@@ -14,10 +14,82 @@ const cron = require('node-cron');
 const multer = require('multer');
 const { parse } = require('csv-parse/sync');
 const xlsx = require('xlsx');
+const crypto = require('crypto');
 
 const app = express();
 const PORT = process.env.PORT || 5179;
 const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret-change-me';
+const CONFIG_SECRET_KEY = process.env.CONFIG_SECRET_KEY || '';
+const SECRET_MASK = '******';
+
+const deriveKey = (secret) => crypto.createHash('sha256').update(secret).digest();
+
+const encryptValue = (value) => {
+  if (value === undefined || value === null) return value;
+  const text = String(value);
+  if (!text) return text;
+  if (!CONFIG_SECRET_KEY) return text;
+  const iv = crypto.randomBytes(12);
+  const key = deriveKey(CONFIG_SECRET_KEY);
+  const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
+  const enc = Buffer.concat([cipher.update(text, 'utf8'), cipher.final()]);
+  const tag = cipher.getAuthTag();
+  const payload = Buffer.concat([iv, tag, enc]).toString('base64');
+  return `enc:${payload}`;
+};
+
+const decryptValue = (value) => {
+  if (value === undefined || value === null) return value;
+  const text = String(value);
+  if (!text.startsWith('enc:')) return text;
+  if (!CONFIG_SECRET_KEY) {
+    throw new Error('CONFIG_SECRET_KEY 未配置，无法解密');
+  }
+  const raw = Buffer.from(text.slice(4), 'base64');
+  const iv = raw.slice(0, 12);
+  const tag = raw.slice(12, 28);
+  const data = raw.slice(28);
+  const key = deriveKey(CONFIG_SECRET_KEY);
+  const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv);
+  decipher.setAuthTag(tag);
+  const dec = Buffer.concat([decipher.update(data), decipher.final()]);
+  return dec.toString('utf8');
+};
+
+const applySecretUpdate = ({ incoming, existing }) => {
+  if (incoming === undefined || incoming === null) return existing;
+  const text = String(incoming).trim();
+  if (!text || text === SECRET_MASK) return existing;
+  if (!CONFIG_SECRET_KEY) {
+    throw new Error('CONFIG_SECRET_KEY 未配置，无法安全保存密码');
+  }
+  return encryptValue(text);
+};
+
+const ensureEncrypted = (value) => {
+  if (value === undefined || value === null) return value;
+  const text = String(value);
+  if (!text) return text;
+  if (!CONFIG_SECRET_KEY) return text;
+  if (text.startsWith('enc:')) return text;
+  return encryptValue(text);
+};
+
+const maskSecrets = (configs) => {
+  const cloned = JSON.parse(JSON.stringify(configs || {}));
+  if (cloned.email?.pass) cloned.email.pass = SECRET_MASK;
+  if (cloned.sms?.accessKeySecret) cloned.sms.accessKeySecret = SECRET_MASK;
+  if (cloned.wecom?.secret) cloned.wecom.secret = SECRET_MASK;
+  return cloned;
+};
+
+const decryptSecrets = (configs) => {
+  if (!configs) return configs;
+  if (configs.email?.pass) configs.email.pass = decryptValue(configs.email.pass);
+  if (configs.sms?.accessKeySecret) configs.sms.accessKeySecret = decryptValue(configs.sms.accessKeySecret);
+  if (configs.wecom?.secret) configs.wecom.secret = decryptValue(configs.wecom.secret);
+  return configs;
+};
 
 const defaultOrigins = [
   'http://localhost:5173',
@@ -151,7 +223,6 @@ app.use('/api', authMiddleware);
 app.get('/api/auth/captcha', async (req, res) => {
   const security = await getSecurityConfig();
   if (!security.captcha.enabled) return res.json({ enabled: false });
-  const crypto = require('crypto');
   const token = crypto.randomBytes(18).toString('hex');
   const code = randomCaptcha();
   const ttlMs = security.captcha.ttlSeconds * 1000;
@@ -235,7 +306,6 @@ app.post('/api/auth/login', async (req, res) => {
         error: '二次验证已开启，但当前账号未配置任何可用验证方式（请完善邮箱/手机号/企业微信或启用谷歌认证）',
       });
     }
-    const crypto = require('crypto');
     const mfaToken = crypto.randomBytes(24).toString('hex');
     const expiresAt = toMysqlDatetime(new Date(Date.now() + 10 * 60 * 1000));
     await db.run(
@@ -633,7 +703,7 @@ app.delete('/api/users/:id', requireRole(['admin']), async (req, res) => {
 
 const getConfigs = async () => {
   const rows = await db.query('SELECT `key`, value FROM send_configs');
-  return rows.reduce((acc, row) => {
+  const configs = rows.reduce((acc, row) => {
     try {
       acc[row.key] = JSON.parse(row.value);
     } catch (err) {
@@ -641,6 +711,7 @@ const getConfigs = async () => {
     }
     return acc;
   }, {});
+  return decryptSecrets(configs);
 };
 
 const getSecurityConfig = async () => {
@@ -853,7 +924,7 @@ const clearLoginFailures = async ({ username, ip }) => {
 };
 
 const randomDigits = (len) => {
-  const bytes = require('crypto').randomBytes(len);
+  const bytes = crypto.randomBytes(len);
   let out = '';
   for (let i = 0; i < len; i++) {
     out += String(bytes[i] % 10);
@@ -862,7 +933,6 @@ const randomDigits = (len) => {
 };
 
 const randomCaptcha = () => {
-  const crypto = require('crypto');
   const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
   const bytes = crypto.randomBytes(4);
   let out = '';
@@ -1395,7 +1465,7 @@ app.get('/api/send-configs', async (req, res) => {
     acc[row.key] = JSON.parse(row.value);
     return acc;
   }, {});
-  res.json(result);
+  res.json(maskSecrets(result));
 });
 
 app.post('/api/send-configs', requireRole(['admin']), async (req, res) => {
@@ -1414,8 +1484,40 @@ app.post('/api/send-configs', requireRole(['admin']), async (req, res) => {
       return res.status(400).json({ error: '提醒模板已锁定，无法修改' });
     }
   }
+  const needsSecretKey =
+    (configs.email && configs.email.pass && configs.email.pass !== SECRET_MASK) ||
+    (configs.sms && configs.sms.accessKeySecret && configs.sms.accessKeySecret !== SECRET_MASK) ||
+    (configs.wecom && configs.wecom.secret && configs.wecom.secret !== SECRET_MASK);
+  if (needsSecretKey && !CONFIG_SECRET_KEY) {
+    return res.status(400).json({ error: '请配置CONFIG_SECRET_KEY后再保存敏感信息' });
+  }
+  const nextConfigs = { ...existing, ...configs };
+  if (configs.email) {
+    const prev = existing.email || {};
+    const merged = { ...prev, ...configs.email };
+    merged.pass = applySecretUpdate({ incoming: configs.email.pass, existing: prev.pass });
+    merged.pass = ensureEncrypted(merged.pass);
+    nextConfigs.email = merged;
+  }
+  if (configs.sms) {
+    const prev = existing.sms || {};
+    const merged = { ...prev, ...configs.sms };
+    merged.accessKeySecret = applySecretUpdate({
+      incoming: configs.sms.accessKeySecret,
+      existing: prev.accessKeySecret,
+    });
+    merged.accessKeySecret = ensureEncrypted(merged.accessKeySecret);
+    nextConfigs.sms = merged;
+  }
+  if (configs.wecom) {
+    const prev = existing.wecom || {};
+    const merged = { ...prev, ...configs.wecom };
+    merged.secret = applySecretUpdate({ incoming: configs.wecom.secret, existing: prev.secret });
+    merged.secret = ensureEncrypted(merged.secret);
+    nextConfigs.wecom = merged;
+  }
   await db.transaction(async (trx) => {
-    for (const [key, value] of Object.entries(configs)) {
+    for (const [key, value] of Object.entries(nextConfigs)) {
       await trx.run(
         'INSERT INTO send_configs (`key`, value) VALUES (?, ?) ON DUPLICATE KEY UPDATE value = VALUES(value), updated_at = NOW()',
         [key, JSON.stringify(value || {})]

@@ -952,6 +952,7 @@ function App() {
       .then(() => {
         setTestEmailStatus({ type: 'success', text: '测试邮件发送成功' })
         showMessage('测试邮件已发送')
+        setModalInfo({ title: '测试邮件成功', message: '测试邮件发送成功' })
       })
       .catch((err) => {
         const msg = normalizeApiError(err) || '测试邮件发送失败'
@@ -986,6 +987,7 @@ function App() {
       .then(() => {
         setTestSmsStatus({ type: 'success', text: '测试短信发送成功' })
         showMessage('测试短信已发送')
+        setModalInfo({ title: '测试短信成功', message: '测试短信发送成功' })
       })
       .catch((err) => {
         const msg = normalizeApiError(err) || '测试短信发送失败'
@@ -1024,6 +1026,7 @@ function App() {
       .then(() => {
         setTestWecomStatus({ type: 'success', text: '测试企业微信发送成功' })
         showMessage('测试企业微信已发送')
+        setModalInfo({ title: '测试企业微信成功', message: '测试企业微信发送成功' })
       })
       .catch((err) => {
         const msg = normalizeApiError(err) || '测试企业微信发送失败'

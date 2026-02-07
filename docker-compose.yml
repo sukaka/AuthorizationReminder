@@ -22,7 +22,8 @@ services:
       MYSQL_USER: juxin
       MYSQL_PASSWORD: juxinpass
       MYSQL_DATABASE: juxin_reminder
-      CORS_ORIGINS: "http://localhost:8080"
+      CORS_ORIGINS: "http://39.100.80.220:8080"
+      CONFIG_SECRET_KEY: "UeiKgUhP80JPdwWMoBRRWmKxdz8BKEP4btzTTh4QmYVc9twMEcgCKuqFDx0M4HX8"
     depends_on:
       - mysql
     ports:

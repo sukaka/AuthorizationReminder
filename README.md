@@ -39,6 +39,7 @@ docker compose up --build
 - `CORS_ORIGINS`：允许的来源（逗号分隔），例如：`http://公网IP:8080,https://your-domain.com`
 - `JWT_SECRET`：JWT 签名密钥（建议生产环境配置）
 - `CSRF_SECURE`：是否强制 CSRF Cookie 为 `Secure`（HTTPS 场景设置为 `true`）
+- `CONFIG_SECRET_KEY`：用于加密存储邮箱密码/短信密钥/企业微信 Secret（建议设置为至少32位随机字符串）
 
 数据库可配置：
 - `MYSQL_HOST` / `MYSQL_PORT`
@@ -47,6 +48,7 @@ docker compose up --build
 
 ## 发送配置注意事项
 - 邮箱/短信/企业微信配置修改后必须点击“保存配置”，否则测试发送会提示未保存。
+- 敏感信息会加密存储，若未配置 `CONFIG_SECRET_KEY` 将无法保存新的密码/密钥。
 
 ## 本地开发
 ```bash
