@@ -1,15 +1,15 @@
 # 聚信授权到期提醒系统
 
-一个用于管理客户授权到期提醒的系统，支持客户/联系人管理、授权管理、发送计划、发送渠道配置、操作日志与安全配置。前端采用 Vite + React，后端采用 Node.js + Express，支持 MySQL 与 Docker 一键部署。
+用于管理客户授权到期提醒的系统，覆盖客户/联系人/授权/发送计划/发送渠道配置/操作日志/安全配置。前端采用 Vite + React，后端采用 Node.js + Express，支持 MySQL 与 Docker 一键部署。
 
 ## 功能概览
-- 客户管理：维护客户名称、聚信销售、渠道销售
+- 客户管理：客户名称、聚信销售、渠道销售
 - 联系人管理：联系人信息、客户关联、状态启停
 - 授权管理：到期日期、提醒天数、状态
-- 发送计划：选择联系人/授权/渠道与提醒天数
+- 发送计划：联系人/授权/渠道与提醒天数
 - 发送渠道配置：邮箱、阿里云短信、企业微信
 - 操作日志：登录/登出/关键操作记录，支持筛选与导出
-- 安全配置：登录失败限制、登录验证码、二次验证
+- 安全配置：登录失败限制、登录验证码
 - 账号安全：每个用户可独立启用二次验证与谷歌认证（支持扫码）
 
 ## 快速开始（Docker）
@@ -21,7 +21,7 @@ docker compose up --build
 - 前端：`http://localhost:8080`
 - 后端：`http://localhost:5179`
 
-默认数据库端口映射为：主机 `3308` → 容器 `3306`。
+默认数据库端口映射：主机 `3308` → 容器 `3306`。
 
 ## 默认账号
 - 用户名：`admin`
@@ -39,7 +39,7 @@ docker compose up --build
 - `CORS_ORIGINS`：允许的来源（逗号分隔），例如：`http://公网IP:8080,https://your-domain.com`
 - `JWT_SECRET`：JWT 签名密钥（建议生产环境配置）
 - `CSRF_SECURE`：是否强制 CSRF Cookie 为 `Secure`（HTTPS 场景设置为 `true`）
-- `CONFIG_SECRET_KEY`：用于加密存储邮箱密码/短信密钥/企业微信 Secret（建议设置为至少32位随机字符串）
+- `CONFIG_SECRET_KEY`：用于加密存储邮箱密码/短信密钥/企业微信 Secret（建议至少 32 位随机字符串）
 
 数据库可配置：
 - `MYSQL_HOST` / `MYSQL_PORT`
@@ -58,26 +58,39 @@ npm run dev
 
 ## 目录结构
 ```
-server/         后端服务与数据库初始化
-web/            前端应用
-docker-compose.yml  Docker 编排
-web/nginx.conf  前端 Nginx 配置
+server/              后端服务与数据库初始化
+web/                 前端应用
+web/nginx.conf       前端 Nginx 配置
+docker-compose.yml   Docker 编排
 ```
 
 ## 安全说明
-- 默认开启 CSRF 保护，前端会自动获取并携带 `X-CSRF-Token`
+- 默认开启 CSRF 保护，前端自动获取并携带 `X-CSRF-Token`
 - CORS 默认仅允许 `localhost` 与 `8080/5173`，公网访问需配置 `CORS_ORIGINS`
+- 发送配置中的密码/Secret 采用加密存储，前端只显示掩码
 
 ## 常见问题
 1. **CORS 报错**
    - 在 `docker-compose.yml` 的 `api` 环境变量中设置 `CORS_ORIGINS` 为你的访问域名/公网IP
 
 2. **登录 403（CSRF）**
-   - 使用 HTTP 时请不要开启 `CSRF_SECURE=true`
+   - 使用 HTTP 时不要开启 `CSRF_SECURE=true`
    - 使用 HTTPS 时可设置 `CSRF_SECURE=true`
+
+## 更新记录（近期）
+- 引入 MySQL + Docker + Nginx 部署方案，支持公网访问与端口映射
+- 增加 CORS 白名单与 CSRF 保护
+- 登录错误统一弹窗提示，账号密码错误提示更明确
+- 发送配置测试发送加入弹窗提示（成功/失败）
+- 配置未保存时阻止测试发送并提示
+- 敏感配置（SMTP/短信/企业微信 Secret）加密存储与掩码显示
+- 账号安全支持每个用户独立开启二次验证与验证码方式选择
+- 谷歌认证支持二维码扫码导入
+- 登录 token 改为 sessionStorage，关闭浏览器需重新登录
 
 ## 技术栈
 - 前端：React + Vite
 - 后端：Node.js + Express
 - 数据库：MySQL
 - 部署：Docker + Nginx
+
