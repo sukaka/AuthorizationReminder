@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState, useRef } from 'react'
+import QRCode from 'qrcode'
 import './App.css'
 
 const buildApi = (getToken, getCsrfToken) => ({
@@ -70,6 +71,7 @@ const tabs = [
   { key: 'reminders', label: '提醒记录' },
   { key: 'imports', label: '导入记录' },
   { key: 'ops', label: '操作日志' },
+  { key: 'account', label: '账号安全' },
   { key: 'config', label: '发送配置' },
   { key: 'security', label: '安全配置' },
   { key: 'users', label: '用户管理' },
@@ -230,6 +232,9 @@ function App() {
   const [testWecom, setTestWecom] = useState('')
   const [testWecomMessage, setTestWecomMessage] = useState('这是一条测试企业微信消息。')
   const [testWecomWebhook, setTestWecomWebhook] = useState('')
+  const [testEmailStatus, setTestEmailStatus] = useState({ type: '', text: '' })
+  const [testSmsStatus, setTestSmsStatus] = useState({ type: '', text: '' })
+  const [testWecomStatus, setTestWecomStatus] = useState({ type: '', text: '' })
   const [testTemplate, setTestTemplate] = useState({
     customer_name: '',
     license_name: '',
@@ -243,6 +248,15 @@ function App() {
   })
   const [totpSetupInfo, setTotpSetupInfo] = useState(null)
   const [totpCode, setTotpCode] = useState('')
+  const [totpQr, setTotpQr] = useState('')
+  const [myMfaSettings, setMyMfaSettings] = useState({
+    enabled: false,
+    methods: [],
+    totp_enabled: false,
+    has_email: false,
+    has_phone: false,
+    has_wecom: false,
+  })
   const [customerImportResult, setCustomerImportResult] = useState(null)
   const [contactImportResult, setContactImportResult] = useState(null)
   const [message, setMessage] = useState('')
@@ -305,6 +319,16 @@ function App() {
       setActiveTab(visibleTabs[0]?.key || 'customers')
     }
   }, [visibleTabs, activeTab])
+
+  useEffect(() => {
+    if (!totpSetupInfo?.otpauth) {
+      setTotpQr('')
+      return
+    }
+    QRCode.toDataURL(totpSetupInfo.otpauth, { margin: 1, width: 180 })
+      .then((url) => setTotpQr(url))
+      .catch(() => setTotpQr(''))
+  }, [totpSetupInfo])
 
   useEffect(() => {
     refreshCsrf()
@@ -590,6 +614,23 @@ function App() {
     }
   }
 
+  const refreshMyMfaSettings = async () => {
+    if (!authToken) return
+    try {
+      const data = await api.get('/api/auth/mfa/settings')
+      setMyMfaSettings({
+        enabled: !!data.enabled,
+        methods: Array.isArray(data.methods) ? data.methods : [],
+        totp_enabled: !!data.totp_enabled,
+        has_email: !!data.has_email,
+        has_phone: !!data.has_phone,
+        has_wecom: !!data.has_wecom,
+      })
+    } catch (err) {
+      // ignore
+    }
+  }
+
   const refreshCsrf = async () => {
     try {
       const res = await fetch('/api/auth/csrf')
@@ -633,7 +674,12 @@ function App() {
       setLoginForm({ username: '', password: '' })
       setMfaState({ required: false, token: '', methods: [], method: '', code: '' })
     } catch (err) {
-      setLoginError('登录失败')
+      const msg = err.message || '登录失败'
+      if (msg.includes('账号或密码错误')) {
+        setLoginError('账号密码错误')
+      } else {
+        setLoginError(msg)
+      }
       refreshCaptcha()
       refreshCsrf()
     }
@@ -841,7 +887,11 @@ function App() {
 
   const onTestEmail = (e) => {
     e.preventDefault()
-    if (!testEmail) return showError('请输入测试邮箱')
+    setTestEmailStatus({ type: '', text: '' })
+    if (!testEmail) {
+      setTestEmailStatus({ type: 'error', text: '请输入测试邮箱' })
+      return showError('请输入测试邮箱')
+    }
     const subject = testEmailSubject
       .replace(/\{customer_name\}/g, testTemplate.customer_name || '')
       .replace(/\{license_name\}/g, testTemplate.license_name || '')
@@ -860,13 +910,24 @@ function App() {
         subject,
         message,
       })
-      .then(() => showMessage('测试邮件已发送'))
-      .catch((err) => showError(err.message || '测试邮件发送失败'))
+      .then(() => {
+        setTestEmailStatus({ type: 'success', text: '测试邮件发送成功' })
+        showMessage('测试邮件已发送')
+      })
+      .catch((err) => {
+        const msg = err.message || '测试邮件发送失败'
+        setTestEmailStatus({ type: 'error', text: msg })
+        showError(msg)
+      })
   }
 
   const onTestSms = (e) => {
     e.preventDefault()
-    if (!testSms) return showError('请输入测试手机号')
+    setTestSmsStatus({ type: '', text: '' })
+    if (!testSms) {
+      setTestSmsStatus({ type: 'error', text: '请输入测试手机号' })
+      return showError('请输入测试手机号')
+    }
     const message = testSmsMessage
       .replace(/\{customer_name\}/g, testTemplate.customer_name || '')
       .replace(/\{license_name\}/g, testTemplate.license_name || '')
@@ -875,13 +936,24 @@ function App() {
       .replace(/\{contact_name\}/g, testTemplate.contact_name || '')
     api
       .post('/api/test/sms', { phone: testSms, message })
-      .then(() => showMessage('测试短信已发送'))
-      .catch((err) => showError(err.message || '测试短信发送失败'))
+      .then(() => {
+        setTestSmsStatus({ type: 'success', text: '测试短信发送成功' })
+        showMessage('测试短信已发送')
+      })
+      .catch((err) => {
+        const msg = err.message || '测试短信发送失败'
+        setTestSmsStatus({ type: 'error', text: msg })
+        showError(msg)
+      })
   }
 
   const onTestWecom = (e) => {
     e.preventDefault()
-    if (!testWecom) return showError('请输入测试用户')
+    setTestWecomStatus({ type: '', text: '' })
+    if (!testWecom) {
+      setTestWecomStatus({ type: 'error', text: '请输入测试用户' })
+      return showError('请输入测试用户')
+    }
     const message = testWecomMessage
       .replace(/\{customer_name\}/g, testTemplate.customer_name || '')
       .replace(/\{license_name\}/g, testTemplate.license_name || '')
@@ -894,8 +966,15 @@ function App() {
         webhook: testWecomWebhook,
         message,
       })
-      .then(() => showMessage('测试企业微信已发送'))
-      .catch((err) => showError(err.message || '测试企业微信发送失败'))
+      .then(() => {
+        setTestWecomStatus({ type: 'success', text: '测试企业微信发送成功' })
+        showMessage('测试企业微信已发送')
+      })
+      .catch((err) => {
+        const msg = err.message || '测试企业微信发送失败'
+        setTestWecomStatus({ type: 'error', text: msg })
+        showError(msg)
+      })
   }
 
   const onSaveUser = async (e) => {
@@ -940,8 +1019,23 @@ function App() {
       setTotpCode('')
       showMessage('谷歌认证已启用')
       refreshUsers()
+      refreshMyMfaSettings()
     } catch (err) {
       showError(err.message || '启用失败')
+    }
+  }
+
+  const onSaveMyMfaSettings = async (e) => {
+    e.preventDefault()
+    try {
+      await api.post('/api/auth/mfa/settings', {
+        enabled: myMfaSettings.enabled,
+        methods: myMfaSettings.methods,
+      })
+      showMessage('二次验证设置已保存')
+      refreshMyMfaSettings()
+    } catch (err) {
+      showError(err.message || '二次验证设置保存失败')
     }
   }
 
@@ -1135,6 +1229,10 @@ function App() {
         setAuthToken('')
         localStorage.removeItem('authToken')
       })
+  }, [authToken])
+
+  useEffect(() => {
+    refreshMyMfaSettings()
   }, [authToken])
 
   useEffect(() => {
@@ -3225,13 +3323,13 @@ function App() {
           </section>
         )}
 
-        {activeTab === 'users' && (
+        {activeTab === 'account' && (
           <section className="panel">
             <div className="panel-header">
-              <h2>用户管理</h2>
-              <p>管理系统账号与权限，仅管理员可见。</p>
+              <h2>账号安全</h2>
+              <p>配置当前账号的二次验证与谷歌认证。</p>
             </div>
-            <div className="panel-block">
+            <div className="panel-block account-tone-totp">
               <h3>谷歌认证（当前账号）</h3>
               <div className="filter-row">
                 <button className="ghost btn btn-outline-secondary" type="button" onClick={onTotpSetup}>
@@ -3246,6 +3344,12 @@ function App() {
               {totpSetupInfo && (
                 <div className="import-errors">
                   <div className="import-errors-title">密钥（手动添加到谷歌认证）</div>
+                  {totpQr && (
+                    <div className="totp-qr">
+                      <img src={totpQr} alt="谷歌认证二维码" />
+                      <div className="muted">建议扫码导入，避免手动录入。</div>
+                    </div>
+                  )}
                   <div className="import-errors-item">Secret：{totpSetupInfo.secret}</div>
                   <div className="import-errors-item">otpauth：{totpSetupInfo.otpauth}</div>
                   <label className="form-label">
@@ -3263,7 +3367,8 @@ function App() {
                 </div>
               )}
             </div>
-            <form className="form-grid" onSubmit={onChangePassword}>
+
+            <form className="form-grid account-tone-password" onSubmit={onChangePassword}>
               <label className="form-label">
                 当前密码
                 <input
@@ -3301,6 +3406,65 @@ function App() {
                 </div>
               )}
             </form>
+
+            <form className="form-grid account-tone-mfa" onSubmit={onSaveMyMfaSettings}>
+              <label className="inline-check form-label">
+                开启二次验证
+                <input
+                  type="checkbox"
+                  checked={myMfaSettings.enabled}
+                  onChange={(e) =>
+                    setMyMfaSettings({ ...myMfaSettings, enabled: e.target.checked })
+                  }
+                />
+              </label>
+              <div className="form-label full-row">
+                验证方式（可多选）
+                <div className="channel-row mfa-pill-row">
+                  {[
+                    { key: 'email', label: '邮箱', ok: myMfaSettings.has_email },
+                    { key: 'sms', label: '短信', ok: myMfaSettings.has_phone },
+                    { key: 'wecom', label: '企业微信', ok: myMfaSettings.has_wecom },
+                    { key: 'totp', label: '谷歌认证', ok: myMfaSettings.totp_enabled },
+                  ].map((m) => {
+                    const selected = myMfaSettings.methods.includes(m.key)
+                    const disabled = !m.ok
+                    return (
+                      <label key={m.key} className={`mfa-pill ${selected ? 'active' : ''} ${disabled ? 'disabled' : ''}`}>
+                        <input
+                          type="checkbox"
+                          disabled={disabled}
+                          checked={selected}
+                          onChange={(e) => {
+                            const next = e.target.checked
+                              ? Array.from(new Set([...myMfaSettings.methods, m.key]))
+                              : myMfaSettings.methods.filter((x) => x !== m.key)
+                            setMyMfaSettings({ ...myMfaSettings, methods: next })
+                          }}
+                        />
+                        {m.label}
+                        {!m.ok ? '（未配置）' : ''}
+                      </label>
+                    )
+                  })}
+                </div>
+                <div className="muted">如需启用邮箱/短信/企业微信，请在“用户管理”补充对应信息。</div>
+              </div>
+              <div className="form-actions">
+                <button type="submit" className="primary btn btn-primary">
+                  保存二次验证
+                </button>
+              </div>
+            </form>
+          </section>
+        )}
+
+        {activeTab === 'users' && (
+          <section className="panel">
+            <div className="panel-header">
+              <h2>用户管理</h2>
+              <p>管理系统账号与权限，仅管理员可见。</p>
+            </div>
             <form className="form-grid" onSubmit={onSaveUser}>
               <label className="form-label">
                 账号
@@ -3587,7 +3751,10 @@ function App() {
                     测试邮箱
                     <input
                       value={testEmail}
-                      onChange={(e) => setTestEmail(e.target.value)}
+                      onChange={(e) => {
+                        setTestEmail(e.target.value)
+                        setTestEmailStatus({ type: '', text: '' })
+                      }}
                       placeholder="请输入测试邮箱地址"
                       className="form-control"
                     />
@@ -3595,6 +3762,11 @@ function App() {
                   <button className="primary btn btn-primary" type="button" onClick={onTestEmail}>
                     测试邮箱
                   </button>
+                  {testEmailStatus.text && (
+                    <div className={`toast ${testEmailStatus.type} form-feedback full-row`}>
+                      {testEmailStatus.text}
+                    </div>
+                  )}
                 </div>
               </div>
 
@@ -3667,7 +3839,10 @@ function App() {
                     测试手机号
                     <input
                       value={testSms}
-                      onChange={(e) => setTestSms(e.target.value)}
+                      onChange={(e) => {
+                        setTestSms(e.target.value)
+                        setTestSmsStatus({ type: '', text: '' })
+                      }}
                       placeholder="请输入测试手机号"
                       className="form-control"
                     />
@@ -3675,6 +3850,11 @@ function App() {
                   <button className="primary btn btn-primary" type="button" onClick={onTestSms}>
                     测试短信
                   </button>
+                  {testSmsStatus.text && (
+                    <div className={`toast ${testSmsStatus.type} form-feedback full-row`}>
+                      {testSmsStatus.text}
+                    </div>
+                  )}
                 </div>
               </div>
 
@@ -3734,7 +3914,10 @@ function App() {
                     测试用户
                     <input
                       value={testWecom}
-                      onChange={(e) => setTestWecom(e.target.value)}
+                      onChange={(e) => {
+                        setTestWecom(e.target.value)
+                        setTestWecomStatus({ type: '', text: '' })
+                      }}
                       placeholder="请输入测试用户ID或手机号"
                       className="form-control"
                     />
@@ -3743,7 +3926,10 @@ function App() {
                     测试Webhook（可选）
                     <input
                       value={testWecomWebhook}
-                      onChange={(e) => setTestWecomWebhook(e.target.value)}
+                      onChange={(e) => {
+                        setTestWecomWebhook(e.target.value)
+                        setTestWecomStatus({ type: '', text: '' })
+                      }}
                       placeholder="若填写则优先走Webhook"
                       className="form-control"
                     />
@@ -3751,6 +3937,11 @@ function App() {
                   <button className="primary btn btn-primary" type="button" onClick={onTestWecom}>
                     测试企业微信
                   </button>
+                  {testWecomStatus.text && (
+                    <div className={`toast ${testWecomStatus.type} form-feedback full-row`}>
+                      {testWecomStatus.text}
+                    </div>
+                  )}
                 </div>
               </div>
 

@@ -70,7 +70,7 @@ const csrfProtection = csurf({
     key: 'csrf_token',
     httpOnly: true,
     sameSite: 'strict',
-    secure: process.env.NODE_ENV === 'production',
+    secure: process.env.CSRF_SECURE === 'true',
   },
 });
 
@@ -214,19 +214,25 @@ app.post('/api/auth/login', async (req, res) => {
   }
   await clearLoginFailures({ username, ip });
 
-  if (user.role === 'admin' && security.mfa.adminMfaMethods.length > 0) {
-    const methods = [];
+  if (Number(user.mfa_enabled) === 1) {
+    let desiredMethods = [];
+    try {
+      desiredMethods = JSON.parse(user.mfa_methods || '[]');
+    } catch (err) {
+      desiredMethods = [];
+    }
     const configured = new Set();
     if (user.email) configured.add('email');
     if (user.phone) configured.add('sms');
     if (user.wecom_id) configured.add('wecom');
     if (user.totp_enabled === 1 && user.totp_secret) configured.add('totp');
-    security.mfa.adminMfaMethods.forEach((m) => {
-      if (configured.has(m)) methods.push(m);
-    });
+    const methods = desiredMethods.filter((m) => configured.has(m));
+    if (!desiredMethods.length) {
+      return res.status(400).json({ error: '请先设置二次验证方式' });
+    }
     if (methods.length === 0) {
       return res.status(400).json({
-        error: '管理员二次验证已开启，但当前账号未配置任何可用验证方式（请在用户管理填写邮箱/手机号/企业微信或启用谷歌认证）',
+        error: '二次验证已开启，但当前账号未配置任何可用验证方式（请完善邮箱/手机号/企业微信或启用谷歌认证）',
       });
     }
     const crypto = require('crypto');
@@ -234,8 +240,7 @@ app.post('/api/auth/login', async (req, res) => {
     const expiresAt = toMysqlDatetime(new Date(Date.now() + 10 * 60 * 1000));
     await db.run(
       `INSERT INTO auth_mfa_sessions (token, user_id, username, methods_json, expires_at)
-       VALUES (?, ?, ?, ?, ?)`
-      ,
+       VALUES (?, ?, ?, ?, ?)`,
       [mfaToken, user.id, user.username, JSON.stringify(methods), expiresAt]
     );
     await logOperation({
@@ -245,7 +250,12 @@ app.post('/api/auth/login', async (req, res) => {
       entityId: 0,
       afterData: { username: user.username, ip, methods },
     });
-    return res.json({ mfaRequired: true, mfaToken, methods, user: { id: user.id, username: user.username, role: user.role } });
+    return res.json({
+      mfaRequired: true,
+      mfaToken,
+      methods,
+      user: { id: user.id, username: user.username, role: user.role },
+    });
   }
 
   const token = createToken(user);
@@ -443,6 +453,68 @@ app.post('/api/auth/totp/enable', async (req, res) => {
     action: 'TOTP_ENABLED',
     entity: 'user',
     entityId: Number(req.user.id),
+  });
+  res.json({ ok: true });
+});
+
+app.get('/api/auth/mfa/settings', async (req, res) => {
+  const user = await db.get(
+    'SELECT id, mfa_enabled, mfa_methods, totp_enabled, email, phone, wecom_id FROM users WHERE id = ?',
+    [req.user.id]
+  );
+  if (!user) return res.status(400).json({ error: '用户不存在' });
+  let methods = [];
+  try {
+    methods = JSON.parse(user.mfa_methods || '[]');
+  } catch (err) {
+    methods = [];
+  }
+  res.json({
+    enabled: Number(user.mfa_enabled) === 1,
+    methods,
+    totp_enabled: Number(user.totp_enabled) === 1,
+    has_email: !!user.email,
+    has_phone: !!user.phone,
+    has_wecom: !!user.wecom_id,
+  });
+});
+
+app.post('/api/auth/mfa/settings', async (req, res) => {
+  const { enabled, methods } = req.body || {};
+  const user = await db.get(
+    'SELECT id, mfa_enabled, mfa_methods, totp_enabled, email, phone, wecom_id FROM users WHERE id = ?',
+    [req.user.id]
+  );
+  if (!user) return res.status(400).json({ error: '用户不存在' });
+  const allowed = new Set(['email', 'sms', 'wecom', 'totp']);
+  const nextMethods = Array.isArray(methods) ? methods.filter((m) => allowed.has(m)) : [];
+  const nextEnabled = enabled === true || enabled === 1 || enabled === '1';
+  if (nextEnabled && nextMethods.length === 0) {
+    return res.status(400).json({ error: '请选择至少一种验证方式' });
+  }
+  if (nextMethods.includes('email') && !user.email) {
+    return res.status(400).json({ error: '邮箱未配置，无法启用邮箱验证' });
+  }
+  if (nextMethods.includes('sms') && !user.phone) {
+    return res.status(400).json({ error: '手机号未配置，无法启用短信验证' });
+  }
+  if (nextMethods.includes('wecom') && !user.wecom_id) {
+    return res.status(400).json({ error: '企业微信未配置，无法启用企业微信验证' });
+  }
+  if (nextMethods.includes('totp') && Number(user.totp_enabled) !== 1) {
+    return res.status(400).json({ error: '谷歌认证未启用，无法选择谷歌认证' });
+  }
+  await db.run('UPDATE users SET mfa_enabled = ?, mfa_methods = ? WHERE id = ?', [
+    nextEnabled ? 1 : 0,
+    JSON.stringify(nextMethods),
+    req.user.id,
+  ]);
+  await logOperation({
+    user: req.user,
+    action: 'UPDATE',
+    entity: 'user_mfa',
+    entityId: Number(req.user.id),
+    afterData: { enabled: nextEnabled, methods: nextMethods },
   });
   res.json({ ok: true });
 });

@@ -71,6 +71,21 @@ const waitForDb = async () => {
   }
 };
 
+const columnExists = async (table, column) => {
+  const rows = await query(
+    `SELECT COUNT(1) AS count
+     FROM information_schema.COLUMNS
+     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = ?`,
+    [table, column]
+  );
+  return Number(rows[0]?.count || 0) > 0;
+};
+
+const addColumnIfMissing = async (table, column, definition) => {
+  if (await columnExists(table, column)) return;
+  await run(`ALTER TABLE ${table} ADD COLUMN ${definition}`);
+};
+
 const init = async () => {
   await run(`CREATE TABLE IF NOT EXISTS customers (
     id INT AUTO_INCREMENT PRIMARY KEY,
@@ -136,8 +151,13 @@ const init = async () => {
     wecom_id VARCHAR(255),
     totp_secret VARCHAR(128),
     totp_enabled TINYINT NOT NULL DEFAULT 0,
+    mfa_enabled TINYINT NOT NULL DEFAULT 0,
+    mfa_methods TEXT,
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
+
+  await addColumnIfMissing('users', 'mfa_enabled', 'mfa_enabled TINYINT NOT NULL DEFAULT 0');
+  await addColumnIfMissing('users', 'mfa_methods', 'mfa_methods TEXT');
 
   await run(`CREATE TABLE IF NOT EXISTS reminder_sent (
     id INT AUTO_INCREMENT PRIMARY KEY,
