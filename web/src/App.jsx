@@ -117,7 +117,7 @@ function App() {
     channel: '',
   })
   const [dashboardView, setDashboardView] = useState(localStorage.getItem('dashboardView') || 'A')
-  const [authToken, setAuthToken] = useState(localStorage.getItem('authToken') || '')
+  const [authToken, setAuthToken] = useState(sessionStorage.getItem('authToken') || '')
   const [currentUser, setCurrentUser] = useState(null)
   const [activeTab, setActiveTab] = useState('dashboard')
   const [customers, setCustomers] = useState([])
@@ -703,7 +703,7 @@ function App() {
         setLoginError('')
         return
       }
-      localStorage.setItem('authToken', result.token)
+      sessionStorage.setItem('authToken', result.token)
       setAuthToken(result.token)
       setCurrentUser(result.user)
       setLoginError('')
@@ -734,7 +734,7 @@ function App() {
         method: mfaState.method,
         code: mfaState.code,
       })
-      localStorage.setItem('authToken', result.token)
+      sessionStorage.setItem('authToken', result.token)
       setAuthToken(result.token)
       setCurrentUser(result.user)
       setMfaState({ required: false, token: '', methods: [], method: '', code: '' })
@@ -751,7 +751,7 @@ function App() {
     } catch (err) {
       // ignore
     }
-    localStorage.removeItem('authToken')
+    sessionStorage.removeItem('authToken')
     setAuthToken('')
     setCurrentUser(null)
     setActiveTab('dashboard')
@@ -1286,7 +1286,7 @@ function App() {
       .then((user) => setCurrentUser(user))
       .catch(() => {
         setAuthToken('')
-        localStorage.removeItem('authToken')
+        sessionStorage.removeItem('authToken')
       })
   }, [authToken])
 
