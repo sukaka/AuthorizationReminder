@@ -1,0 +1,10 @@
+node_modules
+web/node_modules
+web/dist
+.git
+.DS_Store
+docs/mockups
+server/data.db
+npm-debug.log
+yarn.lock
+pnpm-lock.yaml

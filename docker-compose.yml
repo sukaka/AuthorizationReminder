@@ -1,0 +1,38 @@
+services:
+  mysql:
+    image: mysql:8.0
+    environment:
+      MYSQL_ROOT_PASSWORD: rootpass
+      MYSQL_DATABASE: juxin_reminder
+      MYSQL_USER: juxin
+      MYSQL_PASSWORD: juxinpass
+    volumes:
+      - mysql-data:/var/lib/mysql
+    ports:
+      - "3306:3306"
+    command: --default-authentication-plugin=mysql_native_password
+
+  api:
+    build: .
+    environment:
+      PORT: 5179
+      SERVE_WEB: "false"
+      MYSQL_HOST: mysql
+      MYSQL_PORT: 3306
+      MYSQL_USER: juxin
+      MYSQL_PASSWORD: juxinpass
+      MYSQL_DATABASE: juxin_reminder
+    depends_on:
+      - mysql
+    ports:
+      - "5179:5179"
+
+  web:
+    build: ./web
+    depends_on:
+      - api
+    ports:
+      - "8080:80"
+
+volumes:
+  mysql-data:

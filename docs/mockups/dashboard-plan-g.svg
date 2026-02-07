@@ -1,0 +1,46 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="900" viewBox="0 0 1400 900">
+  <defs>
+    <linearGradient id="bgG" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0b1220"/>
+      <stop offset="0.6" stop-color="#121b2f"/>
+      <stop offset="1" stop-color="#0b1326"/>
+    </linearGradient>
+    <linearGradient id="cardG" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#111827"/>
+      <stop offset="1" stop-color="#0f172a"/>
+    </linearGradient>
+    <filter id="glowG" x="-30%" y="-30%" width="160%" height="160%">
+      <feDropShadow dx="0" dy="8" stdDeviation="16" flood-color="#22d3ee" flood-opacity="0.25"/>
+      <feDropShadow dx="0" dy="0" stdDeviation="6" flood-color="#a78bfa" flood-opacity="0.35"/>
+    </filter>
+  </defs>
+
+  <rect width="1400" height="900" fill="url(#bgG)"/>
+  <rect x="30" y="30" width="220" height="840" rx="18" fill="#0b1020" stroke="#1f2b4d"/>
+  <text x="60" y="80" fill="#a78bfa" font-size="18" font-family="Arial">Plan G</text>
+  <text x="60" y="110" fill="#e2e8f0" font-size="14" font-family="Arial">Business Radar</text>
+
+  <rect x="270" y="30" width="1100" height="70" rx="16" fill="url(#cardG)" stroke="#1f2b4d" filter="url(#glowG)"/>
+  <text x="300" y="75" fill="#e2e8f0" font-size="22" font-family="Arial">Radar Dashboard</text>
+
+  <g filter="url(#glowG)">
+    <rect x="270" y="120" width="520" height="320" rx="18" fill="url(#cardG)" stroke="#1f2b4d"/>
+    <rect x="820" y="120" width="550" height="320" rx="18" fill="url(#cardG)" stroke="#1f2b4d"/>
+  </g>
+  <text x="300" y="155" fill="#e2e8f0" font-size="16" font-family="Arial">Health Radar</text>
+  <circle cx="520" cy="280" r="90" fill="none" stroke="#1f2b4d"/>
+  <circle cx="520" cy="280" r="60" fill="none" stroke="#1f2b4d"/>
+  <circle cx="520" cy="280" r="30" fill="none" stroke="#1f2b4d"/>
+  <polygon points="520,200 600,250 560,330 480,350 440,260" fill="rgba(34,211,238,0.25)" stroke="#22d3ee" stroke-width="2"/>
+
+  <text x="850" y="155" fill="#e2e8f0" font-size="16" font-family="Arial">Channel Funnel</text>
+  <polygon points="900,210 1290,210 1240,260 950,260" fill="#60a5fa" opacity="0.8"/>
+  <polygon points="950,280 1240,280 1190,330 1000,330" fill="#34d399" opacity="0.8"/>
+  <polygon points="1000,350 1190,350 1150,390 1040,390" fill="#f97316" opacity="0.8"/>
+
+  <rect x="270" y="460" width="1100" height="380" rx="18" fill="url(#cardG)" stroke="#1f2b4d" filter="url(#glowG)"/>
+  <text x="300" y="495" fill="#e2e8f0" font-size="16" font-family="Arial">Upcoming & Priority List</text>
+  <rect x="300" y="520" width="1020" height="50" rx="12" fill="#0f172a" stroke="#1f2b4d"/>
+  <rect x="300" y="580" width="1020" height="50" rx="12" fill="#0f172a" stroke="#1f2b4d"/>
+  <rect x="300" y="640" width="1020" height="50" rx="12" fill="#0f172a" stroke="#1f2b4d"/>
+</svg>
