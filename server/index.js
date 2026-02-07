@@ -1451,8 +1451,12 @@ const sendEmail = async ({ contact, subject, message, configs }) => {
   if (!contact.email) {
     throw new Error('联系人没有邮箱');
   }
-  if (!emailConfig.host || !emailConfig.user || !emailConfig.pass) {
-    throw new Error('邮箱配置不完整');
+  const missing = [];
+  if (!emailConfig.host) missing.push('SMTP服务器地址');
+  if (!emailConfig.user) missing.push('用户名');
+  if (!emailConfig.pass) missing.push('密码');
+  if (missing.length) {
+    throw new Error(`邮箱配置不完整：${missing.join('、')}`);
   }
   const transporter = createMailer(emailConfig);
   await transporter.sendMail({

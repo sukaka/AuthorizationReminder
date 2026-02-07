@@ -45,6 +45,9 @@ docker compose up --build
 - `MYSQL_USER` / `MYSQL_PASSWORD`
 - `MYSQL_DATABASE`
 
+## 发送配置注意事项
+- 邮箱/短信/企业微信配置修改后必须点击“保存配置”，否则测试发送会提示未保存。
+
 ## 本地开发
 ```bash
 npm install
@@ -76,4 +79,3 @@ web/nginx.conf  前端 Nginx 配置
 - 后端：Node.js + Express
 - 数据库：MySQL
 - 部署：Docker + Nginx
-

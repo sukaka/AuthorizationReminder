@@ -235,6 +235,8 @@ function App() {
   const [testEmailStatus, setTestEmailStatus] = useState({ type: '', text: '' })
   const [testSmsStatus, setTestSmsStatus] = useState({ type: '', text: '' })
   const [testWecomStatus, setTestWecomStatus] = useState({ type: '', text: '' })
+  const [modalInfo, setModalInfo] = useState(null)
+  const [configDirty, setConfigDirty] = useState(false)
   const [testTemplate, setTestTemplate] = useState({
     customer_name: '',
     license_name: '',
@@ -521,6 +523,7 @@ function App() {
       rateLimit: data.rateLimit || prev.rateLimit,
       security: data.security || prev.security,
     }))
+    setConfigDirty(false)
   }
 
 
@@ -601,6 +604,18 @@ function App() {
     setError(text)
     setMessage('')
     setTimeout(() => setError(''), 3000)
+  }
+
+  const normalizeApiError = (err) => {
+    let msg = err && err.message ? String(err.message) : ''
+    try {
+      const parsed = JSON.parse(msg)
+      if (parsed && parsed.error) msg = String(parsed.error)
+    } catch (e) {
+      // ignore
+    }
+    msg = msg.replace(/<[^>]*>/g, '').trim()
+    return msg || '请求失败'
   }
 
   const normalizeLoginError = (err) => {
@@ -884,6 +899,7 @@ function App() {
         ...configForm,
       })
       showMessage('配置已保存')
+      setConfigDirty(false)
     } catch (err) {
       showError('配置保存失败')
     }
@@ -906,7 +922,14 @@ function App() {
     setTestEmailStatus({ type: '', text: '' })
     if (!testEmail) {
       setTestEmailStatus({ type: 'error', text: '请输入测试邮箱' })
+      setModalInfo({ title: '测试邮件失败', message: '请输入测试邮箱' })
       return showError('请输入测试邮箱')
+    }
+    if (configDirty) {
+      const msg = '配置已修改但未保存，请先点击“保存配置”'
+      setTestEmailStatus({ type: 'error', text: msg })
+      setModalInfo({ title: '测试邮件失败', message: msg })
+      return showError(msg)
     }
     const subject = testEmailSubject
       .replace(/\{customer_name\}/g, testTemplate.customer_name || '')
@@ -931,8 +954,9 @@ function App() {
         showMessage('测试邮件已发送')
       })
       .catch((err) => {
-        const msg = err.message || '测试邮件发送失败'
+        const msg = normalizeApiError(err) || '测试邮件发送失败'
         setTestEmailStatus({ type: 'error', text: msg })
+        setModalInfo({ title: '测试邮件失败', message: msg })
         showError(msg)
       })
   }
@@ -942,7 +966,14 @@ function App() {
     setTestSmsStatus({ type: '', text: '' })
     if (!testSms) {
       setTestSmsStatus({ type: 'error', text: '请输入测试手机号' })
+      setModalInfo({ title: '测试短信失败', message: '请输入测试手机号' })
       return showError('请输入测试手机号')
+    }
+    if (configDirty) {
+      const msg = '配置已修改但未保存，请先点击“保存配置”'
+      setTestSmsStatus({ type: 'error', text: msg })
+      setModalInfo({ title: '测试短信失败', message: msg })
+      return showError(msg)
     }
     const message = testSmsMessage
       .replace(/\{customer_name\}/g, testTemplate.customer_name || '')
@@ -957,8 +988,9 @@ function App() {
         showMessage('测试短信已发送')
       })
       .catch((err) => {
-        const msg = err.message || '测试短信发送失败'
+        const msg = normalizeApiError(err) || '测试短信发送失败'
         setTestSmsStatus({ type: 'error', text: msg })
+        setModalInfo({ title: '测试短信失败', message: msg })
         showError(msg)
       })
   }
@@ -968,7 +1000,14 @@ function App() {
     setTestWecomStatus({ type: '', text: '' })
     if (!testWecom) {
       setTestWecomStatus({ type: 'error', text: '请输入测试用户' })
+      setModalInfo({ title: '测试企业微信失败', message: '请输入测试用户' })
       return showError('请输入测试用户')
+    }
+    if (configDirty) {
+      const msg = '配置已修改但未保存，请先点击“保存配置”'
+      setTestWecomStatus({ type: 'error', text: msg })
+      setModalInfo({ title: '测试企业微信失败', message: msg })
+      return showError(msg)
     }
     const message = testWecomMessage
       .replace(/\{customer_name\}/g, testTemplate.customer_name || '')
@@ -987,8 +1026,9 @@ function App() {
         showMessage('测试企业微信已发送')
       })
       .catch((err) => {
-        const msg = err.message || '测试企业微信发送失败'
+        const msg = normalizeApiError(err) || '测试企业微信发送失败'
         setTestWecomStatus({ type: 'error', text: msg })
+        setModalInfo({ title: '测试企业微信失败', message: msg })
         showError(msg)
       })
   }
@@ -1693,6 +1733,19 @@ function App() {
 
         {message && <div className="toast success">{message}</div>}
         {error && <div className="toast error">{error}</div>}
+        {modalInfo && (
+          <div className="modal-backdrop" onClick={() => setModalInfo(null)}>
+            <div className="modal-card" onClick={(e) => e.stopPropagation()}>
+              <div className="modal-title">{modalInfo.title}</div>
+              <div className="modal-body">{modalInfo.message}</div>
+              <div className="modal-actions">
+                <button className="primary btn btn-primary" type="button" onClick={() => setModalInfo(null)}>
+                  知道了
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
         <main>
         {activeTab === 'dashboard' && (
@@ -3629,6 +3682,7 @@ function App() {
                           email: { ...configForm.email, host: e.target.value },
                         })
                       }
+                      onInput={() => setConfigDirty(true)}
                       className="form-control"
                     />
                   </label>
@@ -3642,6 +3696,7 @@ function App() {
                           email: { ...configForm.email, port: e.target.value },
                         })
                       }
+                      onInput={() => setConfigDirty(true)}
                       className="form-control"
                     />
                   </label>
@@ -3655,6 +3710,7 @@ function App() {
                           email: { ...configForm.email, from: e.target.value },
                         })
                       }
+                      onInput={() => setConfigDirty(true)}
                       className="form-control"
                     />
                   </label>
@@ -3668,6 +3724,7 @@ function App() {
                           email: { ...configForm.email, user: e.target.value },
                         })
                       }
+                      onInput={() => setConfigDirty(true)}
                       className="form-control"
                     />
                   </label>
@@ -3682,6 +3739,7 @@ function App() {
                           email: { ...configForm.email, pass: e.target.value },
                         })
                       }
+                      onInput={() => setConfigDirty(true)}
                       className="form-control"
                     />
                   </label>
@@ -3696,6 +3754,7 @@ function App() {
                           email: { ...configForm.email, secure: e.target.checked },
                         })
                       }
+                      onInput={() => setConfigDirty(true)}
                     />
                   </label>
                   <label className="form-label">
@@ -3774,14 +3833,15 @@ function App() {
                       可用变量：{`{customer_name} {license_name} {end_date} {days_left} {contact_name}`}
                     </p>
                   </div>
-                  <label className="full-row form-label">
-                    测试邮箱
-                    <input
-                      value={testEmail}
-                      onChange={(e) => {
-                        setTestEmail(e.target.value)
-                        setTestEmailStatus({ type: '', text: '' })
-                      }}
+                    <label className="full-row form-label">
+                      测试邮箱
+                      <input
+                        value={testEmail}
+                        onChange={(e) => {
+                          setTestEmail(e.target.value)
+                          setTestEmailStatus({ type: '', text: '' })
+                          setModalInfo(null)
+                        }}
                       placeholder="请输入测试邮箱地址"
                       className="form-control"
                     />
@@ -3810,6 +3870,7 @@ function App() {
                           sms: { ...configForm.sms, accessKeyId: e.target.value },
                         })
                       }
+                      onInput={() => setConfigDirty(true)}
                       className="form-control"
                     />
                   </label>
@@ -3824,6 +3885,7 @@ function App() {
                           sms: { ...configForm.sms, accessKeySecret: e.target.value },
                         })
                       }
+                      onInput={() => setConfigDirty(true)}
                       className="form-control"
                     />
                   </label>
@@ -3837,6 +3899,7 @@ function App() {
                           sms: { ...configForm.sms, signName: e.target.value },
                         })
                       }
+                      onInput={() => setConfigDirty(true)}
                       className="form-control"
                     />
                   </label>
@@ -3850,6 +3913,7 @@ function App() {
                           sms: { ...configForm.sms, templateCode: e.target.value },
                         })
                       }
+                      onInput={() => setConfigDirty(true)}
                       className="form-control"
                     />
                   </label>
@@ -3869,6 +3933,7 @@ function App() {
                       onChange={(e) => {
                         setTestSms(e.target.value)
                         setTestSmsStatus({ type: '', text: '' })
+                        setModalInfo(null)
                       }}
                       placeholder="请输入测试手机号"
                       className="form-control"
@@ -3898,6 +3963,7 @@ function App() {
                           wecom: { ...configForm.wecom, corpId: e.target.value },
                         })
                       }
+                      onInput={() => setConfigDirty(true)}
                       className="form-control"
                     />
                   </label>
@@ -3912,6 +3978,7 @@ function App() {
                           wecom: { ...configForm.wecom, secret: e.target.value },
                         })
                       }
+                      onInput={() => setConfigDirty(true)}
                       className="form-control"
                     />
                   </label>
@@ -3925,6 +3992,7 @@ function App() {
                           wecom: { ...configForm.wecom, agentId: e.target.value },
                         })
                       }
+                      onInput={() => setConfigDirty(true)}
                       className="form-control"
                     />
                   </label>
@@ -3944,6 +4012,7 @@ function App() {
                       onChange={(e) => {
                         setTestWecom(e.target.value)
                         setTestWecomStatus({ type: '', text: '' })
+                        setModalInfo(null)
                       }}
                       placeholder="请输入测试用户ID或手机号"
                       className="form-control"
@@ -3956,6 +4025,7 @@ function App() {
                       onChange={(e) => {
                         setTestWecomWebhook(e.target.value)
                         setTestWecomStatus({ type: '', text: '' })
+                        setModalInfo(null)
                       }}
                       placeholder="若填写则优先走Webhook"
                       className="form-control"
