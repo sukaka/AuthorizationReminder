@@ -323,6 +323,44 @@ body {
   width: 100%;
 }
 
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.35);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 50;
+  backdrop-filter: blur(2px);
+}
+
+.modal-card {
+  width: min(420px, 90vw);
+  background: #fff;
+  border-radius: 16px;
+  padding: 18px;
+  box-shadow: 0 24px 60px rgba(15, 23, 42, 0.25);
+  border: 1px solid rgba(148, 163, 184, 0.35);
+}
+
+.modal-title {
+  font-weight: 700;
+  font-size: 18px;
+  margin-bottom: 8px;
+  color: #0f172a;
+}
+
+.modal-body {
+  color: #334155;
+  line-height: 1.6;
+  margin-bottom: 16px;
+}
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
 .panel {
   background: rgba(255, 255, 255, 0.92);
   border-radius: 20px;

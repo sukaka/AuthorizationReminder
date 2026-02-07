@@ -603,6 +603,27 @@ function App() {
     setTimeout(() => setError(''), 3000)
   }
 
+  const normalizeLoginError = (err) => {
+    let msg = err && err.message ? String(err.message) : ''
+    try {
+      const parsed = JSON.parse(msg)
+      if (parsed && parsed.error) msg = String(parsed.error)
+    } catch (e) {
+      // ignore
+    }
+    msg = msg.replace(/<[^>]*>/g, '').trim()
+    if (!msg) msg = '登录失败'
+    if (msg.includes('账号或密码错误') || msg.includes('账号密码错误')) return '账号密码错误'
+    if (msg.includes('Not allowed by CORS')) return 'CORS错误：域名未在CORS_ORIGINS中配置'
+    if (msg.includes('Failed to fetch') || msg.includes('NetworkError')) {
+      return 'CORS错误：域名未在CORS_ORIGINS中配置'
+    }
+    if (msg.includes('Internal Server Error')) return '服务器内部错误，请查看后端日志'
+    if (msg.includes('CSRF token invalid')) return '安全校验失败，请刷新后重试'
+    if (msg.includes('Forbidden')) return '无权限'
+    return msg
+  }
+
   const refreshCaptcha = async () => {
     try {
       const data = await api.get('/api/auth/captcha')
@@ -674,12 +695,7 @@ function App() {
       setLoginForm({ username: '', password: '' })
       setMfaState({ required: false, token: '', methods: [], method: '', code: '' })
     } catch (err) {
-      const msg = err.message || '登录失败'
-      if (msg.includes('账号或密码错误')) {
-        setLoginError('账号密码错误')
-      } else {
-        setLoginError(msg)
-      }
+      setLoginError(normalizeLoginError(err))
       refreshCaptcha()
       refreshCsrf()
     }
@@ -710,7 +726,7 @@ function App() {
       setLoginForm({ username: '', password: '' })
       setLoginError('')
     } catch (err) {
-      setLoginError(err.message || '验证码错误')
+      setLoginError(normalizeLoginError(err))
     }
   }
 
@@ -1558,7 +1574,6 @@ function App() {
                   </div>
                 </div>
               )}
-              {loginError && <div className="toast error">{loginError}</div>}
               <button type="submit" className="primary btn btn-primary">
                 登录
               </button>
@@ -1595,7 +1610,6 @@ function App() {
                   className="form-control"
                 />
               </label>
-              {loginError && <div className="toast error">{loginError}</div>}
               <div className="form-actions">
                 <button type="submit" className="primary btn btn-primary">
                   验证并登录
@@ -1611,6 +1625,19 @@ function App() {
             </form>
           )}
         </div>
+        {loginError && (
+          <div className="modal-backdrop" onClick={() => setLoginError('')}>
+            <div className="modal-card" onClick={(e) => e.stopPropagation()}>
+              <div className="modal-title">登录提示</div>
+              <div className="modal-body">{loginError}</div>
+              <div className="modal-actions">
+                <button className="primary btn btn-primary" type="button" onClick={() => setLoginError('')}>
+                  知道了
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     )
   }
