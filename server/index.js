@@ -234,7 +234,8 @@ app.get('/api/auth/captcha', async (req, res) => {
 
 app.post('/api/auth/login', async (req, res) => {
   const { username, password, captchaToken, captcha } = req.body || {};
-  if (!username || !password) {
+  const rawUsername = String(username || '').trim();
+  if (!rawUsername || !password) {
     return res.status(400).json({ error: '请输入账号和密码' });
   }
   const security = await getSecurityConfig();
@@ -248,42 +249,53 @@ app.post('/api/auth/login', async (req, res) => {
     }
   }
   const ip = getRequestIp(req);
-  const lock = await checkLoginLock({ username, ip });
+  let loginId = rawUsername;
+  let user = null;
+  if (rawUsername === 'admin') {
+    loginId = 'admin';
+    user = await db.get('SELECT * FROM users WHERE username = ?', ['admin']);
+  } else {
+    if (!/^\d{6,20}$/.test(rawUsername)) {
+      return res.status(400).json({ error: '请使用手机号登录' });
+    }
+    loginId = rawUsername;
+    user = await db.get('SELECT * FROM users WHERE phone = ?', [rawUsername]);
+  }
+  const lock = await checkLoginLock({ username: loginId, ip });
   if (lock.locked) {
     await logOperation({
-      user: { id: 0, username, role: 'unknown' },
+      user: { id: 0, username: loginId, role: 'unknown' },
       action: 'LOGIN_LOCKED',
       entity: 'auth',
       entityId: 0,
-      afterData: { username, ip, locked_until: lock.locked_until },
+      afterData: { username: loginId, ip, locked_until: lock.locked_until },
     });
     return res.status(429).json({ error: '登录失败次数过多，请稍后再试' });
   }
-  const user = await db.get('SELECT * FROM users WHERE username = ?', [username]);
   if (!user) {
-    const fail = await recordLoginFailure({ username, ip });
+    const fail = await recordLoginFailure({ username: loginId, ip });
     await logOperation({
-      user: { id: 0, username, role: 'unknown' },
+      user: { id: 0, username: loginId, role: 'unknown' },
       action: 'LOGIN_FAILED',
       entity: 'auth',
       entityId: 0,
-      afterData: { username, ip, fail_count: fail.failCount, locked_until: fail.lockedUntil },
+      afterData: { username: loginId, ip, fail_count: fail.failCount, locked_until: fail.lockedUntil },
     });
     return res.status(400).json({ error: '账号或密码错误' });
   }
   const ok = bcrypt.compareSync(password, user.password_hash);
   if (!ok) {
-    const fail = await recordLoginFailure({ username, ip });
+    const fail = await recordLoginFailure({ username: loginId, ip });
     await logOperation({
       user: { id: user.id, username: user.username, role: user.role },
       action: 'LOGIN_FAILED',
       entity: 'auth',
       entityId: 0,
-      afterData: { username, ip, fail_count: fail.failCount, locked_until: fail.lockedUntil },
+      afterData: { username: loginId, ip, fail_count: fail.failCount, locked_until: fail.lockedUntil },
     });
     return res.status(400).json({ error: '账号或密码错误' });
   }
-  await clearLoginFailures({ username, ip });
+  await clearLoginFailures({ username: loginId, ip });
 
   if (Number(user.mfa_enabled) === 1) {
     let desiredMethods = [];

@@ -1565,7 +1565,7 @@ function App() {
           <div>
             <h1 className="brand-title"><span className="brand-red">聚信</span><span className="brand-blue">授权到期提醒系统</span></h1>
             <h1>欢迎登录</h1>
-            <p className="sub">请使用管理员账号进入系统。</p>
+            <p className="sub">管理员账号使用用户名登录，其他账号请使用手机号。</p>
           </div>
           {!mfaState.required ? (
             <form className="login-form" onSubmit={onLogin}>
@@ -1574,7 +1574,7 @@ function App() {
                 <input
                   value={loginForm.username}
                   onChange={(e) => setLoginForm({ ...loginForm, username: e.target.value })}
-                  placeholder="admin"
+                  placeholder="请使用手机号登录"
                   required
                   className="form-control"
                 />
@@ -1585,7 +1585,6 @@ function App() {
                   type="password"
                   value={loginForm.password}
                   onChange={(e) => setLoginForm({ ...loginForm, password: e.target.value })}
-                  placeholder="123456"
                   required
                   className="form-control"
                 />
