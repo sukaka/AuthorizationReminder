@@ -1886,6 +1886,15 @@ const sendWecomWebhook = async ({ message, configs }) => {
   if (!res.ok) {
     throw new Error('企业微信发送失败');
   }
+  let data = null;
+  try {
+    data = await res.json();
+  } catch (err) {
+    data = null;
+  }
+  if (data && data.errcode !== 0) {
+    throw new Error(`企业微信发送失败: ${data.errmsg || data.errcode}`);
+  }
 };
 
 const sendWecomApp = async ({ contact, message, configs }) => {
@@ -2508,6 +2517,10 @@ app.post('/api/send-plans/send-now', requireRole(['admin', 'sales']), async (req
        AND contacts.id IN (${buildInClause(contactIds)})`,
       contactIds
     );
+    if (!contacts.length) {
+      results.push({ plan_id: plan.id, ok: false, error: '没有可发送的联系人（可能已停用或不在范围）' });
+      continue;
+    }
     const license = {
       id: plan.license_id,
       name: plan.license_name,
@@ -3146,8 +3159,8 @@ app.get('/api/reminder-logs', requireRole(['admin', 'sales']), async (req, res) 
       licenses.name AS license_name
      FROM reminder_logs
      LEFT JOIN contacts ON contacts.id = reminder_logs.contact_id
-     LEFT JOIN customers ON customers.id = contacts.customer_id
      LEFT JOIN licenses ON licenses.id = reminder_logs.license_id
+     LEFT JOIN customers ON customers.id = licenses.customer_id
      ${whereSql}
      ORDER BY reminder_logs.id DESC LIMIT 300`,
     params
@@ -3163,8 +3176,8 @@ app.post('/api/reminder-logs/:id/resend', requireRole(['admin', 'sales']), async
       licenses.name AS license_name, licenses.end_date AS end_date
      FROM reminder_logs
      JOIN contacts ON contacts.id = reminder_logs.contact_id
-     JOIN customers ON customers.id = contacts.customer_id
      JOIN licenses ON licenses.id = reminder_logs.license_id
+     JOIN customers ON customers.id = licenses.customer_id
      WHERE reminder_logs.id = ?`,
     [id]
   );

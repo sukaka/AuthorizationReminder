@@ -650,6 +650,7 @@ function App() {
       rateLimit: data.rateLimit || prev.rateLimit,
       security: data.security || prev.security,
     }))
+    setTestWecomWebhook((prev) => (prev ? prev : data.wecom?.webhook || ''))
     setConfigDirty(false)
   }
 
@@ -1148,10 +1149,11 @@ function App() {
   const onTestWecom = (e) => {
     e.preventDefault()
     setTestWecomStatus({ type: '', text: '' })
-    if (!testWecom) {
-      setTestWecomStatus({ type: 'error', text: '请输入测试用户' })
-      setModalInfo({ title: '测试企业微信失败', message: '请输入测试用户' })
-      return showError('请输入测试用户')
+    const webhookValue = String(testWecomWebhook || '').trim()
+    if (!webhookValue && !testWecom) {
+      setTestWecomStatus({ type: 'error', text: '请输入测试用户或Webhook' })
+      setModalInfo({ title: '测试企业微信失败', message: '请输入测试用户或Webhook' })
+      return showError('请输入测试用户或Webhook')
     }
     if (configDirty) {
       const msg = '配置已修改但未保存，请先点击“保存配置”'
@@ -1168,7 +1170,7 @@ function App() {
     api
       .post('/api/test/wecom', {
         userId: testWecom,
-        webhook: testWecomWebhook,
+        webhook: webhookValue,
         message,
       })
       .then(() => {
@@ -3420,9 +3422,9 @@ function App() {
               </div>
               {pagedReminderLogs.items.map((log) => (
                 <div className="table-row" key={log.id}>
-                  <span>{log.contact_name}</span>
-                  <span>{log.customer_name}</span>
-                  <span>{log.license_name}</span>
+                  <span>{log.is_test ? '测试' : log.contact_name || '-'}</span>
+                  <span>{log.is_test ? '测试' : log.customer_name || '-'}</span>
+                  <span>{log.is_test ? '测试' : log.license_name || '-'}</span>
                   <span>{log.channel}</span>
                   <span>{log.days_left}</span>
                   <span>{log.status}</span>
@@ -4299,6 +4301,21 @@ function App() {
                         })
                       }
                       onInput={() => setConfigDirty(true)}
+                      className="form-control"
+                    />
+                  </label>
+                  <label className="form-label">
+                    Webhook（群机器人）
+                    <input
+                      value={configForm.wecom.webhook}
+                      onChange={(e) =>
+                        setConfigForm({
+                          ...configForm,
+                          wecom: { ...configForm.wecom, webhook: e.target.value },
+                        })
+                      }
+                      onInput={() => setConfigDirty(true)}
+                      placeholder="https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=..."
                       className="form-control"
                     />
                   </label>
