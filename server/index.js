@@ -219,6 +219,51 @@ const requireRole = (roles) => (req, res, next) => {
 
 app.use('/api', authMiddleware);
 
+const buildInClause = (values = []) => values.map(() => '?').join(',');
+
+const applyScopeFilter = ({ scope, where, params, column = 'customers.id' }) => {
+  if (!scope || scope.isAdmin) return;
+  const ids = Array.isArray(scope.customerIds) ? scope.customerIds : [];
+  if (!ids.length) {
+    where.push('1=0');
+    return;
+  }
+  where.push(`${column} IN (${buildInClause(ids)})`);
+  params.push(...ids);
+};
+
+const loadUserScope = async (user) => {
+  if (!user) return { isAdmin: false, customerIds: [] };
+  if (user.role === 'admin') return { isAdmin: true, customerIds: [] };
+  const dbUser = await db.get('SELECT id, phone FROM users WHERE id = ?', [user.id]);
+  const phone = dbUser?.phone;
+  if (!phone) return { isAdmin: false, customerIds: [], contactIds: [], phone: null };
+  const contacts = await db.query(
+    `SELECT c.id, cc.customer_id
+     FROM contacts c
+     JOIN contact_customers cc ON cc.contact_id = c.id
+     WHERE c.phone = ?`,
+    [phone]
+  );
+  const customerIds = Array.from(
+    new Set(contacts.map((c) => Number(c.customer_id)).filter((id) => Number.isFinite(id)))
+  );
+  const contactIds = contacts.map((c) => Number(c.id)).filter((id) => Number.isFinite(id));
+  return { isAdmin: false, customerIds, contactIds, phone };
+};
+
+const scopeMiddleware = async (req, res, next) => {
+  if (!req.user) return next();
+  try {
+    req.scope = await loadUserScope(req.user);
+    return next();
+  } catch (err) {
+    return res.status(500).json({ error: '获取权限范围失败' });
+  }
+};
+
+app.use('/api', scopeMiddleware);
+
 // Auth
 app.get('/api/auth/captcha', async (req, res) => {
   const security = await getSecurityConfig();
@@ -1137,17 +1182,54 @@ const buildSendContent = ({ subject, message, contact, license, configs }) => {
   return { finalSubject, finalMessage };
 };
 
+const normalizeCustomerIds = (rawIds, fallbackId) => {
+  let ids = [];
+  if (Array.isArray(rawIds)) {
+    ids = rawIds;
+  } else if (typeof rawIds === 'string') {
+    ids = rawIds.split(',').map((v) => v.trim());
+  }
+  const cleaned = ids
+    .map((id) => Number(id))
+    .filter((id) => Number.isFinite(id) && id > 0);
+  if (!cleaned.length && fallbackId) {
+    const fallback = Number(fallbackId);
+    if (Number.isFinite(fallback) && fallback > 0) return [fallback];
+  }
+  return Array.from(new Set(cleaned));
+};
+
+const syncContactCustomers = async (trx, contactId, customerIds) => {
+  await trx.run('DELETE FROM contact_customers WHERE contact_id = ?', [contactId]);
+  if (!customerIds.length) return;
+  const values = [];
+  customerIds.forEach((cid) => {
+    values.push(contactId, cid);
+  });
+  const tuples = customerIds.map(() => '(?, ?)').join(',');
+  await trx.run(`INSERT INTO contact_customers (contact_id, customer_id) VALUES ${tuples}`, values);
+};
+
 // Customers
 app.get('/api/customers', async (req, res) => {
   const { search } = req.query;
-  const rows = search
-    ? await db.query('SELECT * FROM customers WHERE name LIKE ? ORDER BY id DESC', [`%${search}%`])
-    : await db.query('SELECT * FROM customers ORDER BY id DESC');
+  const where = [];
+  const params = [];
+  if (search) {
+    where.push('name LIKE ?');
+    params.push(`%${search}%`);
+  }
+  applyScopeFilter({ scope: req.scope, where, params, column: 'customers.id' });
+  const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
+  const rows = await db.query(`SELECT * FROM customers ${whereSql} ORDER BY id DESC`, params);
   res.json(rows);
 });
 
 app.post('/api/customers', requireRole(['admin', 'sales']), async (req, res) => {
   const { name, juxin_sales, channel_sales } = req.body;
+  if (req.scope && !req.scope.isAdmin) {
+    return res.status(403).json({ error: '无权限' });
+  }
   if (!name || !name.trim()) {
     return res.status(400).json({ error: '客户名称不能为空' });
   }
@@ -1178,6 +1260,13 @@ app.put('/api/customers/:id', requireRole(['admin', 'sales']), async (req, res) 
   }
   try {
     const before = await db.get('SELECT * FROM customers WHERE id = ?', [id]);
+    if (!before) return res.status(404).json({ error: '客户不存在' });
+    if (req.scope && !req.scope.isAdmin) {
+      const allowed = req.scope.customerIds || [];
+      if (!allowed.includes(Number(id))) {
+        return res.status(403).json({ error: '无权限' });
+      }
+    }
     await db.run(
       'UPDATE customers SET name = ?, juxin_sales = ?, channel_sales = ? WHERE id = ?',
       [name.trim(), juxin_sales || '', channel_sales || '', id]
@@ -1199,7 +1288,13 @@ app.put('/api/customers/:id', requireRole(['admin', 'sales']), async (req, res) 
 
 app.delete('/api/customers/:id', requireRole(['admin']), async (req, res) => {
   const { id } = req.params;
-  const hasContacts = await db.get('SELECT COUNT(1) AS count FROM contacts WHERE customer_id = ?', [id]);
+  if (req.scope && !req.scope.isAdmin) {
+    const allowed = req.scope.customerIds || [];
+    if (!allowed.includes(Number(id))) {
+      return res.status(403).json({ error: '无权限' });
+    }
+  }
+  const hasContacts = await db.get('SELECT COUNT(1) AS count FROM contact_customers WHERE customer_id = ?', [id]);
   if (Number(hasContacts?.count || 0) > 0) {
     return res.status(400).json({ error: '该客户下存在联系人，无法删除' });
   }
@@ -1221,7 +1316,7 @@ app.get('/api/contacts', async (req, res) => {
   const where = [];
   const params = [];
   if (customer_id) {
-    where.push('contacts.customer_id = ?');
+    where.push('cc.customer_id = ?');
     params.push(customer_id);
   }
   if (is_active === '0' || is_active === '1') {
@@ -1232,44 +1327,75 @@ app.get('/api/contacts', async (req, res) => {
     where.push('(contacts.name LIKE ? OR contacts.phone LIKE ? OR contacts.email LIKE ?)');
     params.push(`%${search}%`, `%${search}%`, `%${search}%`);
   }
+  applyScopeFilter({ scope: req.scope, where, params, column: 'customers.id' });
   const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
   const rows = await db.query(
-    `SELECT contacts.*, customers.name AS customer_name
+    `SELECT contacts.*,
+      GROUP_CONCAT(DISTINCT customers.name ORDER BY customers.name SEPARATOR '、') AS customer_name,
+      GROUP_CONCAT(DISTINCT customers.id ORDER BY customers.id SEPARATOR ',') AS customer_ids
      FROM contacts
-     JOIN customers ON customers.id = contacts.customer_id
+     LEFT JOIN contact_customers cc ON cc.contact_id = contacts.id
+     LEFT JOIN customers ON customers.id = cc.customer_id
      ${whereSql}
+     GROUP BY contacts.id
      ORDER BY contacts.id DESC`,
     params
   );
-  res.json(rows);
+  res.json(
+    rows.map((row) => ({
+      ...row,
+      customer_ids: row.customer_ids
+        ? row.customer_ids
+            .split(',')
+            .map((id) => Number(id))
+            .filter((id) => Number.isFinite(id))
+        : [],
+    }))
+  );
 });
 
 app.post('/api/contacts', requireRole(['admin', 'sales']), async (req, res) => {
-  const { customer_id, name, phone, email, wecom_id, is_active } = req.body;
-  if (!customer_id) {
+  const { customer_id, customer_ids, name, phone, email, wecom_id, is_active } = req.body;
+  const normalizedCustomerIds = normalizeCustomerIds(customer_ids, customer_id);
+  if (!normalizedCustomerIds.length) {
     return res.status(400).json({ error: '请选择客户名称' });
+  }
+  if (req.scope && !req.scope.isAdmin) {
+    const allowed = new Set(req.scope.customerIds || []);
+    if (!normalizedCustomerIds.every((id) => allowed.has(Number(id)))) {
+      return res.status(403).json({ error: '无权限' });
+    }
   }
   if (!name || !name.trim()) {
     return res.status(400).json({ error: '联系人不能为空' });
   }
-  const info = await db.run(
-    'INSERT INTO contacts (customer_id, name, phone, email, wecom_id, is_active) VALUES (?, ?, ?, ?, ?, ?)',
-    [
-      customer_id,
-      name.trim(),
-      phone || '',
-      email || '',
-      wecom_id || '',
-      is_active === 0 ? 0 : 1,
-    ]
-  );
-  const row = await db.get(
-    `SELECT contacts.*, customers.name AS customer_name
-     FROM contacts
-     JOIN customers ON customers.id = contacts.customer_id
-     WHERE contacts.id = ?`,
-    [info.insertId]
-  );
+  const primaryCustomerId = normalizedCustomerIds[0];
+  const row = await db.transaction(async (trx) => {
+    const info = await trx.run(
+      'INSERT INTO contacts (customer_id, name, phone, email, wecom_id, is_active) VALUES (?, ?, ?, ?, ?, ?)',
+      [
+        primaryCustomerId,
+        name.trim(),
+        phone || '',
+        email || '',
+        wecom_id || '',
+        is_active === 0 ? 0 : 1,
+      ]
+    );
+    await syncContactCustomers(trx, info.insertId, normalizedCustomerIds);
+    const result = await trx.get(
+      `SELECT contacts.*,
+        GROUP_CONCAT(DISTINCT customers.name ORDER BY customers.name SEPARATOR '、') AS customer_name,
+        GROUP_CONCAT(DISTINCT customers.id ORDER BY customers.id SEPARATOR ',') AS customer_ids
+       FROM contacts
+       LEFT JOIN contact_customers cc ON cc.contact_id = contacts.id
+       LEFT JOIN customers ON customers.id = cc.customer_id
+       WHERE contacts.id = ?
+       GROUP BY contacts.id`,
+      [info.insertId]
+    );
+    return result;
+  });
   await logOperation({
     user: req.user,
     action: 'CREATE',
@@ -1277,30 +1403,63 @@ app.post('/api/contacts', requireRole(['admin', 'sales']), async (req, res) => {
     entityId: row.id,
     afterData: row,
   });
-  res.json(toJson(row));
+  res.json({
+    ...toJson(row),
+    customer_ids: row?.customer_ids
+      ? row.customer_ids
+          .split(',')
+          .map((id) => Number(id))
+          .filter((id) => Number.isFinite(id))
+      : [],
+  });
 });
 
 app.put('/api/contacts/:id', requireRole(['admin', 'sales']), async (req, res) => {
   const { id } = req.params;
-  const { customer_id, name, phone, email, wecom_id, is_active } = req.body;
-  if (!customer_id) {
+  const { customer_id, customer_ids, name, phone, email, wecom_id, is_active } = req.body;
+  const normalizedCustomerIds = normalizeCustomerIds(customer_ids, customer_id);
+  if (!normalizedCustomerIds.length) {
     return res.status(400).json({ error: '请选择客户名称' });
   }
   if (!name || !name.trim()) {
     return res.status(400).json({ error: '联系人不能为空' });
   }
   const before = await db.get('SELECT * FROM contacts WHERE id = ?', [id]);
-  await db.run(
-    'UPDATE contacts SET customer_id = ?, name = ?, phone = ?, email = ?, wecom_id = ?, is_active = ? WHERE id = ?',
-    [customer_id, name.trim(), phone || '', email || '', wecom_id || '', is_active === 0 ? 0 : 1, id]
-  );
-  const row = await db.get(
-    `SELECT contacts.*, customers.name AS customer_name
-     FROM contacts
-     JOIN customers ON customers.id = contacts.customer_id
-     WHERE contacts.id = ?`,
-    [id]
-  );
+  if (!before) return res.status(404).json({ error: '联系人不存在' });
+  if (req.scope && !req.scope.isAdmin) {
+    const allowed = new Set(req.scope.customerIds || []);
+    const currentLinks = await db.query(
+      'SELECT customer_id FROM contact_customers WHERE contact_id = ?',
+      [id]
+    );
+    const currentIds = currentLinks.map((row) => Number(row.customer_id));
+    if (
+      !currentIds.every((cid) => allowed.has(cid)) ||
+      !normalizedCustomerIds.every((cid) => allowed.has(Number(cid)))
+    ) {
+      return res.status(403).json({ error: '无权限' });
+    }
+  }
+  const primaryCustomerId = normalizedCustomerIds[0];
+  const row = await db.transaction(async (trx) => {
+    await trx.run(
+      'UPDATE contacts SET customer_id = ?, name = ?, phone = ?, email = ?, wecom_id = ?, is_active = ? WHERE id = ?',
+      [primaryCustomerId, name.trim(), phone || '', email || '', wecom_id || '', is_active === 0 ? 0 : 1, id]
+    );
+    await syncContactCustomers(trx, Number(id), normalizedCustomerIds);
+    const result = await trx.get(
+      `SELECT contacts.*,
+        GROUP_CONCAT(DISTINCT customers.name ORDER BY customers.name SEPARATOR '、') AS customer_name,
+        GROUP_CONCAT(DISTINCT customers.id ORDER BY customers.id SEPARATOR ',') AS customer_ids
+       FROM contacts
+       LEFT JOIN contact_customers cc ON cc.contact_id = contacts.id
+       LEFT JOIN customers ON customers.id = cc.customer_id
+       WHERE contacts.id = ?
+       GROUP BY contacts.id`,
+      [id]
+    );
+    return result;
+  });
   await logOperation({
     user: req.user,
     action: 'UPDATE',
@@ -1309,12 +1468,32 @@ app.put('/api/contacts/:id', requireRole(['admin', 'sales']), async (req, res) =
     beforeData: before,
     afterData: row,
   });
-  res.json(toJson(row));
+  res.json({
+    ...toJson(row),
+    customer_ids: row?.customer_ids
+      ? row.customer_ids
+          .split(',')
+          .map((cid) => Number(cid))
+          .filter((cid) => Number.isFinite(cid))
+      : [],
+  });
 });
 
 app.delete('/api/contacts/:id', requireRole(['admin']), async (req, res) => {
   const { id } = req.params;
   const before = await db.get('SELECT * FROM contacts WHERE id = ?', [id]);
+  if (!before) return res.status(404).json({ error: '联系人不存在' });
+  if (req.scope && !req.scope.isAdmin) {
+    const allowed = new Set(req.scope.customerIds || []);
+    const currentLinks = await db.query(
+      'SELECT customer_id FROM contact_customers WHERE contact_id = ?',
+      [id]
+    );
+    const currentIds = currentLinks.map((row) => Number(row.customer_id));
+    if (!currentIds.every((cid) => allowed.has(cid))) {
+      return res.status(403).json({ error: '无权限' });
+    }
+  }
   await db.run('DELETE FROM contacts WHERE id = ?', [id]);
   await logOperation({
     user: req.user,
@@ -1352,6 +1531,7 @@ app.get('/api/licenses', async (req, res) => {
     where.push('(licenses.name LIKE ? OR customers.name LIKE ?)');
     params.push(`%${search}%`, `%${search}%`);
   }
+  applyScopeFilter({ scope: req.scope, where, params, column: 'customers.id' });
   const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
   const rows = await db.query(
     `SELECT licenses.*, customers.name AS customer_name
@@ -1366,6 +1546,10 @@ app.get('/api/licenses', async (req, res) => {
 
 app.get('/api/licenses/expiring', async (req, res) => {
   const days = Number(req.query.days || 30);
+  const where = [];
+  const params = [];
+  applyScopeFilter({ scope: req.scope, where, params, column: 'customers.id' });
+  const scopeSql = where.length ? `AND ${where.join(' AND ')}` : '';
   const rows = await db.query(
     `SELECT licenses.*, customers.name AS customer_name,
       DATEDIFF(licenses.end_date, CURDATE()) AS days_left
@@ -1373,8 +1557,9 @@ app.get('/api/licenses/expiring', async (req, res) => {
      JOIN customers ON customers.id = licenses.customer_id
      WHERE licenses.end_date >= CURDATE()
      AND licenses.end_date <= DATE_ADD(CURDATE(), INTERVAL ? DAY)
+     ${scopeSql}
      ORDER BY licenses.end_date ASC`,
-    [days]
+    [days, ...params]
   );
   res.json(rows);
 });
@@ -1383,6 +1568,12 @@ app.post('/api/licenses', requireRole(['admin', 'sales']), async (req, res) => {
   const { customer_id, name, start_date, end_date, status, note, reminder_days } = req.body;
   if (!customer_id) {
     return res.status(400).json({ error: '请选择客户名称' });
+  }
+  if (req.scope && !req.scope.isAdmin) {
+    const allowed = req.scope.customerIds || [];
+    if (!allowed.includes(Number(customer_id))) {
+      return res.status(403).json({ error: '无权限' });
+    }
   }
   if (!name || !name.trim()) {
     return res.status(400).json({ error: '授权名称不能为空' });
@@ -1424,6 +1615,13 @@ app.put('/api/licenses/:id', requireRole(['admin', 'sales']), async (req, res) =
     return res.status(400).json({ error: '到期日期不能为空' });
   }
   const before = await db.get('SELECT * FROM licenses WHERE id = ?', [id]);
+  if (!before) return res.status(404).json({ error: '授权不存在' });
+  if (req.scope && !req.scope.isAdmin) {
+    const allowed = req.scope.customerIds || [];
+    if (!allowed.includes(Number(before.customer_id)) || !allowed.includes(Number(customer_id))) {
+      return res.status(403).json({ error: '无权限' });
+    }
+  }
   await db.run(
     'UPDATE licenses SET customer_id = ?, name = ?, start_date = ?, end_date = ?, status = ?, note = ?, reminder_days = ? WHERE id = ?',
     [customer_id, name.trim(), start_date || null, end_date, status || 'ACTIVE', note || '', reminder_days || null, id]
@@ -1449,6 +1647,13 @@ app.put('/api/licenses/:id', requireRole(['admin', 'sales']), async (req, res) =
 app.delete('/api/licenses/:id', requireRole(['admin']), async (req, res) => {
   const { id } = req.params;
   const before = await db.get('SELECT * FROM licenses WHERE id = ?', [id]);
+  if (!before) return res.status(404).json({ error: '授权不存在' });
+  if (req.scope && !req.scope.isAdmin) {
+    const allowed = req.scope.customerIds || [];
+    if (!allowed.includes(Number(before.customer_id))) {
+      return res.status(403).json({ error: '无权限' });
+    }
+  }
   await db.run('DELETE FROM licenses WHERE id = ?', [id]);
   await logOperation({
     user: req.user,
@@ -1463,9 +1668,12 @@ app.delete('/api/licenses/:id', requireRole(['admin']), async (req, res) => {
 // Autocomplete customers
 app.get('/api/customers/autocomplete', async (req, res) => {
   const { q } = req.query;
+  const where = ['name LIKE ?'];
+  const params = [`%${q || ''}%`];
+  applyScopeFilter({ scope: req.scope, where, params, column: 'customers.id' });
   const rows = await db.query(
-    'SELECT id, name FROM customers WHERE name LIKE ? ORDER BY name ASC LIMIT 20',
-    [`%${q || ''}%`]
+    `SELECT id, name FROM customers WHERE ${where.join(' AND ')} ORDER BY name ASC LIMIT 20`,
+    params
   );
   res.json(rows);
 });
@@ -1812,6 +2020,33 @@ const sendToContacts = async ({ contacts, channels, subject, message, license, i
   return results;
 };
 
+const ensureContactsInScope = async (scope, contactIds = []) => {
+  if (!scope || scope.isAdmin) return true;
+  const ids = contactIds.map((id) => Number(id)).filter((id) => Number.isFinite(id));
+  const customerIds = (scope.customerIds || []).map((id) => Number(id)).filter((id) => Number.isFinite(id));
+  if (!ids.length || !customerIds.length) return false;
+  const row = await db.get(
+    `SELECT COUNT(DISTINCT contacts.id) AS count
+     FROM contacts
+     JOIN contact_customers cc ON cc.contact_id = contacts.id
+     WHERE contacts.id IN (${buildInClause(ids)})
+     AND cc.customer_id IN (${buildInClause(customerIds)})`,
+    [...ids, ...customerIds]
+  );
+  return Number(row?.count || 0) === ids.length;
+};
+
+const ensureLicenseInScope = async (scope, licenseId) => {
+  if (!scope || scope.isAdmin) return true;
+  const customerIds = (scope.customerIds || []).map((id) => Number(id)).filter((id) => Number.isFinite(id));
+  if (!licenseId || !customerIds.length) return false;
+  const row = await db.get(
+    `SELECT 1 FROM licenses WHERE id = ? AND customer_id IN (${buildInClause(customerIds)})`,
+    [licenseId, ...customerIds]
+  );
+  return !!row;
+};
+
 // Send
 app.post('/api/send', requireRole(['admin', 'sales']), async (req, res) => {
   const { contactIds, channels, subject, message, licenseId } = req.body;
@@ -1820,6 +2055,18 @@ app.post('/api/send', requireRole(['admin', 'sales']), async (req, res) => {
   }
   if (!Array.isArray(channels) || channels.length === 0) {
     return res.status(400).json({ error: '请选择发送渠道' });
+  }
+  if (req.scope && !req.scope.isAdmin) {
+    const okContacts = await ensureContactsInScope(req.scope, contactIds);
+    if (!okContacts) {
+      return res.status(403).json({ error: '无权限' });
+    }
+    if (licenseId) {
+      const okLicense = await ensureLicenseInScope(req.scope, licenseId);
+      if (!okLicense) {
+        return res.status(403).json({ error: '无权限' });
+      }
+    }
   }
   const contacts = await db.query(
     `SELECT contacts.*, customers.name AS customer_name
@@ -1938,12 +2185,18 @@ app.post('/api/test/wecom', requireRole(['admin']), async (req, res) => {
 
 // Send plans
 app.get('/api/send-plans', requireRole(['admin', 'sales']), async (req, res) => {
+  const where = [];
+  const params = [];
+  applyScopeFilter({ scope: req.scope, where, params, column: 'customers.id' });
+  const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
   const rows = await db.query(
     `SELECT send_plans.*, licenses.name AS license_name, customers.name AS customer_name
      FROM send_plans
      JOIN licenses ON licenses.id = send_plans.license_id
      JOIN customers ON customers.id = licenses.customer_id
-     ORDER BY send_plans.id DESC`
+     ${whereSql}
+     ORDER BY send_plans.id DESC`,
+    params
   );
   res.json(
     rows.map((row) => ({
@@ -1968,6 +2221,16 @@ app.post('/api/send-plans', requireRole(['admin', 'sales']), async (req, res) =>
   }
   if (!days || !String(days).trim()) {
     return res.status(400).json({ error: '请填写提醒天数' });
+  }
+  if (req.scope && !req.scope.isAdmin) {
+    const okContacts = await ensureContactsInScope(req.scope, contact_ids);
+    if (!okContacts) {
+      return res.status(403).json({ error: '无权限' });
+    }
+    const okLicense = await ensureLicenseInScope(req.scope, license_id);
+    if (!okLicense) {
+      return res.status(403).json({ error: '无权限' });
+    }
   }
   const info = await db.run(
     'INSERT INTO send_plans (name, license_id, contact_ids, channels, days, enabled, start_date, end_date) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
@@ -2021,6 +2284,21 @@ app.put('/api/send-plans/:id', requireRole(['admin', 'sales']), async (req, res)
     return res.status(400).json({ error: '请填写提醒天数' });
   }
   const before = await db.get('SELECT * FROM send_plans WHERE id = ?', [id]);
+  if (!before) return res.status(404).json({ error: '计划不存在' });
+  if (req.scope && !req.scope.isAdmin) {
+    const okBefore = await ensureLicenseInScope(req.scope, before.license_id);
+    if (!okBefore) {
+      return res.status(403).json({ error: '无权限' });
+    }
+    const okContacts = await ensureContactsInScope(req.scope, contact_ids);
+    if (!okContacts) {
+      return res.status(403).json({ error: '无权限' });
+    }
+    const okLicense = await ensureLicenseInScope(req.scope, license_id);
+    if (!okLicense) {
+      return res.status(403).json({ error: '无权限' });
+    }
+  }
   await db.run(
     'UPDATE send_plans SET name = ?, license_id = ?, contact_ids = ?, channels = ?, days = ?, enabled = ?, start_date = ?, end_date = ? WHERE id = ?',
     [
@@ -2062,6 +2340,13 @@ app.put('/api/send-plans/:id', requireRole(['admin', 'sales']), async (req, res)
 app.delete('/api/send-plans/:id', requireRole(['admin', 'sales']), async (req, res) => {
   const { id } = req.params;
   const before = await db.get('SELECT * FROM send_plans WHERE id = ?', [id]);
+  if (!before) return res.status(404).json({ error: '计划不存在' });
+  if (req.scope && !req.scope.isAdmin) {
+    const ok = await ensureLicenseInScope(req.scope, before.license_id);
+    if (!ok) {
+      return res.status(403).json({ error: '无权限' });
+    }
+  }
   await db.run('DELETE FROM send_plans WHERE id = ?', [id]);
   await logOperation({
     user: req.user,
@@ -2074,6 +2359,10 @@ app.delete('/api/send-plans/:id', requireRole(['admin', 'sales']), async (req, r
 });
 
 app.get('/api/send-logs', async (req, res) => {
+  const where = [];
+  const params = [];
+  applyScopeFilter({ scope: req.scope, where, params, column: 'customers.id' });
+  const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
   const rows = await db.query(
     `SELECT send_logs.*, contacts.name AS contact_name, customers.name AS customer_name,
       licenses.name AS license_name
@@ -2081,7 +2370,9 @@ app.get('/api/send-logs', async (req, res) => {
      JOIN contacts ON contacts.id = send_logs.contact_id
      JOIN customers ON customers.id = contacts.customer_id
      LEFT JOIN licenses ON licenses.id = send_logs.license_id
-     ORDER BY send_logs.id DESC LIMIT 200`
+     ${whereSql}
+     ORDER BY send_logs.id DESC LIMIT 200`,
+    params
   );
   res.json(rows);
 });
@@ -2197,6 +2488,10 @@ app.get('/api/import-jobs', requireRole(['admin', 'sales']), async (req, res) =>
     where.push('created_at <= ?');
     params.push(date_to);
   }
+  if (req.scope && !req.scope.isAdmin) {
+    where.push('user_id = ?');
+    params.push(req.user.id);
+  }
   const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
   const take = Math.min(Math.max(Number(limit || 300), 1), 2000);
   const rows = await db.query(
@@ -2214,6 +2509,9 @@ app.get('/api/import-jobs/:id', requireRole(['admin', 'sales']), async (req, res
   const { id } = req.params;
   const row = await db.get('SELECT * FROM import_jobs WHERE id = ?', [id]);
   if (!row) return res.status(404).json({ error: '记录不存在' });
+  if (req.scope && !req.scope.isAdmin && Number(row.user_id) !== Number(req.user.id)) {
+    return res.status(403).json({ error: '无权限' });
+  }
   let errors = [];
   try {
     errors = row.errors_json ? JSON.parse(row.errors_json) : [];
@@ -2266,6 +2564,9 @@ app.post('/api/users/:id/reset-password', requireRole(['admin']), async (req, re
 
 // Import (CSV)
 app.post('/api/import/customers', requireRole(['admin', 'sales']), upload.single('file'), async (req, res) => {
+  if (req.scope && !req.scope.isAdmin) {
+    return res.status(403).json({ error: '无权限' });
+  }
   if (!req.file) {
     return res.status(400).json({ error: '请上传CSV或Excel文件' });
   }
@@ -2345,6 +2646,39 @@ app.post('/api/import/contacts', requireRole(['admin', 'sales']), upload.single(
   let created = 0;
   let skipped = 0;
   const errors = [];
+  let allowedNames = null;
+  if (req.scope && !req.scope.isAdmin) {
+    const customerIds = req.scope.customerIds || [];
+    if (!customerIds.length) {
+      return res.status(403).json({ error: '无权限' });
+    }
+    const rows = await db.query(
+      `SELECT id, name FROM customers WHERE id IN (${buildInClause(customerIds)})`,
+      customerIds
+    );
+    allowedNames = new Set(rows.map((r) => r.name));
+    const unauthorized = [];
+    records.forEach((row, idx) => {
+      const customerName = row.customer_name || row['客户名称'];
+      if (customerName && !allowedNames.has(String(customerName).trim())) {
+        unauthorized.push({ row: idx + 1, reason: '无权限导入该客户' });
+      }
+    });
+    if (unauthorized.length) {
+      await insertImportJob({
+        user: req.user,
+        type: 'contacts',
+        filename: req.file?.originalname,
+        status: 'FAILED',
+        created: 0,
+        skipped: unauthorized.length,
+        total: records.length,
+        errors: unauthorized,
+        errorMessage: '存在无权限客户',
+      });
+      return res.status(403).json({ error: '无权限导入该客户', errors: unauthorized });
+    }
+  }
   for (const [index, row] of records.entries()) {
     const customerName = row.customer_name || row['客户名称'];
     const name = row.name || row['联系人'];
@@ -2377,6 +2711,10 @@ app.post('/api/import/contacts', requireRole(['admin', 'sales']), upload.single(
         'INSERT INTO contacts (customer_id, name, phone, email, wecom_id, is_active) VALUES (?, ?, ?, ?, ?, ?)',
         [customer.id, String(name).trim(), String(phone).trim(), String(email).trim(), String(wecom).trim(), isActive]
       );
+      await db.run('INSERT INTO contact_customers (contact_id, customer_id) VALUES (?, ?)', [
+        info.insertId,
+        customer.id,
+      ]);
       created += 1;
       await logOperation({
         user: req.user,
@@ -2418,6 +2756,7 @@ app.get('/api/dashboard', requireRole(['admin', 'sales']), async (req, res) => {
     licenseWhere.push('(customers.juxin_sales = ? OR customers.channel_sales = ?)');
     licenseParams.push(sales, sales);
   }
+  applyScopeFilter({ scope: req.scope, where: licenseWhere, params: licenseParams, column: 'customers.id' });
   const licenseWhereSql = licenseWhere.length ? `AND ${licenseWhere.join(' AND ')}` : '';
 
   const licenseDaysExpr = `DATEDIFF(licenses.end_date, CURDATE())`;
@@ -2457,6 +2796,7 @@ app.get('/api/dashboard', requireRole(['admin', 'sales']), async (req, res) => {
     reminderWhere.push('(customers.juxin_sales = ? OR customers.channel_sales = ?)');
     reminderParams.push(sales, sales);
   }
+  applyScopeFilter({ scope: req.scope, where: reminderWhere, params: reminderParams, column: 'customers.id' });
   // Limit dashboard charts to recent N days for better signal.
   reminderWhere.push(`DATE(reminder_logs.sent_at) >= DATE_SUB(CURDATE(), INTERVAL ? DAY)`);
   reminderParams.push(range);
@@ -2623,6 +2963,7 @@ app.get('/api/reminder-logs', requireRole(['admin', 'sales']), async (req, res) 
     where.push('reminder_logs.error_code = ?');
     params.push(error_code);
   }
+  applyScopeFilter({ scope: req.scope, where, params, column: 'customers.id' });
   const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
   const rows = await db.query(
     `SELECT reminder_logs.*, contacts.name AS contact_name, customers.name AS customer_name,
@@ -2642,6 +2983,7 @@ app.post('/api/reminder-logs/:id/resend', requireRole(['admin', 'sales']), async
   const { id } = req.params;
   const log = await db.get(
     `SELECT reminder_logs.*, contacts.*, customers.name AS customer_name,
+      customers.id AS customer_id,
       licenses.name AS license_name, licenses.end_date AS end_date
      FROM reminder_logs
      JOIN contacts ON contacts.id = reminder_logs.contact_id
@@ -2652,6 +2994,12 @@ app.post('/api/reminder-logs/:id/resend', requireRole(['admin', 'sales']), async
   );
   if (!log) {
     return res.status(404).json({ error: '记录不存在' });
+  }
+  if (req.scope && !req.scope.isAdmin) {
+    const allowed = req.scope.customerIds || [];
+    if (!allowed.includes(Number(log.customer_id))) {
+      return res.status(403).json({ error: '无权限' });
+    }
   }
   const license = {
     id: log.license_id,

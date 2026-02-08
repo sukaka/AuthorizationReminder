@@ -107,6 +107,14 @@ const init = async () => {
     FOREIGN KEY (customer_id) REFERENCES customers(id)
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
 
+  await run(`CREATE TABLE IF NOT EXISTS contact_customers (
+    contact_id INT NOT NULL,
+    customer_id INT NOT NULL,
+    PRIMARY KEY (contact_id, customer_id),
+    FOREIGN KEY (contact_id) REFERENCES contacts(id) ON DELETE CASCADE,
+    FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE CASCADE
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
+
   await run(`CREATE TABLE IF NOT EXISTS licenses (
     id INT AUTO_INCREMENT PRIMARY KEY,
     customer_id INT NOT NULL,
@@ -261,6 +269,11 @@ const init = async () => {
     expires_at DATETIME NOT NULL,
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
+
+  await run(
+    `INSERT IGNORE INTO contact_customers (contact_id, customer_id)
+     SELECT id, customer_id FROM contacts WHERE customer_id IS NOT NULL`
+  );
 };
 
 const ready = (async () => {

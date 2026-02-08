@@ -81,6 +81,7 @@ const emptyCustomer = { id: null, name: '', juxin_sales: '', channel_sales: '' }
 const emptyContact = {
   id: null,
   customer_id: '',
+  customer_ids: [],
   name: '',
   phone: '',
   email: '',
@@ -360,8 +361,14 @@ function App() {
   const planContactsView = useMemo(() => {
     const keyword = planContactSearch.trim().toLowerCase()
     return contacts.filter((c) => {
-      if (planCustomerFilter && String(c.customer_id) !== String(planCustomerFilter)) {
-        return false
+      if (planCustomerFilter) {
+        const ids = Array.isArray(c.customer_ids)
+          ? c.customer_ids.map((id) => String(id))
+          : String(c.customer_ids || '')
+              .split(',')
+              .map((id) => id.trim())
+              .filter(Boolean)
+        if (!ids.includes(String(planCustomerFilter))) return false
       }
       if (!keyword) return true
       return (
@@ -797,8 +804,19 @@ function App() {
   const onSaveContact = async (e) => {
     e.preventDefault()
     try {
+      const selectedIds = Array.isArray(contactForm.customer_ids)
+        ? contactForm.customer_ids
+        : String(contactForm.customer_ids || '')
+            .split(',')
+            .map((id) => id.trim())
+            .filter(Boolean)
+      const normalizedIds = selectedIds
+        .map((id) => String(id))
+        .filter((id) => id)
       const payload = {
         ...contactForm,
+        customer_ids: normalizedIds,
+        customer_id: normalizedIds[0] || contactForm.customer_id || '',
         is_active: contactForm.is_active ? 1 : 0,
       }
       if (contactForm.id) {
@@ -816,9 +834,16 @@ function App() {
   }
 
   const onEditContact = (contact) => {
+    const ids = Array.isArray(contact.customer_ids)
+      ? contact.customer_ids
+      : String(contact.customer_ids || '')
+          .split(',')
+          .map((id) => id.trim())
+          .filter(Boolean)
     setContactForm({
       id: contact.id,
-      customer_id: String(contact.customer_id),
+      customer_id: String(contact.customer_id || ids[0] || ''),
+      customer_ids: ids.map((id) => String(id)),
       name: contact.name,
       phone: contact.phone || '',
       email: contact.email || '',
@@ -2432,27 +2457,27 @@ function App() {
                 />
               </label>
               <label className="form-label">
-                客户名称（下拉/联想）
-                <input
-                  list="customer-suggestions"
-                  placeholder="请选择或输入客户名称"
-                  value={customerMap.get(String(contactForm.customer_id))?.name || ''}
+                客户名称（可多选）
+                <select
+                  className="form-select"
+                  multiple
+                  value={contactForm.customer_ids}
                   onChange={(e) => {
-                    const value = e.target.value
-                    const match = customers.find((c) => c.name === value)
+                    const selected = Array.from(e.target.selectedOptions).map((opt) => opt.value)
                     setContactForm({
                       ...contactForm,
-                      customer_id: match ? String(match.id) : '',
+                      customer_ids: selected,
+                      customer_id: selected[0] || '',
                     })
                   }}
                   required
-                  className="form-control"
-                />
-                <datalist id="customer-suggestions">
-                  {pagedCustomers.items.map((c) => (
-                    <option key={c.id} value={c.name} />
+                >
+                  {customers.map((c) => (
+                    <option key={c.id} value={String(c.id)}>
+                      {c.name}
+                    </option>
                   ))}
-                </datalist>
+                </select>
               </label>
               <label className="form-label">
                 客户电话
