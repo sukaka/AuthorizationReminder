@@ -527,6 +527,38 @@ textarea:focus {
   font-size: 13px;
 }
 
+.multi-selected {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.multi-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: rgba(37, 99, 235, 0.1);
+  border: 1px solid rgba(37, 99, 235, 0.2);
+  color: #1e293b;
+  font-size: 12px;
+}
+
+.multi-chip .chip-remove {
+  border: none;
+  background: transparent;
+  color: rgba(30, 41, 59, 0.6);
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+}
+
+.multi-chip .chip-remove:hover {
+  color: rgba(30, 41, 59, 0.9);
+}
+
 .multi-select-trigger {
   width: 100%;
   text-align: left;

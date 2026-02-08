@@ -362,6 +362,11 @@ function App() {
     return map
   }, [contacts])
 
+  const selectedContactCustomerNames = useMemo(() => {
+    const ids = contactForm.customer_ids || []
+    return ids.map((id) => customerMap.get(String(id))?.name).filter(Boolean)
+  }, [contactForm.customer_ids, customerMap])
+
   const parseCustomerNames = (raw) =>
     String(raw || '')
       .split(/[，,、]/)
@@ -386,8 +391,8 @@ function App() {
       customer_ids: ids,
       customer_id: ids[0] || '',
     }))
-    const base = normalizedNames.join('、')
-    setContactCustomerInput(appendSeparator && base ? `${base}、` : base)
+    const base = normalizedNames.join(',')
+    setContactCustomerInput(appendSeparator && base ? `${base},` : base)
   }
 
   useEffect(() => {
@@ -395,7 +400,7 @@ function App() {
     const names = (contactForm.customer_ids || [])
       .map((id) => customerMap.get(String(id))?.name)
       .filter(Boolean)
-    setContactCustomerInput(names.join('、'))
+    setContactCustomerInput(names.join(','))
   }, [contactForm.customer_ids, customerMap, contactCustomerEditing])
 
   useEffect(() => {
@@ -435,8 +440,10 @@ function App() {
   }, [contacts, planContactSearch, planCustomerFilter])
 
   const contactCustomerSuggestions = useMemo(() => {
-    const tokens = parseCustomerNames(contactCustomerInput)
-    const keyword = tokens[tokens.length - 1] || ''
+    const raw = String(contactCustomerInput || '')
+    const hasTrailingSeparator = /[，,、]\s*$/.test(raw)
+    const tokens = parseCustomerNames(raw)
+    const keyword = hasTrailingSeparator ? '' : tokens[tokens.length - 1] || ''
     if (!keyword) return customers
     return customers.filter((c) => c.name.includes(keyword))
   }, [customers, contactCustomerInput])
@@ -2579,7 +2586,7 @@ function App() {
                                 customer_ids: unique,
                                 customer_id: unique[0] || '',
                               })
-                              setContactCustomerInput(names.join('、') + (names.length ? '、' : ''))
+                              setContactCustomerInput(names.join(',') + (names.length ? ',' : ''))
                             }}
                           >
                             <span>{c.name}</span>
@@ -2587,6 +2594,38 @@ function App() {
                           </button>
                         )
                       })}
+                    </div>
+                  )}
+                  {selectedContactCustomerNames.length > 0 && (
+                    <div className="multi-selected">
+                      {selectedContactCustomerNames.map((name) => (
+                        <span key={name} className="multi-chip">
+                          {name}
+                          <button
+                            type="button"
+                            className="chip-remove"
+                            onClick={() => {
+                              const id = customers.find((c) => c.name === name)?.id
+                              if (!id) return
+                              const next = (contactForm.customer_ids || []).filter(
+                                (cid) => String(cid) !== String(id)
+                              )
+                              setContactForm({
+                                ...contactForm,
+                                customer_ids: next,
+                                customer_id: next[0] || '',
+                              })
+                              setContactCustomerEditing(false)
+                              const names = next
+                                .map((cid) => customerMap.get(String(cid))?.name)
+                                .filter(Boolean)
+                              setContactCustomerInput(names.join(','))
+                            }}
+                          >
+                            ×
+                          </button>
+                        </span>
+                      ))}
                     </div>
                   )}
                 </div>
