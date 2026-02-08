@@ -129,6 +129,10 @@ function App() {
   const [licensePage, setLicensePage] = useState(1)
   const [customerForm, setCustomerForm] = useState(emptyCustomer)
   const [contactForm, setContactForm] = useState(emptyContact)
+  const [contactCustomerInput, setContactCustomerInput] = useState('')
+  const [contactCustomerOpen, setContactCustomerOpen] = useState(false)
+  const [contactCustomerEditing, setContactCustomerEditing] = useState(false)
+  const contactCustomerRef = useRef(null)
   const [licenseForm, setLicenseForm] = useState(emptyLicense)
   const [customerSearch, setCustomerSearch] = useState('')
   const [contactSearch, setContactSearch] = useState('')
@@ -358,6 +362,56 @@ function App() {
     return map
   }, [contacts])
 
+  const parseCustomerNames = (raw) =>
+    String(raw || '')
+      .split(/[，,、]/)
+      .map((v) => v.trim())
+      .filter(Boolean)
+
+  const resolveCustomerIdsByNames = (names) => {
+    const ids = []
+    names.forEach((name) => {
+      const match = customers.find((c) => c.name === name)
+      if (match) ids.push(String(match.id))
+    })
+    return Array.from(new Set(ids))
+  }
+
+  const commitContactCustomerInput = (appendSeparator = false) => {
+    const names = parseCustomerNames(contactCustomerInput)
+    const ids = resolveCustomerIdsByNames(names)
+    const normalizedNames = ids.map((id) => customerMap.get(String(id))?.name).filter(Boolean)
+    setContactForm((prev) => ({
+      ...prev,
+      customer_ids: ids,
+      customer_id: ids[0] || '',
+    }))
+    const base = normalizedNames.join('、')
+    setContactCustomerInput(appendSeparator && base ? `${base}、` : base)
+  }
+
+  useEffect(() => {
+    if (contactCustomerEditing) return
+    const names = (contactForm.customer_ids || [])
+      .map((id) => customerMap.get(String(id))?.name)
+      .filter(Boolean)
+    setContactCustomerInput(names.join('、'))
+  }, [contactForm.customer_ids, customerMap, contactCustomerEditing])
+
+  useEffect(() => {
+    const handleClickOutside = (event) => {
+      if (contactCustomerRef.current && !contactCustomerRef.current.contains(event.target)) {
+        if (contactCustomerOpen) {
+          commitContactCustomerInput()
+        }
+        setContactCustomerOpen(false)
+        setContactCustomerEditing(false)
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside)
+    return () => document.removeEventListener('mousedown', handleClickOutside)
+  }, [contactCustomerOpen, contactCustomerInput])
+
   const planContactsView = useMemo(() => {
     const keyword = planContactSearch.trim().toLowerCase()
     return contacts.filter((c) => {
@@ -379,6 +433,13 @@ function App() {
       )
     })
   }, [contacts, planContactSearch, planCustomerFilter])
+
+  const contactCustomerSuggestions = useMemo(() => {
+    const tokens = parseCustomerNames(contactCustomerInput)
+    const keyword = tokens[tokens.length - 1] || ''
+    if (!keyword) return customers
+    return customers.filter((c) => c.name.includes(keyword))
+  }, [customers, contactCustomerInput])
 
   const pagedCustomers = useMemo(() => paginate(customers, customerPage), [customers, customerPage])
   const pagedContacts = useMemo(() => paginate(contacts, contactPage), [contacts, contactPage])
@@ -827,6 +888,8 @@ function App() {
         showMessage('联系人已创建')
       }
       setContactForm(emptyContact)
+      setContactCustomerInput('')
+      setContactCustomerEditing(false)
       refreshContacts()
     } catch (err) {
       showError('联系人保存失败')
@@ -850,6 +913,7 @@ function App() {
       wecom_id: contact.wecom_id || '',
       is_active: contact.is_active !== 0,
     })
+    setContactCustomerEditing(false)
   }
 
   const onDeleteContact = async (id) => {
@@ -2458,26 +2522,74 @@ function App() {
               </label>
               <label className="form-label">
                 客户名称（可多选）
-                <select
-                  className="form-select"
-                  multiple
-                  value={contactForm.customer_ids}
-                  onChange={(e) => {
-                    const selected = Array.from(e.target.selectedOptions).map((opt) => opt.value)
-                    setContactForm({
-                      ...contactForm,
-                      customer_ids: selected,
-                      customer_id: selected[0] || '',
-                    })
-                  }}
-                  required
-                >
-                  {customers.map((c) => (
-                    <option key={c.id} value={String(c.id)}>
-                      {c.name}
-                    </option>
-                  ))}
-                </select>
+                <div className="multi-input" ref={contactCustomerRef}>
+                  <input
+                    value={contactCustomerInput}
+                    onFocus={() => {
+                      setContactCustomerEditing(true)
+                      setContactCustomerOpen(true)
+                    }}
+                    onBlur={() => {
+                      setTimeout(() => {
+                        if (!contactCustomerRef.current?.contains(document.activeElement)) {
+                          commitContactCustomerInput()
+                          setContactCustomerOpen(false)
+                          setContactCustomerEditing(false)
+                        }
+                      }, 0)
+                    }}
+                    onChange={(e) => {
+                      setContactCustomerEditing(true)
+                      setContactCustomerOpen(true)
+                      setContactCustomerInput(e.target.value)
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ',' || e.key === '，') {
+                        e.preventDefault()
+                        commitContactCustomerInput(true)
+                      }
+                    }}
+                    placeholder="输入客户名称，逗号分隔可多选"
+                    className="form-control"
+                    required
+                  />
+                  {contactCustomerOpen && (
+                    <div className="multi-select-menu">
+                      {contactCustomerSuggestions.length === 0 && (
+                        <div className="empty">未匹配到客户</div>
+                      )}
+                      {contactCustomerSuggestions.map((c) => {
+                        const selected = (contactForm.customer_ids || []).includes(String(c.id))
+                        return (
+                          <button
+                            type="button"
+                            key={c.id}
+                            className={`multi-select-item ${selected ? 'selected' : ''}`}
+                            onMouseDown={(event) => event.preventDefault()}
+                            onClick={() => {
+                              const next = selected
+                                ? (contactForm.customer_ids || []).filter((id) => String(id) !== String(c.id))
+                                : [...(contactForm.customer_ids || []), String(c.id)]
+                              const unique = Array.from(new Set(next))
+                              const names = unique
+                                .map((id) => customerMap.get(String(id))?.name)
+                                .filter(Boolean)
+                              setContactForm({
+                                ...contactForm,
+                                customer_ids: unique,
+                                customer_id: unique[0] || '',
+                              })
+                              setContactCustomerInput(names.join('、') + (names.length ? '、' : ''))
+                            }}
+                          >
+                            <span>{c.name}</span>
+                            <span className="check">✓</span>
+                          </button>
+                        )
+                      })}
+                    </div>
+                  )}
+                </div>
               </label>
               <label className="form-label">
                 客户电话
@@ -2526,7 +2638,11 @@ function App() {
                 <button
                   type="button"
                   className="ghost btn btn-outline-secondary"
-                  onClick={() => setContactForm(emptyContact)}
+                  onClick={() => {
+                    setContactForm(emptyContact)
+                    setContactCustomerInput('')
+                    setContactCustomerEditing(false)
+                  }}
                 >
                   清空
                 </button>

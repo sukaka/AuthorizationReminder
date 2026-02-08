@@ -513,6 +513,20 @@ textarea:focus {
   margin-top: 10px;
 }
 
+.multi-input {
+  position: relative;
+}
+
+.multi-input .multi-select-menu {
+  margin-top: 6px;
+}
+
+.multi-input .empty {
+  padding: 8px 10px;
+  color: rgba(30, 41, 59, 0.7);
+  font-size: 13px;
+}
+
 .multi-select-trigger {
   width: 100%;
   text-align: left;
