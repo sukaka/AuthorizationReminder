@@ -197,11 +197,14 @@ const init = async () => {
     contact_ids TEXT NOT NULL,
     channels TEXT NOT NULL,
     days TEXT NOT NULL,
+    wecom_mode VARCHAR(16) NOT NULL DEFAULT 'webhook',
     enabled TINYINT NOT NULL DEFAULT 1,
     start_date DATE,
     end_date DATE,
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
+
+  await addColumnIfMissing('send_plans', 'wecom_mode', "wecom_mode VARCHAR(16) NOT NULL DEFAULT 'webhook'");
 
   await run(`CREATE TABLE IF NOT EXISTS operation_logs (
     id INT AUTO_INCREMENT PRIMARY KEY,

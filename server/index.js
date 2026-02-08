@@ -1173,10 +1173,14 @@ const buildContext = ({ contact, license, subject, message }) => ({
   message: message || '',
 });
 
-const buildSendContent = ({ subject, message, contact, license, configs }) => {
+const buildSendContent = ({ subject, message, contact, license, configs, channel }) => {
   const reminderConfig = (configs && configs.reminder) || {};
-  const context = buildContext({ contact, license, subject, message });
-  const finalSubject = subject || replaceTokens(reminderConfig.subject, context) || '授权到期提醒';
+  const subjectForContext = channel === 'email' ? subject || reminderConfig.subject || '' : '';
+  const context = buildContext({ contact, license, subject: subjectForContext, message });
+  const finalSubject =
+    channel === 'email'
+      ? subject || replaceTokens(reminderConfig.subject, context) || '授权到期提醒'
+      : '';
   const finalMessage =
     message || replaceTokens(reminderConfig.message, context) || '授权即将到期，请及时续约。';
   return { finalSubject, finalMessage };
@@ -1919,17 +1923,49 @@ const insertSendLog = async ({ contactId, licenseId, channels, status, errorCode
   );
 };
 
-const sendToContacts = async ({ contacts, channels, subject, message, license, isTest = false }) => {
+const insertReminderLog = async ({ licenseId, contactId, channel, daysLeft, status, errorCode, error, isTest = 0 }) => {
+  await db.run(
+    'INSERT INTO reminder_logs (license_id, contact_id, channel, days_left, status, error_code, error, is_test) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+    [licenseId || 0, contactId || 0, channel, daysLeft || 0, status, errorCode || null, error || null, isTest]
+  );
+};
+
+const calcDaysLeftValue = (endDate) => {
+  if (!endDate) return 0;
+  const end = new Date(endDate);
+  if (Number.isNaN(end.getTime())) return 0;
+  const diff = Math.ceil((end.getTime() - Date.now()) / (1000 * 60 * 60 * 24));
+  return Number.isFinite(diff) ? diff : 0;
+};
+
+const normalizeWecomMode = (mode) => {
+  if (mode === 'webhook' || mode === 'app' || mode === 'auto') return mode;
+  return 'auto';
+};
+
+const sendToContacts = async ({
+  contacts,
+  channels,
+  subject,
+  message,
+  license,
+  isTest = false,
+  logReminder = false,
+  wecomMode = 'auto',
+}) => {
   const configs = await getConfigs();
   const retryConfig = getRetryConfig(configs);
+  const resolvedWecomMode = normalizeWecomMode(wecomMode);
   const results = [];
   for (const contact of contacts) {
-    const { finalSubject, finalMessage } = buildSendContent({
+    const logChannel = channels.includes('email') ? 'email' : channels[0];
+    const { finalSubject: logSubject, finalMessage: logMessage } = buildSendContent({
       subject,
       message,
       contact,
       license,
       configs,
+      channel: logChannel,
     });
     const channelResults = [];
     for (const channel of channels) {
@@ -1937,6 +1973,14 @@ const sendToContacts = async ({ contacts, channels, subject, message, license, i
         let attempt = 0;
         let lastError = null;
         let lastCode = null;
+        const { finalSubject, finalMessage } = buildSendContent({
+          subject,
+          message,
+          contact,
+          license,
+          configs,
+          channel,
+        });
         while (attempt <= retryConfig.maxRetries) {
           try {
             if (channel === 'email') {
@@ -1952,7 +1996,10 @@ const sendToContacts = async ({ contacts, channels, subject, message, license, i
               });
             }
             if (channel === 'wecom') {
-              if (configs.wecom?.webhook) {
+              const useWebhook =
+                resolvedWecomMode === 'webhook' ||
+                (resolvedWecomMode === 'auto' && configs.wecom?.webhook);
+              if (useWebhook) {
                 await sendWecomWebhook({ message: finalMessage, configs });
               } else {
                 await sendWecomApp({ contact, message: finalMessage, configs });
@@ -2003,10 +2050,25 @@ const sendToContacts = async ({ contacts, channels, subject, message, license, i
       channels: JSON.stringify(channels),
       status: hasFailure ? 'PARTIAL' : 'SENT',
       errorCode: errorCodes || null,
-      subject: finalSubject,
-      message: finalMessage,
+      subject: logSubject,
+      message: logMessage,
       error: hasFailure ? channelResults.map((c) => `${c.channel}:${c.error || ''}`).join('; ') : null,
     });
+    if (logReminder && license?.id) {
+      const daysLeft = license?.days_left ?? calcDaysLeftValue(license?.end_date);
+      for (const result of channelResults) {
+        await insertReminderLog({
+          licenseId: license.id,
+          contactId: contact.id,
+          channel: result.channel,
+          daysLeft,
+          status: result.status === 'FAILED' ? 'FAILED' : 'SENT',
+          errorCode: result.error_code || null,
+          error: result.error || null,
+          isTest: 0,
+        });
+      }
+    }
     if (!isTest && license?.id) {
       // reminder logs are written elsewhere for scheduled sends
     }
@@ -2190,7 +2252,7 @@ app.get('/api/send-plans', requireRole(['admin', 'sales']), async (req, res) => 
   applyScopeFilter({ scope: req.scope, where, params, column: 'customers.id' });
   const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
   const rows = await db.query(
-    `SELECT send_plans.*, licenses.name AS license_name, customers.name AS customer_name
+    `SELECT send_plans.*, licenses.name AS license_name, licenses.end_date AS license_end_date, customers.name AS customer_name
      FROM send_plans
      JOIN licenses ON licenses.id = send_plans.license_id
      JOIN customers ON customers.id = licenses.customer_id
@@ -2209,7 +2271,7 @@ app.get('/api/send-plans', requireRole(['admin', 'sales']), async (req, res) => 
 });
 
 app.post('/api/send-plans', requireRole(['admin', 'sales']), async (req, res) => {
-  const { name, license_id, contact_ids, channels, days, enabled, start_date, end_date } = req.body || {};
+  const { name, license_id, contact_ids, channels, days, enabled, wecom_mode } = req.body || {};
   if (!name || !license_id) {
     return res.status(400).json({ error: '计划名称和授权必填' });
   }
@@ -2232,21 +2294,24 @@ app.post('/api/send-plans', requireRole(['admin', 'sales']), async (req, res) =>
       return res.status(403).json({ error: '无权限' });
     }
   }
+  const license = await db.get('SELECT end_date FROM licenses WHERE id = ?', [license_id]);
+  const resolvedWecomMode = normalizeWecomMode(wecom_mode);
   const info = await db.run(
-    'INSERT INTO send_plans (name, license_id, contact_ids, channels, days, enabled, start_date, end_date) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+    'INSERT INTO send_plans (name, license_id, contact_ids, channels, days, wecom_mode, enabled, start_date, end_date) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
     [
       name.trim(),
       license_id,
       JSON.stringify(contact_ids),
       JSON.stringify(channels),
       days,
+      resolvedWecomMode,
       enabled === 0 ? 0 : 1,
-      start_date || null,
-      end_date || null,
+      null,
+      license?.end_date || null,
     ]
   );
   const row = await db.get(
-    `SELECT send_plans.*, licenses.name AS license_name, customers.name AS customer_name
+    `SELECT send_plans.*, licenses.name AS license_name, licenses.end_date AS license_end_date, customers.name AS customer_name
      FROM send_plans
      JOIN licenses ON licenses.id = send_plans.license_id
      JOIN customers ON customers.id = licenses.customer_id
@@ -2270,7 +2335,7 @@ app.post('/api/send-plans', requireRole(['admin', 'sales']), async (req, res) =>
 
 app.put('/api/send-plans/:id', requireRole(['admin', 'sales']), async (req, res) => {
   const { id } = req.params;
-  const { name, license_id, contact_ids, channels, days, enabled, start_date, end_date } = req.body || {};
+  const { name, license_id, contact_ids, channels, days, enabled, wecom_mode } = req.body || {};
   if (!name || !license_id) {
     return res.status(400).json({ error: '计划名称和授权必填' });
   }
@@ -2299,22 +2364,25 @@ app.put('/api/send-plans/:id', requireRole(['admin', 'sales']), async (req, res)
       return res.status(403).json({ error: '无权限' });
     }
   }
+  const license = await db.get('SELECT end_date FROM licenses WHERE id = ?', [license_id]);
+  const resolvedWecomMode = normalizeWecomMode(wecom_mode);
   await db.run(
-    'UPDATE send_plans SET name = ?, license_id = ?, contact_ids = ?, channels = ?, days = ?, enabled = ?, start_date = ?, end_date = ? WHERE id = ?',
+    'UPDATE send_plans SET name = ?, license_id = ?, contact_ids = ?, channels = ?, days = ?, wecom_mode = ?, enabled = ?, start_date = ?, end_date = ? WHERE id = ?',
     [
       name.trim(),
       license_id,
       JSON.stringify(contact_ids),
       JSON.stringify(channels),
       days,
+      resolvedWecomMode,
       enabled === 0 ? 0 : 1,
-      start_date || null,
-      end_date || null,
+      null,
+      license?.end_date || null,
       id,
     ]
   );
   const row = await db.get(
-    `SELECT send_plans.*, licenses.name AS license_name, customers.name AS customer_name
+    `SELECT send_plans.*, licenses.name AS license_name, licenses.end_date AS license_end_date, customers.name AS customer_name
      FROM send_plans
      JOIN licenses ON licenses.id = send_plans.license_id
      JOIN customers ON customers.id = licenses.customer_id
@@ -2356,6 +2424,114 @@ app.delete('/api/send-plans/:id', requireRole(['admin', 'sales']), async (req, r
     beforeData: before,
   });
   res.json({ ok: true });
+});
+
+app.post('/api/send-plans/send-now', requireRole(['admin', 'sales']), async (req, res) => {
+  const { plan_ids } = req.body || {};
+  if (!Array.isArray(plan_ids) || plan_ids.length === 0) {
+    return res.status(400).json({ error: '请选择发送计划' });
+  }
+  const ids = plan_ids.map((id) => Number(id)).filter((id) => Number.isFinite(id));
+  if (!ids.length) return res.status(400).json({ error: '请选择发送计划' });
+  const plans = await db.query(
+    `SELECT send_plans.*, licenses.name AS license_name, licenses.end_date AS license_end_date,
+      customers.name AS customer_name,
+      DATEDIFF(licenses.end_date, CURDATE()) AS days_left
+     FROM send_plans
+     JOIN licenses ON licenses.id = send_plans.license_id
+     JOIN customers ON customers.id = licenses.customer_id
+     WHERE send_plans.id IN (${buildInClause(ids)})`,
+    ids
+  );
+  if (!plans.length) return res.status(404).json({ error: '计划不存在' });
+
+  if (req.scope && !req.scope.isAdmin) {
+    for (const plan of plans) {
+      const okLicense = await ensureLicenseInScope(req.scope, plan.license_id);
+      if (!okLicense) return res.status(403).json({ error: '无权限' });
+      let contactIds = [];
+      try {
+        contactIds = JSON.parse(plan.contact_ids || '[]');
+      } catch (err) {
+        contactIds = [];
+      }
+      const okContacts = await ensureContactsInScope(req.scope, contactIds);
+      if (!okContacts) return res.status(403).json({ error: '无权限' });
+    }
+  }
+
+  const configs = await getConfigs();
+  const rate = getRateLimitConfig(configs);
+  let totalUnits = 0;
+  for (const plan of plans) {
+    let contactIds = [];
+    let channels = [];
+    try {
+      contactIds = JSON.parse(plan.contact_ids || '[]');
+    } catch (err) {
+      contactIds = [];
+    }
+    try {
+      channels = JSON.parse(plan.channels || '[]');
+    } catch (err) {
+      channels = [];
+    }
+    totalUnits += contactIds.length * channels.length;
+  }
+  if (totalUnits > rate.maxPerRun) {
+    return res.status(429).json({ error: '发送数量过大，请分批发送' });
+  }
+
+  const results = [];
+  for (const plan of plans) {
+    let contactIds = [];
+    let channels = [];
+    try {
+      contactIds = JSON.parse(plan.contact_ids || '[]');
+    } catch (err) {
+      contactIds = [];
+    }
+    try {
+      channels = JSON.parse(plan.channels || '[]');
+    } catch (err) {
+      channels = [];
+    }
+    if (!contactIds.length || !channels.length) {
+      results.push({ plan_id: plan.id, ok: false, error: '计划联系人或渠道为空' });
+      continue;
+    }
+    const contacts = await db.query(
+      `SELECT contacts.*, customers.name AS customer_name
+       FROM contacts
+       JOIN customers ON customers.id = contacts.customer_id
+       WHERE contacts.is_active = 1
+       AND contacts.id IN (${buildInClause(contactIds)})`,
+      contactIds
+    );
+    const license = {
+      id: plan.license_id,
+      name: plan.license_name,
+      end_date: plan.license_end_date,
+      customer_name: plan.customer_name,
+      days_left: plan.days_left,
+    };
+    try {
+      const sendResult = await sendToContacts({
+        contacts,
+        channels,
+        subject: null,
+        message: null,
+        license,
+        logReminder: true,
+        wecomMode: plan.wecom_mode,
+      });
+      results.push({ plan_id: plan.id, ok: true, results: sendResult });
+    } catch (err) {
+      results.push({ plan_id: plan.id, ok: false, error: err.message || '发送失败' });
+    }
+  }
+
+  res.json({ ok: true, results });
 });
 
 app.get('/api/send-logs', async (req, res) => {
@@ -3103,6 +3279,7 @@ const scheduleReminders = async () => {
             subject: null,
             message: null,
             license,
+            wecomMode: plan.wecom_mode,
           });
           await db.run(
             'INSERT INTO reminder_sent (license_id, contact_id, channel, days_left) VALUES (?, ?, ?, ?)',

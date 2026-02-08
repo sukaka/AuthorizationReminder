@@ -167,6 +167,7 @@ function App() {
   const [expandedImportJob, setExpandedImportJob] = useState(null)
   const [sendPlans, setSendPlans] = useState([])
   const [sendPlanPage, setSendPlanPage] = useState(1)
+  const [sendPlanSelections, setSendPlanSelections] = useState([])
   const [sendPlanForm, setSendPlanForm] = useState({
     id: null,
     name: '',
@@ -174,14 +175,15 @@ function App() {
     contact_ids: [],
     days: '60,30,20',
     channels: ['email'],
+    wecom_mode: 'webhook',
     enabled: true,
     start_date: '',
     end_date: '',
   })
-  const [planContactSearch, setPlanContactSearch] = useState('')
-  const [planCustomerFilter, setPlanCustomerFilter] = useState('')
-  const [contactDropdownOpen, setContactDropdownOpen] = useState(false)
-  const contactDropdownRef = useRef(null)
+  const [planContactInput, setPlanContactInput] = useState('')
+  const [planContactOpen, setPlanContactOpen] = useState(false)
+  const [planContactEditing, setPlanContactEditing] = useState(false)
+  const planContactRef = useRef(null)
   const [reminderFilters, setReminderFilters] = useState({
     customer_id: '',
     status: '',
@@ -417,27 +419,77 @@ function App() {
     return () => document.removeEventListener('mousedown', handleClickOutside)
   }, [contactCustomerOpen, contactCustomerInput])
 
-  const planContactsView = useMemo(() => {
-    const keyword = planContactSearch.trim().toLowerCase()
-    return contacts.filter((c) => {
-      if (planCustomerFilter) {
-        const ids = Array.isArray(c.customer_ids)
-          ? c.customer_ids.map((id) => String(id))
-          : String(c.customer_ids || '')
-              .split(',')
-              .map((id) => id.trim())
-              .filter(Boolean)
-        if (!ids.includes(String(planCustomerFilter))) return false
+  const buildContactLabel = (contact) => {
+    const customer = contact.customer_name || ''
+    const name = contact.name || ''
+    if (customer && name) return `${customer} / ${name}`
+    return name || customer || ''
+  }
+
+  const parsePlanContactTokens = (raw) =>
+    String(raw || '')
+      .split(/[，,、]/)
+      .map((v) => v.trim())
+      .filter(Boolean)
+
+  const resolveContactIdsByTokens = (tokens) => {
+    const ids = []
+    tokens.forEach((token) => {
+      const labelMatch = contacts.find((c) => buildContactLabel(c) === token)
+      if (labelMatch) {
+        ids.push(String(labelMatch.id))
+        return
       }
-      if (!keyword) return true
+      const nameMatches = contacts.filter((c) => String(c.name || '') === token)
+      if (nameMatches.length === 1) {
+        ids.push(String(nameMatches[0].id))
+      }
+    })
+    return Array.from(new Set(ids))
+  }
+
+  const commitPlanContactInput = (appendSeparator = false) => {
+    const tokens = parsePlanContactTokens(planContactInput)
+    const ids = resolveContactIdsByTokens(tokens)
+    const labels = ids
+      .map((id) => contactMap.get(String(id)))
+      .filter(Boolean)
+      .map((c) => buildContactLabel(c))
+      .filter(Boolean)
+    setSendPlanForm((prev) => ({
+      ...prev,
+      contact_ids: ids.map((id) => Number(id)),
+    }))
+    const base = labels.join(',')
+    setPlanContactInput(appendSeparator && base ? `${base},` : base)
+  }
+
+  const selectedPlanContactLabels = useMemo(() => {
+    return (sendPlanForm.contact_ids || [])
+      .map((id) => contactMap.get(String(id)))
+      .filter(Boolean)
+      .map((c) => buildContactLabel(c))
+      .filter(Boolean)
+  }, [sendPlanForm.contact_ids, contactMap])
+
+  const planContactSuggestions = useMemo(() => {
+    const raw = String(planContactInput || '')
+    const hasTrailingSeparator = /[，,、]\s*$/.test(raw)
+    const tokens = parsePlanContactTokens(raw)
+    const keyword = hasTrailingSeparator ? '' : (tokens[tokens.length - 1] || '')
+    if (!keyword) return contacts
+    const lower = keyword.toLowerCase()
+    return contacts.filter((c) => {
+      const label = buildContactLabel(c).toLowerCase()
       return (
-        String(c.name || '').toLowerCase().includes(keyword) ||
-        String(c.phone || '').toLowerCase().includes(keyword) ||
-        String(c.email || '').toLowerCase().includes(keyword) ||
-        String(c.customer_name || '').toLowerCase().includes(keyword)
+        label.includes(lower) ||
+        String(c.name || '').toLowerCase().includes(lower) ||
+        String(c.phone || '').toLowerCase().includes(lower) ||
+        String(c.email || '').toLowerCase().includes(lower) ||
+        String(c.customer_name || '').toLowerCase().includes(lower)
       )
     })
-  }, [contacts, planContactSearch, planCustomerFilter])
+  }, [contacts, planContactInput])
 
   const contactCustomerSuggestions = useMemo(() => {
     const raw = String(contactCustomerInput || '')
@@ -1228,10 +1280,14 @@ function App() {
         contact_ids: [],
         days: '60,30,20',
         channels: ['email'],
+        wecom_mode: 'webhook',
         enabled: true,
         start_date: '',
         end_date: '',
       })
+      setPlanContactInput('')
+      setPlanContactEditing(false)
+      setSendPlanSelections([])
       refreshSendPlans()
     } catch (err) {
       showError('发送计划保存失败')
@@ -1257,10 +1313,51 @@ function App() {
       contact_ids: plan.contact_ids || [],
       days: plan.days,
       channels: plan.channels || [],
+      wecom_mode: plan.wecom_mode || 'webhook',
       enabled: plan.enabled !== 0,
-      start_date: plan.start_date || '',
-      end_date: plan.end_date || '',
+      start_date: '',
+      end_date: '',
     })
+    setPlanContactEditing(false)
+  }
+
+  const onToggleSelectAllPlans = () => {
+    const allIds = pagedSendPlans.items.map((p) => p.id)
+    const selected = allIds.every((id) => sendPlanSelections.includes(id))
+    setSendPlanSelections(selected ? sendPlanSelections.filter((id) => !allIds.includes(id)) : Array.from(new Set([...sendPlanSelections, ...allIds])))
+  }
+
+  const onToggleSelectPlan = (id) => {
+    setSendPlanSelections((prev) =>
+      prev.includes(id) ? prev.filter((pid) => pid !== id) : [...prev, id]
+    )
+  }
+
+  const onSendPlansNow = async () => {
+    if (!sendPlanSelections.length) {
+      showError('请先选择发送计划')
+      return
+    }
+    try {
+      const data = await api.post('/api/send-plans/send-now', { plan_ids: sendPlanSelections })
+      const failed = (data.results || []).filter((r) => !r.ok)
+      if (failed.length) {
+        setModalInfo({
+          title: '立即发送完成',
+          message: `共发送 ${data.results.length} 个计划，其中失败 ${failed.length} 个，请查看提醒记录/发送日志。`,
+        })
+      } else {
+        setModalInfo({
+          title: '立即发送成功',
+          message: `已发送 ${data.results.length} 个计划。`,
+        })
+      }
+    } catch (err) {
+      setModalInfo({
+        title: '立即发送失败',
+        message: normalizeApiError(err) || '发送失败',
+      })
+    }
   }
 
   const onTogglePlanEnabled = async (plan) => {
@@ -1397,15 +1494,24 @@ function App() {
   }, [authToken, mfaState.required])
 
   useEffect(() => {
+    if (planContactEditing) return
+    setPlanContactInput(selectedPlanContactLabels.join(','))
+  }, [selectedPlanContactLabels, planContactEditing])
+
+  useEffect(() => {
     const onClick = (event) => {
-      if (!contactDropdownRef.current) return
-      if (!contactDropdownRef.current.contains(event.target)) {
-        setContactDropdownOpen(false)
+      if (!planContactRef.current) return
+      if (!planContactRef.current.contains(event.target)) {
+        if (planContactOpen) {
+          commitPlanContactInput()
+        }
+        setPlanContactOpen(false)
+        setPlanContactEditing(false)
       }
     }
     document.addEventListener('mousedown', onClick)
     return () => document.removeEventListener('mousedown', onClick)
-  }, [])
+  }, [planContactOpen, planContactInput])
 
   useEffect(() => { if (customerPage > pagedCustomers.total) setCustomerPage(pagedCustomers.total) }, [pagedCustomers.total])
   useEffect(() => { if (contactPage > pagedContacts.total) setContactPage(pagedContacts.total) }, [pagedContacts.total])
@@ -2932,16 +3038,22 @@ function App() {
               <h3>自动提醒计划</h3>
               <form className="form-grid" onSubmit={onSaveSendPlan}>
                 <label className="form-label">
-                  计划名称
+                  客户名称
                   <input
+                    list="plan-customer-suggestions"
                     value={sendPlanForm.name}
                     onChange={(e) =>
                       setSendPlanForm({ ...sendPlanForm, name: e.target.value })
                     }
-                    placeholder="例如：主服务到期提醒"
+                    placeholder="请选择或输入客户名称"
                     required
                     className="form-control"
                   />
+                  <datalist id="plan-customer-suggestions">
+                    {customers.map((c) => (
+                      <option key={c.id} value={c.name} />
+                    ))}
+                  </datalist>
                 </label>
                 <label className="form-label">
                   计划状态
@@ -2987,28 +3099,6 @@ function App() {
                   />
                 </label>
                 <label className="form-label">
-                  生效日期
-                  <input
-                    type="date"
-                    value={sendPlanForm.start_date}
-                    onChange={(e) =>
-                      setSendPlanForm({ ...sendPlanForm, start_date: e.target.value })
-                    }
-                    className="form-control"
-                  />
-                </label>
-                <label className="form-label">
-                  失效日期
-                  <input
-                    type="date"
-                    value={sendPlanForm.end_date}
-                    onChange={(e) =>
-                      setSendPlanForm({ ...sendPlanForm, end_date: e.target.value })
-                    }
-                    className="form-control"
-                  />
-                </label>
-                <label className="form-label">
                   发送渠道
                   <div className="channel-row">
                     {['email', 'wecom', 'sms'].map((channel) => (
@@ -3031,85 +3121,83 @@ function App() {
                     ))}
                   </div>
                 </label>
+                <label className="form-label">
+                  企业微信发送方式
+                  <select
+                    className="form-select"
+                    value={sendPlanForm.wecom_mode || 'webhook'}
+                    onChange={(e) => setSendPlanForm({ ...sendPlanForm, wecom_mode: e.target.value })}
+                    disabled={!sendPlanForm.channels.includes('wecom')}
+                  >
+                    <option value="webhook">群机器人（Webhook）</option>
+                    <option value="app">联系人个人（应用消息）</option>
+                  </select>
+                </label>
                 <label className="form-label full-row">
                   联系人选择
-                  <div className="filter-row contact-select-row">
+                  <div className="multi-input" ref={planContactRef}>
                     <input
-                      value={planContactSearch}
-                      onChange={(e) => setPlanContactSearch(e.target.value)}
-                      placeholder="搜索联系人/客户"
+                      value={planContactInput}
+                      onFocus={() => {
+                        setPlanContactEditing(true)
+                        setPlanContactOpen(true)
+                      }}
+                      onBlur={() => {
+                        setTimeout(() => {
+                          if (!planContactRef.current?.contains(document.activeElement)) {
+                            commitPlanContactInput()
+                            setPlanContactOpen(false)
+                            setPlanContactEditing(false)
+                          }
+                        }, 0)
+                      }}
+                      onChange={(e) => {
+                        setPlanContactEditing(true)
+                        setPlanContactOpen(true)
+                        setPlanContactInput(e.target.value)
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' || e.key === ',' || e.key === '，') {
+                          e.preventDefault()
+                          commitPlanContactInput(true)
+                        }
+                      }}
+                      placeholder="输入联系人/客户，逗号分隔可多选"
                       className="form-control"
+                      required
                     />
-                    <select
-                      className="form-select"
-                      value={planCustomerFilter}
-                      onChange={(e) => setPlanCustomerFilter(e.target.value)}
-                    >
-                      <option value="">全部客户</option>
-                      {pagedCustomers.items.map((c) => (
-                        <option key={c.id} value={c.id}>
-                          {c.name}
-                        </option>
-                      ))}
-                    </select>
-                    <button
-                      type="button"
-                      className="ghost btn btn-outline-secondary"
-                      onClick={() =>
-                        setSendPlanForm({
-                          ...sendPlanForm,
-                          contact_ids: planContactsView.map((c) => c.id),
-                        })
-                      }
-                    >
-                      全选当前筛选
-                    </button>
-                    <button
-                      type="button"
-                      className="ghost btn btn-outline-secondary"
-                      onClick={() =>
-                        setSendPlanForm({
-                          ...sendPlanForm,
-                          contact_ids: [],
-                        })
-                      }
-                    >
-                      清空选择
-                    </button>
-                  </div>
-                  <div className="multi-select" ref={contactDropdownRef}>
-                    <button
-                      type="button"
-                      className="multi-select-trigger"
-                      onClick={() => setContactDropdownOpen((v) => !v)}
-                    >
-                      {sendPlanForm.contact_ids.length === 0
-                        ? '请选择联系人'
-                        : planContactsView
-                            .filter((c) => sendPlanForm.contact_ids.includes(c.id))
-                            .map((c) => `${c.customer_name} / ${c.name}`)
-                            .join('，')}
-                    </button>
-                    {contactDropdownOpen && (
+                    {planContactOpen && (
                       <div className="multi-select-menu">
-                        {planContactsView.map((c) => {
-                          const selected = sendPlanForm.contact_ids.includes(c.id)
+                        {planContactSuggestions.length === 0 && (
+                          <div className="empty">未匹配到联系人</div>
+                        )}
+                        {planContactSuggestions.map((c) => {
+                          const selected = (sendPlanForm.contact_ids || []).includes(c.id)
+                          const label = buildContactLabel(c)
                           return (
                             <button
                               key={c.id}
                               type="button"
                               className={`multi-select-item ${selected ? 'selected' : ''}`}
+                              onMouseDown={(event) => event.preventDefault()}
                               onClick={() => {
-                                const ids = selected
+                                const next = selected
                                   ? sendPlanForm.contact_ids.filter((id) => id !== c.id)
                                   : [...sendPlanForm.contact_ids, c.id]
+                                const unique = Array.from(new Set(next))
+                                const labels = unique
+                                  .map((id) => contactMap.get(String(id)))
+                                  .filter(Boolean)
+                                  .map((item) => buildContactLabel(item))
+                                  .filter(Boolean)
                                 setSendPlanForm({
                                   ...sendPlanForm,
-                                  contact_ids: ids,
+                                  contact_ids: unique,
                                 })
+                                setPlanContactInput(labels.join(',') + (labels.length ? ',' : ''))
                               }}
                             >
-                              <span>{c.customer_name} / {c.name}</span>
+                              <span>{label}</span>
                               <span className="check">✓</span>
                             </button>
                           )
@@ -3126,7 +3214,7 @@ function App() {
                     <button
                       type="button"
                       className="ghost btn btn-outline-secondary"
-                      onClick={() =>
+                      onClick={() => {
                         setSendPlanForm({
                           id: null,
                           name: '',
@@ -3134,11 +3222,15 @@ function App() {
                           contact_ids: [],
                           days: '60,30,20',
                           channels: ['email'],
+                          wecom_mode: 'webhook',
                           enabled: true,
                           start_date: '',
                           end_date: '',
                         })
-                      }
+                        setSendPlanSelections([])
+                        setPlanContactInput('')
+                        setPlanContactEditing(false)
+                      }}
                     >
                       取消编辑
                     </button>
@@ -3147,20 +3239,46 @@ function App() {
               </form>
               <div className="table send-table">
                 <div className="table-row head">
-                  <span>计划名称</span>
+                  <span>
+                    <input
+                      type="checkbox"
+                      checked={pagedSendPlans.items.length > 0 && pagedSendPlans.items.every((p) => sendPlanSelections.includes(p.id))}
+                      onChange={onToggleSelectAllPlans}
+                    />
+                  </span>
+                  <span>客户名称</span>
                   <span>授权</span>
                   <span>发送渠道</span>
                   <span>提醒天数</span>
                   <span>联系人姓名</span>
-                  <span>生效/失效</span>
+                  <span>失效日期</span>
                   <span>状态</span>
                   <span>操作</span>
                 </div>
                 {pagedSendPlans.items.map((plan) => (
                   <div className="table-row" key={plan.id}>
+                    <span>
+                      <input
+                        type="checkbox"
+                        checked={sendPlanSelections.includes(plan.id)}
+                        onChange={() => onToggleSelectPlan(plan.id)}
+                      />
+                    </span>
                     <span>{plan.name}</span>
                     <span>{plan.license_name}</span>
-                    <span>{plan.channels.map((c) => (c === 'email' ? '邮件' : c === 'sms' ? '短信' : '企业微信')).join('，')}</span>
+                    <span>
+                      {plan.channels
+                        .map((c) =>
+                          c === 'email'
+                            ? '邮件'
+                            : c === 'sms'
+                              ? '短信'
+                              : plan.wecom_mode === 'app'
+                                ? '企业微信(个人)'
+                                : '企业微信(群)'
+                        )
+                        .join('，')}
+                    </span>
                     <span>{plan.days}</span>
                     <span>
                       {plan.contact_ids.length === 0
@@ -3169,9 +3287,7 @@ function App() {
                             .map((id) => contactMap.get(String(id))?.name || String(id))
                             .join('，')}
                     </span>
-                    <span>
-                      {(plan.start_date || '长期')} / {(plan.end_date || '长期')}
-                    </span>
+                    <span>{plan.license_end_date || '-'}</span>
                     <span>{plan.enabled ? '启用' : '停用'}</span>
                     <span className="actions">
                       <button onClick={() => onEditSendPlan(plan)}>编辑</button>
@@ -3184,6 +3300,14 @@ function App() {
                     </span>
                   </div>
                 ))}
+              </div>
+              <div className="form-actions">
+                <button type="button" className="ghost btn btn-outline-secondary" onClick={onToggleSelectAllPlans}>
+                  {pagedSendPlans.items.every((p) => sendPlanSelections.includes(p.id)) ? '取消全选' : '全选本页'}
+                </button>
+                <button type="button" className="primary btn btn-primary" onClick={onSendPlansNow}>
+                  立即发送
+                </button>
               </div>
               <div className="pagination">
                 <button className="ghost btn btn-outline-secondary" disabled={pagedSendPlans.current === 1} onClick={() => setSendPlanPage(pagedSendPlans.current - 1)}>上一页</button>
