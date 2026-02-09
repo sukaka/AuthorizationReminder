@@ -121,6 +121,7 @@ function App() {
   const [authToken, setAuthToken] = useState(sessionStorage.getItem('authToken') || '')
   const [currentUser, setCurrentUser] = useState(null)
   const [activeTab, setActiveTab] = useState('dashboard')
+  const [screenshotPreview, setScreenshotPreview] = useState(null)
   const [customers, setCustomers] = useState([])
   const [customerPage, setCustomerPage] = useState(1)
   const [contacts, setContacts] = useState([])
@@ -143,6 +144,8 @@ function App() {
   const [licenseStatusFilter, setLicenseStatusFilter] = useState('')
   const [licenseQuickFilter, setLicenseQuickFilter] = useState('')
   const [licenseExpiringDays, setLicenseExpiringDays] = useState('30')
+  const [licenseMissingScreenshot, setLicenseMissingScreenshot] = useState('')
+  const [uploadingLicenseId, setUploadingLicenseId] = useState(null)
   const [reminderLogs, setReminderLogs] = useState([])
   const [reminderPage, setReminderPage] = useState(1)
   const [operationLogs, setOperationLogs] = useState([])
@@ -217,6 +220,15 @@ function App() {
       apiVersion: '2017-05-25',
     },
     wecom: { corpId: '', agentId: '', secret: '', webhook: '' },
+    ocr: {
+      accessKeyId: '',
+      accessKeySecret: '',
+      region: 'cn-beijing',
+      endpoint: '',
+      enabled: false,
+      keywords: '正式授权,授权书,合同',
+      matchMode: 'any',
+    },
     reminder: {
       subject: '授权到期提醒',
       message: '【{customer_name}】的{license_name}将于{end_date}到期，剩余{days_left}天。',
@@ -533,6 +545,7 @@ function App() {
     if (licenseStatusFilter) params.append('status', licenseStatusFilter)
     if (licenseQuickFilter) params.append('quick', licenseQuickFilter)
     if (licenseQuickFilter === 'expiring') params.append('days', licenseExpiringDays)
+    if (licenseMissingScreenshot === '1') params.append('missing_screenshot', '1')
     const data = await api.get(`/api/licenses?${params.toString()}`)
     setLicenses(data)
   }
@@ -644,6 +657,7 @@ function App() {
       email: data.email || prev.email,
       sms: { ...prev.sms, ...smsConfig },
       wecom: data.wecom || prev.wecom,
+      ocr: data.ocr || prev.ocr,
       reminder: data.reminder || prev.reminder,
       reminderSchedule: data.reminderSchedule || prev.reminderSchedule,
       retry: data.retry || prev.retry,
@@ -720,7 +734,7 @@ function App() {
   useEffect(() => {
     if (!authToken) return
     refreshLicenses()
-  }, [licenseSearch, licenseCustomerFilter, licenseStatusFilter, licenseQuickFilter, licenseExpiringDays, authToken])
+  }, [licenseSearch, licenseCustomerFilter, licenseStatusFilter, licenseQuickFilter, licenseExpiringDays, licenseMissingScreenshot, authToken])
 
   const showMessage = (text) => {
     setMessage(text)
@@ -1029,6 +1043,67 @@ function App() {
       refreshLicenses()
     } catch (err) {
       showError('授权删除失败')
+    }
+  }
+
+  const onUploadLicenseScreenshot = async (license, file) => {
+    if (!file) return
+    const allowed = ['image/jpeg', 'image/png']
+    if (!allowed.includes(file.type)) {
+      setModalInfo({ title: '上传失败', message: '仅支持上传jpg或png图片' })
+      return
+    }
+    try {
+      setUploadingLicenseId(license.id)
+      const formData = new FormData()
+      formData.append('file', file)
+      const res = await fetch(`/api/licenses/${license.id}/screenshot`, {
+        method: 'POST',
+        headers: {
+          ...(csrfToken ? { 'X-CSRF-Token': csrfToken } : {}),
+          ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
+        },
+        body: formData,
+      })
+      if (!res.ok) {
+        throw new Error(await res.text())
+      }
+      const payload = await res.json()
+      if (payload && payload.screenshot_valid === 0) {
+        setModalInfo({
+          title: '上传完成（异常）',
+          message: 'OCR未识别到“正式授权”，已标记为异常。',
+        })
+      } else if (payload && payload.ocr_error) {
+        setModalInfo({
+          title: '上传完成（OCR失败）',
+          message: payload.ocr_error,
+        })
+      } else {
+        setModalInfo({ title: '上传成功', message: '截图上传成功' })
+      }
+      refreshLicenses()
+    } catch (err) {
+      setModalInfo({
+        title: '上传失败',
+        message: normalizeApiError(err) || '截图上传失败',
+      })
+    } finally {
+      setUploadingLicenseId(null)
+    }
+  }
+
+  const onDeleteLicenseScreenshot = async (license) => {
+    if (!window.confirm('确认删除该截图？')) return
+    try {
+      await api.del(`/api/licenses/${license.id}/screenshot`)
+      setModalInfo({ title: '删除成功', message: '截图已删除' })
+      refreshLicenses()
+    } catch (err) {
+      setModalInfo({
+        title: '删除失败',
+        message: normalizeApiError(err) || '截图删除失败',
+      })
     }
   }
 
@@ -1914,6 +1989,9 @@ function App() {
         <button className="ghost logout" onClick={onLogout}>
           退出登录
         </button>
+        <div className="sidebar-footer">
+          版本号：v1.0.1
+        </div>
       </aside>
 
       <div className="content">
@@ -1947,6 +2025,21 @@ function App() {
               <div className="modal-actions">
                 <button className="primary btn btn-primary" type="button" onClick={() => setModalInfo(null)}>
                   知道了
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+        {screenshotPreview && (
+          <div className="modal-backdrop" onClick={() => setScreenshotPreview(null)}>
+            <div className="modal-card modal-image" onClick={(e) => e.stopPropagation()}>
+              <div className="modal-title">授权截图预览</div>
+              <div className="modal-body">
+                <img src={screenshotPreview} alt="授权截图" />
+              </div>
+              <div className="modal-actions">
+                <button className="primary btn btn-primary" type="button" onClick={() => setScreenshotPreview(null)}>
+                  关闭
                 </button>
               </div>
             </div>
@@ -2888,6 +2981,14 @@ function App() {
                 <option value="ACTIVE">有效</option>
                 <option value="EXPIRED">已过期</option>
               </select>
+              <select
+                className="form-select"
+                value={licenseMissingScreenshot}
+                onChange={(e) => setLicenseMissingScreenshot(e.target.value)}
+              >
+                <option value="">截图状态</option>
+                <option value="1">未上传截图</option>
+              </select>
             </div>
             {permissions.canWrite && (
               <form className="form-grid" onSubmit={onSaveLicense}>
@@ -2988,19 +3089,25 @@ function App() {
             </form>
             )}
 
-            <div className="table license-table">
-              <div className="table-row head">
-                <span>授权名称</span>
-                <span>客户</span>
-                <span>开始日期</span>
-                <span>到期日期</span>
-                <span>剩余天数</span>
-                <span>提醒天数</span>
-                <span>状态</span>
-                <span>操作</span>
-              </div>
+              <div className="table license-table">
+                <div className="table-row head">
+                  <span>授权名称</span>
+                  <span>客户</span>
+                  <span>开始日期</span>
+                  <span>到期日期</span>
+                  <span>剩余天数</span>
+                  <span>提醒天数</span>
+                  <span>状态</span>
+                  <span>截图</span>
+                  <span>操作</span>
+                </div>
               {pagedLicenses.items.map((l) => (
-                <div className="table-row" key={l.id}>
+                <div
+                  className={`table-row ${!l.screenshot_url ? 'missing-screenshot' : ''} ${
+                    l.screenshot_url && l.screenshot_valid === 0 ? 'invalid-screenshot' : ''
+                  }`}
+                  key={l.id}
+                >
                   <span>{l.name}</span>
                   <span>{l.customer_name}</span>
                   <span>{l.start_date || '-'}</span>
@@ -3008,9 +3115,46 @@ function App() {
                   <span>{calcDaysLeft(l.end_date)}</span>
                   <span>{l.reminder_days || '-'}</span>
                   <span>{l.status === 'ACTIVE' ? '有效' : '已过期'}</span>
+                  <span className="screenshot-cell">
+                    {l.screenshot_url ? (
+                      <>
+                        <button
+                          type="button"
+                          className="link-btn two-line"
+                          onClick={() => setScreenshotPreview(l.screenshot_url)}
+                        >
+                          <span>查看</span>
+                          <span>截图</span>
+                        </button>
+                        {l.screenshot_valid === 0 && <span className="badge-warn">异常</span>}
+                      </>
+                    ) : (
+                      <span className="text-danger">未上传</span>
+                    )}
+                  </span>
                   <span className="actions">
                     {permissions.canWrite && (
                       <button onClick={() => onEditLicense(l)}>编辑</button>
+                    )}
+                    {permissions.canWrite && (
+                      <label className="ghost btn btn-outline-secondary btn-sm upload-btn">
+                        {uploadingLicenseId === l.id ? '上传中...' : '上传截图'}
+                        <input
+                          type="file"
+                          accept="image/png,image/jpeg"
+                          disabled={uploadingLicenseId === l.id}
+                          onChange={(e) => {
+                            const file = e.target.files && e.target.files[0]
+                            e.target.value = ''
+                            onUploadLicenseScreenshot(l, file)
+                          }}
+                        />
+                      </label>
+                    )}
+                    {permissions.canWrite && l.screenshot_url && (
+                      <button className="ghost btn btn-outline-secondary btn-sm" onClick={() => onDeleteLicenseScreenshot(l)}>
+                        删除截图
+                      </button>
                     )}
                     {permissions.canDelete && (
                       <button className="danger btn btn-outline-danger btn-sm" onClick={() => onDeleteLicense(l.id)}>
@@ -4255,6 +4399,119 @@ function App() {
                       {testSmsStatus.text}
                     </div>
                   )}
+                </div>
+              </div>
+
+              <div className="config-card card-split tone-ocr">
+                <div className="config-card-header">OCR 配置（阿里云通用文字识别）</div>
+                <div className="config-card-body">
+                  <label className="inline-check form-label">
+                    启用OCR识别
+                    <input
+                      type="checkbox"
+                      checked={!!configForm.ocr.enabled}
+                      onChange={(e) =>
+                        setConfigForm({
+                          ...configForm,
+                          ocr: { ...configForm.ocr, enabled: e.target.checked },
+                        })
+                      }
+                      onInput={() => setConfigDirty(true)}
+                    />
+                  </label>
+                  <label className="form-label">
+                    AccessKey ID
+                    <input
+                      value={configForm.ocr.accessKeyId}
+                      onChange={(e) =>
+                        setConfigForm({
+                          ...configForm,
+                          ocr: { ...configForm.ocr, accessKeyId: e.target.value },
+                        })
+                      }
+                      onInput={() => setConfigDirty(true)}
+                      className="form-control"
+                    />
+                  </label>
+                  <label className="form-label">
+                    AccessKey Secret
+                    <input
+                      type="password"
+                      value={configForm.ocr.accessKeySecret}
+                      onChange={(e) =>
+                        setConfigForm({
+                          ...configForm,
+                          ocr: { ...configForm.ocr, accessKeySecret: e.target.value },
+                        })
+                      }
+                      onInput={() => setConfigDirty(true)}
+                      className="form-control"
+                    />
+                  </label>
+                  <label className="form-label">
+                    区域
+                    <select
+                      className="form-select"
+                      value={configForm.ocr.region || 'cn-beijing'}
+                      onChange={(e) =>
+                        setConfigForm({
+                          ...configForm,
+                          ocr: { ...configForm.ocr, region: e.target.value },
+                        })
+                      }
+                      onInput={() => setConfigDirty(true)}
+                    >
+                      <option value="cn-beijing">北京</option>
+                      <option value="cn-zhangjiakou">张家口</option>
+                    </select>
+                  </label>
+                  <label className="form-label">
+                    Endpoint（可选）
+                    <input
+                      value={configForm.ocr.endpoint}
+                      onChange={(e) =>
+                        setConfigForm({
+                          ...configForm,
+                          ocr: { ...configForm.ocr, endpoint: e.target.value },
+                        })
+                      }
+                      onInput={() => setConfigDirty(true)}
+                      placeholder="不填则自动使用区域默认值"
+                      className="form-control"
+                    />
+                  </label>
+                  <label className="form-label">
+                    关键词（逗号分隔）
+                    <input
+                      value={configForm.ocr.keywords || ''}
+                      onChange={(e) =>
+                        setConfigForm({
+                          ...configForm,
+                          ocr: { ...configForm.ocr, keywords: e.target.value },
+                        })
+                      }
+                      onInput={() => setConfigDirty(true)}
+                      placeholder="例如：正式授权,授权书,合同"
+                      className="form-control"
+                    />
+                  </label>
+                  <label className="form-label">
+                    匹配规则
+                    <select
+                      className="form-select"
+                      value={configForm.ocr.matchMode || 'any'}
+                      onChange={(e) =>
+                        setConfigForm({
+                          ...configForm,
+                          ocr: { ...configForm.ocr, matchMode: e.target.value },
+                        })
+                      }
+                      onInput={() => setConfigDirty(true)}
+                    >
+                      <option value="any">包含任意一个</option>
+                      <option value="all">必须全部包含</option>
+                    </select>
+                  </label>
                 </div>
               </div>
 

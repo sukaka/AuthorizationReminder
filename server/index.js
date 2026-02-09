@@ -80,6 +80,7 @@ const maskSecrets = (configs) => {
   if (cloned.email?.pass) cloned.email.pass = SECRET_MASK;
   if (cloned.sms?.accessKeySecret) cloned.sms.accessKeySecret = SECRET_MASK;
   if (cloned.wecom?.secret) cloned.wecom.secret = SECRET_MASK;
+  if (cloned.ocr?.accessKeySecret) cloned.ocr.accessKeySecret = SECRET_MASK;
   return cloned;
 };
 
@@ -88,6 +89,7 @@ const decryptSecrets = (configs) => {
   if (configs.email?.pass) configs.email.pass = decryptValue(configs.email.pass);
   if (configs.sms?.accessKeySecret) configs.sms.accessKeySecret = decryptValue(configs.sms.accessKeySecret);
   if (configs.wecom?.secret) configs.wecom.secret = decryptValue(configs.wecom.secret);
+  if (configs.ocr?.accessKeySecret) configs.ocr.accessKeySecret = decryptValue(configs.ocr.accessKeySecret);
   return configs;
 };
 
@@ -136,6 +138,12 @@ app.use(cors(corsOptions));
 app.use(express.json({ limit: '1mb' }));
 app.use(cookieParser());
 const upload = multer({ storage: multer.memoryStorage() });
+const uploadsDir = path.join(__dirname, 'uploads');
+const screenshotUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024 },
+});
+app.use('/uploads', express.static(uploadsDir));
 
 const csrfProtection = csurf({
   cookie: {
@@ -1511,7 +1519,7 @@ app.delete('/api/contacts/:id', requireRole(['admin']), async (req, res) => {
 
 // Licenses
 app.get('/api/licenses', async (req, res) => {
-  const { search, customer_id, status, quick, days } = req.query;
+  const { search, customer_id, status, quick, days, missing_screenshot } = req.query;
   const where = [];
   const params = [];
   if (customer_id) {
@@ -1535,6 +1543,9 @@ app.get('/api/licenses', async (req, res) => {
     where.push('(licenses.name LIKE ? OR customers.name LIKE ?)');
     params.push(`%${search}%`, `%${search}%`);
   }
+  if (missing_screenshot === '1') {
+    where.push('(licenses.screenshot_url IS NULL OR licenses.screenshot_url = \'\')');
+  }
   applyScopeFilter({ scope: req.scope, where, params, column: 'customers.id' });
   const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
   const rows = await db.query(
@@ -1542,7 +1553,7 @@ app.get('/api/licenses', async (req, res) => {
      FROM licenses
      JOIN customers ON customers.id = licenses.customer_id
      ${whereSql}
-     ORDER BY licenses.id DESC`,
+     ORDER BY (licenses.screenshot_url IS NULL OR licenses.screenshot_url = '') DESC, licenses.id DESC`,
     params
   );
   res.json(rows);
@@ -1648,6 +1659,93 @@ app.put('/api/licenses/:id', requireRole(['admin', 'sales']), async (req, res) =
   res.json(toJson(row));
 });
 
+app.post('/api/licenses/:id/screenshot', requireRole(['admin', 'sales']), screenshotUpload.single('file'), async (req, res) => {
+  const { id } = req.params;
+  const license = await db.get('SELECT * FROM licenses WHERE id = ?', [id]);
+  if (!license) {
+    return res.status(404).json({ error: '授权不存在' });
+  }
+  if (req.scope && !req.scope.isAdmin) {
+    const ok = await ensureLicenseInScope(req.scope, id);
+    if (!ok) {
+      return res.status(403).json({ error: '无权限' });
+    }
+  }
+  const file = req.file;
+  if (!file) {
+    return res.status(400).json({ error: '请选择截图文件' });
+  }
+  const allowedTypes = ['image/jpeg', 'image/png'];
+  if (!allowedTypes.includes(file.mimetype)) {
+    return res.status(400).json({ error: '仅支持上传jpg或png图片' });
+  }
+  const ext = file.mimetype === 'image/png' ? '.png' : '.jpg';
+  await fs.promises.mkdir(uploadsDir, { recursive: true });
+  const filename = `license_${id}_${Date.now()}${ext}`;
+  const filepath = path.join(uploadsDir, filename);
+  await fs.promises.writeFile(filepath, file.buffer);
+  const url = `/uploads/${filename}`;
+  let screenshotValid = null;
+  let ocrText = '';
+  let ocrError = null;
+  try {
+    const configs = await getConfigs();
+    const text = await runAliyunOcr({ buffer: file.buffer, configs });
+    ocrText = text;
+    if (text) {
+      const matched = matchOcrKeywords(text, configs.ocr);
+      if (matched !== null) screenshotValid = matched;
+    }
+  } catch (err) {
+    ocrError = err.message || 'OCR识别失败';
+  }
+  await db.run(
+    'UPDATE licenses SET screenshot_url = ?, screenshot_valid = ?, screenshot_ocr_text = ? WHERE id = ?',
+    [url, screenshotValid, ocrText || null, id]
+  );
+  await logOperation({
+    user: req.user,
+    action: 'UPLOAD',
+    entity: 'license_screenshot',
+    entityId: Number(id),
+    beforeData: { screenshot_url: license.screenshot_url || '' },
+    afterData: { screenshot_url: url, screenshot_valid: screenshotValid, ocr_error: ocrError || '' },
+  });
+  res.json({
+    ok: true,
+    screenshot_url: url,
+    screenshot_valid: screenshotValid,
+    ocr_error: ocrError || null,
+  });
+});
+
+app.delete('/api/licenses/:id/screenshot', requireRole(['admin', 'sales']), async (req, res) => {
+  const { id } = req.params;
+  const license = await db.get('SELECT * FROM licenses WHERE id = ?', [id]);
+  if (!license) {
+    return res.status(404).json({ error: '授权不存在' });
+  }
+  if (req.scope && !req.scope.isAdmin) {
+    const ok = await ensureLicenseInScope(req.scope, id);
+    if (!ok) {
+      return res.status(403).json({ error: '无权限' });
+    }
+  }
+  await db.run(
+    'UPDATE licenses SET screenshot_url = NULL, screenshot_valid = NULL, screenshot_ocr_text = NULL WHERE id = ?',
+    [id]
+  );
+  await logOperation({
+    user: req.user,
+    action: 'DELETE',
+    entity: 'license_screenshot',
+    entityId: Number(id),
+    beforeData: { screenshot_url: license.screenshot_url || '' },
+    afterData: { screenshot_url: '' },
+  });
+  res.json({ ok: true });
+});
+
 app.delete('/api/licenses/:id', requireRole(['admin']), async (req, res) => {
   const { id } = req.params;
   const before = await db.get('SELECT * FROM licenses WHERE id = ?', [id]);
@@ -1711,7 +1809,8 @@ app.post('/api/send-configs', requireRole(['admin']), async (req, res) => {
   const needsSecretKey =
     (configs.email && configs.email.pass && configs.email.pass !== SECRET_MASK) ||
     (configs.sms && configs.sms.accessKeySecret && configs.sms.accessKeySecret !== SECRET_MASK) ||
-    (configs.wecom && configs.wecom.secret && configs.wecom.secret !== SECRET_MASK);
+    (configs.wecom && configs.wecom.secret && configs.wecom.secret !== SECRET_MASK) ||
+    (configs.ocr && configs.ocr.accessKeySecret && configs.ocr.accessKeySecret !== SECRET_MASK);
   if (needsSecretKey && !CONFIG_SECRET_KEY) {
     return res.status(400).json({ error: '请配置CONFIG_SECRET_KEY后再保存敏感信息' });
   }
@@ -1739,6 +1838,16 @@ app.post('/api/send-configs', requireRole(['admin']), async (req, res) => {
     merged.secret = applySecretUpdate({ incoming: configs.wecom.secret, existing: prev.secret });
     merged.secret = ensureEncrypted(merged.secret);
     nextConfigs.wecom = merged;
+  }
+  if (configs.ocr) {
+    const prev = existing.ocr || {};
+    const merged = { ...prev, ...configs.ocr };
+    merged.accessKeySecret = applySecretUpdate({
+      incoming: configs.ocr.accessKeySecret,
+      existing: prev.accessKeySecret,
+    });
+    merged.accessKeySecret = ensureEncrypted(merged.accessKeySecret);
+    nextConfigs.ocr = merged;
   }
   await db.transaction(async (trx) => {
     for (const [key, value] of Object.entries(nextConfigs)) {
@@ -1930,6 +2039,81 @@ const insertSendLog = async ({ contactId, licenseId, channels, status, errorCode
     'INSERT INTO send_logs (contact_id, license_id, channels, status, error_code, subject, message, error) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
     [contactId, licenseId, channels, status, errorCode, subject, message, error]
   );
+};
+
+const normalizeOcrRegion = (region) => {
+  if (!region) return 'cn-beijing';
+  if (region === 'cn-zhangjiakou' || region === 'cn-beijing') return region;
+  return 'cn-beijing';
+};
+
+const resolveOcrEndpoint = (region) => {
+  if (region === 'cn-zhangjiakou') return 'ocr.cn-zhangjiakou.aliyuncs.com';
+  return 'ocr.cn-beijing.aliyuncs.com';
+};
+
+const extractOcrText = (data) => {
+  if (!data) return '';
+  let payload = data;
+  if (typeof payload === 'string') {
+    try {
+      payload = JSON.parse(payload);
+    } catch (err) {
+      return payload;
+    }
+  }
+  if (payload.content) return String(payload.content);
+  if (payload.prism_ocr) return String(payload.prism_ocr);
+  if (payload.text) return String(payload.text);
+  if (Array.isArray(payload.words)) return payload.words.join('');
+  if (payload.result && typeof payload.result === 'string') return payload.result;
+  return JSON.stringify(payload);
+};
+
+const runAliyunOcr = async ({ buffer, configs }) => {
+  const ocr = configs.ocr || {};
+  if (!ocr.enabled) {
+    return '';
+  }
+  if (!ocr.accessKeyId || !ocr.accessKeySecret) {
+    throw new Error('OCR配置不完整');
+  }
+  const region = normalizeOcrRegion(ocr.region);
+  const endpoint = ocr.endpoint || resolveOcrEndpoint(region);
+  const client = new RPCClient({
+    accessKeyId: ocr.accessKeyId,
+    accessKeySecret: ocr.accessKeySecret,
+    endpoint,
+    apiVersion: '2021-07-07',
+    timeout: 10000,
+  });
+  const res = await client.request(
+    'RecognizeGeneral',
+    { body: buffer },
+    { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' } }
+  );
+  const content = extractOcrText(res?.Data ?? res?.data ?? res);
+  return String(content || '');
+};
+
+const getOcrKeywords = (ocrConfig) => {
+  const raw = ocrConfig?.keywords || '';
+  return String(raw)
+    .split(/[，,、]/)
+    .map((v) => v.trim())
+    .filter(Boolean);
+};
+
+const matchOcrKeywords = (text, ocrConfig) => {
+  const keywords = getOcrKeywords(ocrConfig);
+  if (!keywords.length) return null;
+  const normalized = String(text || '').replace(/\s+/g, '');
+  if (!normalized) return 0;
+  const mode = ocrConfig?.matchMode === 'all' ? 'all' : 'any';
+  if (mode === 'all') {
+    return keywords.every((k) => normalized.includes(k)) ? 1 : 0;
+  }
+  return keywords.some((k) => normalized.includes(k)) ? 1 : 0;
 };
 
 const insertReminderLog = async ({ licenseId, contactId, channel, daysLeft, status, errorCode, error, isTest = 0 }) => {

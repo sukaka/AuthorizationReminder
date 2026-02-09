@@ -129,6 +129,16 @@ body {
   pointer-events: none;
 }
 
+.sidebar-footer {
+  margin-top: auto;
+  font-size: 12px;
+  color: var(--muted);
+  padding: 8px 12px;
+  border-radius: 12px;
+  background: rgba(148, 163, 184, 0.12);
+  text-align: center;
+}
+
 .menu button:hover::after {
   transform: translateX(200%);
 }
@@ -769,7 +779,84 @@ textarea:focus {
 }
 
 .license-table .table-row {
-  grid-template-columns: 1.6fr 1fr 1fr 1fr 0.6fr 0.7fr 0.7fr 1.2fr;
+  grid-template-columns: 1.4fr 1fr 0.9fr 0.9fr 0.6fr 0.7fr 0.7fr 0.8fr 1.4fr;
+}
+
+.license-table .table-row.missing-screenshot {
+  background: rgba(254, 226, 226, 0.85);
+  border-color: rgba(248, 113, 113, 0.6);
+}
+
+.license-table .table-row.missing-screenshot:hover {
+  box-shadow: 0 12px 24px rgba(248, 113, 113, 0.18);
+}
+
+.license-table .table-row.invalid-screenshot {
+  border-color: rgba(245, 158, 11, 0.6);
+  background: rgba(254, 243, 199, 0.6);
+}
+
+.license-table .table-row.invalid-screenshot:hover {
+  box-shadow: 0 12px 24px rgba(245, 158, 11, 0.2);
+}
+
+.upload-btn input[type="file"] {
+  display: none;
+}
+
+.text-danger {
+  color: #dc2626;
+  font-weight: 600;
+}
+
+.link-btn {
+  background: none;
+  border: none;
+  color: #2563eb;
+  cursor: pointer;
+  padding: 0;
+  font-weight: 600;
+}
+
+.link-btn:hover {
+  text-decoration: underline;
+}
+
+.link-btn.two-line {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  line-height: 1.1;
+  gap: 2px;
+}
+
+.badge-warn {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(245, 158, 11, 0.18);
+  color: #b45309;
+  font-weight: 600;
+  font-size: 12px;
+}
+
+.screenshot-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+}
+
+.modal-card.modal-image {
+  width: min(860px, 92vw);
+}
+
+.modal-card.modal-image img {
+  display: block;
+  max-width: 100%;
+  max-height: 70vh;
+  border-radius: 12px;
 }
 
 .send-table .table-row {
@@ -1558,6 +1645,14 @@ textarea:focus {
 
 .tone-sms .config-card-header {
   background: rgba(254, 243, 199, 0.7);
+}
+
+.tone-ocr {
+  background: linear-gradient(135deg, rgba(237, 233, 254, 0.55), rgba(255, 255, 255, 0.92));
+}
+
+.tone-ocr .config-card-header {
+  background: rgba(237, 233, 254, 0.7);
 }
 
 .tone-wecom {

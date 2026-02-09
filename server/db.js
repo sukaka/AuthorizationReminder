@@ -124,9 +124,16 @@ const init = async () => {
     status VARCHAR(32) NOT NULL DEFAULT 'ACTIVE',
     note TEXT,
     reminder_days TEXT,
+    screenshot_url VARCHAR(1024),
+    screenshot_valid TINYINT,
+    screenshot_ocr_text TEXT,
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (customer_id) REFERENCES customers(id)
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
+
+  await addColumnIfMissing('licenses', 'screenshot_url', 'screenshot_url VARCHAR(1024)');
+  await addColumnIfMissing('licenses', 'screenshot_valid', 'screenshot_valid TINYINT');
+  await addColumnIfMissing('licenses', 'screenshot_ocr_text', 'screenshot_ocr_text TEXT');
 
   await run(`CREATE TABLE IF NOT EXISTS send_configs (
     id INT AUTO_INCREMENT PRIMARY KEY,
