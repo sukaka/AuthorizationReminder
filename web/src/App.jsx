@@ -1989,15 +1989,16 @@ function App() {
         <button className="ghost logout" onClick={onLogout}>
           退出登录
         </button>
-        <div className="sidebar-footer">
-          版本号：v1.0.1
-        </div>
       </aside>
 
       <div className="content">
         <header className="hero">
           <div>
-            <h1 className="brand-title"><span className="brand-red">聚信</span><span className="brand-blue">授权到期提醒系统</span></h1>
+            <h1 className="brand-title">
+              <span className="brand-red">聚信</span>
+              <span className="brand-blue">授权到期提醒系统</span>
+              <span className="version-inline">v1.0.1</span>
+            </h1>
             <h3 className="hero-title">统一管理客户、联系人与发送配置</h3>
             <p className="sub">
               覆盖客户与联系人信息维护，支持邮件、企业微信、短信多渠道提醒。
