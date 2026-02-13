@@ -20,7 +20,40 @@ const app = express();
 const PORT = process.env.PORT || 5179;
 const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret-change-me';
 const CONFIG_SECRET_KEY = process.env.CONFIG_SECRET_KEY || '';
+const AUTH_SERVICE_URL = process.env.AUTH_SERVICE_URL || 'http://auth:5180';
 const SECRET_MASK = '******';
+const SYSTEM_ACCESS_KEYS = ['reminder', 'ticketing'];
+
+const parseAppAccessRaw = (value) => {
+  if (Array.isArray(value)) return value;
+  if (value === undefined || value === null) return null;
+  const text = String(value).trim();
+  if (!text) return null;
+  try {
+    const parsed = JSON.parse(text);
+    if (Array.isArray(parsed)) return parsed;
+  } catch (err) {
+    // fall through to comma-separated parsing
+  }
+  return text.split(',').map((item) => item.trim());
+};
+
+const normalizeAppAccess = (value, role = 'viewer') => {
+  if (role === 'admin') return [...SYSTEM_ACCESS_KEYS];
+  const parsed = parseAppAccessRaw(value);
+  const source = parsed === null ? SYSTEM_ACCESS_KEYS : parsed;
+  return Array.from(
+    new Set(source.map((item) => String(item || '').trim()).filter((item) => SYSTEM_ACCESS_KEYS.includes(item)))
+  );
+};
+
+const formatUserRow = (row) => {
+  if (!row) return row;
+  return {
+    ...row,
+    app_access: normalizeAppAccess(row.app_access, row.role),
+  };
+};
 
 const deriveKey = (secret) => crypto.createHash('sha256').update(secret).digest();
 
@@ -93,22 +126,25 @@ const decryptSecrets = (configs) => {
   return configs;
 };
 
+const normalizeOrigin = (value) => String(value || '').trim().replace(/\/+$/, '');
+
 const defaultOrigins = [
   'http://localhost:5173',
   'http://127.0.0.1:5173',
   'http://localhost:8080',
   'http://127.0.0.1:8080',
-];
+].map(normalizeOrigin);
 const allowedOrigins = (process.env.CORS_ORIGINS || '')
   .split(',')
-  .map((s) => s.trim())
+  .map(normalizeOrigin)
   .filter(Boolean);
 
 const corsOptions = {
   origin: (origin, cb) => {
     if (!origin) return cb(null, true);
+    const requestOrigin = normalizeOrigin(origin);
     const list = allowedOrigins.length ? allowedOrigins : defaultOrigins;
-    if (list.includes(origin)) return cb(null, true);
+    if (list.includes(requestOrigin)) return cb(null, true);
     return cb(new Error('Not allowed by CORS'));
   },
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
@@ -181,10 +217,11 @@ const ensureAdminUser = async () => {
   const existing = await db.get('SELECT COUNT(1) AS count FROM users');
   if (existing && Number(existing.count) > 0) return;
   const hash = bcrypt.hashSync('123456', 10);
-  await db.run('INSERT INTO users (username, password_hash, role) VALUES (?, ?, ?)', [
+  await db.run('INSERT INTO users (username, password_hash, role, app_access) VALUES (?, ?, ?, ?)', [
     'admin',
     hash,
     'admin',
+    JSON.stringify(SYSTEM_ACCESS_KEYS),
   ]);
 };
 
@@ -209,20 +246,78 @@ const authMiddleware = (req, res, next) => {
   if (!token) {
     return res.status(401).json({ error: '未登录' });
   }
-  try {
-    const payload = jwt.verify(token, JWT_SECRET);
-    req.user = payload;
-    return next();
-  } catch (err) {
-    return res.status(401).json({ error: '登录已过期' });
-  }
+  fetch(`${AUTH_SERVICE_URL}/api/auth/introspect`, {
+    method: 'GET',
+    headers: { Authorization: `Bearer ${token}` },
+  })
+    .then(async (resp) => {
+      if (!resp.ok) {
+        return res.status(401).json({ error: '登录已过期' });
+      }
+      const data = await resp.json();
+      const apps = Array.isArray(data?.apps) ? data.apps : [];
+      if (!apps.includes('reminder')) {
+        return res.status(403).json({ error: '无权限访问授权到期提醒系统' });
+      }
+      req.user = data?.user || null;
+      req.scope = data?.scope || null;
+      req.apps = apps;
+      return next();
+    })
+    .catch(() => res.status(401).json({ error: '登录已过期' }));
 };
 
 const requireRole = (roles) => (req, res, next) => {
-  if (!req.user || !roles.includes(req.user.role)) {
-    return res.status(403).json({ error: '无权限' });
+  if (!req.user) return res.status(401).json({ error: '未登录' });
+  const header = req.headers.authorization || '';
+  const token = header.startsWith('Bearer ') ? header.slice(7) : null;
+  if (!token) return res.status(401).json({ error: '未登录' });
+  fetch(`${AUTH_SERVICE_URL}/api/auth/authorize`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      system: 'api',
+      action: 'role:any',
+      resource: { roles },
+    }),
+  })
+    .then(async (resp) => {
+      if (!resp.ok) {
+        return res.status(401).json({ error: '登录已过期' });
+      }
+      const data = await resp.json();
+      if (!data?.allow) return res.status(403).json({ error: data?.reason || '无权限' });
+      return next();
+    })
+    .catch(() => res.status(500).json({ error: '权限服务不可用' }));
+};
+
+const authorizeReminderAction = async (req, action, resource = {}) => {
+  const header = req.headers.authorization || '';
+  const token = header.startsWith('Bearer ') ? header.slice(7) : null;
+  if (!token) return { allow: false, reason: '未登录' };
+  try {
+    const resp = await fetch(`${AUTH_SERVICE_URL}/api/auth/authorize`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        system: 'reminder',
+        action,
+        resource,
+      }),
+    });
+    if (!resp.ok) return { allow: false, reason: '登录已过期' };
+    const data = await resp.json();
+    return data || { allow: false, reason: '无权限' };
+  } catch (err) {
+    return { allow: false, reason: '权限服务不可用' };
   }
-  return next();
 };
 
 app.use('/api', authMiddleware);
@@ -239,38 +334,6 @@ const applyScopeFilter = ({ scope, where, params, column = 'customers.id' }) => 
   where.push(`${column} IN (${buildInClause(ids)})`);
   params.push(...ids);
 };
-
-const loadUserScope = async (user) => {
-  if (!user) return { isAdmin: false, customerIds: [] };
-  if (user.role === 'admin') return { isAdmin: true, customerIds: [] };
-  const dbUser = await db.get('SELECT id, phone FROM users WHERE id = ?', [user.id]);
-  const phone = dbUser?.phone;
-  if (!phone) return { isAdmin: false, customerIds: [], contactIds: [], phone: null };
-  const contacts = await db.query(
-    `SELECT c.id, cc.customer_id
-     FROM contacts c
-     JOIN contact_customers cc ON cc.contact_id = c.id
-     WHERE c.phone = ?`,
-    [phone]
-  );
-  const customerIds = Array.from(
-    new Set(contacts.map((c) => Number(c.customer_id)).filter((id) => Number.isFinite(id)))
-  );
-  const contactIds = contacts.map((c) => Number(c.id)).filter((id) => Number.isFinite(id));
-  return { isAdmin: false, customerIds, contactIds, phone };
-};
-
-const scopeMiddleware = async (req, res, next) => {
-  if (!req.user) return next();
-  try {
-    req.scope = await loadUserScope(req.user);
-    return next();
-  } catch (err) {
-    return res.status(500).json({ error: '获取权限范围失败' });
-  }
-};
-
-app.use('/api', scopeMiddleware);
 
 // Auth
 app.get('/api/auth/captcha', async (req, res) => {
@@ -672,26 +735,31 @@ app.post('/api/auth/logout', async (req, res) => {
 // Users (admin)
 app.get('/api/users', requireRole(['admin']), async (req, res) => {
   const rows = await db.query(
-    'SELECT id, username, role, email, phone, wecom_id, totp_enabled, created_at FROM users ORDER BY id DESC'
+    'SELECT id, username, role, email, phone, wecom_id, app_access, totp_enabled, created_at FROM users ORDER BY id DESC'
   );
-  res.json(rows);
+  res.json(rows.map(formatUserRow));
 });
 
 app.post('/api/users', requireRole(['admin']), async (req, res) => {
-  const { username, password, role, email, phone, wecom_id } = req.body || {};
+  const { username, password, role, email, phone, wecom_id, app_access } = req.body || {};
   if (!username || !password) {
     return res.status(400).json({ error: '请输入账号和密码' });
+  }
+  const nextRole = role || 'viewer';
+  const nextAccess = normalizeAppAccess(app_access, nextRole);
+  if (!nextAccess.length) {
+    return res.status(400).json({ error: '请至少选择一个可访问系统' });
   }
   const hash = bcrypt.hashSync(password, 10);
   try {
     const info = await db.run(
-      'INSERT INTO users (username, password_hash, role, email, phone, wecom_id) VALUES (?, ?, ?, ?, ?, ?)',
-      [username.trim(), hash, role || 'viewer', email || null, phone || null, wecom_id || null]
+      'INSERT INTO users (username, password_hash, role, email, phone, wecom_id, app_access) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      [username.trim(), hash, nextRole, email || null, phone || null, wecom_id || null, JSON.stringify(nextAccess)]
     );
-    const row = await db.get(
-      'SELECT id, username, role, email, phone, wecom_id, totp_enabled, created_at FROM users WHERE id = ?',
+    const row = formatUserRow(await db.get(
+      'SELECT id, username, role, email, phone, wecom_id, app_access, totp_enabled, created_at FROM users WHERE id = ?',
       [info.insertId]
-    );
+    ));
     await logOperation({
       user: req.user,
       action: 'CREATE',
@@ -707,18 +775,29 @@ app.post('/api/users', requireRole(['admin']), async (req, res) => {
 
 app.put('/api/users/:id', requireRole(['admin']), async (req, res) => {
   const { id } = req.params;
-  const { password, role, email, phone, wecom_id } = req.body || {};
-  if (!password && !role && email === undefined && phone === undefined && wecom_id === undefined) {
+  const { password, role, email, phone, wecom_id, app_access } = req.body || {};
+  if (
+    !password &&
+    !role &&
+    email === undefined &&
+    phone === undefined &&
+    wecom_id === undefined &&
+    app_access === undefined
+  ) {
     return res.status(400).json({ error: '没有可更新字段' });
   }
-  const before = await db.get(
-    'SELECT id, username, role, email, phone, wecom_id, totp_enabled, created_at FROM users WHERE id = ?',
+  const before = formatUserRow(await db.get(
+    'SELECT id, username, role, email, phone, wecom_id, app_access, totp_enabled, created_at FROM users WHERE id = ?',
     [id]
-  );
+  ));
+  if (!before) {
+    return res.status(404).json({ error: '用户不存在' });
+  }
   if (password) {
     const hash = bcrypt.hashSync(password, 10);
     await db.run('UPDATE users SET password_hash = ? WHERE id = ?', [hash, id]);
   }
+  const nextRole = role || before.role;
   if (role) {
     await db.run('UPDATE users SET role = ? WHERE id = ?', [role, id]);
   }
@@ -731,10 +810,17 @@ app.put('/api/users/:id', requireRole(['admin']), async (req, res) => {
   if (wecom_id !== undefined) {
     await db.run('UPDATE users SET wecom_id = ? WHERE id = ?', [wecom_id || null, id]);
   }
-  const row = await db.get(
-    'SELECT id, username, role, email, phone, wecom_id, totp_enabled, created_at FROM users WHERE id = ?',
+  if (role !== undefined || app_access !== undefined) {
+    const nextAccess = normalizeAppAccess(app_access !== undefined ? app_access : before.app_access, nextRole);
+    if (!nextAccess.length) {
+      return res.status(400).json({ error: '请至少选择一个可访问系统' });
+    }
+    await db.run('UPDATE users SET app_access = ? WHERE id = ?', [JSON.stringify(nextAccess), id]);
+  }
+  const row = formatUserRow(await db.get(
+    'SELECT id, username, role, email, phone, wecom_id, app_access, totp_enabled, created_at FROM users WHERE id = ?',
     [id]
-  );
+  ));
   await logOperation({
     user: req.user,
     action: 'UPDATE',
@@ -751,10 +837,10 @@ app.delete('/api/users/:id', requireRole(['admin']), async (req, res) => {
   if (String(id) === String(req.user.id)) {
     return res.status(400).json({ error: '不能删除自己' });
   }
-  const before = await db.get(
-    'SELECT id, username, role, email, phone, wecom_id, totp_enabled, created_at FROM users WHERE id = ?',
+  const before = formatUserRow(await db.get(
+    'SELECT id, username, role, email, phone, wecom_id, app_access, totp_enabled, created_at FROM users WHERE id = ?',
     [id]
-  );
+  ));
   await db.run('DELETE FROM users WHERE id = ?', [id]);
   await logOperation({
     user: req.user,
@@ -1239,9 +1325,8 @@ app.get('/api/customers', async (req, res) => {
 
 app.post('/api/customers', requireRole(['admin', 'sales']), async (req, res) => {
   const { name, juxin_sales, channel_sales } = req.body;
-  if (req.scope && !req.scope.isAdmin) {
-    return res.status(403).json({ error: '无权限' });
-  }
+  const authzCreateCustomer = await authorizeReminderAction(req, 'customer:create', { customer_in_scope: false });
+  if (!authzCreateCustomer.allow) return res.status(403).json({ error: authzCreateCustomer.reason || '无权限' });
   if (!name || !name.trim()) {
     return res.status(400).json({ error: '客户名称不能为空' });
   }
@@ -1273,12 +1358,12 @@ app.put('/api/customers/:id', requireRole(['admin', 'sales']), async (req, res) 
   try {
     const before = await db.get('SELECT * FROM customers WHERE id = ?', [id]);
     if (!before) return res.status(404).json({ error: '客户不存在' });
-    if (req.scope && !req.scope.isAdmin) {
-      const allowed = req.scope.customerIds || [];
-      if (!allowed.includes(Number(id))) {
-        return res.status(403).json({ error: '无权限' });
-      }
-    }
+    const allowed = new Set((req.scope?.customerIds || []).map((cid) => Number(cid)));
+    const customerInScope = req.scope?.isAdmin ? true : allowed.has(Number(id));
+    const authzUpdateCustomer = await authorizeReminderAction(req, 'customer:update', {
+      customer_in_scope: customerInScope,
+    });
+    if (!authzUpdateCustomer.allow) return res.status(403).json({ error: authzUpdateCustomer.reason || '无权限' });
     await db.run(
       'UPDATE customers SET name = ?, juxin_sales = ?, channel_sales = ? WHERE id = ?',
       [name.trim(), juxin_sales || '', channel_sales || '', id]
@@ -1300,12 +1385,12 @@ app.put('/api/customers/:id', requireRole(['admin', 'sales']), async (req, res) 
 
 app.delete('/api/customers/:id', requireRole(['admin']), async (req, res) => {
   const { id } = req.params;
-  if (req.scope && !req.scope.isAdmin) {
-    const allowed = req.scope.customerIds || [];
-    if (!allowed.includes(Number(id))) {
-      return res.status(403).json({ error: '无权限' });
-    }
-  }
+  const allowed = new Set((req.scope?.customerIds || []).map((cid) => Number(cid)));
+  const customerInScope = req.scope?.isAdmin ? true : allowed.has(Number(id));
+  const authzDeleteCustomer = await authorizeReminderAction(req, 'customer:delete', {
+    customer_in_scope: customerInScope,
+  });
+  if (!authzDeleteCustomer.allow) return res.status(403).json({ error: authzDeleteCustomer.reason || '无权限' });
   const hasContacts = await db.get('SELECT COUNT(1) AS count FROM contact_customers WHERE customer_id = ?', [id]);
   if (Number(hasContacts?.count || 0) > 0) {
     return res.status(400).json({ error: '该客户下存在联系人，无法删除' });
@@ -1372,12 +1457,14 @@ app.post('/api/contacts', requireRole(['admin', 'sales']), async (req, res) => {
   if (!normalizedCustomerIds.length) {
     return res.status(400).json({ error: '请选择客户名称' });
   }
-  if (req.scope && !req.scope.isAdmin) {
-    const allowed = new Set(req.scope.customerIds || []);
-    if (!normalizedCustomerIds.every((id) => allowed.has(Number(id)))) {
-      return res.status(403).json({ error: '无权限' });
-    }
-  }
+  const allowedCustomerSet = new Set((req.scope?.customerIds || []).map((cid) => Number(cid)));
+  const customerIdsInScope = req.scope?.isAdmin
+    ? true
+    : normalizedCustomerIds.every((id) => allowedCustomerSet.has(Number(id)));
+  const authzCreateContact = await authorizeReminderAction(req, 'contact:create', {
+    customer_ids_in_scope: customerIdsInScope,
+  });
+  if (!authzCreateContact.allow) return res.status(403).json({ error: authzCreateContact.reason || '无权限' });
   if (!name || !name.trim()) {
     return res.status(400).json({ error: '联系人不能为空' });
   }
@@ -1438,20 +1525,20 @@ app.put('/api/contacts/:id', requireRole(['admin', 'sales']), async (req, res) =
   }
   const before = await db.get('SELECT * FROM contacts WHERE id = ?', [id]);
   if (!before) return res.status(404).json({ error: '联系人不存在' });
-  if (req.scope && !req.scope.isAdmin) {
-    const allowed = new Set(req.scope.customerIds || []);
-    const currentLinks = await db.query(
-      'SELECT customer_id FROM contact_customers WHERE contact_id = ?',
-      [id]
-    );
-    const currentIds = currentLinks.map((row) => Number(row.customer_id));
-    if (
-      !currentIds.every((cid) => allowed.has(cid)) ||
-      !normalizedCustomerIds.every((cid) => allowed.has(Number(cid)))
-    ) {
-      return res.status(403).json({ error: '无权限' });
-    }
-  }
+  const allowedContactSet = new Set((req.scope?.customerIds || []).map((cid) => Number(cid)));
+  const currentLinks = await db.query(
+    'SELECT customer_id FROM contact_customers WHERE contact_id = ?',
+    [id]
+  );
+  const currentIds = currentLinks.map((row) => Number(row.customer_id));
+  const customerIdsInScope = req.scope?.isAdmin
+    ? true
+    : currentIds.every((cid) => allowedContactSet.has(cid)) &&
+      normalizedCustomerIds.every((cid) => allowedContactSet.has(Number(cid)));
+  const authzUpdateContact = await authorizeReminderAction(req, 'contact:update', {
+    customer_ids_in_scope: customerIdsInScope,
+  });
+  if (!authzUpdateContact.allow) return res.status(403).json({ error: authzUpdateContact.reason || '无权限' });
   const primaryCustomerId = normalizedCustomerIds[0];
   const row = await db.transaction(async (trx) => {
     await trx.run(
@@ -1495,17 +1582,19 @@ app.delete('/api/contacts/:id', requireRole(['admin']), async (req, res) => {
   const { id } = req.params;
   const before = await db.get('SELECT * FROM contacts WHERE id = ?', [id]);
   if (!before) return res.status(404).json({ error: '联系人不存在' });
-  if (req.scope && !req.scope.isAdmin) {
-    const allowed = new Set(req.scope.customerIds || []);
-    const currentLinks = await db.query(
-      'SELECT customer_id FROM contact_customers WHERE contact_id = ?',
-      [id]
-    );
-    const currentIds = currentLinks.map((row) => Number(row.customer_id));
-    if (!currentIds.every((cid) => allowed.has(cid))) {
-      return res.status(403).json({ error: '无权限' });
-    }
-  }
+  const allowedDeleteContactSet = new Set((req.scope?.customerIds || []).map((cid) => Number(cid)));
+  const currentLinks = await db.query(
+    'SELECT customer_id FROM contact_customers WHERE contact_id = ?',
+    [id]
+  );
+  const currentIds = currentLinks.map((row) => Number(row.customer_id));
+  const customerIdsInScope = req.scope?.isAdmin
+    ? true
+    : currentIds.every((cid) => allowedDeleteContactSet.has(cid));
+  const authzDeleteContact = await authorizeReminderAction(req, 'contact:delete', {
+    customer_ids_in_scope: customerIdsInScope,
+  });
+  if (!authzDeleteContact.allow) return res.status(403).json({ error: authzDeleteContact.reason || '无权限' });
   await db.run('DELETE FROM contacts WHERE id = ?', [id]);
   await logOperation({
     user: req.user,
@@ -1584,12 +1673,12 @@ app.post('/api/licenses', requireRole(['admin', 'sales']), async (req, res) => {
   if (!customer_id) {
     return res.status(400).json({ error: '请选择客户名称' });
   }
-  if (req.scope && !req.scope.isAdmin) {
-    const allowed = req.scope.customerIds || [];
-    if (!allowed.includes(Number(customer_id))) {
-      return res.status(403).json({ error: '无权限' });
-    }
-  }
+  const allowedLicenseSet = new Set((req.scope?.customerIds || []).map((cid) => Number(cid)));
+  const licenseInScope = req.scope?.isAdmin ? true : allowedLicenseSet.has(Number(customer_id));
+  const authzCreateLicense = await authorizeReminderAction(req, 'license:create', {
+    license_in_scope: licenseInScope,
+  });
+  if (!authzCreateLicense.allow) return res.status(403).json({ error: authzCreateLicense.reason || '无权限' });
   if (!name || !name.trim()) {
     return res.status(400).json({ error: '授权名称不能为空' });
   }
@@ -1631,12 +1720,15 @@ app.put('/api/licenses/:id', requireRole(['admin', 'sales']), async (req, res) =
   }
   const before = await db.get('SELECT * FROM licenses WHERE id = ?', [id]);
   if (!before) return res.status(404).json({ error: '授权不存在' });
-  if (req.scope && !req.scope.isAdmin) {
-    const allowed = req.scope.customerIds || [];
-    if (!allowed.includes(Number(before.customer_id)) || !allowed.includes(Number(customer_id))) {
-      return res.status(403).json({ error: '无权限' });
-    }
-  }
+  const allowedUpdateLicenseSet = new Set((req.scope?.customerIds || []).map((cid) => Number(cid)));
+  const licenseInScope = req.scope?.isAdmin
+    ? true
+    : allowedUpdateLicenseSet.has(Number(before.customer_id)) &&
+      allowedUpdateLicenseSet.has(Number(customer_id));
+  const authzUpdateLicense = await authorizeReminderAction(req, 'license:update', {
+    license_in_scope: licenseInScope,
+  });
+  if (!authzUpdateLicense.allow) return res.status(403).json({ error: authzUpdateLicense.reason || '无权限' });
   await db.run(
     'UPDATE licenses SET customer_id = ?, name = ?, start_date = ?, end_date = ?, status = ?, note = ?, reminder_days = ? WHERE id = ?',
     [customer_id, name.trim(), start_date || null, end_date, status || 'ACTIVE', note || '', reminder_days || null, id]
@@ -1665,11 +1757,12 @@ app.post('/api/licenses/:id/screenshot', requireRole(['admin', 'sales']), screen
   if (!license) {
     return res.status(404).json({ error: '授权不存在' });
   }
-  if (req.scope && !req.scope.isAdmin) {
-    const ok = await ensureLicenseInScope(req.scope, id);
-    if (!ok) {
-      return res.status(403).json({ error: '无权限' });
-    }
+  const okLicense = await ensureLicenseInScope(req.scope, id);
+  const authzUploadScreenshot = await authorizeReminderAction(req, 'license:screenshot:create', {
+    license_in_scope: okLicense,
+  });
+  if (!authzUploadScreenshot.allow) {
+    return res.status(403).json({ error: authzUploadScreenshot.reason || '无权限' });
   }
   const file = req.file;
   if (!file) {
@@ -1725,11 +1818,12 @@ app.delete('/api/licenses/:id/screenshot', requireRole(['admin', 'sales']), asyn
   if (!license) {
     return res.status(404).json({ error: '授权不存在' });
   }
-  if (req.scope && !req.scope.isAdmin) {
-    const ok = await ensureLicenseInScope(req.scope, id);
-    if (!ok) {
-      return res.status(403).json({ error: '无权限' });
-    }
+  const okLicense = await ensureLicenseInScope(req.scope, id);
+  const authzDeleteScreenshot = await authorizeReminderAction(req, 'license:screenshot:delete', {
+    license_in_scope: okLicense,
+  });
+  if (!authzDeleteScreenshot.allow) {
+    return res.status(403).json({ error: authzDeleteScreenshot.reason || '无权限' });
   }
   await db.run(
     'UPDATE licenses SET screenshot_url = NULL, screenshot_valid = NULL, screenshot_ocr_text = NULL WHERE id = ?',
@@ -1750,12 +1844,12 @@ app.delete('/api/licenses/:id', requireRole(['admin']), async (req, res) => {
   const { id } = req.params;
   const before = await db.get('SELECT * FROM licenses WHERE id = ?', [id]);
   if (!before) return res.status(404).json({ error: '授权不存在' });
-  if (req.scope && !req.scope.isAdmin) {
-    const allowed = req.scope.customerIds || [];
-    if (!allowed.includes(Number(before.customer_id))) {
-      return res.status(403).json({ error: '无权限' });
-    }
-  }
+  const allowedDeleteLicenseSet = new Set((req.scope?.customerIds || []).map((cid) => Number(cid)));
+  const licenseInScope = req.scope?.isAdmin ? true : allowedDeleteLicenseSet.has(Number(before.customer_id));
+  const authzDeleteLicense = await authorizeReminderAction(req, 'license:delete', {
+    license_in_scope: licenseInScope,
+  });
+  if (!authzDeleteLicense.allow) return res.status(403).json({ error: authzDeleteLicense.reason || '无权限' });
   await db.run('DELETE FROM licenses WHERE id = ?', [id]);
   await logOperation({
     user: req.user,
@@ -2311,18 +2405,13 @@ app.post('/api/send', requireRole(['admin', 'sales']), async (req, res) => {
   if (!Array.isArray(channels) || channels.length === 0) {
     return res.status(400).json({ error: '请选择发送渠道' });
   }
-  if (req.scope && !req.scope.isAdmin) {
-    const okContacts = await ensureContactsInScope(req.scope, contactIds);
-    if (!okContacts) {
-      return res.status(403).json({ error: '无权限' });
-    }
-    if (licenseId) {
-      const okLicense = await ensureLicenseInScope(req.scope, licenseId);
-      if (!okLicense) {
-        return res.status(403).json({ error: '无权限' });
-      }
-    }
-  }
+  const okContacts = await ensureContactsInScope(req.scope, contactIds);
+  const okLicense = licenseId ? await ensureLicenseInScope(req.scope, licenseId) : undefined;
+  const authzSend = await authorizeReminderAction(req, 'send:manual', {
+    contacts_in_scope: okContacts,
+    license_in_scope: okLicense,
+  });
+  if (!authzSend.allow) return res.status(403).json({ error: authzSend.reason || '无权限' });
   const contacts = await db.query(
     `SELECT contacts.*, customers.name AS customer_name
      FROM contacts JOIN customers ON customers.id = contacts.customer_id
@@ -2477,16 +2566,13 @@ app.post('/api/send-plans', requireRole(['admin', 'sales']), async (req, res) =>
   if (!days || !String(days).trim()) {
     return res.status(400).json({ error: '请填写提醒天数' });
   }
-  if (req.scope && !req.scope.isAdmin) {
-    const okContacts = await ensureContactsInScope(req.scope, contact_ids);
-    if (!okContacts) {
-      return res.status(403).json({ error: '无权限' });
-    }
-    const okLicense = await ensureLicenseInScope(req.scope, license_id);
-    if (!okLicense) {
-      return res.status(403).json({ error: '无权限' });
-    }
-  }
+  const okContacts = await ensureContactsInScope(req.scope, contact_ids);
+  const okLicense = await ensureLicenseInScope(req.scope, license_id);
+  const authzCreatePlan = await authorizeReminderAction(req, 'send-plan:create', {
+    contacts_in_scope: okContacts,
+    license_in_scope: okLicense,
+  });
+  if (!authzCreatePlan.allow) return res.status(403).json({ error: authzCreatePlan.reason || '无权限' });
   const license = await db.get('SELECT end_date FROM licenses WHERE id = ?', [license_id]);
   const resolvedWecomMode = normalizeWecomMode(wecom_mode);
   const info = await db.run(
@@ -2543,20 +2629,14 @@ app.put('/api/send-plans/:id', requireRole(['admin', 'sales']), async (req, res)
   }
   const before = await db.get('SELECT * FROM send_plans WHERE id = ?', [id]);
   if (!before) return res.status(404).json({ error: '计划不存在' });
-  if (req.scope && !req.scope.isAdmin) {
-    const okBefore = await ensureLicenseInScope(req.scope, before.license_id);
-    if (!okBefore) {
-      return res.status(403).json({ error: '无权限' });
-    }
-    const okContacts = await ensureContactsInScope(req.scope, contact_ids);
-    if (!okContacts) {
-      return res.status(403).json({ error: '无权限' });
-    }
-    const okLicense = await ensureLicenseInScope(req.scope, license_id);
-    if (!okLicense) {
-      return res.status(403).json({ error: '无权限' });
-    }
-  }
+  const okBefore = await ensureLicenseInScope(req.scope, before.license_id);
+  const okContacts = await ensureContactsInScope(req.scope, contact_ids);
+  const okLicense = await ensureLicenseInScope(req.scope, license_id);
+  const authzUpdatePlan = await authorizeReminderAction(req, 'send-plan:update', {
+    contacts_in_scope: okContacts,
+    license_in_scope: okBefore && okLicense,
+  });
+  if (!authzUpdatePlan.allow) return res.status(403).json({ error: authzUpdatePlan.reason || '无权限' });
   const license = await db.get('SELECT end_date FROM licenses WHERE id = ?', [license_id]);
   const resolvedWecomMode = normalizeWecomMode(wecom_mode);
   await db.run(
@@ -2602,12 +2682,12 @@ app.delete('/api/send-plans/:id', requireRole(['admin', 'sales']), async (req, r
   const { id } = req.params;
   const before = await db.get('SELECT * FROM send_plans WHERE id = ?', [id]);
   if (!before) return res.status(404).json({ error: '计划不存在' });
-  if (req.scope && !req.scope.isAdmin) {
-    const ok = await ensureLicenseInScope(req.scope, before.license_id);
-    if (!ok) {
-      return res.status(403).json({ error: '无权限' });
-    }
-  }
+  const okLicense = await ensureLicenseInScope(req.scope, before.license_id);
+  const authzDeletePlan = await authorizeReminderAction(req, 'send-plan:delete', {
+    contacts_in_scope: true,
+    license_in_scope: okLicense,
+  });
+  if (!authzDeletePlan.allow) return res.status(403).json({ error: authzDeletePlan.reason || '无权限' });
   await db.run('DELETE FROM send_plans WHERE id = ?', [id]);
   await logOperation({
     user: req.user,
@@ -2638,20 +2718,26 @@ app.post('/api/send-plans/send-now', requireRole(['admin', 'sales']), async (req
   );
   if (!plans.length) return res.status(404).json({ error: '计划不存在' });
 
-  if (req.scope && !req.scope.isAdmin) {
-    for (const plan of plans) {
-      const okLicense = await ensureLicenseInScope(req.scope, plan.license_id);
-      if (!okLicense) return res.status(403).json({ error: '无权限' });
-      let contactIds = [];
-      try {
-        contactIds = JSON.parse(plan.contact_ids || '[]');
-      } catch (err) {
-        contactIds = [];
-      }
-      const okContacts = await ensureContactsInScope(req.scope, contactIds);
-      if (!okContacts) return res.status(403).json({ error: '无权限' });
+  let batchInScope = true;
+  for (const plan of plans) {
+    const okLicense = await ensureLicenseInScope(req.scope, plan.license_id);
+    let contactIds = [];
+    try {
+      contactIds = JSON.parse(plan.contact_ids || '[]');
+    } catch (err) {
+      contactIds = [];
+    }
+    const okContacts = await ensureContactsInScope(req.scope, contactIds);
+    if (!okLicense || !okContacts) {
+      batchInScope = false;
+      break;
     }
   }
+  const authzSendNow = await authorizeReminderAction(req, 'send-plan:send-now', {
+    contacts_in_scope: batchInScope,
+    license_in_scope: batchInScope,
+  });
+  if (!authzSendNow.allow) return res.status(403).json({ error: authzSendNow.reason || '无权限' });
 
   const configs = await getConfigs();
   const rate = getRateLimitConfig(configs);
@@ -2882,9 +2968,10 @@ app.get('/api/import-jobs/:id', requireRole(['admin', 'sales']), async (req, res
   const { id } = req.params;
   const row = await db.get('SELECT * FROM import_jobs WHERE id = ?', [id]);
   if (!row) return res.status(404).json({ error: '记录不存在' });
-  if (req.scope && !req.scope.isAdmin && Number(row.user_id) !== Number(req.user.id)) {
-    return res.status(403).json({ error: '无权限' });
-  }
+  const authzImportJob = await authorizeReminderAction(req, 'import-job:read', {
+    own_job: Number(row.user_id) === Number(req.user.id),
+  });
+  if (!authzImportJob.allow) return res.status(403).json({ error: authzImportJob.reason || '无权限' });
   let errors = [];
   try {
     errors = row.errors_json ? JSON.parse(row.errors_json) : [];
@@ -2937,8 +3024,9 @@ app.post('/api/users/:id/reset-password', requireRole(['admin']), async (req, re
 
 // Import (CSV)
 app.post('/api/import/customers', requireRole(['admin', 'sales']), upload.single('file'), async (req, res) => {
-  if (req.scope && !req.scope.isAdmin) {
-    return res.status(403).json({ error: '无权限' });
+  const authzImportCustomers = await authorizeReminderAction(req, 'import:customers', {});
+  if (!authzImportCustomers.allow) {
+    return res.status(403).json({ error: authzImportCustomers.reason || '无权限' });
   }
   if (!req.file) {
     return res.status(400).json({ error: '请上传CSV或Excel文件' });
@@ -3020,37 +3108,37 @@ app.post('/api/import/contacts', requireRole(['admin', 'sales']), upload.single(
   let skipped = 0;
   const errors = [];
   let allowedNames = null;
-  if (req.scope && !req.scope.isAdmin) {
-    const customerIds = req.scope.customerIds || [];
-    if (!customerIds.length) {
-      return res.status(403).json({ error: '无权限' });
-    }
+  const customerIds = req.scope?.customerIds || [];
+  if (customerIds.length) {
     const rows = await db.query(
       `SELECT id, name FROM customers WHERE id IN (${buildInClause(customerIds)})`,
       customerIds
     );
     allowedNames = new Set(rows.map((r) => r.name));
-    const unauthorized = [];
-    records.forEach((row, idx) => {
-      const customerName = row.customer_name || row['客户名称'];
-      if (customerName && !allowedNames.has(String(customerName).trim())) {
-        unauthorized.push({ row: idx + 1, reason: '无权限导入该客户' });
-      }
-    });
-    if (unauthorized.length) {
-      await insertImportJob({
-        user: req.user,
-        type: 'contacts',
-        filename: req.file?.originalname,
-        status: 'FAILED',
-        created: 0,
-        skipped: unauthorized.length,
-        total: records.length,
-        errors: unauthorized,
-        errorMessage: '存在无权限客户',
-      });
-      return res.status(403).json({ error: '无权限导入该客户', errors: unauthorized });
+  }
+  const unauthorized = [];
+  records.forEach((row, idx) => {
+    const customerName = row.customer_name || row['客户名称'];
+    if (customerName && allowedNames && !allowedNames.has(String(customerName).trim())) {
+      unauthorized.push({ row: idx + 1, reason: '无权限导入该客户' });
     }
+  });
+  const authzImportContacts = await authorizeReminderAction(req, 'import:contacts', {
+    customer_names_in_scope: unauthorized.length === 0,
+  });
+  if (!authzImportContacts.allow || unauthorized.length) {
+    await insertImportJob({
+      user: req.user,
+      type: 'contacts',
+      filename: req.file?.originalname,
+      status: 'FAILED',
+      created: 0,
+      skipped: unauthorized.length,
+      total: records.length,
+      errors: unauthorized,
+      errorMessage: '存在无权限客户',
+    });
+    return res.status(403).json({ error: '无权限导入该客户', errors: unauthorized });
   }
   for (const [index, row] of records.entries()) {
     const customerName = row.customer_name || row['客户名称'];
@@ -3368,12 +3456,12 @@ app.post('/api/reminder-logs/:id/resend', requireRole(['admin', 'sales']), async
   if (!log) {
     return res.status(404).json({ error: '记录不存在' });
   }
-  if (req.scope && !req.scope.isAdmin) {
-    const allowed = req.scope.customerIds || [];
-    if (!allowed.includes(Number(log.customer_id))) {
-      return res.status(403).json({ error: '无权限' });
-    }
-  }
+  const allowedResendSet = new Set((req.scope?.customerIds || []).map((cid) => Number(cid)));
+  const licenseInScope = req.scope?.isAdmin ? true : allowedResendSet.has(Number(log.customer_id));
+  const authzResend = await authorizeReminderAction(req, 'reminder-log:resend', {
+    license_in_scope: licenseInScope,
+  });
+  if (!authzResend.allow) return res.status(403).json({ error: authzResend.reason || '无权限' });
   const license = {
     id: log.license_id,
     name: log.license_name,

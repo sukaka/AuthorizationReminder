@@ -76,6 +76,11 @@ const tabs = [
   { key: 'security', label: '安全配置' },
   { key: 'users', label: '用户管理' },
 ]
+const systemAccessOptions = [
+  { key: 'reminder', label: '授权到期提醒系统' },
+  { key: 'ticketing', label: '工单管理系统' },
+]
+const defaultSystemAccess = systemAccessOptions.map((item) => item.key)
 
 const emptyCustomer = { id: null, name: '', juxin_sales: '', channel_sales: '' }
 const emptyContact = {
@@ -97,6 +102,18 @@ const emptyLicense = {
   status: 'ACTIVE',
   note: '',
   reminder_days: '',
+}
+
+const getPortalBaseUrl = () => {
+  const configured = String(import.meta.env.VITE_SSO_PORTAL_URL || '').trim()
+  if (configured) return configured.replace(/\/+$/, '')
+  const { protocol, hostname } = window.location
+  return `${protocol}//${hostname}:5180`
+}
+
+const buildPortalEntryUrl = (system) => {
+  const base = getPortalBaseUrl()
+  return `${base}/portal?system=${encodeURIComponent(system)}`
 }
 
 function App() {
@@ -206,6 +223,7 @@ function App() {
     email: '',
     phone: '',
     wecom_id: '',
+    app_access: [...defaultSystemAccess],
   })
   const [configForm, setConfigForm] = useState({
     email: { host: '', port: '', user: '', pass: '', from: '', secure: '' },
@@ -283,8 +301,13 @@ function App() {
   const [message, setMessage] = useState('')
   const [error, setError] = useState('')
   const [csrfToken, setCsrfToken] = useState('')
+  const csrfTokenRef = useRef('')
+  const setCsrf = (token) => {
+    csrfTokenRef.current = token || ''
+    setCsrfToken(token || '')
+  }
   const [passwordFeedback, setPasswordFeedback] = useState({ type: '', text: '' })
-  const api = useMemo(() => buildApi(() => authToken, () => csrfToken), [authToken, csrfToken])
+  const api = useMemo(() => buildApi(() => authToken, () => csrfTokenRef.current), [authToken])
   const [loginForm, setLoginForm] = useState({ username: '', password: '' })
   const [loginError, setLoginError] = useState('')
   const [mfaState, setMfaState] = useState({
@@ -296,6 +319,26 @@ function App() {
   })
   const [captchaState, setCaptchaState] = useState({ enabled: false, token: '', svg: '' })
   const [captchaInput, setCaptchaInput] = useState('')
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search)
+    const ssoToken = params.get('sso_token')
+    if (!ssoToken) return
+    sessionStorage.setItem('authToken', ssoToken)
+    setAuthToken(ssoToken)
+    params.delete('sso_token')
+    const query = params.toString()
+    const nextUrl = `${window.location.pathname}${query ? `?${query}` : ''}${window.location.hash || ''}`
+    window.history.replaceState({}, '', nextUrl)
+  }, [])
+
+  useEffect(() => {
+    if (authToken) return
+    const timer = setTimeout(() => {
+      window.location.href = buildPortalEntryUrl('reminder')
+    }, 120)
+    return () => clearTimeout(timer)
+  }, [authToken])
 
   const rolePermissions = useMemo(
     () => ({
@@ -815,10 +858,10 @@ function App() {
       if (!res.ok) throw new Error('csrf')
       const data = await res.json()
       const token = data.token || ''
-      setCsrfToken(token)
+      setCsrf(token)
       return token
     } catch (err) {
-      setCsrfToken('')
+      setCsrf('')
       return ''
     }
   }
@@ -826,7 +869,7 @@ function App() {
   const onLogin = async (e) => {
     e.preventDefault()
     try {
-      if (!csrfToken) {
+      if (!csrfTokenRef.current) {
         await refreshCsrf()
       }
       const result = await api.post('/api/auth/login', {
@@ -1271,13 +1314,23 @@ function App() {
           email: userForm.email,
           phone: userForm.phone,
           wecom_id: userForm.wecom_id,
+          app_access: userForm.app_access,
         })
         showMessage('用户已更新')
       } else {
         await api.post('/api/users', userForm)
         showMessage('用户已创建')
       }
-      setUserForm({ id: null, username: '', password: '', role: 'viewer', email: '', phone: '', wecom_id: '' })
+      setUserForm({
+        id: null,
+        username: '',
+        password: '',
+        role: 'viewer',
+        email: '',
+        phone: '',
+        wecom_id: '',
+        app_access: [...defaultSystemAccess],
+      })
       refreshUsers()
     } catch (err) {
       showError('用户保存失败')
@@ -1450,6 +1503,9 @@ function App() {
   }
 
   const onEditUser = (user) => {
+    const nextAccess = Array.isArray(user.app_access)
+      ? user.app_access.filter((key) => defaultSystemAccess.includes(key))
+      : [...defaultSystemAccess]
     setUserForm({
       id: user.id,
       username: user.username,
@@ -1458,6 +1514,7 @@ function App() {
       email: user.email || '',
       phone: user.phone || '',
       wecom_id: user.wecom_id || '',
+      app_access: nextAccess.length ? nextAccess : [...defaultSystemAccess],
     })
   }
 
@@ -1843,122 +1900,19 @@ function App() {
         <div className="login-card">
           <div>
             <h1 className="brand-title"><span className="brand-red">聚信</span><span className="brand-blue">授权到期提醒系统</span></h1>
-            <h1>欢迎登录</h1>
-            <p className="sub">管理员账号使用用户名登录，其他账号请使用手机号。</p>
+            <h1>统一登录中</h1>
+            <p className="sub">正在跳转到统一登录页，请稍候。</p>
           </div>
-          {!mfaState.required ? (
-            <form className="login-form" onSubmit={onLogin}>
-              <label className="form-label">
-                账号
-                <input
-                  value={loginForm.username}
-                  onChange={(e) => setLoginForm({ ...loginForm, username: e.target.value })}
-                  placeholder="请使用手机号登录"
-                  required
-                  className="form-control"
-                />
-              </label>
-              <label className="form-label">
-                密码
-                <input
-                  type="password"
-                  value={loginForm.password}
-                  onChange={(e) => setLoginForm({ ...loginForm, password: e.target.value })}
-                  required
-                  className="form-control"
-                />
-              </label>
-              {captchaState.enabled && (
-                <div className="captcha-row">
-                  <label className="form-label">
-                    验证码
-                    <input
-                      value={captchaInput}
-                      onChange={(e) => setCaptchaInput(e.target.value)}
-                      placeholder="请输入验证码"
-                      required
-                      className="form-control"
-                    />
-                  </label>
-                  <div className="captcha-box">
-                    {captchaState.svg && (
-                      <img
-                        className="captcha-img"
-                        alt="captcha"
-                        src={`data:image/svg+xml;utf8,${encodeURIComponent(captchaState.svg)}`}
-                        onClick={refreshCaptcha}
-                      />
-                    )}
-                    <button type="button" className="ghost btn btn-outline-secondary" onClick={refreshCaptcha}>
-                      刷新
-                    </button>
-                  </div>
-                </div>
-              )}
-              <button type="submit" className="primary btn btn-primary">
-                登录
-              </button>
-            </form>
-          ) : (
-            <form className="login-form" onSubmit={onMfaVerify}>
-              <div className="muted">管理员二次验证已开启，请完成验证。</div>
-              <label className="form-label">
-                验证方式
-                <select
-                  className="form-select"
-                  value={mfaState.method}
-                  onChange={(e) => setMfaState({ ...mfaState, method: e.target.value })}
-                >
-                  {mfaState.methods.map((m) => (
-                    <option key={m} value={m}>
-                      {m === 'email' ? '邮箱' : m === 'sms' ? '短信' : m === 'wecom' ? '企业微信' : '谷歌认证'}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              {mfaState.method !== 'totp' && (
-                <button type="button" className="ghost btn btn-outline-secondary" onClick={onMfaSend}>
-                  发送验证码
-                </button>
-              )}
-              <label className="form-label">
-                验证码
-                <input
-                  value={mfaState.code}
-                  onChange={(e) => setMfaState({ ...mfaState, code: e.target.value })}
-                  placeholder="6位验证码"
-                  required
-                  className="form-control"
-                />
-              </label>
-              <div className="form-actions">
-                <button type="submit" className="primary btn btn-primary">
-                  验证并登录
-                </button>
-                <button
-                  type="button"
-                  className="ghost btn btn-outline-secondary"
-                  onClick={() => setMfaState({ required: false, token: '', methods: [], method: '', code: '' })}
-                >
-                  返回
-                </button>
-              </div>
-            </form>
-          )}
+          <button
+            type="button"
+            className="primary btn btn-primary"
+            onClick={() => {
+              window.location.href = buildPortalEntryUrl('reminder')
+            }}
+          >
+            前往统一登录
+          </button>
         </div>
-        {loginError && (
-          <div className="modal-backdrop" onClick={() => setLoginError('')}>
-            <div className="modal-card" onClick={(e) => e.stopPropagation()}>
-              <div className="modal-title">登录提示</div>
-              <div className="modal-body">{loginError}</div>
-              <div className="modal-actions">
-                <button className="primary btn btn-primary" type="button" onClick={() => setLoginError('')}>
-                  知道了
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
       </div>
     )
   }
@@ -2620,7 +2574,7 @@ function App() {
             </form>
             )}
 
-            <div className="table">
+            <div className="table users-table">
               <div className="table-row head">
                 <span>客户名称</span>
                 <span>聚信销售</span>
@@ -4053,13 +4007,47 @@ function App() {
                 <select
                   className="form-select"
                   value={userForm.role}
-                  onChange={(e) => setUserForm({ ...userForm, role: e.target.value })}
+                  onChange={(e) => {
+                    const nextRole = e.target.value
+                    setUserForm({
+                      ...userForm,
+                      role: nextRole,
+                      app_access: nextRole === 'admin' ? [...defaultSystemAccess] : userForm.app_access,
+                    })
+                  }}
                 >
                   <option value="admin">管理员</option>
                   <option value="sales">销售</option>
                   <option value="viewer">只读</option>
                 </select>
               </label>
+              <div className="form-label full-row">
+                可访问系统（可多选）
+                <div className="channel-row mfa-pill-row">
+                  {systemAccessOptions.map((item) => {
+                    const checked = (userForm.app_access || []).includes(item.key)
+                    const disabled = userForm.role === 'admin'
+                    return (
+                      <label key={item.key} className={`mfa-pill ${checked ? 'active' : ''} ${disabled ? 'disabled' : ''}`}>
+                        <input
+                          type="checkbox"
+                          disabled={disabled}
+                          checked={checked}
+                          onChange={(e) => {
+                            const current = Array.isArray(userForm.app_access) ? userForm.app_access : []
+                            const next = e.target.checked
+                              ? Array.from(new Set([...current, item.key]))
+                              : current.filter((key) => key !== item.key)
+                            setUserForm({ ...userForm, app_access: next })
+                          }}
+                        />
+                        {item.label}
+                      </label>
+                    )
+                  })}
+                </div>
+                {userForm.role === 'admin' && <div className="muted">管理员默认可访问全部系统。</div>}
+              </div>
               <div className="form-actions">
                 <button type="submit" className="primary btn btn-primary">
                   {userForm.id ? '更新用户' : '新增用户'}
@@ -4068,7 +4056,16 @@ function App() {
                   type="button"
                   className="ghost btn btn-outline-secondary"
                   onClick={() =>
-                    setUserForm({ id: null, username: '', password: '', role: 'viewer', email: '', phone: '', wecom_id: '' })
+                    setUserForm({
+                      id: null,
+                      username: '',
+                      password: '',
+                      role: 'viewer',
+                      email: '',
+                      phone: '',
+                      wecom_id: '',
+                      app_access: [...defaultSystemAccess],
+                    })
                   }
                 >
                   清空
@@ -4080,6 +4077,7 @@ function App() {
               <div className="table-row head">
                 <span>账号</span>
                 <span>角色</span>
+                <span>可访问系统</span>
                 <span>二次验证</span>
                 <span>创建时间</span>
                 <span>操作</span>
@@ -4088,6 +4086,11 @@ function App() {
                 <div className="table-row" key={u.id}>
                   <span>{u.username}</span>
                   <span>{u.role}</span>
+                  <span>
+                    {(Array.isArray(u.app_access) ? u.app_access : defaultSystemAccess)
+                      .map((key) => systemAccessOptions.find((item) => item.key === key)?.label || key)
+                      .join('、') || '-'}
+                  </span>
                   <span>
                     {(u.email ? '邮箱 ' : '')}
                     {(u.phone ? '短信 ' : '')}

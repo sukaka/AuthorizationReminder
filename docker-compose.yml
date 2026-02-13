@@ -17,24 +17,73 @@ services:
     environment:
       PORT: 5179
       SERVE_WEB: "false"
+      AUTH_SERVICE_URL: "http://auth:5180"
       MYSQL_HOST: mysql
       MYSQL_PORT: 3306
       MYSQL_USER: juxin
       MYSQL_PASSWORD: juxinpass
       MYSQL_DATABASE: juxin_reminder
-      CORS_ORIGINS: "http://localhost:8080"
+      CORS_ORIGINS: "http://localhost:5180,http://127.0.0.1:5180,http://localhost:8080,http://127.0.0.1:8080,http://localhost:8081,http://127.0.0.1:8081"
+      JWT_SECRET: "dev-secret-change-me"
       CONFIG_SECRET_KEY: "UeiKgUhP80JPdwWMoBRRWmKxdz8BKEP4btzTTh4QmYVc9twMEcgCKuqFDx0M4HX8"
     depends_on:
       - mysql
     ports:
       - "5179:5179"
 
+  auth:
+    build:
+      context: .
+      dockerfile: auth/Dockerfile
+    environment:
+      PORT: 5180
+      MYSQL_HOST: mysql
+      MYSQL_PORT: 3306
+      MYSQL_USER: juxin
+      MYSQL_PASSWORD: juxinpass
+      MYSQL_DATABASE: juxin_reminder
+      CORS_ORIGINS: "http://localhost:5180,http://127.0.0.1:5180,http://localhost:8080,http://127.0.0.1:8080,http://localhost:8081,http://127.0.0.1:8081"
+      JWT_SECRET: "dev-secret-change-me"
+      CONFIG_SECRET_KEY: "UeiKgUhP80JPdwWMoBRRWmKxdz8BKEP4btzTTh4QmYVc9twMEcgCKuqFDx0M4HX8"
+    depends_on:
+      - mysql
+    ports:
+      - "5180:5180"
+
   web:
     build: ./web
     depends_on:
       - api
+      - auth
     ports:
       - "8080:80"
+
+  ticketing:
+    build:
+      context: .
+      dockerfile: ticketing/Dockerfile
+    environment:
+      PORT: 5182
+      AUTH_SERVICE_URL: "http://auth:5180"
+      MYSQL_HOST: mysql
+      MYSQL_PORT: 3306
+      MYSQL_USER: juxin
+      MYSQL_PASSWORD: juxinpass
+      MYSQL_DATABASE: juxin_reminder
+      CORS_ORIGINS: "http://localhost:5180,http://127.0.0.1:5180,http://localhost:8080,http://127.0.0.1:8080,http://localhost:8081,http://127.0.0.1:8081"
+      JWT_SECRET: "dev-secret-change-me"
+    depends_on:
+      - mysql
+    ports:
+      - "5182:5182"
+
+  web-ticketing:
+    build: ./ticketing/web
+    depends_on:
+      - ticketing
+      - auth
+    ports:
+      - "8081:80"
 
 volumes:
   mysql-data:

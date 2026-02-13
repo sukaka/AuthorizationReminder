@@ -83,7 +83,13 @@ const columnExists = async (table, column) => {
 
 const addColumnIfMissing = async (table, column, definition) => {
   if (await columnExists(table, column)) return;
-  await run(`ALTER TABLE ${table} ADD COLUMN ${definition}`);
+  try {
+    await run(`ALTER TABLE ${table} ADD COLUMN ${definition}`);
+  } catch (err) {
+    // Multiple services may run the same migration concurrently; treat duplicate column as success.
+    if (err && err.code === 'ER_DUP_FIELDNAME') return;
+    throw err;
+  }
 };
 
 const init = async () => {
@@ -173,6 +179,7 @@ const init = async () => {
 
   await addColumnIfMissing('users', 'mfa_enabled', 'mfa_enabled TINYINT NOT NULL DEFAULT 0');
   await addColumnIfMissing('users', 'mfa_methods', 'mfa_methods TEXT');
+  await addColumnIfMissing('users', 'app_access', 'app_access TEXT');
 
   await run(`CREATE TABLE IF NOT EXISTS reminder_sent (
     id INT AUTO_INCREMENT PRIMARY KEY,
@@ -240,6 +247,88 @@ const init = async () => {
     error_message TEXT,
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
+
+  await run(`CREATE TABLE IF NOT EXISTS tickets (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    title VARCHAR(255) NOT NULL,
+    description TEXT,
+    status VARCHAR(32) NOT NULL DEFAULT 'OPEN',
+    priority VARCHAR(8) NOT NULL DEFAULT 'P2',
+    created_by INT NOT NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
+
+  await run(`CREATE TABLE IF NOT EXISTS projects (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    name VARCHAR(255) NOT NULL,
+    description TEXT,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
+
+  await run(`CREATE TABLE IF NOT EXISTS schedules (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    engineer_id INT NOT NULL,
+    ticket_id INT,
+    start_at DATETIME NOT NULL,
+    end_at DATETIME NOT NULL,
+    remark VARCHAR(255),
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    INDEX idx_engineer_time (engineer_id, start_at, end_at),
+    INDEX idx_ticket (ticket_id)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
+
+  await run(`CREATE TABLE IF NOT EXISTS ticket_templates (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    code VARCHAR(64) NOT NULL UNIQUE,
+    name VARCHAR(255) NOT NULL,
+    description TEXT,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
+
+  await run(`CREATE TABLE IF NOT EXISTS ticket_template_stages (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    template_id INT NOT NULL,
+    name VARCHAR(255) NOT NULL,
+    duration_days DECIMAL(5,2) NOT NULL,
+    stage_order INT NOT NULL,
+    FOREIGN KEY (template_id) REFERENCES ticket_templates(id) ON DELETE CASCADE
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
+
+  await run(`CREATE TABLE IF NOT EXISTS ticket_template_deliverables (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    stage_id INT NOT NULL,
+    name VARCHAR(255) NOT NULL,
+    FOREIGN KEY (stage_id) REFERENCES ticket_template_stages(id) ON DELETE CASCADE
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
+
+  await run(`CREATE TABLE IF NOT EXISTS ticket_template_roles (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    stage_id INT NOT NULL,
+    role_name VARCHAR(64) NOT NULL,
+    FOREIGN KEY (stage_id) REFERENCES ticket_template_stages(id) ON DELETE CASCADE
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
+
+  await run(`CREATE TABLE IF NOT EXISTS ticket_stages (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    ticket_id INT NOT NULL,
+    name VARCHAR(255) NOT NULL,
+    duration_days DECIMAL(5,2) NOT NULL,
+    stage_order INT NOT NULL,
+    status VARCHAR(32) NOT NULL DEFAULT 'PENDING',
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (ticket_id) REFERENCES tickets(id) ON DELETE CASCADE
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
+
+  await run(`CREATE TABLE IF NOT EXISTS ticket_assignees (
+    ticket_id INT NOT NULL,
+    user_id INT NOT NULL,
+    PRIMARY KEY (ticket_id, user_id),
+    FOREIGN KEY (ticket_id) REFERENCES tickets(id) ON DELETE CASCADE,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
+  await addColumnIfMissing('tickets', 'project_id', 'project_id INT NULL AFTER created_by');
 
   await run(`CREATE TABLE IF NOT EXISTS auth_login_attempts (
     id INT AUTO_INCREMENT PRIMARY KEY,

@@ -21,8 +21,21 @@ docker compose up --build
 访问：
 - 前端：`http://localhost:8080`
 - 后端：`http://localhost:5179`
+- 工单系统前端：`http://localhost:8081`
+- 工单系统后端：`http://localhost:5182`
 
 默认数据库端口映射：主机 `3308` → 容器 `3306`。
+
+## 单独启动工单系统（Docker）
+仅启动认证 + 工单 + 前端：
+```bash
+docker compose up --build mysql auth ticketing web-ticketing
+```
+
+仅启动提醒系统：
+```bash
+docker compose up --build mysql auth api web
+```
 
 ## 默认账号
 - 用户名：`admin`
@@ -33,6 +46,9 @@ docker compose up --build
 ## 运行环境与端口
 - 前端（Nginx）：`8080`
 - 后端（Node/Express）：`5179`
+- 认证服务（SSO）：`5180`
+- 工单系统前端（Nginx）：`8081`
+- 工单系统后端（Node/Express）：`5182`
 - MySQL：`3308`（宿主机）
 
 ## 配置说明
@@ -41,6 +57,11 @@ docker compose up --build
 - `JWT_SECRET`：JWT 签名密钥（建议生产环境配置）
 - `CSRF_SECURE`：是否强制 CSRF Cookie 为 `Secure`（HTTPS 场景设置为 `true`）
 - `CONFIG_SECRET_KEY`：用于加密存储邮箱密码/短信密钥/企业微信 Secret（建议至少 32 位随机字符串）
+
+在 `docker-compose.yml` 的 `auth` 环境变量中配置：
+- `CORS_ORIGINS`：允许的来源
+- `JWT_SECRET`：必须与 `api` 保持一致
+- `CONFIG_SECRET_KEY`：与 `api` 保持一致
 
 数据库可配置：
 - `MYSQL_HOST` / `MYSQL_PORT`
@@ -105,10 +126,19 @@ npm run dev
 ## 目录结构
 ```
 server/              后端服务与数据库初始化
+auth/                统一认证服务（SSO）
 web/                 前端应用
 web/nginx.conf       前端 Nginx 配置
+ticketing/           工单系统后端
+ticketing/web/       工单系统前端
 docker-compose.yml   Docker 编排
 ```
+
+## 工单管理系统说明
+工单系统使用与提醒系统一致的布局与配色，可通过统一登录（SSO）进入：
+- 新建/编辑工单：标题、描述、优先级、状态
+- 工单列表：支持搜索与状态筛选，默认每页 10 条
+- 权限：管理员可删除工单，非管理员仅可查看/编辑自己创建的工单
 
 ## 安全说明
 - 默认开启 CSRF 保护，前端自动获取并携带 `X-CSRF-Token`
