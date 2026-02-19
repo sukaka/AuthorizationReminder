@@ -24,7 +24,7 @@ const AUTH_SERVICE_URL = process.env.AUTH_SERVICE_URL || 'http://auth:5180';
 const AUTH_COOKIE_NAME = String(process.env.AUTH_COOKIE_NAME || 'juxin_auth_token').trim() || 'juxin_auth_token';
 const AUTH_FETCH_TIMEOUT_MS = Number(process.env.AUTH_FETCH_TIMEOUT_MS || 4000);
 const SECRET_MASK = '******';
-const SYSTEM_ACCESS_KEYS = ['reminder', 'ticketing', 'cmdb', 'inventory'];
+const SYSTEM_ACCESS_KEYS = ['reminder', 'ticketing', 'cmdb', 'inventory', 'device-flow', 'sec-impl'];
 const BUILTIN_ACCOUNT_DEFAULT_PASSWORD = process.env.BUILTIN_ACCOUNT_DEFAULT_PASSWORD || '123456';
 const BUILTIN_ACCOUNTS = [
   { username: 'admin', role: 'admin' },
@@ -222,7 +222,8 @@ const parseAppAccessRaw = (value) => {
 const defaultAppAccessByRole = (role = 'viewer') => {
   const r = String(role || '').toLowerCase();
   if (r === 'admin') return [...SYSTEM_ACCESS_KEYS];
-  if (r === 'auditor') return ['reminder', 'inventory'];
+  if (r === 'sysadmin') return ['reminder', 'sec-impl'];
+  if (r === 'auditor') return ['reminder', 'inventory', 'device-flow', 'sec-impl'];
   return ['reminder'];
 };
 

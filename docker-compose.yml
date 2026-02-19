@@ -48,10 +48,11 @@ services:
       MYSQL_USER: juxin
       MYSQL_PASSWORD: juxinpass
       MYSQL_DATABASE: juxin_reminder
-      CORS_ORIGINS: "http://localhost:5180,http://127.0.0.1:5180,http://localhost:8080,http://127.0.0.1:8080,http://localhost:8081,http://127.0.0.1:8081,http://localhost:8082,http://127.0.0.1:8082,http://localhost:8083,http://127.0.0.1:8083,http://localhost:8090,http://127.0.0.1:8090"
+      CORS_ORIGINS: "http://localhost:5180,http://127.0.0.1:5180,http://localhost:8080,http://127.0.0.1:8080,http://localhost:8081,http://127.0.0.1:8081,http://localhost:8082,http://127.0.0.1:8082,http://localhost:8083,http://127.0.0.1:8083,http://localhost:8084,http://127.0.0.1:8084,http://localhost:8090,http://127.0.0.1:8090"
       APP_CMDB_URL: "http://localhost:8090"
       APP_INVENTORY_URL: "http://localhost:8082"
       APP_DEVICE_FLOW_URL: "http://localhost:8083"
+      APP_SEC_IMPL_URL: "http://localhost:8084"
       AUTH_COOKIE_NAME: "juxin_auth_token"
       AUTH_COOKIE_SECURE: "false"
       AUTH_COOKIE_SAMESITE: "lax"
@@ -201,6 +202,43 @@ services:
       - device-flow-api
     ports:
       - "8083:80"
+
+  sec-impl-api:
+    build: ./sec-impl/backend
+    environment:
+      PORT: 5185
+      AUTH_SERVICE_URL: "http://auth:5180"
+      AUTH_SYSTEM_KEY: "sec-impl"
+      AUTH_FETCH_TIMEOUT_MS: 5000
+      AUTH_COOKIE_NAME: "juxin_auth_token"
+      MYSQL_HOST: mysql
+      MYSQL_PORT: 3306
+      MYSQL_USER: sec_impl_user
+      MYSQL_PASSWORD: sec_impl_pass
+      MYSQL_DATABASE: juxin_sec_impl
+      MYSQL_ADMIN_USER: root
+      MYSQL_ADMIN_PASSWORD: rootpass
+      CORS_ORIGINS: "http://localhost:8084,http://127.0.0.1:8084"
+      DASHBOARD_OVERDUE_DAYS: 3
+      SLA_AUTO_RUN_INTERVAL_MS: 300000
+      MAX_BATCH_STAGE_JOB_IDS: 200
+      MAX_IMPORT_ROWS: 500
+      AUDIT_SIGNING_KEY: "sec-impl-audit-signing-key-change-me"
+      UPLOAD_ROOT: "/tmp/sec-impl/uploads"
+      UPLOAD_MAX_FILE_SIZE_MB: 10
+    depends_on:
+      - mysql
+      - auth
+    ports:
+      - "5185:5185"
+
+  web-sec-impl:
+    build: ./sec-impl/frontend
+    depends_on:
+      - sec-impl-api
+      - auth
+    ports:
+      - "8084:80"
 
   cmdb-mongo:
     image: mongo:7.0

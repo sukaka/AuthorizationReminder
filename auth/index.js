@@ -19,7 +19,7 @@ const AUTH_COOKIE_SAMESITE = String(process.env.AUTH_COOKIE_SAMESITE || 'lax').t
 const AUTH_COOKIE_MAX_AGE_MS = Math.max(60 * 1000, Number(process.env.AUTH_COOKIE_MAX_AGE_MS || 7 * 24 * 3600 * 1000));
 const CONFIG_SECRET_KEY = process.env.CONFIG_SECRET_KEY || '';
 const SECRET_MASK = '******';
-const SYSTEM_ACCESS_KEYS = ['reminder', 'ticketing', 'cmdb', 'inventory', 'device-flow'];
+const SYSTEM_ACCESS_KEYS = ['reminder', 'ticketing', 'cmdb', 'inventory', 'device-flow', 'sec-impl'];
 const BUILTIN_ACCOUNT_DEFAULT_PASSWORD = process.env.BUILTIN_ACCOUNT_DEFAULT_PASSWORD || '123456';
 const BUILTIN_ACCOUNTS = [
   { username: 'admin', role: 'admin' },
@@ -90,7 +90,8 @@ const parseAppAccessRaw = (value) => {
 const defaultAppAccessByRole = (role) => {
   const r = String(role || '').toLowerCase();
   if (r === 'admin') return [...SYSTEM_ACCESS_KEYS];
-  if (r === 'auditor') return ['reminder', 'inventory', 'device-flow'];
+  if (r === 'sysadmin') return ['reminder', 'sec-impl'];
+  if (r === 'auditor') return ['reminder', 'inventory', 'device-flow', 'sec-impl'];
   return ['reminder'];
 };
 
@@ -626,6 +627,18 @@ const authorizeDeviceFlow = (user, action) => {
   return deny('不支持的授权动作');
 };
 
+const authorizeSecImpl = (user, action) => {
+  if (!user) return deny('未登录');
+  if (!canAccessSystem(user, 'sec-impl')) return deny('无权限访问安全产品实施记录系统');
+  const role = String(user.role || '').toLowerCase();
+  if (action === 'app:enter' || action === 'sec_impl:read') return allow();
+  if (action === 'sec_impl:write') {
+    if (role === 'admin' || role === 'sysadmin') return allow();
+    return deny('无权限执行实施写操作');
+  }
+  return deny('不支持的授权动作');
+};
+
 app.get('/api/auth/introspect', async (req, res) => {
   const user = await db.get('SELECT id, username, role, app_access FROM users WHERE id = ?', [req.user.id]);
   if (!user) return res.status(401).json({ error: '登录已过期' });
@@ -654,6 +667,8 @@ app.post('/api/auth/authorize', async (req, res) => {
     result = authorizeInventory(user, action);
   } else if (system === 'device-flow') {
     result = authorizeDeviceFlow(user, action);
+  } else if (system === 'sec-impl') {
+    result = authorizeSecImpl(user, action);
   }
   return res.json({ ...result, user: { id: user.id, username: user.username, role: user.role }, scope, apps });
 });
@@ -666,6 +681,7 @@ app.get('/api/auth/apps', async (req, res) => {
   const cmdbURL = process.env.APP_CMDB_URL || 'http://localhost:8090';
   const inventoryURL = process.env.APP_INVENTORY_URL || 'http://localhost:8082';
   const deviceFlowURL = process.env.APP_DEVICE_FLOW_URL || 'http://localhost:8083';
+  const secImplURL = process.env.APP_SEC_IMPL_URL || 'http://localhost:8084';
   const appAccess = getUserAppAccess(user);
   const apps = [];
   if (appAccess.includes('reminder')) {
@@ -685,6 +701,10 @@ app.get('/api/auth/apps', async (req, res) => {
   if (appAccess.includes('device-flow')) {
     const deviceFlowAuth = await authorizeDeviceFlow(user, 'app:enter');
     apps.push({ key: 'device-flow', name: '设备流转系统', url: deviceFlowURL, allow: !!deviceFlowAuth.allow });
+  }
+  if (appAccess.includes('sec-impl')) {
+    const secImplAuth = await authorizeSecImpl(user, 'app:enter');
+    apps.push({ key: 'sec-impl', name: '安全产品实施记录系统', url: secImplURL, allow: !!secImplAuth.allow });
   }
   return res.json({ apps: apps.filter((item) => item.allow) });
 });

@@ -8,6 +8,7 @@ device-flow/frontend/node_modules
 web/dist
 ticketing/web/dist
 device-flow/frontend/dist
+sec-impl/frontend/dist
 .DS_Store
 npm-debug.log
 yarn.lock

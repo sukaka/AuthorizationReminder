@@ -26,6 +26,8 @@ docker compose up --build
 - 工单系统后端：`http://localhost:5182`
 - 库存系统前端：`http://localhost:8082`
 - 库存系统后端：`http://localhost:5183`
+- 安全实施系统前端：`http://localhost:8084`
+- 安全实施系统后端：`http://localhost:5185`
 - CMDB系统前端：`http://localhost:8090`
 - CMDB系统后端：容器内部 `:8088`（通过 `http://localhost:8090/api` 访问）
 
@@ -45,6 +47,11 @@ docker compose up --build mysql auth api web
 仅启动库存系统：
 ```bash
 docker compose up --build mysql auth inventory-api web-inventory
+```
+
+仅启动安全实施系统：
+```bash
+docker compose up --build mysql auth sec-impl-api web-sec-impl
 ```
 
 仅启动CMDB系统：
@@ -73,6 +80,8 @@ docker compose -f cmdb/deploy/docker-compose.yml down
 - 工单系统后端（Node/Express）：`5182`
 - 库存系统前端（Nginx）：`8082`
 - 库存系统后端（Node/Express）：`5183`
+- 安全实施系统前端（Nginx）：`8084`
+- 安全实施系统后端（Node/Express）：`5185`
 - CMDB系统前端（Nginx）：`8090`
 - CMDB系统后端（Go）：容器内部 `8088`
 - MySQL：`3308`（宿主机）
@@ -91,6 +100,7 @@ docker compose -f cmdb/deploy/docker-compose.yml down
 - `JWT_SECRET`：必须与 `api` 保持一致
 - `CONFIG_SECRET_KEY`：与 `api` 保持一致
 - `AUDIT_SIGNING_KEY`：审计日志签名密钥（建议与 `JWT_SECRET` 独立）
+- `APP_SEC_IMPL_URL`：安全实施系统入口（默认 `http://localhost:8084`）
 
 数据库可配置：
 - `MYSQL_HOST` / `MYSQL_PORT`
@@ -161,6 +171,7 @@ web/nginx.conf       前端 Nginx 配置
 ticketing/           工单系统后端
 ticketing/web/       工单系统前端
 inventory-system/    库存系统（前后端）
+sec-impl/            安全产品实施记录系统（前后端+脚本）
 cmdb/                CMDB系统（前后端）
 docker-compose.yml   Docker 编排
 ```
@@ -233,6 +244,7 @@ docker-compose.yml   Docker 编排
 - `/Users/zhanglei/Documents/codex-new/docs/releases/2.0.1-rc1-regression-checklist.md`
 - `/Users/zhanglei/Documents/codex-new/docs/releases/2.0.1.md`
 - `/Users/zhanglei/Documents/codex-new/docs/releases/2.1.0-rc1.md`
+- `/Users/zhanglei/Documents/codex-new/docs/releases/sec-impl-v1-checklist.md`
 
 ## 技术栈
 - 前端：React + Vite

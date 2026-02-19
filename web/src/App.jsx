@@ -82,6 +82,7 @@ const systemAccessOptions = [
   { key: 'cmdb', label: 'CMDB系统', shortLabel: 'CMDB' },
   { key: 'inventory', label: '库存管理系统', shortLabel: '库存系统' },
   { key: 'device-flow', label: '设备流转系统', shortLabel: '设备流转' },
+  { key: 'sec-impl', label: '安全产品实施记录系统', shortLabel: '安全实施' },
 ]
 const defaultSystemAccess = systemAccessOptions.map((item) => item.key)
 const roleOptions = [
@@ -2153,6 +2154,7 @@ function App() {
       ticketing: '工单系统',
       inventory: '库存系统',
       'device-flow': '设备流转系统',
+      'sec-impl': '安全产品实施记录系统',
       sso: '统一登录',
     }
     return map[system] || system || '-'
