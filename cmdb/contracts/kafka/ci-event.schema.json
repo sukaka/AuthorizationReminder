@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "CMDB Event Envelope",
+  "type": "object",
+  "required": ["event_id", "event_type", "event_version", "occurred_at", "producer", "data"],
+  "properties": {
+    "event_id": { "type": "string", "format": "uuid" },
+    "event_type": { "type": "string", "pattern": "^cmdb\\.ci(\\.[a-z]+)+$" },
+    "event_version": { "type": "string" },
+    "occurred_at": { "type": "string", "format": "date-time" },
+    "producer": { "type": "string" },
+    "trace_id": { "type": "string" },
+    "data": {
+      "type": "object",
+      "required": ["ci_uid", "version"],
+      "properties": {
+        "ci_uid": { "type": "string" },
+        "version": { "type": "integer", "minimum": 1 },
+        "changed_fields": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "operator_sub": { "type": "string" }
+      }
+    }
+  }
+}

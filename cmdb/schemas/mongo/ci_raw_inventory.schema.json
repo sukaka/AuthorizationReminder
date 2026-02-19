@@ -1,0 +1,14 @@
+{
+  "$jsonSchema": {
+    "bsonType": "object",
+    "required": ["source", "resource_type", "external_id", "payload", "observed_at"],
+    "properties": {
+      "source": { "bsonType": "string" },
+      "source_account": { "bsonType": "string" },
+      "resource_type": { "bsonType": "string" },
+      "external_id": { "bsonType": "string" },
+      "payload": { "bsonType": "object" },
+      "observed_at": { "bsonType": "date" }
+    }
+  }
+}

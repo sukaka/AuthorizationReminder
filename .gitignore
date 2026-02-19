@@ -3,8 +3,11 @@ web/node_modules
 auth/node_modules
 ticketing/node_modules
 ticketing/web/node_modules
+device-flow/backend/node_modules
+device-flow/frontend/node_modules
 web/dist
 ticketing/web/dist
+device-flow/frontend/dist
 .DS_Store
 npm-debug.log
 yarn.lock

@@ -1,0 +1,15 @@
+{
+  "$jsonSchema": {
+    "bsonType": "object",
+    "required": ["ci_uid", "snapshot_at", "normalized"],
+    "properties": {
+      "ci_uid": { "bsonType": "string" },
+      "snapshot_at": { "bsonType": "date" },
+      "normalized": { "bsonType": "object" },
+      "raw_refs": {
+        "bsonType": "array",
+        "items": { "bsonType": "objectId" }
+      }
+    }
+  }
+}

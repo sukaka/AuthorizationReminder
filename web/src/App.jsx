@@ -2,10 +2,10 @@ import { useEffect, useMemo, useState, useRef } from 'react'
 import QRCode from 'qrcode'
 import './App.css'
 
-const buildApi = (getToken, getCsrfToken) => ({
+const buildApi = (getCsrfToken) => ({
   get: async (path) => {
     const res = await fetch(path, {
-      headers: getToken() ? { Authorization: `Bearer ${getToken()}` } : {},
+      credentials: 'include',
     })
     if (!res.ok) throw new Error(await res.text())
     return res.json()
@@ -16,8 +16,8 @@ const buildApi = (getToken, getCsrfToken) => ({
       headers: {
         'Content-Type': 'application/json',
         ...(getCsrfToken() ? { 'X-CSRF-Token': getCsrfToken() } : {}),
-        ...(getToken() ? { Authorization: `Bearer ${getToken()}` } : {}),
       },
+      credentials: 'include',
       body: JSON.stringify(body),
     })
     if (!res.ok) throw new Error(await res.text())
@@ -29,8 +29,8 @@ const buildApi = (getToken, getCsrfToken) => ({
       headers: {
         'Content-Type': 'application/json',
         ...(getCsrfToken() ? { 'X-CSRF-Token': getCsrfToken() } : {}),
-        ...(getToken() ? { Authorization: `Bearer ${getToken()}` } : {}),
       },
+      credentials: 'include',
       body: JSON.stringify(body),
     })
     if (!res.ok) throw new Error(await res.text())
@@ -41,8 +41,8 @@ const buildApi = (getToken, getCsrfToken) => ({
       method: 'DELETE',
       headers: {
         ...(getCsrfToken() ? { 'X-CSRF-Token': getCsrfToken() } : {}),
-        ...(getToken() ? { Authorization: `Bearer ${getToken()}` } : {}),
       },
+      credentials: 'include',
     })
     if (!res.ok) throw new Error(await res.text())
     return res.json()
@@ -77,10 +77,29 @@ const tabs = [
   { key: 'users', label: '用户管理' },
 ]
 const systemAccessOptions = [
-  { key: 'reminder', label: '授权到期提醒系统' },
-  { key: 'ticketing', label: '工单管理系统' },
+  { key: 'reminder', label: '授权到期提醒系统', shortLabel: '提醒系统' },
+  { key: 'ticketing', label: '工单管理系统', shortLabel: '工单系统' },
+  { key: 'cmdb', label: 'CMDB系统', shortLabel: 'CMDB' },
+  { key: 'inventory', label: '库存管理系统', shortLabel: '库存系统' },
+  { key: 'device-flow', label: '设备流转系统', shortLabel: '设备流转' },
 ]
 const defaultSystemAccess = systemAccessOptions.map((item) => item.key)
+const roleOptions = [
+  { value: 'admin', label: '业务管理员' },
+  { value: 'sysadmin', label: '系统管理员' },
+  { value: 'auditor', label: '审计管理员' },
+  { value: 'viewer', label: '只读用户' },
+  { value: 'sales', label: '销售（旧角色）' },
+]
+const roleLabelMap = {
+  admin: '业务管理员',
+  sysadmin: '系统管理员',
+  auditor: '审计管理员',
+  viewer: '只读用户',
+  sales: '销售（兼容）',
+}
+const roleLabel = (value) => roleLabelMap[String(value || '').toLowerCase()] || value || '-'
+const BUILTIN_ROLE_USERNAMES = new Set(['admin', 'sysadmin', 'auditor'])
 
 const emptyCustomer = { id: null, name: '', juxin_sales: '', channel_sales: '' }
 const emptyContact = {
@@ -116,6 +135,14 @@ const buildPortalEntryUrl = (system) => {
   return `${base}/portal?system=${encodeURIComponent(system)}`
 }
 
+const buildPortalSwitchUrl = (system) => {
+  const base = getPortalBaseUrl()
+  const params = new URLSearchParams()
+  if (system) params.set('system', system)
+  params.set('mode', 'switch')
+  return `${base}/portal?${params.toString()}`
+}
+
 function App() {
   const [dashboard, setDashboard] = useState({
     expiring: 0,
@@ -135,10 +162,14 @@ function App() {
     channel: '',
   })
   const [dashboardView, setDashboardView] = useState(localStorage.getItem('dashboardView') || 'A')
-  const [authToken, setAuthToken] = useState(sessionStorage.getItem('authToken') || '')
+  const [authToken, setAuthToken] = useState('')
+  const [authReady, setAuthReady] = useState(false)
+  const [logoutPending, setLogoutPending] = useState(false)
   const [currentUser, setCurrentUser] = useState(null)
   const [activeTab, setActiveTab] = useState('dashboard')
-  const [screenshotPreview, setScreenshotPreview] = useState(null)
+  const [screenshotPreview, setScreenshotPreview] = useState('')
+  const [previewingScreenshotId, setPreviewingScreenshotId] = useState(null)
+  const screenshotPreviewUrlRef = useRef('')
   const [customers, setCustomers] = useState([])
   const [customerPage, setCustomerPage] = useState(1)
   const [contacts, setContacts] = useState([])
@@ -168,8 +199,11 @@ function App() {
   const [operationLogs, setOperationLogs] = useState([])
   const [opsPage, setOpsPage] = useState(1)
   const [expandedOpsLogId, setExpandedOpsLogId] = useState(null)
+  const [auditVerifyStatus, setAuditVerifyStatus] = useState('')
+  const [auditVerifyResult, setAuditVerifyResult] = useState(null)
   const [opsFilters, setOpsFilters] = useState({
     username: '',
+    system: 'reminder',
     action: '',
     entity: '',
     date_from: '',
@@ -220,6 +254,7 @@ function App() {
     username: '',
     password: '',
     role: 'viewer',
+    is_active: 1,
     email: '',
     phone: '',
     wecom_id: '',
@@ -307,7 +342,7 @@ function App() {
     setCsrfToken(token || '')
   }
   const [passwordFeedback, setPasswordFeedback] = useState({ type: '', text: '' })
-  const api = useMemo(() => buildApi(() => authToken, () => csrfTokenRef.current), [authToken])
+  const api = useMemo(() => buildApi(() => csrfTokenRef.current), [])
   const [loginForm, setLoginForm] = useState({ username: '', password: '' })
   const [loginError, setLoginError] = useState('')
   const [mfaState, setMfaState] = useState({
@@ -321,60 +356,123 @@ function App() {
   const [captchaInput, setCaptchaInput] = useState('')
 
   useEffect(() => {
-    const params = new URLSearchParams(window.location.search)
-    const ssoToken = params.get('sso_token')
-    if (!ssoToken) return
-    sessionStorage.setItem('authToken', ssoToken)
-    setAuthToken(ssoToken)
-    params.delete('sso_token')
-    const query = params.toString()
-    const nextUrl = `${window.location.pathname}${query ? `?${query}` : ''}${window.location.hash || ''}`
-    window.history.replaceState({}, '', nextUrl)
+    let cancelled = false
+    const bootstrapAuth = async () => {
+      try {
+        const res = await fetch('/api/auth/me', { credentials: 'include' })
+        if (!res.ok) return
+        const data = await res.json()
+        if (cancelled) return
+        if (data?.id) {
+          setAuthToken('cookie')
+          setCurrentUser(data)
+        }
+      } catch (_err) {
+        // ignore
+      } finally {
+        if (!cancelled) setAuthReady(true)
+      }
+    }
+    bootstrapAuth()
+    return () => {
+      cancelled = true
+    }
   }, [])
 
   useEffect(() => {
+    if (!authReady) return
     if (authToken) return
     const timer = setTimeout(() => {
       window.location.href = buildPortalEntryUrl('reminder')
-    }, 120)
+    }, logoutPending ? 1000 : 120)
     return () => clearTimeout(timer)
-  }, [authToken])
+  }, [authReady, authToken, logoutPending])
+
+  useEffect(() => {
+    if (!authToken || !logoutPending) return
+    setLogoutPending(false)
+  }, [authToken, logoutPending])
+
+  useEffect(() => {
+    return () => {
+      if (screenshotPreviewUrlRef.current && screenshotPreviewUrlRef.current.startsWith('blob:')) {
+        URL.revokeObjectURL(screenshotPreviewUrlRef.current)
+      }
+    }
+  }, [])
 
   const rolePermissions = useMemo(
     () => ({
       admin: {
+        canBusinessRead: true,
+        canDashboard: true,
         canWrite: true,
         canDelete: true,
         canConfig: true,
         canSend: true,
-        canManageUsers: true,
+        canManageUsers: false,
+        canManageSecurity: false,
+        canAudit: false,
       },
-      sales: {
-        canWrite: true,
+      sysadmin: {
+        canBusinessRead: false,
+        canDashboard: false,
+        canWrite: false,
         canDelete: false,
         canConfig: false,
-        canSend: true,
-        canManageUsers: false,
+        canSend: false,
+        canManageUsers: true,
+        canManageSecurity: true,
+        canAudit: false,
       },
-      viewer: {
+      auditor: {
+        canBusinessRead: false,
+        canDashboard: false,
         canWrite: false,
         canDelete: false,
         canConfig: false,
         canSend: false,
         canManageUsers: false,
+        canManageSecurity: false,
+        canAudit: true,
+      },
+      sales: {
+        canBusinessRead: false,
+        canDashboard: false,
+        canWrite: false,
+        canDelete: false,
+        canConfig: false,
+        canSend: false,
+        canManageUsers: false,
+        canManageSecurity: false,
+        canAudit: false,
+      },
+      viewer: {
+        canBusinessRead: false,
+        canDashboard: false,
+        canWrite: false,
+        canDelete: false,
+        canConfig: false,
+        canSend: false,
+        canManageUsers: false,
+        canManageSecurity: false,
+        canAudit: false,
       },
     }),
     []
   )
   const permissions = rolePermissions[currentUser?.role || 'viewer']
+  const isEditingBuiltinUser = BUILTIN_ROLE_USERNAMES.has(String(userForm.username || '').toLowerCase())
 
   const visibleTabs = tabs.filter((tab) => {
+    if (tab.key === 'dashboard') return permissions.canDashboard
+    if (tab.key === 'customers' || tab.key === 'contacts' || tab.key === 'licenses') return permissions.canBusinessRead
     if (tab.key === 'config') return permissions.canConfig
-    if (tab.key === 'security') return permissions.canConfig
+    if (tab.key === 'security') return permissions.canManageSecurity
     if (tab.key === 'users') return permissions.canManageUsers
     if (tab.key === 'send' || tab.key === 'reminders') return permissions.canSend
     if (tab.key === 'imports') return permissions.canWrite
-    if (tab.key === 'ops') return permissions.canManageUsers
+    if (tab.key === 'ops') return permissions.canAudit
     return true
   })
 
@@ -565,6 +663,7 @@ function App() {
   const pagedImportJobs = useMemo(() => paginate(importJobs, importJobsPage), [importJobs, importJobsPage])
 
   const refreshCustomers = async () => {
+    if (!permissions.canBusinessRead) return
     const params = new URLSearchParams()
     if (customerSearch) params.append('search', customerSearch)
     const data = await api.get(`/api/customers?${params.toString()}`)
@@ -572,6 +671,7 @@ function App() {
   }
 
   const refreshContacts = async () => {
+    if (!permissions.canBusinessRead) return
     const params = new URLSearchParams()
     if (contactSearch) params.append('search', contactSearch)
     if (contactCustomerFilter) params.append('customer_id', contactCustomerFilter)
@@ -582,6 +682,7 @@ function App() {
 
 
   const refreshLicenses = async () => {
+    if (!permissions.canBusinessRead) return
     const params = new URLSearchParams()
     if (licenseSearch) params.append('search', licenseSearch)
     if (licenseCustomerFilter) params.append('customer_id', licenseCustomerFilter)
@@ -594,6 +695,7 @@ function App() {
   }
 
   const refreshReminderLogs = async () => {
+    if (!permissions.canSend) return
     const params = new URLSearchParams()
     Object.entries(reminderFilters).forEach(([key, value]) => {
       if (value) params.append(key, value)
@@ -603,9 +705,10 @@ function App() {
   }
 
   const refreshOperationLogs = async () => {
-    if (!permissions.canManageUsers) return
+    if (!permissions.canAudit) return
     const params = new URLSearchParams()
-    Object.entries(opsFilters).forEach(([key, value]) => {
+    const effectiveOpsFilters = { ...opsFilters, system: opsFilters.system || 'reminder' }
+    Object.entries(effectiveOpsFilters).forEach(([key, value]) => {
       if (value) params.append(key, value)
     })
     const data = await api.get(`/api/operation-logs?${params.toString()}`)
@@ -613,6 +716,7 @@ function App() {
   }
 
   const refreshDashboard = async () => {
+    if (!permissions.canDashboard) return
     const params = new URLSearchParams()
     Object.entries(dashboardFilters).forEach(([key, value]) => {
       if (value) params.append(key, value)
@@ -644,14 +748,15 @@ function App() {
   }
 
   const exportOperationLogs = async () => {
-    if (!permissions.canManageUsers) return
+    if (!permissions.canAudit) return
     const params = new URLSearchParams()
-    Object.entries(opsFilters).forEach(([key, value]) => {
+    const effectiveOpsFilters = { ...opsFilters, system: opsFilters.system || 'reminder' }
+    Object.entries(effectiveOpsFilters).forEach(([key, value]) => {
       if (value) params.append(key, value)
     })
     try {
       const res = await fetch(`/api/operation-logs/export?${params.toString()}`, {
-        headers: authToken ? { Authorization: `Bearer ${authToken}` } : {},
+        credentials: 'include',
       })
       if (!res.ok) throw new Error('导出失败')
       const blob = await res.blob()
@@ -665,6 +770,54 @@ function App() {
       URL.revokeObjectURL(url)
     } catch (err) {
       showError('操作日志导出失败')
+    }
+  }
+
+  const verifyOperationLogs = async () => {
+    if (!permissions.canAudit) return
+    try {
+      const data = await api.get('/api/operation-logs/verify')
+      const verifyResult = {
+        ...data,
+        verified_at: new Date().toISOString(),
+      }
+      setAuditVerifyResult(verifyResult)
+      if (data?.ok) {
+        const text = `审计验签通过（已校验 ${data.checked || 0} 条）`
+        setAuditVerifyStatus(text)
+        showMessage(text)
+      } else {
+        const text = `审计验签失败：${data?.reason || '未知错误'}${data?.failed_id ? `（失败记录ID ${data.failed_id}）` : ''}`
+        setAuditVerifyStatus(text)
+        showError(text)
+      }
+    } catch (err) {
+      const text = normalizeApiError(err) || '审计验签失败'
+      setAuditVerifyStatus(text)
+      setAuditVerifyResult(null)
+      showError(text)
+    }
+  }
+
+  const exportVerifyReport = async () => {
+    if (!permissions.canAudit) return
+    try {
+      const res = await fetch('/api/operation-logs/verify/export', {
+        credentials: 'include',
+      })
+      if (!res.ok) throw new Error('导出失败')
+      const blob = await res.blob()
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `audit_verify_report_${new Date().toISOString().slice(0, 10)}.csv`
+      document.body.appendChild(a)
+      a.click()
+      a.remove()
+      URL.revokeObjectURL(url)
+      showMessage('核验报告已导出')
+    } catch (err) {
+      showError('核验报告导出失败')
     }
   }
 
@@ -683,6 +836,7 @@ function App() {
   }
 
   const refreshSendPlans = async () => {
+    if (!permissions.canSend) return
     const data = await api.get('/api/send-plans')
     setSendPlans(data)
   }
@@ -694,6 +848,7 @@ function App() {
   }
 
   const refreshConfigs = async () => {
+    if (!permissions.canConfig && !permissions.canManageSecurity) return
     const data = await api.get('/api/send-configs')
     const smsConfig = data.sms || {}
     setConfigForm((prev) => ({
@@ -714,28 +869,44 @@ function App() {
 
   useEffect(() => {
     if (!authToken) return
-    refreshCustomers()
-    refreshContacts()
-    refreshLicenses()
-    refreshReminderLogs()
-    refreshSendPlans()
-    refreshImportJobs()
-    refreshConfigs()
-    refreshUsers()
-    refreshDashboard()
-    refreshOperationLogs()
-  }, [authToken])
+    if (permissions.canBusinessRead) {
+      refreshCustomers()
+      refreshContacts()
+      refreshLicenses()
+    }
+    if (permissions.canSend) {
+      refreshReminderLogs()
+      refreshSendPlans()
+    }
+    if (permissions.canWrite) {
+      refreshImportJobs()
+    }
+    if (permissions.canConfig || permissions.canManageSecurity) {
+      refreshConfigs()
+    }
+    if (permissions.canManageUsers) {
+      refreshUsers()
+    }
+    if (permissions.canDashboard) {
+      refreshDashboard()
+    }
+    if (permissions.canAudit) {
+      refreshOperationLogs()
+    }
+  }, [authToken, permissions])
 
   useEffect(() => {
     if (!authToken) return
+    if (!permissions.canSend) return
     refreshReminderLogs()
-  }, [reminderFilters, authToken])
+  }, [reminderFilters, authToken, permissions.canSend])
 
   useEffect(() => {
     if (!authToken) return
+    if (!permissions.canDashboard) return
     if (activeTab !== 'dashboard') return
     refreshDashboard()
-  }, [dashboardFilters, authToken, activeTab])
+  }, [dashboardFilters, authToken, activeTab, permissions.canDashboard])
 
   useEffect(() => {
     try {
@@ -753,31 +924,44 @@ function App() {
 
   useEffect(() => {
     if (!authToken) return
-    if (!permissions.canManageUsers) return
+    if (!permissions.canAudit) return
     refreshOperationLogs()
-  }, [opsFilters, authToken, permissions.canManageUsers])
+  }, [opsFilters, authToken, permissions.canAudit])
 
   useEffect(() => {
-    if (currentUser?.role === 'admin') {
+    if (!authToken) return
+    if (permissions.canManageUsers) {
       refreshUsers()
     }
-  }, [currentUser])
+  }, [permissions.canManageUsers, authToken])
 
 
   useEffect(() => {
     if (!authToken) return
+    if (!permissions.canBusinessRead) return
     refreshCustomers()
-  }, [customerSearch, authToken])
+  }, [customerSearch, authToken, permissions.canBusinessRead])
 
   useEffect(() => {
     if (!authToken) return
+    if (!permissions.canBusinessRead) return
     refreshContacts()
-  }, [contactSearch, contactCustomerFilter, contactStatusFilter, authToken])
+  }, [contactSearch, contactCustomerFilter, contactStatusFilter, authToken, permissions.canBusinessRead])
 
   useEffect(() => {
     if (!authToken) return
+    if (!permissions.canBusinessRead) return
     refreshLicenses()
-  }, [licenseSearch, licenseCustomerFilter, licenseStatusFilter, licenseQuickFilter, licenseExpiringDays, licenseMissingScreenshot, authToken])
+  }, [
+    licenseSearch,
+    licenseCustomerFilter,
+    licenseStatusFilter,
+    licenseQuickFilter,
+    licenseExpiringDays,
+    licenseMissingScreenshot,
+    authToken,
+    permissions.canBusinessRead,
+  ])
 
   const showMessage = (text) => {
     setMessage(text)
@@ -801,6 +985,48 @@ function App() {
     }
     msg = msg.replace(/<[^>]*>/g, '').trim()
     return msg || '请求失败'
+  }
+
+  const validatePasswordComplexity = (password) => {
+    const value = String(password || '')
+    if (value.length < 10) return '密码至少10位，且需包含大写字母、小写字母、数字和特殊字符'
+    if (!/[A-Z]/.test(value)) return '密码需包含至少1个大写字母'
+    if (!/[a-z]/.test(value)) return '密码需包含至少1个小写字母'
+    if (!/\d/.test(value)) return '密码需包含至少1个数字'
+    if (!/[^A-Za-z0-9]/.test(value)) return '密码需包含至少1个特殊字符'
+    return ''
+  }
+
+  const validateUserForm = (form) => {
+    const username = String(form?.username || '').trim()
+    const password = String(form?.password || '')
+    const email = String(form?.email || '').trim()
+    const phone = String(form?.phone || '').trim()
+    const role = String(form?.role || '').trim().toLowerCase()
+    const appAccess = Array.isArray(form?.app_access) ? form.app_access.filter(Boolean) : []
+    const isCreate = !form?.id
+
+    if (isCreate) {
+      if (!username) return '用户名不能为空'
+      if (!/^[\u4e00-\u9fa5A-Za-z0-9_-]{2,32}$/.test(username)) {
+        return '用户名仅支持2-32位中文、字母、数字、下划线或中划线'
+      }
+      if (!password) return '密码不能为空'
+    }
+
+    if (password) {
+      const pwdErr = validatePasswordComplexity(password)
+      if (pwdErr) return pwdErr
+    }
+
+    if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return '邮箱格式不正确'
+    if (phone && !/^\d{6,20}$/.test(phone)) return '手机号格式不正确（6-20位数字）'
+
+    if (!role) return '角色不能为空'
+    if (!['admin', 'sysadmin', 'auditor', 'viewer', 'sales'].includes(role)) return '角色不合法'
+    if (role !== 'admin' && appAccess.length === 0) return '请至少选择一个可访问系统'
+
+    return ''
   }
 
   const normalizeLoginError = (err) => {
@@ -888,8 +1114,7 @@ function App() {
         setLoginError('')
         return
       }
-      sessionStorage.setItem('authToken', result.token)
-      setAuthToken(result.token)
+      setAuthToken('cookie')
       setCurrentUser(result.user)
       setLoginError('')
       setLoginForm({ username: '', password: '' })
@@ -919,8 +1144,7 @@ function App() {
         method: mfaState.method,
         code: mfaState.code,
       })
-      sessionStorage.setItem('authToken', result.token)
-      setAuthToken(result.token)
+      setAuthToken('cookie')
       setCurrentUser(result.user)
       setMfaState({ required: false, token: '', methods: [], method: '', code: '' })
       setLoginForm({ username: '', password: '' })
@@ -936,10 +1160,18 @@ function App() {
     } catch (err) {
       // ignore
     }
-    sessionStorage.removeItem('authToken')
+    setLogoutPending(true)
     setAuthToken('')
     setCurrentUser(null)
     setActiveTab('dashboard')
+  }
+
+  const onSwitchSystem = () => {
+    if (!authToken) {
+      window.location.href = buildPortalEntryUrl('reminder')
+      return
+    }
+    window.location.href = buildPortalSwitchUrl('reminder')
   }
 
   const onSaveCustomer = async (e) => {
@@ -1104,8 +1336,8 @@ function App() {
         method: 'POST',
         headers: {
           ...(csrfToken ? { 'X-CSRF-Token': csrfToken } : {}),
-          ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
         },
+        credentials: 'include',
         body: formData,
       })
       if (!res.ok) {
@@ -1150,6 +1382,39 @@ function App() {
     }
   }
 
+  const closeScreenshotPreview = () => {
+    if (screenshotPreviewUrlRef.current && screenshotPreviewUrlRef.current.startsWith('blob:')) {
+      URL.revokeObjectURL(screenshotPreviewUrlRef.current)
+    }
+    screenshotPreviewUrlRef.current = ''
+    setScreenshotPreview('')
+  }
+
+  const onPreviewLicenseScreenshot = async (license) => {
+    if (!license || !license.id) return
+    try {
+      setPreviewingScreenshotId(license.id)
+      const res = await fetch(`/api/licenses/${license.id}/screenshot/content`, {
+        credentials: 'include',
+      })
+      if (!res.ok) throw new Error(await res.text())
+      const blob = await res.blob()
+      const url = URL.createObjectURL(blob)
+      if (screenshotPreviewUrlRef.current && screenshotPreviewUrlRef.current.startsWith('blob:')) {
+        URL.revokeObjectURL(screenshotPreviewUrlRef.current)
+      }
+      screenshotPreviewUrlRef.current = url
+      setScreenshotPreview(url)
+    } catch (err) {
+      setModalInfo({
+        title: '预览失败',
+        message: normalizeApiError(err) || '截图读取失败',
+      })
+    } finally {
+      setPreviewingScreenshotId(null)
+    }
+  }
+
 
   const onAutocompleteSelect = (value) => {
     const match = customers.find((c) => c.name === value)
@@ -1162,8 +1427,9 @@ function App() {
   const onSaveConfig = async (e) => {
     e.preventDefault()
     try {
+      const { security, ...businessConfigs } = configForm
       await api.post('/api/send-configs', {
-        ...configForm,
+        ...businessConfigs,
       })
       showMessage('配置已保存')
       setConfigDirty(false)
@@ -1306,26 +1572,45 @@ function App() {
 
   const onSaveUser = async (e) => {
     e.preventDefault()
+    const validationError = validateUserForm(userForm)
+    if (validationError) {
+      showError(validationError)
+      setModalInfo({
+        title: '用户信息校验失败',
+        message: validationError,
+      })
+      return
+    }
     try {
       if (userForm.id) {
         await api.put(`/api/users/${userForm.id}`, {
           password: userForm.password || undefined,
           role: userForm.role,
+          is_active: Number(userForm.is_active) === 1 ? 1 : 0,
           email: userForm.email,
           phone: userForm.phone,
           wecom_id: userForm.wecom_id,
           app_access: userForm.app_access,
         })
         showMessage('用户已更新')
+        setModalInfo({
+          title: '更新用户成功',
+          message: '用户信息已更新。',
+        })
       } else {
         await api.post('/api/users', userForm)
         showMessage('用户已创建')
+        setModalInfo({
+          title: '新增用户成功',
+          message: '用户已创建。',
+        })
       }
       setUserForm({
         id: null,
         username: '',
         password: '',
         role: 'viewer',
+        is_active: 1,
         email: '',
         phone: '',
         wecom_id: '',
@@ -1333,7 +1618,12 @@ function App() {
       })
       refreshUsers()
     } catch (err) {
-      showError('用户保存失败')
+      const msg = normalizeApiError(err) || '用户保存失败'
+      showError(msg)
+      setModalInfo({
+        title: userForm.id ? '更新用户失败' : '新增用户失败',
+        message: msg,
+      })
     }
   }
 
@@ -1511,6 +1801,7 @@ function App() {
       username: user.username,
       password: '',
       role: user.role,
+      is_active: Number(user.is_active) === 1 ? 1 : 0,
       email: user.email || '',
       phone: user.phone || '',
       wecom_id: user.wecom_id || '',
@@ -1523,9 +1814,40 @@ function App() {
     try {
       await api.del(`/api/users/${id}`)
       showMessage('用户已删除')
+      setModalInfo({
+        title: '删除用户成功',
+        message: '用户已删除。',
+      })
       refreshUsers()
     } catch (err) {
-      showError('用户删除失败')
+      const msg = normalizeApiError(err) || '用户删除失败'
+      showError(msg)
+      setModalInfo({
+        title: '删除用户失败',
+        message: msg,
+      })
+    }
+  }
+
+  const onToggleUserActive = async (user) => {
+    const nextActive = Number(user.is_active) === 1 ? 0 : 1
+    const actionText = nextActive === 1 ? '启用' : '禁用'
+    if (!window.confirm(`确认${actionText}该用户？`)) return
+    try {
+      await api.put(`/api/users/${user.id}`, { is_active: nextActive })
+      showMessage(`用户已${actionText}`)
+      setModalInfo({
+        title: `${actionText}用户成功`,
+        message: `用户已${actionText}。`,
+      })
+      refreshUsers()
+    } catch (err) {
+      const msg = normalizeApiError(err) || `用户${actionText}失败`
+      showError(msg)
+      setModalInfo({
+        title: `${actionText}用户失败`,
+        message: msg,
+      })
     }
   }
 
@@ -1538,19 +1860,29 @@ function App() {
       setPasswordFeedback({ type: 'success', text: '密码修改成功' })
       setPasswordForm({ currentPassword: '', newPassword: '' })
     } catch (err) {
-      showError('密码修改失败')
-      setPasswordFeedback({ type: 'error', text: '密码修改失败' })
+      const msg = normalizeApiError(err) || '密码修改失败'
+      showError(msg)
+      setPasswordFeedback({ type: 'error', text: msg })
     }
   }
 
   const onResetUserPassword = async (id) => {
-    const newPassword = window.prompt('请输入新密码')
+    const newPassword = window.prompt('请输入新密码（至少10位，包含大小写字母、数字、特殊字符）')
     if (!newPassword) return
     try {
       await api.post(`/api/users/${id}/reset-password`, { newPassword })
       showMessage('密码已重置')
+      setModalInfo({
+        title: '重置密码成功',
+        message: '用户密码已重置。',
+      })
     } catch (err) {
-      showError('密码重置失败')
+      const msg = normalizeApiError(err) || '密码重置失败'
+      showError(msg)
+      setModalInfo({
+        title: '重置密码失败',
+        message: msg,
+      })
     }
   }
 
@@ -1563,8 +1895,8 @@ function App() {
         method: 'POST',
         headers: {
           ...(csrfToken ? { 'X-CSRF-Token': csrfToken } : {}),
-          ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
         },
+        credentials: 'include',
         body: formData,
       })
       const data = await res.json()
@@ -1589,8 +1921,8 @@ function App() {
         method: 'POST',
         headers: {
           ...(csrfToken ? { 'X-CSRF-Token': csrfToken } : {}),
-          ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
         },
+        credentials: 'include',
         body: formData,
       })
       const data = await res.json()
@@ -1613,7 +1945,6 @@ function App() {
       .then((user) => setCurrentUser(user))
       .catch(() => {
         setAuthToken('')
-        sessionStorage.removeItem('authToken')
       })
   }, [authToken])
 
@@ -1781,6 +2112,7 @@ function App() {
       LOGOUT: '登出',
       LOGIN_FAILED: '登录失败',
       LOGIN_LOCKED: '登录锁定',
+      LOGIN_BLOCKED: '账号被禁用',
       LOGIN_MFA_REQUIRED: '需要二次验证',
       MFA_SEND: '发送验证码',
       MFA_SEND_FAILED: '验证码发送失败',
@@ -1793,8 +2125,37 @@ function App() {
       IMPORT: '导入',
       CHANGE_PASSWORD: '修改密码',
       RESET_PASSWORD: '重置密码',
+      ENABLE_USER: '启用用户',
+      DISABLE_USER: '禁用用户',
+      UPLOAD: '上传',
+      '创建项目': '创建项目',
+      '更新项目': '更新项目',
+      '删除项目': '删除项目',
+      '导入模板': '导入模板',
+      '更新项目权限': '更新项目权限',
+      '创建排期': '创建排期',
+      '更新协作人': '更新协作人',
+      '更新观察者': '更新观察者',
+      '新增评论': '新增评论',
+      '新增排期': '新增排期',
+      '更新阶段状态': '更新阶段状态',
+      '从模板生成阶段': '从模板生成阶段',
+      '更新交付物': '更新交付物',
+      '审批通过': '审批通过',
+      '审批驳回': '审批驳回',
     }
     return map[action] || action || '-'
+  }
+
+  const systemLabel = (system) => {
+    const map = {
+      reminder: '提醒系统',
+      ticketing: '工单系统',
+      inventory: '库存系统',
+      'device-flow': '设备流转系统',
+      sso: '统一登录',
+    }
+    return map[system] || system || '-'
   }
 
   const entityLabel = (entity) => {
@@ -1806,6 +2167,16 @@ function App() {
       license: '授权',
       send_plan: '发送计划',
       send_configs: '发送配置',
+      ticket: '工单',
+      project: '项目',
+      template: '模板',
+      schedule: '排期',
+      permission: '权限',
+      '工单': '工单',
+      '项目': '项目',
+      '工单模板': '工单模板',
+      '项目权限': '项目权限',
+      '排期': '排期',
     }
     return map[entity] || entity || '-'
   }
@@ -1925,7 +2296,7 @@ function App() {
           <strong>管理中心</strong>
           {currentUser && (
             <div className="user-pill">
-              {currentUser.username} · {currentUser.role}
+              {currentUser.username} · {roleLabel(currentUser.role)}
             </div>
           )}
         </div>
@@ -1940,9 +2311,14 @@ function App() {
             </button>
           ))}
         </nav>
-        <button className="ghost logout" onClick={onLogout}>
-          退出登录
-        </button>
+        <div className="sidebar-actions">
+          <button className="ghost" onClick={onSwitchSystem}>
+            切换系统
+          </button>
+          <button className="ghost logout" onClick={onLogout}>
+            退出登录
+          </button>
+        </div>
       </aside>
 
       <div className="content">
@@ -1986,14 +2362,14 @@ function App() {
           </div>
         )}
         {screenshotPreview && (
-          <div className="modal-backdrop" onClick={() => setScreenshotPreview(null)}>
+          <div className="modal-backdrop" onClick={closeScreenshotPreview}>
             <div className="modal-card modal-image" onClick={(e) => e.stopPropagation()}>
               <div className="modal-title">授权截图预览</div>
               <div className="modal-body">
                 <img src={screenshotPreview} alt="授权截图" />
               </div>
               <div className="modal-actions">
-                <button className="primary btn btn-primary" type="button" onClick={() => setScreenshotPreview(null)}>
+                <button className="primary btn btn-primary" type="button" onClick={closeScreenshotPreview}>
                   关闭
                 </button>
               </div>
@@ -2574,7 +2950,7 @@ function App() {
             </form>
             )}
 
-            <div className="table users-table">
+            <div className="table">
               <div className="table-row head">
                 <span>客户名称</span>
                 <span>聚信销售</span>
@@ -3076,9 +3452,10 @@ function App() {
                         <button
                           type="button"
                           className="link-btn two-line"
-                          onClick={() => setScreenshotPreview(l.screenshot_url)}
+                          disabled={previewingScreenshotId === l.id}
+                          onClick={() => onPreviewLicenseScreenshot(l)}
                         >
-                          <span>查看</span>
+                          <span>{previewingScreenshotId === l.id ? '读取中' : '查看'}</span>
                           <span>截图</span>
                         </button>
                         {l.screenshot_valid === 0 && <span className="badge-warn">异常</span>}
@@ -3681,8 +4058,15 @@ function App() {
           <section className="panel">
             <div className="panel-header">
               <h2>操作日志</h2>
-              <p>记录登录/登出及管理员关键操作。</p>
+              <p>记录提醒系统关键操作，支持审计签名验真。</p>
+              <div className="muted">审计员可切换到其他系统查看各系统独立审计列表样式。</div>
               <div className="panel-actions">
+                <button className="ghost btn btn-outline-secondary" onClick={verifyOperationLogs}>
+                  审计验签
+                </button>
+                <button className="ghost btn btn-outline-secondary" onClick={exportVerifyReport}>
+                  导出核验报告
+                </button>
                 <button className="ghost btn btn-outline-secondary" onClick={exportOperationLogs}>
                   导出CSV
                 </button>
@@ -3690,6 +4074,17 @@ function App() {
                   刷新
                 </button>
               </div>
+              {auditVerifyStatus && <div className="muted">{auditVerifyStatus}</div>}
+              {auditVerifyResult && (
+                <div className={`audit-verify-card ${auditVerifyResult.ok ? 'ok' : 'fail'}`}>
+                  <div>核验时间：{formatDateTime(auditVerifyResult.verified_at)}</div>
+                  <div>核验结果：{auditVerifyResult.ok ? '通过' : '失败'}</div>
+                  <div>已校验条数：{Number(auditVerifyResult.checked || 0)}</div>
+                  <div>最新记录ID：{Number(auditVerifyResult.latest_id || 0)}</div>
+                  <div>失败记录ID：{auditVerifyResult.failed_id ? Number(auditVerifyResult.failed_id) : '-'}</div>
+                  <div>失败原因：{auditVerifyResult.reason || '-'}</div>
+                </div>
+              )}
             </div>
             <div className="filter-row">
               <input
@@ -3698,6 +4093,18 @@ function App() {
                 placeholder="用户"
                 className="form-control"
               />
+              <button className="ghost btn btn-outline-secondary" type="button" disabled>
+                当前：提醒系统审计
+              </button>
+              <button
+                className="ghost btn btn-outline-secondary"
+                type="button"
+                onClick={() => {
+                  window.location.href = buildPortalSwitchUrl('inventory')
+                }}
+              >
+                查看库存系统审计
+              </button>
               <select
                 className="form-select"
                 value={opsFilters.action}
@@ -3708,6 +4115,7 @@ function App() {
                 <option value="LOGOUT">登出</option>
                 <option value="LOGIN_FAILED">登录失败</option>
                 <option value="LOGIN_LOCKED">登录锁定</option>
+                <option value="LOGIN_BLOCKED">账号被禁用</option>
                 <option value="LOGIN_MFA_REQUIRED">需要二次验证</option>
                 <option value="MFA_SEND">发送验证码</option>
                 <option value="MFA_SEND_FAILED">验证码发送失败</option>
@@ -3717,9 +4125,27 @@ function App() {
                 <option value="CREATE">新增</option>
                 <option value="UPDATE">更新</option>
                 <option value="DELETE">删除</option>
+                <option value="UPLOAD">上传</option>
                 <option value="IMPORT">导入</option>
                 <option value="CHANGE_PASSWORD">修改密码</option>
                 <option value="RESET_PASSWORD">重置密码</option>
+                <option value="ENABLE_USER">启用用户</option>
+                <option value="DISABLE_USER">禁用用户</option>
+                <option value="创建项目">创建项目</option>
+                <option value="更新项目">更新项目</option>
+                <option value="删除项目">删除项目</option>
+                <option value="导入模板">导入模板</option>
+                <option value="更新项目权限">更新项目权限</option>
+                <option value="创建排期">创建排期</option>
+                <option value="更新协作人">更新协作人</option>
+                <option value="更新观察者">更新观察者</option>
+                <option value="新增评论">新增评论</option>
+                <option value="新增排期">新增排期</option>
+                <option value="更新阶段状态">更新阶段状态</option>
+                <option value="从模板生成阶段">从模板生成阶段</option>
+                <option value="更新交付物">更新交付物</option>
+                <option value="审批通过">审批通过</option>
+                <option value="审批驳回">审批驳回</option>
               </select>
               <input
                 value={opsFilters.entity}
@@ -3741,24 +4167,37 @@ function App() {
               />
               <button
                 className="ghost btn btn-outline-secondary"
-                onClick={() => setOpsFilters({ username: '', action: '', entity: '', date_from: '', date_to: '' })}
+                onClick={() =>
+                  setOpsFilters({
+                    username: '',
+                    system: 'reminder',
+                    action: '',
+                    entity: '',
+                    date_from: '',
+                    date_to: '',
+                  })
+                }
               >
                 清空筛选
               </button>
             </div>
             <div className="table ops-table">
               <div className="table-row head">
+                <span>序号</span>
                 <span>用户</span>
+                <span>系统</span>
                 <span>动作</span>
                 <span>对象</span>
                 <span>对象ID</span>
                 <span>时间</span>
                 <span>详情</span>
               </div>
-              {pagedOperationLogs.items.map((log) => (
+              {pagedOperationLogs.items.map((log, idx) => (
                 <div key={log.id}>
                   <div className="table-row">
+                    <span>{(pagedOperationLogs.current - 1) * PAGE_SIZE + idx + 1}</span>
                     <span>{log.username}</span>
+                    <span>{systemLabel(log.system)}</span>
                     <span>{actionLabel(log.action)}</span>
                     <span>{entityLabel(log.entity)}</span>
                     <span>{log.entity_id}</span>
@@ -3950,7 +4389,7 @@ function App() {
           <section className="panel">
             <div className="panel-header">
               <h2>用户管理</h2>
-              <p>管理系统账号与权限，仅管理员可见。</p>
+              <p>管理系统账号与权限，仅系统管理员可见。</p>
             </div>
             <form className="form-grid" onSubmit={onSaveUser}>
               <label className="form-label">
@@ -4001,12 +4440,14 @@ function App() {
                   required={!userForm.id}
                   className="form-control"
                 />
+                <div className="muted">密码需至少10位，包含大小写字母、数字、特殊字符。</div>
               </label>
               <label className="form-label">
                 角色
                 <select
                   className="form-select"
                   value={userForm.role}
+                  disabled={isEditingBuiltinUser}
                   onChange={(e) => {
                     const nextRole = e.target.value
                     setUserForm({
@@ -4016,17 +4457,33 @@ function App() {
                     })
                   }}
                 >
-                  <option value="admin">管理员</option>
-                  <option value="sales">销售</option>
-                  <option value="viewer">只读</option>
+                  {roleOptions.map((item) => (
+                    <option key={item.value} value={item.value}>
+                      {item.label}
+                    </option>
+                  ))}
                 </select>
+                {isEditingBuiltinUser && <div className="muted">内置账号角色固定，不可修改。</div>}
+              </label>
+              <label className="form-label">
+                状态
+                <select
+                  className="form-select"
+                  value={Number(userForm.is_active) === 1 ? '1' : '0'}
+                  disabled={isEditingBuiltinUser}
+                  onChange={(e) => setUserForm({ ...userForm, is_active: Number(e.target.value) === 1 ? 1 : 0 })}
+                >
+                  <option value="1">启用</option>
+                  <option value="0">禁用</option>
+                </select>
+                {isEditingBuiltinUser && <div className="muted">内置账号状态固定为启用。</div>}
               </label>
               <div className="form-label full-row">
                 可访问系统（可多选）
                 <div className="channel-row mfa-pill-row">
                   {systemAccessOptions.map((item) => {
                     const checked = (userForm.app_access || []).includes(item.key)
-                    const disabled = userForm.role === 'admin'
+                    const disabled = userForm.role === 'admin' || isEditingBuiltinUser
                     return (
                       <label key={item.key} className={`mfa-pill ${checked ? 'active' : ''} ${disabled ? 'disabled' : ''}`}>
                         <input
@@ -4046,7 +4503,8 @@ function App() {
                     )
                   })}
                 </div>
-                {userForm.role === 'admin' && <div className="muted">管理员默认可访问全部系统。</div>}
+                {userForm.role === 'admin' && <div className="muted">业务管理员默认可访问全部系统。</div>}
+                {isEditingBuiltinUser && <div className="muted">内置账号系统权限固定，不可修改。</div>}
               </div>
               <div className="form-actions">
                 <button type="submit" className="primary btn btn-primary">
@@ -4061,6 +4519,7 @@ function App() {
                       username: '',
                       password: '',
                       role: 'viewer',
+                      is_active: 1,
                       email: '',
                       phone: '',
                       wecom_id: '',
@@ -4073,23 +4532,32 @@ function App() {
               </div>
             </form>
 
-            <div className="table">
+            <div className="table users-table">
               <div className="table-row head">
+                <span>序号</span>
                 <span>账号</span>
                 <span>角色</span>
+                <span>状态</span>
                 <span>可访问系统</span>
                 <span>二次验证</span>
                 <span>创建时间</span>
                 <span>操作</span>
               </div>
-              {pagedUsers.items.map((u) => (
+              {pagedUsers.items.map((u, idx) => (
                 <div className="table-row" key={u.id}>
+                  <span>{(pagedUsers.current - 1) * PAGE_SIZE + idx + 1}</span>
                   <span>{u.username}</span>
-                  <span>{u.role}</span>
+                  <span>{roleLabel(u.role)}</span>
+                  <span>{Number(u.is_active) === 1 ? '启用' : '禁用'}</span>
                   <span>
-                    {(Array.isArray(u.app_access) ? u.app_access : defaultSystemAccess)
-                      .map((key) => systemAccessOptions.find((item) => item.key === key)?.label || key)
-                      .join('、') || '-'}
+                    <span className="app-access-text">
+                      {(Array.isArray(u.app_access) ? u.app_access : defaultSystemAccess)
+                        .map((key) => {
+                          const opt = systemAccessOptions.find((item) => item.key === key)
+                          return opt?.shortLabel || opt?.label || key
+                        })
+                        .join('、') || '-'}
+                    </span>
                   </span>
                   <span>
                     {(u.email ? '邮箱 ' : '')}
@@ -4101,8 +4569,18 @@ function App() {
                   <span>{u.created_at}</span>
                   <span className="actions">
                     <button onClick={() => onEditUser(u)}>编辑</button>
+                    <button
+                      onClick={() => onToggleUserActive(u)}
+                      disabled={BUILTIN_ROLE_USERNAMES.has(String(u.username || '').toLowerCase())}
+                    >
+                      {Number(u.is_active) === 1 ? '禁用' : '启用'}
+                    </button>
                     <button onClick={() => onResetUserPassword(u.id)}>重置密码</button>
-                    <button className="danger btn btn-outline-danger btn-sm" onClick={() => onDeleteUser(u.id)}>
+                    <button
+                      className="danger btn btn-outline-danger btn-sm"
+                      onClick={() => onDeleteUser(u.id)}
+                      disabled={BUILTIN_ROLE_USERNAMES.has(String(u.username || '').toLowerCase())}
+                    >
                       删除
                     </button>
                   </span>
@@ -4913,7 +5391,7 @@ function App() {
                     </label>
                   </div>
                   <p className="muted full-row">
-                    开启后，管理员登录需完成二次验证；请先在“用户管理”配置管理员的邮箱/手机号/企业微信或启用谷歌认证。
+                    开启后，受管账号登录需完成二次验证；请先在“用户管理”配置对应账号的邮箱/手机号/企业微信或启用谷歌认证。
                   </p>
                 </div>
               </div>

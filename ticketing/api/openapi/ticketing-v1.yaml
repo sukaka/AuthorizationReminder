@@ -1,0 +1,1796 @@
+openapi: 3.0.3
+info:
+  title: 工单系统 API
+  version: 1.0.0
+  description: 本文件为系统接口 OpenAPI 定义，字段说明均为中文注释。
+servers:
+- url: http://localhost:5182
+tags:
+- name: calendar
+  description: 工单日历接口
+- name: dashboard
+  description: 统计看板接口
+- name: departments
+  description: 部门字典接口
+- name: health
+  description: 健康检查接口
+- name: notifications
+  description: 通知中心接口
+- name: projects
+  description: 项目管理与权限接口
+- name: reports
+  description: 报表统计接口
+- name: schedules
+  description: 排期管理接口
+- name: service-catalog
+  description: 服务目录接口
+- name: templates
+  description: 模板管理接口
+- name: tickets
+  description: 工单管理接口
+- name: users
+  description: 用户管理接口
+paths:
+  "/api/calendar/month":
+    get:
+      summary: 查询 /api/calendar/month
+      operationId: get_api_calendar_month
+      tags:
+      - calendar
+      security:
+      - bearerAuth: []
+      responses:
+        '200':
+          description: 请求成功
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/GenericObject"
+        '400':
+          description: 请求参数错误
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/ErrorResponse"
+        '401':
+          description: 未认证或登录已过期
+        '403':
+          description: 无权限访问
+        '500':
+          description: 服务内部错误
+      description: 查询 /api/calendar/month 需在 Authorization 请求头中携带 Bearer Token。 请求体和返回字段请参考下方
+        schema。
+  "/api/dashboard/department":
+    get:
+      summary: 查询 /api/dashboard/department
+      operationId: get_api_dashboard_department
+      tags:
+      - dashboard
+      security:
+      - bearerAuth: []
+      responses:
+        '200':
+          description: 请求成功
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/GenericObject"
+        '400':
+          description: 请求参数错误
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/ErrorResponse"
+        '401':
+          description: 未认证或登录已过期
+        '403':
+          description: 无权限访问
+        '500':
+          description: 服务内部错误
+      description: 查询 /api/dashboard/department 需在 Authorization 请求头中携带 Bearer Token。
+        请求体和返回字段请参考下方 schema。
+  "/api/dashboard/sla-groups":
+    get:
+      summary: 查询 /api/dashboard/sla-groups
+      operationId: get_api_dashboard_sla_groups
+      tags:
+      - dashboard
+      security:
+      - bearerAuth: []
+      responses:
+        '200':
+          description: 请求成功
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/GenericObject"
+        '400':
+          description: 请求参数错误
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/ErrorResponse"
+        '401':
+          description: 未认证或登录已过期
+        '403':
+          description: 无权限访问
+        '500':
+          description: 服务内部错误
+      description: 查询 /api/dashboard/sla-groups 需在 Authorization 请求头中携带 Bearer Token。
+        请求体和返回字段请参考下方 schema。
+  "/api/departments":
+    get:
+      summary: 查询 /api/departments
+      operationId: get_api_departments
+      tags:
+      - departments
+      security:
+      - bearerAuth: []
+      responses:
+        '200':
+          description: 请求成功
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/GenericObject"
+        '400':
+          description: 请求参数错误
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/ErrorResponse"
+        '401':
+          description: 未认证或登录已过期
+        '403':
+          description: 无权限访问
+        '500':
+          description: 服务内部错误
+      description: 查询 /api/departments 需在 Authorization 请求头中携带 Bearer Token。 请求体和返回字段请参考下方
+        schema。
+  "/api/notifications":
+    get:
+      summary: 查询 /api/notifications
+      operationId: get_api_notifications
+      tags:
+      - notifications
+      security:
+      - bearerAuth: []
+      responses:
+        '200':
+          description: 请求成功
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/GenericObject"
+        '400':
+          description: 请求参数错误
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/ErrorResponse"
+        '401':
+          description: 未认证或登录已过期
+        '403':
+          description: 无权限访问
+        '500':
+          description: 服务内部错误
+      description: 查询 /api/notifications 需在 Authorization 请求头中携带 Bearer Token。 请求体和返回字段请参考下方
+        schema。
+  "/api/notifications/{id}/read":
+    put:
+      summary: 更新 /api/notifications/{id}/read
+      operationId: put_api_notifications_id_read
+      tags:
+      - notifications
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: 主键ID
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              "$ref": "#/components/schemas/GenericObject"
+        description: 请求体参数
+      responses:
+        '200':
+          description: 请求成功
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/GenericObject"
+        '400':
+          description: 请求参数错误
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/ErrorResponse"
+        '401':
+          description: 未认证或登录已过期
+        '403':
+          description: 无权限访问
+        '500':
+          description: 服务内部错误
+      description: 更新 /api/notifications/{id}/read 需在 Authorization 请求头中携带 Bearer
+        Token。 请求体和返回字段请参考下方 schema。
+  "/api/notifications/read-all":
+    put:
+      summary: 更新 /api/notifications/read-all
+      operationId: put_api_notifications_read_all
+      tags:
+      - notifications
+      security:
+      - bearerAuth: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              "$ref": "#/components/schemas/GenericObject"
+        description: 请求体参数
+      responses:
+        '200':
+          description: 请求成功
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/GenericObject"
+        '400':
+          description: 请求参数错误
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/ErrorResponse"
+        '401':
+          description: 未认证或登录已过期
+        '403':
+          description: 无权限访问
+        '500':
+          description: 服务内部错误
+      description: 更新 /api/notifications/read-all 需在 Authorization 请求头中携带 Bearer Token。
+        请求体和返回字段请参考下方 schema。
+  "/api/projects":
+    get:
+      summary: 查询 /api/projects
+      operationId: get_api_projects
+      tags:
+      - projects
+      security:
+      - bearerAuth: []
+      responses:
+        '200':
+          description: 请求成功
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/GenericObject"
+        '400':
+          description: 请求参数错误
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/ErrorResponse"
+        '401':
+          description: 未认证或登录已过期
+        '403':
+          description: 无权限访问
+        '500':
+          description: 服务内部错误
+      description: 查询 /api/projects 需在 Authorization 请求头中携带 Bearer Token。 请求体和返回字段请参考下方
+        schema。
+    post:
+      summary: 创建/执行 /api/projects
+      operationId: post_api_projects
+      tags:
+      - projects
+      security:
+      - bearerAuth: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              "$ref": "#/components/schemas/GenericObject"
+        description: 请求体参数
+      responses:
+        '200':
+          description: 请求成功
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/GenericObject"
+        '400':
+          description: 请求参数错误
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/ErrorResponse"
+        '401':
+          description: 未认证或登录已过期
+        '403':
+          description: 无权限访问
+        '500':
+          description: 服务内部错误
+      description: 创建/执行 /api/projects 需在 Authorization 请求头中携带 Bearer Token。 请求体和返回字段请参考下方
+        schema。
+  "/api/projects/{id}":
+    put:
+      summary: 更新 /api/projects/{id}
+      operationId: put_api_projects_id
+      tags:
+      - projects
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: 主键ID
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              "$ref": "#/components/schemas/GenericObject"
+        description: 请求体参数
+      responses:
+        '200':
+          description: 请求成功
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/GenericObject"
+        '400':
+          description: 请求参数错误
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/ErrorResponse"
+        '401':
+          description: 未认证或登录已过期
+        '403':
+          description: 无权限访问
+        '500':
+          description: 服务内部错误
+      description: 更新 /api/projects/{id} 需在 Authorization 请求头中携带 Bearer Token。 请求体和返回字段请参考下方
+        schema。
+    delete:
+      summary: 删除 /api/projects/{id}
+      operationId: delete_api_projects_id
+      tags:
+      - projects
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: 主键ID
+      responses:
+        '200':
+          description: 请求成功
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/GenericObject"
+        '400':
+          description: 请求参数错误
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/ErrorResponse"
+        '401':
+          description: 未认证或登录已过期
+        '403':
+          description: 无权限访问
+        '500':
+          description: 服务内部错误
+      description: 删除 /api/projects/{id} 需在 Authorization 请求头中携带 Bearer Token。 请求体和返回字段请参考下方
+        schema。
+  "/api/projects/{id}/gantt":
+    get:
+      summary: 查询 /api/projects/{id}/gantt
+      operationId: get_api_projects_id_gantt
+      tags:
+      - projects
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: 主键ID
+      responses:
+        '200':
+          description: 请求成功
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/GenericObject"
+        '400':
+          description: 请求参数错误
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/ErrorResponse"
+        '401':
+          description: 未认证或登录已过期
+        '403':
+          description: 无权限访问
+        '500':
+          description: 服务内部错误
+      description: 查询 /api/projects/{id}/gantt 需在 Authorization 请求头中携带 Bearer Token。
+        请求体和返回字段请参考下方 schema。
+  "/api/projects/{id}/permissions":
+    get:
+      summary: 查询 /api/projects/{id}/permissions
+      operationId: get_api_projects_id_permissions
+      tags:
+      - projects
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: 主键ID
+      responses:
+        '200':
+          description: 请求成功
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/GenericObject"
+        '400':
+          description: 请求参数错误
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/ErrorResponse"
+        '401':
+          description: 未认证或登录已过期
+        '403':
+          description: 无权限访问
+        '500':
+          description: 服务内部错误
+      description: 查询 /api/projects/{id}/permissions 需在 Authorization 请求头中携带 Bearer
+        Token。 请求体和返回字段请参考下方 schema。
+    put:
+      summary: 更新 /api/projects/{id}/permissions
+      operationId: put_api_projects_id_permissions
+      tags:
+      - projects
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: 主键ID
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              "$ref": "#/components/schemas/GenericObject"
+        description: 请求体参数
+      responses:
+        '200':
+          description: 请求成功
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/GenericObject"
+        '400':
+          description: 请求参数错误
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/ErrorResponse"
+        '401':
+          description: 未认证或登录已过期
+        '403':
+          description: 无权限访问
+        '500':
+          description: 服务内部错误
+      description: 更新 /api/projects/{id}/permissions 需在 Authorization 请求头中携带 Bearer
+        Token。 请求体和返回字段请参考下方 schema。
+  "/api/projects/{id}/permissions/logs":
+    get:
+      summary: 查询 /api/projects/{id}/permissions/logs
+      operationId: get_api_projects_id_permissions_logs
+      tags:
+      - projects
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: 主键ID
+      responses:
+        '200':
+          description: 请求成功
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/GenericObject"
+        '400':
+          description: 请求参数错误
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/ErrorResponse"
+        '401':
+          description: 未认证或登录已过期
+        '403':
+          description: 无权限访问
+        '500':
+          description: 服务内部错误
+      description: 查询 /api/projects/{id}/permissions/logs 需在 Authorization 请求头中携带
+        Bearer Token。 请求体和返回字段请参考下方 schema。
+  "/api/projects/{id}/permissions/logs/export":
+    get:
+      summary: 查询 /api/projects/{id}/permissions/logs/export
+      operationId: get_api_projects_id_permissions_logs_export
+      tags:
+      - projects
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: 主键ID
+      responses:
+        '200':
+          description: 请求成功
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/GenericObject"
+        '400':
+          description: 请求参数错误
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/ErrorResponse"
+        '401':
+          description: 未认证或登录已过期
+        '403':
+          description: 无权限访问
+        '500':
+          description: 服务内部错误
+      description: 查询 /api/projects/{id}/permissions/logs/export 需在 Authorization
+        请求头中携带 Bearer Token。 请求体和返回字段请参考下方 schema。
+  "/api/reports/summary":
+    get:
+      summary: 查询 /api/reports/summary
+      operationId: get_api_reports_summary
+      tags:
+      - reports
+      security:
+      - bearerAuth: []
+      responses:
+        '200':
+          description: 请求成功
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/GenericObject"
+        '400':
+          description: 请求参数错误
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/ErrorResponse"
+        '401':
+          description: 未认证或登录已过期
+        '403':
+          description: 无权限访问
+        '500':
+          description: 服务内部错误
+      description: 查询 /api/reports/summary 需在 Authorization 请求头中携带 Bearer Token。 请求体和返回字段请参考下方
+        schema。
+  "/api/schedules":
+    get:
+      summary: 查询 /api/schedules
+      operationId: get_api_schedules
+      tags:
+      - schedules
+      security:
+      - bearerAuth: []
+      responses:
+        '200':
+          description: 请求成功
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/GenericObject"
+        '400':
+          description: 请求参数错误
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/ErrorResponse"
+        '401':
+          description: 未认证或登录已过期
+        '403':
+          description: 无权限访问
+        '500':
+          description: 服务内部错误
+      description: 查询 /api/schedules 需在 Authorization 请求头中携带 Bearer Token。 请求体和返回字段请参考下方
+        schema。
+    post:
+      summary: 创建/执行 /api/schedules
+      operationId: post_api_schedules
+      tags:
+      - schedules
+      security:
+      - bearerAuth: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              "$ref": "#/components/schemas/GenericObject"
+        description: 请求体参数
+      responses:
+        '200':
+          description: 请求成功
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/GenericObject"
+        '400':
+          description: 请求参数错误
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/ErrorResponse"
+        '401':
+          description: 未认证或登录已过期
+        '403':
+          description: 无权限访问
+        '500':
+          description: 服务内部错误
+      description: 创建/执行 /api/schedules 需在 Authorization 请求头中携带 Bearer Token。 请求体和返回字段请参考下方
+        schema。
+  "/api/service-catalog":
+    get:
+      summary: 查询 /api/service-catalog
+      operationId: get_api_service_catalog
+      tags:
+      - service-catalog
+      security:
+      - bearerAuth: []
+      responses:
+        '200':
+          description: 请求成功
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/GenericObject"
+        '400':
+          description: 请求参数错误
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/ErrorResponse"
+        '401':
+          description: 未认证或登录已过期
+        '403':
+          description: 无权限访问
+        '500':
+          description: 服务内部错误
+      description: 查询 /api/service-catalog 需在 Authorization 请求头中携带 Bearer Token。 请求体和返回字段请参考下方
+        schema。
+  "/api/templates":
+    get:
+      summary: 查询 /api/templates
+      operationId: get_api_templates
+      tags:
+      - templates
+      security:
+      - bearerAuth: []
+      responses:
+        '200':
+          description: 请求成功
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/GenericObject"
+        '400':
+          description: 请求参数错误
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/ErrorResponse"
+        '401':
+          description: 未认证或登录已过期
+        '403':
+          description: 无权限访问
+        '500':
+          description: 服务内部错误
+      description: 查询 /api/templates 需在 Authorization 请求头中携带 Bearer Token。 请求体和返回字段请参考下方
+        schema。
+  "/api/templates/{id}":
+    get:
+      summary: 查询 /api/templates/{id}
+      operationId: get_api_templates_id
+      tags:
+      - templates
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: 主键ID
+      responses:
+        '200':
+          description: 请求成功
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/GenericObject"
+        '400':
+          description: 请求参数错误
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/ErrorResponse"
+        '401':
+          description: 未认证或登录已过期
+        '403':
+          description: 无权限访问
+        '500':
+          description: 服务内部错误
+      description: 查询 /api/templates/{id} 需在 Authorization 请求头中携带 Bearer Token。 请求体和返回字段请参考下方
+        schema。
+  "/api/templates/import":
+    post:
+      summary: 创建/执行 /api/templates/import
+      operationId: post_api_templates_import
+      tags:
+      - templates
+      security:
+      - bearerAuth: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              "$ref": "#/components/schemas/GenericObject"
+        description: 请求体参数
+      responses:
+        '200':
+          description: 请求成功
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/GenericObject"
+        '400':
+          description: 请求参数错误
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/ErrorResponse"
+        '401':
+          description: 未认证或登录已过期
+        '403':
+          description: 无权限访问
+        '500':
+          description: 服务内部错误
+      description: 创建/执行 /api/templates/import 需在 Authorization 请求头中携带 Bearer Token。
+        请求体和返回字段请参考下方 schema。
+  "/api/tickets":
+    get:
+      summary: 查询 /api/tickets
+      operationId: get_api_tickets
+      tags:
+      - tickets
+      security:
+      - bearerAuth: []
+      responses:
+        '200':
+          description: 请求成功
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/GenericObject"
+        '400':
+          description: 请求参数错误
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/ErrorResponse"
+        '401':
+          description: 未认证或登录已过期
+        '403':
+          description: 无权限访问
+        '500':
+          description: 服务内部错误
+      description: 查询 /api/tickets 需在 Authorization 请求头中携带 Bearer Token。 请求体和返回字段请参考下方
+        schema。
+    post:
+      summary: 创建/执行 /api/tickets
+      operationId: post_api_tickets
+      tags:
+      - tickets
+      security:
+      - bearerAuth: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              "$ref": "#/components/schemas/GenericObject"
+        description: 请求体参数
+      responses:
+        '200':
+          description: 请求成功
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/GenericObject"
+        '400':
+          description: 请求参数错误
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/ErrorResponse"
+        '401':
+          description: 未认证或登录已过期
+        '403':
+          description: 无权限访问
+        '500':
+          description: 服务内部错误
+      description: 创建/执行 /api/tickets 需在 Authorization 请求头中携带 Bearer Token。 请求体和返回字段请参考下方
+        schema。
+  "/api/tickets/{id}":
+    get:
+      summary: 查询 /api/tickets/{id}
+      operationId: get_api_tickets_id
+      tags:
+      - tickets
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: 主键ID
+      responses:
+        '200':
+          description: 请求成功
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/GenericObject"
+        '400':
+          description: 请求参数错误
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/ErrorResponse"
+        '401':
+          description: 未认证或登录已过期
+        '403':
+          description: 无权限访问
+        '500':
+          description: 服务内部错误
+      description: 查询 /api/tickets/{id} 需在 Authorization 请求头中携带 Bearer Token。 请求体和返回字段请参考下方
+        schema。
+    put:
+      summary: 更新 /api/tickets/{id}
+      operationId: put_api_tickets_id
+      tags:
+      - tickets
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: 主键ID
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              "$ref": "#/components/schemas/GenericObject"
+        description: 请求体参数
+      responses:
+        '200':
+          description: 请求成功
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/GenericObject"
+        '400':
+          description: 请求参数错误
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/ErrorResponse"
+        '401':
+          description: 未认证或登录已过期
+        '403':
+          description: 无权限访问
+        '500':
+          description: 服务内部错误
+      description: 更新 /api/tickets/{id} 需在 Authorization 请求头中携带 Bearer Token。 请求体和返回字段请参考下方
+        schema。
+    delete:
+      summary: 删除 /api/tickets/{id}
+      operationId: delete_api_tickets_id
+      tags:
+      - tickets
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: 主键ID
+      responses:
+        '200':
+          description: 请求成功
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/GenericObject"
+        '400':
+          description: 请求参数错误
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/ErrorResponse"
+        '401':
+          description: 未认证或登录已过期
+        '403':
+          description: 无权限访问
+        '500':
+          description: 服务内部错误
+      description: 删除 /api/tickets/{id} 需在 Authorization 请求头中携带 Bearer Token。 请求体和返回字段请参考下方
+        schema。
+  "/api/tickets/{id}/approval":
+    post:
+      summary: 创建/执行 /api/tickets/{id}/approval
+      operationId: post_api_tickets_id_approval
+      tags:
+      - tickets
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: 主键ID
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              "$ref": "#/components/schemas/GenericObject"
+        description: 请求体参数
+      responses:
+        '200':
+          description: 请求成功
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/GenericObject"
+        '400':
+          description: 请求参数错误
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/ErrorResponse"
+        '401':
+          description: 未认证或登录已过期
+        '403':
+          description: 无权限访问
+        '500':
+          description: 服务内部错误
+      description: 创建/执行 /api/tickets/{id}/approval 需在 Authorization 请求头中携带 Bearer
+        Token。 请求体和返回字段请参考下方 schema。
+  "/api/tickets/{id}/assignees":
+    get:
+      summary: 查询 /api/tickets/{id}/assignees
+      operationId: get_api_tickets_id_assignees
+      tags:
+      - tickets
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: 主键ID
+      responses:
+        '200':
+          description: 请求成功
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/GenericObject"
+        '400':
+          description: 请求参数错误
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/ErrorResponse"
+        '401':
+          description: 未认证或登录已过期
+        '403':
+          description: 无权限访问
+        '500':
+          description: 服务内部错误
+      description: 查询 /api/tickets/{id}/assignees 需在 Authorization 请求头中携带 Bearer Token。
+        请求体和返回字段请参考下方 schema。
+    put:
+      summary: 更新 /api/tickets/{id}/assignees
+      operationId: put_api_tickets_id_assignees
+      tags:
+      - tickets
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: 主键ID
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              "$ref": "#/components/schemas/GenericObject"
+        description: 请求体参数
+      responses:
+        '200':
+          description: 请求成功
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/GenericObject"
+        '400':
+          description: 请求参数错误
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/ErrorResponse"
+        '401':
+          description: 未认证或登录已过期
+        '403':
+          description: 无权限访问
+        '500':
+          description: 服务内部错误
+      description: 更新 /api/tickets/{id}/assignees 需在 Authorization 请求头中携带 Bearer Token。
+        请求体和返回字段请参考下方 schema。
+  "/api/tickets/{id}/attachments":
+    get:
+      summary: 查询 /api/tickets/{id}/attachments
+      operationId: get_api_tickets_id_attachments
+      tags:
+      - tickets
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: 主键ID
+      responses:
+        '200':
+          description: 请求成功
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/GenericObject"
+        '400':
+          description: 请求参数错误
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/ErrorResponse"
+        '401':
+          description: 未认证或登录已过期
+        '403':
+          description: 无权限访问
+        '500':
+          description: 服务内部错误
+      description: 查询 /api/tickets/{id}/attachments 需在 Authorization 请求头中携带 Bearer
+        Token。 请求体和返回字段请参考下方 schema。
+    post:
+      summary: 创建/执行 /api/tickets/{id}/attachments
+      operationId: post_api_tickets_id_attachments
+      tags:
+      - tickets
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: 主键ID
+      requestBody:
+        required: false
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file:
+                  type: string
+                  format: binary
+        description: 请求体参数
+      responses:
+        '200':
+          description: 请求成功
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/GenericObject"
+        '400':
+          description: 请求参数错误
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/ErrorResponse"
+        '401':
+          description: 未认证或登录已过期
+        '403':
+          description: 无权限访问
+        '500':
+          description: 服务内部错误
+      description: 创建/执行 /api/tickets/{id}/attachments 需在 Authorization 请求头中携带 Bearer
+        Token。 请求体和返回字段请参考下方 schema。
+  "/api/tickets/{id}/attachments/{attachmentId}":
+    delete:
+      summary: 删除 /api/tickets/{id}/attachments/{attachmentId}
+      operationId: delete_api_tickets_id_attachments_attachmentid
+      tags:
+      - tickets
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: 主键ID
+      - name: attachmentId
+        in: path
+        required: true
+        schema:
+          type: string
+        description: 附件ID
+      responses:
+        '200':
+          description: 请求成功
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/GenericObject"
+        '400':
+          description: 请求参数错误
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/ErrorResponse"
+        '401':
+          description: 未认证或登录已过期
+        '403':
+          description: 无权限访问
+        '500':
+          description: 服务内部错误
+      description: 删除 /api/tickets/{id}/attachments/{attachmentId} 需在 Authorization
+        请求头中携带 Bearer Token。 请求体和返回字段请参考下方 schema。
+  "/api/tickets/{id}/attachments/{attachmentId}/content":
+    get:
+      summary: 查询 /api/tickets/{id}/attachments/{attachmentId}/content
+      operationId: get_api_tickets_id_attachments_attachmentid_content
+      tags:
+      - tickets
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: 主键ID
+      - name: attachmentId
+        in: path
+        required: true
+        schema:
+          type: string
+        description: 附件ID
+      responses:
+        '200':
+          description: 请求成功
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/GenericObject"
+        '400':
+          description: 请求参数错误
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/ErrorResponse"
+        '401':
+          description: 未认证或登录已过期
+        '403':
+          description: 无权限访问
+        '500':
+          description: 服务内部错误
+      description: 查询 /api/tickets/{id}/attachments/{attachmentId}/content 需在 Authorization
+        请求头中携带 Bearer Token。 请求体和返回字段请参考下方 schema。
+  "/api/tickets/{id}/comments":
+    get:
+      summary: 查询 /api/tickets/{id}/comments
+      operationId: get_api_tickets_id_comments
+      tags:
+      - tickets
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: 主键ID
+      responses:
+        '200':
+          description: 请求成功
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/GenericObject"
+        '400':
+          description: 请求参数错误
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/ErrorResponse"
+        '401':
+          description: 未认证或登录已过期
+        '403':
+          description: 无权限访问
+        '500':
+          description: 服务内部错误
+      description: 查询 /api/tickets/{id}/comments 需在 Authorization 请求头中携带 Bearer Token。
+        请求体和返回字段请参考下方 schema。
+    post:
+      summary: 创建/执行 /api/tickets/{id}/comments
+      operationId: post_api_tickets_id_comments
+      tags:
+      - tickets
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: 主键ID
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              "$ref": "#/components/schemas/GenericObject"
+        description: 请求体参数
+      responses:
+        '200':
+          description: 请求成功
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/GenericObject"
+        '400':
+          description: 请求参数错误
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/ErrorResponse"
+        '401':
+          description: 未认证或登录已过期
+        '403':
+          description: 无权限访问
+        '500':
+          description: 服务内部错误
+      description: 创建/执行 /api/tickets/{id}/comments 需在 Authorization 请求头中携带 Bearer
+        Token。 请求体和返回字段请参考下方 schema。
+  "/api/tickets/{id}/deliverables/{deliverableId}":
+    put:
+      summary: 更新 /api/tickets/{id}/deliverables/{deliverableId}
+      operationId: put_api_tickets_id_deliverables_deliverableid
+      tags:
+      - tickets
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: 主键ID
+      - name: deliverableId
+        in: path
+        required: true
+        schema:
+          type: string
+        description: 交付物ID
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              "$ref": "#/components/schemas/GenericObject"
+        description: 请求体参数
+      responses:
+        '200':
+          description: 请求成功
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/GenericObject"
+        '400':
+          description: 请求参数错误
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/ErrorResponse"
+        '401':
+          description: 未认证或登录已过期
+        '403':
+          description: 无权限访问
+        '500':
+          description: 服务内部错误
+      description: 更新 /api/tickets/{id}/deliverables/{deliverableId} 需在 Authorization
+        请求头中携带 Bearer Token。 请求体和返回字段请参考下方 schema。
+  "/api/tickets/{id}/events":
+    get:
+      summary: 查询 /api/tickets/{id}/events
+      operationId: get_api_tickets_id_events
+      tags:
+      - tickets
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: 主键ID
+      responses:
+        '200':
+          description: 请求成功
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/GenericObject"
+        '400':
+          description: 请求参数错误
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/ErrorResponse"
+        '401':
+          description: 未认证或登录已过期
+        '403':
+          description: 无权限访问
+        '500':
+          description: 服务内部错误
+      description: 查询 /api/tickets/{id}/events 需在 Authorization 请求头中携带 Bearer Token。
+        请求体和返回字段请参考下方 schema。
+  "/api/tickets/{id}/events/export":
+    get:
+      summary: 查询 /api/tickets/{id}/events/export
+      operationId: get_api_tickets_id_events_export
+      tags:
+      - tickets
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: 主键ID
+      responses:
+        '200':
+          description: 请求成功
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/GenericObject"
+        '400':
+          description: 请求参数错误
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/ErrorResponse"
+        '401':
+          description: 未认证或登录已过期
+        '403':
+          description: 无权限访问
+        '500':
+          description: 服务内部错误
+      description: 查询 /api/tickets/{id}/events/export 需在 Authorization 请求头中携带 Bearer
+        Token。 请求体和返回字段请参考下方 schema。
+  "/api/tickets/{id}/schedule":
+    post:
+      summary: 创建/执行 /api/tickets/{id}/schedule
+      operationId: post_api_tickets_id_schedule
+      tags:
+      - tickets
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: 主键ID
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              "$ref": "#/components/schemas/GenericObject"
+        description: 请求体参数
+      responses:
+        '200':
+          description: 请求成功
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/GenericObject"
+        '400':
+          description: 请求参数错误
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/ErrorResponse"
+        '401':
+          description: 未认证或登录已过期
+        '403':
+          description: 无权限访问
+        '500':
+          description: 服务内部错误
+      description: 创建/执行 /api/tickets/{id}/schedule 需在 Authorization 请求头中携带 Bearer
+        Token。 请求体和返回字段请参考下方 schema。
+  "/api/tickets/{id}/stages":
+    get:
+      summary: 查询 /api/tickets/{id}/stages
+      operationId: get_api_tickets_id_stages
+      tags:
+      - tickets
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: 主键ID
+      responses:
+        '200':
+          description: 请求成功
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/GenericObject"
+        '400':
+          description: 请求参数错误
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/ErrorResponse"
+        '401':
+          description: 未认证或登录已过期
+        '403':
+          description: 无权限访问
+        '500':
+          description: 服务内部错误
+      description: 查询 /api/tickets/{id}/stages 需在 Authorization 请求头中携带 Bearer Token。
+        请求体和返回字段请参考下方 schema。
+  "/api/tickets/{id}/stages/{stageId}":
+    put:
+      summary: 更新 /api/tickets/{id}/stages/{stageId}
+      operationId: put_api_tickets_id_stages_stageid
+      tags:
+      - tickets
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: 主键ID
+      - name: stageId
+        in: path
+        required: true
+        schema:
+          type: string
+        description: 阶段ID
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              "$ref": "#/components/schemas/GenericObject"
+        description: 请求体参数
+      responses:
+        '200':
+          description: 请求成功
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/GenericObject"
+        '400':
+          description: 请求参数错误
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/ErrorResponse"
+        '401':
+          description: 未认证或登录已过期
+        '403':
+          description: 无权限访问
+        '500':
+          description: 服务内部错误
+      description: 更新 /api/tickets/{id}/stages/{stageId} 需在 Authorization 请求头中携带 Bearer
+        Token。 请求体和返回字段请参考下方 schema。
+  "/api/tickets/{id}/stages/from-template":
+    post:
+      summary: 创建/执行 /api/tickets/{id}/stages/from-template
+      operationId: post_api_tickets_id_stages_from_template
+      tags:
+      - tickets
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: 主键ID
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              "$ref": "#/components/schemas/GenericObject"
+        description: 请求体参数
+      responses:
+        '200':
+          description: 请求成功
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/GenericObject"
+        '400':
+          description: 请求参数错误
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/ErrorResponse"
+        '401':
+          description: 未认证或登录已过期
+        '403':
+          description: 无权限访问
+        '500':
+          description: 服务内部错误
+      description: 创建/执行 /api/tickets/{id}/stages/from-template 需在 Authorization 请求头中携带
+        Bearer Token。 请求体和返回字段请参考下方 schema。
+  "/api/tickets/{id}/watchers":
+    get:
+      summary: 查询 /api/tickets/{id}/watchers
+      operationId: get_api_tickets_id_watchers
+      tags:
+      - tickets
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: 主键ID
+      responses:
+        '200':
+          description: 请求成功
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/GenericObject"
+        '400':
+          description: 请求参数错误
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/ErrorResponse"
+        '401':
+          description: 未认证或登录已过期
+        '403':
+          description: 无权限访问
+        '500':
+          description: 服务内部错误
+      description: 查询 /api/tickets/{id}/watchers 需在 Authorization 请求头中携带 Bearer Token。
+        请求体和返回字段请参考下方 schema。
+    put:
+      summary: 更新 /api/tickets/{id}/watchers
+      operationId: put_api_tickets_id_watchers
+      tags:
+      - tickets
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: 主键ID
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              "$ref": "#/components/schemas/GenericObject"
+        description: 请求体参数
+      responses:
+        '200':
+          description: 请求成功
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/GenericObject"
+        '400':
+          description: 请求参数错误
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/ErrorResponse"
+        '401':
+          description: 未认证或登录已过期
+        '403':
+          description: 无权限访问
+        '500':
+          description: 服务内部错误
+      description: 更新 /api/tickets/{id}/watchers 需在 Authorization 请求头中携带 Bearer Token。
+        请求体和返回字段请参考下方 schema。
+  "/api/users":
+    get:
+      summary: 查询 /api/users
+      operationId: get_api_users
+      tags:
+      - users
+      security:
+      - bearerAuth: []
+      responses:
+        '200':
+          description: 请求成功
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/GenericObject"
+        '400':
+          description: 请求参数错误
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/ErrorResponse"
+        '401':
+          description: 未认证或登录已过期
+        '403':
+          description: 无权限访问
+        '500':
+          description: 服务内部错误
+      description: 查询 /api/users 需在 Authorization 请求头中携带 Bearer Token。 请求体和返回字段请参考下方
+        schema。
+  "/health":
+    get:
+      summary: 查询 /health
+      operationId: get_health
+      tags:
+      - health
+      responses:
+        '200':
+          description: 请求成功
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/GenericObject"
+        '400':
+          description: 请求参数错误
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/ErrorResponse"
+        '401':
+          description: 未认证或登录已过期
+        '403':
+          description: 无权限访问
+        '500':
+          description: 服务内部错误
+      description: 查询 /health 该接口默认无需鉴权（具体以服务端策略为准）。 请求体和返回字段请参考下方 schema。
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  schemas:
+    GenericObject:
+      type: object
+      additionalProperties: true
+      description: GenericObject 数据模型
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+          description: 字段：error
+        message:
+          type: string
+          description: 字段：message
+      description: ErrorResponse 数据模型

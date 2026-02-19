@@ -1,0 +1,17 @@
+{
+  "$jsonSchema": {
+    "bsonType": "object",
+    "required": ["job_id", "ci_uid", "winner_source", "resolved", "created_at"],
+    "properties": {
+      "job_id": { "bsonType": "string" },
+      "ci_uid": { "bsonType": "string" },
+      "conflicts": {
+        "bsonType": "array",
+        "items": { "bsonType": "object" }
+      },
+      "winner_source": { "bsonType": "string" },
+      "resolved": { "bsonType": "bool" },
+      "created_at": { "bsonType": "date" }
+    }
+  }
+}

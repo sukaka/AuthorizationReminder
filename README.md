@@ -10,6 +10,7 @@
 - 发送渠道配置：邮箱、阿里云短信、企业微信（支持 Webhook 或应用消息）
 - 仪表盘：到期统计、渠道统计、趋势等
 - 操作日志：登录/登出/关键操作记录，支持筛选与导出
+- 审计验签：支持失败原因、失败记录ID展示与核验报告导出
 - 安全配置：登录失败限制、登录验证码
 - 账号安全：每个用户可独立启用二次验证与谷歌认证（支持扫码）
 
@@ -23,6 +24,10 @@ docker compose up --build
 - 后端：`http://localhost:5179`
 - 工单系统前端：`http://localhost:8081`
 - 工单系统后端：`http://localhost:5182`
+- 库存系统前端：`http://localhost:8082`
+- 库存系统后端：`http://localhost:5183`
+- CMDB系统前端：`http://localhost:8090`
+- CMDB系统后端：容器内部 `:8088`（通过 `http://localhost:8090/api` 访问）
 
 默认数据库端口映射：主机 `3308` → 容器 `3306`。
 
@@ -37,11 +42,28 @@ docker compose up --build mysql auth ticketing web-ticketing
 docker compose up --build mysql auth api web
 ```
 
-## 默认账号
-- 用户名：`admin`
-- 密码：`123456`
+仅启动库存系统：
+```bash
+docker compose up --build mysql auth inventory-api web-inventory
+```
 
-首次登录后请尽快修改密码。
+仅启动CMDB系统：
+```bash
+docker compose up --build mysql auth cmdb-mongo cmdb-mysql-init cmdb web-cmdb
+```
+
+若你之前在 `cmdb/deploy` 目录单独启动过 CMDB，请先执行：
+```bash
+docker compose -f cmdb/deploy/docker-compose.yml down
+```
+
+## 默认账号（内置）
+- `admin`：业务管理员（客户/联系人/授权/发送计划/发送配置）
+- `sysadmin`：系统管理员（用户管理/安全配置）
+- `auditor`：审计管理员（操作日志查看/导出/验签）
+- 默认密码：`123456`（可通过 `BUILTIN_ACCOUNT_DEFAULT_PASSWORD` 覆盖）
+
+首次登录后请立即修改默认密码。
 
 ## 运行环境与端口
 - 前端（Nginx）：`8080`
@@ -49,6 +71,10 @@ docker compose up --build mysql auth api web
 - 认证服务（SSO）：`5180`
 - 工单系统前端（Nginx）：`8081`
 - 工单系统后端（Node/Express）：`5182`
+- 库存系统前端（Nginx）：`8082`
+- 库存系统后端（Node/Express）：`5183`
+- CMDB系统前端（Nginx）：`8090`
+- CMDB系统后端（Go）：容器内部 `8088`
 - MySQL：`3308`（宿主机）
 
 ## 配置说明
@@ -57,11 +83,14 @@ docker compose up --build mysql auth api web
 - `JWT_SECRET`：JWT 签名密钥（建议生产环境配置）
 - `CSRF_SECURE`：是否强制 CSRF Cookie 为 `Secure`（HTTPS 场景设置为 `true`）
 - `CONFIG_SECRET_KEY`：用于加密存储邮箱密码/短信密钥/企业微信 Secret（建议至少 32 位随机字符串）
+- `BUILTIN_ACCOUNT_DEFAULT_PASSWORD`：内置账号初始密码（仅首次创建时生效）
+- `AUDIT_SIGNING_KEY`：审计日志签名密钥（建议生产环境配置独立密钥）
 
 在 `docker-compose.yml` 的 `auth` 环境变量中配置：
 - `CORS_ORIGINS`：允许的来源
 - `JWT_SECRET`：必须与 `api` 保持一致
 - `CONFIG_SECRET_KEY`：与 `api` 保持一致
+- `AUDIT_SIGNING_KEY`：审计日志签名密钥（建议与 `JWT_SECRET` 独立）
 
 数据库可配置：
 - `MYSQL_HOST` / `MYSQL_PORT`
@@ -111,11 +140,11 @@ docker compose up --build mysql auth api web
 - **应用消息（联系人个人）**：发送给联系人个人。  
   需要配置 `企业ID / 应用Secret / AgentId`，且联系人必须有 `企业微信号(wecom_id)`。
 
-## 权限与数据范围
-- 管理员可查看全部数据  
-- 非管理员登录（手机号）只能看到与**自己关联客户**的数据  
-  - 关联规则：用户手机号 = 联系人手机号  
-  - 联系人关联的客户就是用户可见范围  
+## 权限模型（等保职责分离）
+- `admin`：仅业务操作，不可管理用户，不可修改安全策略，不可查看审计日志
+- `sysadmin`：仅用户管理与安全策略，不可访问业务数据
+- `auditor`：仅审计日志（查看/导出/验签），不可改业务和系统配置
+- 内置账号（`admin`/`sysadmin`/`auditor`）禁止删除、禁止禁用
 
 ## 本地开发
 ```bash
@@ -131,20 +160,29 @@ web/                 前端应用
 web/nginx.conf       前端 Nginx 配置
 ticketing/           工单系统后端
 ticketing/web/       工单系统前端
+inventory-system/    库存系统（前后端）
+cmdb/                CMDB系统（前后端）
 docker-compose.yml   Docker 编排
 ```
 
 ## 工单管理系统说明
 工单系统使用与提醒系统一致的布局与配色，可通过统一登录（SSO）进入：
-- 新建/编辑工单：标题、描述、优先级、状态
+- 新建/编辑工单：标题、描述、优先级、状态、审批状态
 - 工单列表：支持搜索与状态筛选，默认每页 10 条
-- 权限：管理员可删除工单，非管理员仅可查看/编辑自己创建的工单
+- SLA看板：按“即将超时 / 已超时”分组展示
+- 状态流：`新建 -> 受理 -> 处理中 -> 待验证 -> 完成 -> 关闭`
+- 审批流：高风险工单（P1 或 HIGH/CRITICAL）关闭前必须审批通过
+- 协作模型：负责人 + 协作人 + 观察者 + 评论@通知
+- 通知中心：查看协作变更、评论@、审批结果通知
 
 ## 安全说明
 - 默认开启 CSRF 保护，前端自动获取并携带 `X-CSRF-Token`
 - CORS 默认仅允许 `localhost` 与 `8080/5173`，公网访问需配置 `CORS_ORIGINS`
 - 发送配置中的密码/Secret 采用加密存储，前端只显示掩码
-- 登录 token 使用 sessionStorage，关闭浏览器需重新登录
+- 统一登录会话已迁移为 `HttpOnly + Secure + SameSite` Cookie，前端不再持久化 token
+- 用户密码复杂度策略：至少 10 位，且包含大小写字母、数字、特殊字符
+- 审计日志采用链式签名（`prev_hash + signature`），支持 `/api/operation-logs/verify` 验签
+- 支持核验报告导出：`/api/operation-logs/verify/export`
 
 ## 常见问题（FAQ）
 1. **CORS 报错 / 403**
@@ -185,6 +223,16 @@ docker-compose.yml   Docker 编排
 - 发送计划“客户名称”支持下拉联想与手动输入
 - 增强权限范围：非管理员仅能访问关联客户数据
 - 登录错误弹窗提示、配置未保存提示、测试发送提示优化
+- 审计日志支持按系统筛选（提醒系统/工单系统/统一登录）
+- 审计验签结果增强（失败原因、失败记录ID、核验报告导出）
+- 工单新增 SLA 分组看板（即将超时/已超时）
+- 工单新增审批流与状态机（受理、待验证、完成/关闭）
+- 工单新增通知中心（协作变更、评论@、审批结果）
+
+## 发布文档
+- `/Users/zhanglei/Documents/codex-new/docs/releases/2.0.1-rc1-regression-checklist.md`
+- `/Users/zhanglei/Documents/codex-new/docs/releases/2.0.1.md`
+- `/Users/zhanglei/Documents/codex-new/docs/releases/2.1.0-rc1.md`
 
 ## 技术栈
 - 前端：React + Vite

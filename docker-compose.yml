@@ -23,9 +23,15 @@ services:
       MYSQL_USER: juxin
       MYSQL_PASSWORD: juxinpass
       MYSQL_DATABASE: juxin_reminder
-      CORS_ORIGINS: "http://localhost:5180,http://127.0.0.1:5180,http://localhost:8080,http://127.0.0.1:8080,http://localhost:8081,http://127.0.0.1:8081"
-      JWT_SECRET: "dev-secret-change-me"
+      CORS_ORIGINS: "http://localhost:5180,http://127.0.0.1:5180,http://localhost:8080,http://127.0.0.1:8080,http://localhost:8081,http://127.0.0.1:8081,http://localhost:8090,http://127.0.0.1:8090"
+      JWT_SECRET: "3122c0763b7728783ce33c724c81fcdf3b9c77fe33cdc3cbfe5a6f4a896634ea"
+      AUDIT_SIGNING_KEY: "0157ac63610a6b6a1c164a502b8e08987e03b642a6713151638cc21a9d25e542"
       CONFIG_SECRET_KEY: "UeiKgUhP80JPdwWMoBRRWmKxdz8BKEP4btzTTh4QmYVc9twMEcgCKuqFDx0M4HX8"
+      BUILTIN_ACCOUNT_DEFAULT_PASSWORD: "Dm1vbnqsILIVjUa5sWixBFos60bKdEKC"
+      SECURITY_STRICT_MODE: "true"
+      CSRF_SECURE: "false"
+      AUTH_FETCH_TIMEOUT_MS: 4000
+      AUTH_COOKIE_NAME: "juxin_auth_token"
     depends_on:
       - mysql
     ports:
@@ -42,8 +48,14 @@ services:
       MYSQL_USER: juxin
       MYSQL_PASSWORD: juxinpass
       MYSQL_DATABASE: juxin_reminder
-      CORS_ORIGINS: "http://localhost:5180,http://127.0.0.1:5180,http://localhost:8080,http://127.0.0.1:8080,http://localhost:8081,http://127.0.0.1:8081"
-      JWT_SECRET: "dev-secret-change-me"
+      CORS_ORIGINS: "http://localhost:5180,http://127.0.0.1:5180,http://localhost:8080,http://127.0.0.1:8080,http://localhost:8081,http://127.0.0.1:8081,http://localhost:8082,http://127.0.0.1:8082,http://localhost:8083,http://127.0.0.1:8083,http://localhost:8090,http://127.0.0.1:8090"
+      APP_CMDB_URL: "http://localhost:8090"
+      APP_INVENTORY_URL: "http://localhost:8082"
+      APP_DEVICE_FLOW_URL: "http://localhost:8083"
+      AUTH_COOKIE_NAME: "juxin_auth_token"
+      AUTH_COOKIE_SECURE: "false"
+      AUTH_COOKIE_SAMESITE: "lax"
+      JWT_SECRET: "3122c0763b7728783ce33c724c81fcdf3b9c77fe33cdc3cbfe5a6f4a896634ea"
       CONFIG_SECRET_KEY: "UeiKgUhP80JPdwWMoBRRWmKxdz8BKEP4btzTTh4QmYVc9twMEcgCKuqFDx0M4HX8"
     depends_on:
       - mysql
@@ -70,8 +82,13 @@ services:
       MYSQL_USER: juxin
       MYSQL_PASSWORD: juxinpass
       MYSQL_DATABASE: juxin_reminder
-      CORS_ORIGINS: "http://localhost:5180,http://127.0.0.1:5180,http://localhost:8080,http://127.0.0.1:8080,http://localhost:8081,http://127.0.0.1:8081"
-      JWT_SECRET: "dev-secret-change-me"
+      CORS_ORIGINS: "http://localhost:5180,http://127.0.0.1:5180,http://localhost:8080,http://127.0.0.1:8080,http://localhost:8081,http://127.0.0.1:8081,http://localhost:8090,http://127.0.0.1:8090"
+      JWT_SECRET: "3122c0763b7728783ce33c724c81fcdf3b9c77fe33cdc3cbfe5a6f4a896634ea"
+      AUDIT_SIGNING_KEY: "53bc691c095c27647ff02d056637f09482b963d7c9a104454e44376b685b8c3e"
+      SECURITY_STRICT_MODE: "true"
+      AUTH_FETCH_TIMEOUT_MS: 4000
+      AUTH_COOKIE_NAME: "juxin_auth_token"
+      TICKET_ATTACHMENT_ALLOWED_MIME: "image/png,image/jpeg,image/jpg,image/webp,application/pdf,text/plain,application/zip,application/x-zip-compressed,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     depends_on:
       - mysql
     ports:
@@ -85,5 +102,174 @@ services:
     ports:
       - "8081:80"
 
+  shipping-gateway:
+    build: ./inventory-system/shipping-gateway
+    environment:
+      PORT: 5190
+      SHIPPING_GATEWAY_TOKEN: "inventory-shipping-gateway-dev-token"
+      SHIPPING_GATEWAY_TIMEOUT_MS: 8000
+      CORS_ORIGINS: "http://localhost:5183,http://127.0.0.1:5183,http://localhost:8082,http://127.0.0.1:8082"
+      RATE_LIMIT_WINDOW_SEC: 60
+      RATE_LIMIT_MAX: 240
+      SHIPPING_GATEWAY_ALLOW_MOCK: "0"
+      CAINIAO_TRACKING_API_URL: ""
+      CAINIAO_TRACKING_API_TOKEN: ""
+      CAINIAO_TRACKING_TIMEOUT_MS: 8000
+      CAINIAO_APP_KEY: ""
+      CAINIAO_APP_SECRET: ""
+      SF_TRACKING_API_URL: ""
+      SF_TRACKING_API_TOKEN: ""
+      SF_TRACKING_TIMEOUT_MS: 8000
+      SF_CUSTOMER_CODE: ""
+      SF_CHECKWORD: ""
+      JD_TRACKING_API_URL: ""
+      JD_TRACKING_API_TOKEN: ""
+      JD_TRACKING_TIMEOUT_MS: 8000
+      JD_APP_KEY: ""
+      JD_APP_SECRET: ""
+    ports:
+      - "5190:5190"
+
+  inventory-api:
+    build: ./inventory-system/backend
+    environment:
+      PORT: 5183
+      AUTH_SERVICE_URL: "http://auth:5180"
+      AUTH_SYSTEM_KEY: "inventory"
+      AUTH_FETCH_TIMEOUT_MS: 5000
+      AUTH_COOKIE_NAME: "juxin_auth_token"
+      MYSQL_HOST: mysql
+      MYSQL_PORT: 3306
+      MYSQL_USER: juxin
+      MYSQL_PASSWORD: juxinpass
+      MYSQL_DATABASE: juxin_inventory
+      MYSQL_ADMIN_USER: root
+      MYSQL_ADMIN_PASSWORD: rootpass
+      CORS_ORIGINS: "http://localhost:8082,http://127.0.0.1:8082"
+      RATE_LIMIT_WINDOW_SEC: 60
+      RATE_LIMIT_MAX: 300
+      SHIPPING_TRACKING_API_URL: "http://shipping-gateway:5190/api/track/query"
+      SHIPPING_TRACKING_API_TOKEN: "inventory-shipping-gateway-dev-token"
+      SHIPPING_TRACKING_API_TIMEOUT_MS: 8000
+      REMINDER_WEBHOOK_TIMEOUT_MS: 5000
+    depends_on:
+      - mysql
+      - auth
+      - shipping-gateway
+    ports:
+      - "5183:5183"
+
+  web-inventory:
+    build: ./inventory-system/frontend
+    depends_on:
+      - inventory-api
+    ports:
+      - "8082:80"
+
+  device-flow-api:
+    build: ./device-flow/backend
+    environment:
+      PORT: 5184
+      AUTH_SERVICE_URL: "http://auth:5180"
+      AUTH_SYSTEM_KEY: "device-flow"
+      AUTH_FETCH_TIMEOUT_MS: 5000
+      AUTH_COOKIE_NAME: "juxin_auth_token"
+      MYSQL_HOST: mysql
+      MYSQL_PORT: 3306
+      MYSQL_USER: juxin
+      MYSQL_PASSWORD: juxinpass
+      MYSQL_DATABASE: juxin_device_flow
+      MYSQL_ADMIN_USER: root
+      MYSQL_ADMIN_PASSWORD: rootpass
+      CORS_ORIGINS: "http://localhost:8083,http://127.0.0.1:8083"
+      DASHBOARD_OVERDUE_DAYS: 3
+      SLA_AUTO_RUN_INTERVAL_MS: 300000
+      MAX_BATCH_STAGE_JOB_IDS: 200
+      MAX_IMPORT_ROWS: 500
+      AUDIT_SIGNING_KEY: "device-flow-audit-signing-key-change-me"
+      UPLOAD_ROOT: "/tmp/device-flow/uploads"
+      UPLOAD_MAX_FILE_SIZE_MB: 10
+    depends_on:
+      - mysql
+      - auth
+    ports:
+      - "5184:5184"
+
+  web-device-flow:
+    build: ./device-flow/frontend
+    depends_on:
+      - device-flow-api
+    ports:
+      - "8083:80"
+
+  cmdb-mongo:
+    image: mongo:7.0
+    volumes:
+      - cmdb-mongo-data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand({ ping: 1 })"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+
+  cmdb-mysql-init:
+    image: mysql:8.0
+    depends_on:
+      - mysql
+    entrypoint: ["/bin/sh", "-c"]
+    command: >
+      '
+      for i in $$(seq 1 60); do
+        mysql -hmysql -uroot -prootpass -e "SELECT 1" >/dev/null 2>&1 && break;
+        echo "waiting for mysql...";
+        sleep 2;
+      done;
+      mysql -hmysql -uroot -prootpass < /migrations/001_init_cmdb.sql;
+      echo "cmdb mysql initialized";
+      '
+    volumes:
+      - ./cmdb/migrations/mysql/001_init_cmdb.sql:/migrations/001_init_cmdb.sql:ro
+    restart: "no"
+
+  cmdb:
+    build:
+      context: ./cmdb
+      dockerfile: Dockerfile
+    depends_on:
+      cmdb-mongo:
+        condition: service_healthy
+      cmdb-mysql-init:
+        condition: service_completed_successfully
+      auth:
+        condition: service_started
+    environment:
+      APP_NAME: cmdb
+      APP_ENV: dev
+      HTTP_ADDR: ":8088"
+      READ_TIMEOUT_SEC: 10
+      WRITE_TIMEOUT_SEC: 15
+      MYSQL_DSN: "root:rootpass@tcp(mysql:3306)/cmdb?parseTime=true&charset=utf8mb4,utf8"
+      MYSQL_MAX_OPEN_CONNS: 30
+      MYSQL_MAX_IDLE_CONNS: 10
+      MONGO_URI: "mongodb://cmdb-mongo:27017"
+      MONGO_DB: cmdb
+      OUTBOX_ENABLED: "false"
+      AUTH_SERVICE_URL: "http://auth:5180"
+      AUTH_SYSTEM_KEY: cmdb
+      AUTH_TIMEOUT_MS: 5000
+      AUTH_COOKIE_NAME: "juxin_auth_token"
+      BODY_MAX_BYTES: 2097152
+      RATE_LIMIT_WINDOW_SEC: 60
+      RATE_LIMIT_MAX: 300
+
+  web-cmdb:
+    build: ./cmdb/web
+    depends_on:
+      - cmdb
+      - auth
+    ports:
+      - "8090:80"
+
 volumes:
   mysql-data:
+  cmdb-mongo-data:

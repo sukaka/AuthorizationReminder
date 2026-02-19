@@ -161,6 +161,17 @@ body {
   flex-shrink: 0;
 }
 
+.sidebar-actions {
+  display: grid;
+  gap: 10px;
+  margin-top: 8px;
+  flex-shrink: 0;
+}
+
+.sidebar-actions .logout {
+  margin-top: 0;
+}
+
 .hero {
   display: flex;
   justify-content: space-between;
@@ -878,7 +889,44 @@ textarea:focus {
 }
 
 .users-table .table-row {
-  grid-template-columns: 1fr 0.8fr 1.5fr 1.3fr 1fr 1.5fr;
+  grid-template-columns:
+    minmax(52px, 0.34fr)
+    minmax(90px, 0.7fr)
+    minmax(90px, 0.7fr)
+    minmax(70px, 0.55fr)
+    minmax(150px, 1fr)
+    minmax(150px, 0.9fr)
+    minmax(170px, 1fr)
+    minmax(300px, 1.45fr);
+  gap: 10px;
+}
+
+.users-table .table-row > span {
+  min-width: 0;
+}
+
+.users-table .table-row > span:nth-child(2),
+.users-table .table-row > span:nth-child(3) {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.users-table .app-access-text {
+  display: inline;
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+}
+
+.users-table .table-row .actions {
+  min-width: 0;
+  justify-content: flex-start;
+}
+
+.users-table .table-row .actions button {
+  flex: 0 0 auto;
 }
 
 @media (max-width: 1200px) {
@@ -942,7 +990,7 @@ textarea:focus {
 }
 
 .ops-table .table-row {
-  grid-template-columns: 1fr 1fr 1fr 0.6fr 1.2fr 0.6fr;
+  grid-template-columns: 0.42fr 0.9fr 0.8fr 1fr 1fr 0.6fr 1.2fr 0.6fr;
 }
 
 .ops-detail {
@@ -986,6 +1034,29 @@ textarea:focus {
 .ops-detail-text {
   color: #475569;
   font-size: 13px;
+}
+
+.audit-verify-card {
+  margin-top: 10px;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 8px 14px;
+  padding: 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  background: rgba(255, 255, 255, 0.92);
+  font-size: 13px;
+  color: #334155;
+}
+
+.audit-verify-card.ok {
+  border-color: rgba(34, 197, 94, 0.45);
+  background: rgba(240, 253, 244, 0.9);
+}
+
+.audit-verify-card.fail {
+  border-color: rgba(239, 68, 68, 0.45);
+  background: rgba(254, 242, 242, 0.92);
 }
 
 .table-row .danger,

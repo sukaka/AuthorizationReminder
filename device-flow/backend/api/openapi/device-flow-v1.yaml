@@ -1,0 +1,375 @@
+openapi: 3.0.3
+info:
+  title: 设备流转系统 API
+  version: 1.3.0
+servers:
+  - url: http://localhost:5184
+paths:
+  /api/health:
+    get:
+      summary: 健康检查
+      responses:
+        '200':
+          description: OK
+
+  /api/auth/me:
+    get:
+      summary: 当前用户
+      responses:
+        '200':
+          description: OK
+
+  /api/device-flow/dashboard/summary:
+    get:
+      summary: 看板汇总
+      parameters:
+        - name: overdue_days
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 30
+        - name: stage
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: customer
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        '200':
+          description: OK
+
+  /api/device-flow/sla/summary:
+    get:
+      summary: SLA看板汇总
+      parameters:
+        - name: min_overdue_hours
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 0
+            maximum: 720
+      responses:
+        '200':
+          description: OK
+
+  /api/device-flow/sla/rules:
+    put:
+      summary: 更新SLA规则（管理员）
+      responses:
+        '200':
+          description: OK
+
+  /api/device-flow/sla/run:
+    post:
+      summary: 手动执行SLA催办（管理员）
+      responses:
+        '200':
+          description: OK
+
+  /api/device-flow/jobs:
+    get:
+      summary: 流转单列表
+      parameters:
+        - name: page
+          in: query
+          required: false
+          schema:
+            type: integer
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+        - name: keyword
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: stage
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        '200':
+          description: OK
+    post:
+      summary: 新建流转单
+      responses:
+        '201':
+          description: Created
+
+  /api/device-flow/jobs/batch/stage:
+    post:
+      summary: 批量推进阶段
+      responses:
+        '200':
+          description: OK
+
+  /api/device-flow/jobs/{id}:
+    get:
+      summary: 流转单详情
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: OK
+
+  /api/device-flow/jobs/{id}/stages/{action}:
+    post:
+      summary: 推进阶段
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+        - name: action
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: OK
+
+  /api/device-flow/jobs/{id}/rework:
+    post:
+      summary: 退回阶段
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: OK
+
+  /api/device-flow/jobs/{id}/attachments:
+    get:
+      summary: 附件列表
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: OK
+    post:
+      summary: 上传附件（multipart/form-data）
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '201':
+          description: Created
+
+  /api/device-flow/import/jobs.xlsx:
+    post:
+      summary: Excel批量导入流转单
+      responses:
+        '200':
+          description: OK
+
+  /api/device-flow/templates/jobs-import.xlsx:
+    get:
+      summary: 下载Excel导入模板
+      responses:
+        '200':
+          description: OK
+
+  /api/device-flow/attachments/{id}/download:
+    get:
+      summary: 下载附件
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: OK
+
+  /api/device-flow/attachments/{id}:
+    delete:
+      summary: 删除附件（仅管理员）
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: OK
+
+  /api/device-flow/logs:
+    get:
+      summary: 审计日志列表
+      parameters:
+        - name: page
+          in: query
+          required: false
+          schema:
+            type: integer
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+        - name: from
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date
+        - name: to
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date
+        - name: action
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: username
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: keyword
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        '200':
+          description: OK
+
+  /api/device-flow/audit/verify:
+    get:
+      summary: 审计链验签
+      parameters:
+        - name: from_id
+          in: query
+          required: false
+          schema:
+            type: integer
+        - name: to_id
+          in: query
+          required: false
+          schema:
+            type: integer
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 20000
+      responses:
+        '200':
+          description: OK
+
+  /api/device-flow/reports/audit.csv:
+    get:
+      summary: 导出审计CSV
+      parameters:
+        - name: from
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date
+        - name: to
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date
+        - name: action
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: username
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: keyword
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        '200':
+          description: OK
+
+  /api/device-flow/reports/jobs.xlsx:
+    get:
+      summary: 导出流转单Excel
+      parameters:
+        - name: keyword
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: customer
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: stage
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        '200':
+          description: OK
+
+  /api/device-flow/reports/dashboard.csv:
+    get:
+      summary: 导出看板明细CSV
+      parameters:
+        - name: overdue_days
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 30
+        - name: stage
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: customer
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        '200':
+          description: OK

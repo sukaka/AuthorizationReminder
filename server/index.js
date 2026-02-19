@@ -21,8 +21,189 @@ const PORT = process.env.PORT || 5179;
 const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret-change-me';
 const CONFIG_SECRET_KEY = process.env.CONFIG_SECRET_KEY || '';
 const AUTH_SERVICE_URL = process.env.AUTH_SERVICE_URL || 'http://auth:5180';
+const AUTH_COOKIE_NAME = String(process.env.AUTH_COOKIE_NAME || 'juxin_auth_token').trim() || 'juxin_auth_token';
+const AUTH_FETCH_TIMEOUT_MS = Number(process.env.AUTH_FETCH_TIMEOUT_MS || 4000);
 const SECRET_MASK = '******';
-const SYSTEM_ACCESS_KEYS = ['reminder', 'ticketing'];
+const SYSTEM_ACCESS_KEYS = ['reminder', 'ticketing', 'cmdb', 'inventory'];
+const BUILTIN_ACCOUNT_DEFAULT_PASSWORD = process.env.BUILTIN_ACCOUNT_DEFAULT_PASSWORD || '123456';
+const BUILTIN_ACCOUNTS = [
+  { username: 'admin', role: 'admin' },
+  { username: 'sysadmin', role: 'sysadmin' },
+  { username: 'auditor', role: 'auditor' },
+];
+const BUILTIN_ACCOUNT_USERNAMES = new Set(BUILTIN_ACCOUNTS.map((item) => item.username));
+const ALLOWED_USER_ROLES = new Set(['admin', 'sysadmin', 'auditor', 'viewer', 'sales']);
+const AUDIT_SIGNING_KEY = process.env.AUDIT_SIGNING_KEY || JWT_SECRET;
+const SECURITY_STRICT_MODE = process.env.SECURITY_STRICT_MODE === 'true' || process.env.NODE_ENV === 'production';
+const MAX_IMPORT_RECORDS = Number(process.env.MAX_IMPORT_RECORDS || 5000);
+const IMPORT_UPLOAD_MAX_BYTES = Number(process.env.IMPORT_UPLOAD_MAX_BYTES || 3 * 1024 * 1024);
+const SCREENSHOT_UPLOAD_MAX_BYTES = Number(process.env.SCREENSHOT_UPLOAD_MAX_BYTES || 5 * 1024 * 1024);
+const AUTH_RATE_LIMIT_WINDOW_MS = Number(process.env.AUTH_RATE_LIMIT_WINDOW_MS || 60 * 1000);
+const AUTH_RATE_LIMIT_MAX = Number(process.env.AUTH_RATE_LIMIT_MAX || 30);
+const IMPORT_RATE_LIMIT_WINDOW_MS = Number(process.env.IMPORT_RATE_LIMIT_WINDOW_MS || 60 * 1000);
+const IMPORT_RATE_LIMIT_MAX = Number(process.env.IMPORT_RATE_LIMIT_MAX || 10);
+const UPLOAD_RATE_LIMIT_WINDOW_MS = Number(process.env.UPLOAD_RATE_LIMIT_WINDOW_MS || 60 * 1000);
+const UPLOAD_RATE_LIMIT_MAX = Number(process.env.UPLOAD_RATE_LIMIT_MAX || 20);
+const ALLOW_XLSX_IMPORT = process.env.ALLOW_XLSX_IMPORT === 'true' && !SECURITY_STRICT_MODE;
+
+const weakSecrets = new Set(['dev-secret-change-me', 'change-me', '123456', 'password', '']);
+
+const isWeakSecret = (value, minLength = 16) => {
+  const text = String(value || '').trim();
+  if (!text) return true;
+  if (text.length < minLength) return true;
+  return weakSecrets.has(text.toLowerCase());
+};
+
+const validateSecurityBootstrap = () => {
+  const problems = [];
+  if (isWeakSecret(JWT_SECRET, 32)) problems.push('JWT_SECRET 过弱（生产建议至少32位随机值）');
+  if (isWeakSecret(AUDIT_SIGNING_KEY, 32)) problems.push('AUDIT_SIGNING_KEY 过弱（生产建议至少32位随机值）');
+  if (isWeakSecret(CONFIG_SECRET_KEY, 32)) problems.push('CONFIG_SECRET_KEY 过弱（生产建议至少32位随机值）');
+  if (String(BUILTIN_ACCOUNT_DEFAULT_PASSWORD || '').trim() === '123456') {
+    problems.push('BUILTIN_ACCOUNT_DEFAULT_PASSWORD 仍为默认值');
+  }
+  if (!problems.length) return;
+  const text = `[SECURITY] ${problems.join('；')}`;
+  if (SECURITY_STRICT_MODE) {
+    throw new Error(text);
+  }
+  console.warn(`${text}。当前为非严格模式，仅告警。`);
+};
+
+const extractRequestIp = (req) => {
+  const forwarded = req.headers['x-forwarded-for'];
+  if (typeof forwarded === 'string' && forwarded.trim()) {
+    return forwarded.split(',')[0].trim();
+  }
+  return req.ip || req.socket?.remoteAddress || 'unknown';
+};
+
+const createIpRateLimiter = ({ name, windowMs, max }) => {
+  const buckets = new Map();
+  const sweepMs = Math.max(windowMs, 60 * 1000);
+  const timer = setInterval(() => {
+    const now = Date.now();
+    for (const [key, item] of buckets.entries()) {
+      if (item.resetAt <= now) buckets.delete(key);
+    }
+  }, sweepMs);
+  if (typeof timer.unref === 'function') timer.unref();
+
+  return (req, res, next) => {
+    const now = Date.now();
+    const ip = extractRequestIp(req);
+    const key = `${name}:${ip}`;
+    let bucket = buckets.get(key);
+    if (!bucket || bucket.resetAt <= now) {
+      bucket = { count: 0, resetAt: now + windowMs };
+      buckets.set(key, bucket);
+    }
+    bucket.count += 1;
+    if (bucket.count > max) {
+      const retry = Math.max(1, Math.ceil((bucket.resetAt - now) / 1000));
+      res.setHeader('Retry-After', String(retry));
+      return res.status(429).json({ error: '请求过于频繁，请稍后再试' });
+    }
+    return next();
+  };
+};
+
+const fetchWithTimeout = async (url, options = {}, timeoutMs = AUTH_FETCH_TIMEOUT_MS) => {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), Math.max(1000, Number(timeoutMs) || AUTH_FETCH_TIMEOUT_MS));
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+};
+
+const detectImageMimeByMagic = (buffer) => {
+  if (!buffer || buffer.length < 12) return '';
+  const isPng =
+    buffer[0] === 0x89 &&
+    buffer[1] === 0x50 &&
+    buffer[2] === 0x4e &&
+    buffer[3] === 0x47 &&
+    buffer[4] === 0x0d &&
+    buffer[5] === 0x0a &&
+    buffer[6] === 0x1a &&
+    buffer[7] === 0x0a;
+  if (isPng) return 'image/png';
+  const isJpeg = buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[buffer.length - 2] === 0xff && buffer[buffer.length - 1] === 0xd9;
+  if (isJpeg) return 'image/jpeg';
+  return '';
+};
+
+const isBuiltinUsername = (username) => BUILTIN_ACCOUNT_USERNAMES.has(String(username || '').toLowerCase());
+
+const validatePasswordComplexity = (password) => {
+  const value = String(password || '');
+  if (value.length < 10) {
+    return '密码至少10位，且需包含大写字母、小写字母、数字和特殊字符';
+  }
+  if (!/[A-Z]/.test(value)) {
+    return '密码需包含至少1个大写字母';
+  }
+  if (!/[a-z]/.test(value)) {
+    return '密码需包含至少1个小写字母';
+  }
+  if (!/\d/.test(value)) {
+    return '密码需包含至少1个数字';
+  }
+  if (!/[^A-Za-z0-9]/.test(value)) {
+    return '密码需包含至少1个特殊字符';
+  }
+  return '';
+};
+
+const validateUsernameFormat = (username) => {
+  const value = String(username || '').trim();
+  if (!value) return '用户名不能为空';
+  if (!/^[\u4e00-\u9fa5A-Za-z0-9_-]{2,32}$/.test(value)) {
+    return '用户名仅支持2-32位中文、字母、数字、下划线或中划线';
+  }
+  return '';
+};
+
+const validateEmailFormat = (email) => {
+  const value = String(email || '').trim();
+  if (!value) return '';
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)) return '邮箱格式不正确';
+  return '';
+};
+
+const validatePhoneFormat = (phone) => {
+  const value = String(phone || '').trim();
+  if (!value) return '';
+  if (!/^\d{6,20}$/.test(value)) return '手机号格式不正确（6-20位数字）';
+  return '';
+};
+
+const stableStringify = (value) => {
+  if (value === null || value === undefined) return '';
+  if (typeof value !== 'object') return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map((item) => stableStringify(item)).join(',')}]`;
+  const keys = Object.keys(value).sort();
+  return `{${keys.map((k) => `${JSON.stringify(k)}:${stableStringify(value[k])}`).join(',')}}`;
+};
+
+const computeAuditSignature = ({ id, prevHash, userId, username, action, entity, entityId, beforeData, afterData, createdAt }) => {
+  const payload = [
+    String(id),
+    String(prevHash || ''),
+    String(userId || 0),
+    String(username || ''),
+    String(action || ''),
+    String(entity || ''),
+    String(entityId || 0),
+    String(beforeData || ''),
+    String(afterData || ''),
+    String(createdAt || ''),
+  ].join('|');
+  return crypto.createHmac('sha256', AUDIT_SIGNING_KEY).update(payload).digest('hex');
+};
 
 const parseAppAccessRaw = (value) => {
   if (Array.isArray(value)) return value;
@@ -38,10 +219,17 @@ const parseAppAccessRaw = (value) => {
   return text.split(',').map((item) => item.trim());
 };
 
+const defaultAppAccessByRole = (role = 'viewer') => {
+  const r = String(role || '').toLowerCase();
+  if (r === 'admin') return [...SYSTEM_ACCESS_KEYS];
+  if (r === 'auditor') return ['reminder', 'inventory'];
+  return ['reminder'];
+};
+
 const normalizeAppAccess = (value, role = 'viewer') => {
   if (role === 'admin') return [...SYSTEM_ACCESS_KEYS];
   const parsed = parseAppAccessRaw(value);
-  const source = parsed === null ? SYSTEM_ACCESS_KEYS : parsed;
+  const source = parsed === null ? defaultAppAccessByRole(role) : parsed;
   return Array.from(
     new Set(source.map((item) => String(item || '').trim()).filter((item) => SYSTEM_ACCESS_KEYS.includes(item)))
   );
@@ -149,6 +337,7 @@ const corsOptions = {
   },
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'X-CSRF-Token'],
+  credentials: true,
   maxAge: 86400,
 };
 
@@ -170,23 +359,46 @@ app.use(
     crossOriginEmbedderPolicy: false,
   })
 );
+app.disable('x-powered-by');
+if (process.env.TRUST_PROXY_HOPS) {
+  app.set('trust proxy', Number(process.env.TRUST_PROXY_HOPS));
+}
 app.use(cors(corsOptions));
 app.use(express.json({ limit: '1mb' }));
 app.use(cookieParser());
-const upload = multer({ storage: multer.memoryStorage() });
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: IMPORT_UPLOAD_MAX_BYTES },
+});
 const uploadsDir = path.join(__dirname, 'uploads');
 const screenshotUpload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 5 * 1024 * 1024 },
+  limits: { fileSize: SCREENSHOT_UPLOAD_MAX_BYTES },
 });
-app.use('/uploads', express.static(uploadsDir));
+const authRateLimiter = createIpRateLimiter({
+  name: 'auth',
+  windowMs: Math.max(1000, AUTH_RATE_LIMIT_WINDOW_MS),
+  max: Math.max(1, AUTH_RATE_LIMIT_MAX),
+});
+const importRateLimiter = createIpRateLimiter({
+  name: 'import',
+  windowMs: Math.max(1000, IMPORT_RATE_LIMIT_WINDOW_MS),
+  max: Math.max(1, IMPORT_RATE_LIMIT_MAX),
+});
+const uploadRateLimiter = createIpRateLimiter({
+  name: 'upload',
+  windowMs: Math.max(1000, UPLOAD_RATE_LIMIT_WINDOW_MS),
+  max: Math.max(1, UPLOAD_RATE_LIMIT_MAX),
+});
 
 const csrfProtection = csurf({
   cookie: {
     key: 'csrf_token',
     httpOnly: true,
     sameSite: 'strict',
-    secure: process.env.CSRF_SECURE === 'true',
+    secure:
+      process.env.CSRF_SECURE === 'true' ||
+      (SECURITY_STRICT_MODE && process.env.CSRF_SECURE !== 'false'),
   },
 });
 
@@ -201,34 +413,133 @@ app.get('/api/auth/csrf', csrfProtection, (req, res) => {
 
 const parseImportFile = (file) => {
   const name = (file.originalname || '').toLowerCase();
-  if (name.endsWith('.xlsx') || name.endsWith('.xls')) {
+  const mime = String(file.mimetype || '').toLowerCase();
+  const isExcel = name.endsWith('.xlsx') || name.endsWith('.xls');
+  const isCsv = name.endsWith('.csv');
+  if (!isExcel && !isCsv) {
+    throw new Error('仅支持 CSV 或 Excel 文件');
+  }
+  if (isExcel) {
+    if (!ALLOW_XLSX_IMPORT) {
+      throw new Error('安全模式下已禁用Excel导入，请使用CSV导入');
+    }
+    const allowedExcelMime = new Set([
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'application/vnd.ms-excel',
+      'application/octet-stream',
+      '',
+    ]);
+    if (!allowedExcelMime.has(mime)) {
+      throw new Error('Excel 文件类型无效');
+    }
     const workbook = xlsx.read(file.buffer, { type: 'buffer' });
     const sheetName = workbook.SheetNames[0];
     const sheet = workbook.Sheets[sheetName];
-    return xlsx.utils.sheet_to_json(sheet, { defval: '', raw: false });
+    const rows = xlsx.utils.sheet_to_json(sheet, { defval: '', raw: false });
+    if (rows.length > MAX_IMPORT_RECORDS) {
+      throw new Error(`单次导入最多 ${MAX_IMPORT_RECORDS} 行`);
+    }
+    return rows;
+  }
+  const allowedCsvMime = new Set([
+    'text/csv',
+    'application/csv',
+    'text/plain',
+    'application/vnd.ms-excel',
+    'application/octet-stream',
+    '',
+  ]);
+  if (!allowedCsvMime.has(mime)) {
+    throw new Error('CSV 文件类型无效');
   }
   const content = file.buffer.toString('utf8');
-  return parse(content, { columns: true, skip_empty_lines: true, trim: true });
+  const rows = parse(content, { columns: true, skip_empty_lines: true, trim: true });
+  if (rows.length > MAX_IMPORT_RECORDS) {
+    throw new Error(`单次导入最多 ${MAX_IMPORT_RECORDS} 行`);
+  }
+  return rows;
+};
+
+const resolveScreenshotFilePath = (urlValue) => {
+  const url = String(urlValue || '').trim();
+  if (!url.startsWith('/uploads/')) return null;
+  const filename = path.basename(url);
+  if (!filename) return null;
+  const fullPath = path.join(uploadsDir, filename);
+  const normalizedRoot = path.resolve(uploadsDir);
+  const normalizedFull = path.resolve(fullPath);
+  if (!normalizedFull.startsWith(normalizedRoot)) return null;
+  return { filename, fullPath: normalizedFull };
+};
+
+const cleanupScreenshotFile = async (urlValue) => {
+  const resolved = resolveScreenshotFilePath(urlValue);
+  if (!resolved) return;
+  try {
+    await fs.promises.unlink(resolved.fullPath);
+  } catch (err) {
+    if (err && err.code !== 'ENOENT') {
+      console.warn('[SECURITY] 删除旧截图失败', err.message || err);
+    }
+  }
 };
 
 const toJson = (row) => (row ? { ...row } : null);
 
-const ensureAdminUser = async () => {
-  const existing = await db.get('SELECT COUNT(1) AS count FROM users');
-  if (existing && Number(existing.count) > 0) return;
-  const hash = bcrypt.hashSync('123456', 10);
-  await db.run('INSERT INTO users (username, password_hash, role, app_access) VALUES (?, ?, ?, ?)', [
-    'admin',
-    hash,
-    'admin',
-    JSON.stringify(SYSTEM_ACCESS_KEYS),
-  ]);
+const ensureBuiltinUsers = async () => {
+  const hash = bcrypt.hashSync(BUILTIN_ACCOUNT_DEFAULT_PASSWORD, 10);
+  for (const account of BUILTIN_ACCOUNTS) {
+    const expectedAccess = defaultAppAccessByRole(account.role);
+    const row = await db.get('SELECT id, role, app_access, is_active FROM users WHERE username = ?', [account.username]);
+    if (!row) {
+      await db.run('INSERT INTO users (username, password_hash, role, app_access, is_active) VALUES (?, ?, ?, ?, 1)', [
+        account.username,
+        hash,
+        account.role,
+        JSON.stringify(expectedAccess),
+      ]);
+      continue;
+    }
+    if (row.role !== account.role) {
+      await db.run('UPDATE users SET role = ? WHERE id = ?', [account.role, row.id]);
+    }
+    const currentAccess = normalizeAppAccess(row.app_access, account.role);
+    const expectedSorted = [...expectedAccess].sort().join(',');
+    const currentSorted = [...currentAccess].sort().join(',');
+    if (!row.app_access || currentSorted !== expectedSorted) {
+      await db.run('UPDATE users SET app_access = ? WHERE id = ?', [JSON.stringify(expectedAccess), row.id]);
+    }
+    if (Number(row.is_active) !== 1) {
+      await db.run('UPDATE users SET is_active = 1 WHERE id = ?', [row.id]);
+    }
+  }
 };
 
 const createToken = (user) =>
   jwt.sign({ id: user.id, username: user.username, role: user.role }, JWT_SECRET, {
     expiresIn: '7d',
   });
+
+const extractAuthToken = (req) => {
+  const header = String(req.headers.authorization || '').trim();
+  const match = header.match(/^Bearer\s+(.+)$/i);
+  if (match && String(match[1] || '').trim()) return String(match[1]).trim();
+
+  const cookieToken = String(req.cookies?.[AUTH_COOKIE_NAME] || '').trim();
+  if (cookieToken) return cookieToken;
+
+  const rawCookie = String(req.headers.cookie || '');
+  if (!rawCookie) return '';
+  const pairs = rawCookie.split(';');
+  for (const item of pairs) {
+    const idx = item.indexOf('=');
+    if (idx <= 0) continue;
+    const key = item.slice(0, idx).trim();
+    if (key !== AUTH_COOKIE_NAME) continue;
+    return decodeURIComponent(item.slice(idx + 1).trim());
+  }
+  return '';
+};
 
 const authMiddleware = (req, res, next) => {
   if (
@@ -241,12 +552,11 @@ const authMiddleware = (req, res, next) => {
   ) {
     return next();
   }
-  const header = req.headers.authorization || '';
-  const token = header.startsWith('Bearer ') ? header.slice(7) : null;
+  const token = extractAuthToken(req);
   if (!token) {
     return res.status(401).json({ error: '未登录' });
   }
-  fetch(`${AUTH_SERVICE_URL}/api/auth/introspect`, {
+  fetchWithTimeout(`${AUTH_SERVICE_URL}/api/auth/introspect`, {
     method: 'GET',
     headers: { Authorization: `Bearer ${token}` },
   })
@@ -269,10 +579,9 @@ const authMiddleware = (req, res, next) => {
 
 const requireRole = (roles) => (req, res, next) => {
   if (!req.user) return res.status(401).json({ error: '未登录' });
-  const header = req.headers.authorization || '';
-  const token = header.startsWith('Bearer ') ? header.slice(7) : null;
+  const token = extractAuthToken(req);
   if (!token) return res.status(401).json({ error: '未登录' });
-  fetch(`${AUTH_SERVICE_URL}/api/auth/authorize`, {
+  fetchWithTimeout(`${AUTH_SERVICE_URL}/api/auth/authorize`, {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${token}`,
@@ -296,11 +605,10 @@ const requireRole = (roles) => (req, res, next) => {
 };
 
 const authorizeReminderAction = async (req, action, resource = {}) => {
-  const header = req.headers.authorization || '';
-  const token = header.startsWith('Bearer ') ? header.slice(7) : null;
+  const token = extractAuthToken(req);
   if (!token) return { allow: false, reason: '未登录' };
   try {
-    const resp = await fetch(`${AUTH_SERVICE_URL}/api/auth/authorize`, {
+    const resp = await fetchWithTimeout(`${AUTH_SERVICE_URL}/api/auth/authorize`, {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${token}`,
@@ -336,7 +644,7 @@ const applyScopeFilter = ({ scope, where, params, column = 'customers.id' }) => 
 };
 
 // Auth
-app.get('/api/auth/captcha', async (req, res) => {
+app.get('/api/auth/captcha', authRateLimiter, async (req, res) => {
   const security = await getSecurityConfig();
   if (!security.captcha.enabled) return res.json({ enabled: false });
   const token = crypto.randomBytes(18).toString('hex');
@@ -348,7 +656,7 @@ app.get('/api/auth/captcha', async (req, res) => {
   res.json({ enabled: true, token, svg: captchaSvg(code) });
 });
 
-app.post('/api/auth/login', async (req, res) => {
+app.post('/api/auth/login', authRateLimiter, async (req, res) => {
   const { username, password, captchaToken, captcha } = req.body || {};
   const rawUsername = String(username || '').trim();
   if (!rawUsername || !password) {
@@ -367,9 +675,10 @@ app.post('/api/auth/login', async (req, res) => {
   const ip = getRequestIp(req);
   let loginId = rawUsername;
   let user = null;
-  if (rawUsername === 'admin') {
-    loginId = 'admin';
-    user = await db.get('SELECT * FROM users WHERE username = ?', ['admin']);
+  const normalizedUsername = rawUsername.toLowerCase();
+  if (BUILTIN_ACCOUNT_USERNAMES.has(normalizedUsername)) {
+    loginId = normalizedUsername;
+    user = await db.get('SELECT * FROM users WHERE username = ?', [normalizedUsername]);
   } else {
     if (!/^\d{6,20}$/.test(rawUsername)) {
       return res.status(400).json({ error: '请使用手机号登录' });
@@ -398,6 +707,16 @@ app.post('/api/auth/login', async (req, res) => {
       afterData: { username: loginId, ip, fail_count: fail.failCount, locked_until: fail.lockedUntil },
     });
     return res.status(400).json({ error: '账号或密码错误' });
+  }
+  if (Number(user.is_active) !== 1) {
+    await logOperation({
+      user: { id: user.id, username: user.username, role: user.role },
+      action: 'LOGIN_BLOCKED',
+      entity: 'auth',
+      entityId: 0,
+      afterData: { reason: 'DISABLED', username: loginId, ip },
+    });
+    return res.status(403).json({ error: '账号已被禁用，请联系系统管理员' });
   }
   const ok = bcrypt.compareSync(password, user.password_hash);
   if (!ok) {
@@ -467,7 +786,7 @@ app.post('/api/auth/login', async (req, res) => {
   res.json({ token, user: { id: user.id, username: user.username, role: user.role } });
 });
 
-app.post('/api/auth/mfa/send', async (req, res) => {
+app.post('/api/auth/mfa/send', authRateLimiter, async (req, res) => {
   const { mfaToken, method } = req.body || {};
   if (!mfaToken || !method) return res.status(400).json({ error: '参数缺失' });
   const row = await db.get('SELECT * FROM auth_mfa_sessions WHERE token = ?', [mfaToken]);
@@ -560,7 +879,7 @@ app.post('/api/auth/mfa/send', async (req, res) => {
   res.json({ ok: true });
 });
 
-app.post('/api/auth/mfa/verify', async (req, res) => {
+app.post('/api/auth/mfa/verify', authRateLimiter, async (req, res) => {
   const { mfaToken, method, code } = req.body || {};
   if (!mfaToken || !method || !code) return res.status(400).json({ error: '参数缺失' });
   const row = await db.get('SELECT * FROM auth_mfa_sessions WHERE token = ?', [mfaToken]);
@@ -637,7 +956,7 @@ app.post('/api/auth/totp/setup', async (req, res) => {
   res.json({ secret, otpauth });
 });
 
-app.post('/api/auth/totp/enable', async (req, res) => {
+app.post('/api/auth/totp/enable', authRateLimiter, async (req, res) => {
   const { code } = req.body || {};
   if (!code) return res.status(400).json({ error: '请输入验证码' });
   const pending = await db.get('SELECT * FROM auth_totp_pending WHERE user_id = ?', [req.user.id]);
@@ -733,31 +1052,51 @@ app.post('/api/auth/logout', async (req, res) => {
 });
 
 // Users (admin)
-app.get('/api/users', requireRole(['admin']), async (req, res) => {
+app.get('/api/users', requireRole(['sysadmin']), async (req, res) => {
   const rows = await db.query(
-    'SELECT id, username, role, email, phone, wecom_id, app_access, totp_enabled, created_at FROM users ORDER BY id DESC'
+    'SELECT id, username, role, is_active, email, phone, wecom_id, app_access, totp_enabled, created_at FROM users ORDER BY id DESC'
   );
   res.json(rows.map(formatUserRow));
 });
 
-app.post('/api/users', requireRole(['admin']), async (req, res) => {
-  const { username, password, role, email, phone, wecom_id, app_access } = req.body || {};
+app.post('/api/users', requireRole(['sysadmin']), async (req, res) => {
+  const { username, password, role, is_active, email, phone, wecom_id, app_access } = req.body || {};
   if (!username || !password) {
     return res.status(400).json({ error: '请输入账号和密码' });
   }
-  const nextRole = role || 'viewer';
+  const usernameRuleError = validateUsernameFormat(username);
+  if (usernameRuleError) {
+    return res.status(400).json({ error: usernameRuleError });
+  }
+  const passwordRuleError = validatePasswordComplexity(password);
+  if (passwordRuleError) {
+    return res.status(400).json({ error: passwordRuleError });
+  }
+  const emailRuleError = validateEmailFormat(email);
+  if (emailRuleError) {
+    return res.status(400).json({ error: emailRuleError });
+  }
+  const phoneRuleError = validatePhoneFormat(phone);
+  if (phoneRuleError) {
+    return res.status(400).json({ error: phoneRuleError });
+  }
+  const nextRole = String(role || 'viewer').trim().toLowerCase();
+  if (!ALLOWED_USER_ROLES.has(nextRole)) {
+    return res.status(400).json({ error: '角色不合法' });
+  }
   const nextAccess = normalizeAppAccess(app_access, nextRole);
   if (!nextAccess.length) {
     return res.status(400).json({ error: '请至少选择一个可访问系统' });
   }
   const hash = bcrypt.hashSync(password, 10);
+  const nextActive = is_active === undefined ? 1 : (Number(is_active) === 1 ? 1 : 0);
   try {
     const info = await db.run(
-      'INSERT INTO users (username, password_hash, role, email, phone, wecom_id, app_access) VALUES (?, ?, ?, ?, ?, ?, ?)',
-      [username.trim(), hash, nextRole, email || null, phone || null, wecom_id || null, JSON.stringify(nextAccess)]
+      'INSERT INTO users (username, password_hash, role, is_active, email, phone, wecom_id, app_access) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+      [username.trim(), hash, nextRole, nextActive, email || null, phone || null, wecom_id || null, JSON.stringify(nextAccess)]
     );
     const row = formatUserRow(await db.get(
-      'SELECT id, username, role, email, phone, wecom_id, app_access, totp_enabled, created_at FROM users WHERE id = ?',
+      'SELECT id, username, role, is_active, email, phone, wecom_id, app_access, totp_enabled, created_at FROM users WHERE id = ?',
       [info.insertId]
     ));
     await logOperation({
@@ -769,16 +1108,20 @@ app.post('/api/users', requireRole(['admin']), async (req, res) => {
     });
     res.json(row);
   } catch (err) {
-    res.status(400).json({ error: '账号已存在或数据错误' });
+    if (err && err.code === 'ER_DUP_ENTRY') {
+      return res.status(400).json({ error: '用户名已存在' });
+    }
+    return res.status(400).json({ error: err?.sqlMessage || '账号已存在或数据错误' });
   }
 });
 
-app.put('/api/users/:id', requireRole(['admin']), async (req, res) => {
+app.put('/api/users/:id', requireRole(['sysadmin']), async (req, res) => {
   const { id } = req.params;
-  const { password, role, email, phone, wecom_id, app_access } = req.body || {};
+  const { password, role, is_active, email, phone, wecom_id, app_access } = req.body || {};
   if (
     !password &&
     !role &&
+    is_active === undefined &&
     email === undefined &&
     phone === undefined &&
     wecom_id === undefined &&
@@ -786,20 +1129,43 @@ app.put('/api/users/:id', requireRole(['admin']), async (req, res) => {
   ) {
     return res.status(400).json({ error: '没有可更新字段' });
   }
+  if (email !== undefined) {
+    const emailRuleError = validateEmailFormat(email);
+    if (emailRuleError) return res.status(400).json({ error: emailRuleError });
+  }
+  if (phone !== undefined) {
+    const phoneRuleError = validatePhoneFormat(phone);
+    if (phoneRuleError) return res.status(400).json({ error: phoneRuleError });
+  }
   const before = formatUserRow(await db.get(
-    'SELECT id, username, role, email, phone, wecom_id, app_access, totp_enabled, created_at FROM users WHERE id = ?',
+    'SELECT id, username, role, is_active, email, phone, wecom_id, app_access, totp_enabled, created_at FROM users WHERE id = ?',
     [id]
   ));
   if (!before) {
     return res.status(404).json({ error: '用户不存在' });
   }
+  if (BUILTIN_ACCOUNT_USERNAMES.has(String(before.username || '').toLowerCase()) && role) {
+    const fixedRole = BUILTIN_ACCOUNTS.find(
+      (item) => item.username === String(before.username || '').toLowerCase()
+    )?.role;
+    if (fixedRole && String(role).trim().toLowerCase() !== fixedRole) {
+      return res.status(400).json({ error: '内置账号角色不可修改' });
+    }
+  }
   if (password) {
+    const passwordRuleError = validatePasswordComplexity(password);
+    if (passwordRuleError) {
+      return res.status(400).json({ error: passwordRuleError });
+    }
     const hash = bcrypt.hashSync(password, 10);
     await db.run('UPDATE users SET password_hash = ? WHERE id = ?', [hash, id]);
   }
-  const nextRole = role || before.role;
+  const nextRole = role ? String(role).trim().toLowerCase() : before.role;
+  if (!ALLOWED_USER_ROLES.has(nextRole)) {
+    return res.status(400).json({ error: '角色不合法' });
+  }
   if (role) {
-    await db.run('UPDATE users SET role = ? WHERE id = ?', [role, id]);
+    await db.run('UPDATE users SET role = ? WHERE id = ?', [nextRole, id]);
   }
   if (email !== undefined) {
     await db.run('UPDATE users SET email = ? WHERE id = ?', [email || null, id]);
@@ -810,7 +1176,20 @@ app.put('/api/users/:id', requireRole(['admin']), async (req, res) => {
   if (wecom_id !== undefined) {
     await db.run('UPDATE users SET wecom_id = ? WHERE id = ?', [wecom_id || null, id]);
   }
+  if (is_active !== undefined) {
+    const nextActive = Number(is_active) === 1 ? 1 : 0;
+    if (isBuiltinUsername(before.username) && nextActive !== 1) {
+      return res.status(400).json({ error: '内置账号不可禁用' });
+    }
+    if (String(id) === String(req.user.id) && nextActive !== 1) {
+      return res.status(400).json({ error: '不能禁用自己' });
+    }
+    await db.run('UPDATE users SET is_active = ? WHERE id = ?', [nextActive, id]);
+  }
   if (role !== undefined || app_access !== undefined) {
+    if (isBuiltinUsername(before.username) && app_access !== undefined) {
+      return res.status(400).json({ error: '内置账号系统权限不可修改' });
+    }
     const nextAccess = normalizeAppAccess(app_access !== undefined ? app_access : before.app_access, nextRole);
     if (!nextAccess.length) {
       return res.status(400).json({ error: '请至少选择一个可访问系统' });
@@ -818,12 +1197,16 @@ app.put('/api/users/:id', requireRole(['admin']), async (req, res) => {
     await db.run('UPDATE users SET app_access = ? WHERE id = ?', [JSON.stringify(nextAccess), id]);
   }
   const row = formatUserRow(await db.get(
-    'SELECT id, username, role, email, phone, wecom_id, app_access, totp_enabled, created_at FROM users WHERE id = ?',
+    'SELECT id, username, role, is_active, email, phone, wecom_id, app_access, totp_enabled, created_at FROM users WHERE id = ?',
     [id]
   ));
+  let actionType = 'UPDATE';
+  if (Number(before.is_active) !== Number(row.is_active)) {
+    actionType = Number(row.is_active) === 1 ? 'ENABLE_USER' : 'DISABLE_USER';
+  }
   await logOperation({
     user: req.user,
-    action: 'UPDATE',
+    action: actionType,
     entity: 'user',
     entityId: Number(id),
     beforeData: before,
@@ -832,15 +1215,21 @@ app.put('/api/users/:id', requireRole(['admin']), async (req, res) => {
   res.json(row);
 });
 
-app.delete('/api/users/:id', requireRole(['admin']), async (req, res) => {
+app.delete('/api/users/:id', requireRole(['sysadmin']), async (req, res) => {
   const { id } = req.params;
   if (String(id) === String(req.user.id)) {
     return res.status(400).json({ error: '不能删除自己' });
   }
   const before = formatUserRow(await db.get(
-    'SELECT id, username, role, email, phone, wecom_id, app_access, totp_enabled, created_at FROM users WHERE id = ?',
+    'SELECT id, username, role, is_active, email, phone, wecom_id, app_access, totp_enabled, created_at FROM users WHERE id = ?',
     [id]
   ));
+  if (!before) {
+    return res.status(404).json({ error: '用户不存在' });
+  }
+  if (isBuiltinUsername(before.username)) {
+    return res.status(400).json({ error: '内置账号不可删除' });
+  }
   await db.run('DELETE FROM users WHERE id = ?', [id]);
   await logOperation({
     user: req.user,
@@ -932,23 +1321,92 @@ const getRateLimitConfig = (configs) => {
   };
 };
 
-const logOperation = async ({ user, action, entity, entityId, beforeData, afterData }) => {
+const logOperation = async ({ user, action, entity, entityId, beforeData, afterData, system = 'reminder' }) => {
   try {
-    await db.run(
-      'INSERT INTO operation_logs (user_id, username, action, entity, entity_id, before_data, after_data) VALUES (?, ?, ?, ?, ?, ?, ?)',
-      [
-        user?.id || 0,
-        user?.username || 'system',
+    const userId = Number(user?.id || 0);
+    const username = String(user?.username || 'system');
+    const logSystem = String(system || 'reminder').trim() || 'reminder';
+    const beforeText = beforeData === undefined ? null : stableStringify(beforeData);
+    const afterText = afterData === undefined ? null : stableStringify(afterData);
+    const createdAt = toMysqlDatetime(new Date());
+    await db.transaction(async (trx) => {
+      const prev = await trx.get('SELECT signature FROM operation_logs ORDER BY id DESC LIMIT 1 FOR UPDATE');
+      const prevHash = prev?.signature || null;
+      const inserted = await trx.run(
+        `INSERT INTO operation_logs
+           (user_id, username, log_system, action, entity, entity_id, before_data, after_data, prev_hash, signature, sign_version, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [userId, username, logSystem, action, entity, entityId, beforeText, afterText, prevHash, null, 'v1', createdAt]
+      );
+      const signature = computeAuditSignature({
+        id: inserted.insertId,
+        prevHash,
+        userId,
+        username,
         action,
         entity,
         entityId,
-        beforeData ? JSON.stringify(beforeData) : null,
-        afterData ? JSON.stringify(afterData) : null,
-      ]
-    );
+        beforeData: beforeText,
+        afterData: afterText,
+        createdAt,
+      });
+      await trx.run('UPDATE operation_logs SET signature = ? WHERE id = ?', [signature, inserted.insertId]);
+    });
   } catch (err) {
     // ignore logging failures
   }
+};
+
+const backfillOperationLogSignatures = async () => {
+  const rows = await db.query(
+    `SELECT id, user_id, username, action, entity, entity_id, before_data, after_data, prev_hash, signature, created_at
+     FROM operation_logs
+     ORDER BY id ASC`
+  );
+  let previousSignature = null;
+  for (const row of rows) {
+    if (!row.signature) {
+      const desiredPrevHash = previousSignature || null;
+      const desiredSignature = computeAuditSignature({
+        id: row.id,
+        prevHash: desiredPrevHash,
+        userId: row.user_id,
+        username: row.username,
+        action: row.action,
+        entity: row.entity,
+        entityId: row.entity_id,
+        beforeData: row.before_data,
+        afterData: row.after_data,
+        createdAt: row.created_at,
+      });
+      await db.run(
+        'UPDATE operation_logs SET prev_hash = ?, signature = ?, sign_version = ? WHERE id = ?',
+        [desiredPrevHash, desiredSignature, 'v1', row.id]
+      );
+      previousSignature = desiredSignature;
+    } else {
+      previousSignature = row.signature;
+    }
+  }
+};
+
+const backfillOperationLogSystems = async () => {
+  await db.run(
+    `UPDATE operation_logs
+     SET log_system = CASE
+       WHEN entity IN ('工单', '项目', '项目权限', '工单模板', '排期')
+         OR action IN ('创建项目', '更新项目', '删除项目', '更新项目权限', '导入模板', '创建排期')
+         THEN 'ticketing'
+       WHEN action IN (
+         'LOGIN', 'LOGOUT', 'LOGIN_FAILED', 'LOGIN_LOCKED', 'LOGIN_BLOCKED',
+         'LOGIN_MFA_REQUIRED', 'MFA_SEND', 'MFA_SEND_FAILED', 'MFA_VERIFY_OK', 'MFA_VERIFY_FAILED',
+         'TOTP_ENABLED'
+       )
+         THEN 'sso'
+       ELSE 'reminder'
+     END
+     WHERE log_system IS NULL OR log_system = ''`
+  );
 };
 
 const insertImportJob = async ({
@@ -988,7 +1446,9 @@ const insertImportJob = async ({
 };
 
 const csvEscape = (value) => {
-  const raw = value === null || value === undefined ? '' : String(value);
+  const rawText = value === null || value === undefined ? '' : String(value);
+  const ltrim = rawText.replace(/^[\s\r\n\t]+/, '');
+  const raw = /^[=+\-@]/.test(ltrim) ? `'${rawText}` : rawText;
   const escaped = raw.replace(/\"/g, '""');
   return `"${escaped}"`;
 };
@@ -1002,12 +1462,62 @@ const toCsv = (rows, headers) => {
   return `\ufeff${head}\n${body}\n`;
 };
 
+const toAuditActionZh = (value) => {
+  const map = {
+    LOGIN: '登录',
+    LOGOUT: '登出',
+    LOGIN_FAILED: '登录失败',
+    LOGIN_LOCKED: '登录锁定',
+    LOGIN_BLOCKED: '账号被禁用',
+    LOGIN_MFA_REQUIRED: '需要二次验证',
+    MFA_SEND: '发送验证码',
+    MFA_SEND_FAILED: '验证码发送失败',
+    MFA_VERIFY_OK: '验证码校验成功',
+    MFA_VERIFY_FAILED: '验证码校验失败',
+    TOTP_ENABLED: '开启谷歌认证',
+    CREATE: '新增',
+    UPDATE: '更新',
+    DELETE: '删除',
+    IMPORT: '导入',
+    UPLOAD: '上传',
+    CHANGE_PASSWORD: '修改密码',
+    RESET_PASSWORD: '重置密码',
+    ENABLE_USER: '启用用户',
+    DISABLE_USER: '禁用用户',
+  };
+  return map[String(value || '').trim()] || String(value || '');
+};
+
+const toAuditEntityZh = (value) => {
+  const map = {
+    auth: '认证/登录',
+    user: '用户',
+    customer: '客户',
+    contact: '联系人',
+    license: '授权',
+    send_plan: '发送计划',
+    send_configs: '发送配置',
+    ticket: '工单',
+    project: '项目',
+    template: '模板',
+    schedule: '排期',
+    permission: '权限',
+  };
+  return map[String(value || '').trim()] || String(value || '');
+};
+
+const toAuditSystemZh = (value) => {
+  const map = {
+    reminder: '提醒系统',
+    ticketing: '工单系统',
+    cmdb: 'CMDB系统',
+    sso: '统一登录',
+  };
+  return map[String(value || '').trim()] || String(value || '');
+};
+
 const getRequestIp = (req) => {
-  const forwarded = req.headers['x-forwarded-for'];
-  if (typeof forwarded === 'string' && forwarded.trim()) {
-    return forwarded.split(',')[0].trim();
-  }
-  return req.ip || 'unknown';
+  return extractRequestIp(req);
 };
 
 const isLocked = ({ lockedUntilIso }) => {
@@ -1309,7 +1819,7 @@ const syncContactCustomers = async (trx, contactId, customerIds) => {
 };
 
 // Customers
-app.get('/api/customers', async (req, res) => {
+app.get('/api/customers', requireRole(['admin']), async (req, res) => {
   const { search } = req.query;
   const where = [];
   const params = [];
@@ -1323,7 +1833,7 @@ app.get('/api/customers', async (req, res) => {
   res.json(rows);
 });
 
-app.post('/api/customers', requireRole(['admin', 'sales']), async (req, res) => {
+app.post('/api/customers', requireRole(['admin']), async (req, res) => {
   const { name, juxin_sales, channel_sales } = req.body;
   const authzCreateCustomer = await authorizeReminderAction(req, 'customer:create', { customer_in_scope: false });
   if (!authzCreateCustomer.allow) return res.status(403).json({ error: authzCreateCustomer.reason || '无权限' });
@@ -1349,7 +1859,7 @@ app.post('/api/customers', requireRole(['admin', 'sales']), async (req, res) => 
   }
 });
 
-app.put('/api/customers/:id', requireRole(['admin', 'sales']), async (req, res) => {
+app.put('/api/customers/:id', requireRole(['admin']), async (req, res) => {
   const { id } = req.params;
   const { name, juxin_sales, channel_sales } = req.body;
   if (!name || !name.trim()) {
@@ -1408,7 +1918,7 @@ app.delete('/api/customers/:id', requireRole(['admin']), async (req, res) => {
 });
 
 // Contacts
-app.get('/api/contacts', async (req, res) => {
+app.get('/api/contacts', requireRole(['admin']), async (req, res) => {
   const { search, customer_id, is_active } = req.query;
   const where = [];
   const params = [];
@@ -1451,7 +1961,7 @@ app.get('/api/contacts', async (req, res) => {
   );
 });
 
-app.post('/api/contacts', requireRole(['admin', 'sales']), async (req, res) => {
+app.post('/api/contacts', requireRole(['admin']), async (req, res) => {
   const { customer_id, customer_ids, name, phone, email, wecom_id, is_active } = req.body;
   const normalizedCustomerIds = normalizeCustomerIds(customer_ids, customer_id);
   if (!normalizedCustomerIds.length) {
@@ -1513,7 +2023,7 @@ app.post('/api/contacts', requireRole(['admin', 'sales']), async (req, res) => {
   });
 });
 
-app.put('/api/contacts/:id', requireRole(['admin', 'sales']), async (req, res) => {
+app.put('/api/contacts/:id', requireRole(['admin']), async (req, res) => {
   const { id } = req.params;
   const { customer_id, customer_ids, name, phone, email, wecom_id, is_active } = req.body;
   const normalizedCustomerIds = normalizeCustomerIds(customer_ids, customer_id);
@@ -1607,7 +2117,7 @@ app.delete('/api/contacts/:id', requireRole(['admin']), async (req, res) => {
 });
 
 // Licenses
-app.get('/api/licenses', async (req, res) => {
+app.get('/api/licenses', requireRole(['admin']), async (req, res) => {
   const { search, customer_id, status, quick, days, missing_screenshot } = req.query;
   const where = [];
   const params = [];
@@ -1648,7 +2158,7 @@ app.get('/api/licenses', async (req, res) => {
   res.json(rows);
 });
 
-app.get('/api/licenses/expiring', async (req, res) => {
+app.get('/api/licenses/expiring', requireRole(['admin']), async (req, res) => {
   const days = Number(req.query.days || 30);
   const where = [];
   const params = [];
@@ -1668,7 +2178,7 @@ app.get('/api/licenses/expiring', async (req, res) => {
   res.json(rows);
 });
 
-app.post('/api/licenses', requireRole(['admin', 'sales']), async (req, res) => {
+app.post('/api/licenses', requireRole(['admin']), async (req, res) => {
   const { customer_id, name, start_date, end_date, status, note, reminder_days } = req.body;
   if (!customer_id) {
     return res.status(400).json({ error: '请选择客户名称' });
@@ -1706,7 +2216,7 @@ app.post('/api/licenses', requireRole(['admin', 'sales']), async (req, res) => {
   res.json(toJson(row));
 });
 
-app.put('/api/licenses/:id', requireRole(['admin', 'sales']), async (req, res) => {
+app.put('/api/licenses/:id', requireRole(['admin']), async (req, res) => {
   const { id } = req.params;
   const { customer_id, name, start_date, end_date, status, note, reminder_days } = req.body;
   if (!customer_id) {
@@ -1751,7 +2261,7 @@ app.put('/api/licenses/:id', requireRole(['admin', 'sales']), async (req, res) =
   res.json(toJson(row));
 });
 
-app.post('/api/licenses/:id/screenshot', requireRole(['admin', 'sales']), screenshotUpload.single('file'), async (req, res) => {
+app.post('/api/licenses/:id/screenshot', requireRole(['admin']), uploadRateLimiter, screenshotUpload.single('file'), async (req, res) => {
   const { id } = req.params;
   const license = await db.get('SELECT * FROM licenses WHERE id = ?', [id]);
   if (!license) {
@@ -1768,13 +2278,15 @@ app.post('/api/licenses/:id/screenshot', requireRole(['admin', 'sales']), screen
   if (!file) {
     return res.status(400).json({ error: '请选择截图文件' });
   }
-  const allowedTypes = ['image/jpeg', 'image/png'];
-  if (!allowedTypes.includes(file.mimetype)) {
+  const magicMime = detectImageMimeByMagic(file.buffer);
+  const allowedTypes = new Set(['image/jpeg', 'image/png']);
+  if (!allowedTypes.has(String(file.mimetype || '').toLowerCase()) || !allowedTypes.has(magicMime)) {
     return res.status(400).json({ error: '仅支持上传jpg或png图片' });
   }
-  const ext = file.mimetype === 'image/png' ? '.png' : '.jpg';
+  const ext = magicMime === 'image/png' ? '.png' : '.jpg';
   await fs.promises.mkdir(uploadsDir, { recursive: true });
-  const filename = `license_${id}_${Date.now()}${ext}`;
+  const random = crypto.randomBytes(8).toString('hex');
+  const filename = `license_${id}_${Date.now()}_${random}${ext}`;
   const filepath = path.join(uploadsDir, filename);
   await fs.promises.writeFile(filepath, file.buffer);
   const url = `/uploads/${filename}`;
@@ -1796,6 +2308,9 @@ app.post('/api/licenses/:id/screenshot', requireRole(['admin', 'sales']), screen
     'UPDATE licenses SET screenshot_url = ?, screenshot_valid = ?, screenshot_ocr_text = ? WHERE id = ?',
     [url, screenshotValid, ocrText || null, id]
   );
+  if (license.screenshot_url && license.screenshot_url !== url) {
+    await cleanupScreenshotFile(license.screenshot_url);
+  }
   await logOperation({
     user: req.user,
     action: 'UPLOAD',
@@ -1812,7 +2327,7 @@ app.post('/api/licenses/:id/screenshot', requireRole(['admin', 'sales']), screen
   });
 });
 
-app.delete('/api/licenses/:id/screenshot', requireRole(['admin', 'sales']), async (req, res) => {
+app.delete('/api/licenses/:id/screenshot', requireRole(['admin']), async (req, res) => {
   const { id } = req.params;
   const license = await db.get('SELECT * FROM licenses WHERE id = ?', [id]);
   if (!license) {
@@ -1829,6 +2344,7 @@ app.delete('/api/licenses/:id/screenshot', requireRole(['admin', 'sales']), asyn
     'UPDATE licenses SET screenshot_url = NULL, screenshot_valid = NULL, screenshot_ocr_text = NULL WHERE id = ?',
     [id]
   );
+  await cleanupScreenshotFile(license.screenshot_url);
   await logOperation({
     user: req.user,
     action: 'DELETE',
@@ -1838,6 +2354,38 @@ app.delete('/api/licenses/:id/screenshot', requireRole(['admin', 'sales']), asyn
     afterData: { screenshot_url: '' },
   });
   res.json({ ok: true });
+});
+
+app.get('/api/licenses/:id/screenshot/content', requireRole(['admin']), async (req, res) => {
+  const { id } = req.params;
+  const license = await db.get('SELECT id, screenshot_url FROM licenses WHERE id = ?', [id]);
+  if (!license) {
+    return res.status(404).json({ error: '授权不存在' });
+  }
+  const okLicense = await ensureLicenseInScope(req.scope, id);
+  if (!okLicense) {
+    return res.status(403).json({ error: '无权限访问该截图' });
+  }
+  if (!license.screenshot_url) {
+    return res.status(404).json({ error: '截图不存在' });
+  }
+  const resolved = resolveScreenshotFilePath(license.screenshot_url);
+  if (!resolved) {
+    return res.status(404).json({ error: '截图路径无效' });
+  }
+  try {
+    const fileBuffer = await fs.promises.readFile(resolved.fullPath);
+    const mime = resolved.filename.toLowerCase().endsWith('.png') ? 'image/png' : 'image/jpeg';
+    res.setHeader('Content-Type', mime);
+    res.setHeader('Cache-Control', 'no-store');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    return res.send(fileBuffer);
+  } catch (err) {
+    if (err && err.code === 'ENOENT') {
+      return res.status(404).json({ error: '截图文件不存在' });
+    }
+    return res.status(500).json({ error: '读取截图失败' });
+  }
 });
 
 app.delete('/api/licenses/:id', requireRole(['admin']), async (req, res) => {
@@ -1850,6 +2398,7 @@ app.delete('/api/licenses/:id', requireRole(['admin']), async (req, res) => {
     license_in_scope: licenseInScope,
   });
   if (!authzDeleteLicense.allow) return res.status(403).json({ error: authzDeleteLicense.reason || '无权限' });
+  await cleanupScreenshotFile(before.screenshot_url);
   await db.run('DELETE FROM licenses WHERE id = ?', [id]);
   await logOperation({
     user: req.user,
@@ -1862,7 +2411,7 @@ app.delete('/api/licenses/:id', requireRole(['admin']), async (req, res) => {
 });
 
 // Autocomplete customers
-app.get('/api/customers/autocomplete', async (req, res) => {
+app.get('/api/customers/autocomplete', requireRole(['admin']), async (req, res) => {
   const { q } = req.query;
   const where = ['name LIKE ?'];
   const params = [`%${q || ''}%`];
@@ -1875,17 +2424,34 @@ app.get('/api/customers/autocomplete', async (req, res) => {
 });
 
 // Send configs
-app.get('/api/send-configs', async (req, res) => {
+app.get('/api/send-configs', requireRole(['admin', 'sysadmin']), async (req, res) => {
   const rows = await db.query('SELECT `key`, value FROM send_configs');
   const result = rows.reduce((acc, row) => {
     acc[row.key] = JSON.parse(row.value);
     return acc;
   }, {});
-  res.json(maskSecrets(result));
+  const masked = maskSecrets(result);
+  if (req.user?.role === 'sysadmin') {
+    return res.json({ security: masked.security || {} });
+  }
+  if (req.user?.role === 'admin') {
+    const { security, ...businessConfigs } = masked;
+    return res.json(businessConfigs);
+  }
+  return res.json(masked);
 });
 
-app.post('/api/send-configs', requireRole(['admin']), async (req, res) => {
+app.post('/api/send-configs', requireRole(['admin', 'sysadmin']), async (req, res) => {
   const configs = req.body || {};
+  const incomingKeys = Object.keys(configs || {});
+  const hasSecurityPayload = incomingKeys.includes('security');
+  const hasBusinessPayload = incomingKeys.some((key) => key !== 'security');
+  if (req.user?.role === 'sysadmin' && hasBusinessPayload) {
+    return res.status(403).json({ error: '系统管理员仅可修改安全配置' });
+  }
+  if (req.user?.role === 'admin' && hasSecurityPayload) {
+    return res.status(403).json({ error: '业务管理员不可修改安全配置' });
+  }
   const existing = await getConfigs();
   const beforeSnapshot = existing;
   const locked = existing?.reminder?.locked;
@@ -2397,7 +2963,7 @@ const ensureLicenseInScope = async (scope, licenseId) => {
 };
 
 // Send
-app.post('/api/send', requireRole(['admin', 'sales']), async (req, res) => {
+app.post('/api/send', requireRole(['admin']), async (req, res) => {
   const { contactIds, channels, subject, message, licenseId } = req.body;
   if (!Array.isArray(contactIds) || contactIds.length === 0) {
     return res.status(400).json({ error: '请选择联系人' });
@@ -2528,7 +3094,7 @@ app.post('/api/test/wecom', requireRole(['admin']), async (req, res) => {
 });
 
 // Send plans
-app.get('/api/send-plans', requireRole(['admin', 'sales']), async (req, res) => {
+app.get('/api/send-plans', requireRole(['admin']), async (req, res) => {
   const where = [];
   const params = [];
   applyScopeFilter({ scope: req.scope, where, params, column: 'customers.id' });
@@ -2552,7 +3118,7 @@ app.get('/api/send-plans', requireRole(['admin', 'sales']), async (req, res) => 
   );
 });
 
-app.post('/api/send-plans', requireRole(['admin', 'sales']), async (req, res) => {
+app.post('/api/send-plans', requireRole(['admin']), async (req, res) => {
   const { name, license_id, contact_ids, channels, days, enabled, wecom_mode } = req.body || {};
   if (!name || !license_id) {
     return res.status(400).json({ error: '计划名称和授权必填' });
@@ -2612,7 +3178,7 @@ app.post('/api/send-plans', requireRole(['admin', 'sales']), async (req, res) =>
   });
 });
 
-app.put('/api/send-plans/:id', requireRole(['admin', 'sales']), async (req, res) => {
+app.put('/api/send-plans/:id', requireRole(['admin']), async (req, res) => {
   const { id } = req.params;
   const { name, license_id, contact_ids, channels, days, enabled, wecom_mode } = req.body || {};
   if (!name || !license_id) {
@@ -2678,7 +3244,7 @@ app.put('/api/send-plans/:id', requireRole(['admin', 'sales']), async (req, res)
   });
 });
 
-app.delete('/api/send-plans/:id', requireRole(['admin', 'sales']), async (req, res) => {
+app.delete('/api/send-plans/:id', requireRole(['admin']), async (req, res) => {
   const { id } = req.params;
   const before = await db.get('SELECT * FROM send_plans WHERE id = ?', [id]);
   if (!before) return res.status(404).json({ error: '计划不存在' });
@@ -2699,7 +3265,7 @@ app.delete('/api/send-plans/:id', requireRole(['admin', 'sales']), async (req, r
   res.json({ ok: true });
 });
 
-app.post('/api/send-plans/send-now', requireRole(['admin', 'sales']), async (req, res) => {
+app.post('/api/send-plans/send-now', requireRole(['admin']), async (req, res) => {
   const { plan_ids } = req.body || {};
   if (!Array.isArray(plan_ids) || plan_ids.length === 0) {
     return res.status(400).json({ error: '请选择发送计划' });
@@ -2817,7 +3383,7 @@ app.post('/api/send-plans/send-now', requireRole(['admin', 'sales']), async (req
   res.json({ ok: true, results });
 });
 
-app.get('/api/send-logs', async (req, res) => {
+app.get('/api/send-logs', requireRole(['admin']), async (req, res) => {
   const where = [];
   const params = [];
   applyScopeFilter({ scope: req.scope, where, params, column: 'customers.id' });
@@ -2836,10 +3402,13 @@ app.get('/api/send-logs', async (req, res) => {
   res.json(rows);
 });
 
-app.get('/api/operation-logs', requireRole(['admin']), async (req, res) => {
-  const { username, action, entity, date_from, date_to, limit } = req.query || {};
+app.get('/api/operation-logs', requireRole(['auditor']), async (req, res) => {
+  const { username, system, action, entity, date_from, date_to, limit } = req.query || {};
   const where = [];
   const params = [];
+  const systemKey = String(system || 'reminder').trim() || 'reminder';
+  where.push('log_system = ?');
+  params.push(systemKey);
   if (username) {
     where.push('username LIKE ?');
     params.push(`%${username}%`);
@@ -2863,7 +3432,9 @@ app.get('/api/operation-logs', requireRole(['admin']), async (req, res) => {
   const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
   const take = Math.min(Math.max(Number(limit || 300), 1), 2000);
   const rows = await db.query(
-    `SELECT *
+    `SELECT
+       id, user_id, username, log_system AS \`system\`, action, entity, entity_id,
+       before_data, after_data, prev_hash, signature, sign_version, created_at
      FROM operation_logs
      ${whereSql}
      ORDER BY id DESC
@@ -2873,10 +3444,13 @@ app.get('/api/operation-logs', requireRole(['admin']), async (req, res) => {
   res.json(rows);
 });
 
-app.get('/api/operation-logs/export', requireRole(['admin']), async (req, res) => {
-  const { username, action, entity, date_from, date_to } = req.query || {};
+app.get('/api/operation-logs/export', requireRole(['auditor']), async (req, res) => {
+  const { username, system, action, entity, date_from, date_to } = req.query || {};
   const where = [];
   const params = [];
+  const systemKey = String(system || 'reminder').trim() || 'reminder';
+  where.push('log_system = ?');
+  params.push(systemKey);
   if (username) {
     where.push('username LIKE ?');
     params.push(`%${username}%`);
@@ -2899,22 +3473,32 @@ app.get('/api/operation-logs/export', requireRole(['admin']), async (req, res) =
   }
   const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
   const rows = await db.query(
-    `SELECT id, username, action, entity, entity_id, before_data, after_data, created_at
+    `SELECT id, username, log_system AS \`system\`, action, entity, entity_id, before_data, after_data, prev_hash, signature, sign_version, created_at
      FROM operation_logs
      ${whereSql}
      ORDER BY id DESC
      LIMIT 5000`,
     params
   );
+  const localizedRows = rows.map((row) => ({
+    ...row,
+    system: toAuditSystemZh(row.system),
+    action: toAuditActionZh(row.action),
+    entity: toAuditEntityZh(row.entity),
+  }));
 
-  const csv = toCsv(rows, [
+  const csv = toCsv(localizedRows, [
     { key: 'id', label: 'ID' },
     { key: 'username', label: '用户' },
+    { key: 'system', label: '系统' },
     { key: 'action', label: '动作' },
     { key: 'entity', label: '对象' },
     { key: 'entity_id', label: '对象ID' },
     { key: 'before_data', label: '变更前' },
     { key: 'after_data', label: '变更后' },
+    { key: 'prev_hash', label: '前一条签名' },
+    { key: 'signature', label: '当前签名' },
+    { key: 'sign_version', label: '签名版本' },
     { key: 'created_at', label: '时间' },
   ]);
 
@@ -2923,7 +3507,92 @@ app.get('/api/operation-logs/export', requireRole(['admin']), async (req, res) =
   res.send(csv);
 });
 
-app.get('/api/import-jobs', requireRole(['admin', 'sales']), async (req, res) => {
+const verifyOperationLogChain = async (limitInput) => {
+  const limit = Math.min(Math.max(Number(limitInput || 10000), 1), 50000);
+  const rows = await db.query(
+    `SELECT id, user_id, username, action, entity, entity_id, before_data, after_data, prev_hash, signature, created_at
+     FROM operation_logs
+     ORDER BY id ASC
+     LIMIT ?`,
+    [limit]
+  );
+  let previousSignature = null;
+  let checked = 0;
+  for (const row of rows) {
+    checked += 1;
+    if ((row.prev_hash || null) !== (previousSignature || null)) {
+      return {
+        ok: false,
+        checked,
+        failed_id: row.id,
+        reason: '链路断裂：prev_hash与前一条签名不一致',
+      };
+    }
+    const expected = computeAuditSignature({
+      id: row.id,
+      prevHash: row.prev_hash,
+      userId: row.user_id,
+      username: row.username,
+      action: row.action,
+      entity: row.entity,
+      entityId: row.entity_id,
+      beforeData: row.before_data,
+      afterData: row.after_data,
+      createdAt: row.created_at,
+    });
+    if (expected !== row.signature) {
+      return {
+        ok: false,
+        checked,
+        failed_id: row.id,
+        reason: '签名不一致：疑似日志被篡改',
+      };
+    }
+    previousSignature = row.signature;
+  }
+  return {
+    ok: true,
+    checked,
+    latest_id: rows[rows.length - 1]?.id || 0,
+    reason: '',
+  };
+};
+
+app.get('/api/operation-logs/verify', requireRole(['auditor']), async (req, res) => {
+  const result = await verifyOperationLogChain(req.query.limit);
+  return res.json(result);
+});
+
+app.get('/api/operation-logs/verify/export', requireRole(['auditor']), async (req, res) => {
+  const result = await verifyOperationLogChain(req.query.limit);
+  const generatedAt = new Date();
+  const filename = `audit-verify-report-${generatedAt.toISOString().slice(0, 19).replace(/[:T]/g, '-')}.csv`;
+  const rows = [
+    {
+      generated_at: generatedAt.toISOString(),
+      result: result.ok ? '通过' : '失败',
+      checked: Number(result.checked || 0),
+      latest_id: Number(result.latest_id || 0),
+      failed_id: Number(result.failed_id || 0),
+      reason: result.reason || '',
+      verify_limit: Math.min(Math.max(Number(req.query.limit || 10000), 1), 50000),
+    },
+  ];
+  const csv = toCsv(rows, [
+    { key: 'generated_at', label: '核验时间' },
+    { key: 'result', label: '核验结果' },
+    { key: 'checked', label: '已校验条数' },
+    { key: 'latest_id', label: '最新记录ID' },
+    { key: 'failed_id', label: '失败记录ID' },
+    { key: 'reason', label: '失败原因' },
+    { key: 'verify_limit', label: '核验上限' },
+  ]);
+  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+  res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+  res.send(csv);
+});
+
+app.get('/api/import-jobs', requireRole(['admin']), async (req, res) => {
   const { type, status, username, date_from, date_to, limit } = req.query || {};
   const where = [];
   const params = [];
@@ -2964,7 +3633,7 @@ app.get('/api/import-jobs', requireRole(['admin', 'sales']), async (req, res) =>
   res.json(rows);
 });
 
-app.get('/api/import-jobs/:id', requireRole(['admin', 'sales']), async (req, res) => {
+app.get('/api/import-jobs/:id', requireRole(['admin']), async (req, res) => {
   const { id } = req.params;
   const row = await db.get('SELECT * FROM import_jobs WHERE id = ?', [id]);
   if (!row) return res.status(404).json({ error: '记录不存在' });
@@ -2986,6 +3655,10 @@ app.post('/api/auth/change-password', async (req, res) => {
   if (!currentPassword || !newPassword) {
     return res.status(400).json({ error: '请输入当前密码和新密码' });
   }
+  const passwordRuleError = validatePasswordComplexity(newPassword);
+  if (passwordRuleError) {
+    return res.status(400).json({ error: passwordRuleError });
+  }
   const user = await db.get('SELECT * FROM users WHERE id = ?', [req.user.id]);
   if (!user) {
     return res.status(400).json({ error: '用户不存在' });
@@ -3005,11 +3678,19 @@ app.post('/api/auth/change-password', async (req, res) => {
   res.json({ ok: true });
 });
 
-app.post('/api/users/:id/reset-password', requireRole(['admin']), async (req, res) => {
+app.post('/api/users/:id/reset-password', requireRole(['sysadmin']), async (req, res) => {
   const { id } = req.params;
   const { newPassword } = req.body || {};
   if (!newPassword) {
     return res.status(400).json({ error: '请输入新密码' });
+  }
+  const targetUser = await db.get('SELECT id, username FROM users WHERE id = ?', [id]);
+  if (!targetUser) {
+    return res.status(404).json({ error: '用户不存在' });
+  }
+  const passwordRuleError = validatePasswordComplexity(newPassword);
+  if (passwordRuleError) {
+    return res.status(400).json({ error: passwordRuleError });
   }
   const hash = bcrypt.hashSync(newPassword, 10);
   await db.run('UPDATE users SET password_hash = ? WHERE id = ?', [hash, id]);
@@ -3018,12 +3699,13 @@ app.post('/api/users/:id/reset-password', requireRole(['admin']), async (req, re
     action: 'RESET_PASSWORD',
     entity: 'user',
     entityId: Number(id),
+    afterData: { username: targetUser.username },
   });
   res.json({ ok: true });
 });
 
 // Import (CSV)
-app.post('/api/import/customers', requireRole(['admin', 'sales']), upload.single('file'), async (req, res) => {
+app.post('/api/import/customers', requireRole(['admin']), importRateLimiter, upload.single('file'), async (req, res) => {
   const authzImportCustomers = await authorizeReminderAction(req, 'import:customers', {});
   if (!authzImportCustomers.allow) {
     return res.status(403).json({ error: authzImportCustomers.reason || '无权限' });
@@ -3087,7 +3769,7 @@ app.post('/api/import/customers', requireRole(['admin', 'sales']), upload.single
   res.json({ ok: true, created, skipped, total: records.length, errors });
 });
 
-app.post('/api/import/contacts', requireRole(['admin', 'sales']), upload.single('file'), async (req, res) => {
+app.post('/api/import/contacts', requireRole(['admin']), importRateLimiter, upload.single('file'), async (req, res) => {
   if (!req.file) {
     return res.status(400).json({ error: '请上传CSV或Excel文件' });
   }
@@ -3202,7 +3884,7 @@ app.post('/api/import/contacts', requireRole(['admin', 'sales']), upload.single(
   res.json({ ok: true, created, skipped, total: records.length, errors });
 });
 
-app.get('/api/dashboard', requireRole(['admin', 'sales']), async (req, res) => {
+app.get('/api/dashboard', requireRole(['admin']), async (req, res) => {
   const days = Number(req.query.days || 30);
   const range = Number.isFinite(days) ? days : 30;
   const { customer_id, sales, channel } = req.query || {};
@@ -3392,7 +4074,7 @@ app.get('/api/dashboard', requireRole(['admin', 'sales']), async (req, res) => {
   });
 });
 
-app.get('/api/reminder-logs', requireRole(['admin', 'sales']), async (req, res) => {
+app.get('/api/reminder-logs', requireRole(['admin']), async (req, res) => {
   const { customer_id, status, days_left, date_from, date_to, is_test, error_code } = req.query;
   const where = [];
   const params = [];
@@ -3440,7 +4122,7 @@ app.get('/api/reminder-logs', requireRole(['admin', 'sales']), async (req, res) 
   res.json(rows);
 });
 
-app.post('/api/reminder-logs/:id/resend', requireRole(['admin', 'sales']), async (req, res) => {
+app.post('/api/reminder-logs/:id/resend', requireRole(['admin']), async (req, res) => {
   const { id } = req.params;
   const log = await db.get(
     `SELECT reminder_logs.*, contacts.*, customers.name AS customer_name,
@@ -3622,12 +4304,22 @@ app.use((err, req, res, next) => {
   if (err && err.code === 'EBADCSRFTOKEN') {
     return res.status(403).json({ error: 'CSRF token invalid' });
   }
-  return next(err);
+  if (err && err.code === 'LIMIT_FILE_SIZE') {
+    return res.status(400).json({ error: '上传文件过大' });
+  }
+  if (err) {
+    console.error('Unhandled API error', err);
+    return res.status(500).json({ error: '服务器内部错误' });
+  }
+  return next();
 });
 
 const start = async () => {
+  validateSecurityBootstrap();
   await db.ready;
-  await ensureAdminUser();
+  await ensureBuiltinUsers();
+  await backfillOperationLogSignatures();
+  await backfillOperationLogSystems();
   app.listen(PORT, () => {
     console.log(`Server running at http://localhost:${PORT}`);
     startReminderCron();

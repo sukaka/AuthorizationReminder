@@ -1,0 +1,136 @@
+services:
+  mongo:
+    image: mongo:7.0
+    container_name: cmdb-mongo
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand({ ping: 1 })"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.6.1
+    container_name: cmdb-zookeeper
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+
+  kafka:
+    image: confluentinc/cp-kafka:7.6.1
+    container_name: cmdb-kafka
+    depends_on:
+      - zookeeper
+    ports:
+      - "29092:29092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:29092
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+
+  kafka-init:
+    image: confluentinc/cp-kafka:7.6.1
+    container_name: cmdb-kafka-init
+    depends_on:
+      - kafka
+    entrypoint: ["/bin/bash", "-c"]
+    command: >
+      '
+      for i in {1..20}; do
+        kafka-topics --bootstrap-server kafka:9092 --list >/dev/null 2>&1 && break;
+        echo "waiting for kafka...";
+        sleep 3;
+      done;
+      kafka-topics --create --if-not-exists --bootstrap-server kafka:9092 --topic cmdb.ci.created --partitions 3 --replication-factor 1;
+      kafka-topics --create --if-not-exists --bootstrap-server kafka:9092 --topic cmdb.ci.updated --partitions 3 --replication-factor 1;
+      kafka-topics --create --if-not-exists --bootstrap-server kafka:9092 --topic cmdb.ci.relation.changed --partitions 3 --replication-factor 1;
+      kafka-topics --create --if-not-exists --bootstrap-server kafka:9092 --topic cmdb.ci.deleted --partitions 3 --replication-factor 1;
+      kafka-topics --create --if-not-exists --bootstrap-server kafka:9092 --topic cmdb.ci.reconciled --partitions 3 --replication-factor 1;
+      echo "kafka topics created";
+      '
+    restart: "no"
+
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    container_name: cmdb-kafka-ui
+    depends_on:
+      - kafka
+    ports:
+      - "8089:8080"
+    environment:
+      KAFKA_CLUSTERS_0_NAME: local
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9092
+
+  cmdb:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    container_name: cmdb-service
+    depends_on:
+      mongo:
+        condition: service_healthy
+      kafka:
+        condition: service_started
+      kafka-init:
+        condition: service_completed_successfully
+    ports:
+      - "8088:8088"
+    environment:
+      APP_NAME: cmdb
+      APP_ENV: dev
+      HTTP_ADDR: :8088
+      READ_TIMEOUT_SEC: 10
+      WRITE_TIMEOUT_SEC: 15
+
+      MYSQL_DSN: root:rootpass@tcp(host.docker.internal:3308)/cmdb?parseTime=true&charset=utf8mb4,utf8
+      MYSQL_MAX_OPEN_CONNS: 30
+      MYSQL_MAX_IDLE_CONNS: 10
+
+      MONGO_URI: mongodb://mongo:27017
+      MONGO_DB: cmdb
+
+      KAFKA_BROKERS: kafka:9092
+      KAFKA_TOPIC_CI_CREATED: cmdb.ci.created
+      KAFKA_TOPIC_CI_UPDATED: cmdb.ci.updated
+      KAFKA_TOPIC_CI_RELATION_CHANGED: cmdb.ci.relation.changed
+      KAFKA_TOPIC_CI_DELETED: cmdb.ci.deleted
+      KAFKA_TOPIC_CI_RECONCILED: cmdb.ci.reconciled
+
+      OUTBOX_ENABLED: "true"
+      OUTBOX_POLL_INTERVAL_MS: 2000
+      OUTBOX_BATCH_SIZE: 100
+      OUTBOX_PUBLISH_TIMEOUT_MS: 5000
+
+      OIDC_ISSUER: https://sso.example.com/realms/main
+      OIDC_AUDIENCE: cmdb-api
+      OIDC_JWKS_URL: https://sso.example.com/realms/main/protocol/openid-connect/certs
+      AUTH_SERVICE_URL: http://host.docker.internal:5180
+      AUTH_SYSTEM_KEY: cmdb
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  cmdb-web:
+    build:
+      context: ../web
+      dockerfile: Dockerfile
+    container_name: cmdb-web
+    depends_on:
+      cmdb:
+        condition: service_started
+    ports:
+      - "8090:80"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+volumes:
+  mongo_data:

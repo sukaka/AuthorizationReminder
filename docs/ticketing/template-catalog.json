@@ -1,0 +1,475 @@
+{
+  "templates": [
+    {
+      "code": "SEC_PENTEST",
+      "name": "安全服务部-渗透测试",
+      "description": "标准渗透测试流程：授权、执行、复测、报告、验收",
+      "stages": [
+        {
+          "name": "需求与范围确认",
+          "duration_days": 0.5,
+          "deliverables": ["测试范围确认单", "资产清单"],
+          "roles": ["项目经理", "客户经理"]
+        },
+        {
+          "name": "授权资料确认",
+          "duration_days": 0.5,
+          "deliverables": ["测试授权书"],
+          "roles": ["项目经理"]
+        },
+        {
+          "name": "渗透测试执行",
+          "duration_days": 3,
+          "deliverables": ["漏洞证据", "利用链路说明"],
+          "roles": ["渗透测试工程师"]
+        },
+        {
+          "name": "复测与修复验证",
+          "duration_days": 1.5,
+          "deliverables": ["复测记录", "修复确认单"],
+          "roles": ["渗透测试工程师", "客户技术负责人"]
+        },
+        {
+          "name": "报告交付与验收",
+          "duration_days": 1,
+          "deliverables": ["渗透测试报告", "验收单"],
+          "roles": ["渗透测试工程师", "项目经理"]
+        }
+      ]
+    },
+    {
+      "code": "SEC_VULN_SCAN",
+      "name": "安全服务部-漏洞扫描",
+      "description": "资产发现、扫描验证、修复建议、复扫报告",
+      "stages": [
+        {
+          "name": "资产收集",
+          "duration_days": 0.5,
+          "deliverables": ["资产清单"],
+          "roles": ["项目经理", "安全工程师"]
+        },
+        {
+          "name": "漏洞扫描与人工验证",
+          "duration_days": 1.5,
+          "deliverables": ["漏洞列表", "误报确认单"],
+          "roles": ["安全工程师"]
+        },
+        {
+          "name": "修复建议输出",
+          "duration_days": 0.5,
+          "deliverables": ["修复建议清单"],
+          "roles": ["安全工程师"]
+        },
+        {
+          "name": "复扫与报告",
+          "duration_days": 0.5,
+          "deliverables": ["复扫报告"],
+          "roles": ["安全工程师", "项目经理"]
+        }
+      ]
+    },
+    {
+      "code": "SEC_BASELINE",
+      "name": "安全服务部-基线检查",
+      "description": "基线核查、问题汇总、整改复核",
+      "stages": [
+        {
+          "name": "检查范围确认",
+          "duration_days": 0.5,
+          "deliverables": ["基线检查范围单"],
+          "roles": ["项目经理", "安全工程师"]
+        },
+        {
+          "name": "基线检查执行",
+          "duration_days": 1.5,
+          "deliverables": ["基线不符合项清单"],
+          "roles": ["安全工程师"]
+        },
+        {
+          "name": "整改建议与辅导",
+          "duration_days": 0.5,
+          "deliverables": ["整改建议清单"],
+          "roles": ["安全工程师"]
+        },
+        {
+          "name": "复核与结项",
+          "duration_days": 0.5,
+          "deliverables": ["基线复核报告"],
+          "roles": ["安全工程师", "项目经理"]
+        }
+      ]
+    },
+    {
+      "code": "SEC_SWTEST_PENTEST",
+      "name": "安全服务部-软件测试项目渗透",
+      "description": "软件测试项目中的渗透子任务",
+      "stages": [
+        {
+          "name": "测试环境准备",
+          "duration_days": 0.5,
+          "deliverables": ["测试环境确认单"],
+          "roles": ["项目经理", "渗透测试工程师"]
+        },
+        {
+          "name": "功能点渗透测试",
+          "duration_days": 2,
+          "deliverables": ["漏洞证据", "复现步骤"],
+          "roles": ["渗透测试工程师"]
+        },
+        {
+          "name": "问题联调与复测",
+          "duration_days": 1,
+          "deliverables": ["复测结果", "遗留风险说明"],
+          "roles": ["渗透测试工程师", "研发负责人"]
+        },
+        {
+          "name": "专项报告输出",
+          "duration_days": 0.5,
+          "deliverables": ["渗透专项报告"],
+          "roles": ["渗透测试工程师", "项目经理"]
+        }
+      ]
+    },
+    {
+      "code": "SEC_SWTEST_SCAN",
+      "name": "安全服务部-软件测试项目漏扫",
+      "description": "软件测试项目中的漏扫子任务",
+      "stages": [
+        {
+          "name": "扫描策略确认",
+          "duration_days": 0.5,
+          "deliverables": ["扫描策略单"],
+          "roles": ["项目经理", "安全工程师"]
+        },
+        {
+          "name": "自动化扫描",
+          "duration_days": 1,
+          "deliverables": ["扫描结果清单"],
+          "roles": ["安全工程师"]
+        },
+        {
+          "name": "人工复核与分级",
+          "duration_days": 0.5,
+          "deliverables": ["漏洞分级清单"],
+          "roles": ["安全工程师"]
+        },
+        {
+          "name": "结果确认与归档",
+          "duration_days": 0.5,
+          "deliverables": ["漏扫结果报告"],
+          "roles": ["安全工程师", "项目经理"]
+        }
+      ]
+    },
+    {
+      "code": "OPS_RISK_ASSESS",
+      "name": "安全运营部-风险评估",
+      "description": "风险识别、评估、整改建议、复核",
+      "stages": [
+        {
+          "name": "评估启动与范围确认",
+          "duration_days": 0.5,
+          "deliverables": ["评估范围确认单"],
+          "roles": ["项目经理", "安全运营工程师"]
+        },
+        {
+          "name": "风险识别与定级",
+          "duration_days": 2,
+          "deliverables": ["风险清单", "风险等级矩阵"],
+          "roles": ["安全运营工程师"]
+        },
+        {
+          "name": "整改策略制定",
+          "duration_days": 1,
+          "deliverables": ["整改建议书"],
+          "roles": ["安全运营工程师", "项目经理"]
+        },
+        {
+          "name": "评估报告与汇报",
+          "duration_days": 0.5,
+          "deliverables": ["风险评估报告", "汇报材料"],
+          "roles": ["安全运营工程师"]
+        }
+      ]
+    },
+    {
+      "code": "OPS_INCIDENT",
+      "name": "安全运营部-应急响应",
+      "description": "分级、遏制、溯源、修复、复盘",
+      "stages": [
+        {
+          "name": "事件分级与通报",
+          "duration_days": 0.5,
+          "deliverables": ["事件初报"],
+          "roles": ["安全运营工程师", "项目经理"]
+        },
+        {
+          "name": "遏制与隔离",
+          "duration_days": 0.5,
+          "deliverables": ["遏制操作记录"],
+          "roles": ["安全运营工程师", "运维工程师"]
+        },
+        {
+          "name": "溯源分析",
+          "duration_days": 1,
+          "deliverables": ["溯源分析报告"],
+          "roles": ["安全运营工程师"]
+        },
+        {
+          "name": "修复与恢复",
+          "duration_days": 1,
+          "deliverables": ["修复方案", "恢复确认单"],
+          "roles": ["安全运营工程师", "运维工程师"]
+        },
+        {
+          "name": "复盘与改进",
+          "duration_days": 0.5,
+          "deliverables": ["复盘报告", "改进项清单"],
+          "roles": ["项目经理", "安全运营工程师"]
+        }
+      ]
+    },
+    {
+      "code": "OPS_WDSP_IMPL",
+      "name": "安全运营部-WDSP实施",
+      "description": "方案设计、部署联调、试运行、验收",
+      "stages": [
+        {
+          "name": "需求调研与方案设计",
+          "duration_days": 1,
+          "deliverables": ["实施方案"],
+          "roles": ["项目经理", "实施工程师"]
+        },
+        {
+          "name": "环境部署与配置",
+          "duration_days": 2,
+          "deliverables": ["部署记录", "配置清单"],
+          "roles": ["实施工程师"]
+        },
+        {
+          "name": "联调测试",
+          "duration_days": 1,
+          "deliverables": ["联调测试报告"],
+          "roles": ["实施工程师", "客户技术负责人"]
+        },
+        {
+          "name": "试运行与验收",
+          "duration_days": 1,
+          "deliverables": ["试运行报告", "验收单"],
+          "roles": ["项目经理", "实施工程师"]
+        }
+      ]
+    },
+    {
+      "code": "OPS_SECOPS",
+      "name": "安全运营部-安全运维",
+      "description": "日常巡检、告警处置、月报输出",
+      "stages": [
+        {
+          "name": "巡检与健康检查",
+          "duration_days": 0.5,
+          "deliverables": ["巡检记录"],
+          "roles": ["安全运营工程师"]
+        },
+        {
+          "name": "告警研判与处置",
+          "duration_days": 0.5,
+          "deliverables": ["告警处置记录"],
+          "roles": ["安全运营工程师"]
+        },
+        {
+          "name": "问题跟踪闭环",
+          "duration_days": 0.5,
+          "deliverables": ["问题闭环清单"],
+          "roles": ["安全运营工程师"]
+        },
+        {
+          "name": "周报/月报输出",
+          "duration_days": 0.5,
+          "deliverables": ["运营报告"],
+          "roles": ["安全运营工程师", "项目经理"]
+        }
+      ]
+    },
+    {
+      "code": "OPS_ADHOC",
+      "name": "安全运营部-临时任务",
+      "description": "临时需求快速响应与闭环",
+      "stages": [
+        {
+          "name": "任务确认",
+          "duration_days": 0.5,
+          "deliverables": ["任务确认单"],
+          "roles": ["项目经理"]
+        },
+        {
+          "name": "任务执行",
+          "duration_days": 1,
+          "deliverables": ["执行记录"],
+          "roles": ["安全运营工程师"]
+        },
+        {
+          "name": "结果反馈",
+          "duration_days": 0.5,
+          "deliverables": ["任务反馈单"],
+          "roles": ["安全运营工程师"]
+        }
+      ]
+    },
+    {
+      "code": "TECH_CLOUD_IMPL",
+      "name": "技术部-聚信等保云管平台实施",
+      "description": "平台部署、策略配置、联调培训、验收",
+      "stages": [
+        {
+          "name": "实施准备",
+          "duration_days": 1,
+          "deliverables": ["实施计划", "环境检查表"],
+          "roles": ["项目经理", "技术实施工程师"]
+        },
+        {
+          "name": "平台部署",
+          "duration_days": 2,
+          "deliverables": ["部署记录", "安装文档"],
+          "roles": ["技术实施工程师"]
+        },
+        {
+          "name": "策略配置与联调",
+          "duration_days": 2,
+          "deliverables": ["策略配置清单", "联调记录"],
+          "roles": ["技术实施工程师", "客户技术负责人"]
+        },
+        {
+          "name": "培训与验收",
+          "duration_days": 1,
+          "deliverables": ["培训材料", "验收单"],
+          "roles": ["项目经理", "技术实施工程师"]
+        }
+      ]
+    },
+    {
+      "code": "TECH_WAF_IMPL",
+      "name": "技术部-WAF实施",
+      "description": "方案评估、部署、规则调优、上线",
+      "stages": [
+        {
+          "name": "流量与业务评估",
+          "duration_days": 0.5,
+          "deliverables": ["接入评估单"],
+          "roles": ["项目经理", "技术实施工程师"]
+        },
+        {
+          "name": "WAF部署接入",
+          "duration_days": 1,
+          "deliverables": ["接入记录"],
+          "roles": ["技术实施工程师"]
+        },
+        {
+          "name": "规则调优",
+          "duration_days": 1,
+          "deliverables": ["规则策略清单"],
+          "roles": ["技术实施工程师", "安全运营工程师"]
+        },
+        {
+          "name": "上线与观察",
+          "duration_days": 0.5,
+          "deliverables": ["上线确认单"],
+          "roles": ["技术实施工程师"]
+        }
+      ]
+    },
+    {
+      "code": "TECH_LOG_AUDIT_IMPL",
+      "name": "技术部-日志审计实施",
+      "description": "日志接入、规则配置、告警联调",
+      "stages": [
+        {
+          "name": "日志源梳理",
+          "duration_days": 0.5,
+          "deliverables": ["日志源清单"],
+          "roles": ["技术实施工程师"]
+        },
+        {
+          "name": "日志接入与解析",
+          "duration_days": 1.5,
+          "deliverables": ["接入记录", "解析规则清单"],
+          "roles": ["技术实施工程师"]
+        },
+        {
+          "name": "审计规则配置",
+          "duration_days": 1,
+          "deliverables": ["审计规则包"],
+          "roles": ["技术实施工程师", "安全运营工程师"]
+        },
+        {
+          "name": "联调与验收",
+          "duration_days": 0.5,
+          "deliverables": ["联调报告"],
+          "roles": ["项目经理", "技术实施工程师"]
+        }
+      ]
+    },
+    {
+      "code": "TECH_DB_AUDIT_IMPL",
+      "name": "技术部-数据库审计实施",
+      "description": "数据库接入、审计策略、验证验收",
+      "stages": [
+        {
+          "name": "库表与流量评估",
+          "duration_days": 0.5,
+          "deliverables": ["数据库评估单"],
+          "roles": ["技术实施工程师"]
+        },
+        {
+          "name": "审计探针部署",
+          "duration_days": 1,
+          "deliverables": ["部署记录"],
+          "roles": ["技术实施工程师"]
+        },
+        {
+          "name": "审计策略配置",
+          "duration_days": 1,
+          "deliverables": ["审计策略清单"],
+          "roles": ["技术实施工程师", "安全运营工程师"]
+        },
+        {
+          "name": "验证与验收",
+          "duration_days": 0.5,
+          "deliverables": ["验证报告", "验收单"],
+          "roles": ["项目经理", "技术实施工程师"]
+        }
+      ]
+    },
+    {
+      "code": "TECH_FIREWALL_IMPL",
+      "name": "技术部-防火墙实施",
+      "description": "策略梳理、设备上线、切换验证",
+      "stages": [
+        {
+          "name": "策略梳理",
+          "duration_days": 1,
+          "deliverables": ["策略梳理表"],
+          "roles": ["技术实施工程师", "客户网络负责人"]
+        },
+        {
+          "name": "设备部署与配置",
+          "duration_days": 1.5,
+          "deliverables": ["设备配置备份", "部署记录"],
+          "roles": ["技术实施工程师"]
+        },
+        {
+          "name": "切换演练",
+          "duration_days": 0.5,
+          "deliverables": ["切换方案", "回退方案"],
+          "roles": ["技术实施工程师", "项目经理"]
+        },
+        {
+          "name": "正式切换与验收",
+          "duration_days": 1,
+          "deliverables": ["切换确认单", "验收单"],
+          "roles": ["技术实施工程师", "项目经理"]
+        }
+      ]
+    }
+  ]
+}

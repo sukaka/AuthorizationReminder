@@ -1,0 +1,527 @@
+openapi: 3.0.3
+info:
+  title: CMDB API
+  version: 1.2.0
+  description: 本文件为系统接口 OpenAPI 定义，字段说明均为中文注释。
+servers:
+- url: https://cmdb.example.com
+paths:
+  "/healthz":
+    get:
+      summary: 健康检查
+      responses:
+        '200':
+          description: 请求成功
+      description: 健康检查 该接口默认无需鉴权（具体以服务端策略为准）。 请求体和返回字段请参考下方 schema。
+  "/api/v1/dashboard/overview":
+    get:
+      summary: 仪表盘概览
+      security:
+      - bearerAuth: []
+      responses:
+        '200':
+          description: 仪表盘概览数据
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/DashboardOverview"
+        '500':
+          description: 服务内部错误
+      description: 仪表盘概览 需在 Authorization 请求头中携带 Bearer Token。 请求体和返回字段请参考下方 schema。
+  "/api/v1/ci":
+    get:
+      summary: 查询配置项列表
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: ci_type_key
+        in: query
+        schema:
+          type: string
+        description: 配置项类型编码
+      - name: status
+        in: query
+        schema:
+          type: string
+        description: 状态筛选
+      - name: owner
+        in: query
+        schema:
+          type: string
+        description: 负责人筛选
+      - name: keyword
+        in: query
+        schema:
+          type: string
+        description: 关键字搜索
+      - name: page
+        in: query
+        schema:
+          type: integer
+          default: 1
+          minimum: 1
+        description: 页码，从 1 开始
+      - name: page_size
+        in: query
+        schema:
+          type: integer
+          default: 10
+          minimum: 1
+        description: 每页条数
+      responses:
+        '200':
+          description: 配置项列表
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/CIListResult"
+        '400':
+          description: 查询参数不合法
+      description: 查询配置项列表 需在 Authorization 请求头中携带 Bearer Token。 请求体和返回字段请参考下方 schema。
+    post:
+      summary: 创建配置项
+      security:
+      - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              "$ref": "#/components/schemas/CreateCIRequest"
+        description: 请求体参数
+      responses:
+        '201':
+          description: 配置项创建成功
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/CI"
+        '400':
+          description: 请求体或参数不合法
+        '409':
+          description: 资源冲突
+      description: 创建配置项 需在 Authorization 请求头中携带 Bearer Token。 请求体和返回字段请参考下方 schema。
+  "/api/v1/ci/{ci_uid}":
+    get:
+      summary: 按 CI UID 查询配置项
+      security:
+      - bearerAuth: []
+      parameters:
+      - "$ref": "#/components/parameters/CIUID"
+      responses:
+        '200':
+          description: 配置项详情
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/CI"
+        '404':
+          description: 配置项不存在
+      description: 按 CI UID 查询配置项 需在 Authorization 请求头中携带 Bearer Token。 请求体和返回字段请参考下方
+        schema。
+    patch:
+      summary: 更新配置项
+      security:
+      - bearerAuth: []
+      parameters:
+      - "$ref": "#/components/parameters/CIUID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              "$ref": "#/components/schemas/UpdateCIRequest"
+        description: 请求体参数
+      responses:
+        '200':
+          description: 更新成功
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/CI"
+        '400':
+          description: 请求体或参数不合法
+        '404':
+          description: 资源不存在
+        '409':
+          description: 版本冲突，请刷新后重试
+      description: 更新配置项 需在 Authorization 请求头中携带 Bearer Token。 请求体和返回字段请参考下方 schema。
+    delete:
+      summary: 删除配置项
+      security:
+      - bearerAuth: []
+      parameters:
+      - "$ref": "#/components/parameters/CIUID"
+      - name: version
+        in: query
+        required: false
+        schema:
+          type: integer
+          minimum: 1
+        description: 版本号（用于并发控制）
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              "$ref": "#/components/schemas/DeleteCIRequest"
+        description: 请求体参数
+      responses:
+        '200':
+          description: 删除成功
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/DeleteCIResult"
+        '400':
+          description: 请求体或参数不合法
+        '404':
+          description: 资源不存在
+        '409':
+          description: 版本冲突，请刷新后重试
+      description: 删除配置项 需在 Authorization 请求头中携带 Bearer Token。 请求体和返回字段请参考下方 schema。
+  "/api/v1/ci/{ci_uid}/relations":
+    post:
+      summary: 新增或更新配置项关系
+      security:
+      - bearerAuth: []
+      parameters:
+      - "$ref": "#/components/parameters/CIUID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              "$ref": "#/components/schemas/UpsertRelationRequest"
+        description: 请求体参数
+      responses:
+        '200':
+          description: 关系已更新
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/Relation"
+        '400':
+          description: 请求体或参数不合法
+        '404':
+          description: 资源不存在
+      description: 新增或更新配置项关系 需在 Authorization 请求头中携带 Bearer Token。 请求体和返回字段请参考下方
+        schema。
+components:
+  parameters:
+    CIUID:
+      in: path
+      name: ci_uid
+      required: true
+      schema:
+        type: string
+      description: 配置项唯一标识
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  schemas:
+    CI:
+      type: object
+      properties:
+        ci_uid:
+          type: string
+          description: 字段：ci_uid
+        name:
+          type: string
+          description: 字段：name
+        status:
+          type: string
+          description: 字段：status
+        owner:
+          type: string
+          description: 字段：owner
+        version:
+          type: integer
+          description: 字段：version
+        updated_at:
+          type: string
+          format: date-time
+          description: 字段：updated_at
+      description: CI 数据模型
+    CreateCIRequest:
+      type: object
+      required:
+      - ci_type_key
+      - name
+      - unique_key
+      properties:
+        ci_type_key:
+          type: string
+          description: 字段：ci_type_key
+        name:
+          type: string
+          description: 字段：name
+        unique_key:
+          type: string
+          description: 字段：unique_key
+        status:
+          type: string
+          enum:
+          - active
+          - inactive
+          - retired
+          description: 字段：status
+        owner:
+          type: string
+          description: 字段：owner
+        source:
+          type: string
+          enum:
+          - manual
+          - discovery
+          - cloud
+          - import
+          description: 字段：source
+        source_ref:
+          type: string
+          description: 字段：source_ref
+        extra_attrs:
+          type: object
+          additionalProperties: true
+          description: 字段：extra_attrs
+      description: CreateCIRequest 数据模型
+    UpdateCIRequest:
+      type: object
+      required:
+      - version
+      properties:
+        version:
+          type: integer
+          minimum: 1
+          description: 字段：version
+        name:
+          type: string
+          description: 字段：name
+        status:
+          type: string
+          enum:
+          - active
+          - inactive
+          - retired
+          description: 字段：status
+        owner:
+          type: string
+          description: 字段：owner
+        source_ref:
+          type: string
+          description: 字段：source_ref
+        extra_attrs:
+          type: object
+          additionalProperties: true
+          description: 字段：extra_attrs
+      description: UpdateCIRequest 数据模型
+    UpsertRelationRequest:
+      type: object
+      required:
+      - to_ci_uid
+      - relation_type
+      properties:
+        to_ci_uid:
+          type: string
+          description: 字段：to_ci_uid
+        relation_type:
+          type: string
+          enum:
+          - depends_on
+          - runs_on
+          - connects_to
+          - owned_by
+          description: 字段：relation_type
+        attributes:
+          type: object
+          additionalProperties: true
+          description: 字段：attributes
+      description: UpsertRelationRequest 数据模型
+    Relation:
+      type: object
+      properties:
+        from_ci_uid:
+          type: string
+          description: 字段：from_ci_uid
+        to_ci_uid:
+          type: string
+          description: 字段：to_ci_uid
+        relation_type:
+          type: string
+          description: 字段：relation_type
+        version:
+          type: integer
+          description: 字段：version
+        updated_at:
+          type: string
+          format: date-time
+          description: 字段：updated_at
+      description: Relation 数据模型
+    CIListItem:
+      type: object
+      properties:
+        ci_uid:
+          type: string
+          description: 字段：ci_uid
+        ci_type_key:
+          type: string
+          description: 字段：ci_type_key
+        ci_type_name:
+          type: string
+          description: 字段：ci_type_name
+        name:
+          type: string
+          description: 字段：name
+        unique_key:
+          type: string
+          description: 字段：unique_key
+        status:
+          type: string
+          description: 字段：status
+        owner:
+          type: string
+          description: 字段：owner
+        source:
+          type: string
+          description: 字段：source
+        source_ref:
+          type: string
+          description: 字段：source_ref
+        version:
+          type: integer
+          description: 字段：version
+        created_at:
+          type: string
+          format: date-time
+          description: 字段：created_at
+        updated_at:
+          type: string
+          format: date-time
+          description: 字段：updated_at
+      description: CIListItem 数据模型
+    CIListResult:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            "$ref": "#/components/schemas/CIListItem"
+          description: 字段：items
+        total:
+          type: integer
+          description: 字段：total
+        page:
+          type: integer
+          description: 字段：page
+        page_size:
+          type: integer
+          description: 字段：page_size
+      description: CIListResult 数据模型
+    DeleteCIRequest:
+      type: object
+      required:
+      - version
+      properties:
+        version:
+          type: integer
+          minimum: 1
+          description: 字段：version
+      description: DeleteCIRequest 数据模型
+    DeleteCIResult:
+      type: object
+      properties:
+        ci_uid:
+          type: string
+          description: 字段：ci_uid
+        version:
+          type: integer
+          description: 字段：version
+      description: DeleteCIResult 数据模型
+    DashboardTotals:
+      type: object
+      properties:
+        asset_total:
+          type: integer
+          description: 字段：asset_total
+        monthly_new:
+          type: integer
+          description: 字段：monthly_new
+        pending_count:
+          type: integer
+          description: 字段：pending_count
+        anomaly_count:
+          type: integer
+          description: 字段：anomaly_count
+      description: DashboardTotals 数据模型
+    DashboardDistribution:
+      type: object
+      properties:
+        key:
+          type: string
+          description: 字段：key
+        name:
+          type: string
+          description: 字段：name
+        total:
+          type: integer
+          description: 字段：total
+      description: DashboardDistribution 数据模型
+    DashboardTrend:
+      type: object
+      properties:
+        date:
+          type: string
+          description: 字段：date
+        total:
+          type: integer
+          description: 字段：total
+      description: DashboardTrend 数据模型
+    DashboardRecentChange:
+      type: object
+      properties:
+        ci_uid:
+          type: string
+          description: 字段：ci_uid
+        ci_name:
+          type: string
+          description: 字段：ci_name
+        operation:
+          type: string
+          description: 字段：operation
+        operator_name:
+          type: string
+          description: 字段：operator_name
+        occurred_at:
+          type: string
+          format: date-time
+          description: 字段：occurred_at
+      description: DashboardRecentChange 数据模型
+    DashboardOverview:
+      type: object
+      properties:
+        totals:
+          "$ref": "#/components/schemas/DashboardTotals"
+          description: 字段：totals
+        type_distribution:
+          type: array
+          items:
+            "$ref": "#/components/schemas/DashboardDistribution"
+          description: 字段：type_distribution
+        growth_trend:
+          type: array
+          items:
+            "$ref": "#/components/schemas/DashboardTrend"
+          description: 字段：growth_trend
+        owner_distribution:
+          type: array
+          items:
+            "$ref": "#/components/schemas/DashboardDistribution"
+          description: 字段：owner_distribution
+        recent_changes:
+          type: array
+          items:
+            "$ref": "#/components/schemas/DashboardRecentChange"
+          description: 字段：recent_changes
+      description: DashboardOverview 数据模型
