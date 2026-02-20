@@ -5,7 +5,12 @@
   "main": "src/index.js",
   "scripts": {
     "dev": "node --watch src/index.js",
-    "start": "node src/index.js"
+    "start": "node src/index.js",
+    "test": "vitest run",
+    "test:smoke": "vitest run tests/smoke.e2e.test.js",
+    "test:regression": "vitest run tests/regression.api.test.js",
+    "test:rbac": "vitest run tests/rbac.matrix.test.js",
+    "test:e2e": "vitest run tests/*.test.js"
   },
   "dependencies": {
     "cors": "^2.8.5",
@@ -15,5 +20,8 @@
     "multer": "^2.0.2",
     "mysql2": "^3.11.2",
     "xlsx": "^0.18.5"
+  },
+  "devDependencies": {
+    "vitest": "^4.0.18"
   }
 }

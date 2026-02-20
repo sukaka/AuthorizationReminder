@@ -39,15 +39,15 @@ docker compose up --build mysql auth sec-impl-api web-sec-impl
 
 ## 角色矩阵验收命令
 ```bash
-cd /Users/zhanglei/Documents/codex-new/sec-impl/scripts
-./rbac-matrix.sh
+cd /Users/zhanglei/Documents/codex-new/sec-impl/backend
+AUTH_BASE=http://localhost:5180 API_BASE=http://localhost:5185 npm run test:rbac
 ```
 
 ## 冒烟与回归命令
 ```bash
-cd /Users/zhanglei/Documents/codex-new/sec-impl/scripts
-AUTH_TOKEN=<TOKEN> API_BASE=http://localhost:5185 ./smoke-e2e.sh
-AUTH_TOKEN=<TOKEN> API_BASE=http://localhost:5185 ./regression-api.sh
+cd /Users/zhanglei/Documents/codex-new/sec-impl/backend
+AUTH_TOKEN=<TOKEN> API_BASE=http://localhost:5185 npm run test:smoke
+AUTH_TOKEN=<TOKEN> API_BASE=http://localhost:5185 npm run test:regression
 ```
 
 ## 回滚预案

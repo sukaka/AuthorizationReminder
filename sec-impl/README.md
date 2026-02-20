@@ -72,23 +72,29 @@ cd /Users/zhanglei/Documents/codex-new
 docker compose up --build mysql auth sec-impl-api web-sec-impl
 ```
 
-## 验证脚本
-冒烟：
+## 验证（Vitest）
+安装依赖：
 ```bash
-cd /Users/zhanglei/Documents/codex-new/sec-impl/scripts
-AUTH_TOKEN=<统一登录token> API_BASE=http://localhost:5185 ./smoke-e2e.sh
+cd /Users/zhanglei/Documents/codex-new/sec-impl/backend
+npm install
 ```
 
-回归：
+冒烟：
 ```bash
-cd /Users/zhanglei/Documents/codex-new/sec-impl/scripts
-AUTH_TOKEN=<统一登录token> API_BASE=http://localhost:5185 ./regression-api.sh
+cd /Users/zhanglei/Documents/codex-new/sec-impl/backend
+AUTH_TOKEN=<统一登录token> API_BASE=http://localhost:5185 npm run test:smoke
 ```
 
 权限矩阵：
 ```bash
-cd /Users/zhanglei/Documents/codex-new/sec-impl/scripts
-./rbac-matrix.sh
+cd /Users/zhanglei/Documents/codex-new/sec-impl/backend
+AUTH_BASE=http://localhost:5180 API_BASE=http://localhost:5185 npm run test:rbac
+```
+
+回归：
+```bash
+cd /Users/zhanglei/Documents/codex-new/sec-impl/backend
+AUTH_TOKEN=<统一登录token> API_BASE=http://localhost:5185 npm run test:regression
 ```
 
 可选环境变量：
@@ -97,3 +103,6 @@ cd /Users/zhanglei/Documents/codex-new/sec-impl/scripts
 - `BUILTIN_PASSWORD`
 - `AUTH_TOKEN_ADMIN` / `AUTH_TOKEN_AUDITOR` / `AUTH_TOKEN_SYSADMIN`
 - `EXPECT_SYSADMIN_SEC_IMPL_ACCESS=true|false`（默认 `true`）
+
+兼容说明：
+- 旧 Bash 脚本仍保留在 `/Users/zhanglei/Documents/codex-new/sec-impl/scripts`，建议优先使用 Vitest。
