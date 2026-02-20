@@ -100,12 +100,12 @@ func (r *CIRepository) GetDashboardGrowthTrend(ctx context.Context, days int) ([
 	}
 
 	const q = `
-SELECT DATE_FORMAT(DATE(created_at), '%Y-%m-%d') AS day, COUNT(*) AS total
+SELECT DATE_FORMAT(created_at, '%Y-%m-%d') AS day, COUNT(*) AS total
 FROM ci
 WHERE deleted = 0
   AND created_at >= DATE_SUB(CURRENT_DATE(), INTERVAL ? DAY)
-GROUP BY DATE(created_at)
-ORDER BY DATE(created_at)`
+GROUP BY DATE_FORMAT(created_at, '%Y-%m-%d')
+ORDER BY DATE_FORMAT(created_at, '%Y-%m-%d')`
 
 	rows, err := r.db.QueryContext(ctx, q, days-1)
 	if err != nil {
