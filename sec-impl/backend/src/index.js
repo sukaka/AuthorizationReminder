@@ -1741,6 +1741,7 @@ app.get(
   '/api/sec-impl/audit/verify',
   requireAuditReader,
   asyncHandler(async (req, res) => {
+    const actor = getActor(req);
     const fromIdRaw = Number(req.query.from_id || 0);
     const toIdRaw = Number(req.query.to_id || 0);
     const limitRaw = Number(req.query.limit || 5000);

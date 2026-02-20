@@ -20,11 +20,11 @@ describe('sec-impl rbac matrix', () => {
   const authBase = getAuthBase();
   const builtinPassword = String(process.env.BUILTIN_PASSWORD || 'Dm1vbnqsILIVjUa5sWixBFos60bKdEKC');
 
-  const adminUsername = String(process.env.ADMIN_USERNAME || 'admin');
+  const adminLogin = String(process.env.ADMIN_LOGIN || process.env.ADMIN_USERNAME || 'admin');
   const adminPassword = String(process.env.ADMIN_PASSWORD || builtinPassword);
-  const auditorUsername = String(process.env.AUDITOR_USERNAME || 'auditor');
+  const auditorLogin = String(process.env.AUDITOR_LOGIN || process.env.AUDITOR_USERNAME || 'auditor');
   const auditorPassword = String(process.env.AUDITOR_PASSWORD || builtinPassword);
-  const sysadminUsername = String(process.env.SYSADMIN_USERNAME || 'sysadmin');
+  const sysadminLogin = String(process.env.SYSADMIN_LOGIN || process.env.SYSADMIN_USERNAME || 'sysadmin');
   const sysadminPassword = String(process.env.SYSADMIN_PASSWORD || builtinPassword);
 
   const expectSysadminAccess = parseBool(process.env.EXPECT_SYSADMIN_SEC_IMPL_ACCESS, true);
@@ -35,13 +35,13 @@ describe('sec-impl rbac matrix', () => {
     let sysadminToken = String(process.env.AUTH_TOKEN_SYSADMIN || '').trim();
 
     if (!adminToken) {
-      adminToken = await loginByPassword({ authBase, username: adminUsername, password: adminPassword });
+      adminToken = await loginByPassword({ authBase, loginId: adminLogin, password: adminPassword });
     }
     if (!auditorToken) {
-      auditorToken = await loginByPassword({ authBase, username: auditorUsername, password: auditorPassword });
+      auditorToken = await loginByPassword({ authBase, loginId: auditorLogin, password: auditorPassword });
     }
     if (!sysadminToken) {
-      sysadminToken = await loginByPassword({ authBase, username: sysadminUsername, password: sysadminPassword });
+      sysadminToken = await loginByPassword({ authBase, loginId: sysadminLogin, password: sysadminPassword });
     }
 
     const healthResp = await request({

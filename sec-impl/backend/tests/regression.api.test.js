@@ -1,20 +1,30 @@
 const {
   getApiBase,
+  getAuthBase,
   request,
   ensureStatus,
   ensureJsonField,
   uniqueCode,
   uploadAttachment,
+  loginByPassword,
 } = require('./helpers/api');
+
+const resolveAuthToken = async ({ authBase }) => {
+  const directToken = String(process.env.AUTH_TOKEN || '').trim();
+  if (directToken) return directToken;
+
+  const builtinPassword = String(process.env.BUILTIN_PASSWORD || 'Dm1vbnqsILIVjUa5sWixBFos60bKdEKC');
+  const adminLogin = String(process.env.ADMIN_LOGIN || process.env.ADMIN_USERNAME || 'admin').trim();
+  const adminPassword = String(process.env.ADMIN_PASSWORD || builtinPassword).trim();
+  return loginByPassword({ authBase, loginId: adminLogin, password: adminPassword });
+};
 
 describe('sec-impl regression api', () => {
   const apiBase = getApiBase();
-  const authToken = String(process.env.AUTH_TOKEN || '').trim();
+  const authBase = getAuthBase();
 
   it('should pass negative/boundary/regression scenarios', async () => {
-    if (!authToken) {
-      throw new Error('缺少 AUTH_TOKEN，请先设置统一登录 Bearer Token');
-    }
+    const authToken = await resolveAuthToken({ authBase });
 
     const projectCode = uniqueCode('PRJ-REG');
 

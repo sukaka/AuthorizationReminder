@@ -82,7 +82,7 @@ npm install
 冒烟：
 ```bash
 cd /Users/zhanglei/Documents/codex-new/sec-impl/backend
-AUTH_TOKEN=<统一登录token> API_BASE=http://localhost:5185 npm run test:smoke
+AUTH_BASE=http://localhost:5180 API_BASE=http://localhost:5185 ADMIN_LOGIN=admin ADMIN_PASSWORD=<密码> npm run test:smoke
 ```
 
 权限矩阵：
@@ -94,13 +94,17 @@ AUTH_BASE=http://localhost:5180 API_BASE=http://localhost:5185 npm run test:rbac
 回归：
 ```bash
 cd /Users/zhanglei/Documents/codex-new/sec-impl/backend
-AUTH_TOKEN=<统一登录token> API_BASE=http://localhost:5185 npm run test:regression
+AUTH_BASE=http://localhost:5180 API_BASE=http://localhost:5185 ADMIN_LOGIN=admin ADMIN_PASSWORD=<密码> npm run test:regression
 ```
 
 可选环境变量：
 - `API_BASE`（默认 `http://localhost:5185`）
 - `AUTH_BASE`（默认 `http://localhost:5180`）
+- `AUTH_TOKEN`（若提供则直接使用，不再自动登录）
 - `BUILTIN_PASSWORD`
+- `ADMIN_LOGIN` / `AUDITOR_LOGIN` / `SYSADMIN_LOGIN`（可填用户名或手机号）
+- `ADMIN_USERNAME` / `AUDITOR_USERNAME` / `SYSADMIN_USERNAME`（兼容旧变量）
+- `ADMIN_PASSWORD` / `AUDITOR_PASSWORD` / `SYSADMIN_PASSWORD`
 - `AUTH_TOKEN_ADMIN` / `AUTH_TOKEN_AUDITOR` / `AUTH_TOKEN_SYSADMIN`
 - `EXPECT_SYSADMIN_SEC_IMPL_ACCESS=true|false`（默认 `true`）
 

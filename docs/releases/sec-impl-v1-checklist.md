@@ -46,8 +46,8 @@ AUTH_BASE=http://localhost:5180 API_BASE=http://localhost:5185 npm run test:rbac
 ## 冒烟与回归命令
 ```bash
 cd /Users/zhanglei/Documents/codex-new/sec-impl/backend
-AUTH_TOKEN=<TOKEN> API_BASE=http://localhost:5185 npm run test:smoke
-AUTH_TOKEN=<TOKEN> API_BASE=http://localhost:5185 npm run test:regression
+AUTH_BASE=http://localhost:5180 API_BASE=http://localhost:5185 ADMIN_LOGIN=admin ADMIN_PASSWORD=<密码> npm run test:smoke
+AUTH_BASE=http://localhost:5180 API_BASE=http://localhost:5185 ADMIN_LOGIN=admin ADMIN_PASSWORD=<密码> npm run test:regression
 ```
 
 ## 回滚预案

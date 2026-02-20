@@ -172,8 +172,12 @@ const parseCaptchaCode = (svg) => {
   return match && match[1] ? match[1].trim() : '';
 };
 
-const loginByPassword = async ({ authBase, username, password }) => {
+const loginByPassword = async ({ authBase, loginId, username, password }) => {
   const base = normalizeBaseUrl(authBase, DEFAULT_AUTH_BASE);
+  const loginIdentifier = String(loginId || username || '').trim();
+  if (!loginIdentifier || !password) {
+    throw new Error('loginByPassword 缺少 loginId/username 或 password');
+  }
   const jar = new CookieJar();
 
   const csrfRes = await fetchWithTimeout(`${base}/api/auth/csrf`, { method: 'GET' }, 10000);
@@ -203,7 +207,7 @@ const loginByPassword = async ({ authBase, username, password }) => {
   }
 
   const payload = {
-    username,
+    username: loginIdentifier,
     password,
   };
   if (captchaToken && captchaCode) {
@@ -228,7 +232,7 @@ const loginByPassword = async ({ authBase, username, password }) => {
   ensureStatus(loginData, 200);
 
   if (loginData.json?.mfaRequired) {
-    throw new Error(`用户 ${username} 已启用 MFA，无法自动登录`);
+    throw new Error(`用户 ${loginIdentifier} 已启用 MFA，无法自动登录`);
   }
 
   const token = String(loginData.json?.token || '').trim();
