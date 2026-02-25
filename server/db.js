@@ -255,6 +255,7 @@ const init = async () => {
     prev_hash CHAR(64),
     signature CHAR(64),
     sign_version VARCHAR(16) NOT NULL DEFAULT 'v1',
+    request_ip VARCHAR(64) NULL,
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
   if (await columnExists('operation_logs', 'system')) {
@@ -268,6 +269,7 @@ const init = async () => {
   await addColumnIfMissing('operation_logs', 'prev_hash', 'prev_hash CHAR(64)');
   await addColumnIfMissing('operation_logs', 'signature', 'signature CHAR(64)');
   await addColumnIfMissing('operation_logs', 'sign_version', "sign_version VARCHAR(16) NOT NULL DEFAULT 'v1'");
+  await addColumnIfMissing('operation_logs', 'request_ip', 'request_ip VARCHAR(64) NULL');
   await addIndexIfMissing(
     'operation_logs',
     'idx_operation_logs_signature',

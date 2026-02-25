@@ -113,6 +113,39 @@ type OutboxInsertParams struct {
 	Headers       []byte
 }
 
+type AuditListParams struct {
+	ActorSub     string
+	ActorName    string
+	Action       string
+	ResourceType string
+	ResourceUID  string
+	HTTPMethod   string
+	Result       string
+	SourceIP     string
+	Keyword      string
+	DateFrom     *time.Time
+	DateTo       *time.Time
+	Page         int
+	PageSize     int
+}
+
+type AuditLogRow struct {
+	ID           uint64
+	RequestID    string
+	ActorSub     string
+	ActorName    string
+	Action       string
+	ResourceType string
+	ResourceUID  string
+	HTTPMethod   string
+	HTTPPath     string
+	StatusCode   int
+	Result       string
+	ErrorMessage string
+	SourceIP     string
+	CreatedAt    time.Time
+}
+
 func NewCIRepository(db *sql.DB) *CIRepository {
 	return &CIRepository{db: db}
 }
@@ -484,6 +517,171 @@ VALUES (?, ?, ?, ?, ?, ?)`
 	return nil
 }
 
+func (r *CIRepository) ListOperationAudit(ctx context.Context, p AuditListParams) ([]AuditLogRow, int64, error) {
+	page := p.Page
+	if page < 1 {
+		page = 1
+	}
+	pageSize := p.PageSize
+	if pageSize <= 0 {
+		pageSize = 20
+	}
+	if pageSize > 200 {
+		pageSize = 200
+	}
+
+	whereClause, args := buildAuditListWhereClause(p)
+
+	countQuery := `
+SELECT COUNT(*)
+FROM operation_audit a
+WHERE 1 = 1` + whereClause
+
+	var total int64
+	if err := r.db.QueryRowContext(ctx, countQuery, args...).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+	if total == 0 {
+		return []AuditLogRow{}, 0, nil
+	}
+
+	dataQuery := `
+SELECT
+  a.id,
+  a.request_id,
+  a.actor_sub,
+  COALESCE(a.actor_name, ''),
+  a.action,
+  a.resource_type,
+  COALESCE(a.resource_uid, ''),
+  COALESCE(a.http_method, ''),
+  COALESCE(a.http_path, ''),
+  a.status_code,
+  a.result,
+  COALESCE(a.error_message, ''),
+  COALESCE(JSON_UNQUOTE(JSON_EXTRACT(a.metadata_json, '$.source_ip')), ''),
+  a.created_at
+FROM operation_audit a
+WHERE 1 = 1` + whereClause + `
+ORDER BY a.created_at DESC, a.id DESC
+LIMIT ? OFFSET ?`
+
+	dataArgs := make([]any, 0, len(args)+2)
+	dataArgs = append(dataArgs, args...)
+	dataArgs = append(dataArgs, pageSize, (page-1)*pageSize)
+
+	rows, err := r.db.QueryContext(ctx, dataQuery, dataArgs...)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+
+	result := make([]AuditLogRow, 0, pageSize)
+	for rows.Next() {
+		var item AuditLogRow
+		var statusCode sql.NullInt64
+		if err := rows.Scan(
+			&item.ID,
+			&item.RequestID,
+			&item.ActorSub,
+			&item.ActorName,
+			&item.Action,
+			&item.ResourceType,
+			&item.ResourceUID,
+			&item.HTTPMethod,
+			&item.HTTPPath,
+			&statusCode,
+			&item.Result,
+			&item.ErrorMessage,
+			&item.SourceIP,
+			&item.CreatedAt,
+		); err != nil {
+			return nil, 0, err
+		}
+		if statusCode.Valid {
+			item.StatusCode = int(statusCode.Int64)
+		}
+		result = append(result, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, err
+	}
+	return result, total, nil
+}
+
+func (r *CIRepository) ListOperationAuditForExport(ctx context.Context, p AuditListParams, limit int) ([]AuditLogRow, error) {
+	if limit <= 0 {
+		limit = 5000
+	}
+	if limit > 10000 {
+		limit = 10000
+	}
+
+	whereClause, args := buildAuditListWhereClause(p)
+	query := `
+SELECT
+  a.id,
+  a.request_id,
+  a.actor_sub,
+  COALESCE(a.actor_name, ''),
+  a.action,
+  a.resource_type,
+  COALESCE(a.resource_uid, ''),
+  COALESCE(a.http_method, ''),
+  COALESCE(a.http_path, ''),
+  a.status_code,
+  a.result,
+  COALESCE(a.error_message, ''),
+  COALESCE(JSON_UNQUOTE(JSON_EXTRACT(a.metadata_json, '$.source_ip')), ''),
+  a.created_at
+FROM operation_audit a
+WHERE 1 = 1` + whereClause + `
+ORDER BY a.created_at DESC, a.id DESC
+LIMIT ?`
+
+	dataArgs := make([]any, 0, len(args)+1)
+	dataArgs = append(dataArgs, args...)
+	dataArgs = append(dataArgs, limit)
+
+	rows, err := r.db.QueryContext(ctx, query, dataArgs...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	result := make([]AuditLogRow, 0, limit)
+	for rows.Next() {
+		var item AuditLogRow
+		var statusCode sql.NullInt64
+		if err := rows.Scan(
+			&item.ID,
+			&item.RequestID,
+			&item.ActorSub,
+			&item.ActorName,
+			&item.Action,
+			&item.ResourceType,
+			&item.ResourceUID,
+			&item.HTTPMethod,
+			&item.HTTPPath,
+			&statusCode,
+			&item.Result,
+			&item.ErrorMessage,
+			&item.SourceIP,
+			&item.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		if statusCode.Valid {
+			item.StatusCode = int(statusCode.Int64)
+		}
+		result = append(result, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
 func scanCI(scanner interface{ Scan(dest ...any) error }) (*model.CI, error) {
 	var item model.CI
 	var deleted int
@@ -568,6 +766,67 @@ func buildCIListWhereClause(p ListCIParams) (string, []any) {
 		where.WriteString(" AND (c.name LIKE ? OR c.unique_key LIKE ? OR c.ci_uid LIKE ?)")
 		like := "%" + p.Keyword + "%"
 		args = append(args, like, like, like)
+	}
+
+	return where.String(), args
+}
+
+func buildAuditListWhereClause(p AuditListParams) (string, []any) {
+	var where strings.Builder
+	args := make([]any, 0, 12)
+
+	if p.ActorSub != "" {
+		where.WriteString(" AND a.actor_sub = ?")
+		args = append(args, p.ActorSub)
+	}
+	if p.ActorName != "" {
+		where.WriteString(" AND a.actor_name LIKE ?")
+		args = append(args, "%"+p.ActorName+"%")
+	}
+	if p.Action != "" {
+		where.WriteString(" AND a.action LIKE ?")
+		args = append(args, "%"+p.Action+"%")
+	}
+	if p.ResourceType != "" {
+		where.WriteString(" AND a.resource_type = ?")
+		args = append(args, p.ResourceType)
+	}
+	if p.ResourceUID != "" {
+		where.WriteString(" AND a.resource_uid LIKE ?")
+		args = append(args, "%"+p.ResourceUID+"%")
+	}
+	if p.HTTPMethod != "" {
+		where.WriteString(" AND a.http_method = ?")
+		args = append(args, strings.ToUpper(p.HTTPMethod))
+	}
+	if p.Result != "" {
+		where.WriteString(" AND a.result = ?")
+		args = append(args, p.Result)
+	}
+	if p.SourceIP != "" {
+		where.WriteString(" AND COALESCE(JSON_UNQUOTE(JSON_EXTRACT(a.metadata_json, '$.source_ip')), '') LIKE ?")
+		args = append(args, "%"+p.SourceIP+"%")
+	}
+	if p.DateFrom != nil {
+		where.WriteString(" AND a.created_at >= ?")
+		args = append(args, p.DateFrom.Format("2006-01-02 15:04:05"))
+	}
+	if p.DateTo != nil {
+		where.WriteString(" AND a.created_at < ?")
+		args = append(args, p.DateTo.Format("2006-01-02 15:04:05"))
+	}
+	if p.Keyword != "" {
+		like := "%" + p.Keyword + "%"
+		where.WriteString(` AND (
+  a.request_id LIKE ?
+  OR a.actor_sub LIKE ?
+  OR a.actor_name LIKE ?
+  OR a.action LIKE ?
+  OR a.resource_uid LIKE ?
+  OR a.http_path LIKE ?
+  OR COALESCE(JSON_UNQUOTE(JSON_EXTRACT(a.metadata_json, '$.source_ip')), '') LIKE ?
+)`)
+		args = append(args, like, like, like, like, like, like, like)
 	}
 
 	return where.String(), args

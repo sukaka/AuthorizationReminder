@@ -97,11 +97,14 @@ body {
 
 .menu {
   display: grid;
-  gap: 8px;
+  gap: 10px;
   flex: 1;
   min-height: 0;
   overflow-y: auto;
   padding-right: 4px;
+  align-content: start;
+  grid-auto-rows: max-content;
+  align-items: start;
 }
 
 .menu button {
@@ -109,17 +112,14 @@ body {
   background: transparent;
   color: #475569;
   padding: 10px 12px;
+  min-height: 44px;
+  height: auto;
   border-radius: 12px;
   text-align: left;
-  transition: all 0.2s ease;
-  position: relative;
-  overflow: hidden;
+  font-size: 14px;
+  line-height: 1.4;
   cursor: pointer;
-}
-
-.menu button:hover {
-  transform: translateX(2px);
-  color: var(--ink);
+  align-self: start;
 }
 
 .menu button.active {
@@ -127,7 +127,6 @@ body {
   color: var(--accent);
   border-color: rgba(37, 99, 235, 0.35);
   font-weight: 600;
-  box-shadow: inset 0 0 0 1px rgba(37, 99, 235, 0.2);
 }
 
 .sidebar-actions {
@@ -741,6 +740,10 @@ textarea:focus {
 
 .shipping-track-modal {
   width: min(1080px, calc(100vw - 32px));
+}
+
+.shipping-abnormal-modal {
+  width: min(560px, calc(100vw - 24px));
 }
 
 .shipping-track-modal .floating-modal-header {

@@ -390,7 +390,7 @@ paths:
   /api/sec-impl/audit/verify:
     get:
       tags: [Audit]
-      summary: 审计链验签（admin/sysadmin/auditor）
+      summary: 审计链验签（auditor）
       parameters:
         - name: from_id
           in: query

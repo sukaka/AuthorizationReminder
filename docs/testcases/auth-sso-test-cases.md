@@ -18,6 +18,8 @@
 | AUTH-008 | 授权判断 | 调 `POST /api/auth/authorize`，分别测 allow/deny | 返回 `allow=true/false` 与原因 |
 | AUTH-009 | Token 过期/无效 | 用无效 token 调 `GET /api/auth/me` | 返回 401 |
 | AUTH-010 | 退出登录 | 调 `POST /api/auth/logout` | 返回 200，会话失效 |
+| AUTH-011 | 登录页密码显隐 | 在门户登录页点击密码框“眼睛”按钮 | 密码可在明文/密文间切换 |
+| AUTH-012 | 关闭浏览器后重新登录 | 登录成功后关闭浏览器，再次访问门户 | 需要重新输入账号密码 |
 
 ## 建议执行命令
 ```bash

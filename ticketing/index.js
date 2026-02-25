@@ -200,7 +200,7 @@ const authMiddleware = (req, res, next) => {
       if (!apps.includes('ticketing')) {
         return res.status(403).json({ error: '无权限访问工单管理系统' });
       }
-      req.user = data?.user || null;
+      req.user = data?.user ? { ...data.user, request_ip: getClientIp(req) } : null;
       req.apps = apps;
       return next();
     })
@@ -493,6 +493,7 @@ const logOperation = async ({ user, action, entity, entityId, beforeData, afterD
   const userId = Number(user?.id) || null;
   const username = user?.username || null;
   const logSystem = String(system || 'ticketing').trim() || 'ticketing';
+  const sourceIp = String(user?.request_ip || user?.requestIp || '').trim() || null;
   const beforeText = stringifyAuditData(beforeData);
   const afterText = stringifyAuditData(afterData);
   const createdAt = formatDateTime(new Date());
@@ -501,9 +502,9 @@ const logOperation = async ({ user, action, entity, entityId, beforeData, afterD
     const prevHash = prev?.signature || '';
     const inserted = await trx.run(
       `INSERT INTO operation_logs
-         (user_id, username, log_system, action, entity, entity_id, before_data, after_data, prev_hash, signature, sign_version, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [userId, username, logSystem, action, entity, entityId, beforeText, afterText, prevHash, null, 'v1', createdAt]
+         (user_id, username, log_system, action, entity, entity_id, before_data, after_data, prev_hash, signature, sign_version, request_ip, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [userId, username, logSystem, action, entity, entityId, beforeText, afterText, prevHash, null, 'v1', sourceIp, createdAt]
     );
     const signature = computeAuditSignature({
       id: inserted.insertId,
@@ -979,8 +980,12 @@ const refreshTicketCurrentStage = async (ticketId) => {
 app.use('/api', ticketingApiRateLimiter, authMiddleware);
 
 app.get('/api/projects', async (req, res) => {
+  const authz = await authorize(req, { action: 'project:list' });
+  if (!authz.allow) return res.status(403).json({ error: authz.reason || '无权限' });
+
   let rows = [];
-  if (req.user.role === 'admin') {
+  const readOnly = authz?.constraints?.readOnly === true;
+  if (req.user.role === 'admin' || readOnly) {
     rows = await db.query('SELECT * FROM projects ORDER BY id DESC');
   } else {
     rows = await db.query(
@@ -1256,7 +1261,7 @@ app.delete('/api/projects/:id', async (req, res) => {
 
 app.get('/api/projects/:id/permissions', async (req, res) => {
   const { id } = req.params;
-  const authz = await authorize(req, { action: 'project:update', resource: { project_id: id } });
+  const authz = await authorize(req, { action: 'project:permissions:read', resource: { project_id: id } });
   if (!authz.allow) return res.status(403).json({ error: authz.reason || '无权限' });
   const project = await db.get('SELECT id, name FROM projects WHERE id = ?', [id]);
   if (!project) return res.status(404).json({ error: '项目不存在' });
@@ -1396,7 +1401,7 @@ app.put('/api/projects/:id/permissions', async (req, res) => {
 
 app.get('/api/projects/:id/permissions/logs', async (req, res) => {
   const { id } = req.params;
-  const authz = await authorize(req, { action: 'project:update', resource: { project_id: id } });
+  const authz = await authorize(req, { action: 'project:permissions:read', resource: { project_id: id } });
   if (!authz.allow) return res.status(403).json({ error: authz.reason || '无权限' });
   const project = await db.get('SELECT id FROM projects WHERE id = ?', [id]);
   if (!project) return res.status(404).json({ error: '项目不存在' });
@@ -1427,7 +1432,12 @@ app.get('/api/projects/:id/permissions/logs', async (req, res) => {
   const rows = await db.query(
     `SELECT
        id, project_id, operator_id, operator_name, event_type, event_desc,
-       before_json, after_json, created_at
+       before_json, after_json,
+       CASE
+         WHEN JSON_VALID(after_json) THEN JSON_UNQUOTE(JSON_EXTRACT(after_json, '$."请求信息"."请求IP"'))
+         ELSE NULL
+       END AS source_ip,
+       created_at
      FROM ticket_project_permission_logs
      WHERE ${where.join(' AND ')}
      ORDER BY id DESC
@@ -1445,7 +1455,7 @@ app.get('/api/projects/:id/permissions/logs', async (req, res) => {
 
 app.get('/api/projects/:id/permissions/logs/export', async (req, res) => {
   const { id } = req.params;
-  const authz = await authorize(req, { action: 'project:update', resource: { project_id: id } });
+  const authz = await authorize(req, { action: 'project:permissions:read', resource: { project_id: id } });
   if (!authz.allow) return res.status(403).json({ error: authz.reason || '无权限' });
   const project = await db.get('SELECT id, name FROM projects WHERE id = ?', [id]);
   if (!project) return res.status(404).json({ error: '项目不存在' });
@@ -1475,14 +1485,19 @@ app.get('/api/projects/:id/permissions/logs/export', async (req, res) => {
   }
   const rows = await db.query(
     `SELECT
-       id, event_type, event_desc, operator_name, created_at
+       id, event_type, event_desc, operator_name,
+       CASE
+         WHEN JSON_VALID(after_json) THEN JSON_UNQUOTE(JSON_EXTRACT(after_json, '$."请求信息"."请求IP"'))
+         ELSE NULL
+       END AS source_ip,
+       created_at
      FROM ticket_project_permission_logs
      WHERE ${where.join(' AND ')}
      ORDER BY id DESC
      LIMIT 5000`,
     params
   );
-  const header = ['日志ID', '项目ID', '项目名称', '类型', '内容', '操作人', '时间'];
+  const header = ['日志ID', '项目ID', '项目名称', '类型', '内容', '操作人', '来源IP', '时间'];
   const lines = [
     header.map(escapeCsv).join(','),
     ...rows.map((row) =>
@@ -1493,6 +1508,7 @@ app.get('/api/projects/:id/permissions/logs/export', async (req, res) => {
         toPermissionLogTypeZh(row.event_type),
         toPermissionLogDescZh(row.event_desc),
         row.operator_name || '-',
+        row.source_ip || '-',
         formatDateTime(row.created_at),
       ]
         .map(escapeCsv)
@@ -2382,6 +2398,9 @@ app.post('/api/tickets/:id/comments', async (req, res) => {
     const code = authz.reason === '工单不存在' ? 404 : 403;
     return res.status(code).json({ error: authz.reason || '无权限' });
   }
+  if (authz.constraints?.readOnly) {
+    return res.status(403).json({ error: '当前账号仅支持审计只读访问' });
+  }
   const content = normalizeText(req.body?.content);
   if (!content) return res.status(400).json({ error: '评论内容不能为空' });
   const mentions = await parseMentions(content);
@@ -2816,7 +2835,12 @@ app.get('/api/tickets/:id/events', async (req, res) => {
     params.push(normalizeDateInput(req.query.to));
   }
   const rows = await db.query(
-    `SELECT id, event_type, event_desc, before_json, after_json, operator_id, operator_name, created_at
+    `SELECT id, event_type, event_desc, before_json, after_json, operator_id, operator_name,
+            CASE
+              WHEN JSON_VALID(after_json) THEN JSON_UNQUOTE(JSON_EXTRACT(after_json, '$."请求信息"."请求IP"'))
+              ELSE NULL
+            END AS source_ip,
+            created_at
      FROM ticket_events
      WHERE ${where.join(' AND ')}
      ORDER BY id DESC
@@ -2853,18 +2877,23 @@ app.get('/api/tickets/:id/events/export', async (req, res) => {
     params.push(normalizeDateInput(req.query.to));
   }
   const rows = await db.query(
-    `SELECT id, event_type, event_desc, operator_name, created_at
+    `SELECT id, event_type, event_desc, operator_name,
+            CASE
+              WHEN JSON_VALID(after_json) THEN JSON_UNQUOTE(JSON_EXTRACT(after_json, '$."请求信息"."请求IP"'))
+              ELSE NULL
+            END AS source_ip,
+            created_at
      FROM ticket_events
      WHERE ${where.join(' AND ')}
      ORDER BY id DESC
      LIMIT 5000`,
     params
   );
-  const header = ['事件ID', '类型', '内容', '操作人', '时间'];
+  const header = ['事件ID', '类型', '内容', '操作人', '来源IP', '时间'];
   const lines = [
     header.map(escapeCsv).join(','),
     ...rows.map((row) =>
-      [row.id, row.event_type, row.event_desc, row.operator_name || '-', formatDateTime(row.created_at)]
+      [row.id, row.event_type, row.event_desc, row.operator_name || '-', row.source_ip || '-', formatDateTime(row.created_at)]
         .map(escapeCsv)
         .join(',')
     ),
@@ -2873,6 +2902,65 @@ app.get('/api/tickets/:id/events/export', async (req, res) => {
   res.setHeader('Content-Type', 'text/csv; charset=utf-8');
   res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
   res.send(`\uFEFF${lines.join('\n')}`);
+});
+
+app.get('/api/operation-logs', async (req, res) => {
+  const authz = await authorize(req, { action: 'ticket:audit' });
+  if (!authz.allow) return res.status(403).json({ error: authz.reason || '无权限' });
+
+  const page = Math.max(toPositiveInt(req.query.page, 1), 1);
+  const pageSize = Math.min(Math.max(toPositiveInt(req.query.page_size, 50), 1), 200);
+  const offset = (page - 1) * pageSize;
+
+  const where = ['log_system = ?'];
+  const params = ['ticketing'];
+  const operator = normalizeText(req.query.operator);
+  const action = normalizeText(req.query.action);
+  const entity = normalizeText(req.query.entity);
+  const from = normalizeText(req.query.from);
+  const to = normalizeText(req.query.to);
+
+  if (operator) {
+    where.push('username LIKE ?');
+    params.push(`%${operator}%`);
+  }
+  if (action) {
+    where.push('action LIKE ?');
+    params.push(`%${action}%`);
+  }
+  if (entity) {
+    where.push('entity LIKE ?');
+    params.push(`%${entity}%`);
+  }
+  if (from) {
+    where.push('created_at >= ?');
+    params.push(normalizeDateInput(from));
+  }
+  if (to) {
+    where.push('created_at < DATE_ADD(?, INTERVAL 1 DAY)');
+    params.push(normalizeDateInput(to));
+  }
+
+  const countRow = await db.get(
+    `SELECT COUNT(*) AS total
+     FROM operation_logs
+     WHERE ${where.join(' AND ')}`,
+    params
+  );
+  const rows = await db.query(
+    `SELECT id, user_id, username, action, entity, entity_id, before_data, after_data, request_ip, created_at
+     FROM operation_logs
+     WHERE ${where.join(' AND ')}
+     ORDER BY id DESC
+     LIMIT ? OFFSET ?`,
+    [...params, pageSize, offset]
+  );
+  res.json({
+    items: rows,
+    page,
+    page_size: pageSize,
+    total: Number(countRow?.total || 0),
+  });
 });
 
 app.put('/api/tickets/:id', async (req, res) => {

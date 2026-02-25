@@ -1111,7 +1111,7 @@ const requireRole = (...roles) => (req, _res, next) => {
 };
 const requireInventoryEditor = requireRole('admin', 'sysadmin');
 const requireInventoryOperator = requireRole('admin', 'sysadmin');
-const requireAuditViewer = requireRole('admin', 'sysadmin', 'auditor');
+const requireAuditViewer = requireRole('auditor');
 
 const ensureEntityExists = async (table, id, label) => {
   const row = await get(`SELECT id FROM ${table} WHERE id = ?`, [id]);

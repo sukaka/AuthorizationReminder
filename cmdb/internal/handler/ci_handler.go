@@ -255,6 +255,7 @@ func actorFromRequest(c *gin.Context) service.Operator {
 		TraceID:   traceID,
 		Method:    c.Request.Method,
 		Path:      c.FullPath(),
+		SourceIP:  strings.TrimSpace(c.ClientIP()),
 	}
 }
 

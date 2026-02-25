@@ -223,7 +223,7 @@ const defaultAppAccessByRole = (role = 'viewer') => {
   const r = String(role || '').toLowerCase();
   if (r === 'admin') return [...SYSTEM_ACCESS_KEYS];
   if (r === 'sysadmin') return ['reminder', 'sec-impl'];
-  if (r === 'auditor') return ['reminder', 'inventory', 'device-flow', 'sec-impl'];
+  if (r === 'auditor') return ['reminder', 'ticketing', 'cmdb', 'inventory', 'device-flow', 'sec-impl'];
   return ['reminder'];
 };
 
@@ -570,7 +570,7 @@ const authMiddleware = (req, res, next) => {
       if (!apps.includes('reminder')) {
         return res.status(403).json({ error: '无权限访问授权到期提醒系统' });
       }
-      req.user = data?.user || null;
+      req.user = data?.user ? { ...data.user, request_ip: getRequestIp(req) } : null;
       req.scope = data?.scope || null;
       req.apps = apps;
       return next();
@@ -1322,11 +1322,12 @@ const getRateLimitConfig = (configs) => {
   };
 };
 
-const logOperation = async ({ user, action, entity, entityId, beforeData, afterData, system = 'reminder' }) => {
+const logOperation = async ({ user, action, entity, entityId, beforeData, afterData, system = 'reminder', requestIp }) => {
   try {
     const userId = Number(user?.id || 0);
     const username = String(user?.username || 'system');
     const logSystem = String(system || 'reminder').trim() || 'reminder';
+    const sourceIp = String(requestIp || user?.request_ip || user?.requestIp || '').trim() || null;
     const beforeText = beforeData === undefined ? null : stableStringify(beforeData);
     const afterText = afterData === undefined ? null : stableStringify(afterData);
     const createdAt = toMysqlDatetime(new Date());
@@ -1335,9 +1336,9 @@ const logOperation = async ({ user, action, entity, entityId, beforeData, afterD
       const prevHash = prev?.signature || null;
       const inserted = await trx.run(
         `INSERT INTO operation_logs
-           (user_id, username, log_system, action, entity, entity_id, before_data, after_data, prev_hash, signature, sign_version, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [userId, username, logSystem, action, entity, entityId, beforeText, afterText, prevHash, null, 'v1', createdAt]
+           (user_id, username, log_system, action, entity, entity_id, before_data, after_data, prev_hash, signature, sign_version, request_ip, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [userId, username, logSystem, action, entity, entityId, beforeText, afterText, prevHash, null, 'v1', sourceIp, createdAt]
       );
       const signature = computeAuditSignature({
         id: inserted.insertId,
@@ -3435,7 +3436,7 @@ app.get('/api/operation-logs', requireRole(['auditor']), async (req, res) => {
   const rows = await db.query(
     `SELECT
        id, user_id, username, log_system AS \`system\`, action, entity, entity_id,
-       before_data, after_data, prev_hash, signature, sign_version, created_at
+       before_data, after_data, prev_hash, signature, sign_version, request_ip, created_at
      FROM operation_logs
      ${whereSql}
      ORDER BY id DESC
@@ -3474,7 +3475,7 @@ app.get('/api/operation-logs/export', requireRole(['auditor']), async (req, res)
   }
   const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
   const rows = await db.query(
-    `SELECT id, username, log_system AS \`system\`, action, entity, entity_id, before_data, after_data, prev_hash, signature, sign_version, created_at
+    `SELECT id, username, log_system AS \`system\`, action, entity, entity_id, before_data, after_data, prev_hash, signature, sign_version, request_ip, created_at
      FROM operation_logs
      ${whereSql}
      ORDER BY id DESC
@@ -3500,6 +3501,7 @@ app.get('/api/operation-logs/export', requireRole(['auditor']), async (req, res)
     { key: 'prev_hash', label: '前一条签名' },
     { key: 'signature', label: '当前签名' },
     { key: 'sign_version', label: '签名版本' },
+    { key: 'request_ip', label: '来源IP' },
     { key: 'created_at', label: '时间' },
   ]);
 

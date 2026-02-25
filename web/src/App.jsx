@@ -82,7 +82,7 @@ const systemAccessOptions = [
   { key: 'cmdb', label: 'CMDB系统', shortLabel: 'CMDB' },
   { key: 'inventory', label: '库存管理系统', shortLabel: '库存系统' },
   { key: 'device-flow', label: '设备流转系统', shortLabel: '设备流转' },
-  { key: 'sec-impl', label: '安全产品实施记录系统', shortLabel: '安全实施' },
+  { key: 'sec-impl', label: '聚信实施记录系统', shortLabel: '实施记录' },
 ]
 const defaultSystemAccess = systemAccessOptions.map((item) => item.key)
 const roleOptions = [
@@ -142,6 +142,49 @@ const buildPortalSwitchUrl = (system) => {
   if (system) params.set('system', system)
   params.set('mode', 'switch')
   return `${base}/portal?${params.toString()}`
+}
+
+const portalSessionQueryKey = 'portal_session'
+const portalSessionStorageKey = 'juxin_portal_session'
+
+const readPortalSessionMarker = () => {
+  try {
+    return String(sessionStorage.getItem(portalSessionStorageKey) || '').trim()
+  } catch {
+    return ''
+  }
+}
+
+const consumePortalSessionMarker = () => {
+  try {
+    const params = new URLSearchParams(window.location.search)
+    const marker = String(params.get(portalSessionQueryKey) || '').trim()
+    if (marker) {
+      sessionStorage.setItem(portalSessionStorageKey, marker)
+      params.delete(portalSessionQueryKey)
+      const query = params.toString()
+      const nextUrl = `${window.location.pathname}${query ? `?${query}` : ''}${window.location.hash || ''}`
+      window.history.replaceState({}, '', nextUrl)
+      return marker
+    }
+  } catch {
+    return ''
+  }
+  return readPortalSessionMarker()
+}
+
+const shouldThrottlePortalRedirect = (system, windowMs = 8000) => {
+  const key = String(system || '').trim()
+  if (!key) return false
+  try {
+    const storageKey = `portal_redirect_guard_${key}`
+    const now = Date.now()
+    const last = Number(sessionStorage.getItem(storageKey) || 0)
+    sessionStorage.setItem(storageKey, String(now))
+    return Number.isFinite(last) && now - last < windowMs
+  } catch {
+    return false
+  }
 }
 
 function App() {
@@ -309,6 +352,22 @@ function App() {
   const [testSmsStatus, setTestSmsStatus] = useState({ type: '', text: '' })
   const [testWecomStatus, setTestWecomStatus] = useState({ type: '', text: '' })
   const [modalInfo, setModalInfo] = useState(null)
+  const [confirmDialog, setConfirmDialog] = useState({
+    open: false,
+    title: '',
+    message: '',
+    confirmLabel: '确认',
+    onConfirm: null,
+  })
+  const [inputDialog, setInputDialog] = useState({
+    open: false,
+    title: '',
+    message: '',
+    placeholder: '',
+    confirmLabel: '确认',
+    value: '',
+    onSubmit: null,
+  })
   const [configDirty, setConfigDirty] = useState(false)
   const [testTemplate, setTestTemplate] = useState({
     customer_name: '',
@@ -360,6 +419,8 @@ function App() {
     let cancelled = false
     const bootstrapAuth = async () => {
       try {
+        const marker = consumePortalSessionMarker()
+        if (!marker) return
         const res = await fetch('/api/auth/me', { credentials: 'include' })
         if (!res.ok) return
         const data = await res.json()
@@ -384,6 +445,7 @@ function App() {
     if (!authReady) return
     if (authToken) return
     const timer = setTimeout(() => {
+      if (shouldThrottlePortalRedirect('reminder')) return
       window.location.href = buildPortalEntryUrl('reminder')
     }, logoutPending ? 1000 : 120)
     return () => clearTimeout(timer)
@@ -463,9 +525,20 @@ function App() {
     []
   )
   const permissions = rolePermissions[currentUser?.role || 'viewer']
+  const isAuditOnlyUser = currentUser?.role === 'auditor'
   const isEditingBuiltinUser = BUILTIN_ROLE_USERNAMES.has(String(userForm.username || '').toLowerCase())
+  const roleGuideText = useMemo(() => {
+    const role = String(currentUser?.role || '').toLowerCase()
+    if (role === 'admin') return '可维护客户/联系人/授权与发送计划，支持业务配置。'
+    if (role === 'sysadmin') return '仅可维护账号、安全策略和用户，不展示业务数据菜单。'
+    if (role === 'auditor') return '仅可访问操作日志与审计相关能力，不允许业务写操作。'
+    if (role === 'viewer') return '仅可查看账号安全页，若需更多权限请联系管理员。'
+    if (role === 'sales') return '当前为兼容角色，默认仅开放账号安全页。'
+    return '请根据角色授权使用系统功能。'
+  }, [currentUser?.role])
 
   const visibleTabs = tabs.filter((tab) => {
+    if (isAuditOnlyUser) return tab.key === 'ops'
     if (tab.key === 'dashboard') return permissions.canDashboard
     if (tab.key === 'customers' || tab.key === 'contacts' || tab.key === 'licenses') return permissions.canBusinessRead
     if (tab.key === 'config') return permissions.canConfig
@@ -474,7 +547,8 @@ function App() {
     if (tab.key === 'send' || tab.key === 'reminders') return permissions.canSend
     if (tab.key === 'imports') return permissions.canWrite
     if (tab.key === 'ops') return permissions.canAudit
-    return true
+    if (tab.key === 'account') return true
+    return false
   })
 
   useEffect(() => {
@@ -976,6 +1050,58 @@ function App() {
     setTimeout(() => setError(''), 3000)
   }
 
+  const openConfirmDialog = ({ title = '确认操作', message = '', confirmLabel = '确认', onConfirm }) => {
+    setConfirmDialog({
+      open: true,
+      title,
+      message,
+      confirmLabel,
+      onConfirm: typeof onConfirm === 'function' ? onConfirm : null,
+    })
+  }
+
+  const closeConfirmDialog = () => {
+    setConfirmDialog((prev) => ({ ...prev, open: false, onConfirm: null }))
+  }
+
+  const onConfirmDialogAccept = async () => {
+    const callback = confirmDialog.onConfirm
+    closeConfirmDialog()
+    if (!callback) return
+    await callback()
+  }
+
+  const openInputDialog = ({
+    title = '输入信息',
+    message = '',
+    placeholder = '',
+    confirmLabel = '确认',
+    defaultValue = '',
+    onSubmit,
+  }) => {
+    setInputDialog({
+      open: true,
+      title,
+      message,
+      placeholder,
+      confirmLabel,
+      value: defaultValue,
+      onSubmit: typeof onSubmit === 'function' ? onSubmit : null,
+    })
+  }
+
+  const closeInputDialog = () => {
+    setInputDialog((prev) => ({ ...prev, open: false, onSubmit: null, value: '' }))
+  }
+
+  const onInputDialogAccept = async () => {
+    const callback = inputDialog.onSubmit
+    const value = String(inputDialog.value || '')
+    closeInputDialog()
+    if (!callback) return
+    await callback(value)
+  }
+
   const normalizeApiError = (err) => {
     let msg = err && err.message ? String(err.message) : ''
     try {
@@ -1202,14 +1328,20 @@ function App() {
   }
 
   const onDeleteCustomer = async (id) => {
-    if (!window.confirm('确认删除该客户？')) return
-    try {
-      await api.del(`/api/customers/${id}`)
-      showMessage('客户已删除')
-      refreshCustomers()
-    } catch (err) {
-      showError('该客户下有联系人，无法删除')
-    }
+    openConfirmDialog({
+      title: '删除客户',
+      message: '确认删除该客户？',
+      confirmLabel: '确认删除',
+      onConfirm: async () => {
+        try {
+          await api.del(`/api/customers/${id}`)
+          showMessage('客户已删除')
+          refreshCustomers()
+        } catch (err) {
+          showError('该客户下有联系人，无法删除')
+        }
+      },
+    })
   }
 
   const onSaveContact = async (e) => {
@@ -1267,14 +1399,20 @@ function App() {
   }
 
   const onDeleteContact = async (id) => {
-    if (!window.confirm('确认删除该联系人？')) return
-    try {
-      await api.del(`/api/contacts/${id}`)
-      showMessage('联系人已删除')
-      refreshContacts()
-    } catch (err) {
-      showError('联系人删除失败')
-    }
+    openConfirmDialog({
+      title: '删除联系人',
+      message: '确认删除该联系人？',
+      confirmLabel: '确认删除',
+      onConfirm: async () => {
+        try {
+          await api.del(`/api/contacts/${id}`)
+          showMessage('联系人已删除')
+          refreshContacts()
+        } catch (err) {
+          showError('联系人删除失败')
+        }
+      },
+    })
   }
 
   const onSaveLicense = async (e) => {
@@ -1312,14 +1450,20 @@ function App() {
   }
 
   const onDeleteLicense = async (id) => {
-    if (!window.confirm('确认删除该授权？')) return
-    try {
-      await api.del(`/api/licenses/${id}`)
-      showMessage('授权已删除')
-      refreshLicenses()
-    } catch (err) {
-      showError('授权删除失败')
-    }
+    openConfirmDialog({
+      title: '删除授权',
+      message: '确认删除该授权？',
+      confirmLabel: '确认删除',
+      onConfirm: async () => {
+        try {
+          await api.del(`/api/licenses/${id}`)
+          showMessage('授权已删除')
+          refreshLicenses()
+        } catch (err) {
+          showError('授权删除失败')
+        }
+      },
+    })
   }
 
   const onUploadLicenseScreenshot = async (license, file) => {
@@ -1370,17 +1514,23 @@ function App() {
   }
 
   const onDeleteLicenseScreenshot = async (license) => {
-    if (!window.confirm('确认删除该截图？')) return
-    try {
-      await api.del(`/api/licenses/${license.id}/screenshot`)
-      setModalInfo({ title: '删除成功', message: '截图已删除' })
-      refreshLicenses()
-    } catch (err) {
-      setModalInfo({
-        title: '删除失败',
-        message: normalizeApiError(err) || '截图删除失败',
-      })
-    }
+    openConfirmDialog({
+      title: '删除截图',
+      message: '确认删除该截图？',
+      confirmLabel: '确认删除',
+      onConfirm: async () => {
+        try {
+          await api.del(`/api/licenses/${license.id}/screenshot`)
+          setModalInfo({ title: '删除成功', message: '截图已删除' })
+          refreshLicenses()
+        } catch (err) {
+          setModalInfo({
+            title: '删除失败',
+            message: normalizeApiError(err) || '截图删除失败',
+          })
+        }
+      },
+    })
   }
 
   const closeScreenshotPreview = () => {
@@ -1668,14 +1818,20 @@ function App() {
   }
 
   const onResendReminder = async (id) => {
-    if (!window.confirm('确认重发该提醒？')) return
-    try {
-      await api.post(`/api/reminder-logs/${id}/resend`, {})
-      showMessage('已重新发送')
-      refreshReminderLogs()
-    } catch (err) {
-      showError('重新发送失败')
-    }
+    openConfirmDialog({
+      title: '重发提醒',
+      message: '确认重发该提醒？',
+      confirmLabel: '确认重发',
+      onConfirm: async () => {
+        try {
+          await api.post(`/api/reminder-logs/${id}/resend`, {})
+          showMessage('已重新发送')
+          refreshReminderLogs()
+        } catch (err) {
+          showError('重新发送失败')
+        }
+      },
+    })
   }
 
   const onSaveSendPlan = async (e) => {
@@ -1716,14 +1872,20 @@ function App() {
   }
 
   const onDeleteSendPlan = async (id) => {
-    if (!window.confirm('确认删除该发送计划？')) return
-    try {
-      await api.del(`/api/send-plans/${id}`)
-      showMessage('发送计划已删除')
-      refreshSendPlans()
-    } catch (err) {
-      showError('发送计划删除失败')
-    }
+    openConfirmDialog({
+      title: '删除发送计划',
+      message: '确认删除该发送计划？',
+      confirmLabel: '确认删除',
+      onConfirm: async () => {
+        try {
+          await api.del(`/api/send-plans/${id}`)
+          showMessage('发送计划已删除')
+          refreshSendPlans()
+        } catch (err) {
+          showError('发送计划删除失败')
+        }
+      },
+    })
   }
 
   const onEditSendPlan = (plan) => {
@@ -1811,45 +1973,57 @@ function App() {
   }
 
   const onDeleteUser = async (id) => {
-    if (!window.confirm('确认删除该用户？')) return
-    try {
-      await api.del(`/api/users/${id}`)
-      showMessage('用户已删除')
-      setModalInfo({
-        title: '删除用户成功',
-        message: '用户已删除。',
-      })
-      refreshUsers()
-    } catch (err) {
-      const msg = normalizeApiError(err) || '用户删除失败'
-      showError(msg)
-      setModalInfo({
-        title: '删除用户失败',
-        message: msg,
-      })
-    }
+    openConfirmDialog({
+      title: '删除用户',
+      message: '确认删除该用户？',
+      confirmLabel: '确认删除',
+      onConfirm: async () => {
+        try {
+          await api.del(`/api/users/${id}`)
+          showMessage('用户已删除')
+          setModalInfo({
+            title: '删除用户成功',
+            message: '用户已删除。',
+          })
+          refreshUsers()
+        } catch (err) {
+          const msg = normalizeApiError(err) || '用户删除失败'
+          showError(msg)
+          setModalInfo({
+            title: '删除用户失败',
+            message: msg,
+          })
+        }
+      },
+    })
   }
 
   const onToggleUserActive = async (user) => {
     const nextActive = Number(user.is_active) === 1 ? 0 : 1
     const actionText = nextActive === 1 ? '启用' : '禁用'
-    if (!window.confirm(`确认${actionText}该用户？`)) return
-    try {
-      await api.put(`/api/users/${user.id}`, { is_active: nextActive })
-      showMessage(`用户已${actionText}`)
-      setModalInfo({
-        title: `${actionText}用户成功`,
-        message: `用户已${actionText}。`,
-      })
-      refreshUsers()
-    } catch (err) {
-      const msg = normalizeApiError(err) || `用户${actionText}失败`
-      showError(msg)
-      setModalInfo({
-        title: `${actionText}用户失败`,
-        message: msg,
-      })
-    }
+    openConfirmDialog({
+      title: `${actionText}用户`,
+      message: `确认${actionText}该用户？`,
+      confirmLabel: `确认${actionText}`,
+      onConfirm: async () => {
+        try {
+          await api.put(`/api/users/${user.id}`, { is_active: nextActive })
+          showMessage(`用户已${actionText}`)
+          setModalInfo({
+            title: `${actionText}用户成功`,
+            message: `用户已${actionText}。`,
+          })
+          refreshUsers()
+        } catch (err) {
+          const msg = normalizeApiError(err) || `用户${actionText}失败`
+          showError(msg)
+          setModalInfo({
+            title: `${actionText}用户失败`,
+            message: msg,
+          })
+        }
+      },
+    })
   }
 
   const onChangePassword = async (e) => {
@@ -1868,23 +2042,31 @@ function App() {
   }
 
   const onResetUserPassword = async (id) => {
-    const newPassword = window.prompt('请输入新密码（至少10位，包含大小写字母、数字、特殊字符）')
-    if (!newPassword) return
-    try {
-      await api.post(`/api/users/${id}/reset-password`, { newPassword })
-      showMessage('密码已重置')
-      setModalInfo({
-        title: '重置密码成功',
-        message: '用户密码已重置。',
-      })
-    } catch (err) {
-      const msg = normalizeApiError(err) || '密码重置失败'
-      showError(msg)
-      setModalInfo({
-        title: '重置密码失败',
-        message: msg,
-      })
-    }
+    openInputDialog({
+      title: '重置用户密码',
+      message: '请输入新密码（至少10位，包含大小写字母、数字、特殊字符）',
+      placeholder: '输入新密码',
+      confirmLabel: '确认重置',
+      onSubmit: async (value) => {
+        const newPassword = String(value || '')
+        if (!newPassword) return
+        try {
+          await api.post(`/api/users/${id}/reset-password`, { newPassword })
+          showMessage('密码已重置')
+          setModalInfo({
+            title: '重置密码成功',
+            message: '用户密码已重置。',
+          })
+        } catch (err) {
+          const msg = normalizeApiError(err) || '密码重置失败'
+          showError(msg)
+          setModalInfo({
+            title: '重置密码失败',
+            message: msg,
+          })
+        }
+      },
+    })
   }
 
   const onImportCustomers = async (file) => {
@@ -1941,12 +2123,24 @@ function App() {
 
   useEffect(() => {
     if (!authToken) return
-    api
-      .get('/api/auth/me')
-      .then((user) => setCurrentUser(user))
-      .catch(() => {
-        setAuthToken('')
+    let cancelled = false
+    fetch('/api/auth/me', { credentials: 'include' })
+      .then(async (res) => {
+        if (cancelled) return
+        if (res.status === 401) {
+          setAuthToken('')
+          return
+        }
+        if (!res.ok) return
+        const user = await res.json()
+        if (!cancelled) setCurrentUser(user)
       })
+      .catch(() => {
+        // ignore transient network failures to avoid auth redirect loops
+      })
+    return () => {
+      cancelled = true
+    }
   }, [authToken])
 
   useEffect(() => {
@@ -2154,7 +2348,7 @@ function App() {
       ticketing: '工单系统',
       inventory: '库存系统',
       'device-flow': '设备流转系统',
-      'sec-impl': '安全产品实施记录系统',
+      'sec-impl': '聚信实施记录系统',
       sso: '统一登录',
     }
     return map[system] || system || '-'
@@ -2183,14 +2377,192 @@ function App() {
     return map[entity] || entity || '-'
   }
 
-  const prettyJson = (value) => {
-    if (!value) return ''
+  const parseAuditData = (value) => {
+    if (value === null || value === undefined || value === '') return null
+    if (typeof value === 'object') return value
+    const text = String(value).trim()
+    if (!text) return null
     try {
-      const parsed = typeof value === 'string' ? JSON.parse(value) : value
-      return typeof parsed === 'string' ? parsed : JSON.stringify(parsed, null, 2)
+      return JSON.parse(text)
     } catch (err) {
-      return String(value)
+      return text
     }
+  }
+
+  const isPlainObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value)
+
+  const auditFieldLabelMap = {
+    id: 'ID',
+    user_id: '用户ID',
+    username: '用户名',
+    role: '角色',
+    app_access: '系统访问权限',
+    token_version: '令牌版本',
+    lock_until: '锁定截止',
+    fail_count: '失败次数',
+    locked_until: '锁定截止',
+    attempts: '尝试次数',
+    method: '方式',
+    methods: '认证方式',
+    enabled: '是否启用',
+    reason: '原因',
+    error: '错误',
+    message: '说明',
+    ip: '来源IP',
+    request_ip: '来源IP',
+    request_id: '请求ID',
+    source: '来源',
+    status: '状态',
+    name: '名称',
+    customer_id: '客户ID',
+    contact_id: '联系人ID',
+    email: '邮箱',
+    phone: '电话',
+    wecom_id: '企业微信ID',
+    is_active: '是否启用',
+    juxin_sales: '聚信销售',
+    channel_sales: '渠道销售',
+    screenshot_url: '截图地址',
+    screenshot_valid: '截图有效',
+    ocr_error: 'OCR错误',
+    created_at: '创建时间',
+    updated_at: '更新时间',
+    deleted: '已删除',
+  }
+
+  const auditFieldTokenLabelMap = {
+    id: 'ID',
+    user: '用户',
+    username: '用户名',
+    role: '角色',
+    app: '系统',
+    access: '访问权限',
+    token: '令牌',
+    version: '版本',
+    lock: '锁定',
+    locked: '锁定',
+    until: '截止',
+    fail: '失败',
+    count: '次数',
+    attempts: '尝试次数',
+    method: '方式',
+    methods: '方式',
+    enabled: '启用',
+    reason: '原因',
+    error: '错误',
+    message: '说明',
+    ip: '来源IP',
+    request: '请求',
+    source: '来源',
+    status: '状态',
+    name: '名称',
+    customer: '客户',
+    contact: '联系人',
+    email: '邮箱',
+    phone: '电话',
+    wecom: '企业微信',
+    active: '启用',
+    sales: '销售',
+    channel: '渠道',
+    screenshot: '截图',
+    url: '地址',
+    valid: '有效',
+    ocr: 'OCR',
+    created: '创建',
+    updated: '更新',
+    deleted: '删除',
+    before: '变更前',
+    after: '变更后',
+  }
+
+  const formatAuditFieldLabel = (fieldKey) => {
+    const text = String(fieldKey || '').trim()
+    if (!text) return '-'
+    if (/[\u4e00-\u9fa5]/.test(text)) return text
+    const normalized = text.replace(/[\s.-]+/g, '_').toLowerCase()
+    if (auditFieldLabelMap[normalized]) return auditFieldLabelMap[normalized]
+    if (normalized.startsWith('is_')) {
+      const rest = normalized.slice(3)
+      const restLabel = rest.split('_').map((token) => auditFieldTokenLabelMap[token] || token).join('')
+      return restLabel ? `是否${restLabel}` : text
+    }
+    if (normalized.endsWith('_id')) {
+      const rest = normalized.slice(0, -3)
+      const restLabel = rest.split('_').map((token) => auditFieldTokenLabelMap[token] || token).join('')
+      return restLabel ? `${restLabel}ID` : text
+    }
+    if (normalized.endsWith('_at')) {
+      const rest = normalized.slice(0, -3)
+      const restLabel = rest.split('_').map((token) => auditFieldTokenLabelMap[token] || token).join('')
+      return restLabel ? `${restLabel}时间` : text
+    }
+    return normalized
+      .split('_')
+      .filter(Boolean)
+      .map((token) => auditFieldTokenLabelMap[token] || token)
+      .join('')
+  }
+
+  const isEqualForSummary = (a, b) => {
+    if (a === b) return true
+    if ((typeof a !== 'object' || a === null) || (typeof b !== 'object' || b === null)) return false
+    try {
+      return JSON.stringify(a) === JSON.stringify(b)
+    } catch (err) {
+      return false
+    }
+  }
+
+  const formatAuditValueBrief = (value) => {
+    if (value === null || value === undefined || value === '') return '空'
+    if (typeof value === 'boolean') return value ? '是' : '否'
+    if (typeof value === 'number') return Number.isFinite(value) ? String(value) : '无效数字'
+    if (typeof value === 'string') {
+      const text = value.replace(/\s+/g, ' ').trim()
+      if (!text) return '空'
+      return text.length > 24 ? `${text.slice(0, 24)}...` : text
+    }
+    if (Array.isArray(value)) return value.length ? `数组(${value.length}项)` : '空数组'
+    if (isPlainObject(value)) {
+      const size = Object.keys(value).length
+      return size ? `对象(${size}个字段)` : '空对象'
+    }
+    return String(value)
+  }
+
+  const buildAuditChangeSummary = (beforeData, afterData) => {
+    const before = parseAuditData(beforeData)
+    const after = parseAuditData(afterData)
+    if (before === null && after === null) return '无变更'
+
+    if (!isPlainObject(before) || !isPlainObject(after)) {
+      if (before === null) return `新增：${formatAuditValueBrief(after)}`
+      if (after === null) return `删除：${formatAuditValueBrief(before)}`
+      if (isEqualForSummary(before, after)) return '无字段变化'
+      return `由“${formatAuditValueBrief(before)}”变更为“${formatAuditValueBrief(after)}”`
+    }
+
+    const keys = Array.from(new Set([...Object.keys(before), ...Object.keys(after)]))
+    const changes = []
+    for (const key of keys) {
+      const hasBefore = Object.prototype.hasOwnProperty.call(before, key)
+      const hasAfter = Object.prototype.hasOwnProperty.call(after, key)
+      const label = formatAuditFieldLabel(key)
+      if (!hasBefore && hasAfter) {
+        changes.push(`新增「${label}」：${formatAuditValueBrief(after[key])}`)
+        continue
+      }
+      if (hasBefore && !hasAfter) {
+        changes.push(`移除「${label}」`)
+        continue
+      }
+      if (!isEqualForSummary(before[key], after[key])) {
+        changes.push(`「${label}」由“${formatAuditValueBrief(before[key])}”改为“${formatAuditValueBrief(after[key])}”`)
+      }
+    }
+    if (!changes.length) return '无字段变化'
+    const preview = changes.slice(0, 3).join('；')
+    return changes.length > 3 ? `${preview}；等${changes.length}项变更` : preview
   }
 
   const dashboardLicenseView = useMemo(() => {
@@ -2348,6 +2720,11 @@ function App() {
           </div>
         </header>
 
+        <section className="role-guide-card">
+          <div className="role-guide-title">当前角色：{roleLabel(currentUser?.role)}</div>
+          <div className="role-guide-text">{roleGuideText}</div>
+        </section>
+
         {message && <div className="toast success">{message}</div>}
         {error && <div className="toast error">{error}</div>}
         {modalInfo && (
@@ -2358,6 +2735,47 @@ function App() {
               <div className="modal-actions">
                 <button className="primary btn btn-primary" type="button" onClick={() => setModalInfo(null)}>
                   知道了
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+        {confirmDialog.open && (
+          <div className="modal-backdrop" onClick={closeConfirmDialog}>
+            <div className="modal-card" onClick={(e) => e.stopPropagation()}>
+              <div className="modal-title">{confirmDialog.title || '确认操作'}</div>
+              <div className="modal-body">{confirmDialog.message || '确认执行该操作？'}</div>
+              <div className="modal-actions">
+                <button className="ghost btn btn-outline-secondary" type="button" onClick={closeConfirmDialog}>
+                  取消
+                </button>
+                <button className="primary btn btn-primary" type="button" onClick={onConfirmDialogAccept}>
+                  {confirmDialog.confirmLabel || '确认'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+        {inputDialog.open && (
+          <div className="modal-backdrop" onClick={closeInputDialog}>
+            <div className="modal-card" onClick={(e) => e.stopPropagation()}>
+              <div className="modal-title">{inputDialog.title || '输入信息'}</div>
+              <div className="modal-body">
+                <div style={{ marginBottom: 10 }}>{inputDialog.message || '请输入内容'}</div>
+                <input
+                  type="password"
+                  value={inputDialog.value}
+                  placeholder={inputDialog.placeholder || ''}
+                  onChange={(e) => setInputDialog((prev) => ({ ...prev, value: e.target.value }))}
+                  autoFocus
+                />
+              </div>
+              <div className="modal-actions">
+                <button className="ghost btn btn-outline-secondary" type="button" onClick={closeInputDialog}>
+                  取消
+                </button>
+                <button className="primary btn btn-primary" type="button" onClick={onInputDialogAccept}>
+                  {inputDialog.confirmLabel || '确认'}
                 </button>
               </div>
             </div>
@@ -4107,6 +4525,42 @@ function App() {
               >
                 查看库存系统审计
               </button>
+              <button
+                className="ghost btn btn-outline-secondary"
+                type="button"
+                onClick={() => {
+                  window.location.href = buildPortalSwitchUrl('ticketing')
+                }}
+              >
+                查看工单系统审计
+              </button>
+              <button
+                className="ghost btn btn-outline-secondary"
+                type="button"
+                onClick={() => {
+                  window.location.href = buildPortalSwitchUrl('cmdb')
+                }}
+              >
+                查看CMDB审计
+              </button>
+              <button
+                className="ghost btn btn-outline-secondary"
+                type="button"
+                onClick={() => {
+                  window.location.href = buildPortalSwitchUrl('device-flow')
+                }}
+              >
+                查看设备流转审计
+              </button>
+              <button
+                className="ghost btn btn-outline-secondary"
+                type="button"
+                onClick={() => {
+                  window.location.href = buildPortalSwitchUrl('sec-impl')
+                }}
+              >
+                查看实施记录审计
+              </button>
               <select
                 className="form-select"
                 value={opsFilters.action}
@@ -4192,6 +4646,7 @@ function App() {
                 <span>对象</span>
                 <span>对象ID</span>
                 <span>时间</span>
+                <span>来源IP</span>
                 <span>详情</span>
               </div>
               {pagedOperationLogs.items.map((log, idx) => (
@@ -4204,6 +4659,7 @@ function App() {
                     <span>{entityLabel(log.entity)}</span>
                     <span>{log.entity_id}</span>
                     <span>{log.created_at}</span>
+                    <span>{log.request_ip || '-'}</span>
                     <span className="actions">
                       <button
                         className="ghost btn btn-outline-secondary"
@@ -4219,16 +4675,16 @@ function App() {
                     <div className="table-row ops-detail">
                       <div className="ops-detail-grid">
                         <div className="ops-detail-card">
-                          <div className="ops-detail-title">变更前</div>
-                          <pre className="ops-detail-pre">
-                            {prettyJson(log.before_data) || '无'}
-                          </pre>
+                          <div className="ops-detail-title">变更摘要</div>
+                          <div className="ops-detail-text">
+                            {buildAuditChangeSummary(log.before_data, log.after_data)}
+                          </div>
                         </div>
                         <div className="ops-detail-card">
-                          <div className="ops-detail-title">变更后</div>
-                          <pre className="ops-detail-pre">
-                            {prettyJson(log.after_data) || '无'}
-                          </pre>
+                          <div className="ops-detail-title">快照状态</div>
+                          <div className="ops-detail-text">
+                            {log.before_data ? '含变更前快照' : '无变更前快照'} / {log.after_data ? '含变更后快照' : '无变更后快照'}
+                          </div>
                         </div>
                         <div className="ops-detail-card">
                           <div className="ops-detail-title">说明</div>

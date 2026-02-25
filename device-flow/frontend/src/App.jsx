@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import './App.css'
 
 const API_BASE = import.meta.env.VITE_API_BASE || ''
@@ -50,8 +50,8 @@ const actionAllowedRoles = {
   receive: ['admin', 'sysadmin'],
   'hardware-check': ['admin', 'sysadmin'],
   'os-install': ['admin', 'sysadmin'],
-  test: ['admin', 'sysadmin', 'auditor'],
-  approve: ['admin', 'sysadmin', 'auditor'],
+  test: ['admin', 'sysadmin'],
+  approve: ['admin', 'sysadmin'],
   pack: ['admin', 'sysadmin'],
   ship: ['admin', 'sysadmin'],
 }
@@ -84,8 +84,36 @@ const payloadLabelMap = {
   box_no: '箱号',
   pack_note: '装箱备注',
   carrier: '物流公司',
+  outbound_tracking_no: '发货快递单号',
   shipped_note: '发货备注',
   receive_note: '收货备注',
+  current_stage: '当前阶段',
+  status: '状态',
+  stage_record_id: '阶段记录ID',
+  stage_payload: '阶段参数',
+  stage_code: '阶段编码',
+  stage_label: '阶段名称',
+  from_stage: '起始阶段',
+  to_stage: '目标阶段',
+  reason: '原因',
+  source: '来源',
+  deleted: '已删除',
+  job_no: '流转单号',
+  device_sn: '设备SN',
+  customer_name: '客户名称',
+  sales_order_no: '销售订单号',
+  inbound_tracking_no: '来件单号',
+  threshold_hours: 'SLA阈值(小时)',
+  overdue_hours: '超时小时',
+  remind_interval_minutes: '提醒间隔(分钟)',
+  enabled: '是否启用',
+  file_name: '文件名',
+  file_size: '文件大小',
+  attachment_id: '附件ID',
+  operator_name: '操作人',
+  operator_role: '操作角色',
+  created_at: '创建时间',
+  updated_at: '更新时间',
 }
 
 const initialAdvanceForm = {
@@ -156,6 +184,60 @@ const buildPortalSwitchUrl = (system) => {
   if (system) params.set('system', system)
   params.set('mode', 'switch')
   return `${base}/portal?${params.toString()}`
+}
+
+const portalSessionQueryKey = 'portal_session'
+const portalSessionStorageKey = 'juxin_portal_session'
+
+const readPortalSessionMarker = () => {
+  try {
+    return String(sessionStorage.getItem(portalSessionStorageKey) || '').trim()
+  } catch {
+    return ''
+  }
+}
+
+const consumePortalSessionMarker = () => {
+  try {
+    const params = new URLSearchParams(window.location.search)
+    const marker = String(params.get(portalSessionQueryKey) || '').trim()
+    if (marker) {
+      sessionStorage.setItem(portalSessionStorageKey, marker)
+      params.delete(portalSessionQueryKey)
+      const query = params.toString()
+      const nextUrl = `${window.location.pathname}${query ? `?${query}` : ''}${window.location.hash || ''}`
+      window.history.replaceState({}, '', nextUrl)
+      return marker
+    }
+  } catch {
+    return ''
+  }
+  return readPortalSessionMarker()
+}
+
+const logoutFromSso = async () => {
+  try {
+    const csrfResp = await fetch(`${API_BASE}/api/auth/csrf`, { credentials: 'include' })
+    if (!csrfResp.ok) return false
+    let csrfToken = ''
+    try {
+      const csrfPayload = await csrfResp.json()
+      csrfToken = String(csrfPayload?.token || '')
+    } catch {
+      csrfToken = ''
+    }
+    if (!csrfToken) return false
+    const logoutResp = await fetch(`${API_BASE}/api/auth/logout`, {
+      method: 'POST',
+      credentials: 'include',
+      headers: {
+        'X-CSRF-Token': csrfToken,
+      },
+    })
+    return logoutResp.ok
+  } catch {
+    return false
+  }
 }
 
 const downloadBlob = (blob, fileName) => {
@@ -234,6 +316,7 @@ const buildStagePayloadByAction = (action, form) => {
   if (action === 'ship') {
     return {
       carrier: form.carrier,
+      outbound_tracking_no: form.outbound_tracking_no,
       shipped_note: form.shipped_note,
     }
   }
@@ -293,11 +376,165 @@ const validateAdvanceForm = (action, form) => {
   return ''
 }
 
-const formatJsonBrief = (value, maxLength = 140) => {
-  if (!value || typeof value !== 'object') return '-'
-  const text = JSON.stringify(value)
-  if (text.length <= maxLength) return text
-  return `${text.slice(0, maxLength - 3)}...`
+const tryParseAuditData = (value) => {
+  if (value === null || value === undefined || value === '') return null
+  if (typeof value === 'object') return value
+  const text = String(value).trim()
+  if (!text) return null
+  try {
+    return JSON.parse(text)
+  } catch (_err) {
+    return text
+  }
+}
+
+const isPlainObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value)
+
+const isEqualForSummary = (a, b) => {
+  if (a === b) return true
+  if ((typeof a !== 'object' || a === null) || (typeof b !== 'object' || b === null)) return false
+  try {
+    return JSON.stringify(a) === JSON.stringify(b)
+  } catch (_err) {
+    return false
+  }
+}
+
+const formatAuditValueBrief = (value) => {
+  if (value === null || value === undefined || value === '') return '空'
+  if (typeof value === 'boolean') return value ? '是' : '否'
+  if (typeof value === 'number') return Number.isFinite(value) ? String(value) : '无效数字'
+  if (typeof value === 'string') {
+    const text = value.replace(/\s+/g, ' ').trim()
+    if (!text) return '空'
+    return text.length > 24 ? `${text.slice(0, 24)}...` : text
+  }
+  if (Array.isArray(value)) {
+    if (value.length === 0) return '空数组'
+    const primitive = value.every((item) => item === null || ['string', 'number', 'boolean'].includes(typeof item))
+    if (primitive) {
+      const joined = value.map((item) => formatAuditValueBrief(item)).join('、')
+      return joined.length > 30 ? `${joined.slice(0, 30)}...` : joined
+    }
+    return `数组(${value.length}项)`
+  }
+  if (isPlainObject(value)) {
+    const size = Object.keys(value).length
+    return size > 0 ? `对象(${size}个字段)` : '空对象'
+  }
+  return String(value)
+}
+
+const auditFieldTokenLabelMap = {
+  id: 'ID',
+  job: '流转单',
+  ticket: '工单',
+  project: '项目',
+  user: '用户',
+  username: '用户名',
+  role: '角色',
+  status: '状态',
+  stage: '阶段',
+  action: '动作',
+  type: '类型',
+  name: '名称',
+  code: '编码',
+  sn: 'SN',
+  device: '设备',
+  customer: '客户',
+  product: '产品',
+  location: '位置',
+  order: '单',
+  inbound: '来件',
+  outbound: '发货',
+  tracking: '快递',
+  carrier: '物流公司',
+  remark: '备注',
+  reason: '原因',
+  created: '创建',
+  updated: '更新',
+  deleted: '删除',
+  count: '数量',
+  payload: '参数',
+  record: '记录',
+  attachment: '附件',
+  file: '文件',
+  size: '大小',
+  enabled: '启用',
+  threshold: '阈值',
+  overdue: '超时',
+  hours: '小时',
+  minutes: '分钟',
+  source: '来源',
+  ip: '来源IP',
+  request: '请求',
+}
+
+const formatFieldLabelByToken = (fieldKey) => {
+  const text = String(fieldKey || '').trim()
+  if (!text) return '-'
+  if (/[\u4e00-\u9fa5]/.test(text)) return text
+  const normalized = text.replace(/[\s.-]+/g, '_').toLowerCase()
+  if (payloadLabelMap[normalized]) return payloadLabelMap[normalized]
+  if (normalized.startsWith('is_')) {
+    const rest = normalized.slice(3)
+    const restLabel = rest.split('_').map((token) => auditFieldTokenLabelMap[token] || token).join('')
+    return restLabel ? `是否${restLabel}` : text
+  }
+  if (normalized.endsWith('_id')) {
+    const rest = normalized.slice(0, -3)
+    const restLabel = rest.split('_').map((token) => auditFieldTokenLabelMap[token] || token).join('')
+    return restLabel ? `${restLabel}ID` : text
+  }
+  if (normalized.endsWith('_at')) {
+    const rest = normalized.slice(0, -3)
+    const restLabel = rest.split('_').map((token) => auditFieldTokenLabelMap[token] || token).join('')
+    return restLabel ? `${restLabel}时间` : text
+  }
+  const tokens = normalized.split('_').filter(Boolean)
+  if (!tokens.length) return text
+  return tokens.map((token) => auditFieldTokenLabelMap[token] || token).join('')
+}
+
+const fieldLabel = (key) => {
+  const normalized = String(key || '').trim()
+  if (!normalized) return '-'
+  return payloadLabelMap[normalized] || formatFieldLabelByToken(normalized)
+}
+
+const buildAuditChangeSummary = (beforeData, afterData) => {
+  const before = tryParseAuditData(beforeData)
+  const after = tryParseAuditData(afterData)
+  if (before === null && after === null) return '无变更'
+
+  if (!isPlainObject(before) || !isPlainObject(after)) {
+    if (before === null) return `新增：${formatAuditValueBrief(after)}`
+    if (after === null) return `删除：${formatAuditValueBrief(before)}`
+    if (isEqualForSummary(before, after)) return '无字段变化'
+    return `由“${formatAuditValueBrief(before)}”变更为“${formatAuditValueBrief(after)}”`
+  }
+
+  const keys = Array.from(new Set([...Object.keys(before), ...Object.keys(after)]))
+  const changes = []
+  for (const key of keys) {
+    const hasBefore = Object.prototype.hasOwnProperty.call(before, key)
+    const hasAfter = Object.prototype.hasOwnProperty.call(after, key)
+    const label = fieldLabel(key)
+    if (!hasBefore && hasAfter) {
+      changes.push(`新增「${label}」：${formatAuditValueBrief(after[key])}`)
+      continue
+    }
+    if (hasBefore && !hasAfter) {
+      changes.push(`移除「${label}」`)
+      continue
+    }
+    if (!isEqualForSummary(before[key], after[key])) {
+      changes.push(`「${label}」由“${formatAuditValueBrief(before[key])}”改为“${formatAuditValueBrief(after[key])}”`)
+    }
+  }
+  if (!changes.length) return '无字段变化'
+  const preview = changes.slice(0, 3).join('；')
+  return changes.length > 3 ? `${preview}；等${changes.length}项变更` : preview
 }
 
 const batchPayloadTemplateMap = {
@@ -316,6 +553,8 @@ const batchPayloadTemplateMap = {
   pack: { package_check: 'PASS', accessory_check: 'PASS', box_no: 'BOX-BATCH-001', pack_note: '' },
   ship: { carrier: 'SF', shipped_note: '批量发货' },
 }
+
+const cloneBatchPayloadTemplate = (action) => ({ ...(batchPayloadTemplateMap[action] || {}) })
 
 const parseBatchJobIdsText = (value) => {
   const text = String(value || '').trim()
@@ -347,6 +586,12 @@ function App() {
 
   const [selectedJobId, setSelectedJobId] = useState(0)
   const [detail, setDetail] = useState(null)
+  const [detailLoading, setDetailLoading] = useState(false)
+  const [detailModalOpen, setDetailModalOpen] = useState(false)
+  const [detailModalPosition, setDetailModalPosition] = useState({ x: 0, y: 0 })
+  const [detailModalDragging, setDetailModalDragging] = useState(false)
+  const detailModalRef = useRef(null)
+  const detailModalDragRef = useRef(null)
 
   const [createForm, setCreateForm] = useState({
     device_sn: '',
@@ -398,16 +643,43 @@ function App() {
     outbound_tracking_no: '',
     stage_payload_json: JSON.stringify(batchPayloadTemplateMap.receive, null, 2),
   })
+  const [batchStagePayloadForm, setBatchStagePayloadForm] = useState(cloneBatchPayloadTemplate('receive'))
+  const [batchStageAdvancedMode, setBatchStageAdvancedMode] = useState(false)
   const [batchStageResult, setBatchStageResult] = useState(null)
 
   const [auditVerifyForm, setAuditVerifyForm] = useState({ from_id: '', to_id: '', limit: 5000 })
   const [auditVerifyResult, setAuditVerifyResult] = useState(null)
   const [auditVerifyLoading, setAuditVerifyLoading] = useState(false)
+  const [confirmDialog, setConfirmDialog] = useState({
+    open: false,
+    title: '',
+    message: '',
+    confirmLabel: '确认',
+    onConfirm: null,
+  })
 
   const canWrite = user?.role === 'admin' || user?.role === 'sysadmin'
-  const canUpload = ['admin', 'sysadmin', 'auditor'].includes(normalizeRole(user?.role))
-  const canRework = ['admin', 'sysadmin', 'auditor'].includes(normalizeRole(user?.role))
+  const canUpload = ['admin', 'sysadmin'].includes(normalizeRole(user?.role))
+  const canRework = ['admin', 'sysadmin'].includes(normalizeRole(user?.role))
   const canDeleteAttachment = ['admin', 'sysadmin'].includes(normalizeRole(user?.role))
+  const isAuditOnlyUser = normalizeRole(user?.role) === 'auditor'
+  const canReadAuditLogs = isAuditOnlyUser
+  const sidebarMenuItems = useMemo(() => {
+    if (isAuditOnlyUser) {
+      return [
+        { key: 'audit', label: '审计日志' },
+        { key: 'audit-verify', label: '审计验签' },
+      ]
+    }
+    return [
+      { key: 'dashboard', label: '看板总览' },
+      { key: 'sla', label: 'SLA催办' },
+      { key: 'batch', label: '批量处理' },
+      { key: 'jobs', label: '流转单列表' },
+      { key: 'create', label: '新建流转单' },
+    ]
+  }, [isAuditOnlyUser])
+  const detailMatchesSelection = Number(detail?.id || 0) === Number(selectedJobId || 0)
 
   const stageOptions = useMemo(
     () => [
@@ -511,6 +783,75 @@ function App() {
     setSuccessMsg('')
   }
 
+  const openConfirmDialog = ({ title = '确认操作', message = '', confirmLabel = '确认', onConfirm }) => {
+    setConfirmDialog({
+      open: true,
+      title,
+      message,
+      confirmLabel,
+      onConfirm: typeof onConfirm === 'function' ? onConfirm : null,
+    })
+  }
+
+  const closeConfirmDialog = () => {
+    setConfirmDialog((prev) => ({ ...prev, open: false, onConfirm: null }))
+  }
+
+  const onConfirmDialogAccept = async () => {
+    const callback = confirmDialog.onConfirm
+    closeConfirmDialog()
+    if (!callback) return
+    await callback()
+  }
+
+  const isPassFailValue = (value) => {
+    const normalized = String(value || '').toUpperCase()
+    return normalized === 'PASS' || normalized === 'FAIL'
+  }
+
+  const updateBatchStagePayloadField = (key, value) => {
+    setBatchStagePayloadForm((prev) => {
+      const next = { ...prev, [key]: value }
+      setBatchStageForm((current) => ({
+        ...current,
+        stage_payload_json: JSON.stringify(next, null, 2),
+      }))
+      return next
+    })
+  }
+
+  const toggleBatchStageAdvancedMode = () => {
+    if (batchStageAdvancedMode) {
+      const text = trimText(batchStageForm.stage_payload_json)
+      if (!text) {
+        setBatchStagePayloadForm({})
+      } else {
+        try {
+          const parsed = JSON.parse(text)
+          if (!parsed || Array.isArray(parsed) || typeof parsed !== 'object') {
+            return showError('阶段 payload 必须是 JSON 对象')
+          }
+          setBatchStagePayloadForm(parsed)
+        } catch (_err) {
+          return showError('阶段 payload 不是合法 JSON')
+        }
+      }
+    } else {
+      setBatchStageForm((prev) => ({
+        ...prev,
+        stage_payload_json: JSON.stringify(batchStagePayloadForm, null, 2),
+      }))
+    }
+    setBatchStageAdvancedMode((prev) => !prev)
+  }
+
+  const onLogout = async () => {
+    await logoutFromSso()
+    setToken('')
+    setUser(null)
+    window.location.href = buildPortalEntryUrl('device-flow')
+  }
+
   const apiRequest = async (path, options = {}) => {
     const isFormData = Boolean(options.formData)
     const headers = {
@@ -584,14 +925,20 @@ function App() {
     const targetId = Number(id || 0)
     if (!targetId) {
       setDetail(null)
+      setDetailLoading(false)
       return
     }
-    const data = await apiRequest(`/api/device-flow/jobs/${targetId}`)
-    setDetail(data)
+    setDetailLoading(true)
+    try {
+      const data = await apiRequest(`/api/device-flow/jobs/${targetId}`)
+      setDetail(data)
       setAttachmentForm((prev) => ({
         ...prev,
         stage_code: String(data?.current_stage || '').toUpperCase() || prev.stage_code,
       }))
+    } finally {
+      setDetailLoading(false)
+    }
   }
 
   const buildDashboardParams = (overrides = {}) => {
@@ -782,12 +1129,32 @@ function App() {
     if (jobIds.length === 0) return showError('请填写至少1个流转单 ID')
 
     let stagePayload = null
-    const payloadText = String(batchStageForm.stage_payload_json || '').trim()
-    if (payloadText) {
-      try {
-        stagePayload = JSON.parse(payloadText)
-      } catch (_err) {
-        return showError('阶段 payload 不是合法 JSON')
+    if (batchStageAdvancedMode) {
+      const payloadText = String(batchStageForm.stage_payload_json || '').trim()
+      if (payloadText) {
+        try {
+          stagePayload = JSON.parse(payloadText)
+          if (!stagePayload || Array.isArray(stagePayload) || typeof stagePayload !== 'object') {
+            return showError('阶段 payload 必须是 JSON 对象')
+          }
+        } catch (_err) {
+          return showError('阶段 payload 不是合法 JSON')
+        }
+      }
+    } else {
+      const normalized = Object.entries(batchStagePayloadForm).reduce((acc, [key, value]) => {
+        if (value === null || value === undefined) return acc
+        const text = String(value).trim()
+        if (!text) return acc
+        acc[key] = text
+        return acc
+      }, {})
+      stagePayload = Object.keys(normalized).length ? normalized : null
+    }
+    if (batchStageForm.action === 'ship' && trimText(batchStageForm.outbound_tracking_no)) {
+      stagePayload = {
+        ...(stagePayload && typeof stagePayload === 'object' ? stagePayload : {}),
+        outbound_tracking_no: trimText(batchStageForm.outbound_tracking_no),
       }
     }
 
@@ -836,6 +1203,11 @@ function App() {
   const refreshAll = async () => {
     setLoading(true)
     try {
+      if (isAuditOnlyUser) {
+        await refreshAuditLogs()
+        clearTips()
+        return
+      }
       const [rows] = await Promise.all([refreshJobs(), refreshDashboard()])
       const fallbackId = Number(selectedJobId || (rows[0] && rows[0].id) || 0)
       await refreshDetail(fallbackId)
@@ -960,20 +1332,24 @@ function App() {
   const onDeleteAttachment = async (item) => {
     if (!detail) return
     if (!canDeleteAttachment) return showError('当前角色无权删除附件')
-    const ok = window.confirm(`确认删除附件“${item.file_name}”？删除后不可恢复。`)
-    if (!ok) return
-
-    try {
-      setBusy(true)
-      await apiRequest(`/api/device-flow/attachments/${item.id}`, { method: 'DELETE' })
-      showSuccess('附件删除成功')
-      await refreshDashboard()
-      await refreshDetail()
-    } catch (err) {
-      showError(err.message)
-    } finally {
-      setBusy(false)
-    }
+    openConfirmDialog({
+      title: '删除附件',
+      message: `确认删除附件“${item.file_name}”？删除后不可恢复。`,
+      confirmLabel: '确认删除',
+      onConfirm: async () => {
+        try {
+          setBusy(true)
+          await apiRequest(`/api/device-flow/attachments/${item.id}`, { method: 'DELETE' })
+          showSuccess('附件删除成功')
+          await refreshDashboard()
+          await refreshDetail()
+        } catch (err) {
+          showError(err.message)
+        } finally {
+          setBusy(false)
+        }
+      },
+    })
   }
 
   const onExportAudit = async () => {
@@ -1037,21 +1413,45 @@ function App() {
     }
   }
 
+  const closeDetailModal = () => {
+    setDetailModalOpen(false)
+    setDetailModalDragging(false)
+    detailModalDragRef.current = null
+  }
+
+  const onStartDetailModalDrag = (event) => {
+    if (event.button !== 0) return
+    if (!detailModalRef.current) return
+    event.preventDefault()
+    const rect = detailModalRef.current.getBoundingClientRect()
+    detailModalDragRef.current = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      originX: detailModalPosition.x,
+      originY: detailModalPosition.y,
+      width: rect.width,
+      height: rect.height,
+    }
+    setDetailModalDragging(true)
+  }
+
   const onOpenJobDetail = async (jobId) => {
     const targetId = Number(jobId || 0)
     if (!targetId) {
       showError('该记录未关联流转单')
       return
     }
+    setDetailModalOpen(true)
+    setDetailModalPosition({ x: 0, y: 0 })
+    setDetailModalDragging(false)
+    detailModalDragRef.current = null
+    setSelectedJobId(targetId)
     try {
-      setBusy(true)
       setActiveMenu('jobs')
-      setSelectedJobId(targetId)
       await refreshDetail(targetId)
     } catch (err) {
       showError(err.message)
-    } finally {
-      setBusy(false)
     }
   }
 
@@ -1209,6 +1609,8 @@ function App() {
     let cancelled = false
     const bootstrapAuth = async () => {
       try {
+        const marker = consumePortalSessionMarker()
+        if (!marker) return
         const response = await fetch(`${API_BASE}/api/auth/me`, { credentials: 'include' })
         if (!response.ok) return
         const data = await response.json()
@@ -1228,23 +1630,80 @@ function App() {
   }, [])
 
   useEffect(() => {
-    if (!token) return
+    if (!token || !user) return
     refreshAll()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [token])
+  }, [token, user, isAuditOnlyUser])
 
   useEffect(() => {
     if (!token) return
+    if (isAuditOnlyUser) return
     refreshJobs().catch((err) => showError(err.message))
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [page, filters, token])
+  }, [page, filters, token, isAuditOnlyUser])
 
   useEffect(() => {
     if (!token) return
+    if (isAuditOnlyUser) return
     if (!selectedJobId) return
     refreshDetail().catch((err) => showError(err.message))
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedJobId, token])
+  }, [selectedJobId, token, isAuditOnlyUser])
+
+  useEffect(() => {
+    if (!detailModalOpen) return
+    const onKeyDown = (event) => {
+      if (event.key !== 'Escape') return
+      setDetailModalOpen(false)
+      setDetailModalDragging(false)
+      detailModalDragRef.current = null
+    }
+    document.addEventListener('keydown', onKeyDown)
+    return () => document.removeEventListener('keydown', onKeyDown)
+  }, [detailModalOpen])
+
+  useEffect(() => {
+    if (activeMenu === 'jobs') return
+    setDetailModalOpen(false)
+    setDetailModalDragging(false)
+    detailModalDragRef.current = null
+  }, [activeMenu])
+
+  useEffect(() => {
+    if (!detailModalDragging) return
+
+    const onPointerMove = (event) => {
+      const drag = detailModalDragRef.current
+      if (!drag) return
+      if (Number.isInteger(drag.pointerId) && event.pointerId !== drag.pointerId) return
+
+      const deltaX = event.clientX - drag.startX
+      const deltaY = event.clientY - drag.startY
+      const rawX = drag.originX + deltaX
+      const rawY = drag.originY + deltaY
+      const limitX = Math.max(0, (window.innerWidth - drag.width) / 2 - 20)
+      const limitY = Math.max(0, (window.innerHeight - drag.height) / 2 - 20)
+
+      setDetailModalPosition({
+        x: Math.max(-limitX, Math.min(limitX, rawX)),
+        y: Math.max(-limitY, Math.min(limitY, rawY)),
+      })
+    }
+
+    const onPointerUp = (event) => {
+      const drag = detailModalDragRef.current
+      if (drag && Number.isInteger(drag.pointerId) && event.pointerId !== drag.pointerId) return
+      setDetailModalDragging(false)
+      detailModalDragRef.current = null
+    }
+
+    window.addEventListener('pointermove', onPointerMove)
+    window.addEventListener('pointerup', onPointerUp)
+    return () => {
+      window.removeEventListener('pointermove', onPointerMove)
+      window.removeEventListener('pointerup', onPointerUp)
+    }
+  }, [detailModalDragging])
 
   useEffect(() => {
     if (!token) return
@@ -1255,10 +1714,23 @@ function App() {
 
   useEffect(() => {
     if (!token) return
+    if (!canReadAuditLogs) return
     if (activeMenu !== 'audit') return
     refreshAuditLogs().catch((err) => showError(err.message))
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [token, activeMenu, auditPage, auditFilter])
+  }, [token, canReadAuditLogs, activeMenu, auditPage, auditFilter])
+
+  useEffect(() => {
+    if (canReadAuditLogs) return
+    if (activeMenu !== 'audit' && activeMenu !== 'audit-verify') return
+    setActiveMenu('jobs')
+  }, [canReadAuditLogs, activeMenu])
+
+  useEffect(() => {
+    if (!isAuditOnlyUser) return
+    if (activeMenu === 'audit' || activeMenu === 'audit-verify') return
+    setActiveMenu('audit')
+  }, [isAuditOnlyUser, activeMenu])
 
   useEffect(() => {
     if (!token) return
@@ -1269,8 +1741,9 @@ function App() {
 
   useEffect(() => {
     const action = batchStageForm.action
-    const template = batchPayloadTemplateMap[action]
+    const template = cloneBatchPayloadTemplate(action)
     if (!template) return
+    setBatchStagePayloadForm(template)
     setBatchStageForm((prev) => {
       if (prev.action !== action) return prev
       return {
@@ -1278,6 +1751,7 @@ function App() {
         stage_payload_json: JSON.stringify(template, null, 2),
       }
     })
+    setBatchStageAdvancedMode(false)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [batchStageForm.action])
 
@@ -1331,16 +1805,21 @@ function App() {
         </div>
 
         <div className="menu">
-          <button className={activeMenu === 'dashboard' ? 'active' : ''} onClick={() => setActiveMenu('dashboard')}>看板总览</button>
-          <button className={activeMenu === 'sla' ? 'active' : ''} onClick={() => setActiveMenu('sla')}>SLA催办</button>
-          <button className={activeMenu === 'batch' ? 'active' : ''} onClick={() => setActiveMenu('batch')}>批量处理</button>
-          <button className={activeMenu === 'jobs' ? 'active' : ''} onClick={() => setActiveMenu('jobs')}>流转单列表</button>
-          <button className={activeMenu === 'create' ? 'active' : ''} onClick={() => setActiveMenu('create')}>新建流转单</button>
-          <button className={activeMenu === 'audit' ? 'active' : ''} onClick={() => setActiveMenu('audit')}>审计日志</button>
-          <button className={activeMenu === 'audit-verify' ? 'active' : ''} onClick={() => setActiveMenu('audit-verify')}>审计验签</button>
+          {sidebarMenuItems.map((item) => (
+            <button
+              key={item.key}
+              className={activeMenu === item.key ? 'active' : ''}
+              onClick={() => setActiveMenu(item.key)}
+            >
+              {item.label}
+            </button>
+          ))}
         </div>
 
-        <button className="btn" onClick={() => (window.location.href = buildPortalSwitchUrl('reminder'))}>返回系统门户</button>
+        <div className="sidebar-actions">
+          <button className="ghost" onClick={() => (window.location.href = buildPortalSwitchUrl('reminder'))}>切换系统</button>
+          <button className="ghost logout" onClick={onLogout}>退出登录</button>
+        </div>
       </aside>
 
       <main className="content">
@@ -1791,7 +2270,6 @@ function App() {
                         setBatchStageForm((prev) => ({
                           ...prev,
                           action: e.target.value,
-                          stage_payload_json: JSON.stringify(batchPayloadTemplateMap[e.target.value] || {}, null, 2),
                         }))
                       }
                     >
@@ -1830,13 +2308,45 @@ function App() {
                     />
                   </div>
                   <div className="field" style={{ gridColumn: '1 / -1' }}>
-                    <label>阶段 payload JSON</label>
-                    <textarea
-                      className="mono"
-                      value={batchStageForm.stage_payload_json}
-                      onChange={(e) => setBatchStageForm((prev) => ({ ...prev, stage_payload_json: e.target.value }))}
-                      style={{ minHeight: 130 }}
-                    />
+                    <div className="toolbar" style={{ justifyContent: 'space-between' }}>
+                      <label>阶段参数</label>
+                      <button className="btn" type="button" onClick={toggleBatchStageAdvancedMode}>
+                        {batchStageAdvancedMode ? '切换可视化模式' : '切换高级 JSON 模式'}
+                      </button>
+                    </div>
+                    {!batchStageAdvancedMode ? (
+                      <div className="grid" style={{ marginTop: 8, gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))' }}>
+                        {Object.entries(batchStagePayloadForm).map(([key, value]) => (
+                          <div className="field" key={`batch-payload-${key}`}>
+                            <label>{payloadLabelMap[key] || key}</label>
+                            {isPassFailValue(value) ? (
+                              <select
+                                value={String(value || 'PASS').toUpperCase()}
+                                onChange={(e) => updateBatchStagePayloadField(key, String(e.target.value || '').toUpperCase())}
+                              >
+                                <option value="PASS">PASS</option>
+                                <option value="FAIL">FAIL</option>
+                              </select>
+                            ) : (
+                              <input
+                                value={value === undefined || value === null ? '' : String(value)}
+                                onChange={(e) => updateBatchStagePayloadField(key, e.target.value)}
+                              />
+                            )}
+                          </div>
+                        ))}
+                        {Object.keys(batchStagePayloadForm).length === 0 ? (
+                          <div className="muted">当前动作无需阶段参数</div>
+                        ) : null}
+                      </div>
+                    ) : (
+                      <textarea
+                        className="mono"
+                        value={batchStageForm.stage_payload_json}
+                        onChange={(e) => setBatchStageForm((prev) => ({ ...prev, stage_payload_json: e.target.value }))}
+                        style={{ minHeight: 130, marginTop: 8 }}
+                      />
+                    )}
                   </div>
                 </div>
                 <div className="toolbar" style={{ marginTop: 10 }}>
@@ -1957,8 +2467,8 @@ function App() {
                           <td>
                             <button
                               className="btn"
-                              onClick={() => setSelectedJobId(Number(row.id || 0))}
-                              disabled={Number(selectedJobId || 0) === Number(row.id || 0)}
+                              onClick={() => onOpenJobDetail(row.id)}
+                              disabled={busy || (detailModalOpen && Number(selectedJobId || 0) === Number(row.id || 0))}
                             >
                               详情
                             </button>
@@ -1983,205 +2493,230 @@ function App() {
               </div>
             </section>
 
-            <section className="panel">
-              <div className="panel-header">
-                <strong>流转详情</strong>
-              </div>
-              <div className="panel-body">
-                {!detail ? (
-                  <div className="muted">请先从列表选择一条流转单</div>
-                ) : (
-                  <>
-                    <div className="grid">
-                      <div className="field"><label>流转单号</label><input value={detail.job_no || '-'} readOnly /></div>
-                      <div className="field"><label>设备SN</label><input value={detail.device_sn || '-'} readOnly /></div>
-                      <div className="field"><label>客户</label><input value={detail.customer_name || '-'} readOnly /></div>
-                      <div className="field"><label>当前阶段</label><input value={stageText(detail.current_stage)} readOnly /></div>
-                      <div className="field"><label>来件单号</label><input value={detail.inbound_tracking_no || '-'} readOnly /></div>
-                      <div className="field"><label>发货单号</label><input value={detail.outbound_tracking_no || '-'} readOnly /></div>
-                      <div className="field"><label>收货时间</label><input value={parseApiDate(detail.received_at)} readOnly /></div>
-                      <div className="field"><label>发货时间</label><input value={parseApiDate(detail.shipped_at)} readOnly /></div>
+            {detailModalOpen ? (
+              <div
+                className="floating-modal-mask"
+                onMouseDown={(event) => {
+                  if (event.target === event.currentTarget) closeDetailModal()
+                }}
+              >
+                <section
+                  className={`floating-modal device-flow-detail-modal ${detailModalDragging ? 'dragging' : ''}`}
+                  ref={detailModalRef}
+                  style={{
+                    transform: `translate(calc(-50% + ${detailModalPosition.x}px), calc(-50% + ${detailModalPosition.y}px))`,
+                  }}
+                  onMouseDown={(event) => event.stopPropagation()}
+                >
+                  <header className="floating-modal-header" onPointerDown={onStartDetailModalDrag}>
+                    <div>
+                      <h3>流转详情</h3>
+                      <div className="muted">流转单号：{detailMatchesSelection ? detail?.job_no || '-' : '-'} | 拖动标题栏可移动</div>
                     </div>
+                    <button type="button" className="btn" onClick={closeDetailModal}>关闭</button>
+                  </header>
 
-                    <div style={{ marginTop: 16 }} className="panel-subsection">
-                      <strong>关键节点责任人</strong>
-                      <div className="table-wrap" style={{ marginTop: 8 }}>
-                        <table className="table">
-                          <thead>
-                            <tr>
-                              <th>阶段</th>
-                              <th>执行人</th>
-                              <th>角色</th>
-                              <th>执行时间</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {responsibilityRows.map((item) => (
-                              <tr key={`resp-${item.stage}`}>
-                                <td>{stageText(item.stage)}</td>
-                                <td>{item.by || '-'}</td>
-                                <td>{item.role || '-'}</td>
-                                <td>{parseApiDate(item.at)}</td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
-                      </div>
-                    </div>
-
-                    <div style={{ marginTop: 16 }} className="panel-subsection">
-                      <strong>阶段执行表单</strong>
-                      <div className="grid" style={{ marginTop: 8 }}>
-                        <div className="field" style={{ gridColumn: '1 / -1' }}>
-                          <label>阶段备注</label>
-                          <textarea
-                            value={advanceForm.remark}
-                            onChange={(e) => setAdvanceForm((prev) => ({ ...prev, remark: e.target.value }))}
-                            placeholder="阶段备注"
-                          />
+                  <div className="floating-modal-body">
+                    {!selectedJobId ? (
+                      <div className="muted">请先从列表选择一条流转单</div>
+                    ) : detailLoading || !detailMatchesSelection ? (
+                      <div className="muted">正在加载流转详情...</div>
+                    ) : !detail ? (
+                      <div className="muted">未找到流转详情</div>
+                    ) : (
+                      <>
+                        <div className="grid">
+                          <div className="field"><label>流转单号</label><input value={detail.job_no || '-'} readOnly /></div>
+                          <div className="field"><label>设备SN</label><input value={detail.device_sn || '-'} readOnly /></div>
+                          <div className="field"><label>客户</label><input value={detail.customer_name || '-'} readOnly /></div>
+                          <div className="field"><label>当前阶段</label><input value={stageText(detail.current_stage)} readOnly /></div>
+                          <div className="field"><label>来件单号</label><input value={detail.inbound_tracking_no || '-'} readOnly /></div>
+                          <div className="field"><label>发货单号</label><input value={detail.outbound_tracking_no || '-'} readOnly /></div>
+                          <div className="field"><label>收货时间</label><input value={parseApiDate(detail.received_at)} readOnly /></div>
+                          <div className="field"><label>发货时间</label><input value={parseApiDate(detail.shipped_at)} readOnly /></div>
                         </div>
-                        {renderStageFields()}
-                      </div>
-                      <div className="toolbar" style={{ marginTop: 10 }}>
-                        <button className="btn btn-primary" onClick={onAdvanceStage} disabled={!nextAction || busy || !canRunNextAction}>
-                          {nextAction ? actionLabelMap[nextAction] : '流程已完成'}
-                        </button>
-                        {nextAction && !canRunNextAction ? <span className="muted">当前角色无权限执行该阶段</span> : null}
-                      </div>
-                    </div>
 
-                    <div style={{ marginTop: 16 }} className="panel-subsection">
-                      <strong>退回重做</strong>
-                      <div className="toolbar" style={{ marginTop: 8 }}>
-                        <select
-                          value={reworkForm.target_stage}
-                          onChange={(e) => setReworkForm((prev) => ({ ...prev, target_stage: e.target.value }))}
-                        >
-                          {reworkTargetOptions.map((item) => (
-                            <option key={item.value} value={item.value}>
-                              {item.label}
-                            </option>
-                          ))}
-                        </select>
-                        <input
-                          value={reworkForm.reason}
-                          onChange={(e) => setReworkForm((prev) => ({ ...prev, reason: e.target.value }))}
-                          placeholder="退回原因（必填）"
-                        />
-                        <button className="btn btn-warning" onClick={onRework} disabled={reworkTargetOptions.length === 0 || busy || !canRework}>
-                          退回重做
-                        </button>
-                      </div>
-                    </div>
-
-                    <div style={{ marginTop: 16 }} className="panel-subsection">
-                      <strong>附件上传与留证</strong>
-                      <div className="grid" style={{ marginTop: 8 }}>
-                        <div className="field">
-                          <label>所属阶段</label>
-                          <select
-                            value={attachmentForm.stage_code}
-                            onChange={(e) => setAttachmentForm((prev) => ({ ...prev, stage_code: e.target.value }))}
-                          >
-                            {Object.entries(stageLabelMap).map(([value, label]) => (
-                              <option key={value} value={value}>{label}</option>
-                            ))}
-                          </select>
-                        </div>
-                        <div className="field">
-                          <label>附件文件</label>
-                          <input
-                            type="file"
-                            onChange={(e) => {
-                              const file = e.target.files && e.target.files[0] ? e.target.files[0] : null
-                              setAttachmentForm((prev) => ({ ...prev, file }))
-                            }}
-                          />
-                        </div>
-                        <div className="field" style={{ gridColumn: '1 / -1' }}>
-                          <label>附件备注</label>
-                          <textarea value={attachmentForm.remark} onChange={(e) => setAttachmentForm((prev) => ({ ...prev, remark: e.target.value }))} />
-                        </div>
-                      </div>
-                      <div className="toolbar" style={{ marginTop: 8 }}>
-                        <button className="btn btn-primary" onClick={onUploadAttachment} disabled={busy || !canUpload}>上传附件</button>
-                        {!canUpload ? <span className="muted">当前角色无上传权限</span> : null}
-                        {(nextStageCode === 'HARDWARE_CHECKED' || nextStageCode === 'TESTED') ? (
-                          <span className="muted">提示：推进到“{stageText(nextStageCode)}”前，需先上传该阶段至少1个附件。</span>
-                        ) : null}
-                      </div>
-
-                      <div className="table-wrap" style={{ marginTop: 10 }}>
-                        <table className="table">
-                          <thead>
-                            <tr>
-                              <th>文件名</th>
-                              <th>阶段</th>
-                              <th>大小</th>
-                              <th>上传人</th>
-                              <th>上传时间</th>
-                              <th>备注</th>
-                              <th>操作</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {(Array.isArray(detail.attachments) ? detail.attachments : []).map((item) => (
-                              <tr key={item.id}>
-                                <td>{item.file_name}</td>
-                                <td>{stageText(item.stage_code)}</td>
-                                <td>{Math.round(Number(item.file_size || 0) / 1024)} KB</td>
-                                <td>{item.uploaded_by_name || '-'}</td>
-                                <td>{parseApiDate(item.uploaded_at)}</td>
-                                <td>{item.remark || '-'}</td>
-                                <td>
-                                  <div className="toolbar">
-                                    <button className="btn" onClick={() => onDownloadAttachment(item)}>下载</button>
-                                    {canDeleteAttachment ? (
-                                      <button className="btn btn-danger" onClick={() => onDeleteAttachment(item)} disabled={busy}>删除</button>
-                                    ) : null}
-                                  </div>
-                                </td>
-                              </tr>
-                            ))}
-                            {(Array.isArray(detail.attachments) ? detail.attachments : []).length === 0 ? (
-                              <tr><td colSpan={7} className="muted">暂无附件</td></tr>
-                            ) : null}
-                          </tbody>
-                        </table>
-                      </div>
-                    </div>
-
-                    <div style={{ marginTop: 14 }}>
-                      <strong>阶段时间轴</strong>
-                      <div className="timeline" style={{ marginTop: 8 }}>
-                        {(Array.isArray(detail.stage_records) ? detail.stage_records : []).map((item) => (
-                          <div className="timeline-item" key={item.id}>
-                            <div>
-                              <strong>{timelineActionText(item.action)}</strong> · {stageText(item.from_stage)} → {stageText(item.to_stage)}
-                            </div>
-                            <div className="muted">
-                              执行人：{item.operator_name || '-'} ({item.operator_role || '-'}) · {parseApiDate(item.operated_at)}
-                            </div>
-                            {item.remark ? <div className="muted">备注：{item.remark}</div> : null}
-                            {item.rework_reason ? <div className="muted">退回原因：{item.rework_reason}</div> : null}
-                            {formatStagePayload(item.stage_payload).map((line, idx) => (
-                              <div className="muted" key={`${item.id}-payload-${idx}`}>- {line}</div>
-                            ))}
+                        <div style={{ marginTop: 16 }} className="panel-subsection">
+                          <strong>关键节点责任人</strong>
+                          <div className="table-wrap" style={{ marginTop: 8 }}>
+                            <table className="table">
+                              <thead>
+                                <tr>
+                                  <th>阶段</th>
+                                  <th>执行人</th>
+                                  <th>角色</th>
+                                  <th>执行时间</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {responsibilityRows.map((item) => (
+                                  <tr key={`resp-${item.stage}`}>
+                                    <td>{stageText(item.stage)}</td>
+                                    <td>{item.by || '-'}</td>
+                                    <td>{item.role || '-'}</td>
+                                    <td>{parseApiDate(item.at)}</td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
                           </div>
-                        ))}
-                        {(Array.isArray(detail.stage_records) ? detail.stage_records : []).length === 0 ? (
-                          <div className="muted">暂无阶段记录</div>
-                        ) : null}
-                      </div>
-                    </div>
-                  </>
-                )}
+                        </div>
+
+                        <div style={{ marginTop: 16 }} className="panel-subsection">
+                          <strong>阶段执行表单</strong>
+                          <div className="grid" style={{ marginTop: 8 }}>
+                            <div className="field" style={{ gridColumn: '1 / -1' }}>
+                              <label>阶段备注</label>
+                              <textarea
+                                value={advanceForm.remark}
+                                onChange={(e) => setAdvanceForm((prev) => ({ ...prev, remark: e.target.value }))}
+                                placeholder="阶段备注"
+                              />
+                            </div>
+                            {renderStageFields()}
+                          </div>
+                          <div className="toolbar" style={{ marginTop: 10 }}>
+                            <button className="btn btn-primary" onClick={onAdvanceStage} disabled={!nextAction || busy || !canRunNextAction}>
+                              {nextAction ? actionLabelMap[nextAction] : '流程已完成'}
+                            </button>
+                            {nextAction && !canRunNextAction ? <span className="muted">当前角色无权限执行该阶段</span> : null}
+                          </div>
+                        </div>
+
+                        <div style={{ marginTop: 16 }} className="panel-subsection">
+                          <strong>退回重做</strong>
+                          <div className="toolbar" style={{ marginTop: 8 }}>
+                            <select
+                              value={reworkForm.target_stage}
+                              onChange={(e) => setReworkForm((prev) => ({ ...prev, target_stage: e.target.value }))}
+                            >
+                              {reworkTargetOptions.map((item) => (
+                                <option key={item.value} value={item.value}>
+                                  {item.label}
+                                </option>
+                              ))}
+                            </select>
+                            <input
+                              value={reworkForm.reason}
+                              onChange={(e) => setReworkForm((prev) => ({ ...prev, reason: e.target.value }))}
+                              placeholder="退回原因（必填）"
+                            />
+                            <button className="btn btn-warning" onClick={onRework} disabled={reworkTargetOptions.length === 0 || busy || !canRework}>
+                              退回重做
+                            </button>
+                          </div>
+                        </div>
+
+                        <div style={{ marginTop: 16 }} className="panel-subsection">
+                          <strong>附件上传与留证</strong>
+                          <div className="grid" style={{ marginTop: 8 }}>
+                            <div className="field">
+                              <label>所属阶段</label>
+                              <select
+                                value={attachmentForm.stage_code}
+                                onChange={(e) => setAttachmentForm((prev) => ({ ...prev, stage_code: e.target.value }))}
+                              >
+                                {Object.entries(stageLabelMap).map(([value, label]) => (
+                                  <option key={value} value={value}>{label}</option>
+                                ))}
+                              </select>
+                            </div>
+                            <div className="field">
+                              <label>附件文件</label>
+                              <input
+                                type="file"
+                                onChange={(e) => {
+                                  const file = e.target.files && e.target.files[0] ? e.target.files[0] : null
+                                  setAttachmentForm((prev) => ({ ...prev, file }))
+                                }}
+                              />
+                            </div>
+                            <div className="field" style={{ gridColumn: '1 / -1' }}>
+                              <label>附件备注</label>
+                              <textarea value={attachmentForm.remark} onChange={(e) => setAttachmentForm((prev) => ({ ...prev, remark: e.target.value }))} />
+                            </div>
+                          </div>
+                          <div className="toolbar" style={{ marginTop: 8 }}>
+                            <button className="btn btn-primary" onClick={onUploadAttachment} disabled={busy || !canUpload}>上传附件</button>
+                            {!canUpload ? <span className="muted">当前角色无上传权限</span> : null}
+                            {(nextStageCode === 'HARDWARE_CHECKED' || nextStageCode === 'TESTED') ? (
+                              <span className="muted">提示：推进到“{stageText(nextStageCode)}”前，需先上传该阶段至少1个附件。</span>
+                            ) : null}
+                          </div>
+
+                          <div className="table-wrap" style={{ marginTop: 10 }}>
+                            <table className="table">
+                              <thead>
+                                <tr>
+                                  <th>文件名</th>
+                                  <th>阶段</th>
+                                  <th>大小</th>
+                                  <th>上传人</th>
+                                  <th>上传时间</th>
+                                  <th>备注</th>
+                                  <th>操作</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {(Array.isArray(detail.attachments) ? detail.attachments : []).map((item) => (
+                                  <tr key={item.id}>
+                                    <td>{item.file_name}</td>
+                                    <td>{stageText(item.stage_code)}</td>
+                                    <td>{Math.round(Number(item.file_size || 0) / 1024)} KB</td>
+                                    <td>{item.uploaded_by_name || '-'}</td>
+                                    <td>{parseApiDate(item.uploaded_at)}</td>
+                                    <td>{item.remark || '-'}</td>
+                                    <td>
+                                      <div className="toolbar">
+                                        <button className="btn" onClick={() => onDownloadAttachment(item)}>下载</button>
+                                        {canDeleteAttachment ? (
+                                          <button className="btn btn-danger" onClick={() => onDeleteAttachment(item)} disabled={busy}>删除</button>
+                                        ) : null}
+                                      </div>
+                                    </td>
+                                  </tr>
+                                ))}
+                                {(Array.isArray(detail.attachments) ? detail.attachments : []).length === 0 ? (
+                                  <tr><td colSpan={7} className="muted">暂无附件</td></tr>
+                                ) : null}
+                              </tbody>
+                            </table>
+                          </div>
+                        </div>
+
+                        <div style={{ marginTop: 14 }}>
+                          <strong>阶段时间轴</strong>
+                          <div className="timeline" style={{ marginTop: 8 }}>
+                            {(Array.isArray(detail.stage_records) ? detail.stage_records : []).map((item) => (
+                              <div className="timeline-item" key={item.id}>
+                                <div>
+                                  <strong>{timelineActionText(item.action)}</strong> · {stageText(item.from_stage)} → {stageText(item.to_stage)}
+                                </div>
+                                <div className="muted">
+                                  执行人：{item.operator_name || '-'} ({item.operator_role || '-'}) · {parseApiDate(item.operated_at)}
+                                </div>
+                                {item.remark ? <div className="muted">备注：{item.remark}</div> : null}
+                                {item.rework_reason ? <div className="muted">退回原因：{item.rework_reason}</div> : null}
+                                {formatStagePayload(item.stage_payload).map((line, idx) => (
+                                  <div className="muted" key={`${item.id}-payload-${idx}`}>- {line}</div>
+                                ))}
+                              </div>
+                            ))}
+                            {(Array.isArray(detail.stage_records) ? detail.stage_records : []).length === 0 ? (
+                              <div className="muted">暂无阶段记录</div>
+                            ) : null}
+                          </div>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                </section>
               </div>
-            </section>
+            ) : null}
           </>
         ) : null}
 
-        {activeMenu === 'audit' ? (
+        {canReadAuditLogs && activeMenu === 'audit' ? (
           <section className="panel">
             <div className="panel-header">
               <strong>审计日志</strong>
@@ -2263,6 +2798,7 @@ function App() {
                       <th>流转单号</th>
                       <th>设备SN</th>
                       <th>说明</th>
+                      <th>来源IP</th>
                       <th>变更摘要</th>
                     </tr>
                   </thead>
@@ -2289,15 +2825,12 @@ function App() {
                         </td>
                         <td>{row.device_sn || '-'}</td>
                         <td>{row.message || '-'}</td>
-                        <td className="mono">
-                          before: {formatJsonBrief(row.before_data)}
-                          <br />
-                          after: {formatJsonBrief(row.after_data)}
-                        </td>
+                        <td>{row.request_ip || '-'}</td>
+                        <td>{buildAuditChangeSummary(row.before_data, row.after_data)}</td>
                       </tr>
                     ))}
                     {auditLogs.length === 0 ? (
-                      <tr><td colSpan={8} className="muted">暂无日志</td></tr>
+                      <tr><td colSpan={9} className="muted">暂无日志</td></tr>
                     ) : null}
                   </tbody>
                 </table>
@@ -2313,7 +2846,7 @@ function App() {
           </section>
         ) : null}
 
-        {activeMenu === 'audit-verify' ? (
+        {canReadAuditLogs && activeMenu === 'audit-verify' ? (
           <section className="panel">
             <div className="panel-header">
               <strong>审计验签</strong>
@@ -2397,6 +2930,21 @@ function App() {
           </section>
         ) : null}
       </main>
+
+      {confirmDialog.open ? (
+        <div className="dialog-backdrop" onClick={closeConfirmDialog}>
+          <div className="dialog-card" onClick={(event) => event.stopPropagation()}>
+            <div className="dialog-title">{confirmDialog.title || '确认操作'}</div>
+            <div className="dialog-body">{confirmDialog.message || '确认执行该操作？'}</div>
+            <div className="dialog-actions">
+              <button className="btn" type="button" onClick={closeConfirmDialog}>取消</button>
+              <button className="btn btn-primary" type="button" onClick={onConfirmDialogAccept}>
+                {confirmDialog.confirmLabel || '确认'}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   )
 }

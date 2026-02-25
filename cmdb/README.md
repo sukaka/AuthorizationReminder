@@ -60,6 +60,8 @@ npm run dev
 
 ## V1 APIs
 - `GET /healthz`
+- `GET /api/v1/audit/logs`
+- `GET /api/v1/audit/logs/export.csv`
 - `GET /api/v1/ci/:ci_uid`
 - `POST /api/v1/ci`
 - `PATCH /api/v1/ci/:ci_uid`
@@ -91,4 +93,4 @@ curl -X POST http://localhost:8088/api/v1/ci \
 - CI write path: MySQL transaction + outbox insert.
 - Outbox relay publishes to Kafka and marks event status.
 - Consumers must deduplicate by `event_id`.
-- Every mutating API call writes to `operation_audit` and `ci_change_log`.
+- Every mutating API call writes to `operation_audit` and `ci_change_log` (including `metadata_json.source_ip`).

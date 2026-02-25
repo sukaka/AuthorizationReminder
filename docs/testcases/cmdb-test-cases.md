@@ -18,6 +18,10 @@
 | CMDB-008 | 权限控制 | 无 `cmdb` 权限 token 访问 `/api/v1/*` | 返回 403 |
 | CMDB-009 | 未登录访问 | 无 token 访问 `/api/v1/*` | 返回 401 |
 | CMDB-010 | 仪表盘概览 | `GET /api/v1/dashboard/overview` | 返回 200，含 totals/distribution/trend |
+| CMDB-011 | 审计日志查询 | `GET /api/v1/audit/logs?page=1&page_size=20` | 返回 200，含 `items/total/page/page_size` |
+| CMDB-012 | 审计来源IP | 执行一次写操作后查询审计日志 | 新日志含 `source_ip`，页面可见来源IP列 |
+| CMDB-013 | 审计导出CSV | `GET /api/v1/audit/logs/export.csv` | 返回 200，可下载 CSV 且包含来源IP列 |
+| CMDB-014 | 审计变更摘要 | 执行 CI 字段变更后查看审计列表 | 变更内容以中文“变更摘要”展示，不直接展示原始 JSON |
 
 ## 回归记录
 - `2026-02-20` 已修复 `CMDB-010`：`GET /api/v1/dashboard/overview` 返回 200。

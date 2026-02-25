@@ -3,6 +3,7 @@ package handler
 import (
 	"database/sql"
 	"net/http"
+	"strings"
 	"time"
 
 	"cmdb/internal/auth"
@@ -37,6 +38,8 @@ func NewRouter(cfg config.Config, sqlDB *sql.DB, mongoClient *mongo.Client) *gin
 	ciRepo := repository.NewCIRepository(sqlDB)
 	ciSvc := service.NewCIService(ciRepo)
 	ciHandler := NewCIHandler(ciSvc)
+	auditSvc := service.NewAuditService(ciRepo)
+	auditHandler := NewAuditHandler(auditSvc)
 	dashboardSvc := service.NewDashboardService(ciRepo)
 	dashboardHandler := NewDashboardHandler(dashboardSvc)
 
@@ -44,14 +47,49 @@ func NewRouter(cfg config.Config, sqlDB *sql.DB, mongoClient *mongo.Client) *gin
 	api.Use(auth.OIDCAuthMiddleware(cfg))
 	{
 		api.GET("/dashboard/overview", dashboardHandler.Overview)
+		api.GET("/audit/logs", requireCMDBAuditReader(), auditHandler.ListLogs)
+		api.GET("/audit/logs/export.csv", requireCMDBAuditReader(), auditHandler.ExportLogsCSV)
 		api.GET("/ci", ciHandler.ListCI)
 		api.GET("/ci/:ci_uid", ciHandler.GetByUID)
-		api.POST("/ci", ciHandler.CreateCI)
-		api.PATCH("/ci/:ci_uid", ciHandler.UpdateCI)
-		api.DELETE("/ci/:ci_uid", ciHandler.DeleteCI)
-		api.POST("/ci/:ci_uid/relations", ciHandler.UpsertRelation)
+		api.POST("/ci", requireCMDBWriter(), ciHandler.CreateCI)
+		api.PATCH("/ci/:ci_uid", requireCMDBWriter(), ciHandler.UpdateCI)
+		api.DELETE("/ci/:ci_uid", requireCMDBWriter(), ciHandler.DeleteCI)
+		api.POST("/ci/:ci_uid/relations", requireCMDBWriter(), ciHandler.UpsertRelation)
 	}
 
 	_ = mongoClient // reserved for raw snapshot/reconcile handlers
 	return r
+}
+
+func requireCMDBAuditReader() gin.HandlerFunc {
+	allowed := map[string]struct{}{
+		"auditor": {},
+	}
+	return func(c *gin.Context) {
+		role, _ := c.Get("actor_role")
+		roleText, _ := role.(string)
+		key := strings.ToLower(strings.TrimSpace(roleText))
+		if _, ok := allowed[key]; ok {
+			c.Next()
+			return
+		}
+		c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "no audit access to cmdb"})
+	}
+}
+
+func requireCMDBWriter() gin.HandlerFunc {
+	allowed := map[string]struct{}{
+		"admin":    {},
+		"sysadmin": {},
+	}
+	return func(c *gin.Context) {
+		role, _ := c.Get("actor_role")
+		roleText, _ := role.(string)
+		key := strings.ToLower(strings.TrimSpace(roleText))
+		if _, ok := allowed[key]; ok {
+			c.Next()
+			return
+		}
+		c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "no write access to cmdb"})
+	}
 }

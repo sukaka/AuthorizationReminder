@@ -1,253 +1,249 @@
-# 聚信授权到期提醒系统
+# 聚信多系统业务平台
 
-用于管理客户授权到期提醒的系统，覆盖客户/联系人/授权/发送计划/发送渠道配置/操作日志/安全配置。前端使用 Vite + React，后端使用 Node.js + Express，支持 MySQL 与 Docker 一键部署。
+本仓库是一个基于统一登录（SSO）的多系统业务平台，包含以下 6 个业务域：
 
-## 功能概览
-- 客户管理：客户名称、聚信销售、渠道销售
-- 联系人管理：联系人信息、状态启停，支持**一个联系人关联多个客户**
-- 授权管理：到期日期、提醒天数、状态
-- 发送计划：联系人/授权/渠道与提醒天数，支持**立即发送**
-- 发送渠道配置：邮箱、阿里云短信、企业微信（支持 Webhook 或应用消息）
-- 仪表盘：到期统计、渠道统计、趋势等
-- 操作日志：登录/登出/关键操作记录，支持筛选与导出
-- 审计验签：支持失败原因、失败记录ID展示与核验报告导出
-- 安全配置：登录失败限制、登录验证码
-- 账号安全：每个用户可独立启用二次验证与谷歌认证（支持扫码）
+- 授权到期提醒（Reminder）
+- 工单管理（Ticketing）
+- 库存管理（Inventory）
+- 设备流转（Device Flow）
+- 聚信实施记录（Sec-Impl）
+- CMDB
 
-## 快速开始（Docker）
+目标是：统一账号登录、按系统授权访问、业务库隔离、可通过 Docker Compose 一键启动。
+
+## 1. 架构与系统边界
+
+### 1.1 架构组成
+- `auth`：统一登录与授权中心（应用入口聚合、权限校验）
+- `api`：提醒系统后端
+- `ticketing`：工单系统后端
+- `inventory-api` + `shipping-gateway`：库存与物流网关
+- `device-flow-api`：设备流转后端
+- `sec-impl-api`：聚信实施记录后端
+- `cmdb`：CMDB 后端（Go）
+- `web*`：各系统前端（Nginx + 静态资源）
+
+### 1.2 数据库策略
+复用同一个 MySQL 实例，不同系统独立 schema：
+- `juxin_reminder`（提醒/登录/工单）
+- `juxin_inventory`（库存）
+- `juxin_device_flow`（设备流转）
+- `juxin_sec_impl`（聚信实施记录）
+- `cmdb`（CMDB）
+
+> 说明：统一实例 + 独立库，兼顾运维成本与业务隔离。
+
+## 2. 快速开始
+
+### 2.1 环境要求
+- Docker Desktop（含 Docker Compose v2）
+- Node.js 20+（本地开发/构建）
+- Go 1.22+（CMDB 本地开发）
+
+### 2.2 一键启动（全量）
 ```bash
-docker compose up --build
+cd /Users/zhanglei/Documents/codex-new
+docker compose up -d --build
 ```
 
-访问：
-- 前端：`http://localhost:8080`
-- 后端：`http://localhost:5179`
-- 工单系统前端：`http://localhost:8081`
-- 工单系统后端：`http://localhost:5182`
-- 库存系统前端：`http://localhost:8082`
-- 库存系统后端：`http://localhost:5183`
-- 安全实施系统前端：`http://localhost:8084`
-- 安全实施系统后端：`http://localhost:5185`
-- CMDB系统前端：`http://localhost:8090`
-- CMDB系统后端：容器内部 `:8088`（通过 `http://localhost:8090/api` 访问）
-
-默认数据库端口映射：主机 `3308` → 容器 `3306`。
-
-## 单独启动工单系统（Docker）
-仅启动认证 + 工单 + 前端：
+### 2.3 常用按系统启动
 ```bash
-docker compose up --build mysql auth ticketing web-ticketing
+# 仅提醒系统
+docker compose up -d --build mysql auth api web
+
+# 仅工单系统
+docker compose up -d --build mysql auth ticketing web-ticketing
+
+# 仅库存系统
+docker compose up -d --build mysql auth shipping-gateway inventory-api web-inventory
+
+# 仅设备流转系统
+docker compose up -d --build mysql auth device-flow-api web-device-flow
+
+# 仅聚信实施记录系统
+docker compose up -d --build mysql auth sec-impl-api web-sec-impl
+
+# 仅 CMDB 系统
+docker compose up -d --build mysql auth cmdb-mongo cmdb-mysql-init cmdb web-cmdb
 ```
 
-仅启动提醒系统：
+## 3. 服务入口与端口
+
+| 系统 | 地址 |
+|---|---|
+| 统一登录 | `http://localhost:5180` |
+| 提醒前端 | `http://localhost:8080` |
+| 提醒后端 | `http://localhost:5179` |
+| 工单前端 | `http://localhost:8081` |
+| 工单后端 | `http://localhost:5182` |
+| 库存前端 | `http://localhost:8082` |
+| 库存后端 | `http://localhost:5183` |
+| 设备流转前端 | `http://localhost:8083` |
+| 设备流转后端 | `http://localhost:5184` |
+| 聚信实施记录前端 | `http://localhost:8084` |
+| 聚信实施记录后端 | `http://localhost:5185` |
+| CMDB 前端 | `http://localhost:8090` |
+| MySQL（宿主机映射） | `localhost:3308` |
+
+## 4. 默认账号与权限
+
+内置账号（由 `auth` 管理）：
+- `admin`
+- `sysadmin`
+- `auditor`
+
+默认密码由环境变量控制：
+- `BUILTIN_ACCOUNT_DEFAULT_PASSWORD`
+
+建议首次登录立即修改密码。
+统一登录会话采用浏览器会话 Cookie，关闭浏览器后需重新登录。
+
+权限原则：
+- `admin`：业务管理与写操作主角色
+- `sysadmin`：系统管理与配置主角色
+- `auditor`：审计与只读校验主角色
+- 各系统可通过 `app_access` 做精细化入口控制
+
+## 5. 本地开发
+
+### 5.1 提醒系统（根目录）
 ```bash
-docker compose up --build mysql auth api web
-```
-
-仅启动库存系统：
-```bash
-docker compose up --build mysql auth inventory-api web-inventory
-```
-
-仅启动安全实施系统：
-```bash
-docker compose up --build mysql auth sec-impl-api web-sec-impl
-```
-
-仅启动CMDB系统：
-```bash
-docker compose up --build mysql auth cmdb-mongo cmdb-mysql-init cmdb web-cmdb
-```
-
-若你之前在 `cmdb/deploy` 目录单独启动过 CMDB，请先执行：
-```bash
-docker compose -f cmdb/deploy/docker-compose.yml down
-```
-
-## 默认账号（内置）
-- `admin`：业务管理员（客户/联系人/授权/发送计划/发送配置）
-- `sysadmin`：系统管理员（用户管理/安全配置）
-- `auditor`：审计管理员（操作日志查看/导出/验签）
-- 默认密码：`123456`（可通过 `BUILTIN_ACCOUNT_DEFAULT_PASSWORD` 覆盖）
-
-首次登录后请立即修改默认密码。
-
-## 运行环境与端口
-- 前端（Nginx）：`8080`
-- 后端（Node/Express）：`5179`
-- 认证服务（SSO）：`5180`
-- 工单系统前端（Nginx）：`8081`
-- 工单系统后端（Node/Express）：`5182`
-- 库存系统前端（Nginx）：`8082`
-- 库存系统后端（Node/Express）：`5183`
-- 安全实施系统前端（Nginx）：`8084`
-- 安全实施系统后端（Node/Express）：`5185`
-- CMDB系统前端（Nginx）：`8090`
-- CMDB系统后端（Go）：容器内部 `8088`
-- MySQL：`3308`（宿主机）
-
-## 配置说明
-在 `docker-compose.yml` 的 `api` 环境变量中配置：
-- `CORS_ORIGINS`：允许的来源（逗号分隔），例如：`http://公网IP:8080,https://your-domain.com`
-- `JWT_SECRET`：JWT 签名密钥（建议生产环境配置）
-- `CSRF_SECURE`：是否强制 CSRF Cookie 为 `Secure`（HTTPS 场景设置为 `true`）
-- `CONFIG_SECRET_KEY`：用于加密存储邮箱密码/短信密钥/企业微信 Secret（建议至少 32 位随机字符串）
-- `BUILTIN_ACCOUNT_DEFAULT_PASSWORD`：内置账号初始密码（仅首次创建时生效）
-- `AUDIT_SIGNING_KEY`：审计日志签名密钥（建议生产环境配置独立密钥）
-
-在 `docker-compose.yml` 的 `auth` 环境变量中配置：
-- `CORS_ORIGINS`：允许的来源
-- `JWT_SECRET`：必须与 `api` 保持一致
-- `CONFIG_SECRET_KEY`：与 `api` 保持一致
-- `AUDIT_SIGNING_KEY`：审计日志签名密钥（建议与 `JWT_SECRET` 独立）
-- `APP_SEC_IMPL_URL`：安全实施系统入口（默认 `http://localhost:8084`）
-
-数据库可配置：
-- `MYSQL_HOST` / `MYSQL_PORT`
-- `MYSQL_USER` / `MYSQL_PASSWORD`
-- `MYSQL_DATABASE`
-
-## 发送配置与模板
-**模板入口：发送配置 → 提醒模板**
-- 邮件支持**主题+内容**
-- 企业微信/短信**只有内容**
- - 企业微信（群机器人）需要在**企业微信配置**里填写 `Webhook（群机器人）` 并保存
-
-**可用变量（自动替换）**
-- `{customer_name}` 客户名称  
-- `{license_name}` 授权名称  
-- `{end_date}` 到期日期  
-- `{days_left}` 剩余天数  
-- `{contact_name}` 联系人姓名  
-- `{contact_phone}` 联系人电话  
-- `{contact_email}` 联系人邮箱  
-- `{wecom_id}` 企业微信号  
-
-示例：
-- 主题：`【{customer_name}】授权到期提醒`
-- 内容：`{license_name} 将于 {end_date} 到期，剩余 {days_left} 天，请及时续约。`
-
-> 修改发送配置后**必须点击保存**，否则测试发送会提示未保存。
-
-## 联系人可关联多客户
-联系人管理里“客户名称”支持多选：  
-- 直接输入客户名称，使用逗号分隔多个  
-- 或从下拉联想中勾选多个  
-
-系统会保存 `contact_customers` 关系，已有数据会自动回填。
-
-## 发送计划说明
-- “客户名称”字段为**一个输入框**，支持下拉联想与手动输入  
-- “失效日期”固定为授权到期日（无需手填）  
-- 支持**立即发送**：勾选计划后点击“立即发送”触发发送  
-- 企业微信可选择发送方式：
-  - **群机器人（Webhook）**
-  - **联系人个人（应用消息）**
-
-## 企业微信发送方式
-- **Webhook（群机器人）**：发送到群，不会给联系人个人发。  
-  需要在发送配置中保存 `Webhook（群机器人）`。
-- **应用消息（联系人个人）**：发送给联系人个人。  
-  需要配置 `企业ID / 应用Secret / AgentId`，且联系人必须有 `企业微信号(wecom_id)`。
-
-## 权限模型（等保职责分离）
-- `admin`：仅业务操作，不可管理用户，不可修改安全策略，不可查看审计日志
-- `sysadmin`：仅用户管理与安全策略，不可访问业务数据
-- `auditor`：仅审计日志（查看/导出/验签），不可改业务和系统配置
-- 内置账号（`admin`/`sysadmin`/`auditor`）禁止删除、禁止禁用
-
-## 本地开发
-```bash
+cd /Users/zhanglei/Documents/codex-new
 npm install
 npm run dev
 ```
 
-## 目录结构
+### 5.2 其它前后端（示例）
+```bash
+# 聚信实施记录后端
+cd /Users/zhanglei/Documents/codex-new/sec-impl/backend
+npm install
+npm run dev
+
+# 聚信实施记录前端
+cd /Users/zhanglei/Documents/codex-new/sec-impl/frontend
+npm install
+npm run dev
+
+# CMDB 后端
+cd /Users/zhanglei/Documents/codex-new/cmdb
+go run ./cmd/cmdb
 ```
-server/              后端服务与数据库初始化
-auth/                统一认证服务（SSO）
-web/                 前端应用
-web/nginx.conf       前端 Nginx 配置
-ticketing/           工单系统后端
-ticketing/web/       工单系统前端
-inventory-system/    库存系统（前后端）
-sec-impl/            安全产品实施记录系统（前后端+脚本）
-cmdb/                CMDB系统（前后端）
-docker-compose.yml   Docker 编排
+
+## 6. 测试与验收
+
+### 6.1 快速健康检查
+```bash
+curl -sS http://localhost:5179/api/health
+curl -sS http://localhost:5182/health
+curl -sS http://localhost:5183/api/health
+curl -sS http://localhost:5184/api/health
+curl -sS http://localhost:5185/api/health
+curl -sS http://localhost:8090/healthz
 ```
 
-## 工单管理系统说明
-工单系统使用与提醒系统一致的布局与配色，可通过统一登录（SSO）进入：
-- 新建/编辑工单：标题、描述、优先级、状态、审批状态
-- 工单列表：支持搜索与状态筛选，默认每页 10 条
-- SLA看板：按“即将超时 / 已超时”分组展示
-- 状态流：`新建 -> 受理 -> 处理中 -> 待验证 -> 完成 -> 关闭`
-- 审批流：高风险工单（P1 或 HIGH/CRITICAL）关闭前必须审批通过
-- 协作模型：负责人 + 协作人 + 观察者 + 评论@通知
-- 通知中心：查看协作变更、评论@、审批结果通知
+### 6.2 设备流转自动化脚本
+```bash
+cd /Users/zhanglei/Documents/codex-new/device-flow/scripts
+AUTH_TOKEN=<TOKEN> API_BASE=http://localhost:5184 ./smoke-e2e.sh
+AUTH_TOKEN=<TOKEN> API_BASE=http://localhost:5184 ./regression-api.sh
+./rbac-matrix.sh
+```
 
-## 安全说明
-- 默认开启 CSRF 保护，前端自动获取并携带 `X-CSRF-Token`
-- CORS 默认仅允许 `localhost` 与 `8080/5173`，公网访问需配置 `CORS_ORIGINS`
-- 发送配置中的密码/Secret 采用加密存储，前端只显示掩码
-- 统一登录会话已迁移为 `HttpOnly + Secure + SameSite` Cookie，前端不再持久化 token
-- 用户密码复杂度策略：至少 10 位，且包含大小写字母、数字、特殊字符
-- 审计日志采用链式签名（`prev_hash + signature`），支持 `/api/operation-logs/verify` 验签
-- 支持核验报告导出：`/api/operation-logs/verify/export`
+### 6.3 聚信实施记录自动化（Vitest）
+```bash
+cd /Users/zhanglei/Documents/codex-new/sec-impl/backend
+npm run test:smoke
+npm run test:regression
+npm run test:rbac
+```
 
-## 常见问题（FAQ）
-1. **CORS 报错 / 403**
-   - 在 `docker-compose.yml` 设置 `CORS_ORIGINS` 为公网 IP 或域名
+### 6.4 全系统测试用例文档
+- `/Users/zhanglei/Documents/codex-new/docs/testcases/auth-sso-test-cases.md`
+- `/Users/zhanglei/Documents/codex-new/docs/testcases/reminder-test-cases.md`
+- `/Users/zhanglei/Documents/codex-new/docs/testcases/ticketing-test-cases.md`
+- `/Users/zhanglei/Documents/codex-new/docs/testcases/inventory-test-cases.md`
+- `/Users/zhanglei/Documents/codex-new/docs/testcases/device-flow-test-cases.md`
+- `/Users/zhanglei/Documents/codex-new/docs/testcases/sec-impl-test-cases.md`
+- `/Users/zhanglei/Documents/codex-new/docs/testcases/cmdb-test-cases.md`
+- `/Users/zhanglei/Documents/codex-new/docs/testcases/test-run-2026-02-20.md`
 
-2. **登录 403（CSRF）**
-   - 使用 HTTP 时不要开启 `CSRF_SECURE=true`
-   - HTTPS 场景可设置 `CSRF_SECURE=true`
+### 6.5 全系统用户使用手册
+- `/Users/zhanglei/Documents/codex-new/docs/manuals/README.md`
+- `/Users/zhanglei/Documents/codex-new/docs/manuals/auth-sso-user-manual.md`
+- `/Users/zhanglei/Documents/codex-new/docs/manuals/reminder-user-manual.md`
+- `/Users/zhanglei/Documents/codex-new/docs/manuals/ticketing-user-manual.md`
+- `/Users/zhanglei/Documents/codex-new/docs/manuals/inventory-user-manual.md`
+- `/Users/zhanglei/Documents/codex-new/docs/manuals/device-flow-user-manual.md`
+- `/Users/zhanglei/Documents/codex-new/docs/manuals/sec-impl-user-manual.md`
+- `/Users/zhanglei/Documents/codex-new/docs/manuals/cmdb-user-manual.md`
 
-3. **立即发送后没有日志**
-   - 最新版本已把“立即发送”写入提醒记录  
-   - 请确认已部署最新镜像或最新代码
+## 7. 关键环境变量（建议）
 
-4. **企业微信未收到**
-   - 选择“企业微信(群)”时，**必须在发送配置中保存 Webhook**  
-   - 如果配置了 `webhook` 且选择“企业微信(群)”，消息只到群，不会到个人  
-   - 选择“企业微信(个人)”需要配置应用参数 + 联系人 `wecom_id`
-   - 群机器人被禁用/被移除也会导致收不到
+公共建议：
+- `JWT_SECRET`：统一 JWT 密钥
+- `CONFIG_SECRET_KEY`：敏感配置加密密钥
+- `AUDIT_SIGNING_KEY`：审计签名密钥
+- `CORS_ORIGINS`：允许来源白名单
+- `AUTH_COOKIE_NAME`：统一会话 Cookie 名称
 
-7. **测试能发，立即发送不发**
-   - 测试企业微信可以临时填写 webhook，但立即发送只读**已保存配置**  
-   - 请确认：发送配置里已保存 `Webhook（群机器人）` 且计划选择“群机器人（Webhook）”
+系统关键项：
+- Inventory：`AUTH_SYSTEM_KEY=inventory`、`MYSQL_DATABASE=juxin_inventory`
+- Device Flow：`AUTH_SYSTEM_KEY=device-flow`、`MYSQL_DATABASE=juxin_device_flow`
+- Sec-Impl：`AUTH_SYSTEM_KEY=sec-impl`、`MYSQL_DATABASE=juxin_sec_impl`
+- CMDB：`AUTH_SYSTEM_KEY=cmdb`、`MYSQL_DSN=.../cmdb`
 
-5. **非管理员看不到数据**
-   - 需要保证“用户手机号”=“联系人手机号”  
-   - 联系人必须关联客户，才能看到该客户及其授权
+## 8. 安全基线
 
-6. **配置保存提示缺少密钥**
-   - 请配置 `CONFIG_SECRET_KEY`，否则无法保存敏感信息
+- 会话依赖 `HttpOnly` Cookie + Token introspect
+- 登录 Cookie 不设置持久化过期时间（关闭浏览器后失效）
+- 关键写操作与权限判断走统一授权服务
+- 审计日志链式签名（防篡改）
+- 审计界面统一显示中文“变更摘要”（不直接展示原始 JSON）
+- 业务接口默认启用输入校验与分页限制
+- 上传接口限制 MIME、大小与行数（批量导入）
 
-## 更新记录（近期）
-- 联系人支持**关联多个客户**，并支持输入/联想多选
-- 发送计划支持**立即发送**，并写入提醒记录
-- 企业微信发送方式可选：**Webhook 群机器人 / 应用消息个人**
-- 企业微信配置新增**Webhook（群机器人）**保存项
-- 企业微信 Webhook 返回错误码会记录到提醒记录
-- 发送计划“失效日期”改为授权到期日
-- 发送计划“客户名称”支持下拉联想与手动输入
-- 增强权限范围：非管理员仅能访问关联客户数据
-- 登录错误弹窗提示、配置未保存提示、测试发送提示优化
-- 审计日志支持按系统筛选（提醒系统/工单系统/统一登录）
-- 审计验签结果增强（失败原因、失败记录ID、核验报告导出）
-- 工单新增 SLA 分组看板（即将超时/已超时）
-- 工单新增审批流与状态机（受理、待验证、完成/关闭）
-- 工单新增通知中心（协作变更、评论@、审批结果）
+## 9. 目录结构
 
-## 发布文档
-- `/Users/zhanglei/Documents/codex-new/docs/releases/2.0.1-rc1-regression-checklist.md`
+```text
+/Users/zhanglei/Documents/codex-new
+├── auth/                  # 统一登录
+├── server/                # 提醒系统后端
+├── web/                   # 提醒系统前端
+├── ticketing/             # 工单系统
+├── inventory-system/      # 库存系统 + 物流网关
+├── device-flow/           # 设备流转系统
+├── sec-impl/              # 聚信实施记录系统
+├── cmdb/                  # CMDB（Go + Web）
+├── docs/                  # 发布、测试、设计文档
+└── docker-compose.yml     # 统一编排
+```
+
+## 10. 发布与变更文档
+
 - `/Users/zhanglei/Documents/codex-new/docs/releases/2.0.1.md`
+- `/Users/zhanglei/Documents/codex-new/docs/releases/2.0.1-rc1-regression-checklist.md`
 - `/Users/zhanglei/Documents/codex-new/docs/releases/2.1.0-rc1.md`
+- `/Users/zhanglei/Documents/codex-new/docs/releases/device-flow-v1-checklist.md`
 - `/Users/zhanglei/Documents/codex-new/docs/releases/sec-impl-v1-checklist.md`
 
-## 技术栈
-- 前端：React + Vite
-- 后端：Node.js + Express
-- 数据库：MySQL
-- 部署：Docker + Nginx
+## 11. 常见问题
+
+### Q1：登录成功但看不到某系统入口？
+检查该用户 `app_access` 是否包含对应系统键（如 `inventory`、`device-flow`、`sec-impl`、`cmdb`）。
+
+### Q2：跨域报错（CORS）？
+在 `docker-compose.yml` 的对应服务里补齐 `CORS_ORIGINS`，包含访问页面的实际域名与端口。
+
+### Q3：文件上传失败？
+确认 MIME 类型、文件大小、导入行数是否超过系统限制。
+
+### Q4：怎么只回滚单个系统数据？
+各系统独立库，按 schema 回滚即可，不影响其它系统。
+
+---
+
+如需新增系统或做生产化（K8s、灰度、集中观测），建议先补齐：
+- 环境分层（dev/stage/prod）
+- 统一密钥管理
+- CI/CD 与自动回归流水线

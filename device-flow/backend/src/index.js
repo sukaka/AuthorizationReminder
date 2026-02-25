@@ -35,10 +35,10 @@ const UPLOAD_ALLOWED_MIME = new Set(
 
 const STAGES = ['CREATED', 'RECEIVED', 'HARDWARE_CHECKED', 'OS_INSTALLED', 'TESTED', 'APPROVED', 'PACKED', 'SHIPPED'];
 const BASE_WRITER_ROLES = new Set(['admin', 'sysadmin']);
-const ATTACHMENT_UPLOADER_ROLES = new Set(['admin', 'sysadmin', 'auditor']);
+const ATTACHMENT_UPLOADER_ROLES = new Set(['admin', 'sysadmin']);
 const ATTACHMENT_DELETER_ROLES = new Set(['admin', 'sysadmin']);
-const REWORK_ALLOWED_ROLES = new Set(['admin', 'sysadmin', 'auditor']);
-const AUDIT_READER_ROLES = new Set(['admin', 'sysadmin', 'auditor']);
+const REWORK_ALLOWED_ROLES = new Set(['admin', 'sysadmin']);
+const AUDIT_READER_ROLES = new Set(['auditor']);
 const ACTION_TO_STAGE = {
   receive: 'RECEIVED',
   'hardware-check': 'HARDWARE_CHECKED',
@@ -52,8 +52,8 @@ const ACTION_ALLOWED_ROLES = {
   receive: new Set(['admin', 'sysadmin']),
   'hardware-check': new Set(['admin', 'sysadmin']),
   'os-install': new Set(['admin', 'sysadmin']),
-  test: new Set(['admin', 'sysadmin', 'auditor']),
-  approve: new Set(['admin', 'sysadmin', 'auditor']),
+  test: new Set(['admin', 'sysadmin']),
+  approve: new Set(['admin', 'sysadmin']),
   pack: new Set(['admin', 'sysadmin']),
   ship: new Set(['admin', 'sysadmin']),
 };
@@ -292,6 +292,21 @@ const authRequired = asyncHandler(async (req, _res, next) => {
   req.authApps = auth.apps;
   next();
 });
+
+const auditorAuditPathAllowList = new Set([
+  '/api/health',
+  '/api/auth/me',
+  '/api/device-flow/logs',
+  '/api/device-flow/audit/verify',
+  '/api/device-flow/reports/audit.csv',
+]);
+
+const restrictAuditorToAudit = (req, _res, next) => {
+  if (normalizeRole(req.user?.role) !== 'auditor') return next();
+  if (req.method === 'OPTIONS') return next();
+  if (req.method === 'GET' && auditorAuditPathAllowList.has(req.path)) return next();
+  return next(appError('auditor 仅可访问审计相关接口', 403));
+};
 
 const getActor = (req) => ({
   sub: String(req.user?.id ?? ''),
@@ -568,6 +583,7 @@ const buildStagePayload = (action, rawPayload) => {
   if (action === 'ship') {
     return compactObject({
       carrier: trimText(payload.carrier),
+      outbound_tracking_no: trimText(payload.outbound_tracking_no),
       shipped_note: trimText(payload.shipped_note),
     });
   }
@@ -1447,6 +1463,7 @@ const rebuildAuditChainHashes = async () => {
 };
 
 app.use(authRequired);
+app.use(restrictAuditorToAudit);
 
 app.get(
   '/api/health',
@@ -1639,6 +1656,7 @@ app.post(
 
 app.get(
   '/api/device-flow/logs',
+  requireAuditReader,
   asyncHandler(async (req, res) => {
     const paging = parsePaging(req.query.page, req.query.limit);
     const from = parseDateOnly(req.query.from, 'from');
@@ -2317,6 +2335,7 @@ app.get(
 
 app.get(
   '/api/device-flow/reports/audit.csv',
+  requireAuditReader,
   asyncHandler(async (req, res) => {
     const from = parseDateOnly(req.query.from, 'from');
     const to = parseDateOnly(req.query.to, 'to');
@@ -2357,6 +2376,7 @@ app.get(
               l.user_role,
               l.action,
               l.message,
+              l.request_ip,
               j.job_no,
               j.device_sn,
               j.customer_name,
@@ -2369,7 +2389,7 @@ app.get(
       params
     );
 
-    const header = ['日志ID', '操作时间', '操作人', '角色', '动作', '说明', '流转单号', '设备SN', '客户', '当前阶段'];
+    const header = ['日志ID', '操作时间', '操作人', '角色', '动作', '说明', '来源IP', '流转单号', '设备SN', '客户', '当前阶段'];
     const lines = [header.map(escapeCsvCell).join(',')];
     rows.forEach((row) => {
       lines.push(
@@ -2380,6 +2400,7 @@ app.get(
           row.user_role,
           row.action,
           row.message,
+          row.request_ip,
           row.job_no,
           row.device_sn,
           row.customer_name,

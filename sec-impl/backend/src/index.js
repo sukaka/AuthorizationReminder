@@ -38,7 +38,7 @@ const BASE_WRITER_ROLES = new Set(['admin', 'sysadmin']);
 const ATTACHMENT_UPLOADER_ROLES = new Set(['admin', 'sysadmin']);
 const ATTACHMENT_DELETER_ROLES = new Set(['admin', 'sysadmin']);
 const REWORK_ALLOWED_ROLES = new Set(['admin', 'sysadmin']);
-const AUDIT_READER_ROLES = new Set(['admin', 'sysadmin', 'auditor']);
+const AUDIT_READER_ROLES = new Set(['auditor']);
 const ACTION_TO_STAGE = {
   assess: 'ASSESS',
   implement: 'IMPLEMENT',
@@ -277,7 +277,7 @@ const requireAttachmentDeleter = (req, _res, next) => {
 
 const requireAuditReader = (req, _res, next) => {
   if (!AUDIT_READER_ROLES.has(normalizeRole(req.user?.role))) {
-    return next(appError('无权限查看审计验签', 403));
+    return next(appError('无权限查看审计日志', 403));
   }
   return next();
 };
@@ -293,6 +293,21 @@ const authRequired = asyncHandler(async (req, _res, next) => {
   req.authApps = auth.apps;
   next();
 });
+
+const auditorAuditPathAllowList = new Set([
+  '/api/health',
+  '/api/auth/me',
+  '/api/sec-impl/logs',
+  '/api/sec-impl/audit/verify',
+  '/api/sec-impl/reports/audit.csv',
+]);
+
+const restrictAuditorToAudit = (req, _res, next) => {
+  if (normalizeRole(req.user?.role) !== 'auditor') return next();
+  if (req.method === 'OPTIONS') return next();
+  if (req.method === 'GET' && auditorAuditPathAllowList.has(req.path)) return next();
+  return next(appError('auditor 仅可访问审计相关接口', 403));
+};
 
 const getActor = (req) => ({
   sub: String(req.user?.id ?? ''),
@@ -1465,6 +1480,7 @@ const rebuildAuditChainHashes = async () => {
 };
 
 app.use(authRequired);
+app.use(restrictAuditorToAudit);
 
 app.get(
   '/api/health',
@@ -1493,6 +1509,7 @@ app.get(
       Number.isInteger(overdueDaysRaw) && overdueDaysRaw > 0 ? Math.min(overdueDaysRaw, 30) : DASHBOARD_OVERDUE_DAYS;
     const stage = parseStageFilter(req.query.stage, 'stage');
     const customer = trimText(req.query.customer);
+    const canReadAuditLogs = AUDIT_READER_ROLES.has(normalizeRole(req.user?.role));
     const { whereSql: jobWhereSql, params: jobParams } = buildDashboardJobWhere({ stage, customer });
 
     const [stageRows, totalRow, openRow, completedRow, createdTodayRow, shippedTodayRow, overdueRows, recentRows] =
@@ -1534,19 +1551,21 @@ app.get(
            LIMIT 100`,
           [...jobParams, overdueDays]
         ),
-        query(
-          `SELECT l.*,
-                  j.job_no,
-                  j.project_code,
-                  j.customer_name,
-                  j.current_stage
-           FROM sec_impl_operation_logs l
-           LEFT JOIN sec_impl_projects j ON j.id = l.job_id
-           ${jobWhereSql}
-           ORDER BY l.id DESC
-           LIMIT 20`,
-          jobParams
-        ),
+        canReadAuditLogs
+          ? query(
+              `SELECT l.*,
+                      j.job_no,
+                      j.project_code,
+                      j.customer_name,
+                      j.current_stage
+               FROM sec_impl_operation_logs l
+               LEFT JOIN sec_impl_projects j ON j.id = l.job_id
+               ${jobWhereSql}
+               ORDER BY l.id DESC
+               LIMIT 20`,
+              jobParams
+            )
+          : Promise.resolve([]),
       ]);
 
     const stageCountMap = {};
@@ -1658,6 +1677,7 @@ app.post(
 
 app.get(
   '/api/sec-impl/logs',
+  requireAuditReader,
   asyncHandler(async (req, res) => {
     const paging = parsePaging(req.query.page, req.query.limit);
     const from = parseDateOnly(req.query.from, 'from');
@@ -1987,13 +2007,16 @@ app.get(
   asyncHandler(async (req, res) => {
     const id = Number(req.params.id || 0);
     if (!Number.isInteger(id) || id <= 0) throw appError('ID非法');
+    const canReadAuditLogs = AUDIT_READER_ROLES.has(normalizeRole(req.user?.role));
 
     const job = await get('SELECT * FROM sec_impl_projects WHERE id = ?', [id]);
     if (!job) throw appError('实施单不存在', 404);
 
     const [stageRecords, operationLogs, attachments] = await Promise.all([
       query('SELECT * FROM sec_impl_stage_records WHERE job_id = ? ORDER BY id DESC', [id]),
-      query('SELECT * FROM sec_impl_operation_logs WHERE job_id = ? ORDER BY id DESC LIMIT 300', [id]),
+      canReadAuditLogs
+        ? query('SELECT * FROM sec_impl_operation_logs WHERE job_id = ? ORDER BY id DESC LIMIT 300', [id])
+        : Promise.resolve([]),
       query('SELECT * FROM sec_impl_attachments WHERE job_id = ? ORDER BY id DESC', [id]),
     ]);
 
@@ -2428,6 +2451,7 @@ app.get(
 
 app.get(
   '/api/sec-impl/reports/audit.csv',
+  requireAuditReader,
   asyncHandler(async (req, res) => {
     const from = parseDateOnly(req.query.from, 'from');
     const to = parseDateOnly(req.query.to, 'to');
@@ -2468,6 +2492,7 @@ app.get(
               l.user_role,
               l.action,
               l.message,
+              l.request_ip,
               j.job_no,
               j.project_code,
               j.customer_name,
@@ -2480,7 +2505,7 @@ app.get(
       params
     );
 
-    const header = ['日志ID', '操作时间', '操作人', '角色', '动作', '说明', '实施单号', '项目编码', '客户', '当前阶段'];
+    const header = ['日志ID', '操作时间', '操作人', '角色', '动作', '说明', '来源IP', '实施单号', '项目编码', '客户', '当前阶段'];
     const lines = [header.map(escapeCsvCell).join(',')];
     rows.forEach((row) => {
       lines.push(
@@ -2491,6 +2516,7 @@ app.get(
           row.user_role,
           row.action,
           row.message,
+          row.request_ip,
           row.job_no,
           row.project_code,
           row.customer_name,

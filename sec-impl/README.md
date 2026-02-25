@@ -1,4 +1,4 @@
-# 安全产品实施记录系统（Sec Impl）
+# 聚信实施记录系统（Sec Impl）
 
 目录：`/Users/zhanglei/Documents/codex-new/sec-impl`
 
@@ -21,6 +21,7 @@
 - 权限模型：
   - `admin/sysadmin`：写操作
   - `auditor`：只读 + 审计验签
+- 审计日志展示：前端“变更摘要”使用中文差异描述（不直接展示原始 JSON）。
 
 ## 关键接口
 - `GET /api/sec-impl/projects`

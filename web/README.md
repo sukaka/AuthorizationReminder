@@ -1,16 +1,46 @@
-# React + Vite
+# 授权到期提醒前端（web）
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+目录：`/Users/zhanglei/Documents/codex-new/web`
 
-Currently, two official plugins are available:
+## 1. 功能定位
+- 提醒系统前端页面（客户、联系人、授权、发送、日志、安全配置）。
+- 复用统一登录（SSO）会话与授权。
+- 审计日志页面显示来源 IP 与中文“变更摘要”（不直接展示原始 JSON）。
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) (or [oxc](https://oxc.rs) when used in [rolldown-vite](https://vite.dev/guide/rolldown)) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+## 2. 开发启动
+```bash
+cd /Users/zhanglei/Documents/codex-new/web
+npm install
+npm run dev
+```
 
-## React Compiler
+默认开发地址：`http://localhost:5173`  
+通过 Vite 代理到：
+- `http://localhost:5180`（`/api/auth`）
+- `http://localhost:5179`（业务 API 与上传）
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+## 3. 构建与预览
+```bash
+cd /Users/zhanglei/Documents/codex-new/web
+npm run build
+npm run preview
+```
 
-## Expanding the ESLint configuration
+## 4. Docker 运行
+在仓库根目录执行：
+```bash
+cd /Users/zhanglei/Documents/codex-new
+docker compose up --build mysql auth api web
+```
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+对外地址：`http://localhost:8080`
+
+## 5. 登录与会话说明
+- 登录页密码框支持“眼睛”按钮切换明文/密文。
+- 登录成功后依赖统一登录 Cookie。
+- Cookie 为浏览器会话级，关闭浏览器后再次访问需重新登录。
+
+## 6. 相关文档
+- 需求：`/Users/zhanglei/Documents/codex-new/docs/requirements/reminder-requirements.md`
+- 手册：`/Users/zhanglei/Documents/codex-new/docs/manuals/reminder-user-manual.md`
+- 测试用例：`/Users/zhanglei/Documents/codex-new/docs/testcases/reminder-test-cases.md`

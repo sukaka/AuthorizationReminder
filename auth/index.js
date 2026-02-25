@@ -16,7 +16,6 @@ const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret-change-me';
 const AUTH_COOKIE_NAME = String(process.env.AUTH_COOKIE_NAME || 'juxin_auth_token').trim() || 'juxin_auth_token';
 const AUTH_COOKIE_SECURE = process.env.AUTH_COOKIE_SECURE === 'true';
 const AUTH_COOKIE_SAMESITE = String(process.env.AUTH_COOKIE_SAMESITE || 'lax').trim().toLowerCase() || 'lax';
-const AUTH_COOKIE_MAX_AGE_MS = Math.max(60 * 1000, Number(process.env.AUTH_COOKIE_MAX_AGE_MS || 7 * 24 * 3600 * 1000));
 const CONFIG_SECRET_KEY = process.env.CONFIG_SECRET_KEY || '';
 const SECRET_MASK = '******';
 const SYSTEM_ACCESS_KEYS = ['reminder', 'ticketing', 'cmdb', 'inventory', 'device-flow', 'sec-impl'];
@@ -91,7 +90,7 @@ const defaultAppAccessByRole = (role) => {
   const r = String(role || '').toLowerCase();
   if (r === 'admin') return [...SYSTEM_ACCESS_KEYS];
   if (r === 'sysadmin') return ['reminder', 'sec-impl'];
-  if (r === 'auditor') return ['reminder', 'inventory', 'device-flow', 'sec-impl'];
+  if (r === 'auditor') return ['reminder', 'ticketing', 'cmdb', 'inventory', 'device-flow', 'sec-impl'];
   return ['reminder'];
 };
 
@@ -331,7 +330,6 @@ const buildAuthCookieOptions = () => ({
   secure: AUTH_COOKIE_SECURE,
   sameSite: getCookieSameSite(),
   path: '/',
-  maxAge: AUTH_COOKIE_MAX_AGE_MS,
 });
 
 const setAuthCookie = (res, token) => {
@@ -368,7 +366,7 @@ const authMiddleware = async (req, res, next) => {
     if (!user || Number(user.is_active) !== 1) {
       return res.status(401).json({ error: '账号已失效，请联系系统管理员' });
     }
-    req.user = payload;
+    req.user = { ...payload, request_ip: getRequestIp(req) };
     return next();
   } catch (err) {
     return res.status(401).json({ error: '登录已过期' });
@@ -462,7 +460,16 @@ const authorizeTicketing = (user, action, resource) => {
   if (!Number.isFinite(userId)) return deny('无效用户');
 
   if (isReadonlyAuditor || isReadonlySysadmin) {
+    if (action === 'ticket:audit') {
+      return allow({ constraints: { ownOnly: false, readOnly: true } });
+    }
     if (action === 'ticket:catalog' || action === 'ticket:dashboard' || action === 'ticket:list') {
+      return allow({ constraints: { ownOnly: false, readOnly: true } });
+    }
+    if (action === 'project:list') {
+      return allow({ constraints: { ownOnly: false, readOnly: true } });
+    }
+    if (action === 'project:permissions:read') {
       return allow({ constraints: { ownOnly: false, readOnly: true } });
     }
     if (action === 'ticket:notifications') {
@@ -496,6 +503,15 @@ const authorizeTicketing = (user, action, resource) => {
   }
   if (action === 'template:import') {
     return isAdmin ? allow() : deny();
+  }
+  if (action === 'project:list') {
+    return allow({ constraints: { ownOnly: !isAdmin } });
+  }
+  if (action === 'ticket:audit') {
+    return isAdmin ? allow({ constraints: { ownOnly: false, readOnly: true } }) : deny();
+  }
+  if (action === 'project:permissions:read') {
+    return isAdmin ? allow({ constraints: { ownOnly: false } }) : deny();
   }
   if (action === 'project:create' || action === 'project:update' || action === 'project:delete' || action === 'ticket:delete') {
     return isAdmin ? allow() : deny();
@@ -597,8 +613,13 @@ const authorizeTicketing = (user, action, resource) => {
 const authorizeCMDB = (user, action) => {
   if (!user) return deny('未登录');
   if (!canAccessSystem(user, 'cmdb')) return deny('无权限访问CMDB系统');
-  if (action === 'app:enter' || action === 'ci:read' || action === 'ci:write' || action === 'relation:write') {
+  const role = String(user.role || '').toLowerCase();
+  if (action === 'app:enter' || action === 'ci:read') {
     return allow();
+  }
+  if (action === 'ci:write' || action === 'relation:write') {
+    if (role === 'admin' || role === 'sysadmin') return allow();
+    return deny('无权限执行CMDB写操作');
   }
   return deny('不支持的授权动作');
 };
@@ -629,7 +650,7 @@ const authorizeDeviceFlow = (user, action) => {
 
 const authorizeSecImpl = (user, action) => {
   if (!user) return deny('未登录');
-  if (!canAccessSystem(user, 'sec-impl')) return deny('无权限访问安全产品实施记录系统');
+  if (!canAccessSystem(user, 'sec-impl')) return deny('无权限访问聚信实施记录系统');
   const role = String(user.role || '').toLowerCase();
   if (action === 'app:enter' || action === 'sec_impl:read') return allow();
   if (action === 'sec_impl:write') {
@@ -704,7 +725,7 @@ app.get('/api/auth/apps', async (req, res) => {
   }
   if (appAccess.includes('sec-impl')) {
     const secImplAuth = await authorizeSecImpl(user, 'app:enter');
-    apps.push({ key: 'sec-impl', name: '安全产品实施记录系统', url: secImplURL, allow: !!secImplAuth.allow });
+    apps.push({ key: 'sec-impl', name: '聚信实施记录系统', url: secImplURL, allow: !!secImplAuth.allow });
   }
   return res.json({ apps: apps.filter((item) => item.allow) });
 });
@@ -739,7 +760,17 @@ app.get('/portal', (req, res) => {
     .hint{color:#64748b;margin-top:8px;font-size:13px}
     .login-actions{margin-top:12px;display:flex;justify-content:center}
     .login-actions .primary{min-width:120px}
-    #username,#password{width:448px;max-width:100%;box-sizing:border-box}
+    #username{width:448px;max-width:100%;box-sizing:border-box}
+    .password-wrap{position:relative;width:448px;max-width:100%;box-sizing:border-box}
+    .password-wrap input{width:100%;box-sizing:border-box;padding-right:42px}
+    .password-toggle{
+      position:absolute;top:50%;right:8px;transform:translateY(-50%);
+      width:28px;height:28px;padding:0;border:none;background:transparent;color:#64748b;
+      display:inline-flex;align-items:center;justify-content:center;border-radius:6px
+    }
+    .password-toggle:hover{color:#2563eb;background:rgba(37,99,235,.08)}
+    .password-toggle:focus-visible{outline:2px solid rgba(37,99,235,.45);outline-offset:2px}
+    .password-toggle svg{width:18px;height:18px;display:block}
     #captchaInput{width:100%;box-sizing:border-box}
   </style>
 </head>
@@ -750,7 +781,18 @@ app.get('/portal', (req, res) => {
       <div class="muted">登录后进入系统（管理员可选择，系统/审计管理员自动进入后台）。</div>
       <form id="loginForm">
         <label>账号<input id="username" placeholder="内置管理账号或手机号" /></label>
-        <label>密码<input id="password" type="password" placeholder="请输入密码" /></label>
+        <label>密码
+          <div class="password-wrap">
+            <input id="password" type="password" placeholder="请输入密码" />
+            <button id="passwordToggle" class="password-toggle" type="button" aria-label="显示密码" title="显示密码">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6-10-6-10-6"></path>
+                <circle cx="12" cy="12" r="3"></circle>
+                <path id="passwordToggleSlash" d="M4 20L20 4" style="display:none"></path>
+              </svg>
+            </button>
+          </div>
+        </label>
         <div class="captcha-title">验证码</div>
         <div class="row" id="captchaRow">
           <input id="captchaInput" placeholder="请输入验证码" />
@@ -771,7 +813,81 @@ app.get('/portal', (req, res) => {
     let captchaToken = '';
     const portalParams = new URLSearchParams(window.location.search);
     const portalMode = String(portalParams.get('mode') || '').toLowerCase();
-    const defaultReminderUrl = ${JSON.stringify(reminderUrl)};
+    const autoRedirectWindowMs = 8000;
+    const loopbackHostSet = new Set(['localhost', '127.0.0.1']);
+    const portalSessionStorageKey = 'juxin_portal_session';
+    const portalSessionQueryKey = 'portal_session';
+    function getPortalSessionMarker() {
+      try {
+        return String(sessionStorage.getItem(portalSessionStorageKey) || '').trim();
+      } catch (_err) {
+        return '';
+      }
+    }
+    function createPortalSessionMarker() {
+      try {
+        const bytes = new Uint8Array(12);
+        window.crypto.getRandomValues(bytes);
+        return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+      } catch (_err) {
+        return String(Date.now()) + String(Math.random()).slice(2);
+      }
+    }
+    function ensurePortalSessionMarker() {
+      const current = getPortalSessionMarker();
+      if (current) return current;
+      const marker = createPortalSessionMarker();
+      try {
+        sessionStorage.setItem(portalSessionStorageKey, marker);
+      } catch (_err) {
+        return '';
+      }
+      return marker;
+    }
+    function appendPortalSession(rawUrl) {
+      const appUrl = normalizeAppUrl(rawUrl);
+      const marker = getPortalSessionMarker();
+      if (!marker) return appUrl;
+      try {
+        const url = new URL(appUrl, window.location.origin);
+        url.searchParams.set(portalSessionQueryKey, marker);
+        return url.toString();
+      } catch (_err) {
+        return appUrl;
+      }
+    }
+    function normalizeAppUrl(rawUrl) {
+      try {
+        const url = new URL(rawUrl, window.location.origin);
+        const currentHost = String(window.location.hostname || '').trim();
+        const targetHost = String(url.hostname || '').trim();
+        if (
+          currentHost &&
+          targetHost &&
+          currentHost !== targetHost &&
+          (loopbackHostSet.has(currentHost) || loopbackHostSet.has(targetHost))
+        ) {
+          url.protocol = window.location.protocol;
+          url.hostname = currentHost;
+        }
+        return url.toString();
+      } catch (_err) {
+        return rawUrl;
+      }
+    }
+    function shouldThrottleRequestedRedirect(systemKey) {
+      const key = String(systemKey || '').trim();
+      if (!key) return false;
+      try {
+        const storageKey = 'portal_auto_redirect_' + key;
+        const now = Date.now();
+        const lastTs = Number(sessionStorage.getItem(storageKey) || 0);
+        sessionStorage.setItem(storageKey, String(now));
+        return Number.isFinite(lastTs) && now - lastTs < autoRedirectWindowMs;
+      } catch (_err) {
+        return false;
+      }
+    }
     function stripPortalTokenQuery(){
       const params = new URLSearchParams(window.location.search);
       let changed = false;
@@ -787,6 +903,25 @@ app.get('/portal', (req, res) => {
       const query = params.toString();
       const nextUrl = \`\${window.location.pathname}\${query ? \`?\${query}\` : ''}\${window.location.hash || ''}\`;
       window.history.replaceState({}, '', nextUrl);
+    }
+    function initPasswordToggle(){
+      const passwordInput = document.getElementById('password');
+      const toggle = document.getElementById('passwordToggle');
+      const slash = document.getElementById('passwordToggleSlash');
+      if (!passwordInput || !toggle) return;
+      const sync = () => {
+        const showing = passwordInput.type === 'text';
+        if (slash) slash.style.display = showing ? 'block' : 'none';
+        const label = showing ? '隐藏密码' : '显示密码';
+        toggle.setAttribute('aria-label', label);
+        toggle.setAttribute('title', label);
+      };
+      toggle.addEventListener('click', () => {
+        passwordInput.type = passwordInput.type === 'password' ? 'text' : 'password';
+        sync();
+        passwordInput.focus();
+      });
+      sync();
     }
     async function loadCsrf(){
       const r = await fetch('/api/auth/csrf', { credentials: 'include' });
@@ -867,13 +1002,7 @@ app.get('/portal', (req, res) => {
         await loadCaptcha();
         return;
       }
-      const loginRole = String(data?.user?.role || '').toLowerCase();
-      const requestedSystem = String(portalParams.get('system') || '').trim();
-      const shouldForceReminder = loginRole === 'sysadmin' && !requestedSystem && portalMode !== 'switch';
-      if (shouldForceReminder) {
-        window.location.href = defaultReminderUrl;
-        return;
-      }
+      ensurePortalSessionMarker();
       await loadApps();
     }
     async function loadApps(){
@@ -894,17 +1023,25 @@ app.get('/portal', (req, res) => {
       if (requestedSystem && portalMode !== 'switch') {
         const target = list.find((item) => item.key === requestedSystem);
         if (target) {
-          window.location.href = target.url;
-          return;
+          if (shouldThrottleRequestedRedirect(requestedSystem)) {
+            const loginCard = document.getElementById('loginCard');
+            if (loginCard) loginCard.style.display = 'none';
+            const msg = document.getElementById('loginError');
+            if (msg) msg.textContent = '';
+          } else {
+            window.location.href = appendPortalSession(target.url);
+            return;
+          }
         }
       }
       list.forEach(app=>{
+        const appUrl = appendPortalSession(app.url);
         const div = document.createElement('div');
         div.className = 'app-item';
         const btn = document.createElement('button');
         btn.className = 'primary';
         btn.textContent = '进入';
-        btn.onclick = ()=>{ window.location.href = app.url; };
+        btn.onclick = ()=>{ window.location.href = appUrl; };
         div.innerHTML = '<div style="font-weight:700;margin-bottom:8px">'+app.name+'</div>';
         div.appendChild(btn);
         root.appendChild(div);
@@ -914,6 +1051,12 @@ app.get('/portal', (req, res) => {
     async function bootstrap(){
       const loginCard = document.getElementById('loginCard');
       stripPortalTokenQuery();
+      if (!getPortalSessionMarker()) {
+        if (loginCard) loginCard.style.display = 'block';
+        await loadCsrf();
+        await loadCaptcha();
+        return;
+      }
       if (portalMode === 'switch' && loginCard) loginCard.style.display = 'none';
       try {
         await loadApps();
@@ -926,28 +1069,36 @@ app.get('/portal', (req, res) => {
     }
     document.getElementById('loginForm').addEventListener('submit', login);
     document.getElementById('captchaImg').addEventListener('click', loadCaptcha);
+    initPasswordToggle();
     bootstrap();
   </script>
 </body>
 </html>`);
 });
 
-const logOperation = async ({ user, action, entity, entityId, beforeData, afterData, system = 'sso' }) => {
+const logOperation = async ({ user, action, entity, entityId, beforeData, afterData, requestIp, system = 'sso' }) => {
   try {
     const userId = Number(user?.id || 0);
     const username = String(user?.username || 'system');
     const logSystem = String(system || 'sso').trim() || 'sso';
     const beforeText = beforeData === undefined ? null : stableStringify(beforeData);
     const afterText = afterData === undefined ? null : stableStringify(afterData);
+    const sourceIp = String(
+      requestIp
+      || user?.request_ip
+      || user?.requestIp
+      || (afterData && typeof afterData === 'object' ? afterData.ip : '')
+      || ''
+    ).trim() || null;
     const createdAt = toMysqlDatetime(new Date());
     await db.transaction(async (trx) => {
       const prev = await trx.get('SELECT signature FROM operation_logs ORDER BY id DESC LIMIT 1 FOR UPDATE');
       const prevHash = prev?.signature || null;
       const inserted = await trx.run(
         `INSERT INTO operation_logs
-           (user_id, username, log_system, action, entity, entity_id, before_data, after_data, prev_hash, signature, sign_version, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [userId, username, logSystem, action, entity, entityId, beforeText, afterText, prevHash, null, 'v1', createdAt]
+           (user_id, username, log_system, action, entity, entity_id, before_data, after_data, prev_hash, signature, sign_version, request_ip, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [userId, username, logSystem, action, entity, entityId, beforeText, afterText, prevHash, null, 'v1', sourceIp, createdAt]
       );
       const signature = computeAuditSignature({
         id: inserted.insertId,
@@ -1429,6 +1580,7 @@ app.post('/api/auth/login', async (req, res) => {
       action: 'LOGIN_LOCKED',
       entity: 'auth',
       entityId: 0,
+      requestIp: ip,
       afterData: { username: loginId, ip, locked_until: lock.locked_until },
     });
     return res.status(429).json({ error: '登录失败次数过多，请稍后再试' });
@@ -1440,6 +1592,7 @@ app.post('/api/auth/login', async (req, res) => {
       action: 'LOGIN_FAILED',
       entity: 'auth',
       entityId: 0,
+      requestIp: ip,
       afterData: { username: loginId, ip, fail_count: fail.failCount, locked_until: fail.lockedUntil },
     });
     return res.status(400).json({ error: '账号或密码错误' });
@@ -1450,6 +1603,7 @@ app.post('/api/auth/login', async (req, res) => {
       action: 'LOGIN_BLOCKED',
       entity: 'auth',
       entityId: 0,
+      requestIp: ip,
       afterData: { reason: 'DISABLED', username: loginId, ip },
     });
     return res.status(403).json({ error: '账号已被禁用，请联系系统管理员' });
@@ -1462,6 +1616,7 @@ app.post('/api/auth/login', async (req, res) => {
       action: 'LOGIN_FAILED',
       entity: 'auth',
       entityId: 0,
+      requestIp: ip,
       afterData: { username: loginId, ip, fail_count: fail.failCount, locked_until: fail.lockedUntil },
     });
     return res.status(400).json({ error: '账号或密码错误' });
@@ -1501,6 +1656,7 @@ app.post('/api/auth/login', async (req, res) => {
       action: 'LOGIN_MFA_REQUIRED',
       entity: 'auth',
       entityId: 0,
+      requestIp: ip,
       afterData: { username: user.username, ip, methods },
     });
     return res.json({
@@ -1518,6 +1674,7 @@ app.post('/api/auth/login', async (req, res) => {
     action: 'LOGIN',
     entity: 'auth',
     entityId: 0,
+    requestIp: ip,
     afterData: { username: user.username, role: user.role },
   });
   res.json({ token, user: { id: user.id, username: user.username, role: user.role } });
@@ -1525,6 +1682,7 @@ app.post('/api/auth/login', async (req, res) => {
 
 app.post('/api/auth/mfa/send', async (req, res) => {
   const { mfaToken, method } = req.body || {};
+  const requestIp = getRequestIp(req);
   if (!mfaToken || !method) return res.status(400).json({ error: '参数缺失' });
   const row = await db.get('SELECT * FROM auth_mfa_sessions WHERE token = ?', [mfaToken]);
   if (!row) return res.status(400).json({ error: '验证会话不存在或已过期' });
@@ -1593,6 +1751,7 @@ app.post('/api/auth/mfa/send', async (req, res) => {
       action: 'MFA_SEND_FAILED',
       entity: 'auth',
       entityId: 0,
+      requestIp,
       afterData: { method, error: err.message },
     });
     return res.status(400).json({ error: err.message || '发送失败' });
@@ -1610,6 +1769,7 @@ app.post('/api/auth/mfa/send', async (req, res) => {
     action: 'MFA_SEND',
     entity: 'auth',
     entityId: 0,
+    requestIp,
     afterData: { method },
   });
   res.json({ ok: true });
@@ -1617,6 +1777,7 @@ app.post('/api/auth/mfa/send', async (req, res) => {
 
 app.post('/api/auth/mfa/verify', async (req, res) => {
   const { mfaToken, method, code } = req.body || {};
+  const requestIp = getRequestIp(req);
   if (!mfaToken || !method || !code) return res.status(400).json({ error: '参数缺失' });
   const row = await db.get('SELECT * FROM auth_mfa_sessions WHERE token = ?', [mfaToken]);
   if (!row) return res.status(400).json({ error: '验证会话不存在或已过期' });
@@ -1661,6 +1822,7 @@ app.post('/api/auth/mfa/verify', async (req, res) => {
       action: 'MFA_VERIFY_FAILED',
       entity: 'auth',
       entityId: 0,
+      requestIp,
       afterData: { method, attempts },
     });
     return res.status(400).json({ error: '验证码错误' });
@@ -1672,6 +1834,7 @@ app.post('/api/auth/mfa/verify', async (req, res) => {
     action: 'MFA_VERIFY_OK',
     entity: 'auth',
     entityId: 0,
+    requestIp,
     afterData: { method },
   });
   const token = createToken(user);

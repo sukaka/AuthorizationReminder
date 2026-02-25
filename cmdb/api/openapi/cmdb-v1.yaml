@@ -207,6 +207,148 @@ paths:
           description: 资源不存在
       description: 新增或更新配置项关系 需在 Authorization 请求头中携带 Bearer Token。 请求体和返回字段请参考下方
         schema。
+  "/api/v1/audit/logs":
+    get:
+      summary: 查询审计日志列表
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: actor_sub
+        in: query
+        schema:
+          type: string
+        description: 操作人ID
+      - name: actor
+        in: query
+        schema:
+          type: string
+        description: 操作人名称
+      - name: action
+        in: query
+        schema:
+          type: string
+        description: 动作关键字
+      - name: result
+        in: query
+        schema:
+          type: string
+          enum:
+          - success
+          - failed
+        description: 执行结果
+      - name: source_ip
+        in: query
+        schema:
+          type: string
+        description: 来源IP（模糊匹配）
+      - name: keyword
+        in: query
+        schema:
+          type: string
+        description: 关键字（请求ID/资源/路径）
+      - name: date_from
+        in: query
+        schema:
+          type: string
+          format: date
+        description: 开始日期（包含）
+      - name: date_to
+        in: query
+        schema:
+          type: string
+          format: date
+        description: 结束日期（包含）
+      - name: page
+        in: query
+        schema:
+          type: integer
+          default: 1
+          minimum: 1
+        description: 页码，从1开始
+      - name: page_size
+        in: query
+        schema:
+          type: integer
+          default: 20
+          minimum: 1
+        description: 每页条数
+      responses:
+        '200':
+          description: 审计日志列表
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/AuditListResult"
+        '400':
+          description: 查询参数不合法
+      description: 查询审计日志列表 需在 Authorization 请求头中携带 Bearer Token。 请求体和返回字段请参考下方 schema。
+  "/api/v1/audit/logs/export.csv":
+    get:
+      summary: 导出审计日志CSV
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: limit
+        in: query
+        schema:
+          type: integer
+          default: 5000
+          minimum: 1
+        description: 导出条数上限
+      - name: actor_sub
+        in: query
+        schema:
+          type: string
+        description: 操作人ID
+      - name: actor
+        in: query
+        schema:
+          type: string
+        description: 操作人名称
+      - name: action
+        in: query
+        schema:
+          type: string
+        description: 动作关键字
+      - name: result
+        in: query
+        schema:
+          type: string
+          enum:
+          - success
+          - failed
+        description: 执行结果
+      - name: source_ip
+        in: query
+        schema:
+          type: string
+        description: 来源IP（模糊匹配）
+      - name: keyword
+        in: query
+        schema:
+          type: string
+        description: 关键字（请求ID/资源/路径）
+      - name: date_from
+        in: query
+        schema:
+          type: string
+          format: date
+        description: 开始日期（包含）
+      - name: date_to
+        in: query
+        schema:
+          type: string
+          format: date
+        description: 结束日期（包含）
+      responses:
+        '200':
+          description: CSV 文件流
+          content:
+            text/csv:
+              schema:
+                type: string
+                format: binary
+      description: 导出审计日志CSV 需在 Authorization 请求头中携带 Bearer Token。
 components:
   parameters:
     CIUID:
@@ -525,3 +667,68 @@ components:
             "$ref": "#/components/schemas/DashboardRecentChange"
           description: 字段：recent_changes
       description: DashboardOverview 数据模型
+    AuditLogItem:
+      type: object
+      properties:
+        id:
+          type: integer
+          description: 字段：id
+        request_id:
+          type: string
+          description: 字段：request_id
+        actor_sub:
+          type: string
+          description: 字段：actor_sub
+        actor_name:
+          type: string
+          description: 字段：actor_name
+        action:
+          type: string
+          description: 字段：action
+        resource_type:
+          type: string
+          description: 字段：resource_type
+        resource_uid:
+          type: string
+          description: 字段：resource_uid
+        http_method:
+          type: string
+          description: 字段：http_method
+        http_path:
+          type: string
+          description: 字段：http_path
+        status_code:
+          type: integer
+          description: 字段：status_code
+        result:
+          type: string
+          description: 字段：result
+        error_message:
+          type: string
+          description: 字段：error_message
+        source_ip:
+          type: string
+          description: 字段：source_ip
+        created_at:
+          type: string
+          format: date-time
+          description: 字段：created_at
+      description: AuditLogItem 数据模型
+    AuditListResult:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            "$ref": "#/components/schemas/AuditLogItem"
+          description: 字段：items
+        total:
+          type: integer
+          description: 字段：total
+        page:
+          type: integer
+          description: 字段：page
+        page_size:
+          type: integer
+          description: 字段：page_size
+      description: AuditListResult 数据模型

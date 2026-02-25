@@ -26,6 +26,7 @@ type Operator struct {
 	TraceID   string
 	Method    string
 	Path      string
+	SourceIP  string
 }
 
 type CreateCIInput struct {
@@ -215,10 +216,6 @@ func (s *CIService) CreateCI(ctx context.Context, in CreateCIInput, op Operator)
 	}
 
 	rolesJSON, _ := json.Marshal(op.Roles)
-	auditMeta, _ := json.Marshal(map[string]any{
-		"ci_type_key": in.CITypeKey,
-		"source":      in.Source,
-	})
 	if err := s.repo.InsertOperationAuditTx(ctx, tx, repository.AuditParams{
 		RequestID:    op.RequestID,
 		ActorSub:     op.Sub,
@@ -231,7 +228,10 @@ func (s *CIService) CreateCI(ctx context.Context, in CreateCIInput, op Operator)
 		HTTPPath:     op.Path,
 		StatusCode:   201,
 		Result:       "success",
-		Metadata:     auditMeta,
+		Metadata: auditMetadataWithSourceIP(op.SourceIP, map[string]any{
+			"ci_type_key": in.CITypeKey,
+			"source":      in.Source,
+		}),
 	}); err != nil {
 		return nil, err
 	}
@@ -394,6 +394,7 @@ func (s *CIService) UpdateCI(ctx context.Context, in UpdateCIInput, op Operator)
 		HTTPPath:     op.Path,
 		StatusCode:   200,
 		Result:       "success",
+		Metadata:     auditMetadataWithSourceIP(op.SourceIP, nil),
 	}); err != nil {
 		return nil, err
 	}
@@ -490,6 +491,7 @@ func (s *CIService) DeleteCI(ctx context.Context, in DeleteCIInput, op Operator)
 		HTTPPath:     op.Path,
 		StatusCode:   200,
 		Result:       "success",
+		Metadata:     auditMetadataWithSourceIP(op.SourceIP, nil),
 	}); err != nil {
 		return nil, err
 	}
@@ -602,6 +604,7 @@ func (s *CIService) UpsertRelation(ctx context.Context, in UpsertRelationInput, 
 		HTTPPath:     op.Path,
 		StatusCode:   200,
 		Result:       "success",
+		Metadata:     auditMetadataWithSourceIP(op.SourceIP, nil),
 	}); err != nil {
 		return nil, err
 	}
@@ -827,6 +830,7 @@ func prepareOperator(op *Operator) {
 	op.TraceID = strings.TrimSpace(op.TraceID)
 	op.Method = strings.TrimSpace(op.Method)
 	op.Path = strings.TrimSpace(op.Path)
+	op.SourceIP = strings.TrimSpace(op.SourceIP)
 	if op.Sub == "" {
 		op.Sub = "unknown"
 	}
@@ -836,6 +840,24 @@ func prepareOperator(op *Operator) {
 	if op.TraceID == "" {
 		op.TraceID = op.RequestID
 	}
+}
+
+func auditMetadataWithSourceIP(sourceIP string, extras map[string]any) []byte {
+	meta := map[string]any{}
+	for key, value := range extras {
+		meta[key] = value
+	}
+	if sourceIP = strings.TrimSpace(sourceIP); sourceIP != "" {
+		meta["source_ip"] = sourceIP
+	}
+	if len(meta) == 0 {
+		return nil
+	}
+	data, err := json.Marshal(meta)
+	if err != nil {
+		return nil
+	}
+	return data
 }
 
 func marshalMap(v map[string]any) ([]byte, error) {

@@ -21,6 +21,60 @@ const buildPortalSwitchUrl = (system) => {
   return `${base}/portal?${params.toString()}`
 }
 
+const portalSessionQueryKey = 'portal_session'
+const portalSessionStorageKey = 'juxin_portal_session'
+
+const readPortalSessionMarker = () => {
+  try {
+    return String(sessionStorage.getItem(portalSessionStorageKey) || '').trim()
+  } catch {
+    return ''
+  }
+}
+
+const consumePortalSessionMarker = () => {
+  try {
+    const params = new URLSearchParams(window.location.search)
+    const marker = String(params.get(portalSessionQueryKey) || '').trim()
+    if (marker) {
+      sessionStorage.setItem(portalSessionStorageKey, marker)
+      params.delete(portalSessionQueryKey)
+      const query = params.toString()
+      const nextUrl = `${window.location.pathname}${query ? `?${query}` : ''}${window.location.hash || ''}`
+      window.history.replaceState({}, '', nextUrl)
+      return marker
+    }
+  } catch {
+    return ''
+  }
+  return readPortalSessionMarker()
+}
+
+const logoutFromSso = async () => {
+  try {
+    const csrfResp = await fetch('/api/auth/csrf', { credentials: 'include' })
+    if (!csrfResp.ok) return false
+    let csrfToken = ''
+    try {
+      const csrfPayload = await csrfResp.json()
+      csrfToken = String(csrfPayload?.token || '')
+    } catch {
+      csrfToken = ''
+    }
+    if (!csrfToken) return false
+    const logoutResp = await fetch('/api/auth/logout', {
+      method: 'POST',
+      credentials: 'include',
+      headers: {
+        'X-CSRF-Token': csrfToken,
+      },
+    })
+    return logoutResp.ok
+  } catch {
+    return false
+  }
+}
+
 const navTree = [
   {
     key: 'dashboard',
@@ -65,6 +119,15 @@ const navTree = [
     icon: '▤',
     label: '报表分析',
     desc: '查看统计报表与趋势分析。',
+  },
+]
+
+const auditorNavTree = [
+  {
+    key: 'audit',
+    icon: '☷',
+    label: '审计日志',
+    desc: '查看 CMDB 审计相关能力。',
   },
 ]
 
@@ -166,6 +229,13 @@ const emptyAssetResult = {
   page_size: 10,
 }
 
+const emptyAuditResult = {
+  items: [],
+  total: 0,
+  page: 1,
+  page_size: 20,
+}
+
 const extraAttrsHelpText = `主要作用：保存资产的自定义字段，不用改数据库表结构。\n典型例子：{"ip":"10.10.1.5","cpu":"8C","内存":"32GB","机房":"A区-3层"}`
 
 const formatRoleLabel = (role) => {
@@ -220,11 +290,20 @@ const formatRelativeTime = (value) => {
   return dt.toLocaleDateString()
 }
 
+const formatDateTime = (value) => {
+  if (!value) return '-'
+  const dt = new Date(value)
+  if (Number.isNaN(dt.getTime())) return '-'
+  return dt.toLocaleString()
+}
+
 function App() {
   const [authToken, setAuthToken] = useState('')
   const [authReady, setAuthReady] = useState(false)
   const [logoutPending, setLogoutPending] = useState(false)
   const [currentUser, setCurrentUser] = useState(null)
+  const isAuditOnlyUser = String(currentUser?.role || '').toLowerCase() === 'auditor'
+  const visibleNavTree = useMemo(() => (isAuditOnlyUser ? auditorNavTree : navTree), [isAuditOnlyUser])
 
   const [activeKey, setActiveKey] = useState('dashboard')
   const [expandedMenus, setExpandedMenus] = useState({ asset: true, relation: true })
@@ -235,6 +314,20 @@ function App() {
   const [assetPageSize, setAssetPageSize] = useState(10)
   const [assetResult, setAssetResult] = useState(emptyAssetResult)
   const [assetLoading, setAssetLoading] = useState(false)
+  const [auditFilter, setAuditFilter] = useState({
+    actor: '',
+    action: '',
+    result: '',
+    source_ip: '',
+    keyword: '',
+    date_from: '',
+    date_to: '',
+  })
+  const [auditPage, setAuditPage] = useState(1)
+  const [auditPageSize, setAuditPageSize] = useState(20)
+  const [auditResult, setAuditResult] = useState(emptyAuditResult)
+  const [auditLoading, setAuditLoading] = useState(false)
+  const [auditLoadedAt, setAuditLoadedAt] = useState('')
 
   const [lookupUID, setLookupUID] = useState('')
   const [lookupResult, setLookupResult] = useState(null)
@@ -274,11 +367,26 @@ function App() {
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState('')
   const [error, setError] = useState('')
+  const [confirmDialog, setConfirmDialog] = useState({
+    open: false,
+    title: '',
+    message: '',
+    confirmLabel: '确认',
+    onConfirm: null,
+  })
+  const [formatDialog, setFormatDialog] = useState({
+    open: false,
+    title: '',
+    mode: 'export',
+    onPick: null,
+  })
 
   useEffect(() => {
     let cancelled = false
     const bootstrapAuth = async () => {
       try {
+        const marker = consumePortalSessionMarker()
+        if (!marker) return
         const resp = await fetch('/api/auth/me', { credentials: 'include' })
         if (!resp.ok) return
         const data = await resp.json()
@@ -334,6 +442,18 @@ function App() {
       })
     return () => controller.abort()
   }, [authToken])
+
+  useEffect(() => {
+    const hasActive = visibleNavTree.some((top) => {
+      if (top.key === activeKey) return true
+      if (!Array.isArray(top.children)) return false
+      return top.children.some((child) => child.key === activeKey)
+    })
+    if (hasActive) return
+    const fallbackTop = visibleNavTree[0]
+    const fallbackKey = fallbackTop?.children?.[0]?.key || fallbackTop?.key || 'dashboard'
+    setActiveKey(fallbackKey)
+  }, [visibleNavTree, activeKey])
 
   const apiHeaders = useMemo(
     () => ({
@@ -391,6 +511,57 @@ function App() {
     }
   }
 
+  const normalizeAuditResult = (payload) => {
+    const page = Number(payload?.page || 1)
+    const pageSize = Number(payload?.page_size || 20)
+    return {
+      items: Array.isArray(payload?.items) ? payload.items : [],
+      total: Number(payload?.total || 0),
+      page: page > 0 ? page : 1,
+      page_size: pageSize > 0 ? pageSize : 20,
+    }
+  }
+
+  const loadAuditLogs = async (silent = true, pageOverride) => {
+    if (!authToken || activeKey !== 'audit') return
+    setAuditLoading(true)
+    try {
+      const targetPage = Number(pageOverride || auditPage || 1)
+      const params = new URLSearchParams()
+      params.set('page', String(targetPage))
+      params.set('page_size', String(auditPageSize))
+      if (auditFilter.actor.trim()) params.set('actor', auditFilter.actor.trim())
+      if (auditFilter.action.trim()) params.set('action', auditFilter.action.trim())
+      if (auditFilter.result) params.set('result', auditFilter.result)
+      if (auditFilter.source_ip.trim()) params.set('source_ip', auditFilter.source_ip.trim())
+      if (auditFilter.keyword.trim()) params.set('keyword', auditFilter.keyword.trim())
+      if (auditFilter.date_from) params.set('date_from', auditFilter.date_from)
+      if (auditFilter.date_to) params.set('date_to', auditFilter.date_to)
+
+      const resp = await fetch(`/api/v1/audit/logs?${params.toString()}`, {
+        credentials: 'include',
+      })
+      const raw = await resp.text()
+      let payload = {}
+      try {
+        payload = raw ? JSON.parse(raw) : {}
+      } catch {
+        payload = {}
+      }
+      if (!resp.ok) {
+        throw new Error(payload?.error || raw || '审计日志加载失败')
+      }
+      const normalized = normalizeAuditResult(payload)
+      setAuditResult(normalized)
+      if (normalized.page !== auditPage) setAuditPage(normalized.page)
+      setAuditLoadedAt(new Date().toLocaleString())
+    } catch (err) {
+      if (!silent) showError(normalizeApiError(err))
+    } finally {
+      setAuditLoading(false)
+    }
+  }
+
   const normalizeDashboardData = (payload) => {
     const totals = payload?.totals || {}
     return {
@@ -434,7 +605,7 @@ function App() {
   }
 
   const activeMeta = useMemo(() => {
-    for (const top of navTree) {
+    for (const top of visibleNavTree) {
       if (top.key === activeKey) {
         return {
           top,
@@ -453,12 +624,20 @@ function App() {
         }
       }
     }
-    return {
-      top: navTree[0],
-      current: { key: navTree[0].key, label: navTree[0].label, desc: navTree[0].desc || '' },
-      breadcrumb: `首页 / ${navTree[0].label}`,
+    const fallbackTop = visibleNavTree[0]
+    if (!fallbackTop) {
+      return {
+        top: { key: 'dashboard', label: '首页', desc: '' },
+        current: { key: 'dashboard', label: '首页', desc: '' },
+        breadcrumb: '首页',
+      }
     }
-  }, [activeKey])
+    return {
+      top: fallbackTop,
+      current: { key: fallbackTop.key, label: fallbackTop.label, desc: fallbackTop.desc || '' },
+      breadcrumb: `首页 / ${fallbackTop.label}`,
+    }
+  }, [activeKey, visibleNavTree])
 
   const showMessage = (text) => {
     setMessage(text)
@@ -472,12 +651,60 @@ function App() {
     setTimeout(() => setError(''), 2600)
   }
 
+  const openConfirmDialog = ({ title = '确认操作', message = '', confirmLabel = '确认', onConfirm }) => {
+    setConfirmDialog({
+      open: true,
+      title,
+      message,
+      confirmLabel,
+      onConfirm: typeof onConfirm === 'function' ? onConfirm : null,
+    })
+  }
+
+  const closeConfirmDialog = () => {
+    setConfirmDialog((prev) => ({ ...prev, open: false, onConfirm: null }))
+  }
+
+  const onConfirmDialogAccept = async () => {
+    const callback = confirmDialog.onConfirm
+    closeConfirmDialog()
+    if (!callback) return
+    await callback()
+  }
+
+  const chooseFileFormat = (mode) =>
+    new Promise((resolve) => {
+      const actionLabel = mode === 'import' ? '导入' : '导出'
+      setFormatDialog({
+        open: true,
+        title: `${actionLabel}格式选择`,
+        mode,
+        onPick: (value) => resolve(value || ''),
+      })
+    })
+
+  const closeFormatDialog = (value = '') => {
+    setFormatDialog((prev) => {
+      const picker = prev.onPick
+      if (typeof picker === 'function') picker(value)
+      return {
+        open: false,
+        title: '',
+        mode: prev.mode,
+        onPick: null,
+      }
+    })
+  }
+
   useEffect(() => {
     if (!authToken) {
       setDashboardData(emptyDashboard)
       setDashboardLoadedAt('')
       setAssetResult(emptyAssetResult)
       setAssetLoading(false)
+      setAuditResult(emptyAuditResult)
+      setAuditLoading(false)
+      setAuditLoadedAt('')
       return
     }
     if (activeKey === 'dashboard') {
@@ -497,6 +724,23 @@ function App() {
     if (!authToken || !activeKey.startsWith('asset-')) return
     loadAssetList(true)
   }, [authToken, activeKey, assetPage, assetPageSize, assetFilter.keyword, assetFilter.status, assetFilter.owner, currentAssetTypeKey])
+
+  useEffect(() => {
+    if (!authToken || activeKey !== 'audit') return
+    loadAuditLogs(true)
+  }, [
+    authToken,
+    activeKey,
+    auditPage,
+    auditPageSize,
+    auditFilter.actor,
+    auditFilter.action,
+    auditFilter.result,
+    auditFilter.source_ip,
+    auditFilter.keyword,
+    auditFilter.date_from,
+    auditFilter.date_to,
+  ])
 
   const request = async (method, path, body) => {
     const resp = await fetch(path, {
@@ -646,16 +890,7 @@ function App() {
   }
 
   const onLogout = async () => {
-    try {
-      if (authToken) {
-        await fetch('/api/auth/logout', {
-          method: 'POST',
-          credentials: 'include',
-        })
-      }
-    } catch {
-      // ignore
-    }
+    if (authToken) await logoutFromSso()
     setCurrentUser(null)
     setAuthToken('')
     setLogoutPending(true)
@@ -695,21 +930,25 @@ function App() {
   const handleAssetDelete = async (row) => {
     const ciUID = String(row.ci_uid || '').trim()
     if (!ciUID) return
-    const ok = window.confirm(`确认删除资产「${row.name || ciUID}」吗？`)
-    if (!ok) return
-
-    setBusy(true)
-    try {
-      await request('DELETE', `/api/v1/ci/${encodeURIComponent(ciUID)}`, {
-        version: Number(row.version || 0),
-      })
-      await loadAssetList(false)
-      showMessage('删除成功')
-    } catch (err) {
-      showError(normalizeApiError(err))
-    } finally {
-      setBusy(false)
-    }
+    openConfirmDialog({
+      title: '删除资产',
+      message: `确认删除资产「${row.name || ciUID}」吗？`,
+      confirmLabel: '确认删除',
+      onConfirm: async () => {
+        setBusy(true)
+        try {
+          await request('DELETE', `/api/v1/ci/${encodeURIComponent(ciUID)}`, {
+            version: Number(row.version || 0),
+          })
+          await loadAssetList(false)
+          showMessage('删除成功')
+        } catch (err) {
+          showError(normalizeApiError(err))
+        } finally {
+          setBusy(false)
+        }
+      },
+    })
   }
 
   const downloadBlob = (blob, fileName) => {
@@ -720,17 +959,6 @@ function App() {
     link.click()
     document.body.removeChild(link)
     URL.revokeObjectURL(link.href)
-  }
-
-  const chooseFileFormat = (mode) => {
-    const defaultValue = mode === 'import' ? 'json' : 'xlsx'
-    const picked = String(window.prompt(`请选择${mode === 'import' ? '导入' : '导出'}格式：json / csv / xlsx`, defaultValue) || '')
-      .trim()
-      .toLowerCase()
-    if (!picked) return ''
-    if (picked === 'json' || picked === 'csv' || picked === 'xlsx') return picked
-    showError('仅支持 json / csv / xlsx')
-    return ''
   }
 
   const buildExportRows = () => (
@@ -752,8 +980,8 @@ function App() {
     }))
   )
 
-  const exportAssetList = (format) => {
-    const targetFormat = format || chooseFileFormat('export')
+  const exportAssetList = async (format) => {
+    const targetFormat = format || (await chooseFileFormat('export'))
     if (!targetFormat) return
 
     const exportDate = new Date().toISOString().slice(0, 10)
@@ -794,6 +1022,33 @@ function App() {
     const data = XLSX.write(workbook, { bookType: 'xlsx', type: 'array' })
     const blob = new Blob([data], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })
     downloadBlob(blob, `${fileBase}.xlsx`)
+  }
+
+  const exportAuditListCSV = async () => {
+    try {
+      const params = new URLSearchParams()
+      params.set('limit', '10000')
+      if (auditFilter.actor.trim()) params.set('actor', auditFilter.actor.trim())
+      if (auditFilter.action.trim()) params.set('action', auditFilter.action.trim())
+      if (auditFilter.result) params.set('result', auditFilter.result)
+      if (auditFilter.source_ip.trim()) params.set('source_ip', auditFilter.source_ip.trim())
+      if (auditFilter.keyword.trim()) params.set('keyword', auditFilter.keyword.trim())
+      if (auditFilter.date_from) params.set('date_from', auditFilter.date_from)
+      if (auditFilter.date_to) params.set('date_to', auditFilter.date_to)
+
+      const resp = await fetch(`/api/v1/audit/logs/export.csv?${params.toString()}`, {
+        credentials: 'include',
+      })
+      if (!resp.ok) {
+        const text = await resp.text()
+        throw new Error(text || '导出失败')
+      }
+      const blob = await resp.blob()
+      const fileDate = new Date().toISOString().slice(0, 10)
+      downloadBlob(blob, `cmdb-audit-${fileDate}.csv`)
+    } catch (err) {
+      showError(normalizeApiError(err))
+    }
   }
 
   const resolveImportFileFormat = (fileName) => {
@@ -1398,7 +1653,7 @@ function App() {
           <p>接入扫描任务、云资源同步、发现结果入库。</p>
         </div>
       </div>
-      <div className="hint-card">当前页面已按新布局接入，后续可继续对接自动发现任务接口和执行日志。</div>
+      <div className="hint-card">建设中：预计 2026-03-31 前完成第一版自动发现任务与执行日志能力。</div>
     </section>
   )
 
@@ -1410,11 +1665,184 @@ function App() {
           <p>资产总量、变更频次、关系复杂度趋势。</p>
         </div>
       </div>
-      <div className="hint-card">当前页面已按新布局接入，后续可对接图表组件与报表导出功能。</div>
+      <div className="hint-card">建设中：预计 2026-04-15 前完成首批资产与变更趋势报表导出能力。</div>
     </section>
   )
 
+  const renderAudit = () => (
+    <>
+      <section className="panel compact">
+        <div className="toolbar-row">
+          <div className="toolbar-left wide">
+            <input
+              value={auditFilter.actor}
+              onChange={(e) => {
+                setAuditFilter({ ...auditFilter, actor: e.target.value })
+                setAuditPage(1)
+              }}
+              placeholder="操作人"
+            />
+            <input
+              value={auditFilter.action}
+              onChange={(e) => {
+                setAuditFilter({ ...auditFilter, action: e.target.value })
+                setAuditPage(1)
+              }}
+              placeholder="动作（如 ci.update）"
+            />
+            <select
+              value={auditFilter.result}
+              onChange={(e) => {
+                setAuditFilter({ ...auditFilter, result: e.target.value })
+                setAuditPage(1)
+              }}
+            >
+              <option value="">全部结果</option>
+              <option value="success">成功</option>
+              <option value="failed">失败</option>
+            </select>
+            <input
+              value={auditFilter.source_ip}
+              onChange={(e) => {
+                setAuditFilter({ ...auditFilter, source_ip: e.target.value })
+                setAuditPage(1)
+              }}
+              placeholder="来源IP"
+            />
+            <input
+              value={auditFilter.keyword}
+              onChange={(e) => {
+                setAuditFilter({ ...auditFilter, keyword: e.target.value })
+                setAuditPage(1)
+              }}
+              placeholder="关键字（请求ID/资源/路径）"
+            />
+            <input
+              type="date"
+              value={auditFilter.date_from}
+              onChange={(e) => {
+                setAuditFilter({ ...auditFilter, date_from: e.target.value })
+                setAuditPage(1)
+              }}
+            />
+            <input
+              type="date"
+              value={auditFilter.date_to}
+              onChange={(e) => {
+                setAuditFilter({ ...auditFilter, date_to: e.target.value })
+                setAuditPage(1)
+              }}
+            />
+            <button
+              type="button"
+              className="btn btn-outline-secondary"
+              onClick={() => {
+                setAuditFilter({
+                  actor: '',
+                  action: '',
+                  result: '',
+                  source_ip: '',
+                  keyword: '',
+                  date_from: '',
+                  date_to: '',
+                })
+                setAuditPage(1)
+              }}
+            >
+              重置
+            </button>
+          </div>
+        </div>
+      </section>
+
+      <section className="panel compact">
+        <div className="panel-header">
+          <div>
+            <h2>审计日志</h2>
+            <p>记录 CMDB 核心操作，支持来源IP追踪与导出。</p>
+          </div>
+          <span className="panel-tip">{auditLoading ? '加载中...' : `更新于 ${auditLoadedAt || '-'}`}</span>
+        </div>
+
+        <div className="table-shell">
+          <table className="table">
+            <thead>
+              <tr>
+                <th>时间</th>
+                <th>操作人</th>
+                <th>动作</th>
+                <th>资源</th>
+                <th>方法</th>
+                <th>状态</th>
+                <th>来源IP</th>
+                <th>请求ID</th>
+              </tr>
+            </thead>
+            <tbody>
+              {auditResult.items.length === 0 ? (
+                <tr>
+                  <td colSpan={8} className="muted">{auditLoading ? '审计日志加载中...' : '暂无审计日志'}</td>
+                </tr>
+              ) : (
+                auditResult.items.map((row) => (
+                  <tr key={`${row.id}-${row.request_id}`}>
+                    <td>{formatDateTime(row.created_at)}</td>
+                    <td>{row.actor_name || row.actor_sub || '-'}</td>
+                    <td>{row.action || '-'}</td>
+                    <td>{row.resource_uid ? `${row.resource_type} / ${row.resource_uid}` : row.resource_type || '-'}</td>
+                    <td>{row.http_method || '-'}</td>
+                    <td>
+                      <span className={String(row.result || '').toLowerCase() === 'success' ? 'status-tag success' : 'status-tag danger'}>
+                        {String(row.result || '').toLowerCase() === 'success' ? '成功' : '失败'}
+                      </span>
+                    </td>
+                    <td>{row.source_ip || '-'}</td>
+                    <td title={row.request_id || ''}>{row.request_id || '-'}</td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+
+        <div className="table-footer table-footer-actions">
+          <span>共 {Number(auditResult.total || 0)} 条，当前第 {auditPage} / {Math.max(1, Math.ceil(Math.max(Number(auditResult.total || 0), 0) / auditPageSize))} 页</span>
+          <div className="pager">
+            <button
+              type="button"
+              className="btn btn-outline-secondary"
+              disabled={auditLoading || auditPage <= 1}
+              onClick={() => setAuditPage((prev) => Math.max(1, prev - 1))}
+            >
+              上一页
+            </button>
+            <button
+              type="button"
+              className="btn btn-outline-secondary"
+              disabled={auditLoading || auditPage >= Math.max(1, Math.ceil(Math.max(Number(auditResult.total || 0), 0) / auditPageSize))}
+              onClick={() => setAuditPage((prev) => prev + 1)}
+            >
+              下一页
+            </button>
+            <select
+              value={auditPageSize}
+              onChange={(e) => {
+                setAuditPageSize(Number(e.target.value) || 20)
+                setAuditPage(1)
+              }}
+            >
+              <option value={20}>20 条/页</option>
+              <option value={50}>50 条/页</option>
+              <option value={100}>100 条/页</option>
+            </select>
+          </div>
+        </div>
+      </section>
+    </>
+  )
+
   const renderMainContent = () => {
+    if (activeKey === 'audit') return renderAudit()
     if (activeKey === 'dashboard') return renderDashboard()
     if (activeKey.startsWith('asset-')) return renderAssetPage()
     if (activeKey === 'model') return renderModelPage()
@@ -1425,6 +1853,7 @@ function App() {
   }
 
   const pageActions = {
+    audit: ['刷新', '导出CSV'],
     dashboard: ['刷新', '导出报表'],
     'asset-server': ['刷新', '新增', '导入', '导出'],
     'asset-database': ['刷新', '新增', '导入', '导出'],
@@ -1456,10 +1885,18 @@ function App() {
     if (action === '刷新') {
       if (activeKey === 'dashboard') {
         loadDashboardOverview(false)
+      } else if (activeKey === 'audit') {
+        loadAuditLogs(false)
       } else if (activeKey.startsWith('asset-')) {
         loadAssetList(false)
       }
       return
+    }
+    if (action === '导出CSV') {
+      if (activeKey === 'audit') {
+        exportAuditListCSV()
+        return
+      }
     }
     if (action === '导出报表') {
       exportDashboardReport()
@@ -1479,7 +1916,7 @@ function App() {
         return
       }
     }
-    showMessage(`操作「${action}」功能待接入`)
+    showMessage(`操作「${action}」建设中，预计 2026-04-15 前交付`)
   }
 
   if (!authToken) {
@@ -1512,7 +1949,7 @@ function App() {
         </div>
 
         <nav className="nav-tree">
-          {navTree.map((top) => {
+          {visibleNavTree.map((top) => {
             const hasChildren = Array.isArray(top.children) && top.children.length > 0
             const topActive = top.key === activeKey || (hasChildren && top.children.some((item) => item.key === activeKey))
             const expanded = !!expandedMenus[top.key]
@@ -1599,6 +2036,38 @@ function App() {
             )}
           </section>
         </div>
+
+        {confirmDialog.open && (
+          <div className="dialog-backdrop" onClick={closeConfirmDialog}>
+            <div className="dialog-card" onClick={(event) => event.stopPropagation()}>
+              <div className="dialog-title">{confirmDialog.title || '确认操作'}</div>
+              <div className="dialog-body">{confirmDialog.message || '确认执行该操作？'}</div>
+              <div className="dialog-actions">
+                <button type="button" className="btn btn-outline-secondary" onClick={closeConfirmDialog}>取消</button>
+                <button type="button" className="btn btn-primary" onClick={onConfirmDialogAccept}>
+                  {confirmDialog.confirmLabel || '确认'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {formatDialog.open && (
+          <div className="dialog-backdrop" onClick={() => closeFormatDialog('')}>
+            <div className="dialog-card" onClick={(event) => event.stopPropagation()}>
+              <div className="dialog-title">{formatDialog.title || '格式选择'}</div>
+              <div className="dialog-body">请选择{formatDialog.mode === 'import' ? '导入' : '导出'}格式。</div>
+              <div className="format-actions">
+                <button type="button" className="btn btn-outline-secondary" onClick={() => closeFormatDialog('json')}>JSON</button>
+                <button type="button" className="btn btn-outline-secondary" onClick={() => closeFormatDialog('csv')}>CSV</button>
+                <button type="button" className="btn btn-primary" onClick={() => closeFormatDialog('xlsx')}>XLSX</button>
+              </div>
+              <div className="dialog-actions">
+                <button type="button" className="btn btn-outline-secondary" onClick={() => closeFormatDialog('')}>取消</button>
+              </div>
+            </div>
+          </div>
+        )}
 
         {message && <div className="toast success">{message}</div>}
         {error && <div className="toast error">{error}</div>}

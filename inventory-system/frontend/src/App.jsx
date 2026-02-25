@@ -338,22 +338,223 @@ const formatAuditEntityLabel = (entity) => {
   return auditEntityLabelMap[key] || '其他实体'
 }
 
-const formatAuditPayload = (value) => {
-  if (value === null || value === undefined || value === '') return ''
-  if (typeof value === 'object') {
-    try {
-      return JSON.stringify(value, null, 2)
-    } catch (_err) {
-      return String(value)
-    }
-  }
-  const raw = String(value)
+const parseAuditData = (value) => {
+  if (value === null || value === undefined || value === '') return null
+  if (typeof value === 'object') return value
+  const raw = String(value).trim()
+  if (!raw) return null
   try {
-    const parsed = JSON.parse(raw)
-    return JSON.stringify(parsed, null, 2)
+    return JSON.parse(raw)
   } catch (_err) {
     return raw
   }
+}
+
+const isPlainObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value)
+
+const auditFieldLabelMap = {
+  id: 'ID',
+  sku: 'SKU',
+  name: '名称',
+  category: '分类',
+  unit: '单位',
+  safety_stock: '安全库存',
+  is_active: '是否启用',
+  code: '编码',
+  warehouse: '仓库',
+  area: '区域',
+  shelf: '货架',
+  slot: '货位',
+  description: '描述',
+  supplier: '供应商',
+  order_no: '单号',
+  status: '状态',
+  remark: '备注',
+  posted_at: '过账时间',
+  shipment_no: '发货单号',
+  stock_out_order_id: '出库单ID',
+  carrier: '物流公司',
+  tracking_no: '快递单号',
+  receiver_name: '收件人',
+  receiver_phone: '收件电话',
+  receiver_address: '收件地址',
+  shipped_at: '发货时间',
+  product_id: '商品ID',
+  storage_location_id: '存放位置ID',
+  usage_location_id: '使用位置ID',
+  quantity: '数量',
+  unit_cost: '单价',
+  batch_no: '批次号',
+  serial_no: '序列号',
+  serial_nos: '序列号列表',
+  qty_change: '数量变化',
+  qty_before: '变更前数量',
+  qty_after: '变更后数量',
+  qty_in: '累计入库',
+  qty_out: '累计出库',
+  qty_balance: '结余数量',
+  change_type: '变更类型',
+  ref_type: '来源类型',
+  ref_id: '来源ID',
+  operator_id: '操作人ID',
+  operator_name: '操作人',
+  operator_role: '操作角色',
+  user_id: '用户ID',
+  user_sub: '用户标识',
+  username: '用户名',
+  user_role: '角色',
+  message: '说明',
+  request_ip: '来源IP',
+  created_at: '创建时间',
+  updated_at: '更新时间',
+  deleted: '已删除',
+}
+
+const auditFieldTokenLabelMap = {
+  id: 'ID',
+  sku: 'SKU',
+  name: '名称',
+  category: '分类',
+  unit: '单位',
+  safety: '安全',
+  stock: '库存',
+  is: '是否',
+  active: '启用',
+  code: '编码',
+  warehouse: '仓库',
+  area: '区域',
+  shelf: '货架',
+  slot: '货位',
+  description: '描述',
+  supplier: '供应商',
+  order: '单',
+  status: '状态',
+  remark: '备注',
+  posted: '过账',
+  shipment: '发货',
+  out: '出库',
+  in: '入库',
+  carrier: '物流公司',
+  tracking: '快递',
+  receiver: '收件',
+  phone: '电话',
+  address: '地址',
+  shipped: '发货',
+  product: '商品',
+  storage: '存放',
+  usage: '使用',
+  location: '位置',
+  quantity: '数量',
+  qty: '数量',
+  cost: '成本',
+  batch: '批次',
+  serial: '序列号',
+  change: '变更',
+  type: '类型',
+  ref: '来源',
+  operator: '操作人',
+  user: '用户',
+  sub: '标识',
+  username: '用户名',
+  role: '角色',
+  message: '说明',
+  request: '请求',
+  ip: '来源IP',
+  created: '创建',
+  updated: '更新',
+  deleted: '删除',
+  before: '变更前',
+  after: '变更后',
+}
+
+const formatAuditFieldLabel = (fieldKey) => {
+  const text = String(fieldKey || '').trim()
+  if (!text) return '-'
+  if (/[\u4e00-\u9fa5]/.test(text)) return text
+  const normalized = text.replace(/[\s.-]+/g, '_').toLowerCase()
+  if (auditFieldLabelMap[normalized]) return auditFieldLabelMap[normalized]
+  if (normalized.startsWith('is_')) {
+    const rest = normalized.slice(3)
+    const restLabel = rest.split('_').map((token) => auditFieldTokenLabelMap[token] || token).join('')
+    return restLabel ? `是否${restLabel}` : text
+  }
+  if (normalized.endsWith('_id')) {
+    const rest = normalized.slice(0, -3)
+    const restLabel = rest.split('_').map((token) => auditFieldTokenLabelMap[token] || token).join('')
+    return restLabel ? `${restLabel}ID` : text
+  }
+  if (normalized.endsWith('_at')) {
+    const rest = normalized.slice(0, -3)
+    const restLabel = rest.split('_').map((token) => auditFieldTokenLabelMap[token] || token).join('')
+    return restLabel ? `${restLabel}时间` : text
+  }
+  return normalized
+    .split('_')
+    .filter(Boolean)
+    .map((token) => auditFieldTokenLabelMap[token] || token)
+    .join('')
+}
+
+const isEqualForSummary = (a, b) => {
+  if (a === b) return true
+  if ((typeof a !== 'object' || a === null) || (typeof b !== 'object' || b === null)) return false
+  try {
+    return JSON.stringify(a) === JSON.stringify(b)
+  } catch (_err) {
+    return false
+  }
+}
+
+const formatAuditValueBrief = (value) => {
+  if (value === null || value === undefined || value === '') return '空'
+  if (typeof value === 'boolean') return value ? '是' : '否'
+  if (typeof value === 'number') return Number.isFinite(value) ? String(value) : '无效数字'
+  if (typeof value === 'string') {
+    const text = value.replace(/\s+/g, ' ').trim()
+    if (!text) return '空'
+    return text.length > 24 ? `${text.slice(0, 24)}...` : text
+  }
+  if (Array.isArray(value)) return value.length ? `数组(${value.length}项)` : '空数组'
+  if (isPlainObject(value)) {
+    const size = Object.keys(value).length
+    return size ? `对象(${size}个字段)` : '空对象'
+  }
+  return String(value)
+}
+
+const buildAuditChangeSummary = (beforeData, afterData) => {
+  const before = parseAuditData(beforeData)
+  const after = parseAuditData(afterData)
+  if (before === null && after === null) return '无变更'
+
+  if (!isPlainObject(before) || !isPlainObject(after)) {
+    if (before === null) return `新增：${formatAuditValueBrief(after)}`
+    if (after === null) return `删除：${formatAuditValueBrief(before)}`
+    if (isEqualForSummary(before, after)) return '无字段变化'
+    return `由“${formatAuditValueBrief(before)}”变更为“${formatAuditValueBrief(after)}”`
+  }
+
+  const keys = Array.from(new Set([...Object.keys(before), ...Object.keys(after)]))
+  const changes = []
+  for (const key of keys) {
+    const hasBefore = Object.prototype.hasOwnProperty.call(before, key)
+    const hasAfter = Object.prototype.hasOwnProperty.call(after, key)
+    const label = formatAuditFieldLabel(key)
+    if (!hasBefore && hasAfter) {
+      changes.push(`新增「${label}」：${formatAuditValueBrief(after[key])}`)
+      continue
+    }
+    if (hasBefore && !hasAfter) {
+      changes.push(`移除「${label}」`)
+      continue
+    }
+    if (!isEqualForSummary(before[key], after[key])) {
+      changes.push(`「${label}」由“${formatAuditValueBrief(before[key])}”改为“${formatAuditValueBrief(after[key])}”`)
+    }
+  }
+  if (!changes.length) return '无字段变化'
+  const preview = changes.slice(0, 3).join('；')
+  return changes.length > 3 ? `${preview}；等${changes.length}项变更` : preview
 }
 
 const parseDownloadFilename = (contentDisposition) => {
@@ -443,6 +644,63 @@ const buildPortalSwitchUrl = (system) => {
   if (system) params.set('system', system)
   params.set('mode', 'switch')
   return `${base}/portal?${params.toString()}`
+}
+
+const portalSessionQueryKey = 'portal_session'
+const portalSessionStorageKey = 'juxin_portal_session'
+
+const readPortalSessionMarker = () => {
+  try {
+    return String(sessionStorage.getItem(portalSessionStorageKey) || '').trim()
+  } catch {
+    return ''
+  }
+}
+
+const consumePortalSessionMarker = () => {
+  try {
+    const params = new URLSearchParams(window.location.search)
+    const marker = String(params.get(portalSessionQueryKey) || '').trim()
+    if (marker) {
+      sessionStorage.setItem(portalSessionStorageKey, marker)
+      params.delete(portalSessionQueryKey)
+      const query = params.toString()
+      const nextUrl = `${window.location.pathname}${query ? `?${query}` : ''}${window.location.hash || ''}`
+      window.history.replaceState({}, '', nextUrl)
+      return marker
+    }
+  } catch {
+    return ''
+  }
+  return readPortalSessionMarker()
+}
+
+const logoutFromSso = async () => {
+  const authBaseUrl = getPortalBaseUrl()
+  try {
+    const csrfResp = await fetch(`${authBaseUrl}/api/auth/csrf`, {
+      credentials: 'include',
+    })
+    if (!csrfResp.ok) return false
+    let csrfToken = ''
+    try {
+      const csrfPayload = await csrfResp.json()
+      csrfToken = String(csrfPayload?.token || '')
+    } catch {
+      csrfToken = ''
+    }
+    if (!csrfToken) return false
+    const logoutResp = await fetch(`${authBaseUrl}/api/auth/logout`, {
+      method: 'POST',
+      credentials: 'include',
+      headers: {
+        'X-CSRF-Token': csrfToken,
+      },
+    })
+    return logoutResp.ok
+  } catch {
+    return false
+  }
 }
 
 function App() {
@@ -559,6 +817,12 @@ function App() {
   const [shippingDetailOrder, setShippingDetailOrder] = useState(null)
   const [shippingDetailPosition, setShippingDetailPosition] = useState({ x: 0, y: 0 })
   const [shippingDetailDragging, setShippingDetailDragging] = useState(false)
+  const [shippingAbnormalDialog, setShippingAbnormalDialog] = useState({
+    open: false,
+    orderId: 0,
+    orderNo: '',
+    reason: '',
+  })
   const shippingDetailDialogRef = useRef(null)
   const shippingDetailDragRef = useRef(null)
   const [shippingFilter, setShippingFilter] = useState({
@@ -618,7 +882,8 @@ function App() {
 
   const canEditMaster = user?.role === 'admin' || user?.role === 'sysadmin'
   const canOperateInventory = user?.role === 'admin' || user?.role === 'sysadmin'
-  const canViewAudit = user?.role === 'admin' || user?.role === 'sysadmin' || user?.role === 'auditor'
+  const canViewAudit = user?.role === 'auditor'
+  const isAuditOnlyUser = user?.role === 'auditor'
   const productStockMap = useMemo(() => {
     const map = new Map()
     products.forEach((item) => {
@@ -630,8 +895,9 @@ function App() {
     return map
   }, [products])
   const visibleMenuItems = useMemo(() => {
+    if (isAuditOnlyUser) return menuItems.filter((item) => item.key === 'operationLogs')
     return menuItems.filter((item) => item.key !== 'operationLogs' || canViewAudit)
-  }, [canViewAudit])
+  }, [isAuditOnlyUser, canViewAudit])
 
   const clearTips = () => {
     setErrorMsg('')
@@ -945,6 +1211,8 @@ function App() {
     let cancelled = false
     const bootstrapAuth = async () => {
       try {
+        const marker = consumePortalSessionMarker()
+        if (!marker) return
         const response = await fetch(`${API_BASE}/api/auth/me`, { credentials: 'include' })
         if (!response.ok) return
         const data = await response.json()
@@ -1054,8 +1322,8 @@ function App() {
 
   useEffect(() => {
     if (visibleMenuItems.some((item) => item.key === activeMenu)) return
-    setActiveMenu('dashboard')
-  }, [visibleMenuItems, activeMenu])
+    setActiveMenu(isAuditOnlyUser ? 'operationLogs' : 'dashboard')
+  }, [visibleMenuItems, activeMenu, isAuditOnlyUser])
 
   useEffect(() => {
     const onFullscreenChange = () => {
@@ -1280,7 +1548,8 @@ function App() {
     })
   }
 
-  const onLogout = () => {
+  const onLogout = async () => {
+    await logoutFromSso()
     if (document.fullscreenElement) {
       document.exitFullscreen().catch(() => {})
     }
@@ -1791,16 +2060,32 @@ function App() {
   }
 
   const onMarkShippingAbnormal = async (row) => {
-    const reason = window.prompt('请输入异常说明（可选）', row?.remark || '')
-    if (reason === null) return
+    const orderId = Number(row?.id || 0)
+    if (!orderId) return showError('发货单ID无效')
+    setShippingAbnormalDialog({
+      open: true,
+      orderId,
+      orderNo: String(row?.shipment_no || ''),
+      reason: String(row?.remark || ''),
+    })
+  }
+
+  const closeShippingAbnormalDialog = () => {
+    if (busy) return
+    setShippingAbnormalDialog({ open: false, orderId: 0, orderNo: '', reason: '' })
+  }
+
+  const submitShippingAbnormalDialog = async () => {
+    if (!shippingAbnormalDialog.orderId) return showError('发货单ID无效')
     await updateShippingOrderById(
-      row?.id,
+      shippingAbnormalDialog.orderId,
       {
         status: 'EXCEPTION',
-        remark: reason || '',
+        remark: String(shippingAbnormalDialog.reason || '').trim(),
       },
       '发货状态已更新为异常'
     )
+    closeShippingAbnormalDialog()
   }
 
   const closeShippingEditModal = () => {
@@ -4638,14 +4923,13 @@ function App() {
                 <th>实体</th>
                 <th>实体编号</th>
                 <th>描述</th>
-                <th>变更内容</th>
+                <th>变更摘要</th>
                 <th>来源IP</th>
               </tr>
             </thead>
             <tbody>
               {operationLogs.map((row) => {
-                const beforeText = formatAuditPayload(row.before_data)
-                const afterText = formatAuditPayload(row.after_data)
+                const changeSummary = buildAuditChangeSummary(row.before_data, row.after_data)
                 return (
                   <tr key={row.id}>
                     <td>{parseApiDate(row.created_at)}</td>
@@ -4655,17 +4939,7 @@ function App() {
                     <td>{formatAuditEntityLabel(row.entity)}</td>
                     <td>{row.entity_id || '-'}</td>
                     <td>{row.message || '-'}</td>
-                    <td>
-                      {beforeText || afterText ? (
-                        <details className="json-cell">
-                          <summary>查看</summary>
-                          {beforeText ? <pre>变更前:\n{beforeText}</pre> : null}
-                          {afterText ? <pre>变更后:\n{afterText}</pre> : null}
-                        </details>
-                      ) : (
-                        '-'
-                      )}
-                    </td>
+                    <td>{changeSummary}</td>
                     <td>{row.request_ip || '-'}</td>
                   </tr>
                 )
@@ -5446,6 +5720,47 @@ function App() {
                     ) : null}
                   </tbody>
                 </table>
+              </div>
+            </div>
+          </section>
+        </div>
+      ) : null}
+
+      {shippingAbnormalDialog.open ? (
+        <div
+          className="floating-modal-mask"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) {
+              closeShippingAbnormalDialog()
+            }
+          }}
+        >
+          <section className="floating-modal shipping-abnormal-modal" onMouseDown={(event) => event.stopPropagation()}>
+            <header className="floating-modal-header">
+              <div>
+                <h3>标记发货异常</h3>
+                <div className="small">发货单号：{shippingAbnormalDialog.orderNo || '-'}</div>
+              </div>
+              <button type="button" className="btn" onClick={closeShippingAbnormalDialog} disabled={busy}>
+                关闭
+              </button>
+            </header>
+            <div className="floating-modal-body">
+              <div className="field">
+                <label>异常说明（可选）</label>
+                <textarea
+                  value={shippingAbnormalDialog.reason}
+                  onChange={(e) => setShippingAbnormalDialog((prev) => ({ ...prev, reason: e.target.value }))}
+                  placeholder="建议填写异常原因，便于审计追踪"
+                />
+              </div>
+              <div className="toolbar" style={{ marginTop: 12, justifyContent: 'flex-end' }}>
+                <button type="button" className="btn" onClick={closeShippingAbnormalDialog} disabled={busy}>
+                  取消
+                </button>
+                <button type="button" className="btn btn-primary" onClick={submitShippingAbnormalDialog} disabled={busy}>
+                  确认标记异常
+                </button>
               </div>
             </div>
           </section>

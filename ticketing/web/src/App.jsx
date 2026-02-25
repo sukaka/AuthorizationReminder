@@ -161,6 +161,205 @@ const formatFileSize = (size) => {
   return `${(bytes / (1024 * 1024)).toFixed(1)}MB`
 }
 
+const compactText = (value, max = 120) => {
+  const text = String(value === undefined || value === null ? '' : value).replace(/\s+/g, ' ').trim()
+  if (!text) return '-'
+  return text.length > max ? `${text.slice(0, max)}...` : text
+}
+
+const parseAuditData = (value) => {
+  if (value === null || value === undefined || value === '') return null
+  if (typeof value === 'object') return value
+  const text = String(value).trim()
+  if (!text) return null
+  return parseJsonSafe(text, text)
+}
+
+const isPlainObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value)
+
+const auditFieldLabelMap = {
+  ticket_id: '工单ID',
+  project_id: '项目ID',
+  request_id: '请求ID',
+  request_ip: '来源IP',
+  request_info: '请求信息',
+  operator_id: '操作人ID',
+  operator_name: '操作人',
+  owner_id: '负责人ID',
+  owner_name: '负责人',
+  created_by: '创建人',
+  created_at: '创建时间',
+  updated_at: '更新时间',
+  response_deadline: '响应截止时间',
+  resolve_deadline: '解决截止时间',
+  event_type: '事件类型',
+  event_desc: '事件描述',
+  event_id: '事件ID',
+  action: '动作',
+  status: '状态',
+  priority: '优先级',
+  severity: '严重级别',
+  title: '标题',
+  description: '描述',
+  comment_id: '评论ID',
+  assignees: '协作人',
+  watchers: '观察者',
+  deliverables: '交付物',
+  attachments: '附件',
+  attachment_id: '附件ID',
+  attachment_name: '附件名称',
+  stage_id: '阶段ID',
+  stage: '阶段',
+  stage_count: '阶段数量',
+  done_flag: '完成标记',
+  template_id: '模板ID',
+  members: '成员',
+  role: '角色',
+  can_view: '可见',
+  can_edit: '可编辑',
+  can_assign: '可分派',
+  can_close: '可关闭',
+  before_count: '变更前数量',
+  after_count: '变更后数量',
+  diff: '差异',
+  method: '方式',
+  source: '来源',
+  error: '错误',
+  deleted: '已删除',
+  username: '用户名',
+}
+
+const auditFieldTokenLabelMap = {
+  id: 'ID',
+  ticket: '工单',
+  project: '项目',
+  request: '请求',
+  operator: '操作人',
+  owner: '负责人',
+  user: '用户',
+  username: '用户名',
+  role: '角色',
+  event: '事件',
+  action: '动作',
+  status: '状态',
+  priority: '优先级',
+  severity: '严重级别',
+  title: '标题',
+  description: '描述',
+  comment: '评论',
+  stage: '阶段',
+  template: '模板',
+  member: '成员',
+  view: '可见',
+  edit: '可编辑',
+  assign: '可分派',
+  close: '可关闭',
+  before: '变更前',
+  after: '变更后',
+  count: '数量',
+  diff: '差异',
+  method: '方式',
+  source: '来源',
+  error: '错误',
+  deleted: '删除',
+  created: '创建',
+  updated: '更新',
+  response: '响应',
+  resolve: '解决',
+  deadline: '截止时间',
+  ip: '来源IP',
+}
+
+const formatAuditFieldLabel = (fieldKey) => {
+  const text = String(fieldKey || '').trim()
+  if (!text) return '-'
+  if (/[\u4e00-\u9fa5]/.test(text)) return text
+  const normalized = text.replace(/[\s.-]+/g, '_').toLowerCase()
+  if (auditFieldLabelMap[normalized]) return auditFieldLabelMap[normalized]
+  if (normalized.startsWith('is_')) {
+    const rest = normalized.slice(3)
+    const restLabel = rest.split('_').map((token) => auditFieldTokenLabelMap[token] || token).join('')
+    return restLabel ? `是否${restLabel}` : text
+  }
+  if (normalized.endsWith('_id')) {
+    const rest = normalized.slice(0, -3)
+    const restLabel = rest.split('_').map((token) => auditFieldTokenLabelMap[token] || token).join('')
+    return restLabel ? `${restLabel}ID` : text
+  }
+  if (normalized.endsWith('_at')) {
+    const rest = normalized.slice(0, -3)
+    const restLabel = rest.split('_').map((token) => auditFieldTokenLabelMap[token] || token).join('')
+    return restLabel ? `${restLabel}时间` : text
+  }
+  return normalized
+    .split('_')
+    .filter(Boolean)
+    .map((token) => auditFieldTokenLabelMap[token] || token)
+    .join('')
+}
+
+const isEqualForSummary = (a, b) => {
+  if (a === b) return true
+  if ((typeof a !== 'object' || a === null) || (typeof b !== 'object' || b === null)) return false
+  try {
+    return JSON.stringify(a) === JSON.stringify(b)
+  } catch {
+    return false
+  }
+}
+
+const formatAuditValueBrief = (value) => {
+  if (value === null || value === undefined || value === '') return '空'
+  if (typeof value === 'boolean') return value ? '是' : '否'
+  if (typeof value === 'number') return Number.isFinite(value) ? String(value) : '无效数字'
+  if (typeof value === 'string') {
+    const text = value.replace(/\s+/g, ' ').trim()
+    if (!text) return '空'
+    return compactText(text, 24)
+  }
+  if (Array.isArray(value)) return value.length ? `数组(${value.length}项)` : '空数组'
+  if (isPlainObject(value)) {
+    const size = Object.keys(value).length
+    return size ? `对象(${size}个字段)` : '空对象'
+  }
+  return String(value)
+}
+
+const buildAuditChangeSummary = (beforeData, afterData) => {
+  const before = parseAuditData(beforeData)
+  const after = parseAuditData(afterData)
+  if (before === null && after === null) return '无变更'
+
+  if (!isPlainObject(before) || !isPlainObject(after)) {
+    if (before === null) return `新增：${formatAuditValueBrief(after)}`
+    if (after === null) return `删除：${formatAuditValueBrief(before)}`
+    if (isEqualForSummary(before, after)) return '无字段变化'
+    return `由“${formatAuditValueBrief(before)}”变更为“${formatAuditValueBrief(after)}”`
+  }
+
+  const keys = Array.from(new Set([...Object.keys(before), ...Object.keys(after)]))
+  const changes = []
+  for (const key of keys) {
+    const hasBefore = Object.prototype.hasOwnProperty.call(before, key)
+    const hasAfter = Object.prototype.hasOwnProperty.call(after, key)
+    const label = formatAuditFieldLabel(key)
+    if (!hasBefore && hasAfter) {
+      changes.push(`新增「${label}」：${formatAuditValueBrief(after[key])}`)
+      continue
+    }
+    if (hasBefore && !hasAfter) {
+      changes.push(`移除「${label}」`)
+      continue
+    }
+    if (!isEqualForSummary(before[key], after[key])) {
+      changes.push(`「${label}」由“${formatAuditValueBrief(before[key])}”改为“${formatAuditValueBrief(after[key])}”`)
+    }
+  }
+  if (!changes.length) return '无字段变化'
+  const preview = changes.slice(0, 3).join('；')
+  return changes.length > 3 ? `${preview}；等${changes.length}项变更` : preview
+}
+
 const normalizePermissionMember = (row) => {
   const userId = Number(row?.user_id)
   return {
@@ -282,6 +481,60 @@ const buildPortalSwitchUrl = (system) => {
   return `${base}/portal?${params.toString()}`
 }
 
+const portalSessionQueryKey = 'portal_session'
+const portalSessionStorageKey = 'juxin_portal_session'
+
+const readPortalSessionMarker = () => {
+  try {
+    return String(sessionStorage.getItem(portalSessionStorageKey) || '').trim()
+  } catch {
+    return ''
+  }
+}
+
+const consumePortalSessionMarker = () => {
+  try {
+    const params = new URLSearchParams(window.location.search)
+    const marker = String(params.get(portalSessionQueryKey) || '').trim()
+    if (marker) {
+      sessionStorage.setItem(portalSessionStorageKey, marker)
+      params.delete(portalSessionQueryKey)
+      const query = params.toString()
+      const nextUrl = `${window.location.pathname}${query ? `?${query}` : ''}${window.location.hash || ''}`
+      window.history.replaceState({}, '', nextUrl)
+      return marker
+    }
+  } catch {
+    return ''
+  }
+  return readPortalSessionMarker()
+}
+
+const logoutFromSso = async () => {
+  try {
+    const csrfResp = await fetch('/api/auth/csrf', { credentials: 'include' })
+    if (!csrfResp.ok) return false
+    let csrfToken = ''
+    try {
+      const csrfPayload = await csrfResp.json()
+      csrfToken = String(csrfPayload?.token || '')
+    } catch {
+      csrfToken = ''
+    }
+    if (!csrfToken) return false
+    const logoutResp = await fetch('/api/auth/logout', {
+      method: 'POST',
+      credentials: 'include',
+      headers: {
+        'X-CSRF-Token': csrfToken,
+      },
+    })
+    return logoutResp.ok
+  } catch {
+    return false
+  }
+}
+
 const getSeverityLabel = (value) => severityLabelMap[value] || value || '-'
 const getSlaLabel = (value) => slaLabelMap[value] || value || '-'
 const getTicketEventLabel = (value) => ticketEventLabelMap[value] || value || '事件'
@@ -351,6 +604,15 @@ export default function App() {
   const [permissionLogTo, setPermissionLogTo] = useState('')
   const [permissionLogEventType, setPermissionLogEventType] = useState('')
   const [expandedPermissionLogs, setExpandedPermissionLogs] = useState({})
+  const [operationLogs, setOperationLogs] = useState([])
+  const [operationLogOperator, setOperationLogOperator] = useState('')
+  const [operationLogAction, setOperationLogAction] = useState('')
+  const [operationLogEntity, setOperationLogEntity] = useState('')
+  const [operationLogFrom, setOperationLogFrom] = useState('')
+  const [operationLogTo, setOperationLogTo] = useState('')
+  const [operationLogPage, setOperationLogPage] = useState(1)
+  const [operationLogPageSize, setOperationLogPageSize] = useState(50)
+  const [operationLogTotal, setOperationLogTotal] = useState(0)
   const [ticketAssignees, setTicketAssignees] = useState([])
   const [selectedAssignees, setSelectedAssignees] = useState([])
   const [ticketWatchers, setTicketWatchers] = useState([])
@@ -372,19 +634,32 @@ export default function App() {
   })
   const [calendarDays, setCalendarDays] = useState([])
   const [calendarDetail, setCalendarDetail] = useState({ open: false, day: null, items: [] })
+  const [confirmDialog, setConfirmDialog] = useState({
+    open: false,
+    title: '',
+    message: '',
+    confirmLabel: '确认',
+    onConfirm: null,
+  })
   const ganttRef = useRef(null)
   const ganttChart = useRef(null)
   const ticketEditorRef = useRef(null)
   const ticketEditorDrag = useRef({ dragging: false, offsetX: 0, offsetY: 0 })
   const [ticketEditorPos, setTicketEditorPos] = useState({ x: 96, y: 56 })
+  const ticketDetailRef = useRef(null)
+  const ticketDetailDrag = useRef({ dragging: false, offsetX: 0, offsetY: 0 })
+  const [ticketDetailPos, setTicketDetailPos] = useState({ x: 110, y: 80 })
 
   const [message, setMessage] = useState('')
   const [error, setError] = useState('')
+  const isAuditOnlyUser = currentUser?.role === 'auditor'
 
   useEffect(() => {
     let cancelled = false
     const bootstrapAuth = async () => {
       try {
+        const marker = consumePortalSessionMarker()
+        if (!marker) return
         const res = await fetch('/api/auth/me', { credentials: 'include' })
         if (!res.ok) return
         const data = await res.json()
@@ -433,6 +708,27 @@ export default function App() {
     setTimeout(() => setError(''), 3000)
   }
 
+  const openConfirmDialog = ({ title = '确认操作', message = '', confirmLabel = '确认', onConfirm }) => {
+    setConfirmDialog({
+      open: true,
+      title,
+      message,
+      confirmLabel,
+      onConfirm: typeof onConfirm === 'function' ? onConfirm : null,
+    })
+  }
+
+  const closeConfirmDialog = () => {
+    setConfirmDialog((prev) => ({ ...prev, open: false, onConfirm: null }))
+  }
+
+  const onConfirmDialogAccept = async () => {
+    const callback = confirmDialog.onConfirm
+    closeConfirmDialog()
+    if (!callback) return
+    await callback()
+  }
+
   const normalizeApiError = (err) => {
     let msg = err && err.message ? String(err.message) : ''
     try {
@@ -454,12 +750,34 @@ export default function App() {
     })
   }
 
+  const resetTicketDetailPosition = () => {
+    const viewportWidth = window.innerWidth || 1366
+    const modalWidth = Math.min(viewportWidth - 28, 1180)
+    setTicketDetailPos({
+      x: Math.max(14, Math.round((viewportWidth - modalWidth) / 2)),
+      y: Math.max(32, Math.round((window.innerHeight || 900) * 0.08)),
+    })
+  }
+
   const onTicketEditorDragStart = (event) => {
     if (!editingId || event.button !== 0) return
     const rect = ticketEditorRef.current?.getBoundingClientRect()
     const baseX = Number.isFinite(rect?.left) ? rect.left : ticketEditorPos.x
     const baseY = Number.isFinite(rect?.top) ? rect.top : ticketEditorPos.y
     ticketEditorDrag.current = {
+      dragging: true,
+      offsetX: event.clientX - baseX,
+      offsetY: event.clientY - baseY,
+    }
+    document.body.style.userSelect = 'none'
+  }
+
+  const onTicketDetailDragStart = (event) => {
+    if (!activeTicket || editingId || event.button !== 0) return
+    const rect = ticketDetailRef.current?.getBoundingClientRect()
+    const baseX = Number.isFinite(rect?.left) ? rect.left : ticketDetailPos.x
+    const baseY = Number.isFinite(rect?.top) ? rect.top : ticketDetailPos.y
+    ticketDetailDrag.current = {
       dragging: true,
       offsetX: event.clientX - baseX,
       offsetY: event.clientY - baseY,
@@ -746,6 +1064,33 @@ export default function App() {
     }
   }
 
+  const refreshOperationLogs = async () => {
+    if (!authToken) return
+    try {
+      const params = new URLSearchParams()
+      params.set('page', String(operationLogPage))
+      params.set('page_size', String(operationLogPageSize))
+      if (operationLogOperator) params.set('operator', operationLogOperator)
+      if (operationLogAction) params.set('action', operationLogAction)
+      if (operationLogEntity) params.set('entity', operationLogEntity)
+      if (operationLogFrom) params.set('from', operationLogFrom)
+      if (operationLogTo) params.set('to', operationLogTo)
+      const data = await api.get(`/api/operation-logs?${params.toString()}`)
+      const items = Array.isArray(data?.items) ? data.items : []
+      const total = Number(data?.total || 0)
+      const page = Math.max(1, Number(data?.page || operationLogPage || 1))
+      const pageSize = Math.max(1, Number(data?.page_size || operationLogPageSize || 50))
+      setOperationLogs(items)
+      setOperationLogTotal(total)
+      if (page !== operationLogPage) setOperationLogPage(page)
+      if (pageSize !== operationLogPageSize) setOperationLogPageSize(pageSize)
+    } catch (err) {
+      showError(normalizeApiError(err))
+      setOperationLogs([])
+      setOperationLogTotal(0)
+    }
+  }
+
   const refreshTicketAssignees = async (ticketId) => {
     if (!authToken || !ticketId) return
     try {
@@ -813,9 +1158,11 @@ export default function App() {
   }, [authToken])
 
   useEffect(() => {
+    if (isAuditOnlyUser) return
     refreshTickets()
   }, [
     authToken,
+    isAuditOnlyUser,
     ticketSearch,
     ticketStatus,
     ticketProjectFilter,
@@ -834,28 +1181,34 @@ export default function App() {
   }, [authToken])
 
   useEffect(() => {
+    if (isAuditOnlyUser) return
     refreshDepartments()
     refreshServices()
     refreshDashboardStats()
     refreshSlaGroups()
-  }, [authToken])
+  }, [authToken, isAuditOnlyUser])
 
   useEffect(() => {
+    if (isAuditOnlyUser) return
     refreshSlaGroups()
-  }, [authToken, ticketProjectFilter, ticketDepartmentFilter, ticketServiceFilter, ticketOwnerFilter, ticketStatus])
+  }, [authToken, isAuditOnlyUser, ticketProjectFilter, ticketDepartmentFilter, ticketServiceFilter, ticketOwnerFilter, ticketStatus])
 
   useEffect(() => {
+    if (isAuditOnlyUser) return
     refreshNotifications(notificationUnreadOnly)
-  }, [authToken, notificationUnreadOnly])
+  }, [authToken, isAuditOnlyUser, notificationUnreadOnly])
 
   useEffect(() => {
+    if (isAuditOnlyUser) return
     refreshTemplates()
-  }, [authToken])
+  }, [authToken, isAuditOnlyUser])
 
   useEffect(() => {
+    if (isAuditOnlyUser) return
     refreshReportSummary()
   }, [
     authToken,
+    isAuditOnlyUser,
     ticketStatus,
     ticketProjectFilter,
     ticketOwnerFilter,
@@ -889,6 +1242,21 @@ export default function App() {
   ])
 
   useEffect(() => {
+    if (activeMenu !== 'operationLogs') return
+    refreshOperationLogs()
+  }, [
+    authToken,
+    activeMenu,
+    operationLogPage,
+    operationLogPageSize,
+    operationLogOperator,
+    operationLogAction,
+    operationLogEntity,
+    operationLogFrom,
+    operationLogTo,
+  ])
+
+  useEffect(() => {
     if (activeMenu !== 'calendar') return
     loadCalendarMonth()
   }, [authToken, activeMenu, calendarMonth])
@@ -900,8 +1268,12 @@ export default function App() {
   }, [tickets, activeTicket])
 
   useEffect(() => {
-    if (activeMenu === 'permissions' && currentUser?.role !== 'admin') {
+    if (activeMenu === 'permissions' && currentUser?.role !== 'admin' && currentUser?.role !== 'auditor') {
       setActiveMenu('tickets')
+      return
+    }
+    if (currentUser?.role === 'auditor' && activeMenu !== 'operationLogs' && activeMenu !== 'permissions') {
+      setActiveMenu('operationLogs')
     }
   }, [activeMenu, currentUser])
 
@@ -916,25 +1288,50 @@ export default function App() {
   }, [editingId])
 
   useEffect(() => {
+    if (!activeTicket || editingId) return
+    resetTicketDetailPosition()
+  }, [activeTicket, editingId])
+
+  useEffect(() => {
     const onMouseMove = (event) => {
-      if (!ticketEditorDrag.current.dragging) return
-      const modal = ticketEditorRef.current
-      const width = modal?.offsetWidth || 980
-      const height = modal?.offsetHeight || 680
-      const nextX = event.clientX - ticketEditorDrag.current.offsetX
-      const nextY = event.clientY - ticketEditorDrag.current.offsetY
-      const minX = 8
-      const minY = 8
-      const maxX = Math.max(minX, (window.innerWidth || 1366) - width - 8)
-      const maxY = Math.max(minY, (window.innerHeight || 900) - height - 8)
-      setTicketEditorPos({
-        x: Math.max(minX, Math.min(nextX, maxX)),
-        y: Math.max(minY, Math.min(nextY, maxY)),
-      })
+      if (ticketEditorDrag.current.dragging) {
+        const modal = ticketEditorRef.current
+        const width = modal?.offsetWidth || 980
+        const height = modal?.offsetHeight || 680
+        const nextX = event.clientX - ticketEditorDrag.current.offsetX
+        const nextY = event.clientY - ticketEditorDrag.current.offsetY
+        const minX = 8
+        const minY = 8
+        const maxX = Math.max(minX, (window.innerWidth || 1366) - width - 8)
+        const maxY = Math.max(minY, (window.innerHeight || 900) - height - 8)
+        setTicketEditorPos({
+          x: Math.max(minX, Math.min(nextX, maxX)),
+          y: Math.max(minY, Math.min(nextY, maxY)),
+        })
+        return
+      }
+      if (ticketDetailDrag.current.dragging) {
+        const modal = ticketDetailRef.current
+        const width = modal?.offsetWidth || 920
+        const height = modal?.offsetHeight || 620
+        const nextX = event.clientX - ticketDetailDrag.current.offsetX
+        const nextY = event.clientY - ticketDetailDrag.current.offsetY
+        const minX = 8
+        const minY = 8
+        const maxX = Math.max(minX, (window.innerWidth || 1366) - width - 8)
+        const maxY = Math.max(minY, (window.innerHeight || 900) - height - 8)
+        setTicketDetailPos({
+          x: Math.max(minX, Math.min(nextX, maxX)),
+          y: Math.max(minY, Math.min(nextY, maxY)),
+        })
+      }
     }
     const onMouseUp = () => {
-      if (!ticketEditorDrag.current.dragging) return
+      const editorDragging = ticketEditorDrag.current.dragging
+      const detailDragging = ticketDetailDrag.current.dragging
+      if (!editorDragging && !detailDragging) return
       ticketEditorDrag.current.dragging = false
+      ticketDetailDrag.current.dragging = false
       document.body.style.userSelect = ''
     }
     window.addEventListener('mousemove', onMouseMove)
@@ -946,7 +1343,8 @@ export default function App() {
     }
   }, [])
 
-  const onLogout = () => {
+  const onLogout = async () => {
+    await logoutFromSso()
     setLogoutPending(true)
     setAuthToken('')
     setCurrentUser(null)
@@ -1006,6 +1404,18 @@ export default function App() {
       sla_response_minutes: ticket.sla_response_minutes || 30,
       sla_resolve_minutes: ticket.sla_resolve_minutes || 480,
     })
+    refreshTicketStages(ticket.id)
+    refreshTicketAssignees(ticket.id)
+    refreshTicketWatchers(ticket.id)
+    refreshTicketComments(ticket.id)
+    refreshTicketAttachments(ticket.id)
+    loadActiveTicketEvents(ticket.id)
+    setApprovalComment(ticket.approval_comment || '')
+  }
+
+  const onViewTicket = (ticket) => {
+    setEditingId(null)
+    setActiveTicket(ticket)
     refreshTicketStages(ticket.id)
     refreshTicketAssignees(ticket.id)
     refreshTicketWatchers(ticket.id)
@@ -1149,15 +1559,21 @@ export default function App() {
 
   const onDeleteAttachment = async (attachment) => {
     if (!editingId || !attachment?.id) return
-    if (!window.confirm(`确认删除附件「${attachment.filename || attachment.id}」？`)) return
-    try {
-      await api.del(`/api/tickets/${editingId}/attachments/${attachment.id}`)
-      showMessage('附件已删除')
-      refreshTicketAttachments(editingId)
-      loadActiveTicketEvents(editingId)
-    } catch (err) {
-      showError(normalizeApiError(err))
-    }
+    openConfirmDialog({
+      title: '删除附件',
+      message: `确认删除附件「${attachment.filename || attachment.id}」？`,
+      confirmLabel: '确认删除',
+      onConfirm: async () => {
+        try {
+          await api.del(`/api/tickets/${editingId}/attachments/${attachment.id}`)
+          showMessage('附件已删除')
+          refreshTicketAttachments(editingId)
+          loadActiveTicketEvents(editingId)
+        } catch (err) {
+          showError(normalizeApiError(err))
+        }
+      },
+    })
   }
 
   const onApproveTicket = async (decision) => {
@@ -1660,21 +2076,30 @@ export default function App() {
     )
   }
 
-  const menuItems = [
-    { key: 'tickets', label: '工单管理', desc: '创建、分配与跟踪工单处理进度。' },
-    { key: 'projects', label: '项目管理', desc: '管理项目并关联工单。' },
-    ...(currentUser?.role === 'admin'
-      ? [{ key: 'permissions', label: '项目权限', desc: '配置项目成员的可见/编辑/分派/关闭权限。' }]
-      : []),
-    { key: 'templates', label: '模板管理', desc: '配置工单模板并快速生成阶段。' },
-    { key: 'notifications', label: '通知中心', desc: '查看协作通知、评论@与审批提醒。' },
-    { key: 'gantt', label: '甘特图', desc: '查看项目排期甘特图。' },
-    { key: 'calendar', label: '工单日历', desc: '按月查看每天的工程师排期。' },
-  ]
+  const menuItems = isAuditOnlyUser
+    ? [
+        { key: 'operationLogs', label: '操作日志', desc: '查看工单系统级操作日志。' },
+        { key: 'permissions', label: '权限审计', desc: '查看项目权限变更审计。' },
+      ]
+    : [
+        { key: 'tickets', label: '工单管理', desc: '创建、分配与跟踪工单处理进度。' },
+        { key: 'projects', label: '项目管理', desc: '管理项目并关联工单。' },
+        ...(currentUser?.role === 'admin'
+          ? [{ key: 'permissions', label: '项目权限', desc: '配置项目成员的可见/编辑/分派/关闭权限。' }]
+          : []),
+        { key: 'templates', label: '模板管理', desc: '配置工单模板并快速生成阶段。' },
+        { key: 'notifications', label: '通知中心', desc: '查看协作通知、评论@与审批提醒。' },
+        { key: 'gantt', label: '甘特图', desc: '查看项目排期甘特图。' },
+        { key: 'calendar', label: '工单日历', desc: '按月查看每天的工程师排期。' },
+      ]
   const activeMenuMeta = menuItems.find((item) => item.key === activeMenu) || menuItems[0]
   const calendarMonthLabel = `${calendarMonth.getFullYear()}年${calendarMonth.getMonth() + 1}月`
   const calendarCells = getCalendarCells()
   const canManageAttachments = currentUser?.role !== 'auditor' && currentUser?.role !== 'sysadmin'
+  const operationLogTotalPages = Math.max(
+    1,
+    Math.ceil(Math.max(Number(operationLogTotal || 0), 0) / Math.max(Number(operationLogPageSize || 50), 1)),
+  )
 
   return (
     <div className="shell">
@@ -2026,11 +2451,11 @@ export default function App() {
         </section>
         )}
 
-        {activeMenu === 'tickets' && editingId && (
+        {activeMenu === 'tickets' && !isAuditOnlyUser && editingId && (
           <div className="ticket-editor-mask" onClick={onResetForm} />
         )}
 
-        {activeMenu === 'tickets' && (
+        {activeMenu === 'tickets' && !isAuditOnlyUser && (
         <section
           ref={ticketEditorRef}
           className={`panel ${editingId ? 'ticket-editor-modal' : ''}`}
@@ -2511,11 +2936,12 @@ export default function App() {
                   导出审计CSV
                 </button>
               </div>
-              <div className="table compact-table">
+              <div className="table compact-table event-log-table">
                 <div className="table-row head">
                   <span>时间</span>
                   <span>事件</span>
                   <span>操作人</span>
+                  <span>来源IP</span>
                 </div>
                 {ticketEvents.length === 0 ? (
                   <div className="table-row">
@@ -2530,6 +2956,7 @@ export default function App() {
                         <div className="muted">{getTicketEventLabel(event.event_type)}</div>
                       </span>
                       <span>{event.operator_name || '-'}</span>
+                      <span>{event.source_ip || '-'}</span>
                     </div>
                   ))
                 )}
@@ -2537,6 +2964,120 @@ export default function App() {
             </>
           )}
         </section>
+        )}
+
+        {activeMenu === 'operationLogs' && (
+          <section className="panel">
+            <div className="panel-header">
+              <div>
+                <h2>工单系统操作日志</h2>
+                <p>仅展示工单系统写入的系统级操作日志。</p>
+              </div>
+            </div>
+            <div className="filter-row">
+              <input
+                placeholder="操作人"
+                value={operationLogOperator}
+                onChange={(e) => {
+                  setOperationLogOperator(e.target.value)
+                  setOperationLogPage(1)
+                }}
+              />
+              <input
+                placeholder="动作"
+                value={operationLogAction}
+                onChange={(e) => {
+                  setOperationLogAction(e.target.value)
+                  setOperationLogPage(1)
+                }}
+              />
+              <input
+                placeholder="对象"
+                value={operationLogEntity}
+                onChange={(e) => {
+                  setOperationLogEntity(e.target.value)
+                  setOperationLogPage(1)
+                }}
+              />
+              <input
+                type="date"
+                value={operationLogFrom}
+                onChange={(e) => {
+                  setOperationLogFrom(e.target.value)
+                  setOperationLogPage(1)
+                }}
+              />
+              <input
+                type="date"
+                value={operationLogTo}
+                onChange={(e) => {
+                  setOperationLogTo(e.target.value)
+                  setOperationLogPage(1)
+                }}
+              />
+              <button type="button" className="ghost btn btn-outline-secondary" onClick={() => refreshOperationLogs()}>
+                刷新日志
+              </button>
+            </div>
+            <div className="table compact-table permission-log-table">
+              <div className="table-row head">
+                <span>时间</span>
+                <span>操作人</span>
+                <span>动作</span>
+                <span>对象</span>
+                <span>对象ID</span>
+                <span>来源IP</span>
+                <span>变更摘要</span>
+              </div>
+              {operationLogs.length === 0 ? (
+                <div className="table-row">
+                  <span className="muted">暂无操作日志</span>
+                </div>
+              ) : (
+                operationLogs.map((log) => (
+                  <div key={`operation-log-${log.id}`} className="table-row">
+                    <span>{formatDateTime(log.created_at)}</span>
+                    <span>{log.username || '-'}</span>
+                    <span>{log.action || '-'}</span>
+                    <span>{log.entity || '-'}</span>
+                    <span>{log.entity_id || '-'}</span>
+                    <span>{log.request_ip || '-'}</span>
+                    <span>{buildAuditChangeSummary(log.before_data, log.after_data)}</span>
+                  </div>
+                ))
+              )}
+            </div>
+            <div className="pagination">
+              <button
+                className="btn btn-outline-secondary"
+                onClick={() => setOperationLogPage((p) => Math.max(1, p - 1))}
+                disabled={operationLogPage <= 1}
+              >
+                上一页
+              </button>
+              <span>
+                第 {operationLogPage}/{operationLogTotalPages} 页（共 {operationLogTotal} 条）
+              </span>
+              <button
+                className="btn btn-outline-secondary"
+                onClick={() => setOperationLogPage((p) => Math.min(operationLogTotalPages, p + 1))}
+                disabled={operationLogPage >= operationLogTotalPages}
+              >
+                下一页
+              </button>
+              <select
+                value={operationLogPageSize}
+                onChange={(e) => {
+                  setOperationLogPageSize(Number(e.target.value) || 50)
+                  setOperationLogPage(1)
+                }}
+              >
+                <option value={20}>20/页</option>
+                <option value={50}>50/页</option>
+                <option value={100}>100/页</option>
+              </select>
+            </div>
+          </section>
         )}
 
         {activeMenu === 'projects' && (
@@ -2634,28 +3175,32 @@ export default function App() {
                 ))}
               </select>
             </label>
-            <label>
-              添加成员
-              <select
-                value={permissionUserId}
-                onChange={(e) => setPermissionUserId(e.target.value)}
-              >
-                <option value="">请选择用户</option>
-                {users.map((user) => (
-                  <option key={`perm-user-${user.id}`} value={user.id}>
-                    {user.username} ({user.role})
-                  </option>
-                ))}
-              </select>
-            </label>
-            <div className="form-actions">
-              <button type="button" className="ghost btn btn-outline-secondary" onClick={onAddProjectPermissionMember}>
+            {!isAuditOnlyUser ? (
+              <label>
                 添加成员
-              </button>
-              <button type="button" className="primary btn btn-primary" onClick={onSaveProjectPermissions}>
-                保存权限
-              </button>
-            </div>
+                <select
+                  value={permissionUserId}
+                  onChange={(e) => setPermissionUserId(e.target.value)}
+                >
+                  <option value="">请选择用户</option>
+                  {users.map((user) => (
+                    <option key={`perm-user-${user.id}`} value={user.id}>
+                      {user.username} ({user.role})
+                    </option>
+                  ))}
+                </select>
+              </label>
+            ) : null}
+            {!isAuditOnlyUser ? (
+              <div className="form-actions">
+                <button type="button" className="ghost btn btn-outline-secondary" onClick={onAddProjectPermissionMember}>
+                  添加成员
+                </button>
+                <button type="button" className="primary btn btn-primary" onClick={onSaveProjectPermissions}>
+                  保存权限
+                </button>
+              </div>
+            ) : null}
           </div>
           <div className="table permissions-table">
             <div className="table-row head">
@@ -2680,6 +3225,7 @@ export default function App() {
                     <input
                       type="checkbox"
                       checked={!!member.can_view}
+                      disabled={isAuditOnlyUser}
                       onChange={(e) => onPermissionFlagChange(member.user_id, 'can_view', e.target.checked)}
                     />
                   </span>
@@ -2687,6 +3233,7 @@ export default function App() {
                     <input
                       type="checkbox"
                       checked={!!member.can_edit}
+                      disabled={isAuditOnlyUser}
                       onChange={(e) => onPermissionFlagChange(member.user_id, 'can_edit', e.target.checked)}
                     />
                   </span>
@@ -2694,6 +3241,7 @@ export default function App() {
                     <input
                       type="checkbox"
                       checked={!!member.can_assign}
+                      disabled={isAuditOnlyUser}
                       onChange={(e) => onPermissionFlagChange(member.user_id, 'can_assign', e.target.checked)}
                     />
                   </span>
@@ -2701,17 +3249,20 @@ export default function App() {
                     <input
                       type="checkbox"
                       checked={!!member.can_close}
+                      disabled={isAuditOnlyUser}
                       onChange={(e) => onPermissionFlagChange(member.user_id, 'can_close', e.target.checked)}
                     />
                   </span>
                   <span className="actions">
-                    <button
-                      type="button"
-                      className="btn btn-outline-danger"
-                      onClick={() => onRemoveProjectPermissionMember(member.user_id)}
-                    >
-                      移除
-                    </button>
+                    {!isAuditOnlyUser ? (
+                      <button
+                        type="button"
+                        className="btn btn-outline-danger"
+                        onClick={() => onRemoveProjectPermissionMember(member.user_id)}
+                      >
+                        移除
+                      </button>
+                    ) : null}
                   </span>
                 </div>
               ))
@@ -2765,6 +3316,7 @@ export default function App() {
               <span>内容</span>
               <span>类型</span>
               <span>操作人</span>
+              <span>来源IP</span>
               <span>明细</span>
             </div>
             {permissionLogs.length === 0 ? (
@@ -2779,6 +3331,7 @@ export default function App() {
                     <span>{log.event_desc || '-'}</span>
                     <span>{log.event_type || '-'}</span>
                     <span>{log.operator_name || '-'}</span>
+                    <span>{log.source_ip || '-'}</span>
                     <span className="actions">
                       <button
                         type="button"
@@ -3045,14 +3598,20 @@ export default function App() {
                   <span>{getApprovalStatusLabel(ticket.approval_status)}</span>
                   <span>{getStatusLabel(ticket.status)}</span>
                   <span>{formatDateTime(ticket.created_at)}</span>
-                  <span>{formatDateTime(ticket.updated_at)}</span>
-                  <span className="actions">
-                    <button className="btn btn-outline-secondary" onClick={() => onEditTicket(ticket)}>
-                      编辑/详情
-                    </button>
-                    {currentUser?.role === 'admin' && (
-                      <button className="btn btn-outline-danger" onClick={() => onDeleteTicket(ticket)}>
-                        删除
+	                  <span>{formatDateTime(ticket.updated_at)}</span>
+	                  <span className="actions">
+	                    {isAuditOnlyUser ? (
+	                      <button className="btn btn-outline-secondary" onClick={() => onViewTicket(ticket)}>
+	                        查看详情
+	                      </button>
+	                    ) : (
+	                      <button className="btn btn-outline-secondary" onClick={() => onEditTicket(ticket)}>
+	                        编辑/详情
+	                      </button>
+	                    )}
+	                    {currentUser?.role === 'admin' && (
+	                      <button className="btn btn-outline-danger" onClick={() => onDeleteTicket(ticket)}>
+	                        删除
                       </button>
                     )}
                   </span>
@@ -3285,21 +3844,27 @@ export default function App() {
                 ))}
               </div>
             )}
-            <div className="comment-box">
-              <h3>评论</h3>
-              <p className="muted">支持 @用户名，系统会记录被@人员。</p>
-              <textarea
-                rows={3}
-                placeholder="输入评论内容，例如：@张雷 请确认复测时间"
-                value={newComment}
-                onChange={(e) => setNewComment(e.target.value)}
-              />
-              <div className="form-actions">
-                <button type="button" className="primary btn btn-primary" onClick={onAddComment}>
-                  发表评论
-                </button>
-              </div>
-              <div className="table compact-table">
+	            <div className="comment-box">
+	              <h3>评论</h3>
+	              <p className="muted">支持 @用户名，系统会记录被@人员。</p>
+	              {!isAuditOnlyUser ? (
+	                <>
+	                  <textarea
+	                    rows={3}
+	                    placeholder="输入评论内容，例如：@张雷 请确认复测时间"
+	                    value={newComment}
+	                    onChange={(e) => setNewComment(e.target.value)}
+	                  />
+	                  <div className="form-actions">
+	                    <button type="button" className="primary btn btn-primary" onClick={onAddComment}>
+	                      发表评论
+	                    </button>
+	                  </div>
+	                </>
+	              ) : (
+	                <div className="muted">auditor 为只读审计视图，不允许发表评论。</div>
+	              )}
+	              <div className="table compact-table">
                 <div className="table-row head">
                   <span>时间</span>
                   <span>评论内容</span>
@@ -3344,11 +3909,12 @@ export default function App() {
                 导出审计CSV
               </button>
             </div>
-            <div className="table compact-table">
+            <div className="table compact-table event-log-table">
               <div className="table-row head">
                 <span>时间</span>
                 <span>事件</span>
                 <span>操作人</span>
+                <span>来源IP</span>
               </div>
               {ticketEvents.length === 0 ? (
                 <div className="table-row">
@@ -3363,6 +3929,7 @@ export default function App() {
                       <div className="muted">{getTicketEventLabel(event.event_type)}</div>
                     </span>
                     <span>{event.operator_name || '-'}</span>
+                    <span>{event.source_ip || '-'}</span>
                   </div>
                 ))
               )}
@@ -3501,6 +4068,26 @@ export default function App() {
                 onClick={() => setCalendarDetail({ open: false, day: null, items: [] })}
               >
                 关闭
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {confirmDialog.open && (
+        <div className="modal-backdrop" onClick={closeConfirmDialog}>
+          <div className="modal-card" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-title">{confirmDialog.title || '确认操作'}</div>
+            <div className="modal-body">{confirmDialog.message || '确认执行该操作？'}</div>
+            <div className="modal-actions">
+              <button
+                type="button"
+                className="ghost btn btn-outline-secondary"
+                onClick={closeConfirmDialog}
+              >
+                取消
+              </button>
+              <button type="button" className="primary btn btn-primary" onClick={onConfirmDialogAccept}>
+                {confirmDialog.confirmLabel || '确认'}
               </button>
             </div>
           </div>

@@ -2191,6 +2191,10 @@ textarea:focus {
   grid-template-columns: 1fr 2fr 1fr;
 }
 
+.event-log-table .table-row {
+  grid-template-columns: 1fr 2fr 1fr 1fr;
+}
+
 .attachment-box {
   display: grid;
   gap: 10px;
@@ -2214,7 +2218,7 @@ textarea:focus {
 }
 
 .permission-log-table .table-row {
-  grid-template-columns: 1fr 2fr 1fr 0.9fr 0.8fr;
+  grid-template-columns: 1fr 2fr 1fr 0.9fr 0.9fr 0.8fr;
 }
 
 .permission-log-wrap {
