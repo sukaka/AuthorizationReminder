@@ -9,6 +9,7 @@ const RPCClient = require('@alicloud/pop-core');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
+const net = require('net');
 
 const app = express();
 const PORT = process.env.PORT || 5180;
@@ -18,34 +19,215 @@ const AUTH_COOKIE_SECURE = process.env.AUTH_COOKIE_SECURE === 'true';
 const AUTH_COOKIE_SAMESITE = String(process.env.AUTH_COOKIE_SAMESITE || 'lax').trim().toLowerCase() || 'lax';
 const CONFIG_SECRET_KEY = process.env.CONFIG_SECRET_KEY || '';
 const SECRET_MASK = '******';
-const SYSTEM_ACCESS_KEYS = ['reminder', 'ticketing', 'cmdb', 'inventory', 'device-flow', 'sec-impl'];
+const SYSTEM_ACCESS_KEYS = ['reminder', 'ticketing', 'cmdb', 'inventory', 'device-flow', 'sec-impl', 'faq', 'tender', 'train-exam'];
 const BUILTIN_ACCOUNT_DEFAULT_PASSWORD = process.env.BUILTIN_ACCOUNT_DEFAULT_PASSWORD || '123456';
 const BUILTIN_ACCOUNTS = [
   { username: 'admin', role: 'admin' },
   { username: 'sysadmin', role: 'sysadmin' },
   { username: 'auditor', role: 'auditor' },
+  { username: 'editor', role: 'editor' },
+  { username: 'reviewer', role: 'reviewer' },
 ];
 const BUILTIN_ACCOUNT_USERNAMES = new Set(BUILTIN_ACCOUNTS.map((item) => item.username));
 const AUDIT_SIGNING_KEY = process.env.AUDIT_SIGNING_KEY || JWT_SECRET;
+const SECURITY_STRICT_MODE = process.env.SECURITY_STRICT_MODE === 'true' || process.env.NODE_ENV === 'production';
+const weakSecrets = new Set(['dev-secret-change-me', 'change-me', '123456', 'password', '']);
 
-const validatePasswordComplexity = (password) => {
+const isWeakSecret = (value, minLength = 16) => {
+  const text = String(value || '').trim();
+  if (!text) return true;
+  if (text.length < minLength) return true;
+  return weakSecrets.has(text.toLowerCase());
+};
+
+const validateSecurityBootstrap = () => {
+  const problems = [];
+  if (isWeakSecret(JWT_SECRET, 32)) problems.push('JWT_SECRET 过弱（生产建议至少32位随机值）');
+  if (isWeakSecret(AUDIT_SIGNING_KEY, 32)) problems.push('AUDIT_SIGNING_KEY 过弱（生产建议至少32位随机值）');
+  if (isWeakSecret(CONFIG_SECRET_KEY, 32)) problems.push('CONFIG_SECRET_KEY 过弱（生产建议至少32位随机值）');
+  if (String(BUILTIN_ACCOUNT_DEFAULT_PASSWORD || '').trim() === '123456') {
+    problems.push('BUILTIN_ACCOUNT_DEFAULT_PASSWORD 仍为默认值');
+  }
+  if (!problems.length) return;
+  const text = `[SECURITY][auth] ${problems.join('；')}`;
+  if (SECURITY_STRICT_MODE) {
+    throw new Error(text);
+  }
+  console.warn(`${text}。当前为非严格模式，仅告警。`);
+};
+
+const DEFAULT_PASSWORD_POLICY = Object.freeze({
+  minLength: 10,
+  requireUppercase: true,
+  requireLowercase: true,
+  requireNumber: true,
+  requireSpecial: true,
+});
+const DEFAULT_SESSION_TIMEOUT_MINUTES = 7 * 24 * 60;
+const PRIVILEGED_IP_LIMIT_ROLES = new Set(['admin', 'sysadmin', 'auditor']);
+
+const clampNumber = (value, fallback, min, max) => {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return fallback;
+  return Math.min(max, Math.max(min, Math.round(num)));
+};
+
+const normalizePasswordPolicy = (raw) => {
+  const source = raw && typeof raw === 'object' ? raw : {};
+  return {
+    minLength: clampNumber(source.minLength, DEFAULT_PASSWORD_POLICY.minLength, 6, 64),
+    requireUppercase: source.requireUppercase !== false,
+    requireLowercase: source.requireLowercase !== false,
+    requireNumber: source.requireNumber !== false,
+    requireSpecial: source.requireSpecial !== false,
+  };
+};
+
+const buildPasswordComplexityHint = (policy) => {
+  const requirements = [];
+  if (policy.requireUppercase) requirements.push('大写字母');
+  if (policy.requireLowercase) requirements.push('小写字母');
+  if (policy.requireNumber) requirements.push('数字');
+  if (policy.requireSpecial) requirements.push('特殊字符');
+  if (!requirements.length) return `密码至少${policy.minLength}位`;
+  return `密码至少${policy.minLength}位，且需包含${requirements.join('、')}`;
+};
+
+const validatePasswordComplexity = (password, policyInput = DEFAULT_PASSWORD_POLICY) => {
   const value = String(password || '');
-  if (value.length < 10) {
-    return '密码至少10位，且需包含大写字母、小写字母、数字和特殊字符';
-  }
-  if (!/[A-Z]/.test(value)) {
-    return '密码需包含至少1个大写字母';
-  }
-  if (!/[a-z]/.test(value)) {
-    return '密码需包含至少1个小写字母';
-  }
-  if (!/\d/.test(value)) {
-    return '密码需包含至少1个数字';
-  }
-  if (!/[^A-Za-z0-9]/.test(value)) {
-    return '密码需包含至少1个特殊字符';
-  }
+  const policy = normalizePasswordPolicy(policyInput);
+  if (value.length < policy.minLength) return buildPasswordComplexityHint(policy);
+  if (policy.requireUppercase && !/[A-Z]/.test(value)) return '密码需包含至少1个大写字母';
+  if (policy.requireLowercase && !/[a-z]/.test(value)) return '密码需包含至少1个小写字母';
+  if (policy.requireNumber && !/\d/.test(value)) return '密码需包含至少1个数字';
+  if (policy.requireSpecial && !/[^A-Za-z0-9]/.test(value)) return '密码需包含至少1个特殊字符';
   return '';
+};
+
+const normalizeClientIp = (raw) => {
+  let text = String(raw || '').trim();
+  if (!text) return '';
+  if (text.includes(',')) {
+    text = text.split(',')[0].trim();
+  }
+  if (text.startsWith('[') && text.includes(']')) {
+    text = text.slice(1, text.indexOf(']')).trim();
+  }
+  const zoneIdx = text.indexOf('%');
+  if (zoneIdx > 0) text = text.slice(0, zoneIdx);
+  if (/^::ffff:\d+\.\d+\.\d+\.\d+$/i.test(text)) {
+    text = text.replace(/^::ffff:/i, '');
+  }
+  if (text === '::1') return '127.0.0.1';
+  if (/^\d{1,3}(?:\.\d{1,3}){3}:\d+$/.test(text)) {
+    text = text.replace(/:\d+$/, '');
+  }
+  return net.isIP(text) ? text.toLowerCase() : '';
+};
+
+const expandIpv6 = (ip) => {
+  const parts = String(ip || '').split('::');
+  if (parts.length > 2) return null;
+  const left = parts[0] ? parts[0].split(':').filter(Boolean) : [];
+  const right = parts[1] ? parts[1].split(':').filter(Boolean) : [];
+  const fillCount = 8 - left.length - right.length;
+  if (fillCount < 0) return null;
+  const all = parts.length === 1 ? left : [...left, ...Array(fillCount).fill('0'), ...right];
+  if (all.length !== 8) return null;
+  if (!all.every((item) => /^[0-9a-f]{1,4}$/i.test(item))) return null;
+  return all;
+};
+
+const ipToBigInt = (ip, family) => {
+  if (family === 4) {
+    return String(ip)
+      .split('.')
+      .reduce((acc, item) => (acc << 8n) + BigInt(Number(item)), 0n);
+  }
+  if (family === 6) {
+    const items = expandIpv6(ip);
+    if (!items) return null;
+    return items.reduce((acc, item) => (acc << 16n) + BigInt(parseInt(item, 16)), 0n);
+  }
+  return null;
+};
+
+const normalizeIpRule = (raw) => {
+  const text = String(raw || '').trim();
+  if (!text) return '';
+  if (!text.includes('/')) return normalizeClientIp(text);
+  const [baseRaw, prefixRaw] = text.split('/');
+  const base = normalizeClientIp(baseRaw);
+  if (!base) return '';
+  const family = net.isIP(base);
+  const maxPrefix = family === 4 ? 32 : 128;
+  const prefix = Number(prefixRaw);
+  if (!Number.isInteger(prefix) || prefix < 0 || prefix > maxPrefix) return '';
+  return `${base}/${prefix}`;
+};
+
+const parseIpAllowlist = (raw) => {
+  let items = [];
+  if (Array.isArray(raw)) {
+    items = raw;
+  } else if (typeof raw === 'string') {
+    const text = raw.trim();
+    if (!text) items = [];
+    else {
+      try {
+        const parsed = JSON.parse(text);
+        items = Array.isArray(parsed) ? parsed : text.split(/[\n,;]+/);
+      } catch (_err) {
+        items = text.split(/[\n,;]+/);
+      }
+    }
+  }
+  return Array.from(new Set(items.map((item) => normalizeIpRule(item)).filter(Boolean)));
+};
+
+const normalizeRoleIpAllowlist = (security) => {
+  const source = security && typeof security === 'object' ? security : {};
+  const roleSource = source.roleIpAllowlist && typeof source.roleIpAllowlist === 'object'
+    ? source.roleIpAllowlist
+    : {};
+  return {
+    admin: parseIpAllowlist(roleSource.admin ?? source.adminIpAllowlist),
+    sysadmin: parseIpAllowlist(roleSource.sysadmin ?? source.sysadminIpAllowlist),
+    auditor: parseIpAllowlist(roleSource.auditor ?? source.auditorIpAllowlist),
+  };
+};
+
+const isIpMatchRule = (ip, rule) => {
+  if (!ip || !rule) return false;
+  if (!rule.includes('/')) return ip === rule;
+  const [base, prefixText] = rule.split('/');
+  const prefix = Number(prefixText);
+  const family = net.isIP(base);
+  if (!family || net.isIP(ip) !== family) return false;
+  const maxBits = family === 4 ? 32 : 128;
+  if (!Number.isInteger(prefix) || prefix < 0 || prefix > maxBits) return false;
+  const ipNum = ipToBigInt(ip, family);
+  const baseNum = ipToBigInt(base, family);
+  if (ipNum === null || baseNum === null) return false;
+  const shift = BigInt(maxBits - prefix);
+  const mask = prefix === 0 ? 0n : ((1n << BigInt(prefix)) - 1n) << shift;
+  return (ipNum & mask) === (baseNum & mask);
+};
+
+const checkRoleIpAccess = ({ role, ip, securityConfig }) => {
+  const normalizedRole = String(role || '').trim().toLowerCase();
+  if (!PRIVILEGED_IP_LIMIT_ROLES.has(normalizedRole)) {
+    return { enforced: false, allowed: true, allowlist: [] };
+  }
+  const allowlist = Array.isArray(securityConfig?.roleIpAllowlist?.[normalizedRole])
+    ? securityConfig.roleIpAllowlist[normalizedRole]
+    : [];
+  if (!allowlist.length) {
+    return { enforced: false, allowed: true, allowlist: [] };
+  }
+  const normalizedIp = normalizeClientIp(ip);
+  const allowed = !!normalizedIp && allowlist.some((rule) => isIpMatchRule(normalizedIp, rule));
+  return { enforced: true, allowed, allowlist, normalizedIp };
 };
 
 const stableStringify = (value) => {
@@ -89,9 +271,11 @@ const parseAppAccessRaw = (value) => {
 const defaultAppAccessByRole = (role) => {
   const r = String(role || '').toLowerCase();
   if (r === 'admin') return [...SYSTEM_ACCESS_KEYS];
-  if (r === 'sysadmin') return ['reminder', 'sec-impl'];
-  if (r === 'auditor') return ['reminder', 'ticketing', 'cmdb', 'inventory', 'device-flow', 'sec-impl'];
-  return ['reminder'];
+  if (r === 'sysadmin') return ['reminder', 'sec-impl', 'tender', 'train-exam'];
+  if (r === 'auditor') return ['reminder', 'ticketing', 'cmdb', 'inventory', 'device-flow', 'sec-impl', 'faq', 'tender', 'train-exam'];
+  if (r === 'editor') return ['faq', 'tender', 'train-exam'];
+  if (r === 'reviewer') return ['faq', 'train-exam'];
+  return ['reminder', 'train-exam'];
 };
 
 const getUserAppAccess = (user) => {
@@ -99,12 +283,60 @@ const getUserAppAccess = (user) => {
   if (user.role === 'admin') return [...SYSTEM_ACCESS_KEYS];
   const parsed = parseAppAccessRaw(user.app_access);
   const source = parsed === null ? defaultAppAccessByRole(user.role) : parsed;
-  return Array.from(
+  const normalized = Array.from(
     new Set(source.map((item) => String(item || '').trim()).filter((item) => SYSTEM_ACCESS_KEYS.includes(item)))
   );
+  if (!normalized.includes('train-exam')) normalized.push('train-exam');
+  return normalized;
 };
 
 const canAccessSystem = (user, systemKey) => getUserAppAccess(user).includes(systemKey);
+
+const MFA_METHODS = ['email', 'sms', 'wecom', 'totp'];
+
+const parseUserMfaMethods = (raw) => {
+  let parsed = [];
+  if (Array.isArray(raw)) {
+    parsed = raw;
+  } else {
+    const text = String(raw || '').trim();
+    if (!text) return [];
+    try {
+      const data = JSON.parse(text);
+      if (Array.isArray(data)) parsed = data;
+    } catch (_err) {
+      parsed = text.split(',').map((item) => item.trim());
+    }
+  }
+  return Array.from(new Set(parsed.map((item) => String(item || '').trim()).filter((item) => MFA_METHODS.includes(item))));
+};
+
+const collectUserAvailableMfaMethods = (user) => {
+  const available = [];
+  if (user?.email) available.push('email');
+  if (user?.phone) available.push('sms');
+  if (user?.wecom_id) available.push('wecom');
+  if (Number(user?.totp_enabled) === 1 && user?.totp_secret) available.push('totp');
+  return available;
+};
+
+const resolveUserMfaStatus = ({ user, securityConfig }) => {
+  const desiredMethods = parseUserMfaMethods(user?.mfa_methods);
+  const availableMethods = collectUserAvailableMfaMethods(user);
+  const availableSet = new Set(availableMethods);
+  const enabled = Number(user?.mfa_enabled) === 1;
+  const effectiveMethods = desiredMethods.filter((method) => availableSet.has(method));
+  const forceAllUsers = !!securityConfig?.mfa?.forceAllUsers;
+  const setupRequired = forceAllUsers && (!enabled || !desiredMethods.length || !effectiveMethods.length);
+  return {
+    enabled,
+    forceAllUsers,
+    setupRequired,
+    desiredMethods,
+    availableMethods,
+    effectiveMethods,
+  };
+};
 
 const deriveKey = (secret) => crypto.createHash('sha256').update(secret).digest();
 
@@ -231,6 +463,10 @@ app.use(
     crossOriginEmbedderPolicy: false,
   })
 );
+app.disable('x-powered-by');
+if (process.env.TRUST_PROXY_HOPS) {
+  app.set('trust proxy', Number(process.env.TRUST_PROXY_HOPS));
+}
 app.use(cors(corsOptions));
 app.use(express.json({ limit: '1mb' }));
 app.use(cookieParser());
@@ -286,10 +522,18 @@ const ensureBuiltinUsers = async () => {
   }
 };
 
-const createToken = (user) =>
-  jwt.sign({ id: user.id, username: user.username, role: user.role }, JWT_SECRET, {
-    expiresIn: '7d',
+const createToken = async (user, securityConfig = null) => {
+  const security = securityConfig || await getSecurityConfig();
+  const timeoutMinutes = clampNumber(
+    security?.session?.timeoutMinutes,
+    DEFAULT_SESSION_TIMEOUT_MINUTES,
+    5,
+    DEFAULT_SESSION_TIMEOUT_MINUTES
+  );
+  return jwt.sign({ id: user.id, username: user.username, role: user.role }, JWT_SECRET, {
+    expiresIn: timeoutMinutes * 60,
   });
+};
 
 const parseCookieToken = (req) => {
   const tokenFromCookie = String(req.cookies?.[AUTH_COOKIE_NAME] || '').trim();
@@ -362,11 +606,22 @@ const authMiddleware = async (req, res, next) => {
   }
   try {
     const payload = jwt.verify(token, JWT_SECRET);
-    const user = await db.get('SELECT id, is_active FROM users WHERE id = ?', [payload.id]);
+    const user = await db.get('SELECT id, role, is_active FROM users WHERE id = ?', [payload.id]);
     if (!user || Number(user.is_active) !== 1) {
       return res.status(401).json({ error: '账号已失效，请联系系统管理员' });
     }
-    req.user = { ...payload, request_ip: getRequestIp(req) };
+    const security = await getSecurityConfig();
+    const requestIp = getRequestIp(req);
+    const ipCheck = checkRoleIpAccess({
+      role: user.role || payload.role,
+      ip: requestIp,
+      securityConfig: security,
+    });
+    if (!ipCheck.allowed) {
+      clearAuthCookie(res);
+      return res.status(403).json({ error: '当前IP不在允许访问范围内，请联系系统管理员', ipRestricted: true });
+    }
+    req.user = { ...payload, role: user.role || payload.role, request_ip: requestIp };
     return next();
   } catch (err) {
     return res.status(401).json({ error: '登录已过期' });
@@ -660,9 +915,80 @@ const authorizeSecImpl = (user, action) => {
   return deny('不支持的授权动作');
 };
 
+const authorizeFaq = (user, action) => {
+  if (!user) return deny('未登录');
+  if (!canAccessSystem(user, 'faq')) return deny('无权限访问FAQ系统');
+  const role = String(user.role || '').toLowerCase();
+  if (action === 'app:enter' || action === 'faq:read') return allow();
+  if (action === 'faq:write') {
+    if (role === 'admin' || role === 'editor') return allow();
+    return deny('仅管理员或编辑可执行FAQ写操作');
+  }
+  if (action === 'faq:review') {
+    if (role === 'admin' || role === 'reviewer') return allow();
+    return deny('仅管理员或审核员可执行FAQ审核操作');
+  }
+  if (action === 'faq:audit') {
+    if (role === 'auditor') return allow();
+    return deny('仅审计管理员可查看FAQ审计信息');
+  }
+  return deny('不支持的授权动作');
+};
+
+const authorizeTender = (user, action) => {
+  if (!user) return deny('未登录');
+  if (!canAccessSystem(user, 'tender')) return deny('无权限访问标书协同制作系统');
+  const role = String(user.role || '').toLowerCase();
+  if (action === 'app:enter' || action === 'tender:read') {
+    if (role === 'admin' || role === 'editor' || role === 'sysadmin' || role === 'auditor') return allow();
+    return deny('无权限访问标书协同制作系统');
+  }
+  if (action === 'tender:write' || action === 'tender:template:manage' || action === 'tender:ai:use') {
+    if (role === 'admin' || role === 'editor') return allow();
+    return deny('仅管理员或编辑可执行该操作');
+  }
+  if (action === 'tender:config:manage' || action === 'tender:ai:manage') {
+    if (role === 'admin' || role === 'sysadmin') return allow();
+    return deny('仅管理员或系统管理员可执行该操作');
+  }
+  if (action === 'tender:audit:read') {
+    if (role === 'auditor') return allow();
+    return deny('仅审计管理员可查看审计日志');
+  }
+  return deny('不支持的授权动作');
+};
+
+const authorizeTrainExam = (user, action) => {
+  if (!user) return deny('未登录');
+  if (!canAccessSystem(user, 'train-exam')) return deny('无权限访问培训考试系统');
+  const role = String(user.role || '').toLowerCase();
+  if (action === 'app:enter' || action === 'train_exam:read') return allow();
+  if (action === 'train_exam:content:write') {
+    if (role === 'admin' || role === 'editor') return allow();
+    return deny('仅管理员或编辑可维护培训内容');
+  }
+  if (action === 'train_exam:question:review' || action === 'train_exam:paper:publish') {
+    if (role === 'admin' || role === 'reviewer') return allow();
+    return deny('仅管理员或审核员可执行该操作');
+  }
+  if (action === 'train_exam:audit:read') {
+    if (role === 'auditor') return allow();
+    return deny('仅审计管理员可查看审计信息');
+  }
+  return deny('不支持的授权动作');
+};
+
 app.get('/api/auth/introspect', async (req, res) => {
-  const user = await db.get('SELECT id, username, role, app_access FROM users WHERE id = ?', [req.user.id]);
+  const user = await db.get(
+    'SELECT id, username, role, app_access, mfa_enabled, mfa_methods, totp_enabled, totp_secret, email, phone, wecom_id FROM users WHERE id = ?',
+    [req.user.id]
+  );
   if (!user) return res.status(401).json({ error: '登录已过期' });
+  const security = await getSecurityConfig();
+  const mfaStatus = resolveUserMfaStatus({ user, securityConfig: security });
+  if (mfaStatus.setupRequired) {
+    return res.status(403).json({ error: '请先完成二次验证设置', mfaSetupRequired: true });
+  }
   const scope = await buildUserScope(user);
   const apps = getUserAppAccess(user);
   res.json({ user: { id: user.id, username: user.username, role: user.role }, scope, apps });
@@ -670,8 +996,21 @@ app.get('/api/auth/introspect', async (req, res) => {
 
 app.post('/api/auth/authorize', async (req, res) => {
   const { system, action, resource } = req.body || {};
-  const user = await db.get('SELECT id, username, role, app_access FROM users WHERE id = ?', [req.user.id]);
+  const user = await db.get(
+    'SELECT id, username, role, app_access, mfa_enabled, mfa_methods, totp_enabled, totp_secret, email, phone, wecom_id FROM users WHERE id = ?',
+    [req.user.id]
+  );
   if (!user) return res.status(401).json({ error: '登录已过期' });
+  const security = await getSecurityConfig();
+  const mfaStatus = resolveUserMfaStatus({ user, securityConfig: security });
+  if (mfaStatus.setupRequired) {
+    return res.status(403).json({
+      allow: false,
+      reason: '请先完成二次验证设置',
+      mfaSetupRequired: true,
+      user: { id: user.id, username: user.username, role: user.role },
+    });
+  }
   const scope = await buildUserScope(user);
   const apps = getUserAppAccess(user);
 
@@ -690,19 +1029,41 @@ app.post('/api/auth/authorize', async (req, res) => {
     result = authorizeDeviceFlow(user, action);
   } else if (system === 'sec-impl') {
     result = authorizeSecImpl(user, action);
+  } else if (system === 'faq') {
+    result = authorizeFaq(user, action);
+  } else if (system === 'tender') {
+    result = authorizeTender(user, action);
+  } else if (system === 'train-exam') {
+    result = authorizeTrainExam(user, action);
   }
   return res.json({ ...result, user: { id: user.id, username: user.username, role: user.role }, scope, apps });
 });
 
 app.get('/api/auth/apps', async (req, res) => {
-  const user = await db.get('SELECT id, username, role, app_access FROM users WHERE id = ?', [req.user.id]);
+  const user = await db.get(
+    'SELECT id, username, role, app_access, mfa_enabled, mfa_methods, totp_enabled, totp_secret, email, phone, wecom_id FROM users WHERE id = ?',
+    [req.user.id]
+  );
   if (!user) return res.status(401).json({ error: '登录已过期' });
+  const security = await getSecurityConfig();
+  const mfaStatus = resolveUserMfaStatus({ user, securityConfig: security });
+  if (mfaStatus.setupRequired) {
+    return res.json({
+      user: { id: user.id, username: user.username, role: user.role },
+      mfaSetupRequired: true,
+      availableMethods: mfaStatus.availableMethods,
+      apps: [],
+    });
+  }
   const reminderUrl = process.env.APP_REMINDER_URL || 'http://localhost:8080';
   const ticketingUrl = process.env.APP_TICKETING_URL || 'http://localhost:8081';
   const cmdbURL = process.env.APP_CMDB_URL || 'http://localhost:8090';
   const inventoryURL = process.env.APP_INVENTORY_URL || 'http://localhost:8082';
   const deviceFlowURL = process.env.APP_DEVICE_FLOW_URL || 'http://localhost:8083';
   const secImplURL = process.env.APP_SEC_IMPL_URL || 'http://localhost:8084';
+  const faqURL = process.env.APP_FAQ_URL || 'http://localhost:8085';
+  const tenderURL = process.env.APP_TENDER_URL || 'http://localhost:8086';
+  const trainExamURL = process.env.APP_TRAIN_EXAM_URL || 'http://localhost:8087';
   const appAccess = getUserAppAccess(user);
   const apps = [];
   if (appAccess.includes('reminder')) {
@@ -725,9 +1086,24 @@ app.get('/api/auth/apps', async (req, res) => {
   }
   if (appAccess.includes('sec-impl')) {
     const secImplAuth = await authorizeSecImpl(user, 'app:enter');
-    apps.push({ key: 'sec-impl', name: '聚信实施记录系统', url: secImplURL, allow: !!secImplAuth.allow });
+    apps.push({ key: 'sec-impl', name: '实施记录系统', url: secImplURL, allow: !!secImplAuth.allow });
   }
-  return res.json({ apps: apps.filter((item) => item.allow) });
+  if (appAccess.includes('faq')) {
+    const faqAuth = await authorizeFaq(user, 'app:enter');
+    apps.push({ key: 'faq', name: 'FAQ系统', url: faqURL, allow: !!faqAuth.allow });
+  }
+  if (appAccess.includes('tender')) {
+    const tenderAuth = await authorizeTender(user, 'app:enter');
+    apps.push({ key: 'tender', name: '标书协同制作系统', url: tenderURL, allow: !!tenderAuth.allow });
+  }
+  if (appAccess.includes('train-exam')) {
+    const trainExamAuth = await authorizeTrainExam(user, 'app:enter');
+    apps.push({ key: 'train-exam', name: '培训考试系统', url: trainExamURL, allow: !!trainExamAuth.allow });
+  }
+  return res.json({
+    user: { id: user.id, username: user.username, role: user.role },
+    apps: apps.filter((item) => item.allow),
+  });
 });
 
 app.get('/portal', (req, res) => {
@@ -754,8 +1130,23 @@ app.get('/portal', (req, res) => {
     .primary{background:linear-gradient(135deg,#2563eb,#0ea5e9);color:#fff;border:none}
     .row{display:grid;grid-template-columns:minmax(0,1fr) 120px;gap:4px;align-items:center;width:100%}
     .captcha-title{display:block;font-size:24px;font-weight:600;line-height:1.2;margin:12px 0 8px}
-    .app-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px}
+    .app-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
     .app-item{border:1px solid rgba(148,163,184,.28);border-radius:12px;padding:12px;background:#f8fafc}
+    .app-name{
+      font-weight:700;
+      font-size:15px;
+      line-height:1.25;
+      margin-bottom:8px;
+      white-space:nowrap;
+      overflow:visible;
+      text-overflow:clip
+    }
+    @media (max-width: 980px){
+      .app-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+    }
+    @media (max-width: 680px){
+      .app-grid{grid-template-columns:1fr}
+    }
     .error{color:#dc2626;margin-top:10px}
     .hint{color:#64748b;margin-top:8px;font-size:13px}
     .login-actions{margin-top:12px;display:flex;justify-content:center}
@@ -772,6 +1163,20 @@ app.get('/portal', (req, res) => {
     .password-toggle:focus-visible{outline:2px solid rgba(37,99,235,.45);outline-offset:2px}
     .password-toggle svg{width:18px;height:18px;display:block}
     #captchaInput{width:100%;box-sizing:border-box}
+    .mfa-methods{display:grid;gap:10px;margin:12px 0}
+    .mfa-method{
+      display:flex;align-items:center;gap:8px;
+      padding:8px 10px;border:1px solid rgba(148,163,184,.35);border-radius:10px;background:#f8fafc
+    }
+    .mfa-method input{margin:0}
+    .mfa-method.disabled{opacity:.55}
+    .mfa-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
+    .secondary{background:#fff;color:#0f172a}
+    .totp-box{
+      margin-top:10px;padding:10px;border:1px dashed rgba(148,163,184,.5);border-radius:10px;background:#f8fafc
+    }
+    .totp-secret{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,'Liberation Mono','Courier New',monospace;font-size:12px;word-break:break-all}
+    .mfa-strong{margin-top:8px;font-weight:600;color:#1e293b}
   </style>
 </head>
 <body>
@@ -807,6 +1212,42 @@ app.get('/portal', (req, res) => {
       <h2 style="margin:0 0 12px">选择系统</h2>
       <div id="apps" class="app-grid"></div>
     </div>
+    <div id="mfaCard" class="card" style="display:none">
+      <h2 style="margin:0 0 12px">二次验证</h2>
+      <div class="muted">请输入二次验证码完成登录。</div>
+      <div id="mfaMethods" class="mfa-methods"></div>
+      <label>验证码<input id="mfaCode" placeholder="请输入6位验证码" /></label>
+      <div class="mfa-actions">
+        <button id="mfaSendBtn" class="secondary" type="button">发送验证码</button>
+        <button id="mfaVerifyBtn" class="primary" type="button">验证并登录</button>
+      </div>
+      <div id="mfaError" class="error"></div>
+      <div id="mfaHint" class="hint"></div>
+    </div>
+    <div id="mfaSetupCard" class="card" style="display:none">
+      <h2 style="margin:0 0 12px">配置二次验证</h2>
+      <div class="muted">系统管理员已开启强制二次验证，请先完成设置后再进入系统。</div>
+      <div id="mfaSetupMethods" class="mfa-methods"></div>
+      <div class="totp-box">
+        <div class="mfa-strong">谷歌认证（可选）</div>
+        <div id="totpStatus" class="hint">当前未启用谷歌认证。</div>
+        <div id="totpSecretWrap" style="display:none">
+          <div class="hint">请将以下密钥录入谷歌认证器：</div>
+          <div id="totpSecret" class="totp-secret"></div>
+        </div>
+        <div class="mfa-actions">
+          <button id="totpSetupBtn" class="secondary" type="button">生成谷歌密钥</button>
+          <input id="totpCodeInput" placeholder="输入谷歌验证码" />
+          <button id="totpEnableBtn" class="secondary" type="button">启用谷歌认证</button>
+        </div>
+      </div>
+      <div class="mfa-actions">
+        <button id="mfaSetupSaveBtn" class="primary" type="button">保存并重新登录</button>
+        <button id="mfaSetupLogoutBtn" class="secondary" type="button">退出登录</button>
+      </div>
+      <div id="mfaSetupError" class="error"></div>
+      <div id="mfaSetupHint" class="hint"></div>
+    </div>
   </div>
   <script nonce="${nonce}">
     let csrfToken = '';
@@ -814,9 +1255,42 @@ app.get('/portal', (req, res) => {
     const portalParams = new URLSearchParams(window.location.search);
     const portalMode = String(portalParams.get('mode') || '').toLowerCase();
     const autoRedirectWindowMs = 8000;
+    const sysadminDefaultSystemKey = 'reminder';
     const loopbackHostSet = new Set(['localhost', '127.0.0.1']);
     const portalSessionStorageKey = 'juxin_portal_session';
     const portalSessionQueryKey = 'portal_session';
+    const mfaMethodMap = { email: '邮箱', sms: '短信', wecom: '企业微信', totp: '谷歌认证' };
+    let mfaLoginState = { token: '', methods: [], method: '' };
+    let mfaSetupState = { methods: [], forceAllUsersMfa: false, totpEnabled: false, totpSecret: '' };
+
+    function parseJsonSafe(text) {
+      try {
+        return JSON.parse(text || '{}');
+      } catch (_err) {
+        return {};
+      }
+    }
+
+    function getErrorText({ response, data, fallback }) {
+      const payloadError = String(data?.error || '').trim();
+      if (payloadError) return payloadError;
+      if (response && response.includes('invalid csrf token')) return '安全校验失败，请刷新后重试';
+      return String(response || '').replace(/<[^>]*>/g, '').trim() || fallback;
+    }
+
+    function hideAllCards() {
+      const ids = ['loginCard', 'appsCard', 'mfaCard', 'mfaSetupCard'];
+      ids.forEach((id) => {
+        const node = document.getElementById(id);
+        if (node) node.style.display = 'none';
+      });
+    }
+
+    async function ensureCsrfReady() {
+      if (csrfToken) return csrfToken;
+      await loadCsrf();
+      return csrfToken;
+    }
     function getPortalSessionMarker() {
       try {
         return String(sessionStorage.getItem(portalSessionStorageKey) || '').trim();
@@ -971,6 +1445,292 @@ app.get('/portal', (req, res) => {
       }
     }
     function setError(msg){ document.getElementById('loginError').textContent = msg || ''; }
+    function setMfaError(msg){ document.getElementById('mfaError').textContent = msg || ''; }
+    function setMfaHint(msg){ document.getElementById('mfaHint').textContent = msg || ''; }
+    function setMfaSetupError(msg){ document.getElementById('mfaSetupError').textContent = msg || ''; }
+    function setMfaSetupHint(msg){ document.getElementById('mfaSetupHint').textContent = msg || ''; }
+
+    function renderMfaLoginMethods() {
+      const root = document.getElementById('mfaMethods');
+      if (!root) return;
+      root.innerHTML = '';
+      const methods = Array.isArray(mfaLoginState.methods) ? mfaLoginState.methods : [];
+      methods.forEach((method, idx) => {
+        const label = document.createElement('label');
+        label.className = 'mfa-method';
+        const input = document.createElement('input');
+        input.type = 'radio';
+        input.name = 'mfaMethod';
+        input.value = method;
+        input.checked = mfaLoginState.method ? mfaLoginState.method === method : idx === 0;
+        input.addEventListener('change', () => {
+          mfaLoginState.method = method;
+          setMfaError('');
+          setMfaHint(method === 'totp' ? '谷歌认证无需发送验证码，请直接输入验证码后登录。' : '');
+          const sendBtn = document.getElementById('mfaSendBtn');
+          if (sendBtn) sendBtn.disabled = method === 'totp';
+        });
+        label.appendChild(input);
+        const text = document.createElement('span');
+        text.textContent = mfaMethodMap[method] || method;
+        label.appendChild(text);
+        root.appendChild(label);
+      });
+      if (!mfaLoginState.method && methods.length) {
+        mfaLoginState.method = methods[0];
+      }
+      const sendBtn = document.getElementById('mfaSendBtn');
+      if (sendBtn) sendBtn.disabled = mfaLoginState.method === 'totp';
+      setMfaHint(mfaLoginState.method === 'totp' ? '谷歌认证无需发送验证码，请直接输入验证码后登录。' : '');
+    }
+
+    function showMfaLogin(data) {
+      mfaLoginState = {
+        token: String(data?.mfaToken || ''),
+        methods: Array.isArray(data?.methods) ? data.methods : [],
+        method: Array.isArray(data?.methods) && data.methods.length ? data.methods[0] : '',
+      };
+      hideAllCards();
+      const card = document.getElementById('mfaCard');
+      if (card) card.style.display = 'block';
+      const code = document.getElementById('mfaCode');
+      if (code) code.value = '';
+      setMfaError('');
+      renderMfaLoginMethods();
+    }
+
+    async function onMfaSend() {
+      if (!mfaLoginState.token || !mfaLoginState.method) {
+        setMfaError('验证会话不存在，请重新登录');
+        return;
+      }
+      if (mfaLoginState.method === 'totp') {
+        setMfaHint('谷歌认证无需发送验证码，请直接输入验证码后登录。');
+        return;
+      }
+      try {
+        await ensureCsrfReady();
+        const r = await fetch('/api/auth/mfa/send', {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken },
+          body: JSON.stringify({ mfaToken: mfaLoginState.token, method: mfaLoginState.method }),
+        });
+        const text = await r.text();
+        const data = parseJsonSafe(text);
+        if (!r.ok) throw new Error(getErrorText({ response: text, data, fallback: '验证码发送失败' }));
+        setMfaError('');
+        setMfaHint('验证码已发送，请注意查收。');
+      } catch (err) {
+        setMfaError(err.message || '验证码发送失败');
+      }
+    }
+
+    async function onMfaVerify() {
+      if (!mfaLoginState.token || !mfaLoginState.method) {
+        setMfaError('验证会话不存在，请重新登录');
+        return;
+      }
+      const code = String(document.getElementById('mfaCode')?.value || '').trim();
+      if (!code) {
+        setMfaError('请输入验证码');
+        return;
+      }
+      try {
+        await ensureCsrfReady();
+        const r = await fetch('/api/auth/mfa/verify', {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken },
+          body: JSON.stringify({ mfaToken: mfaLoginState.token, method: mfaLoginState.method, code }),
+        });
+        const text = await r.text();
+        const data = parseJsonSafe(text);
+        if (!r.ok) throw new Error(getErrorText({ response: text, data, fallback: '验证失败' }));
+        mfaLoginState = { token: '', methods: [], method: '' };
+        await loadApps();
+      } catch (err) {
+        setMfaError(err.message || '验证失败');
+      }
+    }
+
+    function renderMfaSetupMethods() {
+      const root = document.getElementById('mfaSetupMethods');
+      if (!root) return;
+      root.innerHTML = '';
+      const available = mfaSetupState.available || {};
+      const normalizedSelected = (Array.isArray(mfaSetupState.methods) ? mfaSetupState.methods : []).filter((method) => available[method]);
+      mfaSetupState.methods = normalizedSelected;
+      ['email', 'sms', 'wecom', 'totp'].forEach((method) => {
+        const item = document.createElement('label');
+        item.className = 'mfa-method' + (available[method] ? '' : ' disabled');
+        const input = document.createElement('input');
+        input.type = 'checkbox';
+        input.value = method;
+        input.disabled = !available[method];
+        input.checked = available[method] && mfaSetupState.methods.includes(method);
+        input.addEventListener('change', () => {
+          const set = new Set(mfaSetupState.methods);
+          if (input.checked) set.add(method);
+          else set.delete(method);
+          mfaSetupState.methods = Array.from(set);
+        });
+        const text = document.createElement('span');
+        text.textContent = (mfaMethodMap[method] || method) + (available[method] ? '' : '（未配置）');
+        item.appendChild(input);
+        item.appendChild(text);
+        root.appendChild(item);
+      });
+      const totpStatus = document.getElementById('totpStatus');
+      if (totpStatus) {
+        totpStatus.textContent = mfaSetupState.available?.totp
+          ? '当前已启用谷歌认证，可直接勾选保存。'
+          : '当前未启用谷歌认证。';
+      }
+      const secretWrap = document.getElementById('totpSecretWrap');
+      const secretNode = document.getElementById('totpSecret');
+      if (secretNode) secretNode.textContent = mfaSetupState.totpSecret || '';
+      if (secretWrap) secretWrap.style.display = mfaSetupState.totpSecret ? 'block' : 'none';
+    }
+
+    async function loadMfaSetupState() {
+      const r = await fetch('/api/auth/mfa/settings', { credentials: 'include' });
+      const text = await r.text();
+      const data = parseJsonSafe(text);
+      if (!r.ok) throw new Error(getErrorText({ response: text, data, fallback: '读取二次验证配置失败' }));
+      const available = {
+        email: !!data.has_email,
+        sms: !!data.has_phone,
+        wecom: !!data.has_wecom,
+        totp: !!data.totp_enabled,
+      };
+      const methods = Array.isArray(data.methods) ? data.methods.filter((method) => available[method]) : [];
+      mfaSetupState = {
+        ...mfaSetupState,
+        available,
+        methods,
+        forceAllUsersMfa: !!data.force_all_users_mfa,
+        totpEnabled: !!data.totp_enabled,
+      };
+      renderMfaSetupMethods();
+    }
+
+    async function showMfaSetup() {
+      hideAllCards();
+      const card = document.getElementById('mfaSetupCard');
+      if (card) card.style.display = 'block';
+      setMfaSetupError('');
+      setMfaSetupHint('');
+      try {
+        await loadMfaSetupState();
+        const availableCount = Object.values(mfaSetupState.available || {}).filter(Boolean).length;
+        if (!availableCount) {
+          setMfaSetupError('当前账号未配置可用二次验证方式，请联系系统管理员补充邮箱/手机号/企业微信，或先启用谷歌认证。');
+        }
+      } catch (err) {
+        setMfaSetupError(err.message || '读取二次验证配置失败');
+      }
+    }
+
+    async function onTotpSetup() {
+      try {
+        await ensureCsrfReady();
+        const r = await fetch('/api/auth/totp/setup', {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken },
+          body: JSON.stringify({}),
+        });
+        const text = await r.text();
+        const data = parseJsonSafe(text);
+        if (!r.ok) throw new Error(getErrorText({ response: text, data, fallback: '生成谷歌密钥失败' }));
+        mfaSetupState.totpSecret = String(data.secret || '');
+        renderMfaSetupMethods();
+        setMfaSetupError('');
+        setMfaSetupHint('已生成密钥，请在认证器添加后输入验证码完成启用。');
+      } catch (err) {
+        setMfaSetupError(err.message || '生成谷歌密钥失败');
+      }
+    }
+
+    async function onTotpEnable() {
+      const code = String(document.getElementById('totpCodeInput')?.value || '').trim();
+      if (!code) {
+        setMfaSetupError('请输入谷歌验证码');
+        return;
+      }
+      try {
+        await ensureCsrfReady();
+        const r = await fetch('/api/auth/totp/enable', {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken },
+          body: JSON.stringify({ code }),
+        });
+        const text = await r.text();
+        const data = parseJsonSafe(text);
+        if (!r.ok) throw new Error(getErrorText({ response: text, data, fallback: '启用谷歌认证失败' }));
+        const codeInput = document.getElementById('totpCodeInput');
+        if (codeInput) codeInput.value = '';
+        mfaSetupState.totpSecret = '';
+        await loadMfaSetupState();
+        setMfaSetupError('');
+        setMfaSetupHint('谷歌认证已启用，可在上方勾选后保存。');
+      } catch (err) {
+        setMfaSetupError(err.message || '启用谷歌认证失败');
+      }
+    }
+
+    async function onMfaSetupSave() {
+      const selected = (Array.isArray(mfaSetupState.methods) ? mfaSetupState.methods : []).filter((method) => mfaSetupState.available?.[method]);
+      if (!selected.length) {
+        setMfaSetupError('请至少选择一种可用验证方式');
+        return;
+      }
+      try {
+        await ensureCsrfReady();
+        const r = await fetch('/api/auth/mfa/settings', {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken },
+          body: JSON.stringify({ enabled: true, methods: selected }),
+        });
+        const text = await r.text();
+        const data = parseJsonSafe(text);
+        if (!r.ok) throw new Error(getErrorText({ response: text, data, fallback: '保存二次验证设置失败' }));
+        setMfaSetupError('');
+        setMfaSetupHint('设置已保存，正在退出并要求重新登录...');
+        try {
+          await fetch('/api/auth/logout', {
+            method: 'POST',
+            credentials: 'include',
+            headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken },
+            body: JSON.stringify({}),
+          });
+        } catch (_err) {
+          // ignore
+        }
+        window.location.href = '/portal';
+      } catch (err) {
+        setMfaSetupError(err.message || '保存二次验证设置失败');
+      }
+    }
+
+    async function onMfaSetupLogout() {
+      try {
+        await ensureCsrfReady();
+        await fetch('/api/auth/logout', {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken },
+          body: JSON.stringify({}),
+        });
+      } catch (_err) {
+        // ignore
+      }
+      window.location.href = '/portal';
+    }
+
     async function login(evt){
       evt.preventDefault();
       setError('');
@@ -988,46 +1748,61 @@ app.get('/portal', (req, res) => {
         body:JSON.stringify(body),
       });
       const text = await r.text();
-      let data = {};
-      try{ data = JSON.parse(text || '{}'); }catch{}
+      const data = parseJsonSafe(text);
       if(!r.ok){
-        let msg = data.error || '';
-        if (!msg) {
-          msg = text.includes('invalid csrf token')
-            ? '安全校验失败，请刷新后重试'
-            : (text.replace(/<[^>]*>/g, '').trim() || '登录失败');
-        }
+        const msg = getErrorText({ response: text, data, fallback: '登录失败' });
         setError(msg.includes('账号') && msg.includes('密码') ? '账号密码错误' : msg);
         await loadCsrf();
         await loadCaptcha();
         return;
       }
       ensurePortalSessionMarker();
+      if (data.mfaRequired) {
+        showMfaLogin(data);
+        return;
+      }
+      if (data.mfaSetupRequired) {
+        await showMfaSetup();
+        return;
+      }
       await loadApps();
     }
+
     async function loadApps(){
       const r = await fetch('/api/auth/apps',{credentials:'include'});
       const text = await r.text();
-      let data = {};
-      try { data = JSON.parse(text || '{}'); } catch {}
+      const data = parseJsonSafe(text);
       if (!r.ok) {
         throw new Error(data.error || '登录状态已失效');
       }
+      if (data.mfaSetupRequired) {
+        await showMfaSetup();
+        return;
+      }
       const list = Array.isArray(data.apps)?data.apps:[];
+      const userRole = String(data?.user?.role || '').trim().toLowerCase();
       const requestedSystem = String(portalParams.get('system') || '').trim();
       const root = document.getElementById('apps');
       root.innerHTML = '';
       if (!list.length) {
         throw new Error('当前账号没有可进入的系统');
       }
+      if (!requestedSystem && portalMode !== 'switch' && userRole === 'sysadmin') {
+        const preferred = list.find((item) => item.key === sysadminDefaultSystemKey) || list[0];
+        if (preferred) {
+          if (shouldThrottleRequestedRedirect(preferred.key)) {
+            hideAllCards();
+          } else {
+            window.location.href = appendPortalSession(preferred.url);
+            return;
+          }
+        }
+      }
       if (requestedSystem && portalMode !== 'switch') {
         const target = list.find((item) => item.key === requestedSystem);
         if (target) {
           if (shouldThrottleRequestedRedirect(requestedSystem)) {
-            const loginCard = document.getElementById('loginCard');
-            if (loginCard) loginCard.style.display = 'none';
-            const msg = document.getElementById('loginError');
-            if (msg) msg.textContent = '';
+            hideAllCards();
           } else {
             window.location.href = appendPortalSession(target.url);
             return;
@@ -1042,16 +1817,20 @@ app.get('/portal', (req, res) => {
         btn.className = 'primary';
         btn.textContent = '进入';
         btn.onclick = ()=>{ window.location.href = appUrl; };
-        div.innerHTML = '<div style="font-weight:700;margin-bottom:8px">'+app.name+'</div>';
+        div.innerHTML = '<div class="app-name">'+app.name+'</div>';
         div.appendChild(btn);
         root.appendChild(div);
       });
-      document.getElementById('appsCard').style.display = 'block';
+      hideAllCards();
+      const appsCard = document.getElementById('appsCard');
+      if (appsCard) appsCard.style.display = 'block';
     }
+
     async function bootstrap(){
       const loginCard = document.getElementById('loginCard');
       stripPortalTokenQuery();
       if (!getPortalSessionMarker()) {
+        hideAllCards();
         if (loginCard) loginCard.style.display = 'block';
         await loadCsrf();
         await loadCaptcha();
@@ -1062,6 +1841,7 @@ app.get('/portal', (req, res) => {
         await loadApps();
         return;
       } catch (_err) {
+        hideAllCards();
         if (loginCard) loginCard.style.display = 'block';
       }
       await loadCsrf();
@@ -1069,6 +1849,12 @@ app.get('/portal', (req, res) => {
     }
     document.getElementById('loginForm').addEventListener('submit', login);
     document.getElementById('captchaImg').addEventListener('click', loadCaptcha);
+    document.getElementById('mfaSendBtn').addEventListener('click', onMfaSend);
+    document.getElementById('mfaVerifyBtn').addEventListener('click', onMfaVerify);
+    document.getElementById('totpSetupBtn').addEventListener('click', onTotpSetup);
+    document.getElementById('totpEnableBtn').addEventListener('click', onTotpEnable);
+    document.getElementById('mfaSetupSaveBtn').addEventListener('click', onMfaSetupSave);
+    document.getElementById('mfaSetupLogoutBtn').addEventListener('click', onMfaSetupLogout);
     initPasswordToggle();
     bootstrap();
   </script>
@@ -1157,11 +1943,12 @@ const backfillOperationLogSystems = async () => {
     `UPDATE operation_logs
      SET log_system = CASE
        WHEN entity IN ('工单', '项目', '项目权限', '工单模板', '排期')
-         OR action IN ('创建项目', '更新项目', '删除项目', '更新项目权限', '导入模板', '创建排期')
+       OR action IN ('创建项目', '更新项目', '删除项目', '更新项目权限', '导入模板', '创建排期')
          THEN 'ticketing'
        WHEN action IN (
-         'LOGIN', 'LOGOUT', 'LOGIN_FAILED', 'LOGIN_LOCKED', 'LOGIN_BLOCKED',
-         'LOGIN_MFA_REQUIRED', 'MFA_SEND', 'MFA_SEND_FAILED', 'MFA_VERIFY_OK', 'MFA_VERIFY_FAILED',
+         'LOGIN', 'LOGIN_SUCCESS', 'LOGOUT', 'LOGIN_FAILED', 'LOGIN_LOCKED', 'LOGIN_BLOCKED',
+         'LOGIN_IP_RESTRICTED',
+         'LOGIN_MFA_REQUIRED', 'LOGIN_MFA_SETUP_REQUIRED', 'MFA_SEND', 'MFA_SEND_FAILED', 'MFA_VERIFY_OK', 'MFA_VERIFY_FAILED',
          'TOTP_ENABLED'
        )
          THEN 'sso'
@@ -1172,11 +1959,16 @@ const backfillOperationLogSystems = async () => {
 };
 
 const getRequestIp = (req) => {
-  const forwarded = req.headers['x-forwarded-for'];
-  if (typeof forwarded === 'string' && forwarded.trim()) {
-    return forwarded.split(',')[0].trim();
-  }
-  return req.ip || 'unknown';
+  const xff = req.headers?.['x-forwarded-for'];
+  const xri = req.headers?.['x-real-ip'];
+  const candidate =
+    (Array.isArray(xff) ? xff[0] : xff) ||
+    (Array.isArray(xri) ? xri[0] : xri) ||
+    req.ip ||
+    req.socket?.remoteAddress ||
+    '';
+  const normalized = normalizeClientIp(candidate);
+  return normalized || 'unknown';
 };
 
 const isLocked = ({ lockedUntilIso }) => {
@@ -1204,25 +1996,38 @@ const getSecurityConfig = async () => {
   const login = security.login || {};
   const mfa = security.mfa || {};
   const captcha = security.captcha || {};
-  const maxAttempts = Number(login.maxAttempts ?? 5);
-  const windowMinutes = Number(login.windowMinutes ?? 15);
-  const lockMinutes = Number(login.lockMinutes ?? 15);
-  const codeTtlSeconds = Number(mfa.codeTtlSeconds ?? 300);
+  const maxAttempts = clampNumber(login.maxAttempts, 5, 1, 20);
+  const windowMinutes = clampNumber(login.windowMinutes, 15, 1, 1440);
+  const lockMinutes = clampNumber(login.lockMinutes, 15, 1, 1440);
+  const codeTtlSeconds = clampNumber(mfa.codeTtlSeconds, 300, 60, 1800);
+  const forceAllUsers = mfa.forceAllUsers === true || security.forceAllUsersMfa === true;
   const captchaEnabled = captcha.enabled !== undefined ? !!captcha.enabled : true;
-  const captchaTtlSeconds = Number(captcha.ttlSeconds ?? 300);
+  const captchaTtlSeconds = clampNumber(captcha.ttlSeconds, 300, 60, 1800);
+  const passwordPolicy = normalizePasswordPolicy(security.passwordPolicy || {});
+  const timeoutMinutes = clampNumber(
+    security?.session?.timeoutMinutes ?? security.sessionTimeoutMinutes,
+    DEFAULT_SESSION_TIMEOUT_MINUTES,
+    5,
+    DEFAULT_SESSION_TIMEOUT_MINUTES
+  );
+  const roleIpAllowlist = normalizeRoleIpAllowlist(security);
   return {
     login: {
-      maxAttempts: Number.isFinite(maxAttempts) ? maxAttempts : 5,
-      windowMinutes: Number.isFinite(windowMinutes) ? windowMinutes : 15,
-      lockMinutes: Number.isFinite(lockMinutes) ? lockMinutes : 15,
+      maxAttempts,
+      windowMinutes,
+      lockMinutes,
     },
     mfa: {
-      codeTtlSeconds: Number.isFinite(codeTtlSeconds) ? codeTtlSeconds : 300,
+      codeTtlSeconds,
+      forceAllUsers,
     },
     captcha: {
       enabled: captchaEnabled,
-      ttlSeconds: Number.isFinite(captchaTtlSeconds) ? captchaTtlSeconds : 300,
+      ttlSeconds: captchaTtlSeconds,
     },
+    passwordPolicy,
+    session: { timeoutMinutes },
+    roleIpAllowlist,
   };
 };
 
@@ -1545,22 +2350,42 @@ app.get('/api/auth/captcha', async (req, res) => {
 
 app.post('/api/auth/login', async (req, res) => {
   const { username, password, captchaToken, captcha } = req.body || {};
+  const ip = getRequestIp(req);
   const rawUsername = String(username || '').trim();
+  let loginId = rawUsername;
+  const logLoginFailed = async ({ action = 'LOGIN_FAILED', reason = '', user = null, extra = {} } = {}) => {
+    await logOperation({
+      user: user || { id: 0, username: loginId || rawUsername || 'unknown', role: 'unknown' },
+      action,
+      entity: 'auth',
+      entityId: 0,
+      requestIp: ip,
+      afterData: {
+        username: loginId || rawUsername || '',
+        ip,
+        status: 'failed',
+        reason: reason || undefined,
+        ...extra,
+      },
+    });
+  };
+
   if (!rawUsername || !password) {
+    await logLoginFailed({ reason: 'MISSING_CREDENTIALS', extra: { username: rawUsername || '' } });
     return res.status(400).json({ error: '请输入账号和密码' });
   }
   const security = await getSecurityConfig();
   if (security.captcha.enabled) {
     if (!captchaToken || !captcha) {
+      await logLoginFailed({ reason: 'CAPTCHA_REQUIRED' });
       return res.status(400).json({ error: '请输入验证码' });
     }
     const cap = await verifyCaptcha({ token: captchaToken, code: captcha });
     if (!cap.ok) {
+      await logLoginFailed({ reason: 'CAPTCHA_INVALID', extra: { captcha_error: cap.error } });
       return res.status(400).json({ error: cap.error });
     }
   }
-  const ip = getRequestIp(req);
-  let loginId = rawUsername;
   let user = null;
   const normalizedUsername = rawUsername.toLowerCase();
   if (BUILTIN_ACCOUNT_USERNAMES.has(normalizedUsername)) {
@@ -1568,6 +2393,7 @@ app.post('/api/auth/login', async (req, res) => {
     user = await db.get('SELECT * FROM users WHERE username = ?', [normalizedUsername]);
   } else {
     if (!/^\d{6,20}$/.test(rawUsername)) {
+      await logLoginFailed({ reason: 'INVALID_LOGIN_ID' });
       return res.status(400).json({ error: '请使用手机号登录' });
     }
     loginId = rawUsername;
@@ -1581,19 +2407,15 @@ app.post('/api/auth/login', async (req, res) => {
       entity: 'auth',
       entityId: 0,
       requestIp: ip,
-      afterData: { username: loginId, ip, locked_until: lock.locked_until },
+      afterData: { username: loginId, ip, status: 'failed', locked_until: lock.locked_until },
     });
     return res.status(429).json({ error: '登录失败次数过多，请稍后再试' });
   }
   if (!user) {
     const fail = await recordLoginFailure({ username: loginId, ip });
-    await logOperation({
-      user: { id: 0, username: loginId, role: 'unknown' },
-      action: 'LOGIN_FAILED',
-      entity: 'auth',
-      entityId: 0,
-      requestIp: ip,
-      afterData: { username: loginId, ip, fail_count: fail.failCount, locked_until: fail.lockedUntil },
+    await logLoginFailed({
+      reason: 'USER_NOT_FOUND',
+      extra: { fail_count: fail.failCount, locked_until: fail.lockedUntil },
     });
     return res.status(400).json({ error: '账号或密码错误' });
   }
@@ -1604,42 +2426,87 @@ app.post('/api/auth/login', async (req, res) => {
       entity: 'auth',
       entityId: 0,
       requestIp: ip,
-      afterData: { reason: 'DISABLED', username: loginId, ip },
+      afterData: { reason: 'DISABLED', username: loginId, ip, status: 'failed' },
     });
     return res.status(403).json({ error: '账号已被禁用，请联系系统管理员' });
   }
   const ok = bcrypt.compareSync(password, user.password_hash);
   if (!ok) {
     const fail = await recordLoginFailure({ username: loginId, ip });
-    await logOperation({
+    await logLoginFailed({
       user: { id: user.id, username: user.username, role: user.role },
-      action: 'LOGIN_FAILED',
-      entity: 'auth',
-      entityId: 0,
-      requestIp: ip,
-      afterData: { username: loginId, ip, fail_count: fail.failCount, locked_until: fail.lockedUntil },
+      reason: 'PASSWORD_MISMATCH',
+      extra: { fail_count: fail.failCount, locked_until: fail.lockedUntil },
     });
     return res.status(400).json({ error: '账号或密码错误' });
   }
   await clearLoginFailures({ username: loginId, ip });
+  const ipCheck = checkRoleIpAccess({
+    role: user.role,
+    ip,
+    securityConfig: security,
+  });
+  if (!ipCheck.allowed) {
+    await logOperation({
+      user: { id: user.id, username: user.username, role: user.role },
+      action: 'LOGIN_IP_RESTRICTED',
+      entity: 'auth',
+      entityId: 0,
+      requestIp: ip,
+      afterData: {
+        username: user.username,
+        role: user.role,
+        ip,
+        allowlist: ipCheck.allowlist,
+        status: 'failed',
+      },
+    });
+    return res.status(403).json({ error: '当前IP不在允许访问范围内，请联系系统管理员', ipRestricted: true });
+  }
 
-  if (Number(user.mfa_enabled) === 1) {
-    let desiredMethods = [];
-    try {
-      desiredMethods = JSON.parse(user.mfa_methods || '[]');
-    } catch (err) {
-      desiredMethods = [];
-    }
-    const configured = new Set();
-    if (user.email) configured.add('email');
-    if (user.phone) configured.add('sms');
-    if (user.wecom_id) configured.add('wecom');
-    if (user.totp_enabled === 1 && user.totp_secret) configured.add('totp');
-    const methods = desiredMethods.filter((m) => configured.has(m));
-    if (!desiredMethods.length) {
+  const mfaStatus = resolveUserMfaStatus({ user, securityConfig: security });
+
+  if (mfaStatus.setupRequired) {
+    const token = await createToken(user, security);
+    setAuthCookie(res, token);
+    await logOperation({
+      user,
+      action: 'LOGIN_MFA_SETUP_REQUIRED',
+      entity: 'auth',
+      entityId: 0,
+      requestIp: ip,
+      afterData: {
+        username: user.username,
+        role: user.role,
+        ip,
+        desired_methods: mfaStatus.desiredMethods,
+        available_methods: mfaStatus.availableMethods,
+      },
+    });
+    return res.json({
+      mfaSetupRequired: true,
+      forceAllUsersMfa: true,
+      availableMethods: mfaStatus.availableMethods,
+      user: { id: user.id, username: user.username, role: user.role },
+    });
+  }
+
+  if (mfaStatus.enabled) {
+    const methods = mfaStatus.effectiveMethods;
+    if (!mfaStatus.desiredMethods.length) {
+      await logLoginFailed({
+        user,
+        reason: 'MFA_METHODS_NOT_CONFIGURED',
+        extra: { username: user.username, role: user.role },
+      });
       return res.status(400).json({ error: '请先设置二次验证方式' });
     }
     if (methods.length === 0) {
+      await logLoginFailed({
+        user,
+        reason: 'MFA_METHODS_UNAVAILABLE',
+        extra: { username: user.username, role: user.role },
+      });
       return res.status(400).json({
         error: '二次验证已开启，但当前账号未配置任何可用验证方式（请完善邮箱/手机号/企业微信或启用谷歌认证）',
       });
@@ -1667,15 +2534,15 @@ app.post('/api/auth/login', async (req, res) => {
     });
   }
 
-  const token = createToken(user);
+  const token = await createToken(user, security);
   setAuthCookie(res, token);
   await logOperation({
     user,
-    action: 'LOGIN',
+    action: 'LOGIN_SUCCESS',
     entity: 'auth',
     entityId: 0,
     requestIp: ip,
-    afterData: { username: user.username, role: user.role },
+    afterData: { username: user.username, role: user.role, ip, status: 'success' },
   });
   res.json({ token, user: { id: user.id, username: user.username, role: user.role } });
 });
@@ -1795,6 +2662,24 @@ app.post('/api/auth/mfa/verify', async (req, res) => {
 
   const user = await db.get('SELECT * FROM users WHERE id = ?', [row.user_id]);
   if (!user) return res.status(400).json({ error: '用户不存在' });
+  const security = await getSecurityConfig();
+  const ipCheck = checkRoleIpAccess({
+    role: user.role,
+    ip: requestIp,
+    securityConfig: security,
+  });
+  if (!ipCheck.allowed) {
+    await db.run('DELETE FROM auth_mfa_sessions WHERE token = ?', [mfaToken]);
+    await logOperation({
+      user,
+      action: 'LOGIN_IP_RESTRICTED',
+      entity: 'auth',
+      entityId: 0,
+      requestIp,
+      afterData: { username: user.username, role: user.role, ip: requestIp, allowlist: ipCheck.allowlist },
+    });
+    return res.status(403).json({ error: '当前IP不在允许访问范围内，请联系系统管理员', ipRestricted: true });
+  }
 
   let ok = false;
   if (method === 'totp') {
@@ -1837,8 +2722,16 @@ app.post('/api/auth/mfa/verify', async (req, res) => {
     requestIp,
     afterData: { method },
   });
-  const token = createToken(user);
+  const token = await createToken(user, security);
   setAuthCookie(res, token);
+  await logOperation({
+    user,
+    action: 'LOGIN_SUCCESS',
+    entity: 'auth',
+    entityId: 0,
+    requestIp,
+    afterData: { username: user.username, role: user.role, ip: requestIp, status: 'success', mfa_method: method },
+  });
   res.json({ token, user: { id: user.id, username: user.username, role: user.role } });
 });
 
@@ -1876,16 +2769,13 @@ app.post('/api/auth/totp/enable', async (req, res) => {
 
 app.get('/api/auth/mfa/settings', async (req, res) => {
   const user = await db.get(
-    'SELECT id, mfa_enabled, mfa_methods, totp_enabled, email, phone, wecom_id FROM users WHERE id = ?',
+    'SELECT id, mfa_enabled, mfa_methods, totp_enabled, totp_secret, email, phone, wecom_id FROM users WHERE id = ?',
     [req.user.id]
   );
   if (!user) return res.status(400).json({ error: '用户不存在' });
-  let methods = [];
-  try {
-    methods = JSON.parse(user.mfa_methods || '[]');
-  } catch (err) {
-    methods = [];
-  }
+  const security = await getSecurityConfig();
+  const methods = parseUserMfaMethods(user.mfa_methods);
+  const mfaStatus = resolveUserMfaStatus({ user, securityConfig: security });
   res.json({
     enabled: Number(user.mfa_enabled) === 1,
     methods,
@@ -1893,6 +2783,8 @@ app.get('/api/auth/mfa/settings', async (req, res) => {
     has_email: !!user.email,
     has_phone: !!user.phone,
     has_wecom: !!user.wecom_id,
+    force_all_users_mfa: !!security.mfa.forceAllUsers,
+    setup_required: !!mfaStatus.setupRequired,
   });
 });
 
@@ -1903,9 +2795,13 @@ app.post('/api/auth/mfa/settings', async (req, res) => {
     [req.user.id]
   );
   if (!user) return res.status(400).json({ error: '用户不存在' });
+  const security = await getSecurityConfig();
   const allowed = new Set(['email', 'sms', 'wecom', 'totp']);
   const nextMethods = Array.isArray(methods) ? methods.filter((m) => allowed.has(m)) : [];
   const nextEnabled = enabled === true || enabled === 1 || enabled === '1';
+  if (security.mfa.forceAllUsers && !nextEnabled) {
+    return res.status(400).json({ error: '系统已开启强制二次验证，当前账号不能关闭' });
+  }
   if (nextEnabled && nextMethods.length === 0) {
     return res.status(400).json({ error: '请选择至少一种验证方式' });
   }
@@ -1937,18 +2833,38 @@ app.post('/api/auth/mfa/settings', async (req, res) => {
 });
 
 app.get('/api/auth/me', async (req, res) => {
-  const user = await db.get('SELECT id, username, role, app_access FROM users WHERE id = ?', [req.user.id]);
+  const user = await db.get(
+    'SELECT id, username, role, app_access, mfa_enabled, mfa_methods, totp_enabled, totp_secret, email, phone, wecom_id FROM users WHERE id = ?',
+    [req.user.id]
+  );
   if (!user) return res.json(null);
-  res.json({ id: user.id, username: user.username, role: user.role, app_access: getUserAppAccess(user) });
+  const security = await getSecurityConfig();
+  const mfaStatus = resolveUserMfaStatus({ user, securityConfig: security });
+  res.json({
+    id: user.id,
+    username: user.username,
+    role: user.role,
+    app_access: getUserAppAccess(user),
+    mfa_setup_required: mfaStatus.setupRequired,
+    force_all_users_mfa: mfaStatus.forceAllUsers,
+  });
 });
 
 app.post('/api/auth/logout', async (req, res) => {
+  const requestIp = getRequestIp(req);
   clearAuthCookie(res);
   await logOperation({
     user: req.user,
     action: 'LOGOUT',
     entity: 'auth',
     entityId: 0,
+    requestIp,
+    afterData: {
+      username: req.user?.username || '',
+      role: req.user?.role || '',
+      ip: requestIp,
+      status: 'success',
+    },
   });
   res.json({ ok: true });
 });
@@ -1958,7 +2874,8 @@ app.post('/api/auth/change-password', async (req, res) => {
   if (!currentPassword || !newPassword) {
     return res.status(400).json({ error: '请输入当前密码和新密码' });
   }
-  const passwordRuleError = validatePasswordComplexity(newPassword);
+  const security = await getSecurityConfig();
+  const passwordRuleError = validatePasswordComplexity(newPassword, security.passwordPolicy);
   if (passwordRuleError) {
     return res.status(400).json({ error: passwordRuleError });
   }
@@ -1994,6 +2911,7 @@ app.use((err, req, res, next) => {
 });
 
 const start = async () => {
+  validateSecurityBootstrap();
   await db.ready;
   await ensureBuiltinUsers();
   await backfillOperationLogSignatures();

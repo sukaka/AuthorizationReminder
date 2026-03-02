@@ -48,16 +48,20 @@ services:
       MYSQL_USER: juxin
       MYSQL_PASSWORD: juxinpass
       MYSQL_DATABASE: juxin_reminder
-      CORS_ORIGINS: "http://localhost:5180,http://127.0.0.1:5180,http://localhost:8080,http://127.0.0.1:8080,http://localhost:8081,http://127.0.0.1:8081,http://localhost:8082,http://127.0.0.1:8082,http://localhost:8083,http://127.0.0.1:8083,http://localhost:8084,http://127.0.0.1:8084,http://localhost:8090,http://127.0.0.1:8090"
+      CORS_ORIGINS: "http://localhost:5180,http://127.0.0.1:5180,http://localhost:8080,http://127.0.0.1:8080,http://localhost:8081,http://127.0.0.1:8081,http://localhost:8082,http://127.0.0.1:8082,http://localhost:8083,http://127.0.0.1:8083,http://localhost:8084,http://127.0.0.1:8084,http://localhost:8085,http://127.0.0.1:8085,http://localhost:8086,http://127.0.0.1:8086,http://localhost:8087,http://127.0.0.1:8087,http://localhost:8090,http://127.0.0.1:8090"
       APP_CMDB_URL: "http://localhost:8090"
       APP_INVENTORY_URL: "http://localhost:8082"
       APP_DEVICE_FLOW_URL: "http://localhost:8083"
       APP_SEC_IMPL_URL: "http://localhost:8084"
+      APP_FAQ_URL: "http://localhost:8085"
+      APP_TENDER_URL: "http://localhost:8086"
+      APP_TRAIN_EXAM_URL: "http://localhost:8087"
       AUTH_COOKIE_NAME: "juxin_auth_token"
       AUTH_COOKIE_SECURE: "false"
       AUTH_COOKIE_SAMESITE: "lax"
       JWT_SECRET: "3122c0763b7728783ce33c724c81fcdf3b9c77fe33cdc3cbfe5a6f4a896634ea"
       CONFIG_SECRET_KEY: "UeiKgUhP80JPdwWMoBRRWmKxdz8BKEP4btzTTh4QmYVc9twMEcgCKuqFDx0M4HX8"
+      BUILTIN_ACCOUNT_DEFAULT_PASSWORD: "Dm1vbnqsILIVjUa5sWixBFos60bKdEKC"
     depends_on:
       - mysql
     ports:
@@ -94,6 +98,14 @@ services:
       - mysql
     ports:
       - "5182:5182"
+    develop:
+      watch:
+        - action: rebuild
+          path: ./ticketing/index.js
+        - action: rebuild
+          path: ./ticketing/package.json
+        - action: rebuild
+          path: ./ticketing/package-lock.json
 
   web-ticketing:
     build: ./ticketing/web
@@ -102,6 +114,20 @@ services:
       - auth
     ports:
       - "8081:80"
+    develop:
+      watch:
+        - action: rebuild
+          path: ./ticketing/web/src
+        - action: rebuild
+          path: ./ticketing/web/index.html
+        - action: rebuild
+          path: ./ticketing/web/nginx.conf
+        - action: rebuild
+          path: ./ticketing/web/package.json
+        - action: rebuild
+          path: ./ticketing/web/package-lock.json
+        - action: rebuild
+          path: ./ticketing/web/vite.config.js
 
   shipping-gateway:
     build: ./inventory-system/shipping-gateway
@@ -240,6 +266,180 @@ services:
     ports:
       - "8084:80"
 
+  faq-api:
+    build: ./faq/backend
+    environment:
+      PORT: 5186
+      AUTH_SERVICE_URL: "http://auth:5180"
+      AUTH_SYSTEM_KEY: "faq"
+      AUTH_FETCH_TIMEOUT_MS: 5000
+      AUTH_COOKIE_NAME: "juxin_auth_token"
+      MYSQL_HOST: mysql
+      MYSQL_PORT: 3306
+      MYSQL_USER: faq_user
+      MYSQL_PASSWORD: faq_pass
+      MYSQL_DATABASE: juxin_faq
+      MYSQL_ADMIN_USER: root
+      MYSQL_ADMIN_PASSWORD: rootpass
+      CORS_ORIGINS: "http://localhost:8085,http://127.0.0.1:8085"
+      UPLOAD_ROOT: "/data/faq/uploads"
+      PREVIEW_ROOT: "/data/faq/previews"
+      DRAFT_ROOT: "/data/faq/drafts"
+      EDITABLE_ROOT: "/data/faq/editable"
+      UPLOAD_MAX_FILE_SIZE_MB: 20
+      EDITOR_LOCK_MINUTES: 20
+      DOC_EDITOR_PROVIDER: "onlyoffice"
+      DOC_EDITOR_PUBLIC_PATH: "/doc-editor"
+      DOC_EDITOR_FILE_BASE_URL: "http://faq-api:5186"
+      DOC_EDITOR_CALLBACK_BASE_URL: "http://faq-api:5186"
+      DOC_EDITOR_JWT_SECRET: "faq-onlyoffice-jwt-change-me"
+      LIBREOFFICE_BIN: "soffice"
+    volumes:
+      - faq-data:/data/faq
+    depends_on:
+      - mysql
+      - auth
+      - onlyoffice
+    ports:
+      - "5186:5186"
+
+  web-faq:
+    build: ./faq/frontend
+    depends_on:
+      - faq-api
+      - auth
+      - onlyoffice
+    ports:
+      - "8085:80"
+
+  tender-api:
+    build: ./tender/backend
+    environment:
+      PORT: 5187
+      AUTH_SERVICE_URL: "http://auth:5180"
+      AUTH_SYSTEM_KEY: "tender"
+      AUTH_FETCH_TIMEOUT_MS: 5000
+      AUTH_COOKIE_NAME: "juxin_auth_token"
+      MYSQL_HOST: mysql
+      MYSQL_PORT: 3306
+      MYSQL_USER: tender_user
+      MYSQL_PASSWORD: tender_pass
+      MYSQL_DATABASE: juxin_tender
+      MYSQL_ADMIN_USER: root
+      MYSQL_ADMIN_PASSWORD: rootpass
+      CORS_ORIGINS: "http://localhost:8086,http://127.0.0.1:8086"
+      UPLOAD_ROOT: "/data/tender/uploads"
+      VERSION_ROOT: "/data/tender/uploads/versions"
+      DRAFT_ROOT: "/data/tender/uploads/drafts"
+      ASSET_ROOT: "/data/tender/uploads/assets"
+      WATERMARK_ROOT: "/data/tender/uploads/watermarks"
+      PREVIEW_ROOT: "/data/tender/uploads/previews"
+      EDITABLE_ROOT: "/data/tender/uploads/editable"
+      UPLOAD_MAX_FILE_SIZE_MB: 30
+      LIBREOFFICE_BIN: "soffice"
+      DOC_EDITOR_PROVIDER: "onlyoffice"
+      DOC_EDITOR_PUBLIC_PATH: "/doc-editor"
+      DOC_EDITOR_FILE_BASE_URL: "http://tender-api:5187"
+      DOC_EDITOR_CALLBACK_BASE_URL: "http://tender-api:5187"
+      DOC_EDITOR_JWT_SECRET: "faq-onlyoffice-jwt-change-me"
+      EDITOR_SESSION_TTL_MINUTES: 120
+      AUDIT_SIGNING_KEY: "tender-audit-signing-key-change-me"
+      CONFIG_SECRET_KEY: "tender-config-secret-change-me-32chars"
+      AUDIT_RETENTION_DAYS: 365
+      AUDIT_CLEANUP_INTERVAL_MS: 86400000
+      OCR_ACCESS_KEY_ID: ""
+      OCR_ACCESS_KEY_SECRET: ""
+      OCR_ENDPOINT: "ocr.cn-beijing.aliyuncs.com"
+      OCR_API_VERSION: "2021-07-07"
+      AI_OPENAI_BASE_URL: ""
+      AI_OPENAI_API_KEY: ""
+      AI_QWEN_MODEL_NAME: "qwen3.5"
+      AI_KIMI_MODEL_NAME: "kimi-2.5"
+      AI_CLAUDE_MODEL_NAME: "claude"
+    volumes:
+      - tender-data:/data/tender
+    depends_on:
+      - mysql
+      - auth
+      - onlyoffice
+    ports:
+      - "5187:5187"
+
+  web-tender:
+    build: ./tender/frontend
+    depends_on:
+      - tender-api
+      - auth
+      - onlyoffice
+    ports:
+      - "8086:80"
+
+  train-exam-api:
+    build: ./train-exam/backend
+    environment:
+      PORT: 5188
+      AUTH_SERVICE_URL: "http://auth:5180"
+      AUTH_SYSTEM_KEY: "train-exam"
+      AUTH_FETCH_TIMEOUT_MS: 5000
+      AUTH_COOKIE_NAME: "juxin_auth_token"
+      MYSQL_HOST: mysql
+      MYSQL_PORT: 3306
+      MYSQL_USER: train_exam_user
+      MYSQL_PASSWORD: train_exam_pass
+      MYSQL_DATABASE: juxin_train_exam
+      MYSQL_ADMIN_USER: root
+      MYSQL_ADMIN_PASSWORD: rootpass
+      FAQ_MYSQL_HOST: mysql
+      FAQ_MYSQL_PORT: 3306
+      FAQ_MYSQL_USER: root
+      FAQ_MYSQL_PASSWORD: rootpass
+      FAQ_MYSQL_DATABASE: juxin_faq
+      CORS_ORIGINS: "http://localhost:8087,http://127.0.0.1:8087"
+      RESOURCE_ROOT: "/data/train-exam/resources"
+      IMPORT_ROOT: "/data/train-exam/imports"
+      CERT_ROOT: "/data/train-exam/certificates"
+      UPLOAD_MAX_FILE_SIZE_MB: 50
+      AUDIT_SIGNING_KEY: "train-exam-audit-signing-key-change-me"
+      AI_OPENAI_BASE_URL: ""
+      AI_OPENAI_API_KEY: ""
+      AI_MODEL_NAME: ""
+      DOC_EDITOR_PROVIDER: "onlyoffice"
+      DOC_EDITOR_PUBLIC_PATH: "/doc-editor"
+      DOC_EDITOR_FILE_BASE_URL: "http://train-exam-api:5188"
+      DOC_EDITOR_JWT_SECRET: "faq-onlyoffice-jwt-change-me"
+      DOC_PREVIEW_MIN_SECONDS: 45
+    volumes:
+      - train-exam-data:/data/train-exam
+    depends_on:
+      - mysql
+      - auth
+      - onlyoffice
+    ports:
+      - "5188:5188"
+
+  web-train-exam:
+    build: ./train-exam/frontend
+    depends_on:
+      - train-exam-api
+      - auth
+      - onlyoffice
+    ports:
+      - "8087:80"
+
+  onlyoffice:
+    build:
+      context: ./faq/onlyoffice-fonts
+      dockerfile: Dockerfile
+    environment:
+      JWT_ENABLED: "true"
+      JWT_SECRET: "faq-onlyoffice-jwt-change-me"
+      JWT_HEADER: "Authorization"
+      JWT_IN_BODY: "true"
+      WOPI_ENABLED: "false"
+      ALLOW_PRIVATE_IP_ADDRESS: "true"
+      ALLOW_META_IP_ADDRESS: "true"
+    restart: unless-stopped
+
   cmdb-mongo:
     image: mongo:7.0
     volumes:
@@ -258,11 +458,11 @@ services:
     command: >
       '
       for i in $$(seq 1 60); do
-        mysql -hmysql -uroot -prootpass -e "SELECT 1" >/dev/null 2>&1 && break;
+        mysql --default-character-set=utf8mb4 -hmysql -uroot -prootpass -e "SELECT 1" >/dev/null 2>&1 && break;
         echo "waiting for mysql...";
         sleep 2;
       done;
-      mysql -hmysql -uroot -prootpass < /migrations/001_init_cmdb.sql;
+      mysql --default-character-set=utf8mb4 -hmysql -uroot -prootpass < /migrations/001_init_cmdb.sql;
       echo "cmdb mysql initialized";
       '
     volumes:
@@ -311,3 +511,6 @@ services:
 volumes:
   mysql-data:
   cmdb-mongo-data:
+  faq-data:
+  tender-data:
+  train-exam-data:

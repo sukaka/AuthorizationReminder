@@ -165,6 +165,17 @@ LIMIT 1`
 	return scanCI(r.db.QueryRowContext(ctx, q, ciUID))
 }
 
+func (r *CIRepository) GetByTypeAndUniqueKey(ctx context.Context, ciTypeID uint64, uniqueKey string) (*model.CI, error) {
+	const q = `
+SELECT id, ci_uid, ci_type_id, name, unique_key, status, COALESCE(owner, ''), source, COALESCE(source_ref, ''),
+       CAST(extra_attrs_json AS CHAR), version, deleted, created_at, updated_at
+FROM ci
+WHERE ci_type_id = ? AND unique_key = ? AND deleted = 0
+LIMIT 1`
+
+	return scanCI(r.db.QueryRowContext(ctx, q, ciTypeID, uniqueKey))
+}
+
 func (r *CIRepository) GetByUIDTx(ctx context.Context, tx *sql.Tx, ciUID string) (*model.CI, error) {
 	const q = `
 SELECT id, ci_uid, ci_type_id, name, unique_key, status, COALESCE(owner, ''), source, COALESCE(source_ref, ''),

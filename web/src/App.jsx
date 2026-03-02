@@ -83,24 +83,130 @@ const systemAccessOptions = [
   { key: 'inventory', label: '库存管理系统', shortLabel: '库存系统' },
   { key: 'device-flow', label: '设备流转系统', shortLabel: '设备流转' },
   { key: 'sec-impl', label: '聚信实施记录系统', shortLabel: '实施记录' },
+  { key: 'faq', label: 'FAQ系统', shortLabel: 'FAQ' },
+  { key: 'tender', label: '标书协同制作系统', shortLabel: '标书协同' },
+  { key: 'train-exam', label: '培训考试系统', shortLabel: '培训考试' },
 ]
 const defaultSystemAccess = systemAccessOptions.map((item) => item.key)
 const roleOptions = [
   { value: 'admin', label: '业务管理员' },
+  { value: 'editor', label: '标书编辑' },
   { value: 'sysadmin', label: '系统管理员' },
   { value: 'auditor', label: '审计管理员' },
-  { value: 'viewer', label: '只读用户' },
+  { value: 'user', label: '普通用户' },
   { value: 'sales', label: '销售（旧角色）' },
 ]
 const roleLabelMap = {
   admin: '业务管理员',
+  editor: '标书编辑',
   sysadmin: '系统管理员',
   auditor: '审计管理员',
-  viewer: '只读用户',
+  user: '普通用户',
+  viewer: '普通用户',
   sales: '销售（兼容）',
 }
 const roleLabel = (value) => roleLabelMap[String(value || '').toLowerCase()] || value || '-'
 const BUILTIN_ROLE_USERNAMES = new Set(['admin', 'sysadmin', 'auditor'])
+const defaultPasswordPolicy = Object.freeze({
+  minLength: 10,
+  requireUppercase: true,
+  requireLowercase: true,
+  requireNumber: true,
+  requireSpecial: true,
+})
+const defaultRoleIpAllowlist = Object.freeze({
+  admin: [],
+  sysadmin: [],
+  auditor: [],
+})
+const createDefaultUserForm = () => ({
+  id: null,
+  username: '',
+  password: '',
+  role: 'user',
+  is_active: 1,
+  email: '',
+  phone: '',
+  wecom_id: '',
+  app_access: [...defaultSystemAccess],
+})
+
+const getDefaultUserEditDialogPosition = () => {
+  if (typeof window === 'undefined') return { left: 80, top: 64 }
+  const dialogWidth = Math.min(980, window.innerWidth - 24)
+  const left = Math.max(12, Math.round((window.innerWidth - dialogWidth) / 2))
+  const top = Math.max(20, Math.round(window.innerHeight * 0.08))
+  return { left, top }
+}
+
+const normalizePositiveInt = (value, fallback, min, max) => {
+  const num = Number(value)
+  if (!Number.isFinite(num)) return fallback
+  return Math.min(max, Math.max(min, Math.round(num)))
+}
+
+const parseIpListInput = (value) => {
+  if (Array.isArray(value)) {
+    return Array.from(new Set(value.map((item) => String(item || '').trim()).filter(Boolean)))
+  }
+  const text = String(value || '').trim()
+  if (!text) return []
+  let rawItems = []
+  try {
+    const parsed = JSON.parse(text)
+    rawItems = Array.isArray(parsed) ? parsed : text.split(/[\n,;]+/)
+  } catch {
+    rawItems = text.split(/[\n,;]+/)
+  }
+  return Array.from(new Set(rawItems.map((item) => String(item || '').trim()).filter(Boolean)))
+}
+
+const normalizeSecurityConfig = (securityInput) => {
+  const source = securityInput && typeof securityInput === 'object' ? securityInput : {}
+  const login = source.login && typeof source.login === 'object' ? source.login : {}
+  const mfa = source.mfa && typeof source.mfa === 'object' ? source.mfa : {}
+  const captcha = source.captcha && typeof source.captcha === 'object' ? source.captcha : {}
+  const passwordPolicy =
+    source.passwordPolicy && typeof source.passwordPolicy === 'object' ? source.passwordPolicy : {}
+  const session = source.session && typeof source.session === 'object' ? source.session : {}
+  const roleIpAllowlist =
+    source.roleIpAllowlist && typeof source.roleIpAllowlist === 'object' ? source.roleIpAllowlist : {}
+  return {
+    ...source,
+    login: {
+      maxAttempts: normalizePositiveInt(login.maxAttempts ?? 5, 5, 1, 20),
+      windowMinutes: normalizePositiveInt(login.windowMinutes ?? 15, 15, 1, 1440),
+      lockMinutes: normalizePositiveInt(login.lockMinutes ?? 15, 15, 1, 1440),
+    },
+    mfa: {
+      ...mfa,
+      codeTtlSeconds: normalizePositiveInt(mfa.codeTtlSeconds ?? 300, 300, 60, 1800),
+    },
+    captcha: {
+      ...captcha,
+      enabled: captcha.enabled !== false,
+      ttlSeconds: normalizePositiveInt(captcha.ttlSeconds ?? 300, 300, 60, 1800),
+    },
+    forceAllUsersMfa: source.forceAllUsersMfa === true || mfa.forceAllUsers === true,
+    adminMfaMethods: Array.isArray(source.adminMfaMethods) ? source.adminMfaMethods.filter(Boolean) : [],
+    passwordPolicy: {
+      minLength: normalizePositiveInt(passwordPolicy.minLength ?? defaultPasswordPolicy.minLength, 10, 6, 64),
+      requireUppercase: passwordPolicy.requireUppercase !== false,
+      requireLowercase: passwordPolicy.requireLowercase !== false,
+      requireNumber: passwordPolicy.requireNumber !== false,
+      requireSpecial: passwordPolicy.requireSpecial !== false,
+    },
+    session: {
+      timeoutMinutes: normalizePositiveInt(session.timeoutMinutes ?? source.sessionTimeoutMinutes ?? 10080, 10080, 5, 10080),
+    },
+    roleIpAllowlist: {
+      ...defaultRoleIpAllowlist,
+      admin: parseIpListInput(roleIpAllowlist.admin ?? source.adminIpAllowlist),
+      sysadmin: parseIpListInput(roleIpAllowlist.sysadmin ?? source.sysadminIpAllowlist),
+      auditor: parseIpListInput(roleIpAllowlist.auditor ?? source.auditorIpAllowlist),
+    },
+  }
+}
 
 const emptyCustomer = { id: null, name: '', juxin_sales: '', channel_sales: '' }
 const emptyContact = {
@@ -210,7 +316,7 @@ function App() {
   const [authReady, setAuthReady] = useState(false)
   const [logoutPending, setLogoutPending] = useState(false)
   const [currentUser, setCurrentUser] = useState(null)
-  const [activeTab, setActiveTab] = useState('dashboard')
+  const [activeTab, setActiveTab] = useState('account')
   const [screenshotPreview, setScreenshotPreview] = useState('')
   const [previewingScreenshotId, setPreviewingScreenshotId] = useState(null)
   const screenshotPreviewUrlRef = useRef('')
@@ -293,16 +399,17 @@ function App() {
   })
   const [users, setUsers] = useState([])
   const [usersPage, setUsersPage] = useState(1)
-  const [userForm, setUserForm] = useState({
-    id: null,
-    username: '',
-    password: '',
-    role: 'viewer',
-    is_active: 1,
-    email: '',
-    phone: '',
-    wecom_id: '',
-    app_access: [...defaultSystemAccess],
+  const [userLockFilter, setUserLockFilter] = useState('all')
+  const [userForm, setUserForm] = useState(() => createDefaultUserForm())
+  const [editUserModalOpen, setEditUserModalOpen] = useState(false)
+  const [editUserForm, setEditUserForm] = useState(() => createDefaultUserForm())
+  const [editUserDialogPos, setEditUserDialogPos] = useState(() => getDefaultUserEditDialogPosition())
+  const editUserDragRef = useRef({
+    dragging: false,
+    startX: 0,
+    startY: 0,
+    startLeft: 0,
+    startTop: 0,
   })
   const [configForm, setConfigForm] = useState({
     email: { host: '', port: '', user: '', pass: '', from: '', secure: '' },
@@ -334,11 +441,12 @@ function App() {
     reminderSchedule: { days: '60,30,20', hour: 9, minute: 0, channels: ['email'], graceDays: 0 },
     retry: { maxRetries: 2, intervalMs: 2000 },
     rateLimit: { maxPerRun: 200 },
-    security: {
+    security: normalizeSecurityConfig({
       login: { maxAttempts: 5, windowMinutes: 15, lockMinutes: 15 },
       mfa: { codeTtlSeconds: 300 },
+      forceAllUsersMfa: false,
       adminMfaMethods: [],
-    },
+    }),
   })
   const [testEmail, setTestEmail] = useState('')
   const [testEmailSubject, setTestEmailSubject] = useState('测试邮件')
@@ -510,6 +618,17 @@ function App() {
         canManageSecurity: false,
         canAudit: false,
       },
+      user: {
+        canBusinessRead: false,
+        canDashboard: false,
+        canWrite: false,
+        canDelete: false,
+        canConfig: false,
+        canSend: false,
+        canManageUsers: false,
+        canManageSecurity: false,
+        canAudit: false,
+      },
       viewer: {
         canBusinessRead: false,
         canDashboard: false,
@@ -524,18 +643,23 @@ function App() {
     }),
     []
   )
-  const permissions = rolePermissions[currentUser?.role || 'viewer']
+  const currentRole = String(currentUser?.role || '').toLowerCase() === 'viewer'
+    ? 'user'
+    : (String(currentUser?.role || '').toLowerCase() || 'user')
+  const permissions = rolePermissions[currentRole] || rolePermissions.user
   const isAuditOnlyUser = currentUser?.role === 'auditor'
-  const isEditingBuiltinUser = BUILTIN_ROLE_USERNAMES.has(String(userForm.username || '').toLowerCase())
+  const isEditingBuiltinModalUser =
+    !!editUserForm.id && BUILTIN_ROLE_USERNAMES.has(String(editUserForm.username || '').toLowerCase())
   const roleGuideText = useMemo(() => {
-    const role = String(currentUser?.role || '').toLowerCase()
+    const role = currentRole
     if (role === 'admin') return '可维护客户/联系人/授权与发送计划，支持业务配置。'
+    if (role === 'editor') return '标书编辑角色：可用于标书协同制作系统文档编写、模板与AI能力，提醒系统默认仅开放账号页。'
     if (role === 'sysadmin') return '仅可维护账号、安全策略和用户，不展示业务数据菜单。'
     if (role === 'auditor') return '仅可访问操作日志与审计相关能力，不允许业务写操作。'
-    if (role === 'viewer') return '仅可查看账号安全页，若需更多权限请联系管理员。'
+    if (role === 'user') return '仅可查看账号安全页，若需更多权限请联系管理员。'
     if (role === 'sales') return '当前为兼容角色，默认仅开放账号安全页。'
     return '请根据角色授权使用系统功能。'
-  }, [currentUser?.role])
+  }, [currentRole])
 
   const visibleTabs = tabs.filter((tab) => {
     if (isAuditOnlyUser) return tab.key === 'ops'
@@ -570,6 +694,14 @@ function App() {
   useEffect(() => {
     refreshCsrf()
   }, [])
+
+  useEffect(
+    () => () => {
+      window.removeEventListener('mousemove', onUserEditDragMove)
+      window.removeEventListener('mouseup', onUserEditDragEnd)
+    },
+    []
+  )
 
   const customerMap = useMemo(() => {
     const map = new Map()
@@ -734,7 +866,16 @@ function App() {
   const pagedSendPlans = useMemo(() => paginate(sendPlans, sendPlanPage), [sendPlans, sendPlanPage])
   const pagedReminderLogs = useMemo(() => paginate(reminderLogs, reminderPage), [reminderLogs, reminderPage])
   const pagedOperationLogs = useMemo(() => paginate(operationLogs, opsPage), [operationLogs, opsPage])
-  const pagedUsers = useMemo(() => paginate(users, usersPage), [users, usersPage])
+  const filteredUsers = useMemo(() => {
+    if (userLockFilter === 'locked') {
+      return users.filter((item) => String(item.lock_status || '').toLowerCase() === 'locked')
+    }
+    if (userLockFilter === 'normal') {
+      return users.filter((item) => String(item.lock_status || '').toLowerCase() !== 'locked')
+    }
+    return users
+  }, [users, userLockFilter])
+  const pagedUsers = useMemo(() => paginate(filteredUsers, usersPage), [filteredUsers, usersPage])
   const pagedImportJobs = useMemo(() => paginate(importJobs, importJobsPage), [importJobs, importJobsPage])
 
   const refreshCustomers = async () => {
@@ -935,7 +1076,7 @@ function App() {
       reminderSchedule: data.reminderSchedule || prev.reminderSchedule,
       retry: data.retry || prev.retry,
       rateLimit: data.rateLimit || prev.rateLimit,
-      security: data.security || prev.security,
+      security: normalizeSecurityConfig(data.security || prev.security),
     }))
     setTestWecomWebhook((prev) => (prev ? prev : data.wecom?.webhook || ''))
     setConfigDirty(false)
@@ -1102,6 +1243,43 @@ function App() {
     await callback(value)
   }
 
+  const closeEditUserModal = () => {
+    setEditUserModalOpen(false)
+    setEditUserForm(createDefaultUserForm())
+    editUserDragRef.current.dragging = false
+    window.removeEventListener('mousemove', onUserEditDragMove)
+    window.removeEventListener('mouseup', onUserEditDragEnd)
+  }
+
+  const onUserEditDragMove = (event) => {
+    const drag = editUserDragRef.current
+    if (!drag.dragging) return
+    const maxLeft = Math.max(12, window.innerWidth - 360)
+    const maxTop = Math.max(12, window.innerHeight - 120)
+    const nextLeft = Math.min(maxLeft, Math.max(12, drag.startLeft + (event.clientX - drag.startX)))
+    const nextTop = Math.min(maxTop, Math.max(12, drag.startTop + (event.clientY - drag.startY)))
+    setEditUserDialogPos({ left: Math.round(nextLeft), top: Math.round(nextTop) })
+  }
+
+  const onUserEditDragEnd = () => {
+    editUserDragRef.current.dragging = false
+    window.removeEventListener('mousemove', onUserEditDragMove)
+    window.removeEventListener('mouseup', onUserEditDragEnd)
+  }
+
+  const onUserEditDragStart = (event) => {
+    if (event.button !== 0) return
+    editUserDragRef.current = {
+      dragging: true,
+      startX: event.clientX,
+      startY: event.clientY,
+      startLeft: editUserDialogPos.left,
+      startTop: editUserDialogPos.top,
+    }
+    window.addEventListener('mousemove', onUserEditDragMove)
+    window.addEventListener('mouseup', onUserEditDragEnd)
+  }
+
   const normalizeApiError = (err) => {
     let msg = err && err.message ? String(err.message) : ''
     try {
@@ -1116,11 +1294,21 @@ function App() {
 
   const validatePasswordComplexity = (password) => {
     const value = String(password || '')
-    if (value.length < 10) return '密码至少10位，且需包含大写字母、小写字母、数字和特殊字符'
-    if (!/[A-Z]/.test(value)) return '密码需包含至少1个大写字母'
-    if (!/[a-z]/.test(value)) return '密码需包含至少1个小写字母'
-    if (!/\d/.test(value)) return '密码需包含至少1个数字'
-    if (!/[^A-Za-z0-9]/.test(value)) return '密码需包含至少1个特殊字符'
+    const policy = normalizeSecurityConfig(configForm.security).passwordPolicy
+    const requirements = []
+    if (policy.requireUppercase) requirements.push('大写字母')
+    if (policy.requireLowercase) requirements.push('小写字母')
+    if (policy.requireNumber) requirements.push('数字')
+    if (policy.requireSpecial) requirements.push('特殊字符')
+    if (value.length < policy.minLength) {
+      return requirements.length
+        ? `密码至少${policy.minLength}位，且需包含${requirements.join('、')}`
+        : `密码至少${policy.minLength}位`
+    }
+    if (policy.requireUppercase && !/[A-Z]/.test(value)) return '密码需包含至少1个大写字母'
+    if (policy.requireLowercase && !/[a-z]/.test(value)) return '密码需包含至少1个小写字母'
+    if (policy.requireNumber && !/\d/.test(value)) return '密码需包含至少1个数字'
+    if (policy.requireSpecial && !/[^A-Za-z0-9]/.test(value)) return '密码需包含至少1个特殊字符'
     return ''
   }
 
@@ -1150,7 +1338,7 @@ function App() {
     if (phone && !/^\d{6,20}$/.test(phone)) return '手机号格式不正确（6-20位数字）'
 
     if (!role) return '角色不能为空'
-    if (!['admin', 'sysadmin', 'auditor', 'viewer', 'sales'].includes(role)) return '角色不合法'
+    if (!['admin', 'editor', 'sysadmin', 'auditor', 'user', 'viewer', 'sales'].includes(role)) return '角色不合法'
     if (role !== 'admin' && appAccess.length === 0) return '请至少选择一个可访问系统'
 
     return ''
@@ -1243,6 +1431,7 @@ function App() {
       }
       setAuthToken('cookie')
       setCurrentUser(result.user)
+      setActiveTab('account')
       setLoginError('')
       setLoginForm({ username: '', password: '' })
       setMfaState({ required: false, token: '', methods: [], method: '', code: '' })
@@ -1273,6 +1462,7 @@ function App() {
       })
       setAuthToken('cookie')
       setCurrentUser(result.user)
+      setActiveTab('account')
       setMfaState({ required: false, token: '', methods: [], method: '', code: '' })
       setLoginForm({ username: '', password: '' })
       setLoginError('')
@@ -1290,7 +1480,7 @@ function App() {
     setLogoutPending(true)
     setAuthToken('')
     setCurrentUser(null)
-    setActiveTab('dashboard')
+    setActiveTab('account')
   }
 
   const onSwitchSystem = () => {
@@ -1592,8 +1782,15 @@ function App() {
   const onSaveSecurity = async (e) => {
     e.preventDefault()
     try {
+      const normalized = normalizeSecurityConfig(configForm.security)
       await api.post('/api/send-configs', {
-        security: configForm.security,
+        security: {
+          ...normalized,
+          mfa: {
+            ...(normalized.mfa || {}),
+            forceAllUsers: normalized.forceAllUsersMfa === true,
+          },
+        },
       })
       showMessage('安全配置已保存')
     } catch (err) {
@@ -1733,46 +1930,60 @@ function App() {
       return
     }
     try {
-      if (userForm.id) {
-        await api.put(`/api/users/${userForm.id}`, {
-          password: userForm.password || undefined,
-          role: userForm.role,
-          is_active: Number(userForm.is_active) === 1 ? 1 : 0,
-          email: userForm.email,
-          phone: userForm.phone,
-          wecom_id: userForm.wecom_id,
-          app_access: userForm.app_access,
-        })
-        showMessage('用户已更新')
-        setModalInfo({
-          title: '更新用户成功',
-          message: '用户信息已更新。',
-        })
-      } else {
-        await api.post('/api/users', userForm)
-        showMessage('用户已创建')
-        setModalInfo({
-          title: '新增用户成功',
-          message: '用户已创建。',
-        })
-      }
-      setUserForm({
-        id: null,
-        username: '',
-        password: '',
-        role: 'viewer',
-        is_active: 1,
-        email: '',
-        phone: '',
-        wecom_id: '',
-        app_access: [...defaultSystemAccess],
+      await api.post('/api/users', {
+        ...userForm,
+        id: undefined,
       })
+      showMessage('用户已创建')
+      setModalInfo({
+        title: '新增用户成功',
+        message: '用户已创建。',
+      })
+      setUserForm(createDefaultUserForm())
       refreshUsers()
     } catch (err) {
       const msg = normalizeApiError(err) || '用户保存失败'
       showError(msg)
       setModalInfo({
-        title: userForm.id ? '更新用户失败' : '新增用户失败',
+        title: '新增用户失败',
+        message: msg,
+      })
+    }
+  }
+
+  const onSaveUserEdit = async (e) => {
+    e.preventDefault()
+    const validationError = validateUserForm(editUserForm)
+    if (validationError) {
+      showError(validationError)
+      setModalInfo({
+        title: '用户信息校验失败',
+        message: validationError,
+      })
+      return
+    }
+    try {
+      await api.put(`/api/users/${editUserForm.id}`, {
+        password: editUserForm.password || undefined,
+        role: editUserForm.role,
+        is_active: Number(editUserForm.is_active) === 1 ? 1 : 0,
+        email: editUserForm.email,
+        phone: editUserForm.phone,
+        wecom_id: editUserForm.wecom_id,
+        app_access: editUserForm.app_access,
+      })
+      closeEditUserModal()
+      showMessage('用户已更新')
+      setModalInfo({
+        title: '更新用户成功',
+        message: '用户信息已更新。',
+      })
+      refreshUsers()
+    } catch (err) {
+      const msg = normalizeApiError(err) || '用户更新失败'
+      showError(msg)
+      setModalInfo({
+        title: '更新用户失败',
         message: msg,
       })
     }
@@ -1959,7 +2170,7 @@ function App() {
     const nextAccess = Array.isArray(user.app_access)
       ? user.app_access.filter((key) => defaultSystemAccess.includes(key))
       : [...defaultSystemAccess]
-    setUserForm({
+    setEditUserForm({
       id: user.id,
       username: user.username,
       password: '',
@@ -1970,6 +2181,8 @@ function App() {
       wecom_id: user.wecom_id || '',
       app_access: nextAccess.length ? nextAccess : [...defaultSystemAccess],
     })
+    setEditUserDialogPos(getDefaultUserEditDialogPosition())
+    setEditUserModalOpen(true)
   }
 
   const onDeleteUser = async (id) => {
@@ -2019,6 +2232,33 @@ function App() {
           showError(msg)
           setModalInfo({
             title: `${actionText}用户失败`,
+            message: msg,
+          })
+        }
+      },
+    })
+  }
+
+  const onUnlockUser = async (user) => {
+    if (!user?.id) return
+    openConfirmDialog({
+      title: '解锁用户',
+      message: `确认解锁用户「${user.username}」？`,
+      confirmLabel: '确认解锁',
+      onConfirm: async () => {
+        try {
+          const result = await api.post(`/api/users/${user.id}/unlock`, {})
+          showMessage('用户已解锁')
+          setModalInfo({
+            title: '解锁用户成功',
+            message: `已清理 ${Number(result?.unlocked_count || 0)} 条登录锁定记录。`,
+          })
+          refreshUsers()
+        } catch (err) {
+          const msg = normalizeApiError(err) || '用户解锁失败'
+          showError(msg)
+          setModalInfo({
+            title: '解锁用户失败',
             message: msg,
           })
         }
@@ -2180,6 +2420,7 @@ function App() {
   useEffect(() => { if (reminderPage > pagedReminderLogs.total) setReminderPage(pagedReminderLogs.total) }, [pagedReminderLogs.total])
   useEffect(() => { if (opsPage > pagedOperationLogs.total) setOpsPage(pagedOperationLogs.total) }, [pagedOperationLogs.total])
   useEffect(() => { if (usersPage > pagedUsers.total) setUsersPage(pagedUsers.total) }, [pagedUsers.total])
+  useEffect(() => { setUsersPage(1) }, [userLockFilter])
   useEffect(() => { if (importJobsPage > pagedImportJobs.total) setImportJobsPage(pagedImportJobs.total) }, [pagedImportJobs.total])
 
   const calcDaysLeft = (endDate) => {
@@ -2304,6 +2545,7 @@ function App() {
   const actionLabel = (action) => {
     const map = {
       LOGIN: '登录',
+      LOGIN_SUCCESS: '登录成功',
       LOGOUT: '登出',
       LOGIN_FAILED: '登录失败',
       LOGIN_LOCKED: '登录锁定',
@@ -2638,6 +2880,8 @@ function App() {
       .join(' ')
     return { points: pts, max }
   }, [dashboard.trend])
+  const isSysadminRole = String(currentUser?.role || '').toLowerCase() === 'sysadmin'
+  const heroSystemName = isSysadminRole ? '用户安全管理中心' : '授权到期提醒系统'
 
   if (!authToken) {
     return (
@@ -2686,9 +2930,11 @@ function App() {
           ))}
         </nav>
         <div className="sidebar-actions">
-          <button className="ghost" onClick={onSwitchSystem}>
-            切换系统
-          </button>
+          {String(currentUser?.role || '').toLowerCase() !== 'sysadmin' && (
+            <button className="ghost" onClick={onSwitchSystem}>
+              切换系统
+            </button>
+          )}
           <button className="ghost logout" onClick={onLogout}>
             退出登录
           </button>
@@ -2700,7 +2946,7 @@ function App() {
           <div>
             <h1 className="brand-title">
               <span className="brand-red">聚信</span>
-              <span className="brand-blue">授权到期提醒系统</span>
+              <span className="brand-blue">{heroSystemName}</span>
               <span className="version-inline">v1.0.1</span>
             </h1>
             <h3 className="hero-title">统一管理客户、联系人与发送配置</h3>
@@ -2777,6 +3023,151 @@ function App() {
                 <button className="primary btn btn-primary" type="button" onClick={onInputDialogAccept}>
                   {inputDialog.confirmLabel || '确认'}
                 </button>
+              </div>
+            </div>
+          </div>
+        )}
+        {editUserModalOpen && (
+          <div className="modal-backdrop" onClick={closeEditUserModal}>
+            <div
+              className="modal-card user-edit-modal"
+              style={{ left: `${editUserDialogPos.left}px`, top: `${editUserDialogPos.top}px` }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div
+                className="modal-title user-edit-modal-title"
+                onMouseDown={onUserEditDragStart}
+                role="button"
+                tabIndex={0}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault()
+                  }
+                }}
+                title="按住拖动窗口"
+              >
+                编辑用户
+                <span className="user-edit-modal-drag-tip">按住标题可拖动</span>
+              </div>
+              <div className="modal-body user-edit-modal-body">
+                <form className="form-grid user-edit-form-grid" onSubmit={onSaveUserEdit}>
+                  <label className="form-label">
+                    账号
+                    <input value={editUserForm.username} disabled className="form-control" />
+                  </label>
+                  <label className="form-label">
+                    邮箱（用于二次验证）
+                    <input
+                      value={editUserForm.email}
+                      onChange={(e) => setEditUserForm({ ...editUserForm, email: e.target.value })}
+                      placeholder="例如：xxx@company.com"
+                      className="form-control"
+                    />
+                  </label>
+                  <label className="form-label">
+                    手机号（用于二次验证）
+                    <input
+                      value={editUserForm.phone}
+                      onChange={(e) => setEditUserForm({ ...editUserForm, phone: e.target.value })}
+                      placeholder="例如：13800000000"
+                      className="form-control"
+                    />
+                  </label>
+                  <label className="form-label">
+                    企业微信UserID（用于二次验证）
+                    <input
+                      value={editUserForm.wecom_id}
+                      onChange={(e) => setEditUserForm({ ...editUserForm, wecom_id: e.target.value })}
+                      placeholder="例如：zhangsan"
+                      className="form-control"
+                    />
+                  </label>
+                  <label className="form-label">
+                    密码
+                    <input
+                      type="password"
+                      value={editUserForm.password}
+                      onChange={(e) => setEditUserForm({ ...editUserForm, password: e.target.value })}
+                      placeholder="留空则不修改"
+                      className="form-control"
+                    />
+                    <div className="muted">密码需至少10位，包含大小写字母、数字、特殊字符。</div>
+                  </label>
+                  <label className="form-label">
+                    角色
+                    <select
+                      className="form-select"
+                      value={editUserForm.role}
+                      disabled={isEditingBuiltinModalUser}
+                      onChange={(e) => {
+                        const nextRole = e.target.value
+                        setEditUserForm({
+                          ...editUserForm,
+                          role: nextRole,
+                          app_access: nextRole === 'admin' ? [...defaultSystemAccess] : editUserForm.app_access,
+                        })
+                      }}
+                    >
+                      {roleOptions.map((item) => (
+                        <option key={item.value} value={item.value}>
+                          {item.label}
+                        </option>
+                      ))}
+                    </select>
+                    {isEditingBuiltinModalUser && <div className="muted">内置账号角色固定，不可修改。</div>}
+                  </label>
+                  <label className="form-label">
+                    状态
+                    <select
+                      className="form-select"
+                      value={Number(editUserForm.is_active) === 1 ? '1' : '0'}
+                      disabled={isEditingBuiltinModalUser}
+                      onChange={(e) =>
+                        setEditUserForm({ ...editUserForm, is_active: Number(e.target.value) === 1 ? 1 : 0 })
+                      }
+                    >
+                      <option value="1">启用</option>
+                      <option value="0">禁用</option>
+                    </select>
+                    {isEditingBuiltinModalUser && <div className="muted">内置账号状态固定为启用。</div>}
+                  </label>
+                  <div className="form-label full-row">
+                    可访问系统（可多选）
+                    <div className="channel-row mfa-pill-row">
+                      {systemAccessOptions.map((item) => {
+                        const checked = (editUserForm.app_access || []).includes(item.key)
+                        const disabled = editUserForm.role === 'admin' || isEditingBuiltinModalUser
+                        return (
+                          <label key={item.key} className={`mfa-pill ${checked ? 'active' : ''} ${disabled ? 'disabled' : ''}`}>
+                            <input
+                              type="checkbox"
+                              disabled={disabled}
+                              checked={checked}
+                              onChange={(e) => {
+                                const current = Array.isArray(editUserForm.app_access) ? editUserForm.app_access : []
+                                const next = e.target.checked
+                                  ? Array.from(new Set([...current, item.key]))
+                                  : current.filter((key) => key !== item.key)
+                                setEditUserForm({ ...editUserForm, app_access: next })
+                              }}
+                            />
+                            {item.label}
+                          </label>
+                        )
+                      })}
+                    </div>
+                    {editUserForm.role === 'admin' && <div className="muted">业务管理员默认可访问全部系统。</div>}
+                    {isEditingBuiltinModalUser && <div className="muted">内置账号系统权限固定，不可修改。</div>}
+                  </div>
+                  <div className="form-actions">
+                    <button type="button" className="ghost btn btn-outline-secondary" onClick={closeEditUserModal}>
+                      取消
+                    </button>
+                    <button type="submit" className="primary btn btn-primary">
+                      更新用户
+                    </button>
+                  </div>
+                </form>
               </div>
             </div>
           </div>
@@ -4568,6 +4959,7 @@ function App() {
               >
                 <option value="">全部动作</option>
                 <option value="LOGIN">登录</option>
+                <option value="LOGIN_SUCCESS">登录成功</option>
                 <option value="LOGOUT">登出</option>
                 <option value="LOGIN_FAILED">登录失败</option>
                 <option value="LOGIN_LOCKED">登录锁定</option>
@@ -4846,8 +5238,23 @@ function App() {
         {activeTab === 'users' && (
           <section className="panel">
             <div className="panel-header">
-              <h2>用户管理</h2>
-              <p>管理系统账号与权限，仅系统管理员可见。</p>
+              <div>
+                <h2>用户管理</h2>
+                <p>管理系统账号与权限，仅系统管理员可见。</p>
+              </div>
+              <div className="panel-actions">
+                <span className="muted">锁定状态</span>
+                <select
+                  className="form-select"
+                  value={userLockFilter}
+                  onChange={(e) => setUserLockFilter(e.target.value)}
+                  style={{ minWidth: 160 }}
+                >
+                  <option value="all">全部</option>
+                  <option value="locked">仅已锁定</option>
+                  <option value="normal">仅正常</option>
+                </select>
+              </div>
             </div>
             <form className="form-grid" onSubmit={onSaveUser}>
               <label className="form-label">
@@ -4856,8 +5263,7 @@ function App() {
                   value={userForm.username}
                   onChange={(e) => setUserForm({ ...userForm, username: e.target.value })}
                   placeholder="用户名"
-                  required={!userForm.id}
-                  disabled={!!userForm.id}
+                  required
                   className="form-control"
                 />
               </label>
@@ -4894,8 +5300,8 @@ function App() {
                   type="password"
                   value={userForm.password}
                   onChange={(e) => setUserForm({ ...userForm, password: e.target.value })}
-                  placeholder={userForm.id ? '留空则不修改' : '初始密码'}
-                  required={!userForm.id}
+                  placeholder="初始密码"
+                  required
                   className="form-control"
                 />
                 <div className="muted">密码需至少10位，包含大小写字母、数字、特殊字符。</div>
@@ -4905,7 +5311,6 @@ function App() {
                 <select
                   className="form-select"
                   value={userForm.role}
-                  disabled={isEditingBuiltinUser}
                   onChange={(e) => {
                     const nextRole = e.target.value
                     setUserForm({
@@ -4921,27 +5326,24 @@ function App() {
                     </option>
                   ))}
                 </select>
-                {isEditingBuiltinUser && <div className="muted">内置账号角色固定，不可修改。</div>}
               </label>
               <label className="form-label">
                 状态
                 <select
                   className="form-select"
                   value={Number(userForm.is_active) === 1 ? '1' : '0'}
-                  disabled={isEditingBuiltinUser}
                   onChange={(e) => setUserForm({ ...userForm, is_active: Number(e.target.value) === 1 ? 1 : 0 })}
                 >
                   <option value="1">启用</option>
                   <option value="0">禁用</option>
                 </select>
-                {isEditingBuiltinUser && <div className="muted">内置账号状态固定为启用。</div>}
               </label>
               <div className="form-label full-row">
                 可访问系统（可多选）
                 <div className="channel-row mfa-pill-row">
                   {systemAccessOptions.map((item) => {
                     const checked = (userForm.app_access || []).includes(item.key)
-                    const disabled = userForm.role === 'admin' || isEditingBuiltinUser
+                    const disabled = userForm.role === 'admin'
                     return (
                       <label key={item.key} className={`mfa-pill ${checked ? 'active' : ''} ${disabled ? 'disabled' : ''}`}>
                         <input
@@ -4962,28 +5364,15 @@ function App() {
                   })}
                 </div>
                 {userForm.role === 'admin' && <div className="muted">业务管理员默认可访问全部系统。</div>}
-                {isEditingBuiltinUser && <div className="muted">内置账号系统权限固定，不可修改。</div>}
               </div>
               <div className="form-actions">
                 <button type="submit" className="primary btn btn-primary">
-                  {userForm.id ? '更新用户' : '新增用户'}
+                  新增用户
                 </button>
                 <button
                   type="button"
                   className="ghost btn btn-outline-secondary"
-                  onClick={() =>
-                    setUserForm({
-                      id: null,
-                      username: '',
-                      password: '',
-                      role: 'viewer',
-                      is_active: 1,
-                      email: '',
-                      phone: '',
-                      wecom_id: '',
-                      app_access: [...defaultSystemAccess],
-                    })
-                  }
+                  onClick={() => setUserForm(createDefaultUserForm())}
                 >
                   清空
                 </button>
@@ -4996,54 +5385,76 @@ function App() {
                 <span>账号</span>
                 <span>角色</span>
                 <span>状态</span>
+                <span>锁定状态</span>
                 <span>可访问系统</span>
                 <span>二次验证</span>
                 <span>创建时间</span>
                 <span>操作</span>
               </div>
-              {pagedUsers.items.map((u, idx) => (
-                <div className="table-row" key={u.id}>
-                  <span>{(pagedUsers.current - 1) * PAGE_SIZE + idx + 1}</span>
-                  <span>{u.username}</span>
-                  <span>{roleLabel(u.role)}</span>
-                  <span>{Number(u.is_active) === 1 ? '启用' : '禁用'}</span>
-                  <span>
-                    <span className="app-access-text">
-                      {(Array.isArray(u.app_access) ? u.app_access : defaultSystemAccess)
-                        .map((key) => {
-                          const opt = systemAccessOptions.find((item) => item.key === key)
-                          return opt?.shortLabel || opt?.label || key
-                        })
-                        .join('、') || '-'}
+              {pagedUsers.items.map((u, idx) => {
+                const accessLabels = (Array.isArray(u.app_access) ? u.app_access : defaultSystemAccess)
+                  .map((key) => {
+                    const opt = systemAccessOptions.find((item) => item.key === key)
+                    return opt?.shortLabel || opt?.label || key
+                  })
+                  .filter(Boolean)
+                const isLocked = String(u.lock_status || '').toLowerCase() === 'locked'
+                const lockStatusText = isLocked ? '已锁定' : '正常'
+                const lockStatusTitle = isLocked
+                  ? `锁定至：${u.locked_until ? String(u.locked_until).replace('T', ' ').slice(0, 19) : '-'}；锁定IP数：${Number(u.locked_ip_count || 0)}`
+                  : '账号状态正常'
+
+                return (
+                  <div className="table-row" key={u.id}>
+                    <span>{(pagedUsers.current - 1) * PAGE_SIZE + idx + 1}</span>
+                    <span>{u.username}</span>
+                    <span>{roleLabel(u.role)}</span>
+                    <span>{Number(u.is_active) === 1 ? '启用' : '禁用'}</span>
+                    <span>
+                      <span className={`lock-status-chip ${isLocked ? 'locked' : 'normal'}`} title={lockStatusTitle}>
+                        {lockStatusText}
+                      </span>
                     </span>
-                  </span>
-                  <span>
-                    {(u.email ? '邮箱 ' : '')}
-                    {(u.phone ? '短信 ' : '')}
-                    {(u.wecom_id ? '企业微信 ' : '')}
-                    {u.totp_enabled ? '谷歌认证' : ''}
-                    {(!u.email && !u.phone && !u.wecom_id && !u.totp_enabled) ? '-' : ''}
-                  </span>
-                  <span>{u.created_at}</span>
-                  <span className="actions">
-                    <button onClick={() => onEditUser(u)}>编辑</button>
-                    <button
-                      onClick={() => onToggleUserActive(u)}
-                      disabled={BUILTIN_ROLE_USERNAMES.has(String(u.username || '').toLowerCase())}
-                    >
-                      {Number(u.is_active) === 1 ? '禁用' : '启用'}
-                    </button>
-                    <button onClick={() => onResetUserPassword(u.id)}>重置密码</button>
-                    <button
-                      className="danger btn btn-outline-danger btn-sm"
-                      onClick={() => onDeleteUser(u.id)}
-                      disabled={BUILTIN_ROLE_USERNAMES.has(String(u.username || '').toLowerCase())}
-                    >
-                      删除
-                    </button>
-                  </span>
-                </div>
-              ))}
+                    <span>
+                      <span className="app-access-text">
+                        {accessLabels.length
+                          ? accessLabels.map((label) => (
+                              <span className="app-access-chip" key={`${u.id}-${label}`}>
+                                {label}
+                              </span>
+                            ))
+                          : '-'}
+                      </span>
+                    </span>
+                    <span>
+                      {(u.email ? '邮箱 ' : '')}
+                      {(u.phone ? '短信 ' : '')}
+                      {(u.wecom_id ? '企业微信 ' : '')}
+                      {u.totp_enabled ? '谷歌认证' : ''}
+                      {(!u.email && !u.phone && !u.wecom_id && !u.totp_enabled) ? '-' : ''}
+                    </span>
+                    <span>{u.created_at}</span>
+                    <span className="actions">
+                      <button onClick={() => onEditUser(u)}>编辑</button>
+                      {isLocked && <button onClick={() => onUnlockUser(u)}>解锁</button>}
+                      <button
+                        onClick={() => onToggleUserActive(u)}
+                        disabled={BUILTIN_ROLE_USERNAMES.has(String(u.username || '').toLowerCase())}
+                      >
+                        {Number(u.is_active) === 1 ? '禁用' : '启用'}
+                      </button>
+                      <button onClick={() => onResetUserPassword(u.id)}>重置</button>
+                      <button
+                        className="danger btn btn-outline-danger btn-sm"
+                        onClick={() => onDeleteUser(u.id)}
+                        disabled={BUILTIN_ROLE_USERNAMES.has(String(u.username || '').toLowerCase())}
+                      >
+                        删除
+                      </button>
+                    </span>
+                  </div>
+                )
+              })}
             </div>
               <div className="pagination">
                 <button className="ghost btn btn-outline-secondary" disabled={pagedUsers.current === 1} onClick={() => setUsersPage(pagedUsers.current - 1)}>上一页</button>
@@ -5674,7 +6085,7 @@ function App() {
           <section className="panel">
             <div className="config-page-title">
               <h2>安全配置</h2>
-              <p>配置登录失败限制与管理员二次验证。</p>
+              <p>配置登录策略、密码复杂度、会话超时与管理员IP访问控制。</p>
             </div>
             <form className="config-stack" onSubmit={onSaveSecurity}>
               <div className="config-card card-split tone-sec-login">
@@ -5746,6 +6157,208 @@ function App() {
                 </div>
               </div>
 
+              <div className="config-card card-split tone-sec-login">
+                <div className="config-card-header">密码复杂度策略</div>
+                <div className="config-card-body">
+                  <label className="form-label">
+                    最小密码长度
+                    <input
+                      type="number"
+                      min="6"
+                      max="64"
+                      value={configForm.security?.passwordPolicy?.minLength ?? 10}
+                      onChange={(e) =>
+                        setConfigForm({
+                          ...configForm,
+                          security: {
+                            ...(configForm.security || {}),
+                            passwordPolicy: {
+                              ...(configForm.security?.passwordPolicy || {}),
+                              minLength: Number(e.target.value || 0),
+                            },
+                          },
+                        })
+                      }
+                      className="form-control"
+                    />
+                  </label>
+                  <label className="inline-check form-label">
+                    必须包含大写字母
+                    <input
+                      type="checkbox"
+                      checked={configForm.security?.passwordPolicy?.requireUppercase !== false}
+                      onChange={(e) =>
+                        setConfigForm({
+                          ...configForm,
+                          security: {
+                            ...(configForm.security || {}),
+                            passwordPolicy: {
+                              ...(configForm.security?.passwordPolicy || {}),
+                              requireUppercase: e.target.checked,
+                            },
+                          },
+                        })
+                      }
+                    />
+                  </label>
+                  <label className="inline-check form-label">
+                    必须包含小写字母
+                    <input
+                      type="checkbox"
+                      checked={configForm.security?.passwordPolicy?.requireLowercase !== false}
+                      onChange={(e) =>
+                        setConfigForm({
+                          ...configForm,
+                          security: {
+                            ...(configForm.security || {}),
+                            passwordPolicy: {
+                              ...(configForm.security?.passwordPolicy || {}),
+                              requireLowercase: e.target.checked,
+                            },
+                          },
+                        })
+                      }
+                    />
+                  </label>
+                  <label className="inline-check form-label">
+                    必须包含数字
+                    <input
+                      type="checkbox"
+                      checked={configForm.security?.passwordPolicy?.requireNumber !== false}
+                      onChange={(e) =>
+                        setConfigForm({
+                          ...configForm,
+                          security: {
+                            ...(configForm.security || {}),
+                            passwordPolicy: {
+                              ...(configForm.security?.passwordPolicy || {}),
+                              requireNumber: e.target.checked,
+                            },
+                          },
+                        })
+                      }
+                    />
+                  </label>
+                  <label className="inline-check form-label">
+                    必须包含特殊字符
+                    <input
+                      type="checkbox"
+                      checked={configForm.security?.passwordPolicy?.requireSpecial !== false}
+                      onChange={(e) =>
+                        setConfigForm({
+                          ...configForm,
+                          security: {
+                            ...(configForm.security || {}),
+                            passwordPolicy: {
+                              ...(configForm.security?.passwordPolicy || {}),
+                              requireSpecial: e.target.checked,
+                            },
+                          },
+                        })
+                      }
+                    />
+                  </label>
+                </div>
+              </div>
+
+              <div className="config-card card-split tone-sec-login">
+                <div className="config-card-header">会话超时退出</div>
+                <div className="config-card-body">
+                  <label className="form-label">
+                    登录会话超时(分钟)
+                    <input
+                      type="number"
+                      min="5"
+                      max="10080"
+                      value={configForm.security?.session?.timeoutMinutes ?? 10080}
+                      onChange={(e) =>
+                        setConfigForm({
+                          ...configForm,
+                          security: {
+                            ...(configForm.security || {}),
+                            session: {
+                              ...(configForm.security?.session || {}),
+                              timeoutMinutes: Number(e.target.value || 0),
+                            },
+                          },
+                        })
+                      }
+                      className="form-control"
+                    />
+                  </label>
+                  <p className="muted full-row">
+                    超时后将强制退出并要求重新登录（默认 10080 分钟，即 7 天）。
+                  </p>
+                </div>
+              </div>
+
+              <div className="config-card card-split tone-sec-login">
+                <div className="config-card-header">管理员IP访问限制</div>
+                <div className="config-card-body">
+                  <label className="full-row form-label">
+                    admin 允许IP（每行一个，支持逗号/分号分隔）
+                    <textarea
+                      value={(configForm.security?.roleIpAllowlist?.admin || []).join('\n')}
+                      onChange={(e) =>
+                        setConfigForm({
+                          ...configForm,
+                          security: {
+                            ...(configForm.security || {}),
+                            roleIpAllowlist: {
+                              ...(configForm.security?.roleIpAllowlist || {}),
+                              admin: parseIpListInput(e.target.value),
+                            },
+                          },
+                        })
+                      }
+                      className="form-control"
+                      rows={3}
+                    />
+                  </label>
+                  <label className="full-row form-label">
+                    sysadmin 允许IP
+                    <textarea
+                      value={(configForm.security?.roleIpAllowlist?.sysadmin || []).join('\n')}
+                      onChange={(e) =>
+                        setConfigForm({
+                          ...configForm,
+                          security: {
+                            ...(configForm.security || {}),
+                            roleIpAllowlist: {
+                              ...(configForm.security?.roleIpAllowlist || {}),
+                              sysadmin: parseIpListInput(e.target.value),
+                            },
+                          },
+                        })
+                      }
+                      className="form-control"
+                      rows={3}
+                    />
+                  </label>
+                  <label className="full-row form-label">
+                    auditor 允许IP
+                    <textarea
+                      value={(configForm.security?.roleIpAllowlist?.auditor || []).join('\n')}
+                      onChange={(e) =>
+                        setConfigForm({
+                          ...configForm,
+                          security: {
+                            ...(configForm.security || {}),
+                            roleIpAllowlist: {
+                              ...(configForm.security?.roleIpAllowlist || {}),
+                              auditor: parseIpListInput(e.target.value),
+                            },
+                          },
+                        })
+                      }
+                      className="form-control"
+                      rows={3}
+                    />
+                  </label>
+                  <p className="muted full-row">留空表示该角色不限制来源IP。</p>
+                </div>
+              </div>
+
               <div className="config-card card-split tone-sec-captcha">
                 <div className="config-card-header">登录验证码</div>
                 <div className="config-card-body">
@@ -5792,8 +6405,24 @@ function App() {
               </div>
 
               <div className="config-card card-split tone-sec-mfa">
-                <div className="config-card-header">管理员二次验证</div>
+                <div className="config-card-header">二次验证策略</div>
                 <div className="config-card-body">
+                  <label className="inline-check form-label full-row">
+                    强制全员启用二次验证（系统管理员）
+                    <input
+                      type="checkbox"
+                      checked={configForm.security?.forceAllUsersMfa === true}
+                      onChange={(e) =>
+                        setConfigForm({
+                          ...configForm,
+                          security: {
+                            ...(configForm.security || {}),
+                            forceAllUsersMfa: e.target.checked,
+                          },
+                        })
+                      }
+                    />
+                  </label>
                   <div className="config-inline-row full-row align-top">
                     <label className="form-label">
                       MFA验证码有效期(秒)
@@ -5849,7 +6478,7 @@ function App() {
                     </label>
                   </div>
                   <p className="muted full-row">
-                    开启后，受管账号登录需完成二次验证；请先在“用户管理”配置对应账号的邮箱/手机号/企业微信或启用谷歌认证。
+                    开启“强制全员”后，未完成二次验证配置的用户登录后将被要求立即配置，配置完成会强制退出并要求重新登录。
                   </p>
                 </div>
               </div>

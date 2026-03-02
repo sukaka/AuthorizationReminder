@@ -115,6 +115,12 @@ const navTree = [
     desc: '配置自动发现任务与同步策略。',
   },
   {
+    key: 'change',
+    icon: '↺',
+    label: '变更管理',
+    desc: '管理变更申请、审批、执行与回滚闭环。',
+  },
+  {
     key: 'report',
     icon: '▤',
     label: '报表分析',
@@ -184,6 +190,29 @@ const relationTypeOptions = [
   { value: 'owned_by', label: '归属于' },
 ]
 
+const changeRiskOptions = [
+  { value: 'low', label: '低风险' },
+  { value: 'medium', label: '中风险' },
+  { value: 'high', label: '高风险' },
+]
+
+const changeStatusOptions = [
+  { value: 'pending_approval', label: '待审批' },
+  { value: 'approved', label: '已审批' },
+  { value: 'rejected', label: '已驳回' },
+  { value: 'completed', label: '已执行' },
+  { value: 'rolled_back', label: '已回滚' },
+  { value: 'cancelled', label: '已取消' },
+]
+
+const modelFieldDataTypeOptions = [
+  { value: 'string', label: '文本(string)' },
+  { value: 'number', label: '数字(number)' },
+  { value: 'boolean', label: '布尔(boolean)' },
+  { value: 'object', label: '对象(object)' },
+  { value: 'array', label: '数组(array)' },
+]
+
 const methodLabelMap = {
   GET: '查询',
   POST: '新建',
@@ -192,21 +221,39 @@ const methodLabelMap = {
   DELETE: '删除',
 }
 
-const modelCards = [
-  { name: '物理机', count: 128 },
-  { name: '虚拟机', count: 256 },
-  { name: '容器', count: 64 },
-  { name: '数据库', count: 32 },
-  { name: '交换机', count: 48 },
-  { name: '路由器', count: 24 },
-  { name: '防火墙', count: 16 },
-  { name: '负载均衡', count: 12 },
+const defaultModelTemplates = [
+  { id: 'model-host', name: '主机模型', ci_type_key: 'host', icon: '◍', description: '用于 Linux/Windows 主机资产', created_at: '2026-01-10T08:00:00Z' },
+  { id: 'model-db', name: '数据库模型', ci_type_key: 'database', icon: '◎', description: '用于 MySQL/PostgreSQL/Oracle 等数据库实例', created_at: '2026-01-10T08:05:00Z' },
+  { id: 'model-mw', name: '中间件模型', ci_type_key: 'middleware', icon: '◉', description: '用于消息队列、缓存、注册中心等中间件', created_at: '2026-01-10T08:10:00Z' },
+  { id: 'model-env', name: '网络与环境模型', ci_type_key: 'environment', icon: '◌', description: '用于交换机、路由器、防火墙和网络环境资产', created_at: '2026-01-10T08:15:00Z' },
+  { id: 'model-app', name: '应用模型', ci_type_key: 'application', icon: '◇', description: '用于业务应用与服务实例', created_at: '2026-01-10T08:20:00Z' },
 ]
 
-const relationRows = [
-  { from: '应用A', type: '依赖于', to: '数据库B', updated: '2分钟前' },
-  { from: '应用C', type: '运行于', to: '主机D', updated: '18分钟前' },
-  { from: '服务E', type: '连接到', to: '中间件F', updated: '35分钟前' },
+const defaultDiscoveryTasks = [
+  {
+    id: 'discover-host-daily',
+    name: '主机资产巡检发现',
+    ci_type_key: 'host',
+    owner: 'CMDB平台',
+    schedule: '每天 02:00',
+    enabled: true,
+    batch_size: 2,
+    last_run_at: '',
+    last_status: '',
+    created_at: '2026-02-01T02:00:00Z',
+  },
+  {
+    id: 'discover-db-hourly',
+    name: '数据库资产快速发现',
+    ci_type_key: 'database',
+    owner: 'DBA团队',
+    schedule: '每 4 小时',
+    enabled: true,
+    batch_size: 1,
+    last_run_at: '',
+    last_status: '',
+    created_at: '2026-02-01T02:10:00Z',
+  },
 ]
 
 const emptyDashboard = {
@@ -236,6 +283,79 @@ const emptyAuditResult = {
   page_size: 20,
 }
 
+const emptyRelationResult = {
+  items: [],
+  total: 0,
+  page: 1,
+  page_size: 20,
+}
+
+const emptyTopologyResult = {
+  nodes: [],
+  edges: [],
+  total_nodes: 0,
+  total_edges: 0,
+}
+
+const emptyChangeResult = {
+  items: [],
+  total: 0,
+  page: 1,
+  page_size: 20,
+}
+
+const emptyReportResult = {
+  days: 30,
+  totals: {
+    asset_total: 0,
+    active_total: 0,
+    discovery_total: 0,
+    cloud_total: 0,
+    relation_total: 0,
+    change_total: 0,
+    complexity_index: 0,
+  },
+  change_frequency_trend: [],
+  relation_complexity_trend: [],
+}
+
+const emptyModelForm = {
+  name: '',
+  ci_type_key: 'host',
+  icon: '◍',
+  description: '',
+}
+
+const emptyModelFieldForm = {
+  field_key: '',
+  field_label: '',
+  data_type: 'string',
+  required: false,
+  default_value_text: '',
+}
+
+const emptyDiscoveryTaskForm = {
+  name: '',
+  ci_type_key: 'host',
+  task_mode: 'scan',
+  source_type: 'mock',
+  endpoint_url: '',
+  sync_mode: 'upsert',
+  request_method: 'GET',
+  owner: '',
+  schedule: '每天 02:00',
+  batch_size: 1,
+}
+
+const emptyChangeForm = {
+  title: '',
+  target_ci_uid: '',
+  risk_level: 'medium',
+  planned_start_at: '',
+  planned_end_at: '',
+  description: '',
+}
+
 const extraAttrsHelpText = `主要作用：保存资产的自定义字段，不用改数据库表结构。\n典型例子：{"ip":"10.10.1.5","cpu":"8C","内存":"32GB","机房":"A区-3层"}`
 
 const formatRoleLabel = (role) => {
@@ -261,6 +381,24 @@ const formatStatusLabel = (status) => {
   if (key === 'inactive') return '停用'
   if (key === 'retired') return '退役'
   return String(status || '-')
+}
+
+const formatChangeStatusLabel = (status) => {
+  const key = String(status || '').toLowerCase()
+  if (key === 'pending_approval') return '待审批'
+  if (key === 'approved') return '已审批'
+  if (key === 'rejected') return '已驳回'
+  if (key === 'completed') return '已执行'
+  if (key === 'rolled_back') return '已回滚'
+  if (key === 'cancelled') return '已取消'
+  return String(status || '-')
+}
+
+const changeStatusClassName = (status) => {
+  const key = String(status || '').toLowerCase()
+  if (key === 'approved' || key === 'completed') return 'status-tag success'
+  if (key === 'pending_approval') return 'status-tag offline'
+  return 'status-tag danger'
 }
 
 const normalizeApiError = (err) => {
@@ -297,6 +435,19 @@ const formatDateTime = (value) => {
   return dt.toLocaleString()
 }
 
+const createLocalId = (prefix) => {
+  const randomPart = Math.random().toString(36).slice(2, 8)
+  return `${prefix}-${Date.now()}-${randomPart}`
+}
+
+const pad2 = (value) => String(value).padStart(2, '0')
+
+const formatDateKey = (date) => {
+  const dt = new Date(date)
+  if (Number.isNaN(dt.getTime())) return ''
+  return `${dt.getFullYear()}-${pad2(dt.getMonth() + 1)}-${pad2(dt.getDate())}`
+}
+
 function App() {
   const [authToken, setAuthToken] = useState('')
   const [authReady, setAuthReady] = useState(false)
@@ -328,6 +479,45 @@ function App() {
   const [auditResult, setAuditResult] = useState(emptyAuditResult)
   const [auditLoading, setAuditLoading] = useState(false)
   const [auditLoadedAt, setAuditLoadedAt] = useState('')
+  const [relationFilter, setRelationFilter] = useState({
+    relation_type: '',
+    from_ci_uid: '',
+    to_ci_uid: '',
+    keyword: '',
+  })
+  const [relationPage, setRelationPage] = useState(1)
+  const [relationPageSize, setRelationPageSize] = useState(20)
+  const [relationResult, setRelationResult] = useState(emptyRelationResult)
+  const [relationLoading, setRelationLoading] = useState(false)
+  const [relationLoadedAt, setRelationLoadedAt] = useState('')
+  const [topologyFilter, setTopologyFilter] = useState({
+    keyword: '',
+    focus_ci_uid: '',
+    limit: 300,
+  })
+  const [topologyData, setTopologyData] = useState(emptyTopologyResult)
+  const [topologyLoading, setTopologyLoading] = useState(false)
+  const [topologyLoadedAt, setTopologyLoadedAt] = useState('')
+  const [pathForm, setPathForm] = useState({
+    from_ci_uid: '',
+    to_ci_uid: '',
+    max_depth: 6,
+  })
+  const [pathResult, setPathResult] = useState(null)
+  const [pathLoading, setPathLoading] = useState(false)
+  const [changeFilter, setChangeFilter] = useState({
+    status: '',
+    risk_level: '',
+    keyword: '',
+  })
+  const [changePage, setChangePage] = useState(1)
+  const [changePageSize, setChangePageSize] = useState(20)
+  const [changeResult, setChangeResult] = useState(emptyChangeResult)
+  const [changeLoading, setChangeLoading] = useState(false)
+  const [changeLoadedAt, setChangeLoadedAt] = useState('')
+  const [changeDetail, setChangeDetail] = useState(null)
+  const [changeDialogOpen, setChangeDialogOpen] = useState(false)
+  const [changeForm, setChangeForm] = useState(emptyChangeForm)
 
   const [lookupUID, setLookupUID] = useState('')
   const [lookupResult, setLookupResult] = useState(null)
@@ -335,6 +525,27 @@ function App() {
   const [dashboardData, setDashboardData] = useState(emptyDashboard)
   const [dashboardLoading, setDashboardLoading] = useState(false)
   const [dashboardLoadedAt, setDashboardLoadedAt] = useState('')
+  const [modelTemplates, setModelTemplates] = useState(defaultModelTemplates)
+  const [modelKeyword, setModelKeyword] = useState('')
+  const [modelTypeFilter, setModelTypeFilter] = useState('')
+  const [modelSort, setModelSort] = useState('count-desc')
+  const [modelDialogOpen, setModelDialogOpen] = useState(false)
+  const [modelForm, setModelForm] = useState(emptyModelForm)
+  const [modelFieldDialogOpen, setModelFieldDialogOpen] = useState(false)
+  const [currentModelForFields, setCurrentModelForFields] = useState(null)
+  const [modelFieldRules, setModelFieldRules] = useState([])
+  const [modelFieldLoading, setModelFieldLoading] = useState(false)
+  const [modelFieldForm, setModelFieldForm] = useState(emptyModelFieldForm)
+
+  const [discoveryTasks, setDiscoveryTasks] = useState(defaultDiscoveryTasks)
+  const [discoveryLogs, setDiscoveryLogs] = useState([])
+  const [discoveryDialogOpen, setDiscoveryDialogOpen] = useState(false)
+  const [discoveryTaskForm, setDiscoveryTaskForm] = useState(emptyDiscoveryTaskForm)
+  const [discoveryRunning, setDiscoveryRunning] = useState(false)
+
+  const [reportResult, setReportResult] = useState(emptyReportResult)
+  const [reportLoading, setReportLoading] = useState(false)
+  const [reportLoadedAt, setReportLoadedAt] = useState('')
 
   const [createForm, setCreateForm] = useState({
     ci_type_key: 'application',
@@ -463,6 +674,37 @@ function App() {
   )
 
   const currentAssetTypeKey = useMemo(() => assetTypeKeyMap[activeKey] || '', [activeKey])
+  const typeCountMap = useMemo(() => {
+    const rows = Array.isArray(dashboardData?.type_distribution) ? dashboardData.type_distribution : []
+    return rows.reduce((acc, item) => {
+      const key = String(item?.key || '').trim()
+      if (!key) return acc
+      acc[key] = Number(item?.total || 0)
+      return acc
+    }, {})
+  }, [dashboardData])
+
+  const modelRows = useMemo(() => {
+    const keyword = modelKeyword.trim().toLowerCase()
+    const rows = modelTemplates
+      .map((item) => ({
+        ...item,
+        instance_count: Number(item.instance_count || typeCountMap[item.ci_type_key] || 0),
+      }))
+      .filter((item) => {
+        if (modelTypeFilter && item.ci_type_key !== modelTypeFilter) return false
+        if (!keyword) return true
+        const text = `${item.name || ''} ${item.description || ''} ${item.ci_type_key || ''}`.toLowerCase()
+        return text.includes(keyword)
+      })
+      .sort((a, b) => {
+        if (modelSort === 'name-asc') return String(a.name || '').localeCompare(String(b.name || ''), 'zh-CN')
+        if (modelSort === 'name-desc') return String(b.name || '').localeCompare(String(a.name || ''), 'zh-CN')
+        if (modelSort === 'count-asc') return Number(a.instance_count || 0) - Number(b.instance_count || 0)
+        return Number(b.instance_count || 0) - Number(a.instance_count || 0)
+      })
+    return rows
+  }, [modelTemplates, typeCountMap, modelKeyword, modelTypeFilter, modelSort])
 
   const normalizeAssetResult = (payload) => {
     const page = Number(payload?.page || 1)
@@ -562,6 +804,197 @@ function App() {
     }
   }
 
+  const normalizeRelationResult = (payload) => {
+    const page = Number(payload?.page || 1)
+    const pageSize = Number(payload?.page_size || 20)
+    return {
+      items: Array.isArray(payload?.items) ? payload.items : [],
+      total: Number(payload?.total || 0),
+      page: page > 0 ? page : 1,
+      page_size: pageSize > 0 ? pageSize : 20,
+    }
+  }
+
+  const loadRelationList = async (silent = true, pageOverride) => {
+    if (!authToken || activeKey !== 'relation-list') return
+    setRelationLoading(true)
+    try {
+      const targetPage = Number(pageOverride || relationPage || 1)
+      const params = new URLSearchParams()
+      params.set('page', String(targetPage))
+      params.set('page_size', String(relationPageSize))
+      if (relationFilter.relation_type) params.set('relation_type', relationFilter.relation_type)
+      if (relationFilter.from_ci_uid.trim()) params.set('from_ci_uid', relationFilter.from_ci_uid.trim())
+      if (relationFilter.to_ci_uid.trim()) params.set('to_ci_uid', relationFilter.to_ci_uid.trim())
+      if (relationFilter.keyword.trim()) params.set('keyword', relationFilter.keyword.trim())
+
+      const resp = await fetch(`/api/v1/relations?${params.toString()}`, {
+        credentials: 'include',
+      })
+      const raw = await resp.text()
+      let payload = {}
+      try {
+        payload = raw ? JSON.parse(raw) : {}
+      } catch {
+        payload = {}
+      }
+      if (!resp.ok) {
+        throw new Error(payload?.error || raw || '关系列表加载失败')
+      }
+      const normalized = normalizeRelationResult(payload)
+      setRelationResult(normalized)
+      if (normalized.page !== relationPage) setRelationPage(normalized.page)
+      setRelationLoadedAt(new Date().toLocaleString())
+    } catch (err) {
+      if (!silent) showError(normalizeApiError(err))
+    } finally {
+      setRelationLoading(false)
+    }
+  }
+
+  const normalizeTopologyResult = (payload) => ({
+    nodes: Array.isArray(payload?.nodes) ? payload.nodes : [],
+    edges: Array.isArray(payload?.edges) ? payload.edges : [],
+    total_nodes: Number(payload?.total_nodes || 0),
+    total_edges: Number(payload?.total_edges || 0),
+  })
+
+  const loadTopologyData = async (silent = true) => {
+    if (!authToken || activeKey !== 'relation-topology') return
+    setTopologyLoading(true)
+    try {
+      const params = new URLSearchParams()
+      const limit = Math.max(50, Math.min(3000, Number(topologyFilter.limit || 300)))
+      params.set('limit', String(limit))
+      if (topologyFilter.keyword.trim()) params.set('keyword', topologyFilter.keyword.trim())
+      if (topologyFilter.focus_ci_uid.trim()) params.set('focus_ci_uid', topologyFilter.focus_ci_uid.trim())
+
+      const resp = await fetch(`/api/v1/relations/topology?${params.toString()}`, {
+        credentials: 'include',
+      })
+      const raw = await resp.text()
+      let payload = {}
+      try {
+        payload = raw ? JSON.parse(raw) : {}
+      } catch {
+        payload = {}
+      }
+      if (!resp.ok) {
+        throw new Error(payload?.error || raw || '拓扑数据加载失败')
+      }
+      setTopologyData(normalizeTopologyResult(payload))
+      setTopologyLoadedAt(new Date().toLocaleString())
+    } catch (err) {
+      if (!silent) showError(normalizeApiError(err))
+    } finally {
+      setTopologyLoading(false)
+    }
+  }
+
+  const queryRelationPath = async (event) => {
+    if (event?.preventDefault) event.preventDefault()
+    if (!pathForm.from_ci_uid.trim() || !pathForm.to_ci_uid.trim()) {
+      showError('请输入起点和终点 CI UID')
+      return
+    }
+    setPathLoading(true)
+    try {
+      const params = new URLSearchParams()
+      params.set('from_ci_uid', pathForm.from_ci_uid.trim())
+      params.set('to_ci_uid', pathForm.to_ci_uid.trim())
+      params.set('max_depth', String(Math.max(1, Math.min(12, Number(pathForm.max_depth || 6)))))
+
+      const resp = await fetch(`/api/v1/relations/path?${params.toString()}`, {
+        credentials: 'include',
+      })
+      const raw = await resp.text()
+      let payload = {}
+      try {
+        payload = raw ? JSON.parse(raw) : {}
+      } catch {
+        payload = {}
+      }
+      if (!resp.ok) {
+        throw new Error(payload?.error || raw || '依赖路径查询失败')
+      }
+      setPathResult(payload || null)
+    } catch (err) {
+      showError(normalizeApiError(err))
+    } finally {
+      setPathLoading(false)
+    }
+  }
+
+  const normalizeChangeResult = (payload) => {
+    const page = Number(payload?.page || 1)
+    const pageSize = Number(payload?.page_size || 20)
+    return {
+      items: Array.isArray(payload?.items) ? payload.items : [],
+      total: Number(payload?.total || 0),
+      page: page > 0 ? page : 1,
+      page_size: pageSize > 0 ? pageSize : 20,
+    }
+  }
+
+  const loadChangeList = async (silent = true, pageOverride) => {
+    if (!authToken || activeKey !== 'change') return
+    setChangeLoading(true)
+    try {
+      const targetPage = Number(pageOverride || changePage || 1)
+      const params = new URLSearchParams()
+      params.set('page', String(targetPage))
+      params.set('page_size', String(changePageSize))
+      if (changeFilter.status) params.set('status', changeFilter.status)
+      if (changeFilter.risk_level) params.set('risk_level', changeFilter.risk_level)
+      if (changeFilter.keyword.trim()) params.set('keyword', changeFilter.keyword.trim())
+
+      const resp = await fetch(`/api/v1/changes?${params.toString()}`, {
+        credentials: 'include',
+      })
+      const raw = await resp.text()
+      let payload = {}
+      try {
+        payload = raw ? JSON.parse(raw) : {}
+      } catch {
+        payload = {}
+      }
+      if (!resp.ok) {
+        throw new Error(payload?.error || raw || '变更单列表加载失败')
+      }
+      const normalized = normalizeChangeResult(payload)
+      setChangeResult(normalized)
+      if (normalized.page !== changePage) setChangePage(normalized.page)
+      setChangeLoadedAt(new Date().toLocaleString())
+    } catch (err) {
+      if (!silent) showError(normalizeApiError(err))
+    } finally {
+      setChangeLoading(false)
+    }
+  }
+
+  const loadChangeDetail = async (changeUID, silent = true) => {
+    const uid = String(changeUID || '').trim()
+    if (!uid || !authToken) return
+    try {
+      const resp = await fetch(`/api/v1/changes/${encodeURIComponent(uid)}`, {
+        credentials: 'include',
+      })
+      const raw = await resp.text()
+      let payload = {}
+      try {
+        payload = raw ? JSON.parse(raw) : {}
+      } catch {
+        payload = {}
+      }
+      if (!resp.ok) {
+        throw new Error(payload?.error || raw || '变更单详情加载失败')
+      }
+      setChangeDetail(payload || null)
+    } catch (err) {
+      if (!silent) showError(normalizeApiError(err))
+    }
+  }
+
   const normalizeDashboardData = (payload) => {
     const totals = payload?.totals || {}
     return {
@@ -601,6 +1034,164 @@ function App() {
       if (!silent) showError(normalizeApiError(err))
     } finally {
       if (!silent) setDashboardLoading(false)
+    }
+  }
+
+  const normalizeModelRows = (payload) => {
+    const rawItems = Array.isArray(payload?.items) ? payload.items : (Array.isArray(payload) ? payload : [])
+    return rawItems.map((item) => ({
+      id: String(item?.model_uid || item?.id || createLocalId('model')),
+      model_uid: String(item?.model_uid || item?.id || ''),
+      name: String(item?.name || ''),
+      ci_type_key: String(item?.ci_type_key || ''),
+      ci_type_name: String(item?.ci_type_name || ''),
+      icon: String(item?.icon || '◍'),
+      description: String(item?.description || ''),
+      instance_count: Number(item?.instance_count || 0),
+      created_at: item?.created_at || '',
+      updated_at: item?.updated_at || '',
+    }))
+  }
+
+  const loadModelTemplates = async (silent = true) => {
+    if (!authToken) return
+    try {
+      const resp = await fetch('/api/v1/models', { credentials: 'include' })
+      const raw = await resp.text()
+      let payload = {}
+      try {
+        payload = raw ? JSON.parse(raw) : {}
+      } catch {
+        payload = {}
+      }
+      if (!resp.ok) throw new Error(payload?.error || raw || '模型数据加载失败')
+      const rows = normalizeModelRows(payload)
+      setModelTemplates(rows)
+    } catch (err) {
+      if (!silent) showError(normalizeApiError(err))
+    }
+  }
+
+  const normalizeModelFieldRuleRows = (payload) => {
+    const rawItems = Array.isArray(payload?.items) ? payload.items : (Array.isArray(payload) ? payload : [])
+    return rawItems.map((item) => ({
+      id: String(item?.field_uid || item?.id || createLocalId('field')),
+      field_uid: String(item?.field_uid || item?.id || ''),
+      model_uid: String(item?.model_uid || ''),
+      ci_type_key: String(item?.ci_type_key || ''),
+      ci_type_name: String(item?.ci_type_name || ''),
+      field_key: String(item?.field_key || ''),
+      field_label: String(item?.field_label || ''),
+      data_type: String(item?.data_type || 'string'),
+      required: !!item?.required,
+      has_default: !!item?.has_default || Object.prototype.hasOwnProperty.call(item || {}, 'default_value'),
+      default_value: item?.default_value,
+      created_at: item?.created_at || '',
+      updated_at: item?.updated_at || '',
+    }))
+  }
+
+  const loadModelFieldRules = async (modelUID, silent = true) => {
+    const targetModelUID = String(modelUID || '').trim()
+    if (!authToken || !targetModelUID) return
+    if (!silent) setModelFieldLoading(true)
+    try {
+      const resp = await fetch(`/api/v1/models/${encodeURIComponent(targetModelUID)}/fields`, { credentials: 'include' })
+      const raw = await resp.text()
+      let payload = {}
+      try {
+        payload = raw ? JSON.parse(raw) : {}
+      } catch {
+        payload = {}
+      }
+      if (!resp.ok) throw new Error(payload?.error || raw || '模型字段规则加载失败')
+      setModelFieldRules(normalizeModelFieldRuleRows(payload))
+    } catch (err) {
+      if (!silent) showError(normalizeApiError(err))
+    } finally {
+      if (!silent) setModelFieldLoading(false)
+    }
+  }
+
+  const normalizeDiscoveryTaskRows = (payload) => {
+    const rawItems = Array.isArray(payload?.items) ? payload.items : (Array.isArray(payload) ? payload : [])
+    return rawItems.map((item) => ({
+      id: String(item?.task_uid || item?.id || createLocalId('task')),
+      task_uid: String(item?.task_uid || item?.id || ''),
+      name: String(item?.name || ''),
+      ci_type_key: String(item?.ci_type_key || ''),
+      ci_type_name: String(item?.ci_type_name || ''),
+      task_mode: String(item?.task_mode || 'scan'),
+      source_type: String(item?.source_type || 'mock'),
+      endpoint_url: String(item?.endpoint_url || ''),
+      sync_mode: String(item?.sync_mode || 'upsert'),
+      request_method: String(item?.request_method || 'GET'),
+      owner: String(item?.owner || ''),
+      schedule: String(item?.schedule_text || item?.schedule || ''),
+      batch_size: Number(item?.batch_size || 1),
+      enabled: !!item?.enabled,
+      last_run_at: item?.last_run_at || '',
+      last_status: String(item?.last_status || ''),
+      created_at: item?.created_at || '',
+      updated_at: item?.updated_at || '',
+    }))
+  }
+
+  const normalizeDiscoveryLogRows = (payload) => {
+    const rawItems = Array.isArray(payload?.items) ? payload.items : (Array.isArray(payload) ? payload : [])
+    return rawItems.map((item) => ({
+      id: String(item?.run_uid || item?.id || createLocalId('log')),
+      run_uid: String(item?.run_uid || item?.id || ''),
+      task_uid: String(item?.task_uid || ''),
+      task_name: String(item?.task_name || ''),
+      ci_type_key: String(item?.ci_type_key || ''),
+      ci_type_name: String(item?.ci_type_name || ''),
+      status: String(item?.status || ''),
+      success_count: Number(item?.success_count || 0),
+      created_count: Number(item?.created_count || 0),
+      updated_count: Number(item?.updated_count || 0),
+      failed_count: Number(item?.failed_count || 0),
+      error_message: String(item?.error_message || ''),
+      failures: item?.error_message ? [String(item.error_message)] : [],
+      started_at: item?.started_at || '',
+      finished_at: item?.finished_at || '',
+      created_at: item?.created_at || '',
+    }))
+  }
+
+  const loadDiscoveryTasks = async (silent = true) => {
+    if (!authToken) return
+    try {
+      const resp = await fetch('/api/v1/discovery/tasks', { credentials: 'include' })
+      const raw = await resp.text()
+      let payload = {}
+      try {
+        payload = raw ? JSON.parse(raw) : {}
+      } catch {
+        payload = {}
+      }
+      if (!resp.ok) throw new Error(payload?.error || raw || '发现任务加载失败')
+      setDiscoveryTasks(normalizeDiscoveryTaskRows(payload))
+    } catch (err) {
+      if (!silent) showError(normalizeApiError(err))
+    }
+  }
+
+  const loadDiscoveryLogs = async (silent = true) => {
+    if (!authToken) return
+    try {
+      const resp = await fetch('/api/v1/discovery/logs?limit=60', { credentials: 'include' })
+      const raw = await resp.text()
+      let payload = {}
+      try {
+        payload = raw ? JSON.parse(raw) : {}
+      } catch {
+        payload = {}
+      }
+      if (!resp.ok) throw new Error(payload?.error || raw || '执行日志加载失败')
+      setDiscoveryLogs(normalizeDiscoveryLogRows(payload))
+    } catch (err) {
+      if (!silent) showError(normalizeApiError(err))
     }
   }
 
@@ -705,9 +1296,24 @@ function App() {
       setAuditResult(emptyAuditResult)
       setAuditLoading(false)
       setAuditLoadedAt('')
+      setRelationResult(emptyRelationResult)
+      setRelationLoading(false)
+      setRelationLoadedAt('')
+      setTopologyData(emptyTopologyResult)
+      setTopologyLoading(false)
+      setTopologyLoadedAt('')
+      setPathResult(null)
+      setPathLoading(false)
+      setChangeResult(emptyChangeResult)
+      setChangeLoading(false)
+      setChangeLoadedAt('')
+      setChangeDetail(null)
+      setReportResult(emptyReportResult)
+      setReportLoadedAt('')
+      setReportLoading(false)
       return
     }
-    if (activeKey === 'dashboard') {
+    if (activeKey === 'dashboard' || activeKey === 'model' || activeKey === 'discovery' || activeKey === 'report') {
       loadDashboardOverview(true)
     }
   }, [authToken, activeKey])
@@ -741,6 +1347,54 @@ function App() {
     auditFilter.date_from,
     auditFilter.date_to,
   ])
+
+  useEffect(() => {
+    if (!authToken || activeKey !== 'report') return
+    loadReport(true)
+  }, [authToken, activeKey])
+
+  useEffect(() => {
+    if (!authToken || activeKey !== 'relation-list') return
+    loadRelationList(true)
+  }, [
+    authToken,
+    activeKey,
+    relationPage,
+    relationPageSize,
+    relationFilter.relation_type,
+    relationFilter.from_ci_uid,
+    relationFilter.to_ci_uid,
+    relationFilter.keyword,
+  ])
+
+  useEffect(() => {
+    if (!authToken || activeKey !== 'relation-topology') return
+    loadTopologyData(true)
+  }, [authToken, activeKey, topologyFilter.keyword, topologyFilter.focus_ci_uid, topologyFilter.limit])
+
+  useEffect(() => {
+    if (!authToken || activeKey !== 'change') return
+    loadChangeList(true)
+  }, [
+    authToken,
+    activeKey,
+    changePage,
+    changePageSize,
+    changeFilter.status,
+    changeFilter.risk_level,
+    changeFilter.keyword,
+  ])
+
+  useEffect(() => {
+    if (!authToken || activeKey !== 'model') return
+    loadModelTemplates(true)
+  }, [authToken, activeKey])
+
+  useEffect(() => {
+    if (!authToken || activeKey !== 'discovery') return
+    loadDiscoveryTasks(true)
+    loadDiscoveryLogs(true)
+  }, [authToken, activeKey])
 
   const request = async (method, path, body) => {
     const resp = await fetch(path, {
@@ -1167,6 +1821,572 @@ function App() {
     input.click()
   }
 
+  const loadAllAssets = async () => {
+    const pageSize = 200
+    const all = []
+    let page = 1
+    let total = Number.POSITIVE_INFINITY
+    while (all.length < total && page <= 50) {
+      const params = new URLSearchParams()
+      params.set('page', String(page))
+      params.set('page_size', String(pageSize))
+      const resp = await fetch(`/api/v1/ci?${params.toString()}`, {
+        credentials: 'include',
+      })
+      const raw = await resp.text()
+      let payload = {}
+      try {
+        payload = raw ? JSON.parse(raw) : {}
+      } catch {
+        payload = {}
+      }
+      if (!resp.ok) {
+        throw new Error(payload?.error || raw || '加载资产数据失败')
+      }
+      const items = Array.isArray(payload?.items) ? payload.items : []
+      total = Number(payload?.total || items.length)
+      all.push(...items)
+      if (!items.length) break
+      if (all.length >= total) break
+      page += 1
+    }
+    return all
+  }
+
+  const buildReportResultFromAssets = (assets) => {
+    const typeMap = new Map()
+    const statusMap = new Map()
+    const sourceMap = new Map()
+    const ownerMap = new Map()
+    const trendMap = new Map()
+    const now = new Date()
+    const days = []
+    for (let i = 6; i >= 0; i -= 1) {
+      const dateKey = formatDateKey(now.getTime() - i * 24 * 60 * 60 * 1000)
+      if (dateKey) {
+        days.push(dateKey)
+        trendMap.set(dateKey, 0)
+      }
+    }
+
+    let activeTotal = 0
+    let discoveryTotal = 0
+    const ownerSet = new Set()
+
+    for (const item of assets) {
+      const ciTypeKey = String(item?.ci_type_key || '').trim() || 'unknown'
+      const status = String(item?.status || '').trim() || 'unknown'
+      const source = String(item?.source || '').trim() || 'unknown'
+      const owner = String(item?.owner || '').trim() || '未分配'
+      const dateKey = formatDateKey(item?.created_at || item?.updated_at)
+
+      typeMap.set(ciTypeKey, Number(typeMap.get(ciTypeKey) || 0) + 1)
+      statusMap.set(status, Number(statusMap.get(status) || 0) + 1)
+      sourceMap.set(source, Number(sourceMap.get(source) || 0) + 1)
+      ownerMap.set(owner, Number(ownerMap.get(owner) || 0) + 1)
+      ownerSet.add(owner)
+
+      if (status === 'active') activeTotal += 1
+      if (source === 'discovery') discoveryTotal += 1
+      if (dateKey && trendMap.has(dateKey)) {
+        trendMap.set(dateKey, Number(trendMap.get(dateKey) || 0) + 1)
+      }
+    }
+
+    const toSortedRows = (map, labelResolver) => (
+      Array.from(map.entries())
+        .map(([key, total]) => ({
+          key,
+          name: labelResolver(key),
+          total: Number(total || 0),
+        }))
+        .sort((a, b) => Number(b.total || 0) - Number(a.total || 0))
+    )
+
+    return {
+      totals: {
+        asset_total: assets.length,
+        active_total: activeTotal,
+        discovery_total: discoveryTotal,
+        owner_total: ownerSet.size,
+      },
+      type_distribution: toSortedRows(typeMap, (key) => formatOptionLabel(ciTypeOptions, key)),
+      status_distribution: toSortedRows(statusMap, (key) => formatStatusLabel(key)),
+      source_distribution: toSortedRows(sourceMap, (key) => formatOptionLabel(sourceOptions, key)),
+      owner_distribution: toSortedRows(ownerMap, (key) => key).slice(0, 10),
+      trend_7d: days.map((date) => ({
+        date,
+        total: Number(trendMap.get(date) || 0),
+      })),
+    }
+  }
+
+  const loadReport = async (silent = true) => {
+    if (!authToken) return
+    if (!silent) setReportLoading(true)
+    try {
+      const resp = await fetch('/api/v1/reports/analysis?days=30', { credentials: 'include' })
+      const raw = await resp.text()
+      let payload = {}
+      try {
+        payload = raw ? JSON.parse(raw) : {}
+      } catch {
+        payload = {}
+      }
+      if (!resp.ok) throw new Error(payload?.error || raw || '报表分析加载失败')
+      setReportResult({
+        days: Number(payload?.days || 30),
+        totals: {
+          asset_total: Number(payload?.totals?.asset_total || 0),
+          active_total: Number(payload?.totals?.active_total || 0),
+          discovery_total: Number(payload?.totals?.discovery_total || 0),
+          cloud_total: Number(payload?.totals?.cloud_total || 0),
+          relation_total: Number(payload?.totals?.relation_total || 0),
+          change_total: Number(payload?.totals?.change_total || 0),
+          complexity_index: Number(payload?.totals?.complexity_index || 0),
+        },
+        change_frequency_trend: Array.isArray(payload?.change_frequency_trend) ? payload.change_frequency_trend : [],
+        relation_complexity_trend: Array.isArray(payload?.relation_complexity_trend) ? payload.relation_complexity_trend : [],
+      })
+      setReportLoadedAt(new Date().toLocaleString())
+    } catch (err) {
+      if (!silent) showError(normalizeApiError(err))
+    } finally {
+      if (!silent) setReportLoading(false)
+    }
+  }
+
+  const exportReportAnalysis = async (format) => {
+    const targetFormat = format || (await chooseFileFormat('export'))
+    if (!targetFormat) return
+
+    const fileBase = `cmdb-report-${new Date().toISOString().slice(0, 10)}`
+    const payload = {
+      导出时间: new Date().toLocaleString(),
+      报表更新时间: reportLoadedAt || '-',
+      统计窗口天数: Number(reportResult.days || 30),
+      数据概览: reportResult.totals,
+      变更频次趋势: reportResult.change_frequency_trend,
+      关系复杂度趋势: reportResult.relation_complexity_trend,
+    }
+
+    if (targetFormat === 'json') {
+      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json;charset=utf-8' })
+      downloadBlob(blob, `${fileBase}.json`)
+      return
+    }
+
+    const rows = []
+    rows.push({ 维度: '资产概览', 指标: '资产总数', 数值: Number(reportResult.totals.asset_total || 0) })
+    rows.push({ 维度: '资产概览', 指标: '正常资产', 数值: Number(reportResult.totals.active_total || 0) })
+    rows.push({ 维度: '资产概览', 指标: '自动发现资产', 数值: Number(reportResult.totals.discovery_total || 0) })
+    rows.push({ 维度: '资产概览', 指标: '云同步资产', 数值: Number(reportResult.totals.cloud_total || 0) })
+    rows.push({ 维度: '资产概览', 指标: '关系总量', 数值: Number(reportResult.totals.relation_total || 0) })
+    rows.push({ 维度: '资产概览', 指标: '变更总量(窗口内)', 数值: Number(reportResult.totals.change_total || 0) })
+    rows.push({ 维度: '资产概览', 指标: '当前关系复杂度', 数值: Number(reportResult.totals.complexity_index || 0) })
+
+    for (const item of reportResult.change_frequency_trend || []) {
+      rows.push({ 维度: '变更频次趋势', 指标: item.date, 数值: Number(item.total || 0) })
+    }
+    for (const item of reportResult.relation_complexity_trend || []) {
+      rows.push({ 维度: '关系复杂度趋势', 指标: item.date, 数值: Number(item.complexity_index || 0) })
+    }
+
+    const sheet = XLSX.utils.json_to_sheet(rows)
+    if (targetFormat === 'csv') {
+      const csv = XLSX.utils.sheet_to_csv(sheet)
+      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' })
+      downloadBlob(blob, `${fileBase}.csv`)
+      return
+    }
+
+    const workbook = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(workbook, sheet, '报表分析')
+    const data = XLSX.write(workbook, { bookType: 'xlsx', type: 'array' })
+    const blob = new Blob([data], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })
+    downloadBlob(blob, `${fileBase}.xlsx`)
+  }
+
+  const buildRelationExportRows = () => (
+    (relationResult.items || []).map((item) => ({
+      from_ci_uid: item.from_ci_uid || '',
+      from_ci_name: item.from_ci_name || '',
+      from_ci_type_key: item.from_ci_type_key || '',
+      from_status: item.from_status || '',
+      relation_type: item.relation_type || '',
+      to_ci_uid: item.to_ci_uid || '',
+      to_ci_name: item.to_ci_name || '',
+      to_ci_type_key: item.to_ci_type_key || '',
+      to_status: item.to_status || '',
+      version: Number(item.version || 0),
+      updated_at: item.updated_at || '',
+    }))
+  )
+
+  const exportRelationList = async (format) => {
+    const targetFormat = format || (await chooseFileFormat('export'))
+    if (!targetFormat) return
+
+    const fileBase = `cmdb-relations-${new Date().toISOString().slice(0, 10)}`
+    const rows = buildRelationExportRows()
+    const report = {
+      导出时间: new Date().toLocaleString(),
+      筛选条件: relationFilter,
+      分页: {
+        page: relationResult.page,
+        page_size: relationResult.page_size,
+        total: relationResult.total,
+      },
+      items: rows,
+    }
+
+    if (targetFormat === 'json') {
+      const blob = new Blob([JSON.stringify(report, null, 2)], { type: 'application/json;charset=utf-8' })
+      downloadBlob(blob, `${fileBase}.json`)
+      return
+    }
+
+    const sheet = XLSX.utils.json_to_sheet(rows)
+    if (targetFormat === 'csv') {
+      const csv = XLSX.utils.sheet_to_csv(sheet)
+      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' })
+      downloadBlob(blob, `${fileBase}.csv`)
+      return
+    }
+
+    const workbook = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(workbook, sheet, '关系数据')
+    const data = XLSX.write(workbook, { bookType: 'xlsx', type: 'array' })
+    const blob = new Blob([data], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })
+    downloadBlob(blob, `${fileBase}.xlsx`)
+  }
+
+  const openModelFieldDialog = async (model) => {
+    const modelUID = String(model?.model_uid || model?.id || '').trim()
+    if (!modelUID) return
+    setCurrentModelForFields(model)
+    setModelFieldForm(emptyModelFieldForm)
+    setModelFieldRules([])
+    setModelFieldDialogOpen(true)
+    await loadModelFieldRules(modelUID, false)
+  }
+
+  const closeModelFieldDialog = () => {
+    setModelFieldDialogOpen(false)
+    setCurrentModelForFields(null)
+    setModelFieldRules([])
+    setModelFieldForm(emptyModelFieldForm)
+    setModelFieldLoading(false)
+  }
+
+  const createModelFieldRule = async (event) => {
+    event.preventDefault()
+    const modelUID = String(currentModelForFields?.model_uid || currentModelForFields?.id || '').trim()
+    if (!modelUID) return
+
+    const fieldKey = String(modelFieldForm.field_key || '').trim()
+    const fieldLabel = String(modelFieldForm.field_label || '').trim()
+    const dataType = String(modelFieldForm.data_type || '').trim()
+    if (!fieldKey || !fieldLabel || !dataType) {
+      showError('请完整填写字段编码、字段名称和类型')
+      return
+    }
+
+    const payload = {
+      field_key: fieldKey,
+      field_label: fieldLabel,
+      data_type: dataType,
+      required: !!modelFieldForm.required,
+    }
+    const defaultText = String(modelFieldForm.default_value_text || '').trim()
+    if (defaultText) {
+      try {
+        payload.default_value = JSON.parse(defaultText)
+      } catch {
+        showError('默认值必须是合法 JSON')
+        return
+      }
+    }
+
+    try {
+      await request('POST', `/api/v1/models/${encodeURIComponent(modelUID)}/fields`, payload)
+      setModelFieldForm(emptyModelFieldForm)
+      await loadModelFieldRules(modelUID, true)
+      showMessage('字段规则创建成功')
+    } catch (err) {
+      showError(normalizeApiError(err))
+    }
+  }
+
+  const deleteModelFieldRule = (field) => {
+    const fieldUID = String(field?.field_uid || field?.id || '').trim()
+    if (!fieldUID) return
+    const modelUID = String(currentModelForFields?.model_uid || currentModelForFields?.id || '').trim()
+    openConfirmDialog({
+      title: '删除字段规则',
+      message: `确认删除字段「${field?.field_label || field?.field_key || '-'}」吗？`,
+      confirmLabel: '确认删除',
+      onConfirm: async () => {
+        try {
+          await request('DELETE', `/api/v1/models/fields/${encodeURIComponent(fieldUID)}`)
+          if (modelUID) {
+            await loadModelFieldRules(modelUID, true)
+          }
+          showMessage('字段规则已删除')
+        } catch (err) {
+          showError(normalizeApiError(err))
+        }
+      },
+    })
+  }
+
+  const openModelCreateDialog = () => {
+    setModelForm(emptyModelForm)
+    setModelDialogOpen(true)
+  }
+
+  const closeModelCreateDialog = () => {
+    setModelDialogOpen(false)
+    setModelForm(emptyModelForm)
+  }
+
+  const createModelTemplate = async (event) => {
+    event.preventDefault()
+    const name = String(modelForm.name || '').trim()
+    const ciType = String(modelForm.ci_type_key || '').trim()
+    if (!name) {
+      showError('请输入模型名称')
+      return
+    }
+    if (!ciType) {
+      showError('请选择模型类型')
+      return
+    }
+    try {
+      await request('POST', '/api/v1/models', {
+        name,
+        ci_type_key: ciType,
+        icon: String(modelForm.icon || '').trim() || '◍',
+        description: String(modelForm.description || '').trim(),
+      })
+      closeModelCreateDialog()
+      await loadModelTemplates(true)
+      await loadDashboardOverview(true)
+      showMessage('模型创建成功')
+    } catch (err) {
+      showError(normalizeApiError(err))
+    }
+  }
+
+  const deleteModelTemplate = (item) => {
+    const modelUID = String(item?.model_uid || item?.id || '').trim()
+    if (!modelUID) return
+    openConfirmDialog({
+      title: '删除模型',
+      message: `确认删除模型「${item?.name || '-'}」吗？`,
+      confirmLabel: '确认删除',
+      onConfirm: async () => {
+        try {
+          await request('DELETE', `/api/v1/models/${encodeURIComponent(modelUID)}`)
+          await loadModelTemplates(true)
+          showMessage('模型已删除')
+        } catch (err) {
+          showError(normalizeApiError(err))
+        }
+      },
+    })
+  }
+
+  const openDiscoveryTaskDialog = () => {
+    setDiscoveryTaskForm(emptyDiscoveryTaskForm)
+    setDiscoveryDialogOpen(true)
+  }
+
+  const closeDiscoveryTaskDialog = () => {
+    setDiscoveryDialogOpen(false)
+    setDiscoveryTaskForm(emptyDiscoveryTaskForm)
+  }
+
+  const createDiscoveryTask = async (event) => {
+    event.preventDefault()
+    const name = String(discoveryTaskForm.name || '').trim()
+    if (!name) {
+      showError('请输入任务名称')
+      return
+    }
+    try {
+      await request('POST', '/api/v1/discovery/tasks', {
+        name,
+        ci_type_key: discoveryTaskForm.ci_type_key || 'host',
+        task_mode: discoveryTaskForm.task_mode || 'scan',
+        source_type: discoveryTaskForm.source_type || 'mock',
+        endpoint_url: String(discoveryTaskForm.endpoint_url || '').trim(),
+        sync_mode: discoveryTaskForm.sync_mode || 'upsert',
+        request_method: discoveryTaskForm.request_method || 'GET',
+        owner: String(discoveryTaskForm.owner || '').trim() || 'CMDB平台',
+        schedule_text: String(discoveryTaskForm.schedule || '').trim() || '每天 02:00',
+        batch_size: Math.max(1, Math.min(50, Number(discoveryTaskForm.batch_size || 1))),
+      })
+      closeDiscoveryTaskDialog()
+      await loadDiscoveryTasks(true)
+      showMessage('发现任务创建成功')
+    } catch (err) {
+      showError(normalizeApiError(err))
+    }
+  }
+
+  const toggleDiscoveryTask = async (task, enabled) => {
+    const taskUID = String(task?.task_uid || task?.id || '').trim()
+    if (!taskUID) return
+    try {
+      await request('PATCH', `/api/v1/discovery/tasks/${encodeURIComponent(taskUID)}`, { enabled: !!enabled })
+      await loadDiscoveryTasks(true)
+      showMessage(enabled ? '任务已启用' : '任务已停用')
+    } catch (err) {
+      showError(normalizeApiError(err))
+    }
+  }
+
+  const removeDiscoveryTask = (task) => {
+    const taskUID = String(task?.task_uid || task?.id || '').trim()
+    if (!taskUID) return
+    openConfirmDialog({
+      title: '删除发现任务',
+      message: `确认删除任务「${task?.name || '-'}」吗？`,
+      confirmLabel: '确认删除',
+      onConfirm: async () => {
+        try {
+          await request('DELETE', `/api/v1/discovery/tasks/${encodeURIComponent(taskUID)}`)
+          await loadDiscoveryTasks(true)
+          showMessage('任务已删除')
+        } catch (err) {
+          showError(normalizeApiError(err))
+        }
+      },
+    })
+  }
+
+  const runDiscoveryTask = async (task) => {
+    if (!task) return
+    if (discoveryRunning) return
+    const taskUID = String(task?.task_uid || task?.id || '').trim()
+    if (!taskUID) return
+    setDiscoveryRunning(true)
+    try {
+      const result = await request('POST', `/api/v1/discovery/tasks/${encodeURIComponent(taskUID)}/run`)
+      const payload = result?.返回数据 || {}
+      const success = Number(payload.success_count || 0)
+      const created = Number(payload.created_count || 0)
+      const updated = Number(payload.updated_count || 0)
+      const failed = Number(payload.failed_count || 0)
+      await loadDiscoveryTasks(true)
+      await loadDiscoveryLogs(true)
+      await loadDashboardOverview(true)
+      if (activeKey === 'report') await loadReport(true)
+      showMessage(`任务「${task.name}」执行完成：成功 ${success}（新增 ${created} / 更新 ${updated}），失败 ${failed}`)
+    } catch (err) {
+      showError(normalizeApiError(err))
+    } finally {
+      setDiscoveryRunning(false)
+    }
+  }
+
+  const runAllEnabledDiscoveryTasks = async () => {
+    if (discoveryRunning) return
+    setDiscoveryRunning(true)
+    try {
+      const result = await request('POST', '/api/v1/discovery/run-enabled')
+      const payload = result?.返回数据 || {}
+      const success = Number(payload.success_count || 0)
+      const created = Number(payload.created_count || 0)
+      const updated = Number(payload.updated_count || 0)
+      const failed = Number(payload.failed_count || 0)
+      await loadDashboardOverview(true)
+      await loadDiscoveryTasks(true)
+      await loadDiscoveryLogs(true)
+      if (activeKey === 'report') await loadReport(true)
+      showMessage(`批量执行完成：成功 ${success}（新增 ${created} / 更新 ${updated}），失败 ${failed}`)
+    } catch (err) {
+      showError(normalizeApiError(err))
+    } finally {
+      setDiscoveryRunning(false)
+    }
+  }
+
+  const openChangeCreateDialog = () => {
+    setChangeForm(emptyChangeForm)
+    setChangeDialogOpen(true)
+  }
+
+  const closeChangeCreateDialog = () => {
+    setChangeDialogOpen(false)
+    setChangeForm(emptyChangeForm)
+  }
+
+  const createChangeRequest = async (event) => {
+    event.preventDefault()
+    const title = String(changeForm.title || '').trim()
+    const targetCIUID = String(changeForm.target_ci_uid || '').trim()
+    if (!title || !targetCIUID) {
+      showError('请填写变更标题和目标CIUID')
+      return
+    }
+
+    try {
+      await request('POST', '/api/v1/changes', {
+        title,
+        target_ci_uid: targetCIUID,
+        risk_level: changeForm.risk_level || 'medium',
+        planned_start_at: String(changeForm.planned_start_at || '').trim(),
+        planned_end_at: String(changeForm.planned_end_at || '').trim(),
+        description: String(changeForm.description || '').trim(),
+      })
+      closeChangeCreateDialog()
+      setChangePage(1)
+      await loadChangeList(false, 1)
+      showMessage('变更单创建成功')
+    } catch (err) {
+      showError(normalizeApiError(err))
+    }
+  }
+
+  const runChangeAction = (row, action) => {
+    const uid = String(row?.change_uid || '').trim()
+    if (!uid) return
+
+    const actionMeta = {
+      approve: { title: '审批通过', label: '审批通过', endpoint: 'approve' },
+      reject: { title: '驳回变更', label: '确认驳回', endpoint: 'reject' },
+      execute: { title: '执行变更', label: '确认执行', endpoint: 'execute' },
+      rollback: { title: '回滚变更', label: '确认回滚', endpoint: 'rollback' },
+    }[action]
+    if (!actionMeta) return
+
+    openConfirmDialog({
+      title: actionMeta.title,
+      message: `确认对变更单「${row.title || uid}」执行${actionMeta.title}吗？`,
+      confirmLabel: actionMeta.label,
+      onConfirm: async () => {
+        try {
+          await request('POST', `/api/v1/changes/${encodeURIComponent(uid)}/${actionMeta.endpoint}`, {})
+          await loadChangeList(false)
+          await loadChangeDetail(uid, true)
+          showMessage(`${actionMeta.title}成功`)
+        } catch (err) {
+          showError(normalizeApiError(err))
+        }
+      },
+    })
+  }
+
+  const canRunChangeAction = (row, action) => {
+    const status = String(row?.status || '')
+    if (action === 'approve' || action === 'reject') return status === 'pending_approval'
+    if (action === 'execute') return status === 'approved'
+    if (action === 'rollback') return status === 'completed'
+    return false
+  }
+
   const renderAssetOperationPanel = () => (
     <section className="panel">
       <div className="panel-header">
@@ -1554,120 +2774,861 @@ function App() {
       <section className="panel compact">
         <div className="toolbar-row">
           <div className="toolbar-left wide">
-            <input className="search-input" placeholder="搜索模型..." />
-            <button type="button" className="btn btn-outline-secondary">筛选</button>
-            <button type="button" className="btn btn-outline-secondary">排序</button>
-          </div>
-          <div className="toolbar-right">
-            <button type="button" className="btn btn-primary">新建模型</button>
-          </div>
-        </div>
-      </section>
-      <section className="model-grid">
-        {modelCards.map((item) => (
-          <div key={item.name} className="model-card">
-            <div className="model-icon">◍</div>
-            <div className="model-name">{item.name}</div>
-            <div className="model-count">{item.count} 实例</div>
-          </div>
-        ))}
-      </section>
-    </>
-  )
-
-  const renderRelationTopology = () => (
-    <section className="panel">
-      <div className="panel-header">
-        <div>
-          <h2>拓扑视图</h2>
-          <p>展示资产之间的依赖链路与连接关系。</p>
-        </div>
-      </div>
-      <div className="topology-canvas">
-        <div className="node">应用</div>
-        <div className="edge" />
-        <div className="node">中间件</div>
-        <div className="edge" />
-        <div className="node">数据库</div>
-      </div>
-    </section>
-  )
-
-  const renderRelationList = () => (
-    <>
-      <section className="panel compact">
-        <div className="table-shell">
-          <table className="table">
-            <thead>
-              <tr>
-                <th>源配置项</th>
-                <th>关系类型</th>
-                <th>目标配置项</th>
-                <th>最近更新</th>
-              </tr>
-            </thead>
-            <tbody>
-              {relationRows.map((row) => (
-                <tr key={`${row.from}-${row.to}`}>
-                  <td>{row.from}</td>
-                  <td>{row.type}</td>
-                  <td>{row.to}</td>
-                  <td>{row.updated}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </section>
-
-      <section className="panel">
-        <div className="panel-header">
-          <div>
-            <h2>关系维护</h2>
-            <p>维护配置项之间的依赖、运行、连接与归属关系。</p>
-          </div>
-        </div>
-        <form className="form-grid" onSubmit={handleRelation}>
-          <label>源配置项唯一编号<input value={relationForm.from_ci_uid} onChange={(e) => setRelationForm({ ...relationForm, from_ci_uid: e.target.value })} /></label>
-          <label>目标配置项唯一编号<input value={relationForm.to_ci_uid} onChange={(e) => setRelationForm({ ...relationForm, to_ci_uid: e.target.value })} /></label>
-          <label>
-            关系类型
-            <select value={relationForm.relation_type} onChange={(e) => setRelationForm({ ...relationForm, relation_type: e.target.value })}>
-              {relationTypeOptions.map((item) => (
+            <input
+              className="search-input"
+              value={modelKeyword}
+              onChange={(e) => setModelKeyword(e.target.value)}
+              placeholder="搜索模型名称 / 描述..."
+            />
+            <select value={modelTypeFilter} onChange={(e) => setModelTypeFilter(e.target.value)}>
+              <option value="">全部类型</option>
+              {ciTypeOptions.map((item) => (
                 <option key={item.value} value={item.value}>{item.label}</option>
               ))}
             </select>
-          </label>
-          <label className="full-row">关系属性（对象格式）<textarea rows="6" value={relationForm.attributes_text} onChange={(e) => setRelationForm({ ...relationForm, attributes_text: e.target.value })} /></label>
-          <div className="form-actions"><button disabled={busy} type="submit" className="btn btn-primary">保存关系</button></div>
-        </form>
+            <select value={modelSort} onChange={(e) => setModelSort(e.target.value)}>
+              <option value="count-desc">按实例数（高到低）</option>
+              <option value="count-asc">按实例数（低到高）</option>
+              <option value="name-asc">按名称（升序）</option>
+              <option value="name-desc">按名称（降序）</option>
+            </select>
+          </div>
+          <div className="toolbar-right">
+            <button type="button" className="btn btn-primary" onClick={openModelCreateDialog}>新建模型</button>
+          </div>
+        </div>
       </section>
+      {modelRows.length === 0 ? (
+        <section className="panel">
+          <div className="placeholder">暂无模型，请点击“新建模型”创建。</div>
+        </section>
+      ) : (
+        <section className="model-grid">
+          {modelRows.map((item) => (
+            <div key={item.id} className="model-card">
+              <div className="model-card-head">
+                <div className="model-icon">{item.icon || '◍'}</div>
+                <span className="status-tag success">{item.ci_type_name || formatOptionLabel(ciTypeOptions, item.ci_type_key)}</span>
+              </div>
+              <div className="model-name">{item.name}</div>
+              <div className="model-count">{Number(item.instance_count || 0).toLocaleString()} 实例</div>
+              <div className="model-desc">{item.description || '暂无描述'}</div>
+              <div className="model-meta">创建于 {formatDateTime(item.created_at)}</div>
+              <div className="row-actions">
+                <button type="button" className="link-btn" onClick={() => openModelFieldDialog(item)}>字段规则</button>
+                <button type="button" className="link-btn" onClick={() => deleteModelTemplate(item)}>删除模型</button>
+              </div>
+            </div>
+          ))}
+        </section>
+      )}
     </>
   )
 
-  const renderDiscovery = () => (
-    <section className="panel">
-      <div className="panel-header">
-        <div>
-          <h2>自动发现</h2>
-          <p>接入扫描任务、云资源同步、发现结果入库。</p>
-        </div>
-      </div>
-      <div className="hint-card">建设中：预计 2026-03-31 前完成第一版自动发现任务与执行日志能力。</div>
-    </section>
-  )
+  const renderRelationTopology = () => {
+    const nodes = Array.isArray(topologyData?.nodes) ? topologyData.nodes : []
+    const edges = Array.isArray(topologyData?.edges) ? topologyData.edges : []
+    const previewNodes = nodes.slice(0, 20)
 
-  const renderReport = () => (
-    <section className="panel">
-      <div className="panel-header">
-        <div>
-          <h2>报表分析</h2>
-          <p>资产总量、变更频次、关系复杂度趋势。</p>
-        </div>
-      </div>
-      <div className="hint-card">建设中：预计 2026-04-15 前完成首批资产与变更趋势报表导出能力。</div>
-    </section>
-  )
+    return (
+      <>
+        <section className="panel compact">
+          <div className="toolbar-row">
+            <div className="toolbar-left wide">
+              <input
+                value={topologyFilter.keyword}
+                onChange={(e) => setTopologyFilter((prev) => ({ ...prev, keyword: e.target.value }))}
+                placeholder="关键字（CI名称/CIUID）"
+              />
+              <input
+                value={topologyFilter.focus_ci_uid}
+                onChange={(e) => setTopologyFilter((prev) => ({ ...prev, focus_ci_uid: e.target.value }))}
+                placeholder="聚焦 CIUID（可选）"
+              />
+              <select
+                value={topologyFilter.limit}
+                onChange={(e) => setTopologyFilter((prev) => ({ ...prev, limit: Number(e.target.value) || 300 }))}
+              >
+                <option value={100}>100 条边</option>
+                <option value={300}>300 条边</option>
+                <option value={800}>800 条边</option>
+                <option value={1500}>1500 条边</option>
+              </select>
+              <button type="button" className="btn btn-outline-secondary" onClick={() => loadTopologyData(false)}>刷新拓扑</button>
+            </div>
+          </div>
+        </section>
+
+        <section className="stats-grid">
+          <div className="stat-card">
+            <div className="stat-title">拓扑节点数</div>
+            <div className="stat-main">{Number(topologyData.total_nodes || 0).toLocaleString()}</div>
+            <div className="stat-sub">当前筛选范围内节点</div>
+          </div>
+          <div className="stat-card">
+            <div className="stat-title">拓扑边数</div>
+            <div className="stat-main green">{Number(topologyData.total_edges || 0).toLocaleString()}</div>
+            <div className="stat-sub">关系链路条数</div>
+          </div>
+          <div className="stat-card">
+            <div className="stat-title">加载状态</div>
+            <div className="stat-main orange">{topologyLoading ? '加载中' : '已完成'}</div>
+            <div className="stat-sub">更新时间：{topologyLoadedAt || '-'}</div>
+          </div>
+          <div className="stat-card">
+            <div className="stat-title">路径查询</div>
+            <div className="stat-main red">{pathLoading ? '查询中' : (pathResult?.found ? '已命中' : '待查询')}</div>
+            <div className="stat-sub">支持最短路径（BFS）</div>
+          </div>
+        </section>
+
+        <section className="panel">
+          <div className="panel-header">
+            <div>
+              <h2>拓扑节点预览</h2>
+              <p>展示当前关系网络中的节点（预览前 20 个）。</p>
+            </div>
+          </div>
+          {previewNodes.length === 0 ? (
+            <div className="placeholder">{topologyLoading ? '拓扑加载中...' : '暂无拓扑节点'}</div>
+          ) : (
+            <div className="topology-pill-list">
+              {previewNodes.map((node) => (
+                <div key={node.ci_uid} className="topology-pill">
+                  <strong>{node.name || node.ci_uid}</strong>
+                  <span>{node.ci_type_key} · {node.status}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
+
+        <section className="panel compact">
+          <div className="panel-header">
+            <div>
+              <h2>拓扑边列表</h2>
+              <p>从源配置项到目标配置项的关系链路。</p>
+            </div>
+          </div>
+          <div className="table-shell">
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>源配置项</th>
+                  <th>关系类型</th>
+                  <th>目标配置项</th>
+                  <th>版本</th>
+                </tr>
+              </thead>
+              <tbody>
+                {edges.length === 0 ? (
+                  <tr>
+                    <td colSpan={4} className="muted">{topologyLoading ? '拓扑关系加载中...' : '暂无拓扑关系'}</td>
+                  </tr>
+                ) : edges.map((edge, idx) => (
+                  <tr key={`${edge.from_ci_uid}-${edge.to_ci_uid}-${idx}`}>
+                    <td>{edge.from_ci_uid}</td>
+                    <td>{formatOptionLabel(relationTypeOptions, edge.relation_type)}</td>
+                    <td>{edge.to_ci_uid}</td>
+                    <td>{Number(edge.version || 0)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <section className="panel">
+          <div className="panel-header">
+            <div>
+              <h2>依赖路径查询</h2>
+              <p>查询两个配置项之间的最短依赖路径。</p>
+            </div>
+          </div>
+          <form className="form-grid" onSubmit={queryRelationPath}>
+            <label>
+              起点 CIUID
+              <input value={pathForm.from_ci_uid} onChange={(e) => setPathForm((prev) => ({ ...prev, from_ci_uid: e.target.value }))} />
+            </label>
+            <label>
+              终点 CIUID
+              <input value={pathForm.to_ci_uid} onChange={(e) => setPathForm((prev) => ({ ...prev, to_ci_uid: e.target.value }))} />
+            </label>
+            <label>
+              最大深度
+              <input
+                type="number"
+                min="1"
+                max="12"
+                value={pathForm.max_depth}
+                onChange={(e) => setPathForm((prev) => ({ ...prev, max_depth: e.target.value }))}
+              />
+            </label>
+            <div className="form-actions">
+              <button disabled={pathLoading} type="submit" className="btn btn-primary">{pathLoading ? '查询中...' : '查询路径'}</button>
+            </div>
+          </form>
+          {pathResult ? (
+            <div className="result-fields" style={{ marginTop: 12 }}>
+              {pathResult.found ? (
+                (pathResult.hops || []).length === 0 ? (
+                  <div>起点与终点相同，无需跳转。</div>
+                ) : (pathResult.hops || []).map((hop, idx) => (
+                  <div key={`${hop.from_ci_uid}-${hop.to_ci_uid}-${idx}`}>
+                    <strong>第 {idx + 1} 跳：</strong>{hop.from_ci_name || hop.from_ci_uid} ({hop.from_ci_uid}) → {formatOptionLabel(relationTypeOptions, hop.relation_type)} → {hop.to_ci_name || hop.to_ci_uid} ({hop.to_ci_uid})
+                  </div>
+                ))
+              ) : (
+                <div>{pathResult.message || '未找到路径'}</div>
+              )}
+            </div>
+          ) : null}
+        </section>
+      </>
+    )
+  }
+
+  const renderRelationList = () => {
+    const rows = relationResult.items || []
+    const total = Number(relationResult.total || 0)
+    const totalPages = Math.max(1, Math.ceil(total / relationPageSize))
+
+    return (
+      <>
+        <section className="panel compact">
+          <div className="toolbar-row">
+            <div className="toolbar-left wide">
+              <input
+                value={relationFilter.keyword}
+                onChange={(e) => {
+                  setRelationFilter((prev) => ({ ...prev, keyword: e.target.value }))
+                  setRelationPage(1)
+                }}
+                placeholder="关键字（源/目标名称或CIUID）"
+              />
+              <select
+                value={relationFilter.relation_type}
+                onChange={(e) => {
+                  setRelationFilter((prev) => ({ ...prev, relation_type: e.target.value }))
+                  setRelationPage(1)
+                }}
+              >
+                <option value="">全部关系类型</option>
+                {relationTypeOptions.map((item) => (
+                  <option key={item.value} value={item.value}>{item.label}</option>
+                ))}
+              </select>
+              <input
+                value={relationFilter.from_ci_uid}
+                onChange={(e) => {
+                  setRelationFilter((prev) => ({ ...prev, from_ci_uid: e.target.value }))
+                  setRelationPage(1)
+                }}
+                placeholder="源CIUID（可选）"
+              />
+              <input
+                value={relationFilter.to_ci_uid}
+                onChange={(e) => {
+                  setRelationFilter((prev) => ({ ...prev, to_ci_uid: e.target.value }))
+                  setRelationPage(1)
+                }}
+                placeholder="目标CIUID（可选）"
+              />
+              <button
+                type="button"
+                className="btn btn-outline-secondary"
+                onClick={() => {
+                  setRelationFilter({
+                    relation_type: '',
+                    from_ci_uid: '',
+                    to_ci_uid: '',
+                    keyword: '',
+                  })
+                  setRelationPage(1)
+                }}
+              >
+                重置
+              </button>
+            </div>
+          </div>
+        </section>
+
+        <section className="panel compact">
+          <div className="panel-header">
+            <div>
+              <h2>关系列表</h2>
+              <p>当前关系数据支持按源/目标/类型筛选。</p>
+            </div>
+            <span className="panel-tip">{relationLoading ? '加载中...' : `更新于 ${relationLoadedAt || '-'}`}</span>
+          </div>
+          <div className="table-shell">
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>源配置项</th>
+                  <th>源状态</th>
+                  <th>关系类型</th>
+                  <th>目标配置项</th>
+                  <th>目标状态</th>
+                  <th>版本</th>
+                  <th>最近更新</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.length === 0 ? (
+                  <tr>
+                    <td colSpan={7} className="muted">{relationLoading ? '关系列表加载中...' : '暂无关系数据'}</td>
+                  </tr>
+                ) : rows.map((row, idx) => (
+                  <tr key={`${row.from_ci_uid}-${row.to_ci_uid}-${row.version}-${idx}`}>
+                    <td title={row.from_ci_uid}>{row.from_ci_name || row.from_ci_uid}</td>
+                    <td><span className={statusClassName(row.from_status)}>{formatStatusLabel(row.from_status)}</span></td>
+                    <td>{formatOptionLabel(relationTypeOptions, row.relation_type)}</td>
+                    <td title={row.to_ci_uid}>{row.to_ci_name || row.to_ci_uid}</td>
+                    <td><span className={statusClassName(row.to_status)}>{formatStatusLabel(row.to_status)}</span></td>
+                    <td>{Number(row.version || 0)}</td>
+                    <td>{formatDateTime(row.updated_at)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div className="table-footer table-footer-actions">
+            <span>共 {total} 条，当前第 {relationPage} / {totalPages} 页</span>
+            <div className="pager">
+              <button
+                type="button"
+                className="btn btn-outline-secondary"
+                disabled={relationLoading || relationPage <= 1}
+                onClick={() => setRelationPage((prev) => Math.max(1, prev - 1))}
+              >
+                上一页
+              </button>
+              <button
+                type="button"
+                className="btn btn-outline-secondary"
+                disabled={relationLoading || relationPage >= totalPages}
+                onClick={() => setRelationPage((prev) => Math.min(totalPages, prev + 1))}
+              >
+                下一页
+              </button>
+              <select
+                value={relationPageSize}
+                onChange={(e) => {
+                  setRelationPageSize(Number(e.target.value) || 20)
+                  setRelationPage(1)
+                }}
+              >
+                <option value={20}>20 条/页</option>
+                <option value={50}>50 条/页</option>
+                <option value={100}>100 条/页</option>
+              </select>
+            </div>
+          </div>
+        </section>
+
+        <section className="panel">
+          <div className="panel-header">
+            <div>
+              <h2>关系维护</h2>
+              <p>维护配置项之间的依赖、运行、连接与归属关系。</p>
+            </div>
+          </div>
+          <form className="form-grid" onSubmit={handleRelation}>
+            <label>源配置项唯一编号<input value={relationForm.from_ci_uid} onChange={(e) => setRelationForm({ ...relationForm, from_ci_uid: e.target.value })} /></label>
+            <label>目标配置项唯一编号<input value={relationForm.to_ci_uid} onChange={(e) => setRelationForm({ ...relationForm, to_ci_uid: e.target.value })} /></label>
+            <label>
+              关系类型
+              <select value={relationForm.relation_type} onChange={(e) => setRelationForm({ ...relationForm, relation_type: e.target.value })}>
+                {relationTypeOptions.map((item) => (
+                  <option key={item.value} value={item.value}>{item.label}</option>
+                ))}
+              </select>
+            </label>
+            <label className="full-row">关系属性（对象格式）<textarea rows="6" value={relationForm.attributes_text} onChange={(e) => setRelationForm({ ...relationForm, attributes_text: e.target.value })} /></label>
+            <div className="form-actions"><button disabled={busy} type="submit" className="btn btn-primary">保存关系</button></div>
+          </form>
+        </section>
+      </>
+    )
+  }
+
+  const renderDiscovery = () => {
+    const enabledCount = discoveryTasks.filter((item) => !!item.enabled).length
+    const successLogs = discoveryLogs.filter((item) => item.status === 'success').length
+    const successRate = discoveryLogs.length ? Math.round((successLogs / discoveryLogs.length) * 100) : 0
+    return (
+      <>
+        <section className="stats-grid">
+          <div className="stat-card">
+            <div className="stat-title">发现任务总数</div>
+            <div className="stat-main">{discoveryTasks.length}</div>
+            <div className="stat-sub">当前已配置任务</div>
+          </div>
+          <div className="stat-card">
+            <div className="stat-title">启用任务</div>
+            <div className="stat-main green">{enabledCount}</div>
+            <div className="stat-sub">可参与批量执行</div>
+          </div>
+          <div className="stat-card">
+            <div className="stat-title">执行日志</div>
+            <div className="stat-main orange">{discoveryLogs.length}</div>
+            <div className="stat-sub">保留最近 60 条</div>
+          </div>
+          <div className="stat-card">
+            <div className="stat-title">成功率</div>
+            <div className="stat-main red">{successRate}%</div>
+            <div className="stat-sub">按任务执行结果统计</div>
+          </div>
+        </section>
+
+        <section className="panel compact">
+          <div className="toolbar-row">
+            <div className="toolbar-left">
+              <strong>任务管理：</strong>
+              <span className="muted">支持创建任务、启停、立即执行并落库到资产表。</span>
+            </div>
+            <div className="toolbar-right">
+              <button type="button" className="btn btn-outline-secondary" disabled={discoveryRunning} onClick={runAllEnabledDiscoveryTasks}>
+                {discoveryRunning ? '执行中...' : '立即执行全部启用任务'}
+              </button>
+              <button type="button" className="btn btn-primary" onClick={openDiscoveryTaskDialog}>新建任务</button>
+            </div>
+          </div>
+        </section>
+
+        <section className="panel compact">
+          <div className="panel-header">
+            <div>
+              <h2>发现任务列表</h2>
+              <p>任务执行后将按模型类型生成配置项，来源标记为自动发现。</p>
+            </div>
+          </div>
+          <div className="table-shell">
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>任务名称</th>
+                  <th>资产类型</th>
+                  <th>任务模式</th>
+                  <th>数据源</th>
+                  <th>同步策略</th>
+                  <th>负责人</th>
+                  <th>调度策略</th>
+                  <th>批次</th>
+                  <th>最近执行</th>
+                  <th>状态</th>
+                  <th>操作</th>
+                </tr>
+              </thead>
+              <tbody>
+                {discoveryTasks.length === 0 ? (
+                  <tr>
+                    <td colSpan={11} className="muted">暂无发现任务</td>
+                  </tr>
+                ) : discoveryTasks.map((task) => (
+                  <tr key={task.id}>
+                    <td>{task.name}</td>
+                    <td>{formatOptionLabel(ciTypeOptions, task.ci_type_key)}</td>
+                    <td>{task.task_mode === 'cloud' ? '云同步' : '扫描发现'}</td>
+                    <td title={task.endpoint_url || ''}>
+                      {task.source_type === 'http' ? 'HTTP API' : 'Mock'}
+                      {task.endpoint_url ? '（已配置）' : ''}
+                    </td>
+                    <td>{task.sync_mode === 'create_only' ? '仅新增' : '增量同步'}</td>
+                    <td>{task.owner || '-'}</td>
+                    <td>{task.schedule || '-'}</td>
+                    <td>{Number(task.batch_size || 0)}</td>
+                    <td>{task.last_run_at ? formatDateTime(task.last_run_at) : '-'}</td>
+                    <td>
+                      <span className={task.enabled ? 'status-tag success' : 'status-tag offline'}>
+                        {task.enabled ? '启用' : '停用'}
+                      </span>
+                    </td>
+                    <td>
+                      <div className="row-actions">
+                        <button type="button" className="link-btn" disabled={discoveryRunning} onClick={() => runDiscoveryTask(task)}>立即执行</button>
+                        <button
+                          type="button"
+                          className="link-btn"
+                          onClick={() => toggleDiscoveryTask(task, !task.enabled)}
+                        >
+                          {task.enabled ? '停用' : '启用'}
+                        </button>
+                        <button type="button" className="link-btn" onClick={() => removeDiscoveryTask(task)}>删除</button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <section className="panel compact">
+          <div className="panel-header">
+            <div>
+              <h2>执行日志</h2>
+              <p>记录每次任务执行的成功与失败明细。</p>
+            </div>
+          </div>
+          <div className="table-shell">
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>执行时间</th>
+                  <th>任务名称</th>
+                  <th>资产类型</th>
+                  <th>结果</th>
+                  <th>成功</th>
+                  <th>新增</th>
+                  <th>更新</th>
+                  <th>失败</th>
+                  <th>失败原因</th>
+                </tr>
+              </thead>
+              <tbody>
+                {discoveryLogs.length === 0 ? (
+                  <tr>
+                    <td colSpan={9} className="muted">暂无执行日志</td>
+                  </tr>
+                ) : discoveryLogs.map((log) => (
+                  <tr key={log.id}>
+                    <td>{formatDateTime(log.finished_at || log.started_at)}</td>
+                    <td>{log.task_name}</td>
+                    <td>{formatOptionLabel(ciTypeOptions, log.ci_type_key)}</td>
+                    <td>
+                      <span className={log.status === 'success' ? 'status-tag success' : log.status === 'partial' ? 'status-tag offline' : 'status-tag danger'}>
+                        {log.status === 'success' ? '成功' : log.status === 'partial' ? '部分成功' : '失败'}
+                      </span>
+                    </td>
+                    <td>{Number(log.success_count || 0)}</td>
+                    <td>{Number(log.created_count || 0)}</td>
+                    <td>{Number(log.updated_count || 0)}</td>
+                    <td>{Number(log.failed_count || 0)}</td>
+                    <td title={(log.failures || []).join('；')}>{(log.failures || [])[0] || '-'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      </>
+    )
+  }
+
+  const renderChange = () => {
+    const rows = changeResult.items || []
+    const total = Number(changeResult.total || 0)
+    const totalPages = Math.max(1, Math.ceil(total / changePageSize))
+    const pendingCount = rows.filter((item) => item.status === 'pending_approval').length
+    const approvedCount = rows.filter((item) => item.status === 'approved').length
+    const completedCount = rows.filter((item) => item.status === 'completed').length
+
+    return (
+      <>
+        <section className="panel compact">
+          <div className="toolbar-row">
+            <div className="toolbar-left wide">
+              <select
+                value={changeFilter.status}
+                onChange={(e) => {
+                  setChangeFilter((prev) => ({ ...prev, status: e.target.value }))
+                  setChangePage(1)
+                }}
+              >
+                <option value="">全部状态</option>
+                {changeStatusOptions.map((item) => (
+                  <option key={item.value} value={item.value}>{item.label}</option>
+                ))}
+              </select>
+              <select
+                value={changeFilter.risk_level}
+                onChange={(e) => {
+                  setChangeFilter((prev) => ({ ...prev, risk_level: e.target.value }))
+                  setChangePage(1)
+                }}
+              >
+                <option value="">全部风险</option>
+                {changeRiskOptions.map((item) => (
+                  <option key={item.value} value={item.value}>{item.label}</option>
+                ))}
+              </select>
+              <input
+                value={changeFilter.keyword}
+                onChange={(e) => {
+                  setChangeFilter((prev) => ({ ...prev, keyword: e.target.value }))
+                  setChangePage(1)
+                }}
+                placeholder="关键字（变更单号/标题/目标CI）"
+              />
+              <button
+                type="button"
+                className="btn btn-outline-secondary"
+                onClick={() => {
+                  setChangeFilter({
+                    status: '',
+                    risk_level: '',
+                    keyword: '',
+                  })
+                  setChangePage(1)
+                }}
+              >
+                重置
+              </button>
+            </div>
+          </div>
+        </section>
+
+        <section className="stats-grid">
+          <div className="stat-card">
+            <div className="stat-title">当前筛选总数</div>
+            <div className="stat-main">{total.toLocaleString()}</div>
+            <div className="stat-sub">更新时间：{changeLoadedAt || '-'}</div>
+          </div>
+          <div className="stat-card">
+            <div className="stat-title">待审批（当前页）</div>
+            <div className="stat-main orange">{pendingCount.toLocaleString()}</div>
+            <div className="stat-sub">可执行审批操作</div>
+          </div>
+          <div className="stat-card">
+            <div className="stat-title">已审批（当前页）</div>
+            <div className="stat-main green">{approvedCount.toLocaleString()}</div>
+            <div className="stat-sub">可进入执行阶段</div>
+          </div>
+          <div className="stat-card">
+            <div className="stat-title">已执行（当前页）</div>
+            <div className="stat-main red">{completedCount.toLocaleString()}</div>
+            <div className="stat-sub">支持回滚闭环</div>
+          </div>
+        </section>
+
+        <section className="panel compact">
+          <div className="panel-header">
+            <div>
+              <h2>变更单列表</h2>
+              <p>支持新建、审批、执行、回滚全流程操作。</p>
+            </div>
+          </div>
+          <div className="table-shell">
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>变更单号</th>
+                  <th>标题</th>
+                  <th>目标CI</th>
+                  <th>风险</th>
+                  <th>状态</th>
+                  <th>计划窗口</th>
+                  <th>更新时间</th>
+                  <th>操作</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.length === 0 ? (
+                  <tr>
+                    <td colSpan={8} className="muted">{changeLoading ? '变更单加载中...' : '暂无变更单'}</td>
+                  </tr>
+                ) : rows.map((row) => (
+                  <tr key={row.change_uid}>
+                    <td>{row.change_uid}</td>
+                    <td title={row.description || ''}>{row.title || '-'}</td>
+                    <td title={row.target_ci_uid}>{row.target_ci_name || row.target_ci_uid || '-'}</td>
+                    <td>{formatOptionLabel(changeRiskOptions, row.risk_level)}</td>
+                    <td><span className={changeStatusClassName(row.status)}>{formatChangeStatusLabel(row.status)}</span></td>
+                    <td>{row.planned_start_at ? formatDateTime(row.planned_start_at) : '-'} ~ {row.planned_end_at ? formatDateTime(row.planned_end_at) : '-'}</td>
+                    <td>{formatDateTime(row.updated_at)}</td>
+                    <td>
+                      <div className="row-actions">
+                        <button type="button" className="link-btn" onClick={() => loadChangeDetail(row.change_uid, false)}>查看</button>
+                        <button type="button" className="link-btn" disabled={!canRunChangeAction(row, 'approve')} onClick={() => runChangeAction(row, 'approve')}>审批通过</button>
+                        <button type="button" className="link-btn" disabled={!canRunChangeAction(row, 'reject')} onClick={() => runChangeAction(row, 'reject')}>驳回</button>
+                        <button type="button" className="link-btn" disabled={!canRunChangeAction(row, 'execute')} onClick={() => runChangeAction(row, 'execute')}>执行</button>
+                        <button type="button" className="link-btn" disabled={!canRunChangeAction(row, 'rollback')} onClick={() => runChangeAction(row, 'rollback')}>回滚</button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div className="table-footer table-footer-actions">
+            <span>共 {total} 条，当前第 {changePage} / {totalPages} 页</span>
+            <div className="pager">
+              <button
+                type="button"
+                className="btn btn-outline-secondary"
+                disabled={changeLoading || changePage <= 1}
+                onClick={() => setChangePage((prev) => Math.max(1, prev - 1))}
+              >
+                上一页
+              </button>
+              <button
+                type="button"
+                className="btn btn-outline-secondary"
+                disabled={changeLoading || changePage >= totalPages}
+                onClick={() => setChangePage((prev) => Math.min(totalPages, prev + 1))}
+              >
+                下一页
+              </button>
+              <select
+                value={changePageSize}
+                onChange={(e) => {
+                  setChangePageSize(Number(e.target.value) || 20)
+                  setChangePage(1)
+                }}
+              >
+                <option value={20}>20 条/页</option>
+                <option value={50}>50 条/页</option>
+                <option value={100}>100 条/页</option>
+              </select>
+            </div>
+          </div>
+        </section>
+
+        <section className="panel compact">
+          <div className="panel-header">
+            <div>
+              <h2>变更单详情</h2>
+              <p>查看当前选中变更单的流转记录。</p>
+            </div>
+          </div>
+          {!changeDetail ? (
+            <div className="placeholder">请选择一条变更单查看详情</div>
+          ) : (
+            <>
+              <div className="result-fields">
+                <div><strong>变更单号：</strong>{changeDetail.change_uid || '-'}</div>
+                <div><strong>标题：</strong>{changeDetail.title || '-'}</div>
+                <div><strong>目标CI：</strong>{changeDetail.target_ci_name || changeDetail.target_ci_uid || '-'}</div>
+                <div><strong>风险等级：</strong>{formatOptionLabel(changeRiskOptions, changeDetail.risk_level)}</div>
+                <div><strong>当前状态：</strong>{formatChangeStatusLabel(changeDetail.status)}</div>
+                <div><strong>申请人：</strong>{changeDetail.requested_by_name || changeDetail.requested_by_sub || '-'}</div>
+                <div><strong>计划开始：</strong>{formatDateTime(changeDetail.planned_start_at)}</div>
+                <div><strong>计划结束：</strong>{formatDateTime(changeDetail.planned_end_at)}</div>
+                <div><strong>描述：</strong>{changeDetail.description || '-'}</div>
+              </div>
+              <div className="table-shell" style={{ marginTop: 12 }}>
+                <table className="table">
+                  <thead>
+                    <tr>
+                      <th>时间</th>
+                      <th>动作</th>
+                      <th>状态流转</th>
+                      <th>操作人</th>
+                      <th>备注</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(changeDetail.steps || []).length === 0 ? (
+                      <tr>
+                        <td colSpan={5} className="muted">暂无流转日志</td>
+                      </tr>
+                    ) : (changeDetail.steps || []).map((step) => (
+                      <tr key={step.id || `${step.action}-${step.created_at}`}>
+                        <td>{formatDateTime(step.created_at)}</td>
+                        <td>{step.action || '-'}</td>
+                        <td>{step.from_status ? `${formatChangeStatusLabel(step.from_status)} -> ` : ''}{formatChangeStatusLabel(step.to_status)}</td>
+                        <td>{step.operator_name || step.operator_sub || '-'}</td>
+                        <td>{step.comment_text || '-'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </>
+          )}
+        </section>
+      </>
+    )
+  }
+
+  const renderReport = () => {
+    const totals = reportResult.totals || emptyReportResult.totals
+    const days = Number(reportResult.days || 30)
+    const changeTrend = reportResult.change_frequency_trend || []
+    const complexityTrend = reportResult.relation_complexity_trend || []
+    const maxChange = Math.max(1, ...changeTrend.map((item) => Number(item.total || 0)))
+    const maxComplexity = Math.max(0.000001, ...complexityTrend.map((item) => Number(item.complexity_index || 0)))
+
+    return (
+      <>
+        <section className="stats-grid">
+          <div className="stat-card">
+            <div className="stat-title">资产总数</div>
+            <div className="stat-main">{Number(totals.asset_total || 0).toLocaleString()}</div>
+            <div className="stat-sub">来自 CI 主数据</div>
+          </div>
+          <div className="stat-card">
+            <div className="stat-title">{days}天变更总量</div>
+            <div className="stat-main green">{Number(totals.change_total || 0).toLocaleString()}</div>
+            <div className="stat-sub">来源于变更单创建量</div>
+          </div>
+          <div className="stat-card">
+            <div className="stat-title">关系总量</div>
+            <div className="stat-main orange">{Number(totals.relation_total || 0).toLocaleString()}</div>
+            <div className="stat-sub">当前生效关系边数</div>
+          </div>
+          <div className="stat-card">
+            <div className="stat-title">当前关系复杂度</div>
+            <div className="stat-main red">{Number(totals.complexity_index || 0).toFixed(3)}</div>
+            <div className="stat-sub">关系数 / 资产数</div>
+          </div>
+        </section>
+
+        <section className="panel-grid-2">
+          <section className="panel chart-panel">
+            <div className="panel-header">
+              <h2>变更频次趋势（{days}天）</h2>
+              <span className="panel-tip">{reportLoading ? '加载中...' : `更新于 ${reportLoadedAt || '-'}`}</span>
+            </div>
+            {changeTrend.length === 0 ? (
+              <div className="placeholder">暂无变更频次数据</div>
+            ) : (
+              <div className="metric-bars">
+                {changeTrend.map((item) => (
+                  <div className="metric-row" key={item.date}>
+                    <div className="metric-label">{item.date}</div>
+                    <div className="bar-track">
+                      <div className="bar-fill" style={{ width: `${Math.max(8, Math.round((Number(item.total || 0) / maxChange) * 100))}%` }} />
+                    </div>
+                    <div className="metric-value">{Number(item.total || 0).toLocaleString()}</div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </section>
+          <section className="panel chart-panel">
+            <div className="panel-header"><h2>关系复杂度趋势（{days}天）</h2></div>
+            {complexityTrend.length === 0 ? (
+              <div className="placeholder">暂无复杂度趋势数据</div>
+            ) : (
+              <div className="metric-bars">
+                {complexityTrend.map((item) => (
+                  <div className="metric-row" key={item.date}>
+                    <div className="metric-label">{item.date}</div>
+                    <div className="bar-track">
+                      <div className="bar-fill soft" style={{ width: `${Math.max(8, Math.round((Number(item.complexity_index || 0) / maxComplexity) * 100))}%` }} />
+                    </div>
+                    <div className="metric-value">{Number(item.complexity_index || 0).toFixed(3)}</div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </section>
+        </section>
+
+        <section className="panel">
+          <div className="panel-header"><h2>资产来源概览</h2></div>
+          <div className="result-fields">
+            <div><strong>正常资产：</strong>{Number(totals.active_total || 0).toLocaleString()}</div>
+            <div><strong>自动发现资产：</strong>{Number(totals.discovery_total || 0).toLocaleString()}</div>
+            <div><strong>云同步资产：</strong>{Number(totals.cloud_total || 0).toLocaleString()}</div>
+          </div>
+        </section>
+      </>
+    )
+  }
 
   const renderAudit = () => (
     <>
@@ -1849,6 +3810,7 @@ function App() {
     if (activeKey === 'relation-topology') return renderRelationTopology()
     if (activeKey === 'relation-list') return renderRelationList()
     if (activeKey === 'discovery') return renderDiscovery()
+    if (activeKey === 'change') return renderChange()
     return renderReport()
   }
 
@@ -1860,10 +3822,11 @@ function App() {
     'asset-network': ['刷新', '新增', '导入', '导出'],
     'asset-middleware': ['刷新', '新增', '导入', '导出'],
     model: ['新建模型'],
-    'relation-topology': ['刷新拓扑'],
-    'relation-list': ['导出关系'],
+    'relation-topology': ['刷新', '刷新拓扑'],
+    'relation-list': ['刷新', '导出关系'],
     discovery: ['新建任务', '立即执行'],
-    report: ['导出报表'],
+    change: ['刷新', '新建变更'],
+    report: ['刷新', '导出报表'],
   }
 
   const exportDashboardReport = () => {
@@ -1889,7 +3852,24 @@ function App() {
         loadAuditLogs(false)
       } else if (activeKey.startsWith('asset-')) {
         loadAssetList(false)
+      } else if (activeKey === 'model') {
+        loadModelTemplates(false)
+      } else if (activeKey === 'relation-list') {
+        loadRelationList(false)
+      } else if (activeKey === 'relation-topology') {
+        loadTopologyData(false)
+      } else if (activeKey === 'discovery') {
+        loadDiscoveryTasks(false)
+        loadDiscoveryLogs(false)
+      } else if (activeKey === 'change') {
+        loadChangeList(false)
+      } else if (activeKey === 'report') {
+        loadReport(false)
       }
+      return
+    }
+    if (action === '刷新拓扑') {
+      loadTopologyData(false)
       return
     }
     if (action === '导出CSV') {
@@ -1899,6 +3879,10 @@ function App() {
       }
     }
     if (action === '导出报表') {
+      if (activeKey === 'report') {
+        exportReportAnalysis()
+        return
+      }
       exportDashboardReport()
       return
     }
@@ -1915,6 +3899,26 @@ function App() {
         exportAssetList()
         return
       }
+      if (activeKey === 'relation-list') {
+        exportRelationList()
+        return
+      }
+    }
+    if (action === '新建模型') {
+      openModelCreateDialog()
+      return
+    }
+    if (action === '新建任务') {
+      openDiscoveryTaskDialog()
+      return
+    }
+    if (action === '新建变更') {
+      openChangeCreateDialog()
+      return
+    }
+    if (action === '立即执行') {
+      runAllEnabledDiscoveryTasks()
+      return
     }
     showMessage(`操作「${action}」建设中，预计 2026-04-15 前交付`)
   }
@@ -2006,7 +4010,7 @@ function App() {
                 <button
                   key={action}
                   type="button"
-                  className={action === '新增' || action === '新建模型' ? 'btn btn-primary' : 'btn btn-outline-secondary'}
+                  className={action === '新增' || action === '新建模型' || action === '新建任务' || action === '新建变更' ? 'btn btn-primary' : 'btn btn-outline-secondary'}
                   onClick={() => onPageAction(action)}
                 >
                   {action}
@@ -2065,6 +4069,260 @@ function App() {
               <div className="dialog-actions">
                 <button type="button" className="btn btn-outline-secondary" onClick={() => closeFormatDialog('')}>取消</button>
               </div>
+            </div>
+          </div>
+        )}
+
+        {modelDialogOpen && (
+          <div className="dialog-backdrop" onClick={closeModelCreateDialog}>
+            <div className="dialog-card dialog-card-wide" onClick={(event) => event.stopPropagation()}>
+              <div className="dialog-title">新建模型</div>
+              <form className="form-grid" onSubmit={createModelTemplate}>
+                <label>
+                  模型名称
+                  <input value={modelForm.name} onChange={(e) => setModelForm((prev) => ({ ...prev, name: e.target.value }))} placeholder="例如：Redis实例模型" />
+                </label>
+                <label>
+                  模型类型
+                  <select value={modelForm.ci_type_key} onChange={(e) => setModelForm((prev) => ({ ...prev, ci_type_key: e.target.value }))}>
+                    {ciTypeOptions.map((item) => (
+                      <option key={item.value} value={item.value}>{item.label}</option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  图标
+                  <input value={modelForm.icon} onChange={(e) => setModelForm((prev) => ({ ...prev, icon: e.target.value }))} placeholder="◍" maxLength={2} />
+                </label>
+                <label className="full-row">
+                  描述
+                  <textarea rows="4" value={modelForm.description} onChange={(e) => setModelForm((prev) => ({ ...prev, description: e.target.value }))} placeholder="描述模型用途、命名规范和关键字段" />
+                </label>
+                <div className="dialog-actions full-row">
+                  <button type="button" className="btn btn-outline-secondary" onClick={closeModelCreateDialog}>取消</button>
+                  <button type="submit" className="btn btn-primary">创建模型</button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
+
+        {modelFieldDialogOpen && (
+          <div className="dialog-backdrop" onClick={closeModelFieldDialog}>
+            <div className="dialog-card dialog-card-xl" onClick={(event) => event.stopPropagation()}>
+              <div className="dialog-title">字段规则管理 · {currentModelForFields?.name || '-'}</div>
+              <div className="dialog-body">字段规则将应用到该模型对应资产类型的新增/更新校验。</div>
+              <form className="form-grid" onSubmit={createModelFieldRule}>
+                <label>
+                  字段编码
+                  <input
+                    value={modelFieldForm.field_key}
+                    onChange={(e) => setModelFieldForm((prev) => ({ ...prev, field_key: e.target.value }))}
+                    placeholder="例如：ip / engine / version"
+                  />
+                </label>
+                <label>
+                  字段名称
+                  <input
+                    value={modelFieldForm.field_label}
+                    onChange={(e) => setModelFieldForm((prev) => ({ ...prev, field_label: e.target.value }))}
+                    placeholder="例如：IP地址"
+                  />
+                </label>
+                <label>
+                  数据类型
+                  <select
+                    value={modelFieldForm.data_type}
+                    onChange={(e) => setModelFieldForm((prev) => ({ ...prev, data_type: e.target.value }))}
+                  >
+                    {modelFieldDataTypeOptions.map((item) => (
+                      <option key={item.value} value={item.value}>{item.label}</option>
+                    ))}
+                  </select>
+                </label>
+                <label className="full-row">
+                  默认值（JSON，留空则无默认值）
+                  <textarea
+                    rows="3"
+                    value={modelFieldForm.default_value_text}
+                    onChange={(e) => setModelFieldForm((prev) => ({ ...prev, default_value_text: e.target.value }))}
+                    placeholder={'例如：\n"4C"\n3306\ntrue\n{"zone":"A"}\n["prod","blue"]'}
+                  />
+                </label>
+                <label className="full-row field-inline">
+                  <span>是否必填</span>
+                  <input
+                    type="checkbox"
+                    checked={!!modelFieldForm.required}
+                    onChange={(e) => setModelFieldForm((prev) => ({ ...prev, required: e.target.checked }))}
+                  />
+                </label>
+                <div className="dialog-actions full-row">
+                  <button type="button" className="btn btn-outline-secondary" onClick={closeModelFieldDialog}>关闭</button>
+                  <button type="submit" className="btn btn-primary">新增字段规则</button>
+                </div>
+              </form>
+
+              <div className="table-shell" style={{ marginTop: 12 }}>
+                <table className="table">
+                  <thead>
+                    <tr>
+                      <th>字段编码</th>
+                      <th>字段名称</th>
+                      <th>类型</th>
+                      <th>必填</th>
+                      <th>默认值</th>
+                      <th>操作</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {modelFieldRules.length === 0 ? (
+                      <tr>
+                        <td colSpan={6} className="muted">{modelFieldLoading ? '字段规则加载中...' : '暂无字段规则'}</td>
+                      </tr>
+                    ) : modelFieldRules.map((field) => (
+                      <tr key={field.field_uid || field.id}>
+                        <td>{field.field_key}</td>
+                        <td>{field.field_label}</td>
+                        <td>{field.data_type}</td>
+                        <td>{field.required ? '是' : '否'}</td>
+                        <td>
+                          {field.has_default
+                            ? <code>{JSON.stringify(field.default_value)}</code>
+                            : '-'}
+                        </td>
+                        <td>
+                          <button type="button" className="link-btn" onClick={() => deleteModelFieldRule(field)}>删除</button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {discoveryDialogOpen && (
+          <div className="dialog-backdrop" onClick={closeDiscoveryTaskDialog}>
+            <div className="dialog-card dialog-card-wide" onClick={(event) => event.stopPropagation()}>
+              <div className="dialog-title">新建自动发现任务</div>
+              <form className="form-grid" onSubmit={createDiscoveryTask}>
+                <label>
+                  任务名称
+                  <input value={discoveryTaskForm.name} onChange={(e) => setDiscoveryTaskForm((prev) => ({ ...prev, name: e.target.value }))} placeholder="例如：交换机日巡检发现" />
+                </label>
+                <label>
+                  资产类型
+                  <select value={discoveryTaskForm.ci_type_key} onChange={(e) => setDiscoveryTaskForm((prev) => ({ ...prev, ci_type_key: e.target.value }))}>
+                    {ciTypeOptions.map((item) => (
+                      <option key={item.value} value={item.value}>{item.label}</option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  任务模式
+                  <select value={discoveryTaskForm.task_mode} onChange={(e) => setDiscoveryTaskForm((prev) => ({ ...prev, task_mode: e.target.value }))}>
+                    <option value="scan">扫描发现</option>
+                    <option value="cloud">云资源同步</option>
+                  </select>
+                </label>
+                <label>
+                  数据源
+                  <select value={discoveryTaskForm.source_type} onChange={(e) => setDiscoveryTaskForm((prev) => ({ ...prev, source_type: e.target.value }))}>
+                    <option value="mock">Mock（内置模拟）</option>
+                    <option value="http">HTTP API</option>
+                  </select>
+                </label>
+                {discoveryTaskForm.source_type === 'http' && (
+                  <label className="full-row">
+                    接入地址（HTTP/HTTPS）
+                    <input
+                      value={discoveryTaskForm.endpoint_url}
+                      onChange={(e) => setDiscoveryTaskForm((prev) => ({ ...prev, endpoint_url: e.target.value }))}
+                      placeholder="例如：https://scanner.example.com/api/v1/assets"
+                    />
+                  </label>
+                )}
+                <label>
+                  同步策略
+                  <select value={discoveryTaskForm.sync_mode} onChange={(e) => setDiscoveryTaskForm((prev) => ({ ...prev, sync_mode: e.target.value }))}>
+                    <option value="upsert">增量同步（新增+更新）</option>
+                    <option value="create_only">仅新增</option>
+                  </select>
+                </label>
+                <label>
+                  请求方式
+                  <select value={discoveryTaskForm.request_method} onChange={(e) => setDiscoveryTaskForm((prev) => ({ ...prev, request_method: e.target.value }))}>
+                    <option value="GET">GET</option>
+                    <option value="POST">POST</option>
+                  </select>
+                </label>
+                <label>
+                  负责人
+                  <input value={discoveryTaskForm.owner} onChange={(e) => setDiscoveryTaskForm((prev) => ({ ...prev, owner: e.target.value }))} placeholder="例如：运维一组" />
+                </label>
+                <label>
+                  调度策略
+                  <input value={discoveryTaskForm.schedule} onChange={(e) => setDiscoveryTaskForm((prev) => ({ ...prev, schedule: e.target.value }))} placeholder="例如：每天 02:00 / 每 4 小时" />
+                </label>
+                <label>
+                  每次批量处理条数（1-50）
+                  <input
+                    type="number"
+                    min="1"
+                    max="50"
+                    value={discoveryTaskForm.batch_size}
+                    onChange={(e) => setDiscoveryTaskForm((prev) => ({ ...prev, batch_size: e.target.value }))}
+                  />
+                </label>
+                <div className="dialog-actions full-row">
+                  <button type="button" className="btn btn-outline-secondary" onClick={closeDiscoveryTaskDialog}>取消</button>
+                  <button type="submit" className="btn btn-primary">创建任务</button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
+
+        {changeDialogOpen && (
+          <div className="dialog-backdrop" onClick={closeChangeCreateDialog}>
+            <div className="dialog-card dialog-card-wide" onClick={(event) => event.stopPropagation()}>
+              <div className="dialog-title">新建变更单</div>
+              <form className="form-grid" onSubmit={createChangeRequest}>
+                <label>
+                  变更标题
+                  <input value={changeForm.title} onChange={(e) => setChangeForm((prev) => ({ ...prev, title: e.target.value }))} placeholder="例如：升级订单服务JDK版本" />
+                </label>
+                <label>
+                  目标 CIUID
+                  <input value={changeForm.target_ci_uid} onChange={(e) => setChangeForm((prev) => ({ ...prev, target_ci_uid: e.target.value }))} placeholder="例如：01J..." />
+                </label>
+                <label>
+                  风险等级
+                  <select value={changeForm.risk_level} onChange={(e) => setChangeForm((prev) => ({ ...prev, risk_level: e.target.value }))}>
+                    {changeRiskOptions.map((item) => (
+                      <option key={item.value} value={item.value}>{item.label}</option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  计划开始时间
+                  <input type="datetime-local" value={changeForm.planned_start_at} onChange={(e) => setChangeForm((prev) => ({ ...prev, planned_start_at: e.target.value }))} />
+                </label>
+                <label>
+                  计划结束时间
+                  <input type="datetime-local" value={changeForm.planned_end_at} onChange={(e) => setChangeForm((prev) => ({ ...prev, planned_end_at: e.target.value }))} />
+                </label>
+                <label className="full-row">
+                  变更说明
+                  <textarea rows="4" value={changeForm.description} onChange={(e) => setChangeForm((prev) => ({ ...prev, description: e.target.value }))} placeholder="填写变更背景、实施方案和回退预案" />
+                </label>
+                <div className="dialog-actions full-row">
+                  <button type="button" className="btn btn-outline-secondary" onClick={closeChangeCreateDialog}>取消</button>
+                  <button type="submit" className="btn btn-primary">创建变更单</button>
+                </div>
+              </form>
             </div>
           </div>
         )}

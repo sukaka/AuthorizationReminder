@@ -9,6 +9,8 @@
 - `/Users/zhanglei/Documents/codex-new/docs/manuals/inventory-user-manual.md`
 - `/Users/zhanglei/Documents/codex-new/docs/manuals/device-flow-user-manual.md`
 - `/Users/zhanglei/Documents/codex-new/docs/manuals/sec-impl-user-manual.md`
+- `/Users/zhanglei/Documents/codex-new/docs/manuals/faq-user-manual.md`
+- `/Users/zhanglei/Documents/codex-new/docs/manuals/train-exam-user-manual.md`
 - `/Users/zhanglei/Documents/codex-new/docs/manuals/cmdb-user-manual.md`
 
 ## 2. 阅读建议
@@ -17,5 +19,5 @@
 - 审计员：重点看“审计菜单”“筛选条件”“导出与验签”。
 
 ## 3. 版本说明
-- 当前手册基于仓库现状编写，覆盖系统键：`reminder`、`ticketing`、`inventory`、`device-flow`、`sec-impl`、`cmdb`。
+- 当前手册基于仓库现状编写，覆盖系统键：`reminder`、`ticketing`、`inventory`、`device-flow`、`sec-impl`、`faq`、`tender`、`train-exam`、`cmdb`。
 - 统一登录入口：`http://localhost:5180/portal`。

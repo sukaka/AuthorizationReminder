@@ -16,11 +16,13 @@ const AUTH_SERVICE_URL = process.env.AUTH_SERVICE_URL || 'http://localhost:5180'
 const AUTH_SYSTEM_KEY = String(process.env.AUTH_SYSTEM_KEY || 'sec-impl').trim() || 'sec-impl';
 const AUTH_COOKIE_NAME = String(process.env.AUTH_COOKIE_NAME || 'juxin_auth_token').trim() || 'juxin_auth_token';
 const AUTH_FETCH_TIMEOUT_MS = Math.max(1000, Number(process.env.AUTH_FETCH_TIMEOUT_MS || 5000));
+const SECURITY_STRICT_MODE = process.env.SECURITY_STRICT_MODE === 'true' || process.env.NODE_ENV === 'production';
 const DASHBOARD_OVERDUE_DAYS = Math.max(1, Number(process.env.DASHBOARD_OVERDUE_DAYS || 3));
 const SLA_AUTO_RUN_INTERVAL_MS = Math.max(60000, Number(process.env.SLA_AUTO_RUN_INTERVAL_MS || 5 * 60 * 1000));
 const UPLOAD_ROOT = path.resolve(process.env.UPLOAD_ROOT || './uploads/sec-impl');
 const UPLOAD_MAX_FILE_SIZE = Math.max(1024 * 100, Number(process.env.UPLOAD_MAX_FILE_SIZE_MB || 10) * 1024 * 1024);
 const AUDIT_SIGNING_KEY = String(process.env.AUDIT_SIGNING_KEY || process.env.JWT_SECRET || 'sec-impl-audit-signing-key');
+const weakSecrets = new Set(['dev-secret-change-me', 'change-me', '123456', 'password', '']);
 const MAX_BATCH_STAGE_JOB_IDS = Math.max(1, Math.min(500, Number(process.env.MAX_BATCH_STAGE_JOB_IDS || 200)));
 const MAX_IMPORT_ROWS = Math.max(1, Math.min(5000, Number(process.env.MAX_IMPORT_ROWS || 500)));
 const UPLOAD_ALLOWED_MIME = new Set(
@@ -95,6 +97,9 @@ const corsOptions = {
 };
 
 app.disable('x-powered-by');
+if (process.env.TRUST_PROXY_HOPS) {
+  app.set('trust proxy', Number(process.env.TRUST_PROXY_HOPS));
+}
 app.use(
   helmet({
     contentSecurityPolicy: {
@@ -170,6 +175,22 @@ const importUpload = multer({
 });
 
 const trimText = (value, fallback = '') => (value === undefined || value === null ? fallback : String(value).trim());
+
+const isWeakSecret = (value, minLength = 16) => {
+  const text = String(value || '').trim();
+  if (!text) return true;
+  if (text.length < minLength) return true;
+  return weakSecrets.has(text.toLowerCase());
+};
+
+const validateSecurityBootstrap = () => {
+  const problems = [];
+  if (isWeakSecret(AUDIT_SIGNING_KEY, 32)) problems.push('AUDIT_SIGNING_KEY 过弱（生产建议至少32位随机值）');
+  if (!problems.length) return;
+  const text = `[SECURITY][sec-impl] ${problems.join('；')}`;
+  if (SECURITY_STRICT_MODE) throw new Error(text);
+  console.warn(`${text}。当前为非严格模式，仅告警。`);
+};
 
 const appError = (message, statusCode = 400) => {
   const err = new Error(message);
@@ -1280,9 +1301,19 @@ const runSlaReminderCheck = async ({ actor, requestIp, maxScan = 300 }) => {
   return summary;
 };
 
-const getSlaSummary = async (minOverdueHours) => {
+const getSlaSummary = async (minOverdueHours, reminderPaging = { page: 1, limit: 10, offset: 0 }) => {
   const minHours = Number.isInteger(minOverdueHours) && minOverdueHours >= 0 ? minOverdueHours : 0;
-  const [rules, overdueRows, reminderRows] = await Promise.all([
+  const safeReminderPaging = {
+    page: Number.isInteger(reminderPaging.page) && reminderPaging.page > 0 ? reminderPaging.page : 1,
+    limit:
+      Number.isInteger(reminderPaging.limit) && reminderPaging.limit > 0
+        ? Math.min(reminderPaging.limit, 200)
+        : 10,
+    offset:
+      Number.isInteger(reminderPaging.offset) && reminderPaging.offset >= 0 ? reminderPaging.offset : 0,
+  };
+
+  const [rules, overdueRows, reminderTotalRow, reminderRows] = await Promise.all([
     listSlaRules(),
     query(
       `SELECT j.id,
@@ -1299,9 +1330,10 @@ const getSlaSummary = async (minOverdueHours) => {
          AND TIMESTAMPDIFF(HOUR, j.updated_at, NOW()) >= r.threshold_hours
          AND TIMESTAMPDIFF(HOUR, j.updated_at, NOW()) >= ?
        ORDER BY overdue_hours DESC, j.updated_at ASC
-       LIMIT 200`,
+      LIMIT 200`,
       [minHours]
     ),
+    get('SELECT COUNT(*) AS total FROM sec_impl_sla_reminders'),
     query(
       `SELECT r.id,
               r.job_id,
@@ -1316,10 +1348,12 @@ const getSlaSummary = async (minOverdueHours) => {
        FROM sec_impl_sla_reminders r
        LEFT JOIN sec_impl_projects j ON j.id = r.job_id
        ORDER BY r.id DESC
-       LIMIT 100`
+       LIMIT ? OFFSET ?`,
+      [safeReminderPaging.limit, safeReminderPaging.offset]
     ),
   ]);
 
+  const reminderTotal = Number(reminderTotalRow?.total || 0);
   return {
     generated_at: new Date().toISOString(),
     min_overdue_hours: minHours,
@@ -1334,6 +1368,11 @@ const getSlaSummary = async (minOverdueHours) => {
       threshold_hours: Number(item.threshold_hours || 0),
       overdue_hours: Number(item.overdue_hours || 0),
     })),
+    reminder_paging: {
+      page: safeReminderPaging.page,
+      limit: safeReminderPaging.limit,
+      total: reminderTotal,
+    },
   };
 };
 
@@ -1612,7 +1651,8 @@ app.get(
     const minOverdueHoursRaw = Number(req.query.min_overdue_hours || 0);
     const minOverdueHours =
       Number.isInteger(minOverdueHoursRaw) && minOverdueHoursRaw >= 0 ? Math.min(minOverdueHoursRaw, 720) : 0;
-    const summary = await getSlaSummary(minOverdueHours);
+    const reminderPaging = parsePaging(req.query.page, req.query.limit || 10);
+    const summary = await getSlaSummary(minOverdueHours, reminderPaging);
     res.json(summary);
   })
 );
@@ -1672,6 +1712,81 @@ app.post(
       maxScan,
     });
     res.json(result);
+  })
+);
+
+app.delete(
+  '/api/sec-impl/sla/reminders/:id',
+  requireWriter,
+  asyncHandler(async (req, res) => {
+    const reminderId = Number(req.params.id || 0);
+    if (!Number.isInteger(reminderId) || reminderId <= 0) throw appError('id 参数非法');
+
+    const actor = getActor(req);
+    const reminder = await get(
+      `SELECT id, job_id, stage_code, threshold_hours, overdue_hours, message, created_at
+       FROM sec_impl_sla_reminders
+       WHERE id = ?`,
+      [reminderId]
+    );
+    if (!reminder) throw appError('催办记录不存在', 404);
+
+    await transaction(async (tx) => {
+      await tx.run('DELETE FROM sec_impl_sla_reminders WHERE id = ?', [reminderId]);
+      await writeOperationLogTx(tx, {
+        jobId: Number(reminder.job_id || 0) || null,
+        userSub: actor.sub,
+        username: actor.name,
+        userRole: actor.role,
+        action: 'SLA_REMINDER_DELETE',
+        entity: 'sla_rule',
+        entityId: reminderId,
+        message: `删除催办记录 #${reminderId}`,
+        beforeData: reminder,
+        afterData: {
+          id: reminderId,
+          deleted: true,
+        },
+        requestIp: req.ip,
+      });
+    });
+
+    res.json({ deleted: 1, id: reminderId });
+  })
+);
+
+app.delete(
+  '/api/sec-impl/sla/reminders',
+  requireWriter,
+  asyncHandler(async (req, res) => {
+    const actor = getActor(req);
+    const totalRow = await get('SELECT COUNT(*) AS total FROM sec_impl_sla_reminders');
+    const total = Number(totalRow?.total || 0);
+    if (total <= 0) return res.json({ deleted: 0 });
+
+    await transaction(async (tx) => {
+      await tx.run('DELETE FROM sec_impl_sla_reminders');
+      await writeOperationLogTx(tx, {
+        jobId: null,
+        userSub: actor.sub,
+        username: actor.name,
+        userRole: actor.role,
+        action: 'SLA_REMINDER_PURGE',
+        entity: 'sla_rule',
+        entityId: null,
+        message: `清空催办记录 ${total} 条`,
+        beforeData: {
+          total,
+        },
+        afterData: {
+          deleted: total,
+          deleted_all: true,
+        },
+        requestIp: req.ip,
+      });
+    });
+
+    res.json({ deleted: total });
   })
 );
 
@@ -2581,6 +2696,7 @@ app.use((err, _req, res, _next) => {
 
 const start = async () => {
   try {
+    validateSecurityBootstrap();
     await initDb();
     const auditRebuild = await rebuildAuditChainHashes();
     if (auditRebuild.updated > 0) {

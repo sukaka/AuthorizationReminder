@@ -555,6 +555,8 @@ const batchPayloadTemplateMap = {
   close: { carrier: 'SF', shipped_note: '批量归档' },
 }
 
+const cloneBatchPayloadTemplate = (action) => ({ ...(batchPayloadTemplateMap[action] || {}) })
+
 const parseBatchJobIdsText = (value) => {
   const text = String(value || '').trim()
   if (!text) return []
@@ -631,6 +633,9 @@ function App() {
   const [slaLoading, setSlaLoading] = useState(false)
   const [slaRuleForm, setSlaRuleForm] = useState([])
   const [slaRunResult, setSlaRunResult] = useState(null)
+  const [slaReminderPage, setSlaReminderPage] = useState(1)
+  const [slaReminderTotal, setSlaReminderTotal] = useState(0)
+  const [slaReminderLimit] = useState(10)
 
   const [batchImportFile, setBatchImportFile] = useState(null)
   const [batchImportResult, setBatchImportResult] = useState(null)
@@ -643,6 +648,8 @@ function App() {
     outbound_tracking_no: '',
     stage_payload_json: JSON.stringify(batchPayloadTemplateMap.assess, null, 2),
   })
+  const [batchStagePayloadForm, setBatchStagePayloadForm] = useState(cloneBatchPayloadTemplate('assess'))
+  const [batchStageAdvancedMode, setBatchStageAdvancedMode] = useState(false)
   const [batchStageResult, setBatchStageResult] = useState(null)
 
   const [auditVerifyForm, setAuditVerifyForm] = useState({ from_id: '', to_id: '', limit: 5000 })
@@ -671,10 +678,10 @@ function App() {
     }
     const items = [
       { key: 'dashboard', label: '看板总览' },
-      { key: 'sla', label: 'SLA催办' },
-      { key: 'batch', label: '批量处理' },
-      { key: 'jobs', label: '实施单列表' },
       { key: 'create', label: '新建实施单' },
+      { key: 'jobs', label: '实施单列表' },
+      { key: 'sla', label: 'SLA催办' },
+      { key: 'batch', label: '批量管理' },
     ]
     if (canReadAuditLogs) {
       items.push({ key: 'audit', label: '审计日志' })
@@ -805,6 +812,47 @@ function App() {
     closeConfirmDialog()
     if (!callback) return
     await callback()
+  }
+
+  const isPassFailValue = (value) => {
+    const normalized = String(value || '').toUpperCase()
+    return normalized === 'PASS' || normalized === 'FAIL'
+  }
+
+  const updateBatchStagePayloadField = (key, value) => {
+    setBatchStagePayloadForm((prev) => {
+      const next = { ...prev, [key]: value }
+      setBatchStageForm((current) => ({
+        ...current,
+        stage_payload_json: JSON.stringify(next, null, 2),
+      }))
+      return next
+    })
+  }
+
+  const toggleBatchStageAdvancedMode = () => {
+    if (batchStageAdvancedMode) {
+      const text = trimText(batchStageForm.stage_payload_json)
+      if (!text) {
+        setBatchStagePayloadForm({})
+      } else {
+        try {
+          const parsed = JSON.parse(text)
+          if (!parsed || Array.isArray(parsed) || typeof parsed !== 'object') {
+            return showError('阶段 payload 必须是 JSON 对象')
+          }
+          setBatchStagePayloadForm(parsed)
+        } catch (_err) {
+          return showError('阶段 payload 不是合法 JSON')
+        }
+      }
+    } else {
+      setBatchStageForm((prev) => ({
+        ...prev,
+        stage_payload_json: JSON.stringify(batchStagePayloadForm, null, 2),
+      }))
+    }
+    setBatchStageAdvancedMode((prev) => !prev)
   }
 
   const onLogout = async () => {
@@ -945,11 +993,18 @@ function App() {
     }
   }
 
-  const refreshSlaSummary = async () => {
+  const refreshSlaSummary = async (overrides = {}) => {
     setSlaLoading(true)
     try {
-      const data = await apiRequest('/api/sec-impl/sla/summary')
+      const targetPageRaw = Number(overrides.page ?? slaReminderPage)
+      const targetPage = Number.isInteger(targetPageRaw) && targetPageRaw > 0 ? targetPageRaw : 1
+      const params = new URLSearchParams()
+      params.set('page', String(targetPage))
+      params.set('limit', String(slaReminderLimit))
+      const data = await apiRequest(`/api/sec-impl/sla/summary?${params.toString()}`)
       setSlaData(data)
+      setSlaReminderTotal(Number(data?.reminder_paging?.total || 0))
+      setSlaReminderPage(Number(data?.reminder_paging?.page || targetPage))
       const rules = Array.isArray(data?.rules) ? data.rules : []
       setSlaRuleForm(
         rules.map((item) => ({
@@ -963,6 +1018,51 @@ function App() {
     } finally {
       setSlaLoading(false)
     }
+  }
+
+  const onDeleteSlaReminder = async (item) => {
+    const reminderId = Number(item?.id || 0)
+    if (!reminderId) return showError('催办记录ID无效')
+    if (!canWrite) return showError('当前角色无权限删除催办记录')
+    openConfirmDialog({
+      title: '删除催办记录',
+      message: `确认删除催办记录 #${reminderId}？删除后不可恢复。`,
+      confirmLabel: '确认删除',
+      onConfirm: async () => {
+        try {
+          setBusy(true)
+          await apiRequest(`/api/sec-impl/sla/reminders/${reminderId}`, { method: 'DELETE' })
+          showSuccess('催办记录删除成功')
+          await refreshSlaSummary({ page: slaReminderPage })
+        } catch (err) {
+          showError(err.message)
+        } finally {
+          setBusy(false)
+        }
+      },
+    })
+  }
+
+  const onClearSlaReminders = async () => {
+    if (!canWrite) return showError('当前角色无权限删除催办记录')
+    openConfirmDialog({
+      title: '一键清空催办记录',
+      message: '确认清空全部催办记录？该操作不可恢复。',
+      confirmLabel: '确认清空',
+      onConfirm: async () => {
+        try {
+          setBusy(true)
+          const result = await apiRequest('/api/sec-impl/sla/reminders', { method: 'DELETE' })
+          showSuccess(`已删除 ${Number(result?.deleted || 0)} 条催办记录`)
+          setSlaReminderPage(1)
+          await refreshSlaSummary({ page: 1 })
+        } catch (err) {
+          showError(err.message)
+        } finally {
+          setBusy(false)
+        }
+      },
+    })
   }
 
   const onSaveSlaRules = async () => {
@@ -1091,13 +1191,27 @@ function App() {
     if (jobIds.length === 0) return showError('请填写至少1个实施单 ID')
 
     let stagePayload = null
-    const payloadText = String(batchStageForm.stage_payload_json || '').trim()
-    if (payloadText) {
-      try {
-        stagePayload = JSON.parse(payloadText)
-      } catch (_err) {
-        return showError('阶段 payload 不是合法 JSON')
+    if (batchStageAdvancedMode) {
+      const payloadText = String(batchStageForm.stage_payload_json || '').trim()
+      if (payloadText) {
+        try {
+          stagePayload = JSON.parse(payloadText)
+          if (!stagePayload || Array.isArray(stagePayload) || typeof stagePayload !== 'object') {
+            return showError('阶段 payload 必须是 JSON 对象')
+          }
+        } catch (_err) {
+          return showError('阶段 payload 不是合法 JSON')
+        }
       }
+    } else {
+      const normalized = Object.entries(batchStagePayloadForm).reduce((acc, [key, value]) => {
+        if (value === null || value === undefined) return acc
+        const text = String(value).trim()
+        if (!text) return acc
+        acc[key] = text
+        return acc
+      }, {})
+      stagePayload = Object.keys(normalized).length ? normalized : null
     }
 
     try {
@@ -1677,14 +1791,15 @@ function App() {
   useEffect(() => {
     if (!token) return
     if (activeMenu !== 'sla') return
-    refreshSlaSummary().catch((err) => showError(err.message))
+    refreshSlaSummary({ page: slaReminderPage }).catch((err) => showError(err.message))
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [token, activeMenu])
+  }, [token, activeMenu, slaReminderPage])
 
   useEffect(() => {
     const action = batchStageForm.action
-    const template = batchPayloadTemplateMap[action]
+    const template = cloneBatchPayloadTemplate(action)
     if (!template) return
+    setBatchStagePayloadForm(template)
     setBatchStageForm((prev) => {
       if (prev.action !== action) return prev
       return {
@@ -1692,6 +1807,7 @@ function App() {
         stage_payload_json: JSON.stringify(template, null, 2),
       }
     })
+    setBatchStageAdvancedMode(false)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [batchStageForm.action])
 
@@ -1710,6 +1826,11 @@ function App() {
     const totalPages = Math.max(1, Math.ceil(Math.max(auditTotal, 0) / auditLimit))
     if (auditPage > totalPages) setAuditPage(totalPages)
   }, [auditTotal, auditPage, auditLimit])
+
+  useEffect(() => {
+    const totalPages = Math.max(1, Math.ceil(Math.max(slaReminderTotal, 0) / slaReminderLimit))
+    if (slaReminderPage > totalPages) setSlaReminderPage(totalPages)
+  }, [slaReminderTotal, slaReminderPage, slaReminderLimit])
 
   if (!token || !user) {
     return (
@@ -2099,7 +2220,14 @@ function App() {
                   </div>
 
                   <div className="panel-subsection" style={{ marginTop: 12 }}>
-                    <strong>最近催办记录</strong>
+                    <div className="toolbar" style={{ justifyContent: 'space-between' }}>
+                      <strong>最近催办记录</strong>
+                      {canWrite ? (
+                        <button className="btn btn-danger" onClick={onClearSlaReminders} disabled={busy || slaLoading || slaReminderTotal <= 0}>
+                          一键删除
+                        </button>
+                      ) : null}
+                    </div>
                     <div className="table-wrap" style={{ marginTop: 8 }}>
                       <table className="table">
                         <thead>
@@ -2109,6 +2237,7 @@ function App() {
                             <th>阶段</th>
                             <th>超时/阈值(小时)</th>
                             <th>说明</th>
+                            {canWrite ? <th>操作</th> : null}
                           </tr>
                         </thead>
                         <tbody>
@@ -2123,13 +2252,26 @@ function App() {
                               <td>{stageText(item.stage_code)}</td>
                               <td>{Number(item.overdue_hours || 0)} / {Number(item.threshold_hours || 0)}</td>
                               <td>{item.message || '-'}</td>
+                              {canWrite ? (
+                                <td>
+                                  <button className="btn btn-danger" onClick={() => onDeleteSlaReminder(item)} disabled={busy || slaLoading}>
+                                    删除
+                                  </button>
+                                </td>
+                              ) : null}
                             </tr>
                           ))}
                           {(Array.isArray(slaData?.recent_reminders) ? slaData.recent_reminders : []).length === 0 ? (
-                            <tr><td colSpan={5} className="muted">暂无催办记录</td></tr>
+                            <tr><td colSpan={canWrite ? 6 : 5} className="muted">暂无催办记录</td></tr>
                           ) : null}
                         </tbody>
                       </table>
+                    </div>
+                    <div className="toolbar" style={{ marginTop: 10 }}>
+                      <span className="muted">共 {slaReminderTotal} 条</span>
+                      <button className="btn" disabled={slaReminderPage <= 1 || slaLoading} onClick={() => setSlaReminderPage((p) => Math.max(1, p - 1))}>上一页</button>
+                      <span className="muted">第 {slaReminderPage} 页</span>
+                      <button className="btn" disabled={slaLoading || slaReminderPage * slaReminderLimit >= slaReminderTotal} onClick={() => setSlaReminderPage((p) => p + 1)}>下一页</button>
                     </div>
                   </div>
                 </>
@@ -2141,7 +2283,7 @@ function App() {
         {activeMenu === 'batch' ? (
           <section className="panel">
             <div className="panel-header">
-              <strong>批量处理（Excel）</strong>
+              <strong>批量管理（Excel）</strong>
             </div>
             <div className="panel-body">
               <div className="panel-subsection">
@@ -2212,7 +2354,6 @@ function App() {
                         setBatchStageForm((prev) => ({
                           ...prev,
                           action: e.target.value,
-                          stage_payload_json: JSON.stringify(batchPayloadTemplateMap[e.target.value] || {}, null, 2),
                         }))
                       }
                     >
@@ -2251,13 +2392,45 @@ function App() {
                     />
                   </div>
                   <div className="field" style={{ gridColumn: '1 / -1' }}>
-                    <label>阶段 payload JSON</label>
-                    <textarea
-                      className="mono"
-                      value={batchStageForm.stage_payload_json}
-                      onChange={(e) => setBatchStageForm((prev) => ({ ...prev, stage_payload_json: e.target.value }))}
-                      style={{ minHeight: 130 }}
-                    />
+                    <div className="toolbar" style={{ justifyContent: 'space-between' }}>
+                      <label>阶段参数</label>
+                      <button className="btn" type="button" onClick={toggleBatchStageAdvancedMode}>
+                        {batchStageAdvancedMode ? '切换可视化模式' : '切换高级 JSON 模式'}
+                      </button>
+                    </div>
+                    {!batchStageAdvancedMode ? (
+                      <div className="grid" style={{ marginTop: 8, gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))' }}>
+                        {Object.entries(batchStagePayloadForm).map(([key, value]) => (
+                          <div className="field" key={`batch-payload-${key}`}>
+                            <label>{payloadLabelMap[key] || key}</label>
+                            {isPassFailValue(value) ? (
+                              <select
+                                value={String(value || 'PASS').toUpperCase()}
+                                onChange={(e) => updateBatchStagePayloadField(key, String(e.target.value || '').toUpperCase())}
+                              >
+                                <option value="PASS">PASS</option>
+                                <option value="FAIL">FAIL</option>
+                              </select>
+                            ) : (
+                              <input
+                                value={value === undefined || value === null ? '' : String(value)}
+                                onChange={(e) => updateBatchStagePayloadField(key, e.target.value)}
+                              />
+                            )}
+                          </div>
+                        ))}
+                        {Object.keys(batchStagePayloadForm).length === 0 ? (
+                          <div className="muted">当前动作无需阶段参数</div>
+                        ) : null}
+                      </div>
+                    ) : (
+                      <textarea
+                        className="mono"
+                        value={batchStageForm.stage_payload_json}
+                        onChange={(e) => setBatchStageForm((prev) => ({ ...prev, stage_payload_json: e.target.value }))}
+                        style={{ minHeight: 130, marginTop: 8 }}
+                      />
+                    )}
                   </div>
                 </div>
                 <div className="toolbar" style={{ marginTop: 10 }}>

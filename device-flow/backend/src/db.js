@@ -142,6 +142,37 @@ const seedDefaultSlaRules = async () => {
   }
 };
 
+const seedDefaultDualSignPolicies = async () => {
+  const defaults = [
+    { stage: 'TESTED', requiredSigners: 2, enabled: 1 },
+    { stage: 'APPROVED', requiredSigners: 2, enabled: 1 },
+  ];
+  for (const item of defaults) {
+    await run(
+      `INSERT INTO device_dual_sign_policies
+       (stage_code, required_signers, enabled)
+       VALUES (?, ?, ?)
+       ON DUPLICATE KEY UPDATE
+         required_signers = VALUES(required_signers),
+         enabled = VALUES(enabled)`,
+      [item.stage, item.requiredSigners, item.enabled]
+    );
+  }
+};
+
+const seedDefaultRetentionPolicies = async () => {
+  await run(
+    `INSERT INTO device_retention_policies
+     (target_type, hot_days, cold_days, delete_days, enabled)
+     VALUES ('ATTACHMENT', 180, 365, 730, 1)
+     ON DUPLICATE KEY UPDATE
+       hot_days = VALUES(hot_days),
+       cold_days = VALUES(cold_days),
+       delete_days = VALUES(delete_days),
+       enabled = VALUES(enabled)`
+  );
+};
+
 const transaction = async (fn) => {
   const conn = await pool.getConnection();
   try {
@@ -181,8 +212,10 @@ const createSchema = async () => {
     sales_order_no VARCHAR(128) NOT NULL DEFAULT '',
     inbound_tracking_no VARCHAR(128) NOT NULL DEFAULT '',
     outbound_tracking_no VARCHAR(128) NOT NULL DEFAULT '',
+    device_model VARCHAR(128) NOT NULL DEFAULT '',
     current_stage VARCHAR(32) NOT NULL DEFAULT 'CREATED',
     status VARCHAR(32) NOT NULL DEFAULT 'OPEN',
+    row_version BIGINT NOT NULL DEFAULT 1,
     received_by_sub VARCHAR(64) NULL,
     received_by_name VARCHAR(128) NULL,
     received_by_role VARCHAR(32) NULL,
@@ -211,6 +244,10 @@ const createSchema = async () => {
     shipped_by_name VARCHAR(128) NULL,
     shipped_by_role VARCHAR(32) NULL,
     shipped_at DATETIME NULL,
+    voided_by_sub VARCHAR(64) NULL,
+    voided_by_name VARCHAR(128) NULL,
+    voided_by_role VARCHAR(32) NULL,
+    voided_at DATETIME NULL,
     remark TEXT NULL,
     created_by_sub VARCHAR(64) NULL,
     created_by_name VARCHAR(128) NULL,
@@ -309,18 +346,242 @@ const createSchema = async () => {
     CONSTRAINT fk_sla_reminder_job FOREIGN KEY (job_id) REFERENCES device_jobs(id) ON DELETE CASCADE
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
 
+  await run(`CREATE TABLE IF NOT EXISTS device_change_requests (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    job_id BIGINT NOT NULL,
+    request_type VARCHAR(32) NOT NULL,
+    request_status VARCHAR(32) NOT NULL DEFAULT 'PENDING',
+    request_reason TEXT NULL,
+    request_payload LONGTEXT NULL,
+    requested_by_sub VARCHAR(64) NULL,
+    requested_by_name VARCHAR(128) NULL,
+    requested_by_role VARCHAR(32) NULL,
+    requested_by_department VARCHAR(64) NULL,
+    requested_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    approved_by_sub VARCHAR(64) NULL,
+    approved_by_name VARCHAR(128) NULL,
+    approved_by_role VARCHAR(32) NULL,
+    approved_by_department VARCHAR(64) NULL,
+    approved_at DATETIME NULL,
+    approve_comment TEXT NULL,
+    rejected_by_sub VARCHAR(64) NULL,
+    rejected_by_name VARCHAR(128) NULL,
+    rejected_by_role VARCHAR(32) NULL,
+    rejected_by_department VARCHAR(64) NULL,
+    rejected_at DATETIME NULL,
+    rejected_comment TEXT NULL,
+    withdrawn_by_sub VARCHAR(64) NULL,
+    withdrawn_by_name VARCHAR(128) NULL,
+    withdrawn_by_role VARCHAR(32) NULL,
+    withdrawn_by_department VARCHAR(64) NULL,
+    withdrawn_at DATETIME NULL,
+    applied_stage_record_id BIGINT NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    INDEX idx_change_req_job_status (job_id, request_status, requested_at),
+    INDEX idx_change_req_status_time (request_status, requested_at),
+    CONSTRAINT fk_change_req_job FOREIGN KEY (job_id) REFERENCES device_jobs(id) ON DELETE CASCADE
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
+
+  await run(`CREATE TABLE IF NOT EXISTS device_dual_sign_policies (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    stage_code VARCHAR(32) NOT NULL,
+    required_signers INT NOT NULL DEFAULT 2,
+    enabled TINYINT NOT NULL DEFAULT 1,
+    updated_by_sub VARCHAR(64) NULL,
+    updated_by_name VARCHAR(128) NULL,
+    updated_by_role VARCHAR(32) NULL,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE KEY uk_dual_sign_stage (stage_code)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
+
+  await run(`CREATE TABLE IF NOT EXISTS device_dual_sign_sessions (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    token VARCHAR(128) NOT NULL,
+    job_id BIGINT NOT NULL,
+    action VARCHAR(32) NOT NULL,
+    from_stage VARCHAR(32) NOT NULL,
+    to_stage VARCHAR(32) NOT NULL,
+    stage_payload LONGTEXT NULL,
+    remark TEXT NULL,
+    request_ip VARCHAR(64) NULL,
+    expected_version BIGINT NOT NULL DEFAULT 0,
+    first_signer_sub VARCHAR(64) NULL,
+    first_signer_name VARCHAR(128) NULL,
+    first_signer_role VARCHAR(32) NULL,
+    first_signature VARCHAR(256) NULL,
+    second_signer_sub VARCHAR(64) NULL,
+    second_signer_name VARCHAR(128) NULL,
+    second_signer_role VARCHAR(32) NULL,
+    second_signature VARCHAR(256) NULL,
+    status VARCHAR(32) NOT NULL DEFAULT 'PENDING_SECOND',
+    expires_at DATETIME NULL,
+    completed_at DATETIME NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE KEY uk_dual_sign_token (token),
+    INDEX idx_dual_sign_job_status (job_id, status, created_at),
+    INDEX idx_dual_sign_expire (expires_at),
+    CONSTRAINT fk_dual_sign_job FOREIGN KEY (job_id) REFERENCES device_jobs(id) ON DELETE CASCADE
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
+
+  await run(`CREATE TABLE IF NOT EXISTS device_hardware_templates (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    model_code VARCHAR(64) NOT NULL,
+    model_name VARCHAR(128) NOT NULL DEFAULT '',
+    check_items LONGTEXT NOT NULL,
+    enabled TINYINT NOT NULL DEFAULT 1,
+    created_by_sub VARCHAR(64) NULL,
+    created_by_name VARCHAR(128) NULL,
+    updated_by_sub VARCHAR(64) NULL,
+    updated_by_name VARCHAR(128) NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE KEY uk_hw_template_model (model_code)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
+
+  await run(`CREATE TABLE IF NOT EXISTS device_permission_policies (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    role_code VARCHAR(32) NOT NULL DEFAULT '*',
+    department_code VARCHAR(64) NOT NULL DEFAULT '*',
+    action_code VARCHAR(64) NOT NULL DEFAULT '*',
+    stage_code VARCHAR(32) NOT NULL DEFAULT '*',
+    effect VARCHAR(8) NOT NULL DEFAULT 'ALLOW',
+    enabled TINYINT NOT NULL DEFAULT 1,
+    note VARCHAR(255) NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE KEY uk_permission_policy (role_code, department_code, action_code, stage_code, effect)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
+
+  await run(`CREATE TABLE IF NOT EXISTS device_retention_policies (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    target_type VARCHAR(32) NOT NULL,
+    hot_days INT NOT NULL DEFAULT 180,
+    cold_days INT NOT NULL DEFAULT 365,
+    delete_days INT NOT NULL DEFAULT 730,
+    enabled TINYINT NOT NULL DEFAULT 1,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE KEY uk_retention_target (target_type)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
+
+  await run(`CREATE TABLE IF NOT EXISTS device_job_locks (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    job_id BIGINT NOT NULL,
+    holder_sub VARCHAR(64) NULL,
+    holder_name VARCHAR(128) NULL,
+    holder_role VARCHAR(32) NULL,
+    acquired_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    expires_at DATETIME NOT NULL,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE KEY uk_job_lock_job (job_id),
+    INDEX idx_job_lock_expire (expires_at),
+    CONSTRAINT fk_job_lock_job FOREIGN KEY (job_id) REFERENCES device_jobs(id) ON DELETE CASCADE
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
+
+  await run(`CREATE TABLE IF NOT EXISTS device_api_clients (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    client_name VARCHAR(128) NOT NULL,
+    api_key_hash VARCHAR(128) NOT NULL,
+    enabled TINYINT NOT NULL DEFAULT 1,
+    allowed_ips VARCHAR(255) NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE KEY uk_api_client_key (api_key_hash)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
+
+  await run(`CREATE TABLE IF NOT EXISTS device_callback_subscriptions (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    name VARCHAR(128) NOT NULL,
+    callback_url VARCHAR(512) NOT NULL,
+    secret VARCHAR(128) NOT NULL,
+    events VARCHAR(255) NOT NULL DEFAULT 'stage.changed',
+    enabled TINYINT NOT NULL DEFAULT 1,
+    timeout_ms INT NOT NULL DEFAULT 5000,
+    retry_limit INT NOT NULL DEFAULT 5,
+    created_by_sub VARCHAR(64) NULL,
+    created_by_name VARCHAR(128) NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
+
+  await run(`CREATE TABLE IF NOT EXISTS device_callback_events (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    event_type VARCHAR(64) NOT NULL,
+    job_id BIGINT NULL,
+    payload LONGTEXT NOT NULL,
+    status VARCHAR(16) NOT NULL DEFAULT 'PENDING',
+    attempt_count INT NOT NULL DEFAULT 0,
+    next_retry_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    last_error VARCHAR(255) NULL,
+    last_http_code INT NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    INDEX idx_callback_event_status_time (status, next_retry_at),
+    INDEX idx_callback_event_job_created (job_id, created_at),
+    CONSTRAINT fk_callback_event_job FOREIGN KEY (job_id) REFERENCES device_jobs(id) ON DELETE SET NULL
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
+
+  await run(`CREATE TABLE IF NOT EXISTS device_callback_deliveries (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    event_id BIGINT NOT NULL,
+    callback_id BIGINT NOT NULL,
+    attempt_no INT NOT NULL DEFAULT 1,
+    request_body LONGTEXT NOT NULL,
+    response_code INT NULL,
+    response_body LONGTEXT NULL,
+    duration_ms INT NOT NULL DEFAULT 0,
+    error_message VARCHAR(255) NULL,
+    delivered_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_callback_delivery_event (event_id, delivered_at),
+    INDEX idx_callback_delivery_callback (callback_id, delivered_at),
+    CONSTRAINT fk_callback_delivery_event FOREIGN KEY (event_id) REFERENCES device_callback_events(id) ON DELETE CASCADE,
+    CONSTRAINT fk_callback_delivery_subscription FOREIGN KEY (callback_id) REFERENCES device_callback_subscriptions(id) ON DELETE CASCADE
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
+
+  await run(`CREATE TABLE IF NOT EXISTS device_ops_metrics (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    method VARCHAR(8) NOT NULL,
+    route_path VARCHAR(255) NOT NULL,
+    status_code INT NOT NULL DEFAULT 0,
+    latency_ms INT NOT NULL DEFAULT 0,
+    is_error TINYINT NOT NULL DEFAULT 0,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_ops_metrics_created (created_at),
+    INDEX idx_ops_metrics_route (route_path, created_at),
+    INDEX idx_ops_metrics_error (is_error, created_at)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
+
   await addColumnIfMissing('device_stage_records', 'stage_payload', 'stage_payload LONGTEXT NULL');
   await addColumnIfMissing('device_operation_logs', 'chain_prev_hash', 'chain_prev_hash VARCHAR(128) NULL');
   await addColumnIfMissing('device_operation_logs', 'chain_hash', 'chain_hash VARCHAR(128) NULL');
   await addColumnIfMissing('device_operation_logs', 'chain_version', "chain_version VARCHAR(16) NOT NULL DEFAULT 'v1'");
+  await addColumnIfMissing('device_jobs', 'device_model', "device_model VARCHAR(128) NOT NULL DEFAULT ''");
+  await addColumnIfMissing('device_jobs', 'row_version', 'row_version BIGINT NOT NULL DEFAULT 1');
+  await addColumnIfMissing('device_jobs', 'voided_by_sub', 'voided_by_sub VARCHAR(64) NULL');
+  await addColumnIfMissing('device_jobs', 'voided_by_name', 'voided_by_name VARCHAR(128) NULL');
+  await addColumnIfMissing('device_jobs', 'voided_by_role', 'voided_by_role VARCHAR(32) NULL');
+  await addColumnIfMissing('device_jobs', 'voided_at', 'voided_at DATETIME NULL');
+  await addColumnIfMissing('device_attachments', 'storage_tier', "storage_tier VARCHAR(16) NOT NULL DEFAULT 'HOT'");
+  await addColumnIfMissing('device_attachments', 'archived_at', 'archived_at DATETIME NULL');
+  await addColumnIfMissing('device_attachments', 'archive_path', 'archive_path VARCHAR(512) NULL');
+  await addColumnIfMissing('device_attachments', 'purge_after', 'purge_after DATETIME NULL');
+  await addColumnIfMissing('device_attachments', 'deleted_at', 'deleted_at DATETIME NULL');
+  await addColumnIfMissing('device_dual_sign_sessions', 'expected_version', 'expected_version BIGINT NOT NULL DEFAULT 0');
   await addIndexIfMissing('device_jobs', 'idx_jobs_status_updated', 'status, updated_at');
+  await addIndexIfMissing('device_jobs', 'idx_jobs_model_stage', 'device_model, current_stage');
+  await addIndexIfMissing('device_jobs', 'idx_jobs_stage_status_updated', 'current_stage, status, updated_at');
   await addIndexIfMissing('device_operation_logs', 'idx_op_created', 'created_at');
   await addIndexIfMissing('device_operation_logs', 'idx_op_user_created', 'username, created_at');
   await addIndexIfMissing('device_operation_logs', 'idx_op_chain_hash', 'chain_hash');
   await addIndexIfMissing('device_attachments', 'idx_attachment_job_stage', 'job_id, stage_code');
+  await addIndexIfMissing('device_attachments', 'idx_attachment_tier_uploaded', 'storage_tier, uploaded_at');
+  await addIndexIfMissing('device_attachments', 'idx_attachment_purge_after', 'purge_after');
   await addIndexIfMissing('device_sla_reminders', 'idx_sla_reminder_job_stage_time', 'job_id, stage_code, created_at');
   await addIndexIfMissing('device_sla_reminders', 'idx_sla_reminder_created', 'created_at');
   await seedDefaultSlaRules();
+  await seedDefaultDualSignPolicies();
+  await seedDefaultRetentionPolicies();
 };
 
 const initDb = async () => {

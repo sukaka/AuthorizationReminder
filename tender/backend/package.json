@@ -1,0 +1,30 @@
+{
+  "name": "juxin-tender-backend",
+  "version": "4.0.0",
+  "private": true,
+  "main": "src/index.js",
+  "scripts": {
+    "dev": "node --watch src/index.js",
+    "start": "node src/index.js",
+    "test": "vitest run",
+    "test:smoke": "vitest run tests/smoke.e2e.test.js"
+  },
+  "dependencies": {
+    "@alicloud/pop-core": "^1.8.0",
+    "cors": "^2.8.5",
+    "docxtemplater": "^3.63.0",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "helmet": "^7.1.0",
+    "jimp": "^0.22.12",
+    "jsonwebtoken": "^9.0.3",
+    "mammoth": "^1.9.0",
+    "multer": "^2.0.2",
+    "mysql2": "^3.11.2",
+    "pdf-lib": "^1.17.1",
+    "pizzip": "^3.2.0"
+  },
+  "devDependencies": {
+    "vitest": "^4.0.18"
+  }
+}

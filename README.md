@@ -1,6 +1,6 @@
 # 聚信多系统业务平台
 
-本仓库是一个基于统一登录（SSO）的多系统业务平台，包含以下 6 个业务域：
+本仓库是一个基于统一登录（SSO）的多系统业务平台，包含以下 9 个业务域：
 
 - 授权到期提醒（Reminder）
 - 工单管理（Ticketing）
@@ -8,6 +8,9 @@
 - 设备流转（Device Flow）
 - 聚信实施记录（Sec-Impl）
 - CMDB
+- FAQ
+- 标书系统（Tender）
+- 培训考试系统（Train-Exam）
 
 目标是：统一账号登录、按系统授权访问、业务库隔离、可通过 Docker Compose 一键启动。
 
@@ -21,6 +24,9 @@
 - `device-flow-api`：设备流转后端
 - `sec-impl-api`：聚信实施记录后端
 - `cmdb`：CMDB 后端（Go）
+- `faq-api`：FAQ 后端（Node.js + OnlyOffice）
+- `tender-api`：标书系统后端（Node.js + OnlyOffice + OCR + AI）
+- `train-exam-api`：培训考试系统后端（Node.js + Excel 导题 + 自动评分 + 证书）
 - `web*`：各系统前端（Nginx + 静态资源）
 
 ### 1.2 数据库策略
@@ -30,6 +36,9 @@
 - `juxin_device_flow`（设备流转）
 - `juxin_sec_impl`（聚信实施记录）
 - `cmdb`（CMDB）
+- `juxin_faq`（FAQ）
+- `juxin_tender`（标书系统）
+- `juxin_train_exam`（培训考试系统）
 
 > 说明：统一实例 + 独立库，兼顾运维成本与业务隔离。
 
@@ -63,9 +72,35 @@ docker compose up -d --build mysql auth device-flow-api web-device-flow
 # 仅聚信实施记录系统
 docker compose up -d --build mysql auth sec-impl-api web-sec-impl
 
+# 仅 FAQ 系统
+docker compose up -d --build mysql auth onlyoffice faq-api web-faq
+
+# 仅 标书系统
+docker compose up -d --build mysql auth onlyoffice tender-api web-tender
+
+# 仅 培训考试系统
+docker compose up -d --build mysql auth train-exam-api web-train-exam
+
 # 仅 CMDB 系统
 docker compose up -d --build mysql auth cmdb-mongo cmdb-mysql-init cmdb web-cmdb
 ```
+
+> 说明：`tender-api` 与 `faq-api` 复用同一个 `onlyoffice` 实例时，`DOC_EDITOR_JWT_SECRET` 必须保持一致，否则在线编辑会鉴权失败。
+
+### 2.4 工单系统改动后自动重启镜像
+已在 `docker-compose.yml` 为 `ticketing` 与 `web-ticketing` 配置 `develop.watch`（动作是 `rebuild`）。
+
+```bash
+cd /Users/zhanglei/Documents/codex-new
+
+# 先启动依赖
+docker compose up -d mysql auth ticketing web-ticketing
+
+# 开启监听：代码有改动时自动重建并重启对应镜像/容器
+docker compose watch ticketing web-ticketing
+```
+
+> 说明：`docker compose watch` 会占用当前终端，建议新开一个终端执行。
 
 ## 3. 服务入口与端口
 
@@ -82,6 +117,12 @@ docker compose up -d --build mysql auth cmdb-mongo cmdb-mysql-init cmdb web-cmdb
 | 设备流转后端 | `http://localhost:5184` |
 | 聚信实施记录前端 | `http://localhost:8084` |
 | 聚信实施记录后端 | `http://localhost:5185` |
+| FAQ 前端 | `http://localhost:8085` |
+| FAQ 后端 | `http://localhost:5186` |
+| 标书前端 | `http://localhost:8086` |
+| 标书后端 | `http://localhost:5187` |
+| 培训考试前端 | `http://localhost:8087` |
+| 培训考试后端 | `http://localhost:5188` |
 | CMDB 前端 | `http://localhost:8090` |
 | MySQL（宿主机映射） | `localhost:3308` |
 
@@ -89,6 +130,8 @@ docker compose up -d --build mysql auth cmdb-mongo cmdb-mysql-init cmdb web-cmdb
 
 内置账号（由 `auth` 管理）：
 - `admin`
+- `editor`
+- `reviewer`
 - `sysadmin`
 - `auditor`
 
@@ -100,6 +143,8 @@ docker compose up -d --build mysql auth cmdb-mongo cmdb-mysql-init cmdb web-cmdb
 
 权限原则：
 - `admin`：业务管理与写操作主角色
+- `editor`：标书系统编辑角色 + FAQ/培训考试写入角色
+- `reviewer`：FAQ/培训考试审核角色
 - `sysadmin`：系统管理与配置主角色
 - `auditor`：审计与只读校验主角色
 - 各系统可通过 `app_access` 做精细化入口控制
@@ -125,6 +170,26 @@ cd /Users/zhanglei/Documents/codex-new/sec-impl/frontend
 npm install
 npm run dev
 
+# FAQ 后端
+cd /Users/zhanglei/Documents/codex-new/faq/backend
+npm install
+npm run dev
+
+# FAQ 前端
+cd /Users/zhanglei/Documents/codex-new/faq/frontend
+npm install
+npm run dev
+
+# 培训考试后端
+cd /Users/zhanglei/Documents/codex-new/train-exam/backend
+npm install
+npm run dev
+
+# 培训考试前端
+cd /Users/zhanglei/Documents/codex-new/train-exam/frontend
+npm install
+npm run dev
+
 # CMDB 后端
 cd /Users/zhanglei/Documents/codex-new/cmdb
 go run ./cmd/cmdb
@@ -139,6 +204,8 @@ curl -sS http://localhost:5182/health
 curl -sS http://localhost:5183/api/health
 curl -sS http://localhost:5184/api/health
 curl -sS http://localhost:5185/api/health
+curl -sS http://localhost:5186/api/health
+curl -sS http://localhost:5188/api/health
 curl -sS http://localhost:8090/healthz
 ```
 
@@ -165,6 +232,8 @@ npm run test:rbac
 - `/Users/zhanglei/Documents/codex-new/docs/testcases/inventory-test-cases.md`
 - `/Users/zhanglei/Documents/codex-new/docs/testcases/device-flow-test-cases.md`
 - `/Users/zhanglei/Documents/codex-new/docs/testcases/sec-impl-test-cases.md`
+- `/Users/zhanglei/Documents/codex-new/docs/testcases/faq-test-cases.md`
+- `/Users/zhanglei/Documents/codex-new/docs/testcases/train-exam-test-cases.md`
 - `/Users/zhanglei/Documents/codex-new/docs/testcases/cmdb-test-cases.md`
 - `/Users/zhanglei/Documents/codex-new/docs/testcases/test-run-2026-02-20.md`
 
@@ -176,6 +245,8 @@ npm run test:rbac
 - `/Users/zhanglei/Documents/codex-new/docs/manuals/inventory-user-manual.md`
 - `/Users/zhanglei/Documents/codex-new/docs/manuals/device-flow-user-manual.md`
 - `/Users/zhanglei/Documents/codex-new/docs/manuals/sec-impl-user-manual.md`
+- `/Users/zhanglei/Documents/codex-new/docs/manuals/faq-user-manual.md`
+- `/Users/zhanglei/Documents/codex-new/docs/manuals/train-exam-user-manual.md`
 - `/Users/zhanglei/Documents/codex-new/docs/manuals/cmdb-user-manual.md`
 
 ## 7. 关键环境变量（建议）
@@ -191,6 +262,9 @@ npm run test:rbac
 - Inventory：`AUTH_SYSTEM_KEY=inventory`、`MYSQL_DATABASE=juxin_inventory`
 - Device Flow：`AUTH_SYSTEM_KEY=device-flow`、`MYSQL_DATABASE=juxin_device_flow`
 - Sec-Impl：`AUTH_SYSTEM_KEY=sec-impl`、`MYSQL_DATABASE=juxin_sec_impl`
+- FAQ：`AUTH_SYSTEM_KEY=faq`、`MYSQL_DATABASE=juxin_faq`
+- Tender：`AUTH_SYSTEM_KEY=tender`、`MYSQL_DATABASE=juxin_tender`
+- Train-Exam：`AUTH_SYSTEM_KEY=train-exam`、`MYSQL_DATABASE=juxin_train_exam`
 - CMDB：`AUTH_SYSTEM_KEY=cmdb`、`MYSQL_DSN=.../cmdb`
 
 ## 8. 安全基线
@@ -214,6 +288,9 @@ npm run test:rbac
 ├── inventory-system/      # 库存系统 + 物流网关
 ├── device-flow/           # 设备流转系统
 ├── sec-impl/              # 聚信实施记录系统
+├── faq/                   # FAQ 系统（Node + OnlyOffice + Web）
+├── tender/                # 标书系统（Node + OnlyOffice + OCR + AI）
+├── train-exam/            # 培训考试系统（Node + Web）
 ├── cmdb/                  # CMDB（Go + Web）
 ├── docs/                  # 发布、测试、设计文档
 └── docker-compose.yml     # 统一编排
@@ -230,7 +307,7 @@ npm run test:rbac
 ## 11. 常见问题
 
 ### Q1：登录成功但看不到某系统入口？
-检查该用户 `app_access` 是否包含对应系统键（如 `inventory`、`device-flow`、`sec-impl`、`cmdb`）。
+检查该用户 `app_access` 是否包含对应系统键（如 `inventory`、`device-flow`、`sec-impl`、`faq`、`tender`、`train-exam`、`cmdb`）。
 
 ### Q2：跨域报错（CORS）？
 在 `docker-compose.yml` 的对应服务里补齐 `CORS_ORIGINS`，包含访问页面的实际域名与端口。

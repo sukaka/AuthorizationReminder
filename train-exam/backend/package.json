@@ -1,0 +1,27 @@
+{
+  "name": "juxin-train-exam-backend",
+  "version": "4.0.0",
+  "private": true,
+  "main": "src/index.js",
+  "scripts": {
+    "dev": "node --watch src/index.js",
+    "start": "node src/index.js",
+    "test": "vitest run",
+    "test:smoke": "vitest run tests/smoke.e2e.test.js"
+  },
+  "dependencies": {
+    "@pdf-lib/fontkit": "^1.1.1",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "helmet": "^7.1.0",
+    "jsonwebtoken": "^9.0.2",
+    "multer": "^2.0.2",
+    "mysql2": "^3.11.2",
+    "pdf-lib": "^1.17.1",
+    "xlsx": "^0.18.5"
+  },
+  "devDependencies": {
+    "vitest": "^4.0.18"
+  }
+}

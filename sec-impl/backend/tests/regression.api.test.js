@@ -221,6 +221,18 @@ describe('sec-impl regression api', () => {
     });
     ensureStatus(slaSummaryResp, 200);
     expect(String(slaSummaryResp.json.generated_at || '').length).toBeGreaterThan(0);
+    expect(Number(slaSummaryResp.json?.reminder_paging?.page || 0)).toBe(1);
+    expect(Number(slaSummaryResp.json?.reminder_paging?.limit || 0)).toBe(10);
+    expect(Number(slaSummaryResp.json?.reminder_paging?.total || 0)).toBeGreaterThanOrEqual(0);
+
+    const slaSummaryPageResp = await request({
+      base: apiBase,
+      path: '/api/sec-impl/sla/summary?page=1&limit=5',
+      method: 'GET',
+      token: authToken,
+    });
+    ensureStatus(slaSummaryPageResp, 200);
+    expect(Number(slaSummaryPageResp.json?.reminder_paging?.limit || 0)).toBe(5);
 
     const slaRunResp = await request({
       base: apiBase,
@@ -233,6 +245,23 @@ describe('sec-impl regression api', () => {
     });
     ensureStatus(slaRunResp, 200);
     expect(Number(slaRunResp.json.checked || 0)).toBeGreaterThanOrEqual(0);
+
+    const deleteInvalidReminderResp = await request({
+      base: apiBase,
+      path: '/api/sec-impl/sla/reminders/0',
+      method: 'DELETE',
+      token: authToken,
+    });
+    ensureStatus(deleteInvalidReminderResp, 400);
+
+    const purgeReminderResp = await request({
+      base: apiBase,
+      path: '/api/sec-impl/sla/reminders',
+      method: 'DELETE',
+      token: authToken,
+    });
+    ensureStatus(purgeReminderResp, 200);
+    expect(Number(purgeReminderResp.json?.deleted || 0)).toBeGreaterThanOrEqual(0);
 
     const verifyResp = await request({
       base: apiBase,

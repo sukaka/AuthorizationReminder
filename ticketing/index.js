@@ -48,11 +48,8 @@ const validateSecurityBootstrap = () => {
 };
 
 const extractRequestIp = (req) => {
-  const forwarded = req.headers['x-forwarded-for'];
-  if (typeof forwarded === 'string' && forwarded.trim()) {
-    return forwarded.split(',')[0].trim();
-  }
-  return req.ip || req.socket?.remoteAddress || 'unknown';
+  const ip = String(req.ip || req.socket?.remoteAddress || '').trim();
+  return ip || 'unknown';
 };
 
 const createIpRateLimiter = ({ name, windowMs, max }) => {

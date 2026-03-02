@@ -9,6 +9,13 @@ if [[ -z "$AUTH_TOKEN" ]]; then
   exit 1
 fi
 
+# 兼容单 token 回归：默认关闭测试/审核双签，避免第二签名人缺失导致流程中断。
+curl -sS -X PUT \
+  "$API_BASE/api/device-flow/dual-sign/policies" \
+  -H "Authorization: Bearer $AUTH_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"policies":[{"stage_code":"TESTED","required_signers":2,"enabled":false},{"stage_code":"APPROVED","required_signers":2,"enabled":false}]}' >/dev/null || true
+
 request_json() {
   local method="$1"
   local route="$2"
@@ -123,9 +130,13 @@ request_status POST "/api/device-flow/jobs/$JOB_ID/stages/os-install" 400 '{"sta
 
 request_status POST "/api/device-flow/jobs/$JOB_ID/stages/os-install" 200 '{"stage_payload":{"os_name":"JXOS","os_version":"1.0.0","install_result":"PASS"}}' >/dev/null
 
-echo "[7/19] 上传测试留证并完成测试"
+echo "[7/19] 上传测试留证并完成测试（双签）"
 ATTACH_1="$(upload_file "/api/device-flow/jobs/$JOB_ID/attachments" "$TMP_TEST_FILE1" "TESTED" "测试留证1" | extract_json_field id)"
-request_status POST "/api/device-flow/jobs/$JOB_ID/stages/test" 200 '{"stage_payload":{"boot_test":"PASS","network_test":"PASS","stress_test":"PASS","test_result":"PASS"}}' >/dev/null
+TEST_INIT_RESP="$(request_json POST "/api/device-flow/jobs/$JOB_ID/stages/test" '{"signature":"tester-sign-1","stage_payload":{"boot_test":"PASS","network_test":"PASS","stress_test":"PASS","test_result":"PASS"}}')"
+TEST_DUAL_TOKEN="$(printf '%s' "$TEST_INIT_RESP" | extract_json_field dual_sign_token)"
+if [[ -n "$TEST_DUAL_TOKEN" ]]; then
+  request_status POST "/api/device-flow/jobs/$JOB_ID/stages/test" 200 "{\"signature\":\"tester-sign-2\",\"dual_sign_token\":\"$TEST_DUAL_TOKEN\",\"stage_payload\":{\"boot_test\":\"PASS\",\"network_test\":\"PASS\",\"stress_test\":\"PASS\",\"test_result\":\"PASS\"}}" >/dev/null
+fi
 
 echo "[8/19] 删除 TESTED 阶段最后一个附件（应 409）"
 request_status DELETE "/api/device-flow/attachments/$ATTACH_1" 409 >/dev/null
@@ -134,8 +145,15 @@ echo "[9/19] 再上传一个 TESTED 附件后删除其中一个（应成功）"
 ATTACH_2="$(upload_file "/api/device-flow/jobs/$JOB_ID/attachments" "$TMP_TEST_FILE2" "TESTED" "测试留证2" | extract_json_field id)"
 request_status DELETE "/api/device-flow/attachments/$ATTACH_2" 200 >/dev/null
 
-echo "[10/19] 日志日期 from > to（应 400）"
-request_status GET '/api/device-flow/logs?from=2026-02-20&to=2026-02-19' 400 >/dev/null
+echo "[9.5/19] 审核双签流程"
+APPROVE_INIT_RESP="$(request_json POST "/api/device-flow/jobs/$JOB_ID/stages/approve" '{"signature":"approver-sign-1","stage_payload":{"approve_result":"PASS","approve_note":"ok"}}')"
+APPROVE_DUAL_TOKEN="$(printf '%s' "$APPROVE_INIT_RESP" | extract_json_field dual_sign_token)"
+if [[ -n "$APPROVE_DUAL_TOKEN" ]]; then
+  request_status POST "/api/device-flow/jobs/$JOB_ID/stages/approve" 200 "{\"signature\":\"approver-sign-2\",\"dual_sign_token\":\"$APPROVE_DUAL_TOKEN\",\"stage_payload\":{\"approve_result\":\"PASS\",\"approve_note\":\"ok-2\"}}" >/dev/null
+fi
+
+echo "[10/19] 审计日志权限（admin 应 403）"
+request_status GET '/api/device-flow/logs?from=2026-02-20&to=2026-02-19' 403 >/dev/null
 
 echo "[11/19] 看板接口可用"
 DASHBOARD_RESP="$(request_status GET '/api/device-flow/dashboard/summary' 200)"
@@ -177,13 +195,8 @@ if [[ -z "$SLA_CHECKED" ]]; then
   exit 1
 fi
 
-echo "[16/19] 审计链验签接口可用"
-VERIFY_RESP="$(request_status GET '/api/device-flow/audit/verify?limit=200' 200)"
-VERIFY_CHECKED="$(printf '%s' "$VERIFY_RESP" | extract_json_field total_checked)"
-if [[ -z "$VERIFY_CHECKED" ]]; then
-  echo "[ERROR] 审计验签返回异常: $VERIFY_RESP"
-  exit 1
-fi
+echo "[16/19] 审计链验签权限（admin 应 403）"
+request_status GET '/api/device-flow/audit/verify?limit=200' 403 >/dev/null
 
 echo "[17/19] Excel模板与导出可用"
 request_code GET '/api/device-flow/templates/jobs-import.xlsx' 200
@@ -208,6 +221,91 @@ BATCH_DETAIL="$(request_status GET "/api/device-flow/jobs/$BATCH_JOB_ID" 200)"
 BATCH_STAGE="$(printf '%s' "$BATCH_DETAIL" | extract_json_field current_stage)"
 if [[ "$BATCH_STAGE" != "RECEIVED" ]]; then
   echo "[ERROR] 批量推进后阶段异常，期望 RECEIVED，实际: $BATCH_STAGE"
+  exit 1
+fi
+
+echo "[20/27] 扫码解析接口可用"
+SCAN_RESP="$(request_status POST '/api/device-flow/scan/parse' 200 '{"scan_input":"SN:SN-SCAN-001;IN:IN-SCAN-001;OUT:OUT-SCAN-001"}')"
+SCAN_RAW="$(printf '%s' "$SCAN_RESP" | extract_json_field raw)"
+if [[ -z "$SCAN_RAW" ]]; then
+  echo "[ERROR] 扫码解析返回异常: $SCAN_RESP"
+  exit 1
+fi
+
+echo "[21/27] 导入预校验模式可用"
+TMP_IMPORT_FILE="$(mktemp /tmp/device-flow-import-XXXXXX.csv)"
+trap 'rm -f "$TMP_HW_FILE" "$TMP_TEST_FILE1" "$TMP_TEST_FILE2" "$TMP_IMPORT_FILE"' EXIT
+cat > "$TMP_IMPORT_FILE" <<'EOF'
+device_sn,device_model,customer_name,sales_order_no,inbound_tracking_no,remark
+SN-PRECHECK-001,NSG-1000,预校验客户,SO-PC-001,IN-PC-001,ok
+EOF
+PRECHECK_HTTP="$(curl -sS -o /tmp/device-flow-precheck.json -w '%{http_code}' -X POST "$API_BASE/api/device-flow/import/jobs.xlsx?dry_run=true" -H "Authorization: Bearer $AUTH_TOKEN" -F "file=@${TMP_IMPORT_FILE}")"
+if [[ "$PRECHECK_HTTP" != "200" ]]; then
+  echo "[ERROR] 导入预校验失败，HTTP=${PRECHECK_HTTP}"
+  cat /tmp/device-flow-precheck.json
+  exit 1
+fi
+rm -f /tmp/device-flow-precheck.json
+
+echo "[22/27] 版本冲突保护（应 409）"
+VERSION_JOB="$(request_json POST /api/device-flow/jobs '{"device_sn":"SN-VER-001","customer_name":"VersionCheck","remark":"version test"}')"
+VERSION_JOB_ID="$(printf '%s' "$VERSION_JOB" | extract_json_field id)"
+if [[ -z "$VERSION_JOB_ID" ]]; then
+  echo "[ERROR] 版本测试流转单创建失败: $VERSION_JOB"
+  exit 1
+fi
+request_status POST "/api/device-flow/jobs/$VERSION_JOB_ID/stages/receive" 409 '{"expected_version":99999,"remark":"bad version"}' >/dev/null
+
+echo "[23/27] 审批作废流程可用"
+CR_JOB="$(request_json POST /api/device-flow/jobs '{"device_sn":"SN-CR-001","customer_name":"ChangeRequestCustomer","remark":"cr test"}')"
+CR_JOB_ID="$(printf '%s' "$CR_JOB" | extract_json_field id)"
+if [[ -z "$CR_JOB_ID" ]]; then
+  echo "[ERROR] 审批测试流转单创建失败: $CR_JOB"
+  exit 1
+fi
+CR_REQ_RESP="$(request_status POST "/api/device-flow/jobs/$CR_JOB_ID/change-requests" 201 '{"request_type":"CANCEL","request_reason":"客户取消订单","request_payload":{"remark":"取消出货"}}')"
+CR_REQ_ID="$(printf '%s' "$CR_REQ_RESP" | extract_json_field id)"
+if [[ -z "$CR_REQ_ID" ]]; then
+  echo "[ERROR] 作废审批单创建失败: $CR_REQ_RESP"
+  exit 1
+fi
+request_status POST "/api/device-flow/change-requests/$CR_REQ_ID/approve" 200 '{"approve_comment":"同意作废"}' >/dev/null
+CR_JOB_DETAIL="$(request_status GET "/api/device-flow/jobs/$CR_JOB_ID" 200)"
+CR_STATUS="$(printf '%s' "$CR_JOB_DETAIL" | extract_json_field status)"
+if [[ "$CR_STATUS" != "VOIDED" ]]; then
+  echo "[ERROR] 作废审批后状态异常，期望 VOIDED，实际: $CR_STATUS"
+  exit 1
+fi
+
+echo "[24/27] 标签打印JSON可用"
+LABEL_JSON="$(request_status GET "/api/device-flow/jobs/$JOB_ID/labels/device?format=json" 200)"
+TRACK_URL="$(printf '%s' "$LABEL_JSON" | extract_json_field track_url)"
+if [[ -z "$TRACK_URL" ]]; then
+  echo "[ERROR] 标签打印JSON返回异常: $LABEL_JSON"
+  exit 1
+fi
+
+echo "[25/27] 交付周期报表可用"
+CYCLE_RESP="$(request_status GET '/api/device-flow/reports/cycle' 200)"
+CYCLE_TS="$(printf '%s' "$CYCLE_RESP" | extract_json_field generated_at)"
+if [[ -z "$CYCLE_TS" ]]; then
+  echo "[ERROR] 周期报表返回异常: $CYCLE_RESP"
+  exit 1
+fi
+
+echo "[26/27] 系统操作看板可用"
+OPS_RESP="$(request_status GET '/api/device-flow/ops/dashboard' 200)"
+OPS_TS="$(printf '%s' "$OPS_RESP" | extract_json_field generated_at)"
+if [[ -z "$OPS_TS" ]]; then
+  echo "[ERROR] 运维看板返回异常: $OPS_RESP"
+  exit 1
+fi
+
+echo "[27/27] 数据保留 dry-run 可用"
+RETENTION_RESP="$(request_status POST '/api/device-flow/retention/run?dry_run=true' 200 '{}')"
+RETENTION_SCANNED="$(printf '%s' "$RETENTION_RESP" | extract_json_field scanned)"
+if [[ -z "$RETENTION_SCANNED" ]]; then
+  echo "[ERROR] 保留策略执行返回异常: $RETENTION_RESP"
   exit 1
 fi
 

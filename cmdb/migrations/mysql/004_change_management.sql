@@ -1,0 +1,55 @@
+USE cmdb;
+SET NAMES utf8mb4;
+
+CREATE TABLE IF NOT EXISTS cmdb_change_request (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  change_uid CHAR(26) NOT NULL,
+  title VARCHAR(160) NOT NULL,
+  description VARCHAR(1024) NULL,
+  target_ci_id BIGINT UNSIGNED NOT NULL,
+  risk_level ENUM('low', 'medium', 'high') NOT NULL DEFAULT 'medium',
+  status ENUM('pending_approval', 'approved', 'rejected', 'completed', 'rolled_back', 'cancelled') NOT NULL DEFAULT 'pending_approval',
+  requested_by_sub VARCHAR(128) NOT NULL,
+  requested_by_name VARCHAR(128) NULL,
+  approved_by_sub VARCHAR(128) NULL,
+  approved_by_name VARCHAR(128) NULL,
+  executed_by_sub VARCHAR(128) NULL,
+  executed_by_name VARCHAR(128) NULL,
+  rollback_by_sub VARCHAR(128) NULL,
+  rollback_by_name VARCHAR(128) NULL,
+  approval_comment VARCHAR(255) NULL,
+  execution_note VARCHAR(255) NULL,
+  rollback_note VARCHAR(255) NULL,
+  planned_start_at TIMESTAMP NULL,
+  planned_end_at TIMESTAMP NULL,
+  version INT UNSIGNED NOT NULL DEFAULT 1,
+  deleted TINYINT(1) NOT NULL DEFAULT 0,
+  active_flag TINYINT GENERATED ALWAYS AS (CASE WHEN deleted = 0 THEN 1 ELSE NULL END) STORED,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  deleted_at TIMESTAMP NULL,
+  PRIMARY KEY (id),
+  UNIQUE KEY uk_change_uid (change_uid),
+  KEY idx_change_status_created (status, created_at),
+  KEY idx_change_risk_status (risk_level, status),
+  KEY idx_change_target (target_ci_id, created_at),
+  CONSTRAINT fk_change_target_ci FOREIGN KEY (target_ci_id) REFERENCES ci(id)
+) ENGINE=InnoDB;
+
+CREATE TABLE IF NOT EXISTS cmdb_change_step_log (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  change_id BIGINT UNSIGNED NOT NULL,
+  change_uid CHAR(26) NOT NULL,
+  action ENUM('create', 'approve', 'reject', 'execute', 'rollback', 'cancel') NOT NULL,
+  from_status VARCHAR(32) NULL,
+  to_status VARCHAR(32) NOT NULL,
+  operator_sub VARCHAR(128) NOT NULL,
+  operator_name VARCHAR(128) NULL,
+  comment_text VARCHAR(255) NULL,
+  metadata_json JSON NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  KEY idx_change_step_uid_time (change_uid, created_at),
+  KEY idx_change_step_change_time (change_id, created_at),
+  CONSTRAINT fk_change_step_change FOREIGN KEY (change_id) REFERENCES cmdb_change_request(id)
+) ENGINE=InnoDB;

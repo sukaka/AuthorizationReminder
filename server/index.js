@@ -15,6 +15,7 @@ const multer = require('multer');
 const { parse } = require('csv-parse/sync');
 const xlsx = require('xlsx');
 const crypto = require('crypto');
+const net = require('net');
 
 const app = express();
 const PORT = process.env.PORT || 5179;
@@ -24,15 +25,16 @@ const AUTH_SERVICE_URL = process.env.AUTH_SERVICE_URL || 'http://auth:5180';
 const AUTH_COOKIE_NAME = String(process.env.AUTH_COOKIE_NAME || 'juxin_auth_token').trim() || 'juxin_auth_token';
 const AUTH_FETCH_TIMEOUT_MS = Number(process.env.AUTH_FETCH_TIMEOUT_MS || 4000);
 const SECRET_MASK = '******';
-const SYSTEM_ACCESS_KEYS = ['reminder', 'ticketing', 'cmdb', 'inventory', 'device-flow', 'sec-impl'];
+const SYSTEM_ACCESS_KEYS = ['reminder', 'ticketing', 'cmdb', 'inventory', 'device-flow', 'sec-impl', 'faq', 'tender', 'train-exam'];
 const BUILTIN_ACCOUNT_DEFAULT_PASSWORD = process.env.BUILTIN_ACCOUNT_DEFAULT_PASSWORD || '123456';
 const BUILTIN_ACCOUNTS = [
   { username: 'admin', role: 'admin' },
   { username: 'sysadmin', role: 'sysadmin' },
   { username: 'auditor', role: 'auditor' },
+  { username: 'editor', role: 'editor' },
 ];
 const BUILTIN_ACCOUNT_USERNAMES = new Set(BUILTIN_ACCOUNTS.map((item) => item.username));
-const ALLOWED_USER_ROLES = new Set(['admin', 'sysadmin', 'auditor', 'viewer', 'sales']);
+const ALLOWED_USER_ROLES = new Set(['admin', 'editor', 'sysadmin', 'auditor', 'user', 'viewer', 'sales']);
 const AUDIT_SIGNING_KEY = process.env.AUDIT_SIGNING_KEY || JWT_SECRET;
 const SECURITY_STRICT_MODE = process.env.SECURITY_STRICT_MODE === 'true' || process.env.NODE_ENV === 'production';
 const MAX_IMPORT_RECORDS = Number(process.env.MAX_IMPORT_RECORDS || 5000);
@@ -47,6 +49,15 @@ const UPLOAD_RATE_LIMIT_MAX = Number(process.env.UPLOAD_RATE_LIMIT_MAX || 20);
 const ALLOW_XLSX_IMPORT = process.env.ALLOW_XLSX_IMPORT === 'true' && !SECURITY_STRICT_MODE;
 
 const weakSecrets = new Set(['dev-secret-change-me', 'change-me', '123456', 'password', '']);
+const DEFAULT_PASSWORD_POLICY = Object.freeze({
+  minLength: 10,
+  requireUppercase: true,
+  requireLowercase: true,
+  requireNumber: true,
+  requireSpecial: true,
+});
+const DEFAULT_SESSION_TIMEOUT_MINUTES = 7 * 24 * 60;
+const PRIVILEGED_IP_LIMIT_ROLES = new Set(['admin', 'sysadmin', 'auditor']);
 
 const isWeakSecret = (value, minLength = 16) => {
   const text = String(value || '').trim();
@@ -71,12 +82,170 @@ const validateSecurityBootstrap = () => {
   console.warn(`${text}。当前为非严格模式，仅告警。`);
 };
 
-const extractRequestIp = (req) => {
-  const forwarded = req.headers['x-forwarded-for'];
-  if (typeof forwarded === 'string' && forwarded.trim()) {
-    return forwarded.split(',')[0].trim();
+const clampNumber = (value, fallback, min, max) => {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return fallback;
+  return Math.min(max, Math.max(min, Math.round(num)));
+};
+
+const normalizePasswordPolicy = (raw) => {
+  const source = raw && typeof raw === 'object' ? raw : {};
+  return {
+    minLength: clampNumber(source.minLength, DEFAULT_PASSWORD_POLICY.minLength, 6, 64),
+    requireUppercase: source.requireUppercase !== false,
+    requireLowercase: source.requireLowercase !== false,
+    requireNumber: source.requireNumber !== false,
+    requireSpecial: source.requireSpecial !== false,
+  };
+};
+
+const buildPasswordComplexityHint = (policy) => {
+  const requirements = [];
+  if (policy.requireUppercase) requirements.push('大写字母');
+  if (policy.requireLowercase) requirements.push('小写字母');
+  if (policy.requireNumber) requirements.push('数字');
+  if (policy.requireSpecial) requirements.push('特殊字符');
+  if (!requirements.length) return `密码至少${policy.minLength}位`;
+  return `密码至少${policy.minLength}位，且需包含${requirements.join('、')}`;
+};
+
+const normalizeClientIp = (raw) => {
+  let text = String(raw || '').trim();
+  if (!text) return '';
+  if (text.includes(',')) {
+    text = text.split(',')[0].trim();
   }
-  return req.ip || req.socket?.remoteAddress || 'unknown';
+  if (text.startsWith('[') && text.includes(']')) {
+    text = text.slice(1, text.indexOf(']')).trim();
+  }
+  const zoneIdx = text.indexOf('%');
+  if (zoneIdx > 0) text = text.slice(0, zoneIdx);
+  if (/^::ffff:\d+\.\d+\.\d+\.\d+$/i.test(text)) {
+    text = text.replace(/^::ffff:/i, '');
+  }
+  if (text === '::1') return '127.0.0.1';
+  if (/^\d{1,3}(?:\.\d{1,3}){3}:\d+$/.test(text)) {
+    text = text.replace(/:\d+$/, '');
+  }
+  return net.isIP(text) ? text.toLowerCase() : '';
+};
+
+const expandIpv6 = (ip) => {
+  const parts = String(ip || '').split('::');
+  if (parts.length > 2) return null;
+  const left = parts[0] ? parts[0].split(':').filter(Boolean) : [];
+  const right = parts[1] ? parts[1].split(':').filter(Boolean) : [];
+  const fillCount = 8 - left.length - right.length;
+  if (fillCount < 0) return null;
+  const all = parts.length === 1 ? left : [...left, ...Array(fillCount).fill('0'), ...right];
+  if (all.length !== 8) return null;
+  if (!all.every((item) => /^[0-9a-f]{1,4}$/i.test(item))) return null;
+  return all;
+};
+
+const ipToBigInt = (ip, family) => {
+  if (family === 4) {
+    return String(ip)
+      .split('.')
+      .reduce((acc, item) => (acc << 8n) + BigInt(Number(item)), 0n);
+  }
+  if (family === 6) {
+    const items = expandIpv6(ip);
+    if (!items) return null;
+    return items.reduce((acc, item) => (acc << 16n) + BigInt(parseInt(item, 16)), 0n);
+  }
+  return null;
+};
+
+const normalizeIpRule = (raw) => {
+  const text = String(raw || '').trim();
+  if (!text) return '';
+  if (!text.includes('/')) return normalizeClientIp(text);
+  const [baseRaw, prefixRaw] = text.split('/');
+  const base = normalizeClientIp(baseRaw);
+  if (!base) return '';
+  const family = net.isIP(base);
+  const maxPrefix = family === 4 ? 32 : 128;
+  const prefix = Number(prefixRaw);
+  if (!Number.isInteger(prefix) || prefix < 0 || prefix > maxPrefix) return '';
+  return `${base}/${prefix}`;
+};
+
+const parseIpAllowlist = (raw) => {
+  let items = [];
+  if (Array.isArray(raw)) {
+    items = raw;
+  } else if (typeof raw === 'string') {
+    const text = raw.trim();
+    if (!text) items = [];
+    else {
+      try {
+        const parsed = JSON.parse(text);
+        items = Array.isArray(parsed) ? parsed : text.split(/[\n,;]+/);
+      } catch (_err) {
+        items = text.split(/[\n,;]+/);
+      }
+    }
+  }
+  return Array.from(new Set(items.map((item) => normalizeIpRule(item)).filter(Boolean)));
+};
+
+const normalizeRoleIpAllowlist = (security) => {
+  const source = security && typeof security === 'object' ? security : {};
+  const roleSource = source.roleIpAllowlist && typeof source.roleIpAllowlist === 'object'
+    ? source.roleIpAllowlist
+    : {};
+  return {
+    admin: parseIpAllowlist(roleSource.admin ?? source.adminIpAllowlist),
+    sysadmin: parseIpAllowlist(roleSource.sysadmin ?? source.sysadminIpAllowlist),
+    auditor: parseIpAllowlist(roleSource.auditor ?? source.auditorIpAllowlist),
+  };
+};
+
+const isIpMatchRule = (ip, rule) => {
+  if (!ip || !rule) return false;
+  if (!rule.includes('/')) return ip === rule;
+  const [base, prefixText] = rule.split('/');
+  const prefix = Number(prefixText);
+  const family = net.isIP(base);
+  if (!family || net.isIP(ip) !== family) return false;
+  const maxBits = family === 4 ? 32 : 128;
+  if (!Number.isInteger(prefix) || prefix < 0 || prefix > maxBits) return false;
+  const ipNum = ipToBigInt(ip, family);
+  const baseNum = ipToBigInt(base, family);
+  if (ipNum === null || baseNum === null) return false;
+  const shift = BigInt(maxBits - prefix);
+  const mask = prefix === 0 ? 0n : ((1n << BigInt(prefix)) - 1n) << shift;
+  return (ipNum & mask) === (baseNum & mask);
+};
+
+const checkRoleIpAccess = ({ role, ip, securityConfig }) => {
+  const normalizedRole = String(role || '').trim().toLowerCase();
+  if (!PRIVILEGED_IP_LIMIT_ROLES.has(normalizedRole)) {
+    return { enforced: false, allowed: true, allowlist: [] };
+  }
+  const allowlist = Array.isArray(securityConfig?.roleIpAllowlist?.[normalizedRole])
+    ? securityConfig.roleIpAllowlist[normalizedRole]
+    : [];
+  if (!allowlist.length) {
+    return { enforced: false, allowed: true, allowlist: [] };
+  }
+  const normalizedIp = normalizeClientIp(ip);
+  const allowed = !!normalizedIp && allowlist.some((rule) => isIpMatchRule(normalizedIp, rule));
+  return { enforced: true, allowed, allowlist, normalizedIp };
+};
+
+const extractRequestIp = (req) => {
+  const xff = req.headers?.['x-forwarded-for'];
+  const xri = req.headers?.['x-real-ip'];
+  const candidate =
+    (Array.isArray(xff) ? xff[0] : xff) ||
+    (Array.isArray(xri) ? xri[0] : xri) ||
+    req.ip ||
+    req.socket?.remoteAddress ||
+    '';
+  const normalized = normalizeClientIp(candidate);
+  return normalized || 'unknown';
 };
 
 const createIpRateLimiter = ({ name, windowMs, max }) => {
@@ -138,23 +307,14 @@ const detectImageMimeByMagic = (buffer) => {
 
 const isBuiltinUsername = (username) => BUILTIN_ACCOUNT_USERNAMES.has(String(username || '').toLowerCase());
 
-const validatePasswordComplexity = (password) => {
+const validatePasswordComplexity = (password, policyInput = DEFAULT_PASSWORD_POLICY) => {
   const value = String(password || '');
-  if (value.length < 10) {
-    return '密码至少10位，且需包含大写字母、小写字母、数字和特殊字符';
-  }
-  if (!/[A-Z]/.test(value)) {
-    return '密码需包含至少1个大写字母';
-  }
-  if (!/[a-z]/.test(value)) {
-    return '密码需包含至少1个小写字母';
-  }
-  if (!/\d/.test(value)) {
-    return '密码需包含至少1个数字';
-  }
-  if (!/[^A-Za-z0-9]/.test(value)) {
-    return '密码需包含至少1个特殊字符';
-  }
+  const policy = normalizePasswordPolicy(policyInput);
+  if (value.length < policy.minLength) return buildPasswordComplexityHint(policy);
+  if (policy.requireUppercase && !/[A-Z]/.test(value)) return '密码需包含至少1个大写字母';
+  if (policy.requireLowercase && !/[a-z]/.test(value)) return '密码需包含至少1个小写字母';
+  if (policy.requireNumber && !/\d/.test(value)) return '密码需包含至少1个数字';
+  if (policy.requireSpecial && !/[^A-Za-z0-9]/.test(value)) return '密码需包含至少1个特殊字符';
   return '';
 };
 
@@ -219,28 +379,91 @@ const parseAppAccessRaw = (value) => {
   return text.split(',').map((item) => item.trim());
 };
 
-const defaultAppAccessByRole = (role = 'viewer') => {
-  const r = String(role || '').toLowerCase();
+const normalizeUserRole = (role) => {
+  const r = String(role || '').trim().toLowerCase();
+  if (r === 'viewer') return 'user';
+  return r;
+};
+
+const defaultAppAccessByRole = (role = 'user') => {
+  const r = normalizeUserRole(role);
   if (r === 'admin') return [...SYSTEM_ACCESS_KEYS];
-  if (r === 'sysadmin') return ['reminder', 'sec-impl'];
-  if (r === 'auditor') return ['reminder', 'ticketing', 'cmdb', 'inventory', 'device-flow', 'sec-impl'];
+  if (r === 'editor') return ['faq', 'tender', 'train-exam'];
+  if (r === 'sysadmin') return ['reminder', 'sec-impl', 'tender', 'train-exam'];
+  if (r === 'auditor') return ['reminder', 'ticketing', 'cmdb', 'inventory', 'device-flow', 'sec-impl', 'faq', 'tender', 'train-exam'];
   return ['reminder'];
 };
 
-const normalizeAppAccess = (value, role = 'viewer') => {
-  if (role === 'admin') return [...SYSTEM_ACCESS_KEYS];
+const normalizeAppAccess = (value, role = 'user') => {
+  const normalizedRole = normalizeUserRole(role);
+  if (normalizedRole === 'admin') return [...SYSTEM_ACCESS_KEYS];
   const parsed = parseAppAccessRaw(value);
-  const source = parsed === null ? defaultAppAccessByRole(role) : parsed;
+  const source = parsed === null ? defaultAppAccessByRole(normalizedRole) : parsed;
   return Array.from(
     new Set(source.map((item) => String(item || '').trim()).filter((item) => SYSTEM_ACCESS_KEYS.includes(item)))
   );
+};
+
+const resolveUserLoginId = (user) => {
+  const username = String(user?.username || '').trim().toLowerCase();
+  if (BUILTIN_ACCOUNT_USERNAMES.has(username)) return username;
+  const phone = String(user?.phone || '').trim();
+  if (/^\d{6,20}$/.test(phone)) return phone;
+  return '';
 };
 
 const formatUserRow = (row) => {
   if (!row) return row;
   return {
     ...row,
+    role: normalizeUserRole(row.role),
     app_access: normalizeAppAccess(row.app_access, row.role),
+  };
+};
+
+const MFA_METHODS = ['email', 'sms', 'wecom', 'totp'];
+
+const parseUserMfaMethods = (raw) => {
+  let parsed = [];
+  if (Array.isArray(raw)) {
+    parsed = raw;
+  } else {
+    const text = String(raw || '').trim();
+    if (!text) return [];
+    try {
+      const data = JSON.parse(text);
+      if (Array.isArray(data)) parsed = data;
+    } catch (_err) {
+      parsed = text.split(',').map((item) => item.trim());
+    }
+  }
+  return Array.from(new Set(parsed.map((item) => String(item || '').trim()).filter((item) => MFA_METHODS.includes(item))));
+};
+
+const collectUserAvailableMfaMethods = (user) => {
+  const available = [];
+  if (user?.email) available.push('email');
+  if (user?.phone) available.push('sms');
+  if (user?.wecom_id) available.push('wecom');
+  if (Number(user?.totp_enabled) === 1 && user?.totp_secret) available.push('totp');
+  return available;
+};
+
+const resolveUserMfaStatus = ({ user, securityConfig }) => {
+  const desiredMethods = parseUserMfaMethods(user?.mfa_methods);
+  const availableMethods = collectUserAvailableMfaMethods(user);
+  const availableSet = new Set(availableMethods);
+  const enabled = Number(user?.mfa_enabled) === 1;
+  const effectiveMethods = desiredMethods.filter((method) => availableSet.has(method));
+  const forceAllUsers = !!securityConfig?.mfa?.forceAllUsers;
+  const setupRequired = forceAllUsers && (!enabled || !desiredMethods.length || !effectiveMethods.length);
+  return {
+    enabled,
+    forceAllUsers,
+    setupRequired,
+    desiredMethods,
+    availableMethods,
+    effectiveMethods,
   };
 };
 
@@ -516,10 +739,18 @@ const ensureBuiltinUsers = async () => {
   }
 };
 
-const createToken = (user) =>
-  jwt.sign({ id: user.id, username: user.username, role: user.role }, JWT_SECRET, {
-    expiresIn: '7d',
+const createToken = async (user, securityConfig = null) => {
+  const security = securityConfig || await getSecurityConfig();
+  const timeoutMinutes = clampNumber(
+    security?.session?.timeoutMinutes,
+    DEFAULT_SESSION_TIMEOUT_MINUTES,
+    5,
+    DEFAULT_SESSION_TIMEOUT_MINUTES
+  );
+  return jwt.sign({ id: user.id, username: user.username, role: user.role }, JWT_SECRET, {
+    expiresIn: timeoutMinutes * 60,
   });
+};
 
 const extractAuthToken = (req) => {
   const header = String(req.headers.authorization || '').trim();
@@ -563,6 +794,15 @@ const authMiddleware = (req, res, next) => {
   })
     .then(async (resp) => {
       if (!resp.ok) {
+        if (resp.status === 403) {
+          let payload = null;
+          try {
+            payload = await resp.json();
+          } catch (_err) {
+            payload = null;
+          }
+          return res.status(403).json({ error: payload?.error || payload?.reason || '无权限访问当前系统' });
+        }
         return res.status(401).json({ error: '登录已过期' });
       }
       const data = await resp.json();
@@ -596,6 +836,15 @@ const requireRole = (roles) => (req, res, next) => {
   })
     .then(async (resp) => {
       if (!resp.ok) {
+        if (resp.status === 403) {
+          let payload = null;
+          try {
+            payload = await resp.json();
+          } catch (_err) {
+            payload = null;
+          }
+          return res.status(403).json({ error: payload?.reason || payload?.error || '无权限' });
+        }
         return res.status(401).json({ error: '登录已过期' });
       }
       const data = await resp.json();
@@ -621,7 +870,13 @@ const authorizeReminderAction = async (req, action, resource = {}) => {
         resource,
       }),
     });
-    if (!resp.ok) return { allow: false, reason: '登录已过期' };
+    if (!resp.ok) {
+      if (resp.status === 403) {
+        const payload = await resp.json().catch(() => null);
+        return { allow: false, reason: payload?.reason || payload?.error || '无权限' };
+      }
+      return { allow: false, reason: '登录已过期' };
+    }
     const data = await resp.json();
     return data || { allow: false, reason: '无权限' };
   } catch (err) {
@@ -659,22 +914,41 @@ app.get('/api/auth/captcha', authRateLimiter, async (req, res) => {
 
 app.post('/api/auth/login', authRateLimiter, async (req, res) => {
   const { username, password, captchaToken, captcha } = req.body || {};
+  const ip = getRequestIp(req);
   const rawUsername = String(username || '').trim();
+  let loginId = rawUsername;
+  const logLoginFailed = async ({ action = 'LOGIN_FAILED', reason = '', user = null, extra = {} } = {}) => {
+    await logOperation({
+      user: user || { id: 0, username: loginId || rawUsername || 'unknown', role: 'unknown' },
+      action,
+      entity: 'auth',
+      entityId: 0,
+      requestIp: ip,
+      afterData: {
+        username: loginId || rawUsername || '',
+        ip,
+        status: 'failed',
+        reason: reason || undefined,
+        ...extra,
+      },
+    });
+  };
   if (!rawUsername || !password) {
+    await logLoginFailed({ reason: 'MISSING_CREDENTIALS', extra: { username: rawUsername || '' } });
     return res.status(400).json({ error: '请输入账号和密码' });
   }
   const security = await getSecurityConfig();
   if (security.captcha.enabled) {
     if (!captchaToken || !captcha) {
+      await logLoginFailed({ reason: 'CAPTCHA_REQUIRED' });
       return res.status(400).json({ error: '请输入验证码' });
     }
     const cap = await verifyCaptcha({ token: captchaToken, code: captcha });
     if (!cap.ok) {
+      await logLoginFailed({ reason: 'CAPTCHA_INVALID', extra: { captcha_error: cap.error } });
       return res.status(400).json({ error: cap.error });
     }
   }
-  const ip = getRequestIp(req);
-  let loginId = rawUsername;
   let user = null;
   const normalizedUsername = rawUsername.toLowerCase();
   if (BUILTIN_ACCOUNT_USERNAMES.has(normalizedUsername)) {
@@ -682,6 +956,7 @@ app.post('/api/auth/login', authRateLimiter, async (req, res) => {
     user = await db.get('SELECT * FROM users WHERE username = ?', [normalizedUsername]);
   } else {
     if (!/^\d{6,20}$/.test(rawUsername)) {
+      await logLoginFailed({ reason: 'INVALID_LOGIN_ID' });
       return res.status(400).json({ error: '请使用手机号登录' });
     }
     loginId = rawUsername;
@@ -694,18 +969,16 @@ app.post('/api/auth/login', authRateLimiter, async (req, res) => {
       action: 'LOGIN_LOCKED',
       entity: 'auth',
       entityId: 0,
-      afterData: { username: loginId, ip, locked_until: lock.locked_until },
+      requestIp: ip,
+      afterData: { username: loginId, ip, status: 'failed', locked_until: lock.locked_until },
     });
     return res.status(429).json({ error: '登录失败次数过多，请稍后再试' });
   }
   if (!user) {
     const fail = await recordLoginFailure({ username: loginId, ip });
-    await logOperation({
-      user: { id: 0, username: loginId, role: 'unknown' },
-      action: 'LOGIN_FAILED',
-      entity: 'auth',
-      entityId: 0,
-      afterData: { username: loginId, ip, fail_count: fail.failCount, locked_until: fail.lockedUntil },
+    await logLoginFailed({
+      reason: 'USER_NOT_FOUND',
+      extra: { fail_count: fail.failCount, locked_until: fail.lockedUntil },
     });
     return res.status(400).json({ error: '账号或密码错误' });
   }
@@ -715,41 +988,87 @@ app.post('/api/auth/login', authRateLimiter, async (req, res) => {
       action: 'LOGIN_BLOCKED',
       entity: 'auth',
       entityId: 0,
-      afterData: { reason: 'DISABLED', username: loginId, ip },
+      requestIp: ip,
+      afterData: { reason: 'DISABLED', username: loginId, ip, status: 'failed' },
     });
     return res.status(403).json({ error: '账号已被禁用，请联系系统管理员' });
   }
   const ok = bcrypt.compareSync(password, user.password_hash);
   if (!ok) {
     const fail = await recordLoginFailure({ username: loginId, ip });
-    await logOperation({
+    await logLoginFailed({
       user: { id: user.id, username: user.username, role: user.role },
-      action: 'LOGIN_FAILED',
-      entity: 'auth',
-      entityId: 0,
-      afterData: { username: loginId, ip, fail_count: fail.failCount, locked_until: fail.lockedUntil },
+      reason: 'PASSWORD_MISMATCH',
+      extra: { fail_count: fail.failCount, locked_until: fail.lockedUntil },
     });
     return res.status(400).json({ error: '账号或密码错误' });
   }
   await clearLoginFailures({ username: loginId, ip });
+  const ipCheck = checkRoleIpAccess({
+    role: user.role,
+    ip,
+    securityConfig: security,
+  });
+  if (!ipCheck.allowed) {
+    await logOperation({
+      user: { id: user.id, username: user.username, role: user.role },
+      action: 'LOGIN_IP_RESTRICTED',
+      entity: 'auth',
+      entityId: 0,
+      requestIp: ip,
+      afterData: {
+        username: user.username,
+        role: user.role,
+        ip,
+        allowlist: ipCheck.allowlist,
+        status: 'failed',
+      },
+    });
+    return res.status(403).json({ error: '当前IP不在允许访问范围内，请联系系统管理员', ipRestricted: true });
+  }
 
-  if (Number(user.mfa_enabled) === 1) {
-    let desiredMethods = [];
-    try {
-      desiredMethods = JSON.parse(user.mfa_methods || '[]');
-    } catch (err) {
-      desiredMethods = [];
-    }
-    const configured = new Set();
-    if (user.email) configured.add('email');
-    if (user.phone) configured.add('sms');
-    if (user.wecom_id) configured.add('wecom');
-    if (user.totp_enabled === 1 && user.totp_secret) configured.add('totp');
-    const methods = desiredMethods.filter((m) => configured.has(m));
-    if (!desiredMethods.length) {
+  const mfaStatus = resolveUserMfaStatus({ user, securityConfig: security });
+
+  if (mfaStatus.setupRequired) {
+    const token = await createToken(user, security);
+    await logOperation({
+      user,
+      action: 'LOGIN_MFA_SETUP_REQUIRED',
+      entity: 'auth',
+      entityId: 0,
+      requestIp: ip,
+      afterData: {
+        username: user.username,
+        role: user.role,
+        desired_methods: mfaStatus.desiredMethods,
+        available_methods: mfaStatus.availableMethods,
+      },
+    });
+    return res.json({
+      mfaSetupRequired: true,
+      forceAllUsersMfa: true,
+      availableMethods: mfaStatus.availableMethods,
+      token,
+      user: { id: user.id, username: user.username, role: user.role },
+    });
+  }
+
+  if (mfaStatus.enabled) {
+    const methods = mfaStatus.effectiveMethods;
+    if (!mfaStatus.desiredMethods.length) {
+      await logLoginFailed({
+        user,
+        reason: 'MFA_METHODS_NOT_CONFIGURED',
+        extra: { username: user.username, role: user.role },
+      });
       return res.status(400).json({ error: '请先设置二次验证方式' });
     }
     if (methods.length === 0) {
+      await logLoginFailed({
+        user,
+        reason: 'MFA_METHODS_UNAVAILABLE',
+        extra: { username: user.username, role: user.role },
+      });
       return res.status(400).json({
         error: '二次验证已开启，但当前账号未配置任何可用验证方式（请完善邮箱/手机号/企业微信或启用谷歌认证）',
       });
@@ -766,6 +1085,7 @@ app.post('/api/auth/login', authRateLimiter, async (req, res) => {
       action: 'LOGIN_MFA_REQUIRED',
       entity: 'auth',
       entityId: 0,
+      requestIp: ip,
       afterData: { username: user.username, ip, methods },
     });
     return res.json({
@@ -776,13 +1096,14 @@ app.post('/api/auth/login', authRateLimiter, async (req, res) => {
     });
   }
 
-  const token = createToken(user);
+  const token = await createToken(user, security);
   await logOperation({
     user,
-    action: 'LOGIN',
+    action: 'LOGIN_SUCCESS',
     entity: 'auth',
     entityId: 0,
-    afterData: { username: user.username, role: user.role },
+    requestIp: ip,
+    afterData: { username: user.username, role: user.role, ip, status: 'success' },
   });
   res.json({ token, user: { id: user.id, username: user.username, role: user.role } });
 });
@@ -814,8 +1135,26 @@ app.post('/api/auth/mfa/send', authRateLimiter, async (req, res) => {
 
   const user = await db.get('SELECT * FROM users WHERE id = ?', [row.user_id]);
   if (!user) return res.status(400).json({ error: '用户不存在' });
-
   const security = await getSecurityConfig();
+  const requestIp = getRequestIp(req);
+  const ipCheck = checkRoleIpAccess({
+    role: user.role,
+    ip: requestIp,
+    securityConfig: security,
+  });
+  if (!ipCheck.allowed) {
+    await db.run('DELETE FROM auth_mfa_sessions WHERE token = ?', [mfaToken]);
+    await logOperation({
+      user,
+      action: 'LOGIN_IP_RESTRICTED',
+      entity: 'auth',
+      entityId: 0,
+      requestIp,
+      afterData: { username: user.username, role: user.role, ip: requestIp, allowlist: ipCheck.allowlist, status: 'failed' },
+    });
+    return res.status(403).json({ error: '当前IP不在允许访问范围内，请联系系统管理员', ipRestricted: true });
+  }
+
   const code = randomDigits(6);
   const ttlMs = security.mfa.codeTtlSeconds * 1000;
   const codeExpiresAt = toMysqlDatetime(new Date(Date.now() + ttlMs));
@@ -899,6 +1238,25 @@ app.post('/api/auth/mfa/verify', authRateLimiter, async (req, res) => {
 
   const user = await db.get('SELECT * FROM users WHERE id = ?', [row.user_id]);
   if (!user) return res.status(400).json({ error: '用户不存在' });
+  const security = await getSecurityConfig();
+  const requestIp = getRequestIp(req);
+  const ipCheck = checkRoleIpAccess({
+    role: user.role,
+    ip: requestIp,
+    securityConfig: security,
+  });
+  if (!ipCheck.allowed) {
+    await db.run('DELETE FROM auth_mfa_sessions WHERE token = ?', [mfaToken]);
+    await logOperation({
+      user,
+      action: 'LOGIN_IP_RESTRICTED',
+      entity: 'auth',
+      entityId: 0,
+      requestIp,
+      afterData: { username: user.username, role: user.role, ip: requestIp, allowlist: ipCheck.allowlist, status: 'failed' },
+    });
+    return res.status(403).json({ error: '当前IP不在允许访问范围内，请联系系统管理员', ipRestricted: true });
+  }
 
   let ok = false;
   if (method === 'totp') {
@@ -926,7 +1284,8 @@ app.post('/api/auth/mfa/verify', authRateLimiter, async (req, res) => {
       action: 'MFA_VERIFY_FAILED',
       entity: 'auth',
       entityId: 0,
-      afterData: { method, attempts },
+      requestIp,
+      afterData: { method, attempts, ip: requestIp, status: 'failed' },
     });
     return res.status(400).json({ error: '验证码错误' });
   }
@@ -937,9 +1296,18 @@ app.post('/api/auth/mfa/verify', authRateLimiter, async (req, res) => {
     action: 'MFA_VERIFY_OK',
     entity: 'auth',
     entityId: 0,
+    requestIp,
     afterData: { method },
   });
-  const token = createToken(user);
+  const token = await createToken(user, security);
+  await logOperation({
+    user,
+    action: 'LOGIN_SUCCESS',
+    entity: 'auth',
+    entityId: 0,
+    requestIp,
+    afterData: { username: user.username, role: user.role, ip: requestIp, status: 'success', mfa_method: method },
+  });
   res.json({ token, user: { id: user.id, username: user.username, role: user.role } });
 });
 
@@ -977,16 +1345,13 @@ app.post('/api/auth/totp/enable', authRateLimiter, async (req, res) => {
 
 app.get('/api/auth/mfa/settings', async (req, res) => {
   const user = await db.get(
-    'SELECT id, mfa_enabled, mfa_methods, totp_enabled, email, phone, wecom_id FROM users WHERE id = ?',
+    'SELECT id, mfa_enabled, mfa_methods, totp_enabled, totp_secret, email, phone, wecom_id FROM users WHERE id = ?',
     [req.user.id]
   );
   if (!user) return res.status(400).json({ error: '用户不存在' });
-  let methods = [];
-  try {
-    methods = JSON.parse(user.mfa_methods || '[]');
-  } catch (err) {
-    methods = [];
-  }
+  const security = await getSecurityConfig();
+  const methods = parseUserMfaMethods(user.mfa_methods);
+  const mfaStatus = resolveUserMfaStatus({ user, securityConfig: security });
   res.json({
     enabled: Number(user.mfa_enabled) === 1,
     methods,
@@ -994,6 +1359,8 @@ app.get('/api/auth/mfa/settings', async (req, res) => {
     has_email: !!user.email,
     has_phone: !!user.phone,
     has_wecom: !!user.wecom_id,
+    force_all_users_mfa: !!security.mfa.forceAllUsers,
+    setup_required: !!mfaStatus.setupRequired,
   });
 });
 
@@ -1004,9 +1371,13 @@ app.post('/api/auth/mfa/settings', async (req, res) => {
     [req.user.id]
   );
   if (!user) return res.status(400).json({ error: '用户不存在' });
+  const security = await getSecurityConfig();
   const allowed = new Set(['email', 'sms', 'wecom', 'totp']);
   const nextMethods = Array.isArray(methods) ? methods.filter((m) => allowed.has(m)) : [];
   const nextEnabled = enabled === true || enabled === 1 || enabled === '1';
+  if (security.mfa.forceAllUsers && !nextEnabled) {
+    return res.status(400).json({ error: '系统已开启强制二次验证，当前账号不能关闭' });
+  }
   if (nextEnabled && nextMethods.length === 0) {
     return res.status(400).json({ error: '请选择至少一种验证方式' });
   }
@@ -1038,16 +1409,37 @@ app.post('/api/auth/mfa/settings', async (req, res) => {
 });
 
 app.get('/api/auth/me', async (req, res) => {
-  const user = await db.get('SELECT id, username, role FROM users WHERE id = ?', [req.user.id]);
-  res.json(user || null);
+  const user = await db.get(
+    'SELECT id, username, role, app_access, mfa_enabled, mfa_methods, totp_enabled, totp_secret, email, phone, wecom_id FROM users WHERE id = ?',
+    [req.user.id]
+  );
+  if (!user) return res.json(null);
+  const security = await getSecurityConfig();
+  const mfaStatus = resolveUserMfaStatus({ user, securityConfig: security });
+  res.json({
+    id: user.id,
+    username: user.username,
+    role: normalizeUserRole(user.role),
+    app_access: normalizeAppAccess(user.app_access, user.role),
+    mfa_setup_required: mfaStatus.setupRequired,
+    force_all_users_mfa: mfaStatus.forceAllUsers,
+  });
 });
 
 app.post('/api/auth/logout', async (req, res) => {
+  const requestIp = getRequestIp(req);
   await logOperation({
     user: req.user,
     action: 'LOGOUT',
     entity: 'auth',
     entityId: 0,
+    requestIp,
+    afterData: {
+      username: req.user?.username || '',
+      role: req.user?.role || '',
+      ip: requestIp,
+      status: 'success',
+    },
   });
   res.json({ ok: true });
 });
@@ -1057,7 +1449,43 @@ app.get('/api/users', requireRole(['sysadmin']), async (req, res) => {
   const rows = await db.query(
     'SELECT id, username, role, is_active, email, phone, wecom_id, app_access, totp_enabled, created_at FROM users ORDER BY id DESC'
   );
-  res.json(rows.map(formatUserRow));
+  const users = rows.map(formatUserRow);
+  const loginIds = Array.from(new Set(users.map((item) => resolveUserLoginId(item)).filter(Boolean)));
+  const lockMap = new Map();
+  if (loginIds.length) {
+    const lockRows = await db.query(
+      `SELECT username, MAX(locked_until) AS locked_until,
+              SUM(CASE WHEN locked_until IS NOT NULL AND locked_until > NOW() THEN 1 ELSE 0 END) AS locked_ip_count
+       FROM auth_login_attempts
+       WHERE username IN (${buildInClause(loginIds)})
+       GROUP BY username`,
+      loginIds
+    );
+    lockRows.forEach((row) => {
+      lockMap.set(String(row.username || ''), {
+        locked_until: row.locked_until || null,
+        locked_ip_count: Number(row.locked_ip_count || 0),
+      });
+    });
+  }
+  const payload = users.map((item) => {
+    const loginId = resolveUserLoginId(item);
+    const lockInfo = loginId ? lockMap.get(loginId) : null;
+    const locked = !!(
+      loginId &&
+      lockInfo &&
+      Number(lockInfo.locked_ip_count || 0) > 0 &&
+      isLocked({ lockedUntilIso: lockInfo.locked_until })
+    );
+    return {
+      ...item,
+      login_id: loginId || null,
+      lock_status: locked ? 'locked' : 'normal',
+      locked_until: locked ? lockInfo.locked_until : null,
+      locked_ip_count: locked ? Number(lockInfo.locked_ip_count || 0) : 0,
+    };
+  });
+  res.json(payload);
 });
 
 app.post('/api/users', requireRole(['sysadmin']), async (req, res) => {
@@ -1069,7 +1497,8 @@ app.post('/api/users', requireRole(['sysadmin']), async (req, res) => {
   if (usernameRuleError) {
     return res.status(400).json({ error: usernameRuleError });
   }
-  const passwordRuleError = validatePasswordComplexity(password);
+  const security = await getSecurityConfig();
+  const passwordRuleError = validatePasswordComplexity(password, security.passwordPolicy);
   if (passwordRuleError) {
     return res.status(400).json({ error: passwordRuleError });
   }
@@ -1081,7 +1510,7 @@ app.post('/api/users', requireRole(['sysadmin']), async (req, res) => {
   if (phoneRuleError) {
     return res.status(400).json({ error: phoneRuleError });
   }
-  const nextRole = String(role || 'viewer').trim().toLowerCase();
+  const nextRole = normalizeUserRole(role || 'user');
   if (!ALLOWED_USER_ROLES.has(nextRole)) {
     return res.status(400).json({ error: '角色不合法' });
   }
@@ -1154,14 +1583,15 @@ app.put('/api/users/:id', requireRole(['sysadmin']), async (req, res) => {
     }
   }
   if (password) {
-    const passwordRuleError = validatePasswordComplexity(password);
+    const security = await getSecurityConfig();
+    const passwordRuleError = validatePasswordComplexity(password, security.passwordPolicy);
     if (passwordRuleError) {
       return res.status(400).json({ error: passwordRuleError });
     }
     const hash = bcrypt.hashSync(password, 10);
     await db.run('UPDATE users SET password_hash = ? WHERE id = ?', [hash, id]);
   }
-  const nextRole = role ? String(role).trim().toLowerCase() : before.role;
+  const nextRole = role !== undefined ? normalizeUserRole(role) : normalizeUserRole(before.role);
   if (!ALLOWED_USER_ROLES.has(nextRole)) {
     return res.status(400).json({ error: '角色不合法' });
   }
@@ -1216,6 +1646,43 @@ app.put('/api/users/:id', requireRole(['sysadmin']), async (req, res) => {
   res.json(row);
 });
 
+app.post('/api/users/:id/unlock', requireRole(['sysadmin']), async (req, res) => {
+  const { id } = req.params;
+  const targetUser = await db.get(
+    'SELECT id, username, phone FROM users WHERE id = ?',
+    [id]
+  );
+  if (!targetUser) {
+    return res.status(404).json({ error: '用户不存在' });
+  }
+  const loginId = resolveUserLoginId(targetUser);
+  if (!loginId) {
+    return res.status(400).json({ error: '该用户未配置可用登录标识，无法解锁' });
+  }
+  const beforeLocks = await db.query(
+    'SELECT username, ip, fail_count, first_fail_at, locked_until, updated_at FROM auth_login_attempts WHERE username = ?',
+    [loginId]
+  );
+  await db.run('DELETE FROM auth_login_attempts WHERE username = ?', [loginId]);
+  await logOperation({
+    user: req.user,
+    action: 'UNLOCK_USER',
+    entity: 'user',
+    entityId: Number(id),
+    beforeData: {
+      username: targetUser.username,
+      login_id: loginId,
+      lock_records: beforeLocks,
+    },
+    afterData: {
+      username: targetUser.username,
+      login_id: loginId,
+      unlocked_count: beforeLocks.length,
+    },
+  });
+  res.json({ ok: true, unlocked_count: beforeLocks.length });
+});
+
 app.delete('/api/users/:id', requireRole(['sysadmin']), async (req, res) => {
   const { id } = req.params;
   if (String(id) === String(req.user.id)) {
@@ -1261,29 +1728,42 @@ const getSecurityConfig = async () => {
   const login = security.login || {};
   const mfa = security.mfa || {};
   const captcha = security.captcha || {};
-  const maxAttempts = Number(login.maxAttempts ?? 5);
-  const windowMinutes = Number(login.windowMinutes ?? 15);
-  const lockMinutes = Number(login.lockMinutes ?? 15);
-  const codeTtlSeconds = Number(mfa.codeTtlSeconds ?? 300);
+  const maxAttempts = clampNumber(login.maxAttempts, 5, 1, 20);
+  const windowMinutes = clampNumber(login.windowMinutes, 15, 1, 1440);
+  const lockMinutes = clampNumber(login.lockMinutes, 15, 1, 1440);
+  const codeTtlSeconds = clampNumber(mfa.codeTtlSeconds, 300, 60, 1800);
+  const forceAllUsers = mfa.forceAllUsers === true || security.forceAllUsersMfa === true;
   const captchaEnabled = captcha.enabled !== undefined ? !!captcha.enabled : true;
-  const captchaTtlSeconds = Number(captcha.ttlSeconds ?? 300);
+  const captchaTtlSeconds = clampNumber(captcha.ttlSeconds, 300, 60, 1800);
   const adminMfaMethods = Array.isArray(security.adminMfaMethods)
     ? security.adminMfaMethods
     : [];
+  const passwordPolicy = normalizePasswordPolicy(security.passwordPolicy || {});
+  const timeoutMinutes = clampNumber(
+    security?.session?.timeoutMinutes ?? security.sessionTimeoutMinutes,
+    DEFAULT_SESSION_TIMEOUT_MINUTES,
+    5,
+    DEFAULT_SESSION_TIMEOUT_MINUTES
+  );
+  const roleIpAllowlist = normalizeRoleIpAllowlist(security);
   return {
     login: {
-      maxAttempts: Number.isFinite(maxAttempts) ? maxAttempts : 5,
-      windowMinutes: Number.isFinite(windowMinutes) ? windowMinutes : 15,
-      lockMinutes: Number.isFinite(lockMinutes) ? lockMinutes : 15,
+      maxAttempts,
+      windowMinutes,
+      lockMinutes,
     },
     mfa: {
-      codeTtlSeconds: Number.isFinite(codeTtlSeconds) ? codeTtlSeconds : 300,
+      codeTtlSeconds,
+      forceAllUsers,
       adminMfaMethods: adminMfaMethods.filter(Boolean),
     },
     captcha: {
       enabled: captchaEnabled,
-      ttlSeconds: Number.isFinite(captchaTtlSeconds) ? captchaTtlSeconds : 300,
+      ttlSeconds: captchaTtlSeconds,
     },
+    passwordPolicy,
+    session: { timeoutMinutes },
+    roleIpAllowlist,
   };
 };
 
@@ -1397,11 +1877,12 @@ const backfillOperationLogSystems = async () => {
     `UPDATE operation_logs
      SET log_system = CASE
        WHEN entity IN ('工单', '项目', '项目权限', '工单模板', '排期')
-         OR action IN ('创建项目', '更新项目', '删除项目', '更新项目权限', '导入模板', '创建排期')
+       OR action IN ('创建项目', '更新项目', '删除项目', '更新项目权限', '导入模板', '创建排期')
          THEN 'ticketing'
        WHEN action IN (
-         'LOGIN', 'LOGOUT', 'LOGIN_FAILED', 'LOGIN_LOCKED', 'LOGIN_BLOCKED',
-         'LOGIN_MFA_REQUIRED', 'MFA_SEND', 'MFA_SEND_FAILED', 'MFA_VERIFY_OK', 'MFA_VERIFY_FAILED',
+         'LOGIN', 'LOGIN_SUCCESS', 'LOGOUT', 'LOGIN_FAILED', 'LOGIN_LOCKED', 'LOGIN_BLOCKED',
+         'LOGIN_IP_RESTRICTED',
+         'LOGIN_MFA_REQUIRED', 'LOGIN_MFA_SETUP_REQUIRED', 'MFA_SEND', 'MFA_SEND_FAILED', 'MFA_VERIFY_OK', 'MFA_VERIFY_FAILED',
          'TOTP_ENABLED'
        )
          THEN 'sso'
@@ -1467,11 +1948,14 @@ const toCsv = (rows, headers) => {
 const toAuditActionZh = (value) => {
   const map = {
     LOGIN: '登录',
+    LOGIN_SUCCESS: '登录成功',
     LOGOUT: '登出',
     LOGIN_FAILED: '登录失败',
     LOGIN_LOCKED: '登录锁定',
     LOGIN_BLOCKED: '账号被禁用',
+    LOGIN_IP_RESTRICTED: 'IP受限',
     LOGIN_MFA_REQUIRED: '需要二次验证',
+    LOGIN_MFA_SETUP_REQUIRED: '需要先配置二次验证',
     MFA_SEND: '发送验证码',
     MFA_SEND_FAILED: '验证码发送失败',
     MFA_VERIFY_OK: '验证码校验成功',
@@ -1486,6 +1970,7 @@ const toAuditActionZh = (value) => {
     RESET_PASSWORD: '重置密码',
     ENABLE_USER: '启用用户',
     DISABLE_USER: '禁用用户',
+    UNLOCK_USER: '解锁用户',
   };
   return map[String(value || '').trim()] || String(value || '');
 };
@@ -3658,7 +4143,8 @@ app.post('/api/auth/change-password', async (req, res) => {
   if (!currentPassword || !newPassword) {
     return res.status(400).json({ error: '请输入当前密码和新密码' });
   }
-  const passwordRuleError = validatePasswordComplexity(newPassword);
+  const security = await getSecurityConfig();
+  const passwordRuleError = validatePasswordComplexity(newPassword, security.passwordPolicy);
   if (passwordRuleError) {
     return res.status(400).json({ error: passwordRuleError });
   }
@@ -3691,7 +4177,8 @@ app.post('/api/users/:id/reset-password', requireRole(['sysadmin']), async (req,
   if (!targetUser) {
     return res.status(404).json({ error: '用户不存在' });
   }
-  const passwordRuleError = validatePasswordComplexity(newPassword);
+  const security = await getSecurityConfig();
+  const passwordRuleError = validatePasswordComplexity(newPassword, security.passwordPolicy);
   if (passwordRuleError) {
     return res.status(400).json({ error: passwordRuleError });
   }

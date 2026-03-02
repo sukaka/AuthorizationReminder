@@ -127,6 +127,17 @@ const slaLabelMap = {
   BREACHED: '已超时',
   ON_TIME: '按时完成',
 }
+const stageStatusOptions = [
+  { value: 'PENDING', label: '待开始' },
+  { value: 'IN_PROGRESS', label: '进行中' },
+  { value: 'DONE', label: '已完成' },
+]
+const stageStatusLabelMap = {
+  PENDING: '待开始',
+  IN_PROGRESS: '进行中',
+  DONE: '已完成',
+}
+const getStageStatusLabel = (value) => stageStatusLabelMap[String(value || '').toUpperCase()] || value || '-'
 const ticketEventLabelMap = {
   CREATED: '创建工单',
   UPDATED: '更新工单',
@@ -593,7 +604,7 @@ export default function App() {
   const [ticketStages, setTicketStages] = useState([])
   const [ticketEvents, setTicketEvents] = useState([])
   const [activeTicket, setActiveTicket] = useState(null)
-  const [activeMenu, setActiveMenu] = useState('tickets')
+  const [activeMenu, setActiveMenu] = useState('dashboard')
   const [users, setUsers] = useState([])
   const [permissionProjectId, setPermissionProjectId] = useState('')
   const [projectPermissions, setProjectPermissions] = useState([])
@@ -2082,6 +2093,7 @@ export default function App() {
         { key: 'permissions', label: '权限审计', desc: '查看项目权限变更审计。' },
       ]
     : [
+        { key: 'dashboard', label: '仪表盘', desc: '集中查看工单看板与统计报表。' },
         { key: 'tickets', label: '工单管理', desc: '创建、分配与跟踪工单处理进度。' },
         { key: 'projects', label: '项目管理', desc: '管理项目并关联工单。' },
         ...(currentUser?.role === 'admin'
@@ -2132,7 +2144,7 @@ export default function App() {
           </div>
         </section>
 
-        {activeMenu === 'tickets' && (
+        {activeMenu === 'dashboard' && (
         <section className="panel">
           <div className="panel-header">
             <div>
@@ -2161,7 +2173,7 @@ export default function App() {
         </section>
         )}
 
-        {activeMenu === 'tickets' && (
+        {activeMenu === 'dashboard' && (
         <section className="panel">
           <div className="panel-header">
             <div>
@@ -2229,7 +2241,7 @@ export default function App() {
         </section>
         )}
 
-        {activeMenu === 'tickets' && (
+        {activeMenu === 'dashboard' && (
         <section className="panel">
           <div className="panel-header">
             <div>
@@ -2806,9 +2818,11 @@ export default function App() {
                       value={stage.status}
                       onChange={(e) => onStageStatusChange(stage.id, e.target.value)}
                     >
-                      <option value="PENDING">PENDING</option>
-                      <option value="IN_PROGRESS">IN_PROGRESS</option>
-                      <option value="DONE">DONE</option>
+                      {stageStatusOptions.map((option) => (
+                        <option key={option.value} value={option.value}>
+                          {option.label}
+                        </option>
+                      ))}
                     </select>
                   </span>
                 </div>
@@ -3837,7 +3851,7 @@ export default function App() {
                     </span>
                     <span>
                       <span className={`status-pill ${String(stage.status || '').toLowerCase()}`}>
-                        {stage.status}
+                        {getStageStatusLabel(stage.status)}
                       </span>
                     </span>
                   </div>

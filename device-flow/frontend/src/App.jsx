@@ -147,6 +147,8 @@ const initialAdvanceForm = {
   pack_note: '',
   carrier: '',
   shipped_note: '',
+  signature: '',
+  dual_sign_token: '',
 }
 
 const parseApiDate = (value) => {
@@ -349,6 +351,7 @@ const validateAdvanceForm = (action, form) => {
   }
 
   if (action === 'test') {
+    if (!trimText(form.signature)) return '测试阶段双人复核要求填写电子签名'
     if (trimText(form.burnin_hours)) {
       const burnin = Number(form.burnin_hours)
       if (!Number.isFinite(burnin) || burnin < 0 || burnin > 9999) return '老化时长必须是 0-9999 的数字'
@@ -357,6 +360,7 @@ const validateAdvanceForm = (action, form) => {
   }
 
   if (action === 'approve') {
+    if (!trimText(form.signature)) return '审核阶段双人复核要求填写电子签名'
     return ensureFailNote(form.approve_result, `${trimText(form.approve_note)}${trimText(form.reviewer_comment)}`, remark, '审核结论')
   }
 
@@ -631,6 +635,9 @@ function App() {
   const [slaLoading, setSlaLoading] = useState(false)
   const [slaRuleForm, setSlaRuleForm] = useState([])
   const [slaRunResult, setSlaRunResult] = useState(null)
+  const [slaReminderPage, setSlaReminderPage] = useState(1)
+  const [slaReminderTotal, setSlaReminderTotal] = useState(0)
+  const [slaReminderLimit] = useState(10)
 
   const [batchImportFile, setBatchImportFile] = useState(null)
   const [batchImportResult, setBatchImportResult] = useState(null)
@@ -983,11 +990,18 @@ function App() {
     }
   }
 
-  const refreshSlaSummary = async () => {
+  const refreshSlaSummary = async (overrides = {}) => {
     setSlaLoading(true)
     try {
-      const data = await apiRequest('/api/device-flow/sla/summary')
+      const targetPageRaw = Number(overrides.page ?? slaReminderPage)
+      const targetPage = Number.isInteger(targetPageRaw) && targetPageRaw > 0 ? targetPageRaw : 1
+      const params = new URLSearchParams()
+      params.set('page', String(targetPage))
+      params.set('limit', String(slaReminderLimit))
+      const data = await apiRequest(`/api/device-flow/sla/summary?${params.toString()}`)
       setSlaData(data)
+      setSlaReminderTotal(Number(data?.reminder_paging?.total || 0))
+      setSlaReminderPage(Number(data?.reminder_paging?.page || targetPage))
       const rules = Array.isArray(data?.rules) ? data.rules : []
       setSlaRuleForm(
         rules.map((item) => ({
@@ -1001,6 +1015,51 @@ function App() {
     } finally {
       setSlaLoading(false)
     }
+  }
+
+  const onDeleteSlaReminder = async (item) => {
+    const reminderId = Number(item?.id || 0)
+    if (!reminderId) return showError('催办记录ID无效')
+    if (!canWrite) return showError('当前角色无权限删除催办记录')
+    openConfirmDialog({
+      title: '删除催办记录',
+      message: `确认删除催办记录 #${reminderId}？删除后不可恢复。`,
+      confirmLabel: '确认删除',
+      onConfirm: async () => {
+        try {
+          setBusy(true)
+          await apiRequest(`/api/device-flow/sla/reminders/${reminderId}`, { method: 'DELETE' })
+          showSuccess('催办记录删除成功')
+          await refreshSlaSummary({ page: slaReminderPage })
+        } catch (err) {
+          showError(err.message)
+        } finally {
+          setBusy(false)
+        }
+      },
+    })
+  }
+
+  const onClearSlaReminders = async () => {
+    if (!canWrite) return showError('当前角色无权限删除催办记录')
+    openConfirmDialog({
+      title: '一键清空催办记录',
+      message: '确认清空全部催办记录？该操作不可恢复。',
+      confirmLabel: '确认清空',
+      onConfirm: async () => {
+        try {
+          setBusy(true)
+          const result = await apiRequest('/api/device-flow/sla/reminders', { method: 'DELETE' })
+          showSuccess(`已删除 ${Number(result?.deleted || 0)} 条催办记录`)
+          setSlaReminderPage(1)
+          await refreshSlaSummary({ page: 1 })
+        } catch (err) {
+          showError(err.message)
+        } finally {
+          setBusy(false)
+        }
+      },
+    })
   }
 
   const onSaveSlaRules = async () => {
@@ -1254,13 +1313,38 @@ function App() {
       }
       if (nextAction === 'receive') payload.inbound_tracking_no = advanceForm.inbound_tracking_no
       if (nextAction === 'ship') payload.outbound_tracking_no = advanceForm.outbound_tracking_no
+      if (nextAction === 'test' || nextAction === 'approve') {
+        payload.signature = trimText(advanceForm.signature)
+        if (trimText(advanceForm.dual_sign_token)) {
+          payload.dual_sign_token = trimText(advanceForm.dual_sign_token)
+        }
+      }
 
-      await apiRequest(`/api/device-flow/jobs/${detail.id}/stages/${nextAction}`, {
+      const resp = await apiRequest(`/api/device-flow/jobs/${detail.id}/stages/${nextAction}`, {
         method: 'POST',
         body: payload,
       })
-      showSuccess('阶段推进成功')
-      setAdvanceForm((prev) => ({ ...prev, remark: '', inbound_tracking_no: '', outbound_tracking_no: '' }))
+      if (resp?.pending_dual_sign && resp?.dual_sign_token) {
+        setAdvanceForm((prev) => ({
+          ...prev,
+          dual_sign_token: String(resp.dual_sign_token || ''),
+          signature: '',
+        }))
+        showSuccess(`首签已提交，待第二人复签。会签令牌：${resp.dual_sign_token}`)
+        await refreshDetail()
+        return
+      }
+
+      const dualCompleted = Boolean(resp?.dual_sign_completed)
+      showSuccess(dualCompleted ? '双人复核完成，阶段推进成功' : '阶段推进成功')
+      setAdvanceForm((prev) => ({
+        ...prev,
+        remark: '',
+        inbound_tracking_no: '',
+        outbound_tracking_no: '',
+        signature: '',
+        dual_sign_token: '',
+      }))
       await Promise.all([refreshJobs(), refreshDashboard()])
       await refreshDetail()
     } catch (err) {
@@ -1542,6 +1626,22 @@ function App() {
             <label>测试备注</label>
             <textarea value={advanceForm.test_note} onChange={(e) => setAdvanceForm((prev) => ({ ...prev, test_note: e.target.value }))} />
           </div>
+          <div className="field">
+            <label>电子签名（必填）</label>
+            <input
+              value={advanceForm.signature}
+              onChange={(e) => setAdvanceForm((prev) => ({ ...prev, signature: e.target.value }))}
+              placeholder="输入签名口令或签名串"
+            />
+          </div>
+          <div className="field">
+            <label>双签令牌（第二人复签时填写）</label>
+            <input
+              value={advanceForm.dual_sign_token}
+              onChange={(e) => setAdvanceForm((prev) => ({ ...prev, dual_sign_token: e.target.value }))}
+              placeholder="首签后自动回填"
+            />
+          </div>
         </>
       )
     }
@@ -1557,6 +1657,22 @@ function App() {
           <div className="field" style={{ gridColumn: '1 / -1' }}>
             <label>审核意见</label>
             <textarea value={advanceForm.reviewer_comment} onChange={(e) => setAdvanceForm((prev) => ({ ...prev, reviewer_comment: e.target.value }))} />
+          </div>
+          <div className="field">
+            <label>电子签名（必填）</label>
+            <input
+              value={advanceForm.signature}
+              onChange={(e) => setAdvanceForm((prev) => ({ ...prev, signature: e.target.value }))}
+              placeholder="输入签名口令或签名串"
+            />
+          </div>
+          <div className="field">
+            <label>双签令牌（第二人复签时填写）</label>
+            <input
+              value={advanceForm.dual_sign_token}
+              onChange={(e) => setAdvanceForm((prev) => ({ ...prev, dual_sign_token: e.target.value }))}
+              placeholder="首签后自动回填"
+            />
           </div>
         </>
       )
@@ -1735,9 +1851,9 @@ function App() {
   useEffect(() => {
     if (!token) return
     if (activeMenu !== 'sla') return
-    refreshSlaSummary().catch((err) => showError(err.message))
+    refreshSlaSummary({ page: slaReminderPage }).catch((err) => showError(err.message))
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [token, activeMenu])
+  }, [token, activeMenu, slaReminderPage])
 
   useEffect(() => {
     const action = batchStageForm.action
@@ -1770,6 +1886,11 @@ function App() {
     const totalPages = Math.max(1, Math.ceil(Math.max(auditTotal, 0) / auditLimit))
     if (auditPage > totalPages) setAuditPage(totalPages)
   }, [auditTotal, auditPage, auditLimit])
+
+  useEffect(() => {
+    const totalPages = Math.max(1, Math.ceil(Math.max(slaReminderTotal, 0) / slaReminderLimit))
+    if (slaReminderPage > totalPages) setSlaReminderPage(totalPages)
+  }, [slaReminderTotal, slaReminderPage, slaReminderLimit])
 
   if (!token || !user) {
     return (
@@ -2157,7 +2278,14 @@ function App() {
                   </div>
 
                   <div className="panel-subsection" style={{ marginTop: 12 }}>
-                    <strong>最近催办记录</strong>
+                    <div className="toolbar" style={{ justifyContent: 'space-between' }}>
+                      <strong>最近催办记录</strong>
+                      {canWrite ? (
+                        <button className="btn btn-danger" onClick={onClearSlaReminders} disabled={busy || slaLoading || slaReminderTotal <= 0}>
+                          一键删除
+                        </button>
+                      ) : null}
+                    </div>
                     <div className="table-wrap" style={{ marginTop: 8 }}>
                       <table className="table">
                         <thead>
@@ -2167,6 +2295,7 @@ function App() {
                             <th>阶段</th>
                             <th>超时/阈值(小时)</th>
                             <th>说明</th>
+                            {canWrite ? <th>操作</th> : null}
                           </tr>
                         </thead>
                         <tbody>
@@ -2181,13 +2310,26 @@ function App() {
                               <td>{stageText(item.stage_code)}</td>
                               <td>{Number(item.overdue_hours || 0)} / {Number(item.threshold_hours || 0)}</td>
                               <td>{item.message || '-'}</td>
+                              {canWrite ? (
+                                <td>
+                                  <button className="btn btn-danger" onClick={() => onDeleteSlaReminder(item)} disabled={busy || slaLoading}>
+                                    删除
+                                  </button>
+                                </td>
+                              ) : null}
                             </tr>
                           ))}
                           {(Array.isArray(slaData?.recent_reminders) ? slaData.recent_reminders : []).length === 0 ? (
-                            <tr><td colSpan={5} className="muted">暂无催办记录</td></tr>
+                            <tr><td colSpan={canWrite ? 6 : 5} className="muted">暂无催办记录</td></tr>
                           ) : null}
                         </tbody>
                       </table>
+                    </div>
+                    <div className="toolbar" style={{ marginTop: 10 }}>
+                      <span className="muted">共 {slaReminderTotal} 条</span>
+                      <button className="btn" disabled={slaReminderPage <= 1 || slaLoading} onClick={() => setSlaReminderPage((p) => Math.max(1, p - 1))}>上一页</button>
+                      <span className="muted">第 {slaReminderPage} 页</span>
+                      <button className="btn" disabled={slaLoading || slaReminderPage * slaReminderLimit >= slaReminderTotal} onClick={() => setSlaReminderPage((p) => p + 1)}>下一页</button>
                     </div>
                   </div>
                 </>

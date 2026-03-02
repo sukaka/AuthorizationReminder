@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
+	"reflect"
 	"strings"
 	"time"
 
@@ -158,11 +160,6 @@ func (s *CIService) CreateCI(ctx context.Context, in CreateCIInput, op Operator)
 	}
 	prepareOperator(&op)
 
-	extraJSON, err := marshalMap(in.ExtraAttrs)
-	if err != nil {
-		return nil, fmt.Errorf("%w: invalid extra_attrs", ErrInvalidInput)
-	}
-
 	tx, err := s.repo.BeginTx(ctx)
 	if err != nil {
 		return nil, err
@@ -180,6 +177,15 @@ func (s *CIService) CreateCI(ctx context.Context, in CreateCIInput, op Operator)
 			return nil, fmt.Errorf("%w: unknown ci_type_key", ErrInvalidInput)
 		}
 		return nil, err
+	}
+
+	normalizedExtraAttrs, err := s.applyModelFieldRules(ctx, typeID, in.ExtraAttrs)
+	if err != nil {
+		return nil, err
+	}
+	extraJSON, err := marshalMap(normalizedExtraAttrs)
+	if err != nil {
+		return nil, fmt.Errorf("%w: invalid extra_attrs", ErrInvalidInput)
 	}
 
 	ciUID := ulid.Make().String()
@@ -335,7 +341,11 @@ func (s *CIService) UpdateCI(ctx context.Context, in UpdateCIInput, op Operator)
 
 	var extraJSON []byte
 	if in.HasExtraAttrs {
-		extraJSON, err = marshalMap(in.ExtraAttrs)
+		normalizedExtraAttrs, applyErr := s.applyModelFieldRules(ctx, existing.CITypeID, in.ExtraAttrs)
+		if applyErr != nil {
+			return nil, applyErr
+		}
+		extraJSON, err = marshalMap(normalizedExtraAttrs)
 		if err != nil {
 			return nil, fmt.Errorf("%w: invalid extra_attrs", ErrInvalidInput)
 		}
@@ -865,4 +875,86 @@ func marshalMap(v map[string]any) ([]byte, error) {
 		return nil, nil
 	}
 	return json.Marshal(v)
+}
+
+func (s *CIService) applyModelFieldRules(ctx context.Context, ciTypeID uint64, extraAttrs map[string]any) (map[string]any, error) {
+	rules, err := s.repo.ListModelFieldRulesByTypeID(ctx, ciTypeID)
+	if err != nil {
+		return nil, err
+	}
+	if len(rules) == 0 {
+		return extraAttrs, nil
+	}
+
+	merged := make(map[string]any, len(extraAttrs)+len(rules))
+	for key, value := range extraAttrs {
+		merged[key] = value
+	}
+
+	for _, rule := range rules {
+		value, hasValue := merged[rule.FieldKey]
+		if hasValue && value == nil {
+			hasValue = false
+		}
+		if !hasValue && strings.TrimSpace(rule.DefaultValueRaw) != "" {
+			var defaultValue any
+			if err := json.Unmarshal([]byte(rule.DefaultValueRaw), &defaultValue); err == nil {
+				merged[rule.FieldKey] = defaultValue
+				value = defaultValue
+				hasValue = true
+			}
+		}
+		if rule.Required && !hasValue {
+			return nil, fmt.Errorf("%w: extra_attrs.%s is required", ErrInvalidInput, rule.FieldKey)
+		}
+		if hasValue && !matchesModelFieldDataType(rule.DataType, value) {
+			return nil, fmt.Errorf("%w: extra_attrs.%s should be %s", ErrInvalidInput, rule.FieldKey, rule.DataType)
+		}
+	}
+
+	if len(merged) == 0 {
+		return nil, nil
+	}
+	return merged, nil
+}
+
+func matchesModelFieldDataType(dataType string, value any) bool {
+	switch dataType {
+	case "string":
+		_, ok := value.(string)
+		return ok
+	case "number":
+		switch v := value.(type) {
+		case float64:
+			return !math.IsNaN(v) && !math.IsInf(v, 0)
+		case float32:
+			f := float64(v)
+			return !math.IsNaN(f) && !math.IsInf(f, 0)
+		case int, int8, int16, int32, int64:
+			return true
+		case uint, uint8, uint16, uint32, uint64:
+			return true
+		case json.Number:
+			_, err := v.Float64()
+			return err == nil
+		default:
+			return false
+		}
+	case "boolean":
+		_, ok := value.(bool)
+		return ok
+	case "object":
+		if value == nil {
+			return false
+		}
+		return reflect.ValueOf(value).Kind() == reflect.Map
+	case "array":
+		if value == nil {
+			return false
+		}
+		kind := reflect.ValueOf(value).Kind()
+		return kind == reflect.Array || kind == reflect.Slice
+	default:
+		return false
+	}
 }

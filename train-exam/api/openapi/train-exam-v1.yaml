@@ -1,0 +1,979 @@
+openapi: 3.0.3
+info:
+  title: 培训考试系统 API
+  version: 1.1.0
+  description: |
+    培训考试系统核心接口定义（课程、学习路径、题库、试卷、考试、证书、AI、审计）。
+    本版本已对齐：
+    1) 手工出题/导题不再依赖 JSON 文本字段；
+    2) 视频支持强制播放策略（禁止快进）；
+    3) 术语与界面文案中文化。
+servers:
+  - url: http://localhost:5188
+tags:
+  - name: 基础
+  - name: 课程资源
+  - name: 题库
+  - name: 试卷考试
+  - name: 成绩证书
+  - name: AI
+  - name: 审计统计
+paths:
+  /api/health:
+    get:
+      tags: [基础]
+      summary: 健康检查
+      responses:
+        '200':
+          description: OK
+
+  /api/auth/me:
+    get:
+      tags: [基础]
+      summary: 获取当前登录用户
+      responses:
+        '200':
+          description: OK
+
+  /api/train-exam/courses:
+    get:
+      tags: [课程资源]
+      summary: 查询课程列表
+      parameters:
+        - in: query
+          name: page
+          schema: { type: integer, minimum: 1, default: 1 }
+        - in: query
+          name: limit
+          schema: { type: integer, minimum: 1, maximum: 200, default: 20 }
+        - in: query
+          name: keyword
+          schema: { type: string }
+      responses:
+        '200':
+          description: OK
+    post:
+      tags: [课程资源]
+      summary: 创建课程
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CourseCreateRequest'
+      responses:
+        '201':
+          description: Created
+
+  /api/train-exam/courses/{id}:
+    get:
+      tags: [课程资源]
+      summary: 课程详情
+      parameters:
+        - $ref: '#/components/parameters/IdPathParam'
+      responses:
+        '200':
+          description: OK
+    put:
+      tags: [课程资源]
+      summary: 更新课程
+      parameters:
+        - $ref: '#/components/parameters/IdPathParam'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CourseUpdateRequest'
+      responses:
+        '200':
+          description: OK
+    delete:
+      tags: [课程资源]
+      summary: 删除课程
+      parameters:
+        - $ref: '#/components/parameters/IdPathParam'
+      responses:
+        '200':
+          description: OK
+
+  /api/train-exam/courses/{id}/resources:
+    get:
+      tags: [课程资源]
+      summary: 查询课程资源
+      parameters:
+        - $ref: '#/components/parameters/IdPathParam'
+      responses:
+        '200':
+          description: OK
+    post:
+      tags: [课程资源]
+      summary: 创建课程资源
+      parameters:
+        - $ref: '#/components/parameters/IdPathParam'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ResourceCreateRequest'
+      responses:
+        '201':
+          description: Created
+
+  /api/train-exam/resources/{id}/upload:
+    post:
+      tags: [课程资源]
+      summary: 上传资源文件（文档/视频）
+      parameters:
+        - $ref: '#/components/parameters/IdPathParam'
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file:
+                  type: string
+                  format: binary
+              required: [file]
+      responses:
+        '200':
+          description: OK
+
+  /api/train-exam/resources/{id}/stream:
+    get:
+      tags: [课程资源]
+      summary: 资源流式访问（视频支持 Range）
+      description: 非视频资源返回下载信息；外链资源返回跳转地址。
+      parameters:
+        - $ref: '#/components/parameters/IdPathParam'
+      responses:
+        '200':
+          description: OK
+        '206':
+          description: Partial Content
+
+  /api/train-exam/resources/{id}/download:
+    get:
+      tags: [课程资源]
+      summary: 下载资源
+      parameters:
+        - $ref: '#/components/parameters/IdPathParam'
+      responses:
+        '200':
+          description: OK
+
+  /api/train-exam/resources/{id}/playback-policy:
+    put:
+      tags: [课程资源]
+      summary: 更新视频播放策略（强制播放）
+      description: 仅 video + upload 资源可设置；开启后前端禁止快进。
+      parameters:
+        - $ref: '#/components/parameters/IdPathParam'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PlaybackPolicyRequest'
+      responses:
+        '200':
+          description: OK
+
+  /api/train-exam/courses/{id}/learning-path:
+    get:
+      tags: [课程资源]
+      summary: 获取课程学习路径与章节完成度
+      parameters:
+        - $ref: '#/components/parameters/IdPathParam'
+      responses:
+        '200':
+          description: OK
+
+  /api/train-exam/resources/{id}/progress:
+    post:
+      tags: [课程资源]
+      summary: 更新资源学习进度
+      description: |
+        视频强制播放时，后端会校验是否快进/跳跃进度。
+      parameters:
+        - $ref: '#/components/parameters/IdPathParam'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ResourceProgressRequest'
+      responses:
+        '200':
+          description: OK
+
+  /api/train-exam/my/learning-progress:
+    get:
+      tags: [课程资源]
+      summary: 查询我的课程学习进度
+      responses:
+        '200':
+          description: OK
+
+  /api/train-exam/questions/generation/jobs:
+    post:
+      tags: [题库]
+      summary: 创建 FAQ 自动出题任务
+      responses:
+        '201':
+          description: Created
+
+  /api/train-exam/questions/generation/jobs/{id}:
+    get:
+      tags: [题库]
+      summary: 查询 FAQ 自动出题任务详情
+      parameters:
+        - $ref: '#/components/parameters/IdPathParam'
+      responses:
+        '200':
+          description: OK
+
+  /api/train-exam/questions/generation/jobs/{id}/run:
+    post:
+      tags: [题库]
+      summary: 执行 FAQ 自动出题任务
+      parameters:
+        - $ref: '#/components/parameters/IdPathParam'
+      responses:
+        '200':
+          description: OK
+
+  /api/train-exam/questions/generation/jobs/{id}/publish:
+    post:
+      tags: [题库]
+      summary: 发布 FAQ 自动出题任务草稿题
+      parameters:
+        - $ref: '#/components/parameters/IdPathParam'
+      responses:
+        '200':
+          description: OK
+
+  /api/train-exam/questions/import/template:
+    get:
+      tags: [题库]
+      summary: 下载导题模板
+      description: |
+        模板列（中文）：
+        题干, 题型, 难度, 分值, 选项A, 选项B, 选项C, 选项D, 答案值, 标准答案文本, 同义答案, 解析, 标签
+      responses:
+        '200':
+          description: OK
+
+  /api/train-exam/questions/import/jobs:
+    post:
+      tags: [题库]
+      summary: 上传 Excel 导题
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file:
+                  type: string
+                  format: binary
+              required: [file]
+      responses:
+        '201':
+          description: Created
+
+  /api/train-exam/questions/import/jobs/{id}:
+    get:
+      tags: [题库]
+      summary: 查询导题任务详情
+      parameters:
+        - $ref: '#/components/parameters/IdPathParam'
+      responses:
+        '200':
+          description: OK
+
+  /api/train-exam/questions:
+    get:
+      tags: [题库]
+      summary: 查询题库
+      responses:
+        '200':
+          description: OK
+    post:
+      tags: [题库]
+      summary: 手工创建题目（结构化字段，不使用 JSON 文本）
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/QuestionCreateRequest'
+      responses:
+        '201':
+          description: Created
+
+  /api/train-exam/questions/{id}:
+    put:
+      tags: [题库]
+      summary: 更新题目
+      parameters:
+        - $ref: '#/components/parameters/IdPathParam'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/QuestionCreateRequest'
+      responses:
+        '200':
+          description: OK
+
+  /api/train-exam/questions/{id}/review:
+    post:
+      tags: [题库]
+      summary: 审核题目
+      description: action 支持 approve/reject，也兼容中文“通过/驳回”。
+      parameters:
+        - $ref: '#/components/parameters/IdPathParam'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                action:
+                  type: string
+                  example: approve
+                comment:
+                  type: string
+      responses:
+        '200':
+          description: OK
+
+  /api/train-exam/papers:
+    get:
+      tags: [试卷考试]
+      summary: 查询试卷列表
+      responses:
+        '200':
+          description: OK
+    post:
+      tags: [试卷考试]
+      summary: 创建试卷
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PaperCreateRequest'
+      responses:
+        '201':
+          description: Created
+
+  /api/train-exam/papers/{id}:
+    get:
+      tags: [试卷考试]
+      summary: 查询试卷详情
+      parameters:
+        - $ref: '#/components/parameters/IdPathParam'
+      responses:
+        '200':
+          description: OK
+    put:
+      tags: [试卷考试]
+      summary: 更新试卷
+      parameters:
+        - $ref: '#/components/parameters/IdPathParam'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PaperCreateRequest'
+      responses:
+        '200':
+          description: OK
+
+  /api/train-exam/papers/{id}/publish:
+    post:
+      tags: [试卷考试]
+      summary: 发布试卷
+      parameters:
+        - $ref: '#/components/parameters/IdPathParam'
+      responses:
+        '200':
+          description: OK
+
+  /api/train-exam/papers/{id}/archive:
+    post:
+      tags: [试卷考试]
+      summary: 归档试卷
+      parameters:
+        - $ref: '#/components/parameters/IdPathParam'
+      responses:
+        '200':
+          description: OK
+
+  /api/train-exam/papers/{id}/exam/start:
+    post:
+      tags: [试卷考试]
+      summary: 开始考试
+      parameters:
+        - $ref: '#/components/parameters/IdPathParam'
+      responses:
+        '201':
+          description: Created
+
+  /api/train-exam/exam-sessions/{sessionId}:
+    get:
+      tags: [试卷考试]
+      summary: 查询考试会话
+      parameters:
+        - in: path
+          name: sessionId
+          required: true
+          schema: { type: integer }
+      responses:
+        '200':
+          description: OK
+
+  /api/train-exam/exam-sessions/{sessionId}/answers:
+    post:
+      tags: [试卷考试]
+      summary: 保存答题
+      parameters:
+        - in: path
+          name: sessionId
+          required: true
+          schema: { type: integer }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                question_id:
+                  type: integer
+                user_answer:
+                  description: 可为数组或字符串
+              required: [question_id]
+      responses:
+        '200':
+          description: OK
+
+  /api/train-exam/exam-sessions/{sessionId}/focus-switch:
+    post:
+      tags: [试卷考试]
+      summary: 上报切屏行为
+      parameters:
+        - in: path
+          name: sessionId
+          required: true
+          schema: { type: integer }
+      responses:
+        '200':
+          description: OK
+
+  /api/train-exam/exam-sessions/{sessionId}/submit:
+    post:
+      tags: [试卷考试]
+      summary: 提交试卷
+      parameters:
+        - in: path
+          name: sessionId
+          required: true
+          schema: { type: integer }
+      responses:
+        '200':
+          description: OK
+
+  /api/train-exam/exam-sessions/{sessionId}/result:
+    get:
+      tags: [试卷考试]
+      summary: 查询考试成绩（按会话）
+      parameters:
+        - in: path
+          name: sessionId
+          required: true
+          schema: { type: integer }
+      responses:
+        '200':
+          description: OK
+
+  /api/train-exam/my/results:
+    get:
+      tags: [成绩证书]
+      summary: 查询我的成绩列表
+      responses:
+        '200':
+          description: OK
+
+  /api/train-exam/results/{id}:
+    get:
+      tags: [成绩证书]
+      summary: 查询成绩详情
+      parameters:
+        - $ref: '#/components/parameters/IdPathParam'
+      responses:
+        '200':
+          description: OK
+
+  /api/train-exam/results/{id}/certificate/generate:
+    post:
+      tags: [成绩证书]
+      summary: 生成证书
+      parameters:
+        - $ref: '#/components/parameters/IdPathParam'
+      responses:
+        '201':
+          description: Created
+
+  /api/train-exam/results/{id}/certificate/download:
+    get:
+      tags: [成绩证书]
+      summary: 下载证书
+      parameters:
+        - $ref: '#/components/parameters/IdPathParam'
+      responses:
+        '200':
+          description: OK
+
+  /api/train-exam/results/{id}/advice:
+    get:
+      tags: [AI]
+      summary: 查询成绩 AI 学习建议
+      parameters:
+        - $ref: '#/components/parameters/IdPathParam'
+      responses:
+        '200':
+          description: OK
+
+  /api/train-exam/results/{id}/advice/generate:
+    post:
+      tags: [AI]
+      summary: 生成或重生成成绩 AI 学习建议
+      parameters:
+        - $ref: '#/components/parameters/IdPathParam'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                force:
+                  type: boolean
+                  default: false
+      responses:
+        '200':
+          description: OK
+
+  /api/train-exam/my/certificates:
+    get:
+      tags: [成绩证书]
+      summary: 查询我的证书（含有效期状态）
+      responses:
+        '200':
+          description: OK
+
+  /api/train-exam/my/recertification:
+    get:
+      tags: [成绩证书]
+      summary: 查询我的续证任务
+      responses:
+        '200':
+          description: OK
+
+  /api/train-exam/recertification/jobs/{id}/start:
+    post:
+      tags: [成绩证书]
+      summary: 启动续证复考任务
+      parameters:
+        - $ref: '#/components/parameters/IdPathParam'
+      responses:
+        '200':
+          description: OK
+
+  /api/train-exam/my/wrong-questions:
+    get:
+      tags: [成绩证书]
+      summary: 查询我的错题本
+      responses:
+        '200':
+          description: OK
+
+  /api/train-exam/my/retrain-recommendations:
+    get:
+      tags: [成绩证书]
+      summary: 查询我的复训推荐
+      responses:
+        '200':
+          description: OK
+
+  /api/train-exam/user-profiles:
+    get:
+      tags: [审计统计]
+      summary: 查询用户部门岗位画像
+      responses:
+        '200':
+          description: OK
+
+  /api/train-exam/user-profiles/{userId}:
+    put:
+      tags: [审计统计]
+      summary: 更新用户部门岗位画像
+      parameters:
+        - in: path
+          name: userId
+          required: true
+          schema: { type: integer }
+      responses:
+        '200':
+          description: OK
+
+  /api/train-exam/stats/overview:
+    get:
+      tags: [审计统计]
+      summary: 查询总体统计
+      responses:
+        '200':
+          description: OK
+
+  /api/train-exam/stats/pass-trend:
+    get:
+      tags: [审计统计]
+      summary: 查询通过率趋势
+      responses:
+        '200':
+          description: OK
+
+  /api/train-exam/stats/org-breakdown:
+    get:
+      tags: [审计统计]
+      summary: 部门/岗位分层统计看板
+      responses:
+        '200':
+          description: OK
+
+  /api/train-exam/audit/logs:
+    get:
+      tags: [审计统计]
+      summary: 审计日志列表
+      responses:
+        '200':
+          description: OK
+
+  /api/train-exam/ai/logs:
+    get:
+      tags: [AI]
+      summary: AI 任务日志列表
+      responses:
+        '200':
+          description: OK
+
+  /api/train-exam/ai/models:
+    get:
+      tags: [AI]
+      summary: 查询 AI 模型配置
+      responses:
+        '200':
+          description: OK
+    post:
+      tags: [AI]
+      summary: 新增 AI 模型配置（支持自定义模型）
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AiModelCreateRequest'
+      responses:
+        '201':
+          description: Created
+
+  /api/train-exam/ai/models/{id}:
+    put:
+      tags: [AI]
+      summary: 更新 AI 模型配置（含设为默认）
+      parameters:
+        - $ref: '#/components/parameters/IdPathParam'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AiModelUpdateRequest'
+      responses:
+        '200':
+          description: OK
+
+  /api/train-exam/ai/prompts/{taskType}:
+    put:
+      tags: [AI]
+      summary: 更新 AI 任务提示词
+      parameters:
+        - in: path
+          name: taskType
+          required: true
+          schema:
+            type: string
+            example: EXAM_ADVICE
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                prompt_template:
+                  type: string
+                is_active:
+                  type: boolean
+              required: [prompt_template]
+      responses:
+        '200':
+          description: OK
+
+components:
+  parameters:
+    IdPathParam:
+      in: path
+      name: id
+      required: true
+      schema:
+        type: integer
+
+  schemas:
+    CourseCreateRequest:
+      type: object
+      properties:
+        title:
+          type: string
+        description:
+          type: string
+        duration_minutes:
+          type: integer
+          default: 60
+        status:
+          type: string
+          enum: [draft, published, archived]
+      required: [title]
+
+    CourseUpdateRequest:
+      allOf:
+        - $ref: '#/components/schemas/CourseCreateRequest'
+
+    ResourceCreateRequest:
+      type: object
+      properties:
+        name:
+          type: string
+        resource_type:
+          type: string
+          description: 支持中英文别名，最终归一为 doc/video/link
+          enum: [doc, video, link, 文档, 视频, 外链]
+        source_mode:
+          type: string
+          description: 支持中英文别名，最终归一为 upload/external
+          enum: [upload, external, 上传, 外链]
+        source_url:
+          type: string
+        force_watch:
+          type: boolean
+          description: 仅视频上传资源支持；true 表示禁止快进
+          default: false
+        sort_order:
+          type: integer
+          default: 0
+      required: [name, resource_type, source_mode]
+
+    PlaybackPolicyRequest:
+      type: object
+      properties:
+        force_watch:
+          type: boolean
+      required: [force_watch]
+
+    ResourceProgressRequest:
+      type: object
+      properties:
+        progress_percent:
+          type: number
+          minimum: 0
+          maximum: 100
+        viewed_seconds_increment:
+          type: integer
+          minimum: 0
+        last_position_seconds:
+          type: number
+          minimum: 0
+        mark_completed:
+          type: boolean
+          default: false
+
+    QuestionOptionInput:
+      type: object
+      properties:
+        key:
+          type: string
+          example: A
+        text:
+          type: string
+      required: [key, text]
+
+    QuestionCreateRequest:
+      type: object
+      description: |
+        不再使用 options_json / answer_json / answer_aliases_json 文本字段。
+        客观题推荐传 options + answer_values。
+        填空题推荐传 answer_text + answer_aliases。
+      properties:
+        course_id:
+          type: integer
+        stem:
+          type: string
+        question_type:
+          type: string
+          description: 支持中英文别名
+          enum:
+            - single_choice
+            - multiple_choice
+            - judgement
+            - fill_blank
+            - 单选题
+            - 多选题
+            - 判断题
+            - 填空题
+        difficulty:
+          type: string
+          enum: [easy, medium, hard, 简单, 中等, 困难]
+        points:
+          type: number
+          minimum: 1
+          default: 2
+        options:
+          type: array
+          items:
+            $ref: '#/components/schemas/QuestionOptionInput'
+        answer_values:
+          description: 可传数组或逗号分隔字符串，如 A,B
+          oneOf:
+            - type: array
+              items: { type: string }
+            - type: string
+        answer_text:
+          type: string
+        answer_aliases:
+          description: 可传数组或逗号分隔字符串
+          oneOf:
+            - type: array
+              items: { type: string }
+            - type: string
+        explanation:
+          type: string
+        tags:
+          description: 可传数组或逗号分隔字符串
+          oneOf:
+            - type: array
+              items: { type: string }
+            - type: string
+      required: [stem, question_type]
+
+    PaperRule:
+      type: object
+      properties:
+        question_type:
+          type: string
+          enum: [single_choice, multiple_choice, judgement, fill_blank]
+        difficulty:
+          type: string
+          enum: [easy, medium, hard]
+        question_count:
+          type: integer
+          minimum: 1
+        points_per_question:
+          type: number
+          minimum: 1
+        tags:
+          oneOf:
+            - type: array
+              items: { type: string }
+            - type: string
+
+    PaperCreateRequest:
+      type: object
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+        paper_mode:
+          type: string
+          enum: [fixed, random]
+        course_id:
+          type: integer
+        pass_score:
+          type: number
+          minimum: 0
+          maximum: 100
+          default: 80
+        duration_minutes:
+          type: integer
+          minimum: 10
+          default: 60
+        max_attempts:
+          type: integer
+          minimum: 1
+          maximum: 20
+          default: 3
+        fixed_question_ids:
+          description: 兼容数组或逗号分隔字符串
+          oneOf:
+            - type: array
+              items: { type: integer }
+            - type: string
+        rules:
+          type: array
+          items:
+            $ref: '#/components/schemas/PaperRule'
+      required: [name, paper_mode]
+
+    AiModelCreateRequest:
+      type: object
+      properties:
+        model_key:
+          type: string
+        name:
+          type: string
+        base_url:
+          type: string
+        model_name:
+          type: string
+        api_key:
+          type: string
+        timeout_ms:
+          type: integer
+          default: 20000
+        max_tokens:
+          type: integer
+          default: 2048
+        temperature_default:
+          type: number
+          default: 0.3
+        is_enabled:
+          type: boolean
+          default: true
+        is_default:
+          type: boolean
+          default: false
+      required: [model_key, name, base_url, model_name]
+
+    AiModelUpdateRequest:
+      allOf:
+        - $ref: '#/components/schemas/AiModelCreateRequest'

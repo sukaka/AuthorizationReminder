@@ -9,6 +9,7 @@
 - `/Users/zhanglei/Documents/codex-new/docs/requirements/inventory-requirements.md`
 - `/Users/zhanglei/Documents/codex-new/docs/requirements/device-flow-requirements.md`
 - `/Users/zhanglei/Documents/codex-new/docs/requirements/sec-impl-requirements.md`
+- `/Users/zhanglei/Documents/codex-new/docs/requirements/train-exam-requirements.md`
 - `/Users/zhanglei/Documents/codex-new/docs/requirements/cmdb-requirements.md`
 
 ## 统一约束

@@ -44,6 +44,38 @@
   - `admin/sysadmin`：全流程写操作
   - `auditor`：仅审计相关能力（日志查询、导出、验签）
 - 审计日志展示：前端“变更摘要”采用中文差异描述，不直接展示原始 JSON。
+- 流转单变更审批：
+  - 支持 `WITHDRAW/CANCEL/CORRECT` 审批单发起、撤回、驳回、通过
+  - 审批过程全量审计留痕
+- 双人复核 + 电子签名：
+  - `TESTED/APPROVED` 默认开启双签
+  - 首签返回 `dual_sign_token`，二签完成后才真正推进阶段
+- 扫码能力：
+  - 支持 `SN/IN/OUT` 条码解析
+  - 支持扫码字段写回流转单
+- 标签打印：
+  - 支持设备贴/箱贴
+  - 生成二维码追踪链接
+- 硬件基线模板库：
+  - 按机型定义检查项模板
+  - 单据可按机型自动生成硬件检查 payload 模板
+- 导入预校验模式：
+  - `dry_run=true` 仅校验不落库，返回错误/告警清单
+- 并发冲突保护：
+  - 乐观锁（`expected_version` / `If-Match`）
+  - 运行时抢占锁（`/jobs/{id}/lock`）
+- 交付周期报表：
+  - 阶段耗时、人效、逾期趋势、瓶颈阶段
+- 细粒度权限策略：
+  - 支持按 `role/department/action/stage` 配置 `ALLOW/DENY`
+- 数据保留策略：
+  - 附件冷热分层（HOT->COLD）
+  - 自动归档与清理（支持 dry-run）
+- 对外 API 与回调：
+  - 外部 API Key 查询单据状态
+  - 回调订阅 + 重试队列 + HMAC 签名
+- 系统操作看板：
+  - 失败率、慢接口、磁盘空间、队列积压
 
 ## 关键接口
 - `GET /api/device-flow/dashboard/summary`：看板汇总
@@ -59,6 +91,24 @@
 - `GET /api/device-flow/reports/audit.csv`：审计日志导出
 - `GET /api/device-flow/audit/verify`：审计链验签
 - `DELETE /api/device-flow/attachments/{id}`：删除附件（管理员）
+- `POST /api/device-flow/scan/parse`：扫码内容解析
+- `POST /api/device-flow/jobs/{id}/scan/apply`：扫码字段写回
+- `GET|POST|DELETE /api/device-flow/jobs/{id}/lock`：并发占用锁
+- `GET|PUT /api/device-flow/hardware/templates`：硬件模板库
+- `GET /api/device-flow/jobs/{id}/hardware-baseline`：机型检查项模板
+- `GET|PUT /api/device-flow/dual-sign/policies`：双签策略
+- `GET /api/device-flow/dual-sign/sessions`：双签会签记录
+- `GET|POST /api/device-flow/jobs/{id}/change-requests`：审批单查询/发起
+- `POST /api/device-flow/change-requests/{id}/approve|reject|withdraw`：审批流动作
+- `GET /api/device-flow/jobs/{id}/labels/{type}`：标签打印（`type=device|box`）
+- `GET /api/device-flow/reports/cycle`：交付周期报表
+- `GET /api/device-flow/ops/dashboard`：系统操作看板
+- `GET|PUT /api/device-flow/retention/policies`：保留策略
+- `POST /api/device-flow/retention/run`：执行保留策略
+- `GET|POST|PUT /api/device-flow/callback/subscriptions`：回调订阅管理
+- `POST /api/device-flow/callback/run`：手工触发回调队列消费
+- `POST /api/device-flow/api-clients`：创建外部 API 客户端
+- `GET /api/external/device-flow/jobs/{jobNo}`：外部查询接口（`x-api-key`）
 
 ## 主要环境变量
 - 后端数据库隔离：`MYSQL_DATABASE=juxin_device_flow`
@@ -68,6 +118,13 @@
 - 单次导入上限：`MAX_IMPORT_ROWS=500`
 - 附件大小上限：`UPLOAD_MAX_FILE_SIZE_MB=10`
 - 审计签名密钥：`AUDIT_SIGNING_KEY=<strong-random-key>`
+- 双签 token 有效期：`DUAL_SIGN_TOKEN_TTL_MINUTES=60`
+- 并发锁默认时长：`JOB_LOCK_TTL_SECONDS=300`
+- 回调消费者轮询：`CALLBACK_WORKER_INTERVAL_MS=30000`
+- 回调单批处理上限：`CALLBACK_WORKER_BATCH=20`
+- 运维指标保留天数：`OPS_METRIC_RETENTION_DAYS=14`
+- 标签追踪链接基址：`TRACK_LINK_BASE_URL=<https://xxx/device-flow>`
+- 附件归档目录：`ARCHIVE_ROOT=./uploads/device-flow-archive`
 
 ## 本地启动
 ### 后端

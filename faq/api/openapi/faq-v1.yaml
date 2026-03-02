@@ -1,0 +1,191 @@
+openapi: 3.0.3
+info:
+  title: FAQ 系统 API
+  version: 1.0.0
+  description: FAQ 系统核心接口定义（含在线编辑会话与版本管理）。
+servers:
+  - url: http://localhost:5186
+paths:
+  /api/health:
+    get:
+      summary: FAQ 健康检查
+      responses:
+        '200':
+          description: OK
+  /api/auth/me:
+    get:
+      summary: 获取当前登录用户
+      responses:
+        '200':
+          description: OK
+  /api/faq/articles:
+    get:
+      summary: FAQ 列表查询
+      responses:
+        '200':
+          description: OK
+    post:
+      summary: 创建 FAQ（admin）
+      responses:
+        '201':
+          description: Created
+  /api/faq/articles/{id}:
+    get:
+      summary: FAQ 详情
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: OK
+    put:
+      summary: 更新 FAQ（admin）
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: OK
+  /api/faq/articles/{id}/upload:
+    post:
+      summary: 上传 FAQ 文档版本（admin）
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: integer
+      responses:
+        '201':
+          description: Created
+  /api/faq/articles/{id}/versions:
+    get:
+      summary: 查询文章版本历史
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: OK
+  /api/faq/articles/{id}/versions/{versionId}/restore:
+    post:
+      summary: 版本回滚（admin）
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: integer
+        - in: path
+          name: versionId
+          required: true
+          schema:
+            type: integer
+      responses:
+        '201':
+          description: Created
+  /api/faq/versions/{versionId}/preview:
+    get:
+      summary: 在线预览指定版本
+      parameters:
+        - in: path
+          name: versionId
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: OK
+  /api/faq/versions/{versionId}/download:
+    get:
+      summary: 下载指定版本
+      parameters:
+        - in: path
+          name: versionId
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: OK
+  /api/faq/articles/{id}/editor/session:
+    post:
+      summary: 创建在线编辑会话（admin）
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: OK
+  /api/faq/articles/{id}/editor/status:
+    get:
+      summary: 查询在线编辑状态（admin）
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: OK
+  /api/faq/articles/{id}/editor/release:
+    post:
+      summary: 释放在线编辑锁（admin）
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: OK
+  /api/faq/articles/{id}/editor/publish:
+    post:
+      summary: 发布在线编辑草稿（admin）
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: integer
+      responses:
+        '201':
+          description: Created
+  /api/faq/articles/{id}/editor/discard:
+    post:
+      summary: 放弃在线编辑草稿（admin）
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: OK
+  /api/faq/editor/callback/{sessionId}:
+    post:
+      summary: OnlyOffice 自动保存回调
+      parameters:
+        - in: path
+          name: sessionId
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: OK

@@ -474,6 +474,12 @@ body {
   grid-column: 1 / -1;
 }
 
+.field-inline {
+  flex-direction: row !important;
+  align-items: center;
+  gap: 10px !important;
+}
+
 .form-grid label {
   display: flex;
   flex-direction: column;
@@ -646,6 +652,13 @@ textarea:focus {
   font-weight: 600;
 }
 
+.row-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
 .table-footer {
   margin-top: 14px;
   color: var(--text-muted);
@@ -730,31 +743,53 @@ textarea:focus {
 }
 
 .model-card {
-  min-height: 170px;
+  min-height: 200px;
   border: 1px solid rgba(149, 179, 225, 0.35);
   border-radius: 12px;
   background: linear-gradient(135deg, #ffffff 0%, #f6faff 100%);
-  display: grid;
-  place-items: center;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: flex-start;
   padding: 16px;
+}
+
+.model-card-head {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
 }
 
 .model-icon {
   color: var(--primary);
-  font-size: 32px;
+  font-size: 30px;
   line-height: 1;
 }
 
 .model-name {
-  margin-top: 4px;
-  font-size: 18px;
+  margin-top: 2px;
+  font-size: 17px;
   font-weight: 600;
 }
 
 .model-count {
-  margin-top: 6px;
+  margin-top: 2px;
   color: var(--text-muted);
   font-size: 14px;
+}
+
+.model-desc {
+  color: var(--text-sub);
+  font-size: 13px;
+  line-height: 1.6;
+  margin-top: 4px;
+}
+
+.model-meta {
+  margin-top: auto;
+  color: var(--text-muted);
+  font-size: 12px;
 }
 
 .topology-canvas {
@@ -766,6 +801,32 @@ textarea:focus {
   align-items: center;
   justify-content: center;
   gap: 10px;
+}
+
+.topology-pill-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 10px;
+}
+
+.topology-pill {
+  border: 1px solid rgba(149, 179, 225, 0.35);
+  border-radius: 10px;
+  padding: 10px 12px;
+  background: linear-gradient(135deg, #ffffff 0%, #f3f8ff 100%);
+  display: grid;
+  gap: 4px;
+}
+
+.topology-pill strong {
+  font-size: 14px;
+  color: var(--text-main);
+}
+
+.topology-pill span {
+  font-size: 12px;
+  color: var(--text-muted);
+  word-break: break-all;
 }
 
 .node {
@@ -891,6 +952,14 @@ textarea:focus {
   border: 1px solid rgba(148, 163, 184, 0.35);
   box-shadow: 0 24px 60px rgba(15, 23, 42, 0.25);
   padding: 16px;
+}
+
+.dialog-card.dialog-card-wide {
+  width: min(760px, calc(100vw - 24px));
+}
+
+.dialog-card.dialog-card-xl {
+  width: min(1040px, calc(100vw - 24px));
 }
 
 .dialog-title {

@@ -200,6 +200,9 @@ if [[ -z "$AUTH_TOKEN_SYSADMIN" ]]; then
   AUTH_TOKEN_SYSADMIN="$(login_get_token "$SYSADMIN_USERNAME" "$SYSADMIN_PASSWORD")"
 fi
 
+# 兼容单账号矩阵验证：关闭测试/审核双签，聚焦 RBAC 行为。
+request_status_with_token PUT /api/device-flow/dual-sign/policies 200 "$AUTH_TOKEN_ADMIN" '{"policies":[{"stage_code":"TESTED","required_signers":2,"enabled":false},{"stage_code":"APPROVED","required_signers":2,"enabled":false}]}' >/dev/null
+
 echo "[3/18] 校验系统访问权限"
 request_status_with_token GET /api/auth/me 200 "$AUTH_TOKEN_ADMIN" >/dev/null
 request_status_with_token GET /api/auth/me 200 "$AUTH_TOKEN_AUDITOR" >/dev/null
@@ -237,17 +240,20 @@ echo "[8/18] admin 执行硬件检查 + 系统安装"
 request_status_with_token POST "/api/device-flow/jobs/$JOB_ID/stages/hardware-check" 200 "$AUTH_TOKEN_ADMIN" '{"stage_payload":{"cpu_match":"PASS","memory_match":"PASS","disk_match":"PASS","nic_match":"PASS","serial_match":"PASS"}}' >/dev/null
 request_status_with_token POST "/api/device-flow/jobs/$JOB_ID/stages/os-install" 200 "$AUTH_TOKEN_ADMIN" '{"stage_payload":{"os_name":"JXOS","os_version":"1.0.0","install_result":"PASS"}}' >/dev/null
 
-echo "[9/18] auditor 上传测试留证"
-TEST_ATTACH_RESP="$(upload_file_with_token "/api/device-flow/jobs/$JOB_ID/attachments" "$TMP_TEST_FILE" TESTED "rbac-test" 201 "$AUTH_TOKEN_AUDITOR")"
+echo "[9/18] auditor 上传测试留证（应被拒绝），admin 上传成功"
+upload_file_with_token "/api/device-flow/jobs/$JOB_ID/attachments" "$TMP_TEST_FILE" TESTED "rbac-test-auditor" 403 "$AUTH_TOKEN_AUDITOR" >/dev/null
+TEST_ATTACH_RESP="$(upload_file_with_token "/api/device-flow/jobs/$JOB_ID/attachments" "$TMP_TEST_FILE" TESTED "rbac-test-admin" 201 "$AUTH_TOKEN_ADMIN")"
 TEST_ATTACH_ID="$(printf '%s' "$TEST_ATTACH_RESP" | json_field id)"
 if [[ -z "$TEST_ATTACH_ID" ]]; then
-  echo "[ERROR] auditor 上传测试附件失败：${TEST_ATTACH_RESP}"
+  echo "[ERROR] admin 上传测试附件失败：${TEST_ATTACH_RESP}"
   exit 1
 fi
 
-echo "[10/18] auditor 执行测试 + 审核（应允许）"
-request_status_with_token POST "/api/device-flow/jobs/$JOB_ID/stages/test" 200 "$AUTH_TOKEN_AUDITOR" '{"stage_payload":{"boot_test":"PASS","network_test":"PASS","stress_test":"PASS","test_result":"PASS"}}' >/dev/null
-request_status_with_token POST "/api/device-flow/jobs/$JOB_ID/stages/approve" 200 "$AUTH_TOKEN_AUDITOR" '{"stage_payload":{"approve_result":"PASS","approve_note":"ok"}}' >/dev/null
+echo "[10/18] auditor 执行测试/审核（应被拒绝），admin 执行成功"
+request_status_with_token POST "/api/device-flow/jobs/$JOB_ID/stages/test" 403 "$AUTH_TOKEN_AUDITOR" '{"stage_payload":{"boot_test":"PASS","network_test":"PASS","stress_test":"PASS","test_result":"PASS"}}' >/dev/null
+request_status_with_token POST "/api/device-flow/jobs/$JOB_ID/stages/approve" 403 "$AUTH_TOKEN_AUDITOR" '{"stage_payload":{"approve_result":"PASS","approve_note":"ok"}}' >/dev/null
+request_status_with_token POST "/api/device-flow/jobs/$JOB_ID/stages/test" 200 "$AUTH_TOKEN_ADMIN" '{"stage_payload":{"boot_test":"PASS","network_test":"PASS","stress_test":"PASS","test_result":"PASS"}}' >/dev/null
+request_status_with_token POST "/api/device-flow/jobs/$JOB_ID/stages/approve" 200 "$AUTH_TOKEN_ADMIN" '{"stage_payload":{"approve_result":"PASS","approve_note":"ok"}}' >/dev/null
 
 echo "[11/18] auditor 尝试装箱（应被拒绝）"
 request_status_with_token POST "/api/device-flow/jobs/$JOB_ID/stages/pack" 403 "$AUTH_TOKEN_AUDITOR" '{"stage_payload":{"package_check":"PASS","accessory_check":"PASS","box_no":"BOX-RBAC"}}' >/dev/null
@@ -255,11 +261,11 @@ request_status_with_token POST "/api/device-flow/jobs/$JOB_ID/stages/pack" 403 "
 echo "[12/18] auditor 尝试删除附件（应被拒绝）"
 request_status_with_token DELETE "/api/device-flow/attachments/$TEST_ATTACH_ID" 403 "$AUTH_TOKEN_AUDITOR" >/dev/null
 
-echo "[13/18] auditor 执行退回（应允许）"
-request_status_with_token POST "/api/device-flow/jobs/$JOB_ID/rework" 200 "$AUTH_TOKEN_AUDITOR" '{"target_stage":"TESTED","reason":"抽检复核","remark":"rbac rework"}' >/dev/null
+echo "[13/18] auditor 执行退回（应被拒绝）"
+request_status_with_token POST "/api/device-flow/jobs/$JOB_ID/rework" 403 "$AUTH_TOKEN_AUDITOR" '{"target_stage":"TESTED","reason":"抽检复核","remark":"rbac rework"}' >/dev/null
 
-echo "[14/18] auditor 再次审核（应允许）"
-request_status_with_token POST "/api/device-flow/jobs/$JOB_ID/stages/approve" 200 "$AUTH_TOKEN_AUDITOR" '{"stage_payload":{"approve_result":"PASS","approve_note":"recheck ok"}}' >/dev/null
+echo "[14/18] auditor 再次审核（应被拒绝）"
+request_status_with_token POST "/api/device-flow/jobs/$JOB_ID/stages/approve" 403 "$AUTH_TOKEN_AUDITOR" '{"stage_payload":{"approve_result":"PASS","approve_note":"recheck ok"}}' >/dev/null
 
 echo "[15/18] auditor 可执行审计验签只读（应允许）"
 request_status_with_token GET "/api/device-flow/audit/verify?limit=100" 200 "$AUTH_TOKEN_AUDITOR" >/dev/null
