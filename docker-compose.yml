@@ -1,6 +1,6 @@
 services:
   mysql:
-    image: mysql:8.0
+    image: docker.m.daocloud.io/library/mysql:8.0
     environment:
       MYSQL_ROOT_PASSWORD: rootpass
       MYSQL_DATABASE: juxin_reminder
@@ -441,7 +441,7 @@ services:
     restart: unless-stopped
 
   cmdb-mongo:
-    image: mongo:7.0
+    image: docker.m.daocloud.io/library/mongo:7.0
     volumes:
       - cmdb-mongo-data:/data/db
     healthcheck:
@@ -451,7 +451,7 @@ services:
       retries: 20
 
   cmdb-mysql-init:
-    image: mysql:8.0
+    image: docker.m.daocloud.io/library/mysql:8.0
     depends_on:
       - mysql
     entrypoint: ["/bin/sh", "-c"]

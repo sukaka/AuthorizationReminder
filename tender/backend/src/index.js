@@ -43,6 +43,8 @@ const UPLOAD_ROOT = path.resolve(process.env.UPLOAD_ROOT || '/data/tender/upload
 const VERSION_ROOT = path.resolve(process.env.VERSION_ROOT || `${UPLOAD_ROOT}/versions`);
 const DRAFT_ROOT = path.resolve(process.env.DRAFT_ROOT || `${UPLOAD_ROOT}/drafts`);
 const ASSET_ROOT = path.resolve(process.env.ASSET_ROOT || `${UPLOAD_ROOT}/assets`);
+const SAMPLE_ROOT = path.resolve(process.env.SAMPLE_ROOT || `${UPLOAD_ROOT}/samples`);
+const TEMPLATE_ROOT = path.resolve(process.env.TEMPLATE_ROOT || `${UPLOAD_ROOT}/doc-templates`);
 const WATERMARK_ROOT = path.resolve(process.env.WATERMARK_ROOT || `${UPLOAD_ROOT}/watermarks`);
 const PREVIEW_ROOT = path.resolve(process.env.PREVIEW_ROOT || `${UPLOAD_ROOT}/previews`);
 const EDITABLE_ROOT = path.resolve(process.env.EDITABLE_ROOT || `${UPLOAD_ROOT}/editable`);
@@ -76,6 +78,9 @@ const DOC_EDITOR_DOWNLOAD_HOST_ALLOWLIST = Array.from(
 const LIST_MAX_LIMIT = Math.max(20, Math.min(500, Number(process.env.TENDER_LIST_MAX_LIMIT || 200)));
 const AUDIT_RETENTION_DAYS_DEFAULT = Math.max(30, Number(process.env.AUDIT_RETENTION_DAYS || 365));
 const AUDIT_CLEANUP_INTERVAL_MS = Math.max(6 * 60 * 60 * 1000, Number(process.env.AUDIT_CLEANUP_INTERVAL_MS || 24 * 60 * 60 * 1000));
+const DIFF_MAX_SEGMENTS = Math.max(100, Math.min(1200, Number(process.env.TENDER_DIFF_MAX_SEGMENTS || 500)));
+const DIFF_MAX_ENTRIES = Math.max(100, Math.min(1500, Number(process.env.TENDER_DIFF_MAX_ENTRIES || 600)));
+const EDITOR_EVENTS_MAX_LIMIT = Math.max(20, Math.min(300, Number(process.env.TENDER_EDITOR_EVENTS_MAX_LIMIT || 120)));
 const OCR_ENDPOINT_DEFAULT = 'ocr.cn-beijing.aliyuncs.com';
 const OCR_API_VERSION_DEFAULT = '2021-07-07';
 const OCR_TIMEOUT_MS_DEFAULT = 15000;
@@ -93,8 +98,82 @@ const ALLOWED_BID_UPLOAD_MIME = new Set([
 
 const ALLOWED_ASSET_UPLOAD_EXTS = new Set(['.jpg', '.jpeg', '.png', '.pdf']);
 const ALLOWED_ASSET_UPLOAD_MIME = new Set(['image/jpeg', 'image/png', 'application/pdf']);
+const ALLOWED_DOC_TEMPLATE_EXTS = new Set(['.docx']);
+const ALLOWED_DOC_TEMPLATE_MIME = new Set(['application/vnd.openxmlformats-officedocument.wordprocessingml.document']);
 
-for (const dir of [UPLOAD_ROOT, VERSION_ROOT, DRAFT_ROOT, ASSET_ROOT, WATERMARK_ROOT, PREVIEW_ROOT, EDITABLE_ROOT]) {
+const SAMPLE_PARSE_MAX_TEXT = Math.max(120000, Math.min(500000, Number(process.env.SAMPLE_PARSE_MAX_TEXT || 220000)));
+const BID_ANALYZE_MAX_TEXT = Math.max(180000, Math.min(600000, Number(process.env.BID_ANALYZE_MAX_TEXT || 320000)));
+const SAMPLE_MATCH_CANDIDATE_LIMIT = Math.max(10, Math.min(80, Number(process.env.SAMPLE_MATCH_CANDIDATE_LIMIT || 30)));
+const BID_CATEGORY_ALIASES = new Map([
+  ['SERVICE', 'SERVICE'],
+  ['服务', 'SERVICE'],
+  ['服务类', 'SERVICE'],
+  ['服务型', 'SERVICE'],
+  ['产品', 'PRODUCT'],
+  ['产品类', 'PRODUCT'],
+  ['货物', 'PRODUCT'],
+  ['货物类', 'PRODUCT'],
+  ['PRODUCT', 'PRODUCT'],
+]);
+const BID_CATEGORY_LABELS = {
+  SERVICE: '服务类',
+  PRODUCT: '产品类',
+};
+
+const tenderSectionDefs = [
+  {
+    key: 'INVITATION',
+    title: '投标邀请',
+    aliases: ['投标邀请', '招标公告', '招标邀请', '投标邀请书'],
+  },
+  {
+    key: 'BIDDER_INSTRUCTION',
+    title: '投标人须知',
+    aliases: ['投标人须知', '投标须知', '投标须知前附表', '供应商须知'],
+  },
+  {
+    key: 'BIDDER_INSTRUCTION_TABLE',
+    title: '投标人须知前附表',
+    aliases: ['投标人须知前附表', '须知前附表', '供应商须知前附表'],
+  },
+  {
+    key: 'PROCUREMENT_REQUIREMENT',
+    title: '采购需求',
+    aliases: ['采购需求', '项目需求', '技术需求', '技术要求'],
+  },
+  {
+    key: 'TECH_PARAM_TABLE',
+    title: '技术参数表',
+    aliases: ['技术参数表', '技术参数', '参数表', '技术要求表'],
+  },
+  {
+    key: 'SCORING_STANDARD',
+    title: '评标方法与评标标准',
+    aliases: ['评标方法与评标标准', '评标办法', '评分办法', '评分标准', '评审标准', '综合评分法'],
+  },
+  {
+    key: 'CONTRACT_TERMS',
+    title: '合同主要条款及格式',
+    aliases: ['合同主要条款及格式', '合同主要条款', '合同条款', '合同格式'],
+  },
+  {
+    key: 'ATTACHMENT',
+    title: '附件',
+    aliases: ['附件', '附件清单', '附件资料'],
+  },
+  {
+    key: 'SCORE_TABLE',
+    title: '评分表',
+    aliases: ['评分表', '评分标准表', '评审评分表', '打分表'],
+  },
+  {
+    key: 'BID_DOC_FORMAT',
+    title: '投标文件格式',
+    aliases: ['投标文件格式', '响应文件格式', '投标文件编制格式', '格式附件'],
+  },
+];
+
+for (const dir of [UPLOAD_ROOT, VERSION_ROOT, DRAFT_ROOT, ASSET_ROOT, SAMPLE_ROOT, TEMPLATE_ROOT, WATERMARK_ROOT, PREVIEW_ROOT, EDITABLE_ROOT]) {
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 }
 
@@ -148,6 +227,285 @@ app.use(cors(corsOptions));
 app.use(express.json({ limit: '8mb' }));
 
 const trimText = (value, fallback = '') => (value === undefined || value === null ? fallback : String(value).trim());
+const firstNonEmpty = (...values) => {
+  for (const value of values) {
+    const text = trimText(value);
+    if (text) return text;
+  }
+  return '';
+};
+
+const normalizeBidCategory = (value) => {
+  const raw = trimText(value);
+  if (!raw) return '';
+  const upper = raw.toUpperCase();
+  if (BID_CATEGORY_ALIASES.has(upper)) return BID_CATEGORY_ALIASES.get(upper);
+  if (BID_CATEGORY_ALIASES.has(raw)) return BID_CATEGORY_ALIASES.get(raw);
+  return '';
+};
+
+const bidCategoryLabel = (value) => BID_CATEGORY_LABELS[normalizeBidCategory(value)] || '未识别';
+const ANALYZE_STAGE_TASK_TYPES = {
+  STAGE1: 'BID_ANALYZE_STAGE1',
+  STAGE2: 'BID_ANALYZE_STAGE2',
+  STAGE3: 'BID_ANALYZE_STAGE3',
+};
+const ANALYZE_STAGE_TASK_TYPE_SET = new Set(Object.values(ANALYZE_STAGE_TASK_TYPES));
+const AI_ANALYZE_TASK_TIMEOUT_MS = Math.max(30000, Number(process.env.AI_ANALYZE_TASK_TIMEOUT_MS || 120000));
+const ANALYZE_MIN_TEXT_LENGTH = 120;
+const ANALYZE_MIN_STRUCTURED_CHAPTER_HITS = 2;
+const ANALYZE_ESTIMATED_LINES_PER_PAGE = 45;
+const RISK_CLAUSE_TYPE_SET = new Set([
+  'QUALIFICATION_INVALID',
+  'COMPLIANCE_INVALID',
+  'PERSONNEL_INVALID',
+  'SERVICE_SCHEME_INVALID',
+  'SLA_INVALID',
+  'BUSINESS_INVALID',
+  'QUOTATION_INVALID',
+  'SIGNATURE_SEAL_INVALID',
+  'OTHER_INVALID',
+]);
+const RISK_CLAUSE_TARGET_MAP = {
+  QUALIFICATION_INVALID: 'qualification_invalid_clauses',
+  COMPLIANCE_INVALID: 'compliance_invalid_clauses',
+  PERSONNEL_INVALID: 'personnel_invalid_clauses',
+  SERVICE_SCHEME_INVALID: 'service_scheme_invalid_clauses',
+  SLA_INVALID: 'sla_invalid_clauses',
+  BUSINESS_INVALID: 'business_invalid_clauses',
+  QUOTATION_INVALID: 'quotation_invalid_clauses',
+  SIGNATURE_SEAL_INVALID: 'signature_seal_invalid_clauses',
+  OTHER_INVALID: 'other_invalid_clauses',
+};
+const MISSING_ITEM_TYPE_SET = new Set([
+  'INVALID_BID_CLAUSE',
+  'SUBSTANTIVE_REQUIREMENT',
+  'SLA_INDICATOR',
+  'PERSONNEL_REQUIREMENT',
+  'SCORING_ITEM',
+  'QUOTATION_RULE',
+  'TECH_PARAMETER',
+  'CORE_PRODUCT',
+  'AUTH_REQUIREMENT',
+  'CERTIFICATION_REQUIREMENT',
+  'SAMPLE_REQUIREMENT',
+]);
+const REQUIRED_ANALYZE_CHAPTERS = [
+  { key: 'BIDDER_INSTRUCTION', title: '投标人须知' },
+  { key: 'BIDDER_INSTRUCTION_TABLE', title: '投标人须知前附表' },
+  { key: 'PROCUREMENT_REQUIREMENT', title: '采购需求' },
+  { key: 'TECH_PARAM_TABLE', title: '技术参数表' },
+  { key: 'SCORING_STANDARD', title: '评标办法' },
+  { key: 'CONTRACT_TERMS', title: '合同条款' },
+  { key: 'ATTACHMENT', title: '附件' },
+  { key: 'SCORE_TABLE', title: '评分表' },
+];
+const STAGE1_FORCE_KEYWORDS = [
+  '无效投标',
+  '否决投标',
+  '废标',
+  '负偏离',
+  '实质性要求',
+  '不满足',
+  '★',
+  '▲',
+];
+const SERVICE_STAGE_KEYWORDS = {
+  sla: ['响应时间', '恢复时间', '服务可用性', '故障处理'],
+  personnel: ['项目经理', '项目负责人', '技术负责人', '工程师', '驻场'],
+  price: ['最高限价', '投标报价', '分项报价', '价格评分'],
+  contract: ['违约责任', '考核', '扣款', '服务考核'],
+  technical: ['服务方案', '技术方案', '实施方案'],
+};
+const PRODUCT_STAGE_KEYWORDS = {
+  technical: ['技术参数', '参数要求', '核心参数', '核心产品', '主要产品', '负偏离'],
+  authorization: ['原厂授权', '唯一授权', '制造商授权'],
+  certification: ['3C认证', '节能认证', '环境标志认证', '检测报告'],
+  sample: ['样品', '样机', '演示设备'],
+  price: ['最高限价', '投标报价', '分项报价', '价格评分'],
+  contract: ['违约责任', '考核', '扣款', '服务考核'],
+  personnel: ['项目经理', '项目负责人', '技术负责人', '工程师', '驻场'],
+};
+
+const resolveStageKeywordGroups = (bidCategory = 'SERVICE') => {
+  const category = normalizeBidCategory(bidCategory);
+  return category === 'PRODUCT' ? PRODUCT_STAGE_KEYWORDS : SERVICE_STAGE_KEYWORDS;
+};
+
+const buildStage1EnforcedRules = (bidCategory = 'SERVICE') => {
+  const category = normalizeBidCategory(bidCategory) || 'SERVICE';
+  const groups = resolveStageKeywordGroups(category);
+  if (category === 'PRODUCT') {
+    return [
+      '【货物类规则-必须执行】',
+      '1) 必须强制扫描关键词：无效投标、否决投标、废标、负偏离、实质性要求、不满足、★、▲。',
+      '2) 必须逐行扫描技术参数表、评分表、报价表，命中实质性/无效条件时逐条输出风险。',
+      '2.1) 每条风险必须输出 source_reference.chapter、source_reference.page_number、source_reference.excerpt（原文片段）。',
+      '2.2) clause_content 必须是原文原句，不得改写。',
+      `3) 技术参数重点词：${groups.technical.join('、')}。`,
+      `4) 原厂授权重点词：${groups.authorization.join('、')}。`,
+      `5) 认证要求重点词：${groups.certification.join('、')}。`,
+      `6) 样品要求重点词：${groups.sample.join('、')}。`,
+      `7) 报价重点词：${groups.price.join('、')}。`,
+      `8) 合同扣罚重点词：${groups.contract.join('、')}。`,
+    ].join('\n');
+  }
+  return [
+    '【服务类规则-必须执行】',
+    '1) 必须强制扫描关键词：无效投标、否决投标、废标、负偏离、实质性要求、不满足、★、▲。',
+    '2) 必须扫描评分表中的评分项，凡与废标/否决/实质性相关的条款都要纳入风险条款。',
+    '2.1) 每条风险必须输出 source_reference.chapter、source_reference.page_number、source_reference.excerpt（原文片段）。',
+    '2.2) clause_content 必须是原文原句，不得改写。',
+    `3) SLA重点词必须扫描：${groups.sla.join('、')}。`,
+    `4) 人员条款重点词必须扫描：${groups.personnel.join('、')}。`,
+    `5) 报价条款重点词必须扫描：${groups.price.join('、')}。`,
+    `6) 合同条款重点词必须扫描：${groups.contract.join('、')}。`,
+  ].join('\n');
+};
+
+const buildStage2EnforcedRules = (bidCategory = 'SERVICE') => {
+  const category = normalizeBidCategory(bidCategory) || 'SERVICE';
+  const groups = resolveStageKeywordGroups(category);
+  if (category === 'PRODUCT') {
+    return [
+      '【货物类规则-必须执行】',
+      '1) 评分表中的所有评分项必须逐条提取，不得汇总省略。',
+      '1.1) 所有实质性条款、评分标准、报价规则必须保留原文原句。',
+      '2) 必须检查章节：投标人须知、投标人须知前附表、采购需求、技术参数表、评标办法、合同条款、附件、评分表。',
+      `3) 技术参数关键字必须写入结构化结果：${groups.technical.join('、')}。`,
+      `4) 原厂授权条款必须提取：${groups.authorization.join('、')}。`,
+      `5) 认证条款必须提取：${groups.certification.join('、')}。`,
+      `6) 样品条款必须提取：${groups.sample.join('、')}。`,
+      `7) 报价规则必须提取：${groups.price.join('、')}。`,
+      `8) 合同扣罚条款必须提取：${groups.contract.join('、')}。`,
+      '9) 必须输出字段：goods_procurement_detail、core_product_info、evaluation_score_matrix、technical_deviation_table。',
+    ].join('\n');
+  }
+  return [
+    '【服务类规则-必须执行】',
+    '1) 评分表中的所有评分项必须逐条提取，不得汇总省略。',
+    '1.1) 所有实质性条款、评分标准、报价规则必须保留原文原句。',
+    '2) 必须检查章节：投标人须知、投标人须知前附表、采购需求、评标办法、合同条款、附件、评分表。',
+    `3) SLA关键指标必须写入结构化结果：${groups.sla.join('、')}。`,
+    `4) 人员关键岗位必须写入结构化结果：${groups.personnel.join('、')}。`,
+    `5) 报价关键规则必须写入结构化结果：${groups.price.join('、')}。`,
+    `6) 合同考核与扣款必须写入结构化结果：${groups.contract.join('、')}。`,
+  ].join('\n');
+};
+
+const buildStage3EnforcedRules = (bidCategory = 'SERVICE') => {
+  const category = normalizeBidCategory(bidCategory) || 'SERVICE';
+  const groups = resolveStageKeywordGroups(category);
+  const sharedLines = [
+    '【行业规则-必须执行】',
+    '交叉校验必须特别检查是否遗漏以下关键词条款：',
+    '输出 missing_items 时必须包含 source_reference.chapter、source_reference.page_number、source_reference.excerpt。',
+    `- 强制风险词：${STAGE1_FORCE_KEYWORDS.join('、')}`,
+    `- 报价词：${groups.price.join('、')}`,
+    `- 合同词：${groups.contract.join('、')}`,
+  ];
+  if (category === 'PRODUCT') {
+    sharedLines.push(`- 技术参数词：${groups.technical.join('、')}`);
+    sharedLines.push(`- 原厂授权词：${groups.authorization.join('、')}`);
+    sharedLines.push(`- 认证词：${groups.certification.join('、')}`);
+    sharedLines.push(`- 样品词：${groups.sample.join('、')}`);
+  } else {
+    sharedLines.push(`- SLA词：${groups.sla.join('、')}`);
+    sharedLines.push(`- 人员词：${groups.personnel.join('、')}`);
+  }
+  return sharedLines.join('\n');
+};
+
+const countCjkChars = (value) => {
+  const text = String(value || '');
+  const matches = text.match(/[\u3400-\u9fff]/g);
+  return matches ? matches.length : 0;
+};
+
+const countLatin1HighChars = (value) => {
+  const text = String(value || '');
+  const matches = text.match(/[\u0080-\u00ff]/g);
+  return matches ? matches.length : 0;
+};
+
+const decodeLatin1Utf8Segment = (text) => {
+  const raw = trimText(text);
+  if (!raw) return raw;
+  try {
+    const decoded = Buffer.from(raw, 'latin1').toString('utf8');
+    if (!decoded || decoded.includes('\uFFFD')) return raw;
+    const rawCjk = countCjkChars(raw);
+    const decodedCjk = countCjkChars(decoded);
+    if (decodedCjk > rawCjk) return decoded;
+    const rawHigh = countLatin1HighChars(raw);
+    const decodedHigh = countLatin1HighChars(decoded);
+    if (rawHigh > 0 && decodedHigh < rawHigh) return decoded;
+    return raw;
+  } catch {
+    return raw;
+  }
+};
+
+const fixMojibakeText = (value) => {
+  const text = trimText(value);
+  if (!text) return text;
+  const wholeDecoded = decodeLatin1Utf8Segment(text);
+  if (wholeDecoded !== text) return wholeDecoded;
+
+  // 支持“前半段乱码、后半段正常”的混合文本。
+  const segmentedDecoded = text.replace(/[\u0080-\u00ff]{2,}/g, (segment) => decodeLatin1Utf8Segment(segment));
+  if (segmentedDecoded !== text) return segmentedDecoded;
+  return text;
+};
+
+const normalizeUploadFileName = (req) => {
+  if (!req?.file) return;
+  req.file.originalname = fixMojibakeText(req.file.originalname);
+};
+
+const sanitizeBidRow = (row) => {
+  if (!row || typeof row !== 'object') return row;
+  return {
+    ...row,
+    bid_no: fixMojibakeText(row.bid_no),
+    title: fixMojibakeText(row.title),
+    customer_name: fixMojibakeText(row.customer_name),
+    project_name: fixMojibakeText(row.project_name),
+    summary: fixMojibakeText(row.summary),
+    created_by_name: fixMojibakeText(row.created_by_name),
+    updated_by_name: fixMojibakeText(row.updated_by_name),
+    submitted_by_name: fixMojibakeText(row.submitted_by_name),
+    archived_by_name: fixMojibakeText(row.archived_by_name),
+  };
+};
+
+const sanitizeVersionRow = (row) => {
+  if (!row || typeof row !== 'object') return row;
+  return {
+    ...row,
+    file_name: fixMojibakeText(row.file_name),
+    created_by_name: fixMojibakeText(row.created_by_name),
+  };
+};
+
+const sanitizeDraftRow = (row) => {
+  if (!row || typeof row !== 'object') return row;
+  return {
+    ...row,
+    draft_file_name: fixMojibakeText(row.draft_file_name),
+    updated_by_name: fixMojibakeText(row.updated_by_name),
+  };
+};
+
+const sanitizeAssetRow = (row) => {
+  if (!row || typeof row !== 'object') return row;
+  return {
+    ...row,
+    original_file_name: fixMojibakeText(row.original_file_name),
+    uploaded_by_name: fixMojibakeText(row.uploaded_by_name),
+    reviewer_name: fixMojibakeText(row.reviewer_name),
+  };
+};
 
 const stableStringify = (value) => {
   if (value === null || value === undefined) return '';
@@ -182,6 +540,30 @@ const appError = (message, statusCode = 400) => {
   const err = new Error(message);
   err.statusCode = statusCode;
   return err;
+};
+
+const isMysqlDeadlockError = (err) => {
+  const code = String(err?.code || '').toUpperCase();
+  if (code === 'ER_LOCK_DEADLOCK') return true;
+  const message = String(err?.message || '').toLowerCase();
+  return message.includes('deadlock found when trying to get lock');
+};
+
+const waitMs = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const withDeadlockRetry = async (task, options = {}) => {
+  const maxRetries = Number.isFinite(Number(options.maxRetries)) ? Number(options.maxRetries) : 2;
+  const baseDelayMs = Number.isFinite(Number(options.baseDelayMs)) ? Number(options.baseDelayMs) : 80;
+  let attempt = 0;
+  while (true) {
+    try {
+      return await task();
+    } catch (err) {
+      if (!isMysqlDeadlockError(err) || attempt >= maxRetries) throw err;
+      await waitMs(baseDelayMs * (attempt + 1));
+      attempt += 1;
+    }
+  }
 };
 
 const toPositiveInt = (value, fallback = 1) => {
@@ -301,6 +683,3725 @@ const normalizeStatus = (value) => {
   return 'DRAFT';
 };
 
+const normalizeSearchText = (value, maxLen = 120000) => {
+  const compact = String(value || '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!compact) return '';
+  return compact.slice(0, maxLen);
+};
+
+const extractDocxSearchText = async (docxPath) => {
+  const target = trimText(docxPath);
+  if (!target) return '';
+  try {
+    const result = await mammoth.extractRawText({ path: target });
+    return normalizeSearchText(result?.value);
+  } catch {
+    return '';
+  }
+};
+
+
+const decodeXmlEntities = (value) => String(value || '')
+  .replace(/&lt;/g, '<')
+  .replace(/&gt;/g, '>')
+  .replace(/&amp;/g, '&')
+  .replace(/&quot;/g, '"')
+  .replace(/&apos;/g, '\'')
+  .replace(/&#x([0-9a-fA-F]+);/g, (_m, hex) => {
+    const code = Number.parseInt(hex, 16);
+    return Number.isFinite(code) ? String.fromCodePoint(code) : '';
+  })
+  .replace(/&#([0-9]+);/g, (_m, num) => {
+    const code = Number.parseInt(num, 10);
+    return Number.isFinite(code) ? String.fromCodePoint(code) : '';
+  });
+
+const extractWordRunText = (xml) => {
+  if (!trimText(xml)) return '';
+  const rows = [];
+  const regex = /<w:t(?:\s[^>]*)?>([\s\S]*?)<\/w:t>/g;
+  let matched = regex.exec(xml);
+  while (matched) {
+    const text = decodeXmlEntities(matched[1] || '');
+    if (text) rows.push(text);
+    matched = regex.exec(xml);
+  }
+  return trimText(rows.join(''));
+};
+
+const extractDocxTableBlocks = async (docxPath, options = {}) => {
+  const maxTables = Math.max(1, Math.min(80, Number(options.maxTables || 40)));
+  const maxRows = Math.max(1, Math.min(400, Number(options.maxRows || 180)));
+  const maxCols = Math.max(1, Math.min(60, Number(options.maxCols || 20)));
+  const maxCellLen = Math.max(10, Math.min(2000, Number(options.maxCellLen || 240)));
+
+  const target = trimText(docxPath);
+  if (!target) return [];
+  try {
+    const bytes = await fs.promises.readFile(target);
+    const zip = new PizZip(bytes);
+    const xml = zip.file('word/document.xml')?.asText() || '';
+    if (!trimText(xml)) return [];
+
+    const tables = [];
+    const tableRegex = /<w:tbl[\s\S]*?<\/w:tbl>/g;
+    let tableMatch = tableRegex.exec(xml);
+    while (tableMatch && tables.length < maxTables) {
+      const tableXml = tableMatch[0];
+      const parsedRows = [];
+      const rowRegex = /<w:tr[\s\S]*?<\/w:tr>/g;
+      let rowMatch = rowRegex.exec(tableXml);
+      while (rowMatch && parsedRows.length < maxRows) {
+        const rowXml = rowMatch[0];
+        const rowCells = [];
+        const cellRegex = /<w:tc[\s\S]*?<\/w:tc>/g;
+        let cellMatch = cellRegex.exec(rowXml);
+        while (cellMatch && rowCells.length < maxCols) {
+          const cellXml = cellMatch[0];
+          const cellText = normalizeSearchText(extractWordRunText(cellXml), maxCellLen);
+          rowCells.push(cellText || '未明确');
+          cellMatch = cellRegex.exec(rowXml);
+        }
+        if (rowCells.some((cell) => trimText(cell) && trimText(cell) !== '未明确')) {
+          parsedRows.push(rowCells);
+        }
+        rowMatch = rowRegex.exec(tableXml);
+      }
+
+      if (parsedRows.length) {
+        const firstRow = Array.isArray(parsedRows[0]) ? parsedRows[0] : [];
+        const hasHeader = firstRow.some((cell) => trimText(cell) && trimText(cell) !== '未明确');
+        const header = hasHeader ? firstRow : [];
+        const bodyRows = hasHeader ? parsedRows.slice(1) : parsedRows;
+        const columnCount = parsedRows.reduce((acc, row) => Math.max(acc, Array.isArray(row) ? row.length : 0), 0);
+        const previewRows = parsedRows.slice(0, 3).map((row) => row.join(' | ')).filter(Boolean);
+        const mergedText = parsedRows.flat().join(' ');
+        tables.push({
+          table_index: tables.length + 1,
+          row_count: parsedRows.length,
+          column_count: columnCount,
+          header,
+          rows: bodyRows.slice(0, maxRows),
+          summary: normalizeAnalysisText(previewRows.join('；'), 480),
+          keywords: extractKeywords(mergedText, 16),
+        });
+      }
+      tableMatch = tableRegex.exec(xml);
+    }
+    return tables;
+  } catch {
+    return [];
+  }
+};
+
+const resolveBidVersionSearchText = async (version) => {
+  if (!version) return '';
+  const rawExt = trimText(version.source_ext).toLowerCase();
+  const ext = rawExt.startsWith('.') ? rawExt : `.${rawExt}`;
+  const sourcePath = trimText(version.storage_path);
+  if (!sourcePath) return '';
+
+  if (ext === '.docx') return extractDocxSearchText(sourcePath);
+  if (ext === '.doc') {
+    const tempDir = path.join(EDITABLE_ROOT, `compare-${Date.now()}-${crypto.randomUUID()}`);
+    let convertedPath = '';
+    try {
+      convertedPath = await runLibreOfficeConvert(sourcePath, tempDir, 'docx');
+      return extractDocxSearchText(convertedPath);
+    } catch {
+      return '';
+    } finally {
+      if (convertedPath) {
+        await deleteFileSafe(convertedPath);
+      }
+      try {
+        await fs.promises.rm(tempDir, { recursive: true, force: true });
+      } catch {
+        // ignore temp cleanup error
+      }
+    }
+  }
+  return '';
+};
+
+const sanitizeSampleRow = (row) => {
+  if (!row || typeof row !== 'object') return row;
+  return {
+    ...row,
+    sample_no: fixMojibakeText(row.sample_no),
+    title: fixMojibakeText(row.title),
+    original_file_name: fixMojibakeText(row.original_file_name),
+    uploaded_by_name: fixMojibakeText(row.uploaded_by_name),
+    parse_error: fixMojibakeText(row.parse_error),
+  };
+};
+
+const sanitizeGenerateJobRow = (row) => {
+  if (!row || typeof row !== 'object') return row;
+  return {
+    ...row,
+    bid_category: normalizeBidCategory(row.bid_category) || trimText(row.bid_category),
+    source_file_name: fixMojibakeText(row.source_file_name),
+    model_name: fixMojibakeText(row.model_name),
+    operator_name: fixMojibakeText(row.operator_name),
+    warning_text: fixMojibakeText(row.warning_text),
+    error_message: fixMojibakeText(row.error_message),
+  };
+};
+
+const sanitizeDocTemplateRow = (row) => {
+  if (!row || typeof row !== 'object') return row;
+  return {
+    ...row,
+    template_no: fixMojibakeText(row.template_no),
+    template_name: fixMojibakeText(row.template_name),
+    original_file_name: fixMojibakeText(row.original_file_name),
+    created_by_name: fixMojibakeText(row.created_by_name),
+    updated_by_name: fixMojibakeText(row.updated_by_name),
+  };
+};
+
+const buildSampleNo = async () => {
+  const day = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+  const prefix = `SP-${day}-`;
+  const row = await get('SELECT COUNT(1) AS count FROM tender_bid_samples WHERE sample_no LIKE ?', [`${prefix}%`]);
+  const seq = String(Number(row?.count || 0) + 1).padStart(4, '0');
+  return `${prefix}${seq}`;
+};
+
+const buildDocTemplateNo = async () => {
+  const day = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+  const prefix = `DT-${day}-`;
+  const row = await get('SELECT COUNT(1) AS count FROM tender_doc_templates WHERE template_no LIKE ?', [`${prefix}%`]);
+  const seq = String(Number(row?.count || 0) + 1).padStart(4, '0');
+  return `${prefix}${seq}`;
+};
+
+const normalizeAnalysisText = (value, maxLen = BID_ANALYZE_MAX_TEXT) => {
+  const compact = String(value || '')
+    .replace(/\r\n/g, '\n')
+    .replace(/\u00a0/g, ' ')
+    .replace(/[ \t]+/g, ' ')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+  if (!compact) return '';
+  return compact.slice(0, maxLen);
+};
+
+const toLines = (value) =>
+  String(value || '')
+    .replace(/\r\n/g, '\n')
+    .split(/\n+/)
+    .map((line) => trimText(line))
+    .filter(Boolean);
+
+const summarizeSectionText = (value, maxLen = 320) => {
+  const text = normalizeAnalysisText(value, 24000);
+  if (!text) return '';
+  if (text.length <= maxLen) return text;
+  return `${text.slice(0, maxLen)}...`;
+};
+
+const findSectionStartIndex = (text, aliases = []) => {
+  let best = -1;
+  for (const alias of aliases) {
+    if (!alias) continue;
+    const escaped = alias.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const patterns = [
+      new RegExp(`(^|\\n)\\s*(第[一二三四五六七八九十0-9]+[章节部分条款项]\\s*)?${escaped}(\\s|\\n|$)`),
+      new RegExp(`(^|\\n)\\s*[0-9一二三四五六七八九十]+[、\\.．]\\s*${escaped}(\\s|\\n|$)`),
+      new RegExp(`(^|\\n)\\s*${escaped}(\\s|\\n|$)`),
+    ];
+    for (const pattern of patterns) {
+      const matched = pattern.exec(text);
+      if (!matched) continue;
+      const idx = matched.index + (matched[1] ? matched[1].length : 0);
+      if (best === -1 || idx < best) best = idx;
+    }
+
+    const looseIdx = text.indexOf(alias);
+    if (looseIdx >= 0 && (best === -1 || looseIdx < best)) best = looseIdx;
+  }
+  return best;
+};
+
+const countLinesBeforeIndex = (text, index) => {
+  const source = String(text || '');
+  const end = Math.max(0, Math.min(Number(index) || 0, source.length));
+  if (!end) return 1;
+  let lines = 1;
+  for (let i = 0; i < end; i += 1) {
+    if (source.charCodeAt(i) === 10) lines += 1;
+  }
+  return lines;
+};
+
+const splitTenderSections = (inputText) => {
+  const text = normalizeAnalysisText(inputText, BID_ANALYZE_MAX_TEXT);
+  const markers = [];
+  for (const def of tenderSectionDefs) {
+    const index = findSectionStartIndex(text, def.aliases);
+    if (index >= 0) markers.push({ ...def, index });
+  }
+
+  markers.sort((a, b) => a.index - b.index);
+  const sectionMap = {};
+  const sectionList = [];
+
+  if (!markers.length) {
+    const summary = summarizeSectionText(text, 420);
+    const totalLines = toLines(text).length || (text ? 1 : 0);
+    for (const def of tenderSectionDefs) {
+      const payload = {
+        section_key: def.key,
+        section_title: def.title,
+        text: def.key === 'INVITATION' ? text : '',
+        summary: def.key === 'INVITATION' ? summary : '',
+        start_index: def.key === 'INVITATION' ? 0 : null,
+        end_index: def.key === 'INVITATION' ? text.length : null,
+        start_line: def.key === 'INVITATION' ? 1 : null,
+        end_line: def.key === 'INVITATION' ? totalLines : null,
+      };
+      sectionMap[def.key] = payload;
+      sectionList.push(payload);
+    }
+    return { sectionMap, sectionList };
+  }
+
+  for (let i = 0; i < markers.length; i += 1) {
+    const current = markers[i];
+    const next = markers[i + 1];
+    const start = current.index;
+    const end = next ? next.index : text.length;
+    const startLine = countLinesBeforeIndex(text, start);
+    const endLine = countLinesBeforeIndex(text, Math.max(start, end));
+    const block = normalizeAnalysisText(text.slice(start, end), 80000);
+    const payload = {
+      section_key: current.key,
+      section_title: current.title,
+      text: block,
+      summary: summarizeSectionText(block, 420),
+      start_index: start,
+      end_index: end,
+      start_line: startLine,
+      end_line: endLine,
+    };
+    sectionMap[current.key] = payload;
+  }
+
+  for (const def of tenderSectionDefs) {
+    const item = sectionMap[def.key] || {
+      section_key: def.key,
+      section_title: def.title,
+      text: '',
+      summary: '',
+      start_index: null,
+      end_index: null,
+      start_line: null,
+      end_line: null,
+    };
+    sectionMap[def.key] = item;
+    sectionList.push(item);
+  }
+
+  return { sectionMap, sectionList };
+};
+
+const extractPlainTextTableBlocks = (inputText, options = {}) => {
+  const maxTables = Math.max(1, Math.min(40, Number(options.maxTables || 20)));
+  const maxRows = Math.max(1, Math.min(400, Number(options.maxRows || 160)));
+  const maxCols = Math.max(2, Math.min(40, Number(options.maxCols || 16)));
+  const lines = toLines(inputText);
+  if (!lines.length) return [];
+
+  const groups = [];
+  let current = [];
+  const flush = () => {
+    if (current.length >= 2) groups.push(current);
+    current = [];
+  };
+
+  for (const line of lines) {
+    const hasPipe = line.includes('|') && line.split('|').filter((item) => trimText(item)).length >= 2;
+    const hasTab = line.includes('\t') && line.split('\t').filter((item) => trimText(item)).length >= 2;
+    if (hasPipe || hasTab) {
+      current.push(line);
+    } else {
+      flush();
+    }
+  }
+  flush();
+
+  const tables = [];
+  for (const group of groups) {
+    if (tables.length >= maxTables) break;
+    const rows = group
+      .slice(0, maxRows)
+      .map((line) => {
+        const rawCells = line.includes('|') ? line.split('|') : line.split('\t');
+        return rawCells
+          .map((cell) => normalizeSearchText(cell, 200))
+          .filter((cell, idx) => idx < maxCols)
+          .map((cell) => cell || '未明确');
+      })
+      .filter((row) => row.some((cell) => trimText(cell) && trimText(cell) !== '未明确'));
+
+    if (!rows.length) continue;
+    const header = rows[0] || [];
+    const body = rows.slice(1);
+    const columnCount = rows.reduce((acc, row) => Math.max(acc, row.length), 0);
+    const previewRows = rows.slice(0, 3).map((row) => row.join(' | ')).filter(Boolean);
+    const mergedText = rows.flat().join(' ');
+    tables.push({
+      table_index: tables.length + 1,
+      row_count: rows.length,
+      column_count: columnCount,
+      header,
+      rows: body,
+      summary: normalizeAnalysisText(previewRows.join('；'), 480),
+      keywords: extractKeywords(mergedText, 16),
+    });
+  }
+
+  return tables;
+};
+
+const tableKeywordGroups = {
+  SCORE_TABLE: ['评分', '分值', '得分', '评审', '打分', '综合评分', '评分标准'],
+  PRICE_TABLE: ['报价', '价格', '最高限价', '分项报价', '单价', '总价'],
+  PERSONNEL_TABLE: ['项目经理', '负责人', '工程师', '驻场', '人员', '团队', '证书'],
+  SLA_TABLE: ['响应时间', '恢复时间', '可用性', '故障处理', 'SLA', '服务级别'],
+  RISK_TABLE: ['无效投标', '废标', '否决', '实质性', '不满足', '负偏离', '★', '▲'],
+  CONTRACT_TABLE: ['违约责任', '扣款', '考核', '付款', '履约', '合同'],
+};
+
+const inferTableType = (table = {}) => {
+  const merged = trimText([
+    ...(Array.isArray(table.header) ? table.header : []),
+    ...((Array.isArray(table.rows) ? table.rows : []).flat()),
+    table.summary,
+  ].join(' '));
+  if (!merged) return 'GENERAL_TABLE';
+  for (const [type, keywords] of Object.entries(tableKeywordGroups)) {
+    if (keywords.some((key) => merged.includes(key))) return type;
+  }
+  return 'GENERAL_TABLE';
+};
+
+const findBestSectionForTable = (table = {}, sectionList = []) => {
+  const keywords = Array.isArray(table.keywords) ? table.keywords.filter(Boolean).slice(0, 10) : [];
+  const tableType = inferTableType(table);
+  if (!keywords.length) {
+    if (tableType === 'SCORE_TABLE') {
+      return { section_key: 'SCORE_TABLE', section_title: '评分表' };
+    }
+    return { section_key: 'ATTACHMENT', section_title: '附件' };
+  }
+
+  let best = null;
+  for (const section of sectionList) {
+    const text = trimText(section?.text);
+    if (!text) continue;
+    let score = 0;
+    for (const token of keywords) {
+      if (token && text.includes(token)) score += 1;
+    }
+    if (!best || score > best.score) {
+      best = {
+        score,
+        section_key: trimText(section?.section_key) || 'ATTACHMENT',
+        section_title: trimText(section?.section_title) || '附件',
+      };
+    }
+  }
+
+  if (best && best.score > 0) return best;
+  if (tableType === 'SCORE_TABLE') {
+    return { section_key: 'SCORE_TABLE', section_title: '评分表' };
+  }
+  return { section_key: 'ATTACHMENT', section_title: '附件' };
+};
+
+const buildTableSummaries = ({ tables = [], sectionList = [] }) =>
+  tables.map((table, idx) => {
+    const located = findBestSectionForTable(table, sectionList);
+    return {
+      table_index: Number(table.table_index || idx + 1),
+      table_type: inferTableType(table),
+      section_key: located.section_key,
+      section_title: located.section_title,
+      row_count: Number(table.row_count || 0),
+      column_count: Number(table.column_count || 0),
+      header: Array.isArray(table.header) ? table.header : [],
+      rows: Array.isArray(table.rows) ? table.rows.slice(0, 220) : [],
+      summary: trimText(table.summary) || '未明确',
+      keywords: Array.isArray(table.keywords) ? table.keywords.slice(0, 20) : [],
+    };
+  });
+
+const wordStopList = new Set([
+  '根据',
+  '以及',
+  '其中',
+  '可以',
+  '进行',
+  '相关',
+  '本项目',
+  '项目',
+  '投标',
+  '招标',
+  '采购',
+  '内容',
+  '文件',
+  '要求',
+  '条款',
+  '标准',
+  '合同',
+  '附件',
+  '格式',
+  '规定',
+  '单位',
+  '工作',
+  '服务',
+  '必须',
+  '不得',
+]);
+
+const extractKeywords = (value, limit = 40) => {
+  const text = normalizeAnalysisText(value, 200000);
+  if (!text) return [];
+  const tokens = text
+    .replace(/[^\u4e00-\u9fa5a-zA-Z0-9]+/g, ' ')
+    .split(/\s+/)
+    .map((token) => trimText(token).toLowerCase())
+    .filter((token) => token.length >= 2 && token.length <= 24 && !wordStopList.has(token));
+
+  const score = new Map();
+  for (const token of tokens) {
+    score.set(token, Number(score.get(token) || 0) + 1);
+  }
+  return Array.from(score.entries())
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, limit)
+    .map((item) => item[0]);
+};
+
+const detectBidCategoryFromText = (text) => {
+  const serviceWords = ['服务', '驻场', '运维', '维保', '咨询', '顾问', '实施服务', '技术服务', '培训服务'];
+  const productWords = ['货物', '产品', '设备', '器材', '硬件', '采购清单', '品牌', '型号', '规格参数'];
+  const serviceHit = serviceWords.reduce((acc, word) => (text.includes(word) ? acc + 1 : acc), 0);
+  const productHit = productWords.reduce((acc, word) => (text.includes(word) ? acc + 1 : acc), 0);
+  if (!serviceHit && !productHit) return '';
+  if (serviceHit >= productHit) return 'SERVICE';
+  return 'PRODUCT';
+};
+
+const detectBidFeatures = (inputText) => {
+  const text = normalizeAnalysisText(inputText, BID_ANALYZE_MAX_TEXT);
+  const keywords = extractKeywords(text, 50);
+
+  const detectFeature = (candidates) => {
+    for (const item of candidates) {
+      if (item.words.some((word) => text.includes(word))) return item.name;
+    }
+    return '未识别';
+  };
+
+  const projectType = detectFeature([
+    { name: '信息化建设', words: ['信息化', '系统集成', '平台建设', '软件开发'] },
+    { name: '工程建设', words: ['工程', '施工', '监理', '造价'] },
+    { name: '运维服务', words: ['运维', '驻场', '巡检', '保障服务'] },
+    { name: '咨询服务', words: ['咨询', '顾问', '评估', '规划'] },
+  ]);
+  const industry = detectFeature([
+    { name: '政府采购', words: ['政府采购', '财政', '公共资源交易', '采购人'] },
+    { name: '教育行业', words: ['学校', '教育局', '学院', '校园'] },
+    { name: '医疗行业', words: ['医院', '医疗', '卫健', '卫生健康'] },
+    { name: '能源行业', words: ['电力', '能源', '燃气', '石化'] },
+  ]);
+  const procurementMode = detectFeature([
+    { name: '公开招标', words: ['公开招标'] },
+    { name: '竞争性磋商', words: ['竞争性磋商'] },
+    { name: '竞争性谈判', words: ['竞争性谈判'] },
+    { name: '询价采购', words: ['询价'] },
+    { name: '单一来源', words: ['单一来源'] },
+  ]);
+
+  return {
+    project_type: projectType,
+    industry,
+    procurement_mode: procurementMode,
+    bid_category: detectBidCategoryFromText(text),
+    keywords,
+  };
+};
+
+const containsAny = (text, words) => words.some((word) => text.includes(word));
+
+const buildRuleAnalyzeItems = ({ sectionList = [] }) => {
+  const scoringWords = ['得分', '加分', '评分', '分值', '优秀', '优先', '能力', '业绩', '资质'];
+  const riskWords = ['否决', '无效', '废标', '扣分', '不予', '不符合', '必须', '不得', '拒绝', '逾期', '未提供'];
+  const highRiskWords = ['否决', '无效', '废标', '必须', '不得'];
+
+  const scoring = [];
+  const risks = [];
+  const scoreDedup = new Set();
+  const riskDedup = new Set();
+
+  for (const section of sectionList) {
+    const lines = toLines(section.text).slice(0, 300);
+    for (const rawLine of lines) {
+      const line = trimText(rawLine).replace(/^[-*•\d.、()\s]+/, '');
+      if (!line || line.length < 8) continue;
+
+      if (containsAny(line, scoringWords)) {
+        const key = `${section.section_key}:${line.slice(0, 80)}`;
+        if (!scoreDedup.has(key)) {
+          scoreDedup.add(key);
+          scoring.push({
+            section_key: section.section_key,
+            section_title: section.section_title,
+            title: line.slice(0, 180),
+            evidence: line.slice(0, 300),
+            suggestion: '建议在投标文件中提供可核验的证明材料并对应评分条款逐条响应。',
+          });
+        }
+      }
+
+      if (containsAny(line, riskWords)) {
+        const key = `${section.section_key}:${line.slice(0, 80)}`;
+        if (!riskDedup.has(key)) {
+          riskDedup.add(key);
+          const riskLevel = containsAny(line, highRiskWords) ? 'HIGH' : 'MEDIUM';
+          risks.push({
+            section_key: section.section_key,
+            section_title: section.section_title,
+            title: line.slice(0, 180),
+            evidence: line.slice(0, 300),
+            suggestion: riskLevel === 'HIGH'
+              ? '该条属于硬约束，需在成稿前逐条核对并补齐佐证。'
+              : '建议在响应条款中补充说明，避免因细节缺失导致扣分。',
+            risk_level: riskLevel,
+          });
+        }
+      }
+    }
+  }
+
+  return {
+    scoring_items: scoring.slice(0, 200),
+    risk_items: risks.slice(0, 200),
+  };
+};
+
+const isUnclearText = (value) => {
+  const text = trimText(value);
+  return !text || text === '未明确';
+};
+
+const hasMeaningfulList = (value) =>
+  Array.isArray(value) && value.some((item) => {
+    const text = trimText(item);
+    return text && text !== '未明确';
+  });
+
+const toClauseLines = (value) => {
+  const source = String(value || '').replace(/\r\n/g, '\n');
+  if (!trimText(source)) return [];
+  const lines = source
+    .split(/\n+/)
+    .flatMap((line) => String(line || '').split(/[。；;！？!?]/u))
+    .map((line) => trimText(line).replace(/^[-*•\d.、()\s]+/u, ''))
+    .filter((line) => line.length >= 4);
+  const dedup = [];
+  const seen = new Set();
+  for (const line of lines) {
+    const clipped = line.length > 360 ? line.slice(0, 360) : line;
+    if (seen.has(clipped)) continue;
+    seen.add(clipped);
+    dedup.push(clipped);
+  }
+  return dedup;
+};
+
+const collectSectionClauseLines = (sectionList = [], sectionKeys = []) => {
+  const keys = new Set((Array.isArray(sectionKeys) ? sectionKeys : []).map((item) => trimText(item).toUpperCase()).filter(Boolean));
+  const rows = [];
+  for (const section of Array.isArray(sectionList) ? sectionList : []) {
+    const sectionKey = trimText(section?.section_key).toUpperCase();
+    if (keys.size && !keys.has(sectionKey)) continue;
+    rows.push(...toClauseLines(section?.text));
+  }
+  return rows;
+};
+
+const extractClauseMatches = ({ sectionList = [], sectionKeys = [], keywords = [], limit = 12, minLen = 6 }) => {
+  const lines = collectSectionClauseLines(sectionList, sectionKeys);
+  const words = (Array.isArray(keywords) ? keywords : []).map((item) => trimText(item)).filter(Boolean);
+  if (!lines.length || !words.length) return [];
+  const matched = [];
+  const seen = new Set();
+  for (const line of lines) {
+    if (line.length < minLen) continue;
+    if (!words.some((word) => line.includes(word))) continue;
+    if (seen.has(line)) continue;
+    seen.add(line);
+    matched.push(line);
+    if (matched.length >= limit) break;
+  }
+  return matched;
+};
+
+const hasMeaningfulParamRows = (value) =>
+  Array.isArray(value) && value.some((row) => {
+    if (!isPlainObject(row)) return false;
+    const requirement = trimText(row.param_requirement || row.param_name);
+    return requirement && requirement !== '未明确';
+  });
+
+const hasMeaningfulServiceItems = (value) =>
+  Array.isArray(value) && value.some((row) => {
+    if (!isPlainObject(row)) return false;
+    const scope = trimText(row.service_scope);
+    const delivery = trimText(row.delivery_content);
+    return (scope && scope !== '未明确') || (delivery && delivery !== '未明确');
+  });
+
+const hasMeaningfulSlaItems = (value) =>
+  Array.isArray(value) && value.some((row) => {
+    if (!isPlainObject(row)) return false;
+    const requirement = trimText(row.indicator_requirement);
+    return requirement && requirement !== '未明确';
+  });
+
+const enrichAnalyzeFinalJsonByRules = ({ finalJson = {}, sectionList = [], bidCategory = 'SERVICE' }) => {
+  const category = normalizeBidCategory(bidCategory) || 'SERVICE';
+  const next = normalizeFinalAnalyzeJson(finalJson, category);
+  const changedFields = [];
+  const productKeywords = resolveStageKeywordGroups('PRODUCT');
+  const serviceKeywords = resolveStageKeywordGroups('SERVICE');
+  const mark = (fieldPath) => {
+    if (!changedFields.includes(fieldPath)) changedFields.push(fieldPath);
+  };
+
+  const setTextIfUnclear = (obj, key, value, fieldPath) => {
+    const text = trimText(value);
+    if (!text) return;
+    if (isUnclearText(obj?.[key])) {
+      obj[key] = text;
+      mark(fieldPath);
+    }
+  };
+  const setListIfEmpty = (obj, key, list, fieldPath) => {
+    if (hasMeaningfulList(obj?.[key])) return;
+    const rows = (Array.isArray(list) ? list : [])
+      .map((item) => trimText(item))
+      .filter((item) => item && item !== '未明确');
+    if (!rows.length) return;
+    obj[key] = Array.from(new Set(rows));
+    mark(fieldPath);
+  };
+
+  const businessSourceKeys = ['CONTRACT_TERMS', 'BIDDER_INSTRUCTION_TABLE', 'BIDDER_INSTRUCTION', 'ATTACHMENT'];
+  const documentSourceKeys = ['BID_DOC_FORMAT', 'BIDDER_INSTRUCTION_TABLE', 'BIDDER_INSTRUCTION', 'ATTACHMENT'];
+  const business = isPlainObject(next.business_performance_rules) ? next.business_performance_rules : {};
+  const docRules = isPlainObject(next.bid_document_production_rules) ? next.bid_document_production_rules : {};
+
+  setTextIfUnclear(
+    business,
+    'payment_terms',
+    extractClauseMatches({
+      sectionList,
+      sectionKeys: businessSourceKeys,
+      keywords: ['付款', '支付', '结算', '发票', '价款'],
+      limit: 1,
+    })[0],
+    'business_performance_rules.payment_terms'
+  );
+  setTextIfUnclear(
+    business,
+    'performance_bond_rules',
+    extractClauseMatches({
+      sectionList,
+      sectionKeys: businessSourceKeys,
+      keywords: ['履约保证', '履约保函', '保证金'],
+      limit: 1,
+    })[0],
+    'business_performance_rules.performance_bond_rules'
+  );
+  setTextIfUnclear(
+    business,
+    'intellectual_property_rules',
+    extractClauseMatches({
+      sectionList,
+      sectionKeys: businessSourceKeys,
+      keywords: ['知识产权', '保密', '著作权', '商业秘密'],
+      limit: 1,
+    })[0],
+    'business_performance_rules.intellectual_property_rules'
+  );
+  setTextIfUnclear(
+    business,
+    'liability_for_breach_of_contract',
+    extractClauseMatches({
+      sectionList,
+      sectionKeys: businessSourceKeys,
+      keywords: ['违约责任', '扣款', '罚款', '考核'],
+      limit: 1,
+    })[0],
+    'business_performance_rules.liability_for_breach_of_contract'
+  );
+  setTextIfUnclear(
+    business,
+    'renewal_rules',
+    extractClauseMatches({
+      sectionList,
+      sectionKeys: businessSourceKeys,
+      keywords: ['续约', '续签', '延长', '展期'],
+      limit: 1,
+    })[0],
+    'business_performance_rules.renewal_rules'
+  );
+  setListIfEmpty(
+    business,
+    'other_business_rules',
+    extractClauseMatches({
+      sectionList,
+      sectionKeys: businessSourceKeys,
+      keywords: [...serviceKeywords.contract, ...productKeywords.contract, ...serviceKeywords.price],
+      limit: 10,
+    }),
+    'business_performance_rules.other_business_rules'
+  );
+
+  setListIfEmpty(
+    docRules,
+    'document_composition_list',
+    extractClauseMatches({
+      sectionList,
+      sectionKeys: documentSourceKeys,
+      keywords: ['投标文件', '组成', '格式', '目录', '清单', '应包含'],
+      limit: 14,
+    }),
+    'bid_document_production_rules.document_composition_list'
+  );
+  setTextIfUnclear(
+    docRules,
+    'deviation_table_rules',
+    extractClauseMatches({
+      sectionList,
+      sectionKeys: documentSourceKeys,
+      keywords: ['偏离表', '技术偏离', '商务偏离', '响应偏离'],
+      limit: 1,
+    })[0],
+    'bid_document_production_rules.deviation_table_rules'
+  );
+  setTextIfUnclear(
+    docRules,
+    'file_format_requirements',
+    extractClauseMatches({
+      sectionList,
+      sectionKeys: documentSourceKeys,
+      keywords: ['文件格式', 'Word', 'PDF', '字体', '页码', '装订'],
+      limit: 1,
+    })[0],
+    'bid_document_production_rules.file_format_requirements'
+  );
+  setTextIfUnclear(
+    docRules,
+    'copy_requirements',
+    extractClauseMatches({
+      sectionList,
+      sectionKeys: documentSourceKeys,
+      keywords: ['正本', '副本', '份数', '电子版', '光盘'],
+      limit: 1,
+    })[0],
+    'bid_document_production_rules.copy_requirements'
+  );
+  setTextIfUnclear(
+    docRules,
+    'signature_seal_rules',
+    extractClauseMatches({
+      sectionList,
+      sectionKeys: documentSourceKeys,
+      keywords: ['签字', '盖章', '签章', '骑缝章', '法定代表人'],
+      limit: 1,
+    })[0],
+    'bid_document_production_rules.signature_seal_rules'
+  );
+  setTextIfUnclear(
+    docRules,
+    'sealing_rules',
+    extractClauseMatches({
+      sectionList,
+      sectionKeys: documentSourceKeys,
+      keywords: ['密封', '封装', '封袋', '包装'],
+      limit: 1,
+    })[0],
+    'bid_document_production_rules.sealing_rules'
+  );
+  setTextIfUnclear(
+    docRules,
+    'electronic_bid_rules',
+    extractClauseMatches({
+      sectionList,
+      sectionKeys: documentSourceKeys,
+      keywords: ['电子投标', '加密', '解密', '上传', '电子签章'],
+      limit: 1,
+    })[0],
+    'bid_document_production_rules.electronic_bid_rules'
+  );
+  setTextIfUnclear(
+    docRules,
+    'quotation_sheet_rules',
+    extractClauseMatches({
+      sectionList,
+      sectionKeys: documentSourceKeys,
+      keywords: ['报价一览表', '分项报价', '报价表', '报价清单'],
+      limit: 1,
+    })[0],
+    'bid_document_production_rules.quotation_sheet_rules'
+  );
+
+  if (category === 'PRODUCT') {
+    const detail = isPlainObject(next.goods_procurement_detail) ? next.goods_procurement_detail : {};
+    const techSourceKeys = ['PROCUREMENT_REQUIREMENT', 'TECH_PARAM_TABLE', 'ATTACHMENT', 'CONTRACT_TERMS'];
+    const paramLines = extractClauseMatches({
+      sectionList,
+      sectionKeys: ['TECH_PARAM_TABLE', 'PROCUREMENT_REQUIREMENT'],
+      keywords: [...productKeywords.technical, '规格', '参数', '配置', '性能'],
+      limit: 40,
+    });
+
+    setTextIfUnclear(
+      detail,
+      'delivery_period',
+      extractClauseMatches({
+        sectionList,
+        sectionKeys: techSourceKeys,
+        keywords: ['交付周期', '交货期', '实施周期', '供货周期', '交货时间'],
+        limit: 1,
+      })[0],
+      'goods_procurement_detail.delivery_period'
+    );
+    setTextIfUnclear(
+      detail,
+      'delivery_place',
+      extractClauseMatches({
+        sectionList,
+        sectionKeys: techSourceKeys,
+        keywords: ['交付地点', '交货地点', '收货地点', '服务地点'],
+        limit: 1,
+      })[0],
+      'goods_procurement_detail.delivery_place'
+    );
+    setListIfEmpty(
+      detail,
+      'implementation_requirements',
+      extractClauseMatches({
+        sectionList,
+        sectionKeys: techSourceKeys,
+        keywords: ['实施', '安装', '调试', '部署', '供货', '交付'],
+        limit: 12,
+      }),
+      'goods_procurement_detail.implementation_requirements'
+    );
+    setListIfEmpty(
+      detail,
+      'acceptance_requirements',
+      extractClauseMatches({
+        sectionList,
+        sectionKeys: techSourceKeys,
+        keywords: ['验收', '测试', '开箱', '交接'],
+        limit: 10,
+      }),
+      'goods_procurement_detail.acceptance_requirements'
+    );
+    setListIfEmpty(
+      detail,
+      'after_sales_requirements',
+      extractClauseMatches({
+        sectionList,
+        sectionKeys: techSourceKeys,
+        keywords: ['售后', '质保', '维保', '保修', '故障响应'],
+        limit: 10,
+      }),
+      'goods_procurement_detail.after_sales_requirements'
+    );
+    setListIfEmpty(
+      detail,
+      'manufacturer_authorization',
+      extractClauseMatches({
+        sectionList,
+        sectionKeys: techSourceKeys,
+        keywords: productKeywords.authorization,
+        limit: 8,
+      }),
+      'goods_procurement_detail.manufacturer_authorization'
+    );
+    setListIfEmpty(
+      detail,
+      'certification_requirements',
+      extractClauseMatches({
+        sectionList,
+        sectionKeys: techSourceKeys,
+        keywords: productKeywords.certification,
+        limit: 10,
+      }),
+      'goods_procurement_detail.certification_requirements'
+    );
+    setListIfEmpty(
+      detail,
+      'sample_requirements',
+      extractClauseMatches({
+        sectionList,
+        sectionKeys: techSourceKeys,
+        keywords: productKeywords.sample,
+        limit: 8,
+      }),
+      'goods_procurement_detail.sample_requirements'
+    );
+    setListIfEmpty(
+      detail,
+      'other_goods_requirements',
+      extractClauseMatches({
+        sectionList,
+        sectionKeys: techSourceKeys,
+        keywords: [...productKeywords.technical, ...productKeywords.price, ...productKeywords.contract],
+        limit: 12,
+      }),
+      'goods_procurement_detail.other_goods_requirements'
+    );
+
+    if (!hasMeaningfulParamRows(detail.core_mandatory_parameters) && paramLines.length) {
+      const rows = [];
+      for (const line of paramLines.slice(0, 30)) {
+        const isMandatory = line.includes('★') || line.includes('▲') || line.includes('实质性') ? '是' : '否';
+        const negativeInvalid = line.includes('负偏离') || line.includes('无效投标') || line.includes('废标') ? '是' : '否';
+        rows.push({
+          param_serial: String(rows.length + 1),
+          param_name: `参数${rows.length + 1}`,
+          param_requirement: line,
+          is_mandatory: isMandatory,
+          negative_deviation_invalid: negativeInvalid,
+        });
+      }
+      const mandatoryRows = rows.filter((item) => item.is_mandatory === '是');
+      if (mandatoryRows.length) {
+        detail.core_mandatory_parameters = mandatoryRows;
+        mark('goods_procurement_detail.core_mandatory_parameters');
+      }
+      const generalRows = rows.filter((item) => item.is_mandatory !== '是');
+      if (!hasMeaningfulParamRows(detail.general_parameters) && generalRows.length) {
+        detail.general_parameters = generalRows;
+        mark('goods_procurement_detail.general_parameters');
+      }
+    }
+
+    next.goods_procurement_detail = detail;
+  } else {
+    const detail = isPlainObject(next.service_procurement_detail) ? next.service_procurement_detail : {};
+    const serviceSourceKeys = ['PROCUREMENT_REQUIREMENT', 'CONTRACT_TERMS', 'ATTACHMENT'];
+
+    setTextIfUnclear(
+      detail,
+      'service_period',
+      extractClauseMatches({
+        sectionList,
+        sectionKeys: serviceSourceKeys,
+        keywords: ['服务期限', '合同履行期限', '履约期限', '服务期'],
+        limit: 1,
+      })[0],
+      'service_procurement_detail.service_period'
+    );
+    setTextIfUnclear(
+      detail,
+      'service_place',
+      extractClauseMatches({
+        sectionList,
+        sectionKeys: serviceSourceKeys,
+        keywords: ['服务地点', '实施地点', '驻场地点', '工作地点'],
+        limit: 1,
+      })[0],
+      'service_procurement_detail.service_place'
+    );
+    setTextIfUnclear(
+      detail,
+      'resident_requirement',
+      extractClauseMatches({
+        sectionList,
+        sectionKeys: serviceSourceKeys,
+        keywords: ['驻场', '现场服务', '7*24', '7×24', '工作日驻场'],
+        limit: 1,
+      })[0],
+      'service_procurement_detail.resident_requirement'
+    );
+    setListIfEmpty(
+      detail,
+      'service_implementation_requirements',
+      extractClauseMatches({
+        sectionList,
+        sectionKeys: serviceSourceKeys,
+        keywords: ['实施', '流程', '计划', '进度', '服务方案'],
+        limit: 12,
+      }),
+      'service_procurement_detail.service_implementation_requirements'
+    );
+    setListIfEmpty(
+      detail,
+      'quality_assurance_requirements',
+      extractClauseMatches({
+        sectionList,
+        sectionKeys: serviceSourceKeys,
+        keywords: ['质量保障', '质量管理', '保密', '考核', '质控'],
+        limit: 10,
+      }),
+      'service_procurement_detail.quality_assurance_requirements'
+    );
+    setListIfEmpty(
+      detail,
+      'emergency_response_requirements',
+      extractClauseMatches({
+        sectionList,
+        sectionKeys: serviceSourceKeys,
+        keywords: ['应急', '故障', '突发', '恢复', '响应时间'],
+        limit: 10,
+      }),
+      'service_procurement_detail.emergency_response_requirements'
+    );
+    setListIfEmpty(
+      detail,
+      'training_requirements',
+      extractClauseMatches({
+        sectionList,
+        sectionKeys: serviceSourceKeys,
+        keywords: ['培训', '交底', '演练'],
+        limit: 8,
+      }),
+      'service_procurement_detail.training_requirements'
+    );
+    setListIfEmpty(
+      detail,
+      'other_service_requirements',
+      extractClauseMatches({
+        sectionList,
+        sectionKeys: serviceSourceKeys,
+        keywords: [...serviceKeywords.technical, ...serviceKeywords.sla, ...serviceKeywords.personnel],
+        limit: 12,
+      }),
+      'service_procurement_detail.other_service_requirements'
+    );
+
+    if (!hasMeaningfulServiceItems(detail.service_content_list)) {
+      const rows = extractClauseMatches({
+        sectionList,
+        sectionKeys: serviceSourceKeys,
+        keywords: ['服务内容', '服务范围', '工作内容', '采购标的', '需求'],
+        limit: 10,
+      }).map((line, idx) => ({
+        item_serial: String(idx + 1),
+        service_item_name: `服务项${idx + 1}`,
+        service_scope: line,
+        service_frequency: '未明确',
+        delivery_content: '未明确',
+        is_mandatory: line.includes('★') || line.includes('▲') || line.includes('实质性') ? '是' : '否',
+        negative_deviation_invalid: line.includes('负偏离') || line.includes('无效投标') || line.includes('废标') ? '是' : '否',
+      }));
+      if (rows.length) {
+        detail.service_content_list = rows;
+        mark('service_procurement_detail.service_content_list');
+      }
+    }
+    if (!hasMeaningfulSlaItems(detail.core_sla_indicators)) {
+      const rows = extractClauseMatches({
+        sectionList,
+        sectionKeys: serviceSourceKeys,
+        keywords: serviceKeywords.sla,
+        limit: 10,
+      }).map((line, idx) => ({
+        indicator_serial: String(idx + 1),
+        indicator_name: `SLA指标${idx + 1}`,
+        indicator_requirement: line,
+        is_mandatory: line.includes('★') || line.includes('▲') || line.includes('实质性') ? '是' : '否',
+        negative_deviation_invalid: line.includes('负偏离') || line.includes('无效投标') || line.includes('废标') ? '是' : '否',
+      }));
+      if (rows.length) {
+        detail.core_sla_indicators = rows;
+        mark('service_procurement_detail.core_sla_indicators');
+      }
+    }
+    next.service_procurement_detail = detail;
+  }
+
+  next.business_performance_rules = business;
+  next.bid_document_production_rules = docRules;
+
+  return {
+    final_json: normalizeFinalAnalyzeJson(next, category),
+    filled_count: changedFields.length,
+    filled_fields: changedFields,
+  };
+};
+
+const extractSampleKeywordsFromSections = (sections = []) => {
+  const merged = sections.map((item) => item?.text || '').join('\n');
+  return extractKeywords(merged, 60);
+};
+
+const buildSampleFeatureRows = (sampleId, features = {}) => {
+  const list = [];
+  const pushFeature = (key, value, weight = 1) => {
+    const text = trimText(value);
+    if (!text || text === '未识别') return;
+    list.push({
+      sample_id: sampleId,
+      feature_key: key,
+      feature_value: text,
+      feature_weight: Number(weight),
+    });
+  };
+
+  pushFeature('project_type', features.project_type, 2.2);
+  pushFeature('industry', features.industry, 1.8);
+  pushFeature('procurement_mode', features.procurement_mode, 2.0);
+  pushFeature('bid_category', normalizeBidCategory(features.bid_category), 2.4);
+  const keywords = Array.isArray(features.keywords) ? features.keywords.slice(0, 30) : [];
+  for (const word of keywords) {
+    pushFeature('keyword', word, 0.2);
+  }
+  return list;
+};
+
+const rankMatchedSamples = ({ analyzeFeatures, analyzeSections, samples }) => {
+  const targetKeywords = new Set(Array.isArray(analyzeFeatures?.keywords) ? analyzeFeatures.keywords : []);
+  const targetSectionCount = (analyzeSections || []).filter((item) => trimText(item?.text)).length || 1;
+  const targetProjectType = trimText(analyzeFeatures?.project_type);
+  const targetIndustry = trimText(analyzeFeatures?.industry);
+  const targetMode = trimText(analyzeFeatures?.procurement_mode);
+  const targetBidCategory = normalizeBidCategory(analyzeFeatures?.bid_category);
+
+  const scored = [];
+  for (const sample of samples) {
+    const sampleKeywords = Array.isArray(sample.keywords) ? sample.keywords : [];
+    const sampleKeywordSet = new Set(sampleKeywords);
+    const sampleBidCategory = normalizeBidCategory(sample.bid_category);
+    let overlap = 0;
+    for (const token of targetKeywords) {
+      if (sampleKeywordSet.has(token)) overlap += 1;
+    }
+
+    const sectionCount = Number(sample.section_count || 0);
+    const sectionCoverage = Math.min(1, sectionCount / targetSectionCount);
+
+    let featureScore = 0;
+    if (targetProjectType && targetProjectType === trimText(sample.project_type)) featureScore += 0.32;
+    if (targetIndustry && targetIndustry === trimText(sample.industry)) featureScore += 0.24;
+    if (targetMode && targetMode === trimText(sample.procurement_mode)) featureScore += 0.24;
+    if (targetBidCategory && targetBidCategory === sampleBidCategory) featureScore += 0.36;
+    if (targetBidCategory && sampleBidCategory && targetBidCategory !== sampleBidCategory) featureScore -= 0.12;
+
+    const keywordScore = targetKeywords.size ? Math.min(1, overlap / targetKeywords.size) : 0;
+    const total = Number(Math.max(0, keywordScore * 0.44 + featureScore + sectionCoverage * 0.12).toFixed(4));
+    const reasonParts = [];
+    if (targetBidCategory && targetBidCategory === sampleBidCategory) {
+      reasonParts.push(`招标类型匹配：${bidCategoryLabel(targetBidCategory)}`);
+    } else if (targetBidCategory && sampleBidCategory && targetBidCategory !== sampleBidCategory) {
+      reasonParts.push(`招标类型不同：样本为${bidCategoryLabel(sampleBidCategory)}`);
+    }
+    if (targetProjectType && targetProjectType === trimText(sample.project_type)) reasonParts.push(`项目类型匹配：${targetProjectType}`);
+    if (targetIndustry && targetIndustry === trimText(sample.industry)) reasonParts.push(`行业匹配：${targetIndustry}`);
+    if (targetMode && targetMode === trimText(sample.procurement_mode)) reasonParts.push(`采购方式匹配：${targetMode}`);
+    if (overlap > 0) reasonParts.push(`关键词重合 ${overlap} 项`);
+    reasonParts.push(`章节覆盖 ${sectionCount}/${targetSectionCount}`);
+
+    scored.push({
+      sample_id: Number(sample.id),
+      sample_no: sample.sample_no,
+      title: sample.title,
+      original_file_name: sample.original_file_name,
+      score: total,
+      reason: reasonParts.join('，'),
+    });
+  }
+
+  return scored.sort((a, b) => b.score - a.score || a.sample_id - b.sample_id);
+};
+
+const textByExtFromStorage = async ({ sourcePath, sourceExt, maxLen = BID_ANALYZE_MAX_TEXT }) => {
+  const extRaw = trimText(sourceExt || path.extname(sourcePath)).toLowerCase();
+  const ext = extRaw.startsWith('.') ? extRaw : `.${extRaw}`;
+  if (!trimText(sourcePath)) return '';
+  if (ext === '.docx') {
+    return normalizeAnalysisText(await extractDocxSearchText(sourcePath), maxLen);
+  }
+
+  if (ext === '.doc' || ext === '.pdf') {
+    const tempDir = path.join(EDITABLE_ROOT, `parse-${Date.now()}-${crypto.randomUUID()}`);
+    let convertedPath = '';
+    try {
+      convertedPath = await runLibreOfficeConvert(sourcePath, tempDir, 'docx');
+      return normalizeAnalysisText(await extractDocxSearchText(convertedPath), maxLen);
+    } finally {
+      if (convertedPath) await deleteFileSafe(convertedPath);
+      try {
+        await fs.promises.rm(tempDir, { recursive: true, force: true });
+      } catch {
+        // ignore
+      }
+    }
+  }
+
+  return '';
+};
+
+const tablesByExtFromStorage = async ({ sourcePath, sourceExt, sourceText = '' }) => {
+  const extRaw = trimText(sourceExt || path.extname(sourcePath)).toLowerCase();
+  const ext = extRaw.startsWith('.') ? extRaw : `.${extRaw}`;
+  if (!trimText(sourcePath)) return [];
+
+  if (ext === '.docx') {
+    const docxTables = await extractDocxTableBlocks(sourcePath, { maxTables: 50, maxRows: 220, maxCols: 20 });
+    if (docxTables.length) return docxTables;
+    return extractPlainTextTableBlocks(sourceText, { maxTables: 30, maxRows: 180, maxCols: 16 });
+  }
+
+  if (ext === '.doc' || ext === '.pdf') {
+    const tempDir = path.join(EDITABLE_ROOT, `parse-table-${Date.now()}-${crypto.randomUUID()}`);
+    let convertedPath = '';
+    try {
+      convertedPath = await runLibreOfficeConvert(sourcePath, tempDir, 'docx');
+      const docxTables = await extractDocxTableBlocks(convertedPath, { maxTables: 50, maxRows: 220, maxCols: 20 });
+      if (docxTables.length) return docxTables;
+      return extractPlainTextTableBlocks(sourceText, { maxTables: 30, maxRows: 180, maxCols: 16 });
+    } finally {
+      if (convertedPath) await deleteFileSafe(convertedPath);
+      try {
+        await fs.promises.rm(tempDir, { recursive: true, force: true });
+      } catch {
+        // ignore
+      }
+    }
+  }
+
+  return [];
+};
+
+const composeAnalysisSummary = ({ sections, tables, scoringItems, riskItems, warnings = [] }) => ({
+  section_count: Array.isArray(sections) ? sections.length : 0,
+  table_count: Array.isArray(tables) ? tables.length : 0,
+  scoring_count: Array.isArray(scoringItems) ? scoringItems.length : 0,
+  risk_count: Array.isArray(riskItems) ? riskItems.length : 0,
+  warning_count: Array.isArray(warnings) ? warnings.length : 0,
+});
+
+const isPlainObject = (value) => value && typeof value === 'object' && !Array.isArray(value);
+
+const createServiceFinalAnalyzeSchema = () => ({
+  project_core_info: {
+    project_full_name: '未明确',
+    project_code: '未明确',
+    government_procurement_code: '未明确',
+    project_type: '服务类',
+    service_category: '未明确',
+    procurement_mode: '未明确',
+    buyer_full_name: '未明确',
+    buyer_contact: '未明确',
+    agency_full_name: '未明确',
+    agency_contact: '未明确',
+    fund_source: '未明确',
+    project_budget: '未明确',
+    max_bid_price: '未明确',
+    bid_validity_days: '未明确',
+    bid_file_get_time: '未明确',
+    bid_submission_deadline: '未明确',
+    bid_opening_time: '未明确',
+    bid_opening_place: '未明确',
+    bid_submission_mode: '未明确',
+    consortium_allowed: '未明确',
+    consortium_requirements: ['未明确'],
+  },
+  bidder_qualification_requirements: {
+    main_body_qualification: ['未明确'],
+    industry_access_qualification: ['未明确'],
+    system_certification_requirements: ['未明确'],
+    financial_requirements: ['未明确'],
+    performance_requirements: ['未明确'],
+    credit_requirements: ['未明确'],
+    other_qualification: ['未明确'],
+  },
+  invalid_bid_full_clauses: {
+    qualification_invalid_clauses: ['未明确'],
+    compliance_invalid_clauses: ['未明确'],
+    personnel_invalid_clauses: ['未明确'],
+    service_scheme_invalid_clauses: ['未明确'],
+    sla_invalid_clauses: ['未明确'],
+    business_invalid_clauses: ['未明确'],
+    quotation_invalid_clauses: ['未明确'],
+    signature_seal_invalid_clauses: ['未明确'],
+    other_invalid_clauses: ['未明确'],
+  },
+  service_procurement_detail: {
+    service_period: '未明确',
+    service_place: '未明确',
+    resident_requirement: '未明确',
+    service_content_list: [
+      {
+        item_serial: '未明确',
+        service_item_name: '未明确',
+        service_scope: '未明确',
+        service_frequency: '未明确',
+        delivery_content: '未明确',
+        is_mandatory: '否',
+        negative_deviation_invalid: '否',
+      },
+    ],
+    core_sla_indicators: [
+      {
+        indicator_serial: '未明确',
+        indicator_name: '未明确',
+        indicator_requirement: '未明确',
+        is_mandatory: '否',
+        negative_deviation_invalid: '否',
+      },
+    ],
+    core_personnel_requirements: [
+      {
+        position_serial: '未明确',
+        position_name: '未明确',
+        required_number: '未明确',
+        certificate_requirements: ['未明确'],
+        experience_requirements: ['未明确'],
+        other_requirements: ['未明确'],
+        is_mandatory: '否',
+        non_compliance_invalid: '否',
+      },
+    ],
+    service_implementation_requirements: ['未明确'],
+    quality_assurance_requirements: ['未明确'],
+    emergency_response_requirements: ['未明确'],
+    training_requirements: ['未明确'],
+    acceptance_rules: {
+      acceptance_stage: '未明确',
+      acceptance_standard: '未明确',
+      acceptance_delivery: '未明确',
+    },
+    other_service_requirements: ['未明确'],
+  },
+  evaluation_full_criteria: {
+    evaluation_method: '未明确',
+    total_full_score: '未明确',
+    price_score_rules: {
+      full_score: '未明确',
+      score_calculation_formula: '未明确',
+      price_deduction_policy: ['未明确'],
+    },
+    technical_score_items: [
+      {
+        item_serial: '未明确',
+        score_item_name: '未明确',
+        full_score: '未明确',
+        scoring_standard: '未明确',
+        risk_level: '中',
+        bid_response_module: '未明确',
+        response_required_materials: ['未明确'],
+      },
+    ],
+    personnel_score_items: [
+      {
+        item_serial: '未明确',
+        score_item_name: '未明确',
+        full_score: '未明确',
+        scoring_standard: '未明确',
+        risk_level: '中',
+        bid_response_module: '未明确',
+        response_required_materials: ['未明确'],
+      },
+    ],
+    business_score_items: [
+      {
+        item_serial: '未明确',
+        score_item_name: '未明确',
+        full_score: '未明确',
+        scoring_standard: '未明确',
+        risk_level: '中',
+        bid_response_module: '未明确',
+        response_required_materials: ['未明确'],
+      },
+    ],
+    policy_preference_score_items: [
+      {
+        item_serial: '未明确',
+        score_item_name: '未明确',
+        full_score: '未明确',
+        scoring_standard: '未明确',
+      },
+    ],
+  },
+  business_performance_rules: {
+    payment_terms: '未明确',
+    performance_bond_rules: '未明确',
+    intellectual_property_rules: '未明确',
+    liability_for_breach_of_contract: '未明确',
+    renewal_rules: '未明确',
+    other_business_rules: ['未明确'],
+  },
+  bid_document_production_rules: {
+    document_composition_list: ['未明确'],
+    deviation_table_rules: '未明确',
+    file_format_requirements: '未明确',
+    copy_requirements: '未明确',
+    signature_seal_rules: '未明确',
+    sealing_rules: '未明确',
+    electronic_bid_rules: '未明确',
+    quotation_sheet_rules: '未明确',
+  },
+  bid_self_inspection_list: {
+    high_risk_check_items: ['未明确'],
+    medium_risk_check_items: ['未明确'],
+    low_risk_check_items: ['未明确'],
+  },
+  other_key_notes: ['未明确'],
+});
+
+const createProductFinalAnalyzeSchema = () => ({
+  project_core_info: {
+    project_full_name: '未明确',
+    project_code: '未明确',
+    government_procurement_code: '未明确',
+    project_type: '产品类',
+    goods_category: '未明确',
+    procurement_mode: '未明确',
+    buyer_full_name: '未明确',
+    buyer_contact: '未明确',
+    agency_full_name: '未明确',
+    agency_contact: '未明确',
+    fund_source: '未明确',
+    project_budget: '未明确',
+    max_bid_price: '未明确',
+    bid_validity_days: '未明确',
+    bid_file_get_time: '未明确',
+    bid_submission_deadline: '未明确',
+    bid_opening_time: '未明确',
+    bid_opening_place: '未明确',
+    bid_submission_mode: '未明确',
+    consortium_allowed: '未明确',
+    consortium_requirements: ['未明确'],
+  },
+  bidder_qualification_requirements: {
+    main_body_qualification: ['未明确'],
+    industry_access_qualification: ['未明确'],
+    system_certification_requirements: ['未明确'],
+    financial_requirements: ['未明确'],
+    performance_requirements: ['未明确'],
+    credit_requirements: ['未明确'],
+    other_qualification: ['未明确'],
+  },
+  mandatory_clause_list: ['未明确'],
+  invalid_bid_full_clauses: {
+    qualification_invalid_clauses: ['未明确'],
+    compliance_invalid_clauses: ['未明确'],
+    personnel_invalid_clauses: ['未明确'],
+    service_scheme_invalid_clauses: ['未明确'],
+    sla_invalid_clauses: ['未明确'],
+    business_invalid_clauses: ['未明确'],
+    quotation_invalid_clauses: ['未明确'],
+    signature_seal_invalid_clauses: ['未明确'],
+    other_invalid_clauses: ['未明确'],
+  },
+  goods_procurement_detail: {
+    delivery_period: '未明确',
+    delivery_place: '未明确',
+    core_mandatory_parameters: [
+      {
+        param_serial: '未明确',
+        param_name: '未明确',
+        param_requirement: '未明确',
+        is_mandatory: '否',
+        negative_deviation_invalid: '否',
+      },
+    ],
+    general_parameters: [
+      {
+        param_serial: '未明确',
+        param_name: '未明确',
+        param_requirement: '未明确',
+        is_mandatory: '否',
+        negative_deviation_invalid: '否',
+      },
+    ],
+    manufacturer_authorization: ['未明确'],
+    certification_requirements: ['未明确'],
+    sample_requirements: ['未明确'],
+    implementation_requirements: ['未明确'],
+    acceptance_requirements: ['未明确'],
+    after_sales_requirements: ['未明确'],
+    other_goods_requirements: ['未明确'],
+  },
+  core_product_info: {
+    core_product_name: '未明确',
+    same_brand_rule: '未明确',
+    rule_description: '未明确',
+  },
+  evaluation_full_criteria: {
+    evaluation_method: '未明确',
+    total_full_score: '未明确',
+    price_score_rules: {
+      full_score: '未明确',
+      score_calculation_formula: '未明确',
+      price_deduction_policy: ['未明确'],
+    },
+    technical_score_items: [
+      {
+        item_serial: '未明确',
+        score_item_name: '未明确',
+        full_score: '未明确',
+        scoring_standard: '未明确',
+        risk_level: '中',
+        bid_response_module: '技术参数响应',
+        response_required_materials: ['未明确'],
+      },
+    ],
+    personnel_score_items: [
+      {
+        item_serial: '未明确',
+        score_item_name: '未明确',
+        full_score: '未明确',
+        scoring_standard: '未明确',
+        risk_level: '中',
+        bid_response_module: '团队与人员响应',
+        response_required_materials: ['未明确'],
+      },
+    ],
+    business_score_items: [
+      {
+        item_serial: '未明确',
+        score_item_name: '未明确',
+        full_score: '未明确',
+        scoring_standard: '未明确',
+        risk_level: '中',
+        bid_response_module: '商务响应',
+        response_required_materials: ['未明确'],
+      },
+    ],
+    policy_preference_score_items: [
+      {
+        item_serial: '未明确',
+        score_item_name: '未明确',
+        full_score: '未明确',
+        scoring_standard: '未明确',
+      },
+    ],
+  },
+  evaluation_score_matrix: [
+    {
+      score_category: '未明确',
+      score_item_name: '未明确',
+      full_score: '未明确',
+      scoring_standard: '未明确',
+      risk_level: '中',
+      bid_response_module: '未明确',
+      response_required_materials: ['未明确'],
+    },
+  ],
+  technical_deviation_table: [
+    {
+      param_serial: '未明确',
+      param_name: '未明确',
+      tender_requirement: '未明确',
+      bid_response: '未明确',
+      deviation: '无偏离',
+    },
+  ],
+  business_performance_rules: {
+    payment_terms: '未明确',
+    performance_bond_rules: '未明确',
+    intellectual_property_rules: '未明确',
+    liability_for_breach_of_contract: '未明确',
+    renewal_rules: '未明确',
+    other_business_rules: ['未明确'],
+  },
+  bid_document_production_rules: {
+    document_composition_list: ['未明确'],
+    deviation_table_rules: '未明确',
+    file_format_requirements: '未明确',
+    copy_requirements: '未明确',
+    signature_seal_rules: '未明确',
+    sealing_rules: '未明确',
+    electronic_bid_rules: '未明确',
+    quotation_sheet_rules: '未明确',
+  },
+  bid_self_inspection_list: {
+    high_risk_check_items: ['未明确'],
+    medium_risk_check_items: ['未明确'],
+    low_risk_check_items: ['未明确'],
+  },
+  other_key_notes: ['未明确'],
+});
+
+const createFinalAnalyzeSchema = (bidCategory = 'SERVICE') => {
+  const category = normalizeBidCategory(bidCategory) || 'SERVICE';
+  return category === 'PRODUCT' ? createProductFinalAnalyzeSchema() : createServiceFinalAnalyzeSchema();
+};
+
+const normalizeStringOrUnclear = (value, fallback = '未明确') => trimText(value) || fallback;
+
+const normalizeStringArray = (value, fallback = '未明确') => {
+  if (!Array.isArray(value)) return [fallback];
+  const seen = new Set();
+  const rows = [];
+  for (const item of value) {
+    const text = trimText(item);
+    if (!text) continue;
+    if (seen.has(text)) continue;
+    seen.add(text);
+    rows.push(text);
+  }
+  return rows.length ? rows : [fallback];
+};
+
+const mergeBySchema = (schema, input) => {
+  if (typeof schema === 'string') return normalizeStringOrUnclear(input, schema || '未明确');
+  if (Array.isArray(schema)) {
+    if (schema.length === 1 && typeof schema[0] === 'string') {
+      return normalizeStringArray(input, schema[0] || '未明确');
+    }
+    if (schema.length === 1 && isPlainObject(schema[0])) {
+      if (!Array.isArray(input)) return [];
+      const rows = input
+        .filter((item) => isPlainObject(item))
+        .map((item) => mergeBySchema(schema[0], item));
+      return rows.length ? rows : [];
+    }
+    if (!Array.isArray(input)) return [];
+    return input;
+  }
+  if (!isPlainObject(schema)) return schema;
+  const source = isPlainObject(input) ? input : {};
+  const output = {};
+  for (const key of Object.keys(schema)) {
+    output[key] = mergeBySchema(schema[key], source[key]);
+  }
+  return output;
+};
+
+const normalizeProductEvaluationScoreMatrix = (finalJson = {}) => {
+  const matrixRows = Array.isArray(finalJson?.evaluation_score_matrix) ? finalJson.evaluation_score_matrix : [];
+  const listRows = [];
+  const push = (row) => {
+    const normalized = {
+      score_category: normalizeStringOrUnclear(row?.score_category),
+      score_item_name: normalizeStringOrUnclear(row?.score_item_name),
+      full_score: normalizeStringOrUnclear(row?.full_score),
+      scoring_standard: normalizeStringOrUnclear(row?.scoring_standard),
+      risk_level: normalizeStringOrUnclear(row?.risk_level, '中'),
+      bid_response_module: normalizeStringOrUnclear(row?.bid_response_module),
+      response_required_materials: normalizeStringArray(row?.response_required_materials, '未明确'),
+    };
+    listRows.push(normalized);
+  };
+
+  for (const row of matrixRows) {
+    if (!isPlainObject(row)) continue;
+    if (!trimText(row.score_item_name) || trimText(row.score_item_name) === '未明确') continue;
+    push(row);
+  }
+
+  const groups = [
+    { key: 'technical_score_items', label: '技术分' },
+    { key: 'personnel_score_items', label: '人员分' },
+    { key: 'business_score_items', label: '商务分' },
+    { key: 'policy_preference_score_items', label: '政策加分' },
+  ];
+  for (const group of groups) {
+    const rows = Array.isArray(finalJson?.evaluation_full_criteria?.[group.key])
+      ? finalJson.evaluation_full_criteria[group.key]
+      : [];
+    for (const item of rows) {
+      if (!isPlainObject(item) || !trimText(item.score_item_name) || trimText(item.score_item_name) === '未明确') continue;
+      push({
+        score_category: group.label,
+        score_item_name: item.score_item_name,
+        full_score: item.full_score,
+        scoring_standard: item.scoring_standard,
+        risk_level: item.risk_level,
+        bid_response_module: item.bid_response_module,
+        response_required_materials: item.response_required_materials,
+      });
+    }
+  }
+
+  const dedup = new Set();
+  const uniqueRows = listRows.filter((item) => {
+    const key = `${trimText(item.score_category)}::${trimText(item.score_item_name)}::${trimText(item.scoring_standard)}`;
+    if (!trimText(item.score_item_name) || dedup.has(key)) return false;
+    dedup.add(key);
+    return true;
+  });
+  return uniqueRows.length ? uniqueRows : createProductFinalAnalyzeSchema().evaluation_score_matrix;
+};
+
+const normalizeProductTechnicalDeviationTable = (finalJson = {}) => {
+  const inputRows = Array.isArray(finalJson?.technical_deviation_table) ? finalJson.technical_deviation_table : [];
+  const normalizedRows = [];
+  for (const row of inputRows) {
+    if (!isPlainObject(row)) continue;
+    const requirement = trimText(row.tender_requirement || row.param_requirement || row.param_name);
+    if (!requirement || requirement === '未明确') continue;
+    normalizedRows.push({
+      param_serial: normalizeStringOrUnclear(row.param_serial),
+      param_name: normalizeStringOrUnclear(row.param_name),
+      tender_requirement: normalizeStringOrUnclear(row.tender_requirement || row.param_requirement),
+      bid_response: normalizeStringOrUnclear(row.bid_response || row.bidder_response),
+      deviation: normalizeStringOrUnclear(row.deviation || row.deviation_note, '无偏离'),
+    });
+  }
+
+  if (normalizedRows.length) return normalizedRows;
+  const detail = isPlainObject(finalJson?.goods_procurement_detail) ? finalJson.goods_procurement_detail : {};
+  const core = Array.isArray(detail.core_mandatory_parameters) ? detail.core_mandatory_parameters : [];
+  const general = Array.isArray(detail.general_parameters) ? detail.general_parameters : [];
+  for (const row of [...core, ...general]) {
+    if (!isPlainObject(row)) continue;
+    const requirement = trimText(row.param_requirement || row.param_name);
+    if (!requirement || requirement === '未明确') continue;
+    normalizedRows.push({
+      param_serial: normalizeStringOrUnclear(row.param_serial),
+      param_name: normalizeStringOrUnclear(row.param_name),
+      tender_requirement: normalizeStringOrUnclear(row.param_requirement || row.param_name),
+      bid_response: '已响应，详见技术参数响应表',
+      deviation: '无偏离',
+    });
+  }
+
+  return normalizedRows.length ? normalizedRows : createProductFinalAnalyzeSchema().technical_deviation_table;
+};
+
+const normalizeFinalAnalyzeJson = (raw, bidCategory = 'SERVICE') => {
+  const source = isPlainObject(raw?.final_json) ? raw.final_json : (isPlainObject(raw) ? raw : {});
+  const inferred = normalizeBidCategory(bidCategory)
+    || normalizeBidCategory(source?.project_core_info?.project_type)
+    || 'SERVICE';
+  const schema = createFinalAnalyzeSchema(inferred);
+  const normalized = mergeBySchema(schema, source);
+  if (normalized?.project_core_info) {
+    normalized.project_core_info.project_type = bidCategoryLabel(inferred);
+  }
+  if (inferred === 'PRODUCT') {
+    normalized.evaluation_score_matrix = normalizeProductEvaluationScoreMatrix(normalized);
+    normalized.technical_deviation_table = normalizeProductTechnicalDeviationTable(normalized);
+  }
+  return normalized;
+};
+
+const buildRequiredChapterScan = (sectionList = []) =>
+  REQUIRED_ANALYZE_CHAPTERS.map((def) => {
+    const matched = sectionList.find((item) => trimText(item?.section_key) === def.key && trimText(item?.text));
+    const hit = !!matched;
+    return {
+      chapter_key: def.key,
+      chapter_title: def.title,
+      chapter_status: hit ? '已定位' : '未找到',
+      start_line: Number.isFinite(Number(matched?.start_line)) ? Number(matched.start_line) : null,
+      end_line: Number.isFinite(Number(matched?.end_line)) ? Number(matched.end_line) : null,
+    };
+  });
+
+const estimatePageNumberByLine = (lineNo) => {
+  const parsed = Number(lineNo);
+  if (!Number.isFinite(parsed) || parsed <= 0) return '未明确';
+  return String(Math.max(1, Math.floor((parsed - 1) / ANALYZE_ESTIMATED_LINES_PER_PAGE) + 1));
+};
+
+const tokenizeEvidenceNeedles = (value, limit = 12) => {
+  const base = trimText(value);
+  if (!base || base === '未明确') return [];
+  const tokens = [];
+  const push = (token) => {
+    const text = trimText(token);
+    if (!text) return;
+    if (tokens.includes(text)) return;
+    tokens.push(text);
+  };
+
+  push(base.slice(0, 96));
+  const words = base
+    .replace(/[^\u4e00-\u9fa5a-zA-Z0-9]+/g, ' ')
+    .split(/\s+/)
+    .map((item) => trimText(item))
+    .filter((item) => item.length >= 2 && item.length <= 24)
+    .sort((a, b) => b.length - a.length);
+  for (const word of words) {
+    push(word);
+    if (tokens.length >= limit) break;
+  }
+  return tokens.slice(0, limit);
+};
+
+const buildSourceReferenceFromSection = ({ section, lineIndex = 0, excerpt = '', fallbackChapter = '未明确' }) => {
+  const startLine = Number.isFinite(Number(section?.start_line)) ? Number(section.start_line) : 1;
+  const lineNumber = Math.max(1, startLine + Math.max(0, Number(lineIndex) || 0));
+  const chapter = trimText(section?.section_title) || fallbackChapter || '未明确';
+  return {
+    chapter,
+    page_number: estimatePageNumberByLine(lineNumber),
+    line_number: String(lineNumber),
+    excerpt: trimText(excerpt).slice(0, 360) || '未明确',
+  };
+};
+
+const locateSourceReference = ({ sectionList = [], preferredChapter = '', primaryText = '', secondaryText = '', fallbackChapter = '未明确' }) => {
+  const sections = Array.isArray(sectionList) ? sectionList : [];
+  const chapter = trimText(preferredChapter);
+  const needles = [
+    ...tokenizeEvidenceNeedles(primaryText, 10),
+    ...tokenizeEvidenceNeedles(secondaryText, 6),
+  ].filter(Boolean);
+
+  const chapterFirst = chapter
+    ? sections.filter((item) => trimText(item?.section_title) === chapter || trimText(item?.section_key) === chapter)
+    : [];
+  const candidates = [...chapterFirst, ...sections.filter((item) => !chapterFirst.includes(item))];
+
+  for (const section of candidates) {
+    const lines = toLines(section?.text).slice(0, 1800);
+    if (!lines.length) continue;
+    for (let idx = 0; idx < lines.length; idx += 1) {
+      const line = trimText(lines[idx]);
+      if (!line) continue;
+      if (!needles.length || needles.some((needle) => needle && line.includes(needle))) {
+        return buildSourceReferenceFromSection({
+          section,
+          lineIndex: idx,
+          excerpt: line,
+          fallbackChapter: chapter || fallbackChapter,
+        });
+      }
+    }
+  }
+
+  const fallbackSection = candidates.find((item) => trimText(item?.text))
+    || sections.find((item) => trimText(item?.text));
+  if (fallbackSection) {
+    const excerpt = toLines(fallbackSection.text)[0] || primaryText || secondaryText || '未明确';
+    return buildSourceReferenceFromSection({
+      section: fallbackSection,
+      lineIndex: 0,
+      excerpt,
+      fallbackChapter: chapter || fallbackChapter,
+    });
+  }
+
+  return {
+    chapter: chapter || fallbackChapter || '未明确',
+    page_number: '未明确',
+    line_number: '未明确',
+    excerpt: trimText(primaryText || secondaryText).slice(0, 360) || '未明确',
+  };
+};
+
+const enrichStage1RiskClausesBySource = (rows = [], sectionList = []) =>
+  normalizeStage1RiskClauses(rows).map((item) => {
+    const resolved = locateSourceReference({
+      sectionList,
+      preferredChapter: trimText(item?.source_reference?.chapter),
+      primaryText: trimText(item?.clause_content),
+      secondaryText: trimText(item?.trigger_keyword),
+      fallbackChapter: '风险条款',
+    });
+    return {
+      ...item,
+      source_reference: {
+        chapter: trimText(item?.source_reference?.chapter) || resolved.chapter,
+        page_number: trimText(item?.source_reference?.page_number) || resolved.page_number,
+        line_number: trimText(item?.source_reference?.line_number) || resolved.line_number,
+        excerpt: trimText(item?.source_reference?.excerpt) || resolved.excerpt,
+      },
+    };
+  });
+
+const enrichStage3MissingItemsBySource = (rows = [], sectionList = []) =>
+  normalizeStage3MissingItems(rows).map((item) => {
+    const resolved = locateSourceReference({
+      sectionList,
+      preferredChapter: trimText(item?.source_reference?.chapter),
+      primaryText: trimText(item?.missing_content),
+      secondaryText: trimText(item?.item_type),
+      fallbackChapter: '交叉校验',
+    });
+    return {
+      ...item,
+      source_reference: {
+        chapter: trimText(item?.source_reference?.chapter) || resolved.chapter,
+        page_number: trimText(item?.source_reference?.page_number) || resolved.page_number,
+        line_number: trimText(item?.source_reference?.line_number) || resolved.line_number,
+        excerpt: trimText(item?.source_reference?.excerpt) || resolved.excerpt,
+      },
+    };
+  });
+
+const enrichGenerateItemsBySource = (rows = [], sectionList = []) =>
+  (Array.isArray(rows) ? rows : []).map((item) => {
+    const resolved = locateSourceReference({
+      sectionList,
+      preferredChapter: trimText(item?.section_title || item?.section_key),
+      primaryText: trimText(item?.evidence || item?.title),
+      secondaryText: trimText(item?.title),
+      fallbackChapter: trimText(item?.section_title) || '未明确',
+    });
+    return {
+      ...item,
+      source_reference: resolved,
+    };
+  });
+
+const buildAnalyzeQualityGate = ({
+  sourceText = '',
+  requiredChapterScan = [],
+  tableSummaries = [],
+  stage1RiskClauses = [],
+  scoreExtract = {},
+  productParamExtract = {},
+  bidCategory = 'SERVICE',
+  preflightOnly = false,
+}) => {
+  const textCharCount = String(sourceText || '').length;
+  const chapterRows = Array.isArray(requiredChapterScan) ? requiredChapterScan : [];
+  const chapterHitCount = chapterRows.filter((row) => trimText(row?.chapter_status) === '已定位').length;
+  const chapterTotalCount = chapterRows.length || REQUIRED_ANALYZE_CHAPTERS.length;
+  const chapterCoverage = chapterTotalCount > 0 ? Number((chapterHitCount / chapterTotalCount).toFixed(4)) : 0;
+  const chapterKeywordHitCount = REQUIRED_ANALYZE_CHAPTERS.filter((def) => {
+    const title = trimText(def?.title);
+    return title && String(sourceText || '').includes(title);
+  }).length;
+  const tableCount = Array.isArray(tableSummaries) ? tableSummaries.length : 0;
+  const scoreTableDetected = (Array.isArray(tableSummaries) ? tableSummaries : []).some((item) => {
+    const sectionKey = trimText(item?.section_key).toUpperCase();
+    const tableType = trimText(item?.table_type).toUpperCase();
+    const summary = trimText(item?.summary);
+    return sectionKey === 'SCORE_TABLE'
+      || tableType === 'SCORE_TABLE'
+      || summary.includes('评分')
+      || summary.includes('分值');
+  });
+  const productParamTableDetected = (Array.isArray(tableSummaries) ? tableSummaries : []).some((item) => isLikelyProductParamTable(item));
+  const mergedScoreCount = Number(scoreExtract?.merged_total_count || scoreExtract?.merged_count || 0);
+  const mergedParamCount = Number(productParamExtract?.table_param_merged_count || 0);
+  const riskClauseCount = Array.isArray(stage1RiskClauses) ? stage1RiskClauses.length : 0;
+  const normalizedCategory = normalizeBidCategory(bidCategory) || 'SERVICE';
+
+  const blockingIssues = [];
+  const warningIssues = [];
+
+  if (textCharCount < ANALYZE_MIN_TEXT_LENGTH) {
+    blockingIssues.push(`可解析文本长度不足（当前${textCharCount}字，至少需要${ANALYZE_MIN_TEXT_LENGTH}字）`);
+  }
+  if (chapterHitCount < ANALYZE_MIN_STRUCTURED_CHAPTER_HITS && tableCount === 0 && chapterKeywordHitCount < ANALYZE_MIN_STRUCTURED_CHAPTER_HITS) {
+    blockingIssues.push(`章节识别不足（结构命中${chapterHitCount}/${chapterTotalCount}，章节关键词命中${chapterKeywordHitCount}，且未识别到有效表格）`);
+  }
+  if (!preflightOnly && scoreTableDetected && mergedScoreCount <= 0) {
+    blockingIssues.push('检测到评分表，但未逐条提取评分项');
+  }
+
+  if (chapterCoverage < 0.35 && chapterTotalCount > 0) {
+    warningIssues.push(`章节识别覆盖率较低（${chapterHitCount}/${chapterTotalCount}）`);
+  }
+  if (!preflightOnly && riskClauseCount <= 0) {
+    warningIssues.push('未识别到风险条款，请人工复核废标/无效/实质性条款');
+  }
+  if (!preflightOnly && normalizedCategory === 'PRODUCT' && productParamTableDetected && mergedParamCount <= 0) {
+    warningIssues.push('检测到技术参数表，但未提取到结构化参数，请人工复核');
+  }
+
+  const status = blockingIssues.length ? 'BLOCK' : (warningIssues.length ? 'WARN' : 'PASS');
+  return {
+    status,
+    allow_generate: status !== 'BLOCK',
+    checks: {
+      text_char_count: textCharCount,
+      required_chapter_hit_count: chapterHitCount,
+      required_chapter_total: chapterTotalCount,
+      required_chapter_coverage: chapterCoverage,
+      required_chapter_keyword_hit_count: chapterKeywordHitCount,
+      table_count: tableCount,
+      score_table_detected: scoreTableDetected ? 1 : 0,
+      score_items_merged_count: mergedScoreCount,
+      product_param_table_detected: productParamTableDetected ? 1 : 0,
+      product_param_merged_count: mergedParamCount,
+      risk_clause_count: riskClauseCount,
+      bid_category: normalizedCategory,
+    },
+    blocking_issues: blockingIssues.length ? blockingIssues : ['无'],
+    warning_issues: warningIssues.length ? warningIssues : ['无'],
+  };
+};
+
+const normalizeStage1RiskClauses = (raw) => {
+  if (!Array.isArray(raw)) return [];
+  const dedup = new Set();
+  const rows = [];
+  for (let i = 0; i < raw.length; i += 1) {
+    const item = raw[i];
+    if (!isPlainObject(item)) continue;
+    const clauseContent = trimText(item.clause_content || item.missing_content);
+    if (!clauseContent) continue;
+    const clauseTypeRaw = trimText(item.clause_type).toUpperCase();
+    const clauseType = RISK_CLAUSE_TYPE_SET.has(clauseTypeRaw) ? clauseTypeRaw : 'OTHER_INVALID';
+    const chapter = trimText(item?.source_reference?.chapter);
+    const pageNumber = trimText(item?.source_reference?.page_number);
+    const lineNumber = trimText(item?.source_reference?.line_number);
+    const excerpt = trimText(item?.source_reference?.excerpt);
+    const key = `${clauseType}::${clauseContent}::${chapter}::${pageNumber}::${lineNumber}::${excerpt}`;
+    if (dedup.has(key)) continue;
+    dedup.add(key);
+    rows.push({
+      evidence_id: trimText(item.evidence_id) || `RISK-${String(i + 1).padStart(4, '0')}`,
+      clause_type: clauseType,
+      clause_content: clauseContent,
+      trigger_keyword: trimText(item.trigger_keyword) || '未明确',
+      risk_level: trimText(item.risk_level) === '中' ? '中' : '高',
+      source_reference: {
+        chapter: chapter || '未明确',
+        page_number: pageNumber || '未明确',
+        line_number: lineNumber || '未明确',
+        excerpt: excerpt || clauseContent.slice(0, 180) || '未明确',
+      },
+    });
+  }
+  return rows;
+};
+
+const inferClauseTypeByKeywords = (line, sectionKey, bidCategory = 'SERVICE') => {
+  const text = trimText(line);
+  const category = normalizeBidCategory(bidCategory) || 'SERVICE';
+  const groups = resolveStageKeywordGroups(category);
+  if (!text) return 'OTHER_INVALID';
+  if ((groups.price || []).some((key) => text.includes(key))) return 'QUOTATION_INVALID';
+  if ((groups.personnel || []).some((key) => text.includes(key))) return 'PERSONNEL_INVALID';
+  if ((groups.contract || []).some((key) => text.includes(key))) return 'BUSINESS_INVALID';
+  if ((groups.sla || []).some((key) => text.includes(key))) return 'SLA_INVALID';
+  if ((groups.technical || []).some((key) => text.includes(key))) return 'COMPLIANCE_INVALID';
+  if ((groups.authorization || []).some((key) => text.includes(key))) return 'QUALIFICATION_INVALID';
+  if ((groups.certification || []).some((key) => text.includes(key))) return 'QUALIFICATION_INVALID';
+  if ((groups.sample || []).some((key) => text.includes(key))) return 'COMPLIANCE_INVALID';
+  if (trimText(sectionKey) === 'CONTRACT_TERMS') return 'BUSINESS_INVALID';
+  if (trimText(sectionKey) === 'SCORING_STANDARD' || trimText(sectionKey) === 'SCORE_TABLE') return 'COMPLIANCE_INVALID';
+  return 'OTHER_INVALID';
+};
+
+const scanRiskClausesByKeywords = (sectionList = [], bidCategory = 'SERVICE') => {
+  const groups = resolveStageKeywordGroups(bidCategory);
+  const allKeywords = [
+    ...STAGE1_FORCE_KEYWORDS,
+    ...(groups.sla || []),
+    ...(groups.personnel || []),
+    ...(groups.price || []),
+    ...(groups.contract || []),
+    ...(groups.technical || []),
+    ...(groups.authorization || []),
+    ...(groups.certification || []),
+    ...(groups.sample || []),
+  ];
+  const rows = [];
+  for (const section of sectionList) {
+    const sectionKey = trimText(section?.section_key);
+    const sectionTitle = trimText(section?.section_title) || '未明确';
+    const lines = toLines(section?.text).slice(0, 600);
+    for (const lineRaw of lines) {
+      const line = trimText(lineRaw).replace(/^[-*•\d.、()\s]+/, '');
+      if (!line || line.length < 6) continue;
+      const hitKeyword = allKeywords.find((key) => line.includes(key));
+      if (!hitKeyword) continue;
+      rows.push({
+        evidence_id: '',
+        clause_type: inferClauseTypeByKeywords(line, sectionKey, bidCategory),
+        clause_content: line.slice(0, 500),
+        trigger_keyword: hitKeyword,
+        risk_level: '高',
+        source_reference: {
+          chapter: sectionTitle,
+          page_number: '未明确',
+        },
+      });
+    }
+  }
+  return normalizeStage1RiskClauses(rows);
+};
+
+const normalizeStage3MissingItems = (raw) => {
+  if (!Array.isArray(raw)) return [];
+  const dedup = new Set();
+  const rows = [];
+  for (const item of raw) {
+    if (!isPlainObject(item)) continue;
+    const itemTypeRaw = trimText(item.item_type).toUpperCase();
+    const itemType = MISSING_ITEM_TYPE_SET.has(itemTypeRaw) ? itemTypeRaw : '';
+    const missingContent = trimText(item.missing_content);
+    if (!itemType || !missingContent) continue;
+    const chapter = trimText(item?.source_reference?.chapter) || '未明确';
+    const pageNumber = trimText(item?.source_reference?.page_number) || '未明确';
+    const lineNumber = trimText(item?.source_reference?.line_number) || '未明确';
+    const excerpt = trimText(item?.source_reference?.excerpt) || missingContent.slice(0, 180) || '未明确';
+    const key = `${itemType}::${missingContent}::${chapter}::${pageNumber}::${lineNumber}::${excerpt}`;
+    if (dedup.has(key)) continue;
+    dedup.add(key);
+    rows.push({
+      item_type: itemType,
+      target_field_path: trimText(item.target_field_path),
+      missing_content: missingContent,
+      source_reference: {
+        chapter,
+        page_number: pageNumber,
+        line_number: lineNumber,
+        excerpt,
+      },
+    });
+  }
+  return rows;
+};
+
+const countKeywordCoverage = ({ sectionList = [], keywords = [] }) => {
+  const normalizedKeywords = Array.isArray(keywords)
+    ? keywords.map((item) => trimText(item)).filter(Boolean)
+    : [];
+  if (!normalizedKeywords.length) {
+    return {
+      hit_count: 0,
+      hit_keywords: [],
+      hit_examples: [],
+    };
+  }
+
+  const keywordSet = new Set();
+  const hitExamples = [];
+
+  for (const section of (Array.isArray(sectionList) ? sectionList : [])) {
+    const lines = toLines(section?.text).slice(0, 1200);
+    if (!lines.length) continue;
+    for (const line of lines) {
+      for (const keyword of normalizedKeywords) {
+        if (!line.includes(keyword)) continue;
+        keywordSet.add(keyword);
+        if (hitExamples.length < 6) {
+          hitExamples.push({
+            keyword,
+            chapter: trimText(section?.section_title) || '未明确',
+            excerpt: line.slice(0, 220),
+          });
+        }
+      }
+    }
+  }
+
+  return {
+    hit_count: keywordSet.size,
+    hit_keywords: Array.from(keywordSet),
+    hit_examples: hitExamples,
+  };
+};
+
+const buildRuleCoverageSummary = ({
+  sectionList = [],
+  bidCategory = 'SERVICE',
+  stage1RiskClauses = [],
+  scoreExtract = {},
+}) => {
+  const category = normalizeBidCategory(bidCategory) || 'SERVICE';
+  const groups = resolveStageKeywordGroups(category);
+  const forceRiskCoverage = countKeywordCoverage({
+    sectionList,
+    keywords: STAGE1_FORCE_KEYWORDS,
+  });
+  const quotationCoverage = countKeywordCoverage({
+    sectionList,
+    keywords: groups.price || [],
+  });
+  const personnelCoverage = countKeywordCoverage({
+    sectionList,
+    keywords: groups.personnel || [],
+  });
+  const slaOrTechCoverage = countKeywordCoverage({
+    sectionList,
+    keywords: category === 'PRODUCT' ? (groups.technical || []) : (groups.sla || []),
+  });
+  const scoringCoverage = countKeywordCoverage({
+    sectionList,
+    keywords: ['评分项', '评分标准', '评标办法', '综合评分法', '得分', '分值'],
+  });
+
+  const summaryItems = [
+    { item_type: 'INVALID_BID_CLAUSE', label: '废标/无效条款', coverage: forceRiskCoverage },
+    { item_type: 'QUOTATION_RULE', label: '报价规则', coverage: quotationCoverage },
+    { item_type: 'PERSONNEL_REQUIREMENT', label: '人员要求', coverage: personnelCoverage },
+    {
+      item_type: category === 'PRODUCT' ? 'TECH_PARAMETER' : 'SLA_INDICATOR',
+      label: category === 'PRODUCT' ? '技术参数' : 'SLA指标',
+      coverage: slaOrTechCoverage,
+    },
+    { item_type: 'SCORING_ITEM', label: '评分项', coverage: scoringCoverage },
+  ];
+
+  const missingItems = [];
+  for (const item of summaryItems) {
+    const coverage = item.coverage || { hit_count: 0, hit_keywords: [] };
+    if (Number(coverage.hit_count || 0) > 0) continue;
+    missingItems.push({
+      item_type: item.item_type,
+      target_field_path: '',
+      missing_content: `${item.label}未命中关键词，请人工复核该类条款`,
+      source_reference: {
+        chapter: '未明确',
+        page_number: '未明确',
+        line_number: '未明确',
+        excerpt: `关键词：${(Array.isArray(coverage.hit_keywords) && coverage.hit_keywords.length
+          ? coverage.hit_keywords
+          : (item.item_type === 'SCORING_ITEM' ? ['评分项', '评分标准'] : [])).join('、') || '未明确'}`,
+      },
+    });
+  }
+
+  const stage1Count = Array.isArray(stage1RiskClauses) ? stage1RiskClauses.length : 0;
+  if (stage1Count <= 0) {
+    missingItems.push({
+      item_type: 'INVALID_BID_CLAUSE',
+      target_field_path: '',
+      missing_content: '风险条款扫描结果为空，请人工复核废标/无效/否决条款',
+      source_reference: {
+        chapter: '风险扫描',
+        page_number: '未明确',
+        line_number: '未明确',
+        excerpt: `命中关键词数：${forceRiskCoverage.hit_count}`,
+      },
+    });
+  }
+
+  const mergedScoreCount = Number(scoreExtract?.merged_total_count || scoreExtract?.merged_count || 0);
+  if (Number(scoringCoverage.hit_count || 0) > 0 && mergedScoreCount <= 0) {
+    missingItems.push({
+      item_type: 'SCORING_ITEM',
+      target_field_path: '',
+      missing_content: '存在评分条款关键词但未形成结构化评分项，请人工复核评分表',
+      source_reference: {
+        chapter: '评分表',
+        page_number: '未明确',
+        line_number: '未明确',
+        excerpt: `评分关键词命中：${scoringCoverage.hit_keywords.join('、') || '未明确'}`,
+      },
+    });
+  }
+
+  return {
+    categories: summaryItems.map((item) => ({
+      item_type: item.item_type,
+      label: item.label,
+      hit_count: Number(item.coverage?.hit_count || 0),
+      hit_keywords: Array.isArray(item.coverage?.hit_keywords) ? item.coverage.hit_keywords : [],
+      hit_examples: Array.isArray(item.coverage?.hit_examples) ? item.coverage.hit_examples : [],
+    })),
+    missing_items: normalizeStage3MissingItems(missingItems),
+  };
+};
+
+const cloneJson = (value) => parseMaybeJson(JSON.stringify(value || {}), {});
+
+const pushUniqueText = (list, value) => {
+  const text = trimText(value);
+  const current = Array.isArray(list) ? list : [];
+  const filtered = current
+    .map((item) => trimText(item))
+    .filter((item) => item && item !== '未明确');
+  if (text && !filtered.includes(text)) filtered.push(text);
+  return filtered.length ? filtered : ['未明确'];
+};
+
+const mergeAnalyzeFinalJson = ({ stage2FinalJson, stage1RiskClauses = [], stage3MissingItems = [], bidCategory = 'SERVICE' }) => {
+  const normalizedBidCategory = normalizeBidCategory(bidCategory) || 'SERVICE';
+  const schema = createFinalAnalyzeSchema(normalizedBidCategory);
+  const merged = cloneJson(stage2FinalJson);
+  if (!isPlainObject(merged.bid_self_inspection_list)) merged.bid_self_inspection_list = {};
+  if (!isPlainObject(merged.invalid_bid_full_clauses)) merged.invalid_bid_full_clauses = {};
+  if (!isPlainObject(merged.service_procurement_detail)) merged.service_procurement_detail = {};
+  if (!isPlainObject(merged.goods_procurement_detail)) merged.goods_procurement_detail = {};
+  if (!isPlainObject(merged.bidder_qualification_requirements)) merged.bidder_qualification_requirements = {};
+  if (!Array.isArray(merged.other_key_notes)) merged.other_key_notes = [];
+  const invalid = isPlainObject(merged.invalid_bid_full_clauses) ? merged.invalid_bid_full_clauses : {};
+  for (const item of stage1RiskClauses) {
+    const targetKey = RISK_CLAUSE_TARGET_MAP[item.clause_type] || 'other_invalid_clauses';
+    invalid[targetKey] = pushUniqueText(invalid[targetKey], item.clause_content);
+  }
+  merged.invalid_bid_full_clauses = mergeBySchema(schema.invalid_bid_full_clauses, invalid);
+
+  const addMissingToList = (pathKey, value) => {
+    if (pathKey === 'bid_self_inspection_list.high_risk_check_items') {
+      merged.bid_self_inspection_list.high_risk_check_items = pushUniqueText(merged.bid_self_inspection_list.high_risk_check_items, value);
+      return;
+    }
+    if (pathKey === 'service_procurement_detail.other_service_requirements') {
+      if (normalizedBidCategory === 'PRODUCT') {
+        merged.goods_procurement_detail.other_goods_requirements = pushUniqueText(merged.goods_procurement_detail.other_goods_requirements, value);
+      } else {
+        merged.service_procurement_detail.other_service_requirements = pushUniqueText(merged.service_procurement_detail.other_service_requirements, value);
+      }
+      return;
+    }
+    if (pathKey === 'goods_procurement_detail.other_goods_requirements') {
+      if (normalizedBidCategory === 'PRODUCT') {
+        merged.goods_procurement_detail.other_goods_requirements = pushUniqueText(merged.goods_procurement_detail.other_goods_requirements, value);
+      } else {
+        merged.service_procurement_detail.other_service_requirements = pushUniqueText(merged.service_procurement_detail.other_service_requirements, value);
+      }
+      return;
+    }
+    if (pathKey === 'invalid_bid_full_clauses.other_invalid_clauses') {
+      merged.invalid_bid_full_clauses.other_invalid_clauses = pushUniqueText(merged.invalid_bid_full_clauses.other_invalid_clauses, value);
+      return;
+    }
+    merged.other_key_notes = pushUniqueText(merged.other_key_notes, value);
+  };
+
+  for (const item of stage3MissingItems) {
+    const targetFieldPath = trimText(item.target_field_path);
+    if (targetFieldPath) {
+      addMissingToList(targetFieldPath, item.missing_content);
+      continue;
+    }
+    if (item.item_type === 'INVALID_BID_CLAUSE') {
+      addMissingToList('invalid_bid_full_clauses.other_invalid_clauses', item.missing_content);
+    } else if (item.item_type === 'SUBSTANTIVE_REQUIREMENT') {
+      addMissingToList('bid_self_inspection_list.high_risk_check_items', item.missing_content);
+    } else if (item.item_type === 'SLA_INDICATOR' || item.item_type === 'TECH_PARAMETER') {
+      addMissingToList('service_procurement_detail.other_service_requirements', item.missing_content);
+    } else if (item.item_type === 'AUTH_REQUIREMENT') {
+      merged.bidder_qualification_requirements.other_qualification = pushUniqueText(
+        merged.bidder_qualification_requirements.other_qualification,
+        item.missing_content
+      );
+    } else if (item.item_type === 'CERTIFICATION_REQUIREMENT') {
+      merged.bidder_qualification_requirements.system_certification_requirements = pushUniqueText(
+        merged.bidder_qualification_requirements.system_certification_requirements,
+        item.missing_content
+      );
+    } else if (item.item_type === 'SAMPLE_REQUIREMENT') {
+      addMissingToList('goods_procurement_detail.other_goods_requirements', item.missing_content);
+    } else {
+      addMissingToList('', item.missing_content);
+    }
+  }
+
+  return normalizeFinalAnalyzeJson(merged, normalizedBidCategory);
+};
+
+const scoreItemHeaderWords = new Set([
+  '序号',
+  '评分项',
+  '评分项目',
+  '评审项',
+  '评审项目',
+  '评审内容',
+  '评分内容',
+  '评分因素',
+  '评分标准',
+  '分值',
+  '满分',
+  '得分',
+]);
+
+const inferScoreItemGroup = (name, standard) => {
+  const text = `${trimText(name)} ${trimText(standard)}`;
+  if (!text) return 'technical_score_items';
+  const personnelWords = ['人员', '团队', '项目经理', '负责人', '工程师', '驻场', '社保', '证书'];
+  const businessWords = ['商务', '业绩', '资质', '企业', '履约', '报价', '价格'];
+  const policyWords = ['中小企业', '节能', '环保', '残疾人', '监狱企业', '政策'];
+  if (personnelWords.some((word) => text.includes(word))) return 'personnel_score_items';
+  if (policyWords.some((word) => text.includes(word))) return 'policy_preference_score_items';
+  if (businessWords.some((word) => text.includes(word))) return 'business_score_items';
+  return 'technical_score_items';
+};
+
+const inferResponseModuleByName = (name, standard) => {
+  const text = `${trimText(name)} ${trimText(standard)}`;
+  if (['技术参数', '参数', '核心产品', '主要产品', '原厂授权', '样品', '样机'].some((word) => text.includes(word))) {
+    return '技术参数响应';
+  }
+  if (['项目经理', '负责人', '工程师', '团队', '人员'].some((word) => text.includes(word))) {
+    return '项目团队配置';
+  }
+  if (['业绩', '资质', '商务', '履约', '报价', '价格'].some((word) => text.includes(word))) {
+    return '商务响应与证明材料';
+  }
+  if (['应急', '故障', '恢复', 'SLA', '可用性'].some((word) => text.includes(word))) {
+    return '服务保障与应急方案';
+  }
+  return '服务实施方案';
+};
+
+const inferRiskLevelByScoreText = (name, standard) => {
+  const text = `${trimText(name)} ${trimText(standard)}`;
+  if (['★', '▲', '实质性', '否决', '无效', '废标', '不满足'].some((word) => text.includes(word))) return '高';
+  if (['必须', '应当', '不得'].some((word) => text.includes(word))) return '中';
+  return '中';
+};
+
+const parseScoreValueFromCells = (cells = []) => {
+  let fallback = null;
+  for (const cellRaw of cells) {
+    const cell = trimText(cellRaw);
+    if (!cell) continue;
+    const withUnit = cell.match(/([0-9]{1,3}(?:\.[0-9]+)?)\s*分/);
+    if (withUnit) {
+      const val = Number(withUnit[1]);
+      if (Number.isFinite(val) && val >= 0 && val <= 1000) return String(val);
+    }
+    const pure = cell.match(/^([0-9]{1,3}(?:\.[0-9]+)?)$/);
+    if (pure) {
+      const val = Number(pure[1]);
+      if (Number.isFinite(val) && val >= 0 && val <= 1000 && fallback === null) fallback = String(val);
+    }
+  }
+  return fallback || '未明确';
+};
+
+const pickScoreItemNameFromCells = (cells = []) => {
+  for (const cellRaw of cells) {
+    const cell = trimText(cellRaw);
+    if (!cell) continue;
+    if (scoreItemHeaderWords.has(cell)) continue;
+    if (/^[0-9]+(?:\.[0-9]+)?$/.test(cell)) continue;
+    if (/^第?[一二三四五六七八九十0-9]+[项条]?$/.test(cell)) continue;
+    return cell;
+  }
+  return '';
+};
+
+const buildScoreItemsFromTableSummaries = (tableSummaries = []) => {
+  const rows = [];
+  const dedup = new Set();
+  for (const table of (Array.isArray(tableSummaries) ? tableSummaries : [])) {
+    const sourceRows = [];
+    if (Array.isArray(table?.rows)) {
+      for (const row of table.rows) {
+        if (Array.isArray(row)) sourceRows.push(row);
+      }
+    }
+    for (let idx = 0; idx < sourceRows.length; idx += 1) {
+      const cells = sourceRows[idx].map((cell) => trimText(cell)).filter((cell) => cell);
+      if (!cells.length) continue;
+      const mergedLine = cells.join(' | ');
+      const hasScoreWord = ['评分', '得分', '分值', '满分', '评审'].some((word) => mergedLine.includes(word));
+      const hasScoreNumber = cells.some((cell) => /([0-9]{1,3}(?:\.[0-9]+)?)\s*分/.test(cell) || /^[0-9]{1,3}(?:\.[0-9]+)?$/.test(cell));
+      if (!hasScoreWord && !hasScoreNumber) continue;
+
+      const itemName = pickScoreItemNameFromCells(cells);
+      if (!itemName) continue;
+      const scoringStandard = normalizeAnalysisText(cells.slice(1).join('；') || mergedLine, 500);
+      const scoreKey = `${itemName}::${scoringStandard}`;
+      if (dedup.has(scoreKey)) continue;
+      dedup.add(scoreKey);
+
+      const fullScore = parseScoreValueFromCells(cells);
+      rows.push({
+        group_key: inferScoreItemGroup(itemName, scoringStandard),
+        item: {
+          item_serial: `${Number(table?.table_index || 0) || 1}-${idx + 1}`,
+          score_item_name: itemName,
+          full_score: fullScore,
+          scoring_standard: scoringStandard || '未明确',
+          risk_level: inferRiskLevelByScoreText(itemName, scoringStandard),
+          bid_response_module: inferResponseModuleByName(itemName, scoringStandard),
+          response_required_materials: ['未明确'],
+        },
+      });
+    }
+  }
+  return rows;
+};
+
+const buildScoreItemsFromRuleRows = (ruleRows = []) => {
+  const rows = [];
+  const dedup = new Set();
+  for (let idx = 0; idx < (Array.isArray(ruleRows) ? ruleRows.length : 0); idx += 1) {
+    const row = ruleRows[idx];
+    const itemName = trimText(row?.title);
+    if (!itemName || itemName === '未明确') continue;
+    const scoringStandard = trimText(row?.evidence || row?.evidence_text) || '未明确';
+    const key = `${itemName}::${scoringStandard}`;
+    if (dedup.has(key)) continue;
+    dedup.add(key);
+    rows.push({
+      group_key: inferScoreItemGroup(itemName, scoringStandard),
+      item: {
+        item_serial: `R-${idx + 1}`,
+        score_item_name: itemName,
+        full_score: '未明确',
+        scoring_standard: scoringStandard,
+        risk_level: trimText(row?.risk_level || '中').toUpperCase() === 'HIGH' ? '高' : '中',
+        bid_response_module: inferResponseModuleByName(itemName, scoringStandard),
+        response_required_materials: ['未明确'],
+      },
+    });
+  }
+  return rows;
+};
+
+const productParamHeaderWords = ['序号', '参数', '参数名称', '指标', '技术要求', '规格', '要求', '响应'];
+
+const isLikelyProductParamTable = (table = {}) => {
+  const sectionKey = trimText(table?.section_key).toUpperCase();
+  if (sectionKey === 'TECH_PARAM_TABLE' || sectionKey === 'PROCUREMENT_REQUIREMENT') return true;
+  const title = `${trimText(table?.section_title)} ${trimText(table?.table_name)}`;
+  if (['技术参数', '参数表', '技术指标', '规格参数', '采购需求'].some((word) => title.includes(word))) return true;
+  const rows = Array.isArray(table?.rows) ? table.rows : [];
+  const first = Array.isArray(rows[0]) ? rows[0].map((cell) => trimText(cell)).join(' ') : '';
+  return ['参数', '技术', '指标', '规格'].some((word) => first.includes(word));
+};
+
+const buildProductParametersFromTableSummaries = (tableSummaries = []) => {
+  const rows = [];
+  const dedup = new Set();
+  for (const table of (Array.isArray(tableSummaries) ? tableSummaries : [])) {
+    if (!isLikelyProductParamTable(table)) continue;
+    const sourceRows = Array.isArray(table?.rows) ? table.rows.filter((item) => Array.isArray(item)) : [];
+    if (!sourceRows.length) continue;
+
+    for (let idx = 0; idx < sourceRows.length; idx += 1) {
+      const cells = sourceRows[idx].map((cell) => trimText(cell)).filter((cell) => cell);
+      if (cells.length < 2) continue;
+      const mergedLine = cells.join(' | ');
+      const looksHeader = cells.every((cell) => productParamHeaderWords.some((word) => cell.includes(word)));
+      if (looksHeader) continue;
+
+      let serial = '';
+      let name = '';
+      let requirement = '';
+      if (/^(?:\d+|[一二三四五六七八九十]+)[\.\-、]?$/.test(cells[0])) {
+        serial = cells[0];
+        name = trimText(cells[1]);
+        requirement = trimText(cells.slice(2).join('；') || cells[1]);
+      } else if (cells.length >= 3) {
+        serial = `${Number(table?.table_index || 0) || 1}-${idx + 1}`;
+        name = trimText(cells[0]);
+        requirement = trimText(cells.slice(1).join('；'));
+      } else {
+        serial = `${Number(table?.table_index || 0) || 1}-${idx + 1}`;
+        name = trimText(cells[0]);
+        requirement = trimText(cells[1]);
+      }
+
+      if (!name || name === '未明确') continue;
+      if (!requirement || requirement === '未明确') continue;
+      if (['参数名称', '技术要求', '规格', '指标', '要求'].some((word) => `${name}${requirement}`.includes(word)) && idx === 0) continue;
+
+      const isMandatory = ['★', '▲', '*', '实质性', '必须', '不满足'].some((word) => mergedLine.includes(word));
+      const negativeInvalid = ['负偏离无效', '负偏离作废标处理', '不满足作无效投标处理', '不满足作废标处理'].some((word) => mergedLine.includes(word));
+      const key = `${name}::${requirement}`;
+      if (dedup.has(key)) continue;
+      dedup.add(key);
+      rows.push({
+        param_serial: serial || `${Number(table?.table_index || 0) || 1}-${idx + 1}`,
+        param_name: name,
+        param_requirement: requirement,
+        is_mandatory: isMandatory ? '是' : '否',
+        negative_deviation_invalid: negativeInvalid ? '是' : '否',
+      });
+    }
+  }
+  return rows;
+};
+
+const mergeProductParametersIntoFinalJson = ({ finalJson = {}, tableSummaries = [] }) => {
+  const extractedRows = buildProductParametersFromTableSummaries(tableSummaries);
+  const source = normalizeFinalAnalyzeJson(finalJson, 'PRODUCT');
+  const detail = isPlainObject(source?.goods_procurement_detail) ? source.goods_procurement_detail : {};
+  const coreExisting = Array.isArray(detail.core_mandatory_parameters)
+    ? detail.core_mandatory_parameters.filter((item) => trimText(item?.param_requirement) && trimText(item?.param_requirement) !== '未明确')
+    : [];
+  const generalExisting = Array.isArray(detail.general_parameters)
+    ? detail.general_parameters.filter((item) => trimText(item?.param_requirement) && trimText(item?.param_requirement) !== '未明确')
+    : [];
+
+  const dedup = new Set();
+  for (const item of [...coreExisting, ...generalExisting]) {
+    dedup.add(`${trimText(item.param_name)}::${trimText(item.param_requirement)}`);
+  }
+
+  let mergedCount = 0;
+  for (const item of extractedRows) {
+    const key = `${trimText(item.param_name)}::${trimText(item.param_requirement)}`;
+    if (dedup.has(key)) continue;
+    dedup.add(key);
+    if (trimText(item.is_mandatory) === '是' || trimText(item.negative_deviation_invalid) === '是') {
+      coreExisting.push(item);
+    } else {
+      generalExisting.push(item);
+    }
+    mergedCount += 1;
+  }
+
+  detail.core_mandatory_parameters = coreExisting.length
+    ? coreExisting
+    : createProductFinalAnalyzeSchema().goods_procurement_detail.core_mandatory_parameters;
+  detail.general_parameters = generalExisting.length
+    ? generalExisting
+    : createProductFinalAnalyzeSchema().goods_procurement_detail.general_parameters;
+  source.goods_procurement_detail = mergeBySchema(createProductFinalAnalyzeSchema().goods_procurement_detail, detail);
+
+  return {
+    final_json: normalizeFinalAnalyzeJson(source, 'PRODUCT'),
+    table_param_extracted_count: extractedRows.length,
+    table_param_merged_count: mergedCount,
+  };
+};
+
+const mergeScoreItemsIntoFinalJson = ({ finalJson = {}, tableSummaries = [], ruleScoringItems = [], bidCategory = 'SERVICE' }) => {
+  const normalizedBidCategory = normalizeBidCategory(bidCategory) || 'SERVICE';
+  const source = cloneJson(finalJson);
+  const criteria = isPlainObject(source?.evaluation_full_criteria) ? source.evaluation_full_criteria : {};
+  const schemaCriteria = createFinalAnalyzeSchema(normalizedBidCategory).evaluation_full_criteria;
+  const groupKeys = ['technical_score_items', 'personnel_score_items', 'business_score_items', 'policy_preference_score_items'];
+  const mergedByGroup = {};
+  const dedup = new Set();
+
+  for (const key of groupKeys) {
+    const list = Array.isArray(criteria?.[key]) ? criteria[key] : [];
+    mergedByGroup[key] = list
+      .filter((item) => isPlainObject(item) && trimText(item.score_item_name) && trimText(item.score_item_name) !== '未明确')
+      .map((item) => ({
+        item_serial: normalizeStringOrUnclear(item.item_serial),
+        score_item_name: normalizeStringOrUnclear(item.score_item_name),
+        full_score: normalizeStringOrUnclear(item.full_score),
+        scoring_standard: normalizeStringOrUnclear(item.scoring_standard),
+        risk_level: normalizeStringOrUnclear(item.risk_level, '中'),
+        bid_response_module: normalizeStringOrUnclear(item.bid_response_module),
+        response_required_materials: normalizeStringArray(item.response_required_materials, '未明确'),
+      }));
+    for (const item of mergedByGroup[key]) {
+      dedup.add(`${item.score_item_name}::${item.scoring_standard}`);
+    }
+  }
+
+  const tableItems = buildScoreItemsFromTableSummaries(tableSummaries);
+  const fallbackRuleItems = buildScoreItemsFromRuleRows(ruleScoringItems);
+  const candidateItems = [...tableItems, ...fallbackRuleItems];
+  let tableMergedCount = 0;
+  let fallbackMergedCount = 0;
+
+  for (let i = 0; i < candidateItems.length; i += 1) {
+    const candidate = candidateItems[i];
+    const groupKey = groupKeys.includes(candidate.group_key) ? candidate.group_key : 'technical_score_items';
+    const item = candidate.item;
+    const dedupKey = `${trimText(item.score_item_name)}::${trimText(item.scoring_standard)}`;
+    if (!trimText(item.score_item_name) || dedup.has(dedupKey)) continue;
+    dedup.add(dedupKey);
+    mergedByGroup[groupKey].push(item);
+    if (i < tableItems.length) tableMergedCount += 1;
+    else fallbackMergedCount += 1;
+  }
+
+  for (const key of groupKeys) {
+    criteria[key] = mergedByGroup[key].length ? mergedByGroup[key] : schemaCriteria[key];
+  }
+  source.evaluation_full_criteria = mergeBySchema(schemaCriteria, criteria);
+
+  return {
+    final_json: normalizeFinalAnalyzeJson(source, normalizedBidCategory),
+    table_extracted_count: tableItems.length,
+    fallback_extracted_count: fallbackRuleItems.length,
+    merged_count: tableMergedCount,
+    fallback_merged_count: fallbackMergedCount,
+    merged_total_count: tableMergedCount + fallbackMergedCount,
+  };
+};
+
+const buildScoringItemsFromFinalJson = (finalJson) => {
+  const criteria = finalJson?.evaluation_full_criteria || {};
+  const matrix = Array.isArray(finalJson?.evaluation_score_matrix) ? finalJson.evaluation_score_matrix : [];
+  const groups = [
+    ...(Array.isArray(criteria.technical_score_items) ? criteria.technical_score_items : []),
+    ...(Array.isArray(criteria.personnel_score_items) ? criteria.personnel_score_items : []),
+    ...(Array.isArray(criteria.business_score_items) ? criteria.business_score_items : []),
+    ...(Array.isArray(criteria.policy_preference_score_items) ? criteria.policy_preference_score_items : []),
+  ];
+  const seen = new Set();
+  const rows = [];
+  for (const item of matrix) {
+    const title = trimText(item?.score_item_name);
+    const scoringStandard = trimText(item?.scoring_standard);
+    const key = `${title}::${scoringStandard}`;
+    if (!title || title === '未明确' || seen.has(key)) continue;
+    seen.add(key);
+    rows.push({
+      section_key: 'SCORING_STANDARD',
+      section_title: '评标方法与评标标准',
+      title,
+      evidence: scoringStandard || '未明确',
+      suggestion: Array.isArray(item?.response_required_materials)
+        ? item.response_required_materials.filter((row) => trimText(row) && trimText(row) !== '未明确').join('；') || '建议补充对应证明材料'
+        : '建议补充对应证明材料',
+      risk_level: trimText(item?.risk_level || '中').toUpperCase(),
+    });
+  }
+  for (const item of groups) {
+    const title = trimText(item?.score_item_name);
+    const scoringStandard = trimText(item?.scoring_standard);
+    const key = `${title}::${scoringStandard}`;
+    if (!title || title === '未明确' || seen.has(key)) continue;
+    seen.add(key);
+    rows.push({
+      section_key: 'SCORING_STANDARD',
+      section_title: '评标方法与评标标准',
+      title,
+      evidence: scoringStandard || '未明确',
+      suggestion: Array.isArray(item?.response_required_materials)
+        ? item.response_required_materials.filter((row) => trimText(row) && trimText(row) !== '未明确').join('；') || '建议补充对应证明材料'
+        : '建议补充对应证明材料',
+      risk_level: trimText(item?.risk_level || '中').toUpperCase(),
+    });
+  }
+  return rows;
+};
+
+const buildRiskItemsFromFinalJson = ({ finalJson, stage1RiskClauses = [], bidCategory = 'SERVICE' }) => {
+  const category = normalizeBidCategory(bidCategory) || 'SERVICE';
+  const rows = [];
+  const invalid = finalJson?.invalid_bid_full_clauses || {};
+  const invalidPairs = category === 'PRODUCT'
+    ? [
+      ['qualification_invalid_clauses', '资格性废标条款'],
+      ['compliance_invalid_clauses', '符合性废标条款'],
+      ['personnel_invalid_clauses', '人员废标条款'],
+      ['service_scheme_invalid_clauses', '技术参数废标条款'],
+      ['sla_invalid_clauses', '交付/时效废标条款'],
+      ['business_invalid_clauses', '商务废标条款'],
+      ['quotation_invalid_clauses', '报价废标条款'],
+      ['signature_seal_invalid_clauses', '签章密封废标条款'],
+      ['other_invalid_clauses', '其他废标条款'],
+    ]
+    : [
+    ['qualification_invalid_clauses', '资格性废标条款'],
+    ['compliance_invalid_clauses', '符合性废标条款'],
+    ['personnel_invalid_clauses', '人员废标条款'],
+    ['service_scheme_invalid_clauses', '服务方案废标条款'],
+    ['sla_invalid_clauses', 'SLA废标条款'],
+    ['business_invalid_clauses', '商务废标条款'],
+    ['quotation_invalid_clauses', '报价废标条款'],
+    ['signature_seal_invalid_clauses', '签章密封废标条款'],
+    ['other_invalid_clauses', '其他废标条款'],
+    ];
+  for (const [key, sectionTitle] of invalidPairs) {
+    const list = Array.isArray(invalid[key]) ? invalid[key] : [];
+    for (const line of list) {
+      const text = trimText(line);
+      if (!text || text === '未明确') continue;
+      rows.push({
+        section_key: 'SCORING_STANDARD',
+        section_title: sectionTitle,
+        title: text.slice(0, 180),
+        evidence: text,
+        suggestion: '该条款属于高风险条款，需逐条实质性响应并提供可核验证明。',
+        risk_level: 'HIGH',
+      });
+    }
+  }
+  for (const item of stage1RiskClauses) {
+    const text = trimText(item?.clause_content);
+    if (!text || text === '未明确') continue;
+    rows.push({
+      section_key: trimText(item?.source_reference?.chapter) || 'SCORING_STANDARD',
+      section_title: trimText(item?.source_reference?.chapter) || '风险条款',
+      title: text.slice(0, 180),
+      evidence: text,
+      suggestion: '命中无效/废标风险，请在投标文件中逐条对应并校验。',
+      risk_level: trimText(item?.risk_level) === '中' ? 'MEDIUM' : 'HIGH',
+    });
+  }
+  const dedup = new Set();
+  return rows.filter((item) => {
+    const key = `${item.title}::${item.section_title}`;
+    if (dedup.has(key)) return false;
+    dedup.add(key);
+    return true;
+  });
+};
+
+const parseScoreNumber = (value) => {
+  const text = trimText(value);
+  if (!text || text === '未明确') return null;
+  const matched = text.match(/-?\d+(?:\.\d+)?/);
+  if (!matched) return null;
+  const parsed = Number(matched[0]);
+  return Number.isFinite(parsed) ? parsed : null;
+};
+
+const formatScoreValue = (value) => {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return '未明确';
+  return Number.isInteger(num) ? String(num) : num.toFixed(2);
+};
+
+const pushUniqueRowsByKey = (rows, row, keyGetter) => {
+  const key = trimText(keyGetter(row));
+  if (!key) return rows;
+  const exists = rows.some((item) => trimText(keyGetter(item)) === key);
+  if (!exists) rows.push(row);
+  return rows;
+};
+
+const buildBidRiskChecklist = ({ stage1RiskClauses = [], riskItems = [] }) => {
+  const rows = [];
+  for (const item of stage1RiskClauses) {
+    const clause = trimText(item?.clause_content);
+    if (!clause) continue;
+    pushUniqueRowsByKey(
+      rows,
+      {
+        risk_title: clause,
+        risk_level: trimText(item?.risk_level) === '中' ? '中风险' : '高风险',
+        clause_type: trimText(item?.clause_type) || 'OTHER_INVALID',
+        source_chapter: trimText(item?.source_reference?.chapter) || '未明确',
+      },
+      (row) => `${row.risk_title}::${row.source_chapter}`
+    );
+  }
+  for (const item of riskItems) {
+    const title = trimText(item?.title);
+    if (!title) continue;
+    pushUniqueRowsByKey(
+      rows,
+      {
+        risk_title: title,
+        risk_level: String(trimText(item?.risk_level)).toUpperCase() === 'MEDIUM' ? '中风险' : '高风险',
+        clause_type: 'RULE_RISK',
+        source_chapter: trimText(item?.section_title || item?.section_key) || '未明确',
+      },
+      (row) => `${row.risk_title}::${row.source_chapter}`
+    );
+  }
+  return rows.slice(0, 120);
+};
+
+const buildScoreStrategy = (finalJson = {}) => {
+  const criteria = finalJson?.evaluation_full_criteria || {};
+  const priceScore = parseScoreNumber(criteria?.price_score_rules?.full_score);
+  const technicalItems = Array.isArray(criteria?.technical_score_items) ? criteria.technical_score_items : [];
+  const personnelItems = Array.isArray(criteria?.personnel_score_items) ? criteria.personnel_score_items : [];
+  const businessItems = Array.isArray(criteria?.business_score_items) ? criteria.business_score_items : [];
+  const policyItems = Array.isArray(criteria?.policy_preference_score_items) ? criteria.policy_preference_score_items : [];
+
+  const sumScores = (list) =>
+    list.reduce((acc, item) => {
+      const score = parseScoreNumber(item?.full_score);
+      return acc + (Number.isFinite(score) ? score : 0);
+    }, 0);
+
+  const technicalScore = sumScores(technicalItems) + sumScores(personnelItems);
+  const businessScore = sumScores(businessItems) + sumScores(policyItems);
+  const matrixRows = Array.isArray(finalJson?.evaluation_score_matrix) ? finalJson.evaluation_score_matrix : [];
+  let matrixPrice = 0;
+  let matrixTechnical = 0;
+  let matrixBusiness = 0;
+  for (const row of matrixRows) {
+    const score = parseScoreNumber(row?.full_score);
+    if (!Number.isFinite(score)) continue;
+    const category = trimText(row?.score_category);
+    if (category.includes('价格')) {
+      matrixPrice += score;
+      continue;
+    }
+    if (category.includes('技术') || category.includes('人员')) {
+      matrixTechnical += score;
+      continue;
+    }
+    matrixBusiness += score;
+  }
+  const computedPrice = Number.isFinite(priceScore) ? priceScore : (matrixPrice > 0 ? matrixPrice : null);
+  const computedTechnical = technicalScore > 0 ? technicalScore : matrixTechnical;
+  const computedBusiness = businessScore > 0 ? businessScore : matrixBusiness;
+  const totalScore = (Number.isFinite(computedPrice) ? computedPrice : 0) + computedTechnical + computedBusiness;
+  const totalFromDoc = parseScoreNumber(criteria?.total_full_score);
+
+  return {
+    price_score: formatScoreValue(computedPrice),
+    technical_score: formatScoreValue(computedTechnical),
+    business_score: formatScoreValue(computedBusiness),
+    total_theoretical_score: formatScoreValue(totalScore),
+    total_full_score_in_tender: formatScoreValue(totalFromDoc),
+    note: Number.isFinite(totalFromDoc) && Number.isFinite(totalScore) && Math.abs(totalFromDoc - totalScore) > 0.01
+      ? `招标文件总分=${formatScoreValue(totalFromDoc)}，分项合计=${formatScoreValue(totalScore)}，请人工复核评分表。`
+      : '已按价格分+技术分+商务分进行理论最高得分计算。',
+  };
+};
+
+const toChineseChapterNumber = (num) => {
+  const n = Number(num);
+  if (!Number.isFinite(n) || n <= 0) return String(num);
+  const digits = ['零', '一', '二', '三', '四', '五', '六', '七', '八', '九'];
+  if (n <= 10) return n === 10 ? '十' : digits[n];
+  if (n < 20) return `十${digits[n - 10]}`;
+  if (n % 10 === 0) return `${digits[Math.floor(n / 10)]}十`;
+  return `${digits[Math.floor(n / 10)]}十${digits[n % 10]}`;
+};
+
+const buildServiceSchemeOutline = ({ scoringItems = [] }) => {
+  const outline = [];
+  const push = (value) => {
+    const text = trimText(value);
+    if (!text) return;
+    if (!outline.includes(text)) outline.push(text);
+  };
+
+  const keywordMap = [
+    { title: '项目理解', keywords: ['理解', '需求分析', '项目背景'] },
+    { title: '实施方案', keywords: ['实施', '技术方案', '组织方案', '服务方案'] },
+    { title: '服务流程', keywords: ['流程', '响应', '运维', '服务流程', 'SLA'] },
+    { title: '质量管理', keywords: ['质量', '保障', '考核', '管理'] },
+    { title: '应急响应', keywords: ['应急', '故障', '恢复', '预案'] },
+    { title: '项目团队配置', keywords: ['团队', '人员', '项目经理', '负责人', '工程师'] },
+  ];
+
+  for (const item of scoringItems) {
+    const title = trimText(item?.title || item?.score_item_name);
+    if (!title) continue;
+    for (const mapper of keywordMap) {
+      if (mapper.keywords.some((keyword) => title.includes(keyword))) {
+        push(mapper.title);
+        break;
+      }
+    }
+  }
+
+  for (const fallback of ['项目理解', '实施方案', '服务流程', '质量管理', '应急响应']) {
+    push(fallback);
+  }
+  return outline;
+};
+
+const buildAutoBidToc = ({ serviceSchemeOutline = [] }) => {
+  const chapterTitles = [
+    ...serviceSchemeOutline,
+    '商务条款响应',
+    '技术偏离表',
+    '商务偏离表',
+    '附件资料',
+  ];
+  return chapterTitles.map((title, idx) => `第${toChineseChapterNumber(idx + 1)}章 ${title}`);
+};
+
+const buildGoodsSchemeOutline = ({ scoringItems = [], finalJson = {} }) => {
+  const outline = [];
+  const push = (value) => {
+    const text = trimText(value);
+    if (!text) return;
+    if (!outline.includes(text)) outline.push(text);
+  };
+  const keywordMap = [
+    { title: '项目理解与供货范围', keywords: ['项目理解', '需求分析', '供货范围'] },
+    { title: '技术参数响应', keywords: ['技术参数', '参数', '核心产品', '主要产品', '偏离'] },
+    { title: '供货实施与交付计划', keywords: ['供货', '交付', '安装', '调试', '实施'] },
+    { title: '质量保障与售后服务', keywords: ['质保', '售后', '维护', '服务承诺'] },
+    { title: '项目团队与履约保障', keywords: ['项目经理', '团队', '工程师', '履约'] },
+  ];
+  for (const item of scoringItems) {
+    const title = trimText(item?.title || item?.score_item_name);
+    if (!title) continue;
+    for (const mapper of keywordMap) {
+      if (mapper.keywords.some((word) => title.includes(word))) {
+        push(mapper.title);
+        break;
+      }
+    }
+  }
+  const detail = isPlainObject(finalJson?.goods_procurement_detail) ? finalJson.goods_procurement_detail : {};
+  const coreParamCount = Array.isArray(detail.core_mandatory_parameters)
+    ? detail.core_mandatory_parameters.filter((item) => trimText(item?.param_requirement) && trimText(item?.param_requirement) !== '未明确').length
+    : 0;
+  if (coreParamCount > 0) push('技术参数响应');
+  for (const fallback of ['项目理解与供货范围', '技术参数响应', '供货实施与交付计划', '质量保障与售后服务']) {
+    push(fallback);
+  }
+  return outline;
+};
+
+const buildAutoBidTocByCategory = ({ bidCategory = 'SERVICE', serviceSchemeOutline = [] }) => {
+  const category = normalizeBidCategory(bidCategory) || 'SERVICE';
+  if (category === 'PRODUCT') {
+    const chapterTitles = [
+      ...serviceSchemeOutline,
+      '商务条款响应',
+      '技术偏离表',
+      '商务偏离表',
+      '附件资料',
+    ];
+    return chapterTitles.map((title, idx) => `第${toChineseChapterNumber(idx + 1)}章 ${title}`);
+  }
+  return buildAutoBidToc({ serviceSchemeOutline });
+};
+
+const buildDeviationTables = (finalJson = {}, bidCategory = 'SERVICE') => {
+  const category = normalizeBidCategory(bidCategory) || 'SERVICE';
+  const detail = category === 'PRODUCT'
+    ? (finalJson?.goods_procurement_detail || {})
+    : (finalJson?.service_procurement_detail || {});
+  const business = finalJson?.business_performance_rules || {};
+
+  const technicalRows = [];
+  const appendTechnical = (requirement, response = '已响应，详见投标文件对应章节', note = '无偏离') => {
+    const text = trimText(requirement);
+    if (!text || text === '未明确') return;
+    technicalRows.push({
+      tender_requirement: text,
+      bidder_response: response,
+      deviation_note: note,
+    });
+  };
+
+  if (category === 'PRODUCT') {
+    const techTable = Array.isArray(finalJson?.technical_deviation_table) ? finalJson.technical_deviation_table : [];
+    for (const row of techTable) {
+      appendTechnical(
+        row?.tender_requirement || row?.param_requirement || row?.param_name,
+        row?.bid_response || '已响应，详见技术参数响应表',
+        row?.deviation || '无偏离'
+      );
+    }
+    const coreParams = Array.isArray(detail?.core_mandatory_parameters) ? detail.core_mandatory_parameters : [];
+    const generalParams = Array.isArray(detail?.general_parameters) ? detail.general_parameters : [];
+    for (const item of [...coreParams, ...generalParams]) {
+      appendTechnical(item?.param_requirement, '已响应，详见技术参数响应表');
+    }
+    for (const row of (Array.isArray(detail?.implementation_requirements) ? detail.implementation_requirements : [])) {
+      appendTechnical(row, '已响应，详见供货实施与交付计划');
+    }
+    for (const row of (Array.isArray(detail?.acceptance_requirements) ? detail.acceptance_requirements : [])) {
+      appendTechnical(row, '已响应，详见验收与交付章节');
+    }
+    for (const row of (Array.isArray(detail?.after_sales_requirements) ? detail.after_sales_requirements : [])) {
+      appendTechnical(row, '已响应，详见售后服务承诺');
+    }
+  } else {
+    const serviceContentList = Array.isArray(detail?.service_content_list) ? detail.service_content_list : [];
+    for (const item of serviceContentList) {
+      appendTechnical(item?.service_scope);
+      appendTechnical(item?.delivery_content);
+    }
+    const slaList = Array.isArray(detail?.core_sla_indicators) ? detail.core_sla_indicators : [];
+    for (const item of slaList) {
+      appendTechnical(item?.indicator_requirement, '已响应，详见服务水平承诺章节');
+    }
+    for (const row of (Array.isArray(detail?.service_implementation_requirements) ? detail.service_implementation_requirements : [])) {
+      appendTechnical(row);
+    }
+    for (const row of (Array.isArray(detail?.quality_assurance_requirements) ? detail.quality_assurance_requirements : [])) {
+      appendTechnical(row);
+    }
+    for (const row of (Array.isArray(detail?.emergency_response_requirements) ? detail.emergency_response_requirements : [])) {
+      appendTechnical(row, '已响应，详见应急响应方案');
+    }
+    for (const row of (Array.isArray(detail?.training_requirements) ? detail.training_requirements : [])) {
+      appendTechnical(row);
+    }
+  }
+
+  const businessRows = [];
+  const appendBusiness = (requirement, response = '已响应，详见商务条款响应', note = '无偏离') => {
+    const text = trimText(requirement);
+    if (!text || text === '未明确') return;
+    businessRows.push({
+      tender_requirement: text,
+      bidder_response: response,
+      deviation_note: note,
+    });
+  };
+  appendBusiness(business?.payment_terms, '已响应，详见付款条款响应');
+  appendBusiness(business?.performance_bond_rules, '已响应，详见履约保证金承诺');
+  appendBusiness(business?.intellectual_property_rules, '已响应，详见知识产权与保密承诺');
+  appendBusiness(business?.liability_for_breach_of_contract, '已响应，详见违约责任响应');
+  appendBusiness(business?.renewal_rules, '已响应，详见续约条款响应');
+  for (const row of (Array.isArray(business?.other_business_rules) ? business.other_business_rules : [])) {
+    appendBusiness(row);
+  }
+  if (category === 'PRODUCT') {
+    const coreProduct = isPlainObject(finalJson?.core_product_info) ? finalJson.core_product_info : {};
+    appendBusiness(coreProduct.same_brand_rule, '已响应，详见核心产品与同品牌规则说明');
+    appendBusiness(coreProduct.rule_description, '已响应，详见商务条款响应');
+  }
+
+  return {
+    technical: technicalRows.slice(0, 120),
+    business: businessRows.slice(0, 120),
+  };
+};
+
+const buildGeneratedArtifacts = ({
+  finalJson = {},
+  stage1RiskClauses = [],
+  riskItems = [],
+  scoringItems = [],
+  bidCategory = 'SERVICE',
+}) => {
+  const category = normalizeBidCategory(bidCategory) || 'SERVICE';
+  const serviceSchemeOutline = category === 'PRODUCT'
+    ? buildGoodsSchemeOutline({ scoringItems, finalJson })
+    : buildServiceSchemeOutline({ scoringItems });
+  return {
+    bid_risk_list: buildBidRiskChecklist({ stage1RiskClauses, riskItems }),
+    score_strategy: buildScoreStrategy(finalJson),
+    auto_toc: buildAutoBidTocByCategory({ bidCategory: category, serviceSchemeOutline }),
+    deviation_tables: buildDeviationTables(finalJson, category),
+    service_scheme_outline: serviceSchemeOutline,
+  };
+};
+
+const buildCompanySummaryLines = (company = {}) => {
+  const lines = [];
+  const append = (label, value) => {
+    const text = trimText(value);
+    if (text) lines.push(`${label}：${text}`);
+  };
+  append('公司名称', company.company_name);
+  append('统一社会信用代码', company.uscc);
+  append('注册资金', company.registered_capital ? `${company.registered_capital} 万元` : '');
+  append('公司性质', company.company_nature);
+  append('成立日期', company.established_date);
+  append('经营期限', company.business_term);
+  append('联系电话', company.contact_phone);
+  append('公司邮箱', company.company_email);
+  append('公司地址', company.company_address);
+  append('登记机关', company.registration_authority);
+  append('经营范围', company.business_scope);
+  return lines;
+};
+
+const buildPersonSummaryLines = (title, person = {}) => {
+  const lines = [];
+  const append = (label, value) => {
+    const text = trimText(value);
+    if (text) lines.push(`${label}：${text}`);
+  };
+  lines.push(title);
+  append('姓名', person.name);
+  append('身份证号', person.id_no);
+  append('性别', person.gender);
+  append('出生日期', person.birth_date);
+  append('身份证有效期起', person.id_valid_from);
+  append('身份证有效期止', person.id_valid_to);
+  if (person.id_long_term) lines.push('身份证长期有效：是');
+  append('职位', person.position);
+  return lines;
+};
+
+const buildProjectCoreSummaryLines = (projectCore = {}) => {
+  const lines = [];
+  const append = (label, value) => {
+    const text = trimText(value);
+    if (text && text !== '未明确') lines.push(`${label}：${text}`);
+  };
+
+  append('项目名称', projectCore.project_full_name || projectCore.project_name);
+  append('项目编号', projectCore.project_code);
+  append('包号', projectCore.package_no);
+  append('预算', projectCore.project_budget);
+  append('招标人', projectCore.buyer_full_name);
+  append('招标代理机构', projectCore.agency_full_name);
+  append('项目所属领域', projectCore.project_domain || projectCore.service_category || projectCore.goods_category);
+  append('项目概况', projectCore.project_overview);
+  return lines;
+};
+
+const toArrayOrEmpty = (value) => (Array.isArray(value) ? value : []);
+
+const joinSummaryLines = (lines = []) => {
+  if (!Array.isArray(lines)) return '';
+  return lines.map((item) => trimText(item)).filter(Boolean).join('\n').trim();
+};
+
+const buildQualificationSummaryLines = (list = []) =>
+  toArrayOrEmpty(list).slice(0, 20).map((item, idx) =>
+    `${idx + 1}. ${firstNonEmpty(item?.title, item?.name, item?.certName, '资质证书')}｜编号：${firstNonEmpty(item?.certificate_no, item?.certNo, '-')}`
+  );
+
+const buildFinanceSummaryLines = (list = []) =>
+  toArrayOrEmpty(list).slice(0, 20).map((item, idx) =>
+    `${idx + 1}. ${firstNonEmpty(item?.info_name, item?.title, '财务条目')}｜类型：${firstNonEmpty(item?.info_type, '未分类')}｜时间：${firstNonEmpty(item?.info_date, '-')}`
+  );
+
+const buildPerformanceSummaryLines = (list = []) =>
+  toArrayOrEmpty(list).slice(0, 15).map((item, idx) =>
+    `${idx + 1}. ${firstNonEmpty(item?.project_name, item?.title, '业绩条目')}（${firstNonEmpty(item?.party_a_name, '甲方未填')}）`
+  );
+
+const buildPersonnelListSummaryLines = (list = []) =>
+  toArrayOrEmpty(list).slice(0, 15).map((item, idx) =>
+    `${idx + 1}. ${firstNonEmpty(item?.name, '人员')}｜${firstNonEmpty(item?.position, '岗位未填')}｜${firstNonEmpty(item?.major, item?.education, '专业未填')}`
+  );
+
+const buildDraftChaptersFromAnalysis = ({
+  bidNo,
+  title,
+  sourceFileName,
+  sectionList,
+  scoringItems,
+  riskItems,
+  sampleSections,
+  librarySnapshot,
+  generatedArtifacts,
+  bidCategory = 'SERVICE',
+  finalJson = {},
+}) => {
+  const mapByKey = new Map((sectionList || []).map((item) => [item.section_key, item]));
+  const sampleMap = new Map((sampleSections || []).map((item) => [item.section_key, item]));
+  const getSectionText = (key) => {
+    const selfText = trimText(mapByKey.get(key)?.text);
+    const sampleText = trimText(sampleMap.get(key)?.section_text);
+    return selfText || sampleText || '';
+  };
+
+  const companyLines = buildCompanySummaryLines(librarySnapshot?.company || {});
+  const legalLines = buildPersonSummaryLines('法定代表人信息', librarySnapshot?.personnel?.legal || {});
+  const agentLines = buildPersonSummaryLines('授权委托人信息', librarySnapshot?.personnel?.agent || {});
+  const projectCoreSummaryLines = buildProjectCoreSummaryLines(
+    isPlainObject(finalJson?.project_core_info) ? finalJson.project_core_info : {}
+  );
+
+  const qualificationList = toArrayOrEmpty(librarySnapshot?.qualifications);
+  const financeList = toArrayOrEmpty(librarySnapshot?.finance);
+  const performanceList = toArrayOrEmpty(librarySnapshot?.performance);
+  const personnelList = toArrayOrEmpty(librarySnapshot?.personnel_list);
+  const artifacts = isPlainObject(generatedArtifacts) ? generatedArtifacts : {};
+  const autoToc = Array.isArray(artifacts.auto_toc) ? artifacts.auto_toc.filter((item) => trimText(item)) : [];
+  const serviceSchemeOutline = Array.isArray(artifacts.service_scheme_outline)
+    ? artifacts.service_scheme_outline.filter((item) => trimText(item))
+    : [];
+  const technicalDeviationRows = Array.isArray(artifacts?.deviation_tables?.technical)
+    ? artifacts.deviation_tables.technical
+    : [];
+  const businessDeviationRows = Array.isArray(artifacts?.deviation_tables?.business)
+    ? artifacts.deviation_tables.business
+    : [];
+  const bidRiskList = Array.isArray(artifacts.bid_risk_list) ? artifacts.bid_risk_list : [];
+  const scoreStrategy = isPlainObject(artifacts.score_strategy) ? artifacts.score_strategy : {};
+  const normalizedBidCategory = normalizeBidCategory(bidCategory) || 'SERVICE';
+
+  if (normalizedBidCategory === 'PRODUCT') {
+    const chapterBlocks = [];
+    const goodsDetail = isPlainObject(finalJson?.goods_procurement_detail) ? finalJson.goods_procurement_detail : {};
+    const coreProduct = isPlainObject(finalJson?.core_product_info) ? finalJson.core_product_info : {};
+    const coreParams = Array.isArray(goodsDetail.core_mandatory_parameters) ? goodsDetail.core_mandatory_parameters : [];
+    const generalParams = Array.isArray(goodsDetail.general_parameters) ? goodsDetail.general_parameters : [];
+    const matrixRows = Array.isArray(finalJson?.evaluation_score_matrix)
+      ? finalJson.evaluation_score_matrix.filter((item) => trimText(item?.score_item_name) && trimText(item?.score_item_name) !== '未明确')
+      : [];
+
+    chapterBlocks.push({
+      title: '封面',
+      content: [
+        '投标文件（自动生成初稿）',
+        `标书编号：${bidNo}`,
+        `标书标题：${title}`,
+        '招标类型：产品类',
+        `来源招标文件：${sourceFileName}`,
+        `生成时间：${formatDateTime(new Date()) || ''}`,
+      ],
+    });
+
+    chapterBlocks.push({
+      title: '目录',
+      content: autoToc.length ? autoToc : [
+        '第一章 项目理解与供货范围',
+        '第二章 技术参数响应',
+        '第三章 评分响应与风险校验',
+        '第四章 商务条款响应',
+        '第五章 技术偏离表',
+        '第六章 商务偏离表',
+        '第七章 附件资料',
+      ],
+    });
+
+    chapterBlocks.push({
+      title: '投标邀请',
+      content: [summarizeSectionText(getSectionText('INVITATION'), 2000) || '未提取到该章节，待人工补充。'],
+    });
+
+    chapterBlocks.push({
+      title: '投标人须知',
+      content: [
+        summarizeSectionText(getSectionText('BIDDER_INSTRUCTION'), 1800) || '未提取到该章节，待人工补充。',
+        ...(projectCoreSummaryLines.length ? ['', '投标人须知核心信息', ...projectCoreSummaryLines] : []),
+        '',
+        '投标人基础信息（自有库）',
+        ...(companyLines.length ? companyLines : ['公司信息暂未完善']),
+        '',
+        ...(legalLines.length ? legalLines : ['法定代表人信息暂未完善']),
+        '',
+        ...(agentLines.length ? agentLines : ['授权委托人信息暂未完善']),
+      ],
+    });
+
+    chapterBlocks.push({
+      title: '采购需求与技术参数',
+      content: [
+        summarizeSectionText(getSectionText('PROCUREMENT_REQUIREMENT'), 2200) || '未提取到该章节，待人工补充。',
+        '',
+        `核心产品：${firstNonEmpty(coreProduct.core_product_name, '未明确')}`,
+        `同品牌规则：${firstNonEmpty(coreProduct.same_brand_rule, '未明确')}`,
+        `规则说明：${firstNonEmpty(coreProduct.rule_description, '未明确')}`,
+        '',
+        '核心强制参数',
+        ...(coreParams.length
+          ? coreParams.slice(0, 80).map((item, idx) =>
+            `${idx + 1}. ${firstNonEmpty(item.param_name, '参数')}｜要求：${firstNonEmpty(item.param_requirement, '未明确')}｜是否强制：${firstNonEmpty(item.is_mandatory, '否')}｜负偏离废标：${firstNonEmpty(item.negative_deviation_invalid, '否')}`
+          )
+          : ['未识别到核心强制参数，请人工补充。']),
+        '',
+        '一般参数',
+        ...(generalParams.length
+          ? generalParams.slice(0, 120).map((item, idx) =>
+            `${idx + 1}. ${firstNonEmpty(item.param_name, '参数')}｜要求：${firstNonEmpty(item.param_requirement, '未明确')}`
+          )
+          : ['未识别到一般参数，请人工补充。']),
+        '',
+        '自有库自动匹配材料',
+        ...(qualificationList.length
+          ? qualificationList.slice(0, 20).map((item, idx) => `${idx + 1}. ${firstNonEmpty(item.title, item.name, item.certName, '资质证书')}｜编号：${firstNonEmpty(item.certificate_no, item.certNo, '-')}`)
+          : ['暂无资质数据']),
+        ...(performanceList.length
+          ? performanceList.slice(0, 10).map((item, idx) => `${idx + 1}. ${firstNonEmpty(item.project_name, item.title, '业绩条目')}（${firstNonEmpty(item.party_a_name, '甲方未填')}）`)
+          : ['暂无业绩数据']),
+        ...(personnelList.length
+          ? personnelList.slice(0, 10).map((item, idx) => `${idx + 1}. ${firstNonEmpty(item.name, '人员')}｜${firstNonEmpty(item.position, '岗位未填')}｜${firstNonEmpty(item.major, item.education, '专业未填')}`)
+          : ['暂无人员数据']),
+      ],
+    });
+
+    chapterBlocks.push({
+      title: '评标方法与评分响应',
+      content: [
+        summarizeSectionText(getSectionText('SCORING_STANDARD'), 1800) || '未提取到该章节，待人工补充。',
+        '',
+        '理论最高得分',
+        `价格分：${firstNonEmpty(scoreStrategy.price_score, '未明确')}`,
+        `技术分：${firstNonEmpty(scoreStrategy.technical_score, '未明确')}`,
+        `商务分：${firstNonEmpty(scoreStrategy.business_score, '未明确')}`,
+        `理论总分：${firstNonEmpty(scoreStrategy.total_theoretical_score, '未明确')}`,
+        scoreStrategy.note ? `说明：${scoreStrategy.note}` : '',
+        '',
+        '评分项清单',
+        ...(matrixRows.length
+          ? matrixRows.slice(0, 160).map((item, idx) =>
+            `${idx + 1}. [${firstNonEmpty(item.score_category, '未明确')}] ${firstNonEmpty(item.score_item_name, '评分项')}\n   分值：${firstNonEmpty(item.full_score, '未明确')}\n   评分标准：${firstNonEmpty(item.scoring_standard, '未明确')}`
+          )
+          : (scoringItems.length
+            ? scoringItems.map((item, idx) => `${idx + 1}. ${item.title}\n   证据：${firstNonEmpty(item.evidence, item.evidence_text, '-')}\n   建议：${firstNonEmpty(item.suggestion, item.suggestion_text, '-')}`)
+            : ['暂无评分项，请人工补充'])),
+        '',
+        '废标风险清单',
+        ...(bidRiskList.length
+          ? bidRiskList.map((item, idx) =>
+            `${idx + 1}. ${firstNonEmpty(item.risk_title, '-')} -> ${firstNonEmpty(item.risk_level, '高风险')}\n   来源：${firstNonEmpty(item.source_chapter, '未明确')}`
+          )
+          : (riskItems.length
+            ? riskItems.map((item, idx) => `${idx + 1}. ${item.title} -> ${String(firstNonEmpty(item.risk_level, 'HIGH')).toUpperCase()}\n   来源：${firstNonEmpty(item.section_title, item.section_key, '-')}`)
+            : ['暂无风险项'])),
+      ],
+    });
+
+    chapterBlocks.push({
+      title: '偏离表',
+      content: [
+        '技术偏离表（招标要求 | 投标响应 | 偏离说明）',
+        ...(technicalDeviationRows.length
+          ? technicalDeviationRows.map((item, idx) =>
+            `${idx + 1}. ${firstNonEmpty(item.tender_requirement, item.param_requirement, '-')}\n   投标响应：${firstNonEmpty(item.bidder_response, item.bid_response, '-')}\n   偏离说明：${firstNonEmpty(item.deviation_note, item.deviation, '无偏离')}`
+          )
+          : ['暂无技术偏离条目，请人工补充。']),
+        '',
+        '商务偏离表（招标要求 | 投标响应 | 偏离说明）',
+        ...(businessDeviationRows.length
+          ? businessDeviationRows.map((item, idx) =>
+            `${idx + 1}. ${firstNonEmpty(item.tender_requirement, '-')}\n   投标响应：${firstNonEmpty(item.bidder_response, '-')}\n   偏离说明：${firstNonEmpty(item.deviation_note, '无偏离')}`
+          )
+          : ['暂无商务偏离条目，请人工补充。']),
+      ],
+    });
+
+    chapterBlocks.push({
+      title: '合同主要条款及格式',
+      content: [
+        summarizeSectionText(getSectionText('CONTRACT_TERMS'), 1800) || '未提取到该章节，待人工补充。',
+        '',
+        '财务与履约信息（自有库）',
+        ...(financeList.length
+          ? financeList.slice(0, 20).map((item, idx) => `${idx + 1}. ${firstNonEmpty(item.info_name, item.title, '财务条目')}｜类型：${firstNonEmpty(item.info_type, '未分类')}｜时间：${firstNonEmpty(item.info_date, '-')}`)
+          : ['暂无财务信息']),
+      ],
+    });
+
+    chapterBlocks.push({
+      title: '投标文件格式',
+      content: [
+        summarizeSectionText(getSectionText('BID_DOC_FORMAT'), 1600) || '未提取到该章节，待人工补充。',
+        '',
+        '附录索引',
+        'A. 公司信息',
+        'B. 资质证书',
+        'C. 财务信息',
+        'D. 业绩信息',
+        'E. 人员信息',
+      ],
+    });
+
+    return chapterBlocks;
+  }
+
+  const chapterBlocks = [];
+
+  chapterBlocks.push({
+    title: '封面',
+    content: [
+      `投标文件（自动生成初稿）`,
+      `标书编号：${bidNo}`,
+      `标书标题：${title}`,
+      `来源招标文件：${sourceFileName}`,
+      `生成时间：${formatDateTime(new Date()) || ''}`,
+    ],
+  });
+
+  chapterBlocks.push({
+    title: '目录',
+    content: autoToc.length ? autoToc : tenderSectionDefs.map((item, idx) => `${idx + 1}. ${item.title}`),
+  });
+
+  chapterBlocks.push({
+    title: '投标邀请',
+    content: [summarizeSectionText(getSectionText('INVITATION'), 2000) || '未提取到该章节，待人工补充。'],
+  });
+
+  chapterBlocks.push({
+    title: '投标人须知',
+    content: [
+      summarizeSectionText(getSectionText('BIDDER_INSTRUCTION'), 1800) || '未提取到该章节，待人工补充。',
+      ...(projectCoreSummaryLines.length ? ['', '投标人须知核心信息', ...projectCoreSummaryLines] : []),
+      '',
+      '投标人基础信息（自有库）',
+      ...(companyLines.length ? companyLines : ['公司信息暂未完善']),
+      '',
+      ...(legalLines.length ? legalLines : ['法定代表人信息暂未完善']),
+      '',
+      ...(agentLines.length ? agentLines : ['授权委托人信息暂未完善']),
+    ],
+  });
+
+  chapterBlocks.push({
+    title: '采购需求',
+    content: [
+      summarizeSectionText(getSectionText('PROCUREMENT_REQUIREMENT'), 2000) || '未提取到该章节，待人工补充。',
+      '',
+      '业绩能力（自有库）',
+      ...(performanceList.length
+        ? performanceList.slice(0, 15).map((item, idx) => `${idx + 1}. ${firstNonEmpty(item.project_name, item.title, '业绩条目')}（${firstNonEmpty(item.party_a_name, '甲方未填')}）`)
+        : ['暂无业绩数据']),
+      '',
+      '人员能力（自有库）',
+      ...(personnelList.length
+        ? personnelList.slice(0, 15).map((item, idx) => `${idx + 1}. ${firstNonEmpty(item.name, '人员')}｜${firstNonEmpty(item.position, '岗位未填')}｜${firstNonEmpty(item.education, '学历未填')}`)
+        : ['暂无人员数据']),
+      '',
+      '资质能力（自有库）',
+      ...(qualificationList.length
+        ? qualificationList.slice(0, 20).map((item, idx) => `${idx + 1}. ${firstNonEmpty(item.title, item.name, item.certName, '资质证书')}｜编号：${firstNonEmpty(item.certificate_no, item.certNo, '-')}`)
+        : ['暂无资质数据']),
+    ],
+  });
+
+  chapterBlocks.push({
+    title: '评标方法与评标标准',
+    content: [
+      summarizeSectionText(getSectionText('SCORING_STANDARD'), 1800) || '未提取到该章节，待人工补充。',
+      '',
+      '理论最高得分',
+      `价格分：${firstNonEmpty(scoreStrategy.price_score, '未明确')}`,
+      `技术分：${firstNonEmpty(scoreStrategy.technical_score, '未明确')}`,
+      `商务分：${firstNonEmpty(scoreStrategy.business_score, '未明确')}`,
+      `理论总分：${firstNonEmpty(scoreStrategy.total_theoretical_score, '未明确')}`,
+      scoreStrategy.note ? `说明：${scoreStrategy.note}` : '',
+      '',
+      '得分项清单',
+      ...(scoringItems.length
+        ? scoringItems.map((item, idx) => `${idx + 1}. ${item.title}\n   证据：${firstNonEmpty(item.evidence, item.evidence_text, '-')}\n   建议：${firstNonEmpty(item.suggestion, item.suggestion_text, '-')}`)
+        : ['暂无得分项，请人工补充']),
+      '',
+      '废标风险清单',
+      ...(bidRiskList.length
+        ? bidRiskList.map((item, idx) =>
+          `${idx + 1}. ${firstNonEmpty(item.risk_title, '-')} -> ${firstNonEmpty(item.risk_level, '高风险')}\n   来源：${firstNonEmpty(item.source_chapter, '未明确')}`
+        )
+        : (riskItems.length
+          ? riskItems.map((item, idx) => `${idx + 1}. ${item.title} -> ${String(firstNonEmpty(item.risk_level, 'HIGH')).toUpperCase()}\n   来源：${firstNonEmpty(item.section_title, item.section_key, '-')}`)
+          : ['暂无风险项'])),
+    ],
+  });
+
+  chapterBlocks.push({
+    title: '服务方案框架',
+    content: [
+      '根据评分项自动生成的服务方案建议结构：',
+      ...(serviceSchemeOutline.length ? serviceSchemeOutline.map((item, idx) => `${idx + 1}. ${item}`) : ['项目理解', '实施方案', '服务流程', '质量管理', '应急响应']),
+    ],
+  });
+
+  chapterBlocks.push({
+    title: '偏离表',
+    content: [
+      '技术偏离表（招标要求 | 投标响应 | 偏离说明）',
+      ...(technicalDeviationRows.length
+        ? technicalDeviationRows.map((item, idx) =>
+          `${idx + 1}. ${firstNonEmpty(item.tender_requirement, '-')}\n   投标响应：${firstNonEmpty(item.bidder_response, '-')}\n   偏离说明：${firstNonEmpty(item.deviation_note, '无偏离')}`
+        )
+        : ['暂无技术偏离条目，请人工补充。']),
+      '',
+      '商务偏离表（招标要求 | 投标响应 | 偏离说明）',
+      ...(businessDeviationRows.length
+        ? businessDeviationRows.map((item, idx) =>
+          `${idx + 1}. ${firstNonEmpty(item.tender_requirement, '-')}\n   投标响应：${firstNonEmpty(item.bidder_response, '-')}\n   偏离说明：${firstNonEmpty(item.deviation_note, '无偏离')}`
+        )
+        : ['暂无商务偏离条目，请人工补充。']),
+    ],
+  });
+
+  chapterBlocks.push({
+    title: '合同主要条款及格式',
+    content: [
+      summarizeSectionText(getSectionText('CONTRACT_TERMS'), 1800) || '未提取到该章节，待人工补充。',
+      '',
+      '财务与履约信息（自有库）',
+      ...(financeList.length
+        ? financeList.slice(0, 20).map((item, idx) => `${idx + 1}. ${firstNonEmpty(item.info_name, item.title, '财务条目')}｜类型：${firstNonEmpty(item.info_type, '未分类')}｜时间：${firstNonEmpty(item.info_date, '-')}`)
+        : ['暂无财务信息']),
+    ],
+  });
+
+  chapterBlocks.push({
+    title: '投标文件格式',
+    content: [
+      summarizeSectionText(getSectionText('BID_DOC_FORMAT'), 1600) || '未提取到该章节，待人工补充。',
+      '',
+      '附录索引',
+      'A. 公司信息',
+      'B. 资质证书',
+      'C. 财务信息',
+      'D. 业绩信息',
+      'E. 人员信息',
+    ],
+  });
+
+  return chapterBlocks;
+};
+
+const buildParagraphsFromChapters = (chapters = []) => {
+  const rows = [];
+  for (const chapter of Array.isArray(chapters) ? chapters : []) {
+    const chapterTitle = trimText(chapter?.title);
+    if (chapterTitle) rows.push(chapterTitle);
+    const lines = Array.isArray(chapter?.content) ? chapter.content : toLines(chapter?.content || '');
+    for (const line of lines) {
+      rows.push(trimText(line));
+    }
+    rows.push('');
+  }
+  return rows;
+};
+
+const splitTextToDiffSegments = (value) => {
+  const text = normalizeSearchText(value, 240000);
+  if (!text) return [];
+  const segments = text
+    .replace(/\r\n/g, '\n')
+    .replace(/([。！？.!?；;])/g, '$1\n')
+    .split(/\n+/)
+    .map((item) => trimText(item))
+    .filter(Boolean);
+  return segments.slice(0, DIFF_MAX_SEGMENTS);
+};
+
+const buildDiffEntries = (leftSegments, rightSegments) => {
+  const leftCount = leftSegments.length;
+  const rightCount = rightSegments.length;
+  const dp = Array.from({ length: leftCount + 1 }, () => Array(rightCount + 1).fill(0));
+
+  for (let i = leftCount - 1; i >= 0; i -= 1) {
+    for (let j = rightCount - 1; j >= 0; j -= 1) {
+      if (leftSegments[i] === rightSegments[j]) {
+        dp[i][j] = dp[i + 1][j + 1] + 1;
+      } else {
+        dp[i][j] = Math.max(dp[i + 1][j], dp[i][j + 1]);
+      }
+    }
+  }
+
+  const entries = [];
+  let i = 0;
+  let j = 0;
+  while (i < leftCount && j < rightCount) {
+    if (leftSegments[i] === rightSegments[j]) {
+      entries.push({ type: 'equal', text: leftSegments[i] });
+      i += 1;
+      j += 1;
+      continue;
+    }
+    if (dp[i + 1][j] >= dp[i][j + 1]) {
+      entries.push({ type: 'remove', text: leftSegments[i] });
+      i += 1;
+    } else {
+      entries.push({ type: 'add', text: rightSegments[j] });
+      j += 1;
+    }
+  }
+  while (i < leftCount) {
+    entries.push({ type: 'remove', text: leftSegments[i] });
+    i += 1;
+  }
+  while (j < rightCount) {
+    entries.push({ type: 'add', text: rightSegments[j] });
+    j += 1;
+  }
+
+  const merged = [];
+  for (const item of entries) {
+    const prev = merged[merged.length - 1];
+    if (prev && prev.type === item.type) {
+      prev.text = `${prev.text}\n${item.text}`;
+    } else {
+      merged.push({ ...item });
+    }
+  }
+  return merged;
+};
+
+const buildVersionDiffResult = ({ leftText, rightText }) => {
+  const leftSegments = splitTextToDiffSegments(leftText);
+  const rightSegments = splitTextToDiffSegments(rightText);
+  const diffEntries = buildDiffEntries(leftSegments, rightSegments);
+  const limitedEntries = diffEntries.slice(0, DIFF_MAX_ENTRIES);
+  const addCount = diffEntries.filter((item) => item.type === 'add').length;
+  const removeCount = diffEntries.filter((item) => item.type === 'remove').length;
+  const equalCount = diffEntries.filter((item) => item.type === 'equal').length;
+  const denom = Math.max(1, addCount + removeCount + equalCount);
+  const changeRatio = Math.min(1, (addCount + removeCount) / denom);
+
+  return {
+    left_segments: leftSegments.length,
+    right_segments: rightSegments.length,
+    diff_truncated: diffEntries.length > limitedEntries.length,
+    summary: {
+      add_blocks: addCount,
+      remove_blocks: removeCount,
+      equal_blocks: equalCount,
+      change_ratio: Number(changeRatio.toFixed(4)),
+    },
+    entries: limitedEntries,
+  };
+};
+
 const statusTransitions = {
   DRAFT: new Set(['IN_REVIEW']),
   IN_REVIEW: new Set(['FINALIZED', 'DRAFT']),
@@ -317,6 +4418,11 @@ const normalizeBidUploadExt = (filename) => {
 const normalizeAssetUploadExt = (filename) => {
   const ext = path.extname(String(filename || '')).toLowerCase();
   return ALLOWED_ASSET_UPLOAD_EXTS.has(ext) ? ext : '';
+};
+
+const normalizeDocTemplateExt = (filename) => {
+  const ext = path.extname(String(filename || '')).toLowerCase();
+  return ALLOWED_DOC_TEMPLATE_EXTS.has(ext) ? ext : '';
 };
 
 const guessMimeByExt = (ext) => {
@@ -464,6 +4570,233 @@ const writeSimpleDocx = async ({ outputPath, paragraphs = [] }) => {
   await fs.promises.writeFile(outputPath, buffer);
 };
 
+const buildDocxParagraphXml = (text, options = {}) => {
+  const raw = trimText(text);
+  if (!raw) return '<w:p/>';
+  const {
+    headingLevel = 0,
+  } = options;
+  if (headingLevel === 1) {
+    return `<w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t xml:space="preserve">${escapeXml(raw)}</w:t></w:r></w:p>`;
+  }
+  if (headingLevel === 2) {
+    return `<w:p><w:pPr><w:pStyle w:val="Heading2"/></w:pPr><w:r><w:t xml:space="preserve">${escapeXml(raw)}</w:t></w:r></w:p>`;
+  }
+  return `<w:p><w:r><w:t xml:space="preserve">${escapeXml(raw)}</w:t></w:r></w:p>`;
+};
+
+const buildTemplateReplacementMap = (payload = {}) => ({
+  BID_NO: trimText(payload.bid_no),
+  PROJECT_TITLE: trimText(payload.project_title),
+  PROJECT_NAME: trimText(payload.project_name),
+  PROJECT_CODE: trimText(payload.project_code),
+  PACKAGE_NO: trimText(payload.package_no),
+  BUDGET: trimText(payload.budget),
+  BUYER_NAME: trimText(payload.buyer_name),
+  AGENCY_NAME: trimText(payload.agency_name),
+  PROJECT_DOMAIN: trimText(payload.project_domain),
+  PROJECT_OVERVIEW: trimText(payload.project_overview),
+  CUSTOMER_NAME: trimText(payload.customer_name),
+  SOURCE_FILE_NAME: trimText(payload.source_file_name),
+  BID_CATEGORY: trimText(payload.bid_category),
+  COMPANY_INFO: trimText(payload.company_info),
+  LEGAL_PERSON_INFO: trimText(payload.legal_person_info),
+  AUTHORIZED_AGENT_INFO: trimText(payload.authorized_agent_info),
+  QUALIFICATION_INFO: trimText(payload.qualification_info),
+  FINANCE_INFO: trimText(payload.finance_info),
+  PERFORMANCE_INFO: trimText(payload.performance_info),
+  PERSONNEL_INFO: trimText(payload.personnel_info),
+  BUSINESS_VOLUME_CONTENT: trimText(payload.business_volume_content),
+  TECHNICAL_VOLUME_CONTENT: trimText(payload.technical_volume_content),
+  QUOTATION_VOLUME_CONTENT: trimText(payload.quotation_volume_content),
+  APPENDIX_INDEX_CONTENT: trimText(payload.appendix_index_content),
+  COVER_CONTENT: trimText(payload.cover_content),
+  TOC_CONTENT: trimText(payload.toc_content),
+  GENERATED_AT: trimText(payload.generated_at),
+});
+
+const buildChapterContentText = (chapters = []) => {
+  const lines = [];
+  for (const chapter of Array.isArray(chapters) ? chapters : []) {
+    const title = trimText(chapter?.title);
+    if (title) lines.push(title);
+    const contentLines = Array.isArray(chapter?.content) ? chapter.content : toLines(chapter?.content || '');
+    for (const line of contentLines) {
+      const normalized = trimText(line);
+      if (!normalized) continue;
+      lines.push(normalized);
+    }
+    lines.push('');
+  }
+  return lines.join('\n').trim();
+};
+
+const pickChapterTexts = (chapters = [], keywords = []) => {
+  const keywordList = (Array.isArray(keywords) ? keywords : [])
+    .map((item) => trimText(item))
+    .filter(Boolean);
+  if (!keywordList.length) return '';
+  const lines = [];
+  for (const chapter of Array.isArray(chapters) ? chapters : []) {
+    const title = trimText(chapter?.title);
+    if (!title) continue;
+    if (!keywordList.some((keyword) => title.includes(keyword))) continue;
+    lines.push(title);
+    const contentLines = Array.isArray(chapter?.content) ? chapter.content : toLines(chapter?.content || '');
+    for (const line of contentLines) {
+      const normalized = trimText(line);
+      if (!normalized) continue;
+      lines.push(normalized);
+    }
+    lines.push('');
+  }
+  return lines.join('\n').trim();
+};
+
+const buildTemplateRenderPayload = ({ payload = {}, chapters = [] }) => {
+  const replacementMap = buildTemplateReplacementMap(payload);
+  const chapterContent = buildChapterContentText(chapters);
+  const coverContent = trimText(payload.cover_content) || pickChapterTexts(chapters, ['封面']);
+  const tocContent = trimText(payload.toc_content) || pickChapterTexts(chapters, ['目录']);
+  const businessContent = trimText(payload.business_volume_content) || pickChapterTexts(chapters, ['商务']);
+  const technicalContent = trimText(payload.technical_volume_content)
+    || pickChapterTexts(chapters, ['技术', '服务方案', '采购需求']);
+  const quotationContent = trimText(payload.quotation_volume_content)
+    || pickChapterTexts(chapters, ['报价', '偏离表']);
+  const appendixContent = trimText(payload.appendix_index_content) || pickChapterTexts(chapters, ['附录', '投标文件格式']);
+  const chapterOutline = (Array.isArray(chapters) ? chapters : [])
+    .map((item, idx) => `${idx + 1}. ${trimText(item?.title) || `章节${idx + 1}`}`)
+    .join('\n');
+
+  return {
+    ...payload,
+    ...replacementMap,
+    CHAPTER_COUNT: String((Array.isArray(chapters) ? chapters : []).length),
+    CHAPTER_OUTLINE: chapterOutline,
+    BID_CONTENT: chapterContent,
+    CHAPTERS_CONTENT: chapterContent,
+    BID_BODY: chapterContent,
+    COVER_CONTENT: coverContent,
+    TOC_CONTENT: tocContent,
+    BUSINESS_CONTENT: businessContent,
+    TECHNICAL_CONTENT: technicalContent,
+    QUALIFICATION_CONTENT: trimText(payload.qualification_info) || pickChapterTexts(chapters, ['资格']),
+    BUSINESS_VOLUME_CONTENT: businessContent,
+    TECHNICAL_VOLUME_CONTENT: technicalContent,
+    QUOTATION_VOLUME_CONTENT: quotationContent,
+    APPENDIX_INDEX_CONTENT: appendixContent,
+    COMPANY_INFO: trimText(payload.company_info),
+    LEGAL_PERSON_INFO: trimText(payload.legal_person_info),
+    AUTHORIZED_AGENT_INFO: trimText(payload.authorized_agent_info),
+    QUALIFICATION_INFO: trimText(payload.qualification_info),
+    FINANCE_INFO: trimText(payload.finance_info),
+    PERFORMANCE_INFO: trimText(payload.performance_info),
+    PERSONNEL_INFO: trimText(payload.personnel_info),
+    RISK_CONTENT: pickChapterTexts(chapters, ['风险', '丢分']),
+    SCORE_CONTENT: pickChapterTexts(chapters, ['得分', '评分']),
+    APPENDIX_CONTENT: appendixContent,
+  };
+};
+
+const appendDocxParagraphsToBody = (documentXml, paragraphXmlRows = []) => {
+  const rows = Array.isArray(paragraphXmlRows) ? paragraphXmlRows.filter((item) => trimText(item)) : [];
+  if (!rows.length) return documentXml;
+  const bodyOpenTag = '<w:body>';
+  const bodyCloseTag = '</w:body>';
+  const bodyStart = documentXml.indexOf(bodyOpenTag);
+  const bodyEnd = documentXml.lastIndexOf(bodyCloseTag);
+  if (bodyStart < 0 || bodyEnd <= bodyStart) return documentXml;
+
+  const bodyContentStart = bodyStart + bodyOpenTag.length;
+  const bodyXml = documentXml.slice(bodyContentStart, bodyEnd);
+  const sectPrRegex = /<w:sectPr[\s\S]*<\/w:sectPr>\s*$/;
+  const sectMatch = bodyXml.match(sectPrRegex);
+  const existingContent = sectMatch ? bodyXml.slice(0, bodyXml.length - sectMatch[0].length) : bodyXml;
+  const sectPrXml = sectMatch ? sectMatch[0] : '';
+  const appendixPrefix = existingContent.trim() ? '<w:p/>' : '';
+  const appendixBody = `${appendixPrefix}${rows.join('')}`;
+  const nextBody = `${existingContent}${appendixBody}${sectPrXml}`;
+  return `${documentXml.slice(0, bodyContentStart)}${nextBody}${documentXml.slice(bodyEnd)}`;
+};
+
+const buildChapterParagraphXmlRows = (chapters = []) => {
+  const paragraphXmlRows = [];
+  for (const chapter of Array.isArray(chapters) ? chapters : []) {
+    const chapterTitle = trimText(chapter?.title);
+    if (chapterTitle) paragraphXmlRows.push(buildDocxParagraphXml(chapterTitle, { headingLevel: 1 }));
+    const lines = Array.isArray(chapter?.content) ? chapter.content : toLines(chapter?.content || '');
+    for (const line of lines) {
+      const normalizedLine = trimText(line);
+      if (!normalizedLine) {
+        paragraphXmlRows.push('<w:p/>');
+        continue;
+      }
+      paragraphXmlRows.push(buildDocxParagraphXml(normalizedLine));
+    }
+    paragraphXmlRows.push('<w:p/>');
+  }
+  if (!paragraphXmlRows.length) {
+    paragraphXmlRows.push(buildDocxParagraphXml('投标文件（自动生成初稿）', { headingLevel: 1 }));
+    paragraphXmlRows.push(buildDocxParagraphXml('请人工完善正文内容。'));
+  }
+  return paragraphXmlRows;
+};
+
+const replaceTemplateTokens = (text, replacementMap = {}) => {
+  let result = String(text || '');
+  for (const [key, value] of Object.entries(replacementMap || {})) {
+    const safe = escapeXml(value || '');
+    const token = `{{${key}}}`;
+    result = result.split(token).join(safe);
+  }
+  return result;
+};
+
+const writeDocxWithTemplate = async ({ templatePath, outputPath, chapters = [], payload = {} }) => {
+  const bytes = await fs.promises.readFile(templatePath);
+  const originalZip = new PizZip(bytes);
+  const originalDocXml = originalZip.file('word/document.xml')?.asText() || '';
+  if (!trimText(originalDocXml)) {
+    throw appError('模板文件缺少 word/document.xml，无法写入内容', 500);
+  }
+  const chapterRows = Array.isArray(chapters) ? chapters : [];
+  const replacementMap = buildTemplateReplacementMap(payload);
+  const renderPayload = buildTemplateRenderPayload({ payload, chapters: chapterRows });
+  const hasBodyPlaceholder = ['{{BID_CONTENT}}', '{{CHAPTERS_CONTENT}}', '{{BID_BODY}}']
+    .some((token) => originalDocXml.includes(token));
+
+  await applyDocxTemplate({
+    sourcePath: templatePath,
+    outputPath,
+    payload: renderPayload,
+  });
+
+  const renderedBytes = await fs.promises.readFile(outputPath);
+  const zip = new PizZip(renderedBytes);
+  let renderedDocXml = zip.file('word/document.xml')?.asText() || '';
+  if (!trimText(renderedDocXml)) {
+    throw appError('模板渲染后正文为空，无法生成文档', 500);
+  }
+
+  if (!hasBodyPlaceholder) {
+    const chapterParagraphRows = buildChapterParagraphXmlRows(chapterRows);
+    renderedDocXml = appendDocxParagraphsToBody(renderedDocXml, chapterParagraphRows);
+    zip.file('word/document.xml', renderedDocXml);
+  }
+
+  const replaceInEntries = zip
+    .file(/word\/(header|footer)\d*\.xml/)
+    .map((entry) => entry.name);
+  for (const entryName of replaceInEntries) {
+    const content = zip.file(entryName)?.asText();
+    if (!content) continue;
+    zip.file(entryName, replaceTemplateTokens(content, replacementMap));
+  }
+
+  const out = zip.generate({ type: 'nodebuffer', compression: 'DEFLATE' });
+  await fs.promises.writeFile(outputPath, out);
+};
+
 const fetchWithTimeout = async (url, options = {}, timeoutMs = 5000) => {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -585,6 +4918,7 @@ const authRequired = asyncHandler(async (req, _res, next) => {
   if (req.path === '/health') return next();
   if (req.path.startsWith('/api/tender/editor/callback/')) return next();
   if (/^\/api\/tender\/drafts\/\d+\/download\.docx$/.test(req.path)) return next();
+  if (/^\/api\/tender\/bids\/generate\/jobs\/\d+\/source\/download\.docx$/.test(req.path)) return next();
   const token = extractBearerToken(req.headers.authorization) || extractCookieToken(req.headers.cookie);
   if (!token) throw appError('未登录', 401);
   if (token.length < 16 || token.length > 4096) throw appError('登录凭证非法', 401);
@@ -636,12 +4970,25 @@ const nextBidNo = async () => {
 const ensureBidExists = async (bidId) => {
   const row = await get('SELECT * FROM tender_bids WHERE id = ? LIMIT 1', [bidId]);
   if (!row) throw appError('标书不存在', 404);
-  return row;
+  return sanitizeBidRow(row);
 };
 
 const getCurrentVersion = async (bid) => {
   if (!Number.isFinite(Number(bid?.current_version_id))) return null;
-  return get('SELECT * FROM tender_bid_versions WHERE id = ? LIMIT 1', [Number(bid.current_version_id)]);
+  const row = await get('SELECT * FROM tender_bid_versions WHERE id = ? LIMIT 1', [Number(bid.current_version_id)]);
+  return sanitizeVersionRow(row);
+};
+
+const getBidVersionById = async ({ bidId, versionId }) => {
+  if (!Number.isFinite(Number(versionId)) || Number(versionId) <= 0) return null;
+  const row = await get(
+    `SELECT *
+     FROM tender_bid_versions
+     WHERE id = ? AND bid_id = ?
+     LIMIT 1`,
+    [Number(versionId), Number(bidId)]
+  );
+  return sanitizeVersionRow(row);
 };
 
 const getNextVersionNo = async (tx, bidId) => {
@@ -811,7 +5158,7 @@ const logSystemOperation = async ({ action, entity, entityId = null, message = n
 
 const ensureDraftForBid = async ({ bid, user }) => {
   let draft = await get('SELECT * FROM tender_bid_drafts WHERE bid_id = ? LIMIT 1', [Number(bid.id)]);
-  if (draft) return draft;
+  if (draft) return sanitizeDraftRow(draft);
 
   const version = await getCurrentVersion(bid);
   if (!version) throw appError('标书尚无版本文件，请先上传版本文件', 409);
@@ -843,7 +5190,7 @@ const ensureDraftForBid = async ({ bid, user }) => {
     ]
   );
   draft = await get('SELECT * FROM tender_bid_drafts WHERE id = ? LIMIT 1', [Number(info.insertId)]);
-  return draft;
+  return sanitizeDraftRow(draft);
 };
 
 const buildOnlyOfficeConfig = ({ session, bid, draft, editableUrl, callbackUrl }) => {
@@ -871,6 +5218,56 @@ const buildOnlyOfficeConfig = ({ session, bid, draft, editableUrl, callbackUrl }
       customization: {
         autosave: true,
         forcesave: true,
+      },
+    },
+  };
+
+  return {
+    provider: DOC_EDITOR_PROVIDER,
+    serverPath: DOC_EDITOR_PUBLIC_PATH,
+    config,
+    token: jwt.sign(config, DOC_EDITOR_JWT_SECRET, { expiresIn: '2h' }),
+  };
+};
+
+const buildOnlyOfficeGenerateSourcePreviewConfig = ({ job, sourceUrl, user }) => {
+  const sourceName = trimText(job?.source_file_name) || '招标文件.docx';
+  const title = sourceName.toLowerCase().endsWith('.docx')
+    ? sourceName
+    : `${path.parse(sourceName).name || '招标文件'}.docx`;
+  const fileSize = Number(job?.source_file_size || 0);
+  const updatedTag = String(job?.updated_at || job?.created_at || '')
+    .replace(/[^0-9]/g, '')
+    .slice(0, 14) || `${Date.now()}`;
+  const safeKey = `generate_source_${Number(job?.id || 0)}_${fileSize}_${updatedTag}`
+    .replace(/[^0-9A-Za-z._=-]/g, '_')
+    .slice(0, 128);
+
+  const config = {
+    document: {
+      fileType: 'docx',
+      key: safeKey,
+      title,
+      url: sourceUrl,
+      permissions: {
+        edit: false,
+        download: true,
+        print: true,
+        copy: true,
+      },
+    },
+    documentType: 'word',
+    editorConfig: {
+      mode: 'view',
+      lang: 'zh-CN',
+      user: {
+        id: String(Number(user?.id || 0) || 0),
+        name: String(user?.username || '预览用户'),
+      },
+      customization: {
+        autosave: false,
+        forcesave: false,
+        compactToolbar: true,
       },
     },
   };
@@ -916,7 +5313,10 @@ const bidVersionUpload = multer({
 
 const uploadBidVersion = (req, res, next) => {
   bidVersionUpload.single('file')(req, res, (err) => {
-    if (!err) return next();
+    if (!err) {
+      normalizeUploadFileName(req);
+      return next();
+    }
     if (err.code === 'LIMIT_FILE_SIZE') {
       return next(appError(`文件大小不能超过 ${Math.floor(FILE_MAX_BYTES / 1024 / 1024)}MB`, 400));
     }
@@ -947,7 +5347,78 @@ const tenderSourceUpload = multer({
 
 const uploadTenderSourceFile = (req, res, next) => {
   tenderSourceUpload.single('file')(req, res, (err) => {
-    if (!err) return next();
+    if (!err) {
+      normalizeUploadFileName(req);
+      return next();
+    }
+    if (err.code === 'LIMIT_FILE_SIZE') {
+      return next(appError(`文件大小不能超过 ${Math.floor(FILE_MAX_BYTES / 1024 / 1024)}MB`, 400));
+    }
+    return next(appError(err.message || '文件上传失败', err.statusCode || 400));
+  });
+};
+
+const sampleUpload = multer({
+  storage: multer.diskStorage({
+    destination: (_req, _file, cb) => cb(null, SAMPLE_ROOT),
+    filename: (_req, file, cb) => {
+      const ext = normalizeBidUploadExt(file.originalname || '') || '.docx';
+      cb(null, buildStoredFilename(file.originalname, ext));
+    },
+  }),
+  limits: {
+    fileSize: FILE_MAX_BYTES,
+  },
+  fileFilter: (_req, file, cb) => {
+    const ext = normalizeBidUploadExt(file.originalname || '');
+    const mime = trimText(file.mimetype).toLowerCase();
+    if (!ext || (!ALLOWED_BID_UPLOAD_MIME.has(mime) && mime)) {
+      return cb(appError('仅支持上传 doc/docx/pdf', 400));
+    }
+    return cb(null, true);
+  },
+});
+
+const uploadSampleFile = (req, res, next) => {
+  sampleUpload.single('file')(req, res, (err) => {
+    if (!err) {
+      normalizeUploadFileName(req);
+      return next();
+    }
+    if (err.code === 'LIMIT_FILE_SIZE') {
+      return next(appError(`文件大小不能超过 ${Math.floor(FILE_MAX_BYTES / 1024 / 1024)}MB`, 400));
+    }
+    return next(appError(err.message || '文件上传失败', err.statusCode || 400));
+  });
+};
+
+const docTemplateUpload = multer({
+  storage: multer.diskStorage({
+    destination: (_req, _file, cb) => cb(null, TEMPLATE_ROOT),
+    filename: (_req, file, cb) => {
+      const ext = normalizeDocTemplateExt(file.originalname || '') || '.docx';
+      cb(null, buildStoredFilename(file.originalname, ext));
+    },
+  }),
+  limits: {
+    fileSize: FILE_MAX_BYTES,
+  },
+  fileFilter: (_req, file, cb) => {
+    const ext = normalizeDocTemplateExt(file.originalname || '');
+    const mime = trimText(file.mimetype).toLowerCase();
+    if (!ext || (!ALLOWED_DOC_TEMPLATE_MIME.has(mime) && mime)) {
+      return cb(appError('仅支持上传 docx 模板', 400));
+    }
+    return cb(null, true);
+  },
+});
+
+const uploadDocTemplateFile = (req, res, next) => {
+  docTemplateUpload.single('file')(req, res, (err) => {
+    if (!err) {
+      normalizeUploadFileName(req);
+      return next();
+    }
     if (err.code === 'LIMIT_FILE_SIZE') {
       return next(appError(`文件大小不能超过 ${Math.floor(FILE_MAX_BYTES / 1024 / 1024)}MB`, 400));
     }
@@ -972,7 +5443,10 @@ const assetUpload = multer({
 
 const uploadAssetFile = (req, res, next) => {
   assetUpload.single('file')(req, res, (err) => {
-    if (!err) return next();
+    if (!err) {
+      normalizeUploadFileName(req);
+      return next();
+    }
     if (err.code === 'LIMIT_FILE_SIZE') {
       return next(appError(`文件大小不能超过 ${Math.floor(FILE_MAX_BYTES / 1024 / 1024)}MB`, 400));
     }
@@ -1302,7 +5776,8 @@ const renderWatermarkedFile = async ({ req, asset, purpose = 'preview' }) => {
 
   const ext = path.extname(sourcePath).toLowerCase();
   const watermarkText = createWatermarkText({ req, purpose });
-  const targetPath = path.join(WATERMARK_ROOT, buildStoredFilename(asset.original_file_name, ext));
+  const safeOriginalName = fixMojibakeText(asset.original_file_name);
+  const targetPath = path.join(WATERMARK_ROOT, buildStoredFilename(safeOriginalName, ext));
 
   if (ext === '.jpg' || ext === '.jpeg' || ext === '.png') {
     await renderWatermarkImage({ sourcePath, targetPath, watermarkText });
@@ -1315,7 +5790,7 @@ const renderWatermarkedFile = async ({ req, asset, purpose = 'preview' }) => {
   return {
     path: targetPath,
     mime: guessMimeByExt(ext),
-    filename: asset.original_file_name || path.basename(targetPath),
+    filename: safeOriginalName || path.basename(targetPath),
   };
 };
 
@@ -1428,6 +5903,226 @@ const resolveModel = async (modelId) => {
   return row;
 };
 
+const parseHeadersObject = (input, fallback = {}) => {
+  if (input && typeof input === 'object' && !Array.isArray(input)) return input;
+  if (typeof input === 'string') {
+    const parsed = parseMaybeJson(input, null);
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed;
+  }
+  return fallback && typeof fallback === 'object' && !Array.isArray(fallback) ? fallback : {};
+};
+
+const ensureIntMin = (value, fallback, min) => {
+  if (value === undefined || value === null || value === '') return fallback;
+  const n = Number(value);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.max(min, Math.round(n));
+};
+
+const ensureFloatWithFallback = (value, fallback) => {
+  if (value === undefined || value === null || value === '') return fallback;
+  const n = Number(value);
+  if (!Number.isFinite(n)) return fallback;
+  return n;
+};
+
+const buildModelRuntimeForTest = async (body = {}) => {
+  const modelId = Number(body.model_id || 0);
+  const hasModelId = Number.isFinite(modelId) && modelId > 0;
+
+  let baseModel = null;
+  let baseRuntime = null;
+  if (hasModelId) {
+    baseModel = await get('SELECT * FROM tender_ai_models WHERE id = ? LIMIT 1', [modelId]);
+    if (!baseModel) throw appError('模型不存在', 404);
+    baseRuntime = resolveModelRuntime(baseModel);
+  }
+
+  const name = trimText(body.name) || trimText(baseModel?.name) || '临时模型';
+  const model_key = trimText(body.model_key).toLowerCase() || trimText(baseModel?.model_key).toLowerCase() || 'temporary_model_test';
+  const model_name = trimText(body.model_name) || trimText(baseModel?.model_name) || trimText(baseRuntime?.model_name);
+  const base_url = trimText(body.base_url) || trimText(baseModel?.base_url) || trimText(baseRuntime?.base_url);
+
+  let api_key = trimText(baseRuntime?.api_key);
+  if (body.api_key !== undefined) {
+    const incomingApiKey = trimText(body.api_key);
+    if (incomingApiKey && incomingApiKey !== SECRET_MASK) {
+      api_key = incomingApiKey;
+    }
+  }
+
+  const mergedHeaders = parseHeadersObject(body.extra_headers_json, parseMaybeJson(baseModel?.extra_headers_json, {}));
+  const timeout_ms = ensureIntMin(body.timeout_ms, Number(baseRuntime?.timeout_ms || baseModel?.timeout_ms || 20000), 3000);
+  const max_tokens = ensureIntMin(body.max_tokens, Number(baseRuntime?.max_tokens || baseModel?.max_tokens || 4096), 256);
+  const temperature_default = ensureFloatWithFallback(
+    body.temperature_default,
+    Number(baseRuntime?.temperature_default || baseModel?.temperature_default || 0.3)
+  );
+
+  if (!base_url || !api_key || !model_name) {
+    throw appError('模型配置不完整（base_url/api_key/model_name）', 400);
+  }
+
+  return {
+    source: hasModelId ? 'saved_or_editing' : 'draft',
+    modelMeta: {
+      id: hasModelId ? modelId : 0,
+      name,
+      model_key,
+      model_name,
+      base_url,
+    },
+    runtime: {
+      base_url,
+      api_key,
+      model_name,
+      timeout_ms,
+      max_tokens,
+      temperature_default,
+      extra_headers: mergedHeaders,
+    },
+  };
+};
+
+const runAiModelConnectionTest = async ({ req, modelMeta, runtime, source }) => {
+  const taskType = 'AI_MODEL_TEST';
+  const requestPayload = {
+    task_type: taskType,
+    source,
+    model: {
+      id: Number(modelMeta?.id || 0),
+      model_key: trimText(modelMeta?.model_key),
+      model_name: trimText(modelMeta?.model_name || runtime?.model_name),
+      base_url: trimText(modelMeta?.base_url || runtime?.base_url),
+    },
+  };
+  const requestHash = sha256Hex(stableStringify(requestPayload));
+
+  try {
+    const result = await callOpenAiCompatible({
+      runtime,
+      messages: [
+        { role: 'system', content: '你是模型连通性测试助手，请只回复“连接成功”。' },
+        { role: 'user', content: '请返回“连接成功”，用于验证模型配置是否可用。' },
+      ],
+      temperature: 0,
+      maxTokens: 64,
+    });
+
+    const responseHash = sha256Hex(result.raw || result.content);
+
+    const insert = await run(
+      `INSERT INTO tender_ai_task_logs
+        (task_type, model_id, model_name, status, latency_ms, prompt_tokens, completion_tokens, total_tokens, request_hash, response_hash, error_message, operator_id, operator_name, request_ip)
+       VALUES (?, ?, ?, 'SUCCESS', ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?)`,
+      [
+        taskType,
+        Number(modelMeta?.id || 0),
+        trimText(modelMeta?.name || runtime?.model_name || '模型测试'),
+        Number(result.latencyMs || 0),
+        Number(result.usage?.prompt_tokens || 0),
+        Number(result.usage?.completion_tokens || 0),
+        Number(result.usage?.total_tokens || 0),
+        requestHash,
+        responseHash,
+        Number(req.user.id),
+        trimText(req.user.username),
+        trimText(getClientIp(req)),
+      ]
+    );
+
+    await logOperation({
+      req,
+      action: 'AI_MODEL_TEST',
+      entity: 'ai_model',
+      entityId: Number(modelMeta?.id || 0) || null,
+      message: `测试模型连接 ${trimText(modelMeta?.model_key || modelMeta?.name || runtime?.model_name)}`,
+      afterData: {
+        source,
+        task_log_id: insert.insertId,
+        model_id: Number(modelMeta?.id || 0),
+        model_key: trimText(modelMeta?.model_key),
+        model_name: trimText(modelMeta?.model_name || runtime?.model_name),
+        base_url: trimText(modelMeta?.base_url || runtime?.base_url),
+        latency_ms: Number(result.latencyMs || 0),
+      },
+    });
+
+    return {
+      ok: true,
+      source,
+      task_log_id: insert.insertId,
+      model: {
+        id: Number(modelMeta?.id || 0),
+        name: trimText(modelMeta?.name || runtime?.model_name),
+        model_key: trimText(modelMeta?.model_key),
+        model_name: trimText(modelMeta?.model_name || runtime?.model_name),
+        base_url: trimText(modelMeta?.base_url || runtime?.base_url),
+      },
+      latency_ms: Number(result.latencyMs || 0),
+      usage: {
+        prompt_tokens: Number(result.usage?.prompt_tokens || 0),
+        completion_tokens: Number(result.usage?.completion_tokens || 0),
+        total_tokens: Number(result.usage?.total_tokens || 0),
+      },
+      content_preview: String(result.content || '').slice(0, 200),
+    };
+  } catch (err) {
+    const insert = await run(
+      `INSERT INTO tender_ai_task_logs
+        (task_type, model_id, model_name, status, latency_ms, request_hash, response_hash, error_message, operator_id, operator_name, request_ip)
+       VALUES (?, ?, ?, 'FAILED', ?, ?, NULL, ?, ?, ?, ?)`,
+      [
+        taskType,
+        Number(modelMeta?.id || 0),
+        trimText(modelMeta?.name || runtime?.model_name || '模型测试'),
+        0,
+        requestHash,
+        trimText(err.message).slice(0, 2000),
+        Number(req.user.id),
+        trimText(req.user.username),
+        trimText(getClientIp(req)),
+      ]
+    );
+
+    await logOperation({
+      req,
+      action: 'AI_MODEL_TEST_FAIL',
+      entity: 'ai_model',
+      entityId: Number(modelMeta?.id || 0) || null,
+      message: `模型连接测试失败 ${trimText(modelMeta?.model_key || modelMeta?.name || runtime?.model_name)}`,
+      afterData: {
+        source,
+        task_log_id: insert.insertId,
+        model_id: Number(modelMeta?.id || 0),
+        model_key: trimText(modelMeta?.model_key),
+        model_name: trimText(modelMeta?.model_name || runtime?.model_name),
+        base_url: trimText(modelMeta?.base_url || runtime?.base_url),
+        error: trimText(err.message).slice(0, 2000),
+      },
+    });
+
+    throw err;
+  }
+};
+
+const resolveDocTemplate = async (templateId) => {
+  let row = null;
+  if (Number.isFinite(Number(templateId)) && Number(templateId) > 0) {
+    row = await get(
+      'SELECT * FROM tender_doc_templates WHERE id = ? AND status = \'ACTIVE\' LIMIT 1',
+      [Number(templateId)]
+    );
+    if (!row) throw appError('所选投标模板不存在或已停用', 400);
+    return sanitizeDocTemplateRow(row);
+  }
+
+  row = await get('SELECT * FROM tender_doc_templates WHERE status = \'ACTIVE\' AND is_default = 1 LIMIT 1');
+  if (row) return sanitizeDocTemplateRow(row);
+  row = await get('SELECT * FROM tender_doc_templates WHERE status = \'ACTIVE\' ORDER BY id ASC LIMIT 1');
+  return sanitizeDocTemplateRow(row);
+};
+
 const extractJsonCandidate = (text) => {
   const trimmed = trimText(text);
   if (!trimmed) return null;
@@ -1467,6 +6162,10 @@ const runAiTask = async ({ req, taskType, inputText, modelId, extraSystemPrompt 
 
   const model = await resolveModel(modelId);
   const runtime = resolveModelRuntime(model);
+  const taskRuntime = { ...runtime };
+  if (ANALYZE_STAGE_TASK_TYPE_SET.has(trimText(taskType))) {
+    taskRuntime.timeout_ms = Math.max(Number(taskRuntime.timeout_ms || 0), AI_ANALYZE_TASK_TIMEOUT_MS);
+  }
   const prompt = await getPromptTemplate(taskType);
 
   const systemPrompt = extraSystemPrompt ? `${prompt}\n${extraSystemPrompt}` : prompt;
@@ -1482,13 +6181,13 @@ const runAiTask = async ({ req, taskType, inputText, modelId, extraSystemPrompt 
   let taskLogId = null;
   try {
     const result = await callOpenAiCompatible({
-      runtime,
+      runtime: taskRuntime,
       messages: [
         { role: 'system', content: systemPrompt },
         { role: 'user', content: inputText },
       ],
-      temperature: runtime.temperature_default,
-      maxTokens: runtime.max_tokens,
+      temperature: taskRuntime.temperature_default,
+      maxTokens: taskRuntime.max_tokens,
     });
 
     const responseHash = sha256Hex(result.raw || result.content);
@@ -1667,6 +6366,175 @@ const performAuditCleanup = async () => {
   });
 };
 
+const loadSampleSections = async (sampleId) => {
+  const rows = await query(
+    `SELECT sample_id, section_key, section_title, section_text, summary_text, keywords_json
+     FROM tender_bid_sample_sections
+     WHERE sample_id = ?
+     ORDER BY id ASC`,
+    [Number(sampleId)]
+  );
+  return rows.map((item) => ({
+    ...item,
+    keywords: parseMaybeJson(item.keywords_json, []),
+  }));
+};
+
+const loadSampleFeatures = async (sampleId) => {
+  const rows = await query(
+    `SELECT feature_key, feature_value, feature_weight
+     FROM tender_bid_sample_features
+     WHERE sample_id = ?
+     ORDER BY id ASC`,
+    [Number(sampleId)]
+  );
+  const features = {
+    keywords: [],
+  };
+  for (const row of rows) {
+    const key = trimText(row.feature_key);
+    if (key === 'keyword') {
+      if (trimText(row.feature_value)) features.keywords.push(trimText(row.feature_value));
+      continue;
+    }
+    features[key] = trimText(row.feature_value);
+  }
+  return features;
+};
+
+const loadGenerateJobDetail = async (jobId) => {
+  const job = await get('SELECT * FROM tender_bid_generate_jobs WHERE id = ? LIMIT 1', [Number(jobId)]);
+  if (!job) return null;
+  const items = await query(
+    `SELECT *
+     FROM tender_bid_generate_items
+     WHERE job_id = ?
+     ORDER BY item_type ASC, sort_order ASC, id ASC`,
+    [Number(jobId)]
+  );
+  const matches = await query(
+    `SELECT m.*, s.sample_no, s.title, s.original_file_name
+     FROM tender_bid_generate_matches m
+     LEFT JOIN tender_bid_samples s ON s.id = m.sample_id
+     WHERE m.job_id = ?
+     ORDER BY m.rank_no ASC, m.id ASC`,
+    [Number(jobId)]
+  );
+
+  return {
+    job: sanitizeGenerateJobRow(job),
+    items: items.map((row) => ({
+      ...row,
+      title: fixMojibakeText(row.title),
+      evidence_text: fixMojibakeText(row.evidence_text),
+      suggestion_text: fixMojibakeText(row.suggestion_text),
+      section_title: fixMojibakeText(row.section_title),
+    })),
+    matches: matches.map((row) => ({
+      ...row,
+      sample_no: fixMojibakeText(row.sample_no),
+      title: fixMojibakeText(row.title),
+      original_file_name: fixMojibakeText(row.original_file_name),
+      reason_text: fixMojibakeText(row.reason_text),
+    })),
+  };
+};
+
+const toNumberIdList = (value, maxLen = 20) => {
+  if (!Array.isArray(value)) return [];
+  const seen = new Set();
+  const ids = [];
+  for (const item of value) {
+    const id = Number(item);
+    if (!Number.isFinite(id) || id <= 0) continue;
+    if (seen.has(id)) continue;
+    ids.push(id);
+    seen.add(id);
+    if (ids.length >= maxLen) break;
+  }
+  return ids;
+};
+
+const normalizeInstructionForm = (value = {}) => {
+  const source = isPlainObject(value) ? value : {};
+  const normalizeLine = (input, max = 200) => trimText(input).replace(/\s+/g, ' ').slice(0, max);
+  const normalizeText = (input, max = 2400) => trimText(input).slice(0, max);
+
+  return {
+    project_name: normalizeLine(source.project_name, 300),
+    project_code: normalizeLine(source.project_code, 120),
+    package_no: normalizeLine(source.package_no, 120),
+    budget: normalizeLine(source.budget, 120),
+    buyer_name: normalizeLine(source.buyer_name, 300),
+    agency_name: normalizeLine(source.agency_name, 300),
+    project_domain: normalizeLine(source.project_domain, 200),
+    project_overview: normalizeText(source.project_overview, 4000),
+  };
+};
+
+const applyInstructionFormToFinalJson = (sourceFinalJson = {}, instructionForm = {}, bidCategory = 'SERVICE') => {
+  const normalized = normalizeFinalAnalyzeJson(sourceFinalJson, bidCategory);
+  const form = normalizeInstructionForm(instructionForm);
+  if (!isPlainObject(normalized.project_core_info)) normalized.project_core_info = {};
+  const core = normalized.project_core_info;
+
+  if (trimText(form.project_name)) core.project_full_name = form.project_name;
+  if (trimText(form.project_code)) core.project_code = form.project_code;
+  if (trimText(form.package_no)) core.package_no = form.package_no;
+  if (trimText(form.budget)) core.project_budget = form.budget;
+  if (trimText(form.buyer_name)) core.buyer_full_name = form.buyer_name;
+  if (trimText(form.agency_name)) core.agency_full_name = form.agency_name;
+  if (trimText(form.project_domain)) {
+    core.project_domain = form.project_domain;
+    if ((normalizeBidCategory(bidCategory) || 'SERVICE') === 'PRODUCT') core.goods_category = form.project_domain;
+    else core.service_category = form.project_domain;
+  }
+  if (trimText(form.project_overview)) core.project_overview = form.project_overview;
+
+  return { finalJson: normalized, instructionForm: form };
+};
+
+const collectOwnLibrarySnapshot = async (inputSnapshot = {}) => {
+  const fromInput = inputSnapshot && typeof inputSnapshot === 'object' ? inputSnapshot : {};
+  const company = fromInput.company && typeof fromInput.company === 'object' ? fromInput.company : {};
+  const personnel = fromInput.personnel && typeof fromInput.personnel === 'object' ? fromInput.personnel : {};
+
+  const qualifications = Array.isArray(fromInput.qualifications)
+    ? fromInput.qualifications
+    : (
+      await query(
+        `SELECT r.fields_json
+         FROM tender_assets a
+         LEFT JOIN tender_asset_ocr_results r ON r.asset_id = a.id
+         WHERE a.asset_type = 'QUALIFICATION'
+         ORDER BY a.id DESC
+         LIMIT 50`
+      )
+    ).map((item) => (item?.fields_json && typeof item.fields_json === 'string' ? parseMaybeJson(item.fields_json, {}) : item));
+
+  const finance = Array.isArray(fromInput.finance)
+    ? fromInput.finance
+    : (
+      await query(
+        `SELECT r.fields_json
+         FROM tender_assets a
+         LEFT JOIN tender_asset_ocr_results r ON r.asset_id = a.id
+         WHERE (r.doc_type = 'FINANCE_INFO' OR JSON_UNQUOTE(JSON_EXTRACT(r.fields_json, '$.library_section')) = 'finance')
+         ORDER BY a.id DESC
+         LIMIT 50`
+      )
+    ).map((item) => (item?.fields_json && typeof item.fields_json === 'string' ? parseMaybeJson(item.fields_json, {}) : item));
+
+  return {
+    company,
+    personnel,
+    qualifications: qualifications.filter(Boolean),
+    finance: finance.filter(Boolean),
+    performance: Array.isArray(fromInput.performance) ? fromInput.performance.filter(Boolean) : [],
+    personnel_list: Array.isArray(fromInput.personnel_list) ? fromInput.personnel_list.filter(Boolean) : [],
+  };
+};
+
 app.get('/health', (_req, res) => {
   res.json({ ok: true, app: APP_NAME });
 });
@@ -1724,10 +6592,1465 @@ app.get('/api/tender/bids', requirePermission('tender:read'), asyncHandler(async
   );
 
   res.json({
-    items: rows,
+    items: rows.map((row) => sanitizeBidRow(row)),
     total: Number(total?.total || 0),
     page,
     limit,
+  });
+}));
+
+app.post('/api/tender/samples/upload', requirePermission('tender:write'), uploadSampleFile, asyncHandler(async (req, res) => {
+  const file = req.file;
+  if (!file?.path) throw appError('请上传历史投标样本文件', 400);
+
+  const sourceExt = normalizeBidUploadExt(file.originalname || '') || path.extname(file.path).toLowerCase() || '.docx';
+  const sourceFileName = fixMojibakeText(trimText(file.originalname) || path.basename(file.path));
+  const title = fixMojibakeText(trimText(req.body?.title) || trimText(path.parse(sourceFileName).name) || `历史样本-${Date.now()}`);
+  const sampleNo = await buildSampleNo();
+
+  const insert = await run(
+    `INSERT INTO tender_bid_samples
+      (sample_no, title, original_file_name, source_ext, storage_path, file_size, mime_type, parse_status, status, uploaded_by_id, uploaded_by_name)
+     VALUES (?, ?, ?, ?, ?, ?, ?, 'PENDING', 'ACTIVE', ?, ?)`,
+    [
+      sampleNo,
+      title,
+      sourceFileName,
+      sourceExt,
+      file.path,
+      Number(file.size || 0),
+      trimText(file.mimetype) || guessMimeByExt(sourceExt),
+      Number(req.user.id),
+      req.user.username,
+    ]
+  );
+
+  const sampleId = Number(insert.insertId);
+  let parseStatus = 'SUCCESS';
+  let parseError = '';
+  let parsedText = '';
+  let sections = [];
+  let features = {};
+
+  try {
+    parsedText = await textByExtFromStorage({ sourcePath: file.path, sourceExt, maxLen: SAMPLE_PARSE_MAX_TEXT });
+    if (!parsedText) throw appError('样本文本提取失败，请上传可复制文本的 doc/docx/pdf', 400);
+    const split = splitTenderSections(parsedText);
+    sections = split.sectionList;
+    features = detectBidFeatures(parsedText);
+    const manualBidCategory = normalizeBidCategory(req.body?.bid_category);
+    if (manualBidCategory) features.bid_category = manualBidCategory;
+
+    await transaction(async (tx) => {
+      await tx.run(
+        `UPDATE tender_bid_samples
+         SET parse_status = 'SUCCESS', parse_error = NULL, parsed_text = ?, updated_at = NOW()
+         WHERE id = ?`,
+        [parsedText, sampleId]
+      );
+      await tx.run('DELETE FROM tender_bid_sample_sections WHERE sample_id = ?', [sampleId]);
+      await tx.run('DELETE FROM tender_bid_sample_features WHERE sample_id = ?', [sampleId]);
+
+      for (const section of sections) {
+        await tx.run(
+          `INSERT INTO tender_bid_sample_sections
+            (sample_id, section_key, section_title, section_text, summary_text, keywords_json)
+           VALUES (?, ?, ?, ?, ?, ?)`,
+          [
+            sampleId,
+            section.section_key,
+            section.section_title,
+            section.text || '',
+            section.summary || '',
+            JSON.stringify(extractKeywords(section.text || '', 20)),
+          ]
+        );
+      }
+
+      const featureRows = buildSampleFeatureRows(sampleId, {
+        ...features,
+        keywords: extractSampleKeywordsFromSections(sections),
+      });
+      for (const row of featureRows) {
+        await tx.run(
+          `INSERT INTO tender_bid_sample_features (sample_id, feature_key, feature_value, feature_weight)
+           VALUES (?, ?, ?, ?)`,
+          [row.sample_id, row.feature_key, row.feature_value, row.feature_weight]
+        );
+      }
+    });
+  } catch (err) {
+    parseStatus = 'FAILED';
+    parseError = trimText(err.message).slice(0, 2000) || '样本解析失败';
+    await run(
+      `UPDATE tender_bid_samples
+       SET parse_status = 'FAILED', parse_error = ?, parsed_text = NULL, updated_at = NOW()
+       WHERE id = ?`,
+      [parseError, sampleId]
+    );
+  }
+
+  const row = sanitizeSampleRow(await get('SELECT * FROM tender_bid_samples WHERE id = ? LIMIT 1', [sampleId]));
+  const sectionRows = await loadSampleSections(sampleId);
+  const featureRows = await query(
+    `SELECT feature_key, feature_value, feature_weight
+     FROM tender_bid_sample_features
+     WHERE sample_id = ?
+     ORDER BY id ASC`,
+    [sampleId]
+  );
+
+  await logOperation({
+    req,
+    action: 'SAMPLE_UPLOAD',
+    entity: 'sample',
+    entityId: sampleId,
+    message: `上传历史样本 ${sourceFileName}`,
+    afterData: {
+      sample_id: sampleId,
+      sample_no: sampleNo,
+      parse_status: parseStatus,
+      parse_error: parseError || null,
+      section_count: sectionRows.length,
+    },
+  });
+
+  res.status(201).json({
+    sample: row,
+    sections: sectionRows,
+    features: featureRows,
+  });
+}));
+
+app.get('/api/tender/samples', requirePermission('tender:read'), asyncHandler(async (req, res) => {
+  const page = toPositiveInt(req.query.page, 1);
+  const limit = toBoundedLimit(req.query.limit, 10);
+  const offset = (page - 1) * limit;
+  const keyword = trimText(req.query.keyword);
+  const status = trimText(req.query.status).toUpperCase();
+
+  const where = [];
+  const params = [];
+  if (keyword) {
+    where.push('(title LIKE ? OR original_file_name LIKE ? OR sample_no LIKE ?)');
+    params.push(`%${keyword}%`, `%${keyword}%`, `%${keyword}%`);
+  }
+  if (status) {
+    where.push('status = ?');
+    params.push(status);
+  }
+  const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
+
+  const total = await get(`SELECT COUNT(1) AS total FROM tender_bid_samples ${whereSql}`, params);
+  const rows = await query(
+    `SELECT s.*,
+            (SELECT COUNT(1) FROM tender_bid_sample_sections t WHERE t.sample_id = s.id) AS section_count
+     FROM tender_bid_samples s
+     ${whereSql}
+     ORDER BY s.id DESC
+     LIMIT ? OFFSET ?`,
+    [...params, limit, offset]
+  );
+
+  res.json({
+    items: rows.map((item) => sanitizeSampleRow(item)),
+    total: Number(total?.total || 0),
+    page,
+    limit,
+  });
+}));
+
+app.delete('/api/tender/samples/:id', requirePermission('tender:write'), asyncHandler(async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isFinite(id) || id <= 0) throw appError('样本ID无效', 400);
+
+  const sample = sanitizeSampleRow(await get('SELECT * FROM tender_bid_samples WHERE id = ? LIMIT 1', [id]));
+  if (!sample) throw appError('样本不存在', 404);
+
+  await withDeadlockRetry(
+    () => transaction(async (tx) => {
+      await tx.run('DELETE FROM tender_bid_generate_matches WHERE sample_id = ?', [id]);
+      await tx.run('DELETE FROM tender_bid_sample_features WHERE sample_id = ?', [id]);
+      await tx.run('DELETE FROM tender_bid_sample_sections WHERE sample_id = ?', [id]);
+      await tx.run('DELETE FROM tender_bid_samples WHERE id = ?', [id]);
+    }),
+    { maxRetries: 2, baseDelayMs: 100 }
+  );
+  await deleteFileSafe(sample.storage_path);
+
+  try {
+    await withDeadlockRetry(
+      () => logOperation({
+        req,
+        action: 'SAMPLE_DELETE',
+        entity: 'sample',
+        entityId: id,
+        message: `删除历史样本 ${sample.original_file_name}`,
+        beforeData: sample,
+        afterData: { deleted: true },
+      }),
+      { maxRetries: 2, baseDelayMs: 100 }
+    );
+  } catch (err) {
+    console.error('[tender] sample delete log failed:', err?.message || err);
+  }
+
+  res.json({ ok: true, id });
+}));
+
+app.get('/api/tender/doc-templates', requirePermission('tender:read'), asyncHandler(async (req, res) => {
+  const canManage = hasPermission(req.user, 'tender:config:manage');
+  const whereSql = canManage ? '' : 'WHERE status = \'ACTIVE\'';
+  const rows = await query(
+    `SELECT *
+     FROM tender_doc_templates
+     ${whereSql}
+     ORDER BY is_default DESC, id DESC`
+  );
+  res.json(rows.map((item) => sanitizeDocTemplateRow(item)));
+}));
+
+app.post('/api/tender/doc-templates/upload', requirePermission('tender:config:manage'), uploadDocTemplateFile, asyncHandler(async (req, res) => {
+  const file = req.file;
+  if (!file?.path) throw appError('请上传投标模板文件', 400);
+
+  const sourceExt = normalizeDocTemplateExt(file.originalname || '') || '.docx';
+  const sourceFileName = fixMojibakeText(trimText(file.originalname) || path.basename(file.path));
+  const templateName = fixMojibakeText(trimText(req.body?.template_name || req.body?.name) || trimText(path.parse(sourceFileName).name) || `投标模板-${Date.now()}`);
+  const isDefaultRequested = normalizeBoolean(req.body?.is_default, false);
+  const templateNo = await buildDocTemplateNo();
+
+  let insertedId = 0;
+  await transaction(async (tx) => {
+    const total = await tx.get('SELECT COUNT(1) AS count FROM tender_doc_templates');
+    const shouldDefault = isDefaultRequested || Number(total?.count || 0) === 0;
+    if (shouldDefault) {
+      await tx.run('UPDATE tender_doc_templates SET is_default = 0 WHERE is_default = 1');
+    }
+    const inserted = await tx.run(
+      `INSERT INTO tender_doc_templates
+        (template_no, template_name, original_file_name, source_ext, storage_path, file_size, mime_type, status, is_default, created_by_id, created_by_name, updated_by_id, updated_by_name)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 'ACTIVE', ?, ?, ?, ?, ?)`,
+      [
+        templateNo,
+        templateName,
+        sourceFileName,
+        sourceExt,
+        file.path,
+        Number(file.size || 0),
+        trimText(file.mimetype) || guessMimeByExt(sourceExt),
+        shouldDefault ? 1 : 0,
+        Number(req.user.id),
+        req.user.username,
+        Number(req.user.id),
+        req.user.username,
+      ]
+    );
+    insertedId = Number(inserted.insertId || 0);
+  });
+
+  const row = sanitizeDocTemplateRow(await get('SELECT * FROM tender_doc_templates WHERE id = ? LIMIT 1', [insertedId]));
+  await logOperation({
+    req,
+    action: 'DOC_TEMPLATE_UPLOAD',
+    entity: 'doc_template',
+    entityId: insertedId,
+    message: `上传投标模板 ${templateName}`,
+    afterData: row,
+  });
+
+  res.status(201).json(row);
+}));
+
+app.put('/api/tender/doc-templates/:id', requirePermission('tender:config:manage'), asyncHandler(async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isFinite(id) || id <= 0) throw appError('模板ID无效', 400);
+
+  const before = sanitizeDocTemplateRow(await get('SELECT * FROM tender_doc_templates WHERE id = ? LIMIT 1', [id]));
+  if (!before) throw appError('模板不存在', 404);
+
+  const templateName = req.body?.template_name === undefined ? before.template_name : fixMojibakeText(trimText(req.body?.template_name || req.body?.name));
+  if (!templateName) throw appError('模板名称不能为空', 400);
+  const status = req.body?.status === undefined ? trimText(before.status || 'ACTIVE').toUpperCase() : trimText(req.body?.status).toUpperCase();
+  if (!['ACTIVE', 'DISABLED'].includes(status)) throw appError('模板状态不合法', 400);
+  const setDefault = req.body?.is_default === undefined ? Number(before.is_default || 0) === 1 : normalizeBoolean(req.body?.is_default, false);
+
+  await transaction(async (tx) => {
+    if (setDefault) {
+      await tx.run('UPDATE tender_doc_templates SET is_default = 0 WHERE is_default = 1');
+    }
+    await tx.run(
+      `UPDATE tender_doc_templates
+       SET template_name = ?, status = ?, is_default = ?, updated_by_id = ?, updated_by_name = ?, updated_at = NOW()
+       WHERE id = ?`,
+      [templateName, status, setDefault ? 1 : 0, Number(req.user.id), req.user.username, id]
+    );
+
+    if (!setDefault && Number(before.is_default || 0) === 1) {
+      const fallback = await tx.get('SELECT id FROM tender_doc_templates WHERE id <> ? AND status = \'ACTIVE\' ORDER BY id ASC LIMIT 1', [id]);
+      if (fallback) {
+        await tx.run('UPDATE tender_doc_templates SET is_default = 1 WHERE id = ?', [Number(fallback.id)]);
+      }
+    }
+  });
+
+  const row = sanitizeDocTemplateRow(await get('SELECT * FROM tender_doc_templates WHERE id = ? LIMIT 1', [id]));
+  await logOperation({
+    req,
+    action: 'DOC_TEMPLATE_UPDATE',
+    entity: 'doc_template',
+    entityId: id,
+    message: `更新投标模板 ${before.template_name}`,
+    beforeData: before,
+    afterData: row,
+  });
+
+  res.json(row);
+}));
+
+app.delete('/api/tender/doc-templates/:id', requirePermission('tender:config:manage'), asyncHandler(async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isFinite(id) || id <= 0) throw appError('模板ID无效', 400);
+
+  const before = sanitizeDocTemplateRow(await get('SELECT * FROM tender_doc_templates WHERE id = ? LIMIT 1', [id]));
+  if (!before) throw appError('模板不存在', 404);
+
+  let switchedDefaultId = null;
+  await transaction(async (tx) => {
+    const countRow = await tx.get('SELECT COUNT(1) AS count FROM tender_doc_templates');
+    if (Number(countRow?.count || 0) <= 1) throw appError('至少保留一个模板，不能全部删除', 400);
+
+    const current = await tx.get('SELECT * FROM tender_doc_templates WHERE id = ? LIMIT 1 FOR UPDATE', [id]);
+    if (!current) throw appError('模板不存在', 404);
+    if (Number(current.is_default || 0) === 1) {
+      const fallback = await tx.get(
+        'SELECT id FROM tender_doc_templates WHERE id <> ? AND status = \'ACTIVE\' ORDER BY id ASC LIMIT 1',
+        [id]
+      );
+      if (!fallback) throw appError('默认模板不能删除，请先启用并设置其他默认模板', 400);
+      switchedDefaultId = Number(fallback.id);
+    }
+
+    await tx.run('DELETE FROM tender_doc_templates WHERE id = ?', [id]);
+
+    if (switchedDefaultId) {
+      await tx.run('UPDATE tender_doc_templates SET is_default = 0 WHERE is_default = 1');
+      await tx.run('UPDATE tender_doc_templates SET is_default = 1 WHERE id = ?', [switchedDefaultId]);
+      return;
+    }
+
+    const hasDefault = await tx.get('SELECT id FROM tender_doc_templates WHERE is_default = 1 LIMIT 1');
+    if (!hasDefault) {
+      const fallback = await tx.get('SELECT id FROM tender_doc_templates WHERE status = \'ACTIVE\' ORDER BY id ASC LIMIT 1');
+      if (fallback) {
+        switchedDefaultId = Number(fallback.id);
+        await tx.run('UPDATE tender_doc_templates SET is_default = 1 WHERE id = ?', [switchedDefaultId]);
+      }
+    }
+  });
+  await deleteFileSafe(before.storage_path);
+
+  await logOperation({
+    req,
+    action: 'DOC_TEMPLATE_DELETE',
+    entity: 'doc_template',
+    entityId: id,
+    message: switchedDefaultId
+      ? `删除投标模板 ${before.template_name}，默认模板切换为ID=${switchedDefaultId}`
+      : `删除投标模板 ${before.template_name}`,
+    beforeData: before,
+    afterData: switchedDefaultId ? { switched_default_template_id: switchedDefaultId } : { deleted: true },
+  });
+
+  res.json({
+    ok: true,
+    id,
+    switched_default_template_id: switchedDefaultId,
+  });
+}));
+
+app.get('/api/tender/bids/generate/jobs', requirePermission('tender:read'), asyncHandler(async (req, res) => {
+  const page = toPositiveInt(req.query.page, 1);
+  const limit = toBoundedLimit(req.query.limit, 10);
+  const offset = (page - 1) * limit;
+  const keyword = trimText(req.query.keyword);
+  const status = trimText(req.query.status).toUpperCase();
+
+  const where = [];
+  const params = [];
+  if (keyword) {
+    where.push('(source_file_name LIKE ? OR warning_text LIKE ?)');
+    params.push(`%${keyword}%`, `%${keyword}%`);
+  }
+  if (status) {
+    where.push('status = ?');
+    params.push(status);
+  }
+
+  const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
+  const total = await get(`SELECT COUNT(1) AS total FROM tender_bid_generate_jobs ${whereSql}`, params);
+  const rows = await query(
+    `SELECT *
+     FROM tender_bid_generate_jobs
+     ${whereSql}
+     ORDER BY id DESC
+     LIMIT ? OFFSET ?`,
+    [...params, limit, offset]
+  );
+
+  res.json({
+    items: rows.map((item) => sanitizeGenerateJobRow(item)),
+    total: Number(total?.total || 0),
+    page,
+    limit,
+  });
+}));
+
+app.delete('/api/tender/bids/generate/jobs/:id', requirePermission('tender:write'), asyncHandler(async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isFinite(id) || id <= 0) throw appError('任务ID无效', 400);
+
+  const before = await get('SELECT * FROM tender_bid_generate_jobs WHERE id = ? LIMIT 1', [id]);
+  if (!before) throw appError('任务不存在', 404);
+  const status = String(trimText(before.status)).toUpperCase();
+  if (status === 'ANALYZING') throw appError('任务正在分析中，暂不能删除', 409);
+
+  await withDeadlockRetry(
+    () => transaction(async (tx) => {
+      await tx.run('DELETE FROM tender_bid_generate_matches WHERE job_id = ?', [id]);
+      await tx.run('DELETE FROM tender_bid_generate_items WHERE job_id = ?', [id]);
+      await tx.run('DELETE FROM tender_bid_generate_jobs WHERE id = ?', [id]);
+    }),
+    { maxRetries: 2, baseDelayMs: 100 }
+  );
+
+  const sourcePath = trimText(before.source_storage_path);
+  if (sourcePath) {
+    const refs = await get(
+      `SELECT
+         (SELECT COUNT(1) FROM tender_bid_generate_jobs WHERE source_storage_path = ?) AS job_ref_count,
+         (SELECT COUNT(1) FROM tender_assets WHERE storage_path = ?) AS asset_ref_count`,
+      [sourcePath, sourcePath]
+    );
+    const jobRefCount = Number(refs?.job_ref_count || 0);
+    const assetRefCount = Number(refs?.asset_ref_count || 0);
+    if (jobRefCount <= 0 && assetRefCount <= 0) {
+      await deleteFileSafe(sourcePath);
+    }
+  }
+
+  await logOperation({
+    req,
+    action: 'BID_ANALYZE_DELETE',
+    entity: 'generate_job',
+    entityId: id,
+    message: `删除分析任务 ${trimText(before.source_file_name) || `#${id}`}`,
+    beforeData: {
+      source_file_name: trimText(before.source_file_name),
+      bid_category: normalizeBidCategory(before.bid_category) || trimText(before.bid_category),
+      status: trimText(before.status),
+      model_id: Number(before.model_id || 0) || null,
+      model_name: trimText(before.model_name),
+      created_bid_id: Number(before.created_bid_id || 0) || null,
+    },
+    afterData: { deleted: true },
+  });
+
+  res.json({ ok: true, id });
+}));
+
+app.get('/api/tender/bids/generate/jobs/:id', requirePermission('tender:read'), asyncHandler(async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isFinite(id) || id <= 0) throw appError('任务ID无效', 400);
+  const detail = await loadGenerateJobDetail(id);
+  if (!detail) throw appError('任务不存在', 404);
+  const sectionSummaries = parseMaybeJson(detail.job.section_summaries_json, []);
+  const analysisSummary = parseMaybeJson(detail.job.analysis_summary_json, {});
+  const tableSummaries = Array.isArray(analysisSummary?.table_summaries)
+    ? analysisSummary.table_summaries
+    : [];
+  const stageOutputsRaw = isPlainObject(analysisSummary?.stage_outputs) ? analysisSummary.stage_outputs : {};
+  const scoreTableExtract = isPlainObject(stageOutputsRaw.score_table_extract)
+    ? stageOutputsRaw.score_table_extract
+    : {
+      table_extracted_count: 0,
+      fallback_extracted_count: 0,
+      merged_count: 0,
+      fallback_merged_count: 0,
+      merged_total_count: 0,
+    };
+  const productParamExtract = isPlainObject(stageOutputsRaw.product_param_extract)
+    ? stageOutputsRaw.product_param_extract
+    : {
+      table_param_extracted_count: 0,
+      table_param_merged_count: 0,
+    };
+  const parseQualityGate = isPlainObject(stageOutputsRaw.parse_quality_gate)
+    ? stageOutputsRaw.parse_quality_gate
+    : {
+      status: 'WARN',
+      allow_generate: true,
+      checks: {},
+      blocking_issues: ['无'],
+      warning_issues: ['无'],
+    };
+  const evidenceRegistry = isPlainObject(stageOutputsRaw.evidence_registry)
+    ? stageOutputsRaw.evidence_registry
+    : {
+      stage1_risk_clauses: [],
+      stage3_missing_items: [],
+      scoring_items: [],
+      risk_items: [],
+    };
+  const ruleScanSummary = isPlainObject(stageOutputsRaw.rule_scan_summary)
+    ? stageOutputsRaw.rule_scan_summary
+    : {
+      categories: [],
+      missing_items: [],
+    };
+  const stage1RiskClauses = normalizeStage1RiskClauses(stageOutputsRaw.stage1_risk_clauses || []);
+  const stage3MissingItems = normalizeStage3MissingItems(stageOutputsRaw.stage3_missing_items || []);
+  const requiredChapterScan = Array.isArray(stageOutputsRaw.required_chapter_scan)
+    ? stageOutputsRaw.required_chapter_scan
+    : (Array.isArray(analysisSummary.required_chapter_scan)
+      ? analysisSummary.required_chapter_scan
+      : buildRequiredChapterScan(
+        Array.isArray(sectionSummaries)
+          ? sectionSummaries.map((item) => ({
+            section_key: trimText(item?.section_key),
+            text: trimText(item?.summary),
+          }))
+          : []
+      ));
+  const bidCategory = normalizeBidCategory(detail?.job?.bid_category) || 'SERVICE';
+  const finalJson = normalizeFinalAnalyzeJson(analysisSummary?.final_json || {}, bidCategory);
+  const scoringItems = detail.items.filter((item) => item.item_type === 'SCORING');
+  const riskItems = detail.items.filter((item) => item.item_type === 'RISK');
+  const generatedArtifacts = isPlainObject(analysisSummary?.generated_artifacts)
+    ? analysisSummary.generated_artifacts
+    : buildGeneratedArtifacts({
+      finalJson,
+      stage1RiskClauses,
+      riskItems,
+      scoringItems,
+      bidCategory,
+    });
+
+  res.json({
+    job: detail.job,
+    section_summaries: sectionSummaries,
+    table_summaries: tableSummaries,
+    scoring_items: scoringItems,
+    risk_items: riskItems,
+    matches: detail.matches,
+    final_json: finalJson,
+    stage_outputs: {
+      stage1_risk_clauses: stage1RiskClauses,
+      stage3_missing_items: stage3MissingItems,
+      required_chapter_scan: requiredChapterScan,
+      parse_quality_gate: parseQualityGate,
+      score_table_extract: scoreTableExtract,
+      product_param_extract: productParamExtract,
+      rule_scan_summary: ruleScanSummary,
+      evidence_registry: evidenceRegistry,
+    },
+    generated_artifacts: generatedArtifacts,
+  });
+}));
+
+app.get('/api/tender/bids/generate/jobs/:id/source/editor/session', requirePermission('tender:read'), asyncHandler(async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isFinite(id) || id <= 0) throw appError('任务ID无效', 400);
+  const detail = await loadGenerateJobDetail(id);
+  if (!detail) throw appError('任务不存在', 404);
+
+  const sourcePath = trimText(detail?.job?.source_storage_path);
+  const sourceExt = normalizeBidUploadExt(detail?.job?.source_ext)
+    || path.extname(sourcePath).toLowerCase();
+  if (!sourcePath) throw appError('源文件不存在', 404);
+  if (!['.doc', '.docx'].includes(sourceExt)) {
+    throw appError('当前仅支持 doc/docx 预览', 400);
+  }
+
+  const sourceToken = jwt.sign(
+    {
+      type: 'tender_generate_source',
+      jobId: Number(id),
+    },
+    DOC_EDITOR_JWT_SECRET,
+    { expiresIn: '2h' }
+  );
+  const sourceUrl = `${DOC_EDITOR_FILE_BASE_URL}/api/tender/bids/generate/jobs/${id}/source/download.docx?token=${encodeURIComponent(sourceToken)}`;
+  const editor = buildOnlyOfficeGenerateSourcePreviewConfig({
+    job: detail.job,
+    sourceUrl,
+    user: req.user,
+  });
+
+  res.json({
+    job: detail.job,
+    editor,
+  });
+}));
+
+app.get('/api/tender/bids/generate/jobs/:id/source/download.docx', asyncHandler(async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isFinite(id) || id <= 0) throw appError('任务ID无效', 400);
+
+  const payload = verifyDraftAccessToken(req.query.token || req.params.accessToken);
+  if (trimText(payload?.type) !== 'tender_generate_source' || Number(payload?.jobId) !== id) {
+    throw appError('访问令牌无效', 401);
+  }
+
+  const detail = await loadGenerateJobDetail(id);
+  if (!detail) throw appError('任务不存在', 404);
+
+  const sourcePath = trimText(detail?.job?.source_storage_path);
+  const sourceExt = normalizeBidUploadExt(detail?.job?.source_ext)
+    || path.extname(sourcePath).toLowerCase();
+  if (!sourcePath) throw appError('源文件不存在', 404);
+  if (!['.doc', '.docx'].includes(sourceExt)) throw appError('当前仅支持 doc/docx 预览', 400);
+
+  const sourceFileName = fixMojibakeText(trimText(detail?.job?.source_file_name)) || `招标文件-${id}.docx`;
+  const previewName = sourceFileName.toLowerCase().endsWith('.docx')
+    ? sourceFileName
+    : `${path.parse(sourceFileName).name || `招标文件-${id}`}.docx`;
+
+  if (sourceExt === '.docx') {
+    const stat = await readFileStatSafe(sourcePath);
+    if (!stat?.isFile()) throw appError('源文件不存在', 404);
+    res.setHeader('Content-Type', guessMimeByExt('.docx'));
+    res.setHeader('Content-Disposition', `inline; filename*=UTF-8''${encodeURIComponent(previewName)}`);
+    res.sendFile(path.resolve(sourcePath));
+    return;
+  }
+
+  const tempDir = path.join(EDITABLE_ROOT, `generate-preview-${Date.now()}-${crypto.randomUUID()}`);
+  let convertedPath = '';
+  try {
+    convertedPath = await runLibreOfficeConvert(sourcePath, tempDir, 'docx');
+    res.setHeader('Content-Type', guessMimeByExt('.docx'));
+    res.setHeader('Content-Disposition', `inline; filename*=UTF-8''${encodeURIComponent(previewName)}`);
+    res.sendFile(path.resolve(convertedPath), async () => {
+      await deleteFileSafe(convertedPath);
+      try {
+        await fs.promises.rm(tempDir, { recursive: true, force: true });
+      } catch {
+        // ignore
+      }
+    });
+  } catch (err) {
+    if (convertedPath) await deleteFileSafe(convertedPath);
+    try {
+      await fs.promises.rm(tempDir, { recursive: true, force: true });
+    } catch {
+      // ignore
+    }
+    throw err;
+  }
+}));
+
+app.post('/api/tender/bids/generate/analyze', requirePermission('tender:write'), uploadTenderSourceFile, asyncHandler(async (req, res) => {
+  const file = req.file;
+  if (!file?.path) throw appError('请上传招标文件', 400);
+
+  const sourceExt = normalizeBidUploadExt(file.originalname || '') || path.extname(file.path).toLowerCase() || '.docx';
+  const sourceFileName = fixMojibakeText(trimText(file.originalname) || path.basename(file.path));
+  const bidCategory = normalizeBidCategory(req.body?.bid_category);
+  if (!bidCategory) throw appError('请选择招标类型（服务类/产品类）', 400);
+  const requestedModelId = Number(req.body?.model_id);
+  const model = await resolveModel(requestedModelId);
+
+  const created = await run(
+    `INSERT INTO tender_bid_generate_jobs
+      (source_file_name, source_storage_path, source_ext, source_mime_type, source_file_size, model_id, model_name, bid_category, status, progress, operator_id, operator_name, request_ip)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'ANALYZING', 10, ?, ?, ?)`,
+    [
+      sourceFileName,
+      file.path,
+      sourceExt,
+      trimText(file.mimetype) || guessMimeByExt(sourceExt),
+      Number(file.size || 0),
+      Number(model.id),
+      trimText(model.name),
+      bidCategory,
+      Number(req.user.id),
+      req.user.username,
+      trimText(getClientIp(req)),
+    ]
+  );
+  const jobId = Number(created.insertId);
+
+  await logOperation({
+    req,
+    action: 'BID_ANALYZE_START',
+    entity: 'generate_job',
+    entityId: jobId,
+    message: `开始分析招标文件 ${sourceFileName}`,
+    afterData: {
+      source_file_name: sourceFileName,
+      model_id: model.id,
+      model_name: model.name,
+      bid_category: bidCategory,
+      bid_category_label: bidCategoryLabel(bidCategory),
+    },
+  });
+
+  try {
+    const sourceText = await textByExtFromStorage({ sourcePath: file.path, sourceExt, maxLen: BID_ANALYZE_MAX_TEXT });
+    if (!sourceText) throw appError('文本提取失败，请上传可复制文字的 doc/docx/pdf 文件', 400);
+
+    const split = splitTenderSections(sourceText);
+    const extractedTables = await tablesByExtFromStorage({ sourcePath: file.path, sourceExt, sourceText });
+    const tableSummaries = buildTableSummaries({ tables: extractedTables, sectionList: split.sectionList });
+    const baseRule = buildRuleAnalyzeItems({ sectionList: split.sectionList });
+    const detectedFeatures = detectBidFeatures(sourceText);
+    const features = {
+      ...detectedFeatures,
+      bid_category: bidCategory,
+    };
+    const sectionSummaries = split.sectionList.map((item) => ({
+      section_key: item.section_key,
+      section_title: item.section_title,
+      summary: item.summary,
+    }));
+
+    const sampleRows = await query(
+      `SELECT s.id, s.sample_no, s.title, s.original_file_name,
+              (SELECT COUNT(1) FROM tender_bid_sample_sections ss WHERE ss.sample_id = s.id) AS section_count
+       FROM tender_bid_samples s
+       WHERE s.status = 'ACTIVE' AND s.parse_status = 'SUCCESS'
+       ORDER BY s.id DESC
+       LIMIT ?`,
+      [SAMPLE_MATCH_CANDIDATE_LIMIT]
+    );
+
+    const normalizedSamples = [];
+    for (const row of sampleRows) {
+      const feature = await loadSampleFeatures(row.id);
+      normalizedSamples.push({
+        ...sanitizeSampleRow(row),
+        keywords: Array.isArray(feature.keywords) ? feature.keywords : [],
+        project_type: trimText(feature.project_type),
+        industry: trimText(feature.industry),
+        procurement_mode: trimText(feature.procurement_mode),
+        bid_category: normalizeBidCategory(feature.bid_category),
+      });
+    }
+    const matched = rankMatchedSamples({
+      analyzeFeatures: features,
+      analyzeSections: split.sectionList,
+      samples: normalizedSamples,
+    });
+    const topCandidates = matched.slice(0, 10);
+
+    const warnings = [];
+    if (!tableSummaries.length) {
+      warnings.push('未识别到结构化表格，将按正文条款继续分析。');
+    }
+    let rankedMatches = topCandidates.slice(0, 3);
+    if (rankedMatches.length < 3) {
+      warnings.push(`样本库可用样本不足3份，当前仅匹配到 ${rankedMatches.length} 份。`);
+    }
+    const requiredChapterScan = buildRequiredChapterScan(split.sectionList);
+    const preflightGate = buildAnalyzeQualityGate({
+      sourceText,
+      requiredChapterScan,
+      tableSummaries,
+      bidCategory,
+      preflightOnly: true,
+    });
+    if (preflightGate.status === 'BLOCK') {
+      throw appError(`解析门禁未通过：${preflightGate.blocking_issues.filter((item) => item && item !== '无').join('；') || '请更换可解析招标文件'}`, 400);
+    }
+    for (const item of preflightGate.warning_issues || []) {
+      if (item && item !== '无') warnings.push(`预检提醒：${item}`);
+    }
+
+    let stage1RiskClauses = [];
+    let stage2FinalJson = normalizeFinalAnalyzeJson({
+      project_core_info: {
+        project_type: bidCategoryLabel(bidCategory),
+      },
+    }, bidCategory);
+    let stage3MissingItems = [];
+    const stageTaskLogIds = {
+      stage1: null,
+      stage2: null,
+      stage3: null,
+    };
+
+    const stage1Input = {
+      bid_category: bidCategory,
+      bid_category_label: bidCategoryLabel(bidCategory),
+      required_chapters: REQUIRED_ANALYZE_CHAPTERS.map((item) => ({ key: item.key, title: item.title })),
+      section_summaries: sectionSummaries,
+      extracted_tables: tableSummaries,
+      full_text: sourceText,
+    };
+    try {
+      const stage1Task = await runAiTask({
+        req,
+        taskType: ANALYZE_STAGE_TASK_TYPES.STAGE1,
+        modelId: Number(model.id),
+        inputText: JSON.stringify(stage1Input),
+        extraSystemPrompt: buildStage1EnforcedRules(bidCategory),
+      });
+      stageTaskLogIds.stage1 = Number(stage1Task.task_log_id || 0) || null;
+      const stage1Parsed = isPlainObject(stage1Task.parsed) ? stage1Task.parsed : {};
+      stage1RiskClauses = enrichStage1RiskClausesBySource(stage1Parsed.risk_clauses || [], split.sectionList);
+    } catch (err) {
+      warnings.push(`第一阶段风险扫描失败，已继续后续流程：${trimText(err.message).slice(0, 120)}`);
+    }
+    const ruleScannedRiskClauses = scanRiskClausesByKeywords(split.sectionList, bidCategory);
+    stage1RiskClauses = enrichStage1RiskClausesBySource([...stage1RiskClauses, ...ruleScannedRiskClauses], split.sectionList);
+    if (ruleScannedRiskClauses.length > 0) {
+      warnings.push(`已启用关键词兜底扫描，补充风险条款 ${ruleScannedRiskClauses.length} 条。`);
+    }
+
+    const stage2Input = {
+      bid_category: bidCategory,
+      bid_category_label: bidCategoryLabel(bidCategory),
+      required_chapter_scan: requiredChapterScan,
+      section_summaries: sectionSummaries,
+      extracted_tables: tableSummaries,
+      stage1_risk_clauses: stage1RiskClauses,
+      final_json_schema: createFinalAnalyzeSchema(bidCategory),
+      full_text: sourceText,
+    };
+    try {
+      const stage2Task = await runAiTask({
+        req,
+        taskType: ANALYZE_STAGE_TASK_TYPES.STAGE2,
+        modelId: Number(model.id),
+        inputText: JSON.stringify(stage2Input),
+        extraSystemPrompt: buildStage2EnforcedRules(bidCategory),
+      });
+      stageTaskLogIds.stage2 = Number(stage2Task.task_log_id || 0) || null;
+      stage2FinalJson = normalizeFinalAnalyzeJson(stage2Task.parsed || {}, bidCategory);
+      stage2FinalJson.project_core_info.project_type = bidCategoryLabel(bidCategory);
+    } catch (err) {
+      warnings.push(`第二阶段结构化解析失败，已使用兜底结构：${trimText(err.message).slice(0, 120)}`);
+    }
+
+    const stage3Input = {
+      bid_category: bidCategory,
+      bid_category_label: bidCategoryLabel(bidCategory),
+      stage1_risk_clauses: stage1RiskClauses,
+      stage2_final_json: stage2FinalJson,
+      extracted_tables: tableSummaries,
+      full_text: sourceText,
+    };
+    try {
+      const stage3Task = await runAiTask({
+        req,
+        taskType: ANALYZE_STAGE_TASK_TYPES.STAGE3,
+        modelId: Number(model.id),
+        inputText: JSON.stringify(stage3Input),
+        extraSystemPrompt: buildStage3EnforcedRules(bidCategory),
+      });
+      stageTaskLogIds.stage3 = Number(stage3Task.task_log_id || 0) || null;
+      const stage3Parsed = isPlainObject(stage3Task.parsed) ? stage3Task.parsed : {};
+      stage3MissingItems = enrichStage3MissingItemsBySource(stage3Parsed.missing_items || [], split.sectionList);
+    } catch (err) {
+      warnings.push(`第三阶段交叉校验失败，已输出前两阶段结果：${trimText(err.message).slice(0, 120)}`);
+    }
+
+    const mergedByStagesFinalJson = mergeAnalyzeFinalJson({
+      stage2FinalJson,
+      stage1RiskClauses,
+      stage3MissingItems,
+      bidCategory,
+    });
+    const scoreMergeResult = mergeScoreItemsIntoFinalJson({
+      finalJson: mergedByStagesFinalJson,
+      tableSummaries,
+      ruleScoringItems: baseRule.scoring_items,
+      bidCategory,
+    });
+    let finalJson = scoreMergeResult.final_json;
+    let productParamMergeResult = {
+      table_param_extracted_count: 0,
+      table_param_merged_count: 0,
+    };
+    if (bidCategory === 'PRODUCT') {
+      productParamMergeResult = mergeProductParametersIntoFinalJson({
+        finalJson,
+        tableSummaries,
+      });
+      finalJson = productParamMergeResult.final_json;
+      if (productParamMergeResult.table_param_extracted_count > 0) {
+        warnings.push(
+          `技术参数逐条提取：识别 ${productParamMergeResult.table_param_extracted_count} 条，合并 ${productParamMergeResult.table_param_merged_count} 条。`
+        );
+      } else {
+        warnings.push('技术参数表未识别到结构化参数，请在核对环节人工补充。');
+      }
+    }
+    if (scoreMergeResult.table_extracted_count > 0) {
+      warnings.push(
+        `评分表逐条提取：识别 ${scoreMergeResult.table_extracted_count} 条，表格合并 ${scoreMergeResult.merged_count} 条，兜底补充 ${scoreMergeResult.fallback_merged_count} 条。`
+      );
+    } else {
+      warnings.push(`评分表未识别到结构化条目，已用正文规则兜底提取 ${scoreMergeResult.fallback_extracted_count} 条评分项。`);
+    }
+    const ruleCoverageSummary = buildRuleCoverageSummary({
+      sectionList: split.sectionList,
+      bidCategory,
+      stage1RiskClauses,
+      scoreExtract: {
+        merged_count: scoreMergeResult.merged_count,
+        merged_total_count: scoreMergeResult.merged_total_count,
+      },
+    });
+    if (Array.isArray(ruleCoverageSummary.missing_items) && ruleCoverageSummary.missing_items.length > 0) {
+      stage3MissingItems = enrichStage3MissingItemsBySource(
+        [...stage3MissingItems, ...ruleCoverageSummary.missing_items],
+        split.sectionList
+      );
+      finalJson = mergeAnalyzeFinalJson({
+        stage2FinalJson: finalJson,
+        stage1RiskClauses,
+        stage3MissingItems,
+        bidCategory,
+      });
+      warnings.push(`规则引擎兜底补充遗漏项 ${ruleCoverageSummary.missing_items.length} 条。`);
+    }
+    const fallbackFillResult = enrichAnalyzeFinalJsonByRules({
+      finalJson,
+      sectionList: split.sectionList,
+      bidCategory,
+    });
+    finalJson = fallbackFillResult.final_json;
+    if (Number(fallbackFillResult.filled_count || 0) > 0) {
+      warnings.push(`规则引擎补全商务/技术条款 ${fallbackFillResult.filled_count} 项。`);
+    }
+    let scoringItems = buildScoringItemsFromFinalJson(finalJson);
+    let riskItems = buildRiskItemsFromFinalJson({ finalJson, stage1RiskClauses, bidCategory });
+    if (!scoringItems.length) scoringItems = baseRule.scoring_items;
+    if (!riskItems.length) riskItems = baseRule.risk_items;
+    scoringItems = enrichGenerateItemsBySource(scoringItems, split.sectionList);
+    riskItems = enrichGenerateItemsBySource(riskItems, split.sectionList);
+    const generatedArtifacts = buildGeneratedArtifacts({
+      finalJson,
+      stage1RiskClauses,
+      riskItems,
+      scoringItems,
+      bidCategory,
+    });
+    const qualityGate = buildAnalyzeQualityGate({
+      sourceText,
+      requiredChapterScan,
+      tableSummaries,
+      stage1RiskClauses,
+      scoreExtract: {
+        merged_total_count: scoreMergeResult.merged_total_count,
+        merged_count: scoreMergeResult.merged_count,
+      },
+      productParamExtract: productParamMergeResult,
+      bidCategory,
+      preflightOnly: false,
+    });
+    for (const item of qualityGate.warning_issues || []) {
+      if (item && item !== '无') warnings.push(`门禁提醒：${item}`);
+    }
+    const evidenceRegistry = {
+      stage1_risk_clauses: stage1RiskClauses.map((item) => ({
+        evidence_id: item.evidence_id,
+        clause_type: item.clause_type,
+        clause_content: item.clause_content,
+        source_reference: item.source_reference,
+      })),
+      stage3_missing_items: stage3MissingItems.map((item) => ({
+        item_type: item.item_type,
+        missing_content: item.missing_content,
+        source_reference: item.source_reference,
+      })),
+      scoring_items: scoringItems.map((item, idx) => ({
+        item_no: idx + 1,
+        title: item.title,
+        source_reference: item.source_reference,
+      })),
+      risk_items: riskItems.map((item, idx) => ({
+        item_no: idx + 1,
+        title: item.title,
+        source_reference: item.source_reference,
+      })),
+    };
+
+    const stageOutputs = {
+      stage1_risk_clauses: stage1RiskClauses,
+      stage3_missing_items: stage3MissingItems,
+      required_chapter_scan: requiredChapterScan,
+      parse_quality_gate: qualityGate,
+      score_table_extract: {
+        table_extracted_count: scoreMergeResult.table_extracted_count,
+        fallback_extracted_count: scoreMergeResult.fallback_extracted_count,
+        merged_count: scoreMergeResult.merged_count,
+        fallback_merged_count: scoreMergeResult.fallback_merged_count,
+        merged_total_count: scoreMergeResult.merged_total_count,
+      },
+      product_param_extract: productParamMergeResult,
+      rule_scan_summary: ruleCoverageSummary,
+      evidence_registry: evidenceRegistry,
+    };
+
+    const summaryPayload = {
+      ...composeAnalysisSummary({
+        sections: sectionSummaries,
+        tables: tableSummaries,
+        scoringItems,
+        riskItems,
+        warnings,
+      }),
+      bid_category: bidCategory,
+      bid_category_label: bidCategoryLabel(bidCategory),
+      stage_outputs: stageOutputs,
+      table_summaries: tableSummaries,
+      final_json: finalJson,
+      generated_artifacts: generatedArtifacts,
+      candidate_samples: topCandidates.map((item) => ({
+        sample_id: item.sample_id,
+        sample_no: item.sample_no,
+        title: item.title,
+        score: item.score,
+        reason: item.reason,
+      })),
+    };
+
+    await transaction(async (tx) => {
+      await tx.run(
+        `UPDATE tender_bid_generate_jobs
+         SET status = 'ANALYZED', progress = 60, section_summaries_json = ?, analysis_summary_json = ?, warning_text = ?, updated_at = NOW()
+         WHERE id = ?`,
+        [JSON.stringify(sectionSummaries), JSON.stringify(summaryPayload), warnings.join('；') || null, jobId]
+      );
+      await tx.run('DELETE FROM tender_bid_generate_items WHERE job_id = ?', [jobId]);
+      await tx.run('DELETE FROM tender_bid_generate_matches WHERE job_id = ?', [jobId]);
+
+      for (let i = 0; i < scoringItems.length; i += 1) {
+        const item = scoringItems[i];
+        await tx.run(
+          `INSERT INTO tender_bid_generate_items
+            (job_id, item_type, section_key, section_title, title, evidence_text, suggestion_text, risk_level, sort_order)
+           VALUES (?, 'SCORING', ?, ?, ?, ?, ?, NULL, ?)`,
+          [jobId, item.section_key, item.section_title, item.title, item.evidence || null, item.suggestion || null, i + 1]
+        );
+      }
+
+      for (let i = 0; i < riskItems.length; i += 1) {
+        const item = riskItems[i];
+        await tx.run(
+          `INSERT INTO tender_bid_generate_items
+            (job_id, item_type, section_key, section_title, title, evidence_text, suggestion_text, risk_level, sort_order)
+           VALUES (?, 'RISK', ?, ?, ?, ?, ?, ?, ?)`,
+          [jobId, item.section_key, item.section_title, item.title, item.evidence || null, item.suggestion || null, trimText(item.risk_level || 'MEDIUM'), i + 1]
+        );
+      }
+
+      for (let i = 0; i < rankedMatches.length; i += 1) {
+        const item = rankedMatches[i];
+        await tx.run(
+          `INSERT INTO tender_bid_generate_matches
+            (job_id, sample_id, score, reason_text, rank_no)
+           VALUES (?, ?, ?, ?, ?)`,
+          [jobId, Number(item.sample_id), Number(item.score || 0), trimText(item.reason).slice(0, 500) || null, i + 1]
+        );
+      }
+    });
+
+    const detail = await loadGenerateJobDetail(jobId);
+    await logOperation({
+      req,
+      action: 'BID_ANALYZE_SUCCESS',
+      entity: 'generate_job',
+      entityId: jobId,
+      message: `招标文件分析成功 ${sourceFileName}`,
+      afterData: {
+        summary: summaryPayload,
+        model_id: model.id,
+        model_name: model.name,
+        bid_category: bidCategory,
+        bid_category_label: bidCategoryLabel(bidCategory),
+        stage_ai_task_log_ids: stageTaskLogIds,
+      },
+    });
+
+    res.status(201).json({
+      job: detail.job,
+      section_summaries: parseMaybeJson(detail.job.section_summaries_json, []),
+      table_summaries: tableSummaries,
+      scoring_items: detail.items.filter((item) => item.item_type === 'SCORING'),
+      risk_items: detail.items.filter((item) => item.item_type === 'RISK'),
+      matches: detail.matches,
+      final_json: finalJson,
+      stage_outputs: stageOutputs,
+      generated_artifacts: generatedArtifacts,
+      warnings,
+      model: { id: model.id, name: model.name },
+    });
+  } catch (err) {
+    await run(
+      `UPDATE tender_bid_generate_jobs
+       SET status = 'FAILED', progress = 100, error_message = ?, updated_at = NOW()
+       WHERE id = ?`,
+      [trimText(err.message).slice(0, 2000) || '分析失败', jobId]
+    );
+    await logOperation({
+      req,
+      action: 'BID_ANALYZE_FAIL',
+      entity: 'generate_job',
+      entityId: jobId,
+      message: `招标文件分析失败 ${sourceFileName}`,
+      afterData: {
+        error: trimText(err.message).slice(0, 2000),
+      },
+    });
+    throw err;
+  }
+}));
+
+app.post('/api/tender/bids/generate/jobs/:id/create', requirePermission('tender:write'), asyncHandler(async (req, res) => {
+  const jobId = Number(req.params.id);
+  if (!Number.isFinite(jobId) || jobId <= 0) throw appError('任务ID无效', 400);
+
+  const detail = await loadGenerateJobDetail(jobId);
+  if (!detail) throw appError('分析任务不存在', 404);
+  if (!['ANALYZED', 'GENERATED'].includes(String(detail.job.status || '').toUpperCase())) {
+    throw appError('当前任务状态不允许生成，请先完成分析', 400);
+  }
+
+  const model = await resolveModel(Number(req.body?.model_id || detail.job.model_id || 0));
+  const scoringItems = detail.items.filter((item) => item.item_type === 'SCORING');
+  const riskItems = detail.items.filter((item) => item.item_type === 'RISK');
+  const chosenSampleIds = toNumberIdList(req.body?.sample_ids, 6);
+  const matchedSampleIds = chosenSampleIds.length
+    ? chosenSampleIds
+    : detail.matches.slice(0, 3).map((item) => Number(item.sample_id)).filter((id) => Number.isFinite(id) && id > 0);
+
+  const sampleSections = [];
+  for (const sampleId of matchedSampleIds) {
+    const sections = await loadSampleSections(sampleId);
+    for (const section of sections) {
+      if (!trimText(section.section_text)) continue;
+      if (sampleSections.some((item) => item.section_key === section.section_key)) continue;
+      sampleSections.push(section);
+    }
+  }
+
+  const sectionSummaries = parseMaybeJson(detail.job.section_summaries_json, []);
+  const analysisSummary = parseMaybeJson(detail.job.analysis_summary_json, {});
+  const tableSummaries = Array.isArray(analysisSummary?.table_summaries)
+    ? analysisSummary.table_summaries
+    : [];
+  const stageOutputsRaw = isPlainObject(analysisSummary?.stage_outputs) ? analysisSummary.stage_outputs : {};
+  const parseQualityGate = isPlainObject(stageOutputsRaw.parse_quality_gate)
+    ? stageOutputsRaw.parse_quality_gate
+    : null;
+  const gateStatus = String(trimText(parseQualityGate?.status)).toUpperCase();
+  const gateAllowGenerate = parseQualityGate?.allow_generate === undefined ? true : !!parseQualityGate.allow_generate;
+  if (gateStatus === 'BLOCK' || !gateAllowGenerate) {
+    const blocking = Array.isArray(parseQualityGate?.blocking_issues)
+      ? parseQualityGate.blocking_issues.filter((item) => trimText(item) && trimText(item) !== '无')
+      : [];
+    throw appError(`解析门禁未通过，禁止生成初稿：${blocking.join('；') || '请先修复解析质量问题'}`, 400);
+  }
+  const scoreTableExtract = isPlainObject(stageOutputsRaw.score_table_extract)
+    ? stageOutputsRaw.score_table_extract
+    : { merged_total_count: 0 };
+  const hasScoreTable = tableSummaries.some((item) =>
+    trimText(item?.section_key).toUpperCase() === 'SCORE_TABLE'
+    || trimText(item?.table_type).toUpperCase() === 'SCORE_TABLE'
+  );
+  const mergedScoreRows = Number(scoreTableExtract.merged_total_count || scoreTableExtract.merged_count || 0);
+  if (hasScoreTable && mergedScoreRows <= 0) {
+    throw appError('检测到评分表但未逐条提取到评分项，请先修正解析结果后再生成投标初稿', 400);
+  }
+  const stage1RiskClauses = normalizeStage1RiskClauses(stageOutputsRaw.stage1_risk_clauses || []);
+  const bidCategory = normalizeBidCategory(detail?.job?.bid_category) || 'SERVICE';
+  const instructionApplied = applyInstructionFormToFinalJson(
+    analysisSummary?.final_json || {},
+    req.body?.instruction_form,
+    bidCategory
+  );
+  const finalJson = instructionApplied.finalJson;
+  const instructionForm = instructionApplied.instructionForm;
+  const generatedArtifacts = isPlainObject(analysisSummary?.generated_artifacts)
+    ? analysisSummary.generated_artifacts
+    : buildGeneratedArtifacts({
+      finalJson,
+      stage1RiskClauses,
+      riskItems,
+      scoringItems,
+      bidCategory,
+    });
+  const sectionList = sectionSummaries.map((item) => ({
+    section_key: trimText(item.section_key),
+    section_title: trimText(item.section_title),
+    text: trimText(item.summary),
+  }));
+  const sourceFileName = trimText(detail.job.source_file_name) || '招标文件';
+
+  const inferredTitle = trimText(req.body?.title) || `${trimText(path.parse(sourceFileName).name)}投标文件`;
+  const customerName = trimText(req.body?.customer_name) || '待完善客户';
+  const projectName = trimText(req.body?.project_name)
+    || trimText(instructionForm.project_name)
+    || trimText(path.parse(sourceFileName).name)
+    || '待完善项目';
+  const summary = trimText(req.body?.summary) || `由招标文件分析后自动生成，来源：${sourceFileName}`;
+  const docTemplateId = Number(req.body?.doc_template_id || req.body?.template_id || 0);
+  const selectedTemplate = await resolveDocTemplate(docTemplateId);
+
+  const librarySnapshot = await collectOwnLibrarySnapshot(req.body?.library_snapshot);
+  const bidNo = await nextBidNo();
+
+  let chapters = buildDraftChaptersFromAnalysis({
+    bidNo,
+    title: inferredTitle,
+    sourceFileName,
+    sectionList,
+    scoringItems,
+    riskItems,
+    sampleSections,
+    librarySnapshot,
+    generatedArtifacts,
+    bidCategory,
+    finalJson,
+  });
+
+  const aiWarnings = [];
+  try {
+    const aiComposeInput = {
+      bid_no: bidNo,
+      title: inferredTitle,
+      source_file_name: sourceFileName,
+      bid_category: bidCategory,
+      chapters,
+      final_json: finalJson,
+      scoring_items: scoringItems,
+      risk_items: riskItems,
+      table_summaries: tableSummaries,
+      generated_artifacts: generatedArtifacts,
+      instruction_form: instructionForm,
+    };
+    const aiTask = await runAiTask({
+      req,
+      taskType: 'BID_COMPOSE_DRAFT',
+      modelId: Number(model.id),
+      inputText: JSON.stringify(aiComposeInput),
+    });
+    const aiParsed = aiTask?.parsed && typeof aiTask.parsed === 'object' ? aiTask.parsed : null;
+    if (aiParsed && Array.isArray(aiParsed.chapters) && aiParsed.chapters.length) {
+      chapters = aiParsed.chapters
+        .slice(0, 20)
+        .map((item, idx) => ({
+          title: trimText(item?.title) || `章节${idx + 1}`,
+          content: Array.isArray(item?.content)
+            ? item.content.map((line) => trimText(line)).filter(Boolean)
+            : toLines(item?.content || ''),
+        }))
+        .filter((item) => item.content.length > 0);
+    } else {
+      aiWarnings.push('模型未返回结构化章节，已使用规则骨架生成。');
+    }
+  } catch (err) {
+    aiWarnings.push(`模型起草失败，已使用规则骨架生成：${trimText(err.message).slice(0, 120)}`);
+  }
+
+  const paragraphs = buildParagraphsFromChapters(chapters);
+  if (!paragraphs.length) {
+    paragraphs.push('投标文件（自动生成初稿）', `标书编号：${bidNo}`, `标书标题：${inferredTitle}`, '请人工完善正文。');
+  }
+
+  const projectCoreInfo = isPlainObject(finalJson?.project_core_info) ? finalJson.project_core_info : {};
+  const companyInfoText = joinSummaryLines(buildCompanySummaryLines(librarySnapshot?.company || {}));
+  const legalPersonInfoText = joinSummaryLines(buildPersonSummaryLines('法定代表人信息', librarySnapshot?.personnel?.legal || {}));
+  const authorizedAgentInfoText = joinSummaryLines(buildPersonSummaryLines('授权委托人信息', librarySnapshot?.personnel?.agent || {}));
+  const qualificationInfoText = joinSummaryLines(buildQualificationSummaryLines(librarySnapshot?.qualifications || []));
+  const financeInfoText = joinSummaryLines(buildFinanceSummaryLines(librarySnapshot?.finance || []));
+  const performanceInfoText = joinSummaryLines(buildPerformanceSummaryLines(librarySnapshot?.performance || []));
+  const personnelInfoText = joinSummaryLines(buildPersonnelListSummaryLines(librarySnapshot?.personnel_list || []));
+  const projectCoreInfoText = joinSummaryLines(buildProjectCoreSummaryLines(projectCoreInfo));
+  const coverContent = pickChapterTexts(chapters, ['封面']);
+  const tocContent = pickChapterTexts(chapters, ['目录']);
+  const businessVolumeContent = pickChapterTexts(chapters, ['商务']);
+  const technicalVolumeContent = pickChapterTexts(chapters, ['技术', '服务方案', '采购需求']);
+  const quotationVolumeContent = pickChapterTexts(chapters, ['报价', '偏离表']);
+  const appendixIndexContent = pickChapterTexts(chapters, ['附录', '投标文件格式']);
+
+  const outputPath = path.join(VERSION_ROOT, buildStoredFilename(`${inferredTitle}-auto.docx`, '.docx'));
+  try {
+    if (selectedTemplate?.storage_path) {
+      await writeDocxWithTemplate({
+        templatePath: selectedTemplate.storage_path,
+        outputPath,
+        chapters,
+        payload: {
+          bid_no: bidNo,
+          project_title: inferredTitle,
+          project_name: projectName,
+          customer_name: customerName,
+          source_file_name: sourceFileName,
+          bid_category: bidCategoryLabel(bidCategory),
+          project_code: trimText(instructionForm.project_code),
+          package_no: trimText(instructionForm.package_no),
+          budget: trimText(instructionForm.budget),
+          buyer_name: trimText(instructionForm.buyer_name),
+          agency_name: trimText(instructionForm.agency_name),
+          project_domain: trimText(instructionForm.project_domain),
+          project_overview: trimText(instructionForm.project_overview),
+          project_core_info: projectCoreInfoText,
+          company_info: companyInfoText,
+          legal_person_info: legalPersonInfoText,
+          authorized_agent_info: authorizedAgentInfoText,
+          qualification_info: qualificationInfoText,
+          finance_info: financeInfoText,
+          performance_info: performanceInfoText,
+          personnel_info: personnelInfoText,
+          cover_content: coverContent,
+          toc_content: tocContent,
+          business_volume_content: businessVolumeContent,
+          technical_volume_content: technicalVolumeContent,
+          quotation_volume_content: quotationVolumeContent,
+          appendix_index_content: appendixIndexContent,
+          generated_at: formatDateTime(new Date()) || '',
+        },
+      });
+    } else {
+      await writeSimpleDocx({ outputPath, paragraphs });
+    }
+  } catch (err) {
+    aiWarnings.push(`投标模板套版失败，已降级为基础文档：${trimText(err.message).slice(0, 120)}`);
+    await writeSimpleDocx({ outputPath, paragraphs });
+  }
+  const stat = await readFileStatSafe(outputPath);
+  if (!stat?.isFile()) {
+    await deleteFileSafe(outputPath);
+    throw appError('投标初稿生成失败', 500);
+  }
+
+  const createResult = await transaction(async (tx) => {
+    await tx.run(
+      `UPDATE tender_bid_generate_jobs
+       SET status = 'GENERATING', progress = 80, updated_at = NOW()
+       WHERE id = ?`,
+      [jobId]
+    );
+
+    const bidInfo = await tx.run(
+      `INSERT INTO tender_bids
+        (bid_no, title, customer_name, project_name, status, summary, created_by_id, created_by_name, updated_by_id, updated_by_name)
+       VALUES (?, ?, ?, ?, 'DRAFT', ?, ?, ?, ?, ?)`,
+      [bidNo, inferredTitle, customerName, projectName, summary || null, Number(req.user.id), req.user.username, Number(req.user.id), req.user.username]
+    );
+    const bidId = Number(bidInfo.insertId);
+
+    const versionName = `${inferredTitle}-自动生成.docx`;
+    const versionInfo = await tx.run(
+      `INSERT INTO tender_bid_versions
+        (bid_id, version_no, source_type, source_ext, storage_path, file_name, file_size, mime_type, created_by_id, created_by_name)
+       VALUES (?, 1, 'auto_generate', 'docx', ?, ?, ?, ?, ?, ?)`,
+      [
+        bidId,
+        outputPath,
+        versionName,
+        Number(stat.size || 0),
+        guessMimeByExt('.docx'),
+        Number(req.user.id),
+        req.user.username,
+      ]
+    );
+    const versionId = Number(versionInfo.insertId);
+
+    await tx.run(
+      `UPDATE tender_bids
+       SET current_version_id = ?, updated_by_id = ?, updated_by_name = ?, updated_at = NOW()
+       WHERE id = ?`,
+      [versionId, Number(req.user.id), req.user.username, bidId]
+    );
+
+    const draft = await tx.get(
+      `SELECT * FROM tender_bid_drafts
+       WHERE bid_id = ?
+       LIMIT 1`,
+      [bidId]
+    );
+
+    const sourceAssetInfo = await tx.run(
+      `INSERT INTO tender_assets
+        (bid_id, asset_type, original_file_name, mime_type, storage_path, file_size, status, uploaded_by_id, uploaded_by_name)
+       VALUES (?, 'BIDDING_NOTICE', ?, ?, ?, ?, 'UPLOADED', ?, ?)`,
+      [
+        bidId,
+        sourceFileName,
+        trimText(detail.job.source_mime_type) || guessMimeByExt(detail.job.source_ext || '.docx'),
+        trimText(detail.job.source_storage_path),
+        Number(detail.job.source_file_size || 0),
+        Number(req.user.id),
+        req.user.username,
+      ]
+    );
+
+    await tx.run(
+      `UPDATE tender_bid_generate_jobs
+       SET status = 'GENERATED', progress = 100, model_id = ?, model_name = ?, warning_text = ?, created_bid_id = ?, created_version_id = ?, created_draft_id = ?, updated_at = NOW()
+       WHERE id = ?`,
+      [
+        Number(model.id),
+        trimText(model.name),
+        aiWarnings.join('；') || detail.job.warning_text || null,
+        bidId,
+        versionId,
+        draft?.id ? Number(draft.id) : null,
+        jobId,
+      ]
+    );
+
+    return {
+      bid_id: bidId,
+      version_id: versionId,
+      source_asset_id: Number(sourceAssetInfo.insertId),
+    };
+  });
+
+  const bid = await ensureBidExists(createResult.bid_id);
+  const version = sanitizeVersionRow(await get('SELECT * FROM tender_bid_versions WHERE id = ? LIMIT 1', [createResult.version_id]));
+  const draft = await ensureDraftForBid({ bid, user: req.user });
+  if (draft?.id) {
+    await run(
+      `UPDATE tender_bid_generate_jobs
+       SET created_draft_id = ?, updated_at = NOW()
+       WHERE id = ?`,
+      [Number(draft.id), jobId]
+    );
+  }
+  const job = sanitizeGenerateJobRow(await get('SELECT * FROM tender_bid_generate_jobs WHERE id = ? LIMIT 1', [jobId]));
+
+  await logOperation({
+    req,
+    action: 'BID_GENERATE_FROM_ANALYSIS',
+    entity: 'generate_job',
+    entityId: jobId,
+    message: `根据分析任务生成投标初稿 ${bid.bid_no}`,
+    afterData: {
+      bid_id: bid.id,
+      version_id: version.id,
+      scoring_count: scoringItems.length,
+      risk_count: riskItems.length,
+      matched_sample_ids: matchedSampleIds,
+      doc_template_id: Number(selectedTemplate?.id || 0) || null,
+      doc_template_name: trimText(selectedTemplate?.template_name),
+      warning_text: aiWarnings.join('；') || null,
+    },
+  });
+
+  res.status(201).json({
+    ok: true,
+    job,
+    bid,
+    version,
+    draft,
+    warnings: aiWarnings,
   });
 }));
 
@@ -1739,7 +8062,7 @@ app.post('/api/tender/bids/auto-generate', requirePermission('tender:write'), up
   if (!Number.isFinite(bundleId) || bundleId <= 0) throw appError('bundle_id无效', 400);
 
   const sourceExt = normalizeBidUploadExt(file.originalname || '') || path.extname(file.path).toLowerCase() || '.docx';
-  const sourceFileName = trimText(file.originalname) || path.basename(file.path);
+  const sourceFileName = fixMojibakeText(trimText(file.originalname) || path.basename(file.path));
   const inferredByFilename = trimText(path.parse(sourceFileName).name).replace(/[_-]+/g, ' ').replace(/\s+/g, ' ').slice(0, 120);
 
   let inferredByDoc = '';
@@ -1754,10 +8077,10 @@ app.post('/api/tender/bids/auto-generate', requirePermission('tender:write'), up
 
   const clipText = (value, maxLen) => trimText(value).slice(0, maxLen);
   const inferredTitleSeed = clipText(trimText(inferredByDoc) || trimText(inferredByFilename) || `招标项目-${Date.now()}`, 120);
-  const title = clipText(trimText(req.body?.title) || `${inferredTitleSeed}投标文件`, 200);
-  const customerName = clipText(req.body?.customer_name, 120) || '待完善客户';
-  const projectName = clipText(req.body?.project_name, 120) || inferredTitleSeed;
-  const summaryInput = trimText(req.body?.summary);
+  const title = clipText(fixMojibakeText(trimText(req.body?.title) || `${inferredTitleSeed}投标文件`), 200);
+  const customerName = clipText(fixMojibakeText(req.body?.customer_name), 120) || '待完善客户';
+  const projectName = clipText(fixMojibakeText(req.body?.project_name), 120) || inferredTitleSeed;
+  const summaryInput = fixMojibakeText(trimText(req.body?.summary));
   const summary = summaryInput || `由招标文件自动生成，来源文件：${sourceFileName}`;
 
   const { bundle, filledFieldValues, snippetValues } = await resolveBundlePayloadData({
@@ -1891,8 +8214,8 @@ app.post('/api/tender/bids/auto-generate', requirePermission('tender:write'), up
   }
 
   const bid = await ensureBidExists(created.bidId);
-  const version = await get('SELECT * FROM tender_bid_versions WHERE id = ? LIMIT 1', [created.versionId]);
-  const sourceAsset = await get('SELECT * FROM tender_assets WHERE id = ? LIMIT 1', [created.assetId]);
+  const version = sanitizeVersionRow(await get('SELECT * FROM tender_bid_versions WHERE id = ? LIMIT 1', [created.versionId]));
+  const sourceAsset = sanitizeAssetRow(await get('SELECT * FROM tender_assets WHERE id = ? LIMIT 1', [created.assetId]));
   const draft = await ensureDraftForBid({ bid, user: req.user });
 
   await logOperation({
@@ -1944,15 +8267,15 @@ app.get('/api/tender/bids/:id', requirePermission('tender:read'), asyncHandler(a
   if (!Number.isFinite(id) || id <= 0) throw appError('标书ID无效', 400);
   const bid = await ensureBidExists(id);
   const currentVersion = await getCurrentVersion(bid);
-  const draft = await get('SELECT * FROM tender_bid_drafts WHERE bid_id = ? LIMIT 1', [id]);
+  const draft = sanitizeDraftRow(await get('SELECT * FROM tender_bid_drafts WHERE bid_id = ? LIMIT 1', [id]));
   res.json({ ...bid, currentVersion, draft });
 }));
 
 app.post('/api/tender/bids', requirePermission('tender:write'), asyncHandler(async (req, res) => {
-  const title = trimText(req.body?.title);
-  const customer_name = trimText(req.body?.customer_name);
-  const project_name = trimText(req.body?.project_name);
-  const summary = trimText(req.body?.summary);
+  const title = fixMojibakeText(trimText(req.body?.title));
+  const customer_name = fixMojibakeText(trimText(req.body?.customer_name));
+  const project_name = fixMojibakeText(trimText(req.body?.project_name));
+  const summary = fixMojibakeText(trimText(req.body?.summary));
 
   if (!title) throw appError('标书标题不能为空', 400);
   if (!customer_name) throw appError('客户名称不能为空', 400);
@@ -1966,7 +8289,7 @@ app.post('/api/tender/bids', requirePermission('tender:write'), asyncHandler(asy
     [bidNo, title, customer_name, project_name, summary || null, Number(req.user.id), req.user.username, Number(req.user.id), req.user.username]
   );
 
-  const row = await get('SELECT * FROM tender_bids WHERE id = ? LIMIT 1', [info.insertId]);
+  const row = sanitizeBidRow(await get('SELECT * FROM tender_bids WHERE id = ? LIMIT 1', [info.insertId]));
 
   await logOperation({
     req,
@@ -1985,10 +8308,10 @@ app.put('/api/tender/bids/:id', requirePermission('tender:write'), asyncHandler(
   if (!Number.isFinite(id) || id <= 0) throw appError('标书ID无效', 400);
 
   const before = await ensureBidExists(id);
-  const title = trimText(req.body?.title) || before.title;
-  const customer_name = trimText(req.body?.customer_name) || before.customer_name;
-  const project_name = trimText(req.body?.project_name) || before.project_name;
-  const summary = req.body?.summary === undefined ? before.summary : trimText(req.body?.summary);
+  const title = fixMojibakeText(trimText(req.body?.title)) || before.title;
+  const customer_name = fixMojibakeText(trimText(req.body?.customer_name)) || before.customer_name;
+  const project_name = fixMojibakeText(trimText(req.body?.project_name)) || before.project_name;
+  const summary = req.body?.summary === undefined ? before.summary : fixMojibakeText(trimText(req.body?.summary));
 
   await run(
     `UPDATE tender_bids
@@ -2009,7 +8332,88 @@ app.put('/api/tender/bids/:id', requirePermission('tender:write'), asyncHandler(
     afterData: row,
   });
 
-  res.json(row);
+  res.json(sanitizeBidRow(row));
+}));
+
+app.delete('/api/tender/bids/:id', requirePermission('tender:write'), asyncHandler(async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isFinite(id) || id <= 0) throw appError('标书ID无效', 400);
+
+  const before = await ensureBidExists(id);
+  const versionRows = await query(
+    `SELECT id, storage_path, file_name
+     FROM tender_bid_versions
+     WHERE bid_id = ?`,
+    [id]
+  );
+  const draftRows = await query(
+    `SELECT id, draft_file_path, draft_file_name
+     FROM tender_bid_drafts
+     WHERE bid_id = ?`,
+    [id]
+  );
+  const assetRows = await query(
+    `SELECT id, storage_path, original_file_name
+     FROM tender_assets
+     WHERE bid_id = ?`,
+    [id]
+  );
+  const assetIds = assetRows
+    .map((item) => Number(item.id))
+    .filter((item) => Number.isFinite(item) && item > 0);
+
+  await withDeadlockRetry(
+    () => transaction(async (tx) => {
+      if (assetIds.length) {
+        const placeholders = assetIds.map(() => '?').join(',');
+        await tx.run(`DELETE FROM tender_asset_ocr_results WHERE asset_id IN (${placeholders})`, assetIds);
+      }
+      await tx.run('DELETE FROM tender_editor_sessions WHERE bid_id = ?', [id]);
+      await tx.run('DELETE FROM tender_bid_field_values WHERE bid_id = ?', [id]);
+      await tx.run('UPDATE tender_bid_generate_jobs SET created_bid_id = NULL WHERE created_bid_id = ?', [id]);
+      await tx.run('DELETE FROM tender_bid_versions WHERE bid_id = ?', [id]);
+      await tx.run('DELETE FROM tender_bid_drafts WHERE bid_id = ?', [id]);
+      await tx.run('DELETE FROM tender_assets WHERE bid_id = ?', [id]);
+      await tx.run('DELETE FROM tender_bids WHERE id = ?', [id]);
+    }),
+    { maxRetries: 2, baseDelayMs: 100 }
+  );
+
+  const filePathSet = new Set([
+    ...versionRows.map((item) => trimText(item.storage_path)),
+    ...draftRows.map((item) => trimText(item.draft_file_path)),
+    ...assetRows.map((item) => trimText(item.storage_path)),
+  ].filter(Boolean));
+  for (const filePath of filePathSet) {
+    await deleteFileSafe(filePath);
+  }
+
+  await logOperation({
+    req,
+    action: 'BID_DELETE',
+    entity: 'bid',
+    entityId: id,
+    message: `删除标书 ${before.bid_no}`,
+    beforeData: {
+      bid_no: before.bid_no,
+      title: before.title,
+      status: before.status,
+      version_count: versionRows.length,
+      draft_count: draftRows.length,
+      asset_count: assetRows.length,
+    },
+    afterData: { deleted: true },
+  });
+
+  res.json({
+    ok: true,
+    id,
+    deleted: {
+      version_count: versionRows.length,
+      draft_count: draftRows.length,
+      asset_count: assetRows.length,
+    },
+  });
 }));
 
 app.post('/api/tender/bids/:id/status', requirePermission('tender:write'), asyncHandler(async (req, res) => {
@@ -2063,7 +8467,7 @@ app.post('/api/tender/bids/:id/status', requirePermission('tender:write'), async
     afterData: { status: nextStatus },
   });
 
-  res.json(after);
+  res.json(sanitizeBidRow(after));
 }));
 
 app.post('/api/tender/bids/:id/versions/upload', requirePermission('tender:write'), uploadBidVersion, asyncHandler(async (req, res) => {
@@ -2133,7 +8537,7 @@ app.post('/api/tender/bids/:id/versions/upload', requirePermission('tender:write
     afterData: result,
   });
 
-  res.status(201).json(result);
+  res.status(201).json(sanitizeVersionRow(result));
 }));
 
 app.get('/api/tender/bids/:id/versions', requirePermission('tender:read'), asyncHandler(async (req, res) => {
@@ -2147,7 +8551,48 @@ app.get('/api/tender/bids/:id/versions', requirePermission('tender:read'), async
      ORDER BY version_no DESC`,
     [bidId]
   );
-  res.json(rows);
+  res.json(rows.map((row) => sanitizeVersionRow(row)));
+}));
+
+app.get('/api/tender/bids/:id/versions/compare', requirePermission('tender:read'), asyncHandler(async (req, res) => {
+  const bidId = Number(req.params.id);
+  const leftVersionId = Number(req.query.left_version_id || req.query.left || 0);
+  const rightVersionId = Number(req.query.right_version_id || req.query.right || 0);
+  if (!Number.isFinite(bidId) || bidId <= 0) throw appError('标书ID无效', 400);
+  if (!Number.isFinite(leftVersionId) || leftVersionId <= 0) throw appError('左侧版本ID无效', 400);
+  if (!Number.isFinite(rightVersionId) || rightVersionId <= 0) throw appError('右侧版本ID无效', 400);
+  if (leftVersionId === rightVersionId) throw appError('请至少选择两个不同版本进行对比', 400);
+
+  await ensureBidExists(bidId);
+  const [leftVersion, rightVersion] = await Promise.all([
+    getBidVersionById({ bidId, versionId: leftVersionId }),
+    getBidVersionById({ bidId, versionId: rightVersionId }),
+  ]);
+  if (!leftVersion || !rightVersion) throw appError('版本不存在或不属于当前标书', 404);
+
+  const [leftText, rightText] = await Promise.all([
+    resolveBidVersionSearchText(leftVersion),
+    resolveBidVersionSearchText(rightVersion),
+  ]);
+
+  if (!leftText && !rightText) {
+    return res.json({
+      left_version: sanitizeVersionRow(leftVersion),
+      right_version: sanitizeVersionRow(rightVersion),
+      comparable: false,
+      reason: '两个版本都缺少可提取文本，暂不支持对比',
+      summary: null,
+      entries: [],
+    });
+  }
+
+  const diffPayload = buildVersionDiffResult({ leftText, rightText });
+  return res.json({
+    left_version: sanitizeVersionRow(leftVersion),
+    right_version: sanitizeVersionRow(rightVersion),
+    comparable: true,
+    ...diffPayload,
+  });
 }));
 
 app.post('/api/tender/bids/:id/versions/snapshot', requirePermission('tender:write'), asyncHandler(async (req, res) => {
@@ -2204,7 +8649,7 @@ app.post('/api/tender/bids/:id/versions/snapshot', requirePermission('tender:wri
     afterData: result,
   });
 
-  res.status(201).json(result);
+  res.status(201).json(sanitizeVersionRow(result));
 }));
 
 app.post('/api/tender/bids/:id/editor/session', requirePermission('tender:write'), asyncHandler(async (req, res) => {
@@ -2262,6 +8707,22 @@ app.post('/api/tender/bids/:id/editor/session', requirePermission('tender:write'
     },
   });
 
+  await insertOperationLog({
+    userId: req.user.id,
+    username: req.user.username,
+    userRole: req.user.role,
+    action: 'EDITOR_JOIN',
+    entity: 'bid',
+    entityId: bidId,
+    message: '加入协同编辑',
+    afterData: {
+      bid_id: bidId,
+      session_key: sessionKey,
+      draft_id: draft.id,
+    },
+    requestIp: getClientIp(req),
+  });
+
   res.json({
     provider: DOC_EDITOR_PROVIDER,
     session,
@@ -2274,6 +8735,14 @@ app.post('/api/tender/bids/:id/editor/release', requirePermission('tender:write'
   const bidId = Number(req.params.id);
   if (!Number.isFinite(bidId) || bidId <= 0) throw appError('标书ID无效', 400);
   await ensureBidExists(bidId);
+
+  const activeSessions = await query(
+    `SELECT id, session_key, draft_id
+     FROM tender_editor_sessions
+     WHERE bid_id = ? AND user_id = ? AND status = 'active'
+     ORDER BY id DESC`,
+    [bidId, Number(req.user.id)]
+  );
 
   await run(
     `UPDATE tender_editor_sessions
@@ -2290,7 +8759,66 @@ app.post('/api/tender/bids/:id/editor/release', requirePermission('tender:write'
     message: '释放当前用户的协同编辑会话',
   });
 
+  for (const item of activeSessions) {
+    await insertOperationLog({
+      userId: req.user.id,
+      username: req.user.username,
+      userRole: req.user.role,
+      action: 'EDITOR_LEAVE',
+      entity: 'bid',
+      entityId: bidId,
+      message: '离开协同编辑',
+      afterData: {
+        bid_id: bidId,
+        session_key: trimText(item.session_key),
+        draft_id: Number(item.draft_id) || null,
+      },
+      requestIp: getClientIp(req),
+    });
+  }
+
   res.json({ ok: true });
+}));
+
+app.get('/api/tender/bids/:id/editor/events', requirePermission('tender:read'), asyncHandler(async (req, res) => {
+  const bidId = Number(req.params.id);
+  if (!Number.isFinite(bidId) || bidId <= 0) throw appError('标书ID无效', 400);
+  await ensureBidExists(bidId);
+
+  const limit = Math.min(EDITOR_EVENTS_MAX_LIMIT, toBoundedLimit(req.query.limit, 80));
+  const rows = await query(
+    `SELECT id, username, user_role, action, message, after_data, request_ip, created_at
+     FROM tender_operation_logs
+     WHERE entity = 'bid'
+       AND entity_id = ?
+       AND action IN ('EDITOR_JOIN', 'EDITOR_SAVE', 'EDITOR_FORCE_SAVE', 'EDITOR_LEAVE')
+     ORDER BY id DESC
+     LIMIT ?`,
+    [bidId, limit]
+  );
+
+  const items = rows.map((row) => {
+    const payload = parseMaybeJson(row.after_data, {});
+    return {
+      id: Number(row.id),
+      username: trimText(row.username) || '-',
+      user_role: trimText(row.user_role),
+      action: trimText(row.action),
+      message: trimText(row.message),
+      request_ip: trimText(row.request_ip),
+      created_at: row.created_at,
+      session_key: trimText(payload?.session_key),
+      draft_id: Number(payload?.draft_id || 0) || null,
+      onlyoffice_status: Number(payload?.onlyoffice_status || 0) || null,
+      file_size: Number(payload?.file_size || 0) || null,
+      file_hash: trimText(payload?.file_hash),
+    };
+  });
+
+  res.json({
+    items,
+    total: items.length,
+  });
 }));
 
 app.get('/api/tender/drafts/:id/download.docx', asyncHandler(async (req, res) => {
@@ -2306,7 +8834,7 @@ app.get('/api/tender/drafts/:id/download.docx', asyncHandler(async (req, res) =>
   if (!session) throw appError('编辑会话不存在', 404);
   if (Number(session.draft_id) !== draftId) throw appError('会话与草稿不匹配', 403);
 
-  const draft = await get('SELECT * FROM tender_bid_drafts WHERE id = ? LIMIT 1', [draftId]);
+  const draft = sanitizeDraftRow(await get('SELECT * FROM tender_bid_drafts WHERE id = ? LIMIT 1', [draftId]));
   if (!draft) throw appError('草稿不存在', 404);
 
   const stat = await readFileStatSafe(draft.draft_file_path);
@@ -2343,6 +8871,24 @@ app.post('/api/tender/editor/callback/:sessionKey', asyncHandler(async (req, res
          WHERE id = ?`,
         [Number(session.user_id), session.username, Number(draft.id)]
       );
+      await insertOperationLog({
+        userId: Number(session.user_id) || null,
+        username: session.username,
+        userRole: 'editor',
+        action: status === 6 ? 'EDITOR_FORCE_SAVE' : 'EDITOR_SAVE',
+        entity: 'bid',
+        entityId: Number(session.bid_id) || null,
+        message: status === 6 ? '协同强制保存草稿' : '协同保存草稿',
+        afterData: {
+          bid_id: Number(session.bid_id) || null,
+          session_key: sessionKey,
+          draft_id: Number(draft.id),
+          onlyoffice_status: status,
+          file_size: Number(fileBuf.length || 0),
+          file_hash: crypto.createHash('sha256').update(fileBuf).digest('hex'),
+        },
+        requestIp: getClientIp(req),
+      });
     }
   }
 
@@ -2919,7 +9465,7 @@ app.post('/api/tender/assets/upload', requirePermission('tender:write'), uploadA
     ]
   );
 
-  const asset = await get('SELECT * FROM tender_assets WHERE id = ? LIMIT 1', [assetInfo.insertId]);
+  const asset = sanitizeAssetRow(await get('SELECT * FROM tender_assets WHERE id = ? LIMIT 1', [assetInfo.insertId]));
 
   const ocr = await runAliyunOcr({ buffer: file.buffer });
   const structured = extractStructuredFields(ocr.text, assetType);
@@ -2995,7 +9541,7 @@ app.get('/api/tender/assets', requirePermission('tender:read'), asyncHandler(asy
 
   res.json(
     rows.map((row) => ({
-      ...row,
+      ...sanitizeAssetRow(row),
       fields_json: parseMaybeJson(row.fields_json, {}),
     }))
   );
@@ -3005,7 +9551,7 @@ app.delete('/api/tender/assets/:id', requirePermission('tender:write'), asyncHan
   const id = Number(req.params.id);
   if (!Number.isFinite(id) || id <= 0) throw appError('资产ID无效', 400);
 
-  const asset = await get('SELECT * FROM tender_assets WHERE id = ? LIMIT 1', [id]);
+  const asset = sanitizeAssetRow(await get('SELECT * FROM tender_assets WHERE id = ? LIMIT 1', [id]));
   if (!asset) throw appError('资产不存在', 404);
 
   const ocrRow = await get('SELECT * FROM tender_asset_ocr_results WHERE asset_id = ? LIMIT 1', [id]);
@@ -3038,7 +9584,7 @@ app.post('/api/tender/assets/:id/confirm', requirePermission('tender:write'), as
   const id = Number(req.params.id);
   if (!Number.isFinite(id) || id <= 0) throw appError('资产ID无效', 400);
 
-  const asset = await get('SELECT * FROM tender_assets WHERE id = ? LIMIT 1', [id]);
+  const asset = sanitizeAssetRow(await get('SELECT * FROM tender_assets WHERE id = ? LIMIT 1', [id]));
   if (!asset) throw appError('资产不存在', 404);
 
   const before = await get('SELECT * FROM tender_asset_ocr_results WHERE asset_id = ? LIMIT 1', [id]);
@@ -3080,7 +9626,7 @@ app.get('/api/tender/assets/:id/preview', requirePermission('tender:read'), asyn
   const id = Number(req.params.id);
   if (!Number.isFinite(id) || id <= 0) throw appError('资产ID无效', 400);
 
-  const asset = await get('SELECT * FROM tender_assets WHERE id = ? LIMIT 1', [id]);
+  const asset = sanitizeAssetRow(await get('SELECT * FROM tender_assets WHERE id = ? LIMIT 1', [id]));
   if (!asset) throw appError('资产不存在', 404);
 
   const rendered = await renderWatermarkedFile({ req, asset, purpose: 'preview' });
@@ -3102,7 +9648,7 @@ app.get('/api/tender/assets/:id/download', requirePermission('tender:read'), asy
   const id = Number(req.params.id);
   if (!Number.isFinite(id) || id <= 0) throw appError('资产ID无效', 400);
 
-  const asset = await get('SELECT * FROM tender_assets WHERE id = ? LIMIT 1', [id]);
+  const asset = sanitizeAssetRow(await get('SELECT * FROM tender_assets WHERE id = ? LIMIT 1', [id]));
   if (!asset) throw appError('资产不存在', 404);
 
   const rendered = await renderWatermarkedFile({ req, asset, purpose: 'download' });
@@ -3136,6 +9682,32 @@ app.get('/api/tender/ai/models', asyncHandler(async (req, res) => {
       extra_headers_json: parseMaybeJson(item.extra_headers_json, {}),
     }))
   );
+}));
+
+app.post('/api/tender/ai/models/test', requirePermission('tender:ai:manage'), asyncHandler(async (req, res) => {
+  const prepared = await buildModelRuntimeForTest(req.body || {});
+  const result = await runAiModelConnectionTest({
+    req,
+    modelMeta: prepared.modelMeta,
+    runtime: prepared.runtime,
+    source: prepared.source,
+  });
+  res.json(result);
+}));
+
+app.post('/api/tender/ai/models/:id/test', requirePermission('tender:ai:manage'), asyncHandler(async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isFinite(id) || id <= 0) throw appError('模型ID无效', 400);
+
+  const body = { ...(req.body || {}), model_id: id };
+  const prepared = await buildModelRuntimeForTest(body);
+  const result = await runAiModelConnectionTest({
+    req,
+    modelMeta: { ...prepared.modelMeta, id },
+    runtime: prepared.runtime,
+    source: 'saved',
+  });
+  res.json(result);
 }));
 
 app.post('/api/tender/ai/models', requirePermission('tender:ai:manage'), asyncHandler(async (req, res) => {
@@ -3281,6 +9853,69 @@ app.post('/api/tender/ai/models/:id/default', requirePermission('tender:ai:manag
   res.json({ ok: true });
 }));
 
+app.delete('/api/tender/ai/models/:id', requirePermission('tender:ai:manage'), asyncHandler(async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isFinite(id) || id <= 0) throw appError('模型ID无效', 400);
+
+  const before = await get('SELECT * FROM tender_ai_models WHERE id = ? LIMIT 1', [id]);
+  if (!before) throw appError('模型不存在', 404);
+
+  let switchedDefaultId = null;
+  await transaction(async (tx) => {
+    const countRow = await tx.get('SELECT COUNT(1) AS count FROM tender_ai_models');
+    if (Number(countRow?.count || 0) <= 1) {
+      throw appError('至少保留一个模型，不能全部删除', 400);
+    }
+
+    const model = await tx.get('SELECT * FROM tender_ai_models WHERE id = ? LIMIT 1 FOR UPDATE', [id]);
+    if (!model) throw appError('模型不存在', 404);
+
+    if (Number(model.is_default || 0) === 1) {
+      const candidate = await tx.get(
+        'SELECT id FROM tender_ai_models WHERE id <> ? AND is_enabled = 1 ORDER BY id ASC LIMIT 1',
+        [id]
+      );
+      if (!candidate) {
+        throw appError('当前默认模型不能删除，请先启用并设置其他默认模型', 400);
+      }
+      switchedDefaultId = Number(candidate.id);
+    }
+
+    await tx.run('DELETE FROM tender_ai_models WHERE id = ?', [id]);
+
+    if (switchedDefaultId) {
+      await tx.run('UPDATE tender_ai_models SET is_default = 0 WHERE is_default = 1');
+      await tx.run('UPDATE tender_ai_models SET is_default = 1 WHERE id = ?', [switchedDefaultId]);
+      return;
+    }
+
+    const hasDefault = await tx.get('SELECT id FROM tender_ai_models WHERE is_default = 1 LIMIT 1');
+    if (hasDefault) return;
+    const fallback = await tx.get('SELECT id FROM tender_ai_models WHERE is_enabled = 1 ORDER BY id ASC LIMIT 1');
+    if (fallback) {
+      switchedDefaultId = Number(fallback.id);
+      await tx.run('UPDATE tender_ai_models SET is_default = 1 WHERE id = ?', [switchedDefaultId]);
+    }
+  });
+
+  await logOperation({
+    req,
+    action: 'AI_MODEL_DELETE',
+    entity: 'ai_model',
+    entityId: id,
+    message: switchedDefaultId
+      ? `删除模型 ${before.model_key}，默认模型切换为ID=${switchedDefaultId}`
+      : `删除模型 ${before.model_key}`,
+    beforeData: { ...before, api_key_enc: SECRET_MASK },
+    afterData: switchedDefaultId ? { switched_default_model_id: switchedDefaultId } : {},
+  });
+
+  res.json({
+    ok: true,
+    switched_default_model_id: switchedDefaultId,
+  });
+}));
+
 app.get('/api/tender/ai/prompts', requirePermission('tender:ai:manage'), asyncHandler(async (_req, res) => {
   const rows = await query('SELECT * FROM tender_ai_prompts ORDER BY id ASC');
   res.json(rows);
@@ -3288,7 +9923,18 @@ app.get('/api/tender/ai/prompts', requirePermission('tender:ai:manage'), asyncHa
 
 app.put('/api/tender/ai/prompts/:taskType', requirePermission('tender:ai:manage'), asyncHandler(async (req, res) => {
   const taskType = trimText(req.params.taskType).toUpperCase();
-  if (!['OCR_STRUCTURED', 'REWRITE', 'PROOFREAD'].includes(taskType)) throw appError('不支持的任务类型', 400);
+  if (![
+    'OCR_STRUCTURED',
+    'REWRITE',
+    'PROOFREAD',
+    'BID_ANALYZE_STAGE1',
+    'BID_ANALYZE_STAGE2',
+    'BID_ANALYZE_STAGE3',
+    'BID_ANALYZE',
+    'BID_COMPOSE_DRAFT',
+  ].includes(taskType)) {
+    throw appError('不支持的任务类型', 400);
+  }
   const promptTemplate = trimText(req.body?.prompt_template);
   if (!promptTemplate) throw appError('prompt_template不能为空', 400);
 

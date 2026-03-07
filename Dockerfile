@@ -1,4 +1,4 @@
-FROM node:20-bookworm AS build
+FROM docker.m.daocloud.io/library/node:20-bookworm AS build
 
 WORKDIR /app
 
@@ -14,7 +14,7 @@ COPY web ./web
 RUN npm --prefix web run build
 RUN npm prune --omit=dev
 
-FROM node:20-bookworm-slim
+FROM docker.m.daocloud.io/library/node:20-bookworm-slim
 
 WORKDIR /app
 ENV NODE_ENV=production

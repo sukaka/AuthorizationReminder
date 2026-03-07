@@ -1,6 +1,6 @@
 services:
   mongo:
-    image: mongo:7.0
+    image: docker.m.daocloud.io/library/mongo:7.0
     container_name: cmdb-mongo
     ports:
       - "27017:27017"
@@ -13,14 +13,14 @@ services:
       retries: 20
 
   zookeeper:
-    image: confluentinc/cp-zookeeper:7.6.1
+    image: docker.m.daocloud.io/confluentinc/cp-zookeeper:7.6.1
     container_name: cmdb-zookeeper
     environment:
       ZOOKEEPER_CLIENT_PORT: 2181
       ZOOKEEPER_TICK_TIME: 2000
 
   kafka:
-    image: confluentinc/cp-kafka:7.6.1
+    image: docker.m.daocloud.io/confluentinc/cp-kafka:7.6.1
     container_name: cmdb-kafka
     depends_on:
       - zookeeper
@@ -39,7 +39,7 @@ services:
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
 
   kafka-init:
-    image: confluentinc/cp-kafka:7.6.1
+    image: docker.m.daocloud.io/confluentinc/cp-kafka:7.6.1
     container_name: cmdb-kafka-init
     depends_on:
       - kafka
@@ -61,7 +61,7 @@ services:
     restart: "no"
 
   kafka-ui:
-    image: provectuslabs/kafka-ui:latest
+    image: docker.m.daocloud.io/provectuslabs/kafka-ui:latest
     container_name: cmdb-kafka-ui
     depends_on:
       - kafka

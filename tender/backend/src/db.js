@@ -369,6 +369,129 @@ const createSchema = async () => {
     INDEX idx_tender_ai_task_logs_operator (operator_id, created_at)
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
 
+  await run(`CREATE TABLE IF NOT EXISTS tender_bid_samples (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    sample_no VARCHAR(64) NOT NULL,
+    title VARCHAR(255) NOT NULL,
+    original_file_name VARCHAR(255) NOT NULL,
+    source_ext VARCHAR(16) NOT NULL DEFAULT '.docx',
+    storage_path VARCHAR(512) NOT NULL,
+    file_size BIGINT NOT NULL DEFAULT 0,
+    mime_type VARCHAR(128) NULL,
+    parse_status VARCHAR(16) NOT NULL DEFAULT 'PENDING',
+    parse_error TEXT NULL,
+    parsed_text LONGTEXT NULL,
+    status VARCHAR(16) NOT NULL DEFAULT 'ACTIVE',
+    uploaded_by_id BIGINT NULL,
+    uploaded_by_name VARCHAR(128) NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE KEY uk_tender_bid_samples_no (sample_no),
+    INDEX idx_tender_bid_samples_status (status, parse_status, updated_at),
+    INDEX idx_tender_bid_samples_title (title, id)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
+
+  await run(`CREATE TABLE IF NOT EXISTS tender_bid_sample_sections (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    sample_id BIGINT NOT NULL,
+    section_key VARCHAR(64) NOT NULL,
+    section_title VARCHAR(128) NOT NULL,
+    section_text LONGTEXT NULL,
+    summary_text TEXT NULL,
+    keywords_json TEXT NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE KEY uk_tender_bid_sample_sections (sample_id, section_key),
+    INDEX idx_tender_bid_sample_sections_sample (sample_id, updated_at)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
+
+  await run(`CREATE TABLE IF NOT EXISTS tender_bid_sample_features (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    sample_id BIGINT NOT NULL,
+    feature_key VARCHAR(64) NOT NULL,
+    feature_value VARCHAR(255) NOT NULL,
+    feature_weight DECIMAL(7,4) NOT NULL DEFAULT 1.0000,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_tender_bid_sample_features_sample (sample_id),
+    INDEX idx_tender_bid_sample_features_key (feature_key, feature_value)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
+
+  await run(`CREATE TABLE IF NOT EXISTS tender_bid_generate_jobs (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    source_file_name VARCHAR(255) NOT NULL,
+    source_storage_path VARCHAR(512) NOT NULL,
+    source_ext VARCHAR(16) NOT NULL DEFAULT '.docx',
+    source_mime_type VARCHAR(128) NULL,
+    source_file_size BIGINT NOT NULL DEFAULT 0,
+    model_id BIGINT NULL,
+    model_name VARCHAR(255) NULL,
+    bid_category VARCHAR(16) NULL,
+    status VARCHAR(16) NOT NULL DEFAULT 'ANALYZING',
+    progress INT NOT NULL DEFAULT 0,
+    section_summaries_json LONGTEXT NULL,
+    analysis_summary_json LONGTEXT NULL,
+    warning_text TEXT NULL,
+    error_message TEXT NULL,
+    created_bid_id BIGINT NULL,
+    created_version_id BIGINT NULL,
+    created_draft_id BIGINT NULL,
+    operator_id BIGINT NULL,
+    operator_name VARCHAR(128) NULL,
+    request_ip VARCHAR(64) NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    INDEX idx_tender_bid_generate_jobs_status (status, updated_at),
+    INDEX idx_tender_bid_generate_jobs_operator (operator_id, created_at)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
+
+  await run(`CREATE TABLE IF NOT EXISTS tender_bid_generate_items (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    job_id BIGINT NOT NULL,
+    item_type VARCHAR(16) NOT NULL,
+    section_key VARCHAR(64) NULL,
+    section_title VARCHAR(128) NULL,
+    title VARCHAR(255) NOT NULL,
+    evidence_text TEXT NULL,
+    suggestion_text TEXT NULL,
+    risk_level VARCHAR(16) NULL,
+    sort_order INT NOT NULL DEFAULT 0,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_tender_bid_generate_items_job (job_id, item_type, sort_order)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
+
+  await run(`CREATE TABLE IF NOT EXISTS tender_bid_generate_matches (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    job_id BIGINT NOT NULL,
+    sample_id BIGINT NOT NULL,
+    score DECIMAL(7,4) NOT NULL DEFAULT 0,
+    reason_text VARCHAR(512) NULL,
+    rank_no INT NOT NULL DEFAULT 0,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE KEY uk_tender_bid_generate_matches_rank (job_id, rank_no),
+    INDEX idx_tender_bid_generate_matches_job (job_id, score)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
+
+  await run(`CREATE TABLE IF NOT EXISTS tender_doc_templates (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    template_no VARCHAR(64) NOT NULL,
+    template_name VARCHAR(255) NOT NULL,
+    original_file_name VARCHAR(255) NOT NULL,
+    source_ext VARCHAR(16) NOT NULL DEFAULT '.docx',
+    storage_path VARCHAR(512) NOT NULL,
+    file_size BIGINT NOT NULL DEFAULT 0,
+    mime_type VARCHAR(128) NULL,
+    status VARCHAR(16) NOT NULL DEFAULT 'ACTIVE',
+    is_default TINYINT NOT NULL DEFAULT 0,
+    created_by_id BIGINT NULL,
+    created_by_name VARCHAR(128) NULL,
+    updated_by_id BIGINT NULL,
+    updated_by_name VARCHAR(128) NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE KEY uk_tender_doc_templates_no (template_no),
+    INDEX idx_tender_doc_templates_status (status, is_default, updated_at)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
+
   await run(`CREATE TABLE IF NOT EXISTS tender_system_configs (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,
     \`key\` VARCHAR(128) NOT NULL,
@@ -398,6 +521,21 @@ const createSchema = async () => {
     INDEX idx_tender_operation_logs_user (username, created_at)
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
 
+  const ensureColumn = async (tableName, columnName, columnDefSql) => {
+    const row = await get(
+      `SELECT COUNT(1) AS count
+       FROM information_schema.COLUMNS
+       WHERE TABLE_SCHEMA = DATABASE()
+         AND TABLE_NAME = ?
+         AND COLUMN_NAME = ?`,
+      [tableName, columnName]
+    );
+    if (Number(row?.count || 0) > 0) return;
+    await run(`ALTER TABLE \`${tableName}\` ADD COLUMN \`${columnName}\` ${columnDefSql}`);
+  };
+
+  await ensureColumn('tender_bid_generate_jobs', 'bid_category', "VARCHAR(16) NULL AFTER model_name");
+
   const modelCountRow = await get('SELECT COUNT(1) AS count FROM tender_ai_models');
   if (Number(modelCountRow?.count || 0) === 0) {
     await run(
@@ -417,8 +555,46 @@ const createSchema = async () => {
        VALUES
        ('OCR_STRUCTURED', '你是资质与证照信息抽取助手。请将输入文本抽取为JSON，字段：doc_type,title,certificate_no,subject,issuer,valid_from,valid_to,summary,confidence。仅输出JSON。', 1),
        ('REWRITE', '你是中文标书写作助手。请在不改变事实的前提下，润色并增强专业表达。输出：改写正文。', 1),
-       ('PROOFREAD', '你是标书合规校对助手。识别错漏与风险，输出JSON数组，每项含：type,level,message,suggestion。仅输出JSON。', 1)`
+       ('PROOFREAD', '你是标书合规校对助手。识别错漏与风险，输出JSON数组，每项含：type,level,message,suggestion。仅输出JSON。', 1),
+       ('BID_ANALYZE_STAGE1', '角色：你是政府采购招标文件风险审查专家（服务类优先）。任务：仅识别“可能导致投标无效/被否决/废标”的条款证据，逐条输出，不做归纳，不做改写。硬性规则：仅提取原文，逐字一致；一个条件一条；重复条款去重；仅输出JSON。必须检索关键词含同义触发：无效投标、投标无效、废标、否决投标、否决其投标、不予受理、不通过符合性审查、实质性要求、实质性条款、★、▲、*、不满足作无效投标处理、负偏离无效、投标报价超过最高限价、不得、必须、否则按无效处理。clause_type仅允许：QUALIFICATION_INVALID、COMPLIANCE_INVALID、PERSONNEL_INVALID、SERVICE_SCHEME_INVALID、SLA_INVALID、BUSINESS_INVALID、QUOTATION_INVALID、SIGNATURE_SEAL_INVALID、OTHER_INVALID。risk_level仅允许高或中。无结果返回{\"risk_clauses\":[]}。输出结构：{\"risk_clauses\":[{\"evidence_id\":\"RISK-0001\",\"clause_type\":\"\",\"clause_content\":\"\",\"trigger_keyword\":\"\",\"risk_level\":\"高\",\"source_reference\":{\"chapter\":\"\",\"page_number\":\"\"}}]}', 1),
+       ('BID_ANALYZE_STAGE2', '角色：你是政府采购结构化解析专家。输入包含招标文件全文、章节摘要、阶段1风险条款。任务：输出完整Final JSON（字段结构固定）。强制章节检查：投标人须知、投标人须知前附表、采购需求、评标办法、合同条款、附件、评分表。规则：仅提取原文明确信息；禁止编造；出现冲突按“废标条款>投标人须知前附表>采购需求>评标办法>合同条款>其他正文”裁决；字符串空值填“未明确”；字符串数组空值填[\"未明确\"]；对象数组无明确条款时可返回空数组。仅输出JSON。', 1),
+       ('BID_ANALYZE_STAGE3', '角色：你是政府采购审标专家（服务类项目）。输入包含阶段1结果、阶段2结果和招标文件全文。任务：做遗漏校验，仅检查：废标条款、实质性条款、SLA指标、人员资格要求、评分项、报价规则。判定规则：若原文存在而前两阶段未覆盖则记为遗漏；若阶段2字段为未明确但原文明确也记遗漏；仅引用原文不得改写；同条款按“前30字+章节”去重。item_type仅允许：INVALID_BID_CLAUSE、SUBSTANTIVE_REQUIREMENT、SLA_INDICATOR、PERSONNEL_REQUIREMENT、SCORING_ITEM、QUOTATION_RULE。输出：{\"missing_items\":[{\"item_type\":\"\",\"target_field_path\":\"\",\"missing_content\":\"\",\"source_reference\":{\"chapter\":\"\",\"page_number\":\"\"}}]}；无遗漏返回{\"missing_items\":[]}。', 1),
+       ('BID_ANALYZE', '你是招标文件分析助手。根据输入输出JSON，字段：section_summaries(对象，6章节摘要)、scoring_items(数组)、risk_items(数组)、sample_rerank_ids(数组)。每个条目含title、section_key、evidence、suggestion、risk_level(仅风险项)。仅输出JSON。', 1),
+       ('BID_COMPOSE_DRAFT', '你是投标文件起草助手。根据输入JSON输出JSON，字段：chapters(数组，元素含title与content)、cover_title、summary。不得输出Markdown，仅输出JSON。', 1)`
     );
+  }
+
+  const extraPrompts = [
+    {
+      task_type: 'BID_ANALYZE_STAGE1',
+      prompt_template: '角色：你是政府采购招标文件风险审查专家（服务类优先）。任务：仅识别“可能导致投标无效/被否决/废标”的条款证据，逐条输出，不做归纳，不做改写。硬性规则：仅提取原文，逐字一致；一个条件一条；重复条款去重；仅输出JSON。必须检索关键词含同义触发：无效投标、投标无效、废标、否决投标、否决其投标、不予受理、不通过符合性审查、实质性要求、实质性条款、★、▲、*、不满足作无效投标处理、负偏离无效、投标报价超过最高限价、不得、必须、否则按无效处理。clause_type仅允许：QUALIFICATION_INVALID、COMPLIANCE_INVALID、PERSONNEL_INVALID、SERVICE_SCHEME_INVALID、SLA_INVALID、BUSINESS_INVALID、QUOTATION_INVALID、SIGNATURE_SEAL_INVALID、OTHER_INVALID。risk_level仅允许高或中。无结果返回{\"risk_clauses\":[]}。输出结构：{\"risk_clauses\":[{\"evidence_id\":\"RISK-0001\",\"clause_type\":\"\",\"clause_content\":\"\",\"trigger_keyword\":\"\",\"risk_level\":\"高\",\"source_reference\":{\"chapter\":\"\",\"page_number\":\"\"}}]}',
+    },
+    {
+      task_type: 'BID_ANALYZE_STAGE2',
+      prompt_template: '角色：你是政府采购结构化解析专家。输入包含招标文件全文、章节摘要、阶段1风险条款。任务：输出完整Final JSON（字段结构固定）。强制章节检查：投标人须知、投标人须知前附表、采购需求、评标办法、合同条款、附件、评分表。规则：仅提取原文明确信息；禁止编造；出现冲突按“废标条款>投标人须知前附表>采购需求>评标办法>合同条款>其他正文”裁决；字符串空值填“未明确”；字符串数组空值填[\"未明确\"]；对象数组无明确条款时可返回空数组。仅输出JSON。',
+    },
+    {
+      task_type: 'BID_ANALYZE_STAGE3',
+      prompt_template: '角色：你是政府采购审标专家（服务类项目）。输入包含阶段1结果、阶段2结果和招标文件全文。任务：做遗漏校验，仅检查：废标条款、实质性条款、SLA指标、人员资格要求、评分项、报价规则。判定规则：若原文存在而前两阶段未覆盖则记为遗漏；若阶段2字段为未明确但原文明确也记遗漏；仅引用原文不得改写；同条款按“前30字+章节”去重。item_type仅允许：INVALID_BID_CLAUSE、SUBSTANTIVE_REQUIREMENT、SLA_INDICATOR、PERSONNEL_REQUIREMENT、SCORING_ITEM、QUOTATION_RULE。输出：{\"missing_items\":[{\"item_type\":\"\",\"target_field_path\":\"\",\"missing_content\":\"\",\"source_reference\":{\"chapter\":\"\",\"page_number\":\"\"}}]}；无遗漏返回{\"missing_items\":[]}。',
+    },
+    {
+      task_type: 'BID_ANALYZE',
+      prompt_template: '你是招标文件分析助手。根据输入输出JSON，字段：section_summaries(对象，6章节摘要)、scoring_items(数组)、risk_items(数组)、sample_rerank_ids(数组)。每个条目含title、section_key、evidence、suggestion、risk_level(仅风险项)。仅输出JSON。',
+    },
+    {
+      task_type: 'BID_COMPOSE_DRAFT',
+      prompt_template: '你是投标文件起草助手。根据输入JSON输出JSON，字段：chapters(数组，元素含title与content)、cover_title、summary。不得输出Markdown，仅输出JSON。',
+    },
+  ];
+  for (const item of extraPrompts) {
+    const exists = await get('SELECT id FROM tender_ai_prompts WHERE task_type = ? LIMIT 1', [item.task_type]);
+    if (!exists) {
+      await run(
+        `INSERT INTO tender_ai_prompts (task_type, prompt_template, is_active)
+         VALUES (?, ?, 1)`,
+        [item.task_type, item.prompt_template]
+      );
+    }
   }
 
   const defaultModelRow = await get('SELECT id FROM tender_ai_models WHERE is_default = 1 LIMIT 1');

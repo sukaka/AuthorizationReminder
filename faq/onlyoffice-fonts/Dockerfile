@@ -1,4 +1,4 @@
-FROM onlyoffice/documentserver:8.1.1
+FROM docker.m.daocloud.io/onlyoffice/documentserver:8.1.1
 
 USER root
 
