@@ -17,3 +17,4 @@ server/data.db
 server/data.db-*
 .env
 .env.*
+.worktrees/
