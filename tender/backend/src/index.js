@@ -16,6 +16,22 @@ const Jimp = require('jimp');
 const PizZip = require('pizzip');
 const Docxtemplater = require('docxtemplater');
 const { get, initDb, query, run, transaction } = require('./db');
+const {
+  buildRequirementRows,
+  buildEvidenceRows,
+  buildDraftSectionRows,
+} = require('./final-draft-registry');
+const {
+  runStructuredChecks,
+  runDocxChecks,
+  mergeCheckResults,
+} = require('./final-draft-checks');
+const {
+  buildScoreCoverageMatrix,
+  pickOptimizationCandidates,
+  normalizeOptimizationResponse,
+  buildScoreOptimizationPrompt,
+} = require('./score-optimization');
 
 const app = express();
 const normalizeHost = (value) => String(value || '').trim().toLowerCase();
@@ -4311,6 +4327,196 @@ const buildParagraphsFromChapters = (chapters = []) => {
   return rows;
 };
 
+const persistRequirementRegistry = async (tx, jobId, rows = []) => {
+  await tx.run('DELETE FROM tender_requirement_registry WHERE job_id = ?', [Number(jobId)]);
+  for (const row of Array.isArray(rows) ? rows : []) {
+    await tx.run(
+      `INSERT INTO tender_requirement_registry
+        (job_id, requirement_code, bid_category, requirement_type, title, requirement_text, section_key, section_title, suggestion_text, risk_level, source_json)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        Number(jobId),
+        trimText(row.requirement_code),
+        trimText(row.bid_category) || null,
+        trimText(row.requirement_type),
+        trimText(row.title) || null,
+        trimText(row.requirement_text) || null,
+        trimText(row.section_key) || null,
+        trimText(row.section_title) || null,
+        trimText(row.suggestion_text) || null,
+        trimText(row.risk_level) || null,
+        trimText(row.source_json) || null,
+      ]
+    );
+  }
+};
+
+const persistEvidenceRegistry = async (tx, bidId, rows = []) => {
+  await tx.run('DELETE FROM tender_evidence_registry WHERE bid_id = ?', [Number(bidId)]);
+  for (const row of Array.isArray(rows) ? rows : []) {
+    await tx.run(
+      `INSERT INTO tender_evidence_registry
+        (bid_id, evidence_code, evidence_type, title, evidence_text, library_record_id, source_json)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [
+        Number(bidId),
+        trimText(row.evidence_code),
+        trimText(row.evidence_type),
+        trimText(row.title) || null,
+        trimText(row.evidence_text) || null,
+        Number(row.library_record_id || 0) || null,
+        trimText(row.source_json) || null,
+      ]
+    );
+  }
+};
+
+const persistDraftSectionRegistry = async (tx, bidId, versionId, rows = []) => {
+  await tx.run(
+    'DELETE FROM tender_draft_section_registry WHERE bid_id = ? AND version_id = ?',
+    [Number(bidId), Number(versionId)]
+  );
+  for (const row of Array.isArray(rows) ? rows : []) {
+    await tx.run(
+      `INSERT INTO tender_draft_section_registry
+        (bid_id, version_id, section_title, paragraph_no, paragraph_text, template_slot, requirement_ids_json, evidence_ids_json, score_item_ids_json)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        Number(bidId),
+        Number(versionId),
+        trimText(row.section_title) || null,
+        Number(row.paragraph_no || 0),
+        trimText(row.paragraph_text) || null,
+        trimText(row.template_slot) || null,
+        trimText(row.requirement_ids_json) || '[]',
+        trimText(row.evidence_ids_json) || '[]',
+        trimText(row.score_item_ids_json) || '[]',
+      ]
+    );
+  }
+};
+
+const persistScoreCoverageMatrix = async (tx, { bidId, versionId, rows = [] }) => {
+  await tx.run(
+    'DELETE FROM tender_score_coverage_matrix WHERE bid_id = ? AND version_id = ?',
+    [Number(bidId), Number(versionId || 0) || null]
+  );
+  for (const row of Array.isArray(rows) ? rows : []) {
+    await tx.run(
+      `INSERT INTO tender_score_coverage_matrix
+        (bid_id, version_id, score_item_id, requirement_id, requirement_code, title, full_score, coverage_status, optimization_needed_flag, optimization_reason, target_section_title, bound_evidence_ids_json)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        Number(bidId),
+        Number(versionId || 0) || null,
+        trimText(row.score_item_id),
+        Number(row.requirement_id || 0) || null,
+        trimText(row.requirement_code) || null,
+        trimText(row.title) || null,
+        Number(row.full_score || 0),
+        trimText(row.coverage_status) || 'NONE',
+        Number(row.optimization_needed_flag || 0),
+        trimText(row.optimization_reason) || null,
+        trimText(row.target_section_title) || null,
+        trimText(row.bound_evidence_ids_json) || '[]',
+      ]
+    );
+  }
+};
+
+const persistScoreOptimizationRecords = async (tx, { bidId, versionId, rows = [], user }) => {
+  await tx.run(
+    'DELETE FROM tender_score_optimization_records WHERE bid_id = ? AND version_id = ?',
+    [Number(bidId), Number(versionId || 0) || null]
+  );
+  for (const row of Array.isArray(rows) ? rows : []) {
+    await tx.run(
+      `INSERT INTO tender_score_optimization_records
+        (bid_id, version_id, score_item_id, suggestion_title, suggestion_text, evidence_ids_json, status, created_by_id, created_by_name)
+       VALUES (?, ?, ?, ?, ?, ?, 'PROPOSED', ?, ?)`,
+      [
+        Number(bidId),
+        Number(versionId || 0) || null,
+        trimText(row.score_item_id),
+        trimText(row.suggestion_title) || null,
+        trimText(row.suggestion_text) || null,
+        JSON.stringify(Array.isArray(row.evidence_ids) ? row.evidence_ids : []),
+        Number(user?.id || 0) || null,
+        trimText(user?.username) || null,
+      ]
+    );
+  }
+};
+
+const loadRequirementRegistryRows = async (jobId) =>
+  query(
+    `SELECT *
+     FROM tender_requirement_registry
+     WHERE job_id = ?
+     ORDER BY id ASC`,
+    [Number(jobId)]
+  );
+
+const loadEvidenceRegistryRows = async (bidId) =>
+  query(
+    `SELECT *
+     FROM tender_evidence_registry
+     WHERE bid_id = ?
+     ORDER BY id ASC`,
+    [Number(bidId)]
+  );
+
+const loadDraftSectionRegistryRows = async ({ bidId, versionId }) =>
+  query(
+    `SELECT *
+     FROM tender_draft_section_registry
+     WHERE bid_id = ? AND version_id = ?
+     ORDER BY paragraph_no ASC, id ASC`,
+    [Number(bidId), Number(versionId)]
+  );
+
+const loadLatestGenerateJobForBid = async (bidId) => {
+  const row = await get(
+    `SELECT *
+     FROM tender_bid_generate_jobs
+     WHERE created_bid_id = ?
+     ORDER BY id DESC
+     LIMIT 1`,
+    [Number(bidId)]
+  );
+  return row ? sanitizeGenerateJobRow(row) : null;
+};
+
+const extractParagraphsFromDocx = async (filePath) => {
+  const target = trimText(filePath);
+  if (!target) return [];
+  const stat = await readFileStatSafe(target);
+  if (!stat?.isFile()) return [];
+  const ext = path.extname(target).toLowerCase();
+  if (!['.docx', '.doc'].includes(ext)) return [];
+  try {
+    const extracted = await mammoth.extractRawText({ path: target });
+    return toLines(extracted?.value || '');
+  } catch {
+    return [];
+  }
+};
+
+const buildRuntimeRequirementRegistry = ({ detail }) => {
+  if (!detail?.job) return [];
+  const analysisSummary = parseMaybeJson(detail.job.analysis_summary_json, {});
+  const stageOutputs = isPlainObject(analysisSummary?.stage_outputs) ? analysisSummary.stage_outputs : {};
+  const bidCategory = normalizeBidCategory(detail.job.bid_category) || 'SERVICE';
+  return buildRequirementRows({
+    jobId: Number(detail.job.id),
+    bidCategory,
+    finalJson: normalizeFinalAnalyzeJson(analysisSummary?.final_json || {}, bidCategory),
+    scoringItems: Array.isArray(detail.items) ? detail.items.filter((item) => item.item_type === 'SCORING') : [],
+    stage1RiskClauses: normalizeStage1RiskClauses(stageOutputs.stage1_risk_clauses || []),
+    tableSummaries: Array.isArray(analysisSummary?.table_summaries) ? analysisSummary.table_summaries : [],
+  });
+};
+
 const splitTextToDiffSegments = (value) => {
   const text = normalizeSearchText(value, 240000);
   if (!text) return [];
@@ -7064,6 +7270,7 @@ app.get('/api/tender/bids/generate/jobs/:id', requirePermission('tender:read'), 
   if (!Number.isFinite(id) || id <= 0) throw appError('任务ID无效', 400);
   const detail = await loadGenerateJobDetail(id);
   if (!detail) throw appError('任务不存在', 404);
+  const requirementRegistry = await loadRequirementRegistryRows(id);
   const sectionSummaries = parseMaybeJson(detail.job.section_summaries_json, []);
   const analysisSummary = parseMaybeJson(detail.job.analysis_summary_json, {});
   const tableSummaries = Array.isArray(analysisSummary?.table_summaries)
@@ -7144,6 +7351,7 @@ app.get('/api/tender/bids/generate/jobs/:id', requirePermission('tender:read'), 
     risk_items: riskItems,
     matches: detail.matches,
     final_json: finalJson,
+    requirement_registry: requirementRegistry,
     stage_outputs: {
       stage1_risk_clauses: stage1RiskClauses,
       stage3_missing_items: stage3MissingItems,
@@ -7577,6 +7785,14 @@ app.post('/api/tender/bids/generate/analyze', requirePermission('tender:write'),
         source_reference: item.source_reference,
       })),
     };
+    const requirementRegistry = buildRequirementRows({
+      jobId,
+      bidCategory,
+      finalJson,
+      scoringItems,
+      stage1RiskClauses,
+      tableSummaries,
+    });
 
     const stageOutputs = {
       stage1_risk_clauses: stage1RiskClauses,
@@ -7625,6 +7841,7 @@ app.post('/api/tender/bids/generate/analyze', requirePermission('tender:write'),
          WHERE id = ?`,
         [JSON.stringify(sectionSummaries), JSON.stringify(summaryPayload), warnings.join('；') || null, jobId]
       );
+      await persistRequirementRegistry(tx, jobId, requirementRegistry);
       await tx.run('DELETE FROM tender_bid_generate_items WHERE job_id = ?', [jobId]);
       await tx.run('DELETE FROM tender_bid_generate_matches WHERE job_id = ?', [jobId]);
 
@@ -7684,6 +7901,7 @@ app.post('/api/tender/bids/generate/analyze', requirePermission('tender:write'),
       risk_items: detail.items.filter((item) => item.item_type === 'RISK'),
       matches: detail.matches,
       final_json: finalJson,
+      requirement_registry: requirementRegistry,
       stage_outputs: stageOutputs,
       generated_artifacts: generatedArtifacts,
       warnings,
@@ -7961,6 +8179,16 @@ app.post('/api/tender/bids/generate/jobs/:id/create', requirePermission('tender:
       ]
     );
     const versionId = Number(versionInfo.insertId);
+    const evidenceRegistry = buildEvidenceRows({
+      bidId,
+      librarySnapshot,
+    });
+    const draftSections = buildDraftSectionRows({
+      bidId,
+      versionId,
+      chapters,
+      sectionLinks: {},
+    });
 
     await tx.run(
       `UPDATE tender_bids
@@ -8005,11 +8233,15 @@ app.post('/api/tender/bids/generate/jobs/:id/create', requirePermission('tender:
         jobId,
       ]
     );
+    await persistEvidenceRegistry(tx, bidId, evidenceRegistry);
+    await persistDraftSectionRegistry(tx, bidId, versionId, draftSections);
 
     return {
       bid_id: bidId,
       version_id: versionId,
       source_asset_id: Number(sourceAssetInfo.insertId),
+      evidence_registry: evidenceRegistry,
+      draft_sections: draftSections,
     };
   });
 
@@ -8050,6 +8282,8 @@ app.post('/api/tender/bids/generate/jobs/:id/create', requirePermission('tender:
     bid,
     version,
     draft,
+    evidence_registry: createResult.evidence_registry,
+    draft_sections: createResult.draft_sections,
     warnings: aiWarnings,
   });
 }));
@@ -8269,6 +8503,189 @@ app.get('/api/tender/bids/:id', requirePermission('tender:read'), asyncHandler(a
   const currentVersion = await getCurrentVersion(bid);
   const draft = sanitizeDraftRow(await get('SELECT * FROM tender_bid_drafts WHERE bid_id = ? LIMIT 1', [id]));
   res.json({ ...bid, currentVersion, draft });
+}));
+
+app.post('/api/tender/bids/:id/check', requirePermission('tender:write'), asyncHandler(async (req, res) => {
+  const bidId = Number(req.params.id);
+  if (!Number.isFinite(bidId) || bidId <= 0) throw appError('标书ID无效', 400);
+
+  const bid = await ensureBidExists(bidId);
+  const currentVersion = await getCurrentVersion(bid);
+  const draft = sanitizeDraftRow(await get('SELECT * FROM tender_bid_drafts WHERE bid_id = ? LIMIT 1', [bidId]));
+  if (!currentVersion && !draft) throw appError('标书尚无可校验稿件', 409);
+
+  const latestJob = await loadLatestGenerateJobForBid(bidId);
+  let requirementRegistry = latestJob ? await loadRequirementRegistryRows(latestJob.id) : [];
+  if (!requirementRegistry.length && latestJob) {
+    const detail = await loadGenerateJobDetail(latestJob.id);
+    requirementRegistry = buildRuntimeRequirementRegistry({ detail });
+  }
+  const evidenceRegistry = await loadEvidenceRegistryRows(bidId);
+  let draftSections = currentVersion
+    ? await loadDraftSectionRegistryRows({ bidId, versionId: Number(currentVersion.id) })
+    : [];
+
+  const draftFilePath = trimText(draft?.draft_file_path) || trimText(currentVersion?.storage_path);
+  const paragraphs = await extractParagraphsFromDocx(draftFilePath);
+  if (!draftSections.length && paragraphs.length) {
+    draftSections = paragraphs.map((paragraph, index) => ({
+      section_title: '文档正文',
+      paragraph_no: index + 1,
+      paragraph_text: paragraph,
+      requirement_ids_json: '[]',
+      evidence_ids_json: '[]',
+      score_item_ids_json: '[]',
+    }));
+  }
+
+  const structuredResult = runStructuredChecks({
+    requirements: requirementRegistry,
+    sections: draftSections,
+    evidences: evidenceRegistry,
+    paragraphs,
+  });
+  const docxResult = runDocxChecks({ paragraphs });
+  const checkResult = mergeCheckResults(structuredResult, docxResult);
+
+  const checkRunId = await transaction(async (tx) => {
+    const inserted = await tx.run(
+      `INSERT INTO tender_draft_check_runs
+        (bid_id, version_id, draft_id, status, summary_json, created_by_id, created_by_name)
+       VALUES (?, ?, ?, 'COMPLETED', ?, ?, ?)`,
+      [
+        Number(bidId),
+        Number(currentVersion?.id || 0) || null,
+        Number(draft?.id || 0) || null,
+        JSON.stringify(checkResult.summary),
+        Number(req.user.id || 0) || null,
+        trimText(req.user.username) || null,
+      ]
+    );
+    const runId = Number(inserted.insertId);
+    for (let i = 0; i < checkResult.issues.length; i += 1) {
+      const issue = checkResult.issues[i];
+      await tx.run(
+        `INSERT INTO tender_draft_check_issues
+          (check_run_id, bid_id, issue_type, severity, title, message, requirement_code, requirement_title, section_title, paragraph_text, sort_order)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          runId,
+          Number(bidId),
+          trimText(issue.type),
+          trimText(issue.severity) || 'WARN',
+          trimText(issue.title) || null,
+          trimText(issue.message) || null,
+          trimText(issue.requirement_code) || null,
+          trimText(issue.requirement_title) || null,
+          trimText(issue.section_title) || null,
+          trimText(issue.paragraph_text) || null,
+          i + 1,
+        ]
+      );
+    }
+    return runId;
+  });
+
+  await logOperation({
+    req,
+    action: 'BID_DRAFT_CHECK',
+    entity: 'bid',
+    entityId: bidId,
+    message: `执行成稿校验 ${bid.bid_no}`,
+    afterData: {
+      check_run_id: checkRunId,
+      issue_count: Number(checkResult.summary.issue_count || 0),
+      fatal_count: Number(checkResult.summary.fatal_count || 0),
+      warn_count: Number(checkResult.summary.warn_count || 0),
+      source_job_id: Number(latestJob?.id || 0) || null,
+    },
+  });
+
+  res.json({
+    ok: true,
+    run_id: checkRunId,
+    bid,
+    version: currentVersion,
+    draft,
+    source_job_id: Number(latestJob?.id || 0) || null,
+    requirement_registry: requirementRegistry,
+    evidence_registry: evidenceRegistry,
+    draft_sections: draftSections,
+    summary: checkResult.summary,
+    issues: checkResult.issues,
+  });
+}));
+
+app.post('/api/tender/bids/:id/score-optimize', requirePermission('tender:write'), asyncHandler(async (req, res) => {
+  const bidId = Number(req.params.id);
+  if (!Number.isFinite(bidId) || bidId <= 0) throw appError('标书ID无效', 400);
+
+  const bid = await ensureBidExists(bidId);
+  const currentVersion = await getCurrentVersion(bid);
+  const latestJob = await loadLatestGenerateJobForBid(bidId);
+  let requirementRegistry = latestJob ? await loadRequirementRegistryRows(latestJob.id) : [];
+  if (!requirementRegistry.length && latestJob) {
+    const detail = await loadGenerateJobDetail(latestJob.id);
+    requirementRegistry = buildRuntimeRequirementRegistry({ detail });
+  }
+  const evidenceRegistry = await loadEvidenceRegistryRows(bidId);
+  const draftSections = currentVersion
+    ? await loadDraftSectionRegistryRows({ bidId, versionId: Number(currentVersion.id) })
+    : [];
+
+  const matrix = buildScoreCoverageMatrix({
+    requirements: requirementRegistry,
+    sections: draftSections,
+    evidences: evidenceRegistry,
+  });
+  const candidates = pickOptimizationCandidates(matrix);
+  const promptPreview = buildScoreOptimizationPrompt({ candidates });
+  const normalized = normalizeOptimizationResponse({
+    items: candidates.map((item) => ({
+      score_item_id: item.score_item_id,
+      suggestion_title: `补强${trimText(item.title) || trimText(item.score_item_id)}`,
+      suggestion_text: item.coverage_status === 'NONE'
+        ? `当前评分项“${trimText(item.title) || trimText(item.score_item_id)}”尚未形成章节覆盖，建议新增专章回应评分标准，并绑定对应案例、资质或人员材料。`
+        : `当前评分项“${trimText(item.title) || trimText(item.score_item_id)}”已有文字覆盖，但证据偏弱，建议补充更直接的案例、人员、资质或承诺材料形成闭环。`,
+      evidence_ids: parseMaybeJson(item.bound_evidence_ids_json, []),
+    })),
+  });
+
+  await transaction(async (tx) => {
+    await persistScoreCoverageMatrix(tx, {
+      bidId,
+      versionId: Number(currentVersion?.id || 0) || null,
+      rows: matrix,
+    });
+    await persistScoreOptimizationRecords(tx, {
+      bidId,
+      versionId: Number(currentVersion?.id || 0) || null,
+      rows: normalized.items,
+      user: req.user,
+    });
+  });
+
+  await logOperation({
+    req,
+    action: 'BID_SCORE_OPTIMIZE',
+    entity: 'bid',
+    entityId: bidId,
+    message: `执行评分优化 ${bid.bid_no}`,
+    afterData: {
+      source_job_id: Number(latestJob?.id || 0) || null,
+      candidate_count: normalized.items.length,
+    },
+  });
+
+  res.json({
+    ok: true,
+    bid,
+    version: currentVersion,
+    source_job_id: Number(latestJob?.id || 0) || null,
+    matrix,
+    items: normalized.items,
+    prompt_preview: promptPreview,
+  });
 }));
 
 app.post('/api/tender/bids', requirePermission('tender:write'), asyncHandler(async (req, res) => {

@@ -471,6 +471,119 @@ const createSchema = async () => {
     INDEX idx_tender_bid_generate_matches_job (job_id, score)
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
 
+  await run(`CREATE TABLE IF NOT EXISTS tender_requirement_registry (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    job_id BIGINT NOT NULL,
+    requirement_code VARCHAR(64) NOT NULL,
+    bid_category VARCHAR(16) NULL,
+    requirement_type VARCHAR(32) NOT NULL,
+    title VARCHAR(255) NULL,
+    requirement_text TEXT NULL,
+    section_key VARCHAR(64) NULL,
+    section_title VARCHAR(128) NULL,
+    suggestion_text TEXT NULL,
+    risk_level VARCHAR(16) NULL,
+    source_json LONGTEXT NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE KEY uk_tender_requirement_registry_code (job_id, requirement_code),
+    INDEX idx_tender_requirement_registry_job (job_id, requirement_type, id)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
+
+  await run(`CREATE TABLE IF NOT EXISTS tender_evidence_registry (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    bid_id BIGINT NOT NULL,
+    evidence_code VARCHAR(64) NOT NULL,
+    evidence_type VARCHAR(32) NOT NULL,
+    title VARCHAR(255) NULL,
+    evidence_text TEXT NULL,
+    library_record_id BIGINT NULL,
+    source_json LONGTEXT NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE KEY uk_tender_evidence_registry_code (bid_id, evidence_code),
+    INDEX idx_tender_evidence_registry_bid (bid_id, evidence_type, id)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
+
+  await run(`CREATE TABLE IF NOT EXISTS tender_draft_section_registry (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    bid_id BIGINT NOT NULL,
+    version_id BIGINT NOT NULL,
+    section_title VARCHAR(255) NULL,
+    paragraph_no INT NOT NULL DEFAULT 0,
+    paragraph_text LONGTEXT NULL,
+    template_slot VARCHAR(128) NULL,
+    requirement_ids_json LONGTEXT NULL,
+    evidence_ids_json LONGTEXT NULL,
+    score_item_ids_json LONGTEXT NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_tender_draft_section_registry_version (bid_id, version_id, paragraph_no, id)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
+
+  await run(`CREATE TABLE IF NOT EXISTS tender_draft_check_runs (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    bid_id BIGINT NOT NULL,
+    version_id BIGINT NULL,
+    draft_id BIGINT NULL,
+    status VARCHAR(16) NOT NULL DEFAULT 'COMPLETED',
+    summary_json LONGTEXT NULL,
+    created_by_id BIGINT NULL,
+    created_by_name VARCHAR(128) NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_tender_draft_check_runs_bid (bid_id, created_at),
+    INDEX idx_tender_draft_check_runs_version (version_id, created_at)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
+
+  await run(`CREATE TABLE IF NOT EXISTS tender_draft_check_issues (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    check_run_id BIGINT NOT NULL,
+    bid_id BIGINT NOT NULL,
+    issue_type VARCHAR(64) NOT NULL,
+    severity VARCHAR(16) NOT NULL DEFAULT 'WARN',
+    title VARCHAR(255) NULL,
+    message TEXT NULL,
+    requirement_code VARCHAR(64) NULL,
+    requirement_title VARCHAR(255) NULL,
+    section_title VARCHAR(255) NULL,
+    paragraph_text TEXT NULL,
+    sort_order INT NOT NULL DEFAULT 0,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_tender_draft_check_issues_run (check_run_id, sort_order, id),
+    INDEX idx_tender_draft_check_issues_bid (bid_id, severity, issue_type)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
+
+  await run(`CREATE TABLE IF NOT EXISTS tender_score_coverage_matrix (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    bid_id BIGINT NOT NULL,
+    version_id BIGINT NULL,
+    score_item_id VARCHAR(64) NOT NULL,
+    requirement_id BIGINT NULL,
+    requirement_code VARCHAR(64) NULL,
+    title VARCHAR(255) NULL,
+    full_score DECIMAL(10,2) NOT NULL DEFAULT 0,
+    coverage_status VARCHAR(16) NOT NULL DEFAULT 'NONE',
+    optimization_needed_flag TINYINT NOT NULL DEFAULT 0,
+    optimization_reason TEXT NULL,
+    target_section_title VARCHAR(255) NULL,
+    bound_evidence_ids_json LONGTEXT NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_tender_score_coverage_bid (bid_id, version_id, coverage_status, id),
+    UNIQUE KEY uk_tender_score_coverage_item (bid_id, version_id, score_item_id)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
+
+  await run(`CREATE TABLE IF NOT EXISTS tender_score_optimization_records (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    bid_id BIGINT NOT NULL,
+    version_id BIGINT NULL,
+    score_item_id VARCHAR(64) NOT NULL,
+    suggestion_title VARCHAR(255) NULL,
+    suggestion_text LONGTEXT NULL,
+    evidence_ids_json LONGTEXT NULL,
+    status VARCHAR(16) NOT NULL DEFAULT 'PROPOSED',
+    created_by_id BIGINT NULL,
+    created_by_name VARCHAR(128) NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_tender_score_opt_records_bid (bid_id, version_id, status, id)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
+
   await run(`CREATE TABLE IF NOT EXISTS tender_doc_templates (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,
     template_no VARCHAR(64) NOT NULL,

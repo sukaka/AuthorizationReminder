@@ -1293,6 +1293,23 @@ const createGenerateWizardState = () => ({
   },
 })
 
+const createDraftCheckState = () => ({
+  busy: false,
+  run_id: 0,
+  source_job_id: 0,
+  summary: null,
+  issues: [],
+  severity_filter: 'ALL',
+})
+
+const createScoreOptimizeState = () => ({
+  busy: false,
+  source_job_id: 0,
+  matrix: [],
+  items: [],
+  prompt_preview: '',
+})
+
 function App() {
   const api = useMemo(() => buildApi(), [])
 
@@ -1360,6 +1377,8 @@ function App() {
   })
   const [editorEvents, setEditorEvents] = useState([])
   const [editorEventsLoading, setEditorEventsLoading] = useState(false)
+  const [draftCheckState, setDraftCheckState] = useState(() => createDraftCheckState())
+  const [scoreOptimizeState, setScoreOptimizeState] = useState(() => createScoreOptimizeState())
 
   const [bundles, setBundles] = useState([])
 
@@ -2148,6 +2167,11 @@ function App() {
       return next.length === prev.length ? prev : next
     })
   }, [bids])
+
+  useEffect(() => {
+    setDraftCheckState(createDraftCheckState())
+    setScoreOptimizeState(createScoreOptimizeState())
+  }, [selectedBid?.id])
 
   const canRead = !!permissions.can_read
   const canWrite = !!permissions.can_write
@@ -3536,6 +3560,56 @@ function App() {
     } catch (err) {
       setCompareState((prev) => ({ ...prev, loading: false }))
       showError(err.message || '版本对比失败')
+    }
+  }
+
+  const onRunDraftCheck = async () => {
+    const bidId = Number(selectedBid?.id || 0)
+    if (!bidId || draftCheckState.busy) return
+    resetFeedback()
+    setDraftCheckState((prev) => ({ ...prev, busy: true }))
+    try {
+      const payload = await api.post(`/api/tender/bids/${bidId}/check`, {})
+      const summary = payload?.summary && typeof payload.summary === 'object' ? payload.summary : null
+      const issues = Array.isArray(payload?.issues) ? payload.issues : []
+      setDraftCheckState((prev) => ({
+        ...prev,
+        busy: false,
+        run_id: Number(payload?.run_id || 0),
+        source_job_id: Number(payload?.source_job_id || 0),
+        summary,
+        issues,
+      }))
+      const fatal = Number(summary?.fatal_count || 0)
+      const warn = Number(summary?.warn_count || 0)
+      showMessage(`成稿校验完成：致命问题 ${fatal} 条，告警 ${warn} 条`)
+    } catch (err) {
+      setDraftCheckState((prev) => ({ ...prev, busy: false }))
+      showError(err.message || '成稿校验失败')
+    }
+  }
+
+  const onRunScoreOptimize = async () => {
+    const bidId = Number(selectedBid?.id || 0)
+    if (!bidId || scoreOptimizeState.busy) return
+    resetFeedback()
+    setScoreOptimizeState((prev) => ({ ...prev, busy: true }))
+    try {
+      const payload = await api.post(`/api/tender/bids/${bidId}/score-optimize`, {})
+      const matrix = Array.isArray(payload?.matrix) ? payload.matrix : []
+      const items = Array.isArray(payload?.items) ? payload.items : []
+      setScoreOptimizeState((prev) => ({
+        ...prev,
+        busy: false,
+        source_job_id: Number(payload?.source_job_id || 0),
+        matrix,
+        items,
+        prompt_preview: String(payload?.prompt_preview || ''),
+      }))
+      showMessage(`评分优化完成：生成 ${items.length} 条补强建议`)
+    } catch (err) {
+      setScoreOptimizeState((prev) => ({ ...prev, busy: false }))
+      showError(err.message || '评分优化失败')
     }
   }
 
@@ -5131,6 +5205,25 @@ function App() {
     if (!generateSourcePreviewEditor?.config) return 'text'
     return 'doc'
   })()
+  const draftCheckSummary = draftCheckState.summary && typeof draftCheckState.summary === 'object'
+    ? draftCheckState.summary
+    : { issue_count: 0, fatal_count: 0, warn_count: 0, pass: true }
+  const draftCheckIssues = Array.isArray(draftCheckState.issues)
+    ? draftCheckState.issues
+    : []
+  const draftCheckFilter = String(draftCheckState.severity_filter || 'ALL').toUpperCase()
+  const filteredDraftCheckIssues = draftCheckFilter === 'ALL'
+    ? draftCheckIssues
+    : draftCheckIssues.filter((item) => String(item?.severity || '').toUpperCase() === draftCheckFilter)
+  const scoreOptimizeMatrix = Array.isArray(scoreOptimizeState.matrix)
+    ? scoreOptimizeState.matrix
+    : []
+  const scoreOptimizeItems = Array.isArray(scoreOptimizeState.items)
+    ? scoreOptimizeState.items
+    : []
+  const scoreOptimizeNeedCount = scoreOptimizeMatrix.filter((item) => Number(item?.optimization_needed_flag || 0) === 1).length
+  const scoreOptimizeNoneCount = scoreOptimizeMatrix.filter((item) => String(item?.coverage_status || '').toUpperCase() === 'NONE').length
+  const scoreOptimizeWeakCount = scoreOptimizeMatrix.filter((item) => String(item?.coverage_status || '').toUpperCase() === 'WEAK').length
 
   if (booting) {
     return <div className="app-loading">标书协同制作系统初始化中...</div>
@@ -5553,6 +5646,104 @@ function App() {
                       >
                         {editorEventsLoading ? '刷新中...' : '刷新编辑轨迹'}
                       </button>
+                    </div>
+
+                    <div className="draft-quality-panel">
+                      <div className="section-subhead">
+                        <h4>成稿级校验与评分优化</h4>
+                        <span className="muted">基于当前标书最新版本执行</span>
+                      </div>
+                      <div className="draft-quality-toolbar">
+                        <button className="ghost" onClick={onRunDraftCheck} disabled={draftCheckState.busy}>
+                          {draftCheckState.busy ? '校验中...' : '执行成稿校验'}
+                        </button>
+                        <button className="ghost" onClick={onRunScoreOptimize} disabled={scoreOptimizeState.busy}>
+                          {scoreOptimizeState.busy ? '优化中...' : '执行评分优化'}
+                        </button>
+                        {draftCheckState.run_id ? <span className="muted">校验 Run #{draftCheckState.run_id}</span> : null}
+                        {scoreOptimizeState.source_job_id ? <span className="muted">来源任务 #{scoreOptimizeState.source_job_id}</span> : null}
+                      </div>
+                      <div className="draft-quality-grid">
+                        <article className="draft-quality-card">
+                          <div className="section-subhead">
+                            <h4>校验结果</h4>
+                            <span className={`draft-quality-pass ${draftCheckSummary.pass ? 'ok' : 'risk'}`}>
+                              {draftCheckSummary.pass ? '可提交' : '建议先修复'}
+                            </span>
+                          </div>
+                          <div className="draft-quality-metrics">
+                            <span>问题总数 {Number(draftCheckSummary.issue_count || 0)}</span>
+                            <span>致命 {Number(draftCheckSummary.fatal_count || 0)}</span>
+                            <span>告警 {Number(draftCheckSummary.warn_count || 0)}</span>
+                          </div>
+                          <div className="draft-quality-filter">
+                            <button
+                              type="button"
+                              className={draftCheckFilter === 'ALL' ? 'active' : ''}
+                              onClick={() => setDraftCheckState((prev) => ({ ...prev, severity_filter: 'ALL' }))}
+                            >
+                              全部
+                            </button>
+                            <button
+                              type="button"
+                              className={draftCheckFilter === 'FATAL' ? 'active' : ''}
+                              onClick={() => setDraftCheckState((prev) => ({ ...prev, severity_filter: 'FATAL' }))}
+                            >
+                              致命
+                            </button>
+                            <button
+                              type="button"
+                              className={draftCheckFilter === 'WARN' ? 'active' : ''}
+                              onClick={() => setDraftCheckState((prev) => ({ ...prev, severity_filter: 'WARN' }))}
+                            >
+                              告警
+                            </button>
+                          </div>
+                          <div className="draft-quality-list">
+                            {filteredDraftCheckIssues.map((item, idx) => (
+                              <div className="draft-quality-item" key={`check-issue-${idx}`}>
+                                <div className="draft-quality-item-head">
+                                  <span className={`severity-badge ${String(item?.severity || '').toUpperCase() === 'FATAL' ? 'fatal' : 'warn'}`}>
+                                    {String(item?.severity || 'WARN').toUpperCase()}
+                                  </span>
+                                  <strong>{item?.title || `问题${idx + 1}`}</strong>
+                                </div>
+                                <p>{item?.message || '-'}</p>
+                                {item?.section_title ? <small>章节：{item.section_title}</small> : null}
+                                {item?.requirement_code ? <small>要求编码：{item.requirement_code}</small> : null}
+                              </div>
+                            ))}
+                            {!filteredDraftCheckIssues.length ? <div className="empty">暂无校验问题</div> : null}
+                          </div>
+                        </article>
+
+                        <article className="draft-quality-card">
+                          <div className="section-subhead">
+                            <h4>评分补强建议</h4>
+                            <span className="muted">待补强 {scoreOptimizeNeedCount} 项</span>
+                          </div>
+                          <div className="draft-quality-metrics">
+                            <span>评分项 {scoreOptimizeMatrix.length}</span>
+                            <span>未覆盖 {scoreOptimizeNoneCount}</span>
+                            <span>弱覆盖 {scoreOptimizeWeakCount}</span>
+                          </div>
+                          <div className="draft-quality-list">
+                            {scoreOptimizeItems.map((item, idx) => (
+                              <div className="draft-quality-item" key={`score-opt-${idx}`}>
+                                <div className="draft-quality-item-head">
+                                  <span className="severity-badge score">SUGGEST</span>
+                                  <strong>{item?.suggestion_title || item?.score_item_id || `建议${idx + 1}`}</strong>
+                                </div>
+                                <p>{item?.suggestion_text || '-'}</p>
+                                {Array.isArray(item?.evidence_ids) && item.evidence_ids.length ? (
+                                  <small>建议证据：{item.evidence_ids.join('、')}</small>
+                                ) : null}
+                              </div>
+                            ))}
+                            {!scoreOptimizeItems.length ? <div className="empty">暂无评分补强建议</div> : null}
+                          </div>
+                        </article>
+                      </div>
                     </div>
 
                     <div className="bid-version-grid">
