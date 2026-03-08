@@ -16,6 +16,28 @@ const Jimp = require('jimp');
 const PizZip = require('pizzip');
 const Docxtemplater = require('docxtemplater');
 const { get, initDb, query, run, transaction } = require('./db');
+const {
+  buildRequirementRows,
+  buildClauseRegistryV2,
+  buildClauseRouteBuckets,
+  buildSectionLinksFromClauseRegistry,
+  executeClauseRoutes,
+  buildEvidenceRows,
+  buildDraftSectionRows,
+} = require('./final-draft-registry');
+const {
+  runStructuredChecks,
+  runDocxChecks,
+  mergeCheckResults,
+} = require('./final-draft-checks');
+const {
+  buildScoreCoverageMatrix,
+  pickOptimizationCandidates,
+  normalizeOptimizationResponse,
+  buildScoreOptimizationPrompt,
+  applyOptimizationToSections,
+} = require('./score-optimization');
+const { buildDeviationAndResponseTables } = require('./deviation-response');
 
 const app = express();
 const normalizeHost = (value) => String(value || '').trim().toLowerCase();
@@ -48,6 +70,7 @@ const TEMPLATE_ROOT = path.resolve(process.env.TEMPLATE_ROOT || `${UPLOAD_ROOT}/
 const WATERMARK_ROOT = path.resolve(process.env.WATERMARK_ROOT || `${UPLOAD_ROOT}/watermarks`);
 const PREVIEW_ROOT = path.resolve(process.env.PREVIEW_ROOT || `${UPLOAD_ROOT}/previews`);
 const EDITABLE_ROOT = path.resolve(process.env.EDITABLE_ROOT || `${UPLOAD_ROOT}/editable`);
+const EXPORT_ROOT = path.resolve(process.env.EXPORT_ROOT || `${UPLOAD_ROOT}/exports`);
 const LIBREOFFICE_BIN = String(process.env.LIBREOFFICE_BIN || 'soffice').trim() || 'soffice';
 
 const DOC_EDITOR_PROVIDER = String(process.env.DOC_EDITOR_PROVIDER || 'onlyoffice').trim();
@@ -173,7 +196,7 @@ const tenderSectionDefs = [
   },
 ];
 
-for (const dir of [UPLOAD_ROOT, VERSION_ROOT, DRAFT_ROOT, ASSET_ROOT, SAMPLE_ROOT, TEMPLATE_ROOT, WATERMARK_ROOT, PREVIEW_ROOT, EDITABLE_ROOT]) {
+for (const dir of [UPLOAD_ROOT, VERSION_ROOT, DRAFT_ROOT, ASSET_ROOT, SAMPLE_ROOT, TEMPLATE_ROOT, WATERMARK_ROOT, PREVIEW_ROOT, EDITABLE_ROOT, EXPORT_ROOT]) {
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 }
 
@@ -472,10 +495,24 @@ const sanitizeBidRow = (row) => {
     customer_name: fixMojibakeText(row.customer_name),
     project_name: fixMojibakeText(row.project_name),
     summary: fixMojibakeText(row.summary),
+    review_status: fixMojibakeText(row.review_status),
+    review_stage: fixMojibakeText(row.review_stage),
     created_by_name: fixMojibakeText(row.created_by_name),
     updated_by_name: fixMojibakeText(row.updated_by_name),
     submitted_by_name: fixMojibakeText(row.submitted_by_name),
     archived_by_name: fixMojibakeText(row.archived_by_name),
+  };
+};
+
+const sanitizeBidMemberRow = (row) => {
+  if (!row || typeof row !== 'object') return row;
+  return {
+    ...row,
+    member_username: fixMojibakeText(row.member_username),
+    member_role: fixMojibakeText(row.member_role),
+    member_title: fixMojibakeText(row.member_title),
+    created_by_name: fixMojibakeText(row.created_by_name),
+    updated_by_name: fixMojibakeText(row.updated_by_name),
   };
 };
 
@@ -497,6 +534,16 @@ const sanitizeDraftRow = (row) => {
   };
 };
 
+const sanitizeDraftAutosaveRow = (row) => {
+  if (!row || typeof row !== 'object') return row;
+  return {
+    ...row,
+    file_name: fixMojibakeText(row.file_name),
+    note: fixMojibakeText(row.note),
+    saved_by_name: fixMojibakeText(row.saved_by_name),
+  };
+};
+
 const sanitizeAssetRow = (row) => {
   if (!row || typeof row !== 'object') return row;
   return {
@@ -505,6 +552,46 @@ const sanitizeAssetRow = (row) => {
     uploaded_by_name: fixMojibakeText(row.uploaded_by_name),
     reviewer_name: fixMojibakeText(row.reviewer_name),
   };
+};
+
+const sanitizeKbProjectRow = (row) => {
+  if (!row || typeof row !== 'object') return row;
+  return {
+    ...row,
+    project_name: fixMojibakeText(row.project_name),
+    project_no: fixMojibakeText(row.project_no),
+    purchaser: fixMojibakeText(row.purchaser),
+    industry_type: fixMojibakeText(row.industry_type),
+    project_type: fixMojibakeText(row.project_type),
+    region: fixMojibakeText(row.region),
+    result_status: fixMojibakeText(row.result_status),
+    created_by_name: fixMojibakeText(row.created_by_name),
+    updated_by_name: fixMojibakeText(row.updated_by_name),
+  };
+};
+
+const normalizeKbResultStatus = (value) => {
+  const normalized = String(value || '').trim().toUpperCase();
+  if (['WON', 'LOST', 'IN_PROGRESS', 'ABANDONED', 'UNKNOWN'].includes(normalized)) return normalized;
+  return '';
+};
+
+const normalizeDateTimeInput = (value) => {
+  const text = trimText(value);
+  if (!text) return null;
+
+  // 优先兼容标准数据库时间字符串，避免时区偏移。
+  const directMatch = text.match(/^(\d{4}-\d{2}-\d{2})(?:[ T](\d{2}:\d{2})(?::(\d{2}))?)?$/);
+  if (directMatch) {
+    const datePart = directMatch[1];
+    const hmPart = directMatch[2] || '00:00';
+    const secPart = directMatch[3] || '00';
+    return `${datePart} ${hmPart}:${secPart}`;
+  }
+
+  const parsed = new Date(text);
+  if (Number.isNaN(parsed.getTime())) return null;
+  return formatDateTime(parsed);
 };
 
 const stableStringify = (value) => {
@@ -536,11 +623,55 @@ const validateSecurityBootstrap = () => {
   console.warn(`${text}。当前为非严格模式，仅告警。`);
 };
 
-const appError = (message, statusCode = 400) => {
+const buildManualTakeover = (action, target = '', extra = {}) => ({
+  action: trimText(action),
+  target: trimText(target) || null,
+  ...extra,
+});
+
+const appError = (message, statusCode = 400, meta = {}) => {
   const err = new Error(message);
   err.statusCode = statusCode;
+  if (meta && typeof meta === 'object') {
+    Object.assign(err, meta);
+  }
   return err;
 };
+
+const tenderStageError = ({
+  message,
+  statusCode = 400,
+  code = 'TENDER_REQUEST_FAILED',
+  category = 'REQUEST',
+  retryable = false,
+  manualTakeover = null,
+  details = null,
+}) => appError(message, statusCode, {
+  code,
+  category,
+  retryable: !!retryable,
+  manual_takeover: manualTakeover || null,
+  details: details && typeof details === 'object' ? details : null,
+});
+
+const uploadValidationError = (message, options = {}) => tenderStageError({
+  message,
+  statusCode: Number(options.statusCode || 400),
+  code: options.code || 'TENDER_UPLOAD_INVALID_FILE',
+  category: 'UPLOAD',
+  retryable: false,
+  manualTakeover: options.manualTakeover || buildManualTakeover('请调整文件后重新上传', 'upload'),
+  details: options.details || null,
+});
+
+const bidScopeForbiddenError = (message = '当前账号无权访问该标书') => tenderStageError({
+  message,
+  statusCode: 403,
+  code: 'TENDER_SCOPE_FORBIDDEN',
+  category: 'PERMISSION',
+  retryable: false,
+  manualTakeover: buildManualTakeover('请联系项目管理员分派成员或切换到有权限的账号', 'permission'),
+});
 
 const isMysqlDeadlockError = (err) => {
   const code = String(err?.code || '').toUpperCase();
@@ -677,10 +808,53 @@ const toCsv = (rows, columns) => {
   return `\ufeff${header}${body ? `\n${body}` : ''}`;
 };
 
+const BID_STATUS_SET = new Set([
+  'DRAFT',
+  'FILES_UPLOADED',
+  'PARSE_COMPLETED',
+  'MATERIALS_PENDING',
+  'READY_TO_GENERATE',
+  'GENERATING',
+  'COMPILE_REVIEW_PENDING',
+  'TECH_REVIEW_PENDING',
+  'BUSINESS_REVIEW_PENDING',
+  'FINAL_REVIEW_PENDING',
+  'EXPORT_READY',
+  'EXPORTED',
+  'ARCHIVED',
+  // 兼容历史状态
+  'IN_REVIEW',
+  'FINALIZED',
+  'SUBMITTED',
+]);
+
+const REVIEW_STATUS_SET = new Set(['draft', 'submitted', 'approved', 'rejected', 'returned', 'conditional']);
+const REVIEW_STAGE_SET = new Set(['COMPILE', 'TECH', 'BUSINESS', 'FINAL']);
+
 const normalizeStatus = (value) => {
   const normalized = String(value || '').trim().toUpperCase();
-  if (['DRAFT', 'IN_REVIEW', 'FINALIZED', 'SUBMITTED', 'ARCHIVED'].includes(normalized)) return normalized;
+  if (BID_STATUS_SET.has(normalized)) return normalized;
   return 'DRAFT';
+};
+
+const normalizeReviewStatus = (value) => {
+  const normalized = String(value || '').trim().toLowerCase();
+  if (REVIEW_STATUS_SET.has(normalized)) return normalized;
+  return 'draft';
+};
+
+const normalizeReviewStage = (value) => {
+  const normalized = String(value || '').trim().toUpperCase();
+  if (REVIEW_STAGE_SET.has(normalized)) return normalized;
+  return 'COMPILE';
+};
+
+const inferReviewStageByBidStatus = (status) => {
+  const normalized = normalizeStatus(status);
+  if (normalized === 'TECH_REVIEW_PENDING') return 'TECH';
+  if (normalized === 'BUSINESS_REVIEW_PENDING') return 'BUSINESS';
+  if (normalized === 'FINAL_REVIEW_PENDING') return 'FINAL';
+  return 'COMPILE';
 };
 
 const normalizeSearchText = (value, maxLen = 120000) => {
@@ -3843,11 +4017,16 @@ const buildGeneratedArtifacts = ({
   const serviceSchemeOutline = category === 'PRODUCT'
     ? buildGoodsSchemeOutline({ scoringItems, finalJson })
     : buildServiceSchemeOutline({ scoringItems });
+  const deviationAndResponse = buildDeviationAndResponseTables({
+    bidCategory: category,
+    finalJson,
+  });
   return {
     bid_risk_list: buildBidRiskChecklist({ stage1RiskClauses, riskItems }),
     score_strategy: buildScoreStrategy(finalJson),
     auto_toc: buildAutoBidTocByCategory({ bidCategory: category, serviceSchemeOutline }),
-    deviation_tables: buildDeviationTables(finalJson, category),
+    deviation_tables: deviationAndResponse.deviation_tables,
+    response_tables: deviationAndResponse.response_tables,
     service_scheme_outline: serviceSchemeOutline,
   };
 };
@@ -4111,14 +4290,14 @@ const buildDraftChaptersFromAnalysis = ({
         '技术偏离表（招标要求 | 投标响应 | 偏离说明）',
         ...(technicalDeviationRows.length
           ? technicalDeviationRows.map((item, idx) =>
-            `${idx + 1}. ${firstNonEmpty(item.tender_requirement, item.param_requirement, '-')}\n   投标响应：${firstNonEmpty(item.bidder_response, item.bid_response, '-')}\n   偏离说明：${firstNonEmpty(item.deviation_note, item.deviation, '无偏离')}`
+            `${idx + 1}. ${firstNonEmpty(item.tender_requirement, item.param_requirement, '-')}\n   投标响应：${firstNonEmpty(item.bidder_response, item.bid_response, '-')}\n   偏离说明：${firstNonEmpty(item.deviation_note, item.deviation, '无偏离')}\n   证据来源：${firstNonEmpty(item.evidence_source, '待补证据来源')}\n   人工复核：${item.manual_review_required ? '是' : '否'}`
           )
           : ['暂无技术偏离条目，请人工补充。']),
         '',
         '商务偏离表（招标要求 | 投标响应 | 偏离说明）',
         ...(businessDeviationRows.length
           ? businessDeviationRows.map((item, idx) =>
-            `${idx + 1}. ${firstNonEmpty(item.tender_requirement, '-')}\n   投标响应：${firstNonEmpty(item.bidder_response, '-')}\n   偏离说明：${firstNonEmpty(item.deviation_note, '无偏离')}`
+            `${idx + 1}. ${firstNonEmpty(item.tender_requirement, '-')}\n   投标响应：${firstNonEmpty(item.bidder_response, '-')}\n   偏离说明：${firstNonEmpty(item.deviation_note, '无偏离')}\n   证据来源：${firstNonEmpty(item.evidence_source, '待补证据来源')}\n   人工复核：${item.manual_review_required ? '是' : '否'}`
           )
           : ['暂无商务偏离条目，请人工补充。']),
       ],
@@ -4255,14 +4434,14 @@ const buildDraftChaptersFromAnalysis = ({
       '技术偏离表（招标要求 | 投标响应 | 偏离说明）',
       ...(technicalDeviationRows.length
         ? technicalDeviationRows.map((item, idx) =>
-          `${idx + 1}. ${firstNonEmpty(item.tender_requirement, '-')}\n   投标响应：${firstNonEmpty(item.bidder_response, '-')}\n   偏离说明：${firstNonEmpty(item.deviation_note, '无偏离')}`
+          `${idx + 1}. ${firstNonEmpty(item.tender_requirement, '-')}\n   投标响应：${firstNonEmpty(item.bidder_response, '-')}\n   偏离说明：${firstNonEmpty(item.deviation_note, '无偏离')}\n   证据来源：${firstNonEmpty(item.evidence_source, '待补证据来源')}\n   人工复核：${item.manual_review_required ? '是' : '否'}`
         )
         : ['暂无技术偏离条目，请人工补充。']),
       '',
       '商务偏离表（招标要求 | 投标响应 | 偏离说明）',
       ...(businessDeviationRows.length
         ? businessDeviationRows.map((item, idx) =>
-          `${idx + 1}. ${firstNonEmpty(item.tender_requirement, '-')}\n   投标响应：${firstNonEmpty(item.bidder_response, '-')}\n   偏离说明：${firstNonEmpty(item.deviation_note, '无偏离')}`
+          `${idx + 1}. ${firstNonEmpty(item.tender_requirement, '-')}\n   投标响应：${firstNonEmpty(item.bidder_response, '-')}\n   偏离说明：${firstNonEmpty(item.deviation_note, '无偏离')}\n   证据来源：${firstNonEmpty(item.evidence_source, '待补证据来源')}\n   人工复核：${item.manual_review_required ? '是' : '否'}`
         )
         : ['暂无商务偏离条目，请人工补充。']),
     ],
@@ -4309,6 +4488,203 @@ const buildParagraphsFromChapters = (chapters = []) => {
     rows.push('');
   }
   return rows;
+};
+
+const persistRequirementRegistry = async (tx, jobId, rows = []) => {
+  await tx.run('DELETE FROM tender_requirement_registry WHERE job_id = ?', [Number(jobId)]);
+  for (const row of Array.isArray(rows) ? rows : []) {
+    await tx.run(
+      `INSERT INTO tender_requirement_registry
+        (job_id, requirement_code, bid_category, requirement_type, title, requirement_text, section_key, section_title, suggestion_text, risk_level, source_json)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        Number(jobId),
+        trimText(row.requirement_code),
+        trimText(row.bid_category) || null,
+        trimText(row.requirement_type),
+        trimText(row.title) || null,
+        trimText(row.requirement_text) || null,
+        trimText(row.section_key) || null,
+        trimText(row.section_title) || null,
+        trimText(row.suggestion_text) || null,
+        trimText(row.risk_level) || null,
+        trimText(row.source_json) || null,
+      ]
+    );
+  }
+};
+
+const persistEvidenceRegistry = async (tx, bidId, rows = []) => {
+  await tx.run('DELETE FROM tender_evidence_registry WHERE bid_id = ?', [Number(bidId)]);
+  for (const row of Array.isArray(rows) ? rows : []) {
+    await tx.run(
+      `INSERT INTO tender_evidence_registry
+        (bid_id, evidence_code, evidence_type, title, evidence_text, library_record_id, source_json)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [
+        Number(bidId),
+        trimText(row.evidence_code),
+        trimText(row.evidence_type),
+        trimText(row.title) || null,
+        trimText(row.evidence_text) || null,
+        Number(row.library_record_id || 0) || null,
+        trimText(row.source_json) || null,
+      ]
+    );
+  }
+};
+
+const persistDraftSectionRegistry = async (tx, bidId, versionId, rows = []) => {
+  await tx.run(
+    'DELETE FROM tender_draft_section_registry WHERE bid_id = ? AND version_id = ?',
+    [Number(bidId), Number(versionId)]
+  );
+  for (const row of Array.isArray(rows) ? rows : []) {
+    await tx.run(
+      `INSERT INTO tender_draft_section_registry
+        (bid_id, version_id, section_title, paragraph_no, paragraph_text, template_slot, requirement_ids_json, evidence_ids_json, score_item_ids_json)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        Number(bidId),
+        Number(versionId),
+        trimText(row.section_title) || null,
+        Number(row.paragraph_no || 0),
+        trimText(row.paragraph_text) || null,
+        trimText(row.template_slot) || null,
+        trimText(row.requirement_ids_json) || '[]',
+        trimText(row.evidence_ids_json) || '[]',
+        trimText(row.score_item_ids_json) || '[]',
+      ]
+    );
+  }
+};
+
+const persistScoreCoverageMatrix = async (tx, { bidId, versionId, rows = [] }) => {
+  await tx.run(
+    'DELETE FROM tender_score_coverage_matrix WHERE bid_id = ? AND version_id = ?',
+    [Number(bidId), Number(versionId || 0) || null]
+  );
+  for (const row of Array.isArray(rows) ? rows : []) {
+    await tx.run(
+      `INSERT INTO tender_score_coverage_matrix
+        (bid_id, version_id, score_item_id, requirement_id, requirement_code, title, full_score, coverage_status, optimization_needed_flag, optimization_reason, target_section_title, bound_evidence_ids_json)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        Number(bidId),
+        Number(versionId || 0) || null,
+        trimText(row.score_item_id),
+        Number(row.requirement_id || 0) || null,
+        trimText(row.requirement_code) || null,
+        trimText(row.title) || null,
+        Number(row.full_score || 0),
+        trimText(row.coverage_status) || 'NONE',
+        Number(row.optimization_needed_flag || 0),
+        trimText(row.optimization_reason) || null,
+        trimText(row.target_section_title) || null,
+        trimText(row.bound_evidence_ids_json) || '[]',
+      ]
+    );
+  }
+};
+
+const persistScoreOptimizationRecords = async (tx, { bidId, versionId, rows = [], user }) => {
+  await tx.run(
+    'DELETE FROM tender_score_optimization_records WHERE bid_id = ? AND version_id = ?',
+    [Number(bidId), Number(versionId || 0) || null]
+  );
+  for (const row of Array.isArray(rows) ? rows : []) {
+    await tx.run(
+      `INSERT INTO tender_score_optimization_records
+        (bid_id, version_id, score_item_id, suggestion_title, suggestion_text, evidence_ids_json, target_section_title, before_text, after_text, applied_flag, applied_at, source, status, created_by_id, created_by_name)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        Number(bidId),
+        Number(versionId || 0) || null,
+        trimText(row.score_item_id),
+        trimText(row.suggestion_title) || null,
+        trimText(row.suggestion_text) || null,
+        JSON.stringify(Array.isArray(row.evidence_ids) ? row.evidence_ids : []),
+        trimText(row.section_title || row.target_section_title) || null,
+        trimText(row.before_text) || null,
+        trimText(row.after_text) || null,
+        Number(row.applied_flag || (trimText(row.status).toUpperCase() === 'APPLIED' ? 1 : 0)),
+        Number(row.applied_flag || (trimText(row.status).toUpperCase() === 'APPLIED' ? 1 : 0)) ? (formatDateTime(new Date()) || null) : null,
+        trimText(row.source) || 'RULE',
+        trimText(row.status).toUpperCase() === 'APPLIED' ? 'APPLIED' : 'PROPOSED',
+        Number(user?.id || 0) || null,
+        trimText(user?.username) || null,
+      ]
+    );
+  }
+};
+
+const loadRequirementRegistryRows = async (jobId) =>
+  query(
+    `SELECT *
+     FROM tender_requirement_registry
+     WHERE job_id = ?
+     ORDER BY id ASC`,
+    [Number(jobId)]
+  );
+
+const loadEvidenceRegistryRows = async (bidId) =>
+  query(
+    `SELECT *
+     FROM tender_evidence_registry
+     WHERE bid_id = ?
+     ORDER BY id ASC`,
+    [Number(bidId)]
+  );
+
+const loadDraftSectionRegistryRows = async ({ bidId, versionId }) =>
+  query(
+    `SELECT *
+     FROM tender_draft_section_registry
+     WHERE bid_id = ? AND version_id = ?
+     ORDER BY paragraph_no ASC, id ASC`,
+    [Number(bidId), Number(versionId)]
+  );
+
+const loadLatestGenerateJobForBid = async (bidId) => {
+  const row = await get(
+    `SELECT *
+     FROM tender_bid_generate_jobs
+     WHERE created_bid_id = ?
+     ORDER BY id DESC
+     LIMIT 1`,
+    [Number(bidId)]
+  );
+  return row ? sanitizeGenerateJobRow(row) : null;
+};
+
+const extractParagraphsFromDocx = async (filePath) => {
+  const target = trimText(filePath);
+  if (!target) return [];
+  const stat = await readFileStatSafe(target);
+  if (!stat?.isFile()) return [];
+  const ext = path.extname(target).toLowerCase();
+  if (!['.docx', '.doc'].includes(ext)) return [];
+  try {
+    const extracted = await mammoth.extractRawText({ path: target });
+    return toLines(extracted?.value || '');
+  } catch {
+    return [];
+  }
+};
+
+const buildRuntimeRequirementRegistry = ({ detail }) => {
+  if (!detail?.job) return [];
+  const analysisSummary = parseMaybeJson(detail.job.analysis_summary_json, {});
+  const stageOutputs = isPlainObject(analysisSummary?.stage_outputs) ? analysisSummary.stage_outputs : {};
+  const bidCategory = normalizeBidCategory(detail.job.bid_category) || 'SERVICE';
+  return buildRequirementRows({
+    jobId: Number(detail.job.id),
+    bidCategory,
+    finalJson: normalizeFinalAnalyzeJson(analysisSummary?.final_json || {}, bidCategory),
+    scoringItems: Array.isArray(detail.items) ? detail.items.filter((item) => item.item_type === 'SCORING') : [],
+    stage1RiskClauses: normalizeStage1RiskClauses(stageOutputs.stage1_risk_clauses || []),
+    tableSummaries: Array.isArray(analysisSummary?.table_summaries) ? analysisSummary.table_summaries : [],
+  });
 };
 
 const splitTextToDiffSegments = (value) => {
@@ -4403,11 +4779,37 @@ const buildVersionDiffResult = ({ leftText, rightText }) => {
 };
 
 const statusTransitions = {
-  DRAFT: new Set(['IN_REVIEW']),
+  DRAFT: new Set(['FILES_UPLOADED', 'IN_REVIEW']),
+  FILES_UPLOADED: new Set(['PARSE_COMPLETED', 'MATERIALS_PENDING', 'DRAFT']),
+  PARSE_COMPLETED: new Set(['MATERIALS_PENDING', 'READY_TO_GENERATE', 'DRAFT']),
+  MATERIALS_PENDING: new Set(['READY_TO_GENERATE', 'PARSE_COMPLETED', 'DRAFT']),
+  READY_TO_GENERATE: new Set(['GENERATING', 'COMPILE_REVIEW_PENDING', 'DRAFT']),
+  GENERATING: new Set(['COMPILE_REVIEW_PENDING', 'MATERIALS_PENDING', 'DRAFT']),
+  COMPILE_REVIEW_PENDING: new Set(['TECH_REVIEW_PENDING', 'READY_TO_GENERATE', 'DRAFT']),
+  TECH_REVIEW_PENDING: new Set(['BUSINESS_REVIEW_PENDING', 'COMPILE_REVIEW_PENDING', 'DRAFT']),
+  BUSINESS_REVIEW_PENDING: new Set(['FINAL_REVIEW_PENDING', 'TECH_REVIEW_PENDING', 'DRAFT']),
+  FINAL_REVIEW_PENDING: new Set(['EXPORT_READY', 'BUSINESS_REVIEW_PENDING', 'DRAFT']),
+  EXPORT_READY: new Set(['EXPORTED', 'FINAL_REVIEW_PENDING', 'DRAFT']),
+  EXPORTED: new Set(['ARCHIVED', 'DRAFT']),
+  // 兼容旧状态流转
   IN_REVIEW: new Set(['FINALIZED', 'DRAFT']),
   FINALIZED: new Set(['SUBMITTED', 'DRAFT']),
   SUBMITTED: new Set(['ARCHIVED', 'DRAFT']),
   ARCHIVED: new Set(['DRAFT']),
+};
+
+const reviewStageToPendingStatus = {
+  COMPILE: 'COMPILE_REVIEW_PENDING',
+  TECH: 'TECH_REVIEW_PENDING',
+  BUSINESS: 'BUSINESS_REVIEW_PENDING',
+  FINAL: 'FINAL_REVIEW_PENDING',
+};
+
+const reviewStageToNextStatusOnApproved = {
+  COMPILE: 'TECH_REVIEW_PENDING',
+  TECH: 'BUSINESS_REVIEW_PENDING',
+  BUSINESS: 'FINAL_REVIEW_PENDING',
+  FINAL: 'EXPORT_READY',
 };
 
 const normalizeBidUploadExt = (filename) => {
@@ -4568,6 +4970,89 @@ const buildSimpleDocxBuffer = (paragraphs = []) => {
 const writeSimpleDocx = async ({ outputPath, paragraphs = [] }) => {
   const buffer = buildSimpleDocxBuffer(paragraphs);
   await fs.promises.writeFile(outputPath, buffer);
+};
+
+const sanitizeExportBaseName = (bid) => {
+  const parts = [
+    trimText(bid?.bid_no),
+    trimText(bid?.project_name),
+  ].filter(Boolean);
+  const raw = parts.join('-') || `tender-${Number(bid?.id || 0) || Date.now()}`;
+  return raw.replace(/[^\w\u4e00-\u9fa5.-]+/g, '_').slice(0, 120) || `tender-${Date.now()}`;
+};
+
+const resolveBidExportSource = async (bid) => {
+  const draft = sanitizeDraftRow(await get('SELECT * FROM tender_bid_drafts WHERE bid_id = ? LIMIT 1', [Number(bid.id)]));
+  const currentVersion = await getCurrentVersion(bid);
+  const sourcePath = trimText(draft?.draft_file_path) || trimText(currentVersion?.storage_path);
+  const sourceExt = String(
+    trimText(path.extname(sourcePath))
+    || trimText(draft?.draft_ext)
+    || trimText(currentVersion?.source_ext)
+  ).toLowerCase();
+  if (!sourcePath || !sourceExt) {
+    throw tenderStageError({
+      message: '当前标书暂无可导出文件',
+      statusCode: 409,
+      code: 'TENDER_EXPORT_SOURCE_MISSING',
+      category: 'EXPORT',
+      retryable: false,
+      manualTakeover: buildManualTakeover('请先上传版本文件或生成协同草稿', 'export'),
+    });
+  }
+  return {
+    draft,
+    currentVersion,
+    sourcePath,
+    sourceExt: sourceExt.startsWith('.') ? sourceExt : `.${sourceExt}`,
+    cleanupPaths: [],
+  };
+};
+
+const buildBidRiskReportText = async (bid) => {
+  const latestRun = await get(
+    `SELECT *
+     FROM tender_draft_check_runs
+     WHERE bid_id = ?
+     ORDER BY id DESC
+     LIMIT 1`,
+    [Number(bid.id)]
+  );
+  const issues = latestRun
+    ? await query(
+      `SELECT severity, title, message, section_title, requirement_code
+       FROM tender_draft_check_issues
+       WHERE check_run_id = ?
+       ORDER BY sort_order ASC, id ASC`,
+      [Number(latestRun.id)]
+    )
+    : [];
+  const lines = [
+    `标书编号：${trimText(bid.bid_no) || '-'}`,
+    `标书标题：${trimText(bid.title) || '-'}`,
+    `项目名称：${trimText(bid.project_name) || '-'}`,
+    `导出时间：${new Date().toLocaleString('zh-CN', { hour12: false })}`,
+    '',
+    '风险校验结果',
+  ];
+  if (!latestRun) {
+    lines.push('暂无成稿级校验记录，可先在编制中心执行成稿校验。');
+    return lines.join('\n');
+  }
+  const summary = parseMaybeJson(latestRun.summary_json, {});
+  lines.push(`问题总数：${Number(summary.issue_count || 0)}，致命：${Number(summary.fatal_count || 0)}，告警：${Number(summary.warn_count || 0)}`);
+  lines.push('');
+  if (!issues.length) {
+    lines.push('暂无风险问题。');
+    return lines.join('\n');
+  }
+  issues.forEach((item, idx) => {
+    lines.push(`${idx + 1}. [${trimText(item.severity) || 'WARN'}] ${trimText(item.title) || '未命名问题'}`);
+    lines.push(`   描述：${trimText(item.message) || '-'}`);
+    if (trimText(item.section_title)) lines.push(`   章节：${trimText(item.section_title)}`);
+    if (trimText(item.requirement_code)) lines.push(`   要求编码：${trimText(item.requirement_code)}`);
+  });
+  return lines.join('\n');
 };
 
 const buildDocxParagraphXml = (text, options = {}) => {
@@ -4943,6 +5428,46 @@ const permissionByRole = {
   auditor: new Set(['tender:audit:read']),
 };
 
+const dataScopeByRole = {
+  admin: 'ALL',
+  editor: 'OWNED_OR_ASSIGNED',
+  sysadmin: 'ALL',
+  auditor: 'AUDIT_ONLY',
+};
+
+const bidMemberRoleSet = new Set(['OWNER', 'COORDINATOR', 'COMPILE', 'TECH', 'BUSINESS', 'FINAL', 'RISK', 'EXPORT']);
+
+const buildPermissionMatrix = () =>
+  Object.fromEntries(
+    Object.entries(permissionByRole).map(([role, permissionSet]) => [
+      role,
+      {
+        permissions: Array.from(permissionSet.values()).sort(),
+        data_scope: dataScopeByRole[role] || 'NONE',
+      },
+    ])
+  );
+
+const resolveDataScope = (user) => {
+  const role = String(user?.role || '').toLowerCase();
+  return dataScopeByRole[role] || 'NONE';
+};
+
+const buildGovernancePayload = (user) => ({
+  current_role: String(user?.role || '').toLowerCase() || 'unknown',
+  data_scope: {
+    mode: resolveDataScope(user),
+    description: resolveDataScope(user) === 'OWNED_OR_ASSIGNED'
+      ? '仅可查看本人创建或被分派参与的项目'
+      : resolveDataScope(user) === 'AUDIT_ONLY'
+        ? '仅可查看审计相关数据'
+        : resolveDataScope(user) === 'ALL'
+          ? '可查看全部项目'
+          : '无业务数据范围',
+  },
+  permission_matrix: buildPermissionMatrix(),
+});
+
 const hasPermission = (user, permission) => {
   const role = String(user?.role || '').toLowerCase();
   const set = permissionByRole[role] || new Set();
@@ -4957,6 +5482,139 @@ const requirePermission = (permission) =>
     next();
   });
 
+const normalizeBidMemberRole = (value) => {
+  const normalized = trimText(value).toUpperCase();
+  return bidMemberRoleSet.has(normalized) ? normalized : '';
+};
+
+const buildBidScopeWhere = (user, { idColumn = 'tender_bids.id', creatorColumn = 'tender_bids.created_by_id' } = {}) => {
+  const scope = resolveDataScope(user);
+  if (scope === 'ALL') return { sql: '', params: [] };
+  if (scope !== 'OWNED_OR_ASSIGNED') return { sql: '0 = 1', params: [] };
+
+  const userId = Number(user?.id);
+  const username = trimText(user?.username);
+  if (!Number.isFinite(userId) || userId <= 0 || !username) return { sql: '0 = 1', params: [] };
+
+  return {
+    sql: `(${creatorColumn} = ? OR EXISTS (
+      SELECT 1
+      FROM tender_bid_members scope_members
+      WHERE scope_members.bid_id = ${idColumn}
+        AND (scope_members.member_user_id = ? OR scope_members.member_username = ?)
+    ))`,
+    params: [userId, userId, username],
+  };
+};
+
+const buildOwnerScopeWhere = (user, userIdColumn) => {
+  const scope = resolveDataScope(user);
+  if (scope === 'ALL') return { sql: '', params: [] };
+  if (scope !== 'OWNED_OR_ASSIGNED') return { sql: '0 = 1', params: [] };
+  const userId = Number(user?.id);
+  if (!Number.isFinite(userId) || userId <= 0) return { sql: '0 = 1', params: [] };
+  return { sql: `${userIdColumn} = ?`, params: [userId] };
+};
+
+const appendScopedWhere = (where, params, scoped) => {
+  if (!scoped?.sql) return;
+  where.push(scoped.sql);
+  if (Array.isArray(scoped.params) && scoped.params.length) params.push(...scoped.params);
+};
+
+const loadBidMembersMap = async (bidIds = []) => {
+  const ids = Array.from(
+    new Set(
+      (Array.isArray(bidIds) ? bidIds : [])
+        .map((item) => Number(item))
+        .filter((item) => Number.isFinite(item) && item > 0)
+    )
+  );
+  if (!ids.length) return new Map();
+
+  const rows = await query(
+    `SELECT *
+     FROM tender_bid_members
+     WHERE bid_id IN (${ids.map(() => '?').join(',')})
+     ORDER BY bid_id ASC, member_role ASC, id ASC`,
+    ids
+  );
+
+  const map = new Map();
+  for (const row of rows) {
+    const bidId = Number(row.bid_id);
+    if (!map.has(bidId)) map.set(bidId, []);
+    map.get(bidId).push(sanitizeBidMemberRow(row));
+  }
+  return map;
+};
+
+const withBidMembers = async (rows = []) => {
+  const bidRows = Array.isArray(rows) ? rows.map((row) => sanitizeBidRow(row)) : [];
+  const memberMap = await loadBidMembersMap(bidRows.map((row) => row?.id));
+  return bidRows.map((row) => ({
+    ...row,
+    members: memberMap.get(Number(row.id)) || [],
+  }));
+};
+
+const ensureBidMembers = async ({ bid, members = [], req, tx }) => {
+  const bidRow = sanitizeBidRow(bid);
+  const ownerUserId = Number(bidRow?.created_by_id || 0);
+  const ownerUsername = trimText(bidRow?.created_by_name || req?.user?.username);
+  const ownerMember = ownerUsername
+    ? {
+      member_user_id: Number.isFinite(ownerUserId) && ownerUserId > 0 ? ownerUserId : null,
+      member_username: ownerUsername,
+      member_role: 'OWNER',
+      member_title: '项目负责人',
+    }
+    : null;
+
+  const normalized = [];
+  const seen = new Set();
+  const sourceRows = ownerMember ? [ownerMember, ...members] : [...members];
+  for (const item of sourceRows) {
+    const memberRole = normalizeBidMemberRole(item?.member_role) || 'COORDINATOR';
+    const memberUsername = fixMojibakeText(trimText(item?.member_username));
+    const memberUserIdNum = Number(item?.member_user_id);
+    const memberUserId = Number.isFinite(memberUserIdNum) && memberUserIdNum > 0 ? Math.floor(memberUserIdNum) : null;
+    const memberTitle = fixMojibakeText(trimText(item?.member_title));
+    if (!memberUsername) continue;
+    const dedupeKey = `${memberRole}::${memberUsername}`;
+    if (seen.has(dedupeKey)) continue;
+    seen.add(dedupeKey);
+    normalized.push({
+      member_user_id: memberUserId,
+      member_username: memberUsername,
+      member_role: memberRole,
+      member_title: memberTitle || null,
+    });
+  }
+
+  await tx.run('DELETE FROM tender_bid_members WHERE bid_id = ?', [Number(bidRow.id)]);
+  for (const item of normalized) {
+    await tx.run(
+      `INSERT INTO tender_bid_members
+        (bid_id, member_user_id, member_username, member_role, member_title, created_by_id, created_by_name, updated_by_id, updated_by_name)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        Number(bidRow.id),
+        item.member_user_id,
+        item.member_username,
+        item.member_role,
+        item.member_title,
+        Number(req?.user?.id || 0) || null,
+        trimText(req?.user?.username) || null,
+        Number(req?.user?.id || 0) || null,
+        trimText(req?.user?.username) || null,
+      ]
+    );
+  }
+
+  return normalized;
+};
+
 app.use(authRequired);
 
 const nextBidNo = async () => {
@@ -4967,9 +5625,30 @@ const nextBidNo = async () => {
   return `${prefix}${seq}`;
 };
 
-const ensureBidExists = async (bidId) => {
+const ensureBidExists = async (bidId, options = {}) => {
   const row = await get('SELECT * FROM tender_bids WHERE id = ? LIMIT 1', [bidId]);
-  if (!row) throw appError('标书不存在', 404);
+  if (!row) throw tenderStageError({
+    message: '标书不存在',
+    statusCode: 404,
+    code: 'TENDER_BID_NOT_FOUND',
+    category: 'BUSINESS',
+    retryable: false,
+    manualTakeover: buildManualTakeover('请确认项目是否已被删除或切换到正确项目', 'bid'),
+  });
+  const user = options?.user || null;
+  if (user) {
+    const scope = buildBidScopeWhere(user, { idColumn: 'tender_bids.id', creatorColumn: 'tender_bids.created_by_id' });
+    if (scope.sql) {
+      const allowed = await get(
+        `SELECT id
+         FROM tender_bids
+         WHERE id = ? AND ${scope.sql}
+         LIMIT 1`,
+        [Number(bidId), ...scope.params]
+      );
+      if (!allowed) throw bidScopeForbiddenError();
+    }
+  }
   return sanitizeBidRow(row);
 };
 
@@ -5305,7 +5984,10 @@ const bidVersionUpload = multer({
     const ext = normalizeBidUploadExt(file.originalname || '');
     const mime = trimText(file.mimetype).toLowerCase();
     if (!ext || (!ALLOWED_BID_UPLOAD_MIME.has(mime) && mime)) {
-      return cb(appError('仅支持上传 doc/docx/pdf', 400));
+      return cb(uploadValidationError('仅支持上传 doc/docx/pdf', {
+        code: 'TENDER_UPLOAD_INVALID_FILE',
+        manualTakeover: buildManualTakeover('请重新选择 doc/docx/pdf 文件后上传', 'upload'),
+      }));
     }
     return cb(null, true);
   },
@@ -5318,9 +6000,12 @@ const uploadBidVersion = (req, res, next) => {
       return next();
     }
     if (err.code === 'LIMIT_FILE_SIZE') {
-      return next(appError(`文件大小不能超过 ${Math.floor(FILE_MAX_BYTES / 1024 / 1024)}MB`, 400));
+      return next(uploadValidationError(`文件大小不能超过 ${Math.floor(FILE_MAX_BYTES / 1024 / 1024)}MB`, {
+        code: 'TENDER_UPLOAD_FILE_TOO_LARGE',
+        manualTakeover: buildManualTakeover('请压缩文件或拆分后重新上传', 'upload'),
+      }));
     }
-    return next(appError(err.message || '文件上传失败', err.statusCode || 400));
+    return next(uploadValidationError(err.message || '文件上传失败'));
   });
 };
 
@@ -5339,7 +6024,10 @@ const tenderSourceUpload = multer({
     const ext = normalizeBidUploadExt(file.originalname || '');
     const mime = trimText(file.mimetype).toLowerCase();
     if (!ext || (!ALLOWED_BID_UPLOAD_MIME.has(mime) && mime)) {
-      return cb(appError('仅支持上传 doc/docx/pdf', 400));
+      return cb(uploadValidationError('仅支持上传 doc/docx/pdf', {
+        code: 'TENDER_UPLOAD_INVALID_FILE',
+        manualTakeover: buildManualTakeover('请重新选择 doc/docx/pdf 文件后上传', 'upload'),
+      }));
     }
     return cb(null, true);
   },
@@ -5352,9 +6040,12 @@ const uploadTenderSourceFile = (req, res, next) => {
       return next();
     }
     if (err.code === 'LIMIT_FILE_SIZE') {
-      return next(appError(`文件大小不能超过 ${Math.floor(FILE_MAX_BYTES / 1024 / 1024)}MB`, 400));
+      return next(uploadValidationError(`文件大小不能超过 ${Math.floor(FILE_MAX_BYTES / 1024 / 1024)}MB`, {
+        code: 'TENDER_UPLOAD_FILE_TOO_LARGE',
+        manualTakeover: buildManualTakeover('请压缩文件或拆分后重新上传', 'upload'),
+      }));
     }
-    return next(appError(err.message || '文件上传失败', err.statusCode || 400));
+    return next(uploadValidationError(err.message || '文件上传失败'));
   });
 };
 
@@ -5373,7 +6064,10 @@ const sampleUpload = multer({
     const ext = normalizeBidUploadExt(file.originalname || '');
     const mime = trimText(file.mimetype).toLowerCase();
     if (!ext || (!ALLOWED_BID_UPLOAD_MIME.has(mime) && mime)) {
-      return cb(appError('仅支持上传 doc/docx/pdf', 400));
+      return cb(uploadValidationError('仅支持上传 doc/docx/pdf', {
+        code: 'TENDER_UPLOAD_INVALID_FILE',
+        manualTakeover: buildManualTakeover('请重新选择 doc/docx/pdf 文件后上传', 'upload'),
+      }));
     }
     return cb(null, true);
   },
@@ -5386,9 +6080,12 @@ const uploadSampleFile = (req, res, next) => {
       return next();
     }
     if (err.code === 'LIMIT_FILE_SIZE') {
-      return next(appError(`文件大小不能超过 ${Math.floor(FILE_MAX_BYTES / 1024 / 1024)}MB`, 400));
+      return next(uploadValidationError(`文件大小不能超过 ${Math.floor(FILE_MAX_BYTES / 1024 / 1024)}MB`, {
+        code: 'TENDER_UPLOAD_FILE_TOO_LARGE',
+        manualTakeover: buildManualTakeover('请压缩文件或拆分后重新上传', 'upload'),
+      }));
     }
-    return next(appError(err.message || '文件上传失败', err.statusCode || 400));
+    return next(uploadValidationError(err.message || '文件上传失败'));
   });
 };
 
@@ -5407,7 +6104,10 @@ const docTemplateUpload = multer({
     const ext = normalizeDocTemplateExt(file.originalname || '');
     const mime = trimText(file.mimetype).toLowerCase();
     if (!ext || (!ALLOWED_DOC_TEMPLATE_MIME.has(mime) && mime)) {
-      return cb(appError('仅支持上传 docx 模板', 400));
+      return cb(uploadValidationError('仅支持上传 docx 模板', {
+        code: 'TENDER_UPLOAD_INVALID_TEMPLATE',
+        manualTakeover: buildManualTakeover('请上传 docx 模板文件', 'template'),
+      }));
     }
     return cb(null, true);
   },
@@ -5420,9 +6120,12 @@ const uploadDocTemplateFile = (req, res, next) => {
       return next();
     }
     if (err.code === 'LIMIT_FILE_SIZE') {
-      return next(appError(`文件大小不能超过 ${Math.floor(FILE_MAX_BYTES / 1024 / 1024)}MB`, 400));
+      return next(uploadValidationError(`文件大小不能超过 ${Math.floor(FILE_MAX_BYTES / 1024 / 1024)}MB`, {
+        code: 'TENDER_UPLOAD_FILE_TOO_LARGE',
+        manualTakeover: buildManualTakeover('请压缩模板文件后重新上传', 'template'),
+      }));
     }
-    return next(appError(err.message || '文件上传失败', err.statusCode || 400));
+    return next(uploadValidationError(err.message || '文件上传失败'));
   });
 };
 
@@ -5435,7 +6138,10 @@ const assetUpload = multer({
     const ext = normalizeAssetUploadExt(file.originalname || '');
     const mime = trimText(file.mimetype).toLowerCase();
     if (!ext || (!ALLOWED_ASSET_UPLOAD_MIME.has(mime) && mime)) {
-      return cb(appError('仅支持上传 jpg/png/pdf', 400));
+      return cb(uploadValidationError('仅支持上传 jpg/png/pdf', {
+        code: 'TENDER_UPLOAD_INVALID_ASSET',
+        manualTakeover: buildManualTakeover('请上传 jpg/png/pdf 资产文件', 'asset'),
+      }));
     }
     return cb(null, true);
   },
@@ -5448,9 +6154,12 @@ const uploadAssetFile = (req, res, next) => {
       return next();
     }
     if (err.code === 'LIMIT_FILE_SIZE') {
-      return next(appError(`文件大小不能超过 ${Math.floor(FILE_MAX_BYTES / 1024 / 1024)}MB`, 400));
+      return next(uploadValidationError(`文件大小不能超过 ${Math.floor(FILE_MAX_BYTES / 1024 / 1024)}MB`, {
+        code: 'TENDER_UPLOAD_FILE_TOO_LARGE',
+        manualTakeover: buildManualTakeover('请压缩资产文件后重新上传', 'asset'),
+      }));
     }
-    return next(appError(err.message || '文件上传失败', err.statusCode || 400));
+    return next(uploadValidationError(err.message || '文件上传失败'));
   });
 };
 
@@ -6544,6 +7253,28 @@ app.get('/api/tender/bootstrap', asyncHandler(async (req, res) => {
   const activeDrafts = await get('SELECT COUNT(1) AS count FROM tender_bid_drafts');
   const assetCount = await get('SELECT COUNT(1) AS count FROM tender_assets');
   const modelCount = await get('SELECT COUNT(1) AS count FROM tender_ai_models WHERE is_enabled = 1');
+  const kbProjectCount = await get('SELECT COUNT(1) AS count FROM kb_projects');
+  const kbChunkCount = await get('SELECT COUNT(1) AS count FROM kb_asset_chunks');
+  const bidStatusRows = await query('SELECT status, COUNT(1) AS count FROM tender_bids GROUP BY status');
+  const reviewStatusRows = await query('SELECT review_status, COUNT(1) AS count FROM tender_bids GROUP BY review_status');
+
+  const statusCountMap = Object.fromEntries(
+    (Array.isArray(bidStatusRows) ? bidStatusRows : []).map((row) => [normalizeStatus(row.status), Number(row.count || 0)])
+  );
+  const reviewCountMap = Object.fromEntries(
+    (Array.isArray(reviewStatusRows) ? reviewStatusRows : []).map((row) => [normalizeReviewStatus(row.review_status), Number(row.count || 0)])
+  );
+
+  const todo = {
+    pending_parse: Number(statusCountMap.FILES_UPLOADED || 0),
+    pending_materials: Number(statusCountMap.MATERIALS_PENDING || 0),
+    pending_generate: Number(statusCountMap.READY_TO_GENERATE || 0),
+    pending_review: Number(statusCountMap.COMPILE_REVIEW_PENDING || 0)
+      + Number(statusCountMap.TECH_REVIEW_PENDING || 0)
+      + Number(statusCountMap.BUSINESS_REVIEW_PENDING || 0)
+      + Number(statusCountMap.FINAL_REVIEW_PENDING || 0),
+    ready_export: Number(statusCountMap.EXPORT_READY || 0),
+  };
 
   res.json({
     user: req.user,
@@ -6561,8 +7292,220 @@ app.get('/api/tender/bootstrap', asyncHandler(async (req, res) => {
       drafts: Number(activeDrafts?.count || 0),
       assets: Number(assetCount?.count || 0),
       enabled_models: Number(modelCount?.count || 0),
+      kb_projects: Number(kbProjectCount?.count || 0),
+      kb_chunks: Number(kbChunkCount?.count || 0),
+    },
+    workflow: {
+      status_counts: statusCountMap,
+      review_counts: reviewCountMap,
+      todo,
+    },
+    governance: buildGovernancePayload(req.user),
+  });
+}));
+
+app.get('/api/tender/kb/stats', requirePermission('tender:read'), asyncHandler(async (_req, res) => {
+  const [
+    projects,
+    clauses,
+    scoreItems,
+    qualifications,
+    specs,
+    sectionAssets,
+    cases,
+    personnel,
+    templates,
+    rules,
+    chunks,
+    ingestJobs,
+    linkedBids,
+    linkedRequirements,
+    linkedScoreItems,
+    linkedEvidence,
+    linkedSections,
+    linkedTemplates,
+    linkedMatches,
+  ] = await Promise.all([
+    get('SELECT COUNT(1) AS count FROM kb_projects'),
+    get('SELECT COUNT(1) AS count FROM kb_tender_clauses'),
+    get('SELECT COUNT(1) AS count FROM kb_score_items'),
+    get('SELECT COUNT(1) AS count FROM kb_company_qualifications'),
+    get('SELECT COUNT(1) AS count FROM kb_product_specs'),
+    get('SELECT COUNT(1) AS count FROM kb_section_assets'),
+    get('SELECT COUNT(1) AS count FROM kb_project_cases'),
+    get('SELECT COUNT(1) AS count FROM kb_personnel_assets'),
+    get('SELECT COUNT(1) AS count FROM kb_document_templates'),
+    get('SELECT COUNT(1) AS count FROM kb_validation_rules'),
+    get('SELECT COUNT(1) AS count FROM kb_asset_chunks'),
+    get('SELECT COUNT(1) AS count FROM kb_ingest_jobs'),
+    get('SELECT COUNT(1) AS count FROM tender_bids WHERE source_kb_project_id IS NOT NULL'),
+    get('SELECT COUNT(1) AS count FROM tender_requirement_registry WHERE source_kb_clause_id IS NOT NULL'),
+    get('SELECT COUNT(1) AS count FROM tender_score_coverage_matrix WHERE source_kb_score_item_id IS NOT NULL'),
+    get('SELECT COUNT(1) AS count FROM tender_evidence_registry WHERE source_kb_id IS NOT NULL OR library_record_id IS NOT NULL'),
+    get('SELECT COUNT(1) AS count FROM tender_draft_section_registry WHERE source_kb_section_asset_id IS NOT NULL'),
+    get('SELECT COUNT(1) AS count FROM tender_doc_templates WHERE kb_template_id IS NOT NULL'),
+    get('SELECT COUNT(1) AS count FROM tender_bid_generate_matches WHERE source_kb_case_id IS NOT NULL'),
+  ]);
+
+  res.json({
+    knowledge_base: {
+      projects: Number(projects?.count || 0),
+      tender_clauses: Number(clauses?.count || 0),
+      score_items: Number(scoreItems?.count || 0),
+      company_qualifications: Number(qualifications?.count || 0),
+      product_specs: Number(specs?.count || 0),
+      section_assets: Number(sectionAssets?.count || 0),
+      project_cases: Number(cases?.count || 0),
+      personnel_assets: Number(personnel?.count || 0),
+      document_templates: Number(templates?.count || 0),
+      validation_rules: Number(rules?.count || 0),
+      asset_chunks: Number(chunks?.count || 0),
+      ingest_jobs: Number(ingestJobs?.count || 0),
+    },
+    runtime_links: {
+      bids: Number(linkedBids?.count || 0),
+      requirements: Number(linkedRequirements?.count || 0),
+      score_items: Number(linkedScoreItems?.count || 0),
+      evidence: Number(linkedEvidence?.count || 0),
+      sections: Number(linkedSections?.count || 0),
+      templates: Number(linkedTemplates?.count || 0),
+      case_matches: Number(linkedMatches?.count || 0),
     },
   });
+}));
+
+app.get('/api/tender/kb/projects', requirePermission('tender:read'), asyncHandler(async (req, res) => {
+  const page = toPositiveInt(req.query.page, 1);
+  const limit = toBoundedLimit(req.query.limit, 20);
+  const offset = (page - 1) * limit;
+
+  const keyword = trimText(req.query.keyword);
+  const projectType = trimText(req.query.project_type);
+  const industryType = trimText(req.query.industry_type);
+  const resultStatus = normalizeKbResultStatus(req.query.result_status);
+
+  const where = [];
+  const params = [];
+
+  if (keyword) {
+    where.push('(project_name LIKE ? OR project_no LIKE ? OR purchaser LIKE ?)');
+    params.push(`%${keyword}%`, `%${keyword}%`, `%${keyword}%`);
+  }
+  if (projectType) {
+    where.push('project_type = ?');
+    params.push(projectType);
+  }
+  if (industryType) {
+    where.push('industry_type = ?');
+    params.push(industryType);
+  }
+  if (trimText(req.query.result_status)) {
+    where.push('result_status = ?');
+    params.push(resultStatus || 'UNKNOWN');
+  }
+  appendScopedWhere(where, params, buildOwnerScopeWhere(req.user, 'created_by_id'));
+
+  const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
+  const total = await get(`SELECT COUNT(1) AS total FROM kb_projects ${whereSql}`, params);
+  const items = await query(
+    `SELECT * FROM kb_projects ${whereSql} ORDER BY id DESC LIMIT ? OFFSET ?`,
+    [...params, limit, offset]
+  );
+
+  res.json({
+    items: items.map((row) => sanitizeKbProjectRow(row)),
+    total: Number(total?.total || 0),
+    page,
+    limit,
+  });
+}));
+
+app.post('/api/tender/kb/projects', requirePermission('tender:write'), asyncHandler(async (req, res) => {
+  const projectName = fixMojibakeText(trimText(req.body?.project_name));
+  const projectNo = fixMojibakeText(trimText(req.body?.project_no));
+  const purchaser = fixMojibakeText(trimText(req.body?.purchaser));
+  const industryType = fixMojibakeText(trimText(req.body?.industry_type));
+  const projectType = fixMojibakeText(trimText(req.body?.project_type));
+  const region = fixMojibakeText(trimText(req.body?.region));
+  const publishDateRaw = req.body?.publish_date;
+  const bidDeadlineRaw = req.body?.bid_deadline;
+  const resultStatus = normalizeKbResultStatus(req.body?.result_status);
+  const remarks = fixMojibakeText(trimText(req.body?.remarks));
+  const tags = req.body?.tags_json;
+
+  if (!projectName) throw appError('项目名称不能为空', 400);
+
+  const publishDate = normalizeDateTimeInput(publishDateRaw);
+  const bidDeadline = normalizeDateTimeInput(bidDeadlineRaw);
+  if (publishDateRaw !== undefined && publishDateRaw !== null && trimText(publishDateRaw) && !publishDate) {
+    throw appError('publish_date 格式无效', 400);
+  }
+  if (bidDeadlineRaw !== undefined && bidDeadlineRaw !== null && trimText(bidDeadlineRaw) && !bidDeadline) {
+    throw appError('bid_deadline 格式无效', 400);
+  }
+
+  const bidAmountNum = req.body?.bid_amount === undefined || req.body?.bid_amount === null || req.body?.bid_amount === ''
+    ? null
+    : Number(req.body?.bid_amount);
+  if (bidAmountNum !== null && !Number.isFinite(bidAmountNum)) throw appError('bid_amount 格式无效', 400);
+
+  const sourceBidIdNum = Number(req.body?.source_bid_id);
+  const sourceBidId = Number.isFinite(sourceBidIdNum) && sourceBidIdNum > 0 ? Math.floor(sourceBidIdNum) : null;
+
+  let tagsJson = null;
+  if (tags !== undefined) {
+    if (typeof tags === 'string') {
+      const text = trimText(tags);
+      if (text) {
+        const parsed = parseMaybeJson(text, null);
+        tagsJson = parsed !== null ? JSON.stringify(parsed) : JSON.stringify([text]);
+      }
+    } else if (Array.isArray(tags) || (tags && typeof tags === 'object')) {
+      tagsJson = JSON.stringify(tags);
+    }
+  }
+
+  const insert = await run(
+    `INSERT INTO kb_projects
+      (project_name, project_no, purchaser, industry_type, project_type, region, publish_date, bid_deadline, result_status, bid_amount, source_bid_id, tags_json, remarks, created_by_id, created_by_name, updated_by_id, updated_by_name)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      projectName,
+      projectNo || null,
+      purchaser || null,
+      industryType || null,
+      projectType || null,
+      region || null,
+      publishDate,
+      bidDeadline,
+      resultStatus || 'UNKNOWN',
+      bidAmountNum,
+      sourceBidId,
+      tagsJson,
+      remarks || null,
+      Number(req.user.id),
+      req.user.username,
+      Number(req.user.id),
+      req.user.username,
+    ]
+  );
+
+  const row = await get('SELECT * FROM kb_projects WHERE id = ? LIMIT 1', [insert.insertId]);
+
+  await logOperation({
+    req,
+    action: 'KB_PROJECT_CREATE',
+    entity: 'kb_project',
+    entityId: Number(insert.insertId),
+    message: `创建知识库项目 ${projectName}`,
+    afterData: {
+      project_name: projectName,
+      project_no: projectNo || null,
+      result_status: resultStatus || 'UNKNOWN',
+    },
+  });
+
+  res.status(201).json(sanitizeKbProjectRow(row));
 }));
 
 app.get('/api/tender/bids', requirePermission('tender:read'), asyncHandler(async (req, res) => {
@@ -6583,6 +7526,10 @@ app.get('/api/tender/bids', requirePermission('tender:read'), asyncHandler(async
     where.push('status = ?');
     params.push(status);
   }
+  appendScopedWhere(where, params, buildBidScopeWhere(req.user, {
+    idColumn: 'tender_bids.id',
+    creatorColumn: 'tender_bids.created_by_id',
+  }));
 
   const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
   const total = await get(`SELECT COUNT(1) AS total FROM tender_bids ${whereSql}`, params);
@@ -6592,7 +7539,7 @@ app.get('/api/tender/bids', requirePermission('tender:read'), asyncHandler(async
   );
 
   res.json({
-    items: rows.map((row) => sanitizeBidRow(row)),
+    items: await withBidMembers(rows),
     total: Number(total?.total || 0),
     page,
     limit,
@@ -6739,6 +7686,7 @@ app.get('/api/tender/samples', requirePermission('tender:read'), asyncHandler(as
     where.push('status = ?');
     params.push(status);
   }
+  appendScopedWhere(where, params, buildOwnerScopeWhere(req.user, 's.uploaded_by_id'));
   const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
 
   const total = await get(`SELECT COUNT(1) AS total FROM tender_bid_samples ${whereSql}`, params);
@@ -6766,6 +7714,9 @@ app.delete('/api/tender/samples/:id', requirePermission('tender:write'), asyncHa
 
   const sample = sanitizeSampleRow(await get('SELECT * FROM tender_bid_samples WHERE id = ? LIMIT 1', [id]));
   if (!sample) throw appError('样本不存在', 404);
+  if (resolveDataScope(req.user) === 'OWNED_OR_ASSIGNED' && Number(sample.uploaded_by_id || 0) !== Number(req.user.id || 0)) {
+    throw bidScopeForbiddenError('当前账号无权删除该样本');
+  }
 
   await withDeadlockRetry(
     () => transaction(async (tx) => {
@@ -6986,6 +7937,7 @@ app.get('/api/tender/bids/generate/jobs', requirePermission('tender:read'), asyn
     where.push('status = ?');
     params.push(status);
   }
+  appendScopedWhere(where, params, buildOwnerScopeWhere(req.user, 'operator_id'));
 
   const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
   const total = await get(`SELECT COUNT(1) AS total FROM tender_bid_generate_jobs ${whereSql}`, params);
@@ -7012,6 +7964,9 @@ app.delete('/api/tender/bids/generate/jobs/:id', requirePermission('tender:write
 
   const before = await get('SELECT * FROM tender_bid_generate_jobs WHERE id = ? LIMIT 1', [id]);
   if (!before) throw appError('任务不存在', 404);
+  if (resolveDataScope(req.user) === 'OWNED_OR_ASSIGNED' && Number(before.operator_id || 0) !== Number(req.user.id || 0)) {
+    throw bidScopeForbiddenError('当前账号无权删除该解析任务');
+  }
   const status = String(trimText(before.status)).toUpperCase();
   if (status === 'ANALYZING') throw appError('任务正在分析中，暂不能删除', 409);
 
@@ -7064,6 +8019,13 @@ app.get('/api/tender/bids/generate/jobs/:id', requirePermission('tender:read'), 
   if (!Number.isFinite(id) || id <= 0) throw appError('任务ID无效', 400);
   const detail = await loadGenerateJobDetail(id);
   if (!detail) throw appError('任务不存在', 404);
+  if (resolveDataScope(req.user) === 'OWNED_OR_ASSIGNED' && Number(detail.job?.operator_id || 0) !== Number(req.user.id || 0)) {
+    throw bidScopeForbiddenError('当前账号无权查看该解析任务');
+  }
+  const requirementRegistry = await loadRequirementRegistryRows(id);
+  const clauseRegistryV2 = buildClauseRegistryV2({
+    requirements: requirementRegistry,
+  });
   const sectionSummaries = parseMaybeJson(detail.job.section_summaries_json, []);
   const analysisSummary = parseMaybeJson(detail.job.analysis_summary_json, {});
   const tableSummaries = Array.isArray(analysisSummary?.table_summaries)
@@ -7102,6 +8064,9 @@ app.get('/api/tender/bids/generate/jobs/:id', requirePermission('tender:read'), 
       scoring_items: [],
       risk_items: [],
     };
+  const stageClauseRegistry = Array.isArray(stageOutputsRaw.clause_registry_v2)
+    ? stageOutputsRaw.clause_registry_v2
+    : clauseRegistryV2;
   const ruleScanSummary = isPlainObject(stageOutputsRaw.rule_scan_summary)
     ? stageOutputsRaw.rule_scan_summary
     : {
@@ -7144,6 +8109,8 @@ app.get('/api/tender/bids/generate/jobs/:id', requirePermission('tender:read'), 
     risk_items: riskItems,
     matches: detail.matches,
     final_json: finalJson,
+    requirement_registry: requirementRegistry,
+    clause_registry_v2: clauseRegistryV2,
     stage_outputs: {
       stage1_risk_clauses: stage1RiskClauses,
       stage3_missing_items: stage3MissingItems,
@@ -7153,6 +8120,7 @@ app.get('/api/tender/bids/generate/jobs/:id', requirePermission('tender:read'), 
       product_param_extract: productParamExtract,
       rule_scan_summary: ruleScanSummary,
       evidence_registry: evidenceRegistry,
+      clause_registry_v2: stageClauseRegistry,
     },
     generated_artifacts: generatedArtifacts,
   });
@@ -7577,6 +8545,17 @@ app.post('/api/tender/bids/generate/analyze', requirePermission('tender:write'),
         source_reference: item.source_reference,
       })),
     };
+    const requirementRegistry = buildRequirementRows({
+      jobId,
+      bidCategory,
+      finalJson,
+      scoringItems,
+      stage1RiskClauses,
+      tableSummaries,
+    });
+    const clauseRegistryV2 = buildClauseRegistryV2({
+      requirements: requirementRegistry,
+    });
 
     const stageOutputs = {
       stage1_risk_clauses: stage1RiskClauses,
@@ -7593,6 +8572,7 @@ app.post('/api/tender/bids/generate/analyze', requirePermission('tender:write'),
       product_param_extract: productParamMergeResult,
       rule_scan_summary: ruleCoverageSummary,
       evidence_registry: evidenceRegistry,
+      clause_registry_v2: clauseRegistryV2,
     };
 
     const summaryPayload = {
@@ -7609,6 +8589,7 @@ app.post('/api/tender/bids/generate/analyze', requirePermission('tender:write'),
       table_summaries: tableSummaries,
       final_json: finalJson,
       generated_artifacts: generatedArtifacts,
+      clause_registry_v2: clauseRegistryV2,
       candidate_samples: topCandidates.map((item) => ({
         sample_id: item.sample_id,
         sample_no: item.sample_no,
@@ -7625,6 +8606,7 @@ app.post('/api/tender/bids/generate/analyze', requirePermission('tender:write'),
          WHERE id = ?`,
         [JSON.stringify(sectionSummaries), JSON.stringify(summaryPayload), warnings.join('；') || null, jobId]
       );
+      await persistRequirementRegistry(tx, jobId, requirementRegistry);
       await tx.run('DELETE FROM tender_bid_generate_items WHERE job_id = ?', [jobId]);
       await tx.run('DELETE FROM tender_bid_generate_matches WHERE job_id = ?', [jobId]);
 
@@ -7684,6 +8666,8 @@ app.post('/api/tender/bids/generate/analyze', requirePermission('tender:write'),
       risk_items: detail.items.filter((item) => item.item_type === 'RISK'),
       matches: detail.matches,
       final_json: finalJson,
+      requirement_registry: requirementRegistry,
+      clause_registry_v2: clauseRegistryV2,
       stage_outputs: stageOutputs,
       generated_artifacts: generatedArtifacts,
       warnings,
@@ -7784,6 +8768,16 @@ app.post('/api/tender/bids/generate/jobs/:id/create', requirePermission('tender:
       scoringItems,
       bidCategory,
     });
+  let requirementRegistry = await loadRequirementRegistryRows(jobId);
+  if (!requirementRegistry.length) {
+    requirementRegistry = buildRuntimeRequirementRegistry({ detail });
+  }
+  const clauseRegistryV2 = buildClauseRegistryV2({
+    requirements: requirementRegistry,
+  });
+  const clauseRouteBuckets = buildClauseRouteBuckets({
+    clauses: clauseRegistryV2,
+  });
   const sectionList = sectionSummaries.map((item) => ({
     section_key: trimText(item.section_key),
     section_title: trimText(item.section_title),
@@ -7857,10 +8851,22 @@ app.post('/api/tender/bids/generate/jobs/:id/create', requirePermission('tender:
     aiWarnings.push(`模型起草失败，已使用规则骨架生成：${trimText(err.message).slice(0, 120)}`);
   }
 
+  const clauseRouteExecution = executeClauseRoutes({
+    clauses: clauseRegistryV2,
+    chapters,
+  });
+  chapters = Array.isArray(clauseRouteExecution?.chapters) && clauseRouteExecution.chapters.length
+    ? clauseRouteExecution.chapters
+    : chapters;
+
   const paragraphs = buildParagraphsFromChapters(chapters);
   if (!paragraphs.length) {
     paragraphs.push('投标文件（自动生成初稿）', `标书编号：${bidNo}`, `标书标题：${inferredTitle}`, '请人工完善正文。');
   }
+  const sectionLinks = buildSectionLinksFromClauseRegistry({
+    clauses: clauseRegistryV2,
+    chapters,
+  });
 
   const projectCoreInfo = isPlainObject(finalJson?.project_core_info) ? finalJson.project_core_info : {};
   const companyInfoText = joinSummaryLines(buildCompanySummaryLines(librarySnapshot?.company || {}));
@@ -7961,6 +8967,16 @@ app.post('/api/tender/bids/generate/jobs/:id/create', requirePermission('tender:
       ]
     );
     const versionId = Number(versionInfo.insertId);
+    const evidenceRegistry = buildEvidenceRows({
+      bidId,
+      librarySnapshot,
+    });
+    const draftSections = buildDraftSectionRows({
+      bidId,
+      versionId,
+      chapters,
+      sectionLinks,
+    });
 
     await tx.run(
       `UPDATE tender_bids
@@ -8005,11 +9021,29 @@ app.post('/api/tender/bids/generate/jobs/:id/create', requirePermission('tender:
         jobId,
       ]
     );
+    await persistEvidenceRegistry(tx, bidId, evidenceRegistry);
+    await persistDraftSectionRegistry(tx, bidId, versionId, draftSections);
 
     return {
       bid_id: bidId,
       version_id: versionId,
       source_asset_id: Number(sourceAssetInfo.insertId),
+      evidence_registry: evidenceRegistry,
+      draft_sections: draftSections,
+      clause_registry_v2: clauseRegistryV2,
+      clause_route_summary: Object.keys(clauseRouteBuckets).reduce((acc, key) => {
+        acc[key] = Array.isArray(clauseRouteBuckets[key]) ? clauseRouteBuckets[key].length : 0;
+        return acc;
+      }, {}),
+      clause_route_execution: {
+        response_mode_counts: isPlainObject(clauseRouteExecution?.response_mode_counts)
+          ? clauseRouteExecution.response_mode_counts
+          : {},
+        applied_changes: Number(clauseRouteExecution?.applied_changes || 0),
+        applied_items: Array.isArray(clauseRouteExecution?.applied_items)
+          ? clauseRouteExecution.applied_items
+          : [],
+      },
     };
   });
 
@@ -8040,6 +9074,8 @@ app.post('/api/tender/bids/generate/jobs/:id/create', requirePermission('tender:
       matched_sample_ids: matchedSampleIds,
       doc_template_id: Number(selectedTemplate?.id || 0) || null,
       doc_template_name: trimText(selectedTemplate?.template_name),
+      clause_route_summary: createResult.clause_route_summary,
+      clause_route_execution: createResult.clause_route_execution,
       warning_text: aiWarnings.join('；') || null,
     },
   });
@@ -8050,6 +9086,11 @@ app.post('/api/tender/bids/generate/jobs/:id/create', requirePermission('tender:
     bid,
     version,
     draft,
+    evidence_registry: createResult.evidence_registry,
+    draft_sections: createResult.draft_sections,
+    clause_registry_v2: createResult.clause_registry_v2,
+    clause_route_summary: createResult.clause_route_summary,
+    clause_route_execution: createResult.clause_route_execution,
     warnings: aiWarnings,
   });
 }));
@@ -8265,10 +9306,340 @@ app.post('/api/tender/bids/auto-generate', requirePermission('tender:write'), up
 app.get('/api/tender/bids/:id', requirePermission('tender:read'), asyncHandler(async (req, res) => {
   const id = Number(req.params.id);
   if (!Number.isFinite(id) || id <= 0) throw appError('标书ID无效', 400);
-  const bid = await ensureBidExists(id);
+  const bid = await ensureBidExists(id, { user: req.user });
+  const [bidWithMembers] = await withBidMembers([bid]);
   const currentVersion = await getCurrentVersion(bid);
   const draft = sanitizeDraftRow(await get('SELECT * FROM tender_bid_drafts WHERE bid_id = ? LIMIT 1', [id]));
-  res.json({ ...bid, currentVersion, draft });
+  res.json({ ...bidWithMembers, currentVersion, draft });
+}));
+
+app.get('/api/tender/bids/:id/members', requirePermission('tender:read'), asyncHandler(async (req, res) => {
+  const bidId = Number(req.params.id);
+  if (!Number.isFinite(bidId) || bidId <= 0) throw appError('标书ID无效', 400);
+  await ensureBidExists(bidId, { user: req.user });
+  const memberMap = await loadBidMembersMap([bidId]);
+  res.json({
+    bid_id: bidId,
+    members: memberMap.get(bidId) || [],
+  });
+}));
+
+app.put('/api/tender/bids/:id/members', requirePermission('tender:write'), asyncHandler(async (req, res) => {
+  const bidId = Number(req.params.id);
+  if (!Number.isFinite(bidId) || bidId <= 0) throw appError('标书ID无效', 400);
+  if (!Array.isArray(req.body?.members)) throw appError('members 必须为数组', 400);
+
+  const bid = await ensureBidExists(bidId, { user: req.user });
+  const beforeMembers = (await loadBidMembersMap([bidId])).get(bidId) || [];
+
+  await transaction(async (tx) => {
+    const row = await tx.get('SELECT * FROM tender_bids WHERE id = ? LIMIT 1', [bidId]);
+    if (!row) throw appError('标书不存在', 404);
+    await ensureBidMembers({ bid: row, members: req.body.members, req, tx });
+  });
+
+  const members = (await loadBidMembersMap([bidId])).get(bidId) || [];
+  await logOperation({
+    req,
+    action: 'BID_MEMBER_ASSIGN',
+    entity: 'bid',
+    entityId: bidId,
+    message: `更新标书成员分派 ${bid.bid_no}`,
+    beforeData: { members: beforeMembers },
+    afterData: { members },
+  });
+
+  res.json({
+    bid_id: bidId,
+    members,
+  });
+}));
+
+app.post('/api/tender/bids/:id/check', requirePermission('tender:write'), asyncHandler(async (req, res) => {
+  const bidId = Number(req.params.id);
+  if (!Number.isFinite(bidId) || bidId <= 0) throw appError('标书ID无效', 400);
+
+  const bid = await ensureBidExists(bidId, { user: req.user });
+  const currentVersion = await getCurrentVersion(bid);
+  const draft = sanitizeDraftRow(await get('SELECT * FROM tender_bid_drafts WHERE bid_id = ? LIMIT 1', [bidId]));
+  if (!currentVersion && !draft) throw appError('标书尚无可校验稿件', 409);
+
+  const latestJob = await loadLatestGenerateJobForBid(bidId);
+  const latestDetail = latestJob ? await loadGenerateJobDetail(latestJob.id) : null;
+  let requirementRegistry = latestJob ? await loadRequirementRegistryRows(latestJob.id) : [];
+  if (!requirementRegistry.length && latestDetail) {
+    requirementRegistry = buildRuntimeRequirementRegistry({ detail: latestDetail });
+  }
+  const clauseRegistryV2 = buildClauseRegistryV2({
+    requirements: requirementRegistry,
+  });
+  const evidenceRegistry = await loadEvidenceRegistryRows(bidId);
+  let draftSections = currentVersion
+    ? await loadDraftSectionRegistryRows({ bidId, versionId: Number(currentVersion.id) })
+    : [];
+
+  const draftFilePath = trimText(draft?.draft_file_path) || trimText(currentVersion?.storage_path);
+  const paragraphs = await extractParagraphsFromDocx(draftFilePath);
+  if (!draftSections.length && paragraphs.length) {
+    draftSections = paragraphs.map((paragraph, index) => ({
+      section_title: '文档正文',
+      paragraph_no: index + 1,
+      paragraph_text: paragraph,
+      requirement_ids_json: '[]',
+      evidence_ids_json: '[]',
+      score_item_ids_json: '[]',
+    }));
+  }
+
+  const analyzeSummary = parseMaybeJson(latestDetail?.job?.analysis_summary_json, {});
+  const analyzeBidCategory = normalizeBidCategory(latestDetail?.job?.bid_category) || 'SERVICE';
+  const analyzeFinalJson = normalizeFinalAnalyzeJson(analyzeSummary?.final_json || {}, analyzeBidCategory);
+  const projectCoreInfo = isPlainObject(analyzeFinalJson?.project_core_info) ? analyzeFinalJson.project_core_info : {};
+  const checkContext = {
+    expected_project_name: firstNonEmpty(projectCoreInfo.project_full_name, projectCoreInfo.project_name, bid.project_name),
+    expected_project_no: firstNonEmpty(projectCoreInfo.project_code, projectCoreInfo.package_no),
+    expected_duration: firstNonEmpty(
+      projectCoreInfo.project_duration,
+      projectCoreInfo.service_duration,
+      projectCoreInfo.delivery_period
+    ),
+    expected_contact: firstNonEmpty(projectCoreInfo.contact_person, projectCoreInfo.contact_name),
+    as_of_date: new Date().toISOString().slice(0, 10),
+  };
+
+  const structuredResult = runStructuredChecks({
+    requirements: requirementRegistry,
+    sections: draftSections,
+    evidences: evidenceRegistry,
+    paragraphs,
+    context: checkContext,
+  });
+  const docxResult = runDocxChecks({ paragraphs });
+  const checkResult = mergeCheckResults(structuredResult, docxResult);
+
+  const checkRunId = await transaction(async (tx) => {
+    const inserted = await tx.run(
+      `INSERT INTO tender_draft_check_runs
+        (bid_id, version_id, draft_id, status, summary_json, created_by_id, created_by_name)
+       VALUES (?, ?, ?, 'COMPLETED', ?, ?, ?)`,
+      [
+        Number(bidId),
+        Number(currentVersion?.id || 0) || null,
+        Number(draft?.id || 0) || null,
+        JSON.stringify(checkResult.summary),
+        Number(req.user.id || 0) || null,
+        trimText(req.user.username) || null,
+      ]
+    );
+    const runId = Number(inserted.insertId);
+    for (let i = 0; i < checkResult.issues.length; i += 1) {
+      const issue = checkResult.issues[i];
+      await tx.run(
+        `INSERT INTO tender_draft_check_issues
+          (check_run_id, bid_id, issue_type, severity, title, message, requirement_code, requirement_title, section_title, paragraph_text, sort_order)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          runId,
+          Number(bidId),
+          trimText(issue.type),
+          trimText(issue.severity) || 'WARN',
+          trimText(issue.title) || null,
+          trimText(issue.message) || null,
+          trimText(issue.requirement_code) || null,
+          trimText(issue.requirement_title) || null,
+          trimText(issue.section_title) || null,
+          trimText(issue.paragraph_text) || null,
+          i + 1,
+        ]
+      );
+    }
+    return runId;
+  });
+
+  await logOperation({
+    req,
+    action: 'BID_DRAFT_CHECK',
+    entity: 'bid',
+    entityId: bidId,
+    message: `执行成稿校验 ${bid.bid_no}`,
+    afterData: {
+      check_run_id: checkRunId,
+      issue_count: Number(checkResult.summary.issue_count || 0),
+      fatal_count: Number(checkResult.summary.fatal_count || 0),
+      warn_count: Number(checkResult.summary.warn_count || 0),
+      source_job_id: Number(latestJob?.id || 0) || null,
+    },
+  });
+
+  res.json({
+    ok: true,
+    run_id: checkRunId,
+    bid,
+    version: currentVersion,
+    draft,
+    source_job_id: Number(latestJob?.id || 0) || null,
+    requirement_registry: requirementRegistry,
+    clause_registry_v2: clauseRegistryV2,
+    evidence_registry: evidenceRegistry,
+    draft_sections: draftSections,
+    summary: checkResult.summary,
+    issues: checkResult.issues,
+  });
+}));
+
+app.post('/api/tender/bids/:id/score-optimize', requirePermission('tender:write'), asyncHandler(async (req, res) => {
+  const bidId = Number(req.params.id);
+  if (!Number.isFinite(bidId) || bidId <= 0) throw appError('标书ID无效', 400);
+
+  const bid = await ensureBidExists(bidId, { user: req.user });
+  const currentVersion = await getCurrentVersion(bid);
+  const draft = sanitizeDraftRow(await get('SELECT * FROM tender_bid_drafts WHERE bid_id = ? LIMIT 1', [bidId]));
+  const latestJob = await loadLatestGenerateJobForBid(bidId);
+  let requirementRegistry = latestJob ? await loadRequirementRegistryRows(latestJob.id) : [];
+  if (!requirementRegistry.length && latestJob) {
+    const detail = await loadGenerateJobDetail(latestJob.id);
+    requirementRegistry = buildRuntimeRequirementRegistry({ detail });
+  }
+  const clauseRegistryV2 = buildClauseRegistryV2({
+    requirements: requirementRegistry,
+  });
+  const evidenceRegistry = await loadEvidenceRegistryRows(bidId);
+  let draftSections = currentVersion
+    ? await loadDraftSectionRegistryRows({ bidId, versionId: Number(currentVersion.id) })
+    : [];
+  if (!draftSections.length) {
+    const draftFilePath = trimText(draft?.draft_file_path) || trimText(currentVersion?.storage_path);
+    const paragraphs = await extractParagraphsFromDocx(draftFilePath);
+    if (paragraphs.length) {
+      draftSections = paragraphs.map((paragraph, index) => ({
+        section_title: '文档正文',
+        paragraph_no: index + 1,
+        paragraph_text: paragraph,
+        requirement_ids_json: '[]',
+        evidence_ids_json: '[]',
+        score_item_ids_json: '[]',
+      }));
+    }
+  }
+
+  const matrix = buildScoreCoverageMatrix({
+    requirements: requirementRegistry,
+    sections: draftSections,
+    evidences: evidenceRegistry,
+  });
+  const candidates = pickOptimizationCandidates(matrix);
+  const promptPreview = buildScoreOptimizationPrompt({ candidates });
+  const baselineSuggestionItems = candidates.map((item) => ({
+    score_item_id: item.score_item_id,
+    suggestion_title: `补强${trimText(item.title) || trimText(item.score_item_id)}`,
+    suggestion_text: item.coverage_status === 'NONE'
+      ? `当前评分项“${trimText(item.title) || trimText(item.score_item_id)}”尚未形成章节覆盖，建议新增专章回应评分标准，并绑定对应案例、资质或人员材料。`
+      : `当前评分项“${trimText(item.title) || trimText(item.score_item_id)}”已有文字覆盖，但证据偏弱，建议补充更直接的案例、人员、资质或承诺材料形成闭环。`,
+    evidence_ids: parseMaybeJson(item.bound_evidence_ids_json, []),
+    source: 'RULE',
+  }));
+  const normalizedBaseline = normalizeOptimizationResponse({
+    items: baselineSuggestionItems,
+  });
+
+  const warnings = [];
+  let aiSuggestionItems = [];
+  const aiModelId = Number(req.body?.model_id || 0);
+  if (normalizedBaseline.items.length > 0) {
+    try {
+      const aiTask = await runAiTask({
+        req,
+        taskType: 'REWRITE',
+        modelId: Number.isFinite(aiModelId) && aiModelId > 0 ? aiModelId : null,
+        inputText: JSON.stringify({
+          task: 'score_optimize_rewrite',
+          instruction: '请将以下评分优化候选项改写为更具体可执行的高分应答建议，仅输出JSON对象：{"items":[{"score_item_id":"","suggestion_title":"","suggestion_text":"","evidence_ids":[]}]}。',
+          candidates: normalizedBaseline.items,
+        }),
+      });
+      const aiNormalized = normalizeOptimizationResponse(aiTask?.parsed || {});
+      if (aiNormalized.items.length > 0) {
+        aiSuggestionItems = aiNormalized.items.map((item) => ({
+          ...item,
+          source: 'AI',
+        }));
+      }
+    } catch (err) {
+      warnings.push(`评分优化模型改写失败，已回退规则建议：${trimText(err.message).slice(0, 120)}`);
+    }
+  }
+
+  const suggestionMap = new Map();
+  for (const item of normalizedBaseline.items) {
+    suggestionMap.set(trimText(item.score_item_id), { ...item, source: 'RULE' });
+  }
+  for (const item of aiSuggestionItems) {
+    const key = trimText(item.score_item_id);
+    if (!key) continue;
+    suggestionMap.set(key, item);
+  }
+  const normalized = normalizeOptimizationResponse({
+    items: Array.from(suggestionMap.values()),
+  });
+  const applyResult = applyOptimizationToSections({
+    sections: draftSections,
+    items: normalized.items,
+  });
+  const appliedRows = applyResult.applied_records.map((item) => {
+    const source = trimText(suggestionMap.get(trimText(item.score_item_id))?.source) || 'RULE';
+    return {
+      ...item,
+      source,
+      applied_flag: 1,
+      status: 'APPLIED',
+    };
+  });
+
+  await transaction(async (tx) => {
+    await persistScoreCoverageMatrix(tx, {
+      bidId,
+      versionId: Number(currentVersion?.id || 0) || null,
+      rows: matrix,
+    });
+    if (currentVersion?.id) {
+      await persistDraftSectionRegistry(tx, bidId, Number(currentVersion.id), applyResult.sections);
+    }
+    await persistScoreOptimizationRecords(tx, {
+      bidId,
+      versionId: Number(currentVersion?.id || 0) || null,
+      rows: appliedRows,
+      user: req.user,
+    });
+  });
+
+  await logOperation({
+    req,
+    action: 'BID_SCORE_OPTIMIZE',
+    entity: 'bid',
+    entityId: bidId,
+    message: `执行评分优化 ${bid.bid_no}`,
+    afterData: {
+      source_job_id: Number(latestJob?.id || 0) || null,
+      candidate_count: normalized.items.length,
+      applied_count: applyResult.applied_count,
+    },
+  });
+
+  res.json({
+    ok: true,
+    bid,
+    version: currentVersion,
+    draft,
+    source_job_id: Number(latestJob?.id || 0) || null,
+    clause_registry_v2: clauseRegistryV2,
+    matrix,
+    items: appliedRows,
+    applied_count: applyResult.applied_count,
+    applied_records: appliedRows,
+    draft_sections: applyResult.sections,
+    prompt_preview: promptPreview,
+    warnings,
+  });
 }));
 
 app.post('/api/tender/bids', requirePermission('tender:write'), asyncHandler(async (req, res) => {
@@ -8276,20 +9647,46 @@ app.post('/api/tender/bids', requirePermission('tender:write'), asyncHandler(asy
   const customer_name = fixMojibakeText(trimText(req.body?.customer_name));
   const project_name = fixMojibakeText(trimText(req.body?.project_name));
   const summary = fixMojibakeText(trimText(req.body?.summary));
+  const status = normalizeStatus(req.body?.status || 'DRAFT');
+  const sourceKbProjectIdNum = Number(req.body?.source_kb_project_id);
+  const sourceKbProjectId = Number.isFinite(sourceKbProjectIdNum) && sourceKbProjectIdNum > 0
+    ? Math.floor(sourceKbProjectIdNum)
+    : null;
+  const reviewStage = inferReviewStageByBidStatus(status);
+  const reviewStatus = status.endsWith('_REVIEW_PENDING') ? 'submitted' : 'draft';
 
   if (!title) throw appError('标书标题不能为空', 400);
   if (!customer_name) throw appError('客户名称不能为空', 400);
   if (!project_name) throw appError('项目名称不能为空', 400);
 
   const bidNo = await nextBidNo();
-  const info = await run(
-    `INSERT INTO tender_bids
-      (bid_no, title, customer_name, project_name, status, summary, created_by_id, created_by_name, updated_by_id, updated_by_name)
-     VALUES (?, ?, ?, ?, 'DRAFT', ?, ?, ?, ?, ?)`,
-    [bidNo, title, customer_name, project_name, summary || null, Number(req.user.id), req.user.username, Number(req.user.id), req.user.username]
-  );
+  const bidId = await transaction(async (tx) => {
+    const info = await tx.run(
+      `INSERT INTO tender_bids
+        (bid_no, title, customer_name, project_name, source_kb_project_id, status, review_status, review_stage, summary, created_by_id, created_by_name, updated_by_id, updated_by_name)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        bidNo,
+        title,
+        customer_name,
+        project_name,
+        sourceKbProjectId,
+        status,
+        reviewStatus,
+        reviewStage,
+        summary || null,
+        Number(req.user.id),
+        req.user.username,
+        Number(req.user.id),
+        req.user.username,
+      ]
+    );
+    const row = await tx.get('SELECT * FROM tender_bids WHERE id = ? LIMIT 1', [info.insertId]);
+    await ensureBidMembers({ bid: row, members: [], req, tx });
+    return Number(info.insertId);
+  });
 
-  const row = sanitizeBidRow(await get('SELECT * FROM tender_bids WHERE id = ? LIMIT 1', [info.insertId]));
+  const [row] = await withBidMembers([await get('SELECT * FROM tender_bids WHERE id = ? LIMIT 1', [bidId])]);
 
   await logOperation({
     req,
@@ -8307,21 +9704,28 @@ app.put('/api/tender/bids/:id', requirePermission('tender:write'), asyncHandler(
   const id = Number(req.params.id);
   if (!Number.isFinite(id) || id <= 0) throw appError('标书ID无效', 400);
 
-  const before = await ensureBidExists(id);
+  const before = await ensureBidExists(id, { user: req.user });
   const title = fixMojibakeText(trimText(req.body?.title)) || before.title;
   const customer_name = fixMojibakeText(trimText(req.body?.customer_name)) || before.customer_name;
   const project_name = fixMojibakeText(trimText(req.body?.project_name)) || before.project_name;
   const summary = req.body?.summary === undefined ? before.summary : fixMojibakeText(trimText(req.body?.summary));
+  const sourceKbProjectIdRaw = req.body?.source_kb_project_id;
+  const sourceKbProjectId = sourceKbProjectIdRaw === undefined
+    ? (Number.isFinite(Number(before.source_kb_project_id)) ? Number(before.source_kb_project_id) : null)
+    : (() => {
+      const num = Number(sourceKbProjectIdRaw);
+      return Number.isFinite(num) && num > 0 ? Math.floor(num) : null;
+    })();
 
   await run(
     `UPDATE tender_bids
-     SET title = ?, customer_name = ?, project_name = ?, summary = ?,
+     SET title = ?, customer_name = ?, project_name = ?, source_kb_project_id = ?, summary = ?,
          updated_by_id = ?, updated_by_name = ?, updated_at = NOW()
      WHERE id = ?`,
-    [title, customer_name, project_name, summary || null, Number(req.user.id), req.user.username, id]
+    [title, customer_name, project_name, sourceKbProjectId, summary || null, Number(req.user.id), req.user.username, id]
   );
 
-  const row = await ensureBidExists(id);
+  const row = await ensureBidExists(id, { user: req.user });
   await logOperation({
     req,
     action: 'BID_UPDATE',
@@ -8339,7 +9743,7 @@ app.delete('/api/tender/bids/:id', requirePermission('tender:write'), asyncHandl
   const id = Number(req.params.id);
   if (!Number.isFinite(id) || id <= 0) throw appError('标书ID无效', 400);
 
-  const before = await ensureBidExists(id);
+  const before = await ensureBidExists(id, { user: req.user });
   const versionRows = await query(
     `SELECT id, storage_path, file_name
      FROM tender_bid_versions
@@ -8349,6 +9753,12 @@ app.delete('/api/tender/bids/:id', requirePermission('tender:write'), asyncHandl
   const draftRows = await query(
     `SELECT id, draft_file_path, draft_file_name
      FROM tender_bid_drafts
+     WHERE bid_id = ?`,
+    [id]
+  );
+  const autosaveRows = await query(
+    `SELECT id, storage_path
+     FROM tender_bid_draft_autosaves
      WHERE bid_id = ?`,
     [id]
   );
@@ -8370,6 +9780,8 @@ app.delete('/api/tender/bids/:id', requirePermission('tender:write'), asyncHandl
       }
       await tx.run('DELETE FROM tender_editor_sessions WHERE bid_id = ?', [id]);
       await tx.run('DELETE FROM tender_bid_field_values WHERE bid_id = ?', [id]);
+      await tx.run('DELETE FROM tender_bid_reviews WHERE bid_id = ?', [id]);
+      await tx.run('DELETE FROM tender_bid_draft_autosaves WHERE bid_id = ?', [id]);
       await tx.run('UPDATE tender_bid_generate_jobs SET created_bid_id = NULL WHERE created_bid_id = ?', [id]);
       await tx.run('DELETE FROM tender_bid_versions WHERE bid_id = ?', [id]);
       await tx.run('DELETE FROM tender_bid_drafts WHERE bid_id = ?', [id]);
@@ -8382,6 +9794,7 @@ app.delete('/api/tender/bids/:id', requirePermission('tender:write'), asyncHandl
   const filePathSet = new Set([
     ...versionRows.map((item) => trimText(item.storage_path)),
     ...draftRows.map((item) => trimText(item.draft_file_path)),
+    ...autosaveRows.map((item) => trimText(item.storage_path)),
     ...assetRows.map((item) => trimText(item.storage_path)),
   ].filter(Boolean));
   for (const filePath of filePathSet) {
@@ -8400,6 +9813,7 @@ app.delete('/api/tender/bids/:id', requirePermission('tender:write'), asyncHandl
       status: before.status,
       version_count: versionRows.length,
       draft_count: draftRows.length,
+      autosave_count: autosaveRows.length,
       asset_count: assetRows.length,
     },
     afterData: { deleted: true },
@@ -8411,6 +9825,7 @@ app.delete('/api/tender/bids/:id', requirePermission('tender:write'), asyncHandl
     deleted: {
       version_count: versionRows.length,
       draft_count: draftRows.length,
+      autosave_count: autosaveRows.length,
       asset_count: assetRows.length,
     },
   });
@@ -8421,7 +9836,7 @@ app.post('/api/tender/bids/:id/status', requirePermission('tender:write'), async
   const nextStatus = normalizeStatus(req.body?.status);
   if (!Number.isFinite(id) || id <= 0) throw appError('标书ID无效', 400);
 
-  const before = await ensureBidExists(id);
+  const before = await ensureBidExists(id, { user: req.user });
   const fromStatus = normalizeStatus(before.status);
 
   if (fromStatus !== nextStatus) {
@@ -8431,15 +9846,24 @@ app.post('/api/tender/bids/:id/status', requirePermission('tender:write'), async
     }
   }
 
-  const submittedFields = nextStatus === 'SUBMITTED'
+  if (new Set(['ARCHIVED', 'EXPORTED', 'SUBMITTED']).has(nextStatus) && !normalizeBoolean(req.body?.confirm, false)) {
+    throw appError('该状态变更需要确认，请传 confirm=true', 400);
+  }
+
+  const reviewStage = inferReviewStageByBidStatus(nextStatus);
+  const reviewStatus = nextStatus.endsWith('_REVIEW_PENDING')
+    ? 'submitted'
+    : (['EXPORT_READY', 'EXPORTED', 'SUBMITTED'].includes(nextStatus) ? 'approved' : 'draft');
+
+  const submittedFields = ['SUBMITTED', 'EXPORTED'].includes(nextStatus)
     ? ', submitted_at = NOW(), submitted_by_id = ?, submitted_by_name = ?'
     : '';
   const archivedFields = nextStatus === 'ARCHIVED'
     ? ', archived_at = NOW(), archived_by_id = ?, archived_by_name = ?'
     : '';
 
-  const params = [nextStatus, Number(req.user.id), req.user.username];
-  if (nextStatus === 'SUBMITTED') {
+  const params = [nextStatus, reviewStatus, reviewStage, Number(req.user.id), req.user.username];
+  if (['SUBMITTED', 'EXPORTED'].includes(nextStatus)) {
     params.push(Number(req.user.id), req.user.username);
   }
   if (nextStatus === 'ARCHIVED') {
@@ -8449,14 +9873,14 @@ app.post('/api/tender/bids/:id/status', requirePermission('tender:write'), async
 
   await run(
     `UPDATE tender_bids
-     SET status = ?, updated_by_id = ?, updated_by_name = ?, updated_at = NOW()
+     SET status = ?, review_status = ?, review_stage = ?, updated_by_id = ?, updated_by_name = ?, updated_at = NOW()
      ${submittedFields}
      ${archivedFields}
      WHERE id = ?`,
     params
   );
 
-  const after = await ensureBidExists(id);
+  const after = await ensureBidExists(id, { user: req.user });
   await logOperation({
     req,
     action: 'BID_STATUS',
@@ -8470,10 +9894,400 @@ app.post('/api/tender/bids/:id/status', requirePermission('tender:write'), async
   res.json(sanitizeBidRow(after));
 }));
 
+app.get('/api/tender/bids/:id/reviews', requirePermission('tender:read'), asyncHandler(async (req, res) => {
+  const bidId = Number(req.params.id);
+  if (!Number.isFinite(bidId) || bidId <= 0) throw appError('标书ID无效', 400);
+  await ensureBidExists(bidId, { user: req.user });
+
+  const limit = Math.min(100, toBoundedLimit(req.query.limit, 30));
+  const rows = await query(
+    `SELECT *
+     FROM tender_bid_reviews
+     WHERE bid_id = ?
+     ORDER BY id DESC
+     LIMIT ?`,
+    [bidId, limit]
+  );
+  res.json(rows.map((row) => ({
+    ...row,
+    submitted_by_name: fixMojibakeText(row.submitted_by_name),
+    reviewer_name: fixMojibakeText(row.reviewer_name),
+    review_comment: fixMojibakeText(row.review_comment),
+  })));
+}));
+
+app.post('/api/tender/bids/:id/reviews/submit', requirePermission('tender:write'), asyncHandler(async (req, res) => {
+  const bidId = Number(req.params.id);
+  if (!Number.isFinite(bidId) || bidId <= 0) throw appError('标书ID无效', 400);
+  const bid = await ensureBidExists(bidId, { user: req.user });
+
+  const reviewStage = normalizeReviewStage(req.body?.review_stage || inferReviewStageByBidStatus(bid.status));
+  const pendingStatus = reviewStageToPendingStatus[reviewStage] || 'COMPILE_REVIEW_PENDING';
+  const fromStatus = normalizeStatus(bid.status);
+
+  if (fromStatus !== pendingStatus) {
+    const allowed = statusTransitions[fromStatus] || new Set();
+    if (!allowed.has(pendingStatus)) {
+      throw appError(`当前状态不支持提交到 ${reviewStage} 审核`, 400);
+    }
+  }
+
+  const reviewerIdNum = Number(req.body?.reviewer_id);
+  const reviewerId = Number.isFinite(reviewerIdNum) && reviewerIdNum > 0 ? Math.floor(reviewerIdNum) : null;
+  const reviewerName = fixMojibakeText(trimText(req.body?.reviewer_name));
+  const reviewComment = fixMojibakeText(trimText(req.body?.review_comment));
+
+  const created = await transaction(async (tx) => {
+    const roundRow = await tx.get(
+      'SELECT COALESCE(MAX(review_round), 0) AS max_round FROM tender_bid_reviews WHERE bid_id = ?',
+      [bidId]
+    );
+    const nextRound = Number(roundRow?.max_round || 0) + 1;
+
+    const reviewInsert = await tx.run(
+      `INSERT INTO tender_bid_reviews
+        (bid_id, review_round, review_stage, review_status, submitted_by_id, submitted_by_name, reviewer_id, reviewer_name, review_comment, submitted_at)
+       VALUES (?, ?, ?, 'submitted', ?, ?, ?, ?, ?, NOW())`,
+      [
+        bidId,
+        nextRound,
+        reviewStage,
+        Number(req.user.id),
+        req.user.username,
+        reviewerId,
+        reviewerName || null,
+        reviewComment || null,
+      ]
+    );
+
+    await tx.run(
+      `UPDATE tender_bids
+       SET status = ?, review_status = 'submitted', review_stage = ?, updated_by_id = ?, updated_by_name = ?, updated_at = NOW()
+       WHERE id = ?`,
+      [pendingStatus, reviewStage, Number(req.user.id), req.user.username, bidId]
+    );
+
+    const review = await tx.get('SELECT * FROM tender_bid_reviews WHERE id = ? LIMIT 1', [reviewInsert.insertId]);
+    const afterBid = await tx.get('SELECT * FROM tender_bids WHERE id = ? LIMIT 1', [bidId]);
+    return { review, bid: sanitizeBidRow(afterBid) };
+  });
+
+  await logOperation({
+    req,
+    action: 'BID_REVIEW_SUBMIT',
+    entity: 'bid',
+    entityId: bidId,
+    message: `提交${reviewStage}审核`,
+    afterData: {
+      review_stage: reviewStage,
+      review_id: Number(created.review?.id || 0) || null,
+      pending_status: pendingStatus,
+      reviewer_id: reviewerId,
+      reviewer_name: reviewerName || null,
+    },
+  });
+
+  res.status(201).json({
+    review: {
+      ...created.review,
+      submitted_by_name: fixMojibakeText(created.review?.submitted_by_name),
+      reviewer_name: fixMojibakeText(created.review?.reviewer_name),
+      review_comment: fixMojibakeText(created.review?.review_comment),
+    },
+    bid: created.bid,
+  });
+}));
+
+app.post('/api/tender/bids/:id/reviews/:reviewId/action', requirePermission('tender:write'), asyncHandler(async (req, res) => {
+  const bidId = Number(req.params.id);
+  const reviewId = Number(req.params.reviewId);
+  if (!Number.isFinite(bidId) || bidId <= 0) throw appError('标书ID无效', 400);
+  if (!Number.isFinite(reviewId) || reviewId <= 0) throw appError('审核记录ID无效', 400);
+
+  const action = normalizeReviewStatus(req.body?.action || req.body?.review_status);
+  if (!['approved', 'returned', 'rejected', 'conditional'].includes(action)) {
+    throw appError('审核动作无效', 400);
+  }
+
+  const reviewComment = fixMojibakeText(trimText(req.body?.review_comment));
+  const reviewerIdNum = Number(req.body?.reviewer_id);
+  const reviewerId = Number.isFinite(reviewerIdNum) && reviewerIdNum > 0 ? Math.floor(reviewerIdNum) : Number(req.user.id);
+  const reviewerName = fixMojibakeText(trimText(req.body?.reviewer_name)) || req.user.username;
+
+  const result = await transaction(async (tx) => {
+    const review = await tx.get(
+      'SELECT * FROM tender_bid_reviews WHERE id = ? AND bid_id = ? LIMIT 1',
+      [reviewId, bidId]
+    );
+    if (!review) throw appError('审核记录不存在', 404);
+    if (normalizeReviewStatus(review.review_status) !== 'submitted') {
+      throw appError('该审核记录已处理，不能重复操作', 409);
+    }
+
+    const bid = await tx.get('SELECT * FROM tender_bids WHERE id = ? LIMIT 1', [bidId]);
+    if (!bid) throw appError('标书不存在', 404);
+
+    const reviewStage = normalizeReviewStage(review.review_stage);
+    let targetStatus;
+    if (action === 'approved') {
+      targetStatus = reviewStageToNextStatusOnApproved[reviewStage] || 'EXPORT_READY';
+    } else if (action === 'conditional') {
+      targetStatus = reviewStageToPendingStatus[reviewStage] || 'COMPILE_REVIEW_PENDING';
+    } else if (action === 'returned') {
+      if (reviewStage === 'FINAL') targetStatus = 'BUSINESS_REVIEW_PENDING';
+      else if (reviewStage === 'BUSINESS') targetStatus = 'TECH_REVIEW_PENDING';
+      else if (reviewStage === 'TECH') targetStatus = 'COMPILE_REVIEW_PENDING';
+      else targetStatus = 'READY_TO_GENERATE';
+    } else {
+      targetStatus = 'DRAFT';
+    }
+
+    const fromStatus = normalizeStatus(bid.status);
+    if (fromStatus !== targetStatus) {
+      const allowed = statusTransitions[fromStatus] || new Set();
+      if (!allowed.has(targetStatus)) {
+        throw appError(`状态不允许从 ${fromStatus} 变更为 ${targetStatus}`, 400);
+      }
+    }
+
+    const nextReviewStatus = targetStatus.endsWith('_REVIEW_PENDING')
+      ? 'submitted'
+      : (['EXPORT_READY', 'EXPORTED', 'SUBMITTED'].includes(targetStatus) ? 'approved' : action);
+    const nextReviewStage = inferReviewStageByBidStatus(targetStatus);
+
+    await tx.run(
+      `UPDATE tender_bid_reviews
+       SET review_status = ?, reviewer_id = ?, reviewer_name = ?, review_comment = ?, handled_at = NOW(), updated_at = NOW()
+       WHERE id = ?`,
+      [action, reviewerId, reviewerName, reviewComment || null, reviewId]
+    );
+
+    await tx.run(
+      `UPDATE tender_bids
+       SET status = ?, review_status = ?, review_stage = ?, updated_by_id = ?, updated_by_name = ?, updated_at = NOW()
+       WHERE id = ?`,
+      [targetStatus, nextReviewStatus, nextReviewStage, Number(req.user.id), req.user.username, bidId]
+    );
+
+    const afterReview = await tx.get('SELECT * FROM tender_bid_reviews WHERE id = ? LIMIT 1', [reviewId]);
+    const afterBid = await tx.get('SELECT * FROM tender_bids WHERE id = ? LIMIT 1', [bidId]);
+    return {
+      review: afterReview,
+      bid: sanitizeBidRow(afterBid),
+      targetStatus,
+      action,
+    };
+  });
+
+  await logOperation({
+    req,
+    action: 'BID_REVIEW_ACTION',
+    entity: 'bid',
+    entityId: bidId,
+    message: `审核动作：${action}`,
+    afterData: {
+      review_id: reviewId,
+      action,
+      target_status: result.targetStatus,
+    },
+  });
+
+  res.json({
+    review: {
+      ...result.review,
+      submitted_by_name: fixMojibakeText(result.review?.submitted_by_name),
+      reviewer_name: fixMojibakeText(result.review?.reviewer_name),
+      review_comment: fixMojibakeText(result.review?.review_comment),
+    },
+    bid: result.bid,
+  });
+}));
+
+app.get('/api/tender/bids/:id/draft/autosaves', requirePermission('tender:read'), asyncHandler(async (req, res) => {
+  const bidId = Number(req.params.id);
+  if (!Number.isFinite(bidId) || bidId <= 0) throw appError('标书ID无效', 400);
+  await ensureBidExists(bidId, { user: req.user });
+
+  const limit = Math.min(100, toBoundedLimit(req.query.limit, 20));
+  const rows = await query(
+    `SELECT *
+     FROM tender_bid_draft_autosaves
+     WHERE bid_id = ?
+     ORDER BY id DESC
+     LIMIT ?`,
+    [bidId, limit]
+  );
+  res.json(rows.map((row) => sanitizeDraftAutosaveRow(row)));
+}));
+
+app.post('/api/tender/bids/:id/draft/autosave', requirePermission('tender:write'), asyncHandler(async (req, res) => {
+  const bidId = Number(req.params.id);
+  if (!Number.isFinite(bidId) || bidId <= 0) throw appError('标书ID无效', 400);
+  const bid = await ensureBidExists(bidId, { user: req.user });
+  const draft = await ensureDraftForBid({ bid, user: req.user });
+
+  const sourceRaw = trimText(req.body?.source).toUpperCase();
+  const source = ['AUTO', 'MANUAL', 'EDITOR', 'ONLYOFFICE', 'SYSTEM'].includes(sourceRaw) ? sourceRaw : 'MANUAL';
+  const note = fixMojibakeText(trimText(req.body?.note)).slice(0, 255);
+  const providedHash = trimText(req.body?.content_hash).toLowerCase();
+  const contentText = trimText(req.body?.content_text);
+
+  const draftStat = await readFileStatSafe(draft.draft_file_path);
+  if (!draftStat?.isFile()) throw appError('草稿文件不存在', 404);
+
+  const copiedPath = await copyToManagedPath(draft.draft_file_path, DRAFT_ROOT, '.docx');
+  const copiedStat = await readFileStatSafe(copiedPath);
+  const contentHash = providedHash
+    || (contentText ? sha256Hex(contentText) : sha256Hex(`${copiedPath}:${Number(copiedStat?.size || 0)}:${String(copiedStat?.mtimeMs || '')}`));
+
+  const info = await run(
+    `INSERT INTO tender_bid_draft_autosaves
+      (bid_id, draft_id, version_id, storage_path, file_name, file_size, source, content_hash, note, saved_by_id, saved_by_name, saved_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
+    [
+      bidId,
+      Number(draft.id),
+      Number(bid.current_version_id || 0) || null,
+      copiedPath,
+      path.basename(copiedPath),
+      Number(copiedStat?.size || 0),
+      source,
+      contentHash || null,
+      note || null,
+      Number(req.user.id),
+      req.user.username,
+    ]
+  );
+
+  await run(
+    `UPDATE tender_bid_drafts
+     SET last_saved_at = NOW(), updated_by_id = ?, updated_by_name = ?, updated_at = NOW()
+     WHERE id = ?`,
+    [Number(req.user.id), req.user.username, Number(draft.id)]
+  );
+
+  const row = await get('SELECT * FROM tender_bid_draft_autosaves WHERE id = ? LIMIT 1', [info.insertId]);
+
+  await logOperation({
+    req,
+    action: 'DRAFT_AUTOSAVE',
+    entity: 'bid',
+    entityId: bidId,
+    message: '草稿自动保存',
+    afterData: {
+      autosave_id: Number(info.insertId),
+      source,
+      file_size: Number(copiedStat?.size || 0),
+      content_hash: contentHash || null,
+    },
+  });
+
+  res.status(201).json(sanitizeDraftAutosaveRow(row));
+}));
+
+app.post('/api/tender/bids/:id/draft/rollback', requirePermission('tender:write'), asyncHandler(async (req, res) => {
+  const bidId = Number(req.params.id);
+  const autosaveId = Number(req.body?.autosave_id);
+  if (!Number.isFinite(bidId) || bidId <= 0) throw appError('标书ID无效', 400);
+  if (!Number.isFinite(autosaveId) || autosaveId <= 0) throw appError('autosave_id无效', 400);
+
+  const bid = await ensureBidExists(bidId, { user: req.user });
+  const draft = await ensureDraftForBid({ bid, user: req.user });
+  const autosave = await get(
+    'SELECT * FROM tender_bid_draft_autosaves WHERE id = ? AND bid_id = ? LIMIT 1',
+    [autosaveId, bidId]
+  );
+  if (!autosave) throw appError('自动保存记录不存在', 404);
+
+  const autosavePath = trimText(autosave.storage_path);
+  const autosaveStat = await readFileStatSafe(autosavePath);
+  if (!autosaveStat?.isFile()) throw appError('自动保存文件不存在', 404);
+
+  const restoredDraftPath = await copyToManagedPath(autosavePath, DRAFT_ROOT, '.docx');
+  const restoredDraftStat = await readFileStatSafe(restoredDraftPath);
+
+  const createSnapshot = req.body?.create_snapshot === undefined
+    ? true
+    : normalizeBoolean(req.body?.create_snapshot, true);
+
+  let rollbackVersionRow = null;
+  let rollbackVersionPath = '';
+  if (createSnapshot) {
+    rollbackVersionPath = await copyToManagedPath(restoredDraftPath, VERSION_ROOT, '.docx');
+  }
+
+  const result = await transaction(async (tx) => {
+    let versionId = Number(bid.current_version_id || 0) || null;
+    if (createSnapshot) {
+      const nextVersionNo = await getNextVersionNo(tx, bidId);
+      const insert = await tx.run(
+        `INSERT INTO tender_bid_versions
+          (bid_id, version_no, source_type, source_ext, storage_path, file_name, file_size, mime_type, created_by_id, created_by_name)
+         VALUES (?, ?, 'rollback', 'docx', ?, ?, ?, ?, ?, ?)`,
+        [
+          bidId,
+          nextVersionNo,
+          rollbackVersionPath,
+          `${trimText(bid.title) || 'tender'}-rollback-v${nextVersionNo}.docx`,
+          Number((await readFileStatSafe(rollbackVersionPath))?.size || 0),
+          guessMimeByExt('.docx'),
+          Number(req.user.id),
+          req.user.username,
+        ]
+      );
+      versionId = Number(insert.insertId);
+      rollbackVersionRow = await tx.get('SELECT * FROM tender_bid_versions WHERE id = ? LIMIT 1', [insert.insertId]);
+      await tx.run(
+        `UPDATE tender_bids
+         SET current_version_id = ?, updated_by_id = ?, updated_by_name = ?, updated_at = NOW()
+         WHERE id = ?`,
+        [versionId, Number(req.user.id), req.user.username, bidId]
+      );
+    }
+
+    await tx.run(
+      `UPDATE tender_bid_drafts
+       SET draft_file_path = ?, draft_file_name = ?, base_version_id = ?, updated_by_id = ?, updated_by_name = ?, last_saved_at = NOW(), updated_at = NOW()
+       WHERE id = ?`,
+      [
+        restoredDraftPath,
+        path.basename(restoredDraftPath),
+        versionId,
+        Number(req.user.id),
+        req.user.username,
+        Number(draft.id),
+      ]
+    );
+
+    const afterDraft = await tx.get('SELECT * FROM tender_bid_drafts WHERE id = ? LIMIT 1', [Number(draft.id)]);
+    return sanitizeDraftRow(afterDraft);
+  });
+
+  await logOperation({
+    req,
+    action: 'DRAFT_ROLLBACK',
+    entity: 'bid',
+    entityId: bidId,
+    message: `草稿回滚到自动保存记录 #${autosaveId}`,
+    afterData: {
+      autosave_id: autosaveId,
+      draft_id: Number(draft.id),
+      restored_size: Number(restoredDraftStat?.size || 0),
+      version_id: Number(rollbackVersionRow?.id || 0) || null,
+    },
+  });
+
+  res.json({
+    ok: true,
+    draft: result,
+    version: rollbackVersionRow ? sanitizeVersionRow(rollbackVersionRow) : null,
+  });
+}));
+
 app.post('/api/tender/bids/:id/versions/upload', requirePermission('tender:write'), uploadBidVersion, asyncHandler(async (req, res) => {
   const bidId = Number(req.params.id);
   if (!Number.isFinite(bidId) || bidId <= 0) throw appError('标书ID无效', 400);
-  const bid = await ensureBidExists(bidId);
+  const bid = await ensureBidExists(bidId, { user: req.user });
 
   const file = req.file;
   if (!file?.path) throw appError('请上传文件', 400);
@@ -8517,7 +10331,16 @@ app.post('/api/tender/bids/:id/versions/upload', requirePermission('tender:write
 
     await tx.run(
       `UPDATE tender_bids
-       SET current_version_id = ?, updated_by_id = ?, updated_by_name = ?, updated_at = NOW()
+       SET current_version_id = ?,
+           status = CASE
+             WHEN status IN ('DRAFT', 'IN_REVIEW', 'FINALIZED') THEN 'FILES_UPLOADED'
+             ELSE status
+           END,
+           review_status = CASE
+             WHEN status IN ('DRAFT', 'IN_REVIEW', 'FINALIZED') THEN 'draft'
+             ELSE review_status
+           END,
+           updated_by_id = ?, updated_by_name = ?, updated_at = NOW()
        WHERE id = ?`,
       [insert.insertId, Number(req.user.id), req.user.username, bidId]
     );
@@ -8526,7 +10349,7 @@ app.post('/api/tender/bids/:id/versions/upload', requirePermission('tender:write
   });
 
   await run('DELETE FROM tender_bid_drafts WHERE bid_id = ?', [bidId]);
-  await ensureDraftForBid({ bid: await ensureBidExists(bidId), user: req.user });
+  await ensureDraftForBid({ bid: await ensureBidExists(bidId, { user: req.user }), user: req.user });
 
   await logOperation({
     req,
@@ -8543,7 +10366,7 @@ app.post('/api/tender/bids/:id/versions/upload', requirePermission('tender:write
 app.get('/api/tender/bids/:id/versions', requirePermission('tender:read'), asyncHandler(async (req, res) => {
   const bidId = Number(req.params.id);
   if (!Number.isFinite(bidId) || bidId <= 0) throw appError('标书ID无效', 400);
-  await ensureBidExists(bidId);
+  await ensureBidExists(bidId, { user: req.user });
   const rows = await query(
     `SELECT *
      FROM tender_bid_versions
@@ -8563,7 +10386,7 @@ app.get('/api/tender/bids/:id/versions/compare', requirePermission('tender:read'
   if (!Number.isFinite(rightVersionId) || rightVersionId <= 0) throw appError('右侧版本ID无效', 400);
   if (leftVersionId === rightVersionId) throw appError('请至少选择两个不同版本进行对比', 400);
 
-  await ensureBidExists(bidId);
+  await ensureBidExists(bidId, { user: req.user });
   const [leftVersion, rightVersion] = await Promise.all([
     getBidVersionById({ bidId, versionId: leftVersionId }),
     getBidVersionById({ bidId, versionId: rightVersionId }),
@@ -8598,7 +10421,7 @@ app.get('/api/tender/bids/:id/versions/compare', requirePermission('tender:read'
 app.post('/api/tender/bids/:id/versions/snapshot', requirePermission('tender:write'), asyncHandler(async (req, res) => {
   const bidId = Number(req.params.id);
   if (!Number.isFinite(bidId) || bidId <= 0) throw appError('标书ID无效', 400);
-  const bid = await ensureBidExists(bidId);
+  const bid = await ensureBidExists(bidId, { user: req.user });
   const draft = await ensureDraftForBid({ bid, user: req.user });
 
   const stat = await readFileStatSafe(draft.draft_file_path);
@@ -8656,7 +10479,7 @@ app.post('/api/tender/bids/:id/editor/session', requirePermission('tender:write'
   const bidId = Number(req.params.id);
   if (!Number.isFinite(bidId) || bidId <= 0) throw appError('标书ID无效', 400);
 
-  const bid = await ensureBidExists(bidId);
+  const bid = await ensureBidExists(bidId, { user: req.user });
   const draft = await ensureDraftForBid({ bid, user: req.user });
 
   const callbackToken = crypto.randomBytes(24).toString('hex');
@@ -8734,7 +10557,7 @@ app.post('/api/tender/bids/:id/editor/session', requirePermission('tender:write'
 app.post('/api/tender/bids/:id/editor/release', requirePermission('tender:write'), asyncHandler(async (req, res) => {
   const bidId = Number(req.params.id);
   if (!Number.isFinite(bidId) || bidId <= 0) throw appError('标书ID无效', 400);
-  await ensureBidExists(bidId);
+  await ensureBidExists(bidId, { user: req.user });
 
   const activeSessions = await query(
     `SELECT id, session_key, draft_id
@@ -8783,7 +10606,7 @@ app.post('/api/tender/bids/:id/editor/release', requirePermission('tender:write'
 app.get('/api/tender/bids/:id/editor/events', requirePermission('tender:read'), asyncHandler(async (req, res) => {
   const bidId = Number(req.params.id);
   if (!Number.isFinite(bidId) || bidId <= 0) throw appError('标书ID无效', 400);
-  await ensureBidExists(bidId);
+  await ensureBidExists(bidId, { user: req.user });
 
   const limit = Math.min(EDITOR_EVENTS_MAX_LIMIT, toBoundedLimit(req.query.limit, 80));
   const rows = await query(
@@ -8870,6 +10693,23 @@ app.post('/api/tender/editor/callback/:sessionKey', asyncHandler(async (req, res
          SET last_saved_at = NOW(), updated_at = NOW(), updated_by_id = ?, updated_by_name = ?
          WHERE id = ?`,
         [Number(session.user_id), session.username, Number(draft.id)]
+      );
+      const autosavePath = await copyToManagedPath(draft.draft_file_path, DRAFT_ROOT, '.docx');
+      await run(
+        `INSERT INTO tender_bid_draft_autosaves
+          (bid_id, draft_id, version_id, storage_path, file_name, file_size, source, content_hash, saved_by_id, saved_by_name, saved_at)
+         VALUES (?, ?, ?, ?, ?, ?, 'ONLYOFFICE', ?, ?, ?, NOW())`,
+        [
+          Number(session.bid_id) || null,
+          Number(draft.id),
+          Number(session.version_id) || null,
+          autosavePath,
+          path.basename(autosavePath),
+          Number(fileBuf.length || 0),
+          crypto.createHash('sha256').update(fileBuf).digest('hex'),
+          Number(session.user_id) || null,
+          session.username,
+        ]
       );
       await insertOperationLog({
         userId: Number(session.user_id) || null,
@@ -9357,7 +11197,7 @@ app.post('/api/tender/bids/:id/fill', requirePermission('tender:write'), asyncHa
   if (!Number.isFinite(bidId) || bidId <= 0) throw appError('标书ID无效', 400);
   if (!Number.isFinite(bundleId) || bundleId <= 0) throw appError('bundle_id无效', 400);
 
-  const bid = await ensureBidExists(bidId);
+  const bid = await ensureBidExists(bidId, { user: req.user });
   const draft = await ensureDraftForBid({ bid, user: req.user });
 
   const fieldValueInput = req.body?.field_values && typeof req.body.field_values === 'object' ? req.body.field_values : {};
@@ -9439,7 +11279,7 @@ app.post('/api/tender/assets/upload', requirePermission('tender:write'), uploadA
 
   const bidId = Number(req.body?.bid_id);
   if (Number.isFinite(bidId) && bidId > 0) {
-    await ensureBidExists(bidId);
+    await ensureBidExists(bidId, { user: req.user });
   }
 
   const ext = normalizeAssetUploadExt(file.originalname || '') || '.bin';
@@ -9524,8 +11364,11 @@ app.get('/api/tender/assets', requirePermission('tender:read'), asyncHandler(asy
   const params = [];
 
   if (Number.isFinite(bidId) && bidId > 0) {
+    await ensureBidExists(bidId, { user: req.user });
     where.push('a.bid_id = ?');
     params.push(bidId);
+  } else {
+    appendScopedWhere(where, params, buildOwnerScopeWhere(req.user, 'a.uploaded_by_id'));
   }
 
   const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
@@ -10253,11 +12096,31 @@ app.post('/api/tender/config', requirePermission('tender:config:manage'), asyncH
   res.json(afterSafe);
 }));
 
-app.use((err, _req, res, _next) => {
+app.use((err, req, res, _next) => {
   const status = Number(err?.statusCode || err?.status || 500);
   const message = trimText(err?.message) || '服务器内部错误';
+  const defaultCategory = (() => {
+    const pathText = trimText(req?.path);
+    if (String(err?.category || '').trim()) return trimText(err.category).toUpperCase();
+    if (pathText.includes('/upload')) return 'UPLOAD';
+    if (pathText.includes('/analyze')) return 'PARSE';
+    if (pathText.includes('/export')) return 'EXPORT';
+    if (pathText.includes('/generate')) return 'GENERATE';
+    if (status >= 500) return 'INTERNAL';
+    return 'REQUEST';
+  })();
+  const payload = {
+    error: message,
+    code: trimText(err?.code) || (status >= 500 ? 'TENDER_INTERNAL_ERROR' : 'TENDER_REQUEST_FAILED'),
+    category: defaultCategory,
+    retryable: !!err?.retryable,
+    manual_takeover: err?.manual_takeover || null,
+  };
+  if (err?.details && typeof err.details === 'object') {
+    payload.details = err.details;
+  }
   if (!res.headersSent) {
-    res.status(status).json({ error: message });
+    res.status(status).json(payload);
   }
 });
 

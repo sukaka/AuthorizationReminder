@@ -709,6 +709,93 @@ label.primary {
   line-height: 1.5;
 }
 
+.dashboard-workbench-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 14px;
+}
+
+.workbench-todo-list {
+  display: grid;
+  gap: 8px;
+}
+
+.workbench-todo-item {
+  border-radius: 10px;
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  background: rgba(255, 255, 255, 0.92);
+  padding: 10px 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.workbench-todo-item strong {
+  display: block;
+  font-size: 14px;
+  color: #0f172a;
+}
+
+.workbench-todo-item span {
+  font-size: 12px;
+  color: #64748b;
+}
+
+.workbench-todo-item em {
+  font-style: normal;
+  font-weight: 700;
+  font-size: 18px;
+  color: #1d4ed8;
+  font-variant-numeric: tabular-nums;
+}
+
+.workbench-actions {
+  margin-top: 12px;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.workbench-recent-list {
+  display: grid;
+  gap: 8px;
+}
+
+.workbench-recent-item {
+  width: 100%;
+  text-align: left;
+  border-radius: 10px;
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  background: rgba(255, 255, 255, 0.92);
+  padding: 10px 12px;
+  display: grid;
+  gap: 4px;
+}
+
+.workbench-recent-item .head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.workbench-recent-item strong {
+  font-size: 14px;
+  color: #0f172a;
+}
+
+.workbench-recent-item p {
+  margin: 0;
+  font-size: 13px;
+  color: #334155;
+}
+
+.workbench-recent-item small {
+  color: #64748b;
+  font-size: 12px;
+}
+
 .toast {
   border-radius: 12px;
   padding: 10px 12px;
@@ -2435,6 +2522,18 @@ label.primary {
   background: rgba(148, 163, 184, 0.14);
   color: #475569;
   border-color: rgba(148, 163, 184, 0.32);
+}
+
+.status-pill.tone-upload {
+  background: rgba(37, 99, 235, 0.14);
+  color: #1d4ed8;
+  border-color: rgba(37, 99, 235, 0.36);
+}
+
+.status-pill.tone-prepare {
+  background: rgba(249, 115, 22, 0.15);
+  color: #c2410c;
+  border-color: rgba(249, 115, 22, 0.35);
 }
 
 .editor-list-actions {
@@ -4455,6 +4554,10 @@ label.primary {
     grid-template-columns: 1fr;
   }
 
+  .dashboard-workbench-grid {
+    grid-template-columns: 1fr;
+  }
+
   .dashboard-donut-wrap {
     grid-template-columns: 1fr;
     justify-items: center;
@@ -5096,6 +5199,10 @@ label.primary {
     min-width: 180px;
     min-height: 44px;
     font-size: 20px;
+  }
+
+  .workbench-actions {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .performance-row {

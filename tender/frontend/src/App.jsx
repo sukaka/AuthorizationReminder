@@ -238,6 +238,18 @@ const ownLibraryTabs = [
 
 const bidStatusOptions = [
   { value: 'DRAFT', label: '草稿' },
+  { value: 'FILES_UPLOADED', label: '已上传文件' },
+  { value: 'PARSE_COMPLETED', label: '解析完成' },
+  { value: 'MATERIALS_PENDING', label: '待补资料' },
+  { value: 'READY_TO_GENERATE', label: '可生成' },
+  { value: 'GENERATING', label: '生成中' },
+  { value: 'COMPILE_REVIEW_PENDING', label: '待编制审核' },
+  { value: 'TECH_REVIEW_PENDING', label: '待技术审核' },
+  { value: 'BUSINESS_REVIEW_PENDING', label: '待商务审核' },
+  { value: 'FINAL_REVIEW_PENDING', label: '待终审' },
+  { value: 'EXPORT_READY', label: '可导出' },
+  { value: 'EXPORTED', label: '已导出' },
+  // 兼容旧状态
   { value: 'IN_REVIEW', label: '评审中' },
   { value: 'FINALIZED', label: '定稿' },
   { value: 'SUBMITTED', label: '已提交' },
@@ -595,9 +607,11 @@ const generateJobProgress = (value, fallback = 0) => {
 const bidStatusToneClass = (value) => {
   const key = String(value || '').toUpperCase()
   if (key === 'DRAFT') return 'tone-draft'
-  if (key === 'IN_REVIEW') return 'tone-review'
-  if (key === 'FINALIZED') return 'tone-finalized'
-  if (key === 'SUBMITTED') return 'tone-submitted'
+  if (key === 'FILES_UPLOADED' || key === 'PARSE_COMPLETED') return 'tone-upload'
+  if (key === 'MATERIALS_PENDING' || key === 'READY_TO_GENERATE' || key === 'GENERATING') return 'tone-prepare'
+  if (key.endsWith('_REVIEW_PENDING') || key === 'IN_REVIEW') return 'tone-review'
+  if (key === 'EXPORT_READY' || key === 'FINALIZED') return 'tone-finalized'
+  if (key === 'EXPORTED' || key === 'SUBMITTED') return 'tone-submitted'
   if (key === 'ARCHIVED') return 'tone-archived'
   return 'tone-draft'
 }
@@ -614,10 +628,18 @@ const versionSourceLabel = (value) => {
 
 const bidStatusProgress = (value) => {
   const key = String(value || '').toUpperCase()
-  if (key === 'DRAFT') return 28
-  if (key === 'IN_REVIEW') return 55
-  if (key === 'FINALIZED') return 78
-  if (key === 'SUBMITTED') return 100
+  if (key === 'DRAFT') return 12
+  if (key === 'FILES_UPLOADED') return 20
+  if (key === 'PARSE_COMPLETED') return 30
+  if (key === 'MATERIALS_PENDING') return 40
+  if (key === 'READY_TO_GENERATE') return 50
+  if (key === 'GENERATING') return 62
+  if (key === 'COMPILE_REVIEW_PENDING' || key === 'IN_REVIEW') return 72
+  if (key === 'TECH_REVIEW_PENDING') return 78
+  if (key === 'BUSINESS_REVIEW_PENDING') return 84
+  if (key === 'FINAL_REVIEW_PENDING' || key === 'FINALIZED') return 90
+  if (key === 'EXPORT_READY') return 95
+  if (key === 'EXPORTED' || key === 'SUBMITTED') return 100
   if (key === 'ARCHIVED') return 100
   return 0
 }
@@ -1300,6 +1322,7 @@ function App() {
   const [user, setUser] = useState(null)
   const [permissions, setPermissions] = useState({})
   const [stats, setStats] = useState({ bids: 0, drafts: 0, assets: 0, enabled_models: 0 })
+  const [workflow, setWorkflow] = useState({ status_counts: {}, review_counts: {}, todo: {} })
   const [activeTab, setActiveTab] = useState('dashboard')
   const [libraryMenuOpen, setLibraryMenuOpen] = useState(true)
 
@@ -1820,6 +1843,7 @@ function App() {
     const resp = await api.get('/api/tender/bootstrap')
     setPermissions(resp.permissions || {})
     setStats(resp.stats || {})
+    setWorkflow(resp.workflow || { status_counts: {}, review_counts: {}, todo: {} })
   }
 
   const fetchBids = async () => {
@@ -2160,64 +2184,83 @@ function App() {
     [bundles]
   )
   const bidSummary = useMemo(() => {
-    const summary = { total: bids.length, draft: 0, review: 0, submitted: 0, finalized: 0, archived: 0 }
+    const summary = {
+      total: bids.length,
+      month: 0,
+      draft: 0,
+      prep: 0,
+      materials: 0,
+      generating: 0,
+      review: 0,
+      export_ready: 0,
+      exported: 0,
+      archived: 0,
+      in_progress: 0,
+    }
+    const now = new Date()
+    const monthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`
     for (const item of bids) {
       const status = String(item?.status || '').toUpperCase()
+      const updated = parseDateLike(item?.updated_at || item?.created_at)
+      if (updated && toDateKey(updated).slice(0, 7) === monthKey) summary.month += 1
+
       if (status === 'DRAFT') summary.draft += 1
-      else if (status === 'IN_REVIEW') summary.review += 1
-      else if (status === 'SUBMITTED') summary.submitted += 1
-      else if (status === 'FINALIZED') summary.finalized += 1
+      else if (status === 'FILES_UPLOADED' || status === 'PARSE_COMPLETED') summary.prep += 1
+      else if (status === 'MATERIALS_PENDING') summary.materials += 1
+      else if (status === 'READY_TO_GENERATE' || status === 'GENERATING') summary.generating += 1
+      else if (status.endsWith('_REVIEW_PENDING') || status === 'IN_REVIEW') summary.review += 1
+      else if (status === 'EXPORT_READY' || status === 'FINALIZED') summary.export_ready += 1
+      else if (status === 'EXPORTED' || status === 'SUBMITTED') summary.exported += 1
       else if (status === 'ARCHIVED') summary.archived += 1
+      else summary.draft += 1
     }
+    summary.in_progress = Math.max(0, summary.total - summary.archived - summary.exported)
     return summary
   }, [bids])
   const dashboardKpiCards = useMemo(() => {
-    const total = bidSummary.total
-    const submittedTotal = bidSummary.submitted + bidSummary.archived
-    const submitRate = total > 0 ? toPercent((submittedTotal / total) * 100) : 0
-    const runningJobs = generateJobs.filter((item) => {
-      const key = String(item?.status || '').toUpperCase()
-      return key === 'ANALYZING' || key === 'GENERATING'
-    }).length
+    const todo = workflow?.todo || {}
+    const riskProjectCount = Number(todo.pending_materials || bidSummary.materials || 0)
+      + Number(todo.pending_review || bidSummary.review || 0)
     return [
       {
-        key: 'total',
-        label: '标书总量',
-        value: total,
-        hint: '当前在库标书',
+        key: 'month',
+        label: '本月投标项目',
+        value: bidSummary.month,
+        hint: `项目总数 ${bidSummary.total}`,
         tone: 'tone-blue',
       },
       {
-        key: 'submit-rate',
-        label: '提交完成率',
-        value: `${submitRate}%`,
-        hint: `已提交 ${submittedTotal} / ${total || 0}`,
+        key: 'in-progress',
+        label: '进行中项目',
+        value: bidSummary.in_progress,
+        hint: '未归档、未导出项目',
         tone: 'tone-cyan',
       },
       {
-        key: 'running',
-        label: '在途任务',
-        value: runningJobs,
-        hint: '分析中或生成中',
+        key: 'pending-review',
+        label: '待审核项目',
+        value: Number(todo.pending_review || bidSummary.review || 0),
+        hint: '编制/技术/商务/终审',
         tone: 'tone-amber',
       },
       {
-        key: 'model',
-        label: '可用模型',
-        value: stats.enabled_models || 0,
-        hint: `总模型 ${models.length}`,
+        key: 'risk',
+        label: '高风险项目',
+        value: riskProjectCount,
+        hint: '待补资料或审核阻塞',
         tone: 'tone-indigo',
       },
     ]
-  }, [bidSummary, generateJobs, models.length, stats.enabled_models])
+  }, [bidSummary, workflow])
   const dashboardStatusRows = useMemo(() => {
     const total = Math.max(1, bidSummary.total)
     const source = [
-      { key: 'DRAFT', label: '草稿', value: bidSummary.draft, color: '#3b82f6' },
-      { key: 'IN_REVIEW', label: '评审中', value: bidSummary.review, color: '#14b8a6' },
-      { key: 'FINALIZED', label: '定稿', value: bidSummary.finalized, color: '#8b5cf6' },
-      { key: 'SUBMITTED', label: '已提交', value: bidSummary.submitted, color: '#22c55e' },
-      { key: 'ARCHIVED', label: '已归档', value: bidSummary.archived, color: '#64748b' },
+      { key: 'DRAFT', label: '草稿', value: bidSummary.draft, color: '#64748b' },
+      { key: 'PREP', label: '待解析', value: bidSummary.prep, color: '#3b82f6' },
+      { key: 'MATERIAL', label: '待补资料', value: bidSummary.materials, color: '#f97316' },
+      { key: 'REVIEW', label: '审核中', value: bidSummary.review, color: '#0ea5e9' },
+      { key: 'EXPORT_READY', label: '可导出', value: bidSummary.export_ready, color: '#22c55e' },
+      { key: 'ARCHIVED', label: '归档', value: bidSummary.archived, color: '#334155' },
     ]
     return source.map((item) => ({
       ...item,
@@ -2337,6 +2380,8 @@ function App() {
     const failedGenerate = generateJobs.filter((item) => String(item?.status || '').toUpperCase() === 'FAILED').length
     const failedSample = sampleRows.filter((item) => String(item?.parse_status || '').toUpperCase() === 'FAILED').length
     const failedOcr = assets.filter((item) => String(item?.ocr_status || '').toUpperCase() === 'FAILED').length
+    const pendingMaterials = Number(workflow?.todo?.pending_materials || bidSummary.materials || 0)
+    const pendingReview = Number(workflow?.todo?.pending_review || bidSummary.review || 0)
     if (failedGenerate > 0) {
       rows.push({
         level: '高',
@@ -2358,6 +2403,20 @@ function App() {
         detail: `${failedOcr} 份证照识别失败，建议改用高清图或手工确认。`,
       })
     }
+    if (pendingMaterials > 0) {
+      rows.push({
+        level: '高',
+        title: '待补资料项目未处理',
+        detail: `${pendingMaterials} 个项目处于待补资料状态，可能影响出稿及时性。`,
+      })
+    }
+    if (pendingReview > 0) {
+      rows.push({
+        level: '中',
+        title: '审核待处理',
+        detail: `${pendingReview} 个项目在审核队列中，建议安排处理人加速流转。`,
+      })
+    }
     if (rows.length === 0) {
       rows.push({
         level: '低',
@@ -2366,13 +2425,47 @@ function App() {
       })
     }
     return rows
-  }, [generateJobs, sampleRows, assets])
+  }, [generateJobs, sampleRows, assets, workflow, bidSummary.materials, bidSummary.review])
+  const dashboardTodoRows = useMemo(() => {
+    const todo = workflow?.todo || {}
+    return [
+      { key: 'pending_parse', label: '待解析', value: Number(todo.pending_parse || bidSummary.prep || 0), action: '进入解析' },
+      { key: 'pending_materials', label: '待补资料', value: Number(todo.pending_materials || bidSummary.materials || 0), action: '补齐资料' },
+      { key: 'pending_generate', label: '待生成', value: Number(todo.pending_generate || bidSummary.generating || 0), action: '发起生成' },
+      { key: 'pending_review', label: '待审核', value: Number(todo.pending_review || bidSummary.review || 0), action: '进入审核' },
+      { key: 'ready_export', label: '待导出', value: Number(todo.ready_export || bidSummary.export_ready || 0), action: '执行导出' },
+    ]
+  }, [workflow, bidSummary])
+  const dashboardRecentBids = useMemo(() => {
+    const rows = [...bids]
+      .sort((a, b) => new Date(String(b?.updated_at || b?.created_at || 0)).getTime() - new Date(String(a?.updated_at || a?.created_at || 0)).getTime())
+      .slice(0, 6)
+    return rows.map((item) => {
+      const status = String(item?.status || '').toUpperCase()
+      const riskLevel = status === 'MATERIALS_PENDING'
+        ? '高'
+        : (status.endsWith('_REVIEW_PENDING') || status === 'READY_TO_GENERATE' || status === 'GENERATING' ? '中' : '低')
+      return {
+        ...item,
+        risk_level: riskLevel,
+      }
+    })
+  }, [bids])
   const dashboardFunnelRows = useMemo(() => {
     const steps = [
       { key: 'created', label: '创建标书', value: bidSummary.total },
-      { key: 'editing', label: '进入协同', value: bidSummary.review + bidSummary.finalized + bidSummary.submitted + bidSummary.archived },
-      { key: 'finalized', label: '完成定稿', value: bidSummary.finalized + bidSummary.submitted + bidSummary.archived },
-      { key: 'submitted', label: '正式提交', value: bidSummary.submitted + bidSummary.archived },
+      {
+        key: 'files',
+        label: '文件就绪',
+        value: bidSummary.prep + bidSummary.materials + bidSummary.generating + bidSummary.review + bidSummary.export_ready + bidSummary.exported + bidSummary.archived,
+      },
+      {
+        key: 'review',
+        label: '进入审核',
+        value: bidSummary.review + bidSummary.export_ready + bidSummary.exported + bidSummary.archived,
+      },
+      { key: 'export', label: '可导出', value: bidSummary.export_ready + bidSummary.exported + bidSummary.archived },
+      { key: 'archived', label: '已归档', value: bidSummary.archived },
     ]
     const base = Math.max(1, steps[0].value)
     return steps.map((item) => ({
@@ -2779,9 +2872,32 @@ function App() {
   const onChangeBidStatus = async (bid, status) => {
     resetFeedback()
     try {
-      await api.post(`/api/tender/bids/${bid.id}/status`, { status })
+      const needConfirm = ['ARCHIVED', 'EXPORTED', 'SUBMITTED'].includes(String(status || '').toUpperCase())
+      if (needConfirm && !window.confirm(`确认将标书状态变更为「${bidStatusLabel(status)}」吗？`)) return
+      await api.post(`/api/tender/bids/${bid.id}/status`, { status, confirm: needConfirm })
       await fetchBids()
       showMessage(`状态已更新为${bidStatusLabel(status)}`)
+    } catch (err) {
+      showError(err.message)
+    }
+  }
+
+  const onSubmitCompileReview = async (bid) => {
+    resetFeedback()
+    try {
+      await api.post(`/api/tender/bids/${bid.id}/reviews/submit`, { review_stage: 'COMPILE' })
+      await fetchBids()
+      showMessage('已提交编制审核')
+    } catch (err) {
+      showError(err.message)
+    }
+  }
+
+  const onQuickAutosaveBid = async (bid) => {
+    resetFeedback()
+    try {
+      await api.post(`/api/tender/bids/${bid.id}/draft/autosave`, { source: 'MANUAL', note: '前端快捷存稿' })
+      showMessage('草稿已自动保存')
     } catch (err) {
       showError(err.message)
     }
@@ -5346,6 +5462,74 @@ function App() {
                   ))}
                 </div>
               </article>
+
+              <div className="dashboard-workbench-grid">
+                <article className="dashboard-card workbench-card">
+                  <div className="dashboard-card-head">
+                    <h3>我的待办</h3>
+                    <p>按当前流转状态自动汇总</p>
+                  </div>
+                  <div className="workbench-todo-list">
+                    {dashboardTodoRows.map((item) => (
+                      <div className="workbench-todo-item" key={item.key}>
+                        <div>
+                          <strong>{item.label}</strong>
+                          <span>{item.action}</span>
+                        </div>
+                        <em>{item.value}</em>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="workbench-actions">
+                    <button className="ghost" onClick={() => setActiveTab('bids')}>新建项目</button>
+                    <button className="ghost" onClick={() => setActiveTab('bid-generate')}>上传招标文件</button>
+                    <button className="ghost" onClick={() => setActiveTab('dashboard')}>查看待办</button>
+                    <button className="ghost" onClick={() => setActiveTab('dashboard')}>查看风险</button>
+                    <button
+                      className="primary"
+                      onClick={() => {
+                        const first = dashboardRecentBids[0]
+                        if (!first) {
+                          setActiveTab('bids')
+                          return
+                        }
+                        setActiveTab('bids')
+                        openBidVersionPanel(first).catch(() => {})
+                      }}
+                    >
+                      进入项目
+                    </button>
+                  </div>
+                </article>
+
+                <article className="dashboard-card recent-card">
+                  <div className="dashboard-card-head">
+                    <h3>最近项目</h3>
+                    <p>展示最近处理的投标项目</p>
+                  </div>
+                  <div className="workbench-recent-list">
+                    {dashboardRecentBids.map((item) => (
+                      <button
+                        type="button"
+                        className="workbench-recent-item"
+                        key={item.id}
+                        onClick={() => {
+                          setActiveTab('bids')
+                          openBidVersionPanel(item).catch(() => {})
+                        }}
+                      >
+                        <div className="head">
+                          <strong>{item.title || item.bid_no}</strong>
+                          <span className={`risk-level level-${item.risk_level}`}>{item.risk_level}</span>
+                        </div>
+                        <p>{item.project_name || '-'}</p>
+                        <small>{item.bid_no} · {formatDateTime(item.updated_at || item.created_at)}</small>
+                      </button>
+                    ))}
+                    {!dashboardRecentBids.length ? <div className="empty">暂无最近项目</div> : null}
+                  </div>
+                </article>
+              </div>
             </div>
           </section>
         )}
@@ -5371,12 +5555,12 @@ function App() {
                       <strong>{bidSummary.draft}</strong>
                     </div>
                     <div className="bid-overview-metric">
-                      <span>评审中</span>
+                      <span>审核中</span>
                       <strong>{bidSummary.review}</strong>
                     </div>
                     <div className="bid-overview-metric">
-                      <span>已提交</span>
-                      <strong>{bidSummary.submitted}</strong>
+                      <span>可导出</span>
+                      <strong>{bidSummary.export_ready}</strong>
                     </div>
                   </div>
                 </div>
@@ -5475,6 +5659,8 @@ function App() {
                                 />
                               </label>
                               <button className="ghost" onClick={() => onOpenEditor(item)}>协同编辑</button>
+                              <button className="ghost" onClick={() => onSubmitCompileReview(item)}>提交流程审核</button>
+                              <button className="ghost" onClick={() => onQuickAutosaveBid(item)}>快速存稿</button>
                               <button className="ghost" onClick={() => onDeleteBid(item.id)}>删除</button>
                             </>
                           ) : null}

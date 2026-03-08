@@ -124,7 +124,10 @@ const createSchema = async () => {
     title VARCHAR(255) NOT NULL,
     customer_name VARCHAR(255) NOT NULL,
     project_name VARCHAR(255) NOT NULL,
+    source_kb_project_id BIGINT NULL,
     status VARCHAR(32) NOT NULL DEFAULT 'DRAFT',
+    review_status VARCHAR(16) NOT NULL DEFAULT 'draft',
+    review_stage VARCHAR(32) NULL,
     summary TEXT NULL,
     current_version_id BIGINT NULL,
     submitted_at DATETIME NULL,
@@ -175,6 +178,25 @@ const createSchema = async () => {
     updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     UNIQUE KEY uk_tender_drafts_bid (bid_id),
     INDEX idx_tender_drafts_updated (updated_at)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
+
+  await run(`CREATE TABLE IF NOT EXISTS tender_bid_draft_autosaves (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    bid_id BIGINT NOT NULL,
+    draft_id BIGINT NULL,
+    version_id BIGINT NULL,
+    storage_path VARCHAR(512) NULL,
+    file_name VARCHAR(255) NULL,
+    file_size BIGINT NOT NULL DEFAULT 0,
+    source VARCHAR(32) NOT NULL DEFAULT 'MANUAL',
+    content_hash CHAR(64) NULL,
+    note VARCHAR(255) NULL,
+    saved_by_id BIGINT NULL,
+    saved_by_name VARCHAR(128) NULL,
+    saved_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_tender_bid_draft_autosaves_bid (bid_id, saved_at),
+    INDEX idx_tender_bid_draft_autosaves_draft (draft_id, saved_at)
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
 
   await run(`CREATE TABLE IF NOT EXISTS tender_editor_sessions (
@@ -435,6 +457,7 @@ const createSchema = async () => {
     created_bid_id BIGINT NULL,
     created_version_id BIGINT NULL,
     created_draft_id BIGINT NULL,
+    source_kb_project_ids_json LONGTEXT NULL,
     operator_id BIGINT NULL,
     operator_name VARCHAR(128) NULL,
     request_ip VARCHAR(64) NULL,
@@ -463,6 +486,7 @@ const createSchema = async () => {
     id BIGINT AUTO_INCREMENT PRIMARY KEY,
     job_id BIGINT NOT NULL,
     sample_id BIGINT NOT NULL,
+    source_kb_case_id BIGINT NULL,
     score DECIMAL(7,4) NOT NULL DEFAULT 0,
     reason_text VARCHAR(512) NULL,
     rank_no INT NOT NULL DEFAULT 0,
@@ -471,10 +495,172 @@ const createSchema = async () => {
     INDEX idx_tender_bid_generate_matches_job (job_id, score)
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
 
+  await run(`CREATE TABLE IF NOT EXISTS tender_requirement_registry (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    job_id BIGINT NOT NULL,
+    requirement_code VARCHAR(64) NOT NULL,
+    bid_category VARCHAR(16) NULL,
+    requirement_type VARCHAR(32) NOT NULL,
+    title VARCHAR(255) NULL,
+    requirement_text TEXT NULL,
+    section_key VARCHAR(64) NULL,
+    section_title VARCHAR(128) NULL,
+    suggestion_text TEXT NULL,
+    risk_level VARCHAR(16) NULL,
+    source_json LONGTEXT NULL,
+    source_kb_clause_id BIGINT NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE KEY uk_tender_requirement_registry_code (job_id, requirement_code),
+    INDEX idx_tender_requirement_registry_job (job_id, requirement_type, id)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
+
+  await run(`CREATE TABLE IF NOT EXISTS tender_evidence_registry (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    bid_id BIGINT NOT NULL,
+    evidence_code VARCHAR(64) NOT NULL,
+    evidence_type VARCHAR(32) NOT NULL,
+    title VARCHAR(255) NULL,
+    evidence_text TEXT NULL,
+    library_record_id BIGINT NULL,
+    source_table VARCHAR(64) NULL,
+    source_kb_id BIGINT NULL,
+    source_json LONGTEXT NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE KEY uk_tender_evidence_registry_code (bid_id, evidence_code),
+    INDEX idx_tender_evidence_registry_bid (bid_id, evidence_type, id)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
+
+  await run(`CREATE TABLE IF NOT EXISTS tender_draft_section_registry (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    bid_id BIGINT NOT NULL,
+    version_id BIGINT NOT NULL,
+    section_title VARCHAR(255) NULL,
+    paragraph_no INT NOT NULL DEFAULT 0,
+    paragraph_text LONGTEXT NULL,
+    template_slot VARCHAR(128) NULL,
+    source_kb_section_asset_id BIGINT NULL,
+    requirement_ids_json LONGTEXT NULL,
+    evidence_ids_json LONGTEXT NULL,
+    score_item_ids_json LONGTEXT NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_tender_draft_section_registry_version (bid_id, version_id, paragraph_no, id)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
+
+  await run(`CREATE TABLE IF NOT EXISTS tender_draft_check_runs (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    bid_id BIGINT NOT NULL,
+    version_id BIGINT NULL,
+    draft_id BIGINT NULL,
+    status VARCHAR(16) NOT NULL DEFAULT 'COMPLETED',
+    summary_json LONGTEXT NULL,
+    created_by_id BIGINT NULL,
+    created_by_name VARCHAR(128) NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_tender_draft_check_runs_bid (bid_id, created_at),
+    INDEX idx_tender_draft_check_runs_version (version_id, created_at)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
+
+  await run(`CREATE TABLE IF NOT EXISTS tender_bid_reviews (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    bid_id BIGINT NOT NULL,
+    review_round INT NOT NULL DEFAULT 1,
+    review_stage VARCHAR(32) NOT NULL DEFAULT 'COMPILE',
+    review_status VARCHAR(16) NOT NULL DEFAULT 'submitted',
+    submitted_by_id BIGINT NULL,
+    submitted_by_name VARCHAR(128) NULL,
+    reviewer_id BIGINT NULL,
+    reviewer_name VARCHAR(128) NULL,
+    review_comment TEXT NULL,
+    submitted_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    handled_at DATETIME NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    INDEX idx_tender_bid_reviews_bid (bid_id, review_round, review_stage, id),
+    INDEX idx_tender_bid_reviews_status (review_status, updated_at)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
+
+  await run(`CREATE TABLE IF NOT EXISTS tender_bid_members (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    bid_id BIGINT NOT NULL,
+    member_user_id BIGINT NULL,
+    member_username VARCHAR(128) NOT NULL,
+    member_role VARCHAR(32) NOT NULL DEFAULT 'OWNER',
+    member_title VARCHAR(64) NULL,
+    created_by_id BIGINT NULL,
+    created_by_name VARCHAR(128) NULL,
+    updated_by_id BIGINT NULL,
+    updated_by_name VARCHAR(128) NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE KEY uk_tender_bid_members_unique (bid_id, member_role, member_username),
+    INDEX idx_tender_bid_members_bid (bid_id, member_role, updated_at),
+    INDEX idx_tender_bid_members_user (member_user_id, updated_at)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
+
+  await run(`CREATE TABLE IF NOT EXISTS tender_draft_check_issues (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    check_run_id BIGINT NOT NULL,
+    bid_id BIGINT NOT NULL,
+    issue_type VARCHAR(64) NOT NULL,
+    severity VARCHAR(16) NOT NULL DEFAULT 'WARN',
+    title VARCHAR(255) NULL,
+    message TEXT NULL,
+    requirement_code VARCHAR(64) NULL,
+    requirement_title VARCHAR(255) NULL,
+    section_title VARCHAR(255) NULL,
+    paragraph_text TEXT NULL,
+    sort_order INT NOT NULL DEFAULT 0,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_tender_draft_check_issues_run (check_run_id, sort_order, id),
+    INDEX idx_tender_draft_check_issues_bid (bid_id, severity, issue_type)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
+
+  await run(`CREATE TABLE IF NOT EXISTS tender_score_coverage_matrix (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    bid_id BIGINT NOT NULL,
+    version_id BIGINT NULL,
+    score_item_id VARCHAR(64) NOT NULL,
+    source_kb_score_item_id BIGINT NULL,
+    requirement_id BIGINT NULL,
+    requirement_code VARCHAR(64) NULL,
+    title VARCHAR(255) NULL,
+    full_score DECIMAL(10,2) NOT NULL DEFAULT 0,
+    coverage_status VARCHAR(16) NOT NULL DEFAULT 'NONE',
+    optimization_needed_flag TINYINT NOT NULL DEFAULT 0,
+    optimization_reason TEXT NULL,
+    target_section_title VARCHAR(255) NULL,
+    bound_evidence_ids_json LONGTEXT NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_tender_score_coverage_bid (bid_id, version_id, coverage_status, id),
+    UNIQUE KEY uk_tender_score_coverage_item (bid_id, version_id, score_item_id)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
+
+  await run(`CREATE TABLE IF NOT EXISTS tender_score_optimization_records (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    bid_id BIGINT NOT NULL,
+    version_id BIGINT NULL,
+    score_item_id VARCHAR(64) NOT NULL,
+    suggestion_title VARCHAR(255) NULL,
+    suggestion_text LONGTEXT NULL,
+    evidence_ids_json LONGTEXT NULL,
+    target_section_title VARCHAR(255) NULL,
+    before_text LONGTEXT NULL,
+    after_text LONGTEXT NULL,
+    applied_flag TINYINT NOT NULL DEFAULT 0,
+    applied_at DATETIME NULL,
+    source VARCHAR(32) NULL,
+    status VARCHAR(16) NOT NULL DEFAULT 'PROPOSED',
+    created_by_id BIGINT NULL,
+    created_by_name VARCHAR(128) NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_tender_score_opt_records_bid (bid_id, version_id, status, id)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
+
   await run(`CREATE TABLE IF NOT EXISTS tender_doc_templates (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,
     template_no VARCHAR(64) NOT NULL,
     template_name VARCHAR(255) NOT NULL,
+    kb_template_id BIGINT NULL,
     original_file_name VARCHAR(255) NOT NULL,
     source_ext VARCHAR(16) NOT NULL DEFAULT '.docx',
     storage_path VARCHAR(512) NOT NULL,
@@ -521,6 +707,237 @@ const createSchema = async () => {
     INDEX idx_tender_operation_logs_user (username, created_at)
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
 
+  await run(`CREATE TABLE IF NOT EXISTS kb_projects (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    project_name VARCHAR(255) NOT NULL,
+    project_no VARCHAR(128) NULL,
+    purchaser VARCHAR(255) NULL,
+    industry_type VARCHAR(64) NULL,
+    project_type VARCHAR(64) NULL,
+    region VARCHAR(128) NULL,
+    publish_date DATETIME NULL,
+    bid_deadline DATETIME NULL,
+    result_status VARCHAR(32) NULL,
+    bid_amount DECIMAL(18,2) NULL,
+    source_bid_id BIGINT NULL,
+    tags_json LONGTEXT NULL,
+    remarks TEXT NULL,
+    created_by_id BIGINT NULL,
+    created_by_name VARCHAR(128) NULL,
+    updated_by_id BIGINT NULL,
+    updated_by_name VARCHAR(128) NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE KEY uk_kb_projects_no (project_no),
+    INDEX idx_kb_projects_type (project_type, industry_type, result_status),
+    INDEX idx_kb_projects_name (project_name, id)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
+
+  await run(`CREATE TABLE IF NOT EXISTS kb_tender_clauses (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    kb_project_id BIGINT NOT NULL,
+    clause_no VARCHAR(64) NULL,
+    chapter_name VARCHAR(255) NULL,
+    source_text LONGTEXT NOT NULL,
+    clause_type VARCHAR(64) NULL,
+    is_mandatory TINYINT NOT NULL DEFAULT 0,
+    is_scoring_item TINYINT NOT NULL DEFAULT 0,
+    score_value DECIMAL(10,2) NULL,
+    response_mode VARCHAR(32) NULL,
+    risk_level VARCHAR(16) NULL,
+    source_page VARCHAR(64) NULL,
+    source_position VARCHAR(255) NULL,
+    source_file_path VARCHAR(512) NULL,
+    tags_json LONGTEXT NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    INDEX idx_kb_tender_clauses_project (kb_project_id, clause_type, id),
+    INDEX idx_kb_tender_clauses_risk (risk_level, is_mandatory, is_scoring_item)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
+
+  await run(`CREATE TABLE IF NOT EXISTS kb_score_items (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    kb_project_id BIGINT NOT NULL,
+    item_name VARCHAR(255) NOT NULL,
+    full_score DECIMAL(10,2) NOT NULL DEFAULT 0,
+    scoring_rule LONGTEXT NULL,
+    recommended_response_points LONGTEXT NULL,
+    priority_level VARCHAR(16) NULL,
+    source_clause_id BIGINT NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    INDEX idx_kb_score_items_project (kb_project_id, priority_level, id),
+    INDEX idx_kb_score_items_name (item_name, full_score)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
+
+  await run(`CREATE TABLE IF NOT EXISTS kb_company_qualifications (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    qualification_name VARCHAR(255) NOT NULL,
+    qualification_type VARCHAR(64) NULL,
+    issuer VARCHAR(255) NULL,
+    valid_from DATETIME NULL,
+    valid_to DATETIME NULL,
+    file_path VARCHAR(512) NULL,
+    status VARCHAR(32) NOT NULL DEFAULT 'ACTIVE',
+    applicable_industries LONGTEXT NULL,
+    keywords LONGTEXT NULL,
+    tags_json LONGTEXT NULL,
+    reusable_flag TINYINT NOT NULL DEFAULT 1,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    INDEX idx_kb_company_qualifications_status (status, valid_to, id),
+    INDEX idx_kb_company_qualifications_type (qualification_type, qualification_name)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
+
+  await run(`CREATE TABLE IF NOT EXISTS kb_product_specs (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    product_name VARCHAR(255) NOT NULL,
+    brand VARCHAR(128) NULL,
+    model VARCHAR(128) NULL,
+    category VARCHAR(128) NULL,
+    spec_key VARCHAR(255) NOT NULL,
+    spec_value LONGTEXT NULL,
+    evidence_file VARCHAR(512) NULL,
+    version VARCHAR(64) NULL,
+    status VARCHAR(32) NOT NULL DEFAULT 'ACTIVE',
+    tags_json LONGTEXT NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    INDEX idx_kb_product_specs_model (product_name, brand, model, status),
+    INDEX idx_kb_product_specs_key (spec_key, id)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
+
+  await run(`CREATE TABLE IF NOT EXISTS kb_section_assets (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    kb_project_id BIGINT NULL,
+    section_name VARCHAR(255) NOT NULL,
+    sub_section_name VARCHAR(255) NULL,
+    content LONGTEXT NOT NULL,
+    quality_score DECIMAL(5,2) NULL,
+    reusable_flag TINYINT NOT NULL DEFAULT 1,
+    applicable_scene VARCHAR(128) NULL,
+    industry_type VARCHAR(64) NULL,
+    project_type VARCHAR(64) NULL,
+    tags_json LONGTEXT NULL,
+    source_file_path VARCHAR(512) NULL,
+    source_clause_id BIGINT NULL,
+    source_score_item_id BIGINT NULL,
+    status VARCHAR(32) NOT NULL DEFAULT 'ACTIVE',
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    INDEX idx_kb_section_assets_scene (section_name, applicable_scene, reusable_flag),
+    INDEX idx_kb_section_assets_project (kb_project_id, industry_type, project_type)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
+
+  await run(`CREATE TABLE IF NOT EXISTS kb_project_cases (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    case_name VARCHAR(255) NOT NULL,
+    customer_name VARCHAR(255) NULL,
+    industry_type VARCHAR(64) NULL,
+    project_type VARCHAR(64) NULL,
+    contract_amount DECIMAL(18,2) NULL,
+    sign_date DATETIME NULL,
+    core_products LONGTEXT NULL,
+    summary LONGTEXT NULL,
+    evidence_files LONGTEXT NULL,
+    reusable_flag TINYINT NOT NULL DEFAULT 1,
+    tags_json LONGTEXT NULL,
+    source_project_id BIGINT NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    INDEX idx_kb_project_cases_type (industry_type, project_type, sign_date),
+    INDEX idx_kb_project_cases_name (case_name, id)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
+
+  await run(`CREATE TABLE IF NOT EXISTS kb_personnel_assets (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    name VARCHAR(128) NOT NULL,
+    role_type VARCHAR(64) NULL,
+    certificates LONGTEXT NULL,
+    years_of_experience INT NULL,
+    resume_text LONGTEXT NULL,
+    availability_status VARCHAR(32) NULL,
+    file_path VARCHAR(512) NULL,
+    tags_json LONGTEXT NULL,
+    status VARCHAR(32) NOT NULL DEFAULT 'ACTIVE',
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    INDEX idx_kb_personnel_assets_role (role_type, availability_status, id),
+    INDEX idx_kb_personnel_assets_name (name, years_of_experience)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
+
+  await run(`CREATE TABLE IF NOT EXISTS kb_document_templates (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    template_name VARCHAR(255) NOT NULL,
+    project_type VARCHAR(64) NULL,
+    document_type VARCHAR(64) NULL,
+    version VARCHAR(64) NULL,
+    structure_json LONGTEXT NULL,
+    word_template_path VARCHAR(512) NULL,
+    active_flag TINYINT NOT NULL DEFAULT 1,
+    tags_json LONGTEXT NULL,
+    source_runtime_template_id BIGINT NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    INDEX idx_kb_document_templates_type (project_type, document_type, active_flag),
+    INDEX idx_kb_document_templates_name (template_name, version)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
+
+  await run(`CREATE TABLE IF NOT EXISTS kb_validation_rules (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    rule_name VARCHAR(255) NOT NULL,
+    rule_type VARCHAR(64) NOT NULL,
+    trigger_condition LONGTEXT NULL,
+    check_logic LONGTEXT NOT NULL,
+    severity VARCHAR(16) NOT NULL DEFAULT 'MEDIUM',
+    suggested_action TEXT NULL,
+    active_flag TINYINT NOT NULL DEFAULT 1,
+    tags_json LONGTEXT NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    INDEX idx_kb_validation_rules_type (rule_type, active_flag, severity),
+    INDEX idx_kb_validation_rules_name (rule_name, id)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
+
+  await run(`CREATE TABLE IF NOT EXISTS kb_asset_chunks (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    asset_type VARCHAR(32) NOT NULL,
+    source_table VARCHAR(64) NOT NULL,
+    source_id BIGINT NOT NULL,
+    kb_project_id BIGINT NULL,
+    section_name VARCHAR(255) NULL,
+    sub_section_name VARCHAR(255) NULL,
+    chunk_type VARCHAR(32) NOT NULL,
+    chunk_text LONGTEXT NOT NULL,
+    tags_json LONGTEXT NULL,
+    embedding_status VARCHAR(16) NOT NULL DEFAULT 'PENDING',
+    embedding_model VARCHAR(128) NULL,
+    embedding_vector_ref VARCHAR(255) NULL,
+    quality_score DECIMAL(5,2) NULL,
+    reusable_flag TINYINT NOT NULL DEFAULT 1,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    INDEX idx_kb_asset_chunks_source (source_table, source_id, id),
+    INDEX idx_kb_asset_chunks_project (kb_project_id, chunk_type, embedding_status)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
+
+  await run(`CREATE TABLE IF NOT EXISTS kb_ingest_jobs (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    job_type VARCHAR(64) NOT NULL,
+    source_file VARCHAR(512) NULL,
+    source_hash CHAR(64) NULL,
+    status VARCHAR(16) NOT NULL DEFAULT 'PENDING',
+    input_payload LONGTEXT NULL,
+    output_summary LONGTEXT NULL,
+    error_message TEXT NULL,
+    operator_id BIGINT NULL,
+    operator_name VARCHAR(128) NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    INDEX idx_kb_ingest_jobs_status (status, updated_at),
+    INDEX idx_kb_ingest_jobs_type (job_type, created_at)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
+
   const ensureColumn = async (tableName, columnName, columnDefSql) => {
     const row = await get(
       `SELECT COUNT(1) AS count
@@ -535,6 +952,23 @@ const createSchema = async () => {
   };
 
   await ensureColumn('tender_bid_generate_jobs', 'bid_category', "VARCHAR(16) NULL AFTER model_name");
+  await ensureColumn('tender_bids', 'review_status', "VARCHAR(16) NOT NULL DEFAULT 'draft' AFTER status");
+  await ensureColumn('tender_bids', 'review_stage', "VARCHAR(32) NULL AFTER review_status");
+  await ensureColumn('tender_bids', 'source_kb_project_id', "BIGINT NULL AFTER project_name");
+  await ensureColumn('tender_bid_generate_jobs', 'source_kb_project_ids_json', "LONGTEXT NULL AFTER created_draft_id");
+  await ensureColumn('tender_bid_generate_matches', 'source_kb_case_id', "BIGINT NULL AFTER sample_id");
+  await ensureColumn('tender_requirement_registry', 'source_kb_clause_id', "BIGINT NULL AFTER source_json");
+  await ensureColumn('tender_score_coverage_matrix', 'source_kb_score_item_id', "BIGINT NULL AFTER score_item_id");
+  await ensureColumn('tender_evidence_registry', 'source_table', "VARCHAR(64) NULL AFTER library_record_id");
+  await ensureColumn('tender_evidence_registry', 'source_kb_id', "BIGINT NULL AFTER source_table");
+  await ensureColumn('tender_draft_section_registry', 'source_kb_section_asset_id', "BIGINT NULL AFTER template_slot");
+  await ensureColumn('tender_doc_templates', 'kb_template_id', "BIGINT NULL AFTER template_name");
+  await ensureColumn('tender_score_optimization_records', 'target_section_title', "VARCHAR(255) NULL AFTER evidence_ids_json");
+  await ensureColumn('tender_score_optimization_records', 'before_text', "LONGTEXT NULL AFTER target_section_title");
+  await ensureColumn('tender_score_optimization_records', 'after_text', "LONGTEXT NULL AFTER before_text");
+  await ensureColumn('tender_score_optimization_records', 'applied_flag', "TINYINT NOT NULL DEFAULT 0 AFTER after_text");
+  await ensureColumn('tender_score_optimization_records', 'applied_at', "DATETIME NULL AFTER applied_flag");
+  await ensureColumn('tender_score_optimization_records', 'source', "VARCHAR(32) NULL AFTER applied_at");
 
   const modelCountRow = await get('SELECT COUNT(1) AS count FROM tender_ai_models');
   if (Number(modelCountRow?.count || 0) === 0) {
