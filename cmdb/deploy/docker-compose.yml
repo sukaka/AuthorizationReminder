@@ -1,17 +1,4 @@
 services:
-  mongo:
-    image: docker.m.daocloud.io/library/mongo:7.0
-    container_name: cmdb-mongo
-    ports:
-      - "27017:27017"
-    volumes:
-      - mongo_data:/data/db
-    healthcheck:
-      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand({ ping: 1 })"]
-      interval: 10s
-      timeout: 5s
-      retries: 20
-
   zookeeper:
     image: docker.m.daocloud.io/confluentinc/cp-zookeeper:7.6.1
     container_name: cmdb-zookeeper
@@ -71,14 +58,31 @@ services:
       KAFKA_CLUSTERS_0_NAME: local
       KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9092
 
+  cmdb-db-init:
+    image: docker.m.daocloud.io/library/mysql:8.0
+    container_name: cmdb-db-init
+    entrypoint: ["/bin/sh", "/scripts/init-cmdb-db.sh"]
+    environment:
+      MYSQL_HOST: host.docker.internal
+      MYSQL_PORT: 3308
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      CMDB_MYSQL_PASSWORD: ${CMDB_MYSQL_PASSWORD}
+      INIT_SQL_PATH: /migrations/001_init_cmdb.sql
+    volumes:
+      - ../migrations/mysql/001_init_cmdb.sql:/migrations/001_init_cmdb.sql:ro
+      - ../scripts/init-cmdb-db.sh:/scripts/init-cmdb-db.sh:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: "no"
+
   cmdb:
     build:
       context: ..
       dockerfile: Dockerfile
     container_name: cmdb-service
     depends_on:
-      mongo:
-        condition: service_healthy
+      cmdb-db-init:
+        condition: service_completed_successfully
       kafka:
         condition: service_started
       kafka-init:
@@ -92,12 +96,9 @@ services:
       READ_TIMEOUT_SEC: 10
       WRITE_TIMEOUT_SEC: 15
 
-      MYSQL_DSN: root:rootpass@tcp(host.docker.internal:3308)/cmdb?parseTime=true&charset=utf8mb4,utf8
+      MYSQL_DSN: cmdb_user:${CMDB_MYSQL_PASSWORD}@tcp(host.docker.internal:3308)/cmdb?parseTime=true&charset=utf8mb4,utf8
       MYSQL_MAX_OPEN_CONNS: 30
       MYSQL_MAX_IDLE_CONNS: 10
-
-      MONGO_URI: mongodb://mongo:27017
-      MONGO_DB: cmdb
 
       KAFKA_BROKERS: kafka:9092
       KAFKA_TOPIC_CI_CREATED: cmdb.ci.created
@@ -131,6 +132,3 @@ services:
       - "8090:80"
     extra_hosts:
       - "host.docker.internal:host-gateway"
-
-volumes:
-  mongo_data:

@@ -171,6 +171,44 @@ const uploadWithProgressAndCsrf = ({ path, formData, options = {}, retryOnCsrf =
     xhr.send(formData)
   })
 
+const uploadFileToSignedUrl = ({ url, method = 'PUT', file, headers = {}, onProgress }) =>
+  new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest()
+    xhr.open(method, String(url || ''), true)
+
+    Object.entries(headers || {}).forEach(([key, value]) => {
+      if (value === undefined || value === null || value === '') return
+      xhr.setRequestHeader(key, value)
+    })
+
+    xhr.upload.onprogress = (event) => {
+      if (!event.lengthComputable || typeof onProgress !== 'function') return
+      const percent = Math.max(0, Math.min(100, Math.round((event.loaded / event.total) * 100)))
+      onProgress(percent)
+    }
+
+    xhr.onerror = () => {
+      reject(new Error('OSS 上传失败，请检查网络或桶 CORS 配置后重试'))
+    }
+
+    xhr.onabort = () => {
+      reject(new Error('OSS 上传已取消'))
+    }
+
+    xhr.onload = () => {
+      const status = Number(xhr.status || 0)
+      if (status >= 200 && status < 300) {
+        resolve({
+          etag: String(xhr.getResponseHeader('etag') || xhr.getResponseHeader('ETag') || '').trim(),
+        })
+        return
+      }
+      reject(new Error(`OSS 上传失败(${status})`))
+    }
+
+    xhr.send(file)
+  })
+
 const buildApi = () => ({
   get: async (path) =>
     requestWithOptionalCsrf({
@@ -238,6 +276,68 @@ const buildPortalSwitchUrl = (system) => {
   if (system) params.set('system', system)
   params.set('mode', 'switch')
   return `${base}/portal?${params.toString()}`
+}
+
+const normalizeResourceStorageBackend = ({ resourceType, sourceMode, storageBackend }) => {
+  const type = String(resourceType || '').trim().toLowerCase()
+  const mode = String(sourceMode || '').trim().toLowerCase()
+  const backend = String(storageBackend || '').trim().toLowerCase()
+  if (mode === 'external') return 'external'
+  if (type !== 'video') return 'local'
+  return backend === 'oss' ? 'oss' : 'local'
+}
+
+const isManagedUploadVideoResource = (resource) => {
+  const type = String(resource?.resource_type || '').trim().toLowerCase()
+  const mode = String(resource?.source_mode || '').trim().toLowerCase()
+  const backend = normalizeResourceStorageBackend({
+    resourceType: type,
+    sourceMode: mode,
+    storageBackend: resource?.storage_backend,
+  })
+  return type === 'video' && mode === 'upload' && (backend === 'local' || backend === 'oss')
+}
+
+const buildDefaultOssSettingsForm = () => ({
+  enabled: false,
+  region: '',
+  bucket: '',
+  endpoint: '',
+  access_key_id: '',
+  access_key_secret: '',
+  sts_token: '',
+  signed_upload_expires_seconds: 600,
+  signed_play_expires_seconds: 300,
+  upload_max_file_size_mb: 2048,
+})
+
+const normalizeOssSettingsResponse = (payload) => {
+  const defaults = buildDefaultOssSettingsForm()
+  const readPositiveInt = (value, fallback) => {
+    const num = Number(value)
+    if (!Number.isFinite(num) || num <= 0) return fallback
+    return Math.round(num)
+  }
+  return {
+    form: {
+      enabled: !!payload?.enabled,
+      region: String(payload?.region || '').trim(),
+      bucket: String(payload?.bucket || '').trim(),
+      endpoint: String(payload?.endpoint || '').trim(),
+      access_key_id: String(payload?.access_key_id || '').trim(),
+      access_key_secret: String(payload?.access_key_secret || '').trim(),
+      sts_token: String(payload?.sts_token || '').trim(),
+      signed_upload_expires_seconds: readPositiveInt(payload?.signed_upload_expires_seconds, defaults.signed_upload_expires_seconds),
+      signed_play_expires_seconds: readPositiveInt(payload?.signed_play_expires_seconds, defaults.signed_play_expires_seconds),
+      upload_max_file_size_mb: readPositiveInt(payload?.upload_max_file_size_mb, defaults.upload_max_file_size_mb),
+    },
+    status: {
+      configured: !!payload?.configured,
+      validation_error: String(payload?.validation_error || '').trim(),
+      has_access_key_secret: !!payload?.has_access_key_secret,
+      has_sts_token: !!payload?.has_sts_token,
+    },
+  }
 }
 
 const roleLabel = (role) => {
@@ -385,6 +485,101 @@ const buildResourceOpenUrl = (resource) => {
   if (!id) return ''
   if (resourceType === 'video') return `/api/train-exam/resources/${id}/stream`
   return `/api/train-exam/resources/${id}/download`
+}
+
+const normalizeLearningProgressPercent = (value) => Math.max(0, Math.min(100, Math.round(Number(value || 0))))
+
+const isLearningProgressCompleted = (progress) =>
+  !!progress?.completed
+  || !!progress?.completed_at
+  || normalizeLearningProgressPercent(progress?.progress_percent) >= 100
+
+const isLearningVideoSeekLocked = (resource) =>
+  !!resource?.force_watch
+  && isManagedUploadVideoResource(resource)
+  && !isLearningProgressCompleted(resource?.progress)
+
+const formatPlaybackClock = (value) => {
+  const totalSeconds = Math.max(0, Math.round(Number(value || 0)))
+  const hours = Math.floor(totalSeconds / 3600)
+  const minutes = Math.floor((totalSeconds % 3600) / 60)
+  const seconds = totalSeconds % 60
+  if (hours > 0) return `${hours}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`
+  return `${minutes}:${String(seconds).padStart(2, '0')}`
+}
+
+const formatPlaybackRemainingLabel = (value) => {
+  const totalSeconds = Math.max(0, Math.round(Number(value || 0)))
+  const hours = Math.floor(totalSeconds / 3600)
+  const minutes = Math.floor((totalSeconds % 3600) / 60)
+  const seconds = totalSeconds % 60
+  if (hours > 0) return `${hours}小时${minutes}分`
+  if (minutes > 0) return `${minutes}分${seconds}秒`
+  return `${seconds}秒`
+}
+
+const resolveLearningFlowState = (item) => {
+  const resourceType = String(item?.resource_type || '').trim().toLowerCase()
+  const transcodeStatus = String(item?.transcode_status || '').trim().toLowerCase()
+  const transcodeProgress = Math.max(0, Math.min(100, Number(item?.transcode_progress || 0)))
+  const progressPercent = normalizeLearningProgressPercent(item?.progress?.progress_percent)
+
+  if (resourceType === 'video' && (transcodeStatus === 'queued' || transcodeStatus === 'running')) {
+    return {
+      key: 'transcoding',
+      label: `转码中 ${transcodeProgress}%`,
+      description: '视频仍在后台处理中，稍后即可继续学习。',
+      progressPercent,
+    }
+  }
+
+  if (resourceType === 'video' && transcodeStatus === 'failed') {
+    return {
+      key: 'failed',
+      label: '转码失败',
+      description: String(item?.transcode_message || '').trim() || '视频处理失败，请联系管理员重新上传。',
+      progressPercent,
+    }
+  }
+
+  if (progressPercent >= 100) {
+    return {
+      key: 'completed',
+      label: '已完成',
+      description: '本章已学习完成，可随时回看。',
+      progressPercent: 100,
+    }
+  }
+
+  if (progressPercent > 0) {
+    return {
+      key: 'active',
+      label: '进行中',
+      description: '本章已有学习进度，可以继续。',
+      progressPercent,
+    }
+  }
+
+  return {
+    key: 'pending',
+    label: '待学习',
+    description: '尚未开始，建议从这里进入。',
+    progressPercent: 0,
+  }
+}
+
+const buildLearningPrimaryActionLabel = (item, state) => {
+  const resourceType = String(item?.resource_type || '').trim().toLowerCase()
+  if (resourceType === 'video') {
+    if (state?.key === 'completed') return '回看视频'
+    return state?.key === 'active' ? '继续观看' : '打开播放器'
+  }
+  if (resourceType === 'doc') {
+    if (state?.key === 'completed') return '再次阅读'
+    return state?.key === 'active' ? '继续阅读' : '开始阅读'
+  }
+  if (resourceType === 'link') return '打开链接'
+  return '打开资源'
 }
 
 const aiLogStatusLabel = (value) => {
@@ -848,11 +1043,18 @@ function App() {
     name: '',
     resource_type: 'doc',
     source_mode: 'upload',
+    storage_backend: 'local',
     source_url: '',
     force_watch: false,
     sort_order: 0,
   })
-  const [resourceUpload, setResourceUpload] = useState({ resource_id: '', file: null })
+  const [resourceUpload, setResourceUpload] = useState({
+    resource_id: '',
+    resource_type: 'doc',
+    source_mode: 'upload',
+    storage_backend: 'local',
+    file: null,
+  })
   const [uploadingResource, setUploadingResource] = useState(false)
   const [resourceUploadProgress, setResourceUploadProgress] = useState(0)
   const [resourceUploadNotice, setResourceUploadNotice] = useState('')
@@ -1003,6 +1205,15 @@ function App() {
   const [auditLogs, setAuditLogs] = useState([])
   const [aiLogs, setAiLogs] = useState([])
   const [aiModels, setAiModels] = useState([])
+  const [ossSettingsForm, setOssSettingsForm] = useState(() => buildDefaultOssSettingsForm())
+  const [ossSettingsStatus, setOssSettingsStatus] = useState({
+    configured: false,
+    validation_error: '',
+    has_access_key_secret: false,
+    has_sts_token: false,
+  })
+  const [ossSettingsLoading, setOssSettingsLoading] = useState(false)
+  const [ossSettingsSaving, setOssSettingsSaving] = useState(false)
   const [modelForm, setModelForm] = useState({
     model_key: '',
     name: '',
@@ -1079,6 +1290,7 @@ function App() {
     name: '',
     resource_type: 'doc',
     source_mode: 'upload',
+    storage_backend: 'local',
     source_url: '',
     force_watch: false,
     sort_order: 0,
@@ -1213,11 +1425,56 @@ function App() {
     () => learningPath.items.find((item) => Number(item.id) === Number(selectedLearningResourceId || 0)) || null,
     [learningPath.items, selectedLearningResourceId]
   )
+  const learningVideoSeekLocked = useMemo(
+    () => isLearningVideoSeekLocked(selectedLearningResource),
+    [selectedLearningResource]
+  )
+  const learningVideoRuntimePercent = useMemo(() => {
+    const duration = Math.max(0, Number(videoRuntime.duration || 0))
+    if (duration > 0) return normalizeLearningProgressPercent((Number(videoRuntime.current || 0) / duration) * 100)
+    return normalizeLearningProgressPercent(selectedLearningResource?.progress?.progress_percent)
+  }, [selectedLearningResource, videoRuntime.current, videoRuntime.duration])
+  const learningVideoRemainingSeconds = useMemo(
+    () => Math.max(0, Number(videoRuntime.duration || 0) - Number(videoRuntime.current || 0)),
+    [videoRuntime.current, videoRuntime.duration]
+  )
+  const learningVideoStatusLabel = useMemo(() => {
+    if (learningVideoSeekLocked) return '强制播放（首次需完整观看）'
+    if (selectedLearningResource?.force_watch) return '已完成，可自由回看'
+    return '自由播放'
+  }, [learningVideoSeekLocked, selectedLearningResource])
   const currentLearningCourse = useMemo(() => {
     const cid = Number(learningCourseId || 0)
     if (!cid) return learningPath.course || null
     return courses.find((item) => Number(item.id || 0) === cid) || learningPath.course || null
   }, [courses, learningCourseId, learningPath.course])
+  const learningFlowItems = useMemo(() => (
+    (Array.isArray(learningPath.items) ? learningPath.items : [])
+      .slice()
+      .sort((a, b) => (
+        Number(a?.chapter_no || 0) - Number(b?.chapter_no || 0)
+        || Number(a?.sort_order || 0) - Number(b?.sort_order || 0)
+        || Number(a?.id || 0) - Number(b?.id || 0)
+      ))
+      .map((item) => ({
+        ...item,
+        uiState: resolveLearningFlowState(item),
+      }))
+  ), [learningPath.items])
+  const spotlightLearningItem = useMemo(() => {
+    if (!learningFlowItems.length) return null
+    const inProgressItem = learningFlowItems.find((item) => item.uiState.key === 'active')
+    if (inProgressItem) return inProgressItem
+    const nextPendingItem = learningFlowItems.find((item) => item.uiState.key === 'pending')
+    if (nextPendingItem) return nextPendingItem
+    const blockedItem = learningFlowItems.find((item) => item.uiState.key === 'transcoding' || item.uiState.key === 'failed')
+    if (blockedItem) return blockedItem
+    return learningFlowItems[0]
+  }, [learningFlowItems])
+  const currentLearningCourseTitle = useMemo(
+    () => String(currentLearningCourse?.title || learningPath.course?.title || '').trim() || '未命名课程',
+    [currentLearningCourse, learningPath.course]
+  )
   const hasLearningPathTranscoding = useMemo(
     () =>
       Array.isArray(learningPath.items) &&
@@ -1836,6 +2093,37 @@ function App() {
     setAiModels(Array.isArray(rows) ? rows : [])
   }
 
+  const fetchOssSettings = async (silent = false) => {
+    if (!silent) clearFeedback()
+    if (!isAdminRole) {
+      setOssSettingsForm(buildDefaultOssSettingsForm())
+      setOssSettingsStatus({
+        configured: false,
+        validation_error: '',
+        has_access_key_secret: false,
+        has_sts_token: false,
+      })
+      return
+    }
+    setOssSettingsLoading(true)
+    try {
+      const payload = await api.get('/api/train-exam/settings/oss')
+      const normalized = normalizeOssSettingsResponse(payload)
+      setOssSettingsForm(normalized.form)
+      setOssSettingsStatus(normalized.status)
+    } finally {
+      setOssSettingsLoading(false)
+    }
+  }
+
+  const fetchAiConfigCenter = async (silent = false) => {
+    if (!silent) clearFeedback()
+    await Promise.all([
+      fetchAiModels(true),
+      fetchOssSettings(true),
+    ])
+  }
+
   const fetchUserProfiles = async (silent = false) => {
     if (!silent) clearFeedback()
     const rows = await api.get('/api/train-exam/user-profiles?limit=200')
@@ -1879,18 +2167,42 @@ function App() {
         name: resourceForm.name,
         resource_type: resourceForm.resource_type,
         source_mode: resourceForm.source_mode,
+        storage_backend: normalizeResourceStorageBackend({
+          resourceType: resourceForm.resource_type,
+          sourceMode: resourceForm.source_mode,
+          storageBackend: resourceForm.storage_backend,
+        }),
         source_url: resourceForm.source_url || undefined,
         force_watch: !!resourceForm.force_watch,
         sort_order: Number(resourceForm.sort_order || 0),
       })
       setMessage(`资源已创建：${created.name}`)
-      setResourceUpload((prev) => ({ ...prev, resource_id: String(created.id || '') }))
-      setResourceUploadNotice('资源已创建，可直接选择文件上传')
+      setResourceUpload((prev) => ({
+        ...prev,
+        resource_id: String(created.id || ''),
+        resource_type: String(created?.resource_type || resourceForm.resource_type || 'doc'),
+        source_mode: String(created?.source_mode || resourceForm.source_mode || 'upload'),
+        storage_backend: normalizeResourceStorageBackend({
+          resourceType: created?.resource_type || resourceForm.resource_type,
+          sourceMode: created?.source_mode || resourceForm.source_mode,
+          storageBackend: created?.storage_backend || resourceForm.storage_backend,
+        }),
+      }))
+      setResourceUploadNotice(
+        normalizeResourceStorageBackend({
+          resourceType: created?.resource_type,
+          sourceMode: created?.source_mode,
+          storageBackend: created?.storage_backend,
+        }) === 'oss'
+          ? '资源已创建，可选择标准 MP4 直传到阿里云 OSS'
+          : '资源已创建，可直接选择文件上传'
+      )
       setResourceForm({
         course_id: resourceForm.course_id,
         name: '',
         resource_type: 'doc',
         source_mode: 'upload',
+        storage_backend: 'local',
         source_url: '',
         force_watch: false,
         sort_order: 0,
@@ -2094,6 +2406,33 @@ function App() {
     }, 3000)
   }
 
+  const uploadManagedOssResource = async ({ resourceId, file }) => {
+    const initPayload = await api.post(`/api/train-exam/resources/${resourceId}/oss-upload-init`, {
+      file_name: String(file?.name || ''),
+      mime_type: String(file?.type || 'video/mp4').trim() || 'video/mp4',
+      file_size: Math.max(0, Number(file?.size || 0)),
+    })
+
+    await uploadFileToSignedUrl({
+      url: initPayload?.upload_url,
+      method: initPayload?.method || 'PUT',
+      file,
+      headers: initPayload?.headers || {},
+      onProgress: (percent) => {
+        setResourceUploadProgress(percent)
+        setResourceUploadNotice(`上传到阿里云 OSS：${percent}%`)
+      },
+    })
+
+    return api.post(`/api/train-exam/resources/${resourceId}/oss-upload-complete`, {
+      object_key: initPayload?.object_key,
+      etag: '',
+      file_size: Math.max(0, Number(file?.size || 0)),
+      mime_type: String(file?.type || 'video/mp4').trim() || 'video/mp4',
+      original_name: String(file?.name || ''),
+    })
+  }
+
   const onUploadResource = async (e) => {
     e.preventDefault()
     clearFeedback()
@@ -2109,18 +2448,46 @@ function App() {
     setResourceUploadProgress(0)
     setResourceUploadNotice('开始上传，请稍候...')
     try {
-      const form = new FormData()
-      form.append('file', resourceUpload.file)
-      const payload = await api.postFormWithProgress(`/api/train-exam/resources/${resourceUpload.resource_id}/upload`, form, {
-        onProgress: (percent) => {
-          setResourceUploadProgress(percent)
-          setResourceUploadNotice(`上传中：${percent}%`)
-        },
+      const storageBackend = normalizeResourceStorageBackend({
+        resourceType: resourceUpload.resource_type,
+        sourceMode: resourceUpload.source_mode,
+        storageBackend: resourceUpload.storage_backend,
       })
+      let payload
+      if (storageBackend === 'oss' && String(resourceUpload.resource_type || '').toLowerCase() === 'video') {
+        payload = await uploadManagedOssResource({
+          resourceId: resourceUpload.resource_id,
+          file: resourceUpload.file,
+        })
+      } else {
+        const form = new FormData()
+        form.append('file', resourceUpload.file)
+        payload = await api.postFormWithProgress(`/api/train-exam/resources/${resourceUpload.resource_id}/upload`, form, {
+          onProgress: (percent) => {
+            setResourceUploadProgress(percent)
+            setResourceUploadNotice(`上传中：${percent}%`)
+          },
+        })
+      }
       setResourceUploadProgress(100)
       const transcodeStatus = String(payload?.transcode_status || '').toLowerCase()
       const transcodeProgress = Math.max(0, Math.min(100, Number(payload?.transcode_progress || 0)))
-      if (transcodeStatus === 'queued' || transcodeStatus === 'running') {
+      const finalStorageBackend = normalizeResourceStorageBackend({
+        resourceType: payload?.resource_type || resourceUpload.resource_type,
+        sourceMode: payload?.source_mode || resourceUpload.source_mode,
+        storageBackend: payload?.storage_backend || resourceUpload.storage_backend,
+      })
+      const uploadStatus = String(payload?.upload_status || '').trim().toLowerCase()
+      if (finalStorageBackend === 'oss') {
+        if (uploadStatus === 'ready') {
+          setMessage('资源文件已上传至阿里云 OSS，可直接播放')
+          setResourceUploadNotice('OSS 上传完成')
+        } else {
+          setResourceUploadNotice('OSS 上传已发起，请稍后刷新查看状态')
+        }
+        stopTranscodePolling()
+        setTranscodeTask(null)
+      } else if (transcodeStatus === 'queued' || transcodeStatus === 'running') {
         setMessage('资源文件上传成功，已进入后台转码')
         setResourceUploadNotice(`文件已上传，后台转码中 ${transcodeProgress}%（可以关闭当前页面，不影响转码）`)
         setTranscodeTask({
@@ -2143,7 +2510,13 @@ function App() {
         setMessage('资源文件上传成功')
         setResourceUploadNotice('上传完成')
       }
-      setResourceUpload({ resource_id: '', file: null })
+      setResourceUpload({
+        resource_id: '',
+        resource_type: 'doc',
+        source_mode: 'upload',
+        storage_backend: 'local',
+        file: null,
+      })
       await fetchCourses(true)
       if (learningCourseId) await fetchLearningPath(Number(learningCourseId), true)
     } catch (err) {
@@ -2359,6 +2732,11 @@ function App() {
       name: String(item?.name || ''),
       resource_type: String(item?.resource_type || 'doc'),
       source_mode: String(item?.source_mode || 'upload'),
+      storage_backend: normalizeResourceStorageBackend({
+        resourceType: item?.resource_type,
+        sourceMode: item?.source_mode,
+        storageBackend: item?.storage_backend,
+      }),
       source_url: String(item?.source_url || ''),
       force_watch: !!item?.force_watch,
       sort_order: Number(item?.sort_order || 0),
@@ -2386,6 +2764,11 @@ function App() {
         name: resourceEditForm.name,
         resource_type: resourceEditForm.resource_type,
         source_mode: resourceEditForm.source_mode,
+        storage_backend: normalizeResourceStorageBackend({
+          resourceType: resourceEditForm.resource_type,
+          sourceMode: resourceEditForm.source_mode,
+          storageBackend: resourceEditForm.storage_backend,
+        }),
         source_url: resourceEditForm.source_mode === 'external' ? resourceEditForm.source_url : '',
         force_watch: resourceEditForm.resource_type === 'video' && resourceEditForm.source_mode === 'upload'
           ? !!resourceEditForm.force_watch
@@ -2398,8 +2781,16 @@ function App() {
       setEditingResourceId(0)
 
       if (payload.source_mode === 'upload') {
-        setResourceUpload((prev) => ({ ...prev, resource_id: String(editingResourceId) }))
-        setResourceUploadNotice('资源已更新为上传模式，如需生效请上传最新文件。')
+        setResourceUpload((prev) => ({
+          ...prev,
+          resource_id: String(editingResourceId),
+          resource_type: payload.resource_type,
+          source_mode: payload.source_mode,
+          storage_backend: payload.storage_backend,
+        }))
+        setResourceUploadNotice(payload.storage_backend === 'oss'
+          ? '资源已更新为阿里云 OSS 上传模式，请重新上传标准 MP4 文件。'
+          : '资源已更新为上传模式，如需生效请上传最新文件。')
       }
 
       if (Number(selectedLearningResourceId || 0) === Number(editingResourceId || 0)) {
@@ -2460,40 +2851,73 @@ function App() {
     }
   }
 
+  const playLearningVideo = async (player, resource) => {
+    if (!player) return false
+    try {
+      await player.play()
+      return true
+    } catch (err) {
+      const mediaErrorCode = Number(player.error?.code || 0)
+      const resourceId = Number(resource?.id || 0)
+      if (resourceId) {
+        api.get(`/api/train-exam/resources/${resourceId}/playability`)
+          .then((check) => {
+            if (check && check.playable === false && check.reason) {
+              setLearningPlayerNotice(String(check.reason))
+              return
+            }
+            setLearningPlayerNotice(buildVideoErrorMessage({
+              mediaErrorCode,
+              playErrorMessage: err?.message,
+            }))
+          })
+          .catch(() => {
+            setLearningPlayerNotice(buildVideoErrorMessage({
+              mediaErrorCode,
+              playErrorMessage: err?.message,
+            }))
+          })
+        return false
+      }
+      setLearningPlayerNotice(buildVideoErrorMessage({
+        mediaErrorCode,
+        playErrorMessage: err?.message,
+      }))
+      return false
+    }
+  }
+
   const onToggleLearningVideoPlay = () => {
     const player = learningVideoRef.current
     if (!player) return
     if (player.paused) {
-      player.play().catch((err) => {
-        const mediaErrorCode = Number(player.error?.code || 0)
-        const resourceId = Number(selectedLearningResource?.id || 0)
-        if (resourceId) {
-          api.get(`/api/train-exam/resources/${resourceId}/playability`)
-            .then((check) => {
-              if (check && check.playable === false && check.reason) {
-                setLearningPlayerNotice(String(check.reason))
-                return
-              }
-              setLearningPlayerNotice(buildVideoErrorMessage({
-                mediaErrorCode,
-                playErrorMessage: err?.message,
-              }))
-            })
-            .catch(() => {
-              setLearningPlayerNotice(buildVideoErrorMessage({
-                mediaErrorCode,
-                playErrorMessage: err?.message,
-              }))
-            })
-          return
-        }
-        setLearningPlayerNotice(buildVideoErrorMessage({
-          mediaErrorCode,
-          playErrorMessage: err?.message,
-        }))
-      })
+      void playLearningVideo(player, selectedLearningResource)
+      return
     }
-    else player.pause()
+    player.pause()
+  }
+
+  const onReplayLearningVideo = () => {
+    const player = learningVideoRef.current
+    const resource = selectedLearningResource
+    if (!player || !resource) return
+    try {
+      player.currentTime = 0
+    } catch {
+      // Ignore seek failure until metadata is ready.
+    }
+    learningVideoTrackerRef.current = {
+      lastSyncTs: 0,
+      lastPos: 0,
+      maxPos: 0,
+      blockedToastAt: 0,
+    }
+    setVideoRuntime((prev) => ({
+      current: 0,
+      duration: Math.max(0, Number(player.duration || prev.duration || 0)),
+      playing: !player.paused,
+    }))
+    void playLearningVideo(player, resource)
   }
 
   const closeDocPreviewModal = async ({ recordProgress = true } = {}) => {
@@ -2615,6 +3039,25 @@ function App() {
     }
   }
 
+  const onOpenLearningResource = async (item) => {
+    const resourceType = String(item?.resource_type || '').trim().toLowerCase()
+    if (resourceType === 'video') {
+      await onOpenLearningPlayer(item)
+      return
+    }
+    if (resourceType === 'doc') {
+      await onOpenLearningDocPreview(item)
+      return
+    }
+    const targetUrl = buildResourceOpenUrl(item)
+    if (!targetUrl) {
+      setError('资源链接不可用，请联系管理员检查配置。')
+      return
+    }
+    window.open(targetUrl, '_blank', 'noopener,noreferrer')
+    setMessage('已打开学习资源。')
+  }
+
   const onLearningVideoLoadedMetadata = (item, e) => {
     const player = e.currentTarget
     player.volume = Math.max(0, Math.min(1, Number(learningPlayerVolume || 0) / 100))
@@ -2648,7 +3091,7 @@ function App() {
   }
 
   const onLearningVideoRateChange = (item, e) => {
-    if (!item?.force_watch) return
+    if (!isLearningVideoSeekLocked(item)) return
     const player = e.currentTarget
     if (Number(player.playbackRate || 1) !== 1) {
       player.playbackRate = 1
@@ -2656,7 +3099,7 @@ function App() {
   }
 
   const onLearningVideoSeeking = (item, e) => {
-    if (!item?.force_watch) return
+    if (!isLearningVideoSeekLocked(item)) return
     const player = e.currentTarget
     const tracker = learningVideoTrackerRef.current
     const target = Number(player.currentTime || 0)
@@ -3662,6 +4105,40 @@ function App() {
     }
   }
 
+  const onSaveOssSettings = async (e) => {
+    e.preventDefault()
+    clearFeedback()
+    if (!isAdminRole) {
+      setError('仅管理员可维护阿里云 OSS 配置')
+      return
+    }
+    if (ossSettingsSaving) return
+
+    setOssSettingsSaving(true)
+    try {
+      const payload = await api.put('/api/train-exam/settings/oss', {
+        enabled: !!ossSettingsForm.enabled,
+        region: ossSettingsForm.region,
+        bucket: ossSettingsForm.bucket,
+        endpoint: ossSettingsForm.endpoint,
+        access_key_id: ossSettingsForm.access_key_id,
+        access_key_secret: ossSettingsForm.access_key_secret,
+        sts_token: ossSettingsForm.sts_token,
+        signed_upload_expires_seconds: Number(ossSettingsForm.signed_upload_expires_seconds || 600),
+        signed_play_expires_seconds: Number(ossSettingsForm.signed_play_expires_seconds || 300),
+        upload_max_file_size_mb: Number(ossSettingsForm.upload_max_file_size_mb || 2048),
+      })
+      const normalized = normalizeOssSettingsResponse(payload)
+      setOssSettingsForm(normalized.form)
+      setOssSettingsStatus(normalized.status)
+      setMessage(normalized.status.configured ? '阿里云 OSS 配置已保存并生效' : '阿里云 OSS 已保存为关闭状态')
+    } catch (err) {
+      setError(err.message || '保存阿里云 OSS 配置失败')
+    } finally {
+      setOssSettingsSaving(false)
+    }
+  }
+
   const onCreateAiModel = async (e) => {
     e.preventDefault()
     clearFeedback()
@@ -4285,183 +4762,245 @@ function App() {
     learningVideoTrackerRef.current = { lastSyncTs: 0, lastPos: 0, maxPos: 0, blockedToastAt: 0 }
   }, [selectedLearningResourceId, learningCourseId])
 
-  const renderCourseLearningModalBody = () => (
-    <>
-      <div className="modal-body doc-threshold-config course-learning-config">
-        <div className="row-actions">
-          <span className="badge">当前文档学习阈值：{docPreviewThresholdSeconds} 秒</span>
-        </div>
-        {isAdminRole ? (
-          <div className="row-actions">
-            <label htmlFor="course-learning-doc-threshold-input">阈值(秒)</label>
-            <input
-              id="course-learning-doc-threshold-input"
-              type="number"
-              min={docPreviewThresholdRange.min}
-              max={docPreviewThresholdRange.max}
-              value={docPreviewThresholdInput}
-              onChange={(e) => setDocPreviewThresholdInput(e.target.value)}
-            />
-            <button
-              className="primary"
-              type="button"
-              disabled={docPreviewThresholdSaving}
-              onClick={onSaveDocPreviewThreshold}
-            >
-              {docPreviewThresholdSaving ? '保存中...' : '保存阈值'}
-            </button>
-          </div>
-        ) : (
-          <span className="empty-tip">仅管理员可修改文档学习阈值。</span>
-        )}
-      </div>
+  const renderCourseLearningModalBody = () => {
+    const totalResources = Math.max(0, Number(learningPath.summary?.total_resources || 0))
+    const completedResources = Math.max(0, Number(learningPath.summary?.completed_resources || 0))
+    const inProgressResources = Math.max(0, Number(learningPath.summary?.in_progress_resources || 0))
+    const notStartedResources = Math.max(0, Number(learningPath.summary?.not_started_resources || 0))
+    const completionRate = normalizeLearningProgressPercent(learningPath.summary?.completion_rate)
+    const spotlightActionLabel = spotlightLearningItem
+      ? buildLearningPrimaryActionLabel(spotlightLearningItem, spotlightLearningItem.uiState)
+      : ''
+    const spotlightPrimaryDisabled = !!spotlightLearningItem && (
+      (String(spotlightLearningItem.resource_type || '').toLowerCase() === 'doc' && docPreviewLoading)
+      || (String(spotlightLearningItem.resource_type || '').toLowerCase() === 'link' && !buildResourceOpenUrl(spotlightLearningItem))
+    )
+    const courseSummaryText = totalResources <= 0
+      ? '当前课程还没有章节资源，稍后可在这里继续学习。'
+      : completionRate >= 100
+        ? '本课程已全部完成，可以回看任一章节巩固内容。'
+        : spotlightLearningItem
+          ? `下一步建议继续第 ${spotlightLearningItem.chapter_no} 章，保持学习节奏。`
+          : `当前共有 ${totalResources} 个章节，建议按顺序完成。`
 
-      <div className="modal-body">
-        <div className="metric-grid">
-          <div className="metric"><label>章节总数</label><strong>{learningPath.summary?.total_resources || 0}</strong></div>
-          <div className="metric"><label>已完成</label><strong>{learningPath.summary?.completed_resources || 0}</strong></div>
-          <div className="metric"><label>进行中</label><strong>{learningPath.summary?.in_progress_resources || 0}</strong></div>
-          <div className="metric"><label>完成率</label><strong>{learningPath.summary?.completion_rate || 0}%</strong></div>
-        </div>
-      </div>
+    return (
+      <>
+        <div className="modal-body course-learning-overview">
+          <section className="course-learning-hero">
+            <div className="course-learning-eyebrow">课程学习空间</div>
+            <div className="course-learning-hero-copy">
+              <h2>{currentLearningCourseTitle}</h2>
+              <p>{courseSummaryText}</p>
+            </div>
+            <div className="course-learning-progress-bar">
+              <div className="course-learning-progress-main">
+                <strong>{completionRate}%</strong>
+                <span>{completionRate >= 100 ? '全部章节已完成' : `已完成 ${completedResources} / ${totalResources} 章`}</span>
+              </div>
+              <div className="course-learning-progress-track" aria-hidden="true">
+                <span style={{ width: `${completionRate}%` }} />
+              </div>
+              <div className="course-learning-progress-meta">
+                <span>共 {totalResources} 章</span>
+                <span>已完成 {completedResources}</span>
+                <span>进行中 {inProgressResources}</span>
+                <span>待开始 {notStartedResources}</span>
+              </div>
+            </div>
+          </section>
 
-      <div className="modal-body table-wrap">
-        <table className="learning-path-table">
-          <thead>
-            <tr>
-              <th>章节</th>
-              <th>资源</th>
-              <th>类型</th>
-              <th>进度</th>
-              <th>最近学习</th>
-              <th>操作</th>
-            </tr>
-          </thead>
-          <tbody>
-            {learningPath.items?.length ? learningPath.items.map((item) => (
-              <tr
-                key={`lp-${item.id}`}
-                className={
-                  String(item.resource_type || '').toLowerCase() === 'video' &&
-                  (String(item.transcode_status || '').toLowerCase() === 'queued' ||
-                    String(item.transcode_status || '').toLowerCase() === 'running')
-                    ? 'transcoding-row'
-                    : ''
-                }
-              >
-                <td>第 {item.chapter_no} 章</td>
-                <td>
-                  {item.name}
-                  {String(item.resource_type || '').toLowerCase() === 'video' ? (
-                    <>
-                      {' '}
-                      {String(item.transcode_status || '').toLowerCase() === 'queued' || String(item.transcode_status || '').toLowerCase() === 'running'
-                        ? <span className="badge">转码中 {Math.max(0, Math.min(100, Number(item.transcode_progress || 0)))}%</span>
-                        : null}
-                      {String(item.transcode_status || '').toLowerCase() === 'failed'
-                        ? <span className="badge">转码失败</span>
-                        : null}
-                    </>
-                  ) : null}
-                </td>
-                <td>{resourceTypeLabel(item.resource_type)}</td>
-                <td>{item.progress?.progress_percent || 0}%</td>
-                <td>{formatDateTime(item.progress?.updated_at)}</td>
-                <td>
-                  <div className="row-actions learning-actions">
-                    {String(item.resource_type || '').toLowerCase() === 'video' ? (
-                      <button className="ghost" type="button" onClick={() => onOpenLearningPlayer(item)}>打开播放器</button>
-                    ) : null}
-                    {String(item.resource_type || '').toLowerCase() === 'doc' ? (
-                      <button
-                        className="ghost"
-                        type="button"
-                        disabled={docPreviewLoading}
-                        onClick={() => onOpenLearningDocPreview(item)}
-                      >
-                        {docPreviewLoading ? '正在打开...' : (String(item.source_mode || '').toLowerCase() === 'external' ? '打开外链文档' : '在线预览文档')}
-                      </button>
-                    ) : null}
-                    {isBasicUser ? null : (
-                      <>
-                        {canWrite ? (
-                          <button className="ghost" type="button" onClick={() => onOpenResourceEditModal(item)}>编辑资源</button>
-                        ) : null}
-                        {canWrite ? (
-                          <button
-                            className="danger"
-                            type="button"
-                            disabled={resourceDeletePendingId === Number(item.id)}
-                            onClick={() => onDeleteResource(item)}
-                          >
-                            {resourceDeletePendingId === Number(item.id) ? '删除中...' : '删除资源'}
-                          </button>
-                        ) : null}
-                        {canWrite && String(item.resource_type || '').toLowerCase() === 'video' ? (
-                          <button
-                            className="warn"
-                            type="button"
-                            onClick={() => onUpdateResourcePlaybackPolicy(item.id, !item.force_watch)}
-                          >
-                            {item.force_watch ? '取消强制播放' : '启用强制播放'}
-                          </button>
-                        ) : null}
-                        {String(item.resource_type || '').toLowerCase() === 'doc' ? (
-                          <span className="badge">阅读文档满 {docPreviewThresholdSeconds || DOC_PREVIEW_MIN_SECONDS_DEFAULT} 秒后自动完成</span>
-                        ) : !(item.force_watch && String(item.resource_type || '').toLowerCase() === 'video') ? (
-                          <>
-                            <button className="ghost" type="button" onClick={() => onUpdateLearningProgress({
-                              resourceId: item.id,
-                              nextPercent: Math.min(100, Number(item.progress?.progress_percent || 0) + 10),
-                              markCompleted: false,
-                            })} title="用于手动补录学习进度，不代表真实播放时长">手动补录+10%</button>
-                            <button className="primary" type="button" onClick={() => onUpdateLearningProgress({
-                              resourceId: item.id,
-                              nextPercent: 100,
-                              markCompleted: true,
-                            })}>标记完成</button>
-                          </>
-                        ) : (
-                          <span className="badge">强制播放资源，请在播放器中学习</span>
-                        )}
-                      </>
-                    )}
+          {spotlightLearningItem ? (
+            <section className={`course-learning-spotlight is-${spotlightLearningItem.uiState.key}`}>
+              <div className="course-learning-spotlight-label">继续学习</div>
+              <div className="course-learning-spotlight-main">
+                <div className="course-learning-spotlight-copy">
+                  <strong>第 {spotlightLearningItem.chapter_no} 章 · {spotlightLearningItem.name}</strong>
+                  <p>{spotlightLearningItem.uiState.description}</p>
+                  <div className="course-learning-spotlight-meta">
+                    <span>{resourceTypeLabel(spotlightLearningItem.resource_type)}</span>
+                    <span>当前进度 {spotlightLearningItem.uiState.progressPercent}%</span>
+                    <span>最近学习 {spotlightLearningItem.progress?.updated_at ? formatDateTime(spotlightLearningItem.progress.updated_at) : '尚未开始'}</span>
                   </div>
-                </td>
-              </tr>
-            )) : <tr><td colSpan={6}>该课程暂无章节资源</td></tr>}
-          </tbody>
-        </table>
-      </div>
+                </div>
+                <div className="course-learning-spotlight-actions">
+                  <span className={`learning-flow-badge is-${spotlightLearningItem.uiState.key}`}>{spotlightLearningItem.uiState.label}</span>
+                  <button
+                    className="primary"
+                    type="button"
+                    disabled={spotlightPrimaryDisabled}
+                    onClick={() => { void onOpenLearningResource(spotlightLearningItem) }}
+                  >
+                    {spotlightActionLabel}
+                  </button>
+                </div>
+              </div>
+            </section>
+          ) : null}
+        </div>
 
-      <div className="modal-body table-wrap">
-        <table>
-          <thead>
-            <tr>
-              <th>课程</th>
-              <th>总章节</th>
-              <th>已完成</th>
-              <th>进行中</th>
-              <th>平均完成率</th>
-              <th>最近学习</th>
-            </tr>
-          </thead>
-          <tbody>
-            {myLearningProgress.items?.length ? myLearningProgress.items.map((item) => (
-              <tr key={`my-progress-${item.course_id}`}>
-                <td>{item.course_title}</td>
-                <td>{item.total_resources}</td>
-                <td>{item.completed_resources}</td>
-                <td>{item.in_progress_resources}</td>
-                <td>{item.completion_rate}%</td>
-                <td>{formatDateTime(item.last_learning_at)}</td>
-              </tr>
-            )) : <tr><td colSpan={6}>暂无学习进度记录</td></tr>}
-          </tbody>
-        </table>
-      </div>
-    </>
-  )
+        <div className="modal-body course-learning-flow-wrap">
+          {learningFlowItems.length ? (
+            <div className="course-learning-flow">
+              {learningFlowItems.map((item) => {
+                const state = item.uiState
+                const resourceType = String(item.resource_type || '').toLowerCase()
+                const isSpotlight = Number(item.id || 0) === Number(spotlightLearningItem?.id || 0)
+                const latestLearningText = item.progress?.updated_at ? formatDateTime(item.progress.updated_at) : '尚未开始'
+                const primaryActionLabel = buildLearningPrimaryActionLabel(item, state)
+                const docThresholdText = `阅读文档满 ${docPreviewThresholdSeconds || DOC_PREVIEW_MIN_SECONDS_DEFAULT} 秒后自动完成`
+                const canManualAdjust = !(item.force_watch && isManagedUploadVideoResource(item)) && resourceType !== 'doc'
+                const primaryActionDisabled = (resourceType === 'doc' && docPreviewLoading)
+                  || (resourceType === 'link' && !buildResourceOpenUrl(item))
+
+                return (
+                  <article
+                    key={`learning-flow-${item.id}`}
+                    className={`learning-chapter-card is-${state.key}${isSpotlight ? ' is-spotlight' : ''}`}
+                  >
+                    <div className="learning-chapter-index">
+                      <span className="learning-chapter-order">第 {item.chapter_no} 章</span>
+                      <strong>{resourceTypeLabel(item.resource_type)}</strong>
+                    </div>
+
+                    <div className="learning-chapter-main">
+                      <div className="learning-chapter-head">
+                        <div className="learning-chapter-copy">
+                          <h3>{item.name}</h3>
+                          <p>{state.description}</p>
+                        </div>
+                        <span className={`learning-flow-badge is-${state.key}`}>{state.label}</span>
+                      </div>
+
+                      <div className="learning-chapter-progress-row">
+                        <div className="learning-chapter-progress-track" aria-hidden="true">
+                          <span style={{ width: `${state.progressPercent}%` }} />
+                        </div>
+                        <strong>{state.progressPercent}%</strong>
+                      </div>
+
+                      <div className="learning-chapter-meta">
+                        <span>最近学习 {latestLearningText}</span>
+                        {resourceType === 'video' && isManagedUploadVideoResource(item) && item.force_watch ? <span>需完整观看</span> : null}
+                        {resourceType === 'doc' ? <span>{docThresholdText}</span> : null}
+                        {resourceType === 'link' && String(item.source_mode || '').toLowerCase() === 'external' ? <span>打开后将跳转到外部链接</span> : null}
+                      </div>
+
+                      <div className="learning-chapter-actions">
+                        <button
+                          className={`learning-primary-action is-${state.key}${isSpotlight ? ' is-spotlight' : ''}`}
+                          type="button"
+                          disabled={primaryActionDisabled}
+                          onClick={() => { void onOpenLearningResource(item) }}
+                        >
+                          {primaryActionDisabled ? '正在打开...' : primaryActionLabel}
+                        </button>
+
+                        {!isBasicUser ? (
+                          <details className="learning-chapter-admin">
+                            <summary aria-label={`展开第 ${item.chapter_no} 章的更多操作`}>更多操作</summary>
+                            <div className="row-actions learning-chapter-admin-actions">
+                              {canWrite ? (
+                                <button className="ghost" type="button" onClick={() => onOpenResourceEditModal(item)}>编辑资源</button>
+                              ) : null}
+                              {canWrite ? (
+                                <button
+                                  className="danger"
+                                  type="button"
+                                  disabled={resourceDeletePendingId === Number(item.id)}
+                                  onClick={() => onDeleteResource(item)}
+                                >
+                                  {resourceDeletePendingId === Number(item.id) ? '删除中...' : '删除资源'}
+                                </button>
+                              ) : null}
+                              {canWrite && isManagedUploadVideoResource(item) ? (
+                                <button
+                                  className="warn"
+                                  type="button"
+                                  onClick={() => onUpdateResourcePlaybackPolicy(item.id, !item.force_watch)}
+                                >
+                                  {item.force_watch ? '取消强制播放' : '启用强制播放'}
+                                </button>
+                              ) : null}
+                              {resourceType === 'doc' ? (
+                                <span className="learning-inline-tip">{docThresholdText}</span>
+                              ) : canManualAdjust ? (
+                                <>
+                                  <button
+                                    className="ghost"
+                                    type="button"
+                                    onClick={() => onUpdateLearningProgress({
+                                      resourceId: item.id,
+                                      nextPercent: Math.min(100, Number(item.progress?.progress_percent || 0) + 10),
+                                      markCompleted: false,
+                                    })}
+                                    title="用于手动补录学习进度，不代表真实播放时长"
+                                  >
+                                    手动补录+10%
+                                  </button>
+                                  <button
+                                    className="primary"
+                                    type="button"
+                                    onClick={() => onUpdateLearningProgress({
+                                      resourceId: item.id,
+                                      nextPercent: 100,
+                                      markCompleted: true,
+                                    })}
+                                  >
+                                    标记完成
+                                  </button>
+                                </>
+                              ) : (
+                                <span className="learning-inline-tip">强制播放资源，请在播放器中学习</span>
+                              )}
+                            </div>
+                          </details>
+                        ) : null}
+                      </div>
+                    </div>
+                  </article>
+                )
+              })}
+            </div>
+          ) : (
+            <div className="course-learning-empty">
+              <strong>当前课程还没有可学习章节</strong>
+              <p>先创建文档、视频或外链资源，这里会自动形成连续的学习流。</p>
+            </div>
+          )}
+        </div>
+
+        {isAdminRole ? (
+          <div className="modal-body course-learning-admin-shell">
+            <details className="course-learning-admin-panel">
+              <summary>学习规则与阈值</summary>
+              <div className="course-learning-admin-content">
+                <span className="learning-inline-tip">当前文档学习阈值：{docPreviewThresholdSeconds} 秒</span>
+                <div className="row-actions">
+                  <label htmlFor="course-learning-doc-threshold-input">阈值(秒)</label>
+                  <input
+                    id="course-learning-doc-threshold-input"
+                    type="number"
+                    min={docPreviewThresholdRange.min}
+                    max={docPreviewThresholdRange.max}
+                    value={docPreviewThresholdInput}
+                    onChange={(e) => setDocPreviewThresholdInput(e.target.value)}
+                  />
+                  <button
+                    className="primary"
+                    type="button"
+                    disabled={docPreviewThresholdSaving}
+                    onClick={onSaveDocPreviewThreshold}
+                  >
+                    {docPreviewThresholdSaving ? '保存中...' : '保存阈值'}
+                  </button>
+                </div>
+              </div>
+            </details>
+          </div>
+        ) : null}
+      </>
+    )
+  }
 
   if (booting) {
     return <div className="app-loading">培训考试系统初始化中...</div>
@@ -4569,7 +5108,7 @@ function App() {
               </button>
               <button className={activeMenu === 'retrain' ? 'active' : ''} onClick={() => { setActiveMenu('retrain'); fetchRetrainCenter(true) }}>错题复训</button>
               {canViewAiConfig && (
-                <button className={activeMenu === 'ai-models' ? 'active' : ''} onClick={() => { setActiveMenu('ai-models'); fetchAiModels(true) }}>模型配置</button>
+                <button className={activeMenu === 'ai-models' ? 'active' : ''} onClick={() => { setActiveMenu('ai-models'); fetchAiConfigCenter(true) }}>模型配置</button>
               )}
               {canAudit && (
                 <button className={activeMenu === 'audit' ? 'active' : ''} onClick={() => { setActiveMenu('audit'); fetchAudit(); fetchUserProfiles(true) }}>审计日志</button>
@@ -4736,7 +5275,19 @@ function App() {
                       <div><label>资源名</label><input value={resourceForm.name} onChange={(e) => setResourceForm((p) => ({ ...p, name: e.target.value }))} /></div>
                       <div>
                         <label>资源类型</label>
-                        <select value={resourceForm.resource_type} onChange={(e) => setResourceForm((p) => ({ ...p, resource_type: e.target.value, force_watch: e.target.value === 'video' ? p.force_watch : false }))}>
+                        <select value={resourceForm.resource_type} onChange={(e) => setResourceForm((p) => {
+                          const resourceType = e.target.value
+                          return {
+                            ...p,
+                            resource_type: resourceType,
+                            storage_backend: normalizeResourceStorageBackend({
+                              resourceType,
+                              sourceMode: p.source_mode,
+                              storageBackend: p.storage_backend,
+                            }),
+                            force_watch: resourceType === 'video' ? p.force_watch : false,
+                          }
+                        })}>
                           <option value="doc">文档</option>
                           <option value="video">视频</option>
                           <option value="link">外链</option>
@@ -4744,11 +5295,39 @@ function App() {
                       </div>
                       <div>
                         <label>来源模式</label>
-                        <select value={resourceForm.source_mode} onChange={(e) => setResourceForm((p) => ({ ...p, source_mode: e.target.value, force_watch: e.target.value === 'upload' ? p.force_watch : false }))}>
+                        <select value={resourceForm.source_mode} onChange={(e) => setResourceForm((p) => {
+                          const sourceMode = e.target.value
+                          return {
+                            ...p,
+                            source_mode: sourceMode,
+                            storage_backend: normalizeResourceStorageBackend({
+                              resourceType: p.resource_type,
+                              sourceMode,
+                              storageBackend: p.storage_backend,
+                            }),
+                            force_watch: sourceMode === 'upload' ? p.force_watch : false,
+                          }
+                        })}>
                           <option value="upload">上传</option>
                           <option value="external">外链</option>
                         </select>
                       </div>
+                      {resourceForm.resource_type === 'video' && resourceForm.source_mode === 'upload' ? (
+                        <div>
+                          <label>存储位置</label>
+                          <select value={resourceForm.storage_backend} onChange={(e) => setResourceForm((p) => ({
+                            ...p,
+                            storage_backend: normalizeResourceStorageBackend({
+                              resourceType: p.resource_type,
+                              sourceMode: p.source_mode,
+                              storageBackend: e.target.value,
+                            }),
+                          }))}>
+                            <option value="local">本地</option>
+                            <option value="oss">阿里云 OSS</option>
+                          </select>
+                        </div>
+                      ) : null}
                       {resourceForm.resource_type === 'video' && resourceForm.source_mode === 'upload' ? (
                         <div className="row-actions full resource-switch-row">
                           <label>
@@ -4772,11 +5351,11 @@ function App() {
                       <div className="resource-card-head">
                         <span className="resource-card-step">步骤 2</span>
                         <h4>上传资源文件</h4>
-                        <p>视频转码在后台执行，页面可关闭，不影响任务进行。</p>
+                        <p>本地视频会进入后台转码；OSS 视频会直接上传到阿里云对象存储。</p>
                       </div>
                       <div className="form-grid resource-grid">
                         <div className="full"><label>选择文件</label><input type="file" disabled={uploadingResource} onChange={(e) => setResourceUpload((p) => ({ ...p, file: e.target.files?.[0] || null }))} /></div>
-                        <div className="full resource-hint">请先点击左侧“新建资源”，系统会自动关联本次上传。视频上传不限制大小；文档与 Excel 导题大小限制为 {UPLOAD_MAX_MB}MB。文档仅支持 pdf/doc/docx/txt/md；视频仅支持 mp4/webm/mov/m4v。</div>
+                        <div className="full resource-hint">请先点击左侧“新建资源”，系统会自动关联本次上传。文档与 Excel 导题大小限制为 {UPLOAD_MAX_MB}MB。文档仅支持 pdf/doc/docx/txt/md；本地视频支持 mp4/webm/mov/m4v；阿里云 OSS 受管视频当前仅支持标准 MP4。</div>
                         {resourceUploadNotice ? <div className="full upload-notice">{resourceUploadNotice}</div> : null}
                         {(uploadingResource || resourceUploadProgress > 0) ? (
                           <div className="full upload-progress">
@@ -6871,8 +7450,8 @@ function App() {
             <section className="panel ai-config-panel">
               <div className="panel-header ai-config-panel-header">
                 <h2>大模型配置中心</h2>
-                <button className="ghost" type="button" onClick={() => fetchAiModels()}>
-                  刷新模型
+                <button className="ghost" type="button" onClick={() => fetchAiConfigCenter()}>
+                  刷新配置
                 </button>
               </div>
               <div className="panel-body ai-config-overview">
@@ -6900,6 +7479,52 @@ function App() {
               </div>
 
               <div className="panel-body ai-config-shell">
+                <form onSubmit={onSaveOssSettings} className="ai-config-form-card">
+                  <div className="ai-card-title">
+                    <h3>阿里云 OSS</h3>
+                    <p>用于培训视频直传、签名播放和系统内强制观看。</p>
+                  </div>
+
+                  <div className="form-grid ai-form-grid">
+                    <div className="full ai-switch-row">
+                      <label className="ai-switch">
+                        <input
+                          type="checkbox"
+                          checked={!!ossSettingsForm.enabled}
+                          onChange={(e) => setOssSettingsForm((prev) => ({ ...prev, enabled: e.target.checked }))}
+                          disabled={ossSettingsLoading || ossSettingsSaving}
+                        />
+                        启用 OSS 受管视频
+                      </label>
+                      <span className={`status-chip ${ossSettingsStatus.configured ? 'good' : 'warn'}`}>
+                        {!ossSettingsForm.enabled ? '已关闭' : ossSettingsStatus.configured ? '已就绪' : '待补全'}
+                      </span>
+                    </div>
+                    <div><label>Region</label><input value={ossSettingsForm.region} onChange={(e) => setOssSettingsForm((prev) => ({ ...prev, region: e.target.value }))} placeholder="oss-cn-hangzhou" disabled={ossSettingsLoading || ossSettingsSaving} /></div>
+                    <div><label>Bucket</label><input value={ossSettingsForm.bucket} onChange={(e) => setOssSettingsForm((prev) => ({ ...prev, bucket: e.target.value }))} placeholder="train-exam-video" disabled={ossSettingsLoading || ossSettingsSaving} /></div>
+                    <div><label>Endpoint（可选）</label><input value={ossSettingsForm.endpoint} onChange={(e) => setOssSettingsForm((prev) => ({ ...prev, endpoint: e.target.value }))} placeholder="留空则按 region 走默认 endpoint" disabled={ossSettingsLoading || ossSettingsSaving} /></div>
+                    <div><label>AccessKey ID</label><input value={ossSettingsForm.access_key_id} onChange={(e) => setOssSettingsForm((prev) => ({ ...prev, access_key_id: e.target.value }))} placeholder="LTAI..." disabled={ossSettingsLoading || ossSettingsSaving} /></div>
+                    <div><label>AccessKey Secret</label><input type="password" value={ossSettingsForm.access_key_secret} onChange={(e) => setOssSettingsForm((prev) => ({ ...prev, access_key_secret: e.target.value }))} placeholder={ossSettingsStatus.has_access_key_secret ? '保持 ****** 表示沿用，清空表示移除' : '输入新的 AccessKey Secret'} disabled={ossSettingsLoading || ossSettingsSaving} /></div>
+                    <div><label>STS Token（可选）</label><input type="password" value={ossSettingsForm.sts_token} onChange={(e) => setOssSettingsForm((prev) => ({ ...prev, sts_token: e.target.value }))} placeholder={ossSettingsStatus.has_sts_token ? '保持 ****** 表示沿用，清空表示移除' : '临时凭证场景可填写'} disabled={ossSettingsLoading || ossSettingsSaving} /></div>
+                    <div><label>上传签名有效期(秒)</label><input type="number" value={ossSettingsForm.signed_upload_expires_seconds} onChange={(e) => setOssSettingsForm((prev) => ({ ...prev, signed_upload_expires_seconds: e.target.value }))} disabled={ossSettingsLoading || ossSettingsSaving} /></div>
+                    <div><label>播放签名有效期(秒)</label><input type="number" value={ossSettingsForm.signed_play_expires_seconds} onChange={(e) => setOssSettingsForm((prev) => ({ ...prev, signed_play_expires_seconds: e.target.value }))} disabled={ossSettingsLoading || ossSettingsSaving} /></div>
+                    <div><label>上传大小上限(MB)</label><input type="number" value={ossSettingsForm.upload_max_file_size_mb} onChange={(e) => setOssSettingsForm((prev) => ({ ...prev, upload_max_file_size_mb: e.target.value }))} disabled={ossSettingsLoading || ossSettingsSaving} /></div>
+                    <div className={`full ai-model-test-note ${!ossSettingsForm.enabled || ossSettingsStatus.configured ? 'ok' : 'err'}`}>
+                      {ossSettingsForm.enabled
+                        ? (ossSettingsStatus.configured
+                          ? '当前配置完整，后续培训视频可直接选“阿里云 OSS”进行受管上传。'
+                          : `配置尚未完整：${ossSettingsStatus.validation_error || '请补全 Bucket、Region 和凭证信息'}`)
+                        : '当前为关闭状态，培训视频仍会按本地上传处理。'}
+                    </div>
+                    <div className="full row-actions">
+                      <button className="ghost" type="button" onClick={() => fetchOssSettings()} disabled={ossSettingsLoading || ossSettingsSaving}>重新读取</button>
+                      <button className="primary" type="submit" disabled={!isAdminRole || ossSettingsSaving || ossSettingsLoading}>
+                        {ossSettingsSaving ? '保存中...' : '保存 OSS 配置'}
+                      </button>
+                    </div>
+                  </div>
+                </form>
+
                 <form onSubmit={onCreateAiModel} className="ai-config-form-card">
                   <div className="ai-card-title">
                     <h3>新增模型</h3>
@@ -7152,18 +7777,22 @@ function App() {
                 width: `${courseLearningModal.width}px`,
                 height: `${courseLearningModal.height}px`,
               }}
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="course-learning-modal-heading"
               onMouseDown={(e) => e.stopPropagation()}
             >
               <div className="course-learning-modal-header" onPointerDown={onCourseLearningHeaderPointerDown}>
                 <div className="course-learning-modal-title">
-                  <strong>学习路径与章节完成度</strong>
-                  <div className="row-actions">
-                    <span className="badge">当前课程：{currentLearningCourse?.title || learningPath.course?.title || '-'}</span>
-                    <span className="badge">支持拖动与缩放</span>
-                  </div>
+                  <strong id="course-learning-modal-heading">{currentLearningCourseTitle}</strong>
+                  <p>学习路径与章节完成度</p>
                 </div>
                 <div className="row-actions course-learning-modal-actions">
-                  <select value={learningCourseId} onChange={(e) => { void fetchLearningPath(e.target.value, true) }}>
+                  <select
+                    aria-label="切换当前课程"
+                    value={learningCourseId}
+                    onChange={(e) => { void fetchLearningPath(e.target.value, true) }}
+                  >
                     {(courses || []).map((item) => (
                       <option key={`learning-course-modal-${item.id}`} value={item.id}>{item.title}</option>
                     ))}
@@ -7272,6 +7901,11 @@ function App() {
                     onChange={(e) => setResourceEditForm((p) => ({
                       ...p,
                       resource_type: e.target.value,
+                      storage_backend: normalizeResourceStorageBackend({
+                        resourceType: e.target.value,
+                        sourceMode: p.source_mode,
+                        storageBackend: p.storage_backend,
+                      }),
                       force_watch: e.target.value === 'video' ? p.force_watch : false,
                     }))}
                   >
@@ -7287,6 +7921,11 @@ function App() {
                     onChange={(e) => setResourceEditForm((p) => ({
                       ...p,
                       source_mode: e.target.value,
+                      storage_backend: normalizeResourceStorageBackend({
+                        resourceType: p.resource_type,
+                        sourceMode: e.target.value,
+                        storageBackend: p.storage_backend,
+                      }),
                       force_watch: e.target.value === 'upload' ? p.force_watch : false,
                     }))}
                   >
@@ -7294,6 +7933,25 @@ function App() {
                     <option value="external">外链</option>
                   </select>
                 </div>
+                {resourceEditForm.resource_type === 'video' && resourceEditForm.source_mode === 'upload' ? (
+                  <div>
+                    <label>存储位置</label>
+                    <select
+                      value={resourceEditForm.storage_backend}
+                      onChange={(e) => setResourceEditForm((p) => ({
+                        ...p,
+                        storage_backend: normalizeResourceStorageBackend({
+                          resourceType: p.resource_type,
+                          sourceMode: p.source_mode,
+                          storageBackend: e.target.value,
+                        }),
+                      }))}
+                    >
+                      <option value="local">本地</option>
+                      <option value="oss">阿里云 OSS</option>
+                    </select>
+                  </div>
+                ) : null}
                 <div>
                   <label>章节顺序</label>
                   <input type="number" value={resourceEditForm.sort_order} onChange={(e) => setResourceEditForm((p) => ({ ...p, sort_order: e.target.value }))} />
@@ -7319,7 +7977,7 @@ function App() {
                     <input value={resourceEditForm.source_url} onChange={(e) => setResourceEditForm((p) => ({ ...p, source_url: e.target.value }))} />
                   </div>
                 ) : (
-                  <div className="full sub">切换为“上传”后，请在培训资源区域上传新文件。</div>
+                  <div className="full sub">切换为“上传”后，请在培训资源区域重新上传文件；若选阿里云 OSS，则上传标准 MP4。</div>
                 )}
                 <div className="full row-actions">
                   <button className="primary" type="submit" disabled={resourceEditSaving}>
@@ -7402,11 +8060,13 @@ function App() {
                 <div className="player-modal-title">
                   <strong>视频播放器：{selectedLearningResource.name}</strong>
                   <div className="row-actions">
-                    {selectedLearningResource.force_watch ? <span className="badge">强制播放（禁止快进）</span> : <span className="badge">自由播放</span>}
+                    <span className="badge">{learningVideoStatusLabel}</span>
                     {(String(selectedLearningResource.transcode_status || '').toLowerCase() === 'queued' || String(selectedLearningResource.transcode_status || '').toLowerCase() === 'running')
                       ? <span className="badge">后台转码中 {Math.max(0, Math.min(100, Number(selectedLearningResource.transcode_progress || 0)))}%</span>
                       : null}
-                    <span className="badge">进度 {Math.round(Number(videoRuntime.current || 0))} / {Math.round(Number(videoRuntime.duration || 0))} 秒</span>
+                    <span className="badge">已看 {learningVideoRuntimePercent}%</span>
+                    <span className="badge">{formatPlaybackClock(videoRuntime.current)} / {formatPlaybackClock(videoRuntime.duration)}</span>
+                    <span className="badge">剩余 {formatPlaybackRemainingLabel(learningVideoRemainingSeconds)}</span>
                   </div>
                 </div>
                 <div className="row-actions">
@@ -7429,8 +8089,8 @@ function App() {
                       className="learning-video modal-video"
                       src={`/api/train-exam/resources/${selectedLearningResource.id}/stream?v=${encodeURIComponent(String(selectedLearningResource.updated_at || selectedLearningResource.id || ''))}`}
                       preload="metadata"
-                      controls={!selectedLearningResource.force_watch}
-                      controlsList={selectedLearningResource.force_watch ? 'nodownload noplaybackrate noremoteplayback' : 'nodownload noremoteplayback'}
+                      controls={!learningVideoSeekLocked}
+                      controlsList={learningVideoSeekLocked ? 'nodownload noplaybackrate noremoteplayback' : 'nodownload noremoteplayback'}
                       disablePictureInPicture
                       onLoadedMetadata={(e) => onLearningVideoLoadedMetadata(selectedLearningResource, e)}
                       onPlay={onLearningVideoPlay}
@@ -7441,6 +8101,16 @@ function App() {
                       onEnded={(e) => { onLearningVideoEnded(selectedLearningResource, e) }}
                       onError={(e) => onLearningVideoError(selectedLearningResource, e)}
                     />
+                    <div className="player-session-progress" aria-hidden="true">
+                      <div className="player-session-progress-track">
+                        <span style={{ width: `${learningVideoRuntimePercent}%` }} />
+                      </div>
+                      <div className="player-session-progress-meta">
+                        <span>{formatPlaybackClock(videoRuntime.current)} / {formatPlaybackClock(videoRuntime.duration)}</span>
+                        <strong>已看 {learningVideoRuntimePercent}%</strong>
+                        <span>剩余 {formatPlaybackRemainingLabel(learningVideoRemainingSeconds)}</span>
+                      </div>
+                    </div>
                     <div className="row-actions player-volume-bar">
                       <label htmlFor="learning-player-volume">音量</label>
                       <input
@@ -7452,17 +8122,20 @@ function App() {
                         onChange={(e) => onChangeLearningPlayerVolume(e.target.value)}
                       />
                       <span className="badge">{learningPlayerVolume}%</span>
-                      {selectedLearningResource.force_watch ? (
-                        <>
-                          {String(selectedLearningResource.transcode_status || '').toLowerCase() === 'queued' || String(selectedLearningResource.transcode_status || '').toLowerCase() === 'running' ? (
-                            <span className="badge">视频正在后台转码，请稍后开始播放</span>
-                          ) : (
+                      {String(selectedLearningResource.transcode_status || '').toLowerCase() === 'queued' || String(selectedLearningResource.transcode_status || '').toLowerCase() === 'running' ? (
+                        <span className="badge">视频正在后台转码，请稍后开始播放</span>
+                      ) : (
+                        <div className="player-playback-actions">
+                          <button className="ghost player-replay-action" type="button" onClick={onReplayLearningVideo}>
+                            重看本章
+                          </button>
+                          {learningVideoSeekLocked ? (
                             <button className="primary" type="button" onClick={onToggleLearningVideoPlay}>
                               {videoRuntime.playing ? '暂停播放' : '开始播放'}
                             </button>
-                          )}
-                        </>
-                      ) : null}
+                          ) : null}
+                        </div>
+                      )}
                     </div>
                   </div>
                 )}

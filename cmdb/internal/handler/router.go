@@ -12,10 +12,9 @@ import (
 	"cmdb/internal/repository"
 	"cmdb/internal/service"
 	"github.com/gin-gonic/gin"
-	"go.mongodb.org/mongo-driver/mongo"
 )
 
-func NewRouter(cfg config.Config, sqlDB *sql.DB, mongoClient *mongo.Client) *gin.Engine {
+func NewRouter(cfg config.Config, sqlDB *sql.DB) *gin.Engine {
 	r := gin.New()
 	_ = r.SetTrustedProxies(cfg.TrustedProxies)
 	r.HandleMethodNotAllowed = true
@@ -91,7 +90,6 @@ func NewRouter(cfg config.Config, sqlDB *sql.DB, mongoClient *mongo.Client) *gin
 		api.POST("/ci/:ci_uid/relations", requireCMDBWriter(), ciHandler.UpsertRelation)
 	}
 
-	_ = mongoClient // reserved for raw snapshot/reconcile handlers
 	return r
 }
 

@@ -6,7 +6,7 @@ This directory contains an independent CMDB implementation blueprint and starter
 - Language: Go 1.22+
 - Web: Gin
 - Auth: OIDC SSO (token verification middleware)
-- Datastores: MySQL (source of truth) + MongoDB (flexible/raw snapshots)
+- Datastores: MySQL
 - Messaging: Kafka (event integration with reminder/workorder systems)
 
 ## Boundary
@@ -18,7 +18,6 @@ This directory contains an independent CMDB implementation blueprint and starter
 - `cmd/cmdb`: service bootstrap
 - `internal`: app code (config, db, handlers, services, events, auth)
 - `migrations/mysql`: MySQL DDL
-- `schemas/mongo`: MongoDB collection design and JSON schemas
 - `contracts/kafka`: topic/event contracts
 - `api/openapi`: REST API contract (V1 minimal)
 - `docs`: architecture and rollout notes
@@ -27,10 +26,9 @@ This directory contains an independent CMDB implementation blueprint and starter
 
 ## Quick Start (Local Binary)
 1. Create MySQL schema and run `/Users/zhanglei/Documents/codex-new/cmdb/migrations/mysql/001_init_cmdb.sql`.
-2. Create MongoDB collections according to `/Users/zhanglei/Documents/codex-new/cmdb/schemas/mongo/README.md`.
-3. Create Kafka topics listed in `/Users/zhanglei/Documents/codex-new/cmdb/contracts/kafka/README.md`.
-4. Copy `.env.example` to `.env` and fill values.
-5. Start service:
+2. Create Kafka topics listed in `/Users/zhanglei/Documents/codex-new/cmdb/contracts/kafka/README.md`.
+3. Copy `.env.example` to `.env` and fill values.
+4. Start service:
 
 ```bash
 cd /Users/zhanglei/Documents/codex-new/cmdb
@@ -44,6 +42,10 @@ go run ./cmd/cmdb
 cd /Users/zhanglei/Documents/codex-new/cmdb/deploy
 docker compose up -d --build
 ```
+
+Before starting the compose stack, provide:
+- `MYSQL_ROOT_PASSWORD`
+- `CMDB_MYSQL_PASSWORD`
 
 See `/Users/zhanglei/Documents/codex-new/cmdb/deploy/README.md` for operations.
 

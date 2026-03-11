@@ -10,7 +10,7 @@ AUTH_BASE="${AUTH_BASE:-http://localhost:5180}"
 CMDB_WEB_BASE="${CMDB_WEB_BASE:-http://localhost:8090}"
 
 step "开始执行 $SYSTEM_NAME 系统一键测试"
-compose_up mysql auth cmdb-mongo cmdb-mysql-init cmdb web-cmdb
+compose_up mysql auth cmdb-mysql-init cmdb web-cmdb
 wait_http_status "$AUTH_BASE/health" "200" "auth-health"
 wait_http_status "$CMDB_WEB_BASE" "200" "cmdb-web"
 wait_http_status "$CMDB_WEB_BASE/healthz" "200" "cmdb-healthz"

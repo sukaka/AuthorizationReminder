@@ -28,17 +28,7 @@ func main() {
 	}
 	defer sqlDB.Close()
 
-	mongoClient, err := db.NewMongo(cfg)
-	if err != nil {
-		log.Fatalf("mongo connect failed: %v", err)
-	}
-	defer func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		_ = mongoClient.Disconnect(ctx)
-	}()
-
-	r := handler.NewRouter(cfg, sqlDB, mongoClient)
+	r := handler.NewRouter(cfg, sqlDB)
 
 	var relay *events.OutboxRelay
 	relayCtx, relayCancel := context.WithCancel(context.Background())

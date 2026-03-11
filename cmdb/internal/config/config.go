@@ -21,9 +21,6 @@ type Config struct {
 	MySQLMaxOpen int
 	MySQLMaxIdle int
 
-	MongoURI string
-	MongoDB  string
-
 	KafkaBrokers                []string
 	KafkaTopicCICreated         string
 	KafkaTopicCIUpdated         string
@@ -65,9 +62,6 @@ func Load() (Config, error) {
 		MySQLDSN:     os.Getenv("MYSQL_DSN"),
 		MySQLMaxOpen: readInt("MYSQL_MAX_OPEN_CONNS", 30),
 		MySQLMaxIdle: readInt("MYSQL_MAX_IDLE_CONNS", 10),
-
-		MongoURI: readStr("MONGO_URI", "mongodb://127.0.0.1:27017"),
-		MongoDB:  readStr("MONGO_DB", "cmdb"),
 
 		KafkaBrokers:                splitCSV(readStr("KAFKA_BROKERS", "127.0.0.1:9092")),
 		KafkaTopicCICreated:         readStr("KAFKA_TOPIC_CI_CREATED", "cmdb.ci.created"),

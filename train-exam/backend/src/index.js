@@ -16,6 +16,34 @@ const path = require('path');
 const { PDFDocument, StandardFonts, rgb } = require('pdf-lib');
 const { get, initDb, query, run, transaction } = require('./db');
 const {
+  buildManagedOssObjectKey,
+  createManagedOssPlaybackUrl,
+  createManagedOssUploadSignature,
+  createOssClient,
+  headManagedOssObject,
+  readOssConfigFromEnv,
+  validateOssConfig,
+} = require('./oss-utils');
+const {
+  OSS_SYSTEM_SETTING_KEYS,
+  buildManagedOssAdminPayload,
+  normalizeManagedOssSettingsInput,
+  resolveManagedOssConfig,
+  serializeManagedOssSettings,
+  summarizeManagedOssConfig,
+} = require('./oss-settings-utils');
+const {
+  ALLOWED_STORAGE_BACKENDS,
+  normalizeStorageBackend,
+  normalizeUploadStatus,
+  resolveStorageBackend,
+  supportsManagedVideoPlayback,
+} = require('./resource-storage-utils');
+const {
+  isProgressCompleted,
+  shouldEnforceManagedVideoForceWatch,
+} = require('./learning-progress-utils');
+const {
   buildQuestionImportTemplateRows,
   normalizeJudgementAnswer,
   resolveImportQuestionStatus,
@@ -117,6 +145,8 @@ const ALLOWED_PAPER_STATUSES = new Set(['draft', 'published', 'archived']);
 
 const ALLOWED_DOC_EXTS = new Set(['.pdf', '.doc', '.docx', '.txt', '.md']);
 const ALLOWED_VIDEO_EXTS = new Set(['.mp4', '.webm', '.mov', '.m4v']);
+const ALLOWED_OSS_VIDEO_EXTS = new Set(['.mp4']);
+const ALLOWED_OSS_VIDEO_MIME = new Set(['video/mp4']);
 
 const ALLOWED_DOC_MIME = new Set([
   'application/pdf',
@@ -148,7 +178,6 @@ const DOC_MIME_BY_EXT = Object.freeze({
   '.txt': 'text/plain; charset=utf-8',
   '.md': 'text/markdown; charset=utf-8',
 });
-
 const QUESTION_TYPE_ALIASES = {
   single_choice: 'single_choice',
   single: 'single_choice',
@@ -438,6 +467,106 @@ const appError = (message, statusCode = 400) => {
   const err = new Error(message);
   err.statusCode = statusCode;
   return err;
+};
+
+const buildManagedOssSettingsResponse = (config) => {
+  const payload = buildManagedOssAdminPayload(config);
+  if (!config?.enabled) {
+    return {
+      ...payload,
+      configured: false,
+      validation_error: '',
+    };
+  }
+  try {
+    validateOssConfig(config);
+    return {
+      ...payload,
+      configured: true,
+      validation_error: '',
+    };
+  } catch (err) {
+    return {
+      ...payload,
+      configured: false,
+      validation_error: trimText(err?.message || err) || '请联系管理员检查配置',
+    };
+  }
+};
+
+const getManagedOssRuntime = async () => {
+  const rawConfig = resolveManagedOssConfig({
+    envConfig: readOssConfigFromEnv(),
+    settings: await getSystemSettingValues(Object.values(OSS_SYSTEM_SETTING_KEYS)),
+  });
+  if (!rawConfig.enabled) throw appError('阿里云 OSS 未启用，请联系管理员配置', 409);
+  try {
+    return createOssClient({ config: rawConfig });
+  } catch (err) {
+    throw appError(`阿里云 OSS 配置无效：${trimText(err?.message || err) || '请联系管理员检查配置'}`, 500);
+  }
+};
+
+const ensureManagedOssVideoResource = (resource, statusCode = 400) => {
+  if (!resource) throw appError('资源不存在', 404);
+  const resourceType = normalizeResourceType(resource.resource_type);
+  const sourceMode = normalizeSourceMode(resource.source_mode);
+  const storageBackend = resolveStorageBackend({
+    sourceMode,
+    requested: resource.storage_backend,
+    fallback: sourceMode === 'external' ? 'external' : 'local',
+  });
+  if (resourceType !== 'video' || sourceMode !== 'upload' || storageBackend !== 'oss') {
+    throw appError('仅上传视频且存储后端为 OSS 的资源支持该操作', statusCode);
+  }
+  return {
+    resourceType,
+    sourceMode,
+    storageBackend,
+  };
+};
+
+const validateManagedOssUploadInput = ({ fileName, mimeType, fileSize, maxFileBytes }) => {
+  const originalName = trimText(fileName);
+  if (!originalName) throw appError('缺少文件名', 400);
+  const ext = path.extname(originalName).toLowerCase();
+  if (!ALLOWED_OSS_VIDEO_EXTS.has(ext)) throw appError('OSS 视频目前仅支持标准 MP4 上传', 400);
+
+  const normalizedMime = trimText(mimeType).toLowerCase() || 'video/mp4';
+  if (!ALLOWED_OSS_VIDEO_MIME.has(normalizedMime)) throw appError('OSS 视频目前仅支持 video/mp4', 400);
+
+  const size = Number(fileSize || 0);
+  const sizeLimitBytes = Math.max(1, Number(maxFileBytes || 0));
+  if (size > 0 && sizeLimitBytes > 0 && size > sizeLimitBytes) {
+    throw appError(`视频文件过大，最大支持 ${Math.round(sizeLimitBytes / (1024 * 1024))}MB`, 413);
+  }
+  return {
+    ext,
+    mimeType: normalizedMime,
+    fileSize: size > 0 ? size : null,
+  };
+};
+
+const validateManagedOssHeadResult = ({ headResult, mimeType, fileSize }) => {
+  const actualMimeType = trimText(headResult?.contentType).toLowerCase();
+  if (actualMimeType && !actualMimeType.startsWith('video/mp4')) {
+    throw appError('OSS 对象类型无效，当前仅支持 video/mp4', 400);
+  }
+  const expectedMimeType = trimText(mimeType).toLowerCase();
+  if (expectedMimeType && actualMimeType && actualMimeType !== expectedMimeType) {
+    throw appError('OSS 对象类型与申请上传时不一致', 400);
+  }
+  const actualSize = Number(headResult?.contentLength || 0) || 0;
+  if (actualSize <= 0) throw appError('OSS 对象大小无效，请重新上传', 400);
+  const expectedSize = Number(fileSize || 0);
+  if (expectedSize > 0 && actualSize !== expectedSize) {
+    throw appError('OSS 对象大小与上传声明不一致', 400);
+  }
+  return {
+    contentLength: actualSize,
+    contentType: actualMimeType || expectedMimeType || 'video/mp4',
+    etag: trimText(headResult?.etag),
+  };
 };
 
 const asyncHandler = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
@@ -1208,6 +1337,24 @@ const getSystemSettingValue = async (settingKey) => {
     [key]
   );
   return trimText(row?.setting_value);
+};
+
+const getSystemSettingValues = async (settingKeys = []) => {
+  const keys = Array.from(new Set((Array.isArray(settingKeys) ? settingKeys : [settingKeys]).map((item) => trimText(item)).filter(Boolean)));
+  if (!keys.length) return {};
+  const placeholders = keys.map(() => '?').join(',');
+  const rows = await query(
+    `SELECT setting_key, setting_value
+     FROM te_system_settings
+     WHERE setting_key IN (${placeholders})`,
+    keys
+  );
+  return rows.reduce((acc, row) => {
+    const key = trimText(row?.setting_key);
+    if (!key) return acc;
+    acc[key] = trimText(row?.setting_value);
+    return acc;
+  }, {});
 };
 
 const upsertSystemSettingValue = async ({ settingKey, settingValue, user }) => {
@@ -3567,7 +3714,7 @@ const buildRetrainRecommendations = async ({ userId, limit = 6 }) => {
 
   for (const course of finalCourses) {
     const resources = await query(
-      `SELECT id, name, resource_type, source_mode, source_url, force_watch
+      `SELECT id, name, resource_type, source_mode, storage_backend, upload_status, source_url, force_watch
        FROM te_course_resources
        WHERE course_id = ?
        ORDER BY id DESC
@@ -3589,6 +3736,12 @@ const buildRetrainRecommendations = async ({ userId, limit = 6 }) => {
           name: trimText(item.name),
           resource_type: trimText(item.resource_type),
           source_mode: trimText(item.source_mode),
+          storage_backend: resolveStorageBackend({
+            sourceMode: item.source_mode,
+            requested: item.storage_backend,
+            fallback: normalizeSourceMode(item.source_mode) === 'external' ? 'external' : 'local',
+          }),
+          upload_status: normalizeUploadStatus(item.upload_status, trimText(item.source_url) ? 'ready' : 'pending'),
           force_watch: Number(item.force_watch || 0) === 1,
           source_url: trimText(item.source_url),
         })),
@@ -3672,11 +3825,28 @@ const buildCourseLearningPath = async ({ courseId, userId }) => {
       name: trimText(resource.name),
       resource_type: trimText(resource.resource_type),
       source_mode: trimText(resource.source_mode),
+      storage_backend: resolveStorageBackend({
+        sourceMode: resource.source_mode,
+        requested: resource.storage_backend,
+        fallback: normalizeSourceMode(resource.source_mode) === 'external' ? 'external' : 'local',
+      }),
+      upload_status: normalizeUploadStatus(
+        resource.upload_status,
+        trimText(resource.source_url) || trimText(resource.storage_path) || trimText(resource.object_key) ? 'ready' : 'pending'
+      ),
       force_watch: Number(resource.force_watch || 0) === 1,
       source_url: trimText(resource.source_url),
       mime_type: trimText(resource.mime_type),
       file_size: Number(resource.file_size || 0),
-      has_file: !!trimText(resource.storage_path),
+      has_file: normalizeSourceMode(resource.source_mode) === 'external'
+        ? false
+        : resolveStorageBackend({
+          sourceMode: resource.source_mode,
+          requested: resource.storage_backend,
+          fallback: 'local',
+        }) === 'oss'
+          ? normalizeUploadStatus(resource.upload_status) === 'ready' && !!trimText(resource.object_key)
+          : !!trimText(resource.storage_path),
       transcode_status: normalizeTranscodeStatus(resource.transcode_status, 'none'),
       transcode_progress: Math.max(0, Math.min(100, Number(resource.transcode_progress || 0))),
       transcode_message: trimText(resource.transcode_message),
@@ -3687,7 +3857,10 @@ const buildCourseLearningPath = async ({ courseId, userId }) => {
         progress_percent: progressPercent,
         viewed_seconds: Number(progress?.viewed_seconds || 0),
         last_position_seconds: Number(progress?.last_position_seconds || 0),
-        completed: !!progress?.completed_at || progressPercent >= 100,
+        completed: isProgressCompleted({
+          progressPercent,
+          completedAt: progress?.completed_at || null,
+        }),
         completed_at: progress?.completed_at || null,
         updated_at: progress?.updated_at || null,
       },
@@ -4224,6 +4397,59 @@ app.get('/api/train-exam/settings', requireReader, asyncHandler(async (_req, res
   });
 }));
 
+app.get('/api/train-exam/settings/oss', requireAdminOnly, asyncHandler(async (_req, res) => {
+  const config = resolveManagedOssConfig({
+    envConfig: readOssConfigFromEnv(),
+    settings: await getSystemSettingValues(Object.values(OSS_SYSTEM_SETTING_KEYS)),
+  });
+  res.json(buildManagedOssSettingsResponse(config));
+}));
+
+app.put('/api/train-exam/settings/oss', requireAdminOnly, asyncHandler(async (req, res) => {
+  const settingKeys = Object.values(OSS_SYSTEM_SETTING_KEYS);
+  const currentSettings = await getSystemSettingValues(settingKeys);
+  const before = resolveManagedOssConfig({
+    envConfig: readOssConfigFromEnv(),
+    settings: currentSettings,
+  });
+  const nextInput = normalizeManagedOssSettingsInput({
+    payload: req.body || {},
+    currentSettings,
+  });
+  const nextSettings = serializeManagedOssSettings(nextInput);
+  const effectiveNext = resolveManagedOssConfig({
+    envConfig: readOssConfigFromEnv(),
+    settings: nextSettings,
+  });
+  if (effectiveNext.enabled) validateOssConfig(effectiveNext);
+
+  for (const [settingKey, settingValue] of Object.entries(nextSettings)) {
+    await upsertSystemSettingValue({
+      settingKey,
+      settingValue,
+      user: req.user,
+    });
+  }
+
+  const afterSettings = await getSystemSettingValues(settingKeys);
+  const after = resolveManagedOssConfig({
+    envConfig: readOssConfigFromEnv(),
+    settings: afterSettings,
+  });
+
+  await logOperation({
+    req,
+    action: 'SETTINGS_UPDATE',
+    entity: 'system_settings',
+    entityId: null,
+    message: '更新阿里云 OSS 配置',
+    beforeData: summarizeManagedOssConfig(before),
+    afterData: summarizeManagedOssConfig(after),
+  });
+
+  res.json(buildManagedOssSettingsResponse(after));
+}));
+
 app.put('/api/train-exam/settings/doc-preview-threshold', requireAdminOnly, asyncHandler(async (req, res) => {
   const minReadSeconds = normalizeDocPreviewMinSeconds(req.body?.min_read_seconds, NaN);
   if (!Number.isFinite(minReadSeconds)) {
@@ -4502,6 +4728,11 @@ app.post('/api/train-exam/courses/:id/resources', requireContentWriter, asyncHan
   const name = trimText(req.body?.name);
   const resourceType = normalizeResourceType(req.body?.resource_type);
   const sourceMode = normalizeSourceMode(req.body?.source_mode);
+  const storageBackend = resolveStorageBackend({
+    sourceMode,
+    requested: req.body?.storage_backend,
+    fallback: sourceMode === 'external' ? 'external' : 'local',
+  });
   const sourceUrl = trimText(req.body?.source_url);
   const forceWatch = normalizeBoolean(req.body?.force_watch, false) ? 1 : 0;
   const sortOrder = Math.max(0, Math.min(9999, Number(req.body?.sort_order || 0)));
@@ -4509,15 +4740,35 @@ app.post('/api/train-exam/courses/:id/resources', requireContentWriter, asyncHan
   if (!name) throw appError('资源名称不能为空', 400);
   if (!ALLOWED_RESOURCE_TYPES.has(resourceType)) throw appError('资源类型仅支持：文档/视频/外链', 400);
   if (!ALLOWED_SOURCE_MODES.has(sourceMode)) throw appError('来源模式仅支持：上传/外链', 400);
+  if (!ALLOWED_STORAGE_BACKENDS.has(storageBackend)) throw appError('存储后端仅支持：本地/OSS/外链', 400);
   if (sourceMode === 'external' && !sourceUrl) throw appError('外链资源必须提供 source_url', 400);
+  if (storageBackend === 'oss' && resourceType !== 'video') throw appError('当前仅视频资源支持 OSS 受管存储', 400);
   if (resourceType !== 'video' && forceWatch) throw appError('仅视频资源可启用强制播放', 400);
-  if (resourceType === 'video' && sourceMode !== 'upload' && forceWatch) throw appError('强制播放仅支持上传视频资源', 400);
+  if (forceWatch && !supportsManagedVideoPlayback({ resourceType, sourceMode, storageBackend })) {
+    throw appError('强制播放仅支持受管上传视频资源', 400);
+  }
+
+  const uploadStatus = sourceMode === 'external' ? 'ready' : 'pending';
 
   const result = await run(
     `INSERT INTO te_course_resources
-      (course_id, name, resource_type, source_mode, force_watch, sort_order, source_url, created_by_id, created_by_name)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [courseId, name, resourceType, sourceMode, forceWatch, sortOrder, sourceUrl || null, Number(req.user.id) || null, req.user.username]
+      (course_id, name, resource_type, source_mode, storage_backend, force_watch, sort_order, object_key, object_etag, upload_status, source_url, created_by_id, created_by_name)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      courseId,
+      name,
+      resourceType,
+      sourceMode,
+      storageBackend,
+      forceWatch,
+      sortOrder,
+      null,
+      null,
+      uploadStatus,
+      sourceMode === 'external' ? sourceUrl || null : null,
+      Number(req.user.id) || null,
+      req.user.username,
+    ]
   );
 
   const id = Number(result.insertId || 0);
@@ -4547,6 +4798,24 @@ app.put('/api/train-exam/resources/:id', requireContentWriter, asyncHandler(asyn
   const sourceMode = req.body?.source_mode !== undefined
     ? normalizeSourceMode(req.body.source_mode)
     : normalizeSourceMode(before.source_mode);
+  const beforeSourceMode = normalizeSourceMode(before.source_mode);
+  const beforeStorageBackend = resolveStorageBackend({
+    sourceMode: beforeSourceMode,
+    requested: before.storage_backend,
+    fallback: beforeSourceMode === 'external' ? 'external' : 'local',
+  });
+  const storageBackend = req.body?.storage_backend !== undefined
+    ? resolveStorageBackend({
+      sourceMode,
+      requested: req.body.storage_backend,
+      fallback: beforeStorageBackend,
+    })
+    : beforeSourceMode === sourceMode
+      ? beforeStorageBackend
+      : resolveStorageBackend({
+        sourceMode,
+        fallback: sourceMode === 'external' ? 'external' : 'local',
+      });
   const sourceUrlInput = req.body?.source_url !== undefined ? trimText(req.body.source_url) : trimText(before.source_url);
   const nextSortOrderRaw = req.body?.sort_order !== undefined ? Number(req.body.sort_order) : Number(before.sort_order || 0);
   const sortOrder = Number.isFinite(nextSortOrderRaw)
@@ -4559,20 +4828,31 @@ app.put('/api/train-exam/resources/:id', requireContentWriter, asyncHandler(asyn
   if (!name) throw appError('资源名称不能为空', 400);
   if (!ALLOWED_RESOURCE_TYPES.has(resourceType)) throw appError('资源类型仅支持：文档/视频/外链', 400);
   if (!ALLOWED_SOURCE_MODES.has(sourceMode)) throw appError('来源模式仅支持：上传/外链', 400);
+  if (!ALLOWED_STORAGE_BACKENDS.has(storageBackend)) throw appError('存储后端仅支持：本地/OSS/外链', 400);
   if (sourceMode === 'external' && !sourceUrlInput) throw appError('外链资源必须提供 source_url', 400);
+  if (storageBackend === 'oss' && resourceType !== 'video') throw appError('当前仅视频资源支持 OSS 受管存储', 400);
   if (resourceType !== 'video' && forceWatch) throw appError('仅视频资源可启用强制播放', 400);
-  if (resourceType === 'video' && sourceMode !== 'upload' && forceWatch) throw appError('强制播放仅支持上传视频资源', 400);
+  if (forceWatch && !supportsManagedVideoPlayback({ resourceType, sourceMode, storageBackend })) {
+    throw appError('强制播放仅支持受管上传视频资源', 400);
+  }
 
   let storagePath = trimText(before.storage_path) || null;
+  let objectKey = trimText(before.object_key) || null;
+  let objectEtag = trimText(before.object_etag) || null;
   let mimeType = trimText(before.mime_type) || null;
   let fileSize = Number(before.file_size || 0) || null;
+  let uploadStatus = normalizeUploadStatus(
+    before.upload_status,
+    trimText(before.source_url) || trimText(before.storage_path) || trimText(before.object_key) ? 'ready' : 'pending'
+  );
   let transcodeStatus = normalizeTranscodeStatus(before.transcode_status, 'none');
   let transcodeProgress = Math.max(0, Math.min(100, Number(before.transcode_progress || 100)));
   let transcodeMessage = trimText(before.transcode_message) || null;
   let transcodeJobId = Number(before.transcode_job_id || 0) || null;
-  const shouldClearUploadData = sourceMode === 'external';
+  const shouldClearLocalUploadData = sourceMode === 'external' || storageBackend !== 'local';
+  const shouldClearObjectData = sourceMode === 'external' || storageBackend !== 'oss';
 
-  if (shouldClearUploadData) {
+  if (shouldClearLocalUploadData) {
     storagePath = null;
     mimeType = null;
     fileSize = null;
@@ -4582,20 +4862,42 @@ app.put('/api/train-exam/resources/:id', requireContentWriter, asyncHandler(asyn
     transcodeJobId = null;
   }
 
-  if (resourceType !== 'video') {
+  if (shouldClearObjectData) {
+    objectKey = null;
+    objectEtag = null;
+  }
+
+  if (sourceMode === 'external') {
+    uploadStatus = 'ready';
+  } else if (storageBackend === 'oss') {
+    if (beforeStorageBackend !== 'oss') {
+      uploadStatus = 'pending';
+    } else if (!objectKey) {
+      uploadStatus = 'pending';
+    }
+  } else {
+    uploadStatus = storagePath ? 'ready' : 'pending';
+  }
+
+  if (resourceType !== 'video' || !supportsManagedVideoPlayback({ resourceType, sourceMode, storageBackend })) {
     forceWatch = 0;
+  }
+
+  if (resourceType !== 'video' || sourceMode !== 'upload' || storageBackend !== 'local') {
     transcodeStatus = 'none';
     transcodeProgress = 100;
-    transcodeMessage = null;
+    transcodeMessage = resourceType === 'video' && sourceMode === 'upload' && uploadStatus !== 'ready'
+      ? '请上传视频文件后再播放'
+      : null;
     transcodeJobId = null;
-  } else if (sourceMode === 'upload' && !storagePath) {
+  } else if (!storagePath) {
     transcodeStatus = 'none';
     transcodeProgress = 100;
     transcodeMessage = '请上传视频文件后再播放';
     transcodeJobId = null;
   }
 
-  if (sourceMode !== 'upload' || resourceType !== 'video') {
+  if (sourceMode !== 'upload' || resourceType !== 'video' || storageBackend !== 'local') {
     await run(
       `UPDATE te_resource_transcode_jobs
        SET status = 'skipped',
@@ -4613,8 +4915,8 @@ app.put('/api/train-exam/resources/:id', requireContentWriter, asyncHandler(asyn
 
   await run(
     `UPDATE te_course_resources
-     SET name = ?, resource_type = ?, source_mode = ?, source_url = ?, force_watch = ?, sort_order = ?,
-         storage_path = ?, mime_type = ?, file_size = ?,
+     SET name = ?, resource_type = ?, source_mode = ?, storage_backend = ?, source_url = ?, force_watch = ?, sort_order = ?,
+         storage_path = ?, object_key = ?, object_etag = ?, mime_type = ?, file_size = ?, upload_status = ?,
          transcode_status = ?, transcode_progress = ?, transcode_message = ?, transcode_job_id = ?,
          updated_at = NOW()
      WHERE id = ?`,
@@ -4622,12 +4924,16 @@ app.put('/api/train-exam/resources/:id', requireContentWriter, asyncHandler(asyn
       name,
       resourceType,
       sourceMode,
+      storageBackend,
       sourceMode === 'external' ? sourceUrlInput : null,
       forceWatch,
       sortOrder,
       storagePath,
+      objectKey,
+      objectEtag,
       mimeType,
       fileSize,
+      uploadStatus,
       transcodeStatus,
       transcodeProgress,
       transcodeMessage,
@@ -4636,7 +4942,7 @@ app.put('/api/train-exam/resources/:id', requireContentWriter, asyncHandler(asyn
     ]
   );
 
-  if (shouldClearUploadData && trimText(before.storage_path)) {
+  if (shouldClearLocalUploadData && trimText(before.storage_path)) {
     await removeResourceFileIfExists(before.storage_path);
   }
 
@@ -4720,6 +5026,12 @@ app.put('/api/train-exam/resources/:id/playback-policy', requireContentWriter, a
   if (normalizeResourceType(before.resource_type) !== 'video') throw appError('仅视频资源支持播放策略设置', 400);
 
   const forceWatch = normalizeBoolean(req.body?.force_watch, Number(before.force_watch || 0) === 1) ? 1 : 0;
+  const managedPlayback = supportsManagedVideoPlayback({
+    resourceType: before.resource_type,
+    sourceMode: before.source_mode,
+    storageBackend: before.storage_backend,
+  });
+  if (forceWatch && !managedPlayback) throw appError('强制播放仅支持受管上传视频资源', 400);
   await run(
     `UPDATE te_course_resources
      SET force_watch = ?, updated_at = NOW()
@@ -4749,6 +5061,9 @@ app.post('/api/train-exam/resources/:id/upload', requireContentWriter, uploadRat
     const sourceMode = normalizeSourceMode(resource.source_mode);
     const sourceModeText = sourceMode === 'external' ? '外链' : sourceMode || '未知';
     throw appError(`资源ID ${id} 当前来源模式为“${sourceModeText}”，请先新建“上传”模式资源并使用其资源ID`, 400);
+  }
+  if (resolveStorageBackend({ sourceMode: resource.source_mode, requested: resource.storage_backend, fallback: 'local' }) !== 'local') {
+    throw appError('当前资源已配置为 OSS 受管存储，请改用 OSS 直传接口', 400);
   }
   if (!req.file) throw appError('缺少上传文件', 400);
   const tempFilePath = trimText(req.file.path);
@@ -4809,7 +5124,8 @@ app.post('/api/train-exam/resources/:id/upload', requireContentWriter, uploadRat
 
       await run(
         `UPDATE te_course_resources
-         SET storage_path = ?, source_url = NULL, mime_type = ?, file_size = ?, updated_at = NOW(),
+         SET storage_backend = 'local', storage_path = ?, object_key = NULL, object_etag = NULL, upload_status = 'ready',
+             source_url = NULL, mime_type = ?, file_size = ?, updated_at = NOW(),
              transcode_status = ?, transcode_progress = ?, transcode_message = ?, transcode_job_id = NULL
          WHERE id = ?`,
         [
@@ -4877,7 +5193,8 @@ app.post('/api/train-exam/resources/:id/upload', requireContentWriter, uploadRat
     } else {
       await run(
         `UPDATE te_course_resources
-         SET storage_path = ?, source_url = NULL, mime_type = ?, file_size = ?, updated_at = NOW(),
+         SET storage_backend = 'local', storage_path = ?, object_key = NULL, object_etag = NULL, upload_status = 'ready',
+             source_url = NULL, mime_type = ?, file_size = ?, updated_at = NOW(),
              transcode_status = 'none', transcode_progress = 100, transcode_message = NULL, transcode_job_id = NULL
          WHERE id = ?`,
         [filePath, finalMimeType, finalFileSize, id]
@@ -4921,6 +5238,140 @@ app.post('/api/train-exam/resources/:id/upload', requireContentWriter, uploadRat
   }
 }));
 
+app.post('/api/train-exam/resources/:id/oss-upload-init', requireContentWriter, asyncHandler(async (req, res) => {
+  const id = Number(req.params.id);
+  const resource = await get('SELECT * FROM te_course_resources WHERE id = ? LIMIT 1', [id]);
+  ensureManagedOssVideoResource(resource);
+  const { client, config } = await getManagedOssRuntime();
+
+  const { ext, mimeType, fileSize } = validateManagedOssUploadInput({
+    fileName: req.body?.file_name || req.body?.original_name,
+    mimeType: req.body?.mime_type,
+    fileSize: req.body?.file_size,
+    maxFileBytes: config.uploadMaxBytes,
+  });
+  const objectKey = buildManagedOssObjectKey({
+    courseId: Number(resource.course_id || 0),
+    resourceId: id,
+    ext,
+  });
+  const signed = await createManagedOssUploadSignature({
+    client,
+    objectKey,
+    mimeType,
+    expiresSeconds: config.uploadExpiresSeconds,
+  });
+
+  await run(
+    `UPDATE te_course_resources
+     SET storage_backend = 'oss', storage_path = NULL, object_key = ?, object_etag = NULL, upload_status = 'uploading',
+         source_url = NULL, mime_type = ?, file_size = ?, updated_at = NOW(),
+         transcode_status = 'none', transcode_progress = 100, transcode_message = NULL, transcode_job_id = NULL
+     WHERE id = ?`,
+    [objectKey, mimeType, fileSize, id]
+  );
+  await run(
+    `UPDATE te_resource_transcode_jobs
+     SET status = 'skipped',
+         progress_percent = 100,
+         error_message = CASE
+           WHEN IFNULL(error_message, '') = '' THEN '资源已切换为 OSS 上传，任务已取消'
+           ELSE error_message
+         END,
+         finished_at = NOW(),
+         updated_at = NOW()
+     WHERE resource_id = ? AND status IN ('queued', 'running')`,
+    [id]
+  );
+
+  const after = await get('SELECT * FROM te_course_resources WHERE id = ? LIMIT 1', [id]);
+  await logOperation({
+    req,
+    action: 'RESOURCE_OSS_UPLOAD_INIT',
+    entity: 'course_resource',
+    entityId: id,
+    message: `初始化 OSS 直传 ${resource.name}`,
+    beforeData: {
+      object_key: resource.object_key,
+      upload_status: resource.upload_status,
+    },
+    afterData: {
+      object_key: after.object_key,
+      upload_status: after.upload_status,
+      file_size: after.file_size,
+    },
+  });
+
+  res.json({
+    ...signed,
+    storage_backend: 'oss',
+    allowed_mime: Array.from(ALLOWED_OSS_VIDEO_MIME),
+    max_file_size: config.uploadMaxBytes,
+  });
+}));
+
+app.post('/api/train-exam/resources/:id/oss-upload-complete', requireContentWriter, asyncHandler(async (req, res) => {
+  const id = Number(req.params.id);
+  const resource = await get('SELECT * FROM te_course_resources WHERE id = ? LIMIT 1', [id]);
+  ensureManagedOssVideoResource(resource);
+
+  const objectKey = trimText(req.body?.object_key);
+  if (!objectKey) throw appError('缺少 object_key', 400);
+  if (objectKey !== trimText(resource.object_key)) throw appError('OSS 对象与当前资源不匹配，请重新初始化上传', 409);
+
+  const declaredMimeType = trimText(req.body?.mime_type).toLowerCase() || 'video/mp4';
+  const declaredFileSize = Number(req.body?.file_size || 0) || null;
+  const { client } = await getManagedOssRuntime();
+
+  try {
+    const headResult = await headManagedOssObject({ client, objectKey });
+    const validated = validateManagedOssHeadResult({
+      headResult,
+      mimeType: declaredMimeType,
+      fileSize: declaredFileSize,
+    });
+    const etag = trimText(req.body?.etag) || validated.etag || null;
+
+    await run(
+      `UPDATE te_course_resources
+       SET storage_backend = 'oss', storage_path = NULL, object_key = ?, object_etag = ?, upload_status = 'ready',
+           source_url = NULL, mime_type = ?, file_size = ?, updated_at = NOW(),
+           transcode_status = 'none', transcode_progress = 100, transcode_message = NULL, transcode_job_id = NULL
+       WHERE id = ?`,
+      [objectKey, etag, validated.contentType, validated.contentLength, id]
+    );
+  } catch (err) {
+    await run(
+      `UPDATE te_course_resources
+       SET upload_status = 'failed', updated_at = NOW()
+       WHERE id = ?`,
+      [id]
+    );
+    throw err.statusCode ? err : appError(`OSS 对象校验失败：${trimText(err?.message || err) || '请重新上传'}`, 400);
+  }
+
+  const after = await get('SELECT * FROM te_course_resources WHERE id = ? LIMIT 1', [id]);
+  await logOperation({
+    req,
+    action: 'RESOURCE_OSS_UPLOAD_COMPLETE',
+    entity: 'course_resource',
+    entityId: id,
+    message: `完成 OSS 上传 ${resource.name}`,
+    beforeData: {
+      object_key: resource.object_key,
+      upload_status: resource.upload_status,
+    },
+    afterData: {
+      object_key: after.object_key,
+      object_etag: after.object_etag,
+      upload_status: after.upload_status,
+      file_size: after.file_size,
+    },
+  });
+
+  res.json(after);
+}));
+
 app.get('/api/train-exam/resources/:id/doc-preview-config', requireReader, asyncHandler(async (req, res) => {
   const id = Number(req.params.id);
   const docPreviewMinSeconds = await getDocPreviewMinSeconds();
@@ -4952,9 +5403,35 @@ app.get('/api/train-exam/resources/:id/doc-preview-config', requireReader, async
 app.get('/api/train-exam/resources/:id/stream', requireReader, asyncHandler(async (req, res) => {
   const id = Number(req.params.id);
   const resource = ensureResourceReadAccess(req, await getResourceWithCourseById(id));
+  const sourceMode = normalizeSourceMode(resource.source_mode);
+  const storageBackend = resolveStorageBackend({
+    sourceMode,
+    requested: resource.storage_backend,
+    fallback: sourceMode === 'external' ? 'external' : 'local',
+  });
 
-  if (normalizeSourceMode(resource.source_mode) === 'external') {
+  if (sourceMode === 'external') {
     return res.json({ redirect_url: trimText(resource.source_url), mode: 'external' });
+  }
+
+  if (normalizeResourceType(resource.resource_type) === 'video' && storageBackend === 'oss') {
+    const uploadStatus = normalizeUploadStatus(
+      resource.upload_status,
+      trimText(resource.object_key) ? 'ready' : 'pending'
+    );
+    if (uploadStatus !== 'ready' || !trimText(resource.object_key)) {
+      throw appError('视频尚未上传完成，请完成 OSS 上传后再播放', 409);
+    }
+    const { client, config } = await getManagedOssRuntime();
+    await headManagedOssObject({ client, objectKey: resource.object_key }).catch((err) => {
+      throw err.statusCode ? err : appError('OSS 视频不存在或已失效，请重新上传', 404);
+    });
+    const redirectUrl = await createManagedOssPlaybackUrl({
+      client,
+      objectKey: resource.object_key,
+      expiresSeconds: config.playbackExpiresSeconds,
+    });
+    return res.redirect(302, redirectUrl);
   }
 
   const filePath = trimText(resource.storage_path);
@@ -5037,12 +5514,18 @@ app.get('/api/train-exam/resources/:id/stream', requireReader, asyncHandler(asyn
 app.get('/api/train-exam/resources/:id/playability', requireReader, asyncHandler(async (req, res) => {
   const id = Number(req.params.id);
   const resource = ensureResourceReadAccess(req, await getResourceWithCourseById(id));
+  const sourceMode = normalizeSourceMode(resource.source_mode);
+  const storageBackend = resolveStorageBackend({
+    sourceMode,
+    requested: resource.storage_backend,
+    fallback: sourceMode === 'external' ? 'external' : 'local',
+  });
 
   const transcodeStatus = normalizeTranscodeStatus(resource.transcode_status, 'none');
   const transcodeProgress = Math.max(0, Math.min(100, Number(resource.transcode_progress || 0)));
   const transcodeMessage = trimText(resource.transcode_message);
 
-  if (normalizeSourceMode(resource.source_mode) === 'external') {
+  if (sourceMode === 'external') {
     res.json({
       playable: true,
       reason: '',
@@ -5052,6 +5535,52 @@ app.get('/api/train-exam/resources/:id/playability', requireReader, asyncHandler
       progress_percent: transcodeProgress,
     });
     return;
+  }
+
+  if (normalizeResourceType(resource.resource_type) === 'video' && storageBackend === 'oss') {
+    const uploadStatus = normalizeUploadStatus(
+      resource.upload_status,
+      trimText(resource.object_key) ? 'ready' : 'pending'
+    );
+    if (uploadStatus !== 'ready' || !trimText(resource.object_key)) {
+      res.json({
+        playable: false,
+        reason: 'OSS 视频尚未上传完成，请先完成上传',
+        codec: 'unknown',
+        mode: 'oss',
+        transcode_status: transcodeStatus,
+        progress_percent: transcodeProgress,
+      });
+      return;
+    }
+    try {
+      const { client } = await getManagedOssRuntime();
+      const headResult = await headManagedOssObject({ client, objectKey: resource.object_key });
+      const validated = validateManagedOssHeadResult({
+        headResult,
+        mimeType: resource.mime_type,
+        fileSize: resource.file_size,
+      });
+      res.json({
+        playable: true,
+        reason: '',
+        codec: validated.contentType.startsWith('video/mp4') ? 'h264' : 'unknown',
+        mode: 'oss',
+        transcode_status: 'none',
+        progress_percent: 100,
+      });
+      return;
+    } catch (err) {
+      res.json({
+        playable: false,
+        reason: trimText(err?.message || err) || 'OSS 视频不存在或不可播放，请重新上传',
+        codec: 'unknown',
+        mode: 'oss',
+        transcode_status: 'none',
+        progress_percent: transcodeProgress,
+      });
+      return;
+    }
   }
 
   const filePath = trimText(resource.storage_path);
@@ -5162,9 +5691,27 @@ app.get('/api/train-exam/resources/:id/transcode-status', requireReader, asyncHa
 app.get('/api/train-exam/resources/:id/download', requireReader, asyncHandler(async (req, res) => {
   const id = Number(req.params.id);
   const resource = ensureResourceReadAccess(req, await getResourceWithCourseById(id));
+  const sourceMode = normalizeSourceMode(resource.source_mode);
+  const storageBackend = resolveStorageBackend({
+    sourceMode,
+    requested: resource.storage_backend,
+    fallback: sourceMode === 'external' ? 'external' : 'local',
+  });
 
-  if (normalizeSourceMode(resource.source_mode) === 'external') {
+  if (sourceMode === 'external') {
     return res.redirect(trimText(resource.source_url));
+  }
+
+  if (storageBackend === 'oss') {
+    const uploadStatus = normalizeUploadStatus(resource.upload_status, trimText(resource.object_key) ? 'ready' : 'pending');
+    if (uploadStatus !== 'ready' || !trimText(resource.object_key)) throw appError('资源尚未上传完成', 409);
+    const { client, config } = await getManagedOssRuntime();
+    const redirectUrl = await createManagedOssPlaybackUrl({
+      client,
+      objectKey: resource.object_key,
+      expiresSeconds: config.playbackExpiresSeconds,
+    });
+    return res.redirect(302, redirectUrl);
   }
 
   const filePath = trimText(resource.storage_path);
@@ -5201,7 +5748,11 @@ app.post('/api/train-exam/resources/:id/progress', requireReader, asyncHandler(a
     ? Math.max(0, Number(req.body.last_position_seconds || 0))
     : null;
   const markCompleted = normalizeBoolean(req.body?.mark_completed, false);
-  const forceWatch = Number(resource.force_watch || 0) === 1 && normalizeResourceType(resource.resource_type) === 'video';
+  const forceWatch = Number(resource.force_watch || 0) === 1 && supportsManagedVideoPlayback({
+    resourceType: resource.resource_type,
+    sourceMode: resource.source_mode,
+    storageBackend: resource.storage_backend,
+  });
 
   const currentPercent = clampProgressPercent(existing?.progress_percent || 0);
   const currentLastPosition = Math.max(0, Number(existing?.last_position_seconds || 0));
@@ -5215,7 +5766,13 @@ app.post('/api/train-exam/resources/:id/progress', requireReader, asyncHandler(a
     ? currentLastPosition
     : lastPositionInput;
 
-  if (forceWatch) {
+  const forceWatchLocked = shouldEnforceManagedVideoForceWatch({
+    forceWatchEnabled: forceWatch,
+    progressPercent: currentPercent,
+    completedAt: existing?.completed_at || null,
+  });
+
+  if (forceWatchLocked) {
     if (markCompleted && inputPercent !== 100 && currentPercent < 98) {
       throw appError('当前视频启用强制播放，请完整观看后再完成', 409);
     }

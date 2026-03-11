@@ -125,6 +125,7 @@ paths:
     post:
       tags: [课程资源]
       summary: 上传资源文件（文档/视频）
+      description: 仅 `storage_backend=local` 的上传资源使用；OSS 受管视频请改用 OSS 初始化接口。
       parameters:
         - $ref: '#/components/parameters/IdPathParam'
       requestBody:
@@ -142,11 +143,45 @@ paths:
         '200':
           description: OK
 
+  /api/train-exam/resources/{id}/oss-upload-init:
+    post:
+      tags: [课程资源]
+      summary: 初始化 OSS 直传
+      description: 仅 `resource_type=video` 且 `source_mode=upload` 且 `storage_backend=oss` 的资源可调用。
+      parameters:
+        - $ref: '#/components/parameters/IdPathParam'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OssUploadInitRequest'
+      responses:
+        '200':
+          description: OK
+
+  /api/train-exam/resources/{id}/oss-upload-complete:
+    post:
+      tags: [课程资源]
+      summary: 确认 OSS 直传完成
+      description: 后端会校验对象是否真实存在，校验通过后资源变为可播放。
+      parameters:
+        - $ref: '#/components/parameters/IdPathParam'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OssUploadCompleteRequest'
+      responses:
+        '200':
+          description: OK
+
   /api/train-exam/resources/{id}/stream:
     get:
       tags: [课程资源]
       summary: 资源流式访问（视频支持 Range）
-      description: 非视频资源返回下载信息；外链资源返回跳转地址。
+      description: 非视频资源返回下载信息；外链资源返回跳转地址；OSS 受管视频返回短时签名跳转。
       parameters:
         - $ref: '#/components/parameters/IdPathParam'
       responses:
@@ -713,6 +748,47 @@ paths:
         '200':
           description: OK
 
+  /api/train-exam/settings/oss:
+    get:
+      tags: [系统设置]
+      summary: 查询阿里云 OSS 配置（管理员）
+      responses:
+        '200':
+          description: OK
+    put:
+      tags: [系统设置]
+      summary: 更新阿里云 OSS 配置（管理员）
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                enabled:
+                  type: boolean
+                region:
+                  type: string
+                bucket:
+                  type: string
+                endpoint:
+                  type: string
+                access_key_id:
+                  type: string
+                access_key_secret:
+                  type: string
+                sts_token:
+                  type: string
+                signed_upload_expires_seconds:
+                  type: integer
+                signed_play_expires_seconds:
+                  type: integer
+                upload_max_file_size_mb:
+                  type: integer
+      responses:
+        '200':
+          description: OK
+
   /api/train-exam/ai/prompts/{taskType}:
     put:
       tags: [AI]
@@ -782,16 +858,51 @@ components:
           type: string
           description: 支持中英文别名，最终归一为 upload/external
           enum: [upload, external, 上传, 外链]
+        storage_backend:
+          type: string
+          description: 上传视频可选 local/oss；外链资源自动归一为 external
+          enum: [local, oss, external, 本地, 外链]
         source_url:
           type: string
         force_watch:
           type: boolean
-          description: 仅视频上传资源支持；true 表示禁止快进
+          description: 仅受管上传视频资源支持；true 表示禁止快进
           default: false
         sort_order:
           type: integer
           default: 0
       required: [name, resource_type, source_mode]
+
+    OssUploadInitRequest:
+      type: object
+      properties:
+        file_name:
+          type: string
+          example: lesson.mp4
+        mime_type:
+          type: string
+          example: video/mp4
+        file_size:
+          type: integer
+          minimum: 1
+      required: [file_name]
+
+    OssUploadCompleteRequest:
+      type: object
+      properties:
+        object_key:
+          type: string
+        etag:
+          type: string
+        file_size:
+          type: integer
+          minimum: 1
+        mime_type:
+          type: string
+          example: video/mp4
+        original_name:
+          type: string
+      required: [object_key]
 
     PlaybackPolicyRequest:
       type: object

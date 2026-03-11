@@ -159,9 +159,13 @@ const createSchema = async () => {
     name VARCHAR(255) NOT NULL,
     resource_type VARCHAR(16) NOT NULL,
     source_mode VARCHAR(16) NOT NULL,
+    storage_backend VARCHAR(16) NOT NULL DEFAULT 'local',
     force_watch TINYINT NOT NULL DEFAULT 0,
     sort_order INT NOT NULL DEFAULT 0,
     storage_path VARCHAR(512) NULL,
+    object_key VARCHAR(512) NULL,
+    object_etag VARCHAR(128) NULL,
+    upload_status VARCHAR(16) NOT NULL DEFAULT 'pending',
     source_url VARCHAR(1024) NULL,
     mime_type VARCHAR(128) NULL,
     file_size BIGINT NULL,
@@ -207,13 +211,15 @@ const createSchema = async () => {
   await run(`CREATE TABLE IF NOT EXISTS te_system_settings (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,
     setting_key VARCHAR(128) NOT NULL,
-    setting_value VARCHAR(1024) NOT NULL,
+    setting_value TEXT NOT NULL,
     updated_by_id BIGINT NULL,
     updated_by_name VARCHAR(128) NULL,
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     UNIQUE KEY uk_te_system_settings_key (setting_key)
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
+
+  await run('ALTER TABLE te_system_settings MODIFY COLUMN setting_value TEXT NOT NULL');
 
   await run(
     `INSERT INTO te_system_settings (setting_key, setting_value, updated_by_name)
@@ -525,6 +531,10 @@ const createSchema = async () => {
 
   await addColumnIfMissing('te_course_resources', 'sort_order', 'sort_order INT NOT NULL DEFAULT 0');
   await addColumnIfMissing('te_course_resources', 'force_watch', 'force_watch TINYINT NOT NULL DEFAULT 0');
+  await addColumnIfMissing('te_course_resources', 'storage_backend', "storage_backend VARCHAR(16) NOT NULL DEFAULT 'local'");
+  await addColumnIfMissing('te_course_resources', 'object_key', 'object_key VARCHAR(512) NULL');
+  await addColumnIfMissing('te_course_resources', 'object_etag', 'object_etag VARCHAR(128) NULL');
+  await addColumnIfMissing('te_course_resources', 'upload_status', "upload_status VARCHAR(16) NOT NULL DEFAULT 'pending'");
   await addColumnIfMissing('te_course_resources', 'transcode_status', "transcode_status VARCHAR(16) NOT NULL DEFAULT 'none'");
   await addColumnIfMissing('te_course_resources', 'transcode_progress', 'transcode_progress INT NOT NULL DEFAULT 100');
   await addColumnIfMissing('te_course_resources', 'transcode_message', 'transcode_message VARCHAR(255) NULL');
@@ -543,6 +553,26 @@ const createSchema = async () => {
   await addColumnIfMissing('te_certificates', 'validity_days', 'validity_days INT NOT NULL DEFAULT 365');
   await addColumnIfMissing('te_certificates', 'renewal_remind_days', 'renewal_remind_days INT NOT NULL DEFAULT 30');
   await addColumnIfMissing('te_certificates', 'updated_at', 'updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP');
+
+  await run(
+    `UPDATE te_course_resources
+     SET storage_backend = CASE
+       WHEN source_mode = 'external' THEN 'external'
+       WHEN IFNULL(storage_backend, '') = '' THEN 'local'
+       ELSE storage_backend
+     END`
+  );
+
+  await run(
+    `UPDATE te_course_resources
+     SET upload_status = CASE
+       WHEN source_mode = 'external' THEN 'ready'
+       WHEN IFNULL(object_key, '') <> '' THEN 'ready'
+       WHEN IFNULL(storage_path, '') <> '' THEN 'ready'
+       WHEN IFNULL(upload_status, '') = '' THEN 'pending'
+       ELSE upload_status
+     END`
+  );
 
   await run(
     `UPDATE te_course_resources

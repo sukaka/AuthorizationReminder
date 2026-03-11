@@ -10,7 +10,7 @@
 - Add request tracing (`trace_id` / `request_id`)
 
 ## Week 4
-- Build reconcile jobs from Mongo raw data into MySQL canonical CI
+- Build reconcile jobs from discovery raw data into MySQL canonical CI
 - Implement outbox relay to Kafka
 
 ## Week 5
