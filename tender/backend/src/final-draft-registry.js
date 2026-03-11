@@ -53,6 +53,32 @@ const normalizeRequirementType = (value) => {
   return 'BUSINESS';
 };
 
+const normalizeClauseSubtype = (value) => {
+  const text = trimText(value).toUpperCase();
+  if ([
+    'ORIGINAL_REQUIRED',
+    'COPY_REQUIRED',
+    'DEMO_REQUIRED',
+    'PROTOTYPE_REQUIRED',
+    'MANUFACTURER_AUTHORIZATION',
+    'DISTRIBUTOR_AUTHORIZATION',
+  ].includes(text)) return text;
+  return 'GENERAL';
+};
+
+const inferClauseSubtype = ({ existing = {}, title = '', sourceText = '' }) => {
+  const existingSubtype = normalizeClauseSubtype(existing?.clause_subtype);
+  if (existingSubtype !== 'GENERAL') return existingSubtype;
+  const text = [trimText(title), trimText(sourceText)].filter(Boolean).join('\n');
+  if (/原厂授权|制造商授权|生产厂家授权/.test(text)) return 'MANUFACTURER_AUTHORIZATION';
+  if (/代理授权|代理商授权|经销商授权|渠道授权/.test(text)) return 'DISTRIBUTOR_AUTHORIZATION';
+  if (/现场演示|演示|\bdemo\b/i.test(text)) return 'DEMO_REQUIRED';
+  if (/样机|原型机|试制样品/.test(text)) return 'PROTOTYPE_REQUIRED';
+  if (/原件|原章|原始件/.test(text)) return 'ORIGINAL_REQUIRED';
+  if (/复印件|扫描件|影印件/.test(text)) return 'COPY_REQUIRED';
+  return 'GENERAL';
+};
+
 const inferClauseType = ({ requirementType, title = '', source = {} }) => {
   const sourceType = trimText(source?.clause_type).toUpperCase();
   if (sourceType) return sourceType;
@@ -69,7 +95,13 @@ const inferClauseType = ({ requirementType, title = '', source = {} }) => {
   return 'BUSINESS_TERM';
 };
 
-const inferResponseMode = ({ requirementType }) => {
+const inferResponseMode = ({ requirementType, clauseSubtype = 'GENERAL' }) => {
+  if (['ORIGINAL_REQUIRED', 'COPY_REQUIRED', 'MANUFACTURER_AUTHORIZATION', 'DISTRIBUTOR_AUTHORIZATION'].includes(clauseSubtype)) {
+    return 'EVIDENCE_BINDING';
+  }
+  if (['DEMO_REQUIRED', 'PROTOTYPE_REQUIRED'].includes(clauseSubtype)) {
+    return 'MANUAL_ONLY';
+  }
   if (requirementType === 'SCORING') return 'AI_DRAFT';
   if (requirementType === 'TECH_PARAM') return 'PARAM_COMPARE';
   if (requirementType === 'BUSINESS') return 'EXACT_QUOTE';
@@ -113,7 +145,12 @@ const buildClauseContractFromRequirementRow = (row, index) => {
     : source;
 
   const requirementType = normalizeRequirementType(firstNonEmpty(existing.requirement_type, row?.requirement_type));
-  const responseMode = trimText(existing.response_mode).toUpperCase() || inferResponseMode({ requirementType });
+  const clauseSubtype = inferClauseSubtype({
+    existing,
+    title: firstNonEmpty(existing.title, row?.title),
+    sourceText: firstNonEmpty(existing.source_text, existing.clause_content, row?.requirement_text, row?.title),
+  });
+  const responseMode = trimText(existing.response_mode).toUpperCase() || inferResponseMode({ requirementType, clauseSubtype });
   const route = existing.route && typeof existing.route === 'object'
     ? {
       target_module: trimText(existing.route.target_module),
@@ -154,6 +191,7 @@ const buildClauseContractFromRequirementRow = (row, index) => {
     source_text: sourceText,
     normalized_text: firstNonEmpty(existing.normalized_text, sourceText),
     clause_type: clauseType,
+    clause_subtype: clauseSubtype,
     requirement_type: requirementType,
     mandatory: normalizeBoolean(existing.mandatory, normalizeBoolean(existing.is_mandatory, mandatoryFallback)),
     scoring_related: normalizeBoolean(existing.scoring_related, scoringRelatedFallback),

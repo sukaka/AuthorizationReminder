@@ -45,6 +45,40 @@ describe('clause contract and routing', () => {
     expect(clauses[1].route.target_module).toBe('DEVIATION_GENERATOR');
   });
 
+  it('exposes clause subtype and refines routing defaults for authorization and demo variants', () => {
+    const clauses = buildClauseRegistryV2({
+      requirements: [
+        {
+          id: 3,
+          requirement_code: 'REQ-QUAL-0003',
+          requirement_type: 'QUALIFICATION',
+          title: '原厂授权',
+          requirement_text: '须提供原厂授权书',
+          source_json: JSON.stringify({
+            clause_subtype: 'MANUFACTURER_AUTHORIZATION',
+          }),
+        },
+        {
+          id: 4,
+          requirement_code: 'REQ-TECH-0004',
+          requirement_type: 'TECH_PARAM',
+          title: '现场演示',
+          requirement_text: '投标人须现场演示核心功能',
+          source_json: JSON.stringify({
+            clause_subtype: 'DEMO_REQUIRED',
+          }),
+        },
+      ],
+    });
+
+    expect(clauses[0].clause_subtype).toBe('MANUFACTURER_AUTHORIZATION');
+    expect(clauses[0].response_mode).toBe('EVIDENCE_BINDING');
+    expect(clauses[0].route.target_module).toBe('EVIDENCE_MATCHER');
+    expect(clauses[1].clause_subtype).toBe('DEMO_REQUIRED');
+    expect(clauses[1].response_mode).toBe('MANUAL_ONLY');
+    expect(clauses[1].route.target_module).toBe('RISK_CHECKER');
+  });
+
   it('maps clause contracts into chapter-level section links for draft section registry', () => {
     const sectionLinks = buildSectionLinksFromClauseRegistry({
       clauses: [

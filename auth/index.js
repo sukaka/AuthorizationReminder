@@ -2,7 +2,6 @@ const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
 const cookieParser = require('cookie-parser');
-const csurf = require('csurf');
 const db = require('../server/db');
 const nodemailer = require('nodemailer');
 const RPCClient = require('@alicloud/pop-core');
@@ -10,6 +9,23 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
 const net = require('net');
+const {
+  createCsrfToken,
+  isCsrfTokenValid,
+} = require('./csrf-security');
+const {
+  hashPassword,
+  verifyPassword,
+} = require('./password-security');
+const {
+  isWeakSecret,
+  shouldRotateBuiltinPasswordHash,
+} = require('./security-bootstrap');
+const {
+  buildSessionTokenPayload,
+  createSessionId,
+  isSessionRecordValid,
+} = require('./session-security');
 
 const app = express();
 const PORT = process.env.PORT || 5180;
@@ -17,6 +33,8 @@ const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret-change-me';
 const AUTH_COOKIE_NAME = String(process.env.AUTH_COOKIE_NAME || 'juxin_auth_token').trim() || 'juxin_auth_token';
 const AUTH_COOKIE_SECURE = process.env.AUTH_COOKIE_SECURE === 'true';
 const AUTH_COOKIE_SAMESITE = String(process.env.AUTH_COOKIE_SAMESITE || 'lax').trim().toLowerCase() || 'lax';
+const AUTH_CSRF_COOKIE_NAME = String(process.env.AUTH_CSRF_COOKIE_NAME || 'auth_csrf_token').trim() || 'auth_csrf_token';
+const AUTH_CSRF_COOKIE_SECURE = process.env.CSRF_SECURE === 'true';
 const CONFIG_SECRET_KEY = process.env.CONFIG_SECRET_KEY || '';
 const SECRET_MASK = '******';
 const SYSTEM_ACCESS_KEYS = ['reminder', 'ticketing', 'cmdb', 'inventory', 'device-flow', 'sec-impl', 'faq', 'tender', 'train-exam'];
@@ -31,13 +49,34 @@ const BUILTIN_ACCOUNTS = [
 const BUILTIN_ACCOUNT_USERNAMES = new Set(BUILTIN_ACCOUNTS.map((item) => item.username));
 const AUDIT_SIGNING_KEY = process.env.AUDIT_SIGNING_KEY || JWT_SECRET;
 const SECURITY_STRICT_MODE = process.env.SECURITY_STRICT_MODE === 'true' || process.env.NODE_ENV === 'production';
-const weakSecrets = new Set(['dev-secret-change-me', 'change-me', '123456', 'password', '']);
 
-const isWeakSecret = (value, minLength = 16) => {
-  const text = String(value || '').trim();
-  if (!text) return true;
-  if (text.length < minLength) return true;
-  return weakSecrets.has(text.toLowerCase());
+const parseOriginList = (raw) =>
+  String(raw || '')
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean);
+
+const isLocalHostname = (value) => {
+  const host = String(value || '').trim().toLowerCase();
+  if (!host) return false;
+  if (host === 'localhost' || host === '127.0.0.1' || host === '::1') return true;
+  if (host.endsWith('.localhost')) return true;
+  return false;
+};
+
+const isLocalOrigin = (value) => {
+  try {
+    const parsed = new URL(String(value || '').trim());
+    return isLocalHostname(parsed.hostname);
+  } catch {
+    return false;
+  }
+};
+
+const isLocalOnlyDeployment = () => {
+  const origins = parseOriginList(process.env.CORS_ORIGINS);
+  if (!origins.length) return false;
+  return origins.every((origin) => isLocalOrigin(origin));
 };
 
 const validateSecurityBootstrap = () => {
@@ -47,6 +86,9 @@ const validateSecurityBootstrap = () => {
   if (isWeakSecret(CONFIG_SECRET_KEY, 32)) problems.push('CONFIG_SECRET_KEY 过弱（生产建议至少32位随机值）');
   if (String(BUILTIN_ACCOUNT_DEFAULT_PASSWORD || '').trim() === '123456') {
     problems.push('BUILTIN_ACCOUNT_DEFAULT_PASSWORD 仍为默认值');
+  }
+  if (!AUTH_COOKIE_SECURE && !isLocalOnlyDeployment()) {
+    problems.push('AUTH_COOKIE_SECURE 在非本地部署中必须启用');
   }
   if (!problems.length) return;
   const text = `[SECURITY][auth] ${problems.join('；')}`;
@@ -63,7 +105,8 @@ const DEFAULT_PASSWORD_POLICY = Object.freeze({
   requireNumber: true,
   requireSpecial: true,
 });
-const DEFAULT_SESSION_TIMEOUT_MINUTES = 7 * 24 * 60;
+const DEFAULT_SESSION_TIMEOUT_MINUTES = 12 * 60;
+const MAX_SESSION_TIMEOUT_MINUTES = 7 * 24 * 60;
 const PRIVILEGED_IP_LIMIT_ROLES = new Set(['admin', 'sysadmin', 'auditor']);
 
 const clampNumber = (value, fallback, min, max) => {
@@ -402,10 +445,18 @@ const maskSecrets = (configs) => {
 
 const decryptSecrets = (configs) => {
   if (!configs) return configs;
-  if (configs.email?.pass) configs.email.pass = decryptValue(configs.email.pass);
-  if (configs.sms?.accessKeySecret) configs.sms.accessKeySecret = decryptValue(configs.sms.accessKeySecret);
-  if (configs.wecom?.secret) configs.wecom.secret = decryptValue(configs.wecom.secret);
-  if (configs.ocr?.accessKeySecret) configs.ocr.accessKeySecret = decryptValue(configs.ocr.accessKeySecret);
+  const safeDecrypt = (value, fieldName) => {
+    try {
+      return decryptValue(value);
+    } catch (err) {
+      console.warn(`[SECURITY][auth] 配置项 ${fieldName} 解密失败，已降级为空值，请重新保存该密钥。`);
+      return '';
+    }
+  };
+  if (configs.email?.pass) configs.email.pass = safeDecrypt(configs.email.pass, 'email.pass');
+  if (configs.sms?.accessKeySecret) configs.sms.accessKeySecret = safeDecrypt(configs.sms.accessKeySecret, 'sms.accessKeySecret');
+  if (configs.wecom?.secret) configs.wecom.secret = safeDecrypt(configs.wecom.secret, 'wecom.secret');
+  if (configs.ocr?.accessKeySecret) configs.ocr.accessKeySecret = safeDecrypt(configs.ocr.accessKeySecret, 'ocr.accessKeySecret');
   return configs;
 };
 
@@ -471,33 +522,58 @@ app.use(cors(corsOptions));
 app.use(express.json({ limit: '1mb' }));
 app.use(cookieParser());
 
-const csrfProtection = csurf({
-  cookie: {
-    key: 'csrf_token',
-    httpOnly: true,
-    sameSite: 'strict',
-    secure: process.env.CSRF_SECURE === 'true',
-  },
+const readCookieValue = (req, cookieName) => {
+  const byParser = String(req.cookies?.[cookieName] || '').trim();
+  if (byParser) return byParser;
+  const cookieHeader = String(req.headers.cookie || '').trim();
+  if (!cookieHeader) return '';
+  const pairs = cookieHeader.split(';');
+  for (const item of pairs) {
+    const idx = item.indexOf('=');
+    if (idx <= 0) continue;
+    const key = item.slice(0, idx).trim();
+    if (key !== cookieName) continue;
+    return decodeURIComponent(item.slice(idx + 1).trim());
+  }
+  return '';
+};
+
+const buildCsrfCookieOptions = () => ({
+  httpOnly: true,
+  secure: AUTH_CSRF_COOKIE_SECURE,
+  sameSite: 'strict',
+  path: '/',
 });
 
-app.use('/api', (req, res, next) => {
+const issueCsrfToken = (res) => {
+  const token = createCsrfToken();
+  res.cookie(AUTH_CSRF_COOKIE_NAME, token, buildCsrfCookieOptions());
+  return token;
+};
+
+const validateCsrfToken = (req, res, next) => {
   if (req.path === '/auth/authorize') return next();
   if (['GET', 'HEAD', 'OPTIONS'].includes(req.method)) return next();
-  return csrfProtection(req, res, next);
-});
+  const cookieToken = readCookieValue(req, AUTH_CSRF_COOKIE_NAME);
+  const headerToken = String(req.headers['x-csrf-token'] || '').trim();
+  if (isCsrfTokenValid({ cookieToken, headerToken })) return next();
+  return res.status(403).json({ error: '安全校验失败，请刷新后重试' });
+};
 
-app.get('/api/auth/csrf', csrfProtection, (req, res) => {
-  res.json({ token: req.csrfToken() });
+app.use('/api', validateCsrfToken);
+
+app.get('/api/auth/csrf', (_req, res) => {
+  res.json({ token: issueCsrfToken(res) });
 });
 
 const toMysqlDatetime = (date) =>
   date instanceof Date ? date.toISOString().slice(0, 19).replace('T', ' ') : null;
 
 const ensureBuiltinUsers = async () => {
-  const hash = bcrypt.hashSync(BUILTIN_ACCOUNT_DEFAULT_PASSWORD, 10);
+  const hash = await hashPassword(BUILTIN_ACCOUNT_DEFAULT_PASSWORD);
   for (const account of BUILTIN_ACCOUNTS) {
     const expectedAccess = defaultAppAccessByRole(account.role);
-    const row = await db.get('SELECT id, role, app_access, is_active FROM users WHERE username = ?', [account.username]);
+    const row = await db.get('SELECT id, role, app_access, is_active, password_hash FROM users WHERE username = ?', [account.username]);
     if (!row) {
       await db.run('INSERT INTO users (username, password_hash, role, app_access, is_active) VALUES (?, ?, ?, ?, 1)', [
         account.username,
@@ -519,37 +595,83 @@ const ensureBuiltinUsers = async () => {
     if (Number(row.is_active) !== 1) {
       await db.run('UPDATE users SET is_active = 1 WHERE id = ?', [row.id]);
     }
+    const shouldRotate = await shouldRotateBuiltinPasswordHash({
+      passwordHash: row.password_hash,
+      comparePassword: async (plain, passwordHash) => (await verifyPassword(plain, passwordHash)).ok,
+      configuredPassword: BUILTIN_ACCOUNT_DEFAULT_PASSWORD,
+    });
+    if (shouldRotate) {
+      await db.run('UPDATE users SET password_hash = ? WHERE id = ?', [hash, row.id]);
+      console.warn(`[SECURITY][auth] 已为内建账号 ${account.username} 回填新的默认强口令哈希`);
+    }
   }
 };
 
-const createToken = async (user, securityConfig = null) => {
-  const security = securityConfig || await getSecurityConfig();
-  const timeoutMinutes = clampNumber(
+const resolveSessionTimeoutMinutes = (securityConfig = null) => {
+  const security = securityConfig || {};
+  return clampNumber(
     security?.session?.timeoutMinutes,
     DEFAULT_SESSION_TIMEOUT_MINUTES,
     5,
-    DEFAULT_SESSION_TIMEOUT_MINUTES
+    MAX_SESSION_TIMEOUT_MINUTES
   );
-  return jwt.sign({ id: user.id, username: user.username, role: user.role }, JWT_SECRET, {
+};
+
+const createToken = async ({ user, sessionId, securityConfig = null }) => {
+  const timeoutMinutes = resolveSessionTimeoutMinutes(securityConfig);
+  return jwt.sign(buildSessionTokenPayload({ user, sessionId }), JWT_SECRET, {
     expiresIn: timeoutMinutes * 60,
   });
 };
 
-const parseCookieToken = (req) => {
-  const tokenFromCookie = String(req.cookies?.[AUTH_COOKIE_NAME] || '').trim();
-  if (tokenFromCookie) return tokenFromCookie;
-  const cookieHeader = String(req.headers.cookie || '');
-  if (!cookieHeader) return '';
-  const pairs = cookieHeader.split(';');
-  for (const item of pairs) {
-    const idx = item.indexOf('=');
-    if (idx <= 0) continue;
-    const key = item.slice(0, idx).trim();
-    if (key !== AUTH_COOKIE_NAME) continue;
-    return decodeURIComponent(item.slice(idx + 1).trim());
-  }
-  return '';
+const createUserSession = async ({ user, securityConfig = null, requestIp = '', userAgent = '' }) => {
+  const timeoutMinutes = resolveSessionTimeoutMinutes(securityConfig);
+  const sessionId = createSessionId();
+  const expiresAt = new Date(Date.now() + timeoutMinutes * 60 * 1000);
+  await db.run(
+    `INSERT INTO auth_user_sessions
+      (session_id, user_id, username, role, issued_ip, user_agent, last_seen_at, last_seen_ip, expires_at)
+     VALUES (?, ?, ?, ?, ?, ?, NOW(), ?, ?)`,
+    [
+      sessionId,
+      Number(user?.id || 0),
+      String(user?.username || ''),
+      String(user?.role || ''),
+      String(requestIp || '').slice(0, 64) || null,
+      String(userAgent || '').slice(0, 255) || null,
+      String(requestIp || '').slice(0, 64) || null,
+      toMysqlDatetime(expiresAt),
+    ]
+  );
+  const token = await createToken({ user, sessionId, securityConfig });
+  return { sessionId, token, expiresAt };
 };
+
+const revokeAuthSession = async ({ sessionId, reason = 'logout' } = {}) => {
+  const value = String(sessionId || '').trim();
+  if (!value) return;
+  await db.run(
+    `UPDATE auth_user_sessions
+     SET revoked_at = COALESCE(revoked_at, NOW()),
+         revoked_reason = COALESCE(revoked_reason, ?)
+     WHERE session_id = ?`,
+    [String(reason || 'logout').slice(0, 64), value]
+  );
+};
+
+const revokeUserSessions = async ({ userId, reason = 'password_change' } = {}) => {
+  const id = Number(userId || 0);
+  if (!id) return;
+  await db.run(
+    `UPDATE auth_user_sessions
+     SET revoked_at = COALESCE(revoked_at, NOW()),
+         revoked_reason = COALESCE(revoked_reason, ?)
+     WHERE user_id = ? AND revoked_at IS NULL`,
+    [String(reason || 'password_change').slice(0, 64), id]
+  );
+};
+
+const parseCookieToken = (req) => readCookieValue(req, AUTH_COOKIE_NAME);
 
 const parseBearerToken = (authorization) => {
   const header = String(authorization || '').trim();
@@ -589,6 +711,10 @@ const clearAuthCookie = (res) => {
   });
 };
 
+const clearCsrfCookie = (res) => {
+  res.clearCookie(AUTH_CSRF_COOKIE_NAME, buildCsrfCookieOptions());
+};
+
 const authMiddleware = async (req, res, next) => {
   if (
     req.path === '/auth/login' ||
@@ -606,9 +732,26 @@ const authMiddleware = async (req, res, next) => {
   }
   try {
     const payload = jwt.verify(token, JWT_SECRET);
+    const sessionId = String(payload?.sid || '').trim();
+    if (!sessionId) {
+      clearAuthCookie(res);
+      return res.status(401).json({ error: '登录已过期' });
+    }
     const user = await db.get('SELECT id, role, is_active FROM users WHERE id = ?', [payload.id]);
     if (!user || Number(user.is_active) !== 1) {
+      clearAuthCookie(res);
       return res.status(401).json({ error: '账号已失效，请联系系统管理员' });
+    }
+    const sessionRecord = await db.get(
+      `SELECT session_id, user_id, revoked_at, expires_at
+       FROM auth_user_sessions
+       WHERE session_id = ?
+       LIMIT 1`,
+      [sessionId]
+    );
+    if (!isSessionRecordValid({ tokenSessionId: sessionId, sessionRecord })) {
+      clearAuthCookie(res);
+      return res.status(401).json({ error: '登录已过期' });
     }
     const security = await getSecurityConfig();
     const requestIp = getRequestIp(req);
@@ -621,9 +764,15 @@ const authMiddleware = async (req, res, next) => {
       clearAuthCookie(res);
       return res.status(403).json({ error: '当前IP不在允许访问范围内，请联系系统管理员', ipRestricted: true });
     }
+    await db.run(
+      'UPDATE auth_user_sessions SET last_seen_at = NOW(), last_seen_ip = ? WHERE session_id = ?',
+      [String(requestIp || '').slice(0, 64) || null, sessionId]
+    );
     req.user = { ...payload, role: user.role || payload.role, request_ip: requestIp };
+    req.authSession = sessionRecord;
     return next();
   } catch (err) {
+    clearAuthCookie(res);
     return res.status(401).json({ error: '登录已过期' });
   }
 };
@@ -2430,8 +2579,15 @@ app.post('/api/auth/login', async (req, res) => {
     });
     return res.status(403).json({ error: '账号已被禁用，请联系系统管理员' });
   }
-  const ok = bcrypt.compareSync(password, user.password_hash);
-  if (!ok) {
+  const passwordCheck = await verifyPassword(password, user.password_hash);
+  if (passwordCheck.requiresPasswordReset) {
+    await logLoginFailed({
+      user: { id: user.id, username: user.username, role: user.role },
+      reason: 'PASSWORD_RESET_REQUIRED_LEGACY_LENGTH',
+    });
+    return res.status(400).json({ error: '当前账号密码哈希需要重置，请联系系统管理员处理' });
+  }
+  if (!passwordCheck.ok) {
     const fail = await recordLoginFailure({ username: loginId, ip });
     await logLoginFailed({
       user: { id: user.id, username: user.username, role: user.role },
@@ -2439,6 +2595,9 @@ app.post('/api/auth/login', async (req, res) => {
       extra: { fail_count: fail.failCount, locked_until: fail.lockedUntil },
     });
     return res.status(400).json({ error: '账号或密码错误' });
+  }
+  if (passwordCheck.needsRehash) {
+    await db.run('UPDATE users SET password_hash = ? WHERE id = ?', [await hashPassword(password), user.id]);
   }
   await clearLoginFailures({ username: loginId, ip });
   const ipCheck = checkRoleIpAccess({
@@ -2467,7 +2626,12 @@ app.post('/api/auth/login', async (req, res) => {
   const mfaStatus = resolveUserMfaStatus({ user, securityConfig: security });
 
   if (mfaStatus.setupRequired) {
-    const token = await createToken(user, security);
+    const { token } = await createUserSession({
+      user,
+      securityConfig: security,
+      requestIp: ip,
+      userAgent: req.headers['user-agent'],
+    });
     setAuthCookie(res, token);
     await logOperation({
       user,
@@ -2534,7 +2698,12 @@ app.post('/api/auth/login', async (req, res) => {
     });
   }
 
-  const token = await createToken(user, security);
+  const { token } = await createUserSession({
+    user,
+    securityConfig: security,
+    requestIp: ip,
+    userAgent: req.headers['user-agent'],
+  });
   setAuthCookie(res, token);
   await logOperation({
     user,
@@ -2722,7 +2891,12 @@ app.post('/api/auth/mfa/verify', async (req, res) => {
     requestIp,
     afterData: { method },
   });
-  const token = await createToken(user, security);
+  const { token } = await createUserSession({
+    user,
+    securityConfig: security,
+    requestIp,
+    userAgent: req.headers['user-agent'],
+  });
   setAuthCookie(res, token);
   await logOperation({
     user,
@@ -2852,7 +3026,9 @@ app.get('/api/auth/me', async (req, res) => {
 
 app.post('/api/auth/logout', async (req, res) => {
   const requestIp = getRequestIp(req);
+  await revokeAuthSession({ sessionId: req.authSession?.session_id || req.user?.sid, reason: 'logout' });
   clearAuthCookie(res);
+  clearCsrfCookie(res);
   await logOperation({
     user: req.user,
     action: 'LOGOUT',
@@ -2881,17 +3057,23 @@ app.post('/api/auth/change-password', async (req, res) => {
   }
   const user = await db.get('SELECT * FROM users WHERE id = ?', [req.user.id]);
   if (!user) return res.status(400).json({ error: '用户不存在' });
-  const ok = bcrypt.compareSync(currentPassword, user.password_hash);
-  if (!ok) return res.status(400).json({ error: '当前密码错误' });
-  const hash = bcrypt.hashSync(newPassword, 10);
+  const currentPasswordCheck = await verifyPassword(currentPassword, user.password_hash);
+  if (currentPasswordCheck.requiresPasswordReset) {
+    return res.status(400).json({ error: '当前账号密码哈希需要重置，请联系系统管理员处理' });
+  }
+  if (!currentPasswordCheck.ok) return res.status(400).json({ error: '当前密码错误' });
+  const hash = await hashPassword(newPassword);
   await db.run('UPDATE users SET password_hash = ? WHERE id = ?', [hash, req.user.id]);
+  await revokeUserSessions({ userId: req.user.id, reason: 'password_change' });
+  clearAuthCookie(res);
+  clearCsrfCookie(res);
   await logOperation({
     user: req.user,
     action: 'CHANGE_PASSWORD',
     entity: 'user',
     entityId: Number(req.user.id),
   });
-  res.json({ ok: true });
+  res.json({ ok: true, reauthRequired: true });
 });
 
 app.get('/health', (req, res) => {

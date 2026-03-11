@@ -79,13 +79,13 @@ docker compose up -d --build mysql auth onlyoffice faq-api web-faq
 docker compose up -d --build mysql auth onlyoffice tender-api web-tender
 
 # 仅 培训考试系统
-docker compose up -d --build mysql auth train-exam-api web-train-exam
+docker compose up -d --build mysql auth train-exam-onlyoffice train-exam-api web-train-exam
 
 # 仅 CMDB 系统
 docker compose up -d --build mysql auth cmdb-mongo cmdb-mysql-init cmdb web-cmdb
 ```
 
-> 说明：`tender-api` 与 `faq-api` 复用同一个 `onlyoffice` 实例时，`DOC_EDITOR_JWT_SECRET` 必须保持一致，否则在线编辑会鉴权失败。
+> 说明：`faq-api` 与 `tender-api` 复用同一个 `onlyoffice` 实例时，`DOC_EDITOR_JWT_SECRET` 必须保持一致。`train-exam-api` 已拆分为独立的 `train-exam-onlyoffice` 实例与独立密钥，不应再与 FAQ / 标书系统共用文档密钥。
 
 ### 2.4 工单系统改动后自动重启镜像
 已在 `docker-compose.yml` 为 `ticketing` 与 `web-ticketing` 配置 `develop.watch`（动作是 `rebuild`）。

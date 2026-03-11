@@ -408,6 +408,7 @@ const createSchema = async () => {
     paper_id BIGINT NOT NULL,
     question_type VARCHAR(32) NULL,
     difficulty VARCHAR(16) NULL,
+    question_categories_json TEXT NULL,
     tags_json TEXT NULL,
     question_count INT NOT NULL DEFAULT 1,
     points_per_question DECIMAL(10,2) NOT NULL DEFAULT 1.00,
@@ -531,6 +532,7 @@ const createSchema = async () => {
   await addColumnIfMissing('te_question_answers', 'answer_values_text', 'answer_values_text TEXT NULL');
   await addColumnIfMissing('te_question_answers', 'answer_aliases_text', 'answer_aliases_text TEXT NULL');
   await addColumnIfMissing('te_question_bank', 'question_category', "question_category VARCHAR(64) NOT NULL DEFAULT '未分类'");
+  await addColumnIfMissing('te_paper_question_rules', 'question_categories_json', 'question_categories_json TEXT NULL');
   await addColumnIfMissing('te_exam_sessions', 'user_department', 'user_department VARCHAR(128) NULL');
   await addColumnIfMissing('te_exam_sessions', 'user_position', 'user_position VARCHAR(128) NULL');
   await addColumnIfMissing('te_exam_results', 'user_department', 'user_department VARCHAR(128) NULL');

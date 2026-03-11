@@ -658,6 +658,23 @@ const init = async () => {
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
 
+  await run(`CREATE TABLE IF NOT EXISTS auth_user_sessions (
+    session_id VARCHAR(64) PRIMARY KEY,
+    user_id INT NOT NULL,
+    username VARCHAR(255) NOT NULL,
+    role VARCHAR(64) NOT NULL,
+    issued_ip VARCHAR(64) NULL,
+    user_agent VARCHAR(255) NULL,
+    revoked_reason VARCHAR(64) NULL,
+    last_seen_at DATETIME NULL,
+    last_seen_ip VARCHAR(64) NULL,
+    revoked_at DATETIME NULL,
+    expires_at DATETIME NOT NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_auth_user_sessions_user (user_id, created_at),
+    INDEX idx_auth_user_sessions_expires (expires_at, revoked_at)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
+
   await run(
     `INSERT IGNORE INTO contact_customers (contact_id, customer_id)
      SELECT id, customer_id FROM contacts WHERE customer_id IS NOT NULL`

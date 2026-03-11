@@ -18,3 +18,4 @@ server/data.db-*
 .env
 .env.*
 .worktrees/
+.tmp_*

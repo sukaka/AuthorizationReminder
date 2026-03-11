@@ -2,12 +2,16 @@ FROM docker.m.daocloud.io/library/node:20-bookworm-slim
 
 WORKDIR /app
 
-COPY auth/package.json ./auth/package.json
+COPY auth/package*.json ./auth/
 COPY auth/index.js ./auth/index.js
+COPY auth/csrf-security.js ./auth/csrf-security.js
+COPY auth/password-security.js ./auth/password-security.js
+COPY auth/session-security.js ./auth/session-security.js
+COPY auth/security-bootstrap.js ./auth/security-bootstrap.js
 COPY server/db.js ./server/db.js
 
 WORKDIR /app/auth
-RUN npm install --omit=dev
+RUN npm ci --omit=dev
 
 ENV NODE_ENV=production
 ENV PORT=5180

@@ -3,6 +3,10 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 const API_BASE = import.meta.env.VITE_API_BASE || ''
 const UPLOAD_MAX_MB = Math.max(1, Number(import.meta.env.VITE_UPLOAD_MAX_MB || 50))
 const DOC_PREVIEW_MIN_SECONDS_DEFAULT = Math.max(15, Number(import.meta.env.VITE_DOC_PREVIEW_MIN_SECONDS || 45))
+const CSRF_FAILURE_PATTERN = /csrf/i
+
+let trainExamCsrfToken = ''
+let trainExamCsrfPromise = null
 
 const parseMaybeJson = (text) => {
   const raw = String(text || '').trim()
@@ -30,127 +34,185 @@ const buildHttpError = ({ res, parsed }) => {
   return `请求失败(${res.status})`
 }
 
-const buildApi = () => ({
-  get: async (path) => {
-    const res = await fetch(`${API_BASE}${path}`, {
-      credentials: 'include',
-    })
-    const text = await res.text()
-    const parsed = parseMaybeJson(text)
-    if (!res.ok) {
-      const err = new Error(buildHttpError({ res, parsed }))
-      err.status = res.status
-      throw err
-    }
-    return parsed.data
-  },
-  post: async (path, body) => {
-    const res = await fetch(`${API_BASE}${path}`, {
-      method: 'POST',
-      credentials: 'include',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(body || {}),
-    })
-    const text = await res.text()
-    const parsed = parseMaybeJson(text)
-    if (!res.ok) {
-      const err = new Error(buildHttpError({ res, parsed }))
-      err.status = res.status
-      throw err
-    }
-    return parsed.data
-  },
-  postForm: async (path, formData) => {
-    let res
-    try {
-      res = await fetch(`${API_BASE}${path}`, {
-        method: 'POST',
+const isCsrfFailure = (status, message) => Number(status || 0) === 403 && CSRF_FAILURE_PATTERN.test(String(message || ''))
+
+const parseApiResponse = async (res) => {
+  const text = await res.text()
+  const parsed = parseMaybeJson(text)
+  if (!res.ok) {
+    const err = new Error(buildHttpError({ res, parsed }))
+    err.status = res.status
+    throw err
+  }
+  return parsed.data
+}
+
+const fetchTrainExamCsrfToken = async ({ force = false } = {}) => {
+  if (!force && trainExamCsrfToken) return trainExamCsrfToken
+  if (!trainExamCsrfPromise || force) {
+    trainExamCsrfPromise = (async () => {
+      const res = await fetch(`${API_BASE}/api/train-exam/csrf`, {
         credentials: 'include',
-        body: formData,
       })
+      const payload = await parseApiResponse(res)
+      const token = String(payload?.token || '')
+      if (!token) {
+        throw new Error('CSRF token 获取失败')
+      }
+      trainExamCsrfToken = token
+      return token
+    })().finally(() => {
+      trainExamCsrfPromise = null
+    })
+  }
+  return trainExamCsrfPromise
+}
+
+const requestWithOptionalCsrf = async ({
+  path,
+  method = 'GET',
+  body,
+  headers = {},
+  useCsrf = false,
+  retryOnCsrf = true,
+}) => {
+  const finalHeaders = { ...headers }
+  if (useCsrf) {
+    finalHeaders['X-CSRF-Token'] = await fetchTrainExamCsrfToken()
+  }
+
+  let res
+  try {
+    const res = await fetch(`${API_BASE}${path}`, {
+      method,
+      credentials: 'include',
+      headers: finalHeaders,
+      body,
+    })
+    return await parseApiResponse(res)
+  } catch (err) {
+    if (useCsrf && retryOnCsrf && isCsrfFailure(err?.status, err?.message)) {
+      trainExamCsrfToken = ''
+      await fetchTrainExamCsrfToken({ force: true })
+      return requestWithOptionalCsrf({
+        path,
+        method,
+        body,
+        headers,
+        useCsrf,
+        retryOnCsrf: false,
+      })
+    }
+    throw err
+  }
+}
+
+const uploadWithProgressAndCsrf = ({ path, formData, options = {}, retryOnCsrf = true }) =>
+  new Promise(async (resolve, reject) => {
+    let csrfToken = ''
+    try {
+      csrfToken = await fetchTrainExamCsrfToken()
     } catch {
-      throw new Error('网络请求失败，请检查网络连接或关闭浏览器翻译/代理插件后重试')
+      reject(new Error('CSRF token 获取失败'))
+      return
     }
-    const text = await res.text()
-    const parsed = parseMaybeJson(text)
-    if (!res.ok) {
-      const err = new Error(buildHttpError({ res, parsed }))
-      err.status = res.status
-      throw err
+
+    const xhr = new XMLHttpRequest()
+    xhr.open('POST', `${API_BASE}${path}`, true)
+    xhr.withCredentials = true
+    xhr.setRequestHeader('X-CSRF-Token', csrfToken)
+
+    xhr.upload.onprogress = (event) => {
+      if (!event.lengthComputable) return
+      const percent = Math.max(0, Math.min(100, Math.round((event.loaded / event.total) * 100)))
+      if (typeof options.onProgress === 'function') {
+        options.onProgress(percent)
+      }
     }
-    return parsed.data
-  },
-  postFormWithProgress: (path, formData, options = {}) =>
-    new Promise((resolve, reject) => {
-      const xhr = new XMLHttpRequest()
-      xhr.open('POST', `${API_BASE}${path}`, true)
-      xhr.withCredentials = true
 
-      xhr.upload.onprogress = (event) => {
-        if (!event.lengthComputable) return
-        const percent = Math.max(0, Math.min(100, Math.round((event.loaded / event.total) * 100)))
-        if (typeof options.onProgress === 'function') {
-          options.onProgress(percent)
-        }
+    xhr.onerror = () => {
+      reject(new Error('网络请求失败，请检查网络连接或关闭浏览器翻译/代理插件后重试'))
+    }
+
+    xhr.onabort = () => {
+      reject(new Error('上传已取消'))
+    }
+
+    xhr.onload = async () => {
+      const status = Number(xhr.status || 0)
+      const text = String(xhr.responseText || '')
+      const parsed = parseMaybeJson(text)
+      if (status >= 200 && status < 300) {
+        resolve(parsed.data)
+        return
       }
-
-      xhr.onerror = () => {
-        reject(new Error('网络请求失败，请检查网络连接或关闭浏览器翻译/代理插件后重试'))
-      }
-
-      xhr.onabort = () => {
-        reject(new Error('上传已取消'))
-      }
-
-      xhr.onload = () => {
-        const status = Number(xhr.status || 0)
-        const text = String(xhr.responseText || '')
-        const parsed = parseMaybeJson(text)
-        if (status >= 200 && status < 300) {
-          resolve(parsed.data)
+      const err = new Error(buildHttpError({ res: { status }, parsed }))
+      err.status = status
+      if (retryOnCsrf && isCsrfFailure(status, err.message)) {
+        try {
+          trainExamCsrfToken = ''
+          await fetchTrainExamCsrfToken({ force: true })
+          const retried = await uploadWithProgressAndCsrf({
+            path,
+            formData,
+            options,
+            retryOnCsrf: false,
+          })
+          resolve(retried)
+          return
+        } catch (retryErr) {
+          reject(retryErr)
           return
         }
-        const err = new Error(buildHttpError({ res: { status }, parsed }))
-        err.status = status
-        reject(err)
       }
+      reject(err)
+    }
 
-      xhr.send(formData)
+    xhr.send(formData)
+  })
+
+const buildApi = () => ({
+  get: async (path) =>
+    requestWithOptionalCsrf({
+      path,
+      method: 'GET',
     }),
-  put: async (path, body) => {
-    const res = await fetch(`${API_BASE}${path}`, {
-      method: 'PUT',
-      credentials: 'include',
+  post: async (path, body) =>
+    requestWithOptionalCsrf({
+      path,
+      method: 'POST',
       headers: {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify(body || {}),
+      useCsrf: true,
+    }),
+  postForm: async (path, formData) =>
+    requestWithOptionalCsrf({
+      path,
+      method: 'POST',
+      body: formData,
+      useCsrf: true,
+    }),
+  postFormWithProgress: (path, formData, options = {}) =>
+    uploadWithProgressAndCsrf({ path, formData, options }),
+  put: async (path, body) => {
+    return requestWithOptionalCsrf({
+      path,
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(body || {}),
+      useCsrf: true,
     })
-    const text = await res.text()
-    const parsed = parseMaybeJson(text)
-    if (!res.ok) {
-      const err = new Error(buildHttpError({ res, parsed }))
-      err.status = res.status
-      throw err
-    }
-    return parsed.data
   },
-  del: async (path) => {
-    const res = await fetch(`${API_BASE}${path}`, {
+  del: async (path) =>
+    requestWithOptionalCsrf({
+      path,
       method: 'DELETE',
-      credentials: 'include',
-    })
-    const text = await res.text()
-    const parsed = parseMaybeJson(text)
-    if (!res.ok) {
-      const err = new Error(buildHttpError({ res, parsed }))
-      err.status = res.status
-      throw err
-    }
-    return parsed.data
-  },
+      useCsrf: true,
+    }),
 })
 
 const getPortalBaseUrl = () => {
@@ -195,6 +257,15 @@ const questionTypeLabel = (value) => {
   if (key === 'judgement') return '判断题'
   if (key === 'fill_blank') return '填空题'
   return value || '-'
+}
+
+const getPublishedQuestionCategoryCount = (row, questionType) => {
+  const key = String(questionType || '').trim().toLowerCase()
+  if (key === 'single_choice') return Number(row?.published_single_choice_count || 0)
+  if (key === 'multiple_choice') return Number(row?.published_multiple_choice_count || 0)
+  if (key === 'judgement') return Number(row?.published_judgement_count || 0)
+  if (key === 'fill_blank') return Number(row?.published_fill_blank_count || 0)
+  return Number(row?.published_question_count || 0)
 }
 
 const difficultyLabel = (value) => {
@@ -395,6 +466,59 @@ const formatDateTime = (value) => {
   return date.toLocaleString('zh-CN', { hour12: false })
 }
 
+const formatDurationText = (seconds) => {
+  const total = Math.max(0, Number(seconds || 0))
+  if (!total) return '-'
+  const hours = Math.floor(total / 3600)
+  const minutes = Math.floor((total % 3600) / 60)
+  const remainSeconds = total % 60
+  if (hours > 0) return `${hours}小时${minutes}分${remainSeconds}秒`
+  if (minutes > 0) return `${minutes}分${remainSeconds}秒`
+  return `${remainSeconds}秒`
+}
+
+const formatPercentText = (value) => `${Number(value || 0).toFixed(2).replace(/\.00$/, '')}%`
+
+const buildAdminResultsQueryString = ({ page = 1, limit = 20, filters = {} } = {}) => {
+  const params = new URLSearchParams()
+  params.set('page', String(Math.max(1, Number(page || 1))))
+  params.set('limit', String(Math.max(1, Number(limit || 20))))
+  if (String(filters?.keyword || '').trim()) params.set('keyword', String(filters.keyword).trim())
+  if (String(filters?.user_id || '').trim()) params.set('user_id', String(filters.user_id).trim())
+  if (String(filters?.paper_id || '').trim()) params.set('paper_id', String(filters.paper_id).trim())
+  if (String(filters?.passed || 'all').trim() !== 'all') params.set('passed', String(filters.passed).trim())
+  if (filters?.final_only) params.set('final_only', 'true')
+  if (String(filters?.date_from || '').trim()) params.set('date_from', String(filters.date_from).trim())
+  if (String(filters?.date_to || '').trim()) params.set('date_to', String(filters.date_to).trim())
+  return params.toString()
+}
+
+const buildResultCenterDefaultSummary = () => ({
+  total_results: 0,
+  pass_count: 0,
+  fail_count: 0,
+  average_score: 0,
+  average_duration_seconds: 0,
+  final_result_count: 0,
+  pass_rate: 0,
+})
+
+const buildCandidateRecordDefault = () => ({
+  candidate: null,
+  items: [],
+  summary: {
+    total_results: 0,
+    final_result_count: 0,
+    pass_count: 0,
+    average_score: 0,
+    latest_exam_at: '',
+  },
+  page: 1,
+  limit: 10,
+  total: 0,
+  total_pages: 1,
+})
+
 const buildHistoryResultLabel = ({ result, paperName = '' }) => {
   const rid = Number(result?.id || 0)
   const paperId = Number(result?.paper_id || 0)
@@ -541,6 +665,25 @@ const defaultQuestionForm = {
   tags: '',
 }
 
+const createPaperRule = () => ({
+  question_type: 'single_choice',
+  difficulty: '',
+  question_categories: [],
+  question_count: 5,
+  points_per_question: 2,
+  tags: '',
+})
+
+const createDefaultPaperForm = () => ({
+  name: '',
+  paper_mode: 'fixed',
+  pass_score: 80,
+  duration_minutes: 60,
+  max_attempts: 3,
+  fixed_question_ids: '',
+  rules: [createPaperRule()],
+})
+
 const buildDefaultPlayerModalRect = () => {
   const vw = typeof window !== 'undefined' ? Math.max(360, Number(window.innerWidth || 0)) : 1280
   const vh = typeof window !== 'undefined' ? Math.max(360, Number(window.innerHeight || 0)) : 800
@@ -591,6 +734,100 @@ const clampDocPreviewModalRect = (rect) => {
   return { left, top, width, height }
 }
 
+const buildDefaultCourseLearningModalRect = () => {
+  const vw = typeof window !== 'undefined' ? Math.max(360, Number(window.innerWidth || 0)) : 1440
+  const vh = typeof window !== 'undefined' ? Math.max(360, Number(window.innerHeight || 0)) : 900
+  const width = Math.max(860, Math.min(1380, vw - 24))
+  const height = Math.max(580, Math.min(920, vh - 24))
+  const left = Math.max(8, Math.floor((vw - width) / 2))
+  const top = Math.max(8, Math.floor((vh - height) / 2))
+  return { left, top, width, height }
+}
+
+const clampCourseLearningModalRect = (rect) => {
+  const vw = typeof window !== 'undefined' ? Math.max(360, Number(window.innerWidth || 0)) : 1440
+  const vh = typeof window !== 'undefined' ? Math.max(360, Number(window.innerHeight || 0)) : 900
+  const margin = 8
+  const maxWidth = Math.max(520, vw - margin * 2)
+  const maxHeight = Math.max(360, vh - margin * 2)
+  const minWidth = Math.min(760, maxWidth)
+  const minHeight = Math.min(500, maxHeight)
+  const width = Math.max(minWidth, Math.min(maxWidth, Math.round(Number(rect?.width || minWidth))))
+  const height = Math.max(minHeight, Math.min(maxHeight, Math.round(Number(rect?.height || minHeight))))
+  const left = Math.max(margin, Math.min(vw - width - margin, Math.round(Number(rect?.left || margin))))
+  const top = Math.max(margin, Math.min(vh - height - margin, Math.round(Number(rect?.top || margin))))
+  return { left, top, width, height }
+}
+
+const COURSE_LEARNING_MODAL_LAYOUT_STORAGE_KEY = 'train-exam.course-learning-modal-layout'
+
+const buildMaximizedCourseLearningModalRect = () => {
+  const vw = typeof window !== 'undefined' ? Number(window.innerWidth || 0) : 1440
+  const vh = typeof window !== 'undefined' ? Number(window.innerHeight || 0) : 900
+  return {
+    left: 8,
+    top: 8,
+    width: Math.max(520, vw - 16),
+    height: Math.max(360, vh - 16),
+  }
+}
+
+const readCourseLearningModalLayout = () => {
+  if (typeof window === 'undefined') return null
+  try {
+    const raw = window.localStorage.getItem(COURSE_LEARNING_MODAL_LAYOUT_STORAGE_KEY)
+    if (!raw) return null
+    const parsed = JSON.parse(raw)
+    if (!parsed || typeof parsed !== 'object') return null
+    return parsed
+  } catch {
+    return null
+  }
+}
+
+const buildInitialCourseLearningModalState = () => {
+  const stored = readCourseLearningModalLayout()
+  if (!stored || typeof stored !== 'object') {
+    return {
+      ...buildDefaultCourseLearningModalRect(),
+      maximized: false,
+      restoreRect: null,
+    }
+  }
+  const restoreRect = stored.restoreRect ? clampCourseLearningModalRect(stored.restoreRect) : null
+  if (stored.maximized) {
+    return {
+      ...buildMaximizedCourseLearningModalRect(),
+      maximized: true,
+      restoreRect: restoreRect || clampCourseLearningModalRect(stored),
+    }
+  }
+  return {
+    ...clampCourseLearningModalRect(stored),
+    maximized: false,
+    restoreRect: null,
+  }
+}
+
+const persistCourseLearningModalLayout = (state) => {
+  if (typeof window === 'undefined' || !state || typeof state !== 'object') return
+  try {
+    const payload = state.maximized
+      ? {
+          maximized: true,
+          restoreRect: clampCourseLearningModalRect(state.restoreRect || buildDefaultCourseLearningModalRect()),
+        }
+      : {
+          ...clampCourseLearningModalRect(state),
+          maximized: false,
+          restoreRect: null,
+        }
+    window.localStorage.setItem(COURSE_LEARNING_MODAL_LAYOUT_STORAGE_KEY, JSON.stringify(payload))
+  } catch {
+    // ignore storage write failures
+  }
+}
+
 function App() {
   const api = useMemo(() => buildApi(), [])
 
@@ -639,6 +876,11 @@ function App() {
     summary: { total_courses: 0, completed_courses: 0, average_completion_rate: 0 },
     items: [],
   })
+  const [isCourseLearningModalOpen, setIsCourseLearningModalOpen] = useState(false)
+  const [courseLearningPendingId, setCourseLearningPendingId] = useState(0)
+  const [courseLearningDragState, setCourseLearningDragState] = useState(null)
+  const [courseLearningResizeState, setCourseLearningResizeState] = useState(null)
+  const [courseLearningModal, setCourseLearningModal] = useState(() => buildInitialCourseLearningModalState())
 
   const [generationForm, setGenerationForm] = useState({
     name: '',
@@ -648,6 +890,7 @@ function App() {
   })
   const [latestGenerationJob, setLatestGenerationJob] = useState(null)
   const [importFile, setImportFile] = useState(null)
+  const [publishImportedQuestions, setPublishImportedQuestions] = useState(true)
   const [latestImportJob, setLatestImportJob] = useState(null)
 
   const [questions, setQuestions] = useState([])
@@ -672,23 +915,13 @@ function App() {
   const [questionCategoryEditName, setQuestionCategoryEditName] = useState('')
   const [questionCategoryDeletePendingId, setQuestionCategoryDeletePendingId] = useState(0)
   const [questionDeletePendingId, setQuestionDeletePendingId] = useState(0)
+  const [questionPublishPendingId, setQuestionPublishPendingId] = useState(0)
   const [selectedQuestionIds, setSelectedQuestionIds] = useState([])
   const [questionBatchDeleting, setQuestionBatchDeleting] = useState(false)
+  const [questionBatchPublishing, setQuestionBatchPublishing] = useState(false)
 
   const [papers, setPapers] = useState([])
-  const [paperForm, setPaperForm] = useState({
-    name: '',
-    paper_mode: 'fixed',
-    pass_score: 80,
-    duration_minutes: 60,
-    max_attempts: 3,
-    fixed_question_ids: '',
-    rule_question_type: 'single_choice',
-    rule_difficulty: 'medium',
-    rule_question_count: 5,
-    rule_points_per_question: 2,
-    rule_tags: '',
-  })
+  const [paperForm, setPaperForm] = useState(() => createDefaultPaperForm())
   const [paperDeletePendingId, setPaperDeletePendingId] = useState(0)
   const [selectedPaperIds, setSelectedPaperIds] = useState([])
   const [paperBatchDeleting, setPaperBatchDeleting] = useState(false)
@@ -710,6 +943,33 @@ function App() {
   const [myResults, setMyResults] = useState([])
   const [myCertificates, setMyCertificates] = useState([])
   const [myRecertJobs, setMyRecertJobs] = useState([])
+  const [resultCenterTab, setResultCenterTab] = useState('results')
+  const [resultCenterView, setResultCenterView] = useState({ type: 'list', from: 'list', resultId: 0, userId: 0 })
+  const [adminResults, setAdminResults] = useState([])
+  const [adminResultsFilters, setAdminResultsFilters] = useState({
+    keyword: '',
+    user_id: '',
+    paper_id: '',
+    passed: 'all',
+    final_only: false,
+    date_from: '',
+    date_to: '',
+  })
+  const [adminResultsPagination, setAdminResultsPagination] = useState({
+    page: 1,
+    limit: 20,
+    total: 0,
+    totalPages: 1,
+  })
+  const [adminResultsSummary, setAdminResultsSummary] = useState(() => buildResultCenterDefaultSummary())
+  const [adminResultUsers, setAdminResultUsers] = useState([])
+  const [adminResultPapers, setAdminResultPapers] = useState([])
+  const [adminResultsLoading, setAdminResultsLoading] = useState(false)
+  const [resultReviewDetail, setResultReviewDetail] = useState(null)
+  const [resultReviewCache, setResultReviewCache] = useState({})
+  const [resultReviewLoading, setResultReviewLoading] = useState(false)
+  const [candidateRecord, setCandidateRecord] = useState(() => buildCandidateRecordDefault())
+  const [candidateRecordLoading, setCandidateRecordLoading] = useState(false)
   const [certTemplate, setCertTemplate] = useState({ exists: false })
   const [certTemplateFile, setCertTemplateFile] = useState(null)
   const [certTemplateInputKey, setCertTemplateInputKey] = useState(0)
@@ -842,6 +1102,7 @@ function App() {
   const canAudit = !!user?.permissions?.train_exam_audit_read || role === 'auditor'
   const canViewAiConfig = isAdminRole
   const isBasicUser = role === 'viewer' && !canWrite && !canReview && !canPublishPaper && !canAudit && !canViewAiConfig
+  const canSelectQuestionRows = canWrite || canReview
 
   const clearFeedback = () => {
     setMessage('')
@@ -952,6 +1213,11 @@ function App() {
     () => learningPath.items.find((item) => Number(item.id) === Number(selectedLearningResourceId || 0)) || null,
     [learningPath.items, selectedLearningResourceId]
   )
+  const currentLearningCourse = useMemo(() => {
+    const cid = Number(learningCourseId || 0)
+    if (!cid) return learningPath.course || null
+    return courses.find((item) => Number(item.id || 0) === cid) || learningPath.course || null
+  }, [courses, learningCourseId, learningPath.course])
   const hasLearningPathTranscoding = useMemo(
     () =>
       Array.isArray(learningPath.items) &&
@@ -968,6 +1234,24 @@ function App() {
     if (previewPath.startsWith('http://') || previewPath.startsWith('https://')) return previewPath
     return `${API_BASE}${previewPath}`
   }, [certTemplate?.preview_url])
+
+  const personalResultsSummary = useMemo(() => {
+    const rows = Array.isArray(myResults) ? myResults : []
+    const total = rows.length
+    const passCount = rows.filter((item) => Number(item?.passed || 0) === 1).length
+    const scoreSum = rows.reduce((sum, item) => sum + Number(item?.score || 0), 0)
+    return {
+      total,
+      passCount,
+      failCount: Math.max(0, total - passCount),
+      averageScore: total > 0 ? Number((scoreSum / total).toFixed(2)) : 0,
+    }
+  }, [myResults])
+
+  const resultReviewTypeStats = useMemo(
+    () => (Array.isArray(resultReviewDetail?.report?.by_type) ? resultReviewDetail.report.by_type : []),
+    [resultReviewDetail]
+  )
 
   const dashboardTips = useMemo(() => {
     const tips = []
@@ -1230,6 +1514,139 @@ function App() {
     return rows
   }
 
+  const fetchAdminResults = async (silent = false, options = {}) => {
+    if (!silent) clearFeedback()
+    const page = Math.max(1, Number(options?.page || adminResultsPagination.page || 1))
+    const limit = Math.max(1, Number(options?.limit || adminResultsPagination.limit || 20))
+    const filters = options?.filters || adminResultsFilters
+    setAdminResultsLoading(true)
+    try {
+      const queryString = buildAdminResultsQueryString({ page, limit, filters })
+      const payload = await api.get(`/api/train-exam/admin/results?${queryString}`)
+      const items = Array.isArray(payload?.items) ? payload.items : []
+      const summary = payload?.summary && typeof payload.summary === 'object' ? payload.summary : buildResultCenterDefaultSummary()
+      const filterPayload = payload?.filters && typeof payload.filters === 'object' ? payload.filters : {}
+      const total = Math.max(0, Number(payload?.total || 0))
+      const serverLimit = Math.max(1, Number(payload?.limit || limit || 20))
+      const serverPage = Math.max(1, Number(payload?.page || page || 1))
+      const totalPages = Math.max(1, Number(payload?.total_pages || Math.ceil(total / serverLimit) || 1))
+      setAdminResults(items)
+      setAdminResultsSummary(summary)
+      setAdminResultsPagination({
+        page: serverPage,
+        limit: serverLimit,
+        total,
+        totalPages,
+      })
+      setAdminResultUsers(Array.isArray(filterPayload?.users) ? filterPayload.users : [])
+      setAdminResultPapers(Array.isArray(filterPayload?.papers) ? filterPayload.papers : [])
+      return payload
+    } finally {
+      setAdminResultsLoading(false)
+    }
+  }
+
+  const fetchResultReviewDetail = async (resultId, { silent = false, force = false } = {}) => {
+    const rid = Number(resultId || 0)
+    if (!rid) return null
+    if (!silent) clearFeedback()
+    if (!force && resultReviewCache[rid]) {
+      const cached = resultReviewCache[rid]
+      setResultReviewDetail(cached)
+      return cached
+    }
+    setResultReviewLoading(true)
+    try {
+      const payload = await api.get(`/api/train-exam/results/${rid}/review-detail`)
+      setResultReviewDetail(payload || null)
+      setResultReviewCache((prev) => ({ ...prev, [rid]: payload || null }))
+      return payload || null
+    } finally {
+      setResultReviewLoading(false)
+    }
+  }
+
+  const fetchCandidateRecord = async (userId, { silent = false, page = 1, limit = 10, filters } = {}) => {
+    const uid = Number(userId || 0)
+    if (!uid) return null
+    if (!silent) clearFeedback()
+    setCandidateRecordLoading(true)
+    try {
+      const queryString = buildAdminResultsQueryString({
+        page,
+        limit,
+        filters: {
+          ...(filters || adminResultsFilters),
+          user_id: String(uid),
+        },
+      })
+      const payload = await api.get(`/api/train-exam/admin/users/${uid}/results?${queryString}`)
+      setCandidateRecord(payload && typeof payload === 'object' ? {
+        ...buildCandidateRecordDefault(),
+        ...payload,
+        items: Array.isArray(payload?.items) ? payload.items : [],
+      } : buildCandidateRecordDefault())
+      return payload
+    } finally {
+      setCandidateRecordLoading(false)
+    }
+  }
+
+  const onOpenResultReviewDetail = async (resultId, { from = 'list', userId = 0, silent = false } = {}) => {
+    try {
+      const payload = await fetchResultReviewDetail(resultId, { silent })
+      if (!payload) return
+      setResultCenterView({
+        type: 'detail',
+        from,
+        resultId: Number(resultId || 0),
+        userId: Number(userId || payload?.summary?.user_id || 0),
+      })
+      if (!silent) setMessage(`已打开卷面详情：结果 #${Number(resultId || 0)}`)
+    } catch (err) {
+      setError(err.message || '打开卷面详情失败，请稍后重试')
+    }
+  }
+
+  const onOpenCandidateRecord = async (userId, { silent = false } = {}) => {
+    const uid = Number(userId || 0)
+    if (!uid) {
+      setError('考生信息无效')
+      return
+    }
+    try {
+      await fetchCandidateRecord(uid, {
+        silent,
+        page: 1,
+        limit: candidateRecord.limit || 10,
+      })
+      setResultCenterView({
+        type: 'candidate',
+        from: 'list',
+        resultId: 0,
+        userId: uid,
+      })
+      if (!silent) setMessage(`已打开考生记录：用户 #${uid}`)
+    } catch (err) {
+      setError(err.message || '加载考生记录失败')
+    }
+  }
+
+  const onBackToResultCenter = async () => {
+    if (resultCenterView.type === 'detail' && resultCenterView.from === 'candidate' && Number(resultCenterView.userId || 0) > 0) {
+      setResultCenterView((prev) => ({ ...prev, type: 'candidate', resultId: 0 }))
+      return
+    }
+    setResultCenterView({ type: 'list', from: 'list', resultId: 0, userId: 0 })
+    if (!isBasicUser && !adminResults.length) {
+      try {
+        await fetchAdminResults(true, { page: 1 })
+      } catch (err) {
+        setError(err.message || '加载考试结果失败')
+      }
+    }
+  }
+
   const fetchLearningPath = async (courseId, silent = false) => {
     const cid = Number(courseId || 0)
     if (!cid) return
@@ -1267,6 +1684,82 @@ function App() {
     setMyLearningProgress({
       summary: payload?.summary || { total_courses: 0, completed_courses: 0, average_completion_rate: 0 },
       items: Array.isArray(payload?.items) ? payload.items : [],
+    })
+  }
+
+  const closeCourseLearningModal = () => {
+    setCourseLearningDragState(null)
+    setCourseLearningResizeState(null)
+    setIsCourseLearningModalOpen(false)
+  }
+
+  const onOpenCourseLearningModal = async (course) => {
+    const cid = Number(course?.id || course || 0)
+    if (!cid) {
+      setError('课程不存在')
+      return
+    }
+    clearFeedback()
+    setCourseLearningPendingId(cid)
+    try {
+      await Promise.all([
+        fetchLearningPath(cid, true),
+        fetchMyLearningProgress(true),
+      ])
+      setIsCourseLearningModalOpen(true)
+    } catch (err) {
+      setError(err.message || '加载课程学习路径失败')
+    } finally {
+      setCourseLearningPendingId(0)
+    }
+  }
+
+  const onCourseLearningHeaderPointerDown = (e) => {
+    if (courseLearningModal.maximized) return
+    const tagName = String(e.target?.tagName || '').toLowerCase()
+    if (['button', 'input', 'select', 'textarea', 'label', 'a'].includes(tagName)) return
+    e.preventDefault()
+    setCourseLearningDragState({
+      startX: Number(e.clientX || 0),
+      startY: Number(e.clientY || 0),
+      startLeft: Number(courseLearningModal.left || 0),
+      startTop: Number(courseLearningModal.top || 0),
+    })
+  }
+
+  const onCourseLearningResizePointerDown = (e) => {
+    if (courseLearningModal.maximized) return
+    e.preventDefault()
+    setCourseLearningResizeState({
+      startX: Number(e.clientX || 0),
+      startY: Number(e.clientY || 0),
+      startWidth: Number(courseLearningModal.width || 0),
+      startHeight: Number(courseLearningModal.height || 0),
+    })
+  }
+
+  const onToggleCourseLearningMaximize = () => {
+    if (!isCourseLearningModalOpen) return
+    if (courseLearningModal.maximized) {
+      const restore = courseLearningModal.restoreRect || buildDefaultCourseLearningModalRect()
+      const rect = clampCourseLearningModalRect(restore)
+      setCourseLearningModal({
+        ...rect,
+        maximized: false,
+        restoreRect: null,
+      })
+      return
+    }
+    const currentRect = clampCourseLearningModalRect(courseLearningModal)
+    const vw = typeof window !== 'undefined' ? Number(window.innerWidth || 0) : 1440
+    const vh = typeof window !== 'undefined' ? Number(window.innerHeight || 0) : 900
+    setCourseLearningModal({
+      left: 8,
+      top: 8,
+      width: Math.max(520, vw - 16),
+      height: Math.max(360, vh - 16),
+      maximized: true,
+      restoreRect: currentRect,
     })
   }
 
@@ -2321,9 +2814,17 @@ function App() {
     try {
       const form = new FormData()
       form.append('file', importFile)
+      form.append('publish_after_import', canReview && publishImportedQuestions ? '1' : '0')
       const payload = await api.postForm('/api/train-exam/questions/import/jobs', form)
+      const messageParts = [`导入完成：成功 ${payload.success_rows || 0}`, `失败 ${payload.failed_rows || 0}`]
+      if (Number(payload.published_rows || 0) > 0) {
+        messageParts.push(`已发布 ${payload.published_rows || 0}`)
+      }
+      if (Number(payload.draft_rows || 0) > 0) {
+        messageParts.push(`草稿 ${payload.draft_rows || 0}`)
+      }
       setLatestImportJob(payload)
-      setMessage(`导入完成：成功 ${payload.success_rows || 0}，失败 ${payload.failed_rows || 0}`)
+      setMessage(messageParts.join('，'))
       setImportFile(null)
       await fetchQuestionCategories(true)
       await fetchQuestions(true)
@@ -2434,6 +2935,42 @@ function App() {
       .filter(Boolean)
   }
 
+  const getMultiSelectValues = (target) => Array.from(target?.selectedOptions || [])
+    .map((option) => String(option?.value || '').trim())
+    .filter(Boolean)
+
+  const addPaperRule = () => {
+    setPaperForm((prev) => ({
+      ...prev,
+      rules: [...(Array.isArray(prev.rules) ? prev.rules : []), createPaperRule()],
+    }))
+  }
+
+  const updatePaperRule = (index, patch) => {
+    setPaperForm((prev) => ({
+      ...prev,
+      rules: (Array.isArray(prev.rules) ? prev.rules : []).map((rule, ruleIndex) => (
+        ruleIndex === index ? { ...rule, ...patch } : rule
+      )),
+    }))
+  }
+
+  const removePaperRule = (index) => {
+    setPaperForm((prev) => {
+      const currentRules = Array.isArray(prev.rules) ? prev.rules : []
+      if (currentRules.length <= 1) {
+        return {
+          ...prev,
+          rules: [createPaperRule()],
+        }
+      }
+      return {
+        ...prev,
+        rules: currentRules.filter((_, ruleIndex) => ruleIndex !== index),
+      }
+    })
+  }
+
   const onCreateManualQuestion = async (e) => {
     e.preventDefault()
     clearFeedback()
@@ -2469,17 +3006,20 @@ function App() {
 
   const onReviewQuestion = async (id, action) => {
     clearFeedback()
+    setQuestionPublishPendingId(Number(id || 0))
     try {
       await api.post(`/api/train-exam/questions/${id}/review`, {
         action,
         comment: action === 'approve' ? '通过发布' : '驳回处理',
       })
-      setMessage(`题目${action === 'approve' ? '已通过' : '已驳回'}`)
+      setMessage(`题目${action === 'approve' ? '已发布' : '已驳回'}`)
       await fetchQuestionCategories(true)
       await fetchQuestions(true)
       await fetchOverview(true)
     } catch (err) {
       setError(err.message || '审核题目失败')
+    } finally {
+      setQuestionPublishPendingId(0)
     }
   }
 
@@ -2543,7 +3083,7 @@ function App() {
       setError('当前角色无题目删除权限。')
       return
     }
-    if (questionDeletePendingId || questionBatchDeleting) return
+    if (questionDeletePendingId || questionPublishPendingId || questionBatchDeleting || questionBatchPublishing) return
     let ids = deleteAll
       ? []
       : selectedQuestionIds.map((id) => Number(id || 0)).filter((id) => id > 0)
@@ -2584,6 +3124,64 @@ function App() {
     }
   }
 
+  const onPublishQuestionsBatch = async ({ publishAll = false } = {}) => {
+    if (!canReview) {
+      setError('当前角色无题目审核发布权限。')
+      return
+    }
+    if (questionDeletePendingId || questionPublishPendingId || questionBatchDeleting || questionBatchPublishing) return
+
+    const ids = selectedQuestionIds.map((id) => Number(id || 0)).filter((id) => id > 0)
+    if (!publishAll && !ids.length) {
+      setError('请先勾选要发布的题目')
+      return
+    }
+
+    const confirmed = window.confirm(
+      publishAll
+        ? '确认发布当前筛选条件下的所有草稿题吗？已发布或已归档题目会自动跳过。'
+        : `确认发布选中的 ${ids.length} 道题目吗？仅草稿题会被发布。`
+    )
+    if (!confirmed) return
+
+    clearFeedback()
+    setQuestionBatchPublishing(true)
+    try {
+      const payload = await api.post('/api/train-exam/questions/bulk-publish', publishAll
+        ? { filters: questionFilters }
+        : { question_ids: ids })
+      const publishedCount = Number(payload?.published_count || 0)
+      const skippedCount = Number(payload?.skipped_count || 0)
+      const failedCount = Number(payload?.failed_count || 0)
+      const failed = Array.isArray(payload?.failed) ? payload.failed : []
+      if (!publishAll) {
+        const publishedIds = Array.isArray(payload?.published_ids)
+          ? payload.published_ids.map((id) => Number(id || 0)).filter((id) => id > 0)
+          : []
+        setSelectedQuestionIds((prev) => prev.filter((qid) => !publishedIds.includes(Number(qid))))
+      } else {
+        setSelectedQuestionIds([])
+      }
+      await fetchQuestionCategories(true)
+      await fetchQuestions(true)
+      await fetchOverview(true)
+
+      const summary = [`已发布 ${publishedCount} 道`]
+      if (skippedCount > 0) summary.push(`跳过 ${skippedCount} 道`)
+      if (failedCount > 0) summary.push(`失败 ${failedCount} 道`)
+      if (failedCount > 0 && failed.length) {
+        const detail = failed.slice(0, 3).map((item) => `${item.question_id}：${item.error}`).join('；')
+        setError(`${summary.join('，')}。${detail}`)
+      } else {
+        setMessage(summary.join('，'))
+      }
+    } catch (err) {
+      setError(err.message || '批量发布题目失败')
+    } finally {
+      setQuestionBatchPublishing(false)
+    }
+  }
+
   const onCreatePaper = async (e) => {
     e.preventDefault()
     clearFeedback()
@@ -2596,30 +3194,19 @@ function App() {
         max_attempts: Number(paperForm.max_attempts || 3),
         fixed_question_ids: paperForm.fixed_question_ids,
         rules: paperForm.paper_mode === 'random'
-          ? [{
-              question_type: paperForm.rule_question_type,
-              difficulty: paperForm.rule_difficulty,
-              question_count: Number(paperForm.rule_question_count || 1),
-              points_per_question: Number(paperForm.rule_points_per_question || 1),
-              tags: parseCsvValues(paperForm.rule_tags),
-            }]
+          ? (Array.isArray(paperForm.rules) ? paperForm.rules : []).map((rule) => ({
+              question_type: rule.question_type,
+              difficulty: rule.difficulty,
+              question_categories: Array.isArray(rule.question_categories) ? rule.question_categories : [],
+              question_count: Number(rule.question_count || 1),
+              points_per_question: Number(rule.points_per_question || 1),
+              tags: parseCsvValues(rule.tags),
+            }))
           : [],
       }
       const created = await api.post('/api/train-exam/papers', payload)
       setMessage(`试卷已创建：${created.id}`)
-      setPaperForm({
-        name: '',
-        paper_mode: 'fixed',
-        pass_score: 80,
-        duration_minutes: 60,
-        max_attempts: 3,
-        fixed_question_ids: '',
-        rule_question_type: 'single_choice',
-        rule_difficulty: 'medium',
-        rule_question_count: 5,
-        rule_points_per_question: 2,
-        rule_tags: '',
-      })
+      setPaperForm(createDefaultPaperForm())
       await fetchPapers(true)
       await fetchOverview(true)
     } catch (err) {
@@ -3408,8 +3995,39 @@ function App() {
   }, [activeMenu, learningCourseId, hasLearningPathTranscoding])
 
   useEffect(() => {
-    if (!learningPlayerDragState && !learningPlayerResizeState && !docPreviewDragState && !docPreviewResizeState) return undefined
+    if (
+      !learningPlayerDragState &&
+      !learningPlayerResizeState &&
+      !docPreviewDragState &&
+      !docPreviewResizeState &&
+      !courseLearningDragState &&
+      !courseLearningResizeState
+    ) return undefined
     const onPointerMove = (event) => {
+      if (courseLearningDragState && !courseLearningModal.maximized) {
+        const dx = Number(event.clientX || 0) - Number(courseLearningDragState.startX || 0)
+        const dy = Number(event.clientY || 0) - Number(courseLearningDragState.startY || 0)
+        setCourseLearningModal((prev) => {
+          const nextRect = clampCourseLearningModalRect({
+            ...prev,
+            left: Number(courseLearningDragState.startLeft || 0) + dx,
+            top: Number(courseLearningDragState.startTop || 0) + dy,
+          })
+          return { ...prev, ...nextRect }
+        })
+      }
+      if (courseLearningResizeState && !courseLearningModal.maximized) {
+        const dx = Number(event.clientX || 0) - Number(courseLearningResizeState.startX || 0)
+        const dy = Number(event.clientY || 0) - Number(courseLearningResizeState.startY || 0)
+        setCourseLearningModal((prev) => {
+          const nextRect = clampCourseLearningModalRect({
+            ...prev,
+            width: Number(courseLearningResizeState.startWidth || 0) + dx,
+            height: Number(courseLearningResizeState.startHeight || 0) + dy,
+          })
+          return { ...prev, ...nextRect }
+        })
+      }
       if (learningPlayerDragState && !learningPlayerModal.maximized) {
         const dx = Number(event.clientX || 0) - Number(learningPlayerDragState.startX || 0)
         const dy = Number(event.clientY || 0) - Number(learningPlayerDragState.startY || 0)
@@ -3460,6 +4078,8 @@ function App() {
       }
     }
     const onPointerUp = () => {
+      setCourseLearningDragState(null)
+      setCourseLearningResizeState(null)
       setLearningPlayerDragState(null)
       setLearningPlayerResizeState(null)
       setDocPreviewDragState(null)
@@ -3472,6 +4092,9 @@ function App() {
       window.removeEventListener('pointerup', onPointerUp)
     }
   }, [
+    courseLearningDragState,
+    courseLearningResizeState,
+    courseLearningModal.maximized,
     learningPlayerDragState,
     learningPlayerResizeState,
     learningPlayerModal.maximized,
@@ -3482,6 +4105,21 @@ function App() {
 
   useEffect(() => {
     const onWindowResize = () => {
+      setCourseLearningModal((prev) => {
+        if (prev.maximized) {
+          const vw = typeof window !== 'undefined' ? Number(window.innerWidth || 0) : 1440
+          const vh = typeof window !== 'undefined' ? Number(window.innerHeight || 0) : 900
+          return {
+            ...prev,
+            left: 8,
+            top: 8,
+            width: Math.max(520, vw - 16),
+            height: Math.max(360, vh - 16),
+          }
+        }
+        const nextRect = clampCourseLearningModalRect(prev)
+        return { ...prev, ...nextRect }
+      })
       setLearningPlayerModal((prev) => {
         if (prev.maximized) {
           const vw = typeof window !== 'undefined' ? Number(window.innerWidth || 0) : 1280
@@ -3520,6 +4158,11 @@ function App() {
   }, [])
 
   useEffect(() => {
+    if (courseLearningDragState || courseLearningResizeState) return
+    persistCourseLearningModalLayout(courseLearningModal)
+  }, [courseLearningModal, courseLearningDragState, courseLearningResizeState])
+
+  useEffect(() => {
     const player = learningVideoRef.current
     if (!player) return
     player.volume = Math.max(0, Math.min(1, Number(learningPlayerVolume || 0) / 100))
@@ -3536,6 +4179,7 @@ function App() {
   useEffect(() => {
     if (activeMenu === 'courses') return
     setIsLearningPlayerOpen(false)
+    closeCourseLearningModal()
     setResourceEditVisible(false)
     setEditingResourceId(0)
   }, [activeMenu])
@@ -3641,6 +4285,184 @@ function App() {
     learningVideoTrackerRef.current = { lastSyncTs: 0, lastPos: 0, maxPos: 0, blockedToastAt: 0 }
   }, [selectedLearningResourceId, learningCourseId])
 
+  const renderCourseLearningModalBody = () => (
+    <>
+      <div className="modal-body doc-threshold-config course-learning-config">
+        <div className="row-actions">
+          <span className="badge">当前文档学习阈值：{docPreviewThresholdSeconds} 秒</span>
+        </div>
+        {isAdminRole ? (
+          <div className="row-actions">
+            <label htmlFor="course-learning-doc-threshold-input">阈值(秒)</label>
+            <input
+              id="course-learning-doc-threshold-input"
+              type="number"
+              min={docPreviewThresholdRange.min}
+              max={docPreviewThresholdRange.max}
+              value={docPreviewThresholdInput}
+              onChange={(e) => setDocPreviewThresholdInput(e.target.value)}
+            />
+            <button
+              className="primary"
+              type="button"
+              disabled={docPreviewThresholdSaving}
+              onClick={onSaveDocPreviewThreshold}
+            >
+              {docPreviewThresholdSaving ? '保存中...' : '保存阈值'}
+            </button>
+          </div>
+        ) : (
+          <span className="empty-tip">仅管理员可修改文档学习阈值。</span>
+        )}
+      </div>
+
+      <div className="modal-body">
+        <div className="metric-grid">
+          <div className="metric"><label>章节总数</label><strong>{learningPath.summary?.total_resources || 0}</strong></div>
+          <div className="metric"><label>已完成</label><strong>{learningPath.summary?.completed_resources || 0}</strong></div>
+          <div className="metric"><label>进行中</label><strong>{learningPath.summary?.in_progress_resources || 0}</strong></div>
+          <div className="metric"><label>完成率</label><strong>{learningPath.summary?.completion_rate || 0}%</strong></div>
+        </div>
+      </div>
+
+      <div className="modal-body table-wrap">
+        <table className="learning-path-table">
+          <thead>
+            <tr>
+              <th>章节</th>
+              <th>资源</th>
+              <th>类型</th>
+              <th>进度</th>
+              <th>最近学习</th>
+              <th>操作</th>
+            </tr>
+          </thead>
+          <tbody>
+            {learningPath.items?.length ? learningPath.items.map((item) => (
+              <tr
+                key={`lp-${item.id}`}
+                className={
+                  String(item.resource_type || '').toLowerCase() === 'video' &&
+                  (String(item.transcode_status || '').toLowerCase() === 'queued' ||
+                    String(item.transcode_status || '').toLowerCase() === 'running')
+                    ? 'transcoding-row'
+                    : ''
+                }
+              >
+                <td>第 {item.chapter_no} 章</td>
+                <td>
+                  {item.name}
+                  {String(item.resource_type || '').toLowerCase() === 'video' ? (
+                    <>
+                      {' '}
+                      {String(item.transcode_status || '').toLowerCase() === 'queued' || String(item.transcode_status || '').toLowerCase() === 'running'
+                        ? <span className="badge">转码中 {Math.max(0, Math.min(100, Number(item.transcode_progress || 0)))}%</span>
+                        : null}
+                      {String(item.transcode_status || '').toLowerCase() === 'failed'
+                        ? <span className="badge">转码失败</span>
+                        : null}
+                    </>
+                  ) : null}
+                </td>
+                <td>{resourceTypeLabel(item.resource_type)}</td>
+                <td>{item.progress?.progress_percent || 0}%</td>
+                <td>{formatDateTime(item.progress?.updated_at)}</td>
+                <td>
+                  <div className="row-actions learning-actions">
+                    {String(item.resource_type || '').toLowerCase() === 'video' ? (
+                      <button className="ghost" type="button" onClick={() => onOpenLearningPlayer(item)}>打开播放器</button>
+                    ) : null}
+                    {String(item.resource_type || '').toLowerCase() === 'doc' ? (
+                      <button
+                        className="ghost"
+                        type="button"
+                        disabled={docPreviewLoading}
+                        onClick={() => onOpenLearningDocPreview(item)}
+                      >
+                        {docPreviewLoading ? '正在打开...' : (String(item.source_mode || '').toLowerCase() === 'external' ? '打开外链文档' : '在线预览文档')}
+                      </button>
+                    ) : null}
+                    {isBasicUser ? null : (
+                      <>
+                        {canWrite ? (
+                          <button className="ghost" type="button" onClick={() => onOpenResourceEditModal(item)}>编辑资源</button>
+                        ) : null}
+                        {canWrite ? (
+                          <button
+                            className="danger"
+                            type="button"
+                            disabled={resourceDeletePendingId === Number(item.id)}
+                            onClick={() => onDeleteResource(item)}
+                          >
+                            {resourceDeletePendingId === Number(item.id) ? '删除中...' : '删除资源'}
+                          </button>
+                        ) : null}
+                        {canWrite && String(item.resource_type || '').toLowerCase() === 'video' ? (
+                          <button
+                            className="warn"
+                            type="button"
+                            onClick={() => onUpdateResourcePlaybackPolicy(item.id, !item.force_watch)}
+                          >
+                            {item.force_watch ? '取消强制播放' : '启用强制播放'}
+                          </button>
+                        ) : null}
+                        {String(item.resource_type || '').toLowerCase() === 'doc' ? (
+                          <span className="badge">阅读文档满 {docPreviewThresholdSeconds || DOC_PREVIEW_MIN_SECONDS_DEFAULT} 秒后自动完成</span>
+                        ) : !(item.force_watch && String(item.resource_type || '').toLowerCase() === 'video') ? (
+                          <>
+                            <button className="ghost" type="button" onClick={() => onUpdateLearningProgress({
+                              resourceId: item.id,
+                              nextPercent: Math.min(100, Number(item.progress?.progress_percent || 0) + 10),
+                              markCompleted: false,
+                            })} title="用于手动补录学习进度，不代表真实播放时长">手动补录+10%</button>
+                            <button className="primary" type="button" onClick={() => onUpdateLearningProgress({
+                              resourceId: item.id,
+                              nextPercent: 100,
+                              markCompleted: true,
+                            })}>标记完成</button>
+                          </>
+                        ) : (
+                          <span className="badge">强制播放资源，请在播放器中学习</span>
+                        )}
+                      </>
+                    )}
+                  </div>
+                </td>
+              </tr>
+            )) : <tr><td colSpan={6}>该课程暂无章节资源</td></tr>}
+          </tbody>
+        </table>
+      </div>
+
+      <div className="modal-body table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>课程</th>
+              <th>总章节</th>
+              <th>已完成</th>
+              <th>进行中</th>
+              <th>平均完成率</th>
+              <th>最近学习</th>
+            </tr>
+          </thead>
+          <tbody>
+            {myLearningProgress.items?.length ? myLearningProgress.items.map((item) => (
+              <tr key={`my-progress-${item.course_id}`}>
+                <td>{item.course_title}</td>
+                <td>{item.total_resources}</td>
+                <td>{item.completed_resources}</td>
+                <td>{item.in_progress_resources}</td>
+                <td>{item.completion_rate}%</td>
+                <td>{formatDateTime(item.last_learning_at)}</td>
+              </tr>
+            )) : <tr><td colSpan={6}>暂无学习进度记录</td></tr>}
+          </tbody>
+        </table>
+      </div>
+    </>
+  )
+
   if (booting) {
     return <div className="app-loading">培训考试系统初始化中...</div>
   }
@@ -3682,6 +4504,20 @@ function App() {
               >
                 考试中心
               </button>
+              <button
+                className={activeMenu === 'results' ? 'active' : ''}
+                onClick={async () => {
+                  setActiveMenu('results')
+                  setResultCenterView({ type: 'list', from: 'list', resultId: 0, userId: 0 })
+                  try {
+                    await Promise.all([fetchPapers(true), fetchMyResults(true), fetchCertificateCenter(true)])
+                  } catch (err) {
+                    setError(err.message || '加载成绩与证书失败')
+                  }
+                }}
+              >
+                成绩与证书
+              </button>
               <button className={activeMenu === 'retrain' ? 'active' : ''} onClick={() => { setActiveMenu('retrain'); fetchRetrainCenter(true) }}>错题复训</button>
             </>
           ) : (
@@ -3716,7 +4552,21 @@ function App() {
               >
                 考试中心
               </button>
-              <button className={activeMenu === 'results' ? 'active' : ''} onClick={() => { setActiveMenu('results'); fetchMyResults(true); fetchCertificateCenter(true); fetchCertificateTemplate(true) }}>成绩证书</button>
+              <button
+                className={activeMenu === 'results' ? 'active' : ''}
+                onClick={async () => {
+                  setActiveMenu('results')
+                  setResultCenterTab('results')
+                  setResultCenterView({ type: 'list', from: 'list', resultId: 0, userId: 0 })
+                  try {
+                    await fetchAdminResults(true, { page: 1 })
+                  } catch (err) {
+                    setError(err.message || '加载考试结果失败')
+                  }
+                }}
+              >
+                考试结果
+              </button>
               <button className={activeMenu === 'retrain' ? 'active' : ''} onClick={() => { setActiveMenu('retrain'); fetchRetrainCenter(true) }}>错题复训</button>
               {canViewAiConfig && (
                 <button className={activeMenu === 'ai-models' ? 'active' : ''} onClick={() => { setActiveMenu('ai-models'); fetchAiModels(true) }}>模型配置</button>
@@ -3998,7 +4848,7 @@ function App() {
                       <th>状态</th>
                       <th>时长</th>
                       <th>更新时间</th>
-                      {!isBasicUser ? <th>操作</th> : null}
+                      <th>操作</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -4029,9 +4879,9 @@ function App() {
                         <td><span className="badge">{questionStatusLabel(item.status)}</span></td>
                         <td>{item.duration_minutes} 分钟</td>
                         <td>{formatDateTime(item.updated_at)}</td>
-                        {!isBasicUser ? (
-                          <td>
-                            {canWrite ? (
+                        <td>
+                          <div className="row-actions">
+                            {!isBasicUser && canWrite ? (
                               <button
                                 className="danger"
                                 type="button"
@@ -4040,191 +4890,20 @@ function App() {
                               >
                                 {courseDeletePendingId === Number(item.id) ? '删除中...' : '删除课程'}
                               </button>
-                            ) : <span className="badge">只读</span>}
-                          </td>
-                        ) : null}
-                      </tr>
-                    )) : <tr><td colSpan={isBasicUser ? 5 : 7}>暂无课程</td></tr>}
-                  </tbody>
-                </table>
-              </div>
-            </section>
-
-            <section className="panel">
-              <div className="panel-header">
-                <h2>学习路径与章节完成度</h2>
-                <div className="row-actions">
-                  <select value={learningCourseId} onChange={(e) => fetchLearningPath(e.target.value)}>
-                    {(courses || []).map((item) => (
-                      <option key={`learning-course-${item.id}`} value={item.id}>{item.title}</option>
-                    ))}
-                  </select>
-                  <button className="ghost" type="button" onClick={() => { if (learningCourseId) fetchLearningPath(learningCourseId); fetchMyLearningProgress(true) }}>刷新路径</button>
-                </div>
-              </div>
-              <div className="panel-body doc-threshold-config">
-                <span className="badge">当前文档学习阈值：{docPreviewThresholdSeconds} 秒</span>
-                {isAdminRole ? (
-                  <div className="row-actions">
-                    <label htmlFor="doc-threshold-input">阈值(秒)</label>
-                    <input
-                      id="doc-threshold-input"
-                      type="number"
-                      min={docPreviewThresholdRange.min}
-                      max={docPreviewThresholdRange.max}
-                      value={docPreviewThresholdInput}
-                      onChange={(e) => setDocPreviewThresholdInput(e.target.value)}
-                    />
-                    <button
-                      className="primary"
-                      type="button"
-                      disabled={docPreviewThresholdSaving}
-                      onClick={onSaveDocPreviewThreshold}
-                    >
-                      {docPreviewThresholdSaving ? '保存中...' : '保存阈值'}
-                    </button>
-                  </div>
-                ) : (
-                  <span className="empty-tip">仅管理员可修改文档学习阈值。</span>
-                )}
-              </div>
-              <div className="panel-body metric-grid">
-                <div className="metric"><label>章节总数</label><strong>{learningPath.summary?.total_resources || 0}</strong></div>
-                <div className="metric"><label>已完成</label><strong>{learningPath.summary?.completed_resources || 0}</strong></div>
-                <div className="metric"><label>进行中</label><strong>{learningPath.summary?.in_progress_resources || 0}</strong></div>
-                <div className="metric"><label>完成率</label><strong>{learningPath.summary?.completion_rate || 0}%</strong></div>
-              </div>
-              <div className="panel-body table-wrap">
-                <table className="learning-path-table">
-                  <thead>
-                    <tr>
-                      <th>章节</th>
-                      <th>资源</th>
-                      <th>类型</th>
-                      <th>进度</th>
-                      <th>最近学习</th>
-                      <th>操作</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {learningPath.items?.length ? learningPath.items.map((item) => (
-                      <tr
-                        key={`lp-${item.id}`}
-                        className={
-                          String(item.resource_type || '').toLowerCase() === 'video' &&
-                          (String(item.transcode_status || '').toLowerCase() === 'queued' ||
-                            String(item.transcode_status || '').toLowerCase() === 'running')
-                            ? 'transcoding-row'
-                            : ''
-                        }
-                      >
-                        <td>第 {item.chapter_no} 章</td>
-                        <td>
-                          {item.name}
-                          {String(item.resource_type || '').toLowerCase() === 'video' ? (
-                            <>
-                              {' '}
-                              {String(item.transcode_status || '').toLowerCase() === 'queued' || String(item.transcode_status || '').toLowerCase() === 'running'
-                                ? <span className="badge">转码中 {Math.max(0, Math.min(100, Number(item.transcode_progress || 0)))}%</span>
-                                : null}
-                              {String(item.transcode_status || '').toLowerCase() === 'failed'
-                                ? <span className="badge">转码失败</span>
-                                : null}
-                            </>
-                          ) : null}
-                        </td>
-                        <td>{resourceTypeLabel(item.resource_type)}</td>
-                        <td>{item.progress?.progress_percent || 0}%</td>
-                        <td>{formatDateTime(item.progress?.updated_at)}</td>
-                      <td>
-                        <div className="row-actions learning-actions">
-                          {String(item.resource_type || '').toLowerCase() === 'video' ? (
-                            <button className="ghost" type="button" onClick={() => onOpenLearningPlayer(item)}>打开播放器</button>
                             ) : null}
-                            {String(item.resource_type || '').toLowerCase() === 'doc' ? (
-                              <button
-                                className="ghost"
-                                type="button"
-                                disabled={docPreviewLoading}
-                                onClick={() => onOpenLearningDocPreview(item)}
-                              >
-                                {docPreviewLoading ? '正在打开...' : (String(item.source_mode || '').toLowerCase() === 'external' ? '打开外链文档' : '在线预览文档')}
-                              </button>
-                            ) : null}
-                            {isBasicUser ? null : (
-                              <>
-                                {canWrite ? (
-                                  <button className="ghost" type="button" onClick={() => onOpenResourceEditModal(item)}>编辑资源</button>
-                                ) : null}
-                                {canWrite ? (
-                                  <button
-                                    className="danger"
-                                    type="button"
-                                    disabled={resourceDeletePendingId === Number(item.id)}
-                                    onClick={() => onDeleteResource(item)}
-                                  >
-                                    {resourceDeletePendingId === Number(item.id) ? '删除中...' : '删除资源'}
-                                  </button>
-                                ) : null}
-                                {canWrite && String(item.resource_type || '').toLowerCase() === 'video' ? (
-                                  <button
-                                    className="warn"
-                                    type="button"
-                                    onClick={() => onUpdateResourcePlaybackPolicy(item.id, !item.force_watch)}
-                                  >
-                                    {item.force_watch ? '取消强制播放' : '启用强制播放'}
-                                  </button>
-                                ) : null}
-                                {String(item.resource_type || '').toLowerCase() === 'doc' ? (
-                                  <span className="badge">阅读文档满 {docPreviewThresholdSeconds || DOC_PREVIEW_MIN_SECONDS_DEFAULT} 秒后自动完成</span>
-                                ) : !(item.force_watch && String(item.resource_type || '').toLowerCase() === 'video') ? (
-                                  <>
-                                    <button className="ghost" type="button" onClick={() => onUpdateLearningProgress({
-                                      resourceId: item.id,
-                                      nextPercent: Math.min(100, Number(item.progress?.progress_percent || 0) + 10),
-                                      markCompleted: false,
-                                    })} title="用于手动补录学习进度，不代表真实播放时长">手动补录+10%</button>
-                                    <button className="primary" type="button" onClick={() => onUpdateLearningProgress({
-                                      resourceId: item.id,
-                                      nextPercent: 100,
-                                      markCompleted: true,
-                                    })}>标记完成</button>
-                                  </>
-                                ) : (
-                                  <span className="badge">强制播放资源，请在播放器中学习</span>
-                                )}
-                              </>
-                            )}
+                            <button
+                              className="ghost"
+                              type="button"
+                              disabled={courseLearningPendingId === Number(item.id)}
+                              onClick={() => onOpenCourseLearningModal(item)}
+                            >
+                              {courseLearningPendingId === Number(item.id) ? '加载中...' : '查看课程'}
+                            </button>
+                            {!isBasicUser && !canWrite ? <span className="badge">只读</span> : null}
                           </div>
                         </td>
                       </tr>
-                    )) : <tr><td colSpan={6}>该课程暂无章节资源</td></tr>}
-                  </tbody>
-                </table>
-              </div>
-              <div className="panel-body table-wrap">
-                <table>
-                  <thead>
-                    <tr>
-                      <th>课程</th>
-                      <th>总章节</th>
-                      <th>已完成</th>
-                      <th>进行中</th>
-                      <th>平均完成率</th>
-                      <th>最近学习</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {myLearningProgress.items?.length ? myLearningProgress.items.map((item) => (
-                      <tr key={`my-progress-${item.course_id}`}>
-                        <td>{item.course_title}</td>
-                        <td>{item.total_resources}</td>
-                        <td>{item.completed_resources}</td>
-                        <td>{item.in_progress_resources}</td>
-                        <td>{item.completion_rate}%</td>
-                        <td>{formatDateTime(item.last_learning_at)}</td>
-                      </tr>
-                    )) : <tr><td colSpan={6}>暂无学习进度记录</td></tr>}
+                    )) : <tr><td colSpan={isBasicUser ? 6 : 7}>暂无课程</td></tr>}
                   </tbody>
                 </table>
               </div>
@@ -4269,7 +4948,7 @@ function App() {
                     <div className="question-source-head">
                       <span className="question-step-chip">步骤 2</span>
                       <h4>Excel导题</h4>
-                      <p>用于补充题库，导入后统一进入草稿状态并可继续审核。</p>
+                      <p>{canReview ? '支持单选、多选、判断题导入，可在导入后直接发布。' : '支持单选、多选、判断题导入，当前账号导入后会进入草稿等待审核发布。'}</p>
                     </div>
                     <div className="row-actions">
                       <button className="ghost" type="button" onClick={onDownloadImportTemplate}>下载模板</button>
@@ -4278,12 +4957,25 @@ function App() {
                       <input type="file" accept=".xlsx,.xls" onChange={(e) => setImportFile(e.target.files?.[0] || null)} />
                     </div>
                     <div className="row-actions">
+                      <label>
+                        <input
+                          type="checkbox"
+                          checked={canReview && publishImportedQuestions}
+                          onChange={(e) => setPublishImportedQuestions(e.target.checked)}
+                          disabled={!canReview}
+                        />
+                        {' '}导入后直接发布
+                      </label>
+                      {!canReview ? <span className="badge">当前账号无审核发布权限</span> : null}
+                    </div>
+                    <div className="row-actions">
                       <button className="primary" type="button" onClick={onImportQuestions} disabled={!canWrite}>导入题库</button>
                     </div>
                     {latestImportJob ? (
                       <div className="question-source-meta">
                         <div>最近导入任务：#{latestImportJob.id} / {importStatusLabel(latestImportJob.status)}</div>
                         <div>成功 {latestImportJob.success_rows || 0}，失败 {latestImportJob.failed_rows || 0}</div>
+                        <div>已发布 {latestImportJob.published_rows || 0}，草稿 {latestImportJob.draft_rows || 0}</div>
                       </div>
                     ) : null}
                   </div>
@@ -4441,7 +5133,7 @@ function App() {
                       <button
                         className="danger"
                         type="button"
-                        disabled={questionBatchDeleting || questionDeletePendingId > 0 || selectedQuestionIds.length === 0}
+                        disabled={questionBatchDeleting || questionBatchPublishing || questionDeletePendingId > 0 || questionPublishPendingId > 0 || selectedQuestionIds.length === 0}
                         onClick={() => onDeleteQuestionsBatch({ deleteAll: false })}
                       >
                         {questionBatchDeleting ? '删除中...' : `删除选中(${selectedQuestionIds.length})`}
@@ -4449,10 +5141,30 @@ function App() {
                       <button
                         className="danger"
                         type="button"
-                        disabled={questionBatchDeleting || questionDeletePendingId > 0 || questionPagination.total === 0}
+                        disabled={questionBatchDeleting || questionBatchPublishing || questionDeletePendingId > 0 || questionPublishPendingId > 0 || questionPagination.total === 0}
                         onClick={() => onDeleteQuestionsBatch({ deleteAll: true })}
                       >
                         一键删除当前筛选
+                      </button>
+                    </>
+                  ) : null}
+                  {canReview ? (
+                    <>
+                      <button
+                        className="warn"
+                        type="button"
+                        disabled={questionBatchPublishing || questionBatchDeleting || questionDeletePendingId > 0 || questionPublishPendingId > 0 || selectedQuestionIds.length === 0}
+                        onClick={() => onPublishQuestionsBatch({ publishAll: false })}
+                      >
+                        {questionBatchPublishing ? '发布中...' : `发布选中(${selectedQuestionIds.length})`}
+                      </button>
+                      <button
+                        className="warn"
+                        type="button"
+                        disabled={questionBatchPublishing || questionBatchDeleting || questionDeletePendingId > 0 || questionPublishPendingId > 0 || questionPagination.total === 0}
+                        onClick={() => onPublishQuestionsBatch({ publishAll: true })}
+                      >
+                        一键发布当前筛选草稿
                       </button>
                     </>
                   ) : null}
@@ -4531,7 +5243,7 @@ function App() {
                       <th>
                         <input
                           type="checkbox"
-                          disabled={!canWrite || questionBatchDeleting || questionDeletePendingId > 0 || filteredQuestions.length === 0}
+                          disabled={!canSelectQuestionRows || questionBatchDeleting || questionBatchPublishing || questionDeletePendingId > 0 || questionPublishPendingId > 0 || filteredQuestions.length === 0}
                           checked={filteredQuestions.length > 0 && selectedQuestionIds.length === filteredQuestions.length}
                           onChange={(e) => {
                             const checked = !!e.target.checked
@@ -4558,7 +5270,7 @@ function App() {
                         <td>
                           <input
                             type="checkbox"
-                            disabled={!canWrite || questionBatchDeleting || questionDeletePendingId > 0}
+                            disabled={!canSelectQuestionRows || questionBatchDeleting || questionBatchPublishing || questionDeletePendingId > 0 || questionPublishPendingId > 0}
                             checked={selectedQuestionIds.includes(Number(q.id))}
                             onChange={(e) => {
                               const checked = !!e.target.checked
@@ -4579,13 +5291,31 @@ function App() {
                         <td>{sourceTypeLabel(q.source_type)}</td>
                         <td>
                           <div className="row-actions learning-actions">
-                            {canReview && q.status === 'draft' ? <button className="warn" onClick={() => onReviewQuestion(q.id, 'approve')}>通过</button> : null}
-                            {canReview && q.status === 'draft' ? <button className="danger" onClick={() => onReviewQuestion(q.id, 'reject')}>驳回</button> : null}
+                            {canReview && q.status === 'draft' ? (
+                              <button
+                                className="warn"
+                                type="button"
+                                disabled={questionBatchDeleting || questionBatchPublishing || questionDeletePendingId > 0 || questionPublishPendingId === Number(q.id)}
+                                onClick={() => onReviewQuestion(q.id, 'approve')}
+                              >
+                                {questionPublishPendingId === Number(q.id) ? '发布中...' : '发布'}
+                              </button>
+                            ) : null}
+                            {canReview && q.status === 'draft' ? (
+                              <button
+                                className="danger"
+                                type="button"
+                                disabled={questionBatchDeleting || questionBatchPublishing || questionDeletePendingId > 0 || questionPublishPendingId === Number(q.id)}
+                                onClick={() => onReviewQuestion(q.id, 'reject')}
+                              >
+                                驳回
+                              </button>
+                            ) : null}
                             {canWrite ? (
                               <button
                                 className="danger"
                                 type="button"
-                                disabled={questionBatchDeleting || questionDeletePendingId === Number(q.id)}
+                                disabled={questionBatchDeleting || questionBatchPublishing || questionPublishPendingId > 0 || questionDeletePendingId === Number(q.id)}
                                 onClick={() => onDeleteQuestion(q)}
                               >
                                 {questionDeletePendingId === Number(q.id) ? '删除中...' : '删除题目'}
@@ -4660,26 +5390,69 @@ function App() {
                     <div className="full"><label>固定题目ID(逗号)</label><input value={paperForm.fixed_question_ids} onChange={(e) => setPaperForm((p) => ({ ...p, fixed_question_ids: e.target.value }))} /></div>
                   ) : (
                     <>
-                      <div>
-                        <label>题型</label>
-                        <select value={paperForm.rule_question_type} onChange={(e) => setPaperForm((p) => ({ ...p, rule_question_type: e.target.value }))}>
-                          <option value="single_choice">单选题</option>
-                          <option value="multiple_choice">多选题</option>
-                          <option value="judgement">判断题</option>
-                          <option value="fill_blank">填空题</option>
-                        </select>
+                      <div className="full row-actions">
+                        <span className="badge">抽题规则 {Array.isArray(paperForm.rules) ? paperForm.rules.length : 0} 条</span>
+                        <span className="sub">可新增多条规则实现单选、多选、判断题混合出题。</span>
+                        <button className="ghost" type="button" onClick={addPaperRule}>新增规则</button>
                       </div>
-                      <div>
-                        <label>难度</label>
-                        <select value={paperForm.rule_difficulty} onChange={(e) => setPaperForm((p) => ({ ...p, rule_difficulty: e.target.value }))}>
-                          <option value="easy">简单</option>
-                          <option value="medium">中等</option>
-                          <option value="hard">困难</option>
-                        </select>
-                      </div>
-                      <div><label>抽题数量</label><input type="number" value={paperForm.rule_question_count} onChange={(e) => setPaperForm((p) => ({ ...p, rule_question_count: e.target.value }))} /></div>
-                      <div><label>每题分值</label><input type="number" value={paperForm.rule_points_per_question} onChange={(e) => setPaperForm((p) => ({ ...p, rule_points_per_question: e.target.value }))} /></div>
-                      <div className="full"><label>标签筛选（逗号分隔，可空）</label><input value={paperForm.rule_tags} onChange={(e) => setPaperForm((p) => ({ ...p, rule_tags: e.target.value }))} /></div>
+                      {(Array.isArray(paperForm.rules) ? paperForm.rules : []).map((rule, index) => (
+                        <div className="full question-source-meta" key={`paper-rule-${index}`}>
+                          <div className="row-actions">
+                            <strong>规则 {index + 1}</strong>
+                            <button
+                              className="danger"
+                              type="button"
+                              onClick={() => removePaperRule(index)}
+                              disabled={(Array.isArray(paperForm.rules) ? paperForm.rules.length : 0) <= 1}
+                            >
+                              删除规则
+                            </button>
+                          </div>
+                          <div className="form-grid" style={{ marginTop: 10 }}>
+                            <div>
+                              <label>题型</label>
+                              <select value={rule.question_type} onChange={(e) => updatePaperRule(index, { question_type: e.target.value })}>
+                                <option value="single_choice">单选题</option>
+                                <option value="multiple_choice">多选题</option>
+                                <option value="judgement">判断题</option>
+                                <option value="fill_blank">填空题</option>
+                              </select>
+                            </div>
+                            <div>
+                              <label>难度</label>
+                              <select value={rule.difficulty} onChange={(e) => updatePaperRule(index, { difficulty: e.target.value })}>
+                                <option value="">不限</option>
+                                <option value="easy">简单</option>
+                                <option value="medium">中等</option>
+                                <option value="hard">困难</option>
+                              </select>
+                            </div>
+                            <div><label>抽题数量</label><input type="number" value={rule.question_count} onChange={(e) => updatePaperRule(index, { question_count: e.target.value })} /></div>
+                            <div><label>每题分值</label><input type="number" value={rule.points_per_question} onChange={(e) => updatePaperRule(index, { points_per_question: e.target.value })} /></div>
+                            <div className="full">
+                              <label>题库分类（可单选或多选）</label>
+                              <select
+                                multiple
+                                size={Math.min(6, Math.max(3, questionCategoryRows.length || 3))}
+                                value={Array.isArray(rule.question_categories) ? rule.question_categories : []}
+                                onChange={(e) => updatePaperRule(index, { question_categories: getMultiSelectValues(e.target) })}
+                                style={{ minHeight: 112 }}
+                              >
+                                {questionCategoryRows.map((row) => {
+                                  const typeCount = getPublishedQuestionCategoryCount(row, rule.question_type)
+                                  return (
+                                    <option key={`paper-rule-category-${index}-${row.id}`} value={row.name}>
+                                      {row.name}（已发布{questionTypeLabel(rule.question_type)} {typeCount}题）
+                                    </option>
+                                  )
+                                })}
+                              </select>
+                              <div className="sub">按住 Command/Ctrl 可多选；这里只显示当前题型下已发布、可用于组卷的题量。</div>
+                            </div>
+                            <div className="full"><label>标签筛选（逗号分隔，可空）</label><input value={rule.tags} onChange={(e) => updatePaperRule(index, { tags: e.target.value })} /></div>
+                          </div>
+                        </div>
+                      ))}
                     </>
                   )}
                   <div className="full row-actions"><button className="primary" type="submit" disabled={!canWrite}>创建试卷</button></div>
@@ -5267,167 +6040,829 @@ function App() {
           </>
         )}
 
-        {activeMenu === 'results' && !isBasicUser && (
+        {activeMenu === 'results' && (
           <>
-            <section className="panel">
-              <div className="panel-header">
-                <h2>证书模板</h2>
-                <div className="row-actions">
-                  <button className="ghost" type="button" onClick={() => fetchCertificateTemplate()} disabled={certTemplateUploading || certTemplateDeleting}>刷新模板</button>
-                </div>
-              </div>
-              <div className="panel-body cert-template-panel">
-                <div className="cert-template-form">
-                  <div className="cert-template-meta">
-                    <span className="badge">{certTemplate?.exists ? '已配置模板' : '未配置模板'}</span>
-                    <span className="badge">来源：{certTemplate?.source === 'uploaded' ? 'Web上传' : certTemplate?.source === 'env' ? '环境变量' : '默认样式'}</span>
-                    {certTemplate?.exists ? <span className="badge">文件：{certTemplate.file_name || '-'}</span> : null}
-                    {certTemplate?.exists ? <span className="badge">大小：{Math.max(0, Number(certTemplate.size_bytes || 0))} B</span> : null}
-                  </div>
-                  <div className="sub">支持 png/jpg/jpeg。上传后立即生效，新生成证书会自动套用该模板。</div>
+            {!isBasicUser ? (
+              <section className="panel">
+                <div className="panel-header">
+                  <h2>{resultCenterTab === 'results' ? '考试结果' : '证书中心'}</h2>
                   <div className="row-actions">
-                    <input
-                      key={`cert-template-file-${certTemplateInputKey}`}
-                      type="file"
-                      accept=".png,.jpg,.jpeg,image/png,image/jpeg"
-                      onChange={(e) => setCertTemplateFile(e.target.files?.[0] || null)}
-                      disabled={!canWrite || certTemplateUploading || certTemplateDeleting}
-                    />
                     <button
-                      className="primary"
+                      className={resultCenterTab === 'results' ? 'primary' : 'ghost'}
                       type="button"
-                      onClick={onUploadCertificateTemplate}
-                      disabled={!canWrite || certTemplateUploading || certTemplateDeleting || !certTemplateFile}
+                      onClick={async () => {
+                        setResultCenterTab('results')
+                        setResultCenterView({ type: 'list', from: 'list', resultId: 0, userId: 0 })
+                        try {
+                          await fetchAdminResults(true, { page: 1 })
+                        } catch (err) {
+                          setError(err.message || '加载考试结果失败')
+                        }
+                      }}
                     >
-                      {certTemplateUploading ? '上传中...' : '上传模板'}
+                      考试结果
                     </button>
                     <button
-                      className="danger"
+                      className={resultCenterTab === 'certificates' ? 'primary' : 'ghost'}
                       type="button"
-                      onClick={onDeleteCertificateTemplate}
-                      disabled={!canWrite || certTemplateDeleting || certTemplateUploading || !certTemplate?.can_delete}
+                      onClick={async () => {
+                        setResultCenterTab('certificates')
+                        setResultCenterView({ type: 'list', from: 'list', resultId: 0, userId: 0 })
+                        try {
+                          await Promise.all([fetchCertificateCenter(true), fetchCertificateTemplate(true)])
+                        } catch (err) {
+                          setError(err.message || '加载证书中心失败')
+                        }
+                      }}
                     >
-                      {certTemplateDeleting ? '删除中...' : '删除模板'}
+                      证书中心
                     </button>
                   </div>
-                  {!canWrite ? <div className="empty-tip">当前账号仅可预览模板，不能上传或删除。</div> : null}
                 </div>
-                <div className="cert-template-preview-wrap">
-                  {certTemplate?.exists && certTemplatePreviewUrl ? (
-                    <img className="cert-template-preview" src={certTemplatePreviewUrl} alt="证书模板预览" />
-                  ) : (
-                    <div className="cert-template-empty">当前未上传模板，将使用系统默认证书背景。</div>
-                  )}
+                <div className="panel-body results-hub-intro">
+                  <div>
+                    <strong>{resultCenterTab === 'results' ? '先筛选，再打开卷面详情。' : '证书模板与续证任务按需加载。'}</strong>
+                    <p className="sub">
+                      {resultCenterTab === 'results'
+                        ? '这里可以按考生、试卷和时间查看每次考试的分数、报表和逐题卷面。'
+                        : '证书模板、续证任务和个人证书列表保留在这里，不再和考试结果首屏一起加载。'}
+                    </p>
+                  </div>
+                  {resultCenterTab === 'results' && resultCenterView.type === 'list' ? (
+                    <div className="row-actions">
+                      <span className="badge">当前共 {adminResultsPagination.total} 条结果</span>
+                      <button className="ghost" type="button" onClick={() => fetchAdminResults()} disabled={adminResultsLoading}>
+                        {adminResultsLoading ? '刷新中...' : '刷新结果'}
+                      </button>
+                    </div>
+                  ) : null}
                 </div>
-              </div>
-            </section>
+              </section>
+            ) : null}
 
-            <section className="grid-2">
-              <div className="panel">
-                <div className="panel-header"><h2>证书有效期</h2></div>
-                <div className="panel-body table-wrap">
-                  <table>
-                    <thead>
-                      <tr>
-                        <th>证书号</th>
-                        <th>试卷</th>
-                        <th>状态</th>
-                        <th>有效期至</th>
-                        <th>剩余天数</th>
-                        <th>提醒</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {myCertificates.length ? myCertificates.map((c) => (
-                        <tr key={`cert-${c.id}`}>
-                          <td>{c.certificate_no}</td>
-                          <td>{c.paper_name || c.paper_id}</td>
-                          <td><span className={`status-chip ${c.status === 'active' ? 'good' : 'warn'}`}>{certStatusLabel(c.status)}</span></td>
-                          <td>{formatDateTime(c.valid_until)}</td>
-                          <td>{c.days_left}</td>
-                          <td>{c.should_remind ? '需复考提醒' : '-'}</td>
-                        </tr>
-                      )) : <tr><td colSpan={6}>暂无证书</td></tr>}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-
-              <div className="panel">
-                <div className="panel-header"><h2>续证任务</h2></div>
-                <div className="panel-body table-wrap">
-                  <table>
-                    <thead>
-                      <tr>
-                        <th>ID</th>
-                        <th>试卷</th>
-                        <th>到期/计划时间</th>
-                        <th>状态</th>
-                        <th>触发方式</th>
-                        <th>操作</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {myRecertJobs.length ? myRecertJobs.map((job) => (
-                        <tr key={`recert-${job.id}`}>
-                          <td>{job.id}</td>
-                          <td>{job.paper_name || job.paper_id}</td>
-                          <td>{formatDateTime(job.due_at)}</td>
-                          <td><span className={`status-chip ${job.status === 'completed' ? 'good' : 'warn'}`}>{recertStatusLabel(job.status)}</span></td>
-                          <td>{String(job.trigger_type || '').toLowerCase() === 'auto' ? '自动' : '手动'}</td>
-                          <td>
+            {resultCenterView.type === 'detail' ? (
+              <>
+                <section className="panel results-detail-panel">
+                  <div className="panel-header">
+                    <div>
+                      <h2>卷面详情</h2>
+                      <div className="sub">查看本次考试的得分、题型表现和逐题作答明细。</div>
+                    </div>
+                    <div className="row-actions">
+                      <button className="ghost" type="button" onClick={onBackToResultCenter}>
+                        {resultCenterView.from === 'candidate' ? '返回考生记录' : '返回结果列表'}
+                      </button>
+                      {!isBasicUser && Number(resultReviewDetail?.summary?.user_id || 0) > 0 ? (
+                        <button className="ghost" type="button" onClick={() => onOpenCandidateRecord(resultReviewDetail.summary.user_id, { silent: true })}>
+                          查看考生记录
+                        </button>
+                      ) : null}
+                      <button className="primary" type="button" onClick={() => window.print()} disabled={resultReviewLoading || !resultReviewDetail}>
+                        打印报表
+                      </button>
+                    </div>
+                  </div>
+                  <div className="panel-body">
+                    {resultReviewLoading && !resultReviewDetail ? (
+                      <div className="empty-tip">卷面详情加载中...</div>
+                    ) : resultReviewDetail ? (
+                      <div className="results-detail-shell">
+                        <div className="results-detail-hero">
+                          <div className="results-detail-overview">
+                            <div className="results-detail-title">
+                              <strong>{resultReviewDetail?.summary?.paper_name || '未命名试卷'}</strong>
+                              <span className={`status-chip ${Number(resultReviewDetail?.summary?.passed || 0) === 1 ? 'good' : 'warn'}`}>
+                                {Number(resultReviewDetail?.summary?.passed || 0) === 1 ? '通过' : '未通过'}
+                              </span>
+                            </div>
                             <div className="row-actions">
-                              {['scheduled', 'in_progress'].includes(String(job.status || '').toLowerCase()) ? (
-                                <button className="primary" type="button" onClick={() => onStartRecertJob(job.id, job.paper_id)}>去复考</button>
+                              <span className="badge">结果 #{resultReviewDetail?.summary?.result_id || 0}</span>
+                              <span className="badge">考生：{resultReviewDetail?.summary?.username || '-'}</span>
+                              <span className="badge">部门：{resultReviewDetail?.summary?.user_department || '-'}</span>
+                              <span className="badge">岗位：{resultReviewDetail?.summary?.user_position || '-'}</span>
+                            </div>
+                            <div className="row-actions">
+                              <span className="badge">考试时间：{formatDateTime(resultReviewDetail?.summary?.created_at)}</span>
+                              <span className="badge">用时：{formatDurationText(resultReviewDetail?.summary?.duration_seconds)}</span>
+                              <span className="badge">第 {Number(resultReviewDetail?.summary?.attempt_no || 0)} 次考试</span>
+                              <span className="badge">{Number(resultReviewDetail?.summary?.is_final || 0) === 1 ? '计入最终成绩' : '非最终成绩'}</span>
+                            </div>
+                          </div>
+                          <div className="results-score-card">
+                            <span>得分</span>
+                            <strong>{Number(resultReviewDetail?.summary?.score || 0).toFixed(2)}</strong>
+                            <div>总分 {Number(resultReviewDetail?.summary?.total_score || 0).toFixed(2)} / 及格线 {Number(resultReviewDetail?.summary?.pass_score || 0).toFixed(2)}</div>
+                          </div>
+                        </div>
+                        <div className="metric-grid results-detail-metrics">
+                          <div className="metric">
+                            <label>总题数</label>
+                            <strong>{Number(resultReviewDetail?.report?.total_questions || 0)}</strong>
+                          </div>
+                          <div className="metric">
+                            <label>正确题数</label>
+                            <strong>{Number(resultReviewDetail?.report?.correct_count || 0)}</strong>
+                          </div>
+                          <div className="metric">
+                            <label>错题数</label>
+                            <strong>{Number(resultReviewDetail?.report?.wrong_count || 0)}</strong>
+                          </div>
+                          <div className="metric">
+                            <label>正确率</label>
+                            <strong>{formatPercentText(resultReviewDetail?.report?.accuracy_rate || 0)}</strong>
+                          </div>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="empty-tip">暂无卷面详情</div>
+                    )}
+                  </div>
+                </section>
+
+                {resultReviewDetail ? (
+                  <>
+                    <section className="panel">
+                      <div className="panel-header"><h2>结果报表</h2></div>
+                      <div className="panel-body">
+                        <div className="results-type-grid">
+                          {resultReviewTypeStats.length ? resultReviewTypeStats.map((item) => (
+                            <div className="metric" key={`review-type-${item.question_type}`}>
+                              <label>{questionTypeLabel(item.question_type)}</label>
+                              <strong>{formatPercentText(item.accuracy_rate || 0)}</strong>
+                              <div className="sub">正确 {item.correct_count} / {item.total_questions}，得分 {Number(item.earned_score || 0).toFixed(2)} / {Number(item.total_score || 0).toFixed(2)}</div>
+                            </div>
+                          )) : (
+                            <div className="empty-tip">暂无题型报表</div>
+                          )}
+                        </div>
+                      </div>
+                    </section>
+
+                    {!isBasicUser && resultReviewDetail?.ai_advice ? (
+                      <section className="panel">
+                        <div className="panel-header"><h2>AI 学习建议</h2></div>
+                        <div className="panel-body">
+                          <div className="row-actions">
+                            <span className="badge">{adviceStatusLabel(resultReviewDetail?.ai_advice?.status || 'pending')}</span>
+                            <span className="badge">模型：{resultReviewDetail?.ai_advice?.model_name || '-'}</span>
+                            <span className="badge">更新时间：{formatDateTime(resultReviewDetail?.ai_advice?.updated_at)}</span>
+                          </div>
+                          <pre className="results-ai-advice">{String(resultReviewDetail?.ai_advice?.advice_text || '暂无 AI 建议')}</pre>
+                        </div>
+                      </section>
+                    ) : null}
+
+                    <section className="panel">
+                      <div className="panel-header"><h2>逐题卷面</h2></div>
+                      <div className="panel-body results-question-stack">
+                        {(Array.isArray(resultReviewDetail?.questions) ? resultReviewDetail.questions : []).map((item, idx) => {
+                          const review = buildExamQuestionReview({
+                            detail: {
+                              standard_answer: item.standard_answer,
+                              user_answer: item.user_answer,
+                              is_correct: item.is_correct,
+                              earned_score: item.earned_score,
+                              points: item.points,
+                              explanation: item.explanation,
+                            },
+                            questionType: item.question_type,
+                            options: item.options,
+                          })
+                          return (
+                            <div className="exam-box" key={`review-question-${item.question_id}`}>
+                              <div className="row-actions">
+                                <strong>{idx + 1}. {item.stem || '-'}</strong>
+                                <span className="badge">{questionTypeLabel(item.question_type)} · {Number(item.points || 0)}分</span>
+                                <span className={`status-chip ${item.is_correct ? 'good' : 'warn'}`}>
+                                  {item.is_correct ? '回答正确' : '回答错误'}
+                                </span>
+                              </div>
+                              {review ? (
+                                <div className="exam-answer-review">
+                                  <div className="exam-answer-review-head">
+                                    <strong>作答回顾</strong>
+                                    <span className="badge">本题得分 {review.scoreText}</span>
+                                  </div>
+                                  <div className="exam-answer-review-line">
+                                    <label>你的作答</label>
+                                    <div>{review.userAnswerText}</div>
+                                  </div>
+                                  <div className="exam-answer-review-line">
+                                    <label>标准答案</label>
+                                    <div>{review.standardAnswerText}</div>
+                                  </div>
+                                  {review.explanation ? (
+                                    <div className="exam-answer-review-line">
+                                      <label>解析</label>
+                                      <div>{review.explanation}</div>
+                                    </div>
+                                  ) : null}
+                                </div>
                               ) : null}
                             </div>
-                          </td>
-                        </tr>
-                      )) : <tr><td colSpan={6}>暂无续证任务</td></tr>}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            </section>
+                          )
+                        })}
+                      </div>
+                    </section>
+                  </>
+                ) : null}
+              </>
+            ) : !isBasicUser && resultCenterTab === 'results' && resultCenterView.type === 'candidate' ? (
+              <>
+                <section className="panel">
+                  <div className="panel-header">
+                    <div>
+                      <h2>考生记录</h2>
+                      <div className="sub">查看该考生的历史考试结果与卷面详情。</div>
+                    </div>
+                    <div className="row-actions">
+                      <button className="ghost" type="button" onClick={() => setResultCenterView({ type: 'list', from: 'list', resultId: 0, userId: 0 })}>返回结果列表</button>
+                      <button
+                        className="ghost"
+                        type="button"
+                        onClick={() => fetchCandidateRecord(resultCenterView.userId, { page: candidateRecord.page, limit: candidateRecord.limit })}
+                        disabled={candidateRecordLoading}
+                      >
+                        {candidateRecordLoading ? '刷新中...' : '刷新记录'}
+                      </button>
+                    </div>
+                  </div>
+                  <div className="panel-body">
+                    <div className="results-detail-hero">
+                      <div className="results-detail-overview">
+                        <div className="results-detail-title">
+                          <strong>{candidateRecord?.candidate?.username || `用户 #${resultCenterView.userId}`}</strong>
+                          <span className="badge">用户 #{resultCenterView.userId}</span>
+                        </div>
+                        <div className="row-actions">
+                          <span className="badge">部门：{candidateRecord?.candidate?.department || '-'}</span>
+                          <span className="badge">岗位：{candidateRecord?.candidate?.position_title || '-'}</span>
+                          <span className="badge">最近考试：{formatDateTime(candidateRecord?.summary?.latest_exam_at)}</span>
+                        </div>
+                      </div>
+                      <div className="results-score-card compact">
+                        <span>平均分</span>
+                        <strong>{Number(candidateRecord?.summary?.average_score || 0).toFixed(2)}</strong>
+                        <div>共 {Number(candidateRecord?.summary?.total_results || 0)} 次考试</div>
+                      </div>
+                    </div>
+                    <div className="metric-grid results-detail-metrics">
+                      <div className="metric">
+                        <label>总考试数</label>
+                        <strong>{Number(candidateRecord?.summary?.total_results || 0)}</strong>
+                      </div>
+                      <div className="metric">
+                        <label>通过次数</label>
+                        <strong>{Number(candidateRecord?.summary?.pass_count || 0)}</strong>
+                      </div>
+                      <div className="metric">
+                        <label>最终成绩数</label>
+                        <strong>{Number(candidateRecord?.summary?.final_result_count || 0)}</strong>
+                      </div>
+                      <div className="metric">
+                        <label>当前页</label>
+                        <strong>{Number(candidateRecord?.page || 1)} / {Number(candidateRecord?.total_pages || 1)}</strong>
+                      </div>
+                    </div>
+                  </div>
+                </section>
 
-            <section className="panel">
-              <div className="panel-header"><h2>成绩与证书</h2></div>
-              <div className="panel-body table-wrap">
-                <table>
-                  <thead>
-                    <tr>
-                      <th>ID</th>
-                      <th>试卷ID</th>
-                      <th>次数</th>
-                      <th>成绩</th>
-                      <th>状态</th>
-                      <th>最终</th>
-                      <th>时间</th>
-                      <th>操作</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {myResults.length ? myResults.map((r) => (
-                      <tr key={r.id}>
-                        <td>{r.id}</td>
-                        <td>{r.paper_id}</td>
-                        <td>{r.attempt_no}</td>
-                        <td>{Number(r.score || 0).toFixed(2)} / {Number(r.total_score || 0).toFixed(2)}</td>
-                        <td><span className="badge">{Number(r.passed || 0) === 1 ? '通过' : '未通过'}</span></td>
-                        <td>{Number(r.is_final || 0) === 1 ? '是' : '否'}</td>
-                        <td>{formatDateTime(r.created_at)}</td>
-                        <td>
-                          <div className="row-actions">
-                            {Number(r.passed || 0) === 1 ? <button className="primary" onClick={() => onGenerateCertificate(r.id)}>生成证书</button> : null}
-                            <button className="ghost" onClick={() => onDownloadCertificate(r.id)}>下载证书</button>
-                          </div>
-                        </td>
-                      </tr>
-                    )) : <tr><td colSpan={8}>暂无考试结果</td></tr>}
-                  </tbody>
-                </table>
-              </div>
-            </section>
+                <section className="panel">
+                  <div className="panel-header"><h2>历史考试记录</h2></div>
+                  <div className="panel-body table-wrap">
+                    <table>
+                      <thead>
+                        <tr>
+                          <th>结果ID</th>
+                          <th>试卷</th>
+                          <th>考试时间</th>
+                          <th>得分</th>
+                          <th>用时</th>
+                          <th>第几次考试</th>
+                          <th>考试结果</th>
+                          <th>操作</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {candidateRecordLoading && !candidateRecord.items.length ? (
+                          <tr><td colSpan={8}>考生记录加载中...</td></tr>
+                        ) : candidateRecord.items.length ? candidateRecord.items.map((item) => (
+                          <tr key={`candidate-result-${item.id}`}>
+                            <td>{item.id}</td>
+                            <td>{item.paper_name || item.paper_id}</td>
+                            <td>{formatDateTime(item.created_at)}</td>
+                            <td>{Number(item.score || 0).toFixed(2)} / {Number(item.total_score || 0).toFixed(2)}</td>
+                            <td>{formatDurationText(item.duration_seconds)}</td>
+                            <td>{item.attempt_no}</td>
+                            <td><span className={`status-chip ${Number(item.passed || 0) === 1 ? 'good' : 'warn'}`}>{Number(item.passed || 0) === 1 ? '通过' : '未通过'}</span></td>
+                            <td>
+                              <div className="row-actions">
+                                <button className="ghost" type="button" onClick={() => onOpenResultReviewDetail(item.id, { from: 'candidate', userId: item.user_id })}>查看卷面</button>
+                              </div>
+                            </td>
+                          </tr>
+                        )) : (
+                          <tr><td colSpan={8}>当前筛选下没有可查看的考试记录</td></tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                  <div className="panel-body question-pagination">
+                    <div className="row-actions">
+                      <span className="badge">共 {candidateRecord.total} 条</span>
+                      <span className="badge">第 {candidateRecord.page} / {candidateRecord.total_pages} 页</span>
+                    </div>
+                    <div className="row-actions">
+                      <button
+                        className="ghost"
+                        type="button"
+                        disabled={candidateRecordLoading || Number(candidateRecord.page || 1) <= 1}
+                        onClick={() => fetchCandidateRecord(resultCenterView.userId, {
+                          page: Math.max(1, Number(candidateRecord.page || 1) - 1),
+                          limit: candidateRecord.limit,
+                        })}
+                      >
+                        上一页
+                      </button>
+                      <button
+                        className="ghost"
+                        type="button"
+                        disabled={candidateRecordLoading || Number(candidateRecord.page || 1) >= Number(candidateRecord.total_pages || 1)}
+                        onClick={() => fetchCandidateRecord(resultCenterView.userId, {
+                          page: Math.min(Number(candidateRecord.total_pages || 1), Number(candidateRecord.page || 1) + 1),
+                          limit: candidateRecord.limit,
+                        })}
+                      >
+                        下一页
+                      </button>
+                    </div>
+                  </div>
+                </section>
+              </>
+            ) : !isBasicUser && resultCenterTab === 'results' ? (
+              <>
+                <section className="panel">
+                  <div className="panel-header">
+                    <h2>筛选条件</h2>
+                    <div className="row-actions">
+                      <button
+                        className="ghost"
+                        type="button"
+                        onClick={async () => {
+                          const nextFilters = {
+                            keyword: '',
+                            user_id: '',
+                            paper_id: '',
+                            passed: 'all',
+                            final_only: false,
+                            date_from: '',
+                            date_to: '',
+                          }
+                          setAdminResultsFilters(nextFilters)
+                          await fetchAdminResults(false, { page: 1, filters: nextFilters })
+                        }}
+                        disabled={adminResultsLoading}
+                      >
+                        清空筛选
+                      </button>
+                      <button
+                        className="primary"
+                        type="button"
+                        onClick={() => fetchAdminResults(false, { page: 1 })}
+                        disabled={adminResultsLoading}
+                      >
+                        {adminResultsLoading ? '查询中...' : '应用筛选'}
+                      </button>
+                    </div>
+                  </div>
+                  <div className="panel-body">
+                    <div className="results-filter-grid">
+                      <div>
+                        <label>关键词</label>
+                        <input
+                          value={adminResultsFilters.keyword}
+                          onChange={(e) => setAdminResultsFilters((prev) => ({ ...prev, keyword: e.target.value }))}
+                          placeholder="考生、部门、试卷"
+                        />
+                      </div>
+                      <div>
+                        <label>考生</label>
+                        <select value={adminResultsFilters.user_id} onChange={(e) => setAdminResultsFilters((prev) => ({ ...prev, user_id: e.target.value }))}>
+                          <option value="">全部考生</option>
+                          {adminResultUsers.map((item) => (
+                            <option key={`result-user-${item.user_id}`} value={String(item.user_id)}>
+                              {item.username || `用户#${item.user_id}`}{item.user_department ? `｜${item.user_department}` : ''}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                      <div>
+                        <label>试卷</label>
+                        <select value={adminResultsFilters.paper_id} onChange={(e) => setAdminResultsFilters((prev) => ({ ...prev, paper_id: e.target.value }))}>
+                          <option value="">全部试卷</option>
+                          {adminResultPapers.map((item) => (
+                            <option key={`result-paper-${item.paper_id}`} value={String(item.paper_id)}>
+                              {item.paper_name || `试卷#${item.paper_id}`}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                      <div>
+                        <label>考试结果</label>
+                        <select value={adminResultsFilters.passed} onChange={(e) => setAdminResultsFilters((prev) => ({ ...prev, passed: e.target.value }))}>
+                          <option value="all">全部</option>
+                          <option value="passed">通过</option>
+                          <option value="failed">未通过</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label>开始日期</label>
+                        <input type="date" value={adminResultsFilters.date_from} onChange={(e) => setAdminResultsFilters((prev) => ({ ...prev, date_from: e.target.value }))} />
+                      </div>
+                      <div>
+                        <label>结束日期</label>
+                        <input type="date" value={adminResultsFilters.date_to} onChange={(e) => setAdminResultsFilters((prev) => ({ ...prev, date_to: e.target.value }))} />
+                      </div>
+                      <label className="results-filter-check">
+                        <input
+                          type="checkbox"
+                          checked={!!adminResultsFilters.final_only}
+                          onChange={(e) => setAdminResultsFilters((prev) => ({ ...prev, final_only: e.target.checked }))}
+                        />
+                        <span>只看最终成绩</span>
+                      </label>
+                    </div>
+                  </div>
+                </section>
+
+                <section className="panel">
+                  <div className="panel-header"><h2>当前筛选摘要</h2></div>
+                  <div className="panel-body metric-grid">
+                    <div className="metric">
+                      <label>总考试数</label>
+                      <strong>{Number(adminResultsSummary.total_results || 0)}</strong>
+                    </div>
+                    <div className="metric">
+                      <label>通过率</label>
+                      <strong>{formatPercentText(adminResultsSummary.pass_rate || 0)}</strong>
+                    </div>
+                    <div className="metric">
+                      <label>平均分</label>
+                      <strong>{Number(adminResultsSummary.average_score || 0).toFixed(2)}</strong>
+                    </div>
+                    <div className="metric">
+                      <label>平均用时</label>
+                      <strong>{formatDurationText(adminResultsSummary.average_duration_seconds)}</strong>
+                    </div>
+                  </div>
+                </section>
+
+                <section className="panel">
+                  <div className="panel-header"><h2>考试结果列表</h2></div>
+                  <div className="panel-body table-wrap">
+                    <table className="results-table">
+                      <thead>
+                        <tr>
+                          <th>结果ID</th>
+                          <th>考生</th>
+                          <th>试卷</th>
+                          <th>考试时间</th>
+                          <th>得分</th>
+                          <th>用时</th>
+                          <th>错题数</th>
+                          <th>第几次考试</th>
+                          <th>是否最终</th>
+                          <th>考试结果</th>
+                          <th>操作</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {adminResultsLoading && !adminResults.length ? (
+                          <tr><td colSpan={11}>考试结果加载中...</td></tr>
+                        ) : adminResults.length ? adminResults.map((item) => (
+                          <tr key={`admin-result-${item.id}`}>
+                            <td>{item.id}</td>
+                            <td>
+                              <div>{item.username || '-'}</div>
+                              <div className="sub">{item.user_department || '-'}</div>
+                            </td>
+                            <td>{item.paper_name || item.paper_id}</td>
+                            <td>{formatDateTime(item.created_at)}</td>
+                            <td>{Number(item.score || 0).toFixed(2)} / {Number(item.total_score || 0).toFixed(2)}</td>
+                            <td>{formatDurationText(item.duration_seconds)}</td>
+                            <td>{item.wrong_count}</td>
+                            <td>{item.attempt_no}</td>
+                            <td>{Number(item.is_final || 0) === 1 ? '是' : '否'}</td>
+                            <td><span className={`status-chip ${Number(item.passed || 0) === 1 ? 'good' : 'warn'}`}>{Number(item.passed || 0) === 1 ? '通过' : '未通过'}</span></td>
+                            <td>
+                              <div className="row-actions">
+                                <button className="ghost" type="button" onClick={() => onOpenResultReviewDetail(item.id, { from: 'list', userId: item.user_id })}>查看卷面</button>
+                                <button className="ghost" type="button" onClick={() => onOpenCandidateRecord(item.user_id, { silent: true })}>查看考生记录</button>
+                              </div>
+                            </td>
+                          </tr>
+                        )) : (
+                          <tr><td colSpan={11}>当前条件下没有考试结果</td></tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                  <div className="panel-body question-pagination">
+                    <div className="row-actions">
+                      <span className="badge">共 {adminResultsPagination.total} 条</span>
+                      <span className="badge">第 {adminResultsPagination.page} / {adminResultsPagination.totalPages} 页</span>
+                      <label className="row-actions">
+                        <span>每页</span>
+                        <select
+                          value={adminResultsPagination.limit}
+                          onChange={(e) => fetchAdminResults(false, { page: 1, limit: Number(e.target.value || 20) })}
+                          disabled={adminResultsLoading}
+                        >
+                          <option value="20">20</option>
+                          <option value="50">50</option>
+                          <option value="100">100</option>
+                        </select>
+                      </label>
+                    </div>
+                    <div className="row-actions">
+                      <button
+                        className="ghost"
+                        type="button"
+                        disabled={adminResultsLoading || adminResultsPagination.page <= 1}
+                        onClick={() => fetchAdminResults(false, { page: Math.max(1, adminResultsPagination.page - 1) })}
+                      >
+                        上一页
+                      </button>
+                      <button
+                        className="ghost"
+                        type="button"
+                        disabled={adminResultsLoading || adminResultsPagination.page >= adminResultsPagination.totalPages}
+                        onClick={() => fetchAdminResults(false, { page: Math.min(adminResultsPagination.totalPages, adminResultsPagination.page + 1) })}
+                      >
+                        下一页
+                      </button>
+                    </div>
+                  </div>
+                </section>
+              </>
+            ) : !isBasicUser ? (
+              <>
+                <section className="panel">
+                  <div className="panel-header">
+                    <h2>证书模板</h2>
+                    <div className="row-actions">
+                      <button className="ghost" type="button" onClick={() => fetchCertificateTemplate()} disabled={certTemplateUploading || certTemplateDeleting}>刷新模板</button>
+                    </div>
+                  </div>
+                  <div className="panel-body cert-template-panel">
+                    <div className="cert-template-form">
+                      <div className="cert-template-meta">
+                        <span className="badge">{certTemplate?.exists ? '已配置模板' : '未配置模板'}</span>
+                        <span className="badge">来源：{certTemplate?.source === 'uploaded' ? 'Web上传' : certTemplate?.source === 'env' ? '环境变量' : '默认样式'}</span>
+                        {certTemplate?.exists ? <span className="badge">文件：{certTemplate.file_name || '-'}</span> : null}
+                        {certTemplate?.exists ? <span className="badge">大小：{Math.max(0, Number(certTemplate.size_bytes || 0))} B</span> : null}
+                      </div>
+                      <div className="sub">支持 png/jpg/jpeg。上传后立即生效，新生成证书会自动套用该模板。</div>
+                      <div className="row-actions">
+                        <input
+                          key={`cert-template-file-${certTemplateInputKey}`}
+                          type="file"
+                          accept=".png,.jpg,.jpeg,image/png,image/jpeg"
+                          onChange={(e) => setCertTemplateFile(e.target.files?.[0] || null)}
+                          disabled={!canWrite || certTemplateUploading || certTemplateDeleting}
+                        />
+                        <button
+                          className="primary"
+                          type="button"
+                          onClick={onUploadCertificateTemplate}
+                          disabled={!canWrite || certTemplateUploading || certTemplateDeleting || !certTemplateFile}
+                        >
+                          {certTemplateUploading ? '上传中...' : '上传模板'}
+                        </button>
+                        <button
+                          className="danger"
+                          type="button"
+                          onClick={onDeleteCertificateTemplate}
+                          disabled={!canWrite || certTemplateDeleting || certTemplateUploading || !certTemplate?.can_delete}
+                        >
+                          {certTemplateDeleting ? '删除中...' : '删除模板'}
+                        </button>
+                      </div>
+                      {!canWrite ? <div className="empty-tip">当前账号仅可预览模板，不能上传或删除。</div> : null}
+                    </div>
+                    <div className="cert-template-preview-wrap">
+                      {certTemplate?.exists && certTemplatePreviewUrl ? (
+                        <img className="cert-template-preview" src={certTemplatePreviewUrl} alt="证书模板预览" />
+                      ) : (
+                        <div className="cert-template-empty">当前未上传模板，将使用系统默认证书背景。</div>
+                      )}
+                    </div>
+                  </div>
+                </section>
+
+                <section className="grid-2">
+                  <div className="panel">
+                    <div className="panel-header"><h2>证书有效期</h2></div>
+                    <div className="panel-body table-wrap">
+                      <table>
+                        <thead>
+                          <tr>
+                            <th>证书号</th>
+                            <th>试卷</th>
+                            <th>状态</th>
+                            <th>有效期至</th>
+                            <th>剩余天数</th>
+                            <th>提醒</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {myCertificates.length ? myCertificates.map((c) => (
+                            <tr key={`cert-${c.id}`}>
+                              <td>{c.certificate_no}</td>
+                              <td>{c.paper_name || c.paper_id}</td>
+                              <td><span className={`status-chip ${c.status === 'active' ? 'good' : 'warn'}`}>{certStatusLabel(c.status)}</span></td>
+                              <td>{formatDateTime(c.valid_until)}</td>
+                              <td>{c.days_left}</td>
+                              <td>{c.should_remind ? '需复考提醒' : '-'}</td>
+                            </tr>
+                          )) : <tr><td colSpan={6}>暂无证书</td></tr>}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+
+                  <div className="panel">
+                    <div className="panel-header"><h2>续证任务</h2></div>
+                    <div className="panel-body table-wrap">
+                      <table>
+                        <thead>
+                          <tr>
+                            <th>ID</th>
+                            <th>试卷</th>
+                            <th>到期/计划时间</th>
+                            <th>状态</th>
+                            <th>触发方式</th>
+                            <th>操作</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {myRecertJobs.length ? myRecertJobs.map((job) => (
+                            <tr key={`recert-${job.id}`}>
+                              <td>{job.id}</td>
+                              <td>{job.paper_name || job.paper_id}</td>
+                              <td>{formatDateTime(job.due_at)}</td>
+                              <td><span className={`status-chip ${job.status === 'completed' ? 'good' : 'warn'}`}>{recertStatusLabel(job.status)}</span></td>
+                              <td>{String(job.trigger_type || '').toLowerCase() === 'auto' ? '自动' : '手动'}</td>
+                              <td>
+                                <div className="row-actions">
+                                  {['scheduled', 'in_progress'].includes(String(job.status || '').toLowerCase()) ? (
+                                    <button className="primary" type="button" onClick={() => onStartRecertJob(job.id, job.paper_id)}>去复考</button>
+                                  ) : null}
+                                </div>
+                              </td>
+                            </tr>
+                          )) : <tr><td colSpan={6}>暂无续证任务</td></tr>}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                </section>
+              </>
+            ) : (
+              <>
+                <section className="panel">
+                  <div className="panel-header"><h2>成绩与证书</h2></div>
+                  <div className="panel-body">
+                    <div className="metric-grid">
+                      <div className="metric">
+                        <label>总考试数</label>
+                        <strong>{personalResultsSummary.total}</strong>
+                      </div>
+                      <div className="metric">
+                        <label>通过次数</label>
+                        <strong>{personalResultsSummary.passCount}</strong>
+                      </div>
+                      <div className="metric">
+                        <label>未通过次数</label>
+                        <strong>{personalResultsSummary.failCount}</strong>
+                      </div>
+                      <div className="metric">
+                        <label>平均分</label>
+                        <strong>{Number(personalResultsSummary.averageScore || 0).toFixed(2)}</strong>
+                      </div>
+                    </div>
+                  </div>
+                </section>
+
+                <section className="grid-2">
+                  <div className="panel">
+                    <div className="panel-header"><h2>证书有效期</h2></div>
+                    <div className="panel-body table-wrap">
+                      <table>
+                        <thead>
+                          <tr>
+                            <th>证书号</th>
+                            <th>试卷</th>
+                            <th>状态</th>
+                            <th>有效期至</th>
+                            <th>剩余天数</th>
+                            <th>提醒</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {myCertificates.length ? myCertificates.map((c) => (
+                            <tr key={`viewer-cert-${c.id}`}>
+                              <td>{c.certificate_no}</td>
+                              <td>{c.paper_name || c.paper_id}</td>
+                              <td><span className={`status-chip ${c.status === 'active' ? 'good' : 'warn'}`}>{certStatusLabel(c.status)}</span></td>
+                              <td>{formatDateTime(c.valid_until)}</td>
+                              <td>{c.days_left}</td>
+                              <td>{c.should_remind ? '需复考提醒' : '-'}</td>
+                            </tr>
+                          )) : <tr><td colSpan={6}>暂无证书</td></tr>}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+
+                  <div className="panel">
+                    <div className="panel-header"><h2>续证任务</h2></div>
+                    <div className="panel-body table-wrap">
+                      <table>
+                        <thead>
+                          <tr>
+                            <th>ID</th>
+                            <th>试卷</th>
+                            <th>到期/计划时间</th>
+                            <th>状态</th>
+                            <th>触发方式</th>
+                            <th>操作</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {myRecertJobs.length ? myRecertJobs.map((job) => (
+                            <tr key={`viewer-recert-${job.id}`}>
+                              <td>{job.id}</td>
+                              <td>{job.paper_name || job.paper_id}</td>
+                              <td>{formatDateTime(job.due_at)}</td>
+                              <td><span className={`status-chip ${job.status === 'completed' ? 'good' : 'warn'}`}>{recertStatusLabel(job.status)}</span></td>
+                              <td>{String(job.trigger_type || '').toLowerCase() === 'auto' ? '自动' : '手动'}</td>
+                              <td>
+                                <div className="row-actions">
+                                  {['scheduled', 'in_progress'].includes(String(job.status || '').toLowerCase()) ? (
+                                    <button className="primary" type="button" onClick={() => onStartRecertJob(job.id, job.paper_id)}>开始复训</button>
+                                  ) : null}
+                                </div>
+                              </td>
+                            </tr>
+                          )) : <tr><td colSpan={6}>暂无续证任务</td></tr>}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                </section>
+
+                <section className="panel">
+                  <div className="panel-header"><h2>考试结果</h2></div>
+                  <div className="panel-body table-wrap">
+                    <table>
+                      <thead>
+                        <tr>
+                          <th>结果ID</th>
+                          <th>试卷</th>
+                          <th>第几次考试</th>
+                          <th>得分</th>
+                          <th>考试结果</th>
+                          <th>是否最终</th>
+                          <th>考试时间</th>
+                          <th>操作</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {myResults.length ? myResults.map((r) => (
+                          <tr key={`viewer-result-${r.id}`}>
+                            <td>{r.id}</td>
+                            <td>{paperNameById.get(Number(r.paper_id || 0)) || r.paper_id}</td>
+                            <td>{r.attempt_no}</td>
+                            <td>{Number(r.score || 0).toFixed(2)} / {Number(r.total_score || 0).toFixed(2)}</td>
+                            <td><span className={`status-chip ${Number(r.passed || 0) === 1 ? 'good' : 'warn'}`}>{Number(r.passed || 0) === 1 ? '通过' : '未通过'}</span></td>
+                            <td>{Number(r.is_final || 0) === 1 ? '是' : '否'}</td>
+                            <td>{formatDateTime(r.created_at)}</td>
+                            <td>
+                              <div className="row-actions">
+                                <button className="ghost" type="button" onClick={() => onOpenResultReviewDetail(r.id, { from: 'personal' })}>查看卷面</button>
+                                {Number(r.passed || 0) === 1 ? <button className="primary" type="button" onClick={() => onGenerateCertificate(r.id)}>生成证书</button> : null}
+                                <button className="ghost" type="button" onClick={() => onDownloadCertificate(r.id)}>下载证书</button>
+                              </div>
+                            </td>
+                          </tr>
+                        )) : <tr><td colSpan={8}>还没有可查看的考试结果</td></tr>}
+                      </tbody>
+                    </table>
+                  </div>
+                </section>
+              </>
+            )}
           </>
         )}
 
@@ -5706,6 +7141,64 @@ function App() {
             </section>
           </>
         )}
+
+        {isCourseLearningModalOpen ? (
+          <div className="modal-mask" onMouseDown={(e) => { if (e.target === e.currentTarget) closeCourseLearningModal() }}>
+            <div
+              className={`course-learning-modal ${courseLearningModal.maximized ? 'maximized' : ''}`}
+              style={{
+                left: `${courseLearningModal.left}px`,
+                top: `${courseLearningModal.top}px`,
+                width: `${courseLearningModal.width}px`,
+                height: `${courseLearningModal.height}px`,
+              }}
+              onMouseDown={(e) => e.stopPropagation()}
+            >
+              <div className="course-learning-modal-header" onPointerDown={onCourseLearningHeaderPointerDown}>
+                <div className="course-learning-modal-title">
+                  <strong>学习路径与章节完成度</strong>
+                  <div className="row-actions">
+                    <span className="badge">当前课程：{currentLearningCourse?.title || learningPath.course?.title || '-'}</span>
+                    <span className="badge">支持拖动与缩放</span>
+                  </div>
+                </div>
+                <div className="row-actions course-learning-modal-actions">
+                  <select value={learningCourseId} onChange={(e) => { void fetchLearningPath(e.target.value, true) }}>
+                    {(courses || []).map((item) => (
+                      <option key={`learning-course-modal-${item.id}`} value={item.id}>{item.title}</option>
+                    ))}
+                  </select>
+                  <button className="ghost" type="button" onClick={onToggleCourseLearningMaximize}>
+                    {courseLearningModal.maximized ? '还原窗口' : '铺满窗口'}
+                  </button>
+                  <button
+                    className="ghost"
+                    type="button"
+                    onClick={() => {
+                      if (learningCourseId) void fetchLearningPath(learningCourseId)
+                      void fetchMyLearningProgress(true)
+                    }}
+                  >
+                    刷新路径
+                  </button>
+                  <button className="ghost" type="button" onClick={closeCourseLearningModal}>关闭</button>
+                </div>
+              </div>
+              <div className="course-learning-modal-scroll">
+                {renderCourseLearningModalBody()}
+              </div>
+              {!courseLearningModal.maximized ? (
+                <div
+                  className="course-learning-modal-resizer"
+                  onPointerDown={onCourseLearningResizePointerDown}
+                  role="button"
+                  tabIndex={0}
+                  aria-label="调整课程学习弹窗大小"
+                />
+              ) : null}
+            </div>
+          </div>
+        ) : null}
 
         {aiModelEditVisible ? (
           <div className="modal-mask" onMouseDown={(e) => { if (e.target === e.currentTarget) closeAiModelEditModal() }}>

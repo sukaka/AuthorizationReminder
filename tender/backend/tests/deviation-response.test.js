@@ -22,6 +22,9 @@ describe('deviation and response table generator', () => {
     expect(result.deviation_tables.technical).toHaveLength(1);
     expect(result.deviation_tables.technical[0].satisfy_status).toBe('NOT_SATISFIED');
     expect(result.deviation_tables.technical[0].risk_level).toBe('HIGH');
+    expect(result.deviation_tables.technical[0].risk_grade).toBe('HIGH');
+    expect(result.deviation_tables.technical[0].parameter_key).toContain('3_2_1');
+    expect(result.deviation_tables.technical[0].satisfy_basis).toContain('不满足');
     expect(result.deviation_tables.technical[0].manual_review_required).toBe(true);
   });
 
@@ -36,8 +39,11 @@ describe('deviation and response table generator', () => {
     });
 
     expect(result.response_tables.business).toHaveLength(1);
+    expect(result.response_tables.business[0].response_text).toContain('已响应');
+    expect(result.response_tables.business[0].parameter_key).toContain('原厂授权书并盖章');
+    expect(result.response_tables.business[0].satisfy_basis).toContain('已响应');
     expect(result.response_tables.business[0].evidence_source).toContain('授权');
-    expect(result.response_tables.business[0].deviation).toBe('无偏离');
+    expect(result.response_tables.business[0].risk_grade).toBe('LOW');
     expect(typeof result.response_tables.business[0].manual_review_required).toBe('boolean');
   });
 });

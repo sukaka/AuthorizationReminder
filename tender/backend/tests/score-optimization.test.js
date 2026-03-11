@@ -3,6 +3,9 @@ const {
   pickOptimizationCandidates,
   normalizeOptimizationResponse,
   applyOptimizationToSections,
+  buildWinningStrategyProfiles,
+  pickWinningStrategyProfile,
+  applyWinningStrategyToSuggestions,
 } = require('../src/score-optimization');
 
 describe('score optimization', () => {
@@ -113,5 +116,95 @@ describe('score optimization', () => {
     expect(result.sections[0].section_title).toBe('评分专项响应');
     expect(result.sections[0].paragraph_text).toContain('新增专项评分响应');
     expect(result.sections[0].requirement_ids_json).toContain('REQ-SCORING-0099');
+  });
+
+  it('builds winning strategy profiles from won kb projects and picks exact matching profile', () => {
+    const profiles = buildWinningStrategyProfiles({
+      kbProjects: [
+        { id: 1, project_type: 'SERVICE', industry_type: '医疗', result_status: 'WON' },
+        { id: 2, project_type: 'SERVICE', industry_type: '医疗', result_status: 'WON' },
+        { id: 3, project_type: 'PRODUCT', industry_type: '教育', result_status: 'WON' },
+      ],
+      kbScoreItems: [
+        {
+          id: 11,
+          kb_project_id: 1,
+          item_name: '售后服务方案',
+          full_score: 8,
+          recommended_response_points: JSON.stringify(['7×24小时响应', '2小时到场', '本地服务团队']),
+          priority_level: 'HIGH',
+        },
+        {
+          id: 12,
+          kb_project_id: 2,
+          item_name: '售后服务方案',
+          full_score: 6,
+          recommended_response_points: JSON.stringify(['原厂协同', '本地服务团队']),
+          priority_level: 'HIGH',
+        },
+      ],
+      kbSectionAssets: [
+        {
+          id: 21,
+          kb_project_id: 1,
+          section_name: '售后服务方案',
+          applicable_scene: 'SCORE_OPTIMIZE',
+          source_score_item_id: 11,
+        },
+        {
+          id: 22,
+          kb_project_id: 2,
+          section_name: '服务承诺',
+          applicable_scene: 'SCORE_OPTIMIZE',
+          source_score_item_id: 12,
+        },
+      ],
+    });
+
+    const profile = pickWinningStrategyProfile({
+      profiles,
+      projectType: 'SERVICE',
+      industryType: '医疗',
+    });
+
+    expect(Array.isArray(profiles)).toBe(true);
+    expect(profile.profile_key).toBe('SERVICE|医疗');
+    expect(profile.won_project_count).toBe(2);
+    expect(profile.source_project_ids).toEqual([1, 2]);
+    expect(profile.item_profiles[0].learned_points).toContain('7×24小时响应');
+    expect(profile.item_profiles[0].learned_sections).toContain('售后服务方案');
+  });
+
+  it('applies learned winning strategy directives into optimization suggestions with audit trace', () => {
+    const result = applyWinningStrategyToSuggestions({
+      items: [
+        {
+          score_item_id: 'REQ-SCORING-0101',
+          suggestion_title: '补强售后服务方案',
+          suggestion_text: '补充售后保障能力与服务机制。',
+          evidence_ids: [],
+          source: 'RULE',
+        },
+      ],
+      profile: {
+        profile_key: 'SERVICE|医疗',
+        item_profiles: [
+          {
+            item_name: '售后服务方案',
+            learned_points: ['7×24小时响应', '2小时到场', '本地服务团队'],
+            learned_sections: ['售后服务方案', '服务承诺'],
+            source_project_ids: [1, 2],
+            source_score_item_ids: [11, 12],
+          },
+        ],
+      },
+    });
+
+    expect(result.matched_count).toBe(1);
+    expect(result.items[0].suggestion_text).toContain('历史中标策略');
+    expect(result.items[0].suggestion_text).toContain('7×24小时响应');
+    expect(result.items[0].strategy_profile_key).toBe('SERVICE|医疗');
+    expect(result.items[0].strategy_hit_points).toContain('2小时到场');
+    expect(result.items[0].strategy_source_project_ids).toEqual([1, 2]);
   });
 });

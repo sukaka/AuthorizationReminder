@@ -10,6 +10,13 @@ const mammoth = require('mammoth');
 const multer = require('multer');
 const path = require('path');
 const { spawn } = require('child_process');
+const {
+  collectCategoryForceDeletePlan,
+  getCategoryDeleteGuard,
+  normalizeCategoryDeleteIds,
+  summarizeCategoryBatchDeleteResults,
+  summarizeCategoryForceDeleteResults,
+} = require('./category-delete');
 const { get, initDb, query, run, transaction } = require('./db');
 
 const app = express();
@@ -589,6 +596,155 @@ const logOperation = async ({ req, articleId = null, action, message = '', befor
       trimText(getClientIp(req)).slice(0, 64) || null,
     ]
   );
+};
+
+const loadCategoryDeleteState = async (id) => {
+  const category = await get('SELECT * FROM faq_categories WHERE id = ?', [id]);
+  if (!category) {
+    return {
+      category: null,
+      linkedCount: 0,
+      childCount: 0,
+    };
+  }
+
+  const [linked, child] = await Promise.all([
+    get('SELECT COUNT(1) AS count FROM faq_articles WHERE category_id = ? AND is_deleted = 0', [id]),
+    get('SELECT COUNT(1) AS count FROM faq_categories WHERE parent_id = ?', [id]),
+  ]);
+
+  return {
+    category,
+    linkedCount: Number(linked?.count || 0),
+    childCount: Number(child?.count || 0),
+  };
+};
+
+const ensureCategoryDeletable = async (id) => {
+  const guard = getCategoryDeleteGuard(await loadCategoryDeleteState(id));
+  if (!guard.ok) throw appError(guard.error, guard.status);
+  return guard.category;
+};
+
+const deleteCategoryRecord = async ({ req, id }) => {
+  const before = await ensureCategoryDeletable(id);
+  await run('DELETE FROM faq_categories WHERE id = ?', [id]);
+  await logOperation({ req, action: 'CATEGORY_DELETE', message: `删除分类 ${before.name}`, beforeData: before });
+  return before;
+};
+
+const forceDeleteCategoryRecord = async ({ req, id }) => {
+  const before = await get('SELECT * FROM faq_categories WHERE id = ?', [id]);
+  if (!before) throw appError('分类不存在', 404);
+
+  const plan = collectCategoryForceDeletePlan(
+    await query('SELECT id, parent_id FROM faq_categories'),
+    id
+  );
+  if (!plan.category_ids.length) throw appError('分类不存在', 404);
+
+  const categoryPlaceholders = plan.category_ids.map(() => '?').join(',');
+  const linkedArticles = await query(
+    `SELECT id, is_deleted
+     FROM faq_articles
+     WHERE category_id IN (${categoryPlaceholders})`,
+    plan.category_ids
+  );
+  const linkedArticleIds = normalizeCategoryDeleteIds(linkedArticles.map((item) => item?.id));
+  const activeArticleIds = normalizeCategoryDeleteIds(
+    linkedArticles
+      .filter((item) => Number(item?.is_deleted || 0) !== 1)
+      .map((item) => item?.id)
+  );
+  const deletedArticleIds = normalizeCategoryDeleteIds(
+    linkedArticles
+      .filter((item) => Number(item?.is_deleted || 0) === 1)
+      .map((item) => item?.id)
+  );
+  const retentionDays = normalizeRetentionDays(req.query.retention_days || req.body?.retention_days);
+  const purgeAfter = formatDateTime(new Date(Date.now() + retentionDays * 24 * 60 * 60 * 1000));
+
+  await transaction(async (tx) => {
+    if (activeArticleIds.length) {
+      const activePlaceholders = activeArticleIds.map(() => '?').join(',');
+      await tx.run(
+        `UPDATE faq_articles
+         SET category_id = NULL,
+             is_deleted = 1,
+             deleted_at = NOW(),
+             deleted_by_id = ?,
+             deleted_by_name = ?,
+             purge_after = ?,
+             status = 'archived',
+             updated_by_id = ?,
+             updated_by_name = ?,
+             updated_at = NOW()
+         WHERE id IN (${activePlaceholders})`,
+        [
+          Number(req.user.id) || null,
+          req.user.username,
+          purgeAfter,
+          Number(req.user.id) || null,
+          req.user.username,
+          ...activeArticleIds,
+        ]
+      );
+    }
+
+    if (deletedArticleIds.length) {
+      const deletedPlaceholders = deletedArticleIds.map(() => '?').join(',');
+      await tx.run(
+        `UPDATE faq_articles
+         SET category_id = NULL,
+             updated_by_id = ?,
+             updated_by_name = ?,
+             updated_at = NOW()
+         WHERE id IN (${deletedPlaceholders})`,
+        [
+          Number(req.user.id) || null,
+          req.user.username,
+          ...deletedArticleIds,
+        ]
+      );
+    }
+
+    if (linkedArticleIds.length) {
+      const articlePlaceholders = linkedArticleIds.map(() => '?').join(',');
+      await tx.run(
+        `UPDATE faq_editor_sessions
+         SET status = 'released', released_at = NOW(), updated_at = NOW()
+         WHERE status = 'active' AND article_id IN (${articlePlaceholders})`,
+        linkedArticleIds
+      );
+    }
+
+    for (const categoryId of plan.delete_order) {
+      await tx.run('DELETE FROM faq_categories WHERE id = ?', [categoryId]);
+    }
+  });
+
+  const result = summarizeCategoryForceDeleteResults({
+    deletedCategoryIds: plan.delete_order,
+    recycledArticleIds: activeArticleIds,
+  });
+
+  await logOperation({
+    req,
+    action: 'CATEGORY_FORCE_DELETE',
+    message: `强制删除分类 ${before.name}`,
+    beforeData: {
+      ...before,
+      category_ids: plan.category_ids,
+    },
+    afterData: {
+      ...result,
+      retention_days: retentionDays,
+      purge_after: purgeAfter,
+      detached_deleted_article_ids: deletedArticleIds,
+    },
+  });
+
+  return result;
 };
 
 const ensureArticleExists = async (articleId, options = {}) => {
@@ -1731,19 +1887,42 @@ app.put('/api/faq/categories/:id', requireWriter, asyncHandler(async (req, res) 
   res.json(after);
 }));
 
+app.post('/api/faq/categories/batch-delete', requireWriter, asyncHandler(async (req, res) => {
+  const ids = normalizeCategoryDeleteIds(req.body?.ids);
+  if (!ids.length) throw appError('请选择要删除的分类', 400);
+
+  const results = [];
+  for (const id of ids) {
+    try {
+      await deleteCategoryRecord({ req, id });
+      results.push({ id, ok: true });
+    } catch (err) {
+      if (err?.statusCode) {
+        results.push({
+          id,
+          ok: false,
+          error: trimText(err.message, '删除失败'),
+        });
+        continue;
+      }
+      throw err;
+    }
+  }
+
+  res.json(summarizeCategoryBatchDeleteResults(results));
+}));
+
+app.post('/api/faq/categories/:id/force-delete', requireAdmin, asyncHandler(async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isFinite(id) || id <= 0) throw appError('分类ID无效', 400);
+  const result = await forceDeleteCategoryRecord({ req, id });
+  res.json(result);
+}));
+
 app.delete('/api/faq/categories/:id', requireWriter, asyncHandler(async (req, res) => {
   const id = Number(req.params.id);
   if (!Number.isFinite(id) || id <= 0) throw appError('分类ID无效', 400);
-  const before = await get('SELECT * FROM faq_categories WHERE id = ?', [id]);
-  if (!before) throw appError('分类不存在', 404);
-
-  const linked = await get('SELECT COUNT(1) AS count FROM faq_articles WHERE category_id = ? AND is_deleted = 0', [id]);
-  if (Number(linked?.count || 0) > 0) {
-    throw appError('该分类下有FAQ，无法删除', 409);
-  }
-
-  await run('DELETE FROM faq_categories WHERE id = ?', [id]);
-  await logOperation({ req, action: 'CATEGORY_DELETE', message: `删除分类 ${before.name}`, beforeData: before });
+  await deleteCategoryRecord({ req, id });
   res.json({ ok: true });
 }));
 

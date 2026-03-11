@@ -243,6 +243,34 @@ describe('final draft structured checks', () => {
     expect(result.issues.some((issue) => issue.type === 'performance_out_of_range')).toBe(true);
   });
 
+  it('emits chapter quality warnings when generated draft quality summary is weak', () => {
+    const result = runStructuredChecks({
+      requirements: [],
+      sections: [
+        {
+          section_title: '目录',
+          paragraph_text: '目录',
+          requirement_ids_json: '[]',
+          evidence_ids_json: '[]',
+        },
+      ],
+      evidences: [],
+      paragraphs: [],
+      context: {
+        chapter_quality_summary: {
+          overall_score: 63,
+          high_risk_count: 2,
+          missing_required_count: 1,
+          summary_lines: ['缺失必需章节 1 项'],
+        },
+      },
+    });
+
+    expect(result.issues.some((issue) => issue.type === 'chapter_quality_low_score')).toBe(true);
+    expect(result.issues.some((issue) => issue.type === 'chapter_quality_missing_required')).toBe(true);
+    expect(result.issues.some((issue) => issue.type === 'chapter_quality_high_risk')).toBe(true);
+  });
+
   it('summarizes issue counts by severity', () => {
     const summary = buildCheckSummary([
       { severity: 'FATAL' },
@@ -280,6 +308,100 @@ describe('final draft structured checks', () => {
 
     expect(result.issues.some((issue) => issue.type === 'toc_missing')).toBe(true);
     expect(result.issues.some((issue) => issue.type === 'signature_slot_missing')).toBe(true);
+  });
+
+  it('detects incomplete signature block when signer exists but seal or date markers are missing', () => {
+    const result = runDocxChecks({
+      paragraphs: [
+        '法定代表人（签字）：',
+        '授权代表：张三',
+      ],
+    });
+
+    expect(result.issues.some((issue) => issue.type === 'signature_slot_incomplete')).toBe(true);
+  });
+
+  it('detects conflicts between deviation table and response table for the same requirement', () => {
+    const result = runStructuredChecks({
+      requirements: [
+        {
+          id: 7,
+          requirement_type: 'TECH_PARAM',
+          title: '双机热备',
+          requirement_text: '支持双机热备',
+          requirement_code: 'REQ-TECH-0007',
+        },
+      ],
+      sections: [
+        {
+          section_title: '技术响应',
+          paragraph_text: '支持双机热备。',
+          requirement_ids_json: JSON.stringify(['REQ-TECH-0007']),
+          evidence_ids_json: JSON.stringify([]),
+        },
+      ],
+      evidences: [],
+      artifacts: [
+        {
+          artifact_type: 'DEVIATION_TABLE',
+          artifact_group: 'TECHNICAL',
+          row_json: {
+            tender_requirement: '支持双机热备',
+            bidder_response: '满足',
+            deviation_note: '无偏离',
+          },
+        },
+        {
+          artifact_type: 'RESPONSE_TABLE',
+          artifact_group: 'TECHNICAL',
+          row_json: {
+            tender_requirement: '支持双机热备',
+            response_text: '不满足，存在偏离。',
+            evidence_source: '参数表第12页',
+          },
+        },
+      ],
+      paragraphs: [],
+    });
+
+    expect(result.issues.some((issue) => issue.type === 'artifact_table_conflict')).toBe(true);
+  });
+
+  it('detects conflicts between narrative section claims and artifact table rows', () => {
+    const result = runStructuredChecks({
+      requirements: [
+        {
+          id: 8,
+          requirement_type: 'TECH_PARAM',
+          title: '双机热备',
+          requirement_text: '支持双机热备',
+          requirement_code: 'REQ-TECH-0008',
+        },
+      ],
+      sections: [
+        {
+          section_title: '技术偏离说明',
+          paragraph_text: '我方完全满足双机热备要求，无偏离。',
+          requirement_ids_json: JSON.stringify(['REQ-TECH-0008']),
+          evidence_ids_json: JSON.stringify([]),
+        },
+      ],
+      evidences: [],
+      artifacts: [
+        {
+          artifact_type: 'DEVIATION_TABLE',
+          artifact_group: 'TECHNICAL',
+          row_json: {
+            tender_requirement: '支持双机热备',
+            bidder_response: '存在偏离',
+            deviation_note: '有偏离',
+          },
+        },
+      ],
+      paragraphs: [],
+    });
+
+    expect(result.issues.some((issue) => issue.type === 'section_artifact_conflict')).toBe(true);
   });
 
   it('merges structured and docx issues into one summary', () => {

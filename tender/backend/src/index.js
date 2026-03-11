@@ -36,8 +36,78 @@ const {
   normalizeOptimizationResponse,
   buildScoreOptimizationPrompt,
   applyOptimizationToSections,
+  buildWinningStrategyProfiles,
+  pickWinningStrategyProfile,
+  applyWinningStrategyToSuggestions,
 } = require('./score-optimization');
 const { buildDeviationAndResponseTables } = require('./deviation-response');
+const {
+  normalizeParseFileRole,
+  resolveSelectedSheetNames,
+  mergeParsedProjectFields,
+  extractArchiveDocumentsFromBuffer,
+  extractSpreadsheetWorkbookFromBuffer,
+  extractProjectFieldsFromText,
+  buildParseClauses,
+  buildSpreadsheetTables,
+  parseWorkspaceConstants,
+} = require('./parse-workspace');
+const {
+  normalizeDraftSectionRows,
+  buildDraftArtifactCollections,
+  buildDraftArtifactRowsForSave,
+} = require('./draft-workspace');
+const {
+  buildRiskProjectRow,
+  buildRiskCenterOverview,
+  sanitizeExportRecordRow: normalizeExportRecordRow,
+  buildExportCenterOverview,
+  buildTemplateReferenceConflictMessage,
+} = require('./ops-center');
+const {
+  buildSemanticRetrievalChunks,
+  buildSemanticFeedbackIndex,
+  rankSemanticAssetRecommendations,
+} = require('./semantic-retrieval');
+const {
+  buildKbProjectRecord,
+  buildKbScoreItemRows,
+  buildKbAssetChunks,
+  normalizeTagList,
+} = require('./kb-ingest');
+const {
+  evaluateDatasetResult,
+  buildRunSummary,
+  buildBaselineDelta,
+} = require('./evaluation-kpi');
+const {
+  buildWordLayoutPlan,
+  ensureDocxHeaderFooterBuffer,
+  ensureDocxLogicalParagraphsBuffer,
+  ensureDocxNativeTocBuffer,
+  ensureDocxPageBreakBeforeHeadingsBuffer,
+  ensureDocxSectionPageNumberBuffer,
+  DOCX_NATIVE_TOC_MARKER,
+} = require('./word-layout');
+const {
+  buildDraftChapterSchema,
+  buildDraftChapterQualitySummary,
+  normalizeDraftChaptersToSchema,
+} = require('./draft-schema');
+const {
+  buildValidationRuleSeed,
+  normalizeValidationRuleRow,
+  buildMissingValidationRules,
+  decorateIssuesWithRules,
+  buildRuleExecutionSummary,
+} = require('./validation-rule-library');
+const {
+  resolveDataScope,
+  hasPermission,
+  buildPermissionSummary,
+  buildGovernancePayload,
+  buildFailurePayload,
+} = require('./governance');
 
 const app = express();
 const normalizeHost = (value) => String(value || '').trim().toLowerCase();
@@ -71,6 +141,7 @@ const WATERMARK_ROOT = path.resolve(process.env.WATERMARK_ROOT || `${UPLOAD_ROOT
 const PREVIEW_ROOT = path.resolve(process.env.PREVIEW_ROOT || `${UPLOAD_ROOT}/previews`);
 const EDITABLE_ROOT = path.resolve(process.env.EDITABLE_ROOT || `${UPLOAD_ROOT}/editable`);
 const EXPORT_ROOT = path.resolve(process.env.EXPORT_ROOT || `${UPLOAD_ROOT}/exports`);
+const PARSE_ROOT = path.resolve(process.env.PARSE_ROOT || `${UPLOAD_ROOT}/parse-workspace`);
 const LIBREOFFICE_BIN = String(process.env.LIBREOFFICE_BIN || 'soffice').trim() || 'soffice';
 
 const DOC_EDITOR_PROVIDER = String(process.env.DOC_EDITOR_PROVIDER || 'onlyoffice').trim();
@@ -117,6 +188,17 @@ const ALLOWED_BID_UPLOAD_MIME = new Set([
   'application/msword',
   'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
   'application/pdf',
+]);
+const ALLOWED_PARSE_UPLOAD_EXTS = new Set(['.doc', '.docx', '.pdf', '.xls', '.xlsx', '.zip']);
+const ALLOWED_PARSE_UPLOAD_MIME = new Set([
+  'application/msword',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  'application/pdf',
+  'application/zip',
+  'application/x-zip-compressed',
+  'application/vnd.ms-excel',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  'application/octet-stream',
 ]);
 
 const ALLOWED_ASSET_UPLOAD_EXTS = new Set(['.jpg', '.jpeg', '.png', '.pdf']);
@@ -196,7 +278,7 @@ const tenderSectionDefs = [
   },
 ];
 
-for (const dir of [UPLOAD_ROOT, VERSION_ROOT, DRAFT_ROOT, ASSET_ROOT, SAMPLE_ROOT, TEMPLATE_ROOT, WATERMARK_ROOT, PREVIEW_ROOT, EDITABLE_ROOT, EXPORT_ROOT]) {
+for (const dir of [UPLOAD_ROOT, VERSION_ROOT, DRAFT_ROOT, ASSET_ROOT, SAMPLE_ROOT, TEMPLATE_ROOT, WATERMARK_ROOT, PREVIEW_ROOT, EDITABLE_ROOT, EXPORT_ROOT, PARSE_ROOT]) {
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 }
 
@@ -544,6 +626,94 @@ const sanitizeDraftAutosaveRow = (row) => {
   };
 };
 
+const sanitizeExportRecordRow = (row) => {
+  if (!row || typeof row !== 'object') return row;
+  const normalized = normalizeExportRecordRow(row);
+  return {
+    ...normalized,
+    file_name: fixMojibakeText(normalized.file_name),
+    error_message: fixMojibakeText(normalized.error_message),
+    created_by_name: fixMojibakeText(normalized.created_by_name),
+  };
+};
+
+const sanitizeDraftArtifactRow = (row) => {
+  if (!row || typeof row !== 'object') return row;
+  return {
+    ...row,
+    artifact_type: trimText(row.artifact_type).toUpperCase() || 'DEVIATION_TABLE',
+    artifact_group: trimText(row.artifact_group).toUpperCase() || 'TECHNICAL',
+    created_by_name: fixMojibakeText(row.created_by_name),
+    updated_by_name: fixMojibakeText(row.updated_by_name),
+    row_json: parseMaybeJson(row.row_json, {}),
+  };
+};
+
+const sanitizeDraftCheckRunRow = (row) => {
+  if (!row || typeof row !== 'object') return row;
+  return {
+    ...row,
+    status: trimText(row.status).toUpperCase() || 'COMPLETED',
+    created_by_name: fixMojibakeText(row.created_by_name),
+    summary: parseMaybeJson(row.summary_json, {}),
+  };
+};
+
+const sanitizeDraftCheckIssueRow = (row) => {
+  if (!row || typeof row !== 'object') return row;
+  return {
+    ...row,
+    severity: trimText(row.severity).toUpperCase() || 'WARN',
+    title: fixMojibakeText(row.title),
+    message: fixMojibakeText(row.message),
+    requirement_title: fixMojibakeText(row.requirement_title),
+    section_title: fixMojibakeText(row.section_title),
+    paragraph_text: fixMojibakeText(row.paragraph_text),
+  };
+};
+
+const sanitizeValidationRuleRow = (row) => {
+  if (!row || typeof row !== 'object') return row;
+  const normalized = normalizeValidationRuleRow(row);
+  return {
+    ...normalized,
+    rule_name: fixMojibakeText(normalized.rule_name),
+    trigger_condition: fixMojibakeText(normalized.trigger_condition),
+    check_logic: fixMojibakeText(normalized.check_logic),
+    suggested_action: fixMojibakeText(normalized.suggested_action),
+  };
+};
+
+const sanitizeScoreCoverageRow = (row) => {
+  if (!row || typeof row !== 'object') return row;
+  return {
+    ...row,
+    title: fixMojibakeText(row.title),
+    coverage_status: trimText(row.coverage_status).toUpperCase() || 'NONE',
+    optimization_reason: fixMojibakeText(row.optimization_reason),
+    target_section_title: fixMojibakeText(row.target_section_title),
+    bound_evidence_ids: parseMaybeJson(row.bound_evidence_ids_json, []),
+  };
+};
+
+const sanitizeScoreOptimizationRecordRow = (row) => {
+  if (!row || typeof row !== 'object') return row;
+  return {
+    ...row,
+    suggestion_title: fixMojibakeText(row.suggestion_title),
+    suggestion_text: fixMojibakeText(row.suggestion_text),
+    target_section_title: fixMojibakeText(row.target_section_title),
+    before_text: fixMojibakeText(row.before_text),
+    after_text: fixMojibakeText(row.after_text),
+    status: trimText(row.status).toUpperCase() || 'PROPOSED',
+    source: trimText(row.source).toUpperCase() || 'RULE',
+    strategy_profile_key: trimText(row.strategy_profile_key),
+    created_by_name: fixMojibakeText(row.created_by_name),
+    evidence_ids: parseMaybeJson(row.evidence_ids_json, []),
+    audit_trace: parseMaybeJson(row.audit_trace_json, {}),
+  };
+};
+
 const sanitizeAssetRow = (row) => {
   if (!row || typeof row !== 'object') return row;
   return {
@@ -551,6 +721,77 @@ const sanitizeAssetRow = (row) => {
     original_file_name: fixMojibakeText(row.original_file_name),
     uploaded_by_name: fixMojibakeText(row.uploaded_by_name),
     reviewer_name: fixMojibakeText(row.reviewer_name),
+  };
+};
+
+const sanitizeParseJobRow = (row) => {
+  if (!row || typeof row !== 'object') return row;
+  return {
+    ...row,
+    parse_scope: trimText(row.parse_scope).toUpperCase() || 'FULL',
+    status: trimText(row.status).toUpperCase() || 'PENDING',
+    operator_name: fixMojibakeText(row.operator_name),
+    warning_text: fixMojibakeText(row.warning_text),
+    error_message: fixMojibakeText(row.error_message),
+    merged_fields: parseMaybeJson(row.merged_fields_json, {}),
+    field_sources: parseMaybeJson(row.field_sources_json, {}),
+    summary: parseMaybeJson(row.summary_json, {}),
+  };
+};
+
+const sanitizeParseFileRow = (row) => {
+  if (!row || typeof row !== 'object') return row;
+  return {
+    ...row,
+    file_role: normalizeParseFileRole(row.file_role),
+    file_kind: trimText(row.file_kind).toUpperCase() || 'UPLOAD',
+    status: trimText(row.status).toUpperCase() || 'UPLOADED',
+    original_file_name: fixMojibakeText(row.original_file_name),
+    display_name: fixMojibakeText(row.display_name),
+    uploaded_by_name: fixMojibakeText(row.uploaded_by_name),
+    sheet_manifest: parseMaybeJson(row.sheet_manifest_json, []),
+    selected_sheet_names: parseMaybeJson(row.selected_sheets_json, []),
+    parse_summary: parseMaybeJson(row.parse_summary_json, {}),
+  };
+};
+
+const sanitizeParseClauseRow = (row) => {
+  if (!row || typeof row !== 'object') return row;
+  return {
+    ...row,
+    clause_code: trimText(row.clause_code),
+    clause_title: fixMojibakeText(row.clause_title),
+    clause_text: fixMojibakeText(row.clause_text),
+    clause_type: trimText(row.clause_type).toUpperCase() || 'GENERAL',
+    response_mode: trimText(row.response_mode).toUpperCase() || 'TEXT',
+    source_role: normalizeParseFileRole(row.source_role),
+    metadata: parseMaybeJson(row.metadata_json, {}),
+  };
+};
+
+const sanitizeParseTableRow = (row) => {
+  if (!row || typeof row !== 'object') return row;
+  return {
+    ...row,
+    table_name: fixMojibakeText(row.table_name),
+    source_sheet_name: fixMojibakeText(row.source_sheet_name),
+    summary_text: fixMojibakeText(row.summary_text),
+    source_role: normalizeParseFileRole(row.source_role),
+    header: parseMaybeJson(row.header_json, []),
+    rows: parseMaybeJson(row.rows_json, []),
+  };
+};
+
+const sanitizeParseMatchRow = (row) => {
+  if (!row || typeof row !== 'object') return row;
+  return {
+    ...row,
+    match_status: trimText(row.match_status).toUpperCase() || 'RECOMMENDED',
+    reason_text: fixMojibakeText(row.reason_text),
+    match_source: trimText(row.match_source).toUpperCase() || 'RULE',
+    created_by_name: fixMojibakeText(row.created_by_name),
+    updated_by_name: fixMojibakeText(row.updated_by_name),
+    payload: parseMaybeJson(row.payload_json, {}),
   };
 };
 
@@ -567,6 +808,74 @@ const sanitizeKbProjectRow = (row) => {
     result_status: fixMojibakeText(row.result_status),
     created_by_name: fixMojibakeText(row.created_by_name),
     updated_by_name: fixMojibakeText(row.updated_by_name),
+  };
+};
+
+const sanitizeKbIngestJobRow = (row) => {
+  if (!row || typeof row !== 'object') return row;
+  return {
+    ...row,
+    job_type: trimText(row.job_type).toUpperCase() || 'BID_PROJECT_INGEST',
+    source_file: fixMojibakeText(row.source_file),
+    status: trimText(row.status).toUpperCase() || 'PENDING',
+    error_message: fixMojibakeText(row.error_message),
+    operator_name: fixMojibakeText(row.operator_name),
+    input_payload: parseMaybeJson(row.input_payload, {}),
+    output_summary: parseMaybeJson(row.output_summary, {}),
+  };
+};
+
+const TENDER_EVAL_TYPES = ['CLAUSE_RECOGNITION', 'SCORE_COVERAGE', 'MATERIAL_MATCHING', 'RISK_RECALL', 'EXPORT_COMPLETENESS'];
+
+const normalizeEvaluationType = (value) => {
+  const normalized = trimText(value).toUpperCase();
+  return TENDER_EVAL_TYPES.includes(normalized) ? normalized : '';
+};
+
+const sanitizeEvaluationDatasetRow = (row) => {
+  if (!row || typeof row !== 'object') return row;
+  return {
+    ...row,
+    dataset_code: fixMojibakeText(row.dataset_code),
+    dataset_name: fixMojibakeText(row.dataset_name),
+    eval_type: normalizeEvaluationType(row.eval_type),
+    source_bid_id: Number(row.source_bid_id || 0) || null,
+    baseline_flag: Number(row.baseline_flag || 0) === 1,
+    status: trimText(row.status).toUpperCase() || 'ACTIVE',
+    expected_payload: parseMaybeJson(row.expected_payload_json, {}),
+    notes: fixMojibakeText(row.notes),
+    created_by_name: fixMojibakeText(row.created_by_name),
+    updated_by_name: fixMojibakeText(row.updated_by_name),
+  };
+};
+
+const sanitizeEvaluationRunRow = (row) => {
+  if (!row || typeof row !== 'object') return row;
+  return {
+    ...row,
+    run_no: fixMojibakeText(row.run_no),
+    run_label: fixMojibakeText(row.run_label),
+    run_scope: trimText(row.run_scope).toUpperCase() || 'ADHOC',
+    status: trimText(row.status).toUpperCase() || 'SUCCESS',
+    dataset_count: Number(row.dataset_count || 0) || 0,
+    summary: parseMaybeJson(row.summary_json, {}),
+    baseline_summary: parseMaybeJson(row.baseline_summary_json, {}),
+    started_by_name: fixMojibakeText(row.started_by_name),
+  };
+};
+
+const sanitizeEvaluationRunItemRow = (row) => {
+  if (!row || typeof row !== 'object') return row;
+  return {
+    ...row,
+    eval_type: normalizeEvaluationType(row.eval_type),
+    source_bid_id: Number(row.source_bid_id || 0) || null,
+    score: Number(row.score || 0) || 0,
+    status: trimText(row.status).toUpperCase() || 'PASS',
+    result: parseMaybeJson(row.result_json, {}),
+    delta: parseMaybeJson(row.delta_json, {}),
+    dataset_name: fixMojibakeText(row.dataset_name),
+    dataset_code: fixMojibakeText(row.dataset_code),
   };
 };
 
@@ -4559,6 +4868,32 @@ const persistDraftSectionRegistry = async (tx, bidId, versionId, rows = []) => {
   }
 };
 
+const persistDraftArtifactRows = async (tx, { bidId, versionId, rows = [], user }) => {
+  await tx.run(
+    'DELETE FROM tender_draft_artifact_rows WHERE bid_id = ? AND version_id = ?',
+    [Number(bidId), Number(versionId)]
+  );
+  for (const row of Array.isArray(rows) ? rows : []) {
+    await tx.run(
+      `INSERT INTO tender_draft_artifact_rows
+        (bid_id, version_id, artifact_type, artifact_group, row_no, row_json, created_by_id, created_by_name, updated_by_id, updated_by_name)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        Number(bidId),
+        Number(versionId),
+        trimText(row.artifact_type).toUpperCase() || 'DEVIATION_TABLE',
+        trimText(row.artifact_group).toUpperCase() || 'TECHNICAL',
+        Number(row.row_no || 0),
+        trimText(row.row_json) || '{}',
+        Number(user?.id || 0) || null,
+        trimText(user?.username) || null,
+        Number(user?.id || 0) || null,
+        trimText(user?.username) || null,
+      ]
+    );
+  }
+};
+
 const persistScoreCoverageMatrix = async (tx, { bidId, versionId, rows = [] }) => {
   await tx.run(
     'DELETE FROM tender_score_coverage_matrix WHERE bid_id = ? AND version_id = ?',
@@ -4595,8 +4930,8 @@ const persistScoreOptimizationRecords = async (tx, { bidId, versionId, rows = []
   for (const row of Array.isArray(rows) ? rows : []) {
     await tx.run(
       `INSERT INTO tender_score_optimization_records
-        (bid_id, version_id, score_item_id, suggestion_title, suggestion_text, evidence_ids_json, target_section_title, before_text, after_text, applied_flag, applied_at, source, status, created_by_id, created_by_name)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        (bid_id, version_id, score_item_id, suggestion_title, suggestion_text, evidence_ids_json, target_section_title, before_text, after_text, applied_flag, applied_at, source, strategy_profile_key, audit_trace_json, status, created_by_id, created_by_name)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         Number(bidId),
         Number(versionId || 0) || null,
@@ -4610,6 +4945,13 @@ const persistScoreOptimizationRecords = async (tx, { bidId, versionId, rows = []
         Number(row.applied_flag || (trimText(row.status).toUpperCase() === 'APPLIED' ? 1 : 0)),
         Number(row.applied_flag || (trimText(row.status).toUpperCase() === 'APPLIED' ? 1 : 0)) ? (formatDateTime(new Date()) || null) : null,
         trimText(row.source) || 'RULE',
+        trimText(row.strategy_profile_key) || null,
+        JSON.stringify({
+          strategy_hit_points: Array.isArray(row.strategy_hit_points) ? row.strategy_hit_points : [],
+          strategy_section_patterns: Array.isArray(row.strategy_section_patterns) ? row.strategy_section_patterns : [],
+          strategy_source_project_ids: Array.isArray(row.strategy_source_project_ids) ? row.strategy_source_project_ids : [],
+          strategy_source_score_item_ids: Array.isArray(row.strategy_source_score_item_ids) ? row.strategy_source_score_item_ids : [],
+        }),
         trimText(row.status).toUpperCase() === 'APPLIED' ? 'APPLIED' : 'PROPOSED',
         Number(user?.id || 0) || null,
         trimText(user?.username) || null,
@@ -4645,6 +4987,153 @@ const loadDraftSectionRegistryRows = async ({ bidId, versionId }) =>
     [Number(bidId), Number(versionId)]
   );
 
+const loadDraftArtifactRows = async ({ bidId, versionId }) =>
+  query(
+    `SELECT *
+     FROM tender_draft_artifact_rows
+     WHERE bid_id = ? AND version_id = ?
+     ORDER BY artifact_type ASC, artifact_group ASC, row_no ASC, id ASC`,
+    [Number(bidId), Number(versionId)]
+  );
+
+const loadValidationRuleRows = async ({ ruleType = '', issueType = '', activeOnly = false, limit = 200 } = {}) => {
+  const conditions = [];
+  const params = [];
+  if (activeOnly) {
+    conditions.push('active_flag = 1');
+  }
+  const normalizedRuleType = trimText(ruleType).toUpperCase();
+  if (normalizedRuleType) {
+    conditions.push('rule_type = ?');
+    params.push(normalizedRuleType);
+  }
+  const cappedLimit = Math.max(1, Math.min(500, Number(limit || 0) || 200));
+  const rows = await query(
+    `SELECT *
+     FROM kb_validation_rules
+     ${conditions.length ? `WHERE ${conditions.join(' AND ')}` : ''}
+     ORDER BY rule_type ASC, severity DESC, id ASC
+     LIMIT ?`,
+    [...params, cappedLimit]
+  );
+  const normalizedRows = rows.map((item) => sanitizeValidationRuleRow(item));
+  const normalizedIssueType = trimText(issueType);
+  if (!normalizedIssueType) return normalizedRows;
+  return normalizedRows.filter((item) => trimText(item?.tags?.issue_type) === normalizedIssueType);
+};
+
+const syncValidationRuleLibrary = async () => {
+  const existingRows = await query('SELECT rule_name FROM kb_validation_rules');
+  const missingRules = buildMissingValidationRules({
+    existingRules: existingRows,
+    seedRules: buildValidationRuleSeed(),
+  });
+  for (const row of missingRules) {
+    await run(
+      `INSERT INTO kb_validation_rules
+        (rule_name, rule_type, trigger_condition, check_logic, severity, suggested_action, active_flag, tags_json)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        row.rule_name,
+        row.rule_type,
+        row.trigger_condition || null,
+        row.check_logic,
+        row.severity,
+        row.suggested_action || null,
+        Number(row.active_flag || 0) === 1 ? 1 : 0,
+        JSON.stringify(row.tags || {}),
+      ]
+    );
+  }
+  const totalRow = await get('SELECT COUNT(1) AS count FROM kb_validation_rules');
+  return {
+    inserted_count: missingRules.length,
+    total_count: Number(totalRow?.count || 0),
+  };
+};
+
+const loadLatestDraftCheckRun = async ({ bidId }) => {
+  const runRow = await get(
+    `SELECT *
+     FROM tender_draft_check_runs
+     WHERE bid_id = ?
+     ORDER BY id DESC
+     LIMIT 1`,
+    [Number(bidId)]
+  );
+  if (!runRow) return { run: null, issues: [] };
+  const issueRows = await query(
+    `SELECT *
+     FROM tender_draft_check_issues
+     WHERE check_run_id = ?
+     ORDER BY sort_order ASC, id ASC`,
+    [Number(runRow.id)]
+  );
+  return {
+    run: sanitizeDraftCheckRunRow(runRow),
+    issues: issueRows.map((item) => sanitizeDraftCheckIssueRow(item)),
+  };
+};
+
+const loadScoreCoverageRows = async ({ bidId, versionId }) =>
+  query(
+    `SELECT *
+     FROM tender_score_coverage_matrix
+     WHERE bid_id = ? AND version_id = ?
+     ORDER BY id ASC`,
+    [Number(bidId), Number(versionId || 0) || null]
+  );
+
+const loadScoreOptimizationRecordRows = async ({ bidId, versionId }) =>
+  query(
+    `SELECT *
+     FROM tender_score_optimization_records
+     WHERE bid_id = ? AND version_id = ?
+     ORDER BY id DESC`,
+    [Number(bidId), Number(versionId || 0) || null]
+  );
+
+const loadDraftAutosaveRows = async ({ bidId, limit = 20 }) =>
+  query(
+    `SELECT *
+     FROM tender_bid_draft_autosaves
+     WHERE bid_id = ?
+     ORDER BY id DESC
+     LIMIT ?`,
+    [Number(bidId), Math.min(100, Math.max(1, Number(limit || 20)))]
+  );
+
+const loadExportRecordsByBidIds = async ({ bidIds = [], limit = 200 }) => {
+  const ids = Array.from(
+    new Set(
+      (Array.isArray(bidIds) ? bidIds : [])
+        .map((item) => Number(item))
+        .filter((item) => Number.isFinite(item) && item > 0)
+    )
+  );
+  if (!ids.length) return [];
+  const take = Math.min(1000, Math.max(ids.length, Number(limit || 200)));
+  const rows = await query(
+    `SELECT *
+     FROM tender_bid_export_records
+     WHERE bid_id IN (${ids.map(() => '?').join(',')})
+     ORDER BY id DESC
+     LIMIT ?`,
+    [...ids, take]
+  );
+  return rows.map((item) => sanitizeExportRecordRow(item));
+};
+
+const buildLatestBidRowMap = (rows = [], bidIdSelector) => {
+  const map = new Map();
+  for (const row of Array.isArray(rows) ? rows : []) {
+    const bidId = Number(bidIdSelector(row));
+    if (!Number.isFinite(bidId) || bidId <= 0 || map.has(bidId)) continue;
+    map.set(bidId, row);
+  }
+  return map;
+};
+
 const loadLatestGenerateJobForBid = async (bidId) => {
   const row = await get(
     `SELECT *
@@ -4655,6 +5144,190 @@ const loadLatestGenerateJobForBid = async (bidId) => {
     [Number(bidId)]
   );
   return row ? sanitizeGenerateJobRow(row) : null;
+};
+
+const buildRiskCenterProjectRows = async (bids = []) => {
+  const bidRows = Array.isArray(bids) ? bids.map((item) => sanitizeBidRow(item)).filter(Boolean) : [];
+  const bidIds = bidRows.map((item) => Number(item.id)).filter((item) => Number.isFinite(item) && item > 0);
+  if (!bidIds.length) return [];
+
+  const [parseJobs, checkRuns, exportRecords] = await Promise.all([
+    query(
+      `SELECT *
+       FROM tender_bid_parse_jobs
+       WHERE bid_id IN (${bidIds.map(() => '?').join(',')})
+       ORDER BY id DESC`,
+      bidIds
+    ),
+    query(
+      `SELECT *
+       FROM tender_draft_check_runs
+       WHERE bid_id IN (${bidIds.map(() => '?').join(',')})
+       ORDER BY id DESC`,
+      bidIds
+    ),
+    loadExportRecordsByBidIds({ bidIds, limit: Math.max(300, bidIds.length * 3) }),
+  ]);
+
+  const parseJobMap = buildLatestBidRowMap(parseJobs.map((item) => sanitizeParseJobRow(item)), (item) => item?.bid_id);
+  const checkRunMap = buildLatestBidRowMap(checkRuns.map((item) => sanitizeDraftCheckRunRow(item)), (item) => item?.bid_id);
+  const exportRecordMap = buildLatestBidRowMap(exportRecords, (item) => item?.bid_id);
+
+  const levelWeight = { HIGH: 3, MEDIUM: 2, LOW: 1 };
+  return bidRows
+    .map((bid) => buildRiskProjectRow({
+      bid,
+      latestParseJob: parseJobMap.get(Number(bid.id)) || null,
+      latestDraftCheckRun: checkRunMap.get(Number(bid.id)) || null,
+      latestExportRecord: exportRecordMap.get(Number(bid.id)) || null,
+    }))
+    .sort((a, b) => {
+      const levelDiff = (levelWeight[String(b.risk_level || '').toUpperCase()] || 0) - (levelWeight[String(a.risk_level || '').toUpperCase()] || 0);
+      if (levelDiff !== 0) return levelDiff;
+      return new Date(String(b.updated_at || b.latest_check_at || b.latest_export_at || 0)).getTime()
+        - new Date(String(a.updated_at || a.latest_check_at || a.latest_export_at || 0)).getTime();
+    });
+};
+
+const buildExportCenterProjectRows = async (bids = []) => {
+  const bidRows = Array.isArray(bids) ? bids.map((item) => sanitizeBidRow(item)).filter(Boolean) : [];
+  const bidIds = bidRows.map((item) => Number(item.id)).filter((item) => Number.isFinite(item) && item > 0);
+  if (!bidIds.length) return { projectRows: [], exportRecords: [] };
+  const currentVersionIds = Array.from(
+    new Set(
+      bidRows
+        .map((item) => Number(item.current_version_id))
+        .filter((item) => Number.isFinite(item) && item > 0)
+    )
+  );
+
+  const [draftRows, versionRows, exportRecords] = await Promise.all([
+    query(
+      `SELECT *
+       FROM tender_bid_drafts
+       WHERE bid_id IN (${bidIds.map(() => '?').join(',')})`,
+      bidIds
+    ),
+    currentVersionIds.length
+      ? query(
+        `SELECT *
+         FROM tender_bid_versions
+         WHERE id IN (${currentVersionIds.map(() => '?').join(',')})`,
+        currentVersionIds
+      )
+      : Promise.resolve([]),
+    loadExportRecordsByBidIds({ bidIds, limit: Math.max(500, bidIds.length * 4) }),
+  ]);
+
+  const draftMap = new Map(draftRows.map((item) => [Number(item.bid_id), sanitizeDraftRow(item)]));
+  const versionMap = new Map(versionRows.map((item) => [Number(item.id), sanitizeVersionRow(item)]));
+  const exportRecordMap = buildLatestBidRowMap(exportRecords, (item) => item?.bid_id);
+  const projectRows = bidRows.map((bid) => {
+    const latestExport = exportRecordMap.get(Number(bid.id)) || null;
+    const draft = draftMap.get(Number(bid.id)) || null;
+    const currentVersion = versionMap.get(Number(bid.current_version_id)) || null;
+    return {
+      bid_id: Number(bid.id),
+      bid_no: fixMojibakeText(bid.bid_no),
+      title: fixMojibakeText(bid.title),
+      project_name: fixMojibakeText(bid.project_name),
+      status: trimText(bid.status).toUpperCase() || 'DRAFT',
+      current_version_id: Number(bid.current_version_id || 0) || null,
+      current_version_no: Number(currentVersion?.version_no || 0) || null,
+      current_version_file_name: fixMojibakeText(currentVersion?.file_name),
+      draft_updated_at: draft?.updated_at || draft?.last_saved_at || null,
+      draft_file_name: fixMojibakeText(draft?.draft_file_name),
+      latest_export_record: latestExport,
+      export_ready_flag: ['EXPORT_READY', 'EXPORTED', 'ARCHIVED', 'SUBMITTED'].includes(trimText(bid.status).toUpperCase()),
+      updated_at: bid.updated_at || bid.created_at || null,
+    };
+  }).sort((a, b) => new Date(String(b.updated_at || b.draft_updated_at || 0)).getTime() - new Date(String(a.updated_at || a.draft_updated_at || 0)).getTime());
+
+  return { projectRows, exportRecords };
+};
+
+const resolveDraftWorkspaceVersionId = ({ bid, currentVersion, draft }) => {
+  const versionId = Number(currentVersion?.id || bid?.current_version_id || draft?.base_version_id || 0);
+  return Number.isFinite(versionId) && versionId > 0 ? versionId : 0;
+};
+
+const buildDraftWorkspacePayload = async ({ bid, currentVersion, draft }) => {
+  const bidId = Number(bid.id);
+  const versionId = resolveDraftWorkspaceVersionId({ bid, currentVersion, draft });
+  const latestJob = await loadLatestGenerateJobForBid(bidId);
+  const latestDetail = latestJob ? await loadGenerateJobDetail(latestJob.id) : null;
+  let requirementRegistry = latestJob ? await loadRequirementRegistryRows(latestJob.id) : [];
+  if (!requirementRegistry.length && latestDetail) {
+    requirementRegistry = buildRuntimeRequirementRegistry({ detail: latestDetail });
+  }
+  const evidenceRegistry = await loadEvidenceRegistryRows(bidId);
+  const clauseRegistryV2 = buildClauseRegistryV2({
+    requirements: requirementRegistry,
+  });
+
+  let sections = versionId ? await loadDraftSectionRegistryRows({ bidId, versionId }) : [];
+  if ((!Array.isArray(sections) || !sections.length) && (currentVersion || draft)) {
+    const draftFilePath = trimText(draft?.draft_file_path) || trimText(currentVersion?.storage_path);
+    const paragraphs = await extractParagraphsFromDocx(draftFilePath);
+    if (paragraphs.length) {
+      sections = paragraphs.map((paragraph, index) => ({
+        id: 0,
+        section_title: '文档正文',
+        paragraph_no: index + 1,
+        paragraph_text: paragraph,
+        requirement_ids_json: '[]',
+        evidence_ids_json: '[]',
+        score_item_ids_json: '[]',
+      }));
+    }
+  }
+  const normalizedSections = normalizeDraftSectionRows(sections);
+  const persistedArtifactRows = versionId
+    ? await loadDraftArtifactRows({ bidId, versionId })
+    : [];
+  const analysisSummary = parseMaybeJson(latestDetail?.job?.analysis_summary_json, {});
+  const generatedArtifacts = isPlainObject(analysisSummary?.generated_artifacts)
+    ? analysisSummary.generated_artifacts
+    : {};
+  const artifacts = buildDraftArtifactCollections({
+    persistedRows: persistedArtifactRows.map((item) => sanitizeDraftArtifactRow(item)),
+    generatedArtifacts,
+  });
+
+  const { run: latestCheckRun, issues: latestCheckIssues } = await loadLatestDraftCheckRun({ bidId });
+  let scoreCoverageRows = versionId ? await loadScoreCoverageRows({ bidId, versionId }) : [];
+  if (!scoreCoverageRows.length && requirementRegistry.length) {
+    scoreCoverageRows = buildScoreCoverageMatrix({
+      requirements: requirementRegistry,
+      sections: normalizedSections.map((item) => ({
+        section_title: item.section_title,
+        paragraph_text: item.paragraph_text,
+        requirement_ids_json: JSON.stringify(item.requirement_ids || []),
+        evidence_ids_json: JSON.stringify(item.evidence_ids || []),
+        score_item_ids_json: JSON.stringify(item.score_item_ids || []),
+      })),
+      evidences: evidenceRegistry,
+    });
+  }
+  const optimizationRows = versionId ? await loadScoreOptimizationRecordRows({ bidId, versionId }) : [];
+  const autosaves = await loadDraftAutosaveRows({ bidId, limit: 20 });
+
+  return {
+    bid: sanitizeBidRow(bid),
+    version: currentVersion ? sanitizeVersionRow(currentVersion) : null,
+    draft: draft ? sanitizeDraftRow(draft) : null,
+    source_job_id: Number(latestJob?.id || 0) || null,
+    sections: normalizedSections,
+    artifacts,
+    latest_check_run: latestCheckRun,
+    latest_check_issues: latestCheckIssues,
+    score_coverage_matrix: scoreCoverageRows.map((item) => sanitizeScoreCoverageRow(item)),
+    score_optimization_records: optimizationRows.map((item) => sanitizeScoreOptimizationRecordRow(item)),
+    autosaves: autosaves.map((item) => sanitizeDraftAutosaveRow(item)),
+    requirement_registry: requirementRegistry,
+    evidence_registry: evidenceRegistry,
+    clause_registry_v2: clauseRegistryV2,
+  };
 };
 
 const extractParagraphsFromDocx = async (filePath) => {
@@ -4817,6 +5490,11 @@ const normalizeBidUploadExt = (filename) => {
   return ALLOWED_BID_UPLOAD_EXTS.has(ext) ? ext : '';
 };
 
+const normalizeParseUploadExt = (filename) => {
+  const ext = path.extname(String(filename || '')).toLowerCase();
+  return ALLOWED_PARSE_UPLOAD_EXTS.has(ext) ? ext : '';
+};
+
 const normalizeAssetUploadExt = (filename) => {
   const ext = path.extname(String(filename || '')).toLowerCase();
   return ALLOWED_ASSET_UPLOAD_EXTS.has(ext) ? ext : '';
@@ -4832,6 +5510,9 @@ const guessMimeByExt = (ext) => {
   if (normalized === '.pdf') return 'application/pdf';
   if (normalized === '.docx') return 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
   if (normalized === '.doc') return 'application/msword';
+  if (normalized === '.xlsx') return 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+  if (normalized === '.xls') return 'application/vnd.ms-excel';
+  if (normalized === '.zip') return 'application/zip';
   if (normalized === '.jpg' || normalized === '.jpeg') return 'image/jpeg';
   if (normalized === '.png') return 'image/png';
   return 'application/octet-stream';
@@ -4878,10 +5559,28 @@ const runLibreOfficeConvert = async (inputPath, outDir, format) => {
     child.stderr.on('data', (chunk) => {
       stderr += String(chunk || '');
     });
-    child.on('error', (err) => reject(err));
+    child.on('error', (err) => reject(tenderStageError({
+      message: `LibreOffice 转换启动失败: ${trimText(err?.message) || '未知错误'}`,
+      statusCode: 502,
+      code: 'TENDER_FILE_CONVERT_UNAVAILABLE',
+      category: 'CONVERT',
+      retryable: true,
+      manualTakeover: buildManualTakeover('请稍后重试，或检查 LibreOffice 环境后再导出', 'convert'),
+    })));
     child.on('close', (code) => {
       if (code === 0) return resolve();
-      return reject(new Error(stderr || `LibreOffice 转换失败，退出码 ${code}`));
+      return reject(tenderStageError({
+        message: stderr || `LibreOffice 转换失败，退出码 ${code}`,
+        statusCode: 502,
+        code: 'TENDER_FILE_CONVERT_FAILED',
+        category: 'CONVERT',
+        retryable: true,
+        manualTakeover: buildManualTakeover('请稍后重试，或检查源文件后重新导出', 'convert'),
+        details: {
+          format,
+          exit_code: Number(code || 0),
+        },
+      }));
     });
   });
 
@@ -4891,7 +5590,14 @@ const runLibreOfficeConvert = async (inputPath, outDir, format) => {
   try {
     await fs.promises.access(outPath, fs.constants.R_OK);
   } catch {
-    throw appError(`未找到转换产物: ${outPath}`, 500);
+    throw tenderStageError({
+      message: `未找到转换产物: ${outPath}`,
+      statusCode: 502,
+      code: 'TENDER_FILE_CONVERT_OUTPUT_MISSING',
+      category: 'CONVERT',
+      retryable: true,
+      manualTakeover: buildManualTakeover('请稍后重试，或检查转换环境后重新导出', 'convert'),
+    });
   }
   return outPath;
 };
@@ -4921,7 +5627,7 @@ const escapeXml = (value) =>
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&apos;');
 
-const buildSimpleDocxBuffer = (paragraphs = []) => {
+const buildSimpleDocxBuffer = (paragraphs = [], options = {}) => {
   const rows = Array.isArray(paragraphs) ? paragraphs : [];
   const paragraphXml = rows
     .map((line) => {
@@ -4964,11 +5670,35 @@ const buildSimpleDocxBuffer = (paragraphs = []) => {
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"></Relationships>`
   );
 
-  return zip.generate({ type: 'nodebuffer', compression: 'DEFLATE' });
+  let buffer = ensureDocxHeaderFooterBuffer(
+    zip.generate({ type: 'nodebuffer', compression: 'DEFLATE' }),
+    {
+      headerText: trimText(options.headerText),
+      footerText: trimText(options.footerText),
+    }
+  );
+  const tocLines = Array.isArray(options.tocLines) ? options.tocLines : [];
+  if (tocLines.length) {
+    buffer = ensureDocxNativeTocBuffer(buffer, { tocLines });
+  }
+  const pageBreakTitles = Array.isArray(options.pageBreakTitles) ? options.pageBreakTitles : [];
+  if (pageBreakTitles.length) {
+    buffer = ensureDocxPageBreakBeforeHeadingsBuffer(buffer, { headings: pageBreakTitles });
+  }
+  const bodyStartHeading = pageBreakTitles.find((title) => trimText(title) && trimText(title) !== '目录') || '';
+  buffer = ensureDocxSectionPageNumberBuffer(buffer, { bodyStartHeading });
+  return buffer;
 };
 
-const writeSimpleDocx = async ({ outputPath, paragraphs = [] }) => {
-  const buffer = buildSimpleDocxBuffer(paragraphs);
+const writeSimpleDocx = async ({
+  outputPath,
+  paragraphs = [],
+  headerText = '',
+  footerText = '',
+  tocLines = [],
+  pageBreakTitles = [],
+}) => {
+  const buffer = buildSimpleDocxBuffer(paragraphs, { headerText, footerText, tocLines, pageBreakTitles });
   await fs.promises.writeFile(outputPath, buffer);
 };
 
@@ -5055,6 +5785,204 @@ const buildBidRiskReportText = async (bid) => {
   return lines.join('\n');
 };
 
+const buildBidExportOutputName = ({ bid, exportType, ext }) => {
+  const baseName = sanitizeExportBaseName(bid);
+  const suffixMap = {
+    DOCX: '-投标文件',
+    PDF: '-投标文件',
+    PACKAGE: '-导出包',
+  };
+  return `${baseName}${suffixMap[exportType] || ''}${ext}`;
+};
+
+const ensureDocxExportFile = async ({ sourcePath, sourceExt, tempDir }) => {
+  const normalizedExt = trimText(sourceExt).toLowerCase();
+  if (normalizedExt === '.docx') {
+    return copyToManagedPath(sourcePath, EXPORT_ROOT, '.docx');
+  }
+  if (normalizedExt === '.doc' || normalizedExt === '.pdf') {
+    const convertedPath = await runLibreOfficeConvert(sourcePath, tempDir, 'docx');
+    return copyToManagedPath(convertedPath, EXPORT_ROOT, '.docx');
+  }
+  throw appError(`当前文件类型不支持导出为DOCX: ${normalizedExt || 'unknown'}`, 400);
+};
+
+const ensurePdfExportFile = async ({ sourcePath, sourceExt, tempDir }) => {
+  const normalizedExt = trimText(sourceExt).toLowerCase();
+  if (normalizedExt === '.pdf') {
+    return copyToManagedPath(sourcePath, EXPORT_ROOT, '.pdf');
+  }
+  if (normalizedExt === '.docx' || normalizedExt === '.doc') {
+    const convertedPath = await runLibreOfficeConvert(sourcePath, tempDir, 'pdf');
+    return copyToManagedPath(convertedPath, EXPORT_ROOT, '.pdf');
+  }
+  throw appError(`当前文件类型不支持导出为PDF: ${normalizedExt || 'unknown'}`, 400);
+};
+
+const writeBidRiskReportFile = async ({ bid }) => {
+  const content = await buildBidRiskReportText(bid);
+  const reportPath = path.join(EXPORT_ROOT, buildStoredFilename(`${sanitizeExportBaseName(bid)}-风险报告.txt`, '.txt'));
+  await fs.promises.mkdir(path.dirname(reportPath), { recursive: true });
+  await fs.promises.writeFile(reportPath, content, 'utf8');
+  return reportPath;
+};
+
+const buildPackageBuffer = async ({ fileEntries = [] }) => {
+  const zip = new PizZip();
+  for (const entry of Array.isArray(fileEntries) ? fileEntries : []) {
+    const entryPath = trimText(entry?.path);
+    const entryName = trimText(entry?.name);
+    if (!entryPath || !entryName) continue;
+    const bytes = await fs.promises.readFile(entryPath);
+    zip.file(entryName, bytes);
+  }
+  return zip.generate({ type: 'nodebuffer', compression: 'DEFLATE' });
+};
+
+const insertExportRecord = async ({
+  bidId,
+  versionId = null,
+  draftId = null,
+  exportType,
+  status,
+  storagePath = null,
+  fileName = null,
+  mimeType = null,
+  fileSize = 0,
+  errorMessage = null,
+  payload = {},
+  result = {},
+  user = null,
+}) => {
+  const info = await run(
+    `INSERT INTO tender_bid_export_records
+      (bid_id, version_id, draft_id, export_type, status, storage_path, file_name, mime_type, file_size, error_message, payload_json, result_json, created_by_id, created_by_name)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      Number(bidId),
+      Number.isFinite(Number(versionId)) && Number(versionId) > 0 ? Number(versionId) : null,
+      Number.isFinite(Number(draftId)) && Number(draftId) > 0 ? Number(draftId) : null,
+      trimText(exportType).toUpperCase() || 'DOCX',
+      trimText(status).toUpperCase() || 'SUCCESS',
+      trimText(storagePath) || null,
+      trimText(fileName) || null,
+      trimText(mimeType) || null,
+      Number(fileSize || 0) || 0,
+      trimText(errorMessage) || null,
+      stableStringify(payload || {}),
+      stableStringify(result || {}),
+      Number.isFinite(Number(user?.id)) ? Number(user.id) : null,
+      trimText(user?.username) || null,
+    ]
+  );
+  const row = await get('SELECT * FROM tender_bid_export_records WHERE id = ? LIMIT 1', [Number(info.insertId)]);
+  return sanitizeExportRecordRow(row);
+};
+
+const executeBidExport = async ({ bid, format, user }) => {
+  const exportType = trimText(format).toUpperCase();
+  if (!['DOCX', 'PDF', 'PACKAGE'].includes(exportType)) throw appError('不支持的导出格式', 400);
+
+  const source = await resolveBidExportSource(bid);
+  const sourceDraftId = Number(source?.draft?.id || 0) || null;
+  const sourceVersionId = Number(source?.currentVersion?.id || 0) || null;
+
+  try {
+    return await withTempDir('bid-export', async (tempDir) => {
+      let artifactPath = '';
+      let artifactExt = exportType === 'PDF' ? '.pdf' : (exportType === 'PACKAGE' ? '.zip' : '.docx');
+      let mimeType = guessMimeByExt(artifactExt);
+      const cleanupPaths = [];
+
+      if (exportType === 'DOCX') {
+        artifactPath = await ensureDocxExportFile({ sourcePath: source.sourcePath, sourceExt: source.sourceExt, tempDir });
+      } else if (exportType === 'PDF') {
+        artifactPath = await ensurePdfExportFile({ sourcePath: source.sourcePath, sourceExt: source.sourceExt, tempDir });
+      } else {
+        const docxPath = await ensureDocxExportFile({ sourcePath: source.sourcePath, sourceExt: source.sourceExt, tempDir });
+        const pdfPath = await ensurePdfExportFile({ sourcePath: source.sourcePath, sourceExt: source.sourceExt, tempDir });
+        const reportPath = await writeBidRiskReportFile({ bid });
+        cleanupPaths.push(docxPath, pdfPath, reportPath);
+        const buffer = await buildPackageBuffer({
+          fileEntries: [
+            { name: buildBidExportOutputName({ bid, exportType: 'DOCX', ext: '.docx' }), path: docxPath },
+            { name: buildBidExportOutputName({ bid, exportType: 'PDF', ext: '.pdf' }), path: pdfPath },
+            { name: `${sanitizeExportBaseName(bid)}-风险报告.txt`, path: reportPath },
+          ],
+        });
+        artifactPath = path.join(EXPORT_ROOT, buildStoredFilename(buildBidExportOutputName({ bid, exportType: 'PACKAGE', ext: '.zip' }), '.zip'));
+        await fs.promises.mkdir(path.dirname(artifactPath), { recursive: true });
+        await fs.promises.writeFile(artifactPath, buffer);
+      }
+
+      const stat = await readFileStatSafe(artifactPath);
+      if (!stat?.isFile()) throw appError('导出产物不存在', 500);
+
+      const fileName = buildBidExportOutputName({ bid, exportType, ext: artifactExt });
+      const finalPath = path.join(path.dirname(artifactPath), buildStoredFilename(fileName, artifactExt));
+      await fs.promises.copyFile(artifactPath, finalPath);
+      if (finalPath !== artifactPath) cleanupPaths.push(artifactPath);
+
+      const record = await insertExportRecord({
+        bidId: Number(bid.id),
+        versionId: sourceVersionId,
+        draftId: sourceDraftId,
+        exportType,
+        status: 'SUCCESS',
+        storagePath: finalPath,
+        fileName,
+        mimeType,
+        fileSize: Number(stat.size || 0),
+        payload: {
+          format: exportType,
+          source_ext: source.sourceExt,
+          source_version_id: sourceVersionId,
+          source_draft_id: sourceDraftId,
+        },
+        result: {
+          ready: true,
+        },
+        user,
+      });
+
+      if (trimText(bid.status).toUpperCase() === 'EXPORT_READY') {
+        await run(
+          `UPDATE tender_bids
+           SET status = 'EXPORTED', updated_by_id = ?, updated_by_name = ?, updated_at = NOW()
+           WHERE id = ?`,
+          [Number(user?.id || 0) || null, trimText(user?.username) || null, Number(bid.id)]
+        );
+      }
+
+      for (const cleanupPath of cleanupPaths) {
+        await deleteFileSafe(cleanupPath);
+      }
+
+      return record;
+    });
+  } catch (err) {
+    await insertExportRecord({
+      bidId: Number(bid.id),
+      versionId: sourceVersionId,
+      draftId: sourceDraftId,
+      exportType,
+      status: 'FAILED',
+      errorMessage: err?.message || String(err),
+      payload: {
+        format: exportType,
+        source_ext: source.sourceExt,
+        source_version_id: sourceVersionId,
+        source_draft_id: sourceDraftId,
+      },
+      result: {
+        ready: false,
+      },
+      user,
+    });
+    throw err;
+  }
+};
+
 const buildDocxParagraphXml = (text, options = {}) => {
   const raw = trimText(text);
   if (!raw) return '<w:p/>';
@@ -5095,14 +6023,24 @@ const buildTemplateReplacementMap = (payload = {}) => ({
   TECHNICAL_VOLUME_CONTENT: trimText(payload.technical_volume_content),
   QUOTATION_VOLUME_CONTENT: trimText(payload.quotation_volume_content),
   APPENDIX_INDEX_CONTENT: trimText(payload.appendix_index_content),
+  HEADER_CONTENT: trimText(payload.header_content),
+  FOOTER_CONTENT: trimText(payload.footer_content),
   COVER_CONTENT: trimText(payload.cover_content),
   TOC_CONTENT: trimText(payload.toc_content),
+  CHAPTER_OUTLINE: trimText(payload.chapter_outline),
   GENERATED_AT: trimText(payload.generated_at),
 });
 
-const buildChapterContentText = (chapters = []) => {
+const isTocChapter = (chapter) => {
+  const title = trimText(chapter?.title);
+  return trimText(chapter?.slot).toUpperCase() === 'TOC' || /目录/u.test(title);
+};
+
+const buildChapterContentText = (chapters = [], options = {}) => {
+  const { excludeToc = false } = options;
   const lines = [];
   for (const chapter of Array.isArray(chapters) ? chapters : []) {
+    if (excludeToc && isTocChapter(chapter)) continue;
     const title = trimText(chapter?.title);
     if (title) lines.push(title);
     const contentLines = Array.isArray(chapter?.content) ? chapter.content : toLines(chapter?.content || '');
@@ -5138,9 +6076,9 @@ const pickChapterTexts = (chapters = [], keywords = []) => {
   return lines.join('\n').trim();
 };
 
-const buildTemplateRenderPayload = ({ payload = {}, chapters = [] }) => {
+const buildTemplateRenderPayload = ({ payload = {}, chapters = [], excludeTocFromChapterContent = false }) => {
   const replacementMap = buildTemplateReplacementMap(payload);
-  const chapterContent = buildChapterContentText(chapters);
+  const chapterContent = buildChapterContentText(chapters, { excludeToc: excludeTocFromChapterContent });
   const coverContent = trimText(payload.cover_content) || pickChapterTexts(chapters, ['封面']);
   const tocContent = trimText(payload.toc_content) || pickChapterTexts(chapters, ['目录']);
   const businessContent = trimText(payload.business_volume_content) || pickChapterTexts(chapters, ['商务']);
@@ -5170,6 +6108,8 @@ const buildTemplateRenderPayload = ({ payload = {}, chapters = [] }) => {
     TECHNICAL_VOLUME_CONTENT: technicalContent,
     QUOTATION_VOLUME_CONTENT: quotationContent,
     APPENDIX_INDEX_CONTENT: appendixContent,
+    HEADER_CONTENT: trimText(payload.header_content),
+    FOOTER_CONTENT: trimText(payload.footer_content),
     COMPANY_INFO: trimText(payload.company_info),
     LEGAL_PERSON_INFO: trimText(payload.legal_person_info),
     AUTHORIZED_AGENT_INFO: trimText(payload.authorized_agent_info),
@@ -5237,7 +6177,15 @@ const replaceTemplateTokens = (text, replacementMap = {}) => {
   return result;
 };
 
-const writeDocxWithTemplate = async ({ templatePath, outputPath, chapters = [], payload = {} }) => {
+const writeDocxWithTemplate = ({
+  templatePath,
+  outputPath,
+  chapters = [],
+  payload = {},
+  tocLines = [],
+  pageBreakTitles = [],
+}) => {
+  return (async () => {
   const bytes = await fs.promises.readFile(templatePath);
   const originalZip = new PizZip(bytes);
   const originalDocXml = originalZip.file('word/document.xml')?.asText() || '';
@@ -5246,9 +6194,16 @@ const writeDocxWithTemplate = async ({ templatePath, outputPath, chapters = [], 
   }
   const chapterRows = Array.isArray(chapters) ? chapters : [];
   const replacementMap = buildTemplateReplacementMap(payload);
-  const renderPayload = buildTemplateRenderPayload({ payload, chapters: chapterRows });
   const hasBodyPlaceholder = ['{{BID_CONTENT}}', '{{CHAPTERS_CONTENT}}', '{{BID_BODY}}']
     .some((token) => originalDocXml.includes(token));
+  const hasTocPlaceholder = originalDocXml.includes('{{TOC_CONTENT}}');
+  const renderPayload = buildTemplateRenderPayload({
+    payload: hasTocPlaceholder
+      ? { ...payload, toc_content: DOCX_NATIVE_TOC_MARKER }
+      : payload,
+    chapters: chapterRows,
+    excludeTocFromChapterContent: hasTocPlaceholder,
+  });
 
   await applyDocxTemplate({
     sourcePath: templatePath,
@@ -5264,7 +6219,9 @@ const writeDocxWithTemplate = async ({ templatePath, outputPath, chapters = [], 
   }
 
   if (!hasBodyPlaceholder) {
-    const chapterParagraphRows = buildChapterParagraphXmlRows(chapterRows);
+    const chapterParagraphRows = buildChapterParagraphXmlRows(
+      hasTocPlaceholder ? chapterRows.filter((chapter) => !isTocChapter(chapter)) : chapterRows
+    );
     renderedDocXml = appendDocxParagraphsToBody(renderedDocXml, chapterParagraphRows);
     zip.file('word/document.xml', renderedDocXml);
   }
@@ -5278,8 +6235,37 @@ const writeDocxWithTemplate = async ({ templatePath, outputPath, chapters = [], 
     zip.file(entryName, replaceTemplateTokens(content, replacementMap));
   }
 
-  const out = zip.generate({ type: 'nodebuffer', compression: 'DEFLATE' });
+  let out = ensureDocxHeaderFooterBuffer(
+    zip.generate({ type: 'nodebuffer', compression: 'DEFLATE' }),
+    {
+      headerText: trimText(renderPayload.HEADER_CONTENT),
+      footerText: trimText(renderPayload.FOOTER_CONTENT),
+    }
+  );
+  let bodyPlaceholderExpanded = false;
+  if (hasBodyPlaceholder) {
+    const expandedOut = ensureDocxLogicalParagraphsBuffer(out, {
+      splitHints: pageBreakTitles,
+      headingLines: pageBreakTitles,
+    });
+    bodyPlaceholderExpanded = expandedOut !== out;
+    out = expandedOut;
+  }
+  if (!hasBodyPlaceholder || hasTocPlaceholder || bodyPlaceholderExpanded) {
+    out = ensureDocxNativeTocBuffer(out, {
+      marker: DOCX_NATIVE_TOC_MARKER,
+      tocLines,
+    });
+  }
+  if (!hasBodyPlaceholder || bodyPlaceholderExpanded) {
+    out = ensureDocxPageBreakBeforeHeadingsBuffer(out, {
+      headings: pageBreakTitles,
+    });
+    const bodyStartHeading = pageBreakTitles.find((title) => trimText(title) && trimText(title) !== '目录') || '';
+    out = ensureDocxSectionPageNumberBuffer(out, { bodyStartHeading });
+  }
   await fs.promises.writeFile(outputPath, out);
+  })();
 };
 
 const fetchWithTimeout = async (url, options = {}, timeoutMs = 5000) => {
@@ -5414,65 +6400,7 @@ const authRequired = asyncHandler(async (req, _res, next) => {
   next();
 });
 
-const permissionByRole = {
-  admin: new Set([
-    'tender:read',
-    'tender:write',
-    'tender:template:manage',
-    'tender:config:manage',
-    'tender:ai:use',
-    'tender:ai:manage',
-  ]),
-  editor: new Set(['tender:read', 'tender:write', 'tender:template:manage', 'tender:ai:use']),
-  sysadmin: new Set(['tender:read', 'tender:config:manage', 'tender:ai:manage']),
-  auditor: new Set(['tender:audit:read']),
-};
-
-const dataScopeByRole = {
-  admin: 'ALL',
-  editor: 'OWNED_OR_ASSIGNED',
-  sysadmin: 'ALL',
-  auditor: 'AUDIT_ONLY',
-};
-
 const bidMemberRoleSet = new Set(['OWNER', 'COORDINATOR', 'COMPILE', 'TECH', 'BUSINESS', 'FINAL', 'RISK', 'EXPORT']);
-
-const buildPermissionMatrix = () =>
-  Object.fromEntries(
-    Object.entries(permissionByRole).map(([role, permissionSet]) => [
-      role,
-      {
-        permissions: Array.from(permissionSet.values()).sort(),
-        data_scope: dataScopeByRole[role] || 'NONE',
-      },
-    ])
-  );
-
-const resolveDataScope = (user) => {
-  const role = String(user?.role || '').toLowerCase();
-  return dataScopeByRole[role] || 'NONE';
-};
-
-const buildGovernancePayload = (user) => ({
-  current_role: String(user?.role || '').toLowerCase() || 'unknown',
-  data_scope: {
-    mode: resolveDataScope(user),
-    description: resolveDataScope(user) === 'OWNED_OR_ASSIGNED'
-      ? '仅可查看本人创建或被分派参与的项目'
-      : resolveDataScope(user) === 'AUDIT_ONLY'
-        ? '仅可查看审计相关数据'
-        : resolveDataScope(user) === 'ALL'
-          ? '可查看全部项目'
-          : '无业务数据范围',
-  },
-  permission_matrix: buildPermissionMatrix(),
-});
-
-const hasPermission = (user, permission) => {
-  const role = String(user?.role || '').toLowerCase();
-  const set = permissionByRole[role] || new Set();
-  return set.has(permission);
-};
 
 const requirePermission = (permission) =>
   asyncHandler(async (req, _res, next) => {
@@ -5673,6 +6601,1368 @@ const getBidVersionById = async ({ bidId, versionId }) => {
 const getNextVersionNo = async (tx, bidId) => {
   const row = await tx.get('SELECT MAX(version_no) AS max_no FROM tender_bid_versions WHERE bid_id = ?', [bidId]);
   return Number(row?.max_no || 0) + 1;
+};
+
+const normalizeParseScope = (value) => {
+  const normalized = trimText(value).toUpperCase();
+  if (['FULL', 'SCORING', 'PARAMETERS', 'QUALIFICATION'].includes(normalized)) return normalized;
+  return 'FULL';
+};
+
+const normalizeParseMatchStatus = (value) => {
+  const normalized = trimText(value).toUpperCase();
+  if (['RECOMMENDED', 'CONFIRMED', 'REPLACED', 'IGNORED'].includes(normalized)) return normalized;
+  return '';
+};
+const PARSE_MATCH_FEEDBACK_STATUS = new Set(['CONFIRMED', 'REPLACED', 'IGNORED']);
+
+const parseScopeTitleMap = {
+  FULL: '全量解析',
+  SCORING: '仅评分项',
+  PARAMETERS: '仅参数表',
+  QUALIFICATION: '仅资格项',
+};
+
+const parseScopeClauseTypeMap = {
+  SCORING: new Set(['SCORING']),
+  PARAMETERS: new Set(['TECHNICAL']),
+  QUALIFICATION: new Set(['QUALIFICATION']),
+};
+
+const parseScopeKeywordMap = {
+  SCORING: ['评分', '评审', '分值', '打分'],
+  PARAMETERS: ['参数', '技术', '规格', '配置'],
+  QUALIFICATION: ['资格', '资质', '业绩', '人员', '证书'],
+};
+
+const withTempDir = async (prefix, fn) => {
+  const dir = path.join(EDITABLE_ROOT, `${prefix}-${Date.now()}-${crypto.randomUUID()}`);
+  await fs.promises.mkdir(dir, { recursive: true });
+  try {
+    return await fn(dir);
+  } finally {
+    try {
+      await fs.promises.rm(dir, { recursive: true, force: true });
+    } catch {
+      // ignore
+    }
+  }
+};
+
+const loadSpreadsheetWorkbookFromBuffer = async ({ buffer, sourceExt, sourceName, selectedSheetNames = [] }) => {
+  const ext = trimText(sourceExt).toLowerCase();
+  if (ext === '.xlsx') {
+    return extractSpreadsheetWorkbookFromBuffer(buffer, { sourceName, selectedSheetNames });
+  }
+  if (ext !== '.xls') {
+    return {
+      sheet_manifest: [],
+      selected_sheet_names: [],
+      sheets: [],
+      text: '',
+    };
+  }
+
+  return withTempDir('parse-xls', async (tempDir) => {
+    const sourcePath = path.join(tempDir, buildStoredFilename(sourceName || 'sheet.xls', '.xls'));
+    await fs.promises.writeFile(sourcePath, buffer);
+    const convertedPath = await runLibreOfficeConvert(sourcePath, tempDir, 'xlsx');
+    const bytes = await fs.promises.readFile(convertedPath);
+    return extractSpreadsheetWorkbookFromBuffer(bytes, {
+      sourceName: sourceName || path.basename(sourcePath),
+      selectedSheetNames,
+    });
+  });
+};
+
+const loadSpreadsheetWorkbookFromStoredFile = async ({ sourcePath, sourceExt, sourceName, selectedSheetNames = [] }) => {
+  if (!trimText(sourcePath)) {
+    return {
+      sheet_manifest: [],
+      selected_sheet_names: [],
+      sheets: [],
+      text: '',
+    };
+  }
+  const bytes = await fs.promises.readFile(sourcePath);
+  return loadSpreadsheetWorkbookFromBuffer({
+    buffer: bytes,
+    sourceExt,
+    sourceName,
+    selectedSheetNames,
+  });
+};
+
+const buildParseFilePreviewSummary = (workbook) => {
+  const sheetManifest = Array.isArray(workbook?.sheet_manifest) ? workbook.sheet_manifest : [];
+  const selectedSheetNames = Array.isArray(workbook?.selected_sheet_names) ? workbook.selected_sheet_names : [];
+  const sheets = Array.isArray(workbook?.sheets) ? workbook.sheets : [];
+  const totalRows = sheets.reduce((sum, item) => sum + Number(item?.row_count || 0), 0);
+  return {
+    sheet_count: sheetManifest.length,
+    selected_sheet_count: selectedSheetNames.length,
+    selected_sheet_names: selectedSheetNames,
+    total_rows: totalRows,
+  };
+};
+
+const buildParseKeywordTokens = (value) => {
+  const tokens = new Set();
+  const text = String(value || '').toLowerCase();
+  const chineseParts = text.match(/[\u4e00-\u9fa5]{2,}/g) || [];
+  chineseParts.forEach((item) => tokens.add(item));
+  const wordParts = text.match(/[a-z0-9]{2,}/g) || [];
+  wordParts.forEach((item) => tokens.add(item));
+  return Array.from(tokens);
+};
+
+const scoreKeywordOverlap = (baseTokens = [], candidateTokens = []) => {
+  if (!baseTokens.length || !candidateTokens.length) return 0;
+  const candidateSet = new Set(candidateTokens);
+  let matched = 0;
+  for (const token of baseTokens) {
+    if (candidateSet.has(token)) matched += 1;
+  }
+  return matched / Math.max(baseTokens.length, 1);
+};
+
+const scopeMatchesTable = (scope, table) => {
+  if (scope === 'FULL') return true;
+  const keywords = parseScopeKeywordMap[scope] || [];
+  if (!keywords.length) return true;
+  const target = trimText([
+    table?.table_name,
+    table?.source_sheet_name,
+    table?.summary,
+    Array.isArray(table?.header) ? table.header.join(' ') : '',
+  ].join(' '));
+  return keywords.some((item) => target.includes(item));
+};
+
+const filterClausesByParseScope = (scope, clauses = []) => {
+  if (scope === 'FULL') return clauses;
+  const typeSet = parseScopeClauseTypeMap[scope];
+  const filtered = (Array.isArray(clauses) ? clauses : []).filter((item) => typeSet?.has(trimText(item?.clause_type).toUpperCase()));
+  return filtered.length ? filtered : clauses;
+};
+
+const filterTablesByParseScope = (scope, tables = []) => {
+  if (scope === 'FULL') return tables;
+  const filtered = (Array.isArray(tables) ? tables : []).filter((item) => scopeMatchesTable(scope, item));
+  return filtered.length ? filtered : tables;
+};
+
+const loadParseFilesByBidId = async (bidId, options = {}) => {
+  const includeDeleted = normalizeBoolean(options.includeDeleted, false);
+  const where = ['bid_id = ?'];
+  const params = [Number(bidId)];
+  if (!includeDeleted) {
+    where.push(`status <> 'DELETED'`);
+  }
+  const rows = await query(
+    `SELECT *
+     FROM tender_bid_parse_files
+     WHERE ${where.join(' AND ')}
+     ORDER BY COALESCE(root_file_id, id) ASC, source_depth ASC, id ASC`,
+    params
+  );
+  return rows.map((row) => sanitizeParseFileRow(row));
+};
+
+const loadLatestParseJobRow = async (bidId) => {
+  const row = await get(
+    `SELECT *
+     FROM tender_bid_parse_jobs
+     WHERE bid_id = ?
+     ORDER BY id DESC
+     LIMIT 1`,
+    [Number(bidId)]
+  );
+  return sanitizeParseJobRow(row);
+};
+
+const loadParseJobDetail = async (jobId, options = {}) => {
+  const parsedJobId = Number(jobId);
+  if (!Number.isFinite(parsedJobId) || parsedJobId <= 0) return null;
+  const where = ['id = ?'];
+  const params = [parsedJobId];
+  if (Number.isFinite(Number(options.bidId)) && Number(options.bidId) > 0) {
+    where.push('bid_id = ?');
+    params.push(Number(options.bidId));
+  }
+  const job = sanitizeParseJobRow(await get(
+    `SELECT *
+     FROM tender_bid_parse_jobs
+     WHERE ${where.join(' AND ')}
+     LIMIT 1`,
+    params
+  ));
+  if (!job) return null;
+
+  const [clauses, tables, matches] = await Promise.all([
+    query(
+      `SELECT *
+       FROM tender_bid_parse_clauses
+       WHERE parse_job_id = ?
+       ORDER BY sort_order ASC, id ASC`,
+      [parsedJobId]
+    ),
+    query(
+      `SELECT *
+       FROM tender_bid_parse_tables
+       WHERE parse_job_id = ?
+       ORDER BY sort_order ASC, id ASC`,
+      [parsedJobId]
+    ),
+    query(
+      `SELECT m.*, c.clause_title, c.clause_text, a.original_file_name AS asset_file_name
+       FROM tender_bid_parse_matches m
+       LEFT JOIN tender_bid_parse_clauses c ON c.id = m.clause_id
+       LEFT JOIN tender_assets a ON a.id = m.asset_id
+       WHERE m.parse_job_id = ?
+       ORDER BY m.clause_id ASC, m.id ASC`,
+      [parsedJobId]
+    ),
+  ]);
+
+  return {
+    job,
+    clauses: clauses.map((row) => sanitizeParseClauseRow(row)),
+    tables: tables.map((row) => sanitizeParseTableRow(row)),
+    matches: matches.map((row) => ({
+      ...sanitizeParseMatchRow(row),
+      clause_title: fixMojibakeText(row.clause_title),
+      clause_text: fixMojibakeText(row.clause_text),
+      asset_file_name: fixMojibakeText(row.asset_file_name),
+    })),
+  };
+};
+
+const loadBidParseWorkspace = async (bidId) => {
+  const files = await loadParseFilesByBidId(bidId);
+  const latestJob = await loadLatestParseJobRow(bidId);
+  const detail = latestJob ? await loadParseJobDetail(latestJob.id, { bidId }) : null;
+  return {
+    bid_id: Number(bidId),
+    files,
+    latest_job: detail?.job || null,
+    project_fields: {
+      values: detail?.job?.merged_fields || {},
+      sources: detail?.job?.field_sources || {},
+    },
+    clauses: detail?.clauses || [],
+    tables: detail?.tables || [],
+    matches: detail?.matches || [],
+    constants: {
+      file_roles: parseWorkspaceConstants.SUPPORTED_PARSE_FILE_ROLES,
+      parse_scopes: Object.entries(parseScopeTitleMap).map(([value, label]) => ({ value, label })),
+    },
+  };
+};
+
+const buildBidKbIngestSourceFile = (bidId) => `bid:${Number(bidId)}`;
+
+const normalizeKbDateTime = (value) => {
+  const normalized = normalizeDateTimeInput(value);
+  return normalized || null;
+};
+
+const loadLinkedKbProjectByBid = async (bid = {}) => {
+  const linkedId = Number(bid?.source_kb_project_id || 0);
+  if (linkedId > 0) {
+    const linked = sanitizeKbProjectRow(await get('SELECT * FROM kb_projects WHERE id = ? LIMIT 1', [linkedId]));
+    if (linked) return linked;
+  }
+  const fallback = sanitizeKbProjectRow(await get(
+    `SELECT *
+     FROM kb_projects
+     WHERE source_bid_id = ?
+     ORDER BY id DESC
+     LIMIT 1`,
+    [Number(bid?.id || 0)]
+  ));
+  return fallback;
+};
+
+const loadWinningStrategyInputs = async ({ limit = 40 } = {}) => {
+  const cappedLimit = Math.max(1, Math.min(80, Number(limit || 0) || 40));
+  const projectRows = (await query(
+    `SELECT *
+     FROM kb_projects
+     WHERE result_status = 'WON'
+     ORDER BY updated_at DESC, id DESC
+     LIMIT ?`,
+    [cappedLimit]
+  )).map((row) => sanitizeKbProjectRow(row));
+  const projectIds = projectRows.map((item) => Number(item.id)).filter((value) => Number.isFinite(value) && value > 0);
+  if (!projectIds.length) {
+    return {
+      kbProjects: [],
+      kbScoreItems: [],
+      kbSectionAssets: [],
+    };
+  }
+
+  const [kbScoreItems, kbSectionAssets] = await Promise.all([
+    query(
+      `SELECT *
+       FROM kb_score_items
+       WHERE kb_project_id IN (${projectIds.map(() => '?').join(',')})
+       ORDER BY full_score DESC, id DESC`,
+      projectIds
+    ),
+    query(
+      `SELECT *
+       FROM kb_section_assets
+       WHERE kb_project_id IN (${projectIds.map(() => '?').join(',')}) AND status = 'ACTIVE'
+       ORDER BY quality_score DESC, id DESC`,
+      projectIds
+    ),
+  ]);
+
+  return {
+    kbProjects: projectRows,
+    kbScoreItems,
+    kbSectionAssets,
+  };
+};
+
+const loadBidAssetOcrRows = async (bidId) => {
+  const rows = await query(
+    `SELECT a.*, r.ocr_text, r.fields_json
+     FROM tender_assets a
+     LEFT JOIN tender_asset_ocr_results r
+       ON r.id = (
+         SELECT rr.id
+         FROM tender_asset_ocr_results rr
+         WHERE rr.asset_id = a.id
+         ORDER BY rr.id DESC
+         LIMIT 1
+       )
+     WHERE a.bid_id = ?
+     ORDER BY a.id ASC`,
+    [Number(bidId)]
+  );
+  return rows.map((row) => ({
+    ...sanitizeAssetRow(row),
+    ocr_text: fixMojibakeText(row.ocr_text),
+    fields_json: parseMaybeJson(row.fields_json, {}),
+  }));
+};
+
+const buildKbClauseTags = (projectTags = [], clause = {}) => normalizeTagList([
+  ...projectTags,
+  trimText(clause?.clause_type) ? `clause-${trimText(clause.clause_type).toLowerCase()}` : '',
+  Number(clause?.scoring_flag || 0) > 0 ? 'clause-scoring' : '',
+  Number(clause?.mandatory_flag || 0) > 0 ? 'clause-mandatory' : '',
+  trimText(clause?.response_mode) ? `response-${trimText(clause.response_mode).toLowerCase()}` : '',
+]);
+
+const buildKbSectionTags = (projectTags = [], section = {}) => normalizeTagList([
+  ...projectTags,
+  trimText(section?.section_title) ? `section-${trimText(section.section_title)}` : 'section-paragraph',
+]);
+
+const loadKbProjectStats = async (kbProjectId) => {
+  const safeProjectId = Number(kbProjectId || 0);
+  if (!safeProjectId) {
+    return {
+      clause_count: 0,
+      score_item_count: 0,
+      section_asset_count: 0,
+      chunk_count: 0,
+      attachment_chunk_count: 0,
+    };
+  }
+  const [clauses, scoreItems, sections, chunks, attachmentChunks] = await Promise.all([
+    get('SELECT COUNT(1) AS count FROM kb_tender_clauses WHERE kb_project_id = ?', [safeProjectId]),
+    get('SELECT COUNT(1) AS count FROM kb_score_items WHERE kb_project_id = ?', [safeProjectId]),
+    get('SELECT COUNT(1) AS count FROM kb_section_assets WHERE kb_project_id = ?', [safeProjectId]),
+    get('SELECT COUNT(1) AS count FROM kb_asset_chunks WHERE kb_project_id = ?', [safeProjectId]),
+    get(
+      `SELECT COUNT(1) AS count
+       FROM kb_asset_chunks
+       WHERE kb_project_id = ? AND chunk_type = 'ATTACHMENT_OCR'`,
+      [safeProjectId]
+    ),
+  ]);
+  return {
+    clause_count: Number(clauses?.count || 0),
+    score_item_count: Number(scoreItems?.count || 0),
+    section_asset_count: Number(sections?.count || 0),
+    chunk_count: Number(chunks?.count || 0),
+    attachment_chunk_count: Number(attachmentChunks?.count || 0),
+  };
+};
+
+const loadBidKbWorkspace = async ({ bid, user }) => {
+  const safeBid = bid || await ensureBidExists(Number(user?.bidId || 0), { user });
+  const latestParseJob = await loadLatestParseJobRow(Number(safeBid.id));
+  const parseDetail = latestParseJob ? await loadParseJobDetail(latestParseJob.id, { bidId: Number(safeBid.id) }) : null;
+  const currentVersion = await getCurrentVersion(safeBid);
+  const sectionRows = currentVersion ? await loadDraftSectionRegistryRows({ bidId: Number(safeBid.id), versionId: Number(currentVersion.id) }) : [];
+  const attachmentRows = await loadBidAssetOcrRows(Number(safeBid.id));
+  const linkedProject = await loadLinkedKbProjectByBid(safeBid);
+  const ingestJobs = (await query(
+    `SELECT *
+     FROM kb_ingest_jobs
+     WHERE job_type = 'BID_PROJECT_INGEST' AND source_file = ?
+     ORDER BY id DESC
+     LIMIT 10`,
+    [buildBidKbIngestSourceFile(safeBid.id)]
+  )).map((row) => sanitizeKbIngestJobRow(row));
+
+  const derivedDefaults = buildKbProjectRecord({
+    bid: safeBid,
+    latestParseJob,
+    overrides: {},
+    user: user || {},
+  });
+  const defaultTags = Array.isArray(derivedDefaults.tags) ? derivedDefaults.tags : [];
+  const projectRecordForEstimate = {
+    id: Number(linkedProject?.id || safeBid.id),
+    project_name: trimText(linkedProject?.project_name || derivedDefaults.project_name),
+    purchaser: trimText(linkedProject?.purchaser || derivedDefaults.purchaser),
+    project_type: trimText(linkedProject?.project_type || derivedDefaults.project_type),
+    industry_type: trimText(linkedProject?.industry_type || derivedDefaults.industry_type),
+    remarks: trimText(linkedProject?.remarks || derivedDefaults.remarks),
+    tags: Array.isArray(parseMaybeJson(linkedProject?.tags_json, null))
+      ? parseMaybeJson(linkedProject?.tags_json, [])
+      : defaultTags,
+  };
+  const estimatedChunks = buildKbAssetChunks({
+    kbProjectId: Number(linkedProject?.id || safeBid.id),
+    project: projectRecordForEstimate,
+    clauses: parseDetail?.clauses || [],
+    sections: sectionRows.map((row) => ({
+      id: Number(row.id),
+      section_title: row.section_title,
+      paragraph_text: row.paragraph_text,
+    })),
+    tables: parseDetail?.tables || [],
+    attachments: attachmentRows,
+  });
+  const projectStats = await loadKbProjectStats(linkedProject?.id);
+
+  return {
+    bid: safeBid,
+    linked_project: linkedProject,
+    latest_parse_job: parseDetail?.job || null,
+    ingest_jobs: ingestJobs,
+    defaults: {
+      project_name: trimText(linkedProject?.project_name || derivedDefaults.project_name),
+      project_no: trimText(linkedProject?.project_no || derivedDefaults.project_no),
+      purchaser: trimText(linkedProject?.purchaser || derivedDefaults.purchaser),
+      project_type: trimText(linkedProject?.project_type || derivedDefaults.project_type),
+      industry_type: trimText(linkedProject?.industry_type || derivedDefaults.industry_type),
+      region: trimText(linkedProject?.region || derivedDefaults.region),
+      result_status: trimText(linkedProject?.result_status || derivedDefaults.result_status || 'IN_PROGRESS'),
+      bid_amount: linkedProject?.bid_amount ?? derivedDefaults.bid_amount ?? '',
+      tags: Array.isArray(parseMaybeJson(linkedProject?.tags_json, null))
+        ? parseMaybeJson(linkedProject?.tags_json, [])
+        : defaultTags,
+      remarks: trimText(linkedProject?.remarks || derivedDefaults.remarks),
+    },
+    stats: {
+      ingestable_clauses: Number(parseDetail?.clauses?.length || 0),
+      ingestable_score_items: Number(buildKbScoreItemRows({
+        kbProjectId: Number(linkedProject?.id || safeBid.id),
+        clauses: parseDetail?.clauses || [],
+      }).length),
+      ingestable_sections: Number(sectionRows.length || 0),
+      ingestable_tables: Number(parseDetail?.tables?.length || 0),
+      ingestable_attachments: Number(attachmentRows.length || 0),
+      estimated_chunk_count: Number(estimatedChunks.length || 0),
+      ...projectStats,
+    },
+  };
+};
+
+const buildKbProjectNoFallback = ({ projectNo, bid }) => {
+  const base = trimText(projectNo);
+  const bidNo = trimText(bid?.bid_no) || (Number.isFinite(Number(bid?.id)) && Number(bid.id) > 0 ? `BID-${Number(bid.id)}` : '');
+  if (!base) return bidNo ? bidNo.slice(0, 128) : null;
+  if (!bidNo) return base.slice(0, 128);
+  const next = base.includes(bidNo) ? base : `${base}-${bidNo}`;
+  return next.slice(0, 128);
+};
+
+const resolveKbProjectNoForIngest = async ({ tx, projectNo, bid, currentProjectId = 0 }) => {
+  const desiredProjectNo = trimText(projectNo) || trimText(bid?.bid_no) || '';
+  if (!desiredProjectNo) return null;
+
+  const existing = await tx.get(
+    `SELECT id, source_bid_id
+     FROM kb_projects
+     WHERE project_no = ?
+     LIMIT 1`,
+    [desiredProjectNo]
+  );
+  if (!existing || Number(existing.id) === Number(currentProjectId || 0) || Number(existing.source_bid_id || 0) === Number(bid?.id || 0)) {
+    return desiredProjectNo.slice(0, 128);
+  }
+
+  const fallback = buildKbProjectNoFallback({ projectNo: desiredProjectNo, bid });
+  if (fallback) {
+    const fallbackExisting = await tx.get(
+      `SELECT id, source_bid_id
+       FROM kb_projects
+       WHERE project_no = ?
+       LIMIT 1`,
+      [fallback]
+    );
+    if (!fallbackExisting || Number(fallbackExisting.id) === Number(currentProjectId || 0) || Number(fallbackExisting.source_bid_id || 0) === Number(bid?.id || 0)) {
+      return fallback;
+    }
+  }
+
+  return `${String(fallback || desiredProjectNo).slice(0, 108)}-ID${Number(bid?.id || 0)}`.slice(0, 128);
+};
+
+const runBidKbIngest = async ({
+  bid,
+  user,
+  overrides = {},
+}) => {
+  const latestParseJob = await loadLatestParseJobRow(Number(bid.id));
+  if (!latestParseJob || Number(latestParseJob?.id || 0) <= 0) {
+    throw tenderStageError({
+      message: '请先完成项目解析后再执行知识库沉淀',
+      statusCode: 409,
+      code: 'TENDER_KB_INGEST_PARSE_REQUIRED',
+      category: 'BUSINESS',
+      manualTakeover: buildManualTakeover('先在项目解析工作台完成解析，再执行知识库沉淀', 'kb_ingest'),
+    });
+  }
+
+  const parseDetail = await loadParseJobDetail(latestParseJob.id, { bidId: Number(bid.id) });
+  if (!parseDetail || (!parseDetail.clauses.length && !parseDetail.tables.length)) {
+    throw tenderStageError({
+      message: '当前项目缺少可沉淀的解析结果',
+      statusCode: 409,
+      code: 'TENDER_KB_INGEST_EMPTY_PARSE_RESULT',
+      category: 'BUSINESS',
+      manualTakeover: buildManualTakeover('请确认解析结果包含条款或表格后再入库', 'kb_ingest'),
+    });
+  }
+
+  const currentVersion = await getCurrentVersion(bid);
+  const sectionRows = currentVersion
+    ? await loadDraftSectionRegistryRows({ bidId: Number(bid.id), versionId: Number(currentVersion.id) })
+    : [];
+  const attachmentRows = await loadBidAssetOcrRows(Number(bid.id));
+  const parseFiles = await loadParseFilesByBidId(Number(bid.id), { includeDeleted: false });
+  const parseFileMap = new Map(parseFiles.map((item) => [Number(item.id), item]));
+  const ingestInput = {
+    source_bid_id: Number(bid.id),
+    parse_job_id: Number(latestParseJob.id),
+    version_id: Number(currentVersion?.id || 0) || null,
+    overrides: isPlainObject(overrides) ? overrides : {},
+  };
+  const ingestSource = buildBidKbIngestSourceFile(bid.id);
+  const sourceHash = crypto.createHash('sha256').update(stableStringify(ingestInput)).digest('hex');
+  const jobInsert = await run(
+    `INSERT INTO kb_ingest_jobs
+      (job_type, source_file, source_hash, status, input_payload, operator_id, operator_name)
+     VALUES ('BID_PROJECT_INGEST', ?, ?, 'RUNNING', ?, ?, ?)`,
+    [
+      ingestSource,
+      sourceHash,
+      JSON.stringify(ingestInput),
+      Number(user?.id || 0) || null,
+      trimText(user?.username) || null,
+    ]
+  );
+  const jobId = Number(jobInsert.insertId);
+
+  try {
+    const result = await transaction(async (tx) => {
+      const existingProject = sanitizeKbProjectRow(await tx.get(
+        `SELECT *
+         FROM kb_projects
+         WHERE source_bid_id = ?
+         ORDER BY id DESC
+         LIMIT 1`,
+        [Number(bid.id)]
+      ));
+      const projectRecord = buildKbProjectRecord({
+        bid,
+        latestParseJob,
+        overrides,
+        user,
+      });
+      projectRecord.publish_date = normalizeKbDateTime(projectRecord.publish_date);
+      projectRecord.bid_deadline = normalizeKbDateTime(projectRecord.bid_deadline);
+
+      let kbProjectId = Number(existingProject?.id || 0);
+      projectRecord.project_no = await resolveKbProjectNoForIngest({
+        tx,
+        projectNo: projectRecord.project_no,
+        bid,
+        currentProjectId: kbProjectId,
+      });
+      if (kbProjectId > 0) {
+        await tx.run(
+          `UPDATE kb_projects
+           SET project_name = ?, project_no = ?, purchaser = ?, industry_type = ?, project_type = ?, region = ?,
+               publish_date = ?, bid_deadline = ?, result_status = ?, bid_amount = ?, source_bid_id = ?, tags_json = ?,
+               remarks = ?, updated_by_id = ?, updated_by_name = ?, updated_at = NOW()
+           WHERE id = ?`,
+          [
+            projectRecord.project_name,
+            projectRecord.project_no || null,
+            projectRecord.purchaser || null,
+            projectRecord.industry_type || null,
+            projectRecord.project_type || null,
+            projectRecord.region || null,
+            projectRecord.publish_date,
+            projectRecord.bid_deadline,
+            projectRecord.result_status || 'IN_PROGRESS',
+            projectRecord.bid_amount,
+            projectRecord.source_bid_id,
+            JSON.stringify(projectRecord.tags || []),
+            projectRecord.remarks || null,
+            Number(user?.id || 0) || null,
+            trimText(user?.username) || null,
+            kbProjectId,
+          ]
+        );
+      } else {
+        const inserted = await tx.run(
+          `INSERT INTO kb_projects
+            (project_name, project_no, purchaser, industry_type, project_type, region, publish_date, bid_deadline,
+             result_status, bid_amount, source_bid_id, tags_json, remarks, created_by_id, created_by_name, updated_by_id, updated_by_name)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [
+            projectRecord.project_name,
+            projectRecord.project_no || null,
+            projectRecord.purchaser || null,
+            projectRecord.industry_type || null,
+            projectRecord.project_type || null,
+            projectRecord.region || null,
+            projectRecord.publish_date,
+            projectRecord.bid_deadline,
+            projectRecord.result_status || 'IN_PROGRESS',
+            projectRecord.bid_amount,
+            projectRecord.source_bid_id,
+            JSON.stringify(projectRecord.tags || []),
+            projectRecord.remarks || null,
+            Number(user?.id || 0) || null,
+            trimText(user?.username) || null,
+            Number(user?.id || 0) || null,
+            trimText(user?.username) || null,
+          ]
+        );
+        kbProjectId = Number(inserted.insertId);
+      }
+
+      await tx.run('DELETE FROM kb_asset_chunks WHERE kb_project_id = ?', [kbProjectId]);
+      await tx.run('DELETE FROM kb_section_assets WHERE kb_project_id = ?', [kbProjectId]);
+      await tx.run('DELETE FROM kb_score_items WHERE kb_project_id = ?', [kbProjectId]);
+      await tx.run('DELETE FROM kb_tender_clauses WHERE kb_project_id = ?', [kbProjectId]);
+
+      const projectTags = Array.isArray(projectRecord.tags) ? projectRecord.tags : [];
+      const runtimeClauseIdToKbId = new Map();
+      for (const clause of parseDetail.clauses || []) {
+        const sourceFile = parseFileMap.get(Number(clause.source_file_id || 0));
+        const inserted = await tx.run(
+          `INSERT INTO kb_tender_clauses
+            (kb_project_id, clause_no, chapter_name, source_text, clause_type, is_mandatory, is_scoring_item, score_value,
+             response_mode, risk_level, source_page, source_position, source_file_path, tags_json)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [
+            kbProjectId,
+            trimText(clause.clause_code) || null,
+            trimText(clause.clause_title) || null,
+            trimText(clause.clause_text),
+            trimText(clause.clause_type) || null,
+            Number(clause.mandatory_flag || 0) > 0 ? 1 : 0,
+            Number(clause.scoring_flag || 0) > 0 ? 1 : 0,
+            Number.isFinite(Number(clause.score_value)) ? Number(clause.score_value) : null,
+            trimText(clause.response_mode) || null,
+            Number(clause.mandatory_flag || 0) > 0 ? 'HIGH' : (Number(clause.scoring_flag || 0) > 0 ? 'MEDIUM' : 'LOW'),
+            null,
+            trimText(clause?.metadata?.relative_path || sourceFile?.relative_path || sourceFile?.display_name) || null,
+            trimText(sourceFile?.storage_path) || null,
+            JSON.stringify(buildKbClauseTags(projectTags, clause)),
+          ]
+        );
+        runtimeClauseIdToKbId.set(Number(clause.id), Number(inserted.insertId));
+      }
+
+      const scoreRows = buildKbScoreItemRows({
+        kbProjectId,
+        clauses: parseDetail.clauses || [],
+      });
+      for (const item of scoreRows) {
+        await tx.run(
+          `INSERT INTO kb_score_items
+            (kb_project_id, item_name, full_score, scoring_rule, recommended_response_points, priority_level, source_clause_id)
+           VALUES (?, ?, ?, ?, ?, ?, ?)`,
+          [
+            kbProjectId,
+            trimText(item.item_name),
+            Number(item.full_score || 0),
+            trimText(item.scoring_rule) || null,
+            JSON.stringify(Array.isArray(item.recommended_response_points) ? item.recommended_response_points : []),
+            trimText(item.priority_level) || null,
+            runtimeClauseIdToKbId.get(Number(item.source_clause_id || 0)) || null,
+          ]
+        );
+      }
+
+      const sectionIdMap = new Map();
+      for (const section of sectionRows) {
+        const tags = buildKbSectionTags(projectTags, section);
+        const inserted = await tx.run(
+          `INSERT INTO kb_section_assets
+            (kb_project_id, section_name, sub_section_name, content, quality_score, reusable_flag, applicable_scene,
+             industry_type, project_type, tags_json, source_file_path, source_clause_id, source_score_item_id, status)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, 'ACTIVE')`,
+          [
+            kbProjectId,
+            trimText(section.section_title) || '正文',
+            trimText(section.template_slot) || null,
+            trimText(section.paragraph_text),
+            0.9,
+            1,
+            trimText(section.section_title) || null,
+            projectRecord.industry_type || null,
+            projectRecord.project_type || null,
+            JSON.stringify(tags),
+            trimText(currentVersion?.storage_path) || null,
+          ]
+        );
+        const kbSectionAssetId = Number(inserted.insertId);
+        sectionIdMap.set(Number(section.id), kbSectionAssetId);
+        await tx.run(
+          `UPDATE tender_draft_section_registry
+           SET source_kb_section_asset_id = ?
+           WHERE id = ?`,
+          [kbSectionAssetId, Number(section.id)]
+        );
+      }
+
+      const chunkRows = buildKbAssetChunks({
+        kbProjectId,
+        project: {
+          id: kbProjectId,
+          project_name: projectRecord.project_name,
+          purchaser: projectRecord.purchaser,
+          project_type: projectRecord.project_type,
+          industry_type: projectRecord.industry_type,
+          remarks: projectRecord.remarks,
+          tags: projectRecord.tags,
+        },
+        clauses: (parseDetail.clauses || []).map((clause) => ({
+          ...clause,
+          id: runtimeClauseIdToKbId.get(Number(clause.id || 0)) || clause.id,
+        })),
+        sections: sectionRows.map((section) => ({
+          id: sectionIdMap.get(Number(section.id)) || section.id,
+          section_title: section.section_title,
+          paragraph_text: section.paragraph_text,
+        })),
+        tables: parseDetail.tables || [],
+        attachments: attachmentRows,
+      });
+
+      for (const chunk of chunkRows) {
+        await tx.run(
+          `INSERT INTO kb_asset_chunks
+            (asset_type, source_table, source_id, kb_project_id, section_name, sub_section_name, chunk_type,
+             chunk_text, tags_json, embedding_status, embedding_model, embedding_vector_ref, quality_score, reusable_flag)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'PENDING', NULL, NULL, ?, ?)`,
+          [
+            trimText(chunk.asset_type) || 'GENERIC_ASSET',
+            trimText(chunk.source_table),
+            Number(chunk.source_id || 0) || 0,
+            kbProjectId,
+            trimText(chunk.section_name) || null,
+            trimText(chunk.sub_section_name) || null,
+            trimText(chunk.chunk_type) || 'PROJECT_SUMMARY',
+            trimText(chunk.chunk_text),
+            JSON.stringify(Array.isArray(chunk.tags) ? chunk.tags : []),
+            Number(chunk.quality_score || 0) || 0,
+            Number(chunk.reusable_flag || 0) > 0 ? 1 : 0,
+          ]
+        );
+      }
+
+      await tx.run(
+        `UPDATE tender_bids
+         SET source_kb_project_id = ?, updated_by_id = ?, updated_by_name = ?, updated_at = NOW()
+         WHERE id = ?`,
+        [kbProjectId, Number(user?.id || 0) || null, trimText(user?.username) || null, Number(bid.id)]
+      );
+
+      return {
+        kb_project_id: kbProjectId,
+        summary: {
+          kb_project_id: kbProjectId,
+          clause_count: Number(parseDetail.clauses?.length || 0),
+          score_item_count: Number(scoreRows.length || 0),
+          section_asset_count: Number(sectionRows.length || 0),
+          chunk_count: Number(chunkRows.length || 0),
+          attachment_count: Number(attachmentRows.length || 0),
+        },
+      };
+    });
+
+    await run(
+      `UPDATE kb_ingest_jobs
+       SET status = 'SUCCESS', output_summary = ?, updated_at = NOW()
+       WHERE id = ?`,
+      [JSON.stringify(result.summary || {}), jobId]
+    );
+
+    return {
+      job_id: jobId,
+      kb_project_id: result.kb_project_id,
+      summary: result.summary || {},
+    };
+  } catch (err) {
+    await run(
+      `UPDATE kb_ingest_jobs
+       SET status = 'FAILED', error_message = ?, updated_at = NOW()
+       WHERE id = ?`,
+      [trimText(err?.message || '知识库沉淀失败').slice(0, 1000), jobId]
+    );
+    throw err;
+  }
+};
+
+const uniqueTextList = (values = []) => {
+  const result = [];
+  const seen = new Set();
+  for (const item of Array.isArray(values) ? values : []) {
+    const text = trimText(item);
+    if (!text || seen.has(text)) continue;
+    seen.add(text);
+    result.push(text);
+  }
+  return result;
+};
+
+const buildEvaluationDatasetCode = () => `EVAL-DS-${Date.now()}-${crypto.randomUUID().slice(0, 8).toUpperCase()}`;
+
+const buildEvaluationRunNo = () => `EVAL-RUN-${Date.now()}-${crypto.randomUUID().slice(0, 8).toUpperCase()}`;
+
+const normalizeEvaluationExpectedPayload = (evalType, payload = {}) => {
+  const safe = payload && typeof payload === 'object' && !Array.isArray(payload) ? payload : {};
+  if (evalType === 'CLAUSE_RECOGNITION') {
+    return {
+      clause_count: Math.max(0, Number(safe.clause_count || 0)),
+      mandatory_count: Math.max(0, Number(safe.mandatory_count || 0)),
+      scoring_count: Math.max(0, Number(safe.scoring_count || 0)),
+      clause_types: uniqueTextList(safe.clause_types),
+    };
+  }
+  if (evalType === 'SCORE_COVERAGE') {
+    return {
+      score_item_names: uniqueTextList(safe.score_item_names),
+      recommended_points: uniqueTextList(safe.recommended_points),
+    };
+  }
+  if (evalType === 'MATERIAL_MATCHING') {
+    return {
+      required_asset_ids: uniqueTextList(safe.required_asset_ids),
+    };
+  }
+  if (evalType === 'RISK_RECALL') {
+    return {
+      risk_codes: uniqueTextList(safe.risk_codes),
+      high_risk_codes: uniqueTextList(safe.high_risk_codes),
+    };
+  }
+  if (evalType === 'EXPORT_COMPLETENESS') {
+    return {
+      required_deliverables: uniqueTextList(safe.required_deliverables),
+    };
+  }
+  return {};
+};
+
+const buildVisibleEvaluationDatasetWhere = (user, filters = {}) => {
+  const where = [];
+  const params = [];
+
+  if (trimText(filters.evalType)) {
+    where.push('d.eval_type = ?');
+    params.push(normalizeEvaluationType(filters.evalType));
+  }
+  if (filters.baselineFlag !== undefined && filters.baselineFlag !== null && filters.baselineFlag !== '') {
+    where.push('d.baseline_flag = ?');
+    params.push(Number(filters.baselineFlag) ? 1 : 0);
+  }
+  if (trimText(filters.status)) {
+    where.push('d.status = ?');
+    params.push(trimText(filters.status).toUpperCase());
+  }
+  if (Array.isArray(filters.datasetIds) && filters.datasetIds.length) {
+    const ids = Array.from(new Set(filters.datasetIds.map((item) => Number(item)).filter((item) => Number.isFinite(item) && item > 0)));
+    if (!ids.length) {
+      where.push('1 = 0');
+    } else {
+      where.push(`d.id IN (${ids.map(() => '?').join(',')})`);
+      params.push(...ids);
+    }
+  }
+  appendScopedWhere(where, params, buildBidScopeWhere(user, {
+    idColumn: 'b.id',
+    creatorColumn: 'b.created_by_id',
+  }));
+  return {
+    whereSql: where.length ? `WHERE ${where.join(' AND ')}` : '',
+    params,
+  };
+};
+
+const listVisibleEvaluationDatasets = async ({ user, filters = {}, limit = 200 } = {}) => {
+  const { whereSql, params } = buildVisibleEvaluationDatasetWhere(user, filters);
+  const take = Math.min(2000, Math.max(1, Number(limit || 200)));
+  const rows = await query(
+    `SELECT d.*, b.title AS bid_title, b.project_name AS bid_project_name, b.status AS bid_status
+     FROM tender_eval_datasets d
+     JOIN tender_bids b ON b.id = d.source_bid_id
+     ${whereSql}
+     ORDER BY d.id DESC
+     LIMIT ?`,
+    [...params, take]
+  );
+  return rows.map((row) => ({
+    ...sanitizeEvaluationDatasetRow(row),
+    bid_title: fixMojibakeText(row.bid_title),
+    bid_project_name: fixMojibakeText(row.bid_project_name),
+    bid_status: trimText(row.bid_status).toUpperCase(),
+  }));
+};
+
+const buildVisibleEvaluationScope = (user) => buildBidScopeWhere(user, {
+  idColumn: 'b.id',
+  creatorColumn: 'b.created_by_id',
+});
+
+const listVisibleEvaluationRuns = async ({ user, limit = 100 } = {}) => {
+  const scoped = buildVisibleEvaluationScope(user);
+  const take = Math.min(2000, Math.max(1, Number(limit || 100)));
+  const rows = await query(
+    `SELECT DISTINCT r.*
+     FROM tender_eval_runs r
+     JOIN tender_eval_run_items i ON i.run_id = r.id
+     JOIN tender_eval_datasets d ON d.id = i.dataset_id
+     JOIN tender_bids b ON b.id = d.source_bid_id
+     ${scoped.sql ? `WHERE ${scoped.sql}` : ''}
+     ORDER BY r.id DESC
+     LIMIT ?`,
+    [...scoped.params, take]
+  );
+  return rows.map((row) => sanitizeEvaluationRunRow(row));
+};
+
+const loadVisibleEvaluationRunDetail = async ({ user, runId }) => {
+  const scoped = buildVisibleEvaluationScope(user);
+  const run = sanitizeEvaluationRunRow(await get(
+    `SELECT DISTINCT r.*
+     FROM tender_eval_runs r
+     JOIN tender_eval_run_items i ON i.run_id = r.id
+     JOIN tender_eval_datasets d ON d.id = i.dataset_id
+     JOIN tender_bids b ON b.id = d.source_bid_id
+     WHERE r.id = ?
+       ${scoped.sql ? `AND (${scoped.sql})` : ''}
+     LIMIT 1`,
+    [Number(runId), ...scoped.params]
+  ));
+  if (!run) return null;
+
+  const itemRows = await query(
+    `SELECT i.*, d.dataset_code, d.dataset_name
+     FROM tender_eval_run_items i
+     JOIN tender_eval_datasets d ON d.id = i.dataset_id
+     JOIN tender_bids b ON b.id = d.source_bid_id
+     WHERE i.run_id = ?
+       ${scoped.sql ? `AND (${scoped.sql})` : ''}
+     ORDER BY i.id ASC`,
+    [Number(runId), ...scoped.params]
+  );
+
+  return {
+    run,
+    items: itemRows.map((row) => sanitizeEvaluationRunItemRow(row)),
+  };
+};
+
+const buildEvaluationFactBundle = async ({ bid }) => {
+  const latestParseJob = await loadLatestParseJobRow(Number(bid.id));
+  const parseDetail = latestParseJob ? await loadParseJobDetail(latestParseJob.id, { bidId: Number(bid.id) }) : null;
+  const currentVersion = await getCurrentVersion(bid);
+  const sectionRows = currentVersion
+    ? await loadDraftSectionRegistryRows({ bidId: Number(bid.id), versionId: Number(currentVersion.id) })
+    : [];
+  const artifactRows = currentVersion
+    ? (await loadDraftArtifactRows({ bidId: Number(bid.id), versionId: Number(currentVersion.id) })).map((row) => sanitizeDraftArtifactRow(row))
+    : [];
+  const scoreCoverageRows = currentVersion
+    ? (await loadScoreCoverageRows({ bidId: Number(bid.id), versionId: Number(currentVersion.id) })).map((row) => sanitizeScoreCoverageRow(row))
+    : [];
+  const latestCheck = await loadLatestDraftCheckRun({ bidId: Number(bid.id) });
+  const exportRecords = await loadExportRecordsByBidIds({ bidIds: [Number(bid.id)], limit: 10 });
+  return {
+    bid,
+    parseDetail: parseDetail || { job: null, clauses: [], tables: [], matches: [] },
+    currentVersion,
+    sectionRows: Array.isArray(sectionRows) ? sectionRows : [],
+    artifactRows,
+    scoreCoverageRows,
+    latestCheck,
+    latestExportRecord: exportRecords[0] || null,
+  };
+};
+
+const buildScoreCoveragePayloadFromFacts = (facts = {}) => {
+  const derivedScoreItems = buildKbScoreItemRows({
+    kbProjectId: Number(facts?.bid?.id || 0) || 0,
+    clauses: facts?.parseDetail?.clauses || [],
+  });
+  const rowTitles = (Array.isArray(facts?.scoreCoverageRows) ? facts.scoreCoverageRows : [])
+    .map((item) => trimText(item?.title))
+    .filter(Boolean);
+  return {
+    score_item_names: uniqueTextList([...rowTitles, ...derivedScoreItems.map((item) => trimText(item?.item_name))]),
+    recommended_points: uniqueTextList(
+      derivedScoreItems.flatMap((item) => Array.isArray(item?.recommended_response_points) ? item.recommended_response_points : [])
+    ),
+  };
+};
+
+const buildMaterialMatchingPayloadFromFacts = (facts = {}) => {
+  const matches = Array.isArray(facts?.parseDetail?.matches) ? facts.parseDetail.matches : [];
+  return {
+    matched_asset_ids: uniqueTextList(matches.map((item) => {
+      const assetId = Number(item?.asset_id || 0);
+      return assetId > 0 ? `A-${assetId}` : '';
+    })),
+    need_manual_review_count: matches.filter((item) => {
+      const payload = item?.payload && typeof item.payload === 'object' ? item.payload : {};
+      return !!payload.need_manual_review;
+    }).length,
+    total_match_count: matches.length,
+  };
+};
+
+const buildRiskRecallPayloadFromFacts = (facts = {}) => {
+  const issues = Array.isArray(facts?.latestCheck?.issues) ? facts.latestCheck.issues : [];
+  return {
+    risk_codes: uniqueTextList(issues.map((item) => trimText(item?.issue_type))),
+    high_risk_codes: uniqueTextList(
+      issues
+        .filter((item) => ['FATAL', 'HIGH', 'ERROR'].includes(trimText(item?.severity).toUpperCase()))
+        .map((item) => trimText(item?.issue_type))
+    ),
+  };
+};
+
+const buildExportCompletenessPayloadFromFacts = (facts = {}) => {
+  const sectionDeliverables = (Array.isArray(facts?.sectionRows) ? facts.sectionRows : [])
+    .map((item) => trimText(item?.section_title))
+    .filter(Boolean);
+  const artifactDeliverables = (Array.isArray(facts?.artifactRows) ? facts.artifactRows : [])
+    .map((item) => {
+      const group = trimText(item?.artifact_group);
+      const type = trimText(item?.artifact_type);
+      if (!group && !type) return '';
+      return [group, type].filter(Boolean).join('_');
+    })
+    .filter(Boolean);
+  return {
+    deliverables: uniqueTextList([...sectionDeliverables, ...artifactDeliverables]),
+    latest_export_status: trimText(facts?.latestExportRecord?.status).toUpperCase(),
+  };
+};
+
+const buildEvaluationActualPayload = ({ evalType, facts }) => {
+  const clauses = Array.isArray(facts?.parseDetail?.clauses) ? facts.parseDetail.clauses : [];
+  if (evalType === 'CLAUSE_RECOGNITION') {
+    return {
+      clause_count: clauses.length,
+      mandatory_count: clauses.filter((item) => Number(item?.mandatory_flag || 0) > 0).length,
+      scoring_count: clauses.filter((item) => Number(item?.scoring_flag || 0) > 0).length,
+      clause_types: uniqueTextList(clauses.map((item) => trimText(item?.clause_type))),
+    };
+  }
+  if (evalType === 'SCORE_COVERAGE') return buildScoreCoveragePayloadFromFacts(facts);
+  if (evalType === 'MATERIAL_MATCHING') return buildMaterialMatchingPayloadFromFacts(facts);
+  if (evalType === 'RISK_RECALL') return buildRiskRecallPayloadFromFacts(facts);
+  if (evalType === 'EXPORT_COMPLETENESS') return buildExportCompletenessPayloadFromFacts(facts);
+  return {};
+};
+
+const buildEvaluationExpectedPayloadFromFacts = ({ evalType, facts }) => {
+  if (evalType === 'MATERIAL_MATCHING') {
+    const current = buildMaterialMatchingPayloadFromFacts(facts);
+    return normalizeEvaluationExpectedPayload(evalType, {
+      required_asset_ids: current.matched_asset_ids,
+    });
+  }
+  if (evalType === 'EXPORT_COMPLETENESS') {
+    const current = buildExportCompletenessPayloadFromFacts(facts);
+    return normalizeEvaluationExpectedPayload(evalType, {
+      required_deliverables: current.deliverables,
+    });
+  }
+  return normalizeEvaluationExpectedPayload(evalType, buildEvaluationActualPayload({ evalType, facts }));
+};
+
+const determineEvaluationRunStatus = (summary = {}) => {
+  if (Number(summary?.fail_count || 0) > 0) return 'FAILED';
+  if (Number(summary?.warning_count || 0) > 0) return 'WARNING';
+  return 'SUCCESS';
+};
+
+const loadLatestBaselineRun = async () => sanitizeEvaluationRunRow(await get(
+  `SELECT *
+   FROM tender_eval_runs
+   WHERE run_scope = 'BASELINE'
+   ORDER BY id DESC
+   LIMIT 1`
+));
+
+const evaluationTypeToSummaryKey = (evalType) => {
+  const normalized = normalizeEvaluationType(evalType);
+  if (normalized === 'CLAUSE_RECOGNITION') return 'clause_recognition';
+  if (normalized === 'SCORE_COVERAGE') return 'score_coverage';
+  if (normalized === 'MATERIAL_MATCHING') return 'material_matching';
+  if (normalized === 'RISK_RECALL') return 'risk_recall';
+  if (normalized === 'EXPORT_COMPLETENESS') return 'export_completeness';
+  return '';
+};
+
+const ensureParseFileExists = async ({ bidId, fileId }) => {
+  const row = await get(
+    `SELECT *
+     FROM tender_bid_parse_files
+     WHERE id = ? AND bid_id = ?
+     LIMIT 1`,
+    [Number(fileId), Number(bidId)]
+  );
+  const file = sanitizeParseFileRow(row);
+  if (!file || file.status === 'DELETED') {
+    throw tenderStageError({
+      message: '解析文件不存在',
+      statusCode: 404,
+      code: 'TENDER_PARSE_FILE_NOT_FOUND',
+      category: 'BUSINESS',
+      manualTakeover: buildManualTakeover('请刷新页面后确认文件仍存在', 'parse_file'),
+    });
+  }
+  return file;
+};
+
+const ensureParseJobExists = async ({ bidId, jobId }) => {
+  const detail = await loadParseJobDetail(jobId, { bidId });
+  if (!detail) {
+    throw tenderStageError({
+      message: '解析任务不存在',
+      statusCode: 404,
+      code: 'TENDER_PARSE_JOB_NOT_FOUND',
+      category: 'BUSINESS',
+      manualTakeover: buildManualTakeover('请刷新页面后重试', 'parse_job'),
+    });
+  }
+  return detail;
+};
+
+const refreshBidStatusAfterParseUpload = async ({ bidId, user }) => {
+  const bid = await get('SELECT id, status FROM tender_bids WHERE id = ? LIMIT 1', [Number(bidId)]);
+  const currentStatus = normalizeStatus(bid?.status);
+  if (currentStatus !== 'DRAFT') return;
+  await run(
+    `UPDATE tender_bids
+     SET status = 'FILES_UPLOADED', updated_by_id = ?, updated_by_name = ?, updated_at = NOW()
+     WHERE id = ?`,
+    [Number(user?.id || 0) || null, trimText(user?.username) || null, Number(bidId)]
+  );
+};
+
+const refreshBidStatusAfterParseCompleted = async ({ bidId, user }) => {
+  const bid = await get('SELECT id, status FROM tender_bids WHERE id = ? LIMIT 1', [Number(bidId)]);
+  const currentStatus = normalizeStatus(bid?.status);
+  if (!currentStatus) return;
+  const allowed = statusTransitions[currentStatus] || new Set();
+  if (currentStatus === 'PARSE_COMPLETED' || !allowed.has('PARSE_COMPLETED')) return;
+  await run(
+    `UPDATE tender_bids
+     SET status = 'PARSE_COMPLETED', updated_by_id = ?, updated_by_name = ?, updated_at = NOW()
+     WHERE id = ?`,
+    [Number(user?.id || 0) || null, trimText(user?.username) || null, Number(bidId)]
+  );
+};
+
+const collectParseSourcePayload = async (file) => {
+  const sourceExt = trimText(file?.source_ext).toLowerCase();
+  const sourcePath = trimText(file?.storage_path);
+  const displayName = trimText(file?.display_name || file?.original_file_name);
+  if (!sourcePath) {
+    return {
+      text: '',
+      tables: [],
+      fields: {},
+      workbook: null,
+      parse_summary: {},
+    };
+  }
+
+  if (['.xlsx', '.xls'].includes(sourceExt)) {
+    const workbook = await loadSpreadsheetWorkbookFromStoredFile({
+      sourcePath,
+      sourceExt,
+      sourceName: displayName,
+      selectedSheetNames: file?.selected_sheet_names || [],
+    });
+    const tables = buildSpreadsheetTables(workbook);
+    const text = trimText(workbook.text);
+    return {
+      text,
+      tables,
+      fields: extractProjectFieldsFromText(text),
+      workbook,
+      parse_summary: buildParseFilePreviewSummary(workbook),
+    };
+  }
+
+  const text = await textByExtFromStorage({
+    sourcePath,
+    sourceExt,
+    maxLen: BID_ANALYZE_MAX_TEXT,
+  });
+  const tables = await tablesByExtFromStorage({
+    sourcePath,
+    sourceExt,
+    sourceText: text,
+  });
+  return {
+    text,
+    tables,
+    fields: extractProjectFieldsFromText(text),
+    workbook: null,
+    parse_summary: {
+      text_length: text.length,
+      table_count: tables.length,
+    },
+  };
+};
+
+const loadParseRecommendationChunks = async (bidId) => {
+  const [
+    assetRows,
+    kbChunkRows,
+    kbSectionRows,
+    kbCaseRows,
+    kbSpecRows,
+    kbQualificationRows,
+    kbPersonnelRows,
+  ] = await Promise.all([
+    query(
+      `SELECT a.*, GROUP_CONCAT(o.ocr_text SEPARATOR ' ') AS ocr_text
+       FROM tender_assets a
+       LEFT JOIN tender_asset_ocr_results o ON o.asset_id = a.id
+       WHERE a.bid_id = ?
+       GROUP BY a.id
+       ORDER BY a.id DESC`,
+      [Number(bidId)]
+    ),
+    query(
+      `SELECT *
+       FROM kb_asset_chunks
+       WHERE reusable_flag = 1
+       ORDER BY updated_at DESC, id DESC
+       LIMIT 120`
+    ),
+    query(
+      `SELECT *
+       FROM kb_section_assets
+       WHERE reusable_flag = 1 AND status = 'ACTIVE'
+       ORDER BY updated_at DESC, id DESC
+       LIMIT 80`
+    ),
+    query(
+      `SELECT *
+       FROM kb_project_cases
+       WHERE reusable_flag = 1
+       ORDER BY updated_at DESC, id DESC
+       LIMIT 80`
+    ),
+    query(
+      `SELECT *
+       FROM kb_product_specs
+       WHERE status = 'ACTIVE'
+       ORDER BY updated_at DESC, id DESC
+       LIMIT 80`
+    ),
+    query(
+      `SELECT *
+       FROM kb_company_qualifications
+       WHERE status = 'ACTIVE'
+       ORDER BY updated_at DESC, id DESC
+       LIMIT 80`
+    ),
+    query(
+      `SELECT *
+       FROM kb_personnel_assets
+       WHERE status = 'ACTIVE'
+       ORDER BY updated_at DESC, id DESC
+       LIMIT 80`
+    ),
+  ]);
+
+  return buildSemanticRetrievalChunks({
+    projectAssets: assetRows,
+    kbChunks: kbChunkRows,
+    kbSectionAssets: kbSectionRows,
+    kbProjectCases: kbCaseRows,
+    kbProductSpecs: kbSpecRows,
+    kbQualifications: kbQualificationRows,
+    kbPersonnelAssets: kbPersonnelRows,
+  });
+};
+
+const loadParseRecommendationFeedbackIndex = async () => {
+  const rows = await query(
+    `SELECT asset_id, match_status, payload_json, updated_at, created_at
+     FROM tender_bid_parse_matches
+     WHERE match_status IN ('CONFIRMED', 'REPLACED', 'IGNORED')
+     ORDER BY updated_at DESC, id DESC
+     LIMIT 4000`
+  );
+  return buildSemanticFeedbackIndex(rows.map((row) => ({
+    asset_id: Number(row.asset_id || 0) || null,
+    match_status: trimText(row.match_status).toUpperCase(),
+    payload: parseMaybeJson(row.payload_json, {}),
+    updated_at: row.updated_at,
+    created_at: row.created_at,
+  })));
+};
+
+const buildParseMatchPayloadWithFeedback = ({ basePayload, nextPayload, matchStatus, user }) => {
+  const merged = {
+    ...(basePayload && typeof basePayload === 'object' && !Array.isArray(basePayload) ? basePayload : {}),
+    ...(nextPayload && typeof nextPayload === 'object' && !Array.isArray(nextPayload) ? nextPayload : {}),
+  };
+
+  delete merged.feedback_status;
+  delete merged.feedback_updated_at;
+  delete merged.feedback_actor;
+
+  if (PARSE_MATCH_FEEDBACK_STATUS.has(matchStatus)) {
+    merged.feedback_status = matchStatus;
+    merged.feedback_updated_at = new Date().toISOString();
+    merged.feedback_actor = {
+      id: Number(user?.id || 0) || null,
+      username: trimText(user?.username) || null,
+    };
+  }
+
+  return merged;
 };
 
 const resolveDefaultRetentionDays = async () => {
@@ -6037,6 +8327,51 @@ const uploadTenderSourceFile = (req, res, next) => {
   tenderSourceUpload.single('file')(req, res, (err) => {
     if (!err) {
       normalizeUploadFileName(req);
+      return next();
+    }
+    if (err.code === 'LIMIT_FILE_SIZE') {
+      return next(uploadValidationError(`文件大小不能超过 ${Math.floor(FILE_MAX_BYTES / 1024 / 1024)}MB`, {
+        code: 'TENDER_UPLOAD_FILE_TOO_LARGE',
+        manualTakeover: buildManualTakeover('请压缩文件或拆分后重新上传', 'upload'),
+      }));
+    }
+    return next(uploadValidationError(err.message || '文件上传失败'));
+  });
+};
+
+const tenderParseUpload = multer({
+  storage: multer.diskStorage({
+    destination: (_req, _file, cb) => cb(null, PARSE_ROOT),
+    filename: (_req, file, cb) => {
+      const ext = normalizeParseUploadExt(file.originalname || '') || '.docx';
+      cb(null, buildStoredFilename(file.originalname, ext));
+    },
+  }),
+  limits: {
+    fileSize: FILE_MAX_BYTES,
+    files: 20,
+  },
+  fileFilter: (_req, file, cb) => {
+    const ext = normalizeParseUploadExt(file.originalname || '');
+    const mime = trimText(file.mimetype).toLowerCase();
+    if (!ext || (!ALLOWED_PARSE_UPLOAD_MIME.has(mime) && mime)) {
+      return cb(uploadValidationError('仅支持上传 doc/docx/pdf/xls/xlsx/zip', {
+        code: 'TENDER_PARSE_UPLOAD_INVALID_FILE',
+        manualTakeover: buildManualTakeover('请重新选择 doc/docx/pdf/xls/xlsx/zip 文件后上传', 'upload'),
+      }));
+    }
+    return cb(null, true);
+  },
+});
+
+const uploadTenderParseFiles = (req, res, next) => {
+  tenderParseUpload.array('files', 20)(req, res, (err) => {
+    if (!err) {
+      if (Array.isArray(req.files)) {
+        req.files.forEach((item) => {
+          item.originalname = fixMojibakeText(item.originalname);
+        });
+      }
       return next();
     }
     if (err.code === 'LIMIT_FILE_SIZE') {
@@ -6564,26 +8899,70 @@ const callOpenAiCompatible = async ({ runtime, messages, temperature, maxTokens 
   };
 
   const startedAt = Date.now();
-  const resp = await fetchWithTimeout(
-    endpoint,
-    {
-      method: 'POST',
-      headers,
-      body: JSON.stringify(body),
-    },
-    runtime.timeout_ms
-  );
+  let resp;
+  try {
+    resp = await fetchWithTimeout(
+      endpoint,
+      {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(body),
+      },
+      runtime.timeout_ms
+    );
+  } catch (err) {
+    throw tenderStageError({
+      message: `模型调用失败: ${trimText(err?.message) || '请求超时'}`,
+      statusCode: 502,
+      code: 'TENDER_AI_UPSTREAM_TIMEOUT',
+      category: 'AI',
+      retryable: true,
+      manualTakeover: buildManualTakeover('请稍后重试或切换备用模型', 'ai_model'),
+      details: {
+        endpoint,
+        timeout_ms: Number(runtime.timeout_ms || 0),
+      },
+    });
+  }
   const raw = await resp.text();
   const latencyMs = Date.now() - startedAt;
 
   if (!resp.ok) {
-    throw appError(`模型调用失败: HTTP ${resp.status} ${raw.slice(0, 200)}`, 400);
+    const retryable = resp.status === 429 || resp.status >= 500;
+    throw tenderStageError({
+      message: `模型调用失败: HTTP ${resp.status} ${raw.slice(0, 200)}`,
+      statusCode: retryable ? 502 : 400,
+      code: resp.status === 429 ? 'TENDER_AI_UPSTREAM_RATE_LIMIT' : retryable ? 'TENDER_AI_UPSTREAM_FAILED' : 'TENDER_AI_REQUEST_REJECTED',
+      category: 'AI',
+      retryable,
+      manualTakeover: buildManualTakeover(
+        retryable ? '请稍后重试或切换备用模型' : '请检查提示词、模型配置或输入内容后重试',
+        'ai_model'
+      ),
+      details: {
+        upstream_status: Number(resp.status || 0),
+      },
+    });
   }
 
   const parsed = parseMaybeJson(raw, null);
-  if (!parsed) throw appError('模型返回非JSON', 400);
+  if (!parsed) throw tenderStageError({
+    message: '模型返回非JSON',
+    statusCode: 502,
+    code: 'TENDER_AI_RESPONSE_INVALID_JSON',
+    category: 'AI',
+    retryable: false,
+    manualTakeover: buildManualTakeover('请切换模型或调整任务提示词后重试', 'ai_model'),
+  });
   const content = parsed?.choices?.[0]?.message?.content;
-  if (!trimText(content)) throw appError('模型返回内容为空', 400);
+  if (!trimText(content)) throw tenderStageError({
+    message: '模型返回内容为空',
+    statusCode: 502,
+    code: 'TENDER_AI_RESPONSE_EMPTY',
+    category: 'AI',
+    retryable: false,
+    manualTakeover: buildManualTakeover('请切换模型或调整任务提示词后重试', 'ai_model'),
+  });
 
   return {
     content: String(content),
@@ -7278,15 +9657,7 @@ app.get('/api/tender/bootstrap', asyncHandler(async (req, res) => {
 
   res.json({
     user: req.user,
-    permissions: {
-      can_read: hasPermission(req.user, 'tender:read'),
-      can_write: hasPermission(req.user, 'tender:write'),
-      can_template_manage: hasPermission(req.user, 'tender:template:manage'),
-      can_config_manage: hasPermission(req.user, 'tender:config:manage'),
-      can_audit_read: hasPermission(req.user, 'tender:audit:read'),
-      can_ai_use: hasPermission(req.user, 'tender:ai:use'),
-      can_ai_manage: hasPermission(req.user, 'tender:ai:manage'),
-    },
+    permissions: buildPermissionSummary(req.user),
     stats: {
       bids: Number(bidCount?.count || 0),
       drafts: Number(activeDrafts?.count || 0),
@@ -7371,6 +9742,27 @@ app.get('/api/tender/kb/stats', requirePermission('tender:read'), asyncHandler(a
       templates: Number(linkedTemplates?.count || 0),
       case_matches: Number(linkedMatches?.count || 0),
     },
+  });
+}));
+
+app.get('/api/tender/kb/validation-rules', requirePermission('tender:read'), asyncHandler(async (req, res) => {
+  const rules = await loadValidationRuleRows({
+    ruleType: req.query?.rule_type,
+    issueType: req.query?.issue_type,
+    activeOnly: normalizeBoolean(req.query?.active_flag, true),
+    limit: req.query?.limit,
+  });
+  res.json({
+    items: rules,
+    total: rules.length,
+  });
+}));
+
+app.post('/api/tender/kb/validation-rules/sync', requirePermission('tender:config:manage'), asyncHandler(async (_req, res) => {
+  const summary = await syncValidationRuleLibrary();
+  res.json({
+    ok: true,
+    ...summary,
   });
 }));
 
@@ -8100,6 +10492,9 @@ app.get('/api/tender/bids/generate/jobs/:id', requirePermission('tender:read'), 
       scoringItems,
       bidCategory,
     });
+  const chapterQualitySummary = isPlainObject(stageOutputsRaw.chapter_quality_summary)
+    ? stageOutputsRaw.chapter_quality_summary
+    : null;
 
   res.json({
     job: detail.job,
@@ -8121,8 +10516,10 @@ app.get('/api/tender/bids/generate/jobs/:id', requirePermission('tender:read'), 
       rule_scan_summary: ruleScanSummary,
       evidence_registry: evidenceRegistry,
       clause_registry_v2: stageClauseRegistry,
+      chapter_quality_summary: chapterQualitySummary,
     },
     generated_artifacts: generatedArtifacts,
+    chapter_quality_summary: chapterQualitySummary,
   });
 }));
 
@@ -8694,17 +11091,44 @@ app.post('/api/tender/bids/generate/analyze', requirePermission('tender:write'),
   }
 }));
 
-app.post('/api/tender/bids/generate/jobs/:id/create', requirePermission('tender:write'), asyncHandler(async (req, res) => {
-  const jobId = Number(req.params.id);
-  if (!Number.isFinite(jobId) || jobId <= 0) throw appError('任务ID无效', 400);
-
-  const detail = await loadGenerateJobDetail(jobId);
-  if (!detail) throw appError('分析任务不存在', 404);
-  if (!['ANALYZED', 'GENERATED'].includes(String(detail.job.status || '').toUpperCase())) {
-    throw appError('当前任务状态不允许生成，请先完成分析', 400);
+const upsertDraftForGeneratedVersion = async (tx, { bid, versionId, sourcePath, user }) => {
+  const draftCopyPath = await copyToManagedPath(sourcePath, DRAFT_ROOT, '.docx');
+  const draftFileName = `${trimText(bid.title) || 'tender'}-draft.docx`;
+  const existingDraft = await tx.get('SELECT * FROM tender_bid_drafts WHERE bid_id = ? LIMIT 1', [Number(bid.id)]);
+  if (existingDraft) {
+    await tx.run(
+      `UPDATE tender_bid_drafts
+       SET draft_file_path = ?, draft_file_name = ?, base_version_id = ?, updated_by_id = ?, updated_by_name = ?, last_saved_at = NOW(), updated_at = NOW()
+       WHERE id = ?`,
+      [
+        draftCopyPath,
+        draftFileName,
+        Number(versionId),
+        Number(user?.id || 0) || null,
+        trimText(user?.username) || null,
+        Number(existingDraft.id),
+      ]
+    );
+    return sanitizeDraftRow(await tx.get('SELECT * FROM tender_bid_drafts WHERE id = ? LIMIT 1', [Number(existingDraft.id)]));
   }
 
-  const model = await resolveModel(Number(req.body?.model_id || detail.job.model_id || 0));
+  const inserted = await tx.run(
+    `INSERT INTO tender_bid_drafts
+      (bid_id, base_version_id, draft_file_path, draft_file_name, draft_ext, updated_by_id, updated_by_name, last_saved_at)
+     VALUES (?, ?, ?, ?, 'docx', ?, ?, NOW())`,
+    [
+      Number(bid.id),
+      Number(versionId),
+      draftCopyPath,
+      draftFileName,
+      Number(user?.id || 0) || null,
+      trimText(user?.username) || null,
+    ]
+  );
+  return sanitizeDraftRow(await tx.get('SELECT * FROM tender_bid_drafts WHERE id = ? LIMIT 1', [Number(inserted.insertId)]));
+};
+
+const createGeneratedDraftFromDetail = async ({ detail, req, model, existingBid = null }) => {
   const scoringItems = detail.items.filter((item) => item.item_type === 'SCORING');
   const riskItems = detail.items.filter((item) => item.item_type === 'RISK');
   const chosenSampleIds = toNumberIdList(req.body?.sample_ids, 6);
@@ -8768,7 +11192,7 @@ app.post('/api/tender/bids/generate/jobs/:id/create', requirePermission('tender:
       scoringItems,
       bidCategory,
     });
-  let requirementRegistry = await loadRequirementRegistryRows(jobId);
+  let requirementRegistry = await loadRequirementRegistryRows(Number(detail.job.id));
   if (!requirementRegistry.length) {
     requirementRegistry = buildRuntimeRequirementRegistry({ detail });
   }
@@ -8785,18 +11209,25 @@ app.post('/api/tender/bids/generate/jobs/:id/create', requirePermission('tender:
   }));
   const sourceFileName = trimText(detail.job.source_file_name) || '招标文件';
 
-  const inferredTitle = trimText(req.body?.title) || `${trimText(path.parse(sourceFileName).name)}投标文件`;
-  const customerName = trimText(req.body?.customer_name) || '待完善客户';
+  const inferredTitle = trimText(req.body?.title)
+    || trimText(existingBid?.title)
+    || `${trimText(path.parse(sourceFileName).name)}投标文件`;
+  const customerName = trimText(req.body?.customer_name)
+    || trimText(existingBid?.customer_name)
+    || '待完善客户';
   const projectName = trimText(req.body?.project_name)
+    || trimText(existingBid?.project_name)
     || trimText(instructionForm.project_name)
     || trimText(path.parse(sourceFileName).name)
     || '待完善项目';
-  const summary = trimText(req.body?.summary) || `由招标文件分析后自动生成，来源：${sourceFileName}`;
+  const summary = trimText(req.body?.summary)
+    || trimText(existingBid?.summary)
+    || `由招标文件分析后自动生成，来源：${sourceFileName}`;
   const docTemplateId = Number(req.body?.doc_template_id || req.body?.template_id || 0);
   const selectedTemplate = await resolveDocTemplate(docTemplateId);
 
   const librarySnapshot = await collectOwnLibrarySnapshot(req.body?.library_snapshot);
-  const bidNo = await nextBidNo();
+  const bidNo = trimText(existingBid?.bid_no) || await nextBidNo();
 
   let chapters = buildDraftChaptersFromAnalysis({
     bidNo,
@@ -8811,6 +11242,11 @@ app.post('/api/tender/bids/generate/jobs/:id/create', requirePermission('tender:
     bidCategory,
     finalJson,
   });
+  const baselineChapters = Array.isArray(chapters) ? chapters.map((item) => ({
+    title: trimText(item?.title),
+    content: Array.isArray(item?.content) ? item.content : toLines(item?.content || ''),
+  })) : [];
+  const draftChapterSchema = buildDraftChapterSchema({ bidCategory });
 
   const aiWarnings = [];
   try {
@@ -8826,6 +11262,7 @@ app.post('/api/tender/bids/generate/jobs/:id/create', requirePermission('tender:
       table_summaries: tableSummaries,
       generated_artifacts: generatedArtifacts,
       instruction_form: instructionForm,
+      draft_schema: draftChapterSchema,
     };
     const aiTask = await runAiTask({
       req,
@@ -8851,12 +11288,48 @@ app.post('/api/tender/bids/generate/jobs/:id/create', requirePermission('tender:
     aiWarnings.push(`模型起草失败，已使用规则骨架生成：${trimText(err.message).slice(0, 120)}`);
   }
 
+  const chapterSchemaResult = normalizeDraftChaptersToSchema({
+    bidCategory,
+    baselineChapters,
+    aiChapters: chapters,
+  });
+  chapters = Array.isArray(chapterSchemaResult?.chapters) && chapterSchemaResult.chapters.length
+    ? chapterSchemaResult.chapters
+    : baselineChapters;
+  if (!chapterSchemaResult?.validation?.valid) {
+    aiWarnings.push(`章节结构未完全命中固定 schema，已按规则骨架兜底：${(chapterSchemaResult?.validation?.missing_required_keys || []).join(', ')}`);
+  }
+
   const clauseRouteExecution = executeClauseRoutes({
     clauses: clauseRegistryV2,
     chapters,
   });
   chapters = Array.isArray(clauseRouteExecution?.chapters) && clauseRouteExecution.chapters.length
     ? clauseRouteExecution.chapters
+    : chapters;
+  const chapterQualitySummary = buildDraftChapterQualitySummary({
+    bidCategory,
+    chapters,
+    validation: chapterSchemaResult?.validation || {},
+  });
+  const updatedAnalysisSummary = {
+    ...analysisSummary,
+    stage_outputs: {
+      ...stageOutputsRaw,
+      chapter_quality_summary: chapterQualitySummary,
+    },
+  };
+
+  const generatedAtText = formatDateTime(new Date()) || '';
+  const wordLayout = buildWordLayoutPlan({
+    chapters,
+    bidNo,
+    projectName,
+    projectTitle: inferredTitle,
+    generatedAt: generatedAtText,
+  });
+  chapters = Array.isArray(wordLayout?.chapters) && wordLayout.chapters.length
+    ? wordLayout.chapters
     : chapters;
 
   const paragraphs = buildParagraphsFromChapters(chapters);
@@ -8878,11 +11351,11 @@ app.post('/api/tender/bids/generate/jobs/:id/create', requirePermission('tender:
   const personnelInfoText = joinSummaryLines(buildPersonnelListSummaryLines(librarySnapshot?.personnel_list || []));
   const projectCoreInfoText = joinSummaryLines(buildProjectCoreSummaryLines(projectCoreInfo));
   const coverContent = pickChapterTexts(chapters, ['封面']);
-  const tocContent = pickChapterTexts(chapters, ['目录']);
+  const tocContent = trimText(wordLayout?.toc_content) || pickChapterTexts(chapters, ['目录']);
   const businessVolumeContent = pickChapterTexts(chapters, ['商务']);
   const technicalVolumeContent = pickChapterTexts(chapters, ['技术', '服务方案', '采购需求']);
   const quotationVolumeContent = pickChapterTexts(chapters, ['报价', '偏离表']);
-  const appendixIndexContent = pickChapterTexts(chapters, ['附录', '投标文件格式']);
+  const appendixIndexContent = trimText(wordLayout?.appendix_index_content) || pickChapterTexts(chapters, ['附录', '投标文件格式']);
 
   const outputPath = path.join(VERSION_ROOT, buildStoredFilename(`${inferredTitle}-auto.docx`, '.docx'));
   try {
@@ -8891,6 +11364,8 @@ app.post('/api/tender/bids/generate/jobs/:id/create', requirePermission('tender:
         templatePath: selectedTemplate.storage_path,
         outputPath,
         chapters,
+        tocLines: Array.isArray(wordLayout?.toc_lines) ? wordLayout.toc_lines : [],
+        pageBreakTitles: Array.isArray(wordLayout?.page_break_titles) ? wordLayout.page_break_titles : [],
         payload: {
           bid_no: bidNo,
           project_title: inferredTitle,
@@ -8919,15 +11394,32 @@ app.post('/api/tender/bids/generate/jobs/:id/create', requirePermission('tender:
           technical_volume_content: technicalVolumeContent,
           quotation_volume_content: quotationVolumeContent,
           appendix_index_content: appendixIndexContent,
-          generated_at: formatDateTime(new Date()) || '',
+          header_content: trimText(wordLayout?.header_text),
+          footer_content: trimText(wordLayout?.footer_text),
+          chapter_outline: trimText(wordLayout?.chapter_outline),
+          generated_at: generatedAtText,
         },
       });
     } else {
-      await writeSimpleDocx({ outputPath, paragraphs });
+      await writeSimpleDocx({
+        outputPath,
+        paragraphs,
+        headerText: trimText(wordLayout?.header_text),
+        footerText: trimText(wordLayout?.footer_text),
+        tocLines: Array.isArray(wordLayout?.toc_lines) ? wordLayout.toc_lines : [],
+        pageBreakTitles: Array.isArray(wordLayout?.page_break_titles) ? wordLayout.page_break_titles : [],
+      });
     }
   } catch (err) {
     aiWarnings.push(`投标模板套版失败，已降级为基础文档：${trimText(err.message).slice(0, 120)}`);
-    await writeSimpleDocx({ outputPath, paragraphs });
+    await writeSimpleDocx({
+      outputPath,
+      paragraphs,
+      headerText: trimText(wordLayout?.header_text),
+      footerText: trimText(wordLayout?.footer_text),
+      tocLines: Array.isArray(wordLayout?.toc_lines) ? wordLayout.toc_lines : [],
+      pageBreakTitles: Array.isArray(wordLayout?.page_break_titles) ? wordLayout.page_break_titles : [],
+    });
   }
   const stat = await readFileStatSafe(outputPath);
   if (!stat?.isFile()) {
@@ -8940,24 +11432,50 @@ app.post('/api/tender/bids/generate/jobs/:id/create', requirePermission('tender:
       `UPDATE tender_bid_generate_jobs
        SET status = 'GENERATING', progress = 80, updated_at = NOW()
        WHERE id = ?`,
-      [jobId]
+      [Number(detail.job.id)]
     );
 
-    const bidInfo = await tx.run(
-      `INSERT INTO tender_bids
-        (bid_no, title, customer_name, project_name, status, summary, created_by_id, created_by_name, updated_by_id, updated_by_name)
-       VALUES (?, ?, ?, ?, 'DRAFT', ?, ?, ?, ?, ?)`,
-      [bidNo, inferredTitle, customerName, projectName, summary || null, Number(req.user.id), req.user.username, Number(req.user.id), req.user.username]
-    );
-    const bidId = Number(bidInfo.insertId);
+    let bidId = Number(existingBid?.id || 0);
+    let bidRow = existingBid ? await tx.get('SELECT * FROM tender_bids WHERE id = ? LIMIT 1', [Number(existingBid.id)]) : null;
+    if (!bidRow && existingBid) throw appError('目标标书不存在', 404);
 
+    if (!bidRow) {
+      const bidInfo = await tx.run(
+        `INSERT INTO tender_bids
+          (bid_no, title, customer_name, project_name, status, summary, created_by_id, created_by_name, updated_by_id, updated_by_name)
+         VALUES (?, ?, ?, ?, 'DRAFT', ?, ?, ?, ?, ?)`,
+        [bidNo, inferredTitle, customerName, projectName, summary || null, Number(req.user.id), req.user.username, Number(req.user.id), req.user.username]
+      );
+      bidId = Number(bidInfo.insertId);
+      bidRow = await tx.get('SELECT * FROM tender_bids WHERE id = ? LIMIT 1', [bidId]);
+    } else {
+      await tx.run(
+        `UPDATE tender_bids
+         SET title = ?, customer_name = ?, project_name = ?, summary = ?, status = 'DRAFT',
+             updated_by_id = ?, updated_by_name = ?, updated_at = NOW()
+         WHERE id = ?`,
+        [
+          inferredTitle,
+          customerName,
+          projectName,
+          summary || null,
+          Number(req.user.id),
+          req.user.username,
+          bidId,
+        ]
+      );
+      bidRow = await tx.get('SELECT * FROM tender_bids WHERE id = ? LIMIT 1', [bidId]);
+    }
+
+    const nextVersionNo = await getNextVersionNo(tx, bidId);
     const versionName = `${inferredTitle}-自动生成.docx`;
     const versionInfo = await tx.run(
       `INSERT INTO tender_bid_versions
         (bid_id, version_no, source_type, source_ext, storage_path, file_name, file_size, mime_type, created_by_id, created_by_name)
-       VALUES (?, 1, 'auto_generate', 'docx', ?, ?, ?, ?, ?, ?)`,
+       VALUES (?, ?, 'auto_generate', 'docx', ?, ?, ?, ?, ?, ?)`,
       [
         bidId,
+        nextVersionNo,
         outputPath,
         versionName,
         Number(stat.size || 0),
@@ -8985,49 +11503,56 @@ app.post('/api/tender/bids/generate/jobs/:id/create', requirePermission('tender:
       [versionId, Number(req.user.id), req.user.username, bidId]
     );
 
-    const draft = await tx.get(
-      `SELECT * FROM tender_bid_drafts
-       WHERE bid_id = ?
-       LIMIT 1`,
-      [bidId]
-    );
+    let sourceAssetId = null;
+    if (trimText(detail.job.source_storage_path)) {
+      const sourceAssetInfo = await tx.run(
+        `INSERT INTO tender_assets
+          (bid_id, asset_type, original_file_name, mime_type, storage_path, file_size, status, uploaded_by_id, uploaded_by_name)
+         VALUES (?, 'BIDDING_NOTICE', ?, ?, ?, ?, 'UPLOADED', ?, ?)`,
+        [
+          bidId,
+          sourceFileName,
+          trimText(detail.job.source_mime_type) || guessMimeByExt(detail.job.source_ext || '.docx'),
+          trimText(detail.job.source_storage_path),
+          Number(detail.job.source_file_size || 0),
+          Number(req.user.id),
+          req.user.username,
+        ]
+      );
+      sourceAssetId = Number(sourceAssetInfo.insertId || 0) || null;
+    }
 
-    const sourceAssetInfo = await tx.run(
-      `INSERT INTO tender_assets
-        (bid_id, asset_type, original_file_name, mime_type, storage_path, file_size, status, uploaded_by_id, uploaded_by_name)
-       VALUES (?, 'BIDDING_NOTICE', ?, ?, ?, ?, 'UPLOADED', ?, ?)`,
-      [
-        bidId,
-        sourceFileName,
-        trimText(detail.job.source_mime_type) || guessMimeByExt(detail.job.source_ext || '.docx'),
-        trimText(detail.job.source_storage_path),
-        Number(detail.job.source_file_size || 0),
-        Number(req.user.id),
-        req.user.username,
-      ]
-    );
+    await persistEvidenceRegistry(tx, bidId, evidenceRegistry);
+    await persistDraftSectionRegistry(tx, bidId, versionId, draftSections);
+    const draftRow = await upsertDraftForGeneratedVersion(tx, {
+      bid: bidRow,
+      versionId,
+      sourcePath: outputPath,
+      user: req.user,
+    });
 
     await tx.run(
       `UPDATE tender_bid_generate_jobs
-       SET status = 'GENERATED', progress = 100, model_id = ?, model_name = ?, warning_text = ?, created_bid_id = ?, created_version_id = ?, created_draft_id = ?, updated_at = NOW()
+       SET status = 'GENERATED', progress = 100, model_id = ?, model_name = ?, analysis_summary_json = ?, warning_text = ?, created_bid_id = ?, created_version_id = ?, created_draft_id = ?, updated_at = NOW()
        WHERE id = ?`,
       [
         Number(model.id),
         trimText(model.name),
+        JSON.stringify(updatedAnalysisSummary),
         aiWarnings.join('；') || detail.job.warning_text || null,
         bidId,
         versionId,
-        draft?.id ? Number(draft.id) : null,
-        jobId,
+        Number(draftRow?.id || 0) || null,
+        Number(detail.job.id),
       ]
     );
-    await persistEvidenceRegistry(tx, bidId, evidenceRegistry);
-    await persistDraftSectionRegistry(tx, bidId, versionId, draftSections);
 
     return {
+      bid: sanitizeBidRow(bidRow),
       bid_id: bidId,
       version_id: versionId,
-      source_asset_id: Number(sourceAssetInfo.insertId),
+      draft: draftRow,
+      source_asset_id: sourceAssetId,
       evidence_registry: evidenceRegistry,
       draft_sections: draftSections,
       clause_registry_v2: clauseRegistryV2,
@@ -9044,30 +11569,24 @@ app.post('/api/tender/bids/generate/jobs/:id/create', requirePermission('tender:
           ? clauseRouteExecution.applied_items
           : [],
       },
+      chapter_schema_validation: chapterSchemaResult?.validation || null,
+      chapter_quality_summary: chapterQualitySummary,
     };
   });
 
-  const bid = await ensureBidExists(createResult.bid_id);
   const version = sanitizeVersionRow(await get('SELECT * FROM tender_bid_versions WHERE id = ? LIMIT 1', [createResult.version_id]));
-  const draft = await ensureDraftForBid({ bid, user: req.user });
-  if (draft?.id) {
-    await run(
-      `UPDATE tender_bid_generate_jobs
-       SET created_draft_id = ?, updated_at = NOW()
-       WHERE id = ?`,
-      [Number(draft.id), jobId]
-    );
-  }
-  const job = sanitizeGenerateJobRow(await get('SELECT * FROM tender_bid_generate_jobs WHERE id = ? LIMIT 1', [jobId]));
+  const job = sanitizeGenerateJobRow(await get('SELECT * FROM tender_bid_generate_jobs WHERE id = ? LIMIT 1', [Number(detail.job.id)]));
 
   await logOperation({
     req,
-    action: 'BID_GENERATE_FROM_ANALYSIS',
+    action: existingBid ? 'BID_GENERATE_FROM_PARSE_WORKSPACE' : 'BID_GENERATE_FROM_ANALYSIS',
     entity: 'generate_job',
-    entityId: jobId,
-    message: `根据分析任务生成投标初稿 ${bid.bid_no}`,
+    entityId: Number(detail.job.id),
+    message: existingBid
+      ? `根据项目解析结果生成投标初稿 ${createResult.bid.bid_no}`
+      : `根据分析任务生成投标初稿 ${createResult.bid.bid_no}`,
     afterData: {
-      bid_id: bid.id,
+      bid_id: createResult.bid.id,
       version_id: version.id,
       scoring_count: scoringItems.length,
       risk_count: riskItems.length,
@@ -9076,23 +11595,452 @@ app.post('/api/tender/bids/generate/jobs/:id/create', requirePermission('tender:
       doc_template_name: trimText(selectedTemplate?.template_name),
       clause_route_summary: createResult.clause_route_summary,
       clause_route_execution: createResult.clause_route_execution,
+      chapter_schema_validation: createResult.chapter_schema_validation,
+      chapter_quality_summary: createResult.chapter_quality_summary,
       warning_text: aiWarnings.join('；') || null,
+      source_job_id: Number(detail.job.id),
     },
   });
 
-  res.status(201).json({
+  return {
     ok: true,
     job,
-    bid,
+    bid: createResult.bid,
     version,
-    draft,
+    draft: createResult.draft,
     evidence_registry: createResult.evidence_registry,
     draft_sections: createResult.draft_sections,
     clause_registry_v2: createResult.clause_registry_v2,
     clause_route_summary: createResult.clause_route_summary,
     clause_route_execution: createResult.clause_route_execution,
+    chapter_schema_validation: createResult.chapter_schema_validation,
+    chapter_quality_summary: createResult.chapter_quality_summary,
     warnings: aiWarnings,
+  };
+};
+
+const parseBridgeRoleWeight = {
+  MAIN: 0,
+  CLARIFICATION: 1,
+  ATTACHMENT: 2,
+  SUPPLEMENT: 3,
+};
+
+const sortParseFilesForGenerateBridge = (files = []) =>
+  [...(Array.isArray(files) ? files : [])]
+    .filter((item) => item && item.status !== 'DELETED' && trimText(item.source_ext).toLowerCase() !== '.zip')
+    .sort((a, b) => {
+      const weightDiff = (parseBridgeRoleWeight[normalizeParseFileRole(a?.file_role)] ?? 99)
+        - (parseBridgeRoleWeight[normalizeParseFileRole(b?.file_role)] ?? 99);
+      if (weightDiff !== 0) return weightDiff;
+      return Number(a?.id || 0) - Number(b?.id || 0);
+    });
+
+const pickParseBridgeSourceFile = (files = []) => {
+  const sorted = sortParseFilesForGenerateBridge(files);
+  return sorted[0] || null;
+};
+
+const inferSectionKeyFromParseTitle = (title = '') => {
+  const text = trimText(title);
+  if (!text) return 'ATTACHMENT';
+  if (text.includes('投标人须知前附表')) return 'BIDDER_INSTRUCTION_TABLE';
+  if (text.includes('投标人须知')) return 'BIDDER_INSTRUCTION';
+  if (text.includes('技术参数')) return 'TECH_PARAM_TABLE';
+  if (text.includes('评分表')) return 'SCORE_TABLE';
+  if (text.includes('评标')) return 'SCORING_STANDARD';
+  if (text.includes('采购需求')) return 'PROCUREMENT_REQUIREMENT';
+  if (text.includes('合同')) return 'CONTRACT_TERMS';
+  if (text.includes('附件')) return 'ATTACHMENT';
+  return 'ATTACHMENT';
+};
+
+const buildFallbackSectionListFromParseClauses = (clauses = []) => {
+  const groups = new Map();
+  for (const clause of Array.isArray(clauses) ? clauses : []) {
+    const sectionTitle = trimText(clause?.clause_title) || trimText(clause?.clause_type) || '附件';
+    const sectionKey = inferSectionKeyFromParseTitle(sectionTitle);
+    const current = groups.get(sectionKey) || {
+      section_key: sectionKey,
+      section_title: sectionTitle,
+      text: '',
+      summary: '',
+    };
+    current.text = [current.text, trimText(clause?.clause_text)].filter(Boolean).join('\n');
+    current.summary = trimText(current.text).slice(0, 240);
+    groups.set(sectionKey, current);
+  }
+  return Array.from(groups.values());
+};
+
+const buildParseBridgeAnalysisBundle = async ({ bid, parseDetail, parseFiles = [], bidCategory = 'SERVICE' }) => {
+  const sortedFiles = sortParseFilesForGenerateBridge(parseFiles);
+  const textBlocks = [];
+  for (const file of sortedFiles) {
+    const payload = await collectParseSourcePayload(file);
+    const text = trimText(payload?.text);
+    if (!text) continue;
+    textBlocks.push(`【${normalizeParseFileRole(file.file_role)}】${trimText(file.display_name || file.original_file_name)}\n${text}`);
+  }
+
+  const sourceText = normalizeAnalysisText(
+    textBlocks.join('\n\n') || (Array.isArray(parseDetail?.clauses) ? parseDetail.clauses.map((item) => trimText(item?.clause_text)).filter(Boolean).join('\n') : '')
+  );
+  const split = trimText(sourceText) ? splitTenderSections(sourceText) : { sectionList: [] };
+  const sectionList = Array.isArray(split?.sectionList) && split.sectionList.length
+    ? split.sectionList
+    : buildFallbackSectionListFromParseClauses(parseDetail?.clauses || []);
+  const sectionSummaries = sectionList.map((item) => ({
+    section_key: trimText(item.section_key),
+    section_title: trimText(item.section_title),
+    summary: trimText(item.summary || item.text).slice(0, 500),
+  }));
+  const tableSummaries = buildTableSummaries({
+    tables: (Array.isArray(parseDetail?.tables) ? parseDetail.tables : []).map((table, index) => ({
+      table_index: Number(table?.table_index || index + 1),
+      table_name: trimText(table?.table_name) || trimText(table?.source_sheet_name) || `表格${index + 1}`,
+      source_sheet_name: trimText(table?.source_sheet_name),
+      row_count: Number(table?.row_count || 0),
+      column_count: Number(table?.column_count || 0),
+      header: Array.isArray(table?.header) ? table.header : [],
+      rows: Array.isArray(table?.rows) ? table.rows : [],
+      summary: trimText(table?.summary_text),
+      keywords: [
+        trimText(table?.table_name),
+        trimText(table?.source_sheet_name),
+        ...(Array.isArray(table?.header) ? table.header.slice(0, 6).map((item) => trimText(item)) : []),
+      ].filter(Boolean),
+    })),
+    sectionList,
   });
+  const baseRule = buildRuleAnalyzeItems({ sectionList });
+  let stage1RiskClauses = enrichStage1RiskClausesBySource(
+    scanRiskClausesByKeywords(sectionList, bidCategory),
+    sectionList
+  );
+  let stage3MissingItems = [];
+  const requiredChapterScan = buildRequiredChapterScan(sectionList);
+
+  const mergedFields = isPlainObject(parseDetail?.job?.merged_fields) ? parseDetail.job.merged_fields : {};
+  let finalJson = normalizeFinalAnalyzeJson({
+    project_core_info: {
+      project_type: bidCategoryLabel(bidCategory),
+      project_full_name: firstNonEmpty(mergedFields.project_full_name, mergedFields.project_name, bid.project_name, bid.title),
+      project_name: firstNonEmpty(mergedFields.project_name, bid.project_name, bid.title),
+      project_code: firstNonEmpty(mergedFields.project_code, bid.bid_no),
+      package_no: firstNonEmpty(mergedFields.package_no),
+      project_budget: firstNonEmpty(mergedFields.project_budget, mergedFields.budget),
+      buyer_full_name: firstNonEmpty(mergedFields.buyer_name, bid.customer_name),
+      agency_full_name: firstNonEmpty(mergedFields.agency_name),
+      project_domain: firstNonEmpty(mergedFields.project_domain),
+      project_overview: firstNonEmpty(mergedFields.project_overview, sectionSummaries[0]?.summary),
+      bid_deadline: firstNonEmpty(mergedFields.bid_deadline),
+    },
+  }, bidCategory);
+
+  const scoreMergeResult = mergeScoreItemsIntoFinalJson({
+    finalJson,
+    tableSummaries,
+    ruleScoringItems: baseRule.scoring_items,
+    bidCategory,
+  });
+  finalJson = scoreMergeResult.final_json;
+
+  let productParamMergeResult = {
+    table_param_extracted_count: 0,
+    table_param_merged_count: 0,
+  };
+  if (normalizeBidCategory(bidCategory) === 'PRODUCT') {
+    productParamMergeResult = mergeProductParametersIntoFinalJson({
+      finalJson,
+      tableSummaries,
+    });
+    finalJson = productParamMergeResult.final_json;
+  }
+
+  const ruleCoverageSummary = buildRuleCoverageSummary({
+    sectionList,
+    bidCategory,
+    stage1RiskClauses,
+    scoreExtract: {
+      merged_count: scoreMergeResult.merged_count,
+      merged_total_count: scoreMergeResult.merged_total_count,
+    },
+  });
+  if (Array.isArray(ruleCoverageSummary.missing_items) && ruleCoverageSummary.missing_items.length > 0) {
+    stage3MissingItems = enrichStage3MissingItemsBySource(ruleCoverageSummary.missing_items, sectionList);
+    finalJson = mergeAnalyzeFinalJson({
+      stage2FinalJson: finalJson,
+      stage1RiskClauses,
+      stage3MissingItems,
+      bidCategory,
+    });
+  }
+
+  const fallbackFillResult = enrichAnalyzeFinalJsonByRules({
+    finalJson,
+    sectionList,
+    bidCategory,
+  });
+  finalJson = fallbackFillResult.final_json;
+
+  let scoringItems = buildScoringItemsFromFinalJson(finalJson);
+  let riskItems = buildRiskItemsFromFinalJson({ finalJson, stage1RiskClauses, bidCategory });
+  if (!scoringItems.length) scoringItems = baseRule.scoring_items;
+  if (!riskItems.length) riskItems = baseRule.risk_items;
+  scoringItems = enrichGenerateItemsBySource(scoringItems, sectionList);
+  riskItems = enrichGenerateItemsBySource(riskItems, sectionList);
+
+  const warnings = [];
+  if (!tableSummaries.length) warnings.push('解析工作台未识别到结构化表格，将按正文条款继续生成。');
+  if (Number(fallbackFillResult.filled_count || 0) > 0) {
+    warnings.push(`规则引擎补全商务/技术条款 ${fallbackFillResult.filled_count} 项。`);
+  }
+
+  const generatedArtifacts = buildGeneratedArtifacts({
+    finalJson,
+    stage1RiskClauses,
+    riskItems,
+    scoringItems,
+    bidCategory,
+  });
+  const qualityGate = buildAnalyzeQualityGate({
+    sourceText,
+    requiredChapterScan,
+    tableSummaries,
+    stage1RiskClauses,
+    scoreExtract: {
+      merged_count: scoreMergeResult.merged_count,
+      merged_total_count: scoreMergeResult.merged_total_count,
+    },
+    productParamExtract: productParamMergeResult,
+    bidCategory,
+    preflightOnly: false,
+  });
+  for (const item of qualityGate.warning_issues || []) {
+    if (item && item !== '无') warnings.push(`门禁提醒：${item}`);
+  }
+
+  const evidenceRegistry = {
+    stage1_risk_clauses: stage1RiskClauses.map((item) => ({
+      evidence_id: item.evidence_id,
+      clause_type: item.clause_type,
+      clause_content: item.clause_content,
+      source_reference: item.source_reference,
+    })),
+    stage3_missing_items: stage3MissingItems.map((item) => ({
+      item_type: item.item_type,
+      missing_content: item.missing_content,
+      source_reference: item.source_reference,
+    })),
+    scoring_items: scoringItems.map((item, idx) => ({
+      item_no: idx + 1,
+      title: item.title,
+      source_reference: item.source_reference,
+    })),
+    risk_items: riskItems.map((item, idx) => ({
+      item_no: idx + 1,
+      title: item.title,
+      source_reference: item.source_reference,
+    })),
+  };
+
+  const analysisSummary = {
+    ...composeAnalysisSummary({
+      sections: sectionSummaries,
+      tables: tableSummaries,
+      scoringItems,
+      riskItems,
+      warnings,
+    }),
+    bid_category: bidCategory,
+    bid_category_label: bidCategoryLabel(bidCategory),
+    stage_outputs: {
+      stage1_risk_clauses: stage1RiskClauses,
+      stage3_missing_items: stage3MissingItems,
+      required_chapter_scan: requiredChapterScan,
+      parse_quality_gate: qualityGate,
+      score_table_extract: {
+        table_extracted_count: Number(tableSummaries.length || 0),
+        fallback_extracted_count: 0,
+        merged_count: Number(scoreMergeResult.merged_count || 0),
+        fallback_merged_count: 0,
+        merged_total_count: Number(scoreMergeResult.merged_total_count || 0),
+      },
+      product_param_extract: productParamMergeResult,
+      rule_scan_summary: ruleCoverageSummary,
+      evidence_registry: evidenceRegistry,
+    },
+    table_summaries: tableSummaries,
+    final_json: finalJson,
+    generated_artifacts: generatedArtifacts,
+    candidate_samples: [],
+  };
+
+  return {
+    sectionSummaries,
+    analysisSummary,
+    scoringItems,
+    riskItems,
+    stage1RiskClauses,
+    warnings,
+  };
+};
+
+const createGenerateJobFromParseBridge = async ({ bid, parseDetail, parseFiles, req, model, bidCategory }) => {
+  const sourceFile = pickParseBridgeSourceFile(parseFiles);
+  const sourceFileName = trimText(sourceFile?.display_name || sourceFile?.original_file_name)
+    || `${trimText(bid.project_name || bid.title) || '项目解析结果'}.docx`;
+  const sourceStoragePath = trimText(sourceFile?.storage_path) || path.join(UPLOAD_ROOT, 'parse-bridge-placeholder.docx');
+  const sourceExt = trimText(sourceFile?.source_ext).toLowerCase() || '.docx';
+  const sourceMimeType = trimText(sourceFile?.mime_type) || guessMimeByExt(sourceExt || '.docx');
+  const sourceFileSize = Number(sourceFile?.file_size || 0);
+
+  const inserted = await run(
+    `INSERT INTO tender_bid_generate_jobs
+      (source_file_name, source_storage_path, source_ext, source_mime_type, source_file_size, model_id, model_name, bid_category, status, progress, operator_id, operator_name, request_ip, created_bid_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'ANALYZING', 10, ?, ?, ?, ?)`,
+    [
+      sourceFileName,
+      sourceStoragePath,
+      sourceExt || '.docx',
+      sourceMimeType,
+      sourceFileSize,
+      Number(model.id),
+      trimText(model.name),
+      bidCategory,
+      Number(req.user.id || 0) || null,
+      trimText(req.user.username) || null,
+      trimText(getClientIp(req)),
+      Number(bid.id),
+    ]
+  );
+  const jobId = Number(inserted.insertId);
+
+  try {
+    const bundle = await buildParseBridgeAnalysisBundle({
+      bid,
+      parseDetail,
+      parseFiles,
+      bidCategory,
+    });
+    const requirementRegistry = buildRequirementRows({
+      jobId,
+      bidCategory,
+      finalJson: normalizeFinalAnalyzeJson(bundle.analysisSummary?.final_json || {}, bidCategory),
+      scoringItems: bundle.scoringItems,
+      stage1RiskClauses: bundle.stage1RiskClauses,
+      tableSummaries: Array.isArray(bundle.analysisSummary?.table_summaries) ? bundle.analysisSummary.table_summaries : [],
+    });
+    const clauseRegistryV2 = buildClauseRegistryV2({
+      requirements: requirementRegistry,
+    });
+    bundle.analysisSummary.stage_outputs = {
+      ...(isPlainObject(bundle.analysisSummary.stage_outputs) ? bundle.analysisSummary.stage_outputs : {}),
+      clause_registry_v2: clauseRegistryV2,
+    };
+    bundle.analysisSummary.clause_registry_v2 = clauseRegistryV2;
+
+    await transaction(async (tx) => {
+      await tx.run(
+        `UPDATE tender_bid_generate_jobs
+         SET status = 'ANALYZED', progress = 60, section_summaries_json = ?, analysis_summary_json = ?, warning_text = ?, updated_at = NOW()
+         WHERE id = ?`,
+        [
+          JSON.stringify(bundle.sectionSummaries),
+          JSON.stringify(bundle.analysisSummary),
+          bundle.warnings.join('；') || null,
+          jobId,
+        ]
+      );
+      await tx.run('DELETE FROM tender_bid_generate_items WHERE job_id = ?', [jobId]);
+      await tx.run('DELETE FROM tender_bid_generate_matches WHERE job_id = ?', [jobId]);
+      await tx.run('DELETE FROM tender_requirement_registry WHERE job_id = ?', [jobId]);
+
+      for (let i = 0; i < bundle.scoringItems.length; i += 1) {
+        const item = bundle.scoringItems[i];
+        await tx.run(
+          `INSERT INTO tender_bid_generate_items
+            (job_id, item_type, section_key, section_title, title, evidence_text, suggestion_text, risk_level, sort_order)
+           VALUES (?, 'SCORING', ?, ?, ?, ?, ?, NULL, ?)`,
+          [jobId, item.section_key, item.section_title, item.title, item.evidence || null, item.suggestion || null, i + 1]
+        );
+      }
+      for (let i = 0; i < bundle.riskItems.length; i += 1) {
+        const item = bundle.riskItems[i];
+        await tx.run(
+          `INSERT INTO tender_bid_generate_items
+            (job_id, item_type, section_key, section_title, title, evidence_text, suggestion_text, risk_level, sort_order)
+           VALUES (?, 'RISK', ?, ?, ?, ?, ?, ?, ?)`,
+          [jobId, item.section_key, item.section_title, item.title, item.evidence || null, item.suggestion || null, trimText(item.risk_level || 'MEDIUM'), i + 1]
+        );
+      }
+      await persistRequirementRegistry(tx, jobId, requirementRegistry);
+    });
+
+    return loadGenerateJobDetail(jobId);
+  } catch (err) {
+    await run(
+      `UPDATE tender_bid_generate_jobs
+       SET status = 'FAILED', progress = 100, error_message = ?, updated_at = NOW()
+       WHERE id = ?`,
+      [trimText(err.message).slice(0, 2000) || '项目解析桥接生成失败', jobId]
+    );
+    throw err;
+  }
+};
+
+app.post('/api/tender/bids/generate/jobs/:id/create', requirePermission('tender:write'), asyncHandler(async (req, res) => {
+  const jobId = Number(req.params.id);
+  if (!Number.isFinite(jobId) || jobId <= 0) throw appError('任务ID无效', 400);
+
+  const detail = await loadGenerateJobDetail(jobId);
+  if (!detail) throw appError('分析任务不存在', 404);
+  if (!['ANALYZED', 'GENERATED'].includes(String(detail.job.status || '').toUpperCase())) {
+    throw appError('当前任务状态不允许生成，请先完成分析', 400);
+  }
+
+  const model = await resolveModel(Number(req.body?.model_id || detail.job.model_id || 0));
+  const result = await createGeneratedDraftFromDetail({
+    detail,
+    req,
+    model,
+  });
+  res.status(201).json(result);
+}));
+
+app.post('/api/tender/bids/:id/generate/from-parse', requirePermission('tender:write'), asyncHandler(async (req, res) => {
+  const bidId = Number(req.params.id);
+  if (!Number.isFinite(bidId) || bidId <= 0) throw appError('标书ID无效', 400);
+
+  const bid = await ensureBidExists(bidId, { user: req.user });
+  const latestParseJob = await loadLatestParseJobRow(bidId);
+  if (!latestParseJob || Number(latestParseJob.id || 0) <= 0) {
+    throw appError('请先完成项目解析后再生成初稿', 409);
+  }
+  const parseDetail = await loadParseJobDetail(Number(latestParseJob.id), { bidId });
+  if (!parseDetail || (!Array.isArray(parseDetail.clauses) || !parseDetail.clauses.length) && (!Array.isArray(parseDetail.tables) || !parseDetail.tables.length)) {
+    throw appError('当前项目缺少可用于生成的解析结果', 409);
+  }
+
+  const parseFiles = await loadParseFilesByBidId(bidId, { includeDeleted: false });
+  const bidCategory = normalizeBidCategory(req.body?.bid_category || bid.bid_category) || 'SERVICE';
+  const model = await resolveModel(Number(req.body?.model_id || 0));
+  const detail = await createGenerateJobFromParseBridge({
+    bid,
+    parseDetail,
+    parseFiles,
+    req,
+    model,
+    bidCategory,
+  });
+  const result = await createGeneratedDraftFromDetail({
+    detail,
+    req,
+    model,
+    existingBid: bid,
+  });
+  res.status(201).json(result);
 }));
 
 app.post('/api/tender/bids/auto-generate', requirePermission('tender:write'), uploadTenderSourceFile, asyncHandler(async (req, res) => {
@@ -9133,6 +12081,13 @@ app.post('/api/tender/bids/auto-generate', requirePermission('tender:write'), up
   const generatedDocPath = path.join(VERSION_ROOT, buildStoredFilename(`${title}-auto.docx`, '.docx'));
   const generatedDocName = `${title}-自动生成.docx`;
   const nowText = formatDateTime(new Date()) || new Date().toISOString().slice(0, 19).replace('T', ' ');
+  const bundleLayout = buildWordLayoutPlan({
+    chapters: [],
+    bidNo,
+    projectName,
+    projectTitle: title,
+    generatedAt: nowText,
+  });
 
   const paragraphs = [
     '投标文件（自动生成）',
@@ -9167,7 +12122,13 @@ app.post('/api/tender/bids/auto-generate', requirePermission('tender:write'), up
     paragraphs.push('无片段条目');
   }
 
-  await writeSimpleDocx({ outputPath: generatedDocPath, paragraphs });
+  await writeSimpleDocx({
+    outputPath: generatedDocPath,
+    paragraphs,
+    headerText: trimText(bundleLayout?.header_text),
+    footerText: trimText(bundleLayout?.footer_text),
+    pageBreakTitles: Array.isArray(bundleLayout?.page_break_titles) ? bundleLayout.page_break_titles : [],
+  });
   const generatedStat = await readFileStatSafe(generatedDocPath);
   if (!generatedStat?.isFile()) {
     await deleteFileSafe(generatedDocPath);
@@ -9313,6 +12274,153 @@ app.get('/api/tender/bids/:id', requirePermission('tender:read'), asyncHandler(a
   res.json({ ...bidWithMembers, currentVersion, draft });
 }));
 
+app.get('/api/tender/bids/:id/kb/workspace', requirePermission('tender:read'), asyncHandler(async (req, res) => {
+  const bidId = Number(req.params.id);
+  if (!Number.isFinite(bidId) || bidId <= 0) throw appError('标书ID无效', 400);
+  const bid = await ensureBidExists(bidId, { user: req.user });
+  const payload = await loadBidKbWorkspace({ bid, user: req.user });
+  res.json(payload);
+}));
+
+app.post('/api/tender/bids/:id/kb/ingest', requirePermission('tender:write'), asyncHandler(async (req, res) => {
+  const bidId = Number(req.params.id);
+  if (!Number.isFinite(bidId) || bidId <= 0) throw appError('标书ID无效', 400);
+  const bid = await ensureBidExists(bidId, { user: req.user });
+  const overrides = isPlainObject(req.body) ? req.body : {};
+
+  const ingestResult = await runBidKbIngest({
+    bid,
+    user: req.user,
+    overrides,
+  });
+  const payload = await loadBidKbWorkspace({
+    bid: await ensureBidExists(bidId, { user: req.user }),
+    user: req.user,
+  });
+
+  await logOperation({
+    req,
+    action: 'KB_BID_INGEST',
+    entity: 'bid',
+    entityId: bidId,
+    message: `执行知识库沉淀 ${bid.bid_no}`,
+    afterData: {
+      job_id: ingestResult.job_id,
+      kb_project_id: ingestResult.kb_project_id,
+      summary: ingestResult.summary,
+    },
+  });
+
+  res.json(payload);
+}));
+
+app.get('/api/tender/bids/:id/draft/workspace', requirePermission('tender:read'), asyncHandler(async (req, res) => {
+  const bidId = Number(req.params.id);
+  if (!Number.isFinite(bidId) || bidId <= 0) throw appError('标书ID无效', 400);
+  const bid = await ensureBidExists(bidId, { user: req.user });
+  const currentVersion = await getCurrentVersion(bid);
+  const draft = await get('SELECT * FROM tender_bid_drafts WHERE bid_id = ? LIMIT 1', [bidId]);
+  const payload = await buildDraftWorkspacePayload({
+    bid,
+    currentVersion,
+    draft,
+  });
+  res.json(payload);
+}));
+
+app.put('/api/tender/bids/:id/draft/sections', requirePermission('tender:write'), asyncHandler(async (req, res) => {
+  const bidId = Number(req.params.id);
+  if (!Number.isFinite(bidId) || bidId <= 0) throw appError('标书ID无效', 400);
+  if (!Array.isArray(req.body?.sections)) throw appError('sections 必须为数组', 400);
+
+  const bid = await ensureBidExists(bidId, { user: req.user });
+  const currentVersion = await getCurrentVersion(bid);
+  const draft = await get('SELECT * FROM tender_bid_drafts WHERE bid_id = ? LIMIT 1', [bidId]);
+  const versionId = resolveDraftWorkspaceVersionId({ bid, currentVersion, draft });
+  if (!versionId) throw appError('当前项目尚无可保存的初稿版本', 409);
+
+  const sections = normalizeDraftSectionRows(req.body.sections).map((item, index) => ({
+    section_title: item.section_title || '文档正文',
+    paragraph_no: Number(item.paragraph_no || index + 1) || index + 1,
+    paragraph_text: item.paragraph_text,
+    requirement_ids_json: JSON.stringify(Array.isArray(item.requirement_ids) ? item.requirement_ids : []),
+    evidence_ids_json: JSON.stringify(Array.isArray(item.evidence_ids) ? item.evidence_ids : []),
+    score_item_ids_json: JSON.stringify(Array.isArray(item.score_item_ids) ? item.score_item_ids : []),
+  }));
+
+  await transaction(async (tx) => {
+    await persistDraftSectionRegistry(tx, bidId, versionId, sections);
+  });
+
+  await logOperation({
+    req,
+    action: 'DRAFT_SECTION_SAVE',
+    entity: 'bid',
+    entityId: bidId,
+    message: `保存结构化章节稿 ${bid.bid_no}`,
+    afterData: {
+      version_id: versionId,
+      section_count: sections.length,
+    },
+  });
+
+  res.json({
+    ok: true,
+    bid_id: bidId,
+    version_id: versionId,
+    sections: normalizeDraftSectionRows(sections),
+  });
+}));
+
+app.put('/api/tender/bids/:id/draft/artifacts', requirePermission('tender:write'), asyncHandler(async (req, res) => {
+  const bidId = Number(req.params.id);
+  if (!Number.isFinite(bidId) || bidId <= 0) throw appError('标书ID无效', 400);
+  if (!isPlainObject(req.body?.artifacts)) throw appError('artifacts 必须为对象', 400);
+
+  const bid = await ensureBidExists(bidId, { user: req.user });
+  const currentVersion = await getCurrentVersion(bid);
+  const draft = await get('SELECT * FROM tender_bid_drafts WHERE bid_id = ? LIMIT 1', [bidId]);
+  const versionId = resolveDraftWorkspaceVersionId({ bid, currentVersion, draft });
+  if (!versionId) throw appError('当前项目尚无可保存的初稿版本', 409);
+
+  const artifactRows = buildDraftArtifactRowsForSave({
+    bidId,
+    versionId,
+    artifacts: req.body.artifacts,
+  });
+
+  await transaction(async (tx) => {
+    await persistDraftArtifactRows(tx, {
+      bidId,
+      versionId,
+      rows: artifactRows,
+      user: req.user,
+    });
+  });
+
+  await logOperation({
+    req,
+    action: 'DRAFT_ARTIFACT_SAVE',
+    entity: 'bid',
+    entityId: bidId,
+    message: `保存结构化偏离/应答表 ${bid.bid_no}`,
+    afterData: {
+      version_id: versionId,
+      row_count: artifactRows.length,
+    },
+  });
+
+  res.json({
+    ok: true,
+    bid_id: bidId,
+    version_id: versionId,
+    artifacts: buildDraftArtifactCollections({
+      persistedRows: artifactRows,
+      generatedArtifacts: {},
+    }),
+  });
+}));
+
 app.get('/api/tender/bids/:id/members', requirePermission('tender:read'), asyncHandler(async (req, res) => {
   const bidId = Number(req.params.id);
   if (!Number.isFinite(bidId) || bidId <= 0) throw appError('标书ID无效', 400);
@@ -9355,6 +12463,719 @@ app.put('/api/tender/bids/:id/members', requirePermission('tender:write'), async
   });
 }));
 
+app.get('/api/tender/bids/:id/parse/workspace', requirePermission('tender:read'), asyncHandler(async (req, res) => {
+  const bidId = Number(req.params.id);
+  if (!Number.isFinite(bidId) || bidId <= 0) throw appError('标书ID无效', 400);
+  const bid = await ensureBidExists(bidId, { user: req.user });
+  const workspace = await loadBidParseWorkspace(bidId);
+  res.json({
+    bid,
+    ...workspace,
+  });
+}));
+
+app.post('/api/tender/bids/:id/parse/files', requirePermission('tender:write'), uploadTenderParseFiles, asyncHandler(async (req, res) => {
+  const bidId = Number(req.params.id);
+  if (!Number.isFinite(bidId) || bidId <= 0) throw appError('标书ID无效', 400);
+  await ensureBidExists(bidId, { user: req.user });
+
+  const fileRole = normalizeParseFileRole(req.body?.file_role || req.body?.role || req.body?.source_role);
+  const incomingFiles = Array.isArray(req.files) ? req.files : [];
+  if (!incomingFiles.length) throw appError('请至少上传一个文件', 400);
+
+  const createdIds = [];
+  const warnings = [];
+  for (const file of incomingFiles) {
+    const sourceExt = normalizeParseUploadExt(file.originalname || file.path);
+    if (!sourceExt) throw uploadValidationError('仅支持上传 doc/docx/pdf/xls/xlsx/zip');
+    const sourceFileName = fixMojibakeText(trimText(file.originalname) || path.basename(file.path));
+
+    let sheetManifest = [];
+    let selectedSheetNames = [];
+    let parseSummary = {};
+
+    if (['.xlsx', '.xls'].includes(sourceExt)) {
+      const workbook = await loadSpreadsheetWorkbookFromStoredFile({
+        sourcePath: file.path,
+        sourceExt,
+        sourceName: sourceFileName,
+      });
+      sheetManifest = workbook.sheet_manifest || [];
+      selectedSheetNames = workbook.selected_sheet_names || [];
+      parseSummary = buildParseFilePreviewSummary(workbook);
+    }
+
+    const inserted = await run(
+      `INSERT INTO tender_bid_parse_files
+        (bid_id, parse_job_id, parent_file_id, root_file_id, file_role, file_kind, status, source_depth, relative_path,
+         original_file_name, display_name, source_ext, source_mime_type, storage_path, file_size,
+         sheet_manifest_json, selected_sheets_json, parse_summary_json, uploaded_by_id, uploaded_by_name)
+       VALUES (?, NULL, NULL, NULL, ?, 'UPLOAD', ?, 0, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        bidId,
+        fileRole,
+        sourceExt === '.zip' ? 'EXTRACTED' : 'UPLOADED',
+        sourceFileName,
+        sourceFileName,
+        sourceExt,
+        trimText(file.mimetype) || guessMimeByExt(sourceExt),
+        file.path,
+        Number(file.size || 0),
+        JSON.stringify(sheetManifest),
+        JSON.stringify(selectedSheetNames),
+        JSON.stringify(parseSummary),
+        Number(req.user.id || 0) || null,
+        trimText(req.user.username) || null,
+      ]
+    );
+    const rootFileId = Number(inserted.insertId);
+    createdIds.push(rootFileId);
+    await run('UPDATE tender_bid_parse_files SET root_file_id = ? WHERE id = ?', [rootFileId, rootFileId]);
+
+    if (sourceExt === '.zip') {
+      const zipBuffer = await fs.promises.readFile(file.path);
+      const extracted = await extractArchiveDocumentsFromBuffer(zipBuffer, { sourceName: sourceFileName });
+      warnings.push(...(Array.isArray(extracted.skipped) ? extracted.skipped : []).map((item) => ({
+        file_name: sourceFileName,
+        entry_name: item.entryName,
+        reason: item.reason,
+      })));
+
+      for (const entry of extracted.files || []) {
+        const childSourceName = path.basename(entry.entryName);
+        const childStoragePath = path.join(PARSE_ROOT, buildStoredFilename(childSourceName, entry.ext));
+        await fs.promises.writeFile(childStoragePath, entry.buffer);
+
+        let childManifest = [];
+        let childSelectedSheetNames = [];
+        let childSummary = {};
+        if (['.xlsx', '.xls'].includes(entry.ext)) {
+          const workbook = await loadSpreadsheetWorkbookFromBuffer({
+            buffer: entry.buffer,
+            sourceExt: entry.ext,
+            sourceName: childSourceName,
+          });
+          childManifest = workbook.sheet_manifest || [];
+          childSelectedSheetNames = workbook.selected_sheet_names || [];
+          childSummary = buildParseFilePreviewSummary(workbook);
+        }
+
+        const childInserted = await run(
+          `INSERT INTO tender_bid_parse_files
+            (bid_id, parse_job_id, parent_file_id, root_file_id, file_role, file_kind, status, source_depth, relative_path,
+             original_file_name, display_name, source_ext, source_mime_type, storage_path, file_size,
+             sheet_manifest_json, selected_sheets_json, parse_summary_json, uploaded_by_id, uploaded_by_name)
+           VALUES (?, NULL, ?, ?, ?, 'ARCHIVE_ENTRY', 'UPLOADED', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [
+            bidId,
+            rootFileId,
+            rootFileId,
+            fileRole,
+            Math.max(1, Number(entry.depth || 0) + 1),
+            trimText(entry.entryName) || childSourceName,
+            trimText(entry.entryName) || childSourceName,
+            childSourceName,
+            entry.ext,
+            guessMimeByExt(entry.ext),
+            childStoragePath,
+            Number(entry.buffer?.length || 0),
+            JSON.stringify(childManifest),
+            JSON.stringify(childSelectedSheetNames),
+            JSON.stringify(childSummary),
+            Number(req.user.id || 0) || null,
+            trimText(req.user.username) || null,
+          ]
+        );
+        createdIds.push(Number(childInserted.insertId));
+      }
+
+      await run(
+        `UPDATE tender_bid_parse_files
+         SET parse_summary_json = ?, updated_at = NOW()
+         WHERE id = ?`,
+        [JSON.stringify({
+          extracted_count: Number(extracted.files?.length || 0),
+          skipped_count: Number(extracted.skipped?.length || 0),
+        }), rootFileId]
+      );
+    }
+  }
+
+  await refreshBidStatusAfterParseUpload({ bidId, user: req.user });
+  const workspace = await loadBidParseWorkspace(bidId);
+  res.status(201).json({
+    bid_id: bidId,
+    items: workspace.files.filter((item) => createdIds.includes(Number(item.id))),
+    warnings,
+    workspace,
+  });
+}));
+
+app.delete('/api/tender/bids/:id/parse/files/:fileId', requirePermission('tender:write'), asyncHandler(async (req, res) => {
+  const bidId = Number(req.params.id);
+  const fileId = Number(req.params.fileId);
+  if (!Number.isFinite(bidId) || bidId <= 0) throw appError('标书ID无效', 400);
+  if (!Number.isFinite(fileId) || fileId <= 0) throw appError('文件ID无效', 400);
+  await ensureBidExists(bidId, { user: req.user });
+  await ensureParseFileExists({ bidId, fileId });
+
+  const rows = await query(
+    `SELECT *
+     FROM tender_bid_parse_files
+     WHERE bid_id = ?
+       AND status <> 'DELETED'
+       AND (id = ? OR parent_file_id = ? OR root_file_id = ?)
+     ORDER BY source_depth DESC, id DESC`,
+    [bidId, fileId, fileId, fileId]
+  );
+  const targetRows = rows.map((row) => sanitizeParseFileRow(row));
+  const targetIds = targetRows.map((item) => Number(item.id)).filter((item) => Number.isFinite(item) && item > 0);
+  const clauseRows = targetIds.length
+    ? await query(
+      `SELECT id
+       FROM tender_bid_parse_clauses
+       WHERE bid_id = ? AND source_file_id IN (${targetIds.map(() => '?').join(',')})`,
+      [bidId, ...targetIds]
+    )
+    : [];
+  const clauseIds = clauseRows.map((item) => Number(item.id)).filter((item) => Number.isFinite(item) && item > 0);
+
+  await transaction(async (tx) => {
+    if (clauseIds.length) {
+      await tx.run(
+        `DELETE FROM tender_bid_parse_matches
+         WHERE bid_id = ? AND clause_id IN (${clauseIds.map(() => '?').join(',')})`,
+        [bidId, ...clauseIds]
+      );
+    }
+    if (targetIds.length) {
+      await tx.run(
+        `DELETE FROM tender_bid_parse_clauses
+         WHERE bid_id = ? AND source_file_id IN (${targetIds.map(() => '?').join(',')})`,
+        [bidId, ...targetIds]
+      );
+      await tx.run(
+        `DELETE FROM tender_bid_parse_tables
+         WHERE bid_id = ? AND source_file_id IN (${targetIds.map(() => '?').join(',')})`,
+        [bidId, ...targetIds]
+      );
+      await tx.run(
+        `UPDATE tender_bid_parse_files
+         SET status = 'DELETED', updated_at = NOW()
+         WHERE bid_id = ? AND id IN (${targetIds.map(() => '?').join(',')})`,
+        [bidId, ...targetIds]
+      );
+    }
+  });
+
+  const filePathSet = new Set(targetRows.map((item) => trimText(item.storage_path)).filter(Boolean));
+  for (const filePath of filePathSet) {
+    await deleteFileSafe(filePath);
+  }
+
+  const workspace = await loadBidParseWorkspace(bidId);
+  res.json({
+    ok: true,
+    bid_id: bidId,
+    deleted_ids: targetIds,
+    workspace,
+  });
+}));
+
+app.post('/api/tender/bids/:id/parse/files/:fileId/sheets/select', requirePermission('tender:write'), asyncHandler(async (req, res) => {
+  const bidId = Number(req.params.id);
+  const fileId = Number(req.params.fileId);
+  if (!Number.isFinite(bidId) || bidId <= 0) throw appError('标书ID无效', 400);
+  if (!Number.isFinite(fileId) || fileId <= 0) throw appError('文件ID无效', 400);
+  await ensureBidExists(bidId, { user: req.user });
+  const file = await ensureParseFileExists({ bidId, fileId });
+  if (!['.xlsx', '.xls'].includes(trimText(file.source_ext).toLowerCase())) {
+    throw appError('当前文件不是 Excel，不能选择 sheet', 400);
+  }
+
+  let sheetManifest = Array.isArray(file.sheet_manifest) ? file.sheet_manifest : [];
+  if (!sheetManifest.length) {
+    const workbook = await loadSpreadsheetWorkbookFromStoredFile({
+      sourcePath: file.storage_path,
+      sourceExt: file.source_ext,
+      sourceName: file.display_name,
+    });
+    sheetManifest = workbook.sheet_manifest || [];
+  }
+  const selected = resolveSelectedSheetNames(
+    sheetManifest,
+    req.body?.selected_sheet_names || req.body?.sheet_names || req.body?.sheets || []
+  );
+  if (sheetManifest.length && !selected.length) {
+    throw appError('请至少勾选一个 sheet', 400);
+  }
+  const workbook = await loadSpreadsheetWorkbookFromStoredFile({
+    sourcePath: file.storage_path,
+    sourceExt: file.source_ext,
+    sourceName: file.display_name,
+    selectedSheetNames: selected,
+  });
+  await run(
+    `UPDATE tender_bid_parse_files
+     SET sheet_manifest_json = ?, selected_sheets_json = ?, parse_summary_json = ?, updated_at = NOW()
+     WHERE id = ? AND bid_id = ?`,
+    [
+      JSON.stringify(sheetManifest),
+      JSON.stringify(selected),
+      JSON.stringify(buildParseFilePreviewSummary(workbook)),
+      fileId,
+      bidId,
+    ]
+  );
+
+  res.json({
+    bid_id: bidId,
+    file: sanitizeParseFileRow(await get('SELECT * FROM tender_bid_parse_files WHERE id = ? LIMIT 1', [fileId])),
+  });
+}));
+
+app.post('/api/tender/bids/:id/parse/start', requirePermission('tender:write'), asyncHandler(async (req, res) => {
+  const bidId = Number(req.params.id);
+  if (!Number.isFinite(bidId) || bidId <= 0) throw appError('标书ID无效', 400);
+  await ensureBidExists(bidId, { user: req.user });
+  const parseScope = normalizeParseScope(req.body?.parse_scope || req.body?.scope);
+
+  const files = await loadParseFilesByBidId(bidId);
+  const parseableFiles = files.filter((item) => item.status !== 'DELETED' && trimText(item.source_ext).toLowerCase() !== '.zip');
+  if (!parseableFiles.length) throw appError('请先上传招标文件、澄清文件或附件', 400);
+
+  const created = await run(
+    `INSERT INTO tender_bid_parse_jobs
+      (bid_id, parse_scope, status, progress, file_count, operator_id, operator_name)
+     VALUES (?, ?, 'RUNNING', 10, ?, ?, ?)`,
+    [bidId, parseScope, parseableFiles.length, Number(req.user.id || 0) || null, trimText(req.user.username) || null]
+  );
+  const jobId = Number(created.insertId);
+
+  try {
+    const mergedSources = [];
+    const tableRows = [];
+    const clauseRows = [];
+    const warnings = [];
+    let tableSort = 1;
+    let clauseSort = 1;
+
+    for (const file of parseableFiles) {
+      const payload = await collectParseSourcePayload(file);
+      const scopedTables = filterTablesByParseScope(parseScope, payload.tables);
+      const scopedClauses = filterClausesByParseScope(parseScope, buildParseClauses({
+        text: payload.text,
+        tables: scopedTables,
+        fileRole: file.file_role,
+      }));
+
+      if (!trimText(payload.text) && !scopedTables.length) {
+        warnings.push(`${trimText(file.display_name || file.original_file_name)} 未提取到可解析内容`);
+      }
+
+      mergedSources.push({
+        file_role: file.file_role,
+        fields: payload.fields,
+      });
+
+      for (const table of scopedTables) {
+        tableRows.push({
+          bid_id: bidId,
+          parse_job_id: jobId,
+          source_file_id: Number(file.id),
+          table_name: trimText(table.table_name) || trimText(file.display_name),
+          source_sheet_name: trimText(table.source_sheet_name) || null,
+          row_count: Number(table.row_count || 0),
+          column_count: Number(table.column_count || 0),
+          summary_text: trimText(table.summary) || null,
+          header_json: JSON.stringify(Array.isArray(table.header) ? table.header : []),
+          rows_json: JSON.stringify(Array.isArray(table.rows) ? table.rows : []),
+          source_role: file.file_role,
+          sort_order: tableSort,
+        });
+        tableSort += 1;
+      }
+
+      for (const clause of scopedClauses) {
+        clauseRows.push({
+          bid_id: bidId,
+          parse_job_id: jobId,
+          source_file_id: Number(file.id),
+          clause_code: `PW-${jobId}-${String(clauseSort).padStart(4, '0')}`,
+          clause_title: trimText(clause.clause_title) || trimText(file.display_name),
+          clause_text: trimText(clause.clause_text),
+          clause_type: trimText(clause.clause_type).toUpperCase() || 'GENERAL',
+          response_mode: trimText(clause.response_mode).toUpperCase() || 'TEXT',
+          mandatory_flag: normalizeBoolean(clause.mandatory_flag, false) ? 1 : 0,
+          scoring_flag: normalizeBoolean(clause.scoring_flag, false) ? 1 : 0,
+          score_value: Number.isFinite(Number(clause.score_value)) ? Number(clause.score_value) : null,
+          source_role: file.file_role,
+          sort_order: clauseSort,
+          metadata_json: JSON.stringify({
+            file_name: trimText(file.display_name || file.original_file_name),
+            relative_path: trimText(file.relative_path) || null,
+          }),
+        });
+        clauseSort += 1;
+      }
+
+      await run(
+        `UPDATE tender_bid_parse_files
+         SET parse_job_id = ?, status = 'PARSED', parse_summary_json = ?, updated_at = NOW()
+         WHERE id = ?`,
+        [jobId, JSON.stringify(payload.parse_summary || {}), Number(file.id)]
+      );
+    }
+
+    const mergedFields = mergeParsedProjectFields(mergedSources);
+    const summary = {
+      parse_scope: parseScope,
+      parse_scope_label: parseScopeTitleMap[parseScope] || parseScopeTitleMap.FULL,
+      file_count: parseableFiles.length,
+      table_count: tableRows.length,
+      clause_count: clauseRows.length,
+      warning_count: warnings.length,
+    };
+
+    await transaction(async (tx) => {
+      for (const table of tableRows) {
+        await tx.run(
+          `INSERT INTO tender_bid_parse_tables
+            (bid_id, parse_job_id, source_file_id, table_name, source_sheet_name, row_count, column_count,
+             summary_text, header_json, rows_json, source_role, sort_order)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [
+            table.bid_id,
+            table.parse_job_id,
+            table.source_file_id,
+            table.table_name,
+            table.source_sheet_name,
+            table.row_count,
+            table.column_count,
+            table.summary_text,
+            table.header_json,
+            table.rows_json,
+            table.source_role,
+            table.sort_order,
+          ]
+        );
+      }
+      for (const clause of clauseRows) {
+        await tx.run(
+          `INSERT INTO tender_bid_parse_clauses
+            (bid_id, parse_job_id, source_file_id, clause_code, clause_title, clause_text, clause_type,
+             response_mode, mandatory_flag, scoring_flag, score_value, source_role, sort_order, metadata_json)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [
+            clause.bid_id,
+            clause.parse_job_id,
+            clause.source_file_id,
+            clause.clause_code,
+            clause.clause_title,
+            clause.clause_text,
+            clause.clause_type,
+            clause.response_mode,
+            clause.mandatory_flag,
+            clause.scoring_flag,
+            clause.score_value,
+            clause.source_role,
+            clause.sort_order,
+            clause.metadata_json,
+          ]
+        );
+      }
+      await tx.run(
+        `UPDATE tender_bid_parse_jobs
+         SET status = 'COMPLETED', progress = 100, merged_fields_json = ?, field_sources_json = ?, summary_json = ?, warning_text = ?, updated_at = NOW()
+         WHERE id = ?`,
+        [
+          JSON.stringify(mergedFields.values || {}),
+          JSON.stringify(mergedFields.sources || {}),
+          JSON.stringify(summary),
+          warnings.join('\n') || null,
+          jobId,
+        ]
+      );
+    });
+
+    await refreshBidStatusAfterParseCompleted({ bidId, user: req.user });
+    const detail = await ensureParseJobExists({ bidId, jobId });
+    res.status(201).json(detail);
+  } catch (err) {
+    await run(
+      `UPDATE tender_bid_parse_jobs
+       SET status = 'FAILED', progress = 100, error_message = ?, updated_at = NOW()
+       WHERE id = ?`,
+      [trimText(err?.message || '解析失败').slice(0, 1000), jobId]
+    );
+    throw err;
+  }
+}));
+
+app.get('/api/tender/bids/:id/parse/jobs/:jobId', requirePermission('tender:read'), asyncHandler(async (req, res) => {
+  const bidId = Number(req.params.id);
+  const jobId = Number(req.params.jobId);
+  if (!Number.isFinite(bidId) || bidId <= 0) throw appError('标书ID无效', 400);
+  if (!Number.isFinite(jobId) || jobId <= 0) throw appError('任务ID无效', 400);
+  await ensureBidExists(bidId, { user: req.user });
+  const detail = await ensureParseJobExists({ bidId, jobId });
+  res.json(detail);
+}));
+
+app.put('/api/tender/bids/:id/parse/clauses/bulk', requirePermission('tender:write'), asyncHandler(async (req, res) => {
+  const bidId = Number(req.params.id);
+  if (!Number.isFinite(bidId) || bidId <= 0) throw appError('标书ID无效', 400);
+  await ensureBidExists(bidId, { user: req.user });
+  const items = Array.isArray(req.body?.items) ? req.body.items : (Array.isArray(req.body?.clauses) ? req.body.clauses : []);
+  if (!items.length) throw appError('items 不能为空', 400);
+
+  const clauseIds = Array.from(new Set(items.map((item) => Number(item?.id || item?.clause_id)).filter((item) => Number.isFinite(item) && item > 0)));
+  if (!clauseIds.length) throw appError('缺少有效的条款ID', 400);
+  const existingRows = await query(
+    `SELECT *
+     FROM tender_bid_parse_clauses
+     WHERE bid_id = ? AND id IN (${clauseIds.map(() => '?').join(',')})`,
+    [bidId, ...clauseIds]
+  );
+  const existingMap = new Map(existingRows.map((item) => [Number(item.id), sanitizeParseClauseRow(item)]));
+  if (existingMap.size !== clauseIds.length) throw appError('存在无效的条款ID', 404);
+
+  await transaction(async (tx) => {
+    for (const item of items) {
+      const clauseId = Number(item?.id || item?.clause_id);
+      const current = existingMap.get(clauseId);
+      if (!current) continue;
+      const clauseType = trimText(item?.clause_type).toUpperCase() || current.clause_type;
+      const responseMode = trimText(item?.response_mode).toUpperCase() || current.response_mode;
+      const mandatoryFlag = item?.mandatory_flag === undefined
+        ? Number(current.mandatory_flag || 0)
+        : (normalizeBoolean(item?.mandatory_flag, false) ? 1 : 0);
+      const scoringFlag = item?.scoring_flag === undefined
+        ? Number(current.scoring_flag || 0)
+        : (normalizeBoolean(item?.scoring_flag, false) ? 1 : 0);
+      const scoreValue = item?.score_value === undefined
+        ? current.score_value
+        : (Number.isFinite(Number(item?.score_value)) ? Number(item.score_value) : null);
+      await tx.run(
+        `UPDATE tender_bid_parse_clauses
+         SET clause_type = ?, response_mode = ?, mandatory_flag = ?, scoring_flag = ?, score_value = ?, updated_at = NOW()
+         WHERE id = ? AND bid_id = ?`,
+        [clauseType || 'GENERAL', responseMode || 'TEXT', mandatoryFlag, scoringFlag, scoreValue, clauseId, bidId]
+      );
+    }
+  });
+
+  const latestJob = await loadLatestParseJobRow(bidId);
+  const detail = latestJob ? await loadParseJobDetail(latestJob.id, { bidId }) : { clauses: [] };
+  res.json({
+    bid_id: bidId,
+    updated_ids: clauseIds,
+    clauses: detail?.clauses || [],
+  });
+}));
+
+app.post('/api/tender/bids/:id/parse/matches/recommend', requirePermission('tender:write'), asyncHandler(async (req, res) => {
+  const bidId = Number(req.params.id);
+  if (!Number.isFinite(bidId) || bidId <= 0) throw appError('标书ID无效', 400);
+  await ensureBidExists(bidId, { user: req.user });
+
+  const requestedJobId = Number(req.body?.parse_job_id || 0);
+  const latestJob = requestedJobId > 0
+    ? sanitizeParseJobRow(await get('SELECT * FROM tender_bid_parse_jobs WHERE id = ? AND bid_id = ? LIMIT 1', [requestedJobId, bidId]))
+    : await loadLatestParseJobRow(bidId);
+  if (!latestJob) throw appError('请先执行解析', 409);
+
+  const clauseIds = Array.from(new Set(
+    (Array.isArray(req.body?.clause_ids) ? req.body.clause_ids : [])
+      .map((item) => Number(item))
+      .filter((item) => Number.isFinite(item) && item > 0)
+  ));
+  const clauseRows = await query(
+    `SELECT *
+     FROM tender_bid_parse_clauses
+     WHERE parse_job_id = ? ${clauseIds.length ? `AND id IN (${clauseIds.map(() => '?').join(',')})` : ''}
+     ORDER BY sort_order ASC, id ASC`,
+    clauseIds.length ? [Number(latestJob.id), ...clauseIds] : [Number(latestJob.id)]
+  );
+  const clauses = clauseRows.map((item) => sanitizeParseClauseRow(item));
+
+  const retrievalChunks = await loadParseRecommendationChunks(bidId);
+  const feedbackIndex = await loadParseRecommendationFeedbackIndex();
+
+  const recommendations = [];
+  for (const clause of clauses) {
+    const ranked = rankSemanticAssetRecommendations({
+      clause,
+      chunks: retrievalChunks,
+      limit: 3,
+      feedbackIndex,
+    });
+    for (const item of ranked) {
+      recommendations.push({
+        clause_id: Number(clause.id),
+        asset_id: Number(item.asset_id || 0) || null,
+        confidence: Number(item.confidence || 0),
+        reason_text: trimText(item.reason_text) || null,
+        match_source: trimText(item.match_source).toUpperCase() || 'HYBRID',
+        payload: {
+          recommended: true,
+          chunk_id: trimText(item.chunk_id),
+          chunk_type: trimText(item.chunk_type).toUpperCase() || 'GENERIC_ASSET',
+          source_table: trimText(item.source_table),
+          source_id: Number(item.source_id || 0) || null,
+          semantic_score: Number(item.semantic_score || 0),
+          rule_score: Number(item.rule_score || 0),
+          rerank_score: Number(item.rerank_score || 0),
+          feedback_score: Number(item.feedback_score || 0),
+          feedback_summary: item.feedback_summary && typeof item.feedback_summary === 'object' ? item.feedback_summary : {},
+          need_manual_review: !!item.need_manual_review,
+          manual_review_reasons: Array.isArray(item.manual_review_reasons) ? item.manual_review_reasons : [],
+          chunk_preview: trimText(item.chunk_preview),
+          title: trimText(item.title),
+        },
+      });
+    }
+  }
+
+  await transaction(async (tx) => {
+    if (clauses.length) {
+      await tx.run(
+        `DELETE FROM tender_bid_parse_matches
+         WHERE bid_id = ? AND parse_job_id = ? AND match_status = 'RECOMMENDED' AND clause_id IN (${clauses.map(() => '?').join(',')})`,
+        [bidId, Number(latestJob.id), ...clauses.map((item) => Number(item.id))]
+      );
+    }
+    for (const item of recommendations) {
+      await tx.run(
+        `INSERT INTO tender_bid_parse_matches
+          (bid_id, parse_job_id, clause_id, asset_id, match_status, confidence, reason_text, match_source, payload_json, created_by_id, created_by_name, updated_by_id, updated_by_name)
+         VALUES (?, ?, ?, ?, 'RECOMMENDED', ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          bidId,
+          Number(latestJob.id),
+          item.clause_id,
+          Number.isFinite(Number(item.asset_id)) && Number(item.asset_id) > 0 ? Number(item.asset_id) : null,
+          item.confidence,
+          item.reason_text,
+          item.match_source,
+          JSON.stringify(item.payload || { recommended: true }),
+          Number(req.user.id || 0) || null,
+          trimText(req.user.username) || null,
+          Number(req.user.id || 0) || null,
+          trimText(req.user.username) || null,
+        ]
+      );
+    }
+  });
+
+  const detail = await loadParseJobDetail(latestJob.id, { bidId });
+  res.json({
+    bid_id: bidId,
+    parse_job_id: Number(latestJob.id),
+    matches: detail?.matches || [],
+  });
+}));
+
+app.put('/api/tender/bids/:id/parse/matches/bulk', requirePermission('tender:write'), asyncHandler(async (req, res) => {
+  const bidId = Number(req.params.id);
+  if (!Number.isFinite(bidId) || bidId <= 0) throw appError('标书ID无效', 400);
+  await ensureBidExists(bidId, { user: req.user });
+  const items = Array.isArray(req.body?.items) ? req.body.items : (Array.isArray(req.body?.matches) ? req.body.matches : []);
+  if (!items.length) throw appError('items 不能为空', 400);
+
+  const latestJob = await loadLatestParseJobRow(bidId);
+  if (!latestJob) throw appError('请先执行解析', 409);
+  const clauseIds = Array.from(new Set(items.map((item) => Number(item?.clause_id)).filter((item) => Number.isFinite(item) && item > 0)));
+  const matchIds = Array.from(new Set(items.map((item) => Number(item?.id || item?.match_id)).filter((item) => Number.isFinite(item) && item > 0)));
+  const clauseMap = clauseIds.length
+    ? new Map((await query(
+      `SELECT id
+       FROM tender_bid_parse_clauses
+       WHERE bid_id = ? AND parse_job_id = ? AND id IN (${clauseIds.map(() => '?').join(',')})`,
+      [bidId, Number(latestJob.id), ...clauseIds]
+    )).map((item) => [Number(item.id), true]))
+    : new Map();
+  const existingMatchMap = matchIds.length
+    ? new Map((await query(
+      `SELECT id, payload_json
+       FROM tender_bid_parse_matches
+       WHERE bid_id = ? AND id IN (${matchIds.map(() => '?').join(',')})`,
+      [bidId, ...matchIds]
+    )).map((item) => [Number(item.id), item]))
+    : new Map();
+
+  await transaction(async (tx) => {
+    for (const item of items) {
+      const matchId = Number(item?.id || item?.match_id);
+      const clauseId = Number(item?.clause_id);
+      const assetId = Number(item?.asset_id);
+      const matchStatus = normalizeParseMatchStatus(item?.match_status || item?.status);
+      if (!matchStatus) throw appError('匹配状态不合法', 400);
+
+      if (Number.isFinite(matchId) && matchId > 0) {
+        const existing = existingMatchMap.get(matchId) || null;
+        const payload = buildParseMatchPayloadWithFeedback({
+          basePayload: parseMaybeJson(existing?.payload_json, {}),
+          nextPayload: item?.payload,
+          matchStatus,
+          user: req.user,
+        });
+        await tx.run(
+          `UPDATE tender_bid_parse_matches
+           SET asset_id = ?, match_status = ?, confidence = ?, reason_text = ?, payload_json = ?, updated_by_id = ?, updated_by_name = ?, updated_at = NOW()
+           WHERE id = ? AND bid_id = ?`,
+          [
+            Number.isFinite(assetId) && assetId > 0 ? assetId : null,
+            matchStatus,
+            Number.isFinite(Number(item?.confidence)) ? Number(item.confidence) : 0,
+            trimText(item?.reason_text) || null,
+            JSON.stringify(payload),
+            Number(req.user.id || 0) || null,
+            trimText(req.user.username) || null,
+            matchId,
+            bidId,
+          ]
+        );
+        continue;
+      }
+
+      if (!clauseMap.has(clauseId)) throw appError('存在无效的条款ID', 404);
+      const payload = buildParseMatchPayloadWithFeedback({
+        basePayload: {},
+        nextPayload: item?.payload,
+        matchStatus,
+        user: req.user,
+      });
+      await tx.run(
+        `INSERT INTO tender_bid_parse_matches
+          (bid_id, parse_job_id, clause_id, asset_id, match_status, confidence, reason_text, match_source, payload_json, created_by_id, created_by_name, updated_by_id, updated_by_name)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 'MANUAL', ?, ?, ?, ?, ?)`,
+        [
+          bidId,
+          Number(latestJob.id),
+          clauseId,
+          Number.isFinite(assetId) && assetId > 0 ? assetId : null,
+          matchStatus,
+          Number.isFinite(Number(item?.confidence)) ? Number(item.confidence) : 0,
+          trimText(item?.reason_text) || null,
+          JSON.stringify(payload),
+          Number(req.user.id || 0) || null,
+          trimText(req.user.username) || null,
+          Number(req.user.id || 0) || null,
+          trimText(req.user.username) || null,
+        ]
+      );
+    }
+  });
+
+  const detail = await loadParseJobDetail(latestJob.id, { bidId });
+  res.json({
+    bid_id: bidId,
+    parse_job_id: Number(latestJob.id),
+    matches: detail?.matches || [],
+  });
+}));
+
 app.post('/api/tender/bids/:id/check', requirePermission('tender:write'), asyncHandler(async (req, res) => {
   const bidId = Number(req.params.id);
   if (!Number.isFinite(bidId) || bidId <= 0) throw appError('标书ID无效', 400);
@@ -9377,6 +13198,9 @@ app.post('/api/tender/bids/:id/check', requirePermission('tender:write'), asyncH
   let draftSections = currentVersion
     ? await loadDraftSectionRegistryRows({ bidId, versionId: Number(currentVersion.id) })
     : [];
+  const draftArtifacts = currentVersion
+    ? await loadDraftArtifactRows({ bidId, versionId: Number(currentVersion.id) })
+    : [];
 
   const draftFilePath = trimText(draft?.draft_file_path) || trimText(currentVersion?.storage_path);
   const paragraphs = await extractParagraphsFromDocx(draftFilePath);
@@ -9392,6 +13216,7 @@ app.post('/api/tender/bids/:id/check', requirePermission('tender:write'), asyncH
   }
 
   const analyzeSummary = parseMaybeJson(latestDetail?.job?.analysis_summary_json, {});
+  const analyzeStageOutputs = isPlainObject(analyzeSummary?.stage_outputs) ? analyzeSummary.stage_outputs : {};
   const analyzeBidCategory = normalizeBidCategory(latestDetail?.job?.bid_category) || 'SERVICE';
   const analyzeFinalJson = normalizeFinalAnalyzeJson(analyzeSummary?.final_json || {}, analyzeBidCategory);
   const projectCoreInfo = isPlainObject(analyzeFinalJson?.project_core_info) ? analyzeFinalJson.project_core_info : {};
@@ -9404,6 +13229,9 @@ app.post('/api/tender/bids/:id/check', requirePermission('tender:write'), asyncH
       projectCoreInfo.delivery_period
     ),
     expected_contact: firstNonEmpty(projectCoreInfo.contact_person, projectCoreInfo.contact_name),
+    chapter_quality_summary: isPlainObject(analyzeStageOutputs?.chapter_quality_summary)
+      ? analyzeStageOutputs.chapter_quality_summary
+      : null,
     as_of_date: new Date().toISOString().slice(0, 10),
   };
 
@@ -9411,11 +13239,29 @@ app.post('/api/tender/bids/:id/check', requirePermission('tender:write'), asyncH
     requirements: requirementRegistry,
     sections: draftSections,
     evidences: evidenceRegistry,
+    artifacts: draftArtifacts,
     paragraphs,
     context: checkContext,
   });
   const docxResult = runDocxChecks({ paragraphs });
-  const checkResult = mergeCheckResults(structuredResult, docxResult);
+  const rawCheckResult = mergeCheckResults(structuredResult, docxResult);
+  const activeValidationRules = await loadValidationRuleRows({
+    activeOnly: true,
+    limit: 500,
+  });
+  const checkIssues = decorateIssuesWithRules({
+    issues: rawCheckResult.issues,
+    rules: activeValidationRules,
+  });
+  const ruleExecution = buildRuleExecutionSummary({
+    rules: activeValidationRules,
+    issues: checkIssues,
+  });
+  const checkResult = {
+    ...rawCheckResult,
+    issues: checkIssues,
+    rule_execution: ruleExecution,
+  };
 
   const checkRunId = await transaction(async (tx) => {
     const inserted = await tx.run(
@@ -9483,6 +13329,7 @@ app.post('/api/tender/bids/:id/check', requirePermission('tender:write'), asyncH
     evidence_registry: evidenceRegistry,
     draft_sections: draftSections,
     summary: checkResult.summary,
+    rule_execution: checkResult.rule_execution,
     issues: checkResult.issues,
   });
 }));
@@ -9495,6 +13342,7 @@ app.post('/api/tender/bids/:id/score-optimize', requirePermission('tender:write'
   const currentVersion = await getCurrentVersion(bid);
   const draft = sanitizeDraftRow(await get('SELECT * FROM tender_bid_drafts WHERE bid_id = ? LIMIT 1', [bidId]));
   const latestJob = await loadLatestGenerateJobForBid(bidId);
+  const linkedKbProject = await loadLinkedKbProjectByBid(bid);
   let requirementRegistry = latestJob ? await loadRequirementRegistryRows(latestJob.id) : [];
   if (!requirementRegistry.length && latestJob) {
     const detail = await loadGenerateJobDetail(latestJob.id);
@@ -9578,18 +13426,32 @@ app.post('/api/tender/bids/:id/score-optimize', requirePermission('tender:write'
     if (!key) continue;
     suggestionMap.set(key, item);
   }
-  const normalized = normalizeOptimizationResponse({
+  const strategyInputs = await loadWinningStrategyInputs({ limit: 40 });
+  const strategyProfiles = buildWinningStrategyProfiles(strategyInputs);
+  const selectedStrategyProfile = pickWinningStrategyProfile({
+    profiles: strategyProfiles,
+    projectType: trimText(linkedKbProject?.project_type),
+    industryType: trimText(linkedKbProject?.industry_type),
+  });
+  const strategyLearning = applyWinningStrategyToSuggestions({
     items: Array.from(suggestionMap.values()),
+    profile: selectedStrategyProfile,
+  });
+  const normalized = normalizeOptimizationResponse({
+    items: strategyLearning.items,
   });
   const applyResult = applyOptimizationToSections({
     sections: draftSections,
     items: normalized.items,
   });
   const appliedRows = applyResult.applied_records.map((item) => {
-    const source = trimText(suggestionMap.get(trimText(item.score_item_id))?.source) || 'RULE';
+    const source = trimText(suggestionMap.get(trimText(item.score_item_id))?.source) || trimText(item.source) || 'RULE';
+    const sourceWithLearning = trimText(item.strategy_profile_key)
+      ? `${source}_LEARNED`
+      : source;
     return {
       ...item,
-      source,
+      source: sourceWithLearning,
       applied_flag: 1,
       status: 'APPLIED',
     };
@@ -9622,6 +13484,8 @@ app.post('/api/tender/bids/:id/score-optimize', requirePermission('tender:write'
       source_job_id: Number(latestJob?.id || 0) || null,
       candidate_count: normalized.items.length,
       applied_count: applyResult.applied_count,
+      strategy_profile: strategyLearning.profile,
+      strategy_matched_count: Number(strategyLearning.matched_count || 0),
     },
   });
 
@@ -9637,6 +13501,8 @@ app.post('/api/tender/bids/:id/score-optimize', requirePermission('tender:write'
     applied_count: applyResult.applied_count,
     applied_records: appliedRows,
     draft_sections: applyResult.sections,
+    strategy_profile: strategyLearning.profile,
+    strategy_matched_count: Number(strategyLearning.matched_count || 0),
     prompt_preview: promptPreview,
     warnings,
   });
@@ -9762,9 +13628,21 @@ app.delete('/api/tender/bids/:id', requirePermission('tender:write'), asyncHandl
      WHERE bid_id = ?`,
     [id]
   );
+  const exportRows = await query(
+    `SELECT id, storage_path
+     FROM tender_bid_export_records
+     WHERE bid_id = ?`,
+    [id]
+  );
   const assetRows = await query(
     `SELECT id, storage_path, original_file_name
      FROM tender_assets
+     WHERE bid_id = ?`,
+    [id]
+  );
+  const parseFileRows = await query(
+    `SELECT id, storage_path
+     FROM tender_bid_parse_files
      WHERE bid_id = ?`,
     [id]
   );
@@ -9781,7 +13659,19 @@ app.delete('/api/tender/bids/:id', requirePermission('tender:write'), asyncHandl
       await tx.run('DELETE FROM tender_editor_sessions WHERE bid_id = ?', [id]);
       await tx.run('DELETE FROM tender_bid_field_values WHERE bid_id = ?', [id]);
       await tx.run('DELETE FROM tender_bid_reviews WHERE bid_id = ?', [id]);
+      await tx.run('DELETE FROM tender_draft_check_issues WHERE bid_id = ?', [id]);
+      await tx.run('DELETE FROM tender_draft_check_runs WHERE bid_id = ?', [id]);
+      await tx.run('DELETE FROM tender_score_optimization_records WHERE bid_id = ?', [id]);
+      await tx.run('DELETE FROM tender_score_coverage_matrix WHERE bid_id = ?', [id]);
+      await tx.run('DELETE FROM tender_draft_artifact_rows WHERE bid_id = ?', [id]);
+      await tx.run('DELETE FROM tender_draft_section_registry WHERE bid_id = ?', [id]);
       await tx.run('DELETE FROM tender_bid_draft_autosaves WHERE bid_id = ?', [id]);
+      await tx.run('DELETE FROM tender_bid_export_records WHERE bid_id = ?', [id]);
+      await tx.run('DELETE FROM tender_bid_parse_matches WHERE bid_id = ?', [id]);
+      await tx.run('DELETE FROM tender_bid_parse_clauses WHERE bid_id = ?', [id]);
+      await tx.run('DELETE FROM tender_bid_parse_tables WHERE bid_id = ?', [id]);
+      await tx.run('DELETE FROM tender_bid_parse_jobs WHERE bid_id = ?', [id]);
+      await tx.run('DELETE FROM tender_bid_parse_files WHERE bid_id = ?', [id]);
       await tx.run('UPDATE tender_bid_generate_jobs SET created_bid_id = NULL WHERE created_bid_id = ?', [id]);
       await tx.run('DELETE FROM tender_bid_versions WHERE bid_id = ?', [id]);
       await tx.run('DELETE FROM tender_bid_drafts WHERE bid_id = ?', [id]);
@@ -9795,7 +13685,9 @@ app.delete('/api/tender/bids/:id', requirePermission('tender:write'), asyncHandl
     ...versionRows.map((item) => trimText(item.storage_path)),
     ...draftRows.map((item) => trimText(item.draft_file_path)),
     ...autosaveRows.map((item) => trimText(item.storage_path)),
+    ...exportRows.map((item) => trimText(item.storage_path)),
     ...assetRows.map((item) => trimText(item.storage_path)),
+    ...parseFileRows.map((item) => trimText(item.storage_path)),
   ].filter(Boolean));
   for (const filePath of filePathSet) {
     await deleteFileSafe(filePath);
@@ -9815,6 +13707,7 @@ app.delete('/api/tender/bids/:id', requirePermission('tender:write'), asyncHandl
       draft_count: draftRows.length,
       autosave_count: autosaveRows.length,
       asset_count: assetRows.length,
+      parse_file_count: parseFileRows.length,
     },
     afterData: { deleted: true },
   });
@@ -9827,6 +13720,7 @@ app.delete('/api/tender/bids/:id', requirePermission('tender:write'), asyncHandl
       draft_count: draftRows.length,
       autosave_count: autosaveRows.length,
       asset_count: assetRows.length,
+      parse_file_count: parseFileRows.length,
     },
   });
 }));
@@ -10644,6 +14538,135 @@ app.get('/api/tender/bids/:id/editor/events', requirePermission('tender:read'), 
   });
 }));
 
+app.get('/api/tender/risk-center/summary', requirePermission('tender:read'), asyncHandler(async (req, res) => {
+  const keyword = trimText(req.query.keyword);
+  const status = normalizeStatus(req.query.status);
+  const level = trimText(req.query.level).toUpperCase();
+  const limit = toBoundedLimit(req.query.limit, 200);
+  const where = [];
+  const params = [];
+
+  if (keyword) {
+    where.push('(title LIKE ? OR customer_name LIKE ? OR project_name LIKE ? OR bid_no LIKE ?)');
+    params.push(`%${keyword}%`, `%${keyword}%`, `%${keyword}%`, `%${keyword}%`);
+  }
+  if (trimText(req.query.status)) {
+    where.push('status = ?');
+    params.push(status);
+  }
+  appendScopedWhere(where, params, buildBidScopeWhere(req.user, {
+    idColumn: 'tender_bids.id',
+    creatorColumn: 'tender_bids.created_by_id',
+  }));
+
+  const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
+  const bidRows = await query(
+    `SELECT *
+     FROM tender_bids
+     ${whereSql}
+     ORDER BY updated_at DESC, id DESC
+     LIMIT ?`,
+    [...params, limit]
+  );
+
+  const riskRows = await buildRiskCenterProjectRows(bidRows);
+  const filteredRows = riskRows.filter((item) => !level || String(item.risk_level || '').toUpperCase() === level);
+
+  res.json({
+    overview: buildRiskCenterOverview(filteredRows),
+    items: filteredRows,
+  });
+}));
+
+app.get('/api/tender/export-center/summary', requirePermission('tender:read'), asyncHandler(async (req, res) => {
+  const keyword = trimText(req.query.keyword);
+  const status = normalizeStatus(req.query.status);
+  const limit = toBoundedLimit(req.query.limit, 200);
+  const where = [];
+  const params = [];
+
+  if (keyword) {
+    where.push('(title LIKE ? OR customer_name LIKE ? OR project_name LIKE ? OR bid_no LIKE ?)');
+    params.push(`%${keyword}%`, `%${keyword}%`, `%${keyword}%`, `%${keyword}%`);
+  }
+  if (trimText(req.query.status)) {
+    where.push('status = ?');
+    params.push(status);
+  }
+  appendScopedWhere(where, params, buildBidScopeWhere(req.user, {
+    idColumn: 'tender_bids.id',
+    creatorColumn: 'tender_bids.created_by_id',
+  }));
+
+  const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
+  const bidRows = await query(
+    `SELECT *
+     FROM tender_bids
+     ${whereSql}
+     ORDER BY updated_at DESC, id DESC
+     LIMIT ?`,
+    [...params, limit]
+  );
+
+  const { projectRows, exportRecords } = await buildExportCenterProjectRows(bidRows);
+  const visibleBidIds = new Set(projectRows.map((item) => Number(item.bid_id)).filter((item) => Number.isFinite(item) && item > 0));
+  const visibleRecords = exportRecords.filter((item) => visibleBidIds.has(Number(item.bid_id))).slice(0, 80);
+
+  res.json({
+    overview: buildExportCenterOverview({ projectRows, exportRecords: visibleRecords, now: new Date().toISOString() }),
+    items: projectRows,
+    recent_records: visibleRecords,
+  });
+}));
+
+app.post('/api/tender/bids/:id/export', requirePermission('tender:write'), asyncHandler(async (req, res) => {
+  const bidId = Number(req.params.id);
+  if (!Number.isFinite(bidId) || bidId <= 0) throw appError('标书ID无效', 400);
+
+  const bid = await ensureBidExists(bidId, { user: req.user });
+  const format = trimText(req.body?.format).toUpperCase() || 'DOCX';
+  const record = await executeBidExport({ bid, format, user: req.user });
+  const latestBid = await ensureBidExists(bidId, { user: req.user });
+
+  await logOperation({
+    req,
+    action: 'BID_EXPORT',
+    entity: 'bid',
+    entityId: bidId,
+    message: `导出标书 ${bid.bid_no} (${format})`,
+    afterData: {
+      export_record_id: Number(record.id),
+      export_type: record.export_type,
+      status: record.status,
+      file_name: record.file_name,
+    },
+  });
+
+  res.status(201).json({
+    ok: true,
+    bid: latestBid,
+    record,
+    download_url: `/api/tender/export-records/${record.id}/download`,
+  });
+}));
+
+app.get('/api/tender/export-records/:id/download', requirePermission('tender:read'), asyncHandler(async (req, res) => {
+  const recordId = Number(req.params.id);
+  if (!Number.isFinite(recordId) || recordId <= 0) throw appError('导出记录ID无效', 400);
+
+  const row = await get('SELECT * FROM tender_bid_export_records WHERE id = ? LIMIT 1', [recordId]);
+  if (!row) throw appError('导出记录不存在', 404);
+  const record = sanitizeExportRecordRow(row);
+  await ensureBidExists(Number(record.bid_id), { user: req.user });
+  if (record.status !== 'SUCCESS' || !trimText(record.storage_path)) throw appError('当前导出记录无可下载文件', 404);
+
+  const stat = await readFileStatSafe(record.storage_path);
+  if (!stat?.isFile()) throw appError('导出文件不存在', 404);
+
+  res.setHeader('Content-Type', record.mime_type || guessMimeByExt(path.extname(record.file_name || record.storage_path)));
+  res.download(path.resolve(record.storage_path), record.file_name || path.basename(record.storage_path));
+}));
+
 app.get('/api/tender/drafts/:id/download.docx', asyncHandler(async (req, res) => {
   const draftId = Number(req.params.id);
   if (!Number.isFinite(draftId) || draftId <= 0) throw appError('草稿ID无效', 400);
@@ -10822,20 +14845,35 @@ app.delete('/api/tender/templates/fields/:id', requirePermission('tender:templat
   if (!Number.isFinite(id) || id <= 0) throw appError('字段ID无效', 400);
   const before = await get('SELECT * FROM tender_template_fields WHERE id = ? LIMIT 1', [id]);
   if (!before) throw appError('字段不存在', 404);
+  const bundleRefs = await query(
+    `SELECT b.id, b.bundle_code, b.name
+     FROM tender_template_bundle_items item
+     INNER JOIN tender_template_bundles b ON b.id = item.bundle_id
+     WHERE item.item_type = 'FIELD' AND item.ref_id = ?
+     ORDER BY b.id DESC`,
+    [id]
+  );
+  if (bundleRefs.length) {
+    throw appError(buildTemplateReferenceConflictMessage({
+      entityLabel: '模板字段',
+      entityCode: before.field_code,
+      bundles: bundleRefs,
+    }), 400);
+  }
 
-  await run('UPDATE tender_template_fields SET is_active = 0, updated_at = NOW() WHERE id = ?', [id]);
+  await run('DELETE FROM tender_template_fields WHERE id = ?', [id]);
 
   await logOperation({
     req,
     action: 'TEMPLATE_FIELD_DELETE',
     entity: 'template_field',
     entityId: id,
-    message: `停用模板字段 ${before.field_code}`,
+    message: `删除模板字段 ${before.field_code}`,
     beforeData: before,
-    afterData: { is_active: 0 },
+    afterData: { deleted: true },
   });
 
-  res.json({ ok: true });
+  res.json({ ok: true, id });
 }));
 
 app.get('/api/tender/templates/snippets', requirePermission('tender:read'), asyncHandler(async (_req, res) => {
@@ -10924,20 +14962,35 @@ app.delete('/api/tender/templates/snippets/:id', requirePermission('tender:templ
   if (!Number.isFinite(id) || id <= 0) throw appError('片段ID无效', 400);
   const before = await get('SELECT * FROM tender_template_snippets WHERE id = ? LIMIT 1', [id]);
   if (!before) throw appError('片段不存在', 404);
+  const bundleRefs = await query(
+    `SELECT b.id, b.bundle_code, b.name
+     FROM tender_template_bundle_items item
+     INNER JOIN tender_template_bundles b ON b.id = item.bundle_id
+     WHERE item.item_type = 'SNIPPET' AND item.ref_id = ?
+     ORDER BY b.id DESC`,
+    [id]
+  );
+  if (bundleRefs.length) {
+    throw appError(buildTemplateReferenceConflictMessage({
+      entityLabel: '模板片段',
+      entityCode: before.snippet_code,
+      bundles: bundleRefs,
+    }), 400);
+  }
 
-  await run('UPDATE tender_template_snippets SET is_active = 0, updated_at = NOW() WHERE id = ?', [id]);
+  await run('DELETE FROM tender_template_snippets WHERE id = ?', [id]);
 
   await logOperation({
     req,
     action: 'TEMPLATE_SNIPPET_DELETE',
     entity: 'template_snippet',
     entityId: id,
-    message: `停用模板片段 ${before.snippet_code}`,
+    message: `删除模板片段 ${before.snippet_code}`,
     beforeData: before,
-    afterData: { is_active: 0 },
+    afterData: { deleted: true },
   });
 
-  res.json({ ok: true });
+  res.json({ ok: true, id });
 }));
 
 const loadBundleItems = async (bundleId) => {
@@ -11175,20 +15228,22 @@ app.delete('/api/tender/templates/bundles/:id', requirePermission('tender:templa
   if (!Number.isFinite(id) || id <= 0) throw appError('模板包ID无效', 400);
   const before = await loadBundleDetail(id);
   if (!before) throw appError('模板包不存在', 404);
-
-  await run(`UPDATE tender_template_bundles SET status = 'INACTIVE', updated_at = NOW() WHERE id = ?`, [id]);
+  await transaction(async (tx) => {
+    await tx.run('DELETE FROM tender_template_bundle_items WHERE bundle_id = ?', [id]);
+    await tx.run('DELETE FROM tender_template_bundles WHERE id = ?', [id]);
+  });
 
   await logOperation({
     req,
     action: 'TEMPLATE_BUNDLE_DELETE',
     entity: 'template_bundle',
     entityId: id,
-    message: `停用模板包 ${before.bundle_code}`,
+    message: `删除模板包 ${before.bundle_code}`,
     beforeData: before,
-    afterData: { status: 'INACTIVE' },
+    afterData: { deleted: true },
   });
 
-  res.json({ ok: true });
+  res.json({ ok: true, id });
 }));
 
 app.post('/api/tender/bids/:id/fill', requirePermission('tender:write'), asyncHandler(async (req, res) => {
@@ -11899,6 +15954,238 @@ app.get('/api/tender/ai/logs', asyncHandler(async (req, res) => {
   res.json(rows);
 }));
 
+app.get('/api/tender/evaluations/overview', requirePermission('tender:read'), asyncHandler(async (req, res) => {
+  const datasetRows = await listVisibleEvaluationDatasets({ user: req.user, limit: 2000 });
+  const runRows = await listVisibleEvaluationRuns({ user: req.user, limit: 2000 });
+  const latestRun = runRows[0] || null;
+  const latestBaselineRun = runRows.find((item) => String(item.run_scope) === 'BASELINE') || null;
+
+  res.json({
+    overview: {
+      dataset_count: datasetRows.length,
+      baseline_dataset_count: datasetRows.filter((item) => item.baseline_flag).length,
+      run_count: runRows.length,
+      latest_run: latestRun,
+      latest_baseline_run: latestBaselineRun,
+    },
+    dataset_counts_by_type: TENDER_EVAL_TYPES.map((evalType) => ({
+      eval_type: evalType,
+      count: datasetRows.filter((item) => item.eval_type === evalType).length,
+    })),
+    recent_runs: runRows.slice(0, 10),
+  });
+}));
+
+app.get('/api/tender/evaluations/datasets', requirePermission('tender:read'), asyncHandler(async (req, res) => {
+  const limit = toBoundedLimit(req.query.limit, 200);
+  const items = await listVisibleEvaluationDatasets({
+    user: req.user,
+    filters: {
+      evalType: req.query.eval_type,
+      baselineFlag: req.query.baseline_flag,
+      status: req.query.status,
+    },
+    limit,
+  });
+  res.json({
+    items,
+    total: items.length,
+  });
+}));
+
+app.post('/api/tender/evaluations/datasets', requirePermission('tender:write'), asyncHandler(async (req, res) => {
+  const bidId = Number(req.body?.bid_id || req.body?.source_bid_id || 0);
+  if (!Number.isFinite(bidId) || bidId <= 0) throw appError('bid_id不能为空', 400);
+
+  const evalType = normalizeEvaluationType(req.body?.eval_type);
+  if (!evalType) throw appError('eval_type不支持', 400);
+
+  const bid = await ensureBidExists(bidId, { user: req.user });
+  const facts = await buildEvaluationFactBundle({ bid });
+  const actualPayload = buildEvaluationActualPayload({ evalType, facts });
+  const expectedPayload = req.body?.expected_payload === undefined
+    ? buildEvaluationExpectedPayloadFromFacts({ evalType, facts })
+    : normalizeEvaluationExpectedPayload(
+      evalType,
+      req.body?.expected_payload && typeof req.body.expected_payload === 'object'
+        ? req.body.expected_payload
+        : parseMaybeJson(req.body?.expected_payload, {})
+    );
+
+  const datasetName = trimText(req.body?.dataset_name) || `${trimText(bid.project_name || bid.title)}-${evalType}`;
+  const datasetCode = trimText(req.body?.dataset_code) || buildEvaluationDatasetCode();
+  const baselineFlag = req.body?.baseline_flag === undefined ? 1 : (req.body?.baseline_flag ? 1 : 0);
+  const notes = trimText(req.body?.notes);
+
+  const insert = await run(
+    `INSERT INTO tender_eval_datasets
+      (dataset_code, dataset_name, eval_type, source_bid_id, baseline_flag, status, expected_payload_json, notes, created_by_id, created_by_name, updated_by_id, updated_by_name)
+     VALUES (?, ?, ?, ?, ?, 'ACTIVE', ?, ?, ?, ?, ?, ?)`,
+    [
+      datasetCode,
+      datasetName,
+      evalType,
+      bidId,
+      baselineFlag,
+      JSON.stringify(expectedPayload),
+      notes || null,
+      Number(req.user.id),
+      req.user.username,
+      Number(req.user.id),
+      req.user.username,
+    ]
+  );
+
+  const row = sanitizeEvaluationDatasetRow(await get('SELECT * FROM tender_eval_datasets WHERE id = ? LIMIT 1', [insert.insertId]));
+
+  await logOperation({
+    req,
+    action: 'EVALUATION_DATASET_CREATE',
+    entity: 'evaluation_dataset',
+    entityId: Number(row.id),
+    message: `创建评测数据集 ${row.dataset_code}`,
+    afterData: {
+      eval_type: row.eval_type,
+      source_bid_id: row.source_bid_id,
+      baseline_flag: row.baseline_flag,
+    },
+  });
+
+  res.status(201).json({
+    ...row,
+    actual_preview: actualPayload,
+  });
+}));
+
+app.get('/api/tender/evaluations/runs', requirePermission('tender:read'), asyncHandler(async (req, res) => {
+  const limit = toBoundedLimit(req.query.limit, 100);
+  const items = await listVisibleEvaluationRuns({ user: req.user, limit });
+  res.json({
+    items,
+    total: items.length,
+  });
+}));
+
+app.get('/api/tender/evaluations/runs/:id', requirePermission('tender:read'), asyncHandler(async (req, res) => {
+  const runId = Number(req.params.id);
+  if (!Number.isFinite(runId) || runId <= 0) throw appError('评测批次ID无效', 400);
+
+  const detail = await loadVisibleEvaluationRunDetail({ user: req.user, runId });
+  if (!detail) throw appError('评测批次不存在', 404);
+  res.json(detail);
+}));
+
+app.post('/api/tender/evaluations/runs', requirePermission('tender:write'), asyncHandler(async (req, res) => {
+  const requestedIds = Array.from(
+    new Set(
+      (Array.isArray(req.body?.dataset_ids) ? req.body.dataset_ids : [])
+        .map((item) => Number(item))
+        .filter((item) => Number.isFinite(item) && item > 0)
+    )
+  );
+  const runScope = ['BASELINE', 'ADHOC'].includes(trimText(req.body?.run_scope).toUpperCase())
+    ? trimText(req.body?.run_scope).toUpperCase()
+    : 'ADHOC';
+  const runLabel = trimText(req.body?.run_label) || `${runScope === 'BASELINE' ? 'Baseline' : 'Adhoc'} ${new Date().toISOString()}`;
+
+  const datasets = requestedIds.length
+    ? await listVisibleEvaluationDatasets({ user: req.user, filters: { datasetIds: requestedIds, status: 'ACTIVE' }, limit: requestedIds.length })
+    : await listVisibleEvaluationDatasets({ user: req.user, filters: { baselineFlag: true, status: 'ACTIVE' }, limit: 500 });
+
+  if (requestedIds.length && datasets.length !== requestedIds.length) {
+    throw appError('部分评测数据集不存在或无权限', 404);
+  }
+  if (!datasets.length) {
+    throw appError('缺少可执行的评测数据集', 409);
+  }
+
+  const previousBaselineRun = await loadLatestBaselineRun();
+  const evaluatedItems = [];
+  for (const dataset of datasets) {
+    const bid = await ensureBidExists(Number(dataset.source_bid_id), { user: req.user });
+    const facts = await buildEvaluationFactBundle({ bid });
+    const actualPayload = buildEvaluationActualPayload({ evalType: dataset.eval_type, facts });
+    const result = evaluateDatasetResult({
+      dataset,
+      actual: actualPayload,
+    });
+    evaluatedItems.push({
+      dataset,
+      actual: actualPayload,
+      result,
+    });
+  }
+
+  const summary = buildRunSummary(evaluatedItems.map((item) => item.result));
+  const baselineSummary = buildBaselineDelta({
+    currentSummary: summary,
+    baselineSummary: previousBaselineRun?.summary || summary,
+  });
+  const runStatus = determineEvaluationRunStatus(summary);
+
+  const created = await transaction(async (tx) => {
+    const insert = await tx.run(
+      `INSERT INTO tender_eval_runs
+        (run_no, run_label, run_scope, status, dataset_count, summary_json, baseline_summary_json, started_by_id, started_by_name, completed_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
+      [
+        buildEvaluationRunNo(),
+        runLabel,
+        runScope,
+        runStatus,
+        evaluatedItems.length,
+        JSON.stringify(summary),
+        JSON.stringify(baselineSummary),
+        Number(req.user.id),
+        req.user.username,
+      ]
+    );
+    const runId = Number(insert.insertId);
+
+    for (const item of evaluatedItems) {
+      const summaryKey = evaluationTypeToSummaryKey(item.dataset.eval_type);
+      const deltaPayload = summaryKey && baselineSummary?.kpis?.[summaryKey]
+        ? baselineSummary.kpis[summaryKey]
+        : { current_score: Number(item.result.score || 0), baseline_score: Number(item.result.score || 0), delta: 0, trend: 'FLAT' };
+      await tx.run(
+        `INSERT INTO tender_eval_run_items
+          (run_id, dataset_id, eval_type, source_bid_id, score, status, result_json, delta_json)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          runId,
+          Number(item.dataset.id),
+          item.dataset.eval_type,
+          Number(item.dataset.source_bid_id),
+          Number(item.result.score || 0),
+          item.result.status,
+          JSON.stringify(item.result),
+          JSON.stringify(deltaPayload),
+        ]
+      );
+    }
+
+    return runId;
+  });
+
+  const detail = await loadVisibleEvaluationRunDetail({ user: req.user, runId: created });
+
+  await logOperation({
+    req,
+    action: 'EVALUATION_RUN_START',
+    entity: 'evaluation_run',
+    entityId: Number(created),
+    message: `执行评测批次 ${runLabel}`,
+    afterData: {
+      run_scope: runScope,
+      dataset_count: evaluatedItems.length,
+      status: runStatus,
+      overall_score: summary.overall_score,
+    },
+  });
+
+  res.status(201).json(detail);
+}));
+
 app.get('/api/tender/audit/logs', requirePermission('tender:audit:read'), asyncHandler(async (req, res) => {
   const { username, action, entity, date_from, date_to, keyword, limit } = req.query || {};
   const where = [];
@@ -12097,27 +16384,31 @@ app.post('/api/tender/config', requirePermission('tender:config:manage'), asyncH
 }));
 
 app.use((err, req, res, _next) => {
-  const status = Number(err?.statusCode || err?.status || 500);
-  const message = trimText(err?.message) || '服务器内部错误';
-  const defaultCategory = (() => {
-    const pathText = trimText(req?.path);
-    if (String(err?.category || '').trim()) return trimText(err.category).toUpperCase();
-    if (pathText.includes('/upload')) return 'UPLOAD';
-    if (pathText.includes('/analyze')) return 'PARSE';
-    if (pathText.includes('/export')) return 'EXPORT';
-    if (pathText.includes('/generate')) return 'GENERATE';
-    if (status >= 500) return 'INTERNAL';
-    return 'REQUEST';
-  })();
-  const payload = {
-    error: message,
-    code: trimText(err?.code) || (status >= 500 ? 'TENDER_INTERNAL_ERROR' : 'TENDER_REQUEST_FAILED'),
-    category: defaultCategory,
-    retryable: !!err?.retryable,
-    manual_takeover: err?.manual_takeover || null,
-  };
-  if (err?.details && typeof err.details === 'object') {
-    payload.details = err.details;
+  const {
+    status,
+    payload,
+    should_log: shouldLogFailure,
+    failure_log: failureLog,
+  } = buildFailurePayload({
+    err,
+    path: req?.path,
+    method: req?.method,
+  });
+  if (shouldLogFailure) {
+    insertOperationLog({
+      userId: req?.user?.id,
+      username: req?.user?.username,
+      userRole: req?.user?.role,
+      action: failureLog.action,
+      entity: failureLog.entity,
+      entityId: null,
+      message: failureLog.message,
+      beforeData: null,
+      afterData: failureLog.afterData,
+      requestIp: getClientIp(req),
+    }).catch((logErr) => {
+      console.error('[tender] failure audit log write failed:', logErr?.message || logErr);
+    });
   }
   if (!res.headersSent) {
     res.status(status).json(payload);
@@ -12148,7 +16439,14 @@ const start = async () => {
   });
 };
 
-start().catch((err) => {
-  console.error('[tender] failed to start:', err);
-  process.exit(1);
-});
+if (require.main === module) {
+  start().catch((err) => {
+    console.error('[tender] failed to start:', err);
+    process.exit(1);
+  });
+}
+
+module.exports = {
+  app,
+  start,
+};

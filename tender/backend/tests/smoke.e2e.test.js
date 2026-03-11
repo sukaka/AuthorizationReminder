@@ -51,6 +51,49 @@ const buildMinimalDocxBlob = () => {
   });
 };
 
+const buildDocxBlobFromLines = (lines = []) => {
+  const paragraphXml = (Array.isArray(lines) ? lines : [])
+    .map((line) => `<w:p><w:r><w:t xml:space="preserve">${String(line).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</w:t></w:r></w:p>`)
+    .join('');
+
+  const zip = new PizZip();
+  zip.file(
+    '[Content_Types].xml',
+    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
+</Types>`
+  );
+  zip.folder('_rels').file(
+    '.rels',
+    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>
+</Relationships>`
+  );
+  zip.folder('word').file(
+    'document.xml',
+    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:body>
+    ${paragraphXml}
+    <w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440"/></w:sectPr>
+  </w:body>
+</w:document>`
+  );
+  zip.folder('word').folder('_rels').file(
+    'document.xml.rels',
+    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"></Relationships>`
+  );
+  const buffer = zip.generate({ type: 'nodebuffer' });
+  return new Blob([buffer], {
+    type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  });
+};
+
 const buildAnalyzeDocxBlob = (bidCategory = 'SERVICE') => {
   const isProduct = String(bidCategory || '').toUpperCase() === 'PRODUCT';
   const bodyLines = isProduct
@@ -100,46 +143,7 @@ const buildAnalyzeDocxBlob = (bidCategory = 'SERVICE') => {
       '第一章 项目理解；第二章 实施方案；第三章 服务保障；第四章 应急响应。',
     ];
 
-  const paragraphXml = bodyLines
-    .map((line) => `<w:p><w:r><w:t xml:space="preserve">${String(line).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</w:t></w:r></w:p>`)
-    .join('');
-
-  const zip = new PizZip();
-  zip.file(
-    '[Content_Types].xml',
-    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
-  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
-  <Default Extension="xml" ContentType="application/xml"/>
-  <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
-</Types>`
-  );
-  zip.folder('_rels').file(
-    '.rels',
-    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
-  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>
-</Relationships>`
-  );
-  zip.folder('word').file(
-    'document.xml',
-    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
-  <w:body>
-    ${paragraphXml}
-    <w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440"/></w:sectPr>
-  </w:body>
-</w:document>`
-  );
-  zip.folder('word').folder('_rels').file(
-    'document.xml.rels',
-    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"></Relationships>`
-  );
-  const buffer = zip.generate({ type: 'nodebuffer' });
-  return new Blob([buffer], {
-    type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-  });
+  return buildDocxBlobFromLines(bodyLines);
 };
 
 const resolveAuthToken = async ({ authBase }) => {
@@ -208,6 +212,14 @@ const loadAuthUserByUsername = async (username) => {
   }
 };
 
+const createTenderDbConnection = async () => mysql.createConnection({
+  host: String(process.env.TENDER_DB_HOST || process.env.MYSQL_HOST || '127.0.0.1'),
+  port: Number(process.env.TENDER_DB_PORT || process.env.MYSQL_PORT || 3308),
+  user: String(process.env.MYSQL_USER || 'tender_user'),
+  password: String(process.env.MYSQL_PASSWORD || 'tender_pass'),
+  database: String(process.env.MYSQL_DATABASE || 'juxin_tender'),
+});
+
 const toMojibake = (text) => Buffer.from(String(text || ''), 'utf8').toString('latin1');
 
 describe('tender smoke e2e', () => {
@@ -263,6 +275,16 @@ describe('tender smoke e2e', () => {
     });
     ensureStatus(listResp, 200);
     expect(Array.isArray(listResp.json?.items)).toBe(true);
+
+    const ruleLibraryResp = await request({
+      base: apiBase,
+      path: '/api/tender/kb/validation-rules?limit=200',
+      method: 'GET',
+      token: authToken,
+    });
+    ensureStatus(ruleLibraryResp, 200);
+    expect(Array.isArray(ruleLibraryResp.json?.items || [])).toBe(true);
+    expect(Number(ruleLibraryResp.json?.total || 0)).toBeGreaterThanOrEqual(100);
 
     const versionsResp = await request({
       base: apiBase,
@@ -532,8 +554,209 @@ describe('tender smoke e2e', () => {
       token: editorToken,
     });
     ensureStatus(bootstrapResp, 200);
+    expect(Array.isArray(bootstrapResp.json?.permissions?.menu_permissions)).toBe(true);
+    expect(Array.isArray(bootstrapResp.json?.permissions?.page_permissions)).toBe(true);
+    expect(Array.isArray(bootstrapResp.json?.permissions?.button_permissions)).toBe(true);
+    expect(bootstrapResp.json?.permissions?.menu_permissions).toContain('bids');
+    expect(bootstrapResp.json?.permissions?.page_permissions).toContain('bid.parse.workspace');
+    expect(bootstrapResp.json?.permissions?.button_permissions).toContain('parse.start');
     expect(bootstrapResp.json?.governance?.data_scope?.mode).toBe('OWNED_OR_ASSIGNED');
+    expect(bootstrapResp.json?.governance?.menu_permissions).toContain('risk-center');
+    expect(bootstrapResp.json?.governance?.button_permissions).toContain('bid.member.assign');
     expect(bootstrapResp.json?.governance?.permission_matrix?.editor?.data_scope).toBe('OWNED_OR_ASSIGNED');
+  });
+
+  it('should ingest parsed bid project into knowledge base with normalized chunk outputs', async () => {
+    const authToken = await resolveAuthToken({ authBase });
+
+    const createResp = await request({
+      base: apiBase,
+      path: '/api/tender/bids',
+      method: 'POST',
+      token: authToken,
+      body: {
+        title: uniqueCode('KB-INGEST-BID'),
+        customer_name: '知识库客户',
+        project_name: '知识库沉淀项目',
+        summary: '用于知识库项目级入库回归',
+      },
+    });
+    ensureStatus(createResp, 201);
+    const bidId = Number(ensureJsonField(createResp, 'id'));
+
+    const parseUploadForm = new FormData();
+    parseUploadForm.append('file_role', 'MAIN');
+    parseUploadForm.append('files', buildAnalyzeDocxBlob('SERVICE'), `kb-ingest-${Date.now()}.docx`);
+    const parseUploadResp = await request({
+      base: apiBase,
+      path: `/api/tender/bids/${bidId}/parse/files`,
+      method: 'POST',
+      token: authToken,
+      body: parseUploadForm,
+    });
+    ensureStatus(parseUploadResp, 201);
+
+    const parseStartResp = await request({
+      base: apiBase,
+      path: `/api/tender/bids/${bidId}/parse/start`,
+      method: 'POST',
+      token: authToken,
+      body: {
+        parse_scope: 'FULL',
+      },
+    });
+    ensureStatus(parseStartResp, 201);
+    expect(Number(parseStartResp.json?.clauses?.length || 0)).toBeGreaterThan(0);
+
+    const kbWorkspaceResp = await request({
+      base: apiBase,
+      path: `/api/tender/bids/${bidId}/kb/workspace`,
+      method: 'GET',
+      token: authToken,
+    });
+    ensureStatus(kbWorkspaceResp, 200);
+    expect(Number(kbWorkspaceResp.json?.stats?.ingestable_clauses || 0)).toBeGreaterThan(0);
+    expect(kbWorkspaceResp.json?.defaults?.project_name).toBeTruthy();
+
+    const ingestResp = await request({
+      base: apiBase,
+      path: `/api/tender/bids/${bidId}/kb/ingest`,
+      method: 'POST',
+      token: authToken,
+      body: {
+        result_status: 'WON',
+        project_type: 'SERVICE',
+        industry_type: '政务',
+        region: '华东',
+        tags: ['政务', 'service'],
+        remarks: 'smoke ingest',
+      },
+    });
+    ensureStatus(ingestResp, 200);
+    expect(Number(ingestResp.json?.linked_project?.id || 0)).toBeGreaterThan(0);
+    expect(Number(ingestResp.json?.linked_project?.source_bid_id || 0)).toBe(bidId);
+    expect(Number(ingestResp.json?.stats?.clause_count || 0)).toBeGreaterThan(0);
+    expect(Number(ingestResp.json?.stats?.chunk_count || 0)).toBeGreaterThan(0);
+    expect(Array.isArray(ingestResp.json?.ingest_jobs)).toBe(true);
+    expect(String(ingestResp.json?.ingest_jobs?.[0]?.status || '')).toBe('SUCCESS');
+  });
+
+  it('should create evaluation dataset and run baseline kpi summary for a parsed bid project', async () => {
+    const authToken = await resolveAuthToken({ authBase });
+
+    const createResp = await request({
+      base: apiBase,
+      path: '/api/tender/bids',
+      method: 'POST',
+      token: authToken,
+      body: {
+        title: uniqueCode('EVAL-BID'),
+        customer_name: '评测客户',
+        project_name: '评测KPI项目',
+        summary: '用于评测集和KPI流水线回归',
+      },
+    });
+    ensureStatus(createResp, 201);
+    const bidId = Number(ensureJsonField(createResp, 'id'));
+
+    const parseUploadForm = new FormData();
+    parseUploadForm.append('file_role', 'MAIN');
+    parseUploadForm.append('files', buildAnalyzeDocxBlob('SERVICE'), `evaluation-${Date.now()}.docx`);
+    const parseUploadResp = await request({
+      base: apiBase,
+      path: `/api/tender/bids/${bidId}/parse/files`,
+      method: 'POST',
+      token: authToken,
+      body: parseUploadForm,
+    });
+    ensureStatus(parseUploadResp, 201);
+
+    const parseStartResp = await request({
+      base: apiBase,
+      path: `/api/tender/bids/${bidId}/parse/start`,
+      method: 'POST',
+      token: authToken,
+      body: {
+        parse_scope: 'FULL',
+      },
+    });
+    ensureStatus(parseStartResp, 201);
+
+    const overviewBeforeResp = await request({
+      base: apiBase,
+      path: '/api/tender/evaluations/overview',
+      method: 'GET',
+      token: authToken,
+    });
+    ensureStatus(overviewBeforeResp, 200);
+    expect(overviewBeforeResp.json?.overview && typeof overviewBeforeResp.json.overview === 'object').toBe(true);
+
+    const datasetCreateResp = await request({
+      base: apiBase,
+      path: '/api/tender/evaluations/datasets',
+      method: 'POST',
+      token: authToken,
+      body: {
+        bid_id: bidId,
+        dataset_name: `评测样本-${Date.now()}`,
+        eval_type: 'CLAUSE_RECOGNITION',
+        baseline_flag: true,
+      },
+    });
+    ensureStatus(datasetCreateResp, 201);
+    expect(Number(datasetCreateResp.json?.id || 0)).toBeGreaterThan(0);
+    expect(String(datasetCreateResp.json?.eval_type || '')).toBe('CLAUSE_RECOGNITION');
+    expect(Number(datasetCreateResp.json?.source_bid_id || 0)).toBe(bidId);
+
+    const datasetsResp = await request({
+      base: apiBase,
+      path: '/api/tender/evaluations/datasets',
+      method: 'GET',
+      token: authToken,
+    });
+    ensureStatus(datasetsResp, 200);
+    expect(Array.isArray(datasetsResp.json?.items)).toBe(true);
+    expect(datasetsResp.json.items.some((item) => Number(item.id) === Number(datasetCreateResp.json.id))).toBe(true);
+
+    const runCreateResp = await request({
+      base: apiBase,
+      path: '/api/tender/evaluations/runs',
+      method: 'POST',
+      token: authToken,
+      body: {
+        run_label: `baseline-${Date.now()}`,
+        run_scope: 'BASELINE',
+        dataset_ids: [Number(datasetCreateResp.json.id)],
+      },
+    });
+    ensureStatus(runCreateResp, 201);
+    expect(Number(runCreateResp.json?.run?.id || 0)).toBeGreaterThan(0);
+    expect(Number(runCreateResp.json?.run?.dataset_count || 0)).toBe(1);
+    expect(runCreateResp.json?.run?.summary?.kpis?.clause_recognition).toBeTruthy();
+    expect(Array.isArray(runCreateResp.json?.items)).toBe(true);
+    expect(runCreateResp.json.items).toHaveLength(1);
+
+    const runDetailResp = await request({
+      base: apiBase,
+      path: `/api/tender/evaluations/runs/${Number(runCreateResp.json.run.id)}`,
+      method: 'GET',
+      token: authToken,
+    });
+    ensureStatus(runDetailResp, 200);
+    expect(Number(runDetailResp.json?.run?.id || 0)).toBe(Number(runCreateResp.json.run.id));
+    expect(Array.isArray(runDetailResp.json?.items)).toBe(true);
+    expect(runDetailResp.json?.items?.[0]?.result?.eval_type).toBe('CLAUSE_RECOGNITION');
+
+    const overviewAfterResp = await request({
+      base: apiBase,
+      path: '/api/tender/evaluations/overview',
+      method: 'GET',
+      token: authToken,
+    });
+    ensureStatus(overviewAfterResp, 200);
+    expect(Number(overviewAfterResp.json?.overview?.dataset_count || 0)).toBeGreaterThan(0);
+    expect(Number(overviewAfterResp.json?.overview?.run_count || 0)).toBeGreaterThan(0);
+    expect(overviewAfterResp.json?.overview?.latest_run?.summary?.kpis?.clause_recognition).toBeTruthy();
   });
 
   it('should return structured upload errors for invalid sample files', async () => {
@@ -585,6 +808,292 @@ describe('tender smoke e2e', () => {
     ensureStatus(detailResp, 200);
     expect(detailResp.json?.title).toBe(expectedTitle);
   });
+
+  it('should generate draft from latest parse workspace result for the current bid', async () => {
+    const authToken = await resolveAuthToken({ authBase });
+
+    const templateForm = new FormData();
+    templateForm.append('file', buildMinimalDocxBlob(), `parse-bridge-template-${Date.now()}.docx`);
+    templateForm.append('template_name', `解析桥接模板-${Date.now()}`);
+    templateForm.append('is_default', '1');
+    const templateUploadResp = await request({
+      base: apiBase,
+      path: '/api/tender/doc-templates/upload',
+      method: 'POST',
+      token: authToken,
+      body: templateForm,
+    });
+    ensureStatus(templateUploadResp, 201);
+    const templateId = Number(templateUploadResp.json?.id || 0);
+    expect(templateId).toBeGreaterThan(0);
+
+    const createResp = await request({
+      base: apiBase,
+      path: '/api/tender/bids',
+      method: 'POST',
+      token: authToken,
+      body: {
+        title: uniqueCode('PARSE-GENERATE-BRIDGE'),
+        customer_name: '桥接客户',
+        project_name: '解析桥接项目',
+        summary: '用于项目级 parse 到 generate 桥接回归',
+      },
+    });
+    ensureStatus(createResp, 201);
+    const bidId = Number(ensureJsonField(createResp, 'id'));
+
+    const mainUploadForm = new FormData();
+    mainUploadForm.append('file_role', 'MAIN');
+    mainUploadForm.append('files', buildAnalyzeDocxBlob('SERVICE'), `bridge-main-${Date.now()}.docx`);
+    const mainUploadResp = await request({
+      base: apiBase,
+      path: `/api/tender/bids/${bidId}/parse/files`,
+      method: 'POST',
+      token: authToken,
+      body: mainUploadForm,
+    });
+    ensureStatus(mainUploadResp, 201);
+
+    const clarificationUploadForm = new FormData();
+    clarificationUploadForm.append('file_role', 'CLARIFICATION');
+    clarificationUploadForm.append(
+      'files',
+      buildDocxBlobFromLines([
+        '澄清说明',
+        '本项目投标截止时间顺延至2026年4月2日09:30。',
+        '项目名称以最终澄清文件为准。',
+      ]),
+      `bridge-clarification-${Date.now()}.docx`
+    );
+    const clarificationUploadResp = await request({
+      base: apiBase,
+      path: `/api/tender/bids/${bidId}/parse/files`,
+      method: 'POST',
+      token: authToken,
+      body: clarificationUploadForm,
+    });
+    ensureStatus(clarificationUploadResp, 201);
+
+    const attachmentUploadForm = new FormData();
+    attachmentUploadForm.append('file_role', 'ATTACHMENT');
+    attachmentUploadForm.append(
+      'files',
+      buildDocxBlobFromLines([
+        '附件资料',
+        '附件一：服务承诺书。',
+        '附件二：报价表。',
+      ]),
+      `bridge-attachment-${Date.now()}.docx`
+    );
+    const attachmentUploadResp = await request({
+      base: apiBase,
+      path: `/api/tender/bids/${bidId}/parse/files`,
+      method: 'POST',
+      token: authToken,
+      body: attachmentUploadForm,
+    });
+    ensureStatus(attachmentUploadResp, 201);
+
+    const parseStartResp = await request({
+      base: apiBase,
+      path: `/api/tender/bids/${bidId}/parse/start`,
+      method: 'POST',
+      token: authToken,
+      body: {
+        parse_scope: 'FULL',
+      },
+    });
+    ensureStatus(parseStartResp, 201);
+    expect(Number(parseStartResp.json?.job?.summary?.file_count || 0)).toBe(3);
+    expect(Number(parseStartResp.json?.clauses?.length || 0)).toBeGreaterThan(0);
+
+    const generateResp = await request({
+      base: apiBase,
+      path: `/api/tender/bids/${bidId}/generate/from-parse`,
+      method: 'POST',
+      token: authToken,
+      body: {
+        bid_category: 'SERVICE',
+        doc_template_id: templateId,
+      },
+      timeoutMs: 60000,
+    });
+    ensureStatus(generateResp, 201);
+    expect(Number(generateResp.json?.job?.created_bid_id || 0)).toBe(bidId);
+    expect(Number(generateResp.json?.bid?.id || 0)).toBe(bidId);
+    expect(Number(generateResp.json?.version?.id || 0)).toBeGreaterThan(0);
+    expect(Number(generateResp.json?.draft?.bid_id || 0)).toBe(bidId);
+    expect(Array.isArray(generateResp.json?.draft_sections || [])).toBe(true);
+    expect(generateResp.json?.draft_sections?.some((item) => String(item?.section_title || '').trim() === '目录')).toBe(true);
+    expect(generateResp.json?.chapter_schema_validation && typeof generateResp.json.chapter_schema_validation === 'object').toBe(true);
+    expect(generateResp.json?.chapter_quality_summary && typeof generateResp.json.chapter_quality_summary === 'object').toBe(true);
+    expect(Number.isFinite(Number(generateResp.json?.chapter_quality_summary?.overall_score ?? NaN))).toBe(true);
+    expect(Array.isArray(generateResp.json?.chapter_quality_summary?.chapter_scores || [])).toBe(true);
+  }, 120000);
+
+  it('should persist parse match feedback and reuse it in subsequent recommendations', async () => {
+    const authToken = await resolveAuthToken({ authBase });
+    const uniqueTag = `SMOKEFEEDBACK${Date.now()}`;
+    const adminLogin = String(process.env.ADMIN_LOGIN || process.env.ADMIN_USERNAME || 'admin').trim() || 'admin';
+
+    const createResp = await request({
+      base: apiBase,
+      path: '/api/tender/bids',
+      method: 'POST',
+      token: authToken,
+      body: {
+        title: uniqueCode('PARSE-FEEDBACK'),
+        customer_name: '反馈客户',
+        project_name: '反馈闭环项目',
+        summary: '用于校验 parse 匹配反馈闭环',
+      },
+    });
+    ensureStatus(createResp, 201);
+    const bidId = Number(ensureJsonField(createResp, 'id'));
+
+    const uploadForm = new FormData();
+    uploadForm.append('file_role', 'MAIN');
+    uploadForm.append(
+      'files',
+      buildDocxBlobFromLines([
+        '采购需求',
+        `${uniqueTag} ${uniqueTag} ${uniqueTag} 需提供本地服务团队、7×24小时响应和2小时到场保障。`,
+      ]),
+      `parse-feedback-${Date.now()}.docx`
+    );
+    const uploadResp = await request({
+      base: apiBase,
+      path: `/api/tender/bids/${bidId}/parse/files`,
+      method: 'POST',
+      token: authToken,
+      body: uploadForm,
+    });
+    ensureStatus(uploadResp, 201);
+
+    const parseStartResp = await request({
+      base: apiBase,
+      path: `/api/tender/bids/${bidId}/parse/start`,
+      method: 'POST',
+      token: authToken,
+      body: {
+        parse_scope: 'FULL',
+      },
+    });
+    ensureStatus(parseStartResp, 201);
+    const clause = (Array.isArray(parseStartResp.json?.clauses) ? parseStartResp.json.clauses : [])
+      .find((item) => String(item?.clause_text || '').includes(uniqueTag));
+    expect(Number(clause?.id || 0)).toBeGreaterThan(0);
+
+    let strongerSourceId = 0;
+    let weakerSourceId = 0;
+    const conn = await createTenderDbConnection();
+    try {
+      await conn.execute(
+        `DELETE FROM tender_bid_parse_matches
+         WHERE payload_json LIKE '%反馈闭环-%'
+            OR payload_json LIKE '%SMOKE-FEEDBACK%'
+            OR payload_json LIKE '%SMOKEFEEDBACK%'`
+      );
+      await conn.execute(
+        `DELETE FROM kb_section_assets
+         WHERE section_name LIKE '反馈闭环-%'
+            OR section_name LIKE 'SMOKE-FEEDBACK%'
+            OR section_name LIKE 'SMOKEFEEDBACK%'`
+      );
+      const [strongerResult] = await conn.execute(
+        `INSERT INTO kb_section_assets
+          (section_name, sub_section_name, content, quality_score, reusable_flag, tags_json, status)
+         VALUES (?, ?, ?, ?, 1, ?, 'ACTIVE')`,
+        [
+          `${uniqueTag} 售后服务方案`,
+          '标准保障',
+          `${uniqueTag} ${uniqueTag} ${uniqueTag} 提供本地服务团队、7×24小时响应和2小时到场保障，并提供原厂协同。`,
+          96,
+          JSON.stringify(['售后', uniqueTag]),
+        ]
+      );
+      strongerSourceId = Number(strongerResult.insertId || 0);
+      const [weakerResult] = await conn.execute(
+        `INSERT INTO kb_section_assets
+          (section_name, sub_section_name, content, quality_score, reusable_flag, tags_json, status)
+         VALUES (?, ?, ?, ?, 1, ?, 'ACTIVE')`,
+        [
+          `${uniqueTag} 服务承诺书`,
+          '响应机制',
+          `${uniqueTag} ${uniqueTag} ${uniqueTag} 提供本地服务团队、7×24小时响应和2小时到场保障。`,
+          78,
+          JSON.stringify(['服务承诺', uniqueTag]),
+        ]
+      );
+      weakerSourceId = Number(weakerResult.insertId || 0);
+    } finally {
+      await conn.end();
+    }
+    expect(strongerSourceId).toBeGreaterThan(0);
+    expect(weakerSourceId).toBeGreaterThan(0);
+
+    const recommendFirstResp = await request({
+      base: apiBase,
+      path: `/api/tender/bids/${bidId}/parse/matches/recommend`,
+      method: 'POST',
+      token: authToken,
+      body: {},
+    });
+    ensureStatus(recommendFirstResp, 200);
+    const firstRoundMatches = (Array.isArray(recommendFirstResp.json?.matches) ? recommendFirstResp.json.matches : [])
+      .filter((item) => Number(item?.clause_id || 0) === Number(clause.id) && String(item?.match_status || '').toUpperCase() === 'RECOMMENDED')
+      .filter((item) => Number(item?.payload?.source_id || 0) === strongerSourceId || Number(item?.payload?.source_id || 0) === weakerSourceId);
+    expect(firstRoundMatches.length).toBe(2);
+    const initialTopMatch = firstRoundMatches[0];
+    const feedbackTargetMatch = firstRoundMatches[1];
+    expect(Number(initialTopMatch?.payload?.source_id || 0)).not.toBe(Number(feedbackTargetMatch?.payload?.source_id || 0));
+
+    const confirmResp = await request({
+      base: apiBase,
+      path: `/api/tender/bids/${bidId}/parse/matches/bulk`,
+      method: 'PUT',
+      token: authToken,
+      body: {
+        items: [
+          {
+            id: Number(feedbackTargetMatch.id),
+            clause_id: Number(clause.id),
+            match_status: 'CONFIRMED',
+            confidence: Number(feedbackTargetMatch.confidence || 0),
+            reason_text: feedbackTargetMatch.reason_text,
+            payload: feedbackTargetMatch.payload,
+          },
+        ],
+      },
+    });
+    ensureStatus(confirmResp, 200);
+    const confirmedMatch = (Array.isArray(confirmResp.json?.matches) ? confirmResp.json.matches : [])
+      .find((item) => Number(item?.id || 0) === Number(feedbackTargetMatch.id));
+    expect(String(confirmedMatch?.match_status || '')).toBe('CONFIRMED');
+    expect(confirmedMatch?.payload?.feedback_status).toBe('CONFIRMED');
+    expect(confirmedMatch?.payload?.feedback_actor?.username).toBe(adminLogin);
+
+    const recommendSecondResp = await request({
+      base: apiBase,
+      path: `/api/tender/bids/${bidId}/parse/matches/recommend`,
+      method: 'POST',
+      token: authToken,
+      body: {},
+    });
+    ensureStatus(recommendSecondResp, 200);
+    const preservedConfirmed = (Array.isArray(recommendSecondResp.json?.matches) ? recommendSecondResp.json.matches : [])
+      .find((item) => Number(item?.id || 0) === Number(feedbackTargetMatch.id));
+    expect(String(preservedConfirmed?.match_status || '')).toBe('CONFIRMED');
+
+    const secondRoundRecommended = (Array.isArray(recommendSecondResp.json?.matches) ? recommendSecondResp.json.matches : [])
+      .filter((item) => Number(item?.clause_id || 0) === Number(clause.id) && String(item?.match_status || '').toUpperCase() === 'RECOMMENDED')
+      .filter((item) => Number(item?.payload?.source_id || 0) === strongerSourceId || Number(item?.payload?.source_id || 0) === weakerSourceId);
+    expect(secondRoundRecommended.length).toBe(2);
+    expect(Number(secondRoundRecommended[0]?.payload?.source_id || 0)).toBe(Number(feedbackTargetMatch?.payload?.source_id || 0));
+    expect(Number(secondRoundRecommended[0]?.payload?.feedback_score || 0)).toBeGreaterThan(0);
+    expect(Number(secondRoundRecommended[0]?.payload?.feedback_summary?.confirmed_count || 0)).toBeGreaterThanOrEqual(1);
+    expect(Number(secondRoundRecommended[1]?.payload?.feedback_score || 0)).toBeLessThanOrEqual(0);
+  }, 120000);
 
   it('should upload sample then analyze and create draft from generate job', async () => {
     const authToken = await resolveAuthToken({ authBase });
@@ -673,6 +1182,20 @@ describe('tender smoke e2e', () => {
     expect(Array.isArray(analyzeResp.json?.generated_artifacts?.deviation_tables?.business || [])).toBe(true);
     expect(Array.isArray(analyzeResp.json?.generated_artifacts?.response_tables?.technical || [])).toBe(true);
     expect(Array.isArray(analyzeResp.json?.generated_artifacts?.response_tables?.business || [])).toBe(true);
+    const serviceDeviationRow = analyzeResp.json?.generated_artifacts?.deviation_tables?.technical?.[0] || null;
+    if (serviceDeviationRow) {
+      expect(String(serviceDeviationRow.parameter_key || '').trim()).not.toBe('');
+      expect(String(serviceDeviationRow.satisfy_basis || '').trim()).not.toBe('');
+      expect(String(serviceDeviationRow.evidence_source || '').trim()).not.toBe('');
+      expect(String(serviceDeviationRow.risk_grade || '').trim()).not.toBe('');
+    }
+    const serviceResponseRow = analyzeResp.json?.generated_artifacts?.response_tables?.technical?.[0] || null;
+    if (serviceResponseRow) {
+      expect(String(serviceResponseRow.parameter_key || '').trim()).not.toBe('');
+      expect(String(serviceResponseRow.response_text || '').trim()).not.toBe('');
+      expect(String(serviceResponseRow.satisfy_basis || '').trim()).not.toBe('');
+      expect(String(serviceResponseRow.risk_grade || '').trim()).not.toBe('');
+    }
 
     const createResp = await request({
       base: apiBase,
@@ -692,6 +1215,13 @@ describe('tender smoke e2e', () => {
     expect(Number(createResp.json?.bid?.id || 0)).toBeGreaterThan(0);
     expect(Number(createResp.json?.version?.id || 0)).toBeGreaterThan(0);
     expect(createResp.json?.clause_route_execution && typeof createResp.json.clause_route_execution === 'object').toBe(true);
+    expect(createResp.json?.chapter_schema_validation && typeof createResp.json.chapter_schema_validation === 'object').toBe(true);
+    expect(createResp.json?.chapter_schema_validation?.valid).toBe(true);
+    expect(createResp.json?.chapter_quality_summary && typeof createResp.json.chapter_quality_summary === 'object').toBe(true);
+    expect(Number.isFinite(Number(createResp.json?.chapter_quality_summary?.overall_score ?? NaN))).toBe(true);
+    expect(Array.isArray(createResp.json?.chapter_quality_summary?.chapter_scores || [])).toBe(true);
+    expect(Array.isArray(createResp.json?.draft_sections || [])).toBe(true);
+    expect(createResp.json?.draft_sections?.some((item) => String(item?.section_title || '').trim() === '目录')).toBe(true);
     const createdBidId = Number(createResp.json?.bid?.id || 0);
 
     const checkResp = await request({
@@ -705,6 +1235,81 @@ describe('tender smoke e2e', () => {
     expect(checkResp.json?.summary && typeof checkResp.json.summary === 'object').toBe(true);
     expect(Array.isArray(checkResp.json?.issues || [])).toBe(true);
     expect(Array.isArray(checkResp.json?.clause_registry_v2 || [])).toBe(true);
+    expect(checkResp.json?.rule_execution && typeof checkResp.json.rule_execution === 'object').toBe(true);
+    expect(Number(checkResp.json?.rule_execution?.active_rule_count || 0)).toBeGreaterThanOrEqual(100);
+
+    const targetRequirement = Array.isArray(checkResp.json?.requirement_registry)
+      ? checkResp.json.requirement_registry.find((item) => String(item?.requirement_code || '').trim())
+      : null;
+    expect(targetRequirement && typeof targetRequirement === 'object').toBeTruthy();
+    const targetRequirementCode = String(targetRequirement?.requirement_code || '').trim();
+    const targetRequirementText = String(
+      targetRequirement?.requirement_text || targetRequirement?.title || targetRequirementCode
+    ).trim();
+
+    const saveSectionsResp = await request({
+      base: apiBase,
+      path: `/api/tender/bids/${createdBidId}/draft/sections`,
+      method: 'PUT',
+      token: authToken,
+      body: {
+        sections: [
+          {
+            section_title: '冲突校验章节',
+            paragraph_no: 1,
+            paragraph_text: `我方对“${targetRequirementText}”完全满足，无偏离。`,
+            requirement_ids: [targetRequirementCode],
+            evidence_ids: [],
+            score_item_ids: [],
+          },
+        ],
+      },
+    });
+    ensureStatus(saveSectionsResp, 200);
+
+    const saveArtifactsResp = await request({
+      base: apiBase,
+      path: `/api/tender/bids/${createdBidId}/draft/artifacts`,
+      method: 'PUT',
+      token: authToken,
+      body: {
+        artifacts: {
+          deviation_tables: {
+            technical: [
+              {
+                tender_requirement: targetRequirementText,
+                bidder_response: '满足',
+                deviation_note: '无偏离',
+              },
+            ],
+            business: [],
+          },
+          response_tables: {
+            technical: [
+              {
+                tender_requirement: targetRequirementText,
+                response_text: '不满足，存在偏离。',
+                evidence_source: '人工录入',
+              },
+            ],
+            business: [],
+          },
+        },
+      },
+    });
+    ensureStatus(saveArtifactsResp, 200);
+
+    const conflictCheckResp = await request({
+      base: apiBase,
+      path: `/api/tender/bids/${createdBidId}/check`,
+      method: 'POST',
+      token: authToken,
+      body: {},
+    });
+    ensureStatus(conflictCheckResp, 200);
+    expect(conflictCheckResp.json?.issues.some((issue) => issue?.type === 'artifact_table_conflict')).toBe(true);
+    expect(conflictCheckResp.json?.issues.some((issue) => issue?.type === 'section_artifact_conflict')).toBe(true);
+    expect(Number(conflictCheckResp.json?.rule_execution?.triggered_issue_count || 0)).toBeGreaterThan(0);
 
     const optimizeResp = await request({
       base: apiBase,
@@ -740,5 +1345,12 @@ describe('tender smoke e2e', () => {
     expect(Array.isArray(productAnalyzeResp.json?.final_json?.evaluation_score_matrix || [])).toBe(true);
     expect(Array.isArray(productAnalyzeResp.json?.final_json?.technical_deviation_table || [])).toBe(true);
     expect(Array.isArray(productAnalyzeResp.json?.generated_artifacts?.deviation_tables?.technical || [])).toBe(true);
+    const productDeviationRow = productAnalyzeResp.json?.generated_artifacts?.deviation_tables?.technical?.[0] || null;
+    if (productDeviationRow) {
+      expect(String(productDeviationRow.parameter_key || '').trim()).not.toBe('');
+      expect(String(productDeviationRow.satisfy_basis || '').trim()).not.toBe('');
+      expect(String(productDeviationRow.evidence_source || '').trim()).not.toBe('');
+      expect(String(productDeviationRow.risk_grade || '').trim()).not.toBe('');
+    }
   }, 300000);
 });

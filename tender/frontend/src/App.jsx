@@ -1,5 +1,53 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import './App.css'
+import {
+  bidMemberRoleOptions,
+  deriveBidLifecycleSteps,
+  normalizeBidMemberDraft,
+  reviewStageLabel,
+  reviewStatusLabel,
+  validateBidMemberDrafts,
+} from './bid-workflow.js'
+import {
+  parseFileRoleOptions,
+  parseScopeOptions,
+  buildParseFileTree,
+  buildSheetSelectionDrafts,
+  buildClauseBulkPayload,
+  buildMatchBulkPayload,
+  resolveParseWorkspaceGenerateDefaults,
+} from './parse-workspace.js'
+import {
+  normalizeSemanticMatchMeta,
+} from './semantic-retrieval.js'
+import {
+  createBidDraftWorkspaceState,
+  buildBidDraftWorkspaceData,
+  buildDraftSectionSavePayload,
+  buildDraftArtifactSavePayload,
+} from './draft-workspace.js'
+import {
+  createRiskCenterState,
+  createTemplateCenterState,
+  createExportCenterState,
+  buildRiskCenterData,
+  buildTemplateBundlePayload,
+  toggleListSelection,
+  toggleAllListSelection,
+  buildBulkDeleteFeedback,
+  buildExportCenterData,
+} from './ops-center.js'
+import {
+  createKbIngestState,
+  buildKbIngestWorkspaceData,
+  buildKbIngestPayload,
+} from './kb-ingest.js'
+import {
+  createEvaluationCenterState,
+  buildEvaluationOverviewData,
+  buildEvaluationDatasetPayload,
+  buildEvaluationRunDetailData,
+} from './evaluation-kpi.js'
 
 const API_BASE = String(import.meta.env.VITE_API_BASE || '').trim()
 
@@ -217,10 +265,24 @@ const inferQualificationMaterial = (text) => {
   return '按招标文件要求提供对应证明材料'
 }
 
+const summarizeEvaluationExpectedPayload = (payload = {}) => {
+  if (!payload || typeof payload !== 'object') return '未配置'
+  if (Array.isArray(payload.clause_types)) return `条款类型 ${payload.clause_types.length} 项`
+  if (Array.isArray(payload.score_item_names)) return `评分项 ${payload.score_item_names.length} 项`
+  if (Array.isArray(payload.required_asset_ids)) return `资料ID ${payload.required_asset_ids.length} 项`
+  if (Array.isArray(payload.risk_codes)) return `风险码 ${payload.risk_codes.length} 项`
+  if (Array.isArray(payload.required_deliverables)) return `交付物 ${payload.required_deliverables.length} 项`
+  return '结构化样本'
+}
+
 const mainTabs = [
   { key: 'dashboard', label: '仪表盘' },
   { key: 'bids', label: '标书管理' },
   { key: 'bid-generate', label: '标书生成' },
+  { key: 'risk-center', label: '风险中心' },
+  { key: 'template-center', label: '模板中心' },
+  { key: 'export-center', label: '导出中心' },
+  { key: 'evaluation-center', label: '评测中心' },
   { key: 'editor', label: '在线编辑' },
   { key: 'ai', label: 'AI助手' },
   { key: 'audit', label: '审计日志' },
@@ -271,6 +333,14 @@ const bidCategoryLabelMap = bidCategoryOptions.reduce((acc, cur) => {
   return acc
 }, {})
 
+const chapterQualitySourceLabelMap = {
+  AI: 'AI 章节',
+  FALLBACK: '规则兜底',
+  RULE: '规则章节',
+  EXTRA_AI: '附加 AI',
+  MISSING: '缺失章节',
+}
+
 const assetTypeLabelMap = {
   QUALIFICATION: '资质证书',
   BUSINESS_LICENSE: '营业执照',
@@ -286,6 +356,19 @@ const ocrStatusLabelMap = {
   CONFIRMED: '已确认',
   FAILED: '识别失败',
 }
+
+const evaluationTypeOptions = [
+  { value: 'CLAUSE_RECOGNITION', label: '条款识别' },
+  { value: 'SCORE_COVERAGE', label: '评分覆盖' },
+  { value: 'MATERIAL_MATCHING', label: '资料匹配' },
+  { value: 'RISK_RECALL', label: '风险召回' },
+  { value: 'EXPORT_COMPLETENESS', label: '导出完整性' },
+]
+
+const evaluationTypeLabelMap = evaluationTypeOptions.reduce((acc, cur) => {
+  acc[cur.value] = cur.label
+  return acc
+}, {})
 
 const qualificationNameOptions = [
   '建筑业企业资质证书',
@@ -356,6 +439,16 @@ const personnelPositionOptions = [
 ]
 
 const personnelStatusOptions = ['在职', '离职', '外聘']
+const artifactSatisfyStatusOptions = [
+  { value: 'SATISFIED', label: '满足' },
+  { value: 'NOT_SATISFIED', label: '不满足' },
+  { value: 'TO_CONFIRM', label: '待确认' },
+]
+const artifactRiskGradeOptions = [
+  { value: 'LOW', label: '低' },
+  { value: 'MEDIUM', label: '中' },
+  { value: 'HIGH', label: '高' },
+]
 
 const PERFORMANCE_STORAGE_KEY = 'tender.performance.entries.v1'
 const PERSONNEL_STORAGE_KEY = 'tender.personnel.entries.v1'
@@ -1315,6 +1408,155 @@ const createGenerateWizardState = () => ({
   },
 })
 
+const createBidParseWorkspaceState = () => ({
+  bidId: 0,
+  loading: false,
+  refreshing: false,
+  error: '',
+  files: [],
+  latest_job: null,
+  project_fields: { values: {}, sources: {} },
+  clauses: [],
+  tables: [],
+  matches: [],
+  constants: {
+    file_roles: parseFileRoleOptions.map((item) => item.value),
+    parse_scopes: parseScopeOptions,
+  },
+  uploadRole: 'MAIN',
+  uploadFiles: [],
+  uploadInputKey: 0,
+  uploading: false,
+  parseScope: 'FULL',
+  parsing: false,
+  sheetDrafts: {},
+  matchDraftRows: [],
+  savingSheets: {},
+  clauseSaving: false,
+  recommending: false,
+  matchSaving: false,
+  generating: false,
+  generateForm: {
+    bid_category: '',
+    model_id: '',
+    doc_template_id: '',
+  },
+})
+
+const parseClauseTypeOptions = [
+  { value: 'GENERAL', label: '综合条款' },
+  { value: 'QUALIFICATION', label: '资格条款' },
+  { value: 'TECHNICAL', label: '技术条款' },
+  { value: 'SCORING', label: '评分条款' },
+  { value: 'CONTRACT', label: '合同条款' },
+  { value: 'COMMERCIAL', label: '商务条款' },
+  { value: 'SCHEDULE', label: '进度条款' },
+]
+
+const parseResponseModeOptions = [
+  { value: 'TEXT', label: '正文回应' },
+  { value: 'MATRIX', label: '偏离表/参数表' },
+  { value: 'EVIDENCE', label: '证据绑定' },
+  { value: 'STATEMENT', label: '承诺说明' },
+]
+
+const parseMatchStatusOptions = [
+  { value: 'RECOMMENDED', label: '待确认' },
+  { value: 'CONFIRMED', label: '已确认' },
+  { value: 'REPLACED', label: '已替换' },
+  { value: 'IGNORED', label: '忽略' },
+]
+
+const parseRoleLabelMap = parseFileRoleOptions.reduce((acc, item) => {
+  acc[item.value] = item.label
+  return acc
+}, {})
+
+const parseScopeLabelMap = parseScopeOptions.reduce((acc, item) => {
+  acc[item.value] = item.label
+  return acc
+}, {})
+
+const parseClauseTypeLabelMap = parseClauseTypeOptions.reduce((acc, item) => {
+  acc[item.value] = item.label
+  return acc
+}, {})
+
+const parseResponseModeLabelMap = parseResponseModeOptions.reduce((acc, item) => {
+  acc[item.value] = item.label
+  return acc
+}, {})
+
+const parseMatchStatusLabelMap = parseMatchStatusOptions.reduce((acc, item) => {
+  acc[item.value] = item.label
+  return acc
+}, {})
+
+const buildParseMatchDraftRows = (clauses = [], matches = []) => {
+  const matchMap = new Map()
+  ;(Array.isArray(matches) ? matches : []).forEach((item) => {
+    const clauseId = Number(item?.clause_id || 0)
+    if (!clauseId) return
+    if (!matchMap.has(clauseId)) matchMap.set(clauseId, [])
+    matchMap.get(clauseId).push(item)
+  })
+  const rows = []
+  ;(Array.isArray(clauses) ? clauses : []).forEach((clause) => {
+    const clauseId = Number(clause?.id || 0)
+    const matched = matchMap.get(clauseId) || []
+    if (matched.length) {
+      matched.forEach((item, index) => {
+        const semanticMeta = normalizeSemanticMatchMeta(item)
+        rows.push({
+          ...item,
+          ...semanticMeta,
+          row_key: item?.id ? `id-${item.id}` : `clause-${clauseId}-${index}`,
+          clause_id: clauseId,
+          clause_title: item?.clause_title || clause?.clause_title || clause?.clause_text,
+        })
+      })
+      return
+    }
+    rows.push({
+      row_key: `clause-${clauseId}-0`,
+      id: null,
+      clause_id: clauseId,
+      clause_title: clause?.clause_title || clause?.clause_text,
+      asset_id: null,
+      match_status: 'RECOMMENDED',
+      confidence: 0,
+      reason_text: '',
+      payload: { is_new: true },
+      ...normalizeSemanticMatchMeta({ payload: { is_new: true } }),
+    })
+  })
+  return rows
+}
+
+const createBidDetailForm = () => ({
+  title: '',
+  customer_name: '',
+  project_name: '',
+  summary: '',
+})
+
+const toBidDetailForm = (bid = {}) => ({
+  title: firstNonEmpty(bid?.title),
+  customer_name: firstNonEmpty(bid?.customer_name),
+  project_name: firstNonEmpty(bid?.project_name),
+  summary: firstNonEmpty(bid?.summary),
+})
+
+const createBidMemberDraft = (seed = {}) => ({
+  local_id: firstNonEmpty(seed?.local_id, seed?.id ? `member-${seed.id}` : `member-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`),
+  ...normalizeBidMemberDraft(seed),
+})
+
+const isMeaningfulBidMemberDraft = (row = {}) => {
+  const normalized = normalizeBidMemberDraft(row)
+  return !!(normalized.member_username || normalized.member_title || normalized.member_user_id)
+}
+
 function App() {
   const api = useMemo(() => buildApi(), [])
 
@@ -1324,7 +1566,18 @@ function App() {
   const [stats, setStats] = useState({ bids: 0, drafts: 0, assets: 0, enabled_models: 0 })
   const [workflow, setWorkflow] = useState({ status_counts: {}, review_counts: {}, todo: {} })
   const [activeTab, setActiveTab] = useState('dashboard')
-  const [libraryMenuOpen, setLibraryMenuOpen] = useState(true)
+  const [libraryMenuOpen, setLibraryMenuOpen] = useState(false)
+  const canRead = !!permissions.can_read
+  const canWrite = !!permissions.can_write
+  const canTemplateManage = !!permissions.can_template_manage
+  const canConfigManage = !!permissions.can_config_manage
+  const canAudit = !!permissions.can_audit_read
+  const canAiUse = !!permissions.can_ai_use
+  const canAiManage = !!permissions.can_ai_manage
+
+  useEffect(() => {
+    if (activeTab.startsWith('library-')) setLibraryMenuOpen(true)
+  }, [activeTab])
 
   const [message, setMessage] = useState('')
   const [error, setError] = useState('')
@@ -1375,6 +1628,21 @@ function App() {
 
   const [versions, setVersions] = useState([])
   const [selectedBid, setSelectedBid] = useState(null)
+  const [selectedBidDetail, setSelectedBidDetail] = useState(null)
+  const [bidDetailForm, setBidDetailForm] = useState(() => createBidDetailForm())
+  const [bidDetailLoading, setBidDetailLoading] = useState(false)
+  const [bidDetailError, setBidDetailError] = useState('')
+  const [bidDetailSaving, setBidDetailSaving] = useState(false)
+  const [bidMemberDrafts, setBidMemberDrafts] = useState([])
+  const [bidMembersLoading, setBidMembersLoading] = useState(false)
+  const [bidMembersError, setBidMembersError] = useState('')
+  const [bidMembersSaving, setBidMembersSaving] = useState(false)
+  const [bidReviews, setBidReviews] = useState([])
+  const [bidReviewsLoading, setBidReviewsLoading] = useState(false)
+  const [bidReviewsError, setBidReviewsError] = useState('')
+  const [bidParseWorkspace, setBidParseWorkspace] = useState(() => createBidParseWorkspaceState())
+  const [kbIngestState, setKbIngestState] = useState(() => createKbIngestState())
+  const [bidDraftWorkspace, setBidDraftWorkspace] = useState(() => createBidDraftWorkspaceState())
   const [compareState, setCompareState] = useState({
     leftVersionId: '',
     rightVersionId: '',
@@ -1490,6 +1758,17 @@ function App() {
 
   const [models, setModels] = useState([])
   const [docTemplates, setDocTemplates] = useState([])
+  const [templateFields, setTemplateFields] = useState([])
+  const [templateSnippets, setTemplateSnippets] = useState([])
+  const [riskCenterState, setRiskCenterState] = useState(() => createRiskCenterState())
+  const [templateCenterState, setTemplateCenterState] = useState(() => createTemplateCenterState())
+  const [templateCenterTab, setTemplateCenterTab] = useState('docs')
+  const [docTemplateSelectedIds, setDocTemplateSelectedIds] = useState([])
+  const [templateFieldSelectedIds, setTemplateFieldSelectedIds] = useState([])
+  const [templateSnippetSelectedIds, setTemplateSnippetSelectedIds] = useState([])
+  const [templateBundleSelectedIds, setTemplateBundleSelectedIds] = useState([])
+  const [exportCenterState, setExportCenterState] = useState(() => createExportCenterState())
+  const [evaluationCenterState, setEvaluationCenterState] = useState(() => createEvaluationCenterState())
   const [docTemplateUploadFile, setDocTemplateUploadFile] = useState(null)
   const [docTemplateUploadName, setDocTemplateUploadName] = useState('')
   const [docTemplateSetDefault, setDocTemplateSetDefault] = useState(true)
@@ -1895,12 +2174,239 @@ function App() {
     }
   }
 
+  const fetchBidDetail = async (bidId, options = {}) => {
+    if (!bidId) {
+      setSelectedBidDetail(null)
+      setBidDetailForm(createBidDetailForm())
+      return null
+    }
+    if (!options.silent) setBidDetailLoading(true)
+    setBidDetailError('')
+    try {
+      const detail = await api.get(`/api/tender/bids/${bidId}`)
+      setSelectedBid(detail)
+      setSelectedBidDetail(detail)
+      setBidDetailForm(toBidDetailForm(detail))
+      return detail
+    } catch (err) {
+      setBidDetailError(err.message || '读取项目详情失败')
+      return null
+    } finally {
+      if (!options.silent) setBidDetailLoading(false)
+    }
+  }
+
+  const fetchBidMembers = async (bidId, options = {}) => {
+    if (!bidId) {
+      setBidMemberDrafts([])
+      return []
+    }
+    if (!options.silent) setBidMembersLoading(true)
+    setBidMembersError('')
+    try {
+      const resp = await api.get(`/api/tender/bids/${bidId}/members`)
+      const items = Array.isArray(resp?.members) ? resp.members : []
+      setBidMemberDrafts(items.map((item) => createBidMemberDraft(item)))
+      return items
+    } catch (err) {
+      setBidMembersError(err.message || '读取成员分派失败')
+      return []
+    } finally {
+      if (!options.silent) setBidMembersLoading(false)
+    }
+  }
+
+  const fetchBidReviews = async (bidId, options = {}) => {
+    if (!bidId) {
+      setBidReviews([])
+      return []
+    }
+    if (!options.silent) setBidReviewsLoading(true)
+    setBidReviewsError('')
+    try {
+      const rows = await api.get(`/api/tender/bids/${bidId}/reviews?limit=30`)
+      const items = Array.isArray(rows) ? rows : []
+      setBidReviews(items)
+      return items
+    } catch (err) {
+      setBidReviewsError(err.message || '读取审核记录失败')
+      return []
+    } finally {
+      if (!options.silent) setBidReviewsLoading(false)
+    }
+  }
+
+  const fetchBidParseWorkspace = async (bidId, options = {}) => {
+    if (!bidId) {
+      setBidParseWorkspace(createBidParseWorkspaceState())
+      return null
+    }
+    if (options.silent) {
+      setBidParseWorkspace((prev) => ({ ...prev, refreshing: true, error: '' }))
+    } else {
+      setBidParseWorkspace((prev) => ({ ...prev, loading: true, error: '' }))
+    }
+    try {
+      const resp = await api.get(`/api/tender/bids/${bidId}/parse/workspace`)
+      const files = Array.isArray(resp?.files) ? resp.files : []
+      const generateDefaults = resolveParseWorkspaceGenerateDefaults({
+        bidCategory: resp?.bid?.bid_category,
+        models,
+        docTemplates,
+      })
+      const workspace = {
+        ...createBidParseWorkspaceState(),
+        bidId: Number(bidId) || 0,
+        files,
+        latest_job: resp?.latest_job || null,
+        project_fields: resp?.project_fields && typeof resp.project_fields === 'object'
+          ? resp.project_fields
+          : { values: {}, sources: {} },
+        clauses: Array.isArray(resp?.clauses) ? resp.clauses : [],
+        tables: Array.isArray(resp?.tables) ? resp.tables : [],
+        matches: Array.isArray(resp?.matches) ? resp.matches : [],
+        constants: resp?.constants && typeof resp.constants === 'object'
+          ? resp.constants
+          : createBidParseWorkspaceState().constants,
+        sheetDrafts: buildSheetSelectionDrafts(files),
+        matchDraftRows: buildParseMatchDraftRows(
+          Array.isArray(resp?.clauses) ? resp.clauses : [],
+          Array.isArray(resp?.matches) ? resp.matches : []
+        ),
+      }
+      setBidParseWorkspace((prev) => {
+        const sameBid = Number(prev.bidId || 0) === Number(bidId)
+        return {
+          ...workspace,
+          uploadRole: sameBid ? (prev.uploadRole || workspace.uploadRole) : workspace.uploadRole,
+          uploadFiles: sameBid ? (prev.uploadFiles || []) : [],
+          uploadInputKey: sameBid ? (prev.uploadInputKey || 0) : 0,
+          parseScope: sameBid ? (prev.parseScope || workspace.parseScope) : workspace.parseScope,
+          generating: sameBid ? !!prev.generating : false,
+          generateForm: sameBid
+            ? {
+                bid_category: prev.generateForm?.bid_category || generateDefaults.bid_category,
+                model_id: prev.generateForm?.model_id || generateDefaults.model_id,
+                doc_template_id: prev.generateForm?.doc_template_id || generateDefaults.doc_template_id,
+              }
+            : generateDefaults,
+        }
+      })
+      return resp
+    } catch (err) {
+      setBidParseWorkspace((prev) => ({
+        ...prev,
+        error: err.message || '读取解析工作台失败',
+      }))
+      return null
+    } finally {
+      setBidParseWorkspace((prev) => ({
+        ...prev,
+        loading: false,
+        refreshing: false,
+      }))
+    }
+  }
+
+  const fetchBidKbWorkspace = async (bidId, options = {}) => {
+    if (!bidId) {
+      setKbIngestState(createKbIngestState())
+      return null
+    }
+    if (options.silent) {
+      setKbIngestState((prev) => ({ ...prev, refreshing: true, error: '' }))
+    } else {
+      setKbIngestState((prev) => ({ ...prev, loading: true, error: '' }))
+    }
+    try {
+      const resp = await api.get(`/api/tender/bids/${bidId}/kb/workspace`)
+      const workspace = buildKbIngestWorkspaceData(resp)
+      setKbIngestState((prev) => ({
+        ...workspace,
+        loading: false,
+        refreshing: false,
+        error: '',
+        ingesting: prev.ingesting,
+      }))
+      return workspace
+    } catch (err) {
+      setKbIngestState((prev) => ({
+        ...prev,
+        error: err.message || '读取知识库沉淀工作台失败',
+      }))
+      return null
+    } finally {
+      setKbIngestState((prev) => ({
+        ...prev,
+        loading: false,
+        refreshing: false,
+      }))
+    }
+  }
+
+  const fetchBidDraftWorkspace = async (bidId, options = {}) => {
+    if (!bidId) {
+      setBidDraftWorkspace(createBidDraftWorkspaceState())
+      return null
+    }
+    if (options.silent) {
+      setBidDraftWorkspace((prev) => ({ ...prev, refreshing: true, error: '' }))
+    } else {
+      setBidDraftWorkspace((prev) => ({ ...prev, loading: true, error: '' }))
+    }
+    try {
+      const resp = await api.get(`/api/tender/bids/${bidId}/draft/workspace`)
+      const workspace = buildBidDraftWorkspaceData(resp)
+      setBidDraftWorkspace((prev) => ({
+        ...workspace,
+        loading: false,
+        refreshing: false,
+        error: '',
+        savingSections: prev.savingSections,
+        savingArtifacts: prev.savingArtifacts,
+        checking: prev.checking,
+        optimizing: prev.optimizing,
+        autosaving: prev.autosaving,
+        rollingBackId: prev.rollingBackId,
+      }))
+      return workspace
+    } catch (err) {
+      setBidDraftWorkspace((prev) => ({
+        ...prev,
+        error: err.message || '读取初稿工作台失败',
+      }))
+      return null
+    } finally {
+      setBidDraftWorkspace((prev) => ({
+        ...prev,
+        loading: false,
+        refreshing: false,
+      }))
+    }
+  }
+
+  const refreshSelectedBidWorkspace = async (bidId, options = {}) => {
+    if (!bidId) return
+    await Promise.allSettled([
+      fetchBidDetail(bidId, { silent: options.silent }),
+      fetchBidMembers(bidId, { silent: options.silent }),
+      fetchBidReviews(bidId, { silent: options.silent }),
+      fetchBidParseWorkspace(bidId, { silent: options.silent }),
+      fetchBidKbWorkspace(bidId, { silent: options.silent }),
+      fetchBidDraftWorkspace(bidId, { silent: options.silent }),
+    ])
+  }
+
   const openBidVersionPanel = async (bid) => {
     if (!bid?.id) return
     resetFeedback()
     setSelectedBid(bid)
     try {
-      await Promise.all([fetchVersions(bid.id), fetchEditorEvents(bid.id)])
+      await Promise.all([
+        fetchVersions(bid.id),
+        fetchEditorEvents(bid.id),
+        refreshSelectedBidWorkspace(bid.id),
+      ])
     } catch (err) {
       showError(err.message)
     }
@@ -1934,6 +2440,152 @@ function App() {
   const fetchDocTemplates = async () => {
     const rows = await api.get('/api/tender/doc-templates')
     setDocTemplates(Array.isArray(rows) ? rows : [])
+  }
+
+  const fetchTemplateFields = async () => {
+    const rows = await api.get('/api/tender/templates/fields')
+    const items = Array.isArray(rows) ? rows : []
+    setTemplateFields(items)
+    setTemplateCenterState((prev) => ({ ...prev, fields: items }))
+    return items
+  }
+
+  const fetchTemplateSnippets = async () => {
+    const rows = await api.get('/api/tender/templates/snippets')
+    const items = Array.isArray(rows) ? rows : []
+    setTemplateSnippets(items)
+    setTemplateCenterState((prev) => ({ ...prev, snippets: items }))
+    return items
+  }
+
+  const fetchRiskCenter = async (filters = riskCenterState.filters) => {
+    const params = new URLSearchParams()
+    if (filters?.keyword) params.set('keyword', filters.keyword)
+    if (filters?.level) params.set('level', filters.level)
+    if (filters?.status) params.set('status', filters.status)
+    params.set('limit', '200')
+    const payload = await api.get(`/api/tender/risk-center/summary?${params.toString()}`)
+    const data = buildRiskCenterData(payload)
+    setRiskCenterState((prev) => ({
+      ...prev,
+      loading: false,
+      error: '',
+      overview: data.overview,
+      items: data.items,
+    }))
+    return data
+  }
+
+  const fetchExportCenter = async (filters = exportCenterState.filters) => {
+    const params = new URLSearchParams()
+    if (filters?.keyword) params.set('keyword', filters.keyword)
+    if (filters?.status) params.set('status', filters.status)
+    params.set('limit', '200')
+    const payload = await api.get(`/api/tender/export-center/summary?${params.toString()}`)
+    const data = buildExportCenterData(payload)
+    setExportCenterState((prev) => ({
+      ...prev,
+      loading: false,
+      error: '',
+      overview: data.overview,
+      items: data.items,
+      recent_records: data.recent_records,
+    }))
+    return data
+  }
+
+  const fetchTemplateCenter = async () => {
+    const [docTemplateRows, fieldRows, snippetRows, bundleRows] = await Promise.all([
+      api.get('/api/tender/doc-templates'),
+      api.get('/api/tender/templates/fields'),
+      api.get('/api/tender/templates/snippets'),
+      api.get('/api/tender/templates/bundles'),
+    ])
+    const nextDocTemplates = Array.isArray(docTemplateRows) ? docTemplateRows : []
+    const nextFields = Array.isArray(fieldRows) ? fieldRows : []
+    const nextSnippets = Array.isArray(snippetRows) ? snippetRows : []
+    const nextBundles = Array.isArray(bundleRows) ? bundleRows : []
+    const nextDocTemplateIdSet = new Set(nextDocTemplates.map((item) => Number(item.id)).filter((id) => Number.isFinite(id) && id > 0))
+    const nextFieldIdSet = new Set(nextFields.map((item) => Number(item.id)).filter((id) => Number.isFinite(id) && id > 0))
+    const nextSnippetIdSet = new Set(nextSnippets.map((item) => Number(item.id)).filter((id) => Number.isFinite(id) && id > 0))
+    const nextBundleIdSet = new Set(nextBundles.map((item) => Number(item.id)).filter((id) => Number.isFinite(id) && id > 0))
+    setDocTemplates(nextDocTemplates)
+    setTemplateFields(nextFields)
+    setTemplateSnippets(nextSnippets)
+    setBundles(nextBundles)
+    setDocTemplateSelectedIds((prev) => prev.filter((id) => nextDocTemplateIdSet.has(Number(id))))
+    setTemplateFieldSelectedIds((prev) => prev.filter((id) => nextFieldIdSet.has(Number(id))))
+    setTemplateSnippetSelectedIds((prev) => prev.filter((id) => nextSnippetIdSet.has(Number(id))))
+    setTemplateBundleSelectedIds((prev) => prev.filter((id) => nextBundleIdSet.has(Number(id))))
+    setTemplateCenterState((prev) => ({
+      ...prev,
+      loading: false,
+      error: '',
+      fields: nextFields,
+      snippets: nextSnippets,
+      bundles: nextBundles,
+    }))
+    return {
+      docTemplates: nextDocTemplates,
+      fields: nextFields,
+      snippets: nextSnippets,
+      bundles: nextBundles,
+    }
+  }
+
+  const fetchEvaluationRunDetail = async (runId, options = {}) => {
+    const safeRunId = Number(runId || 0)
+    if (!safeRunId) {
+      setEvaluationCenterState((prev) => ({ ...prev, selectedRun: null }))
+      return null
+    }
+    const payload = await api.get(`/api/tender/evaluations/runs/${safeRunId}`)
+    const data = buildEvaluationRunDetailData(payload)
+    if (!options?.silent) {
+      setEvaluationCenterState((prev) => ({
+        ...prev,
+        selectedRun: data,
+      }))
+    }
+    return data
+  }
+
+  const fetchEvaluationCenter = async (options = {}) => {
+    const [overviewPayload, datasetsPayload, runsPayload] = await Promise.all([
+      api.get('/api/tender/evaluations/overview'),
+      api.get('/api/tender/evaluations/datasets?limit=200'),
+      api.get('/api/tender/evaluations/runs?limit=60'),
+    ])
+    const overviewData = buildEvaluationOverviewData(overviewPayload)
+    const datasets = Array.isArray(datasetsPayload?.items) ? datasetsPayload.items : []
+    const runs = Array.isArray(runsPayload?.items) ? runsPayload.items : []
+    const targetRunId = Number(options?.runId || evaluationCenterState.selectedRun?.run?.id || runs?.[0]?.id || 0)
+    const detail = targetRunId > 0 ? await fetchEvaluationRunDetail(targetRunId, { silent: true }) : null
+
+    setEvaluationCenterState((prev) => ({
+      ...prev,
+      loading: false,
+      error: '',
+      overview: overviewData.overview,
+      datasetCountsByType: overviewData.datasetCountsByType,
+      recentRuns: overviewData.recentRuns,
+      datasets,
+      runs,
+      selectedRun: detail,
+      runForm: {
+        ...prev.runForm,
+        dataset_ids: (Array.isArray(prev.runForm?.dataset_ids) ? prev.runForm.dataset_ids : []).filter((id) => (
+          datasets.some((item) => Number(item.id) === Number(id))
+        )),
+      },
+    }))
+
+    return {
+      ...overviewData,
+      datasets,
+      runs,
+      selectedRun: detail,
+    }
   }
 
   const fetchAuditLogs = async () => {
@@ -1983,6 +2635,34 @@ function App() {
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  useEffect(() => {
+    if (activeTab === 'risk-center' && canRead) {
+      setRiskCenterState((prev) => ({ ...prev, loading: true, error: '' }))
+      fetchRiskCenter().catch((err) => {
+        setRiskCenterState((prev) => ({ ...prev, loading: false, error: err.message || '读取风险中心失败' }))
+      })
+    }
+    if (activeTab === 'template-center' && canRead) {
+      setTemplateCenterState((prev) => ({ ...prev, loading: true, error: '' }))
+      fetchTemplateCenter().catch((err) => {
+        setTemplateCenterState((prev) => ({ ...prev, loading: false, error: err.message || '读取模板中心失败' }))
+      })
+    }
+    if (activeTab === 'export-center' && canRead) {
+      setExportCenterState((prev) => ({ ...prev, loading: true, error: '' }))
+      fetchExportCenter().catch((err) => {
+        setExportCenterState((prev) => ({ ...prev, loading: false, error: err.message || '读取导出中心失败' }))
+      })
+    }
+    if (activeTab === 'evaluation-center' && canRead) {
+      setEvaluationCenterState((prev) => ({ ...prev, loading: true, error: '' }))
+      fetchEvaluationCenter().catch((err) => {
+        setEvaluationCenterState((prev) => ({ ...prev, loading: false, error: err.message || '读取评测中心失败' }))
+      })
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab, canRead])
 
   useEffect(() => () => {
     safeRevokeUrl(companyLicenseUpload.preview_url)
@@ -2157,6 +2837,44 @@ function App() {
     return () => clearInterval(timer)
   }, [generateWizard.analysisBusy])
 
+  const selectedBidCurrent = selectedBidDetail || selectedBid
+  const bidParseGenerateDefaults = useMemo(
+    () => resolveParseWorkspaceGenerateDefaults({
+      bidCategory: selectedBidCurrent?.bid_category,
+      models,
+      docTemplates,
+    }),
+    [selectedBidCurrent?.bid_category, models, docTemplates]
+  )
+
+  useEffect(() => {
+    setBidParseWorkspace((prev) => {
+      const currentForm = prev.generateForm && typeof prev.generateForm === 'object'
+        ? prev.generateForm
+        : createBidParseWorkspaceState().generateForm
+      const nextForm = {
+        bid_category: currentForm.bid_category || bidParseGenerateDefaults.bid_category,
+        model_id: currentForm.model_id || bidParseGenerateDefaults.model_id,
+        doc_template_id: currentForm.doc_template_id || bidParseGenerateDefaults.doc_template_id,
+      }
+      if (
+        currentForm.bid_category === nextForm.bid_category
+        && currentForm.model_id === nextForm.model_id
+        && currentForm.doc_template_id === nextForm.doc_template_id
+      ) {
+        return prev
+      }
+      return {
+        ...prev,
+        generateForm: nextForm,
+      }
+    })
+  }, [
+    bidParseGenerateDefaults.bid_category,
+    bidParseGenerateDefaults.model_id,
+    bidParseGenerateDefaults.doc_template_id,
+  ])
+
   useEffect(() => {
     const bidIdSet = new Set(
       bids
@@ -2173,15 +2891,56 @@ function App() {
     })
   }, [bids])
 
-  const canRead = !!permissions.can_read
-  const canWrite = !!permissions.can_write
-  const canConfigManage = !!permissions.can_config_manage
-  const canAudit = !!permissions.can_audit_read
-  const canAiUse = !!permissions.can_ai_use
-  const canAiManage = !!permissions.can_ai_manage
+  useEffect(() => {
+    if (!selectedBid?.id) return
+    const next = bids.find((item) => Number(item.id) === Number(selectedBid.id))
+    if (next) setSelectedBid(next)
+  }, [bids, selectedBid?.id])
+
+  const bidDraftArtifacts = bidDraftWorkspace.artifacts || createBidDraftWorkspaceState().artifacts
+  const selectedBidLifecycleSteps = useMemo(
+    () => deriveBidLifecycleSteps(selectedBidCurrent || {}),
+    [selectedBidCurrent]
+  )
+  const bidParseFileGroups = useMemo(
+    () => buildParseFileTree(bidParseWorkspace.files),
+    [bidParseWorkspace.files]
+  )
+  const bidScopedAssets = useMemo(
+    () => assets.filter((item) => Number(item?.bid_id || 0) === Number(selectedBidCurrent?.id || 0)),
+    [assets, selectedBidCurrent?.id]
+  )
+  const bidParseMatchRows = useMemo(
+    () => (Array.isArray(bidParseWorkspace.matchDraftRows) && bidParseWorkspace.matchDraftRows.length
+      ? bidParseWorkspace.matchDraftRows
+      : buildParseMatchDraftRows(bidParseWorkspace.clauses, bidParseWorkspace.matches)),
+    [bidParseWorkspace.matchDraftRows, bidParseWorkspace.matches, bidParseWorkspace.clauses]
+  )
+  const bidParseSpreadsheetFiles = useMemo(
+    () => bidParseFileGroups
+      .flatMap((group) => [group.root, ...(Array.isArray(group.children) ? group.children : [])])
+      .filter((item) => ['.xls', '.xlsx'].includes(String(item?.source_ext || '').toLowerCase())),
+    [bidParseFileGroups]
+  )
   const activeBundles = useMemo(
     () => bundles.filter((item) => String(item.status || '').toUpperCase() === 'ACTIVE'),
     [bundles]
+  )
+  const activeTemplateFields = useMemo(
+    () => templateFields.filter((item) => Number(item?.is_active || 0) === 1),
+    [templateFields]
+  )
+  const activeTemplateSnippets = useMemo(
+    () => templateSnippets.filter((item) => Number(item?.is_active || 0) === 1),
+    [templateSnippets]
+  )
+  const bidParseGenerateModels = useMemo(
+    () => models.filter((item) => Number(item?.is_enabled || 0) === 1),
+    [models]
+  )
+  const bidParseGenerateTemplates = useMemo(
+    () => docTemplates.filter((item) => String(item?.status || '').toUpperCase() === 'ACTIVE'),
+    [docTemplates]
   )
   const bidSummary = useMemo(() => {
     const summary = {
@@ -2483,6 +3242,29 @@ function App() {
     [editorSelectedIds]
   )
   const editorAllSelected = bids.length > 0 && bids.every((item) => editorSelectedIdSet.has(Number(item.id)))
+  const docTemplateSelectedIdSet = useMemo(
+    () => new Set(docTemplateSelectedIds.map((id) => Number(id)).filter((id) => Number.isFinite(id) && id > 0)),
+    [docTemplateSelectedIds]
+  )
+  const docTemplateAllSelected = docTemplates.length > 0 && docTemplates.every((item) => docTemplateSelectedIdSet.has(Number(item.id)))
+  const templateFieldSelectedIdSet = useMemo(
+    () => new Set(templateFieldSelectedIds.map((id) => Number(id)).filter((id) => Number.isFinite(id) && id > 0)),
+    [templateFieldSelectedIds]
+  )
+  const templateFieldAllSelected = templateFields.length > 0
+    && templateFields.every((item) => templateFieldSelectedIdSet.has(Number(item.id)))
+  const templateSnippetSelectedIdSet = useMemo(
+    () => new Set(templateSnippetSelectedIds.map((id) => Number(id)).filter((id) => Number.isFinite(id) && id > 0)),
+    [templateSnippetSelectedIds]
+  )
+  const templateSnippetAllSelected = templateSnippets.length > 0
+    && templateSnippets.every((item) => templateSnippetSelectedIdSet.has(Number(item.id)))
+  const templateBundleSelectedIdSet = useMemo(
+    () => new Set(templateBundleSelectedIds.map((id) => Number(id)).filter((id) => Number.isFinite(id) && id > 0)),
+    [templateBundleSelectedIds]
+  )
+  const templateBundleAllSelected = bundles.length > 0
+    && bundles.every((item) => templateBundleSelectedIdSet.has(Number(item.id)))
   const generateRows = useMemo(() => {
     const keyword = String(generateSearch || '').trim().toLowerCase()
     const rows = generateJobs.map((item) => {
@@ -2842,6 +3624,7 @@ function App() {
   const visibleMainTabs = mainTabs.filter((tab) => {
     if (tab.key === 'bids' || tab.key === 'editor') return canRead
     if (tab.key === 'bid-generate') return canWrite
+    if (tab.key === 'risk-center' || tab.key === 'template-center' || tab.key === 'export-center' || tab.key === 'evaluation-center') return canRead
     if (tab.key === 'ai') return canAiUse || canAiManage
     if (tab.key === 'audit') return canAudit
     if (tab.key === 'config') return canConfigManage
@@ -2869,13 +3652,603 @@ function App() {
     }
   }
 
+  const onSaveBidDetail = async () => {
+    const bidId = Number(selectedBidCurrent?.id || 0)
+    if (!bidId) return
+    const payload = {
+      title: String(bidDetailForm.title || '').trim(),
+      customer_name: String(bidDetailForm.customer_name || '').trim(),
+      project_name: String(bidDetailForm.project_name || '').trim(),
+      summary: String(bidDetailForm.summary || '').trim(),
+    }
+    if (!payload.title) {
+      showError('标书标题不能为空')
+      return
+    }
+    if (!payload.customer_name) {
+      showError('客户名称不能为空')
+      return
+    }
+    if (!payload.project_name) {
+      showError('项目名称不能为空')
+      return
+    }
+
+    resetFeedback()
+    setBidDetailSaving(true)
+    try {
+      await api.put(`/api/tender/bids/${bidId}`, payload)
+      await Promise.allSettled([
+        fetchBids(),
+        fetchBidDetail(bidId, { silent: true }),
+      ])
+      showMessage('项目基础信息已保存')
+    } catch (err) {
+      showError(err.message || '保存项目信息失败')
+    } finally {
+      setBidDetailSaving(false)
+    }
+  }
+
+  const onAddBidMemberDraft = () => {
+    setBidMemberDrafts((prev) => [...prev, createBidMemberDraft()])
+  }
+
+  const onChangeBidMemberDraft = (localId, field, value) => {
+    setBidMemberDrafts((prev) => prev.map((item) => {
+      if (item.local_id !== localId) return item
+      return createBidMemberDraft({
+        ...item,
+        [field]: value,
+        local_id: item.local_id,
+      })
+    }))
+  }
+
+  const onRemoveBidMemberDraft = (localId) => {
+    setBidMemberDrafts((prev) => prev.filter((item) => item.local_id !== localId || String(item.member_role).toUpperCase() === 'OWNER'))
+  }
+
+  const onSaveBidMembers = async () => {
+    const bidId = Number(selectedBidCurrent?.id || 0)
+    if (!bidId) return
+    const rows = bidMemberDrafts
+      .filter((item) => isMeaningfulBidMemberDraft(item) || String(item.member_role || '').toUpperCase() === 'OWNER')
+      .map((item) => normalizeBidMemberDraft(item))
+    const validation = validateBidMemberDrafts(rows)
+    if (!validation.ok) {
+      showError(validation.errors[0] || '成员分派信息不完整')
+      return
+    }
+
+    resetFeedback()
+    setBidMembersSaving(true)
+    try {
+      await api.put(`/api/tender/bids/${bidId}/members`, { members: rows })
+      await Promise.allSettled([
+        fetchBids(),
+        fetchBidDetail(bidId, { silent: true }),
+        fetchBidMembers(bidId, { silent: true }),
+      ])
+      showMessage('项目成员分派已保存')
+    } catch (err) {
+      showError(err.message || '保存成员分派失败')
+    } finally {
+      setBidMembersSaving(false)
+    }
+  }
+
+  const onChangeBidKbForm = (field, value) => {
+    setKbIngestState((prev) => ({
+      ...prev,
+      form: {
+        ...prev.form,
+        [field]: value,
+      },
+    }))
+  }
+
+  const onRunBidKbIngest = async () => {
+    const bidId = Number(selectedBidCurrent?.id || 0)
+    if (!bidId) return
+    resetFeedback()
+    setKbIngestState((prev) => ({ ...prev, ingesting: true }))
+    try {
+      const payload = buildKbIngestPayload(kbIngestState.form || {})
+      const resp = await api.post(`/api/tender/bids/${bidId}/kb/ingest`, payload)
+      const workspace = buildKbIngestWorkspaceData(resp)
+      setKbIngestState((prev) => ({
+        ...workspace,
+        loading: false,
+        refreshing: false,
+        error: '',
+        ingesting: false,
+      }))
+      await Promise.allSettled([
+        fetchBootstrap(),
+        fetchBids(),
+        fetchBidDetail(bidId, { silent: true }),
+      ])
+      showMessage('项目知识库沉淀已完成')
+    } catch (err) {
+      setKbIngestState((prev) => ({ ...prev, ingesting: false }))
+      showError(err.message || '执行知识库沉淀失败')
+    }
+  }
+
+  const onPickBidParseFiles = (fileList) => {
+    const files = Array.from(fileList || [])
+    setBidParseWorkspace((prev) => ({ ...prev, uploadFiles: files }))
+  }
+
+  const onUploadBidParseFiles = async () => {
+    const bidId = Number(selectedBidCurrent?.id || 0)
+    if (!bidId) return
+    if (!bidParseWorkspace.uploadFiles.length) {
+      showError('请先选择要上传的文件')
+      return
+    }
+    resetFeedback()
+    setBidParseWorkspace((prev) => ({ ...prev, uploading: true }))
+    try {
+      const form = new FormData()
+      form.append('file_role', bidParseWorkspace.uploadRole || 'MAIN')
+      bidParseWorkspace.uploadFiles.forEach((file) => {
+        form.append('files', file)
+      })
+      await api.post(`/api/tender/bids/${bidId}/parse/files`, form)
+      await Promise.allSettled([
+        fetchBids(),
+        fetchBidParseWorkspace(bidId, { silent: true }),
+      ])
+      setBidParseWorkspace((prev) => ({
+        ...prev,
+        uploadFiles: [],
+        uploadInputKey: prev.uploadInputKey + 1,
+      }))
+      showMessage('解析文件已上传')
+    } catch (err) {
+      showError(err.message || '上传解析文件失败')
+    } finally {
+      setBidParseWorkspace((prev) => ({ ...prev, uploading: false }))
+    }
+  }
+
+  const onDeleteBidParseFile = async (fileId) => {
+    const bidId = Number(selectedBidCurrent?.id || 0)
+    if (!bidId || !fileId) return
+    if (!window.confirm('确认删除该解析文件及其解压子文件吗？')) return
+    resetFeedback()
+    try {
+      await api.del(`/api/tender/bids/${bidId}/parse/files/${fileId}`)
+      await Promise.allSettled([
+        fetchBids(),
+        fetchBidParseWorkspace(bidId, { silent: true }),
+      ])
+      showMessage('解析文件已删除')
+    } catch (err) {
+      showError(err.message || '删除解析文件失败')
+    }
+  }
+
+  const onToggleBidParseSheetDraft = (fileId, sheetName, checked) => {
+    setBidParseWorkspace((prev) => {
+      const current = Array.isArray(prev.sheetDrafts?.[fileId]) ? prev.sheetDrafts[fileId] : []
+      const next = checked
+        ? Array.from(new Set([...current, sheetName]))
+        : current.filter((item) => item !== sheetName)
+      return {
+        ...prev,
+        sheetDrafts: {
+          ...prev.sheetDrafts,
+          [fileId]: next,
+        },
+      }
+    })
+  }
+
+  const onSaveBidParseSheets = async (fileId) => {
+    const bidId = Number(selectedBidCurrent?.id || 0)
+    if (!bidId || !fileId) return
+    const selectedSheetNames = bidParseWorkspace.sheetDrafts?.[fileId] || []
+    if (!selectedSheetNames.length) {
+      showError('请至少勾选一个 sheet')
+      return
+    }
+    resetFeedback()
+    setBidParseWorkspace((prev) => ({
+      ...prev,
+      savingSheets: { ...prev.savingSheets, [fileId]: true },
+    }))
+    try {
+      await api.post(`/api/tender/bids/${bidId}/parse/files/${fileId}/sheets/select`, {
+        selected_sheet_names: selectedSheetNames,
+      })
+      await fetchBidParseWorkspace(bidId, { silent: true })
+      showMessage('Sheet 选择已保存')
+    } catch (err) {
+      showError(err.message || '保存 sheet 选择失败')
+    } finally {
+      setBidParseWorkspace((prev) => ({
+        ...prev,
+        savingSheets: {
+          ...prev.savingSheets,
+          [fileId]: false,
+        },
+      }))
+    }
+  }
+
+  const onStartBidParse = async (scope) => {
+    const bidId = Number(selectedBidCurrent?.id || 0)
+    if (!bidId) return
+    const parseScope = scope || bidParseWorkspace.parseScope || 'FULL'
+    resetFeedback()
+    setBidParseWorkspace((prev) => ({ ...prev, parsing: true }))
+    try {
+      await api.post(`/api/tender/bids/${bidId}/parse/start`, { parse_scope: parseScope })
+      await Promise.allSettled([
+        fetchBids(),
+        fetchBidParseWorkspace(bidId, { silent: true }),
+      ])
+      showMessage(`已执行${parseScopeLabelMap[parseScope] || '解析'}`)
+    } catch (err) {
+      showError(err.message || '执行解析失败')
+    } finally {
+      setBidParseWorkspace((prev) => ({ ...prev, parsing: false }))
+    }
+  }
+
+  const onGenerateBidFromParseWorkspace = async () => {
+    const bidId = Number(selectedBidCurrent?.id || 0)
+    if (!bidId) return
+    if (!bidParseWorkspace.latest_job?.id) {
+      showError('请先完成项目解析后再生成初稿')
+      return
+    }
+    if (!bidParseWorkspace.clauses.length && !bidParseWorkspace.tables.length) {
+      showError('当前项目缺少可用于生成的解析结果')
+      return
+    }
+
+    const defaults = resolveParseWorkspaceGenerateDefaults({
+      bidCategory: selectedBidCurrent?.bid_category,
+      models,
+      docTemplates,
+    })
+    const bidCategory = bidParseWorkspace.generateForm?.bid_category || defaults.bid_category
+    const modelId = bidParseWorkspace.generateForm?.model_id || defaults.model_id
+    const templateId = bidParseWorkspace.generateForm?.doc_template_id || defaults.doc_template_id
+
+    resetFeedback()
+    setBidParseWorkspace((prev) => ({ ...prev, generating: true }))
+    try {
+      const result = await api.post(`/api/tender/bids/${bidId}/generate/from-parse`, {
+        bid_category: bidCategory,
+        model_id: modelId ? Number(modelId) : undefined,
+        doc_template_id: templateId ? Number(templateId) : undefined,
+      })
+      await Promise.allSettled([fetchGenerateJobs(), fetchBids(), fetchBootstrap()])
+      setActiveTab('bids')
+      if (result?.bid?.id) {
+        await openBidVersionPanel(result.bid)
+      }
+      showMessage(
+        result?.warnings?.length
+          ? '投标初稿已生成，存在提示项，请继续在版本区核对'
+          : '已根据最近解析结果生成投标初稿'
+      )
+    } catch (err) {
+      showError(err.message || '根据解析结果生成初稿失败')
+    } finally {
+      setBidParseWorkspace((prev) => ({ ...prev, generating: false }))
+    }
+  }
+
+  const onChangeBidParseClause = (clauseId, field, value) => {
+    setBidParseWorkspace((prev) => ({
+      ...prev,
+      clauses: prev.clauses.map((item) => {
+        if (Number(item.id) !== Number(clauseId)) return item
+        return { ...item, [field]: value }
+      }),
+    }))
+  }
+
+  const onSaveBidParseClauses = async () => {
+    const bidId = Number(selectedBidCurrent?.id || 0)
+    if (!bidId || !bidParseWorkspace.clauses.length) return
+    resetFeedback()
+    setBidParseWorkspace((prev) => ({ ...prev, clauseSaving: true }))
+    try {
+      await api.put(
+        `/api/tender/bids/${bidId}/parse/clauses/bulk`,
+        buildClauseBulkPayload(bidParseWorkspace.clauses)
+      )
+      await fetchBidParseWorkspace(bidId, { silent: true })
+      showMessage('条款分类已保存')
+    } catch (err) {
+      showError(err.message || '保存条款分类失败')
+    } finally {
+      setBidParseWorkspace((prev) => ({ ...prev, clauseSaving: false }))
+    }
+  }
+
+  const onRecommendBidParseMatches = async () => {
+    const bidId = Number(selectedBidCurrent?.id || 0)
+    if (!bidId) return
+    resetFeedback()
+    setBidParseWorkspace((prev) => ({ ...prev, recommending: true }))
+    try {
+      await api.post(`/api/tender/bids/${bidId}/parse/matches/recommend`, {})
+      await fetchBidParseWorkspace(bidId, { silent: true })
+      showMessage('已生成资产匹配建议')
+    } catch (err) {
+      showError(err.message || '生成资产匹配建议失败')
+    } finally {
+      setBidParseWorkspace((prev) => ({ ...prev, recommending: false }))
+    }
+  }
+
+  const onChangeBidParseMatch = (rowKey, field, value) => {
+    setBidParseWorkspace((prev) => {
+      const baseRows = Array.isArray(prev.matchDraftRows) && prev.matchDraftRows.length
+        ? prev.matchDraftRows
+        : buildParseMatchDraftRows(prev.clauses, prev.matches)
+      const rows = baseRows.map((item) => {
+        if (item?.row_key !== rowKey) return item
+        return { ...item, [field]: value }
+      })
+      return {
+        ...prev,
+        matchDraftRows: rows,
+      }
+    })
+  }
+
+  const onSaveBidParseMatches = async () => {
+    const bidId = Number(selectedBidCurrent?.id || 0)
+    if (!bidId || !bidParseMatchRows.length) return
+    const payload = buildMatchBulkPayload(bidParseWorkspace.matchDraftRows)
+    if (!payload.items.length) {
+      showError('暂无需要保存的匹配结果')
+      return
+    }
+    resetFeedback()
+    setBidParseWorkspace((prev) => ({ ...prev, matchSaving: true }))
+    try {
+      await api.put(`/api/tender/bids/${bidId}/parse/matches/bulk`, payload)
+      await fetchBidParseWorkspace(bidId, { silent: true })
+      showMessage('资产匹配结果已保存')
+    } catch (err) {
+      showError(err.message || '保存资产匹配失败')
+    } finally {
+      setBidParseWorkspace((prev) => ({ ...prev, matchSaving: false }))
+    }
+  }
+
+  const onChangeBidDraftSection = (index, field, value) => {
+    setBidDraftWorkspace((prev) => ({
+      ...prev,
+      sections: prev.sections.map((item, itemIndex) => {
+        if (itemIndex !== index) return item
+        return { ...item, [field]: value }
+      }),
+    }))
+  }
+
+  const onSaveBidDraftSections = async () => {
+    const bidId = Number(selectedBidCurrent?.id || 0)
+    if (!bidId) return
+    resetFeedback()
+    setBidDraftWorkspace((prev) => ({ ...prev, savingSections: true }))
+    try {
+      await api.put(
+        `/api/tender/bids/${bidId}/draft/sections`,
+        buildDraftSectionSavePayload(bidDraftWorkspace.sections)
+      )
+      await fetchBidDraftWorkspace(bidId, { silent: true })
+      showMessage('结构化章节稿已保存')
+    } catch (err) {
+      showError(err.message || '保存结构化章节稿失败')
+    } finally {
+      setBidDraftWorkspace((prev) => ({ ...prev, savingSections: false }))
+    }
+  }
+
+  const onChangeBidDraftArtifact = (bucketKey, groupKey, index, field, value) => {
+    setBidDraftWorkspace((prev) => {
+      const currentBucket = prev.artifacts?.[bucketKey] && typeof prev.artifacts[bucketKey] === 'object'
+        ? prev.artifacts[bucketKey]
+        : {}
+      const currentRows = Array.isArray(currentBucket?.[groupKey]) ? currentBucket[groupKey] : []
+      return {
+        ...prev,
+        artifacts: {
+          ...prev.artifacts,
+          [bucketKey]: {
+            ...currentBucket,
+            [groupKey]: currentRows.map((item, itemIndex) => {
+              if (itemIndex !== index) return item
+              if (field === 'risk_grade') return { ...item, risk_grade: value, risk_level: value }
+              if (field === 'manual_review_required') return { ...item, manual_review_required: Boolean(value) }
+              return { ...item, [field]: value }
+            }),
+          },
+        },
+      }
+    })
+  }
+
+  const onAddBidDraftArtifactRow = (bucketKey, groupKey) => {
+    setBidDraftWorkspace((prev) => {
+      const currentBucket = prev.artifacts?.[bucketKey] && typeof prev.artifacts[bucketKey] === 'object'
+        ? prev.artifacts[bucketKey]
+        : {}
+      const currentRows = Array.isArray(currentBucket?.[groupKey]) ? currentBucket[groupKey] : []
+      const isResponse = bucketKey === 'response_tables'
+      const nextRow = isResponse
+        ? {
+          row_no: currentRows.length + 1,
+          parameter_key: '',
+          tender_requirement: '',
+          response_text: '',
+          satisfy_status: 'TO_CONFIRM',
+          satisfy_basis: '',
+          evidence_source: '',
+          risk_level: 'MEDIUM',
+          risk_grade: 'MEDIUM',
+          manual_review_required: true,
+        }
+        : {
+          row_no: currentRows.length + 1,
+          parameter_key: '',
+          tender_requirement: '',
+          bidder_response: '',
+          deviation_note: '无偏离',
+          satisfy_status: 'TO_CONFIRM',
+          satisfy_basis: '',
+          evidence_source: '',
+          risk_level: 'MEDIUM',
+          risk_grade: 'MEDIUM',
+          manual_review_required: true,
+        }
+      return {
+        ...prev,
+        artifacts: {
+          ...prev.artifacts,
+          [bucketKey]: {
+            ...currentBucket,
+            [groupKey]: [...currentRows, nextRow],
+          },
+        },
+      }
+    })
+  }
+
+  const onRemoveBidDraftArtifactRow = (bucketKey, groupKey, index) => {
+    setBidDraftWorkspace((prev) => {
+      const currentBucket = prev.artifacts?.[bucketKey] && typeof prev.artifacts[bucketKey] === 'object'
+        ? prev.artifacts[bucketKey]
+        : {}
+      const currentRows = Array.isArray(currentBucket?.[groupKey]) ? currentBucket[groupKey] : []
+      return {
+        ...prev,
+        artifacts: {
+          ...prev.artifacts,
+          [bucketKey]: {
+            ...currentBucket,
+            [groupKey]: currentRows
+              .filter((_item, itemIndex) => itemIndex !== index)
+              .map((item, itemIndex) => ({ ...item, row_no: itemIndex + 1 })),
+          },
+        },
+      }
+    })
+  }
+
+  const onSaveBidDraftArtifacts = async () => {
+    const bidId = Number(selectedBidCurrent?.id || 0)
+    if (!bidId) return
+    resetFeedback()
+    setBidDraftWorkspace((prev) => ({ ...prev, savingArtifacts: true }))
+    try {
+      await api.put(
+        `/api/tender/bids/${bidId}/draft/artifacts`,
+        buildDraftArtifactSavePayload(bidDraftWorkspace.artifacts)
+      )
+      await fetchBidDraftWorkspace(bidId, { silent: true })
+      showMessage('结构化偏离/应答表已保存')
+    } catch (err) {
+      showError(err.message || '保存结构化偏离/应答表失败')
+    } finally {
+      setBidDraftWorkspace((prev) => ({ ...prev, savingArtifacts: false }))
+    }
+  }
+
+  const onRunBidDraftCheck = async () => {
+    const bidId = Number(selectedBidCurrent?.id || 0)
+    if (!bidId) return
+    resetFeedback()
+    setBidDraftWorkspace((prev) => ({ ...prev, checking: true }))
+    try {
+      const resp = await api.post(`/api/tender/bids/${bidId}/check`, {})
+      await fetchBidDraftWorkspace(bidId, { silent: true })
+      showMessage(`成稿校验完成，共 ${Number(resp?.summary?.issue_count || 0)} 项问题`)
+    } catch (err) {
+      showError(err.message || '执行成稿校验失败')
+    } finally {
+      setBidDraftWorkspace((prev) => ({ ...prev, checking: false }))
+    }
+  }
+
+  const onRunBidScoreOptimize = async () => {
+    const bidId = Number(selectedBidCurrent?.id || 0)
+    if (!bidId) return
+    resetFeedback()
+    setBidDraftWorkspace((prev) => ({ ...prev, optimizing: true }))
+    try {
+      const resp = await api.post(`/api/tender/bids/${bidId}/score-optimize`, {})
+      await fetchBidDraftWorkspace(bidId, { silent: true })
+      showMessage(`评分优化已完成，应用 ${Number(resp?.applied_count || 0)} 项`)
+    } catch (err) {
+      showError(err.message || '执行评分优化失败')
+    } finally {
+      setBidDraftWorkspace((prev) => ({ ...prev, optimizing: false }))
+    }
+  }
+
+  const onCreateBidDraftAutosave = async () => {
+    const bidId = Number(selectedBidCurrent?.id || 0)
+    if (!bidId) return
+    resetFeedback()
+    setBidDraftWorkspace((prev) => ({ ...prev, autosaving: true }))
+    try {
+      await api.post(`/api/tender/bids/${bidId}/draft/autosave`, { source: 'MANUAL', note: '项目级初稿工作台存稿' })
+      await fetchBidDraftWorkspace(bidId, { silent: true })
+      showMessage('项目初稿已存稿')
+    } catch (err) {
+      showError(err.message || '创建初稿存稿失败')
+    } finally {
+      setBidDraftWorkspace((prev) => ({ ...prev, autosaving: false }))
+    }
+  }
+
+  const onRollbackBidDraftAutosave = async (autosaveId) => {
+    const bidId = Number(selectedBidCurrent?.id || 0)
+    const targetAutosaveId = Number(autosaveId || 0)
+    if (!bidId || !targetAutosaveId) return
+    if (!window.confirm(`确认回滚到存稿 #${targetAutosaveId} 吗？系统会同步生成新版本快照。`)) return
+    resetFeedback()
+    setBidDraftWorkspace((prev) => ({ ...prev, rollingBackId: targetAutosaveId }))
+    try {
+      await api.post(`/api/tender/bids/${bidId}/draft/rollback`, {
+        autosave_id: targetAutosaveId,
+        create_snapshot: true,
+      })
+      await Promise.allSettled([
+        fetchBids(),
+        fetchVersions(bidId),
+        refreshSelectedBidWorkspace(bidId, { silent: true }),
+      ])
+      showMessage(`已回滚到存稿 #${targetAutosaveId}`)
+    } catch (err) {
+      showError(err.message || '回滚初稿存稿失败')
+    } finally {
+      setBidDraftWorkspace((prev) => ({ ...prev, rollingBackId: null }))
+    }
+  }
+
   const onChangeBidStatus = async (bid, status) => {
     resetFeedback()
     try {
       const needConfirm = ['ARCHIVED', 'EXPORTED', 'SUBMITTED'].includes(String(status || '').toUpperCase())
       if (needConfirm && !window.confirm(`确认将标书状态变更为「${bidStatusLabel(status)}」吗？`)) return
       await api.post(`/api/tender/bids/${bid.id}/status`, { status, confirm: needConfirm })
-      await fetchBids()
+      await Promise.allSettled([
+        fetchBids(),
+        Number(selectedBid?.id) === Number(bid.id) ? refreshSelectedBidWorkspace(bid.id, { silent: true }) : Promise.resolve(),
+      ])
       showMessage(`状态已更新为${bidStatusLabel(status)}`)
     } catch (err) {
       showError(err.message)
@@ -2886,7 +4259,10 @@ function App() {
     resetFeedback()
     try {
       await api.post(`/api/tender/bids/${bid.id}/reviews/submit`, { review_stage: 'COMPILE' })
-      await fetchBids()
+      await Promise.allSettled([
+        fetchBids(),
+        Number(selectedBid?.id) === Number(bid.id) ? refreshSelectedBidWorkspace(bid.id, { silent: true }) : Promise.resolve(),
+      ])
       showMessage('已提交编制审核')
     } catch (err) {
       showError(err.message)
@@ -2897,6 +4273,9 @@ function App() {
     resetFeedback()
     try {
       await api.post(`/api/tender/bids/${bid.id}/draft/autosave`, { source: 'MANUAL', note: '前端快捷存稿' })
+      if (Number(selectedBid?.id) === Number(bid.id)) {
+        await fetchBidDraftWorkspace(bid.id, { silent: true })
+      }
       showMessage('草稿已自动保存')
     } catch (err) {
       showError(err.message)
@@ -2912,7 +4291,11 @@ function App() {
       showMessage('版本上传成功')
       await fetchBids()
       if (Number(selectedBid?.id) === Number(bidId)) {
-        await Promise.all([fetchVersions(bidId), fetchEditorEvents(bidId, { silent: true })])
+        await Promise.all([
+          fetchVersions(bidId),
+          fetchEditorEvents(bidId, { silent: true }),
+          refreshSelectedBidWorkspace(bidId, { silent: true }),
+        ])
       }
     } catch (err) {
       showError(err.message)
@@ -2951,7 +4334,10 @@ function App() {
       await api.post(`/api/tender/bids/${bid.id}/fill`, { bundle_id: bundleId })
       await fetchBids()
       if (Number(selectedBid?.id) === Number(bid.id)) {
-        await fetchVersions(bid.id)
+        await Promise.all([
+          fetchVersions(bid.id),
+          refreshSelectedBidWorkspace(bid.id, { silent: true }),
+        ])
       }
       showMessage(`已套用模板包：${bundle.name || bundle.bundle_code}`)
     } catch (err) {
@@ -2990,7 +4376,11 @@ function App() {
       await fetchBids()
       if (createdBid?.id) {
         setSelectedBid(createdBid)
-        await Promise.all([fetchVersions(createdBid.id), fetchEditorEvents(createdBid.id)])
+        await Promise.all([
+          fetchVersions(createdBid.id),
+          fetchEditorEvents(createdBid.id),
+          refreshSelectedBidWorkspace(createdBid.id),
+        ])
       }
       showMessage('已根据招标文件自动生成投标文件')
       fetchBootstrap().catch(() => {})
@@ -3002,6 +4392,15 @@ function App() {
 
   const resetSelectedBidPanel = () => {
     setSelectedBid(null)
+    setSelectedBidDetail(null)
+    setBidDetailForm(createBidDetailForm())
+    setBidDetailError('')
+    setBidMemberDrafts([])
+    setBidMembersError('')
+    setBidReviews([])
+    setBidReviewsError('')
+    setBidParseWorkspace(createBidParseWorkspaceState())
+    setBidDraftWorkspace(createBidDraftWorkspaceState())
     setVersions([])
     setEditorEvents([])
     setCompareState({
@@ -4812,13 +6211,421 @@ function App() {
   }
 
   const onDeleteDocTemplate = async (id) => {
+    const targetId = Number(id)
+    if (!Number.isFinite(targetId) || targetId <= 0) return
     resetFeedback()
     try {
       if (!window.confirm('确认删除该投标模板吗？')) return
-      await api.del(`/api/tender/doc-templates/${id}`)
+      await api.del(`/api/tender/doc-templates/${targetId}`)
       await fetchDocTemplates()
+      setDocTemplateSelectedIds((prev) => prev.filter((item) => Number(item) !== targetId))
       showMessage('投标模板已删除')
     } catch (err) {
+      showError(err.message)
+    }
+  }
+
+  const onToggleDocTemplateSelect = (id) => {
+    setDocTemplateSelectedIds((prev) => toggleListSelection(prev, id))
+  }
+
+  const onToggleTemplateFieldSelect = (id) => {
+    setTemplateFieldSelectedIds((prev) => toggleListSelection(prev, id))
+  }
+
+  const onToggleTemplateSnippetSelect = (id) => {
+    setTemplateSnippetSelectedIds((prev) => toggleListSelection(prev, id))
+  }
+
+  const onToggleTemplateBundleSelect = (id) => {
+    setTemplateBundleSelectedIds((prev) => toggleListSelection(prev, id))
+  }
+
+  const onToggleDocTemplateSelectAll = () => {
+    setDocTemplateSelectedIds((prev) => toggleAllListSelection(prev, docTemplates))
+  }
+
+  const onToggleTemplateFieldSelectAll = () => {
+    setTemplateFieldSelectedIds((prev) => toggleAllListSelection(prev, templateFields))
+  }
+
+  const onToggleTemplateSnippetSelectAll = () => {
+    setTemplateSnippetSelectedIds((prev) => toggleAllListSelection(prev, templateSnippets))
+  }
+
+  const onToggleTemplateBundleSelectAll = () => {
+    setTemplateBundleSelectedIds((prev) => toggleAllListSelection(prev, bundles))
+  }
+
+  const runTemplateBatchDelete = async ({
+    ids,
+    emptyMessage,
+    confirmMessage,
+    deleteItem,
+    setSelectedIds,
+    successMessage = '批量删除完成',
+    failureMessage = '批量删除失败',
+  }) => {
+    const normalizedIds = Array.from(new Set(
+      (Array.isArray(ids) ? ids : [])
+        .map((id) => Number(id))
+        .filter((id) => Number.isFinite(id) && id > 0)
+    ))
+    if (!normalizedIds.length) {
+      showError(emptyMessage)
+      return
+    }
+    if (!window.confirm(confirmMessage(normalizedIds.length))) return
+    resetFeedback()
+    try {
+      const failed = []
+      let successCount = 0
+      for (let i = 0; i < normalizedIds.length; i += 1) {
+        const currentId = normalizedIds[i]
+        try {
+          await deleteItem(currentId)
+          successCount += 1
+        } catch (err) {
+          failed.push({ id: currentId, message: err?.message || failureMessage })
+        }
+      }
+      await fetchTemplateCenter()
+      setSelectedIds(
+        failed.map((item) => Number(item.id)).filter((id) => Number.isFinite(id) && id > 0)
+      )
+      const feedback = buildBulkDeleteFeedback({
+        successCount,
+        failed,
+        successMessage,
+        failureMessage,
+      })
+      if (feedback.type === 'success') showMessage(feedback.message)
+      else showError(feedback.message)
+    } catch (err) {
+      showError(err.message || failureMessage)
+    }
+  }
+
+  const onBatchDeleteDocTemplates = async () => {
+    await runTemplateBatchDelete({
+      ids: Array.from(docTemplateSelectedIdSet),
+      emptyMessage: '请先勾选要删除的投标模板',
+      confirmMessage: (count) => `确认删除已选 ${count} 个投标模板吗？`,
+      deleteItem: (targetId) => api.del(`/api/tender/doc-templates/${targetId}`),
+      setSelectedIds: setDocTemplateSelectedIds,
+      successMessage: '批量删除完成',
+      failureMessage: '批量删除失败',
+    })
+  }
+
+  const openBidFromOpsCenter = async (bidId) => {
+    const targetId = Number(bidId || 0)
+    if (!targetId) return
+    const current = bids.find((item) => Number(item.id) === targetId)
+    if (current) {
+      setActiveTab('bids')
+      await openBidVersionPanel(current)
+      return
+    }
+    const result = await api.get('/api/tender/bids?page=1&limit=200')
+    const items = Array.isArray(result?.items) ? result.items : []
+    setBids(items)
+    const next = items.find((item) => Number(item.id) === targetId)
+    if (next) {
+      setActiveTab('bids')
+      await openBidVersionPanel(next)
+    }
+  }
+
+  const onCreateTemplateField = async () => {
+    resetFeedback()
+    try {
+      const form = templateCenterState.fieldForm || {}
+      await api.post('/api/tender/templates/fields', {
+        field_code: form.field_code,
+        field_name: form.field_name,
+        data_type: form.data_type,
+        default_value: form.default_value,
+        required_flag: !!form.required_flag,
+      })
+      setTemplateCenterState((prev) => ({
+        ...prev,
+        fieldForm: {
+          field_code: '',
+          field_name: '',
+          data_type: 'text',
+          default_value: '',
+          required_flag: false,
+        },
+      }))
+      await fetchTemplateCenter()
+      showMessage('模板字段已新增')
+    } catch (err) {
+      showError(err.message)
+    }
+  }
+
+  const onToggleTemplateField = async (item) => {
+    resetFeedback()
+    try {
+      await api.put(`/api/tender/templates/fields/${item.id}`, {
+        is_active: !Number(item?.is_active || 0),
+      })
+      await fetchTemplateCenter()
+      showMessage('模板字段状态已更新')
+    } catch (err) {
+      showError(err.message)
+    }
+  }
+
+  const onDeleteTemplateField = async (item) => {
+    const targetId = Number(item?.id || 0)
+    if (!targetId) return
+    resetFeedback()
+    try {
+      if (!window.confirm(`确认删除模板字段“${item?.field_name || item?.field_code || '未命名字段'}”吗？`)) return
+      await api.del(`/api/tender/templates/fields/${targetId}`)
+      await fetchTemplateCenter()
+      setTemplateFieldSelectedIds((prev) => prev.filter((id) => Number(id) !== targetId))
+      showMessage('模板字段已删除')
+    } catch (err) {
+      showError(err.message)
+    }
+  }
+
+  const onBatchDeleteTemplateFields = async () => {
+    await runTemplateBatchDelete({
+      ids: Array.from(templateFieldSelectedIdSet),
+      emptyMessage: '请先勾选要删除的模板字段',
+      confirmMessage: (count) => `确认删除已选 ${count} 个模板字段吗？`,
+      deleteItem: (targetId) => api.del(`/api/tender/templates/fields/${targetId}`),
+      setSelectedIds: setTemplateFieldSelectedIds,
+      successMessage: '批量删除完成',
+      failureMessage: '批量删除模板字段失败',
+    })
+  }
+
+  const onCreateTemplateSnippet = async () => {
+    resetFeedback()
+    try {
+      const form = templateCenterState.snippetForm || {}
+      const tags = String(form.tags_text || '')
+        .split(/[，,\s]+/)
+        .map((item) => String(item || '').trim())
+        .filter(Boolean)
+      await api.post('/api/tender/templates/snippets', {
+        snippet_code: form.snippet_code,
+        title: form.title,
+        category: form.category,
+        tags_json: tags,
+        content: form.content,
+      })
+      setTemplateCenterState((prev) => ({
+        ...prev,
+        snippetForm: {
+          snippet_code: '',
+          title: '',
+          category: '',
+          tags_text: '',
+          content: '',
+        },
+      }))
+      await fetchTemplateCenter()
+      showMessage('模板片段已新增')
+    } catch (err) {
+      showError(err.message)
+    }
+  }
+
+  const onToggleTemplateSnippet = async (item) => {
+    resetFeedback()
+    try {
+      await api.put(`/api/tender/templates/snippets/${item.id}`, {
+        is_active: !Number(item?.is_active || 0),
+      })
+      await fetchTemplateCenter()
+      showMessage('模板片段状态已更新')
+    } catch (err) {
+      showError(err.message)
+    }
+  }
+
+  const onDeleteTemplateSnippet = async (item) => {
+    const targetId = Number(item?.id || 0)
+    if (!targetId) return
+    resetFeedback()
+    try {
+      if (!window.confirm(`确认删除模板片段“${item?.title || item?.snippet_code || '未命名片段'}”吗？`)) return
+      await api.del(`/api/tender/templates/snippets/${targetId}`)
+      await fetchTemplateCenter()
+      setTemplateSnippetSelectedIds((prev) => prev.filter((id) => Number(id) !== targetId))
+      showMessage('模板片段已删除')
+    } catch (err) {
+      showError(err.message)
+    }
+  }
+
+  const onBatchDeleteTemplateSnippets = async () => {
+    await runTemplateBatchDelete({
+      ids: Array.from(templateSnippetSelectedIdSet),
+      emptyMessage: '请先勾选要删除的模板片段',
+      confirmMessage: (count) => `确认删除已选 ${count} 个模板片段吗？`,
+      deleteItem: (targetId) => api.del(`/api/tender/templates/snippets/${targetId}`),
+      setSelectedIds: setTemplateSnippetSelectedIds,
+      successMessage: '批量删除完成',
+      failureMessage: '批量删除模板片段失败',
+    })
+  }
+
+  const onCreateTemplateBundle = async () => {
+    resetFeedback()
+    try {
+      const payload = buildTemplateBundlePayload(templateCenterState.bundleForm || {})
+      if (!payload.items.length) throw new Error('请至少选择一个字段或片段')
+      await api.post('/api/tender/templates/bundles', payload)
+      setTemplateCenterState((prev) => ({
+        ...prev,
+        bundleForm: {
+          bundle_code: '',
+          name: '',
+          bid_type: 'SERVICE',
+          description: '',
+          field_ids: [],
+          snippet_ids: [],
+        },
+      }))
+      await fetchTemplateCenter()
+      showMessage('模板包已新增')
+    } catch (err) {
+      showError(err.message)
+    }
+  }
+
+  const onToggleTemplateBundle = async (item) => {
+    resetFeedback()
+    try {
+      await api.put(`/api/tender/templates/bundles/${item.id}`, {
+        status: String(item?.status || '').toUpperCase() === 'ACTIVE' ? 'INACTIVE' : 'ACTIVE',
+        items: Array.isArray(item?.items) ? item.items : [],
+      })
+      await fetchTemplateCenter()
+      showMessage('模板包状态已更新')
+    } catch (err) {
+      showError(err.message)
+    }
+  }
+
+  const onDeleteTemplateBundle = async (item) => {
+    const targetId = Number(item?.id || 0)
+    if (!targetId) return
+    resetFeedback()
+    try {
+      if (!window.confirm(`确认删除模板包“${item?.name || item?.bundle_code || '未命名模板包'}”吗？`)) return
+      await api.del(`/api/tender/templates/bundles/${targetId}`)
+      await fetchTemplateCenter()
+      setTemplateBundleSelectedIds((prev) => prev.filter((id) => Number(id) !== targetId))
+      showMessage('模板包已删除')
+    } catch (err) {
+      showError(err.message)
+    }
+  }
+
+  const onBatchDeleteTemplateBundles = async () => {
+    await runTemplateBatchDelete({
+      ids: Array.from(templateBundleSelectedIdSet),
+      emptyMessage: '请先勾选要删除的模板包',
+      confirmMessage: (count) => `确认删除已选 ${count} 个模板包吗？`,
+      deleteItem: (targetId) => api.del(`/api/tender/templates/bundles/${targetId}`),
+      setSelectedIds: setTemplateBundleSelectedIds,
+      successMessage: '批量删除完成',
+      failureMessage: '批量删除模板包失败',
+    })
+  }
+
+  const onRunBidExport = async (bidId, format) => {
+    const targetId = Number(bidId || 0)
+    if (!targetId) return
+    resetFeedback()
+    try {
+      const result = await api.post(`/api/tender/bids/${targetId}/export`, { format })
+      await Promise.allSettled([fetchBids(), fetchExportCenter()])
+      if (selectedBid?.id === targetId) {
+        refreshSelectedBidWorkspace(targetId, { silent: true }).catch(() => {})
+      }
+      if (result?.download_url) {
+        window.open(`${API_BASE}${result.download_url}`, '_blank', 'noopener,noreferrer')
+      }
+      showMessage(`已生成 ${String(format || '').toUpperCase()} 导出文件`)
+    } catch (err) {
+      showError(err.message)
+    }
+  }
+
+  const onCreateEvaluationDataset = async () => {
+    resetFeedback()
+    try {
+      const payload = buildEvaluationDatasetPayload(evaluationCenterState.datasetForm || {})
+      if (!payload.bid_id) throw new Error('请选择项目后再创建评测样本')
+      setEvaluationCenterState((prev) => ({ ...prev, savingDataset: true }))
+      const row = await api.post('/api/tender/evaluations/datasets', payload)
+      await fetchEvaluationCenter({ runId: evaluationCenterState.selectedRun?.run?.id })
+      setEvaluationCenterState((prev) => ({
+        ...prev,
+        savingDataset: false,
+        datasetForm: {
+          ...prev.datasetForm,
+          dataset_name: '',
+          notes: '',
+          expected_payload_text: '',
+        },
+        runForm: {
+          ...prev.runForm,
+          dataset_ids: Array.from(new Set([...(prev.runForm?.dataset_ids || []), Number(row?.id || 0)].filter(Boolean))),
+        },
+      }))
+      showMessage('评测数据集已创建')
+    } catch (err) {
+      setEvaluationCenterState((prev) => ({ ...prev, savingDataset: false }))
+      showError(err.message)
+    }
+  }
+
+  const onSelectEvaluationRun = async (runId) => {
+    resetFeedback()
+    try {
+      const detail = await fetchEvaluationRunDetail(runId)
+      setEvaluationCenterState((prev) => ({ ...prev, selectedRun: detail }))
+    } catch (err) {
+      showError(err.message)
+    }
+  }
+
+  const onStartEvaluationRun = async () => {
+    resetFeedback()
+    try {
+      setEvaluationCenterState((prev) => ({ ...prev, runningEvaluation: true }))
+      const payload = {
+        run_label: String(evaluationCenterState.runForm?.run_label || '').trim(),
+        run_scope: String(evaluationCenterState.runForm?.run_scope || 'BASELINE').trim().toUpperCase(),
+        dataset_ids: Array.isArray(evaluationCenterState.runForm?.dataset_ids)
+          ? evaluationCenterState.runForm.dataset_ids
+          : [],
+      }
+      const detail = await api.post('/api/tender/evaluations/runs', payload)
+      const normalized = buildEvaluationRunDetailData(detail)
+      await fetchEvaluationCenter({ runId: normalized?.run?.id })
+      setEvaluationCenterState((prev) => ({
+        ...prev,
+        runningEvaluation: false,
+        selectedRun: normalized,
+        runForm: {
+          ...prev.runForm,
+          run_label: '',
+        },
+      }))
+      showMessage('评测批次已执行')
+    } catch (err) {
+      setEvaluationCenterState((prev) => ({ ...prev, runningEvaluation: false }))
       showError(err.message)
     }
   }
@@ -5058,6 +6865,16 @@ function App() {
   const wizardFinalJson = generateWizard.analysis?.final_json && typeof generateWizard.analysis.final_json === 'object'
     ? generateWizard.analysis.final_json
     : {}
+  const wizardChapterQualitySummary = generateWizard.analysis?.chapter_quality_summary
+    && typeof generateWizard.analysis.chapter_quality_summary === 'object'
+    ? generateWizard.analysis.chapter_quality_summary
+    : (generateWizard.analysis?.stage_outputs?.chapter_quality_summary
+      && typeof generateWizard.analysis.stage_outputs.chapter_quality_summary === 'object'
+      ? generateWizard.analysis.stage_outputs.chapter_quality_summary
+      : null)
+  const wizardChapterQualityRows = Array.isArray(wizardChapterQualitySummary?.chapter_scores)
+    ? wizardChapterQualitySummary.chapter_scores
+    : []
   const wizardInstructionForm = {
     ...createGenerateInstructionForm(),
     ...(generateWizard.instruction_form && typeof generateWizard.instruction_form === 'object'
@@ -5247,6 +7064,12 @@ function App() {
     if (!generateSourcePreviewEditor?.config) return 'text'
     return 'doc'
   })()
+  const templateCenterTabs = [
+    { key: 'docs', label: '模板文件', count: docTemplates.length },
+    { key: 'fields', label: '字段管理', count: templateFields.length },
+    { key: 'snippets', label: '片段管理', count: templateSnippets.length },
+    { key: 'bundles', label: '模板包', count: bundles.length },
+  ]
 
   if (booting) {
     return <div className="app-loading">标书协同制作系统初始化中...</div>
@@ -5254,13 +7077,13 @@ function App() {
 
   return (
     <div className="shell">
-      <aside className="sidebar">
+      <aside className="sidebar" aria-label="标书系统主导航">
         <div className="brand">
           <strong><span className="brand-red">聚信</span><span className="brand-blue">标书协同制作系统</span></strong>
         </div>
         <div className="user-pill">{user?.username || '-'} · {roleLabel(user?.role)}</div>
 
-        <div className="menu">
+        <div className="menu" role="navigation" aria-label="系统功能导航">
           {visibleMainTabs.map((item) => (
             <button
               key={item.key}
@@ -5281,12 +7104,15 @@ function App() {
             <div className="menu-group">
               <button
                 className={`group-toggle ${activeTab.startsWith('library-') ? 'active' : ''}`}
+                type="button"
+                aria-expanded={libraryMenuOpen}
+                aria-controls="library-submenu"
                 onClick={() => setLibraryMenuOpen((prev) => !prev)}
               >
                 自有库
               </button>
               {libraryMenuOpen ? (
-                <div className="submenu">
+                <div className="submenu" id="library-submenu">
                   {visibleOwnLibraryTabs.map((item) => (
                     <button
                       key={item.key}
@@ -5484,7 +7310,7 @@ function App() {
                     <button className="ghost" onClick={() => setActiveTab('bids')}>新建项目</button>
                     <button className="ghost" onClick={() => setActiveTab('bid-generate')}>上传招标文件</button>
                     <button className="ghost" onClick={() => setActiveTab('dashboard')}>查看待办</button>
-                    <button className="ghost" onClick={() => setActiveTab('dashboard')}>查看风险</button>
+                    <button className="ghost" onClick={() => setActiveTab('risk-center')}>查看风险</button>
                     <button
                       className="primary"
                       onClick={() => {
@@ -5530,6 +7356,1173 @@ function App() {
                   </div>
                 </article>
               </div>
+            </div>
+          </section>
+        )}
+
+        {activeTab === 'risk-center' && (
+          <section className="panel">
+            <div className="panel-header"><h2>风险中心</h2></div>
+            <div className="panel-body">
+              <div className="ops-center-hero">
+                <div>
+                  <p className="ops-center-kicker">Risk Operations</p>
+                  <h3>聚焦项目阻塞、校验问题和导出失败</h3>
+                  <p>按项目统一查看待补资料、审核积压、成稿校验与导出异常，优先处理高风险项目。</p>
+                </div>
+                <button
+                  className="ghost"
+                  onClick={() => {
+                    setRiskCenterState((prev) => ({ ...prev, loading: true, error: '' }))
+                    fetchRiskCenter().catch((err) => {
+                      setRiskCenterState((prev) => ({ ...prev, loading: false, error: err.message || '读取风险中心失败' }))
+                      showError(err.message)
+                    })
+                  }}
+                >
+                  刷新风险
+                </button>
+              </div>
+
+              <div className="filters" style={{ gridTemplateColumns: '1.4fr 160px 180px 120px' }}>
+                <input
+                  value={riskCenterState.filters.keyword}
+                  placeholder="搜索项目名称/编号"
+                  onChange={(e) => setRiskCenterState((prev) => ({
+                    ...prev,
+                    filters: { ...prev.filters, keyword: e.target.value },
+                  }))}
+                />
+                <select
+                  value={riskCenterState.filters.level}
+                  onChange={(e) => setRiskCenterState((prev) => ({
+                    ...prev,
+                    filters: { ...prev.filters, level: e.target.value },
+                  }))}
+                >
+                  <option value="">全部风险等级</option>
+                  <option value="HIGH">高风险</option>
+                  <option value="MEDIUM">中风险</option>
+                  <option value="LOW">低风险</option>
+                </select>
+                <select
+                  value={riskCenterState.filters.status}
+                  onChange={(e) => setRiskCenterState((prev) => ({
+                    ...prev,
+                    filters: { ...prev.filters, status: e.target.value },
+                  }))}
+                >
+                  <option value="">全部项目状态</option>
+                  {bidStatusOptions.map((item) => (
+                    <option key={`risk-status-${item.value}`} value={item.value}>{item.label}</option>
+                  ))}
+                </select>
+                <button
+                  className="primary"
+                  onClick={() => {
+                    setRiskCenterState((prev) => ({ ...prev, loading: true, error: '' }))
+                    fetchRiskCenter(riskCenterState.filters).catch((err) => {
+                      setRiskCenterState((prev) => ({ ...prev, loading: false, error: err.message || '读取风险中心失败' }))
+                      showError(err.message)
+                    })
+                  }}
+                >
+                  查询
+                </button>
+              </div>
+
+              {riskCenterState.error ? <div className="empty">{riskCenterState.error}</div> : null}
+
+              <div className="ops-center-metrics">
+                <article className="ops-metric-card">
+                  <span>高风险项目</span>
+                  <strong>{riskCenterState.overview.high_risk_projects || 0}</strong>
+                  <small>优先处理阻塞链路</small>
+                </article>
+                <article className="ops-metric-card">
+                  <span>中风险项目</span>
+                  <strong>{riskCenterState.overview.medium_risk_projects || 0}</strong>
+                  <small>建议人工复核</small>
+                </article>
+                <article className="ops-metric-card">
+                  <span>待补资料</span>
+                  <strong>{riskCenterState.overview.materials_pending_projects || 0}</strong>
+                  <small>容易影响时效与合规</small>
+                </article>
+                <article className="ops-metric-card">
+                  <span>导出失败</span>
+                  <strong>{riskCenterState.overview.export_failed_records || 0}</strong>
+                  <small>需要回查源文件与转换环境</small>
+                </article>
+              </div>
+
+              <div className="table" style={{ marginTop: 14 }}>
+                <div className="table-row header ops-risk-table" style={{ gridTemplateColumns: '1.1fr 0.7fr 0.6fr 1fr 0.8fr 1fr 0.8fr' }}>
+                  <span>项目</span>
+                  <span>状态</span>
+                  <span>等级</span>
+                  <span>风险来源</span>
+                  <span>校验问题</span>
+                  <span>推荐动作</span>
+                  <span>操作</span>
+                </div>
+                {riskCenterState.items.map((item) => (
+                  <div className="table-row ops-risk-table" key={`risk-center-${item.bid_id}`} style={{ gridTemplateColumns: '1.1fr 0.7fr 0.6fr 1fr 0.8fr 1fr 0.8fr' }}>
+                    <span>
+                      <strong>{item.title || item.project_name || `项目#${item.bid_id}`}</strong>
+                      <small className="muted">{item.project_name || item.bid_no || '-'}</small>
+                    </span>
+                    <span>{bidStatusLabelMap[item.status] || item.status}</span>
+                    <span><span className={`risk-level level-${item.risk_label}`}>{item.risk_label}</span></span>
+                    <span>{item.risk_sources?.length ? item.risk_sources.join(' / ') : '暂无'}</span>
+                    <span>致命 {item.fatal_count || 0} / 告警 {item.warn_count || 0}</span>
+                    <span>{item.recommended_action || '继续推进'}</span>
+                    <span className="row-actions">
+                      <button className="ghost" onClick={() => openBidFromOpsCenter(item.bid_id).catch((err) => showError(err.message))}>打开项目</button>
+                      <button className="ghost" onClick={() => setActiveTab('export-center')}>去导出</button>
+                    </span>
+                  </div>
+                ))}
+                {!riskCenterState.items.length && !riskCenterState.loading ? <div className="empty">暂无风险项目</div> : null}
+              </div>
+            </div>
+          </section>
+        )}
+
+        {activeTab === 'template-center' && (
+          <section className="panel">
+            <div className="panel-header"><h2>模板中心</h2></div>
+            <div className="panel-body">
+              <div className="ops-center-hero template-center-hero">
+                <div>
+                  <p className="ops-center-kicker">模板资产工作台</p>
+                  <h3>统一维护投标模板、字段映射与复用片段</h3>
+                  <p>先沉淀模板文件，再维护字段和片段，最后组合成模板包，减少每个项目重复搭建。</p>
+                </div>
+                <button
+                  className="ghost template-center-refresh"
+                  onClick={() => {
+                    setTemplateCenterState((prev) => ({ ...prev, loading: true, error: '' }))
+                    fetchTemplateCenter().catch((err) => {
+                      setTemplateCenterState((prev) => ({ ...prev, loading: false, error: err.message || '读取模板中心失败' }))
+                      showError(err.message)
+                    })
+                  }}
+                  disabled={templateCenterState.loading}
+                >
+                  {templateCenterState.loading ? '刷新中...' : '刷新模板'}
+                </button>
+              </div>
+
+              {templateCenterState.error ? <div className="empty">{templateCenterState.error}</div> : null}
+
+              <div className="template-center-nav" role="tablist" aria-label="模板中心二级菜单">
+                {templateCenterTabs.map((item) => (
+                  <button
+                    key={item.key}
+                    type="button"
+                    role="tab"
+                    id={`template-center-tab-${item.key}`}
+                    className={templateCenterTab === item.key ? 'active' : ''}
+                    aria-selected={templateCenterTab === item.key}
+                    aria-controls={`template-center-panel-${item.key}`}
+                    onClick={() => setTemplateCenterTab(item.key)}
+                  >
+                    <span>{item.label}</span>
+                    <strong>{item.count}</strong>
+                  </button>
+                ))}
+              </div>
+
+              <div
+                className="template-center-stage"
+                role="tabpanel"
+                id={`template-center-panel-${templateCenterTab}`}
+                aria-labelledby={`template-center-tab-${templateCenterTab}`}
+              >
+                {templateCenterTab === 'docs' ? (
+                <article className="panel ops-subpanel">
+                  <div className="panel-header template-subpanel-header">
+                    <div>
+                      <h2>投标模板</h2>
+                      <p>上传并维护可直接套版的 Word 模板。</p>
+                    </div>
+                    {canConfigManage ? (
+                      <div className="template-batch-actions">
+                        <span>已选 {docTemplateSelectedIds.length} 项</span>
+                        <button className="ghost" onClick={onBatchDeleteDocTemplates} disabled={!docTemplateSelectedIds.length}>
+                          批量删除
+                        </button>
+                      </div>
+                    ) : null}
+                  </div>
+                  <div className="panel-body">
+                    {canConfigManage ? (
+                      <div className="article-create template-toolbar template-toolbar-doc">
+                        <input
+                          aria-label="模板名称"
+                          placeholder="模板名称"
+                          value={docTemplateUploadName}
+                          onChange={(e) => setDocTemplateUploadName(e.target.value)}
+                        />
+                        <label
+                          className="ghost template-file-trigger"
+                          tabIndex={0}
+                          aria-label="选择模板文件"
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter' || e.key === ' ') {
+                              e.preventDefault()
+                              e.currentTarget.querySelector('input[type="file"]')?.click()
+                            }
+                          }}
+                        >
+                          选择 DOCX
+                          <input
+                            key={docTemplateInputKey}
+                            type="file"
+                            accept=".docx"
+                            style={{ display: 'none' }}
+                            onChange={(e) => setDocTemplateUploadFile(e.target.files?.[0] || null)}
+                          />
+                        </label>
+                        <button className="primary" onClick={onUploadDocTemplate} disabled={docTemplateUploadBusy}>
+                          {docTemplateUploadBusy ? '上传中...' : '上传模板'}
+                        </button>
+                      </div>
+                    ) : null}
+                    <div className="template-file-meta">{docTemplateUploadFile?.name || '当前未选择模板文件'}</div>
+                    <div className="table template-table template-table-docs">
+                      <div className="table-row header template-table-row-docs">
+                        <span className="template-table-check">
+                          {canConfigManage ? (
+                            <input
+                              type="checkbox"
+                              aria-label={docTemplateAllSelected ? '取消全选投标模板' : '全选投标模板'}
+                              checked={docTemplateAllSelected}
+                              onChange={onToggleDocTemplateSelectAll}
+                            />
+                          ) : (
+                            '选择'
+                          )}
+                        </span>
+                        <span>模板</span>
+                        <span>默认</span>
+                        <span>状态</span>
+                        <span>操作</span>
+                      </div>
+                      {docTemplates.map((item) => (
+                        <div className="table-row template-table-row-docs" key={`doc-template-${item.id}`}>
+                          <span className="template-table-check">
+                            {canConfigManage ? (
+                              <input
+                                type="checkbox"
+                                aria-label={`选择投标模板 ${item.template_name}`}
+                                checked={docTemplateSelectedIdSet.has(Number(item.id))}
+                                onChange={() => onToggleDocTemplateSelect(item.id)}
+                              />
+                            ) : null}
+                          </span>
+                          <span className="template-table-title">
+                            <strong>{item.template_name}</strong>
+                            <small className="muted">{item.original_file_name}</small>
+                          </span>
+                          <span>{item.is_default ? '默认模板' : '候选模板'}</span>
+                          <span>{String(item.status || '').toUpperCase() === 'ACTIVE' ? '启用中' : '已停用'}</span>
+                          <span className="row-actions template-row-actions">
+                            {canConfigManage && !item.is_default ? <button className="ghost" onClick={() => onSetDefaultDocTemplate(item.id)}>设为默认</button> : null}
+                            {canConfigManage ? <button className="ghost" onClick={() => onDeleteDocTemplate(item.id)}>删除</button> : null}
+                          </span>
+                        </div>
+                      ))}
+                      {!docTemplates.length ? <div className="empty">暂无投标模板</div> : null}
+                    </div>
+                  </div>
+                </article>
+                ) : null}
+
+                {templateCenterTab === 'fields' ? (
+                <article className="panel ops-subpanel">
+                  <div className="panel-header template-subpanel-header">
+                    <div>
+                      <h2>模板字段</h2>
+                      <p>维护可复用的占位字段和默认值。</p>
+                    </div>
+                    {canTemplateManage ? (
+                      <div className="template-batch-actions">
+                        <span>已选 {templateFieldSelectedIds.length} 项</span>
+                        <button className="ghost" onClick={onBatchDeleteTemplateFields} disabled={!templateFieldSelectedIds.length}>
+                          批量删除
+                        </button>
+                      </div>
+                    ) : null}
+                  </div>
+                  <div className="panel-body">
+                    {canTemplateManage ? (
+                      <div className="article-create template-toolbar template-toolbar-field">
+                        <input
+                          aria-label="字段编码"
+                          placeholder="字段编码"
+                          value={templateCenterState.fieldForm?.field_code || ''}
+                          onChange={(e) => setTemplateCenterState((prev) => ({
+                            ...prev,
+                            fieldForm: { ...prev.fieldForm, field_code: e.target.value },
+                          }))}
+                        />
+                        <input
+                          aria-label="字段名称"
+                          placeholder="字段名称"
+                          value={templateCenterState.fieldForm?.field_name || ''}
+                          onChange={(e) => setTemplateCenterState((prev) => ({
+                            ...prev,
+                            fieldForm: { ...prev.fieldForm, field_name: e.target.value },
+                          }))}
+                        />
+                        <select
+                          aria-label="字段类型"
+                          value={templateCenterState.fieldForm?.data_type || 'text'}
+                          onChange={(e) => setTemplateCenterState((prev) => ({
+                            ...prev,
+                            fieldForm: { ...prev.fieldForm, data_type: e.target.value },
+                          }))}
+                        >
+                          <option value="text">文本</option>
+                          <option value="number">数字</option>
+                          <option value="date">日期</option>
+                        </select>
+                        <input
+                          aria-label="默认值"
+                          placeholder="默认值"
+                          value={templateCenterState.fieldForm?.default_value || ''}
+                          onChange={(e) => setTemplateCenterState((prev) => ({
+                            ...prev,
+                            fieldForm: { ...prev.fieldForm, default_value: e.target.value },
+                          }))}
+                        />
+                        <label className="field-inline template-inline-check">
+                          <span>必填</span>
+                          <input
+                            type="checkbox"
+                            checked={!!templateCenterState.fieldForm?.required_flag}
+                            onChange={(e) => setTemplateCenterState((prev) => ({
+                              ...prev,
+                              fieldForm: { ...prev.fieldForm, required_flag: e.target.checked },
+                            }))}
+                          />
+                        </label>
+                        <button className="primary" onClick={onCreateTemplateField}>新增字段</button>
+                      </div>
+                    ) : null}
+                    <div className="table template-table template-table-fields">
+                      <div className="table-row header template-table-row-fields">
+                        <span className="template-table-check">
+                          {canTemplateManage ? (
+                            <input
+                              type="checkbox"
+                              aria-label={templateFieldAllSelected ? '取消全选模板字段' : '全选模板字段'}
+                              checked={templateFieldAllSelected}
+                              onChange={onToggleTemplateFieldSelectAll}
+                            />
+                          ) : (
+                            '选择'
+                          )}
+                        </span>
+                        <span>编码</span>
+                        <span>名称</span>
+                        <span>类型</span>
+                        <span>状态</span>
+                        <span>操作</span>
+                      </div>
+                      {templateFields.map((item) => (
+                        <div className="table-row template-table-row-fields" key={`template-field-${item.id}`}>
+                          <span className="template-table-check">
+                            {canTemplateManage ? (
+                              <input
+                                type="checkbox"
+                                aria-label={`选择模板字段 ${item.field_name}`}
+                                checked={templateFieldSelectedIdSet.has(Number(item.id))}
+                                onChange={() => onToggleTemplateFieldSelect(item.id)}
+                              />
+                            ) : null}
+                          </span>
+                          <span>{item.field_code}</span>
+                          <span>{item.field_name}</span>
+                          <span>{item.data_type}</span>
+                          <span>{Number(item.is_active || 0) === 1 ? '启用中' : '已停用'}</span>
+                          <span className="row-actions template-row-actions">
+                            {canTemplateManage ? (
+                              <>
+                                <button className="ghost" onClick={() => onToggleTemplateField(item)}>
+                                  {Number(item.is_active || 0) === 1 ? '停用字段' : '启用字段'}
+                                </button>
+                                <button className="ghost" onClick={() => onDeleteTemplateField(item)}>删除</button>
+                              </>
+                            ) : null}
+                          </span>
+                        </div>
+                      ))}
+                      {!templateFields.length ? <div className="empty">暂无模板字段</div> : null}
+                    </div>
+                  </div>
+                </article>
+                ) : null}
+
+                {templateCenterTab === 'snippets' ? (
+                <article className="panel ops-subpanel">
+                  <div className="panel-header template-subpanel-header">
+                    <div>
+                      <h2>模板片段</h2>
+                      <p>沉淀常用段落，减少重复撰写。</p>
+                    </div>
+                    {canTemplateManage ? (
+                      <div className="template-batch-actions">
+                        <span>已选 {templateSnippetSelectedIds.length} 项</span>
+                        <button className="ghost" onClick={onBatchDeleteTemplateSnippets} disabled={!templateSnippetSelectedIds.length}>
+                          批量删除
+                        </button>
+                      </div>
+                    ) : null}
+                  </div>
+                  <div className="panel-body">
+                    {canTemplateManage ? (
+                      <>
+                        <div className="article-create template-toolbar template-toolbar-snippet">
+                          <input
+                            aria-label="片段编码"
+                            placeholder="片段编码"
+                            value={templateCenterState.snippetForm?.snippet_code || ''}
+                            onChange={(e) => setTemplateCenterState((prev) => ({
+                              ...prev,
+                              snippetForm: { ...prev.snippetForm, snippet_code: e.target.value },
+                            }))}
+                          />
+                          <input
+                            aria-label="片段标题"
+                            placeholder="片段标题"
+                            value={templateCenterState.snippetForm?.title || ''}
+                            onChange={(e) => setTemplateCenterState((prev) => ({
+                              ...prev,
+                              snippetForm: { ...prev.snippetForm, title: e.target.value },
+                            }))}
+                          />
+                          <input
+                            aria-label="片段分类"
+                            placeholder="分类"
+                            value={templateCenterState.snippetForm?.category || ''}
+                            onChange={(e) => setTemplateCenterState((prev) => ({
+                              ...prev,
+                              snippetForm: { ...prev.snippetForm, category: e.target.value },
+                            }))}
+                          />
+                          <input
+                            aria-label="标签"
+                            placeholder="标签（空格/逗号分隔）"
+                            value={templateCenterState.snippetForm?.tags_text || ''}
+                            onChange={(e) => setTemplateCenterState((prev) => ({
+                              ...prev,
+                              snippetForm: { ...prev.snippetForm, tags_text: e.target.value },
+                            }))}
+                          />
+                          <button className="primary" onClick={onCreateTemplateSnippet}>新增片段</button>
+                        </div>
+                        <textarea
+                          className="template-snippet-textarea"
+                          aria-label="片段内容"
+                          placeholder="片段内容"
+                          value={templateCenterState.snippetForm?.content || ''}
+                          onChange={(e) => setTemplateCenterState((prev) => ({
+                            ...prev,
+                            snippetForm: { ...prev.snippetForm, content: e.target.value },
+                          }))}
+                        />
+                      </>
+                    ) : null}
+                    <div className="table template-table template-table-snippets">
+                      <div className="table-row header template-table-row-snippets">
+                        <span className="template-table-check">
+                          {canTemplateManage ? (
+                            <input
+                              type="checkbox"
+                              aria-label={templateSnippetAllSelected ? '取消全选模板片段' : '全选模板片段'}
+                              checked={templateSnippetAllSelected}
+                              onChange={onToggleTemplateSnippetSelectAll}
+                            />
+                          ) : (
+                            '选择'
+                          )}
+                        </span>
+                        <span>编码</span>
+                        <span>标题</span>
+                        <span>分类</span>
+                        <span>内容</span>
+                        <span>操作</span>
+                      </div>
+                      {templateSnippets.map((item) => (
+                        <div className="table-row template-table-row-snippets" key={`template-snippet-${item.id}`}>
+                          <span className="template-table-check">
+                            {canTemplateManage ? (
+                              <input
+                                type="checkbox"
+                                aria-label={`选择模板片段 ${item.title}`}
+                                checked={templateSnippetSelectedIdSet.has(Number(item.id))}
+                                onChange={() => onToggleTemplateSnippetSelect(item.id)}
+                              />
+                            ) : null}
+                          </span>
+                          <span>{item.snippet_code}</span>
+                          <span>{item.title}</span>
+                          <span>{item.category || '-'}</span>
+                          <span className="template-table-content">{String(item.content || '').slice(0, 120) || '-'}</span>
+                          <span className="row-actions template-row-actions">
+                            {canTemplateManage ? (
+                              <>
+                                <button className="ghost" onClick={() => onToggleTemplateSnippet(item)}>
+                                  {Number(item.is_active || 0) === 1 ? '停用片段' : '启用片段'}
+                                </button>
+                                <button className="ghost" onClick={() => onDeleteTemplateSnippet(item)}>删除</button>
+                              </>
+                            ) : null}
+                          </span>
+                        </div>
+                      ))}
+                      {!templateSnippets.length ? <div className="empty">暂无模板片段</div> : null}
+                    </div>
+                  </div>
+                </article>
+                ) : null}
+
+                {templateCenterTab === 'bundles' ? (
+              <article className="panel ops-subpanel template-bundle-panel">
+                <div className="panel-header template-subpanel-header">
+                  <div>
+                    <h2>模板包</h2>
+                    <p>组合字段与片段，形成项目可直接套用的模板包。</p>
+                  </div>
+                  {canTemplateManage ? (
+                    <div className="template-batch-actions">
+                      <span>已选 {templateBundleSelectedIds.length} 项</span>
+                      <button className="ghost" onClick={onBatchDeleteTemplateBundles} disabled={!templateBundleSelectedIds.length}>
+                        批量删除
+                      </button>
+                    </div>
+                  ) : null}
+                </div>
+                <div className="panel-body">
+                  {canTemplateManage ? (
+                    <>
+                      <div className="article-create template-toolbar template-toolbar-bundle">
+                        <input
+                          aria-label="模板包编码"
+                          placeholder="模板包编码"
+                          value={templateCenterState.bundleForm?.bundle_code || ''}
+                          onChange={(e) => setTemplateCenterState((prev) => ({
+                            ...prev,
+                            bundleForm: { ...prev.bundleForm, bundle_code: e.target.value },
+                          }))}
+                        />
+                        <input
+                          aria-label="模板包名称"
+                          placeholder="模板包名称"
+                          value={templateCenterState.bundleForm?.name || ''}
+                          onChange={(e) => setTemplateCenterState((prev) => ({
+                            ...prev,
+                            bundleForm: { ...prev.bundleForm, name: e.target.value },
+                          }))}
+                        />
+                        <select
+                          aria-label="投标类型"
+                          value={templateCenterState.bundleForm?.bid_type || 'SERVICE'}
+                          onChange={(e) => setTemplateCenterState((prev) => ({
+                            ...prev,
+                            bundleForm: { ...prev.bundleForm, bid_type: e.target.value },
+                          }))}
+                        >
+                          {bidCategoryOptions.map((item) => (
+                            <option key={`bundle-bid-type-${item.value}`} value={item.value}>{item.label}</option>
+                          ))}
+                        </select>
+                        <input
+                          aria-label="说明"
+                          placeholder="说明"
+                          value={templateCenterState.bundleForm?.description || ''}
+                          onChange={(e) => setTemplateCenterState((prev) => ({
+                            ...prev,
+                            bundleForm: { ...prev.bundleForm, description: e.target.value },
+                            }))}
+                          />
+                        <button className="primary" onClick={onCreateTemplateBundle}>新增模板包</button>
+                      </div>
+
+                      <div className="ops-template-selector-grid">
+                        <div className="ops-template-selector">
+                          <h4>选择字段</h4>
+                          <div className="ops-template-checklist">
+                            {activeTemplateFields.map((item) => {
+                              const selected = Array.isArray(templateCenterState.bundleForm?.field_ids)
+                                && templateCenterState.bundleForm.field_ids.some((current) => Number(current) === Number(item.id))
+                              return (
+                                <label key={`bundle-field-${item.id}`}>
+                                  <input
+                                    type="checkbox"
+                                    checked={selected}
+                                    onChange={(e) => setTemplateCenterState((prev) => {
+                                      const current = Array.isArray(prev.bundleForm?.field_ids) ? prev.bundleForm.field_ids : []
+                                      const next = e.target.checked
+                                        ? [...current, item.id]
+                                        : current.filter((value) => Number(value) !== Number(item.id))
+                                      return {
+                                        ...prev,
+                                        bundleForm: { ...prev.bundleForm, field_ids: next },
+                                      }
+                                    })}
+                                  />
+                                  <span>{item.field_name} <small>{item.field_code}</small></span>
+                                </label>
+                              )
+                            })}
+                            {!activeTemplateFields.length ? <div className="empty">暂无启用字段</div> : null}
+                          </div>
+                        </div>
+                        <div className="ops-template-selector">
+                          <h4>选择片段</h4>
+                          <div className="ops-template-checklist">
+                            {activeTemplateSnippets.map((item) => {
+                              const selected = Array.isArray(templateCenterState.bundleForm?.snippet_ids)
+                                && templateCenterState.bundleForm.snippet_ids.some((current) => Number(current) === Number(item.id))
+                              return (
+                                <label key={`bundle-snippet-${item.id}`}>
+                                  <input
+                                    type="checkbox"
+                                    checked={selected}
+                                    onChange={(e) => setTemplateCenterState((prev) => {
+                                      const current = Array.isArray(prev.bundleForm?.snippet_ids) ? prev.bundleForm.snippet_ids : []
+                                      const next = e.target.checked
+                                        ? [...current, item.id]
+                                        : current.filter((value) => Number(value) !== Number(item.id))
+                                      return {
+                                        ...prev,
+                                        bundleForm: { ...prev.bundleForm, snippet_ids: next },
+                                      }
+                                    })}
+                                  />
+                                  <span>{item.title} <small>{item.snippet_code}</small></span>
+                                </label>
+                              )
+                            })}
+                            {!activeTemplateSnippets.length ? <div className="empty">暂无启用片段</div> : null}
+                          </div>
+                        </div>
+                      </div>
+                    </>
+                  ) : null}
+
+                  <div className="table template-table template-table-bundles">
+                    <div className="table-row header template-table-row-bundles">
+                      <span className="template-table-check">
+                        {canTemplateManage ? (
+                          <input
+                            type="checkbox"
+                            aria-label={templateBundleAllSelected ? '取消全选模板包' : '全选模板包'}
+                            checked={templateBundleAllSelected}
+                            onChange={onToggleTemplateBundleSelectAll}
+                          />
+                        ) : (
+                          '选择'
+                        )}
+                      </span>
+                      <span>编码</span>
+                      <span>名称</span>
+                      <span>类型</span>
+                      <span>状态</span>
+                      <span>内容</span>
+                      <span>操作</span>
+                    </div>
+                    {bundles.map((item) => (
+                      <div className="table-row template-table-row-bundles" key={`template-bundle-${item.id}`}>
+                        <span className="template-table-check">
+                          {canTemplateManage ? (
+                            <input
+                              type="checkbox"
+                              aria-label={`选择模板包 ${item.name}`}
+                              checked={templateBundleSelectedIdSet.has(Number(item.id))}
+                              onChange={() => onToggleTemplateBundleSelect(item.id)}
+                            />
+                          ) : null}
+                        </span>
+                        <span>{item.bundle_code}</span>
+                        <span>{item.name}</span>
+                        <span>{bidCategoryLabelMap[item.bid_type] || item.bid_type || '-'}</span>
+                        <span>{String(item.status || '').toUpperCase() === 'ACTIVE' ? '启用中' : '已停用'}</span>
+                        <span>{Array.isArray(item.items) ? `${item.items.length} 个组件` : '0 个组件'}</span>
+                        <span className="row-actions template-row-actions">
+                          {canTemplateManage ? (
+                            <>
+                              <button className="ghost" onClick={() => onToggleTemplateBundle(item)}>
+                                {String(item.status || '').toUpperCase() === 'ACTIVE' ? '停用模板包' : '启用模板包'}
+                              </button>
+                              <button className="ghost" onClick={() => onDeleteTemplateBundle(item)}>删除</button>
+                            </>
+                          ) : null}
+                        </span>
+                      </div>
+                    ))}
+                    {!bundles.length ? <div className="empty">暂无模板包</div> : null}
+                  </div>
+                </div>
+              </article>
+                ) : null}
+              </div>
+            </div>
+          </section>
+        )}
+
+        {activeTab === 'export-center' && (
+          <section className="panel">
+            <div className="panel-header"><h2>导出中心</h2></div>
+            <div className="panel-body">
+              <div className="ops-center-hero">
+                <div>
+                  <p className="ops-center-kicker">Export Operations</p>
+                  <h3>统一执行 Word、PDF 和导出包产出</h3>
+                  <p>围绕当前项目状态、草稿版本和最近导出结果，集中完成导出、追踪和下载。</p>
+                </div>
+                <button
+                  className="ghost"
+                  onClick={() => {
+                    setExportCenterState((prev) => ({ ...prev, loading: true, error: '' }))
+                    fetchExportCenter().catch((err) => {
+                      setExportCenterState((prev) => ({ ...prev, loading: false, error: err.message || '读取导出中心失败' }))
+                      showError(err.message)
+                    })
+                  }}
+                >
+                  刷新导出
+                </button>
+              </div>
+
+              <div className="filters" style={{ gridTemplateColumns: '1.3fr 180px 120px' }}>
+                <input
+                  value={exportCenterState.filters.keyword}
+                  placeholder="搜索项目名称/编号"
+                  onChange={(e) => setExportCenterState((prev) => ({
+                    ...prev,
+                    filters: { ...prev.filters, keyword: e.target.value },
+                  }))}
+                />
+                <select
+                  value={exportCenterState.filters.status}
+                  onChange={(e) => setExportCenterState((prev) => ({
+                    ...prev,
+                    filters: { ...prev.filters, status: e.target.value },
+                  }))}
+                >
+                  <option value="">全部状态</option>
+                  {bidStatusOptions.map((item) => (
+                    <option key={`export-status-${item.value}`} value={item.value}>{item.label}</option>
+                  ))}
+                </select>
+                <button
+                  className="primary"
+                  onClick={() => {
+                    setExportCenterState((prev) => ({ ...prev, loading: true, error: '' }))
+                    fetchExportCenter(exportCenterState.filters).catch((err) => {
+                      setExportCenterState((prev) => ({ ...prev, loading: false, error: err.message || '读取导出中心失败' }))
+                      showError(err.message)
+                    })
+                  }}
+                >
+                  查询
+                </button>
+              </div>
+
+              {exportCenterState.error ? <div className="empty">{exportCenterState.error}</div> : null}
+
+              <div className="ops-center-metrics">
+                <article className="ops-metric-card">
+                  <span>待导出项目</span>
+                  <strong>{exportCenterState.overview.ready_projects || 0}</strong>
+                  <small>处于可导出阶段</small>
+                </article>
+                <article className="ops-metric-card">
+                  <span>已导出项目</span>
+                  <strong>{exportCenterState.overview.exported_projects || 0}</strong>
+                  <small>已产生产物</small>
+                </article>
+                <article className="ops-metric-card">
+                  <span>近7天成功</span>
+                  <strong>{exportCenterState.overview.recent_success_records || 0}</strong>
+                  <small>导出成功记录</small>
+                </article>
+                <article className="ops-metric-card">
+                  <span>近7天失败</span>
+                  <strong>{exportCenterState.overview.recent_failed_records || 0}</strong>
+                  <small>需回查失败原因</small>
+                </article>
+              </div>
+
+              <div className="table" style={{ marginTop: 14 }}>
+                <div className="table-row header" style={{ gridTemplateColumns: '1fr 0.7fr 0.8fr 0.8fr 0.8fr 1.2fr' }}>
+                  <span>项目</span>
+                  <span>状态</span>
+                  <span>当前版本</span>
+                  <span>草稿更新时间</span>
+                  <span>最近导出</span>
+                  <span>操作</span>
+                </div>
+                {exportCenterState.items.map((item) => (
+                  <div className="table-row" key={`export-project-${item.bid_id}`} style={{ gridTemplateColumns: '1fr 0.7fr 0.8fr 0.8fr 0.8fr 1.2fr' }}>
+                    <span>
+                      <strong>{item.title || item.project_name || `项目#${item.bid_id}`}</strong>
+                      <small className="muted">{item.project_name || item.bid_no || '-'}</small>
+                    </span>
+                    <span>{bidStatusLabelMap[item.status] || item.status}</span>
+                    <span>{item.current_version_no ? `v${item.current_version_no}` : '-'}</span>
+                    <span>{formatDateTime(item.draft_updated_at) || '-'}</span>
+                    <span>
+                      {item.latest_export_record
+                        ? `${item.latest_export_record.export_type} / ${item.latest_export_record.status}`
+                        : '暂无'}
+                    </span>
+                    <span className="row-actions">
+                      <button className="ghost" onClick={() => openBidFromOpsCenter(item.bid_id).catch((err) => showError(err.message))}>打开项目</button>
+                      {canWrite ? <button className="ghost" disabled={!item.export_ready_flag} onClick={() => onRunBidExport(item.bid_id, 'DOCX')}>Word</button> : null}
+                      {canWrite ? <button className="ghost" disabled={!item.export_ready_flag} onClick={() => onRunBidExport(item.bid_id, 'PDF')}>PDF</button> : null}
+                      {canWrite ? <button className="ghost" disabled={!item.export_ready_flag} onClick={() => onRunBidExport(item.bid_id, 'PACKAGE')}>导出包</button> : null}
+                    </span>
+                  </div>
+                ))}
+                {!exportCenterState.items.length && !exportCenterState.loading ? <div className="empty">暂无可展示项目</div> : null}
+              </div>
+
+              <article className="panel ops-subpanel" style={{ marginTop: 14 }}>
+                <div className="panel-header"><h2>最近导出记录</h2></div>
+                <div className="panel-body">
+                  <div className="table">
+                    <div className="table-row header" style={{ gridTemplateColumns: '0.9fr 0.7fr 1fr 0.8fr 0.8fr 0.7fr' }}>
+                      <span>导出类型</span>
+                      <span>状态</span>
+                      <span>文件</span>
+                      <span>项目ID</span>
+                      <span>时间</span>
+                      <span>操作</span>
+                    </div>
+                    {exportCenterState.recent_records.map((item) => (
+                      <div className="table-row" key={`export-record-${item.id}`} style={{ gridTemplateColumns: '0.9fr 0.7fr 1fr 0.8fr 0.8fr 0.7fr' }}>
+                        <span>{item.export_type}</span>
+                        <span>{item.status}</span>
+                        <span>{item.file_name || '-'}</span>
+                        <span>{item.bid_id || '-'}</span>
+                        <span>{formatDateTime(item.created_at) || '-'}</span>
+                        <span className="row-actions">
+                          {item.status === 'SUCCESS' ? (
+                            <a className="ghost" href={`${API_BASE}/api/tender/export-records/${item.id}/download`} target="_blank" rel="noreferrer">下载</a>
+                          ) : (
+                            <span className="muted">失败</span>
+                          )}
+                        </span>
+                      </div>
+                    ))}
+                    {!exportCenterState.recent_records.length ? <div className="empty">暂无导出记录</div> : null}
+                  </div>
+                </div>
+              </article>
+            </div>
+          </section>
+        )}
+
+        {activeTab === 'evaluation-center' && (
+          <section className="panel">
+            <div className="panel-header"><h2>评测中心</h2></div>
+            <div className="panel-body">
+              <div className="ops-center-hero">
+                <div>
+                  <p className="ops-center-kicker">Evaluation Operations</p>
+                  <h3>把评测样本、KPI 批次和基线对比收敛到一个工作台</h3>
+                  <p>围绕现有项目沉淀 golden dataset，执行批次评测，持续对比条款识别、评分覆盖、资料匹配、风险召回和导出完整性。</p>
+                </div>
+                <button
+                  className="ghost"
+                  onClick={() => {
+                    setEvaluationCenterState((prev) => ({ ...prev, loading: true, error: '' }))
+                    fetchEvaluationCenter().catch((err) => {
+                      setEvaluationCenterState((prev) => ({ ...prev, loading: false, error: err.message || '读取评测中心失败' }))
+                      showError(err.message)
+                    })
+                  }}
+                >
+                  刷新评测
+                </button>
+              </div>
+
+              {evaluationCenterState.error ? <div className="empty">{evaluationCenterState.error}</div> : null}
+
+              <div className="ops-center-metrics">
+                <article className="ops-metric-card">
+                  <span>评测样本</span>
+                  <strong>{evaluationCenterState.overview.dataset_count || 0}</strong>
+                  <small>当前已沉淀样本数</small>
+                </article>
+                <article className="ops-metric-card">
+                  <span>Baseline 样本</span>
+                  <strong>{evaluationCenterState.overview.baseline_dataset_count || 0}</strong>
+                  <small>默认参与基线批次</small>
+                </article>
+                <article className="ops-metric-card">
+                  <span>评测批次</span>
+                  <strong>{evaluationCenterState.overview.run_count || 0}</strong>
+                  <small>可对比历史版本变化</small>
+                </article>
+                <article className="ops-metric-card">
+                  <span>最近总分</span>
+                  <strong>{Number(evaluationCenterState.overview.latest_run?.summary?.overall_score || 0).toFixed(3)}</strong>
+                  <small>{evaluationCenterState.overview.latest_run ? '最新批次 overall score' : '暂无批次'}</small>
+                </article>
+              </div>
+
+              <div className="evaluation-type-strip">
+                {evaluationCenterState.datasetCountsByType.map((item) => (
+                  <div className="evaluation-type-chip" key={`eval-type-${item.eval_type}`}>
+                    <span>{evaluationTypeLabelMap[item.eval_type] || item.eval_type}</span>
+                    <strong>{item.count || 0}</strong>
+                  </div>
+                ))}
+                {!evaluationCenterState.datasetCountsByType.length ? <div className="empty">暂无评测样本类型分布</div> : null}
+              </div>
+
+              <div className="evaluation-center-grid">
+                <article className="panel ops-subpanel">
+                  <div className="panel-header"><h2>创建评测样本</h2></div>
+                  <div className="panel-body">
+                    <div className="evaluation-form-grid">
+                      <select
+                        value={evaluationCenterState.datasetForm?.bid_id || ''}
+                        onChange={(e) => setEvaluationCenterState((prev) => ({
+                          ...prev,
+                          datasetForm: { ...prev.datasetForm, bid_id: e.target.value },
+                        }))}
+                      >
+                        <option value="">选择项目</option>
+                        {bids.map((item) => (
+                          <option key={`eval-bid-${item.id}`} value={item.id}>{item.title || item.project_name || `项目#${item.id}`}</option>
+                        ))}
+                      </select>
+                      <input
+                        placeholder="样本名称"
+                        value={evaluationCenterState.datasetForm?.dataset_name || ''}
+                        onChange={(e) => setEvaluationCenterState((prev) => ({
+                          ...prev,
+                          datasetForm: { ...prev.datasetForm, dataset_name: e.target.value },
+                        }))}
+                      />
+                      <select
+                        value={evaluationCenterState.datasetForm?.eval_type || 'CLAUSE_RECOGNITION'}
+                        onChange={(e) => setEvaluationCenterState((prev) => ({
+                          ...prev,
+                          datasetForm: { ...prev.datasetForm, eval_type: e.target.value },
+                        }))}
+                      >
+                        {evaluationTypeOptions.map((item) => (
+                          <option key={`eval-type-option-${item.value}`} value={item.value}>{item.label}</option>
+                        ))}
+                      </select>
+                      <label className="field-inline">
+                        <span>Baseline</span>
+                        <input
+                          type="checkbox"
+                          checked={!!evaluationCenterState.datasetForm?.baseline_flag}
+                          onChange={(e) => setEvaluationCenterState((prev) => ({
+                            ...prev,
+                            datasetForm: { ...prev.datasetForm, baseline_flag: e.target.checked },
+                          }))}
+                        />
+                      </label>
+                      <input
+                        className="span-2"
+                        placeholder="备注"
+                        value={evaluationCenterState.datasetForm?.notes || ''}
+                        onChange={(e) => setEvaluationCenterState((prev) => ({
+                          ...prev,
+                          datasetForm: { ...prev.datasetForm, notes: e.target.value },
+                        }))}
+                      />
+                    </div>
+                    <textarea
+                      placeholder="可选：手工覆盖 expected_payload JSON；留空则按当前项目事实自动生成"
+                      value={evaluationCenterState.datasetForm?.expected_payload_text || ''}
+                      onChange={(e) => setEvaluationCenterState((prev) => ({
+                        ...prev,
+                        datasetForm: { ...prev.datasetForm, expected_payload_text: e.target.value },
+                      }))}
+                      style={{ minHeight: 108, marginTop: 12 }}
+                    />
+                    <div className="row-actions" style={{ marginTop: 12 }}>
+                      <button className="primary" onClick={onCreateEvaluationDataset} disabled={evaluationCenterState.savingDataset}>
+                        {evaluationCenterState.savingDataset ? '创建中...' : '创建样本'}
+                      </button>
+                    </div>
+                  </div>
+                </article>
+
+                <article className="panel ops-subpanel">
+                  <div className="panel-header"><h2>执行评测</h2></div>
+                  <div className="panel-body">
+                    <div className="evaluation-form-grid">
+                      <input
+                        placeholder="批次名称（可选）"
+                        value={evaluationCenterState.runForm?.run_label || ''}
+                        onChange={(e) => setEvaluationCenterState((prev) => ({
+                          ...prev,
+                          runForm: { ...prev.runForm, run_label: e.target.value },
+                        }))}
+                      />
+                      <select
+                        value={evaluationCenterState.runForm?.run_scope || 'BASELINE'}
+                        onChange={(e) => setEvaluationCenterState((prev) => ({
+                          ...prev,
+                          runForm: { ...prev.runForm, run_scope: e.target.value },
+                        }))}
+                      >
+                        <option value="BASELINE">Baseline</option>
+                        <option value="ADHOC">Adhoc</option>
+                      </select>
+                      <div className="evaluation-run-meta">
+                        已选样本 {Array.isArray(evaluationCenterState.runForm?.dataset_ids) ? evaluationCenterState.runForm.dataset_ids.length : 0}
+                        <small className="muted">未选择时默认执行全部 baseline 样本</small>
+                      </div>
+                    </div>
+                    <div className="row-actions" style={{ marginTop: 12 }}>
+                      <button className="primary" onClick={onStartEvaluationRun} disabled={evaluationCenterState.runningEvaluation}>
+                        {evaluationCenterState.runningEvaluation ? '执行中...' : '开始评测'}
+                      </button>
+                    </div>
+                    <div className="evaluation-run-list">
+                      {(evaluationCenterState.recentRuns || []).map((item) => (
+                        <button
+                          type="button"
+                          key={`evaluation-run-${item.id}`}
+                          className={`evaluation-run-item ${Number(evaluationCenterState.selectedRun?.run?.id || 0) === Number(item.id) ? 'active' : ''}`}
+                          onClick={() => onSelectEvaluationRun(item.id)}
+                        >
+                          <strong>{item.run_label || item.run_no}</strong>
+                          <span>{item.run_scope} / {item.status}</span>
+                          <small>{formatDateTime(item.created_at) || '-'}</small>
+                        </button>
+                      ))}
+                      {!evaluationCenterState.recentRuns.length ? <div className="empty">暂无评测批次</div> : null}
+                    </div>
+                  </div>
+                </article>
+              </div>
+
+              <article className="panel ops-subpanel" style={{ marginTop: 14 }}>
+                <div className="panel-header"><h2>评测样本列表</h2></div>
+                <div className="panel-body">
+                  <div className="table">
+                    <div className="table-row header" style={{ gridTemplateColumns: '80px 1fr 0.8fr 0.6fr 1fr 0.6fr' }}>
+                      <span>批次</span>
+                      <span>项目 / 样本</span>
+                      <span>类型</span>
+                      <span>Baseline</span>
+                      <span>期望结构</span>
+                      <span>状态</span>
+                    </div>
+                    {evaluationCenterState.datasets.map((item) => {
+                      const checked = Array.isArray(evaluationCenterState.runForm?.dataset_ids)
+                        && evaluationCenterState.runForm.dataset_ids.some((id) => Number(id) === Number(item.id))
+                      return (
+                        <div className="table-row" key={`evaluation-dataset-${item.id}`} style={{ gridTemplateColumns: '80px 1fr 0.8fr 0.6fr 1fr 0.6fr' }}>
+                          <span>
+                            <input
+                              type="checkbox"
+                              checked={checked}
+                              onChange={(e) => setEvaluationCenterState((prev) => {
+                                const current = Array.isArray(prev.runForm?.dataset_ids) ? prev.runForm.dataset_ids : []
+                                const next = e.target.checked
+                                  ? [...current, Number(item.id)]
+                                  : current.filter((value) => Number(value) !== Number(item.id))
+                                return {
+                                  ...prev,
+                                  runForm: { ...prev.runForm, dataset_ids: Array.from(new Set(next)) },
+                                }
+                              })}
+                            />
+                          </span>
+                          <span>
+                            <strong>{item.dataset_name || item.dataset_code}</strong>
+                            <small className="muted">{item.bid_project_name || item.bid_title || `项目#${item.source_bid_id}`}</small>
+                          </span>
+                          <span>{evaluationTypeLabelMap[item.eval_type] || item.eval_type}</span>
+                          <span>{item.baseline_flag ? '是' : '否'}</span>
+                          <span>{summarizeEvaluationExpectedPayload(item.expected_payload)}</span>
+                          <span>{item.status || 'ACTIVE'}</span>
+                        </div>
+                      )
+                    })}
+                    {!evaluationCenterState.datasets.length ? <div className="empty">暂无评测样本</div> : null}
+                  </div>
+                </div>
+              </article>
+
+              <article className="panel ops-subpanel" style={{ marginTop: 14 }}>
+                <div className="panel-header"><h2>批次详情</h2></div>
+                <div className="panel-body">
+                  {evaluationCenterState.selectedRun?.run ? (
+                    <>
+                      <div className="evaluation-run-summary-grid">
+                        <article className="ops-metric-card">
+                          <span>Overall</span>
+                          <strong>{Number(evaluationCenterState.selectedRun.run.summary?.overall_score || 0).toFixed(3)}</strong>
+                          <small>当前批次总分</small>
+                        </article>
+                        <article className="ops-metric-card">
+                          <span>PASS</span>
+                          <strong>{evaluationCenterState.selectedRun.run.summary?.pass_count || 0}</strong>
+                          <small>通过项</small>
+                        </article>
+                        <article className="ops-metric-card">
+                          <span>WARNING</span>
+                          <strong>{evaluationCenterState.selectedRun.run.summary?.warning_count || 0}</strong>
+                          <small>待人工复核</small>
+                        </article>
+                        <article className="ops-metric-card">
+                          <span>Delta</span>
+                          <strong>{Number(evaluationCenterState.selectedRun.run.baseline_summary?.overall_score_delta || 0).toFixed(3)}</strong>
+                          <small>相对 baseline 的总分变化</small>
+                        </article>
+                      </div>
+
+                      <div className="table" style={{ marginTop: 14 }}>
+                        <div className="table-row header" style={{ gridTemplateColumns: '1fr 0.8fr 0.6fr 0.6fr 0.8fr 1fr' }}>
+                          <span>样本</span>
+                          <span>类型</span>
+                          <span>状态</span>
+                          <span>分数</span>
+                          <span>Delta</span>
+                          <span>缺口 / 风险</span>
+                        </div>
+                        {evaluationCenterState.selectedRun.items.map((item) => (
+                          <div className="table-row" key={`evaluation-run-item-${item.id}`} style={{ gridTemplateColumns: '1fr 0.8fr 0.6fr 0.6fr 0.8fr 1fr' }}>
+                            <span>{item.dataset_name || `样本#${item.dataset_id}`}</span>
+                            <span>{evaluationTypeLabelMap[item.eval_type] || item.eval_type}</span>
+                            <span>{item.status}</span>
+                            <span>{Number(item.score || 0).toFixed(3)}</span>
+                            <span>{Number(item.delta?.delta || 0).toFixed(3)}</span>
+                            <span>
+                              {Array.isArray(item.result?.high_risk_misses) && item.result.high_risk_misses.length
+                                ? `高风险遗漏: ${item.result.high_risk_misses.join(' / ')}`
+                                : Array.isArray(item.result?.misses) && item.result.misses.length
+                                  ? item.result.misses.join(' / ')
+                                  : '无明显缺口'}
+                            </span>
+                          </div>
+                        ))}
+                        {!evaluationCenterState.selectedRun.items.length ? <div className="empty">当前批次暂无明细</div> : null}
+                      </div>
+                    </>
+                  ) : (
+                    <div className="empty">请选择一个评测批次查看详情</div>
+                  )}
+                </div>
+              </article>
             </div>
           </section>
         )}
@@ -5702,7 +8695,7 @@ function App() {
                 {selectedBid && (
                   <div className="bid-version-panel">
                     <div className="bid-version-headline">
-                      <h3>版本历史 - {selectedBid.title}</h3>
+                      <h3>版本历史 - {selectedBidCurrent?.title || selectedBid.title}</h3>
                       <span className="muted">{versions.length} 个版本</span>
                     </div>
 
@@ -5819,6 +8812,1210 @@ function App() {
                         </div>
                       ) : null}
                       {!editorEventsLoading && !editorEvents.length ? <div className="empty">暂无编辑轨迹</div> : null}
+                    </div>
+
+                    <div className="bid-lifecycle-panel">
+                      <div className="bid-version-headline">
+                        <h3>项目生命周期 - {selectedBidCurrent?.bid_no || selectedBid.bid_no}</h3>
+                        <button
+                          className="ghost"
+                          onClick={() => refreshSelectedBidWorkspace(selectedBid.id).catch((err) => showError(err.message || '刷新项目详情失败'))}
+                        >
+                          刷新详情
+                        </button>
+                      </div>
+
+                      <div className="bid-lifecycle-grid">
+                        <section className="bid-detail-card">
+                          <div className="section-subhead">
+                            <h4>生命周期进度</h4>
+                            <span className={`status-pill ${bidStatusToneClass(selectedBidCurrent?.status)}`}>
+                              {bidStatusLabel(selectedBidCurrent?.status)}
+                            </span>
+                          </div>
+                          {bidDetailLoading ? <div className="empty">项目详情加载中...</div> : null}
+                          {!bidDetailLoading && bidDetailError ? <div className="empty">{bidDetailError}</div> : null}
+                          {!bidDetailLoading && !bidDetailError ? (
+                            <>
+                              <div className="bid-lifecycle-steps">
+                                {selectedBidLifecycleSteps.map((step) => (
+                                  <div key={step.key} className={`bid-lifecycle-step is-${step.state}`}>
+                                    <span className="step-dot" />
+                                    <div className="step-content">
+                                      <strong>{step.label}</strong>
+                                      <small>{step.state === 'done' ? '已完成' : step.state === 'current' ? '当前阶段' : '待推进'}</small>
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                              <div className="bid-detail-meta-grid">
+                                <div className="bid-detail-meta-item">
+                                  <span>审核阶段</span>
+                                  <strong>{reviewStageLabel(selectedBidCurrent?.review_stage)}</strong>
+                                </div>
+                                <div className="bid-detail-meta-item">
+                                  <span>审核状态</span>
+                                  <strong>{reviewStatusLabel(selectedBidCurrent?.review_status)}</strong>
+                                </div>
+                                <div className="bid-detail-meta-item">
+                                  <span>创建时间</span>
+                                  <strong>{formatDateTime(selectedBidCurrent?.created_at)}</strong>
+                                </div>
+                                <div className="bid-detail-meta-item">
+                                  <span>最近更新</span>
+                                  <strong>{formatDateTime(selectedBidCurrent?.updated_at)}</strong>
+                                </div>
+                                <div className="bid-detail-meta-item">
+                                  <span>提交时间</span>
+                                  <strong>{formatDateTime(selectedBidCurrent?.submitted_at)}</strong>
+                                </div>
+                                <div className="bid-detail-meta-item">
+                                  <span>归档时间</span>
+                                  <strong>{formatDateTime(selectedBidCurrent?.archived_at)}</strong>
+                                </div>
+                              </div>
+                            </>
+                          ) : null}
+                        </section>
+
+                        <section className="bid-detail-card">
+                          <div className="section-subhead">
+                            <h4>基础信息</h4>
+                            {canWrite ? (
+                              <button className="ghost" onClick={onSaveBidDetail} disabled={bidDetailSaving || bidDetailLoading}>
+                                {bidDetailSaving ? '保存中...' : '保存信息'}
+                              </button>
+                            ) : null}
+                          </div>
+                          <div className="bid-detail-form-grid">
+                            <label>
+                              <span>标书标题</span>
+                              <input
+                                value={bidDetailForm.title}
+                                disabled={!canWrite || bidDetailLoading || bidDetailSaving}
+                                onChange={(e) => setBidDetailForm((prev) => ({ ...prev, title: e.target.value }))}
+                              />
+                            </label>
+                            <label>
+                              <span>客户名称</span>
+                              <input
+                                value={bidDetailForm.customer_name}
+                                disabled={!canWrite || bidDetailLoading || bidDetailSaving}
+                                onChange={(e) => setBidDetailForm((prev) => ({ ...prev, customer_name: e.target.value }))}
+                              />
+                            </label>
+                            <label>
+                              <span>项目名称</span>
+                              <input
+                                value={bidDetailForm.project_name}
+                                disabled={!canWrite || bidDetailLoading || bidDetailSaving}
+                                onChange={(e) => setBidDetailForm((prev) => ({ ...prev, project_name: e.target.value }))}
+                              />
+                            </label>
+                            <label>
+                              <span>项目编号</span>
+                              <input value={selectedBidCurrent?.bid_no || '-'} disabled />
+                            </label>
+                            <label className="span-2">
+                              <span>摘要</span>
+                              <textarea
+                                rows="4"
+                                value={bidDetailForm.summary}
+                                disabled={!canWrite || bidDetailLoading || bidDetailSaving}
+                                onChange={(e) => setBidDetailForm((prev) => ({ ...prev, summary: e.target.value }))}
+                              />
+                            </label>
+                          </div>
+                        </section>
+
+                        <section className="bid-detail-card">
+                          <div className="section-subhead">
+                            <h4>成员分派</h4>
+                            {canWrite ? (
+                              <div className="bid-detail-actions">
+                                <button className="ghost" onClick={onAddBidMemberDraft} disabled={bidMembersSaving}>新增成员</button>
+                                <button className="ghost" onClick={onSaveBidMembers} disabled={bidMembersSaving || bidMembersLoading}>
+                                  {bidMembersSaving ? '保存中...' : '保存分派'}
+                                </button>
+                              </div>
+                            ) : null}
+                          </div>
+                          {bidMembersLoading ? <div className="empty">成员信息加载中...</div> : null}
+                          {!bidMembersLoading && bidMembersError ? <div className="empty">{bidMembersError}</div> : null}
+                          {!bidMembersLoading && !bidMembersError ? (
+                            <div className="bid-member-list">
+                              {bidMemberDrafts.map((item) => (
+                                <div className="bid-member-row" key={item.local_id}>
+                                  <select
+                                    value={item.member_role}
+                                    disabled={!canWrite || bidMembersSaving || String(item.member_role).toUpperCase() === 'OWNER'}
+                                    onChange={(e) => onChangeBidMemberDraft(item.local_id, 'member_role', e.target.value)}
+                                  >
+                                    {bidMemberRoleOptions.map((option) => (
+                                      <option key={option.value} value={option.value}>{option.label}</option>
+                                    ))}
+                                  </select>
+                                  <input
+                                    value={item.member_username}
+                                    placeholder="用户名"
+                                    disabled={!canWrite || bidMembersSaving || String(item.member_role).toUpperCase() === 'OWNER'}
+                                    onChange={(e) => onChangeBidMemberDraft(item.local_id, 'member_username', e.target.value)}
+                                  />
+                                  <input
+                                    value={item.member_title}
+                                    placeholder="岗位/职责"
+                                    disabled={!canWrite || bidMembersSaving}
+                                    onChange={(e) => onChangeBidMemberDraft(item.local_id, 'member_title', e.target.value)}
+                                  />
+                                  {canWrite ? (
+                                    <button
+                                      className="ghost"
+                                      onClick={() => onRemoveBidMemberDraft(item.local_id)}
+                                      disabled={bidMembersSaving || String(item.member_role).toUpperCase() === 'OWNER'}
+                                    >
+                                      移除
+                                    </button>
+                                  ) : null}
+                                </div>
+                              ))}
+                              {!bidMemberDrafts.length ? <div className="empty">暂无成员分派</div> : null}
+                            </div>
+                          ) : null}
+                        </section>
+
+                        <section className="bid-detail-card">
+                          <div className="section-subhead">
+                            <h4>审核记录</h4>
+                            <span className="muted">{bidReviews.length} 条记录</span>
+                          </div>
+                          {bidReviewsLoading ? <div className="empty">审核记录加载中...</div> : null}
+                          {!bidReviewsLoading && bidReviewsError ? <div className="empty">{bidReviewsError}</div> : null}
+                          {!bidReviewsLoading && !bidReviewsError ? (
+                            <div className="bid-review-list">
+                              {bidReviews.map((item) => (
+                                <div className="bid-review-item" key={item.id}>
+                                  <div className="bid-review-head">
+                                    <strong>第 {item.review_round || '-'} 轮 · {reviewStageLabel(item.review_stage)}</strong>
+                                    <span className="meta-pill">{reviewStatusLabel(item.review_status)}</span>
+                                  </div>
+                                  <div className="bid-review-meta">
+                                    提交人 {item.submitted_by_name || '-'} · 审核人 {item.reviewer_name || '-'}
+                                  </div>
+                                  <div className="bid-review-meta">
+                                    提交于 {formatDateTime(item.submitted_at)} · 处理于 {formatDateTime(item.handled_at)}
+                                  </div>
+                                  {item.review_comment ? <p className="bid-review-comment">{item.review_comment}</p> : null}
+                                </div>
+                              ))}
+                              {!bidReviews.length ? <div className="empty">暂无审核记录</div> : null}
+                            </div>
+                          ) : null}
+                        </section>
+
+                        <section className="bid-detail-card span-2 bid-parse-workspace-card">
+                          <div className="section-subhead">
+                            <h4>项目解析工作台</h4>
+                            <div className="bid-detail-actions">
+                              {bidParseWorkspace.latest_job ? (
+                                <span className="status-pill tone-upload">
+                                  最近解析: {parseScopeLabelMap[String(bidParseWorkspace.latest_job?.parse_scope || '').toUpperCase()] || '全量解析'}
+                                </span>
+                              ) : null}
+                              <button
+                                className="ghost"
+                                onClick={() => fetchBidParseWorkspace(selectedBid.id, { silent: true }).catch((err) => showError(err.message || '刷新解析工作台失败'))}
+                              >
+                                {bidParseWorkspace.refreshing ? '刷新中...' : '刷新工作台'}
+                              </button>
+                            </div>
+                          </div>
+                          {bidParseWorkspace.loading ? <div className="empty">解析工作台加载中...</div> : null}
+                          {!bidParseWorkspace.loading && bidParseWorkspace.error ? <div className="empty">{bidParseWorkspace.error}</div> : null}
+                          {!bidParseWorkspace.loading && !bidParseWorkspace.error ? (
+                            <div className="bid-parse-workspace-grid">
+                              <section className="bid-parse-card">
+                                <div className="section-subhead">
+                                  <h4>上传解析</h4>
+                                  <span className="muted">{bidParseWorkspace.files.length} 个文件节点</span>
+                                </div>
+                                <div className="bid-parse-toolbar">
+                                  <select
+                                    value={bidParseWorkspace.uploadRole}
+                                    onChange={(e) => setBidParseWorkspace((prev) => ({ ...prev, uploadRole: e.target.value }))}
+                                  >
+                                    {parseFileRoleOptions.map((item) => (
+                                      <option key={item.value} value={item.value}>{item.label}</option>
+                                    ))}
+                                  </select>
+                                  <label className="ghost bid-parse-file-picker">
+                                    <input
+                                      key={bidParseWorkspace.uploadInputKey}
+                                      type="file"
+                                      accept=".doc,.docx,.pdf,.xls,.xlsx,.zip"
+                                      multiple
+                                      onChange={(e) => onPickBidParseFiles(e.target.files)}
+                                    />
+                                    选择文件
+                                  </label>
+                                  <button className="ghost" onClick={onUploadBidParseFiles} disabled={bidParseWorkspace.uploading}>
+                                    {bidParseWorkspace.uploading ? '上传中...' : '上传到项目'}
+                                  </button>
+                                </div>
+                                {bidParseWorkspace.uploadFiles.length ? (
+                                  <div className="bid-parse-upload-preview">
+                                    {bidParseWorkspace.uploadFiles.map((file) => (
+                                      <span key={`${file.name}-${file.size}`}>{file.name}</span>
+                                    ))}
+                                  </div>
+                                ) : null}
+
+                                <div className="bid-parse-actions">
+                                  <select
+                                    value={bidParseWorkspace.parseScope}
+                                    onChange={(e) => setBidParseWorkspace((prev) => ({ ...prev, parseScope: e.target.value }))}
+                                  >
+                                    {parseScopeOptions.map((item) => (
+                                      <option key={item.value} value={item.value}>{item.label}</option>
+                                    ))}
+                                  </select>
+                                  <button className="primary" onClick={() => onStartBidParse()} disabled={bidParseWorkspace.parsing}>
+                                    {bidParseWorkspace.parsing ? '解析中...' : '执行解析'}
+                                  </button>
+                                  {parseScopeOptions.map((item) => (
+                                    <button
+                                      key={`scope-${item.value}`}
+                                      className="ghost"
+                                      onClick={() => onStartBidParse(item.value)}
+                                      disabled={bidParseWorkspace.parsing}
+                                    >
+                                      {item.label}
+                                    </button>
+                                  ))}
+                                </div>
+
+                                <div className="bid-parse-file-tree">
+                                  {bidParseFileGroups.map((group) => (
+                                    <div key={`parse-group-${group.root?.id}`} className="bid-parse-file-group">
+                                      <div className="bid-parse-file-row root">
+                                        <div className="bid-parse-file-main">
+                                          <strong>{group.root?.display_name}</strong>
+                                          <span className="meta-pill">{parseRoleLabelMap[group.root?.file_role] || group.root?.file_role}</span>
+                                          <span className="meta-pill">{String(group.root?.status || '').toUpperCase()}</span>
+                                        </div>
+                                        <div className="row-actions">
+                                          <span className="muted">{group.children.length ? `${group.children.length} 个解压子文件` : '直传文件'}</span>
+                                          <button className="link danger" onClick={() => onDeleteBidParseFile(group.root?.id)}>删除</button>
+                                        </div>
+                                      </div>
+                                      {group.children.length ? (
+                                        <div className="bid-parse-file-children">
+                                          {group.children.map((child) => (
+                                            <div key={`parse-child-${child.id}`} className="bid-parse-file-row child">
+                                              <div className="bid-parse-file-main">
+                                                <strong>{child.display_name}</strong>
+                                                <span className="muted">{child.relative_path || child.display_name}</span>
+                                              </div>
+                                              <div className="row-actions">
+                                                <span className="meta-pill">{child.source_ext}</span>
+                                                <button className="link danger" onClick={() => onDeleteBidParseFile(child.id)}>删除</button>
+                                              </div>
+                                            </div>
+                                          ))}
+                                        </div>
+                                      ) : null}
+                                    </div>
+                                  ))}
+                                  {!bidParseFileGroups.length ? <div className="empty">当前项目还没有解析文件</div> : null}
+                                </div>
+
+                                {bidParseSpreadsheetFiles.length ? (
+                                  <div className="bid-parse-sheet-list">
+                                    {bidParseSpreadsheetFiles.map((file) => (
+                                      <div key={`sheet-${file.id}`} className="bid-parse-sheet-card">
+                                        <div className="section-subhead">
+                                          <h4>{file.display_name}</h4>
+                                          <button
+                                            className="ghost"
+                                            onClick={() => onSaveBidParseSheets(file.id)}
+                                            disabled={!!bidParseWorkspace.savingSheets?.[file.id]}
+                                          >
+                                            {bidParseWorkspace.savingSheets?.[file.id] ? '保存中...' : '保存 Sheet 选择'}
+                                          </button>
+                                        </div>
+                                        <div className="bid-parse-sheet-grid">
+                                          {(file.sheet_manifest || []).map((sheet) => {
+                                            const sheetName = String(sheet?.name || sheet).trim()
+                                            const checked = (bidParseWorkspace.sheetDrafts?.[file.id] || []).includes(sheetName)
+                                            return (
+                                              <label key={`${file.id}-${sheetName}`} className="bid-parse-sheet-item">
+                                                <input
+                                                  type="checkbox"
+                                                  checked={checked}
+                                                  onChange={(e) => onToggleBidParseSheetDraft(file.id, sheetName, e.target.checked)}
+                                                />
+                                                <span>{sheetName}</span>
+                                              </label>
+                                            )
+                                          })}
+                                        </div>
+                                      </div>
+                                    ))}
+                                  </div>
+                                ) : null}
+                              </section>
+
+                              <section className="bid-parse-card">
+                                <div className="section-subhead">
+                                  <h4>解析汇总</h4>
+                                  <span className="muted">
+                                    {bidParseWorkspace.latest_job
+                                      ? `条款 ${bidParseWorkspace.clauses.length} / 表格 ${bidParseWorkspace.tables.length}`
+                                      : '尚未执行解析'}
+                                  </span>
+                                </div>
+                                <div className="bid-parse-field-grid">
+                                  {Object.entries(bidParseWorkspace.project_fields?.values || {}).map(([key, value]) => (
+                                    <div key={`field-${key}`} className="bid-parse-field-item">
+                                      <span>{key}</span>
+                                      <strong>{String(value || '-')}</strong>
+                                      <small>来源 {String(bidParseWorkspace.project_fields?.sources?.[key] || '-')}</small>
+                                    </div>
+                                  ))}
+                                  {!Object.keys(bidParseWorkspace.project_fields?.values || {}).length ? (
+                                    <div className="empty">暂无项目字段汇总，先执行解析</div>
+                                  ) : null}
+                                </div>
+                                {bidParseWorkspace.latest_job?.summary ? (
+                                  <div className="bid-parse-summary-grid">
+                                    <div className="bid-parse-summary-item">
+                                      <span>解析范围</span>
+                                      <strong>{parseScopeLabelMap[String(bidParseWorkspace.latest_job?.summary?.parse_scope || '').toUpperCase()] || '-'}</strong>
+                                    </div>
+                                    <div className="bid-parse-summary-item">
+                                      <span>文件数</span>
+                                      <strong>{bidParseWorkspace.latest_job?.summary?.file_count || 0}</strong>
+                                    </div>
+                                    <div className="bid-parse-summary-item">
+                                      <span>条款数</span>
+                                      <strong>{bidParseWorkspace.latest_job?.summary?.clause_count || 0}</strong>
+                                    </div>
+                                    <div className="bid-parse-summary-item">
+                                      <span>表格数</span>
+                                      <strong>{bidParseWorkspace.latest_job?.summary?.table_count || 0}</strong>
+                                    </div>
+                                  </div>
+                                ) : null}
+                                <div className="bid-parse-generate-box">
+                                  <div className="section-subhead">
+                                    <h4>生成初稿</h4>
+                                    <span className="muted">
+                                      直接复用最近一次项目解析结果
+                                    </span>
+                                  </div>
+                                  <div className="bid-parse-generate-grid">
+                                    <label className="bid-parse-generate-field">
+                                      <span>招标类型</span>
+                                      <select
+                                        value={bidParseWorkspace.generateForm?.bid_category || bidParseGenerateDefaults.bid_category}
+                                        onChange={(e) => setBidParseWorkspace((prev) => ({
+                                          ...prev,
+                                          generateForm: {
+                                            ...createBidParseWorkspaceState().generateForm,
+                                            ...(prev.generateForm && typeof prev.generateForm === 'object' ? prev.generateForm : {}),
+                                            bid_category: e.target.value,
+                                          },
+                                        }))}
+                                      >
+                                        {bidCategoryOptions.map((item) => (
+                                          <option key={`parse-generate-category-${item.value}`} value={item.value}>{item.label}</option>
+                                        ))}
+                                      </select>
+                                    </label>
+                                    <label className="bid-parse-generate-field">
+                                      <span>模型</span>
+                                      <select
+                                        value={bidParseWorkspace.generateForm?.model_id || bidParseGenerateDefaults.model_id}
+                                        onChange={(e) => setBidParseWorkspace((prev) => ({
+                                          ...prev,
+                                          generateForm: {
+                                            ...createBidParseWorkspaceState().generateForm,
+                                            ...(prev.generateForm && typeof prev.generateForm === 'object' ? prev.generateForm : {}),
+                                            model_id: e.target.value,
+                                          },
+                                        }))}
+                                      >
+                                        <option value="">系统默认模型</option>
+                                        {bidParseGenerateModels.map((item) => (
+                                          <option key={`parse-generate-model-${item.id}`} value={item.id}>{item.name}</option>
+                                        ))}
+                                      </select>
+                                    </label>
+                                    <label className="bid-parse-generate-field">
+                                      <span>投标模板</span>
+                                      <select
+                                        value={bidParseWorkspace.generateForm?.doc_template_id || bidParseGenerateDefaults.doc_template_id}
+                                        onChange={(e) => setBidParseWorkspace((prev) => ({
+                                          ...prev,
+                                          generateForm: {
+                                            ...createBidParseWorkspaceState().generateForm,
+                                            ...(prev.generateForm && typeof prev.generateForm === 'object' ? prev.generateForm : {}),
+                                            doc_template_id: e.target.value,
+                                          },
+                                        }))}
+                                      >
+                                        <option value="">系统默认模板 / 基础文档</option>
+                                        {bidParseGenerateTemplates.map((item) => (
+                                          <option key={`parse-generate-template-${item.id}`} value={item.id}>{item.template_name}</option>
+                                        ))}
+                                      </select>
+                                    </label>
+                                    <button
+                                      className="primary"
+                                      onClick={onGenerateBidFromParseWorkspace}
+                                      disabled={
+                                        bidParseWorkspace.generating
+                                        || bidParseWorkspace.parsing
+                                        || !bidParseWorkspace.latest_job?.id
+                                        || (!bidParseWorkspace.clauses.length && !bidParseWorkspace.tables.length)
+                                      }
+                                    >
+                                      {bidParseWorkspace.generating ? '生成中...' : '根据解析结果生成初稿'}
+                                    </button>
+                                  </div>
+                                  <div className="bid-parse-generate-hint">
+                                    {bidParseWorkspace.latest_job?.id
+                                      ? `最近解析任务 #${bidParseWorkspace.latest_job.id}，生成后会直接刷新当前标书版本。`
+                                      : '请先完成一次项目解析，再根据结构化结果生成初稿。'}
+                                  </div>
+                                </div>
+                              </section>
+
+                              <section className="bid-parse-card span-2">
+                                <div className="section-subhead">
+                                  <h4>条款分类</h4>
+                                  <button className="ghost" onClick={onSaveBidParseClauses} disabled={bidParseWorkspace.clauseSaving}>
+                                    {bidParseWorkspace.clauseSaving ? '保存中...' : '保存条款分类'}
+                                  </button>
+                                </div>
+                                {bidParseWorkspace.clauses.length ? (
+                                  <div className="bid-parse-clause-table">
+                                    <div className="bid-parse-clause-row header">
+                                      <span>条款</span>
+                                      <span>类型</span>
+                                      <span>响应方式</span>
+                                      <span>必答</span>
+                                      <span>评分</span>
+                                      <span>分值</span>
+                                    </div>
+                                    {bidParseWorkspace.clauses.map((item) => (
+                                      <div key={`clause-${item.id}`} className="bid-parse-clause-row">
+                                        <div className="bid-parse-clause-text">
+                                          <strong>{item.clause_title || item.clause_text}</strong>
+                                          <small>{item.clause_text}</small>
+                                        </div>
+                                        <select value={item.clause_type || 'GENERAL'} onChange={(e) => onChangeBidParseClause(item.id, 'clause_type', e.target.value)}>
+                                          {parseClauseTypeOptions.map((option) => (
+                                            <option key={option.value} value={option.value}>{option.label}</option>
+                                          ))}
+                                        </select>
+                                        <select value={item.response_mode || 'TEXT'} onChange={(e) => onChangeBidParseClause(item.id, 'response_mode', e.target.value)}>
+                                          {parseResponseModeOptions.map((option) => (
+                                            <option key={option.value} value={option.value}>{option.label}</option>
+                                          ))}
+                                        </select>
+                                        <label className="bid-parse-inline-check">
+                                          <input
+                                            type="checkbox"
+                                            checked={Number(item.mandatory_flag || 0) > 0}
+                                            onChange={(e) => onChangeBidParseClause(item.id, 'mandatory_flag', e.target.checked)}
+                                          />
+                                          <span>是</span>
+                                        </label>
+                                        <label className="bid-parse-inline-check">
+                                          <input
+                                            type="checkbox"
+                                            checked={Number(item.scoring_flag || 0) > 0}
+                                            onChange={(e) => onChangeBidParseClause(item.id, 'scoring_flag', e.target.checked)}
+                                          />
+                                          <span>是</span>
+                                        </label>
+                                        <input
+                                          type="number"
+                                          min="0"
+                                          step="0.5"
+                                          value={item.score_value ?? ''}
+                                          onChange={(e) => onChangeBidParseClause(item.id, 'score_value', e.target.value)}
+                                        />
+                                      </div>
+                                    ))}
+                                  </div>
+                                ) : <div className="empty">暂无条款，请先执行解析</div>}
+                              </section>
+
+                              <section className="bid-parse-card span-2">
+                                <div className="section-subhead">
+                                  <h4>资产匹配</h4>
+                                  <div className="bid-detail-actions">
+                                    <button className="ghost" onClick={onRecommendBidParseMatches} disabled={bidParseWorkspace.recommending}>
+                                      {bidParseWorkspace.recommending ? '推荐中...' : '生成匹配建议'}
+                                    </button>
+                                    <button className="ghost" onClick={onSaveBidParseMatches} disabled={bidParseWorkspace.matchSaving}>
+                                      {bidParseWorkspace.matchSaving ? '保存中...' : '保存匹配结果'}
+                                    </button>
+                                  </div>
+                                </div>
+                                {bidParseMatchRows.length ? (
+                                  <div className="bid-parse-match-table">
+                                    <div className="bid-parse-match-row header">
+                                      <span>条款</span>
+                                      <span>资产 / 来源</span>
+                                      <span>状态</span>
+                                      <span>置信度 / 得分</span>
+                                      <span>说明 / 复核</span>
+                                    </div>
+                                    {bidParseMatchRows.map((item) => (
+                                      <div key={item.row_key} className="bid-parse-match-row">
+                                        <div className="bid-parse-clause-text">
+                                          <strong>{item.clause_title || `条款 #${item.clause_id}`}</strong>
+                                          {item.asset_file_name ? <small>当前建议: {item.asset_file_name}</small> : null}
+                                          {item.match_source_label ? <small>召回方式: {item.match_source_label}</small> : null}
+                                        </div>
+                                        <div className="bid-parse-match-meta">
+                                          <select value={item.asset_id || ''} onChange={(e) => onChangeBidParseMatch(item.row_key, 'asset_id', e.target.value)}>
+                                            <option value="">暂不绑定</option>
+                                            {bidScopedAssets.map((asset) => (
+                                              <option key={`asset-${asset.id}`} value={asset.id}>
+                                                {asset.original_file_name}
+                                              </option>
+                                            ))}
+                                          </select>
+                                          <small>
+                                            {item.source_label || '项目资产'}
+                                            {item.chunk_title ? ` · ${item.chunk_title}` : ''}
+                                          </small>
+                                        </div>
+                                        <select value={item.match_status || 'RECOMMENDED'} onChange={(e) => onChangeBidParseMatch(item.row_key, 'match_status', e.target.value)}>
+                                          {parseMatchStatusOptions.map((option) => (
+                                            <option key={option.value} value={option.value}>{option.label}</option>
+                                          ))}
+                                        </select>
+                                        <div className="bid-parse-match-meta">
+                                          <input
+                                            type="number"
+                                            min="0"
+                                            max="1"
+                                            step="0.01"
+                                            value={item.confidence ?? 0}
+                                            onChange={(e) => onChangeBidParseMatch(item.row_key, 'confidence', e.target.value)}
+                                          />
+                                          <small>
+                                            语义 {Number(item.semantic_score || 0).toFixed(2)}
+                                            {' '}· 规则 {Number(item.rule_score || 0).toFixed(2)}
+                                            {' '}· 重排 {Number(item.rerank_score || 0).toFixed(2)}
+                                          </small>
+                                        </div>
+                                        <div className="bid-parse-match-meta">
+                                          <input
+                                            value={item.reason_text || ''}
+                                            placeholder="命中理由 / 人工说明"
+                                            onChange={(e) => onChangeBidParseMatch(item.row_key, 'reason_text', e.target.value)}
+                                          />
+                                          {item.chunk_preview ? <small>{item.chunk_preview}</small> : null}
+                                          {item.need_manual_review ? (
+                                            <div className="bid-parse-review-flag">
+                                              <span className="meta-pill">需人工复核</span>
+                                              <div className="bid-parse-review-list">
+                                                {(item.manual_review_reasons || []).map((reason) => (
+                                                  <small key={`${item.row_key}-${reason}`}>{reason}</small>
+                                                ))}
+                                              </div>
+                                            </div>
+                                          ) : null}
+                                        </div>
+                                      </div>
+                                    ))}
+                                  </div>
+                                ) : <div className="empty">暂无匹配结果，可先执行解析后生成建议</div>}
+                              </section>
+                            </div>
+                          ) : null}
+                        </section>
+
+                        <section className="bid-parse-card span-2 bid-draft-workspace">
+                          <div className="section-subhead">
+                            <div>
+                              <h4>知识库沉淀</h4>
+                              <span className="muted">
+                                以当前项目解析结果、章节稿和附件为基础沉淀到知识库，供后续召回复用。
+                              </span>
+                            </div>
+                            <div className="bid-detail-actions">
+                              <button
+                                className="ghost"
+                                onClick={() => fetchBidKbWorkspace(selectedBid.id, { silent: true }).catch((err) => showError(err.message || '刷新知识库沉淀工作台失败'))}
+                              >
+                                {kbIngestState.refreshing ? '刷新中...' : '刷新工作台'}
+                              </button>
+                              {canWrite ? (
+                                <button className="primary" onClick={onRunBidKbIngest} disabled={kbIngestState.ingesting}>
+                                  {kbIngestState.ingesting ? '沉淀中...' : '执行知识库沉淀'}
+                                </button>
+                              ) : null}
+                            </div>
+                          </div>
+                          {kbIngestState.loading ? <div className="empty">知识库沉淀工作台加载中...</div> : null}
+                          {!kbIngestState.loading && kbIngestState.error ? <div className="empty">{kbIngestState.error}</div> : null}
+                          {!kbIngestState.loading && !kbIngestState.error ? (
+                            <div className="bid-kb-workspace-grid">
+                              <section className="bid-kb-card">
+                                <div className="section-subhead">
+                                  <h4>沉淀概览</h4>
+                                  {kbIngestState.linkedProject?.id ? (
+                                    <span className="status-pill tone-success">已关联 KB #{kbIngestState.linkedProject.id}</span>
+                                  ) : (
+                                    <span className="status-pill tone-upload">尚未沉淀</span>
+                                  )}
+                                </div>
+                                <div className="bid-kb-stats-grid">
+                                  <div className="bid-kb-stat-item">
+                                    <span>可入库条款</span>
+                                    <strong>{kbIngestState.stats.ingestable_clauses}</strong>
+                                  </div>
+                                  <div className="bid-kb-stat-item">
+                                    <span>可入库评分项</span>
+                                    <strong>{kbIngestState.stats.ingestable_score_items}</strong>
+                                  </div>
+                                  <div className="bid-kb-stat-item">
+                                    <span>可入库章节</span>
+                                    <strong>{kbIngestState.stats.ingestable_sections}</strong>
+                                  </div>
+                                  <div className="bid-kb-stat-item">
+                                    <span>可入库表格</span>
+                                    <strong>{kbIngestState.stats.ingestable_tables}</strong>
+                                  </div>
+                                  <div className="bid-kb-stat-item">
+                                    <span>可入库附件</span>
+                                    <strong>{kbIngestState.stats.ingestable_attachments}</strong>
+                                  </div>
+                                  <div className="bid-kb-stat-item">
+                                    <span>预计 Chunk</span>
+                                    <strong>{kbIngestState.stats.estimated_chunk_count}</strong>
+                                  </div>
+                                  <div className="bid-kb-stat-item">
+                                    <span>已沉淀条款</span>
+                                    <strong>{kbIngestState.stats.clause_count}</strong>
+                                  </div>
+                                  <div className="bid-kb-stat-item">
+                                    <span>已沉淀 Chunk</span>
+                                    <strong>{kbIngestState.stats.chunk_count}</strong>
+                                  </div>
+                                </div>
+                                {kbIngestState.linkedProject ? (
+                                  <div className="bid-kb-linked-card">
+                                    <strong>{kbIngestState.linkedProject.project_name || '-'}</strong>
+                                    <small>
+                                      项目编号 {kbIngestState.linkedProject.project_no || '-'}
+                                      {' '}· 结果 {kbIngestState.linkedProject.result_status || '-'}
+                                    </small>
+                                  </div>
+                                ) : null}
+                              </section>
+
+                              <section className="bid-kb-card">
+                                <div className="section-subhead">
+                                  <h4>沉淀参数</h4>
+                                  <span className="muted">可覆盖项目类型、行业、区域、标签和备注</span>
+                                </div>
+                                <div className="bid-detail-form-grid bid-kb-form-grid">
+                                  <label>
+                                    <span>项目名称</span>
+                                    <input
+                                      value={kbIngestState.form.project_name}
+                                      disabled={!canWrite || kbIngestState.ingesting}
+                                      onChange={(e) => onChangeBidKbForm('project_name', e.target.value)}
+                                    />
+                                  </label>
+                                  <label>
+                                    <span>项目类型</span>
+                                    <select
+                                      value={kbIngestState.form.project_type}
+                                      disabled={!canWrite || kbIngestState.ingesting}
+                                      onChange={(e) => onChangeBidKbForm('project_type', e.target.value)}
+                                    >
+                                      <option value="">未指定</option>
+                                      <option value="SERVICE">服务类</option>
+                                      <option value="PRODUCT">货物类</option>
+                                    </select>
+                                  </label>
+                                  <label>
+                                    <span>行业</span>
+                                    <input
+                                      value={kbIngestState.form.industry_type}
+                                      disabled={!canWrite || kbIngestState.ingesting}
+                                      onChange={(e) => onChangeBidKbForm('industry_type', e.target.value)}
+                                    />
+                                  </label>
+                                  <label>
+                                    <span>区域</span>
+                                    <input
+                                      value={kbIngestState.form.region}
+                                      disabled={!canWrite || kbIngestState.ingesting}
+                                      onChange={(e) => onChangeBidKbForm('region', e.target.value)}
+                                    />
+                                  </label>
+                                  <label>
+                                    <span>项目结果</span>
+                                    <select
+                                      value={kbIngestState.form.result_status}
+                                      disabled={!canWrite || kbIngestState.ingesting}
+                                      onChange={(e) => onChangeBidKbForm('result_status', e.target.value)}
+                                    >
+                                      <option value="IN_PROGRESS">进行中</option>
+                                      <option value="WON">已中标</option>
+                                      <option value="LOST">未中标</option>
+                                      <option value="ABANDONED">已放弃</option>
+                                      <option value="UNKNOWN">未知</option>
+                                    </select>
+                                  </label>
+                                  <label>
+                                    <span>金额</span>
+                                    <input
+                                      value={kbIngestState.form.bid_amount}
+                                      disabled={!canWrite || kbIngestState.ingesting}
+                                      onChange={(e) => onChangeBidKbForm('bid_amount', e.target.value)}
+                                    />
+                                  </label>
+                                  <label className="span-2">
+                                    <span>标签</span>
+                                    <input
+                                      value={kbIngestState.form.tags_text}
+                                      disabled={!canWrite || kbIngestState.ingesting}
+                                      onChange={(e) => onChangeBidKbForm('tags_text', e.target.value)}
+                                      placeholder="逗号分隔，如 政务, service, cloud-sec"
+                                    />
+                                  </label>
+                                  <label className="span-2">
+                                    <span>备注</span>
+                                    <textarea
+                                      rows="3"
+                                      value={kbIngestState.form.remarks}
+                                      disabled={!canWrite || kbIngestState.ingesting}
+                                      onChange={(e) => onChangeBidKbForm('remarks', e.target.value)}
+                                    />
+                                  </label>
+                                </div>
+                              </section>
+
+                              <section className="bid-kb-card span-2">
+                                <div className="section-subhead">
+                                  <h4>沉淀历史</h4>
+                                  <span className="muted">{kbIngestState.ingestJobs.length} 条记录</span>
+                                </div>
+                                <div className="bid-kb-job-list">
+                                  {kbIngestState.ingestJobs.map((item) => (
+                                    <div key={`kb-ingest-job-${item.id}`} className="bid-kb-job-item">
+                                      <div className="bid-kb-job-head">
+                                        <strong>任务 #{item.id}</strong>
+                                        <span className="meta-pill">{item.status}</span>
+                                      </div>
+                                      <div className="bid-kb-job-meta">
+                                        更新时间 {formatDateTime(item.updated_at)} · 操作人 {item.operator_name || '-'}
+                                      </div>
+                                      {item.output_summary?.chunk_count || item.output_summary?.clause_count ? (
+                                        <div className="bid-kb-job-meta">
+                                          条款 {Number(item.output_summary?.clause_count || 0)}
+                                          {' '}· 评分项 {Number(item.output_summary?.score_item_count || 0)}
+                                          {' '}· 章节 {Number(item.output_summary?.section_asset_count || 0)}
+                                          {' '}· Chunk {Number(item.output_summary?.chunk_count || 0)}
+                                        </div>
+                                      ) : null}
+                                      {item.error_message ? <p className="bid-review-comment">{item.error_message}</p> : null}
+                                    </div>
+                                  ))}
+                                  {!kbIngestState.ingestJobs.length ? <div className="empty">暂无沉淀历史</div> : null}
+                                </div>
+                              </section>
+                            </div>
+                          ) : null}
+                        </section>
+
+                        <section className="bid-parse-card span-2 bid-draft-workspace">
+                          <div className="section-subhead">
+                            <div>
+                              <h4>初稿工作台</h4>
+                              <span className="muted">
+                                当前版本：v{bidDraftWorkspace.version?.version_no || '-'}
+                                {' '}｜ 存稿 {bidDraftWorkspace.autosaves.length}
+                                {' '}｜ 问题 {Number(bidDraftWorkspace.checkSummary?.issue_count || 0)}
+                                {' '}｜ 待优化 {bidDraftWorkspace.pendingOptimizationCount}
+                              </span>
+                            </div>
+                            <div className="bid-detail-actions">
+                              <button
+                                className="ghost"
+                                onClick={() => fetchBidDraftWorkspace(selectedBid.id, { silent: true }).catch((err) => showError(err.message || '刷新初稿工作台失败'))}
+                              >
+                                {bidDraftWorkspace.refreshing ? '刷新中...' : '刷新工作台'}
+                              </button>
+                              <button
+                                className="ghost"
+                                onClick={() => onOpenEditor(selectedBidCurrent || selectedBid)}
+                                disabled={!selectedBidCurrent?.id}
+                              >
+                                打开 OnlyOffice
+                              </button>
+                            </div>
+                          </div>
+                          {bidDraftWorkspace.loading ? <div className="empty">初稿工作台加载中...</div> : null}
+                          {!bidDraftWorkspace.loading && bidDraftWorkspace.error ? <div className="empty">{bidDraftWorkspace.error}</div> : null}
+                          {!bidDraftWorkspace.loading && !bidDraftWorkspace.error ? (
+                            <div className="bid-draft-workspace-grid">
+                              <section className="bid-draft-card span-2">
+                                <div className="section-subhead">
+                                  <div>
+                                    <h4>结构化章节稿</h4>
+                                    <span className="muted">上方版本对比可继续用于前后稿比较；这里负责项目级结构化编辑。</span>
+                                  </div>
+                                  {canWrite ? (
+                                    <button className="ghost" onClick={onSaveBidDraftSections} disabled={bidDraftWorkspace.savingSections}>
+                                      {bidDraftWorkspace.savingSections ? '保存中...' : '保存章节稿'}
+                                    </button>
+                                  ) : null}
+                                </div>
+                                <div className="bid-draft-summary-grid">
+                                  <div className="bid-draft-summary-item">
+                                    <span>章节数</span>
+                                    <strong>{bidDraftWorkspace.sections.length}</strong>
+                                  </div>
+                                  <div className="bid-draft-summary-item">
+                                    <span>证据条目</span>
+                                    <strong>{bidDraftWorkspace.evidenceRegistry.length}</strong>
+                                  </div>
+                                  <div className="bid-draft-summary-item">
+                                    <span>需求条目</span>
+                                    <strong>{bidDraftWorkspace.requirementRegistry.length}</strong>
+                                  </div>
+                                  <div className="bid-draft-summary-item">
+                                    <span>来源任务</span>
+                                    <strong>{bidDraftWorkspace.source_job_id || '-'}</strong>
+                                  </div>
+                                </div>
+                                <div className="bid-draft-section-list">
+                                  {bidDraftWorkspace.sections.map((item, index) => (
+                                    <article key={`draft-section-${item.id || item.paragraph_no || index}`} className="bid-draft-section-row">
+                                      <div className="bid-draft-section-head">
+                                        <strong>段落 {item.paragraph_no || index + 1}</strong>
+                                        <small>{item.section_title || '文档正文'}</small>
+                                      </div>
+                                      <label>
+                                        <span>章节标题</span>
+                                        <input
+                                          value={item.section_title || ''}
+                                          disabled={!canWrite || bidDraftWorkspace.savingSections}
+                                          onChange={(e) => onChangeBidDraftSection(index, 'section_title', e.target.value)}
+                                        />
+                                      </label>
+                                      <label>
+                                        <span>章节正文</span>
+                                        <textarea
+                                          rows="5"
+                                          value={item.paragraph_text || ''}
+                                          disabled={!canWrite || bidDraftWorkspace.savingSections}
+                                          onChange={(e) => onChangeBidDraftSection(index, 'paragraph_text', e.target.value)}
+                                        />
+                                      </label>
+                                      <div className="bid-draft-section-meta">
+                                        <span>需求ID：{item.requirement_ids?.length ? item.requirement_ids.join(', ') : '-'}</span>
+                                        <span>证据ID：{item.evidence_ids?.length ? item.evidence_ids.join(', ') : '-'}</span>
+                                        <span>评分ID：{item.score_item_ids?.length ? item.score_item_ids.join(', ') : '-'}</span>
+                                      </div>
+                                    </article>
+                                  ))}
+                                  {!bidDraftWorkspace.sections.length ? <div className="empty">暂无结构化章节稿，可先生成初稿或执行评分优化。</div> : null}
+                                </div>
+                              </section>
+
+                              <section className="bid-draft-card span-2">
+                                <div className="section-subhead">
+                                  <div>
+                                    <h4>偏离表 / 应答表</h4>
+                                    <span className="muted">默认回退到最近生成任务的结构化产物；保存后优先使用项目级编辑结果。</span>
+                                  </div>
+                                  {canWrite ? (
+                                    <button className="ghost" onClick={onSaveBidDraftArtifacts} disabled={bidDraftWorkspace.savingArtifacts}>
+                                      {bidDraftWorkspace.savingArtifacts ? '保存中...' : '保存结构化表'}
+                                    </button>
+                                  ) : null}
+                                </div>
+                                <div className="bid-draft-artifact-grid">
+                                  {[
+                                    { bucketKey: 'deviation_tables', groupKey: 'technical', title: '技术偏离表' },
+                                    { bucketKey: 'deviation_tables', groupKey: 'business', title: '商务偏离表' },
+                                    { bucketKey: 'response_tables', groupKey: 'technical', title: '技术应答表' },
+                                    { bucketKey: 'response_tables', groupKey: 'business', title: '商务应答表' },
+                                  ].map((group) => {
+                                    const rows = bidDraftArtifacts?.[group.bucketKey]?.[group.groupKey] || []
+                                    const isResponse = group.bucketKey === 'response_tables'
+                                    return (
+                                      <article key={`${group.bucketKey}-${group.groupKey}`} className="bid-draft-artifact-card">
+                                        <div className="section-subhead">
+                                          <h5>{group.title}</h5>
+                                          {canWrite ? (
+                                            <button
+                                              className="ghost"
+                                              onClick={() => onAddBidDraftArtifactRow(group.bucketKey, group.groupKey)}
+                                              disabled={bidDraftWorkspace.savingArtifacts}
+                                            >
+                                              新增行
+                                            </button>
+                                          ) : null}
+                                        </div>
+                                        <div className="bid-draft-artifact-list">
+                                          {rows.map((row, index) => (
+                                            <div key={`${group.bucketKey}-${group.groupKey}-${index}`} className="bid-draft-artifact-row">
+                                              <div className="bid-draft-artifact-meta">
+                                                <span>状态：{row.satisfy_status || 'TO_CONFIRM'}</span>
+                                                <span>风险：{row.risk_grade || row.risk_level || 'MEDIUM'}</span>
+                                                <label className="bid-draft-artifact-check">
+                                                  <input
+                                                    type="checkbox"
+                                                    checked={Boolean(row.manual_review_required)}
+                                                    disabled={!canWrite || bidDraftWorkspace.savingArtifacts}
+                                                    onChange={(e) => onChangeBidDraftArtifact(group.bucketKey, group.groupKey, index, 'manual_review_required', e.target.checked)}
+                                                  />
+                                                  <span>人工复核</span>
+                                                </label>
+                                              </div>
+                                              <label>
+                                                <span>参数键</span>
+                                                <input
+                                                  value={row.parameter_key || ''}
+                                                  disabled={!canWrite || bidDraftWorkspace.savingArtifacts}
+                                                  onChange={(e) => onChangeBidDraftArtifact(group.bucketKey, group.groupKey, index, 'parameter_key', e.target.value)}
+                                                />
+                                              </label>
+                                              <label>
+                                                <span>招标要求</span>
+                                                <textarea
+                                                  rows="3"
+                                                  value={row.tender_requirement || ''}
+                                                  disabled={!canWrite || bidDraftWorkspace.savingArtifacts}
+                                                  onChange={(e) => onChangeBidDraftArtifact(group.bucketKey, group.groupKey, index, 'tender_requirement', e.target.value)}
+                                                />
+                                              </label>
+                                              <label>
+                                                <span>{isResponse ? '应答文本' : '投标响应'}</span>
+                                                <textarea
+                                                  rows="3"
+                                                  value={isResponse ? (row.response_text || '') : (row.bidder_response || '')}
+                                                  disabled={!canWrite || bidDraftWorkspace.savingArtifacts}
+                                                  onChange={(e) => onChangeBidDraftArtifact(group.bucketKey, group.groupKey, index, isResponse ? 'response_text' : 'bidder_response', e.target.value)}
+                                                />
+                                              </label>
+                                              <label>
+                                                <span>{isResponse ? '判定依据' : '偏离说明'}</span>
+                                                <textarea
+                                                  rows="2"
+                                                  value={isResponse ? (row.satisfy_basis || '') : (row.deviation_note || '')}
+                                                  disabled={!canWrite || bidDraftWorkspace.savingArtifacts}
+                                                  onChange={(e) => onChangeBidDraftArtifact(group.bucketKey, group.groupKey, index, isResponse ? 'satisfy_basis' : 'deviation_note', e.target.value)}
+                                                />
+                                              </label>
+                                              {!isResponse ? (
+                                                <label>
+                                                  <span>判定依据</span>
+                                                  <textarea
+                                                    rows="2"
+                                                    value={row.satisfy_basis || ''}
+                                                    disabled={!canWrite || bidDraftWorkspace.savingArtifacts}
+                                                    onChange={(e) => onChangeBidDraftArtifact(group.bucketKey, group.groupKey, index, 'satisfy_basis', e.target.value)}
+                                                  />
+                                                </label>
+                                              ) : null}
+                                              <label>
+                                                <span>证据来源</span>
+                                                <textarea
+                                                  rows="2"
+                                                  value={row.evidence_source || ''}
+                                                  disabled={!canWrite || bidDraftWorkspace.savingArtifacts}
+                                                  onChange={(e) => onChangeBidDraftArtifact(group.bucketKey, group.groupKey, index, 'evidence_source', e.target.value)}
+                                                />
+                                              </label>
+                                              <div className="bid-draft-artifact-inline">
+                                                <label>
+                                                  <span>满足状态</span>
+                                                  <select
+                                                    value={row.satisfy_status || 'TO_CONFIRM'}
+                                                    disabled={!canWrite || bidDraftWorkspace.savingArtifacts}
+                                                    onChange={(e) => onChangeBidDraftArtifact(group.bucketKey, group.groupKey, index, 'satisfy_status', e.target.value)}
+                                                  >
+                                                    {artifactSatisfyStatusOptions.map((item) => (
+                                                      <option key={`artifact-status-${item.value}`} value={item.value}>{item.label}</option>
+                                                    ))}
+                                                  </select>
+                                                </label>
+                                                <label>
+                                                  <span>风险等级</span>
+                                                  <select
+                                                    value={row.risk_grade || row.risk_level || 'MEDIUM'}
+                                                    disabled={!canWrite || bidDraftWorkspace.savingArtifacts}
+                                                    onChange={(e) => onChangeBidDraftArtifact(group.bucketKey, group.groupKey, index, 'risk_grade', e.target.value)}
+                                                  >
+                                                    {artifactRiskGradeOptions.map((item) => (
+                                                      <option key={`artifact-risk-${item.value}`} value={item.value}>{item.label}</option>
+                                                    ))}
+                                                  </select>
+                                                </label>
+                                              </div>
+                                              {canWrite ? (
+                                                <button
+                                                  className="ghost danger"
+                                                  onClick={() => onRemoveBidDraftArtifactRow(group.bucketKey, group.groupKey, index)}
+                                                  disabled={bidDraftWorkspace.savingArtifacts}
+                                                >
+                                                  删除
+                                                </button>
+                                              ) : null}
+                                            </div>
+                                          ))}
+                                          {!rows.length ? <div className="empty">暂无结构化行，可从生成结果回退或手工新增。</div> : null}
+                                        </div>
+                                      </article>
+                                    )
+                                  })}
+                                </div>
+                              </section>
+
+                              <section className="bid-draft-card">
+                                <div className="section-subhead">
+                                  <div>
+                                    <h4>评分覆盖与校验</h4>
+                                    <span className="muted">规则复核在前，优化补强在后。</span>
+                                  </div>
+                                  <div className="bid-detail-actions">
+                                    {canWrite ? (
+                                      <button className="ghost" onClick={onRunBidDraftCheck} disabled={bidDraftWorkspace.checking}>
+                                        {bidDraftWorkspace.checking ? '校验中...' : '执行校验'}
+                                      </button>
+                                    ) : null}
+                                    {canWrite ? (
+                                      <button className="ghost" onClick={onRunBidScoreOptimize} disabled={bidDraftWorkspace.optimizing}>
+                                        {bidDraftWorkspace.optimizing ? '优化中...' : '执行优化'}
+                                      </button>
+                                    ) : null}
+                                  </div>
+                                </div>
+                                <div className="bid-draft-summary-grid">
+                                  <div className="bid-draft-summary-item">
+                                    <span>问题总数</span>
+                                    <strong>{Number(bidDraftWorkspace.checkSummary?.issue_count || 0)}</strong>
+                                  </div>
+                                  <div className="bid-draft-summary-item">
+                                    <span>致命问题</span>
+                                    <strong>{Number(bidDraftWorkspace.checkSummary?.fatal_count || 0)}</strong>
+                                  </div>
+                                  <div className="bid-draft-summary-item">
+                                    <span>待优化项</span>
+                                    <strong>{bidDraftWorkspace.pendingOptimizationCount}</strong>
+                                  </div>
+                                  <div className="bid-draft-summary-item">
+                                    <span>已应用优化</span>
+                                    <strong>{bidDraftWorkspace.appliedOptimizationCount}</strong>
+                                  </div>
+                                </div>
+                                <div className="bid-draft-check-list">
+                                  {bidDraftWorkspace.latestCheckIssues.map((item) => (
+                                    <div key={`draft-issue-${item.id}`} className={`bid-draft-check-item tone-${String(item.severity || '').toLowerCase() || 'warn'}`}>
+                                      <strong>{item.title || item.issue_type || '未命名问题'}</strong>
+                                      <span>{item.message || '-'}</span>
+                                    </div>
+                                  ))}
+                                  {!bidDraftWorkspace.latestCheckIssues.length ? <div className="empty">暂无校验问题，执行校验后在此展示。</div> : null}
+                                </div>
+                                <div className="bid-draft-matrix-list">
+                                  {bidDraftWorkspace.scoreCoverageMatrix.map((item) => (
+                                    <div key={`draft-matrix-${item.id || item.score_item_id}`} className="bid-draft-matrix-item">
+                                      <strong>{item.title || item.score_item_id || '-'}</strong>
+                                      <span>
+                                        覆盖状态：
+                                        {String(item.coverage_status || '').toUpperCase() === 'FULL'
+                                          ? '已覆盖'
+                                          : String(item.coverage_status || '').toUpperCase() === 'PARTIAL'
+                                            ? '部分覆盖'
+                                            : '未覆盖'}
+                                      </span>
+                                      <small>{item.optimization_reason || '暂无优化说明'}</small>
+                                    </div>
+                                  ))}
+                                  {!bidDraftWorkspace.scoreCoverageMatrix.length ? <div className="empty">暂无评分覆盖矩阵，执行优化后会自动刷新。</div> : null}
+                                </div>
+                                <div className="bid-draft-matrix-list" style={{ marginTop: 16 }}>
+                                  {bidDraftWorkspace.scoreOptimizationRecords.map((item) => (
+                                    <div key={`draft-opt-${item.id || item.score_item_id}`} className="bid-draft-matrix-item">
+                                      <strong>{item.suggestion_title || item.score_item_id || '评分优化建议'}</strong>
+                                      <span>
+                                        来源：
+                                        {item.source || 'RULE'}
+                                        {item.strategy_profile_key ? ` · 策略画像 ${item.strategy_profile_key}` : ''}
+                                      </span>
+                                      <small>{item.suggestion_text || '暂无建议正文'}</small>
+                                      {item.audit_trace?.strategy_hit_points?.length ? (
+                                        <small>
+                                          历史高分要点：
+                                          {item.audit_trace.strategy_hit_points.join('、')}
+                                        </small>
+                                      ) : null}
+                                      {item.audit_trace?.strategy_source_project_ids?.length ? (
+                                        <small>
+                                          来源中标项目：
+                                          {item.audit_trace.strategy_source_project_ids.join('、')}
+                                        </small>
+                                      ) : null}
+                                    </div>
+                                  ))}
+                                  {!bidDraftWorkspace.scoreOptimizationRecords.length ? <div className="empty">暂无评分优化记录，执行优化后会在此展示历史中标策略与应用结果。</div> : null}
+                                </div>
+                              </section>
+
+                              <section className="bid-draft-card">
+                                <div className="section-subhead">
+                                  <div>
+                                    <h4>存稿与回滚</h4>
+                                    <span className="muted">这里管理 Word 草稿的可回退快照。</span>
+                                  </div>
+                                  {canWrite ? (
+                                    <button className="ghost" onClick={onCreateBidDraftAutosave} disabled={bidDraftWorkspace.autosaving}>
+                                      {bidDraftWorkspace.autosaving ? '存稿中...' : '立即存稿'}
+                                    </button>
+                                  ) : null}
+                                </div>
+                                <div className="bid-draft-autosave-list">
+                                  {bidDraftWorkspace.autosaves.map((item) => (
+                                    <div key={`draft-autosave-${item.id}`} className="bid-draft-autosave-row">
+                                      <div className="bid-draft-autosave-meta">
+                                        <strong>#{item.id}</strong>
+                                        <span>{item.source || '-'}</span>
+                                        <span>{formatDateTime(item.saved_at)}</span>
+                                        <small>{item.note || '无备注'}</small>
+                                      </div>
+                                      {canWrite ? (
+                                        <button
+                                          className="ghost"
+                                          onClick={() => onRollbackBidDraftAutosave(item.id)}
+                                          disabled={Number(bidDraftWorkspace.rollingBackId || 0) === Number(item.id)}
+                                        >
+                                          {Number(bidDraftWorkspace.rollingBackId || 0) === Number(item.id) ? '回滚中...' : '回滚到此'}
+                                        </button>
+                                      ) : null}
+                                    </div>
+                                  ))}
+                                  {!bidDraftWorkspace.autosaves.length ? <div className="empty">暂无存稿记录，可先创建一条手工存稿。</div> : null}
+                                </div>
+                              </section>
+                            </div>
+                          ) : null}
+                        </section>
+                      </div>
                     </div>
                   </div>
                 )}
@@ -6577,6 +10774,57 @@ function App() {
                           <span>已选样本：{wizardSelectedSampleSet.size} 个</span>
                           <span>当前模型：{models.find((item) => String(item.id) === String(generateWizard.model_id))?.name || '-'}</span>
                         </div>
+                        {wizardChapterQualitySummary ? (
+                          <div className="generate-quality-card">
+                            <div className="generate-check-head">
+                              <h4>章节质量</h4>
+                              <span>生成后质量摘要</span>
+                            </div>
+                            <div className="generate-quality-metrics">
+                              <div>
+                                <label>总分</label>
+                                <strong>{wizardChapterQualitySummary.overall_score ?? '-'}</strong>
+                              </div>
+                              <div>
+                                <label>等级</label>
+                                <strong>{wizardChapterQualitySummary.grade || '-'}</strong>
+                              </div>
+                              <div>
+                                <label>高风险章节</label>
+                                <strong>{wizardChapterQualitySummary.high_risk_count || 0}</strong>
+                              </div>
+                              <div>
+                                <label>待重点复核</label>
+                                <strong>{wizardChapterQualitySummary.attention_count || 0}</strong>
+                              </div>
+                            </div>
+                            {Array.isArray(wizardChapterQualitySummary.summary_lines) && wizardChapterQualitySummary.summary_lines.length ? (
+                              <div className="generate-warning-list">
+                                {wizardChapterQualitySummary.summary_lines.map((item, idx) => (
+                                  <span key={`chapter-quality-summary-${idx}`}>{item}</span>
+                                ))}
+                              </div>
+                            ) : null}
+                            <div className="generate-quality-list">
+                              {wizardChapterQualityRows.slice(0, 12).map((item) => (
+                                <div className="generate-quality-item" key={`chapter-quality-${item.chapter_key || item.chapter_title}`}>
+                                  <div className="generate-quality-item-top">
+                                    <strong>{item.chapter_title || item.chapter_key || '-'}</strong>
+                                    <span>{item.grade || '-'} / {item.score ?? '-'}</span>
+                                  </div>
+                                  <div className="generate-quality-item-meta">
+                                    <span>{chapterQualitySourceLabelMap[item.source] || item.source || '未标记来源'}</span>
+                                    <span>{Number(item.line_count || 0)} 行</span>
+                                    <span>{Number(item.char_count || 0)} 字</span>
+                                  </div>
+                                  {Array.isArray(item.warnings) && item.warnings.length ? (
+                                    <p>{item.warnings.join('；')}</p>
+                                  ) : null}
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        ) : null}
                         <div className="generate-wizard-foot">
                           <button type="button" className="ghost" onClick={() => setGenerateWizard((prev) => ({ ...prev, step: 2 }))}>
                             返回核对
@@ -8299,6 +12547,8 @@ function App() {
                     <code>{'{{QUOTATION_VOLUME_CONTENT}}'}</code>
                     {' '}
                     <code>{'{{APPENDIX_INDEX_CONTENT}}'}</code>
+                    {' '}
+                    <code>{'{{CHAPTER_OUTLINE}}'}</code>
                     <br />
                     自有库映射：
                     {' '}
@@ -8316,7 +12566,13 @@ function App() {
                     {' '}
                     <code>{'{{FINANCE_INFO}}'}</code>
                     <br />
-                    说明：模板里放置正文占位符后，系统会按你模板样式生成（字体、标题层级、行距、页眉页脚、分页均由模板控制）。
+                    页眉页脚：
+                    {' '}
+                    <code>{'{{HEADER_CONTENT}}'}</code>
+                    {' '}
+                    <code>{'{{FOOTER_CONTENT}}'}</code>
+                    <br />
+                    说明：模板里放置正文占位符后，系统会按你模板样式生成；如果模板缺少页眉页脚，系统会自动补默认页眉页脚。
                   </div>
                   <div className="table" style={{ marginTop: 8 }}>
                     <div className="table-row header" style={{ gridTemplateColumns: '1fr 0.7fr 1fr 0.7fr 0.9fr' }}>

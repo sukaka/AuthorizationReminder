@@ -183,6 +183,245 @@ describe('faq smoke e2e', () => {
   const apiBase = getApiBase();
   const authBase = getAuthBase();
 
+  it('should force delete category tree and recycle linked faq articles', async () => {
+    const adminToken = await resolveAdminToken({ authBase, apiBase, optional: true });
+    if (!adminToken) {
+      console.warn('[faq smoke] skip: no FAQ admin token could be resolved');
+      return;
+    }
+    const adminInfo = await resolveSessionInfo({ apiBase, token: adminToken });
+    if (!adminInfo.ok || adminInfo.role !== 'admin') {
+      console.warn(`[faq smoke] skip: admin token unavailable for FAQ admin force delete (${adminInfo.status} ${adminInfo.reason || ''})`);
+      return;
+    }
+
+    const categoryPrefix = uniqueCode('FAQ-CATEGORY-FORCE');
+
+    const parentResp = await request({
+      base: apiBase,
+      path: '/api/faq/categories',
+      method: 'POST',
+      token: adminToken,
+      body: {
+        name: `${categoryPrefix}-parent`,
+        sort_order: 10,
+        is_active: 1,
+      },
+    });
+    ensureStatus(parentResp, 201);
+    const parentId = Number(ensureJsonField(parentResp, 'id'));
+
+    const childResp = await request({
+      base: apiBase,
+      path: '/api/faq/categories',
+      method: 'POST',
+      token: adminToken,
+      body: {
+        name: `${categoryPrefix}-child`,
+        parent_id: parentId,
+        sort_order: 20,
+        is_active: 1,
+      },
+    });
+    ensureStatus(childResp, 201);
+    const childId = Number(ensureJsonField(childResp, 'id'));
+
+    const articleResp = await request({
+      base: apiBase,
+      path: '/api/faq/articles',
+      method: 'POST',
+      token: adminToken,
+      body: {
+        title: uniqueCode('FAQ-CATEGORY-FORCE'),
+        summary: 'category force delete smoke',
+        category_id: childId,
+        tags: ['smoke', 'category-force-delete'],
+      },
+    });
+    ensureStatus(articleResp, 201);
+    const articleId = Number(ensureJsonField(articleResp, 'id'));
+
+    const forceDeleteResp = await request({
+      base: apiBase,
+      path: `/api/faq/categories/${parentId}/force-delete`,
+      method: 'POST',
+      token: adminToken,
+      body: {},
+    });
+    ensureStatus(forceDeleteResp, 200);
+    expect(Number(forceDeleteResp.json?.deleted_category_count || 0)).toBe(2);
+    expect(Array.isArray(forceDeleteResp.json?.deleted_category_ids)).toBe(true);
+    expect(forceDeleteResp.json.deleted_category_ids.map((item) => Number(item))).toEqual(expect.arrayContaining([parentId, childId]));
+    expect(Number(forceDeleteResp.json?.recycled_article_count || 0)).toBe(1);
+    expect(Array.isArray(forceDeleteResp.json?.recycled_article_ids)).toBe(true);
+    expect(forceDeleteResp.json.recycled_article_ids.map((item) => Number(item))).toContain(articleId);
+
+    const categoryListResp = await request({
+      base: apiBase,
+      path: '/api/faq/categories',
+      method: 'GET',
+      token: adminToken,
+    });
+    ensureStatus(categoryListResp, 200);
+    const categoryIds = Array.isArray(categoryListResp.json) ? categoryListResp.json.map((item) => Number(item?.id || 0)) : [];
+    expect(categoryIds).not.toContain(parentId);
+    expect(categoryIds).not.toContain(childId);
+
+    const recycleResp = await request({
+      base: apiBase,
+      path: '/api/faq/articles?recycle=1&page=1&limit=50',
+      method: 'GET',
+      token: adminToken,
+    });
+    ensureStatus(recycleResp, 200);
+    const recycled = Array.isArray(recycleResp.json?.items)
+      ? recycleResp.json.items.find((item) => Number(item?.id || 0) === articleId)
+      : null;
+    expect(recycled).toBeTruthy();
+    expect(Number(recycled?.is_deleted || 0)).toBe(1);
+    expect(recycled?.category_id ?? null).toBe(null);
+  });
+
+  it('should enforce category delete rules and support partial batch delete', async () => {
+    const authToken = await resolveWriterToken({ authBase, apiBase, optional: true });
+    if (!authToken) {
+      console.warn('[faq smoke] skip: no FAQ writer token could be resolved');
+      return;
+    }
+    const writerInfo = await resolveSessionInfo({ apiBase, token: authToken });
+    if (!writerInfo.ok || !writerInfo.permissions?.can_write_faq) {
+      console.warn(`[faq smoke] skip: writer token unavailable for FAQ write (${writerInfo.status} ${writerInfo.reason || ''})`);
+      return;
+    }
+
+    const categoryPrefix = uniqueCode('FAQ-CATEGORY-DELETE');
+
+    const parentResp = await request({
+      base: apiBase,
+      path: '/api/faq/categories',
+      method: 'POST',
+      token: authToken,
+      body: {
+        name: `${categoryPrefix}-parent`,
+        sort_order: 10,
+        is_active: 1,
+      },
+    });
+    ensureStatus(parentResp, 201);
+    const parentId = Number(ensureJsonField(parentResp, 'id'));
+
+    const childResp = await request({
+      base: apiBase,
+      path: '/api/faq/categories',
+      method: 'POST',
+      token: authToken,
+      body: {
+        name: `${categoryPrefix}-child`,
+        parent_id: parentId,
+        sort_order: 20,
+        is_active: 1,
+      },
+    });
+    ensureStatus(childResp, 201);
+    const childId = Number(ensureJsonField(childResp, 'id'));
+    expect(childId).toBeGreaterThan(0);
+
+    const linkedResp = await request({
+      base: apiBase,
+      path: '/api/faq/categories',
+      method: 'POST',
+      token: authToken,
+      body: {
+        name: `${categoryPrefix}-linked`,
+        sort_order: 30,
+        is_active: 1,
+      },
+    });
+    ensureStatus(linkedResp, 201);
+    const linkedId = Number(ensureJsonField(linkedResp, 'id'));
+
+    const freeResp = await request({
+      base: apiBase,
+      path: '/api/faq/categories',
+      method: 'POST',
+      token: authToken,
+      body: {
+        name: `${categoryPrefix}-free`,
+        sort_order: 40,
+        is_active: 1,
+      },
+    });
+    ensureStatus(freeResp, 201);
+    const freeId = Number(ensureJsonField(freeResp, 'id'));
+
+    const articleResp = await request({
+      base: apiBase,
+      path: '/api/faq/articles',
+      method: 'POST',
+      token: authToken,
+      body: {
+        title: uniqueCode('FAQ-CATEGORY-LINK'),
+        summary: 'category delete smoke',
+        category_id: linkedId,
+        tags: ['smoke', 'category-delete'],
+      },
+    });
+    ensureStatus(articleResp, 201);
+
+    const linkedDeleteResp = await request({
+      base: apiBase,
+      path: `/api/faq/categories/${linkedId}`,
+      method: 'DELETE',
+      token: authToken,
+    });
+    expect(linkedDeleteResp.status).toBe(409);
+    expect(normalizeText(linkedDeleteResp.json?.error || linkedDeleteResp.text)).toContain('该分类下有FAQ');
+
+    const parentDeleteResp = await request({
+      base: apiBase,
+      path: `/api/faq/categories/${parentId}`,
+      method: 'DELETE',
+      token: authToken,
+    });
+    expect(parentDeleteResp.status).toBe(409);
+    expect(normalizeText(parentDeleteResp.json?.error || parentDeleteResp.text)).toContain('该分类下有子分类');
+
+    const batchDeleteResp = await request({
+      base: apiBase,
+      path: '/api/faq/categories/batch-delete',
+      method: 'POST',
+      token: authToken,
+      body: {
+        ids: [freeId, linkedId, parentId],
+      },
+    });
+    ensureStatus(batchDeleteResp, 200);
+    expect(Number(batchDeleteResp.json?.total || 0)).toBe(3);
+    expect(Number(batchDeleteResp.json?.success_count || 0)).toBe(1);
+    expect(Number(batchDeleteResp.json?.failure_count || 0)).toBe(2);
+    expect(Array.isArray(batchDeleteResp.json?.deleted_ids)).toBe(true);
+    expect(batchDeleteResp.json.deleted_ids.map((item) => Number(item))).toContain(freeId);
+    expect(Array.isArray(batchDeleteResp.json?.failures)).toBe(true);
+    expect(batchDeleteResp.json.failures.some(
+      (item) => Number(item?.id || 0) === linkedId && normalizeText(item?.error).includes('该分类下有FAQ')
+    )).toBe(true);
+    expect(batchDeleteResp.json.failures.some(
+      (item) => Number(item?.id || 0) === parentId && normalizeText(item?.error).includes('该分类下有子分类')
+    )).toBe(true);
+
+    const listResp = await request({
+      base: apiBase,
+      path: '/api/faq/categories',
+      method: 'GET',
+      token: authToken,
+    });
+    ensureStatus(listResp, 200);
+    const categoryIds = Array.isArray(listResp.json) ? listResp.json.map((item) => Number(item?.id || 0)) : [];
+    expect(categoryIds).not.toContain(freeId);
+    expect(categoryIds).toContain(linkedId);
+    expect(categoryIds).toContain(parentId);
+  });
+
   it('should create article, upload version and query preview/download', async () => {
     const authToken = await resolveWriterToken({ authBase, apiBase, optional: true });
     if (!authToken) {

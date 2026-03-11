@@ -2,10 +2,10 @@ services:
   mysql:
     image: docker.m.daocloud.io/library/mysql:8.0
     environment:
-      MYSQL_ROOT_PASSWORD: rootpass
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
       MYSQL_DATABASE: juxin_reminder
       MYSQL_USER: juxin
-      MYSQL_PASSWORD: juxinpass
+      MYSQL_PASSWORD: ${MYSQL_SHARED_APP_PASSWORD}
     volumes:
       - mysql-data:/var/lib/mysql
     ports:
@@ -45,8 +45,8 @@ services:
       PORT: 5180
       MYSQL_HOST: mysql
       MYSQL_PORT: 3306
-      MYSQL_USER: juxin
-      MYSQL_PASSWORD: juxinpass
+      MYSQL_USER: auth_user
+      MYSQL_PASSWORD: ${AUTH_MYSQL_PASSWORD}
       MYSQL_DATABASE: juxin_reminder
       CORS_ORIGINS: "http://localhost:5180,http://127.0.0.1:5180,http://localhost:8080,http://127.0.0.1:8080,http://localhost:8081,http://127.0.0.1:8081,http://localhost:8082,http://127.0.0.1:8082,http://localhost:8083,http://127.0.0.1:8083,http://localhost:8084,http://127.0.0.1:8084,http://localhost:8085,http://127.0.0.1:8085,http://localhost:8086,http://127.0.0.1:8086,http://localhost:8087,http://127.0.0.1:8087,http://localhost:8090,http://127.0.0.1:8090"
       APP_CMDB_URL: "http://localhost:8090"
@@ -59,9 +59,11 @@ services:
       AUTH_COOKIE_NAME: "juxin_auth_token"
       AUTH_COOKIE_SECURE: "false"
       AUTH_COOKIE_SAMESITE: "lax"
-      JWT_SECRET: "3122c0763b7728783ce33c724c81fcdf3b9c77fe33cdc3cbfe5a6f4a896634ea"
-      CONFIG_SECRET_KEY: "UeiKgUhP80JPdwWMoBRRWmKxdz8BKEP4btzTTh4QmYVc9twMEcgCKuqFDx0M4HX8"
-      BUILTIN_ACCOUNT_DEFAULT_PASSWORD: "Dm1vbnqsILIVjUa5sWixBFos60bKdEKC"
+      JWT_SECRET: ${AUTH_JWT_SECRET}
+      AUDIT_SIGNING_KEY: ${AUTH_AUDIT_SIGNING_KEY}
+      CONFIG_SECRET_KEY: ${AUTH_CONFIG_SECRET_KEY}
+      BUILTIN_ACCOUNT_DEFAULT_PASSWORD: ${AUTH_BUILTIN_ACCOUNT_DEFAULT_PASSWORD}
+      SECURITY_STRICT_MODE: "true"
     depends_on:
       - mysql
     ports:
@@ -277,10 +279,10 @@ services:
       MYSQL_HOST: mysql
       MYSQL_PORT: 3306
       MYSQL_USER: faq_user
-      MYSQL_PASSWORD: faq_pass
+      MYSQL_PASSWORD: ${FAQ_MYSQL_PASSWORD}
       MYSQL_DATABASE: juxin_faq
       MYSQL_ADMIN_USER: root
-      MYSQL_ADMIN_PASSWORD: rootpass
+      MYSQL_ADMIN_PASSWORD: ${MYSQL_ROOT_PASSWORD}
       CORS_ORIGINS: "http://localhost:8085,http://127.0.0.1:8085"
       UPLOAD_ROOT: "/data/faq/uploads"
       PREVIEW_ROOT: "/data/faq/previews"
@@ -292,7 +294,7 @@ services:
       DOC_EDITOR_PUBLIC_PATH: "/doc-editor"
       DOC_EDITOR_FILE_BASE_URL: "http://faq-api:5186"
       DOC_EDITOR_CALLBACK_BASE_URL: "http://faq-api:5186"
-      DOC_EDITOR_JWT_SECRET: "faq-onlyoffice-jwt-change-me"
+      DOC_EDITOR_JWT_SECRET: ${FAQ_DOC_EDITOR_JWT_SECRET}
       LIBREOFFICE_BIN: "soffice"
     volumes:
       - faq-data:/data/faq
@@ -341,7 +343,7 @@ services:
       DOC_EDITOR_PUBLIC_PATH: "/doc-editor"
       DOC_EDITOR_FILE_BASE_URL: "http://tender-api:5187"
       DOC_EDITOR_CALLBACK_BASE_URL: "http://tender-api:5187"
-      DOC_EDITOR_JWT_SECRET: "faq-onlyoffice-jwt-change-me"
+      DOC_EDITOR_JWT_SECRET: ${FAQ_DOC_EDITOR_JWT_SECRET}
       EDITOR_SESSION_TTL_MINUTES: 120
       AUDIT_SIGNING_KEY: "tender-audit-signing-key-change-me"
       CONFIG_SECRET_KEY: "tender-config-secret-change-me-32chars"
@@ -385,35 +387,37 @@ services:
       MYSQL_HOST: mysql
       MYSQL_PORT: 3306
       MYSQL_USER: train_exam_user
-      MYSQL_PASSWORD: train_exam_pass
+      MYSQL_PASSWORD: ${TRAIN_EXAM_MYSQL_PASSWORD}
       MYSQL_DATABASE: juxin_train_exam
       MYSQL_ADMIN_USER: root
-      MYSQL_ADMIN_PASSWORD: rootpass
+      MYSQL_ADMIN_PASSWORD: ${MYSQL_ROOT_PASSWORD}
       FAQ_MYSQL_HOST: mysql
       FAQ_MYSQL_PORT: 3306
-      FAQ_MYSQL_USER: root
-      FAQ_MYSQL_PASSWORD: rootpass
+      FAQ_MYSQL_USER: faq_user
+      FAQ_MYSQL_PASSWORD: ${FAQ_MYSQL_PASSWORD}
       FAQ_MYSQL_DATABASE: juxin_faq
       CORS_ORIGINS: "http://localhost:8087,http://127.0.0.1:8087"
       RESOURCE_ROOT: "/data/train-exam/resources"
       IMPORT_ROOT: "/data/train-exam/imports"
       CERT_ROOT: "/data/train-exam/certificates"
       UPLOAD_MAX_FILE_SIZE_MB: 50
-      AUDIT_SIGNING_KEY: "train-exam-audit-signing-key-change-me"
+      AUDIT_SIGNING_KEY: ${TRAIN_EXAM_AUDIT_SIGNING_KEY}
       AI_OPENAI_BASE_URL: ""
       AI_OPENAI_API_KEY: ""
       AI_MODEL_NAME: ""
       DOC_EDITOR_PROVIDER: "onlyoffice"
       DOC_EDITOR_PUBLIC_PATH: "/doc-editor"
       DOC_EDITOR_FILE_BASE_URL: "http://train-exam-api:5188"
-      DOC_EDITOR_JWT_SECRET: "faq-onlyoffice-jwt-change-me"
+      DOC_EDITOR_JWT_SECRET: ${TRAIN_EXAM_DOC_EDITOR_JWT_SECRET}
       DOC_PREVIEW_MIN_SECONDS: 45
+      SECURITY_STRICT_MODE: "true"
+      CSRF_SECURE: "false"
     volumes:
       - train-exam-data:/data/train-exam
     depends_on:
       - mysql
       - auth
-      - onlyoffice
+      - train-exam-onlyoffice
     ports:
       - "5188:5188"
 
@@ -422,7 +426,7 @@ services:
     depends_on:
       - train-exam-api
       - auth
-      - onlyoffice
+      - train-exam-onlyoffice
     ports:
       - "8087:80"
 
@@ -432,7 +436,21 @@ services:
       dockerfile: Dockerfile
     environment:
       JWT_ENABLED: "true"
-      JWT_SECRET: "faq-onlyoffice-jwt-change-me"
+      JWT_SECRET: ${FAQ_DOC_EDITOR_JWT_SECRET}
+      JWT_HEADER: "Authorization"
+      JWT_IN_BODY: "true"
+      WOPI_ENABLED: "false"
+      ALLOW_PRIVATE_IP_ADDRESS: "true"
+      ALLOW_META_IP_ADDRESS: "true"
+    restart: unless-stopped
+
+  train-exam-onlyoffice:
+    build:
+      context: ./faq/onlyoffice-fonts
+      dockerfile: Dockerfile
+    environment:
+      JWT_ENABLED: "true"
+      JWT_SECRET: ${TRAIN_EXAM_DOC_EDITOR_JWT_SECRET}
       JWT_HEADER: "Authorization"
       JWT_IN_BODY: "true"
       WOPI_ENABLED: "false"

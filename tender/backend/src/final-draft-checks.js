@@ -86,11 +86,41 @@ const normalizeParagraphs = (paragraphs = []) =>
     .map((item) => trimText(item))
     .filter(Boolean);
 
+const normalizeArtifacts = (artifacts = []) =>
+  toArray(artifacts)
+    .filter((item) => item && typeof item === 'object')
+    .map((item) => {
+      const row = parseJsonObject(item.row_json);
+      return {
+        artifact_type: trimText(item.artifact_type).toUpperCase() || 'DEVIATION_TABLE',
+        artifact_group: trimText(item.artifact_group).toUpperCase() || 'TECHNICAL',
+        row_no: Number(item.row_no || 0) || 0,
+        requirement_code: trimText(row.requirement_code || row.requirement_id),
+        tender_requirement: trimText(
+          row.tender_requirement ||
+          row.requirement_text ||
+          row.parameter_name ||
+          row.item_name ||
+          row.item_title
+        ),
+        status_text: trimText([
+          row.bidder_response,
+          row.response_text,
+          row.deviation_note,
+          row.deviation_status,
+          row.response_status,
+        ].filter(Boolean).join(' ')),
+        row_json: row,
+      };
+    });
+
 const normalizeTextToken = (value) =>
   trimText(value)
     .toLowerCase()
     .replace(/\s+/g, '')
     .replace(/[：:（）()【】\[\]、，,。.!?？;；]/g, '');
+
+const uniqueNonEmpty = (values = []) => Array.from(new Set(toArray(values).map((item) => trimText(item)).filter(Boolean)));
 
 const parseDateLike = (value) => {
   const text = trimText(value);
@@ -226,7 +256,164 @@ const buildConsistencyIssues = ({ lines = [], context = {} }) => {
   return issues;
 };
 
+const buildChapterQualityIssues = (context = {}) => {
+  const quality = parseJsonObject(context.chapter_quality_summary);
+  if (!Object.keys(quality).length) return [];
+
+  const issues = [];
+  const overallScore = Number(quality.overall_score || 0);
+  const highRiskCount = Number(quality.high_risk_count || 0);
+  const missingRequiredCount = Number(quality.missing_required_count || 0);
+  const summaryLines = Array.isArray(quality.summary_lines)
+    ? quality.summary_lines.map((item) => trimText(item)).filter(Boolean)
+    : [];
+
+  if (missingRequiredCount > 0) {
+    issues.push(buildIssue({
+      type: 'chapter_quality_missing_required',
+      severity: 'WARN',
+      title: '章节质量存在必需章节缺失',
+      message: summaryLines[0] || `章节质量摘要显示缺失必需章节 ${missingRequiredCount} 项。`,
+    }));
+  }
+
+  if (overallScore > 0 && overallScore < 78) {
+    issues.push(buildIssue({
+      type: 'chapter_quality_low_score',
+      severity: 'WARN',
+      title: '章节质量总分偏低',
+      message: `章节质量总分为 ${overallScore}，建议优先复核低分章节并补强正文内容。`,
+    }));
+  }
+
+  if (highRiskCount > 0) {
+    issues.push(buildIssue({
+      type: 'chapter_quality_high_risk',
+      severity: 'WARN',
+      title: '存在高风险章节',
+      message: `章节质量摘要显示高风险章节 ${highRiskCount} 个，请优先核对缺章、过短章节和规则兜底章节。`,
+    }));
+  }
+
+  return issues;
+};
+
 const hasSatisfiedToken = (value) => /满足|完全响应|无偏离|符合要求/.test(trimText(value));
+
+const inferStatusFromText = (value) => {
+  const text = trimText(value);
+  if (!text) return 'UNKNOWN';
+  if (/不满足|未满足|无法满足|不符合|无法响应|不响应/.test(text)) return 'UNSATISFIED';
+  if (/有偏离|存在偏离|负偏离|偏离/.test(text) && !/无偏离/.test(text)) return 'DEVIATED';
+  if (/无偏离|完全满足|完全响应|均满足|满足|符合要求|符合招标要求/.test(text)) return 'SATISFIED';
+  return 'UNKNOWN';
+};
+
+const statusIsPositive = (status) => trimText(status).toUpperCase() === 'SATISFIED';
+
+const statusIsNegative = (status) => new Set(['UNSATISFIED', 'DEVIATED']).has(trimText(status).toUpperCase());
+
+const statusesConflict = (left, right) => {
+  const leftStatus = trimText(left).toUpperCase();
+  const rightStatus = trimText(right).toUpperCase();
+  if (!leftStatus || !rightStatus || leftStatus === 'UNKNOWN' || rightStatus === 'UNKNOWN') return false;
+  return (statusIsPositive(leftStatus) && statusIsNegative(rightStatus)) ||
+    (statusIsNegative(leftStatus) && statusIsPositive(rightStatus));
+};
+
+const buildRequirementTokens = (requirement) =>
+  uniqueNonEmpty([
+    trimText(requirement?.requirement_code),
+    trimText(requirement?.title),
+    trimText(requirement?.requirement_text),
+  ]).map((item) => normalizeTextToken(item)).filter(Boolean);
+
+const artifactMatchesRequirement = (requirement, artifact) => {
+  if (!requirement || !artifact) return false;
+  const requirementCode = trimText(requirement.requirement_code);
+  const artifactCode = trimText(artifact.requirement_code);
+  if (requirementCode && artifactCode && requirementCode === artifactCode) return true;
+  const artifactTokens = uniqueNonEmpty([
+    artifact.tender_requirement,
+    trimText(artifact?.row_json?.requirement_text),
+  ]).map((item) => normalizeTextToken(item)).filter(Boolean);
+  if (!artifactTokens.length) return false;
+  const requirementTokens = buildRequirementTokens(requirement);
+  return requirementTokens.some((token) =>
+    artifactTokens.some((artifactToken) => artifactToken.includes(token) || token.includes(artifactToken))
+  );
+};
+
+const buildArtifactTableConflictIssues = ({ requirements = [], artifacts = [] }) => {
+  const issues = [];
+  for (const requirement of requirements) {
+    const relatedArtifacts = artifacts.filter((artifact) => artifactMatchesRequirement(requirement, artifact));
+    if (relatedArtifacts.length < 2) continue;
+    const deviationStatuses = relatedArtifacts
+      .filter((artifact) => artifact.artifact_type === 'DEVIATION_TABLE')
+      .map((artifact) => ({
+        artifact,
+        status: inferStatusFromText(artifact.status_text),
+      }))
+      .filter((item) => item.status !== 'UNKNOWN');
+    const responseStatuses = relatedArtifacts
+      .filter((artifact) => artifact.artifact_type === 'RESPONSE_TABLE')
+      .map((artifact) => ({
+        artifact,
+        status: inferStatusFromText(artifact.status_text),
+      }))
+      .filter((item) => item.status !== 'UNKNOWN');
+    if (!deviationStatuses.length || !responseStatuses.length) continue;
+    const conflictedPair = deviationStatuses.flatMap((left) => responseStatuses.map((right) => ({ left, right })))
+      .find((pair) => statusesConflict(pair.left.status, pair.right.status));
+    if (!conflictedPair) continue;
+    issues.push(buildIssue({
+      type: 'artifact_table_conflict',
+      severity: 'WARN',
+      title: `偏离表与应答表状态冲突：${requirement.title || requirement.requirement_code || '未命名要求'}`,
+      message: `偏离表判定=${conflictedPair.left.status}，应答表判定=${conflictedPair.right.status}，请人工复核同一要求的表格表述。`,
+      requirement,
+      paragraph: trimText([
+        conflictedPair.left.artifact.tender_requirement,
+        conflictedPair.left.artifact.status_text,
+        conflictedPair.right.artifact.status_text,
+      ].filter(Boolean).join(' | ')),
+    }));
+  }
+  return issues;
+};
+
+const buildSectionArtifactConflictIssues = ({ requirements = [], sections = [], artifacts = [] }) => {
+  const issues = [];
+  for (const requirement of requirements) {
+    const coveredSections = sections.filter((section) => requirementCoveredBySection(requirement, section));
+    if (!coveredSections.length) continue;
+    const sectionStatus = inferStatusFromText(coveredSections.map((section) => section.paragraph_text).join('\n'));
+    if (sectionStatus === 'UNKNOWN') continue;
+    const relatedArtifacts = artifacts
+      .filter((artifact) => artifactMatchesRequirement(requirement, artifact))
+      .map((artifact) => ({
+        artifact,
+        status: inferStatusFromText(artifact.status_text),
+      }))
+      .filter((item) => item.status !== 'UNKNOWN');
+    const conflicted = relatedArtifacts.find((item) => statusesConflict(sectionStatus, item.status));
+    if (!conflicted) continue;
+    issues.push(buildIssue({
+      type: 'section_artifact_conflict',
+      severity: 'WARN',
+      title: `章节与表格状态冲突：${requirement.title || requirement.requirement_code || '未命名要求'}`,
+      message: `正文章节判定=${sectionStatus}，${conflicted.artifact.artifact_type} 判定=${conflicted.status}，请统一表述。`,
+      requirement,
+      section: coveredSections[0],
+      paragraph: trimText([
+        coveredSections[0]?.paragraph_text,
+        conflicted.artifact.status_text,
+      ].filter(Boolean).join(' | ')),
+    }));
+  }
+  return issues;
+};
 
 const extractRecentYearWindow = (text) => {
   const matched = trimText(text).match(/近\s*([一二三四五六七八九十\d]+)\s*年/);
@@ -376,12 +563,14 @@ const runStructuredChecks = ({
   requirements = [],
   sections = [],
   evidences = [],
+  artifacts = [],
   paragraphs = [],
   context = {},
 }) => {
   const normalizedRequirements = normalizeRequirements(requirements);
   const normalizedSections = normalizeSections(sections);
   const normalizedEvidences = normalizeEvidences(evidences);
+  const normalizedArtifacts = normalizeArtifacts(artifacts);
   const normalizedParagraphs = normalizeParagraphs(paragraphs);
   const textLines = collectTextLines({ sections: normalizedSections, paragraphs: normalizedParagraphs });
   const issues = [];
@@ -474,6 +663,16 @@ const runStructuredChecks = ({
     }
   }
 
+  issues.push(...buildArtifactTableConflictIssues({
+    requirements: normalizedRequirements,
+    artifacts: normalizedArtifacts,
+  }));
+  issues.push(...buildSectionArtifactConflictIssues({
+    requirements: normalizedRequirements,
+    sections: normalizedSections,
+    artifacts: normalizedArtifacts,
+  }));
+
   for (const paragraph of normalizedParagraphs) {
     if (!/\{\{[^}]+\}\}/.test(paragraph)) continue;
     issues.push(buildIssue({
@@ -498,6 +697,7 @@ const runStructuredChecks = ({
   }
 
   issues.push(...buildConsistencyIssues({ lines: textLines, context }));
+  issues.push(...buildChapterQualityIssues(context));
 
   const asOfDate = parseAsOfDate(context);
   const asOfMs = asOfDate.getTime();
@@ -601,13 +801,23 @@ const runDocxChecks = ({ paragraphs = [] }) => {
     }));
   }
 
-  const hasSignatureSlot = normalizedParagraphs.some((paragraph) => /法定代表人|授权代表|签字|签章|盖章/.test(paragraph));
+  const hasSignerMarker = normalizedParagraphs.some((paragraph) => /法定代表人|授权代表|委托代理人|签字/.test(paragraph));
+  const hasSealMarker = normalizedParagraphs.some((paragraph) => /签章|盖章/.test(paragraph));
+  const hasDateMarker = normalizedParagraphs.some((paragraph) => /日期|年\s*月\s*日/.test(paragraph));
+  const hasSignatureSlot = hasSignerMarker || hasSealMarker || hasDateMarker;
   if (!hasSignatureSlot) {
     issues.push(buildIssue({
       type: 'signature_slot_missing',
       severity: 'WARN',
       title: '缺少签署位',
       message: '当前成稿未检测到法定代表人/授权代表签字盖章位置。',
+    }));
+  } else if (!(hasSignerMarker && hasSealMarker && hasDateMarker)) {
+    issues.push(buildIssue({
+      type: 'signature_slot_incomplete',
+      severity: 'WARN',
+      title: '签署位信息不完整',
+      message: '已检测到签署区域，但缺少签字人、盖章位或日期中的关键组成，请补齐完整签署页。',
     }));
   }
 

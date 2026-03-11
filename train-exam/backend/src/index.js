@@ -3,16 +3,40 @@ require('dotenv').config();
 const cors = require('cors');
 const crypto = require('crypto');
 const { spawn } = require('child_process');
+const cookieParser = require('cookie-parser');
+const ExcelJS = require('exceljs');
 const express = require('express');
 const fs = require('fs');
 const helmet = require('helmet');
 const jwt = require('jsonwebtoken');
 const multer = require('multer');
 const mysql = require('mysql2/promise');
+const net = require('net');
 const path = require('path');
 const { PDFDocument, StandardFonts, rgb } = require('pdf-lib');
-const XLSX = require('xlsx');
 const { get, initDb, query, run, transaction } = require('./db');
+const {
+  buildQuestionImportTemplateRows,
+  normalizeJudgementAnswer,
+  resolveImportQuestionStatus,
+} = require('./question-import-utils');
+const { buildQuestionFilterWhere } = require('./question-filter-utils');
+const { normalizeQuestionCategoryRow } = require('./question-category-utils');
+const { normalizePaperRuleCategories } = require('./paper-rule-utils');
+const {
+  normalizeAdminResultsFilters,
+  buildAdminResultsWhere,
+  normalizeAdminResultListRow,
+  normalizeAdminResultsSummary,
+  buildResultReviewDetail,
+  buildCandidateHistorySummary,
+} = require('./result-center-utils');
+const {
+  canReadCourse,
+  createMemoryRateLimiter,
+  isDocPreviewHostAllowed,
+  validateAiBaseUrl,
+} = require('./security-utils');
 
 const app = express();
 
@@ -22,7 +46,11 @@ const AUTH_SYSTEM_KEY = String(process.env.AUTH_SYSTEM_KEY || 'train-exam').trim
 const AUTH_COOKIE_NAME = String(process.env.AUTH_COOKIE_NAME || 'juxin_auth_token').trim() || 'juxin_auth_token';
 const AUTH_FETCH_TIMEOUT_MS = Math.max(1000, Number(process.env.AUTH_FETCH_TIMEOUT_MS || 5000));
 const SECURITY_STRICT_MODE = process.env.SECURITY_STRICT_MODE === 'true' || process.env.NODE_ENV === 'production';
+const CSRF_COOKIE_NAME = String(process.env.TRAIN_EXAM_CSRF_COOKIE_NAME || 'train_exam_csrf_token').trim() || 'train_exam_csrf_token';
+const CSRF_SECURE = process.env.CSRF_SECURE === 'true';
 const AUDIT_SIGNING_KEY = String(process.env.AUDIT_SIGNING_KEY || 'train-exam-audit-signing-key-change-me').trim();
+const AI_ALLOW_PRIVATE_BASE_URLS = process.env.AI_ALLOW_PRIVATE_BASE_URLS === 'true';
+const AI_ALLOW_INSECURE_HTTP = process.env.AI_ALLOW_INSECURE_HTTP === 'true';
 
 const FILE_MAX_BYTES = Math.max(1024 * 100, Number(process.env.UPLOAD_MAX_FILE_SIZE_MB || 50) * 1024 * 1024);
 const VIDEO_TRANSCODE_ENABLED = String(process.env.VIDEO_TRANSCODE_ENABLED || 'true').trim().toLowerCase() !== 'false';
@@ -63,6 +91,13 @@ const DOC_EDITOR_PROVIDER = String(process.env.DOC_EDITOR_PROVIDER || 'onlyoffic
 const DOC_EDITOR_FILE_BASE_URL = String(process.env.DOC_EDITOR_FILE_BASE_URL || 'http://train-exam-api:5188').trim().replace(/\/+$/, '');
 const DOC_EDITOR_PUBLIC_PATH = String(process.env.DOC_EDITOR_PUBLIC_PATH || '/doc-editor').trim() || '/doc-editor';
 const DOC_EDITOR_JWT_SECRET = String(process.env.DOC_EDITOR_JWT_SECRET || 'faq-onlyoffice-jwt-change-me').trim();
+const DOC_EDITOR_FILE_ALLOWED_HOST = (() => {
+  try {
+    return new URL(DOC_EDITOR_FILE_BASE_URL).host.toLowerCase();
+  } catch {
+    return '';
+  }
+})();
 const DOC_PREVIEW_MIN_SECONDS_MIN = 15;
 const DOC_PREVIEW_MIN_SECONDS_MAX = 600;
 const DOC_PREVIEW_MIN_SECONDS_DEFAULT = Math.max(
@@ -222,6 +257,44 @@ app.use(
 );
 app.use(cors(corsOptions));
 app.use(express.json({ limit: '10mb' }));
+app.use(cookieParser());
+
+const getCsrfCookieValue = (req) => trimText(req.cookies?.[CSRF_COOKIE_NAME]);
+
+const issueCsrfToken = (res) => {
+  const token = crypto.randomBytes(24).toString('hex');
+  res.cookie(CSRF_COOKIE_NAME, token, {
+    httpOnly: true,
+    sameSite: 'strict',
+    secure: CSRF_SECURE,
+    path: '/',
+  });
+  return token;
+};
+
+const validateCsrfToken = (req, _res, next) => {
+  const cookieToken = getCsrfCookieValue(req);
+  const headerToken = trimText(req.headers['x-csrf-token']);
+  if (!cookieToken || !headerToken) {
+    const err = appError('CSRF 校验失败，请刷新页面后重试', 403);
+    err.securityAction = 'CSRF_FAILURE';
+    return next(err);
+  }
+  const cookieBuffer = Buffer.from(cookieToken);
+  const headerBuffer = Buffer.from(headerToken);
+  if (cookieBuffer.length !== headerBuffer.length || !crypto.timingSafeEqual(cookieBuffer, headerBuffer)) {
+    const err = appError('CSRF 校验失败，请刷新页面后重试', 403);
+    err.securityAction = 'CSRF_FAILURE';
+    return next(err);
+  }
+  return next();
+};
+
+app.use('/api', (req, res, next) => {
+  if (req.path === '/health' || req.path === '/train-exam/csrf') return next();
+  if (['GET', 'HEAD', 'OPTIONS'].includes(req.method)) return next();
+  return validateCsrfToken(req, res, next);
+});
 
 for (const dir of [RESOURCE_ROOT, IMPORT_ROOT, CERT_ROOT, CERT_TEMPLATE_DIR, RESOURCE_TMP_ROOT]) {
   if (!fs.existsSync(dir)) {
@@ -249,6 +322,41 @@ const uploadResource = multer({
 });
 
 const trimText = (value, fallback = '') => (value === undefined || value === null ? fallback : String(value).trim());
+
+const weakSecrets = new Set([
+  'change-me',
+  'train-exam-audit-signing-key-change-me',
+  'faq-onlyoffice-jwt-change-me',
+  'password',
+  '123456',
+  '',
+]);
+
+const isWeakSecret = (value, minLength = 16) => {
+  const text = trimText(value);
+  if (!text) return true;
+  if (text.length < minLength) return true;
+  return weakSecrets.has(text.toLowerCase());
+};
+
+const validateSecurityBootstrap = () => {
+  const problems = [];
+  if (isWeakSecret(AUDIT_SIGNING_KEY, 32)) {
+    problems.push('AUDIT_SIGNING_KEY 过弱（建议至少32位随机值）');
+  }
+  if (isWeakSecret(DOC_EDITOR_JWT_SECRET, 32)) {
+    problems.push('DOC_EDITOR_JWT_SECRET 过弱（建议至少32位随机值）');
+  }
+  if (!DOC_EDITOR_FILE_ALLOWED_HOST) {
+    problems.push('DOC_EDITOR_FILE_BASE_URL 非法，无法解析可信 Host');
+  }
+  if (!problems.length) return;
+  const message = `[SECURITY][train-exam] ${problems.join('；')}`;
+  if (SECURITY_STRICT_MODE) {
+    throw new Error(message);
+  }
+  console.warn(`${message}。当前为非严格模式，仅告警。`);
+};
 
 const toPositiveInt = (value, fallback = 1) => {
   const n = Number(value);
@@ -421,6 +529,8 @@ const canReviewQuestions = (req) => isAdmin(req) || isReviewer(req);
 const canPublishPaper = (req) => isAdmin(req) || isReviewer(req);
 const canReadAudit = (req) => isAuditor(req);
 const canReadAiModelConfig = (req) => isAdmin(req);
+const canReadResultCenter = (req) => isAdmin(req) || isReviewer(req) || isAuditor(req);
+const isElevatedTrainExamReader = (req) => isAdmin(req) || isEditor(req) || isReviewer(req) || isAuditor(req);
 const isBasicTrainExamUser = (req) =>
   isViewer(req)
   && !canWriteContent(req)
@@ -429,14 +539,39 @@ const isBasicTrainExamUser = (req) =>
   && !canReadAudit(req)
   && !canReadAiModelConfig(req);
 
+const canReadCourseRecord = (req, course) => canReadCourse({
+  role: getUserRole(req),
+  courseStatus: trimText(course?.status),
+});
+
+const ensureCourseReadAccess = (req, course, message = '无权限访问该课程') => {
+  if (!course) throw appError('课程不存在', 404);
+  if (!canReadCourseRecord(req, course)) throw appError(message, 403);
+  return course;
+};
+
+const buildCourseWhereForReader = (req, { alias = '' } = {}) => {
+  if (isElevatedTrainExamReader(req)) {
+    return { whereSql: '', params: [] };
+  }
+  const prefix = alias ? `${alias}.` : '';
+  return {
+    whereSql: `WHERE ${prefix}status = 'published'`,
+    params: [],
+  };
+};
+
 const BASIC_VIEWER_ALLOWED_APIS = [
   { method: 'GET', pattern: /^\/api\/auth\/me$/ },
   { method: 'GET', pattern: /^\/api\/train-exam\/auth\/me$/ },
+  { method: 'GET', pattern: /^\/api\/train-exam\/csrf$/ },
   { method: 'GET', pattern: /^\/api\/train-exam\/settings$/ },
   { method: 'GET', pattern: /^\/api\/train-exam\/courses$/ },
+  { method: 'GET', pattern: /^\/api\/train-exam\/courses\/\d+$/ },
   { method: 'GET', pattern: /^\/api\/train-exam\/courses\/\d+\/learning-path$/ },
   { method: 'GET', pattern: /^\/api\/train-exam\/my\/learning-progress$/ },
   { method: 'GET', pattern: /^\/api\/train-exam\/resources\/\d+\/playability$/ },
+  { method: 'GET', pattern: /^\/api\/train-exam\/resources\/\d+\/transcode-status$/ },
   { method: 'GET', pattern: /^\/api\/train-exam\/resources\/\d+\/stream$/ },
   { method: 'GET', pattern: /^\/api\/train-exam\/resources\/\d+\/download$/ },
   { method: 'GET', pattern: /^\/api\/train-exam\/resources\/\d+\/doc-preview-config$/ },
@@ -450,10 +585,16 @@ const BASIC_VIEWER_ALLOWED_APIS = [
   { method: 'POST', pattern: /^\/api\/train-exam\/exam-sessions\/\d+\/submit$/ },
   { method: 'GET', pattern: /^\/api\/train-exam\/exam-sessions\/\d+\/result$/ },
   { method: 'GET', pattern: /^\/api\/train-exam\/my\/results$/ },
+  { method: 'GET', pattern: /^\/api\/train-exam\/my\/certificates$/ },
+  { method: 'GET', pattern: /^\/api\/train-exam\/my\/recertification$/ },
+  { method: 'POST', pattern: /^\/api\/train-exam\/recertification\/jobs\/\d+\/start$/ },
   { method: 'POST', pattern: /^\/api\/train-exam\/retrain\/start$/ },
   { method: 'GET', pattern: /^\/api\/train-exam\/my\/wrong-questions$/ },
   { method: 'GET', pattern: /^\/api\/train-exam\/my\/retrain-recommendations$/ },
   { method: 'GET', pattern: /^\/api\/train-exam\/results\/\d+$/ },
+  { method: 'GET', pattern: /^\/api\/train-exam\/results\/\d+\/review-detail$/ },
+  { method: 'POST', pattern: /^\/api\/train-exam\/results\/\d+\/certificate\/generate$/ },
+  { method: 'GET', pattern: /^\/api\/train-exam\/results\/\d+\/certificate\/download$/ },
 ];
 
 const allowBasicViewerApi = (req) => {
@@ -494,12 +635,210 @@ const requireAdminOnly = (req, _res, next) => {
   return next();
 };
 
+const requireResultCenterReader = (req, _res, next) => {
+  if (!canReadResultCenter(req)) return next(appError('仅管理员、审核员或审计管理员可查看考试结果中心', 403));
+  return next();
+};
+
 const requireAiModelReader = (req, _res, next) => {
   if (!canReadAiModelConfig(req)) return next(appError('仅管理员可查看模型配置', 403));
   return next();
 };
 
 const getClientIp = (req) => trimText(req.ip) || trimText(req.socket?.remoteAddress) || '';
+
+const normalizeClientIp = (value) => {
+  let text = trimText(value);
+  if (!text) return '';
+  if (text.includes(',')) {
+    text = trimText(text.split(',')[0]);
+  }
+  if (text.startsWith('[') && text.includes(']')) {
+    text = trimText(text.slice(1, text.indexOf(']')));
+  }
+  if (/^::ffff:\d+\.\d+\.\d+\.\d+$/i.test(text)) {
+    text = text.replace(/^::ffff:/i, '');
+  }
+  const zoneIndex = text.indexOf('%');
+  if (zoneIndex > 0) {
+    text = trimText(text.slice(0, zoneIndex));
+  }
+  return net.isIP(text) ? text.toLowerCase() : '';
+};
+
+const isPrivateIpv4Address = (value) => {
+  const parts = String(value || '').split('.').map((item) => Number(item));
+  if (parts.length !== 4 || parts.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) return false;
+  if (parts[0] === 10 || parts[0] === 127) return true;
+  if (parts[0] === 169 && parts[1] === 254) return true;
+  if (parts[0] === 192 && parts[1] === 168) return true;
+  if (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) return true;
+  return false;
+};
+
+const isPrivateRequestIp = (req) => {
+  const forwarded = normalizeClientIp(req.headers['x-forwarded-for']);
+  const actual = forwarded || normalizeClientIp(getClientIp(req));
+  if (!actual) return false;
+  const family = net.isIP(actual);
+  if (family === 4) return isPrivateIpv4Address(actual);
+  if (family === 6) {
+    return actual === '::1' || actual.startsWith('fc') || actual.startsWith('fd') || actual.startsWith('fe80:');
+  }
+  return false;
+};
+
+const getRequestHost = (req) => {
+  const raw = trimText(req.headers['x-forwarded-host'] || req.headers.host).toLowerCase();
+  if (!raw) return '';
+  return trimText(raw.split(',')[0]).toLowerCase();
+};
+
+const buildSecurityEventLogPayload = ({ req, statusCode, message, action }) => ({
+  req,
+  action,
+  entity: 'security_event',
+  entityId: null,
+  message,
+  afterData: {
+    status_code: Number(statusCode || 0),
+    method: trimText(req?.method).toUpperCase(),
+    path: trimText(String(req?.originalUrl || '').split('?')[0]),
+    request_ip: trimText(getClientIp(req)),
+  },
+});
+
+const buildRateLimitMiddleware = ({ keyPrefix, windowMs, limit, message = '操作过于频繁，请稍后再试' }) => {
+  const limiter = createMemoryRateLimiter({ windowMs, limit });
+  return (req, _res, next) => {
+    const userId = Number(req.user?.id || 0) || 0;
+    const key = `${keyPrefix}:${userId}:${getClientIp(req)}`;
+    const result = limiter.consume(key);
+    if (result.allowed) return next();
+    const err = appError(message, 429);
+    err.securityAction = 'RATE_LIMIT';
+    err.retryAfterSeconds = Math.max(1, Math.ceil(Number(result.retryAfterMs || windowMs) / 1000));
+    return next(err);
+  };
+};
+
+const normalizeAiBaseUrlOrThrow = (value) => {
+  try {
+    return validateAiBaseUrl(value, {
+      allowHttp: AI_ALLOW_INSECURE_HTTP,
+      allowPrivateHosts: AI_ALLOW_PRIVATE_BASE_URLS,
+    }).toString().replace(/\/+$/, '');
+  } catch (err) {
+    throw appError(trimText(err?.message || 'AI base_url 非法') || 'AI base_url 非法', 400);
+  }
+};
+
+const getCourseSummaryById = async (courseId) =>
+  get('SELECT * FROM te_courses WHERE id = ? LIMIT 1', [Number(courseId || 0)]);
+
+const getResourceWithCourseById = async (resourceId) =>
+  get(
+    `SELECT
+      r.*,
+      c.id AS linked_course_id,
+      c.title AS course_title,
+      c.status AS course_status
+     FROM te_course_resources r
+     LEFT JOIN te_courses c ON c.id = r.course_id
+     WHERE r.id = ?
+     LIMIT 1`,
+    [Number(resourceId || 0)]
+  );
+
+const ensureResourceReadAccess = (req, resource, message = '无权限访问该资源') => {
+  if (!resource) throw appError('资源不存在', 404);
+  ensureCourseReadAccess(
+    req,
+    {
+      id: Number(resource.linked_course_id || resource.course_id || 0),
+      title: trimText(resource.course_title),
+      status: trimText(resource.course_status),
+    },
+    message
+  );
+  return resource;
+};
+
+const getPaperAccessRowById = async (paperId) =>
+  get(
+    `SELECT
+      p.*,
+      c.id AS linked_course_id,
+      c.title AS course_title,
+      c.status AS course_status
+     FROM te_papers p
+     LEFT JOIN te_courses c ON c.id = p.course_id
+     WHERE p.id = ?
+     LIMIT 1`,
+    [Number(paperId || 0)]
+  );
+
+const ensurePaperReadAccess = (req, paper, message = '无权限访问该试卷') => {
+  if (!paper) throw appError('试卷不存在', 404);
+  if (isElevatedTrainExamReader(req)) return paper;
+  if (trimText(paper.status).toLowerCase() !== 'published') throw appError(message, 403);
+  const courseId = Number(paper.linked_course_id || paper.course_id || 0);
+  if (courseId > 0) {
+    ensureCourseReadAccess(
+      req,
+      {
+        id: courseId,
+        title: trimText(paper.course_title),
+        status: trimText(paper.course_status),
+      },
+      message
+    );
+  }
+  return paper;
+};
+
+const uploadRateLimit = buildRateLimitMiddleware({
+  keyPrefix: 'resource-upload',
+  windowMs: 60 * 1000,
+  limit: 6,
+  message: '上传过于频繁，请稍后再试',
+});
+const importRateLimit = buildRateLimitMiddleware({
+  keyPrefix: 'question-import',
+  windowMs: 10 * 60 * 1000,
+  limit: 8,
+  message: '导入过于频繁，请稍后再试',
+});
+const examStartRateLimit = buildRateLimitMiddleware({
+  keyPrefix: 'exam-start',
+  windowMs: 5 * 60 * 1000,
+  limit: 12,
+  message: '开始考试请求过于频繁，请稍后再试',
+});
+const resultAdviceRateLimit = buildRateLimitMiddleware({
+  keyPrefix: 'result-advice',
+  windowMs: 5 * 60 * 1000,
+  limit: 10,
+  message: 'AI 建议生成过于频繁，请稍后再试',
+});
+const certificateGenerateRateLimit = buildRateLimitMiddleware({
+  keyPrefix: 'certificate-generate',
+  windowMs: 10 * 60 * 1000,
+  limit: 10,
+  message: '证书生成过于频繁，请稍后再试',
+});
+const aiModelTestRateLimit = buildRateLimitMiddleware({
+  keyPrefix: 'ai-model-test',
+  windowMs: 60 * 1000,
+  limit: 10,
+  message: 'AI 模型测试过于频繁，请稍后再试',
+});
+const questionGenerationRunRateLimit = buildRateLimitMiddleware({
+  keyPrefix: 'question-generation-run',
+  windowMs: 5 * 60 * 1000,
+  limit: 6,
+  message: '自动出题执行过于频繁，请稍后再试',
+});
 
 const authRequired = asyncHandler(async (req, _res, next) => {
   if (req.path === '/health') return next();
@@ -821,19 +1160,19 @@ const listQuestionCategoryRows = async () => {
       c.is_system,
       c.created_at,
       c.updated_at,
-      COUNT(q.id) AS question_count
+      COUNT(q.id) AS question_count,
+      SUM(CASE WHEN q.status = 'published' THEN 1 ELSE 0 END) AS published_question_count,
+      SUM(CASE WHEN q.status = 'published' AND q.question_type = 'single_choice' THEN 1 ELSE 0 END) AS published_single_choice_count,
+      SUM(CASE WHEN q.status = 'published' AND q.question_type = 'multiple_choice' THEN 1 ELSE 0 END) AS published_multiple_choice_count,
+      SUM(CASE WHEN q.status = 'published' AND q.question_type = 'judgement' THEN 1 ELSE 0 END) AS published_judgement_count,
+      SUM(CASE WHEN q.status = 'published' AND q.question_type = 'fill_blank' THEN 1 ELSE 0 END) AS published_fill_blank_count
      FROM te_question_categories c
      LEFT JOIN te_question_bank q ON q.question_category = c.name
      GROUP BY c.id, c.name, c.is_system, c.created_at, c.updated_at
      ORDER BY c.is_system DESC, c.name ASC, c.id ASC`
   );
 
-  return rows.map((item) => ({
-    ...item,
-    id: Number(item.id || 0),
-    is_system: Number(item.is_system || 0),
-    question_count: Number(item.question_count || 0),
-  }));
+  return rows.map((item) => normalizeQuestionCategoryRow(item));
 };
 
 const listQuestionCategoryNames = async () => {
@@ -921,6 +1260,7 @@ const buildDocPreviewFileToken = ({ resourceId, userId, username }) =>
       resource_id: Number(resourceId || 0),
       user_id: Number(userId || 0) || null,
       username: trimText(username) || null,
+      allowed_host: DOC_EDITOR_FILE_ALLOWED_HOST,
     },
     DOC_EDITOR_JWT_SECRET,
     { expiresIn: `${DOC_PREVIEW_FILE_TOKEN_TTL_SECONDS}s` }
@@ -2032,7 +2372,7 @@ const resolveAiRuntime = async (taskType = 'FAQ_TO_QUESTIONS') => {
   const model = await get('SELECT * FROM te_ai_models WHERE is_enabled = 1 AND is_default = 1 LIMIT 1');
   if (!model) throw appError('未找到可用AI模型', 400);
 
-  const baseUrl = trimText(model.base_url || process.env.AI_OPENAI_BASE_URL);
+  const baseUrl = normalizeAiBaseUrlOrThrow(model.base_url || process.env.AI_OPENAI_BASE_URL);
   const apiKey = trimText(model.api_key || process.env.AI_OPENAI_API_KEY);
   const modelName = trimText(model.model_name || process.env.AI_MODEL_NAME);
   const timeoutMs = Math.max(3000, Number(model.timeout_ms || 20000));
@@ -2107,7 +2447,7 @@ const callOpenAiCompatible = async ({ runtime, inputText }) => {
 };
 
 const testAiModelConnectivity = async ({ model, req }) => {
-  const baseUrl = trimText(model?.base_url || process.env.AI_OPENAI_BASE_URL);
+  const baseUrlRaw = trimText(model?.base_url || process.env.AI_OPENAI_BASE_URL);
   const apiKey = trimText(model?.api_key || process.env.AI_OPENAI_API_KEY);
   const modelName = trimText(model?.model_name || process.env.AI_MODEL_NAME);
   const timeoutMs = Math.max(3000, Math.min(120000, Number(model?.timeout_ms || 20000)));
@@ -2118,7 +2458,7 @@ const testAiModelConnectivity = async ({ model, req }) => {
   const operatorId = Number(req?.user?.id || 0) || null;
   const operatorName = trimText(req?.user?.username) || null;
 
-  if (!baseUrl || !apiKey || !modelName) {
+  if (!baseUrlRaw || !apiKey || !modelName) {
     const message = '模型配置不完整（base_url/api_key/model_name）';
     await run(
       `INSERT INTO te_ai_task_logs
@@ -2135,6 +2475,8 @@ const testAiModelConnectivity = async ({ model, req }) => {
       checked_at: toMysqlDatetime(new Date()),
     };
   }
+
+  const baseUrl = normalizeAiBaseUrlOrThrow(baseUrlRaw);
 
   const endpoint = `${baseUrl.replace(/\/+$/, '')}/chat/completions`;
   const body = {
@@ -2320,16 +2662,7 @@ const normalizeQuestionInput = (payload = {}, { defaultCategory = '未分类' } 
     if (!answerText && answerAliases.length) answerText = answerAliases[0];
     answerValues = parseTextList([answerText, ...answerAliases], { upper: false });
   } else if (questionType === 'judgement') {
-    const answer = trimText(Array.isArray(payload.answer) ? payload.answer[0] : payload.answer).toLowerCase();
-    const normalized = ['true', 't', '对', 'yes', 'y', '1'].includes(answer)
-      ? 'true'
-      : ['false', 'f', '错', 'no', 'n', '0'].includes(answer)
-        ? 'false'
-        : answer === 'a'
-          ? 'true'
-          : answer === 'b'
-            ? 'false'
-            : '';
+    const normalized = normalizeJudgementAnswer(payload.answer);
     if (!normalized) throw appError('判断题答案必须是 true/false', 400);
     options = [
       { key: 'A', text: '正确', is_correct: normalized === 'true' ? 1 : 0 },
@@ -2395,7 +2728,16 @@ const normalizeQuestionInput = (payload = {}, { defaultCategory = '未分类' } 
   };
 };
 
-const insertQuestion = async ({ payload, user, sourceType = 'manual', generationJobId = null, courseId = null, status = 'draft' }) => {
+const insertQuestion = async ({
+  payload,
+  user,
+  sourceType = 'manual',
+  generationJobId = null,
+  courseId = null,
+  status = 'draft',
+  reviewer = null,
+  reviewComment = '',
+}) => {
   const normalized = normalizeQuestionInput(payload, {
     defaultCategory: getDefaultQuestionCategoryBySource(sourceType),
   });
@@ -2452,6 +2794,33 @@ const insertQuestion = async ({ payload, user, sourceType = 'manual', generation
         toJoinedText(normalized.answer.answer_aliases || []),
       ]
     );
+
+    if (reviewer && trimText(status) === 'published') {
+      await tx.run(
+        `UPDATE te_question_bank
+         SET reviewed_by_id = ?, reviewed_by_name = ?, review_comment = ?, reviewed_at = NOW(),
+             updated_by_id = ?, updated_by_name = ?, updated_at = NOW()
+         WHERE id = ?`,
+        [
+          Number(reviewer.id) || null,
+          trimText(reviewer.username) || null,
+          trimText(reviewComment) || null,
+          Number(user?.id) || null,
+          trimText(user?.username) || null,
+          questionId,
+        ]
+      );
+      await tx.run(
+        `INSERT INTO te_question_review_logs (question_id, action, comment, operator_id, operator_name)
+         VALUES (?, 'approve', ?, ?, ?)`,
+        [
+          questionId,
+          trimText(reviewComment) || '导入直接发布',
+          Number(reviewer.id) || null,
+          trimText(reviewer.username) || null,
+        ]
+      );
+    }
 
     return questionId;
   });
@@ -2776,6 +3145,81 @@ const ensureResultAccess = (req, resultRow, { allowAuditRead = true } = {}) => {
   const isAudit = allowAuditRead && (isAdmin(req) || isAuditor(req));
   if (!isOwner && !isAudit) throw appError('无权限访问该成绩记录', 403);
   return { isOwner, isAudit };
+};
+
+const resolveResultPaperName = (row = {}) => {
+  const paperId = Number(row?.paper_id || 0);
+  const name = trimText(row?.paper_name);
+  if (name) return name;
+  if (paperId === 0) return '错题复训';
+  return paperId > 0 ? `试卷#${paperId}` : '未命名试卷';
+};
+
+const buildWrongCountFromResult = (row = {}) => {
+  const detail = parseMaybeJson(row?.detail_json, {});
+  const details = Array.isArray(detail?.details) ? detail.details : [];
+  return details.filter((item) => {
+    if (!item || typeof item !== 'object') return false;
+    if (typeof item.is_correct === 'boolean') return !item.is_correct;
+    return Number(item.is_correct || 0) !== 1;
+  }).length;
+};
+
+const normalizeAdminResultRow = (row = {}) => {
+  const normalized = normalizeAdminResultListRow({
+    ...row,
+    wrong_count: buildWrongCountFromResult(row),
+  });
+  return {
+    ...normalized,
+    paper_name: resolveResultPaperName(row),
+    username: trimText(row.username),
+    user_department: trimText(row.user_department),
+    user_position: trimText(row.user_position),
+    created_at: row.created_at,
+  };
+};
+
+const buildAdminResultUserOptions = async ({ whereSql, params }) => {
+  const rows = await query(
+    `SELECT
+      r.user_id,
+      MAX(r.username) AS username,
+      MAX(NULLIF(r.user_department, '')) AS user_department,
+      MAX(r.created_at) AS latest_created_at
+     FROM te_exam_results r
+     LEFT JOIN te_papers p ON p.id = r.paper_id
+     ${whereSql}
+     GROUP BY r.user_id
+     ORDER BY latest_created_at DESC
+     LIMIT 100`,
+    params
+  );
+  return rows.map((item) => ({
+    user_id: Number(item.user_id || 0),
+    username: trimText(item.username),
+    user_department: trimText(item.user_department),
+  })).filter((item) => item.user_id > 0);
+};
+
+const buildAdminResultPaperOptions = async ({ whereSql, params }) => {
+  const rows = await query(
+    `SELECT
+      r.paper_id,
+      MAX(p.name) AS paper_name,
+      MAX(r.created_at) AS latest_created_at
+     FROM te_exam_results r
+     LEFT JOIN te_papers p ON p.id = r.paper_id
+     ${whereSql}
+     GROUP BY r.paper_id
+     ORDER BY latest_created_at DESC
+     LIMIT 100`,
+    params
+  );
+  return rows.map((item) => ({
+    paper_id: Number(item.paper_id || 0),
+    paper_name: resolveResultPaperName(item),
+  })).filter((item) => Number(item.paper_id || 0) >= 0);
 };
 
 const finalizeExamSession = async ({ sessionId, forceTimeout = false, req = null }) => {
@@ -3270,8 +3714,14 @@ const buildCourseLearningPath = async ({ courseId, userId }) => {
   };
 };
 
-const buildMyLearningProgress = async ({ userId }) => {
+const buildMyLearningProgress = async ({ userId, role }) => {
   const uid = Number(userId || 0);
+  const where = [];
+  const params = [uid];
+  if (!canReadCourse({ role, courseStatus: 'draft' })) {
+    where.push("c.status = 'published'");
+  }
+  const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
   const rows = await query(
     `SELECT
       c.id AS course_id,
@@ -3283,9 +3733,10 @@ const buildMyLearningProgress = async ({ userId }) => {
      FROM te_courses c
      LEFT JOIN te_course_resources r ON r.course_id = c.id
      LEFT JOIN te_resource_progress rp ON rp.resource_id = r.id AND rp.user_id = ?
+     ${whereSql}
      GROUP BY c.id, c.title
      ORDER BY last_learning_at DESC, c.id DESC`,
-    [uid]
+    params
   );
 
   return rows.map((item) => {
@@ -3690,6 +4141,21 @@ app.get('/api/train-exam/resources/:id/doc-preview-file', asyncHandler(async (re
   const id = Number(req.params.id);
   const tokenPayload = verifyDocPreviewFileToken(req.query.token);
   if (Number(tokenPayload?.resource_id || 0) !== id) throw appError('预览令牌与资源不匹配', 401);
+  if (!isDocPreviewHostAllowed({
+    requestHost: trimText(req.headers.host).toLowerCase(),
+    tokenHost: tokenPayload?.allowed_host,
+    forwardedHost: req.headers['x-forwarded-host'],
+    forwardedFor: req.headers['x-forwarded-for'],
+    realIp: req.headers['x-real-ip'],
+    forwarded: req.headers.forwarded,
+    forwardedProto: req.headers['x-forwarded-proto'],
+    forwardedPort: req.headers['x-forwarded-port'],
+  })) {
+    throw appError('预览令牌绑定的访问主机不匹配', 401);
+  }
+  if (!isPrivateRequestIp(req)) {
+    throw appError('文档预览文件仅允许内网预览服务访问', 403);
+  }
 
   const resource = await get('SELECT * FROM te_course_resources WHERE id = ? LIMIT 1', [id]);
   if (!resource) throw appError('资源不存在', 404);
@@ -3715,6 +4181,12 @@ app.get('/api/train-exam/resources/:id/doc-preview-file', asyncHandler(async (re
 
 app.use('/api', authRequired);
 app.use('/api', requireBasicViewerScope);
+
+app.get('/api/train-exam/csrf', requireReader, asyncHandler(async (_req, res) => {
+  res.json({
+    token: issueCsrfToken(res),
+  });
+}));
 
 const buildTrainExamMePayload = async (req) => {
   const org = await resolveUserOrgProfile({ userId: req.user.id, username: req.user.username });
@@ -3839,6 +4311,11 @@ app.get('/api/train-exam/courses', requireReader, asyncHandler(async (req, res) 
 
   const where = [];
   const params = [];
+  const accessFilter = buildCourseWhereForReader(req);
+  if (accessFilter.whereSql) {
+    where.push(accessFilter.whereSql.replace(/^WHERE\s+/i, ''));
+    params.push(...accessFilter.params);
+  }
   if (keyword) {
     where.push('(title LIKE ? OR description LIKE ?)');
     params.push(`%${keyword}%`, `%${keyword}%`);
@@ -3938,7 +4415,7 @@ app.post('/api/train-exam/courses/bulk-delete', requireContentWriter, asyncHandl
 app.get('/api/train-exam/courses/:id', requireReader, asyncHandler(async (req, res) => {
   const id = Number(req.params.id);
   const row = await get('SELECT * FROM te_courses WHERE id = ? LIMIT 1', [id]);
-  if (!row) throw appError('课程不存在', 404);
+  ensureCourseReadAccess(req, row);
   res.json(row);
 }));
 
@@ -4007,8 +4484,8 @@ app.delete('/api/train-exam/courses/:id', requireContentWriter, asyncHandler(asy
 
 app.get('/api/train-exam/courses/:id/resources', requireReader, asyncHandler(async (req, res) => {
   const courseId = Number(req.params.id);
-  const course = await get('SELECT id FROM te_courses WHERE id = ? LIMIT 1', [courseId]);
-  if (!course) throw appError('课程不存在', 404);
+  const course = await get('SELECT * FROM te_courses WHERE id = ? LIMIT 1', [courseId]);
+  ensureCourseReadAccess(req, course);
 
   const rows = await query(
     `SELECT * FROM te_course_resources WHERE course_id = ? ORDER BY sort_order ASC, id ASC`,
@@ -4264,7 +4741,7 @@ app.put('/api/train-exam/resources/:id/playback-policy', requireContentWriter, a
   res.json(after);
 }));
 
-app.post('/api/train-exam/resources/:id/upload', requireContentWriter, uploadResource.single('file'), asyncHandler(async (req, res) => {
+app.post('/api/train-exam/resources/:id/upload', requireContentWriter, uploadRateLimit, uploadResource.single('file'), asyncHandler(async (req, res) => {
   const id = Number(req.params.id);
   const resource = await get('SELECT * FROM te_course_resources WHERE id = ? LIMIT 1', [id]);
   if (!resource) throw appError('资源不存在', 404);
@@ -4447,8 +4924,7 @@ app.post('/api/train-exam/resources/:id/upload', requireContentWriter, uploadRes
 app.get('/api/train-exam/resources/:id/doc-preview-config', requireReader, asyncHandler(async (req, res) => {
   const id = Number(req.params.id);
   const docPreviewMinSeconds = await getDocPreviewMinSeconds();
-  const resource = await get('SELECT * FROM te_course_resources WHERE id = ? LIMIT 1', [id]);
-  if (!resource) throw appError('资源不存在', 404);
+  const resource = ensureResourceReadAccess(req, await getResourceWithCourseById(id));
   if (normalizeResourceType(resource.resource_type) !== 'doc') throw appError('仅文档资源支持在线预览', 400);
   if (normalizeSourceMode(resource.source_mode) !== 'upload') {
     const url = trimText(resource.source_url);
@@ -4475,8 +4951,7 @@ app.get('/api/train-exam/resources/:id/doc-preview-config', requireReader, async
 
 app.get('/api/train-exam/resources/:id/stream', requireReader, asyncHandler(async (req, res) => {
   const id = Number(req.params.id);
-  const resource = await get('SELECT * FROM te_course_resources WHERE id = ? LIMIT 1', [id]);
-  if (!resource) throw appError('资源不存在', 404);
+  const resource = ensureResourceReadAccess(req, await getResourceWithCourseById(id));
 
   if (normalizeSourceMode(resource.source_mode) === 'external') {
     return res.json({ redirect_url: trimText(resource.source_url), mode: 'external' });
@@ -4561,8 +5036,7 @@ app.get('/api/train-exam/resources/:id/stream', requireReader, asyncHandler(asyn
 
 app.get('/api/train-exam/resources/:id/playability', requireReader, asyncHandler(async (req, res) => {
   const id = Number(req.params.id);
-  const resource = await get('SELECT * FROM te_course_resources WHERE id = ? LIMIT 1', [id]);
-  if (!resource) throw appError('资源不存在', 404);
+  const resource = ensureResourceReadAccess(req, await getResourceWithCourseById(id));
 
   const transcodeStatus = normalizeTranscodeStatus(resource.transcode_status, 'none');
   const transcodeProgress = Math.max(0, Math.min(100, Number(resource.transcode_progress || 0)));
@@ -4642,8 +5116,7 @@ app.get('/api/train-exam/resources/:id/playability', requireReader, asyncHandler
 
 app.get('/api/train-exam/resources/:id/transcode-status', requireReader, asyncHandler(async (req, res) => {
   const id = Number(req.params.id);
-  const resource = await get('SELECT * FROM te_course_resources WHERE id = ? LIMIT 1', [id]);
-  if (!resource) throw appError('资源不存在', 404);
+  const resource = ensureResourceReadAccess(req, await getResourceWithCourseById(id));
 
   const status = normalizeTranscodeStatus(resource.transcode_status, 'none');
   const progressPercent = Math.max(0, Math.min(100, Number(resource.transcode_progress || 0)));
@@ -4688,8 +5161,7 @@ app.get('/api/train-exam/resources/:id/transcode-status', requireReader, asyncHa
 
 app.get('/api/train-exam/resources/:id/download', requireReader, asyncHandler(async (req, res) => {
   const id = Number(req.params.id);
-  const resource = await get('SELECT * FROM te_course_resources WHERE id = ? LIMIT 1', [id]);
-  if (!resource) throw appError('资源不存在', 404);
+  const resource = ensureResourceReadAccess(req, await getResourceWithCourseById(id));
 
   if (normalizeSourceMode(resource.source_mode) === 'external') {
     return res.redirect(trimText(resource.source_url));
@@ -4704,6 +5176,8 @@ app.get('/api/train-exam/resources/:id/download', requireReader, asyncHandler(as
 }));
 
 app.get('/api/train-exam/courses/:id/learning-path', requireReader, asyncHandler(async (req, res) => {
+  const course = await getCourseSummaryById(req.params.id);
+  ensureCourseReadAccess(req, course);
   const payload = await buildCourseLearningPath({
     courseId: Number(req.params.id),
     userId: Number(req.user.id || 0),
@@ -4713,8 +5187,7 @@ app.get('/api/train-exam/courses/:id/learning-path', requireReader, asyncHandler
 
 app.post('/api/train-exam/resources/:id/progress', requireReader, asyncHandler(async (req, res) => {
   const resourceId = Number(req.params.id);
-  const resource = await get('SELECT * FROM te_course_resources WHERE id = ? LIMIT 1', [resourceId]);
-  if (!resource) throw appError('资源不存在', 404);
+  const resource = ensureResourceReadAccess(req, await getResourceWithCourseById(resourceId));
 
   const userId = Number(req.user.id || 0);
   const username = trimText(req.user.username);
@@ -4787,7 +5260,10 @@ app.post('/api/train-exam/resources/:id/progress', requireReader, asyncHandler(a
 }));
 
 app.get('/api/train-exam/my/learning-progress', requireReader, asyncHandler(async (req, res) => {
-  const items = await buildMyLearningProgress({ userId: Number(req.user.id || 0) });
+  const items = await buildMyLearningProgress({
+    userId: Number(req.user.id || 0),
+    role: getUserRole(req),
+  });
   const totalCourses = items.length;
   const completedCourses = items.filter((item) => Number(item.total_resources || 0) > 0 && Number(item.completed_resources || 0) >= Number(item.total_resources || 0)).length;
   const avgCompletion = totalCourses > 0
@@ -4881,7 +5357,7 @@ app.get('/api/train-exam/questions/generation/jobs/:id', requireReader, asyncHan
   });
 }));
 
-app.post('/api/train-exam/questions/generation/jobs/:id/run', requireContentWriter, asyncHandler(async (req, res) => {
+app.post('/api/train-exam/questions/generation/jobs/:id/run', requireContentWriter, questionGenerationRunRateLimit, asyncHandler(async (req, res) => {
   const id = Number(req.params.id);
   const job = await get('SELECT * FROM te_question_generation_jobs WHERE id = ? LIMIT 1', [id]);
   if (!job) throw appError('出题任务不存在', 404);
@@ -5133,56 +5609,82 @@ app.post('/api/train-exam/questions/generation/jobs/:id/publish', requireQuestio
 }));
 
 app.get('/api/train-exam/questions/import/template', requireReader, asyncHandler(async (_req, res) => {
-  const rows = [
-    [
-      '题干',
-      '分类',
-      '题型',
-      '难度',
-      '分值',
-      '选项A',
-      '选项B',
-      '选项C',
-      '选项D',
-      '答案值',
-      '标准答案文本',
-      '同义答案',
-      '解析',
-      '标签',
-    ],
-    [
-      '以下哪项是信息安全制度的核心目标？',
-      '网络安全',
-      '单选题',
-      '中等',
-      '2',
-      '保障机密性、完整性、可用性',
-      '只关注成本',
-      '只关注性能',
-      '',
-      'A',
-      '',
-      '',
-      '核心目标是CIA三要素。',
-      '安全,制度',
-    ],
-  ];
-
-  const wb = XLSX.utils.book_new();
-  const ws = XLSX.utils.aoa_to_sheet(rows);
-  XLSX.utils.book_append_sheet(wb, ws, 'questions');
-  const buffer = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+  const rows = buildQuestionImportTemplateRows();
+  const workbook = new ExcelJS.Workbook();
+  const worksheet = workbook.addWorksheet('questions');
+  rows.forEach((row) => {
+    worksheet.addRow(Array.isArray(row) ? row : []);
+  });
+  const buffer = Buffer.from(await workbook.xlsx.writeBuffer());
 
   res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
   res.setHeader('Content-Disposition', 'attachment; filename="train-exam-question-template.xlsx"');
   res.send(buffer);
 }));
 
-app.post('/api/train-exam/questions/import/jobs', requireContentWriter, uploadLimited.single('file'), asyncHandler(async (req, res) => {
+const normalizeExcelCellValue = (value) => {
+  if (value === undefined || value === null) return '';
+  if (typeof value === 'object') {
+    if (Array.isArray(value.richText)) {
+      return trimText(value.richText.map((item) => trimText(item?.text)).join(''));
+    }
+    if (value.text !== undefined) return trimText(value.text);
+    if (value.result !== undefined) return trimText(value.result);
+    if (value.hyperlink !== undefined) return trimText(value.text || value.hyperlink);
+  }
+  return trimText(value);
+};
+
+const normalizeExcelHeaderKey = (value) =>
+  trimText(value)
+    .toLowerCase()
+    .replace(/\s+/g, '_')
+    .replace(/[^\p{L}\p{N}_]+/gu, '_')
+    .replace(/^_+|_+$/g, '');
+
+const parseQuestionImportRowsFromWorkbook = async (buffer) => {
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.load(buffer);
+  const worksheet = workbook.worksheets[0];
+  if (!worksheet) throw new Error('工作表为空');
+
+  const rows = [];
+  let headers = [];
+  worksheet.eachRow({ includeEmpty: false }, (row, rowNumber) => {
+    const values = row.values.slice(1).map((item) => normalizeExcelCellValue(item));
+    if (rowNumber === 1) {
+      headers = values;
+      return;
+    }
+    if (!values.some((item) => trimText(item))) return;
+    const payload = {};
+    headers.forEach((header, index) => {
+      const key = trimText(header);
+      if (!key) return;
+      const value = values[index] === undefined ? '' : values[index];
+      payload[key] = value;
+      const aliasKey = normalizeExcelHeaderKey(key);
+      if (aliasKey && payload[aliasKey] === undefined) {
+        payload[aliasKey] = value;
+      }
+    });
+    rows.push(payload);
+  });
+
+  return rows;
+};
+
+app.post('/api/train-exam/questions/import/jobs', requireContentWriter, importRateLimit, uploadLimited.single('file'), asyncHandler(async (req, res) => {
   if (!req.file) throw appError('缺少导入文件', 400);
 
   const ext = path.extname(trimText(req.file.originalname)).toLowerCase();
-  if (!['.xlsx', '.xls'].includes(ext)) throw appError('仅支持 Excel 文件导入', 400);
+  if (ext !== '.xlsx') throw appError('仅支持 .xlsx 文件导入', 400);
+  const canReviewImportedQuestions = canReviewQuestions(req);
+  const publishAfterImport = normalizeBoolean(req.body?.publish_after_import, canReviewImportedQuestions);
+  const importedQuestionStatus = resolveImportQuestionStatus({
+    publishAfterImport,
+    canReview: canReviewImportedQuestions,
+  });
 
   const storagePath = await writeUploadFile(IMPORT_ROOT, req.file.originalname, req.file.buffer);
 
@@ -5196,11 +5698,7 @@ app.post('/api/train-exam/questions/import/jobs', requireContentWriter, uploadLi
 
   let rows = [];
   try {
-    const workbook = XLSX.read(req.file.buffer, { type: 'buffer' });
-    const firstSheetName = workbook.SheetNames[0];
-    if (!firstSheetName) throw new Error('工作表为空');
-    const sheet = workbook.Sheets[firstSheetName];
-    rows = XLSX.utils.sheet_to_json(sheet, { defval: '' });
+    rows = await parseQuestionImportRowsFromWorkbook(req.file.buffer);
   } catch (err) {
     await run(
       `UPDATE te_import_jobs
@@ -5216,6 +5714,7 @@ app.post('/api/train-exam/questions/import/jobs', requireContentWriter, uploadLi
   }
 
   let success = 0;
+  let published = 0;
   const errors = [];
 
   for (let i = 0; i < rows.length; i += 1) {
@@ -5254,8 +5753,13 @@ app.post('/api/train-exam/questions/import/jobs', requireContentWriter, uploadLi
         payload,
         user: req.user,
         sourceType: 'import',
-        status: 'draft',
+        status: importedQuestionStatus,
+        reviewer: importedQuestionStatus === 'published' ? req.user : null,
+        reviewComment: 'Excel导入直接发布',
       });
+      if (importedQuestionStatus === 'published') {
+        published += 1;
+      }
       success += 1;
     } catch (err) {
       errors.push({ row: i + 2, error: trimText(err.message || '导入失败') });
@@ -5263,6 +5767,7 @@ app.post('/api/train-exam/questions/import/jobs', requireContentWriter, uploadLi
   }
 
   const failed = errors.length;
+  const draft = Math.max(0, success - published);
   const status = failed > 0 ? (success > 0 ? 'partial_failed' : 'failed') : 'completed';
 
   await run(
@@ -5284,12 +5789,19 @@ app.post('/api/train-exam/questions/import/jobs', requireContentWriter, uploadLi
       total: rows.length,
       success,
       failed,
+      published,
+      draft,
+      publish_after_import: importedQuestionStatus === 'published',
     },
   });
 
   res.status(201).json({
     ...result,
     errors,
+    published_rows: published,
+    draft_rows: draft,
+    publish_after_import_requested: publishAfterImport,
+    publish_after_import_effective: importedQuestionStatus === 'published',
   });
 }));
 
@@ -5336,7 +5848,12 @@ app.post('/api/train-exam/question-categories', requireContentWriter, asyncHandl
       c.is_system,
       c.created_at,
       c.updated_at,
-      COUNT(q.id) AS question_count
+      COUNT(q.id) AS question_count,
+      SUM(CASE WHEN q.status = 'published' THEN 1 ELSE 0 END) AS published_question_count,
+      SUM(CASE WHEN q.status = 'published' AND q.question_type = 'single_choice' THEN 1 ELSE 0 END) AS published_single_choice_count,
+      SUM(CASE WHEN q.status = 'published' AND q.question_type = 'multiple_choice' THEN 1 ELSE 0 END) AS published_multiple_choice_count,
+      SUM(CASE WHEN q.status = 'published' AND q.question_type = 'judgement' THEN 1 ELSE 0 END) AS published_judgement_count,
+      SUM(CASE WHEN q.status = 'published' AND q.question_type = 'fill_blank' THEN 1 ELSE 0 END) AS published_fill_blank_count
      FROM te_question_categories c
      LEFT JOIN te_question_bank q ON q.question_category = c.name
      WHERE c.id = ?
@@ -5353,12 +5870,7 @@ app.post('/api/train-exam/question-categories', requireContentWriter, asyncHandl
     afterData: row,
   });
 
-  res.status(201).json({
-    ...row,
-    id: Number(row?.id || 0),
-    is_system: Number(row?.is_system || 0),
-    question_count: Number(row?.question_count || 0),
-  });
+  res.status(201).json(normalizeQuestionCategoryRow(row));
 }));
 
 app.put('/api/train-exam/question-categories/:id', requireContentWriter, asyncHandler(async (req, res) => {
@@ -5372,7 +5884,7 @@ app.put('/api/train-exam/question-categories/:id', requireContentWriter, asyncHa
   if (nextName === trimText(before.name)) {
     const rows = await listQuestionCategoryRows();
     const same = rows.find((item) => Number(item.id || 0) === id) || null;
-    return res.json(same || { id, name: nextName, is_system: 0, question_count: 0 });
+    return res.json(same || normalizeQuestionCategoryRow({ id, name: nextName }));
   }
 
   const conflict = await get('SELECT id FROM te_question_categories WHERE name = ? AND id <> ? LIMIT 1', [nextName, id]);
@@ -5406,7 +5918,7 @@ app.put('/api/train-exam/question-categories/:id', requireContentWriter, asyncHa
     afterData: after,
   });
 
-  res.json(after || { id, name: nextName, is_system: 0, question_count: 0 });
+  res.json(after || normalizeQuestionCategoryRow({ id, name: nextName }));
 }));
 
 app.delete('/api/train-exam/question-categories/:id', requireContentWriter, asyncHandler(async (req, res) => {
@@ -5456,37 +5968,7 @@ app.delete('/api/train-exam/question-categories/:id', requireContentWriter, asyn
 app.get('/api/train-exam/questions', requireReader, asyncHandler(async (req, res) => {
   const page = toPositiveInt(req.query.page, 1);
   const limit = toBoundedLimit(req.query.limit, 10);
-  const keyword = trimText(req.query.keyword);
-  const status = trimText(req.query.status).toLowerCase();
-  const questionType = trimText(req.query.question_type).toLowerCase();
-  const sourceType = trimText(req.query.source_type).toLowerCase();
-  const questionCategory = trimText(req.query.question_category || req.query.category);
-
-  const where = [];
-  const params = [];
-
-  if (keyword) {
-    where.push('stem LIKE ?');
-    params.push(`%${keyword}%`);
-  }
-  if (status) {
-    where.push('status = ?');
-    params.push(status);
-  }
-  if (questionType) {
-    where.push('question_type = ?');
-    params.push(questionType);
-  }
-  if (sourceType) {
-    where.push('source_type = ?');
-    params.push(sourceType);
-  }
-  if (questionCategory) {
-    where.push('question_category = ?');
-    params.push(questionCategory);
-  }
-
-  const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
+  const { whereSql, params } = buildQuestionFilterWhere(req.query || {});
   const totalRow = await get(`SELECT COUNT(1) AS total FROM te_question_bank ${whereSql}`, params);
   const total = Number(totalRow?.total || 0);
   const offset = (page - 1) * limit;
@@ -5512,6 +5994,107 @@ app.get('/api/train-exam/questions', requireReader, asyncHandler(async (req, res
     limit,
     total_pages: totalPages,
     categories,
+  });
+}));
+
+app.post('/api/train-exam/questions/bulk-publish', requireQuestionReviewer, asyncHandler(async (req, res) => {
+  const requestedIds = parseIdArray(req.body?.question_ids || req.body?.ids);
+  const filters = req.body?.filters && typeof req.body.filters === 'object' ? req.body.filters : null;
+  if (!requestedIds.length && !filters) throw appError('请先选择要发布的题目或提供筛选条件', 400);
+
+  let targetRows = [];
+  const failed = [];
+
+  if (requestedIds.length) {
+    targetRows = await query(
+      `SELECT id, status
+       FROM te_question_bank
+       WHERE id IN (${requestedIds.map(() => '?').join(',')})`,
+      requestedIds
+    );
+    const foundIds = new Set(targetRows.map((item) => Number(item.id || 0)).filter((id) => id > 0));
+    requestedIds
+      .filter((id) => !foundIds.has(Number(id || 0)))
+      .forEach((id) => failed.push({
+        question_id: Number(id || 0),
+        error: '题目不存在',
+      }));
+  } else {
+    const { whereSql, params } = buildQuestionFilterWhere(filters || {});
+    targetRows = await query(
+      `SELECT id, status
+       FROM te_question_bank
+       ${whereSql}
+       ORDER BY id DESC`,
+      params
+    );
+  }
+
+  const publishedIds = [];
+  const skippedIds = [];
+  targetRows.forEach((item) => {
+    const id = Number(item.id || 0);
+    const status = trimText(item.status).toLowerCase();
+    if (!id) return;
+    if (status === 'draft') {
+      publishedIds.push(id);
+      return;
+    }
+    skippedIds.push(id);
+  });
+
+  if (publishedIds.length) {
+    await transaction(async (tx) => {
+      await tx.run(
+        `UPDATE te_question_bank
+         SET status = 'published', reviewed_by_id = ?, reviewed_by_name = ?, reviewed_at = NOW(), review_comment = ?,
+             updated_by_id = ?, updated_by_name = ?, updated_at = NOW()
+         WHERE id IN (${publishedIds.map(() => '?').join(',')})`,
+        [
+          Number(req.user.id) || null,
+          req.user.username,
+          '批量发布',
+          Number(req.user.id) || null,
+          req.user.username,
+          ...publishedIds,
+        ]
+      );
+
+      for (const id of publishedIds) {
+        await tx.run(
+          `INSERT INTO te_question_review_logs (question_id, action, comment, operator_id, operator_name)
+           VALUES (?, 'approve', ?, ?, ?)`,
+          [id, '批量发布', Number(req.user.id) || null, req.user.username]
+        );
+      }
+    });
+  }
+
+  await logOperation({
+    req,
+    action: 'QUESTION_BULK_PUBLISH',
+    entity: 'question',
+    entityId: publishedIds[0] || requestedIds[0] || 0,
+    message: requestedIds.length
+      ? `批量发布题目 ${publishedIds.length} 道`
+      : `按筛选条件批量发布题目 ${publishedIds.length} 道`,
+    afterData: {
+      question_ids: requestedIds.length ? requestedIds : null,
+      filters: requestedIds.length ? null : filters,
+      published_count: publishedIds.length,
+      skipped_count: skippedIds.length,
+      failed_count: failed.length,
+    },
+  });
+
+  res.json({
+    success: true,
+    published_count: publishedIds.length,
+    skipped_count: skippedIds.length,
+    failed_count: failed.length,
+    published_ids: publishedIds,
+    skipped_ids: skippedIds,
+    failed,
   });
 }));
 
@@ -5665,12 +6248,13 @@ const replacePaperRules = async ({ tx, paperId, rules = [] }) => {
     const rule = rules[i] || {};
     await tx.run(
       `INSERT INTO te_paper_question_rules
-        (paper_id, question_type, difficulty, tags_json, question_count, points_per_question, sort_order)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        (paper_id, question_type, difficulty, question_categories_json, tags_json, question_count, points_per_question, sort_order)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         paperId,
         trimText(rule.question_type) || null,
         trimText(rule.difficulty) || null,
+        JSON.stringify(normalizePaperRuleCategories(rule.question_categories)),
         JSON.stringify(normalizeTags(rule.tags)),
         Math.max(1, Number(rule.question_count || 1)),
         Math.max(1, Number(rule.points_per_question || 1)),
@@ -5701,7 +6285,11 @@ const loadPaperDetail = async (paperId) => {
   const fixedQuestions = await query('SELECT * FROM te_paper_questions WHERE paper_id = ? ORDER BY sort_order ASC, id ASC', [paperId]);
   return {
     ...paper,
-    rules: rules.map((item) => ({ ...item, tags: parseMaybeJson(item.tags_json, []) })),
+    rules: rules.map((item) => ({
+      ...item,
+      tags: parseMaybeJson(item.tags_json, []),
+      question_categories: normalizePaperRuleCategories(parseMaybeJson(item.question_categories_json, [])),
+    })),
     fixed_questions: fixedQuestions.map((item) => ({
       id: item.id,
       question_id: Number(item.question_id),
@@ -5713,7 +6301,19 @@ const loadPaperDetail = async (paperId) => {
 };
 
 app.get('/api/train-exam/papers', requireReader, asyncHandler(async (req, res) => {
-  const rows = await query('SELECT * FROM te_papers ORDER BY id DESC');
+  const where = [];
+  if (!isElevatedTrainExamReader(req)) {
+    where.push("p.status = 'published'");
+    where.push("(p.course_id IS NULL OR c.status = 'published')");
+  }
+  const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
+  const rows = await query(
+    `SELECT p.*
+     FROM te_papers p
+     LEFT JOIN te_courses c ON c.id = p.course_id
+     ${whereSql}
+     ORDER BY p.id DESC`
+  );
   res.json(rows);
 }));
 
@@ -5783,8 +6383,8 @@ app.post('/api/train-exam/papers', requireContentWriter, asyncHandler(async (req
 
 app.get('/api/train-exam/papers/:id', requireReader, asyncHandler(async (req, res) => {
   const id = Number(req.params.id);
+  ensurePaperReadAccess(req, await getPaperAccessRowById(id));
   const paper = await loadPaperDetail(id);
-  if (!paper) throw appError('试卷不存在', 404);
   res.json(paper);
 }));
 
@@ -6025,6 +6625,9 @@ const buildRandomQuestionsByRules = async (rules) => {
     const questionCount = Math.max(1, Number(rule.question_count || 1));
     const pointsPerQuestion = Math.max(1, Number(rule.points_per_question || 1));
     const tags = Array.isArray(rule.tags) ? rule.tags : parseMaybeJson(rule.tags_json, []);
+    const questionCategories = normalizePaperRuleCategories(
+      Array.isArray(rule.question_categories) ? rule.question_categories : parseMaybeJson(rule.question_categories_json, [])
+    );
 
     if (questionType) {
       where.push('question_type = ?');
@@ -6033,6 +6636,10 @@ const buildRandomQuestionsByRules = async (rules) => {
     if (difficulty) {
       where.push('difficulty = ?');
       params.push(difficulty);
+    }
+    if (questionCategories.length) {
+      where.push(`question_category IN (${questionCategories.map(() => '?').join(',')})`);
+      params.push(...questionCategories);
     }
 
     const candidates = await query(
@@ -6201,8 +6808,9 @@ const createExamSessionWithSnapshots = async ({
   };
 };
 
-app.post('/api/train-exam/papers/:id/exam/start', requireReader, asyncHandler(async (req, res) => {
+app.post('/api/train-exam/papers/:id/exam/start', requireReader, examStartRateLimit, asyncHandler(async (req, res) => {
   const paperId = Number(req.params.id);
+  ensurePaperReadAccess(req, await getPaperAccessRowById(paperId));
   const paper = await loadPaperDetail(paperId);
   if (!paper) throw appError('试卷不存在', 404);
   if (trimText(paper.status) !== 'published') throw appError('试卷未发布，不能开始考试', 409);
@@ -6395,6 +7003,147 @@ app.get('/api/train-exam/my/results', requireReader, asyncHandler(async (req, re
     [Number(req.user.id || 0)]
   );
   res.json(rows);
+}));
+
+app.get('/api/train-exam/admin/results', requireResultCenterReader, asyncHandler(async (req, res) => {
+  const filters = normalizeAdminResultsFilters(req.query);
+  const { whereSql, params } = buildAdminResultsWhere(filters);
+  const offset = Math.max(0, (filters.page - 1) * filters.limit);
+
+  const [totalRow, summaryRow, rows, users, papers] = await Promise.all([
+    get(
+      `SELECT COUNT(1) AS total
+       FROM te_exam_results r
+       LEFT JOIN te_papers p ON p.id = r.paper_id
+       ${whereSql}`,
+      params
+    ),
+    get(
+      `SELECT
+        COUNT(1) AS total_results,
+        SUM(CASE WHEN r.passed = 1 THEN 1 ELSE 0 END) AS pass_count,
+        SUM(CASE WHEN r.passed = 0 THEN 1 ELSE 0 END) AS fail_count,
+        AVG(r.score) AS average_score,
+        AVG(
+          CASE
+            WHEN s.started_at IS NOT NULL
+              THEN GREATEST(TIMESTAMPDIFF(SECOND, s.started_at, COALESCE(s.submitted_at, s.ended_at, s.updated_at, r.created_at)), 0)
+            ELSE 0
+          END
+        ) AS average_duration_seconds,
+        SUM(CASE WHEN r.is_final = 1 THEN 1 ELSE 0 END) AS final_result_count
+       FROM te_exam_results r
+       LEFT JOIN te_exam_sessions s ON s.id = r.session_id
+       LEFT JOIN te_papers p ON p.id = r.paper_id
+       ${whereSql}`,
+      params
+    ),
+    query(
+      `SELECT
+        r.*,
+        p.name AS paper_name,
+        CASE
+          WHEN s.started_at IS NOT NULL
+            THEN GREATEST(TIMESTAMPDIFF(SECOND, s.started_at, COALESCE(s.submitted_at, s.ended_at, s.updated_at, r.created_at)), 0)
+          ELSE 0
+        END AS duration_seconds
+       FROM te_exam_results r
+       LEFT JOIN te_exam_sessions s ON s.id = r.session_id
+       LEFT JOIN te_papers p ON p.id = r.paper_id
+       ${whereSql}
+       ORDER BY r.created_at DESC, r.id DESC
+       LIMIT ? OFFSET ?`,
+      [...params, filters.limit, offset]
+    ),
+    buildAdminResultUserOptions({ whereSql, params }),
+    buildAdminResultPaperOptions({ whereSql, params }),
+  ]);
+
+  const total = Number(totalRow?.total || 0);
+  res.json({
+    items: rows.map((item) => normalizeAdminResultRow(item)),
+    page: filters.page,
+    limit: filters.limit,
+    total,
+    total_pages: Math.max(1, Math.ceil(total / filters.limit) || 1),
+    summary: normalizeAdminResultsSummary(summaryRow || {}),
+    filters: {
+      applied: filters,
+      users,
+      papers,
+    },
+  });
+}));
+
+app.get('/api/train-exam/admin/users/:userId/results', requireResultCenterReader, asyncHandler(async (req, res) => {
+  const userId = Number(req.params.userId);
+  if (!userId) throw appError('考生不存在', 404);
+
+  const filters = normalizeAdminResultsFilters({
+    ...req.query,
+    user_id: userId,
+  });
+  const { whereSql, params } = buildAdminResultsWhere(filters);
+  const offset = Math.max(0, (filters.page - 1) * filters.limit);
+
+  const [profile, rows, summaryRows, totalRow] = await Promise.all([
+    get(
+      `SELECT user_id, username, department, position_title
+       FROM te_user_profiles
+       WHERE user_id = ?
+       LIMIT 1`,
+      [userId]
+    ),
+    query(
+      `SELECT
+        r.*,
+        p.name AS paper_name,
+        CASE
+          WHEN s.started_at IS NOT NULL
+            THEN GREATEST(TIMESTAMPDIFF(SECOND, s.started_at, COALESCE(s.submitted_at, s.ended_at, s.updated_at, r.created_at)), 0)
+          ELSE 0
+        END AS duration_seconds
+       FROM te_exam_results r
+       LEFT JOIN te_exam_sessions s ON s.id = r.session_id
+       LEFT JOIN te_papers p ON p.id = r.paper_id
+       ${whereSql}
+       ORDER BY r.created_at DESC, r.id DESC
+       LIMIT ? OFFSET ?`,
+      [...params, filters.limit, offset]
+    ),
+    query(
+      `SELECT r.score, r.passed, r.is_final, r.created_at
+       FROM te_exam_results r
+       LEFT JOIN te_papers p ON p.id = r.paper_id
+       ${whereSql}
+       ORDER BY r.created_at DESC, r.id DESC`,
+      params
+    ),
+    get(
+      `SELECT COUNT(1) AS total
+       FROM te_exam_results r
+       LEFT JOIN te_papers p ON p.id = r.paper_id
+       ${whereSql}`,
+      params
+    ),
+  ]);
+
+  const candidateRow = rows[0] || {};
+  const total = Number(totalRow?.total || 0);
+  res.json({
+    candidate: {
+      user_id: userId,
+      username: trimText(profile?.username || candidateRow?.username),
+      department: trimText(profile?.department || candidateRow?.user_department),
+      position_title: trimText(profile?.position_title || candidateRow?.user_position),
+    },
+    items: rows.map((item) => normalizeAdminResultRow(item)),
+    summary: buildCandidateHistorySummary(summaryRows),
+    page: filters.page,
+    limit: filters.limit,
+    total,
+    total_pages: Math.max(1, Math.ceil(total / filters.limit) || 1),
+  });
 }));
 
 app.get('/api/train-exam/my/certificates', requireReader, asyncHandler(async (req, res) => {
@@ -6702,6 +7451,45 @@ app.get('/api/train-exam/results/:id', requireReader, asyncHandler(async (req, r
   });
 }));
 
+app.get('/api/train-exam/results/:id/review-detail', requireReader, asyncHandler(async (req, res) => {
+  const id = Number(req.params.id);
+  const resultRow = await get('SELECT * FROM te_exam_results WHERE id = ? LIMIT 1', [id]);
+  ensureResultAccess(req, resultRow, { allowAuditRead: true });
+
+  const resultDetail = parseMaybeJson(resultRow?.detail_json, {});
+  const [sessionRow, paperRow, answerRows, aiAdviceRow] = await Promise.all([
+    get('SELECT * FROM te_exam_sessions WHERE id = ? LIMIT 1', [Number(resultRow?.session_id || 0)]),
+    Number(resultRow?.paper_id || 0) > 0
+      ? get('SELECT id, name, pass_score FROM te_papers WHERE id = ? LIMIT 1', [Number(resultRow.paper_id || 0)])
+      : Promise.resolve(null),
+    query(
+      `SELECT question_id, sort_order, is_correct, earned_score, question_snapshot_json, user_answer_json, standard_answer_json
+       FROM te_exam_answers
+       WHERE session_id = ?
+       ORDER BY sort_order ASC, id ASC`,
+      [Number(resultRow?.session_id || 0)]
+    ),
+    get('SELECT * FROM te_result_ai_advices WHERE result_id = ? LIMIT 1', [id]),
+  ]);
+
+  const payload = buildResultReviewDetail({
+    resultRow,
+    sessionRow,
+    paperRow: {
+      id: Number(paperRow?.id || resultRow?.paper_id || 0),
+      name: resolveResultPaperName({
+        paper_id: resultRow?.paper_id,
+        paper_name: paperRow?.name,
+      }),
+      pass_score: paperRow?.pass_score ?? resultDetail?.pass_score ?? 0,
+    },
+    answerRows,
+    aiAdviceRow,
+  });
+
+  res.json(payload);
+}));
+
 app.get('/api/train-exam/results/:id/advice', requireReader, asyncHandler(async (req, res) => {
   const resultId = Number(req.params.id);
   const result = await get('SELECT * FROM te_exam_results WHERE id = ? LIMIT 1', [resultId]);
@@ -6717,7 +7505,7 @@ app.get('/api/train-exam/results/:id/advice', requireReader, asyncHandler(async 
   });
 }));
 
-app.post('/api/train-exam/results/:id/advice/generate', requireReader, asyncHandler(async (req, res) => {
+app.post('/api/train-exam/results/:id/advice/generate', requireReader, resultAdviceRateLimit, asyncHandler(async (req, res) => {
   const resultId = Number(req.params.id);
   const force = normalizeBoolean(req.body?.force, false);
   const row = await generateResultAdvice({ req, resultId, force });
@@ -7076,7 +7864,7 @@ app.delete('/api/train-exam/certificate-template', requireContentWriter, asyncHa
   });
 }));
 
-app.post('/api/train-exam/results/:id/certificate/generate', requireReader, asyncHandler(async (req, res) => {
+app.post('/api/train-exam/results/:id/certificate/generate', requireReader, certificateGenerateRateLimit, asyncHandler(async (req, res) => {
   const resultId = Number(req.params.id);
   const result = await get('SELECT * FROM te_exam_results WHERE id = ? LIMIT 1', [resultId]);
   ensureResultAccess(req, result, { allowAuditRead: true });
@@ -7337,12 +8125,13 @@ app.get('/api/train-exam/ai/models', requireAiModelReader, asyncHandler(async (_
   res.json(rows.map((item) => ({ ...item, api_key: maskSecret(item.api_key) })));
 }));
 
-app.post('/api/train-exam/ai/models/test', requireAdminOnly, asyncHandler(async (req, res) => {
+app.post('/api/train-exam/ai/models/test', requireAdminOnly, aiModelTestRateLimit, asyncHandler(async (req, res) => {
+  const baseUrlInput = trimText(req.body?.base_url);
   const modelDraft = {
     id: null,
     model_key: trimText(req.body?.model_key).toLowerCase(),
     name: trimText(req.body?.name) || '未保存模型',
-    base_url: trimText(req.body?.base_url),
+    base_url: baseUrlInput,
     model_name: trimText(req.body?.model_name),
     api_key: trimText(req.body?.api_key),
     timeout_ms: Math.max(3000, Math.min(120000, Number(req.body?.timeout_ms || 20000))),
@@ -7350,6 +8139,7 @@ app.post('/api/train-exam/ai/models/test', requireAdminOnly, asyncHandler(async 
   if (!modelDraft.base_url) throw appError('请先填写接口地址（Base URL）', 400);
   if (!modelDraft.model_name) throw appError('请先填写模型名', 400);
   if (!modelDraft.api_key) throw appError('请先填写API Key', 400);
+  modelDraft.base_url = normalizeAiBaseUrlOrThrow(modelDraft.base_url);
 
   const testResult = await testAiModelConnectivity({ model: modelDraft, req });
   await logOperation({
@@ -7376,7 +8166,7 @@ app.post('/api/train-exam/ai/models/test', requireAdminOnly, asyncHandler(async 
   });
 }));
 
-app.post('/api/train-exam/ai/models/:id/test', requireAdminOnly, asyncHandler(async (req, res) => {
+app.post('/api/train-exam/ai/models/:id/test', requireAdminOnly, aiModelTestRateLimit, asyncHandler(async (req, res) => {
   const id = Number(req.params.id);
   if (!id) throw appError('模型ID无效', 400);
   const row = await get('SELECT * FROM te_ai_models WHERE id = ? LIMIT 1', [id]);
@@ -7410,7 +8200,7 @@ app.post('/api/train-exam/ai/models/:id/test', requireAdminOnly, asyncHandler(as
 app.post('/api/train-exam/ai/models', requireAdminOnly, asyncHandler(async (req, res) => {
   const modelKey = trimText(req.body?.model_key).toLowerCase();
   const name = trimText(req.body?.name);
-  const baseUrl = trimText(req.body?.base_url);
+  const baseUrlInput = trimText(req.body?.base_url);
   const modelName = trimText(req.body?.model_name);
   const apiKey = trimText(req.body?.api_key);
   const timeoutMs = Math.max(3000, Math.min(120000, Number(req.body?.timeout_ms || 20000)));
@@ -7423,8 +8213,9 @@ app.post('/api/train-exam/ai/models', requireAdminOnly, asyncHandler(async (req,
     throw appError('model_key 仅支持小写字母/数字/下划线/中划线，长度2-64', 400);
   }
   if (!name) throw appError('name 不能为空', 400);
-  if (!baseUrl) throw appError('base_url 不能为空', 400);
+  if (!baseUrlInput) throw appError('base_url 不能为空', 400);
   if (!modelName) throw appError('model_name 不能为空', 400);
+  const baseUrl = normalizeAiBaseUrlOrThrow(baseUrlInput);
 
   const existed = await get('SELECT id FROM te_ai_models WHERE model_key = ? LIMIT 1', [modelKey]);
   if (existed) throw appError('model_key 已存在', 409);
@@ -7452,7 +8243,7 @@ app.put('/api/train-exam/ai/models/:id', requireAdminOnly, asyncHandler(async (r
   if (!row) throw appError('模型不存在', 404);
 
   const name = trimText(req.body?.name || row.name);
-  const baseUrl = trimText(req.body?.base_url !== undefined ? req.body.base_url : row.base_url);
+  const baseUrlInput = trimText(req.body?.base_url !== undefined ? req.body.base_url : row.base_url);
   const modelName = trimText(req.body?.model_name !== undefined ? req.body.model_name : row.model_name);
   const timeoutMs = Math.max(3000, Math.min(120000, Number(req.body?.timeout_ms || row.timeout_ms || 20000)));
   const maxTokens = Math.max(256, Math.min(16000, Number(req.body?.max_tokens || row.max_tokens || 2048)));
@@ -7460,6 +8251,8 @@ app.put('/api/train-exam/ai/models/:id', requireAdminOnly, asyncHandler(async (r
   const isEnabled = normalizeBoolean(req.body?.is_enabled, Number(row.is_enabled || 0) === 1) ? 1 : 0;
   const isDefault = normalizeBoolean(req.body?.is_default, Number(row.is_default || 0) === 1) ? 1 : 0;
   const apiKey = req.body?.api_key !== undefined ? trimText(req.body.api_key) : trimText(row.api_key);
+  if (!baseUrlInput) throw appError('base_url 不能为空', 400);
+  const baseUrl = normalizeAiBaseUrlOrThrow(baseUrlInput);
 
   await transaction(async (tx) => {
     if (isDefault === 1) {
@@ -7567,8 +8360,23 @@ app.use((err, _req, res, _next) => {
   const statusCode = Number(err?.statusCode || err?.status || 500);
   const message = trimText(err?.message || '服务器异常') || '服务器异常';
 
+  if (_req && [401, 403, 429].includes(statusCode)) {
+    const action = trimText(err?.securityAction)
+      || (statusCode === 401 ? 'AUTH_FAILURE' : statusCode === 403 ? 'ACCESS_DENIED' : 'RATE_LIMIT');
+    void logOperation(buildSecurityEventLogPayload({
+      req: _req,
+      statusCode,
+      message: `${action}: ${message}`,
+      action,
+    }));
+  }
+
   if (statusCode >= 500) {
     console.error('[train-exam] internal error:', err);
+  }
+
+  if (statusCode === 429 && Number(err?.retryAfterSeconds || 0) > 0) {
+    res.setHeader('Retry-After', String(Number(err.retryAfterSeconds)));
   }
 
   res.status(statusCode).json({
@@ -7577,6 +8385,7 @@ app.use((err, _req, res, _next) => {
 });
 
 const main = async () => {
+  validateSecurityBootstrap();
   await initDb();
   await resumePendingTranscodeJobs();
   app.listen(PORT, () => {

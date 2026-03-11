@@ -36,8 +36,43 @@ const inferRiskLevel = ({ mandatory = false, invalidOnNegative = false, satisfyS
   return 'LOW';
 };
 
+const normalizeKeyPart = (value) =>
+  trimText(value)
+    .replace(/\s+/g, '_')
+    .replace(/[^\p{L}\p{N}]+/gu, '_')
+    .replace(/^_+|_+$/g, '');
+
+const buildParameterKey = ({ itemNo = '', paramName = '', requirement = '' }) => {
+  const key = [
+    'PARAM',
+    normalizeKeyPart(itemNo),
+    normalizeKeyPart(paramName),
+    normalizeKeyPart(requirement),
+  ].filter(Boolean).join('_');
+  return key || 'PARAM_UNMAPPED';
+};
+
+const buildSatisfyBasis = ({
+  response = '',
+  deviation = '',
+  satisfyStatus = 'TO_CONFIRM',
+  mandatory = false,
+  invalidOnNegative = false,
+}) => {
+  const parts = [];
+  if (trimText(response)) parts.push(`投标响应“${trimText(response)}”`);
+  if (trimText(deviation)) parts.push(`偏离说明“${trimText(deviation)}”`);
+  if (mandatory) parts.push('条款为强制项');
+  if (invalidOnNegative) parts.push('负偏离可能触发无效投标/废标');
+  const basis = parts.length ? parts.join('，') : '缺少明确响应信息';
+  if (satisfyStatus === 'SATISFIED') return `依据${basis}判定为满足。`;
+  if (satisfyStatus === 'NOT_SATISFIED') return `依据${basis}判定为不满足。`;
+  return `依据${basis}仍无法形成明确满足结论，需人工确认。`;
+};
+
 const buildRow = ({
   itemNo,
+  paramName,
   requirement,
   response,
   deviation,
@@ -50,16 +85,31 @@ const buildRow = ({
     invalidOnNegative,
     satisfyStatus,
   });
+  const parameterKey = buildParameterKey({
+    itemNo,
+    paramName,
+    requirement,
+  });
+  const satisfyBasis = buildSatisfyBasis({
+    response,
+    deviation,
+    satisfyStatus,
+    mandatory,
+    invalidOnNegative,
+  });
   const manualReviewRequired = riskLevel === 'HIGH' || satisfyStatus === 'TO_CONFIRM';
   const evidenceSource = inferEvidenceSource(requirement);
   return {
     item_no: trimText(itemNo),
+    parameter_key: parameterKey,
     tender_requirement: trimText(requirement),
     bidder_response: trimText(response) || '待补充响应',
     deviation_note: trimText(deviation) || '无偏离',
     satisfy_status: satisfyStatus,
+    satisfy_basis: satisfyBasis,
     evidence_source: evidenceSource,
     risk_level: riskLevel,
+    risk_grade: riskLevel,
     manual_review_required: manualReviewRequired,
   };
 };
@@ -79,6 +129,7 @@ const buildDeviationAndResponseTables = ({ bidCategory = 'SERVICE', finalJson = 
     techRows.forEach((item, index) => {
       technicalRows.push(buildRow({
         itemNo: item?.item_no || item?.param_no || `${index + 1}`,
+        paramName: item?.param_name,
         requirement: item?.tender_requirement || item?.param_requirement || item?.param_name,
         response: item?.bid_response || item?.bidder_response || '待补充响应',
         deviation: item?.deviation || item?.deviation_note || '无偏离',
@@ -91,6 +142,7 @@ const buildDeviationAndResponseTables = ({ bidCategory = 'SERVICE', finalJson = 
     slaRows.forEach((item, index) => {
       technicalRows.push(buildRow({
         itemNo: item?.item_no || `${index + 1}`,
+        paramName: item?.indicator_name || item?.indicator_title,
         requirement: item?.indicator_requirement,
         response: '已响应，详见服务水平承诺章节',
         deviation: '无偏离',
@@ -101,6 +153,7 @@ const buildDeviationAndResponseTables = ({ bidCategory = 'SERVICE', finalJson = 
     toArray(detail?.service_implementation_requirements).forEach((item, index) => {
       technicalRows.push(buildRow({
         itemNo: `IMP-${index + 1}`,
+        paramName: `实施要求${index + 1}`,
         requirement: item,
         response: '已响应，详见实施方案章节',
         deviation: '无偏离',
@@ -111,6 +164,7 @@ const buildDeviationAndResponseTables = ({ bidCategory = 'SERVICE', finalJson = 
   const pushBusinessRow = (itemNo, requirement, response = '已响应，详见商务响应章节', deviation = '无偏离') => {
     const row = buildRow({
       itemNo,
+      paramName: requirement,
       requirement,
       response,
       deviation,
@@ -134,10 +188,15 @@ const buildDeviationAndResponseTables = ({ bidCategory = 'SERVICE', finalJson = 
   const businessFiltered = businessRows.filter((row) => trimText(row.tender_requirement)).slice(0, 120);
   const toResponseRow = (row) => ({
     item_no: row.item_no,
+    parameter_key: row.parameter_key,
     tender_requirement: row.tender_requirement,
-    our_response: row.bidder_response,
-    deviation: row.deviation_note,
+    response_text: row.bidder_response,
+    deviation_note: row.deviation_note,
+    satisfy_status: row.satisfy_status,
+    satisfy_basis: row.satisfy_basis,
     evidence_source: row.evidence_source,
+    risk_level: row.risk_level,
+    risk_grade: row.risk_grade,
     manual_review_required: row.manual_review_required,
   });
 
@@ -157,4 +216,5 @@ module.exports = {
   buildDeviationAndResponseTables,
   inferSatisfyStatus,
   inferEvidenceSource,
+  buildParameterKey,
 };

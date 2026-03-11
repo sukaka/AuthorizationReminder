@@ -1,4 +1,8 @@
 const mysql = require('mysql2/promise');
+const {
+  buildValidationRuleSeed,
+  buildMissingValidationRules,
+} = require('./validation-rule-library');
 
 const DB_HOST = process.env.MYSQL_HOST || '127.0.0.1';
 const DB_PORT = Number(process.env.MYSQL_PORT || 3306);
@@ -199,6 +203,29 @@ const createSchema = async () => {
     INDEX idx_tender_bid_draft_autosaves_draft (draft_id, saved_at)
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
 
+  await run(`CREATE TABLE IF NOT EXISTS tender_bid_export_records (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    bid_id BIGINT NOT NULL,
+    version_id BIGINT NULL,
+    draft_id BIGINT NULL,
+    export_type VARCHAR(16) NOT NULL DEFAULT 'DOCX',
+    status VARCHAR(16) NOT NULL DEFAULT 'SUCCESS',
+    storage_path VARCHAR(512) NULL,
+    file_name VARCHAR(255) NULL,
+    mime_type VARCHAR(128) NULL,
+    file_size BIGINT NOT NULL DEFAULT 0,
+    error_message TEXT NULL,
+    payload_json LONGTEXT NULL,
+    result_json LONGTEXT NULL,
+    created_by_id BIGINT NULL,
+    created_by_name VARCHAR(128) NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    INDEX idx_tender_bid_export_records_bid (bid_id, created_at),
+    INDEX idx_tender_bid_export_records_status (status, export_type, updated_at),
+    INDEX idx_tender_bid_export_records_version (version_id, created_at)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
+
   await run(`CREATE TABLE IF NOT EXISTS tender_editor_sessions (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,
     session_key VARCHAR(64) NOT NULL,
@@ -391,6 +418,62 @@ const createSchema = async () => {
     INDEX idx_tender_ai_task_logs_operator (operator_id, created_at)
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
 
+  await run(`CREATE TABLE IF NOT EXISTS tender_eval_datasets (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    dataset_code VARCHAR(64) NOT NULL,
+    dataset_name VARCHAR(255) NOT NULL,
+    eval_type VARCHAR(32) NOT NULL,
+    source_bid_id BIGINT NOT NULL,
+    baseline_flag TINYINT NOT NULL DEFAULT 1,
+    status VARCHAR(16) NOT NULL DEFAULT 'ACTIVE',
+    expected_payload_json LONGTEXT NULL,
+    notes TEXT NULL,
+    created_by_id BIGINT NULL,
+    created_by_name VARCHAR(128) NULL,
+    updated_by_id BIGINT NULL,
+    updated_by_name VARCHAR(128) NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE KEY uk_tender_eval_datasets_code (dataset_code),
+    INDEX idx_tender_eval_datasets_bid (source_bid_id, eval_type, status, updated_at),
+    INDEX idx_tender_eval_datasets_baseline (baseline_flag, status, updated_at)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
+
+  await run(`CREATE TABLE IF NOT EXISTS tender_eval_runs (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    run_no VARCHAR(64) NOT NULL,
+    run_label VARCHAR(255) NULL,
+    run_scope VARCHAR(16) NOT NULL DEFAULT 'ADHOC',
+    status VARCHAR(16) NOT NULL DEFAULT 'SUCCESS',
+    dataset_count INT NOT NULL DEFAULT 0,
+    summary_json LONGTEXT NULL,
+    baseline_summary_json LONGTEXT NULL,
+    started_by_id BIGINT NULL,
+    started_by_name VARCHAR(128) NULL,
+    completed_at DATETIME NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE KEY uk_tender_eval_runs_no (run_no),
+    INDEX idx_tender_eval_runs_scope (run_scope, created_at),
+    INDEX idx_tender_eval_runs_status (status, created_at)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
+
+  await run(`CREATE TABLE IF NOT EXISTS tender_eval_run_items (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    run_id BIGINT NOT NULL,
+    dataset_id BIGINT NOT NULL,
+    eval_type VARCHAR(32) NOT NULL,
+    source_bid_id BIGINT NOT NULL,
+    score DECIMAL(7,4) NOT NULL DEFAULT 0,
+    status VARCHAR(16) NOT NULL DEFAULT 'PASS',
+    result_json LONGTEXT NULL,
+    delta_json LONGTEXT NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_tender_eval_run_items_run (run_id, id),
+    INDEX idx_tender_eval_run_items_dataset (dataset_id, created_at),
+    INDEX idx_tender_eval_run_items_bid (source_bid_id, eval_type, created_at)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
+
   await run(`CREATE TABLE IF NOT EXISTS tender_bid_samples (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,
     sample_no VARCHAR(64) NOT NULL,
@@ -495,6 +578,123 @@ const createSchema = async () => {
     INDEX idx_tender_bid_generate_matches_job (job_id, score)
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
 
+  await run(`CREATE TABLE IF NOT EXISTS tender_bid_parse_jobs (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    bid_id BIGINT NOT NULL,
+    parse_scope VARCHAR(32) NOT NULL DEFAULT 'FULL',
+    status VARCHAR(16) NOT NULL DEFAULT 'PENDING',
+    progress INT NOT NULL DEFAULT 0,
+    file_count INT NOT NULL DEFAULT 0,
+    merged_fields_json LONGTEXT NULL,
+    field_sources_json LONGTEXT NULL,
+    summary_json LONGTEXT NULL,
+    warning_text TEXT NULL,
+    error_message TEXT NULL,
+    operator_id BIGINT NULL,
+    operator_name VARCHAR(128) NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    INDEX idx_tender_bid_parse_jobs_bid (bid_id, id),
+    INDEX idx_tender_bid_parse_jobs_status (status, updated_at),
+    INDEX idx_tender_bid_parse_jobs_operator (operator_id, created_at)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
+
+  await run(`CREATE TABLE IF NOT EXISTS tender_bid_parse_files (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    bid_id BIGINT NOT NULL,
+    parse_job_id BIGINT NULL,
+    parent_file_id BIGINT NULL,
+    root_file_id BIGINT NULL,
+    file_role VARCHAR(16) NOT NULL DEFAULT 'SUPPLEMENT',
+    file_kind VARCHAR(24) NOT NULL DEFAULT 'UPLOAD',
+    status VARCHAR(16) NOT NULL DEFAULT 'UPLOADED',
+    source_depth INT NOT NULL DEFAULT 0,
+    relative_path VARCHAR(512) NULL,
+    original_file_name VARCHAR(255) NOT NULL,
+    display_name VARCHAR(255) NOT NULL,
+    source_ext VARCHAR(16) NOT NULL,
+    source_mime_type VARCHAR(128) NULL,
+    storage_path VARCHAR(512) NOT NULL,
+    file_size BIGINT NOT NULL DEFAULT 0,
+    sheet_manifest_json LONGTEXT NULL,
+    selected_sheets_json LONGTEXT NULL,
+    parse_summary_json LONGTEXT NULL,
+    uploaded_by_id BIGINT NULL,
+    uploaded_by_name VARCHAR(128) NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    INDEX idx_tender_bid_parse_files_bid (bid_id, id),
+    INDEX idx_tender_bid_parse_files_root (root_file_id, parent_file_id, id),
+    INDEX idx_tender_bid_parse_files_role (bid_id, file_role, status, updated_at),
+    INDEX idx_tender_bid_parse_files_job (parse_job_id, updated_at)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
+
+  await run(`CREATE TABLE IF NOT EXISTS tender_bid_parse_clauses (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    bid_id BIGINT NOT NULL,
+    parse_job_id BIGINT NOT NULL,
+    source_file_id BIGINT NULL,
+    clause_code VARCHAR(64) NULL,
+    clause_title VARCHAR(255) NULL,
+    clause_text LONGTEXT NOT NULL,
+    clause_type VARCHAR(32) NOT NULL DEFAULT 'GENERAL',
+    response_mode VARCHAR(32) NOT NULL DEFAULT 'TEXT',
+    mandatory_flag TINYINT(1) NOT NULL DEFAULT 0,
+    scoring_flag TINYINT(1) NOT NULL DEFAULT 0,
+    score_value DECIMAL(10,2) NULL,
+    source_role VARCHAR(16) NOT NULL DEFAULT 'SUPPLEMENT',
+    sort_order INT NOT NULL DEFAULT 0,
+    metadata_json LONGTEXT NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    INDEX idx_tender_bid_parse_clauses_job (parse_job_id, sort_order, id),
+    INDEX idx_tender_bid_parse_clauses_bid (bid_id, clause_type, updated_at),
+    INDEX idx_tender_bid_parse_clauses_source (source_file_id, id)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
+
+  await run(`CREATE TABLE IF NOT EXISTS tender_bid_parse_tables (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    bid_id BIGINT NOT NULL,
+    parse_job_id BIGINT NOT NULL,
+    source_file_id BIGINT NULL,
+    table_name VARCHAR(255) NULL,
+    source_sheet_name VARCHAR(255) NULL,
+    row_count INT NOT NULL DEFAULT 0,
+    column_count INT NOT NULL DEFAULT 0,
+    summary_text TEXT NULL,
+    header_json LONGTEXT NULL,
+    rows_json LONGTEXT NULL,
+    source_role VARCHAR(16) NOT NULL DEFAULT 'SUPPLEMENT',
+    sort_order INT NOT NULL DEFAULT 0,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    INDEX idx_tender_bid_parse_tables_job (parse_job_id, sort_order, id),
+    INDEX idx_tender_bid_parse_tables_bid (bid_id, updated_at),
+    INDEX idx_tender_bid_parse_tables_source (source_file_id, id)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
+
+  await run(`CREATE TABLE IF NOT EXISTS tender_bid_parse_matches (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    bid_id BIGINT NOT NULL,
+    parse_job_id BIGINT NOT NULL,
+    clause_id BIGINT NOT NULL,
+    asset_id BIGINT NULL,
+    match_status VARCHAR(16) NOT NULL DEFAULT 'RECOMMENDED',
+    confidence DECIMAL(8,4) NOT NULL DEFAULT 0,
+    reason_text TEXT NULL,
+    match_source VARCHAR(16) NOT NULL DEFAULT 'RULE',
+    payload_json LONGTEXT NULL,
+    created_by_id BIGINT NULL,
+    created_by_name VARCHAR(128) NULL,
+    updated_by_id BIGINT NULL,
+    updated_by_name VARCHAR(128) NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    INDEX idx_tender_bid_parse_matches_job (parse_job_id, clause_id, updated_at),
+    INDEX idx_tender_bid_parse_matches_bid (bid_id, match_status, updated_at),
+    INDEX idx_tender_bid_parse_matches_asset (asset_id, updated_at)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
+
   await run(`CREATE TABLE IF NOT EXISTS tender_requirement_registry (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,
     job_id BIGINT NOT NULL,
@@ -544,6 +744,23 @@ const createSchema = async () => {
     score_item_ids_json LONGTEXT NULL,
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     INDEX idx_tender_draft_section_registry_version (bid_id, version_id, paragraph_no, id)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
+
+  await run(`CREATE TABLE IF NOT EXISTS tender_draft_artifact_rows (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    bid_id BIGINT NOT NULL,
+    version_id BIGINT NOT NULL,
+    artifact_type VARCHAR(32) NOT NULL,
+    artifact_group VARCHAR(32) NOT NULL,
+    row_no INT NOT NULL DEFAULT 0,
+    row_json LONGTEXT NULL,
+    created_by_id BIGINT NULL,
+    created_by_name VARCHAR(128) NULL,
+    updated_by_id BIGINT NULL,
+    updated_by_name VARCHAR(128) NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    INDEX idx_tender_draft_artifact_rows_bid (bid_id, version_id, artifact_type, artifact_group, row_no, id)
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
 
   await run(`CREATE TABLE IF NOT EXISTS tender_draft_check_runs (
@@ -649,6 +866,8 @@ const createSchema = async () => {
     applied_flag TINYINT NOT NULL DEFAULT 0,
     applied_at DATETIME NULL,
     source VARCHAR(32) NULL,
+    strategy_profile_key VARCHAR(128) NULL,
+    audit_trace_json LONGTEXT NULL,
     status VARCHAR(16) NOT NULL DEFAULT 'PROPOSED',
     created_by_id BIGINT NULL,
     created_by_name VARCHAR(128) NULL,
@@ -969,6 +1188,8 @@ const createSchema = async () => {
   await ensureColumn('tender_score_optimization_records', 'applied_flag', "TINYINT NOT NULL DEFAULT 0 AFTER after_text");
   await ensureColumn('tender_score_optimization_records', 'applied_at', "DATETIME NULL AFTER applied_flag");
   await ensureColumn('tender_score_optimization_records', 'source', "VARCHAR(32) NULL AFTER applied_at");
+  await ensureColumn('tender_score_optimization_records', 'strategy_profile_key', "VARCHAR(128) NULL AFTER source");
+  await ensureColumn('tender_score_optimization_records', 'audit_trace_json', "LONGTEXT NULL AFTER strategy_profile_key");
 
   const modelCountRow = await get('SELECT COUNT(1) AS count FROM tender_ai_models');
   if (Number(modelCountRow?.count || 0) === 0) {
@@ -1040,11 +1261,37 @@ const createSchema = async () => {
   }
 };
 
+const seedValidationRuleLibrary = async () => {
+  const existingRows = await query('SELECT rule_name FROM kb_validation_rules');
+  const missingRules = buildMissingValidationRules({
+    existingRules: existingRows,
+    seedRules: buildValidationRuleSeed(),
+  });
+  for (const row of missingRules) {
+    await run(
+      `INSERT INTO kb_validation_rules
+        (rule_name, rule_type, trigger_condition, check_logic, severity, suggested_action, active_flag, tags_json)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        row.rule_name,
+        row.rule_type,
+        row.trigger_condition || null,
+        row.check_logic,
+        row.severity,
+        row.suggested_action || null,
+        Number(row.active_flag || 0) === 1 ? 1 : 0,
+        JSON.stringify(row.tags || {}),
+      ]
+    );
+  }
+};
+
 const initDb = async () => {
   await bootstrapDatabase();
   pool = buildPool({ database: DB_NAME });
   await waitForDb(pool, 'tender database');
   await createSchema();
+  await seedValidationRuleLibrary();
 };
 
 module.exports = {

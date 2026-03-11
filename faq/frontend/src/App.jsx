@@ -374,6 +374,8 @@ function App() {
     is_active: true,
   })
   const [categorySubmitting, setCategorySubmitting] = useState(false)
+  const [selectedCategoryIds, setSelectedCategoryIds] = useState([])
+  const [categoryDeleting, setCategoryDeleting] = useState(false)
 
   const [keyword, setKeyword] = useState('')
   const [statusFilter, setStatusFilter] = useState('')
@@ -465,6 +467,11 @@ function App() {
     () => new Set((favorites || []).map((item) => Number(item.article_id)).filter((id) => Number.isFinite(id) && id > 0)),
     [favorites]
   )
+  const allCategoryIds = useMemo(
+    () => categories.map((item) => Number(item?.id || 0)).filter((id) => Number.isFinite(id) && id > 0),
+    [categories]
+  )
+  const allCategoriesSelected = allCategoryIds.length > 0 && selectedCategoryIds.length === allCategoryIds.length
 
   const resetFeedback = () => {
     setMessage('')
@@ -667,6 +674,116 @@ function App() {
     })
   }
 
+  const refreshCategories = async () => {
+    const refreshed = await api.get('/api/faq/categories')
+    const rows = Array.isArray(refreshed) ? refreshed : []
+    const validIds = new Set(rows.map((item) => Number(item?.id || 0)).filter((id) => Number.isFinite(id) && id > 0))
+    setCategories(rows)
+    setSelectedCategoryIds((prev) => prev.filter((id) => validIds.has(Number(id))))
+    if (Number(categoryForm.id || 0) > 0 && !validIds.has(Number(categoryForm.id))) {
+      resetCategoryForm()
+    }
+    return rows
+  }
+
+  const buildCategoryBatchMessage = (result, nameMap) => {
+    const successCount = Number(result?.success_count || 0)
+    const failureCount = Number(result?.failure_count || 0)
+    if (failureCount <= 0) return `已删除 ${successCount} 个分类`
+
+    const detail = (Array.isArray(result?.failures) ? result.failures : [])
+      .slice(0, 3)
+      .map((item) => {
+        const id = Number(item?.id || 0)
+        const label = nameMap.get(id) || `ID:${id}`
+        return `${label}：${String(item?.error || '删除失败').trim() || '删除失败'}`
+      })
+      .join('；')
+    return `删除完成：成功 ${successCount} 个，失败 ${failureCount} 个${detail ? `。${detail}` : ''}`
+  }
+
+  const buildCategoryForceDeleteMessage = (result, fallbackName) => {
+    const deletedCount = Number(result?.deleted_category_count || 0)
+    const recycledCount = Number(result?.recycled_article_count || 0)
+    if (deletedCount <= 0) return `分类「${fallbackName}」已强制删除`
+    if (recycledCount <= 0) return `已强制删除 ${deletedCount} 个分类，未发现需回收的 FAQ`
+    return `已强制删除 ${deletedCount} 个分类，${recycledCount} 篇 FAQ 已移入回收站`
+  }
+
+  const onToggleCategorySelection = (categoryId) => {
+    const id = Number(categoryId || 0)
+    if (id <= 0) return
+    setSelectedCategoryIds((prev) => (
+      prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id]
+    ))
+  }
+
+  const onToggleAllCategories = () => {
+    if (!allCategoryIds.length) return
+    setSelectedCategoryIds(allCategoriesSelected ? [] : allCategoryIds)
+  }
+
+  const onDeleteCategory = async (item) => {
+    const id = Number(item?.id || 0)
+    if (!isWriter || categoryDeleting || id <= 0) return
+    const name = String(item?.name || '').trim() || `ID:${id}`
+    const ok = window.confirm(`确定删除分类「${name}」吗？`)
+    if (!ok) return
+
+    resetFeedback()
+    setCategoryDeleting(true)
+    try {
+      await api.delete(`/api/faq/categories/${id}`)
+      await refreshCategories()
+      setMessage(`分类「${name}」已删除`)
+    } catch (err) {
+      setError(err.message || '分类删除失败')
+    } finally {
+      setCategoryDeleting(false)
+    }
+  }
+
+  const onForceDeleteCategory = async (item) => {
+    const id = Number(item?.id || 0)
+    if (!isAdmin || categoryDeleting || id <= 0) return
+    const name = String(item?.name || '').trim() || `ID:${id}`
+    const ok = window.confirm(
+      `确定强制删除分类「${name}」吗？\n\n这会递归删除所有子分类，并将关联 FAQ 移入回收站。\n已删除 FAQ 恢复后会变成未分类。`
+    )
+    if (!ok) return
+
+    resetFeedback()
+    setCategoryDeleting(true)
+    try {
+      const result = await api.post(`/api/faq/categories/${id}/force-delete`)
+      await refreshCategories()
+      setMessage(buildCategoryForceDeleteMessage(result, name))
+    } catch (err) {
+      setError(err.message || '强制删除分类失败')
+    } finally {
+      setCategoryDeleting(false)
+    }
+  }
+
+  const onBatchDeleteCategories = async () => {
+    if (!isWriter || categoryDeleting || !selectedCategoryIds.length) return
+    const nameMap = new Map(categories.map((item) => [Number(item.id || 0), String(item.name || '').trim() || `ID:${item.id}`]))
+    const ok = window.confirm(`确定批量删除已选中的 ${selectedCategoryIds.length} 个分类吗？`)
+    if (!ok) return
+
+    resetFeedback()
+    setCategoryDeleting(true)
+    try {
+      const result = await api.post('/api/faq/categories/batch-delete', { ids: selectedCategoryIds })
+      await refreshCategories()
+      setMessage(buildCategoryBatchMessage(result, nameMap))
+    } catch (err) {
+      setError(err.message || '批量删除分类失败')
+    } finally {
+      setCategoryDeleting(false)
+    }
+  }
+
   const onEditCategory = (item) => {
     if (!isWriter || !item) return
     resetFeedback()
@@ -713,8 +830,7 @@ function App() {
         await api.post('/api/faq/categories', payload)
         setMessage('分类已创建')
       }
-      const refreshed = await api.get('/api/faq/categories')
-      setCategories(Array.isArray(refreshed) ? refreshed : [])
+      await refreshCategories()
       resetCategoryForm()
     } catch (err) {
       setError(err.message || '分类保存失败')
@@ -1731,6 +1847,7 @@ function App() {
   }, [editorVisible, editorPayload, editorContainerId])
 
   const totalPages = Math.max(1, Math.ceil(Number(articles.total || 0) / Math.max(1, Number(articles.limit || 20))))
+  const articleRowStart = (Math.max(1, Number(articles.page || 1)) - 1) * Math.max(1, Number(articles.limit || 20))
   const allVisibleSelected = articles.items.length > 0 && articles.items.every((item) => selectedIds.includes(Number(item.id)))
   const effectiveBatchAction = recycleMode && batchAction === 'delete' ? 'restore' : batchAction
   const selectedArticleFavorited = selectedArticle ? favoriteIdSet.has(Number(selectedArticle.id)) : false
@@ -1993,8 +2110,32 @@ function App() {
                 </form>
               ) : null}
 
+              {isWriter ? (
+                <div className="batch-bar category-batch-bar">
+                  <span className="muted">已选 {selectedCategoryIds.length} 项</span>
+                  <button className="ghost" type="button" onClick={onBatchDeleteCategories} disabled={!selectedCategoryIds.length || categoryDeleting}>
+                    {categoryDeleting ? '删除中...' : '批量删除'}
+                  </button>
+                  <button className="ghost" type="button" onClick={() => setSelectedCategoryIds([])} disabled={!selectedCategoryIds.length || categoryDeleting}>
+                    清空选择
+                  </button>
+                  <span className="muted">删除时会自动拦截仍有关联 FAQ 或子分类的分类</span>
+                </div>
+              ) : null}
+
               <div className="table">
-                <div className={`table-row header ${isWriter ? 'category-table-row-admin' : ''}`}>
+                <div className={`table-row header ${isWriter ? 'category-table-row-selectable' : ''}`}>
+                  {isWriter ? (
+                    <span className="check-col">
+                      <input
+                        type="checkbox"
+                        checked={allCategoriesSelected}
+                        onChange={onToggleAllCategories}
+                        disabled={!allCategoryIds.length || categoryDeleting}
+                        aria-label="全选分类"
+                      />
+                    </span>
+                  ) : null}
                   <span>名称</span>
                   <span>父级</span>
                   <span>排序</span>
@@ -2003,7 +2144,18 @@ function App() {
                   {isWriter ? <span>操作</span> : null}
                 </div>
                 {categories.map((item) => (
-                  <div className={`table-row ${isWriter ? 'category-table-row-admin' : ''}`} key={item.id}>
+                  <div className={`table-row ${isWriter ? 'category-table-row-selectable' : ''}`} key={item.id}>
+                    {isWriter ? (
+                      <span className="check-col">
+                        <input
+                          type="checkbox"
+                          checked={selectedCategoryIds.includes(Number(item.id))}
+                          onChange={() => onToggleCategorySelection(item.id)}
+                          disabled={categoryDeleting}
+                          aria-label={`选择分类${item.name}`}
+                        />
+                      </span>
+                    ) : null}
                     <span>{item.name}</span>
                     <span>{item.parent_id ? (categories.find((c) => Number(c.id) === Number(item.parent_id))?.name || item.parent_id) : '-'}</span>
                     <span>{item.sort_order}</span>
@@ -2011,7 +2163,11 @@ function App() {
                     <span>{formatDateTime(item.updated_at)}</span>
                     {isWriter ? (
                       <span className="row-actions">
-                        <button className="link" onClick={() => onEditCategory(item)}>编辑</button>
+                        <button className="link" onClick={() => onEditCategory(item)} disabled={categoryDeleting}>编辑</button>
+                        <button className="link danger" onClick={() => onDeleteCategory(item)} disabled={categoryDeleting}>删除</button>
+                        {isAdmin ? (
+                          <button className="link danger" onClick={() => onForceDeleteCategory(item)} disabled={categoryDeleting}>强制删除</button>
+                        ) : null}
                       </span>
                     ) : null}
                   </div>
@@ -2274,9 +2430,10 @@ function App() {
                   </div>
                 ) : null}
 
-                <div className={`table ${rowDensity === 'compact' ? 'density-compact' : ''} ${isAdmin ? 'with-checkbox' : ''}`}>
+                <div className={`table article-table ${rowDensity === 'compact' ? 'density-compact' : ''} ${isAdmin ? 'with-checkbox' : ''}`}>
                   <div className="table-row header">
                     {isAdmin ? <span className="check-col" /> : null}
+                    <span className="seq-col">序号</span>
                     <span>标题</span>
                     <span>状态</span>
                     <span>分类</span>
@@ -2288,6 +2445,7 @@ function App() {
                       {Array.from({ length: 6 }).map((_, idx) => (
                         <div className="table-row skeleton-row" key={`skeleton-${idx}`}>
                           {isAdmin ? <span className="skeleton-cell check-col" /> : null}
+                          <span className="skeleton-cell seq-col" />
                           <span className="skeleton-cell" />
                           <span className="skeleton-cell" />
                           <span className="skeleton-cell" />
@@ -2298,7 +2456,7 @@ function App() {
                     </>
                   ) : (
                     <>
-                      {articles.items.map((item) => (
+                      {articles.items.map((item, rowIndex) => (
                         <div className="table-row" key={item.id}>
                           {isAdmin ? (
                             <span className="check-col">
@@ -2309,6 +2467,7 @@ function App() {
                               />
                             </span>
                           ) : null}
+                          <span className="seq-col">{articleRowStart + rowIndex + 1}</span>
                           <span className="title-cell">{item.title}</span>
                           <span><span className={`status-chip status-${String(item.status || 'draft').toLowerCase()}`}>{statusText(item.status)}</span></span>
                           <span>{item.category_name || '-'}</span>

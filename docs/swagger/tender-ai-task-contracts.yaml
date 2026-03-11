@@ -1,0 +1,1085 @@
+openapi: 3.0.3
+info:
+  title: Tender AI Task Contracts
+  version: 1.0.0
+  description: |
+    Tender 系统统一 AI 任务契约说明。
+
+    这是一份逻辑 contract 文档，不代表所有路径都已经在当前运行时逐一落地。
+    它用于约束 parse / match / generate / validate / export 五类 AI 任务的请求、
+    响应、prompt contract 和 trace 字段。
+servers:
+  - url: https://internal.example.invalid
+    description: Logical contract only
+tags:
+  - name: parse
+  - name: match
+  - name: generate
+  - name: validate
+  - name: export
+paths:
+  /contracts/ai/tasks/parse-project-overview:
+    post:
+      tags: [parse]
+      summary: Parse project overview from tender materials
+      x-runtime-mapping:
+        current_entrypoints:
+          - POST /api/tender/bids/generate/analyze
+          - POST /api/tender/bids/:id/parse/start
+        current_task_types:
+          - BID_ANALYZE_STAGE2
+          - BID_ANALYZE
+      x-prompt-contract:
+        system_role: 招标文件理解助手
+        input_blocks:
+          - task context
+          - material bundle
+          - clarification summary
+          - output schema
+        must_rules:
+          - 仅依据输入材料输出
+          - 缺失信息必须列出 missing_inputs
+          - 输出必须为固定 JSON
+        must_not_rules:
+          - 不得编造项目编号
+          - 不得编造截止时间
+          - 不得做最终合规结论
+        manual_review_when:
+          - 提取到关键时间但证据不足
+          - 采购人或项目编号存在冲突
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ParseProjectOverviewRequest'
+      responses:
+        '200':
+          description: Parse overview result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ParseProjectOverviewResponse'
+  /contracts/ai/tasks/classify-clauses:
+    post:
+      tags: [parse]
+      summary: Classify tender clauses
+      x-runtime-mapping:
+        current_entrypoints:
+          - POST /api/tender/bids/generate/analyze
+          - PUT /api/tender/bids/:id/parse/clauses/bulk
+        current_task_types:
+          - BID_ANALYZE_STAGE2
+      x-prompt-contract:
+        system_role: 条款分类助手
+        input_blocks:
+          - clause slices
+          - section context
+          - clause taxonomy
+          - output schema
+        must_rules:
+          - 每条条款都要返回 clause_type
+          - 高风险条款要附 risk_level
+          - 需给出 response_mode 建议
+        must_not_rules:
+          - 不得直接判定废标成立
+          - 不得忽略证据来源
+        manual_review_when:
+          - clause_type 为废标项
+          - 同一条款出现多重解释
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ClassifyClausesRequest'
+      responses:
+        '200':
+          description: Clause classification result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ClassifyClausesResponse'
+  /contracts/ai/tasks/extract-score-items:
+    post:
+      tags: [parse]
+      summary: Extract score items from score rules
+      x-runtime-mapping:
+        current_entrypoints:
+          - POST /api/tender/bids/generate/analyze
+        current_task_types:
+          - BID_ANALYZE_STAGE2
+      x-prompt-contract:
+        system_role: 评分项提取助手
+        input_blocks:
+          - score section text
+          - score tables
+          - section context
+          - output schema
+        must_rules:
+          - 每个评分项都返回 full_score
+          - 需给出 criteria 和 recommended_points
+          - 保留 related_sections
+        must_not_rules:
+          - 不得凭空添加评分项
+          - 不得省略低置信度标记
+        manual_review_when:
+          - 表格结构无法稳定解析
+          - 分值或评分规则存在歧义
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ExtractScoreItemsRequest'
+      responses:
+        '200':
+          description: Score item extraction result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExtractScoreItemsResponse'
+  /contracts/ai/tasks/match-enterprise-assets:
+    post:
+      tags: [match]
+      summary: Match enterprise materials and evidence
+      x-runtime-mapping:
+        current_entrypoints:
+          - POST /api/tender/bids/:id/parse/matches/recommend
+        current_task_types:
+          - MATCH_ENTERPRISE_ASSETS
+      x-prompt-contract:
+        system_role: 企业资料匹配助手
+        input_blocks:
+          - clauses
+          - score items
+          - asset candidates
+          - retrieval filters
+          - output schema
+        must_rules:
+          - 返回 match_score 和 reason
+          - 返回 asset freshness 或有效性提示
+          - 不匹配时要说明 gap
+        must_not_rules:
+          - 不得断言证书仍然有效
+          - 不得自动批准提交材料
+        manual_review_when:
+          - 资质、授权、人员、业绩被引用
+          - 高价值评分项仅匹配到单一证据
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MatchEnterpriseAssetsRequest'
+      responses:
+        '200':
+          description: Asset match result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MatchEnterpriseAssetsResponse'
+  /contracts/ai/tasks/generate-section-draft:
+    post:
+      tags: [generate]
+      summary: Generate draft section text
+      x-runtime-mapping:
+        current_entrypoints:
+          - POST /api/tender/bids/generate/jobs/{id}/create
+        current_task_types:
+          - BID_COMPOSE_DRAFT
+      x-prompt-contract:
+        system_role: 标书章节生成助手
+        input_blocks:
+          - project context
+          - tender requirements
+          - score items
+          - matched assets
+          - output schema
+        must_rules:
+          - 围绕评分项组织内容
+          - 引用真实 asset_id
+          - 返回 unsupported_claims
+        must_not_rules:
+          - 不得编造案例
+          - 不得编造资质
+          - 不得编造服务能力
+        manual_review_when:
+          - 章节引用高风险资料
+          - 评分项覆盖不足
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GenerateSectionDraftRequest'
+      responses:
+        '200':
+          description: Section draft result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GenerateSectionDraftResponse'
+  /contracts/ai/tasks/generate-response-text:
+    post:
+      tags: [generate]
+      summary: Generate deviation or response table text
+      x-runtime-mapping:
+        current_entrypoints:
+          - POST /api/tender/ai/tasks/rewrite
+          - project draft workspace save flow
+        current_task_types:
+          - REWRITE
+      x-prompt-contract:
+        system_role: 偏离表与应答表文本助手
+        input_blocks:
+          - tender requirement
+          - satisfy status
+          - evidence source
+          - enterprise commitment
+          - output schema
+        must_rules:
+          - 只生成文字表述
+          - 每行返回 deviation_status
+          - 必须保留 evidence_source
+        must_not_rules:
+          - 不得替代参数满足判定
+          - 不得编造证据
+        manual_review_when:
+          - satisfy status 涉及关键技术参数
+          - 文字承诺涉及到场时间或原厂授权
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GenerateResponseTextRequest'
+      responses:
+        '200':
+          description: Response text result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GenerateResponseTextResponse'
+  /contracts/ai/tasks/optimize-draft-content:
+    post:
+      tags: [generate]
+      summary: Optimize existing draft content
+      x-runtime-mapping:
+        current_entrypoints:
+          - POST /api/tender/bids/{id}/score-optimize
+          - POST /api/tender/ai/tasks/rewrite
+          - POST /api/tender/ai/tasks/proofread
+        current_task_types:
+          - REWRITE
+          - PROOFREAD
+      x-prompt-contract:
+        system_role: 草稿优化助手
+        input_blocks:
+          - current draft
+          - score coverage gaps
+          - style target
+          - forbidden claims
+          - output schema
+        must_rules:
+          - 返回优化后文本
+          - 返回新增覆盖点和删除冗余点
+          - 说明 modification_summary
+        must_not_rules:
+          - 不得新增无证据事实
+          - 不得隐藏 unresolved_gaps
+        manual_review_when:
+          - 优化结果改变原始承诺语义
+          - 覆盖缺口仍未闭合
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OptimizeDraftContentRequest'
+      responses:
+        '200':
+          description: Draft optimization result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OptimizeDraftContentResponse'
+  /contracts/ai/tasks/explain-risk-flags:
+    post:
+      tags: [validate]
+      summary: Explain risk flags and validation findings
+      x-runtime-mapping:
+        current_entrypoints:
+          - POST /api/tender/bids/{id}/check
+          - GET /api/tender/risk-center/summary
+        current_task_types:
+          - EXPLAIN_RISK_FLAGS
+      x-prompt-contract:
+        system_role: 风险解释助手
+        input_blocks:
+          - rule issues
+          - coverage summary
+          - related draft excerpt
+          - output schema
+        must_rules:
+          - 解释 risk_reason
+          - 给出 suggested_action
+          - 标记 blocking 与 non-blocking
+        must_not_rules:
+          - 不得替代规则引擎最终结论
+          - 不得忽略高风险来源
+        manual_review_when:
+          - blocking 风险存在
+          - 风险涉及法律承诺、资质、参数或人员
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ExplainRiskFlagsRequest'
+      responses:
+        '200':
+          description: Risk explanation result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExplainRiskFlagsResponse'
+  /contracts/ai/tasks/export-package-summary:
+    post:
+      tags: [export]
+      summary: Summarize export readiness before packaging
+      x-runtime-mapping:
+        current_entrypoints:
+          - POST /api/tender/bids/{id}/export
+          - GET /api/tender/export-center/summary
+        current_task_types:
+          - EXPORT_PACKAGE_SUMMARY
+      x-prompt-contract:
+        system_role: 导出前摘要助手
+        input_blocks:
+          - export context
+          - latest draft summary
+          - risk summary
+          - attachment checklist
+          - output schema
+        must_rules:
+          - 返回 export_readiness
+          - 返回 missing_items
+          - 返回 review_checklist
+        must_not_rules:
+          - 不得宣告最终合规
+          - 不得替代人工终审
+        manual_review_when:
+          - missing_items 非空
+          - 存在 blocking_risks
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ExportPackageSummaryRequest'
+      responses:
+        '200':
+          description: Export summary result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExportPackageSummaryResponse'
+components:
+  schemas:
+    RequestedBy:
+      type: object
+      required: [user_id, username]
+      properties:
+        user_id:
+          type: integer
+        username:
+          type: string
+        role:
+          type: string
+    PromptContractRef:
+      type: object
+      required:
+        - prompt_template_id
+        - prompt_template_version
+        - output_schema_id
+      properties:
+        prompt_template_id:
+          type: string
+        prompt_template_version:
+          type: string
+        output_schema_id:
+          type: string
+        system_role:
+          type: string
+        must_rules:
+          type: array
+          items:
+            type: string
+        must_not_rules:
+          type: array
+          items:
+            type: string
+    EvidenceSource:
+      type: object
+      required: [source_type, source_ref]
+      properties:
+        source_type:
+          type: string
+          enum: [tender_file, clarification_file, attachment, asset, rule_issue, draft_section]
+        source_ref:
+          type: string
+        excerpt:
+          type: string
+        page_no:
+          type: integer
+        section_key:
+          type: string
+    RiskFlag:
+      type: object
+      required: [risk_type, level, message]
+      properties:
+        risk_type:
+          type: string
+        level:
+          type: string
+          enum: [low, medium, high, blocking]
+        message:
+          type: string
+        requires_rule_check:
+          type: boolean
+        requires_manual_review:
+          type: boolean
+    TraceInfo:
+      type: object
+      required:
+        - runtime_task_type
+        - model_name
+        - prompt_template_version
+      properties:
+        runtime_task_type:
+          type: string
+        task_log_id:
+          type: integer
+        model_id:
+          type: integer
+        model_name:
+          type: string
+        model_version:
+          type: string
+        prompt_template_id:
+          type: string
+        prompt_template_version:
+          type: string
+        input_snapshot_id:
+          type: string
+        output_snapshot_id:
+          type: string
+        request_hash:
+          type: string
+        response_hash:
+          type: string
+    ManualReviewInfo:
+      type: object
+      required: [required]
+      properties:
+        required:
+          type: boolean
+        reasons:
+          type: array
+          items:
+            type: string
+        checklist:
+          type: array
+          items:
+            type: string
+    MaterialRef:
+      type: object
+      required: [material_id, material_type]
+      properties:
+        material_id:
+          type: string
+        material_type:
+          type: string
+          enum: [tender_main, clarification, attachment, xls_sheet, kb_asset, draft_section]
+        title:
+          type: string
+        selected_sheet_names:
+          type: array
+          items:
+            type: string
+    TaskEnvelopeBase:
+      type: object
+      required:
+        - task_id
+        - task_type
+        - project_id
+        - requested_by
+        - prompt_contract
+      properties:
+        task_id:
+          type: string
+        task_type:
+          type: string
+        project_id:
+          type: integer
+        bid_id:
+          type: integer
+        bid_version_id:
+          type: integer
+        requested_by:
+          $ref: '#/components/schemas/RequestedBy'
+        prompt_contract:
+          $ref: '#/components/schemas/PromptContractRef'
+        constraints:
+          type: object
+          additionalProperties: true
+    TaskResponseBase:
+      type: object
+      required:
+        - task_id
+        - task_type
+        - status
+        - confidence
+        - evidence_sources
+        - risk_flags
+        - need_manual_review
+        - trace
+      properties:
+        task_id:
+          type: string
+        task_type:
+          type: string
+        status:
+          type: string
+          enum: [SUCCESS, PARTIAL, FAILED, BLOCKED]
+        confidence:
+          type: number
+          minimum: 0
+          maximum: 1
+        evidence_sources:
+          type: array
+          items:
+            $ref: '#/components/schemas/EvidenceSource'
+        risk_flags:
+          type: array
+          items:
+            $ref: '#/components/schemas/RiskFlag'
+        need_manual_review:
+          $ref: '#/components/schemas/ManualReviewInfo'
+        trace:
+          $ref: '#/components/schemas/TraceInfo'
+    ClauseClassification:
+      type: object
+      required: [clause_id, clause_type, is_mandatory, is_scoring_item, risk_level, response_mode]
+      properties:
+        clause_id:
+          type: string
+        clause_type:
+          type: string
+        clause_subtype:
+          type: string
+        is_mandatory:
+          type: boolean
+        is_scoring_item:
+          type: boolean
+        risk_level:
+          type: string
+          enum: [low, medium, high, blocking]
+        response_mode:
+          type: string
+        evidence_sources:
+          type: array
+          items:
+            $ref: '#/components/schemas/EvidenceSource'
+    ScoreItem:
+      type: object
+      required: [item_name, full_score, criteria]
+      properties:
+        item_name:
+          type: string
+        full_score:
+          type: number
+        criteria:
+          type: string
+        recommended_points:
+          type: array
+          items:
+            type: string
+        related_sections:
+          type: array
+          items:
+            type: string
+        evidence_sources:
+          type: array
+          items:
+            $ref: '#/components/schemas/EvidenceSource'
+    RetrievedAsset:
+      type: object
+      required: [asset_id, asset_type, asset_name, match_score, reason]
+      properties:
+        asset_id:
+          type: string
+        asset_type:
+          type: string
+        asset_name:
+          type: string
+        match_score:
+          type: number
+        reason:
+          type: string
+        freshness_hint:
+          type: string
+        recommended_action:
+          type: string
+        review_required:
+          type: boolean
+    ParseProjectOverviewRequest:
+      allOf:
+        - $ref: '#/components/schemas/TaskEnvelopeBase'
+        - type: object
+          properties:
+            task_type:
+              type: string
+              enum: [PARSE_PROJECT_OVERVIEW]
+            inputs:
+              type: object
+              required: [materials]
+              properties:
+                materials:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/MaterialRef'
+                chapter_outline:
+                  type: array
+                  items:
+                    type: string
+                clarification_refs:
+                  type: array
+                  items:
+                    type: string
+    ParseProjectOverviewResponse:
+      allOf:
+        - $ref: '#/components/schemas/TaskResponseBase'
+        - type: object
+          required: [result]
+          properties:
+            task_type:
+              type: string
+              enum: [PARSE_PROJECT_OVERVIEW]
+            result:
+              type: object
+              properties:
+                project_name:
+                  type: string
+                project_no:
+                  type: string
+                purchaser:
+                  type: string
+                deadline:
+                  type: string
+                summary:
+                  type: string
+                key_focus:
+                  type: array
+                  items:
+                    type: string
+                technical_focus:
+                  type: array
+                  items:
+                    type: string
+                commercial_focus:
+                  type: array
+                  items:
+                    type: string
+                high_risk_points:
+                  type: array
+                  items:
+                    type: string
+                missing_inputs:
+                  type: array
+                  items:
+                    type: string
+    ClassifyClausesRequest:
+      allOf:
+        - $ref: '#/components/schemas/TaskEnvelopeBase'
+        - type: object
+          properties:
+            task_type:
+              type: string
+              enum: [CLASSIFY_CLAUSES]
+            inputs:
+              type: object
+              required: [clauses]
+              properties:
+                clauses:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      clause_id:
+                        type: string
+                      title:
+                        type: string
+                      text:
+                        type: string
+                      section_name:
+                        type: string
+    ClassifyClausesResponse:
+      allOf:
+        - $ref: '#/components/schemas/TaskResponseBase'
+        - type: object
+          properties:
+            task_type:
+              type: string
+              enum: [CLASSIFY_CLAUSES]
+            result:
+              type: object
+              properties:
+                clauses:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/ClauseClassification'
+    ExtractScoreItemsRequest:
+      allOf:
+        - $ref: '#/components/schemas/TaskEnvelopeBase'
+        - type: object
+          properties:
+            task_type:
+              type: string
+              enum: [EXTRACT_SCORE_ITEMS]
+            inputs:
+              type: object
+              required: [score_text]
+              properties:
+                score_text:
+                  type: string
+                score_tables:
+                  type: array
+                  items:
+                    type: object
+                    additionalProperties: true
+                related_sections:
+                  type: array
+                  items:
+                    type: string
+    ExtractScoreItemsResponse:
+      allOf:
+        - $ref: '#/components/schemas/TaskResponseBase'
+        - type: object
+          properties:
+            task_type:
+              type: string
+              enum: [EXTRACT_SCORE_ITEMS]
+            result:
+              type: object
+              properties:
+                score_items:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/ScoreItem'
+    MatchEnterpriseAssetsRequest:
+      allOf:
+        - $ref: '#/components/schemas/TaskEnvelopeBase'
+        - type: object
+          properties:
+            task_type:
+              type: string
+              enum: [MATCH_ENTERPRISE_ASSETS]
+            inputs:
+              type: object
+              required: [clauses, asset_candidates]
+              properties:
+                clauses:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/ClauseClassification'
+                score_items:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/ScoreItem'
+                asset_candidates:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/MaterialRef'
+                retrieval_filters:
+                  type: object
+                  additionalProperties: true
+    MatchEnterpriseAssetsResponse:
+      allOf:
+        - $ref: '#/components/schemas/TaskResponseBase'
+        - type: object
+          properties:
+            task_type:
+              type: string
+              enum: [MATCH_ENTERPRISE_ASSETS]
+            result:
+              type: object
+              properties:
+                retrieved_assets:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/RetrievedAsset'
+                coverage_gaps:
+                  type: array
+                  items:
+                    type: string
+    GenerateSectionDraftRequest:
+      allOf:
+        - $ref: '#/components/schemas/TaskEnvelopeBase'
+        - type: object
+          properties:
+            task_type:
+              type: string
+              enum: [GENERATE_SECTION_DRAFT]
+            inputs:
+              type: object
+              required: [section_name, tender_requirements]
+              properties:
+                section_name:
+                  type: string
+                tender_requirements:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/ClauseClassification'
+                score_items:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/ScoreItem'
+                matched_assets:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/RetrievedAsset'
+                style:
+                  type: string
+    GenerateSectionDraftResponse:
+      allOf:
+        - $ref: '#/components/schemas/TaskResponseBase'
+        - type: object
+          properties:
+            task_type:
+              type: string
+              enum: [GENERATE_SECTION_DRAFT]
+            result:
+              type: object
+              properties:
+                section_name:
+                  type: string
+                section_outline:
+                  type: array
+                  items:
+                    type: string
+                score_points_covered:
+                  type: array
+                  items:
+                    type: string
+                draft_text:
+                  type: string
+                cited_asset_ids:
+                  type: array
+                  items:
+                    type: string
+                unsupported_claims:
+                  type: array
+                  items:
+                    type: string
+    GenerateResponseTextRequest:
+      allOf:
+        - $ref: '#/components/schemas/TaskEnvelopeBase'
+        - type: object
+          properties:
+            task_type:
+              type: string
+              enum: [GENERATE_RESPONSE_TEXT]
+            inputs:
+              type: object
+              required: [rows]
+              properties:
+                rows:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      tender_requirement:
+                        type: string
+                      satisfy_status:
+                        type: string
+                      evidence_source:
+                        type: string
+                      enterprise_commitment:
+                        type: string
+    GenerateResponseTextResponse:
+      allOf:
+        - $ref: '#/components/schemas/TaskResponseBase'
+        - type: object
+          properties:
+            task_type:
+              type: string
+              enum: [GENERATE_RESPONSE_TEXT]
+            result:
+              type: object
+              properties:
+                rows:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      tender_requirement:
+                        type: string
+                      response_text:
+                        type: string
+                      deviation_status:
+                        type: string
+                      evidence_source:
+                        type: string
+                      need_manual_review:
+                        type: boolean
+    OptimizeDraftContentRequest:
+      allOf:
+        - $ref: '#/components/schemas/TaskEnvelopeBase'
+        - type: object
+          properties:
+            task_type:
+              type: string
+              enum: [OPTIMIZE_DRAFT_CONTENT]
+            inputs:
+              type: object
+              required: [draft_text]
+              properties:
+                draft_text:
+                  type: string
+                score_gaps:
+                  type: array
+                  items:
+                    type: string
+                style_target:
+                  type: string
+    OptimizeDraftContentResponse:
+      allOf:
+        - $ref: '#/components/schemas/TaskResponseBase'
+        - type: object
+          properties:
+            task_type:
+              type: string
+              enum: [OPTIMIZE_DRAFT_CONTENT]
+            result:
+              type: object
+              properties:
+                optimized_text:
+                  type: string
+                added_coverage_points:
+                  type: array
+                  items:
+                    type: string
+                removed_redundant_points:
+                  type: array
+                  items:
+                    type: string
+                modification_summary:
+                  type: string
+                unresolved_gaps:
+                  type: array
+                  items:
+                    type: string
+    ExplainRiskFlagsRequest:
+      allOf:
+        - $ref: '#/components/schemas/TaskEnvelopeBase'
+        - type: object
+          properties:
+            task_type:
+              type: string
+              enum: [EXPLAIN_RISK_FLAGS]
+            inputs:
+              type: object
+              required: [risk_items]
+              properties:
+                risk_items:
+                  type: array
+                  items:
+                    type: object
+                    additionalProperties: true
+                draft_excerpt:
+                  type: string
+                related_rules:
+                  type: array
+                  items:
+                    type: string
+    ExplainRiskFlagsResponse:
+      allOf:
+        - $ref: '#/components/schemas/TaskResponseBase'
+        - type: object
+          properties:
+            task_type:
+              type: string
+              enum: [EXPLAIN_RISK_FLAGS]
+            result:
+              type: object
+              properties:
+                explanations:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      risk_type:
+                        type: string
+                      risk_reason:
+                        type: string
+                      suggested_action:
+                        type: string
+                      blocking:
+                        type: boolean
+    ExportPackageSummaryRequest:
+      allOf:
+        - $ref: '#/components/schemas/TaskEnvelopeBase'
+        - type: object
+          properties:
+            task_type:
+              type: string
+              enum: [EXPORT_PACKAGE_SUMMARY]
+            inputs:
+              type: object
+              required: [export_type]
+              properties:
+                export_type:
+                  type: string
+                  enum: [DOCX, PDF, PACKAGE]
+                latest_draft_summary:
+                  type: string
+                risk_summary:
+                  type: array
+                  items:
+                    type: string
+                attachment_checklist:
+                  type: array
+                  items:
+                    type: string
+    ExportPackageSummaryResponse:
+      allOf:
+        - $ref: '#/components/schemas/TaskResponseBase'
+        - type: object
+          properties:
+            task_type:
+              type: string
+              enum: [EXPORT_PACKAGE_SUMMARY]
+            result:
+              type: object
+              properties:
+                export_readiness:
+                  type: string
+                  enum: [ready, caution, blocked]
+                missing_items:
+                  type: array
+                  items:
+                    type: string
+                package_outline:
+                  type: array
+                  items:
+                    type: string
+                blocking_risks:
+                  type: array
+                  items:
+                    type: string
+                review_checklist:
+                  type: array
+                  items:
+                    type: string
