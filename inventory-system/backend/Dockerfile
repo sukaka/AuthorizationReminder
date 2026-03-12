@@ -1,4 +1,5 @@
-FROM docker.m.daocloud.io/library/node:20-alpine
+ARG NODE_20_ALPINE_IMAGE=node:20-alpine
+FROM ${NODE_20_ALPINE_IMAGE}
 
 WORKDIR /app
 

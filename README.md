@@ -54,10 +54,10 @@
 cd /Users/zhanglei/Documents/codex-new
 cp .env.example .env
 # 编辑 .env，填入真实密码与密钥
-docker compose up -d --build
+./scripts/deploy/docker-compose-aliyun.sh up -d --build
 ```
 
-> 说明：根目录 `.env` 是必需文件，`docker compose` 不会从 Git 仓库自动带出这些密码与密钥。可先从 [`.env.example`](/Users/zhanglei/Documents/codex-new/.env.example) 复制生成。
+> 说明：根目录 `.env` 是必需文件，`docker compose` 不会从 Git 仓库自动带出这些密码与密钥。可先从 [`.env.example`](/Users/zhanglei/Documents/codex-new/.env.example) 复制生成。`docker-compose-aliyun.sh` 会优先探测你配置的阿里云镜像前缀，探测不到时自动回退官方镜像。
 
 ### 2.2.1 新服务器首启（一键）
 ```bash
@@ -71,31 +71,31 @@ export AUTH_BUILTIN_ACCOUNT_DEFAULT_PASSWORD='改成你要登录的默认密码'
 ### 2.3 常用按系统启动
 ```bash
 # 仅提醒系统
-docker compose up -d --build mysql auth api web
+./scripts/deploy/docker-compose-aliyun.sh up -d --build mysql auth api web
 
 # 仅工单系统
-docker compose up -d --build mysql auth ticketing web-ticketing
+./scripts/deploy/docker-compose-aliyun.sh up -d --build mysql auth ticketing web-ticketing
 
 # 仅库存系统
-docker compose up -d --build mysql auth shipping-gateway inventory-api web-inventory
+./scripts/deploy/docker-compose-aliyun.sh up -d --build mysql auth shipping-gateway inventory-api web-inventory
 
 # 仅设备流转系统
-docker compose up -d --build mysql auth device-flow-api web-device-flow
+./scripts/deploy/docker-compose-aliyun.sh up -d --build mysql auth device-flow-api web-device-flow
 
 # 仅聚信实施记录系统
-docker compose up -d --build mysql auth sec-impl-api web-sec-impl
+./scripts/deploy/docker-compose-aliyun.sh up -d --build mysql auth sec-impl-api web-sec-impl
 
 # 仅 FAQ 系统
-docker compose up -d --build mysql auth onlyoffice faq-api web-faq
+./scripts/deploy/docker-compose-aliyun.sh up -d --build mysql auth onlyoffice faq-api web-faq
 
 # 仅 标书系统
-docker compose up -d --build mysql auth onlyoffice tender-api web-tender
+./scripts/deploy/docker-compose-aliyun.sh up -d --build mysql auth onlyoffice tender-api web-tender
 
 # 仅 培训考试系统
-docker compose up -d --build mysql auth train-exam-onlyoffice train-exam-api web-train-exam
+./scripts/deploy/docker-compose-aliyun.sh up -d --build mysql auth train-exam-onlyoffice train-exam-api web-train-exam
 
 # 仅 CMDB 系统
-docker compose up -d --build mysql auth cmdb-mysql-init cmdb web-cmdb
+./scripts/deploy/docker-compose-aliyun.sh up -d --build mysql auth cmdb-mysql-init cmdb web-cmdb
 ```
 
 > 说明：启动 CMDB 前，需要在根目录 `.env` 中提供 `CMDB_MYSQL_PASSWORD`，用于初始化 `cmdb_user` 并作为运行时数据库密码。
@@ -111,10 +111,10 @@ docker compose up -d --build mysql auth cmdb-mysql-init cmdb web-cmdb
 cd /Users/zhanglei/Documents/codex-new
 
 # 先启动依赖
-docker compose up -d mysql auth ticketing web-ticketing
+./scripts/deploy/docker-compose-aliyun.sh up -d mysql auth ticketing web-ticketing
 
 # 开启监听：代码有改动时自动重建并重启对应镜像/容器
-docker compose watch ticketing web-ticketing
+./scripts/deploy/docker-compose-aliyun.sh watch ticketing web-ticketing
 ```
 
 > 说明：`docker compose watch` 会占用当前终端，建议新开一个终端执行。

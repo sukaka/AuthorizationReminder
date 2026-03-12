@@ -1,13 +1,21 @@
+x-build-args-cmdb: &build_args_cmdb
+  GOLANG_1_22_ALPINE_IMAGE: ${GOLANG_1_22_ALPINE_IMAGE:-golang:1.22-alpine}
+  ALPINE_3_20_IMAGE: ${ALPINE_3_20_IMAGE:-alpine:3.20}
+
+x-build-args-node-alpine-nginx127: &build_args_node_alpine_nginx127
+  NODE_20_ALPINE_IMAGE: ${NODE_20_ALPINE_IMAGE:-node:20-alpine}
+  NGINX_1_27_ALPINE_IMAGE: ${NGINX_1_27_ALPINE_IMAGE:-nginx:1.27-alpine}
+
 services:
   zookeeper:
-    image: docker.m.daocloud.io/confluentinc/cp-zookeeper:7.6.1
+    image: ${CP_ZOOKEEPER_7_6_1_IMAGE:-confluentinc/cp-zookeeper:7.6.1}
     container_name: cmdb-zookeeper
     environment:
       ZOOKEEPER_CLIENT_PORT: 2181
       ZOOKEEPER_TICK_TIME: 2000
 
   kafka:
-    image: docker.m.daocloud.io/confluentinc/cp-kafka:7.6.1
+    image: ${CP_KAFKA_7_6_1_IMAGE:-confluentinc/cp-kafka:7.6.1}
     container_name: cmdb-kafka
     depends_on:
       - zookeeper
@@ -26,7 +34,7 @@ services:
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
 
   kafka-init:
-    image: docker.m.daocloud.io/confluentinc/cp-kafka:7.6.1
+    image: ${CP_KAFKA_7_6_1_IMAGE:-confluentinc/cp-kafka:7.6.1}
     container_name: cmdb-kafka-init
     depends_on:
       - kafka
@@ -48,7 +56,7 @@ services:
     restart: "no"
 
   kafka-ui:
-    image: docker.m.daocloud.io/provectuslabs/kafka-ui:latest
+    image: ${KAFKA_UI_LATEST_IMAGE:-provectuslabs/kafka-ui:latest}
     container_name: cmdb-kafka-ui
     depends_on:
       - kafka
@@ -59,7 +67,7 @@ services:
       KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9092
 
   cmdb-db-init:
-    image: docker.m.daocloud.io/library/mysql:8.0
+    image: ${MYSQL_8_IMAGE:-mysql:8.0}
     container_name: cmdb-db-init
     entrypoint: ["/bin/sh", "/scripts/init-cmdb-db.sh"]
     environment:
@@ -79,6 +87,7 @@ services:
     build:
       context: ..
       dockerfile: Dockerfile
+      args: *build_args_cmdb
     container_name: cmdb-service
     depends_on:
       cmdb-db-init:
@@ -124,6 +133,7 @@ services:
     build:
       context: ../web
       dockerfile: Dockerfile
+      args: *build_args_node_alpine_nginx127
     container_name: cmdb-web
     depends_on:
       cmdb:

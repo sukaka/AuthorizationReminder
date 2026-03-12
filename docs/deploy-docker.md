@@ -7,8 +7,17 @@
 ```bash
 cp .env.example .env
 # 编辑 .env，填入真实密码与密钥
-docker compose up --build
+./scripts/deploy/docker-compose-aliyun.sh up --build
 ```
+
+如已将基础镜像同步到阿里云 ACR，可在根 `.env` 中设置以下可选前缀：
+
+- `ALIYUN_DOCKERHUB_PREFIX`
+- `ALIYUN_ONLYOFFICE_PREFIX`
+- `ALIYUN_CONFLUENTINC_PREFIX`
+- `ALIYUN_PROVECTUSLABS_PREFIX`
+
+包装脚本会先探测阿里云候选镜像，探测失败时自动回退官方镜像。
 
 ## 访问
 - 前端：`http://localhost:8080`

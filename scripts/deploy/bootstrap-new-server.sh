@@ -3,12 +3,20 @@ set -euo pipefail
 
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 ROOT_DIR=$(cd "${SCRIPT_DIR}/../.." && pwd)
+COMPOSE_WRAPPER="${ROOT_DIR}/scripts/deploy/docker-compose-aliyun.sh"
 ENV_FILE="${ROOT_DIR}/.env"
 ENV_TEMPLATE="${ROOT_DIR}/.env.example"
 
 require_cmd() {
   command -v "$1" >/dev/null 2>&1 || {
     echo "missing required command: $1" >&2
+    exit 1
+  }
+}
+
+require_file_exec() {
+  [ -x "$1" ] || {
+    echo "missing required executable: $1" >&2
     exit 1
   }
 }
@@ -117,7 +125,7 @@ wait_cmdb() {
   local i
   for ((i=1; i<=retries; i+=1)); do
     local cmdb_id
-    cmdb_id=$(docker compose -f "${ROOT_DIR}/docker-compose.yml" ps -q cmdb 2>/dev/null || true)
+    cmdb_id=$("${COMPOSE_WRAPPER}" -f "${ROOT_DIR}/docker-compose.yml" ps -q cmdb 2>/dev/null || true)
     if [ -n "$cmdb_id" ] && docker exec "$cmdb_id" /bin/sh -lc 'wget -qO- http://127.0.0.1:8088/healthz' >/dev/null 2>&1; then
       echo "cmdb: ok"
       return 0
@@ -133,6 +141,7 @@ main() {
   require_cmd openssl
   require_cmd awk
   require_cmd curl
+  require_file_exec "${COMPOSE_WRAPPER}"
 
   cd "$ROOT_DIR"
   [ -f "$ENV_TEMPLATE" ] || {
@@ -157,9 +166,9 @@ main() {
   ensure_value TRAIN_EXAM_DOC_EDITOR_JWT_SECRET hex
   ensure_value CMDB_MYSQL_PASSWORD pass
 
-  docker compose config >/tmp/codex-compose-bootstrap.yml
-  docker compose up -d mysql
-  docker compose up -d --build
+  "${COMPOSE_WRAPPER}" config >/tmp/codex-compose-bootstrap.yml
+  "${COMPOSE_WRAPPER}" up -d mysql
+  "${COMPOSE_WRAPPER}" up -d --build
 
   wait_http auth "http://127.0.0.1:5180/health"
   wait_http reminder "http://127.0.0.1:5179/api/health"
@@ -171,7 +180,7 @@ main() {
   wait_http train-exam "http://127.0.0.1:5188/api/health"
   wait_cmdb
 
-  docker compose ps
+  "${COMPOSE_WRAPPER}" ps
 }
 
 main "$@"

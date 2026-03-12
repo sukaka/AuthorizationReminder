@@ -1,4 +1,5 @@
-FROM docker.m.daocloud.io/library/node:20-bookworm-slim
+ARG NODE_20_BOOKWORM_SLIM_IMAGE=node:20-bookworm-slim
+FROM ${NODE_20_BOOKWORM_SLIM_IMAGE}
 
 WORKDIR /app
 

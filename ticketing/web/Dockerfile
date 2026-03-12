@@ -1,4 +1,6 @@
-FROM docker.m.daocloud.io/library/node:20-bookworm AS build
+ARG NODE_20_BOOKWORM_IMAGE=node:20-bookworm
+ARG NGINX_1_25_ALPINE_IMAGE=nginx:1.25-alpine
+FROM ${NODE_20_BOOKWORM_IMAGE} AS build
 
 WORKDIR /app
 
@@ -8,7 +10,7 @@ RUN npm install
 COPY . ./
 RUN npm run build
 
-FROM docker.m.daocloud.io/library/nginx:1.25-alpine
+FROM ${NGINX_1_25_ALPINE_IMAGE}
 
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 COPY --from=build /app/dist /usr/share/nginx/html

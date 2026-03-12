@@ -1,4 +1,5 @@
-FROM docker.m.daocloud.io/onlyoffice/documentserver:8.1.1
+ARG ONLYOFFICE_DOCUMENTSERVER_8_1_1_IMAGE=onlyoffice/documentserver:8.1.1
+FROM ${ONLYOFFICE_DOCUMENTSERVER_8_1_1_IMAGE}
 
 USER root
 

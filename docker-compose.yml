@@ -1,6 +1,31 @@
+x-build-args-root-app: &build_args_root_app
+  NODE_20_BOOKWORM_IMAGE: ${NODE_20_BOOKWORM_IMAGE:-node:20-bookworm}
+  NODE_20_BOOKWORM_SLIM_IMAGE: ${NODE_20_BOOKWORM_SLIM_IMAGE:-node:20-bookworm-slim}
+
+x-build-args-node-bookworm-slim: &build_args_node_bookworm_slim
+  NODE_20_BOOKWORM_SLIM_IMAGE: ${NODE_20_BOOKWORM_SLIM_IMAGE:-node:20-bookworm-slim}
+
+x-build-args-node-bookworm-nginx125: &build_args_node_bookworm_nginx125
+  NODE_20_BOOKWORM_IMAGE: ${NODE_20_BOOKWORM_IMAGE:-node:20-bookworm}
+  NGINX_1_25_ALPINE_IMAGE: ${NGINX_1_25_ALPINE_IMAGE:-nginx:1.25-alpine}
+
+x-build-args-node-alpine: &build_args_node_alpine
+  NODE_20_ALPINE_IMAGE: ${NODE_20_ALPINE_IMAGE:-node:20-alpine}
+
+x-build-args-node-alpine-nginx127: &build_args_node_alpine_nginx127
+  NODE_20_ALPINE_IMAGE: ${NODE_20_ALPINE_IMAGE:-node:20-alpine}
+  NGINX_1_27_ALPINE_IMAGE: ${NGINX_1_27_ALPINE_IMAGE:-nginx:1.27-alpine}
+
+x-build-args-onlyoffice: &build_args_onlyoffice
+  ONLYOFFICE_DOCUMENTSERVER_8_1_1_IMAGE: ${ONLYOFFICE_DOCUMENTSERVER_8_1_1_IMAGE:-onlyoffice/documentserver:8.1.1}
+
+x-build-args-cmdb: &build_args_cmdb
+  GOLANG_1_22_ALPINE_IMAGE: ${GOLANG_1_22_ALPINE_IMAGE:-golang:1.22-alpine}
+  ALPINE_3_20_IMAGE: ${ALPINE_3_20_IMAGE:-alpine:3.20}
+
 services:
   mysql:
-    image: docker.m.daocloud.io/library/mysql:8.0
+    image: ${MYSQL_8_IMAGE:-mysql:8.0}
     environment:
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
       MYSQL_DATABASE: juxin_reminder
@@ -13,7 +38,9 @@ services:
     command: --default-authentication-plugin=mysql_native_password
 
   api:
-    build: .
+    build:
+      context: .
+      args: *build_args_root_app
     environment:
       PORT: 5179
       SERVE_WEB: "false"
@@ -43,6 +70,7 @@ services:
     build:
       context: .
       dockerfile: auth/Dockerfile
+      args: *build_args_node_bookworm_slim
     environment:
       PORT: 5180
       MYSQL_HOST: mysql
@@ -74,7 +102,9 @@ services:
       - "5180:5180"
 
   web:
-    build: ./web
+    build:
+      context: ./web
+      args: *build_args_node_bookworm_nginx125
     depends_on:
       - api
       - auth
@@ -85,6 +115,7 @@ services:
     build:
       context: .
       dockerfile: ticketing/Dockerfile
+      args: *build_args_node_bookworm_slim
     environment:
       PORT: 5182
       AUTH_SERVICE_URL: "http://auth:5180"
@@ -116,7 +147,9 @@ services:
           path: ./ticketing/package-lock.json
 
   web-ticketing:
-    build: ./ticketing/web
+    build:
+      context: ./ticketing/web
+      args: *build_args_node_bookworm_nginx125
     depends_on:
       - ticketing
       - auth
@@ -138,7 +171,9 @@ services:
           path: ./ticketing/web/vite.config.js
 
   shipping-gateway:
-    build: ./inventory-system/shipping-gateway
+    build:
+      context: ./inventory-system/shipping-gateway
+      args: *build_args_node_alpine
     environment:
       PORT: 5190
       SHIPPING_GATEWAY_TOKEN: "inventory-shipping-gateway-dev-token"
@@ -166,7 +201,9 @@ services:
       - "5190:5190"
 
   inventory-api:
-    build: ./inventory-system/backend
+    build:
+      context: ./inventory-system/backend
+      args: *build_args_node_alpine
     environment:
       PORT: 5183
       AUTH_SERVICE_URL: "http://auth:5180"
@@ -195,14 +232,18 @@ services:
       - "5183:5183"
 
   web-inventory:
-    build: ./inventory-system/frontend
+    build:
+      context: ./inventory-system/frontend
+      args: *build_args_node_alpine_nginx127
     depends_on:
       - inventory-api
     ports:
       - "8082:80"
 
   device-flow-api:
-    build: ./device-flow/backend
+    build:
+      context: ./device-flow/backend
+      args: *build_args_node_alpine
     environment:
       PORT: 5184
       AUTH_SERVICE_URL: "http://auth:5180"
@@ -231,14 +272,18 @@ services:
       - "5184:5184"
 
   web-device-flow:
-    build: ./device-flow/frontend
+    build:
+      context: ./device-flow/frontend
+      args: *build_args_node_alpine_nginx127
     depends_on:
       - device-flow-api
     ports:
       - "8083:80"
 
   sec-impl-api:
-    build: ./sec-impl/backend
+    build:
+      context: ./sec-impl/backend
+      args: *build_args_node_alpine
     environment:
       PORT: 5185
       AUTH_SERVICE_URL: "http://auth:5180"
@@ -267,7 +312,9 @@ services:
       - "5185:5185"
 
   web-sec-impl:
-    build: ./sec-impl/frontend
+    build:
+      context: ./sec-impl/frontend
+      args: *build_args_node_alpine_nginx127
     depends_on:
       - sec-impl-api
       - auth
@@ -275,7 +322,9 @@ services:
       - "8084:80"
 
   faq-api:
-    build: ./faq/backend
+    build:
+      context: ./faq/backend
+      args: *build_args_node_bookworm_slim
     environment:
       PORT: 5186
       AUTH_SERVICE_URL: "http://auth:5180"
@@ -312,7 +361,9 @@ services:
       - "5186:5186"
 
   web-faq:
-    build: ./faq/frontend
+    build:
+      context: ./faq/frontend
+      args: *build_args_node_alpine_nginx127
     depends_on:
       - faq-api
       - auth
@@ -321,7 +372,9 @@ services:
       - "8085:80"
 
   tender-api:
-    build: ./tender/backend
+    build:
+      context: ./tender/backend
+      args: *build_args_node_bookworm_slim
     environment:
       PORT: 5187
       AUTH_SERVICE_URL: "http://auth:5180"
@@ -374,7 +427,9 @@ services:
       - "5187:5187"
 
   web-tender:
-    build: ./tender/frontend
+    build:
+      context: ./tender/frontend
+      args: *build_args_node_alpine_nginx127
     depends_on:
       - tender-api
       - auth
@@ -383,7 +438,9 @@ services:
       - "8086:80"
 
   train-exam-api:
-    build: ./train-exam/backend
+    build:
+      context: ./train-exam/backend
+      args: *build_args_node_bookworm_slim
     environment:
       PORT: 5188
       AUTH_SERVICE_URL: "http://auth:5180"
@@ -438,7 +495,9 @@ services:
       - "5188:5188"
 
   web-train-exam:
-    build: ./train-exam/frontend
+    build:
+      context: ./train-exam/frontend
+      args: *build_args_node_alpine_nginx127
     depends_on:
       - train-exam-api
       - auth
@@ -450,6 +509,7 @@ services:
     build:
       context: ./faq/onlyoffice-fonts
       dockerfile: Dockerfile
+      args: *build_args_onlyoffice
     environment:
       JWT_ENABLED: "true"
       JWT_SECRET: ${FAQ_DOC_EDITOR_JWT_SECRET}
@@ -464,6 +524,7 @@ services:
     build:
       context: ./faq/onlyoffice-fonts
       dockerfile: Dockerfile
+      args: *build_args_onlyoffice
     environment:
       JWT_ENABLED: "true"
       JWT_SECRET: ${TRAIN_EXAM_DOC_EDITOR_JWT_SECRET}
@@ -475,7 +536,7 @@ services:
     restart: unless-stopped
 
   cmdb-mysql-init:
-    image: docker.m.daocloud.io/library/mysql:8.0
+    image: ${MYSQL_8_IMAGE:-mysql:8.0}
     depends_on:
       - mysql
     entrypoint: ["/bin/sh", "/scripts/init-cmdb-db.sh"]
@@ -494,6 +555,7 @@ services:
     build:
       context: ./cmdb
       dockerfile: Dockerfile
+      args: *build_args_cmdb
     depends_on:
       cmdb-mysql-init:
         condition: service_completed_successfully
@@ -518,7 +580,9 @@ services:
       RATE_LIMIT_MAX: 300
 
   web-cmdb:
-    build: ./cmdb/web
+    build:
+      context: ./cmdb/web
+      args: *build_args_node_alpine_nginx127
     depends_on:
       - cmdb
       - auth
