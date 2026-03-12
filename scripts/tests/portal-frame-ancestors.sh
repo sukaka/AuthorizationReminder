@@ -10,6 +10,7 @@ files=(
   "sec-impl/frontend/nginx.conf"
   "faq/frontend/nginx.conf"
   "tender/frontend/nginx.conf"
+  "train-exam/frontend/nginx.conf"
 )
 
 for file in "${files[@]}"; do
