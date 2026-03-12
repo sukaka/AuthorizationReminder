@@ -16,6 +16,10 @@ const { parse } = require('csv-parse/sync');
 const xlsx = require('xlsx');
 const crypto = require('crypto');
 const net = require('net');
+const {
+  isOriginAllowedForRequest,
+  normalizeOrigin,
+} = require('./cors-origin');
 
 const app = express();
 const PORT = process.env.PORT || 5179;
@@ -538,8 +542,6 @@ const decryptSecrets = (configs) => {
   return configs;
 };
 
-const normalizeOrigin = (value) => String(value || '').trim().replace(/\/+$/, '');
-
 const defaultOrigins = [
   'http://localhost:5173',
   'http://127.0.0.1:5173',
@@ -551,18 +553,22 @@ const allowedOrigins = (process.env.CORS_ORIGINS || '')
   .map(normalizeOrigin)
   .filter(Boolean);
 
-const corsOptions = {
-  origin: (origin, cb) => {
-    if (!origin) return cb(null, true);
-    const requestOrigin = normalizeOrigin(origin);
-    const list = allowedOrigins.length ? allowedOrigins : defaultOrigins;
-    if (list.includes(requestOrigin)) return cb(null, true);
-    return cb(new Error('Not allowed by CORS'));
-  },
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-CSRF-Token'],
-  credentials: true,
-  maxAge: 86400,
+const corsOptions = (req, cb) => {
+  const origin = req.headers.origin;
+  const allowed = isOriginAllowedForRequest({
+    origin,
+    headers: req.headers,
+    allowedOrigins,
+    defaultOrigins,
+  });
+  if (!allowed) return cb(new Error('Not allowed by CORS'));
+  return cb(null, {
+    origin: true,
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-CSRF-Token'],
+    credentials: true,
+    maxAge: 86400,
+  });
 };
 
 app.use(
