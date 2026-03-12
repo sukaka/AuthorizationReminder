@@ -28,6 +28,7 @@ x-build-args-cmdb: &build_args_cmdb
 services:
   mysql:
     image: ${MYSQL_IMAGE:-mysql:8.0}
+    entrypoint: ["/bin/sh", "/scripts/run-mysql.sh"]
     environment:
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
       MYSQL_DATABASE: juxin_reminder
@@ -35,6 +36,7 @@ services:
       MYSQL_PASSWORD: ${MYSQL_SHARED_APP_PASSWORD}
     volumes:
       - mysql-data:/var/lib/mysql
+      - ./scripts/deploy/run-mysql.sh:/scripts/run-mysql.sh:ro
     ports:
       - "3308:3306"
 
