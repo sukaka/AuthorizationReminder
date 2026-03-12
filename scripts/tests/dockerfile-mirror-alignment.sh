@@ -17,7 +17,7 @@ for file in \
   "${ROOT_DIR}/faq/backend/Dockerfile" \
   "${ROOT_DIR}/tender/backend/Dockerfile" \
   "${ROOT_DIR}/faq/onlyoffice-fonts/Dockerfile"; do
-  check_contains "$file" 'mirrors.cloud.aliyuncs.com/debian'
+  check_contains "$file" 'mirrors.aliyun.com/debian'
   check_contains "$file" 'deb.debian.org/debian'
 done
 

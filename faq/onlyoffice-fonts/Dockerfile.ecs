@@ -11,22 +11,22 @@ RUN set -eux; \
     if [ -f /etc/apt/sources.list.d/debian.sources ]; then \
       printf '%s\n' \
         'Types: deb' \
-        'URIs: http://mirrors.cloud.aliyuncs.com/debian' \
+        'URIs: http://mirrors.aliyun.com/debian' \
         'Suites: bookworm bookworm-updates' \
         'Components: main' \
         'Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg' \
         '' \
         'Types: deb' \
-        'URIs: http://mirrors.cloud.aliyuncs.com/debian-security' \
+        'URIs: http://mirrors.aliyun.com/debian-security' \
         'Suites: bookworm-security' \
         'Components: main' \
         'Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg' \
         > /etc/apt/sources.list.d/debian.sources; \
     else \
       printf '%s\n' \
-        'deb http://mirrors.cloud.aliyuncs.com/debian bookworm main' \
-        'deb http://mirrors.cloud.aliyuncs.com/debian bookworm-updates main' \
-        'deb http://mirrors.cloud.aliyuncs.com/debian-security bookworm-security main' \
+        'deb http://mirrors.aliyun.com/debian bookworm main' \
+        'deb http://mirrors.aliyun.com/debian bookworm-updates main' \
+        'deb http://mirrors.aliyun.com/debian-security bookworm-security main' \
         > /etc/apt/sources.list; \
     fi; \
     apt-get update; \
