@@ -13,6 +13,7 @@ Runtime image policy:
 - MySQL defaults to `mysql:8.0` for the current deployment environment.
 - Kafka / ZooKeeper default to `7.8.7`, which stays compatible with the current ZooKeeper-based topology.
 - Kafka UI uses `latest`.
+- CMDB build defaults to `GO_MODULE_PROXY=https://mirrors.aliyun.com/goproxy/,direct` and `GO_CHECKSUM_DB=sum.golang.google.cn`.
 
 The `cmdb-db-init` one-shot task will:
 - apply `/Users/zhanglei/Documents/codex-new/cmdb/migrations/mysql/001_init_cmdb.sql`

@@ -1,6 +1,8 @@
 x-build-args-cmdb: &build_args_cmdb
   GOLANG_1_22_ALPINE_IMAGE: ${GOLANG_1_22_ALPINE_IMAGE:-golang:1.22-alpine}
   ALPINE_3_20_IMAGE: ${ALPINE_3_20_IMAGE:-alpine:3.20}
+  GOPROXY: ${GO_MODULE_PROXY:-https://mirrors.aliyun.com/goproxy/,direct}
+  GOSUMDB: ${GO_CHECKSUM_DB:-sum.golang.google.cn}
 
 x-build-args-node-alpine-nginx: &build_args_node_alpine_nginx
   NODE_20_ALPINE_IMAGE: ${NODE_20_ALPINE_IMAGE:-node:20-alpine}
