@@ -8,6 +8,7 @@ BOOTSTRAP_DOCKER_CONFIG_DIR="${BOOTSTRAP_DOCKER_CONFIG_DIR:-/etc/docker}"
 BOOTSTRAP_DOCKER_DAEMON_JSON="${BOOTSTRAP_DOCKER_DAEMON_JSON:-${BOOTSTRAP_DOCKER_CONFIG_DIR}/daemon.json}"
 ALIYUN_MIRROR_URL="${ALIYUN_MIRROR_URL:-}"
 AUTH_BUILTIN_ACCOUNT_DEFAULT_PASSWORD="${AUTH_BUILTIN_ACCOUNT_DEFAULT_PASSWORD:-}"
+PUBLIC_HOST="${PUBLIC_HOST:-}"
 
 require_cmd() {
   command -v "$1" >/dev/null 2>&1 || {
@@ -60,6 +61,7 @@ run_repo_bootstrap() {
   chmod +x scripts/deploy/bootstrap-new-server.sh scripts/deploy/docker-compose-aliyun.sh scripts/deploy/resolve-image-sources.sh
   require_file_exec "$BOOTSTRAP_REPO_DIR/scripts/deploy/bootstrap-new-server.sh"
   export AUTH_BUILTIN_ACCOUNT_DEFAULT_PASSWORD
+  export PUBLIC_HOST
   "$BOOTSTRAP_REPO_DIR/scripts/deploy/bootstrap-new-server.sh"
 }
 
@@ -69,6 +71,7 @@ main() {
   require_cmd systemctl
   require_env ALIYUN_MIRROR_URL "$ALIYUN_MIRROR_URL"
   require_env AUTH_BUILTIN_ACCOUNT_DEFAULT_PASSWORD "$AUTH_BUILTIN_ACCOUNT_DEFAULT_PASSWORD"
+  require_env PUBLIC_HOST "$PUBLIC_HOST"
 
   configure_docker_mirror
   sync_repo

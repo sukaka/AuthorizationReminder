@@ -16,6 +16,7 @@ git clone -b codex/4.0.9 https://github.com/sukaka/AuthorizationReminder.git /ro
 cd /root/AuthorizationReminder-codex-4.0.9
 export ALIYUN_MIRROR_URL='替换成你的阿里云镜像加速器地址'
 export AUTH_BUILTIN_ACCOUNT_DEFAULT_PASSWORD='改成你要登录的默认密码'
+export PUBLIC_HOST='服务器公网IP或域名，不带协议和端口'
 ./scripts/deploy/bootstrap-full-server.sh
 ```
 
@@ -23,6 +24,7 @@ export AUTH_BUILTIN_ACCOUNT_DEFAULT_PASSWORD='改成你要登录的默认密码'
 
 - `ALIYUN_MIRROR_URL`
 - `AUTH_BUILTIN_ACCOUNT_DEFAULT_PASSWORD`
+- `PUBLIC_HOST`
 
 可选覆盖：
 
@@ -38,6 +40,8 @@ export AUTH_BUILTIN_ACCOUNT_DEFAULT_PASSWORD='改成你要登录的默认密码'
 - `ALIYUN_PROVECTUSLABS_PREFIX`
 
 包装脚本会先探测阿里云候选镜像，探测失败时自动回退官方镜像。
+
+`PUBLIC_HOST` 会统一注入各业务服务的 `CORS_ORIGINS`，用于允许浏览器通过 `http://你的公网IP:端口` 访问。
 
 ## 访问
 - 前端：`http://localhost:8080`

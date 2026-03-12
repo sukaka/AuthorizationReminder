@@ -65,10 +65,11 @@ git clone -b codex/4.0.9 https://github.com/sukaka/AuthorizationReminder.git /ro
 cd /root/AuthorizationReminder-codex-4.0.9
 export ALIYUN_MIRROR_URL='替换成你的阿里云镜像加速器地址'
 export AUTH_BUILTIN_ACCOUNT_DEFAULT_PASSWORD='改成你要登录的默认密码'
+export PUBLIC_HOST='服务器公网IP或域名，不带协议和端口'
 ./scripts/deploy/bootstrap-full-server.sh
 ```
 
-> 说明：`bootstrap-full-server.sh` 默认把仓库同步到 `/root/AuthorizationReminder-codex-4.0.9`，并使用分支 `codex/4.0.9`。如需覆盖，可设置 `BOOTSTRAP_REPO_DIR`、`BOOTSTRAP_BRANCH`、`BOOTSTRAP_REPO_URL`。`ALIYUN_MIRROR_URL` 与 `AUTH_BUILTIN_ACCOUNT_DEFAULT_PASSWORD` 为必填项。
+> 说明：`bootstrap-full-server.sh` 默认把仓库同步到 `/root/AuthorizationReminder-codex-4.0.9`，并使用分支 `codex/4.0.9`。如需覆盖，可设置 `BOOTSTRAP_REPO_DIR`、`BOOTSTRAP_BRANCH`、`BOOTSTRAP_REPO_URL`。`ALIYUN_MIRROR_URL`、`AUTH_BUILTIN_ACCOUNT_DEFAULT_PASSWORD`、`PUBLIC_HOST` 为必填项。`PUBLIC_HOST` 只写主机名/IP，不要带 `http://` 或端口。
 
 ### 2.3 常用按系统启动
 ```bash

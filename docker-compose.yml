@@ -55,7 +55,7 @@ services:
       MYSQL_DATABASE: juxin_reminder
       MYSQL_ADMIN_USER: root
       MYSQL_ADMIN_PASSWORD: ${MYSQL_ROOT_PASSWORD}
-      CORS_ORIGINS: "http://localhost:5180,http://127.0.0.1:5180,http://localhost:8080,http://127.0.0.1:8080,http://localhost:8081,http://127.0.0.1:8081,http://localhost:8090,http://127.0.0.1:8090"
+      CORS_ORIGINS: "http://localhost:5180,http://127.0.0.1:5180,http://${PUBLIC_HOST:-localhost}:5180,http://localhost:8080,http://127.0.0.1:8080,http://${PUBLIC_HOST:-localhost}:8080,http://localhost:8081,http://127.0.0.1:8081,http://${PUBLIC_HOST:-localhost}:8081,http://localhost:8090,http://127.0.0.1:8090,http://${PUBLIC_HOST:-localhost}:8090"
       JWT_SECRET: "3122c0763b7728783ce33c724c81fcdf3b9c77fe33cdc3cbfe5a6f4a896634ea"
       AUDIT_SIGNING_KEY: "0157ac63610a6b6a1c164a502b8e08987e03b642a6713151638cc21a9d25e542"
       CONFIG_SECRET_KEY: "UeiKgUhP80JPdwWMoBRRWmKxdz8BKEP4btzTTh4QmYVc9twMEcgCKuqFDx0M4HX8"
@@ -83,7 +83,7 @@ services:
       MYSQL_DATABASE: juxin_reminder
       MYSQL_ADMIN_USER: root
       MYSQL_ADMIN_PASSWORD: ${MYSQL_ROOT_PASSWORD}
-      CORS_ORIGINS: "http://localhost:5180,http://127.0.0.1:5180,http://localhost:8080,http://127.0.0.1:8080,http://localhost:8081,http://127.0.0.1:8081,http://localhost:8082,http://127.0.0.1:8082,http://localhost:8083,http://127.0.0.1:8083,http://localhost:8084,http://127.0.0.1:8084,http://localhost:8085,http://127.0.0.1:8085,http://localhost:8086,http://127.0.0.1:8086,http://localhost:8087,http://127.0.0.1:8087,http://localhost:8090,http://127.0.0.1:8090"
+      CORS_ORIGINS: "http://localhost:5180,http://127.0.0.1:5180,http://${PUBLIC_HOST:-localhost}:5180,http://localhost:8080,http://127.0.0.1:8080,http://${PUBLIC_HOST:-localhost}:8080,http://localhost:8081,http://127.0.0.1:8081,http://${PUBLIC_HOST:-localhost}:8081,http://localhost:8082,http://127.0.0.1:8082,http://${PUBLIC_HOST:-localhost}:8082,http://localhost:8083,http://127.0.0.1:8083,http://${PUBLIC_HOST:-localhost}:8083,http://localhost:8084,http://127.0.0.1:8084,http://${PUBLIC_HOST:-localhost}:8084,http://localhost:8085,http://127.0.0.1:8085,http://${PUBLIC_HOST:-localhost}:8085,http://localhost:8086,http://127.0.0.1:8086,http://${PUBLIC_HOST:-localhost}:8086,http://localhost:8087,http://127.0.0.1:8087,http://${PUBLIC_HOST:-localhost}:8087,http://localhost:8090,http://127.0.0.1:8090,http://${PUBLIC_HOST:-localhost}:8090"
       APP_CMDB_URL: "http://localhost:8090"
       APP_INVENTORY_URL: "http://localhost:8082"
       APP_DEVICE_FLOW_URL: "http://localhost:8083"
@@ -129,7 +129,7 @@ services:
       MYSQL_DATABASE: juxin_reminder
       MYSQL_ADMIN_USER: root
       MYSQL_ADMIN_PASSWORD: ${MYSQL_ROOT_PASSWORD}
-      CORS_ORIGINS: "http://localhost:5180,http://127.0.0.1:5180,http://localhost:8080,http://127.0.0.1:8080,http://localhost:8081,http://127.0.0.1:8081,http://localhost:8090,http://127.0.0.1:8090"
+      CORS_ORIGINS: "http://localhost:5180,http://127.0.0.1:5180,http://${PUBLIC_HOST:-localhost}:5180,http://localhost:8080,http://127.0.0.1:8080,http://${PUBLIC_HOST:-localhost}:8080,http://localhost:8081,http://127.0.0.1:8081,http://${PUBLIC_HOST:-localhost}:8081,http://localhost:8090,http://127.0.0.1:8090,http://${PUBLIC_HOST:-localhost}:8090"
       JWT_SECRET: "3122c0763b7728783ce33c724c81fcdf3b9c77fe33cdc3cbfe5a6f4a896634ea"
       AUDIT_SIGNING_KEY: "53bc691c095c27647ff02d056637f09482b963d7c9a104454e44376b685b8c3e"
       SECURITY_STRICT_MODE: "true"
@@ -181,7 +181,7 @@ services:
       PORT: 5190
       SHIPPING_GATEWAY_TOKEN: "inventory-shipping-gateway-dev-token"
       SHIPPING_GATEWAY_TIMEOUT_MS: 8000
-      CORS_ORIGINS: "http://localhost:5183,http://127.0.0.1:5183,http://localhost:8082,http://127.0.0.1:8082"
+      CORS_ORIGINS: "http://localhost:5183,http://127.0.0.1:5183,http://${PUBLIC_HOST:-localhost}:5183,http://localhost:8082,http://127.0.0.1:8082,http://${PUBLIC_HOST:-localhost}:8082"
       RATE_LIMIT_WINDOW_SEC: 60
       RATE_LIMIT_MAX: 240
       SHIPPING_GATEWAY_ALLOW_MOCK: "0"
@@ -220,7 +220,7 @@ services:
       MYSQL_DATABASE: juxin_inventory
       MYSQL_ADMIN_USER: root
       MYSQL_ADMIN_PASSWORD: ${MYSQL_ROOT_PASSWORD}
-      CORS_ORIGINS: "http://localhost:8082,http://127.0.0.1:8082"
+      CORS_ORIGINS: "http://localhost:8082,http://127.0.0.1:8082,http://${PUBLIC_HOST:-localhost}:8082"
       RATE_LIMIT_WINDOW_SEC: 60
       RATE_LIMIT_MAX: 300
       SHIPPING_TRACKING_API_URL: "http://shipping-gateway:5190/api/track/query"
@@ -260,7 +260,7 @@ services:
       MYSQL_DATABASE: juxin_device_flow
       MYSQL_ADMIN_USER: root
       MYSQL_ADMIN_PASSWORD: ${MYSQL_ROOT_PASSWORD}
-      CORS_ORIGINS: "http://localhost:8083,http://127.0.0.1:8083"
+      CORS_ORIGINS: "http://localhost:8083,http://127.0.0.1:8083,http://${PUBLIC_HOST:-localhost}:8083"
       DASHBOARD_OVERDUE_DAYS: 3
       SLA_AUTO_RUN_INTERVAL_MS: 300000
       MAX_BATCH_STAGE_JOB_IDS: 200
@@ -300,7 +300,7 @@ services:
       MYSQL_DATABASE: juxin_sec_impl
       MYSQL_ADMIN_USER: root
       MYSQL_ADMIN_PASSWORD: ${MYSQL_ROOT_PASSWORD}
-      CORS_ORIGINS: "http://localhost:8084,http://127.0.0.1:8084"
+      CORS_ORIGINS: "http://localhost:8084,http://127.0.0.1:8084,http://${PUBLIC_HOST:-localhost}:8084"
       DASHBOARD_OVERDUE_DAYS: 3
       SLA_AUTO_RUN_INTERVAL_MS: 300000
       MAX_BATCH_STAGE_JOB_IDS: 200
@@ -341,7 +341,7 @@ services:
       MYSQL_DATABASE: juxin_faq
       MYSQL_ADMIN_USER: root
       MYSQL_ADMIN_PASSWORD: ${MYSQL_ROOT_PASSWORD}
-      CORS_ORIGINS: "http://localhost:8085,http://127.0.0.1:8085"
+      CORS_ORIGINS: "http://localhost:8085,http://127.0.0.1:8085,http://${PUBLIC_HOST:-localhost}:8085"
       UPLOAD_ROOT: "/data/faq/uploads"
       PREVIEW_ROOT: "/data/faq/previews"
       DRAFT_ROOT: "/data/faq/drafts"
@@ -391,7 +391,7 @@ services:
       MYSQL_DATABASE: juxin_tender
       MYSQL_ADMIN_USER: root
       MYSQL_ADMIN_PASSWORD: ${MYSQL_ROOT_PASSWORD}
-      CORS_ORIGINS: "http://localhost:8086,http://127.0.0.1:8086"
+      CORS_ORIGINS: "http://localhost:8086,http://127.0.0.1:8086,http://${PUBLIC_HOST:-localhost}:8086"
       UPLOAD_ROOT: "/data/tender/uploads"
       VERSION_ROOT: "/data/tender/uploads/versions"
       DRAFT_ROOT: "/data/tender/uploads/drafts"
@@ -462,7 +462,7 @@ services:
       FAQ_MYSQL_USER: faq_user
       FAQ_MYSQL_PASSWORD: ${FAQ_MYSQL_PASSWORD}
       FAQ_MYSQL_DATABASE: juxin_faq
-      CORS_ORIGINS: "http://localhost:8087,http://127.0.0.1:8087"
+      CORS_ORIGINS: "http://localhost:8087,http://127.0.0.1:8087,http://${PUBLIC_HOST:-localhost}:8087"
       RESOURCE_ROOT: "/data/train-exam/resources"
       IMPORT_ROOT: "/data/train-exam/imports"
       CERT_ROOT: "/data/train-exam/certificates"

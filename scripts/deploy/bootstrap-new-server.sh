@@ -95,6 +95,15 @@ ensure_value() {
       fi
       upsert_env "$key" "$provided"
       ;;
+    host_or_localhost)
+      local provided=""
+      provided="${!key:-}"
+      if is_placeholder "$provided"; then
+        upsert_env "$key" "localhost"
+      else
+        upsert_env "$key" "$provided"
+      fi
+      ;;
     *)
       echo "unknown mode: $mode" >&2
       exit 1
@@ -157,6 +166,7 @@ main() {
   ensure_value AUTH_AUDIT_SIGNING_KEY hex
   ensure_value AUTH_CONFIG_SECRET_KEY hex
   ensure_value AUTH_BUILTIN_ACCOUNT_DEFAULT_PASSWORD required_plain
+  ensure_value PUBLIC_HOST host_or_localhost
   ensure_value FAQ_MYSQL_PASSWORD pass
   ensure_value FAQ_DOC_EDITOR_JWT_SECRET hex
   ensure_value SEC_IMPL_MYSQL_PASSWORD pass
