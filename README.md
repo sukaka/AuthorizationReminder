@@ -61,12 +61,14 @@ cp .env.example .env
 
 ### 2.2.1 新服务器首启（一键）
 ```bash
-cd /Users/zhanglei/Documents/codex-new
+git clone -b codex/4.0.9 https://github.com/sukaka/AuthorizationReminder.git /root/AuthorizationReminder-codex-4.0.9
+cd /root/AuthorizationReminder-codex-4.0.9
+export ALIYUN_MIRROR_URL='替换成你的阿里云镜像加速器地址'
 export AUTH_BUILTIN_ACCOUNT_DEFAULT_PASSWORD='改成你要登录的默认密码'
-./scripts/deploy/bootstrap-new-server.sh
+./scripts/deploy/bootstrap-full-server.sh
 ```
 
-> 说明：该脚本会自动补齐根 `.env` 中缺失或仍是占位符的密钥，启动 MySQL 和全量服务，并执行基础健康检查。`AUTH_BUILTIN_ACCOUNT_DEFAULT_PASSWORD` 必须由你显式提供，否则脚本会拒绝继续，避免部署完成后无法登录。
+> 说明：`bootstrap-full-server.sh` 默认把仓库同步到 `/root/AuthorizationReminder-codex-4.0.9`，并使用分支 `codex/4.0.9`。如需覆盖，可设置 `BOOTSTRAP_REPO_DIR`、`BOOTSTRAP_BRANCH`、`BOOTSTRAP_REPO_URL`。`ALIYUN_MIRROR_URL` 与 `AUTH_BUILTIN_ACCOUNT_DEFAULT_PASSWORD` 为必填项。
 
 ### 2.3 常用按系统启动
 ```bash

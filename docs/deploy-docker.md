@@ -10,6 +10,26 @@ cp .env.example .env
 ./scripts/deploy/docker-compose-aliyun.sh up --build
 ```
 
+## 新服务器首启
+```bash
+git clone -b codex/4.0.9 https://github.com/sukaka/AuthorizationReminder.git /root/AuthorizationReminder-codex-4.0.9
+cd /root/AuthorizationReminder-codex-4.0.9
+export ALIYUN_MIRROR_URL='替换成你的阿里云镜像加速器地址'
+export AUTH_BUILTIN_ACCOUNT_DEFAULT_PASSWORD='改成你要登录的默认密码'
+./scripts/deploy/bootstrap-full-server.sh
+```
+
+必填环境变量：
+
+- `ALIYUN_MIRROR_URL`
+- `AUTH_BUILTIN_ACCOUNT_DEFAULT_PASSWORD`
+
+可选覆盖：
+
+- `BOOTSTRAP_REPO_DIR`
+- `BOOTSTRAP_BRANCH`
+- `BOOTSTRAP_REPO_URL`
+
 如已将基础镜像同步到阿里云 ACR，可在根 `.env` 中设置以下可选前缀：
 
 - `ALIYUN_DOCKERHUB_PREFIX`
