@@ -103,7 +103,7 @@ Use repository search to detect missing doc updates.
 
 **Step 2: Run baseline inspection**
 
-Run: `cd /Users/zhanglei/Documents/codex-new && rg -n 'cmdb_user|CMDB_MYSQL_PASSWORD|root@cmdb|root:rootpass@tcp' README.md cmdb docs`
+Run: `cd /Users/zhanglei/Documents/codex-new && rg -n 'cmdb_user|CMDB_MYSQL_PASSWORD|root@cmdb|root:[^@]+@tcp' README.md cmdb docs`
 Expected: docs do not yet fully describe the new runtime user.
 
 **Step 3: Write minimal implementation**

@@ -5,6 +5,8 @@
 
 ## 启动
 ```bash
+cp .env.example .env
+# 编辑 .env，填入真实密码与密钥
 docker compose up --build
 ```
 
@@ -16,10 +18,10 @@ docker compose up --build
 默认使用 MySQL：
 - 数据库：`juxin_reminder`
 - 用户：`juxin`
-- 密码：`juxinpass`
-- Root 密码：`rootpass`
+- 业务共享密码：来自根 `.env` 的 `MYSQL_SHARED_APP_PASSWORD`
+- Root 密码：来自根 `.env` 的 `MYSQL_ROOT_PASSWORD`
 
-如需修改，请编辑 `docker-compose.yml` 中的环境变量。
+如需修改，请编辑根目录 `.env`。推荐先从 [`.env.example`](/Users/zhanglei/Documents/codex-new/.env.example) 复制。
 
 ## 架构说明
 - 采用官方多架构镜像（`node:20` / `mysql:8.0` / `nginx:1.25`），可在 x86_64 与 arm64 环境构建运行。

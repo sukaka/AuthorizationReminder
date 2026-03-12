@@ -17,5 +17,6 @@ server/data.db
 server/data.db-*
 .env
 .env.*
+!.env.example
 .worktrees/
 .tmp_*

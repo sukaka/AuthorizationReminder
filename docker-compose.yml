@@ -21,8 +21,10 @@ services:
       MYSQL_HOST: mysql
       MYSQL_PORT: 3306
       MYSQL_USER: juxin
-      MYSQL_PASSWORD: juxinpass
+      MYSQL_PASSWORD: ${MYSQL_SHARED_APP_PASSWORD}
       MYSQL_DATABASE: juxin_reminder
+      MYSQL_ADMIN_USER: root
+      MYSQL_ADMIN_PASSWORD: ${MYSQL_ROOT_PASSWORD}
       CORS_ORIGINS: "http://localhost:5180,http://127.0.0.1:5180,http://localhost:8080,http://127.0.0.1:8080,http://localhost:8081,http://127.0.0.1:8081,http://localhost:8090,http://127.0.0.1:8090"
       JWT_SECRET: "3122c0763b7728783ce33c724c81fcdf3b9c77fe33cdc3cbfe5a6f4a896634ea"
       AUDIT_SIGNING_KEY: "0157ac63610a6b6a1c164a502b8e08987e03b642a6713151638cc21a9d25e542"
@@ -48,6 +50,8 @@ services:
       MYSQL_USER: auth_user
       MYSQL_PASSWORD: ${AUTH_MYSQL_PASSWORD}
       MYSQL_DATABASE: juxin_reminder
+      MYSQL_ADMIN_USER: root
+      MYSQL_ADMIN_PASSWORD: ${MYSQL_ROOT_PASSWORD}
       CORS_ORIGINS: "http://localhost:5180,http://127.0.0.1:5180,http://localhost:8080,http://127.0.0.1:8080,http://localhost:8081,http://127.0.0.1:8081,http://localhost:8082,http://127.0.0.1:8082,http://localhost:8083,http://127.0.0.1:8083,http://localhost:8084,http://127.0.0.1:8084,http://localhost:8085,http://127.0.0.1:8085,http://localhost:8086,http://127.0.0.1:8086,http://localhost:8087,http://127.0.0.1:8087,http://localhost:8090,http://127.0.0.1:8090"
       APP_CMDB_URL: "http://localhost:8090"
       APP_INVENTORY_URL: "http://localhost:8082"
@@ -87,8 +91,10 @@ services:
       MYSQL_HOST: mysql
       MYSQL_PORT: 3306
       MYSQL_USER: juxin
-      MYSQL_PASSWORD: juxinpass
+      MYSQL_PASSWORD: ${MYSQL_SHARED_APP_PASSWORD}
       MYSQL_DATABASE: juxin_reminder
+      MYSQL_ADMIN_USER: root
+      MYSQL_ADMIN_PASSWORD: ${MYSQL_ROOT_PASSWORD}
       CORS_ORIGINS: "http://localhost:5180,http://127.0.0.1:5180,http://localhost:8080,http://127.0.0.1:8080,http://localhost:8081,http://127.0.0.1:8081,http://localhost:8090,http://127.0.0.1:8090"
       JWT_SECRET: "3122c0763b7728783ce33c724c81fcdf3b9c77fe33cdc3cbfe5a6f4a896634ea"
       AUDIT_SIGNING_KEY: "53bc691c095c27647ff02d056637f09482b963d7c9a104454e44376b685b8c3e"
@@ -170,10 +176,10 @@ services:
       MYSQL_HOST: mysql
       MYSQL_PORT: 3306
       MYSQL_USER: juxin
-      MYSQL_PASSWORD: juxinpass
+      MYSQL_PASSWORD: ${MYSQL_SHARED_APP_PASSWORD}
       MYSQL_DATABASE: juxin_inventory
       MYSQL_ADMIN_USER: root
-      MYSQL_ADMIN_PASSWORD: rootpass
+      MYSQL_ADMIN_PASSWORD: ${MYSQL_ROOT_PASSWORD}
       CORS_ORIGINS: "http://localhost:8082,http://127.0.0.1:8082"
       RATE_LIMIT_WINDOW_SEC: 60
       RATE_LIMIT_MAX: 300
@@ -206,10 +212,10 @@ services:
       MYSQL_HOST: mysql
       MYSQL_PORT: 3306
       MYSQL_USER: juxin
-      MYSQL_PASSWORD: juxinpass
+      MYSQL_PASSWORD: ${MYSQL_SHARED_APP_PASSWORD}
       MYSQL_DATABASE: juxin_device_flow
       MYSQL_ADMIN_USER: root
-      MYSQL_ADMIN_PASSWORD: rootpass
+      MYSQL_ADMIN_PASSWORD: ${MYSQL_ROOT_PASSWORD}
       CORS_ORIGINS: "http://localhost:8083,http://127.0.0.1:8083"
       DASHBOARD_OVERDUE_DAYS: 3
       SLA_AUTO_RUN_INTERVAL_MS: 300000
@@ -242,10 +248,10 @@ services:
       MYSQL_HOST: mysql
       MYSQL_PORT: 3306
       MYSQL_USER: sec_impl_user
-      MYSQL_PASSWORD: sec_impl_pass
+      MYSQL_PASSWORD: ${SEC_IMPL_MYSQL_PASSWORD}
       MYSQL_DATABASE: juxin_sec_impl
       MYSQL_ADMIN_USER: root
-      MYSQL_ADMIN_PASSWORD: rootpass
+      MYSQL_ADMIN_PASSWORD: ${MYSQL_ROOT_PASSWORD}
       CORS_ORIGINS: "http://localhost:8084,http://127.0.0.1:8084"
       DASHBOARD_OVERDUE_DAYS: 3
       SLA_AUTO_RUN_INTERVAL_MS: 300000
@@ -325,10 +331,10 @@ services:
       MYSQL_HOST: mysql
       MYSQL_PORT: 3306
       MYSQL_USER: tender_user
-      MYSQL_PASSWORD: tender_pass
+      MYSQL_PASSWORD: ${TENDER_MYSQL_PASSWORD}
       MYSQL_DATABASE: juxin_tender
       MYSQL_ADMIN_USER: root
-      MYSQL_ADMIN_PASSWORD: rootpass
+      MYSQL_ADMIN_PASSWORD: ${MYSQL_ROOT_PASSWORD}
       CORS_ORIGINS: "http://localhost:8086,http://127.0.0.1:8086"
       UPLOAD_ROOT: "/data/tender/uploads"
       VERSION_ROOT: "/data/tender/uploads/versions"

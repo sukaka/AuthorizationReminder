@@ -192,7 +192,7 @@ const loadAuthUserByUsername = async (username) => {
     host: String(process.env.AUTH_DB_HOST || process.env.MYSQL_HOST || '127.0.0.1'),
     port: Number(process.env.AUTH_DB_PORT || process.env.MYSQL_PORT || 3308),
     user: String(process.env.AUTH_DB_USER || process.env.MYSQL_USER || 'juxin'),
-    password: String(process.env.AUTH_DB_PASSWORD || process.env.MYSQL_PASSWORD || 'juxinpass'),
+    password: String(process.env.AUTH_DB_PASSWORD || process.env.MYSQL_SHARED_APP_PASSWORD || process.env.MYSQL_PASSWORD || ''),
     database: String(process.env.AUTH_DB_NAME || process.env.MYSQL_DATABASE || 'juxin_reminder'),
   });
   try {

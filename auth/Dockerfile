@@ -9,6 +9,7 @@ COPY auth/password-security.js ./auth/password-security.js
 COPY auth/session-security.js ./auth/session-security.js
 COPY auth/security-bootstrap.js ./auth/security-bootstrap.js
 COPY server/db.js ./server/db.js
+COPY server/db-bootstrap.js ./server/db-bootstrap.js
 
 WORKDIR /app/auth
 RUN npm ci --omit=dev

@@ -52,8 +52,21 @@
 ### 2.2 一键启动（全量）
 ```bash
 cd /Users/zhanglei/Documents/codex-new
+cp .env.example .env
+# 编辑 .env，填入真实密码与密钥
 docker compose up -d --build
 ```
+
+> 说明：根目录 `.env` 是必需文件，`docker compose` 不会从 Git 仓库自动带出这些密码与密钥。可先从 [`.env.example`](/Users/zhanglei/Documents/codex-new/.env.example) 复制生成。
+
+### 2.2.1 新服务器首启（一键）
+```bash
+cd /Users/zhanglei/Documents/codex-new
+export AUTH_BUILTIN_ACCOUNT_DEFAULT_PASSWORD='改成你要登录的默认密码'
+./scripts/deploy/bootstrap-new-server.sh
+```
+
+> 说明：该脚本会自动补齐根 `.env` 中缺失或仍是占位符的密钥，启动 MySQL 和全量服务，并执行基础健康检查。`AUTH_BUILTIN_ACCOUNT_DEFAULT_PASSWORD` 必须由你显式提供，否则脚本会拒绝继续，避免部署完成后无法登录。
 
 ### 2.3 常用按系统启动
 ```bash

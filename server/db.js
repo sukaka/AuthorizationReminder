@@ -1,15 +1,28 @@
 const mysql = require('mysql2/promise');
+const { buildBootstrapStatements } = require('./db-bootstrap');
 
-const pool = mysql.createPool({
-  host: process.env.MYSQL_HOST || 'mysql',
-  port: process.env.MYSQL_PORT ? Number(process.env.MYSQL_PORT) : 3306,
-  user: process.env.MYSQL_USER || 'root',
-  password: process.env.MYSQL_PASSWORD || '',
-  database: process.env.MYSQL_DATABASE || 'juxin_reminder',
-  waitForConnections: true,
-  connectionLimit: 10,
-  dateStrings: true,
-});
+const DB_HOST = process.env.MYSQL_HOST || 'mysql';
+const DB_PORT = process.env.MYSQL_PORT ? Number(process.env.MYSQL_PORT) : 3306;
+const DB_USER = process.env.MYSQL_USER || 'root';
+const DB_PASSWORD = process.env.MYSQL_PASSWORD || '';
+const DB_NAME = process.env.MYSQL_DATABASE || 'juxin_reminder';
+const DB_CONN_LIMIT = Number(process.env.DB_CONNECTION_LIMIT || 10);
+const DB_RETRIES = Number(process.env.DB_CONNECT_RETRIES || 30);
+const DB_RETRY_DELAY = Number(process.env.DB_CONNECT_DELAY_MS || 2000);
+
+const buildPool = ({ database, user, password } = {}) =>
+  mysql.createPool({
+    host: DB_HOST,
+    port: DB_PORT,
+    user: user || DB_USER,
+    password: password !== undefined ? password : DB_PASSWORD,
+    database: database || DB_NAME,
+    waitForConnections: true,
+    connectionLimit: DB_CONN_LIMIT,
+    dateStrings: true,
+  });
+
+const pool = buildPool();
 
 const query = async (sql, params = []) => {
   const [rows] = await pool.query(sql, params);
@@ -57,17 +70,38 @@ const transaction = async (fn) => {
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-const waitForDb = async () => {
-  const attempts = Number(process.env.DB_CONNECT_RETRIES || 30);
-  const delayMs = Number(process.env.DB_CONNECT_DELAY_MS || 2000);
-  for (let i = 0; i < attempts; i += 1) {
+const waitForDb = async (targetPool = pool, label = 'database') => {
+  for (let i = 0; i < DB_RETRIES; i += 1) {
     try {
-      await pool.query('SELECT 1');
+      await targetPool.query('SELECT 1');
       return;
     } catch (err) {
-      if (i === attempts - 1) throw err;
-      await sleep(delayMs);
+      if (i === DB_RETRIES - 1) throw err;
+      console.warn(`[db] waiting for ${label}... (${i + 1}/${DB_RETRIES})`);
+      await sleep(DB_RETRY_DELAY);
     }
+  }
+};
+
+const bootstrapDatabase = async () => {
+  const adminUser = process.env.MYSQL_ADMIN_USER || DB_USER;
+  const adminPassword =
+    process.env.MYSQL_ADMIN_PASSWORD !== undefined ? process.env.MYSQL_ADMIN_PASSWORD : DB_PASSWORD;
+  const adminPool = buildPool({ user: adminUser, password: adminPassword, database: undefined });
+
+  await waitForDb(adminPool, 'mysql admin connection');
+
+  try {
+    const statements = buildBootstrapStatements({
+      database: DB_NAME,
+      user: DB_USER,
+      password: DB_PASSWORD,
+    });
+    for (const statement of statements) {
+      await adminPool.query(statement.sql, statement.params || []);
+    }
+  } finally {
+    await adminPool.end();
   }
 };
 
@@ -682,7 +716,8 @@ const init = async () => {
 };
 
 const ready = (async () => {
-  await waitForDb();
+  await bootstrapDatabase();
+  await waitForDb(pool, 'reminder/auth database');
   await init();
 })();
 
