@@ -30,6 +30,9 @@ const {
   isOriginAllowedForRequest,
   normalizeOrigin,
 } = require('../server/cors-origin');
+const {
+  buildHelmetCspDirectives,
+} = require('../server/helmet-csp');
 
 const app = express();
 const PORT = process.env.PORT || 5180;
@@ -505,17 +508,7 @@ app.use((req, res, next) => {
 app.use(
   helmet({
     contentSecurityPolicy: {
-      directives: {
-        defaultSrc: ["'self'"],
-        baseUri: ["'self'"],
-        frameAncestors: ["'self'"],
-        objectSrc: ["'none'"],
-        scriptSrc: ["'self'", (req, res) => `'nonce-${res.locals.cspNonce}'`],
-        styleSrc: ["'self'", "'unsafe-inline'"],
-        imgSrc: ["'self'", 'data:'],
-        fontSrc: ["'self'", 'data:'],
-        connectSrc: ["'self'"],
-      },
+      directives: buildHelmetCspDirectives({ withNonce: true }),
     },
     crossOriginEmbedderPolicy: false,
   })

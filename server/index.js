@@ -20,6 +20,9 @@ const {
   isOriginAllowedForRequest,
   normalizeOrigin,
 } = require('./cors-origin');
+const {
+  buildHelmetCspDirectives,
+} = require('./helmet-csp');
 
 const app = express();
 const PORT = process.env.PORT || 5179;
@@ -574,17 +577,7 @@ const corsOptions = (req, cb) => {
 app.use(
   helmet({
     contentSecurityPolicy: {
-      directives: {
-        defaultSrc: ["'self'"],
-        baseUri: ["'self'"],
-        frameAncestors: ["'self'"],
-        objectSrc: ["'none'"],
-        scriptSrc: ["'self'"],
-        styleSrc: ["'self'", "'unsafe-inline'"],
-        imgSrc: ["'self'", 'data:'],
-        fontSrc: ["'self'", 'data:'],
-        connectSrc: ["'self'"],
-      },
+      directives: buildHelmetCspDirectives(),
     },
     crossOriginEmbedderPolicy: false,
   })
