@@ -67,7 +67,7 @@ services:
       KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9092
 
   cmdb-db-init:
-    image: ${MYSQL_IMAGE:-mysql:8.4}
+    image: ${MYSQL_IMAGE:-mysql:8.0}
     container_name: cmdb-db-init
     entrypoint: ["/bin/sh", "/scripts/init-cmdb-db.sh"]
     environment:

@@ -36,7 +36,7 @@ if ! grep -q '^NODE_20_BOOKWORM_IMAGE=registry.cn-hangzhou.aliyuncs.com/acr-mirr
   exit 1
 fi
 
-if ! grep -q '^MYSQL_IMAGE=mysql:8.4$' "${OUT_FILE}"; then
+if ! grep -q '^MYSQL_IMAGE=mysql:8.0$' "${OUT_FILE}"; then
   echo "expected MYSQL_IMAGE to fall back to official image" >&2
   exit 1
 fi

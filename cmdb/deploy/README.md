@@ -10,7 +10,7 @@ docker compose up -d --build
 ```
 
 Runtime image policy:
-- MySQL defaults to `mysql:8.4` for the current LTS line.
+- MySQL defaults to `mysql:8.0` for the current deployment environment.
 - Kafka / ZooKeeper default to `7.8.7`, which stays compatible with the current ZooKeeper-based topology.
 - Kafka UI uses `latest`.
 

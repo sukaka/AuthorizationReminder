@@ -101,8 +101,8 @@ main() {
     "$(build_library_candidate node:20-alpine)"
   write_alias NGINX_ALPINE_IMAGE nginx:alpine \
     "$(build_library_candidate nginx:alpine)"
-  write_alias MYSQL_IMAGE mysql:8.4 \
-    "$(build_library_candidate mysql:8.4)"
+  write_alias MYSQL_IMAGE mysql:8.0 \
+    "$(build_library_candidate mysql:8.0)"
   write_alias GOLANG_1_22_ALPINE_IMAGE golang:1.22-alpine \
     "$(build_library_candidate golang:1.22-alpine)"
   write_alias ALPINE_3_20_IMAGE alpine:3.20 \

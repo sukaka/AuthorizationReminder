@@ -18,8 +18,8 @@
   - 风险：镜像内系统包会变化，但对静态资源前端服务影响可控。
 - OnlyOffice：保留 `onlyoffice/documentserver:latest`
   - 已经验证当前 Dockerfile 能基于 `latest` 继续构建。
-- MySQL：改为 `mysql:8.4`
-  - 这是当前官方 LTS 线，比 `mysql:8.0` 新，同时避免 `mysql:latest` 将来跳到新主版本。
+- MySQL：默认回退为 `mysql:8.0`
+  - 原因：当前服务器镜像加速环境无法稳定拉取 `mysql:8.4`，先回退到当前可部署的 `8.0` 线。
 - Kafka / ZooKeeper：改为 `confluentinc/cp-kafka:7.8.7` / `confluentinc/cp-zookeeper:7.8.7`
   - 这是当前仍兼容 ZooKeeper 模式的较新 7.x 线，避免 8.x 移除 ZooKeeper 带来的架构断裂。
 - Kafka UI：保留 `provectuslabs/kafka-ui:latest`

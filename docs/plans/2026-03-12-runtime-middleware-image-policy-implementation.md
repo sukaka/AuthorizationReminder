@@ -18,7 +18,7 @@
 
 **Step 1: Update Compose build args and runtime image aliases**
 - Replace `NGINX_1_25_ALPINE_IMAGE` / `NGINX_1_27_ALPINE_IMAGE` with `NGINX_ALPINE_IMAGE`.
-- Replace `MYSQL_8_IMAGE` with `MYSQL_IMAGE` and default to `mysql:8.4`.
+- Replace `MYSQL_8_IMAGE` with `MYSQL_IMAGE` and default to `mysql:8.0`.
 - Replace `CP_ZOOKEEPER_7_6_1_IMAGE` / `CP_KAFKA_7_6_1_IMAGE` with generic aliases defaulting to `7.8.7`.
 
 **Step 2: Render Compose config**
@@ -54,7 +54,7 @@ Expected: no missing build args.
 
 **Step 1: Update resolver defaults**
 - `NGINX_ALPINE_IMAGE=nginx:alpine`
-- `MYSQL_IMAGE=mysql:8.4`
+- `MYSQL_IMAGE=mysql:8.0`
 - `CP_ZOOKEEPER_IMAGE=confluentinc/cp-zookeeper:7.8.7`
 - `CP_KAFKA_IMAGE=confluentinc/cp-kafka:7.8.7`
 

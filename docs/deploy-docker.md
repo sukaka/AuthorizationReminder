@@ -53,8 +53,8 @@ export AUTH_BUILTIN_ACCOUNT_DEFAULT_PASSWORD='改成你要登录的默认密码'
 如需修改，请编辑根目录 `.env`。推荐先从 [`.env.example`](/Users/zhanglei/Documents/codex-new/.env.example) 复制。
 
 ## 架构说明
-- 采用官方多架构镜像（`node:20` / `mysql:8.4` / `nginx:alpine`），可在 x86_64 与 arm64 环境构建运行。
-- 运行时中间件采用“最新可兼容版本线”：OnlyOffice 与 Kafka UI 使用 `latest`，MySQL 使用 `8.4` LTS，CMDB 的 Kafka / ZooKeeper 使用 `7.8.7` 以保持 ZooKeeper 拓扑兼容。
+- 采用官方多架构镜像（`node:20` / `mysql:8.0` / `nginx:alpine`），可在 x86_64 与 arm64 环境构建运行。
+- 运行时中间件采用“最新可兼容版本线”：OnlyOffice 与 Kafka UI 使用 `latest`，MySQL 暂时使用 `8.0`，CMDB 的 Kafka / ZooKeeper 使用 `7.8.7` 以保持 ZooKeeper 拓扑兼容。
 - 如需跨架构构建，可使用 `docker buildx` 指定 `--platform`。
 
 ## CORS/CSRF
