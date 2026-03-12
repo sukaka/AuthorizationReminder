@@ -109,8 +109,8 @@ main() {
     "$(build_library_candidate golang:1.22-alpine)"
   write_alias ALPINE_3_20_IMAGE alpine:3.20 \
     "$(build_library_candidate alpine:3.20)"
-  write_alias ONLYOFFICE_DOCUMENTSERVER_8_1_1_IMAGE onlyoffice/documentserver:8.1.1 \
-    "$(build_vendor_candidate ALIYUN_ONLYOFFICE_PREFIX onlyoffice/documentserver:8.1.1)"
+  write_alias ONLYOFFICE_DOCUMENTSERVER_IMAGE onlyoffice/documentserver:latest \
+    "$(build_vendor_candidate ALIYUN_ONLYOFFICE_PREFIX onlyoffice/documentserver:latest)"
   write_alias CP_ZOOKEEPER_7_6_1_IMAGE confluentinc/cp-zookeeper:7.6.1 \
     "$(build_vendor_candidate ALIYUN_CONFLUENTINC_PREFIX confluentinc/cp-zookeeper:7.6.1)"
   write_alias CP_KAFKA_7_6_1_IMAGE confluentinc/cp-kafka:7.6.1 \

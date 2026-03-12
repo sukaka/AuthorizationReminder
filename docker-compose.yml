@@ -17,7 +17,7 @@ x-build-args-node-alpine-nginx127: &build_args_node_alpine_nginx127
   NGINX_1_27_ALPINE_IMAGE: ${NGINX_1_27_ALPINE_IMAGE:-nginx:1.27-alpine}
 
 x-build-args-onlyoffice: &build_args_onlyoffice
-  ONLYOFFICE_DOCUMENTSERVER_8_1_1_IMAGE: ${ONLYOFFICE_DOCUMENTSERVER_8_1_1_IMAGE:-onlyoffice/documentserver:8.1.1}
+  ONLYOFFICE_DOCUMENTSERVER_IMAGE: ${ONLYOFFICE_DOCUMENTSERVER_IMAGE:-onlyoffice/documentserver:latest}
 
 x-build-args-cmdb: &build_args_cmdb
   GOLANG_1_22_ALPINE_IMAGE: ${GOLANG_1_22_ALPINE_IMAGE:-golang:1.22-alpine}
