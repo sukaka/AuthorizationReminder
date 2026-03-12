@@ -99,23 +99,21 @@ main() {
     "$(build_library_candidate node:20-bookworm-slim)"
   write_alias NODE_20_ALPINE_IMAGE node:20-alpine \
     "$(build_library_candidate node:20-alpine)"
-  write_alias NGINX_1_25_ALPINE_IMAGE nginx:1.25-alpine \
-    "$(build_library_candidate nginx:1.25-alpine)"
-  write_alias NGINX_1_27_ALPINE_IMAGE nginx:1.27-alpine \
-    "$(build_library_candidate nginx:1.27-alpine)"
-  write_alias MYSQL_8_IMAGE mysql:8.0 \
-    "$(build_library_candidate mysql:8.0)"
+  write_alias NGINX_ALPINE_IMAGE nginx:alpine \
+    "$(build_library_candidate nginx:alpine)"
+  write_alias MYSQL_IMAGE mysql:8.4 \
+    "$(build_library_candidate mysql:8.4)"
   write_alias GOLANG_1_22_ALPINE_IMAGE golang:1.22-alpine \
     "$(build_library_candidate golang:1.22-alpine)"
   write_alias ALPINE_3_20_IMAGE alpine:3.20 \
     "$(build_library_candidate alpine:3.20)"
   write_alias ONLYOFFICE_DOCUMENTSERVER_IMAGE onlyoffice/documentserver:latest \
     "$(build_vendor_candidate ALIYUN_ONLYOFFICE_PREFIX onlyoffice/documentserver:latest)"
-  write_alias CP_ZOOKEEPER_7_6_1_IMAGE confluentinc/cp-zookeeper:7.6.1 \
-    "$(build_vendor_candidate ALIYUN_CONFLUENTINC_PREFIX confluentinc/cp-zookeeper:7.6.1)"
-  write_alias CP_KAFKA_7_6_1_IMAGE confluentinc/cp-kafka:7.6.1 \
-    "$(build_vendor_candidate ALIYUN_CONFLUENTINC_PREFIX confluentinc/cp-kafka:7.6.1)"
-  write_alias KAFKA_UI_LATEST_IMAGE provectuslabs/kafka-ui:latest \
+  write_alias CP_ZOOKEEPER_IMAGE confluentinc/cp-zookeeper:7.8.7 \
+    "$(build_vendor_candidate ALIYUN_CONFLUENTINC_PREFIX confluentinc/cp-zookeeper:7.8.7)"
+  write_alias CP_KAFKA_IMAGE confluentinc/cp-kafka:7.8.7 \
+    "$(build_vendor_candidate ALIYUN_CONFLUENTINC_PREFIX confluentinc/cp-kafka:7.8.7)"
+  write_alias KAFKA_UI_IMAGE provectuslabs/kafka-ui:latest \
     "$(build_vendor_candidate ALIYUN_PROVECTUSLABS_PREFIX provectuslabs/kafka-ui:latest)"
 }
 

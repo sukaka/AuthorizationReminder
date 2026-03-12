@@ -86,7 +86,7 @@ Expected: no matches.
 
 Example:
 ```yaml
-image: ${MYSQL_8_IMAGE:-mysql:8.0}
+image: ${MYSQL_IMAGE:-mysql:8.4}
 ```
 
 **Step 2: Pass build args into every service whose Dockerfile now consumes image aliases**

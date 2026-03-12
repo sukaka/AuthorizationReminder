@@ -36,8 +36,28 @@ if ! grep -q '^NODE_20_BOOKWORM_IMAGE=registry.cn-hangzhou.aliyuncs.com/acr-mirr
   exit 1
 fi
 
-if ! grep -q '^MYSQL_8_IMAGE=mysql:8.0$' "${OUT_FILE}"; then
-  echo "expected MYSQL_8_IMAGE to fall back to official image" >&2
+if ! grep -q '^MYSQL_IMAGE=mysql:8.4$' "${OUT_FILE}"; then
+  echo "expected MYSQL_IMAGE to fall back to official image" >&2
+  exit 1
+fi
+
+if ! grep -q '^NGINX_ALPINE_IMAGE=nginx:alpine$' "${OUT_FILE}"; then
+  echo "expected NGINX_ALPINE_IMAGE to fall back to official image" >&2
+  exit 1
+fi
+
+if ! grep -q '^CP_ZOOKEEPER_IMAGE=confluentinc/cp-zookeeper:7.8.7$' "${OUT_FILE}"; then
+  echo "expected CP_ZOOKEEPER_IMAGE to fall back to official compatible image" >&2
+  exit 1
+fi
+
+if ! grep -q '^CP_KAFKA_IMAGE=confluentinc/cp-kafka:7.8.7$' "${OUT_FILE}"; then
+  echo "expected CP_KAFKA_IMAGE to fall back to official compatible image" >&2
+  exit 1
+fi
+
+if ! grep -q '^KAFKA_UI_IMAGE=provectuslabs/kafka-ui:latest$' "${OUT_FILE}"; then
+  echo "expected KAFKA_UI_IMAGE to fall back to official image" >&2
   exit 1
 fi
 

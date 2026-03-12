@@ -5,16 +5,16 @@ x-build-args-root-app: &build_args_root_app
 x-build-args-node-bookworm-slim: &build_args_node_bookworm_slim
   NODE_20_BOOKWORM_SLIM_IMAGE: ${NODE_20_BOOKWORM_SLIM_IMAGE:-node:20-bookworm-slim}
 
-x-build-args-node-bookworm-nginx125: &build_args_node_bookworm_nginx125
+x-build-args-node-bookworm-nginx: &build_args_node_bookworm_nginx
   NODE_20_BOOKWORM_IMAGE: ${NODE_20_BOOKWORM_IMAGE:-node:20-bookworm}
-  NGINX_1_25_ALPINE_IMAGE: ${NGINX_1_25_ALPINE_IMAGE:-nginx:1.25-alpine}
+  NGINX_ALPINE_IMAGE: ${NGINX_ALPINE_IMAGE:-nginx:alpine}
 
 x-build-args-node-alpine: &build_args_node_alpine
   NODE_20_ALPINE_IMAGE: ${NODE_20_ALPINE_IMAGE:-node:20-alpine}
 
-x-build-args-node-alpine-nginx127: &build_args_node_alpine_nginx127
+x-build-args-node-alpine-nginx: &build_args_node_alpine_nginx
   NODE_20_ALPINE_IMAGE: ${NODE_20_ALPINE_IMAGE:-node:20-alpine}
-  NGINX_1_27_ALPINE_IMAGE: ${NGINX_1_27_ALPINE_IMAGE:-nginx:1.27-alpine}
+  NGINX_ALPINE_IMAGE: ${NGINX_ALPINE_IMAGE:-nginx:alpine}
 
 x-build-args-onlyoffice: &build_args_onlyoffice
   ONLYOFFICE_DOCUMENTSERVER_IMAGE: ${ONLYOFFICE_DOCUMENTSERVER_IMAGE:-onlyoffice/documentserver:latest}
@@ -25,7 +25,7 @@ x-build-args-cmdb: &build_args_cmdb
 
 services:
   mysql:
-    image: ${MYSQL_8_IMAGE:-mysql:8.0}
+    image: ${MYSQL_IMAGE:-mysql:8.4}
     environment:
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
       MYSQL_DATABASE: juxin_reminder
@@ -104,7 +104,7 @@ services:
   web:
     build:
       context: ./web
-      args: *build_args_node_bookworm_nginx125
+      args: *build_args_node_bookworm_nginx
     depends_on:
       - api
       - auth
@@ -149,7 +149,7 @@ services:
   web-ticketing:
     build:
       context: ./ticketing/web
-      args: *build_args_node_bookworm_nginx125
+      args: *build_args_node_bookworm_nginx
     depends_on:
       - ticketing
       - auth
@@ -234,7 +234,7 @@ services:
   web-inventory:
     build:
       context: ./inventory-system/frontend
-      args: *build_args_node_alpine_nginx127
+      args: *build_args_node_alpine_nginx
     depends_on:
       - inventory-api
     ports:
@@ -274,7 +274,7 @@ services:
   web-device-flow:
     build:
       context: ./device-flow/frontend
-      args: *build_args_node_alpine_nginx127
+      args: *build_args_node_alpine_nginx
     depends_on:
       - device-flow-api
     ports:
@@ -314,7 +314,7 @@ services:
   web-sec-impl:
     build:
       context: ./sec-impl/frontend
-      args: *build_args_node_alpine_nginx127
+      args: *build_args_node_alpine_nginx
     depends_on:
       - sec-impl-api
       - auth
@@ -363,7 +363,7 @@ services:
   web-faq:
     build:
       context: ./faq/frontend
-      args: *build_args_node_alpine_nginx127
+      args: *build_args_node_alpine_nginx
     depends_on:
       - faq-api
       - auth
@@ -429,7 +429,7 @@ services:
   web-tender:
     build:
       context: ./tender/frontend
-      args: *build_args_node_alpine_nginx127
+      args: *build_args_node_alpine_nginx
     depends_on:
       - tender-api
       - auth
@@ -497,7 +497,7 @@ services:
   web-train-exam:
     build:
       context: ./train-exam/frontend
-      args: *build_args_node_alpine_nginx127
+      args: *build_args_node_alpine_nginx
     depends_on:
       - train-exam-api
       - auth
@@ -536,7 +536,7 @@ services:
     restart: unless-stopped
 
   cmdb-mysql-init:
-    image: ${MYSQL_8_IMAGE:-mysql:8.0}
+    image: ${MYSQL_IMAGE:-mysql:8.4}
     depends_on:
       - mysql
     entrypoint: ["/bin/sh", "/scripts/init-cmdb-db.sh"]
@@ -582,7 +582,7 @@ services:
   web-cmdb:
     build:
       context: ./cmdb/web
-      args: *build_args_node_alpine_nginx127
+      args: *build_args_node_alpine_nginx
     depends_on:
       - cmdb
       - auth

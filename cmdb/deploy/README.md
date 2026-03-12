@@ -9,6 +9,11 @@ export CMDB_MYSQL_PASSWORD=change_me
 docker compose up -d --build
 ```
 
+Runtime image policy:
+- MySQL defaults to `mysql:8.4` for the current LTS line.
+- Kafka / ZooKeeper default to `7.8.7`, which stays compatible with the current ZooKeeper-based topology.
+- Kafka UI uses `latest`.
+
 The `cmdb-db-init` one-shot task will:
 - apply `/Users/zhanglei/Documents/codex-new/cmdb/migrations/mysql/001_init_cmdb.sql`
 - create or reset `cmdb_user`
