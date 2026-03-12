@@ -17,14 +17,24 @@ if [ -z "$ENV_SOURCE" ]; then
   fi
 fi
 
+# Export explicit values from the selected env file before resolving images so
+# user-provided aliases and mirror prefixes take precedence over generated defaults.
+if [ -f "$ENV_SOURCE" ]; then
+  set -a
+  # shellcheck disable=SC1090
+  . "$ENV_SOURCE"
+  set +a
+fi
+
 "${SCRIPT_DIR}/resolve-image-sources.sh" "$IMAGE_ENV_FILE"
 
 : > "$COMBINED_ENV_FILE"
+cat "$IMAGE_ENV_FILE" >> "$COMBINED_ENV_FILE"
+printf '\n' >> "$COMBINED_ENV_FILE"
 if [ -f "$ENV_SOURCE" ]; then
   cat "$ENV_SOURCE" >> "$COMBINED_ENV_FILE"
   printf '\n' >> "$COMBINED_ENV_FILE"
 fi
-cat "$IMAGE_ENV_FILE" >> "$COMBINED_ENV_FILE"
 
 cd "$ROOT_DIR"
 export DOCKER_BUILDKIT
