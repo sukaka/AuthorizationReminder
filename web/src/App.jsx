@@ -1,53 +1,80 @@
-import { useEffect, useMemo, useState, useRef } from 'react'
+import { useCallback, useEffect, useMemo, useState, useRef } from 'react'
 import QRCode from 'qrcode'
 import './App.css'
 
-const buildApi = (getCsrfToken) => ({
-  get: async (path) => {
+const buildApi = (getCsrfToken, refreshCsrfToken) => {
+  const isCsrfInvalidError = (text) => String(text || '').includes('CSRF token invalid')
+
+  const request = async (path, options = {}, allowCsrfRetry = true) => {
     const res = await fetch(path, {
       credentials: 'include',
+      ...options,
     })
-    if (!res.ok) throw new Error(await res.text())
-    return res.json()
-  },
-  post: async (path, body) => {
-    const res = await fetch(path, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        ...(getCsrfToken() ? { 'X-CSRF-Token': getCsrfToken() } : {}),
-      },
-      credentials: 'include',
-      body: JSON.stringify(body),
-    })
-    if (!res.ok) throw new Error(await res.text())
-    return res.json()
-  },
-  put: async (path, body) => {
-    const res = await fetch(path, {
-      method: 'PUT',
-      headers: {
-        'Content-Type': 'application/json',
-        ...(getCsrfToken() ? { 'X-CSRF-Token': getCsrfToken() } : {}),
-      },
-      credentials: 'include',
-      body: JSON.stringify(body),
-    })
-    if (!res.ok) throw new Error(await res.text())
-    return res.json()
-  },
-  del: async (path) => {
-    const res = await fetch(path, {
-      method: 'DELETE',
-      headers: {
-        ...(getCsrfToken() ? { 'X-CSRF-Token': getCsrfToken() } : {}),
-      },
-      credentials: 'include',
-    })
-    if (!res.ok) throw new Error(await res.text())
-    return res.json()
-  },
-})
+    if (res.ok) return res
+    const errorText = await res.text()
+    if (
+      allowCsrfRetry &&
+      refreshCsrfToken &&
+      ['POST', 'PUT', 'DELETE'].includes(String(options.method || 'GET').toUpperCase()) &&
+      res.status === 403 &&
+      isCsrfInvalidError(errorText)
+    ) {
+      const nextToken = await refreshCsrfToken()
+      if (nextToken) {
+        return request(
+          path,
+          {
+            ...options,
+            headers: {
+              ...(options.headers || {}),
+              'X-CSRF-Token': nextToken,
+            },
+          },
+          false
+        )
+      }
+    }
+    throw new Error(errorText)
+  }
+
+  return {
+    get: async (path) => {
+      const res = await request(path)
+      return res.json()
+    },
+    post: async (path, body) => {
+      const res = await request(path, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(getCsrfToken() ? { 'X-CSRF-Token': getCsrfToken() } : {}),
+        },
+        body: JSON.stringify(body),
+      })
+      return res.json()
+    },
+    put: async (path, body) => {
+      const res = await request(path, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(getCsrfToken() ? { 'X-CSRF-Token': getCsrfToken() } : {}),
+        },
+        body: JSON.stringify(body),
+      })
+      return res.json()
+    },
+    del: async (path) => {
+      const res = await request(path, {
+        method: 'DELETE',
+        headers: {
+          ...(getCsrfToken() ? { 'X-CSRF-Token': getCsrfToken() } : {}),
+        },
+      })
+      return res.json()
+    },
+  }
+}
 
 const PAGE_SIZE = 10
 
@@ -505,12 +532,27 @@ function App() {
   const [error, setError] = useState('')
   const [csrfToken, setCsrfToken] = useState('')
   const csrfTokenRef = useRef('')
-  const setCsrf = (token) => {
+  const setCsrf = useCallback((token) => {
     csrfTokenRef.current = token || ''
     setCsrfToken(token || '')
-  }
+  }, [])
+  const refreshCsrf = useCallback(async () => {
+    try {
+      const res = await fetch('/api/auth/csrf', {
+        credentials: 'include',
+      })
+      if (!res.ok) throw new Error('csrf')
+      const data = await res.json()
+      const token = data.token || ''
+      setCsrf(token)
+      return token
+    } catch (err) {
+      setCsrf('')
+      return ''
+    }
+  }, [setCsrf])
   const [passwordFeedback, setPasswordFeedback] = useState({ type: '', text: '' })
-  const api = useMemo(() => buildApi(() => csrfTokenRef.current), [])
+  const api = useMemo(() => buildApi(() => csrfTokenRef.current, refreshCsrf), [refreshCsrf])
   const [loginForm, setLoginForm] = useState({ username: '', password: '' })
   const [loginError, setLoginError] = useState('')
   const [mfaState, setMfaState] = useState({
@@ -693,7 +735,7 @@ function App() {
 
   useEffect(() => {
     refreshCsrf()
-  }, [])
+  }, [refreshCsrf])
 
   useEffect(
     () => () => {
@@ -1393,20 +1435,6 @@ function App() {
     }
   }
 
-  const refreshCsrf = async () => {
-    try {
-      const res = await fetch('/api/auth/csrf')
-      if (!res.ok) throw new Error('csrf')
-      const data = await res.json()
-      const token = data.token || ''
-      setCsrf(token)
-      return token
-    } catch (err) {
-      setCsrf('')
-      return ''
-    }
-  }
-
   const onLogin = async (e) => {
     e.preventDefault()
     try {
@@ -1435,6 +1463,7 @@ function App() {
       setLoginError('')
       setLoginForm({ username: '', password: '' })
       setMfaState({ required: false, token: '', methods: [], method: '', code: '' })
+      await refreshCsrf()
     } catch (err) {
       setLoginError(normalizeLoginError(err))
       refreshCaptcha()
@@ -1466,6 +1495,7 @@ function App() {
       setMfaState({ required: false, token: '', methods: [], method: '', code: '' })
       setLoginForm({ username: '', password: '' })
       setLoginError('')
+      await refreshCsrf()
     } catch (err) {
       setLoginError(normalizeLoginError(err))
     }
