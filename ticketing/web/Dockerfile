@@ -6,12 +6,13 @@ FROM ${NODE_20_BOOKWORM_IMAGE} AS build
 WORKDIR /app
 
 COPY package.json ./
+COPY package-lock.json ./
 RUN npm config set registry "${NPM_REGISTRY}" \
  && npm config set fetch-retries 6 \
  && npm config set fetch-retry-mintimeout 20000 \
  && npm config set fetch-retry-maxtimeout 120000 \
  && npm config set fetch-timeout 300000 \
- && sh -ec 'npm install --no-audit --no-fund --foreground-scripts || (sleep 5; npm install --no-audit --no-fund --foreground-scripts)'
+ && sh -ec 'npm ci --no-audit --no-fund --foreground-scripts || (sleep 5; npm ci --no-audit --no-fund --foreground-scripts)'
 
 COPY . ./
 RUN npm run build
