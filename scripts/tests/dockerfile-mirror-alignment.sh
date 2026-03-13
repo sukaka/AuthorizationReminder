@@ -15,10 +15,16 @@ check_contains() {
 for file in \
   "${ROOT_DIR}/train-exam/backend/Dockerfile" \
   "${ROOT_DIR}/faq/backend/Dockerfile" \
-  "${ROOT_DIR}/tender/backend/Dockerfile" \
-  "${ROOT_DIR}/faq/onlyoffice-fonts/Dockerfile"; do
+  "${ROOT_DIR}/tender/backend/Dockerfile"; do
   check_contains "$file" 'mirrors.aliyun.com/debian'
   check_contains "$file" 'deb.debian.org/debian'
+done
+
+for file in \
+  "${ROOT_DIR}/faq/onlyoffice-fonts/Dockerfile" \
+  "${ROOT_DIR}/faq/onlyoffice-fonts/Dockerfile.ecs"; do
+  check_contains "$file" 'mirrors.aliyun.com/ubuntu'
+  check_contains "$file" 'archive.ubuntu.com/ubuntu'
 done
 
 for file in \
