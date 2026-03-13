@@ -66,6 +66,10 @@ const {
   validateAiBaseUrl,
 } = require('./security-utils');
 const {
+  evaluateAnswer,
+  normalizeMultipleChoiceAnswerValues,
+} = require('./exam-answer-utils');
+const {
   isOriginAllowedForRequest,
   normalizeOrigin,
 } = require('./cors-origin');
@@ -2848,7 +2852,9 @@ const normalizeQuestionInput = (payload = {}, { defaultCategory = '未分类' } 
 
     const answerRawInput = payload.answer_values !== undefined ? payload.answer_values : payload.answer;
     const answerRaw = Array.isArray(answerRawInput) ? answerRawInput : parseTextList(answerRawInput, { upper: true });
-    answerValues = parseTextList(answerRaw, { upper: true });
+    answerValues = questionType === 'multiple_choice'
+      ? normalizeMultipleChoiceAnswerValues(answerRaw)
+      : parseTextList(answerRaw, { upper: true });
 
     if (!answerValues.length) {
       const inferred = options.filter((item) => item.is_correct === 1).map((item) => item.key);
@@ -3213,64 +3219,6 @@ const hideStandardAnswer = (snapshot) => {
   const clone = { ...snapshot };
   delete clone.standard_answer;
   return clone;
-};
-
-const normalizeUserAnswerValues = (value) => {
-  if (Array.isArray(value)) return value.map((item) => trimText(item)).filter(Boolean);
-  if (value && typeof value === 'object') {
-    if (Array.isArray(value.values)) return value.values.map((item) => trimText(item)).filter(Boolean);
-    if (value.value !== undefined) return [trimText(value.value)].filter(Boolean);
-  }
-  const text = trimText(value);
-  if (!text) return [];
-  return text.split(/[，,、\s]+/).map((item) => trimText(item)).filter(Boolean);
-};
-
-const normalizeAnswerToken = (value) => trimText(value).toLowerCase();
-
-const evaluateAnswer = ({ snapshot, standardAnswer, userAnswer }) => {
-  const qType = normalizeQuestionType(snapshot?.question_type, 'single_choice');
-  const points = Number(snapshot?.points || 0);
-  const stdValues = Array.isArray(standardAnswer?.answer_values)
-    ? standardAnswer.answer_values.map((item) => normalizeAnswerToken(item)).filter(Boolean)
-    : [];
-  const userValuesRaw = normalizeUserAnswerValues(userAnswer);
-  const userValues = userValuesRaw.map((item) => normalizeAnswerToken(item)).filter(Boolean);
-
-  let isCorrect = false;
-
-  if (qType === 'fill_blank') {
-    const answerText = normalizeAnswerToken(standardAnswer?.answer_text);
-    const aliases = Array.isArray(standardAnswer?.answer_aliases)
-      ? standardAnswer.answer_aliases.map((item) => normalizeAnswerToken(item)).filter(Boolean)
-      : [];
-    const expected = Array.from(new Set([answerText, ...aliases, ...stdValues].filter(Boolean)));
-    if (userValues.length) {
-      isCorrect = expected.includes(userValues[0]);
-    }
-  } else if (qType === 'multiple_choice') {
-    const sortedStd = Array.from(new Set(stdValues)).sort();
-    const sortedUser = Array.from(new Set(userValues)).sort();
-    isCorrect = sortedStd.length > 0 && sortedStd.length === sortedUser.length && sortedStd.every((val, idx) => val === sortedUser[idx]);
-  } else {
-    const expected = stdValues[0] || '';
-    let user = userValues[0] || '';
-    if (qType === 'judgement') {
-      if (['a', '正确', '对', 'true', 't', '1'].includes(user)) user = 'true';
-      if (['b', '错误', '错', 'false', 'f', '0'].includes(user)) user = 'false';
-      let normalizedExpected = expected;
-      if (['a', '正确', '对', 'true', 't', '1'].includes(normalizedExpected)) normalizedExpected = 'true';
-      if (['b', '错误', '错', 'false', 'f', '0'].includes(normalizedExpected)) normalizedExpected = 'false';
-      isCorrect = !!user && user === normalizedExpected;
-    } else {
-      isCorrect = !!user && user === expected;
-    }
-  }
-
-  return {
-    isCorrect,
-    earnedScore: isCorrect ? points : 0,
-  };
 };
 
 const toQuestionTypeCn = (value) => {

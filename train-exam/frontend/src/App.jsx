@@ -744,6 +744,13 @@ const normalizeAnswerItems = (value) => {
 
 const normalizeOptionKey = (value) => String(value ?? '').trim().toUpperCase()
 
+const expandCompactMultipleChoiceItems = (value) => normalizeAnswerItems(value)
+  .flatMap((item) => {
+    const optionKey = normalizeOptionKey(item)
+    if (/^[A-Z]{2,}$/.test(optionKey)) return optionKey.split('')
+    return [item]
+  })
+
 const normalizeJudgementAnswer = (value) => {
   const raw = String(value ?? '').trim()
   const key = raw.toLowerCase()
@@ -753,7 +760,9 @@ const normalizeJudgementAnswer = (value) => {
 }
 
 const formatExamAnswerText = ({ questionType, values, options }) => {
-  const items = normalizeAnswerItems(values)
+  const items = questionType === 'multiple_choice'
+    ? expandCompactMultipleChoiceItems(values)
+    : normalizeAnswerItems(values)
   if (!items.length) return '未作答'
 
   if (questionType === 'fill_blank') {
