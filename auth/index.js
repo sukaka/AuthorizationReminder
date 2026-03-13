@@ -33,6 +33,9 @@ const {
 const {
   buildHelmetCspDirectives,
 } = require('../server/helmet-csp');
+const {
+  resolveSecurityStrictMode,
+} = require('../server/security-strict-mode');
 
 const app = express();
 const PORT = process.env.PORT || 5180;
@@ -55,7 +58,7 @@ const BUILTIN_ACCOUNTS = [
 ];
 const BUILTIN_ACCOUNT_USERNAMES = new Set(BUILTIN_ACCOUNTS.map((item) => item.username));
 const AUDIT_SIGNING_KEY = process.env.AUDIT_SIGNING_KEY || JWT_SECRET;
-const SECURITY_STRICT_MODE = process.env.SECURITY_STRICT_MODE === 'true' || process.env.NODE_ENV === 'production';
+const SECURITY_STRICT_MODE = resolveSecurityStrictMode(process.env);
 
 const parseOriginList = (raw) =>
   String(raw || '')

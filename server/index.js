@@ -23,6 +23,9 @@ const {
 const {
   buildHelmetCspDirectives,
 } = require('./helmet-csp');
+const {
+  resolveSecurityStrictMode,
+} = require('./security-strict-mode');
 
 const app = express();
 const PORT = process.env.PORT || 5179;
@@ -43,7 +46,7 @@ const BUILTIN_ACCOUNTS = [
 const BUILTIN_ACCOUNT_USERNAMES = new Set(BUILTIN_ACCOUNTS.map((item) => item.username));
 const ALLOWED_USER_ROLES = new Set(['admin', 'editor', 'sysadmin', 'auditor', 'user', 'viewer', 'sales']);
 const AUDIT_SIGNING_KEY = process.env.AUDIT_SIGNING_KEY || JWT_SECRET;
-const SECURITY_STRICT_MODE = process.env.SECURITY_STRICT_MODE === 'true' || process.env.NODE_ENV === 'production';
+const SECURITY_STRICT_MODE = resolveSecurityStrictMode(process.env);
 const MAX_IMPORT_RECORDS = Number(process.env.MAX_IMPORT_RECORDS || 5000);
 const IMPORT_UPLOAD_MAX_BYTES = Number(process.env.IMPORT_UPLOAD_MAX_BYTES || 3 * 1024 * 1024);
 const SCREENSHOT_UPLOAD_MAX_BYTES = Number(process.env.SCREENSHOT_UPLOAD_MAX_BYTES || 5 * 1024 * 1024);
