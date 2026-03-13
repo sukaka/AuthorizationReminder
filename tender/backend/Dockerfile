@@ -60,11 +60,12 @@ RUN set -eux; \
     apt-get install -y --no-install-recommends libreoffice; \
     rm -rf /var/lib/apt/lists/*
 
-COPY package*.json ./
+COPY tender/backend/package*.json ./
 RUN npm config set registry https://registry.npmmirror.com \
  && npm ci --omit=dev
 
-COPY src ./src
+COPY tender/backend/src ./src
+COPY server/cors-origin.js ./src/cors-origin.js
 
 EXPOSE 5187
 CMD ["npm", "start"]

@@ -4,6 +4,10 @@ const cors = require('cors');
 const express = require('express');
 const helmet = require('helmet');
 const mysql = require('mysql2/promise');
+const {
+  isOriginAllowedForRequest,
+  normalizeOrigin,
+} = require('./cors-origin');
 const { get, initDb, query, run, transaction } = require('./db');
 
 const app = express();
@@ -66,8 +70,6 @@ const SERIAL_STATUS = {
   OUT_STOCK: 'OUT_STOCK',
 };
 
-const normalizeOrigin = (value) => String(value || '').trim().replace(/\/+$/, '');
-
 const defaultOrigins = [
   'http://localhost:5173',
   'http://127.0.0.1:5173',
@@ -80,21 +82,26 @@ const allowedOrigins = (process.env.CORS_ORIGINS || '')
   .map(normalizeOrigin)
   .filter(Boolean);
 
-const corsOptions = {
-  origin: (origin, cb) => {
-    if (!origin) return cb(null, true);
-    const requestOrigin = normalizeOrigin(origin);
-    const list = allowedOrigins.length ? allowedOrigins : defaultOrigins;
-    if (list.includes(requestOrigin)) return cb(null, true);
+const corsOptions = (req, cb) => {
+  const allowed = isOriginAllowedForRequest({
+    origin: req.headers.origin,
+    headers: req.headers,
+    allowedOrigins,
+    defaultOrigins,
+  });
+  if (!allowed) {
     const err = new Error('Not allowed by CORS');
     err.statusCode = 403;
     return cb(err);
-  },
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
-  credentials: true,
-  exposedHeaders: ['X-Total-Count', 'X-Page', 'X-Limit'],
-  maxAge: 86400,
+  }
+  return cb(null, {
+    origin: true,
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization'],
+    credentials: true,
+    exposedHeaders: ['X-Total-Count', 'X-Page', 'X-Limit'],
+    maxAge: 86400,
+  });
 };
 
 app.disable('x-powered-by');

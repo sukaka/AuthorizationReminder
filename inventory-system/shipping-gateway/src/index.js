@@ -4,6 +4,10 @@ const crypto = require('crypto');
 const cors = require('cors');
 const express = require('express');
 const helmet = require('helmet');
+const {
+  isOriginAllowedForRequest,
+  normalizeOrigin,
+} = require('./cors-origin');
 
 const app = express();
 const PORT = Number(process.env.PORT || 5190);
@@ -35,8 +39,6 @@ const trimText = (value, fallback = '') => {
   if (value === undefined || value === null) return fallback;
   return String(value).trim();
 };
-const normalizeOrigin = (value) => trimText(value).replace(/\/+$/, '');
-
 const defaultOrigins = [
   'http://localhost:5183',
   'http://127.0.0.1:5183',
@@ -427,19 +429,24 @@ const queryProviderTracking = async ({ providerConfig, carrier, trackingNo }) =>
   }
 };
 
-const corsOptions = {
-  origin: (origin, cb) => {
-    if (!origin) return cb(null, true);
-    const requestOrigin = normalizeOrigin(origin);
-    const list = allowedOrigins.length ? allowedOrigins : defaultOrigins;
-    if (list.includes(requestOrigin)) return cb(null, true);
+const corsOptions = (req, cb) => {
+  const allowed = isOriginAllowedForRequest({
+    origin: req.headers.origin,
+    headers: req.headers,
+    allowedOrigins,
+    defaultOrigins,
+  });
+  if (!allowed) {
     const err = new Error('Not allowed by CORS');
     err.statusCode = 403;
     return cb(err);
-  },
-  methods: ['GET', 'POST', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-API-Token'],
-  maxAge: 86400,
+  }
+  return cb(null, {
+    origin: true,
+    methods: ['GET', 'POST', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-API-Token'],
+    maxAge: 86400,
+  });
 };
 
 const apiRateLimiter = createIpRateLimiter({

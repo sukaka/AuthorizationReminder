@@ -175,7 +175,8 @@ services:
 
   shipping-gateway:
     build:
-      context: ./inventory-system/shipping-gateway
+      context: .
+      dockerfile: inventory-system/shipping-gateway/Dockerfile
       args: *build_args_node_alpine
     environment:
       PORT: 5190
@@ -205,7 +206,8 @@ services:
 
   inventory-api:
     build:
-      context: ./inventory-system/backend
+      context: .
+      dockerfile: inventory-system/backend/Dockerfile
       args: *build_args_node_alpine
     environment:
       PORT: 5183
@@ -245,7 +247,8 @@ services:
 
   device-flow-api:
     build:
-      context: ./device-flow/backend
+      context: .
+      dockerfile: device-flow/backend/Dockerfile
       args: *build_args_node_alpine
     environment:
       PORT: 5184
@@ -285,7 +288,8 @@ services:
 
   sec-impl-api:
     build:
-      context: ./sec-impl/backend
+      context: .
+      dockerfile: sec-impl/backend/Dockerfile
       args: *build_args_node_alpine
     environment:
       PORT: 5185
@@ -326,7 +330,8 @@ services:
 
   faq-api:
     build:
-      context: ./faq/backend
+      context: .
+      dockerfile: faq/backend/Dockerfile
       args: *build_args_node_bookworm_slim
     environment:
       PORT: 5186
@@ -376,7 +381,8 @@ services:
 
   tender-api:
     build:
-      context: ./tender/backend
+      context: .
+      dockerfile: tender/backend/Dockerfile
       args: *build_args_node_bookworm_slim
     environment:
       PORT: 5187
@@ -442,7 +448,8 @@ services:
 
   train-exam-api:
     build:
-      context: ./train-exam/backend
+      context: .
+      dockerfile: train-exam/backend/Dockerfile
       args: *build_args_node_bookworm_slim
     environment:
       PORT: 5188

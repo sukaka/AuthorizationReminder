@@ -5,6 +5,7 @@ WORKDIR /app
 
 COPY ticketing/package.json ./ticketing/package.json
 COPY ticketing/index.js ./ticketing/index.js
+COPY server/cors-origin.js ./server/cors-origin.js
 COPY server/db.js ./server/db.js
 COPY server/db-bootstrap.js ./server/db-bootstrap.js
 

@@ -60,11 +60,12 @@ RUN set -eux; \
     apt-get install -y --no-install-recommends ffmpeg; \
     rm -rf /var/lib/apt/lists/*
 
-COPY package*.json ./
+COPY train-exam/backend/package*.json ./
 RUN npm config set registry https://registry.npmmirror.com \
  && npm ci --omit=dev
 
-COPY src ./src
+COPY train-exam/backend/src ./src
+COPY server/cors-origin.js ./src/cors-origin.js
 
 EXPOSE 5188
 CMD ["npm", "start"]

@@ -108,6 +108,10 @@ const {
   buildGovernancePayload,
   buildFailurePayload,
 } = require('./governance');
+const {
+  isOriginAllowedForRequest,
+  normalizeOrigin,
+} = require('./cors-origin');
 
 const app = express();
 const normalizeHost = (value) => String(value || '').trim().toLowerCase();
@@ -282,28 +286,32 @@ for (const dir of [UPLOAD_ROOT, VERSION_ROOT, DRAFT_ROOT, ASSET_ROOT, SAMPLE_ROO
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 }
 
-const normalizeOrigin = (value) => String(value || '').trim().replace(/\/+$/, '');
 const defaultOrigins = ['http://localhost:8086', 'http://127.0.0.1:8086'].map(normalizeOrigin);
 const allowedOrigins = (process.env.CORS_ORIGINS || '')
   .split(',')
   .map(normalizeOrigin)
   .filter(Boolean);
 
-const corsOptions = {
-  origin: (origin, cb) => {
-    if (!origin) return cb(null, true);
-    const requestOrigin = normalizeOrigin(origin);
-    const list = allowedOrigins.length ? allowedOrigins : defaultOrigins;
-    if (list.includes(requestOrigin)) return cb(null, true);
+const corsOptions = (req, cb) => {
+  const allowed = isOriginAllowedForRequest({
+    origin: req.headers.origin,
+    headers: req.headers,
+    allowedOrigins,
+    defaultOrigins,
+  });
+  if (!allowed) {
     const err = new Error('Not allowed by CORS');
     err.statusCode = 403;
     return cb(err);
-  },
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-CSRF-Token'],
-  credentials: true,
-  exposedHeaders: ['X-Total-Count', 'X-Page', 'X-Limit'],
-  maxAge: 86400,
+  }
+  return cb(null, {
+    origin: true,
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-CSRF-Token'],
+    credentials: true,
+    exposedHeaders: ['X-Total-Count', 'X-Page', 'X-Limit'],
+    maxAge: 86400,
+  });
 };
 
 app.disable('x-powered-by');
