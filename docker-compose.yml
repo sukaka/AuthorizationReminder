@@ -1,20 +1,25 @@
 x-build-args-root-app: &build_args_root_app
   NODE_20_BOOKWORM_IMAGE: ${NODE_20_BOOKWORM_IMAGE:-node:20-bookworm}
   NODE_20_BOOKWORM_SLIM_IMAGE: ${NODE_20_BOOKWORM_SLIM_IMAGE:-node:20-bookworm-slim}
+  NPM_REGISTRY: ${NPM_REGISTRY:-https://registry.npmmirror.com}
 
 x-build-args-node-bookworm-slim: &build_args_node_bookworm_slim
   NODE_20_BOOKWORM_SLIM_IMAGE: ${NODE_20_BOOKWORM_SLIM_IMAGE:-node:20-bookworm-slim}
+  NPM_REGISTRY: ${NPM_REGISTRY:-https://registry.npmmirror.com}
 
 x-build-args-node-bookworm-nginx: &build_args_node_bookworm_nginx
   NODE_20_BOOKWORM_IMAGE: ${NODE_20_BOOKWORM_IMAGE:-node:20-bookworm}
   NGINX_ALPINE_IMAGE: ${NGINX_ALPINE_IMAGE:-nginx:alpine}
+  NPM_REGISTRY: ${NPM_REGISTRY:-https://registry.npmmirror.com}
 
 x-build-args-node-alpine: &build_args_node_alpine
   NODE_20_ALPINE_IMAGE: ${NODE_20_ALPINE_IMAGE:-node:20-alpine}
+  NPM_REGISTRY: ${NPM_REGISTRY:-https://registry.npmmirror.com}
 
 x-build-args-node-alpine-nginx: &build_args_node_alpine_nginx
   NODE_20_ALPINE_IMAGE: ${NODE_20_ALPINE_IMAGE:-node:20-alpine}
   NGINX_ALPINE_IMAGE: ${NGINX_ALPINE_IMAGE:-nginx:alpine}
+  NPM_REGISTRY: ${NPM_REGISTRY:-https://registry.npmmirror.com}
 
 x-build-args-onlyoffice: &build_args_onlyoffice
   ONLYOFFICE_DOCUMENTSERVER_IMAGE: ${ONLYOFFICE_DOCUMENTSERVER_IMAGE:-onlyoffice/documentserver:latest}

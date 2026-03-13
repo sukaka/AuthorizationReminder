@@ -1,4 +1,5 @@
 ARG NODE_20_BOOKWORM_SLIM_IMAGE=node:20-bookworm-slim
+ARG NPM_REGISTRY=https://registry.npmmirror.com
 FROM ${NODE_20_BOOKWORM_SLIM_IMAGE}
 
 WORKDIR /app
@@ -61,8 +62,12 @@ RUN set -eux; \
     rm -rf /var/lib/apt/lists/*
 
 COPY tender/backend/package*.json ./
-RUN npm config set registry https://registry.npmmirror.com \
- && npm ci --omit=dev
+RUN npm config set registry "${NPM_REGISTRY}" \
+ && npm config set fetch-retries 6 \
+ && npm config set fetch-retry-mintimeout 20000 \
+ && npm config set fetch-retry-maxtimeout 120000 \
+ && npm config set fetch-timeout 300000 \
+ && sh -ec 'npm ci --omit=dev --no-audit --no-fund --foreground-scripts || (sleep 5; npm ci --omit=dev --no-audit --no-fund --foreground-scripts)'
 
 COPY tender/backend/src ./src
 COPY server/cors-origin.js ./src/cors-origin.js

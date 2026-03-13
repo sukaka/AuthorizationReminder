@@ -1,5 +1,6 @@
 ARG NODE_20_BOOKWORM_IMAGE=node:20-bookworm
 ARG NODE_20_BOOKWORM_SLIM_IMAGE=node:20-bookworm-slim
+ARG NPM_REGISTRY=https://registry.npmmirror.com
 FROM ${NODE_20_BOOKWORM_IMAGE} AS build
 
 WORKDIR /app
@@ -7,8 +8,13 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 COPY web/package.json web/package-lock.json ./web/
 
-RUN npm ci
-RUN npm --prefix web ci
+RUN npm config set registry "${NPM_REGISTRY}" \
+ && npm config set fetch-retries 6 \
+ && npm config set fetch-retry-mintimeout 20000 \
+ && npm config set fetch-retry-maxtimeout 120000 \
+ && npm config set fetch-timeout 300000 \
+ && sh -ec 'npm ci --no-audit --no-fund --foreground-scripts || (sleep 5; npm ci --no-audit --no-fund --foreground-scripts)'
+RUN sh -ec 'npm --prefix web ci --no-audit --no-fund --foreground-scripts || (sleep 5; npm --prefix web ci --no-audit --no-fund --foreground-scripts)'
 
 COPY server ./server
 COPY web ./web

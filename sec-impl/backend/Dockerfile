@@ -1,10 +1,12 @@
 ARG NODE_20_ALPINE_IMAGE=node:20-alpine
+ARG NPM_REGISTRY=https://registry.npmmirror.com
 FROM ${NODE_20_ALPINE_IMAGE}
 
 WORKDIR /app
 
 COPY sec-impl/backend/package*.json ./
-RUN npm config set fetch-retries 6 \
+RUN npm config set registry "${NPM_REGISTRY}" \
+ && npm config set fetch-retries 6 \
  && npm config set fetch-retry-mintimeout 20000 \
  && npm config set fetch-retry-maxtimeout 120000 \
  && npm config set fetch-timeout 300000 \
