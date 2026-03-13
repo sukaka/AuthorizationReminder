@@ -43,6 +43,13 @@ export PUBLIC_HOST='服务器公网IP或域名，不带协议和端口'
 
 `PUBLIC_HOST` 会统一注入各业务服务的 `CORS_ORIGINS`，用于允许浏览器通过 `http://你的公网IP:端口` 访问。
 
+认证服务的 Cookie 安全开关也已参数化：
+
+- `AUTH_COOKIE_SECURE=false`
+- `AUTH_SECURITY_STRICT_MODE=false`
+
+如果当前服务器只提供 `HTTP`，保持上面两个值为 `false`。如果已经通过反向代理或负载均衡提供了 `HTTPS`，再一起改成 `true`。
+
 ## 访问
 - 前端：`http://localhost:8080`
 - 后端：`http://localhost:5179`（如需直连）
