@@ -102,3 +102,36 @@
 
 - `node --check /Users/zhanglei/Documents/codex-new/auth/index.js`
 - `docker compose build auth`
+
+## 2026-03-14 Style Rollback Target
+
+- 用户确认独立后台不要继续走上一轮偏硬朗的控制台视觉。
+- 新目标是回到 reminder 现有“管理中心”样式语言：
+  - 左侧圆角侧栏
+  - 顶部渐变 hero 卡片
+  - 次级说明卡
+  - 大面积白底卡片 + 轻渐变内容区
+- 本次只回退页面样式和前端交互组织方式，不回退独立后台能力本身：
+  - `sysadmin -> /admin-center`
+  - `auditor -> /audit-center`
+  - `admin-center` / `audit-center` 相关 API 继续保留
+
+## 2026-03-14 Style Rollback Implementation
+
+- `/Users/zhanglei/Documents/codex-new/auth/index.js`
+  - `admin-center` / `audit-center` 的页面壳层已改成与 reminder 管理中心一致的布局语言
+  - `admin-center` 新增当前账号安全面板，复用 `auth` 自身接口：
+    - MFA 设置读取
+    - TOTP 密钥生成 / 启用
+    - 当前账号密码修改
+    - MFA 方式保存
+  - 页面请求已补齐 CSRF 获取与自动重试，避免独立后台提交类操作被 `auth` 的 CSRF 校验拦截
+  - `audit-center` 统计卡、筛选区、日志区、验签/导出区已统一到同一套管理中心外观
+
+## 2026-03-14 Style Rollback Verification
+
+- `node --check /Users/zhanglei/Documents/codex-new/auth/index.js`
+- `docker compose build auth`
+- `docker compose up -d mysql auth`
+- `curl -I http://127.0.0.1:5180/admin-center`
+- `curl -s http://127.0.0.1:5180/admin-center | rg -n "用户安全管理中心|账号安全|安全配置|用户管理|返回门户"`

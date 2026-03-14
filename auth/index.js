@@ -1273,149 +1273,428 @@ app.get('/api/auth/apps', async (req, res) => {
   });
 });
 
-const renderAdminCenterSections = () => `
-  <section class="panel panel-wide">
-    <div class="panel-head">
-      <div>
-        <h2>用户管理</h2>
-        <p>直接调用 \`/api/admin-center/users\`，不再依赖 reminder 后台入口。</p>
-      </div>
-      <button id="adminUsersReloadBtn" type="button" class="secondary-btn">刷新列表</button>
-    </div>
-    <div id="adminUsersNotice" class="mini-hint"></div>
-    <div class="table-wrap">
-      <table class="data-table">
-        <thead>
-          <tr>
-            <th>ID</th>
-            <th>账号</th>
-            <th>角色</th>
-            <th>状态</th>
-            <th>锁定状态</th>
-            <th>登录标识</th>
-            <th>可访问系统</th>
-            <th>操作</th>
-          </tr>
-        </thead>
-        <tbody id="adminUsersBody">
-          <tr><td colspan="8" class="empty">正在加载用户列表...</td></tr>
-        </tbody>
-      </table>
-    </div>
-  </section>
-  <section class="panel">
-    <h2>创建用户</h2>
-    <p class="mini-hint">第一版按角色使用默认系统权限，不再从 reminder 里创建。</p>
-    <form id="adminCreateUserForm" class="form-grid">
-      <label>用户名<input name="username" placeholder="2-32位中文/字母/数字" required /></label>
-      <label>初始密码<input name="password" type="password" placeholder="Strong#1234" required /></label>
-      <label>角色
-        <select name="role">
-          <option value="user">普通用户</option>
-          <option value="editor">编辑</option>
-          <option value="reviewer">审核</option>
-          <option value="sysadmin">系统管理员</option>
-          <option value="auditor">审计管理员</option>
-          <option value="sales">销售</option>
-        </select>
-      </label>
-      <label>邮箱<input name="email" type="email" placeholder="name@example.com" /></label>
-      <label>手机号<input name="phone" placeholder="13800000000" /></label>
-      <label>企业微信ID<input name="wecom_id" placeholder="wecom-id" /></label>
-      <div class="form-actions">
-        <button class="primary-btn" type="submit">新增用户</button>
-      </div>
-    </form>
-    <div id="adminCreateUserNotice" class="mini-hint"></div>
-  </section>
-  <section class="panel">
-    <h2>安全管理</h2>
-    <p class="mini-hint">第一版直接维护密码策略、会话超时、强制 MFA 和角色 IP 白名单。</p>
-    <form id="adminSecurityForm" class="form-grid">
-      <label>最小密码长度<input id="passwordMinLength" type="number" min="6" max="64" /></label>
-      <label>会话超时（分钟）<input id="sessionTimeoutMinutes" type="number" min="5" max="720" /></label>
-      <label class="checkbox"><input id="forceAllUsersMfa" type="checkbox" /> 强制所有用户开启二次验证</label>
-      <label class="checkbox"><input id="requireUppercase" type="checkbox" /> 需要大写字母</label>
-      <label class="checkbox"><input id="requireLowercase" type="checkbox" /> 需要小写字母</label>
-      <label class="checkbox"><input id="requireNumber" type="checkbox" /> 需要数字</label>
-      <label class="checkbox"><input id="requireSpecial" type="checkbox" /> 需要特殊字符</label>
-      <label class="full">管理员 IP 白名单<textarea id="roleIpAdmin" rows="4" placeholder="一行一个 IP 或 CIDR"></textarea></label>
-      <label class="full">系统管理员 IP 白名单<textarea id="roleIpSysadmin" rows="4" placeholder="一行一个 IP 或 CIDR"></textarea></label>
-      <label class="full">审计管理员 IP 白名单<textarea id="roleIpAuditor" rows="4" placeholder="一行一个 IP 或 CIDR"></textarea></label>
-      <div class="form-actions">
-        <button class="primary-btn" type="button" id="adminSecurityReloadBtn">重新加载</button>
-        <button class="primary-btn" type="submit">保存安全配置</button>
-      </div>
-    </form>
-    <div id="adminSecurityNotice" class="mini-hint"></div>
-  </section>
-`;
+const DEDICATED_CENTER_VERSION = 'v4.0.9';
 
-const renderAuditCenterSections = () => `
-  <section class="panel panel-wide">
-    <div class="panel-head">
-      <div>
-        <h2>审计日志</h2>
-        <p>直接调用 \`/api/audit-center/logs\`，默认跨系统查询，不再绑定 reminder。</p>
+const renderAdminCenterSections = () => ({
+  shellTitle: '管理中心',
+  heroName: '用户安全管理中心',
+  heroTitle: '统一管理账号、访问权限与安全策略',
+  heroSubtitle: '覆盖当前账号安全、系统用户维护、密码策略与高权限访问控制。',
+  roleGuideText: '仅可维护账号、安全策略和用户，不展示业务系统数据菜单。',
+  defaultTab: 'account',
+  navItems: [
+    { key: 'account', label: '账号安全' },
+    { key: 'security', label: '安全配置' },
+    { key: 'users', label: '用户管理' },
+  ],
+  stats: [
+    { id: 'primaryStatValue', label: '用户数量', value: '0' },
+    { id: 'secondaryStatValue', label: '锁定账号', value: '0' },
+  ],
+  sections: `
+    <section class="panel center-panel" data-tab-panel="account">
+      <div class="panel-header">
+        <div>
+          <h2>账号安全</h2>
+          <p>配置当前账号的谷歌认证、密码与二次验证方式。</p>
+        </div>
+        <div class="panel-actions muted">
+          <span>当前账号变更会即时生效</span>
+        </div>
       </div>
-      <div class="inline-actions">
-        <button id="auditLogsReloadBtn" type="button" class="secondary-btn">刷新日志</button>
-        <button id="auditExportBtn" type="button" class="secondary-btn">导出 CSV</button>
-        <button id="auditVerifyBtn" type="button" class="primary-btn">校验审计链</button>
+      <div class="panel-block account-tone-totp">
+        <div class="block-head">
+          <div>
+            <h3>谷歌认证（当前账号）</h3>
+            <div id="totpStatus" class="muted">正在读取谷歌认证状态...</div>
+          </div>
+          <div class="inline-actions">
+            <button id="totpSetupBtn" class="ghost-btn" type="button">生成密钥</button>
+            <button id="totpEnableBtn" class="primary-btn" type="button" disabled>启用谷歌认证</button>
+          </div>
+        </div>
+        <div id="totpSecretWrap" class="import-errors" style="display:none">
+          <div class="import-errors-title">密钥（手动录入谷歌认证器）</div>
+          <div id="totpSecret" class="totp-secret"></div>
+          <label class="form-label full-row">
+            输入 6 位验证码
+            <input id="totpCodeInput" class="form-control" placeholder="例如：123456" />
+          </label>
+          <div class="muted">请先在谷歌认证器中添加此密钥，再输入当前验证码完成启用。</div>
+        </div>
       </div>
-    </div>
-    <form id="auditFilterForm" class="form-grid compact">
-      <label>用户<input id="auditFilterUsername" placeholder="用户名关键字" /></label>
-      <label>系统
-        <select id="auditFilterSystem">
-          <option value="">全部系统</option>
-          <option value="sso">统一登录</option>
-          <option value="reminder">提醒系统</option>
-          <option value="ticketing">工单系统</option>
-          <option value="cmdb">CMDB</option>
-          <option value="inventory">库存系统</option>
-          <option value="device-flow">设备流转</option>
-          <option value="sec-impl">实施记录</option>
-          <option value="faq">FAQ</option>
-          <option value="tender">标书系统</option>
-          <option value="train-exam">培训考试</option>
-        </select>
-      </label>
-      <label>动作<input id="auditFilterAction" placeholder="如 LOGIN / UPDATE" /></label>
-      <label>对象<input id="auditFilterEntity" placeholder="如 user / send_configs" /></label>
-      <label>条数上限<input id="auditFilterLimit" type="number" min="1" max="2000" value="100" /></label>
-      <div class="form-actions">
-        <button class="primary-btn" type="submit">查询日志</button>
+      <form id="accountPasswordForm" class="form-grid account-tone-password inline-actions">
+        <label class="form-label">
+          当前密码
+          <input id="currentPassword" type="password" class="form-control" required />
+        </label>
+        <label class="form-label">
+          新密码
+          <input id="newPassword" type="password" class="form-control" required />
+        </label>
+        <div class="form-actions">
+          <button class="primary-btn" type="submit">修改密码</button>
+        </div>
+      </form>
+      <form id="accountMfaForm" class="form-grid account-tone-mfa">
+        <label class="inline-check form-label full-row">
+          开启二次验证
+          <input id="accountMfaEnabled" type="checkbox" />
+        </label>
+        <div class="form-label full-row">
+          验证方式（可多选）
+          <div class="channel-row mfa-pill-row" id="accountMfaMethodList">
+            <label class="mfa-pill" data-mfa-pill="email"><input type="checkbox" data-mfa-method="email" />邮箱</label>
+            <label class="mfa-pill" data-mfa-pill="sms"><input type="checkbox" data-mfa-method="sms" />短信</label>
+            <label class="mfa-pill" data-mfa-pill="wecom"><input type="checkbox" data-mfa-method="wecom" />企业微信</label>
+            <label class="mfa-pill" data-mfa-pill="totp"><input type="checkbox" data-mfa-method="totp" />谷歌认证</label>
+          </div>
+          <div class="muted">未配置的方式会自动禁用；可先启用谷歌认证再纳入二次验证。</div>
+        </div>
+        <div class="form-actions">
+          <button class="primary-btn" type="submit">保存二次验证</button>
+        </div>
+      </form>
+      <div id="accountNotice" class="hint-line"></div>
+    </section>
+
+    <section class="panel center-panel" data-tab-panel="security" hidden>
+      <div class="config-page-title">
+        <h2>安全配置</h2>
+        <p>统一维护登录限制、密码复杂度、会话超时、验证码与角色访问策略。</p>
       </div>
-    </form>
-    <div id="auditVerifyNotice" class="mini-hint"></div>
-    <div class="table-wrap">
-      <table class="data-table">
-        <thead>
-          <tr>
-            <th>ID</th>
-            <th>系统</th>
-            <th>用户</th>
-            <th>动作</th>
-            <th>对象</th>
-            <th>时间</th>
-          </tr>
-        </thead>
-        <tbody id="auditLogsBody">
-          <tr><td colspan="6" class="empty">正在加载审计日志...</td></tr>
-        </tbody>
-      </table>
-    </div>
-  </section>
-`;
+      <form id="adminSecurityForm" class="config-stack">
+        <div class="config-card tone-sec-login">
+          <div class="config-card-header">登录失败限制</div>
+          <div class="config-card-body">
+            <label class="form-label">
+              登录最大失败次数
+              <input id="loginMaxAttempts" type="number" min="1" class="form-control" />
+            </label>
+            <label class="form-label">
+              统计窗口（分钟）
+              <input id="loginWindowMinutes" type="number" min="1" class="form-control" />
+            </label>
+            <label class="form-label">
+              锁定时长（分钟）
+              <input id="loginLockMinutes" type="number" min="1" class="form-control" />
+            </label>
+          </div>
+        </div>
+
+        <div class="config-card tone-sec-login">
+          <div class="config-card-header">密码复杂度策略</div>
+          <div class="config-card-body">
+            <label class="form-label">
+              最小密码长度
+              <input id="passwordMinLength" type="number" min="6" max="64" class="form-control" />
+            </label>
+            <label class="inline-check form-label">
+              必须包含大写字母
+              <input id="requireUppercase" type="checkbox" />
+            </label>
+            <label class="inline-check form-label">
+              必须包含小写字母
+              <input id="requireLowercase" type="checkbox" />
+            </label>
+            <label class="inline-check form-label">
+              必须包含数字
+              <input id="requireNumber" type="checkbox" />
+            </label>
+            <label class="inline-check form-label">
+              必须包含特殊字符
+              <input id="requireSpecial" type="checkbox" />
+            </label>
+          </div>
+        </div>
+
+        <div class="config-card tone-sec-login">
+          <div class="config-card-header">会话超时退出</div>
+          <div class="config-card-body">
+            <label class="form-label">
+              登录会话超时（分钟）
+              <input id="sessionTimeoutMinutes" type="number" min="5" max="10080" class="form-control" />
+            </label>
+            <p class="muted full-row">超时后将强制退出并要求重新登录（默认 10080 分钟，即 7 天）。</p>
+          </div>
+        </div>
+
+        <div class="config-card tone-sec-login">
+          <div class="config-card-header">管理员 IP 访问限制</div>
+          <div class="config-card-body">
+            <label class="form-label full-row">
+              admin 允许 IP（每行一个，支持逗号/分号分隔）
+              <textarea id="roleIpAdmin" class="form-control" rows="3"></textarea>
+            </label>
+            <label class="form-label full-row">
+              sysadmin 允许 IP
+              <textarea id="roleIpSysadmin" class="form-control" rows="3"></textarea>
+            </label>
+            <label class="form-label full-row">
+              auditor 允许 IP
+              <textarea id="roleIpAuditor" class="form-control" rows="3"></textarea>
+            </label>
+            <p class="muted full-row">留空表示该角色不限制来源 IP。</p>
+          </div>
+        </div>
+
+        <div class="config-card tone-sec-captcha">
+          <div class="config-card-header">登录验证码</div>
+          <div class="config-card-body">
+            <label class="form-label">
+              验证码有效期（秒）
+              <input id="captchaTtlSeconds" type="number" min="60" class="form-control" />
+            </label>
+            <label class="inline-check form-label">
+              启用登录验证码
+              <input id="captchaEnabled" type="checkbox" />
+            </label>
+          </div>
+        </div>
+
+        <div class="config-card tone-sec-mfa">
+          <div class="config-card-header">二次验证策略</div>
+          <div class="config-card-body">
+            <label class="inline-check form-label full-row">
+              强制全员启用二次验证
+              <input id="forceAllUsersMfa" type="checkbox" />
+            </label>
+            <label class="form-label">
+              MFA 验证码有效期（秒）
+              <input id="mfaCodeTtlSeconds" type="number" min="60" class="form-control" />
+            </label>
+            <div class="form-label full-row">
+              管理员默认验证方式（可多选）
+              <div class="channel-row mfa-pill-row">
+                <label class="mfa-pill"><input type="checkbox" data-admin-mfa-method="email" />邮箱</label>
+                <label class="mfa-pill"><input type="checkbox" data-admin-mfa-method="sms" />短信</label>
+                <label class="mfa-pill"><input type="checkbox" data-admin-mfa-method="wecom" />企业微信</label>
+                <label class="mfa-pill"><input type="checkbox" data-admin-mfa-method="totp" />谷歌认证</label>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="config-actions">
+          <button class="ghost-btn" type="button" id="adminSecurityReloadBtn">重新加载</button>
+          <button class="primary-btn" type="submit">保存安全配置</button>
+        </div>
+      </form>
+      <div id="adminSecurityNotice" class="hint-line"></div>
+    </section>
+
+    <section class="panel center-panel" data-tab-panel="users" hidden>
+      <div class="panel-header">
+        <div>
+          <h2>用户管理</h2>
+          <p>集中维护账号、角色、登录标识和访问权限。</p>
+        </div>
+        <div class="panel-actions">
+          <button id="adminUsersReloadBtn" type="button" class="ghost-btn">刷新列表</button>
+        </div>
+      </div>
+      <form id="adminCreateUserForm" class="form-grid user-create-grid">
+        <label class="form-label">
+          账号
+          <input name="username" class="form-control" placeholder="2-32 位中文/字母/数字" required />
+        </label>
+        <label class="form-label">
+          初始密码
+          <input name="password" type="password" class="form-control" placeholder="Strong#1234" required />
+        </label>
+        <label class="form-label">
+          角色
+          <select name="role" class="form-select">
+            <option value="user">普通用户</option>
+            <option value="editor">编辑</option>
+            <option value="reviewer">审核</option>
+            <option value="sysadmin">系统管理员</option>
+            <option value="auditor">审计管理员</option>
+            <option value="sales">销售</option>
+          </select>
+        </label>
+        <label class="form-label">
+          邮箱
+          <input name="email" type="email" class="form-control" placeholder="name@example.com" />
+        </label>
+        <label class="form-label">
+          手机号
+          <input name="phone" class="form-control" placeholder="13800000000" />
+        </label>
+        <label class="form-label">
+          企业微信 ID
+          <input name="wecom_id" class="form-control" placeholder="wecom-id" />
+        </label>
+        <div class="form-actions">
+          <button class="primary-btn" type="submit">新增用户</button>
+        </div>
+      </form>
+      <div id="adminCreateUserNotice" class="hint-line"></div>
+      <div id="adminUsersNotice" class="hint-line"></div>
+      <div class="table-wrap">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>ID</th>
+              <th>账号</th>
+              <th>角色</th>
+              <th>状态</th>
+              <th>锁定状态</th>
+              <th>登录标识</th>
+              <th>可访问系统</th>
+              <th>操作</th>
+            </tr>
+          </thead>
+          <tbody id="adminUsersBody">
+            <tr><td colspan="8" class="empty">正在加载用户列表...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+  `,
+});
+
+const renderAuditCenterSections = () => ({
+  shellTitle: '审计中心',
+  heroName: '审计日志管理中心',
+  heroTitle: '统一查看跨系统审计记录、验签与导出',
+  heroSubtitle: '面向审计管理员，提供审计日志检索、链路校验和归档导出能力。',
+  roleGuideText: '仅提供审计日志查询、链路校验与导出功能，不开放业务变更入口。',
+  defaultTab: 'overview',
+  navItems: [
+    { key: 'overview', label: '审计总览' },
+    { key: 'logs', label: '日志查询' },
+    { key: 'verify', label: '校验与导出' },
+  ],
+  stats: [
+    { id: 'primaryStatValue', label: '日志数量', value: '0' },
+    { id: 'secondaryStatValue', label: '覆盖系统', value: '0' },
+  ],
+  sections: `
+    <section class="panel center-panel" data-tab-panel="overview">
+      <div class="panel-header">
+        <div>
+          <h2>审计总览</h2>
+          <p>当前页面聚合统一登录、提醒系统以及各业务系统的操作审计记录。</p>
+        </div>
+      </div>
+      <div class="summary-grid">
+        <div class="summary-card tone-sec-login">
+          <strong>跨系统检索</strong>
+          <span>支持按系统、用户、动作与对象联合筛选。</span>
+        </div>
+        <div class="summary-card tone-sec-captcha">
+          <strong>链路校验</strong>
+          <span>可基于当前筛选范围校验审计哈希链完整性。</span>
+        </div>
+        <div class="summary-card tone-sec-mfa">
+          <strong>导出归档</strong>
+          <span>当前查询结果可直接导出为 CSV，用于审计留存。</span>
+        </div>
+      </div>
+      <div id="auditOverviewNotice" class="hint-line">进入“日志查询”后会自动加载最近一批审计记录。</div>
+    </section>
+
+    <section class="panel center-panel" data-tab-panel="logs" hidden>
+      <div class="panel-header">
+        <div>
+          <h2>日志查询</h2>
+          <p>按用户、系统、动作、对象和条数上限检索审计日志。</p>
+        </div>
+        <div class="panel-actions">
+          <button id="auditLogsReloadBtn" type="button" class="ghost-btn">刷新日志</button>
+        </div>
+      </div>
+      <form id="auditFilterForm" class="form-grid compact">
+        <label class="form-label">用户<input id="auditFilterUsername" class="form-control" placeholder="用户名关键字" /></label>
+        <label class="form-label">系统
+          <select id="auditFilterSystem" class="form-select">
+            <option value="">全部系统</option>
+            <option value="sso">统一登录</option>
+            <option value="reminder">提醒系统</option>
+            <option value="ticketing">工单系统</option>
+            <option value="cmdb">CMDB</option>
+            <option value="inventory">库存系统</option>
+            <option value="device-flow">设备流转</option>
+            <option value="sec-impl">实施记录</option>
+            <option value="faq">FAQ</option>
+            <option value="tender">标书系统</option>
+            <option value="train-exam">培训考试</option>
+          </select>
+        </label>
+        <label class="form-label">动作<input id="auditFilterAction" class="form-control" placeholder="如 LOGIN / UPDATE" /></label>
+        <label class="form-label">对象<input id="auditFilterEntity" class="form-control" placeholder="如 user / send_configs" /></label>
+        <label class="form-label">条数上限<input id="auditFilterLimit" type="number" min="1" max="2000" value="100" class="form-control" /></label>
+        <div class="form-actions">
+          <button class="primary-btn" type="submit">查询日志</button>
+        </div>
+      </form>
+      <div id="auditLogsNotice" class="hint-line"></div>
+      <div class="table-wrap">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>ID</th>
+              <th>系统</th>
+              <th>用户</th>
+              <th>动作</th>
+              <th>对象</th>
+              <th>时间</th>
+            </tr>
+          </thead>
+          <tbody id="auditLogsBody">
+            <tr><td colspan="6" class="empty">正在加载审计日志...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="panel center-panel" data-tab-panel="verify" hidden>
+      <div class="panel-header">
+        <div>
+          <h2>校验与导出</h2>
+          <p>基于当前筛选条件执行审计链校验，并导出结果文件用于归档。</p>
+        </div>
+      </div>
+      <div class="summary-grid">
+        <div class="summary-card tone-sec-captcha">
+          <strong>校验链路完整性</strong>
+          <span>检测当前筛选范围内审计日志的签名链是否连续、可验证。</span>
+          <div class="inline-actions">
+            <button id="auditVerifyBtn" type="button" class="primary-btn">校验审计链</button>
+          </div>
+        </div>
+        <div class="summary-card tone-sec-mfa">
+          <strong>导出当前结果</strong>
+          <span>导出 CSV 时会沿用“日志查询”中的筛选条件。</span>
+          <div class="inline-actions">
+            <button id="auditExportBtn" type="button" class="ghost-btn">导出 CSV</button>
+          </div>
+        </div>
+      </div>
+      <div id="auditVerifyNotice" class="hint-line"></div>
+    </section>
+  `,
+});
 
 const renderDedicatedCenterPage = ({ nonce, config }) => {
   const normalizedKey = String(config?.key || '').trim().toLowerCase();
   const allowedRoles = ['admin', 'sysadmin', 'auditor']
     .filter((role) => canAccessDedicatedCenter({ role, systemKey: normalizedKey }));
-  const sectionHtml = normalizedKey === ADMIN_CENTER_KEY
+  const centerDefinition = normalizedKey === ADMIN_CENTER_KEY
     ? renderAdminCenterSections()
     : renderAuditCenterSections();
+  const navHtml = centerDefinition.navItems
+    .map((item) => `<button type="button" data-center-tab="${item.key}"${item.key === centerDefinition.defaultTab ? ' class="active"' : ''}>${item.label}</button>`)
+    .join('');
+  const statsHtml = centerDefinition.stats
+    .map((item) => `
+      <div class="status-card">
+        <span>${item.label}</span>
+        <strong id="${item.id}">${item.value}</strong>
+      </div>
+    `)
+    .join('');
   return `<!doctype html>
 <html lang="zh-CN">
 <head>
@@ -1423,108 +1702,296 @@ const renderDedicatedCenterPage = ({ nonce, config }) => {
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>${config.title}</title>
   <style>
-    body{margin:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;background:linear-gradient(135deg,#f8fafc 0%,#e0ecff 60%,#ecfdf5 100%);color:#0f172a}
-    .shell{max-width:1120px;margin:0 auto;padding:32px 20px 48px}
-    .hero,.card{background:#fff;border:1px solid rgba(148,163,184,.28);border-radius:20px;box-shadow:0 10px 26px rgba(15,23,42,.08)}
-    .hero{padding:24px;margin-bottom:18px}
-    .hero h1{margin:0;font-size:42px;line-height:1.1}
-    .hero p{margin:12px 0 0;color:#64748b;font-size:18px}
-    .toolbar{display:flex;gap:12px;flex-wrap:wrap;margin-top:18px}
-    .toolbar a,.toolbar button{height:40px;padding:0 16px;border-radius:12px;border:1px solid rgba(148,163,184,.35);background:#fff;color:#0f172a;text-decoration:none;font-size:14px;display:inline-flex;align-items:center;justify-content:center;cursor:pointer}
-    .toolbar .primary{background:linear-gradient(135deg,#2563eb,#0ea5e9);color:#fff;border:none}
-    .status{padding:14px 16px;border-radius:14px;background:#eff6ff;color:#1d4ed8;margin-bottom:18px}
-    .status.error{background:#fff1f2;color:#be123c}
-    .grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}
-    .panel{padding:18px;background:#fff;border:1px solid rgba(148,163,184,.28);border-radius:20px;box-shadow:0 10px 26px rgba(15,23,42,.08)}
-    .panel-wide{grid-column:1 / -1}
-    .panel h2{margin:0 0 10px;font-size:22px}
-    .panel p{margin:0;color:#475569;line-height:1.65}
-    .meta{display:flex;gap:10px;flex-wrap:wrap;margin-top:12px}
-    .pill{display:inline-flex;align-items:center;padding:6px 12px;border-radius:999px;background:#eff6ff;color:#1d4ed8;font-size:13px;font-weight:600}
-    .panel-head{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;margin-bottom:12px}
-    .inline-actions,.form-actions{display:flex;gap:8px;flex-wrap:wrap}
-    .primary-btn,.secondary-btn{height:40px;padding:0 16px;border-radius:12px;border:1px solid rgba(148,163,184,.35);font-size:14px;cursor:pointer}
-    .primary-btn{background:linear-gradient(135deg,#2563eb,#0ea5e9);color:#fff;border:none}
-    .secondary-btn{background:#fff;color:#0f172a}
-    .form-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+    :root{
+      --paper:#ffffff;
+      --ink:#0f172a;
+      --muted:#64748b;
+      --line:rgba(148,163,184,.35);
+      --accent:#2563eb;
+      --accent-2:#0ea5e9;
+      --bg:#f5f7fb;
+      --shadow:0 14px 30px rgba(15,23,42,.12);
+      --glow:0 0 0 1px rgba(59,130,246,.08),0 10px 24px rgba(37,99,235,.16);
+    }
+    *{box-sizing:border-box}
+    html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;background:radial-gradient(circle at top right,rgba(37,99,235,.12),transparent 45%),radial-gradient(circle at 20% 20%,rgba(14,165,233,.12),transparent 40%),linear-gradient(135deg,#f8fafc 0%,#eef2ff 38%,#f0fdf4 100%);color:var(--ink)}
+    body{min-height:100vh}
+    button,input,select,textarea{font:inherit}
+    .shell{max-width:1760px;margin:0 auto;padding:24px clamp(14px,2vw,30px) 90px;display:grid;grid-template-columns:236px minmax(0,1fr);gap:clamp(16px,1.8vw,26px)}
+    .content{display:flex;flex-direction:column;gap:24px;min-width:0}
+    .sidebar{background:linear-gradient(160deg,rgba(255,255,255,.9),rgba(248,250,252,.9));border-radius:20px;border:1px solid rgba(148,163,184,.25);padding:22px 18px;display:flex;flex-direction:column;gap:20px;height:calc(100vh - 56px);position:sticky;top:20px;box-shadow:var(--glow);backdrop-filter:blur(12px);isolation:isolate;overflow:hidden}
+    .sidebar::before{content:'';position:absolute;inset:-1px;border-radius:22px;padding:1px;background:linear-gradient(135deg,rgba(37,99,235,.7),rgba(14,165,233,.4),rgba(34,197,94,.5));-webkit-mask:linear-gradient(#fff 0 0) content-box,linear-gradient(#fff 0 0);-webkit-mask-composite:xor;mask-composite:exclude;opacity:.9;z-index:-1;filter:drop-shadow(0 0 12px rgba(59,130,246,.35))}
+    .brand strong{font-size:20px;letter-spacing:.02em}
+    .eyebrow{text-transform:uppercase;letter-spacing:.16em;font-size:11px;color:#94a3b8;margin:0 0 10px}
+    .user-pill{margin-top:10px;font-size:12px;color:var(--ink);background:linear-gradient(135deg,rgba(37,99,235,.18),rgba(34,197,94,.18));padding:6px 12px;border-radius:999px;display:inline-flex}
+    .menu{display:grid;gap:10px;flex:1 1 auto;min-height:0;overflow-y:auto;padding-right:4px;align-content:start;grid-auto-rows:max-content}
+    .menu button{border:1px solid transparent;background:transparent;color:#475569;padding:10px 12px;min-height:44px;border-radius:12px;text-align:left;font-size:14px;line-height:1.4;cursor:pointer}
+    .menu button.active{background:linear-gradient(135deg,rgba(37,99,235,.18),rgba(14,165,233,.18));color:var(--accent);border-color:rgba(37,99,235,.35);font-weight:600}
+    .sidebar-actions{display:grid;gap:10px;margin-top:8px}
+    .brand-title{margin:6px 0 12px;font-size:30px;line-height:1.1}
+    .brand-red{color:#d01c25;font-weight:700}
+    .brand-blue{color:#2563eb;font-weight:700}
+    .version-inline{margin-left:12px;font-size:12px;color:var(--muted);font-weight:600;padding:4px 8px;border-radius:999px;background:rgba(148,163,184,.12)}
+    .hero{display:flex;justify-content:space-between;gap:24px;padding:26px 30px;background:linear-gradient(140deg,#ffffff,#f1f5ff 55%,#ecfeff);border-radius:22px;border:1px solid rgba(148,163,184,.35);box-shadow:var(--glow);position:relative;overflow:hidden}
+    .hero::after{content:'';position:absolute;right:-120px;top:-120px;width:260px;height:260px;background:radial-gradient(circle,rgba(14,165,233,.18),transparent 70%);pointer-events:none}
+    .hero::before{content:'';position:absolute;inset:0;background:linear-gradient(120deg,rgba(59,130,246,.12),transparent 40%,rgba(34,197,94,.12));opacity:.8;pointer-events:none}
+    .hero-title{font-size:20px;margin:6px 0 12px;font-weight:600}
+    .sub{color:var(--muted);max-width:560px;margin:0}
+    .status{display:grid;gap:12px;min-width:180px}
+    .status-card{background:rgba(255,255,255,.92);border-radius:14px;padding:16px 18px;border:1px solid rgba(148,163,184,.35);display:flex;flex-direction:column;gap:8px;box-shadow:var(--shadow);position:relative;overflow:hidden}
+    .status-card strong{font-size:22px;color:var(--accent)}
+    .role-guide-card{border:1px solid rgba(148,163,184,.3);border-radius:14px;background:linear-gradient(135deg,rgba(255,255,255,.95),rgba(241,245,255,.88));padding:12px 14px;box-shadow:var(--shadow)}
+    .role-guide-title{font-size:14px;font-weight:700;color:var(--ink)}
+    .role-guide-text{margin-top:6px;color:var(--muted);font-size:13px}
+    .content-stack{display:grid;gap:24px}
+    .center-panel[hidden]{display:none !important}
+    .panel{background:rgba(255,255,255,.92);border-radius:20px;padding:22px;border:1px solid rgba(148,163,184,.35);box-shadow:var(--glow);backdrop-filter:blur(10px);position:relative;overflow:hidden}
+    .panel::after{content:'';position:absolute;top:-60%;left:-20%;width:120%;height:120%;background:radial-gradient(circle,rgba(14,165,233,.12),transparent 55%);opacity:.6;pointer-events:none}
+    .panel-header{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;margin-bottom:20px;position:relative;z-index:1}
+    .panel-header h2{margin:0 0 6px;font-size:22px}
+    .panel-header p{margin:0;color:var(--muted)}
+    .panel-actions,.inline-actions,.form-actions{display:flex;gap:12px;align-items:center;flex-wrap:wrap}
+    .muted{color:var(--muted)}
+    .primary-btn,.ghost-btn{height:44px;padding:0 16px;border-radius:12px;border:1px solid rgba(148,163,184,.35);font-size:14px;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;background:#fff;color:#0f172a}
+    .primary-btn{background:linear-gradient(135deg,#2563eb,#0ea5e9);color:#fff;border:none;box-shadow:0 10px 18px rgba(37,99,235,.2)}
+    .primary-btn:disabled,.ghost-btn:disabled{opacity:.55;cursor:not-allowed}
+    .form-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:16px;margin-bottom:24px;padding:16px;border-radius:16px;background:linear-gradient(135deg,rgba(224,231,255,.55),rgba(226,232,240,.25));border:1px solid rgba(148,163,184,.25);position:relative;z-index:1}
     .form-grid.compact{grid-template-columns:repeat(5,minmax(0,1fr))}
-    .form-grid label{display:flex;flex-direction:column;gap:6px;font-size:14px;color:#334155}
-    .form-grid .full{grid-column:1 / -1}
-    .form-grid input,.form-grid select,.form-grid textarea{border-radius:12px;border:1px solid rgba(148,163,184,.4);padding:10px 12px;font-size:14px;font-family:inherit}
-    .checkbox{flex-direction:row !important;align-items:center;gap:8px;padding-top:24px}
-    .checkbox input{width:auto}
-    .table-wrap{overflow:auto;border:1px solid rgba(226,232,240,.9);border-radius:16px}
-    .data-table{width:100%;border-collapse:collapse;min-width:720px}
+    .form-grid .form-actions{align-self:end}
+    .form-label{display:flex;flex-direction:column;gap:8px;font-size:14px;color:var(--ink)}
+    .full-row{grid-column:1 / -1}
+    .inline-check{flex-direction:row;align-items:center;gap:12px}
+    .form-control,.form-select,input,select,textarea{padding:10px 12px;border-radius:12px;border:1px solid rgba(148,163,184,.45);background:rgba(255,255,255,.96);outline:none;transition:border .2s ease,box-shadow .2s ease}
+    input:focus,select:focus,textarea:focus,button:focus-visible{border-color:var(--accent);box-shadow:0 0 0 3px rgba(37,99,235,.12);outline:none}
+    .panel-block{background:linear-gradient(140deg,rgba(248,250,252,.9),rgba(239,246,255,.9));border:1px solid rgba(226,232,240,.9);border-radius:16px;padding:16px;margin-bottom:20px;display:grid;gap:16px;position:relative;z-index:1}
+    .block-head{display:flex;justify-content:space-between;gap:16px;align-items:flex-start}
+    .block-head h3{margin:0 0 6px;font-size:18px}
+    .import-errors{display:grid;gap:12px;padding:14px;border-radius:14px;background:rgba(255,255,255,.8);border:1px dashed rgba(148,163,184,.45)}
+    .import-errors-title{font-size:13px;font-weight:700;color:#334155}
+    .totp-secret{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,'Liberation Mono','Courier New',monospace;font-size:12px;word-break:break-all}
+    .hint-line{margin-top:12px;color:#64748b;font-size:13px;white-space:pre-wrap}
+    .hint-line.error{color:#be123c}
+    .channel-row{display:flex;flex-wrap:wrap;gap:10px;margin-top:8px}
+    .mfa-pill{display:inline-flex;align-items:center;gap:8px;padding:8px 12px;border-radius:999px;border:1px solid rgba(148,163,184,.35);background:rgba(255,255,255,.85);box-shadow:0 6px 14px rgba(15,23,42,.08);transition:transform .2s ease,box-shadow .2s ease,border .2s ease}
+    .mfa-pill input{width:16px;height:16px}
+    .mfa-pill.active{border-color:rgba(59,130,246,.6);box-shadow:0 10px 18px rgba(59,130,246,.18)}
+    .mfa-pill.disabled{opacity:.55}
+    .account-tone-totp{background:linear-gradient(135deg,rgba(220,252,231,.55),rgba(219,234,254,.35));border:1px solid rgba(134,239,172,.35)}
+    .account-tone-password{background:linear-gradient(135deg,rgba(254,240,138,.28),rgba(255,255,255,.9));border:1px solid rgba(251,191,36,.25)}
+    .account-tone-mfa{background:linear-gradient(135deg,rgba(224,231,255,.55),rgba(248,250,252,.9));border:1px solid rgba(148,163,184,.25)}
+    .config-page-title h2{margin:0 0 6px;font-size:24px}
+    .config-page-title p{margin:0 0 18px;color:var(--muted)}
+    .config-stack{display:grid;gap:18px}
+    .config-card{background:#fff;border:1px solid #e2e8f0;border-radius:14px;overflow:hidden}
+    .config-card-header{padding:14px 18px;font-weight:600;background:#f8fafc;border-bottom:1px solid #e2e8f0}
+    .config-card-body{padding:18px;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px}
+    .config-card-body .full-row{grid-column:1 / -1}
+    .config-actions{display:flex;gap:12px;justify-content:flex-end}
+    .tone-sec-login{background:linear-gradient(135deg,rgba(254,226,226,.42),rgba(255,255,255,.92))}
+    .tone-sec-login .config-card-header{background:rgba(254,226,226,.62)}
+    .tone-sec-captcha{background:linear-gradient(135deg,rgba(207,250,254,.45),rgba(255,255,255,.92))}
+    .tone-sec-captcha .config-card-header{background:rgba(207,250,254,.66)}
+    .tone-sec-mfa{background:linear-gradient(135deg,rgba(254,243,199,.5),rgba(255,255,255,.92))}
+    .tone-sec-mfa .config-card-header{background:rgba(254,243,199,.7)}
+    .summary-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:16px;position:relative;z-index:1}
+    .summary-card{border-radius:16px;padding:18px;display:grid;gap:12px;border:1px solid rgba(148,163,184,.22);background:rgba(255,255,255,.92);box-shadow:0 10px 24px rgba(15,23,42,.08)}
+    .summary-card strong{font-size:18px}
+    .table-wrap{overflow:auto;border:1px solid rgba(226,232,240,.9);border-radius:16px;position:relative;z-index:1;background:rgba(255,255,255,.9)}
+    .data-table{width:100%;border-collapse:collapse;min-width:780px}
     .data-table th,.data-table td{padding:12px 14px;border-bottom:1px solid rgba(226,232,240,.8);text-align:left;font-size:14px;vertical-align:top}
     .data-table th{background:#f8fafc;color:#334155}
     .empty{text-align:center;color:#64748b}
     .table-actions{display:flex;flex-wrap:wrap;gap:8px}
-    .tiny-btn{height:32px;padding:0 10px;border-radius:999px;border:1px solid rgba(37,99,235,.24);background:#fff;color:#1d4ed8;font-size:12px;cursor:pointer}
+    .tiny-btn{height:36px;padding:0 12px;border-radius:999px;border:1px solid rgba(37,99,235,.24);background:#fff;color:#1d4ed8;font-size:12px;cursor:pointer}
     .tiny-btn.danger{border-color:rgba(220,38,38,.24);color:#b91c1c}
     .tiny-btn:disabled{opacity:.55;cursor:not-allowed}
     .status-pill{display:inline-flex;align-items:center;padding:4px 10px;border-radius:999px;background:#eff6ff;color:#1d4ed8;font-size:12px;font-weight:600}
     .status-pill.warn{background:#fff7ed;color:#c2410c}
     .status-pill.muted{background:#f1f5f9;color:#475569}
-    .mini-hint{margin:10px 0 0;color:#64748b;font-size:13px;white-space:pre-wrap}
-    .mini-hint.error{color:#be123c}
+    .toast{padding:12px 16px;border-radius:14px;max-width:640px;box-shadow:var(--shadow)}
+    .toast.info{background:#eff6ff;color:#1d4ed8}
+    .toast.success{background:#e9f0ff;color:#2f6df6}
+    .toast.error{background:#fff1f2;color:#be123c}
     @media (max-width: 1100px){.form-grid.compact{grid-template-columns:repeat(2,minmax(0,1fr))}}
-    @media (max-width: 960px){.grid,.form-grid,.form-grid.compact{grid-template-columns:1fr}.hero h1{font-size:34px}.panel-wide{grid-column:auto}}
+    @media (max-width: 960px){
+      .shell{grid-template-columns:1fr}
+      .sidebar{position:relative;height:auto}
+      .hero{flex-direction:column}
+      .config-card-body,.form-grid,.form-grid.compact{grid-template-columns:1fr}
+      .block-head{flex-direction:column}
+    }
   </style>
 </head>
 <body>
   <div class="shell">
-    <section class="hero">
-      <h1>${config.title}</h1>
-      <p>${config.subtitle}</p>
-      <div class="meta">
-        <span class="pill">独立系统入口</span>
-        <span class="pill">系统标识：${config.key}</span>
+    <aside class="sidebar">
+      <div class="brand">
+        <p class="eyebrow">统一身份认证</p>
+        <strong>${centerDefinition.shellTitle}</strong>
+        <div id="userPill" class="user-pill" style="display:none"></div>
       </div>
-      <div class="toolbar">
-        <a class="primary" href="/portal?mode=switch">切换系统</a>
-        <button id="logoutBtn" type="button">退出登录</button>
+      <nav class="menu">
+        ${navHtml}
+      </nav>
+      <div class="sidebar-actions">
+        <button id="portalBtn" class="ghost-btn" type="button">返回门户</button>
+        <button id="logoutBtn" class="ghost-btn logout" type="button">退出登录</button>
       </div>
-    </section>
-    <div id="status" class="status">正在检查登录状态...</div>
-    <section id="content" class="grid" style="display:none">
-      ${sectionHtml}
-    </section>
+    </aside>
+
+    <div class="content">
+      <header class="hero">
+        <div>
+          <h1 class="brand-title">
+            <span class="brand-red">聚信</span>
+            <span class="brand-blue">${centerDefinition.heroName}</span>
+            <span class="version-inline">${DEDICATED_CENTER_VERSION}</span>
+          </h1>
+          <h3 class="hero-title">${centerDefinition.heroTitle}</h3>
+          <p class="sub">${centerDefinition.heroSubtitle}</p>
+        </div>
+        <div class="status">
+          ${statsHtml}
+        </div>
+      </header>
+
+      <section id="roleGuide" class="role-guide-card" style="display:none">
+        <div id="roleGuideTitle" class="role-guide-title"></div>
+        <div id="roleGuideText" class="role-guide-text">${centerDefinition.roleGuideText}</div>
+      </section>
+
+      <div id="status" class="toast info">正在检查登录状态...</div>
+
+      <main id="content" class="content-stack" style="display:none">
+        ${centerDefinition.sections}
+      </main>
+    </div>
   </div>
   <script nonce="${nonce}">
     const systemKey = '${config.key}';
     const allowedRoles = ${JSON.stringify(allowedRoles)};
+    const defaultTab = ${JSON.stringify(centerDefinition.defaultTab)};
+    const centerRoleGuideText = ${JSON.stringify(centerDefinition.roleGuideText)};
     const centerApi = ${JSON.stringify(config.api || {})};
+    const defaultPasswordPolicy = Object.freeze({
+      minLength: 10,
+      requireUppercase: true,
+      requireLowercase: true,
+      requireNumber: true,
+      requireSpecial: true,
+    });
+    const defaultRoleIpAllowlist = Object.freeze({
+      admin: [],
+      sysadmin: [],
+      auditor: [],
+    });
+    const roleLabelMap = {
+      admin: '管理员',
+      sysadmin: '系统管理员',
+      auditor: '审计管理员',
+      editor: '编辑',
+      reviewer: '审核',
+      user: '普通用户',
+      viewer: '普通用户',
+      sales: '销售（兼容）',
+    };
+    let csrfToken = '';
+    let currentUser = null;
+    let adminUsersRows = [];
+    let auditLogsRows = [];
+    let adminSecurityRawState = {};
+    let accountSecurityState = {
+      enabled: false,
+      methods: [],
+      available: { email: false, sms: false, wecom: false, totp: false },
+      totpEnabled: false,
+      totpSecret: '',
+    };
     const statusEl = document.getElementById('status');
     const contentEl = document.getElementById('content');
+    const roleGuideEl = document.getElementById('roleGuide');
+    const roleGuideTitleEl = document.getElementById('roleGuideTitle');
+    const roleGuideTextEl = document.getElementById('roleGuideText');
+    const userPillEl = document.getElementById('userPill');
+    const portalBtn = document.getElementById('portalBtn');
     const logoutBtn = document.getElementById('logoutBtn');
 
-    async function logout() {
-      await fetch('/api/auth/logout', {
-        method: 'POST',
-        credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
-      }).catch(() => {});
-      window.location.href = '/portal';
+    function roleLabel(value) {
+      return roleLabelMap[String(value || '').trim().toLowerCase()] || value || '-';
     }
 
-    async function requestJson(url, options = {}) {
+    function setSurfaceStatus(text, type = 'info') {
+      statusEl.className = 'toast ' + type;
+      statusEl.textContent = text || '';
+      statusEl.style.display = text ? 'block' : 'none';
+    }
+
+    function setHint(id, text, isError = false) {
+      const node = document.getElementById(id);
+      if (!node) return;
+      node.className = isError ? 'hint-line error' : 'hint-line';
+      node.textContent = text || '';
+    }
+
+    function parseJsonSafe(text) {
+      try {
+        return JSON.parse(text || '{}');
+      } catch (_err) {
+        return {};
+      }
+    }
+
+    function getErrorText({ response, data, fallback }) {
+      const payloadError = String(data?.error || '').trim();
+      if (payloadError) return payloadError;
+      if (response && response.toLowerCase().includes('csrf')) return '安全校验失败，请刷新后重试';
+      return String(response || '').replace(/<[^>]*>/g, '').trim() || fallback;
+    }
+
+    async function loadCsrf() {
+      const r = await fetch('/api/auth/csrf', { credentials: 'include' });
+      if (!r.ok) throw new Error('CSRF_INIT_FAILED');
+      const data = await r.json();
+      csrfToken = String(data?.token || '');
+      if (!csrfToken) throw new Error('CSRF_EMPTY');
+      return csrfToken;
+    }
+
+    async function ensureCsrfReady() {
+      if (csrfToken) return csrfToken;
+      return loadCsrf();
+    }
+
+    async function requestJson(url, options = {}, retry = true) {
+      const method = String(options.method || 'GET').trim().toUpperCase();
+      const headers = { ...(options.headers || {}) };
+      if (options.body !== undefined && !headers['Content-Type']) {
+        headers['Content-Type'] = 'application/json';
+      }
+      if (!['GET', 'HEAD', 'OPTIONS'].includes(method)) {
+        await ensureCsrfReady();
+        headers['X-CSRF-Token'] = csrfToken;
+      }
       const response = await fetch(url, {
         credentials: 'include',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(options.headers || {}),
-        },
         ...options,
+        method,
+        headers,
       });
       const text = await response.text();
-      let data = {};
-      try {
-        data = text ? JSON.parse(text) : {};
-      } catch (_err) {
-        data = {};
+      const data = parseJsonSafe(text);
+      if (response.status === 401) {
+        window.location.href = '/portal?system=' + encodeURIComponent(systemKey);
+        throw new Error('登录状态已失效');
       }
       if (!response.ok) {
-        throw new Error(String(data.error || text || '请求失败').trim());
+        const message = getErrorText({ response: text, data, fallback: '请求失败' });
+        if (retry && message.includes('安全校验失败')) {
+          csrfToken = '';
+          await loadCsrf();
+          return requestJson(url, options, false);
+        }
+        throw new Error(message);
       }
       return data;
     }
@@ -1538,10 +2005,117 @@ const renderDedicatedCenterPage = ({ nonce, config }) => {
         .replaceAll("'", '&#39;');
     }
 
+    function parseIpListInput(value) {
+      if (Array.isArray(value)) {
+        return Array.from(new Set(value.map((item) => String(item || '').trim()).filter(Boolean)));
+      }
+      const text = String(value || '').trim();
+      if (!text) return [];
+      let items = [];
+      try {
+        const parsed = JSON.parse(text);
+        items = Array.isArray(parsed) ? parsed : text.split(/[\\n,;]+/);
+      } catch (_err) {
+        items = text.split(/[\\n,;]+/);
+      }
+      return Array.from(new Set(items.map((item) => String(item || '').trim()).filter(Boolean)));
+    }
+
+    function normalizePositiveInt(value, fallback, min, max) {
+      const num = Number(value);
+      if (!Number.isFinite(num)) return fallback;
+      return Math.min(max, Math.max(min, Math.round(num)));
+    }
+
+    function normalizeSecurityConfig(securityInput) {
+      const source = securityInput && typeof securityInput === 'object' ? securityInput : {};
+      const login = source.login && typeof source.login === 'object' ? source.login : {};
+      const mfa = source.mfa && typeof source.mfa === 'object' ? source.mfa : {};
+      const captcha = source.captcha && typeof source.captcha === 'object' ? source.captcha : {};
+      const passwordPolicy = source.passwordPolicy && typeof source.passwordPolicy === 'object' ? source.passwordPolicy : {};
+      const session = source.session && typeof source.session === 'object' ? source.session : {};
+      const roleIpAllowlist = source.roleIpAllowlist && typeof source.roleIpAllowlist === 'object' ? source.roleIpAllowlist : {};
+      return {
+        ...source,
+        login: {
+          maxAttempts: normalizePositiveInt(login.maxAttempts ?? 5, 5, 1, 20),
+          windowMinutes: normalizePositiveInt(login.windowMinutes ?? 15, 15, 1, 1440),
+          lockMinutes: normalizePositiveInt(login.lockMinutes ?? 15, 15, 1, 1440),
+        },
+        mfa: {
+          ...mfa,
+          codeTtlSeconds: normalizePositiveInt(mfa.codeTtlSeconds ?? 300, 300, 60, 1800),
+        },
+        captcha: {
+          ...captcha,
+          enabled: captcha.enabled !== false,
+          ttlSeconds: normalizePositiveInt(captcha.ttlSeconds ?? 300, 300, 60, 1800),
+        },
+        forceAllUsersMfa: source.forceAllUsersMfa === true || mfa.forceAllUsers === true,
+        adminMfaMethods: Array.isArray(source.adminMfaMethods) ? source.adminMfaMethods.filter(Boolean) : [],
+        passwordPolicy: {
+          minLength: normalizePositiveInt(passwordPolicy.minLength ?? defaultPasswordPolicy.minLength, 10, 6, 64),
+          requireUppercase: passwordPolicy.requireUppercase !== false,
+          requireLowercase: passwordPolicy.requireLowercase !== false,
+          requireNumber: passwordPolicy.requireNumber !== false,
+          requireSpecial: passwordPolicy.requireSpecial !== false,
+        },
+        session: {
+          timeoutMinutes: normalizePositiveInt(session.timeoutMinutes ?? source.sessionTimeoutMinutes ?? 10080, 10080, 5, 10080),
+        },
+        roleIpAllowlist: {
+          ...defaultRoleIpAllowlist,
+          admin: parseIpListInput(roleIpAllowlist.admin ?? source.adminIpAllowlist),
+          sysadmin: parseIpListInput(roleIpAllowlist.sysadmin ?? source.sysadminIpAllowlist),
+          auditor: parseIpListInput(roleIpAllowlist.auditor ?? source.auditorIpAllowlist),
+        },
+      };
+    }
+
+    function setActiveTab(tabKey) {
+      document.querySelectorAll('[data-center-tab]').forEach((button) => {
+        button.classList.toggle('active', button.dataset.centerTab === tabKey);
+      });
+      document.querySelectorAll('[data-tab-panel]').forEach((panel) => {
+        panel.hidden = panel.dataset.tabPanel !== tabKey;
+      });
+    }
+
+    function updateStatCard(id, value) {
+      const node = document.getElementById(id);
+      if (node) node.textContent = String(value ?? '0');
+    }
+
+    async function logout() {
+      try {
+        await requestJson('/api/auth/logout', {
+          method: 'POST',
+          body: JSON.stringify({}),
+        });
+      } catch (_err) {
+        // ignore logout failures and return to portal anyway
+      }
+      window.location.href = '/portal';
+    }
+
+    function syncUserIdentity() {
+      if (!currentUser) return;
+      if (userPillEl) {
+        userPillEl.textContent = currentUser.username + ' · ' + roleLabel(currentUser.role);
+        userPillEl.style.display = 'inline-flex';
+      }
+      if (roleGuideTitleEl) roleGuideTitleEl.textContent = '当前角色：' + roleLabel(currentUser.role);
+      if (roleGuideTextEl) roleGuideTextEl.textContent = centerRoleGuideText;
+      if (roleGuideEl) roleGuideEl.style.display = 'block';
+    }
+
     function renderUsers(rows) {
       const body = document.getElementById('adminUsersBody');
       if (!body) return;
       const list = Array.isArray(rows) ? rows : [];
+      adminUsersRows = list;
+      updateStatCard('primaryStatValue', list.length);
+      updateStatCard('secondaryStatValue', list.filter((row) => row.lock_status === 'locked').length);
       if (!list.length) {
         body.innerHTML = '<tr><td colspan="8" class="empty">当前没有用户数据</td></tr>';
         return;
@@ -1578,11 +2152,225 @@ const renderDedicatedCenterPage = ({ nonce, config }) => {
       }).join('');
     }
 
-    function setHint(id, text, isError = false) {
-      const node = document.getElementById(id);
-      if (!node) return;
-      node.className = isError ? 'mini-hint error' : 'mini-hint';
-      node.textContent = text;
+    function syncAccountMfaState() {
+      const enabledInput = document.getElementById('accountMfaEnabled');
+      if (enabledInput) enabledInput.checked = accountSecurityState.enabled;
+      const methodInputs = document.querySelectorAll('[data-mfa-method]');
+      methodInputs.forEach((input) => {
+        const method = String(input.dataset.mfaMethod || '');
+        const available = !!accountSecurityState.available[method];
+        const active = accountSecurityState.methods.includes(method);
+        input.disabled = !available;
+        input.checked = active;
+        const pill = input.closest('.mfa-pill');
+        if (pill) {
+          pill.classList.toggle('active', active);
+          pill.classList.toggle('disabled', !available);
+        }
+      });
+      const totpStatus = document.getElementById('totpStatus');
+      if (totpStatus) {
+        if (accountSecurityState.totpEnabled) {
+          totpStatus.textContent = '当前已启用谷歌认证，可直接纳入二次验证。';
+        } else if (accountSecurityState.totpSecret) {
+          totpStatus.textContent = '已生成密钥，请在认证器中录入后输入验证码完成启用。';
+        } else {
+          totpStatus.textContent = '当前未启用谷歌认证。';
+        }
+      }
+      const totpEnableBtn = document.getElementById('totpEnableBtn');
+      if (totpEnableBtn) totpEnableBtn.disabled = !accountSecurityState.totpSecret;
+      const secretWrap = document.getElementById('totpSecretWrap');
+      if (secretWrap) secretWrap.style.display = accountSecurityState.totpSecret ? 'grid' : 'none';
+      const secretNode = document.getElementById('totpSecret');
+      if (secretNode) secretNode.textContent = accountSecurityState.totpSecret || '';
+    }
+
+    async function loadAccountSecurity() {
+      if (systemKey !== '${ADMIN_CENTER_KEY}') return;
+      setHint('accountNotice', '正在加载账号安全配置...');
+      try {
+        const data = await requestJson('/api/auth/mfa/settings');
+        accountSecurityState = {
+          enabled: data.enabled === true,
+          methods: Array.isArray(data.methods) ? data.methods : [],
+          available: {
+            email: !!data.has_email,
+            sms: !!data.has_phone,
+            wecom: !!data.has_wecom,
+            totp: !!data.totp_enabled,
+          },
+          totpEnabled: !!data.totp_enabled,
+          totpSecret: '',
+        };
+        syncAccountMfaState();
+        setHint('accountNotice', '账号安全配置已加载');
+      } catch (error) {
+        setHint('accountNotice', error.message || '读取账号安全配置失败', true);
+      }
+    }
+
+    async function onTotpSetup() {
+      setHint('accountNotice', '正在生成谷歌认证密钥...');
+      try {
+        const data = await requestJson('/api/auth/totp/setup', {
+          method: 'POST',
+          body: JSON.stringify({}),
+        });
+        accountSecurityState.totpSecret = String(data.secret || '');
+        accountSecurityState.totpEnabled = false;
+        syncAccountMfaState();
+        setHint('accountNotice', '已生成密钥，请在谷歌认证器中添加后输入验证码。');
+      } catch (error) {
+        setHint('accountNotice', error.message || '生成谷歌认证密钥失败', true);
+      }
+    }
+
+    async function onTotpEnable() {
+      const code = String(document.getElementById('totpCodeInput')?.value || '').trim();
+      if (!code) {
+        setHint('accountNotice', '请输入谷歌验证码', true);
+        return;
+      }
+      setHint('accountNotice', '正在启用谷歌认证...');
+      try {
+        await requestJson('/api/auth/totp/enable', {
+          method: 'POST',
+          body: JSON.stringify({ code }),
+        });
+        const codeInput = document.getElementById('totpCodeInput');
+        if (codeInput) codeInput.value = '';
+        await loadAccountSecurity();
+        setHint('accountNotice', '谷歌认证已启用，可勾选为当前账号的二次验证方式。');
+      } catch (error) {
+        setHint('accountNotice', error.message || '启用谷歌认证失败', true);
+      }
+    }
+
+    async function onChangePassword(event) {
+      event.preventDefault();
+      const currentPassword = String(document.getElementById('currentPassword')?.value || '').trim();
+      const newPassword = String(document.getElementById('newPassword')?.value || '').trim();
+      if (!currentPassword || !newPassword) {
+        setHint('accountNotice', '请输入当前密码和新密码', true);
+        return;
+      }
+      setHint('accountNotice', '正在修改密码...');
+      try {
+        const result = await requestJson('/api/auth/change-password', {
+          method: 'POST',
+          body: JSON.stringify({ currentPassword, newPassword }),
+        });
+        event.currentTarget.reset();
+        setHint('accountNotice', '密码已修改，正在返回登录页重新登录...');
+        if (result.reauthRequired) {
+          window.setTimeout(() => {
+            window.location.href = '/portal';
+          }, 1000);
+        }
+      } catch (error) {
+        setHint('accountNotice', error.message || '修改密码失败', true);
+      }
+    }
+
+    async function onSaveAccountMfaSettings(event) {
+      event.preventDefault();
+      const enabled = !!document.getElementById('accountMfaEnabled')?.checked;
+      const methods = Array.from(document.querySelectorAll('[data-mfa-method]:checked'))
+        .map((input) => String(input.dataset.mfaMethod || '').trim())
+        .filter(Boolean);
+      if (enabled && methods.length === 0) {
+        setHint('accountNotice', '请至少选择一种可用的二次验证方式', true);
+        return;
+      }
+      setHint('accountNotice', '正在保存二次验证配置...');
+      try {
+        await requestJson('/api/auth/mfa/settings', {
+          method: 'POST',
+          body: JSON.stringify({ enabled, methods }),
+        });
+        accountSecurityState.enabled = enabled;
+        accountSecurityState.methods = methods;
+        syncAccountMfaState();
+        setHint('accountNotice', '二次验证配置已保存');
+      } catch (error) {
+        setHint('accountNotice', error.message || '保存二次验证配置失败', true);
+      }
+    }
+
+    function applySecurityForm(data) {
+      const normalized = normalizeSecurityConfig(data || {});
+      adminSecurityRawState = normalized;
+      const byId = (id) => document.getElementById(id);
+      byId('loginMaxAttempts').value = normalized.login.maxAttempts;
+      byId('loginWindowMinutes').value = normalized.login.windowMinutes;
+      byId('loginLockMinutes').value = normalized.login.lockMinutes;
+      byId('passwordMinLength').value = normalized.passwordPolicy.minLength;
+      byId('requireUppercase').checked = normalized.passwordPolicy.requireUppercase !== false;
+      byId('requireLowercase').checked = normalized.passwordPolicy.requireLowercase !== false;
+      byId('requireNumber').checked = normalized.passwordPolicy.requireNumber !== false;
+      byId('requireSpecial').checked = normalized.passwordPolicy.requireSpecial !== false;
+      byId('sessionTimeoutMinutes').value = normalized.session.timeoutMinutes;
+      byId('roleIpAdmin').value = (normalized.roleIpAllowlist.admin || []).join('\\n');
+      byId('roleIpSysadmin').value = (normalized.roleIpAllowlist.sysadmin || []).join('\\n');
+      byId('roleIpAuditor').value = (normalized.roleIpAllowlist.auditor || []).join('\\n');
+      byId('captchaTtlSeconds').value = normalized.captcha.ttlSeconds;
+      byId('captchaEnabled').checked = normalized.captcha.enabled !== false;
+      byId('forceAllUsersMfa').checked = normalized.forceAllUsersMfa === true;
+      byId('mfaCodeTtlSeconds').value = normalized.mfa.codeTtlSeconds;
+      document.querySelectorAll('[data-admin-mfa-method]').forEach((input) => {
+        const method = String(input.dataset.adminMfaMethod || '').trim();
+        const checked = normalized.adminMfaMethods.includes(method);
+        input.checked = checked;
+        const pill = input.closest('.mfa-pill');
+        if (pill) pill.classList.toggle('active', checked);
+      });
+    }
+
+    function collectSecurityPayload() {
+      const base = adminSecurityRawState && typeof adminSecurityRawState === 'object' ? adminSecurityRawState : {};
+      const next = {
+        ...base,
+        login: {
+          ...(base.login || {}),
+          maxAttempts: Number(document.getElementById('loginMaxAttempts')?.value || 5),
+          windowMinutes: Number(document.getElementById('loginWindowMinutes')?.value || 15),
+          lockMinutes: Number(document.getElementById('loginLockMinutes')?.value || 15),
+        },
+        passwordPolicy: {
+          ...(base.passwordPolicy || {}),
+          minLength: Number(document.getElementById('passwordMinLength')?.value || 10),
+          requireUppercase: !!document.getElementById('requireUppercase')?.checked,
+          requireLowercase: !!document.getElementById('requireLowercase')?.checked,
+          requireNumber: !!document.getElementById('requireNumber')?.checked,
+          requireSpecial: !!document.getElementById('requireSpecial')?.checked,
+        },
+        session: {
+          ...(base.session || {}),
+          timeoutMinutes: Number(document.getElementById('sessionTimeoutMinutes')?.value || 10080),
+        },
+        roleIpAllowlist: {
+          ...(base.roleIpAllowlist || {}),
+          admin: parseIpListInput(document.getElementById('roleIpAdmin')?.value || ''),
+          sysadmin: parseIpListInput(document.getElementById('roleIpSysadmin')?.value || ''),
+          auditor: parseIpListInput(document.getElementById('roleIpAuditor')?.value || ''),
+        },
+        captcha: {
+          ...(base.captcha || {}),
+          enabled: !!document.getElementById('captchaEnabled')?.checked,
+          ttlSeconds: Number(document.getElementById('captchaTtlSeconds')?.value || 300),
+        },
+        forceAllUsersMfa: !!document.getElementById('forceAllUsersMfa')?.checked,
+        adminMfaMethods: Array.from(document.querySelectorAll('[data-admin-mfa-method]:checked'))
+          .map((input) => String(input.dataset.adminMfaMethod || '').trim())
+          .filter(Boolean),
+        mfa: {
+          ...(base.mfa || {}),
+          codeTtlSeconds: Number(document.getElementById('mfaCodeTtlSeconds')?.value || 300),
+        },
+      };
+      next.mfa.forceAllUsers = next.forceAllUsersMfa === true;
+      return normalizeSecurityConfig(next);
     }
 
     async function loadAdminUsers() {
@@ -1666,52 +2454,6 @@ const renderDedicatedCenterPage = ({ nonce, config }) => {
       }
     }
 
-    function applySecurityForm(data) {
-      const passwordPolicy = data?.passwordPolicy || {};
-      const session = data?.session || {};
-      const mfa = data?.mfa || {};
-      const roleIpAllowlist = data?.roleIpAllowlist || {};
-      const byId = (id) => document.getElementById(id);
-      byId('passwordMinLength').value = passwordPolicy.minLength || 10;
-      byId('sessionTimeoutMinutes').value = session.timeoutMinutes || 720;
-      byId('forceAllUsersMfa').checked = mfa.forceAllUsers === true;
-      byId('requireUppercase').checked = passwordPolicy.requireUppercase !== false;
-      byId('requireLowercase').checked = passwordPolicy.requireLowercase !== false;
-      byId('requireNumber').checked = passwordPolicy.requireNumber !== false;
-      byId('requireSpecial').checked = passwordPolicy.requireSpecial !== false;
-      byId('roleIpAdmin').value = Array.isArray(roleIpAllowlist.admin) ? roleIpAllowlist.admin.join('\\n') : '';
-      byId('roleIpSysadmin').value = Array.isArray(roleIpAllowlist.sysadmin) ? roleIpAllowlist.sysadmin.join('\\n') : '';
-      byId('roleIpAuditor').value = Array.isArray(roleIpAllowlist.auditor) ? roleIpAllowlist.auditor.join('\\n') : '';
-    }
-
-    function collectSecurityPayload() {
-      const parseLines = (id) =>
-        String(document.getElementById(id)?.value || '')
-          .split('\\n')
-          .map((item) => item.trim())
-          .filter(Boolean);
-      return {
-        passwordPolicy: {
-          minLength: Number(document.getElementById('passwordMinLength')?.value || 10),
-          requireUppercase: !!document.getElementById('requireUppercase')?.checked,
-          requireLowercase: !!document.getElementById('requireLowercase')?.checked,
-          requireNumber: !!document.getElementById('requireNumber')?.checked,
-          requireSpecial: !!document.getElementById('requireSpecial')?.checked,
-        },
-        session: {
-          timeoutMinutes: Number(document.getElementById('sessionTimeoutMinutes')?.value || 720),
-        },
-        mfa: {
-          forceAllUsers: !!document.getElementById('forceAllUsersMfa')?.checked,
-        },
-        roleIpAllowlist: {
-          admin: parseLines('roleIpAdmin'),
-          sysadmin: parseLines('roleIpSysadmin'),
-          auditor: parseLines('roleIpAuditor'),
-        },
-      };
-    }
-
     async function loadAdminSecurity() {
       setHint('adminSecurityNotice', '正在加载安全配置...');
       try {
@@ -1760,17 +2502,20 @@ const renderDedicatedCenterPage = ({ nonce, config }) => {
       const body = document.getElementById('auditLogsBody');
       if (!body) return;
       const list = Array.isArray(rows) ? rows : [];
+      auditLogsRows = list;
+      updateStatCard('primaryStatValue', list.length);
+      updateStatCard('secondaryStatValue', new Set(list.map((row) => String(row.system || '').trim()).filter(Boolean)).size);
       if (!list.length) {
         body.innerHTML = '<tr><td colspan="6" class="empty">当前没有审计日志</td></tr>';
         return;
       }
       body.innerHTML = list.map((row) => '<tr>'
-        + '<td>' + row.id + '</td>'
-        + '<td>' + (row.system || '-') + '</td>'
-        + '<td>' + (row.username || '-') + '</td>'
-        + '<td>' + (row.action || '-') + '</td>'
-        + '<td>' + (row.entity || '-') + '</td>'
-        + '<td>' + (row.created_at || '-') + '</td>'
+        + '<td>' + escapeHtml(row.id) + '</td>'
+        + '<td>' + escapeHtml(row.system || '-') + '</td>'
+        + '<td>' + escapeHtml(row.username || '-') + '</td>'
+        + '<td>' + escapeHtml(row.action || '-') + '</td>'
+        + '<td>' + escapeHtml(row.entity || '-') + '</td>'
+        + '<td>' + escapeHtml(row.created_at || '-') + '</td>'
         + '</tr>').join('');
     }
 
@@ -1793,14 +2538,14 @@ const renderDedicatedCenterPage = ({ nonce, config }) => {
     async function loadAuditLogs(event) {
       if (event) event.preventDefault();
       const params = collectAuditQuery();
-      setHint('auditVerifyNotice', '正在加载审计日志...');
+      setHint('auditLogsNotice', '正在加载审计日志...');
       try {
         const rows = await requestJson(centerApi.logsList + '?' + params.toString());
         renderAuditLogs(rows);
-        setHint('auditVerifyNotice', '审计日志已更新');
+        setHint('auditLogsNotice', '审计日志已更新');
       } catch (error) {
         renderAuditLogs([]);
-        setHint('auditVerifyNotice', error.message || '加载审计日志失败', true);
+        setHint('auditLogsNotice', error.message || '加载审计日志失败', true);
       }
     }
 
@@ -1854,12 +2599,35 @@ const renderDedicatedCenterPage = ({ nonce, config }) => {
     }
 
     function initCenterFeatures() {
+      setActiveTab(defaultTab);
+      document.querySelectorAll('[data-center-tab]').forEach((button) => {
+        button.addEventListener('click', () => {
+          setActiveTab(button.dataset.centerTab);
+        });
+      });
       if (systemKey === '${ADMIN_CENTER_KEY}') {
+        document.getElementById('accountPasswordForm')?.addEventListener('submit', onChangePassword);
+        document.getElementById('accountMfaForm')?.addEventListener('submit', onSaveAccountMfaSettings);
+        document.getElementById('totpSetupBtn')?.addEventListener('click', onTotpSetup);
+        document.getElementById('totpEnableBtn')?.addEventListener('click', onTotpEnable);
+        document.querySelectorAll('[data-mfa-method]').forEach((input) => {
+          input.addEventListener('change', () => {
+            const pill = input.closest('.mfa-pill');
+            if (pill) pill.classList.toggle('active', input.checked);
+          });
+        });
+        document.querySelectorAll('[data-admin-mfa-method]').forEach((input) => {
+          input.addEventListener('change', () => {
+            const pill = input.closest('.mfa-pill');
+            if (pill) pill.classList.toggle('active', input.checked);
+          });
+        });
         document.getElementById('adminUsersReloadBtn')?.addEventListener('click', loadAdminUsers);
         document.getElementById('adminUsersBody')?.addEventListener('click', onAdminUsersAction);
         document.getElementById('adminCreateUserForm')?.addEventListener('submit', onAdminCreateUser);
         document.getElementById('adminSecurityForm')?.addEventListener('submit', onAdminSaveSecurity);
         document.getElementById('adminSecurityReloadBtn')?.addEventListener('click', loadAdminSecurity);
+        loadAccountSecurity();
         loadAdminUsers();
         loadAdminSecurity();
         return;
@@ -1872,6 +2640,7 @@ const renderDedicatedCenterPage = ({ nonce, config }) => {
     }
 
     async function bootstrapCenter() {
+      setSurfaceStatus('正在检查登录状态...', 'info');
       try {
         const response = await fetch('/api/auth/me', { credentials: 'include' });
         if (response.status === 401) {
@@ -1879,22 +2648,25 @@ const renderDedicatedCenterPage = ({ nonce, config }) => {
           return;
         }
         const user = await response.json();
+        currentUser = user;
         const role = String(user?.role || '').trim().toLowerCase();
         const appAccess = Array.isArray(user?.app_access) ? user.app_access : [];
         if (!allowedRoles.includes(role) || !appAccess.includes(systemKey)) {
-          statusEl.className = 'status error';
-          statusEl.textContent = '当前账号无权访问该独立系统，请切换账号或返回门户。';
+          setSurfaceStatus('当前账号无权访问该独立系统，请切换账号或返回门户。', 'error');
           return;
         }
-        statusEl.textContent = '已确认登录态：' + user.username + ' / ' + role;
+        syncUserIdentity();
+        setSurfaceStatus('');
         contentEl.style.display = 'grid';
         initCenterFeatures();
       } catch (error) {
-        statusEl.className = 'status error';
-        statusEl.textContent = '加载登录态失败，请刷新后重试。';
+        setSurfaceStatus('加载登录态失败，请刷新后重试。', 'error');
       }
     }
 
+    portalBtn.addEventListener('click', () => {
+      window.location.href = '/portal?mode=switch';
+    });
     logoutBtn.addEventListener('click', logout);
     bootstrapCenter();
   </script>
