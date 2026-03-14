@@ -1301,7 +1301,7 @@ app.get('/api/auth/apps', async (req, res) => {
   });
 });
 
-const RELEASE_VERSION = '4.1.3';
+const RELEASE_VERSION = '4.1.4';
 const DEDICATED_CENTER_VERSION = `v${RELEASE_VERSION}`;
 const ADMIN_CENTER_ROLE_OPTIONS = Object.freeze([
   { value: 'user', label: '普通用户' },
@@ -2041,6 +2041,7 @@ const renderDedicatedCenterPage = ({ nonce, config }) => {
       requireSpecial: true,
     });
     const systemAccessOptions = ${JSON.stringify(ADMIN_CENTER_SYSTEM_OPTIONS)};
+    const systemDisplayOptions = ${JSON.stringify(SYSTEM_DISPLAY_OPTIONS)};
     const defaultRoleIpAllowlist = Object.freeze({
       admin: [],
       sysadmin: [],
@@ -2083,6 +2084,30 @@ const renderDedicatedCenterPage = ({ nonce, config }) => {
 
     function roleLabel(value) {
       return roleLabelMap[String(value || '').trim().toLowerCase()] || value || '-';
+    }
+
+    function getSystemDisplayOption(key) {
+      return systemDisplayOptions.find((item) => item.key === String(key || '').trim());
+    }
+
+    function getSystemDisplayLabel(key) {
+      const item = getSystemDisplayOption(key);
+      return item?.label || key || '-';
+    }
+
+    function getSystemDisplayShortLabel(key) {
+      const item = getSystemDisplayOption(key);
+      return item?.shortLabel || item?.label || key || '-';
+    }
+
+    function summarizeSystemAccess(keys, maxVisible = 2) {
+      const labels = Array.isArray(keys)
+        ? keys.map((key) => getSystemDisplayShortLabel(key)).filter(Boolean)
+        : [];
+      return {
+        labels: labels.slice(0, maxVisible),
+        overflowCount: Math.max(labels.length - maxVisible, 0),
+      };
     }
 
     function getDefaultBusinessAccessByRole(role) {

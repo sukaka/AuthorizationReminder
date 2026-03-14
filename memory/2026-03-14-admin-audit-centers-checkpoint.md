@@ -192,10 +192,10 @@
 
 - 已从当前工作树切出新分支：`codex/4.1.0`
 - 当前版本对齐目标：
-  - 页面版本角标：`v4.1.3`
-  - 仓库分支：`codex/4.1.3`
-  - Git 标签：`v4.1.3`
-  - 发布说明：`/Users/zhanglei/Documents/codex-new/docs/releases/4.1.3.md`
+  - 页面版本角标：`v4.1.4`
+  - 仓库分支：`codex/4.1.4`
+  - Git 标签：`v4.1.4`
+  - 发布说明：`/Users/zhanglei/Documents/codex-new/docs/releases/4.1.4.md`
 
 ## 2026-03-14 Modal Position Fix
 
@@ -233,4 +233,4 @@
   - 在登录页标题区增加版本号角标，和独立后台统一显示当前版本
 - 版本处理：
   - 本次属于已发布 `4.1.2` 之后的修订版 Bug 修复，版本从 `4.1.2` 升到 `4.1.3`
-  - Git 对齐目标：分支 `codex/4.1.3`，标签 `v4.1.3`
+  - Git 对齐目标：分支 `codex/4.1.4`，标签 `v4.1.4`
