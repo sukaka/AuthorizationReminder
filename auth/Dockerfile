@@ -11,6 +11,7 @@ COPY auth/admin-center-security.js ./auth/admin-center-security.js
 COPY auth/admin-center-user-import.js ./auth/admin-center-user-import.js
 COPY auth/audit-center-logs.js ./auth/audit-center-logs.js
 COPY auth/portal-routing.js ./auth/portal-routing.js
+COPY auth/system-access-display.js ./auth/system-access-display.js
 COPY auth/csrf-security.js ./auth/csrf-security.js
 COPY auth/password-security.js ./auth/password-security.js
 COPY auth/session-security.js ./auth/session-security.js

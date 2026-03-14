@@ -1301,7 +1301,7 @@ app.get('/api/auth/apps', async (req, res) => {
   });
 });
 
-const RELEASE_VERSION = '4.1.2';
+const RELEASE_VERSION = '4.1.3';
 const DEDICATED_CENTER_VERSION = `v${RELEASE_VERSION}`;
 const ADMIN_CENTER_ROLE_OPTIONS = Object.freeze([
   { value: 'user', label: '普通用户' },
@@ -3248,6 +3248,8 @@ app.get('/portal', (req, res) => {
     .brand-red{color:#d01c25}
     .brand-blue{color:#2563eb}
     .muted{color:#64748b}
+    .title-row{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:8px}
+    .version-badge{display:inline-flex;align-items:center;justify-content:center;padding:4px 10px;border-radius:999px;background:rgba(37,99,235,.1);color:#1d4ed8;font-size:12px;font-weight:700;white-space:nowrap}
     label{display:flex;flex-direction:column;gap:8px;margin:12px 0}
     input,select,button{border-radius:10px;border:1px solid rgba(148,163,184,.4);padding:0 12px;font-size:14px;height:40px}
     button{cursor:pointer}
@@ -3306,7 +3308,10 @@ app.get('/portal', (req, res) => {
 <body>
   <div class="wrap">
     <div class="card" id="loginCard">
-      <h1 class="title"><span class="brand-red">聚信</span><span class="brand-blue">统一登录平台</span></h1>
+      <div class="title-row">
+        <h1 class="title"><span class="brand-red">聚信</span><span class="brand-blue">统一登录平台</span></h1>
+        <span class="version-badge">${DEDICATED_CENTER_VERSION}</span>
+      </div>
       <div class="muted">登录后进入系统（管理员可选择，系统/审计管理员自动进入后台）。</div>
       <form id="loginForm">
         <label>账号<input id="username" placeholder="内置管理账号或手机号" /></label>

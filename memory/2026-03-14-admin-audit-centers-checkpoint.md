@@ -192,10 +192,10 @@
 
 - 已从当前工作树切出新分支：`codex/4.1.0`
 - 当前版本对齐目标：
-  - 页面版本角标：`v4.1.2`
-  - 仓库分支：`codex/4.1.2`
-  - Git 标签：`v4.1.2`
-  - 发布说明：`/Users/zhanglei/Documents/codex-new/docs/releases/4.1.2.md`
+  - 页面版本角标：`v4.1.3`
+  - 仓库分支：`codex/4.1.3`
+  - Git 标签：`v4.1.3`
+  - 发布说明：`/Users/zhanglei/Documents/codex-new/docs/releases/4.1.3.md`
 
 ## 2026-03-14 Modal Position Fix
 
@@ -221,3 +221,16 @@
 - 版本处理：
   - 本次属于缺陷修复与展示一致性修正，版本从 `4.1.1` 升到 `4.1.2`
   - Git 对齐目标：分支 `codex/4.1.2`，标签 `v4.1.2`
+
+## 2026-03-14 Portal Recovery
+
+- 用户反馈：本地 `http://localhost:5180/portal?system=reminder` 无法打开，浏览器报 `ERR_CONNECTION_REFUSED`。
+- 根因：
+  - `auth/index.js` 新增了 `require('./system-access-display')`
+  - 但 `/Users/zhanglei/Documents/codex-new/auth/Dockerfile` 没有复制这个文件，导致容器启动时报 `Cannot find module './system-access-display'`
+- 处理方式：
+  - 在 `auth/Dockerfile` 补 `COPY auth/system-access-display.js ./auth/system-access-display.js`
+  - 在登录页标题区增加版本号角标，和独立后台统一显示当前版本
+- 版本处理：
+  - 本次属于已发布 `4.1.2` 之后的修订版 Bug 修复，版本从 `4.1.2` 升到 `4.1.3`
+  - Git 对齐目标：分支 `codex/4.1.3`，标签 `v4.1.3`
