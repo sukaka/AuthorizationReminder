@@ -57,6 +57,12 @@ const {
   serializeLogsAsCsv,
 } = require('./audit-center-logs');
 const {
+  SYSTEM_DISPLAY_OPTIONS,
+  getSystemDisplayLabel,
+  getSystemDisplayShortLabel,
+  summarizeSystemAccess,
+} = require('./system-access-display');
+const {
   buildUserImportFilename,
   buildUserImportTemplateWorkbook,
   buildUserImportWorkbook,
@@ -1295,7 +1301,7 @@ app.get('/api/auth/apps', async (req, res) => {
   });
 });
 
-const RELEASE_VERSION = '4.1.1';
+const RELEASE_VERSION = '4.1.2';
 const DEDICATED_CENTER_VERSION = `v${RELEASE_VERSION}`;
 const ADMIN_CENTER_ROLE_OPTIONS = Object.freeze([
   { value: 'user', label: '普通用户' },
@@ -1305,17 +1311,9 @@ const ADMIN_CENTER_ROLE_OPTIONS = Object.freeze([
   { value: 'auditor', label: '审计管理员' },
   { value: 'sales', label: '销售' },
 ]);
-const ADMIN_CENTER_SYSTEM_OPTIONS = Object.freeze([
-  { key: 'reminder', label: '授权到期提醒系统', shortLabel: '提醒系统' },
-  { key: 'ticketing', label: '工单管理系统', shortLabel: '工单系统' },
-  { key: 'cmdb', label: 'CMDB系统', shortLabel: 'CMDB系统' },
-  { key: 'inventory', label: '库存管理系统', shortLabel: '库存管理系统' },
-  { key: 'device-flow', label: '设备流转系统', shortLabel: '设备流转系统' },
-  { key: 'sec-impl', label: '聚信实施记录系统', shortLabel: '聚信实施记录系统' },
-  { key: 'faq', label: 'FAQ系统', shortLabel: 'FAQ系统' },
-  { key: 'tender', label: '标书协同制作系统', shortLabel: '标书协同制作系统' },
-  { key: 'train-exam', label: '培训考试系统', shortLabel: '培训考试系统' },
-]);
+const ADMIN_CENTER_SYSTEM_OPTIONS = Object.freeze(
+  SYSTEM_DISPLAY_OPTIONS.filter((item) => item.key !== ADMIN_CENTER_KEY && item.key !== AUDIT_CENTER_KEY)
+);
 
 const renderSystemAccessCheckboxes = (inputName, dataKey, options = ADMIN_CENTER_SYSTEM_OPTIONS) => options
   .map((item) => `<label class="access-pill"><input type="checkbox" name="${inputName}" data-${dataKey}="${item.key}" value="${item.key}" /><span>${item.label}</span></label>`)
@@ -1948,6 +1946,8 @@ const renderDedicatedCenterPage = ({ nonce, config }) => {
     .empty{text-align:center;color:#64748b}
     .chip-list{display:flex;flex-wrap:wrap;gap:8px}
     .chip{display:inline-flex;align-items:center;padding:6px 10px;border-radius:999px;border:1px solid rgba(148,163,184,.35);background:#f8fafc;color:#334155;font-size:12px}
+    .chip-more{background:#eff6ff;color:#1d4ed8;border-color:rgba(37,99,235,.22);font-weight:600}
+    .access-cell{min-width:220px;max-width:320px}
     .table-actions{display:flex;flex-wrap:wrap;gap:8px}
     .tiny-btn{height:36px;padding:0 12px;border-radius:999px;border:1px solid rgba(37,99,235,.24);background:#fff;color:#1d4ed8;font-size:12px;cursor:pointer}
     .tiny-btn.danger{border-color:rgba(220,38,38,.24);color:#b91c1c}
@@ -2083,20 +2083,6 @@ const renderDedicatedCenterPage = ({ nonce, config }) => {
 
     function roleLabel(value) {
       return roleLabelMap[String(value || '').trim().toLowerCase()] || value || '-';
-    }
-
-    function getSystemOption(key) {
-      return systemAccessOptions.find((item) => item.key === String(key || '').trim());
-    }
-
-    function getSystemLabel(key) {
-      const item = getSystemOption(key);
-      return item?.label || key || '-';
-    }
-
-    function getSystemShortLabel(key) {
-      const item = getSystemOption(key);
-      return item?.shortLabel || item?.label || key || '-';
     }
 
     function getDefaultBusinessAccessByRole(role) {
@@ -2473,8 +2459,13 @@ const renderDedicatedCenterPage = ({ nonce, config }) => {
       }
       body.innerHTML = list.map((row, index) => {
         const accessList = Array.isArray(row.app_access) ? row.app_access : [];
-        const access = accessList.length
-          ? '<div class="chip-list">' + accessList.map((key) => '<span class="chip">' + escapeHtml(getSystemShortLabel(key)) + '</span>').join('') + '</div>'
+        const accessSummary = summarizeSystemAccess(accessList);
+        const accessTitle = accessList.map((key) => getSystemDisplayLabel(key)).join('、');
+        const access = accessSummary.labels.length
+          ? '<div class="chip-list" title="' + escapeHtml(accessTitle) + '">'
+            + accessSummary.labels.map((label) => '<span class="chip">' + escapeHtml(label) + '</span>').join('')
+            + (accessSummary.overflowCount > 0 ? '<span class="chip chip-more">+' + accessSummary.overflowCount + '</span>' : '')
+            + '</div>'
           : '<span class="factor-text">-</span>';
         const factorList = [];
         if (row.email) factorList.push('邮箱');
@@ -2499,7 +2490,7 @@ const renderDedicatedCenterPage = ({ nonce, config }) => {
           + '<td>' + role + '</td>'
           + '<td>' + status + '</td>'
           + '<td>' + lockStatus + '</td>'
-          + '<td>' + access + '</td>'
+          + '<td class="access-cell">' + access + '</td>'
           + '<td><span class="factor-text">' + factorText + '</span></td>'
           + '<td>' + escapeHtml(row.created_at || '-') + '</td>'
           + '<td><div class="table-actions">'
@@ -3028,7 +3019,7 @@ const renderDedicatedCenterPage = ({ nonce, config }) => {
       }
       body.innerHTML = list.map((row) => '<tr>'
         + '<td>' + escapeHtml(row.id) + '</td>'
-        + '<td>' + escapeHtml(getSystemLabel(row.system || '-')) + '</td>'
+        + '<td>' + escapeHtml(getSystemDisplayLabel(row.system || '-')) + '</td>'
         + '<td>' + escapeHtml(row.username || '-') + '</td>'
         + '<td>' + escapeHtml(row.action || '-') + '</td>'
         + '<td>' + escapeHtml(row.entity || '-') + '</td>'

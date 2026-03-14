@@ -192,10 +192,10 @@
 
 - 已从当前工作树切出新分支：`codex/4.1.0`
 - 当前版本对齐目标：
-  - 页面版本角标：`v4.1.1`
-  - 仓库分支：`codex/4.1.1`
-  - Git 标签：`v4.1.1`
-  - 发布说明：`/Users/zhanglei/Documents/codex-new/docs/releases/4.1.1.md`
+  - 页面版本角标：`v4.1.2`
+  - 仓库分支：`codex/4.1.2`
+  - Git 标签：`v4.1.2`
+  - 发布说明：`/Users/zhanglei/Documents/codex-new/docs/releases/4.1.2.md`
 
 ## 2026-03-14 Modal Position Fix
 
@@ -209,3 +209,15 @@
   - 移动端把容器 padding 下调到 `8px`，保留可滚动能力
 - 版本处理：
   - 因为 `v4.1.0` 已经发布并打标签，这次弹层定位修复按规则升级为 `4.1.1`
+
+## 2026-03-14 Access Column Tightening
+
+- 用户反馈：`admin-center` 用户表里的“可访问系统”列过宽，长中文系统标签和多项权限一起展开后，列表可读性变差。
+- 处理方式：
+  - 新增 `/Users/zhanglei/Documents/codex-new/auth/system-access-display.js`
+  - 统一系统中文展示名，补齐 `admin-center` -> `管理中心`、`audit-center` -> `审计中心`
+  - 用户列表里的权限列改成“前 2 个标签 + `+N` 摘要”
+  - 审计日志系统列也统一走这套中文展示 helper
+- 版本处理：
+  - 本次属于缺陷修复与展示一致性修正，版本从 `4.1.1` 升到 `4.1.2`
+  - Git 对齐目标：分支 `codex/4.1.2`，标签 `v4.1.2`
