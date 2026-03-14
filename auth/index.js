@@ -1295,7 +1295,7 @@ app.get('/api/auth/apps', async (req, res) => {
   });
 });
 
-const RELEASE_VERSION = '4.1.0';
+const RELEASE_VERSION = '4.1.1';
 const DEDICATED_CENTER_VERSION = `v${RELEASE_VERSION}`;
 const ADMIN_CENTER_ROLE_OPTIONS = Object.freeze([
   { value: 'user', label: '普通用户' },
@@ -1957,9 +1957,9 @@ const renderDedicatedCenterPage = ({ nonce, config }) => {
     .status-pill.muted{background:#f1f5f9;color:#475569}
     .factor-text{color:#475569}
     .modal-shell[hidden]{display:none !important}
-    .modal-shell{position:fixed;inset:0;z-index:40}
+    .modal-shell{position:fixed;inset:0;z-index:40;display:grid;place-items:center;padding:24px;overflow:auto}
     .modal-backdrop{position:absolute;inset:0;background:rgba(15,23,42,.26);backdrop-filter:blur(4px)}
-    .modal-panel{position:relative;z-index:1;width:min(1180px,calc(100vw - 32px));max-height:calc(100vh - 48px);overflow:auto;margin:24px auto;background:linear-gradient(135deg,rgba(255,255,255,.96),rgba(239,246,255,.96));border-radius:22px;border:1px solid rgba(148,163,184,.32);box-shadow:0 24px 60px rgba(15,23,42,.22);padding:22px}
+    .modal-panel{position:relative;z-index:1;width:min(1180px,100%);max-height:calc(100vh - 48px);overflow:auto;margin:0;background:linear-gradient(135deg,rgba(255,255,255,.96),rgba(239,246,255,.96));border-radius:22px;border:1px solid rgba(148,163,184,.32);box-shadow:0 24px 60px rgba(15,23,42,.22);padding:22px}
     .modal-head{display:flex;justify-content:space-between;align-items:center;gap:16px;margin-bottom:18px}
     .modal-head h3{margin:0;font-size:22px}
     .user-edit-grid{margin-bottom:0}
@@ -1975,7 +1975,8 @@ const renderDedicatedCenterPage = ({ nonce, config }) => {
       .config-card-body,.form-grid,.form-grid.compact{grid-template-columns:1fr}
       .user-import-row{grid-template-columns:1fr}
       .access-pill-grid{gap:10px}
-      .modal-panel{width:min(100vw - 16px,1180px);margin:8px auto;max-height:calc(100vh - 16px)}
+      .modal-shell{padding:8px}
+      .modal-panel{width:min(100%,1180px);margin:0;max-height:calc(100vh - 16px)}
       .block-head{flex-direction:column}
     }
   </style>

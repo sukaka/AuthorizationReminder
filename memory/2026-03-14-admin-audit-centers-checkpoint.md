@@ -192,7 +192,20 @@
 
 - 已从当前工作树切出新分支：`codex/4.1.0`
 - 当前版本对齐目标：
-  - 页面版本角标：`v4.1.0`
-  - 仓库分支：`codex/4.1.0`
-  - Git 标签：`v4.1.0`
-  - 发布说明：`/Users/zhanglei/Documents/codex-new/docs/releases/4.1.0.md`
+  - 页面版本角标：`v4.1.1`
+  - 仓库分支：`codex/4.1.1`
+  - Git 标签：`v4.1.1`
+  - 发布说明：`/Users/zhanglei/Documents/codex-new/docs/releases/4.1.1.md`
+
+## 2026-03-14 Modal Position Fix
+
+- 用户反馈：点击“编辑用户”后，弹层贴在页面顶部，视觉上像被截断，不符合旧管理中心的居中弹层体验。
+- 根因：
+  - `.modal-shell` 只有 `position: fixed`，没有任何居中布局
+  - `.modal-panel` 依赖 `margin: 24px auto`，导致始终顶部对齐
+- 修复方式：
+  - 将 `.modal-shell` 改为 `display: grid; place-items: center; padding: 24px; overflow: auto`
+  - 将 `.modal-panel` 改为 `width:min(1180px,100%)`、`margin:0`
+  - 移动端把容器 padding 下调到 `8px`，保留可滚动能力
+- 版本处理：
+  - 因为 `v4.1.0` 已经发布并打标签，这次弹层定位修复按规则升级为 `4.1.1`

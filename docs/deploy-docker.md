@@ -12,8 +12,8 @@ cp .env.example .env
 
 ## 新服务器首启
 ```bash
-git clone -b codex/4.1.0 https://github.com/sukaka/AuthorizationReminder.git /root/AuthorizationReminder-codex-4.1.0
-cd /root/AuthorizationReminder-codex-4.1.0
+git clone -b codex/4.1.1 https://github.com/sukaka/AuthorizationReminder.git /root/AuthorizationReminder-codex-4.1.1
+cd /root/AuthorizationReminder-codex-4.1.1
 export ALIYUN_MIRROR_URL='替换成你的阿里云镜像加速器地址'
 export AUTH_BUILTIN_ACCOUNT_DEFAULT_PASSWORD='改成你要登录的默认密码'
 export PUBLIC_HOST='服务器公网IP或域名，不带协议和端口'
