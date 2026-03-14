@@ -1274,24 +1274,11 @@ app.get('/api/auth/apps', async (req, res) => {
 });
 
 const renderAdminCenterSections = () => `
-  <section class="control-strip panel-wide">
-    <article class="control-card">
-      <span class="control-label">默认入口</span>
-      <strong>sysadmin 直达管理后台</strong>
-      <p>登录后直接进入账号与安全控制台，不再经过业务系统跳转。</p>
-    </article>
-    <article class="control-card">
-      <span class="control-label">核心职责</span>
-      <strong>账号、权限、会话策略统一收口</strong>
-      <p>把日常的启停、解锁、重置密码和安全边界维护压缩在同一屏完成。</p>
-    </article>
-  </section>
-  <section class="panel panel-main">
+  <section class="panel panel-wide">
     <div class="panel-head">
       <div>
-        <div class="eyebrow">核心控制区</div>
         <h2>用户管理</h2>
-        <p>集中查看账号状态、角色分配、登录标识和系统访问范围。</p>
+        <p>直接调用 \`/api/admin-center/users\`，不再依赖 reminder 后台入口。</p>
       </div>
       <button id="adminUsersReloadBtn" type="button" class="secondary-btn">刷新列表</button>
     </div>
@@ -1316,87 +1303,66 @@ const renderAdminCenterSections = () => `
       </table>
     </div>
   </section>
-  <div class="panel-stack">
-    <section class="panel panel-secondary">
-      <div class="eyebrow">准入配置</div>
-      <h2>创建用户</h2>
-      <p class="mini-hint">创建账号时同时确定角色、联系信息和基础访问身份。</p>
-      <form id="adminCreateUserForm" class="form-grid">
-        <label>用户名<input name="username" placeholder="2-32位中文/字母/数字" required /></label>
-        <label>初始密码<input name="password" type="password" placeholder="Strong#1234" required /></label>
-        <label>角色
-          <select name="role">
-            <option value="user">普通用户</option>
-            <option value="editor">编辑</option>
-            <option value="reviewer">审核</option>
-            <option value="sysadmin">系统管理员</option>
-            <option value="auditor">审计管理员</option>
-            <option value="sales">销售</option>
-          </select>
-        </label>
-        <label>邮箱<input name="email" type="email" placeholder="name@example.com" /></label>
-        <label>手机号<input name="phone" placeholder="13800000000" /></label>
-        <label>企业微信ID<input name="wecom_id" placeholder="wecom-id" /></label>
-        <div class="form-actions">
-          <button class="primary-btn" type="submit">新增用户</button>
-        </div>
-      </form>
-      <div id="adminCreateUserNotice" class="mini-hint"></div>
-    </section>
-    <section class="panel panel-secondary">
-      <div class="eyebrow">安全边界</div>
-      <h2>安全管理</h2>
-      <p class="mini-hint">维护密码强度、会话时长、MFA 和高权限角色 IP 白名单。</p>
-      <form id="adminSecurityForm" class="form-grid">
-        <label>最小密码长度<input id="passwordMinLength" type="number" min="6" max="64" /></label>
-        <label>会话超时（分钟）<input id="sessionTimeoutMinutes" type="number" min="5" max="720" /></label>
-        <label class="checkbox"><input id="forceAllUsersMfa" type="checkbox" /> 强制所有用户开启二次验证</label>
-        <label class="checkbox"><input id="requireUppercase" type="checkbox" /> 需要大写字母</label>
-        <label class="checkbox"><input id="requireLowercase" type="checkbox" /> 需要小写字母</label>
-        <label class="checkbox"><input id="requireNumber" type="checkbox" /> 需要数字</label>
-        <label class="checkbox"><input id="requireSpecial" type="checkbox" /> 需要特殊字符</label>
-        <label class="full">管理员 IP 白名单<textarea id="roleIpAdmin" rows="4" placeholder="一行一个 IP 或 CIDR"></textarea></label>
-        <label class="full">系统管理员 IP 白名单<textarea id="roleIpSysadmin" rows="4" placeholder="一行一个 IP 或 CIDR"></textarea></label>
-        <label class="full">审计管理员 IP 白名单<textarea id="roleIpAuditor" rows="4" placeholder="一行一个 IP 或 CIDR"></textarea></label>
-        <div class="form-actions">
-          <button class="secondary-btn" type="button" id="adminSecurityReloadBtn">重新加载</button>
-          <button class="primary-btn" type="submit">保存安全配置</button>
-        </div>
-      </form>
-      <div id="adminSecurityNotice" class="mini-hint"></div>
-    </section>
-  </div>
+  <section class="panel">
+    <h2>创建用户</h2>
+    <p class="mini-hint">第一版按角色使用默认系统权限，不再从 reminder 里创建。</p>
+    <form id="adminCreateUserForm" class="form-grid">
+      <label>用户名<input name="username" placeholder="2-32位中文/字母/数字" required /></label>
+      <label>初始密码<input name="password" type="password" placeholder="Strong#1234" required /></label>
+      <label>角色
+        <select name="role">
+          <option value="user">普通用户</option>
+          <option value="editor">编辑</option>
+          <option value="reviewer">审核</option>
+          <option value="sysadmin">系统管理员</option>
+          <option value="auditor">审计管理员</option>
+          <option value="sales">销售</option>
+        </select>
+      </label>
+      <label>邮箱<input name="email" type="email" placeholder="name@example.com" /></label>
+      <label>手机号<input name="phone" placeholder="13800000000" /></label>
+      <label>企业微信ID<input name="wecom_id" placeholder="wecom-id" /></label>
+      <div class="form-actions">
+        <button class="primary-btn" type="submit">新增用户</button>
+      </div>
+    </form>
+    <div id="adminCreateUserNotice" class="mini-hint"></div>
+  </section>
+  <section class="panel">
+    <h2>安全管理</h2>
+    <p class="mini-hint">第一版直接维护密码策略、会话超时、强制 MFA 和角色 IP 白名单。</p>
+    <form id="adminSecurityForm" class="form-grid">
+      <label>最小密码长度<input id="passwordMinLength" type="number" min="6" max="64" /></label>
+      <label>会话超时（分钟）<input id="sessionTimeoutMinutes" type="number" min="5" max="720" /></label>
+      <label class="checkbox"><input id="forceAllUsersMfa" type="checkbox" /> 强制所有用户开启二次验证</label>
+      <label class="checkbox"><input id="requireUppercase" type="checkbox" /> 需要大写字母</label>
+      <label class="checkbox"><input id="requireLowercase" type="checkbox" /> 需要小写字母</label>
+      <label class="checkbox"><input id="requireNumber" type="checkbox" /> 需要数字</label>
+      <label class="checkbox"><input id="requireSpecial" type="checkbox" /> 需要特殊字符</label>
+      <label class="full">管理员 IP 白名单<textarea id="roleIpAdmin" rows="4" placeholder="一行一个 IP 或 CIDR"></textarea></label>
+      <label class="full">系统管理员 IP 白名单<textarea id="roleIpSysadmin" rows="4" placeholder="一行一个 IP 或 CIDR"></textarea></label>
+      <label class="full">审计管理员 IP 白名单<textarea id="roleIpAuditor" rows="4" placeholder="一行一个 IP 或 CIDR"></textarea></label>
+      <div class="form-actions">
+        <button class="primary-btn" type="button" id="adminSecurityReloadBtn">重新加载</button>
+        <button class="primary-btn" type="submit">保存安全配置</button>
+      </div>
+    </form>
+    <div id="adminSecurityNotice" class="mini-hint"></div>
+  </section>
 `;
 
 const renderAuditCenterSections = () => `
-  <section class="control-strip panel-wide">
-    <article class="control-card">
-      <span class="control-label">默认入口</span>
-      <strong>auditor 直达审计中心</strong>
-      <p>登录后优先进入日志核查与导出面板，不与业务写操作混用。</p>
-    </article>
-    <article class="control-card">
-      <span class="control-label">审计职责</span>
-      <strong>跨系统留痕、验签、导出三合一</strong>
-      <p>先筛选范围，再校验链路完整性，最后导出结果用于留档或复核。</p>
-    </article>
-  </section>
   <section class="panel panel-wide">
     <div class="panel-head">
       <div>
-        <div class="eyebrow">审计控制区</div>
         <h2>审计日志</h2>
-        <p>统一查看跨系统操作记录，支持筛选、验签和导出留痕。</p>
+        <p>直接调用 \`/api/audit-center/logs\`，默认跨系统查询，不再绑定 reminder。</p>
       </div>
       <div class="inline-actions">
         <button id="auditLogsReloadBtn" type="button" class="secondary-btn">刷新日志</button>
         <button id="auditExportBtn" type="button" class="secondary-btn">导出 CSV</button>
         <button id="auditVerifyBtn" type="button" class="primary-btn">校验审计链</button>
       </div>
-    </div>
-    <div class="subsection-head">
-      <span>筛选范围</span>
-      <span>先缩小范围，再执行校验或导出</span>
     </div>
     <form id="auditFilterForm" class="form-grid compact">
       <label>用户<input id="auditFilterUsername" placeholder="用户名关键字" /></label>
@@ -1450,7 +1416,6 @@ const renderDedicatedCenterPage = ({ nonce, config }) => {
   const sectionHtml = normalizedKey === ADMIN_CENTER_KEY
     ? renderAdminCenterSections()
     : renderAuditCenterSections();
-  const layoutClass = normalizedKey === ADMIN_CENTER_KEY ? 'grid admin-grid' : 'grid';
   return `<!doctype html>
 <html lang="zh-CN">
 <head>
@@ -1458,72 +1423,52 @@ const renderDedicatedCenterPage = ({ nonce, config }) => {
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>${config.title}</title>
   <style>
-    :root{color-scheme:light;--bg:#e9eef6;--bg-accent:#f8fbff;--ink:#0f172a;--muted:#5b6b82;--line:rgba(100,116,139,.26);--line-strong:rgba(71,85,105,.42);--panel:#ffffff;--panel-soft:#f7f9fc;--panel-tint:#eef4ff;--accent:#1d4ed8;--accent-strong:#1e40af;--accent-soft:#dbeafe;--success:#0f766e;--success-soft:#ccfbf1;--warn:#b45309;--warn-soft:#ffedd5;--danger:#b91c1c;--danger-soft:#fee2e2;--shadow:0 24px 60px rgba(15,23,42,.12);--radius-lg:24px;--radius-md:16px;--radius-sm:12px}
-    *{box-sizing:border-box}
-    body{margin:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;background:radial-gradient(circle at top left,rgba(37,99,235,.16),transparent 28%),radial-gradient(circle at top right,rgba(15,118,110,.12),transparent 32%),linear-gradient(180deg,var(--bg-accent),var(--bg));color:var(--ink)}
-    .shell{max-width:1180px;margin:0 auto;padding:28px 20px 48px}
-    .hero{padding:28px;border-radius:28px;background:linear-gradient(145deg,#0f172a 0%,#162338 58%,#183b7a 100%);color:#f8fafc;box-shadow:var(--shadow);position:relative;overflow:hidden}
-    .hero::after{content:'';position:absolute;inset:auto -40px -56px auto;width:220px;height:220px;border-radius:50%;background:radial-gradient(circle,rgba(255,255,255,.22),transparent 72%)}
-    .hero h1{margin:0;font-size:46px;line-height:1.05;font-family:'Noto Serif SC','Songti SC','STSong',Georgia,serif;letter-spacing:-.02em}
-    .hero p{max-width:760px;margin:14px 0 0;color:rgba(226,232,240,.82);font-size:18px;line-height:1.7}
-    .meta{display:flex;gap:10px;flex-wrap:wrap;margin-top:18px}
-    .pill{display:inline-flex;align-items:center;min-height:32px;padding:0 12px;border-radius:999px;background:rgba(148,163,184,.18);border:1px solid rgba(226,232,240,.16);color:#dbeafe;font-size:13px;font-weight:700;letter-spacing:.02em}
-    .toolbar{display:flex;gap:12px;flex-wrap:wrap;margin-top:22px}
-    .toolbar a,.toolbar button,.primary-btn,.secondary-btn,.tiny-btn{transition:transform .16s ease,box-shadow .16s ease,border-color .16s ease,background-color .16s ease,color .16s ease}
-    .toolbar a,.toolbar button{min-height:42px;padding:0 16px;border-radius:999px;border:1px solid rgba(226,232,240,.18);background:rgba(255,255,255,.06);color:#f8fafc;text-decoration:none;font-size:14px;font-weight:700;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;backdrop-filter:blur(8px)}
-    .toolbar .primary{background:linear-gradient(135deg,#f8fafc,#dbeafe);border:none;color:#0f172a;box-shadow:0 10px 24px rgba(15,23,42,.24)}
-    .status{display:inline-flex;align-items:center;min-height:42px;padding:0 14px;border-radius:999px;background:var(--panel);border:1px solid rgba(148,163,184,.28);color:var(--muted);box-shadow:0 10px 24px rgba(15,23,42,.06);margin:18px 0}
-    .status.ready{background:rgba(15,23,42,.84);border-color:rgba(30,64,175,.36);color:#dbeafe}
-    .status.error{display:flex;width:100%;min-height:unset;padding:14px 16px;border-radius:var(--radius-md);background:#fff7f7;color:var(--danger);border-color:rgba(220,38,38,.2)}
-    .grid{display:grid;gap:18px}
-    .admin-grid{grid-template-columns:minmax(0,1.65fr) minmax(320px,.95fr);align-items:start}
-    .control-strip{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
-    .control-card{padding:18px 18px 20px;border-radius:20px;background:linear-gradient(180deg,rgba(15,23,42,.95),rgba(21,37,63,.92));border:1px solid rgba(96,165,250,.14);box-shadow:0 18px 40px rgba(15,23,42,.12);color:#f8fafc}
-    .control-card strong{display:block;margin-top:8px;font-size:20px;line-height:1.3;letter-spacing:-.02em}
-    .control-card p{margin:8px 0 0;color:rgba(226,232,240,.78);font-size:14px;line-height:1.7}
-    .control-label{display:inline-flex;align-items:center;height:28px;padding:0 10px;border-radius:999px;background:rgba(59,130,246,.14);color:#bfdbfe;font-size:12px;font-weight:800;letter-spacing:.08em;text-transform:uppercase}
-    .panel{padding:20px;background:rgba(255,255,255,.94);border:1px solid rgba(148,163,184,.2);border-radius:var(--radius-lg);box-shadow:0 18px 36px rgba(15,23,42,.08)}
-    .panel-main{background:linear-gradient(180deg,#ffffff,#fbfdff)}
-    .panel-secondary{background:linear-gradient(180deg,#ffffff,#f7faff)}
+    body{margin:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;background:linear-gradient(135deg,#f8fafc 0%,#e0ecff 60%,#ecfdf5 100%);color:#0f172a}
+    .shell{max-width:1120px;margin:0 auto;padding:32px 20px 48px}
+    .hero,.card{background:#fff;border:1px solid rgba(148,163,184,.28);border-radius:20px;box-shadow:0 10px 26px rgba(15,23,42,.08)}
+    .hero{padding:24px;margin-bottom:18px}
+    .hero h1{margin:0;font-size:42px;line-height:1.1}
+    .hero p{margin:12px 0 0;color:#64748b;font-size:18px}
+    .toolbar{display:flex;gap:12px;flex-wrap:wrap;margin-top:18px}
+    .toolbar a,.toolbar button{height:40px;padding:0 16px;border-radius:12px;border:1px solid rgba(148,163,184,.35);background:#fff;color:#0f172a;text-decoration:none;font-size:14px;display:inline-flex;align-items:center;justify-content:center;cursor:pointer}
+    .toolbar .primary{background:linear-gradient(135deg,#2563eb,#0ea5e9);color:#fff;border:none}
+    .status{padding:14px 16px;border-radius:14px;background:#eff6ff;color:#1d4ed8;margin-bottom:18px}
+    .status.error{background:#fff1f2;color:#be123c}
+    .grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}
+    .panel{padding:18px;background:#fff;border:1px solid rgba(148,163,184,.28);border-radius:20px;box-shadow:0 10px 26px rgba(15,23,42,.08)}
     .panel-wide{grid-column:1 / -1}
-    .panel-stack{display:grid;gap:18px}
-    .panel h2{margin:6px 0 10px;font-size:24px;letter-spacing:-.02em}
-    .panel p{margin:0;color:var(--muted);line-height:1.7}
-    .eyebrow{display:inline-flex;align-items:center;height:28px;padding:0 10px;border-radius:999px;background:var(--panel-tint);color:var(--accent-strong);font-size:12px;font-weight:800;letter-spacing:.08em;text-transform:uppercase}
-    .panel-head{display:flex;justify-content:space-between;gap:16px;align-items:flex-start;margin-bottom:16px}
-    .subsection-head{display:flex;justify-content:space-between;gap:12px;align-items:center;padding:12px 14px;border-radius:16px;background:linear-gradient(180deg,#f8fbff,#f1f6fd);border:1px solid rgba(148,163,184,.18);margin-bottom:14px;font-size:13px;color:var(--muted)}
-    .subsection-head span:first-child{font-weight:800;color:var(--ink);text-transform:uppercase;letter-spacing:.08em;font-size:12px}
-    .inline-actions,.form-actions{display:flex;gap:10px;flex-wrap:wrap}
-    .primary-btn,.secondary-btn{min-height:42px;padding:0 16px;border-radius:999px;font-size:14px;font-weight:700;cursor:pointer}
-    .primary-btn{background:linear-gradient(135deg,var(--accent),#0ea5e9);color:#fff;border:none;box-shadow:0 10px 22px rgba(37,99,235,.22)}
-    .secondary-btn{background:var(--panel-soft);color:var(--ink);border:1px solid rgba(148,163,184,.34)}
-    .form-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
+    .panel h2{margin:0 0 10px;font-size:22px}
+    .panel p{margin:0;color:#475569;line-height:1.65}
+    .meta{display:flex;gap:10px;flex-wrap:wrap;margin-top:12px}
+    .pill{display:inline-flex;align-items:center;padding:6px 12px;border-radius:999px;background:#eff6ff;color:#1d4ed8;font-size:13px;font-weight:600}
+    .panel-head{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;margin-bottom:12px}
+    .inline-actions,.form-actions{display:flex;gap:8px;flex-wrap:wrap}
+    .primary-btn,.secondary-btn{height:40px;padding:0 16px;border-radius:12px;border:1px solid rgba(148,163,184,.35);font-size:14px;cursor:pointer}
+    .primary-btn{background:linear-gradient(135deg,#2563eb,#0ea5e9);color:#fff;border:none}
+    .secondary-btn{background:#fff;color:#0f172a}
+    .form-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
     .form-grid.compact{grid-template-columns:repeat(5,minmax(0,1fr))}
-    .form-grid label{display:flex;flex-direction:column;gap:8px;font-size:14px;font-weight:600;color:#334155}
+    .form-grid label{display:flex;flex-direction:column;gap:6px;font-size:14px;color:#334155}
     .form-grid .full{grid-column:1 / -1}
-    .form-grid input,.form-grid select,.form-grid textarea{min-height:44px;border-radius:14px;border:1px solid rgba(148,163,184,.34);background:#fff;padding:10px 12px;font-size:14px;font-family:inherit;color:var(--ink)}
-    .form-grid textarea{min-height:104px;resize:vertical}
+    .form-grid input,.form-grid select,.form-grid textarea{border-radius:12px;border:1px solid rgba(148,163,184,.4);padding:10px 12px;font-size:14px;font-family:inherit}
     .checkbox{flex-direction:row !important;align-items:center;gap:8px;padding-top:24px}
-    .checkbox input{width:auto;min-height:unset}
-    .table-wrap{overflow:auto;border:1px solid rgba(226,232,240,.92);border-radius:20px;background:#fff}
-    .data-table{width:100%;border-collapse:collapse;min-width:760px}
-    .data-table th,.data-table td{padding:14px 16px;border-bottom:1px solid rgba(226,232,240,.82);text-align:left;font-size:14px;vertical-align:top}
-    .data-table th{background:#f7f9fc;color:#334155;font-size:12px;font-weight:800;letter-spacing:.06em;text-transform:uppercase}
-    .data-table tbody tr:hover{background:#f8fbff}
-    .empty{text-align:center;color:var(--muted);padding:28px 16px !important}
-    .table-actions{display:flex;flex-wrap:wrap;gap:10px}
-    .tiny-btn{min-height:38px;padding:0 12px;border-radius:999px;border:1px solid rgba(37,99,235,.18);background:#f8fbff;color:var(--accent-strong);font-size:13px;font-weight:700;cursor:pointer}
-    .tiny-btn.danger{border-color:rgba(220,38,38,.18);background:#fff7f7;color:var(--danger)}
-    .tiny-btn:disabled{opacity:.55;cursor:not-allowed;transform:none;box-shadow:none}
-    .status-pill{display:inline-flex;align-items:center;min-height:28px;padding:0 10px;border-radius:999px;background:var(--accent-soft);color:var(--accent-strong);font-size:12px;font-weight:800;letter-spacing:.03em}
-    .status-pill.warn{background:var(--warn-soft);color:var(--warn)}
-    .status-pill.muted{background:#eef2f7;color:#475569}
-    .mini-hint{margin:12px 0 0;color:var(--muted);font-size:13px;line-height:1.6;white-space:pre-wrap}
-    .mini-hint.error{color:var(--danger)}
-    .toolbar a:hover,.toolbar button:hover,.primary-btn:hover,.secondary-btn:hover,.tiny-btn:hover{transform:translateY(-1px)}
-    .toolbar a:focus-visible,.toolbar button:focus-visible,.primary-btn:focus-visible,.secondary-btn:focus-visible,.tiny-btn:focus-visible,.form-grid input:focus-visible,.form-grid select:focus-visible,.form-grid textarea:focus-visible{outline:none;border-color:rgba(37,99,235,.58);box-shadow:0 0 0 4px rgba(59,130,246,.16)}
-    @media (max-width: 1100px){.control-strip{grid-template-columns:1fr}.form-grid.compact{grid-template-columns:repeat(2,minmax(0,1fr))}}
-    @media (max-width: 960px){.admin-grid,.grid,.form-grid,.form-grid.compact{grid-template-columns:1fr}.hero h1{font-size:36px}.panel-wide{grid-column:auto}.status{width:100%}.toolbar a,.toolbar button,.primary-btn,.secondary-btn,.tiny-btn{width:100%;justify-content:center}.subsection-head{flex-direction:column;align-items:flex-start}}
+    .checkbox input{width:auto}
+    .table-wrap{overflow:auto;border:1px solid rgba(226,232,240,.9);border-radius:16px}
+    .data-table{width:100%;border-collapse:collapse;min-width:720px}
+    .data-table th,.data-table td{padding:12px 14px;border-bottom:1px solid rgba(226,232,240,.8);text-align:left;font-size:14px;vertical-align:top}
+    .data-table th{background:#f8fafc;color:#334155}
+    .empty{text-align:center;color:#64748b}
+    .table-actions{display:flex;flex-wrap:wrap;gap:8px}
+    .tiny-btn{height:32px;padding:0 10px;border-radius:999px;border:1px solid rgba(37,99,235,.24);background:#fff;color:#1d4ed8;font-size:12px;cursor:pointer}
+    .tiny-btn.danger{border-color:rgba(220,38,38,.24);color:#b91c1c}
+    .tiny-btn:disabled{opacity:.55;cursor:not-allowed}
+    .status-pill{display:inline-flex;align-items:center;padding:4px 10px;border-radius:999px;background:#eff6ff;color:#1d4ed8;font-size:12px;font-weight:600}
+    .status-pill.warn{background:#fff7ed;color:#c2410c}
+    .status-pill.muted{background:#f1f5f9;color:#475569}
+    .mini-hint{margin:10px 0 0;color:#64748b;font-size:13px;white-space:pre-wrap}
+    .mini-hint.error{color:#be123c}
+    @media (max-width: 1100px){.form-grid.compact{grid-template-columns:repeat(2,minmax(0,1fr))}}
+    @media (max-width: 960px){.grid,.form-grid,.form-grid.compact{grid-template-columns:1fr}.hero h1{font-size:34px}.panel-wide{grid-column:auto}}
   </style>
 </head>
 <body>
@@ -1541,7 +1486,7 @@ const renderDedicatedCenterPage = ({ nonce, config }) => {
       </div>
     </section>
     <div id="status" class="status">正在检查登录状态...</div>
-    <section id="content" class="${layoutClass}" style="display:none">
+    <section id="content" class="grid" style="display:none">
       ${sectionHtml}
     </section>
   </div>
@@ -1941,7 +1886,6 @@ const renderDedicatedCenterPage = ({ nonce, config }) => {
           statusEl.textContent = '当前账号无权访问该独立系统，请切换账号或返回门户。';
           return;
         }
-        statusEl.className = 'status ready';
         statusEl.textContent = '已确认登录态：' + user.username + ' / ' + role;
         contentEl.style.display = 'grid';
         initCenterFeatures();
