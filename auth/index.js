@@ -36,6 +36,24 @@ const {
 const {
   resolveSecurityStrictMode,
 } = require('../server/security-strict-mode');
+const {
+  createAdminCenterUsersService,
+} = require('./admin-center-users');
+const {
+  createAdminCenterSecurityService,
+} = require('./admin-center-security');
+const {
+  createAuditCenterLogsService,
+  serializeLogsAsCsv,
+} = require('./audit-center-logs');
+const {
+  ADMIN_CENTER_KEY,
+  AUDIT_CENTER_KEY,
+  canAccessDedicatedCenter,
+  SYSTEM_ACCESS_KEYS,
+  defaultAppAccessByRole,
+  getDedicatedCenterConfig,
+} = require('./portal-routing');
 
 const app = express();
 const PORT = process.env.PORT || 5180;
@@ -47,7 +65,6 @@ const AUTH_CSRF_COOKIE_NAME = String(process.env.AUTH_CSRF_COOKIE_NAME || 'auth_
 const AUTH_CSRF_COOKIE_SECURE = process.env.CSRF_SECURE === 'true';
 const CONFIG_SECRET_KEY = process.env.CONFIG_SECRET_KEY || '';
 const SECRET_MASK = '******';
-const SYSTEM_ACCESS_KEYS = ['reminder', 'ticketing', 'cmdb', 'inventory', 'device-flow', 'sec-impl', 'faq', 'tender', 'train-exam'];
 const BUILTIN_ACCOUNT_DEFAULT_PASSWORD = process.env.BUILTIN_ACCOUNT_DEFAULT_PASSWORD || '123456';
 const BUILTIN_ACCOUNTS = [
   { username: 'admin', role: 'admin' },
@@ -321,25 +338,16 @@ const parseAppAccessRaw = (value) => {
   return text.split(',').map((item) => item.trim());
 };
 
-const defaultAppAccessByRole = (role) => {
-  const r = String(role || '').toLowerCase();
-  if (r === 'admin') return [...SYSTEM_ACCESS_KEYS];
-  if (r === 'sysadmin') return ['reminder', 'sec-impl', 'tender', 'train-exam'];
-  if (r === 'auditor') return ['reminder', 'ticketing', 'cmdb', 'inventory', 'device-flow', 'sec-impl', 'faq', 'tender', 'train-exam'];
-  if (r === 'editor') return ['faq', 'tender', 'train-exam'];
-  if (r === 'reviewer') return ['faq', 'train-exam'];
-  return ['reminder', 'train-exam'];
-};
-
 const getUserAppAccess = (user) => {
   if (!user) return [];
   if (user.role === 'admin') return [...SYSTEM_ACCESS_KEYS];
+  const role = String(user.role || '').trim().toLowerCase();
   const parsed = parseAppAccessRaw(user.app_access);
-  const source = parsed === null ? defaultAppAccessByRole(user.role) : parsed;
+  const source = parsed === null ? defaultAppAccessByRole(role) : parsed;
   const normalized = Array.from(
     new Set(source.map((item) => String(item || '').trim()).filter((item) => SYSTEM_ACCESS_KEYS.includes(item)))
   );
-  if (!normalized.includes('train-exam')) normalized.push('train-exam');
+  if (!normalized.includes('train-exam') && !['sysadmin', 'auditor'].includes(role)) normalized.push('train-exam');
   return normalized;
 };
 
@@ -1215,8 +1223,16 @@ app.get('/api/auth/apps', async (req, res) => {
   const faqURL = process.env.APP_FAQ_URL || 'http://localhost:8085';
   const tenderURL = process.env.APP_TENDER_URL || 'http://localhost:8086';
   const trainExamURL = process.env.APP_TRAIN_EXAM_URL || 'http://localhost:8087';
+  const adminCenterURL = process.env.APP_ADMIN_CENTER_URL || 'http://localhost:5180/admin-center';
+  const auditCenterURL = process.env.APP_AUDIT_CENTER_URL || 'http://localhost:5180/audit-center';
   const appAccess = getUserAppAccess(user);
   const apps = [];
+  if (appAccess.includes(ADMIN_CENTER_KEY)) {
+    apps.push({ key: ADMIN_CENTER_KEY, name: '管理后台', url: adminCenterURL, allow: user.role === 'sysadmin' || user.role === 'admin' });
+  }
+  if (appAccess.includes(AUDIT_CENTER_KEY)) {
+    apps.push({ key: AUDIT_CENTER_KEY, name: '审计中心', url: auditCenterURL, allow: user.role === 'auditor' || user.role === 'admin' });
+  }
   if (appAccess.includes('reminder')) {
     apps.push({ key: 'reminder', name: '授权到期提醒系统', url: reminderUrl, allow: true });
   }
@@ -1256,6 +1272,650 @@ app.get('/api/auth/apps', async (req, res) => {
     apps: apps.filter((item) => item.allow),
   });
 });
+
+const renderAdminCenterSections = () => `
+  <section class="panel panel-wide">
+    <div class="panel-head">
+      <div>
+        <h2>用户管理</h2>
+        <p>直接调用 \`/api/admin-center/users\`，不再依赖 reminder 后台入口。</p>
+      </div>
+      <button id="adminUsersReloadBtn" type="button" class="secondary-btn">刷新列表</button>
+    </div>
+    <div id="adminUsersNotice" class="mini-hint"></div>
+    <div class="table-wrap">
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>账号</th>
+            <th>角色</th>
+            <th>状态</th>
+            <th>锁定状态</th>
+            <th>登录标识</th>
+            <th>可访问系统</th>
+            <th>操作</th>
+          </tr>
+        </thead>
+        <tbody id="adminUsersBody">
+          <tr><td colspan="8" class="empty">正在加载用户列表...</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+  <section class="panel">
+    <h2>创建用户</h2>
+    <p class="mini-hint">第一版按角色使用默认系统权限，不再从 reminder 里创建。</p>
+    <form id="adminCreateUserForm" class="form-grid">
+      <label>用户名<input name="username" placeholder="2-32位中文/字母/数字" required /></label>
+      <label>初始密码<input name="password" type="password" placeholder="Strong#1234" required /></label>
+      <label>角色
+        <select name="role">
+          <option value="user">普通用户</option>
+          <option value="editor">编辑</option>
+          <option value="reviewer">审核</option>
+          <option value="sysadmin">系统管理员</option>
+          <option value="auditor">审计管理员</option>
+          <option value="sales">销售</option>
+        </select>
+      </label>
+      <label>邮箱<input name="email" type="email" placeholder="name@example.com" /></label>
+      <label>手机号<input name="phone" placeholder="13800000000" /></label>
+      <label>企业微信ID<input name="wecom_id" placeholder="wecom-id" /></label>
+      <div class="form-actions">
+        <button class="primary-btn" type="submit">新增用户</button>
+      </div>
+    </form>
+    <div id="adminCreateUserNotice" class="mini-hint"></div>
+  </section>
+  <section class="panel">
+    <h2>安全管理</h2>
+    <p class="mini-hint">第一版直接维护密码策略、会话超时、强制 MFA 和角色 IP 白名单。</p>
+    <form id="adminSecurityForm" class="form-grid">
+      <label>最小密码长度<input id="passwordMinLength" type="number" min="6" max="64" /></label>
+      <label>会话超时（分钟）<input id="sessionTimeoutMinutes" type="number" min="5" max="720" /></label>
+      <label class="checkbox"><input id="forceAllUsersMfa" type="checkbox" /> 强制所有用户开启二次验证</label>
+      <label class="checkbox"><input id="requireUppercase" type="checkbox" /> 需要大写字母</label>
+      <label class="checkbox"><input id="requireLowercase" type="checkbox" /> 需要小写字母</label>
+      <label class="checkbox"><input id="requireNumber" type="checkbox" /> 需要数字</label>
+      <label class="checkbox"><input id="requireSpecial" type="checkbox" /> 需要特殊字符</label>
+      <label class="full">管理员 IP 白名单<textarea id="roleIpAdmin" rows="4" placeholder="一行一个 IP 或 CIDR"></textarea></label>
+      <label class="full">系统管理员 IP 白名单<textarea id="roleIpSysadmin" rows="4" placeholder="一行一个 IP 或 CIDR"></textarea></label>
+      <label class="full">审计管理员 IP 白名单<textarea id="roleIpAuditor" rows="4" placeholder="一行一个 IP 或 CIDR"></textarea></label>
+      <div class="form-actions">
+        <button class="primary-btn" type="button" id="adminSecurityReloadBtn">重新加载</button>
+        <button class="primary-btn" type="submit">保存安全配置</button>
+      </div>
+    </form>
+    <div id="adminSecurityNotice" class="mini-hint"></div>
+  </section>
+`;
+
+const renderAuditCenterSections = () => `
+  <section class="panel panel-wide">
+    <div class="panel-head">
+      <div>
+        <h2>审计日志</h2>
+        <p>直接调用 \`/api/audit-center/logs\`，默认跨系统查询，不再绑定 reminder。</p>
+      </div>
+      <div class="inline-actions">
+        <button id="auditLogsReloadBtn" type="button" class="secondary-btn">刷新日志</button>
+        <button id="auditExportBtn" type="button" class="secondary-btn">导出 CSV</button>
+        <button id="auditVerifyBtn" type="button" class="primary-btn">校验审计链</button>
+      </div>
+    </div>
+    <form id="auditFilterForm" class="form-grid compact">
+      <label>用户<input id="auditFilterUsername" placeholder="用户名关键字" /></label>
+      <label>系统
+        <select id="auditFilterSystem">
+          <option value="">全部系统</option>
+          <option value="sso">统一登录</option>
+          <option value="reminder">提醒系统</option>
+          <option value="ticketing">工单系统</option>
+          <option value="cmdb">CMDB</option>
+          <option value="inventory">库存系统</option>
+          <option value="device-flow">设备流转</option>
+          <option value="sec-impl">实施记录</option>
+          <option value="faq">FAQ</option>
+          <option value="tender">标书系统</option>
+          <option value="train-exam">培训考试</option>
+        </select>
+      </label>
+      <label>动作<input id="auditFilterAction" placeholder="如 LOGIN / UPDATE" /></label>
+      <label>对象<input id="auditFilterEntity" placeholder="如 user / send_configs" /></label>
+      <label>条数上限<input id="auditFilterLimit" type="number" min="1" max="2000" value="100" /></label>
+      <div class="form-actions">
+        <button class="primary-btn" type="submit">查询日志</button>
+      </div>
+    </form>
+    <div id="auditVerifyNotice" class="mini-hint"></div>
+    <div class="table-wrap">
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>系统</th>
+            <th>用户</th>
+            <th>动作</th>
+            <th>对象</th>
+            <th>时间</th>
+          </tr>
+        </thead>
+        <tbody id="auditLogsBody">
+          <tr><td colspan="6" class="empty">正在加载审计日志...</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+`;
+
+const renderDedicatedCenterPage = ({ nonce, config }) => {
+  const normalizedKey = String(config?.key || '').trim().toLowerCase();
+  const allowedRoles = ['admin', 'sysadmin', 'auditor']
+    .filter((role) => canAccessDedicatedCenter({ role, systemKey: normalizedKey }));
+  const sectionHtml = normalizedKey === ADMIN_CENTER_KEY
+    ? renderAdminCenterSections()
+    : renderAuditCenterSections();
+  return `<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>${config.title}</title>
+  <style>
+    body{margin:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;background:linear-gradient(135deg,#f8fafc 0%,#e0ecff 60%,#ecfdf5 100%);color:#0f172a}
+    .shell{max-width:1120px;margin:0 auto;padding:32px 20px 48px}
+    .hero,.card{background:#fff;border:1px solid rgba(148,163,184,.28);border-radius:20px;box-shadow:0 10px 26px rgba(15,23,42,.08)}
+    .hero{padding:24px;margin-bottom:18px}
+    .hero h1{margin:0;font-size:42px;line-height:1.1}
+    .hero p{margin:12px 0 0;color:#64748b;font-size:18px}
+    .toolbar{display:flex;gap:12px;flex-wrap:wrap;margin-top:18px}
+    .toolbar a,.toolbar button{height:40px;padding:0 16px;border-radius:12px;border:1px solid rgba(148,163,184,.35);background:#fff;color:#0f172a;text-decoration:none;font-size:14px;display:inline-flex;align-items:center;justify-content:center;cursor:pointer}
+    .toolbar .primary{background:linear-gradient(135deg,#2563eb,#0ea5e9);color:#fff;border:none}
+    .status{padding:14px 16px;border-radius:14px;background:#eff6ff;color:#1d4ed8;margin-bottom:18px}
+    .status.error{background:#fff1f2;color:#be123c}
+    .grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}
+    .panel{padding:18px;background:#fff;border:1px solid rgba(148,163,184,.28);border-radius:20px;box-shadow:0 10px 26px rgba(15,23,42,.08)}
+    .panel-wide{grid-column:1 / -1}
+    .panel h2{margin:0 0 10px;font-size:22px}
+    .panel p{margin:0;color:#475569;line-height:1.65}
+    .meta{display:flex;gap:10px;flex-wrap:wrap;margin-top:12px}
+    .pill{display:inline-flex;align-items:center;padding:6px 12px;border-radius:999px;background:#eff6ff;color:#1d4ed8;font-size:13px;font-weight:600}
+    .panel-head{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;margin-bottom:12px}
+    .inline-actions,.form-actions{display:flex;gap:8px;flex-wrap:wrap}
+    .primary-btn,.secondary-btn{height:40px;padding:0 16px;border-radius:12px;border:1px solid rgba(148,163,184,.35);font-size:14px;cursor:pointer}
+    .primary-btn{background:linear-gradient(135deg,#2563eb,#0ea5e9);color:#fff;border:none}
+    .secondary-btn{background:#fff;color:#0f172a}
+    .form-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+    .form-grid.compact{grid-template-columns:repeat(5,minmax(0,1fr))}
+    .form-grid label{display:flex;flex-direction:column;gap:6px;font-size:14px;color:#334155}
+    .form-grid .full{grid-column:1 / -1}
+    .form-grid input,.form-grid select,.form-grid textarea{border-radius:12px;border:1px solid rgba(148,163,184,.4);padding:10px 12px;font-size:14px;font-family:inherit}
+    .checkbox{flex-direction:row !important;align-items:center;gap:8px;padding-top:24px}
+    .checkbox input{width:auto}
+    .table-wrap{overflow:auto;border:1px solid rgba(226,232,240,.9);border-radius:16px}
+    .data-table{width:100%;border-collapse:collapse;min-width:720px}
+    .data-table th,.data-table td{padding:12px 14px;border-bottom:1px solid rgba(226,232,240,.8);text-align:left;font-size:14px;vertical-align:top}
+    .data-table th{background:#f8fafc;color:#334155}
+    .empty{text-align:center;color:#64748b}
+    .table-actions{display:flex;flex-wrap:wrap;gap:8px}
+    .tiny-btn{height:32px;padding:0 10px;border-radius:999px;border:1px solid rgba(37,99,235,.24);background:#fff;color:#1d4ed8;font-size:12px;cursor:pointer}
+    .tiny-btn.danger{border-color:rgba(220,38,38,.24);color:#b91c1c}
+    .tiny-btn:disabled{opacity:.55;cursor:not-allowed}
+    .status-pill{display:inline-flex;align-items:center;padding:4px 10px;border-radius:999px;background:#eff6ff;color:#1d4ed8;font-size:12px;font-weight:600}
+    .status-pill.warn{background:#fff7ed;color:#c2410c}
+    .status-pill.muted{background:#f1f5f9;color:#475569}
+    .mini-hint{margin:10px 0 0;color:#64748b;font-size:13px;white-space:pre-wrap}
+    .mini-hint.error{color:#be123c}
+    @media (max-width: 1100px){.form-grid.compact{grid-template-columns:repeat(2,minmax(0,1fr))}}
+    @media (max-width: 960px){.grid,.form-grid,.form-grid.compact{grid-template-columns:1fr}.hero h1{font-size:34px}.panel-wide{grid-column:auto}}
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <section class="hero">
+      <h1>${config.title}</h1>
+      <p>${config.subtitle}</p>
+      <div class="meta">
+        <span class="pill">独立系统入口</span>
+        <span class="pill">系统标识：${config.key}</span>
+      </div>
+      <div class="toolbar">
+        <a class="primary" href="/portal?mode=switch">切换系统</a>
+        <button id="logoutBtn" type="button">退出登录</button>
+      </div>
+    </section>
+    <div id="status" class="status">正在检查登录状态...</div>
+    <section id="content" class="grid" style="display:none">
+      ${sectionHtml}
+    </section>
+  </div>
+  <script nonce="${nonce}">
+    const systemKey = '${config.key}';
+    const allowedRoles = ${JSON.stringify(allowedRoles)};
+    const centerApi = ${JSON.stringify(config.api || {})};
+    const statusEl = document.getElementById('status');
+    const contentEl = document.getElementById('content');
+    const logoutBtn = document.getElementById('logoutBtn');
+
+    async function logout() {
+      await fetch('/api/auth/logout', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+      }).catch(() => {});
+      window.location.href = '/portal';
+    }
+
+    async function requestJson(url, options = {}) {
+      const response = await fetch(url, {
+        credentials: 'include',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(options.headers || {}),
+        },
+        ...options,
+      });
+      const text = await response.text();
+      let data = {};
+      try {
+        data = text ? JSON.parse(text) : {};
+      } catch (_err) {
+        data = {};
+      }
+      if (!response.ok) {
+        throw new Error(String(data.error || text || '请求失败').trim());
+      }
+      return data;
+    }
+
+    function escapeHtml(value) {
+      return String(value ?? '')
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&#39;');
+    }
+
+    function renderUsers(rows) {
+      const body = document.getElementById('adminUsersBody');
+      if (!body) return;
+      const list = Array.isArray(rows) ? rows : [];
+      if (!list.length) {
+        body.innerHTML = '<tr><td colspan="8" class="empty">当前没有用户数据</td></tr>';
+        return;
+      }
+      body.innerHTML = list.map((row) => {
+        const access = escapeHtml(Array.isArray(row.app_access) ? row.app_access.join(', ') : '');
+        const loginId = escapeHtml(row.login_id || '-');
+        const username = escapeHtml(row.username || '-');
+        const role = escapeHtml(row.role || '-');
+        const status = Number(row.is_active) === 1
+          ? '<span class="status-pill">启用</span>'
+          : '<span class="status-pill muted">禁用</span>';
+        const lockStatus = row.lock_status === 'locked'
+          ? '<span class="status-pill warn">已锁定</span>'
+          : '<span class="status-pill">正常</span>';
+        const nextActive = Number(row.is_active) === 1 ? 0 : 1;
+        const toggleLabel = Number(row.is_active) === 1 ? '禁用' : '启用';
+        const unlockDisabled = row.lock_status === 'locked' ? '' : ' disabled';
+        return '<tr>'
+          + '<td>' + row.id + '</td>'
+          + '<td>' + username + '</td>'
+          + '<td>' + role + '</td>'
+          + '<td>' + status + '</td>'
+          + '<td>' + lockStatus + '</td>'
+          + '<td>' + loginId + '</td>'
+          + '<td>' + access + '</td>'
+          + '<td><div class="table-actions">'
+          + '<button type="button" class="tiny-btn" data-user-action="toggle-active" data-user-id="' + row.id + '" data-next-active="' + nextActive + '" data-username="' + username + '">' + toggleLabel + '</button>'
+          + '<button type="button" class="tiny-btn" data-user-action="unlock" data-user-id="' + row.id + '" data-username="' + username + '"' + unlockDisabled + '>解锁</button>'
+          + '<button type="button" class="tiny-btn" data-user-action="reset-password" data-user-id="' + row.id + '" data-username="' + username + '">重置密码</button>'
+          + '<button type="button" class="tiny-btn danger" data-user-action="delete" data-user-id="' + row.id + '" data-username="' + username + '">删除</button>'
+          + '</div></td>'
+          + '</tr>';
+      }).join('');
+    }
+
+    function setHint(id, text, isError = false) {
+      const node = document.getElementById(id);
+      if (!node) return;
+      node.className = isError ? 'mini-hint error' : 'mini-hint';
+      node.textContent = text;
+    }
+
+    async function loadAdminUsers() {
+      setHint('adminUsersNotice', '正在刷新用户列表...');
+      try {
+        const rows = await requestJson(centerApi.usersList);
+        renderUsers(rows);
+        setHint('adminUsersNotice', '用户列表已更新');
+      } catch (error) {
+        renderUsers([]);
+        setHint('adminUsersNotice', error.message || '加载用户列表失败', true);
+      }
+    }
+
+    async function onAdminUsersAction(event) {
+      const button = event.target.closest('[data-user-action]');
+      if (!button) return;
+      const userId = String(button.dataset.userId || '').trim();
+      const action = String(button.dataset.userAction || '').trim();
+      const username = String(button.dataset.username || '').trim() || ('#' + userId);
+      if (!userId || !action) return;
+      let request = null;
+      let successMessage = '操作成功';
+
+      if (action === 'toggle-active') {
+        const nextActive = Number(button.dataset.nextActive || 0) === 1 ? 1 : 0;
+        const label = nextActive === 1 ? '启用' : '禁用';
+        if (!window.confirm('确认' + label + '用户“' + username + '”吗？')) return;
+        request = {
+          url: centerApi.usersItemBase + '/' + encodeURIComponent(userId),
+          options: {
+            method: 'PUT',
+            body: JSON.stringify({ is_active: nextActive }),
+          },
+        };
+        successMessage = '已' + label + '用户：' + username;
+      } else if (action === 'unlock') {
+        request = {
+          url: centerApi.usersItemBase + '/' + encodeURIComponent(userId) + '/unlock',
+          options: { method: 'POST', body: JSON.stringify({}) },
+        };
+        successMessage = '已解锁用户：' + username;
+      } else if (action === 'reset-password') {
+        const newPassword = window.prompt('请输入用户“' + username + '”的新密码');
+        if (newPassword === null) return;
+        if (!String(newPassword).trim()) {
+          setHint('adminUsersNotice', '新密码不能为空', true);
+          return;
+        }
+        request = {
+          url: centerApi.usersItemBase + '/' + encodeURIComponent(userId) + '/reset-password',
+          options: {
+            method: 'POST',
+            body: JSON.stringify({ newPassword }),
+          },
+        };
+        successMessage = '已重置密码：' + username;
+      } else if (action === 'delete') {
+        if (!window.confirm('确认删除用户“' + username + '”吗？此操作不可恢复。')) return;
+        request = {
+          url: centerApi.usersItemBase + '/' + encodeURIComponent(userId),
+          options: { method: 'DELETE' },
+        };
+        successMessage = '已删除用户：' + username;
+      }
+
+      if (!request) return;
+      const previousText = button.textContent;
+      button.disabled = true;
+      button.textContent = '处理中...';
+      setHint('adminUsersNotice', '正在执行用户操作...');
+      try {
+        await requestJson(request.url, request.options);
+        await loadAdminUsers();
+        setHint('adminUsersNotice', successMessage);
+      } catch (error) {
+        setHint('adminUsersNotice', error.message || '用户操作失败', true);
+      } finally {
+        button.disabled = false;
+        button.textContent = previousText;
+      }
+    }
+
+    function applySecurityForm(data) {
+      const passwordPolicy = data?.passwordPolicy || {};
+      const session = data?.session || {};
+      const mfa = data?.mfa || {};
+      const roleIpAllowlist = data?.roleIpAllowlist || {};
+      const byId = (id) => document.getElementById(id);
+      byId('passwordMinLength').value = passwordPolicy.minLength || 10;
+      byId('sessionTimeoutMinutes').value = session.timeoutMinutes || 720;
+      byId('forceAllUsersMfa').checked = mfa.forceAllUsers === true;
+      byId('requireUppercase').checked = passwordPolicy.requireUppercase !== false;
+      byId('requireLowercase').checked = passwordPolicy.requireLowercase !== false;
+      byId('requireNumber').checked = passwordPolicy.requireNumber !== false;
+      byId('requireSpecial').checked = passwordPolicy.requireSpecial !== false;
+      byId('roleIpAdmin').value = Array.isArray(roleIpAllowlist.admin) ? roleIpAllowlist.admin.join('\\n') : '';
+      byId('roleIpSysadmin').value = Array.isArray(roleIpAllowlist.sysadmin) ? roleIpAllowlist.sysadmin.join('\\n') : '';
+      byId('roleIpAuditor').value = Array.isArray(roleIpAllowlist.auditor) ? roleIpAllowlist.auditor.join('\\n') : '';
+    }
+
+    function collectSecurityPayload() {
+      const parseLines = (id) =>
+        String(document.getElementById(id)?.value || '')
+          .split('\\n')
+          .map((item) => item.trim())
+          .filter(Boolean);
+      return {
+        passwordPolicy: {
+          minLength: Number(document.getElementById('passwordMinLength')?.value || 10),
+          requireUppercase: !!document.getElementById('requireUppercase')?.checked,
+          requireLowercase: !!document.getElementById('requireLowercase')?.checked,
+          requireNumber: !!document.getElementById('requireNumber')?.checked,
+          requireSpecial: !!document.getElementById('requireSpecial')?.checked,
+        },
+        session: {
+          timeoutMinutes: Number(document.getElementById('sessionTimeoutMinutes')?.value || 720),
+        },
+        mfa: {
+          forceAllUsers: !!document.getElementById('forceAllUsersMfa')?.checked,
+        },
+        roleIpAllowlist: {
+          admin: parseLines('roleIpAdmin'),
+          sysadmin: parseLines('roleIpSysadmin'),
+          auditor: parseLines('roleIpAuditor'),
+        },
+      };
+    }
+
+    async function loadAdminSecurity() {
+      setHint('adminSecurityNotice', '正在加载安全配置...');
+      try {
+        const data = await requestJson(centerApi.securityGet);
+        applySecurityForm(data || {});
+        setHint('adminSecurityNotice', '安全配置已加载');
+      } catch (error) {
+        setHint('adminSecurityNotice', error.message || '加载安全配置失败', true);
+      }
+    }
+
+    async function onAdminCreateUser(event) {
+      event.preventDefault();
+      const form = event.currentTarget;
+      const formData = new FormData(form);
+      const payload = Object.fromEntries(formData.entries());
+      setHint('adminCreateUserNotice', '正在创建用户...');
+      try {
+        const row = await requestJson(centerApi.usersCreate, {
+          method: 'POST',
+          body: JSON.stringify(payload),
+        });
+        form.reset();
+        setHint('adminCreateUserNotice', '已创建用户：' + row.username);
+        await loadAdminUsers();
+      } catch (error) {
+        setHint('adminCreateUserNotice', error.message || '创建用户失败', true);
+      }
+    }
+
+    async function onAdminSaveSecurity(event) {
+      event.preventDefault();
+      setHint('adminSecurityNotice', '正在保存安全配置...');
+      try {
+        await requestJson(centerApi.securitySave, {
+          method: 'POST',
+          body: JSON.stringify(collectSecurityPayload()),
+        });
+        setHint('adminSecurityNotice', '安全配置已保存');
+      } catch (error) {
+        setHint('adminSecurityNotice', error.message || '保存安全配置失败', true);
+      }
+    }
+
+    function renderAuditLogs(rows) {
+      const body = document.getElementById('auditLogsBody');
+      if (!body) return;
+      const list = Array.isArray(rows) ? rows : [];
+      if (!list.length) {
+        body.innerHTML = '<tr><td colspan="6" class="empty">当前没有审计日志</td></tr>';
+        return;
+      }
+      body.innerHTML = list.map((row) => '<tr>'
+        + '<td>' + row.id + '</td>'
+        + '<td>' + (row.system || '-') + '</td>'
+        + '<td>' + (row.username || '-') + '</td>'
+        + '<td>' + (row.action || '-') + '</td>'
+        + '<td>' + (row.entity || '-') + '</td>'
+        + '<td>' + (row.created_at || '-') + '</td>'
+        + '</tr>').join('');
+    }
+
+    function collectAuditQuery() {
+      const params = new URLSearchParams();
+      const mappings = [
+        ['username', 'auditFilterUsername'],
+        ['system', 'auditFilterSystem'],
+        ['action', 'auditFilterAction'],
+        ['entity', 'auditFilterEntity'],
+        ['limit', 'auditFilterLimit'],
+      ];
+      mappings.forEach(([key, id]) => {
+        const value = String(document.getElementById(id)?.value || '').trim();
+        if (value) params.set(key, value);
+      });
+      return params;
+    }
+
+    async function loadAuditLogs(event) {
+      if (event) event.preventDefault();
+      const params = collectAuditQuery();
+      setHint('auditVerifyNotice', '正在加载审计日志...');
+      try {
+        const rows = await requestJson(centerApi.logsList + '?' + params.toString());
+        renderAuditLogs(rows);
+        setHint('auditVerifyNotice', '审计日志已更新');
+      } catch (error) {
+        renderAuditLogs([]);
+        setHint('auditVerifyNotice', error.message || '加载审计日志失败', true);
+      }
+    }
+
+    async function exportAuditLogs() {
+      const params = collectAuditQuery();
+      const url = centerApi.logsExport + '?' + params.toString();
+      setHint('auditVerifyNotice', '正在导出审计日志...');
+      try {
+        const response = await fetch(url, { credentials: 'include' });
+        if (!response.ok) {
+          const text = await response.text();
+          let message = text || '导出审计日志失败';
+          try {
+            const data = text ? JSON.parse(text) : {};
+            message = String(data.error || message).trim() || '导出审计日志失败';
+          } catch (_err) {
+            // keep raw response text
+          }
+          throw new Error(message);
+        }
+        const blob = await response.blob();
+        const objectUrl = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        const stamp = new Date().toISOString().replaceAll(':', '-');
+        link.href = objectUrl;
+        link.download = 'audit-center-logs-' + stamp + '.csv';
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        URL.revokeObjectURL(objectUrl);
+        setHint('auditVerifyNotice', '审计日志已导出');
+      } catch (error) {
+        setHint('auditVerifyNotice', error.message || '导出审计日志失败', true);
+      }
+    }
+
+    async function verifyAuditChain() {
+      setHint('auditVerifyNotice', '正在校验审计链...');
+      try {
+        const limit = String(document.getElementById('auditFilterLimit')?.value || '10000').trim();
+        const query = limit ? '?limit=' + encodeURIComponent(limit) : '';
+        const result = await requestJson(centerApi.logsVerify + query);
+        if (result.ok) {
+          setHint('auditVerifyNotice', '审计链校验通过，已检查 ' + result.checked + ' 条记录');
+          return;
+        }
+        setHint('auditVerifyNotice', (result.reason || '审计链校验失败') + '（失败记录 ID: ' + (result.failed_id || '-') + '）', true);
+      } catch (error) {
+        setHint('auditVerifyNotice', error.message || '审计链校验失败', true);
+      }
+    }
+
+    function initCenterFeatures() {
+      if (systemKey === '${ADMIN_CENTER_KEY}') {
+        document.getElementById('adminUsersReloadBtn')?.addEventListener('click', loadAdminUsers);
+        document.getElementById('adminUsersBody')?.addEventListener('click', onAdminUsersAction);
+        document.getElementById('adminCreateUserForm')?.addEventListener('submit', onAdminCreateUser);
+        document.getElementById('adminSecurityForm')?.addEventListener('submit', onAdminSaveSecurity);
+        document.getElementById('adminSecurityReloadBtn')?.addEventListener('click', loadAdminSecurity);
+        loadAdminUsers();
+        loadAdminSecurity();
+        return;
+      }
+      document.getElementById('auditFilterForm')?.addEventListener('submit', loadAuditLogs);
+      document.getElementById('auditLogsReloadBtn')?.addEventListener('click', loadAuditLogs);
+      document.getElementById('auditExportBtn')?.addEventListener('click', exportAuditLogs);
+      document.getElementById('auditVerifyBtn')?.addEventListener('click', verifyAuditChain);
+      loadAuditLogs();
+    }
+
+    async function bootstrapCenter() {
+      try {
+        const response = await fetch('/api/auth/me', { credentials: 'include' });
+        if (response.status === 401) {
+          window.location.href = '/portal?system=' + encodeURIComponent(systemKey);
+          return;
+        }
+        const user = await response.json();
+        const role = String(user?.role || '').trim().toLowerCase();
+        const appAccess = Array.isArray(user?.app_access) ? user.app_access : [];
+        if (!allowedRoles.includes(role) || !appAccess.includes(systemKey)) {
+          statusEl.className = 'status error';
+          statusEl.textContent = '当前账号无权访问该独立系统，请切换账号或返回门户。';
+          return;
+        }
+        statusEl.textContent = '已确认登录态：' + user.username + ' / ' + role;
+        contentEl.style.display = 'grid';
+        initCenterFeatures();
+      } catch (error) {
+        statusEl.className = 'status error';
+        statusEl.textContent = '加载登录态失败，请刷新后重试。';
+      }
+    }
+
+    logoutBtn.addEventListener('click', logout);
+    bootstrapCenter();
+  </script>
+</body>
+</html>`;
+};
+
+const registerDedicatedCenterPage = (systemKey) => {
+  const config = getDedicatedCenterConfig(systemKey);
+  if (!config) return;
+  app.get(`/${systemKey}`, (_req, res) => {
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    res.send(renderDedicatedCenterPage({
+      nonce: res.locals.cspNonce || '',
+      config,
+    }));
+  });
+};
+
+registerDedicatedCenterPage(ADMIN_CENTER_KEY);
+registerDedicatedCenterPage(AUDIT_CENTER_KEY);
 
 app.get('/portal', (req, res) => {
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
@@ -1406,7 +2066,10 @@ app.get('/portal', (req, res) => {
     const portalParams = new URLSearchParams(window.location.search);
     const portalMode = String(portalParams.get('mode') || '').toLowerCase();
     const autoRedirectWindowMs = 8000;
-    const sysadminDefaultSystemKey = 'reminder';
+    const privilegedDefaultSystemKeyByRole = {
+      sysadmin: '${ADMIN_CENTER_KEY}',
+      auditor: '${AUDIT_CENTER_KEY}',
+    };
     const loopbackHostSet = new Set(['localhost', '127.0.0.1']);
     const portalSessionStorageKey = 'juxin_portal_session';
     const portalSessionQueryKey = 'portal_session';
@@ -1938,8 +2601,9 @@ app.get('/portal', (req, res) => {
       if (!list.length) {
         throw new Error('当前账号没有可进入的系统');
       }
-      if (!requestedSystem && portalMode !== 'switch' && userRole === 'sysadmin') {
-        const preferred = list.find((item) => item.key === sysadminDefaultSystemKey) || list[0];
+      const privilegedDefaultSystemKey = privilegedDefaultSystemKeyByRole[userRole] || '';
+      if (!requestedSystem && portalMode !== 'switch' && privilegedDefaultSystemKey) {
+        const preferred = list.find((item) => item.key === privilegedDefaultSystemKey) || list[0];
         if (preferred) {
           if (shouldThrottleRequestedRedirect(preferred.key)) {
             hideAllCards();
@@ -2181,6 +2845,190 @@ const getSecurityConfig = async () => {
     roleIpAllowlist,
   };
 };
+
+const adminCenterUsersService = createAdminCenterUsersService({
+  db,
+  hashPassword,
+  getSecurityConfig,
+  logOperation,
+  builtinAccountUsernames: BUILTIN_ACCOUNT_USERNAMES,
+});
+const adminCenterSecurityService = createAdminCenterSecurityService({
+  db,
+  logOperation,
+});
+const auditCenterLogsService = createAuditCenterLogsService({
+  db,
+  computeAuditSignature,
+});
+
+const canUseDedicatedCenter = (user, systemKey) => canAccessDedicatedCenter({ role: user?.role, systemKey });
+
+const sendApiError = (res, err, fallback = '请求失败') => {
+  const statusCode = Number(err?.statusCode || 500);
+  const error = String(err?.message || '').trim() || fallback;
+  return res.status(statusCode).json({ error });
+};
+
+app.get('/api/admin-center/users', async (req, res) => {
+  if (!canUseDedicatedCenter(req.user, ADMIN_CENTER_KEY)) {
+    return res.status(403).json({ error: '无权限访问管理后台' });
+  }
+  try {
+    const rows = await adminCenterUsersService.listUsers();
+    return res.json(rows);
+  } catch (err) {
+    return sendApiError(res, err, '获取用户列表失败');
+  }
+});
+
+app.post('/api/admin-center/users', async (req, res) => {
+  if (!canUseDedicatedCenter(req.user, ADMIN_CENTER_KEY)) {
+    return res.status(403).json({ error: '无权限访问管理后台' });
+  }
+  try {
+    const row = await adminCenterUsersService.createUser({
+      actor: req.user,
+      payload: req.body || {},
+    });
+    return res.json(row);
+  } catch (err) {
+    return sendApiError(res, err, '创建用户失败');
+  }
+});
+
+app.put('/api/admin-center/users/:id', async (req, res) => {
+  if (!canUseDedicatedCenter(req.user, ADMIN_CENTER_KEY)) {
+    return res.status(403).json({ error: '无权限访问管理后台' });
+  }
+  try {
+    const row = await adminCenterUsersService.updateUser({
+      actor: req.user,
+      targetId: req.params.id,
+      payload: req.body || {},
+    });
+    return res.json(row);
+  } catch (err) {
+    return sendApiError(res, err, '更新用户失败');
+  }
+});
+
+app.post('/api/admin-center/users/:id/unlock', async (req, res) => {
+  if (!canUseDedicatedCenter(req.user, ADMIN_CENTER_KEY)) {
+    return res.status(403).json({ error: '无权限访问管理后台' });
+  }
+  try {
+    const result = await adminCenterUsersService.unlockUser({
+      actor: req.user,
+      targetId: req.params.id,
+    });
+    return res.json(result);
+  } catch (err) {
+    return sendApiError(res, err, '解锁用户失败');
+  }
+});
+
+app.post('/api/admin-center/users/:id/reset-password', async (req, res) => {
+  if (!canUseDedicatedCenter(req.user, ADMIN_CENTER_KEY)) {
+    return res.status(403).json({ error: '无权限访问管理后台' });
+  }
+  try {
+    const result = await adminCenterUsersService.resetPassword({
+      actor: req.user,
+      targetId: req.params.id,
+      newPassword: req.body?.newPassword,
+    });
+    return res.json(result);
+  } catch (err) {
+    return sendApiError(res, err, '重置密码失败');
+  }
+});
+
+app.delete('/api/admin-center/users/:id', async (req, res) => {
+  if (!canUseDedicatedCenter(req.user, ADMIN_CENTER_KEY)) {
+    return res.status(403).json({ error: '无权限访问管理后台' });
+  }
+  try {
+    const result = await adminCenterUsersService.deleteUser({
+      actor: req.user,
+      targetId: req.params.id,
+    });
+    return res.json(result);
+  } catch (err) {
+    return sendApiError(res, err, '删除用户失败');
+  }
+});
+
+app.get('/api/admin-center/security', async (req, res) => {
+  if (!canUseDedicatedCenter(req.user, ADMIN_CENTER_KEY)) {
+    return res.status(403).json({ error: '无权限访问管理后台' });
+  }
+  try {
+    const security = await adminCenterSecurityService.getSecurity();
+    return res.json(security);
+  } catch (err) {
+    return sendApiError(res, err, '获取安全配置失败');
+  }
+});
+
+app.post('/api/admin-center/security', async (req, res) => {
+  if (!canUseDedicatedCenter(req.user, ADMIN_CENTER_KEY)) {
+    return res.status(403).json({ error: '无权限访问管理后台' });
+  }
+  try {
+    const result = await adminCenterSecurityService.saveSecurity({
+      actor: req.user,
+      payload: req.body || {},
+    });
+    return res.json(result);
+  } catch (err) {
+    return sendApiError(res, err, '保存安全配置失败');
+  }
+});
+
+app.get('/api/audit-center/logs', async (req, res) => {
+  if (!canUseDedicatedCenter(req.user, AUDIT_CENTER_KEY)) {
+    return res.status(403).json({ error: '无权限访问审计中心' });
+  }
+  try {
+    const rows = await auditCenterLogsService.listLogs({ query: req.query || {} });
+    return res.json(rows);
+  } catch (err) {
+    return sendApiError(res, err, '获取审计日志失败');
+  }
+});
+
+app.get('/api/audit-center/logs/export', async (req, res) => {
+  if (!canUseDedicatedCenter(req.user, AUDIT_CENTER_KEY)) {
+    return res.status(403).json({ error: '无权限访问审计中心' });
+  }
+  try {
+    const rows = await auditCenterLogsService.listLogs({
+      query: req.query || {},
+    });
+    const csv = serializeLogsAsCsv(rows);
+    const stamp = new Date().toISOString().replaceAll(':', '-');
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="audit-center-logs-${stamp}.csv"`);
+    return res.send(`\uFEFF${csv}`);
+  } catch (err) {
+    return sendApiError(res, err, '导出审计日志失败');
+  }
+});
+
+app.get('/api/audit-center/logs/verify', async (req, res) => {
+  if (!canUseDedicatedCenter(req.user, AUDIT_CENTER_KEY)) {
+    return res.status(403).json({ error: '无权限访问审计中心' });
+  }
+  try {
+    const result = await auditCenterLogsService.verifyLogChain({
+      limitInput: req.query?.limit,
+    });
+    return res.json(result);
+  } catch (err) {
+    return sendApiError(res, err, '审计链校验失败');
+  }
+});
 
 const checkLoginLock = async ({ username, ip }) => {
   const row = await db.get(
