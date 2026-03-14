@@ -79,6 +79,8 @@ test('dedicated center config exposes admin and audit metadata', () => {
       usersList: '/api/admin-center/users',
       usersCreate: '/api/admin-center/users',
       usersItemBase: '/api/admin-center/users',
+      usersImport: '/api/admin-center/users/import',
+      usersImportTemplate: '/api/admin-center/users/template.xlsx',
       securityGet: '/api/admin-center/security',
       securitySave: '/api/admin-center/security',
     },

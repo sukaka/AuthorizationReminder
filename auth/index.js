@@ -2,6 +2,7 @@ const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
 const cookieParser = require('cookie-parser');
+const multer = require('multer');
 const db = require('../server/db');
 const nodemailer = require('nodemailer');
 const RPCClient = require('@alicloud/pop-core');
@@ -37,15 +38,30 @@ const {
   resolveSecurityStrictMode,
 } = require('../server/security-strict-mode');
 const {
+  ALLOWED_USER_ROLES,
   createAdminCenterUsersService,
+  normalizeAppAccess,
+  normalizeUserRole,
+  validateEmailFormat,
+  validatePhoneFormat,
+  validateUsernameFormat,
 } = require('./admin-center-users');
 const {
   createAdminCenterSecurityService,
 } = require('./admin-center-security');
 const {
+  parseAdminCenterUserImportFile,
+} = require('./admin-center-user-import');
+const {
   createAuditCenterLogsService,
   serializeLogsAsCsv,
 } = require('./audit-center-logs');
+const {
+  buildUserImportFilename,
+  buildUserImportTemplateWorkbook,
+  buildUserImportWorkbook,
+  importUsersFromRows,
+} = require('../server/user-import');
 const {
   ADMIN_CENTER_KEY,
   AUDIT_CENTER_KEY,
@@ -135,6 +151,8 @@ const DEFAULT_PASSWORD_POLICY = Object.freeze({
 const DEFAULT_SESSION_TIMEOUT_MINUTES = 12 * 60;
 const MAX_SESSION_TIMEOUT_MINUTES = 7 * 24 * 60;
 const PRIVILEGED_IP_LIMIT_ROLES = new Set(['admin', 'sysadmin', 'auditor']);
+const MAX_IMPORT_RECORDS = Number(process.env.MAX_IMPORT_RECORDS || 5000);
+const IMPORT_UPLOAD_MAX_BYTES = Number(process.env.IMPORT_UPLOAD_MAX_BYTES || 3 * 1024 * 1024);
 
 const clampNumber = (value, fallback, min, max) => {
   const num = Number(value);
@@ -531,6 +549,10 @@ if (process.env.TRUST_PROXY_HOPS) {
 app.use(cors(corsOptions));
 app.use(express.json({ limit: '1mb' }));
 app.use(cookieParser());
+const adminCenterImportUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: IMPORT_UPLOAD_MAX_BYTES },
+});
 
 const readCookieValue = (req, cookieName) => {
   const byParser = String(req.cookies?.[cookieName] || '').trim();
@@ -1529,6 +1551,18 @@ const renderAdminCenterSections = () => ({
           <button class="primary-btn" type="submit">新增用户</button>
         </div>
       </form>
+      <div class="import-row user-import-row">
+        <label id="adminUserImportLabel" class="import-btn">
+          <span id="adminUserImportLabelText">批量导入（Excel）</span>
+          <input id="adminUserImportInput" type="file" accept=".xlsx,.xls" />
+        </label>
+        <button id="adminUserImportTemplateBtn" type="button" class="ghost-btn">下载模板</button>
+        <div class="import-copy">
+          <span class="muted">列：username/账号、role/角色、is_active/状态、app_access/可访问系统、email、phone、wecom_id</span>
+          <span class="muted">可先下载模板，按示例行填写后再导入；初始密码会自动生成并写入结果 Excel。</span>
+          <span id="adminUserImportSummary" class="muted"></span>
+        </div>
+      </div>
       <div id="adminCreateUserNotice" class="hint-line"></div>
       <div id="adminUsersNotice" class="hint-line"></div>
       <div class="table-wrap">
@@ -1761,6 +1795,12 @@ const renderDedicatedCenterPage = ({ nonce, config }) => {
     .form-label{display:flex;flex-direction:column;gap:8px;font-size:14px;color:var(--ink)}
     .full-row{grid-column:1 / -1}
     .inline-check{flex-direction:row;align-items:center;gap:12px}
+    .import-row{display:grid;gap:10px;margin:-4px 0 18px;position:relative;z-index:1}
+    .user-import-row{grid-template-columns:auto auto minmax(0,1fr);align-items:start}
+    .import-btn{position:relative;display:inline-flex;align-items:center;justify-content:center;min-height:44px;padding:0 18px;border-radius:12px;border:1px solid rgba(148,163,184,.35);background:linear-gradient(135deg,#2563eb,#0ea5e9);color:#fff;cursor:pointer;box-shadow:0 10px 18px rgba(37,99,235,.2)}
+    .import-btn input[type='file']{position:absolute;inset:0;opacity:0;cursor:pointer}
+    .import-btn.disabled{opacity:.55;pointer-events:none}
+    .import-copy{display:grid;gap:4px;min-width:0;padding-top:4px}
     .form-control,.form-select,input,select,textarea{padding:10px 12px;border-radius:12px;border:1px solid rgba(148,163,184,.45);background:rgba(255,255,255,.96);outline:none;transition:border .2s ease,box-shadow .2s ease}
     input:focus,select:focus,textarea:focus,button:focus-visible{border-color:var(--accent);box-shadow:0 0 0 3px rgba(37,99,235,.12);outline:none}
     .panel-block{background:linear-gradient(140deg,rgba(248,250,252,.9),rgba(239,246,255,.9));border:1px solid rgba(226,232,240,.9);border-radius:16px;padding:16px;margin-bottom:20px;display:grid;gap:16px;position:relative;z-index:1}
@@ -1818,6 +1858,7 @@ const renderDedicatedCenterPage = ({ nonce, config }) => {
       .sidebar{position:relative;height:auto}
       .hero{flex-direction:column}
       .config-card-body,.form-grid,.form-grid.compact{grid-template-columns:1fr}
+      .user-import-row{grid-template-columns:1fr}
       .block-head{flex-direction:column}
     }
   </style>
@@ -1899,6 +1940,9 @@ const renderDedicatedCenterPage = ({ nonce, config }) => {
     let currentUser = null;
     let adminUsersRows = [];
     let auditLogsRows = [];
+    let adminUserImportUploading = false;
+    let adminUserImportTemplateDownloading = false;
+    let adminUserImportResult = null;
     let adminSecurityRawState = {};
     let accountSecurityState = {
       enabled: false,
@@ -1996,6 +2040,89 @@ const renderDedicatedCenterPage = ({ nonce, config }) => {
       return data;
     }
 
+    function extractFilenameFromContentDisposition(value) {
+      const text = String(value || '').trim();
+      if (!text) return '';
+      const utf8Match = text.match(/filename\\*\\s*=\\s*UTF-8''([^;]+)/i);
+      if (utf8Match && utf8Match[1]) {
+        try {
+          return decodeURIComponent(utf8Match[1].trim());
+        } catch (_err) {
+          return utf8Match[1].trim();
+        }
+      }
+      const quotedMatch = text.match(/filename\\s*=\\s*\"([^\"]+)\"/i);
+      if (quotedMatch && quotedMatch[1]) return quotedMatch[1].trim();
+      const plainMatch = text.match(/filename\\s*=\\s*([^;]+)/i);
+      if (plainMatch && plainMatch[1]) return plainMatch[1].trim();
+      return '';
+    }
+
+    function readImportFilename(headers, fallback) {
+      const explicit = String(headers?.get?.('X-Import-Filename') || '').trim();
+      if (explicit) return explicit;
+      const contentDisposition = headers?.get?.('Content-Disposition') || '';
+      return extractFilenameFromContentDisposition(contentDisposition) || fallback;
+    }
+
+    function readImportSummary(headers) {
+      return {
+        total: Number(headers.get('X-Import-Total') || 0),
+        created: Number(headers.get('X-Import-Created') || 0),
+        skipped: Number(headers.get('X-Import-Skipped') || 0),
+        errorCount: Number(headers.get('X-Import-Error-Count') || 0),
+        filename: readImportFilename(headers, 'user-import-result.xlsx'),
+      };
+    }
+
+    async function requestBlob(url, options = {}, retry = true) {
+      const method = String(options.method || 'GET').trim().toUpperCase();
+      const headers = { ...(options.headers || {}) };
+      if (!['GET', 'HEAD', 'OPTIONS'].includes(method)) {
+        await ensureCsrfReady();
+        headers['X-CSRF-Token'] = csrfToken;
+      }
+      const response = await fetch(url, {
+        credentials: 'include',
+        ...options,
+        method,
+        headers,
+      });
+      const blob = await response.blob();
+      if (response.status === 401) {
+        window.location.href = '/portal?system=' + encodeURIComponent(systemKey);
+        throw new Error('登录状态已失效');
+      }
+      if (!response.ok) {
+        let text = '';
+        try {
+          text = await blob.text();
+        } catch (_err) {
+          text = '';
+        }
+        const data = parseJsonSafe(text);
+        const message = getErrorText({ response: text, data, fallback: '请求失败' });
+        if (retry && message.includes('安全校验失败')) {
+          csrfToken = '';
+          await loadCsrf();
+          return requestBlob(url, options, false);
+        }
+        throw new Error(message);
+      }
+      return { response, blob };
+    }
+
+    function triggerFileDownload(blob, filename) {
+      const objectUrl = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = objectUrl;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.setTimeout(() => URL.revokeObjectURL(objectUrl), 0);
+    }
+
     function escapeHtml(value) {
       return String(value ?? '')
         .replaceAll('&', '&amp;')
@@ -2084,6 +2211,30 @@ const renderDedicatedCenterPage = ({ nonce, config }) => {
     function updateStatCard(id, value) {
       const node = document.getElementById(id);
       if (node) node.textContent = String(value ?? '0');
+    }
+
+    function syncAdminImportState() {
+      const importInput = document.getElementById('adminUserImportInput');
+      const importLabel = document.getElementById('adminUserImportLabel');
+      const importLabelText = document.getElementById('adminUserImportLabelText');
+      const templateBtn = document.getElementById('adminUserImportTemplateBtn');
+      const summary = document.getElementById('adminUserImportSummary');
+      const importBusy = adminUserImportUploading || adminUserImportTemplateDownloading;
+
+      if (importInput) importInput.disabled = importBusy;
+      if (importLabel) importLabel.classList.toggle('disabled', importBusy);
+      if (importLabelText) {
+        importLabelText.textContent = adminUserImportUploading ? '导入中...' : '批量导入（Excel）';
+      }
+      if (templateBtn) {
+        templateBtn.disabled = importBusy;
+        templateBtn.textContent = adminUserImportTemplateDownloading ? '模板下载中...' : '下载模板';
+      }
+      if (summary) {
+        summary.textContent = adminUserImportResult
+          ? ('最近导入：' + adminUserImportResult.created + ' 成功 / ' + adminUserImportResult.skipped + ' 跳过 / ' + adminUserImportResult.total + ' 总数')
+          : '';
+      }
     }
 
     async function logout() {
@@ -2484,6 +2635,50 @@ const renderDedicatedCenterPage = ({ nonce, config }) => {
       }
     }
 
+    async function onAdminImportUsers(file) {
+      if (!file || adminUserImportUploading || adminUserImportTemplateDownloading) return;
+      const formData = new FormData();
+      formData.append('file', file);
+      adminUserImportUploading = true;
+      syncAdminImportState();
+      setHint('adminUsersNotice', '正在导入用户...');
+      try {
+        const { response, blob } = await requestBlob(centerApi.usersImport, {
+          method: 'POST',
+          body: formData,
+        });
+        const summary = readImportSummary(response.headers);
+        adminUserImportResult = summary;
+        syncAdminImportState();
+        triggerFileDownload(blob, summary.filename);
+        setHint('adminUsersNotice', '用户导入完成：' + summary.created + ' 成功 / ' + summary.skipped + ' 跳过');
+        await loadAdminUsers();
+      } catch (error) {
+        setHint('adminUsersNotice', error.message || '用户导入失败', true);
+      } finally {
+        adminUserImportUploading = false;
+        syncAdminImportState();
+      }
+    }
+
+    async function onAdminDownloadImportTemplate() {
+      if (adminUserImportUploading || adminUserImportTemplateDownloading) return;
+      adminUserImportTemplateDownloading = true;
+      syncAdminImportState();
+      setHint('adminUsersNotice', '正在下载导入模板...');
+      try {
+        const { response, blob } = await requestBlob(centerApi.usersImportTemplate);
+        const fileName = readImportFilename(response.headers, 'user-import-template.xlsx');
+        triggerFileDownload(blob, fileName);
+        setHint('adminUsersNotice', '用户导入模板已开始下载');
+      } catch (error) {
+        setHint('adminUsersNotice', error.message || '下载模板失败', true);
+      } finally {
+        adminUserImportTemplateDownloading = false;
+        syncAdminImportState();
+      }
+    }
+
     async function onAdminSaveSecurity(event) {
       event.preventDefault();
       setHint('adminSecurityNotice', '正在保存安全配置...');
@@ -2625,8 +2820,15 @@ const renderDedicatedCenterPage = ({ nonce, config }) => {
         document.getElementById('adminUsersReloadBtn')?.addEventListener('click', loadAdminUsers);
         document.getElementById('adminUsersBody')?.addEventListener('click', onAdminUsersAction);
         document.getElementById('adminCreateUserForm')?.addEventListener('submit', onAdminCreateUser);
+        document.getElementById('adminUserImportInput')?.addEventListener('change', (event) => {
+          const file = event.target.files && event.target.files[0];
+          onAdminImportUsers(file);
+          event.target.value = '';
+        });
+        document.getElementById('adminUserImportTemplateBtn')?.addEventListener('click', onAdminDownloadImportTemplate);
         document.getElementById('adminSecurityForm')?.addEventListener('submit', onAdminSaveSecurity);
         document.getElementById('adminSecurityReloadBtn')?.addEventListener('click', loadAdminSecurity);
+        syncAdminImportState();
         loadAccountSecurity();
         loadAdminUsers();
         loadAdminSecurity();
@@ -3642,6 +3844,28 @@ const sendApiError = (res, err, fallback = '请求失败') => {
   return res.status(statusCode).json({ error });
 };
 
+const validateImportedAdminCenterUserRow = (row) => {
+  const usernameRuleError = validateUsernameFormat(row.username);
+  if (usernameRuleError) return usernameRuleError;
+
+  const nextRole = normalizeUserRole(row.role || 'user');
+  if (!nextRole) return '角色不能为空';
+  if (!ALLOWED_USER_ROLES.has(nextRole)) {
+    return '角色不合法';
+  }
+
+  const emailRuleError = validateEmailFormat(row.email);
+  if (emailRuleError) return emailRuleError;
+
+  const phoneRuleError = validatePhoneFormat(row.phone);
+  if (phoneRuleError) return phoneRuleError;
+
+  const nextAccess = normalizeAppAccess(row.app_access, nextRole);
+  if (!nextAccess.length) return '请至少选择一个可访问系统';
+
+  return '';
+};
+
 app.get('/api/admin-center/users', async (req, res) => {
   if (!canUseDedicatedCenter(req.user, ADMIN_CENTER_KEY)) {
     return res.status(403).json({ error: '无权限访问管理后台' });
@@ -3667,6 +3891,83 @@ app.post('/api/admin-center/users', async (req, res) => {
   } catch (err) {
     return sendApiError(res, err, '创建用户失败');
   }
+});
+
+app.post('/api/admin-center/users/import', adminCenterImportUpload.single('file'), async (req, res) => {
+  if (!canUseDedicatedCenter(req.user, ADMIN_CENTER_KEY)) {
+    return res.status(403).json({ error: '无权限访问管理后台' });
+  }
+  let records = [];
+  try {
+    records = parseAdminCenterUserImportFile(req.file, { maxRecords: MAX_IMPORT_RECORDS });
+  } catch (err) {
+    return sendApiError(res, err, '解析导入文件失败');
+  }
+
+  try {
+    const security = await getSecurityConfig();
+    const result = await importUsersFromRows({
+      rows: records,
+      passwordPolicy: security?.passwordPolicy || DEFAULT_PASSWORD_POLICY,
+      validateRow: validateImportedAdminCenterUserRow,
+      findUserByUsername: async (username) => {
+        const value = String(username || '').trim();
+        if (!value) return null;
+        return db.get('SELECT id FROM users WHERE username = ? LIMIT 1', [value]);
+      },
+      insertUser: async (payload) => adminCenterUsersService.createUser({
+        actor: req.user,
+        payload: {
+          username: payload.username,
+          password: payload.password,
+          role: payload.role,
+          is_active: payload.is_active,
+          email: payload.email,
+          phone: payload.phone,
+          wecom_id: payload.wecom_id,
+          app_access: payload.app_access,
+        },
+      }),
+      resolveInsertError: (err) => String(err?.message || '').trim() || '用户创建失败',
+    });
+
+    await logOperation({
+      user: req.user,
+      action: 'IMPORT',
+      entity: 'user',
+      afterData: {
+        total: result.total,
+        created: result.created,
+        skipped: result.skipped,
+        error_count: result.errors.length,
+      },
+    });
+
+    const fileName = buildUserImportFilename(new Date());
+    const workbookBuffer = buildUserImportWorkbook(result.resultRows);
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
+    res.setHeader('X-Import-Total', String(result.total));
+    res.setHeader('X-Import-Created', String(result.created));
+    res.setHeader('X-Import-Skipped', String(result.skipped));
+    res.setHeader('X-Import-Error-Count', String(result.errors.length));
+    res.setHeader('X-Import-Filename', fileName);
+    return res.send(workbookBuffer);
+  } catch (err) {
+    return sendApiError(res, err, '用户导入失败');
+  }
+});
+
+app.get('/api/admin-center/users/template.xlsx', async (req, res) => {
+  if (!canUseDedicatedCenter(req.user, ADMIN_CENTER_KEY)) {
+    return res.status(403).json({ error: '无权限访问管理后台' });
+  }
+  const fileName = 'user-import-template.xlsx';
+  const workbookBuffer = buildUserImportTemplateWorkbook();
+  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
+  res.setHeader('X-Import-Filename', fileName);
+  return res.send(workbookBuffer);
 });
 
 app.put('/api/admin-center/users/:id', async (req, res) => {

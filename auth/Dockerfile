@@ -8,6 +8,7 @@ COPY auth/package*.json ./auth/
 COPY auth/index.js ./auth/index.js
 COPY auth/admin-center-users.js ./auth/admin-center-users.js
 COPY auth/admin-center-security.js ./auth/admin-center-security.js
+COPY auth/admin-center-user-import.js ./auth/admin-center-user-import.js
 COPY auth/audit-center-logs.js ./auth/audit-center-logs.js
 COPY auth/portal-routing.js ./auth/portal-routing.js
 COPY auth/csrf-security.js ./auth/csrf-security.js
@@ -19,6 +20,7 @@ COPY server/helmet-csp.js ./server/helmet-csp.js
 COPY server/security-strict-mode.js ./server/security-strict-mode.js
 COPY server/db.js ./server/db.js
 COPY server/db-bootstrap.js ./server/db-bootstrap.js
+COPY server/user-import.js ./server/user-import.js
 
 WORKDIR /app/auth
 RUN npm config set registry "${NPM_REGISTRY}" \

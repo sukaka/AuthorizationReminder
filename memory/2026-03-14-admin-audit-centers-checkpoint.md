@@ -135,3 +135,36 @@
 - `docker compose up -d mysql auth`
 - `curl -I http://127.0.0.1:5180/admin-center`
 - `curl -s http://127.0.0.1:5180/admin-center | rg -n "用户安全管理中心|账号安全|安全配置|用户管理|返回门户"`
+
+## 2026-03-14 Admin Center User Import Restored
+
+- 用户指出按旧管理中心样式恢复后，`admin-center` 缺失了：
+  - 用户批量上传（Excel）
+  - 上传模板下载
+- 本次已将用户导入链路落到 `auth` 独立后台，而不是重新依赖 `reminder`：
+  - 新增 `auth` 侧 Excel 解析 helper：
+    - `/Users/zhanglei/Documents/codex-new/auth/admin-center-user-import.js`
+  - `auth` 新增接口：
+    - `POST /api/admin-center/users/import`
+    - `GET /api/admin-center/users/template.xlsx`
+  - 页面恢复导入入口：
+    - “批量导入（Excel）”
+    - “下载模板”
+    - 最近一次导入摘要
+- 导入逻辑仍复用现有用户模板与结果文件规范：
+  - 初始密码自动生成
+  - 结果 Excel 返回成功/跳过明细
+  - 模板列保持：`username/role/is_active/app_access/email/phone/wecom_id`
+
+## 2026-03-14 Admin Center User Import Verification
+
+- `node --test /Users/zhanglei/Documents/codex-new/auth/tests/admin-center-user-import.test.js`
+- `node --test /Users/zhanglei/Documents/codex-new/auth/tests/admin-center-users.test.js`
+- `node --test /Users/zhanglei/Documents/codex-new/auth/tests/admin-center-security.test.js`
+- `node --test /Users/zhanglei/Documents/codex-new/auth/tests/audit-center-logs.test.js`
+- `node --test /Users/zhanglei/Documents/codex-new/auth/tests/portal-routing.test.js`
+- `node --check /Users/zhanglei/Documents/codex-new/auth/index.js`
+- `node --check /Users/zhanglei/Documents/codex-new/auth/admin-center-user-import.js`
+- `node --check /Users/zhanglei/Documents/codex-new/auth/portal-routing.js`
+- `docker compose build auth`
+- `curl -s http://127.0.0.1:5180/admin-center | rg -n "批量导入（Excel）|下载模板"`
