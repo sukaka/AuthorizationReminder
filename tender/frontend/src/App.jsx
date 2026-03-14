@@ -48,6 +48,7 @@ import {
   buildEvaluationDatasetPayload,
   buildEvaluationRunDetailData,
 } from './evaluation-kpi.js'
+import { logoutFromSso } from './portal-auth.js'
 
 const API_BASE = String(import.meta.env.VITE_API_BASE || '').trim()
 
@@ -2605,6 +2606,11 @@ function App() {
 
   const redirectToLogin = () => {
     window.location.replace(buildPortalLoginUrl('tender'))
+  }
+
+  const handleLogout = async () => {
+    await logoutFromSso({ apiBase: API_BASE })
+    window.location.href = buildPortalEntryUrl('tender')
   }
 
   const bootstrapAuth = async () => {
@@ -7141,7 +7147,7 @@ function App() {
 
         <div className="sidebar-actions">
           <button className="ghost" onClick={() => (window.location.href = buildPortalSwitchUrl('tender'))}>切换系统</button>
-          <button className="ghost" onClick={() => (window.location.href = buildPortalEntryUrl('tender'))}>返回门户</button>
+          <button className="ghost" onClick={handleLogout}>退出系统</button>
         </div>
       </aside>
 

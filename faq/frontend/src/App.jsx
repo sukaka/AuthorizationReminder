@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { logoutFromSso } from './portal-auth.js'
 
 const API_BASE = import.meta.env.VITE_API_BASE || ''
 
@@ -1861,6 +1862,11 @@ function App() {
         : ''
   const trendMax = Math.max(1, ...trendStats.map((item) => Number(item?.views || 0)))
 
+  const handleLogout = async () => {
+    await logoutFromSso({ apiBase: API_BASE })
+    window.location.href = buildPortalEntryUrl('faq')
+  }
+
   if (authRedirecting) {
     return <div className="app-loading">正在跳转登录页...</div>
   }
@@ -1905,7 +1911,7 @@ function App() {
 
         <div className="sidebar-actions">
           <button className="ghost" onClick={() => window.location.href = buildPortalSwitchUrl('faq')}>切换系统</button>
-          <button className="ghost" onClick={() => window.location.href = buildPortalEntryUrl('faq')}>返回门户</button>
+          <button className="ghost" onClick={handleLogout}>退出系统</button>
         </div>
       </aside>
 
