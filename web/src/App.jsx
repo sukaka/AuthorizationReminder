@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState, useRef } from 'react'
 import QRCode from 'qrcode'
 import './App.css'
+import { readUserImportDownloadFilename, readUserImportSummary } from './user-import.js'
 
 const buildApi = (getCsrfToken, refreshCsrfToken) => {
   const isCsrfInvalidError = (text) => String(text || '').includes('CSRF token invalid')
@@ -528,6 +529,9 @@ function App() {
   })
   const [customerImportResult, setCustomerImportResult] = useState(null)
   const [contactImportResult, setContactImportResult] = useState(null)
+  const [userImportResult, setUserImportResult] = useState(null)
+  const [userImportUploading, setUserImportUploading] = useState(false)
+  const [userImportTemplateDownloading, setUserImportTemplateDownloading] = useState(false)
   const [message, setMessage] = useState('')
   const [error, setError] = useState('')
   const [csrfToken, setCsrfToken] = useState('')
@@ -2388,6 +2392,98 @@ function App() {
       refreshContacts()
     } catch (err) {
       showError(err.message || '联系人导入失败')
+    }
+  }
+
+  const triggerUserImportDownload = (blob, filename) => {
+    const downloadUrl = window.URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = downloadUrl
+    link.download = filename
+    document.body.appendChild(link)
+    link.click()
+    link.remove()
+    window.setTimeout(() => window.URL.revokeObjectURL(downloadUrl), 0)
+  }
+
+  const onImportUsers = async (file) => {
+    if (!file || userImportUploading) return
+    const formData = new FormData()
+    formData.append('file', file)
+    setUserImportUploading(true)
+    try {
+      const res = await fetch('/api/import/users', {
+        method: 'POST',
+        headers: {
+          ...(csrfToken ? { 'X-CSRF-Token': csrfToken } : {}),
+        },
+        credentials: 'include',
+        body: formData,
+      })
+      const blob = await res.blob()
+      if (!res.ok) {
+        let text = ''
+        try {
+          text = await blob.text()
+        } catch {
+          text = ''
+        }
+        throw new Error(text || '用户导入失败')
+      }
+
+      const summary = readUserImportSummary(res.headers)
+      setUserImportResult(summary)
+      triggerUserImportDownload(blob, summary.filename)
+
+      showMessage(`用户导入完成：${summary.created} 成功 / ${summary.skipped} 跳过`)
+      setModalInfo({
+        title: '用户导入完成',
+        message: `共处理 ${summary.total} 条，成功 ${summary.created} 条，跳过 ${summary.skipped} 条。结果文件已开始下载。`,
+      })
+      refreshUsers()
+    } catch (err) {
+      const msg = normalizeApiError(err) || '用户导入失败'
+      showError(msg)
+      setModalInfo({
+        title: '用户导入失败',
+        message: msg,
+      })
+    } finally {
+      setUserImportUploading(false)
+    }
+  }
+
+  const onDownloadUserImportTemplate = async () => {
+    if (userImportTemplateDownloading || userImportUploading) return
+
+    setUserImportTemplateDownloading(true)
+    try {
+      const res = await fetch('/api/import/users/template.xlsx', {
+        credentials: 'include',
+      })
+      const blob = await res.blob()
+      if (!res.ok) {
+        let text = ''
+        try {
+          text = await blob.text()
+        } catch {
+          text = ''
+        }
+        throw new Error(text || '下载模板失败')
+      }
+
+      const fileName = readUserImportDownloadFilename(res.headers, 'user-import-template.xlsx')
+      triggerUserImportDownload(blob, fileName)
+      showMessage('用户导入模板已开始下载')
+    } catch (err) {
+      const msg = normalizeApiError(err) || '下载模板失败'
+      showError(msg)
+      setModalInfo({
+        title: '模板下载失败',
+        message: msg,
+      })
+    } finally {
+      setUserImportTemplateDownloading(false)
     }
   }
 
@@ -5408,6 +5504,38 @@ function App() {
                 </button>
               </div>
             </form>
+
+            <div className="import-row user-import-row">
+              <label className={`import-btn ${userImportUploading ? 'disabled' : ''}`}>
+                {userImportUploading ? '导入中...' : '批量导入（Excel）'}
+                <input
+                  type="file"
+                  accept=".xlsx,.xls"
+                  disabled={userImportUploading}
+                  onChange={(e) => {
+                    const file = e.target.files?.[0]
+                    onImportUsers(file)
+                    e.target.value = ''
+                  }}
+                />
+              </label>
+              <button
+                type="button"
+                className="ghost btn btn-outline-secondary"
+                disabled={userImportTemplateDownloading || userImportUploading}
+                onClick={onDownloadUserImportTemplate}
+              >
+                {userImportTemplateDownloading ? '模板下载中...' : '下载模板'}
+              </button>
+              <span className="muted">列：username/账号、role/角色、is_active/状态、app_access/可访问系统、email、phone、wecom_id</span>
+              <span className="muted">可先下载模板，按示例行填写后再导入。</span>
+              <span className="muted">系统权限示例：faq|tender|train-exam；初始密码由系统自动生成并写入结果 Excel。</span>
+              {userImportResult && (
+                <span className="muted">
+                  最近导入：{userImportResult.created} 成功 / {userImportResult.skipped} 跳过 / {userImportResult.total} 总数
+                </span>
+              )}
+            </div>
 
             <div className="table users-table">
               <div className="table-row head">

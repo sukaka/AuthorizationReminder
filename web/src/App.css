@@ -709,8 +709,17 @@ textarea:focus {
   gap: 6px;
 }
 
+.import-btn.disabled {
+  opacity: 0.72;
+  cursor: not-allowed;
+}
+
 .import-row input[type='file'] {
   display: none;
+}
+
+.user-import-row {
+  margin-top: 4px;
 }
 
 .import-errors {

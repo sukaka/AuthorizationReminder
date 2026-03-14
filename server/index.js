@@ -26,6 +26,13 @@ const {
 const {
   resolveSecurityStrictMode,
 } = require('./security-strict-mode');
+const {
+  buildUserImportFilename,
+  buildUserImportWorkbook,
+  buildUserImportTemplateWorkbook,
+  importUsersFromRows,
+  isUserImportExcelFile,
+} = require('./user-import');
 
 const app = express();
 const PORT = process.env.PORT || 5179;
@@ -1709,6 +1716,134 @@ app.delete('/api/users/:id', requireRole(['sysadmin']), async (req, res) => {
     beforeData: before,
   });
   res.json({ ok: true });
+});
+
+app.post('/api/import/users', requireRole(['sysadmin']), importRateLimiter, upload.single('file'), async (req, res) => {
+  if (!req.file) {
+    return res.status(400).json({ error: '请上传Excel文件' });
+  }
+  if (!isUserImportExcelFile(req.file)) {
+    await insertImportJob({
+      user: req.user,
+      type: 'users',
+      filename: req.file?.originalname,
+      status: 'FAILED',
+      errorMessage: '仅支持 Excel 文件',
+    });
+    return res.status(400).json({ error: '仅支持 Excel 文件（.xlsx/.xls）' });
+  }
+
+  let records = [];
+  try {
+    records = parseImportFile(req.file);
+  } catch (err) {
+    const errorMessage = trimText(err?.message) || '文件解析失败';
+    await insertImportJob({
+      user: req.user,
+      type: 'users',
+      filename: req.file?.originalname,
+      status: 'FAILED',
+      errorMessage,
+    });
+    return res.status(400).json({ error: errorMessage });
+  }
+
+  const security = await getSecurityConfig();
+  const validateImportedUserRow = (row) => {
+    const usernameRuleError = validateUsernameFormat(row.username);
+    if (usernameRuleError) return usernameRuleError;
+
+    const nextRole = normalizeUserRole(row.role || 'user');
+    if (!nextRole) return '角色不能为空';
+    if (!ALLOWED_USER_ROLES.has(nextRole)) return '角色不合法';
+
+    const emailRuleError = validateEmailFormat(row.email);
+    if (emailRuleError) return emailRuleError;
+
+    const phoneRuleError = validatePhoneFormat(row.phone);
+    if (phoneRuleError) return phoneRuleError;
+
+    const nextAccess = normalizeAppAccess(row.app_access, nextRole);
+    if (!nextAccess.length) return '请至少选择一个可访问系统';
+
+    return '';
+  };
+
+  const result = await importUsersFromRows({
+    rows: records,
+    passwordPolicy: security.passwordPolicy,
+    validateRow: validateImportedUserRow,
+    findUserByUsername: async (username) => {
+      const value = trimText(username);
+      if (!value) return null;
+      return db.get('SELECT id FROM users WHERE username = ? LIMIT 1', [value]);
+    },
+    insertUser: async (payload) => {
+      const nextRole = normalizeUserRole(payload.role || 'user');
+      const nextAccess = normalizeAppAccess(payload.app_access, nextRole);
+      const info = await db.run(
+        'INSERT INTO users (username, password_hash, role, is_active, email, phone, wecom_id, app_access) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+        [
+          trimText(payload.username),
+          bcrypt.hashSync(String(payload.password || ''), 10),
+          nextRole,
+          Number(payload.is_active) === 1 ? 1 : 0,
+          trimText(payload.email) || null,
+          trimText(payload.phone) || null,
+          trimText(payload.wecom_id) || null,
+          JSON.stringify(nextAccess),
+        ]
+      );
+      const createdRow = formatUserRow(await db.get(
+        'SELECT id, username, role, is_active, email, phone, wecom_id, app_access, totp_enabled, created_at FROM users WHERE id = ?',
+        [info.insertId]
+      ));
+      await logOperation({
+        user: req.user,
+        action: 'CREATE',
+        entity: 'user',
+        entityId: createdRow.id,
+        afterData: createdRow,
+      });
+      return createdRow;
+    },
+    resolveInsertError: (err) => {
+      if (err?.code === 'ER_DUP_ENTRY') return '用户名已存在';
+      return trimText(err?.sqlMessage || err?.message) || '用户创建失败';
+    },
+  });
+
+  await insertImportJob({
+    user: req.user,
+    type: 'users',
+    filename: req.file?.originalname,
+    status: 'DONE',
+    created: result.created,
+    skipped: result.skipped,
+    total: result.total,
+    errors: result.errors,
+    errorMessage: result.errors.length ? '部分用户导入失败' : null,
+  });
+
+  const fileName = buildUserImportFilename(new Date());
+  const workbookBuffer = buildUserImportWorkbook(result.resultRows);
+  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
+  res.setHeader('X-Import-Total', String(result.total));
+  res.setHeader('X-Import-Created', String(result.created));
+  res.setHeader('X-Import-Skipped', String(result.skipped));
+  res.setHeader('X-Import-Error-Count', String(result.errors.length));
+  res.setHeader('X-Import-Filename', fileName);
+  res.send(workbookBuffer);
+});
+
+app.get('/api/import/users/template.xlsx', requireRole(['sysadmin']), async (_req, res) => {
+  const fileName = 'user-import-template.xlsx';
+  const workbookBuffer = buildUserImportTemplateWorkbook();
+  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
+  res.setHeader('X-Import-Filename', fileName);
+  res.send(workbookBuffer);
 });
 
 const getConfigs = async () => {
