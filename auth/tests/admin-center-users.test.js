@@ -147,6 +147,51 @@ test('updateUser can toggle active state for regular users', async () => {
   assert.equal(operations[0].action, 'DISABLE_USER');
 });
 
+test('updateUser can update profile fields and app access', async () => {
+  const runs = [];
+  const service = createAdminCenterUsersService({
+    db: {
+      async get(sql, params = []) {
+        return {
+          id: Number(params[0]),
+          username: 'editor-user',
+          role: 'editor',
+          is_active: 1,
+          email: 'old@example.com',
+          phone: '13800000000',
+          wecom_id: 'old-wecom',
+          app_access: '["faq","tender"]',
+          totp_enabled: 0,
+          created_at: '2026-03-14 16:00:00',
+        };
+      },
+      async run(sql, params = []) {
+        runs.push({ sql, params });
+        return {};
+      },
+    },
+    getSecurityConfig: async () => ({ passwordPolicy: DEFAULT_POLICY }),
+  });
+
+  await service.updateUser({
+    actor: { id: 1, username: 'sysadmin', role: 'sysadmin' },
+    targetId: 88,
+    payload: {
+      role: 'reviewer',
+      email: 'next@example.com',
+      phone: '13911112222',
+      wecom_id: 'next-wecom',
+      app_access: ['faq', 'train-exam'],
+    },
+  });
+
+  assert.ok(runs.some((item) => item.sql.includes('SET role = ?') && item.params[0] === 'reviewer'));
+  assert.ok(runs.some((item) => item.sql.includes('SET email = ?') && item.params[0] === 'next@example.com'));
+  assert.ok(runs.some((item) => item.sql.includes('SET phone = ?') && item.params[0] === '13911112222'));
+  assert.ok(runs.some((item) => item.sql.includes('SET wecom_id = ?') && item.params[0] === 'next-wecom'));
+  assert.ok(runs.some((item) => item.sql.includes('SET app_access = ?') && JSON.parse(item.params[0])[1] === 'train-exam'));
+});
+
 test('unlockUser clears login attempts for target login id', async () => {
   const runs = [];
   const service = createAdminCenterUsersService({

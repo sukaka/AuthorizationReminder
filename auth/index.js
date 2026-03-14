@@ -1295,7 +1295,35 @@ app.get('/api/auth/apps', async (req, res) => {
   });
 });
 
-const DEDICATED_CENTER_VERSION = 'v4.0.9';
+const RELEASE_VERSION = '4.1.0';
+const DEDICATED_CENTER_VERSION = `v${RELEASE_VERSION}`;
+const ADMIN_CENTER_ROLE_OPTIONS = Object.freeze([
+  { value: 'user', label: '普通用户' },
+  { value: 'editor', label: '业务管理员' },
+  { value: 'reviewer', label: '审核用户' },
+  { value: 'sysadmin', label: '系统管理员' },
+  { value: 'auditor', label: '审计管理员' },
+  { value: 'sales', label: '销售' },
+]);
+const ADMIN_CENTER_SYSTEM_OPTIONS = Object.freeze([
+  { key: 'reminder', label: '授权到期提醒系统', shortLabel: '提醒系统' },
+  { key: 'ticketing', label: '工单管理系统', shortLabel: '工单系统' },
+  { key: 'cmdb', label: 'CMDB系统', shortLabel: 'CMDB系统' },
+  { key: 'inventory', label: '库存管理系统', shortLabel: '库存管理系统' },
+  { key: 'device-flow', label: '设备流转系统', shortLabel: '设备流转系统' },
+  { key: 'sec-impl', label: '聚信实施记录系统', shortLabel: '聚信实施记录系统' },
+  { key: 'faq', label: 'FAQ系统', shortLabel: 'FAQ系统' },
+  { key: 'tender', label: '标书协同制作系统', shortLabel: '标书协同制作系统' },
+  { key: 'train-exam', label: '培训考试系统', shortLabel: '培训考试系统' },
+]);
+
+const renderSystemAccessCheckboxes = (inputName, dataKey, options = ADMIN_CENTER_SYSTEM_OPTIONS) => options
+  .map((item) => `<label class="access-pill"><input type="checkbox" name="${inputName}" data-${dataKey}="${item.key}" value="${item.key}" /><span>${item.label}</span></label>`)
+  .join('');
+
+const renderRoleOptions = (options = ADMIN_CENTER_ROLE_OPTIONS) => options
+  .map((item) => `<option value="${item.value}">${item.label}</option>`)
+  .join('');
 
 const renderAdminCenterSections = () => ({
   shellTitle: '管理中心',
@@ -1521,21 +1549,6 @@ const renderAdminCenterSections = () => ({
           <input name="username" class="form-control" placeholder="2-32 位中文/字母/数字" required />
         </label>
         <label class="form-label">
-          初始密码
-          <input name="password" type="password" class="form-control" placeholder="Strong#1234" required />
-        </label>
-        <label class="form-label">
-          角色
-          <select name="role" class="form-select">
-            <option value="user">普通用户</option>
-            <option value="editor">编辑</option>
-            <option value="reviewer">审核</option>
-            <option value="sysadmin">系统管理员</option>
-            <option value="auditor">审计管理员</option>
-            <option value="sales">销售</option>
-          </select>
-        </label>
-        <label class="form-label">
           邮箱
           <input name="email" type="email" class="form-control" placeholder="name@example.com" />
         </label>
@@ -1547,8 +1560,34 @@ const renderAdminCenterSections = () => ({
           企业微信 ID
           <input name="wecom_id" class="form-control" placeholder="wecom-id" />
         </label>
+        <label class="form-label">
+          初始密码
+          <input name="password" type="password" class="form-control" placeholder="Strong#1234" required />
+          <span class="muted">密码需至少10位，包含大小写字母、数字、特殊字符。</span>
+        </label>
+        <label class="form-label">
+          角色
+          <select name="role" class="form-select">
+            ${renderRoleOptions()}
+          </select>
+        </label>
+        <label class="form-label">
+          状态
+          <select name="is_active" class="form-select">
+            <option value="1">启用</option>
+            <option value="0">禁用</option>
+          </select>
+        </label>
+        <div class="form-label full-row">
+          可访问系统（可多选）
+          <div class="access-pill-grid">
+            ${renderSystemAccessCheckboxes('app_access', 'system-access')}
+          </div>
+          <span id="adminCreateUserAccessHint" class="muted">可按用户职责勾选业务系统权限。</span>
+        </div>
         <div class="form-actions">
           <button class="primary-btn" type="submit">新增用户</button>
+          <button id="adminCreateUserResetBtn" class="ghost-btn" type="button">清空</button>
         </div>
       </form>
       <div class="import-row user-import-row">
@@ -1569,20 +1608,81 @@ const renderAdminCenterSections = () => ({
         <table class="data-table">
           <thead>
             <tr>
-              <th>ID</th>
+              <th>序号</th>
               <th>账号</th>
               <th>角色</th>
               <th>状态</th>
               <th>锁定状态</th>
-              <th>登录标识</th>
               <th>可访问系统</th>
+              <th>二次验证</th>
+              <th>创建时间</th>
               <th>操作</th>
             </tr>
           </thead>
           <tbody id="adminUsersBody">
-            <tr><td colspan="8" class="empty">正在加载用户列表...</td></tr>
+            <tr><td colspan="9" class="empty">正在加载用户列表...</td></tr>
           </tbody>
         </table>
+      </div>
+      <div id="adminEditModal" class="modal-shell" hidden>
+        <div class="modal-backdrop" data-modal-close="adminEditModal"></div>
+        <section class="modal-panel">
+          <header class="modal-head">
+            <div>
+              <h3>编辑用户</h3>
+            </div>
+            <button type="button" class="ghost-btn" data-modal-close="adminEditModal">关闭</button>
+          </header>
+          <form id="adminEditUserForm" class="form-grid user-edit-grid">
+            <input id="adminEditUserId" type="hidden" />
+            <label class="form-label">
+              账号
+              <input id="adminEditUsername" class="form-control" readonly />
+            </label>
+            <label class="form-label">
+              邮箱（用于二次验证）
+              <input id="adminEditEmail" type="email" class="form-control" placeholder="例如：xxx@company.com" />
+            </label>
+            <label class="form-label">
+              手机号（用于二次验证）
+              <input id="adminEditPhone" class="form-control" placeholder="例如：13800000000" />
+            </label>
+            <label class="form-label">
+              企业微信UserID（用于二次验证）
+              <input id="adminEditWecomId" class="form-control" placeholder="例如：zhangsan" />
+            </label>
+            <label class="form-label">
+              密码
+              <input id="adminEditPassword" type="password" class="form-control" placeholder="留空则不修改" />
+              <span class="muted">密码需至少10位，包含大小写字母、数字、特殊字符。</span>
+            </label>
+            <label class="form-label">
+              角色
+              <select id="adminEditRole" class="form-select">
+                ${renderRoleOptions()}
+              </select>
+            </label>
+            <label class="form-label">
+              状态
+              <select id="adminEditActive" class="form-select">
+                <option value="1">启用</option>
+                <option value="0">禁用</option>
+              </select>
+            </label>
+            <div class="form-label full-row">
+              可访问系统（可多选）
+              <div class="access-pill-grid">
+                ${renderSystemAccessCheckboxes('adminEditAppAccess', 'edit-system-access')}
+              </div>
+              <span id="adminEditUserAccessHint" class="muted">可按用户职责勾选业务系统权限。</span>
+            </div>
+            <div class="form-actions">
+              <button type="button" class="ghost-btn" data-modal-close="adminEditModal">取消</button>
+              <button class="primary-btn" type="submit">更新用户</button>
+            </div>
+          </form>
+          <div id="adminEditUserNotice" class="hint-line"></div>
+        </section>
       </div>
     </section>
   `,
@@ -1801,6 +1901,11 @@ const renderDedicatedCenterPage = ({ nonce, config }) => {
     .import-btn input[type='file']{position:absolute;inset:0;opacity:0;cursor:pointer}
     .import-btn.disabled{opacity:.55;pointer-events:none}
     .import-copy{display:grid;gap:4px;min-width:0;padding-top:4px}
+    .access-pill-grid{display:flex;flex-wrap:wrap;gap:14px;margin-top:8px}
+    .access-pill{display:inline-flex;align-items:center;gap:10px;padding:12px 16px;border-radius:999px;border:1px solid rgba(96,165,250,.45);background:rgba(255,255,255,.92);box-shadow:0 8px 18px rgba(59,130,246,.08);min-height:48px}
+    .access-pill input{width:18px;height:18px;margin:0}
+    .access-pill.active{border-color:rgba(37,99,235,.65);box-shadow:0 10px 22px rgba(37,99,235,.14)}
+    .access-pill.disabled{opacity:.55}
     .form-control,.form-select,input,select,textarea{padding:10px 12px;border-radius:12px;border:1px solid rgba(148,163,184,.45);background:rgba(255,255,255,.96);outline:none;transition:border .2s ease,box-shadow .2s ease}
     input:focus,select:focus,textarea:focus,button:focus-visible{border-color:var(--accent);box-shadow:0 0 0 3px rgba(37,99,235,.12);outline:none}
     .panel-block{background:linear-gradient(140deg,rgba(248,250,252,.9),rgba(239,246,255,.9));border:1px solid rgba(226,232,240,.9);border-radius:16px;padding:16px;margin-bottom:20px;display:grid;gap:16px;position:relative;z-index:1}
@@ -1841,6 +1946,8 @@ const renderDedicatedCenterPage = ({ nonce, config }) => {
     .data-table th,.data-table td{padding:12px 14px;border-bottom:1px solid rgba(226,232,240,.8);text-align:left;font-size:14px;vertical-align:top}
     .data-table th{background:#f8fafc;color:#334155}
     .empty{text-align:center;color:#64748b}
+    .chip-list{display:flex;flex-wrap:wrap;gap:8px}
+    .chip{display:inline-flex;align-items:center;padding:6px 10px;border-radius:999px;border:1px solid rgba(148,163,184,.35);background:#f8fafc;color:#334155;font-size:12px}
     .table-actions{display:flex;flex-wrap:wrap;gap:8px}
     .tiny-btn{height:36px;padding:0 12px;border-radius:999px;border:1px solid rgba(37,99,235,.24);background:#fff;color:#1d4ed8;font-size:12px;cursor:pointer}
     .tiny-btn.danger{border-color:rgba(220,38,38,.24);color:#b91c1c}
@@ -1848,6 +1955,14 @@ const renderDedicatedCenterPage = ({ nonce, config }) => {
     .status-pill{display:inline-flex;align-items:center;padding:4px 10px;border-radius:999px;background:#eff6ff;color:#1d4ed8;font-size:12px;font-weight:600}
     .status-pill.warn{background:#fff7ed;color:#c2410c}
     .status-pill.muted{background:#f1f5f9;color:#475569}
+    .factor-text{color:#475569}
+    .modal-shell[hidden]{display:none !important}
+    .modal-shell{position:fixed;inset:0;z-index:40}
+    .modal-backdrop{position:absolute;inset:0;background:rgba(15,23,42,.26);backdrop-filter:blur(4px)}
+    .modal-panel{position:relative;z-index:1;width:min(1180px,calc(100vw - 32px));max-height:calc(100vh - 48px);overflow:auto;margin:24px auto;background:linear-gradient(135deg,rgba(255,255,255,.96),rgba(239,246,255,.96));border-radius:22px;border:1px solid rgba(148,163,184,.32);box-shadow:0 24px 60px rgba(15,23,42,.22);padding:22px}
+    .modal-head{display:flex;justify-content:space-between;align-items:center;gap:16px;margin-bottom:18px}
+    .modal-head h3{margin:0;font-size:22px}
+    .user-edit-grid{margin-bottom:0}
     .toast{padding:12px 16px;border-radius:14px;max-width:640px;box-shadow:var(--shadow)}
     .toast.info{background:#eff6ff;color:#1d4ed8}
     .toast.success{background:#e9f0ff;color:#2f6df6}
@@ -1859,6 +1974,8 @@ const renderDedicatedCenterPage = ({ nonce, config }) => {
       .hero{flex-direction:column}
       .config-card-body,.form-grid,.form-grid.compact{grid-template-columns:1fr}
       .user-import-row{grid-template-columns:1fr}
+      .access-pill-grid{gap:10px}
+      .modal-panel{width:min(100vw - 16px,1180px);margin:8px auto;max-height:calc(100vh - 16px)}
       .block-head{flex-direction:column}
     }
   </style>
@@ -1914,6 +2031,7 @@ const renderDedicatedCenterPage = ({ nonce, config }) => {
     const defaultTab = ${JSON.stringify(centerDefinition.defaultTab)};
     const centerRoleGuideText = ${JSON.stringify(centerDefinition.roleGuideText)};
     const centerApi = ${JSON.stringify(config.api || {})};
+    const releaseVersion = ${JSON.stringify(RELEASE_VERSION)};
     const defaultPasswordPolicy = Object.freeze({
       minLength: 10,
       requireUppercase: true,
@@ -1921,6 +2039,7 @@ const renderDedicatedCenterPage = ({ nonce, config }) => {
       requireNumber: true,
       requireSpecial: true,
     });
+    const systemAccessOptions = ${JSON.stringify(ADMIN_CENTER_SYSTEM_OPTIONS)};
     const defaultRoleIpAllowlist = Object.freeze({
       admin: [],
       sysadmin: [],
@@ -1930,16 +2049,17 @@ const renderDedicatedCenterPage = ({ nonce, config }) => {
       admin: '管理员',
       sysadmin: '系统管理员',
       auditor: '审计管理员',
-      editor: '编辑',
-      reviewer: '审核',
+      editor: '业务管理员',
+      reviewer: '审核用户',
       user: '普通用户',
       viewer: '普通用户',
-      sales: '销售（兼容）',
+      sales: '销售',
     };
     let csrfToken = '';
     let currentUser = null;
     let adminUsersRows = [];
     let auditLogsRows = [];
+    let currentEditUserRow = null;
     let adminUserImportUploading = false;
     let adminUserImportTemplateDownloading = false;
     let adminUserImportResult = null;
@@ -1962,6 +2082,85 @@ const renderDedicatedCenterPage = ({ nonce, config }) => {
 
     function roleLabel(value) {
       return roleLabelMap[String(value || '').trim().toLowerCase()] || value || '-';
+    }
+
+    function getSystemOption(key) {
+      return systemAccessOptions.find((item) => item.key === String(key || '').trim());
+    }
+
+    function getSystemLabel(key) {
+      const item = getSystemOption(key);
+      return item?.label || key || '-';
+    }
+
+    function getSystemShortLabel(key) {
+      const item = getSystemOption(key);
+      return item?.shortLabel || item?.label || key || '-';
+    }
+
+    function getDefaultBusinessAccessByRole(role) {
+      const normalizedRole = String(role || '').trim().toLowerCase();
+      if (normalizedRole === 'editor') return ['faq', 'tender', 'train-exam'];
+      if (normalizedRole === 'reviewer') return ['faq', 'train-exam'];
+      if (normalizedRole === 'sales') return ['reminder', 'train-exam'];
+      if (normalizedRole === 'admin') return systemAccessOptions.map((item) => item.key);
+      return ['reminder', 'train-exam'];
+    }
+
+    function setCheckedValues(selector, values) {
+      const selected = new Set(Array.isArray(values) ? values.map((item) => String(item || '').trim()) : []);
+      document.querySelectorAll(selector).forEach((input) => {
+        input.checked = selected.has(String(input.value || '').trim());
+      });
+    }
+
+    function readCheckedValues(selector) {
+      return Array.from(document.querySelectorAll(selector + ':checked'))
+        .map((input) => String(input.value || '').trim())
+        .filter(Boolean);
+    }
+
+    function syncAccessPillState(selector) {
+      document.querySelectorAll(selector).forEach((input) => {
+        const pill = input.closest('.access-pill');
+        if (!pill) return;
+        pill.classList.toggle('active', !!input.checked);
+        pill.classList.toggle('disabled', !!input.disabled);
+      });
+    }
+
+    function applyRoleAccessPreset({ role, selector, hintId, preferredValues = null }) {
+      const normalizedRole = String(role || '').trim().toLowerCase();
+      const inputs = Array.from(document.querySelectorAll(selector));
+      let hintText = '';
+      let nextValues = Array.isArray(preferredValues) ? preferredValues : getDefaultBusinessAccessByRole(normalizedRole);
+      let disabled = false;
+
+      if (normalizedRole === 'sysadmin') {
+        nextValues = [];
+        disabled = true;
+        hintText = '系统管理员固定进入管理中心，不配置业务系统权限。';
+      } else if (normalizedRole === 'auditor') {
+        nextValues = [];
+        disabled = true;
+        hintText = '审计管理员固定进入审计中心，不配置业务系统权限。';
+      } else if (normalizedRole === 'admin') {
+        nextValues = systemAccessOptions.map((item) => item.key);
+        hintText = '管理员默认可访问全部业务系统。';
+      } else if (!Array.isArray(preferredValues)) {
+        hintText = '可按用户职责勾选业务系统权限。';
+      }
+
+      const selected = new Set(nextValues);
+      inputs.forEach((input) => {
+        input.disabled = disabled;
+        input.checked = selected.has(String(input.value || '').trim());
+      });
+      syncAccessPillState(selector);
+      if (hintId) {
+        const hintNode = document.getElementById(hintId);
+        if (hintNode) hintNode.textContent = hintText;
+      }
     }
 
     function setSurfaceStatus(text, type = 'info') {
@@ -2268,14 +2467,22 @@ const renderDedicatedCenterPage = ({ nonce, config }) => {
       updateStatCard('primaryStatValue', list.length);
       updateStatCard('secondaryStatValue', list.filter((row) => row.lock_status === 'locked').length);
       if (!list.length) {
-        body.innerHTML = '<tr><td colspan="8" class="empty">当前没有用户数据</td></tr>';
+        body.innerHTML = '<tr><td colspan="9" class="empty">当前没有用户数据</td></tr>';
         return;
       }
-      body.innerHTML = list.map((row) => {
-        const access = escapeHtml(Array.isArray(row.app_access) ? row.app_access.join(', ') : '');
-        const loginId = escapeHtml(row.login_id || '-');
+      body.innerHTML = list.map((row, index) => {
+        const accessList = Array.isArray(row.app_access) ? row.app_access : [];
+        const access = accessList.length
+          ? '<div class="chip-list">' + accessList.map((key) => '<span class="chip">' + escapeHtml(getSystemShortLabel(key)) + '</span>').join('') + '</div>'
+          : '<span class="factor-text">-</span>';
+        const factorList = [];
+        if (row.email) factorList.push('邮箱');
+        if (row.phone) factorList.push('短信');
+        if (row.wecom_id) factorList.push('企业微信');
+        if (Number(row.totp_enabled) === 1) factorList.push('谷歌认证');
+        const factorText = factorList.length ? escapeHtml(Array.from(new Set(factorList)).join('、')) : '-';
         const username = escapeHtml(row.username || '-');
-        const role = escapeHtml(row.role || '-');
+        const role = escapeHtml(roleLabel(row.role || '-'));
         const status = Number(row.is_active) === 1
           ? '<span class="status-pill">启用</span>'
           : '<span class="status-pill muted">禁用</span>';
@@ -2286,14 +2493,16 @@ const renderDedicatedCenterPage = ({ nonce, config }) => {
         const toggleLabel = Number(row.is_active) === 1 ? '禁用' : '启用';
         const unlockDisabled = row.lock_status === 'locked' ? '' : ' disabled';
         return '<tr>'
-          + '<td>' + row.id + '</td>'
+          + '<td>' + (index + 1) + '</td>'
           + '<td>' + username + '</td>'
           + '<td>' + role + '</td>'
           + '<td>' + status + '</td>'
           + '<td>' + lockStatus + '</td>'
-          + '<td>' + loginId + '</td>'
           + '<td>' + access + '</td>'
+          + '<td><span class="factor-text">' + factorText + '</span></td>'
+          + '<td>' + escapeHtml(row.created_at || '-') + '</td>'
           + '<td><div class="table-actions">'
+          + '<button type="button" class="tiny-btn" data-user-action="edit" data-user-id="' + row.id + '">编辑</button>'
           + '<button type="button" class="tiny-btn" data-user-action="toggle-active" data-user-id="' + row.id + '" data-next-active="' + nextActive + '" data-username="' + username + '">' + toggleLabel + '</button>'
           + '<button type="button" class="tiny-btn" data-user-action="unlock" data-user-id="' + row.id + '" data-username="' + username + '"' + unlockDisabled + '>解锁</button>'
           + '<button type="button" class="tiny-btn" data-user-action="reset-password" data-user-id="' + row.id + '" data-username="' + username + '">重置密码</button>'
@@ -2301,6 +2510,92 @@ const renderDedicatedCenterPage = ({ nonce, config }) => {
           + '</div></td>'
           + '</tr>';
       }).join('');
+    }
+
+    function closeModal(modalId) {
+      const modal = document.getElementById(modalId);
+      if (!modal) return;
+      modal.hidden = true;
+    }
+
+    function openModal(modalId) {
+      const modal = document.getElementById(modalId);
+      if (!modal) return;
+      modal.hidden = false;
+    }
+
+    function collectCreateUserPayload(form) {
+      const formData = new FormData(form);
+      const role = String(formData.get('role') || 'user').trim();
+      let appAccess = readCheckedValues('[data-system-access]');
+      if (role === 'sysadmin') appAccess = ['admin-center'];
+      if (role === 'auditor') appAccess = ['audit-center'];
+      return {
+        username: String(formData.get('username') || '').trim(),
+        password: String(formData.get('password') || '').trim(),
+        role,
+        is_active: Number(formData.get('is_active') || 1) === 1 ? 1 : 0,
+        email: String(formData.get('email') || '').trim(),
+        phone: String(formData.get('phone') || '').trim(),
+        wecom_id: String(formData.get('wecom_id') || '').trim(),
+        app_access: appAccess,
+      };
+    }
+
+    function resetCreateUserForm() {
+      const form = document.getElementById('adminCreateUserForm');
+      if (!form) return;
+      form.reset();
+      const roleSelect = form.querySelector('select[name="role"]');
+      if (roleSelect) roleSelect.value = 'user';
+      const activeSelect = form.querySelector('select[name="is_active"]');
+      if (activeSelect) activeSelect.value = '1';
+      applyRoleAccessPreset({
+        role: 'user',
+        selector: '[data-system-access]',
+        hintId: 'adminCreateUserAccessHint',
+      });
+    }
+
+    function openEditUserModal(userId) {
+      const row = adminUsersRows.find((item) => String(item.id) === String(userId));
+      if (!row) {
+        setHint('adminUsersNotice', '未找到要编辑的用户', true);
+        return;
+      }
+      currentEditUserRow = row;
+      document.getElementById('adminEditUserId').value = String(row.id || '');
+      document.getElementById('adminEditUsername').value = String(row.username || '');
+      document.getElementById('adminEditEmail').value = String(row.email || '');
+      document.getElementById('adminEditPhone').value = String(row.phone || '');
+      document.getElementById('adminEditWecomId').value = String(row.wecom_id || '');
+      document.getElementById('adminEditPassword').value = '';
+      document.getElementById('adminEditRole').value = String(row.role || 'user');
+      document.getElementById('adminEditActive').value = Number(row.is_active) === 1 ? '1' : '0';
+      applyRoleAccessPreset({
+        role: row.role,
+        selector: '[data-edit-system-access]',
+        hintId: 'adminEditUserAccessHint',
+        preferredValues: Array.isArray(row.app_access) ? row.app_access : [],
+      });
+      setHint('adminEditUserNotice', '');
+      openModal('adminEditModal');
+    }
+
+    function collectEditUserPayload() {
+      const role = String(document.getElementById('adminEditRole')?.value || 'user').trim();
+      let appAccess = readCheckedValues('[data-edit-system-access]');
+      if (role === 'sysadmin') appAccess = ['admin-center'];
+      if (role === 'auditor') appAccess = ['audit-center'];
+      return {
+        email: String(document.getElementById('adminEditEmail')?.value || '').trim(),
+        phone: String(document.getElementById('adminEditPhone')?.value || '').trim(),
+        wecom_id: String(document.getElementById('adminEditWecomId')?.value || '').trim(),
+        password: String(document.getElementById('adminEditPassword')?.value || '').trim(),
+        role,
+        is_active: Number(document.getElementById('adminEditActive')?.value || 1) === 1 ? 1 : 0,
+        app_access: appAccess,
+      };
     }
 
     function syncAccountMfaState() {
@@ -2546,6 +2841,10 @@ const renderDedicatedCenterPage = ({ nonce, config }) => {
       let request = null;
       let successMessage = '操作成功';
 
+      if (action === 'edit') {
+        openEditUserModal(userId);
+        return;
+      }
       if (action === 'toggle-active') {
         const nextActive = Number(button.dataset.nextActive || 0) === 1 ? 1 : 0;
         const label = nextActive === 1 ? '启用' : '禁用';
@@ -2619,19 +2918,41 @@ const renderDedicatedCenterPage = ({ nonce, config }) => {
     async function onAdminCreateUser(event) {
       event.preventDefault();
       const form = event.currentTarget;
-      const formData = new FormData(form);
-      const payload = Object.fromEntries(formData.entries());
+      const payload = collectCreateUserPayload(form);
       setHint('adminCreateUserNotice', '正在创建用户...');
       try {
         const row = await requestJson(centerApi.usersCreate, {
           method: 'POST',
           body: JSON.stringify(payload),
         });
-        form.reset();
+        resetCreateUserForm();
         setHint('adminCreateUserNotice', '已创建用户：' + row.username);
         await loadAdminUsers();
       } catch (error) {
         setHint('adminCreateUserNotice', error.message || '创建用户失败', true);
+      }
+    }
+
+    async function onAdminEditUserSubmit(event) {
+      event.preventDefault();
+      const userId = String(document.getElementById('adminEditUserId')?.value || '').trim();
+      if (!userId) {
+        setHint('adminEditUserNotice', '缺少用户标识', true);
+        return;
+      }
+      const payload = collectEditUserPayload();
+      if (!payload.password) delete payload.password;
+      setHint('adminEditUserNotice', '正在更新用户...');
+      try {
+        const row = await requestJson(centerApi.usersItemBase + '/' + encodeURIComponent(userId), {
+          method: 'PUT',
+          body: JSON.stringify(payload),
+        });
+        setHint('adminEditUserNotice', '用户已更新：' + row.username);
+        closeModal('adminEditModal');
+        await loadAdminUsers();
+      } catch (error) {
+        setHint('adminEditUserNotice', error.message || '更新用户失败', true);
       }
     }
 
@@ -2706,7 +3027,7 @@ const renderDedicatedCenterPage = ({ nonce, config }) => {
       }
       body.innerHTML = list.map((row) => '<tr>'
         + '<td>' + escapeHtml(row.id) + '</td>'
-        + '<td>' + escapeHtml(row.system || '-') + '</td>'
+        + '<td>' + escapeHtml(getSystemLabel(row.system || '-')) + '</td>'
         + '<td>' + escapeHtml(row.username || '-') + '</td>'
         + '<td>' + escapeHtml(row.action || '-') + '</td>'
         + '<td>' + escapeHtml(row.entity || '-') + '</td>'
@@ -2820,6 +3141,31 @@ const renderDedicatedCenterPage = ({ nonce, config }) => {
         document.getElementById('adminUsersReloadBtn')?.addEventListener('click', loadAdminUsers);
         document.getElementById('adminUsersBody')?.addEventListener('click', onAdminUsersAction);
         document.getElementById('adminCreateUserForm')?.addEventListener('submit', onAdminCreateUser);
+        document.getElementById('adminCreateUserResetBtn')?.addEventListener('click', resetCreateUserForm);
+        document.getElementById('adminEditUserForm')?.addEventListener('submit', onAdminEditUserSubmit);
+        document.getElementById('adminEditRole')?.addEventListener('change', (event) => {
+          applyRoleAccessPreset({
+            role: event.target.value,
+            selector: '[data-edit-system-access]',
+            hintId: 'adminEditUserAccessHint',
+          });
+        });
+        document.querySelector('select[name="role"]')?.addEventListener('change', (event) => {
+          applyRoleAccessPreset({
+            role: event.target.value,
+            selector: '[data-system-access]',
+            hintId: 'adminCreateUserAccessHint',
+          });
+        });
+        document.querySelectorAll('[data-system-access]').forEach((input) => {
+          input.addEventListener('change', () => syncAccessPillState('[data-system-access]'));
+        });
+        document.querySelectorAll('[data-edit-system-access]').forEach((input) => {
+          input.addEventListener('change', () => syncAccessPillState('[data-edit-system-access]'));
+        });
+        document.querySelectorAll('[data-modal-close="adminEditModal"]').forEach((node) => {
+          node.addEventListener('click', () => closeModal('adminEditModal'));
+        });
         document.getElementById('adminUserImportInput')?.addEventListener('change', (event) => {
           const file = event.target.files && event.target.files[0];
           onAdminImportUsers(file);
@@ -2829,6 +3175,7 @@ const renderDedicatedCenterPage = ({ nonce, config }) => {
         document.getElementById('adminSecurityForm')?.addEventListener('submit', onAdminSaveSecurity);
         document.getElementById('adminSecurityReloadBtn')?.addEventListener('click', loadAdminSecurity);
         syncAdminImportState();
+        resetCreateUserForm();
         loadAccountSecurity();
         loadAdminUsers();
         loadAdminSecurity();

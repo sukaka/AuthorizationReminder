@@ -11,7 +11,7 @@ const DEFAULT_PASSWORD_POLICY = Object.freeze({
   requireSpecial: true,
 });
 
-const ALLOWED_USER_ROLES = new Set(['admin', 'editor', 'sysadmin', 'auditor', 'user', 'viewer', 'sales']);
+const ALLOWED_USER_ROLES = new Set(['admin', 'editor', 'reviewer', 'sysadmin', 'auditor', 'user', 'viewer', 'sales']);
 
 const buildInClause = (values = []) => values.map(() => '?').join(',');
 

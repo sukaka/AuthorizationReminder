@@ -168,3 +168,31 @@
 - `node --check /Users/zhanglei/Documents/codex-new/auth/portal-routing.js`
 - `docker compose build auth`
 - `curl -s http://127.0.0.1:5180/admin-center | rg -n "批量导入（Excel）|下载模板"`
+
+## 2026-03-14 Admin Center Edit Modal + Version Alignment
+
+- 用户要求继续将 `admin-center` 的用户管理区对齐到旧版管理中心体验：
+  - 恢复“编辑用户”弹层
+  - “可访问系统”统一使用中文名称展示
+  - 保留用户导入、模板下载、结果文件下载
+- 当前 `auth` 前端模板内已补齐：
+  - 新增用户表单中的“状态”“可访问系统（中文）”“清空”
+  - 用户列表中的中文系统标签、二次验证列、创建时间列
+  - “编辑用户”弹层，支持角色/状态/可访问系统更新
+- 后端同步修正：
+  - `reviewer` 已纳入 `auth/admin-center-users.js` 的可用角色集合，避免编辑用户时后端拒绝合法旧角色
+- 版本判定按统一规则执行：
+  - 从 `4.0.9` 升到 `4.1.0`
+  - 原因：本次属于独立后台能力增强与用户管理体验完善，属于“功能优化”，不是整套系统大改版，也不只是修 Bug
+- 下一步需要完成：
+  - 将 `4.1.0` 同步到页面角标、README、部署文档、bootstrap 脚本、发布说明
+  - 创建并推送 `codex/4.1.0` 分支，使 Git 与版本号一致
+
+## 2026-03-14 Release Line Promotion
+
+- 已从当前工作树切出新分支：`codex/4.1.0`
+- 当前版本对齐目标：
+  - 页面版本角标：`v4.1.0`
+  - 仓库分支：`codex/4.1.0`
+  - Git 标签：`v4.1.0`
+  - 发布说明：`/Users/zhanglei/Documents/codex-new/docs/releases/4.1.0.md`
