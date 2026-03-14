@@ -85,3 +85,20 @@
 - 然后再决定是否拆第二批：
   - 审计中心导出验签报告
   - 管理后台用户编辑表单
+
+## 2026-03-14 Additional Updates
+
+- 对独立后台做了第二轮界面 polish：
+  - `admin-center` 增加职责卡片，强化“默认入口 / 核心职责”的首页说明
+  - `audit-center` 增加职责卡片和“筛选范围”说明，页面更接近审计控制台而不是普通表单页
+  - 页面壳层改成更深、更硬朗的控制台风格，按钮、表单、焦点态、状态条和表格交互已统一
+- 新增整套系统版本规范文档：
+  - `/Users/zhanglei/Documents/codex-new/docs/versioning.md`
+  - 规则固定为：`主版本.次版本.修订号`
+  - 大改版升第一位，功能优化升第二位，Bug 修复升第三位
+- `README.md` 已增加版本规范文档入口
+
+## 2026-03-14 Additional Verification
+
+- `node --check /Users/zhanglei/Documents/codex-new/auth/index.js`
+- `docker compose build auth`

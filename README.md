@@ -320,6 +320,7 @@ npm run test:rbac
 
 ## 10. 发布与变更文档
 
+- `/Users/zhanglei/Documents/codex-new/docs/versioning.md`
 - `/Users/zhanglei/Documents/codex-new/docs/releases/2.0.1.md`
 - `/Users/zhanglei/Documents/codex-new/docs/releases/2.0.1-rc1-regression-checklist.md`
 - `/Users/zhanglei/Documents/codex-new/docs/releases/2.1.0-rc1.md`
