@@ -1,6 +1,6 @@
 {
   "name": "juxin-inventory-backend",
-  "version": "4.3.3",
+  "version": "4.4.0",
   "private": true,
   "main": "src/index.js",
   "scripts": {

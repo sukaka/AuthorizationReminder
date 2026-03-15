@@ -27,6 +27,7 @@ test('audit center renders command workbench layout', () => {
   assert.match(source, /auditPrevPageBtn/);
   assert.match(source, /auditNextPageBtn/);
   assert.match(source, /auditPaginationSummary/);
+  assert.match(source, /auditResultsWindowCount/);
   assert.match(source, /page_size/);
 });
 
@@ -58,4 +59,11 @@ test('audit log table renders localized action and entity labels', () => {
   assert.match(source, /<th>事件<\/th>/);
   assert.match(source, /<th>主体<\/th>\s*<th>IP地址<\/th>\s*<th>对象<\/th>/);
   assert.match(source, /audit-subject-cell[\s\S]*requestIpLabel[\s\S]*audit-object-chip/);
+});
+
+test('audit center summary distinguishes total matches from current window', () => {
+  assert.match(source, /matchedTotal/);
+  assert.match(source, /matchedTotalIsExact/);
+  assert.match(source, /总命中/);
+  assert.match(source, /当前窗口/);
 });

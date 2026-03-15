@@ -1,6 +1,6 @@
 {
   "name": "juxin-device-flow-web",
-  "version": "4.3.3",
+  "version": "4.4.0",
   "private": true,
   "type": "module",
   "scripts": {

@@ -67,6 +67,16 @@ const formatDateTime = (date) => {
   return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
 };
 
+const readNumericTotal = (...values) => {
+  for (const value of values) {
+    const num = Number(value);
+    if (Number.isFinite(num) && num >= 0) {
+      return Math.round(num);
+    }
+  }
+  return null;
+};
+
 const normalizeAuditTimestamp = (value) => {
   const text = normalizeText(value);
   if (!text) return '';
@@ -325,6 +335,17 @@ const buildUrl = (baseUrl, path, params) => {
   return queryString ? `${origin}${pathname}?${queryString}` : `${origin}${pathname}`;
 };
 
+const readRemotePayloadTotal = (data) => readNumericTotal(
+  data?.total,
+  data?.total_count,
+  data?.count,
+  data?.pagination?.total,
+  data?.page?.total,
+  data?.meta?.total,
+  data?.meta?.count,
+  data?.stats?.total,
+);
+
 const parseAuditPage = (value) => clampLimit(value, 1, 1, 100000);
 
 const parseAuditPageSize = (value) => clampLimit(value, DEFAULT_AUDIT_PAGE_SIZE, 1, MAX_AUDIT_PAGE_SIZE);
@@ -361,7 +382,7 @@ const sortAuditRows = (rows = []) =>
     return normalizeText(right.system).localeCompare(normalizeText(left.system), 'zh-CN');
   });
 
-const queryLocalLogs = async ({ db, query = {}, take }) => {
+const buildLocalLogsWhere = (query = {}) => {
   const { username, system, action, entity, date_from, date_to } = query || {};
   const where = [];
   const params = [];
@@ -389,18 +410,39 @@ const queryLocalLogs = async ({ db, query = {}, take }) => {
     where.push('created_at <= ?');
     params.push(normalizeText(date_to));
   }
-  const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
-  const rows = await db.query(
-    `SELECT
-       id, user_id, username, log_system AS \`system\`, action, entity, entity_id,
-       before_data, after_data, prev_hash, signature, sign_version, request_ip, created_at
-     FROM operation_logs
-     ${whereSql}
-     ORDER BY id DESC
-     LIMIT ?`,
-    [...params, take]
-  );
-  return Array.isArray(rows) ? rows.map((row) => normalizeAuditRow(row.system, row)) : [];
+  return {
+    whereSql: where.length ? `WHERE ${where.join(' AND ')}` : '',
+    params,
+  };
+};
+
+const queryLocalLogs = async ({ db, query = {}, take }) => {
+  const { whereSql, params } = buildLocalLogsWhere(query);
+  const [countRows, rows] = await Promise.all([
+    db.query(
+      `SELECT COUNT(*) AS total_count
+       FROM operation_logs
+       ${whereSql}`,
+      params
+    ),
+    db.query(
+      `SELECT
+         id, user_id, username, log_system AS \`system\`, action, entity, entity_id,
+         before_data, after_data, prev_hash, signature, sign_version, request_ip, created_at
+       FROM operation_logs
+       ${whereSql}
+       ORDER BY id DESC
+       LIMIT ?`,
+      [...params, take]
+    ),
+  ]);
+  const normalizedRows = Array.isArray(rows) ? rows.map((row) => normalizeAuditRow(row.system, row)) : [];
+  const matchedTotal = readNumericTotal(countRows?.[0]?.total_count, countRows?.[0]?.total, normalizedRows.length) ?? normalizedRows.length;
+  return {
+    rows: normalizedRows,
+    matchedTotal,
+    matchedTotalIsExact: true,
+  };
 };
 
 const resolveConfiguredRemoteSources = (remoteBaseUrls = {}, system = '') => {
@@ -432,7 +474,13 @@ const fetchRemoteLogs = async ({
     headers: buildRemoteHeaders({ authToken, cookieHeader }),
     timeoutMs: REMOTE_FETCH_TIMEOUT_MS,
   });
-  return source.extractRows(data).map((row) => source.normalizeRow(row));
+  const rows = source.extractRows(data).map((row) => source.normalizeRow(row));
+  const explicitTotal = readRemotePayloadTotal(data);
+  return {
+    rows,
+    matchedTotal: explicitTotal ?? rows.length,
+    matchedTotalIsExact: explicitTotal !== null || rows.length < take,
+  };
 };
 
 const normalizeRemoteVerifyResult = (sourceKey, data = {}) => {
@@ -519,14 +567,20 @@ const createAuditCenterLogsService = ({
             cookieHeader,
           }).catch((error) => {
             console.warn(`[audit-center] remote source ${source.key} failed: ${error?.message || error}`);
-            return [];
+            return {
+              rows: [],
+              matchedTotal: 0,
+              matchedTotalIsExact: false,
+            };
           })
         );
       });
 
       const resultGroups = await Promise.all(jobs);
-      const merged = sortAuditRows(filterAuditRows(resultGroups.flat(), query)).slice(0, take);
+      const merged = sortAuditRows(filterAuditRows(resultGroups.flatMap((group) => group.rows || []), query)).slice(0, take);
       const total = merged.length;
+      const matchedTotal = resultGroups.reduce((sum, group) => sum + readNumericTotal(group?.matchedTotal, 0), 0);
+      const matchedTotalIsExact = resultGroups.every((group) => group?.matchedTotalIsExact !== false);
       const totalPages = total ? Math.ceil(total / pageSize) : 0;
       const offset = (page - 1) * pageSize;
       const systems = new Set(merged.map((row) => normalizeText(row.system)).filter(Boolean)).size;
@@ -536,6 +590,8 @@ const createAuditCenterLogsService = ({
         page,
         pageSize,
         total,
+        matchedTotal: Math.max(total, matchedTotal),
+        matchedTotalIsExact,
         totalPages,
         hasMore: offset + pageSize < total,
         systems,

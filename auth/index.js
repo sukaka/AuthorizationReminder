@@ -1306,7 +1306,7 @@ app.get('/api/auth/apps', async (req, res) => {
   });
 });
 
-const RELEASE_VERSION = '4.3.3';
+const RELEASE_VERSION = '4.4.0';
 const DEDICATED_CENTER_VERSION = `v${RELEASE_VERSION}`;
 const ADMIN_CENTER_ROLE_OPTIONS = Object.freeze([
   { value: 'user', label: '普通用户' },
@@ -1715,7 +1715,7 @@ const renderAuditCenterSections = () => ({
     { key: 'verify', label: '校验与导出' },
   ],
   stats: [
-    { id: 'primaryStatValue', label: '日志数量', value: '0' },
+    { id: 'primaryStatValue', label: '总命中', value: '0' },
     { id: 'secondaryStatValue', label: '覆盖系统', value: '0' },
   ],
   sections: `
@@ -1847,7 +1847,8 @@ const renderAuditCenterSections = () => ({
 	            <p id="auditResultsSummary">优先查看事件、主体、对象与时间线，快速判断是否需要进入导出或验签。</p>
 	          </div>
 	          <div class="audit-results-meta">
-	            <span id="auditResultsCount">0 条记录</span>
+	            <span id="auditResultsCount">总命中 0 条</span>
+	            <span id="auditResultsWindowCount">当前窗口 0 条</span>
 	            <span id="auditResultsSystems">0 个系统</span>
 	          </div>
 	        </div>
@@ -2260,6 +2261,8 @@ const renderDedicatedCenterPage = ({ nonce, config }) => {
       page: 1,
       pageSize: DEFAULT_AUDIT_PAGE_SIZE,
       total: 0,
+      matchedTotal: 0,
+      matchedTotalIsExact: true,
       totalPages: 0,
       hasMore: false,
       systems: 0,
@@ -3296,6 +3299,9 @@ const renderDedicatedCenterPage = ({ nonce, config }) => {
 	      const total = source.total === undefined
 	        ? items.length
 	        : clampNumber(source.total, items.length, 0, 200000);
+	      const matchedTotal = source.matchedTotal === undefined
+	        ? total
+	        : Math.max(total, clampNumber(source.matchedTotal, total, 0, 200000));
 	      const totalPages = total
 	        ? clampNumber(source.totalPages, Math.ceil(total / pageSize), 1, 100000)
 	        : 0;
@@ -3304,6 +3310,8 @@ const renderDedicatedCenterPage = ({ nonce, config }) => {
 	        page: clampNumber(source.page, auditLogsMeta.page || 1, 1, 100000),
 	        pageSize,
 	        total,
+	        matchedTotal,
+	        matchedTotalIsExact: source.matchedTotalIsExact === undefined ? true : Boolean(source.matchedTotalIsExact),
 	        totalPages,
 	        hasMore: source.hasMore === undefined ? (totalPages > 0 && (Number(source.page || 1) < totalPages)) : Boolean(source.hasMore),
 	        systems: source.systems === undefined
@@ -3313,6 +3321,11 @@ const renderDedicatedCenterPage = ({ nonce, config }) => {
 	      };
 	    }
 
+	    function formatAuditMatchedTotal(meta) {
+	      const prefix = meta.matchedTotalIsExact ? '' : '至少 ';
+	      return prefix + meta.matchedTotal + ' 条';
+	    }
+
 	    function renderAuditPagination(meta) {
 	      const summaryEl = document.getElementById('auditPaginationSummary');
 	      const indicatorEl = document.getElementById('auditPageIndicator');
@@ -3320,8 +3333,8 @@ const renderDedicatedCenterPage = ({ nonce, config }) => {
 	      const nextBtn = document.getElementById('auditNextPageBtn');
 	      if (summaryEl) {
 	        if (meta.total) {
-	          const limitSuffix = meta.total >= meta.queryLimit ? ('，当前结果已达到查询上限 ' + meta.queryLimit + ' 条') : '';
-	          summaryEl.textContent = '每页 ' + meta.pageSize + ' 条，当前第 ' + meta.page + ' / ' + meta.totalPages + ' 页，共 ' + meta.total + ' 条记录' + limitSuffix;
+	          const limitSuffix = meta.total >= meta.queryLimit ? ('，当前窗口已达到查询上限 ' + meta.queryLimit + ' 条') : '';
+	          summaryEl.textContent = '每页 ' + meta.pageSize + ' 条，当前窗口第 ' + meta.page + ' / ' + meta.totalPages + ' 页，共 ' + meta.total + ' 条；总命中 ' + formatAuditMatchedTotal(meta) + limitSuffix;
 	        } else {
 	          summaryEl.textContent = '每页 ' + meta.pageSize + ' 条，当前没有命中记录';
 	        }
@@ -3338,18 +3351,20 @@ const renderDedicatedCenterPage = ({ nonce, config }) => {
 	      const list = meta.items;
 	      auditLogsRows = list;
 	      auditLogsMeta = meta;
-	      updateStatCard('primaryStatValue', meta.total);
+	      updateStatCard('primaryStatValue', meta.matchedTotalIsExact ? meta.matchedTotal : ('至少 ' + meta.matchedTotal));
 	      updateStatCard('secondaryStatValue', meta.systems);
 	      const countEl = document.getElementById('auditResultsCount');
+	      const windowCountEl = document.getElementById('auditResultsWindowCount');
 	      const systemsEl = document.getElementById('auditResultsSystems');
 	      const summaryEl = document.getElementById('auditResultsSummary');
 	      const updatedEl = document.getElementById('auditOverviewUpdated');
-	      if (countEl) countEl.textContent = meta.total + ' 条记录';
+	      if (countEl) countEl.textContent = '总命中 ' + formatAuditMatchedTotal(meta);
+	      if (windowCountEl) windowCountEl.textContent = '当前窗口 ' + meta.total + ' 条';
 	      if (systemsEl) systemsEl.textContent = meta.systems + ' 个系统';
 	      if (summaryEl) {
-	        const limitSuffix = meta.total >= meta.queryLimit && meta.total > 0 ? (' 已达到查询上限 ' + meta.queryLimit + ' 条。') : '';
+	        const limitSuffix = meta.total >= meta.queryLimit && meta.total > 0 ? (' 当前窗口已达到查询上限 ' + meta.queryLimit + ' 条。') : '';
 	        summaryEl.textContent = meta.total
-	          ? ('当前范围命中 ' + meta.total + ' 条记录，覆盖 ' + meta.systems + ' 个系统，当前第 ' + meta.page + ' / ' + meta.totalPages + ' 页。' + limitSuffix)
+	          ? ('总命中 ' + formatAuditMatchedTotal(meta) + '，当前窗口 ' + meta.total + ' 条，覆盖 ' + meta.systems + ' 个系统，当前第 ' + meta.page + ' / ' + meta.totalPages + ' 页。' + limitSuffix)
 	          : '当前筛选范围没有命中记录，可以切换预设或放宽条件后重新检索。';
 	      }
 	      if (updatedEl) updatedEl.textContent = new Date().toLocaleString('zh-CN', { hour12: false });
@@ -3460,7 +3475,7 @@ const renderDedicatedCenterPage = ({ nonce, config }) => {
         const payload = await requestJson(centerApi.logsList + '?' + params.toString());
         const meta = renderAuditLogs(payload);
         if (meta?.total) {
-          setHint('auditLogsNotice', '审计日志已更新，当前第 ' + meta.page + ' / ' + meta.totalPages + ' 页，共 ' + meta.total + ' 条记录');
+          setHint('auditLogsNotice', '审计日志已更新，总命中 ' + formatAuditMatchedTotal(meta) + '，当前窗口 ' + meta.total + ' 条，当前第 ' + meta.page + ' / ' + meta.totalPages + ' 页');
         } else {
           setHint('auditLogsNotice', '当前筛选范围没有命中记录');
         }
@@ -3470,6 +3485,8 @@ const renderDedicatedCenterPage = ({ nonce, config }) => {
           page,
           pageSize,
           total: 0,
+          matchedTotal: 0,
+          matchedTotalIsExact: true,
           totalPages: 0,
           hasMore: false,
           systems: 0,

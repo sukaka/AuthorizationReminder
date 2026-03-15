@@ -120,3 +120,21 @@
 - 这次修复只补了审计中心前端脚本缺失的 `clampNumber`，没有改动接口协议
 - 新增 UI 测试约束：
   - 审计中心客户端脚本必须在分页逻辑前定义 `clampNumber`
+
+## 2026-03-15 Audit Total Count Clarification
+
+- 用户确认需要在审计中心直接看到“总条数”
+- 当前实现里的 `total` 实际是“条数上限截断后的当前窗口总数”，不是全量命中数
+- 这次统一约定：
+  - `total` 继续表示当前窗口总数，用于分页
+  - `matchedTotal` 表示总命中数
+  - `matchedTotalIsExact` 表示总命中数是否精确
+- 本地日志通过 `COUNT(*)` 提供精确总数
+- 远端日志优先读取 `total / total_count / meta.total / pagination.total`
+- 对未返回总数的远端源：
+  - 返回条数小于 limit 时，视为精确
+  - 返回条数等于 limit 时，只展示“至少 X 条”
+- 前端文案已统一成：
+  - `总命中 ...`
+  - `当前窗口 ...`
+  - 分页摘要明确标注“当前窗口第 X / Y 页”

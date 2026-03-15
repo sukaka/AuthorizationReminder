@@ -25,14 +25,18 @@ test('listLogs queries across systems by default', async () => {
     },
   });
 
-  assert.equal(calls.length, 1);
+  assert.equal(calls.length, 2);
   assert.doesNotMatch(calls[0].sql, /log_system = \?/);
-  assert.deepEqual(calls[0].params, ['%alice%', 50]);
+  assert.match(calls[0].sql, /SELECT COUNT\(\*\) AS total_count/);
+  assert.deepEqual(calls[0].params, ['%alice%']);
+  assert.deepEqual(calls[1].params, ['%alice%', 50]);
   assert.deepEqual(result, {
     items: [],
     page: 1,
     pageSize: 10,
     total: 0,
+    matchedTotal: 0,
+    matchedTotalIsExact: true,
     totalPages: 0,
     hasMore: false,
     systems: 0,
@@ -94,6 +98,8 @@ test('listLogs merges local and remote audit sources and sorts by time desc', as
     ]
   );
   assert.equal(result.total, 2);
+  assert.equal(result.matchedTotal, 2);
+  assert.equal(result.matchedTotalIsExact, true);
   assert.equal(result.page, 1);
   assert.equal(result.pageSize, 10);
   assert.equal(result.totalPages, 1);
@@ -168,6 +174,8 @@ test('listLogs paginates merged rows with 10 items per page by default', async (
   assert.equal(result.page, 2);
   assert.equal(result.pageSize, 10);
   assert.equal(result.total, 25);
+  assert.equal(result.matchedTotal, 25);
+  assert.equal(result.matchedTotalIsExact, true);
   assert.equal(result.totalPages, 3);
   assert.equal(result.hasMore, true);
   assert.equal(result.systems, 1);
@@ -176,6 +184,37 @@ test('listLogs paginates merged rows with 10 items per page by default', async (
     result.items.map((row) => row.id),
     [15, 14, 13, 12, 11, 10, 9, 8, 7, 6]
   );
+});
+
+test('listLogs reports lower-bound total when remote source does not expose exact count beyond query limit', async () => {
+  const service = createAuditCenterLogsService({
+    db: {
+      async query() {
+        return [];
+      },
+    },
+    computeAuditSignature: () => '',
+    fetchJson: async () => Array.from({ length: 5 }, (_item, index) => ({
+      id: index + 1,
+      username: `remote-${index + 1}`,
+      action: 'LOGIN_SUCCESS',
+      entity: 'auth',
+      request_ip: '10.0.0.1',
+      created_at: `2026-03-15 10:00:0${index + 1}`,
+    })),
+    remoteBaseUrls: {
+      inventory: 'http://inventory-api:5183',
+    },
+  });
+
+  const result = await service.listLogs({
+    query: { system: 'inventory', limit: 5 },
+    authToken: 'token-123',
+  });
+
+  assert.equal(result.total, 5);
+  assert.equal(result.matchedTotal, 5);
+  assert.equal(result.matchedTotalIsExact, false);
 });
 
 test('verifyLogChain validates signature chain', async () => {
