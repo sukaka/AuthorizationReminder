@@ -9,18 +9,19 @@ const {
 test('getSystemDisplayLabel returns Chinese labels for dedicated centers', () => {
   assert.equal(getSystemDisplayLabel('admin-center'), '管理中心');
   assert.equal(getSystemDisplayLabel('audit-center'), '审计中心');
+  assert.equal(getSystemDisplayLabel('delivery'), '交付系统');
 });
 
 test('summarizeSystemAccess keeps first two labels and collapses overflow count', () => {
   assert.deepEqual(
     summarizeSystemAccess([
       'reminder',
-      'ticketing',
+      'delivery',
       'cmdb',
       'inventory',
     ]),
     {
-      labels: ['提醒系统', '工单系统'],
+      labels: ['提醒系统', '交付系统'],
       overflowCount: 2,
     }
   );

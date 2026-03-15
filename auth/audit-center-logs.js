@@ -179,10 +179,10 @@ const REMOTE_SOURCE_DEFINITIONS = Object.freeze({
       return normalizeAuditRow('device-flow', row);
     },
   }),
-  'sec-impl': Object.freeze({
-    key: 'sec-impl',
-    listPath: '/api/sec-impl/logs',
-    verifyPath: '/api/sec-impl/audit/verify',
+  delivery: Object.freeze({
+    key: 'delivery',
+    listPath: '/api/delivery/audit/logs',
+    verifyPath: '/api/delivery/audit/verify',
     buildListQuery(query, take) {
       const params = new URLSearchParams();
       params.set('page', '1');
@@ -197,7 +197,7 @@ const REMOTE_SOURCE_DEFINITIONS = Object.freeze({
       return Array.isArray(data) ? data : [];
     },
     normalizeRow(row) {
-      return normalizeAuditRow('sec-impl', row);
+      return normalizeAuditRow('delivery', row);
     },
   }),
   faq: Object.freeze({
@@ -484,7 +484,7 @@ const fetchRemoteLogs = async ({
 };
 
 const normalizeRemoteVerifyResult = (sourceKey, data = {}) => {
-  if (sourceKey === 'device-flow' || sourceKey === 'sec-impl') {
+  if (sourceKey === 'device-flow' || sourceKey === 'delivery') {
     const issueCount = Number(data.issue_count || 0);
     const firstIssueId = Number(Array.isArray(data.issues) ? data.issues[0]?.id || 0 : 0);
     const result = {

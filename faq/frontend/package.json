@@ -1,6 +1,6 @@
 {
   "name": "juxin-faq-web",
-  "version": "4.4.2",
+  "version": "5.0.0",
   "private": true,
   "type": "module",
   "scripts": {

@@ -92,10 +92,11 @@ services:
       APP_CMDB_URL: "http://localhost:8090"
       APP_INVENTORY_URL: "http://localhost:8082"
       APP_DEVICE_FLOW_URL: "http://localhost:8083"
-      APP_SEC_IMPL_URL: "http://localhost:8084"
+      APP_DELIVERY_URL: "http://localhost:8084"
       APP_FAQ_URL: "http://localhost:8085"
       APP_TENDER_URL: "http://localhost:8086"
       APP_TRAIN_EXAM_URL: "http://localhost:8087"
+      AUDIT_SOURCE_DELIVERY_URL: "http://delivery-api:5185"
       AUTH_COOKIE_NAME: "juxin_auth_token"
       AUTH_COOKIE_SECURE: "${AUTH_COOKIE_SECURE:-false}"
       AUTH_COOKIE_SAMESITE: "lax"
@@ -291,22 +292,22 @@ services:
     ports:
       - "8083:80"
 
-  sec-impl-api:
+  delivery-api:
     build:
       context: .
-      dockerfile: sec-impl/backend/Dockerfile
+      dockerfile: delivery/backend/Dockerfile
       args: *build_args_node_alpine
     environment:
       PORT: 5185
       AUTH_SERVICE_URL: "http://auth:5180"
-      AUTH_SYSTEM_KEY: "sec-impl"
+      AUTH_SYSTEM_KEY: "delivery"
       AUTH_FETCH_TIMEOUT_MS: 5000
       AUTH_COOKIE_NAME: "juxin_auth_token"
       MYSQL_HOST: mysql
       MYSQL_PORT: 3306
-      MYSQL_USER: sec_impl_user
-      MYSQL_PASSWORD: ${SEC_IMPL_MYSQL_PASSWORD}
-      MYSQL_DATABASE: juxin_sec_impl
+      MYSQL_USER: delivery_user
+      MYSQL_PASSWORD: ${DELIVERY_MYSQL_PASSWORD:-delivery_dev_password_change_me}
+      MYSQL_DATABASE: juxin_delivery
       MYSQL_ADMIN_USER: root
       MYSQL_ADMIN_PASSWORD: ${MYSQL_ROOT_PASSWORD}
       CORS_ORIGINS: "http://localhost:8084,http://127.0.0.1:8084,http://${PUBLIC_HOST:-localhost}:8084"
@@ -314,8 +315,8 @@ services:
       SLA_AUTO_RUN_INTERVAL_MS: 300000
       MAX_BATCH_STAGE_JOB_IDS: 200
       MAX_IMPORT_ROWS: 500
-      AUDIT_SIGNING_KEY: "sec-impl-audit-signing-key-change-me"
-      UPLOAD_ROOT: "/tmp/sec-impl/uploads"
+      AUDIT_SIGNING_KEY: "delivery-audit-signing-key-change-me"
+      UPLOAD_ROOT: "/tmp/delivery/uploads"
       UPLOAD_MAX_FILE_SIZE_MB: 10
     depends_on:
       - mysql
@@ -323,12 +324,12 @@ services:
     ports:
       - "5185:5185"
 
-  web-sec-impl:
+  web-delivery:
     build:
-      context: ./sec-impl/frontend
+      context: ./delivery/frontend
       args: *build_args_node_alpine_nginx
     depends_on:
-      - sec-impl-api
+      - delivery-api
       - auth
     ports:
       - "8084:80"

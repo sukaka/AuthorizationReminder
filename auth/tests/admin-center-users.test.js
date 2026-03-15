@@ -15,15 +15,18 @@ const DEFAULT_POLICY = {
 };
 
 test('normalizeAppAccess strips dedicated centers for admin and locks sysadmin/auditor to their own center', () => {
-  const adminAccess = normalizeAppAccess(['reminder', 'admin-center', 'audit-center'], 'admin');
+  const adminAccess = normalizeAppAccess(['reminder', 'ticketing', 'sec-impl', 'admin-center', 'audit-center'], 'admin');
   const sysadminAccess = normalizeAppAccess(['reminder', 'admin-center'], 'sysadmin');
   const auditorAccess = normalizeAppAccess(['faq', 'audit-center'], 'auditor');
 
   assert.ok(adminAccess.includes('reminder'));
+  assert.ok(adminAccess.includes('delivery'));
+  assert.equal(adminAccess.includes('ticketing'), false);
+  assert.equal(adminAccess.includes('sec-impl'), false);
   assert.equal(adminAccess.includes('admin-center'), false);
   assert.equal(adminAccess.includes('audit-center'), false);
   assert.deepEqual(sysadminAccess, ['admin-center']);
-  assert.deepEqual(auditorAccess, ['audit-center']);
+  assert.deepEqual(auditorAccess, ['audit-center', 'delivery']);
 });
 
 test('listUsers merges lock state into formatted payload', async () => {

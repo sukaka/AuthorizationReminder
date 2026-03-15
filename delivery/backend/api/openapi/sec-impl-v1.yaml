@@ -1,0 +1,647 @@
+openapi: 3.0.3
+info:
+  title: 交付系统 API
+  version: 1.0.0
+servers:
+  - url: http://localhost:5185
+
+tags:
+  - name: Project
+  - name: Attachment
+  - name: Dashboard
+  - name: SLA
+  - name: Audit
+  - name: Batch
+
+paths:
+  /api/delivery/dashboard/summary:
+    get:
+      tags: [Dashboard]
+      summary: 看板汇总
+      parameters:
+        - $ref: '#/components/parameters/OverdueDays'
+        - $ref: '#/components/parameters/StageFilter'
+        - name: customer
+          in: query
+          schema:
+            type: string
+            maxLength: 255
+      responses:
+        '200':
+          description: OK
+
+  /api/delivery/sla/summary:
+    get:
+      tags: [SLA]
+      summary: SLA 汇总
+      parameters:
+        - name: min_overdue_hours
+          in: query
+          schema:
+            type: integer
+            minimum: 0
+            maximum: 720
+      responses:
+        '200':
+          description: OK
+
+  /api/delivery/sla/rules:
+    put:
+      tags: [SLA]
+      summary: 更新 SLA 规则（admin/sysadmin）
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [rules]
+              properties:
+                rules:
+                  type: array
+                  minItems: 1
+                  maxItems: 7
+                  items:
+                    $ref: '#/components/schemas/SlaRuleInput'
+      responses:
+        '200':
+          description: OK
+
+  /api/delivery/sla/run:
+    post:
+      tags: [SLA]
+      summary: 手动执行 SLA 扫描（admin/sysadmin）
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                max_scan:
+                  type: integer
+                  minimum: 1
+                  maximum: 1000
+      responses:
+        '200':
+          description: OK
+
+  /api/delivery/orders:
+    get:
+      tags: [Project]
+      summary: 交付单分页列表
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Limit'
+        - name: keyword
+          in: query
+          schema:
+            type: string
+            maxLength: 128
+        - $ref: '#/components/parameters/StageFilter'
+      responses:
+        '200':
+          description: OK
+          headers:
+            X-Total-Count:
+              $ref: '#/components/headers/TotalCount'
+            X-Page:
+              $ref: '#/components/headers/Page'
+            X-Limit:
+              $ref: '#/components/headers/Limit'
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Project'
+    post:
+      tags: [Project]
+      summary: 新建交付单（admin/sysadmin）
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProjectCreateRequest'
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Project'
+
+  /api/delivery/orders/{id}:
+    get:
+      tags: [Project]
+      summary: 交付单详情
+      parameters:
+        - $ref: '#/components/parameters/ProjectId'
+      responses:
+        '200':
+          description: OK
+
+  /api/delivery/orders/{id}/phases/{action}:
+    post:
+      tags: [Project]
+      summary: 单条阶段推进（不可跳步）
+      parameters:
+        - $ref: '#/components/parameters/ProjectId'
+        - name: action
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/StageAction'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                remark:
+                  type: string
+                  maxLength: 2000
+                inbound_tracking_no:
+                  type: string
+                  maxLength: 128
+                outbound_tracking_no:
+                  type: string
+                  maxLength: 128
+                stage_payload:
+                  type: object
+                  additionalProperties: true
+      responses:
+        '200':
+          description: OK
+
+  /api/delivery/orders/{id}/rework:
+    post:
+      tags: [Project]
+      summary: 退回到前序阶段（admin/sysadmin）
+      parameters:
+        - $ref: '#/components/parameters/ProjectId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [target_stage, reason]
+              properties:
+                target_stage:
+                  $ref: '#/components/schemas/StageCode'
+                reason:
+                  type: string
+                  minLength: 1
+                  maxLength: 2000
+                remark:
+                  type: string
+                  maxLength: 2000
+      responses:
+        '200':
+          description: OK
+
+  /api/delivery/orders/batch/phase:
+    post:
+      tags: [Batch]
+      summary: 批量阶段推进（admin/sysadmin）
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [action, job_ids]
+              properties:
+                action:
+                  $ref: '#/components/schemas/StageAction'
+                job_ids:
+                  type: array
+                  minItems: 1
+                  maxItems: 200
+                  items:
+                    type: integer
+                    minimum: 1
+                remark:
+                  type: string
+                  maxLength: 2000
+                inbound_tracking_no:
+                  type: string
+                  maxLength: 128
+                outbound_tracking_no:
+                  type: string
+                  maxLength: 128
+                stage_payload:
+                  type: object
+                  additionalProperties: true
+      responses:
+        '200':
+          description: OK
+
+  /api/delivery/import/orders.xlsx:
+    post:
+      tags: [Batch]
+      summary: Excel/CSV 批量导入交付单（admin/sysadmin）
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file:
+                  type: string
+                  format: binary
+      responses:
+        '200':
+          description: OK
+
+  /api/delivery/templates/orders-import.xlsx:
+    get:
+      tags: [Batch]
+      summary: 下载导入模板
+      responses:
+        '200':
+          description: XLSX
+
+  /api/delivery/orders/{id}/attachments:
+    get:
+      tags: [Attachment]
+      summary: 交付单附件列表
+      parameters:
+        - $ref: '#/components/parameters/ProjectId'
+      responses:
+        '200':
+          description: OK
+    post:
+      tags: [Attachment]
+      summary: 上传附件（admin/sysadmin）
+      parameters:
+        - $ref: '#/components/parameters/ProjectId'
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file:
+                  type: string
+                  format: binary
+                stage_code:
+                  $ref: '#/components/schemas/StageCode'
+                stage_record_id:
+                  type: integer
+                  minimum: 1
+                remark:
+                  type: string
+                  maxLength: 255
+      responses:
+        '201':
+          description: Created
+
+  /api/delivery/attachments/{id}/download:
+    get:
+      tags: [Attachment]
+      summary: 下载附件
+      parameters:
+        - $ref: '#/components/parameters/AttachmentId'
+      responses:
+        '200':
+          description: Binary file
+
+  /api/delivery/attachments/{id}:
+    delete:
+      tags: [Attachment]
+      summary: 删除附件（admin/sysadmin）
+      parameters:
+        - $ref: '#/components/parameters/AttachmentId'
+      responses:
+        '200':
+          description: OK
+
+  /api/delivery/audit/logs:
+    get:
+      tags: [Audit]
+      summary: 操作日志分页查询
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Limit'
+        - name: from
+          in: query
+          schema:
+            type: string
+            format: date
+        - name: to
+          in: query
+          schema:
+            type: string
+            format: date
+        - name: action
+          in: query
+          schema:
+            type: string
+            enum:
+              - PROJECT_CREATE
+              - STAGE_ADVANCE
+              - STAGE_REWORK
+              - ATTACHMENT_UPLOAD
+              - ATTACHMENT_DELETE
+              - SLA_RULE_UPDATE
+              - BATCH_IMPORT
+              - BATCH_STAGE
+              - AUDIT_VERIFY
+        - name: username
+          in: query
+          schema:
+            type: string
+            maxLength: 128
+        - name: keyword
+          in: query
+          schema:
+            type: string
+            maxLength: 128
+        - name: job_id
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+      responses:
+        '200':
+          description: OK
+          headers:
+            X-Total-Count:
+              $ref: '#/components/headers/TotalCount'
+            X-Page:
+              $ref: '#/components/headers/Page'
+            X-Limit:
+              $ref: '#/components/headers/Limit'
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/OperationLog'
+
+  /api/delivery/audit/verify:
+    get:
+      tags: [Audit]
+      summary: 审计链验签（auditor）
+      parameters:
+        - name: from_id
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+        - name: to_id
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 20000
+      responses:
+        '200':
+          description: OK
+
+  /api/delivery/reports/orders.xlsx:
+    get:
+      tags: [Batch]
+      summary: 导出交付单 Excel
+      parameters:
+        - name: keyword
+          in: query
+          schema:
+            type: string
+            maxLength: 128
+        - name: customer
+          in: query
+          schema:
+            type: string
+            maxLength: 255
+        - $ref: '#/components/parameters/StageFilter'
+      responses:
+        '200':
+          description: XLSX
+
+  /api/delivery/reports/dashboard.csv:
+    get:
+      tags: [Dashboard]
+      summary: 导出看板明细 CSV
+      parameters:
+        - $ref: '#/components/parameters/OverdueDays'
+        - $ref: '#/components/parameters/StageFilter'
+        - name: customer
+          in: query
+          schema:
+            type: string
+            maxLength: 255
+      responses:
+        '200':
+          description: CSV
+
+  /api/delivery/reports/audit.csv:
+    get:
+      tags: [Audit]
+      summary: 导出审计 CSV
+      parameters:
+        - name: from
+          in: query
+          schema:
+            type: string
+            format: date
+        - name: to
+          in: query
+          schema:
+            type: string
+            format: date
+        - name: action
+          in: query
+          schema:
+            type: string
+        - name: username
+          in: query
+          schema:
+            type: string
+            maxLength: 128
+        - name: keyword
+          in: query
+          schema:
+            type: string
+            maxLength: 128
+      responses:
+        '200':
+          description: CSV
+
+components:
+  headers:
+    TotalCount:
+      description: 总记录数
+      schema:
+        type: integer
+        minimum: 0
+    Page:
+      description: 当前页码
+      schema:
+        type: integer
+        minimum: 1
+    Limit:
+      description: 每页大小
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 200
+
+  parameters:
+    Page:
+      name: page
+      in: query
+      schema:
+        type: integer
+        minimum: 1
+        default: 1
+    Limit:
+      name: limit
+      in: query
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 200
+        default: 20
+    OverdueDays:
+      name: overdue_days
+      in: query
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 30
+        default: 3
+    StageFilter:
+      name: stage
+      in: query
+      schema:
+        $ref: '#/components/schemas/StageCode'
+    ProjectId:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: integer
+        minimum: 1
+    AttachmentId:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: integer
+        minimum: 1
+
+  schemas:
+    StageCode:
+      type: string
+      enum: [INIT, ASSESS, IMPLEMENT, TUNE, TRIAL, ACCEPT, HANDOVER, CLOSED]
+
+    StageAction:
+      type: string
+      enum: [assess, implement, tune, trial, accept, handover, close]
+
+    ProjectCreateRequest:
+      type: object
+      required: [project_code, customer_name]
+      properties:
+        project_code:
+          type: string
+          minLength: 1
+          maxLength: 128
+        product_type:
+          type: string
+          maxLength: 64
+        customer_name:
+          type: string
+          minLength: 1
+          maxLength: 255
+        sales_order_no:
+          type: string
+          maxLength: 128
+        inbound_tracking_no:
+          type: string
+          maxLength: 128
+        remark:
+          type: string
+          maxLength: 2000
+
+    Project:
+      type: object
+      properties:
+        id:
+          type: integer
+        job_no:
+          type: string
+        project_code:
+          type: string
+        product_type:
+          type: string
+        customer_name:
+          type: string
+        current_stage:
+          $ref: '#/components/schemas/StageCode'
+        status:
+          type: string
+          enum: [OPEN, COMPLETED]
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    SlaRuleInput:
+      type: object
+      required: [stage_code, threshold_hours, remind_interval_minutes, enabled]
+      properties:
+        stage_code:
+          $ref: '#/components/schemas/StageCode'
+        threshold_hours:
+          type: integer
+          minimum: 1
+          maximum: 720
+        remind_interval_minutes:
+          type: integer
+          minimum: 10
+          maximum: 1440
+        enabled:
+          type: boolean
+
+    OperationLog:
+      type: object
+      properties:
+        id:
+          type: integer
+        action:
+          type: string
+          enum:
+            - PROJECT_CREATE
+            - STAGE_ADVANCE
+            - STAGE_REWORK
+            - ATTACHMENT_UPLOAD
+            - ATTACHMENT_DELETE
+            - SLA_RULE_UPDATE
+            - BATCH_IMPORT
+            - BATCH_STAGE
+            - AUDIT_VERIFY
+        entity:
+          type: string
+          enum: [project, stage_record, deliverable, attachment, sla_rule, operation_log]
+        message:
+          type: string
+        created_at:
+          type: string
+          format: date-time

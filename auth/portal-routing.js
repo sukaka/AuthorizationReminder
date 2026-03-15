@@ -1,13 +1,17 @@
 const ADMIN_CENTER_KEY = 'admin-center';
 const AUDIT_CENTER_KEY = 'audit-center';
+const DELIVERY_KEY = 'delivery';
+const LEGACY_SYSTEM_ACCESS_ALIASES = Object.freeze({
+  ticketing: DELIVERY_KEY,
+  'sec-impl': DELIVERY_KEY,
+});
 
 const SYSTEM_ACCESS_KEYS = Object.freeze([
   'reminder',
-  'ticketing',
+  DELIVERY_KEY,
   'cmdb',
   'inventory',
   'device-flow',
-  'sec-impl',
   'faq',
   'tender',
   'train-exam',
@@ -19,6 +23,11 @@ const BUSINESS_SYSTEM_ACCESS_KEYS = Object.freeze(
 );
 
 const normalizePortalRole = (role) => String(role || '').trim().toLowerCase();
+const normalizeSystemAccessKey = (key) => {
+  const normalized = String(key || '').trim().toLowerCase();
+  if (!normalized) return '';
+  return LEGACY_SYSTEM_ACCESS_ALIASES[normalized] || normalized;
+};
 
 const parseAppAccessRaw = (value) => {
   if (Array.isArray(value)) return value;
@@ -38,7 +47,7 @@ const defaultAppAccessByRole = (role) => {
   const normalizedRole = normalizePortalRole(role);
   if (normalizedRole === 'admin') return [...BUSINESS_SYSTEM_ACCESS_KEYS];
   if (normalizedRole === 'sysadmin') return [ADMIN_CENTER_KEY];
-  if (normalizedRole === 'auditor') return [AUDIT_CENTER_KEY];
+  if (normalizedRole === 'auditor') return [AUDIT_CENTER_KEY, DELIVERY_KEY];
   if (normalizedRole === 'editor') return ['faq', 'tender', 'train-exam'];
   if (normalizedRole === 'reviewer') return ['faq', 'train-exam'];
   return ['reminder', 'train-exam'];
@@ -53,7 +62,11 @@ const resolveUserAppAccess = (user) => {
   const parsed = parseAppAccessRaw(user.app_access);
   const source = parsed === null ? defaultAppAccessByRole(normalizedRole) : parsed;
   const normalized = Array.from(
-    new Set(source.map((item) => String(item || '').trim()).filter((item) => BUSINESS_SYSTEM_ACCESS_KEYS.includes(item)))
+    new Set(
+      source
+        .map((item) => normalizeSystemAccessKey(item))
+        .filter((item) => BUSINESS_SYSTEM_ACCESS_KEYS.includes(item))
+    )
   );
   if (!normalized.includes('train-exam') && !['sysadmin', 'auditor'].includes(normalizedRole)) {
     normalized.push('train-exam');
@@ -124,12 +137,14 @@ const resolvePortalRedirectTarget = ({ apps, userRole, requestedSystem, portalMo
 module.exports = {
   ADMIN_CENTER_KEY,
   AUDIT_CENTER_KEY,
+  DELIVERY_KEY,
   BUSINESS_SYSTEM_ACCESS_KEYS,
   canAccessDedicatedCenter,
   SYSTEM_ACCESS_KEYS,
   defaultAppAccessByRole,
   getDedicatedCenterConfig,
   getDefaultPortalSystemKey,
+  normalizeSystemAccessKey,
   normalizePortalRole,
   parseAppAccessRaw,
   resolveUserAppAccess,

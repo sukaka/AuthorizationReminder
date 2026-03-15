@@ -16,7 +16,14 @@ test('sysadmin defaults to admin-center access', () => {
 });
 
 test('auditor defaults to audit-center access', () => {
-  assert.deepEqual(defaultAppAccessByRole('auditor'), ['audit-center']);
+  assert.deepEqual(defaultAppAccessByRole('auditor'), ['audit-center', 'delivery']);
+});
+
+test('admin defaults to delivery instead of ticketing and sec-impl', () => {
+  const access = defaultAppAccessByRole('admin');
+  assert.ok(access.includes('delivery'));
+  assert.equal(access.includes('ticketing'), false);
+  assert.equal(access.includes('sec-impl'), false);
 });
 
 test('sysadmin without requested system redirects to admin-center', () => {
@@ -72,16 +79,26 @@ test('auditor can access audit-center only', () => {
 });
 
 test('admin never receives dedicated centers even when legacy app_access contains them', () => {
-  const apps = resolveUserAppAccess({ role: ' admin ', app_access: '["reminder","admin-center","audit-center"]' });
+  const apps = resolveUserAppAccess({ role: ' admin ', app_access: '["reminder","ticketing","sec-impl","admin-center","audit-center"]' });
 
   assert.ok(apps.includes('reminder'));
+  assert.ok(apps.includes('delivery'));
+  assert.equal(apps.includes('ticketing'), false);
+  assert.equal(apps.includes('sec-impl'), false);
   assert.equal(apps.includes(ADMIN_CENTER_KEY), false);
   assert.equal(apps.includes(AUDIT_CENTER_KEY), false);
 });
 
 test('sysadmin and auditor ignore legacy non-dedicated app_access', () => {
   assert.deepEqual(resolveUserAppAccess({ role: 'sysadmin', app_access: '["reminder","admin-center"]' }), [ADMIN_CENTER_KEY]);
-  assert.deepEqual(resolveUserAppAccess({ role: 'auditor', app_access: '["faq","audit-center"]' }), [AUDIT_CENTER_KEY]);
+  assert.deepEqual(resolveUserAppAccess({ role: 'auditor', app_access: '["faq","audit-center"]' }), [AUDIT_CENTER_KEY, 'delivery']);
+});
+
+test('legacy ticketing and sec-impl access folds into delivery once', () => {
+  assert.deepEqual(
+    resolveUserAppAccess({ role: 'editor', app_access: '["ticketing","sec-impl","faq"]' }),
+    ['delivery', 'faq', 'train-exam']
+  );
 });
 
 test('dedicated center config exposes admin and audit metadata', () => {

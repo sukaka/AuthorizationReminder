@@ -76,6 +76,7 @@ const {
 const {
   ADMIN_CENTER_KEY,
   AUDIT_CENTER_KEY,
+  DELIVERY_KEY,
   canAccessDedicatedCenter,
   parseAppAccessRaw,
   resolveUserAppAccess,
@@ -1087,6 +1088,33 @@ const authorizeSecImpl = (user, action) => {
   return deny('不支持的授权动作');
 };
 
+const authorizeDelivery = (user, action) => {
+  if (!user) return deny('未登录');
+  if (!canAccessSystem(user, DELIVERY_KEY)) return deny('无权限访问交付系统');
+  const role = String(user.role || '').toLowerCase();
+  if (action === 'app:enter' || action === 'delivery:read') {
+    if (role === 'sysadmin') return deny('系统管理员不参与交付业务');
+    return allow();
+  }
+  if (action === 'delivery:audit' || action === 'delivery:verify' || action === 'delivery:export') {
+    if (role === 'admin' || role === 'auditor') return allow();
+    return deny('仅管理员或审计员可访问交付审计能力');
+  }
+  if (
+    action === 'delivery:write' ||
+    action === 'delivery:workflow' ||
+    action === 'delivery:phase' ||
+    action === 'delivery:comment' ||
+    action === 'delivery:schedule'
+  ) {
+    if (role === 'admin' || role === 'editor' || role === 'reviewer' || role === 'user' || role === 'sales') {
+      return allow();
+    }
+    return deny('当前角色不可执行交付写操作');
+  }
+  return deny('不支持的授权动作');
+};
+
 const authorizeFaq = (user, action) => {
   if (!user) return deny('未登录');
   if (!canAccessSystem(user, 'faq')) return deny('无权限访问FAQ系统');
@@ -1199,6 +1227,8 @@ app.post('/api/auth/authorize', async (req, res) => {
     result = authorizeInventory(user, action);
   } else if (system === 'device-flow') {
     result = authorizeDeviceFlow(user, action);
+  } else if (system === 'delivery') {
+    result = authorizeDelivery(user, action, resource);
   } else if (system === 'sec-impl') {
     result = authorizeSecImpl(user, action);
   } else if (system === 'faq') {
@@ -1228,11 +1258,10 @@ app.get('/api/auth/apps', async (req, res) => {
     });
   }
   const reminderUrl = process.env.APP_REMINDER_URL || 'http://localhost:8080';
-  const ticketingUrl = process.env.APP_TICKETING_URL || 'http://localhost:8081';
+  const deliveryURL = process.env.APP_DELIVERY_URL || 'http://localhost:8084';
   const cmdbURL = process.env.APP_CMDB_URL || 'http://localhost:8090';
   const inventoryURL = process.env.APP_INVENTORY_URL || 'http://localhost:8082';
   const deviceFlowURL = process.env.APP_DEVICE_FLOW_URL || 'http://localhost:8083';
-  const secImplURL = process.env.APP_SEC_IMPL_URL || 'http://localhost:8084';
   const faqURL = process.env.APP_FAQ_URL || 'http://localhost:8085';
   const tenderURL = process.env.APP_TENDER_URL || 'http://localhost:8086';
   const trainExamURL = process.env.APP_TRAIN_EXAM_URL || 'http://localhost:8087';
@@ -1259,9 +1288,9 @@ app.get('/api/auth/apps', async (req, res) => {
   if (appAccess.includes('reminder')) {
     apps.push({ key: 'reminder', name: '授权到期提醒系统', url: reminderUrl, allow: true });
   }
-  if (appAccess.includes('ticketing')) {
-    const ticketAuth = await authorizeTicketing(user, 'app:enter', {});
-    apps.push({ key: 'ticketing', name: '工单管理系统', url: ticketingUrl, allow: !!ticketAuth.allow });
+  if (appAccess.includes(DELIVERY_KEY)) {
+    const deliveryAuth = await authorizeDelivery(user, 'app:enter', {});
+    apps.push({ key: 'delivery', name: '交付系统', url: deliveryURL, allow: !!deliveryAuth.allow });
   }
   if (appAccess.includes('cmdb')) {
     apps.push({ key: 'cmdb', name: 'CMDB系统', url: cmdbURL, allow: true });
@@ -1273,10 +1302,6 @@ app.get('/api/auth/apps', async (req, res) => {
   if (appAccess.includes('device-flow')) {
     const deviceFlowAuth = await authorizeDeviceFlow(user, 'app:enter');
     apps.push({ key: 'device-flow', name: '设备流转系统', url: deviceFlowURL, allow: !!deviceFlowAuth.allow });
-  }
-  if (appAccess.includes('sec-impl')) {
-    const secImplAuth = await authorizeSecImpl(user, 'app:enter');
-    apps.push({ key: 'sec-impl', name: '实施记录系统', url: secImplURL, allow: !!secImplAuth.allow });
   }
   if (appAccess.includes('faq')) {
     const faqAuth = await authorizeFaq(user, 'app:enter');
@@ -1296,7 +1321,7 @@ app.get('/api/auth/apps', async (req, res) => {
   });
 });
 
-const RELEASE_VERSION = '4.4.2';
+const RELEASE_VERSION = '5.0.0';
 const DEDICATED_CENTER_VERSION = `v${RELEASE_VERSION}`;
 const ADMIN_CENTER_ROLE_OPTIONS = Object.freeze([
   { value: 'user', label: '普通用户' },
@@ -1776,11 +1801,10 @@ const renderAuditCenterSections = () => ({
 	                <option value="">全部系统</option>
 	                <option value="sso">统一登录</option>
 	                <option value="reminder">提醒系统</option>
-	                <option value="ticketing">工单系统</option>
+	                <option value="delivery">交付系统</option>
 	                <option value="cmdb">CMDB系统</option>
 	                <option value="inventory">库存管理系统</option>
 	                <option value="device-flow">设备流转系统</option>
-	                <option value="sec-impl">聚信实施记录系统</option>
 	                <option value="faq">FAQ系统</option>
 	                <option value="tender">标书协同制作系统</option>
 	                <option value="train-exam">培训考试系统</option>
@@ -4526,7 +4550,7 @@ const backfillOperationLogSystems = async () => {
      SET log_system = CASE
        WHEN entity IN ('工单', '项目', '项目权限', '工单模板', '排期')
        OR action IN ('创建项目', '更新项目', '删除项目', '更新项目权限', '导入模板', '创建排期')
-         THEN 'ticketing'
+         THEN 'delivery'
        WHEN action IN (
          'LOGIN', 'LOGIN_SUCCESS', 'LOGOUT', 'LOGIN_FAILED', 'LOGIN_LOCKED', 'LOGIN_BLOCKED',
          'LOGIN_IP_RESTRICTED',
@@ -4627,7 +4651,7 @@ const adminCenterSecurityService = createAdminCenterSecurityService({
 const auditCenterRemoteBaseUrls = Object.freeze({
   inventory: process.env.AUDIT_SOURCE_INVENTORY_URL || 'http://localhost:5183',
   'device-flow': process.env.AUDIT_SOURCE_DEVICE_FLOW_URL || 'http://localhost:5184',
-  'sec-impl': process.env.AUDIT_SOURCE_SEC_IMPL_URL || 'http://localhost:5185',
+  delivery: process.env.AUDIT_SOURCE_DELIVERY_URL || 'http://localhost:5185',
   faq: process.env.AUDIT_SOURCE_FAQ_URL || 'http://localhost:5186',
   tender: process.env.AUDIT_SOURCE_TENDER_URL || 'http://localhost:5187',
   'train-exam': process.env.AUDIT_SOURCE_TRAIN_EXAM_URL || 'http://localhost:5188',
