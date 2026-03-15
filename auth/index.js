@@ -1306,7 +1306,7 @@ app.get('/api/auth/apps', async (req, res) => {
   });
 });
 
-const RELEASE_VERSION = '4.3.2';
+const RELEASE_VERSION = '4.3.3';
 const DEDICATED_CENTER_VERSION = `v${RELEASE_VERSION}`;
 const ADMIN_CENTER_ROLE_OPTIONS = Object.freeze([
   { value: 'user', label: '普通用户' },
@@ -2245,6 +2245,13 @@ const renderDedicatedCenterPage = ({ nonce, config }) => {
       sales: '销售',
     };
     const DEFAULT_AUDIT_PAGE_SIZE = 10;
+
+    function clampNumber(value, fallback, min, max) {
+      const num = Number(value);
+      if (!Number.isFinite(num)) return fallback;
+      return Math.min(max, Math.max(min, Math.round(num)));
+    }
+
     let csrfToken = '';
     let currentUser = null;
     let adminUsersRows = [];

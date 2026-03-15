@@ -39,6 +39,18 @@ test('audit center places pagination controls before the audit table for visibil
   assert.ok(paginationIndex < tableIndex, 'expected pagination controls to render before the audit table');
 });
 
+test('audit center client script defines clampNumber before audit log pagination logic', () => {
+  const clientScriptStart = source.indexOf('const DEFAULT_AUDIT_PAGE_SIZE = 10;');
+  const paginationLogicStart = source.indexOf('function normalizeAuditLogsPayload(payload)');
+
+  assert.notEqual(clientScriptStart, -1);
+  assert.notEqual(paginationLogicStart, -1);
+  assert.match(
+    source.slice(clientScriptStart, paginationLogicStart),
+    /function clampNumber\(value, fallback, min, max\)|const clampNumber = \(value, fallback, min, max\) =>/,
+  );
+});
+
 test('audit log table renders localized action and entity labels', () => {
   assert.match(source, /getAuditActionLabel\(row\.action \|\| '-'\)/);
   assert.match(source, /getAuditEntityLabel\(row\.entity \|\| '-'\)/);

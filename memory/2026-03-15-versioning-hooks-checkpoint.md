@@ -109,3 +109,14 @@
 - 这次修复将分页控件从表格下方移动到结果区顶部，确保打开日志列表时就能看到
 - 新增 UI 测试约束：
   - `auditPaginationSummary` 必须出现在审计表格标记之前
+
+## 2026-03-15 Audit Logs Loading Fix
+
+- 用户反馈分页出现后，日志列表一直停留在“正在加载审计日志...”
+- 运行态根因已确认：
+  - 后端 `/api/audit-center/logs` 接口本身可正常返回分页数据
+  - 浏览器页面脚本在 `loadAuditLogs()` 入口同步抛出 `ReferenceError: clampNumber is not defined`
+  - 由于异常发生在真正发起日志查询前，列表行保持初始“正在加载”占位态
+- 这次修复只补了审计中心前端脚本缺失的 `clampNumber`，没有改动接口协议
+- 新增 UI 测试约束：
+  - 审计中心客户端脚本必须在分页逻辑前定义 `clampNumber`
