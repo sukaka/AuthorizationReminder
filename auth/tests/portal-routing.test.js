@@ -71,11 +71,17 @@ test('auditor can access audit-center only', () => {
   assert.equal(canAccessDedicatedCenter({ role: 'auditor', systemKey: ADMIN_CENTER_KEY }), false);
 });
 
-test('admin keeps dedicated centers even when legacy app_access omits them', () => {
-  const apps = resolveUserAppAccess({ role: ' admin ', app_access: '["reminder","ticketing"]' });
+test('admin never receives dedicated centers even when legacy app_access contains them', () => {
+  const apps = resolveUserAppAccess({ role: ' admin ', app_access: '["reminder","admin-center","audit-center"]' });
 
-  assert.ok(apps.includes(ADMIN_CENTER_KEY));
-  assert.ok(apps.includes(AUDIT_CENTER_KEY));
+  assert.ok(apps.includes('reminder'));
+  assert.equal(apps.includes(ADMIN_CENTER_KEY), false);
+  assert.equal(apps.includes(AUDIT_CENTER_KEY), false);
+});
+
+test('sysadmin and auditor ignore legacy non-dedicated app_access', () => {
+  assert.deepEqual(resolveUserAppAccess({ role: 'sysadmin', app_access: '["reminder","admin-center"]' }), [ADMIN_CENTER_KEY]);
+  assert.deepEqual(resolveUserAppAccess({ role: 'auditor', app_access: '["faq","audit-center"]' }), [AUDIT_CENTER_KEY]);
 });
 
 test('dedicated center config exposes admin and audit metadata', () => {

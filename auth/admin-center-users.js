@@ -1,5 +1,5 @@
 const {
-  SYSTEM_ACCESS_KEYS,
+  BUSINESS_SYSTEM_ACCESS_KEYS,
   defaultAppAccessByRole,
 } = require('./portal-routing');
 
@@ -37,11 +37,13 @@ const parseAppAccessRaw = (value) => {
 
 const normalizeAppAccess = (value, role = 'user') => {
   const normalizedRole = normalizeUserRole(role);
-  if (normalizedRole === 'admin') return [...SYSTEM_ACCESS_KEYS];
+  if (normalizedRole === 'admin' || normalizedRole === 'sysadmin' || normalizedRole === 'auditor') {
+    return defaultAppAccessByRole(normalizedRole);
+  }
   const parsed = parseAppAccessRaw(value);
   const source = parsed === null ? defaultAppAccessByRole(normalizedRole) : parsed;
   return Array.from(
-    new Set(source.map((item) => String(item || '').trim()).filter((item) => SYSTEM_ACCESS_KEYS.includes(item)))
+    new Set(source.map((item) => String(item || '').trim()).filter((item) => BUSINESS_SYSTEM_ACCESS_KEYS.includes(item)))
   );
 };
 

@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 
 const {
   createAdminCenterUsersService,
+  normalizeAppAccess,
 } = require('../admin-center-users');
 
 const DEFAULT_POLICY = {
@@ -12,6 +13,18 @@ const DEFAULT_POLICY = {
   requireNumber: true,
   requireSpecial: true,
 };
+
+test('normalizeAppAccess strips dedicated centers for admin and locks sysadmin/auditor to their own center', () => {
+  const adminAccess = normalizeAppAccess(['reminder', 'admin-center', 'audit-center'], 'admin');
+  const sysadminAccess = normalizeAppAccess(['reminder', 'admin-center'], 'sysadmin');
+  const auditorAccess = normalizeAppAccess(['faq', 'audit-center'], 'auditor');
+
+  assert.ok(adminAccess.includes('reminder'));
+  assert.equal(adminAccess.includes('admin-center'), false);
+  assert.equal(adminAccess.includes('audit-center'), false);
+  assert.deepEqual(sysadminAccess, ['admin-center']);
+  assert.deepEqual(auditorAccess, ['audit-center']);
+});
 
 test('listUsers merges lock state into formatted payload', async () => {
   const queries = [];

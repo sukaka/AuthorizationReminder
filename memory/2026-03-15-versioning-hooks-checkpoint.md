@@ -154,3 +154,19 @@
   - 以前比较的是“解析后的管理员兜底权限”，会误以为数据库里的 `app_access` 已正确
   - 现在改为比较数据库里存储的原始 `app_access`，可自动把内置 `admin/sysadmin/auditor` 修回预期权限集合
 - 回归测试已加到 `auth/tests/portal-routing.test.js`
+
+## 2026-03-15 Dedicated Center Rule Correction
+
+- 用户补充了真实需求：
+  - `admin` 不应看到管理后台和审计中心
+  - `sysadmin` 登录后应直接进入管理后台
+  - `auditor` 登录后应直接进入审计中心
+- 因此上一版 `4.4.1` 对 `admin` 开放专属中心是错误需求实现，已纠正回角色专属访问模型。
+- 修正点：
+  - `defaultAppAccessByRole('admin')` 改为仅业务系统，不再包含 `admin-center`/`audit-center`
+  - `resolveUserAppAccess()` 对 `admin/sysadmin/auditor` 改为固定权限集合，不再信任历史脏 `app_access`
+  - `canAccessDedicatedCenter()` 恢复为仅 `sysadmin` 访问管理后台、仅 `auditor` 访问审计中心
+  - `admin-center-users.normalizeAppAccess()` 同步收紧，避免用户管理接口继续把专属中心分配给 `admin`
+- 本地运行态验证：
+  - `/portal` 仍返回 `200`
+  - 需要重建 `auth` 容器并检查数据库中的 `admin/sysadmin/auditor app_access` 是否按新规则自愈
