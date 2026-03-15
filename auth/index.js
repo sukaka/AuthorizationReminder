@@ -77,6 +77,8 @@ const {
   ADMIN_CENTER_KEY,
   AUDIT_CENTER_KEY,
   canAccessDedicatedCenter,
+  parseAppAccessRaw,
+  resolveUserAppAccess,
   SYSTEM_ACCESS_KEYS,
   defaultAppAccessByRole,
   getDedicatedCenterConfig,
@@ -353,32 +355,7 @@ const computeAuditSignature = ({ id, prevHash, userId, username, action, entity,
   return crypto.createHmac('sha256', AUDIT_SIGNING_KEY).update(payload).digest('hex');
 };
 
-const parseAppAccessRaw = (value) => {
-  if (Array.isArray(value)) return value;
-  if (value === undefined || value === null) return null;
-  const text = String(value).trim();
-  if (!text) return null;
-  try {
-    const parsed = JSON.parse(text);
-    if (Array.isArray(parsed)) return parsed;
-  } catch (err) {
-    // fallback to comma-separated parsing
-  }
-  return text.split(',').map((item) => item.trim());
-};
-
-const getUserAppAccess = (user) => {
-  if (!user) return [];
-  if (user.role === 'admin') return [...SYSTEM_ACCESS_KEYS];
-  const role = String(user.role || '').trim().toLowerCase();
-  const parsed = parseAppAccessRaw(user.app_access);
-  const source = parsed === null ? defaultAppAccessByRole(role) : parsed;
-  const normalized = Array.from(
-    new Set(source.map((item) => String(item || '').trim()).filter((item) => SYSTEM_ACCESS_KEYS.includes(item)))
-  );
-  if (!normalized.includes('train-exam') && !['sysadmin', 'auditor'].includes(role)) normalized.push('train-exam');
-  return normalized;
-};
+const getUserAppAccess = (user) => resolveUserAppAccess(user);
 
 const canAccessSystem = (user, systemKey) => getUserAppAccess(user).includes(systemKey);
 
@@ -629,7 +606,10 @@ const ensureBuiltinUsers = async () => {
     if (row.role !== account.role) {
       await db.run('UPDATE users SET role = ? WHERE id = ?', [account.role, row.id]);
     }
-    const currentAccess = getUserAppAccess({ role: account.role, app_access: row.app_access });
+    const parsedAccess = parseAppAccessRaw(row.app_access);
+    const currentAccess = Array.isArray(parsedAccess)
+      ? Array.from(new Set(parsedAccess.map((item) => String(item || '').trim()).filter((item) => SYSTEM_ACCESS_KEYS.includes(item))))
+      : [];
     const expectedSorted = [...expectedAccess].sort().join(',');
     const currentSorted = [...currentAccess].sort().join(',');
     if (!row.app_access || currentSorted !== expectedSorted) {
@@ -1261,10 +1241,20 @@ app.get('/api/auth/apps', async (req, res) => {
   const appAccess = getUserAppAccess(user);
   const apps = [];
   if (appAccess.includes(ADMIN_CENTER_KEY)) {
-    apps.push({ key: ADMIN_CENTER_KEY, name: '管理后台', url: adminCenterURL, allow: user.role === 'sysadmin' || user.role === 'admin' });
+    apps.push({
+      key: ADMIN_CENTER_KEY,
+      name: '管理后台',
+      url: adminCenterURL,
+      allow: canAccessDedicatedCenter({ role: user.role, systemKey: ADMIN_CENTER_KEY }),
+    });
   }
   if (appAccess.includes(AUDIT_CENTER_KEY)) {
-    apps.push({ key: AUDIT_CENTER_KEY, name: '审计中心', url: auditCenterURL, allow: user.role === 'auditor' || user.role === 'admin' });
+    apps.push({
+      key: AUDIT_CENTER_KEY,
+      name: '审计中心',
+      url: auditCenterURL,
+      allow: canAccessDedicatedCenter({ role: user.role, systemKey: AUDIT_CENTER_KEY }),
+    });
   }
   if (appAccess.includes('reminder')) {
     apps.push({ key: 'reminder', name: '授权到期提醒系统', url: reminderUrl, allow: true });
@@ -1306,7 +1296,7 @@ app.get('/api/auth/apps', async (req, res) => {
   });
 });
 
-const RELEASE_VERSION = '4.4.0';
+const RELEASE_VERSION = '4.4.1';
 const DEDICATED_CENTER_VERSION = `v${RELEASE_VERSION}`;
 const ADMIN_CENTER_ROLE_OPTIONS = Object.freeze([
   { value: 'user', label: '普通用户' },

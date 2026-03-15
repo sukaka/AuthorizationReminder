@@ -7,6 +7,7 @@ const {
   canAccessDedicatedCenter,
   defaultAppAccessByRole,
   getDedicatedCenterConfig,
+  resolveUserAppAccess,
   resolvePortalRedirectTarget,
 } = require('../portal-routing');
 
@@ -68,6 +69,13 @@ test('sysadmin can access admin-center only', () => {
 test('auditor can access audit-center only', () => {
   assert.equal(canAccessDedicatedCenter({ role: 'auditor', systemKey: AUDIT_CENTER_KEY }), true);
   assert.equal(canAccessDedicatedCenter({ role: 'auditor', systemKey: ADMIN_CENTER_KEY }), false);
+});
+
+test('admin keeps dedicated centers even when legacy app_access omits them', () => {
+  const apps = resolveUserAppAccess({ role: ' admin ', app_access: '["reminder","ticketing"]' });
+
+  assert.ok(apps.includes(ADMIN_CENTER_KEY));
+  assert.ok(apps.includes(AUDIT_CENTER_KEY));
 });
 
 test('dedicated center config exposes admin and audit metadata', () => {

@@ -138,3 +138,19 @@
   - `总命中 ...`
   - `当前窗口 ...`
   - 分页摘要明确标注“当前窗口第 X / Y 页”
+
+## 2026-03-15 Admin Dedicated Centers Access Fix
+
+- 用户反馈 `admin` 账号看不到管理后台和审计中心。
+- 代码排查发现专属中心权限链路不够统一：
+  - `canAccessDedicatedCenter()` 已做角色归一化
+  - 但 `/api/auth/apps` 里对管理后台/审计中心的 `allow` 仍有精确字符串比较
+  - 本地用户系统访问解析也存在对 `admin` 的精确字符串判断
+- 这次修复统一为共享 portal 访问解析：
+  - 新增 `resolveUserAppAccess()` 与 `normalizePortalRole()`
+  - `admin` 即使遇到历史遗留 `app_access` 数据缺少 `admin-center`/`audit-center`，也会拿到两个专属中心
+  - `/api/auth/apps` 对两个专属中心的放行判断改为复用 `canAccessDedicatedCenter()`
+- 同时修正内置账号启动自愈逻辑：
+  - 以前比较的是“解析后的管理员兜底权限”，会误以为数据库里的 `app_access` 已正确
+  - 现在改为比较数据库里存储的原始 `app_access`，可自动把内置 `admin/sysadmin/auditor` 修回预期权限集合
+- 回归测试已加到 `auth/tests/portal-routing.test.js`

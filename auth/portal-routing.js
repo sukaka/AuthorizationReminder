@@ -15,8 +15,24 @@ const SYSTEM_ACCESS_KEYS = Object.freeze([
   AUDIT_CENTER_KEY,
 ]);
 
+const normalizePortalRole = (role) => String(role || '').trim().toLowerCase();
+
+const parseAppAccessRaw = (value) => {
+  if (Array.isArray(value)) return value;
+  if (value === undefined || value === null) return null;
+  const text = String(value).trim();
+  if (!text) return null;
+  try {
+    const parsed = JSON.parse(text);
+    if (Array.isArray(parsed)) return parsed;
+  } catch (_err) {
+    // fall back to comma-separated values
+  }
+  return text.split(',').map((item) => item.trim());
+};
+
 const defaultAppAccessByRole = (role) => {
-  const normalizedRole = String(role || '').trim().toLowerCase();
+  const normalizedRole = normalizePortalRole(role);
   if (normalizedRole === 'admin') return [...SYSTEM_ACCESS_KEYS];
   if (normalizedRole === 'sysadmin') return [ADMIN_CENTER_KEY];
   if (normalizedRole === 'auditor') return [AUDIT_CENTER_KEY];
@@ -25,15 +41,30 @@ const defaultAppAccessByRole = (role) => {
   return ['reminder', 'train-exam'];
 };
 
+const resolveUserAppAccess = (user) => {
+  if (!user) return [];
+  const normalizedRole = normalizePortalRole(user.role);
+  if (normalizedRole === 'admin') return [...SYSTEM_ACCESS_KEYS];
+  const parsed = parseAppAccessRaw(user.app_access);
+  const source = parsed === null ? defaultAppAccessByRole(normalizedRole) : parsed;
+  const normalized = Array.from(
+    new Set(source.map((item) => String(item || '').trim()).filter((item) => SYSTEM_ACCESS_KEYS.includes(item)))
+  );
+  if (!normalized.includes('train-exam') && !['sysadmin', 'auditor'].includes(normalizedRole)) {
+    normalized.push('train-exam');
+  }
+  return normalized;
+};
+
 const getDefaultPortalSystemKey = (role) => {
-  const normalizedRole = String(role || '').trim().toLowerCase();
+  const normalizedRole = normalizePortalRole(role);
   if (normalizedRole === 'sysadmin') return ADMIN_CENTER_KEY;
   if (normalizedRole === 'auditor') return AUDIT_CENTER_KEY;
   return '';
 };
 
 const canAccessDedicatedCenter = ({ role, systemKey }) => {
-  const normalizedRole = String(role || '').trim().toLowerCase();
+  const normalizedRole = normalizePortalRole(role);
   const normalizedSystemKey = String(systemKey || '').trim().toLowerCase();
   if (normalizedRole === 'admin') return normalizedSystemKey === ADMIN_CENTER_KEY || normalizedSystemKey === AUDIT_CENTER_KEY;
   if (normalizedRole === 'sysadmin') return normalizedSystemKey === ADMIN_CENTER_KEY;
@@ -94,5 +125,8 @@ module.exports = {
   defaultAppAccessByRole,
   getDedicatedCenterConfig,
   getDefaultPortalSystemKey,
+  normalizePortalRole,
+  parseAppAccessRaw,
+  resolveUserAppAccess,
   resolvePortalRedirectTarget,
 };
