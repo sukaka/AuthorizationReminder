@@ -1306,7 +1306,7 @@ app.get('/api/auth/apps', async (req, res) => {
   });
 });
 
-const RELEASE_VERSION = '4.2.0';
+const RELEASE_VERSION = '4.3.0';
 const DEDICATED_CENTER_VERSION = `v${RELEASE_VERSION}`;
 const ADMIN_CENTER_ROLE_OPTIONS = Object.freeze([
   { value: 'user', label: '普通用户' },
@@ -1859,14 +1859,23 @@ const renderAuditCenterSections = () => ({
 	                <th>编号</th>
 	                <th>事件</th>
 	                <th>主体</th>
+	                <th>IP地址</th>
 	                <th>对象</th>
 	                <th>时间</th>
 	              </tr>
 	            </thead>
 	            <tbody id="auditLogsBody">
-	              <tr><td colspan="5" class="empty">正在加载审计日志...</td></tr>
+	              <tr><td colspan="6" class="empty">正在加载审计日志...</td></tr>
 	            </tbody>
 	          </table>
+	        </div>
+	        <div class="audit-pagination">
+	          <div id="auditPaginationSummary" class="audit-pagination-summary">每页 10 条，当前第 1 页</div>
+	          <div class="audit-pagination-actions">
+	            <button id="auditPrevPageBtn" type="button" class="ghost-btn">上一页</button>
+	            <span id="auditPageIndicator" class="audit-page-indicator">第 0 / 0 页</span>
+	            <button id="auditNextPageBtn" type="button" class="ghost-btn">下一页</button>
+	          </div>
 	        </div>
 	      </section>
 	    </section>
@@ -2107,6 +2116,11 @@ const renderDedicatedCenterPage = ({ nonce, config }) => {
 	    .audit-data-table{min-width:860px}
 	    .audit-stream-table th{font-size:12px;letter-spacing:.08em;text-transform:uppercase;background:rgba(226,232,240,.44);color:#475569}
 	    .audit-stream-table tbody tr:hover{background:rgba(226,232,240,.28)}
+	    .audit-pagination{margin-top:14px;display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}
+	    .audit-pagination-summary{font-size:13px;color:#475569;line-height:1.6}
+	    .audit-pagination-actions{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+	    .audit-page-indicator{display:inline-flex;align-items:center;justify-content:center;min-height:36px;padding:0 14px;border-radius:999px;background:#f8fafc;border:1px solid rgba(148,163,184,.2);color:#334155;font-size:12px;font-weight:700}
+	    .audit-pagination .ghost-btn:disabled{opacity:.45;cursor:not-allowed;box-shadow:none;transform:none}
 	    .audit-id-badge{display:inline-flex;align-items:center;justify-content:center;min-width:54px;min-height:30px;padding:0 10px;border-radius:999px;background:#f1f5f9;color:#0f172a;font-size:12px;font-weight:700;border:1px solid rgba(148,163,184,.24)}
 	    .audit-event-cell,.audit-subject-cell,.audit-object-cell{display:grid;gap:8px}
 	    .audit-subject-head,.audit-object-head{display:flex;flex-wrap:wrap;align-items:center;gap:8px}
@@ -2147,6 +2161,7 @@ const renderDedicatedCenterPage = ({ nonce, config }) => {
 	      .audit-limit-field{max-width:none}
 	      .audit-results-bar{flex-direction:column;align-items:flex-start}
 	      .audit-preset-row{align-items:flex-start}
+	      .audit-pagination{align-items:flex-start}
 	    }
   </style>
 </head>
@@ -2229,10 +2244,20 @@ const renderDedicatedCenterPage = ({ nonce, config }) => {
       viewer: '普通用户',
       sales: '销售',
     };
+    const DEFAULT_AUDIT_PAGE_SIZE = 10;
     let csrfToken = '';
     let currentUser = null;
     let adminUsersRows = [];
     let auditLogsRows = [];
+    let auditLogsMeta = {
+      page: 1,
+      pageSize: DEFAULT_AUDIT_PAGE_SIZE,
+      total: 0,
+      totalPages: 0,
+      hasMore: false,
+      systems: 0,
+      queryLimit: 100,
+    };
     let currentEditUserRow = null;
     let adminUserImportUploading = false;
     let adminUserImportTemplateDownloading = false;
@@ -2312,6 +2337,22 @@ const renderDedicatedCenterPage = ({ nonce, config }) => {
     function getAuditEntityLabel(key) {
       const item = getAuditEntityOption(key);
       return item?.label || key || '-';
+    }
+
+    function getAuditRequestIpLabel(row) {
+      const action = String(row?.action || '').trim().toUpperCase();
+      const entity = String(row?.entity || '').trim().toLowerCase();
+      if (
+        action === 'LOGOUT'
+        || action.startsWith('LOGIN')
+        || action.startsWith('MFA_')
+        || action.startsWith('TOTP_')
+        || entity === 'auth'
+        || entity === 'user_mfa'
+      ) {
+        return '登录IP';
+      }
+      return '来源IP';
     }
 
     function getDefaultBusinessAccessByRole(role) {
@@ -3235,45 +3276,100 @@ const renderDedicatedCenterPage = ({ nonce, config }) => {
       }
     }
 
-	    function renderAuditLogs(rows) {
+	    function getAuditQueryLimit() {
+	      return String(document.getElementById('auditFilterLimit')?.value || '100').trim() || '100';
+	    }
+
+	    function normalizeAuditLogsPayload(payload) {
+	      const source = payload && typeof payload === 'object' && !Array.isArray(payload)
+	        ? payload
+	        : { items: Array.isArray(payload) ? payload : [] };
+	      const items = Array.isArray(source.items) ? source.items : [];
+	      const pageSize = clampNumber(source.pageSize ?? source.page_size, auditLogsMeta.pageSize || DEFAULT_AUDIT_PAGE_SIZE, 1, 2000);
+	      const total = source.total === undefined
+	        ? items.length
+	        : clampNumber(source.total, items.length, 0, 200000);
+	      const totalPages = total
+	        ? clampNumber(source.totalPages, Math.ceil(total / pageSize), 1, 100000)
+	        : 0;
+	      return {
+	        items,
+	        page: clampNumber(source.page, auditLogsMeta.page || 1, 1, 100000),
+	        pageSize,
+	        total,
+	        totalPages,
+	        hasMore: source.hasMore === undefined ? (totalPages > 0 && (Number(source.page || 1) < totalPages)) : Boolean(source.hasMore),
+	        systems: source.systems === undefined
+	          ? new Set(items.map((row) => String(row.system || '').trim()).filter(Boolean)).size
+	          : clampNumber(source.systems, 0, 0, 1000),
+	        queryLimit: clampNumber(source.queryLimit, Number(getAuditQueryLimit()) || 100, 1, 2000),
+	      };
+	    }
+
+	    function renderAuditPagination(meta) {
+	      const summaryEl = document.getElementById('auditPaginationSummary');
+	      const indicatorEl = document.getElementById('auditPageIndicator');
+	      const prevBtn = document.getElementById('auditPrevPageBtn');
+	      const nextBtn = document.getElementById('auditNextPageBtn');
+	      if (summaryEl) {
+	        if (meta.total) {
+	          const limitSuffix = meta.total >= meta.queryLimit ? ('，当前结果已达到查询上限 ' + meta.queryLimit + ' 条') : '';
+	          summaryEl.textContent = '每页 ' + meta.pageSize + ' 条，当前第 ' + meta.page + ' / ' + meta.totalPages + ' 页，共 ' + meta.total + ' 条记录' + limitSuffix;
+	        } else {
+	          summaryEl.textContent = '每页 ' + meta.pageSize + ' 条，当前没有命中记录';
+	        }
+	      }
+	      if (indicatorEl) indicatorEl.textContent = meta.totalPages ? ('第 ' + meta.page + ' / ' + meta.totalPages + ' 页') : '第 0 / 0 页';
+	      if (prevBtn) prevBtn.disabled = meta.page <= 1;
+	      if (nextBtn) nextBtn.disabled = !meta.hasMore;
+	    }
+
+	    function renderAuditLogs(payload) {
 	      const body = document.getElementById('auditLogsBody');
-	      if (!body) return;
-	      const list = Array.isArray(rows) ? rows : [];
+	      if (!body) return null;
+	      const meta = normalizeAuditLogsPayload(payload);
+	      const list = meta.items;
 	      auditLogsRows = list;
-	      const coveredSystems = new Set(list.map((row) => String(row.system || '').trim()).filter(Boolean)).size;
-	      updateStatCard('primaryStatValue', list.length);
-	      updateStatCard('secondaryStatValue', coveredSystems);
+	      auditLogsMeta = meta;
+	      updateStatCard('primaryStatValue', meta.total);
+	      updateStatCard('secondaryStatValue', meta.systems);
 	      const countEl = document.getElementById('auditResultsCount');
 	      const systemsEl = document.getElementById('auditResultsSystems');
 	      const summaryEl = document.getElementById('auditResultsSummary');
 	      const updatedEl = document.getElementById('auditOverviewUpdated');
-	      if (countEl) countEl.textContent = list.length + ' 条记录';
-	      if (systemsEl) systemsEl.textContent = coveredSystems + ' 个系统';
+	      if (countEl) countEl.textContent = meta.total + ' 条记录';
+	      if (systemsEl) systemsEl.textContent = meta.systems + ' 个系统';
 	      if (summaryEl) {
-	        summaryEl.textContent = list.length
-	          ? ('当前范围命中 ' + list.length + ' 条记录，覆盖 ' + coveredSystems + ' 个系统，按时间倒序展示最近事件。')
+	        const limitSuffix = meta.total >= meta.queryLimit && meta.total > 0 ? (' 已达到查询上限 ' + meta.queryLimit + ' 条。') : '';
+	        summaryEl.textContent = meta.total
+	          ? ('当前范围命中 ' + meta.total + ' 条记录，覆盖 ' + meta.systems + ' 个系统，当前第 ' + meta.page + ' / ' + meta.totalPages + ' 页。' + limitSuffix)
 	          : '当前筛选范围没有命中记录，可以切换预设或放宽条件后重新检索。';
 	      }
 	      if (updatedEl) updatedEl.textContent = new Date().toLocaleString('zh-CN', { hour12: false });
+	      renderAuditPagination(meta);
 	      if (!list.length) {
-	        body.innerHTML = '<tr><td colspan="5" class="empty">当前没有审计日志</td></tr>';
-	        return;
+	        body.innerHTML = '<tr><td colspan="6" class="empty">' + escapeHtml(meta.total ? '当前页没有记录，请返回上一页或重新检索。' : '当前没有审计日志') + '</td></tr>';
+	        return meta;
 	      }
 	      body.innerHTML = list.map((row) => {
 	        const actionTone = getAuditActionTone(row.action || '');
 	        const requestIp = String(row.request_ip || '').trim();
+	        const requestIpLabel = getAuditRequestIpLabel(row);
 	        const systemLabel = getAuditSystemLabel(row.system || '-') || '-';
 	        const entityLabel = getAuditEntityLabel(row.entity || '-');
+	        const subjectMeta = row.user_id ? ('用户ID ' + row.user_id) : '用户ID 未记录';
 	        const entityMeta = row.entity_id ? ('对象ID ' + row.entity_id) : '对象ID 未记录';
 	        return '<tr>'
 	          + '<td><span class="audit-id-badge">#' + escapeHtml(row.id) + '</span></td>'
 	          + '<td><div class="audit-event-cell"><span class="audit-event-chip tone-' + escapeHtml(actionTone) + '">' + escapeHtml(getAuditActionLabel(row.action || '-')) + '</span></div></td>'
 	          + '<td><div class="audit-subject-cell"><div class="audit-subject-head"><strong class="audit-user-name">' + escapeHtml(row.username || '-') + '</strong><span class="audit-meta-chip">' + escapeHtml(systemLabel) + '</span></div>'
-	          + '<div class="audit-subject-meta">' + escapeHtml(requestIp ? ('来源IP ' + requestIp) : '来源IP 未记录') + '</div></div></td>'
+	          + '<div class="audit-subject-meta">' + escapeHtml(subjectMeta) + '</div></div></td>'
+	          + '<td><div class="audit-object-cell"><div class="audit-object-head"><span class="audit-meta-chip">' + escapeHtml(requestIpLabel) + '</span></div><div class="audit-time">' + escapeHtml(requestIp || '未记录') + '</div></div></td>'
 	          + '<td><div class="audit-object-cell"><div class="audit-object-head"><span class="audit-object-chip">' + escapeHtml(entityLabel) + '</span></div><div class="audit-object-meta">' + escapeHtml(entityMeta) + '</div></div></td>'
 	          + '<td><div class="audit-time">' + escapeHtml(row.created_at || '-') + '</div></td>'
 	          + '</tr>';
 	      }).join('');
+	      return meta;
 	    }
 
 	    function updateAuditWorkbenchSummary(matchedPreset) {
@@ -3324,10 +3420,10 @@ const renderDedicatedCenterPage = ({ nonce, config }) => {
       if (actionEl) actionEl.value = action;
       if (entityEl) entityEl.value = entity;
       syncAuditPresetButtons();
-      loadAuditLogs();
+      loadAuditLogs(null, { resetPage: true });
     }
 
-    function collectAuditQuery() {
+    function collectAuditQuery(options = {}) {
       const params = new URLSearchParams();
       const mappings = [
         ['username', 'auditFilterUsername'],
@@ -3340,26 +3436,45 @@ const renderDedicatedCenterPage = ({ nonce, config }) => {
         const value = String(document.getElementById(id)?.value || '').trim();
         if (value) params.set(key, value);
       });
+      params.set('page', String(clampNumber(options.page, auditLogsMeta.page || 1, 1, 100000)));
+      params.set('page_size', String(clampNumber(options.pageSize, auditLogsMeta.pageSize || DEFAULT_AUDIT_PAGE_SIZE, 1, 2000)));
       return params;
     }
 
-    async function loadAuditLogs(event) {
+    async function loadAuditLogs(event, options = {}) {
       if (event) event.preventDefault();
-      const params = collectAuditQuery();
+      const shouldResetPage = options.resetPage === true || event?.type === 'submit';
+      const page = clampNumber(options.page, shouldResetPage ? 1 : (auditLogsMeta.page || 1), 1, 100000);
+      const pageSize = clampNumber(options.pageSize, auditLogsMeta.pageSize || DEFAULT_AUDIT_PAGE_SIZE, 1, 2000);
+      const params = collectAuditQuery({ page, pageSize });
       syncAuditPresetButtons();
       setHint('auditLogsNotice', '正在加载审计日志...');
       try {
-        const rows = await requestJson(centerApi.logsList + '?' + params.toString());
-        renderAuditLogs(rows);
-        setHint('auditLogsNotice', '审计日志已更新，共 ' + rows.length + ' 条记录');
+        const payload = await requestJson(centerApi.logsList + '?' + params.toString());
+        const meta = renderAuditLogs(payload);
+        if (meta?.total) {
+          setHint('auditLogsNotice', '审计日志已更新，当前第 ' + meta.page + ' / ' + meta.totalPages + ' 页，共 ' + meta.total + ' 条记录');
+        } else {
+          setHint('auditLogsNotice', '当前筛选范围没有命中记录');
+        }
       } catch (error) {
-        renderAuditLogs([]);
+        renderAuditLogs({
+          items: [],
+          page,
+          pageSize,
+          total: 0,
+          totalPages: 0,
+          hasMore: false,
+          systems: 0,
+          queryLimit: Number(getAuditQueryLimit()) || 100,
+        });
         setHint('auditLogsNotice', error.message || '加载审计日志失败', true);
       }
     }
 
     async function exportAuditLogs() {
-      const params = collectAuditQuery();
+      const exportLimit = Number(getAuditQueryLimit()) || 100;
+      const params = collectAuditQuery({ page: 1, pageSize: exportLimit });
       const url = centerApi.logsExport + '?' + params.toString();
       setHint('auditVerifyNotice', '正在导出审计日志...');
       try {
@@ -3395,7 +3510,11 @@ const renderDedicatedCenterPage = ({ nonce, config }) => {
       setHint('auditVerifyNotice', '正在校验审计链...');
       try {
         const limit = String(document.getElementById('auditFilterLimit')?.value || '10000').trim();
-        const query = limit ? '?limit=' + encodeURIComponent(limit) : '';
+        const system = String(document.getElementById('auditFilterSystem')?.value || '').trim();
+        const params = new URLSearchParams();
+        if (limit) params.set('limit', limit);
+        if (system) params.set('system', system);
+        const query = params.toString() ? ('?' + params.toString()) : '';
         const result = await requestJson(centerApi.logsVerify + query);
         if (result.ok) {
           setHint('auditVerifyNotice', '审计链校验通过，已检查 ' + result.checked + ' 条记录');
@@ -3478,6 +3597,14 @@ const renderDedicatedCenterPage = ({ nonce, config }) => {
       document.getElementById('auditLogsReloadBtn')?.addEventListener('click', loadAuditLogs);
       document.getElementById('auditExportBtn')?.addEventListener('click', exportAuditLogs);
       document.getElementById('auditVerifyBtn')?.addEventListener('click', verifyAuditChain);
+      document.getElementById('auditPrevPageBtn')?.addEventListener('click', () => {
+        if (auditLogsMeta.page <= 1) return;
+        loadAuditLogs(null, { page: auditLogsMeta.page - 1 });
+      });
+      document.getElementById('auditNextPageBtn')?.addEventListener('click', () => {
+        if (!auditLogsMeta.hasMore) return;
+        loadAuditLogs(null, { page: auditLogsMeta.page + 1 });
+      });
       document.querySelectorAll('[data-audit-preset]').forEach((node) => {
         node.addEventListener('click', () => applyAuditPreset(node.dataset.auditPreset));
       });
@@ -3485,7 +3612,7 @@ const renderDedicatedCenterPage = ({ nonce, config }) => {
         document.getElementById(id)?.addEventListener('change', syncAuditPresetButtons);
       });
       syncAuditPresetButtons();
-      loadAuditLogs();
+      loadAuditLogs(null, { resetPage: true });
     }
 
     async function bootstrapCenter() {
@@ -4483,9 +4610,19 @@ const adminCenterSecurityService = createAdminCenterSecurityService({
   db,
   logOperation,
 });
+const auditCenterRemoteBaseUrls = Object.freeze({
+  inventory: process.env.AUDIT_SOURCE_INVENTORY_URL || 'http://localhost:5183',
+  'device-flow': process.env.AUDIT_SOURCE_DEVICE_FLOW_URL || 'http://localhost:5184',
+  'sec-impl': process.env.AUDIT_SOURCE_SEC_IMPL_URL || 'http://localhost:5185',
+  faq: process.env.AUDIT_SOURCE_FAQ_URL || 'http://localhost:5186',
+  tender: process.env.AUDIT_SOURCE_TENDER_URL || 'http://localhost:5187',
+  'train-exam': process.env.AUDIT_SOURCE_TRAIN_EXAM_URL || 'http://localhost:5188',
+  cmdb: process.env.AUDIT_SOURCE_CMDB_URL || 'http://localhost:8088',
+});
 const auditCenterLogsService = createAuditCenterLogsService({
   db,
   computeAuditSignature,
+  remoteBaseUrls: auditCenterRemoteBaseUrls,
 });
 
 const canUseDedicatedCenter = (user, systemKey) => canAccessDedicatedCenter({ role: user?.role, systemKey });
@@ -4716,8 +4853,12 @@ app.get('/api/audit-center/logs', async (req, res) => {
     return res.status(403).json({ error: '无权限访问审计中心' });
   }
   try {
-    const rows = await auditCenterLogsService.listLogs({ query: req.query || {} });
-    return res.json(rows);
+    const payload = await auditCenterLogsService.listLogs({
+      query: req.query || {},
+      authToken: getRequestAuthToken(req),
+      cookieHeader: req.headers?.cookie || '',
+    });
+    return res.json(payload);
   } catch (err) {
     return sendApiError(res, err, '获取审计日志失败');
   }
@@ -4728,10 +4869,17 @@ app.get('/api/audit-center/logs/export', async (req, res) => {
     return res.status(403).json({ error: '无权限访问审计中心' });
   }
   try {
-    const rows = await auditCenterLogsService.listLogs({
-      query: req.query || {},
+    const exportLimit = Number(req.query?.limit || req.query?.page_size || 300);
+    const payload = await auditCenterLogsService.listLogs({
+      query: {
+        ...(req.query || {}),
+        page: 1,
+        page_size: exportLimit,
+      },
+      authToken: getRequestAuthToken(req),
+      cookieHeader: req.headers?.cookie || '',
     });
-    const csv = serializeLogsAsCsv(rows);
+    const csv = serializeLogsAsCsv(payload.items);
     const stamp = new Date().toISOString().replaceAll(':', '-');
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');
     res.setHeader('Content-Disposition', `attachment; filename="audit-center-logs-${stamp}.csv"`);
@@ -4748,6 +4896,9 @@ app.get('/api/audit-center/logs/verify', async (req, res) => {
   try {
     const result = await auditCenterLogsService.verifyLogChain({
       limitInput: req.query?.limit,
+      system: req.query?.system,
+      authToken: getRequestAuthToken(req),
+      cookieHeader: req.headers?.cookie || '',
     });
     return res.json(result);
   } catch (err) {
