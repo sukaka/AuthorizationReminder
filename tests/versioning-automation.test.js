@@ -10,6 +10,8 @@ const {
   bumpVersion,
   syncRepositoryVersion,
   applyVersioningToHeadCommit,
+  pushCurrentBranch,
+  switchToVersionBranch,
 } = require('../scripts/versioning/automation');
 
 const writeJson = (filePath, value) => {
@@ -185,4 +187,111 @@ test('applyVersioningToHeadCommit skips commits that already carry a version pre
   assert.equal(result.reason, 'already-versioned');
   assert.equal(beforeHead, afterHead);
   assert.equal(version, '4.2.0');
+});
+
+test('pushCurrentBranch sets upstream for a new local branch', () => {
+  const remoteDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-version-remote-'));
+  const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-version-push-'));
+  const git = (cwd, ...args) => execFileSync('git', args, { cwd, encoding: 'utf8' });
+
+  git(remoteDir, 'init', '--bare');
+
+  git(rootDir, 'init');
+  git(rootDir, 'config', 'user.name', 'Codex Test');
+  git(rootDir, 'config', 'user.email', 'codex@example.com');
+  git(rootDir, 'checkout', '-b', 'codex/4.2.0');
+  git(rootDir, 'remote', 'add', 'origin', remoteDir);
+
+  writeJson(path.join(rootDir, 'package.json'), { name: 'root', version: '4.2.0' });
+  git(rootDir, 'add', 'package.json');
+  git(rootDir, 'commit', '-m', 'chore: init');
+
+  const result = pushCurrentBranch({ rootDir });
+  const upstream = git(rootDir, 'rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{upstream}').trim();
+  const localHead = git(rootDir, 'rev-parse', 'HEAD').trim();
+  const remoteHead = git(remoteDir, 'rev-parse', 'refs/heads/codex/4.2.0').trim();
+
+  assert.equal(result.skipped, false);
+  assert.equal(result.branch, 'codex/4.2.0');
+  assert.equal(result.remote, 'origin');
+  assert.equal(result.upstreamSet, true);
+  assert.equal(upstream, 'origin/codex/4.2.0');
+  assert.equal(remoteHead, localHead);
+});
+
+test('applyVersioningToHeadCommit can be followed by pushCurrentBranch to publish the amended commit', () => {
+  const remoteDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-version-amend-remote-'));
+  const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-version-amend-push-'));
+  const git = (cwd, ...args) => execFileSync('git', args, { cwd, encoding: 'utf8' });
+
+  git(remoteDir, 'init', '--bare');
+
+  git(rootDir, 'init');
+  git(rootDir, 'config', 'user.name', 'Codex Test');
+  git(rootDir, 'config', 'user.email', 'codex@example.com');
+  git(rootDir, 'checkout', '-b', 'codex/4.2.0');
+  git(rootDir, 'remote', 'add', 'origin', remoteDir);
+
+  writeJson(path.join(rootDir, 'package.json'), { name: 'root', version: '4.1.4' });
+  writeJson(path.join(rootDir, 'package-lock.json'), makePackageLock('4.1.4'));
+  writeText(path.join(rootDir, 'auth/index.js'), "const RELEASE_VERSION = '4.1.4';\n");
+  writeText(path.join(rootDir, 'docs/versioning.md'), '- 当前整套系统口径版本：`4.1.4`\n');
+  writeText(path.join(rootDir, 'README.md'), 'git clone -b codex/4.1.4 /root/AuthorizationReminder-codex-4.1.4\n');
+  writeText(path.join(rootDir, 'scripts/deploy/bootstrap-full-server.sh'), 'BOOTSTRAP_BRANCH="${BOOTSTRAP_BRANCH:-codex/4.1.4}"\n');
+  writeText(path.join(rootDir, 'scripts/tests/bootstrap-full-server.sh'), "BOOTSTRAP_BRANCH='codex/4.1.4' \\\n");
+  writeText(path.join(rootDir, 'note.txt'), 'init\n');
+
+  git(rootDir, 'add', '.');
+  git(rootDir, 'commit', '-m', 'chore: init');
+
+  fs.writeFileSync(path.join(rootDir, 'note.txt'), 'changed\n');
+  git(rootDir, 'add', 'note.txt');
+  git(rootDir, 'commit', '-m', 'feat: auto push after bump');
+
+  applyVersioningToHeadCommit({ rootDir });
+  const pushResult = pushCurrentBranch({ rootDir });
+
+  const summary = git(rootDir, 'log', '-1', '--pretty=%s').trim();
+  const localHead = git(rootDir, 'rev-parse', 'HEAD').trim();
+  const remoteHead = git(remoteDir, 'rev-parse', 'refs/heads/codex/4.2.0').trim();
+
+  assert.equal(summary, '[v4.2.0] feat: auto push after bump');
+  assert.equal(pushResult.skipped, false);
+  assert.equal(pushResult.branch, 'codex/4.2.0');
+  assert.equal(remoteHead, localHead);
+});
+
+test('switchToVersionBranch moves the release commit onto the next version branch and preserves the old branch', () => {
+  const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-version-branch-shift-'));
+  const git = (...args) => execFileSync('git', args, { cwd: rootDir, encoding: 'utf8' });
+
+  git('init');
+  git('config', 'user.name', 'Codex Test');
+  git('config', 'user.email', 'codex@example.com');
+  git('checkout', '-b', 'codex/4.2.0');
+
+  writeJson(path.join(rootDir, 'package.json'), { name: 'root', version: '4.2.0' });
+  git('add', 'package.json');
+  git('commit', '-m', 'chore: init');
+
+  writeText(path.join(rootDir, 'note.txt'), 'release\n');
+  git('add', 'note.txt');
+  git('commit', '-m', '[v4.3.0] feat: release next version');
+
+  const previousHead = git('rev-parse', 'HEAD^').trim();
+  const releaseHead = git('rev-parse', 'HEAD').trim();
+
+  const result = switchToVersionBranch({
+    rootDir,
+    currentVersion: '4.2.0',
+    nextVersion: '4.3.0',
+  });
+
+  assert.equal(result.switched, true);
+  assert.equal(result.previousBranch, 'codex/4.2.0');
+  assert.equal(result.currentBranch, 'codex/4.3.0');
+  assert.equal(result.previousCommit, previousHead);
+  assert.equal(git('branch', '--show-current').trim(), 'codex/4.3.0');
+  assert.equal(git('rev-parse', 'codex/4.2.0').trim(), previousHead);
+  assert.equal(git('rev-parse', 'codex/4.3.0').trim(), releaseHead);
 });

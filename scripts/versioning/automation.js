@@ -175,6 +175,111 @@ const git = ({ rootDir, args, env = {} }) => execFileSync('git', args, {
   stdio: ['ignore', 'pipe', 'pipe'],
 });
 
+const getCurrentBranchName = (rootDir) => git({
+  rootDir,
+  args: ['rev-parse', '--abbrev-ref', 'HEAD'],
+}).trim();
+
+const getBranchHead = (rootDir, branchName) => git({
+  rootDir,
+  args: ['rev-parse', '--verify', `refs/heads/${branchName}`],
+}).trim();
+
+const branchExists = (rootDir, branchName) => {
+  try {
+    getBranchHead(rootDir, branchName);
+    return true;
+  } catch (_error) {
+    return false;
+  }
+};
+
+const buildVersionBranchName = (version) => `codex/${version}`;
+
+const switchToVersionBranch = ({ rootDir, currentVersion, nextVersion }) => {
+  const resolvedRoot = path.resolve(rootDir);
+  const currentBranch = getCurrentBranchName(resolvedRoot);
+  const previousBranch = buildVersionBranchName(currentVersion);
+  const nextBranch = buildVersionBranchName(nextVersion);
+
+  if (
+    !VERSION_RE.test(String(currentVersion || '').trim())
+    || !VERSION_RE.test(String(nextVersion || '').trim())
+    || currentBranch !== previousBranch
+    || previousBranch === nextBranch
+  ) {
+    return {
+      switched: false,
+      previousBranch,
+      currentBranch,
+      previousCommit: '',
+    };
+  }
+
+  const releaseHead = git({ rootDir: resolvedRoot, args: ['rev-parse', 'HEAD'] }).trim();
+  const previousCommit = git({ rootDir: resolvedRoot, args: ['rev-parse', 'HEAD^'] }).trim();
+
+  if (branchExists(resolvedRoot, nextBranch)) {
+    const existingHead = getBranchHead(resolvedRoot, nextBranch);
+    if (existingHead !== releaseHead) {
+      throw new Error(`版本分支 ${nextBranch} 已存在且不指向当前提交`);
+    }
+    git({ rootDir: resolvedRoot, args: ['switch', nextBranch] });
+  } else {
+    git({ rootDir: resolvedRoot, args: ['switch', '-c', nextBranch] });
+  }
+
+  git({
+    rootDir: resolvedRoot,
+    args: ['branch', '-f', previousBranch, previousCommit],
+  });
+
+  return {
+    switched: true,
+    previousBranch,
+    currentBranch: nextBranch,
+    previousCommit,
+    currentCommit: releaseHead,
+  };
+};
+
+const hasUpstreamBranch = (rootDir) => {
+  try {
+    git({
+      rootDir,
+      args: ['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{upstream}'],
+    });
+    return true;
+  } catch (_error) {
+    return false;
+  }
+};
+
+const pushCurrentBranch = ({ rootDir, remoteName = 'origin' }) => {
+  const resolvedRoot = path.resolve(rootDir);
+  const branch = getCurrentBranchName(resolvedRoot);
+  if (!branch || branch === 'HEAD') {
+    return { skipped: true, reason: 'detached-head' };
+  }
+
+  const upstreamExists = hasUpstreamBranch(resolvedRoot);
+  const args = upstreamExists
+    ? ['push', remoteName, branch]
+    : ['push', '--set-upstream', remoteName, branch];
+
+  git({
+    rootDir: resolvedRoot,
+    args,
+  });
+
+  return {
+    skipped: false,
+    branch,
+    remote: remoteName,
+    upstreamSet: !upstreamExists,
+  };
+};
+
 const hasLocalChanges = (rootDir) => Boolean(git({ rootDir, args: ['status', '--porcelain', '--untracked-files=all'] }).trim());
 
 const stashLocalChanges = (rootDir) => {
@@ -281,10 +386,13 @@ const applyVersioningToHeadCommit = ({ rootDir }) => {
 module.exports = {
   applyVersioningToHeadCommit,
   bumpVersion,
+  buildVersionBranchName,
   buildVersionedCommitMessage,
   normalizeCommitMessage,
   parseCommitBumpType,
+  pushCurrentBranch,
   stripVersionPrefix,
+  switchToVersionBranch,
   syncRepositoryVersion,
   validateCommitMessage,
 };
