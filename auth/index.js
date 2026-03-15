@@ -1306,7 +1306,7 @@ app.get('/api/auth/apps', async (req, res) => {
   });
 });
 
-const RELEASE_VERSION = '4.3.1';
+const RELEASE_VERSION = '4.3.2';
 const DEDICATED_CENTER_VERSION = `v${RELEASE_VERSION}`;
 const ADMIN_CENTER_ROLE_OPTIONS = Object.freeze([
   { value: 'user', label: '普通用户' },
@@ -1852,6 +1852,14 @@ const renderAuditCenterSections = () => ({
 	          </div>
 	        </div>
 	        <div id="auditLogsNotice" class="hint-line"></div>
+	        <div class="audit-pagination">
+	          <div id="auditPaginationSummary" class="audit-pagination-summary">每页 10 条，当前第 1 页</div>
+	          <div class="audit-pagination-actions">
+	            <button id="auditPrevPageBtn" type="button" class="ghost-btn">上一页</button>
+	            <span id="auditPageIndicator" class="audit-page-indicator">第 0 / 0 页</span>
+	            <button id="auditNextPageBtn" type="button" class="ghost-btn">下一页</button>
+	          </div>
+	        </div>
 	        <div class="table-wrap audit-table-wrap">
 	          <table class="data-table audit-data-table audit-stream-table">
 	            <thead>
@@ -1868,14 +1876,6 @@ const renderAuditCenterSections = () => ({
 	              <tr><td colspan="6" class="empty">正在加载审计日志...</td></tr>
 	            </tbody>
 	          </table>
-	        </div>
-	        <div class="audit-pagination">
-	          <div id="auditPaginationSummary" class="audit-pagination-summary">每页 10 条，当前第 1 页</div>
-	          <div class="audit-pagination-actions">
-	            <button id="auditPrevPageBtn" type="button" class="ghost-btn">上一页</button>
-	            <span id="auditPageIndicator" class="audit-page-indicator">第 0 / 0 页</span>
-	            <button id="auditNextPageBtn" type="button" class="ghost-btn">下一页</button>
-	          </div>
 	        </div>
 	      </section>
 	    </section>

@@ -98,3 +98,14 @@
   - `systems`
   - `queryLimit`
 - 导出继续导出当前筛选窗口内的全部记录，而不是只导出当前页
+
+## 2026-03-15 Audit Pagination Visibility Fix
+
+- 用户反馈“还是没有分页”，实际根因不是分页逻辑失效，而是分页控件放在审计表格底部，首屏不明显
+- 运行态排查确认：
+  - 本地 `auth` 容器一度仍在跑旧版 `4.2.0` 镜像
+  - 对 `auth` 执行 `docker compose build --no-cache auth` 后，容器已切到 `4.3.1`
+  - 运行中 HTML 已包含分页节点
+- 这次修复将分页控件从表格下方移动到结果区顶部，确保打开日志列表时就能看到
+- 新增 UI 测试约束：
+  - `auditPaginationSummary` 必须出现在审计表格标记之前

@@ -30,6 +30,15 @@ test('audit center renders command workbench layout', () => {
   assert.match(source, /page_size/);
 });
 
+test('audit center places pagination controls before the audit table for visibility', () => {
+  const paginationIndex = source.indexOf('id="auditPaginationSummary"');
+  const tableIndex = source.indexOf('class="data-table audit-data-table audit-stream-table"');
+
+  assert.notEqual(paginationIndex, -1);
+  assert.notEqual(tableIndex, -1);
+  assert.ok(paginationIndex < tableIndex, 'expected pagination controls to render before the audit table');
+});
+
 test('audit log table renders localized action and entity labels', () => {
   assert.match(source, /getAuditActionLabel\(row\.action \|\| '-'\)/);
   assert.match(source, /getAuditEntityLabel\(row\.entity \|\| '-'\)/);
