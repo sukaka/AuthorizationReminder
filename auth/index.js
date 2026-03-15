@@ -57,6 +57,11 @@ const {
   serializeLogsAsCsv,
 } = require('./audit-center-logs');
 const {
+  AUDIT_ACTION_OPTIONS,
+  AUDIT_ENTITY_OPTIONS,
+  AUDIT_PRESET_OPTIONS,
+} = require('./audit-log-display');
+const {
   SYSTEM_DISPLAY_OPTIONS,
   getSystemDisplayLabel,
   getSystemDisplayShortLabel,
@@ -1301,7 +1306,7 @@ app.get('/api/auth/apps', async (req, res) => {
   });
 });
 
-const RELEASE_VERSION = '4.1.4';
+const RELEASE_VERSION = '4.2.0';
 const DEDICATED_CENTER_VERSION = `v${RELEASE_VERSION}`;
 const ADMIN_CENTER_ROLE_OPTIONS = Object.freeze([
   { value: 'user', label: '普通用户' },
@@ -1321,6 +1326,17 @@ const renderSystemAccessCheckboxes = (inputName, dataKey, options = ADMIN_CENTER
 
 const renderRoleOptions = (options = ADMIN_CENTER_ROLE_OPTIONS) => options
   .map((item) => `<option value="${item.value}">${item.label}</option>`)
+  .join('');
+
+const renderSelectOptions = (options = [], emptyLabel = '全部') => [
+  `<option value="">${emptyLabel}</option>`,
+  ...options.map((item) => `<option value="${item.value}">${item.label}</option>`),
+].join('');
+
+const fallbackAuditPresetButtonId = (key) => `auditPreset${String(key || '').slice(0, 1).toUpperCase()}${String(key || '').slice(1)}Btn`;
+
+const renderAuditPresetButtons = () => AUDIT_PRESET_OPTIONS
+  .map((item) => `<button id="${item.buttonId || fallbackAuditPresetButtonId(item.key)}" type="button" class="audit-filter-chip" data-audit-preset="${item.key}" title="${item.summary || item.label}">${item.label}</button>`)
   .join('');
 
 const renderAdminCenterSections = () => ({
@@ -1707,102 +1723,184 @@ const renderAuditCenterSections = () => ({
       <div class="panel-header">
         <div>
           <h2>审计总览</h2>
-          <p>当前页面聚合统一登录、提醒系统以及各业务系统的操作审计记录。</p>
+          <p>按取证流程组织统一登录、提醒系统与各业务系统的操作审计记录。</p>
         </div>
       </div>
-      <div class="summary-grid">
-        <div class="summary-card tone-sec-login">
-          <strong>跨系统检索</strong>
-          <span>支持按系统、用户、动作与对象联合筛选。</span>
+      <div class="audit-overview-rail">
+        <article class="audit-overview-item">
+          <span class="audit-overview-step">检索</span>
+          <div>
+            <strong>先按系统、事件与对象缩小范围</strong>
+            <p>日志查询中的筛选项全部使用中文标签，不需要记英文动作和对象 key。</p>
+          </div>
+        </article>
+        <article class="audit-overview-item">
+          <span class="audit-overview-step">核对</span>
+          <div>
+            <strong>重点关注登录、权限与配置变更</strong>
+            <p>登录与会话、用户与权限、配置变更三类预设可以直接落到高风险审计面板。</p>
+          </div>
+        </article>
+        <article class="audit-overview-item">
+          <span class="audit-overview-step">归档</span>
+          <div>
+            <strong>筛选结果可以直接校验并导出</strong>
+            <p>校验与导出页会沿用当前筛选范围，适合留档、复核和提交审计附件。</p>
+          </div>
+        </article>
+      </div>
+      <div class="audit-overview-meta">
+        <div class="audit-overview-metric">
+          <span>最近刷新</span>
+          <strong id="auditOverviewUpdated">尚未加载</strong>
         </div>
-        <div class="summary-card tone-sec-captcha">
-          <strong>链路校验</strong>
-          <span>可基于当前筛选范围校验审计哈希链完整性。</span>
-        </div>
-        <div class="summary-card tone-sec-mfa">
-          <strong>导出归档</strong>
-          <span>当前查询结果可直接导出为 CSV，用于审计留存。</span>
+        <div class="audit-overview-metric">
+          <span>当前默认范围</span>
+          <strong>最近 100 条</strong>
         </div>
       </div>
       <div id="auditOverviewNotice" class="hint-line">进入“日志查询”后会自动加载最近一批审计记录。</div>
     </section>
 
-    <section class="panel center-panel" data-tab-panel="logs" hidden>
-      <div class="panel-header">
-        <div>
-          <h2>日志查询</h2>
-          <p>按用户、系统、动作、对象和条数上限检索审计日志。</p>
-        </div>
-        <div class="panel-actions">
-          <button id="auditLogsReloadBtn" type="button" class="ghost-btn">刷新日志</button>
-        </div>
-      </div>
-      <form id="auditFilterForm" class="form-grid compact">
-        <label class="form-label">用户<input id="auditFilterUsername" class="form-control" placeholder="用户名关键字" /></label>
-        <label class="form-label">系统
-          <select id="auditFilterSystem" class="form-select">
-            <option value="">全部系统</option>
-            <option value="sso">统一登录</option>
-            <option value="reminder">提醒系统</option>
-            <option value="ticketing">工单系统</option>
-            <option value="cmdb">CMDB</option>
-            <option value="inventory">库存系统</option>
-            <option value="device-flow">设备流转</option>
-            <option value="sec-impl">实施记录</option>
-            <option value="faq">FAQ</option>
-            <option value="tender">标书系统</option>
-            <option value="train-exam">培训考试</option>
-          </select>
-        </label>
-        <label class="form-label">动作<input id="auditFilterAction" class="form-control" placeholder="如 LOGIN / UPDATE" /></label>
-        <label class="form-label">对象<input id="auditFilterEntity" class="form-control" placeholder="如 user / send_configs" /></label>
-        <label class="form-label">条数上限<input id="auditFilterLimit" type="number" min="1" max="2000" value="100" class="form-control" /></label>
-        <div class="form-actions">
-          <button class="primary-btn" type="submit">查询日志</button>
-        </div>
-      </form>
-      <div id="auditLogsNotice" class="hint-line"></div>
-      <div class="table-wrap">
-        <table class="data-table">
-          <thead>
-            <tr>
-              <th>ID</th>
-              <th>系统</th>
-              <th>用户</th>
-              <th>动作</th>
-              <th>对象</th>
-              <th>时间</th>
-            </tr>
-          </thead>
-          <tbody id="auditLogsBody">
-            <tr><td colspan="6" class="empty">正在加载审计日志...</td></tr>
-          </tbody>
-        </table>
-      </div>
-    </section>
-
-    <section class="panel center-panel" data-tab-panel="verify" hidden>
-      <div class="panel-header">
-        <div>
-          <h2>校验与导出</h2>
-          <p>基于当前筛选条件执行审计链校验，并导出结果文件用于归档。</p>
-        </div>
-      </div>
-      <div class="summary-grid">
-        <div class="summary-card tone-sec-captcha">
-          <strong>校验链路完整性</strong>
-          <span>检测当前筛选范围内审计日志的签名链是否连续、可验证。</span>
-          <div class="inline-actions">
-            <button id="auditVerifyBtn" type="button" class="primary-btn">校验审计链</button>
-          </div>
-        </div>
-        <div class="summary-card tone-sec-mfa">
-          <strong>导出当前结果</strong>
-          <span>导出 CSV 时会沿用“日志查询”中的筛选条件。</span>
-          <div class="inline-actions">
-            <button id="auditExportBtn" type="button" class="ghost-btn">导出 CSV</button>
-          </div>
-        </div>
+	    <section class="panel center-panel" data-tab-panel="logs" hidden>
+	      <div class="audit-command-grid">
+	        <article class="audit-command-card audit-command-card-primary">
+	          <div class="audit-command-head">
+	            <div>
+	              <span class="audit-kicker">日志查询</span>
+	              <h2>审计取证工作台</h2>
+	              <p>把原始动作码折叠为中文业务语义，先收窄范围，再顺着事件流回看用户、系统与对象线索。</p>
+	            </div>
+	            <div class="panel-actions">
+	              <button id="auditLogsReloadBtn" type="button" class="ghost-btn">刷新日志</button>
+	            </div>
+	          </div>
+	          <div class="audit-preset-row">
+	            <span class="audit-preset-label">快速视角</span>
+	            ${renderAuditPresetButtons()}
+	          </div>
+	          <form id="auditFilterForm" class="form-grid compact audit-filter-grid">
+	            <label class="form-label">用户<input id="auditFilterUsername" class="form-control" placeholder="按账号、责任人或操作人检索" /></label>
+	            <label class="form-label">系统
+	              <select id="auditFilterSystem" class="form-select">
+	                <option value="">全部系统</option>
+	                <option value="sso">统一登录</option>
+	                <option value="reminder">提醒系统</option>
+	                <option value="ticketing">工单系统</option>
+	                <option value="cmdb">CMDB系统</option>
+	                <option value="inventory">库存管理系统</option>
+	                <option value="device-flow">设备流转系统</option>
+	                <option value="sec-impl">聚信实施记录系统</option>
+	                <option value="faq">FAQ系统</option>
+	                <option value="tender">标书协同制作系统</option>
+	                <option value="train-exam">培训考试系统</option>
+	              </select>
+	            </label>
+	            <label class="form-label">事件
+	              <select id="auditFilterAction" class="form-select">
+	                ${renderSelectOptions(AUDIT_ACTION_OPTIONS, '全部动作')}
+	              </select>
+	            </label>
+	            <label class="form-label">对象
+	              <select id="auditFilterEntity" class="form-select">
+	                ${renderSelectOptions(AUDIT_ENTITY_OPTIONS, '全部对象')}
+	              </select>
+	            </label>
+	            <label class="form-label audit-limit-field">条数上限<input id="auditFilterLimit" type="number" min="1" max="2000" value="100" class="form-control" /></label>
+	            <div class="form-actions audit-filter-actions">
+	              <button class="primary-btn" type="submit">查询日志</button>
+	            </div>
+	          </form>
+	          <div class="audit-filter-note">所有动作、对象和系统展示都使用中文标签，日志结果区不再直接暴露内部英文 key。</div>
+	        </article>
+	        <aside class="audit-command-card audit-command-card-focus">
+	          <div class="audit-focus-card">
+	            <span class="audit-kicker">当前视角</span>
+	            <strong id="auditFocusPreset">全部事件</strong>
+	            <p id="auditFocusSummary">跨系统查看最近一批审计动态，适合先做全局排查。</p>
+	          </div>
+	          <div class="audit-focus-metrics">
+	            <div class="audit-focus-metric">
+	              <span>系统范围</span>
+	              <strong id="auditFocusSystem">全部系统</strong>
+	            </div>
+	            <div class="audit-focus-metric">
+	              <span>事件范围</span>
+	              <strong id="auditFocusAction">全部动作</strong>
+	            </div>
+	            <div class="audit-focus-metric">
+	              <span>对象范围</span>
+	              <strong id="auditFocusEntity">全部对象</strong>
+	            </div>
+	            <div class="audit-focus-metric">
+	              <span>查询上限</span>
+	              <strong id="auditFocusLimit">100 条</strong>
+	            </div>
+	          </div>
+	        </aside>
+	      </div>
+	      <section class="audit-stream-panel">
+	        <div class="audit-results-bar">
+	          <div>
+	            <span class="audit-kicker">审计结果</span>
+	            <strong>按时间倒序的事件流</strong>
+	            <p id="auditResultsSummary">优先查看事件、主体、对象与时间线，快速判断是否需要进入导出或验签。</p>
+	          </div>
+	          <div class="audit-results-meta">
+	            <span id="auditResultsCount">0 条记录</span>
+	            <span id="auditResultsSystems">0 个系统</span>
+	          </div>
+	        </div>
+	        <div id="auditLogsNotice" class="hint-line"></div>
+	        <div class="table-wrap audit-table-wrap">
+	          <table class="data-table audit-data-table audit-stream-table">
+	            <thead>
+	              <tr>
+	                <th>编号</th>
+	                <th>事件</th>
+	                <th>主体</th>
+	                <th>对象</th>
+	                <th>时间</th>
+	              </tr>
+	            </thead>
+	            <tbody id="auditLogsBody">
+	              <tr><td colspan="5" class="empty">正在加载审计日志...</td></tr>
+	            </tbody>
+	          </table>
+	        </div>
+	      </section>
+	    </section>
+	
+	    <section class="panel center-panel" data-tab-panel="verify" hidden>
+	      <div class="panel-header">
+	        <div>
+	          <h2>校验与导出</h2>
+	          <p>围绕当前筛选范围执行链路校验与归档导出，不需要重新设置上下文。</p>
+	        </div>
+	      </div>
+	      <div class="audit-workbench">
+	        <article class="audit-workbench-card tone-sec-captcha">
+	          <div>
+	            <span class="audit-kicker">链路校验</span>
+	            <strong>校验审计链</strong>
+	            <p>检查当前筛选范围内签名链是否连续，优先发现断链、篡改和记录缺口。</p>
+	          </div>
+	          <div class="audit-workbench-note">校验时会沿用“日志查询”中的条数上限设置。</div>
+	          <div class="inline-actions">
+	            <button id="auditVerifyBtn" type="button" class="primary-btn">校验审计链</button>
+	          </div>
+	        </article>
+	        <article class="audit-workbench-card tone-sec-mfa">
+	          <div>
+	            <span class="audit-kicker">归档导出</span>
+	            <strong>导出当前结果</strong>
+	            <p>CSV 会沿用查询条件，并以中文标题导出，便于直接归档、复核和提交附件。</p>
+	          </div>
+	          <div class="audit-workbench-note">导出的系统、事件和对象列均使用中文展示值。</div>
+	          <div class="inline-actions">
+	            <button id="auditExportBtn" type="button" class="ghost-btn">导出 CSV</button>
+	          </div>
+        </article>
       </div>
       <div id="auditVerifyNotice" class="hint-line"></div>
     </section>
@@ -1963,22 +2061,93 @@ const renderDedicatedCenterPage = ({ nonce, config }) => {
     .modal-head{display:flex;justify-content:space-between;align-items:center;gap:16px;margin-bottom:18px}
     .modal-head h3{margin:0;font-size:22px}
     .user-edit-grid{margin-bottom:0}
-    .toast{padding:12px 16px;border-radius:14px;max-width:640px;box-shadow:var(--shadow)}
+	    .audit-kicker{display:inline-flex;align-items:center;min-height:28px;padding:0 10px;border-radius:999px;background:rgba(15,23,42,.08);color:#334155;font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase}
+	    .audit-overview-rail{display:grid;gap:14px;position:relative;z-index:1}
+	    .audit-overview-item{display:grid;grid-template-columns:92px minmax(0,1fr);gap:16px;align-items:start;padding:18px 20px;border-radius:22px;border:1px solid rgba(148,163,184,.18);background:linear-gradient(155deg,rgba(255,255,255,.95),rgba(236,242,255,.82));box-shadow:0 10px 24px rgba(15,23,42,.06)}
+	    .audit-overview-step{display:inline-flex;align-items:center;justify-content:center;min-height:38px;padding:0 14px;border-radius:999px;background:#dbe7ff;color:#1e3a8a;font-size:12px;font-weight:700;letter-spacing:.08em}
+	    .audit-overview-item strong{display:block;font-size:17px;margin-bottom:6px}
+	    .audit-overview-item p{margin:0;color:var(--muted);line-height:1.7}
+	    .audit-overview-meta{display:flex;flex-wrap:wrap;gap:12px;margin-top:16px;position:relative;z-index:1}
+	    .audit-overview-metric{min-width:180px;padding:14px 16px;border-radius:18px;border:1px solid rgba(148,163,184,.2);background:rgba(255,255,255,.84);display:grid;gap:6px}
+	    .audit-overview-metric span{font-size:12px;color:var(--muted)}
+	    .audit-overview-metric strong{font-size:16px}
+	    .audit-command-grid{display:grid;grid-template-columns:minmax(0,1.5fr) minmax(300px,.92fr);gap:18px;margin-bottom:18px;position:relative;z-index:1}
+	    .audit-command-card{border-radius:24px;border:1px solid rgba(148,163,184,.2);padding:22px;display:grid;gap:18px;overflow:hidden;position:relative}
+	    .audit-command-card::before{content:'';position:absolute;inset:0;background:radial-gradient(circle at top left,rgba(59,130,246,.12),transparent 42%),radial-gradient(circle at bottom right,rgba(14,165,233,.09),transparent 32%);pointer-events:none}
+	    .audit-command-card > *{position:relative;z-index:1}
+	    .audit-command-card-primary{background:linear-gradient(160deg,rgba(249,251,255,.98),rgba(235,242,255,.94));box-shadow:0 16px 36px rgba(15,23,42,.08)}
+	    .audit-command-card-focus{background:linear-gradient(165deg,rgba(15,23,42,.96),rgba(30,41,59,.92));color:#e2e8f0;box-shadow:0 18px 42px rgba(15,23,42,.18)}
+	    .audit-command-card-focus .audit-kicker{background:rgba(255,255,255,.1);color:#dbeafe}
+	    .audit-command-head{display:flex;justify-content:space-between;align-items:flex-start;gap:16px}
+	    .audit-command-head h2{margin:10px 0 8px;font-size:30px;line-height:1.05;letter-spacing:-.03em}
+	    .audit-command-head p{margin:0;max-width:720px;color:#475569;line-height:1.7}
+	    .audit-preset-row{display:flex;flex-wrap:wrap;align-items:center;gap:10px}
+	    .audit-preset-label{font-size:12px;font-weight:700;color:#64748b;letter-spacing:.08em;text-transform:uppercase}
+	    .audit-filter-grid{margin:0;padding:0;border:none;background:transparent;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px 16px}
+	    .audit-limit-field{max-width:180px}
+	    .audit-filter-actions{align-self:end}
+	    .audit-filter-chip{min-height:40px;padding:0 15px;border-radius:999px;border:1px solid rgba(100,116,139,.22);background:rgba(255,255,255,.82);color:#334155;cursor:pointer;transition:transform .18s ease,background .18s ease,border-color .18s ease,box-shadow .18s ease}
+	    .audit-filter-chip:hover{transform:translateY(-1px);border-color:rgba(37,99,235,.24);box-shadow:0 8px 18px rgba(15,23,42,.06)}
+	    .audit-filter-chip.active{border-color:#0f172a;background:#0f172a;color:#f8fafc;font-weight:700;box-shadow:0 12px 22px rgba(15,23,42,.12)}
+	    .audit-filter-note{font-size:13px;color:#475569;line-height:1.7}
+	    .audit-focus-card{display:grid;gap:10px;padding-bottom:4px;border-bottom:1px solid rgba(255,255,255,.12)}
+	    .audit-focus-card strong{font-size:28px;line-height:1.08;letter-spacing:-.03em}
+	    .audit-focus-card p{margin:0;color:rgba(226,232,240,.82);line-height:1.7}
+	    .audit-focus-metrics{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+	    .audit-focus-metric{padding:14px;border-radius:18px;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.08);display:grid;gap:8px}
+	    .audit-focus-metric span{font-size:12px;color:rgba(191,219,254,.75)}
+	    .audit-focus-metric strong{font-size:15px;color:#f8fafc}
+	    .audit-stream-panel{padding:22px;border-radius:24px;border:1px solid rgba(148,163,184,.18);background:linear-gradient(180deg,rgba(255,255,255,.97),rgba(242,247,255,.92));box-shadow:0 14px 30px rgba(15,23,42,.06);position:relative;z-index:1}
+	    .audit-results-bar{display:flex;justify-content:space-between;align-items:flex-end;gap:16px;margin-bottom:14px}
+	    .audit-results-bar strong{display:block;font-size:24px;line-height:1.08;margin:8px 0 6px;letter-spacing:-.03em}
+	    .audit-results-bar p{margin:0;color:var(--muted);font-size:13px;line-height:1.7}
+	    .audit-results-meta{display:flex;flex-wrap:wrap;gap:10px}
+	    .audit-results-meta span{display:inline-flex;align-items:center;min-height:36px;padding:0 13px;border-radius:999px;background:#eaf2ff;color:#1e40af;font-size:12px;font-weight:700;border:1px solid rgba(59,130,246,.16)}
+	    .audit-table-wrap{background:rgba(255,255,255,.72);border-color:rgba(148,163,184,.16)}
+	    .audit-data-table{min-width:860px}
+	    .audit-stream-table th{font-size:12px;letter-spacing:.08em;text-transform:uppercase;background:rgba(226,232,240,.44);color:#475569}
+	    .audit-stream-table tbody tr:hover{background:rgba(226,232,240,.28)}
+	    .audit-id-badge{display:inline-flex;align-items:center;justify-content:center;min-width:54px;min-height:30px;padding:0 10px;border-radius:999px;background:#f1f5f9;color:#0f172a;font-size:12px;font-weight:700;border:1px solid rgba(148,163,184,.24)}
+	    .audit-event-cell,.audit-subject-cell,.audit-object-cell{display:grid;gap:8px}
+	    .audit-subject-head,.audit-object-head{display:flex;flex-wrap:wrap;align-items:center;gap:8px}
+	    .audit-user-name{font-weight:700;color:#0f172a}
+	    .audit-subject-meta,.audit-object-meta{font-size:12px;color:#64748b;line-height:1.6}
+	    .audit-meta-chip,.audit-object-chip,.audit-event-chip{display:inline-flex;align-items:center;min-height:32px;padding:0 12px;border-radius:999px;border:1px solid rgba(148,163,184,.24);background:#f8fafc;color:#334155;font-size:12px;font-weight:600;white-space:nowrap}
+	    .audit-meta-chip{background:#eff6ff;color:#1d4ed8;border-color:rgba(59,130,246,.22)}
+	    .audit-object-chip{background:#f8fafc;color:#475569}
+	    .audit-event-chip.tone-session{background:#e0f2fe;color:#0c4a6e;border-color:rgba(14,165,233,.26)}
+	    .audit-event-chip.tone-security{background:#eef2ff;color:#3730a3;border-color:rgba(99,102,241,.24)}
+	    .audit-event-chip.tone-change{background:#ecfccb;color:#3f6212;border-color:rgba(132,204,22,.24)}
+	    .audit-event-chip.tone-neutral{background:#f8fafc;color:#334155}
+	    .audit-time{font-family:'SFMono-Regular',Consolas,'Liberation Mono','Courier New',monospace;color:#334155;font-size:12px;line-height:1.6}
+	    .audit-workbench{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px;position:relative;z-index:1}
+	    .audit-workbench-card{border-radius:22px;padding:20px;border:1px solid rgba(148,163,184,.2);background:rgba(255,255,255,.92);display:grid;gap:14px;box-shadow:0 12px 26px rgba(15,23,42,.08)}
+	    .audit-workbench-card strong{display:block;font-size:22px;line-height:1.08;margin-top:8px}
+	    .audit-workbench-card p{margin:0;color:var(--muted);line-height:1.7}
+	    .audit-workbench-note{font-size:13px;color:#475569;line-height:1.7}
+	    .toast{padding:12px 16px;border-radius:14px;max-width:640px;box-shadow:var(--shadow)}
     .toast.info{background:#eff6ff;color:#1d4ed8}
     .toast.success{background:#e9f0ff;color:#2f6df6}
     .toast.error{background:#fff1f2;color:#be123c}
     @media (max-width: 1100px){.form-grid.compact{grid-template-columns:repeat(2,minmax(0,1fr))}}
-    @media (max-width: 960px){
-      .shell{grid-template-columns:1fr}
-      .sidebar{position:relative;height:auto}
-      .hero{flex-direction:column}
-      .config-card-body,.form-grid,.form-grid.compact{grid-template-columns:1fr}
-      .user-import-row{grid-template-columns:1fr}
-      .access-pill-grid{gap:10px}
-      .modal-shell{padding:8px}
-      .modal-panel{width:min(100%,1180px);margin:0;max-height:calc(100vh - 16px)}
-      .block-head{flex-direction:column}
-    }
+	    @media (max-width: 960px){
+	      .shell{grid-template-columns:1fr}
+	      .sidebar{position:relative;height:auto}
+	      .hero{flex-direction:column}
+	      .config-card-body,.form-grid,.form-grid.compact{grid-template-columns:1fr}
+	      .user-import-row{grid-template-columns:1fr}
+	      .access-pill-grid{gap:10px}
+	      .modal-shell{padding:8px}
+	      .modal-panel{width:min(100%,1180px);margin:0;max-height:calc(100vh - 16px)}
+	      .block-head{flex-direction:column}
+	      .audit-overview-item{grid-template-columns:1fr}
+	      .audit-command-grid{grid-template-columns:1fr}
+	      .audit-command-head{flex-direction:column}
+	      .audit-focus-metrics{grid-template-columns:1fr}
+	      .audit-limit-field{max-width:none}
+	      .audit-results-bar{flex-direction:column;align-items:flex-start}
+	      .audit-preset-row{align-items:flex-start}
+	    }
   </style>
 </head>
 <body>
@@ -2042,6 +2211,9 @@ const renderDedicatedCenterPage = ({ nonce, config }) => {
     });
     const systemAccessOptions = ${JSON.stringify(ADMIN_CENTER_SYSTEM_OPTIONS)};
     const systemDisplayOptions = ${JSON.stringify(SYSTEM_DISPLAY_OPTIONS)};
+    const auditActionOptions = ${JSON.stringify(AUDIT_ACTION_OPTIONS)};
+    const auditEntityOptions = ${JSON.stringify(AUDIT_ENTITY_OPTIONS)};
+    const auditPresetOptions = ${JSON.stringify(AUDIT_PRESET_OPTIONS)};
     const defaultRoleIpAllowlist = Object.freeze({
       admin: [],
       sysadmin: [],
@@ -2108,6 +2280,38 @@ const renderDedicatedCenterPage = ({ nonce, config }) => {
         labels: labels.slice(0, maxVisible),
         overflowCount: Math.max(labels.length - maxVisible, 0),
       };
+    }
+
+    function getAuditActionOption(value) {
+      return auditActionOptions.find((item) => item.value === String(value || '').trim());
+    }
+
+    function getAuditEntityOption(value) {
+      return auditEntityOptions.find((item) => item.value === String(value || '').trim());
+    }
+
+    function getAuditPreset(value) {
+      return auditPresetOptions.find((item) => item.key === String(value || '').trim());
+    }
+
+    function getAuditSystemLabel(key) {
+      if (String(key || '').trim() === 'sso') return '统一登录';
+      return getSystemDisplayShortLabel(key);
+    }
+
+    function getAuditActionLabel(key) {
+      const item = getAuditActionOption(key);
+      return item?.label || key || '-';
+    }
+
+    function getAuditActionTone(key) {
+      const item = getAuditActionOption(key);
+      return item?.tone || 'neutral';
+    }
+
+    function getAuditEntityLabel(key) {
+      const item = getAuditEntityOption(key);
+      return item?.label || key || '-';
     }
 
     function getDefaultBusinessAccessByRole(role) {
@@ -3031,25 +3235,96 @@ const renderDedicatedCenterPage = ({ nonce, config }) => {
       }
     }
 
-    function renderAuditLogs(rows) {
-      const body = document.getElementById('auditLogsBody');
-      if (!body) return;
-      const list = Array.isArray(rows) ? rows : [];
-      auditLogsRows = list;
-      updateStatCard('primaryStatValue', list.length);
-      updateStatCard('secondaryStatValue', new Set(list.map((row) => String(row.system || '').trim()).filter(Boolean)).size);
-      if (!list.length) {
-        body.innerHTML = '<tr><td colspan="6" class="empty">当前没有审计日志</td></tr>';
-        return;
-      }
-      body.innerHTML = list.map((row) => '<tr>'
-        + '<td>' + escapeHtml(row.id) + '</td>'
-        + '<td>' + escapeHtml(getSystemDisplayLabel(row.system || '-')) + '</td>'
-        + '<td>' + escapeHtml(row.username || '-') + '</td>'
-        + '<td>' + escapeHtml(row.action || '-') + '</td>'
-        + '<td>' + escapeHtml(row.entity || '-') + '</td>'
-        + '<td>' + escapeHtml(row.created_at || '-') + '</td>'
-        + '</tr>').join('');
+	    function renderAuditLogs(rows) {
+	      const body = document.getElementById('auditLogsBody');
+	      if (!body) return;
+	      const list = Array.isArray(rows) ? rows : [];
+	      auditLogsRows = list;
+	      const coveredSystems = new Set(list.map((row) => String(row.system || '').trim()).filter(Boolean)).size;
+	      updateStatCard('primaryStatValue', list.length);
+	      updateStatCard('secondaryStatValue', coveredSystems);
+	      const countEl = document.getElementById('auditResultsCount');
+	      const systemsEl = document.getElementById('auditResultsSystems');
+	      const summaryEl = document.getElementById('auditResultsSummary');
+	      const updatedEl = document.getElementById('auditOverviewUpdated');
+	      if (countEl) countEl.textContent = list.length + ' 条记录';
+	      if (systemsEl) systemsEl.textContent = coveredSystems + ' 个系统';
+	      if (summaryEl) {
+	        summaryEl.textContent = list.length
+	          ? ('当前范围命中 ' + list.length + ' 条记录，覆盖 ' + coveredSystems + ' 个系统，按时间倒序展示最近事件。')
+	          : '当前筛选范围没有命中记录，可以切换预设或放宽条件后重新检索。';
+	      }
+	      if (updatedEl) updatedEl.textContent = new Date().toLocaleString('zh-CN', { hour12: false });
+	      if (!list.length) {
+	        body.innerHTML = '<tr><td colspan="5" class="empty">当前没有审计日志</td></tr>';
+	        return;
+	      }
+	      body.innerHTML = list.map((row) => {
+	        const actionTone = getAuditActionTone(row.action || '');
+	        const requestIp = String(row.request_ip || '').trim();
+	        const systemLabel = getAuditSystemLabel(row.system || '-') || '-';
+	        const entityLabel = getAuditEntityLabel(row.entity || '-');
+	        const entityMeta = row.entity_id ? ('对象ID ' + row.entity_id) : '对象ID 未记录';
+	        return '<tr>'
+	          + '<td><span class="audit-id-badge">#' + escapeHtml(row.id) + '</span></td>'
+	          + '<td><div class="audit-event-cell"><span class="audit-event-chip tone-' + escapeHtml(actionTone) + '">' + escapeHtml(getAuditActionLabel(row.action || '-')) + '</span></div></td>'
+	          + '<td><div class="audit-subject-cell"><div class="audit-subject-head"><strong class="audit-user-name">' + escapeHtml(row.username || '-') + '</strong><span class="audit-meta-chip">' + escapeHtml(systemLabel) + '</span></div>'
+	          + '<div class="audit-subject-meta">' + escapeHtml(requestIp ? ('来源IP ' + requestIp) : '来源IP 未记录') + '</div></div></td>'
+	          + '<td><div class="audit-object-cell"><div class="audit-object-head"><span class="audit-object-chip">' + escapeHtml(entityLabel) + '</span></div><div class="audit-object-meta">' + escapeHtml(entityMeta) + '</div></div></td>'
+	          + '<td><div class="audit-time">' + escapeHtml(row.created_at || '-') + '</div></td>'
+	          + '</tr>';
+	      }).join('');
+	    }
+
+	    function updateAuditWorkbenchSummary(matchedPreset) {
+	      const system = String(document.getElementById('auditFilterSystem')?.value || '').trim();
+	      const action = String(document.getElementById('auditFilterAction')?.value || '').trim();
+	      const entity = String(document.getElementById('auditFilterEntity')?.value || '').trim();
+	      const limit = String(document.getElementById('auditFilterLimit')?.value || '100').trim() || '100';
+	      const preset = matchedPreset || auditPresetOptions.find((item) => (
+	        String(item.query?.system || '').trim() === system
+	        && String(item.query?.action || '').trim() === action
+	        && String(item.query?.entity || '').trim() === entity
+	      ));
+	      const setText = (id, text) => {
+	        const target = document.getElementById(id);
+	        if (target) target.textContent = text;
+	      };
+	      setText('auditFocusPreset', preset?.label || '自定义检索');
+	      setText('auditFocusSummary', preset?.summary || '按当前筛选条件查看命中的审计事件，便于逐条复核。');
+	      setText('auditFocusSystem', system ? (getAuditSystemLabel(system) || system) : '全部系统');
+	      setText('auditFocusAction', action ? getAuditActionLabel(action) : '全部动作');
+	      setText('auditFocusEntity', entity ? getAuditEntityLabel(entity) : '全部对象');
+	      setText('auditFocusLimit', limit + ' 条');
+	    }
+
+	    function syncAuditPresetButtons() {
+	      const system = String(document.getElementById('auditFilterSystem')?.value || '').trim();
+	      const action = String(document.getElementById('auditFilterAction')?.value || '').trim();
+	      const entity = String(document.getElementById('auditFilterEntity')?.value || '').trim();
+	      const matched = auditPresetOptions.find((item) => (
+        String(item.query?.system || '').trim() === system
+        && String(item.query?.action || '').trim() === action
+        && String(item.query?.entity || '').trim() === entity
+      ));
+	      document.querySelectorAll('[data-audit-preset]').forEach((node) => {
+	        node.classList.toggle('active', node.dataset.auditPreset === matched?.key);
+	      });
+	      updateAuditWorkbenchSummary(matched);
+	    }
+
+    function applyAuditPreset(key) {
+      const preset = getAuditPreset(key);
+      if (!preset) return;
+      const { system = '', action = '', entity = '' } = preset.query || {};
+      const systemEl = document.getElementById('auditFilterSystem');
+      const actionEl = document.getElementById('auditFilterAction');
+      const entityEl = document.getElementById('auditFilterEntity');
+      if (systemEl) systemEl.value = system;
+      if (actionEl) actionEl.value = action;
+      if (entityEl) entityEl.value = entity;
+      syncAuditPresetButtons();
+      loadAuditLogs();
     }
 
     function collectAuditQuery() {
@@ -3071,11 +3346,12 @@ const renderDedicatedCenterPage = ({ nonce, config }) => {
     async function loadAuditLogs(event) {
       if (event) event.preventDefault();
       const params = collectAuditQuery();
+      syncAuditPresetButtons();
       setHint('auditLogsNotice', '正在加载审计日志...');
       try {
         const rows = await requestJson(centerApi.logsList + '?' + params.toString());
         renderAuditLogs(rows);
-        setHint('auditLogsNotice', '审计日志已更新');
+        setHint('auditLogsNotice', '审计日志已更新，共 ' + rows.length + ' 条记录');
       } catch (error) {
         renderAuditLogs([]);
         setHint('auditLogsNotice', error.message || '加载审计日志失败', true);
@@ -3202,6 +3478,13 @@ const renderDedicatedCenterPage = ({ nonce, config }) => {
       document.getElementById('auditLogsReloadBtn')?.addEventListener('click', loadAuditLogs);
       document.getElementById('auditExportBtn')?.addEventListener('click', exportAuditLogs);
       document.getElementById('auditVerifyBtn')?.addEventListener('click', verifyAuditChain);
+      document.querySelectorAll('[data-audit-preset]').forEach((node) => {
+        node.addEventListener('click', () => applyAuditPreset(node.dataset.auditPreset));
+      });
+      ['auditFilterSystem', 'auditFilterAction', 'auditFilterEntity'].forEach((id) => {
+        document.getElementById(id)?.addEventListener('change', syncAuditPresetButtons);
+      });
+      syncAuditPresetButtons();
       loadAuditLogs();
     }
 
