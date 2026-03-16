@@ -122,6 +122,33 @@ test('syncRepositoryVersion updates live version files and bootstrap references'
   assert.match(fs.readFileSync(path.join(rootDir, 'scripts/tests/bootstrap-full-server.sh'), 'utf8'), /codex\/4\.2\.0/);
 });
 
+test('syncRepositoryVersion ignores nested worktree directories', () => {
+  const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-version-worktree-ignore-'));
+
+  writeJson(path.join(rootDir, 'package.json'), { name: 'root', version: '5.0.1' });
+  writeJson(path.join(rootDir, 'package-lock.json'), makePackageLock('5.0.1'));
+  writeJson(path.join(rootDir, 'auth/package.json'), { name: 'auth', version: '5.0.1' });
+  writeJson(path.join(rootDir, 'auth/package-lock.json'), makePackageLock('5.0.1'));
+  writeText(path.join(rootDir, 'auth/index.js'), "const RELEASE_VERSION = '5.0.1';\n");
+  writeText(path.join(rootDir, 'docs/versioning.md'), '- 当前整套系统口径版本：`5.0.1`\n');
+  writeText(path.join(rootDir, 'README.md'), 'git clone -b codex/5.0.1 /root/AuthorizationReminder-codex-5.0.1\n');
+  writeText(path.join(rootDir, 'scripts/deploy/bootstrap-full-server.sh'), 'BOOTSTRAP_BRANCH="${BOOTSTRAP_BRANCH:-codex/5.0.1}"\n');
+  writeText(path.join(rootDir, 'scripts/tests/bootstrap-full-server.sh'), "BOOTSTRAP_BRANCH='codex/5.0.1' \\\n");
+
+  writeJson(path.join(rootDir, '.worktrees/delivery-system/package.json'), { name: 'nested', version: '5.0.1' });
+  writeJson(path.join(rootDir, '.worktrees/delivery-system/package-lock.json'), makePackageLock('5.0.1'));
+
+  const changedFiles = syncRepositoryVersion({
+    rootDir,
+    currentVersion: '5.0.1',
+    nextVersion: '5.0.2',
+  });
+
+  assert.ok(changedFiles.includes('package.json'));
+  assert.equal(JSON.parse(fs.readFileSync(path.join(rootDir, 'package.json'), 'utf8')).version, '5.0.2');
+  assert.equal(JSON.parse(fs.readFileSync(path.join(rootDir, '.worktrees/delivery-system/package.json'), 'utf8')).version, '5.0.1');
+});
+
 test('applyVersioningToHeadCommit amends the latest commit with bumped version files', () => {
   const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-version-hook-'));
   const git = (...args) => execFileSync('git', args, { cwd: rootDir, encoding: 'utf8' });

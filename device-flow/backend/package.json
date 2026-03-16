@@ -1,6 +1,6 @@
 {
   "name": "juxin-device-flow-backend",
-  "version": "5.0.1",
+  "version": "5.0.3",
   "private": true,
   "main": "src/index.js",
   "scripts": {

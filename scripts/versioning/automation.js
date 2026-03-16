@@ -20,6 +20,7 @@ const TEXT_VERSION_FILES = [
 
 const WALK_IGNORE_DIRS = new Set([
   '.git',
+  '.worktrees',
   'node_modules',
   'dist',
   'coverage',
