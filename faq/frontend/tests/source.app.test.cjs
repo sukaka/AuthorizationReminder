@@ -22,3 +22,11 @@ test('faq frontend exposes global library, department library and access request
   assert.match(source, /申请查看/);
   assert.match(source, /待审批/);
 });
+
+test('filteredCategories is declared before allCategoryIds to avoid TDZ on first render', () => {
+  const filteredIndex = source.indexOf('const filteredCategories = useMemo(');
+  const allIdsIndex = source.indexOf('const allCategoryIds = useMemo(');
+  assert.notEqual(filteredIndex, -1, 'filteredCategories declaration missing');
+  assert.notEqual(allIdsIndex, -1, 'allCategoryIds declaration missing');
+  assert.ok(filteredIndex < allIdsIndex, 'filteredCategories must be declared before allCategoryIds');
+});

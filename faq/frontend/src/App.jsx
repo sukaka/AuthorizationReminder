@@ -553,11 +553,6 @@ function App() {
     () => new Set((favorites || []).map((item) => Number(item.article_id)).filter((id) => Number.isFinite(id) && id > 0)),
     [favorites]
   )
-  const allCategoryIds = useMemo(
-    () => filteredCategories.map((item) => Number(item?.id || 0)).filter((id) => Number.isFinite(id) && id > 0),
-    [filteredCategories]
-  )
-  const allCategoriesSelected = allCategoryIds.length > 0 && selectedCategoryIds.length === allCategoryIds.length
 
   const latestAccessRequestByArticleId = useMemo(() => {
     const map = new Map()
@@ -584,6 +579,11 @@ function App() {
       return true
     })
   }, [categories, categoryDepartmentFilter, categoryScopeFilter])
+  const allCategoryIds = useMemo(
+    () => filteredCategories.map((item) => Number(item?.id || 0)).filter((id) => Number.isFinite(id) && id > 0),
+    [filteredCategories]
+  )
+  const allCategoriesSelected = allCategoryIds.length > 0 && selectedCategoryIds.length === allCategoryIds.length
 
   const articleFormCategories = useMemo(() => {
     const scope = String(articleForm.library_scope || 'department').trim().toLowerCase() || 'department'
