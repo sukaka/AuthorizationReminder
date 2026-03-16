@@ -53,6 +53,7 @@ const formatUserRow = (row) => {
     ...row,
     role: normalizeUserRole(row.role),
     app_access: normalizeAppAccess(row.app_access, row.role),
+    department_code: normalizeDepartmentCode(row.department_code),
   };
 };
 
@@ -113,6 +114,15 @@ const createHttpError = (statusCode, message) => {
   return error;
 };
 
+const normalizeDepartmentCode = (departmentCode) => {
+  const value = String(departmentCode || '').trim().toUpperCase();
+  if (!value) return null;
+  if (!/^[A-Z0-9_-]{1,32}$/.test(value)) {
+    throw createHttpError(400, '部门编码格式不正确');
+  }
+  return value;
+};
+
 const assertDbMethods = (db, methods = []) => {
   const missing = methods.filter((method) => typeof db?.[method] !== 'function');
   if (missing.length) {
@@ -133,7 +143,7 @@ const createAdminCenterUsersService = ({
     async listUsers() {
       assertDbMethods(db, ['query']);
       const rows = await db.query(
-        'SELECT id, username, role, is_active, email, phone, wecom_id, app_access, totp_enabled, created_at FROM users ORDER BY id DESC'
+        'SELECT id, username, role, is_active, email, phone, wecom_id, app_access, department_code, totp_enabled, created_at FROM users ORDER BY id DESC'
       );
       const users = rows.map(formatUserRow);
       const loginIds = Array.from(new Set(users.map((item) => resolveUserLoginId(item, builtinAccountUsernames)).filter(Boolean)));
@@ -175,7 +185,7 @@ const createAdminCenterUsersService = ({
 
     async createUser({ actor, payload }) {
       assertDbMethods(db, ['run', 'get']);
-      const { username, password, role, is_active, email, phone, wecom_id, app_access } = payload || {};
+      const { username, password, role, is_active, email, phone, wecom_id, app_access, department_code } = payload || {};
       if (!username || !password) throw createHttpError(400, '请输入账号和密码');
 
       const usernameRuleError = validateUsernameFormat(username);
@@ -193,6 +203,7 @@ const createAdminCenterUsersService = ({
 
       const nextRole = normalizeUserRole(role || 'user');
       if (!ALLOWED_USER_ROLES.has(nextRole)) throw createHttpError(400, '角色不合法');
+      const nextDepartmentCode = normalizeDepartmentCode(department_code);
 
       const nextAccess = normalizeAppAccess(app_access, nextRole);
       if (!nextAccess.length) throw createHttpError(400, '请至少选择一个可访问系统');
@@ -202,8 +213,8 @@ const createAdminCenterUsersService = ({
       let info;
       try {
         info = await db.run(
-          'INSERT INTO users (username, password_hash, role, is_active, email, phone, wecom_id, app_access) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-          [String(username).trim(), hash, nextRole, nextActive, email || null, phone || null, wecom_id || null, JSON.stringify(nextAccess)]
+          'INSERT INTO users (username, password_hash, role, is_active, email, phone, wecom_id, app_access, department_code) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+          [String(username).trim(), hash, nextRole, nextActive, email || null, phone || null, wecom_id || null, JSON.stringify(nextAccess), nextDepartmentCode]
         );
       } catch (err) {
         if (err && err.code === 'ER_DUP_ENTRY') throw createHttpError(400, '用户名已存在');
@@ -211,7 +222,7 @@ const createAdminCenterUsersService = ({
       }
 
       const row = formatUserRow(await db.get(
-        'SELECT id, username, role, is_active, email, phone, wecom_id, app_access, totp_enabled, created_at FROM users WHERE id = ?',
+        'SELECT id, username, role, is_active, email, phone, wecom_id, app_access, department_code, totp_enabled, created_at FROM users WHERE id = ?',
         [info.insertId]
       ));
       await logOperation({
@@ -226,7 +237,7 @@ const createAdminCenterUsersService = ({
 
     async updateUser({ actor, targetId, payload }) {
       assertDbMethods(db, ['get', 'run']);
-      const { password, role, is_active, email, phone, wecom_id, app_access } = payload || {};
+      const { password, role, is_active, email, phone, wecom_id, app_access, department_code } = payload || {};
       if (
         !password &&
         !role &&
@@ -234,7 +245,8 @@ const createAdminCenterUsersService = ({
         email === undefined &&
         phone === undefined &&
         wecom_id === undefined &&
-        app_access === undefined
+        app_access === undefined &&
+        department_code === undefined
       ) {
         throw createHttpError(400, '没有可更新字段');
       }
@@ -247,7 +259,7 @@ const createAdminCenterUsersService = ({
         if (phoneRuleError) throw createHttpError(400, phoneRuleError);
       }
       const before = formatUserRow(await db.get(
-        'SELECT id, username, role, is_active, email, phone, wecom_id, app_access, totp_enabled, created_at FROM users WHERE id = ?',
+        'SELECT id, username, role, is_active, email, phone, wecom_id, app_access, department_code, totp_enabled, created_at FROM users WHERE id = ?',
         [targetId]
       ));
       if (!before) throw createHttpError(404, '用户不存在');
@@ -278,6 +290,9 @@ const createAdminCenterUsersService = ({
       if (wecom_id !== undefined) {
         await db.run('UPDATE users SET wecom_id = ? WHERE id = ?', [wecom_id || null, targetId]);
       }
+      if (department_code !== undefined) {
+        await db.run('UPDATE users SET department_code = ? WHERE id = ?', [normalizeDepartmentCode(department_code), targetId]);
+      }
       if (is_active !== undefined) {
         const nextActive = Number(is_active) === 1 ? 1 : 0;
         if (builtinAccountUsernames.has(String(before.username || '').toLowerCase()) && nextActive !== 1) {
@@ -297,7 +312,7 @@ const createAdminCenterUsersService = ({
         await db.run('UPDATE users SET app_access = ? WHERE id = ?', [JSON.stringify(nextAccess), targetId]);
       }
       const row = formatUserRow(await db.get(
-        'SELECT id, username, role, is_active, email, phone, wecom_id, app_access, totp_enabled, created_at FROM users WHERE id = ?',
+        'SELECT id, username, role, is_active, email, phone, wecom_id, app_access, department_code, totp_enabled, created_at FROM users WHERE id = ?',
         [targetId]
       ));
       let actionType = 'UPDATE';
@@ -394,6 +409,7 @@ module.exports = {
   createAdminCenterUsersService,
   formatUserRow,
   normalizeAppAccess,
+  normalizeDepartmentCode,
   normalizeUserRole,
   resolveUserLoginId,
   validateEmailFormat,

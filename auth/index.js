@@ -41,11 +41,15 @@ const {
   ALLOWED_USER_ROLES,
   createAdminCenterUsersService,
   normalizeAppAccess,
+  normalizeDepartmentCode,
   normalizeUserRole,
   validateEmailFormat,
   validatePhoneFormat,
   validateUsernameFormat,
 } = require('./admin-center-users');
+const {
+  createAdminCenterDepartmentsService,
+} = require('./admin-center-departments');
 const {
   createAdminCenterSecurityService,
 } = require('./admin-center-security');
@@ -804,23 +808,72 @@ const authMiddleware = async (req, res, next) => {
 app.use('/api', authMiddleware);
 
 const buildUserScope = async (user) => {
-  if (!user) return { isAdmin: false, customerIds: [], contactIds: [], phone: null };
-  if (user.role === 'admin') return { isAdmin: true, customerIds: [], contactIds: [], phone: null };
-  const dbUser = await db.get('SELECT id, phone FROM users WHERE id = ?', [user.id]);
+  if (!user) {
+    return {
+      isAdmin: false,
+      customerIds: [],
+      contactIds: [],
+      phone: null,
+      department: null,
+      managedDepartments: [],
+      isDepartmentDocAdmin: false,
+    };
+  }
+  const dbUser = await db.get('SELECT id, phone, department_code FROM users WHERE id = ?', [user.id]);
   const phone = dbUser?.phone || null;
-  if (!phone) return { isAdmin: false, customerIds: [], contactIds: [], phone: null };
-  const contacts = await db.query(
-    `SELECT c.id, cc.customer_id
-     FROM contacts c
-     JOIN contact_customers cc ON cc.contact_id = c.id
-     WHERE c.phone = ?`,
-    [phone]
+  const departmentCode = normalizeDepartmentCode(dbUser?.department_code);
+  const department = departmentCode
+    ? await db.get(
+      'SELECT code, name, is_active FROM departments WHERE code = ? LIMIT 1',
+      [departmentCode]
+    )
+    : null;
+  const managedDepartments = await db.query(
+    `SELECT d.code, d.name, d.is_active
+     FROM department_doc_admins dda
+     JOIN departments d ON d.code = dda.department_code
+     WHERE dda.user_id = ? AND dda.can_manage_docs = 1
+     ORDER BY d.sort_order ASC, d.code ASC`,
+    [user.id]
   );
-  const customerIds = Array.from(
-    new Set(contacts.map((c) => Number(c.customer_id)).filter((id) => Number.isFinite(id)))
-  );
-  const contactIds = contacts.map((c) => Number(c.id)).filter((id) => Number.isFinite(id));
-  return { isAdmin: false, customerIds, contactIds, phone };
+
+  let customerIds = [];
+  let contactIds = [];
+  if (phone) {
+    const contacts = await db.query(
+      `SELECT c.id, cc.customer_id
+       FROM contacts c
+       JOIN contact_customers cc ON cc.contact_id = c.id
+       WHERE c.phone = ?`,
+      [phone]
+    );
+    customerIds = Array.from(
+      new Set(contacts.map((c) => Number(c.customer_id)).filter((id) => Number.isFinite(id)))
+    );
+    contactIds = contacts.map((c) => Number(c.id)).filter((id) => Number.isFinite(id));
+  }
+
+  return {
+    isAdmin: user.role === 'admin',
+    customerIds,
+    contactIds,
+    phone,
+    department: departmentCode
+      ? {
+        code: departmentCode,
+        name: String(department?.name || departmentCode),
+        is_active: Number(department?.is_active || 0) === 1 ? 1 : 0,
+      }
+      : null,
+    managedDepartments: Array.isArray(managedDepartments)
+      ? managedDepartments.map((item) => ({
+        code: normalizeDepartmentCode(item.code),
+        name: String(item.name || item.code || ''),
+        is_active: Number(item.is_active || 0) === 1 ? 1 : 0,
+      }))
+      : [],
+    isDepartmentDocAdmin: Array.isArray(managedDepartments) && managedDepartments.length > 0,
+  };
 };
 
 const deny = (reason = '无权限') => ({ allow: false, reason });
@@ -1321,7 +1374,7 @@ app.get('/api/auth/apps', async (req, res) => {
   });
 });
 
-const RELEASE_VERSION = '5.1.0';
+const RELEASE_VERSION = '5.2.0';
 const DEDICATED_CENTER_VERSION = `v${RELEASE_VERSION}`;
 const ADMIN_CENTER_ROLE_OPTIONS = Object.freeze([
   { value: 'user', label: '普通用户' },
@@ -1365,6 +1418,7 @@ const renderAdminCenterSections = () => ({
     { key: 'account', label: '账号安全' },
     { key: 'security', label: '安全配置' },
     { key: 'users', label: '用户管理' },
+    { key: 'departments', label: '部门管理' },
   ],
   stats: [
     { id: 'primaryStatValue', label: '用户数量', value: '0' },
@@ -1601,6 +1655,12 @@ const renderAdminCenterSections = () => ({
           </select>
         </label>
         <label class="form-label">
+          主归属部门
+          <select name="department_code" class="form-select" id="adminCreateUserDepartment">
+            <option value="">未分配</option>
+          </select>
+        </label>
+        <label class="form-label">
           状态
           <select name="is_active" class="form-select">
             <option value="1">启用</option>
@@ -1640,6 +1700,7 @@ const renderAdminCenterSections = () => ({
               <th>序号</th>
               <th>账号</th>
               <th>角色</th>
+              <th>主归属部门</th>
               <th>状态</th>
               <th>锁定状态</th>
               <th>可访问系统</th>
@@ -1649,7 +1710,7 @@ const renderAdminCenterSections = () => ({
             </tr>
           </thead>
           <tbody id="adminUsersBody">
-            <tr><td colspan="9" class="empty">正在加载用户列表...</td></tr>
+            <tr><td colspan="10" class="empty">正在加载用户列表...</td></tr>
           </tbody>
         </table>
       </div>
@@ -1692,6 +1753,12 @@ const renderAdminCenterSections = () => ({
               </select>
             </label>
             <label class="form-label">
+              主归属部门
+              <select id="adminEditDepartmentCode" class="form-select">
+                <option value="">未分配</option>
+              </select>
+            </label>
+            <label class="form-label">
               状态
               <select id="adminEditActive" class="form-select">
                 <option value="1">启用</option>
@@ -1712,6 +1779,66 @@ const renderAdminCenterSections = () => ({
           </form>
           <div id="adminEditUserNotice" class="hint-line"></div>
         </section>
+      </div>
+    </section>
+
+    <section class="panel center-panel" data-tab-panel="departments" hidden>
+      <div class="panel-header">
+        <div>
+          <h2>部门管理</h2>
+          <p>维护部门主数据、用户主归属部门，以及各部门的部门文档管理员。</p>
+        </div>
+        <div class="panel-actions">
+          <button id="adminDepartmentsReloadBtn" type="button" class="ghost-btn">刷新部门</button>
+        </div>
+      </div>
+      <form id="adminDepartmentForm" class="form-grid user-create-grid">
+        <label class="form-label">
+          部门编码
+          <input id="adminDepartmentCode" class="form-control" placeholder="如 TECH" required />
+        </label>
+        <label class="form-label">
+          部门名称
+          <input id="adminDepartmentName" class="form-control" placeholder="如 技术部" required />
+        </label>
+        <label class="form-label">
+          排序
+          <input id="adminDepartmentSortOrder" type="number" class="form-control" value="0" />
+        </label>
+        <label class="form-label">
+          状态
+          <select id="adminDepartmentActive" class="form-select">
+            <option value="1">启用</option>
+            <option value="0">禁用</option>
+          </select>
+        </label>
+        <div class="form-label full-row">
+          部门文档管理员
+          <div id="adminDepartmentAdmins" class="access-pill-grid"></div>
+          <span class="muted">部门管理员负责本部门文档分类维护与跨部门查看审批。</span>
+        </div>
+        <div class="form-actions">
+          <button class="primary-btn" type="submit">保存部门</button>
+          <button id="adminDepartmentResetBtn" class="ghost-btn" type="button">清空</button>
+        </div>
+      </form>
+      <div id="adminDepartmentsNotice" class="hint-line"></div>
+      <div class="table-wrap">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>部门编码</th>
+              <th>部门名称</th>
+              <th>排序</th>
+              <th>状态</th>
+              <th>部门文档管理员</th>
+              <th>操作</th>
+            </tr>
+          </thead>
+          <tbody id="adminDepartmentsBody">
+            <tr><td colspan="6" class="empty">正在加载部门列表...</td></tr>
+          </tbody>
+        </table>
       </div>
     </section>
   `,
@@ -2270,6 +2397,7 @@ const renderDedicatedCenterPage = ({ nonce, config }) => {
     let csrfToken = '';
     let currentUser = null;
     let adminUsersRows = [];
+    let adminDepartmentsRows = [];
     let auditLogsRows = [];
     let auditLogsMeta = {
       page: 1,
@@ -2305,6 +2433,74 @@ const renderDedicatedCenterPage = ({ nonce, config }) => {
 
     function roleLabel(value) {
       return roleLabelMap[String(value || '').trim().toLowerCase()] || value || '-';
+    }
+
+    function getDepartmentName(departmentCode) {
+      const code = String(departmentCode || '').trim().toUpperCase();
+      if (!code) return '未分配';
+      const row = adminDepartmentsRows.find((item) => String(item.code || '').trim().toUpperCase() === code);
+      return row?.name || code;
+    }
+
+    function renderDepartmentOptions(selectedCode = '') {
+      const selected = String(selectedCode || '').trim().toUpperCase();
+      const rows = Array.isArray(adminDepartmentsRows) ? adminDepartmentsRows : [];
+      const activeRows = rows.filter((item) => Number(item.is_active || 0) === 1 || String(item.code || '').trim().toUpperCase() === selected);
+      const seen = new Set();
+      const options = ['<option value="">未分配</option>'];
+      activeRows.forEach((item) => {
+        const code = String(item.code || '').trim().toUpperCase();
+        if (!code || seen.has(code)) return;
+        seen.add(code);
+        const label = String(item.name || code).trim() || code;
+        options.push('<option value="' + escapeHtml(code) + '"' + (code === selected ? ' selected' : '') + '>' + escapeHtml(label) + '</option>');
+      });
+      if (selected && !seen.has(selected)) {
+        options.push('<option value="' + escapeHtml(selected) + '" selected>' + escapeHtml(selected) + '</option>');
+      }
+      return options.join('');
+    }
+
+    function syncDepartmentSelects() {
+      const createSelect = document.getElementById('adminCreateUserDepartment');
+      if (createSelect) {
+        const currentValue = String(createSelect.value || '').trim().toUpperCase();
+        createSelect.innerHTML = renderDepartmentOptions(currentValue);
+        createSelect.value = currentValue;
+      }
+      const editSelect = document.getElementById('adminEditDepartmentCode');
+      if (editSelect) {
+        const currentValue = String(editSelect.value || '').trim().toUpperCase();
+        editSelect.innerHTML = renderDepartmentOptions(currentValue);
+        editSelect.value = currentValue;
+      }
+    }
+
+    function renderDepartmentAdminPicker(selectedIds = []) {
+      const container = document.getElementById('adminDepartmentAdmins');
+      if (!container) return;
+      const picked = new Set((Array.isArray(selectedIds) ? selectedIds : []).map((item) => Number(item)).filter((item) => item > 0));
+      const options = adminUsersRows
+        .filter((row) => Number(row.is_active) === 1)
+        .sort((left, right) => String(left.username || '').localeCompare(String(right.username || '')));
+      if (!options.length) {
+        container.innerHTML = '<span class="muted">请先创建用户，再设置部门管理员</span>';
+        return;
+      }
+      container.innerHTML = options.map((row) => {
+        const checked = picked.has(Number(row.id)) ? ' checked' : '';
+        const code = String(row.department_code || '').trim().toUpperCase();
+        const deptText = code ? (' · ' + getDepartmentName(code)) : '';
+        return '<label class="mfa-pill"><input type="checkbox" data-department-admin-user="' + row.id + '"' + checked + ' />'
+          + escapeHtml(String(row.username || '-'))
+          + '<span class="muted">' + escapeHtml(deptText) + '</span></label>';
+      }).join('');
+    }
+
+    function readSelectedDepartmentAdminIds() {
+      return Array.from(document.querySelectorAll('[data-department-admin-user]:checked'))
+        .map((input) => Number(input.dataset.departmentAdminUser || 0))
+        .filter((id) => Number.isFinite(id) && id > 0);
     }
 
     function getSystemDisplayOption(key) {
@@ -2736,7 +2932,12 @@ const renderDedicatedCenterPage = ({ nonce, config }) => {
         userPillEl.style.display = 'inline-flex';
       }
       if (roleGuideTitleEl) roleGuideTitleEl.textContent = '当前角色：' + roleLabel(currentUser.role);
-      if (roleGuideTextEl) roleGuideTextEl.textContent = centerRoleGuideText;
+      if (roleGuideTextEl) {
+        const departmentName = currentUser?.scope?.department?.name || '';
+        roleGuideTextEl.textContent = departmentName
+          ? (centerRoleGuideText + ' 当前主归属部门：' + departmentName)
+          : centerRoleGuideText;
+      }
       if (roleGuideEl) roleGuideEl.style.display = 'block';
     }
 
@@ -2748,7 +2949,7 @@ const renderDedicatedCenterPage = ({ nonce, config }) => {
       updateStatCard('primaryStatValue', list.length);
       updateStatCard('secondaryStatValue', list.filter((row) => row.lock_status === 'locked').length);
       if (!list.length) {
-        body.innerHTML = '<tr><td colspan="9" class="empty">当前没有用户数据</td></tr>';
+        body.innerHTML = '<tr><td colspan="10" class="empty">当前没有用户数据</td></tr>';
         return;
       }
       body.innerHTML = list.map((row, index) => {
@@ -2769,6 +2970,7 @@ const renderDedicatedCenterPage = ({ nonce, config }) => {
         const factorText = factorList.length ? escapeHtml(Array.from(new Set(factorList)).join('、')) : '-';
         const username = escapeHtml(row.username || '-');
         const role = escapeHtml(roleLabel(row.role || '-'));
+        const department = escapeHtml(getDepartmentName(row.department_code));
         const status = Number(row.is_active) === 1
           ? '<span class="status-pill">启用</span>'
           : '<span class="status-pill muted">禁用</span>';
@@ -2782,6 +2984,7 @@ const renderDedicatedCenterPage = ({ nonce, config }) => {
           + '<td>' + (index + 1) + '</td>'
           + '<td>' + username + '</td>'
           + '<td>' + role + '</td>'
+          + '<td>' + department + '</td>'
           + '<td>' + status + '</td>'
           + '<td>' + lockStatus + '</td>'
           + '<td class="access-cell">' + access + '</td>'
@@ -2820,6 +3023,7 @@ const renderDedicatedCenterPage = ({ nonce, config }) => {
         username: String(formData.get('username') || '').trim(),
         password: String(formData.get('password') || '').trim(),
         role,
+        department_code: String(formData.get('department_code') || '').trim().toUpperCase(),
         is_active: Number(formData.get('is_active') || 1) === 1 ? 1 : 0,
         email: String(formData.get('email') || '').trim(),
         phone: String(formData.get('phone') || '').trim(),
@@ -2836,6 +3040,8 @@ const renderDedicatedCenterPage = ({ nonce, config }) => {
       if (roleSelect) roleSelect.value = 'user';
       const activeSelect = form.querySelector('select[name="is_active"]');
       if (activeSelect) activeSelect.value = '1';
+      const departmentSelect = form.querySelector('select[name="department_code"]');
+      if (departmentSelect) departmentSelect.value = '';
       applyRoleAccessPreset({
         role: 'user',
         selector: '[data-system-access]',
@@ -2857,6 +3063,8 @@ const renderDedicatedCenterPage = ({ nonce, config }) => {
       document.getElementById('adminEditWecomId').value = String(row.wecom_id || '');
       document.getElementById('adminEditPassword').value = '';
       document.getElementById('adminEditRole').value = String(row.role || 'user');
+      document.getElementById('adminEditDepartmentCode').innerHTML = renderDepartmentOptions(row.department_code);
+      document.getElementById('adminEditDepartmentCode').value = String(row.department_code || '').trim().toUpperCase();
       document.getElementById('adminEditActive').value = Number(row.is_active) === 1 ? '1' : '0';
       applyRoleAccessPreset({
         role: row.role,
@@ -2879,9 +3087,118 @@ const renderDedicatedCenterPage = ({ nonce, config }) => {
         wecom_id: String(document.getElementById('adminEditWecomId')?.value || '').trim(),
         password: String(document.getElementById('adminEditPassword')?.value || '').trim(),
         role,
+        department_code: String(document.getElementById('adminEditDepartmentCode')?.value || '').trim().toUpperCase(),
         is_active: Number(document.getElementById('adminEditActive')?.value || 1) === 1 ? 1 : 0,
         app_access: appAccess,
       };
+    }
+
+    function resetDepartmentForm() {
+      const codeInput = document.getElementById('adminDepartmentCode');
+      const nameInput = document.getElementById('adminDepartmentName');
+      const sortInput = document.getElementById('adminDepartmentSortOrder');
+      const activeSelect = document.getElementById('adminDepartmentActive');
+      if (codeInput) codeInput.value = '';
+      if (nameInput) nameInput.value = '';
+      if (sortInput) sortInput.value = '0';
+      if (activeSelect) activeSelect.value = '1';
+      renderDepartmentAdminPicker([]);
+    }
+
+    function openDepartmentEditor(departmentCode) {
+      const row = adminDepartmentsRows.find((item) => String(item.code || '').trim().toUpperCase() === String(departmentCode || '').trim().toUpperCase());
+      if (!row) {
+        setHint('adminDepartmentsNotice', '未找到要编辑的部门', true);
+        return;
+      }
+      document.getElementById('adminDepartmentCode').value = String(row.code || '');
+      document.getElementById('adminDepartmentName').value = String(row.name || '');
+      document.getElementById('adminDepartmentSortOrder').value = String(row.sort_order || 0);
+      document.getElementById('adminDepartmentActive').value = Number(row.is_active) === 1 ? '1' : '0';
+      renderDepartmentAdminPicker((row.admins || []).map((item) => Number(item.user_id || 0)));
+      setHint('adminDepartmentsNotice', '已载入部门：' + String(row.name || row.code));
+    }
+
+    function renderDepartments(rows) {
+      const body = document.getElementById('adminDepartmentsBody');
+      if (!body) return;
+      adminDepartmentsRows = Array.isArray(rows) ? rows : [];
+      syncDepartmentSelects();
+      if (adminUsersRows.length) renderUsers(adminUsersRows);
+      if (!adminDepartmentsRows.length) {
+        body.innerHTML = '<tr><td colspan="6" class="empty">当前没有部门数据</td></tr>';
+        return;
+      }
+      body.innerHTML = adminDepartmentsRows.map((row) => {
+        const admins = Array.isArray(row.admins) && row.admins.length
+          ? row.admins.map((item) => '<span class="chip">' + escapeHtml(String(item.username || item.user_id || '-')) + '</span>').join('')
+          : '<span class="factor-text">未配置</span>';
+        const status = Number(row.is_active) === 1
+          ? '<span class="status-pill">启用</span>'
+          : '<span class="status-pill muted">禁用</span>';
+        return '<tr>'
+          + '<td>' + escapeHtml(row.code || '-') + '</td>'
+          + '<td>' + escapeHtml(row.name || '-') + '</td>'
+          + '<td>' + escapeHtml(row.sort_order || 0) + '</td>'
+          + '<td>' + status + '</td>'
+          + '<td><div class="chip-list">' + admins + '</div></td>'
+          + '<td><div class="table-actions">'
+          + '<button type="button" class="tiny-btn" data-department-action="edit" data-department-code="' + escapeHtml(row.code || '') + '">编辑</button>'
+          + '</div></td>'
+          + '</tr>';
+      }).join('');
+    }
+
+    async function loadAdminDepartments() {
+      setHint('adminDepartmentsNotice', '正在加载部门配置...');
+      try {
+        const rows = await requestJson('/api/admin-center/departments');
+        renderDepartments(rows);
+        renderDepartmentAdminPicker(readSelectedDepartmentAdminIds());
+        setHint('adminDepartmentsNotice', '部门配置已更新');
+      } catch (error) {
+        renderDepartments([]);
+        renderDepartmentAdminPicker([]);
+        setHint('adminDepartmentsNotice', error.message || '加载部门配置失败', true);
+      }
+    }
+
+    async function onAdminDepartmentSubmit(event) {
+      event.preventDefault();
+      const code = String(document.getElementById('adminDepartmentCode')?.value || '').trim().toUpperCase();
+      const name = String(document.getElementById('adminDepartmentName')?.value || '').trim();
+      if (!code || !name) {
+        setHint('adminDepartmentsNotice', '请填写部门编码和部门名称', true);
+        return;
+      }
+      const payload = {
+        name,
+        sort_order: Number(document.getElementById('adminDepartmentSortOrder')?.value || 0),
+        is_active: Number(document.getElementById('adminDepartmentActive')?.value || 1) === 1 ? 1 : 0,
+        admin_user_ids: readSelectedDepartmentAdminIds(),
+      };
+      setHint('adminDepartmentsNotice', '正在保存部门配置...');
+      try {
+        await requestJson('/api/admin-center/departments/' + encodeURIComponent(code), {
+          method: 'PUT',
+          body: JSON.stringify(payload),
+        });
+        await loadAdminDepartments();
+        await loadAdminUsers();
+        setHint('adminDepartmentsNotice', '部门配置已保存');
+      } catch (error) {
+        setHint('adminDepartmentsNotice', error.message || '保存部门配置失败', true);
+      }
+    }
+
+    function onAdminDepartmentsAction(event) {
+      const button = event.target.closest('[data-department-action]');
+      if (!button) return;
+      const action = String(button.dataset.departmentAction || '').trim();
+      const departmentCode = String(button.dataset.departmentCode || '').trim();
+      if (action === 'edit' && departmentCode) {
+        openDepartmentEditor(departmentCode);
+      }
     }
 
     function syncAccountMfaState() {
@@ -3110,9 +3427,11 @@ const renderDedicatedCenterPage = ({ nonce, config }) => {
       try {
         const rows = await requestJson(centerApi.usersList);
         renderUsers(rows);
+        renderDepartmentAdminPicker(readSelectedDepartmentAdminIds());
         setHint('adminUsersNotice', '用户列表已更新');
       } catch (error) {
         renderUsers([]);
+        renderDepartmentAdminPicker([]);
         setHint('adminUsersNotice', error.message || '加载用户列表失败', true);
       }
     }
@@ -3593,6 +3912,10 @@ const renderDedicatedCenterPage = ({ nonce, config }) => {
         document.getElementById('adminCreateUserForm')?.addEventListener('submit', onAdminCreateUser);
         document.getElementById('adminCreateUserResetBtn')?.addEventListener('click', resetCreateUserForm);
         document.getElementById('adminEditUserForm')?.addEventListener('submit', onAdminEditUserSubmit);
+        document.getElementById('adminDepartmentsReloadBtn')?.addEventListener('click', loadAdminDepartments);
+        document.getElementById('adminDepartmentForm')?.addEventListener('submit', onAdminDepartmentSubmit);
+        document.getElementById('adminDepartmentResetBtn')?.addEventListener('click', resetDepartmentForm);
+        document.getElementById('adminDepartmentsBody')?.addEventListener('click', onAdminDepartmentsAction);
         document.getElementById('adminEditRole')?.addEventListener('change', (event) => {
           applyRoleAccessPreset({
             role: event.target.value,
@@ -3626,7 +3949,9 @@ const renderDedicatedCenterPage = ({ nonce, config }) => {
         document.getElementById('adminSecurityReloadBtn')?.addEventListener('click', loadAdminSecurity);
         syncAdminImportState();
         resetCreateUserForm();
+        resetDepartmentForm();
         loadAccountSecurity();
+        loadAdminDepartments();
         loadAdminUsers();
         loadAdminSecurity();
         return;
@@ -4644,6 +4969,7 @@ const adminCenterUsersService = createAdminCenterUsersService({
   logOperation,
   builtinAccountUsernames: BUILTIN_ACCOUNT_USERNAMES,
 });
+const adminCenterDepartmentsService = createAdminCenterDepartmentsService({ db });
 const adminCenterSecurityService = createAdminCenterSecurityService({
   db,
   logOperation,
@@ -4687,6 +5013,12 @@ const validateImportedAdminCenterUserRow = (row) => {
   const phoneRuleError = validatePhoneFormat(row.phone);
   if (phoneRuleError) return phoneRuleError;
 
+  try {
+    normalizeDepartmentCode(row.department_code);
+  } catch (err) {
+    return String(err?.message || '部门编码格式不正确');
+  }
+
   const nextAccess = normalizeAppAccess(row.app_access, nextRole);
   if (!nextAccess.length) return '请至少选择一个可访问系统';
 
@@ -4702,6 +5034,40 @@ app.get('/api/admin-center/users', async (req, res) => {
     return res.json(rows);
   } catch (err) {
     return sendApiError(res, err, '获取用户列表失败');
+  }
+});
+
+app.get('/api/admin-center/departments', async (req, res) => {
+  if (!canUseDedicatedCenter(req.user, ADMIN_CENTER_KEY)) {
+    return res.status(403).json({ error: '无权限访问管理后台' });
+  }
+  try {
+    const rows = await adminCenterDepartmentsService.listDepartments();
+    return res.json(rows);
+  } catch (err) {
+    return sendApiError(res, err, '获取部门列表失败');
+  }
+});
+
+app.put('/api/admin-center/departments/:code', async (req, res) => {
+  if (!canUseDedicatedCenter(req.user, ADMIN_CENTER_KEY)) {
+    return res.status(403).json({ error: '无权限访问管理后台' });
+  }
+  try {
+    const row = await adminCenterDepartmentsService.saveDepartment({
+      code: req.params.code,
+      payload: req.body || {},
+    });
+    await logOperation({
+      user: req.user,
+      action: 'UPDATE',
+      entity: 'department',
+      entityId: String(row.code || ''),
+      afterData: row,
+    });
+    return res.json(row);
+  } catch (err) {
+    return sendApiError(res, err, '保存部门失败');
   }
 });
 
@@ -5772,17 +6138,23 @@ app.post('/api/auth/mfa/settings', async (req, res) => {
 
 app.get('/api/auth/me', async (req, res) => {
   const user = await db.get(
-    'SELECT id, username, role, app_access, mfa_enabled, mfa_methods, totp_enabled, totp_secret, email, phone, wecom_id FROM users WHERE id = ?',
+    'SELECT id, username, role, app_access, mfa_enabled, mfa_methods, totp_enabled, totp_secret, email, phone, wecom_id, department_code FROM users WHERE id = ?',
     [req.user.id]
   );
   if (!user) return res.json(null);
   const security = await getSecurityConfig();
   const mfaStatus = resolveUserMfaStatus({ user, securityConfig: security });
+  const scope = await buildUserScope(user);
   res.json({
     id: user.id,
     username: user.username,
     role: user.role,
     app_access: getUserAppAccess(user),
+    scope: {
+      department: scope.department,
+      managedDepartments: scope.managedDepartments,
+      isDepartmentDocAdmin: scope.isDepartmentDocAdmin,
+    },
     mfa_setup_required: mfaStatus.setupRequired,
     force_all_users_mfa: mfaStatus.forceAllUsers,
   });

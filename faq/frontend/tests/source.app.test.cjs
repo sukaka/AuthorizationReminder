@@ -14,3 +14,11 @@ test('faq frontend shows 文档管理系统 branding', () => {
   assert.match(html, /<title>文档管理系统<\/title>/);
   assert.doesNotMatch(source, /FAQ 系统初始化中/);
 });
+
+test('faq frontend exposes global library, department library and access request copy', () => {
+  assert.match(source, /全局库/);
+  assert.match(source, /部门库/);
+  assert.match(source, /跨部门受限/);
+  assert.match(source, /申请查看/);
+  assert.match(source, /待审批/);
+});

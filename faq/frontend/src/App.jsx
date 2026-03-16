@@ -149,6 +149,14 @@ const REVIEW_STATUS_LABEL_MAP = {
   cancelled: '已取消',
 }
 
+const ACCESS_REQUEST_STATUS_LABEL_MAP = {
+  pending: '待审批',
+  approved: '已通过',
+  rejected: '已拒绝',
+  revoked: '已撤销',
+  expired: '已过期',
+}
+
 const OUTBOX_STATUS_LABEL_MAP = {
   pending: '待发送',
   delivering: '发送中',
@@ -167,6 +175,11 @@ const FILE_EXT_LABEL_MAP = {
   doc: 'Word文档',
   docx: 'Word文档',
   html: '网页文档',
+}
+
+const LIBRARY_SCOPE_LABEL_MAP = {
+  global: '全局库',
+  department: '部门库',
 }
 
 const OUTBOX_EVENT_LABEL_MAP = {
@@ -255,11 +268,13 @@ const statusText = (value) => {
 }
 
 const reviewStatusText = (value) => translateByMap(value, REVIEW_STATUS_LABEL_MAP, '未知状态')
+const accessRequestStatusText = (value) => translateByMap(value, ACCESS_REQUEST_STATUS_LABEL_MAP, '未知状态')
 const outboxStatusText = (value) => translateByMap(value, OUTBOX_STATUS_LABEL_MAP, '未知状态')
 const outboxEventText = (value) => translateByUpperMap(value, OUTBOX_EVENT_LABEL_MAP, '其他事件')
 const auditActionText = (value) => translateByUpperMap(value, AUDIT_ACTION_LABEL_MAP, '其他操作')
 const versionSourceText = (value) => translateByMap(value, VERSION_SOURCE_LABEL_MAP, '其他来源')
 const fileExtText = (value) => translateByMap(value, FILE_EXT_LABEL_MAP, '其他文档')
+const libraryScopeText = (value) => translateByMap(value, LIBRARY_SCOPE_LABEL_MAP, '部门库')
 
 const formatRemaining = (seconds) => {
   const safe = Math.max(0, Number(seconds || 0))
@@ -275,6 +290,12 @@ const FEEDBACK_REASON_OPTIONS = [
   { value: 'permission_issue', label: '权限或环境受限' },
   { value: 'missing_context', label: '缺少前置条件' },
   { value: 'other', label: '其他' },
+]
+
+const ACCESS_DURATION_OPTIONS = [
+  { value: '7d', label: '7天' },
+  { value: '30d', label: '30天' },
+  { value: 'long_term', label: '长期' },
 ]
 
 const DETAIL_PREF_STORAGE_KEY = 'faq_detail_modal_pref_v2'
@@ -371,6 +392,8 @@ function App() {
     id: null,
     name: '',
     parent_id: '',
+    library_scope: 'department',
+    department_code: '',
     sort_order: '0',
     is_active: true,
   })
@@ -381,10 +404,20 @@ function App() {
   const [keyword, setKeyword] = useState('')
   const [statusFilter, setStatusFilter] = useState('')
   const [categoryFilter, setCategoryFilter] = useState('')
+  const [libraryFilter, setLibraryFilter] = useState('all')
+  const [categoryScopeFilter, setCategoryScopeFilter] = useState('all')
+  const [categoryDepartmentFilter, setCategoryDepartmentFilter] = useState('')
   const [recycleMode, setRecycleMode] = useState(false)
   const [rowDensity, setRowDensity] = useState('comfortable')
 
-  const [articleForm, setArticleForm] = useState({ title: '', summary: '', tagsText: '', category_id: '' })
+  const [articleForm, setArticleForm] = useState({
+    title: '',
+    summary: '',
+    tagsText: '',
+    category_id: '',
+    library_scope: 'department',
+    department_code: '',
+  })
   const [uploadingArticleId, setUploadingArticleId] = useState(null)
   const [selectedIds, setSelectedIds] = useState([])
   const [batchAction, setBatchAction] = useState('archive')
@@ -395,6 +428,8 @@ function App() {
   const [recentItems, setRecentItems] = useState([])
   const [contentHealth, setContentHealth] = useState(null)
   const [pinRecommendations, setPinRecommendations] = useState({ loading: false, generated_at: null, candidates: [] })
+  const [accessRequests, setAccessRequests] = useState({ mine: [], incoming: [] })
+  const [accessRequestsLoading, setAccessRequestsLoading] = useState(false)
 
   const [selectedArticle, setSelectedArticle] = useState(null)
   const [versions, setVersions] = useState([])
@@ -407,6 +442,8 @@ function App() {
     title: '',
     summary: '',
     category_id: '',
+    library_scope: 'department',
+    department_code: '',
   })
   const [detailModalOffset, setDetailModalOffset] = useState(() => {
     const pref = readDetailModalPref()
@@ -462,21 +499,133 @@ function App() {
   const isAuditor = roleKey === 'auditor' || !!user?.permissions?.can_view_audit
   const isWriter = !!user?.permissions?.can_write_faq || isAdmin || roleKey === 'editor'
   const isReviewer = !!user?.permissions?.can_review_publish || isAdmin || roleKey === 'reviewer'
-  const isFaqBasicUser = roleKey === 'viewer' && !isWriter && !isReviewer && !isAuditor
+  const currentDepartment = user?.scope?.department || null
+  const currentDepartmentCode = String(currentDepartment?.code || '').trim().toUpperCase()
+  const managedDepartments = Array.isArray(user?.scope?.managedDepartments) ? user.scope.managedDepartments : []
+  const managedDepartmentCodes = useMemo(
+    () => Array.from(new Set(managedDepartments.map((item) => String(item?.code || '').trim().toUpperCase()).filter(Boolean))),
+    [managedDepartments]
+  )
+  const canManageDepartmentDocs = managedDepartmentCodes.length > 0
+  const canManageGlobalLibrary = !!user?.permissions?.can_manage_global_library || isAdmin
+  const canManageArticles = isWriter || canManageDepartmentDocs
+  const canManageCategories = isWriter || canManageDepartmentDocs || canManageGlobalLibrary
+  const canReviewAccessRequests = isAdmin || canManageDepartmentDocs
+  const isFaqBasicUser = roleKey === 'viewer' && !isWriter && !isReviewer && !isAuditor && !canManageDepartmentDocs
+
+  const departmentNameMap = useMemo(() => {
+    const pairs = []
+    if (currentDepartmentCode) {
+      pairs.push([currentDepartmentCode, String(currentDepartment?.name || currentDepartmentCode)])
+    }
+    managedDepartments.forEach((item) => {
+      const code = String(item?.code || '').trim().toUpperCase()
+      if (code) pairs.push([code, String(item?.name || code)])
+    })
+    categories.forEach((item) => {
+      const code = String(item?.department_code || '').trim().toUpperCase()
+      if (code) pairs.push([code, code])
+    })
+    articles.items.forEach((item) => {
+      const code = String(item?.department_code || '').trim().toUpperCase()
+      if (code) pairs.push([code, code])
+    })
+    return new Map(pairs)
+  }, [articles.items, categories, currentDepartment, currentDepartmentCode, managedDepartments])
+
+  const departmentOptions = useMemo(() => {
+    const options = []
+    const pushOption = (code, name) => {
+      const normalized = String(code || '').trim().toUpperCase()
+      if (!normalized || options.some((item) => item.code === normalized)) return
+      options.push({ code: normalized, name: String(name || normalized) })
+    }
+    if (currentDepartmentCode) {
+      pushOption(currentDepartmentCode, currentDepartment?.name || currentDepartmentCode)
+    }
+    managedDepartments.forEach((item) => pushOption(item?.code, item?.name))
+    categories.forEach((item) => pushOption(item?.department_code, departmentNameMap.get(String(item?.department_code || '').trim().toUpperCase())))
+    articles.items.forEach((item) => pushOption(item?.department_code, departmentNameMap.get(String(item?.department_code || '').trim().toUpperCase())))
+    return options
+  }, [articles.items, categories, currentDepartment, currentDepartmentCode, departmentNameMap, managedDepartments])
 
   const favoriteIdSet = useMemo(
     () => new Set((favorites || []).map((item) => Number(item.article_id)).filter((id) => Number.isFinite(id) && id > 0)),
     [favorites]
   )
   const allCategoryIds = useMemo(
-    () => categories.map((item) => Number(item?.id || 0)).filter((id) => Number.isFinite(id) && id > 0),
-    [categories]
+    () => filteredCategories.map((item) => Number(item?.id || 0)).filter((id) => Number.isFinite(id) && id > 0),
+    [filteredCategories]
   )
   const allCategoriesSelected = allCategoryIds.length > 0 && selectedCategoryIds.length === allCategoryIds.length
+
+  const latestAccessRequestByArticleId = useMemo(() => {
+    const map = new Map()
+    ;(Array.isArray(accessRequests.mine) ? accessRequests.mine : []).forEach((item) => {
+      const articleId = Number(item?.article_id || 0)
+      if (!articleId) return
+      if (!map.has(articleId) || Number(map.get(articleId)?.id || 0) < Number(item?.id || 0)) {
+        map.set(articleId, item)
+      }
+    })
+    return map
+  }, [accessRequests.mine])
+
+  const filteredCategories = useMemo(() => {
+    return categories.filter((item) => {
+      const scope = String(item?.library_scope || 'department').trim().toLowerCase() || 'department'
+      const departmentCode = String(item?.department_code || '').trim().toUpperCase()
+      if (categoryScopeFilter === 'global') return scope === 'global'
+      if (categoryScopeFilter === 'department') {
+        if (scope !== 'department') return false
+        if (!categoryDepartmentFilter) return true
+        return departmentCode === String(categoryDepartmentFilter || '').trim().toUpperCase()
+      }
+      return true
+    })
+  }, [categories, categoryDepartmentFilter, categoryScopeFilter])
+
+  const articleFormCategories = useMemo(() => {
+    const scope = String(articleForm.library_scope || 'department').trim().toLowerCase() || 'department'
+    const departmentCode = String(articleForm.department_code || '').trim().toUpperCase()
+    return categories.filter((item) => {
+      const itemScope = String(item?.library_scope || 'department').trim().toLowerCase() || 'department'
+      const itemDepartmentCode = String(item?.department_code || '').trim().toUpperCase()
+      if (itemScope !== scope) return false
+      if (scope === 'department') return itemDepartmentCode === departmentCode
+      return true
+    })
+  }, [articleForm.department_code, articleForm.library_scope, categories])
+
+  const editArticleCategories = useMemo(() => {
+    const scope = String(editArticleDialog.library_scope || 'department').trim().toLowerCase() || 'department'
+    const departmentCode = String(editArticleDialog.department_code || '').trim().toUpperCase()
+    return categories.filter((item) => {
+      const itemScope = String(item?.library_scope || 'department').trim().toLowerCase() || 'department'
+      const itemDepartmentCode = String(item?.department_code || '').trim().toUpperCase()
+      if (itemScope !== scope) return false
+      if (scope === 'department') return itemDepartmentCode === departmentCode
+      return true
+    })
+  }, [categories, editArticleDialog.department_code, editArticleDialog.library_scope])
 
   const resetFeedback = () => {
     setMessage('')
     setError('')
+  }
+
+  const departmentLabel = (departmentCode) => {
+    const code = String(departmentCode || '').trim().toUpperCase()
+    if (!code) return '全公司'
+    return departmentNameMap.get(code) || code
+  }
+
+  const canManageArticleItem = (article) => {
+    const scope = String(article?.library_scope || 'department').trim().toLowerCase() || 'department'
+    const departmentCode = String(article?.department_code || '').trim().toUpperCase()
+    if (scope === 'global') return canManageGlobalLibrary
+    if (!departmentCode) return false
+    return isAdmin || managedDepartmentCodes.includes(departmentCode) || (isWriter && currentDepartmentCode === departmentCode)
   }
 
   const loadEditorScript = async () => {
@@ -534,13 +683,16 @@ function App() {
       const meRole = String(me?.role || '').toLowerCase()
       const meCanWrite = meRole === 'admin' || meRole === 'editor' || !!me?.permissions?.can_write_faq
       const meCanAudit = meRole === 'auditor' || !!me?.permissions?.can_view_audit
+      const meCanManageDocs = meCanWrite || Array.isArray(me?.scope?.managedDepartments) && me.scope.managedDepartments.length > 0
+      const meDepartmentCode = String(me?.scope?.department?.code || '').trim().toUpperCase()
 
-      const [categoryData, articleData, overview, favoriteData, recentData] = await Promise.all([
+      const [categoryData, articleData, overview, favoriteData, recentData, accessRequestData] = await Promise.all([
         api.get('/api/faq/categories'),
         api.get('/api/faq/articles?page=1&limit=20'),
         api.get('/api/faq/stats/overview'),
         api.get('/api/faq/favorites'),
         api.get('/api/faq/recent?limit=8'),
+        api.get('/api/faq/access-requests').catch(() => ({ mine: [], incoming: [] })),
       ])
       const [healthData, pinData, trendData, topData, outboxData] = await Promise.all([
         api.get('/api/faq/stats/content-health').catch(() => null),
@@ -556,6 +708,10 @@ function App() {
       setStats(overview || {})
       setFavorites(Array.isArray(favoriteData) ? favoriteData : [])
       setRecentItems(Array.isArray(recentData) ? recentData : [])
+      setAccessRequests({
+        mine: Array.isArray(accessRequestData?.mine) ? accessRequestData.mine : [],
+        incoming: Array.isArray(accessRequestData?.incoming) ? accessRequestData.incoming : [],
+      })
       setContentHealth(healthData || null)
       setPinRecommendations({
         loading: false,
@@ -565,7 +721,23 @@ function App() {
       setTrendStats(Array.isArray(trendData) ? trendData : [])
       setTopStats(Array.isArray(topData) ? topData : [])
       setOutboxEvents(Array.isArray(outboxData) ? outboxData : [])
-      if (meCanWrite) {
+      setArticleForm((prev) => ({
+        ...prev,
+        library_scope: meRole === 'admin' ? prev.library_scope : 'department',
+        department_code: prev.department_code || meDepartmentCode,
+      }))
+      setEditArticleDialog((prev) => ({
+        ...prev,
+        library_scope: prev.library_scope || 'department',
+        department_code: prev.department_code || meDepartmentCode,
+      }))
+      setCategoryForm((prev) => ({
+        ...prev,
+        library_scope: meRole === 'admin' ? prev.library_scope : 'department',
+        department_code: prev.department_code || meDepartmentCode,
+      }))
+      setCategoryDepartmentFilter((prev) => prev || meDepartmentCode)
+      if (meCanManageDocs) {
         await loadEditorScript()
       } else {
         setEditorScriptReady(false)
@@ -594,6 +766,7 @@ function App() {
     if (keyword.trim()) params.set('keyword', keyword.trim())
     if (statusFilter) params.set('status', statusFilter)
     if (categoryFilter) params.set('category_id', categoryFilter)
+    if (libraryFilter !== 'all') params.set('library_scope', libraryFilter)
     if (mode) params.set('recycle', '1')
 
     try {
@@ -603,6 +776,21 @@ function App() {
       if (options?.clearSelection !== false) setSelectedIds([])
     } finally {
       if (!options?.silent) setArticlesLoading(false)
+    }
+  }
+
+  const fetchAccessRequests = async () => {
+    setAccessRequestsLoading(true)
+    try {
+      const data = await api.get('/api/faq/access-requests')
+      setAccessRequests({
+        mine: Array.isArray(data?.mine) ? data.mine : [],
+        incoming: Array.isArray(data?.incoming) ? data.incoming : [],
+      })
+    } catch (err) {
+      setError(err.message || '读取跨部门申请失败')
+    } finally {
+      setAccessRequestsLoading(false)
     }
   }
 
@@ -650,6 +838,7 @@ function App() {
     setKeyword('')
     setStatusFilter('')
     setCategoryFilter('')
+    setLibraryFilter('all')
     setSearchSuggestions([])
     fetchArticles(1, { clearSelection: true, recycle: recycleMode })
   }
@@ -670,6 +859,8 @@ function App() {
       id: null,
       name: '',
       parent_id: '',
+      library_scope: isAdmin ? 'global' : 'department',
+      department_code: currentDepartmentCode,
       sort_order: '0',
       is_active: true,
     })
@@ -726,7 +917,7 @@ function App() {
 
   const onDeleteCategory = async (item) => {
     const id = Number(item?.id || 0)
-    if (!isWriter || categoryDeleting || id <= 0) return
+    if (!canManageCategories || categoryDeleting || id <= 0) return
     const name = String(item?.name || '').trim() || `ID:${id}`
     const ok = window.confirm(`确定删除分类「${name}」吗？`)
     if (!ok) return
@@ -767,7 +958,7 @@ function App() {
   }
 
   const onBatchDeleteCategories = async () => {
-    if (!isWriter || categoryDeleting || !selectedCategoryIds.length) return
+    if (!canManageCategories || categoryDeleting || !selectedCategoryIds.length) return
     const nameMap = new Map(categories.map((item) => [Number(item.id || 0), String(item.name || '').trim() || `ID:${item.id}`]))
     const ok = window.confirm(`确定批量删除已选中的 ${selectedCategoryIds.length} 个分类吗？`)
     if (!ok) return
@@ -786,12 +977,14 @@ function App() {
   }
 
   const onEditCategory = (item) => {
-    if (!isWriter || !item) return
+    if (!canManageCategories || !item) return
     resetFeedback()
     setCategoryForm({
       id: Number(item.id) || null,
       name: String(item.name || ''),
       parent_id: item.parent_id ? String(item.parent_id) : '',
+      library_scope: String(item.library_scope || 'department').trim().toLowerCase() || 'department',
+      department_code: String(item.department_code || '').trim().toUpperCase(),
       sort_order: String(Number(item.sort_order || 0)),
       is_active: Number(item.is_active || 0) === 1,
     })
@@ -799,7 +992,7 @@ function App() {
 
   const onSubmitCategory = async (event) => {
     event.preventDefault()
-    if (!isWriter || categorySubmitting) return
+    if (!canManageCategories || categorySubmitting) return
     resetFeedback()
 
     const name = String(categoryForm.name || '').trim()
@@ -818,8 +1011,14 @@ function App() {
     const payload = {
       name,
       parent_id: parentIdNum > 0 ? parentIdNum : null,
+      library_scope: categoryForm.library_scope === 'global' ? 'global' : 'department',
+      department_code: categoryForm.library_scope === 'global' ? null : (String(categoryForm.department_code || '').trim().toUpperCase() || null),
       sort_order: Number.isFinite(Number(categoryForm.sort_order)) ? Number(categoryForm.sort_order) : 0,
       is_active: categoryForm.is_active ? 1 : 0,
+    }
+    if (payload.library_scope === 'department' && !payload.department_code) {
+      setError('部门库分类必须选择归属部门')
+      return
     }
 
     setCategorySubmitting(true)
@@ -973,17 +1172,29 @@ function App() {
 
   const onCreateArticle = async (e) => {
     e.preventDefault()
-    if (!isWriter) return
+    if (!canManageArticles) return
     resetFeedback()
 
     try {
-      const created = await api.post('/api/faq/articles', {
+      const payload = {
         title: articleForm.title,
         summary: articleForm.summary,
         tags: parseTagsText(articleForm.tagsText),
         category_id: articleForm.category_id || undefined,
+        library_scope: articleForm.library_scope,
+        department_code: articleForm.library_scope === 'department' ? (articleForm.department_code || undefined) : undefined,
+      }
+      const created = await api.post('/api/faq/articles', {
+        ...payload,
       })
-      setArticleForm({ title: '', summary: '', tagsText: '', category_id: '' })
+      setArticleForm({
+        title: '',
+        summary: '',
+        tagsText: '',
+        category_id: '',
+        library_scope: isAdmin ? articleForm.library_scope : 'department',
+        department_code: articleForm.department_code || currentDepartmentCode,
+      })
       setMessage(`已创建文档：${created.title}`)
       await fetchArticles(1)
       await openArticle(created.id)
@@ -993,7 +1204,7 @@ function App() {
   }
 
   const onUploadVersion = async (articleId, file) => {
-    if (!isWriter) return
+    if (!selectedArticleManageable) return
     if (!file) return
     resetFeedback()
 
@@ -1013,7 +1224,7 @@ function App() {
   }
 
   const onOpenPublishDialog = async () => {
-    if (!selectedArticle?.id) return
+    if (!selectedArticle?.id || !selectedArticleManageable) return
     resetFeedback()
     const targetVersionId = Number(previewVersion?.id || selectedArticle?.current_version?.id || 0)
     setPublishDialog((prev) => ({
@@ -1124,6 +1335,47 @@ function App() {
     }
   }
 
+  const onRequestArticleAccess = async (article) => {
+    const articleId = Number(article?.id || 0)
+    if (articleId <= 0) return
+    resetFeedback()
+    const reason = window.prompt('填写申请原因（可选）', '') || ''
+    try {
+      await api.post(`/api/faq/articles/${articleId}/access-requests`, {
+        reason: String(reason || '').trim(),
+      })
+      setMessage(`已提交《${article?.title || `#${articleId}`}》查看申请`)
+      await fetchAccessRequests()
+      await fetchArticles(articles.page || 1, { clearSelection: false, silent: true })
+    } catch (err) {
+      setError(err.message || '提交查看申请失败')
+    }
+  }
+
+  const onReviewAccessRequest = async (requestRow, status) => {
+    const requestId = Number(requestRow?.id || 0)
+    if (!requestId) return
+    resetFeedback()
+    const reviewComment = window.prompt(status === 'approved' ? '审批备注（可选）' : '拒绝原因（可选）', '') || ''
+    let durationCode = '7d'
+    if (status === 'approved') {
+      const picked = window.prompt('授权时效：输入 7、30 或 long', '30') || '30'
+      durationCode = picked === '30' ? '30d' : (String(picked).toLowerCase() === 'long' ? 'long_term' : '7d')
+    }
+    try {
+      await api.post(`/api/faq/access-requests/${requestId}/review`, {
+        status,
+        review_comment: String(reviewComment || '').trim(),
+        duration_code: durationCode,
+      })
+      setMessage(status === 'approved' ? '跨部门查看申请已通过' : '跨部门查看申请已拒绝')
+      await fetchAccessRequests()
+      await fetchArticles(articles.page || 1, { clearSelection: false, silent: true })
+    } catch (err) {
+      setError(err.message || '处理申请失败')
+    }
+  }
+
   const onCompareVersions = async () => {
     if (!selectedArticle?.id || compareState.loading) return
     const left = Number(compareState.leftVersionId || 0)
@@ -1228,7 +1480,7 @@ function App() {
   }
 
   const onOpenEditArticle = (article) => {
-    if (!isWriter || !article?.id) return
+    if (!canManageArticleItem(article) || !article?.id) return
     resetFeedback()
     setEditArticleDialog({
       open: true,
@@ -1237,6 +1489,8 @@ function App() {
       title: String(article.title || ''),
       summary: String(article.summary || ''),
       category_id: Number(article.category_id || 0) > 0 ? String(article.category_id) : '',
+      library_scope: String(article.library_scope || 'department').trim().toLowerCase() || 'department',
+      department_code: String(article.department_code || currentDepartmentCode || '').trim().toUpperCase(),
     })
   }
 
@@ -1249,12 +1503,14 @@ function App() {
       title: '',
       summary: '',
       category_id: '',
+      library_scope: 'department',
+      department_code: currentDepartmentCode,
     })
   }
 
   const onSubmitEditArticle = async (event) => {
     event.preventDefault()
-    if (!isWriter || editArticleDialog.submitting) return
+    if (!canManageArticles || editArticleDialog.submitting) return
     const articleId = Number(editArticleDialog.articleId || 0)
     if (!Number.isFinite(articleId) || articleId <= 0) return
 
@@ -1273,6 +1529,8 @@ function App() {
         title,
         summary: summary || null,
         category_id: Number.isFinite(categoryId) && categoryId > 0 ? categoryId : null,
+        library_scope: editArticleDialog.library_scope,
+        department_code: editArticleDialog.library_scope === 'department' ? (editArticleDialog.department_code || null) : null,
       })
       setMessage('文档基础信息已更新')
       setEditArticleDialog({
@@ -1282,6 +1540,8 @@ function App() {
         title: '',
         summary: '',
         category_id: '',
+        library_scope: 'department',
+        department_code: currentDepartmentCode,
       })
       await fetchArticles(articles.page || 1, { clearSelection: false })
       if (selectedArticle?.id === articleId) await openArticle(articleId)
@@ -1440,7 +1700,7 @@ function App() {
   }
 
   const onLockEditorSection = async () => {
-    if (!isWriter || !selectedArticle?.id || !editorSectionKey || editorSectionLoading) return
+    if (!selectedArticleManageable || !selectedArticle?.id || !editorSectionKey || editorSectionLoading) return
     resetFeedback()
     setEditorSectionLoading(true)
     try {
@@ -1458,7 +1718,7 @@ function App() {
   }
 
   const onReleaseEditorSection = async () => {
-    if (!isWriter || !selectedArticle?.id || !editorSectionKey || editorSectionLoading) return
+    if (!selectedArticleManageable || !selectedArticle?.id || !editorSectionKey || editorSectionLoading) return
     resetFeedback()
     setEditorSectionLoading(true)
     try {
@@ -1476,7 +1736,7 @@ function App() {
   }
 
   const onOpenEditor = async () => {
-    if (!isWriter || !selectedArticle?.id) return
+    if (!selectedArticleManageable || !selectedArticle?.id) return
     const sourceExt = String(selectedArticle?.current_version?.source_ext || '').trim().toLowerCase()
     if (!selectedArticle?.current_version?.id) {
       setError('当前文章没有可编辑版本，请先上传 DOC/DOCX 文件')
@@ -1534,7 +1794,7 @@ function App() {
     setEditorSectionKey('')
     setEditorSectionLoading(false)
     setEditorCollabMode('single')
-    if (selectedArticle?.id && isWriter) {
+    if (selectedArticle?.id && selectedArticleManageable) {
       try {
         await api.post(`/api/faq/articles/${selectedArticle.id}/editor/release`, {})
       } catch {
@@ -1544,7 +1804,7 @@ function App() {
   }
 
   const onPublishEditorDraft = async () => {
-    if (!isWriter || !selectedArticle?.id) return
+    if (!selectedArticleManageable || !selectedArticle?.id) return
     resetFeedback()
 
     try {
@@ -1562,7 +1822,7 @@ function App() {
   }
 
   const onDiscardEditorDraft = async () => {
-    if (!isWriter || !selectedArticle?.id) return
+    if (!selectedArticleManageable || !selectedArticle?.id) return
     resetFeedback()
 
     try {
@@ -1733,7 +1993,7 @@ function App() {
   }, [articles.items])
 
   useEffect(() => {
-    if (!editorVisible || !selectedArticle?.id || !isWriter) return
+    if (!editorVisible || !selectedArticle?.id || !selectedArticleManageable) return
     let timer = null
     let stopped = false
     const run = async () => {
@@ -1750,7 +2010,7 @@ function App() {
       stopped = true
       if (timer) window.clearInterval(timer)
     }
-  }, [editorVisible, selectedArticle?.id, isWriter])
+  }, [editorVisible, selectedArticle?.id, selectedArticleManageable])
 
   useEffect(() => {
     const onKeyDown = (event) => {
@@ -1810,9 +2070,23 @@ function App() {
   }, [isFaqBasicUser, activeMenu, recycleMode])
 
   useEffect(() => {
+    if (activeMenu === 'categories' && !canManageCategories) {
+      setActiveMenu('articles')
+    }
+    if (activeMenu === 'access-requests' && !canReviewAccessRequests) {
+      setActiveMenu('articles')
+    }
+  }, [activeMenu, canManageCategories, canReviewAccessRequests])
+
+  useEffect(() => {
     if (!isReviewer || activeMenu !== 'approvals') return
     fetchPublishRequests(publishRequests.status || 'pending', 1)
   }, [activeMenu, isReviewer])
+
+  useEffect(() => {
+    if (!canReviewAccessRequests || activeMenu !== 'access-requests') return
+    fetchAccessRequests()
+  }, [activeMenu, canReviewAccessRequests])
 
   useEffect(() => {
     if (!editorVisible || !editorPayload?.editor || !window.DocsAPI?.DocEditor) return
@@ -1852,6 +2126,7 @@ function App() {
   const allVisibleSelected = articles.items.length > 0 && articles.items.every((item) => selectedIds.includes(Number(item.id)))
   const effectiveBatchAction = recycleMode && batchAction === 'delete' ? 'restore' : batchAction
   const selectedArticleFavorited = selectedArticle ? favoriteIdSet.has(Number(selectedArticle.id)) : false
+  const selectedArticleManageable = selectedArticle ? canManageArticleItem(selectedArticle) : false
   const currentVersionExt = String(selectedArticle?.current_version?.source_ext || '').trim().toLowerCase()
   const editorDisabledReason = !selectedArticle?.current_version?.id
     ? '请先上传 DOC/DOCX 版本后再在线编辑'
@@ -1894,10 +2169,17 @@ function App() {
             <>
               <button className={activeMenu === 'dashboard' ? 'active' : ''} onClick={() => setActiveMenu('dashboard')}>仪表盘</button>
               <button className={activeMenu === 'articles' ? 'active' : ''} onClick={() => setActiveMenu('articles')}>文档管理</button>
-              <button className={activeMenu === 'categories' ? 'active' : ''} onClick={() => setActiveMenu('categories')}>分类管理</button>
+              {canManageCategories ? (
+                <button className={activeMenu === 'categories' ? 'active' : ''} onClick={() => setActiveMenu('categories')}>分类管理</button>
+              ) : null}
               {isReviewer ? (
                 <button className={activeMenu === 'approvals' ? 'active' : ''} onClick={() => { setActiveMenu('approvals'); fetchPublishRequests('pending', 1) }}>
                   发布审批
+                </button>
+              ) : null}
+              {canReviewAccessRequests ? (
+                <button className={activeMenu === 'access-requests' ? 'active' : ''} onClick={() => { setActiveMenu('access-requests'); fetchAccessRequests() }}>
+                  待审批
                 </button>
               ) : null}
               {isAuditor ? (
@@ -1919,7 +2201,7 @@ function App() {
         <section className="hero">
           <div>
             <h1>文档知识库</h1>
-            <p className="sub">支持 doc/docx/pdf 上传、在线预览与 Word 在线编辑。</p>
+            <p className="sub">支持全局库与部门库双层管理，跨部门默认仅可见题头，需申请后查看正文。</p>
           </div>
           <div className="hero-actions">
             <button className="ghost" onClick={() => fetchBootstrap()}>刷新</button>
@@ -1928,7 +2210,7 @@ function App() {
 
         {message ? <div className="toast success">{message}</div> : null}
         {error ? <div className="toast error">{error}</div> : null}
-        {isWriter && editorScriptError ? <div className="toast warning">{editorScriptError}</div> : null}
+        {canManageArticles && editorScriptError ? <div className="toast warning">{editorScriptError}</div> : null}
 
         {activeMenu === 'dashboard' && !isFaqBasicUser && (
           <>
@@ -2071,11 +2353,26 @@ function App() {
           </>
         )}
 
-        {activeMenu === 'categories' && !isFaqBasicUser && (
+        {activeMenu === 'categories' && canManageCategories && (
           <section className="panel">
-            <div className="panel-header"><h2>分类管理</h2></div>
+            <div className="panel-header">
+              <h2>分类管理</h2>
+              <div className="row-actions">
+                <select value={categoryScopeFilter} onChange={(e) => setCategoryScopeFilter(e.target.value)}>
+                  <option value="all">全部分类</option>
+                  <option value="global">全局库分类</option>
+                  <option value="department">部门库分类</option>
+                </select>
+                {categoryScopeFilter === 'department' ? (
+                  <select value={categoryDepartmentFilter} onChange={(e) => setCategoryDepartmentFilter(e.target.value)}>
+                    <option value="">全部部门</option>
+                    {departmentOptions.map((item) => <option key={`category-department-${item.code}`} value={item.code}>{item.name}</option>)}
+                  </select>
+                ) : null}
+              </div>
+            </div>
             <div className="panel-body">
-              {isWriter ? (
+              {canManageCategories ? (
                 <form className="category-form" onSubmit={onSubmitCategory}>
                   <input
                     value={categoryForm.name}
@@ -2084,12 +2381,35 @@ function App() {
                     required
                   />
                   <select
+                    value={categoryForm.library_scope}
+                    onChange={(e) => setCategoryForm((prev) => ({
+                      ...prev,
+                      library_scope: e.target.value,
+                      department_code: e.target.value === 'global' ? '' : (prev.department_code || currentDepartmentCode),
+                      parent_id: '',
+                    }))}
+                  >
+                    {canManageGlobalLibrary ? <option value="global">全局库</option> : null}
+                    <option value="department">部门库</option>
+                  </select>
+                  {categoryForm.library_scope === 'department' ? (
+                    <select
+                      value={categoryForm.department_code}
+                      onChange={(e) => setCategoryForm((prev) => ({ ...prev, department_code: e.target.value, parent_id: '' }))}
+                    >
+                      <option value="">选择部门</option>
+                      {departmentOptions.map((item) => <option key={`category-form-${item.code}`} value={item.code}>{item.name}</option>)}
+                    </select>
+                  ) : null}
+                  <select
                     value={categoryForm.parent_id}
                     onChange={(e) => setCategoryForm((prev) => ({ ...prev, parent_id: e.target.value }))}
                   >
                     <option value="">无父级</option>
                     {categories
                       .filter((item) => Number(item.id) !== Number(categoryForm.id || 0))
+                      .filter((item) => String(item.library_scope || 'department').trim().toLowerCase() === categoryForm.library_scope)
+                      .filter((item) => categoryForm.library_scope === 'global' || String(item.department_code || '').trim().toUpperCase() === String(categoryForm.department_code || '').trim().toUpperCase())
                       .map((item) => <option key={`category-parent-${item.id}`} value={item.id}>{item.name}</option>)}
                   </select>
                   <input
@@ -2116,7 +2436,7 @@ function App() {
                 </form>
               ) : null}
 
-              {isWriter ? (
+              {canManageCategories ? (
                 <div className="batch-bar category-batch-bar">
                   <span className="muted">已选 {selectedCategoryIds.length} 项</span>
                   <button className="ghost" type="button" onClick={onBatchDeleteCategories} disabled={!selectedCategoryIds.length || categoryDeleting}>
@@ -2130,8 +2450,8 @@ function App() {
               ) : null}
 
               <div className="table">
-                <div className={`table-row header ${isWriter ? 'category-table-row-selectable' : ''}`}>
-                  {isWriter ? (
+                <div className={`table-row header ${canManageCategories ? 'category-table-row-selectable' : ''}`}>
+                  {canManageCategories ? (
                     <span className="check-col">
                       <input
                         type="checkbox"
@@ -2143,15 +2463,17 @@ function App() {
                     </span>
                   ) : null}
                   <span>名称</span>
+                  <span>文库</span>
+                  <span>部门</span>
                   <span>父级</span>
                   <span>排序</span>
                   <span>状态</span>
                   <span>更新时间</span>
-                  {isWriter ? <span>操作</span> : null}
+                  {canManageCategories ? <span>操作</span> : null}
                 </div>
-                {categories.map((item) => (
-                  <div className={`table-row ${isWriter ? 'category-table-row-selectable' : ''}`} key={item.id}>
-                    {isWriter ? (
+                {filteredCategories.map((item) => (
+                  <div className={`table-row ${canManageCategories ? 'category-table-row-selectable' : ''}`} key={item.id}>
+                    {canManageCategories ? (
                       <span className="check-col">
                         <input
                           type="checkbox"
@@ -2163,11 +2485,13 @@ function App() {
                       </span>
                     ) : null}
                     <span>{item.name}</span>
+                    <span><span className={`status-chip status-library-${String(item.library_scope || 'department').toLowerCase()}`}>{libraryScopeText(item.library_scope)}</span></span>
+                    <span>{String(item.library_scope || 'department').toLowerCase() === 'global' ? '全公司' : departmentLabel(item.department_code)}</span>
                     <span>{item.parent_id ? (categories.find((c) => Number(c.id) === Number(item.parent_id))?.name || item.parent_id) : '-'}</span>
                     <span>{item.sort_order}</span>
                     <span>{item.is_active ? '启用' : '停用'}</span>
                     <span>{formatDateTime(item.updated_at)}</span>
-                    {isWriter ? (
+                    {canManageCategories ? (
                       <span className="row-actions">
                         <button className="link" onClick={() => onEditCategory(item)} disabled={categoryDeleting}>编辑</button>
                         <button className="link danger" onClick={() => onDeleteCategory(item)} disabled={categoryDeleting}>删除</button>
@@ -2178,7 +2502,7 @@ function App() {
                     ) : null}
                   </div>
                 ))}
-                {!categories.length ? <div className="empty">暂无分类</div> : null}
+                {!filteredCategories.length ? <div className="empty">当前筛选下暂无分类</div> : null}
               </div>
             </div>
           </section>
@@ -2233,6 +2557,79 @@ function App() {
                   </div>
                 ))}
                 {!outboxEvents.length ? <div className="empty">暂无出站事件</div> : null}
+              </div>
+            </div>
+          </section>
+        )}
+
+        {activeMenu === 'access-requests' && canReviewAccessRequests && (
+          <section className="panel">
+            <div className="panel-header">
+              <h2>待审批</h2>
+              <div className="row-actions">
+                <button className="ghost" onClick={fetchAccessRequests} disabled={accessRequestsLoading}>
+                  {accessRequestsLoading ? '刷新中...' : '刷新'}
+                </button>
+              </div>
+            </div>
+            <div className="panel-body request-queue-grid">
+              <div className="request-queue-card">
+                <div className="section-head">
+                  <h3>部门待审批</h3>
+                  <span>{Array.isArray(accessRequests.incoming) ? accessRequests.incoming.length : 0} 条</span>
+                </div>
+                <div className="table">
+                  <div className="table-row header access-request-row">
+                    <span>文档</span>
+                    <span>申请人</span>
+                    <span>来源部门</span>
+                    <span>状态</span>
+                    <span>操作</span>
+                  </div>
+                  {(accessRequests.incoming || []).map((item) => (
+                    <div className="table-row access-request-row" key={`incoming-${item.id}`}>
+                      <span className="title-cell">{item.article_title || `#${item.article_id}`}</span>
+                      <span>{item.requester_name || '-'}</span>
+                      <span>{departmentLabel(item.requester_department_code)}</span>
+                      <span><span className={`status-chip status-${String(item.status || '').toLowerCase()}`}>{accessRequestStatusText(item.status)}</span></span>
+                      <span className="row-actions">
+                        {String(item.status || '').toLowerCase() === 'pending' ? (
+                          <>
+                            <button className="link" onClick={() => onReviewAccessRequest(item, 'approved')}>通过</button>
+                            <button className="link danger" onClick={() => onReviewAccessRequest(item, 'rejected')}>拒绝</button>
+                          </>
+                        ) : (
+                          <span className="muted">已处理</span>
+                        )}
+                      </span>
+                    </div>
+                  ))}
+                  {!accessRequests.incoming?.length ? <div className="empty">当前没有跨部门待审批申请</div> : null}
+                </div>
+              </div>
+
+              <div className="request-queue-card">
+                <div className="section-head">
+                  <h3>我的申请</h3>
+                  <span>{Array.isArray(accessRequests.mine) ? accessRequests.mine.length : 0} 条</span>
+                </div>
+                <div className="table">
+                  <div className="table-row header access-request-row">
+                    <span>文档</span>
+                    <span>目标部门</span>
+                    <span>状态</span>
+                    <span>申请时间</span>
+                  </div>
+                  {(accessRequests.mine || []).map((item) => (
+                    <div className="table-row access-request-row" key={`mine-${item.id}`}>
+                      <span className="title-cell">{item.article_title || `#${item.article_id}`}</span>
+                      <span>{departmentLabel(item.target_department_code)}</span>
+                      <span><span className={`status-chip status-${String(item.status || '').toLowerCase()}`}>{accessRequestStatusText(item.status)}</span></span>
+                      <span>{formatDateTime(item.created_at)}</span>
+                    </div>
+                  ))}
+                  {!accessRequests.mine?.length ? <div className="empty">你还没有跨部门查看申请</div> : null}
+                </div>
               </div>
             </div>
           </section>
@@ -2340,11 +2737,29 @@ function App() {
                         {!favorites.length ? <span className="muted">暂无收藏</span> : null}
                       </div>
                     </div>
+                    <div className="quick-card">
+                      <h4>我的跨部门申请</h4>
+                      <div className="quick-list">
+                        {(accessRequests.mine || []).slice(0, 4).map((item) => (
+                          <div key={`request-quick-${item.id}`} className="quick-request">
+                            <strong>{item.article_title || `#${item.article_id}`}</strong>
+                            <span>{accessRequestStatusText(item.status)}</span>
+                          </div>
+                        ))}
+                        {!accessRequests.mine?.length ? <span className="muted">暂无跨部门申请</span> : null}
+                      </div>
+                    </div>
                   </div>
                 ) : null}
 
                 <div className="filters">
                   <input value={keyword} onChange={(e) => setKeyword(e.target.value)} placeholder="关键词（标题/摘要/标签/正文）" />
+                  <select value={libraryFilter} onChange={(e) => setLibraryFilter(e.target.value)}>
+                    <option value="all">全部文库</option>
+                    <option value="global">全局库</option>
+                    <option value="department">部门库</option>
+                    <option value="restricted">跨部门受限</option>
+                  </select>
                   <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
                     <option value="">全部状态</option>
                     <option value="draft">草稿</option>
@@ -2369,7 +2784,7 @@ function App() {
                   </div>
                 ) : null}
 
-                {isWriter && !recycleMode && (
+                {canManageArticles && !recycleMode && (
                   <form className="article-create" onSubmit={onCreateArticle}>
                     <input
                       value={articleForm.title}
@@ -2388,11 +2803,32 @@ function App() {
                       placeholder="标签（逗号分隔）"
                     />
                     <select
+                      value={articleForm.library_scope}
+                      onChange={(e) => setArticleForm((prev) => ({
+                        ...prev,
+                        library_scope: e.target.value,
+                        category_id: '',
+                        department_code: e.target.value === 'global' ? '' : (prev.department_code || currentDepartmentCode),
+                      }))}
+                    >
+                      {canManageGlobalLibrary ? <option value="global">全局库</option> : null}
+                      <option value="department">部门库</option>
+                    </select>
+                    {articleForm.library_scope === 'department' ? (
+                      <select
+                        value={articleForm.department_code}
+                        onChange={(e) => setArticleForm((prev) => ({ ...prev, department_code: e.target.value, category_id: '' }))}
+                      >
+                        <option value="">选择部门</option>
+                        {departmentOptions.map((item) => <option key={`article-form-dept-${item.code}`} value={item.code}>{item.name}</option>)}
+                      </select>
+                    ) : null}
+                    <select
                       value={articleForm.category_id}
                       onChange={(e) => setArticleForm({ ...articleForm, category_id: e.target.value })}
                     >
                       <option value="">无分类</option>
-                      {categories.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+                      {articleFormCategories.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
                     </select>
                     <button className="primary" type="submit">新增文档</button>
                   </form>
@@ -2441,6 +2877,8 @@ function App() {
                     {isAdmin ? <span className="check-col" /> : null}
                     <span className="seq-col">序号</span>
                     <span>标题</span>
+                    <span>文库</span>
+                    <span>部门</span>
                     <span>状态</span>
                     <span>分类</span>
                     <span>{recycleMode ? '删除时间' : '更新时间'}</span>
@@ -2452,6 +2890,8 @@ function App() {
                         <div className="table-row skeleton-row" key={`skeleton-${idx}`}>
                           {isAdmin ? <span className="skeleton-cell check-col" /> : null}
                           <span className="skeleton-cell seq-col" />
+                          <span className="skeleton-cell" />
+                          <span className="skeleton-cell" />
                           <span className="skeleton-cell" />
                           <span className="skeleton-cell" />
                           <span className="skeleton-cell" />
@@ -2474,18 +2914,32 @@ function App() {
                             </span>
                           ) : null}
                           <span className="seq-col">{articleRowStart + rowIndex + 1}</span>
-                          <span className="title-cell">{item.title}</span>
+                          <span className="title-cell">
+                            <strong>{item.title}</strong>
+                            {item.visibility === 'restricted' ? <span className="row-note">跨部门受限，仅可见题头</span> : null}
+                          </span>
+                          <span><span className={`status-chip status-library-${String(item.library_scope || 'department').toLowerCase()}`}>{libraryScopeText(item.library_scope)}</span></span>
+                          <span>{String(item.library_scope || 'department').toLowerCase() === 'global' ? '全公司' : departmentLabel(item.department_code)}</span>
                           <span><span className={`status-chip status-${String(item.status || 'draft').toLowerCase()}`}>{statusText(item.status)}</span></span>
                           <span>{item.category_name || '-'}</span>
                           <span>{formatDateTime(recycleMode ? item.deleted_at : item.updated_at)}</span>
                           <span className="row-actions">
-                            {!recycleMode ? <button className="link" onClick={() => openArticle(item.id)}>查看</button> : null}
-                            {!isFaqBasicUser && !recycleMode ? (
+                            {!recycleMode && item.visibility !== 'restricted' ? <button className="link" onClick={() => openArticle(item.id)}>查看</button> : null}
+                            {!recycleMode && item.visibility === 'restricted' ? (
+                              <button
+                                className="link"
+                                onClick={() => onRequestArticleAccess(item)}
+                                disabled={String(latestAccessRequestByArticleId.get(Number(item.id))?.status || '').toLowerCase() === 'pending'}
+                              >
+                                {String(latestAccessRequestByArticleId.get(Number(item.id))?.status || '').toLowerCase() === 'pending' ? '待审批' : '申请查看'}
+                              </button>
+                            ) : null}
+                            {!isFaqBasicUser && !recycleMode && item.visibility !== 'restricted' ? (
                               <button className="link" onClick={() => onToggleFavorite(item.id)}>
                                 {favoriteIdSet.has(Number(item.id)) ? '取消收藏' : '收藏'}
                               </button>
                             ) : null}
-                            {isWriter && !recycleMode ? (
+                            {canManageArticleItem(item) && !recycleMode ? (
                               <button className="link" onClick={() => onOpenEditArticle(item)}>编辑</button>
                             ) : null}
                             {isAdmin && !recycleMode ? (
@@ -2541,6 +2995,10 @@ function App() {
                 <div className="detail-meta-row">
                   <span className={`status-chip status-${String(selectedArticle.status || 'draft').toLowerCase()}`}>{statusText(selectedArticle.status)}</span>
                   <span className="meta-dot" />
+                  <span className={`status-chip status-library-${String(selectedArticle.library_scope || 'department').toLowerCase()}`}>{libraryScopeText(selectedArticle.library_scope)}</span>
+                  <span className="meta-dot" />
+                  <span>{String(selectedArticle.library_scope || 'department').toLowerCase() === 'global' ? '全公司' : departmentLabel(selectedArticle.department_code)}</span>
+                  <span className="meta-dot" />
                   <span>{selectedArticle.category_name || '无分类'}</span>
                   <span className="meta-dot" />
                   <span>更新时间 {formatDateTime(selectedArticle.updated_at)}</span>
@@ -2556,10 +3014,10 @@ function App() {
             <div className="panel-body detail-modal-body">
               <div className="detail-actions-bar">
                 <div className="detail-actions-main">
-                  {isWriter ? (
+                  {selectedArticleManageable ? (
                     <button className="ghost" onClick={() => onOpenEditArticle(selectedArticle)}>编辑信息</button>
                   ) : null}
-                  {isWriter ? (
+                  {selectedArticleManageable ? (
                     <label className="ghost upload-btn">
                       {uploadingArticleId === selectedArticle.id ? '上传中...' : '上传文件'}
                       <input
@@ -2585,9 +3043,9 @@ function App() {
                 </div>
 
                 <div className="detail-actions-ops">
-                  {isWriter ? <button className="ghost" onClick={onOpenPublishDialog}>{isReviewer ? '发布' : '提审发布'}</button> : null}
+                  {selectedArticleManageable ? <button className="ghost" onClick={onOpenPublishDialog}>{isReviewer ? '发布' : '提审发布'}</button> : null}
                   {isAdmin ? <button className="ghost" onClick={() => onArchiveStatus(selectedArticle.id)}>归档</button> : null}
-                  {isWriter ? (
+                  {selectedArticleManageable ? (
                     <>
                       <button
                         className="primary"
@@ -2898,9 +3356,38 @@ function App() {
                   disabled={editArticleDialog.submitting}
                 >
                   <option value="">无分类</option>
-                  {categories.map((item) => <option key={`edit-category-${item.id}`} value={item.id}>{item.name}</option>)}
+                  {editArticleCategories.map((item) => <option key={`edit-category-${item.id}`} value={item.id}>{item.name}</option>)}
                 </select>
               </label>
+              <label>
+                <span>文库范围</span>
+                <select
+                  value={editArticleDialog.library_scope}
+                  onChange={(e) => setEditArticleDialog((prev) => ({
+                    ...prev,
+                    library_scope: e.target.value,
+                    department_code: e.target.value === 'global' ? '' : (prev.department_code || currentDepartmentCode),
+                    category_id: '',
+                  }))}
+                  disabled={editArticleDialog.submitting}
+                >
+                  {canManageGlobalLibrary ? <option value="global">全局库</option> : null}
+                  <option value="department">部门库</option>
+                </select>
+              </label>
+              {editArticleDialog.library_scope === 'department' ? (
+                <label>
+                  <span>归属部门</span>
+                  <select
+                    value={editArticleDialog.department_code}
+                    onChange={(e) => setEditArticleDialog((prev) => ({ ...prev, department_code: e.target.value, category_id: '' }))}
+                    disabled={editArticleDialog.submitting}
+                  >
+                    <option value="">选择部门</option>
+                    {departmentOptions.map((item) => <option key={`edit-dept-${item.code}`} value={item.code}>{item.name}</option>)}
+                  </select>
+                </label>
+              ) : null}
               <div className="confirm-modal-actions">
                 <button className="ghost" type="button" onClick={onCloseEditArticleDialog} disabled={editArticleDialog.submitting}>
                   取消

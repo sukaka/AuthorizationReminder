@@ -5,6 +5,9 @@ const DB_PORT = Number(process.env.MYSQL_PORT || 3306);
 const DB_USER = process.env.MYSQL_USER || 'faq_user';
 const DB_PASSWORD = process.env.MYSQL_PASSWORD || 'faq_pass';
 const DB_NAME = process.env.MYSQL_DATABASE || 'juxin_faq';
+const AUTH_DB_NAME = process.env.AUTH_MYSQL_DATABASE || 'juxin_reminder';
+const DB_ADMIN_USER = process.env.MYSQL_ADMIN_USER || DB_USER;
+const DB_ADMIN_PASSWORD = process.env.MYSQL_ADMIN_PASSWORD !== undefined ? process.env.MYSQL_ADMIN_PASSWORD : DB_PASSWORD;
 const DB_CONN_LIMIT = Number(process.env.DB_CONNECTION_LIMIT || 10);
 const DB_RETRIES = Number(process.env.DB_CONNECT_RETRIES || 30);
 const DB_RETRY_DELAY = Number(process.env.DB_CONNECT_DELAY_MS || 2000);
@@ -46,9 +49,8 @@ const waitForDb = async (targetPool, label = 'database') => {
 };
 
 const bootstrapDatabase = async () => {
-  const adminUser = process.env.MYSQL_ADMIN_USER || DB_USER;
-  const adminPassword =
-    process.env.MYSQL_ADMIN_PASSWORD !== undefined ? process.env.MYSQL_ADMIN_PASSWORD : DB_PASSWORD;
+  const adminUser = DB_ADMIN_USER;
+  const adminPassword = DB_ADMIN_PASSWORD;
 
   const safeDbName = ensureSafeIdentifier(DB_NAME, 'MYSQL_DATABASE');
   const safeAppUser = ensureSafeIdentifier(DB_USER, 'MYSQL_USER');
@@ -153,6 +155,8 @@ const createSchema = async () => {
     id BIGINT AUTO_INCREMENT PRIMARY KEY,
     name VARCHAR(128) NOT NULL,
     parent_id BIGINT NULL,
+    library_scope VARCHAR(16) NOT NULL DEFAULT 'department',
+    department_code VARCHAR(32) NULL,
     sort_order INT NOT NULL DEFAULT 0,
     is_active TINYINT NOT NULL DEFAULT 1,
     created_by_id BIGINT NULL,
@@ -160,6 +164,7 @@ const createSchema = async () => {
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     INDEX idx_faq_categories_parent (parent_id),
+    INDEX idx_faq_categories_scope (library_scope, department_code, is_active),
     INDEX idx_faq_categories_active (is_active)
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
 
@@ -168,6 +173,8 @@ const createSchema = async () => {
     title VARCHAR(255) NOT NULL,
     summary TEXT NULL,
     category_id BIGINT NULL,
+    library_scope VARCHAR(16) NOT NULL DEFAULT 'department',
+    department_code VARCHAR(32) NULL,
     tags_json TEXT NULL,
     status VARCHAR(32) NOT NULL DEFAULT 'draft',
     is_deleted TINYINT NOT NULL DEFAULT 0,
@@ -188,6 +195,7 @@ const createSchema = async () => {
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     INDEX idx_faq_articles_category (category_id),
+    INDEX idx_faq_articles_scope (library_scope, department_code, status, is_deleted),
     INDEX idx_faq_articles_status (status),
     INDEX idx_faq_articles_deleted (is_deleted, purge_after, updated_at),
     INDEX idx_faq_articles_pinned (is_pinned, updated_at)
@@ -388,6 +396,59 @@ const createSchema = async () => {
     INDEX idx_faq_outbox_event (event_type, created_at)
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
 
+  await run(`CREATE TABLE IF NOT EXISTS faq_article_access_requests (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    article_id BIGINT NOT NULL,
+    requester_id BIGINT NOT NULL,
+    requester_name VARCHAR(128) NOT NULL,
+    requester_department_code VARCHAR(32) NULL,
+    target_department_code VARCHAR(32) NOT NULL,
+    status VARCHAR(16) NOT NULL DEFAULT 'pending',
+    request_reason VARCHAR(500) NULL,
+    review_comment VARCHAR(500) NULL,
+    reviewed_by_id BIGINT NULL,
+    reviewed_by_name VARCHAR(128) NULL,
+    reviewed_at DATETIME NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    INDEX idx_faq_access_req_article (article_id, created_at),
+    INDEX idx_faq_access_req_requester (requester_id, status, created_at),
+    INDEX idx_faq_access_req_target (target_department_code, status, created_at)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
+
+  await run(`CREATE TABLE IF NOT EXISTS faq_article_access_grants (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    article_id BIGINT NOT NULL,
+    request_id BIGINT NULL,
+    grantee_id BIGINT NOT NULL,
+    grantee_name VARCHAR(128) NOT NULL,
+    target_department_code VARCHAR(32) NOT NULL,
+    status VARCHAR(16) NOT NULL DEFAULT 'approved',
+    duration_code VARCHAR(16) NOT NULL DEFAULT '7d',
+    expires_at DATETIME NULL,
+    approved_by_id BIGINT NULL,
+    approved_by_name VARCHAR(128) NULL,
+    approved_at DATETIME NULL,
+    revoked_by_id BIGINT NULL,
+    revoked_by_name VARCHAR(128) NULL,
+    revoked_at DATETIME NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    INDEX idx_faq_access_grants_article (article_id, grantee_id, status, expires_at),
+    INDEX idx_faq_access_grants_request (request_id),
+    INDEX idx_faq_access_grants_grantee (grantee_id, status, expires_at)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
+
+  await run(`CREATE TABLE IF NOT EXISTS faq_article_department_backfill_queue (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    article_id BIGINT NOT NULL,
+    created_by_id BIGINT NULL,
+    created_by_name VARCHAR(128) NULL,
+    reason VARCHAR(255) NOT NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE KEY uk_faq_backfill_article (article_id)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
+
   await run(`CREATE TABLE IF NOT EXISTS faq_article_feedback (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,
     article_id BIGINT NOT NULL,
@@ -411,8 +472,22 @@ const createSchema = async () => {
   await ensureColumn('faq_articles', 'purge_after', 'purge_after DATETIME NULL');
   await ensureColumn('faq_articles', 'pinned_reason', 'pinned_reason VARCHAR(255) NULL');
   await ensureColumn('faq_articles', 'pin_score', 'pin_score DECIMAL(10,4) NULL');
+  await ensureColumn('faq_articles', 'library_scope', "library_scope VARCHAR(16) NOT NULL DEFAULT 'department'");
+  await ensureColumn('faq_articles', 'department_code', 'department_code VARCHAR(32) NULL');
+  await ensureColumn('faq_categories', 'library_scope', "library_scope VARCHAR(16) NOT NULL DEFAULT 'department'");
+  await ensureColumn('faq_categories', 'department_code', 'department_code VARCHAR(32) NULL');
   await ensureColumn('faq_article_versions', 'search_text', 'search_text LONGTEXT NULL');
   await ensureColumn('faq_article_versions', 'publish_note', 'publish_note VARCHAR(500) NULL');
+  await ensureIndex(
+    'faq_articles',
+    'idx_faq_articles_scope',
+    'INDEX idx_faq_articles_scope (library_scope, department_code, status, is_deleted)'
+  );
+  await ensureIndex(
+    'faq_categories',
+    'idx_faq_categories_scope',
+    'INDEX idx_faq_categories_scope (library_scope, department_code, is_active)'
+  );
   await ensureIndex(
     'faq_article_versions',
     'ft_faq_versions_search_text',
@@ -422,11 +497,106 @@ const createSchema = async () => {
   const categoryCount = await get('SELECT COUNT(1) AS count FROM faq_categories');
   if (Number(categoryCount?.count || 0) === 0) {
     await run(
-      `INSERT INTO faq_categories (name, parent_id, sort_order, is_active, created_by_id, created_by_name)
+      `INSERT INTO faq_categories (name, parent_id, library_scope, department_code, sort_order, is_active, created_by_id, created_by_name)
        VALUES
-       ('常见问题', NULL, 10, 1, 0, 'system'),
-       ('操作指南', NULL, 20, 1, 0, 'system'),
-       ('故障排查', NULL, 30, 1, 0, 'system')`
+       ('常见问题', NULL, 'global', NULL, 10, 1, 0, 'system'),
+       ('操作指南', NULL, 'global', NULL, 20, 1, 0, 'system'),
+       ('故障排查', NULL, 'global', NULL, 30, 1, 0, 'system')`
+    );
+  }
+};
+
+const buildAuthDepartmentMap = async () => {
+  const authPool = buildPool({
+    database: AUTH_DB_NAME,
+    user: DB_ADMIN_USER,
+    password: DB_ADMIN_PASSWORD,
+  });
+  try {
+    await waitForDb(authPool, 'auth database');
+    const [rows] = await authPool.query(
+      `SELECT id, department_code
+       FROM users
+       WHERE department_code IS NOT NULL
+         AND department_code <> ''`
+    );
+    return new Map(
+      rows
+        .map((item) => [Number(item.id || 0), String(item.department_code || '').trim().toUpperCase()])
+        .filter(([userId, departmentCode]) => userId > 0 && departmentCode)
+    );
+  } catch (err) {
+    console.warn(`[db] skip faq department backfill from auth: ${err?.message || err}`);
+    return new Map();
+  } finally {
+    await authPool.end();
+  }
+};
+
+const backfillDepartmentLibraries = async () => {
+  const userDepartments = await buildAuthDepartmentMap();
+  const articleRows = await query(
+    `SELECT id, created_by_id, created_by_name, library_scope, department_code
+     FROM faq_articles
+     WHERE library_scope IS NULL
+        OR library_scope = ''
+        OR (library_scope = 'department' AND (department_code IS NULL OR department_code = ''))`
+  );
+  for (const row of articleRows) {
+    const articleId = Number(row.id || 0);
+    const createdById = Number(row.created_by_id || 0);
+    const mappedDepartment = userDepartments.get(createdById) || '';
+    if (mappedDepartment) {
+      await run(
+        `UPDATE faq_articles
+         SET library_scope = 'department', department_code = ?
+         WHERE id = ?`,
+        [mappedDepartment, articleId]
+      );
+      continue;
+    }
+    if (createdById === 0 || String(row.created_by_name || '').trim().toLowerCase() === 'system') {
+      await run(
+        `UPDATE faq_articles
+         SET library_scope = 'global', department_code = NULL
+         WHERE id = ?`,
+        [articleId]
+      );
+      continue;
+    }
+    await run(
+      `INSERT IGNORE INTO faq_article_department_backfill_queue
+        (article_id, created_by_id, created_by_name, reason)
+       VALUES (?, ?, ?, ?)`,
+      [articleId, createdById || null, row.created_by_name || null, '缺少创建人部门映射']
+    );
+  }
+
+  const categoryRows = await query(
+    `SELECT id, created_by_id, created_by_name, library_scope, department_code
+     FROM faq_categories
+     WHERE library_scope IS NULL
+        OR library_scope = ''
+        OR (library_scope = 'department' AND (department_code IS NULL OR department_code = ''))`
+  );
+  for (const row of categoryRows) {
+    const categoryId = Number(row.id || 0);
+    const createdById = Number(row.created_by_id || 0);
+    const mappedDepartment = userDepartments.get(createdById) || '';
+    if (mappedDepartment) {
+      await run(
+        `UPDATE faq_categories
+         SET library_scope = 'department', department_code = ?
+         WHERE id = ?`,
+        [mappedDepartment, categoryId]
+      );
+      continue;
+    }
+    await run(
+      `UPDATE faq_categories
+       SET library_scope = 'global', department_code = NULL
+       WHERE id = ?`,
+      [categoryId]
     );
   }
 };
@@ -436,6 +606,7 @@ const initDb = async () => {
   pool = buildPool({ database: DB_NAME });
   await waitForDb(pool, 'faq database');
   await createSchema();
+  await backfillDepartmentLibraries();
 };
 
 module.exports = {

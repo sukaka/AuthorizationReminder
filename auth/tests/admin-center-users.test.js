@@ -37,8 +37,8 @@ test('listUsers merges lock state into formatted payload', async () => {
         queries.push({ sql, params });
         if (sql.includes('FROM users ORDER BY id DESC')) {
           return [
-            { id: 9, username: 'sysadmin', role: 'sysadmin', is_active: 1, email: '', phone: '', wecom_id: '', app_access: '["admin-center"]', totp_enabled: 0, created_at: '2026-03-14 10:00:00' },
-            { id: 8, username: 'alice', role: 'user', is_active: 1, email: 'a@example.com', phone: '13900000000', wecom_id: '', app_access: '["reminder"]', totp_enabled: 0, created_at: '2026-03-14 09:00:00' },
+            { id: 9, username: 'sysadmin', role: 'sysadmin', is_active: 1, email: '', phone: '', wecom_id: '', app_access: '["admin-center"]', department_code: 'TECH', totp_enabled: 0, created_at: '2026-03-14 10:00:00' },
+            { id: 8, username: 'alice', role: 'user', is_active: 1, email: 'a@example.com', phone: '13900000000', wecom_id: '', app_access: '["reminder"]', department_code: 'SEC_OPERATION', totp_enabled: 0, created_at: '2026-03-14 09:00:00' },
           ];
         }
         if (sql.includes('FROM auth_login_attempts')) {
@@ -57,8 +57,10 @@ test('listUsers merges lock state into formatted payload', async () => {
   assert.equal(rows.length, 2);
   assert.equal(rows[0].login_id, 'sysadmin');
   assert.equal(rows[0].lock_status, 'locked');
+  assert.equal(rows[0].department_code, 'TECH');
   assert.equal(rows[1].login_id, '13900000000');
   assert.equal(rows[1].lock_status, 'normal');
+  assert.equal(rows[1].department_code, 'SEC_OPERATION');
   assert.equal(rows[0].app_access[0], 'admin-center');
   assert.equal(queries.length, 2);
 });
@@ -85,6 +87,7 @@ test('createUser applies normalized role and dedicated center defaults', async (
             phone: '13911112222',
             wecom_id: 'wx-boss',
             app_access: '["admin-center"]',
+            department_code: 'TECH',
             totp_enabled: 0,
             created_at: '2026-03-14 15:00:00',
           };
@@ -106,14 +109,17 @@ test('createUser applies normalized role and dedicated center defaults', async (
       email: 'boss@example.com',
       phone: '13911112222',
       wecom_id: 'wx-boss',
+      department_code: 'TECH',
     },
   });
 
   assert.equal(row.id, 42);
   assert.deepEqual(row.app_access, ['admin-center']);
+  assert.equal(row.department_code, 'TECH');
   assert.equal(runs.length, 1);
   assert.equal(runs[0].params[1], 'hashed:Strong#1234');
   assert.deepEqual(JSON.parse(runs[0].params[7]), ['admin-center']);
+  assert.equal(runs[0].params[8], 'TECH');
   assert.equal(operations[0].action, 'CREATE');
   assert.equal(operations[0].entity, 'user');
 });
@@ -177,6 +183,7 @@ test('updateUser can update profile fields and app access', async () => {
           phone: '13800000000',
           wecom_id: 'old-wecom',
           app_access: '["faq","tender"]',
+          department_code: 'TECH',
           totp_enabled: 0,
           created_at: '2026-03-14 16:00:00',
         };
@@ -198,6 +205,7 @@ test('updateUser can update profile fields and app access', async () => {
       phone: '13911112222',
       wecom_id: 'next-wecom',
       app_access: ['faq', 'train-exam'],
+      department_code: 'SEC_SERVICE',
     },
   });
 
@@ -206,6 +214,7 @@ test('updateUser can update profile fields and app access', async () => {
   assert.ok(runs.some((item) => item.sql.includes('SET phone = ?') && item.params[0] === '13911112222'));
   assert.ok(runs.some((item) => item.sql.includes('SET wecom_id = ?') && item.params[0] === 'next-wecom'));
   assert.ok(runs.some((item) => item.sql.includes('SET app_access = ?') && JSON.parse(item.params[0])[1] === 'train-exam'));
+  assert.ok(runs.some((item) => item.sql.includes('SET department_code = ?') && item.params[0] === 'SEC_SERVICE'));
 });
 
 test('unlockUser clears login attempts for target login id', async () => {

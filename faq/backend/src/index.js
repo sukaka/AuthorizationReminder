@@ -18,6 +18,16 @@ const {
   summarizeCategoryForceDeleteResults,
 } = require('./category-delete');
 const {
+  canManageDepartmentContent,
+  canReviewDepartmentRequest,
+  getManagedDepartmentCodes,
+  getUserDepartmentCode,
+  normalizeDepartmentCode,
+  normalizeLibraryScope,
+  resolveArticleAccess,
+  sanitizeArticleForList,
+} = require('./library-access');
+const {
   isOriginAllowedForRequest,
   normalizeOrigin,
 } = require('./cors-origin');
@@ -356,6 +366,7 @@ const introspectToken = async (token) => {
 
   const user = data?.user;
   const apps = Array.isArray(data?.apps) ? data.apps : [];
+  const scope = data?.scope && typeof data.scope === 'object' ? data.scope : {};
   if (!user || user.id === undefined || !user.username) throw appError('登录状态无效', 401);
   if (AUTH_SYSTEM_KEY && !apps.includes(AUTH_SYSTEM_KEY)) throw appError('无权限访问文档管理系统', 403);
 
@@ -364,6 +375,11 @@ const introspectToken = async (token) => {
       id: Number(user.id),
       username: String(user.username || ''),
       role: String(user.role || 'viewer'),
+      scope: {
+        department: scope.department || null,
+        managedDepartments: Array.isArray(scope.managedDepartments) ? scope.managedDepartments : [],
+        isDepartmentDocAdmin: scope.isDepartmentDocAdmin === true,
+      },
     },
     apps,
   };
@@ -392,6 +408,12 @@ const isEditor = (req) => getUserRole(req) === 'editor';
 const isReviewer = (req) => getUserRole(req) === 'reviewer';
 const canWriteFaq = (req) => isAdmin(req) || isEditor(req);
 const canReviewPublish = (req) => isAdmin(req) || isReviewer(req);
+const getRequestDepartmentCode = (req) => getUserDepartmentCode(req.user);
+const getRequestManagedDepartments = (req) => getManagedDepartmentCodes(req.user);
+const isDepartmentDocAdmin = (req, departmentCode) => canReviewDepartmentRequest(req.user, departmentCode);
+const canManageGlobalLibrary = (req) => isAdmin(req);
+const canManageDepartmentLibrary = (req, departmentCode) => canManageDepartmentContent(req.user, departmentCode);
+const canUseGlobalLibrary = (req) => !['sysadmin', 'auditor'].includes(getUserRole(req)) || isAdmin(req);
 
 const requireAdmin = (req, _res, next) => {
   if (!isAdmin(req)) return next(appError('仅管理员可执行该操作', 403));
@@ -432,6 +454,177 @@ const parseTags = (value) => {
   const text = trimText(value);
   if (!text) return [];
   return Array.from(new Set(text.split(/[，,、]/).map((item) => trimText(item)).filter(Boolean))).slice(0, 20);
+};
+
+const normalizeAccessDurationCode = (value) => {
+  const text = trimText(value).toLowerCase();
+  if (text === '30d') return '30d';
+  if (text === 'long_term') return 'long_term';
+  return '7d';
+};
+
+const buildGrantExpiresAt = (durationCode) => {
+  const now = Date.now();
+  if (durationCode === 'long_term') return null;
+  const days = durationCode === '30d' ? 30 : 7;
+  return formatDateTime(new Date(now + days * 24 * 60 * 60 * 1000));
+};
+
+const getArticleActiveGrant = async ({ articleId, userId }) => {
+  if (!Number.isFinite(Number(articleId)) || !Number.isFinite(Number(userId))) return null;
+  return get(
+    `SELECT *
+     FROM faq_article_access_grants
+     WHERE article_id = ?
+       AND grantee_id = ?
+       AND status = 'approved'
+       AND (expires_at IS NULL OR expires_at > NOW())
+     ORDER BY id DESC
+     LIMIT 1`,
+    [Number(articleId), Number(userId)]
+  );
+};
+
+const getArticleWithCategory = async (articleId) => {
+  return get(
+    `SELECT a.*, c.name AS category_name
+     FROM faq_articles a
+     LEFT JOIN faq_categories c ON c.id = a.category_id
+     WHERE a.id = ?`,
+    [articleId]
+  );
+};
+
+const resolveArticleAccessForRequest = async (req, article) => {
+  const activeGrant = await getArticleActiveGrant({
+    articleId: article?.id,
+    userId: Number(req.user?.id) || 0,
+  });
+  return resolveArticleAccess({
+    user: req.user,
+    article,
+    activeGrant,
+  });
+};
+
+const ensureReadableArticle = async (req, articleId) => {
+  const article = await getArticleWithCategory(articleId);
+  if (!article) throw appError('文章不存在', 404);
+  const access = await resolveArticleAccessForRequest(req, article);
+  if (!access.canRead) {
+    throw appError(access.visibility === 'restricted' ? '当前仅可查看题头，请先申请权限' : '无权查看该文档', 403);
+  }
+  return { article, access };
+};
+
+const ensureManageableArticle = async (req, articleId, options = {}) => {
+  const { includeDeleted = false } = options;
+  const article = await ensureArticleExists(articleId, { includeDeleted });
+  const access = await resolveArticleAccessForRequest(req, article);
+  if (!access.canManage && !canManageDepartmentLibrary(req, article.department_code)) {
+    throw appError('仅管理员、编辑或部门文档管理员可管理该文档', 403);
+  }
+  return { article, access };
+};
+
+const normalizeArticleScopeInput = (req, payload = {}, fallbackDepartmentCode = '') => {
+  if (isAdmin(req)) {
+    const libraryScope = normalizeLibraryScope(payload.library_scope);
+    const departmentCode = normalizeDepartmentCode(payload.department_code || fallbackDepartmentCode);
+    if (libraryScope === 'global') {
+      return { library_scope: 'global', department_code: null };
+    }
+    if (!departmentCode) throw appError('部门库文档必须选择归属部门', 400);
+    return { library_scope: 'department', department_code: departmentCode };
+  }
+  const departmentCode = normalizeDepartmentCode(payload.department_code || fallbackDepartmentCode || getRequestDepartmentCode(req));
+  if (!departmentCode) throw appError('当前账号未配置主归属部门，无法创建部门库文档', 400);
+  if (!canManageDepartmentLibrary(req, departmentCode)) {
+    throw appError('仅当前部门编辑或部门文档管理员可管理目标部门文档', 403);
+  }
+  return { library_scope: 'department', department_code: departmentCode };
+};
+
+const buildAccessRequestNoticePayload = ({ type, article, requestRow, reviewRow }) => ({
+  type,
+  article_id: Number(article?.id || 0),
+  article_title: String(article?.title || ''),
+  target_department_code: String(article?.department_code || ''),
+  request_id: Number(requestRow?.id || 0),
+  reviewer: reviewRow
+    ? {
+      id: Number(reviewRow.reviewed_by_id || 0),
+      username: String(reviewRow.reviewed_by_name || ''),
+    }
+    : null,
+});
+
+const buildInClause = (values = []) => values.map(() => '?').join(',');
+
+const buildVisibleDepartmentCodes = (req, includeManaged = false) => {
+  const values = [getRequestDepartmentCode(req)];
+  if (includeManaged) values.push(...getRequestManagedDepartments(req));
+  return Array.from(new Set(values.map((item) => normalizeDepartmentCode(item)).filter(Boolean)));
+};
+
+const buildCategoryVisibilityWhere = (req, includeManaged = false) => {
+  if (isAdmin(req)) return { clause: '1=1', params: [] };
+  const departments = buildVisibleDepartmentCodes(req, includeManaged);
+  const clauses = [];
+  const params = [];
+  if (canUseGlobalLibrary(req)) {
+    clauses.push(`(library_scope = 'global')`);
+  }
+  if (departments.length) {
+    clauses.push(`(library_scope = 'department' AND department_code IN (${buildInClause(departments)}))`);
+    params.push(...departments);
+  }
+  if (!clauses.length) return { clause: '0=1', params: [] };
+  return { clause: clauses.join(' OR '), params };
+};
+
+const ensureCategoryMatchesLibrary = async ({ categoryId, libraryScope, departmentCode }) => {
+  if (!Number.isFinite(Number(categoryId)) || Number(categoryId) <= 0) return null;
+  const category = await get('SELECT * FROM faq_categories WHERE id = ?', [Number(categoryId)]);
+  if (!category) throw appError('分类不存在', 404);
+  if (normalizeLibraryScope(category.library_scope) !== normalizeLibraryScope(libraryScope)) {
+    throw appError('文档与分类的文库范围不一致', 400);
+  }
+  if (normalizeLibraryScope(libraryScope) === 'department') {
+    if (normalizeDepartmentCode(category.department_code) !== normalizeDepartmentCode(departmentCode)) {
+      throw appError('部门库文档只能挂到本部门分类', 400);
+    }
+  }
+  return category;
+};
+
+const getGrantMapForArticles = async ({ articleIds, userId }) => {
+  const ids = Array.from(new Set((Array.isArray(articleIds) ? articleIds : []).map((item) => Number(item)).filter((item) => item > 0)));
+  if (!ids.length || !Number.isFinite(Number(userId)) || Number(userId) <= 0) return new Map();
+  const rows = await query(
+    `SELECT *
+     FROM faq_article_access_grants
+     WHERE grantee_id = ?
+       AND article_id IN (${buildInClause(ids)})
+       AND status = 'approved'
+       AND (expires_at IS NULL OR expires_at > NOW())`,
+    [Number(userId), ...ids]
+  );
+  return new Map(rows.map((item) => [Number(item.article_id), item]));
+};
+
+const articleMatchesKeyword = ({ article, keyword, access }) => {
+  const key = trimText(keyword).toLowerCase();
+  if (!key) return true;
+  const title = trimText(article.title).toLowerCase();
+  if (title.includes(key)) return true;
+  if (access.visibility !== 'full') return false;
+  const haystack = [
+    trimText(article.summary),
+    trimText(article.tags_json),
+    trimText(article.matched_search_text),
+  ].join(' ').toLowerCase();
+  return haystack.includes(key);
 };
 
 const normalizeStatus = (value) => {
@@ -1830,36 +2023,55 @@ app.get('/api/auth/me', asyncHandler(async (req, res) => {
     username: req.user.username,
     role: req.user.role,
     apps: req.authApps,
+    scope: req.user.scope || { department: null, managedDepartments: [] },
     permissions: {
       can_write_faq: canWriteFaq(req),
       can_review_publish: canReviewPublish(req),
       can_view_audit: isAuditor(req),
+      can_manage_global_library: canManageGlobalLibrary(req),
+      managed_department_codes: getRequestManagedDepartments(req),
     },
   });
 }));
 
-app.get('/api/faq/categories', asyncHandler(async (_req, res) => {
+app.get('/api/faq/categories', asyncHandler(async (req, res) => {
+  const visibility = buildCategoryVisibilityWhere(req, true);
   const rows = await query(
-    `SELECT id, name, parent_id, sort_order, is_active, created_by_id, created_by_name, created_at, updated_at
+    `SELECT id, name, parent_id, library_scope, department_code, sort_order, is_active, created_by_id, created_by_name, created_at, updated_at
      FROM faq_categories
-     ORDER BY sort_order ASC, id ASC`
+     WHERE ${visibility.clause}
+     ORDER BY library_scope ASC, sort_order ASC, id ASC`,
+    visibility.params
   );
   res.json(rows);
 }));
 
-app.post('/api/faq/categories', requireWriter, asyncHandler(async (req, res) => {
+app.post('/api/faq/categories', asyncHandler(async (req, res) => {
   const name = trimText(req.body?.name);
   if (!name) throw appError('分类名称不能为空', 400);
   const parentId = Number(req.body?.parent_id);
   const sortOrder = Number.isFinite(Number(req.body?.sort_order)) ? Number(req.body.sort_order) : 0;
   const isActive = req.body?.is_active === 0 || req.body?.is_active === false ? 0 : 1;
+  const libraryScope = normalizeLibraryScope(req.body?.library_scope);
+  const departmentCode = normalizeDepartmentCode(req.body?.department_code || getRequestDepartmentCode(req));
+  if (libraryScope === 'global') {
+    if (!canManageGlobalLibrary(req)) throw appError('仅管理员可维护全局库分类', 403);
+  } else if (!canManageDepartmentLibrary(req, departmentCode)) {
+    throw appError('仅部门文档管理员可维护本部门分类', 403);
+  }
+  const parentValue = Number.isFinite(parentId) && parentId > 0 ? parentId : null;
+  if (parentValue) {
+    await ensureCategoryMatchesLibrary({ categoryId: parentValue, libraryScope, departmentCode });
+  }
 
   const result = await run(
-    `INSERT INTO faq_categories (name, parent_id, sort_order, is_active, created_by_id, created_by_name)
-     VALUES (?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO faq_categories (name, parent_id, library_scope, department_code, sort_order, is_active, created_by_id, created_by_name)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       name,
-      Number.isFinite(parentId) && parentId > 0 ? parentId : null,
+      parentValue,
+      libraryScope,
+      libraryScope === 'global' ? null : departmentCode,
       sortOrder,
       isActive,
       Number(req.user.id) || null,
@@ -1872,22 +2084,39 @@ app.post('/api/faq/categories', requireWriter, asyncHandler(async (req, res) => 
   res.status(201).json(row);
 }));
 
-app.put('/api/faq/categories/:id', requireWriter, asyncHandler(async (req, res) => {
+app.put('/api/faq/categories/:id', asyncHandler(async (req, res) => {
   const id = Number(req.params.id);
   if (!Number.isFinite(id) || id <= 0) throw appError('分类ID无效', 400);
   const before = await get('SELECT * FROM faq_categories WHERE id = ?', [id]);
   if (!before) throw appError('分类不存在', 404);
+  const beforeScope = normalizeLibraryScope(before.library_scope);
+  const beforeDepartmentCode = normalizeDepartmentCode(before.department_code);
+  if (beforeScope === 'global') {
+    if (!canManageGlobalLibrary(req)) throw appError('仅管理员可维护全局库分类', 403);
+  } else if (!canManageDepartmentLibrary(req, beforeDepartmentCode)) {
+    throw appError('仅部门文档管理员可维护本部门分类', 403);
+  }
 
   const name = trimText(req.body?.name) || before.name;
   const parentId = Number(req.body?.parent_id);
   const sortOrder = Number.isFinite(Number(req.body?.sort_order)) ? Number(req.body.sort_order) : Number(before.sort_order || 0);
   const isActive = req.body?.is_active === undefined ? Number(before.is_active || 0) : req.body?.is_active ? 1 : 0;
+  const nextScope = isAdmin(req)
+    ? normalizeLibraryScope(req.body?.library_scope || beforeScope)
+    : beforeScope;
+  const nextDepartmentCode = nextScope === 'global'
+    ? null
+    : normalizeDepartmentCode(req.body?.department_code || beforeDepartmentCode || getRequestDepartmentCode(req));
+  const parentValue = Number.isFinite(parentId) && parentId > 0 ? parentId : null;
+  if (parentValue) {
+    await ensureCategoryMatchesLibrary({ categoryId: parentValue, libraryScope: nextScope, departmentCode: nextDepartmentCode });
+  }
 
   await run(
     `UPDATE faq_categories
-     SET name = ?, parent_id = ?, sort_order = ?, is_active = ?, updated_at = NOW()
+     SET name = ?, parent_id = ?, library_scope = ?, department_code = ?, sort_order = ?, is_active = ?, updated_at = NOW()
      WHERE id = ?`,
-    [name, Number.isFinite(parentId) && parentId > 0 ? parentId : null, sortOrder, isActive, id]
+    [name, parentValue, nextScope, nextDepartmentCode, sortOrder, isActive, id]
   );
 
   const after = await get('SELECT * FROM faq_categories WHERE id = ?', [id]);
@@ -1895,13 +2124,21 @@ app.put('/api/faq/categories/:id', requireWriter, asyncHandler(async (req, res) 
   res.json(after);
 }));
 
-app.post('/api/faq/categories/batch-delete', requireWriter, asyncHandler(async (req, res) => {
+app.post('/api/faq/categories/batch-delete', asyncHandler(async (req, res) => {
   const ids = normalizeCategoryDeleteIds(req.body?.ids);
   if (!ids.length) throw appError('请选择要删除的分类', 400);
 
   const results = [];
   for (const id of ids) {
     try {
+      const before = await get('SELECT * FROM faq_categories WHERE id = ?', [id]);
+      if (!before) throw appError('分类不存在', 404);
+      const scope = normalizeLibraryScope(before.library_scope);
+      if (scope === 'global') {
+        if (!canManageGlobalLibrary(req)) throw appError('仅管理员可删除全局库分类', 403);
+      } else if (!canManageDepartmentLibrary(req, before.department_code)) {
+        throw appError('仅部门文档管理员可删除本部门分类', 403);
+      }
       await deleteCategoryRecord({ req, id });
       results.push({ id, ok: true });
     } catch (err) {
@@ -1927,9 +2164,17 @@ app.post('/api/faq/categories/:id/force-delete', requireAdmin, asyncHandler(asyn
   res.json(result);
 }));
 
-app.delete('/api/faq/categories/:id', requireWriter, asyncHandler(async (req, res) => {
+app.delete('/api/faq/categories/:id', asyncHandler(async (req, res) => {
   const id = Number(req.params.id);
   if (!Number.isFinite(id) || id <= 0) throw appError('分类ID无效', 400);
+  const before = await get('SELECT * FROM faq_categories WHERE id = ?', [id]);
+  if (!before) throw appError('分类不存在', 404);
+  const scope = normalizeLibraryScope(before.library_scope);
+  if (scope === 'global') {
+    if (!canManageGlobalLibrary(req)) throw appError('仅管理员可删除全局库分类', 403);
+  } else if (!canManageDepartmentLibrary(req, before.department_code)) {
+    throw appError('仅部门文档管理员可删除本部门分类', 403);
+  }
   await deleteCategoryRecord({ req, id });
   res.json({ ok: true });
 }));
@@ -2176,23 +2421,6 @@ app.get('/api/faq/articles', asyncHandler(async (req, res) => {
 
   where.push(recycleMode ? 'a.is_deleted = 1' : 'a.is_deleted = 0');
 
-  const keyword = trimText(req.query.keyword);
-  const keywordLike = keyword ? `%${keyword}%` : '';
-  if (keyword) {
-    where.push(`(
-      a.title LIKE ?
-      OR a.summary LIKE ?
-      OR a.tags_json LIKE ?
-      OR EXISTS (
-        SELECT 1
-        FROM faq_article_versions sv
-        WHERE sv.id IN (a.current_version_id, a.published_version_id)
-          AND sv.search_text LIKE ?
-      )
-    )`);
-    params.push(keywordLike, keywordLike, keywordLike, keywordLike);
-  }
-
   const categoryId = Number(req.query.category_id);
   if (Number.isFinite(categoryId) && categoryId > 0) {
     where.push('a.category_id = ?');
@@ -2206,52 +2434,15 @@ app.get('/api/faq/articles', asyncHandler(async (req, res) => {
   }
 
   const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
-  const relevanceSql = keyword
-    ? `(
-      (CASE WHEN a.title LIKE ? THEN 80 ELSE 0 END) +
-      (CASE WHEN a.summary LIKE ? THEN 40 ELSE 0 END) +
-      (CASE WHEN a.tags_json LIKE ? THEN 28 ELSE 0 END) +
-      (CASE WHEN EXISTS (
-        SELECT 1
-        FROM faq_article_versions sv
-        WHERE sv.id IN (a.current_version_id, a.published_version_id)
-          AND sv.search_text LIKE ?
-      ) THEN 16 ELSE 0 END)
-    )`
-    : '0';
-  const relevanceParams = keyword ? [keywordLike, keywordLike, keywordLike, keywordLike] : [];
-  const matchedTextSql = keyword
-    ? `(SELECT sv.search_text
-       FROM faq_article_versions sv
-       WHERE sv.id IN (a.current_version_id, a.published_version_id)
-         AND sv.search_text LIKE ?
-       ORDER BY CASE
-         WHEN sv.id = a.current_version_id THEN 0
-         WHEN sv.id = a.published_version_id THEN 1
-         ELSE 2
-       END
-       LIMIT 1)`
-    : 'NULL';
-  const matchedTextParams = keyword ? [keywordLike] : [];
   const orderSql = recycleMode
-    ? (keyword ? 'relevance_score DESC, a.deleted_at DESC, a.updated_at DESC, a.id DESC' : 'a.deleted_at DESC, a.updated_at DESC, a.id DESC')
-    : (keyword
-      ? 'relevance_score DESC, a.is_pinned DESC, a.updated_at DESC, a.id DESC'
-      : 'a.is_pinned DESC, a.updated_at DESC, a.id DESC');
-
-  const totalRow = await get(
-    `SELECT COUNT(1) AS total
-     FROM faq_articles a
-     ${whereSql}`,
-    params
-  );
+    ? 'a.deleted_at DESC, a.updated_at DESC, a.id DESC'
+    : 'a.is_pinned DESC, a.updated_at DESC, a.id DESC';
 
   const rows = await query(
     `SELECT
       a.*,
       c.name AS category_name,
-      ${relevanceSql} AS relevance_score,
-      ${matchedTextSql} AS matched_search_text,
+      cv.search_text AS matched_search_text,
       cv.version_no AS current_version_no,
       cv.render_type AS current_render_type,
       cv.render_status AS current_render_status,
@@ -2263,58 +2454,99 @@ app.get('/api/faq/articles', asyncHandler(async (req, res) => {
      LEFT JOIN faq_article_versions cv ON cv.id = a.current_version_id
      LEFT JOIN faq_article_versions pv ON pv.id = a.published_version_id
      ${whereSql}
-     ORDER BY ${orderSql}
-     LIMIT ? OFFSET ?`,
-    [...relevanceParams, ...matchedTextParams, ...params, limit, offset]
+     ORDER BY ${orderSql}`,
+    params
   );
 
-  const formatted = rows.map((item) => ({
-    ...item,
-    tags: toJson(item.tags_json, []),
-    favorite_count: Number(item.favorite_count || 0),
-    view_count: Number(item.view_count || 0),
-    relevance_score: Number(item.relevance_score || 0),
-    match_snippet: keyword
-      ? extractSearchSnippet(item.summary || item.matched_search_text || item.title, keyword)
-      : '',
-  }));
-  const suggestions = !Number(totalRow?.total || 0) && keyword
-    ? await buildSearchSuggestions({
-        keyword,
-        currentArticleIds: formatted.map((item) => Number(item.id)).filter((id) => id > 0),
-      })
-    : [];
+  const keyword = trimText(req.query.keyword);
+  const libraryFilter = trimText(req.query.library_scope).toLowerCase();
+  const grantMap = await getGrantMapForArticles({
+    articleIds: rows.map((item) => Number(item.id || 0)),
+    userId: Number(req.user.id) || 0,
+  });
 
-  res.setHeader('X-Total-Count', String(Number(totalRow?.total || 0)));
+  const filtered = rows
+    .map((item) => {
+      const access = resolveArticleAccess({
+        user: req.user,
+        article: item,
+        activeGrant: grantMap.get(Number(item.id)),
+      });
+      const visibleItem = sanitizeArticleForList({
+        ...item,
+        favorite_count: Number(item.favorite_count || 0),
+        view_count: Number(item.view_count || 0),
+        match_snippet: keyword
+          ? extractSearchSnippet(item.summary || item.matched_search_text || item.title, keyword)
+          : '',
+      }, access);
+      return {
+        ...visibleItem,
+        _access: access,
+      };
+    })
+    .filter((item) => articleMatchesKeyword({ article: item, keyword, access: item._access }))
+    .filter((item) => {
+      if (libraryFilter === 'global') return String(item.library_scope || 'department').toLowerCase() === 'global';
+      if (libraryFilter === 'department') {
+        return String(item.library_scope || 'department').toLowerCase() === 'department' && item._access.visibility === 'full';
+      }
+      if (libraryFilter === 'restricted') return item._access.visibility === 'restricted';
+      return true;
+    });
+
+  const paged = filtered.slice(offset, offset + limit).map((item) => ({
+    ...item,
+    visibility: item._access.visibility,
+    _access: undefined,
+  }));
+
+  res.setHeader('X-Total-Count', String(filtered.length));
   res.setHeader('X-Page', String(page));
   res.setHeader('X-Limit', String(limit));
 
   res.json({
-    items: formatted,
-    total: Number(totalRow?.total || 0),
+    items: paged,
+    total: filtered.length,
     page,
     limit,
     keyword,
-    suggestions,
+    suggestions: [],
   });
 }));
 
-app.post('/api/faq/articles', requireWriter, asyncHandler(async (req, res) => {
+app.post('/api/faq/articles', asyncHandler(async (req, res) => {
   const title = trimText(req.body?.title);
   if (!title) throw appError('标题不能为空', 400);
 
   const summary = trimText(req.body?.summary) || null;
   const categoryId = Number(req.body?.category_id);
   const tags = parseTags(req.body?.tags);
+  const scopePayload = normalizeArticleScopeInput(req, req.body, getRequestDepartmentCode(req));
+  if (scopePayload.library_scope === 'global') {
+    if (!canManageGlobalLibrary(req)) throw appError('仅管理员可创建全局库文档', 403);
+  } else if (!canManageDepartmentLibrary(req, scopePayload.department_code)) {
+    throw appError('仅管理员、编辑或部门文档管理员可创建本部门文档', 403);
+  }
+  const categoryValue = Number.isFinite(categoryId) && categoryId > 0 ? categoryId : null;
+  if (categoryValue) {
+    await ensureCategoryMatchesLibrary({
+      categoryId: categoryValue,
+      libraryScope: scopePayload.library_scope,
+      departmentCode: scopePayload.department_code,
+    });
+  }
 
   const result = await run(
     `INSERT INTO faq_articles
-      (title, summary, category_id, tags_json, status, is_pinned, created_by_id, created_by_name, updated_by_id, updated_by_name)
-     VALUES (?, ?, ?, ?, 'draft', 0, ?, ?, ?, ?)`,
+      (title, summary, category_id, library_scope, department_code, tags_json, status, is_pinned, created_by_id, created_by_name, updated_by_id, updated_by_name)
+     VALUES (?, ?, ?, ?, ?, ?, 'draft', 0, ?, ?, ?, ?)`,
     [
       title,
       summary,
-      Number.isFinite(categoryId) && categoryId > 0 ? categoryId : null,
+      categoryValue,
+      scopePayload.library_scope,
+      scopePayload.department_code,
       JSON.stringify(tags),
       Number(req.user.id) || null,
       req.user.username,
@@ -2332,14 +2564,7 @@ app.get('/api/faq/articles/:id', asyncHandler(async (req, res) => {
   const id = Number(req.params.id);
   if (!Number.isFinite(id) || id <= 0) throw appError('文章ID无效', 400);
 
-  const article = await get(
-    `SELECT a.*, c.name AS category_name
-     FROM faq_articles a
-     LEFT JOIN faq_categories c ON c.id = a.category_id
-     WHERE a.id = ?`,
-    [id]
-  );
-  if (!article) throw appError('文章不存在', 404);
+  const { article, access } = await ensureReadableArticle(req, id);
 
   const currentVersion = Number(article.current_version_id)
     ? await get('SELECT * FROM faq_article_versions WHERE id = ?', [Number(article.current_version_id)])
@@ -2418,28 +2643,196 @@ app.get('/api/faq/articles/:id', asyncHandler(async (req, res) => {
         : null,
     },
     publish_requests: requestRows,
+    library_access: access,
   });
 }));
 
-app.put('/api/faq/articles/:id', requireWriter, asyncHandler(async (req, res) => {
+app.post('/api/faq/articles/:id/access-requests', asyncHandler(async (req, res) => {
+  const articleId = Number(req.params.id);
+  if (!Number.isFinite(articleId) || articleId <= 0) throw appError('文章ID无效', 400);
+  const article = await getArticleWithCategory(articleId);
+  if (!article) throw appError('文章不存在', 404);
+  const access = await resolveArticleAccessForRequest(req, article);
+  if (normalizeLibraryScope(article.library_scope) !== 'department') {
+    throw appError('全局库文档无需申请权限', 400);
+  }
+  if (access.canRead) throw appError('当前账号已可查看该文档', 400);
+  if (access.visibility !== 'restricted') throw appError('当前账号无权申请该文档', 403);
+
+  const requestReason = trimText(req.body?.reason).slice(0, 500) || null;
+  const insert = await run(
+    `INSERT INTO faq_article_access_requests
+      (article_id, requester_id, requester_name, requester_department_code, target_department_code, status, request_reason)
+     VALUES (?, ?, ?, ?, ?, 'pending', ?)`,
+    [
+      articleId,
+      Number(req.user.id) || 0,
+      req.user.username,
+      getRequestDepartmentCode(req) || null,
+      normalizeDepartmentCode(article.department_code),
+      requestReason,
+    ]
+  );
+  const requestRow = await get('SELECT * FROM faq_article_access_requests WHERE id = ?', [insert.insertId]);
+  await emitSystemEvent({
+    eventType: 'FAQ_ACCESS_REQUEST_CREATED',
+    articleId,
+    req,
+    payload: buildAccessRequestNoticePayload({ type: 'request_created', article, requestRow }),
+  });
+  res.status(201).json(requestRow);
+}));
+
+app.get('/api/faq/access-requests', asyncHandler(async (req, res) => {
+  const mine = await query(
+    `SELECT r.*, a.title AS article_title
+     FROM faq_article_access_requests r
+     JOIN faq_articles a ON a.id = r.article_id
+     WHERE r.requester_id = ?
+     ORDER BY r.id DESC
+     LIMIT 100`,
+    [Number(req.user.id) || 0]
+  );
+  let incoming = [];
+  if (isAdmin(req) || getRequestManagedDepartments(req).length) {
+    const departments = getRequestManagedDepartments(req);
+    const where = isAdmin(req)
+      ? '1=1'
+      : `r.target_department_code IN (${buildInClause(departments)})`;
+    incoming = await query(
+      `SELECT r.*, a.title AS article_title
+       FROM faq_article_access_requests r
+       JOIN faq_articles a ON a.id = r.article_id
+       WHERE ${where}
+       ORDER BY CASE WHEN r.status = 'pending' THEN 0 ELSE 1 END, r.id DESC
+       LIMIT 200`,
+      isAdmin(req) ? [] : departments
+    );
+  }
+  res.json({ mine, incoming });
+}));
+
+app.post('/api/faq/access-requests/:id/review', asyncHandler(async (req, res) => {
+  const requestId = Number(req.params.id);
+  if (!Number.isFinite(requestId) || requestId <= 0) throw appError('申请ID无效', 400);
+  const requestRow = await get('SELECT * FROM faq_article_access_requests WHERE id = ?', [requestId]);
+  if (!requestRow) throw appError('申请不存在', 404);
+  if (!canReviewDepartmentRequest(req.user, requestRow.target_department_code)) {
+    throw appError('仅目标部门文档管理员可审批', 403);
+  }
+  if (trimText(requestRow.status).toLowerCase() !== 'pending') throw appError('该申请已处理', 400);
+
+  const decision = trimText(req.body?.status).toLowerCase();
+  const nextStatus = decision === 'approved' ? 'approved' : (decision === 'rejected' ? 'rejected' : '');
+  if (!nextStatus) throw appError('审批状态无效', 400);
+  const reviewComment = trimText(req.body?.review_comment).slice(0, 500) || null;
+  const article = await getArticleWithCategory(Number(requestRow.article_id));
+  let grant = null;
+
+  await transaction(async (tx) => {
+    await tx.run(
+      `UPDATE faq_article_access_requests
+       SET status = ?, review_comment = ?, reviewed_by_id = ?, reviewed_by_name = ?, reviewed_at = NOW(), updated_at = NOW()
+       WHERE id = ?`,
+      [nextStatus, reviewComment, Number(req.user.id) || 0, req.user.username, requestId]
+    );
+    if (nextStatus === 'approved') {
+      const durationCode = normalizeAccessDurationCode(req.body?.duration_code);
+      const expiresAt = buildGrantExpiresAt(durationCode);
+      await tx.run(
+        `UPDATE faq_article_access_grants
+         SET status = 'revoked', revoked_by_id = ?, revoked_by_name = ?, revoked_at = NOW(), updated_at = NOW()
+         WHERE article_id = ? AND grantee_id = ? AND status = 'approved'`,
+        [Number(req.user.id) || 0, req.user.username, Number(requestRow.article_id), Number(requestRow.requester_id)]
+      );
+      const insert = await tx.run(
+        `INSERT INTO faq_article_access_grants
+          (article_id, request_id, grantee_id, grantee_name, target_department_code, status, duration_code, expires_at, approved_by_id, approved_by_name, approved_at)
+         VALUES (?, ?, ?, ?, ?, 'approved', ?, ?, ?, ?, NOW())`,
+        [
+          Number(requestRow.article_id),
+          requestId,
+          Number(requestRow.requester_id),
+          requestRow.requester_name,
+          requestRow.target_department_code,
+          durationCode,
+          expiresAt,
+          Number(req.user.id) || 0,
+          req.user.username,
+        ]
+      );
+      grant = await tx.get('SELECT * FROM faq_article_access_grants WHERE id = ?', [insert.insertId]);
+    }
+  });
+
+  const reviewed = await get('SELECT * FROM faq_article_access_requests WHERE id = ?', [requestId]);
+  await emitSystemEvent({
+    eventType: nextStatus === 'approved' ? 'FAQ_ACCESS_REQUEST_APPROVED' : 'FAQ_ACCESS_REQUEST_REJECTED',
+    articleId: Number(requestRow.article_id),
+    req,
+    payload: buildAccessRequestNoticePayload({ type: nextStatus, article, requestRow: reviewed, reviewRow: reviewed }),
+  });
+  res.json({ request: reviewed, grant });
+}));
+
+app.post('/api/faq/access-grants/:id/revoke', asyncHandler(async (req, res) => {
+  const grantId = Number(req.params.id);
+  if (!Number.isFinite(grantId) || grantId <= 0) throw appError('授权ID无效', 400);
+  const grant = await get('SELECT * FROM faq_article_access_grants WHERE id = ?', [grantId]);
+  if (!grant) throw appError('授权不存在', 404);
+  if (!canReviewDepartmentRequest(req.user, grant.target_department_code)) {
+    throw appError('仅目标部门文档管理员可撤销授权', 403);
+  }
+  await run(
+    `UPDATE faq_article_access_grants
+     SET status = 'revoked', revoked_by_id = ?, revoked_by_name = ?, revoked_at = NOW(), updated_at = NOW()
+     WHERE id = ?`,
+    [Number(req.user.id) || 0, req.user.username, grantId]
+  );
+  const article = await getArticleWithCategory(Number(grant.article_id));
+  await emitSystemEvent({
+    eventType: 'FAQ_ACCESS_GRANT_REVOKED',
+    articleId: Number(grant.article_id),
+    req,
+    payload: buildAccessRequestNoticePayload({ type: 'revoked', article, requestRow: grant, reviewRow: grant }),
+  });
+  res.json({ ok: true });
+}));
+
+app.put('/api/faq/articles/:id', asyncHandler(async (req, res) => {
   const id = Number(req.params.id);
   if (!Number.isFinite(id) || id <= 0) throw appError('文章ID无效', 400);
 
   const before = await ensureArticleExists(id);
+  const beforeAccess = await resolveArticleAccessForRequest(req, before);
+  if (!beforeAccess.canManage && !canManageDepartmentLibrary(req, before.department_code)) {
+    throw appError('仅管理员、编辑或部门文档管理员可更新该文档', 403);
+  }
 
   const title = trimText(req.body?.title) || before.title;
   const summary = req.body?.summary === undefined ? before.summary : trimText(req.body.summary) || null;
   const categoryId = Number(req.body?.category_id);
   const tags = req.body?.tags === undefined ? toJson(before.tags_json, []) : parseTags(req.body.tags);
+  const scopePayload = normalizeArticleScopeInput(req, req.body, before.department_code || getRequestDepartmentCode(req));
+  const categoryValue = Number.isFinite(categoryId) && categoryId > 0 ? categoryId : null;
+  if (categoryValue) {
+    await ensureCategoryMatchesLibrary({
+      categoryId: categoryValue,
+      libraryScope: scopePayload.library_scope,
+      departmentCode: scopePayload.department_code,
+    });
+  }
 
   await run(
     `UPDATE faq_articles
-     SET title = ?, summary = ?, category_id = ?, tags_json = ?, updated_by_id = ?, updated_by_name = ?, updated_at = NOW()
+     SET title = ?, summary = ?, category_id = ?, library_scope = ?, department_code = ?, tags_json = ?, updated_by_id = ?, updated_by_name = ?, updated_at = NOW()
      WHERE id = ?`,
     [
       title,
       summary,
-      Number.isFinite(categoryId) && categoryId > 0 ? categoryId : null,
+      categoryValue,
+      scopePayload.library_scope,
+      scopePayload.department_code,
       JSON.stringify(tags),
       Number(req.user.id) || null,
       req.user.username,
@@ -2777,11 +3170,11 @@ app.post('/api/faq/articles/:id/restore', requireAdmin, asyncHandler(async (req,
   res.json(after);
 }));
 
-app.post('/api/faq/articles/:id/upload', requireWriter, uploadSingle('file'), asyncHandler(async (req, res) => {
+app.post('/api/faq/articles/:id/upload', uploadSingle('file'), asyncHandler(async (req, res) => {
   const articleId = Number(req.params.id);
   if (!Number.isFinite(articleId) || articleId <= 0) throw appError('文章ID无效', 400);
 
-  const article = await ensureArticleExists(articleId);
+  const { article } = await ensureManageableArticle(req, articleId);
   if (!req.file?.path) throw appError('请上传文件', 400);
 
   const ext = normalizeUploadExt(req.file.originalname || req.file.filename || '');
@@ -2891,7 +3284,7 @@ app.get('/api/faq/articles/:id/versions', asyncHandler(async (req, res) => {
   const articleId = Number(req.params.id);
   if (!Number.isFinite(articleId) || articleId <= 0) throw appError('文章ID无效', 400);
 
-  await ensureArticleExists(articleId);
+  await ensureReadableArticle(req, articleId);
   const rows = await query(
     `SELECT *
      FROM faq_article_versions
@@ -2911,7 +3304,7 @@ app.get('/api/faq/articles/:id/versions/compare', asyncHandler(async (req, res) 
   if (!Number.isFinite(rightVersionId) || rightVersionId <= 0) throw appError('右侧版本ID无效', 400);
   if (leftVersionId === rightVersionId) throw appError('请至少选择两个不同版本进行对比', 400);
 
-  await ensureArticleExists(articleId);
+  await ensureReadableArticle(req, articleId);
   const [leftVersion, rightVersion] = await Promise.all([
     getVersionById({ articleId, versionId: leftVersionId }),
     getVersionById({ articleId, versionId: rightVersionId }),
@@ -2943,10 +3336,10 @@ app.get('/api/faq/articles/:id/versions/compare', asyncHandler(async (req, res) 
   });
 }));
 
-app.post('/api/faq/articles/:id/publish/check', requireWriter, asyncHandler(async (req, res) => {
+app.post('/api/faq/articles/:id/publish/check', asyncHandler(async (req, res) => {
   const articleId = Number(req.params.id);
   if (!Number.isFinite(articleId) || articleId <= 0) throw appError('文章ID无效', 400);
-  const article = await ensureArticleExists(articleId);
+  const { article } = await ensureManageableArticle(req, articleId);
   const targetVersionId = Number(req.body?.version_id || article.current_version_id || 0);
   const targetVersion = await getVersionById({ articleId, versionId: targetVersionId });
 
@@ -2965,11 +3358,11 @@ app.post('/api/faq/articles/:id/publish/check', requireWriter, asyncHandler(asyn
   });
 }));
 
-app.post('/api/faq/articles/:id/publish', requireWriter, asyncHandler(async (req, res) => {
+app.post('/api/faq/articles/:id/publish', asyncHandler(async (req, res) => {
   const articleId = Number(req.params.id);
   if (!Number.isFinite(articleId) || articleId <= 0) throw appError('文章ID无效', 400);
 
-  const article = await ensureArticleExists(articleId);
+  const { article } = await ensureManageableArticle(req, articleId);
   const targetVersionId = Number(req.body?.version_id || article.current_version_id || 0);
   const targetVersion = await getVersionById({ articleId, versionId: targetVersionId });
   if (!targetVersion) throw appError('目标版本不存在，请先上传或选择版本', 404);
@@ -3079,7 +3472,7 @@ app.get('/api/faq/articles/:id/publish-requests', asyncHandler(async (req, res) 
   if (!canWriteFaq(req) && !canReviewPublish(req)) throw appError('无权限查看发布审批记录', 403);
   const articleId = Number(req.params.id);
   if (!Number.isFinite(articleId) || articleId <= 0) throw appError('文章ID无效', 400);
-  await ensureArticleExists(articleId, { includeDeleted: true });
+  await ensureReadableArticle(req, articleId);
   const limit = Math.min(30, toBoundedLimit(req.query.limit, 10));
 
   const rows = await query(
@@ -3188,6 +3581,7 @@ app.get('/api/faq/versions/:versionId/preview', asyncHandler(async (req, res) =>
 
   const version = await get('SELECT * FROM faq_article_versions WHERE id = ?', [versionId]);
   if (!version) throw appError('版本不存在', 404);
+  await ensureReadableArticle(req, Number(version.article_id));
 
   const renderType = trimText(version.render_type).toLowerCase();
 
@@ -3221,6 +3615,7 @@ app.get('/api/faq/versions/:versionId/download', asyncHandler(async (req, res) =
 
   const version = await get('SELECT * FROM faq_article_versions WHERE id = ?', [versionId]);
   if (!version) throw appError('版本不存在', 404);
+  await ensureReadableArticle(req, Number(version.article_id));
 
   const variant = trimText(req.query.variant).toLowerCase();
   const inline = req.query.inline === '1';
@@ -3248,7 +3643,7 @@ app.get('/api/faq/versions/:versionId/download', asyncHandler(async (req, res) =
 app.post('/api/faq/articles/:id/favorite', asyncHandler(async (req, res) => {
   const articleId = Number(req.params.id);
   if (!Number.isFinite(articleId) || articleId <= 0) throw appError('文章ID无效', 400);
-  await ensureArticleExists(articleId);
+  await ensureReadableArticle(req, articleId);
 
   await run(
     `INSERT INTO faq_favorites (article_id, user_id, username)
@@ -3270,7 +3665,7 @@ app.delete('/api/faq/articles/:id/favorite', asyncHandler(async (req, res) => {
 
 app.get('/api/faq/favorites', asyncHandler(async (req, res) => {
   const rows = await query(
-    `SELECT f.*, a.title, a.summary, a.status, a.is_pinned, a.updated_at
+    `SELECT f.*, a.title, a.summary, a.status, a.is_pinned, a.updated_at, a.library_scope, a.department_code, a.tags_json
      FROM faq_favorites f
      JOIN faq_articles a ON a.id = f.article_id
      WHERE f.user_id = ?
@@ -3278,13 +3673,28 @@ app.get('/api/faq/favorites', asyncHandler(async (req, res) => {
      ORDER BY f.created_at DESC`,
     [Number(req.user.id) || 0]
   );
-  res.json(rows);
+  const grantMap = await getGrantMapForArticles({
+    articleIds: rows.map((item) => Number(item.article_id || 0)),
+    userId: Number(req.user.id) || 0,
+  });
+  res.json(
+    rows
+      .map((item) => {
+        const access = resolveArticleAccess({
+          user: req.user,
+          article: item,
+          activeGrant: grantMap.get(Number(item.article_id || 0)),
+        });
+        return sanitizeArticleForList(item, access);
+      })
+      .filter((item) => item.visibility !== 'forbidden')
+  );
 }));
 
 app.post('/api/faq/articles/:id/feedback', asyncHandler(async (req, res) => {
   const articleId = Number(req.params.id);
   if (!Number.isFinite(articleId) || articleId <= 0) throw appError('文章ID无效', 400);
-  const article = await ensureArticleExists(articleId);
+  const { article } = await ensureReadableArticle(req, articleId);
 
   const solved =
     req.body?.solved === false || req.body?.solved === 0 || String(req.body?.solved).toLowerCase() === 'false'
@@ -3357,7 +3767,7 @@ app.post('/api/faq/articles/:id/feedback', asyncHandler(async (req, res) => {
 app.get('/api/faq/articles/:id/feedback/summary', asyncHandler(async (req, res) => {
   const articleId = Number(req.params.id);
   if (!Number.isFinite(articleId) || articleId <= 0) throw appError('文章ID无效', 400);
-  await ensureArticleExists(articleId, { includeDeleted: true });
+  await ensureReadableArticle(req, articleId);
 
   const [summaryRow, reasonRows, myFeedback] = await Promise.all([
     get(
@@ -3422,7 +3832,11 @@ app.get('/api/faq/recent', asyncHandler(async (req, res) => {
     `SELECT
       a.id,
       a.title,
+      a.summary,
       a.status,
+      a.library_scope,
+      a.department_code,
+      a.tags_json,
       a.category_id,
       a.updated_at,
       MAX(v.created_at) AS last_viewed_at
@@ -3430,18 +3844,33 @@ app.get('/api/faq/recent', asyncHandler(async (req, res) => {
      JOIN faq_articles a ON a.id = v.article_id
      WHERE a.is_deleted = 0
        AND v.viewer_id = ?
-     GROUP BY a.id, a.title, a.status, a.category_id, a.updated_at
+     GROUP BY a.id, a.title, a.summary, a.status, a.library_scope, a.department_code, a.tags_json, a.category_id, a.updated_at
      ORDER BY last_viewed_at DESC
      LIMIT ?`,
     [Number(req.user.id) || 0, limit]
   );
-  res.json(rows);
+  const grantMap = await getGrantMapForArticles({
+    articleIds: rows.map((item) => Number(item.id || 0)),
+    userId: Number(req.user.id) || 0,
+  });
+  res.json(
+    rows
+      .map((item) => sanitizeArticleForList(
+        item,
+        resolveArticleAccess({
+          user: req.user,
+          article: item,
+          activeGrant: grantMap.get(Number(item.id || 0)),
+        })
+      ))
+      .filter((item) => item.visibility !== 'forbidden')
+  );
 }));
 
 app.post('/api/faq/articles/:id/view', asyncHandler(async (req, res) => {
   const articleId = Number(req.params.id);
   if (!Number.isFinite(articleId) || articleId <= 0) throw appError('文章ID无效', 400);
-  await ensureArticleExists(articleId);
+  await ensureReadableArticle(req, articleId);
 
   await transaction(async (tx) => {
     await tx.run(
@@ -3909,10 +4338,10 @@ app.post('/api/faq/reindex/search-text', requireAdmin, asyncHandler(async (req, 
   });
 }));
 
-app.get('/api/faq/articles/:id/editor/status', requireWriter, asyncHandler(async (req, res) => {
+app.get('/api/faq/articles/:id/editor/status', asyncHandler(async (req, res) => {
   const articleId = Number(req.params.id);
   if (!Number.isFinite(articleId) || articleId <= 0) throw appError('文章ID无效', 400);
-  await ensureArticleExists(articleId);
+  await ensureManageableArticle(req, articleId);
 
   await expireArticleSessions(articleId);
   const activeSessions = await listActiveSessions(articleId);
@@ -3946,10 +4375,10 @@ app.get('/api/faq/articles/:id/editor/status', requireWriter, asyncHandler(async
   });
 }));
 
-app.get('/api/faq/articles/:id/editor/sections', requireWriter, asyncHandler(async (req, res) => {
+app.get('/api/faq/articles/:id/editor/sections', asyncHandler(async (req, res) => {
   const articleId = Number(req.params.id);
   if (!Number.isFinite(articleId) || articleId <= 0) throw appError('文章ID无效', 400);
-  await ensureArticleExists(articleId);
+  await ensureManageableArticle(req, articleId);
   const sections = await getSectionLocks(articleId);
   res.json({
     collab_mode: EDITOR_COLLAB_MODE === 'section' ? 'section' : 'single',
@@ -3957,10 +4386,10 @@ app.get('/api/faq/articles/:id/editor/sections', requireWriter, asyncHandler(asy
   });
 }));
 
-app.post('/api/faq/articles/:id/editor/sections/lock', requireWriter, asyncHandler(async (req, res) => {
+app.post('/api/faq/articles/:id/editor/sections/lock', asyncHandler(async (req, res) => {
   const articleId = Number(req.params.id);
   if (!Number.isFinite(articleId) || articleId <= 0) throw appError('文章ID无效', 400);
-  await ensureArticleExists(articleId);
+  await ensureManageableArticle(req, articleId);
   if (EDITOR_COLLAB_MODE !== 'section') throw appError('当前未开启分段协作模式', 409);
 
   const sectionKey = normalizeSectionKey(req.body?.section_key);
@@ -3982,10 +4411,10 @@ app.post('/api/faq/articles/:id/editor/sections/lock', requireWriter, asyncHandl
   res.json({ ok: true, sections });
 }));
 
-app.post('/api/faq/articles/:id/editor/sections/release', requireWriter, asyncHandler(async (req, res) => {
+app.post('/api/faq/articles/:id/editor/sections/release', asyncHandler(async (req, res) => {
   const articleId = Number(req.params.id);
   if (!Number.isFinite(articleId) || articleId <= 0) throw appError('文章ID无效', 400);
-  await ensureArticleExists(articleId);
+  await ensureManageableArticle(req, articleId);
   const sectionKey = normalizeSectionKey(req.body?.section_key);
   if (!sectionKey) throw appError('请选择分段', 400);
   const released = await releaseSectionLock({
@@ -4007,11 +4436,11 @@ app.post('/api/faq/articles/:id/editor/sections/release', requireWriter, asyncHa
   });
 }));
 
-app.post('/api/faq/articles/:id/editor/session', requireWriter, asyncHandler(async (req, res) => {
+app.post('/api/faq/articles/:id/editor/session', asyncHandler(async (req, res) => {
   const articleId = Number(req.params.id);
   if (!Number.isFinite(articleId) || articleId <= 0) throw appError('文章ID无效', 400);
 
-  const article = await ensureArticleExists(articleId);
+  const { article } = await ensureManageableArticle(req, articleId);
   const currentVersion = await getCurrentVersion(article);
   if (!currentVersion) throw appError('当前文章没有可编辑版本', 400);
 
@@ -4188,11 +4617,11 @@ app.post('/api/faq/articles/:id/editor/session', requireWriter, asyncHandler(asy
   });
 }));
 
-app.post('/api/faq/articles/:id/editor/release', requireWriter, asyncHandler(async (req, res) => {
+app.post('/api/faq/articles/:id/editor/release', asyncHandler(async (req, res) => {
   const articleId = Number(req.params.id);
   if (!Number.isFinite(articleId) || articleId <= 0) throw appError('文章ID无效', 400);
 
-  await ensureArticleExists(articleId);
+  await ensureManageableArticle(req, articleId);
   await expireArticleSessions(articleId);
   let active = await getOwnActiveSession(articleId, Number(req.user.id) || 0);
   if (!active && EDITOR_COLLAB_MODE === 'single') {
@@ -4222,11 +4651,11 @@ app.post('/api/faq/articles/:id/editor/release', requireWriter, asyncHandler(asy
   res.json({ ok: true });
 }));
 
-app.post('/api/faq/articles/:id/editor/publish', requireWriter, asyncHandler(async (req, res) => {
+app.post('/api/faq/articles/:id/editor/publish', asyncHandler(async (req, res) => {
   const articleId = Number(req.params.id);
   if (!Number.isFinite(articleId) || articleId <= 0) throw appError('文章ID无效', 400);
 
-  const article = await ensureArticleExists(articleId);
+  const { article } = await ensureManageableArticle(req, articleId);
   const publishNote = normalizePublishNote(req.body?.publish_note);
   await expireArticleSessions(articleId);
   let active = await getOwnActiveSession(articleId, Number(req.user.id) || 0);
@@ -4341,11 +4770,11 @@ app.post('/api/faq/articles/:id/editor/publish', requireWriter, asyncHandler(asy
   res.status(201).json(published);
 }));
 
-app.post('/api/faq/articles/:id/editor/discard', requireWriter, asyncHandler(async (req, res) => {
+app.post('/api/faq/articles/:id/editor/discard', asyncHandler(async (req, res) => {
   const articleId = Number(req.params.id);
   if (!Number.isFinite(articleId) || articleId <= 0) throw appError('文章ID无效', 400);
 
-  await ensureArticleExists(articleId);
+  await ensureManageableArticle(req, articleId);
   await expireArticleSessions(articleId);
   let active = await getOwnActiveSession(articleId, Number(req.user.id) || 0);
   if (!active && EDITOR_COLLAB_MODE === 'single') {

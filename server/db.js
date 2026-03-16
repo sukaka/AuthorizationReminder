@@ -236,6 +236,12 @@ const init = async () => {
   await addColumnIfMissing('users', 'mfa_methods', 'mfa_methods TEXT');
   await addColumnIfMissing('users', 'app_access', 'app_access TEXT');
   await addColumnIfMissing('users', 'is_active', 'is_active TINYINT NOT NULL DEFAULT 1');
+  await addColumnIfMissing('users', 'department_code', 'department_code VARCHAR(32) NULL');
+  await addIndexIfMissing(
+    'users',
+    'idx_users_department_code',
+    'CREATE INDEX idx_users_department_code ON users (department_code)'
+  );
 
   await run(`CREATE TABLE IF NOT EXISTS reminder_sent (
     id INT AUTO_INCREMENT PRIMARY KEY,
@@ -553,6 +559,15 @@ const init = async () => {
     sort_order INT NOT NULL DEFAULT 0,
     is_active TINYINT NOT NULL DEFAULT 1,
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
+
+  await run(`CREATE TABLE IF NOT EXISTS department_doc_admins (
+    department_code VARCHAR(32) NOT NULL,
+    user_id INT NOT NULL,
+    can_manage_docs TINYINT NOT NULL DEFAULT 1,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (department_code, user_id),
+    INDEX idx_department_doc_admins_user (user_id)
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
 
   await run(`CREATE TABLE IF NOT EXISTS service_catalog (
