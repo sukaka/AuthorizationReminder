@@ -30,3 +30,11 @@ test('filteredCategories is declared before allCategoryIds to avoid TDZ on first
   assert.notEqual(allIdsIndex, -1, 'allCategoryIds declaration missing');
   assert.ok(filteredIndex < allIdsIndex, 'filteredCategories must be declared before allCategoryIds');
 });
+
+test('selectedArticleManageable is declared before editor polling effect dependencies', () => {
+  const selectedManageableIndex = source.indexOf('const selectedArticleManageable =');
+  const effectIndex = source.indexOf("}, [editorVisible, selectedArticle?.id, selectedArticleManageable])");
+  assert.notEqual(selectedManageableIndex, -1, 'selectedArticleManageable declaration missing');
+  assert.notEqual(effectIndex, -1, 'editor polling effect missing');
+  assert.ok(selectedManageableIndex < effectIndex, 'selectedArticleManageable must be declared before the effect dependency array');
+});

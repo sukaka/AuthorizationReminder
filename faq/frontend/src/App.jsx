@@ -1915,6 +1915,22 @@ function App() {
     })
   }
 
+  const totalPages = Math.max(1, Math.ceil(Number(articles.total || 0) / Math.max(1, Number(articles.limit || 20))))
+  const articleRowStart = (Math.max(1, Number(articles.page || 1)) - 1) * Math.max(1, Number(articles.limit || 20))
+  const allVisibleSelected = articles.items.length > 0 && articles.items.every((item) => selectedIds.includes(Number(item.id)))
+  const effectiveBatchAction = recycleMode && batchAction === 'delete' ? 'restore' : batchAction
+  const selectedArticleFavorited = selectedArticle ? favoriteIdSet.has(Number(selectedArticle.id)) : false
+  const selectedArticleManageable = selectedArticle ? canManageArticleItem(selectedArticle) : false
+  const currentVersionExt = String(selectedArticle?.current_version?.source_ext || '').trim().toLowerCase()
+  const editorDisabledReason = !selectedArticle?.current_version?.id
+    ? '请先上传 DOC/DOCX 版本后再在线编辑'
+    : currentVersionExt === 'pdf'
+      ? '当前版本为 PDF，不支持在线编辑'
+      : currentVersionExt && !['doc', 'docx'].includes(currentVersionExt)
+        ? `当前版本类型 ${currentVersionExt.toUpperCase()} 不支持在线编辑`
+        : ''
+  const trendMax = Math.max(1, ...trendStats.map((item) => Number(item?.views || 0)))
+
   useEffect(() => {
     if (!selectedArticle) return
     setDetailModalOffset({ x: 0, y: 0 })
@@ -2120,22 +2136,6 @@ function App() {
       clearTimeout(timer)
     }
   }, [editorVisible, editorPayload, editorContainerId])
-
-  const totalPages = Math.max(1, Math.ceil(Number(articles.total || 0) / Math.max(1, Number(articles.limit || 20))))
-  const articleRowStart = (Math.max(1, Number(articles.page || 1)) - 1) * Math.max(1, Number(articles.limit || 20))
-  const allVisibleSelected = articles.items.length > 0 && articles.items.every((item) => selectedIds.includes(Number(item.id)))
-  const effectiveBatchAction = recycleMode && batchAction === 'delete' ? 'restore' : batchAction
-  const selectedArticleFavorited = selectedArticle ? favoriteIdSet.has(Number(selectedArticle.id)) : false
-  const selectedArticleManageable = selectedArticle ? canManageArticleItem(selectedArticle) : false
-  const currentVersionExt = String(selectedArticle?.current_version?.source_ext || '').trim().toLowerCase()
-  const editorDisabledReason = !selectedArticle?.current_version?.id
-    ? '请先上传 DOC/DOCX 版本后再在线编辑'
-    : currentVersionExt === 'pdf'
-      ? '当前版本为 PDF，不支持在线编辑'
-      : currentVersionExt && !['doc', 'docx'].includes(currentVersionExt)
-        ? `当前版本类型 ${currentVersionExt.toUpperCase()} 不支持在线编辑`
-        : ''
-  const trendMax = Math.max(1, ...trendStats.map((item) => Number(item?.views || 0)))
 
   const handleLogout = async () => {
     await logoutFromSso({ apiBase: API_BASE })

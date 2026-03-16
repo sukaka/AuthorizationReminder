@@ -104,3 +104,17 @@
   - `node --test faq/frontend/tests/source.app.test.cjs`
   - `cd faq/frontend && npm run build`
   - `curl http://127.0.0.1:8085` 已返回新 bundle 资源路径
+
+## 文档管理系统白屏二次修复
+- 用户刷新后新 bundle 仍报错：`ReferenceError: Cannot access 'tt' before initialization`，对应新资源 `index-CUs5-Eak.js`。
+- 二次根因：
+  - `selectedArticleManageable` 定义在多个 `useEffect` 之后，但编辑器状态轮询的 effect 已在依赖数组中引用了它。
+  - React 在渲染期会先求值依赖数组，所以再次触发 TDZ。
+- 二次修复：
+  - 将 `selectedArticleManageable` 连同相关派生常量整体前移到第一个 `useEffect` 之前。
+  - 新增源码测试，强制要求 `selectedArticleManageable` 的声明位置早于编辑器轮询 effect。
+  - 重新构建并重建 `web-faq`，新 bundle 更新为 `index-Bz9ncEUy.js`。
+- 二次验证：
+  - `node --test faq/frontend/tests/source.app.test.cjs`
+  - `cd faq/frontend && npm run build`
+  - `docker compose up -d --build web-faq`
