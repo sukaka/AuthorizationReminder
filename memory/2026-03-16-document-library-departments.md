@@ -66,3 +66,9 @@
 - FAQ 旧模板/片段能力仍保留旧权限模型，但功能已下线，不影响当前主流程。
 - 历史文档部门回填依赖 `auth.users.department_code`；无归属文档会进入待处理队列。
 - 如果后续要支持“全局库管理员”而非仅 `admin`，需要补独立资格表。
+
+## 运行态补丁
+- 首轮 `5.2.0` 本地重建时发现 `auth` 容器启动失败，原因是 `auth/Dockerfile` 漏打包 `admin-center-departments.js`。
+- 已补 Dockerfile 与打包测试，后续版本需包含：
+  - `auth/admin-center-departments.js`
+  - `auth/tests/auth-dockerfile-packaging.test.js`

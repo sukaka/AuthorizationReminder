@@ -9,6 +9,10 @@ test('auth Dockerfile packages system access display helper', () => {
   assert.match(source, /COPY auth\/system-access-display\.js \.\/auth\/system-access-display\.js/);
 });
 
+test('auth Dockerfile packages department admin helper', () => {
+  assert.match(source, /COPY auth\/admin-center-departments\.js \.\/auth\/admin-center-departments\.js/);
+});
+
 test('auth Dockerfile packages audit log display helper', () => {
   assert.match(source, /COPY auth\/audit-log-display\.js \.\/auth\/audit-log-display\.js/);
 });
