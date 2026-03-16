@@ -49,6 +49,17 @@
 - Node.js 20+（本地开发/构建）
 - Go 1.22+（CMDB 本地开发）
 
+### 2.1.1 容器刷新约定
+每次开始联调、验收或回归前，默认先把容器切到最新镜像/最新构建，避免还在使用旧 bundle 或旧服务进程。
+
+```bash
+cd /Users/zhanglei/Documents/codex-new
+./scripts/deploy/docker-compose-aliyun.sh pull
+./scripts/deploy/docker-compose-aliyun.sh up -d --build
+```
+
+> 说明：如只验证某个系统，可在 `up -d --build` 后面追加具体服务名；但“先 pull、再 rebuild”应作为默认前置动作。
+
 ### 2.2 一键启动（全量）
 ```bash
 cd /Users/zhanglei/Documents/codex-new
@@ -61,15 +72,15 @@ cp .env.example .env
 
 ### 2.2.1 新服务器首启（一键）
 ```bash
-git clone -b codex/5.2.3 https://github.com/sukaka/AuthorizationReminder.git /root/AuthorizationReminder-codex-5.2.3
-cd /root/AuthorizationReminder-codex-5.2.3
+git clone -b codex/5.3.0 https://github.com/sukaka/AuthorizationReminder.git /root/AuthorizationReminder-codex-5.3.0
+cd /root/AuthorizationReminder-codex-5.3.0
 export ALIYUN_MIRROR_URL='替换成你的阿里云镜像加速器地址'
 export AUTH_BUILTIN_ACCOUNT_DEFAULT_PASSWORD='改成你要登录的默认密码'
 export PUBLIC_HOST='服务器公网IP或域名，不带协议和端口'
 ./scripts/deploy/bootstrap-full-server.sh
 ```
 
-> 说明：`bootstrap-full-server.sh` 默认把仓库同步到 `/root/AuthorizationReminder-codex-5.2.3`，并使用分支 `codex/5.2.3`。如需覆盖，可设置 `BOOTSTRAP_REPO_DIR`、`BOOTSTRAP_BRANCH`、`BOOTSTRAP_REPO_URL`。`ALIYUN_MIRROR_URL`、`AUTH_BUILTIN_ACCOUNT_DEFAULT_PASSWORD`、`PUBLIC_HOST` 为必填项。`PUBLIC_HOST` 只写主机名/IP，不要带 `http://` 或端口。
+> 说明：`bootstrap-full-server.sh` 默认把仓库同步到 `/root/AuthorizationReminder-codex-5.3.0`，并使用分支 `codex/5.3.0`。如需覆盖，可设置 `BOOTSTRAP_REPO_DIR`、`BOOTSTRAP_BRANCH`、`BOOTSTRAP_REPO_URL`。`ALIYUN_MIRROR_URL`、`AUTH_BUILTIN_ACCOUNT_DEFAULT_PASSWORD`、`PUBLIC_HOST` 为必填项。`PUBLIC_HOST` 只写主机名/IP，不要带 `http://` 或端口。
 >
 > 如果服务器当前只提供 `HTTP`，根 `.env` 里要保持 `AUTH_COOKIE_SECURE=false` 与 `AUTH_SECURITY_STRICT_MODE=false`，否则 `auth` 会因为安全启动校验直接退出。只有在你已经提供 `HTTPS` 入口时，才把这两个值一起改成 `true`。
 

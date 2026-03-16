@@ -38,3 +38,30 @@ test('selectedArticleManageable is declared before editor polling effect depende
   assert.notEqual(effectIndex, -1, 'editor polling effect missing');
   assert.ok(selectedManageableIndex < effectIndex, 'selectedArticleManageable must be declared before the effect dependency array');
 });
+
+test('article list filters expose visible field labels instead of placeholders only', () => {
+  assert.match(source, /筛选文档/);
+  assert.match(source, /关键词搜索/);
+  assert.match(source, /文库范围/);
+  assert.match(source, /文档状态/);
+  assert.match(source, /文档分类/);
+});
+
+test('article composer is progressively disclosed behind an expandable trigger', () => {
+  assert.match(source, /展开新建文档/);
+  assert.match(source, /收起新建文档/);
+  assert.match(source, /aria-expanded=\{articleComposerOpen\}/);
+});
+
+test('article workspace emphasizes one primary shortcuts area and one reminders area', () => {
+  assert.match(source, /继续处理/);
+  assert.match(source, /待处理提醒/);
+  assert.match(source, /最近访问/);
+  assert.match(source, /我的收藏/);
+});
+
+test('recycle mode exposes purge actions for single and batch delete', () => {
+  assert.match(source, /批量彻底删除/);
+  assert.match(source, /彻底删除/);
+  assert.match(source, /确认彻底删除选中的回收站文章吗/);
+});
