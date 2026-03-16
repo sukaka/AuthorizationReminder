@@ -65,7 +65,7 @@ ALIYUN_MIRROR_URL='https://example.mirror.aliyuncs.com' \
 AUTH_BUILTIN_ACCOUNT_DEFAULT_PASSWORD='Password123!' \
 PUBLIC_HOST='8.141.81.201' \
 BOOTSTRAP_REPO_DIR="${REPO_DIR}" \
-BOOTSTRAP_BRANCH='codex/5.0.3' \
+BOOTSTRAP_BRANCH='codex/5.1.0' \
 BOOTSTRAP_REPO_URL='https://example.invalid/repo.git' \
 BOOTSTRAP_DOCKER_CONFIG_DIR="${DOCKER_DIR}" \
 bash "${SCRIPT_PATH}"
@@ -75,7 +75,7 @@ if ! grep -q 'https://example.mirror.aliyuncs.com' "${DOCKER_DIR}/daemon.json"; 
   exit 1
 fi
 
-if ! grep -q '^git clone -b codex/5.0.3 https://example.invalid/repo.git '"${REPO_DIR}"'$' "${LOG_FILE}"; then
+if ! grep -q '^git clone -b codex/5.1.0 https://example.invalid/repo.git '"${REPO_DIR}"'$' "${LOG_FILE}"; then
   echo 'expected branch clone command' >&2
   exit 1
 fi

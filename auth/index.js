@@ -1117,20 +1117,20 @@ const authorizeDelivery = (user, action) => {
 
 const authorizeFaq = (user, action) => {
   if (!user) return deny('未登录');
-  if (!canAccessSystem(user, 'faq')) return deny('无权限访问FAQ系统');
+  if (!canAccessSystem(user, 'faq')) return deny('无权限访问文档管理系统');
   const role = String(user.role || '').toLowerCase();
   if (action === 'app:enter' || action === 'faq:read') return allow();
   if (action === 'faq:write') {
     if (role === 'admin' || role === 'editor') return allow();
-    return deny('仅管理员或编辑可执行FAQ写操作');
+    return deny('仅管理员或编辑可执行文档写操作');
   }
   if (action === 'faq:review') {
     if (role === 'admin' || role === 'reviewer') return allow();
-    return deny('仅管理员或审核员可执行FAQ审核操作');
+    return deny('仅管理员或审核员可执行文档审核操作');
   }
   if (action === 'faq:audit') {
     if (role === 'auditor') return allow();
-    return deny('仅审计管理员可查看FAQ审计信息');
+    return deny('仅审计管理员可查看文档审计信息');
   }
   return deny('不支持的授权动作');
 };
@@ -1305,7 +1305,7 @@ app.get('/api/auth/apps', async (req, res) => {
   }
   if (appAccess.includes('faq')) {
     const faqAuth = await authorizeFaq(user, 'app:enter');
-    apps.push({ key: 'faq', name: 'FAQ系统', url: faqURL, allow: !!faqAuth.allow });
+    apps.push({ key: 'faq', name: '文档管理系统', url: faqURL, allow: !!faqAuth.allow });
   }
   if (appAccess.includes('tender')) {
     const tenderAuth = await authorizeTender(user, 'app:enter');
@@ -1321,7 +1321,7 @@ app.get('/api/auth/apps', async (req, res) => {
   });
 });
 
-const RELEASE_VERSION = '5.0.3';
+const RELEASE_VERSION = '5.1.0';
 const DEDICATED_CENTER_VERSION = `v${RELEASE_VERSION}`;
 const ADMIN_CENTER_ROLE_OPTIONS = Object.freeze([
   { value: 'user', label: '普通用户' },
@@ -1805,7 +1805,7 @@ const renderAuditCenterSections = () => ({
 	                <option value="cmdb">CMDB系统</option>
 	                <option value="inventory">库存管理系统</option>
 	                <option value="device-flow">设备流转系统</option>
-	                <option value="faq">FAQ系统</option>
+	                <option value="faq">文档管理系统</option>
 	                <option value="tender">标书协同制作系统</option>
 	                <option value="train-exam">培训考试系统</option>
 	              </select>

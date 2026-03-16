@@ -4,7 +4,7 @@ const SYSTEM_DISPLAY_OPTIONS = Object.freeze([
   { key: 'cmdb', label: 'CMDB系统', shortLabel: 'CMDB系统' },
   { key: 'inventory', label: '库存管理系统', shortLabel: '库存管理系统' },
   { key: 'device-flow', label: '设备流转系统', shortLabel: '设备流转系统' },
-  { key: 'faq', label: 'FAQ系统', shortLabel: 'FAQ系统' },
+  { key: 'faq', label: '文档管理系统', shortLabel: '文档管理系统' },
   { key: 'tender', label: '标书协同制作系统', shortLabel: '标书协同制作系统' },
   { key: 'train-exam', label: '培训考试系统', shortLabel: '培训考试系统' },
   { key: 'admin-center', label: '管理中心', shortLabel: '管理中心' },

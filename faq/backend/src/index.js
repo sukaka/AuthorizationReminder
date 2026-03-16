@@ -357,7 +357,7 @@ const introspectToken = async (token) => {
   const user = data?.user;
   const apps = Array.isArray(data?.apps) ? data.apps : [];
   if (!user || user.id === undefined || !user.username) throw appError('登录状态无效', 401);
-  if (AUTH_SYSTEM_KEY && !apps.includes(AUTH_SYSTEM_KEY)) throw appError('无权限访问FAQ系统', 403);
+  if (AUTH_SYSTEM_KEY && !apps.includes(AUTH_SYSTEM_KEY)) throw appError('无权限访问文档管理系统', 403);
 
   return {
     user: {

@@ -707,8 +707,8 @@ function App() {
     const deletedCount = Number(result?.deleted_category_count || 0)
     const recycledCount = Number(result?.recycled_article_count || 0)
     if (deletedCount <= 0) return `分类「${fallbackName}」已强制删除`
-    if (recycledCount <= 0) return `已强制删除 ${deletedCount} 个分类，未发现需回收的 FAQ`
-    return `已强制删除 ${deletedCount} 个分类，${recycledCount} 篇 FAQ 已移入回收站`
+    if (recycledCount <= 0) return `已强制删除 ${deletedCount} 个分类，未发现需回收的文档`
+    return `已强制删除 ${deletedCount} 个分类，${recycledCount} 篇文档已移入回收站`
   }
 
   const onToggleCategorySelection = (categoryId) => {
@@ -749,7 +749,7 @@ function App() {
     if (!isAdmin || categoryDeleting || id <= 0) return
     const name = String(item?.name || '').trim() || `ID:${id}`
     const ok = window.confirm(
-      `确定强制删除分类「${name}」吗？\n\n这会递归删除所有子分类，并将关联 FAQ 移入回收站。\n已删除 FAQ 恢复后会变成未分类。`
+      `确定强制删除分类「${name}」吗？\n\n这会递归删除所有子分类，并将关联文档移入回收站。\n已删除文档恢复后会变成未分类。`
     )
     if (!ok) return
 
@@ -873,7 +873,7 @@ function App() {
       const data = await api.get('/api/faq/stats/top?limit=10')
       setTopStats(Array.isArray(data) ? data : [])
     } catch (err) {
-      setError(err.message || '读取热门FAQ失败')
+      setError(err.message || '读取热门文档失败')
     }
   }
 
@@ -984,7 +984,7 @@ function App() {
         category_id: articleForm.category_id || undefined,
       })
       setArticleForm({ title: '', summary: '', tagsText: '', category_id: '' })
-      setMessage(`已创建 FAQ：${created.title}`)
+      setMessage(`已创建文档：${created.title}`)
       await fetchArticles(1)
       await openArticle(created.id)
     } catch (err) {
@@ -1274,7 +1274,7 @@ function App() {
         summary: summary || null,
         category_id: Number.isFinite(categoryId) && categoryId > 0 ? categoryId : null,
       })
-      setMessage('FAQ基础信息已更新')
+      setMessage('文档基础信息已更新')
       setEditArticleDialog({
         open: false,
         submitting: false,
@@ -1287,7 +1287,7 @@ function App() {
       if (selectedArticle?.id === articleId) await openArticle(articleId)
     } catch (err) {
       setEditArticleDialog((prev) => ({ ...prev, submitting: false }))
-      setError(err.message || 'FAQ信息更新失败')
+      setError(err.message || '文档信息更新失败')
     }
   }
 
@@ -1872,7 +1872,7 @@ function App() {
   }
 
   if (booting) {
-    return <div className="app-loading">FAQ 系统初始化中...</div>
+    return <div className="app-loading">文档管理系统初始化中...</div>
   }
 
   if (!user) {
@@ -1883,17 +1883,17 @@ function App() {
     <div className="shell">
       <aside className="sidebar">
         <div className="brand">
-          <strong><span className="brand-red">聚信</span><span className="brand-blue">FAQ 系统</span></strong>
+          <strong><span className="brand-red">聚信</span><span className="brand-blue">文档管理系统</span></strong>
         </div>
         <div className="user-pill">{user?.username || '-'} · {roleLabel(user?.role)}</div>
 
         <div className="menu">
           {isFaqBasicUser ? (
-            <button className={activeMenu === 'articles' ? 'active' : ''} onClick={() => setActiveMenu('articles')}>FAQ管理</button>
+            <button className={activeMenu === 'articles' ? 'active' : ''} onClick={() => setActiveMenu('articles')}>文档管理</button>
           ) : (
             <>
               <button className={activeMenu === 'dashboard' ? 'active' : ''} onClick={() => setActiveMenu('dashboard')}>仪表盘</button>
-              <button className={activeMenu === 'articles' ? 'active' : ''} onClick={() => setActiveMenu('articles')}>FAQ管理</button>
+              <button className={activeMenu === 'articles' ? 'active' : ''} onClick={() => setActiveMenu('articles')}>文档管理</button>
               <button className={activeMenu === 'categories' ? 'active' : ''} onClick={() => setActiveMenu('categories')}>分类管理</button>
               {isReviewer ? (
                 <button className={activeMenu === 'approvals' ? 'active' : ''} onClick={() => { setActiveMenu('approvals'); fetchPublishRequests('pending', 1) }}>
@@ -1918,7 +1918,7 @@ function App() {
       <main className="content">
         <section className="hero">
           <div>
-            <h1>FAQ 知识库</h1>
+            <h1>文档知识库</h1>
             <p className="sub">支持 doc/docx/pdf 上传、在线预览与 Word 在线编辑。</p>
           </div>
           <div className="hero-actions">
@@ -1935,7 +1935,7 @@ function App() {
             <section className="panel">
               <div className="panel-header"><h2>数据概览</h2></div>
               <div className="panel-body metric-grid">
-                <div className="metric"><label>FAQ总数</label><strong>{stats.article_total || 0}</strong></div>
+                <div className="metric"><label>文档总数</label><strong>{stats.article_total || 0}</strong></div>
                 <div className="metric"><label>已发布</label><strong>{stats.published_total || 0}</strong></div>
                 <div className="metric"><label>草稿</label><strong>{stats.draft_total || 0}</strong></div>
                 <div className="metric"><label>总阅读</label><strong>{stats.views_total || 0}</strong></div>
@@ -1952,7 +1952,7 @@ function App() {
 
             <section className="panel">
               <div className="panel-header">
-                <h2>访问趋势与热门FAQ</h2>
+                <h2>访问趋势与热门文档</h2>
                 <div className="row-actions">
                   <button className="ghost" onClick={refreshTrendStats}>刷新趋势</button>
                   <button className="ghost" onClick={refreshTopStats}>刷新热门</button>
@@ -2300,7 +2300,7 @@ function App() {
           <section className="article-layout">
             <section className="panel article-list-panel">
               <div className="panel-header">
-                <h2>{recycleMode ? '回收站' : 'FAQ 列表'}</h2>
+                <h2>{recycleMode ? '回收站' : '文档列表'}</h2>
                 <div className="row-actions">
                   {!isFaqBasicUser ? (
                     <>
@@ -2313,7 +2313,7 @@ function App() {
                           setRecycleMode((prev) => !prev)
                         }}
                       >
-                        {recycleMode ? '返回FAQ列表' : '回收站'}
+                        {recycleMode ? '返回文档列表' : '回收站'}
                       </button>
                     </>
                   ) : null}
@@ -2374,7 +2374,7 @@ function App() {
                     <input
                       value={articleForm.title}
                       onChange={(e) => setArticleForm({ ...articleForm, title: e.target.value })}
-                      placeholder="新建FAQ标题"
+                      placeholder="新建文档标题"
                       required
                     />
                     <input
@@ -2394,7 +2394,7 @@ function App() {
                       <option value="">无分类</option>
                       {categories.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
                     </select>
-                    <button className="primary" type="submit">新增FAQ</button>
+                    <button className="primary" type="submit">新增文档</button>
                   </form>
                 )}
                 {isAdmin ? (
@@ -2502,7 +2502,7 @@ function App() {
                       ))}
                       {!articles.items.length ? (
                         <div className="empty">
-                          {recycleMode ? '回收站为空，可切换回FAQ列表继续管理。' : '暂无FAQ数据，先创建一篇或上传一个文档版本。'}
+                          {recycleMode ? '回收站为空，可切换回文档列表继续管理。' : '暂无文档数据，先创建一篇或上传一个文档版本。'}
                         </div>
                       ) : null}
                     </>
@@ -2536,7 +2536,7 @@ function App() {
           >
             <div className={`detail-modal-top ${draggingDetailModal ? 'dragging' : ''}`} onMouseDown={onDetailDragStart}>
               <div className="detail-modal-intro">
-                <p className="detail-kicker">FAQ 详情与预览</p>
+                <p className="detail-kicker">文档详情与预览</p>
                 <h2>{selectedArticle.title}</h2>
                 <div className="detail-meta-row">
                   <span className={`status-chip status-${String(selectedArticle.status || 'draft').toLowerCase()}`}>{statusText(selectedArticle.status)}</span>
@@ -2839,7 +2839,7 @@ function App() {
       {deleteConfirm.open && (
         <div className="confirm-modal-mask" onClick={onCancelDeleteArticle}>
           <section className="confirm-modal panel" onClick={(e) => e.stopPropagation()}>
-            <h3>确认删除 FAQ</h3>
+            <h3>确认删除文档</h3>
             <p>
               将把「{deleteConfirm.article?.title || '-'}」移入回收站，可在到期前恢复。
             </p>
@@ -2867,7 +2867,7 @@ function App() {
       {editArticleDialog.open && (
         <div className="confirm-modal-mask" onClick={onCloseEditArticleDialog}>
           <section className="confirm-modal panel article-edit-modal" onClick={(e) => e.stopPropagation()}>
-            <h3>编辑 FAQ 信息</h3>
+            <h3>编辑文档信息</h3>
             <p>支持修改标题、摘要和分类，文档版本内容不会受影响。</p>
             <form className="article-edit-form" onSubmit={onSubmitEditArticle}>
               <label>
@@ -2885,7 +2885,7 @@ function App() {
                 <textarea
                   value={editArticleDialog.summary}
                   onChange={(e) => setEditArticleDialog((prev) => ({ ...prev, summary: e.target.value }))}
-                  placeholder="可填写FAQ场景、适用范围或关键步骤说明"
+                  placeholder="可填写文档场景、适用范围或关键步骤说明"
                   maxLength={1000}
                   disabled={editArticleDialog.submitting}
                 />

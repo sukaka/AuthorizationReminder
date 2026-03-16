@@ -31,7 +31,7 @@ test('summarizeSystemAccess keeps all labels when only two systems are granted',
   assert.deepEqual(
     summarizeSystemAccess(['faq', 'train-exam']),
     {
-      labels: ['FAQ系统', '培训考试系统'],
+      labels: ['文档管理系统', '培训考试系统'],
       overflowCount: 0,
     }
   );
