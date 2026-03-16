@@ -9,6 +9,43 @@ const normalizeCategoryDeleteIds = (ids) => {
   return Array.from(new Set(ids.map((item) => toDeleteId(item)).filter((item) => item > 0)));
 };
 
+const orderCategoryBatchDeleteIds = (rows = [], ids = []) => {
+  const selectedIds = normalizeCategoryDeleteIds(ids);
+  if (!selectedIds.length) return [];
+
+  const selectedIdSet = new Set(selectedIds);
+  const parentById = new Map();
+  (Array.isArray(rows) ? rows : []).forEach((item) => {
+    const id = toDeleteId(item?.id);
+    if (id <= 0 || !selectedIdSet.has(id)) return;
+    parentById.set(id, toDeleteId(item?.parent_id));
+  });
+
+  const depthMemo = new Map();
+  const getDepth = (id, stack = new Set()) => {
+    if (depthMemo.has(id)) return depthMemo.get(id);
+    if (stack.has(id)) return 0;
+
+    stack.add(id);
+    const parentId = parentById.get(id) || 0;
+    const depth = parentId > 0 && selectedIdSet.has(parentId)
+      ? getDepth(parentId, stack) + 1
+      : 0;
+    stack.delete(id);
+    depthMemo.set(id, depth);
+    return depth;
+  };
+
+  return selectedIds
+    .map((id, index) => ({ id, index, depth: getDepth(id) }))
+    .sort((left, right) => {
+      const depthDiff = right.depth - left.depth;
+      if (depthDiff !== 0) return depthDiff;
+      return left.index - right.index;
+    })
+    .map((item) => item.id);
+};
+
 const getCategoryDeleteGuard = ({ category = null, linkedCount = 0, childCount = 0 } = {}) => {
   if (!category) {
     return { ok: false, status: 404, error: '分类不存在' };
@@ -108,6 +145,7 @@ module.exports = {
   collectCategoryForceDeletePlan,
   getCategoryDeleteGuard,
   normalizeCategoryDeleteIds,
+  orderCategoryBatchDeleteIds,
   summarizeCategoryBatchDeleteResults,
   summarizeCategoryForceDeleteResults,
 };

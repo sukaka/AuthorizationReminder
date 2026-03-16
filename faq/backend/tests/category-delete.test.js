@@ -2,6 +2,7 @@ const {
   collectCategoryForceDeletePlan,
   getCategoryDeleteGuard,
   normalizeCategoryDeleteIds,
+  orderCategoryBatchDeleteIds,
   summarizeCategoryBatchDeleteResults,
   summarizeCategoryForceDeleteResults,
 } = require('../src/category-delete');
@@ -62,6 +63,15 @@ describe('faq category delete helpers', () => {
         { id: 23, error: '该分类下有子分类，无法删除' },
       ],
     });
+  });
+
+  it('orders selected categories so descendants delete before selected parents', () => {
+    expect(orderCategoryBatchDeleteIds([
+      { id: 10, parent_id: null },
+      { id: 11, parent_id: 10 },
+      { id: 12, parent_id: 11 },
+      { id: 13, parent_id: null },
+    ], [10, 13, 11, 12])).toEqual([12, 11, 10, 13]);
   });
 
   it('collects category subtree ids and delete order for force delete', () => {

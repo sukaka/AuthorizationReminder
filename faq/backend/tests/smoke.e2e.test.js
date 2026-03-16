@@ -422,6 +422,78 @@ describe('faq smoke e2e', () => {
     expect(categoryIds).toContain(parentId);
   });
 
+  it('should batch delete selected child categories before their selected parents', async () => {
+    const authToken = await resolveAdminToken({ authBase, apiBase, optional: true });
+    if (!authToken) {
+      console.warn('[faq smoke] skip: no FAQ admin token could be resolved');
+      return;
+    }
+    const adminInfo = await resolveSessionInfo({ apiBase, token: authToken });
+    if (!adminInfo.ok || adminInfo.role !== 'admin') {
+      console.warn(`[faq smoke] skip: admin token unavailable for FAQ admin batch delete (${adminInfo.status} ${adminInfo.reason || ''})`);
+      return;
+    }
+
+    const categoryPrefix = uniqueCode('FAQ-CATEGORY-BATCH-TREE');
+
+    const parentResp = await request({
+      base: apiBase,
+      path: '/api/faq/categories',
+      method: 'POST',
+      token: authToken,
+      body: {
+        name: `${categoryPrefix}-parent`,
+        library_scope: 'global',
+        sort_order: 10,
+        is_active: 1,
+      },
+    });
+    ensureStatus(parentResp, 201);
+    const parentId = Number(ensureJsonField(parentResp, 'id'));
+
+    const childResp = await request({
+      base: apiBase,
+      path: '/api/faq/categories',
+      method: 'POST',
+      token: authToken,
+      body: {
+        name: `${categoryPrefix}-child`,
+        parent_id: parentId,
+        library_scope: 'global',
+        sort_order: 20,
+        is_active: 1,
+      },
+    });
+    ensureStatus(childResp, 201);
+    const childId = Number(ensureJsonField(childResp, 'id'));
+
+    const batchDeleteResp = await request({
+      base: apiBase,
+      path: '/api/faq/categories/batch-delete',
+      method: 'POST',
+      token: authToken,
+      body: {
+        ids: [parentId, childId],
+      },
+    });
+    ensureStatus(batchDeleteResp, 200);
+    expect(Number(batchDeleteResp.json?.total || 0)).toBe(2);
+    expect(Number(batchDeleteResp.json?.success_count || 0)).toBe(2);
+    expect(Number(batchDeleteResp.json?.failure_count || 0)).toBe(0);
+    expect(batchDeleteResp.json?.deleted_ids?.map((item) => Number(item))).toEqual([childId, parentId]);
+
+    const listResp = await request({
+      base: apiBase,
+      path: '/api/faq/categories',
+      method: 'GET',
+      token: authToken,
+    });
+    ensureStatus(listResp, 200);
+    const categoryIds = Array.isArray(listResp.json) ? listResp.json.map((item) => Number(item?.id || 0)) : [];
+    expect(categoryIds).not.toContain(parentId);
+    expect(categoryIds).not.toContain(childId);
+  });
+
   it('should create article, upload version and query preview/download', async () => {
     const authToken = await resolveWriterToken({ authBase, apiBase, optional: true });
     if (!authToken) {
@@ -744,5 +816,66 @@ describe('faq smoke e2e', () => {
     } else {
       console.warn('[faq smoke] skip auditor endpoints: auditor token unavailable');
     }
+  });
+
+  it('should purge recycled articles from recycle bin', async () => {
+    const adminToken = await resolveAdminToken({ authBase, apiBase, optional: true });
+    if (!adminToken) {
+      console.warn('[faq smoke] skip: no FAQ admin token could be resolved for recycle purge');
+      return;
+    }
+    const adminInfo = await resolveSessionInfo({ apiBase, token: adminToken });
+    if (!adminInfo.ok || adminInfo.role !== 'admin') {
+      console.warn(`[faq smoke] skip: admin token unavailable for recycle purge (${adminInfo.status} ${adminInfo.reason || ''})`);
+      return;
+    }
+
+    const articleResp = await request({
+      base: apiBase,
+      path: '/api/faq/articles',
+      method: 'POST',
+      token: adminToken,
+      body: {
+        title: uniqueCode('FAQ-RECYCLE-PURGE'),
+        summary: 'recycle purge smoke',
+        tags: ['smoke', 'recycle-purge'],
+        library_scope: 'global',
+      },
+    });
+    ensureStatus(articleResp, 201);
+    const articleId = Number(ensureJsonField(articleResp, 'id'));
+
+    const recycleResp = await request({
+      base: apiBase,
+      path: `/api/faq/articles/${articleId}`,
+      method: 'DELETE',
+      token: adminToken,
+    });
+    ensureStatus(recycleResp, 200);
+
+    const purgeResp = await request({
+      base: apiBase,
+      path: '/api/faq/articles/batch',
+      method: 'POST',
+      token: adminToken,
+      body: {
+        action: 'purge',
+        article_ids: [articleId],
+      },
+    });
+    ensureStatus(purgeResp, 200);
+    expect(Number(purgeResp.json?.total || 0)).toBe(1);
+
+    const recycleListResp = await request({
+      base: apiBase,
+      path: '/api/faq/articles?recycle=1&page=1&limit=50',
+      method: 'GET',
+      token: adminToken,
+    });
+    ensureStatus(recycleListResp, 200);
+    const recycled = Array.isArray(recycleListResp.json?.items)
+      ? recycleListResp.json.items.find((item) => Number(item?.id || 0) === articleId)
+      : null;
+    expect(recycled).toBeFalsy();
   });
 });

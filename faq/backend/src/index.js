@@ -14,9 +14,13 @@ const {
   collectCategoryForceDeletePlan,
   getCategoryDeleteGuard,
   normalizeCategoryDeleteIds,
+  orderCategoryBatchDeleteIds,
   summarizeCategoryBatchDeleteResults,
   summarizeCategoryForceDeleteResults,
 } = require('./category-delete');
+const {
+  getArticleBatchActionGuard,
+} = require('./article-batch');
 const {
   canManageDepartmentContent,
   canReviewDepartmentRequest,
@@ -1376,6 +1380,34 @@ const listActiveSessions = async (articleId) => {
   );
 };
 
+const logArticlePurgedOperation = async ({ req = null, articleId, title = '', deletedAt = null, purgeAfter = null, manual = false } = {}) => {
+  await logOperation({
+    req,
+    articleId: Number(articleId),
+    action: 'ARTICLE_PURGE',
+    message: `${manual ? '回收站手动清理' : '回收站自动清理'}「${trimText(title) || `ID:${articleId}`}」`,
+    beforeData: {
+      deleted_at: deletedAt,
+      purge_after: purgeAfter,
+      manual,
+    },
+  });
+};
+
+const emitArticlePurgedEvent = async ({ req = null, articleId, title = '', deletedAt = null, purgeAfter = null, manual = false } = {}) => {
+  await emitSystemEvent({
+    req,
+    eventType: 'FAQ_RECYCLE_PURGED',
+    articleId: Number(articleId),
+    payload: {
+      article_title: trimText(title),
+      deleted_at: deletedAt,
+      purge_after: purgeAfter,
+      manual,
+    },
+  });
+};
+
 const purgeExpiredDeletedArticles = async () => {
   const expired = await query(
     `SELECT id, title, deleted_at, purge_after
@@ -1394,23 +1426,19 @@ const purgeExpiredDeletedArticles = async () => {
     const removed = await hardDeleteArticleById(Number(item.id));
     if (!removed) continue;
     purged += 1;
-    await logOperation({
+    await logArticlePurgedOperation({
       articleId: Number(item.id),
-      action: 'ARTICLE_PURGE',
-      message: `回收站自动清理「${trimText(item.title) || `ID:${item.id}`}」`,
-      beforeData: {
-        deleted_at: item.deleted_at,
-        purge_after: item.purge_after,
-      },
+      title: item.title,
+      deletedAt: item.deleted_at,
+      purgeAfter: item.purge_after,
+      manual: false,
     });
-    await emitSystemEvent({
-      eventType: 'FAQ_RECYCLE_PURGED',
+    await emitArticlePurgedEvent({
       articleId: Number(item.id),
-      payload: {
-        article_title: trimText(item.title),
-        deleted_at: item.deleted_at,
-        purge_after: item.purge_after,
-      },
+      title: item.title,
+      deletedAt: item.deleted_at,
+      purgeAfter: item.purge_after,
+      manual: false,
     });
   }
   return purged;
@@ -2127,9 +2155,13 @@ app.put('/api/faq/categories/:id', asyncHandler(async (req, res) => {
 app.post('/api/faq/categories/batch-delete', asyncHandler(async (req, res) => {
   const ids = normalizeCategoryDeleteIds(req.body?.ids);
   if (!ids.length) throw appError('请选择要删除的分类', 400);
+  const categoryRows = ids.length > 1
+    ? await query(`SELECT id, parent_id FROM faq_categories WHERE id IN (${buildInClause(ids)})`, ids)
+    : [];
+  const orderedIds = ids.length > 1 ? orderCategoryBatchDeleteIds(categoryRows, ids) : ids;
 
   const results = [];
-  for (const id of ids) {
+  for (const id of orderedIds) {
     try {
       const before = await get('SELECT * FROM faq_categories WHERE id = ?', [id]);
       if (!before) throw appError('分类不存在', 404);
@@ -2938,15 +2970,14 @@ app.post('/api/faq/articles/batch', requireAdmin, asyncHandler(async (req, res) 
 
   const placeholders = articleIds.map(() => '?').join(',');
   const rows = await query(
-    `SELECT id, title, category_id, status, current_version_id, is_deleted
+    `SELECT id, title, category_id, status, current_version_id, is_deleted, deleted_at, purge_after
      FROM faq_articles
      WHERE id IN (${placeholders})`,
     articleIds
   );
   if (rows.length !== articleIds.length) throw appError('存在无效文章ID', 400);
-
-  const deletedRows = rows.filter((item) => Number(item.is_deleted || 0) === 1);
-  if (deletedRows.length && action !== 'restore') throw appError('回收站文章请先恢复后再执行该操作', 409);
+  const guard = getArticleBatchActionGuard({ action, rows });
+  if (!guard.ok) throw appError(guard.error, guard.status);
 
   if (action === 'publish') {
     const invalid = rows.filter((item) => !Number(item.current_version_id));
@@ -3029,8 +3060,6 @@ app.post('/api/faq/articles/batch', requireAdmin, asyncHandler(async (req, res) 
       [targetCategory ? Number(targetCategory.id) : null, Number(req.user.id) || null, req.user.username, ...articleIds]
     );
   } else if (action === 'restore') {
-    const invalid = rows.filter((item) => Number(item.is_deleted || 0) !== 1);
-    if (invalid.length) throw appError('仅回收站文章可执行恢复', 409);
     await run(
       `UPDATE faq_articles
        SET is_deleted = 0,
@@ -3044,6 +3073,27 @@ app.post('/api/faq/articles/batch', requireAdmin, asyncHandler(async (req, res) 
        WHERE id IN (${placeholders})`,
       [Number(req.user.id) || null, req.user.username, ...articleIds]
     );
+  } else if (action === 'purge') {
+    for (const item of rows) {
+      const removed = await hardDeleteArticleById(Number(item.id));
+      if (!removed) continue;
+      await logArticlePurgedOperation({
+        req,
+        articleId: Number(item.id),
+        title: item.title,
+        deletedAt: item.deleted_at,
+        purgeAfter: item.purge_after,
+        manual: true,
+      });
+      await emitArticlePurgedEvent({
+        req,
+        articleId: Number(item.id),
+        title: item.title,
+        deletedAt: item.deleted_at,
+        purgeAfter: item.purge_after,
+        manual: true,
+      });
+    }
   } else {
     throw appError('不支持的批量操作', 400);
   }
