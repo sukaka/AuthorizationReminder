@@ -35,6 +35,33 @@
 - `npm run build` in `delivery/frontend`
 - `docker compose -f docker-compose.yml config --services`
 
+## 运行态补充
+- 真实联调没有起第二套 MySQL，而是复用了主环境 `codex-new-mysql-1` 暴露的 `3308`，临时起了独立端口的 `auth(5191)`、`delivery-api(5195)`、`web-delivery(8094)`。
+- 联调过程中发现并修复两个运行缺陷：
+  - `auth/Dockerfile` 漏打包 `audit-log-display.js`，导致容器启动时报 `MODULE_NOT_FOUND`。
+  - `delivery_orders` 建表 SQL 重复定义 `approved_by_* / approved_at`，导致 MySQL 报 `ER_DUP_FIELDNAME`。
+- 迁移脚本新增旧库字段缺失兼容：
+  - `juxin_reminder.tickets` 缺少 `sales_order_no`、`ticket_no` 时自动回退。
+  - `juxin_sec_impl.sec_impl_projects` 缺少 `title` 时自动回退。
+- 已执行本地真实迁移到 `juxin_delivery`：
+  - `delivery_projects=12`
+  - `delivery_orders=14`
+  - `delivery_workflow_events=88`
+  - `delivery_phase_runs=57`
+  - `delivery_deliverables=18`
+  - `delivery_audit_logs=1256`
+  - `delivery_sla_rules=7`
+  - `delivery_sla_reminders=1161`
+  - `delivery_templates=4`
+  - `delivery_template_phase_rules=5`
+- 迁移告警：
+  - `sec-impl` 历史附件有 `26` 个源文件在当前机器上不存在，因此 `delivery_evidence_attachments` 本地迁移结果为 `0`，并记录 `missing_attachment_files=26`。
+- 门户真实页面与交付前端都已返回 `200`；`delivery-api` 未登录访问返回 `401`，符合预期。
+- 因为这次联调复用了共享 `juxin_reminder`，`ensureBuiltinUsers()` 已把内置账号 `app_access` 按新模型自愈为：
+  - `admin => ["reminder","delivery","cmdb","inventory","device-flow","faq","tender","train-exam"]`
+  - `auditor => ["audit-center","delivery"]`
+  - `sysadmin => ["admin-center"]`
+
 ## 当前已知未完项
 - 没有执行真实数据库迁移，只完成了迁移脚本与目标表幂等设计。
 - 没有跑 `delivery` 的在线 e2e，需要联动 `auth + mysql + delivery-api` 后再做。

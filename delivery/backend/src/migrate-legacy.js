@@ -28,6 +28,21 @@ const buildPool = () => mysql.createPool({
   dateStrings: true,
 });
 
+const loadTableColumns = async (pool, database, table) => {
+  const [rows] = await pool.query(
+    `SELECT COLUMN_NAME
+     FROM information_schema.COLUMNS
+     WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?`,
+    [database, table]
+  );
+  return new Set(rows.map((row) => String(row.COLUMN_NAME || '').trim()).filter(Boolean));
+};
+
+const buildOptionalColumnSql = (availableColumns, columnName, fallbackSql = 'NULL') => {
+  if (availableColumns instanceof Set && availableColumns.has(columnName)) return columnName;
+  return `${fallbackSql} AS ${columnName}`;
+};
+
 const trimText = (value, fallback = '') => (value === undefined || value === null ? fallback : String(value).trim());
 const toNumberOrNull = (value) => {
   const num = Number(value);
@@ -859,8 +874,11 @@ const runLegacyMigration = async ({ dryRun = true, limit = 0 } = {}) => {
       summary.ticket_project_members += 1;
     }
 
+    const ticketColumns = await loadTableColumns(pool, TICKETING_DB, 'tickets');
     const [tickets] = await pool.query(
-      `SELECT id, title, description, status, service_code, ticket_type, customer_name, sales_order_no, ticket_no,
+      `SELECT id, title, description, status, service_code, ticket_type, customer_name,
+              ${buildOptionalColumnSql(ticketColumns, 'sales_order_no', `''`)},
+              ${buildOptionalColumnSql(ticketColumns, 'ticket_no', `''`)},
               project_id, department_code, owner_id, created_by, created_at, updated_at, approval_required,
               approval_status, approval_by, approval_at, approval_comment, response_deadline, resolve_deadline
        FROM \`${TICKETING_DB}\`.tickets
@@ -1086,8 +1104,9 @@ const runLegacyMigration = async ({ dryRun = true, limit = 0 } = {}) => {
       summary.ticket_audit_logs += 1;
     }
 
+    const secImplColumns = await loadTableColumns(pool, SEC_IMPL_DB, 'sec_impl_projects');
     const [secImplOrders] = await pool.query(
-      `SELECT id, job_no, project_code, title, product_type, customer_name, sales_order_no, inbound_tracking_no, outbound_tracking_no,
+      `SELECT id, job_no, project_code, ${buildOptionalColumnSql(secImplColumns, 'title', `''`)}, product_type, customer_name, sales_order_no, inbound_tracking_no, outbound_tracking_no,
               current_stage, status, remark, received_by_sub, received_by_name, received_by_role, received_at,
               hardware_checked_by_sub, hardware_checked_by_name, hardware_checked_by_role, hardware_checked_at,
               os_installed_by_sub, os_installed_by_name, os_installed_by_role, os_installed_at,
@@ -1361,6 +1380,7 @@ if (require.main === module) {
 }
 
 module.exports = {
+  buildOptionalColumnSql,
   mapSecImplProjectToDeliveryProject,
   mapSecImplRowToDeliveryOrder,
   mapTicketProjectToDeliveryProject,

@@ -2,6 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+const { buildOptionalColumnSql } = require('../src/migrate-legacy.js');
 
 const indexSource = fs.readFileSync(path.join(__dirname, '..', 'src', 'index.js'), 'utf8');
 const dbSource = fs.readFileSync(path.join(__dirname, '..', 'src', 'db.js'), 'utf8');
@@ -21,6 +22,13 @@ test('delivery schema defines unified order, project, workflow, comment and sche
   assert.match(dbSource, /CREATE TABLE IF NOT EXISTS delivery_workflow_events \(/);
   assert.match(dbSource, /CREATE TABLE IF NOT EXISTS delivery_comments \(/);
   assert.match(dbSource, /CREATE TABLE IF NOT EXISTS delivery_schedules \(/);
+});
+
+test('delivery order schema defines approval columns only once', () => {
+  assert.equal((dbSource.match(/approved_by_sub VARCHAR\(64\) NULL/g) || []).length, 1);
+  assert.equal((dbSource.match(/approved_by_name VARCHAR\(128\) NULL/g) || []).length, 1);
+  assert.equal((dbSource.match(/approved_by_role VARCHAR\(32\) NULL/g) || []).length, 1);
+  assert.equal((dbSource.match(/approved_at DATETIME NULL/g) || []).length, 1);
 });
 
 test('delivery backend exposes unified project, comment and schedule endpoints', () => {
@@ -45,4 +53,11 @@ test('delivery legacy migration covers members, comments, schedules, attachments
   assert.match(migrationSource, /delivery_phase_runs/);
   assert.match(migrationSource, /delivery_audit_logs/);
   assert.match(migrationSource, /delivery_sla_rules/);
+});
+
+test('delivery legacy migration can fall back for missing legacy columns', () => {
+  const available = new Set(['id', 'title', 'customer_name']);
+  assert.equal(buildOptionalColumnSql(available, 'sales_order_no', `''`), `'' AS sales_order_no`);
+  assert.equal(buildOptionalColumnSql(available, 'title', `''`), 'title');
+  assert.match(migrationSource, /buildOptionalColumnSql\(secImplColumns, 'title', `''`\)/);
 });
