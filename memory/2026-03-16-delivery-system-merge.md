@@ -61,6 +61,10 @@
   - `admin => ["reminder","delivery","cmdb","inventory","device-flow","faq","tender","train-exam"]`
   - `auditor => ["audit-center","delivery"]`
   - `sysadmin => ["admin-center"]`
+- 交付系统审计权限已进一步收紧：
+  - `delivery` 内的“审计日志 / 审计验签 / 审计导出”现在只允许 `auditor`
+  - `admin`、`sysadmin` 以及其他业务角色都不再显示审计菜单，也不能调用对应接口
+  - 业务写权限和交付单流程权限不受这次改动影响
 
 ## 当前已知未完项
 - 没有执行真实数据库迁移，只完成了迁移脚本与目标表幂等设计。

@@ -44,7 +44,7 @@ const BASE_WRITER_ROLES = new Set(['admin', 'editor', 'reviewer', 'user', 'sales
 const ATTACHMENT_UPLOADER_ROLES = new Set(['admin', 'editor', 'reviewer', 'user', 'sales']);
 const ATTACHMENT_DELETER_ROLES = new Set(['admin', 'editor']);
 const REWORK_ALLOWED_ROLES = new Set(['admin', 'editor']);
-const AUDIT_READER_ROLES = new Set(['admin', 'auditor']);
+const AUDIT_READER_ROLES = new Set(['auditor']);
 const ACTION_TO_STAGE = {
   assess: 'ASSESS',
   implement: 'IMPLEMENT',

@@ -678,7 +678,7 @@ function App() {
   const canRework = ['admin', 'editor'].includes(normalizeRole(user?.role))
   const canDeleteAttachment = ['admin', 'editor'].includes(normalizeRole(user?.role))
   const isAuditOnlyUser = normalizeRole(user?.role) === 'auditor'
-  const canReadAuditLogs = isAuditOnlyUser || normalizeRole(user?.role) === 'admin'
+  const canReadAuditLogs = isAuditOnlyUser
   const sidebarMenuItems = useMemo(() => {
     if (isAuditOnlyUser) {
       return [

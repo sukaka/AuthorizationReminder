@@ -18,6 +18,12 @@ test('auth authorize route supports delivery system key', () => {
   assert.match(source, /result = authorizeDelivery\(user, action, resource\);/);
 });
 
+test('delivery audit authorization is restricted to auditors only', () => {
+  assert.match(source, /if \(action === 'delivery:audit' \|\| action === 'delivery:verify' \|\| action === 'delivery:export'\) \{/);
+  assert.match(source, /if \(role === 'auditor'\) return allow\(\);/);
+  assert.doesNotMatch(source, /if \(role === 'admin' \|\| role === 'auditor'\) return allow\(\);/);
+});
+
 test('audit center remote source maps delivery instead of sec-impl', () => {
   assert.match(auditSource, /delivery: Object\.freeze\(\{/);
   assert.match(auditSource, /listPath: '\/api\/delivery\/audit\/logs'/);

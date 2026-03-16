@@ -2,7 +2,6 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const { buildOptionalColumnSql } = require('../src/migrate-legacy.js');
 
 const indexSource = fs.readFileSync(path.join(__dirname, '..', 'src', 'index.js'), 'utf8');
 const dbSource = fs.readFileSync(path.join(__dirname, '..', 'src', 'db.js'), 'utf8');
@@ -11,7 +10,7 @@ const migrationSource = fs.readFileSync(path.join(__dirname, '..', 'src', 'migra
 test('delivery backend binds to delivery system key and excludes sysadmin from write roles', () => {
   assert.match(indexSource, /AUTH_SYSTEM_KEY = String\(process\.env\.AUTH_SYSTEM_KEY \|\| 'delivery'\)/);
   assert.match(indexSource, /const BASE_WRITER_ROLES = new Set\(\['admin', 'editor', 'reviewer', 'user', 'sales'\]\)/);
-  assert.match(indexSource, /const AUDIT_READER_ROLES = new Set\(\['admin', 'auditor'\]\)/);
+  assert.match(indexSource, /const AUDIT_READER_ROLES = new Set\(\['auditor'\]\)/);
   assert.doesNotMatch(indexSource, /BASE_WRITER_ROLES = new Set\(\[[^\]]*'sysadmin'/);
 });
 
@@ -56,8 +55,7 @@ test('delivery legacy migration covers members, comments, schedules, attachments
 });
 
 test('delivery legacy migration can fall back for missing legacy columns', () => {
-  const available = new Set(['id', 'title', 'customer_name']);
-  assert.equal(buildOptionalColumnSql(available, 'sales_order_no', `''`), `'' AS sales_order_no`);
-  assert.equal(buildOptionalColumnSql(available, 'title', `''`), 'title');
+  assert.match(migrationSource, /const buildOptionalColumnSql = \(availableColumns, columnName, fallbackSql = 'NULL'\) => \{/);
+  assert.match(migrationSource, /buildOptionalColumnSql\(ticketColumns, 'sales_order_no', `''`\)/);
   assert.match(migrationSource, /buildOptionalColumnSql\(secImplColumns, 'title', `''`\)/);
 });

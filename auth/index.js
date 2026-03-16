@@ -1097,8 +1097,8 @@ const authorizeDelivery = (user, action) => {
     return allow();
   }
   if (action === 'delivery:audit' || action === 'delivery:verify' || action === 'delivery:export') {
-    if (role === 'admin' || role === 'auditor') return allow();
-    return deny('仅管理员或审计员可访问交付审计能力');
+    if (role === 'auditor') return allow();
+    return deny('仅审计员可访问交付审计能力');
   }
   if (
     action === 'delivery:write' ||

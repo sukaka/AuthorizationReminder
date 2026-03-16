@@ -269,8 +269,8 @@ describe('delivery regression api', () => {
       method: 'GET',
       token: authToken,
     });
-    ensureStatus(verifyResp, 200);
-    expect(Number(verifyResp.json.total_checked || 0)).toBeGreaterThanOrEqual(0);
+    ensureStatus(verifyResp, 403);
+    expect(String(verifyResp.json?.error || '')).toContain('审计');
 
     const templateResp = await request({
       base: apiBase,
