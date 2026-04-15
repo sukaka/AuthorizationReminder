@@ -314,6 +314,54 @@ test('updateUser allows builtin account role changes while keeping access normal
   assert.ok(runs.some((item) => item.sql.includes('SET app_access = ?') && JSON.parse(item.params[0])[0] === 'audit-center'));
 });
 
+test('updateUser allows builtin account access updates when bundled with role changes', async () => {
+  const runs = [];
+  let currentRole = 'admin';
+  let currentAppAccess = '["reminder","delivery","train-exam"]';
+  const service = createAdminCenterUsersService({
+    db: {
+      async get(sql, params = []) {
+        return {
+          id: Number(params[0]),
+          username: 'admin',
+          role: currentRole,
+          is_active: 1,
+          must_change_password: 0,
+          email: 'admin@example.com',
+          phone: '',
+          wecom_id: '',
+          app_access: currentAppAccess,
+          department_code: 'TECH',
+          totp_enabled: 0,
+          created_at: '2026-04-15 16:30:00',
+        };
+      },
+      async run(sql, params = []) {
+        if (sql.includes('SET role = ?')) currentRole = String(params[0]);
+        if (sql.includes('SET app_access = ?')) currentAppAccess = String(params[0]);
+        runs.push({ sql, params });
+        return {};
+      },
+    },
+    builtinAccountUsernames: new Set(['admin', 'sysadmin', 'auditor', 'editor', 'reviewer']),
+    getSecurityConfig: async () => ({ passwordPolicy: DEFAULT_POLICY }),
+  });
+
+  const row = await service.updateUser({
+    actor: { id: 2, username: 'sysadmin', role: 'sysadmin' },
+    targetId: 1,
+    payload: {
+      role: 'user',
+      app_access: ['reminder', 'train-exam'],
+    },
+  });
+
+  assert.equal(row.role, 'user');
+  assert.deepEqual(row.app_access, ['reminder', 'train-exam']);
+  assert.ok(runs.some((item) => item.sql.includes('SET role = ?') && item.params[0] === 'user'));
+  assert.ok(runs.some((item) => item.sql.includes('SET app_access = ?') && JSON.parse(item.params[0])[1] === 'train-exam'));
+});
+
 test('unlockUser clears login attempts for target login id', async () => {
   const runs = [];
   const service = createAdminCenterUsersService({

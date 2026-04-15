@@ -314,7 +314,11 @@ const createAdminCenterUsersService = ({
         await db.run('UPDATE users SET is_active = ? WHERE id = ?', [nextActive, targetId]);
       }
       if (role !== undefined || app_access !== undefined) {
-        if (builtinAccountUsernames.has(String(before.username || '').toLowerCase()) && app_access !== undefined) {
+        if (
+          builtinAccountUsernames.has(String(before.username || '').toLowerCase())
+          && app_access !== undefined
+          && role === undefined
+        ) {
           throw createHttpError(400, '内置账号系统权限不可修改');
         }
         const nextAccess = normalizeAppAccess(app_access !== undefined ? app_access : before.app_access, nextRole);
