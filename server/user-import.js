@@ -152,7 +152,17 @@ const generateImportPassword = (policy = {}) => {
 const buildUserImportWorkbook = (rows = []) => {
   const safeRows = Array.isArray(rows) ? rows : [];
   const sheet = xlsx.utils.json_to_sheet(safeRows, {
-    header: ['username', 'role', 'is_active', 'app_access_text', 'result', 'reason', 'initial_password'],
+    header: [
+      'username',
+      'role',
+      'is_active',
+      'app_access_text',
+      'result',
+      'reason',
+      'initial_password',
+      'notify_email_status',
+      'notify_email_reason',
+    ],
   });
   const workbook = xlsx.utils.book_new();
   xlsx.utils.book_append_sheet(workbook, sheet, 'result');
@@ -220,7 +230,15 @@ const buildUserImportFilename = (date = new Date()) => {
   return `user-import-result-${year}-${month}-${day}-${hour}-${minute}-${second}.xlsx`;
 };
 
-const toResultRow = ({ rowNumber, row, result, reason, initialPassword }) => ({
+const toResultRow = ({
+  rowNumber,
+  row,
+  result,
+  reason,
+  initialPassword,
+  notifyEmailStatus,
+  notifyEmailReason,
+}) => ({
   row: rowNumber,
   username: row.username,
   role: row.role,
@@ -229,6 +247,8 @@ const toResultRow = ({ rowNumber, row, result, reason, initialPassword }) => ({
   result,
   reason: reason || '',
   initial_password: initialPassword || '',
+  notify_email_status: notifyEmailStatus || '',
+  notify_email_reason: notifyEmailReason || '',
 });
 
 const importUsersFromRows = async ({
@@ -237,6 +257,7 @@ const importUsersFromRows = async ({
   validateRow = () => '',
   findUserByUsername,
   insertUser,
+  notifyUser,
   normalizeRow = normalizeUserImportRow,
   resolveInsertError = (err) => trimText(err?.message) || '用户创建失败',
 }) => {
@@ -259,6 +280,8 @@ const importUsersFromRows = async ({
         result: 'SKIPPED',
         reason: validationError,
         initialPassword: '',
+        notifyEmailStatus: 'SKIPPED',
+        notifyEmailReason: validationError,
       }));
       continue;
     }
@@ -273,6 +296,8 @@ const importUsersFromRows = async ({
         result: 'SKIPPED',
         reason: '用户名已存在',
         initialPassword: '',
+        notifyEmailStatus: 'SKIPPED',
+        notifyEmailReason: '用户名已存在',
       }));
       continue;
     }
@@ -290,16 +315,37 @@ const importUsersFromRows = async ({
         result: 'SKIPPED',
         reason,
         initialPassword: '',
+        notifyEmailStatus: 'SKIPPED',
+        notifyEmailReason: reason,
       }));
       continue;
     }
     created += 1;
+    let notifyEmailStatus = '';
+    let notifyEmailReason = '';
+    if (typeof notifyUser === 'function') {
+      try {
+        const notifyResult = await notifyUser({
+          row: normalizedRow,
+          rowNumber,
+          raw,
+          initialPassword,
+        });
+        notifyEmailStatus = trimText(notifyResult?.status).toUpperCase() || 'SENT';
+        notifyEmailReason = trimText(notifyResult?.reason);
+      } catch (err) {
+        notifyEmailStatus = 'FAILED';
+        notifyEmailReason = trimText(err?.message) || '邮件发送失败';
+      }
+    }
     resultRows.push(toResultRow({
       rowNumber,
       row: normalizedRow,
       result: 'SUCCESS',
       reason: '',
       initialPassword,
+      notifyEmailStatus,
+      notifyEmailReason,
     }));
   }
 

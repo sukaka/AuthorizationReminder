@@ -57,6 +57,9 @@ const {
   parseAdminCenterUserImportFile,
 } = require('./admin-center-user-import');
 const {
+  buildImportedUserPasswordEmail,
+} = require('./admin-center-user-import-email');
+const {
   createAuditCenterLogsService,
   serializeLogsAsCsv,
 } = require('./audit-center-logs');
@@ -112,6 +115,25 @@ const BUILTIN_ACCOUNTS = [
 const BUILTIN_ACCOUNT_USERNAMES = new Set(BUILTIN_ACCOUNTS.map((item) => item.username));
 const AUDIT_SIGNING_KEY = process.env.AUDIT_SIGNING_KEY || JWT_SECRET;
 const SECURITY_STRICT_MODE = resolveSecurityStrictMode(process.env);
+const AUTH_LOGIN_URL = (() => {
+  const adminCenterUrl = String(process.env.APP_ADMIN_CENTER_URL || '').trim();
+  if (adminCenterUrl) {
+    try {
+      return new URL('/login', adminCenterUrl).toString();
+    } catch (err) {
+      // ignore invalid configured url
+    }
+  }
+  const publicHost = String(process.env.PUBLIC_HOST || 'localhost').trim() || 'localhost';
+  if (/^https?:\/\//i.test(publicHost)) {
+    try {
+      return new URL('/login', publicHost).toString();
+    } catch (err) {
+      // ignore invalid configured host
+    }
+  }
+  return `http://${publicHost}:5180/login`;
+})();
 
 const parseOriginList = (raw) =>
   String(raw || '')
@@ -1376,7 +1398,7 @@ app.get('/api/auth/apps', async (req, res) => {
   });
 });
 
-const RELEASE_VERSION = '5.4.4';
+const RELEASE_VERSION = '5.5.0';
 const DEDICATED_CENTER_VERSION = `v${RELEASE_VERSION}`;
 const ADMIN_CENTER_ROLE_OPTIONS = Object.freeze([
   { value: 'user', label: '普通用户' },
@@ -1690,7 +1712,7 @@ const renderAdminCenterSections = () => ({
         <button id="adminUserExportBtn" type="button" class="ghost-btn">导出用户</button>
         <div class="import-copy">
           <span class="muted">列：账号、角色、状态、可访问系统、邮箱、手机号、企业微信UserID（历史英文列头也兼容）</span>
-          <span class="muted">可先下载模板，按示例行填写后再导入；初始密码会自动生成并写入结果 Excel。</span>
+          <span class="muted">可先下载模板，按示例行填写后再导入；填写邮箱后，系统会自动发送初始密码邮件，结果 Excel 也会记录发送状态。</span>
           <span id="adminUserImportSummary" class="muted"></span>
         </div>
       </div>
@@ -5206,7 +5228,10 @@ app.post('/api/admin-center/users/import', adminCenterImportUpload.single('file'
   }
 
   try {
-    const security = await getSecurityConfig();
+    const [security, configs] = await Promise.all([
+      getSecurityConfig(),
+      getConfigs(),
+    ]);
     const result = await importUsersFromRows({
       rows: records,
       passwordPolicy: security?.passwordPolicy || DEFAULT_PASSWORD_POLICY,
@@ -5229,8 +5254,28 @@ app.post('/api/admin-center/users/import', adminCenterImportUpload.single('file'
           app_access: payload.app_access,
         },
       }),
+      notifyUser: async ({ row, initialPassword }) => {
+        if (!String(row.email || '').trim()) {
+          return { status: 'SKIPPED', reason: '未填写邮箱' };
+        }
+        const emailContent = buildImportedUserPasswordEmail({
+          username: row.username,
+          initialPassword,
+          loginUrl: AUTH_LOGIN_URL,
+        });
+        await sendEmail({
+          contact: { email: row.email, name: row.username },
+          subject: emailContent.subject,
+          message: emailContent.message,
+          configs,
+        });
+        return { status: 'SENT', reason: '' };
+      },
       resolveInsertError: (err) => String(err?.message || '').trim() || '用户创建失败',
     });
+    const emailSentCount = result.resultRows.filter((item) => item.notify_email_status === 'SENT').length;
+    const emailFailedCount = result.resultRows.filter((item) => item.notify_email_status === 'FAILED').length;
+    const emailSkippedCount = result.resultRows.filter((item) => item.notify_email_status === 'SKIPPED').length;
 
     await logOperation({
       user: req.user,
@@ -5241,6 +5286,9 @@ app.post('/api/admin-center/users/import', adminCenterImportUpload.single('file'
         created: result.created,
         skipped: result.skipped,
         error_count: result.errors.length,
+        email_sent_count: emailSentCount,
+        email_failed_count: emailFailedCount,
+        email_skipped_count: emailSkippedCount,
       },
     });
 

@@ -95,6 +95,8 @@ test('buildUserImportWorkbook writes success passwords and keeps skipped rows em
       result: 'SUCCESS',
       reason: '',
       initial_password: 'Temp#2026Aa',
+      notify_email_status: 'SENT',
+      notify_email_reason: '',
     },
     {
       username: 'dup-user',
@@ -104,6 +106,8 @@ test('buildUserImportWorkbook writes success passwords and keeps skipped rows em
       result: 'SKIPPED',
       reason: '用户名已存在',
       initial_password: '',
+      notify_email_status: 'SKIPPED',
+      notify_email_reason: '用户名已存在',
     },
   ]);
 
@@ -115,9 +119,12 @@ test('buildUserImportWorkbook writes success passwords and keeps skipped rows em
   assert.equal(rows.length, 2);
   assert.equal(rows[0].username, 'editor01');
   assert.equal(rows[0].initial_password, 'Temp#2026Aa');
+  assert.equal(rows[0].notify_email_status, 'SENT');
   assert.equal(rows[1].username, 'dup-user');
   assert.equal(rows[1].initial_password, '');
+  assert.equal(rows[1].notify_email_status, 'SKIPPED');
   assert.equal(rows[1].reason, '用户名已存在');
+  assert.equal(rows[1].notify_email_reason, '用户名已存在');
 });
 
 test('buildAdminCenterUsersExportWorkbook writes localized user export rows', () => {
@@ -233,6 +240,45 @@ test('importUsersFromRows skips duplicates and returns generated passwords for c
   assert.equal(result.resultRows[0].result, 'SKIPPED');
   assert.equal(result.resultRows[1].result, 'SUCCESS');
   assert.ok(result.resultRows[1].initial_password);
+});
+
+test('importUsersFromRows records per-user email delivery outcome without failing created users', async () => {
+  const result = await importUsersFromRows({
+    rows: [
+      { username: 'email-ok', role: 'viewer', is_active: '1', app_access: 'faq', email: 'ok@example.com' },
+      { username: 'email-missing', role: 'editor', is_active: '1', app_access: 'faq|tender', email: '' },
+      { username: 'email-fail', role: 'editor', is_active: '1', app_access: 'faq|tender', email: 'fail@example.com' },
+    ],
+    passwordPolicy: {
+      minLength: 10,
+      requireUppercase: true,
+      requireLowercase: true,
+      requireNumber: true,
+      requireSpecial: true,
+    },
+    validateRow: () => '',
+    findUserByUsername: async () => null,
+    insertUser: async (payload) => ({ id: payload.username, ...payload }),
+    notifyUser: async ({ row }) => {
+      if (!row.email) {
+        return { status: 'SKIPPED', reason: '未填写邮箱' };
+      }
+      if (row.username === 'email-fail') {
+        throw new Error('邮箱配置不完整');
+      }
+      return { status: 'SENT', reason: '' };
+    },
+  });
+
+  assert.equal(result.created, 3);
+  assert.equal(result.skipped, 0);
+  assert.equal(result.resultRows[0].notify_email_status, 'SENT');
+  assert.equal(result.resultRows[0].notify_email_reason, '');
+  assert.equal(result.resultRows[1].notify_email_status, 'SKIPPED');
+  assert.equal(result.resultRows[1].notify_email_reason, '未填写邮箱');
+  assert.equal(result.resultRows[2].notify_email_status, 'FAILED');
+  assert.equal(result.resultRows[2].notify_email_reason, '邮箱配置不完整');
+  assert.equal(result.resultRows[2].result, 'SUCCESS');
 });
 
 test('isUserImportExcelFile only accepts xls and xlsx names', () => {

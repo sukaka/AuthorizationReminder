@@ -13,6 +13,10 @@ test('auth Dockerfile packages department admin helper', () => {
   assert.match(source, /COPY auth\/admin-center-departments\.js \.\/auth\/admin-center-departments\.js/);
 });
 
+test('auth Dockerfile packages user import email helper', () => {
+  assert.match(source, /COPY auth\/admin-center-user-import-email\.js \.\/auth\/admin-center-user-import-email\.js/);
+});
+
 test('auth Dockerfile packages audit log display helper', () => {
   assert.match(source, /COPY auth\/audit-log-display\.js \.\/auth\/audit-log-display\.js/);
 });
