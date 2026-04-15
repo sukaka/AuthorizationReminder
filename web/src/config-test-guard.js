@@ -4,6 +4,8 @@ export const readConfigTestBlockMessage = ({ configDirty = false, configSaving =
   return ''
 }
 
+export const CONFIG_SECRET_MASK = '******'
+
 export const pickBusinessConfigs = (configForm = {}) => {
   const { security, ...businessConfigs } = configForm || {}
   return businessConfigs
@@ -11,6 +13,27 @@ export const pickBusinessConfigs = (configForm = {}) => {
 
 export const buildBusinessConfigSnapshot = (configForm = {}) =>
   JSON.stringify(pickBusinessConfigs(configForm))
+
+export const maskBusinessSecretFields = (configForm = {}, previousConfig = {}) => {
+  const next = JSON.parse(JSON.stringify(configForm || {}))
+  const previous = previousConfig || {}
+
+  const maskIfPresent = (groupKey, fieldKey) => {
+    if (!next?.[groupKey]) return
+    const currentValue = String(next[groupKey][fieldKey] ?? '').trim()
+    const previousValue = String(previous?.[groupKey]?.[fieldKey] ?? '').trim()
+    if (currentValue || previousValue) {
+      next[groupKey][fieldKey] = CONFIG_SECRET_MASK
+    }
+  }
+
+  maskIfPresent('email', 'pass')
+  maskIfPresent('sms', 'accessKeySecret')
+  maskIfPresent('wecom', 'secret')
+  maskIfPresent('ocr', 'accessKeySecret')
+
+  return next
+}
 
 const isPlainObject = (value) =>
   value !== null && typeof value === 'object' && !Array.isArray(value)

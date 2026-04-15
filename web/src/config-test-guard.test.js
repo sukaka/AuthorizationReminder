@@ -3,8 +3,10 @@ import assert from 'node:assert/strict'
 
 import {
   buildBusinessConfigSnapshot,
+  CONFIG_SECRET_MASK,
   describeBusinessConfigDiffs,
   listBusinessConfigDiffPaths,
+  maskBusinessSecretFields,
   pickBusinessConfigs,
   readConfigTestBlockMessage,
 } from './config-test-guard.js'
@@ -77,5 +79,27 @@ test('describeBusinessConfigDiffs summarizes first few changed fields', () => {
   assert.equal(
     describeBusinessConfigDiffs(['email.host', 'email.pass', 'wecom.webhook', 'ocr.enabled']),
     'email.host、email.pass、wecom.webhook 等 4 项'
+  )
+})
+
+test('maskBusinessSecretFields masks saved secret fields back to shared mask', () => {
+  assert.deepEqual(
+    maskBusinessSecretFields(
+      {
+        email: { host: 'smtp.qq.com', pass: 'real-secret' },
+        sms: { accessKeySecret: '' },
+        wecom: { secret: 'abc123' },
+      },
+      {
+        email: { pass: CONFIG_SECRET_MASK },
+        sms: { accessKeySecret: CONFIG_SECRET_MASK },
+        wecom: { secret: '' },
+      }
+    ),
+    {
+      email: { host: 'smtp.qq.com', pass: CONFIG_SECRET_MASK },
+      sms: { accessKeySecret: CONFIG_SECRET_MASK },
+      wecom: { secret: CONFIG_SECRET_MASK },
+    }
   )
 })

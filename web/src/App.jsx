@@ -3,6 +3,7 @@ import QRCode from 'qrcode'
 import './App.css'
 import {
   buildBusinessConfigSnapshot,
+  maskBusinessSecretFields,
   describeBusinessConfigDiffs,
   listBusinessConfigDiffPaths,
   pickBusinessConfigs,
@@ -1863,8 +1864,13 @@ function App() {
       await api.post('/api/send-configs', {
         ...businessConfigs,
       })
+      const maskedBusinessConfigs = maskBusinessSecretFields(businessConfigs, currentBusinessConfigs)
       showMessage('配置已保存')
-      setSavedConfigSnapshot(buildBusinessConfigSnapshot({ ...businessConfigs }))
+      setConfigForm((prev) => ({
+        ...prev,
+        ...maskedBusinessConfigs,
+      }))
+      setSavedConfigSnapshot(buildBusinessConfigSnapshot(maskedBusinessConfigs))
       setConfigDirty(false)
     } catch (err) {
       showError('配置保存失败')
