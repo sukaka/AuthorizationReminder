@@ -27,6 +27,7 @@ const {
   resolveSecurityStrictMode,
 } = require('./security-strict-mode');
 const {
+  buildDownloadHeaderMeta,
   buildUserImportFilename,
   buildUserImportWorkbook,
   buildUserImportTemplateWorkbook,
@@ -1838,11 +1839,11 @@ app.post('/api/import/users', requireRole(['sysadmin']), importRateLimiter, uplo
 });
 
 app.get('/api/import/users/template.xlsx', requireRole(['sysadmin']), async (_req, res) => {
-  const fileName = '用户导入模板.xlsx';
+  const download = buildDownloadHeaderMeta('用户导入模板.xlsx', 'user-import-template.xlsx');
   const workbookBuffer = buildUserImportTemplateWorkbook();
   res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-  res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
-  res.setHeader('X-Import-Filename', fileName);
+  res.setHeader('Content-Disposition', download.contentDisposition);
+  res.setHeader('X-Import-Filename', download.encodedFileName);
   res.send(workbookBuffer);
 });
 

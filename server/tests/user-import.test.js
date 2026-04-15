@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 const xlsx = require('xlsx');
 
 const {
+  buildDownloadHeaderMeta,
   normalizeUserImportRow,
   generateImportPassword,
   buildUserImportWorkbook,
@@ -11,6 +12,17 @@ const {
   isUserImportExcelFile,
   buildUserImportFilename,
 } = require('../user-import.js');
+
+test('buildDownloadHeaderMeta encodes non-ascii filenames for HTTP headers', () => {
+  const meta = buildDownloadHeaderMeta('用户导入模板.xlsx', 'user-import-template.xlsx');
+
+  assert.equal(meta.fileName, '用户导入模板.xlsx');
+  assert.equal(meta.encodedFileName, '%E7%94%A8%E6%88%B7%E5%AF%BC%E5%85%A5%E6%A8%A1%E6%9D%BF.xlsx');
+  assert.equal(
+    meta.contentDisposition,
+    `attachment; filename="user-import-template.xlsx"; filename*=UTF-8''${meta.encodedFileName}`
+  );
+});
 
 test('normalizeUserImportRow normalizes aliases, access list, and active flag', () => {
   const row = normalizeUserImportRow({

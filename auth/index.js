@@ -72,6 +72,7 @@ const {
   summarizeSystemAccess,
 } = require('./system-access-display');
 const {
+  buildDownloadHeaderMeta,
   buildUserImportFilename,
   buildUserImportTemplateWorkbook,
   buildUserImportWorkbook,
@@ -1374,7 +1375,7 @@ app.get('/api/auth/apps', async (req, res) => {
   });
 });
 
-const RELEASE_VERSION = '5.4.2';
+const RELEASE_VERSION = '5.4.3';
 const DEDICATED_CENTER_VERSION = `v${RELEASE_VERSION}`;
 const ADMIN_CENTER_ROLE_OPTIONS = Object.freeze([
   { value: 'user', label: '普通用户' },
@@ -2736,8 +2737,22 @@ const renderDedicatedCenterPage = ({ nonce, config }) => {
 
     function readImportFilename(headers, fallback) {
       const explicit = String(headers?.get?.('X-Import-Filename') || '').trim();
-      if (explicit) return explicit;
+      if (explicit) {
+        try {
+          return decodeURIComponent(explicit);
+        } catch (_err) {
+          return explicit;
+        }
+      }
       const contentDisposition = headers?.get?.('Content-Disposition') || '';
+      const encodedMatch = String(contentDisposition).match(/filename\*\s*=\s*UTF-8''([^;]+)/i);
+      if (encodedMatch && encodedMatch[1]) {
+        try {
+          return decodeURIComponent(encodedMatch[1].trim());
+        } catch (_err) {
+          // fall back to filename=
+        }
+      }
       return extractFilenameFromContentDisposition(contentDisposition) || fallback;
     }
 
@@ -5155,11 +5170,11 @@ app.get('/api/admin-center/users/template.xlsx', async (req, res) => {
   if (!canUseDedicatedCenter(req.user, ADMIN_CENTER_KEY)) {
     return res.status(403).json({ error: '无权限访问管理后台' });
   }
-  const fileName = '用户导入模板.xlsx';
+  const download = buildDownloadHeaderMeta('用户导入模板.xlsx', 'user-import-template.xlsx');
   const workbookBuffer = buildUserImportTemplateWorkbook();
   res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-  res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
-  res.setHeader('X-Import-Filename', fileName);
+  res.setHeader('Content-Disposition', download.contentDisposition);
+  res.setHeader('X-Import-Filename', download.encodedFileName);
   return res.send(workbookBuffer);
 });
 

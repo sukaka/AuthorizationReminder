@@ -1,6 +1,6 @@
 {
   "name": "juxin-faq-backend",
-  "version": "5.4.2",
+  "version": "5.4.3",
   "private": true,
   "main": "src/index.js",
   "scripts": {

@@ -12,6 +12,20 @@ const pickFirst = (row, keys) => {
 
 const trimText = (value) => String(value ?? '').trim();
 const pad2 = (value) => String(value).padStart(2, '0');
+const sanitizeAsciiFilename = (value, fallback = 'download.xlsx') => {
+  const text = String(value || '').replace(/[^\x20-\x7E]/g, '').trim();
+  return text || fallback;
+};
+const buildDownloadHeaderMeta = (fileName, asciiFallback = 'download.xlsx') => {
+  const displayName = trimText(fileName) || asciiFallback;
+  const fallbackName = sanitizeAsciiFilename(asciiFallback, 'download.xlsx');
+  const encodedName = encodeURIComponent(displayName);
+  return {
+    fileName: displayName,
+    encodedFileName: encodedName,
+    contentDisposition: `attachment; filename="${fallbackName}"; filename*=UTF-8''${encodedName}`,
+  };
+};
 const IMPORT_ROLE_ALIASES = Object.freeze({
   '普通用户': 'user',
   '业务管理员': 'editor',
@@ -264,6 +278,7 @@ const importUsersFromRows = async ({
 };
 
 module.exports = {
+  buildDownloadHeaderMeta,
   normalizeUserImportRow,
   generateImportPassword,
   buildUserImportWorkbook,
