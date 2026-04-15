@@ -289,9 +289,6 @@ const createAdminCenterUsersService = ({
       if (!ALLOWED_USER_ROLES.has(nextRole)) throw createHttpError(400, '角色不合法');
 
       if (role !== undefined) {
-        if (builtinAccountUsernames.has(String(before.username || '').toLowerCase()) && nextRole !== before.role) {
-          throw createHttpError(400, '内置账号角色不可修改');
-        }
         await db.run('UPDATE users SET role = ? WHERE id = ?', [nextRole, targetId]);
       }
       if (email !== undefined) {

@@ -269,6 +269,51 @@ test('updateUser can update profile fields and app access', async () => {
   assert.ok(runs.some((item) => item.sql.includes('SET department_code = ?') && item.params[0] === 'SEC_SERVICE'));
 });
 
+test('updateUser allows builtin account role changes while keeping access normalized', async () => {
+  const runs = [];
+  let currentRole = 'admin';
+  let currentAppAccess = '["reminder","delivery"]';
+  const service = createAdminCenterUsersService({
+    db: {
+      async get(sql, params = []) {
+        return {
+          id: Number(params[0]),
+          username: 'admin',
+          role: currentRole,
+          is_active: 1,
+          must_change_password: 0,
+          email: 'admin@example.com',
+          phone: '',
+          wecom_id: '',
+          app_access: currentAppAccess,
+          department_code: 'TECH',
+          totp_enabled: 0,
+          created_at: '2026-04-15 16:00:00',
+        };
+      },
+      async run(sql, params = []) {
+        if (sql.includes('SET role = ?')) currentRole = String(params[0]);
+        if (sql.includes('SET app_access = ?')) currentAppAccess = String(params[0]);
+        runs.push({ sql, params });
+        return {};
+      },
+    },
+    builtinAccountUsernames: new Set(['admin', 'sysadmin', 'auditor', 'editor', 'reviewer']),
+    getSecurityConfig: async () => ({ passwordPolicy: DEFAULT_POLICY }),
+  });
+
+  const row = await service.updateUser({
+    actor: { id: 1, username: 'sysadmin', role: 'sysadmin' },
+    targetId: 1,
+    payload: { role: 'auditor' },
+  });
+
+  assert.equal(row.role, 'auditor');
+  assert.deepEqual(row.app_access, ['audit-center', 'delivery']);
+  assert.ok(runs.some((item) => item.sql.includes('SET role = ?') && item.params[0] === 'auditor'));
+  assert.ok(runs.some((item) => item.sql.includes('SET app_access = ?') && JSON.parse(item.params[0])[0] === 'audit-center'));
+});
+
 test('unlockUser clears login attempts for target login id', async () => {
   const runs = [];
   const service = createAdminCenterUsersService({
