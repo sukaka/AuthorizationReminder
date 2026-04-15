@@ -12,30 +12,62 @@ const pickFirst = (row, keys) => {
 
 const trimText = (value) => String(value ?? '').trim();
 const pad2 = (value) => String(value).padStart(2, '0');
+const IMPORT_ROLE_ALIASES = Object.freeze({
+  '普通用户': 'user',
+  '业务管理员': 'editor',
+  '审核用户': 'reviewer',
+  '系统管理员': 'sysadmin',
+  '审计管理员': 'auditor',
+  '销售': 'sales',
+});
+const IMPORT_SYSTEM_ALIASES = Object.freeze({
+  '授权到期提醒系统': 'reminder',
+  '提醒系统': 'reminder',
+  '交付系统': 'delivery',
+  'cmdb系统': 'cmdb',
+  'cmdb': 'cmdb',
+  '库存管理系统': 'inventory',
+  '设备流转系统': 'device-flow',
+  '文档管理系统': 'faq',
+  '标书协同制作系统': 'tender',
+  '培训考试系统': 'train-exam',
+});
 const USER_IMPORT_TEMPLATE_HEADERS = Object.freeze([
-  'username',
-  'role',
-  'is_active',
-  'app_access',
-  'email',
-  'phone',
-  'wecom_id',
+  '账号',
+  '角色',
+  '状态',
+  '可访问系统',
+  '邮箱',
+  '手机号',
+  '企业微信UserID',
 ]);
 const USER_IMPORT_TEMPLATE_SAMPLE_ROW = Object.freeze({
-  username: 'editor_demo',
-  role: 'editor',
-  is_active: 1,
-  app_access: 'faq|tender',
-  email: 'editor_demo@example.com',
-  phone: '13800000000',
-  wecom_id: 'editor-demo',
+  账号: '张三',
+  角色: '普通用户',
+  状态: '启用',
+  可访问系统: '培训考试系统|文档管理系统',
+  邮箱: 'zhangsan@example.com',
+  手机号: '13800000000',
+  企业微信UserID: 'zhangsan',
 });
+
+const normalizeImportRole = (value) => {
+  const text = trimText(value);
+  if (!text) return '';
+  const normalized = text.toLowerCase();
+  return IMPORT_ROLE_ALIASES[text] || IMPORT_ROLE_ALIASES[normalized] || normalized;
+};
 
 const splitImportAccess = (value) => Array.from(
   new Set(
     String(value || '')
       .split(/[|,，、;；\s]+/)
-      .map((item) => trimText(item).toLowerCase())
+      .map((item) => {
+        const text = trimText(item);
+        if (!text) return '';
+        const normalized = text.toLowerCase();
+        return IMPORT_SYSTEM_ALIASES[text] || IMPORT_SYSTEM_ALIASES[normalized] || normalized;
+      })
       .filter(Boolean)
   )
 );
@@ -49,7 +81,7 @@ const normalizeImportActive = (value) => {
 
 const normalizeUserImportRow = (raw = {}) => ({
   username: trimText(pickFirst(raw, ['username', '账号'])),
-  role: trimText(pickFirst(raw, ['role', '角色'])).toLowerCase(),
+  role: normalizeImportRole(pickFirst(raw, ['role', '角色'])),
   is_active: normalizeImportActive(pickFirst(raw, ['is_active', 'status', '状态'])),
   email: trimText(pickFirst(raw, ['email', '邮箱'])),
   phone: trimText(pickFirst(raw, ['phone', '手机号'])),
@@ -114,9 +146,10 @@ const buildUserImportWorkbook = (rows = []) => {
 };
 
 const buildUserImportTemplateWorkbook = () => {
-  const sheet = xlsx.utils.json_to_sheet([USER_IMPORT_TEMPLATE_SAMPLE_ROW], {
-    header: USER_IMPORT_TEMPLATE_HEADERS,
-  });
+  const sheet = xlsx.utils.aoa_to_sheet([
+    USER_IMPORT_TEMPLATE_HEADERS,
+    USER_IMPORT_TEMPLATE_HEADERS.map((key) => USER_IMPORT_TEMPLATE_SAMPLE_ROW[key] ?? ''),
+  ]);
   const workbook = xlsx.utils.book_new();
   xlsx.utils.book_append_sheet(workbook, sheet, 'template');
   return xlsx.write(workbook, { type: 'buffer', bookType: 'xlsx' });

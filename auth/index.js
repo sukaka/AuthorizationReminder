@@ -1374,7 +1374,7 @@ app.get('/api/auth/apps', async (req, res) => {
   });
 });
 
-const RELEASE_VERSION = '5.4.1';
+const RELEASE_VERSION = '5.4.2';
 const DEDICATED_CENTER_VERSION = `v${RELEASE_VERSION}`;
 const ADMIN_CENTER_ROLE_OPTIONS = Object.freeze([
   { value: 'user', label: '普通用户' },
@@ -1686,7 +1686,7 @@ const renderAdminCenterSections = () => ({
         </label>
         <button id="adminUserImportTemplateBtn" type="button" class="ghost-btn">下载模板</button>
         <div class="import-copy">
-          <span class="muted">列：username/账号、role/角色、is_active/状态、app_access/可访问系统、email、phone、wecom_id</span>
+          <span class="muted">列：账号、角色、状态、可访问系统、邮箱、手机号、企业微信UserID（历史英文列头也兼容）</span>
           <span class="muted">可先下载模板，按示例行填写后再导入；初始密码会自动生成并写入结果 Excel。</span>
           <span id="adminUserImportSummary" class="muted"></span>
         </div>
@@ -3594,7 +3594,7 @@ const renderDedicatedCenterPage = ({ nonce, config }) => {
       setHint('adminUsersNotice', '正在下载导入模板...');
       try {
         const { response, blob } = await requestBlob(centerApi.usersImportTemplate);
-        const fileName = readImportFilename(response.headers, 'user-import-template.xlsx');
+        const fileName = readImportFilename(response.headers, '用户导入模板.xlsx');
         triggerFileDownload(blob, fileName);
         setHint('adminUsersNotice', '用户导入模板已开始下载');
       } catch (error) {
@@ -5155,7 +5155,7 @@ app.get('/api/admin-center/users/template.xlsx', async (req, res) => {
   if (!canUseDedicatedCenter(req.user, ADMIN_CENTER_KEY)) {
     return res.status(403).json({ error: '无权限访问管理后台' });
   }
-  const fileName = 'user-import-template.xlsx';
+  const fileName = '用户导入模板.xlsx';
   const workbookBuffer = buildUserImportTemplateWorkbook();
   res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
   res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);

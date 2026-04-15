@@ -1838,7 +1838,7 @@ app.post('/api/import/users', requireRole(['sysadmin']), importRateLimiter, uplo
 });
 
 app.get('/api/import/users/template.xlsx', requireRole(['sysadmin']), async (_req, res) => {
-  const fileName = 'user-import-template.xlsx';
+  const fileName = '用户导入模板.xlsx';
   const workbookBuffer = buildUserImportTemplateWorkbook();
   res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
   res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);

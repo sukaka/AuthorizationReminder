@@ -34,6 +34,28 @@ test('normalizeUserImportRow normalizes aliases, access list, and active flag', 
   });
 });
 
+test('normalizeUserImportRow accepts Chinese role labels and system labels', () => {
+  const row = normalizeUserImportRow({
+    账号: '张三',
+    角色: '普通用户',
+    状态: '启用',
+    可访问系统: '培训考试系统|文档管理系统',
+    邮箱: 'zhangsan@example.com',
+    手机号: '13800000000',
+    企业微信UserID: 'zhangsan',
+  });
+
+  assert.deepEqual(row, {
+    username: '张三',
+    role: 'user',
+    is_active: 1,
+    email: 'zhangsan@example.com',
+    phone: '13800000000',
+    wecom_id: 'zhangsan',
+    app_access: ['train-exam', 'faq'],
+  });
+});
+
 test('generateImportPassword satisfies the active password policy', () => {
   const password = generateImportPassword({
     minLength: 12,
@@ -96,22 +118,22 @@ test('buildUserImportTemplateWorkbook writes the expected template header and sa
   const rows = xlsx.utils.sheet_to_json(workbook.Sheets.template, { header: 1, defval: '' });
 
   assert.deepEqual(rows[0], [
-    'username',
-    'role',
-    'is_active',
-    'app_access',
-    'email',
-    'phone',
-    'wecom_id',
+    '账号',
+    '角色',
+    '状态',
+    '可访问系统',
+    '邮箱',
+    '手机号',
+    '企业微信UserID',
   ]);
   assert.deepEqual(rows[1], [
-    'editor_demo',
-    'editor',
-    1,
-    'faq|tender',
-    'editor_demo@example.com',
+    '张三',
+    '普通用户',
+    '启用',
+    '培训考试系统|文档管理系统',
+    'zhangsan@example.com',
     '13800000000',
-    'editor-demo',
+    'zhangsan',
   ]);
 });
 
