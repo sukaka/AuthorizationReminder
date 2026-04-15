@@ -3,3 +3,11 @@ export const readConfigTestBlockMessage = ({ configDirty = false, configSaving =
   if (configDirty) return '配置已修改但未保存，请先点击“保存配置”'
   return ''
 }
+
+export const pickBusinessConfigs = (configForm = {}) => {
+  const { security, ...businessConfigs } = configForm || {}
+  return businessConfigs
+}
+
+export const buildBusinessConfigSnapshot = (configForm = {}) =>
+  JSON.stringify(pickBusinessConfigs(configForm))

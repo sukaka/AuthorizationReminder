@@ -1,7 +1,11 @@
 import { useCallback, useEffect, useMemo, useState, useRef } from 'react'
 import QRCode from 'qrcode'
 import './App.css'
-import { readConfigTestBlockMessage } from './config-test-guard.js'
+import {
+  buildBusinessConfigSnapshot,
+  pickBusinessConfigs,
+  readConfigTestBlockMessage,
+} from './config-test-guard.js'
 import { readUserImportDownloadFilename, readUserImportSummary } from './user-import.js'
 
 const buildApi = (getCsrfToken, refreshCsrfToken) => {
@@ -507,6 +511,39 @@ function App() {
   })
   const [configDirty, setConfigDirty] = useState(false)
   const [configSaving, setConfigSaving] = useState(false)
+  const [savedConfigSnapshot, setSavedConfigSnapshot] = useState(() =>
+    buildBusinessConfigSnapshot({
+      email: { host: '', port: '', user: '', pass: '', from: '', secure: '' },
+      sms: {
+        accessKeyId: '',
+        accessKeySecret: '',
+        signName: '',
+        templateCode: '',
+        templateParamKey: 'content',
+        templateParams: '{\"content\":\"{message}\"}',
+        endpoint: 'https://dysmsapi.aliyuncs.com',
+        apiVersion: '2017-05-25',
+      },
+      wecom: { corpId: '', agentId: '', secret: '', webhook: '' },
+      ocr: {
+        accessKeyId: '',
+        accessKeySecret: '',
+        region: 'cn-beijing',
+        endpoint: '',
+        enabled: false,
+        keywords: '正式授权,授权书,合同',
+        matchMode: 'any',
+      },
+      reminder: {
+        subject: '授权到期提醒',
+        message: '【{customer_name}】的{license_name}将于{end_date}到期，剩余{days_left}天。',
+        locked: false,
+      },
+      reminderSchedule: { days: '60,30,20', hour: 9, minute: 0, channels: ['email'], graceDays: 0 },
+      retry: { maxRetries: 2, intervalMs: 2000 },
+      rateLimit: { maxPerRun: 200 },
+    })
+  )
   const [testTemplate, setTestTemplate] = useState({
     customer_name: '',
     license_name: '',
@@ -559,6 +596,10 @@ function App() {
   }, [setCsrf])
   const [passwordFeedback, setPasswordFeedback] = useState({ type: '', text: '' })
   const api = useMemo(() => buildApi(() => csrfTokenRef.current, refreshCsrf), [refreshCsrf])
+  const hasUnsavedBusinessConfigChanges = useMemo(
+    () => buildBusinessConfigSnapshot(configForm) !== savedConfigSnapshot,
+    [configForm, savedConfigSnapshot]
+  )
   const [loginForm, setLoginForm] = useState({ username: '', password: '' })
   const [loginError, setLoginError] = useState('')
   const [mfaState, setMfaState] = useState({
@@ -1115,7 +1156,7 @@ function App() {
     if (!permissions.canConfig && !permissions.canManageSecurity) return
     const data = await api.get('/api/send-configs')
     const smsConfig = data.sms || {}
-    setConfigForm((prev) => ({
+    const nextConfigForm = ((prev) => ({
       email: data.email || prev.email,
       sms: { ...prev.sms, ...smsConfig },
       wecom: data.wecom || prev.wecom,
@@ -1125,7 +1166,9 @@ function App() {
       retry: data.retry || prev.retry,
       rateLimit: data.rateLimit || prev.rateLimit,
       security: normalizeSecurityConfig(data.security || prev.security),
-    }))
+    }))(configForm)
+    setConfigForm(nextConfigForm)
+    setSavedConfigSnapshot(buildBusinessConfigSnapshot(nextConfigForm))
     setTestWecomWebhook((prev) => (prev ? prev : data.wecom?.webhook || ''))
     setConfigDirty(false)
   }
@@ -1805,11 +1848,12 @@ function App() {
     e.preventDefault()
     setConfigSaving(true)
     try {
-      const { security, ...businessConfigs } = configForm
+      const businessConfigs = pickBusinessConfigs(configForm)
       await api.post('/api/send-configs', {
         ...businessConfigs,
       })
       showMessage('配置已保存')
+      setSavedConfigSnapshot(buildBusinessConfigSnapshot({ ...businessConfigs }))
       setConfigDirty(false)
     } catch (err) {
       showError('配置保存失败')
@@ -1845,7 +1889,10 @@ function App() {
       setModalInfo({ title: '测试邮件失败', message: '请输入测试邮箱' })
       return showError('请输入测试邮箱')
     }
-    const blockMessage = readConfigTestBlockMessage({ configDirty, configSaving })
+    const blockMessage = readConfigTestBlockMessage({
+      configDirty: hasUnsavedBusinessConfigChanges,
+      configSaving,
+    })
     if (blockMessage) {
       const msg = blockMessage
       setTestEmailStatus({ type: 'error', text: msg })
@@ -1891,7 +1938,10 @@ function App() {
       setModalInfo({ title: '测试短信失败', message: '请输入测试手机号' })
       return showError('请输入测试手机号')
     }
-    const blockMessage = readConfigTestBlockMessage({ configDirty, configSaving })
+    const blockMessage = readConfigTestBlockMessage({
+      configDirty: hasUnsavedBusinessConfigChanges,
+      configSaving,
+    })
     if (blockMessage) {
       const msg = blockMessage
       setTestSmsStatus({ type: 'error', text: msg })
@@ -1928,7 +1978,10 @@ function App() {
       setModalInfo({ title: '测试企业微信失败', message: '请输入测试用户或Webhook' })
       return showError('请输入测试用户或Webhook')
     }
-    const blockMessage = readConfigTestBlockMessage({ configDirty, configSaving })
+    const blockMessage = readConfigTestBlockMessage({
+      configDirty: hasUnsavedBusinessConfigChanges,
+      configSaving,
+    })
     if (blockMessage) {
       const msg = blockMessage
       setTestWecomStatus({ type: 'error', text: msg })
