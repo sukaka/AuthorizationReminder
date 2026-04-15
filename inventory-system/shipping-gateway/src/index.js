@@ -42,8 +42,8 @@ const trimText = (value, fallback = '') => {
 const defaultOrigins = [
   'http://localhost:5183',
   'http://127.0.0.1:5183',
-  'http://localhost:8082',
-  'http://127.0.0.1:8082',
+  'http://localhost:18082',
+  'http://127.0.0.1:18082',
 ].map(normalizeOrigin);
 
 const allowedOrigins = String(process.env.CORS_ORIGINS || '')

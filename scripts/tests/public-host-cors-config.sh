@@ -22,8 +22,8 @@ fi
 docker compose --env-file "$TMP_ENV" -f "${ROOT_DIR}/docker-compose.yml" config > "$TMP_OUT"
 
 grep -q 'http://8.141.81.201:5180' "$TMP_OUT"
-grep -q 'http://8.141.81.201:8087' "$TMP_OUT"
-if grep -q 'http://:8087' "$TMP_OUT"; then
+grep -q 'http://8.141.81.201:18087' "$TMP_OUT"
+if grep -q 'http://:18087' "$TMP_OUT"; then
   echo 'rendered compose contains invalid PUBLIC_HOST expansion' >&2
   exit 1
 fi

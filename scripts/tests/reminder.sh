@@ -8,7 +8,7 @@ source "$SCRIPT_DIR/lib/common.sh"
 SYSTEM_NAME="reminder"
 AUTH_BASE="${AUTH_BASE:-http://localhost:5180}"
 REMINDER_API_BASE="${REMINDER_API_BASE:-http://localhost:5179}"
-REMINDER_WEB_BASE="${REMINDER_WEB_BASE:-http://localhost:8080}"
+REMINDER_WEB_BASE="${REMINDER_WEB_BASE:-http://localhost:18080}"
 
 step "开始执行 $SYSTEM_NAME 系统一键测试"
 compose_up mysql auth api web

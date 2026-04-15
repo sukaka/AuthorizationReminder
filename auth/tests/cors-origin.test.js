@@ -17,9 +17,9 @@ test('allows configured origins', () => {
 
 test('allows same-host origins across ports for deployed public hosts', () => {
   const ok = isOriginAllowedForRequest({
-    origin: 'http://8.141.81.201:8080',
+    origin: 'http://8.141.81.201:18080',
     headers: { host: '8.141.81.201:5179' },
-    allowedOrigins: ['http://localhost:8080'],
+    allowedOrigins: ['http://localhost:18080'],
   });
 
   assert.equal(ok, true);
@@ -29,7 +29,7 @@ test('rejects unrelated public origins', () => {
   const ok = isOriginAllowedForRequest({
     origin: 'http://malicious.example.com',
     headers: { host: '8.141.81.201:5179' },
-    allowedOrigins: ['http://localhost:8080'],
+    allowedOrigins: ['http://localhost:18080'],
   });
 
   assert.equal(ok, false);

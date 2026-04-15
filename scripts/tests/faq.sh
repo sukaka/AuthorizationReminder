@@ -8,7 +8,7 @@ source "$SCRIPT_DIR/lib/common.sh"
 SYSTEM_NAME="faq"
 AUTH_BASE="${AUTH_BASE:-http://localhost:5180}"
 FAQ_API_BASE="${FAQ_API_BASE:-http://localhost:5186}"
-FAQ_WEB_BASE="${FAQ_WEB_BASE:-http://localhost:8085}"
+FAQ_WEB_BASE="${FAQ_WEB_BASE:-http://localhost:18085}"
 
 step "开始执行 $SYSTEM_NAME 系统一键测试"
 compose_up mysql auth onlyoffice faq-api web-faq

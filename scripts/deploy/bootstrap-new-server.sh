@@ -177,8 +177,8 @@ main() {
   ensure_value CMDB_MYSQL_PASSWORD pass
 
   "${COMPOSE_WRAPPER}" config >/tmp/codex-compose-bootstrap.yml
-  "${COMPOSE_WRAPPER}" up -d mysql
-  "${COMPOSE_WRAPPER}" up -d --build
+  "${COMPOSE_WRAPPER}" start mysql
+  "${COMPOSE_WRAPPER}" rebuild
 
   wait_http auth "http://127.0.0.1:5180/health"
   wait_http reminder "http://127.0.0.1:5179/api/health"

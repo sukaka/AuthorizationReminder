@@ -8,7 +8,7 @@ source "$SCRIPT_DIR/lib/common.sh"
 SYSTEM_NAME="sec-impl"
 AUTH_BASE="${AUTH_BASE:-http://localhost:5180}"
 SEC_IMPL_API_BASE="${SEC_IMPL_API_BASE:-http://localhost:5185}"
-SEC_IMPL_WEB_BASE="${SEC_IMPL_WEB_BASE:-http://localhost:8084}"
+SEC_IMPL_WEB_BASE="${SEC_IMPL_WEB_BASE:-http://localhost:18084}"
 RUN_E2E="${RUN_E2E:-1}"
 RUN_RBAC="${RUN_RBAC:-1}"
 

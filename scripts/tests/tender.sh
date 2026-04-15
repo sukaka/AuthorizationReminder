@@ -8,7 +8,7 @@ source "$SCRIPT_DIR/lib/common.sh"
 SYSTEM_NAME="tender"
 AUTH_BASE="${AUTH_BASE:-http://localhost:5180}"
 TENDER_API_BASE="${TENDER_API_BASE:-http://localhost:5187}"
-TENDER_WEB_BASE="${TENDER_WEB_BASE:-http://localhost:8086}"
+TENDER_WEB_BASE="${TENDER_WEB_BASE:-http://localhost:18086}"
 
 step "开始执行 $SYSTEM_NAME 系统一键测试"
 compose_up mysql auth onlyoffice tender-api web-tender

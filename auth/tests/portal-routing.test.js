@@ -30,7 +30,7 @@ test('sysadmin without requested system redirects to admin-center', () => {
   const target = resolvePortalRedirectTarget({
     apps: [
       { key: 'admin-center', url: 'http://localhost:5180/admin-center' },
-      { key: 'reminder', url: 'http://localhost:8080' },
+      { key: 'reminder', url: 'http://localhost:18080' },
     ],
     userRole: 'sysadmin',
     requestedSystem: '',
@@ -44,7 +44,7 @@ test('auditor without requested system redirects to audit-center', () => {
   const target = resolvePortalRedirectTarget({
     apps: [
       { key: 'audit-center', url: 'http://localhost:5180/audit-center' },
-      { key: 'reminder', url: 'http://localhost:8080' },
+      { key: 'reminder', url: 'http://localhost:18080' },
     ],
     userRole: 'auditor',
     requestedSystem: '',
@@ -58,14 +58,14 @@ test('requested system still wins over privileged default', () => {
   const target = resolvePortalRedirectTarget({
     apps: [
       { key: 'admin-center', url: 'http://localhost:5180/admin-center' },
-      { key: 'reminder', url: 'http://localhost:8080' },
+      { key: 'reminder', url: 'http://localhost:18080' },
     ],
     userRole: 'sysadmin',
     requestedSystem: 'reminder',
     portalMode: '',
   });
 
-  assert.deepEqual(target, { key: 'reminder', url: 'http://localhost:8080' });
+  assert.deepEqual(target, { key: 'reminder', url: 'http://localhost:18080' });
 });
 
 test('sysadmin can access admin-center only', () => {

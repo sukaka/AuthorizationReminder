@@ -8,7 +8,7 @@ source "$SCRIPT_DIR/lib/common.sh"
 SYSTEM_NAME="train-exam"
 AUTH_BASE="${AUTH_BASE:-http://localhost:5180}"
 TRAIN_EXAM_API_BASE="${TRAIN_EXAM_API_BASE:-http://localhost:5188}"
-TRAIN_EXAM_WEB_BASE="${TRAIN_EXAM_WEB_BASE:-http://localhost:8087}"
+TRAIN_EXAM_WEB_BASE="${TRAIN_EXAM_WEB_BASE:-http://localhost:18087}"
 
 step "开始执行 $SYSTEM_NAME 系统一键测试"
 compose_up mysql auth train-exam-api web-train-exam

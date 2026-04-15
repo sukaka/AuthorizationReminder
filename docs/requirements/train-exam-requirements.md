@@ -2,7 +2,7 @@
 
 ## 1. 系统概述
 - 系统名称：培训考试系统
-- 前端：`http://localhost:8087`
+- 前端：`http://localhost:18087`
 - 后端：`http://localhost:5188`
 - 系统键：`train-exam`
 - 数据库：`juxin_train_exam`

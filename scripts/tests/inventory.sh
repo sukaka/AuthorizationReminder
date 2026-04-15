@@ -9,7 +9,7 @@ SYSTEM_NAME="inventory"
 AUTH_BASE="${AUTH_BASE:-http://localhost:5180}"
 INVENTORY_API_BASE="${INVENTORY_API_BASE:-http://localhost:5183}"
 SHIPPING_GATEWAY_BASE="${SHIPPING_GATEWAY_BASE:-http://localhost:5190}"
-INVENTORY_WEB_BASE="${INVENTORY_WEB_BASE:-http://localhost:8082}"
+INVENTORY_WEB_BASE="${INVENTORY_WEB_BASE:-http://localhost:18082}"
 
 step "开始执行 $SYSTEM_NAME 系统一键测试"
 compose_up mysql auth shipping-gateway inventory-api web-inventory

@@ -1,7 +1,7 @@
 # 授权到期提醒系统（Reminder）用户使用手册
 
 ## 1. 系统信息
-- 前端地址：`http://localhost:8080`
+- 前端地址：`http://localhost:18080`
 - 后端地址：`http://localhost:5179`
 - 系统键：`reminder`
 

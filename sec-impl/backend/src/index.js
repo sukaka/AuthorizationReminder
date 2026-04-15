@@ -76,7 +76,7 @@ const SLA_STAGE_LABEL = {
   CLOSED: '归档关闭',
 };
 
-const defaultOrigins = ['http://localhost:8084', 'http://127.0.0.1:8084'].map(normalizeOrigin);
+const defaultOrigins = ['http://localhost:18084', 'http://127.0.0.1:18084'].map(normalizeOrigin);
 const allowedOrigins = (process.env.CORS_ORIGINS || '')
   .split(',')
   .map(normalizeOrigin)

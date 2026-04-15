@@ -494,10 +494,10 @@ const defaultOrigins = [
   'http://127.0.0.1:5173',
   'http://localhost:5180',
   'http://127.0.0.1:5180',
-  'http://localhost:8080',
-  'http://127.0.0.1:8080',
-  'http://localhost:8081',
-  'http://127.0.0.1:8081',
+  'http://localhost:18080',
+  'http://127.0.0.1:18080',
+  'http://localhost:18081',
+  'http://127.0.0.1:18081',
 ].map(normalizeOrigin);
 const allowedOrigins = (process.env.CORS_ORIGINS || '')
   .split(',')
@@ -1310,14 +1310,14 @@ app.get('/api/auth/apps', async (req, res) => {
       apps: [],
     });
   }
-  const reminderUrl = process.env.APP_REMINDER_URL || 'http://localhost:8080';
-  const deliveryURL = process.env.APP_DELIVERY_URL || 'http://localhost:8084';
+  const reminderUrl = process.env.APP_REMINDER_URL || 'http://localhost:18080';
+  const deliveryURL = process.env.APP_DELIVERY_URL || 'http://localhost:18084';
   const cmdbURL = process.env.APP_CMDB_URL || 'http://localhost:8090';
-  const inventoryURL = process.env.APP_INVENTORY_URL || 'http://localhost:8082';
-  const deviceFlowURL = process.env.APP_DEVICE_FLOW_URL || 'http://localhost:8083';
-  const faqURL = process.env.APP_FAQ_URL || 'http://localhost:8085';
-  const tenderURL = process.env.APP_TENDER_URL || 'http://localhost:8086';
-  const trainExamURL = process.env.APP_TRAIN_EXAM_URL || 'http://localhost:8087';
+  const inventoryURL = process.env.APP_INVENTORY_URL || 'http://localhost:18082';
+  const deviceFlowURL = process.env.APP_DEVICE_FLOW_URL || 'http://localhost:18083';
+  const faqURL = process.env.APP_FAQ_URL || 'http://localhost:18085';
+  const tenderURL = process.env.APP_TENDER_URL || 'http://localhost:18086';
+  const trainExamURL = process.env.APP_TRAIN_EXAM_URL || 'http://localhost:18087';
   const adminCenterURL = process.env.APP_ADMIN_CENTER_URL || 'http://localhost:5180/admin-center';
   const auditCenterURL = process.env.APP_AUDIT_CENTER_URL || 'http://localhost:5180/audit-center';
   const appAccess = getUserAppAccess(user);
@@ -1374,7 +1374,7 @@ app.get('/api/auth/apps', async (req, res) => {
   });
 });
 
-const RELEASE_VERSION = '5.4.0';
+const RELEASE_VERSION = '5.4.1';
 const DEDICATED_CENTER_VERSION = `v${RELEASE_VERSION}`;
 const ADMIN_CENTER_ROLE_OPTIONS = Object.freeze([
   { value: 'user', label: '普通用户' },
@@ -4031,7 +4031,7 @@ registerDedicatedCenterPage(AUDIT_CENTER_KEY);
 app.get('/portal', (req, res) => {
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
   const nonce = res.locals.cspNonce || '';
-  const reminderUrl = process.env.APP_REMINDER_URL || 'http://localhost:8080';
+  const reminderUrl = process.env.APP_REMINDER_URL || 'http://localhost:18080';
   res.send(`<!doctype html>
 <html lang="zh-CN">
 <head>

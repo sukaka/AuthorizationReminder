@@ -7,7 +7,7 @@ const source = fs.readFileSync(path.join(__dirname, '..', 'index.js'), 'utf8');
 const auditSource = fs.readFileSync(path.join(__dirname, '..', 'audit-center-logs.js'), 'utf8');
 
 test('auth apps route exposes delivery and no longer lists ticketing or sec-impl', () => {
-  assert.match(source, /const deliveryURL = process\.env\.APP_DELIVERY_URL \|\| 'http:\/\/localhost:8084'/);
+  assert.match(source, /const deliveryURL = process\.env\.APP_DELIVERY_URL \|\| 'http:\/\/localhost:18084'/);
   assert.match(source, /apps\.push\(\{ key: 'delivery', name: '交付系统', url: deliveryURL, allow: !!deliveryAuth\.allow \}\)/);
   assert.doesNotMatch(source, /apps\.push\(\{ key: 'ticketing'/);
   assert.doesNotMatch(source, /apps\.push\(\{ key: 'sec-impl'/);

@@ -100,7 +100,7 @@ const SLA_STAGE_LABEL = {
   SHIPPED: '已发货',
 };
 
-const defaultOrigins = ['http://localhost:8083', 'http://127.0.0.1:8083'].map(normalizeOrigin);
+const defaultOrigins = ['http://localhost:18083', 'http://127.0.0.1:18083'].map(normalizeOrigin);
 const allowedOrigins = (process.env.CORS_ORIGINS || '')
   .split(',')
   .map(normalizeOrigin)

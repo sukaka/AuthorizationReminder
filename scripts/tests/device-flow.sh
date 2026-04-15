@@ -8,7 +8,7 @@ source "$SCRIPT_DIR/lib/common.sh"
 SYSTEM_NAME="device-flow"
 AUTH_BASE="${AUTH_BASE:-http://localhost:5180}"
 DEVICE_FLOW_API_BASE="${DEVICE_FLOW_API_BASE:-http://localhost:5184}"
-DEVICE_FLOW_WEB_BASE="${DEVICE_FLOW_WEB_BASE:-http://localhost:8083}"
+DEVICE_FLOW_WEB_BASE="${DEVICE_FLOW_WEB_BASE:-http://localhost:18083}"
 RUN_E2E="${RUN_E2E:-1}"
 RUN_RBAC="${RUN_RBAC:-1}"
 

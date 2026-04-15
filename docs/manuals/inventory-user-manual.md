@@ -1,7 +1,7 @@
 # 库存管理系统（Inventory）用户使用手册
 
 ## 1. 系统信息
-- 前端地址：`http://localhost:8082`
+- 前端地址：`http://localhost:18082`
 - 后端地址：`http://localhost:5183`
 - 物流网关：`http://localhost:5190`
 - 系统键：`inventory`

@@ -33,7 +33,7 @@ cd /Users/zhanglei/Documents/codex-new
 docker compose up --build mysql auth api web
 ```
 
-对外地址：`http://localhost:8080`
+对外地址：`http://localhost:18080`
 
 ## 5. 登录与会话说明
 - 登录页密码框支持“眼睛”按钮切换明文/密文。

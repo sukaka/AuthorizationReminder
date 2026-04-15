@@ -123,10 +123,10 @@ const attachmentUpload = multer({
 const defaultOrigins = [
   'http://localhost:5173',
   'http://127.0.0.1:5173',
-  'http://localhost:8080',
-  'http://127.0.0.1:8080',
-  'http://localhost:8081',
-  'http://127.0.0.1:8081',
+  'http://localhost:18080',
+  'http://127.0.0.1:18080',
+  'http://localhost:18081',
+  'http://127.0.0.1:18081',
 ].map(normalizeOrigin);
 const allowedOrigins = (process.env.CORS_ORIGINS || '')
   .split(',')

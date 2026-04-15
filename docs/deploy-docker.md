@@ -51,7 +51,7 @@ export PUBLIC_HOST='服务器公网IP或域名，不带协议和端口'
 如果当前服务器只提供 `HTTP`，保持上面两个值为 `false`。如果已经通过反向代理或负载均衡提供了 `HTTPS`，再一起改成 `true`。
 
 ## 访问
-- 前端：`http://localhost:8080`
+- 前端：`http://localhost:18080`
 - 后端：`http://localhost:5179`（如需直连）
 
 ## 数据库

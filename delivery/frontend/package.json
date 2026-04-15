@@ -1,10 +1,10 @@
 {
   "name": "juxin-delivery-web",
-  "version": "5.4.0",
+  "version": "5.4.1",
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "vite --host 0.0.0.0 --port 8084",
+    "dev": "vite --host 0.0.0.0 --port 18084",
     "build": "vite build",
     "preview": "vite preview --host 0.0.0.0 --port 4184"
   },

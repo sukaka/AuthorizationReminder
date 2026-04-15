@@ -8,7 +8,7 @@ source "$SCRIPT_DIR/lib/common.sh"
 SYSTEM_NAME="ticketing"
 AUTH_BASE="${AUTH_BASE:-http://localhost:5180}"
 TICKETING_API_BASE="${TICKETING_API_BASE:-http://localhost:5182}"
-TICKETING_WEB_BASE="${TICKETING_WEB_BASE:-http://localhost:8081}"
+TICKETING_WEB_BASE="${TICKETING_WEB_BASE:-http://localhost:18081}"
 
 step "开始执行 $SYSTEM_NAME 系统一键测试"
 compose_up mysql auth ticketing web-ticketing

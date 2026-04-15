@@ -246,7 +246,7 @@ const SOURCE_MODE_ALIASES = {
 let faqPool = null;
 let transcodeRunnerActive = false;
 
-const defaultOrigins = ['http://localhost:8087', 'http://127.0.0.1:8087'].map(normalizeOrigin);
+const defaultOrigins = ['http://localhost:18087', 'http://127.0.0.1:18087'].map(normalizeOrigin);
 const allowedOrigins = (process.env.CORS_ORIGINS || '')
   .split(',')
   .map(normalizeOrigin)

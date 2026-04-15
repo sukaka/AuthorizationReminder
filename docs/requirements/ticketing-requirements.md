@@ -2,7 +2,7 @@
 
 ## 1. 系统概述
 - 系统名称：工单管理系统
-- 前端：`http://localhost:8081`
+- 前端：`http://localhost:18081`
 - 后端：`http://localhost:5182`
 - 系统键：`ticketing`
 - 数据库：`juxin_reminder`（与提醒系统共享实例，业务表隔离）

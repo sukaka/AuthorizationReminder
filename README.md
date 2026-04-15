@@ -50,68 +50,74 @@
 - Go 1.22+（CMDB 本地开发）
 
 ### 2.1.1 容器刷新约定
-每次开始联调、验收或回归前，默认先把容器切到最新镜像/最新构建，避免还在使用旧 bundle 或旧服务进程。
+日常启动默认只拉起已有容器；只有代码变更、首次部署或明确需要刷新镜像时，才执行重建，避免 `up -d --build` 带来的高磁盘 IO。
 
 ```bash
 cd /Users/zhanglei/Documents/codex-new
-./scripts/deploy/docker-compose-aliyun.sh pull
-./scripts/deploy/docker-compose-aliyun.sh up -d --build
+./scripts/deploy/docker-compose-aliyun.sh start
 ```
 
-> 说明：如只验证某个系统，可在 `up -d --build` 后面追加具体服务名；但“先 pull、再 rebuild”应作为默认前置动作。
+代码变更后再执行：
+
+```bash
+cd /Users/zhanglei/Documents/codex-new
+./scripts/deploy/docker-compose-aliyun.sh rebuild
+```
+
+> 说明：如只验证某个系统，可在 `start` 或 `rebuild` 后面追加具体服务名。
 
 ### 2.2 一键启动（全量）
 ```bash
 cd /Users/zhanglei/Documents/codex-new
 cp .env.example .env
 # 编辑 .env，填入真实密码与密钥
-./scripts/deploy/docker-compose-aliyun.sh up -d --build
+./scripts/deploy/docker-compose-aliyun.sh rebuild
 ```
 
 > 说明：根目录 `.env` 是必需文件，`docker compose` 不会从 Git 仓库自动带出这些密码与密钥。可先从 [`.env.example`](/Users/zhanglei/Documents/codex-new/.env.example) 复制生成。`docker-compose-aliyun.sh` 会优先探测你配置的阿里云镜像前缀，探测不到时自动回退官方镜像。
 
 ### 2.2.1 新服务器首启（一键）
 ```bash
-git clone -b codex/5.4.0 https://github.com/sukaka/AuthorizationReminder.git /root/AuthorizationReminder-codex-5.4.0
-cd /root/AuthorizationReminder-codex-5.4.0
+git clone -b codex/5.4.1 https://github.com/sukaka/AuthorizationReminder.git /root/AuthorizationReminder-codex-5.4.1
+cd /root/AuthorizationReminder-codex-5.4.1
 export ALIYUN_MIRROR_URL='替换成你的阿里云镜像加速器地址'
 export AUTH_BUILTIN_ACCOUNT_DEFAULT_PASSWORD='改成你要登录的默认密码'
 export PUBLIC_HOST='服务器公网IP或域名，不带协议和端口'
 ./scripts/deploy/bootstrap-full-server.sh
 ```
 
-> 说明：`bootstrap-full-server.sh` 默认把仓库同步到 `/root/AuthorizationReminder-codex-5.4.0`，并使用分支 `codex/5.4.0`。如需覆盖，可设置 `BOOTSTRAP_REPO_DIR`、`BOOTSTRAP_BRANCH`、`BOOTSTRAP_REPO_URL`。`ALIYUN_MIRROR_URL`、`AUTH_BUILTIN_ACCOUNT_DEFAULT_PASSWORD`、`PUBLIC_HOST` 为必填项。`PUBLIC_HOST` 只写主机名/IP，不要带 `http://` 或端口。
+> 说明：`bootstrap-full-server.sh` 默认把仓库同步到 `/root/AuthorizationReminder-codex-5.4.1`，并使用分支 `codex/5.4.1`。如需覆盖，可设置 `BOOTSTRAP_REPO_DIR`、`BOOTSTRAP_BRANCH`、`BOOTSTRAP_REPO_URL`。`ALIYUN_MIRROR_URL`、`AUTH_BUILTIN_ACCOUNT_DEFAULT_PASSWORD`、`PUBLIC_HOST` 为必填项。`PUBLIC_HOST` 只写主机名/IP，不要带 `http://` 或端口。
 >
 > 如果服务器当前只提供 `HTTP`，根 `.env` 里要保持 `AUTH_COOKIE_SECURE=false` 与 `AUTH_SECURITY_STRICT_MODE=false`，否则 `auth` 会因为安全启动校验直接退出。只有在你已经提供 `HTTPS` 入口时，才把这两个值一起改成 `true`。
 
 ### 2.3 常用按系统启动
 ```bash
 # 仅提醒系统
-./scripts/deploy/docker-compose-aliyun.sh up -d --build mysql auth api web
+./scripts/deploy/docker-compose-aliyun.sh start mysql auth api web
 
 # 仅工单系统
-./scripts/deploy/docker-compose-aliyun.sh up -d --build mysql auth ticketing web-ticketing
+./scripts/deploy/docker-compose-aliyun.sh start mysql auth ticketing web-ticketing
 
 # 仅库存系统
-./scripts/deploy/docker-compose-aliyun.sh up -d --build mysql auth shipping-gateway inventory-api web-inventory
+./scripts/deploy/docker-compose-aliyun.sh start mysql auth shipping-gateway inventory-api web-inventory
 
 # 仅设备流转系统
-./scripts/deploy/docker-compose-aliyun.sh up -d --build mysql auth device-flow-api web-device-flow
+./scripts/deploy/docker-compose-aliyun.sh start mysql auth device-flow-api web-device-flow
 
 # 仅聚信实施记录系统
-./scripts/deploy/docker-compose-aliyun.sh up -d --build mysql auth sec-impl-api web-sec-impl
+./scripts/deploy/docker-compose-aliyun.sh start mysql auth sec-impl-api web-sec-impl
 
 # 仅 FAQ 系统
-./scripts/deploy/docker-compose-aliyun.sh up -d --build mysql auth onlyoffice faq-api web-faq
+./scripts/deploy/docker-compose-aliyun.sh start mysql auth onlyoffice faq-api web-faq
 
 # 仅 标书系统
-./scripts/deploy/docker-compose-aliyun.sh up -d --build mysql auth onlyoffice tender-api web-tender
+./scripts/deploy/docker-compose-aliyun.sh start mysql auth onlyoffice tender-api web-tender
 
 # 仅 培训考试系统
-./scripts/deploy/docker-compose-aliyun.sh up -d --build mysql auth train-exam-onlyoffice train-exam-api web-train-exam
+./scripts/deploy/docker-compose-aliyun.sh start mysql auth train-exam-onlyoffice train-exam-api web-train-exam
 
 # 仅 CMDB 系统
-./scripts/deploy/docker-compose-aliyun.sh up -d --build mysql auth cmdb-mysql-init cmdb web-cmdb
+./scripts/deploy/docker-compose-aliyun.sh start mysql auth cmdb-mysql-init cmdb web-cmdb
 ```
 
 > 说明：启动 CMDB 前，需要在根目录 `.env` 中提供 `CMDB_MYSQL_PASSWORD`，用于初始化 `cmdb_user` 并作为运行时数据库密码。
@@ -140,21 +146,21 @@ cd /Users/zhanglei/Documents/codex-new
 | 系统 | 地址 |
 |---|---|
 | 统一登录 | `http://localhost:5180` |
-| 提醒前端 | `http://localhost:8080` |
+| 提醒前端 | `http://localhost:18080` |
 | 提醒后端 | `http://localhost:5179` |
-| 工单前端 | `http://localhost:8081` |
+| 工单前端 | `http://localhost:18081` |
 | 工单后端 | `http://localhost:5182` |
-| 库存前端 | `http://localhost:8082` |
+| 库存前端 | `http://localhost:18082` |
 | 库存后端 | `http://localhost:5183` |
-| 设备流转前端 | `http://localhost:8083` |
+| 设备流转前端 | `http://localhost:18083` |
 | 设备流转后端 | `http://localhost:5184` |
-| 聚信实施记录前端 | `http://localhost:8084` |
+| 聚信实施记录前端 | `http://localhost:18084` |
 | 聚信实施记录后端 | `http://localhost:5185` |
-| FAQ 前端 | `http://localhost:8085` |
+| FAQ 前端 | `http://localhost:18085` |
 | FAQ 后端 | `http://localhost:5186` |
-| 标书前端 | `http://localhost:8086` |
+| 标书前端 | `http://localhost:18086` |
 | 标书后端 | `http://localhost:5187` |
-| 培训考试前端 | `http://localhost:8087` |
+| 培训考试前端 | `http://localhost:18087` |
 | 培训考试后端 | `http://localhost:5188` |
 | CMDB 前端 | `http://localhost:8090` |
 | MySQL（宿主机映射） | `localhost:3308` |

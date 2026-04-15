@@ -126,7 +126,7 @@ const ALLOWED_UPLOAD_MIME = new Set([
   'application/pdf',
 ]);
 
-const defaultOrigins = ['http://localhost:8085', 'http://127.0.0.1:8085'].map(normalizeOrigin);
+const defaultOrigins = ['http://localhost:18085', 'http://127.0.0.1:18085'].map(normalizeOrigin);
 const allowedOrigins = (process.env.CORS_ORIGINS || '')
   .split(',')
   .map(normalizeOrigin)

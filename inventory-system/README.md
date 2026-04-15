@@ -77,7 +77,7 @@ npm install
 npm run dev
 ```
 
-访问：`http://localhost:8082`
+访问：`http://localhost:18082`
 
 ## Docker 启动（接入主工程同一 MySQL）
 已在主目录 `docker-compose.yml` 中新增：

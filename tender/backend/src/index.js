@@ -286,7 +286,7 @@ for (const dir of [UPLOAD_ROOT, VERSION_ROOT, DRAFT_ROOT, ASSET_ROOT, SAMPLE_ROO
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 }
 
-const defaultOrigins = ['http://localhost:8086', 'http://127.0.0.1:8086'].map(normalizeOrigin);
+const defaultOrigins = ['http://localhost:18086', 'http://127.0.0.1:18086'].map(normalizeOrigin);
 const allowedOrigins = (process.env.CORS_ORIGINS || '')
   .split(',')
   .map(normalizeOrigin)

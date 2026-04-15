@@ -26,6 +26,10 @@ if [ -f "$ENV_SOURCE" ]; then
   set +a
 fi
 
+run_compose() {
+  docker compose --env-file "$COMBINED_ENV_FILE" "$@"
+}
+
 "${SCRIPT_DIR}/resolve-image-sources.sh" "$IMAGE_ENV_FILE"
 
 : > "$COMBINED_ENV_FILE"
@@ -39,4 +43,19 @@ fi
 cd "$ROOT_DIR"
 export DOCKER_BUILDKIT
 export COMPOSE_DOCKER_CLI_BUILD
-exec docker compose --env-file "$COMBINED_ENV_FILE" "$@"
+
+COMMAND="${1:-}"
+case "$COMMAND" in
+  start)
+    shift
+    exec docker compose --env-file "$COMBINED_ENV_FILE" up -d "$@"
+    ;;
+  rebuild)
+    shift
+    run_compose build "$@"
+    exec docker compose --env-file "$COMBINED_ENV_FILE" up -d "$@"
+    ;;
+  *)
+    exec docker compose --env-file "$COMBINED_ENV_FILE" "$@"
+    ;;
+esac

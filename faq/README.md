@@ -34,7 +34,7 @@ cd /Users/zhanglei/Documents/codex-new
 docker compose up -d --build mysql auth onlyoffice faq-api web-faq
 ```
 
-访问：`http://localhost:8085`
+访问：`http://localhost:18085`
 
 ## 本地开发
 后端：

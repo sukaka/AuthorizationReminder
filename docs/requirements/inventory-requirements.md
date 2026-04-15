@@ -2,7 +2,7 @@
 
 ## 1. 系统概述
 - 系统名称：库存管理系统
-- 前端：`http://localhost:8082`
+- 前端：`http://localhost:18082`
 - 后端：`http://localhost:5183`
 - 物流网关：`http://localhost:5190`
 - 系统键：`inventory`

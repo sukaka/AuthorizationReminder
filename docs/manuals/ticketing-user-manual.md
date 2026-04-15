@@ -1,7 +1,7 @@
 # 工单管理系统（Ticketing）用户使用手册
 
 ## 1. 系统信息
-- 前端地址：`http://localhost:8081`
+- 前端地址：`http://localhost:18081`
 - 后端地址：`http://localhost:5182`
 - 系统键：`ticketing`
 

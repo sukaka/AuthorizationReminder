@@ -108,15 +108,15 @@ flowchart LR
 
 | 系统 | 前端服务 / 入口 | 前端容器 | 后端服务 / 入口 | 后端容器 | 数据库 | 运行账号 | 中间件依赖 | 备注 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| 主系统 Reminder | `web` / `http://localhost:8080` | `codex-new-web-1` | `api` / `http://localhost:5179` | `codex-new-api-1` | `juxin_reminder` | `juxin` | `mysql`、`auth` | 与 `ticketing`、`auth` 共用提醒主库 |
+| 主系统 Reminder | `web` / `http://localhost:18080` | `codex-new-web-1` | `api` / `http://localhost:5179` | `codex-new-api-1` | `juxin_reminder` | `juxin` | `mysql`、`auth` | 与 `ticketing`、`auth` 共用提醒主库 |
 | 统一认证中心 | 无独立前端容器，入口 `http://localhost:5180/portal` | `codex-new-auth-1` | `auth` / `http://localhost:5180` | `codex-new-auth-1` | `juxin_reminder` | `auth_user` | `mysql` | 提供统一登录、权限、门户导航 |
-| 工单系统 | `web-ticketing` / `http://localhost:8081` | `codex-new-web-ticketing-1` | `ticketing` / `http://localhost:5182` | `codex-new-ticketing-1` | `juxin_reminder` | `juxin` | `mysql`、`auth` | 与主系统共库 |
-| 库存系统 | `web-inventory` / `http://localhost:8082` | `codex-new-web-inventory-1` | `inventory-api` / `http://localhost:5183` | `codex-new-inventory-api-1` | `juxin_inventory` | `juxin` | `mysql`、`auth`、`shipping-gateway` | 物流能力来自 `shipping-gateway` |
-| 设备流转 | `web-device-flow` / `http://localhost:8083` | `codex-new-web-device-flow-1` | `device-flow-api` / `http://localhost:5184` | `codex-new-device-flow-api-1` | `juxin_device_flow` | `juxin` | `mysql`、`auth` | 独立业务库 |
-| 等保实施 | `web-sec-impl` / `http://localhost:8084` | `codex-new-web-sec-impl-1` | `sec-impl-api` / `http://localhost:5185` | `codex-new-sec-impl-api-1` | `juxin_sec_impl` | `sec_impl_user` | `mysql`、`auth` | 独立账号、独立库 |
-| FAQ | `web-faq` / `http://localhost:8085` | `codex-new-web-faq-1` | `faq-api` / `http://localhost:5186` | `codex-new-faq-api-1` | `juxin_faq` | `faq_user` | `mysql`、`auth`、`onlyoffice` | 依赖 FAQ 专属数据卷 |
-| 招投标 | `web-tender` / `http://localhost:8086` | `codex-new-web-tender-1` | `tender-api` / `http://localhost:5187` | `codex-new-tender-api-1` | `juxin_tender` | `tender_user` | `mysql`、`auth`、`onlyoffice` | 共享 FAQ/Tender 的 OnlyOffice |
-| 培训考试 | `web-train-exam` / `http://localhost:8087` | `codex-new-web-train-exam-1` | `train-exam-api` / `http://localhost:5188` | `codex-new-train-exam-api-1` | `juxin_train_exam` | `train_exam_user` | `mysql`、`auth`、`train-exam-onlyoffice` | 主业务库 |
+| 工单系统 | `web-ticketing` / `http://localhost:18081` | `codex-new-web-ticketing-1` | `ticketing` / `http://localhost:5182` | `codex-new-ticketing-1` | `juxin_reminder` | `juxin` | `mysql`、`auth` | 与主系统共库 |
+| 库存系统 | `web-inventory` / `http://localhost:18082` | `codex-new-web-inventory-1` | `inventory-api` / `http://localhost:5183` | `codex-new-inventory-api-1` | `juxin_inventory` | `juxin` | `mysql`、`auth`、`shipping-gateway` | 物流能力来自 `shipping-gateway` |
+| 设备流转 | `web-device-flow` / `http://localhost:18083` | `codex-new-web-device-flow-1` | `device-flow-api` / `http://localhost:5184` | `codex-new-device-flow-api-1` | `juxin_device_flow` | `juxin` | `mysql`、`auth` | 独立业务库 |
+| 等保实施 | `web-sec-impl` / `http://localhost:18084` | `codex-new-web-sec-impl-1` | `sec-impl-api` / `http://localhost:5185` | `codex-new-sec-impl-api-1` | `juxin_sec_impl` | `sec_impl_user` | `mysql`、`auth` | 独立账号、独立库 |
+| FAQ | `web-faq` / `http://localhost:18085` | `codex-new-web-faq-1` | `faq-api` / `http://localhost:5186` | `codex-new-faq-api-1` | `juxin_faq` | `faq_user` | `mysql`、`auth`、`onlyoffice` | 依赖 FAQ 专属数据卷 |
+| 招投标 | `web-tender` / `http://localhost:18086` | `codex-new-web-tender-1` | `tender-api` / `http://localhost:5187` | `codex-new-tender-api-1` | `juxin_tender` | `tender_user` | `mysql`、`auth`、`onlyoffice` | 共享 FAQ/Tender 的 OnlyOffice |
+| 培训考试 | `web-train-exam` / `http://localhost:18087` | `codex-new-web-train-exam-1` | `train-exam-api` / `http://localhost:5188` | `codex-new-train-exam-api-1` | `juxin_train_exam` | `train_exam_user` | `mysql`、`auth`、`train-exam-onlyoffice` | 主业务库 |
 | 培训考试附带 FAQ 访问 | 无独立前端 | 无 | `train-exam-api` 内部附加连接 | `codex-new-train-exam-api-1` | `juxin_faq` | `faq_user` | `mysql` | 培训考试还会额外访问 FAQ 库 |
 | CMDB | `web-cmdb` / `http://localhost:8090` | `codex-new-web-cmdb-1` | `cmdb` / 容器内 `:8088` | `codex-new-cmdb-1` | `cmdb` | `cmdb_user` | `mysql`、`auth` | 后端未直接映射宿主机端口 |
 

@@ -2,7 +2,7 @@
 
 ## 1. 系统概述
 - 系统名称：授权到期提醒系统
-- 前端：`http://localhost:8080`
+- 前端：`http://localhost:18080`
 - 后端：`http://localhost:5179`
 - 数据库：`juxin_reminder`
 

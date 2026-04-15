@@ -61,7 +61,7 @@ RUN set -eux; \
     apt-get install -y --no-install-recommends ffmpeg; \
     rm -rf /var/lib/apt/lists/*
 
-COPY train-exam/backend/package*.json ./
+COPY package*.json ./
 RUN npm config set registry "${NPM_REGISTRY}" \
  && npm config set fetch-retries 6 \
  && npm config set fetch-retry-mintimeout 20000 \
@@ -69,8 +69,7 @@ RUN npm config set registry "${NPM_REGISTRY}" \
  && npm config set fetch-timeout 300000 \
  && sh -ec 'npm ci --omit=dev --no-audit --no-fund --foreground-scripts || (sleep 5; npm ci --omit=dev --no-audit --no-fund --foreground-scripts)'
 
-COPY train-exam/backend/src ./src
-COPY server/cors-origin.js ./src/cors-origin.js
+COPY src ./src
 
 EXPOSE 5188
 CMD ["npm", "start"]
