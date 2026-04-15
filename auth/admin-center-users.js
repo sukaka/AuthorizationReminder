@@ -396,6 +396,43 @@ const createAdminCenterUsersService = ({
       return { ok: true };
     },
 
+    async deleteUsers({ actor, targetIds }) {
+      const ids = Array.from(
+        new Set(
+          (Array.isArray(targetIds) ? targetIds : [])
+            .map((item) => Number(item))
+            .filter((item) => Number.isInteger(item) && item > 0)
+        )
+      );
+      if (!ids.length) throw createHttpError(400, '请选择要删除的用户');
+
+      const results = [];
+      let deleted = 0;
+      let failed = 0;
+      for (const targetId of ids) {
+        try {
+          await this.deleteUser({ actor, targetId });
+          deleted += 1;
+          results.push({ id: targetId, status: 'DELETED' });
+        } catch (err) {
+          failed += 1;
+          results.push({
+            id: targetId,
+            status: 'FAILED',
+            error: String(err?.message || '删除用户失败').trim() || '删除用户失败',
+          });
+        }
+      }
+
+      return {
+        ok: true,
+        total: ids.length,
+        deleted,
+        failed,
+        results,
+      };
+    },
+
     async resetPassword({ actor, targetId, newPassword }) {
       assertDbMethods(db, ['get', 'run']);
       if (!newPassword) throw createHttpError(400, '请输入新密码');

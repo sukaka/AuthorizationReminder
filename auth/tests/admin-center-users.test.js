@@ -418,3 +418,91 @@ test('resetPassword hashes the new password before saving', async () => {
   assert.equal(runs[0].params[0], 'hashed:Strong#5678');
   assert.equal(runs[0].params[1], 1);
 });
+
+test('deleteUsers deletes regular users and skips protected ones', async () => {
+  const runs = [];
+  const operations = [];
+  const deletedIds = [];
+  const rowsById = new Map([
+    [2, {
+      id: 2,
+      username: 'alice',
+      role: 'user',
+      is_active: 1,
+      must_change_password: 0,
+      email: 'alice@example.com',
+      phone: '13800000001',
+      wecom_id: '',
+      app_access: '["reminder"]',
+      department_code: 'TECH',
+      totp_enabled: 0,
+      created_at: '2026-04-15 09:00:00',
+    }],
+    [3, {
+      id: 3,
+      username: 'admin',
+      role: 'admin',
+      is_active: 1,
+      must_change_password: 0,
+      email: 'admin@example.com',
+      phone: '',
+      wecom_id: '',
+      app_access: '["reminder","delivery","train-exam"]',
+      department_code: 'TECH',
+      totp_enabled: 0,
+      created_at: '2026-04-15 09:10:00',
+    }],
+    [4, {
+      id: 4,
+      username: 'bob',
+      role: 'user',
+      is_active: 1,
+      must_change_password: 0,
+      email: 'bob@example.com',
+      phone: '13800000002',
+      wecom_id: '',
+      app_access: '["train-exam"]',
+      department_code: 'TECH',
+      totp_enabled: 0,
+      created_at: '2026-04-15 09:20:00',
+    }],
+  ]);
+  const service = createAdminCenterUsersService({
+    db: {
+      async get(sql, params = []) {
+        return rowsById.get(Number(params[0])) || null;
+      },
+      async run(sql, params = []) {
+        runs.push({ sql, params });
+        if (sql.startsWith('DELETE FROM users WHERE id = ?')) {
+          deletedIds.push(Number(params[0]));
+          return {};
+        }
+        throw new Error(`unexpected run: ${sql}`);
+      },
+    },
+    builtinAccountUsernames: new Set(['admin', 'sysadmin', 'auditor', 'editor', 'reviewer']),
+    logOperation: async (payload) => { operations.push(payload); },
+  });
+
+  const result = await service.deleteUsers({
+    actor: { id: 1, username: 'sysadmin', role: 'sysadmin' },
+    targetIds: [2, 3, 4],
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.total, 3);
+  assert.equal(result.deleted, 2);
+  assert.equal(result.failed, 1);
+  assert.deepEqual(deletedIds, [2, 4]);
+  assert.equal(runs.length, 2);
+  assert.equal(operations.length, 2);
+  assert.deepEqual(
+    result.results.map((item) => ({ id: item.id, status: item.status, error: item.error || '' })),
+    [
+      { id: 2, status: 'DELETED', error: '' },
+      { id: 3, status: 'FAILED', error: '内置账号不可删除' },
+      { id: 4, status: 'DELETED', error: '' },
+    ]
+  );
+});

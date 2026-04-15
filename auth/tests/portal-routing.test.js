@@ -109,6 +109,7 @@ test('dedicated center config exposes admin and audit metadata', () => {
     api: {
       usersList: '/api/admin-center/users',
       usersCreate: '/api/admin-center/users',
+      usersBatchDelete: '/api/admin-center/users/batch-delete',
       usersExport: '/api/admin-center/users/export.xlsx',
       usersItemBase: '/api/admin-center/users',
       usersImport: '/api/admin-center/users/import',

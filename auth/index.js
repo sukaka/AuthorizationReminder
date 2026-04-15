@@ -1425,7 +1425,7 @@ app.get('/api/auth/apps', async (req, res) => {
   });
 });
 
-const RELEASE_VERSION = '5.6.2';
+const RELEASE_VERSION = '5.7.0';
 const DEDICATED_CENTER_VERSION = `v${RELEASE_VERSION}`;
 const ADMIN_CENTER_ROLE_OPTIONS = Object.freeze([
   { value: 'user', label: '普通用户' },
@@ -1674,6 +1674,7 @@ const renderAdminCenterSections = () => ({
           <p>集中维护账号、角色、登录标识和访问权限。</p>
         </div>
         <div class="panel-actions">
+          <button id="adminUsersBulkDeleteBtn" type="button" class="ghost-btn">批量删除</button>
           <button id="adminUsersReloadBtn" type="button" class="ghost-btn">刷新列表</button>
         </div>
       </div>
@@ -1745,10 +1746,12 @@ const renderAdminCenterSections = () => ({
       </div>
       <div id="adminCreateUserNotice" class="hint-line"></div>
       <div id="adminUsersNotice" class="hint-line"></div>
+      <div id="adminUsersSelectionSummary" class="hint-line"></div>
       <div class="table-wrap">
         <table class="data-table">
           <thead>
             <tr>
+              <th class="select-cell"><input id="adminUsersToggleAll" type="checkbox" aria-label="全选用户" /></th>
               <th>序号</th>
               <th>账号</th>
               <th>角色</th>
@@ -1762,7 +1765,7 @@ const renderAdminCenterSections = () => ({
             </tr>
           </thead>
           <tbody id="adminUsersBody">
-            <tr><td colspan="10" class="empty">正在加载用户列表...</td></tr>
+            <tr><td colspan="11" class="empty">正在加载用户列表...</td></tr>
           </tbody>
         </table>
       </div>
@@ -2244,6 +2247,8 @@ const renderDedicatedCenterPage = ({ nonce, config }) => {
     .data-table{width:100%;border-collapse:collapse;min-width:780px}
     .data-table th,.data-table td{padding:12px 14px;border-bottom:1px solid rgba(226,232,240,.8);text-align:left;font-size:14px;vertical-align:top}
     .data-table th{background:#f8fafc;color:#334155}
+    .select-cell{width:52px;text-align:center !important}
+    .select-cell input{width:16px;height:16px}
     .empty{text-align:center;color:#64748b}
     .chip-list{display:flex;flex-wrap:wrap;gap:8px}
     .chip{display:inline-flex;align-items:center;padding:6px 10px;border-radius:999px;border:1px solid rgba(148,163,184,.35);background:#f8fafc;color:#334155;font-size:12px}
@@ -2449,6 +2454,7 @@ const renderDedicatedCenterPage = ({ nonce, config }) => {
     let csrfToken = '';
     let currentUser = null;
     let adminUsersRows = [];
+    let adminSelectedUserIds = [];
     let adminDepartmentsRows = [];
     let auditLogsRows = [];
     let auditLogsMeta = {
@@ -2466,6 +2472,7 @@ const renderDedicatedCenterPage = ({ nonce, config }) => {
     let adminUserImportUploading = false;
     let adminUserImportTemplateDownloading = false;
     let adminUserExporting = false;
+    let adminUsersBulkDeleting = false;
     let adminUserImportResult = null;
     let adminSecurityRawState = {};
     let accountSecurityState = {
@@ -3008,6 +3015,46 @@ const renderDedicatedCenterPage = ({ nonce, config }) => {
       }
     }
 
+    function normalizeAdminSelectedUserIds(ids) {
+      const available = new Set((Array.isArray(adminUsersRows) ? adminUsersRows : []).map((row) => String(row.id)));
+      return Array.from(
+        new Set((Array.isArray(ids) ? ids : []).map((item) => String(item || '').trim()).filter((item) => available.has(item)))
+      );
+    }
+
+    function syncAdminUserSelectionUi() {
+      const selected = new Set(normalizeAdminSelectedUserIds(adminSelectedUserIds));
+      adminSelectedUserIds = Array.from(selected);
+      const rows = Array.isArray(adminUsersRows) ? adminUsersRows : [];
+      const selectableCount = rows.length;
+      const selectedCount = adminSelectedUserIds.length;
+      const allChecked = selectableCount > 0 && selectedCount === selectableCount;
+      const partiallyChecked = selectedCount > 0 && selectedCount < selectableCount;
+      const toggleAll = document.getElementById('adminUsersToggleAll');
+      const bulkDeleteBtn = document.getElementById('adminUsersBulkDeleteBtn');
+      const summary = document.getElementById('adminUsersSelectionSummary');
+
+      if (toggleAll) {
+        toggleAll.checked = allChecked;
+        toggleAll.indeterminate = partiallyChecked;
+        toggleAll.disabled = selectableCount === 0 || adminUsersBulkDeleting;
+      }
+      if (bulkDeleteBtn) {
+        bulkDeleteBtn.disabled = selectedCount === 0 || adminUsersBulkDeleting;
+        bulkDeleteBtn.textContent = adminUsersBulkDeleting ? '批量删除中...' : '批量删除';
+      }
+      if (summary) {
+        summary.textContent = selectedCount > 0
+          ? ('已选择 ' + selectedCount + ' 个用户')
+          : '可勾选多名用户后执行批量删除。';
+      }
+      document.querySelectorAll('[data-user-select-id]').forEach((input) => {
+        const checked = selected.has(String(input.dataset.userSelectId || '').trim());
+        input.checked = checked;
+        input.disabled = adminUsersBulkDeleting;
+      });
+    }
+
     async function logout() {
       try {
         await requestJson('/api/auth/logout', {
@@ -3044,7 +3091,7 @@ const renderDedicatedCenterPage = ({ nonce, config }) => {
       updateStatCard('primaryStatValue', list.length);
       updateStatCard('secondaryStatValue', list.filter((row) => row.lock_status === 'locked').length);
       if (!list.length) {
-        body.innerHTML = '<tr><td colspan="10" class="empty">当前没有用户数据</td></tr>';
+        body.innerHTML = '<tr><td colspan="11" class="empty">当前没有用户数据</td></tr>';
         return;
       }
       body.innerHTML = list.map((row, index) => {
@@ -3075,7 +3122,9 @@ const renderDedicatedCenterPage = ({ nonce, config }) => {
         const nextActive = Number(row.is_active) === 1 ? 0 : 1;
         const toggleLabel = Number(row.is_active) === 1 ? '禁用' : '启用';
         const unlockDisabled = row.lock_status === 'locked' ? '' : ' disabled';
+        const selected = adminSelectedUserIds.includes(String(row.id));
         return '<tr>'
+          + '<td class="select-cell"><input type="checkbox" data-user-select-id="' + row.id + '"' + (selected ? ' checked' : '') + ' aria-label="选择用户 ' + username + '" /></td>'
           + '<td>' + (index + 1) + '</td>'
           + '<td>' + username + '</td>'
           + '<td>' + role + '</td>'
@@ -3522,10 +3571,14 @@ const renderDedicatedCenterPage = ({ nonce, config }) => {
       try {
         const rows = await requestJson(centerApi.usersList);
         renderUsers(rows);
+        adminSelectedUserIds = normalizeAdminSelectedUserIds(adminSelectedUserIds);
+        syncAdminUserSelectionUi();
         renderDepartmentAdminPicker(readSelectedDepartmentAdminIds());
         setHint('adminUsersNotice', '用户列表已更新');
       } catch (error) {
         renderUsers([]);
+        adminSelectedUserIds = [];
+        syncAdminUserSelectionUi();
         renderDepartmentAdminPicker([]);
         setHint('adminUsersNotice', error.message || '加载用户列表失败', true);
       }
@@ -3601,6 +3654,59 @@ const renderDedicatedCenterPage = ({ nonce, config }) => {
       } finally {
         button.disabled = false;
         button.textContent = previousText;
+      }
+    }
+
+    function onAdminUsersSelectionChange(event) {
+      const checkbox = event.target.closest('[data-user-select-id]');
+      if (!checkbox) return;
+      const userId = String(checkbox.dataset.userSelectId || '').trim();
+      if (!userId) return;
+      const selected = new Set(adminSelectedUserIds);
+      if (checkbox.checked) selected.add(userId);
+      else selected.delete(userId);
+      adminSelectedUserIds = Array.from(selected);
+      syncAdminUserSelectionUi();
+    }
+
+    function onAdminUsersToggleAll(event) {
+      const checked = !!event.target?.checked;
+      adminSelectedUserIds = checked
+        ? (Array.isArray(adminUsersRows) ? adminUsersRows.map((row) => String(row.id)) : [])
+        : [];
+      syncAdminUserSelectionUi();
+    }
+
+    async function onAdminUsersBulkDelete() {
+      const ids = normalizeAdminSelectedUserIds(adminSelectedUserIds);
+      if (!ids.length) {
+        setHint('adminUsersNotice', '请先选择要删除的用户', true);
+        return;
+      }
+      if (!window.confirm('确认批量删除已选中的 ' + ids.length + ' 个用户吗？此操作不可恢复。')) return;
+      adminUsersBulkDeleting = true;
+      syncAdminUserSelectionUi();
+      setHint('adminUsersNotice', '正在批量删除用户...');
+      try {
+        const result = await requestJson(centerApi.usersBatchDelete, {
+          method: 'POST',
+          body: JSON.stringify({ ids }),
+        });
+        const failedItems = Array.isArray(result?.results)
+          ? result.results.filter((item) => item.status === 'FAILED')
+          : [];
+        adminSelectedUserIds = [];
+        await loadAdminUsers();
+        const summary = '批量删除完成：已删除 ' + Number(result?.deleted || 0) + ' 个'
+          + (failedItems.length
+            ? ('；跳过 ' + failedItems.length + ' 个（' + failedItems.map((item) => item.error || ('#' + item.id)).join('；') + '）')
+            : '');
+        setHint('adminUsersNotice', summary);
+      } catch (error) {
+        setHint('adminUsersNotice', error.message || '批量删除用户失败', true);
+      } finally {
+        adminUsersBulkDeleting = false;
+        syncAdminUserSelectionUi();
       }
     }
 
@@ -4024,7 +4130,10 @@ const renderDedicatedCenterPage = ({ nonce, config }) => {
           });
         });
         document.getElementById('adminUsersReloadBtn')?.addEventListener('click', loadAdminUsers);
+        document.getElementById('adminUsersBulkDeleteBtn')?.addEventListener('click', onAdminUsersBulkDelete);
+        document.getElementById('adminUsersToggleAll')?.addEventListener('change', onAdminUsersToggleAll);
         document.getElementById('adminUsersBody')?.addEventListener('click', onAdminUsersAction);
+        document.getElementById('adminUsersBody')?.addEventListener('change', onAdminUsersSelectionChange);
         document.getElementById('adminCreateUserForm')?.addEventListener('submit', onAdminCreateUser);
         document.getElementById('adminCreateUserResetBtn')?.addEventListener('click', resetCreateUserForm);
         document.getElementById('adminEditUserForm')?.addEventListener('submit', onAdminEditUserSubmit);
@@ -4065,6 +4174,7 @@ const renderDedicatedCenterPage = ({ nonce, config }) => {
         document.getElementById('adminSecurityForm')?.addEventListener('submit', onAdminSaveSecurity);
         document.getElementById('adminSecurityReloadBtn')?.addEventListener('click', loadAdminSecurity);
         syncAdminImportState();
+        syncAdminUserSelectionUi();
         resetCreateUserForm();
         resetDepartmentForm();
         loadAccountSecurity();
@@ -5520,6 +5630,21 @@ app.put('/api/admin-center/users/:id', async (req, res) => {
     return res.json(row);
   } catch (err) {
     return sendApiError(res, err, '更新用户失败');
+  }
+});
+
+app.post('/api/admin-center/users/batch-delete', async (req, res) => {
+  if (!canUseDedicatedCenter(req.user, ADMIN_CENTER_KEY)) {
+    return res.status(403).json({ error: '无权限访问管理后台' });
+  }
+  try {
+    const result = await adminCenterUsersService.deleteUsers({
+      actor: req.user,
+      targetIds: req.body?.ids,
+    });
+    return res.json(result);
+  } catch (err) {
+    return sendApiError(res, err, '批量删除用户失败');
   }
 });
 
