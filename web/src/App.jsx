@@ -583,7 +583,7 @@ function App() {
   }, [])
   const refreshCsrf = useCallback(async () => {
     try {
-      const res = await fetch('/api/auth/csrf', {
+      const res = await fetch('/api/csrf', {
         credentials: 'include',
       })
       if (!res.ok) throw new Error('csrf')

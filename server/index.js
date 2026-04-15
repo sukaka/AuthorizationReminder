@@ -641,6 +641,10 @@ app.use('/api', (req, res, next) => {
   return csrfProtection(req, res, next);
 });
 
+app.get('/api/csrf', csrfProtection, (req, res) => {
+  res.json({ token: req.csrfToken() });
+});
+
 app.get('/api/auth/csrf', csrfProtection, (req, res) => {
   res.json({ token: req.csrfToken() });
 });

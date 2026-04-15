@@ -1,6 +1,6 @@
 {
   "name": "juxin-shipping-gateway",
-  "version": "5.7.6",
+  "version": "5.7.7",
   "private": true,
   "main": "src/index.js",
   "scripts": {
