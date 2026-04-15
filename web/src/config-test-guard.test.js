@@ -3,6 +3,8 @@ import assert from 'node:assert/strict'
 
 import {
   buildBusinessConfigSnapshot,
+  describeBusinessConfigDiffs,
+  listBusinessConfigDiffPaths,
   pickBusinessConfigs,
   readConfigTestBlockMessage,
 } from './config-test-guard.js'
@@ -52,5 +54,28 @@ test('buildBusinessConfigSnapshot ignores security changes for testing guard', (
   assert.equal(
     buildBusinessConfigSnapshot(baseForm),
     buildBusinessConfigSnapshot(changedSecurity)
+  )
+})
+
+test('listBusinessConfigDiffPaths returns nested changed fields', () => {
+  assert.deepEqual(
+    listBusinessConfigDiffPaths(
+      {
+        email: { host: 'smtp.qq.com', port: '465' },
+        reminderSchedule: { channels: ['email'] },
+      },
+      {
+        email: { host: 'smtp.exmail.qq.com', port: '465' },
+        reminderSchedule: { channels: ['email', 'wecom'] },
+      }
+    ),
+    ['email.host', 'reminderSchedule.channels']
+  )
+})
+
+test('describeBusinessConfigDiffs summarizes first few changed fields', () => {
+  assert.equal(
+    describeBusinessConfigDiffs(['email.host', 'email.pass', 'wecom.webhook', 'ocr.enabled']),
+    'email.host、email.pass、wecom.webhook 等 4 项'
   )
 })

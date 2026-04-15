@@ -3,6 +3,8 @@ import QRCode from 'qrcode'
 import './App.css'
 import {
   buildBusinessConfigSnapshot,
+  describeBusinessConfigDiffs,
+  listBusinessConfigDiffPaths,
   pickBusinessConfigs,
   readConfigTestBlockMessage,
 } from './config-test-guard.js'
@@ -596,9 +598,18 @@ function App() {
   }, [setCsrf])
   const [passwordFeedback, setPasswordFeedback] = useState({ type: '', text: '' })
   const api = useMemo(() => buildApi(() => csrfTokenRef.current, refreshCsrf), [refreshCsrf])
+  const currentBusinessConfigs = useMemo(() => pickBusinessConfigs(configForm), [configForm])
   const hasUnsavedBusinessConfigChanges = useMemo(
     () => buildBusinessConfigSnapshot(configForm) !== savedConfigSnapshot,
     [configForm, savedConfigSnapshot]
+  )
+  const dirtyBusinessConfigPaths = useMemo(
+    () =>
+      listBusinessConfigDiffPaths(
+        currentBusinessConfigs,
+        JSON.parse(savedConfigSnapshot || '{}')
+      ),
+    [currentBusinessConfigs, savedConfigSnapshot]
   )
   const [loginForm, setLoginForm] = useState({ username: '', password: '' })
   const [loginError, setLoginError] = useState('')
@@ -1894,7 +1905,11 @@ function App() {
       configSaving,
     })
     if (blockMessage) {
-      const msg = blockMessage
+      const diffHint = describeBusinessConfigDiffs(dirtyBusinessConfigPaths)
+      const msg =
+        blockMessage === '配置已修改但未保存，请先点击“保存配置”' && diffHint
+          ? `${blockMessage}（未保存项：${diffHint}）`
+          : blockMessage
       setTestEmailStatus({ type: 'error', text: msg })
       setModalInfo({ title: '测试邮件失败', message: msg })
       return showError(msg)
@@ -1943,7 +1958,11 @@ function App() {
       configSaving,
     })
     if (blockMessage) {
-      const msg = blockMessage
+      const diffHint = describeBusinessConfigDiffs(dirtyBusinessConfigPaths)
+      const msg =
+        blockMessage === '配置已修改但未保存，请先点击“保存配置”' && diffHint
+          ? `${blockMessage}（未保存项：${diffHint}）`
+          : blockMessage
       setTestSmsStatus({ type: 'error', text: msg })
       setModalInfo({ title: '测试短信失败', message: msg })
       return showError(msg)
@@ -1983,7 +2002,11 @@ function App() {
       configSaving,
     })
     if (blockMessage) {
-      const msg = blockMessage
+      const diffHint = describeBusinessConfigDiffs(dirtyBusinessConfigPaths)
+      const msg =
+        blockMessage === '配置已修改但未保存，请先点击“保存配置”' && diffHint
+          ? `${blockMessage}（未保存项：${diffHint}）`
+          : blockMessage
       setTestWecomStatus({ type: 'error', text: msg })
       setModalInfo({ title: '测试企业微信失败', message: msg })
       return showError(msg)
