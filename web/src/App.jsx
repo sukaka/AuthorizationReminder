@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState, useRef } from 'react'
 import QRCode from 'qrcode'
 import './App.css'
+import { readConfigTestBlockMessage } from './config-test-guard.js'
 import { readUserImportDownloadFilename, readUserImportSummary } from './user-import.js'
 
 const buildApi = (getCsrfToken, refreshCsrfToken) => {
@@ -505,6 +506,7 @@ function App() {
     onSubmit: null,
   })
   const [configDirty, setConfigDirty] = useState(false)
+  const [configSaving, setConfigSaving] = useState(false)
   const [testTemplate, setTestTemplate] = useState({
     customer_name: '',
     license_name: '',
@@ -1801,6 +1803,7 @@ function App() {
 
   const onSaveConfig = async (e) => {
     e.preventDefault()
+    setConfigSaving(true)
     try {
       const { security, ...businessConfigs } = configForm
       await api.post('/api/send-configs', {
@@ -1810,6 +1813,8 @@ function App() {
       setConfigDirty(false)
     } catch (err) {
       showError('配置保存失败')
+    } finally {
+      setConfigSaving(false)
     }
   }
 
@@ -1840,8 +1845,9 @@ function App() {
       setModalInfo({ title: '测试邮件失败', message: '请输入测试邮箱' })
       return showError('请输入测试邮箱')
     }
-    if (configDirty) {
-      const msg = '配置已修改但未保存，请先点击“保存配置”'
+    const blockMessage = readConfigTestBlockMessage({ configDirty, configSaving })
+    if (blockMessage) {
+      const msg = blockMessage
       setTestEmailStatus({ type: 'error', text: msg })
       setModalInfo({ title: '测试邮件失败', message: msg })
       return showError(msg)
@@ -1885,8 +1891,9 @@ function App() {
       setModalInfo({ title: '测试短信失败', message: '请输入测试手机号' })
       return showError('请输入测试手机号')
     }
-    if (configDirty) {
-      const msg = '配置已修改但未保存，请先点击“保存配置”'
+    const blockMessage = readConfigTestBlockMessage({ configDirty, configSaving })
+    if (blockMessage) {
+      const msg = blockMessage
       setTestSmsStatus({ type: 'error', text: msg })
       setModalInfo({ title: '测试短信失败', message: msg })
       return showError(msg)
@@ -1921,8 +1928,9 @@ function App() {
       setModalInfo({ title: '测试企业微信失败', message: '请输入测试用户或Webhook' })
       return showError('请输入测试用户或Webhook')
     }
-    if (configDirty) {
-      const msg = '配置已修改但未保存，请先点击“保存配置”'
+    const blockMessage = readConfigTestBlockMessage({ configDirty, configSaving })
+    if (blockMessage) {
+      const msg = blockMessage
       setTestWecomStatus({ type: 'error', text: msg })
       setModalInfo({ title: '测试企业微信失败', message: msg })
       return showError(msg)
@@ -5807,8 +5815,13 @@ function App() {
                       className="form-control"
                     />
                   </label>
-                  <button className="primary btn btn-primary" type="button" onClick={onTestEmail}>
-                    测试邮箱
+                  <button
+                    className="primary btn btn-primary"
+                    type="button"
+                    onClick={onTestEmail}
+                    disabled={configSaving}
+                  >
+                    {configSaving ? '配置保存中...' : '测试邮箱'}
                   </button>
                   {testEmailStatus.text && (
                     <div className={`toast ${testEmailStatus.type} form-feedback full-row`}>
@@ -5900,8 +5913,13 @@ function App() {
                       className="form-control"
                     />
                   </label>
-                  <button className="primary btn btn-primary" type="button" onClick={onTestSms}>
-                    测试短信
+                  <button
+                    className="primary btn btn-primary"
+                    type="button"
+                    onClick={onTestSms}
+                    disabled={configSaving}
+                  >
+                    {configSaving ? '配置保存中...' : '测试短信'}
                   </button>
                   {testSmsStatus.text && (
                     <div className={`toast ${testSmsStatus.type} form-feedback full-row`}>
@@ -6120,8 +6138,13 @@ function App() {
                       className="form-control"
                     />
                   </label>
-                  <button className="primary btn btn-primary" type="button" onClick={onTestWecom}>
-                    测试企业微信
+                  <button
+                    className="primary btn btn-primary"
+                    type="button"
+                    onClick={onTestWecom}
+                    disabled={configSaving}
+                  >
+                    {configSaving ? '配置保存中...' : '测试企业微信'}
                   </button>
                   {testWecomStatus.text && (
                     <div className={`toast ${testWecomStatus.type} form-feedback full-row`}>
@@ -6132,8 +6155,8 @@ function App() {
               </div>
 
               <div className="config-actions">
-                <button type="submit" className="primary btn btn-primary">
-                  保存配置
+                <button type="submit" className="primary btn btn-primary" disabled={configSaving}>
+                  {configSaving ? '保存中...' : '保存配置'}
                 </button>
               </div>
               <div className="config-card card-split tone-control">
