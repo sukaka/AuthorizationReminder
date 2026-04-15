@@ -159,6 +159,41 @@ const buildUserImportWorkbook = (rows = []) => {
   return xlsx.write(workbook, { type: 'buffer', bookType: 'xlsx' });
 };
 
+const buildAdminCenterUsersExportWorkbook = (rows = []) => {
+  const safeRows = Array.isArray(rows) ? rows : [];
+  const sheet = xlsx.utils.json_to_sheet(safeRows, {
+    header: [
+      'username',
+      'role_label',
+      'department_name',
+      'status_label',
+      'lock_status_label',
+      'app_access_labels',
+      'email',
+      'phone',
+      'wecom_id',
+      'mfa_methods_label',
+      'created_at',
+    ],
+  });
+  xlsx.utils.sheet_add_aoa(sheet, [[
+    '账号',
+    '角色',
+    '主归属部门',
+    '状态',
+    '锁定状态',
+    '可访问系统',
+    '邮箱',
+    '手机号',
+    '企业微信UserID',
+    '二次验证',
+    '创建时间',
+  ]], { origin: 'A1' });
+  const workbook = xlsx.utils.book_new();
+  xlsx.utils.book_append_sheet(workbook, sheet, 'users');
+  return xlsx.write(workbook, { type: 'buffer', bookType: 'xlsx' });
+};
+
 const buildUserImportTemplateWorkbook = () => {
   const sheet = xlsx.utils.aoa_to_sheet([
     USER_IMPORT_TEMPLATE_HEADERS,
@@ -279,6 +314,7 @@ const importUsersFromRows = async ({
 
 module.exports = {
   buildDownloadHeaderMeta,
+  buildAdminCenterUsersExportWorkbook,
   normalizeUserImportRow,
   generateImportPassword,
   buildUserImportWorkbook,

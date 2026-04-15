@@ -4,6 +4,7 @@ const xlsx = require('xlsx');
 
 const {
   buildDownloadHeaderMeta,
+  buildAdminCenterUsersExportWorkbook,
   normalizeUserImportRow,
   generateImportPassword,
   buildUserImportWorkbook,
@@ -117,6 +118,56 @@ test('buildUserImportWorkbook writes success passwords and keeps skipped rows em
   assert.equal(rows[1].username, 'dup-user');
   assert.equal(rows[1].initial_password, '');
   assert.equal(rows[1].reason, '用户名已存在');
+});
+
+test('buildAdminCenterUsersExportWorkbook writes localized user export rows', () => {
+  const buffer = buildAdminCenterUsersExportWorkbook([
+    {
+      username: 'zhangsan',
+      role_label: '普通用户',
+      department_name: '技术部',
+      status_label: '启用',
+      lock_status_label: '正常',
+      app_access_labels: '培训考试系统、文档管理系统',
+      email: 'zhangsan@example.com',
+      phone: '13800000000',
+      wecom_id: 'zhangsan',
+      mfa_methods_label: '邮箱、谷歌认证',
+      created_at: '2026-04-15 13:40:00',
+    },
+  ]);
+
+  assert.ok(Buffer.isBuffer(buffer));
+
+  const workbook = xlsx.read(buffer, { type: 'buffer' });
+  const rows = xlsx.utils.sheet_to_json(workbook.Sheets.users, { header: 1, defval: '' });
+
+  assert.deepEqual(rows[0], [
+    '账号',
+    '角色',
+    '主归属部门',
+    '状态',
+    '锁定状态',
+    '可访问系统',
+    '邮箱',
+    '手机号',
+    '企业微信UserID',
+    '二次验证',
+    '创建时间',
+  ]);
+  assert.deepEqual(rows[1], [
+    'zhangsan',
+    '普通用户',
+    '技术部',
+    '启用',
+    '正常',
+    '培训考试系统、文档管理系统',
+    'zhangsan@example.com',
+    '13800000000',
+    'zhangsan',
+    '邮箱、谷歌认证',
+    '2026-04-15 13:40:00',
+  ]);
 });
 
 test('buildUserImportTemplateWorkbook writes the expected template header and sample row', () => {

@@ -99,6 +99,7 @@ const getDedicatedCenterConfig = (systemKey) => {
       api: {
         usersList: '/api/admin-center/users',
         usersCreate: '/api/admin-center/users',
+        usersExport: '/api/admin-center/users/export.xlsx',
         usersItemBase: '/api/admin-center/users',
         usersImport: '/api/admin-center/users/import',
         usersImportTemplate: '/api/admin-center/users/template.xlsx',

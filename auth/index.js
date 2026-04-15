@@ -73,6 +73,7 @@ const {
 } = require('./system-access-display');
 const {
   buildDownloadHeaderMeta,
+  buildAdminCenterUsersExportWorkbook,
   buildUserImportFilename,
   buildUserImportTemplateWorkbook,
   buildUserImportWorkbook,
@@ -1375,7 +1376,7 @@ app.get('/api/auth/apps', async (req, res) => {
   });
 });
 
-const RELEASE_VERSION = '5.4.3';
+const RELEASE_VERSION = '5.4.4';
 const DEDICATED_CENTER_VERSION = `v${RELEASE_VERSION}`;
 const ADMIN_CENTER_ROLE_OPTIONS = Object.freeze([
   { value: 'user', label: '普通用户' },
@@ -1686,6 +1687,7 @@ const renderAdminCenterSections = () => ({
           <input id="adminUserImportInput" type="file" accept=".xlsx,.xls" />
         </label>
         <button id="adminUserImportTemplateBtn" type="button" class="ghost-btn">下载模板</button>
+        <button id="adminUserExportBtn" type="button" class="ghost-btn">导出用户</button>
         <div class="import-copy">
           <span class="muted">列：账号、角色、状态、可访问系统、邮箱、手机号、企业微信UserID（历史英文列头也兼容）</span>
           <span class="muted">可先下载模板，按示例行填写后再导入；初始密码会自动生成并写入结果 Excel。</span>
@@ -2144,7 +2146,7 @@ const renderDedicatedCenterPage = ({ nonce, config }) => {
     .full-row{grid-column:1 / -1}
     .inline-check{flex-direction:row;align-items:center;gap:12px}
     .import-row{display:grid;gap:10px;margin:-4px 0 18px;position:relative;z-index:1}
-    .user-import-row{grid-template-columns:auto auto minmax(0,1fr);align-items:start}
+    .user-import-row{grid-template-columns:auto auto auto minmax(0,1fr);align-items:start}
     .import-btn{position:relative;display:inline-flex;align-items:center;justify-content:center;min-height:44px;padding:0 18px;border-radius:12px;border:1px solid rgba(148,163,184,.35);background:linear-gradient(135deg,#2563eb,#0ea5e9);color:#fff;cursor:pointer;box-shadow:0 10px 18px rgba(37,99,235,.2)}
     .import-btn input[type='file']{position:absolute;inset:0;opacity:0;cursor:pointer}
     .import-btn.disabled{opacity:.55;pointer-events:none}
@@ -2414,6 +2416,7 @@ const renderDedicatedCenterPage = ({ nonce, config }) => {
     let currentEditUserRow = null;
     let adminUserImportUploading = false;
     let adminUserImportTemplateDownloading = false;
+    let adminUserExporting = false;
     let adminUserImportResult = null;
     let adminSecurityRawState = {};
     let accountSecurityState = {
@@ -2909,8 +2912,9 @@ const renderDedicatedCenterPage = ({ nonce, config }) => {
       const importLabel = document.getElementById('adminUserImportLabel');
       const importLabelText = document.getElementById('adminUserImportLabelText');
       const templateBtn = document.getElementById('adminUserImportTemplateBtn');
+      const exportBtn = document.getElementById('adminUserExportBtn');
       const summary = document.getElementById('adminUserImportSummary');
-      const importBusy = adminUserImportUploading || adminUserImportTemplateDownloading;
+      const importBusy = adminUserImportUploading || adminUserImportTemplateDownloading || adminUserExporting;
 
       if (importInput) importInput.disabled = importBusy;
       if (importLabel) importLabel.classList.toggle('disabled', importBusy);
@@ -2920,6 +2924,10 @@ const renderDedicatedCenterPage = ({ nonce, config }) => {
       if (templateBtn) {
         templateBtn.disabled = importBusy;
         templateBtn.textContent = adminUserImportTemplateDownloading ? '模板下载中...' : '下载模板';
+      }
+      if (exportBtn) {
+        exportBtn.disabled = importBusy;
+        exportBtn.textContent = adminUserExporting ? '导出中...' : '导出用户';
       }
       if (summary) {
         summary.textContent = adminUserImportResult
@@ -3603,7 +3611,7 @@ const renderDedicatedCenterPage = ({ nonce, config }) => {
     }
 
     async function onAdminDownloadImportTemplate() {
-      if (adminUserImportUploading || adminUserImportTemplateDownloading) return;
+      if (adminUserImportUploading || adminUserImportTemplateDownloading || adminUserExporting) return;
       adminUserImportTemplateDownloading = true;
       syncAdminImportState();
       setHint('adminUsersNotice', '正在下载导入模板...');
@@ -3616,6 +3624,24 @@ const renderDedicatedCenterPage = ({ nonce, config }) => {
         setHint('adminUsersNotice', error.message || '下载模板失败', true);
       } finally {
         adminUserImportTemplateDownloading = false;
+        syncAdminImportState();
+      }
+    }
+
+    async function onAdminExportUsers() {
+      if (adminUserImportUploading || adminUserImportTemplateDownloading || adminUserExporting) return;
+      adminUserExporting = true;
+      syncAdminImportState();
+      setHint('adminUsersNotice', '正在导出全部用户...');
+      try {
+        const { response, blob } = await requestBlob(centerApi.usersExport);
+        const fileName = readImportFilename(response.headers, '用户导出.xlsx');
+        triggerFileDownload(blob, fileName);
+        setHint('adminUsersNotice', '用户导出已开始下载');
+      } catch (error) {
+        setHint('adminUsersNotice', error.message || '导出用户失败', true);
+      } finally {
+        adminUserExporting = false;
         syncAdminImportState();
       }
     }
@@ -3960,6 +3986,7 @@ const renderDedicatedCenterPage = ({ nonce, config }) => {
           event.target.value = '';
         });
         document.getElementById('adminUserImportTemplateBtn')?.addEventListener('click', onAdminDownloadImportTemplate);
+        document.getElementById('adminUserExportBtn')?.addEventListener('click', onAdminExportUsers);
         document.getElementById('adminSecurityForm')?.addEventListener('submit', onAdminSaveSecurity);
         document.getElementById('adminSecurityReloadBtn')?.addEventListener('click', loadAdminSecurity);
         syncAdminImportState();
@@ -5049,6 +5076,72 @@ app.get('/api/admin-center/users', async (req, res) => {
     return res.json(rows);
   } catch (err) {
     return sendApiError(res, err, '获取用户列表失败');
+  }
+});
+
+app.get('/api/admin-center/users/export.xlsx', async (req, res) => {
+  if (!canUseDedicatedCenter(req.user, ADMIN_CENTER_KEY)) {
+    return res.status(403).json({ error: '无权限访问管理后台' });
+  }
+  try {
+    const [users, departments] = await Promise.all([
+      adminCenterUsersService.listUsers(),
+      adminCenterDepartmentsService.listDepartments(),
+    ]);
+    const departmentNameMap = new Map(
+      (Array.isArray(departments) ? departments : []).map((item) => [String(item.code || '').trim().toUpperCase(), String(item.name || '').trim()])
+    );
+    const roleLabelMap = new Map([
+      ['admin', '管理员'],
+      ['sysadmin', '系统管理员'],
+      ['auditor', '审计管理员'],
+      ['editor', '业务管理员'],
+      ['reviewer', '审核用户'],
+      ['user', '普通用户'],
+      ['viewer', '普通用户'],
+      ['sales', '销售'],
+    ]);
+    const exportRows = (Array.isArray(users) ? users : []).map((row) => {
+      const mfaLabels = [];
+      if (row.email) mfaLabels.push('邮箱');
+      if (row.phone) mfaLabels.push('短信');
+      if (row.wecom_id) mfaLabels.push('企业微信');
+      if (Number(row.totp_enabled) === 1) mfaLabels.push('谷歌认证');
+      const appAccessLabels = (Array.isArray(row.app_access) ? row.app_access : [])
+        .map((key) => getSystemDisplayLabel(key))
+        .filter(Boolean)
+        .join('、');
+      const departmentCode = String(row.department_code || '').trim().toUpperCase();
+      return {
+        username: String(row.username || ''),
+        role_label: roleLabelMap.get(String(row.role || '').trim().toLowerCase()) || String(row.role || ''),
+        department_name: departmentNameMap.get(departmentCode) || departmentCode || '未分配',
+        status_label: Number(row.is_active) === 1 ? '启用' : '禁用',
+        lock_status_label: row.lock_status === 'locked' ? '已锁定' : '正常',
+        app_access_labels: appAccessLabels,
+        email: String(row.email || ''),
+        phone: String(row.phone || ''),
+        wecom_id: String(row.wecom_id || ''),
+        mfa_methods_label: mfaLabels.length ? Array.from(new Set(mfaLabels)).join('、') : '-',
+        created_at: String(row.created_at || ''),
+      };
+    });
+    const workbookBuffer = buildAdminCenterUsersExportWorkbook(exportRows);
+    const download = buildDownloadHeaderMeta('用户导出.xlsx', 'user-export.xlsx');
+    await logOperation({
+      user: req.user,
+      action: 'EXPORT',
+      entity: 'user',
+      afterData: {
+        total: exportRows.length,
+      },
+    });
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', download.contentDisposition);
+    res.setHeader('X-Import-Filename', download.encodedFileName);
+    return res.send(workbookBuffer);
+  } catch (err) {
+    return sendApiError(res, err, '导出用户失败');
   }
 });
 
