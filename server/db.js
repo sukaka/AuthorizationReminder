@@ -222,6 +222,7 @@ const init = async () => {
     password_hash VARCHAR(255) NOT NULL,
     role VARCHAR(64) NOT NULL DEFAULT 'admin',
     is_active TINYINT NOT NULL DEFAULT 1,
+    must_change_password TINYINT NOT NULL DEFAULT 0,
     email VARCHAR(255),
     phone VARCHAR(64),
     wecom_id VARCHAR(255),
@@ -236,6 +237,7 @@ const init = async () => {
   await addColumnIfMissing('users', 'mfa_methods', 'mfa_methods TEXT');
   await addColumnIfMissing('users', 'app_access', 'app_access TEXT');
   await addColumnIfMissing('users', 'is_active', 'is_active TINYINT NOT NULL DEFAULT 1');
+  await addColumnIfMissing('users', 'must_change_password', 'must_change_password TINYINT NOT NULL DEFAULT 0');
   await addColumnIfMissing('users', 'department_code', 'department_code VARCHAR(32) NULL');
   await addIndexIfMissing(
     'users',

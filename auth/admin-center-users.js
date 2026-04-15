@@ -52,6 +52,7 @@ const formatUserRow = (row) => {
   return {
     ...row,
     role: normalizeUserRole(row.role),
+    must_change_password: Number(row.must_change_password) === 1 ? 1 : 0,
     app_access: normalizeAppAccess(row.app_access, row.role),
     department_code: normalizeDepartmentCode(row.department_code),
   };
@@ -143,7 +144,7 @@ const createAdminCenterUsersService = ({
     async listUsers() {
       assertDbMethods(db, ['query']);
       const rows = await db.query(
-        'SELECT id, username, role, is_active, email, phone, wecom_id, app_access, department_code, totp_enabled, created_at FROM users ORDER BY id DESC'
+        'SELECT id, username, role, is_active, must_change_password, email, phone, wecom_id, app_access, department_code, totp_enabled, created_at FROM users ORDER BY id DESC'
       );
       const users = rows.map(formatUserRow);
       const loginIds = Array.from(new Set(users.map((item) => resolveUserLoginId(item, builtinAccountUsernames)).filter(Boolean)));
@@ -185,7 +186,7 @@ const createAdminCenterUsersService = ({
 
     async createUser({ actor, payload }) {
       assertDbMethods(db, ['run', 'get']);
-      const { username, password, role, is_active, email, phone, wecom_id, app_access, department_code } = payload || {};
+      const { username, password, role, is_active, must_change_password, email, phone, wecom_id, app_access, department_code } = payload || {};
       if (!username || !password) throw createHttpError(400, '请输入账号和密码');
 
       const usernameRuleError = validateUsernameFormat(username);
@@ -210,11 +211,23 @@ const createAdminCenterUsersService = ({
 
       const hash = await hashPassword(password);
       const nextActive = is_active === undefined ? 1 : (Number(is_active) === 1 ? 1 : 0);
+      const nextMustChangePassword = Number(must_change_password) === 1 ? 1 : 0;
       let info;
       try {
         info = await db.run(
-          'INSERT INTO users (username, password_hash, role, is_active, email, phone, wecom_id, app_access, department_code) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-          [String(username).trim(), hash, nextRole, nextActive, email || null, phone || null, wecom_id || null, JSON.stringify(nextAccess), nextDepartmentCode]
+          'INSERT INTO users (username, password_hash, role, is_active, email, phone, wecom_id, app_access, department_code, must_change_password) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+          [
+            String(username).trim(),
+            hash,
+            nextRole,
+            nextActive,
+            email || null,
+            phone || null,
+            wecom_id || null,
+            JSON.stringify(nextAccess),
+            nextDepartmentCode,
+            nextMustChangePassword,
+          ]
         );
       } catch (err) {
         if (err && err.code === 'ER_DUP_ENTRY') throw createHttpError(400, '用户名已存在');
@@ -222,7 +235,7 @@ const createAdminCenterUsersService = ({
       }
 
       const row = formatUserRow(await db.get(
-        'SELECT id, username, role, is_active, email, phone, wecom_id, app_access, department_code, totp_enabled, created_at FROM users WHERE id = ?',
+        'SELECT id, username, role, is_active, must_change_password, email, phone, wecom_id, app_access, department_code, totp_enabled, created_at FROM users WHERE id = ?',
         [info.insertId]
       ));
       await logOperation({
@@ -259,7 +272,7 @@ const createAdminCenterUsersService = ({
         if (phoneRuleError) throw createHttpError(400, phoneRuleError);
       }
       const before = formatUserRow(await db.get(
-        'SELECT id, username, role, is_active, email, phone, wecom_id, app_access, department_code, totp_enabled, created_at FROM users WHERE id = ?',
+        'SELECT id, username, role, is_active, must_change_password, email, phone, wecom_id, app_access, department_code, totp_enabled, created_at FROM users WHERE id = ?',
         [targetId]
       ));
       if (!before) throw createHttpError(404, '用户不存在');
@@ -312,7 +325,7 @@ const createAdminCenterUsersService = ({
         await db.run('UPDATE users SET app_access = ? WHERE id = ?', [JSON.stringify(nextAccess), targetId]);
       }
       const row = formatUserRow(await db.get(
-        'SELECT id, username, role, is_active, email, phone, wecom_id, app_access, department_code, totp_enabled, created_at FROM users WHERE id = ?',
+        'SELECT id, username, role, is_active, must_change_password, email, phone, wecom_id, app_access, department_code, totp_enabled, created_at FROM users WHERE id = ?',
         [targetId]
       ));
       let actionType = 'UPDATE';
@@ -364,7 +377,7 @@ const createAdminCenterUsersService = ({
       assertDbMethods(db, ['get', 'run']);
       if (String(targetId) === String(actor?.id)) throw createHttpError(400, '不能删除自己');
       const before = formatUserRow(await db.get(
-        'SELECT id, username, role, is_active, email, phone, wecom_id, app_access, totp_enabled, created_at FROM users WHERE id = ?',
+        'SELECT id, username, role, is_active, must_change_password, email, phone, wecom_id, app_access, totp_enabled, created_at FROM users WHERE id = ?',
         [targetId]
       ));
       if (!before) throw createHttpError(404, '用户不存在');
@@ -391,7 +404,7 @@ const createAdminCenterUsersService = ({
       const passwordRuleError = validatePasswordComplexity(newPassword, security?.passwordPolicy);
       if (passwordRuleError) throw createHttpError(400, passwordRuleError);
       const hash = await hashPassword(newPassword);
-      await db.run('UPDATE users SET password_hash = ? WHERE id = ?', [hash, targetId]);
+      await db.run('UPDATE users SET password_hash = ?, must_change_password = ? WHERE id = ?', [hash, 1, targetId]);
       await logOperation({
         user: actor,
         action: 'RESET_PASSWORD',

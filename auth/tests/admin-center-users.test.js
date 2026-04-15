@@ -83,6 +83,7 @@ test('createUser applies normalized role and dedicated center defaults', async (
             username: 'boss',
             role: 'sysadmin',
             is_active: 1,
+            must_change_password: 0,
             email: 'boss@example.com',
             phone: '13911112222',
             wecom_id: 'wx-boss',
@@ -120,8 +121,59 @@ test('createUser applies normalized role and dedicated center defaults', async (
   assert.equal(runs[0].params[1], 'hashed:Strong#1234');
   assert.deepEqual(JSON.parse(runs[0].params[7]), ['admin-center']);
   assert.equal(runs[0].params[8], 'TECH');
+  assert.equal(runs[0].params[9], 0);
   assert.equal(operations[0].action, 'CREATE');
   assert.equal(operations[0].entity, 'user');
+});
+
+test('createUser can mark imported users as requiring password change on first login', async () => {
+  const runs = [];
+  const service = createAdminCenterUsersService({
+    db: {
+      async run(sql, params = []) {
+        runs.push({ sql, params });
+        if (sql.startsWith('INSERT INTO users')) return { insertId: 52 };
+        throw new Error(`unexpected run: ${sql}`);
+      },
+      async get(sql, params = []) {
+        if (sql.includes('FROM users WHERE id = ?')) {
+          assert.deepEqual(params, [52]);
+          return {
+            id: 52,
+            username: 'imported-user',
+            role: 'user',
+            is_active: 1,
+            must_change_password: 1,
+            email: 'imported@example.com',
+            phone: '13911112222',
+            wecom_id: '',
+            app_access: '["train-exam"]',
+            department_code: 'TECH',
+            totp_enabled: 0,
+            created_at: '2026-04-15 15:00:00',
+          };
+        }
+        throw new Error(`unexpected get: ${sql}`);
+      },
+    },
+    hashPassword: async (password) => `hashed:${password}`,
+    getSecurityConfig: async () => ({ passwordPolicy: DEFAULT_POLICY }),
+  });
+
+  const row = await service.createUser({
+    actor: { id: 1, username: 'admin', role: 'admin' },
+    payload: {
+      username: 'imported-user',
+      password: 'Strong#1234',
+      role: 'user',
+      phone: '13911112222',
+      app_access: ['train-exam'],
+      must_change_password: 1,
+    },
+  });
+
+  assert.equal(row.must_change_password, 1);
+  assert.equal(runs[0].params[9], 1);
 });
 
 test('updateUser can toggle active state for regular users', async () => {
@@ -271,4 +323,5 @@ test('resetPassword hashes the new password before saving', async () => {
 
   assert.deepEqual(result, { ok: true });
   assert.equal(runs[0].params[0], 'hashed:Strong#5678');
+  assert.equal(runs[0].params[1], 1);
 });

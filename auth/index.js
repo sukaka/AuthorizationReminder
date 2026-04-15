@@ -58,6 +58,7 @@ const {
 } = require('./admin-center-user-import');
 const {
   buildImportedUserPasswordEmail,
+  buildImportedUsersAdminSummaryEmail,
 } = require('./admin-center-user-import-email');
 const {
   createAuditCenterLogsService,
@@ -387,6 +388,18 @@ const computeAuditSignature = ({ id, prevHash, userId, username, action, entity,
 const getUserAppAccess = (user) => resolveUserAppAccess(user);
 
 const canAccessSystem = (user, systemKey) => getUserAppAccess(user).includes(systemKey);
+const isPasswordChangeRequired = (user) => Number(user?.must_change_password) === 1;
+const buildAuthUserPayload = (user) => ({
+  id: user.id,
+  username: user.username,
+  role: user.role,
+  must_change_password: isPasswordChangeRequired(user) ? 1 : 0,
+});
+const sendPasswordChangeRequired = (res, user) => res.status(403).json({
+  error: '首次登录请先修改密码',
+  mustChangePassword: true,
+  user: buildAuthUserPayload(user),
+});
 
 const MFA_METHODS = ['email', 'sms', 'wecom', 'totp'];
 
@@ -1257,7 +1270,7 @@ const authorizeTrainExam = (user, action) => {
 
 app.get('/api/auth/introspect', async (req, res) => {
   const user = await db.get(
-    'SELECT id, username, role, app_access, mfa_enabled, mfa_methods, totp_enabled, totp_secret, email, phone, wecom_id FROM users WHERE id = ?',
+    'SELECT id, username, role, app_access, mfa_enabled, mfa_methods, totp_enabled, totp_secret, email, phone, wecom_id, must_change_password FROM users WHERE id = ?',
     [req.user.id]
   );
   if (!user) return res.status(401).json({ error: '登录已过期' });
@@ -1266,15 +1279,18 @@ app.get('/api/auth/introspect', async (req, res) => {
   if (mfaStatus.setupRequired) {
     return res.status(403).json({ error: '请先完成二次验证设置', mfaSetupRequired: true });
   }
+  if (isPasswordChangeRequired(user)) {
+    return sendPasswordChangeRequired(res, user);
+  }
   const scope = await buildUserScope(user);
   const apps = getUserAppAccess(user);
-  res.json({ user: { id: user.id, username: user.username, role: user.role }, scope, apps });
+  res.json({ user: buildAuthUserPayload(user), scope, apps });
 });
 
 app.post('/api/auth/authorize', async (req, res) => {
   const { system, action, resource } = req.body || {};
   const user = await db.get(
-    'SELECT id, username, role, app_access, mfa_enabled, mfa_methods, totp_enabled, totp_secret, email, phone, wecom_id FROM users WHERE id = ?',
+    'SELECT id, username, role, app_access, mfa_enabled, mfa_methods, totp_enabled, totp_secret, email, phone, wecom_id, must_change_password FROM users WHERE id = ?',
     [req.user.id]
   );
   if (!user) return res.status(401).json({ error: '登录已过期' });
@@ -1285,7 +1301,15 @@ app.post('/api/auth/authorize', async (req, res) => {
       allow: false,
       reason: '请先完成二次验证设置',
       mfaSetupRequired: true,
-      user: { id: user.id, username: user.username, role: user.role },
+      user: buildAuthUserPayload(user),
+    });
+  }
+  if (isPasswordChangeRequired(user)) {
+    return res.status(403).json({
+      allow: false,
+      reason: '首次登录请先修改密码',
+      mustChangePassword: true,
+      user: buildAuthUserPayload(user),
     });
   }
   const scope = await buildUserScope(user);
@@ -1315,12 +1339,12 @@ app.post('/api/auth/authorize', async (req, res) => {
   } else if (system === 'train-exam') {
     result = authorizeTrainExam(user, action);
   }
-  return res.json({ ...result, user: { id: user.id, username: user.username, role: user.role }, scope, apps });
+  return res.json({ ...result, user: buildAuthUserPayload(user), scope, apps });
 });
 
 app.get('/api/auth/apps', async (req, res) => {
   const user = await db.get(
-    'SELECT id, username, role, app_access, mfa_enabled, mfa_methods, totp_enabled, totp_secret, email, phone, wecom_id FROM users WHERE id = ?',
+    'SELECT id, username, role, app_access, mfa_enabled, mfa_methods, totp_enabled, totp_secret, email, phone, wecom_id, must_change_password FROM users WHERE id = ?',
     [req.user.id]
   );
   if (!user) return res.status(401).json({ error: '登录已过期' });
@@ -1328,11 +1352,14 @@ app.get('/api/auth/apps', async (req, res) => {
   const mfaStatus = resolveUserMfaStatus({ user, securityConfig: security });
   if (mfaStatus.setupRequired) {
     return res.json({
-      user: { id: user.id, username: user.username, role: user.role },
+      user: buildAuthUserPayload(user),
       mfaSetupRequired: true,
       availableMethods: mfaStatus.availableMethods,
       apps: [],
     });
+  }
+  if (isPasswordChangeRequired(user)) {
+    return sendPasswordChangeRequired(res, user);
   }
   const reminderUrl = process.env.APP_REMINDER_URL || 'http://localhost:18080';
   const deliveryURL = process.env.APP_DELIVERY_URL || 'http://localhost:18084';
@@ -1393,12 +1420,12 @@ app.get('/api/auth/apps', async (req, res) => {
     apps.push({ key: 'train-exam', name: '培训考试系统', url: trainExamURL, allow: !!trainExamAuth.allow });
   }
   return res.json({
-    user: { id: user.id, username: user.username, role: user.role },
+    user: buildAuthUserPayload(user),
     apps: apps.filter((item) => item.allow),
   });
 });
 
-const RELEASE_VERSION = '5.5.0';
+const RELEASE_VERSION = '5.6.0';
 const DEDICATED_CENTER_VERSION = `v${RELEASE_VERSION}`;
 const ADMIN_CENTER_ROLE_OPTIONS = Object.freeze([
   { value: 'user', label: '普通用户' },
@@ -1712,7 +1739,7 @@ const renderAdminCenterSections = () => ({
         <button id="adminUserExportBtn" type="button" class="ghost-btn">导出用户</button>
         <div class="import-copy">
           <span class="muted">列：账号、角色、状态、可访问系统、邮箱、手机号、企业微信UserID（历史英文列头也兼容）</span>
-          <span class="muted">可先下载模板，按示例行填写后再导入；填写邮箱后，系统会自动发送初始密码邮件，结果 Excel 也会记录发送状态。</span>
+          <span class="muted">可先下载模板，按示例行填写后再导入；填写邮箱后，系统会自动发送初始密码邮件，并给 admin 邮箱发送本次导入密码汇总。</span>
           <span id="adminUserImportSummary" class="muted"></span>
         </div>
       </div>
@@ -2782,11 +2809,22 @@ const renderDedicatedCenterPage = ({ nonce, config }) => {
     }
 
     function readImportSummary(headers) {
+      const adminNotifyReasonRaw = String(headers.get('X-Import-Admin-Notify-Reason') || '').trim();
+      let adminNotifyReason = '';
+      if (adminNotifyReasonRaw) {
+        try {
+          adminNotifyReason = decodeURIComponent(adminNotifyReasonRaw);
+        } catch (_err) {
+          adminNotifyReason = adminNotifyReasonRaw;
+        }
+      }
       return {
         total: Number(headers.get('X-Import-Total') || 0),
         created: Number(headers.get('X-Import-Created') || 0),
         skipped: Number(headers.get('X-Import-Skipped') || 0),
         errorCount: Number(headers.get('X-Import-Error-Count') || 0),
+        adminNotifyStatus: String(headers.get('X-Import-Admin-Notify-Status') || '').trim(),
+        adminNotifyReason,
         filename: readImportFilename(headers, 'user-import-result.xlsx'),
       };
     }
@@ -2953,7 +2991,19 @@ const renderDedicatedCenterPage = ({ nonce, config }) => {
       }
       if (summary) {
         summary.textContent = adminUserImportResult
-          ? ('最近导入：' + adminUserImportResult.created + ' 成功 / ' + adminUserImportResult.skipped + ' 跳过 / ' + adminUserImportResult.total + ' 总数')
+          ? (
+            '最近导入：' + adminUserImportResult.created + ' 成功 / '
+            + adminUserImportResult.skipped + ' 跳过 / '
+            + adminUserImportResult.total + ' 总数'
+            + (
+              adminUserImportResult.adminNotifyStatus
+                ? ('；管理员汇总邮件：'
+                  + adminUserImportResult.adminNotifyStatus
+                  + (adminUserImportResult.adminNotifyReason ? '（' + adminUserImportResult.adminNotifyReason + '）' : '')
+                )
+                : ''
+            )
+          )
           : '';
       }
     }
@@ -3622,7 +3672,10 @@ const renderDedicatedCenterPage = ({ nonce, config }) => {
         adminUserImportResult = summary;
         syncAdminImportState();
         triggerFileDownload(blob, summary.filename);
-        setHint('adminUsersNotice', '用户导入完成：' + summary.created + ' 成功 / ' + summary.skipped + ' 跳过');
+        const adminNotifyText = summary.adminNotifyStatus
+          ? ('；管理员汇总邮件：' + summary.adminNotifyStatus + (summary.adminNotifyReason ? '（' + summary.adminNotifyReason + '）' : ''))
+          : '';
+        setHint('adminUsersNotice', '用户导入完成：' + summary.created + ' 成功 / ' + summary.skipped + ' 跳过' + adminNotifyText);
         await loadAdminUsers();
       } catch (error) {
         setHint('adminUsersNotice', error.message || '用户导入失败', true);
@@ -4046,11 +4099,16 @@ const renderDedicatedCenterPage = ({ nonce, config }) => {
       setSurfaceStatus('正在检查登录状态...', 'info');
       try {
         const response = await fetch('/api/auth/me', { credentials: 'include' });
+        const data = await response.json();
         if (response.status === 401) {
           window.location.href = '/portal?system=' + encodeURIComponent(systemKey);
           return;
         }
-        const user = await response.json();
+        if (response.status === 403 && data?.mustChangePassword) {
+          window.location.href = '/portal';
+          return;
+        }
+        const user = data;
         currentUser = user;
         const role = String(user?.role || '').trim().toLowerCase();
         const appAccess = Array.isArray(user?.app_access) ? user.app_access : [];
@@ -4203,6 +4261,20 @@ app.get('/portal', (req, res) => {
       <h2 style="margin:0 0 12px">选择系统</h2>
       <div id="apps" class="app-grid"></div>
     </div>
+    <div id="forcePasswordCard" class="card" style="display:none">
+      <h2 style="margin:0 0 12px">首次登录请先修改密码</h2>
+      <div class="muted">为保障账号安全，首次登录后必须先修改密码，修改完成后再重新登录系统。</div>
+      <form id="forcePasswordForm">
+        <label>当前密码<input id="forceCurrentPassword" type="password" placeholder="请输入当前密码" /></label>
+        <label>新密码<input id="forceNewPassword" type="password" placeholder="请输入新密码" /></label>
+        <div class="mfa-actions">
+          <button id="forcePasswordSubmitBtn" class="primary" type="submit">修改密码</button>
+          <button id="forcePasswordLogoutBtn" class="secondary" type="button">退出登录</button>
+        </div>
+      </form>
+      <div id="forcePasswordError" class="error"></div>
+      <div id="forcePasswordHint" class="hint"></div>
+    </div>
     <div id="mfaCard" class="card" style="display:none">
       <h2 style="margin:0 0 12px">二次验证</h2>
       <div class="muted">请输入二次验证码完成登录。</div>
@@ -4273,7 +4345,7 @@ app.get('/portal', (req, res) => {
     }
 
     function hideAllCards() {
-      const ids = ['loginCard', 'appsCard', 'mfaCard', 'mfaSetupCard'];
+      const ids = ['loginCard', 'appsCard', 'forcePasswordCard', 'mfaCard', 'mfaSetupCard'];
       ids.forEach((id) => {
         const node = document.getElementById(id);
         if (node) node.style.display = 'none';
@@ -4439,10 +4511,69 @@ app.get('/portal', (req, res) => {
       }
     }
     function setError(msg){ document.getElementById('loginError').textContent = msg || ''; }
+    function setForcePasswordError(msg){ document.getElementById('forcePasswordError').textContent = msg || ''; }
+    function setForcePasswordHint(msg){ document.getElementById('forcePasswordHint').textContent = msg || ''; }
     function setMfaError(msg){ document.getElementById('mfaError').textContent = msg || ''; }
     function setMfaHint(msg){ document.getElementById('mfaHint').textContent = msg || ''; }
     function setMfaSetupError(msg){ document.getElementById('mfaSetupError').textContent = msg || ''; }
     function setMfaSetupHint(msg){ document.getElementById('mfaSetupHint').textContent = msg || ''; }
+
+    function showForcePasswordCard() {
+      hideAllCards();
+      const card = document.getElementById('forcePasswordCard');
+      if (card) card.style.display = 'block';
+      const currentNode = document.getElementById('forceCurrentPassword');
+      const newNode = document.getElementById('forceNewPassword');
+      if (currentNode) currentNode.value = '';
+      if (newNode) newNode.value = '';
+      setForcePasswordError('');
+      setForcePasswordHint('请先修改密码后再继续。');
+    }
+
+    async function onForcePasswordSubmit(event) {
+      event.preventDefault();
+      const currentPassword = String(document.getElementById('forceCurrentPassword')?.value || '').trim();
+      const newPassword = String(document.getElementById('forceNewPassword')?.value || '').trim();
+      if (!currentPassword || !newPassword) {
+        setForcePasswordError('请输入当前密码和新密码');
+        return;
+      }
+      setForcePasswordError('');
+      setForcePasswordHint('正在修改密码...');
+      try {
+        await ensureCsrfReady();
+        const r = await fetch('/api/auth/change-password', {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken },
+          body: JSON.stringify({ currentPassword, newPassword }),
+        });
+        const text = await r.text();
+        const data = parseJsonSafe(text);
+        if (!r.ok) throw new Error(getErrorText({ response: text, data, fallback: '修改密码失败' }));
+        setForcePasswordHint('密码已修改，请重新登录。');
+        window.setTimeout(() => {
+          window.location.href = '/portal';
+        }, 800);
+      } catch (err) {
+        setForcePasswordError(err.message || '修改密码失败');
+      }
+    }
+
+    async function onForcePasswordLogout() {
+      try {
+        await ensureCsrfReady();
+        await fetch('/api/auth/logout', {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken },
+          body: JSON.stringify({}),
+        });
+      } catch (_err) {
+        // ignore
+      }
+      window.location.href = '/portal';
+    }
 
     function renderMfaLoginMethods() {
       const root = document.getElementById('mfaMethods');
@@ -4542,6 +4673,10 @@ app.get('/portal', (req, res) => {
         const data = parseJsonSafe(text);
         if (!r.ok) throw new Error(getErrorText({ response: text, data, fallback: '验证失败' }));
         mfaLoginState = { token: '', methods: [], method: '' };
+        if (data.mustChangePassword) {
+          showForcePasswordCard();
+          return;
+        }
         await loadApps();
       } catch (err) {
         setMfaError(err.message || '验证失败');
@@ -4759,6 +4894,10 @@ app.get('/portal', (req, res) => {
         await showMfaSetup();
         return;
       }
+      if (data.mustChangePassword) {
+        showForcePasswordCard();
+        return;
+      }
       await loadApps();
     }
 
@@ -4767,7 +4906,15 @@ app.get('/portal', (req, res) => {
       const text = await r.text();
       const data = parseJsonSafe(text);
       if (!r.ok) {
+        if (data.mustChangePassword) {
+          showForcePasswordCard();
+          return;
+        }
         throw new Error(data.error || '登录状态已失效');
+      }
+      if (data.mustChangePassword) {
+        showForcePasswordCard();
+        return;
       }
       if (data.mfaSetupRequired) {
         await showMfaSetup();
@@ -4846,6 +4993,8 @@ app.get('/portal', (req, res) => {
     document.getElementById('captchaImg').addEventListener('click', loadCaptcha);
     document.getElementById('mfaSendBtn').addEventListener('click', onMfaSend);
     document.getElementById('mfaVerifyBtn').addEventListener('click', onMfaVerify);
+    document.getElementById('forcePasswordForm').addEventListener('submit', onForcePasswordSubmit);
+    document.getElementById('forcePasswordLogoutBtn').addEventListener('click', onForcePasswordLogout);
     document.getElementById('totpSetupBtn').addEventListener('click', onTotpSetup);
     document.getElementById('totpEnableBtn').addEventListener('click', onTotpEnable);
     document.getElementById('mfaSetupSaveBtn').addEventListener('click', onMfaSetupSave);
@@ -5252,6 +5401,7 @@ app.post('/api/admin-center/users/import', adminCenterImportUpload.single('file'
           phone: payload.phone,
           wecom_id: payload.wecom_id,
           app_access: payload.app_access,
+          must_change_password: 1,
         },
       }),
       notifyUser: async ({ row, initialPassword }) => {
@@ -5273,6 +5423,40 @@ app.post('/api/admin-center/users/import', adminCenterImportUpload.single('file'
       },
       resolveInsertError: (err) => String(err?.message || '').trim() || '用户创建失败',
     });
+    const importedUsers = result.resultRows
+      .filter((item) => item.result === 'SUCCESS')
+      .map((item) => ({
+        username: item.username,
+        email: records.find((row) => String(row?.username || '').trim() === String(item.username || '').trim())?.email || '',
+        initialPassword: item.initial_password,
+      }));
+    let adminNotifyStatus = 'SKIPPED';
+    let adminNotifyReason = '';
+    if (!importedUsers.length) {
+      adminNotifyReason = '本次没有成功导入用户';
+    } else {
+      const adminUser = await db.get('SELECT id, username, email FROM users WHERE username = ? LIMIT 1', ['admin']);
+      if (!String(adminUser?.email || '').trim()) {
+        adminNotifyReason = 'admin 未配置邮箱';
+      } else {
+        try {
+          const summaryEmail = buildImportedUsersAdminSummaryEmail({
+            loginUrl: AUTH_LOGIN_URL,
+            rows: importedUsers,
+          });
+          await sendEmail({
+            contact: { email: adminUser.email, name: adminUser.username || 'admin' },
+            subject: summaryEmail.subject,
+            message: summaryEmail.message,
+            configs,
+          });
+          adminNotifyStatus = 'SENT';
+        } catch (err) {
+          adminNotifyStatus = 'FAILED';
+          adminNotifyReason = String(err?.message || '').trim() || '管理员汇总邮件发送失败';
+        }
+      }
+    }
     const emailSentCount = result.resultRows.filter((item) => item.notify_email_status === 'SENT').length;
     const emailFailedCount = result.resultRows.filter((item) => item.notify_email_status === 'FAILED').length;
     const emailSkippedCount = result.resultRows.filter((item) => item.notify_email_status === 'SKIPPED').length;
@@ -5289,6 +5473,8 @@ app.post('/api/admin-center/users/import', adminCenterImportUpload.single('file'
         email_sent_count: emailSentCount,
         email_failed_count: emailFailedCount,
         email_skipped_count: emailSkippedCount,
+        admin_notify_status: adminNotifyStatus,
+        admin_notify_reason: adminNotifyReason || undefined,
       },
     });
 
@@ -5300,6 +5486,8 @@ app.post('/api/admin-center/users/import', adminCenterImportUpload.single('file'
     res.setHeader('X-Import-Created', String(result.created));
     res.setHeader('X-Import-Skipped', String(result.skipped));
     res.setHeader('X-Import-Error-Count', String(result.errors.length));
+    res.setHeader('X-Import-Admin-Notify-Status', adminNotifyStatus);
+    res.setHeader('X-Import-Admin-Notify-Reason', encodeURIComponent(adminNotifyReason || ''));
     res.setHeader('X-Import-Filename', fileName);
     return res.send(workbookBuffer);
   } catch (err) {
@@ -5999,7 +6187,7 @@ app.post('/api/auth/login', async (req, res) => {
     requestIp: ip,
     afterData: { username: user.username, role: user.role, ip, status: 'success' },
   });
-  res.json({ token, user: { id: user.id, username: user.username, role: user.role } });
+  res.json({ token, user: buildAuthUserPayload(user), mustChangePassword: isPasswordChangeRequired(user) });
 });
 
 app.post('/api/auth/mfa/send', async (req, res) => {
@@ -6192,7 +6380,7 @@ app.post('/api/auth/mfa/verify', async (req, res) => {
     requestIp,
     afterData: { username: user.username, role: user.role, ip: requestIp, status: 'success', mfa_method: method },
   });
-  res.json({ token, user: { id: user.id, username: user.username, role: user.role } });
+  res.json({ token, user: buildAuthUserPayload(user), mustChangePassword: isPasswordChangeRequired(user) });
 });
 
 app.post('/api/auth/totp/setup', async (req, res) => {
@@ -6294,17 +6482,18 @@ app.post('/api/auth/mfa/settings', async (req, res) => {
 
 app.get('/api/auth/me', async (req, res) => {
   const user = await db.get(
-    'SELECT id, username, role, app_access, mfa_enabled, mfa_methods, totp_enabled, totp_secret, email, phone, wecom_id, department_code FROM users WHERE id = ?',
+    'SELECT id, username, role, app_access, mfa_enabled, mfa_methods, totp_enabled, totp_secret, email, phone, wecom_id, department_code, must_change_password FROM users WHERE id = ?',
     [req.user.id]
   );
   if (!user) return res.json(null);
   const security = await getSecurityConfig();
   const mfaStatus = resolveUserMfaStatus({ user, securityConfig: security });
+  if (isPasswordChangeRequired(user)) {
+    return sendPasswordChangeRequired(res, user);
+  }
   const scope = await buildUserScope(user);
   res.json({
-    id: user.id,
-    username: user.username,
-    role: user.role,
+    ...buildAuthUserPayload(user),
     app_access: getUserAppAccess(user),
     scope: {
       department: scope.department,
@@ -6355,7 +6544,7 @@ app.post('/api/auth/change-password', async (req, res) => {
   }
   if (!currentPasswordCheck.ok) return res.status(400).json({ error: '当前密码错误' });
   const hash = await hashPassword(newPassword);
-  await db.run('UPDATE users SET password_hash = ? WHERE id = ?', [hash, req.user.id]);
+  await db.run('UPDATE users SET password_hash = ?, must_change_password = ? WHERE id = ?', [hash, 0, req.user.id]);
   await revokeUserSessions({ userId: req.user.id, reason: 'password_change' });
   clearAuthCookie(res);
   clearCsrfCookie(res);

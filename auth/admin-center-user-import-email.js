@@ -23,6 +23,38 @@ const buildImportedUserPasswordEmail = ({
   };
 };
 
+const buildImportedUsersAdminSummaryEmail = ({
+  rows = [],
+  loginUrl,
+}) => {
+  const safeRows = Array.isArray(rows) ? rows : [];
+  const safeLoginUrl = trimText(loginUrl);
+  const lines = safeRows.map((row, index) => {
+    const username = trimText(row?.username) || '-';
+    const email = trimText(row?.email) || '未填写邮箱';
+    const initialPassword = trimText(row?.initialPassword) || '-';
+    return [
+      `${index + 1}. 账号：${username}`,
+      `   邮箱：${email}`,
+      `   初始密码：${initialPassword}`,
+    ].join('\n');
+  });
+  return {
+    subject: '聚信统一登录平台批量导入账号汇总',
+    message: [
+      '您好，admin：',
+      '',
+      `本次共导入成功 ${safeRows.length} 个用户。`,
+      safeLoginUrl ? `登录入口：${safeLoginUrl}` : '',
+      '',
+      ...lines,
+      '',
+      '请妥善保管本邮件中的初始密码，并提醒相关用户首次登录后立即修改密码。',
+    ].filter(Boolean).join('\n'),
+  };
+};
+
 module.exports = {
   buildImportedUserPasswordEmail,
+  buildImportedUsersAdminSummaryEmail,
 };
