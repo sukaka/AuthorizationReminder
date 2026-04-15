@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 
 import {
   BUSINESS_CONFIG_SECTION_FIELDS,
+  buildBusinessConfigFormFromApi,
   buildBusinessConfigSnapshot,
   CONFIG_SECRET_MASK,
   describeBusinessConfigDiffs,
@@ -74,6 +75,55 @@ test('buildBusinessConfigSnapshot ignores security changes for testing guard', (
   assert.equal(
     buildBusinessConfigSnapshot(baseForm),
     buildBusinessConfigSnapshot(changedSecurity)
+  )
+})
+
+test('buildBusinessConfigFormFromApi keeps masked email password after save sync', () => {
+  assert.deepEqual(
+    buildBusinessConfigFormFromApi(
+      {
+        email: {
+          host: 'smtp.qq.com',
+          port: '465',
+          user: 'sukaka@qq.com',
+          pass: CONFIG_SECRET_MASK,
+          from: 'sukaka@qq.com',
+          secure: true,
+        },
+      },
+      {
+        email: {
+          host: 'smtp.qq.com',
+          port: '465',
+          user: 'sukaka@qq.com',
+          pass: 'real-secret',
+          from: 'sukaka@qq.com',
+          secure: true,
+        },
+        sms: {
+          endpoint: 'https://dysmsapi.aliyuncs.com',
+        },
+      }
+    ),
+    {
+      email: {
+        host: 'smtp.qq.com',
+        port: '465',
+        user: 'sukaka@qq.com',
+        pass: CONFIG_SECRET_MASK,
+        from: 'sukaka@qq.com',
+        secure: true,
+      },
+      sms: {
+        endpoint: 'https://dysmsapi.aliyuncs.com',
+      },
+      wecom: {},
+      ocr: {},
+      reminder: {},
+      reminderSchedule: {},
+      retry: {},
+      rateLimit: {},
+    }
   )
 })
 

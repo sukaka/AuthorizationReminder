@@ -3,6 +3,7 @@ import QRCode from 'qrcode'
 import './App.css'
 import {
   BUSINESS_CONFIG_SECTION_FIELDS,
+  buildBusinessConfigFormFromApi,
   buildBusinessConfigSnapshot,
   maskBusinessSecretFields,
   describeBusinessConfigDiffs,
@@ -1178,20 +1179,14 @@ function App() {
   const refreshConfigs = async () => {
     if (!permissions.canConfig && !permissions.canManageSecurity) return
     const data = await api.get('/api/send-configs')
-    const smsConfig = data.sms || {}
+    const nextBusinessConfigs = buildBusinessConfigFormFromApi(data, configForm)
     const nextConfigForm = ((prev) => ({
-      email: data.email || prev.email,
-      sms: { ...prev.sms, ...smsConfig },
-      wecom: data.wecom || prev.wecom,
-      ocr: data.ocr || prev.ocr,
-      reminder: data.reminder || prev.reminder,
-      reminderSchedule: data.reminderSchedule || prev.reminderSchedule,
-      retry: data.retry || prev.retry,
-      rateLimit: data.rateLimit || prev.rateLimit,
+      ...prev,
+      ...nextBusinessConfigs,
       security: normalizeSecurityConfig(data.security || prev.security),
     }))(configForm)
     setConfigForm(nextConfigForm)
-    setSavedBusinessConfigs(pickBusinessConfigs(nextConfigForm))
+    setSavedBusinessConfigs(nextBusinessConfigs)
     setTestWecomWebhook((prev) => (prev ? prev : data.wecom?.webhook || ''))
     setConfigDirty(false)
   }
@@ -1872,22 +1867,29 @@ function App() {
     try {
       const sectionConfigs = pickBusinessConfigSection(currentBusinessConfigs, sectionKey)
       await api.post('/api/send-configs', sectionConfigs)
-      const maskedSectionConfigs = maskBusinessSecretFields(
-        sectionConfigs,
-        pickBusinessConfigSection(savedBusinessConfigs, sectionKey)
-      )
+      let nextBusinessConfigs = null
+      try {
+        const latestConfigs = await api.get('/api/send-configs')
+        nextBusinessConfigs = buildBusinessConfigFormFromApi(latestConfigs, currentBusinessConfigs)
+        setTestWecomWebhook((prev) => (prev ? prev : latestConfigs.wecom?.webhook || ''))
+      } catch (refreshErr) {
+        nextBusinessConfigs = {
+          ...savedBusinessConfigs,
+          ...maskBusinessSecretFields(
+            sectionConfigs,
+            pickBusinessConfigSection(savedBusinessConfigs, sectionKey)
+          ),
+        }
+      }
       showMessage(`${sectionLabel}已保存`)
-      setConfigForm((prev) => ({
-        ...prev,
-        ...maskedSectionConfigs,
-      }))
-      setSavedBusinessConfigs((prev) => ({
-        ...prev,
-        ...maskedSectionConfigs,
-      }))
+      setModalInfo(null)
+      setConfigForm((prev) => ({ ...prev, ...nextBusinessConfigs }))
+      setSavedBusinessConfigs(nextBusinessConfigs)
       setConfigDirty(false)
     } catch (err) {
-      showError(`${sectionLabel}保存失败`)
+      const message = normalizeApiError(err) || `${sectionLabel}保存失败`
+      showError(message)
+      setModalInfo({ title: `${sectionLabel}保存失败`, message })
     } finally {
       setConfigSavingSection('')
     }

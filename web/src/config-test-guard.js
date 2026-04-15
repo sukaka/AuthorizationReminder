@@ -30,6 +30,21 @@ export const pickBusinessConfigSection = (configForm = {}, sectionKey = '') => {
   }, {})
 }
 
+export const buildBusinessConfigFormFromApi = (configForm = {}, previousConfig = {}) => {
+  const previousBusinessConfigs = pickBusinessConfigs(previousConfig)
+  const smsConfig = configForm.sms || {}
+  return {
+    email: configForm.email || previousBusinessConfigs.email || {},
+    sms: { ...(previousBusinessConfigs.sms || {}), ...smsConfig },
+    wecom: configForm.wecom || previousBusinessConfigs.wecom || {},
+    ocr: configForm.ocr || previousBusinessConfigs.ocr || {},
+    reminder: configForm.reminder || previousBusinessConfigs.reminder || {},
+    reminderSchedule: configForm.reminderSchedule || previousBusinessConfigs.reminderSchedule || {},
+    retry: configForm.retry || previousBusinessConfigs.retry || {},
+    rateLimit: configForm.rateLimit || previousBusinessConfigs.rateLimit || {},
+  }
+}
+
 export const buildBusinessConfigSnapshot = (configForm = {}) =>
   JSON.stringify(pickBusinessConfigs(configForm))
 
