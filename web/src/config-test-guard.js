@@ -6,9 +6,28 @@ export const readConfigTestBlockMessage = ({ configDirty = false, configSaving =
 
 export const CONFIG_SECRET_MASK = '******'
 
+export const BUSINESS_CONFIG_SECTION_FIELDS = Object.freeze({
+  email: ['email'],
+  sms: ['sms'],
+  ocr: ['ocr'],
+  wecom: ['wecom'],
+  control: ['retry', 'rateLimit'],
+  template: ['reminder'],
+})
+
 export const pickBusinessConfigs = (configForm = {}) => {
   const { security, ...businessConfigs } = configForm || {}
   return businessConfigs
+}
+
+export const pickBusinessConfigSection = (configForm = {}, sectionKey = '') => {
+  const fields = BUSINESS_CONFIG_SECTION_FIELDS[sectionKey] || []
+  return fields.reduce((acc, fieldKey) => {
+    if (Object.prototype.hasOwnProperty.call(configForm || {}, fieldKey)) {
+      acc[fieldKey] = configForm[fieldKey]
+    }
+    return acc
+  }, {})
 }
 
 export const buildBusinessConfigSnapshot = (configForm = {}) =>

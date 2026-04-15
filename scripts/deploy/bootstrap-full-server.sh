@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-BOOTSTRAP_REPO_DIR="${BOOTSTRAP_REPO_DIR:-/root/AuthorizationReminder-codex-5.7.8}"
-BOOTSTRAP_BRANCH="${BOOTSTRAP_BRANCH:-codex/5.7.8}"
+BOOTSTRAP_REPO_DIR="${BOOTSTRAP_REPO_DIR:-/root/AuthorizationReminder-codex-5.8.0}"
+BOOTSTRAP_BRANCH="${BOOTSTRAP_BRANCH:-codex/5.8.0}"
 BOOTSTRAP_REPO_URL="${BOOTSTRAP_REPO_URL:-https://github.com/sukaka/AuthorizationReminder.git}"
 BOOTSTRAP_DOCKER_CONFIG_DIR="${BOOTSTRAP_DOCKER_CONFIG_DIR:-/etc/docker}"
 BOOTSTRAP_DOCKER_DAEMON_JSON="${BOOTSTRAP_DOCKER_DAEMON_JSON:-${BOOTSTRAP_DOCKER_CONFIG_DIR}/daemon.json}"

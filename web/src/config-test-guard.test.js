@@ -2,11 +2,13 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 
 import {
+  BUSINESS_CONFIG_SECTION_FIELDS,
   buildBusinessConfigSnapshot,
   CONFIG_SECRET_MASK,
   describeBusinessConfigDiffs,
   listBusinessConfigDiffPaths,
   maskBusinessSecretFields,
+  pickBusinessConfigSection,
   pickBusinessConfigs,
   readConfigTestBlockMessage,
 } from './config-test-guard.js'
@@ -39,6 +41,22 @@ test('pickBusinessConfigs excludes security settings from save snapshot', () => 
     {
       email: { host: 'smtp.qq.com' },
       sms: { signName: '聚信' },
+    }
+  )
+})
+
+test('pickBusinessConfigSection returns only fields for requested section', () => {
+  assert.deepEqual(
+    pickBusinessConfigSection(
+      {
+        email: { host: 'smtp.qq.com' },
+        sms: { signName: '聚信' },
+        retry: { maxRetries: 2 },
+      },
+      'email'
+    ),
+    {
+      email: { host: 'smtp.qq.com' },
     }
   )
 })
@@ -102,4 +120,11 @@ test('maskBusinessSecretFields masks saved secret fields back to shared mask', (
       wecom: { secret: CONFIG_SECRET_MASK },
     }
   )
+})
+
+test('BUSINESS_CONFIG_SECTION_FIELDS keeps channel sections independent', () => {
+  assert.deepEqual(BUSINESS_CONFIG_SECTION_FIELDS.email, ['email'])
+  assert.deepEqual(BUSINESS_CONFIG_SECTION_FIELDS.sms, ['sms'])
+  assert.deepEqual(BUSINESS_CONFIG_SECTION_FIELDS.ocr, ['ocr'])
+  assert.deepEqual(BUSINESS_CONFIG_SECTION_FIELDS.wecom, ['wecom'])
 })

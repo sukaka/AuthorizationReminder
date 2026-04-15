@@ -2,10 +2,12 @@ import { useCallback, useEffect, useMemo, useState, useRef } from 'react'
 import QRCode from 'qrcode'
 import './App.css'
 import {
+  BUSINESS_CONFIG_SECTION_FIELDS,
   buildBusinessConfigSnapshot,
   maskBusinessSecretFields,
   describeBusinessConfigDiffs,
   listBusinessConfigDiffPaths,
+  pickBusinessConfigSection,
   pickBusinessConfigs,
   readConfigTestBlockMessage,
 } from './config-test-guard.js'
@@ -513,9 +515,9 @@ function App() {
     onSubmit: null,
   })
   const [configDirty, setConfigDirty] = useState(false)
-  const [configSaving, setConfigSaving] = useState(false)
-  const [savedConfigSnapshot, setSavedConfigSnapshot] = useState(() =>
-    buildBusinessConfigSnapshot({
+  const [configSavingSection, setConfigSavingSection] = useState('')
+  const [savedBusinessConfigs, setSavedBusinessConfigs] = useState(() =>
+    ({
       email: { host: '', port: '', user: '', pass: '', from: '', secure: '' },
       sms: {
         accessKeyId: '',
@@ -600,17 +602,26 @@ function App() {
   const [passwordFeedback, setPasswordFeedback] = useState({ type: '', text: '' })
   const api = useMemo(() => buildApi(() => csrfTokenRef.current, refreshCsrf), [refreshCsrf])
   const currentBusinessConfigs = useMemo(() => pickBusinessConfigs(configForm), [configForm])
-  const hasUnsavedBusinessConfigChanges = useMemo(
-    () => buildBusinessConfigSnapshot(configForm) !== savedConfigSnapshot,
-    [configForm, savedConfigSnapshot]
-  )
-  const dirtyBusinessConfigPaths = useMemo(
+  const dirtyBusinessConfigPathsBySection = useMemo(
     () =>
-      listBusinessConfigDiffPaths(
-        currentBusinessConfigs,
-        JSON.parse(savedConfigSnapshot || '{}')
+      Object.fromEntries(
+        Object.keys(BUSINESS_CONFIG_SECTION_FIELDS).map((sectionKey) => [
+          sectionKey,
+          listBusinessConfigDiffPaths(
+            pickBusinessConfigSection(currentBusinessConfigs, sectionKey),
+            pickBusinessConfigSection(savedBusinessConfigs, sectionKey)
+          ),
+        ])
       ),
-    [currentBusinessConfigs, savedConfigSnapshot]
+    [currentBusinessConfigs, savedBusinessConfigs]
+  )
+  const isConfigSectionDirty = useCallback(
+    (sectionKey) => (dirtyBusinessConfigPathsBySection[sectionKey] || []).length > 0,
+    [dirtyBusinessConfigPathsBySection]
+  )
+  const isConfigSectionSaving = useCallback(
+    (sectionKey) => configSavingSection === sectionKey,
+    [configSavingSection]
   )
   const [loginForm, setLoginForm] = useState({ username: '', password: '' })
   const [loginError, setLoginError] = useState('')
@@ -1180,7 +1191,7 @@ function App() {
       security: normalizeSecurityConfig(data.security || prev.security),
     }))(configForm)
     setConfigForm(nextConfigForm)
-    setSavedConfigSnapshot(buildBusinessConfigSnapshot(nextConfigForm))
+    setSavedBusinessConfigs(pickBusinessConfigs(nextConfigForm))
     setTestWecomWebhook((prev) => (prev ? prev : data.wecom?.webhook || ''))
     setConfigDirty(false)
   }
@@ -1856,26 +1867,29 @@ function App() {
   }
 
 
-  const onSaveConfig = async (e) => {
-    e.preventDefault()
-    setConfigSaving(true)
+  const onSaveConfigSection = async (sectionKey, sectionLabel) => {
+    setConfigSavingSection(sectionKey)
     try {
-      const businessConfigs = pickBusinessConfigs(configForm)
-      await api.post('/api/send-configs', {
-        ...businessConfigs,
-      })
-      const maskedBusinessConfigs = maskBusinessSecretFields(businessConfigs, currentBusinessConfigs)
-      showMessage('配置已保存')
+      const sectionConfigs = pickBusinessConfigSection(currentBusinessConfigs, sectionKey)
+      await api.post('/api/send-configs', sectionConfigs)
+      const maskedSectionConfigs = maskBusinessSecretFields(
+        sectionConfigs,
+        pickBusinessConfigSection(savedBusinessConfigs, sectionKey)
+      )
+      showMessage(`${sectionLabel}已保存`)
       setConfigForm((prev) => ({
         ...prev,
-        ...maskedBusinessConfigs,
+        ...maskedSectionConfigs,
       }))
-      setSavedConfigSnapshot(buildBusinessConfigSnapshot(maskedBusinessConfigs))
+      setSavedBusinessConfigs((prev) => ({
+        ...prev,
+        ...maskedSectionConfigs,
+      }))
       setConfigDirty(false)
     } catch (err) {
-      showError('配置保存失败')
+      showError(`${sectionLabel}保存失败`)
     } finally {
-      setConfigSaving(false)
+      setConfigSavingSection('')
     }
   }
 
@@ -1907,11 +1921,11 @@ function App() {
       return showError('请输入测试邮箱')
     }
     const blockMessage = readConfigTestBlockMessage({
-      configDirty: hasUnsavedBusinessConfigChanges,
-      configSaving,
+      configDirty: isConfigSectionDirty('email'),
+      configSaving: isConfigSectionSaving('email'),
     })
     if (blockMessage) {
-      const diffHint = describeBusinessConfigDiffs(dirtyBusinessConfigPaths)
+      const diffHint = describeBusinessConfigDiffs(dirtyBusinessConfigPathsBySection.email || [])
       const msg =
         blockMessage === '配置已修改但未保存，请先点击“保存配置”' && diffHint
           ? `${blockMessage}（未保存项：${diffHint}）`
@@ -1960,11 +1974,11 @@ function App() {
       return showError('请输入测试手机号')
     }
     const blockMessage = readConfigTestBlockMessage({
-      configDirty: hasUnsavedBusinessConfigChanges,
-      configSaving,
+      configDirty: isConfigSectionDirty('sms'),
+      configSaving: isConfigSectionSaving('sms'),
     })
     if (blockMessage) {
-      const diffHint = describeBusinessConfigDiffs(dirtyBusinessConfigPaths)
+      const diffHint = describeBusinessConfigDiffs(dirtyBusinessConfigPathsBySection.sms || [])
       const msg =
         blockMessage === '配置已修改但未保存，请先点击“保存配置”' && diffHint
           ? `${blockMessage}（未保存项：${diffHint}）`
@@ -2004,11 +2018,11 @@ function App() {
       return showError('请输入测试用户或Webhook')
     }
     const blockMessage = readConfigTestBlockMessage({
-      configDirty: hasUnsavedBusinessConfigChanges,
-      configSaving,
+      configDirty: isConfigSectionDirty('wecom'),
+      configSaving: isConfigSectionSaving('wecom'),
     })
     if (blockMessage) {
-      const diffHint = describeBusinessConfigDiffs(dirtyBusinessConfigPaths)
+      const diffHint = describeBusinessConfigDiffs(dirtyBusinessConfigPathsBySection.wecom || [])
       const msg =
         blockMessage === '配置已修改但未保存，请先点击“保存配置”' && diffHint
           ? `${blockMessage}（未保存项：${diffHint}）`
@@ -5719,7 +5733,7 @@ function App() {
               <h2>发送渠道配置</h2>
               <p>配置系统通知与发送渠道。</p>
             </div>
-            <form className="config-stack" onSubmit={onSaveConfig}>
+            <form className="config-stack" onSubmit={(e) => e.preventDefault()}>
               <div className="config-card card-split tone-email">
                 <div className="config-card-header">邮箱配置</div>
                 <div className="config-card-body">
@@ -5901,9 +5915,17 @@ function App() {
                     className="primary btn btn-primary"
                     type="button"
                     onClick={onTestEmail}
-                    disabled={configSaving}
+                    disabled={isConfigSectionSaving('email')}
                   >
-                    {configSaving ? '配置保存中...' : '测试邮箱'}
+                    {isConfigSectionSaving('email') ? '邮箱配置保存中...' : '测试邮箱'}
+                  </button>
+                  <button
+                    className="ghost btn btn-outline-secondary"
+                    type="button"
+                    onClick={() => onSaveConfigSection('email', '邮箱配置')}
+                    disabled={isConfigSectionSaving('email')}
+                  >
+                    {isConfigSectionSaving('email') ? '保存中...' : '保存邮箱配置'}
                   </button>
                   {testEmailStatus.text && (
                     <div className={`toast ${testEmailStatus.type} form-feedback full-row`}>
@@ -5999,9 +6021,17 @@ function App() {
                     className="primary btn btn-primary"
                     type="button"
                     onClick={onTestSms}
-                    disabled={configSaving}
+                    disabled={isConfigSectionSaving('sms')}
                   >
-                    {configSaving ? '配置保存中...' : '测试短信'}
+                    {isConfigSectionSaving('sms') ? '短信配置保存中...' : '测试短信'}
+                  </button>
+                  <button
+                    className="ghost btn btn-outline-secondary"
+                    type="button"
+                    onClick={() => onSaveConfigSection('sms', '短信配置')}
+                    disabled={isConfigSectionSaving('sms')}
+                  >
+                    {isConfigSectionSaving('sms') ? '保存中...' : '保存短信配置'}
                   </button>
                   {testSmsStatus.text && (
                     <div className={`toast ${testSmsStatus.type} form-feedback full-row`}>
@@ -6121,6 +6151,14 @@ function App() {
                       <option value="all">必须全部包含</option>
                     </select>
                   </label>
+                  <button
+                    className="ghost btn btn-outline-secondary"
+                    type="button"
+                    onClick={() => onSaveConfigSection('ocr', 'OCR配置')}
+                    disabled={isConfigSectionSaving('ocr')}
+                  >
+                    {isConfigSectionSaving('ocr') ? '保存中...' : '保存OCR配置'}
+                  </button>
                 </div>
               </div>
 
@@ -6224,9 +6262,17 @@ function App() {
                     className="primary btn btn-primary"
                     type="button"
                     onClick={onTestWecom}
-                    disabled={configSaving}
+                    disabled={isConfigSectionSaving('wecom')}
                   >
-                    {configSaving ? '配置保存中...' : '测试企业微信'}
+                    {isConfigSectionSaving('wecom') ? '企业微信配置保存中...' : '测试企业微信'}
+                  </button>
+                  <button
+                    className="ghost btn btn-outline-secondary"
+                    type="button"
+                    onClick={() => onSaveConfigSection('wecom', '企业微信配置')}
+                    disabled={isConfigSectionSaving('wecom')}
+                  >
+                    {isConfigSectionSaving('wecom') ? '保存中...' : '保存企业微信配置'}
                   </button>
                   {testWecomStatus.text && (
                     <div className={`toast ${testWecomStatus.type} form-feedback full-row`}>
@@ -6236,11 +6282,6 @@ function App() {
                 </div>
               </div>
 
-              <div className="config-actions">
-                <button type="submit" className="primary btn btn-primary" disabled={configSaving}>
-                  {configSaving ? '保存中...' : '保存配置'}
-                </button>
-              </div>
               <div className="config-card card-split tone-control">
                 <div className="config-card-header">发送控制</div>
                 <div className="config-card-body">
@@ -6289,6 +6330,14 @@ function App() {
                       className="form-control"
                     />
                   </label>
+                  <button
+                    className="ghost btn btn-outline-secondary"
+                    type="button"
+                    onClick={() => onSaveConfigSection('control', '发送控制')}
+                    disabled={isConfigSectionSaving('control')}
+                  >
+                    {isConfigSectionSaving('control') ? '保存中...' : '保存发送控制'}
+                  </button>
                 </div>
               </div>
               <div className="config-card card-split tone-template">
@@ -6338,6 +6387,14 @@ function App() {
                   <p className="muted full-row">
                     变量：{`{customer_name} {license_name} {end_date} {days_left} {contact_name}`}
                   </p>
+                  <button
+                    className="ghost btn btn-outline-secondary"
+                    type="button"
+                    onClick={() => onSaveConfigSection('template', '提醒模板')}
+                    disabled={isConfigSectionSaving('template')}
+                  >
+                    {isConfigSectionSaving('template') ? '保存中...' : '保存提醒模板'}
+                  </button>
                 </div>
               </div>
             </form>
