@@ -1425,7 +1425,7 @@ app.get('/api/auth/apps', async (req, res) => {
   });
 });
 
-const RELEASE_VERSION = '5.7.2';
+const RELEASE_VERSION = '5.7.3';
 const DEDICATED_CENTER_VERSION = `v${RELEASE_VERSION}`;
 const ADMIN_CENTER_ROLE_OPTIONS = Object.freeze([
   { value: 'user', label: '普通用户' },
