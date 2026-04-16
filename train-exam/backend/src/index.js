@@ -69,6 +69,7 @@ const {
   evaluateAnswer,
   normalizeMultipleChoiceAnswerValues,
 } = require('./exam-answer-utils');
+const { isBasicViewerApiAllowed } = require('./viewer-scope-utils');
 const {
   isOriginAllowedForRequest,
   normalizeOrigin,
@@ -702,48 +703,11 @@ const buildCourseWhereForReader = (req, { alias = '' } = {}) => {
   };
 };
 
-const BASIC_VIEWER_ALLOWED_APIS = [
-  { method: 'GET', pattern: /^\/api\/auth\/me$/ },
-  { method: 'GET', pattern: /^\/api\/train-exam\/auth\/me$/ },
-  { method: 'GET', pattern: /^\/api\/train-exam\/csrf$/ },
-  { method: 'GET', pattern: /^\/api\/train-exam\/settings$/ },
-  { method: 'GET', pattern: /^\/api\/train-exam\/courses$/ },
-  { method: 'GET', pattern: /^\/api\/train-exam\/courses\/\d+$/ },
-  { method: 'GET', pattern: /^\/api\/train-exam\/courses\/\d+\/learning-path$/ },
-  { method: 'GET', pattern: /^\/api\/train-exam\/my\/learning-progress$/ },
-  { method: 'GET', pattern: /^\/api\/train-exam\/resources\/\d+\/playability$/ },
-  { method: 'GET', pattern: /^\/api\/train-exam\/resources\/\d+\/transcode-status$/ },
-  { method: 'GET', pattern: /^\/api\/train-exam\/resources\/\d+\/stream$/ },
-  { method: 'GET', pattern: /^\/api\/train-exam\/resources\/\d+\/download$/ },
-  { method: 'GET', pattern: /^\/api\/train-exam\/resources\/\d+\/doc-preview-config$/ },
-  { method: 'GET', pattern: /^\/api\/train-exam\/resources\/\d+\/doc-preview-file$/ },
-  { method: 'POST', pattern: /^\/api\/train-exam\/resources\/\d+\/progress$/ },
-  { method: 'GET', pattern: /^\/api\/train-exam\/papers$/ },
-  { method: 'POST', pattern: /^\/api\/train-exam\/papers\/\d+\/exam\/start$/ },
-  { method: 'GET', pattern: /^\/api\/train-exam\/exam-sessions\/\d+$/ },
-  { method: 'POST', pattern: /^\/api\/train-exam\/exam-sessions\/\d+\/answers$/ },
-  { method: 'POST', pattern: /^\/api\/train-exam\/exam-sessions\/\d+\/focus-switch$/ },
-  { method: 'POST', pattern: /^\/api\/train-exam\/exam-sessions\/\d+\/submit$/ },
-  { method: 'GET', pattern: /^\/api\/train-exam\/exam-sessions\/\d+\/result$/ },
-  { method: 'GET', pattern: /^\/api\/train-exam\/my\/results$/ },
-  { method: 'GET', pattern: /^\/api\/train-exam\/my\/certificates$/ },
-  { method: 'GET', pattern: /^\/api\/train-exam\/my\/recertification$/ },
-  { method: 'POST', pattern: /^\/api\/train-exam\/recertification\/jobs\/\d+\/start$/ },
-  { method: 'POST', pattern: /^\/api\/train-exam\/retrain\/start$/ },
-  { method: 'GET', pattern: /^\/api\/train-exam\/my\/wrong-questions$/ },
-  { method: 'GET', pattern: /^\/api\/train-exam\/my\/retrain-recommendations$/ },
-  { method: 'GET', pattern: /^\/api\/train-exam\/results\/\d+$/ },
-  { method: 'GET', pattern: /^\/api\/train-exam\/results\/\d+\/review-detail$/ },
-  { method: 'POST', pattern: /^\/api\/train-exam\/results\/\d+\/certificate\/generate$/ },
-  { method: 'GET', pattern: /^\/api\/train-exam\/results\/\d+\/certificate\/download$/ },
-];
-
 const allowBasicViewerApi = (req) => {
   const method = trimText(req.method || 'GET').toUpperCase();
   if (method === 'OPTIONS') return true;
   const fullPath = trimText(String(req.originalUrl || '').split('?')[0]);
-  if (!fullPath) return false;
-  return BASIC_VIEWER_ALLOWED_APIS.some((item) => item.method === method && item.pattern.test(fullPath));
+  return isBasicViewerApiAllowed({ method, path: fullPath });
 };
 
 const requireReader = (req, _res, next) => {
@@ -996,7 +960,7 @@ const authRequired = asyncHandler(async (req, _res, next) => {
 const requireBasicViewerScope = (req, _res, next) => {
   if (!isBasicTrainExamUser(req)) return next();
   if (allowBasicViewerApi(req)) return next();
-  return next(appError('普通用户仅可访问培训学习、考试中心与错题复训功能', 403));
+  return next(appError('普通用户仅可访问课程列表、试卷列表和考试结果功能', 403));
 };
 
 const sanitizeFileName = (name) => String(name || '').replace(/[^a-zA-Z0-9._-]+/g, '_').slice(0, 180) || 'file';

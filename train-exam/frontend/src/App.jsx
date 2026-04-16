@@ -1567,14 +1567,18 @@ function App() {
         && !me?.permissions?.train_exam_question_review
         && !me?.permissions?.train_exam_paper_publish
         && !me?.permissions?.train_exam_audit_read
-      setActiveMenu(meIsBasicUser ? 'exam' : 'dashboard')
+      setActiveMenu(meIsBasicUser ? 'courses' : 'dashboard')
 
       if (meIsBasicUser) {
+        const items = await fetchCourses(true)
         await Promise.all([
+          fetchDocPreviewSettings(true),
+          fetchMyLearningProgress(true),
           fetchPapers(true),
           fetchMyResults(true),
-          fetchRetrainCenter(true),
         ])
+        const firstId = Number(items?.[0]?.id || 0)
+        if (firstId) await fetchLearningPath(firstId, true)
         return
       }
 
@@ -5037,36 +5041,36 @@ function App() {
                   if (firstId) await fetchLearningPath(Number(learningCourseId || firstId), true)
                 }}
               >
-                培训管理
+                课程列表
               </button>
               <button
-                className={activeMenu === 'exam' ? 'active' : ''}
+                className={activeMenu === 'papers' ? 'active' : ''}
                 onClick={async () => {
-                  setActiveMenu('exam')
+                  setActiveMenu('papers')
                   try {
-                    await Promise.all([fetchPapers(true), fetchMyResults(true)])
+                    await fetchPapers(true)
                   } catch (err) {
-                    setError(err.message || '加载考试中心失败')
+                    setError(err.message || '加载试卷列表失败')
                   }
                 }}
               >
-                考试中心
+                试卷列表
               </button>
               <button
                 className={activeMenu === 'results' ? 'active' : ''}
                 onClick={async () => {
                   setActiveMenu('results')
+                  setResultCenterTab('results')
                   setResultCenterView({ type: 'list', from: 'list', resultId: 0, userId: 0 })
                   try {
-                    await Promise.all([fetchPapers(true), fetchMyResults(true), fetchCertificateCenter(true)])
+                    await fetchMyResults(true)
                   } catch (err) {
-                    setError(err.message || '加载成绩与证书失败')
+                    setError(err.message || '加载考试结果失败')
                   }
                 }}
               >
-                成绩与证书
+                考试结果
               </button>
-              <button className={activeMenu === 'retrain' ? 'active' : ''} onClick={() => { setActiveMenu('retrain'); fetchRetrainCenter(true) }}>错题复训</button>
             </>
           ) : (
             <>
@@ -6150,6 +6154,44 @@ function App() {
               </div>
             </section>
           </>
+        )}
+
+        {activeMenu === 'papers' && isBasicUser && (
+          <section className="panel">
+            <div className="panel-header">
+              <h2>试卷列表</h2>
+              <div className="row-actions">
+                <span className="badge">已发布 {publishedPapers.length} 套</span>
+                <button className="ghost" type="button" onClick={() => fetchPapers(true)}>刷新试卷</button>
+              </div>
+            </div>
+            <div className="panel-body table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>ID</th>
+                    <th>名称</th>
+                    <th>方式</th>
+                    <th>及格线</th>
+                    <th>时长(分钟)</th>
+                    <th>操作</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {publishedPapers.length ? publishedPapers.map((item) => (
+                    <tr key={`published-paper-list-${item.id}`}>
+                      <td>{item.id}</td>
+                      <td>{item.name || '-'}</td>
+                      <td>{paperModeLabel(item.paper_mode)}</td>
+                      <td>{Number(item.pass_score || 0)}</td>
+                      <td>{Number(item.duration_minutes || 0)}</td>
+                      <td><button className="primary" onClick={() => onStartExam(item.id)}>开始考试</button></td>
+                    </tr>
+                  )) : <tr><td colSpan={6}>暂无可考试卷</td></tr>}
+                </tbody>
+              </table>
+            </div>
+          </section>
         )}
 
         {activeMenu === 'exam' && (
@@ -7319,7 +7361,7 @@ function App() {
             ) : (
               <>
                 <section className="panel">
-                  <div className="panel-header"><h2>成绩与证书</h2></div>
+                  <div className="panel-header"><h2>考试结果列表</h2></div>
                   <div className="panel-body">
                     <div className="metric-grid">
                       <div className="metric">
@@ -7342,76 +7384,8 @@ function App() {
                   </div>
                 </section>
 
-                <section className="grid-2">
-                  <div className="panel">
-                    <div className="panel-header"><h2>证书有效期</h2></div>
-                    <div className="panel-body table-wrap">
-                      <table>
-                        <thead>
-                          <tr>
-                            <th>证书号</th>
-                            <th>试卷</th>
-                            <th>状态</th>
-                            <th>有效期至</th>
-                            <th>剩余天数</th>
-                            <th>提醒</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {myCertificates.length ? myCertificates.map((c) => (
-                            <tr key={`viewer-cert-${c.id}`}>
-                              <td>{c.certificate_no}</td>
-                              <td>{c.paper_name || c.paper_id}</td>
-                              <td><span className={`status-chip ${c.status === 'active' ? 'good' : 'warn'}`}>{certStatusLabel(c.status)}</span></td>
-                              <td>{formatDateTime(c.valid_until)}</td>
-                              <td>{c.days_left}</td>
-                              <td>{c.should_remind ? '需复考提醒' : '-'}</td>
-                            </tr>
-                          )) : <tr><td colSpan={6}>暂无证书</td></tr>}
-                        </tbody>
-                      </table>
-                    </div>
-                  </div>
-
-                  <div className="panel">
-                    <div className="panel-header"><h2>续证任务</h2></div>
-                    <div className="panel-body table-wrap">
-                      <table>
-                        <thead>
-                          <tr>
-                            <th>ID</th>
-                            <th>试卷</th>
-                            <th>到期/计划时间</th>
-                            <th>状态</th>
-                            <th>触发方式</th>
-                            <th>操作</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {myRecertJobs.length ? myRecertJobs.map((job) => (
-                            <tr key={`viewer-recert-${job.id}`}>
-                              <td>{job.id}</td>
-                              <td>{job.paper_name || job.paper_id}</td>
-                              <td>{formatDateTime(job.due_at)}</td>
-                              <td><span className={`status-chip ${job.status === 'completed' ? 'good' : 'warn'}`}>{recertStatusLabel(job.status)}</span></td>
-                              <td>{String(job.trigger_type || '').toLowerCase() === 'auto' ? '自动' : '手动'}</td>
-                              <td>
-                                <div className="row-actions">
-                                  {['scheduled', 'in_progress'].includes(String(job.status || '').toLowerCase()) ? (
-                                    <button className="primary" type="button" onClick={() => onStartRecertJob(job.id, job.paper_id)}>开始复训</button>
-                                  ) : null}
-                                </div>
-                              </td>
-                            </tr>
-                          )) : <tr><td colSpan={6}>暂无续证任务</td></tr>}
-                        </tbody>
-                      </table>
-                    </div>
-                  </div>
-                </section>
-
                 <section className="panel">
-                  <div className="panel-header"><h2>考试结果</h2></div>
+                  <div className="panel-header"><h2>考试结果列表</h2></div>
                   <div className="panel-body table-wrap">
                     <table>
                       <thead>
@@ -7439,8 +7413,6 @@ function App() {
                             <td>
                               <div className="row-actions">
                                 <button className="ghost" type="button" onClick={() => onOpenResultReviewDetail(r.id, { from: 'personal' })}>查看卷面</button>
-                                {Number(r.passed || 0) === 1 ? <button className="primary" type="button" onClick={() => onGenerateCertificate(r.id)}>生成证书</button> : null}
-                                <button className="ghost" type="button" onClick={() => onDownloadCertificate(r.id)}>下载证书</button>
                               </div>
                             </td>
                           </tr>
