@@ -6,6 +6,7 @@ const {
   buildDownloadHeaderMeta,
   buildAdminCenterUsersExportWorkbook,
   normalizeUserImportRow,
+  IMPORT_INITIAL_PASSWORD,
   generateImportPassword,
   buildUserImportWorkbook,
   buildUserImportTemplateWorkbook,
@@ -69,20 +70,16 @@ test('normalizeUserImportRow accepts Chinese role labels and system labels', () 
   });
 });
 
-test('generateImportPassword satisfies the active password policy', () => {
+test('generateImportPassword always returns the fixed imported-user password', () => {
   const password = generateImportPassword({
-    minLength: 12,
-    requireUppercase: true,
-    requireLowercase: true,
-    requireNumber: true,
-    requireSpecial: true,
+    minLength: 99,
+    requireUppercase: false,
+    requireLowercase: false,
+    requireNumber: false,
+    requireSpecial: false,
   });
 
-  assert.ok(password.length >= 12);
-  assert.match(password, /[A-Z]/);
-  assert.match(password, /[a-z]/);
-  assert.match(password, /\d/);
-  assert.match(password, /[^A-Za-z0-9]/);
+  assert.equal(password, IMPORT_INITIAL_PASSWORD);
 });
 
 test('buildUserImportWorkbook writes success passwords and keeps skipped rows empty', () => {
@@ -94,8 +91,8 @@ test('buildUserImportWorkbook writes success passwords and keeps skipped rows em
       app_access_text: 'faq|tender',
       result: 'SUCCESS',
       reason: '',
-      initial_password: 'Temp#2026Aa',
-      notify_email_status: 'SENT',
+      initial_password: IMPORT_INITIAL_PASSWORD,
+      notify_email_status: '',
       notify_email_reason: '',
     },
     {
@@ -106,8 +103,8 @@ test('buildUserImportWorkbook writes success passwords and keeps skipped rows em
       result: 'SKIPPED',
       reason: '用户名已存在',
       initial_password: '',
-      notify_email_status: 'SKIPPED',
-      notify_email_reason: '用户名已存在',
+      notify_email_status: '',
+      notify_email_reason: '',
     },
   ]);
 
@@ -118,13 +115,13 @@ test('buildUserImportWorkbook writes success passwords and keeps skipped rows em
 
   assert.equal(rows.length, 2);
   assert.equal(rows[0].username, 'editor01');
-  assert.equal(rows[0].initial_password, 'Temp#2026Aa');
-  assert.equal(rows[0].notify_email_status, 'SENT');
+  assert.equal(rows[0].initial_password, IMPORT_INITIAL_PASSWORD);
+  assert.equal(rows[0].notify_email_status, '');
   assert.equal(rows[1].username, 'dup-user');
   assert.equal(rows[1].initial_password, '');
-  assert.equal(rows[1].notify_email_status, 'SKIPPED');
+  assert.equal(rows[1].notify_email_status, '');
   assert.equal(rows[1].reason, '用户名已存在');
-  assert.equal(rows[1].notify_email_reason, '用户名已存在');
+  assert.equal(rows[1].notify_email_reason, '');
 });
 
 test('buildAdminCenterUsersExportWorkbook writes localized user export rows', () => {
@@ -207,7 +204,7 @@ test('buildUserImportTemplateWorkbook writes the expected template header and sa
   ]);
 });
 
-test('importUsersFromRows skips duplicates and returns generated passwords for created users', async () => {
+test('importUsersFromRows skips duplicates and returns the fixed password for created users', async () => {
   const inserted = [];
   const result = await importUsersFromRows({
     rows: [
@@ -236,13 +233,13 @@ test('importUsersFromRows skips duplicates and returns generated passwords for c
   assert.equal(result.errors[0].reason, '用户名已存在');
   assert.equal(inserted.length, 1);
   assert.equal(inserted[0].username, 'new-user');
-  assert.match(inserted[0].password, /[A-Z]/);
+  assert.equal(inserted[0].password, IMPORT_INITIAL_PASSWORD);
   assert.equal(result.resultRows[0].result, 'SKIPPED');
   assert.equal(result.resultRows[1].result, 'SUCCESS');
-  assert.ok(result.resultRows[1].initial_password);
+  assert.equal(result.resultRows[1].initial_password, IMPORT_INITIAL_PASSWORD);
 });
 
-test('importUsersFromRows records per-user email delivery outcome without failing created users', async () => {
+test('importUsersFromRows no longer records email delivery outcome for imported users', async () => {
   const result = await importUsersFromRows({
     rows: [
       { username: 'email-ok', role: 'viewer', is_active: '1', app_access: 'faq', email: 'ok@example.com' },
@@ -259,26 +256,18 @@ test('importUsersFromRows records per-user email delivery outcome without failin
     validateRow: () => '',
     findUserByUsername: async () => null,
     insertUser: async (payload) => ({ id: payload.username, ...payload }),
-    notifyUser: async ({ row }) => {
-      if (!row.email) {
-        return { status: 'SKIPPED', reason: '未填写邮箱' };
-      }
-      if (row.username === 'email-fail') {
-        throw new Error('邮箱配置不完整');
-      }
-      return { status: 'SENT', reason: '' };
-    },
   });
 
   assert.equal(result.created, 3);
   assert.equal(result.skipped, 0);
-  assert.equal(result.resultRows[0].notify_email_status, 'SENT');
+  assert.equal(result.resultRows[0].notify_email_status, '');
   assert.equal(result.resultRows[0].notify_email_reason, '');
-  assert.equal(result.resultRows[1].notify_email_status, 'SKIPPED');
-  assert.equal(result.resultRows[1].notify_email_reason, '未填写邮箱');
-  assert.equal(result.resultRows[2].notify_email_status, 'FAILED');
-  assert.equal(result.resultRows[2].notify_email_reason, '邮箱配置不完整');
+  assert.equal(result.resultRows[1].notify_email_status, '');
+  assert.equal(result.resultRows[1].notify_email_reason, '');
+  assert.equal(result.resultRows[2].notify_email_status, '');
+  assert.equal(result.resultRows[2].notify_email_reason, '');
   assert.equal(result.resultRows[2].result, 'SUCCESS');
+  assert.equal(result.resultRows[2].initial_password, IMPORT_INITIAL_PASSWORD);
 });
 
 test('isUserImportExcelFile only accepts xls and xlsx names', () => {

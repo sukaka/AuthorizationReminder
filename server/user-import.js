@@ -1,4 +1,3 @@
-const crypto = require('crypto');
 const xlsx = require('xlsx');
 
 const pickFirst = (row, keys) => {
@@ -103,51 +102,9 @@ const normalizeUserImportRow = (raw = {}) => ({
   app_access: splitImportAccess(pickFirst(raw, ['app_access', '可访问系统', '系统权限'])),
 });
 
-const randomChar = (source) => source[crypto.randomInt(0, source.length)];
+const IMPORT_INITIAL_PASSWORD = '!b$#+^o9uF';
 
-const shuffle = (text) => {
-  const chars = String(text || '').split('');
-  for (let idx = chars.length - 1; idx > 0; idx -= 1) {
-    const next = crypto.randomInt(0, idx + 1);
-    [chars[idx], chars[next]] = [chars[next], chars[idx]];
-  }
-  return chars.join('');
-};
-
-const generateImportPassword = (policy = {}) => {
-  const normalized = {
-    minLength: Math.max(6, Number(policy?.minLength || 10)),
-    requireUppercase: policy?.requireUppercase !== false,
-    requireLowercase: policy?.requireLowercase !== false,
-    requireNumber: policy?.requireNumber !== false,
-    requireSpecial: policy?.requireSpecial !== false,
-  };
-  const pools = [];
-  const required = [];
-  if (normalized.requireUppercase) {
-    pools.push('ABCDEFGHIJKLMNOPQRSTUVWXYZ');
-    required.push(randomChar('ABCDEFGHIJKLMNOPQRSTUVWXYZ'));
-  }
-  if (normalized.requireLowercase) {
-    pools.push('abcdefghijklmnopqrstuvwxyz');
-    required.push(randomChar('abcdefghijklmnopqrstuvwxyz'));
-  }
-  if (normalized.requireNumber) {
-    pools.push('0123456789');
-    required.push(randomChar('0123456789'));
-  }
-  if (normalized.requireSpecial) {
-    pools.push('!@#$%^&*_-+=');
-    required.push(randomChar('!@#$%^&*_-+='));
-  }
-  if (!pools.length) pools.push('ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789');
-
-  const allChars = pools.join('');
-  while (required.length < normalized.minLength) {
-    required.push(randomChar(allChars));
-  }
-  return shuffle(required.join(''));
-};
+const generateImportPassword = () => IMPORT_INITIAL_PASSWORD;
 
 const buildUserImportWorkbook = (rows = []) => {
   const safeRows = Array.isArray(rows) ? rows : [];
@@ -253,11 +210,9 @@ const toResultRow = ({
 
 const importUsersFromRows = async ({
   rows,
-  passwordPolicy,
   validateRow = () => '',
   findUserByUsername,
   insertUser,
-  notifyUser,
   normalizeRow = normalizeUserImportRow,
   resolveInsertError = (err) => trimText(err?.message) || '用户创建失败',
 }) => {
@@ -280,8 +235,8 @@ const importUsersFromRows = async ({
         result: 'SKIPPED',
         reason: validationError,
         initialPassword: '',
-        notifyEmailStatus: 'SKIPPED',
-        notifyEmailReason: validationError,
+        notifyEmailStatus: '',
+        notifyEmailReason: '',
       }));
       continue;
     }
@@ -296,13 +251,13 @@ const importUsersFromRows = async ({
         result: 'SKIPPED',
         reason: '用户名已存在',
         initialPassword: '',
-        notifyEmailStatus: 'SKIPPED',
-        notifyEmailReason: '用户名已存在',
+        notifyEmailStatus: '',
+        notifyEmailReason: '',
       }));
       continue;
     }
 
-    const initialPassword = generateImportPassword(passwordPolicy);
+    const initialPassword = generateImportPassword();
     try {
       await insertUser({ ...normalizedRow, password: initialPassword }, { rowNumber, raw });
     } catch (err) {
@@ -315,37 +270,20 @@ const importUsersFromRows = async ({
         result: 'SKIPPED',
         reason,
         initialPassword: '',
-        notifyEmailStatus: 'SKIPPED',
-        notifyEmailReason: reason,
+        notifyEmailStatus: '',
+        notifyEmailReason: '',
       }));
       continue;
     }
     created += 1;
-    let notifyEmailStatus = '';
-    let notifyEmailReason = '';
-    if (typeof notifyUser === 'function') {
-      try {
-        const notifyResult = await notifyUser({
-          row: normalizedRow,
-          rowNumber,
-          raw,
-          initialPassword,
-        });
-        notifyEmailStatus = trimText(notifyResult?.status).toUpperCase() || 'SENT';
-        notifyEmailReason = trimText(notifyResult?.reason);
-      } catch (err) {
-        notifyEmailStatus = 'FAILED';
-        notifyEmailReason = trimText(err?.message) || '邮件发送失败';
-      }
-    }
     resultRows.push(toResultRow({
       rowNumber,
       row: normalizedRow,
       result: 'SUCCESS',
       reason: '',
       initialPassword,
-      notifyEmailStatus,
-      notifyEmailReason,
+      notifyEmailStatus: '',
+      notifyEmailReason: '',
     }));
   }
 
@@ -361,6 +299,7 @@ const importUsersFromRows = async ({
 module.exports = {
   buildDownloadHeaderMeta,
   buildAdminCenterUsersExportWorkbook,
+  IMPORT_INITIAL_PASSWORD,
   normalizeUserImportRow,
   generateImportPassword,
   buildUserImportWorkbook,

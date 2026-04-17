@@ -57,10 +57,6 @@ const {
   parseAdminCenterUserImportFile,
 } = require('./admin-center-user-import');
 const {
-  buildImportedUserPasswordEmail,
-  buildImportedUsersAdminSummaryEmail,
-} = require('./admin-center-user-import-email');
-const {
   createAuditCenterLogsService,
   serializeLogsAsCsv,
 } = require('./audit-center-logs');
@@ -2817,22 +2813,11 @@ const renderDedicatedCenterPage = ({ nonce, config }) => {
     }
 
     function readImportSummary(headers) {
-      const adminNotifyReasonRaw = String(headers.get('X-Import-Admin-Notify-Reason') || '').trim();
-      let adminNotifyReason = '';
-      if (adminNotifyReasonRaw) {
-        try {
-          adminNotifyReason = decodeURIComponent(adminNotifyReasonRaw);
-        } catch (_err) {
-          adminNotifyReason = adminNotifyReasonRaw;
-        }
-      }
       return {
         total: Number(headers.get('X-Import-Total') || 0),
         created: Number(headers.get('X-Import-Created') || 0),
         skipped: Number(headers.get('X-Import-Skipped') || 0),
         errorCount: Number(headers.get('X-Import-Error-Count') || 0),
-        adminNotifyStatus: String(headers.get('X-Import-Admin-Notify-Status') || '').trim(),
-        adminNotifyReason,
         filename: readImportFilename(headers, 'user-import-result.xlsx'),
       };
     }
@@ -3003,14 +2988,6 @@ const renderDedicatedCenterPage = ({ nonce, config }) => {
             '最近导入：' + adminUserImportResult.created + ' 成功 / '
             + adminUserImportResult.skipped + ' 跳过 / '
             + adminUserImportResult.total + ' 总数'
-            + (
-              adminUserImportResult.adminNotifyStatus
-                ? ('；管理员汇总邮件：'
-                  + adminUserImportResult.adminNotifyStatus
-                  + (adminUserImportResult.adminNotifyReason ? '（' + adminUserImportResult.adminNotifyReason + '）' : '')
-                )
-                : ''
-            )
           )
           : '';
       }
@@ -3779,10 +3756,7 @@ const renderDedicatedCenterPage = ({ nonce, config }) => {
         adminUserImportResult = summary;
         syncAdminImportState();
         triggerFileDownload(blob, summary.filename);
-        const adminNotifyText = summary.adminNotifyStatus
-          ? ('；管理员汇总邮件：' + summary.adminNotifyStatus + (summary.adminNotifyReason ? '（' + summary.adminNotifyReason + '）' : ''))
-          : '';
-        setHint('adminUsersNotice', '用户导入完成：' + summary.created + ' 成功 / ' + summary.skipped + ' 跳过' + adminNotifyText);
+        setHint('adminUsersNotice', '用户导入完成：' + summary.created + ' 成功 / ' + summary.skipped + ' 跳过');
         await loadAdminUsers();
       } catch (error) {
         setHint('adminUsersNotice', error.message || '用户导入失败', true);
@@ -5488,13 +5462,8 @@ app.post('/api/admin-center/users/import', adminCenterImportUpload.single('file'
   }
 
   try {
-    const [security, configs] = await Promise.all([
-      getSecurityConfig(),
-      getConfigs(),
-    ]);
     const result = await importUsersFromRows({
       rows: records,
-      passwordPolicy: security?.passwordPolicy || DEFAULT_PASSWORD_POLICY,
       validateRow: validateImportedAdminCenterUserRow,
       findUserByUsername: async (username) => {
         const value = String(username || '').trim();
@@ -5515,62 +5484,8 @@ app.post('/api/admin-center/users/import', adminCenterImportUpload.single('file'
           must_change_password: 1,
         },
       }),
-      notifyUser: async ({ row, initialPassword }) => {
-        if (!String(row.email || '').trim()) {
-          return { status: 'SKIPPED', reason: '未填写邮箱' };
-        }
-        const emailContent = buildImportedUserPasswordEmail({
-          username: row.username,
-          initialPassword,
-          loginUrl: AUTH_LOGIN_URL,
-        });
-        await sendEmail({
-          contact: { email: row.email, name: row.username },
-          subject: emailContent.subject,
-          message: emailContent.message,
-          configs,
-        });
-        return { status: 'SENT', reason: '' };
-      },
       resolveInsertError: (err) => String(err?.message || '').trim() || '用户创建失败',
     });
-    const importedUsers = result.resultRows
-      .filter((item) => item.result === 'SUCCESS')
-      .map((item) => ({
-        username: item.username,
-        email: records.find((row) => String(row?.username || '').trim() === String(item.username || '').trim())?.email || '',
-        initialPassword: item.initial_password,
-      }));
-    let adminNotifyStatus = 'SKIPPED';
-    let adminNotifyReason = '';
-    if (!importedUsers.length) {
-      adminNotifyReason = '本次没有成功导入用户';
-    } else {
-      const adminUser = await db.get('SELECT id, username, email FROM users WHERE username = ? LIMIT 1', ['admin']);
-      if (!String(adminUser?.email || '').trim()) {
-        adminNotifyReason = 'admin 未配置邮箱';
-      } else {
-        try {
-          const summaryEmail = buildImportedUsersAdminSummaryEmail({
-            loginUrl: AUTH_LOGIN_URL,
-            rows: importedUsers,
-          });
-          await sendEmail({
-            contact: { email: adminUser.email, name: adminUser.username || 'admin' },
-            subject: summaryEmail.subject,
-            message: summaryEmail.message,
-            configs,
-          });
-          adminNotifyStatus = 'SENT';
-        } catch (err) {
-          adminNotifyStatus = 'FAILED';
-          adminNotifyReason = String(err?.message || '').trim() || '管理员汇总邮件发送失败';
-        }
-      }
-    }
-    const emailSentCount = result.resultRows.filter((item) => item.notify_email_status === 'SENT').length;
-    const emailFailedCount = result.resultRows.filter((item) => item.notify_email_status === 'FAILED').length;
-    const emailSkippedCount = result.resultRows.filter((item) => item.notify_email_status === 'SKIPPED').length;
 
     await logOperation({
       user: req.user,
@@ -5581,11 +5496,7 @@ app.post('/api/admin-center/users/import', adminCenterImportUpload.single('file'
         created: result.created,
         skipped: result.skipped,
         error_count: result.errors.length,
-        email_sent_count: emailSentCount,
-        email_failed_count: emailFailedCount,
-        email_skipped_count: emailSkippedCount,
-        admin_notify_status: adminNotifyStatus,
-        admin_notify_reason: adminNotifyReason || undefined,
+        initial_password_delivery: 'fixed-local-only',
       },
     });
 
@@ -5597,8 +5508,6 @@ app.post('/api/admin-center/users/import', adminCenterImportUpload.single('file'
     res.setHeader('X-Import-Created', String(result.created));
     res.setHeader('X-Import-Skipped', String(result.skipped));
     res.setHeader('X-Import-Error-Count', String(result.errors.length));
-    res.setHeader('X-Import-Admin-Notify-Status', adminNotifyStatus);
-    res.setHeader('X-Import-Admin-Notify-Reason', encodeURIComponent(adminNotifyReason || ''));
     res.setHeader('X-Import-Filename', fileName);
     return res.send(workbookBuffer);
   } catch (err) {
