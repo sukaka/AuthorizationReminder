@@ -66,6 +66,46 @@ const addOneDay = (dateText) => {
   return date.toISOString().slice(0, 10);
 };
 
+const STORED_UTC_TEXT_RE = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})$/;
+const SHANGHAI_DATETIME_FORMATTER = new Intl.DateTimeFormat('sv-SE', {
+  timeZone: 'Asia/Shanghai',
+  hour12: false,
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+  hour: '2-digit',
+  minute: '2-digit',
+  second: '2-digit',
+});
+
+const parseStoredUtcDate = (value) => {
+  const text = trimText(value);
+  if (!text) return null;
+  const matched = text.match(STORED_UTC_TEXT_RE);
+  if (matched) {
+    const [, year, month, day, hour, minute, second] = matched;
+    return new Date(Date.UTC(
+      Number(year),
+      Number(month) - 1,
+      Number(day),
+      Number(hour),
+      Number(minute),
+      Number(second),
+    ));
+  }
+  const normalized = text.includes(' ') ? text.replace(' ', 'T') : text;
+  const date = new Date(normalized);
+  return Number.isNaN(date.getTime()) ? null : date;
+};
+
+const formatShanghaiDateTime = (value) => {
+  const text = trimText(value);
+  if (!text) return '';
+  const date = parseStoredUtcDate(text);
+  if (!date) return text;
+  return SHANGHAI_DATETIME_FORMATTER.format(date).replace(' ', ' ');
+};
+
 const buildDateStart = (value) => {
   const text = trimText(value);
   return isDateText(text) ? `${text} 00:00:00` : '';
@@ -308,7 +348,7 @@ const buildResultsExportCsv = (rows = []) => {
       trimText(item?.username),
       trimText(item?.user_department),
       trimText(item?.paper_name) || `试卷#${row.paper_id || 0}`,
-      trimText(item?.created_at),
+      formatShanghaiDateTime(item?.created_at),
       row.score.toFixed(2),
       row.total_score.toFixed(2),
       row.duration_seconds,
@@ -323,6 +363,7 @@ const buildResultsExportCsv = (rows = []) => {
 
 module.exports = {
   buildResultsExportCsv,
+  formatShanghaiDateTime,
   normalizeAdminResultsFilters,
   buildAdminResultsWhere,
   normalizeAdminResultListRow,

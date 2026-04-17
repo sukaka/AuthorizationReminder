@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { formatDateTime } from './datetime'
 
 const API_BASE = import.meta.env.VITE_API_BASE || ''
 const UPLOAD_MAX_MB = Math.max(1, Number(import.meta.env.VITE_UPLOAD_MAX_MB || 50))
@@ -695,13 +696,6 @@ const auditEntityLabel = (value) => {
     user_profile: '用户画像',
   }
   return map[key] || value || '-'
-}
-
-const formatDateTime = (value) => {
-  if (!value) return '-'
-  const date = new Date(String(value).replace(' ', 'T'))
-  if (Number.isNaN(date.getTime())) return String(value)
-  return date.toLocaleString('zh-CN', { hour12: false })
 }
 
 const formatDurationText = (seconds) => {
