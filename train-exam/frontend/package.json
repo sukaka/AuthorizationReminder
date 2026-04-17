@@ -1,6 +1,6 @@
 {
   "name": "juxin-train-exam-web",
-  "version": "5.10.6",
+  "version": "5.10.8",
   "private": true,
   "type": "module",
   "scripts": {

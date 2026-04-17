@@ -31,3 +31,9 @@ test('basic viewer result area no longer renders certificate or recertification 
   assert.doesNotMatch(appSource, /viewer-cert-/);
   assert.doesNotMatch(appSource, /viewer-recert-/);
 });
+
+test('results center exposes export actions for admin and basic user result lists', () => {
+  assert.match(appSource, /导出结果/);
+  assert.match(appSource, /\/api\/train-exam\/admin\/results\/export\.csv/);
+  assert.match(appSource, /\/api\/train-exam\/my\/results\/export\.csv/);
+});

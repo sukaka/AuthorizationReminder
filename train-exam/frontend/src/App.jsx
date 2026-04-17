@@ -47,6 +47,49 @@ const parseApiResponse = async (res) => {
   return parsed.data
 }
 
+const readDownloadFilename = (res, fallback) => {
+  const contentDisposition = String(res?.headers?.get?.('Content-Disposition') || '').trim()
+  const encodedMatch = contentDisposition.match(/filename\*\s*=\s*UTF-8''([^;]+)/i)
+  if (encodedMatch?.[1]) {
+    try {
+      return decodeURIComponent(encodedMatch[1].trim())
+    } catch {
+      return encodedMatch[1].trim()
+    }
+  }
+  const quotedMatch = contentDisposition.match(/filename\s*=\s*"([^"]+)"/i)
+  if (quotedMatch?.[1]) return quotedMatch[1].trim()
+  const plainMatch = contentDisposition.match(/filename\s*=\s*([^;]+)/i)
+  if (plainMatch?.[1]) return plainMatch[1].trim()
+  return fallback
+}
+
+const triggerBrowserDownload = (blob, filename) => {
+  const url = window.URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = filename
+  document.body.appendChild(link)
+  link.click()
+  link.remove()
+  window.setTimeout(() => window.URL.revokeObjectURL(url), 0)
+}
+
+const downloadTrainExamFile = async ({ path, fallbackFilename }) => {
+  const res = await fetch(`${API_BASE}${path}`, {
+    method: 'GET',
+    credentials: 'include',
+  })
+  if (!res.ok) {
+    const parsed = parseMaybeJson(await res.text())
+    const err = new Error(buildHttpError({ res, parsed }))
+    err.status = res.status
+    throw err
+  }
+  const blob = await res.blob()
+  triggerBrowserDownload(blob, readDownloadFilename(res, fallbackFilename))
+}
+
 const fetchTrainExamCsrfToken = async ({ force = false } = {}) => {
   if (!force && trainExamCsrfToken) return trainExamCsrfToken
   if (!trainExamCsrfPromise || force) {
@@ -1152,6 +1195,7 @@ function App() {
   const [lastSavedAt, setLastSavedAt] = useState('')
 
   const [myResults, setMyResults] = useState([])
+  const [myResultsExporting, setMyResultsExporting] = useState(false)
   const [myCertificates, setMyCertificates] = useState([])
   const [myRecertJobs, setMyRecertJobs] = useState([])
   const [resultCenterTab, setResultCenterTab] = useState('results')
@@ -1176,6 +1220,7 @@ function App() {
   const [adminResultUsers, setAdminResultUsers] = useState([])
   const [adminResultPapers, setAdminResultPapers] = useState([])
   const [adminResultsLoading, setAdminResultsLoading] = useState(false)
+  const [adminResultsExporting, setAdminResultsExporting] = useState(false)
   const [resultReviewDetail, setResultReviewDetail] = useState(null)
   const [resultReviewCache, setResultReviewCache] = useState({})
   const [resultReviewLoading, setResultReviewLoading] = useState(false)
@@ -1817,6 +1862,27 @@ function App() {
     }
   }
 
+  const onExportAdminResults = async () => {
+    if (adminResultsExporting) return
+    setAdminResultsExporting(true)
+    try {
+      const queryString = buildAdminResultsQueryString({
+        page: 1,
+        limit: adminResultsPagination.limit || 20,
+        filters: adminResultsFilters,
+      })
+      await downloadTrainExamFile({
+        path: `/api/train-exam/admin/results/export.csv?${queryString}`,
+        fallbackFilename: 'train-exam-results.csv',
+      })
+      setMessage('考试结果已开始导出')
+    } catch (err) {
+      setError(err.message || '导出考试结果失败')
+    } finally {
+      setAdminResultsExporting(false)
+    }
+  }
+
   const fetchResultReviewDetail = async (resultId, { silent = false, force = false } = {}) => {
     const rid = Number(resultId || 0)
     if (!rid) return null
@@ -1915,6 +1981,22 @@ function App() {
       } catch (err) {
         setError(err.message || '加载考试结果失败')
       }
+    }
+  }
+
+  const onExportMyResults = async () => {
+    if (myResultsExporting) return
+    setMyResultsExporting(true)
+    try {
+      await downloadTrainExamFile({
+        path: '/api/train-exam/my/results/export.csv',
+        fallbackFilename: 'train-exam-my-results.csv',
+      })
+      setMessage('考试结果已开始导出')
+    } catch (err) {
+      setError(err.message || '导出考试结果失败')
+    } finally {
+      setMyResultsExporting(false)
     }
   }
 
@@ -6722,6 +6804,9 @@ function App() {
                   {resultCenterTab === 'results' && resultCenterView.type === 'list' ? (
                     <div className="row-actions">
                       <span className="badge">当前共 {adminResultsPagination.total} 条结果</span>
+                      <button className="ghost" type="button" onClick={onExportAdminResults} disabled={adminResultsLoading || adminResultsExporting}>
+                        {adminResultsExporting ? '导出中...' : '导出结果'}
+                      </button>
                       <button className="ghost" type="button" onClick={() => fetchAdminResults()} disabled={adminResultsLoading}>
                         {adminResultsLoading ? '刷新中...' : '刷新结果'}
                       </button>
@@ -7386,7 +7471,14 @@ function App() {
                 </section>
 
                 <section className="panel">
-                  <div className="panel-header"><h2>考试结果列表</h2></div>
+                  <div className="panel-header">
+                    <h2>考试结果列表</h2>
+                    <div className="row-actions">
+                      <button className="ghost" type="button" onClick={onExportMyResults} disabled={myResultsExporting}>
+                        {myResultsExporting ? '导出中...' : '导出结果'}
+                      </button>
+                    </div>
+                  </div>
                   <div className="panel-body table-wrap">
                     <table>
                       <thead>

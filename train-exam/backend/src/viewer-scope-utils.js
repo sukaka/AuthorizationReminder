@@ -29,6 +29,7 @@ const BASIC_VIEWER_ALLOWED_APIS = [
   { method: 'POST', pattern: /^\/api\/train-exam\/exam-sessions\/\d+\/submit$/ },
   { method: 'GET', pattern: /^\/api\/train-exam\/exam-sessions\/\d+\/result$/ },
   { method: 'GET', pattern: /^\/api\/train-exam\/my\/results$/ },
+  { method: 'GET', pattern: /^\/api\/train-exam\/my\/results\/export\.csv$/ },
   { method: 'GET', pattern: /^\/api\/train-exam\/results\/\d+$/ },
   { method: 'GET', pattern: /^\/api\/train-exam\/results\/\d+\/review-detail$/ },
 ];

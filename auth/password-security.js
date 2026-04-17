@@ -40,11 +40,17 @@ const verifyPassword = async (value, storedHash) => {
   return { ok, needsRehash: ok, requiresPasswordReset: false };
 };
 
+const isPasswordReuse = async (value, storedHash) => {
+  const result = await verifyPassword(value, storedHash);
+  return result.ok === true && result.requiresPasswordReset !== true;
+};
+
 module.exports = {
   LEGACY_BCRYPT_MAX_BYTES,
   MODERN_PASSWORD_HASH_PREFIX,
   getPasswordByteLength,
   hashPassword,
+  isPasswordReuse,
   isModernPasswordHash,
   verifyPassword,
 };
