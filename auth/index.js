@@ -16,6 +16,7 @@ const {
 } = require('./csrf-security');
 const {
   hashPassword,
+  isPasswordReuse,
   verifyPassword,
 } = require('./password-security');
 const {
@@ -6578,6 +6579,9 @@ app.post('/api/auth/change-password', async (req, res) => {
     return res.status(400).json({ error: '当前账号密码哈希需要重置，请联系系统管理员处理' });
   }
   if (!currentPasswordCheck.ok) return res.status(400).json({ error: '当前密码错误' });
+  if (await isPasswordReuse(newPassword, user.password_hash)) {
+    return res.status(400).json({ error: '新密码不能与当前密码相同' });
+  }
   const hash = await hashPassword(newPassword);
   await db.run('UPDATE users SET password_hash = ?, must_change_password = ? WHERE id = ?', [hash, 0, req.user.id]);
   await revokeUserSessions({ userId: req.user.id, reason: 'password_change' });

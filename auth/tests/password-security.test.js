@@ -4,6 +4,7 @@ const bcrypt = require('bcryptjs');
 
 const {
   hashPassword,
+  isPasswordReuse,
   verifyPassword,
   isModernPasswordHash,
 } = require('../password-security');
@@ -39,4 +40,12 @@ test('legacy bcrypt hashes still verify safe-length passwords and request rehash
   assert.equal(result.ok, true);
   assert.equal(result.needsRehash, true);
   assert.equal(result.requiresPasswordReset, false);
+});
+
+test('isPasswordReuse detects when the new password matches the current password', async () => {
+  const currentPassword = 'Reuse#2026Aa';
+  const currentHash = await hashPassword(currentPassword);
+
+  assert.equal(await isPasswordReuse(currentPassword, currentHash), true);
+  assert.equal(await isPasswordReuse('Different#2026Bb', currentHash), false);
 });

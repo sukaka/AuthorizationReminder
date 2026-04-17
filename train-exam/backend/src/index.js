@@ -52,6 +52,7 @@ const { buildQuestionFilterWhere } = require('./question-filter-utils');
 const { normalizeQuestionCategoryRow } = require('./question-category-utils');
 const { normalizePaperRuleCategories } = require('./paper-rule-utils');
 const {
+  buildResultsExportCsv,
   normalizeAdminResultsFilters,
   buildAdminResultsWhere,
   normalizeAdminResultListRow,
@@ -3245,6 +3246,12 @@ const normalizeAdminResultRow = (row = {}) => {
     user_position: trimText(row.user_position),
     created_at: row.created_at,
   };
+};
+
+const pad2 = (value) => String(value).padStart(2, '0');
+const buildResultsExportFilename = (prefix, date = new Date()) => {
+  const current = date instanceof Date ? date : new Date(date);
+  return `${prefix}-${current.getFullYear()}-${pad2(current.getMonth() + 1)}-${pad2(current.getDate())}-${pad2(current.getHours())}-${pad2(current.getMinutes())}-${pad2(current.getSeconds())}.csv`;
 };
 
 const buildAdminResultUserOptions = async ({ whereSql, params }) => {
@@ -7482,6 +7489,32 @@ app.get('/api/train-exam/my/results', requireReader, asyncHandler(async (req, re
   res.json(rows);
 }));
 
+app.get('/api/train-exam/my/results/export.csv', requireReader, asyncHandler(async (req, res) => {
+  const includeRetrain = normalizeBoolean(req.query.include_retrain, false);
+  const rows = await query(
+    `SELECT
+      r.*,
+      p.name AS paper_name,
+      CASE
+        WHEN s.started_at IS NOT NULL
+          THEN GREATEST(TIMESTAMPDIFF(SECOND, s.started_at, COALESCE(s.submitted_at, s.ended_at, s.updated_at, r.created_at)), 0)
+        ELSE 0
+      END AS duration_seconds
+     FROM te_exam_results r
+     LEFT JOIN te_exam_sessions s ON s.id = r.session_id
+     LEFT JOIN te_papers p ON p.id = r.paper_id
+     WHERE r.user_id = ? ${includeRetrain ? '' : 'AND r.paper_id > 0'}
+     ORDER BY r.created_at DESC, r.id DESC`,
+    [Number(req.user.id || 0)]
+  );
+  const normalizedRows = rows.map((item) => normalizeAdminResultRow(item));
+  const csv = buildResultsExportCsv(normalizedRows);
+  const fileName = buildResultsExportFilename('train-exam-my-results');
+  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+  res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
+  return res.send(csv);
+}));
+
 app.get('/api/train-exam/admin/results', requireResultCenterReader, asyncHandler(async (req, res) => {
   const filters = normalizeAdminResultsFilters(req.query);
   const { whereSql, params } = buildAdminResultsWhere(filters);
@@ -7550,6 +7583,33 @@ app.get('/api/train-exam/admin/results', requireResultCenterReader, asyncHandler
       papers,
     },
   });
+}));
+
+app.get('/api/train-exam/admin/results/export.csv', requireResultCenterReader, asyncHandler(async (req, res) => {
+  const filters = normalizeAdminResultsFilters(req.query);
+  const { whereSql, params } = buildAdminResultsWhere(filters);
+  const rows = await query(
+    `SELECT
+      r.*,
+      p.name AS paper_name,
+      CASE
+        WHEN s.started_at IS NOT NULL
+          THEN GREATEST(TIMESTAMPDIFF(SECOND, s.started_at, COALESCE(s.submitted_at, s.ended_at, s.updated_at, r.created_at)), 0)
+        ELSE 0
+      END AS duration_seconds
+     FROM te_exam_results r
+     LEFT JOIN te_exam_sessions s ON s.id = r.session_id
+     LEFT JOIN te_papers p ON p.id = r.paper_id
+     ${whereSql}
+     ORDER BY r.created_at DESC, r.id DESC`,
+    params
+  );
+  const normalizedRows = rows.map((item) => normalizeAdminResultRow(item));
+  const csv = buildResultsExportCsv(normalizedRows);
+  const fileName = buildResultsExportFilename('train-exam-results');
+  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+  res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
+  return res.send(csv);
 }));
 
 app.get('/api/train-exam/admin/users/:userId/results', requireResultCenterReader, asyncHandler(async (req, res) => {

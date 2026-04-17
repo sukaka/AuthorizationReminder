@@ -276,7 +276,53 @@ const buildCandidateHistorySummary = (rows = []) => {
   };
 };
 
+const csvEscapeCell = (value) => {
+  const text = String(value ?? '');
+  if (!text) return '';
+  if (/[",\n]/.test(text)) {
+    return `"${text.replace(/"/g, '""')}"`;
+  }
+  return text;
+};
+
+const buildResultsExportCsv = (rows = []) => {
+  const headers = [
+    '结果ID',
+    '考生',
+    '部门',
+    '试卷',
+    '考试时间',
+    '得分',
+    '总分',
+    '用时(秒)',
+    '错题数',
+    '第几次考试',
+    '是否最终',
+    '考试结果',
+  ];
+  const lines = [headers.join(',')];
+  (Array.isArray(rows) ? rows : []).forEach((item) => {
+    const row = normalizeAdminResultListRow(item);
+    lines.push([
+      row.id,
+      trimText(item?.username),
+      trimText(item?.user_department),
+      trimText(item?.paper_name) || `试卷#${row.paper_id || 0}`,
+      trimText(item?.created_at),
+      row.score.toFixed(2),
+      row.total_score.toFixed(2),
+      row.duration_seconds,
+      row.wrong_count,
+      row.attempt_no,
+      row.is_final === 1 ? '是' : '否',
+      row.passed === 1 ? '通过' : '未通过',
+    ].map(csvEscapeCell).join(','));
+  });
+  return `\uFEFF${lines.join('\n')}`;
+};
+
 module.exports = {
+  buildResultsExportCsv,
   normalizeAdminResultsFilters,
   buildAdminResultsWhere,
   normalizeAdminResultListRow,

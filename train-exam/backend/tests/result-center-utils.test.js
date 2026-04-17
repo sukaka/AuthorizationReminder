@@ -1,4 +1,5 @@
 const {
+  buildResultsExportCsv,
   normalizeAdminResultsFilters,
   buildAdminResultsWhere,
   normalizeAdminResultListRow,
@@ -105,6 +106,28 @@ describe('result center utils', () => {
       final_result_count: 9,
       pass_rate: 61.11,
     });
+  });
+
+  it('builds results export csv with localized headers and rows', () => {
+    const csv = buildResultsExportCsv([
+      {
+        id: 18,
+        username: '张三',
+        user_department: '生产部',
+        paper_name: '安全生产考试',
+        created_at: '2026-04-17 11:14:33',
+        score: 86.5,
+        total_score: 100,
+        duration_seconds: 930,
+        wrong_count: 3,
+        attempt_no: 2,
+        is_final: 1,
+        passed: 1,
+      },
+    ]);
+
+    expect(csv).toContain('结果ID,考生,部门,试卷,考试时间,得分,总分,用时(秒),错题数,第几次考试,是否最终,考试结果');
+    expect(csv).toContain('18,张三,生产部,安全生产考试,2026-04-17 11:14:33,86.50,100.00,930,3,2,是,通过');
   });
 
   it('builds review detail payload with grouped report stats', () => {
