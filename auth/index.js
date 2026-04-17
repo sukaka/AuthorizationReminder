@@ -94,6 +94,7 @@ const {
   defaultAppAccessByRole,
   getDedicatedCenterConfig,
 } = require('./portal-routing');
+const { version: AUTH_PACKAGE_VERSION } = require('./package.json');
 
 const app = express();
 const PORT = process.env.PORT || 5180;
@@ -1425,7 +1426,7 @@ app.get('/api/auth/apps', async (req, res) => {
   });
 });
 
-const RELEASE_VERSION = '5.8.0';
+const RELEASE_VERSION = AUTH_PACKAGE_VERSION;
 const DEDICATED_CENTER_VERSION = `v${RELEASE_VERSION}`;
 const ADMIN_CENTER_ROLE_OPTIONS = Object.freeze([
   { value: 'user', label: '普通用户' },

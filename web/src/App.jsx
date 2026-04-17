@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState, useRef } from 'react'
 import QRCode from 'qrcode'
+import appPackage from '../package.json'
 import './App.css'
 import {
   BUSINESS_CONFIG_SECTION_FIELDS,
@@ -13,6 +14,8 @@ import {
   readConfigTestBlockMessage,
 } from './config-test-guard.js'
 import { readUserImportDownloadFilename, readUserImportSummary } from './user-import.js'
+
+const APP_RELEASE_VERSION = `v${appPackage.version}`
 
 const buildApi = (getCsrfToken, refreshCsrfToken) => {
   const isCsrfInvalidError = (text) => String(text || '').includes('CSRF token invalid')
@@ -3179,7 +3182,7 @@ function App() {
             <h1 className="brand-title">
               <span className="brand-red">聚信</span>
               <span className="brand-blue">{heroSystemName}</span>
-              <span className="version-inline">v1.0.1</span>
+              <span className="version-inline">{APP_RELEASE_VERSION}</span>
             </h1>
             <h3 className="hero-title">统一管理客户、联系人与发送配置</h3>
             <p className="sub">
