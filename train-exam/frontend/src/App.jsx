@@ -1322,7 +1322,8 @@ function App() {
   const canPublishPaper = isAdminRole || !!user?.permissions?.train_exam_paper_publish || role === 'reviewer'
   const canAudit = !!user?.permissions?.train_exam_audit_read || role === 'auditor'
   const canViewAiConfig = isAdminRole
-  const isBasicUser = role === 'viewer' && !canWrite && !canReview && !canPublishPaper && !canAudit && !canViewAiConfig
+  const isBasicRole = role === 'viewer' || role === 'user'
+  const isBasicUser = isBasicRole && !canWrite && !canReview && !canPublishPaper && !canAudit && !canViewAiConfig
   const canSelectQuestionRows = canWrite || canReview
 
   const clearFeedback = () => {
@@ -1562,7 +1563,7 @@ function App() {
       const me = await api.get('/api/train-exam/auth/me')
       setUser(me)
       const meRole = String(me?.role || '').trim().toLowerCase()
-      const meIsBasicUser = meRole === 'viewer'
+      const meIsBasicUser = (meRole === 'viewer' || meRole === 'user')
         && !me?.permissions?.train_exam_content_write
         && !me?.permissions?.train_exam_question_review
         && !me?.permissions?.train_exam_paper_publish

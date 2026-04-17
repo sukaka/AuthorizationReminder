@@ -22,6 +22,11 @@ test('basic viewer menu only exposes course list, paper list and results', () =>
   assert.doesNotMatch(block, /题库管理/);
 });
 
+test('basic user detection treats user role as regular learner too', () => {
+  assert.match(appSource, /role === 'viewer'/);
+  assert.match(appSource, /role === 'user'/);
+});
+
 test('basic viewer result area no longer renders certificate or recertification tables', () => {
   assert.doesNotMatch(appSource, /viewer-cert-/);
   assert.doesNotMatch(appSource, /viewer-recert-/);

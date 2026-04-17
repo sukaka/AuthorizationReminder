@@ -1,6 +1,12 @@
-const { isBasicViewerApiAllowed } = require('../src/viewer-scope-utils');
+const { isBasicViewerApiAllowed, isBasicViewerRole } = require('../src/viewer-scope-utils');
 
 describe('viewer scope utils', () => {
+  it('treats both user and viewer as basic roles', () => {
+    expect(isBasicViewerRole('viewer')).toBe(true);
+    expect(isBasicViewerRole('user')).toBe(true);
+    expect(isBasicViewerRole('admin')).toBe(false);
+  });
+
   it('allows only course list, paper list, exam start, my results and own result detail routes', () => {
     expect(isBasicViewerApiAllowed({ method: 'GET', path: '/api/train-exam/courses' })).toBe(true);
     expect(isBasicViewerApiAllowed({ method: 'GET', path: '/api/train-exam/courses/12/learning-path' })).toBe(true);

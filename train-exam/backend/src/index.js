@@ -69,7 +69,7 @@ const {
   evaluateAnswer,
   normalizeMultipleChoiceAnswerValues,
 } = require('./exam-answer-utils');
-const { isBasicViewerApiAllowed } = require('./viewer-scope-utils');
+const { isBasicViewerApiAllowed, isBasicViewerRole } = require('./viewer-scope-utils');
 const {
   isOriginAllowedForRequest,
   normalizeOrigin,
@@ -664,7 +664,7 @@ const isAdmin = (req) => getUserRole(req) === 'admin';
 const isEditor = (req) => getUserRole(req) === 'editor';
 const isReviewer = (req) => getUserRole(req) === 'reviewer';
 const isAuditor = (req) => getUserRole(req) === 'auditor';
-const isViewer = (req) => getUserRole(req) === 'viewer';
+const isViewer = (req) => isBasicViewerRole(getUserRole(req));
 const canReadTrainExam = () => true;
 const canWriteContent = (req) => isAdmin(req) || isEditor(req);
 const canReviewQuestions = (req) => isAdmin(req) || isReviewer(req);

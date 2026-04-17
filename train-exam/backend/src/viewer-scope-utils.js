@@ -1,5 +1,10 @@
 const trimText = (value) => String(value || '').trim();
 
+const isBasicViewerRole = (role) => {
+  const key = trimText(role).toLowerCase();
+  return key === 'viewer' || key === 'user';
+};
+
 const BASIC_VIEWER_ALLOWED_APIS = [
   { method: 'GET', pattern: /^\/api\/auth\/me$/ },
   { method: 'GET', pattern: /^\/api\/train-exam\/auth\/me$/ },
@@ -39,4 +44,5 @@ const isBasicViewerApiAllowed = ({ method = 'GET', path = '' } = {}) => {
 module.exports = {
   BASIC_VIEWER_ALLOWED_APIS,
   isBasicViewerApiAllowed,
+  isBasicViewerRole,
 };
