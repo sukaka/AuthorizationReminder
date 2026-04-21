@@ -392,31 +392,118 @@ test('unlockUser clears login attempts for target login id', async () => {
   assert.equal(runs[0].params[0], 'sysadmin');
 });
 
-test('resetPassword hashes the new password before saving', async () => {
-  const runs = [];
+test('resetPassword allows sysadmin to reset a non-sysadmin user to the fixed password and force password change', async () => {
+  const calls = [];
   const service = createAdminCenterUsersService({
     db: {
       async get(sql, params = []) {
-        return { id: Number(params[0]), username: 'target-user' };
+        if (sql.includes('FROM users WHERE id = ?')) {
+          return {
+            id: Number(params[0]),
+            username: 'editor-a',
+            role: 'editor',
+            must_change_password: 0,
+          };
+        }
+        return null;
       },
       async run(sql, params = []) {
-        runs.push({ sql, params });
-        return {};
+        calls.push({ sql, params });
+        return { affectedRows: 1 };
       },
     },
     hashPassword: async (password) => `hashed:${password}`,
-    getSecurityConfig: async () => ({ passwordPolicy: DEFAULT_POLICY }),
+    revokeSessions: async (payload) => {
+      calls.push({ type: 'revoke', payload });
+    },
+    logOperation: async (payload) => {
+      calls.push({ type: 'audit', payload });
+    },
   });
 
   const result = await service.resetPassword({
-    actor: { id: 1, username: 'sysadmin', role: 'sysadmin' },
-    targetId: 5,
-    newPassword: 'Strong#5678',
+    actor: { id: 9, username: 'sysadmin', role: 'sysadmin' },
+    targetId: 18,
   });
 
-  assert.deepEqual(result, { ok: true });
-  assert.equal(runs[0].params[0], 'hashed:Strong#5678');
-  assert.equal(runs[0].params[1], 1);
+  assert.deepEqual(result, {
+    ok: true,
+    username: 'editor-a',
+    reset_password: '!b$#+^o9uF',
+  });
+  assert.deepEqual(calls, [
+    {
+      sql: 'UPDATE users SET password_hash = ?, must_change_password = ? WHERE id = ?',
+      params: ['hashed:!b$#+^o9uF', 1, 18],
+    },
+    {
+      type: 'revoke',
+      payload: { userId: 18, reason: 'password_reset' },
+    },
+    {
+      type: 'audit',
+      payload: {
+        user: { id: 9, username: 'sysadmin', role: 'sysadmin' },
+        action: 'RESET_PASSWORD',
+        entity: 'user',
+        entityId: 18,
+        afterData: { username: 'editor-a', forced_change: true },
+      },
+    },
+  ]);
+});
+
+test('resetPassword rejects non-sysadmin actors', async () => {
+  const service = createAdminCenterUsersService({
+    db: {
+      async get() {
+        return { id: 18, username: 'editor-a', role: 'editor' };
+      },
+      async run() {
+        return { affectedRows: 1 };
+      },
+    },
+  });
+
+  await assert.rejects(
+    service.resetPassword({
+      actor: { id: 3, username: 'admin', role: 'admin' },
+      targetId: 18,
+    }),
+    (error) => error?.statusCode === 403 && error?.message === '仅系统管理员可重置密码'
+  );
+});
+
+test('resetPassword rejects resetting self or any sysadmin target', async () => {
+  const service = createAdminCenterUsersService({
+    db: {
+      async get(_sql, params = []) {
+        const id = Number(params[0]);
+        if (id === 9) return { id: 9, username: 'sysadmin', role: 'sysadmin' };
+        if (id === 12) return { id: 12, username: 'sysadmin-backup', role: 'sysadmin' };
+        return null;
+      },
+      async run() {
+        return { affectedRows: 1 };
+      },
+    },
+  });
+
+  await assert.rejects(
+    service.resetPassword({
+      actor: { id: 9, username: 'sysadmin', role: 'sysadmin' },
+      targetId: 9,
+    }),
+    (error) => error?.statusCode === 400 && error?.message === '不能重置自己的密码'
+  );
+
+  await assert.rejects(
+    service.resetPassword({
+      actor: { id: 9, username: 'sysadmin', role: 'sysadmin' },
+      targetId: 12,
+    }),
+    (error) => error?.statusCode === 403 && error?.message === '不能重置系统管理员密码'
+  );
 });
 
 test('deleteUsers deletes regular users and skips protected ones', async () => {

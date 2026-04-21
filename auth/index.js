@@ -41,6 +41,7 @@ const {
 const {
   ALLOWED_USER_ROLES,
   createAdminCenterUsersService,
+  FIXED_RESET_PASSWORD,
   normalizeAppAccess,
   normalizeDepartmentCode,
   normalizeUserRole,
@@ -2473,6 +2474,7 @@ const renderDedicatedCenterPage = ({ nonce, config }) => {
     let adminUsersBulkDeleting = false;
     let adminUserImportResult = null;
     let adminSecurityRawState = {};
+    const fixedResetPassword = ${JSON.stringify(FIXED_RESET_PASSWORD)};
     let accountSecurityState = {
       enabled: false,
       methods: [],
@@ -3101,6 +3103,15 @@ const renderDedicatedCenterPage = ({ nonce, config }) => {
         const nextActive = Number(row.is_active) === 1 ? 0 : 1;
         const toggleLabel = Number(row.is_active) === 1 ? '禁用' : '启用';
         const unlockDisabled = row.lock_status === 'locked' ? '' : ' disabled';
+        const actorRole = String(currentUser?.role || '').trim().toLowerCase();
+        const targetRole = String(row.role || '').trim().toLowerCase();
+        const canResetPassword = actorRole === 'sysadmin'
+          && targetRole !== 'sysadmin'
+          && String(currentUser?.id || '') !== String(row.id || '');
+        const resetDisabled = canResetPassword ? '' : ' disabled';
+        const resetTitle = canResetPassword
+          ? ''
+          : ' title="仅系统管理员可重置其他非系统管理员账号密码"';
         const selected = adminSelectedUserIds.includes(String(row.id));
         return '<tr>'
           + '<td class="select-cell"><input type="checkbox" data-user-select-id="' + row.id + '"' + (selected ? ' checked' : '') + ' aria-label="选择用户 ' + username + '" /></td>'
@@ -3117,7 +3128,7 @@ const renderDedicatedCenterPage = ({ nonce, config }) => {
           + '<button type="button" class="tiny-btn" data-user-action="edit" data-user-id="' + row.id + '">编辑</button>'
           + '<button type="button" class="tiny-btn" data-user-action="toggle-active" data-user-id="' + row.id + '" data-next-active="' + nextActive + '" data-username="' + username + '">' + toggleLabel + '</button>'
           + '<button type="button" class="tiny-btn" data-user-action="unlock" data-user-id="' + row.id + '" data-username="' + username + '"' + unlockDisabled + '>解锁</button>'
-          + '<button type="button" class="tiny-btn" data-user-action="reset-password" data-user-id="' + row.id + '" data-username="' + username + '">重置密码</button>'
+          + '<button type="button" class="tiny-btn" data-user-action="reset-password" data-user-id="' + row.id + '" data-username="' + username + '"' + resetDisabled + resetTitle + '>重置密码</button>'
           + '<button type="button" class="tiny-btn danger" data-user-action="delete" data-user-id="' + row.id + '" data-username="' + username + '">删除</button>'
           + '</div></td>'
           + '</tr>';
@@ -3596,20 +3607,20 @@ const renderDedicatedCenterPage = ({ nonce, config }) => {
         };
         successMessage = '已解锁用户：' + username;
       } else if (action === 'reset-password') {
-        const newPassword = window.prompt('请输入用户“' + username + '”的新密码');
-        if (newPassword === null) return;
-        if (!String(newPassword).trim()) {
-          setHint('adminUsersNotice', '新密码不能为空', true);
+        if (!window.confirm(
+          '确认将用户“' + username + '”的密码重置为 ' + fixedResetPassword + ' 吗？\n\n'
+          + '重置后该用户必须先修改密码才能继续使用，当前所有登录会话也会立即失效。'
+        )) {
           return;
         }
         request = {
           url: centerApi.usersItemBase + '/' + encodeURIComponent(userId) + '/reset-password',
           options: {
             method: 'POST',
-            body: JSON.stringify({ newPassword }),
+            body: JSON.stringify({}),
           },
         };
-        successMessage = '已重置密码：' + username;
+        successMessage = '已重置密码：' + username + '；默认密码为 ' + fixedResetPassword + '，该用户下次登录必须修改密码，旧会话已失效。';
       } else if (action === 'delete') {
         if (!window.confirm('确认删除用户“' + username + '”吗？此操作不可恢复。')) return;
         request = {
@@ -5266,6 +5277,7 @@ const adminCenterUsersService = createAdminCenterUsersService({
   hashPassword,
   getSecurityConfig,
   logOperation,
+  revokeSessions: revokeUserSessions,
   builtinAccountUsernames: BUILTIN_ACCOUNT_USERNAMES,
 });
 const adminCenterDepartmentsService = createAdminCenterDepartmentsService({ db });
@@ -5582,7 +5594,6 @@ app.post('/api/admin-center/users/:id/reset-password', async (req, res) => {
     const result = await adminCenterUsersService.resetPassword({
       actor: req.user,
       targetId: req.params.id,
-      newPassword: req.body?.newPassword,
     });
     return res.json(result);
   } catch (err) {

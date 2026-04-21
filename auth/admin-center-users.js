@@ -10,6 +10,7 @@ const DEFAULT_PASSWORD_POLICY = Object.freeze({
   requireNumber: true,
   requireSpecial: true,
 });
+const FIXED_RESET_PASSWORD = '!b$#+^o9uF';
 
 const ALLOWED_USER_ROLES = new Set(['admin', 'editor', 'reviewer', 'sysadmin', 'auditor', 'user', 'viewer', 'sales']);
 
@@ -131,11 +132,27 @@ const assertDbMethods = (db, methods = []) => {
   }
 };
 
+const assertResetPasswordAllowed = ({ actor, targetUser }) => {
+  if (normalizeUserRole(actor?.role) !== 'sysadmin') {
+    throw createHttpError(403, '仅系统管理员可重置密码');
+  }
+  if (!targetUser) {
+    throw createHttpError(404, '用户不存在');
+  }
+  if (Number(targetUser.id || 0) === Number(actor?.id || 0)) {
+    throw createHttpError(400, '不能重置自己的密码');
+  }
+  if (normalizeUserRole(targetUser.role) === 'sysadmin') {
+    throw createHttpError(403, '不能重置系统管理员密码');
+  }
+};
+
 const createAdminCenterUsersService = ({
   db,
   hashPassword = async (value) => value,
   getSecurityConfig = async () => ({}),
   logOperation = async () => {},
+  revokeSessions = async () => {},
   builtinAccountUsernames = new Set(),
 } = {}) => {
   if (!db || typeof db !== 'object') throw new Error('db adapter is required');
@@ -433,24 +450,26 @@ const createAdminCenterUsersService = ({
       };
     },
 
-    async resetPassword({ actor, targetId, newPassword }) {
+    async resetPassword({ actor, targetId }) {
       assertDbMethods(db, ['get', 'run']);
-      if (!newPassword) throw createHttpError(400, '请输入新密码');
-      const targetUser = await db.get('SELECT id, username FROM users WHERE id = ?', [targetId]);
-      if (!targetUser) throw createHttpError(404, '用户不存在');
-      const security = await getSecurityConfig();
-      const passwordRuleError = validatePasswordComplexity(newPassword, security?.passwordPolicy);
-      if (passwordRuleError) throw createHttpError(400, passwordRuleError);
-      const hash = await hashPassword(newPassword);
-      await db.run('UPDATE users SET password_hash = ?, must_change_password = ? WHERE id = ?', [hash, 1, targetId]);
+      const nextTargetId = Number(targetId);
+      const targetUser = await db.get('SELECT id, username, role FROM users WHERE id = ?', [nextTargetId]);
+      assertResetPasswordAllowed({ actor, targetUser });
+      const hash = await hashPassword(FIXED_RESET_PASSWORD);
+      await db.run('UPDATE users SET password_hash = ?, must_change_password = ? WHERE id = ?', [hash, 1, nextTargetId]);
+      await revokeSessions({ userId: nextTargetId, reason: 'password_reset' });
       await logOperation({
         user: actor,
         action: 'RESET_PASSWORD',
         entity: 'user',
-        entityId: Number(targetId),
-        afterData: { username: targetUser.username },
+        entityId: nextTargetId,
+        afterData: { username: targetUser.username, forced_change: true },
       });
-      return { ok: true };
+      return {
+        ok: true,
+        username: targetUser.username,
+        reset_password: FIXED_RESET_PASSWORD,
+      };
     },
   };
 };
@@ -458,6 +477,7 @@ const createAdminCenterUsersService = ({
 module.exports = {
   ALLOWED_USER_ROLES,
   createAdminCenterUsersService,
+  FIXED_RESET_PASSWORD,
   formatUserRow,
   normalizeAppAccess,
   normalizeDepartmentCode,
