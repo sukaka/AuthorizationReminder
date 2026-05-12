@@ -14,7 +14,8 @@ cp .env.example .env
 ```bash
 git clone -b codex/4.1.4 https://github.com/sukaka/AuthorizationReminder.git /root/AuthorizationReminder-codex-4.1.4
 cd /root/AuthorizationReminder-codex-4.1.4
-export ALIYUN_MIRROR_URL='替换成你的阿里云镜像加速器地址'
+# 在阿里云容器镜像服务控制台复制真实的 https://...mirror.aliyuncs.com 地址
+export ALIYUN_MIRROR_URL='<阿里云镜像加速器真实 HTTPS 地址>'
 export AUTH_BUILTIN_ACCOUNT_DEFAULT_PASSWORD='改成你要登录的默认密码'
 export PUBLIC_HOST='服务器公网IP或域名，不带协议和端口'
 ./scripts/deploy/bootstrap-full-server.sh
@@ -25,6 +26,8 @@ export PUBLIC_HOST='服务器公网IP或域名，不带协议和端口'
 - `ALIYUN_MIRROR_URL`
 - `AUTH_BUILTIN_ACCOUNT_DEFAULT_PASSWORD`
 - `PUBLIC_HOST`
+
+`ALIYUN_MIRROR_URL` 必须是阿里云控制台给出的真实 HTTP(S) 镜像加速地址，不能保留示例占位符。
 
 可选覆盖：
 

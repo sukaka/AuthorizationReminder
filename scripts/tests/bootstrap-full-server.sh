@@ -59,6 +59,30 @@ exit 0
 SH
 chmod +x "${BIN_DIR}/systemctl"
 
+PLACEHOLDER_DOCKER_DIR="${TMP_DIR}/docker-placeholder"
+mkdir -p "${PLACEHOLDER_DOCKER_DIR}"
+if PATH="${BIN_DIR}:$PATH" \
+TEST_LOG_FILE="${LOG_FILE}" \
+ALIYUN_MIRROR_URL='替换成你的阿里云镜像加速器地址' \
+AUTH_BUILTIN_ACCOUNT_DEFAULT_PASSWORD='Password123!' \
+PUBLIC_HOST='8.141.81.201' \
+BOOTSTRAP_REPO_DIR="${TMP_DIR}/repo-placeholder" \
+BOOTSTRAP_DOCKER_CONFIG_DIR="${PLACEHOLDER_DOCKER_DIR}" \
+bash "${SCRIPT_PATH}" >/dev/null 2>"${TMP_DIR}/placeholder.err"; then
+  echo 'expected placeholder ALIYUN_MIRROR_URL to fail' >&2
+  exit 1
+fi
+
+if [ -f "${PLACEHOLDER_DOCKER_DIR}/daemon.json" ]; then
+  echo 'expected placeholder ALIYUN_MIRROR_URL not to write daemon.json' >&2
+  exit 1
+fi
+
+if ! grep -q 'ALIYUN_MIRROR_URL' "${TMP_DIR}/placeholder.err"; then
+  echo 'expected placeholder failure to mention ALIYUN_MIRROR_URL' >&2
+  exit 1
+fi
+
 PATH="${BIN_DIR}:$PATH" \
 TEST_LOG_FILE="${LOG_FILE}" \
 ALIYUN_MIRROR_URL='https://example.mirror.aliyuncs.com' \

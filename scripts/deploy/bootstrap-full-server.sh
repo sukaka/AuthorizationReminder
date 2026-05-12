@@ -26,6 +26,25 @@ require_env() {
   fi
 }
 
+require_real_mirror_url() {
+  local value="$1"
+  case "$value" in
+    http://*|https://*)
+      ;;
+    *)
+      echo "required env ALIYUN_MIRROR_URL must be a real http(s) mirror URL" >&2
+      exit 1
+      ;;
+  esac
+
+  case "$value" in
+    *替换成*|*你的*|*change_me*|*replace-with*|*example.com*|*example.invalid*)
+      echo "required env ALIYUN_MIRROR_URL still looks like a placeholder" >&2
+      exit 1
+      ;;
+  esac
+}
+
 require_file_exec() {
   [ -x "$1" ] || {
     echo "missing required executable: $1" >&2
@@ -70,6 +89,7 @@ main() {
   require_cmd docker
   require_cmd systemctl
   require_env ALIYUN_MIRROR_URL "$ALIYUN_MIRROR_URL"
+  require_real_mirror_url "$ALIYUN_MIRROR_URL"
   require_env AUTH_BUILTIN_ACCOUNT_DEFAULT_PASSWORD "$AUTH_BUILTIN_ACCOUNT_DEFAULT_PASSWORD"
   require_env PUBLIC_HOST "$PUBLIC_HOST"
 
