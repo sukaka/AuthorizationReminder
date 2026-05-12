@@ -17,3 +17,10 @@ test('admin center client uses fixed-password confirmation instead of prompting 
   assert.match(source, /const fixedResetPassword = /);
   assert.doesNotMatch(source, /window\.prompt\('请输入用户“'\s*\+/);
 });
+
+test('admin center reset-password confirmation keeps newlines escaped in rendered script', () => {
+  assert.ok(
+    source.includes("吗？\\\\n\\\\n'"),
+    'confirm message newline must remain escaped after the outer HTML template renders',
+  );
+});

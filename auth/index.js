@@ -3608,7 +3608,7 @@ const renderDedicatedCenterPage = ({ nonce, config }) => {
         successMessage = '已解锁用户：' + username;
       } else if (action === 'reset-password') {
         if (!window.confirm(
-          '确认将用户“' + username + '”的密码重置为 ' + fixedResetPassword + ' 吗？\n\n'
+          '确认将用户“' + username + '”的密码重置为 ' + fixedResetPassword + ' 吗？\\n\\n'
           + '重置后该用户必须先修改密码才能继续使用，当前所有登录会话也会立即失效。'
         )) {
           return;
