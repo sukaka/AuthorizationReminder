@@ -52,6 +52,19 @@ test('audit center client script defines clampNumber before audit log pagination
   );
 });
 
+test('dedicated center login check times out and surfaces failed auth responses', () => {
+  const bootstrapStart = source.indexOf('async function bootstrapCenter()');
+  const bootstrapEnd = source.indexOf("portalBtn.addEventListener('click'", bootstrapStart);
+
+  assert.notEqual(bootstrapStart, -1);
+  assert.notEqual(bootstrapEnd, -1);
+  const bootstrapSource = source.slice(bootstrapStart, bootstrapEnd);
+  assert.match(bootstrapSource, /new AbortController\(\)/);
+  assert.match(bootstrapSource, /setTimeout\(\(\) => authCheckController\.abort\(\), 10000\)/);
+  assert.match(bootstrapSource, /if \(!response\.ok\)/);
+  assert.match(bootstrapSource, /AbortError/);
+});
+
 test('audit log table renders localized action and entity labels', () => {
   assert.match(source, /getAuditActionLabel\(row\.action \|\| '-'\)/);
   assert.match(source, /getAuditEntityLabel\(row\.entity \|\| '-'\)/);

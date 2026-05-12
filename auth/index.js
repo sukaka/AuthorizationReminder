@@ -4194,9 +4194,14 @@ const renderDedicatedCenterPage = ({ nonce, config }) => {
 
     async function bootstrapCenter() {
       setSurfaceStatus('正在检查登录状态...', 'info');
+      const authCheckController = new AbortController();
+      const authCheckTimer = setTimeout(() => authCheckController.abort(), 10000);
       try {
-        const response = await fetch('/api/auth/me', { credentials: 'include' });
-        const data = await response.json();
+        const response = await fetch('/api/auth/me', {
+          credentials: 'include',
+          signal: authCheckController.signal,
+        });
+        const data = await response.json().catch(() => ({}));
         if (response.status === 401) {
           window.location.href = '/portal?system=' + encodeURIComponent(systemKey);
           return;
@@ -4204,6 +4209,9 @@ const renderDedicatedCenterPage = ({ nonce, config }) => {
         if (response.status === 403 && data?.mustChangePassword) {
           window.location.href = '/portal';
           return;
+        }
+        if (!response.ok) {
+          throw new Error(data?.error || '登录态检查失败');
         }
         const user = data;
         currentUser = user;
@@ -4218,7 +4226,12 @@ const renderDedicatedCenterPage = ({ nonce, config }) => {
         contentEl.style.display = 'grid';
         initCenterFeatures();
       } catch (error) {
-        setSurfaceStatus('加载登录态失败，请刷新后重试。', 'error');
+        const message = error?.name === 'AbortError'
+          ? '检查登录状态超时，请确认认证服务和数据库是否正常。'
+          : (error?.message || '加载登录态失败，请刷新后重试。');
+        setSurfaceStatus(message, 'error');
+      } finally {
+        clearTimeout(authCheckTimer);
       }
     }
 
@@ -6528,28 +6541,33 @@ app.post('/api/auth/mfa/settings', async (req, res) => {
 });
 
 app.get('/api/auth/me', async (req, res) => {
-  const user = await db.get(
-    'SELECT id, username, role, app_access, mfa_enabled, mfa_methods, totp_enabled, totp_secret, email, phone, wecom_id, department_code, must_change_password FROM users WHERE id = ?',
-    [req.user.id]
-  );
-  if (!user) return res.json(null);
-  const security = await getSecurityConfig();
-  const mfaStatus = resolveUserMfaStatus({ user, securityConfig: security });
-  if (isPasswordChangeRequired(user)) {
-    return sendPasswordChangeRequired(res, user);
+  try {
+    const user = await db.get(
+      'SELECT id, username, role, app_access, mfa_enabled, mfa_methods, totp_enabled, totp_secret, email, phone, wecom_id, department_code, must_change_password FROM users WHERE id = ?',
+      [req.user.id]
+    );
+    if (!user) return res.json(null);
+    const security = await getSecurityConfig();
+    const mfaStatus = resolveUserMfaStatus({ user, securityConfig: security });
+    if (isPasswordChangeRequired(user)) {
+      return sendPasswordChangeRequired(res, user);
+    }
+    const scope = await buildUserScope(user);
+    return res.json({
+      ...buildAuthUserPayload(user),
+      app_access: getUserAppAccess(user),
+      scope: {
+        department: scope.department,
+        managedDepartments: scope.managedDepartments,
+        isDepartmentDocAdmin: scope.isDepartmentDocAdmin,
+      },
+      mfa_setup_required: mfaStatus.setupRequired,
+      force_all_users_mfa: mfaStatus.forceAllUsers,
+    });
+  } catch (err) {
+    console.error('[auth] failed to load current user', err);
+    return sendApiError(res, err, '获取登录状态失败');
   }
-  const scope = await buildUserScope(user);
-  res.json({
-    ...buildAuthUserPayload(user),
-    app_access: getUserAppAccess(user),
-    scope: {
-      department: scope.department,
-      managedDepartments: scope.managedDepartments,
-      isDepartmentDocAdmin: scope.isDepartmentDocAdmin,
-    },
-    mfa_setup_required: mfaStatus.setupRequired,
-    force_all_users_mfa: mfaStatus.forceAllUsers,
-  });
 });
 
 app.post('/api/auth/logout', async (req, res) => {
