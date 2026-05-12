@@ -1,5 +1,7 @@
 const {
   buildResultsExportCsv,
+  calculateExamRating,
+  normalizeAdminResultPaperSummaryRow,
   normalizeAdminResultsFilters,
   buildAdminResultsWhere,
   normalizeAdminResultListRow,
@@ -9,6 +11,14 @@ const {
 } = require('../src/result-center-utils');
 
 describe('result center utils', () => {
+  it('calculates exam ratings from score rate boundaries', () => {
+    expect(calculateExamRating(90, 100)).toEqual({ rating_level: 'A', rating_rate: 90 });
+    expect(calculateExamRating(80, 100)).toEqual({ rating_level: 'B', rating_rate: 80 });
+    expect(calculateExamRating(60, 100)).toEqual({ rating_level: 'C', rating_rate: 60 });
+    expect(calculateExamRating(59.99, 100)).toEqual({ rating_level: 'D', rating_rate: 59.99 });
+    expect(calculateExamRating(10, 0)).toEqual({ rating_level: 'D', rating_rate: 0 });
+  });
+
   it('normalizes admin result filters with defaults and aliases', () => {
     expect(normalizeAdminResultsFilters({
       keyword: ' 张三 ',
@@ -88,6 +98,8 @@ describe('result center utils', () => {
       is_final: 0,
       duration_seconds: 780,
       wrong_count: 4,
+      rating_level: 'B',
+      rating_rate: 82.5,
     });
 
     expect(normalizeAdminResultsSummary({
@@ -126,8 +138,43 @@ describe('result center utils', () => {
       },
     ]);
 
-    expect(csv).toContain('结果ID,考生,部门,试卷,考试时间,得分,总分,用时(秒),错题数,第几次考试,是否最终,考试结果');
-    expect(csv).toContain('18,张三,生产部,安全生产考试,2026-04-17 11:14:33,86.50,100.00,930,3,2,是,通过');
+    expect(csv).toContain('结果ID,考生,部门,试卷,考试时间,得分,总分,评级,用时(秒),错题数,第几次考试,是否最终,考试结果');
+    expect(csv).toContain('18,张三,生产部,安全生产考试,2026-04-17 11:14:33,86.50,100.00,B,930,3,2,是,通过');
+  });
+
+  it('normalizes admin paper result summary rows with rating distribution', () => {
+    expect(normalizeAdminResultPaperSummaryRow({
+      paper_id: '7',
+      paper_name: '安全生产考试',
+      status: 'published',
+      result_total: '5',
+      candidate_total: '3',
+      final_result_count: '2',
+      pass_count: '4',
+      average_score: '83.334',
+      latest_result_at: '2026-04-17 03:14:33',
+      rating_a_count: '1',
+      rating_b_count: '2',
+      rating_c_count: '1',
+      rating_d_count: '1',
+    })).toEqual({
+      paper_id: 7,
+      paper_name: '安全生产考试',
+      status: 'published',
+      result_total: 5,
+      candidate_total: 3,
+      final_result_count: 2,
+      pass_count: 4,
+      pass_rate: 80,
+      average_score: 83.33,
+      latest_result_at: '2026-04-17 03:14:33',
+      rating_distribution: {
+        A: 1,
+        B: 2,
+        C: 1,
+        D: 1,
+      },
+    });
   });
 
   it('builds review detail payload with grouped report stats', () => {

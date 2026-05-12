@@ -19,6 +19,6 @@ describe('result center timezone formatting', () => {
       },
     ]);
 
-    expect(csv).toContain('1,张三,生产部,安全生产考试,2026-04-17 11:14:33,86.50,100.00,930,3,2,是,通过');
+    expect(csv).toContain('1,张三,生产部,安全生产考试,2026-04-17 11:14:33,86.50,100.00,B,930,3,2,是,通过');
   });
 });

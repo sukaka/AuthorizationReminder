@@ -1,5 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { formatDateTime } from './datetime'
+import {
+  clearPersistedExamSessionId,
+  persistExamSessionId,
+  readPersistedExamSessionId,
+} from './exam-session-storage'
 
 const API_BASE = import.meta.env.VITE_API_BASE || ''
 const UPLOAD_MAX_MB = Math.max(1, Number(import.meta.env.VITE_UPLOAD_MAX_MB || 50))
@@ -711,6 +716,11 @@ const formatDurationText = (seconds) => {
 
 const formatPercentText = (value) => `${Number(value || 0).toFixed(2).replace(/\.00$/, '')}%`
 
+const formatRatingText = (value) => {
+  const level = String(value || '').trim().toUpperCase()
+  return ['A', 'B', 'C', 'D'].includes(level) ? level : 'D'
+}
+
 const buildAdminResultsQueryString = ({ page = 1, limit = 20, filters = {} } = {}) => {
   const params = new URLSearchParams()
   params.set('page', String(Math.max(1, Number(page || 1))))
@@ -733,6 +743,10 @@ const buildResultCenterDefaultSummary = () => ({
   average_duration_seconds: 0,
   final_result_count: 0,
   pass_rate: 0,
+})
+
+const buildAdminResultPaperOverviewDefault = () => ({
+  items: [],
 })
 
 const buildCandidateRecordDefault = () => ({
@@ -1193,8 +1207,9 @@ function App() {
   const [myCertificates, setMyCertificates] = useState([])
   const [myRecertJobs, setMyRecertJobs] = useState([])
   const [resultCenterTab, setResultCenterTab] = useState('results')
-  const [resultCenterView, setResultCenterView] = useState({ type: 'list', from: 'list', resultId: 0, userId: 0 })
+  const [resultCenterView, setResultCenterView] = useState({ type: 'papers', from: 'papers', resultId: 0, userId: 0, paperId: 0 })
   const [adminResults, setAdminResults] = useState([])
+  const [adminResultPaperOverview, setAdminResultPaperOverview] = useState(() => buildAdminResultPaperOverviewDefault())
   const [adminResultsFilters, setAdminResultsFilters] = useState({
     keyword: '',
     user_id: '',
@@ -1214,6 +1229,7 @@ function App() {
   const [adminResultUsers, setAdminResultUsers] = useState([])
   const [adminResultPapers, setAdminResultPapers] = useState([])
   const [adminResultsLoading, setAdminResultsLoading] = useState(false)
+  const [adminResultPapersLoading, setAdminResultPapersLoading] = useState(false)
   const [adminResultsExporting, setAdminResultsExporting] = useState(false)
   const [resultReviewDetail, setResultReviewDetail] = useState(null)
   const [resultReviewCache, setResultReviewCache] = useState({})
@@ -1619,6 +1635,8 @@ function App() {
         ])
         const firstId = Number(items?.[0]?.id || 0)
         if (firstId) await fetchLearningPath(firstId, true)
+        const restored = await restorePersistedExamSession({ silent: true })
+        if (restored) return
         return
       }
 
@@ -1632,6 +1650,7 @@ function App() {
         fetchMyResults(true),
         fetchCertificateTemplate(true),
       ])
+      await restorePersistedExamSession({ silent: true })
     } catch (err) {
       if (Number(err?.status) === 401 || String(err?.message || '').includes('未登录')) {
         window.location.replace(buildPortalEntryUrl('train-exam'))
@@ -1856,6 +1875,44 @@ function App() {
     }
   }
 
+  const fetchAdminResultPapers = async (silent = false) => {
+    if (!silent) clearFeedback()
+    setAdminResultPapersLoading(true)
+    try {
+      const payload = await api.get('/api/train-exam/admin/results/papers')
+      const items = Array.isArray(payload?.items) ? payload.items : []
+      setAdminResultPaperOverview({ items })
+      return items
+    } finally {
+      setAdminResultPapersLoading(false)
+    }
+  }
+
+  const onOpenPaperResults = async (paper) => {
+    const paperId = Number(paper?.paper_id || paper?.id || 0)
+    if (!paperId) {
+      setError('试卷信息无效')
+      return
+    }
+    const nextFilters = {
+      ...adminResultsFilters,
+      paper_id: String(paperId),
+    }
+    setAdminResultsFilters(nextFilters)
+    setResultCenterView({
+      type: 'list',
+      from: 'papers',
+      resultId: 0,
+      userId: 0,
+      paperId,
+    })
+    try {
+      await fetchAdminResults(true, { page: 1, filters: nextFilters })
+    } catch (err) {
+      setError(err.message || '加载试卷成绩失败')
+    }
+  }
+
   const onExportAdminResults = async () => {
     if (adminResultsExporting) return
     setAdminResultsExporting(true)
@@ -1968,10 +2025,14 @@ function App() {
       setResultCenterView((prev) => ({ ...prev, type: 'candidate', resultId: 0 }))
       return
     }
-    setResultCenterView({ type: 'list', from: 'list', resultId: 0, userId: 0 })
-    if (!isBasicUser && !adminResults.length) {
+    if (resultCenterView.type === 'detail' && resultCenterView.from === 'list') {
+      setResultCenterView((prev) => ({ ...prev, type: 'list', resultId: 0 }))
+      return
+    }
+    setResultCenterView({ type: 'papers', from: 'papers', resultId: 0, userId: 0, paperId: 0 })
+    if (!isBasicUser && !adminResultPaperOverview.items.length) {
       try {
-        await fetchAdminResults(true, { page: 1 })
+        await fetchAdminResultPapers(true)
       } catch (err) {
         setError(err.message || '加载考试结果失败')
       }
@@ -3914,7 +3975,8 @@ function App() {
     setCurrentQuestions(nextQuestions)
     setActiveQuestionId(Number(nextQuestions?.[0]?.question_id || 0))
     const duration = Number(payload?.session?.duration_minutes || 60)
-    setRemainingSeconds(Math.max(0, Math.floor(duration * 60)))
+    const remaining = Number(payload?.remaining_seconds)
+    setRemainingSeconds(Number.isFinite(remaining) ? Math.max(0, Math.floor(remaining)) : Math.max(0, Math.floor(duration * 60)))
     setCurrentResult(null)
     setSelectedHistoryResultId('')
     setResultAdvice(null)
@@ -3927,11 +3989,43 @@ function App() {
     setActiveMenu('exam')
   }
 
+  const restoreExamSessionById = async (sessionId, { silent = false } = {}) => {
+    const sid = Number(sessionId || 0)
+    if (!sid) {
+      if (typeof window !== 'undefined') clearPersistedExamSessionId(window.sessionStorage)
+      return null
+    }
+    if (!silent) clearFeedback()
+    try {
+      const payload = await api.get(`/api/train-exam/exam-sessions/${sid}`)
+      if (String(payload?.session?.status || '').toLowerCase() === 'started') {
+        applyExamSessionPayload(payload, silent ? '' : `已恢复考试会话：${sid}`)
+        return payload
+      }
+      if (typeof window !== 'undefined') clearPersistedExamSessionId(window.sessionStorage)
+      return payload
+    } catch (err) {
+      if (typeof window !== 'undefined') clearPersistedExamSessionId(window.sessionStorage)
+      if (!silent) setError(err.message || '恢复考试会话失败')
+      return null
+    }
+  }
+
+  const restorePersistedExamSession = async ({ silent = true } = {}) => {
+    if (typeof window === 'undefined') return null
+    const sessionId = readPersistedExamSessionId(window.sessionStorage)
+    if (!sessionId) return null
+    return restoreExamSessionById(sessionId, { silent })
+  }
+
   const onStartExam = async (paperId) => {
     clearFeedback()
     try {
       const payload = await api.post(`/api/train-exam/papers/${paperId}/exam/start`, {})
-      applyExamSessionPayload(payload, `考试已开始，会话ID：${payload?.session?.id}`)
+      applyExamSessionPayload(
+        payload,
+        payload?.resumed ? `已恢复考试，会话ID：${payload?.session?.id}` : `考试已开始，会话ID：${payload?.session?.id}`
+      )
     } catch (err) {
       setError(err.message || '开始考试失败')
     }
@@ -4495,6 +4589,19 @@ function App() {
   useEffect(() => {
     fetchBootstrap()
   }, [])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    if (
+      Number(currentSession?.id || 0) > 0
+      && !currentResult
+      && String(currentSession?.status || '').toLowerCase() === 'started'
+    ) {
+      persistExamSessionId(window.sessionStorage, Number(currentSession.id))
+      return
+    }
+    clearPersistedExamSessionId(window.sessionStorage)
+  }, [currentSession?.id, currentSession?.status, currentResult])
 
   useEffect(() => () => {
     stopTranscodePolling()
@@ -5138,7 +5245,7 @@ function App() {
                 onClick={async () => {
                   setActiveMenu('results')
                   setResultCenterTab('results')
-                  setResultCenterView({ type: 'list', from: 'list', resultId: 0, userId: 0 })
+                  setResultCenterView({ type: 'papers', from: 'papers', resultId: 0, userId: 0, paperId: 0 })
                   try {
                     await fetchMyResults(true)
                   } catch (err) {
@@ -5186,9 +5293,9 @@ function App() {
                 onClick={async () => {
                   setActiveMenu('results')
                   setResultCenterTab('results')
-                  setResultCenterView({ type: 'list', from: 'list', resultId: 0, userId: 0 })
+                  setResultCenterView({ type: 'papers', from: 'papers', resultId: 0, userId: 0, paperId: 0 })
                   try {
-                    await fetchAdminResults(true, { page: 1 })
+                    await fetchAdminResultPapers(true)
                   } catch (err) {
                     setError(err.message || '加载考试结果失败')
                   }
@@ -6494,6 +6601,7 @@ function App() {
                         <div className="row-actions">
                           <span className="badge">得分：{Number(currentResult.score || 0).toFixed(2)}</span>
                           <span className="badge">总分：{Number(currentResult.total_score || 0).toFixed(2)}</span>
+                          <span className={`rating-chip rating-${formatRatingText(currentResult.rating_level).toLowerCase()}`}>评级 {formatRatingText(currentResult.rating_level)}</span>
                           <span className="badge">{Number(currentResult.passed || 0) === 1 ? '通过' : '未通过'}</span>
                           {!isBasicUser && Number(currentResult.passed || 0) === 1 ? (
                             <button className="primary" onClick={() => onGenerateCertificate(currentResult.id)}>生成证书</button>
@@ -6759,9 +6867,9 @@ function App() {
                       type="button"
                       onClick={async () => {
                         setResultCenterTab('results')
-                        setResultCenterView({ type: 'list', from: 'list', resultId: 0, userId: 0 })
+                        setResultCenterView({ type: 'papers', from: 'papers', resultId: 0, userId: 0, paperId: 0 })
                         try {
-                          await fetchAdminResults(true, { page: 1 })
+                          await fetchAdminResultPapers(true)
                         } catch (err) {
                           setError(err.message || '加载考试结果失败')
                         }
@@ -6774,7 +6882,7 @@ function App() {
                       type="button"
                       onClick={async () => {
                         setResultCenterTab('certificates')
-                        setResultCenterView({ type: 'list', from: 'list', resultId: 0, userId: 0 })
+                        setResultCenterView({ type: 'papers', from: 'papers', resultId: 0, userId: 0, paperId: 0 })
                         try {
                           await Promise.all([fetchCertificateCenter(true), fetchCertificateTemplate(true)])
                         } catch (err) {
@@ -6788,16 +6896,24 @@ function App() {
                 </div>
                 <div className="panel-body results-hub-intro">
                   <div>
-                    <strong>{resultCenterTab === 'results' ? '先筛选，再打开卷面详情。' : '证书模板与续证任务按需加载。'}</strong>
+                    <strong>{resultCenterTab === 'results' ? '先选试卷，再查看每个人的考试结果。' : '证书模板与续证任务按需加载。'}</strong>
                     <p className="sub">
                       {resultCenterTab === 'results'
-                        ? '这里可以按考生、试卷和时间查看每次考试的分数、报表和逐题卷面。'
+                        ? '成绩中心按已发布试卷汇总，进入试卷后仍可按考生、时间和通过状态筛选。'
                         : '证书模板、续证任务和个人证书列表保留在这里，不再和考试结果首屏一起加载。'}
                     </p>
                   </div>
-                  {resultCenterTab === 'results' && resultCenterView.type === 'list' ? (
+                  {resultCenterTab === 'results' && resultCenterView.type === 'papers' ? (
+                    <div className="row-actions">
+                      <span className="badge">已发布试卷 {adminResultPaperOverview.items.length} 套</span>
+                      <button className="ghost" type="button" onClick={() => fetchAdminResultPapers()} disabled={adminResultPapersLoading}>
+                        {adminResultPapersLoading ? '刷新中...' : '刷新试卷'}
+                      </button>
+                    </div>
+                  ) : resultCenterTab === 'results' && resultCenterView.type === 'list' ? (
                     <div className="row-actions">
                       <span className="badge">当前共 {adminResultsPagination.total} 条结果</span>
+                      <button className="ghost" type="button" onClick={onBackToResultCenter}>返回试卷列表</button>
                       <button className="ghost" type="button" onClick={onExportAdminResults} disabled={adminResultsLoading || adminResultsExporting}>
                         {adminResultsExporting ? '导出中...' : '导出结果'}
                       </button>
@@ -6848,6 +6964,7 @@ function App() {
                             <div className="row-actions">
                               <span className="badge">结果 #{resultReviewDetail?.summary?.result_id || 0}</span>
                               <span className="badge">考生：{resultReviewDetail?.summary?.username || '-'}</span>
+                              <span className={`rating-chip rating-${formatRatingText(resultReviewDetail?.summary?.rating_level).toLowerCase()}`}>评级 {formatRatingText(resultReviewDetail?.summary?.rating_level)}</span>
                               <span className="badge">部门：{resultReviewDetail?.summary?.user_department || '-'}</span>
                               <span className="badge">岗位：{resultReviewDetail?.summary?.user_position || '-'}</span>
                             </div>
@@ -6861,7 +6978,7 @@ function App() {
                           <div className="results-score-card">
                             <span>得分</span>
                             <strong>{Number(resultReviewDetail?.summary?.score || 0).toFixed(2)}</strong>
-                            <div>总分 {Number(resultReviewDetail?.summary?.total_score || 0).toFixed(2)} / 及格线 {Number(resultReviewDetail?.summary?.pass_score || 0).toFixed(2)}</div>
+                            <div>评级 {formatRatingText(resultReviewDetail?.summary?.rating_level)} / 总分 {Number(resultReviewDetail?.summary?.total_score || 0).toFixed(2)} / 及格线 {Number(resultReviewDetail?.summary?.pass_score || 0).toFixed(2)}</div>
                           </div>
                         </div>
                         <div className="metric-grid results-detail-metrics">
@@ -6977,6 +7094,70 @@ function App() {
                   </>
                 ) : null}
               </>
+            ) : !isBasicUser && resultCenterTab === 'results' && resultCenterView.type === 'papers' ? (
+              <section className="panel">
+                <div className="panel-header">
+                  <div>
+                    <h2>试卷成绩总览</h2>
+                    <div className="sub">只显示已发布试卷，点进试卷后查看每个人的考试结果。</div>
+                  </div>
+                  <button className="ghost" type="button" onClick={() => fetchAdminResultPapers()} disabled={adminResultPapersLoading}>
+                    {adminResultPapersLoading ? '刷新中...' : '刷新试卷'}
+                  </button>
+                </div>
+                <div className="panel-body table-wrap">
+                  <table className="results-table">
+                    <thead>
+                      <tr>
+                        <th>试卷</th>
+                        <th>考试次数</th>
+                        <th>参考人数</th>
+                        <th>最终成绩数</th>
+                        <th>平均分</th>
+                        <th>通过率</th>
+                        <th>评级分布</th>
+                        <th>最近考试</th>
+                        <th>操作</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {adminResultPapersLoading && !adminResultPaperOverview.items.length ? (
+                        <tr><td colSpan={9}>试卷成绩加载中...</td></tr>
+                      ) : adminResultPaperOverview.items.length ? adminResultPaperOverview.items.map((item) => {
+                        const distribution = item.rating_distribution || {}
+                        return (
+                          <tr key={`result-paper-overview-${item.paper_id}`}>
+                            <td>
+                              <div>{item.paper_name || `试卷#${item.paper_id}`}</div>
+                              <div className="sub">ID：{item.paper_id}</div>
+                            </td>
+                            <td>{Number(item.result_total || 0)}</td>
+                            <td>{Number(item.candidate_total || 0)}</td>
+                            <td>{Number(item.final_result_count || 0)}</td>
+                            <td>{Number(item.average_score || 0).toFixed(2)}</td>
+                            <td>{formatPercentText(item.pass_rate || 0)}</td>
+                            <td>
+                              <div className="rating-distribution">
+                                {['A', 'B', 'C', 'D'].map((level) => (
+                                  <span className={`rating-chip rating-${level.toLowerCase()}`} key={`paper-${item.paper_id}-rating-${level}`}>
+                                    {level} {Number(distribution[level] || 0)}
+                                  </span>
+                                ))}
+                              </div>
+                            </td>
+                            <td>{formatDateTime(item.latest_result_at)}</td>
+                            <td>
+                              <button className="primary" type="button" onClick={() => onOpenPaperResults(item)}>查看成绩</button>
+                            </td>
+                          </tr>
+                        )
+                      }) : (
+                        <tr><td colSpan={9}>暂无已发布试卷</td></tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </section>
             ) : !isBasicUser && resultCenterTab === 'results' && resultCenterView.type === 'candidate' ? (
               <>
                 <section className="panel">
@@ -6986,7 +7167,7 @@ function App() {
                       <div className="sub">查看该考生的历史考试结果与卷面详情。</div>
                     </div>
                     <div className="row-actions">
-                      <button className="ghost" type="button" onClick={() => setResultCenterView({ type: 'list', from: 'list', resultId: 0, userId: 0 })}>返回结果列表</button>
+                      <button className="ghost" type="button" onClick={onBackToResultCenter}>返回结果列表</button>
                       <button
                         className="ghost"
                         type="button"
@@ -7047,6 +7228,7 @@ function App() {
                           <th>试卷</th>
                           <th>考试时间</th>
                           <th>得分</th>
+                          <th>评级</th>
                           <th>用时</th>
                           <th>第几次考试</th>
                           <th>考试结果</th>
@@ -7055,13 +7237,14 @@ function App() {
                       </thead>
                       <tbody>
                         {candidateRecordLoading && !candidateRecord.items.length ? (
-                          <tr><td colSpan={8}>考生记录加载中...</td></tr>
+                          <tr><td colSpan={9}>考生记录加载中...</td></tr>
                         ) : candidateRecord.items.length ? candidateRecord.items.map((item) => (
                           <tr key={`candidate-result-${item.id}`}>
                             <td>{item.id}</td>
                             <td>{item.paper_name || item.paper_id}</td>
                             <td>{formatDateTime(item.created_at)}</td>
                             <td>{Number(item.score || 0).toFixed(2)} / {Number(item.total_score || 0).toFixed(2)}</td>
+                            <td><span className={`rating-chip rating-${formatRatingText(item.rating_level).toLowerCase()}`}>{formatRatingText(item.rating_level)}</span></td>
                             <td>{formatDurationText(item.duration_seconds)}</td>
                             <td>{item.attempt_no}</td>
                             <td><span className={`status-chip ${Number(item.passed || 0) === 1 ? 'good' : 'warn'}`}>{Number(item.passed || 0) === 1 ? '通过' : '未通过'}</span></td>
@@ -7072,7 +7255,7 @@ function App() {
                             </td>
                           </tr>
                         )) : (
-                          <tr><td colSpan={8}>当前筛选下没有可查看的考试记录</td></tr>
+                          <tr><td colSpan={9}>当前筛选下没有可查看的考试记录</td></tr>
                         )}
                       </tbody>
                     </table>
@@ -7238,6 +7421,7 @@ function App() {
                           <th>试卷</th>
                           <th>考试时间</th>
                           <th>得分</th>
+                          <th>评级</th>
                           <th>用时</th>
                           <th>错题数</th>
                           <th>第几次考试</th>
@@ -7248,7 +7432,7 @@ function App() {
                       </thead>
                       <tbody>
                         {adminResultsLoading && !adminResults.length ? (
-                          <tr><td colSpan={11}>考试结果加载中...</td></tr>
+                          <tr><td colSpan={12}>考试结果加载中...</td></tr>
                         ) : adminResults.length ? adminResults.map((item) => (
                           <tr key={`admin-result-${item.id}`}>
                             <td>{item.id}</td>
@@ -7259,6 +7443,7 @@ function App() {
                             <td>{item.paper_name || item.paper_id}</td>
                             <td>{formatDateTime(item.created_at)}</td>
                             <td>{Number(item.score || 0).toFixed(2)} / {Number(item.total_score || 0).toFixed(2)}</td>
+                            <td><span className={`rating-chip rating-${formatRatingText(item.rating_level).toLowerCase()}`}>{formatRatingText(item.rating_level)}</span></td>
                             <td>{formatDurationText(item.duration_seconds)}</td>
                             <td>{item.wrong_count}</td>
                             <td>{item.attempt_no}</td>
@@ -7272,7 +7457,7 @@ function App() {
                             </td>
                           </tr>
                         )) : (
-                          <tr><td colSpan={11}>当前条件下没有考试结果</td></tr>
+                          <tr><td colSpan={12}>当前条件下没有考试结果</td></tr>
                         )}
                       </tbody>
                     </table>
@@ -7481,6 +7666,7 @@ function App() {
                           <th>试卷</th>
                           <th>第几次考试</th>
                           <th>得分</th>
+                          <th>评级</th>
                           <th>考试结果</th>
                           <th>是否最终</th>
                           <th>考试时间</th>
@@ -7494,6 +7680,7 @@ function App() {
                             <td>{paperNameById.get(Number(r.paper_id || 0)) || r.paper_id}</td>
                             <td>{r.attempt_no}</td>
                             <td>{Number(r.score || 0).toFixed(2)} / {Number(r.total_score || 0).toFixed(2)}</td>
+                            <td><span className={`rating-chip rating-${formatRatingText(r.rating_level).toLowerCase()}`}>{formatRatingText(r.rating_level)}</span></td>
                             <td><span className={`status-chip ${Number(r.passed || 0) === 1 ? 'good' : 'warn'}`}>{Number(r.passed || 0) === 1 ? '通过' : '未通过'}</span></td>
                             <td>{Number(r.is_final || 0) === 1 ? '是' : '否'}</td>
                             <td>{formatDateTime(r.created_at)}</td>
@@ -7503,7 +7690,7 @@ function App() {
                               </div>
                             </td>
                           </tr>
-                        )) : <tr><td colSpan={8}>还没有可查看的考试结果</td></tr>}
+                        )) : <tr><td colSpan={9}>还没有可查看的考试结果</td></tr>}
                       </tbody>
                     </table>
                   </div>

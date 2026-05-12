@@ -304,6 +304,19 @@ describe('train-exam smoke e2e', () => {
     const examQuestions = Array.isArray(startResp.json?.questions) ? startResp.json.questions : [];
     expect(examQuestions.length).toBeGreaterThanOrEqual(2);
 
+    const resumeResp = await request({
+      base: apiBase,
+      path: `/api/train-exam/papers/${paperId}/exam/start`,
+      method: 'POST',
+      token,
+      body: {},
+    });
+    ensureStatus(resumeResp, 200);
+    expect(Number(resumeResp.json?.session?.id || 0)).toBe(sessionId);
+    expect(String(resumeResp.json?.session?.status || '').toLowerCase()).toBe('started');
+    expect(Array.isArray(resumeResp.json?.questions)).toBe(true);
+    expect(resumeResp.json.questions.length).toBe(examQuestions.length);
+
     for (const question of examQuestions) {
       const qid = Number(question?.question_id || 0);
       const userAnswer = ['A'];

@@ -56,6 +56,7 @@ const {
   normalizeAdminResultsFilters,
   buildAdminResultsWhere,
   normalizeAdminResultListRow,
+  normalizeAdminResultPaperSummaryRow,
   normalizeAdminResultsSummary,
   buildResultReviewDetail,
   buildCandidateHistorySummary,
@@ -70,6 +71,10 @@ const {
   evaluateAnswer,
   normalizeMultipleChoiceAnswerValues,
 } = require('./exam-answer-utils');
+const {
+  getExamSessionExpireTs,
+  shouldResumeExistingExamSession,
+} = require('./exam-session-utils');
 const { isBasicViewerApiAllowed, isBasicViewerRole } = require('./viewer-scope-utils');
 const {
   isOriginAllowedForRequest,
@@ -7283,6 +7288,41 @@ const createExamSessionWithSnapshots = async ({
 
   return {
     session,
+    remaining_seconds: Math.max(0, Math.floor(Number(session?.duration_minutes || durationMinutes || 60) * 60)),
+    questions: answers.map((item) => ({
+      question_id: Number(item.question_id),
+      sort_order: Number(item.sort_order || 0),
+      snapshot: parseMaybeJson(item.question_snapshot_json, {}),
+      user_answer: parseMaybeJson(item.user_answer_json, null),
+    })),
+  };
+};
+
+const loadExamSessionPayload = async ({ sessionId, req = null, autoFinalizeOnExpire = true } = {}) => {
+  const sid = Number(sessionId || 0);
+  const session = await get('SELECT * FROM te_exam_sessions WHERE id = ? LIMIT 1', [sid]);
+  if (!session) throw appError('考试会话不存在', 404);
+
+  if (autoFinalizeOnExpire && trimText(session.status) === 'started' && Date.now() >= getExamSessionExpireTs(session)) {
+    await finalizeExamSession({ sessionId: sid, forceTimeout: true, req });
+  }
+
+  const latestSession = await get('SELECT * FROM te_exam_sessions WHERE id = ? LIMIT 1', [sid]);
+  const answers = await query(
+    `SELECT question_id, question_snapshot_json, user_answer_json, sort_order
+     FROM te_exam_answers
+     WHERE session_id = ?
+     ORDER BY sort_order ASC, id ASC`,
+    [sid]
+  );
+
+  const remainingSeconds = trimText(latestSession.status) === 'started'
+    ? Math.max(0, Math.floor((getExamSessionExpireTs(latestSession) - Date.now()) / 1000))
+    : 0;
+
+  return {
+    session: latestSession,
+    remaining_seconds: remainingSeconds,
     questions: answers.map((item) => ({
       question_id: Number(item.question_id),
       sort_order: Number(item.sort_order || 0),
@@ -7300,6 +7340,25 @@ app.post('/api/train-exam/papers/:id/exam/start', requireReader, examStartRateLi
   if (trimText(paper.status) !== 'published') throw appError('试卷未发布，不能开始考试', 409);
 
   const userId = Number(req.user.id || 0);
+  const runningSession = await get(
+    `SELECT * FROM te_exam_sessions
+     WHERE paper_id = ? AND user_id = ? AND status = 'started'
+     ORDER BY id DESC
+     LIMIT 1`,
+    [paperId, userId]
+  );
+  if (runningSession && shouldResumeExistingExamSession({ session: runningSession })) {
+    const payload = await loadExamSessionPayload({ sessionId: Number(runningSession.id), req, autoFinalizeOnExpire: true });
+    res.status(200).json({
+      ...payload,
+      resumed: true,
+    });
+    return;
+  }
+  if (runningSession) {
+    await finalizeExamSession({ sessionId: Number(runningSession.id), forceTimeout: true, req });
+  }
+
   const doneAttemptsRow = await get(
     `SELECT COUNT(1) AS total
      FROM te_exam_sessions
@@ -7340,45 +7399,18 @@ app.post('/api/train-exam/papers/:id/exam/start', requireReader, examStartRateLi
     operationAction: 'EXAM_START',
   });
 
-  res.status(201).json(payload);
+  res.status(201).json({
+    ...payload,
+    resumed: false,
+  });
 }));
 
 app.get('/api/train-exam/exam-sessions/:sessionId', requireReader, asyncHandler(async (req, res) => {
   const sessionId = Number(req.params.sessionId);
   const session = await get('SELECT * FROM te_exam_sessions WHERE id = ? LIMIT 1', [sessionId]);
   ensureExamSessionAccess(req, session, { allowAuditRead: true });
-
-  const started = parseDate(session.started_at);
-  const expireTs = started ? started.getTime() + Number(session.duration_minutes || 60) * 60 * 1000 : Date.now();
-  const nowTs = Date.now();
-
-  if (trimText(session.status) === 'started' && nowTs >= expireTs) {
-    await finalizeExamSession({ sessionId, forceTimeout: true, req });
-  }
-
-  const latestSession = await get('SELECT * FROM te_exam_sessions WHERE id = ? LIMIT 1', [sessionId]);
-  const answers = await query(
-    `SELECT question_id, question_snapshot_json, user_answer_json, sort_order
-     FROM te_exam_answers
-     WHERE session_id = ?
-     ORDER BY sort_order ASC, id ASC`,
-    [sessionId]
-  );
-
-  const remainingSeconds = trimText(latestSession.status) === 'started'
-    ? Math.max(0, Math.floor((expireTs - Date.now()) / 1000))
-    : 0;
-
-  res.json({
-    session: latestSession,
-    remaining_seconds: remainingSeconds,
-    questions: answers.map((item) => ({
-      question_id: Number(item.question_id),
-      sort_order: Number(item.sort_order || 0),
-      snapshot: parseMaybeJson(item.question_snapshot_json, {}),
-      user_answer: parseMaybeJson(item.user_answer_json, null),
-    })),
-  });
+  const payload = await loadExamSessionPayload({ sessionId, req, autoFinalizeOnExpire: true });
+  res.json(payload);
 }));
 
 app.post('/api/train-exam/exam-sessions/:sessionId/answers', requireReader, asyncHandler(async (req, res) => {
@@ -7444,7 +7476,7 @@ app.post('/api/train-exam/exam-sessions/:sessionId/submit', requireReader, async
   }
 
   res.json({
-    ...result,
+    ...normalizeAdminResultRow(result),
     ai_advice: advice
       ? {
           id: Number(advice.id || 0),
@@ -7473,7 +7505,7 @@ app.get('/api/train-exam/exam-sessions/:sessionId/result', requireReader, asyncH
   if (!result) throw appError('当前会话尚未生成成绩', 409);
 
   res.json({
-    ...result,
+    ...normalizeAdminResultRow(result),
     detail: parseMaybeJson(result.detail_json, {}),
   });
 }));
@@ -7486,7 +7518,34 @@ app.get('/api/train-exam/my/results', requireReader, asyncHandler(async (req, re
      ORDER BY id DESC`,
     [Number(req.user.id || 0)]
   );
-  res.json(rows);
+  res.json(rows.map((item) => normalizeAdminResultRow(item)));
+}));
+
+app.get('/api/train-exam/admin/results/papers', requireResultCenterReader, asyncHandler(async (req, res) => {
+  const rows = await query(
+    `SELECT
+      p.id AS paper_id,
+      p.name AS paper_name,
+      p.status,
+      COUNT(r.id) AS result_total,
+      COUNT(DISTINCT CASE WHEN r.user_id IS NOT NULL THEN r.user_id END) AS candidate_total,
+      SUM(CASE WHEN r.is_final = 1 THEN 1 ELSE 0 END) AS final_result_count,
+      SUM(CASE WHEN r.passed = 1 THEN 1 ELSE 0 END) AS pass_count,
+      AVG(r.score) AS average_score,
+      MAX(r.created_at) AS latest_result_at,
+      SUM(CASE WHEN r.total_score > 0 AND (r.score / r.total_score) >= 0.9 THEN 1 ELSE 0 END) AS rating_a_count,
+      SUM(CASE WHEN r.total_score > 0 AND (r.score / r.total_score) >= 0.8 AND (r.score / r.total_score) < 0.9 THEN 1 ELSE 0 END) AS rating_b_count,
+      SUM(CASE WHEN r.total_score > 0 AND (r.score / r.total_score) >= 0.6 AND (r.score / r.total_score) < 0.8 THEN 1 ELSE 0 END) AS rating_c_count,
+      SUM(CASE WHEN r.id IS NOT NULL AND (r.total_score <= 0 OR (r.total_score > 0 AND (r.score / r.total_score) < 0.6)) THEN 1 ELSE 0 END) AS rating_d_count
+     FROM te_papers p
+     LEFT JOIN te_exam_results r ON r.paper_id = p.id
+     WHERE p.status = 'published'
+     GROUP BY p.id, p.name, p.status
+     ORDER BY latest_result_at DESC, p.id DESC`
+  );
+  res.json({
+    items: rows.map((item) => normalizeAdminResultPaperSummaryRow(item)),
+  });
 }));
 
 app.get('/api/train-exam/my/results/export.csv', requireReader, asyncHandler(async (req, res) => {
@@ -7973,7 +8032,7 @@ app.get('/api/train-exam/results/:id', requireReader, asyncHandler(async (req, r
   const advice = await get('SELECT * FROM te_result_ai_advices WHERE result_id = ? LIMIT 1', [id]);
 
   res.json({
-    ...row,
+    ...normalizeAdminResultRow(row),
     detail: parseMaybeJson(row.detail_json, {}),
     ai_advice: advice
       ? {

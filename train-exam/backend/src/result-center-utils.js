@@ -31,6 +31,15 @@ const roundTo = (value, digits = 2) => {
   return Math.round(num * base) / base;
 };
 
+const calculateExamRating = (score, totalScore) => {
+  const total = toNumber(totalScore, 0);
+  const rate = total > 0 ? roundTo((toNumber(score, 0) / total) * 100, 2) : 0;
+  if (rate >= 90) return { rating_level: 'A', rating_rate: rate };
+  if (rate >= 80) return { rating_level: 'B', rating_rate: rate };
+  if (rate >= 60) return { rating_level: 'C', rating_rate: rate };
+  return { rating_level: 'D', rating_rate: rate };
+};
+
 const parseMaybeJson = (value, fallback = null) => {
   if (value && typeof value === 'object') return value;
   const text = trimText(value);
@@ -181,6 +190,7 @@ const normalizeAdminResultListRow = (item = {}) => ({
   is_final: toNumber(item.is_final, 0),
   duration_seconds: toPositiveInt(item.duration_seconds, 0),
   wrong_count: toPositiveInt(item.wrong_count, 0),
+  ...calculateExamRating(item.score, item.total_score),
 });
 
 const normalizeAdminResultsSummary = (item = {}) => {
@@ -194,6 +204,29 @@ const normalizeAdminResultsSummary = (item = {}) => {
     average_duration_seconds: toPositiveInt(item.average_duration_seconds, 0),
     final_result_count: toPositiveInt(item.final_result_count, 0),
     pass_rate: total > 0 ? roundTo((passCount / total) * 100, 2) : 0,
+  };
+};
+
+const normalizeAdminResultPaperSummaryRow = (item = {}) => {
+  const resultTotal = toPositiveInt(item.result_total, 0);
+  const passCount = toPositiveInt(item.pass_count, 0);
+  return {
+    paper_id: toPositiveInt(item.paper_id ?? item.id, 0),
+    paper_name: trimText(item.paper_name ?? item.name),
+    status: trimText(item.status),
+    result_total: resultTotal,
+    candidate_total: toPositiveInt(item.candidate_total, 0),
+    final_result_count: toPositiveInt(item.final_result_count, 0),
+    pass_count: passCount,
+    pass_rate: resultTotal > 0 ? roundTo((passCount / resultTotal) * 100, 2) : 0,
+    average_score: roundTo(item.average_score, 2),
+    latest_result_at: item.latest_result_at || '',
+    rating_distribution: {
+      A: toPositiveInt(item.rating_a_count, 0),
+      B: toPositiveInt(item.rating_b_count, 0),
+      C: toPositiveInt(item.rating_c_count, 0),
+      D: toPositiveInt(item.rating_d_count, 0),
+    },
   };
 };
 
@@ -334,6 +367,7 @@ const buildResultsExportCsv = (rows = []) => {
     '考试时间',
     '得分',
     '总分',
+    '评级',
     '用时(秒)',
     '错题数',
     '第几次考试',
@@ -351,6 +385,7 @@ const buildResultsExportCsv = (rows = []) => {
       formatShanghaiDateTime(item?.created_at),
       row.score.toFixed(2),
       row.total_score.toFixed(2),
+      row.rating_level,
       row.duration_seconds,
       row.wrong_count,
       row.attempt_no,
@@ -363,10 +398,12 @@ const buildResultsExportCsv = (rows = []) => {
 
 module.exports = {
   buildResultsExportCsv,
+  calculateExamRating,
   formatShanghaiDateTime,
   normalizeAdminResultsFilters,
   buildAdminResultsWhere,
   normalizeAdminResultListRow,
+  normalizeAdminResultPaperSummaryRow,
   normalizeAdminResultsSummary,
   buildResultReviewDetail,
   buildCandidateHistorySummary,

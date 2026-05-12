@@ -37,3 +37,9 @@ test('results center exposes export actions for admin and basic user result list
   assert.match(appSource, /\/api\/train-exam\/admin\/results\/export\.csv/);
   assert.match(appSource, /\/api\/train-exam\/my\/results\/export\.csv/);
 });
+
+test('admin result center starts from published paper result overview', () => {
+  assert.match(appSource, /\/api\/train-exam\/admin\/results\/papers/);
+  assert.match(appSource, /查看成绩/);
+  assert.match(appSource, /评级分布/);
+});
