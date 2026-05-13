@@ -15,6 +15,7 @@ const SYSTEM_ACCESS_KEYS = Object.freeze([
   'faq',
   'tender',
   'train-exam',
+  'prompt-center',
   ADMIN_CENTER_KEY,
   AUDIT_CENTER_KEY,
 ]);
@@ -48,9 +49,9 @@ const defaultAppAccessByRole = (role) => {
   if (normalizedRole === 'admin') return [...BUSINESS_SYSTEM_ACCESS_KEYS];
   if (normalizedRole === 'sysadmin') return [ADMIN_CENTER_KEY];
   if (normalizedRole === 'auditor') return [AUDIT_CENTER_KEY, DELIVERY_KEY];
-  if (normalizedRole === 'editor') return ['faq', 'tender', 'train-exam'];
-  if (normalizedRole === 'reviewer') return ['faq', 'train-exam'];
-  return ['reminder', 'train-exam'];
+  if (normalizedRole === 'editor') return ['faq', 'tender', 'train-exam', 'prompt-center'];
+  if (normalizedRole === 'reviewer') return ['faq', 'train-exam', 'prompt-center'];
+  return ['reminder', 'train-exam', 'prompt-center'];
 };
 
 const resolveUserAppAccess = (user) => {
@@ -70,6 +71,9 @@ const resolveUserAppAccess = (user) => {
   );
   if (!normalized.includes('train-exam') && !['sysadmin', 'auditor'].includes(normalizedRole)) {
     normalized.push('train-exam');
+  }
+  if (!normalized.includes('prompt-center') && !['sysadmin', 'auditor'].includes(normalizedRole)) {
+    normalized.push('prompt-center');
   }
   return normalized;
 };

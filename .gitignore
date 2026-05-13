@@ -9,6 +9,7 @@ web/dist
 ticketing/web/dist
 device-flow/frontend/dist
 sec-impl/frontend/dist
+prompt-center/frontend/dist
 .DS_Store
 npm-debug.log
 yarn.lock

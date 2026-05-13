@@ -1,6 +1,6 @@
 # 聚信多系统业务平台
 
-本仓库是一个基于统一登录（SSO）的多系统业务平台，包含以下 9 个业务域：
+本仓库是一个基于统一登录（SSO）的多系统业务平台，包含以下 10 个业务域：
 
 - 授权到期提醒（Reminder）
 - 工单管理（Ticketing）
@@ -11,6 +11,7 @@
 - FAQ
 - 标书系统（Tender）
 - 培训考试系统（Train-Exam）
+- 提示词管理中心（Prompt Center）
 
 目标是：统一账号登录、按系统授权访问、业务库隔离、可通过 Docker Compose 一键启动。
 
@@ -27,6 +28,7 @@
 - `faq-api`：FAQ 后端（Node.js + OnlyOffice）
 - `tender-api`：标书系统后端（Node.js + OnlyOffice + OCR + AI）
 - `train-exam-api`：培训考试系统后端（Node.js + Excel 导题 + 自动评分 + 证书）
+- `prompt-center-api`：提示词管理中心后端（Node.js + 部门分类 + 版本审计）
 - `web*`：各系统前端（Nginx + 静态资源）
 
 ### 1.2 数据库策略
@@ -39,6 +41,7 @@
 - `juxin_faq`（FAQ）
 - `juxin_tender`（标书系统）
 - `juxin_train_exam`（培训考试系统）
+- `juxin_prompt_center`（提示词管理中心）
 
 > 说明：统一实例 + 独立库，兼顾运维成本与业务隔离。
 
@@ -117,6 +120,9 @@ export PUBLIC_HOST='服务器公网IP或域名，不带协议和端口'
 # 仅 培训考试系统
 ./scripts/deploy/docker-compose-aliyun.sh start mysql auth train-exam-onlyoffice train-exam-api web-train-exam
 
+# 仅 提示词管理中心
+./scripts/deploy/docker-compose-aliyun.sh start mysql auth prompt-center-api web-prompt-center
+
 # 仅 CMDB 系统
 ./scripts/deploy/docker-compose-aliyun.sh start mysql auth cmdb-mysql-init cmdb web-cmdb
 ```
@@ -163,6 +169,8 @@ cd /Users/zhanglei/Documents/codex-new
 | 标书后端 | `http://localhost:5187` |
 | 培训考试前端 | `http://localhost:18087` |
 | 培训考试后端 | `http://localhost:5188` |
+| 提示词中心前端 | `http://localhost:18088` |
+| 提示词中心后端 | `http://localhost:5189` |
 | CMDB 前端 | `http://localhost:8090` |
 | MySQL（宿主机映射） | `localhost:3308` |
 
@@ -305,6 +313,7 @@ npm run test:rbac
 - FAQ：`AUTH_SYSTEM_KEY=faq`、`MYSQL_DATABASE=juxin_faq`
 - Tender：`AUTH_SYSTEM_KEY=tender`、`MYSQL_DATABASE=juxin_tender`
 - Train-Exam：`AUTH_SYSTEM_KEY=train-exam`、`MYSQL_DATABASE=juxin_train_exam`
+- Prompt Center：`AUTH_SYSTEM_KEY=prompt-center`、`MYSQL_DATABASE=juxin_prompt_center`
 - CMDB：`AUTH_SYSTEM_KEY=cmdb`、`MYSQL_DSN=.../cmdb`
 
 ## 8. 安全基线
@@ -331,6 +340,7 @@ npm run test:rbac
 ├── faq/                   # FAQ 系统（Node + OnlyOffice + Web）
 ├── tender/                # 标书系统（Node + OnlyOffice + OCR + AI）
 ├── train-exam/            # 培训考试系统（Node + Web）
+├── prompt-center/         # 提示词管理中心（Node + Web）
 ├── cmdb/                  # CMDB（Go + Web）
 ├── docs/                  # 发布、测试、设计文档
 └── docker-compose.yml     # 统一编排
@@ -348,7 +358,7 @@ npm run test:rbac
 ## 11. 常见问题
 
 ### Q1：登录成功但看不到某系统入口？
-检查该用户 `app_access` 是否包含对应系统键（如 `inventory`、`device-flow`、`sec-impl`、`faq`、`tender`、`train-exam`、`cmdb`）。
+检查该用户 `app_access` 是否包含对应系统键（如 `inventory`、`device-flow`、`sec-impl`、`faq`、`tender`、`train-exam`、`prompt-center`、`cmdb`）。
 
 ### Q2：跨域报错（CORS）？
 在 `docker-compose.yml` 的对应服务里补齐 `CORS_ORIGINS`，包含访问页面的实际域名与端口。

@@ -1267,6 +1267,26 @@ const authorizeTrainExam = (user, action) => {
   return deny('不支持的授权动作');
 };
 
+const authorizePromptCenter = (user, action) => {
+  if (!user) return deny('未登录');
+  if (!canAccessSystem(user, 'prompt-center')) return deny('无权限访问提示词管理中心');
+  const role = String(user.role || '').toLowerCase();
+  if (action === 'app:enter' || action === 'prompt_center:read') return allow();
+  if (action === 'prompt_center:write' || action === 'prompt_center:taxonomy:manage') {
+    if (role === 'admin' || role === 'editor') return allow();
+    return deny('仅管理员或业务管理员可维护提示词');
+  }
+  if (action === 'prompt_center:publish') {
+    if (role === 'admin' || role === 'reviewer') return allow();
+    return deny('仅管理员或审核用户可发布提示词');
+  }
+  if (action === 'prompt_center:audit:read') {
+    if (role === 'auditor' || role === 'admin') return allow();
+    return deny('仅管理员或审计管理员可查看审计日志');
+  }
+  return deny('不支持的授权动作');
+};
+
 app.get('/api/auth/introspect', async (req, res) => {
   const user = await db.get(
     'SELECT id, username, role, app_access, mfa_enabled, mfa_methods, totp_enabled, totp_secret, email, phone, wecom_id, must_change_password FROM users WHERE id = ?',
@@ -1337,6 +1357,8 @@ app.post('/api/auth/authorize', async (req, res) => {
     result = authorizeTender(user, action);
   } else if (system === 'train-exam') {
     result = authorizeTrainExam(user, action);
+  } else if (system === 'prompt-center') {
+    result = authorizePromptCenter(user, action);
   }
   return res.json({ ...result, user: buildAuthUserPayload(user), scope, apps });
 });
@@ -1368,6 +1390,7 @@ app.get('/api/auth/apps', async (req, res) => {
   const faqURL = process.env.APP_FAQ_URL || 'http://localhost:18085';
   const tenderURL = process.env.APP_TENDER_URL || 'http://localhost:18086';
   const trainExamURL = process.env.APP_TRAIN_EXAM_URL || 'http://localhost:18087';
+  const promptCenterURL = process.env.APP_PROMPT_CENTER_URL || 'http://localhost:18088';
   const adminCenterURL = process.env.APP_ADMIN_CENTER_URL || 'http://localhost:5180/admin-center';
   const auditCenterURL = process.env.APP_AUDIT_CENTER_URL || 'http://localhost:5180/audit-center';
   const appAccess = getUserAppAccess(user);
@@ -1417,6 +1440,10 @@ app.get('/api/auth/apps', async (req, res) => {
   if (appAccess.includes('train-exam')) {
     const trainExamAuth = await authorizeTrainExam(user, 'app:enter');
     apps.push({ key: 'train-exam', name: '培训考试系统', url: trainExamURL, allow: !!trainExamAuth.allow });
+  }
+  if (appAccess.includes('prompt-center')) {
+    const promptCenterAuth = await authorizePromptCenter(user, 'app:enter');
+    apps.push({ key: 'prompt-center', name: '提示词管理中心', url: promptCenterURL, allow: !!promptCenterAuth.allow });
   }
   return res.json({
     user: buildAuthUserPayload(user),
@@ -1989,6 +2016,7 @@ const renderAuditCenterSections = () => ({
 	                <option value="faq">文档管理系统</option>
 	                <option value="tender">标书协同制作系统</option>
 	                <option value="train-exam">培训考试系统</option>
+	                <option value="prompt-center">提示词管理中心</option>
 	              </select>
 	            </label>
 	            <label class="form-label">事件
@@ -2637,11 +2665,11 @@ const renderDedicatedCenterPage = ({ nonce, config }) => {
 
     function getDefaultBusinessAccessByRole(role) {
       const normalizedRole = String(role || '').trim().toLowerCase();
-      if (normalizedRole === 'editor') return ['faq', 'tender', 'train-exam'];
-      if (normalizedRole === 'reviewer') return ['faq', 'train-exam'];
-      if (normalizedRole === 'sales') return ['reminder', 'train-exam'];
+      if (normalizedRole === 'editor') return ['faq', 'tender', 'train-exam', 'prompt-center'];
+      if (normalizedRole === 'reviewer') return ['faq', 'train-exam', 'prompt-center'];
+      if (normalizedRole === 'sales') return ['reminder', 'train-exam', 'prompt-center'];
       if (normalizedRole === 'admin') return systemAccessOptions.map((item) => item.key);
-      return ['reminder', 'train-exam'];
+      return ['reminder', 'train-exam', 'prompt-center'];
     }
 
     function setCheckedValues(selector, values) {
@@ -5305,6 +5333,7 @@ const auditCenterRemoteBaseUrls = Object.freeze({
   faq: process.env.AUDIT_SOURCE_FAQ_URL || 'http://localhost:5186',
   tender: process.env.AUDIT_SOURCE_TENDER_URL || 'http://localhost:5187',
   'train-exam': process.env.AUDIT_SOURCE_TRAIN_EXAM_URL || 'http://localhost:5188',
+  'prompt-center': process.env.AUDIT_SOURCE_PROMPT_CENTER_URL || 'http://localhost:5189',
   cmdb: process.env.AUDIT_SOURCE_CMDB_URL || 'http://localhost:8088',
 });
 const auditCenterLogsService = createAuditCenterLogsService({

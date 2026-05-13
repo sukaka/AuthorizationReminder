@@ -7,6 +7,7 @@ const SYSTEM_DISPLAY_OPTIONS = Object.freeze([
   { key: 'faq', label: '文档管理系统', shortLabel: '文档管理系统' },
   { key: 'tender', label: '标书协同制作系统', shortLabel: '标书协同制作系统' },
   { key: 'train-exam', label: '培训考试系统', shortLabel: '培训考试系统' },
+  { key: 'prompt-center', label: '提示词管理中心', shortLabel: '提示词中心' },
   { key: 'admin-center', label: '管理中心', shortLabel: '管理中心' },
   { key: 'audit-center', label: '审计中心', shortLabel: '审计中心' },
 ]);

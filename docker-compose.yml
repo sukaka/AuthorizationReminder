@@ -88,7 +88,7 @@ services:
       MYSQL_DATABASE: juxin_reminder
       MYSQL_ADMIN_USER: root
       MYSQL_ADMIN_PASSWORD: ${MYSQL_ROOT_PASSWORD}
-      CORS_ORIGINS: "http://localhost:5180,http://127.0.0.1:5180,http://${PUBLIC_HOST:-localhost}:5180,http://localhost:18080,http://127.0.0.1:18080,http://${PUBLIC_HOST:-localhost}:18080,http://localhost:18081,http://127.0.0.1:18081,http://${PUBLIC_HOST:-localhost}:18081,http://localhost:18082,http://127.0.0.1:18082,http://${PUBLIC_HOST:-localhost}:18082,http://localhost:18083,http://127.0.0.1:18083,http://${PUBLIC_HOST:-localhost}:18083,http://localhost:18084,http://127.0.0.1:18084,http://${PUBLIC_HOST:-localhost}:18084,http://localhost:18085,http://127.0.0.1:18085,http://${PUBLIC_HOST:-localhost}:18085,http://localhost:18086,http://127.0.0.1:18086,http://${PUBLIC_HOST:-localhost}:18086,http://localhost:18087,http://127.0.0.1:18087,http://${PUBLIC_HOST:-localhost}:18087,http://localhost:8090,http://127.0.0.1:8090,http://${PUBLIC_HOST:-localhost}:8090"
+      CORS_ORIGINS: "http://localhost:5180,http://127.0.0.1:5180,http://${PUBLIC_HOST:-localhost}:5180,http://localhost:18080,http://127.0.0.1:18080,http://${PUBLIC_HOST:-localhost}:18080,http://localhost:18081,http://127.0.0.1:18081,http://${PUBLIC_HOST:-localhost}:18081,http://localhost:18082,http://127.0.0.1:18082,http://${PUBLIC_HOST:-localhost}:18082,http://localhost:18083,http://127.0.0.1:18083,http://${PUBLIC_HOST:-localhost}:18083,http://localhost:18084,http://127.0.0.1:18084,http://${PUBLIC_HOST:-localhost}:18084,http://localhost:18085,http://127.0.0.1:18085,http://${PUBLIC_HOST:-localhost}:18085,http://localhost:18086,http://127.0.0.1:18086,http://${PUBLIC_HOST:-localhost}:18086,http://localhost:18087,http://127.0.0.1:18087,http://${PUBLIC_HOST:-localhost}:18087,http://localhost:18088,http://127.0.0.1:18088,http://${PUBLIC_HOST:-localhost}:18088,http://localhost:8090,http://127.0.0.1:8090,http://${PUBLIC_HOST:-localhost}:8090"
       APP_CMDB_URL: "http://localhost:8090"
       APP_INVENTORY_URL: "http://localhost:18082"
       APP_DEVICE_FLOW_URL: "http://localhost:18083"
@@ -96,7 +96,9 @@ services:
       APP_FAQ_URL: "http://localhost:18085"
       APP_TENDER_URL: "http://localhost:18086"
       APP_TRAIN_EXAM_URL: "http://localhost:18087"
+      APP_PROMPT_CENTER_URL: "http://localhost:18088"
       AUDIT_SOURCE_DELIVERY_URL: "http://delivery-api:5185"
+      AUDIT_SOURCE_PROMPT_CENTER_URL: "http://prompt-center-api:5189"
       AUTH_COOKIE_NAME: "juxin_auth_token"
       AUTH_COOKIE_SECURE: "${AUTH_COOKIE_SECURE:-false}"
       AUTH_COOKIE_SAMESITE: "lax"
@@ -520,6 +522,41 @@ services:
       - train-exam-onlyoffice
     ports:
       - "18087:80"
+
+  prompt-center-api:
+    build:
+      context: ./prompt-center/backend
+      dockerfile: Dockerfile
+      args: *build_args_node_bookworm_slim
+    environment:
+      PORT: 5189
+      AUTH_SERVICE_URL: "http://auth:5180"
+      AUTH_SYSTEM_KEY: "prompt-center"
+      AUTH_FETCH_TIMEOUT_MS: 5000
+      AUTH_COOKIE_NAME: "juxin_auth_token"
+      MYSQL_HOST: mysql
+      MYSQL_PORT: 3306
+      MYSQL_USER: prompt_center_user
+      MYSQL_PASSWORD: ${PROMPT_CENTER_MYSQL_PASSWORD}
+      MYSQL_DATABASE: juxin_prompt_center
+      MYSQL_ADMIN_USER: root
+      MYSQL_ADMIN_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      CORS_ORIGINS: "http://localhost:18088,http://127.0.0.1:18088,http://${PUBLIC_HOST:-localhost}:18088,http://localhost:5180,http://127.0.0.1:5180,http://${PUBLIC_HOST:-localhost}:5180"
+    depends_on:
+      - mysql
+      - auth
+    ports:
+      - "5189:5189"
+
+  web-prompt-center:
+    build:
+      context: ./prompt-center/frontend
+      args: *build_args_node_alpine_nginx
+    depends_on:
+      - prompt-center-api
+      - auth
+    ports:
+      - "18088:80"
 
   onlyoffice:
     build:

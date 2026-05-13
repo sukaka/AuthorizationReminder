@@ -97,7 +97,7 @@ test('sysadmin and auditor ignore legacy non-dedicated app_access', () => {
 test('legacy ticketing and sec-impl access folds into delivery once', () => {
   assert.deepEqual(
     resolveUserAppAccess({ role: 'editor', app_access: '["ticketing","sec-impl","faq"]' }),
-    ['delivery', 'faq', 'train-exam']
+    ['delivery', 'faq', 'train-exam', 'prompt-center']
   );
 });
 

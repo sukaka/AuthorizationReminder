@@ -10,6 +10,7 @@ test('getSystemDisplayLabel returns Chinese labels for dedicated centers', () =>
   assert.equal(getSystemDisplayLabel('admin-center'), '管理中心');
   assert.equal(getSystemDisplayLabel('audit-center'), '审计中心');
   assert.equal(getSystemDisplayLabel('delivery'), '交付系统');
+  assert.equal(getSystemDisplayLabel('prompt-center'), '提示词管理中心');
 });
 
 test('summarizeSystemAccess keeps first two labels and collapses overflow count', () => {
@@ -29,9 +30,9 @@ test('summarizeSystemAccess keeps first two labels and collapses overflow count'
 
 test('summarizeSystemAccess keeps all labels when only two systems are granted', () => {
   assert.deepEqual(
-    summarizeSystemAccess(['faq', 'train-exam']),
+    summarizeSystemAccess(['faq', 'prompt-center']),
     {
-      labels: ['文档管理系统', '培训考试系统'],
+      labels: ['文档管理系统', '提示词中心'],
       overflowCount: 0,
     }
   );

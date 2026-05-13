@@ -262,6 +262,24 @@ const REMOTE_SOURCE_DEFINITIONS = Object.freeze({
       return normalizeAuditRow('train-exam', row);
     },
   }),
+  'prompt-center': Object.freeze({
+    key: 'prompt-center',
+    listPath: '/api/prompt-center/audit/logs',
+    buildListQuery(query, take) {
+      const params = new URLSearchParams();
+      params.set('limit', String(take));
+      if (query.username) params.set('username', normalizeText(query.username));
+      if (query.action) params.set('action', normalizeText(query.action));
+      if (query.entity) params.set('entity', normalizeText(query.entity));
+      return params;
+    },
+    extractRows(data) {
+      return Array.isArray(data) ? data : [];
+    },
+    normalizeRow(row) {
+      return normalizeAuditRow('prompt-center', row);
+    },
+  }),
   cmdb: Object.freeze({
     key: 'cmdb',
     listPath: '/api/v1/audit/logs',
