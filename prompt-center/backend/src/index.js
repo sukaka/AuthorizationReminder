@@ -2,6 +2,7 @@ require('dotenv').config();
 
 const cookieParser = require('cookie-parser');
 const cors = require('cors');
+const crypto = require('node:crypto');
 const express = require('express');
 const helmet = require('helmet');
 const db = require('./db');
@@ -19,6 +20,9 @@ const service = require('./prompt-service');
 
 const app = express();
 const PORT = Number(process.env.PORT || 5189);
+const CSRF_COOKIE_NAME = String(process.env.PROMPT_CENTER_CSRF_COOKIE_NAME || 'prompt_center_csrf_token').trim()
+  || 'prompt_center_csrf_token';
+const CSRF_SECURE = process.env.CSRF_SECURE === 'true';
 const CORS_ORIGINS = String(process.env.CORS_ORIGINS || '')
   .split(',')
   .map((item) => item.trim())
@@ -35,10 +39,37 @@ app.use(cors({
     if (CORS_ORIGINS.length === 0 || CORS_ORIGINS.includes(origin)) return callback(null, true);
     return callback(new Error('CORS origin not allowed'));
   },
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-CSRF-Token'],
   credentials: true,
 }));
 
 const requestIp = (req) => req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.socket?.remoteAddress || '';
+const safeMethods = new Set(['GET', 'HEAD', 'OPTIONS']);
+
+const issueCsrfToken = (res) => {
+  const token = crypto.randomBytes(24).toString('hex');
+  res.cookie(CSRF_COOKIE_NAME, token, {
+    httpOnly: true,
+    sameSite: 'strict',
+    secure: CSRF_SECURE,
+    path: '/',
+  });
+  return token;
+};
+
+const validateCsrfToken = (req, _res, next) => {
+  if (safeMethods.has(req.method)) return next();
+  const cookieToken = String(req.cookies?.[CSRF_COOKIE_NAME] || '').trim();
+  const headerToken = String(req.headers['x-csrf-token'] || '').trim();
+  if (!cookieToken || !headerToken) return next(appError('CSRF 校验失败，请刷新页面后重试', 403));
+  const cookieBuffer = Buffer.from(cookieToken);
+  const headerBuffer = Buffer.from(headerToken);
+  if (cookieBuffer.length !== headerBuffer.length || !crypto.timingSafeEqual(cookieBuffer, headerBuffer)) {
+    return next(appError('CSRF 校验失败，请刷新页面后重试', 403));
+  }
+  return next();
+};
 
 app.get('/health', (_req, res) => {
   res.json({ ok: true, service: 'prompt-center' });
@@ -46,6 +77,12 @@ app.get('/health', (_req, res) => {
 
 const router = express.Router();
 router.use(authRequired);
+
+router.get('/csrf', (_req, res) => {
+  res.json({ token: issueCsrfToken(res) });
+});
+
+router.use(validateCsrfToken);
 
 router.get('/auth/me', (req, res) => {
   res.json({

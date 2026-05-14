@@ -9,6 +9,9 @@ import {
 } from './prompt-utils.js';
 
 const API_BASE = '/api/prompt-center';
+const safeMethods = new Set(['GET', 'HEAD', 'OPTIONS']);
+let csrfToken = '';
+
 const emptyPromptForm = {
   title: '',
   summary: '',
@@ -22,18 +25,44 @@ const emptyPromptForm = {
 const emptyDepartmentForm = { name: '', description: '', sort_order: 0, is_active: true };
 const emptyCategoryForm = { department_id: '', name: '', description: '', sort_order: 0, is_active: true };
 
+async function fetchCsrfToken() {
+  const resp = await fetch(`${API_BASE}/csrf`, { credentials: 'include' });
+  const text = await resp.text();
+  const data = text ? JSON.parse(text) : {};
+  if (!resp.ok || !data.token) throw new Error(data.error || '安全校验初始化失败');
+  csrfToken = String(data.token || '');
+  return csrfToken;
+}
+
+async function ensureCsrfToken() {
+  if (csrfToken) return csrfToken;
+  return fetchCsrfToken();
+}
+
 async function api(path, options = {}) {
+  const { csrfRetried = false, headers: optionHeaders = {}, ...fetchOptions } = options;
+  const method = String(fetchOptions.method || 'GET').toUpperCase();
+  const unsafe = !safeMethods.has(method);
+  const headers = {
+    'Content-Type': 'application/json',
+    ...optionHeaders,
+  };
+  if (unsafe) headers['X-CSRF-Token'] = await ensureCsrfToken();
+
   const resp = await fetch(`${API_BASE}${path}`, {
     credentials: 'include',
-    headers: {
-      'Content-Type': 'application/json',
-      ...(options.headers || {}),
-    },
-    ...options,
+    headers,
+    ...fetchOptions,
   });
   const text = await resp.text();
   const data = text ? JSON.parse(text) : {};
-  if (!resp.ok) throw new Error(data.error || '请求失败');
+  if (!resp.ok) {
+    if (unsafe && resp.status === 403 && !csrfRetried && /csrf/i.test(data.error || text)) {
+      csrfToken = '';
+      return api(path, { ...options, csrfRetried: true });
+    }
+    throw new Error(data.error || '请求失败');
+  }
   return data;
 }
 

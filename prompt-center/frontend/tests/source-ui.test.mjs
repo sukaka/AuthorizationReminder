@@ -16,3 +16,8 @@ test('prompt center UI calls prompt-center API namespace', () => {
   assert.match(source, /\/api\/prompt-center/);
   assert.match(source, /\/prompts\/\$\{selectedPrompt\.id\}\/publish/);
 });
+
+test('prompt center UI sends csrf token for write requests', () => {
+  assert.match(source, /\/csrf/);
+  assert.match(source, /X-CSRF-Token/);
+});
