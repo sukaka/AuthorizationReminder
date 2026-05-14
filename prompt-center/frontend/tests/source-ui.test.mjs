@@ -4,6 +4,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 const source = fs.readFileSync(path.join(import.meta.dirname, '..', 'src', 'App.jsx'), 'utf8');
+const viteConfig = fs.readFileSync(path.join(import.meta.dirname, '..', 'vite.config.js'), 'utf8');
 
 test('prompt center UI contains department, category, version and audit views', () => {
   assert.match(source, /部门/);
@@ -20,4 +21,9 @@ test('prompt center UI calls prompt-center API namespace', () => {
 test('prompt center UI sends csrf token for write requests', () => {
   assert.match(source, /\/csrf/);
   assert.match(source, /X-CSRF-Token/);
+});
+
+test('prompt center vite build enables react plugin', () => {
+  assert.match(viteConfig, /@vitejs\/plugin-react/);
+  assert.match(viteConfig, /plugins:\s*\[react\(\)\]/);
 });
