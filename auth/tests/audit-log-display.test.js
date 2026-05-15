@@ -21,6 +21,8 @@ test('audit display helpers localize system, action and entity to chinese', () =
   assert.equal(getAuditActionLabel('prompt.update'), '修改提示词');
   assert.equal(getAuditActionLabel('prompt.rollback'), '回滚提示词');
   assert.equal(getAuditActionLabel('prompt.archived'), '删除/归档提示词');
+  assert.equal(getAuditActionLabel('prompt.favorite'), '收藏提示词');
+  assert.equal(getAuditActionLabel('prompt.unfavorite'), '取消收藏提示词');
   assert.equal(getAuditEntityLabel('auth'), '认证/登录');
   assert.equal(getAuditEntityLabel('send_configs'), '发送配置');
   assert.equal(getAuditEntityLabel('prompt'), '提示词');

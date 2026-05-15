@@ -64,6 +64,45 @@ describe('prompt center service helpers', () => {
     expect(mockDb.run).not.toHaveBeenCalled();
   });
 
+  test('saves category hierarchy with parent and level', async () => {
+    const mockDb = {
+      get: vi.fn()
+        .mockResolvedValueOnce({ id: 2, name: '技术部' })
+        .mockResolvedValueOnce({ id: 10, department_id: 2, name: '故障排查', level: 2 })
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce({ id: 11, department_id: 2, parent_id: 10, level: 3, name: '网络故障' }),
+      run: vi.fn().mockResolvedValue({ insertId: 11 }),
+    };
+
+    await expect(service.saveCategory(
+      mockDb,
+      { department_id: 2, parent_id: 10, name: '网络故障' },
+      { id: 1, display_name: '管理员' },
+      '127.0.0.1'
+    )).resolves.toMatchObject({ id: 11, parent_id: 10, level: 3, name: '网络故障' });
+    expect(mockDb.run).toHaveBeenCalledWith(
+      expect.stringContaining('parent_id'),
+      expect.arrayContaining([2, 10, 3, '网络故障'])
+    );
+  });
+
+  test('rejects category hierarchy deeper than three levels', async () => {
+    const mockDb = {
+      get: vi.fn()
+        .mockResolvedValueOnce({ id: 2, name: '技术部' })
+        .mockResolvedValueOnce({ id: 10, department_id: 2, name: '四级父类', level: 3 }),
+      run: vi.fn(),
+    };
+
+    await expect(service.saveCategory(
+      mockDb,
+      { department_id: 2, parent_id: 10, name: '不能保存' },
+      { id: 1 },
+      '127.0.0.1'
+    )).rejects.toMatchObject({ message: '提示词分类最多支持三级', statusCode: 400 });
+    expect(mockDb.run).not.toHaveBeenCalled();
+  });
+
   test('saves department manager fields', async () => {
     const mockDb = {
       get: vi.fn()
@@ -194,6 +233,44 @@ describe('prompt center service helpers', () => {
       '127.0.0.1'
     )).rejects.toMatchObject({ message: '仅技术部负责人可维护该部门提示词', statusCode: 403 });
     expect(mockDb.run).not.toHaveBeenCalled();
+  });
+
+  test('listPrompts includes prompts under descendant categories', async () => {
+    const mockDb = {
+      query: vi.fn().mockResolvedValue([]),
+    };
+
+    await service.listPrompts(mockDb, { category_id: 10 }, { user: { id: 18, role: 'admin' } });
+
+    expect(mockDb.query.mock.calls[0][0]).toMatch(/WITH RECURSIVE category_tree/i);
+    expect(mockDb.query.mock.calls[0][1]).toEqual(expect.arrayContaining([10]));
+  });
+
+  test('favorites are personal to the current user', async () => {
+    const mockDb = {
+      run: vi.fn().mockResolvedValue({ affectedRows: 1 }),
+      query: vi.fn().mockResolvedValue([
+        {
+          id: 8,
+          department_id: 2,
+          category_id: 11,
+          title: '网络故障排查',
+          content: '请分析 {{故障}}',
+          tags_json: '[]',
+          is_favorite: 1,
+        },
+      ]),
+    };
+
+    await service.addFavorite(mockDb, 8, { id: 18, display_name: '张磊' }, '10.0.0.8');
+    const favorites = await service.listFavoritePrompts(mockDb, { user: { id: 18, role: 'user' } });
+
+    expect(mockDb.run).toHaveBeenCalledWith(
+      expect.stringContaining('pc_prompt_favorites'),
+      expect.arrayContaining([18, 8])
+    );
+    expect(mockDb.query.mock.calls[0][1]).toContain(18);
+    expect(favorites[0]).toMatchObject({ id: 8, is_favorite: true });
   });
 
   test('writes detailed prompt audit records with actor and request ip', async () => {

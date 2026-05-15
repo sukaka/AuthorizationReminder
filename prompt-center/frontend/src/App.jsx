@@ -39,6 +39,8 @@ const emptyPromptForm = {
   summary: '',
   content: '',
   department_id: '',
+  category_level1: '',
+  category_level2: '',
   category_id: '',
   visibility: 'department',
   tags: '',
@@ -53,7 +55,32 @@ const emptyDepartmentForm = {
   sort_order: 0,
   is_active: true,
 };
-const emptyCategoryForm = { department_id: '', name: '', description: '', sort_order: 0, is_active: true };
+const emptyCategoryForm = {
+  department_id: '',
+  parent_id: '',
+  name: '',
+  description: '',
+  sort_order: 0,
+  is_active: true,
+};
+
+function childCategories(categories, departmentId, parentId = null) {
+  return categories.filter((item) => (
+    Number(item.department_id) === Number(departmentId || 0)
+    && Number(item.parent_id || 0) === Number(parentId || 0)
+  ));
+}
+
+function findCategoryPath(categories, categoryId) {
+  const byId = new Map(categories.map((item) => [Number(item.id), item]));
+  const path = [];
+  let current = byId.get(Number(categoryId || 0));
+  while (current) {
+    path.unshift(current);
+    current = byId.get(Number(current.parent_id || 0));
+  }
+  return path;
+}
 
 async function fetchCsrfToken() {
   const resp = await fetch(`${API_BASE}/csrf`, { credentials: 'include' });
@@ -102,30 +129,40 @@ async function api(path, options = {}) {
 
 export default function App() {
   const [activeTab, setActiveTab] = useState('library');
+  const [libraryMode, setLibraryMode] = useState('list');
   const [me, setMe] = useState(null);
   const [permissions, setPermissions] = useState({});
   const [overview, setOverview] = useState(null);
   const [departments, setDepartments] = useState([]);
   const [categories, setCategories] = useState([]);
   const [prompts, setPrompts] = useState([]);
+  const [favoritePrompts, setFavoritePrompts] = useState([]);
   const [auditLogs, setAuditLogs] = useState([]);
   const [filters, setFilters] = useState({ keyword: '', department_id: '', category_id: '', status: '' });
   const [promptForm, setPromptForm] = useState(emptyPromptForm);
   const [departmentForm, setDepartmentForm] = useState(emptyDepartmentForm);
   const [categoryForm, setCategoryForm] = useState(emptyCategoryForm);
   const [selectedPrompt, setSelectedPrompt] = useState(null);
+  const [browseDepartmentId, setBrowseDepartmentId] = useState('');
+  const [browseCategoryId, setBrowseCategoryId] = useState('');
   const [versions, setVersions] = useState([]);
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
-  const selectedDepartmentCategories = useMemo(() => {
-    const departmentId = Number(promptForm.department_id || filters.department_id || 0);
-    if (!departmentId) return categories;
-    return categories.filter((item) => Number(item.department_id) === departmentId);
-  }, [categories, promptForm.department_id, filters.department_id]);
-
+  const formLevel1Categories = useMemo(
+    () => childCategories(categories, promptForm.department_id, null),
+    [categories, promptForm.department_id]
+  );
+  const formLevel2Categories = useMemo(
+    () => childCategories(categories, promptForm.department_id, promptForm.category_level1),
+    [categories, promptForm.department_id, promptForm.category_level1]
+  );
+  const formLevel3Categories = useMemo(
+    () => childCategories(categories, promptForm.department_id, promptForm.category_level2),
+    [categories, promptForm.department_id, promptForm.category_level2]
+  );
   const variableList = useMemo(() => extractVariables(promptForm.content), [promptForm.content]);
   const managedDepartmentIds = useMemo(
     () => (permissions.managed_department_ids || []).map((item) => Number(item)).filter(Boolean),
@@ -163,6 +200,7 @@ export default function App() {
       setDepartments(departmentData);
       setCategories(categoryData);
       await loadPrompts(filters);
+      await loadFavorites();
       if (auth.permissions?.can_read_audit) {
         setAuditLogs(await api('/audit/logs?limit=80'));
       }
@@ -179,6 +217,10 @@ export default function App() {
       if (value !== undefined && value !== null && String(value).trim()) query.set(key, String(value).trim());
     });
     setPrompts(await api(`/prompts?${query.toString()}`));
+  };
+
+  const loadFavorites = async () => {
+    setFavoritePrompts(await api('/favorites'));
   };
 
   useEffect(() => {
@@ -198,17 +240,22 @@ export default function App() {
     setSelectedPrompt(null);
     setVersions([]);
     setPromptForm(emptyPromptForm);
+    setActiveTab('library');
+    setLibraryMode('create');
   };
 
   const editPrompt = async (prompt) => {
     try {
       const detail = await api(`/prompts/${prompt.id}`);
+      const categoryPath = findCategoryPath(categories, detail.category_id);
       setSelectedPrompt(detail);
       setPromptForm({
         title: detail.title || '',
         summary: detail.summary || '',
         content: detail.content || '',
         department_id: String(detail.department_id || ''),
+        category_level1: String(categoryPath[0]?.id || ''),
+        category_level2: String(categoryPath[1]?.id || ''),
         category_id: String(detail.category_id || ''),
         visibility: detail.visibility || 'department',
         tags: tagsToInput(detail.tags || []),
@@ -220,6 +267,7 @@ export default function App() {
         setVersions([]);
       }
       setActiveTab('library');
+      setLibraryMode('create');
     } catch (err) {
       showError(err);
     }
@@ -234,7 +282,7 @@ export default function App() {
         ? await api(`/prompts/${selectedPrompt.id}`, { method: 'PUT', body: JSON.stringify(payload) })
         : await api('/prompts', { method: 'POST', body: JSON.stringify(payload) });
       showMessage(selectedPrompt ? '提示词已更新' : '提示词已创建');
-      await Promise.all([loadPrompts(filters), loadAll()]);
+      await Promise.all([loadPrompts(filters), loadFavorites(), loadAll()]);
       await editPrompt(saved);
     } catch (err) {
       showError(err);
@@ -265,6 +313,47 @@ export default function App() {
     } catch (err) {
       showError(err);
     }
+  };
+
+  const deletePrompt = async (prompt) => {
+    try {
+      await api(`/prompts/${prompt.id}/archive`, { method: 'POST', body: '{}' });
+      showMessage('提示词已删除');
+      await Promise.all([loadPrompts(filters), loadFavorites()]);
+      if (selectedPrompt?.id === prompt.id) resetPromptForm();
+    } catch (err) {
+      showError(err);
+    }
+  };
+
+  const toggleFavorite = async (prompt) => {
+    try {
+      await api(`/prompts/${prompt.id}/favorite`, {
+        method: prompt.is_favorite ? 'DELETE' : 'POST',
+        body: '{}',
+      });
+      showMessage(prompt.is_favorite ? '已取消收藏' : '已收藏');
+      await Promise.all([loadPrompts(filters), loadFavorites()]);
+    } catch (err) {
+      showError(err);
+    }
+  };
+
+  const selectBrowseDepartment = (departmentId) => {
+    setBrowseDepartmentId(String(departmentId || ''));
+    setBrowseCategoryId('');
+    setPrompts([]);
+  };
+
+  const selectBrowseCategory = async (categoryId) => {
+    const nextFilters = {
+      ...filters,
+      department_id: browseDepartmentId,
+      category_id: String(categoryId || ''),
+    };
+    setBrowseCategoryId(String(categoryId || ''));
+    setFilters(nextFilters);
+    await loadPrompts(nextFilters);
   };
 
   const rollbackPrompt = async (versionId) => {
@@ -342,6 +431,63 @@ export default function App() {
     window.location.href = buildPortalUrl();
   };
 
+  const renderPromptRow = (prompt) => (
+    <article
+      key={prompt.id}
+      className={selectedPrompt?.id === prompt.id ? 'prompt-row selected' : 'prompt-row'}
+      onClick={() => editPrompt(prompt)}
+    >
+      <div>
+        <strong>{prompt.title}</strong>
+        <p>{prompt.summary || '未填写摘要'}</p>
+        <div className="meta-line">
+          <span>{prompt.department_name}</span>
+          <span>{prompt.category_name}</span>
+          <span>创建人：{prompt.created_by_name || '-'}</span>
+          <span>{formatDateTime(prompt.updated_at)}</span>
+        </div>
+      </div>
+      <div className="row-side">
+        <span className={`status ${prompt.status}`}>{statusLabels[prompt.status] || prompt.status}</span>
+        <div className="row-actions">
+          <button type="button" onClick={(event) => { event.stopPropagation(); editPrompt(prompt); }}>编辑</button>
+          <button type="button" onClick={(event) => { event.stopPropagation(); deletePrompt(prompt); }}>删除</button>
+          <button type="button" className={prompt.is_favorite ? 'favorite active' : 'favorite'} onClick={(event) => { event.stopPropagation(); toggleFavorite(prompt); }}>
+            {prompt.is_favorite ? '已收藏' : '收藏'}
+          </button>
+          <button type="button" onClick={(event) => { event.stopPropagation(); copyPrompt(prompt); }}>复制</button>
+        </div>
+      </div>
+    </article>
+  );
+
+  const renderCategoryTree = (parentId = null, depth = 1) => {
+    const levelLabel = depth === 1 ? '一级分类' : depth === 2 ? '二级分类' : '三级分类';
+    const items = childCategories(categories, browseDepartmentId, parentId);
+    if (!items.length) return null;
+    return (
+      <div className={`category-level level-${depth}`}>
+        <div className="category-level-title">{levelLabel}</div>
+        {items.map((item) => (
+          <div key={item.id} className="category-branch">
+            <button
+              type="button"
+              className={Number(browseCategoryId) === Number(item.id) ? 'active' : ''}
+              onClick={() => selectBrowseCategory(item.id)}
+            >
+              <span>{item.name}</span>
+              <em>{item.prompt_count || 0} 条</em>
+            </button>
+            {renderCategoryTree(item.id, depth + 1)}
+          </div>
+        ))}
+      </div>
+    );
+  };
+
+  const browseDepartment = departments.find((item) => Number(item.id) === Number(browseDepartmentId || 0));
+  const browseCategoryPath = findCategoryPath(categories, browseCategoryId);
+
   return (
     <div className="app-shell">
       <aside className="side-nav">
@@ -350,7 +496,14 @@ export default function App() {
           <h1>提示词管理中心</h1>
         </div>
         <nav>
-          <button className={activeTab === 'library' ? 'active' : ''} onClick={() => setActiveTab('library')}>提示词库</button>
+          <div className="nav-group">
+            <button className={activeTab === 'library' ? 'active' : ''} onClick={() => { setActiveTab('library'); setLibraryMode('list'); }}>提示词库</button>
+            <div className="sub-nav">
+              <button className={activeTab === 'library' && libraryMode === 'create' ? 'active' : ''} onClick={() => { setActiveTab('library'); setLibraryMode('create'); }}>提示词创建</button>
+              <button className={activeTab === 'library' && libraryMode === 'list' ? 'active' : ''} onClick={() => { setActiveTab('library'); setLibraryMode('list'); }}>提示词列表</button>
+            </div>
+          </div>
+          <button className={activeTab === 'favorites' ? 'active' : ''} onClick={() => { setActiveTab('favorites'); loadFavorites(); }}>我的收藏</button>
           <button className={activeTab === 'taxonomy' ? 'active' : ''} onClick={() => setActiveTab('taxonomy')}>部门分类</button>
           {permissions.can_read_audit && (
             <button className={activeTab === 'audit' ? 'active' : ''} onClick={() => setActiveTab('audit')}>审计日志</button>
@@ -401,7 +554,51 @@ export default function App() {
           </article>
         </section>
 
-        {activeTab === 'library' && (
+        {activeTab === 'library' && libraryMode === 'list' && (
+          <section className="library-browser">
+            <div className="section-head">
+              <div>
+                <span className="eyebrow">提示词列表</span>
+                <h3>{browseDepartment ? browseDepartment.name : '选择提示词部门'}</h3>
+              </div>
+              {browseDepartment && <button type="button" className="ghost" onClick={() => selectBrowseDepartment('')}>返回部门</button>}
+            </div>
+            {!browseDepartment && (
+              <div className="department-grid">
+                {departments.map((department) => (
+                  <button type="button" key={department.id} className="department-card" onClick={() => selectBrowseDepartment(department.id)}>
+                    <strong>{department.name}</strong>
+                    <span>{department.description || '暂无说明'}</span>
+                    <em>{department.prompt_count || 0} 条提示词</em>
+                  </button>
+                ))}
+              </div>
+            )}
+            {browseDepartment && (
+              <div className="browser-grid">
+                <aside className="category-tree-panel">
+                  <div className="breadcrumb">提示词列表 / {browseDepartment.name}</div>
+                  {renderCategoryTree(null, 1) || <div className="empty">该部门暂无分类</div>}
+                </aside>
+                <div className="list-panel">
+                  <div className="breadcrumb">
+                    {browseCategoryPath.length
+                      ? [browseDepartment.name, ...browseCategoryPath.map((item) => item.name)].join(' / ')
+                      : `${browseDepartment.name} / 请选择分类`}
+                  </div>
+                  <div className="prompt-list">
+                    {browseCategoryId
+                      ? prompts.map((prompt) => renderPromptRow(prompt))
+                      : <div className="empty">点击左侧分类后展示该分类下的所有提示词</div>}
+                    {browseCategoryId && prompts.length === 0 && <div className="empty">该分类下暂无提示词</div>}
+                  </div>
+                </div>
+              </div>
+            )}
+          </section>
+        )}
+
+        {activeTab === 'library' && libraryMode === 'create' && (
           <section className="workspace-grid">
             <div className="list-panel">
               <form className="toolbar" onSubmit={submitFilters}>
@@ -439,26 +636,7 @@ export default function App() {
 
               <div className="prompt-list">
                 {prompts.map((prompt) => (
-                  <article
-                    key={prompt.id}
-                    className={selectedPrompt?.id === prompt.id ? 'prompt-row selected' : 'prompt-row'}
-                    onClick={() => editPrompt(prompt)}
-                  >
-                    <div>
-                      <strong>{prompt.title}</strong>
-                      <p>{prompt.summary || '未填写摘要'}</p>
-                      <div className="meta-line">
-                        <span>{prompt.department_name}</span>
-                        <span>{prompt.category_name}</span>
-                        <span>创建人：{prompt.created_by_name || '-'}</span>
-                        <span>{formatDateTime(prompt.updated_at)}</span>
-                      </div>
-                    </div>
-                    <div className="row-side">
-                      <span className={`status ${prompt.status}`}>{statusLabels[prompt.status] || prompt.status}</span>
-                      <button type="button" onClick={(event) => { event.stopPropagation(); copyPrompt(prompt); }}>复制</button>
-                    </div>
-                  </article>
+                  renderPromptRow(prompt)
                 ))}
                 {prompts.length === 0 && <div className="empty">暂无匹配提示词</div>}
               </div>
@@ -485,15 +663,51 @@ export default function App() {
               <label>摘要<input value={promptForm.summary} disabled={!canEditPrompt} onChange={(event) => setPromptForm({ ...promptForm, summary: event.target.value })} /></label>
               <div className="two-cols">
                 <label>部门
-                  <select value={promptForm.department_id} disabled={!permissions.can_write} onChange={(event) => setPromptForm({ ...promptForm, department_id: event.target.value, category_id: '' })}>
+                  <select
+                    value={promptForm.department_id}
+                    disabled={!permissions.can_write}
+                    onChange={(event) => setPromptForm({
+                      ...promptForm,
+                      department_id: event.target.value,
+                      category_level1: '',
+                      category_level2: '',
+                      category_id: '',
+                    })}
+                  >
                     <option value="">请选择部门</option>
                     {departments.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
                   </select>
                 </label>
-                <label>分类
-                  <select value={promptForm.category_id} disabled={!canEditPrompt} onChange={(event) => setPromptForm({ ...promptForm, category_id: event.target.value })}>
-                    <option value="">请选择分类</option>
-                    {selectedDepartmentCategories.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+                <label>一级分类
+                  <select
+                    value={promptForm.category_level1}
+                    disabled={!canEditPrompt}
+                    onChange={(event) => setPromptForm({ ...promptForm, category_level1: event.target.value, category_level2: '', category_id: '' })}
+                  >
+                    <option value="">请选择一级分类</option>
+                    {formLevel1Categories.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+                  </select>
+                </label>
+              </div>
+              <div className="two-cols">
+                <label>二级分类
+                  <select
+                    value={promptForm.category_level2}
+                    disabled={!canEditPrompt || !promptForm.category_level1}
+                    onChange={(event) => setPromptForm({ ...promptForm, category_level2: event.target.value, category_id: '' })}
+                  >
+                    <option value="">请选择二级分类</option>
+                    {formLevel2Categories.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+                  </select>
+                </label>
+                <label>三级分类
+                  <select
+                    value={promptForm.category_id}
+                    disabled={!canEditPrompt || !promptForm.category_level2}
+                    onChange={(event) => setPromptForm({ ...promptForm, category_id: event.target.value })}
+                  >
+                    <option value="">请选择三级分类</option>
+                    {formLevel3Categories.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
                   </select>
                 </label>
               </div>
@@ -532,6 +746,22 @@ export default function App() {
           </section>
         )}
 
+        {activeTab === 'favorites' && (
+          <section className="favorites-panel">
+            <div className="section-head">
+              <div>
+                <span className="eyebrow">我的收藏</span>
+                <h3>个人收藏提示词</h3>
+              </div>
+              <button type="button" className="ghost" onClick={loadFavorites}>刷新</button>
+            </div>
+            <div className="prompt-list">
+              {favoritePrompts.map((prompt) => renderPromptRow(prompt))}
+              {favoritePrompts.length === 0 && <div className="empty">暂无收藏提示词</div>}
+            </div>
+          </section>
+        )}
+
         {activeTab === 'taxonomy' && (
           <section className="taxonomy-grid">
             <div className="table-panel">
@@ -553,7 +783,7 @@ export default function App() {
               {categories.map((item) => (
                 <div className="table-row" key={item.id}>
                   <strong>{item.name}</strong>
-                  <span>{item.department_name || '-'}</span>
+                  <span>{item.department_name || '-'} / {item.parent_name || '一级分类'} / {item.level || 1}级</span>
                   <em>{item.prompt_count} 条</em>
                 </div>
               ))}
@@ -571,9 +801,15 @@ export default function App() {
                 </form>
                 <form className="compact-form" onSubmit={saveCategory}>
                   <h3>新增分类</h3>
-                  <select value={categoryForm.department_id} onChange={(event) => setCategoryForm({ ...categoryForm, department_id: event.target.value })}>
+                  <select value={categoryForm.department_id} onChange={(event) => setCategoryForm({ ...categoryForm, department_id: event.target.value, parent_id: '' })}>
                     <option value="">请选择部门</option>
                     {departments.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+                  </select>
+                  <select value={categoryForm.parent_id} onChange={(event) => setCategoryForm({ ...categoryForm, parent_id: event.target.value })}>
+                    <option value="">不选上级，作为一级分类</option>
+                    {categories
+                      .filter((item) => Number(item.department_id) === Number(categoryForm.department_id || 0) && Number(item.level || 1) < 3)
+                      .map((item) => <option key={item.id} value={item.id}>{`${item.level || 1}级 / ${item.name}`}</option>)}
                   </select>
                   <input placeholder="分类名称" value={categoryForm.name} onChange={(event) => setCategoryForm({ ...categoryForm, name: event.target.value })} />
                   <input placeholder="分类说明" value={categoryForm.description} onChange={(event) => setCategoryForm({ ...categoryForm, description: event.target.value })} />

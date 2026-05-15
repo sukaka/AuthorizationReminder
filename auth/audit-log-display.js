@@ -37,6 +37,8 @@ const AUDIT_ACTION_OPTIONS = Object.freeze([
   { value: 'prompt.archived', label: '删除/归档提示词', tone: 'change' },
   { value: 'prompt.rollback', label: '回滚提示词', tone: 'change' },
   { value: 'prompt.use', label: '复制使用提示词', tone: 'session' },
+  { value: 'prompt.favorite', label: '收藏提示词', tone: 'session' },
+  { value: 'prompt.unfavorite', label: '取消收藏提示词', tone: 'session' },
 ]);
 
 const AUDIT_ENTITY_OPTIONS = Object.freeze([

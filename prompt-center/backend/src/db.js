@@ -91,6 +91,15 @@ const ensureColumn = async (tableName, columnName, columnDefSql) => {
   }
 };
 
+const ensureIndex = async (tableName, indexName, indexSql) => {
+  const safeTable = ensureSafeIdentifier(tableName, 'tableName');
+  const safeIndex = ensureSafeIdentifier(indexName, 'indexName');
+  const rows = await query(`SHOW INDEX FROM \`${safeTable}\` WHERE Key_name = ?`, [safeIndex]);
+  if (rows.length === 0) {
+    await run(indexSql);
+  }
+};
+
 const transaction = async (fn) => {
   const conn = await pool.getConnection();
   try {
@@ -140,6 +149,8 @@ const createSchema = async () => {
   await run(`CREATE TABLE IF NOT EXISTS pc_categories (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,
     department_id BIGINT NOT NULL,
+    parent_id BIGINT NULL,
+    level TINYINT NOT NULL DEFAULT 1,
     name VARCHAR(128) NOT NULL,
     description TEXT NULL,
     sort_order INT NOT NULL DEFAULT 0,
@@ -147,8 +158,16 @@ const createSchema = async () => {
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     UNIQUE KEY uk_pc_categories_dept_name (department_id, name),
+    INDEX idx_pc_categories_parent (department_id, parent_id, level, sort_order, id),
     INDEX idx_pc_categories_dept_sort (department_id, is_active, sort_order, id)
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
+  await ensureColumn('pc_categories', 'parent_id', 'BIGINT NULL AFTER department_id');
+  await ensureColumn('pc_categories', 'level', 'TINYINT NOT NULL DEFAULT 1 AFTER parent_id');
+  await ensureIndex(
+    'pc_categories',
+    'idx_pc_categories_parent',
+    'CREATE INDEX idx_pc_categories_parent ON pc_categories (department_id, parent_id, level, sort_order, id)'
+  );
 
   await run(`CREATE TABLE IF NOT EXISTS pc_prompts (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,
@@ -205,6 +224,16 @@ const createSchema = async () => {
     INDEX idx_pc_audit_logs_created (created_at),
     INDEX idx_pc_audit_logs_entity (entity, entity_id, created_at)
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
+
+  await run(`CREATE TABLE IF NOT EXISTS pc_prompt_favorites (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    user_id BIGINT NOT NULL,
+    prompt_id BIGINT NOT NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE KEY uk_pc_prompt_favorites_user_prompt (user_id, prompt_id),
+    INDEX idx_pc_prompt_favorites_user (user_id, created_at),
+    INDEX idx_pc_prompt_favorites_prompt (prompt_id)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
 };
 
 const seedDefaults = async () => {
@@ -219,21 +248,36 @@ const seedDefaults = async () => {
       'INSERT INTO pc_departments (name, description, sort_order) VALUES (?, ?, ?)',
       ['技术部', '技术方案、故障排查和知识沉淀提示词', 20]
     );
+    const salesSpeech = await tx.run(
+      'INSERT INTO pc_categories (department_id, parent_id, level, name, description, sort_order) VALUES (?, ?, ?, ?, ?, ?)',
+      [sales.insertId, null, 1, '客户话术', '拜访开场、异议处理、复盘总结', 10]
+    );
+    const customerSummary = await tx.run(
+      'INSERT INTO pc_categories (department_id, parent_id, level, name, description, sort_order) VALUES (?, ?, ?, ?, ?, ?)',
+      [sales.insertId, null, 1, '客户总结', '会议纪要、客户画像、下一步动作', 20]
+    );
+    const techSolution = await tx.run(
+      'INSERT INTO pc_categories (department_id, parent_id, level, name, description, sort_order) VALUES (?, ?, ?, ?, ?, ?)',
+      [tech.insertId, null, 1, '技术方案', '方案撰写、排障分析、变更说明', 10]
+    );
+    const objectionHandling = await tx.run(
+      'INSERT INTO pc_categories (department_id, parent_id, level, name, description, sort_order) VALUES (?, ?, ?, ?, ?, ?)',
+      [sales.insertId, salesSpeech.insertId, 2, '异议处理', '价格、周期、竞品等常见异议', 10]
+    );
+    const visitReview = await tx.run(
+      'INSERT INTO pc_categories (department_id, parent_id, level, name, description, sort_order) VALUES (?, ?, ?, ?, ?, ?)',
+      [sales.insertId, customerSummary.insertId, 2, '拜访复盘', '客户拜访后总结与下一步计划', 10]
+    );
+    const troubleshooting = await tx.run(
+      'INSERT INTO pc_categories (department_id, parent_id, level, name, description, sort_order) VALUES (?, ?, ?, ?, ?, ?)',
+      [tech.insertId, techSolution.insertId, 2, '故障排查', '网络、系统和部署问题排查', 10]
+    );
     await tx.run(
-      'INSERT INTO pc_categories (department_id, name, description, sort_order) VALUES (?, ?, ?, ?), (?, ?, ?, ?), (?, ?, ?, ?)',
+      'INSERT INTO pc_categories (department_id, parent_id, level, name, description, sort_order) VALUES (?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?)',
       [
-        sales.insertId,
-        '客户话术',
-        '拜访开场、异议处理、复盘总结',
-        10,
-        sales.insertId,
-        '客户总结',
-        '会议纪要、客户画像、下一步动作',
-        20,
-        tech.insertId,
-        '技术方案',
-        '方案撰写、排障分析、变更说明',
-        10,
+        sales.insertId, objectionHandling.insertId, 3, '价格异议', '报价解释、价值澄清与推进话术', 10,
+        sales.insertId, visitReview.insertId, 3, '客户画像', '客户背景、痛点和行动项总结', 10,
+        tech.insertId, troubleshooting.insertId, 3, '网络故障', '网络连接、代理和端口排查', 10,
       ]
     );
   });

@@ -45,3 +45,24 @@ test('prompt center UI supports department managers and creator display', () => 
   assert.match(source, /创建人/);
   assert.match(source, /负责人/);
 });
+
+test('prompt center UI supports nested prompt library navigation and favorites', () => {
+  assert.match(source, /提示词创建/);
+  assert.match(source, /提示词列表/);
+  assert.match(source, /我的收藏/);
+  assert.match(source, /一级分类/);
+  assert.match(source, /二级分类/);
+  assert.match(source, /三级分类/);
+  assert.match(source, /setLibraryMode\('create'\)/);
+  assert.match(source, /setLibraryMode\('list'\)/);
+  assert.match(source, /setActiveTab\('favorites'\)/);
+});
+
+test('prompt center UI exposes row edit archive and favorite actions', () => {
+  assert.match(source, /编辑/);
+  assert.match(source, /删除/);
+  assert.match(source, /收藏/);
+  assert.match(source, /\/favorites/);
+  assert.match(source, /\/prompts\/\$\{prompt\.id\}\/favorite/);
+  assert.match(source, /toggleFavorite/);
+});

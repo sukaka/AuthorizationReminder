@@ -129,6 +129,10 @@ router.get('/prompts', asyncHandler(async (req, res) => {
   res.json(await service.listPrompts(db, req.query, req));
 }));
 
+router.get('/favorites', asyncHandler(async (req, res) => {
+  res.json(await service.listFavoritePrompts(db, req));
+}));
+
 router.post('/prompts', asyncHandler(async (req, res) => {
   res.status(201).json(await service.createPrompt(db, req.body, req.user, requestIp(req)));
 }));
@@ -151,6 +155,14 @@ router.post('/prompts/:id/archive', requirePermission(canPublishPrompt, '仅管�
 
 router.post('/prompts/:id/usage', asyncHandler(async (req, res) => {
   res.json(await service.recordUsage(db, req.params.id, req.user, requestIp(req)));
+}));
+
+router.post('/prompts/:id/favorite', asyncHandler(async (req, res) => {
+  res.json(await service.addFavorite(db, req.params.id, req.user, requestIp(req)));
+}));
+
+router.delete('/prompts/:id/favorite', asyncHandler(async (req, res) => {
+  res.json(await service.removeFavorite(db, req.params.id, req.user, requestIp(req)));
 }));
 
 router.get('/prompts/:id/versions', asyncHandler(async (req, res) => {

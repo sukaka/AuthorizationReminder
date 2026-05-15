@@ -30,9 +30,17 @@ const assertUniqueDepartmentName = async (db, name, id = null) => {
   if (existing) throw appError(`部门“${name}”已存在`, 409);
 };
 
-const assertUniqueCategoryName = async (db, departmentId, name, id = null) => {
-  const params = [Number(departmentId), name];
-  let sql = 'SELECT id FROM pc_categories WHERE department_id = ? AND name = ?';
+const assertUniqueCategoryName = async (db, departmentId, parentId, name, id = null) => {
+  const params = [Number(departmentId)];
+  let sql = 'SELECT id FROM pc_categories WHERE department_id = ?';
+  if (parentId) {
+    sql += ' AND parent_id = ?';
+    params.push(Number(parentId));
+  } else {
+    sql += ' AND parent_id IS NULL';
+  }
+  sql += ' AND name = ?';
+  params.push(name);
   if (id) {
     sql += ' AND id <> ?';
     params.push(Number(id));
@@ -119,6 +127,7 @@ const normalizePromptRow = (row) => {
     department_manager_user_id: row.department_manager_user_id ? Number(row.department_manager_user_id) : null,
     usage_count: Number(row.usage_count || 0),
     current_version_id: row.current_version_id ? Number(row.current_version_id) : null,
+    is_favorite: row.is_favorite === true || Number(row.is_favorite || 0) > 0,
     tags: parseTags(row.tags_json),
     variables: extractPromptVariables(row.content),
   };
@@ -130,6 +139,18 @@ const normalizeDepartmentRow = (row) => {
     ...row,
     id: Number(row.id),
     manager_user_id: row.manager_user_id ? Number(row.manager_user_id) : null,
+    prompt_count: Number(row.prompt_count || 0),
+  };
+};
+
+const normalizeCategoryRow = (row) => {
+  if (!row) return null;
+  return {
+    ...row,
+    id: Number(row.id),
+    department_id: Number(row.department_id),
+    parent_id: row.parent_id ? Number(row.parent_id) : null,
+    level: Number(row.level || 1),
     prompt_count: Number(row.prompt_count || 0),
   };
 };
@@ -186,7 +207,7 @@ const ensureDepartment = async (db, id) => {
 };
 
 const ensureCategory = async (db, id, departmentId) => {
-  const row = await db.get('SELECT * FROM pc_categories WHERE id = ?', [Number(id)]);
+  const row = normalizeCategoryRow(await db.get('SELECT * FROM pc_categories WHERE id = ?', [Number(id)]));
   if (!row) throw appError('分类不存在', 404);
   if (departmentId && Number(row.department_id) !== Number(departmentId)) throw appError('分类不属于所选部门', 400);
   return row;
@@ -317,67 +338,74 @@ const listCategories = async (db, filters = {}) => {
   }
   if (!filters.includeInactive) where.push('c.is_active = 1');
   const rows = await db.query(
-    `SELECT c.*, d.name AS department_name,
+    `SELECT c.*, d.name AS department_name, parent.name AS parent_name,
       (SELECT COUNT(1) FROM pc_prompts p WHERE p.category_id = c.id AND p.status <> 'archived') AS prompt_count
      FROM pc_categories c
      LEFT JOIN pc_departments d ON d.id = c.department_id
+     LEFT JOIN pc_categories parent ON parent.id = c.parent_id
      ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
      ORDER BY d.sort_order ASC, c.sort_order ASC, c.id ASC`,
     params
   );
-  return rows.map((row) => ({
-    ...row,
-    id: Number(row.id),
-    department_id: Number(row.department_id),
-    prompt_count: Number(row.prompt_count || 0),
-  }));
+  return rows.map(normalizeCategoryRow);
 };
 
 const saveCategory = async (db, payload, user, requestIp, id = null) => {
   const departmentId = Number(payload.department_id || payload.departmentId || 0);
+  const parentId = Number(payload.parent_id || payload.parentId || 0) || null;
   const name = trimText(payload.name);
   if (!departmentId) throw appError('请选择所属部门', 400);
   if (!name || name.length > 128) throw appError('分类名称不能为空且不能超过128个字符', 400);
   const department = await ensureDepartment(db, departmentId);
+  let parent = null;
+  if (parentId) {
+    parent = await ensureCategory(db, parentId, departmentId);
+    if (Number(parent.level || 1) >= 3) throw appError('提示词分类最多支持三级', 400);
+    if (id && Number(parent.id) === Number(id)) throw appError('上级分类不能选择自己', 400);
+  }
   const data = {
     department_id: departmentId,
     department_name: department.name,
+    parent_id: parentId,
+    parent_name: parent?.name || '',
+    level: parent ? Number(parent.level || 1) + 1 : 1,
     name,
     description: trimText(payload.description),
     sort_order: Number(payload.sort_order || payload.sortOrder || 0) || 0,
     is_active: payload.is_active === false || payload.isActive === false ? 0 : 1,
   };
-  await assertUniqueCategoryName(db, data.department_id, data.name, id);
+  await assertUniqueCategoryName(db, data.department_id, data.parent_id, data.name, id);
   if (id) {
     try {
       await db.run(
-        'UPDATE pc_categories SET department_id = ?, name = ?, description = ?, sort_order = ?, is_active = ? WHERE id = ?',
-        [data.department_id, data.name, data.description, data.sort_order, data.is_active, Number(id)]
+        'UPDATE pc_categories SET department_id = ?, parent_id = ?, level = ?, name = ?, description = ?, sort_order = ?, is_active = ? WHERE id = ?',
+        [data.department_id, data.parent_id, data.level, data.name, data.description, data.sort_order, data.is_active, Number(id)]
       );
     } catch (err) {
       if (isDuplicateKeyError(err)) throw appError(`分类“${data.name}”在该部门下已存在`, 409);
       throw err;
     }
     await logAudit(db, { user, action: 'category.update', entity: 'category', entityId: id, detail: data, requestIp });
-    return db.get('SELECT * FROM pc_categories WHERE id = ?', [Number(id)]);
+    return normalizeCategoryRow(await db.get('SELECT * FROM pc_categories WHERE id = ?', [Number(id)]));
   }
   let result;
   try {
     result = await db.run(
-      'INSERT INTO pc_categories (department_id, name, description, sort_order, is_active) VALUES (?, ?, ?, ?, ?)',
-      [data.department_id, data.name, data.description, data.sort_order, data.is_active]
+      'INSERT INTO pc_categories (department_id, parent_id, level, name, description, sort_order, is_active) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      [data.department_id, data.parent_id, data.level, data.name, data.description, data.sort_order, data.is_active]
     );
   } catch (err) {
     if (isDuplicateKeyError(err)) throw appError(`分类“${data.name}”在该部门下已存在`, 409);
     throw err;
   }
   await logAudit(db, { user, action: 'category.create', entity: 'category', entityId: result.insertId, detail: data, requestIp });
-  return db.get('SELECT * FROM pc_categories WHERE id = ?', [result.insertId]);
+  return normalizeCategoryRow(await db.get('SELECT * FROM pc_categories WHERE id = ?', [result.insertId]));
 };
 
 const buildPromptWhere = (filters = {}, req = null) => {
   const where = [];
   const params = [];
+  let categoryCte = '';
   const status = trimText(filters.status);
   if (status) {
     if (!ALLOWED_PROMPT_STATUSES.has(status)) throw appError('状态参数无效', 400);
@@ -389,8 +417,14 @@ const buildPromptWhere = (filters = {}, req = null) => {
     params.push(Number(filters.department_id));
   }
   if (filters.category_id) {
-    where.push('p.category_id = ?');
+    categoryCte = `WITH RECURSIVE category_tree AS (
+      SELECT id FROM pc_categories WHERE id = ?
+      UNION ALL
+      SELECT child.id FROM pc_categories child
+      INNER JOIN category_tree parent ON child.parent_id = parent.id
+    )`;
     params.push(Number(filters.category_id));
+    where.push('p.category_id IN (SELECT id FROM category_tree)');
   }
   const keyword = trimText(filters.keyword);
   if (keyword) {
@@ -413,15 +447,19 @@ const buildPromptWhere = (filters = {}, req = null) => {
       where.push("p.status = 'published'");
     }
   }
-  return { where, params };
+  return { where, params, categoryCte };
 };
 
 const listPrompts = async (db, filters, req) => {
-  const { where, params } = buildPromptWhere(filters, req);
+  const { where, params, categoryCte } = buildPromptWhere(filters, req);
   const limit = Math.max(1, Math.min(200, Number(filters.limit || 60)));
   const offset = Math.max(0, Number(filters.offset || 0));
+  const favoriteUserId = Number(req?.user?.id || 0);
+  const favoriteSelect = favoriteUserId
+    ? `EXISTS(SELECT 1 FROM pc_prompt_favorites f WHERE f.prompt_id = p.id AND f.user_id = ${favoriteUserId}) AS is_favorite,`
+    : '0 AS is_favorite,';
   const rows = await db.query(
-    `SELECT p.*, d.name AS department_name, d.manager_user_id AS department_manager_user_id,
+    `${categoryCte ? `${categoryCte}\n` : ''}SELECT p.*, ${favoriteSelect} d.name AS department_name, d.manager_user_id AS department_manager_user_id,
        d.manager_name AS department_manager_name, c.name AS category_name, v.version_no AS current_version_no
      FROM pc_prompts p
      LEFT JOIN pc_departments d ON d.id = p.department_id
@@ -672,6 +710,61 @@ const recordUsage = async (db, id, user, requestIp) => {
   return { ok: true };
 };
 
+const addFavorite = async (db, id, user, requestIp) => {
+  if (!user?.id) throw appError('请先登录后再收藏提示词', 401);
+  await db.run(
+    'INSERT IGNORE INTO pc_prompt_favorites (user_id, prompt_id) VALUES (?, ?)',
+    [Number(user.id), Number(id)]
+  );
+  await logAudit(db, {
+    user,
+    action: 'prompt.favorite',
+    entity: 'prompt',
+    entityId: id,
+    detail: { prompt_id: Number(id), result: '收藏' },
+    requestIp,
+  });
+  return { ok: true, is_favorite: true };
+};
+
+const removeFavorite = async (db, id, user, requestIp) => {
+  if (!user?.id) throw appError('请先登录后再取消收藏', 401);
+  await db.run(
+    'DELETE FROM pc_prompt_favorites WHERE user_id = ? AND prompt_id = ?',
+    [Number(user.id), Number(id)]
+  );
+  await logAudit(db, {
+    user,
+    action: 'prompt.unfavorite',
+    entity: 'prompt',
+    entityId: id,
+    detail: { prompt_id: Number(id), result: '取消收藏' },
+    requestIp,
+  });
+  return { ok: true, is_favorite: false };
+};
+
+const listFavoritePrompts = async (db, req) => {
+  if (!req?.user?.id) throw appError('请先登录后查看收藏', 401);
+  const favoriteUserId = Number(req.user.id);
+  const rows = await db.query(
+    `SELECT p.*, 1 AS is_favorite, d.name AS department_name, d.manager_user_id AS department_manager_user_id,
+       d.manager_name AS department_manager_name, c.name AS category_name, v.version_no AS current_version_no,
+       f.created_at AS favorite_at
+     FROM pc_prompt_favorites f
+     INNER JOIN pc_prompts p ON p.id = f.prompt_id
+     LEFT JOIN pc_departments d ON d.id = p.department_id
+     LEFT JOIN pc_categories c ON c.id = p.category_id
+     LEFT JOIN pc_prompt_versions v ON v.id = p.current_version_id
+     WHERE f.user_id = ? AND p.status <> 'archived'
+     ORDER BY f.created_at DESC, p.updated_at DESC`,
+    [favoriteUserId]
+  );
+  return rows.map(normalizePromptRow);
+};
+
+const archivePrompt = async (db, id, user, requestIp) => setPromptStatus(db, id, 'archived', user, requestIp);
+
 const getOverview = async (db) => {
   const [counts, departments, categories, recentlyUpdated] = await Promise.all([
     db.get(
@@ -749,9 +842,13 @@ module.exports = {
   createPrompt,
   updatePrompt,
   setPromptStatus,
+  archivePrompt,
   rollbackPrompt,
   listVersions,
   recordUsage,
+  addFavorite,
+  removeFavorite,
+  listFavoritePrompts,
   getOverview,
   listAuditLogs,
   logAudit,
