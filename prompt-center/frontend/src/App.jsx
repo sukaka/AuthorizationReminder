@@ -183,8 +183,8 @@ export default function App() {
   );
   const promptDepartmentId = Number(promptForm.department_id || 0);
   const canWriteSelectedDepartment = promptDepartmentId > 0 && managedDepartmentIds.includes(promptDepartmentId);
-  const canEditPrompt = !!permissions.can_write && (!selectedPrompt || canWriteSelectedDepartment);
-  const canSavePrompt = !!permissions.can_write && canWriteSelectedDepartment;
+  const canEditPrompt = !selectedPrompt || canWriteSelectedDepartment;
+  const canSavePrompt = canWriteSelectedDepartment;
 
   const showMessage = (text) => {
     setMessage(text);
@@ -616,7 +616,7 @@ export default function App() {
             <div className="brand-row">
               <strong>聚信</strong>
               <h2>企业提示词管理中心</h2>
-              <span>v5.16.1</span>
+              <span>v5.16.2</span>
             </div>
             <p>按部门和分类沉淀提示词，保留版本、发布状态和审计记录。</p>
           </div>
@@ -784,7 +784,11 @@ export default function App() {
               </div>
               <div className="create-permission-notice">
                 <span>i</span>
-                <strong>您拥有本部门提示词的创建与管理权限</strong>
+                <strong>
+                  {canWriteSelectedDepartment
+                    ? '您拥有本部门提示词的创建与管理权限'
+                    : '可以先填写内容，只有所选部门负责人可以保存'}
+                </strong>
               </div>
               {selectedPrompt && (
                 <div className="meta-line">
@@ -792,7 +796,7 @@ export default function App() {
                   <span>最近更新：{selectedPrompt.updated_by_name || '-'}</span>
                 </div>
               )}
-              {promptDepartmentId > 0 && !canWriteSelectedDepartment && permissions.can_write && (
+              {promptDepartmentId > 0 && !canWriteSelectedDepartment && (
                 <div className="notice">只有该部门负责人可以保存或回滚这个提示词。</div>
               )}
               <div className="create-field">
@@ -811,7 +815,7 @@ export default function App() {
                 <div className="select-shell">
                   <select
                     value={promptForm.department_id}
-                    disabled={!permissions.can_write}
+                    disabled={selectedPrompt && !canEditPrompt}
                     onChange={(event) => setPromptForm({
                       ...promptForm,
                       department_id: event.target.value,
@@ -833,7 +837,7 @@ export default function App() {
                     <div className="select-shell">
                       <select
                         value={promptForm.category_level1}
-                        disabled={!canEditPrompt}
+                        disabled={!canEditPrompt || !promptForm.department_id}
                         onChange={(event) => setPromptForm({ ...promptForm, category_level1: event.target.value, category_level2: '', category_id: '' })}
                       >
                         <option value="">请选择一级分类</option>
@@ -895,23 +899,19 @@ export default function App() {
                 <strong>通过变量可在调用时动态替换内容</strong>
                 {variableList.length ? variableList.map((item) => <mark key={item}>{item}</mark>) : <em>无</em>}
               </div>
-              {permissions.can_write && (
-                <>
-                  <div className="create-field">
-                    <label>版本备注（可选）</label>
-                    <div className="counted-field">
-                      <input value={promptForm.change_note} disabled={!canEditPrompt} maxLength={200} placeholder="请输入本次创建或更新的备注信息" onChange={(event) => setPromptForm({ ...promptForm, change_note: event.target.value })} />
-                      <span>{promptForm.change_note.length}/200</span>
-                    </div>
-                  </div>
-                  <div className="actions create-actions">
-                    <button type="button" className="ghost" onClick={resetPromptForm}>取消</button>
-                    <button disabled={saving || !canSavePrompt} type="submit">{saving ? '保存中' : '保存'}</button>
-                    {selectedPrompt && permissions.can_publish && <button type="button" onClick={publishPrompt}>发布</button>}
-                    {selectedPrompt && permissions.can_publish && <button type="button" className="ghost" onClick={archivePrompt}>归档</button>}
-                  </div>
-                </>
-              )}
+              <div className="create-field">
+                <label>版本备注（可选）</label>
+                <div className="counted-field">
+                  <input value={promptForm.change_note} disabled={!canEditPrompt} maxLength={200} placeholder="请输入本次创建或更新的备注信息" onChange={(event) => setPromptForm({ ...promptForm, change_note: event.target.value })} />
+                  <span>{promptForm.change_note.length}/200</span>
+                </div>
+              </div>
+              <div className="actions create-actions">
+                <button type="button" className="ghost" onClick={resetPromptForm}>取消</button>
+                <button disabled={saving || !canSavePrompt} type="submit">{saving ? '保存中' : '保存'}</button>
+                {selectedPrompt && permissions.can_publish && <button type="button" onClick={publishPrompt}>发布</button>}
+                {selectedPrompt && permissions.can_publish && <button type="button" className="ghost" onClick={archivePrompt}>归档</button>}
+              </div>
               {selectedPrompt && versions.length > 0 && (
                 <div className="versions">
                   <h4>版本记录</h4>

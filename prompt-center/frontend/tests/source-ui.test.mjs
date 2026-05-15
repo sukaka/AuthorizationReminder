@@ -72,6 +72,8 @@ test('prompt center create page uses the approved single-workbench layout', () =
   assert.match(source, /create-permission-notice/);
   assert.match(source, /category-select-grid/);
   assert.match(source, /prompt-editor-shell/);
+  assert.match(source, /可以先填写内容，只有所选部门负责人可以保存/);
+  assert.doesNotMatch(source, /disabled=\{!permissions\.can_write\}/);
   assert.doesNotMatch(source, /工作概览/);
   assert.doesNotMatch(source, /分类路径/);
   assert.doesNotMatch(source, /维护规则/);
