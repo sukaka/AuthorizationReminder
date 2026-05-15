@@ -82,6 +82,19 @@ function findCategoryPath(categories, categoryId) {
   return path;
 }
 
+function firstLeafCategory(categories, departmentId) {
+  const walk = (parentId = null) => {
+    const children = childCategories(categories, departmentId, parentId);
+    if (!children.length) return null;
+    for (const child of children) {
+      const leaf = walk(child.id);
+      if (leaf) return leaf;
+    }
+    return children[0];
+  };
+  return walk(null);
+}
+
 async function fetchCsrfToken() {
   const resp = await fetch(`${API_BASE}/csrf`, { credentials: 'include' });
   const text = await resp.text();
@@ -199,7 +212,17 @@ export default function App() {
       setOverview(overviewData);
       setDepartments(departmentData);
       setCategories(categoryData);
-      await loadPrompts(filters);
+      const initialDepartmentId = departmentData[0]?.id ? String(departmentData[0].id) : '';
+      const initialCategory = initialDepartmentId ? firstLeafCategory(categoryData, initialDepartmentId) : null;
+      const initialFilters = {
+        ...filters,
+        department_id: initialDepartmentId,
+        category_id: initialCategory?.id ? String(initialCategory.id) : '',
+      };
+      setBrowseDepartmentId(initialDepartmentId);
+      setBrowseCategoryId(initialFilters.category_id);
+      setFilters(initialFilters);
+      await loadPrompts(initialFilters);
       await loadFavorites();
       if (auth.permissions?.can_read_audit) {
         setAuditLogs(await api('/audit/logs?limit=80'));
@@ -537,7 +560,7 @@ export default function App() {
               onClick={() => selectBrowseCategory(item.id)}
             >
               <span>{item.name}</span>
-              <em>{item.prompt_count || 0} 条</em>
+              {depth === 1 && <em>{item.prompt_count || 0} 条</em>}
             </button>
             {depth < 3 && renderPromptCategoryTree(item.id, depth + 1)}
           </li>
@@ -556,6 +579,9 @@ export default function App() {
   const promptListBreadcrumb = browseDepartment
     ? ['提示词列表', browseDepartment.name, ...browseCategoryPath.map((item) => item.name)].join(' / ')
     : '提示词列表 / 部门';
+  const selectedCategoryName = browseCategoryPath[browseCategoryPath.length - 1]?.name || '';
+  const departmentTone = ['blue', 'green', 'orange', 'purple'];
+  const countDepartmentCategories = (departmentId) => categories.filter((item) => Number(item.department_id) === Number(departmentId)).length;
 
   return (
     <div className="app-shell">
@@ -590,7 +616,7 @@ export default function App() {
             <div className="brand-row">
               <strong>聚信</strong>
               <h2>企业提示词管理中心</h2>
-              <span>v5.16.0</span>
+              <span>v5.16.1</span>
             </div>
             <p>按部门和分类沉淀提示词，保留版本、发布状态和审计记录。</p>
           </div>
@@ -608,127 +634,139 @@ export default function App() {
           <section className="prompt-list-workspace">
             <div className="prompt-list-head">
               <div>
-                <span className="eyebrow">提示词列表</span>
-                <h3>提示词库浏览</h3>
+                <span className="eyebrow">提示词库</span>
+                <h3>提示词列表</h3>
               </div>
               <div className="prompt-list-head-actions">
-                {browseDepartment && <button type="button" className="ghost" onClick={() => selectBrowseDepartment('')}>返回部门</button>}
-                {permissions.can_write && <button type="button" onClick={resetPromptForm}>创建提示词</button>}
+                <button type="button" className="ghost" onClick={() => loadAll()}>刷新</button>
+                {permissions.can_write && <button type="button" onClick={resetPromptForm}>+ 创建提示词</button>}
               </div>
             </div>
-            <div className="create-permission-notice prompt-list-notice">
-              <span>i</span>
-              <strong>先选择部门，再进入分类目录，最后查看该分类下的提示词。</strong>
-            </div>
-            <div className="prompt-list-layout">
-              <aside className="list-department-panel">
-                <div className="list-panel-title">
-                  <h3>提示词部门</h3>
-                  <span>{departments.length} 个部门</span>
-                </div>
-                <div className="list-department-grid">
-                {departments.map((department) => (
-                  <button
-                    type="button"
-                    key={department.id}
-                    className={Number(browseDepartmentId) === Number(department.id) ? 'list-department-card active' : 'list-department-card'}
-                    onClick={() => selectBrowseDepartment(department.id)}
-                  >
-                    <span className="department-card-top">
-                      <strong>{department.name}</strong>
-                      <em>›</em>
-                    </span>
-                    <span>{department.description || '暂无说明'}</span>
-                    <small>{department.prompt_count || 0} 条提示词</small>
-                  </button>
-                ))}
-                </div>
-              </aside>
 
-              <div className="prompt-browser-stack">
-                <section className="prompt-table-panel">
-                  <div className="prompt-browser-top">
-                    <div className="breadcrumb">{promptListBreadcrumb}</div>
-                    {permissions.can_write && <button type="button" onClick={resetPromptForm}>创建提示词</button>}
-                  </div>
-                  <form className="prompt-list-filters" onSubmit={submitFilters}>
-                    <input
-                      value={filters.keyword}
-                      placeholder="搜索标题、摘要或内容"
-                      onChange={(event) => setFilters({ ...filters, keyword: event.target.value })}
-                    />
-                    <select value={filters.status} onChange={(event) => setFilters({ ...filters, status: event.target.value })}>
-                      <option value="">全部状态</option>
-                      <option value="published">已发布</option>
-                      <option value="draft">草稿</option>
-                      <option value="archived">已归档</option>
-                    </select>
-                    <button type="submit">筛选</button>
-                  </form>
-                  <div className="prompt-browser-grid">
-                    <aside className="prompt-category-tree">
-                      <h3>分类目录</h3>
-                      {browseDepartment
-                        ? renderPromptCategoryTree(null, 1) || <div className="empty">该部门暂无分类</div>
-                        : <div className="empty">请先选择左侧部门</div>}
-                    </aside>
-                    <div className="prompt-table-wrap">
-                      <div className="prompt-table-heading">
-                        <div>
-                          <h3>{promptListTitle}</h3>
-                          <p>{browseCategoryId ? `当前分类共 ${prompts.length} 条提示词` : '点击左侧分类后展示该分类下的所有提示词'}</p>
-                        </div>
-                      </div>
-                      {browseCategoryId && prompts.length > 0 ? (
-                        <>
-                          <table className="prompt-table">
-                            <thead>
-                              <tr>
-                                <th>标题</th>
-                                <th>创建人</th>
-                                <th>更新时间</th>
-                                <th>状态</th>
-                                <th>操作</th>
-                              </tr>
-                            </thead>
-                            <tbody>{prompts.map((prompt) => renderPromptTableRow(prompt))}</tbody>
-                          </table>
-                          <div className="prompt-pager">
-                            <span>共 {prompts.length} 条</span>
-                            <span>‹</span>
-                            <strong>1</strong>
-                            <span>›</span>
-                          </div>
-                        </>
-                      ) : (
-                        <div className="empty">{browseCategoryId ? '该分类下暂无提示词' : '请选择一个三级分类查看提示词'}</div>
-                      )}
-                    </div>
-                  </div>
-                </section>
-
-                <section className="list-favorites-panel">
+            <div className="prompt-list-body">
+              <div className="create-permission-notice prompt-list-notice">
+                <span>i</span>
+                <strong>先选择部门，再进入分类目录，最后查看该分类下的提示词。</strong>
+              </div>
+              <div className="prompt-list-layout">
+                <aside className="list-department-panel">
                   <div className="list-panel-title">
-                    <h3>我的收藏</h3>
-                    <button type="button" className="ghost" onClick={loadFavorites}>刷新</button>
+                    <h3>提示词部门</h3>
+                    <span>点击切换</span>
                   </div>
-                  {favoritePrompts.length > 0 ? (
-                    <table className="prompt-table">
-                      <thead>
-                        <tr>
-                          <th>标题</th>
-                          <th>所属分类</th>
-                          <th>所属部门</th>
-                          <th>更新时间</th>
-                          <th>操作</th>
-                        </tr>
-                      </thead>
-                      <tbody>{favoritePrompts.map((prompt) => renderFavoriteTableRow(prompt))}</tbody>
-                    </table>
-                  ) : (
-                    <div className="empty">暂无收藏提示词</div>
-                  )}
-                </section>
+                  <div className="list-department-grid">
+                  {departments.map((department, index) => (
+                    <button
+                      type="button"
+                      key={department.id}
+                      className={Number(browseDepartmentId) === Number(department.id) ? 'list-department-card active' : 'list-department-card'}
+                      onClick={() => selectBrowseDepartment(department.id)}
+                    >
+                      <span className="department-card-top">
+                        <span className={`department-mark ${departmentTone[index % departmentTone.length]}`}>{department.name.slice(0, 1)}</span>
+                        <strong>{department.name}</strong>
+                        <em>›</em>
+                      </span>
+                      <span>{department.description || '暂无说明'}</span>
+                      <small>{department.prompt_count || 0} 条　{countDepartmentCategories(department.id)} 个分类</small>
+                    </button>
+                  ))}
+                  </div>
+                </aside>
+
+                <div className="prompt-browser-stack">
+                  <section className="prompt-table-panel">
+                    <div className="prompt-browser-top">
+                      <div className="breadcrumb">{promptListBreadcrumb}</div>
+                      {permissions.can_write && <button type="button" onClick={resetPromptForm}>+ 创建提示词</button>}
+                    </div>
+                    <form className="prompt-list-filters" onSubmit={submitFilters}>
+                      <input
+                        value={filters.keyword}
+                        placeholder={selectedCategoryName || '搜索标题、摘要或内容'}
+                        onChange={(event) => setFilters({ ...filters, keyword: event.target.value })}
+                      />
+                      <select value={filters.status} onChange={(event) => setFilters({ ...filters, status: event.target.value })}>
+                        <option value="">全部状态</option>
+                        <option value="published">已发布</option>
+                        <option value="draft">草稿</option>
+                        <option value="archived">已归档</option>
+                      </select>
+                      <select defaultValue="updated_at">
+                        <option value="updated_at">按更新时间</option>
+                        <option value="created_at">按创建时间</option>
+                      </select>
+                      <button type="submit">筛选</button>
+                    </form>
+                    <div className="prompt-browser-grid">
+                      <aside className="prompt-category-tree">
+                        <h3>分类目录</h3>
+                        {browseDepartment && <p>{browseDepartment.name}</p>}
+                        {browseDepartment
+                          ? renderPromptCategoryTree(null, 1) || <div className="empty">该部门暂无分类</div>
+                          : <div className="empty">请先选择左侧部门</div>}
+                      </aside>
+                      <div className="prompt-table-wrap">
+                        <div className="prompt-table-heading">
+                          <div>
+                            <h3>{promptListTitle}</h3>
+                            <p>{browseCategoryId ? `提示词共 ${prompts.length} 条，当前展示最近更新的内容` : '点击左侧分类后展示该分类下的所有提示词'}</p>
+                          </div>
+                        </div>
+                        {browseCategoryId && prompts.length > 0 ? (
+                          <>
+                            <table className="prompt-table">
+                              <thead>
+                                <tr>
+                                  <th>标题</th>
+                                  <th>创建人</th>
+                                  <th>更新时间</th>
+                                  <th>状态</th>
+                                  <th>操作</th>
+                                </tr>
+                              </thead>
+                              <tbody>{prompts.map((prompt) => renderPromptTableRow(prompt))}</tbody>
+                            </table>
+                            <div className="prompt-pager">
+                              <span>共 {prompts.length} 条</span>
+                              <span>‹</span>
+                              <strong>1</strong>
+                              <span>2</span>
+                              <span>3</span>
+                              <span>›</span>
+                              <button type="button">10 条/页</button>
+                            </div>
+                          </>
+                        ) : (
+                          <div className="empty">{browseCategoryId ? '该分类下暂无提示词' : '请选择一个分类查看提示词'}</div>
+                        )}
+                      </div>
+                    </div>
+                  </section>
+
+                  <section className="list-favorites-panel">
+                    <div className="list-panel-title">
+                      <h3>我的收藏</h3>
+                      <span>当前用户：{me?.display_name || me?.username || '-'}</span>
+                    </div>
+                    {favoritePrompts.length > 0 ? (
+                      <table className="prompt-table">
+                        <thead>
+                          <tr>
+                            <th>标题</th>
+                            <th>所属分类</th>
+                            <th>所属部门</th>
+                            <th>更新时间</th>
+                            <th>操作</th>
+                          </tr>
+                        </thead>
+                        <tbody>{favoritePrompts.map((prompt) => renderFavoriteTableRow(prompt))}</tbody>
+                      </table>
+                    ) : (
+                      <div className="empty">暂无收藏提示词</div>
+                    )}
+                  </section>
+                </div>
               </div>
             </div>
           </section>

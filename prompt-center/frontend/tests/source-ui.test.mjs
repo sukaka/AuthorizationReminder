@@ -79,9 +79,12 @@ test('prompt center create page uses the approved single-workbench layout', () =
 
 test('prompt center list page uses the approved department and category browser layout', () => {
   assert.match(source, /prompt-list-workspace/);
+  assert.match(source, /prompt-list-body/);
   assert.match(source, /list-department-panel/);
+  assert.match(source, /department-mark/);
   assert.match(source, /prompt-category-tree/);
   assert.match(source, /prompt-table-panel/);
   assert.match(source, /list-favorites-panel/);
   assert.match(source, /先选择部门，再进入分类目录/);
+  assert.match(source, /当前用户/);
 });
