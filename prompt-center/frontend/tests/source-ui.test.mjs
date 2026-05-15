@@ -66,3 +66,9 @@ test('prompt center UI exposes row edit archive and favorite actions', () => {
   assert.match(source, /\/prompts\/\$\{prompt\.id\}\/favorite/);
   assert.match(source, /toggleFavorite/);
 });
+
+test('prompt center create page uses the approved single-workbench layout', () => {
+  assert.match(source, /create-workspace/);
+  assert.match(source, /create-side-panel/);
+  assert.match(source, /prompt-command-strip/);
+});

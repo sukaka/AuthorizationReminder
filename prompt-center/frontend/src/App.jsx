@@ -535,25 +535,6 @@ export default function App() {
         {error && <div className="notice danger">{error}</div>}
         {loading && <div className="notice">正在检查登录状态...</div>}
 
-        <section className="metric-grid">
-          <article>
-            <span>提示词总数</span>
-            <strong>{overview?.counts?.total || 0}</strong>
-          </article>
-          <article>
-            <span>已发布</span>
-            <strong>{overview?.counts?.published || 0}</strong>
-          </article>
-          <article>
-            <span>部门数量</span>
-            <strong>{departments.length}</strong>
-          </article>
-          <article>
-            <span>复制使用</span>
-            <strong>{overview?.counts?.usage_count || 0}</strong>
-          </article>
-        </section>
-
         {activeTab === 'library' && libraryMode === 'list' && (
           <section className="library-browser">
             <div className="section-head">
@@ -599,56 +580,19 @@ export default function App() {
         )}
 
         {activeTab === 'library' && libraryMode === 'create' && (
-          <section className="workspace-grid">
-            <div className="list-panel">
-              <form className="toolbar" onSubmit={submitFilters}>
-                <input
-                  value={filters.keyword}
-                  onChange={(event) => setFilters({ ...filters, keyword: event.target.value })}
-                  placeholder="搜索标题、摘要、内容"
-                />
-                <select
-                  value={filters.department_id}
-                  onChange={(event) => setFilters({ ...filters, department_id: event.target.value, category_id: '' })}
-                >
-                  <option value="">全部部门</option>
-                  {departments.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
-                </select>
-                <select
-                  value={filters.category_id}
-                  onChange={(event) => setFilters({ ...filters, category_id: event.target.value })}
-                >
-                  <option value="">全部分类</option>
-                  {categories
-                    .filter((item) => !filters.department_id || Number(item.department_id) === Number(filters.department_id))
-                    .map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
-                </select>
-                {permissions.can_write && (
-                  <select value={filters.status} onChange={(event) => setFilters({ ...filters, status: event.target.value })}>
-                    <option value="">全部状态</option>
-                    <option value="draft">草稿</option>
-                    <option value="published">已发布</option>
-                    <option value="archived">已归档</option>
-                  </select>
-                )}
-                <button type="submit">查询</button>
-              </form>
-
-              <div className="prompt-list">
-                {prompts.map((prompt) => (
-                  renderPromptRow(prompt)
-                ))}
-                {prompts.length === 0 && <div className="empty">暂无匹配提示词</div>}
-              </div>
-            </div>
-
-            <form className="editor-panel" onSubmit={savePrompt}>
+          <section className="create-workspace">
+            <form className="editor-panel create-editor" onSubmit={savePrompt}>
               <div className="panel-head">
                 <div>
                   <span className="eyebrow">{selectedPrompt ? `ID ${selectedPrompt.id}` : '新建'}</span>
                   <h3>{selectedPrompt ? '编辑提示词' : '创建提示词'}</h3>
                 </div>
                 {permissions.can_write && <button type="button" onClick={resetPromptForm}>新建</button>}
+              </div>
+              <div className="prompt-command-strip">
+                <span>提示词创建</span>
+                <span>{selectedPrompt ? '编辑已有提示词' : '部门负责人创建新提示词'}</span>
+                <span>{variableList.length ? `${variableList.length} 个变量` : '无变量'}</span>
               </div>
               {selectedPrompt && (
                 <div className="meta-line">
@@ -743,6 +687,28 @@ export default function App() {
                 </div>
               )}
             </form>
+            <aside className="create-side-panel">
+              <section>
+                <span className="eyebrow">工作概览</span>
+                <div className="mini-stats">
+                  <div><strong>{overview?.counts?.total || 0}</strong><span>提示词</span></div>
+                  <div><strong>{overview?.counts?.published || 0}</strong><span>已发布</span></div>
+                  <div><strong>{departments.length}</strong><span>部门</span></div>
+                </div>
+              </section>
+              <section>
+                <span className="eyebrow">分类路径</span>
+                <ol className="category-steps">
+                  <li className={promptForm.category_level1 ? 'done' : ''}>一级分类</li>
+                  <li className={promptForm.category_level2 ? 'done' : ''}>二级分类</li>
+                  <li className={promptForm.category_id ? 'done' : ''}>三级分类</li>
+                </ol>
+              </section>
+              <section>
+                <span className="eyebrow">维护规则</span>
+                <p>只有对应部门负责人可以创建、更新和回滚提示词；删除会进入归档并保留审计记录。</p>
+              </section>
+            </aside>
           </section>
         )}
 
