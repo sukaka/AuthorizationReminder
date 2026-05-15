@@ -1,5 +1,5 @@
 import { createRequire } from 'node:module';
-import { describe, expect, test } from 'vitest';
+import { describe, expect, test, vi } from 'vitest';
 
 const require = createRequire(import.meta.url);
 const db = require('../src/db');
@@ -38,5 +38,29 @@ describe('prompt center service helpers', () => {
       visibility: 'department',
       tags: ['销售', '拜访'],
     });
+  });
+
+  test('returns a business error when department name already exists', async () => {
+    const mockDb = {
+      get: vi.fn().mockResolvedValue({ id: 2 }),
+      run: vi.fn(),
+    };
+
+    await expect(service.saveDepartment(mockDb, { name: '技术部' }, { id: 1 }, '127.0.0.1'))
+      .rejects.toMatchObject({ message: '部门“技术部”已存在', statusCode: 409 });
+    expect(mockDb.run).not.toHaveBeenCalled();
+  });
+
+  test('returns a business error when category name already exists in department', async () => {
+    const mockDb = {
+      get: vi.fn()
+        .mockResolvedValueOnce({ id: 2, name: '技术部' })
+        .mockResolvedValueOnce({ id: 3 }),
+      run: vi.fn(),
+    };
+
+    await expect(service.saveCategory(mockDb, { department_id: 2, name: '技术方案' }, { id: 1 }, '127.0.0.1'))
+      .rejects.toMatchObject({ message: '分类“技术方案”在该部门下已存在', statusCode: 409 });
+    expect(mockDb.run).not.toHaveBeenCalled();
   });
 });

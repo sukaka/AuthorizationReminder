@@ -5,6 +5,32 @@ const ALLOWED_VISIBILITIES = new Set(['department', 'company']);
 
 const trimText = (value) => String(value || '').trim();
 const nowSql = () => new Date().toISOString().slice(0, 19).replace('T', ' ');
+const isDuplicateKeyError = (err) => (
+  err?.code === 'ER_DUP_ENTRY'
+  || /Duplicate entry/i.test(String(err?.message || ''))
+);
+
+const assertUniqueDepartmentName = async (db, name, id = null) => {
+  const params = [name];
+  let sql = 'SELECT id FROM pc_departments WHERE name = ?';
+  if (id) {
+    sql += ' AND id <> ?';
+    params.push(Number(id));
+  }
+  const existing = await db.get(sql, params);
+  if (existing) throw appError(`部门“${name}”已存在`, 409);
+};
+
+const assertUniqueCategoryName = async (db, departmentId, name, id = null) => {
+  const params = [Number(departmentId), name];
+  let sql = 'SELECT id FROM pc_categories WHERE department_id = ? AND name = ?';
+  if (id) {
+    sql += ' AND id <> ?';
+    params.push(Number(id));
+  }
+  const existing = await db.get(sql, params);
+  if (existing) throw appError(`分类“${name}”在该部门下已存在`, 409);
+};
 
 const normalizeTags = (value) => {
   const source = Array.isArray(value)
@@ -180,18 +206,30 @@ const saveDepartment = async (db, payload, user, requestIp, id = null) => {
     sort_order: Number(payload.sort_order || payload.sortOrder || 0) || 0,
     is_active: payload.is_active === false || payload.isActive === false ? 0 : 1,
   };
+  await assertUniqueDepartmentName(db, data.name, id);
   if (id) {
-    await db.run(
-      'UPDATE pc_departments SET name = ?, description = ?, sort_order = ?, is_active = ? WHERE id = ?',
-      [data.name, data.description, data.sort_order, data.is_active, Number(id)]
-    );
+    try {
+      await db.run(
+        'UPDATE pc_departments SET name = ?, description = ?, sort_order = ?, is_active = ? WHERE id = ?',
+        [data.name, data.description, data.sort_order, data.is_active, Number(id)]
+      );
+    } catch (err) {
+      if (isDuplicateKeyError(err)) throw appError(`部门“${data.name}”已存在`, 409);
+      throw err;
+    }
     await logAudit(db, { user, action: 'department.update', entity: 'department', entityId: id, detail: data, requestIp });
     return ensureDepartment(db, id);
   }
-  const result = await db.run(
-    'INSERT INTO pc_departments (name, description, sort_order, is_active) VALUES (?, ?, ?, ?)',
-    [data.name, data.description, data.sort_order, data.is_active]
-  );
+  let result;
+  try {
+    result = await db.run(
+      'INSERT INTO pc_departments (name, description, sort_order, is_active) VALUES (?, ?, ?, ?)',
+      [data.name, data.description, data.sort_order, data.is_active]
+    );
+  } catch (err) {
+    if (isDuplicateKeyError(err)) throw appError(`部门“${data.name}”已存在`, 409);
+    throw err;
+  }
   await logAudit(db, { user, action: 'department.create', entity: 'department', entityId: result.insertId, detail: data, requestIp });
   return ensureDepartment(db, result.insertId);
 };
@@ -234,18 +272,30 @@ const saveCategory = async (db, payload, user, requestIp, id = null) => {
     sort_order: Number(payload.sort_order || payload.sortOrder || 0) || 0,
     is_active: payload.is_active === false || payload.isActive === false ? 0 : 1,
   };
+  await assertUniqueCategoryName(db, data.department_id, data.name, id);
   if (id) {
-    await db.run(
-      'UPDATE pc_categories SET department_id = ?, name = ?, description = ?, sort_order = ?, is_active = ? WHERE id = ?',
-      [data.department_id, data.name, data.description, data.sort_order, data.is_active, Number(id)]
-    );
+    try {
+      await db.run(
+        'UPDATE pc_categories SET department_id = ?, name = ?, description = ?, sort_order = ?, is_active = ? WHERE id = ?',
+        [data.department_id, data.name, data.description, data.sort_order, data.is_active, Number(id)]
+      );
+    } catch (err) {
+      if (isDuplicateKeyError(err)) throw appError(`分类“${data.name}”在该部门下已存在`, 409);
+      throw err;
+    }
     await logAudit(db, { user, action: 'category.update', entity: 'category', entityId: id, detail: data, requestIp });
     return db.get('SELECT * FROM pc_categories WHERE id = ?', [Number(id)]);
   }
-  const result = await db.run(
-    'INSERT INTO pc_categories (department_id, name, description, sort_order, is_active) VALUES (?, ?, ?, ?, ?)',
-    [data.department_id, data.name, data.description, data.sort_order, data.is_active]
-  );
+  let result;
+  try {
+    result = await db.run(
+      'INSERT INTO pc_categories (department_id, name, description, sort_order, is_active) VALUES (?, ?, ?, ?, ?)',
+      [data.department_id, data.name, data.description, data.sort_order, data.is_active]
+    );
+  } catch (err) {
+    if (isDuplicateKeyError(err)) throw appError(`分类“${data.name}”在该部门下已存在`, 409);
+    throw err;
+  }
   await logAudit(db, { user, action: 'category.create', entity: 'category', entityId: result.insertId, detail: data, requestIp });
   return db.get('SELECT * FROM pc_categories WHERE id = ?', [result.insertId]);
 };
