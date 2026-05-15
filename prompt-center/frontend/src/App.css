@@ -297,8 +297,7 @@ label {
 
 .create-workspace {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 320px;
-  gap: 20px;
+  grid-template-columns: minmax(0, 1fr);
   align-items: start;
 }
 
@@ -329,26 +328,210 @@ label {
 }
 
 .create-editor {
-  padding: 22px;
+  gap: 18px;
+  padding: 26px 28px 28px;
+  background: rgba(255, 255, 255, 0.86);
 }
 
-.prompt-command-strip {
+.create-form-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: center;
+}
+
+.create-form-head h3 {
+  margin: 4px 0 0;
+  font-size: 24px;
+}
+
+.create-permission-notice {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-height: 52px;
+  padding: 0 18px;
+  border: 1px solid rgba(94, 155, 255, 0.36);
+  border-radius: 4px;
+  color: #5a6f8e;
+  background: linear-gradient(90deg, rgba(235, 244, 255, 0.95), rgba(249, 252, 255, 0.95));
+}
+
+.create-permission-notice span {
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  color: #ffffff;
+  background: #4f86f7;
+  font-weight: 900;
+}
+
+.create-permission-notice strong {
+  font-size: 22px;
+  letter-spacing: 0;
+}
+
+.create-field {
+  display: grid;
+  gap: 10px;
+}
+
+.create-field > label {
+  display: block;
+  color: #1b3150;
+  font-size: 18px;
+  font-weight: 900;
+}
+
+.required {
+  margin-right: 6px;
+  color: #f5223d;
+}
+
+.create-field input,
+.create-field select {
+  min-height: 52px;
+  padding: 0 18px;
+  border-color: rgba(118, 153, 195, 0.28);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.94);
+  font-size: 16px;
+  font-weight: 650;
+}
+
+.counted-field {
+  position: relative;
+}
+
+.counted-field input {
+  padding-right: 92px;
+}
+
+.counted-field > span {
+  position: absolute;
+  right: 18px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: #6d7f9c;
+  font-size: 16px;
+  font-weight: 800;
+  pointer-events: none;
+}
+
+.select-shell {
+  position: relative;
+}
+
+.select-shell::after {
+  content: "⌄";
+  position: absolute;
+  right: 16px;
+  top: 50%;
+  transform: translateY(-55%);
+  color: #172033;
+  font-size: 22px;
+  pointer-events: none;
+}
+
+.select-shell select {
+  appearance: none;
+  padding-right: 48px;
+}
+
+.category-select-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 18px;
+}
+
+.category-select-grid span {
+  display: block;
+  margin-bottom: 8px;
+  color: #697d9b;
+  font-size: 15px;
+  font-weight: 900;
+}
+
+.tag-preview {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
-  padding: 12px;
-  border: 1px solid rgba(37, 99, 235, 0.16);
-  border-radius: 8px;
+  gap: 10px;
+  min-height: 30px;
+}
+
+.tag-preview span {
+  height: 30px;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 12px;
+  border-radius: 6px;
+  color: #2563eb;
+  background: rgba(226, 238, 255, 0.95);
+  font-weight: 900;
+}
+
+.prompt-editor-shell {
+  overflow: hidden;
+  border: 1px solid rgba(118, 153, 195, 0.28);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.94);
+}
+
+.prompt-toolbar {
+  height: 44px;
+  display: flex;
+  align-items: center;
+  gap: 22px;
+  padding: 0 18px;
+  border-bottom: 1px solid rgba(118, 153, 195, 0.22);
+  color: #324862;
+  font-size: 17px;
+  font-weight: 850;
+}
+
+.prompt-editor-shell textarea {
+  min-height: 260px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  padding: 20px 18px 48px;
+  font-size: 16px;
+  font-weight: 650;
+  line-height: 1.8;
+}
+
+.textarea-counter > span {
+  top: auto;
+  right: 18px;
+  bottom: 14px;
+  transform: none;
+}
+
+.create-variable-box {
+  min-height: 48px;
+  border-style: solid;
   background: rgba(232, 241, 255, 0.72);
 }
 
-.prompt-command-strip span {
-  border-radius: 999px;
-  padding: 5px 10px;
-  color: #52647f;
-  background: rgba(255, 255, 255, 0.82);
-  font-size: 12px;
-  font-weight: 800;
+.create-variable-box strong {
+  color: #6a7d99;
+  font-size: 14px;
+}
+
+.create-actions {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) minmax(180px, 1fr);
+  gap: 28px;
+  padding-top: 6px;
+}
+
+.create-actions button {
+  min-height: 52px;
+  font-size: 18px;
+  font-weight: 900;
 }
 
 .create-side-panel {

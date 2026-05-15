@@ -521,7 +521,7 @@ export default function App() {
             <div className="brand-row">
               <strong>聚信</strong>
               <h2>企业提示词管理中心</h2>
-              <span>v5.11.5</span>
+              <span>v5.15.2</span>
             </div>
             <p>按部门和分类沉淀提示词，保留版本、发布状态和审计记录。</p>
           </div>
@@ -582,17 +582,16 @@ export default function App() {
         {activeTab === 'library' && libraryMode === 'create' && (
           <section className="create-workspace">
             <form className="editor-panel create-editor" onSubmit={savePrompt}>
-              <div className="panel-head">
+              <div className="create-form-head">
                 <div>
                   <span className="eyebrow">{selectedPrompt ? `ID ${selectedPrompt.id}` : '新建'}</span>
                   <h3>{selectedPrompt ? '编辑提示词' : '创建提示词'}</h3>
                 </div>
                 {permissions.can_write && <button type="button" onClick={resetPromptForm}>新建</button>}
               </div>
-              <div className="prompt-command-strip">
-                <span>提示词创建</span>
-                <span>{selectedPrompt ? '编辑已有提示词' : '部门负责人创建新提示词'}</span>
-                <span>{variableList.length ? `${variableList.length} 个变量` : '无变量'}</span>
+              <div className="create-permission-notice">
+                <span>i</span>
+                <strong>您拥有本部门提示词的创建与管理权限</strong>
               </div>
               {selectedPrompt && (
                 <div className="meta-line">
@@ -603,10 +602,20 @@ export default function App() {
               {promptDepartmentId > 0 && !canWriteSelectedDepartment && permissions.can_write && (
                 <div className="notice">只有该部门负责人可以保存或回滚这个提示词。</div>
               )}
-              <label>标题<input value={promptForm.title} disabled={!canEditPrompt} onChange={(event) => setPromptForm({ ...promptForm, title: event.target.value })} /></label>
-              <label>摘要<input value={promptForm.summary} disabled={!canEditPrompt} onChange={(event) => setPromptForm({ ...promptForm, summary: event.target.value })} /></label>
-              <div className="two-cols">
-                <label>部门
+              <div className="create-field">
+                <label><span className="required">*</span>标题</label>
+                <div className="counted-field">
+                  <input value={promptForm.title} disabled={!canEditPrompt} placeholder="请输入提示词标题，建议简洁明确" maxLength={100} onChange={(event) => setPromptForm({ ...promptForm, title: event.target.value })} />
+                  <span>{promptForm.title.length}/100</span>
+                </div>
+              </div>
+              <div className="create-field">
+                <label>摘要</label>
+                <input value={promptForm.summary} disabled={!canEditPrompt} placeholder="请输入提示词摘要，便于列表快速识别用途" onChange={(event) => setPromptForm({ ...promptForm, summary: event.target.value })} />
+              </div>
+              <div className="create-field">
+                <label><span className="required">*</span>部门</label>
+                <div className="select-shell">
                   <select
                     value={promptForm.department_id}
                     disabled={!permissions.can_write}
@@ -621,50 +630,89 @@ export default function App() {
                     <option value="">请选择部门</option>
                     {departments.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
                   </select>
-                </label>
-                <label>一级分类
-                  <select
-                    value={promptForm.category_level1}
-                    disabled={!canEditPrompt}
-                    onChange={(event) => setPromptForm({ ...promptForm, category_level1: event.target.value, category_level2: '', category_id: '' })}
-                  >
-                    <option value="">请选择一级分类</option>
-                    {formLevel1Categories.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
-                  </select>
-                </label>
+                </div>
               </div>
-              <div className="two-cols">
-                <label>二级分类
-                  <select
-                    value={promptForm.category_level2}
-                    disabled={!canEditPrompt || !promptForm.category_level1}
-                    onChange={(event) => setPromptForm({ ...promptForm, category_level2: event.target.value, category_id: '' })}
-                  >
-                    <option value="">请选择二级分类</option>
-                    {formLevel2Categories.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
-                  </select>
-                </label>
-                <label>三级分类
-                  <select
-                    value={promptForm.category_id}
-                    disabled={!canEditPrompt || !promptForm.category_level2}
-                    onChange={(event) => setPromptForm({ ...promptForm, category_id: event.target.value })}
-                  >
-                    <option value="">请选择三级分类</option>
-                    {formLevel3Categories.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
-                  </select>
-                </label>
+              <div className="create-field">
+                <label><span className="required">*</span>分类</label>
+                <div className="category-select-grid">
+                  <div>
+                    <span>一级分类</span>
+                    <div className="select-shell">
+                      <select
+                        value={promptForm.category_level1}
+                        disabled={!canEditPrompt}
+                        onChange={(event) => setPromptForm({ ...promptForm, category_level1: event.target.value, category_level2: '', category_id: '' })}
+                      >
+                        <option value="">请选择一级分类</option>
+                        {formLevel1Categories.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+                      </select>
+                    </div>
+                  </div>
+                  <div>
+                    <span>二级分类</span>
+                    <div className="select-shell">
+                      <select
+                        value={promptForm.category_level2}
+                        disabled={!canEditPrompt || !promptForm.category_level1}
+                        onChange={(event) => setPromptForm({ ...promptForm, category_level2: event.target.value, category_id: '' })}
+                      >
+                        <option value="">请选择二级分类</option>
+                        {formLevel2Categories.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+                      </select>
+                    </div>
+                  </div>
+                  <div>
+                    <span>三级分类</span>
+                    <div className="select-shell">
+                      <select
+                        value={promptForm.category_id}
+                        disabled={!canEditPrompt || !promptForm.category_level2}
+                        onChange={(event) => setPromptForm({ ...promptForm, category_id: event.target.value })}
+                      >
+                        <option value="">请选择三级分类</option>
+                        {formLevel3Categories.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+                      </select>
+                    </div>
+                  </div>
+                </div>
               </div>
-              <label>标签<input value={promptForm.tags} disabled={!canEditPrompt} onChange={(event) => setPromptForm({ ...promptForm, tags: event.target.value })} /></label>
-              <label>内容<textarea value={promptForm.content} disabled={!canEditPrompt} onChange={(event) => setPromptForm({ ...promptForm, content: event.target.value })} /></label>
-              <div className="variable-box">
-                <span>变量</span>
+              <div className="create-field">
+                <label>标签</label>
+                <input value={promptForm.tags} disabled={!canEditPrompt} placeholder="输入后按回车添加，可多选" onChange={(event) => setPromptForm({ ...promptForm, tags: event.target.value })} />
+                <div className="tag-preview">
+                  {tagsToInput(promptForm.tags).split(/[,，]/).map((item) => item.trim()).filter(Boolean).map((item) => (
+                    <span key={item}>{item} ×</span>
+                  ))}
+                </div>
+              </div>
+              <div className="create-field">
+                <label><span className="required">*</span>提示词内容</label>
+                <div className="prompt-editor-shell">
+                  <div className="prompt-toolbar" aria-hidden="true">
+                    <span>↶</span><span>/</span><span>B</span><span>U</span><span>≡</span><span>☷</span><span>↔</span><span>链</span><span>图</span>
+                  </div>
+                  <div className="counted-field textarea-counter">
+                    <textarea value={promptForm.content} disabled={!canEditPrompt} maxLength={5000} placeholder="请输入提示词内容，支持 Markdown 格式，建议包含背景、目标、约束、步骤、输出格式等信息。" onChange={(event) => setPromptForm({ ...promptForm, content: event.target.value })} />
+                    <span>{promptForm.content.length}/5000</span>
+                  </div>
+                </div>
+              </div>
+              <div className="variable-box create-variable-box">
+                <span>变量（可选）</span>
+                <strong>通过变量可在调用时动态替换内容</strong>
                 {variableList.length ? variableList.map((item) => <mark key={item}>{item}</mark>) : <em>无</em>}
               </div>
               {permissions.can_write && (
                 <>
-                  <label>变更说明<input value={promptForm.change_note} disabled={!canEditPrompt} onChange={(event) => setPromptForm({ ...promptForm, change_note: event.target.value })} /></label>
-                  <div className="actions">
+                  <div className="create-field">
+                    <label>版本备注（可选）</label>
+                    <div className="counted-field">
+                      <input value={promptForm.change_note} disabled={!canEditPrompt} maxLength={200} placeholder="请输入本次创建或更新的备注信息" onChange={(event) => setPromptForm({ ...promptForm, change_note: event.target.value })} />
+                      <span>{promptForm.change_note.length}/200</span>
+                    </div>
+                  </div>
+                  <div className="actions create-actions">
+                    <button type="button" className="ghost" onClick={resetPromptForm}>取消</button>
                     <button disabled={saving || !canSavePrompt} type="submit">{saving ? '保存中' : '保存'}</button>
                     {selectedPrompt && permissions.can_publish && <button type="button" onClick={publishPrompt}>发布</button>}
                     {selectedPrompt && permissions.can_publish && <button type="button" className="ghost" onClick={archivePrompt}>归档</button>}
@@ -687,28 +735,6 @@ export default function App() {
                 </div>
               )}
             </form>
-            <aside className="create-side-panel">
-              <section>
-                <span className="eyebrow">工作概览</span>
-                <div className="mini-stats">
-                  <div><strong>{overview?.counts?.total || 0}</strong><span>提示词</span></div>
-                  <div><strong>{overview?.counts?.published || 0}</strong><span>已发布</span></div>
-                  <div><strong>{departments.length}</strong><span>部门</span></div>
-                </div>
-              </section>
-              <section>
-                <span className="eyebrow">分类路径</span>
-                <ol className="category-steps">
-                  <li className={promptForm.category_level1 ? 'done' : ''}>一级分类</li>
-                  <li className={promptForm.category_level2 ? 'done' : ''}>二级分类</li>
-                  <li className={promptForm.category_id ? 'done' : ''}>三级分类</li>
-                </ol>
-              </section>
-              <section>
-                <span className="eyebrow">维护规则</span>
-                <p>只有对应部门负责人可以创建、更新和回滚提示词；删除会进入归档并保留审计记录。</p>
-              </section>
-            </aside>
           </section>
         )}
 

@@ -69,6 +69,10 @@ test('prompt center UI exposes row edit archive and favorite actions', () => {
 
 test('prompt center create page uses the approved single-workbench layout', () => {
   assert.match(source, /create-workspace/);
-  assert.match(source, /create-side-panel/);
-  assert.match(source, /prompt-command-strip/);
+  assert.match(source, /create-permission-notice/);
+  assert.match(source, /category-select-grid/);
+  assert.match(source, /prompt-editor-shell/);
+  assert.doesNotMatch(source, /工作概览/);
+  assert.doesNotMatch(source, /分类路径/);
+  assert.doesNotMatch(source, /维护规则/);
 });
