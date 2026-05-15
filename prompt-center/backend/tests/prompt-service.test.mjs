@@ -102,7 +102,7 @@ describe('prompt center service helpers', () => {
     const mockDb = {
       get: vi.fn()
         .mockResolvedValueOnce({ id: 2, name: '技术部', manager_user_id: 18, manager_name: '张磊' })
-        .mockResolvedValueOnce({ id: 3, department_id: 2 })
+        .mockResolvedValueOnce({ id: 3, department_id: 2, name: '技术方案' })
         .mockResolvedValueOnce({
           id: 8,
           department_id: 2,
@@ -128,6 +128,18 @@ describe('prompt center service helpers', () => {
       '127.0.0.1'
     )).resolves.toMatchObject({ id: 8, department_id: 2, category_id: 3 });
     expect(mockDb.transaction).toHaveBeenCalledOnce();
+    expect(mockDb.run).toHaveBeenCalledWith(
+      expect.stringContaining('pc_audit_logs'),
+      expect.arrayContaining([
+        'prompt.create',
+        'prompt',
+        8,
+        expect.stringContaining('"department_name":"技术部"'),
+        '127.0.0.1',
+      ])
+    );
+    expect(mockDb.run.mock.calls[0][1][6]).toContain('"category_name":"技术方案"');
+    expect(mockDb.run.mock.calls[0][1][6]).toContain('"version_no":1');
   });
 
   test('rejects prompt update by a non department manager', async () => {
@@ -182,5 +194,46 @@ describe('prompt center service helpers', () => {
       '127.0.0.1'
     )).rejects.toMatchObject({ message: '仅技术部负责人可维护该部门提示词', statusCode: 403 });
     expect(mockDb.run).not.toHaveBeenCalled();
+  });
+
+  test('writes detailed prompt audit records with actor and request ip', async () => {
+    const mockDb = {
+      run: vi.fn().mockResolvedValue({ insertId: 1 }),
+    };
+
+    await service.logAudit(mockDb, {
+      user: { id: 7, display_name: '张磊', role: 'auditor' },
+      action: 'prompt.update',
+      entity: 'prompt',
+      entityId: 8,
+      detail: {
+        title: '技术排障提示词',
+        department_name: '技术部',
+        category_name: '技术方案',
+        before: { title: '旧标题' },
+        after: { title: '新标题' },
+      },
+      requestIp: '10.0.0.8',
+    });
+
+    expect(mockDb.run).toHaveBeenCalledWith(
+      expect.stringContaining('pc_audit_logs'),
+      [
+        7,
+        '张磊',
+        'auditor',
+        'prompt.update',
+        'prompt',
+        8,
+        JSON.stringify({
+          title: '技术排障提示词',
+          department_name: '技术部',
+          category_name: '技术方案',
+          before: { title: '旧标题' },
+          after: { title: '新标题' },
+        }),
+        '10.0.0.8',
+      ]
+    );
   });
 });

@@ -66,6 +66,8 @@ const {
   AUDIT_ACTION_OPTIONS,
   AUDIT_ENTITY_OPTIONS,
   AUDIT_PRESET_OPTIONS,
+  getAuditDetailSummary,
+  getAuditTimeLabel,
 } = require('./audit-log-display');
 const {
   SYSTEM_DISPLAY_OPTIONS,
@@ -2093,11 +2095,12 @@ const renderAuditCenterSections = () => ({
 	                <th>主体</th>
 	                <th>IP地址</th>
 	                <th>对象</th>
+	                <th>详情</th>
 	                <th>时间</th>
 	              </tr>
 	            </thead>
 	            <tbody id="auditLogsBody">
-	              <tr><td colspan="6" class="empty">正在加载审计日志...</td></tr>
+	              <tr><td colspan="7" class="empty">正在加载审计日志...</td></tr>
 	            </tbody>
 	          </table>
 	        </div>
@@ -2352,6 +2355,7 @@ const renderDedicatedCenterPage = ({ nonce, config }) => {
 	    .audit-subject-head,.audit-object-head{display:flex;flex-wrap:wrap;align-items:center;gap:8px}
 	    .audit-user-name{font-weight:700;color:#0f172a}
 	    .audit-subject-meta,.audit-object-meta{font-size:12px;color:#64748b;line-height:1.6}
+	    .audit-detail-summary{max-width:280px;color:#334155;font-size:13px;line-height:1.55;overflow-wrap:anywhere}
 	    .audit-meta-chip,.audit-object-chip,.audit-event-chip{display:inline-flex;align-items:center;min-height:32px;padding:0 12px;border-radius:999px;border:1px solid rgba(148,163,184,.24);background:#f8fafc;color:#334155;font-size:12px;font-weight:600;white-space:nowrap}
 	    .audit-meta-chip{background:#eff6ff;color:#1d4ed8;border-color:rgba(59,130,246,.22)}
 	    .audit-object-chip{background:#f8fafc;color:#475569}
@@ -2661,6 +2665,51 @@ const renderDedicatedCenterPage = ({ nonce, config }) => {
         return '登录IP';
       }
       return '来源IP';
+    }
+
+    function normalizeAuditDetailValue(value) {
+      if (value === undefined || value === null) return null;
+      if (typeof value === 'string') {
+        const text = value.trim();
+        if (!text) return null;
+        try {
+          return JSON.parse(text);
+        } catch (_err) {
+          return text;
+        }
+      }
+      return value;
+    }
+
+    function getAuditDetailSummary(row) {
+      const detail = normalizeAuditDetailValue(row?.after_data)
+        || normalizeAuditDetailValue(row?.detail)
+        || normalizeAuditDetailValue(row?.detail_json)
+        || normalizeAuditDetailValue(row?.message);
+      if (!detail) return '-';
+      if (typeof detail === 'string') return detail.slice(0, 180);
+      if (typeof detail !== 'object') return String(detail);
+      const parts = [
+        detail.title,
+        detail.name,
+        detail.department_name,
+        detail.category_name,
+        detail.status_label,
+        detail.status,
+        detail.version_no ? ('v' + detail.version_no) : '',
+        detail.result,
+        detail.message,
+      ].map((item) => String(item || '').trim()).filter(Boolean);
+      if (parts.length) return Array.from(new Set(parts)).join(' / ').slice(0, 220);
+      return JSON.stringify(detail).slice(0, 220);
+    }
+
+    function getAuditTimeLabel(row) {
+      const action = String(row?.action || '').trim().toUpperCase();
+      const entity = String(row?.entity || '').trim().toLowerCase();
+      if (action === 'LOGOUT') return '登出时间';
+      if (action.startsWith('LOGIN') || entity === 'auth') return '登录时间';
+      return '操作时间';
     }
 
     function getDefaultBusinessAccessByRole(role) {
@@ -3940,13 +3989,15 @@ const renderDedicatedCenterPage = ({ nonce, config }) => {
 	      if (updatedEl) updatedEl.textContent = new Date().toLocaleString('zh-CN', { hour12: false });
 	      renderAuditPagination(meta);
 	      if (!list.length) {
-	        body.innerHTML = '<tr><td colspan="6" class="empty">' + escapeHtml(meta.total ? '当前页没有记录，请返回上一页或重新检索。' : '当前没有审计日志') + '</td></tr>';
+	        body.innerHTML = '<tr><td colspan="7" class="empty">' + escapeHtml(meta.total ? '当前页没有记录，请返回上一页或重新检索。' : '当前没有审计日志') + '</td></tr>';
 	        return meta;
 	      }
 	      body.innerHTML = list.map((row) => {
 	        const actionTone = getAuditActionTone(row.action || '');
 	        const requestIp = String(row.request_ip || '').trim();
 	        const requestIpLabel = getAuditRequestIpLabel(row);
+	        const detailSummary = getAuditDetailSummary(row);
+	        const timeLabel = getAuditTimeLabel(row);
 	        const systemLabel = getAuditSystemLabel(row.system || '-') || '-';
 	        const entityLabel = getAuditEntityLabel(row.entity || '-');
 	        const subjectMeta = row.user_id ? ('用户ID ' + row.user_id) : '用户ID 未记录';
@@ -3958,7 +4009,8 @@ const renderDedicatedCenterPage = ({ nonce, config }) => {
 	          + '<div class="audit-subject-meta">' + escapeHtml(subjectMeta) + '</div></div></td>'
 	          + '<td><div class="audit-object-cell"><div class="audit-object-head"><span class="audit-meta-chip">' + escapeHtml(requestIpLabel) + '</span></div><div class="audit-time">' + escapeHtml(requestIp || '未记录') + '</div></div></td>'
 	          + '<td><div class="audit-object-cell"><div class="audit-object-head"><span class="audit-object-chip">' + escapeHtml(entityLabel) + '</span></div><div class="audit-object-meta">' + escapeHtml(entityMeta) + '</div></div></td>'
-	          + '<td><div class="audit-time">' + escapeHtml(row.created_at || '-') + '</div></td>'
+	          + '<td><div class="audit-detail-summary">' + escapeHtml(detailSummary || '-') + '</div></td>'
+	          + '<td><div class="audit-object-cell"><div class="audit-object-head"><span class="audit-meta-chip">' + escapeHtml(timeLabel) + '</span></div><div class="audit-time">' + escapeHtml(row.created_at || '-') + '</div></div></td>'
 	          + '</tr>';
 	      }).join('');
 	      return meta;

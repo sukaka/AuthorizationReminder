@@ -144,6 +144,77 @@ test('listLogs only fetches the requested remote system', async () => {
   assert.equal(result.queryLimit, 30);
 });
 
+test('listLogs normalizes prompt center audit details for auditor review', async () => {
+  const service = createAuditCenterLogsService({
+    db: {
+      async query() {
+        throw new Error('local db should not be used for prompt center remote logs');
+      },
+    },
+    computeAuditSignature: () => '',
+    fetchJson: async (url) => {
+      assert.match(url, /^http:\/\/prompt-center-api:5189\/api\/prompt-center\/audit\/logs\?/);
+      return [
+        {
+          id: 18,
+          actor_id: 7,
+          actor_name: 'zhanglei',
+          actor_role: 'auditor',
+          action: 'prompt.update',
+          entity: 'prompt',
+          entity_id: 8,
+          detail: {
+            title: '技术排障提示词',
+            department_name: '技术部',
+            category_name: '技术方案',
+            version_no: 3,
+          },
+          request_ip: '10.0.0.8',
+          created_at: '2026-05-15 10:00:00',
+        },
+      ];
+    },
+    remoteBaseUrls: {
+      'prompt-center': 'http://prompt-center-api:5189',
+    },
+  });
+
+  const result = await service.listLogs({
+    query: { system: 'prompt-center', limit: 20 },
+    authToken: 'token-123',
+  });
+
+  assert.equal(result.items[0].system, 'prompt-center');
+  assert.equal(result.items[0].username, 'zhanglei');
+  assert.equal(result.items[0].user_role, 'auditor');
+  assert.deepEqual(result.items[0].after_data, {
+    title: '技术排障提示词',
+    department_name: '技术部',
+    category_name: '技术方案',
+    version_no: 3,
+  });
+});
+
+test('serializeLogsAsCsv includes display detail summary for exports', () => {
+  const csv = serializeLogsAsCsv([
+    {
+      id: 9,
+      system: 'prompt-center',
+      username: 'zhanglei',
+      action: 'prompt.archived',
+      entity: 'prompt',
+      entity_id: 8,
+      request_ip: '10.0.0.8',
+      after_data: { title: '技术排障提示词', status_label: '已归档' },
+      created_at: '2026-05-15 11:00:00',
+    },
+  ]);
+
+  assert.match(csv, /详情/);
+  assert.match(csv, /删除\/归档提示词/);
+  assert.match(csv, /技术排障提示词 \/ 已归档/);
+});
+
 test('listLogs paginates merged rows with 10 items per page by default', async () => {
   const service = createAuditCenterLogsService({
     db: {
@@ -308,7 +379,7 @@ test('serializeLogsAsCsv exports localized csv headers and values', () => {
     },
   ]);
 
-  assert.match(csv, /^ID,系统,用户,动作,对象,对象ID,IP地址,时间,前一条签名,当前签名,变更前,变更后\n/);
+  assert.match(csv, /^ID,系统,用户,动作,对象,对象ID,IP地址,详情,时间,前一条签名,当前签名,变更前,变更后\n/);
   assert.match(csv, /"统一登录"/);
   assert.match(csv, /"更新"/);
   assert.match(csv, /"用户"/);

@@ -27,6 +27,16 @@ const AUDIT_ACTION_OPTIONS = Object.freeze([
   { value: 'DELETE', label: '删除', tone: 'change' },
   { value: 'IMPORT', label: '导入', tone: 'change' },
   { value: 'UPLOAD', label: '上传', tone: 'change' },
+  { value: 'department.create', label: '新增部门', tone: 'change' },
+  { value: 'department.update', label: '修改部门', tone: 'change' },
+  { value: 'category.create', label: '新增分类', tone: 'change' },
+  { value: 'category.update', label: '修改分类', tone: 'change' },
+  { value: 'prompt.create', label: '创建提示词', tone: 'change' },
+  { value: 'prompt.update', label: '修改提示词', tone: 'change' },
+  { value: 'prompt.published', label: '发布提示词', tone: 'change' },
+  { value: 'prompt.archived', label: '删除/归档提示词', tone: 'change' },
+  { value: 'prompt.rollback', label: '回滚提示词', tone: 'change' },
+  { value: 'prompt.use', label: '复制使用提示词', tone: 'session' },
 ]);
 
 const AUDIT_ENTITY_OPTIONS = Object.freeze([
@@ -44,6 +54,9 @@ const AUDIT_ENTITY_OPTIONS = Object.freeze([
   { value: 'template', label: '模板' },
   { value: 'schedule', label: '排期' },
   { value: 'permission', label: '权限' },
+  { value: 'prompt', label: '提示词' },
+  { value: 'department', label: '部门' },
+  { value: 'category', label: '分类' },
 ]);
 
 const AUDIT_PRESET_OPTIONS = Object.freeze([
@@ -136,6 +149,53 @@ const getAuditRequestIpLabel = (row = {}) => {
   return '来源IP';
 };
 
+const normalizeDetailValue = (value) => {
+  if (value === undefined || value === null) return null;
+  if (typeof value === 'string') {
+    const text = value.trim();
+    if (!text) return null;
+    try {
+      return JSON.parse(text);
+    } catch (_err) {
+      return text;
+    }
+  }
+  return value;
+};
+
+const getAuditDetailSummary = (row = {}) => {
+  const detail = normalizeDetailValue(row.after_data)
+    || normalizeDetailValue(row.detail)
+    || normalizeDetailValue(row.detail_json)
+    || normalizeDetailValue(row.message);
+  if (!detail) return '-';
+  if (typeof detail === 'string') return detail.slice(0, 180);
+  if (typeof detail !== 'object') return String(detail);
+  const parts = [
+    detail.title,
+    detail.name,
+    detail.department_name,
+    detail.category_name,
+    detail.status_label,
+    detail.status,
+    detail.version_no ? `v${detail.version_no}` : '',
+    detail.result,
+    detail.message,
+  ]
+    .map((item) => String(item || '').trim())
+    .filter(Boolean);
+  if (parts.length) return Array.from(new Set(parts)).join(' / ').slice(0, 220);
+  return JSON.stringify(detail).slice(0, 220);
+};
+
+const getAuditTimeLabel = (row = {}) => {
+  const action = String(row.action || '').trim().toUpperCase();
+  const entity = String(row.entity || '').trim().toLowerCase();
+  if (action === 'LOGOUT') return '登出时间';
+  if (action.startsWith('LOGIN') || entity === 'auth') return '登录时间';
+  return '操作时间';
+};
+
 const formatAuditLogForDisplay = (row = {}) => ({
   ...row,
   systemLabel: getAuditSystemLabel(row.system),
@@ -143,6 +203,8 @@ const formatAuditLogForDisplay = (row = {}) => ({
   entityLabel: getAuditEntityLabel(row.entity),
   actionTone: getAuditActionTone(row.action),
   requestIpLabel: getAuditRequestIpLabel(row),
+  detailSummary: getAuditDetailSummary(row),
+  timeLabel: getAuditTimeLabel(row),
 });
 
 module.exports = {
@@ -152,7 +214,9 @@ module.exports = {
   formatAuditLogForDisplay,
   getAuditActionLabel,
   getAuditActionTone,
+  getAuditDetailSummary,
   getAuditEntityLabel,
   getAuditRequestIpLabel,
   getAuditSystemLabel,
+  getAuditTimeLabel,
 };

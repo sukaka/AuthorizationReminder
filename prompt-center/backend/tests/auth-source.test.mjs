@@ -18,4 +18,8 @@ describe('prompt center auth source', () => {
     expect(source).toContain('extractCookieToken');
     expect(source).toContain('juxin_auth_token');
   });
+
+  test('limits prompt center audit visibility to auditor role', () => {
+    expect(source).toContain("const canReadAudit = (req) => isAuditor(req);");
+  });
 });

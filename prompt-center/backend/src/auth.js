@@ -101,7 +101,7 @@ const isAuditor = (req) => roleOf(req) === 'auditor';
 const canWritePrompt = (req) => isAdmin(req) || isEditor(req);
 const canPublishPrompt = (req) => isAdmin(req) || isReviewer(req);
 const canManageTaxonomy = (req) => isAdmin(req) || isEditor(req);
-const canReadAudit = (req) => isAdmin(req) || isAuditor(req);
+const canReadAudit = (req) => isAuditor(req);
 
 const requirePermission = (predicate, message) =>
   asyncHandler(async (req, _res, next) => {

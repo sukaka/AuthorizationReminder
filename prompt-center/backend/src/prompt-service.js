@@ -2,6 +2,15 @@ const { appError, canPublishPrompt, canWritePrompt } = require('./auth');
 
 const ALLOWED_PROMPT_STATUSES = new Set(['draft', 'published', 'archived']);
 const ALLOWED_VISIBILITIES = new Set(['department', 'company']);
+const PROMPT_STATUS_LABELS = Object.freeze({
+  draft: '草稿',
+  published: '已发布',
+  archived: '已归档',
+});
+const PROMPT_VISIBILITY_LABELS = Object.freeze({
+  department: '部门可见',
+  company: '全公司可见',
+});
 
 const trimText = (value) => String(value || '').trim();
 const nowSql = () => new Date().toISOString().slice(0, 19).replace('T', ' ');
@@ -216,6 +225,35 @@ const createVersion = async (tx, promptId, payload, user, changeNote) => {
   return { id: result.insertId, version_no: versionNo };
 };
 
+const cleanAuditDetail = (detail) => Object.fromEntries(
+  Object.entries(detail).filter(([, value]) => {
+    if (value === null || value === undefined || value === '') return false;
+    if (Array.isArray(value) && value.length === 0) return false;
+    return true;
+  })
+);
+
+const promptAuditSnapshot = (source = {}, extra = {}) => {
+  const status = trimText(source.status || extra.status);
+  const visibility = trimText(source.visibility || extra.visibility);
+  const tags = parseTags(source.tags ?? source.tags_json ?? extra.tags);
+  return cleanAuditDetail({
+    title: trimText(source.title || extra.title),
+    department_id: Number(source.department_id || extra.department_id || 0) || null,
+    department_name: trimText(source.department_name || extra.department_name),
+    category_id: Number(source.category_id || extra.category_id || 0) || null,
+    category_name: trimText(source.category_name || extra.category_name),
+    status,
+    status_label: PROMPT_STATUS_LABELS[status] || '',
+    visibility,
+    visibility_label: PROMPT_VISIBILITY_LABELS[visibility] || '',
+    version_no: Number(source.current_version_no || source.version_no || extra.version_no || 0) || null,
+    summary: trimText(source.summary || extra.summary).slice(0, 512),
+    tags,
+    change_note: trimText(source.change_note || source.changeNote || extra.change_note).slice(0, 512),
+  });
+};
+
 const listDepartments = async (db, { includeInactive = false } = {}) => {
   const rows = await db.query(
     `SELECT d.*,
@@ -300,9 +338,10 @@ const saveCategory = async (db, payload, user, requestIp, id = null) => {
   const name = trimText(payload.name);
   if (!departmentId) throw appError('请选择所属部门', 400);
   if (!name || name.length > 128) throw appError('分类名称不能为空且不能超过128个字符', 400);
-  await ensureDepartment(db, departmentId);
+  const department = await ensureDepartment(db, departmentId);
   const data = {
     department_id: departmentId,
+    department_name: department.name,
     name,
     description: trimText(payload.description),
     sort_order: Number(payload.sort_order || payload.sortOrder || 0) || 0,
@@ -422,7 +461,7 @@ const createPrompt = async (db, payload, user, requestIp) => {
   const data = normalizePromptPayload(payload);
   const department = await ensureDepartment(db, data.department_id);
   assertDepartmentManager(department, user);
-  await ensureCategory(db, data.category_id, data.department_id);
+  const category = await ensureCategory(db, data.category_id, data.department_id);
   const result = await db.transaction(async (tx) => {
     const inserted = await tx.run(
       `INSERT INTO pc_prompts
@@ -451,7 +490,12 @@ const createPrompt = async (db, payload, user, requestIp) => {
     action: 'prompt.create',
     entity: 'prompt',
     entityId: result.id,
-    detail: { title: data.title, version_no: result.version.version_no },
+    detail: promptAuditSnapshot(data, {
+      department_name: department.name,
+      category_name: category.name,
+      status: 'draft',
+      version_no: result.version.version_no,
+    }),
     requestIp,
   });
   return getPromptById(db, result.id, { user: { role: 'admin' } });
@@ -470,7 +514,7 @@ const updatePrompt = async (db, id, payload, user, requestIp) => {
     ? existingDepartment
     : await ensureDepartment(db, data.department_id);
   assertDepartmentManager(department, user);
-  await ensureCategory(db, data.category_id, data.department_id);
+  const category = await ensureCategory(db, data.category_id, data.department_id);
   const version = await db.transaction(async (tx) => {
     const created = await createVersion(tx, Number(id), data, user, data.change_note || '更新提示词');
     await tx.run(
@@ -499,7 +543,21 @@ const updatePrompt = async (db, id, payload, user, requestIp) => {
     action: 'prompt.update',
     entity: 'prompt',
     entityId: id,
-    detail: { title: data.title, version_no: version.version_no },
+    detail: {
+      ...promptAuditSnapshot(data, {
+        department_name: department.name,
+        category_name: category.name,
+        status: existing.status,
+        version_no: version.version_no,
+      }),
+      before: promptAuditSnapshot(existing),
+      after: promptAuditSnapshot(data, {
+        department_name: department.name,
+        category_name: category.name,
+        status: existing.status,
+        version_no: version.version_no,
+      }),
+    },
     requestIp,
   });
   return getPromptById(db, id, { user: { role: 'admin' } });
@@ -521,7 +579,11 @@ const setPromptStatus = async (db, id, status, user, requestIp) => {
     action: `prompt.${status}`,
     entity: 'prompt',
     entityId: id,
-    detail: { title: prompt.title, status },
+    detail: {
+      ...promptAuditSnapshot({ ...prompt, status }),
+      before: promptAuditSnapshot(prompt),
+      after: promptAuditSnapshot({ ...prompt, status }),
+    },
     requestIp,
   });
   return getPromptById(db, id, { user: { role: 'admin' } });
@@ -553,7 +615,24 @@ const rollbackPrompt = async (db, id, versionId, user, requestIp) => {
     action: 'prompt.rollback',
     entity: 'prompt',
     entityId: id,
-    detail: { title: prompt.title, version_no: version.version_no },
+    detail: {
+      ...promptAuditSnapshot({
+        ...prompt,
+        title: version.title,
+        summary: version.summary,
+        tags_json: version.tags_json,
+        current_version_no: version.version_no,
+        version_no: version.version_no,
+      }),
+      before: promptAuditSnapshot(prompt),
+      after: promptAuditSnapshot({
+        ...prompt,
+        title: version.title,
+        summary: version.summary,
+        tags_json: version.tags_json,
+        current_version_no: version.version_no,
+      }),
+    },
     requestIp,
   });
   return getPromptById(db, id, { user: { role: 'admin' } });
@@ -587,7 +666,7 @@ const recordUsage = async (db, id, user, requestIp) => {
     action: 'prompt.use',
     entity: 'prompt',
     entityId: id,
-    detail: { title: prompt.title },
+    detail: promptAuditSnapshot(prompt),
     requestIp,
   });
   return { ok: true };

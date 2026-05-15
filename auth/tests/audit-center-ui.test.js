@@ -69,9 +69,11 @@ test('audit log table renders localized action and entity labels', () => {
   assert.match(source, /getAuditActionLabel\(row\.action \|\| '-'\)/);
   assert.match(source, /getAuditEntityLabel\(row\.entity \|\| '-'\)/);
   assert.match(source, /getAuditRequestIpLabel\(row\)/);
+  assert.match(source, /getAuditDetailSummary\(row\)/);
+  assert.match(source, /getAuditTimeLabel\(row\)/);
   assert.match(source, /<th>事件<\/th>/);
-  assert.match(source, /<th>主体<\/th>\s*<th>IP地址<\/th>\s*<th>对象<\/th>/);
-  assert.match(source, /audit-subject-cell[\s\S]*requestIpLabel[\s\S]*audit-object-chip/);
+  assert.match(source, /<th>主体<\/th>\s*<th>IP地址<\/th>\s*<th>对象<\/th>\s*<th>详情<\/th>\s*<th>时间<\/th>/);
+  assert.match(source, /audit-subject-cell[\s\S]*requestIpLabel[\s\S]*audit-object-chip[\s\S]*audit-detail-summary/);
 });
 
 test('audit center summary distinguishes total matches from current window', () => {

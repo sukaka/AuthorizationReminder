@@ -163,7 +163,7 @@ router.post('/prompts/:id/rollback', asyncHandler(async (req, res) => {
   res.json(await service.rollbackPrompt(db, req.params.id, versionId, req.user, requestIp(req)));
 }));
 
-router.get('/audit/logs', requirePermission(canReadAudit, '仅管理员或审计管理员可查看审计日志'), asyncHandler(async (req, res) => {
+router.get('/audit/logs', requirePermission(canReadAudit, '仅审计账号可查看审计日志'), asyncHandler(async (req, res) => {
   res.json(await service.listAuditLogs(db, req.query));
 }));
 
