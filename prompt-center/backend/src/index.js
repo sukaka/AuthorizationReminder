@@ -13,7 +13,6 @@ const {
   canManageTaxonomy,
   canPublishPrompt,
   canReadAudit,
-  canWritePrompt,
   requirePermission,
 } = require('./auth');
 const service = require('./prompt-service');
@@ -84,17 +83,19 @@ router.get('/csrf', (_req, res) => {
 
 router.use(validateCsrfToken);
 
-router.get('/auth/me', (req, res) => {
+router.get('/auth/me', asyncHandler(async (req, res) => {
+  const managedDepartmentIds = await service.listManagedDepartmentIds(db, req.user);
   res.json({
     user: req.user,
     permissions: {
-      can_write: canWritePrompt(req),
+      can_write: managedDepartmentIds.length > 0,
       can_publish: canPublishPrompt(req),
       can_manage_taxonomy: canManageTaxonomy(req),
       can_read_audit: canReadAudit(req),
+      managed_department_ids: managedDepartmentIds,
     },
   });
-});
+}));
 
 router.get('/overview', asyncHandler(async (_req, res) => {
   res.json(await service.getOverview(db));
@@ -128,7 +129,7 @@ router.get('/prompts', asyncHandler(async (req, res) => {
   res.json(await service.listPrompts(db, req.query, req));
 }));
 
-router.post('/prompts', requirePermission(canWritePrompt, '仅管理员或业务管理员可维护提示词'), asyncHandler(async (req, res) => {
+router.post('/prompts', asyncHandler(async (req, res) => {
   res.status(201).json(await service.createPrompt(db, req.body, req.user, requestIp(req)));
 }));
 
@@ -136,7 +137,7 @@ router.get('/prompts/:id', asyncHandler(async (req, res) => {
   res.json(await service.getPromptById(db, req.params.id, req));
 }));
 
-router.put('/prompts/:id', requirePermission(canWritePrompt, '仅管理员或业务管理员可维护提示词'), asyncHandler(async (req, res) => {
+router.put('/prompts/:id', asyncHandler(async (req, res) => {
   res.json(await service.updatePrompt(db, req.params.id, req.body, req.user, requestIp(req)));
 }));
 
@@ -152,12 +153,11 @@ router.post('/prompts/:id/usage', asyncHandler(async (req, res) => {
   res.json(await service.recordUsage(db, req.params.id, req.user, requestIp(req)));
 }));
 
-router.get('/prompts/:id/versions', requirePermission(canWritePrompt, '仅管理员或业务管理员可查看版本记录'), asyncHandler(async (req, res) => {
-  await service.getPromptById(db, req.params.id, { user: { role: 'admin' } });
-  res.json(await service.listVersions(db, req.params.id));
+router.get('/prompts/:id/versions', asyncHandler(async (req, res) => {
+  res.json(await service.listVersions(db, req.params.id, req));
 }));
 
-router.post('/prompts/:id/rollback', requirePermission(canWritePrompt, '仅管理员或业务管理员可回滚提示词'), asyncHandler(async (req, res) => {
+router.post('/prompts/:id/rollback', asyncHandler(async (req, res) => {
   const versionId = Number(req.body?.version_id || req.body?.versionId || 0);
   if (!versionId) throw appError('请选择要回滚的版本', 400);
   res.json(await service.rollbackPrompt(db, req.params.id, versionId, req.user, requestIp(req)));

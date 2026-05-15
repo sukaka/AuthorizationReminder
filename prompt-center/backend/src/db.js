@@ -82,6 +82,15 @@ const run = async (sql, params = []) => {
   return result;
 };
 
+const ensureColumn = async (tableName, columnName, columnDefSql) => {
+  const safeTable = ensureSafeIdentifier(tableName, 'tableName');
+  const safeColumn = ensureSafeIdentifier(columnName, 'columnName');
+  const rows = await query(`SHOW COLUMNS FROM \`${safeTable}\` LIKE ?`, [safeColumn]);
+  if (rows.length === 0) {
+    await run(`ALTER TABLE \`${safeTable}\` ADD COLUMN \`${safeColumn}\` ${columnDefSql}`);
+  }
+};
+
 const transaction = async (fn) => {
   const conn = await pool.getConnection();
   try {
@@ -116,6 +125,8 @@ const createSchema = async () => {
     id BIGINT AUTO_INCREMENT PRIMARY KEY,
     name VARCHAR(128) NOT NULL,
     description TEXT NULL,
+    manager_user_id BIGINT NULL,
+    manager_name VARCHAR(128) NULL,
     sort_order INT NOT NULL DEFAULT 0,
     is_active TINYINT NOT NULL DEFAULT 1,
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -123,6 +134,8 @@ const createSchema = async () => {
     UNIQUE KEY uk_pc_departments_name (name),
     INDEX idx_pc_departments_active_sort (is_active, sort_order, id)
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
+  await ensureColumn('pc_departments', 'manager_user_id', 'BIGINT NULL AFTER description');
+  await ensureColumn('pc_departments', 'manager_name', 'VARCHAR(128) NULL AFTER manager_user_id');
 
   await run(`CREATE TABLE IF NOT EXISTS pc_categories (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,

@@ -37,3 +37,11 @@ test('prompt center redirects unauthenticated users to unified portal', () => {
   assert.match(source, /resp\.status === 401/);
   assert.match(source, /prompt-center/);
 });
+
+test('prompt center UI supports department managers and creator display', () => {
+  assert.match(source, /manager_user_id/);
+  assert.match(source, /manager_name/);
+  assert.match(source, /managed_department_ids/);
+  assert.match(source, /创建人/);
+  assert.match(source, /负责人/);
+});

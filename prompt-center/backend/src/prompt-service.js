@@ -107,11 +107,32 @@ const normalizePromptRow = (row) => {
     id: Number(row.id),
     department_id: Number(row.department_id),
     category_id: Number(row.category_id),
+    department_manager_user_id: row.department_manager_user_id ? Number(row.department_manager_user_id) : null,
     usage_count: Number(row.usage_count || 0),
     current_version_id: row.current_version_id ? Number(row.current_version_id) : null,
     tags: parseTags(row.tags_json),
     variables: extractPromptVariables(row.content),
   };
+};
+
+const normalizeDepartmentRow = (row) => {
+  if (!row) return null;
+  return {
+    ...row,
+    id: Number(row.id),
+    manager_user_id: row.manager_user_id ? Number(row.manager_user_id) : null,
+    prompt_count: Number(row.prompt_count || 0),
+  };
+};
+
+const isDepartmentManager = (department, user) => (
+  Number(department?.manager_user_id || 0) > 0
+  && Number(department?.manager_user_id || 0) === Number(user?.id || 0)
+);
+
+const assertDepartmentManager = (department, user) => {
+  if (!department?.manager_user_id) throw appError(`请先为${department?.name || '该部门'}设置负责人`, 403);
+  if (!isDepartmentManager(department, user)) throw appError(`仅${department.name}负责人可维护该部门提示词`, 403);
 };
 
 const normalizeAuditRow = (row) => ({
@@ -162,6 +183,15 @@ const ensureCategory = async (db, id, departmentId) => {
   return row;
 };
 
+const listManagedDepartmentIds = async (db, user) => {
+  if (!user?.id) return [];
+  const rows = await db.query(
+    'SELECT id FROM pc_departments WHERE manager_user_id = ? AND is_active = 1 ORDER BY sort_order ASC, id ASC',
+    [Number(user.id)]
+  );
+  return rows.map((row) => Number(row.id)).filter(Boolean);
+};
+
 const createVersion = async (tx, promptId, payload, user, changeNote) => {
   const latest = await tx.get('SELECT COALESCE(MAX(version_no), 0) AS latest FROM pc_prompt_versions WHERE prompt_id = ?', [
     Number(promptId),
@@ -194,7 +224,7 @@ const listDepartments = async (db, { includeInactive = false } = {}) => {
      ${includeInactive ? '' : 'WHERE d.is_active = 1'}
      ORDER BY d.sort_order ASC, d.id ASC`
   );
-  return rows.map((row) => ({ ...row, id: Number(row.id), prompt_count: Number(row.prompt_count || 0) }));
+  return rows.map(normalizeDepartmentRow);
 };
 
 const saveDepartment = async (db, payload, user, requestIp, id = null) => {
@@ -203,6 +233,8 @@ const saveDepartment = async (db, payload, user, requestIp, id = null) => {
   const data = {
     name,
     description: trimText(payload.description),
+    manager_user_id: Number(payload.manager_user_id || payload.managerUserId || 0) || null,
+    manager_name: trimText(payload.manager_name || payload.managerName).slice(0, 128),
     sort_order: Number(payload.sort_order || payload.sortOrder || 0) || 0,
     is_active: payload.is_active === false || payload.isActive === false ? 0 : 1,
   };
@@ -210,8 +242,10 @@ const saveDepartment = async (db, payload, user, requestIp, id = null) => {
   if (id) {
     try {
       await db.run(
-        'UPDATE pc_departments SET name = ?, description = ?, sort_order = ?, is_active = ? WHERE id = ?',
-        [data.name, data.description, data.sort_order, data.is_active, Number(id)]
+        `UPDATE pc_departments
+         SET name = ?, description = ?, manager_user_id = ?, manager_name = ?, sort_order = ?, is_active = ?
+         WHERE id = ?`,
+        [data.name, data.description, data.manager_user_id, data.manager_name, data.sort_order, data.is_active, Number(id)]
       );
     } catch (err) {
       if (isDuplicateKeyError(err)) throw appError(`部门“${data.name}”已存在`, 409);
@@ -223,8 +257,10 @@ const saveDepartment = async (db, payload, user, requestIp, id = null) => {
   let result;
   try {
     result = await db.run(
-      'INSERT INTO pc_departments (name, description, sort_order, is_active) VALUES (?, ?, ?, ?)',
-      [data.name, data.description, data.sort_order, data.is_active]
+      `INSERT INTO pc_departments
+        (name, description, manager_user_id, manager_name, sort_order, is_active)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      [data.name, data.description, data.manager_user_id, data.manager_name, data.sort_order, data.is_active]
     );
   } catch (err) {
     if (isDuplicateKeyError(err)) throw appError(`部门“${data.name}”已存在`, 409);
@@ -308,8 +344,6 @@ const buildPromptWhere = (filters = {}, req = null) => {
     if (!ALLOWED_PROMPT_STATUSES.has(status)) throw appError('状态参数无效', 400);
     where.push('p.status = ?');
     params.push(status);
-  } else if (!canWritePrompt(req || {})) {
-    where.push("p.status = 'published'");
   }
   if (filters.department_id) {
     where.push('p.department_id = ?');
@@ -329,6 +363,17 @@ const buildPromptWhere = (filters = {}, req = null) => {
     where.push("JSON_SEARCH(p.tags_json, 'one', ?) IS NOT NULL");
     params.push(tag.replace(/^#/, ''));
   }
+  if (!canWritePrompt(req || {})) {
+    if (req?.user?.id) {
+      where.push(
+        `(p.status = 'published'
+          OR p.department_id IN (SELECT id FROM pc_departments WHERE manager_user_id = ?))`
+      );
+      params.push(Number(req.user.id));
+    } else {
+      where.push("p.status = 'published'");
+    }
+  }
   return { where, params };
 };
 
@@ -337,7 +382,8 @@ const listPrompts = async (db, filters, req) => {
   const limit = Math.max(1, Math.min(200, Number(filters.limit || 60)));
   const offset = Math.max(0, Number(filters.offset || 0));
   const rows = await db.query(
-    `SELECT p.*, d.name AS department_name, c.name AS category_name, v.version_no AS current_version_no
+    `SELECT p.*, d.name AS department_name, d.manager_user_id AS department_manager_user_id,
+       d.manager_name AS department_manager_name, c.name AS category_name, v.version_no AS current_version_no
      FROM pc_prompts p
      LEFT JOIN pc_departments d ON d.id = p.department_id
      LEFT JOIN pc_categories c ON c.id = p.category_id
@@ -352,7 +398,8 @@ const listPrompts = async (db, filters, req) => {
 
 const getPromptById = async (db, id, req) => {
   const prompt = normalizePromptRow(await db.get(
-    `SELECT p.*, d.name AS department_name, c.name AS category_name, v.version_no AS current_version_no
+    `SELECT p.*, d.name AS department_name, d.manager_user_id AS department_manager_user_id,
+       d.manager_name AS department_manager_name, c.name AS category_name, v.version_no AS current_version_no
      FROM pc_prompts p
      LEFT JOIN pc_departments d ON d.id = p.department_id
      LEFT JOIN pc_categories c ON c.id = p.category_id
@@ -361,13 +408,20 @@ const getPromptById = async (db, id, req) => {
     [Number(id)]
   ));
   if (!prompt) throw appError('提示词不存在', 404);
-  if (!canWritePrompt(req || {}) && prompt.status !== 'published') throw appError('无权限访问未发布提示词', 403);
+  if (
+    !canWritePrompt(req || {})
+    && !isDepartmentManager({ manager_user_id: prompt.department_manager_user_id }, req?.user)
+    && prompt.status !== 'published'
+  ) {
+    throw appError('无权限访问未发布提示词', 403);
+  }
   return prompt;
 };
 
 const createPrompt = async (db, payload, user, requestIp) => {
   const data = normalizePromptPayload(payload);
-  await ensureDepartment(db, data.department_id);
+  const department = await ensureDepartment(db, data.department_id);
+  assertDepartmentManager(department, user);
   await ensureCategory(db, data.category_id, data.department_id);
   const result = await db.transaction(async (tx) => {
     const inserted = await tx.run(
@@ -410,7 +464,12 @@ const updatePrompt = async (db, id, payload, user, requestIp) => {
     ...payload,
     tags: payload.tags === undefined ? existing.tags : payload.tags,
   });
-  await ensureDepartment(db, data.department_id);
+  const existingDepartment = await ensureDepartment(db, existing.department_id);
+  assertDepartmentManager(existingDepartment, user);
+  const department = Number(data.department_id) === Number(existing.department_id)
+    ? existingDepartment
+    : await ensureDepartment(db, data.department_id);
+  assertDepartmentManager(department, user);
   await ensureCategory(db, data.category_id, data.department_id);
   const version = await db.transaction(async (tx) => {
     const created = await createVersion(tx, Number(id), data, user, data.change_note || '更新提示词');
@@ -470,6 +529,8 @@ const setPromptStatus = async (db, id, status, user, requestIp) => {
 
 const rollbackPrompt = async (db, id, versionId, user, requestIp) => {
   const prompt = await getPromptById(db, id, { user: { role: 'admin' } });
+  const department = await ensureDepartment(db, prompt.department_id);
+  assertDepartmentManager(department, user);
   const version = await db.get('SELECT * FROM pc_prompt_versions WHERE id = ? AND prompt_id = ?', [Number(versionId), Number(id)]);
   if (!version) throw appError('版本不存在', 404);
   await db.run(
@@ -498,7 +559,12 @@ const rollbackPrompt = async (db, id, versionId, user, requestIp) => {
   return getPromptById(db, id, { user: { role: 'admin' } });
 };
 
-const listVersions = async (db, id) => {
+const listVersions = async (db, id, req = null) => {
+  const prompt = await getPromptById(db, id, { user: { role: 'admin' } });
+  const department = await ensureDepartment(db, prompt.department_id);
+  if (!canWritePrompt(req || {}) && !isDepartmentManager(department, req?.user)) {
+    throw appError('仅部门负责人可查看版本记录', 403);
+  }
   const rows = await db.query(
     'SELECT * FROM pc_prompt_versions WHERE prompt_id = ? ORDER BY version_no DESC',
     [Number(id)]
@@ -596,6 +662,7 @@ module.exports = {
   normalizePromptPayload,
   listDepartments,
   saveDepartment,
+  listManagedDepartmentIds,
   listCategories,
   saveCategory,
   listPrompts,

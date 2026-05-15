@@ -44,7 +44,15 @@ const emptyPromptForm = {
   tags: '',
   change_note: '',
 };
-const emptyDepartmentForm = { name: '', description: '', sort_order: 0, is_active: true };
+const emptyDepartmentForm = {
+  id: '',
+  name: '',
+  description: '',
+  manager_user_id: '',
+  manager_name: '',
+  sort_order: 0,
+  is_active: true,
+};
 const emptyCategoryForm = { department_id: '', name: '', description: '', sort_order: 0, is_active: true };
 
 async function fetchCsrfToken() {
@@ -119,6 +127,14 @@ export default function App() {
   }, [categories, promptForm.department_id, filters.department_id]);
 
   const variableList = useMemo(() => extractVariables(promptForm.content), [promptForm.content]);
+  const managedDepartmentIds = useMemo(
+    () => (permissions.managed_department_ids || []).map((item) => Number(item)).filter(Boolean),
+    [permissions.managed_department_ids]
+  );
+  const promptDepartmentId = Number(promptForm.department_id || 0);
+  const canWriteSelectedDepartment = promptDepartmentId > 0 && managedDepartmentIds.includes(promptDepartmentId);
+  const canEditPrompt = !!permissions.can_write && (!selectedPrompt || canWriteSelectedDepartment);
+  const canSavePrompt = !!permissions.can_write && canWriteSelectedDepartment;
 
   const showMessage = (text) => {
     setMessage(text);
@@ -198,8 +214,10 @@ export default function App() {
         tags: tagsToInput(detail.tags || []),
         change_note: '',
       });
-      if (permissions.can_write) {
+      if ((permissions.managed_department_ids || []).map(Number).includes(Number(detail.department_id))) {
         setVersions(await api(`/prompts/${detail.id}/versions`));
+      } else {
+        setVersions([]);
       }
       setActiveTab('library');
     } catch (err) {
@@ -279,13 +297,29 @@ export default function App() {
   const saveDepartment = async (event) => {
     event.preventDefault();
     try {
-      await api('/departments', { method: 'POST', body: JSON.stringify(departmentForm) });
+      const departmentId = Number(departmentForm.id || 0);
+      await api(departmentId ? `/departments/${departmentId}` : '/departments', {
+        method: departmentId ? 'PUT' : 'POST',
+        body: JSON.stringify(departmentForm),
+      });
       setDepartmentForm(emptyDepartmentForm);
-      showMessage('部门已创建');
+      showMessage(departmentId ? '部门已更新' : '部门已创建');
       await loadAll();
     } catch (err) {
       showError(err);
     }
+  };
+
+  const editDepartment = (department) => {
+    setDepartmentForm({
+      id: String(department.id || ''),
+      name: department.name || '',
+      description: department.description || '',
+      manager_user_id: String(department.manager_user_id || ''),
+      manager_name: department.manager_name || '',
+      sort_order: Number(department.sort_order || 0),
+      is_active: department.is_active !== 0,
+    });
   };
 
   const saveCategory = async (event) => {
@@ -416,6 +450,7 @@ export default function App() {
                       <div className="meta-line">
                         <span>{prompt.department_name}</span>
                         <span>{prompt.category_name}</span>
+                        <span>创建人：{prompt.created_by_name || '-'}</span>
                         <span>{formatDateTime(prompt.updated_at)}</span>
                       </div>
                     </div>
@@ -437,8 +472,17 @@ export default function App() {
                 </div>
                 {permissions.can_write && <button type="button" onClick={resetPromptForm}>新建</button>}
               </div>
-              <label>标题<input value={promptForm.title} disabled={!permissions.can_write} onChange={(event) => setPromptForm({ ...promptForm, title: event.target.value })} /></label>
-              <label>摘要<input value={promptForm.summary} disabled={!permissions.can_write} onChange={(event) => setPromptForm({ ...promptForm, summary: event.target.value })} /></label>
+              {selectedPrompt && (
+                <div className="meta-line">
+                  <span>创建人：{selectedPrompt.created_by_name || '-'}</span>
+                  <span>最近更新：{selectedPrompt.updated_by_name || '-'}</span>
+                </div>
+              )}
+              {promptDepartmentId > 0 && !canWriteSelectedDepartment && permissions.can_write && (
+                <div className="notice">只有该部门负责人可以保存或回滚这个提示词。</div>
+              )}
+              <label>标题<input value={promptForm.title} disabled={!canEditPrompt} onChange={(event) => setPromptForm({ ...promptForm, title: event.target.value })} /></label>
+              <label>摘要<input value={promptForm.summary} disabled={!canEditPrompt} onChange={(event) => setPromptForm({ ...promptForm, summary: event.target.value })} /></label>
               <div className="two-cols">
                 <label>部门
                   <select value={promptForm.department_id} disabled={!permissions.can_write} onChange={(event) => setPromptForm({ ...promptForm, department_id: event.target.value, category_id: '' })}>
@@ -447,23 +491,23 @@ export default function App() {
                   </select>
                 </label>
                 <label>分类
-                  <select value={promptForm.category_id} disabled={!permissions.can_write} onChange={(event) => setPromptForm({ ...promptForm, category_id: event.target.value })}>
+                  <select value={promptForm.category_id} disabled={!canEditPrompt} onChange={(event) => setPromptForm({ ...promptForm, category_id: event.target.value })}>
                     <option value="">请选择分类</option>
                     {selectedDepartmentCategories.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
                   </select>
                 </label>
               </div>
-              <label>标签<input value={promptForm.tags} disabled={!permissions.can_write} onChange={(event) => setPromptForm({ ...promptForm, tags: event.target.value })} /></label>
-              <label>内容<textarea value={promptForm.content} disabled={!permissions.can_write} onChange={(event) => setPromptForm({ ...promptForm, content: event.target.value })} /></label>
+              <label>标签<input value={promptForm.tags} disabled={!canEditPrompt} onChange={(event) => setPromptForm({ ...promptForm, tags: event.target.value })} /></label>
+              <label>内容<textarea value={promptForm.content} disabled={!canEditPrompt} onChange={(event) => setPromptForm({ ...promptForm, content: event.target.value })} /></label>
               <div className="variable-box">
                 <span>变量</span>
                 {variableList.length ? variableList.map((item) => <mark key={item}>{item}</mark>) : <em>无</em>}
               </div>
               {permissions.can_write && (
                 <>
-                  <label>变更说明<input value={promptForm.change_note} onChange={(event) => setPromptForm({ ...promptForm, change_note: event.target.value })} /></label>
+                  <label>变更说明<input value={promptForm.change_note} disabled={!canEditPrompt} onChange={(event) => setPromptForm({ ...promptForm, change_note: event.target.value })} /></label>
                   <div className="actions">
-                    <button disabled={saving} type="submit">{saving ? '保存中' : '保存'}</button>
+                    <button disabled={saving || !canSavePrompt} type="submit">{saving ? '保存中' : '保存'}</button>
                     {selectedPrompt && permissions.can_publish && <button type="button" onClick={publishPrompt}>发布</button>}
                     {selectedPrompt && permissions.can_publish && <button type="button" className="ghost" onClick={archivePrompt}>归档</button>}
                   </div>
@@ -477,7 +521,7 @@ export default function App() {
                       <span>v{item.version_no}</span>
                       <strong>{item.change_note || item.title}</strong>
                       <small>{formatDateTime(item.created_at)}</small>
-                      {permissions.can_write && item.id !== selectedPrompt.current_version_id && (
+                      {canWriteSelectedDepartment && item.id !== selectedPrompt.current_version_id && (
                         <button type="button" onClick={() => rollbackPrompt(item.id)}>回滚</button>
                       )}
                     </div>
@@ -496,7 +540,11 @@ export default function App() {
                 <div className="table-row" key={item.id}>
                   <strong>{item.name}</strong>
                   <span>{item.description || '-'}</span>
+                  <span>负责人：{item.manager_name || '未设置'}{item.manager_user_id ? `（ID ${item.manager_user_id}）` : ''}</span>
                   <em>{item.prompt_count} 条</em>
+                  {permissions.can_manage_taxonomy && (
+                    <button type="button" className="ghost" onClick={() => editDepartment(item)}>编辑</button>
+                  )}
                 </div>
               ))}
             </div>
@@ -513,10 +561,13 @@ export default function App() {
             {permissions.can_manage_taxonomy && (
               <div className="form-stack">
                 <form className="compact-form" onSubmit={saveDepartment}>
-                  <h3>新增部门</h3>
+                  <h3>{departmentForm.id ? '编辑部门' : '新增部门'}</h3>
                   <input placeholder="部门名称" value={departmentForm.name} onChange={(event) => setDepartmentForm({ ...departmentForm, name: event.target.value })} />
                   <input placeholder="部门说明" value={departmentForm.description} onChange={(event) => setDepartmentForm({ ...departmentForm, description: event.target.value })} />
-                  <button type="submit">保存部门</button>
+                  <input placeholder="负责人用户ID" value={departmentForm.manager_user_id} onChange={(event) => setDepartmentForm({ ...departmentForm, manager_user_id: event.target.value })} />
+                  <input placeholder="负责人姓名" value={departmentForm.manager_name} onChange={(event) => setDepartmentForm({ ...departmentForm, manager_name: event.target.value })} />
+                  <button type="submit">{departmentForm.id ? '更新部门' : '保存部门'}</button>
+                  {departmentForm.id && <button type="button" className="ghost" onClick={() => setDepartmentForm(emptyDepartmentForm)}>取消编辑</button>}
                 </form>
                 <form className="compact-form" onSubmit={saveCategory}>
                   <h3>新增分类</h3>
