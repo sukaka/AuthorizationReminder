@@ -11,6 +11,28 @@ import {
 const API_BASE = '/api/prompt-center';
 const safeMethods = new Set(['GET', 'HEAD', 'OPTIONS']);
 let csrfToken = '';
+let redirectingToPortal = false;
+
+function getPortalBaseUrl() {
+  const configured = String(import.meta.env.VITE_SSO_PORTAL_URL || '').trim();
+  if (configured) return configured.replace(/\/+$/, '');
+  const { protocol, hostname } = window.location;
+  return `${protocol}//${hostname}:5180`;
+}
+
+function buildPortalUrl({ system = '', mode = '' } = {}) {
+  const params = new URLSearchParams();
+  if (system) params.set('system', system);
+  if (mode) params.set('mode', mode);
+  const query = params.toString();
+  return `${getPortalBaseUrl()}/portal${query ? `?${query}` : ''}`;
+}
+
+function redirectToPortal(system = 'prompt-center') {
+  if (redirectingToPortal) return;
+  redirectingToPortal = true;
+  window.location.replace(buildPortalUrl({ system }));
+}
 
 const emptyPromptForm = {
   title: '',
@@ -57,6 +79,10 @@ async function api(path, options = {}) {
   const text = await resp.text();
   const data = text ? JSON.parse(text) : {};
   if (!resp.ok) {
+    if (resp.status === 401) {
+      redirectToPortal('prompt-center');
+      throw new Error('登录状态已失效');
+    }
     if (unsafe && resp.status === 403 && !csrfRetried && /csrf/i.test(data.error || text)) {
       csrfToken = '';
       return api(path, { ...options, csrfRetried: true });
@@ -275,11 +301,11 @@ export default function App() {
   };
 
   const goPortal = () => {
-    window.location.href = '/portal';
+    window.location.href = buildPortalUrl({ system: 'prompt-center', mode: 'switch' });
   };
 
   const logout = () => {
-    window.location.href = '/logout';
+    window.location.href = buildPortalUrl();
   };
 
   return (

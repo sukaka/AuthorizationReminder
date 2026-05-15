@@ -27,3 +27,13 @@ test('prompt center vite build enables react plugin', () => {
   assert.match(viteConfig, /@vitejs\/plugin-react/);
   assert.match(viteConfig, /plugins:\s*\[react\(\)\]/);
 });
+
+test('prompt center redirects unauthenticated users to unified portal', () => {
+  assert.match(source, /VITE_SSO_PORTAL_URL/);
+  assert.match(source, /params\.set\('system', system\)/);
+  assert.match(source, /params\.set\('mode', mode\)/);
+  assert.match(source, /buildPortalUrl\(\{ system \}\)/);
+  assert.match(source, /buildPortalUrl\(\{ system: 'prompt-center', mode: 'switch' \}\)/);
+  assert.match(source, /resp\.status === 401/);
+  assert.match(source, /prompt-center/);
+});
