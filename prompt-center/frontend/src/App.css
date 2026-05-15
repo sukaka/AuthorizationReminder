@@ -713,6 +713,306 @@ label {
   font-style: normal;
 }
 
+.prompt-list-workspace {
+  display: grid;
+  gap: 18px;
+}
+
+.prompt-list-head,
+.prompt-browser-top,
+.list-panel-title,
+.prompt-table-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.prompt-list-head h3,
+.prompt-table-heading h3,
+.list-panel-title h3,
+.prompt-category-tree h3 {
+  margin: 4px 0 0;
+  color: #172033;
+  font-size: 22px;
+}
+
+.prompt-list-head-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.prompt-list-notice {
+  min-height: 56px;
+}
+
+.prompt-list-layout {
+  display: grid;
+  grid-template-columns: minmax(280px, 0.34fr) minmax(0, 1fr);
+  gap: 18px;
+  align-items: start;
+}
+
+.list-department-panel,
+.prompt-table-panel,
+.list-favorites-panel {
+  border: 1px solid rgba(124, 139, 163, 0.22);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.78);
+  box-shadow: 0 18px 44px rgba(65, 98, 140, 0.12);
+}
+
+.list-department-panel,
+.prompt-table-panel,
+.list-favorites-panel {
+  padding: 20px;
+}
+
+.list-panel-title {
+  margin-bottom: 16px;
+}
+
+.list-panel-title span,
+.prompt-table-heading p {
+  margin: 0;
+  color: #5e6f8f;
+  font-weight: 800;
+}
+
+.list-department-grid {
+  display: grid;
+  gap: 12px;
+}
+
+.list-department-card {
+  display: grid;
+  gap: 18px;
+  min-height: 148px;
+  padding: 18px;
+  color: #172033;
+  text-align: left;
+  border: 1px solid rgba(124, 139, 163, 0.22);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.72);
+  box-shadow: none;
+}
+
+.list-department-card:hover,
+.list-department-card.active {
+  color: #172033;
+  border-color: rgba(37, 99, 235, 0.32);
+  background: rgba(232, 241, 255, 0.92);
+}
+
+.department-card-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.department-card-top strong {
+  font-size: 20px;
+}
+
+.department-card-top em {
+  color: #8797b2;
+  font-size: 26px;
+  font-style: normal;
+  line-height: 1;
+}
+
+.list-department-card > span:not(.department-card-top) {
+  color: #5e6f8f;
+  line-height: 1.65;
+}
+
+.list-department-card small {
+  color: #2563eb;
+  font-size: 15px;
+  font-weight: 900;
+}
+
+.prompt-browser-stack {
+  display: grid;
+  gap: 18px;
+}
+
+.prompt-table-panel {
+  display: grid;
+  gap: 16px;
+}
+
+.prompt-list-filters {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) minmax(150px, 0.3fr) auto;
+  gap: 10px;
+}
+
+.prompt-list-filters input,
+.prompt-list-filters select {
+  min-height: 42px;
+}
+
+.prompt-browser-grid {
+  display: grid;
+  grid-template-columns: minmax(220px, 0.3fr) minmax(0, 1fr);
+  gap: 18px;
+  align-items: start;
+}
+
+.prompt-category-tree {
+  min-height: 420px;
+  padding-right: 16px;
+  border-right: 1px solid rgba(124, 139, 163, 0.18);
+}
+
+.prompt-tree-root,
+.prompt-tree-children {
+  display: grid;
+  gap: 7px;
+  margin: 14px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.prompt-tree-children {
+  margin: 7px 0 0 14px;
+  padding-left: 12px;
+  border-left: 1px solid rgba(124, 139, 163, 0.2);
+}
+
+.prompt-tree-root button,
+.prompt-tree-children button {
+  width: 100%;
+  min-height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 0 10px;
+  color: #24334d;
+  text-align: left;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  box-shadow: none;
+}
+
+.prompt-tree-root button:hover,
+.prompt-tree-children button:hover,
+.prompt-tree-root button.active,
+.prompt-tree-children button.active {
+  color: #2563eb;
+  border-color: rgba(37, 99, 235, 0.22);
+  background: rgba(227, 239, 255, 0.9);
+}
+
+.prompt-tree-root em,
+.prompt-tree-children em {
+  flex: 0 0 auto;
+  color: #7384a3;
+  font-size: 12px;
+  font-style: normal;
+}
+
+.prompt-table-wrap {
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+}
+
+.prompt-table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  overflow: hidden;
+  border: 1px solid rgba(124, 139, 163, 0.2);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.78);
+}
+
+.prompt-table th,
+.prompt-table td {
+  padding: 13px 14px;
+  border-bottom: 1px solid rgba(124, 139, 163, 0.16);
+  color: #24334d;
+  text-align: left;
+  vertical-align: middle;
+}
+
+.prompt-table th {
+  color: #5e6f8f;
+  background: rgba(245, 249, 255, 0.88);
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.prompt-table tr:last-child td {
+  border-bottom: 0;
+}
+
+.prompt-table strong {
+  color: #172033;
+}
+
+.prompt-table p {
+  margin: 6px 0 0;
+  color: #7384a3;
+  line-height: 1.45;
+}
+
+.table-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.table-actions button,
+.table-link {
+  min-height: 28px;
+  padding: 0 6px;
+  color: #2563eb;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.table-actions button:hover,
+.table-link:hover {
+  color: #174ec8;
+  background: rgba(227, 239, 255, 0.8);
+}
+
+.table-actions .favorite.active {
+  color: #d98a00;
+}
+
+.prompt-pager {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  color: #7384a3;
+  font-weight: 800;
+}
+
+.prompt-pager strong {
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  color: #2563eb;
+  border: 1px solid rgba(37, 99, 235, 0.34);
+  border-radius: 6px;
+  background: rgba(232, 241, 255, 0.9);
+}
+
 .toolbar {
   display: grid;
   grid-template-columns: minmax(180px, 1.2fr) minmax(120px, 0.8fr) minmax(120px, 0.8fr) minmax(112px, 0.65fr) auto;
@@ -970,8 +1270,18 @@ label {
   .workspace-grid,
   .create-workspace,
   .browser-grid,
+  .prompt-list-layout,
+  .prompt-browser-grid,
   .taxonomy-grid {
     grid-template-columns: 1fr;
+  }
+
+  .prompt-category-tree {
+    min-height: auto;
+    padding-right: 0;
+    padding-bottom: 16px;
+    border-right: 0;
+    border-bottom: 1px solid rgba(124, 139, 163, 0.18);
   }
 
   .department-grid {
@@ -1001,12 +1311,30 @@ label {
   }
 
   .toolbar,
+  .prompt-list-filters,
   .two-cols,
   .version-row,
   .table-row,
   .audit-row,
   .prompt-row {
     grid-template-columns: 1fr;
+  }
+
+  .prompt-list-head,
+  .prompt-browser-top,
+  .list-panel-title,
+  .prompt-table-heading {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .prompt-table {
+    min-width: 720px;
+  }
+
+  .prompt-table-wrap,
+  .list-favorites-panel {
+    overflow-x: auto;
   }
 
   .department-grid {
