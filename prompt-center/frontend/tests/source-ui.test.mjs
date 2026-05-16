@@ -73,6 +73,13 @@ test('prompt center UI exposes row edit archive and favorite actions', () => {
   assert.match(source, /toggleFavorite/);
 });
 
+test('prompt center create page shows publish state feedback', () => {
+  assert.match(source, /状态：/);
+  assert.match(source, /selectedPrompt\.status !== 'published'/);
+  assert.match(source, /已发布/);
+  assert.match(source, /发布/);
+});
+
 test('prompt center create page uses the approved single-workbench layout', () => {
   assert.match(source, /create-workspace/);
   assert.match(source, /create-permission-notice/);

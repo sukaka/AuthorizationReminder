@@ -608,7 +608,7 @@ export default function App() {
             <div className="brand-row">
               <strong>聚信</strong>
               <h2>企业提示词管理中心</h2>
-              <span>v5.17.0</span>
+              <span>v5.17.1</span>
             </div>
             <p>按部门和分类沉淀提示词，保留版本、发布状态和审计记录。</p>
           </div>
@@ -786,6 +786,7 @@ export default function App() {
                 <div className="meta-line">
                   <span>创建人：{selectedPrompt.created_by_name || '-'}</span>
                   <span>最近更新：{selectedPrompt.updated_by_name || '-'}</span>
+                  <span>状态：{statusLabels[selectedPrompt.status] || selectedPrompt.status}</span>
                 </div>
               )}
               {promptDepartmentId > 0 && !canWriteSelectedDepartment && (
@@ -892,7 +893,12 @@ export default function App() {
               <div className="actions create-actions">
                 <button type="button" className="ghost" onClick={resetPromptForm}>取消</button>
                 <button disabled={saving || !canSavePrompt} type="submit">{saving ? '保存中' : '保存'}</button>
-                {selectedPrompt && permissions.can_publish && <button type="button" onClick={publishPrompt}>发布</button>}
+                {selectedPrompt && permissions.can_publish && selectedPrompt.status !== 'published' && (
+                  <button type="button" onClick={publishPrompt}>发布</button>
+                )}
+                {selectedPrompt && permissions.can_publish && selectedPrompt.status === 'published' && (
+                  <button type="button" disabled>已发布</button>
+                )}
                 {selectedPrompt && permissions.can_publish && <button type="button" className="ghost" onClick={archivePrompt}>归档</button>}
               </div>
               {selectedPrompt && versions.length > 0 && (

@@ -1,6 +1,6 @@
 {
   "name": "juxin-prompt-center-frontend",
-  "version": "5.17.0",
+  "version": "5.17.1",
   "private": true,
   "type": "module",
   "scripts": {
