@@ -123,3 +123,11 @@ test('prompt center category tree shows prompt counts on every category level', 
   assert.match(source, /<em>\{item\.prompt_count \|\| 0\} 条<\/em>/);
   assert.doesNotMatch(source, /depth === 1 && <em>\{item\.prompt_count \|\| 0\} 条<\/em>/);
 });
+
+test('prompt center category navigation clears text filters and explains direct category counts', () => {
+  assert.match(source, /keyword: '',\s*status: '',\s*department_id: departmentId/s);
+  assert.match(source, /keyword: '',\s*status: '',\s*department_id: browseDepartmentId/s);
+  assert.match(source, /direct_prompt_count/);
+  assert.match(source, /本级/);
+  assert.match(source, /分类共/);
+});

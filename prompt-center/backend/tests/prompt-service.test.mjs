@@ -255,6 +255,7 @@ describe('prompt center service helpers', () => {
 
     expect(mockDb.query.mock.calls[0][0]).toMatch(/WITH RECURSIVE category_tree/i);
     expect(mockDb.query.mock.calls[0][0]).toMatch(/ct\.root_id = c\.id/);
+    expect(mockDb.query.mock.calls[0][0]).toMatch(/AS direct_prompt_count/);
   });
 
   test('favorites are personal to the current user', async () => {

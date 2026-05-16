@@ -420,19 +420,22 @@ export default function App() {
   };
 
   const selectBrowseDepartment = (departmentId) => {
-    setBrowseDepartmentId(String(departmentId || ''));
-    setBrowseCategoryId('');
-    setFilters((current) => ({
-      ...current,
+    const nextFilters = {
+      keyword: '',
+      status: '',
       department_id: departmentId ? String(departmentId) : '',
       category_id: '',
-    }));
+    };
+    setBrowseDepartmentId(String(departmentId || ''));
+    setBrowseCategoryId('');
+    setFilters(nextFilters);
     setPrompts([]);
   };
 
   const selectBrowseCategory = async (categoryId) => {
     const nextFilters = {
-      ...filters,
+      keyword: '',
+      status: '',
       department_id: browseDepartmentId,
       category_id: String(categoryId || ''),
     };
@@ -609,25 +612,33 @@ export default function App() {
     if (!items.length) return null;
     return (
       <ul className={depth === 1 ? 'prompt-tree-root' : 'prompt-tree-children'}>
-        {items.map((item) => (
-          <li key={item.id}>
-            <button
-              type="button"
-              className={Number(browseCategoryId) === Number(item.id) ? 'active' : ''}
-              onClick={() => selectBrowseCategory(item.id)}
-            >
-              <span>{item.name}</span>
-              <em>{item.prompt_count || 0} 条</em>
-            </button>
-            {depth < 2 && renderPromptCategoryTree(item.id, depth + 1)}
-          </li>
-        ))}
+        {items.map((item) => {
+          const directCount = Number(item.direct_prompt_count || 0);
+          const childCount = Math.max(0, Number(item.prompt_count || 0) - directCount);
+          return (
+            <li key={item.id}>
+              <button
+                type="button"
+                className={Number(browseCategoryId) === Number(item.id) ? 'active' : ''}
+                onClick={() => selectBrowseCategory(item.id)}
+              >
+                <span>{item.name}</span>
+                <em>{item.prompt_count || 0} 条</em>
+              </button>
+              {directCount > 0 && childCount > 0 && (
+                <small className="category-direct-note">本级 {directCount} 条，子分类 {childCount} 条</small>
+              )}
+              {depth < 2 && renderPromptCategoryTree(item.id, depth + 1)}
+            </li>
+          );
+        })}
       </ul>
     );
   };
 
   const browseDepartment = departments.find((item) => Number(item.id) === Number(browseDepartmentId || 0));
   const browseCategoryPath = findCategoryPath(categories, browseCategoryId);
+  const browseCategory = categories.find((item) => Number(item.id) === Number(browseCategoryId || 0));
   const promptListTitle = browseCategoryPath.length
     ? browseCategoryPath[browseCategoryPath.length - 1].name
     : browseDepartment
@@ -637,6 +648,8 @@ export default function App() {
     ? ['提示词列表', browseDepartment.name, ...browseCategoryPath.map((item) => item.name)].join(' / ')
     : '提示词列表 / 部门';
   const selectedCategoryName = browseCategoryPath[browseCategoryPath.length - 1]?.name || '';
+  const selectedCategoryTotal = Number(browseCategory?.prompt_count || 0);
+  const hasActivePromptFilter = Boolean(String(filters.keyword || '').trim() || String(filters.status || '').trim());
   const departmentTone = ['blue', 'green', 'orange', 'purple'];
   const countDepartmentCategories = (departmentId) => categories.filter((item) => Number(item.department_id) === Number(departmentId)).length;
 
@@ -673,7 +686,7 @@ export default function App() {
             <div className="brand-row">
               <strong>聚信</strong>
               <h2>企业提示词管理中心</h2>
-              <span>v5.18.1</span>
+              <span>v5.18.2</span>
             </div>
             <p>按部门和分类沉淀提示词，保留版本、发布状态和审计记录。</p>
           </div>
@@ -776,7 +789,13 @@ export default function App() {
                         <div className="prompt-table-heading">
                           <div>
                             <h3>{promptListTitle}</h3>
-                            <p>{browseCategoryId ? `提示词共 ${prompts.length} 条，当前展示最近更新的内容` : '点击左侧分类后展示该分类下的所有提示词'}</p>
+                            <p>
+                              {browseCategoryId
+                                ? hasActivePromptFilter
+                                  ? `筛选结果 ${prompts.length} 条 / 分类共 ${selectedCategoryTotal} 条`
+                                  : `分类共 ${selectedCategoryTotal} 条，当前展示最近更新的内容`
+                                : '点击左侧分类后展示该分类下的所有提示词'}
+                            </p>
                           </div>
                         </div>
                         {browseCategoryId && prompts.length > 0 ? (

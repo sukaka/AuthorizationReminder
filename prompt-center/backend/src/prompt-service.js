@@ -152,6 +152,7 @@ const normalizeCategoryRow = (row) => {
     parent_id: row.parent_id ? Number(row.parent_id) : null,
     level: Number(row.level || 1),
     prompt_count: Number(row.prompt_count || 0),
+    direct_prompt_count: Number(row.direct_prompt_count || 0),
   };
 };
 
@@ -354,7 +355,10 @@ const listCategories = async (db, filters = {}) => {
       (SELECT COUNT(1)
        FROM pc_prompts p
        INNER JOIN category_tree ct ON ct.category_id = p.category_id
-       WHERE ct.root_id = c.id AND p.status <> 'archived') AS prompt_count
+       WHERE ct.root_id = c.id AND p.status <> 'archived') AS prompt_count,
+      (SELECT COUNT(1)
+       FROM pc_prompts p
+       WHERE p.category_id = c.id AND p.status <> 'archived') AS direct_prompt_count
      FROM pc_categories c
      LEFT JOIN pc_departments d ON d.id = c.department_id
      LEFT JOIN pc_categories parent ON parent.id = c.parent_id
