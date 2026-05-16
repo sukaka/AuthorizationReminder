@@ -91,6 +91,31 @@ function firstSelectableCategory(categories, departmentId) {
   return level1[0] || null;
 }
 
+function normalizeCompareValue(value) {
+  if (Array.isArray(value)) return value.join(', ');
+  return String(value || '').trim();
+}
+
+function comparePromptVersions(left, right) {
+  if (!left || !right) return [];
+  const fields = [
+    ['标题变化', 'title'],
+    ['摘要变化', 'summary'],
+    ['内容变化', 'content'],
+    ['标签变化', 'tags'],
+  ];
+  return fields.map(([label, key]) => {
+    const before = normalizeCompareValue(left[key]);
+    const after = normalizeCompareValue(right[key]);
+    return {
+      label,
+      before,
+      after,
+      changed: before !== after,
+    };
+  });
+}
+
 async function fetchCsrfToken() {
   const resp = await fetch(`${API_BASE}/csrf`, { credentials: 'include' });
   const text = await resp.text();
@@ -155,6 +180,8 @@ export default function App() {
   const [browseDepartmentId, setBrowseDepartmentId] = useState('');
   const [browseCategoryId, setBrowseCategoryId] = useState('');
   const [versions, setVersions] = useState([]);
+  const [compareVersionIds, setCompareVersionIds] = useState({ before: '', after: '' });
+  const [dialog, setDialog] = useState(null);
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
@@ -177,6 +204,9 @@ export default function App() {
   const canWriteSelectedDepartment = promptDepartmentId > 0 && managedDepartmentIds.includes(promptDepartmentId);
   const canEditPrompt = !selectedPrompt || canWriteSelectedDepartment;
   const canSavePrompt = canWriteSelectedDepartment;
+  const beforeVersion = versions.find((item) => String(item.id) === String(compareVersionIds.before));
+  const afterVersion = versions.find((item) => String(item.id) === String(compareVersionIds.after));
+  const versionComparison = comparePromptVersions(beforeVersion, afterVersion);
 
   const showMessage = (text) => {
     setMessage(text);
@@ -188,6 +218,10 @@ export default function App() {
   const showError = (err) => {
     setError(err?.message || '请求失败');
     setMessage('');
+  };
+
+  const showDialog = (nextDialog) => {
+    setDialog(nextDialog);
   };
 
   const loadAll = async () => {
@@ -277,9 +311,15 @@ export default function App() {
         change_note: '',
       });
       if ((permissions.managed_department_ids || []).map(Number).includes(Number(detail.department_id))) {
-        setVersions(await api(`/prompts/${detail.id}/versions`));
+        const versionList = await api(`/prompts/${detail.id}/versions`);
+        setVersions(versionList);
+        setCompareVersionIds({
+          before: String(versionList[1]?.id || versionList[0]?.id || ''),
+          after: String(versionList[0]?.id || ''),
+        });
       } else {
         setVersions([]);
+        setCompareVersionIds({ before: '', after: '' });
       }
       setActiveTab('library');
       setLibraryMode('create');
@@ -306,15 +346,40 @@ export default function App() {
     }
   };
 
+  const openPromptInList = async (prompt) => {
+    const nextFilters = {
+      keyword: '',
+      status: '',
+      department_id: String(prompt.department_id || ''),
+      category_id: String(prompt.category_id || ''),
+    };
+    setBrowseDepartmentId(nextFilters.department_id);
+    setBrowseCategoryId(nextFilters.category_id);
+    setFilters(nextFilters);
+    setActiveTab('library');
+    setLibraryMode('list');
+    await loadPrompts(nextFilters);
+  };
+
   const publishPrompt = async () => {
     if (!selectedPrompt) return;
     try {
       const saved = await api(`/prompts/${selectedPrompt.id}/publish`, { method: 'POST', body: '{}' });
       showMessage('提示词已发布');
-      await loadPrompts(filters);
-      await editPrompt(saved);
+      showDialog({
+        type: 'success',
+        title: '发布成功',
+        message: `提示词“${saved.title || selectedPrompt.title || ''}”已发布，并已切换到所在分类列表。`,
+      });
+      setSelectedPrompt(saved);
+      await openPromptInList(saved);
     } catch (err) {
       showError(err);
+      showDialog({
+        type: 'danger',
+        title: '发布失败',
+        message: err?.message || '发布失败，请稍后重试。',
+      });
     }
   };
 
@@ -608,7 +673,7 @@ export default function App() {
             <div className="brand-row">
               <strong>聚信</strong>
               <h2>企业提示词管理中心</h2>
-              <span>v5.17.1</span>
+              <span>v5.18.0</span>
             </div>
             <p>按部门和分类沉淀提示词，保留版本、发布状态和审计记录。</p>
           </div>
@@ -621,6 +686,15 @@ export default function App() {
         {message && <div className="notice success">{message}</div>}
         {error && <div className="notice danger">{error}</div>}
         {loading && <div className="notice">正在检查登录状态...</div>}
+        {dialog && (
+          <div className="dialog-backdrop">
+            <div className={`dialog-card ${dialog.type || ''}`} role="dialog" aria-modal="true" aria-labelledby="publish-dialog-title">
+              <h3 id="publish-dialog-title">{dialog.title}</h3>
+              <p>{dialog.message}</p>
+              <button type="button" onClick={() => setDialog(null)}>知道了</button>
+            </div>
+          </div>
+        )}
 
         {activeTab === 'library' && libraryMode === 'list' && (
           <section className="prompt-list-workspace">
@@ -914,6 +988,52 @@ export default function App() {
                       )}
                     </div>
                   ))}
+                  {versions.length > 1 && (
+                    <div className="version-compare">
+                      <div className="version-compare-head">
+                        <h4>版本对比</h4>
+                        <span>查看每个版本的提示词内容与变化</span>
+                      </div>
+                      <div className="version-compare-controls">
+                        <label>
+                          <span>对比版本</span>
+                          <select
+                            value={compareVersionIds.before}
+                            onChange={(event) => setCompareVersionIds({ ...compareVersionIds, before: event.target.value })}
+                          >
+                            {versions.map((item) => (
+                              <option key={item.id} value={item.id}>v{item.version_no} {formatDateTime(item.created_at)}</option>
+                            ))}
+                          </select>
+                        </label>
+                        <label>
+                          <span>当前版本</span>
+                          <select
+                            value={compareVersionIds.after}
+                            onChange={(event) => setCompareVersionIds({ ...compareVersionIds, after: event.target.value })}
+                          >
+                            {versions.map((item) => (
+                              <option key={item.id} value={item.id}>v{item.version_no} {formatDateTime(item.created_at)}</option>
+                            ))}
+                          </select>
+                        </label>
+                      </div>
+                      <div className="version-diff-list">
+                        {versionComparison.map((item) => (
+                          <div key={item.label} className={item.changed ? 'version-diff changed' : 'version-diff'}>
+                            <div className="version-diff-title">
+                              <strong>{item.label}</strong>
+                              <span>{item.changed ? '有变化' : '无变化'}</span>
+                            </div>
+                            <div className="version-diff-grid">
+                              <pre>{item.before || '-'}</pre>
+                              <pre>{item.after || '-'}</pre>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
             </form>

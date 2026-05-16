@@ -80,6 +80,21 @@ test('prompt center create page shows publish state feedback', () => {
   assert.match(source, /发布/);
 });
 
+test('prompt center publish action shows dialog and opens the published prompt in list', () => {
+  assert.match(source, /dialog/);
+  assert.match(source, /发布成功/);
+  assert.match(source, /发布失败/);
+  assert.match(source, /openPromptInList/);
+  assert.match(source, /setLibraryMode\('list'\)/);
+});
+
+test('prompt center version records support content comparison', () => {
+  assert.match(source, /comparePromptVersions/);
+  assert.match(source, /版本对比/);
+  assert.match(source, /对比版本/);
+  assert.match(source, /内容变化/);
+});
+
 test('prompt center create page uses the approved single-workbench layout', () => {
   assert.match(source, /create-workspace/);
   assert.match(source, /create-permission-notice/);

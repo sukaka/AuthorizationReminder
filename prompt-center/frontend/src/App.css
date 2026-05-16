@@ -1297,6 +1297,145 @@ label {
   font-style: normal;
 }
 
+.version-compare {
+  display: grid;
+  gap: 14px;
+  padding: 16px;
+  border: 1px solid rgba(37, 99, 235, 0.18);
+  border-radius: 8px;
+  background: rgba(248, 251, 255, 0.86);
+}
+
+.version-compare-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.version-compare-head span,
+.version-diff-title span {
+  color: #637493;
+  font-weight: 800;
+}
+
+.version-compare-controls {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.version-compare-controls label {
+  display: grid;
+  gap: 8px;
+  color: #566987;
+  font-weight: 900;
+}
+
+.version-compare-controls select {
+  width: 100%;
+  min-height: 44px;
+  border: 1px solid #d6e3f3;
+  border-radius: 8px;
+  background: #fff;
+  color: #132238;
+  font: inherit;
+  font-weight: 800;
+}
+
+.version-diff-list {
+  display: grid;
+  gap: 12px;
+}
+
+.version-diff {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid rgba(124, 139, 163, 0.18);
+  border-radius: 8px;
+  background: #fff;
+}
+
+.version-diff.changed {
+  border-color: rgba(37, 99, 235, 0.34);
+  background: #f5f9ff;
+}
+
+.version-diff-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.version-diff-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.version-diff pre {
+  min-height: 72px;
+  max-height: 220px;
+  margin: 0;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  border: 1px solid rgba(124, 139, 163, 0.18);
+  border-radius: 8px;
+  padding: 12px;
+  background: rgba(247, 250, 255, 0.9);
+  color: #18263b;
+  font: 13px/1.6 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(15, 23, 42, 0.22);
+  backdrop-filter: blur(4px);
+}
+
+.dialog-card {
+  width: min(420px, 100%);
+  display: grid;
+  gap: 14px;
+  padding: 22px;
+  border: 1px solid rgba(124, 139, 163, 0.22);
+  border-radius: 10px;
+  background: #fff;
+  box-shadow: 0 24px 70px rgba(23, 37, 84, 0.2);
+}
+
+.dialog-card.success {
+  border-color: rgba(37, 99, 235, 0.34);
+}
+
+.dialog-card.danger {
+  border-color: rgba(220, 38, 38, 0.34);
+}
+
+.dialog-card h3 {
+  margin: 0;
+  color: #132238;
+  font-size: 20px;
+}
+
+.dialog-card p {
+  margin: 0;
+  color: #5d6f8c;
+  line-height: 1.7;
+}
+
+.dialog-card button {
+  justify-self: end;
+}
+
 .taxonomy-grid {
   display: grid;
   grid-template-columns: 1fr 1fr minmax(300px, 0.8fr);
@@ -1363,6 +1502,11 @@ label {
     padding-bottom: 16px;
     border-right: 0;
     border-bottom: 1px solid rgba(124, 139, 163, 0.18);
+  }
+
+  .version-compare-controls,
+  .version-diff-grid {
+    grid-template-columns: 1fr;
   }
 
   .department-grid {
