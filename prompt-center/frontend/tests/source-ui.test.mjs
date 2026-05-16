@@ -52,10 +52,16 @@ test('prompt center UI supports nested prompt library navigation and favorites',
   assert.match(source, /我的收藏/);
   assert.match(source, /一级分类/);
   assert.match(source, /二级分类/);
-  assert.match(source, /三级分类/);
+  assert.doesNotMatch(source, /三级分类/);
   assert.match(source, /setLibraryMode\('create'\)/);
   assert.match(source, /setLibraryMode\('list'\)/);
   assert.match(source, /setActiveTab\('favorites'\)/);
+});
+
+test('prompt center create page uses second-level category as the final prompt category', () => {
+  assert.doesNotMatch(source, /formLevel3Categories/);
+  assert.doesNotMatch(source, /请选择三级分类/);
+  assert.match(source, /category_level2: event\.target\.value,\s*category_id: event\.target\.value/s);
 });
 
 test('prompt center UI exposes row edit archive and favorite actions', () => {

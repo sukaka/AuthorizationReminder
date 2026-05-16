@@ -82,17 +82,13 @@ function findCategoryPath(categories, categoryId) {
   return path;
 }
 
-function firstLeafCategory(categories, departmentId) {
-  const walk = (parentId = null) => {
-    const children = childCategories(categories, departmentId, parentId);
-    if (!children.length) return null;
-    for (const child of children) {
-      const leaf = walk(child.id);
-      if (leaf) return leaf;
-    }
-    return children[0];
-  };
-  return walk(null);
+function firstSelectableCategory(categories, departmentId) {
+  const level1 = childCategories(categories, departmentId, null);
+  for (const parent of level1) {
+    const level2 = childCategories(categories, departmentId, parent.id);
+    if (level2.length) return level2[0];
+  }
+  return level1[0] || null;
 }
 
 async function fetchCsrfToken() {
@@ -172,10 +168,6 @@ export default function App() {
     () => childCategories(categories, promptForm.department_id, promptForm.category_level1),
     [categories, promptForm.department_id, promptForm.category_level1]
   );
-  const formLevel3Categories = useMemo(
-    () => childCategories(categories, promptForm.department_id, promptForm.category_level2),
-    [categories, promptForm.department_id, promptForm.category_level2]
-  );
   const variableList = useMemo(() => extractVariables(promptForm.content), [promptForm.content]);
   const managedDepartmentIds = useMemo(
     () => (permissions.managed_department_ids || []).map((item) => Number(item)).filter(Boolean),
@@ -213,7 +205,7 @@ export default function App() {
       setDepartments(departmentData);
       setCategories(categoryData);
       const initialDepartmentId = departmentData[0]?.id ? String(departmentData[0].id) : '';
-      const initialCategory = initialDepartmentId ? firstLeafCategory(categoryData, initialDepartmentId) : null;
+      const initialCategory = initialDepartmentId ? firstSelectableCategory(categoryData, initialDepartmentId) : null;
       const initialFilters = {
         ...filters,
         department_id: initialDepartmentId,
@@ -279,7 +271,7 @@ export default function App() {
         department_id: String(detail.department_id || ''),
         category_level1: String(categoryPath[0]?.id || ''),
         category_level2: String(categoryPath[1]?.id || ''),
-        category_id: String(detail.category_id || ''),
+        category_id: String(categoryPath[1]?.id || detail.category_id || ''),
         visibility: detail.visibility || 'department',
         tags: tagsToInput(detail.tags || []),
         change_note: '',
@@ -524,7 +516,7 @@ export default function App() {
   );
 
   const renderCategoryTree = (parentId = null, depth = 1) => {
-    const levelLabel = depth === 1 ? '一级分类' : depth === 2 ? '二级分类' : '三级分类';
+    const levelLabel = depth === 1 ? '一级分类' : '二级分类';
     const items = childCategories(categories, browseDepartmentId, parentId);
     if (!items.length) return null;
     return (
@@ -540,7 +532,7 @@ export default function App() {
               <span>{item.name}</span>
               <em>{item.prompt_count || 0} 条</em>
             </button>
-            {renderCategoryTree(item.id, depth + 1)}
+            {depth < 2 && renderCategoryTree(item.id, depth + 1)}
           </div>
         ))}
       </div>
@@ -562,7 +554,7 @@ export default function App() {
               <span>{item.name}</span>
               {depth === 1 && <em>{item.prompt_count || 0} 条</em>}
             </button>
-            {depth < 3 && renderPromptCategoryTree(item.id, depth + 1)}
+            {depth < 2 && renderPromptCategoryTree(item.id, depth + 1)}
           </li>
         ))}
       </ul>
@@ -616,7 +608,7 @@ export default function App() {
             <div className="brand-row">
               <strong>聚信</strong>
               <h2>企业提示词管理中心</h2>
-              <span>v5.16.2</span>
+              <span>v5.17.0</span>
             </div>
             <p>按部门和分类沉淀提示词，保留版本、发布状态和审计记录。</p>
           </div>
@@ -851,23 +843,14 @@ export default function App() {
                       <select
                         value={promptForm.category_level2}
                         disabled={!canEditPrompt || !promptForm.category_level1}
-                        onChange={(event) => setPromptForm({ ...promptForm, category_level2: event.target.value, category_id: '' })}
+                        onChange={(event) => setPromptForm({
+                          ...promptForm,
+                          category_level2: event.target.value,
+                          category_id: event.target.value,
+                        })}
                       >
                         <option value="">请选择二级分类</option>
                         {formLevel2Categories.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
-                      </select>
-                    </div>
-                  </div>
-                  <div>
-                    <span>三级分类</span>
-                    <div className="select-shell">
-                      <select
-                        value={promptForm.category_id}
-                        disabled={!canEditPrompt || !promptForm.category_level2}
-                        onChange={(event) => setPromptForm({ ...promptForm, category_id: event.target.value })}
-                      >
-                        <option value="">请选择三级分类</option>
-                        {formLevel3Categories.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
                       </select>
                     </div>
                   </div>
@@ -993,7 +976,7 @@ export default function App() {
                   <select value={categoryForm.parent_id} onChange={(event) => setCategoryForm({ ...categoryForm, parent_id: event.target.value })}>
                     <option value="">不选上级，作为一级分类</option>
                     {categories
-                      .filter((item) => Number(item.department_id) === Number(categoryForm.department_id || 0) && Number(item.level || 1) < 3)
+                      .filter((item) => Number(item.department_id) === Number(categoryForm.department_id || 0) && Number(item.level || 1) < 2)
                       .map((item) => <option key={item.id} value={item.id}>{`${item.level || 1}级 / ${item.name}`}</option>)}
                   </select>
                   <input placeholder="分类名称" value={categoryForm.name} onChange={(event) => setCategoryForm({ ...categoryForm, name: event.target.value })} />
