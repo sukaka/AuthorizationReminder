@@ -246,6 +246,20 @@ describe('prompt center service helpers', () => {
     expect(mockDb.query.mock.calls[0][1]).toEqual(expect.arrayContaining([10]));
   });
 
+  test('listPrompts binds category tree params before department filters', async () => {
+    const mockDb = {
+      query: vi.fn().mockResolvedValue([]),
+    };
+
+    await service.listPrompts(
+      mockDb,
+      { department_id: 2, category_id: 10 },
+      { user: { id: 18, role: 'admin' } }
+    );
+
+    expect(mockDb.query.mock.calls[0][1].slice(0, 2)).toEqual([10, 2]);
+  });
+
   test('listCategories counts prompts under descendant categories', async () => {
     const mockDb = {
       query: vi.fn().mockResolvedValue([]),

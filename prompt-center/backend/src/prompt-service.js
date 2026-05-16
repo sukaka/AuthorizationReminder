@@ -424,6 +424,7 @@ const saveCategory = async (db, payload, user, requestIp, id = null) => {
 const buildPromptWhere = (filters = {}, req = null) => {
   const where = [];
   const params = [];
+  const categoryParams = [];
   let categoryCte = '';
   const status = trimText(filters.status);
   if (status) {
@@ -442,7 +443,7 @@ const buildPromptWhere = (filters = {}, req = null) => {
       SELECT child.id FROM pc_categories child
       INNER JOIN category_tree parent ON child.parent_id = parent.id
     )`;
-    params.push(Number(filters.category_id));
+    categoryParams.push(Number(filters.category_id));
     where.push('p.category_id IN (SELECT id FROM category_tree)');
   }
   const keyword = trimText(filters.keyword);
@@ -466,7 +467,7 @@ const buildPromptWhere = (filters = {}, req = null) => {
       where.push("p.status = 'published'");
     }
   }
-  return { where, params, categoryCte };
+  return { where, params: [...categoryParams, ...params], categoryCte };
 };
 
 const listPrompts = async (db, filters, req) => {
