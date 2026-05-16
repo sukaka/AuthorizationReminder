@@ -617,7 +617,7 @@ export default function App() {
               onClick={() => selectBrowseCategory(item.id)}
             >
               <span>{item.name}</span>
-              {depth === 1 && <em>{item.prompt_count || 0} 条</em>}
+              <em>{item.prompt_count || 0} 条</em>
             </button>
             {depth < 2 && renderPromptCategoryTree(item.id, depth + 1)}
           </li>
@@ -673,7 +673,7 @@ export default function App() {
             <div className="brand-row">
               <strong>聚信</strong>
               <h2>企业提示词管理中心</h2>
-              <span>v5.18.0</span>
+              <span>v5.18.1</span>
             </div>
             <p>按部门和分类沉淀提示词，保留版本、发布状态和审计记录。</p>
           </div>

@@ -337,9 +337,24 @@ const listCategories = async (db, filters = {}) => {
     params.push(Number(filters.department_id));
   }
   if (!filters.includeInactive) where.push('c.is_active = 1');
+  const activeCategoryFilter = filters.includeInactive ? '' : 'WHERE is_active = 1';
+  const activeChildFilter = filters.includeInactive ? '' : 'AND child.is_active = 1';
   const rows = await db.query(
-    `SELECT c.*, d.name AS department_name, parent.name AS parent_name,
-      (SELECT COUNT(1) FROM pc_prompts p WHERE p.category_id = c.id AND p.status <> 'archived') AS prompt_count
+    `WITH RECURSIVE category_tree AS (
+      SELECT id AS root_id, id AS category_id
+      FROM pc_categories
+      ${activeCategoryFilter}
+      UNION ALL
+      SELECT parent.root_id, child.id AS category_id
+      FROM pc_categories child
+      INNER JOIN category_tree parent ON child.parent_id = parent.category_id
+      ${activeChildFilter}
+    )
+     SELECT c.*, d.name AS department_name, parent.name AS parent_name,
+      (SELECT COUNT(1)
+       FROM pc_prompts p
+       INNER JOIN category_tree ct ON ct.category_id = p.category_id
+       WHERE ct.root_id = c.id AND p.status <> 'archived') AS prompt_count
      FROM pc_categories c
      LEFT JOIN pc_departments d ON d.id = c.department_id
      LEFT JOIN pc_categories parent ON parent.id = c.parent_id

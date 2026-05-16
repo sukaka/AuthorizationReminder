@@ -1,6 +1,6 @@
 {
   "name": "juxin-prompt-center-backend",
-  "version": "5.15.1",
+  "version": "5.18.1",
   "private": true,
   "main": "src/index.js",
   "scripts": {

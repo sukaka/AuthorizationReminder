@@ -118,3 +118,8 @@ test('prompt center list page uses the approved department and category browser 
   assert.match(source, /先选择部门，再进入分类目录/);
   assert.match(source, /当前用户/);
 });
+
+test('prompt center category tree shows prompt counts on every category level', () => {
+  assert.match(source, /<em>\{item\.prompt_count \|\| 0\} 条<\/em>/);
+  assert.doesNotMatch(source, /depth === 1 && <em>\{item\.prompt_count \|\| 0\} 条<\/em>/);
+});

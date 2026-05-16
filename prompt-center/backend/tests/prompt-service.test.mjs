@@ -246,6 +246,17 @@ describe('prompt center service helpers', () => {
     expect(mockDb.query.mock.calls[0][1]).toEqual(expect.arrayContaining([10]));
   });
 
+  test('listCategories counts prompts under descendant categories', async () => {
+    const mockDb = {
+      query: vi.fn().mockResolvedValue([]),
+    };
+
+    await service.listCategories(mockDb, { department_id: 2 });
+
+    expect(mockDb.query.mock.calls[0][0]).toMatch(/WITH RECURSIVE category_tree/i);
+    expect(mockDb.query.mock.calls[0][0]).toMatch(/ct\.root_id = c\.id/);
+  });
+
   test('favorites are personal to the current user', async () => {
     const mockDb = {
       run: vi.fn().mockResolvedValue({ affectedRows: 1 }),
