@@ -118,13 +118,21 @@ test('prompt center create page uses the approved single-workbench layout', () =
 test('prompt center list page uses the approved department and category browser layout', () => {
   assert.match(source, /prompt-list-workspace/);
   assert.match(source, /prompt-list-body/);
+  assert.match(source, /prompt-list-three-column/);
   assert.match(source, /list-department-panel/);
   assert.match(source, /department-mark/);
+  assert.match(source, /prompt-category-panel/);
+  assert.match(source, /category-panel-head/);
+  assert.match(source, /分类目录（/);
   assert.match(source, /prompt-category-tree/);
   assert.match(source, /prompt-table-panel/);
-  assert.match(source, /list-favorites-panel/);
+  assert.match(source, /table-panel-head/);
+  assert.match(source, /prompt-search-field/);
+  assert.match(source, /sort-arrow/);
+  assert.match(source, /placeholder="搜索标题、摘要或内容"/);
+  assert.doesNotMatch(source, /selectedCategoryName \|\| '搜索标题、摘要或内容'/);
+  assert.doesNotMatch(source, /list-favorites-panel/);
   assert.match(source, /先选择部门，再进入分类目录/);
-  assert.match(source, /当前用户/);
 });
 
 test('prompt center category tree shows prompt counts on every category level', () => {
