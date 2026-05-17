@@ -38,6 +38,14 @@ test('prompt center redirects unauthenticated users to unified portal', () => {
   assert.match(source, /prompt-center/);
 });
 
+test('prompt center logout revokes unified auth session before returning to login', () => {
+  assert.match(source, /buildAuthApiUrl\('\/api\/auth\/logout'\)/);
+  assert.match(source, /method: 'POST'/);
+  assert.match(source, /credentials: 'include'/);
+  assert.match(source, /buildPortalUrl\(\)/);
+  assert.doesNotMatch(source, /const logout = \(\) => \{\s*window\.location\.href = buildPortalUrl\(\);\s*\}/s);
+});
+
 test('prompt center UI supports department managers and creator display', () => {
   assert.match(source, /manager_user_id/);
   assert.match(source, /manager_name/);

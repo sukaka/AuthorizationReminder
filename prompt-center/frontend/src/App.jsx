@@ -28,6 +28,10 @@ function buildPortalUrl({ system = '', mode = '' } = {}) {
   return `${getPortalBaseUrl()}/portal${query ? `?${query}` : ''}`;
 }
 
+function buildAuthApiUrl(path) {
+  return `${getPortalBaseUrl()}${path}`;
+}
+
 function redirectToPortal(system = 'prompt-center') {
   if (redirectingToPortal) return;
   redirectingToPortal = true;
@@ -516,7 +520,24 @@ export default function App() {
   };
 
   const logout = () => {
-    window.location.href = buildPortalUrl();
+    (async () => {
+      try {
+        const csrfResp = await fetch(buildAuthApiUrl('/api/auth/csrf'), { credentials: 'include' });
+        const csrfData = csrfResp.ok ? await csrfResp.json() : {};
+        await fetch(buildAuthApiUrl('/api/auth/logout'), {
+          method: 'POST',
+          credentials: 'include',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-CSRF-Token': String(csrfData.token || ''),
+          },
+          body: JSON.stringify({}),
+        });
+      } catch (_err) {
+        // 退出失败也回登录入口，避免用户卡在业务系统内。
+      }
+      window.location.href = buildPortalUrl();
+    })();
   };
 
   const renderPromptRow = (prompt) => (
@@ -686,7 +707,7 @@ export default function App() {
             <div className="brand-row">
               <strong>聚信</strong>
               <h2>企业提示词管理中心</h2>
-              <span>v5.18.3</span>
+              <span>v5.18.4</span>
             </div>
             <p>按部门和分类沉淀提示词，保留版本、发布状态和审计记录。</p>
           </div>
