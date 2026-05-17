@@ -208,6 +208,7 @@ export default function App() {
   const canWriteSelectedDepartment = promptDepartmentId > 0 && managedDepartmentIds.includes(promptDepartmentId);
   const canEditPrompt = !selectedPrompt || canWriteSelectedDepartment;
   const canSavePrompt = canWriteSelectedDepartment;
+  const canManagePrompt = (prompt) => managedDepartmentIds.includes(Number(prompt?.department_id || 0));
   const beforeVersion = versions.find((item) => String(item.id) === String(compareVersionIds.before));
   const afterVersion = versions.find((item) => String(item.id) === String(compareVersionIds.after));
   const versionComparison = comparePromptVersions(beforeVersion, afterVersion);
@@ -559,12 +560,18 @@ export default function App() {
       <div className="row-side">
         <span className={`status ${prompt.status}`}>{statusLabels[prompt.status] || prompt.status}</span>
         <div className="row-actions">
-          <button type="button" onClick={(event) => { event.stopPropagation(); editPrompt(prompt); }}>编辑</button>
-          <button type="button" onClick={(event) => { event.stopPropagation(); deletePrompt(prompt); }}>删除</button>
+          <button type="button" onClick={(event) => { event.stopPropagation(); editPrompt(prompt); }}>
+            {canManagePrompt(prompt) ? '编辑' : '查看'}
+          </button>
+          {canManagePrompt(prompt) && (
+            <button type="button" onClick={(event) => { event.stopPropagation(); deletePrompt(prompt); }}>删除</button>
+          )}
           <button type="button" className={prompt.is_favorite ? 'favorite active' : 'favorite'} onClick={(event) => { event.stopPropagation(); toggleFavorite(prompt); }}>
             {prompt.is_favorite ? '已收藏' : '收藏'}
           </button>
-          <button type="button" onClick={(event) => { event.stopPropagation(); copyPrompt(prompt); }}>复制</button>
+          {canManagePrompt(prompt) && (
+            <button type="button" onClick={(event) => { event.stopPropagation(); copyPrompt(prompt); }}>复制</button>
+          )}
         </div>
       </div>
     </article>
@@ -581,12 +588,12 @@ export default function App() {
       <td><span className={`status ${prompt.status}`}>{statusLabels[prompt.status] || prompt.status}</span></td>
       <td>
         <div className="table-actions">
-          <button type="button" onClick={() => editPrompt(prompt)}>编辑</button>
-          <button type="button" onClick={() => deletePrompt(prompt)}>删除</button>
+          <button type="button" onClick={() => editPrompt(prompt)}>{canManagePrompt(prompt) ? '编辑' : '查看'}</button>
+          {canManagePrompt(prompt) && <button type="button" onClick={() => deletePrompt(prompt)}>删除</button>}
           <button type="button" className={prompt.is_favorite ? 'favorite active' : 'favorite'} onClick={() => toggleFavorite(prompt)}>
             {prompt.is_favorite ? '已收藏' : '收藏'}
           </button>
-          <button type="button" onClick={() => copyPrompt(prompt)}>复制</button>
+          {canManagePrompt(prompt) && <button type="button" onClick={() => copyPrompt(prompt)}>复制</button>}
         </div>
       </td>
     </tr>
@@ -696,7 +703,7 @@ export default function App() {
             <div className="brand-row">
               <strong>聚信</strong>
               <h2>企业提示词管理中心</h2>
-              <span>v5.19.1</span>
+              <span>v5.20.0</span>
             </div>
             <p>按部门和分类沉淀提示词，保留版本、发布状态和审计记录。</p>
           </div>
@@ -972,13 +979,13 @@ export default function App() {
               <div className="actions create-actions">
                 <button type="button" className="ghost" onClick={resetPromptForm}>取消</button>
                 <button disabled={saving || !canSavePrompt} type="submit">{saving ? '保存中' : '保存'}</button>
-                {selectedPrompt && permissions.can_publish && selectedPrompt.status !== 'published' && (
+                {selectedPrompt && canWriteSelectedDepartment && selectedPrompt.status !== 'published' && (
                   <button type="button" onClick={publishPrompt}>发布</button>
                 )}
-                {selectedPrompt && permissions.can_publish && selectedPrompt.status === 'published' && (
+                {selectedPrompt && canWriteSelectedDepartment && selectedPrompt.status === 'published' && (
                   <button type="button" disabled>已发布</button>
                 )}
-                {selectedPrompt && permissions.can_publish && <button type="button" className="ghost" onClick={archivePrompt}>归档</button>}
+                {selectedPrompt && canWriteSelectedDepartment && <button type="button" className="ghost" onClick={archivePrompt}>归档</button>}
               </div>
               {selectedPrompt && versions.length > 0 && (
                 <div className="versions">

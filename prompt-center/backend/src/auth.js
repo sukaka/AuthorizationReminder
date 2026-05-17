@@ -95,12 +95,8 @@ const authRequired = asyncHandler(async (req, _res, next) => {
 
 const roleOf = (req) => normalizeRole(req.user?.role);
 const isAdmin = (req) => roleOf(req) === 'admin';
-const isEditor = (req) => roleOf(req) === 'editor';
-const isReviewer = (req) => roleOf(req) === 'reviewer';
 const isAuditor = (req) => roleOf(req) === 'auditor';
-const canWritePrompt = (req) => isAdmin(req) || isEditor(req);
-const canPublishPrompt = (req) => isAdmin(req) || isReviewer(req);
-const canManageTaxonomy = (req) => isAdmin(req) || isEditor(req);
+const canManageTaxonomy = (req) => isAdmin(req);
 const canReadAudit = (req) => isAuditor(req);
 
 const requirePermission = (predicate, message) =>
@@ -114,8 +110,6 @@ module.exports = {
   asyncHandler,
   authRequired,
   roleOf,
-  canWritePrompt,
-  canPublishPrompt,
   canManageTaxonomy,
   canReadAudit,
   requirePermission,

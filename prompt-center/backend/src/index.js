@@ -11,7 +11,6 @@ const {
   asyncHandler,
   authRequired,
   canManageTaxonomy,
-  canPublishPrompt,
   canReadAudit,
   requirePermission,
 } = require('./auth');
@@ -85,11 +84,12 @@ router.use(validateCsrfToken);
 
 router.get('/auth/me', asyncHandler(async (req, res) => {
   const managedDepartmentIds = await service.listManagedDepartmentIds(db, req.user);
+  const canMaintainPrompts = managedDepartmentIds.length > 0;
   res.json({
     user: req.user,
     permissions: {
-      can_write: managedDepartmentIds.length > 0,
-      can_publish: canPublishPrompt(req),
+      can_write: canMaintainPrompts,
+      can_publish: canMaintainPrompts,
       can_manage_taxonomy: canManageTaxonomy(req),
       can_read_audit: canReadAudit(req),
       managed_department_ids: managedDepartmentIds,
@@ -105,11 +105,11 @@ router.get('/departments', asyncHandler(async (req, res) => {
   res.json(await service.listDepartments(db, { includeInactive: req.query.include_inactive === '1' }));
 }));
 
-router.post('/departments', requirePermission(canManageTaxonomy, '仅管理员或业务管理员可维护部门'), asyncHandler(async (req, res) => {
+router.post('/departments', requirePermission(canManageTaxonomy, '仅管理员可维护部门'), asyncHandler(async (req, res) => {
   res.status(201).json(await service.saveDepartment(db, req.body, req.user, requestIp(req)));
 }));
 
-router.put('/departments/:id', requirePermission(canManageTaxonomy, '仅管理员或业务管理员可维护部门'), asyncHandler(async (req, res) => {
+router.put('/departments/:id', requirePermission(canManageTaxonomy, '仅管理员可维护部门'), asyncHandler(async (req, res) => {
   res.json(await service.saveDepartment(db, req.body, req.user, requestIp(req), req.params.id));
 }));
 
@@ -117,11 +117,11 @@ router.get('/categories', asyncHandler(async (req, res) => {
   res.json(await service.listCategories(db, req.query));
 }));
 
-router.post('/categories', requirePermission(canManageTaxonomy, '仅管理员或业务管理员可维护分类'), asyncHandler(async (req, res) => {
+router.post('/categories', requirePermission(canManageTaxonomy, '仅管理员可维护分类'), asyncHandler(async (req, res) => {
   res.status(201).json(await service.saveCategory(db, req.body, req.user, requestIp(req)));
 }));
 
-router.put('/categories/:id', requirePermission(canManageTaxonomy, '仅管理员或业务管理员可维护分类'), asyncHandler(async (req, res) => {
+router.put('/categories/:id', requirePermission(canManageTaxonomy, '仅管理员可维护分类'), asyncHandler(async (req, res) => {
   res.json(await service.saveCategory(db, req.body, req.user, requestIp(req), req.params.id));
 }));
 
@@ -145,11 +145,11 @@ router.put('/prompts/:id', asyncHandler(async (req, res) => {
   res.json(await service.updatePrompt(db, req.params.id, req.body, req.user, requestIp(req)));
 }));
 
-router.post('/prompts/:id/publish', requirePermission(canPublishPrompt, '仅管理员或审核用户可发布提示词'), asyncHandler(async (req, res) => {
+router.post('/prompts/:id/publish', asyncHandler(async (req, res) => {
   res.json(await service.setPromptStatus(db, req.params.id, 'published', req.user, requestIp(req)));
 }));
 
-router.post('/prompts/:id/archive', requirePermission(canPublishPrompt, '仅管理员或审核用户可归档提示词'), asyncHandler(async (req, res) => {
+router.post('/prompts/:id/archive', asyncHandler(async (req, res) => {
   res.json(await service.setPromptStatus(db, req.params.id, 'archived', req.user, requestIp(req)));
 }));
 

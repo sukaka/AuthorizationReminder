@@ -1,4 +1,4 @@
-const { appError, canPublishPrompt, canWritePrompt } = require('./auth');
+const { appError } = require('./auth');
 
 const ALLOWED_PROMPT_STATUSES = new Set(['draft', 'published', 'archived']);
 const ALLOWED_VISIBILITIES = new Set(['department', 'company']);
@@ -456,16 +456,14 @@ const buildPromptWhere = (filters = {}, req = null) => {
     where.push("JSON_SEARCH(p.tags_json, 'one', ?) IS NOT NULL");
     params.push(tag.replace(/^#/, ''));
   }
-  if (!canWritePrompt(req || {})) {
-    if (req?.user?.id) {
-      where.push(
-        `(p.status = 'published'
-          OR p.department_id IN (SELECT id FROM pc_departments WHERE manager_user_id = ?))`
-      );
-      params.push(Number(req.user.id));
-    } else {
-      where.push("p.status = 'published'");
-    }
+  if (req?.user?.id) {
+    where.push(
+      `(p.status = 'published'
+        OR p.department_id IN (SELECT id FROM pc_departments WHERE manager_user_id = ?))`
+    );
+    params.push(Number(req.user.id));
+  } else {
+    where.push("p.status = 'published'");
   }
   return { where, params: [...categoryParams, ...params], categoryCte };
 };
@@ -506,7 +504,7 @@ const getPromptById = async (db, id, req) => {
   ));
   if (!prompt) throw appError('提示词不存在', 404);
   if (
-    !canWritePrompt(req || {})
+    !req?.internal
     && !isDepartmentManager({ manager_user_id: prompt.department_manager_user_id }, req?.user)
     && prompt.status !== 'published'
   ) {
@@ -556,11 +554,11 @@ const createPrompt = async (db, payload, user, requestIp) => {
     }),
     requestIp,
   });
-  return getPromptById(db, result.id, { user: { role: 'admin' } });
+  return getPromptById(db, result.id, { internal: true });
 };
 
 const updatePrompt = async (db, id, payload, user, requestIp) => {
-  const existing = await getPromptById(db, id, { user: { role: 'admin' } });
+  const existing = await getPromptById(db, id, { internal: true });
   const data = normalizePromptPayload({
     ...existing,
     ...payload,
@@ -618,12 +616,14 @@ const updatePrompt = async (db, id, payload, user, requestIp) => {
     },
     requestIp,
   });
-  return getPromptById(db, id, { user: { role: 'admin' } });
+  return getPromptById(db, id, { internal: true });
 };
 
 const setPromptStatus = async (db, id, status, user, requestIp) => {
   if (!ALLOWED_PROMPT_STATUSES.has(status)) throw appError('状态无效', 400);
-  const prompt = await getPromptById(db, id, { user: { role: 'admin' } });
+  const prompt = await getPromptById(db, id, { internal: true });
+  const department = await ensureDepartment(db, prompt.department_id);
+  assertDepartmentManager(department, user);
   const fields = {
     published_at: status === 'published' ? nowSql() : prompt.published_at,
     archived_at: status === 'archived' ? nowSql() : null,
@@ -644,11 +644,11 @@ const setPromptStatus = async (db, id, status, user, requestIp) => {
     },
     requestIp,
   });
-  return getPromptById(db, id, { user: { role: 'admin' } });
+  return getPromptById(db, id, { internal: true });
 };
 
 const rollbackPrompt = async (db, id, versionId, user, requestIp) => {
-  const prompt = await getPromptById(db, id, { user: { role: 'admin' } });
+  const prompt = await getPromptById(db, id, { internal: true });
   const department = await ensureDepartment(db, prompt.department_id);
   assertDepartmentManager(department, user);
   const version = await db.get('SELECT * FROM pc_prompt_versions WHERE id = ? AND prompt_id = ?', [Number(versionId), Number(id)]);
@@ -693,13 +693,13 @@ const rollbackPrompt = async (db, id, versionId, user, requestIp) => {
     },
     requestIp,
   });
-  return getPromptById(db, id, { user: { role: 'admin' } });
+  return getPromptById(db, id, { internal: true });
 };
 
 const listVersions = async (db, id, req = null) => {
-  const prompt = await getPromptById(db, id, { user: { role: 'admin' } });
+  const prompt = await getPromptById(db, id, { internal: true });
   const department = await ensureDepartment(db, prompt.department_id);
-  if (!canWritePrompt(req || {}) && !isDepartmentManager(department, req?.user)) {
+  if (!isDepartmentManager(department, req?.user)) {
     throw appError('仅部门负责人可查看版本记录', 403);
   }
   const rows = await db.query(
@@ -872,5 +872,4 @@ module.exports = {
   getOverview,
   listAuditLogs,
   logAudit,
-  canPublishPrompt,
 };

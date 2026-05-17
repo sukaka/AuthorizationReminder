@@ -72,13 +72,16 @@ test('prompt center create page uses second-level category as the final prompt c
   assert.match(source, /category_level2: event\.target\.value,\s*category_id: event\.target\.value/s);
 });
 
-test('prompt center UI exposes row edit archive and favorite actions', () => {
+test('prompt center UI exposes row view and favorite actions while gating maintenance actions', () => {
+  assert.match(source, /canManagePrompt/);
+  assert.match(source, /canManagePrompt\(prompt\) \? '编辑' : '查看'/);
   assert.match(source, /编辑/);
   assert.match(source, /删除/);
   assert.match(source, /收藏/);
   assert.match(source, /\/favorites/);
   assert.match(source, /\/prompts\/\$\{prompt\.id\}\/favorite/);
   assert.match(source, /toggleFavorite/);
+  assert.doesNotMatch(source, /permissions\.can_publish && selectedPrompt/);
 });
 
 test('prompt center create page shows publish state feedback', () => {

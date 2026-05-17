@@ -235,6 +235,80 @@ describe('prompt center service helpers', () => {
     expect(mockDb.run).not.toHaveBeenCalled();
   });
 
+  test('rejects prompt status changes by a non department manager', async () => {
+    const mockDb = {
+      get: vi.fn()
+        .mockResolvedValueOnce({
+          id: 8,
+          department_id: 2,
+          category_id: 3,
+          title: '排障提示词',
+          content: '旧内容',
+          visibility: 'department',
+          status: 'draft',
+          tags_json: '[]',
+        })
+        .mockResolvedValueOnce({ id: 2, name: '技术部', manager_user_id: 18, manager_name: '张磊' })
+        .mockResolvedValueOnce({
+          id: 8,
+          department_id: 2,
+          category_id: 3,
+          title: '排障提示词',
+          content: '旧内容',
+          visibility: 'department',
+          status: 'published',
+          tags_json: '[]',
+        }),
+      run: vi.fn().mockResolvedValue({ affectedRows: 1 }),
+    };
+
+    await expect(service.setPromptStatus(
+      mockDb,
+      8,
+      'published',
+      { id: 19, display_name: '李雷' },
+      '127.0.0.1'
+    )).rejects.toMatchObject({ message: '仅技术部负责人可维护该部门提示词', statusCode: 403 });
+    expect(mockDb.run).not.toHaveBeenCalled();
+  });
+
+  test('limits draft prompt visibility to published prompts and managed departments', async () => {
+    const mockDb = {
+      query: vi.fn().mockResolvedValue([]),
+    };
+
+    await service.listPrompts(mockDb, {}, { user: { id: 18, role: 'admin' } });
+
+    expect(mockDb.query.mock.calls[0][0]).toMatch(/p\.status = 'published'/);
+    expect(mockDb.query.mock.calls[0][0]).toMatch(/manager_user_id = \?/);
+    expect(mockDb.query.mock.calls[0][1]).toEqual(expect.arrayContaining([18]));
+  });
+
+  test('rejects version records for admin users who are not the department manager', async () => {
+    const mockDb = {
+      get: vi.fn()
+        .mockResolvedValueOnce({
+          id: 8,
+          department_id: 2,
+          category_id: 3,
+          title: '排障提示词',
+          content: '旧内容',
+          visibility: 'department',
+          status: 'published',
+          tags_json: '[]',
+        })
+        .mockResolvedValueOnce({ id: 2, name: '技术部', manager_user_id: 18, manager_name: '张磊' }),
+      query: vi.fn().mockResolvedValue([]),
+    };
+
+    await expect(service.listVersions(
+      mockDb,
+      8,
+      { user: { id: 1, role: 'admin', display_name: '管理员' } }
+    )).rejects.toMatchObject({ message: '仅部门负责人可查看版本记录', statusCode: 403 });
+    expect(mockDb.query).not.toHaveBeenCalled();
+  });
+
   test('listPrompts includes prompts under descendant categories', async () => {
     const mockDb = {
       query: vi.fn().mockResolvedValue([]),
