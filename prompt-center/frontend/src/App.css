@@ -1159,6 +1159,10 @@ label {
   background: rgba(232, 241, 255, 0.9);
 }
 
+.prompt-pager .disabled {
+  opacity: 0.45;
+}
+
 .prompt-pager button {
   min-height: 36px;
   color: #172033;

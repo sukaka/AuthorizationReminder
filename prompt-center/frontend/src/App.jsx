@@ -658,6 +658,8 @@ export default function App() {
     : '提示词列表 / 部门';
   const selectedCategoryTotal = Number(browseCategory?.prompt_count || 0);
   const hasActivePromptFilter = Boolean(String(filters.keyword || '').trim() || String(filters.status || '').trim());
+  const promptPageSize = 10;
+  const promptPageCount = Math.max(1, Math.ceil(prompts.length / promptPageSize));
   const departmentTone = ['blue', 'green', 'orange', 'purple'];
   const countDepartmentCategories = (departmentId) => categories.filter((item) => Number(item.department_id) === Number(departmentId)).length;
 
@@ -694,7 +696,7 @@ export default function App() {
             <div className="brand-row">
               <strong>聚信</strong>
               <h2>企业提示词管理中心</h2>
-              <span>v5.19.0</span>
+              <span>v5.19.1</span>
             </div>
             <p>按部门和分类沉淀提示词，保留版本、发布状态和审计记录。</p>
           </div>
@@ -821,11 +823,13 @@ export default function App() {
                         </table>
                         <div className="prompt-pager">
                           <span>共 {prompts.length} 条</span>
-                          <span>‹</span>
-                          <strong>1</strong>
-                          <span>2</span>
-                          <span>3</span>
-                          <span>›</span>
+                          <span className={promptPageCount === 1 ? 'disabled' : ''}>‹</span>
+                          {Array.from({ length: promptPageCount }, (_, index) => (
+                            index === 0
+                              ? <strong key={index + 1}>{index + 1}</strong>
+                              : <span key={index + 1}>{index + 1}</span>
+                          ))}
+                          <span className={promptPageCount === 1 ? 'disabled' : ''}>›</span>
                           <button type="button">10 条/页</button>
                         </div>
                       </>

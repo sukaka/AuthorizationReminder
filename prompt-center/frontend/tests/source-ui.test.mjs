@@ -147,3 +147,10 @@ test('prompt center category navigation clears text filters and explains direct 
   assert.match(source, /本级/);
   assert.match(source, /分类共/);
 });
+
+test('prompt center pager renders page numbers from the current result count', () => {
+  assert.match(source, /promptPageSize/);
+  assert.match(source, /promptPageCount/);
+  assert.match(source, /Array\.from\(\{ length: promptPageCount \}/);
+  assert.doesNotMatch(source, /<span>2<\/span>\s*<span>3<\/span>/);
+});
