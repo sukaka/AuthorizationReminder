@@ -5023,7 +5023,6 @@ function App() {
           <section className="course-learning-hero">
             <div className="course-learning-eyebrow">课程学习空间</div>
             <div className="course-learning-hero-copy">
-              <h2>{currentLearningCourseTitle}</h2>
               <p>{courseSummaryText}</p>
             </div>
             <div className="course-learning-progress-bar">
