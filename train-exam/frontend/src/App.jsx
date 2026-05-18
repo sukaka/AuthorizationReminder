@@ -1363,6 +1363,7 @@ function App() {
   const [resourceEditSaving, setResourceEditSaving] = useState(false)
   const [resourceDeletePendingId, setResourceDeletePendingId] = useState(0)
   const [courseDeletePendingId, setCourseDeletePendingId] = useState(0)
+  const [courseStatusPendingId, setCourseStatusPendingId] = useState(0)
   const [selectedCourseIds, setSelectedCourseIds] = useState([])
   const [courseBatchDeleting, setCourseBatchDeleting] = useState(false)
   const learningVideoRef = useRef(null)
@@ -2299,6 +2300,42 @@ function App() {
     }
   }
 
+  const onUpdateCourseStatus = async (item, nextStatus) => {
+    if (!canWrite) {
+      setError('当前角色无课程状态修改权限。')
+      return
+    }
+    const id = Number(item?.id || 0)
+    if (!id) return
+    const normalized = String(nextStatus || '').trim().toLowerCase()
+    const isPublishing = normalized === 'published'
+    const actionLabel = isPublishing ? '发布' : '改回草稿'
+    const title = String(item?.title || `课程-${id}`)
+    const confirmed = window.confirm(`确认${actionLabel}课程“${title}”吗？`)
+    if (!confirmed) return
+    clearFeedback()
+    setCourseStatusPendingId(id)
+    try {
+      const updated = await api.put(`/api/train-exam/courses/${id}`, {
+        title: item.title,
+        description: item.description || '',
+        duration_minutes: Number(item.duration_minutes || 60),
+        status: nextStatus,
+      })
+      setMessage(`课程已${actionLabel}：${updated?.title || title}`)
+      await fetchCourses(true)
+      await fetchOverview(true)
+      await fetchMyLearningProgress(true)
+      if (Number(learningCourseId || 0) === id) {
+        await fetchLearningPath(id, true)
+      }
+    } catch (err) {
+      setError(err.message || '修改课程状态失败')
+    } finally {
+      setCourseStatusPendingId(0)
+    }
+  }
+
   const onCreateResource = async (e) => {
     e.preventDefault()
     clearFeedback()
@@ -2429,7 +2466,7 @@ function App() {
       setError('当前角色无课程删除权限。')
       return
     }
-    if (courseDeletePendingId || courseBatchDeleting) return
+    if (courseDeletePendingId || courseStatusPendingId || courseBatchDeleting) return
     const ids = deleteAll
       ? (courses || []).map((item) => Number(item.id || 0)).filter((id) => id > 0)
       : selectedCourseIds.map((id) => Number(id || 0)).filter((id) => id > 0)
@@ -5582,7 +5619,7 @@ function App() {
                     <button
                       className="danger"
                       type="button"
-                      disabled={courseBatchDeleting || courseDeletePendingId > 0 || selectedCourseIds.length === 0}
+                      disabled={courseBatchDeleting || courseDeletePendingId > 0 || courseStatusPendingId > 0 || selectedCourseIds.length === 0}
                       onClick={() => onDeleteCoursesBatch({ deleteAll: false })}
                     >
                       {courseBatchDeleting ? '删除中...' : `删除选中(${selectedCourseIds.length})`}
@@ -5590,7 +5627,7 @@ function App() {
                     <button
                       className="danger"
                       type="button"
-                      disabled={courseBatchDeleting || courseDeletePendingId > 0 || courses.length === 0}
+                      disabled={courseBatchDeleting || courseDeletePendingId > 0 || courseStatusPendingId > 0 || courses.length === 0}
                       onClick={() => onDeleteCoursesBatch({ deleteAll: true })}
                     >
                       一键删除全部
@@ -5606,7 +5643,7 @@ function App() {
                         <th>
                           <input
                             type="checkbox"
-                            disabled={!canWrite || courseBatchDeleting || courseDeletePendingId > 0 || courses.length === 0}
+                            disabled={!canWrite || courseBatchDeleting || courseDeletePendingId > 0 || courseStatusPendingId > 0 || courses.length === 0}
                             checked={courses.length > 0 && selectedCourseIds.length === courses.length}
                             onChange={(e) => {
                               const checked = !!e.target.checked
@@ -5634,7 +5671,7 @@ function App() {
                           <td>
                             <input
                               type="checkbox"
-                              disabled={!canWrite || courseBatchDeleting || courseDeletePendingId > 0}
+                              disabled={!canWrite || courseBatchDeleting || courseDeletePendingId > 0 || courseStatusPendingId > 0}
                               checked={selectedCourseIds.includes(Number(item.id))}
                               onChange={(e) => {
                                 const checked = !!e.target.checked
@@ -5658,10 +5695,31 @@ function App() {
                         <td>
                           <div className="row-actions">
                             {!isBasicUser && canWrite ? (
+                              String(item.status || '').toLowerCase() === 'published' ? (
+                                <button
+                                  className="ghost"
+                                  type="button"
+                                  disabled={courseBatchDeleting || courseStatusPendingId === Number(item.id)}
+                                  onClick={() => onUpdateCourseStatus(item, 'draft')}
+                                >
+                                  {courseStatusPendingId === Number(item.id) ? '更新中...' : '改回草稿'}
+                                </button>
+                              ) : (
+                                <button
+                                  className="primary"
+                                  type="button"
+                                  disabled={courseBatchDeleting || courseStatusPendingId === Number(item.id)}
+                                  onClick={() => onUpdateCourseStatus(item, 'published')}
+                                >
+                                  {courseStatusPendingId === Number(item.id) ? '更新中...' : '发布课程'}
+                                </button>
+                              )
+                            ) : null}
+                            {!isBasicUser && canWrite ? (
                               <button
                                 className="danger"
                                 type="button"
-                                disabled={courseBatchDeleting || courseDeletePendingId === Number(item.id)}
+                                disabled={courseBatchDeleting || courseStatusPendingId > 0 || courseDeletePendingId === Number(item.id)}
                                 onClick={() => onDeleteCourse(item)}
                               >
                                 {courseDeletePendingId === Number(item.id) ? '删除中...' : '删除课程'}
