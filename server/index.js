@@ -28,6 +28,11 @@ const {
   buildHelmetCspDirectives,
 } = require('./helmet-csp');
 const {
+  buildContext,
+  buildSendContent,
+  replaceTokens,
+} = require('./reminder-content');
+const {
   resolveSecurityStrictMode,
 } = require('./security-strict-mode');
 const {
@@ -2327,40 +2332,6 @@ const normalizeScheduleConfig = (configs) => {
     graceDays: Number.isFinite(graceDays) ? graceDays : 0,
     channels,
   };
-};
-
-const replaceTokens = (template, context) => {
-  if (!template) return '';
-  return template.replace(/\{(\w+)\}/g, (match, key) => {
-    const value = context[key];
-    return value === undefined || value === null ? '' : String(value);
-  });
-};
-
-const buildContext = ({ contact, license, subject, message }) => ({
-  contact_name: contact?.name || '',
-  customer_name: contact?.customer_name || '',
-  contact_phone: contact?.phone || '',
-  contact_email: contact?.email || '',
-  wecom_id: contact?.wecom_id || '',
-  license_name: license?.name || '',
-  end_date: license?.end_date || '',
-  days_left: license?.days_left ?? '',
-  subject: subject || '',
-  message: message || '',
-});
-
-const buildSendContent = ({ subject, message, contact, license, configs, channel }) => {
-  const reminderConfig = (configs && configs.reminder) || {};
-  const subjectForContext = channel === 'email' ? subject || reminderConfig.subject || '' : '';
-  const context = buildContext({ contact, license, subject: subjectForContext, message });
-  const finalSubject =
-    channel === 'email'
-      ? subject || replaceTokens(reminderConfig.subject, context) || '授权到期提醒'
-      : '';
-  const finalMessage =
-    message || replaceTokens(reminderConfig.message, context) || '授权即将到期，请及时续约。';
-  return { finalSubject, finalMessage };
 };
 
 const normalizeCustomerIds = (rawIds, fallbackId) => {
