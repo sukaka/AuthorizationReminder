@@ -122,6 +122,27 @@ test('syncRepositoryVersion updates live version files and bootstrap references'
   assert.match(fs.readFileSync(path.join(rootDir, 'scripts/tests/bootstrap-full-server.sh'), 'utf8'), /codex\/4\.2\.0/);
 });
 
+test('syncRepositoryVersion aligns web package even when it lagged behind root version', () => {
+  const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-version-web-align-'));
+
+  writeJson(path.join(rootDir, 'package.json'), { name: 'root', version: '5.24.1' });
+  writeJson(path.join(rootDir, 'package-lock.json'), makePackageLock('5.24.1'));
+  writeJson(path.join(rootDir, 'web/package.json'), { name: 'web', version: '5.10.12' });
+  writeJson(path.join(rootDir, 'web/package-lock.json'), makePackageLock('5.10.12'));
+
+  const changedFiles = syncRepositoryVersion({
+    rootDir,
+    currentVersion: '5.24.1',
+    nextVersion: '5.24.2',
+  });
+
+  assert.ok(changedFiles.includes('web/package.json'));
+  assert.ok(changedFiles.includes('web/package-lock.json'));
+  assert.equal(JSON.parse(fs.readFileSync(path.join(rootDir, 'web/package.json'), 'utf8')).version, '5.24.2');
+  assert.equal(JSON.parse(fs.readFileSync(path.join(rootDir, 'web/package-lock.json'), 'utf8')).version, '5.24.2');
+  assert.equal(JSON.parse(fs.readFileSync(path.join(rootDir, 'web/package-lock.json'), 'utf8')).packages[''].version, '5.24.2');
+});
+
 test('syncRepositoryVersion ignores nested worktree directories', () => {
   const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-version-worktree-ignore-'));
 

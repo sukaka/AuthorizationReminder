@@ -18,6 +18,14 @@ const TEXT_VERSION_FILES = [
   'scripts/tests/bootstrap-full-server.sh',
 ];
 
+const FORCE_VERSION_PACKAGE_DIRS = new Set([
+  '.',
+  'auth',
+  'train-exam/backend',
+  'train-exam/frontend',
+  'web',
+]);
+
 const WALK_IGNORE_DIRS = new Set([
   '.git',
   '.worktrees',
@@ -100,16 +108,20 @@ const walkForPackageJson = (rootDir, startDir = rootDir, result = []) => {
   return result;
 };
 
-const updateJsonVersionFile = ({ filePath, currentVersion, nextVersion }) => {
+const updateJsonVersionFile = ({ filePath, currentVersion, nextVersion, force = false }) => {
   if (!fs.existsSync(filePath)) return false;
   const original = readText(filePath);
   const json = JSON.parse(original);
   let changed = false;
-  if (json.version === currentVersion) {
+  if (json.version === currentVersion || (force && json.version !== nextVersion)) {
     json.version = nextVersion;
     changed = true;
   }
-  if (json.packages && json.packages[''] && json.packages[''].version === currentVersion) {
+  if (
+    json.packages
+    && json.packages['']
+    && (json.packages[''].version === currentVersion || (force && json.packages[''].version !== nextVersion))
+  ) {
     json.packages[''].version = nextVersion;
     changed = true;
   }
@@ -147,11 +159,13 @@ const syncRepositoryVersion = ({ rootDir, currentVersion = '', nextVersion = '' 
   const changedFiles = new Set();
   const packageJsonFiles = walkForPackageJson(resolvedRoot);
   for (const packageJsonPath of packageJsonFiles) {
-    if (updateJsonVersionFile({ filePath: packageJsonPath, currentVersion: sourceVersion, nextVersion })) {
+    const packageDir = toPosixRelative(resolvedRoot, path.dirname(packageJsonPath)) || '.';
+    const forceVersion = FORCE_VERSION_PACKAGE_DIRS.has(packageDir);
+    if (updateJsonVersionFile({ filePath: packageJsonPath, currentVersion: sourceVersion, nextVersion, force: forceVersion })) {
       changedFiles.add(toPosixRelative(resolvedRoot, packageJsonPath));
     }
     const lockPath = path.join(path.dirname(packageJsonPath), 'package-lock.json');
-    if (updateJsonVersionFile({ filePath: lockPath, currentVersion: sourceVersion, nextVersion })) {
+    if (updateJsonVersionFile({ filePath: lockPath, currentVersion: sourceVersion, nextVersion, force: forceVersion })) {
       changedFiles.add(toPosixRelative(resolvedRoot, lockPath));
     }
   }
