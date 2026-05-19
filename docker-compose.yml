@@ -110,7 +110,7 @@ services:
     depends_on:
       - mysql
     ports:
-      - "5180:5180"
+      - "${AUTH_HOST_PORT:-5180}:5180"
 
   web:
     build:

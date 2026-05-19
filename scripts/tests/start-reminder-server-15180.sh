@@ -41,6 +41,16 @@ IMAGE_ENV_FILE="${IMAGE_ENV_FILE}" \
 COMBINED_ENV_FILE="${COMBINED_ENV_FILE}" \
 bash "${SCRIPT_PATH}" start
 
+if ! grep -q 'AUTH_HOST_PORT="${AUTH_HOST_PORT:-15180}"' "${SCRIPT_PATH}"; then
+  echo 'expected start script to default auth host port to 15180' >&2
+  exit 1
+fi
+
+if ! grep -q '"${AUTH_HOST_PORT:-5180}:5180"' "${ROOT_DIR}/docker-compose.yml"; then
+  echo 'expected base compose auth port to be configurable' >&2
+  exit 1
+fi
+
 if ! grep -q ' -f docker-compose.yml -f scripts/deploy/docker-compose.reminder-15180.yml up -d mysql auth api web$' "${LOG_FILE}"; then
   echo 'expected start script to use reminder 15180 override and only reminder services' >&2
   exit 1
@@ -66,4 +76,3 @@ if ! grep -q ' -f docker-compose.yml -f scripts/deploy/docker-compose.reminder-1
 fi
 
 echo 'start reminder server 15180: ok'
-

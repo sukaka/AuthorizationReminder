@@ -6,6 +6,7 @@ ROOT_DIR=$(cd "${SCRIPT_DIR}/../.." && pwd)
 COMPOSE_WRAPPER="${SCRIPT_DIR}/docker-compose-aliyun.sh"
 OVERRIDE_FILE="scripts/deploy/docker-compose.reminder-15180.yml"
 SERVICES=(mysql auth api web)
+export AUTH_HOST_PORT="${AUTH_HOST_PORT:-15180}"
 
 usage() {
   cat <<'EOF'
@@ -54,4 +55,3 @@ case "${command}" in
     exit 2
     ;;
 esac
-
