@@ -444,6 +444,22 @@ paths:
         '200':
           description: OK
 
+  /api/train-exam/papers/{id}/schedule-publish:
+    post:
+      tags: [试卷考试]
+      summary: 定时发布试卷
+      parameters:
+        - $ref: '#/components/parameters/IdPathParam'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PaperSchedulePublishRequest'
+      responses:
+        '200':
+          description: OK
+
   /api/train-exam/papers/{id}/archive:
     post:
       tags: [试卷考试]
@@ -1054,6 +1070,15 @@ components:
           items:
             $ref: '#/components/schemas/PaperRule'
       required: [name, paper_mode]
+
+    PaperSchedulePublishRequest:
+      type: object
+      properties:
+        scheduled_publish_at:
+          type: string
+          description: 上海时区本地时间，格式为 YYYY-MM-DDTHH:mm 或 YYYY-MM-DD HH:mm:ss
+          example: '2026-05-20T09:30'
+      required: [scheduled_publish_at]
 
     AiModelCreateRequest:
       type: object

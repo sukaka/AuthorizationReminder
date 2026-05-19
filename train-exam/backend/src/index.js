@@ -44,6 +44,10 @@ const {
   shouldEnforceManagedVideoForceWatch,
 } = require('./learning-progress-utils');
 const {
+  SCHEDULED_PAPER_STATUS,
+  normalizeScheduledPublishAt,
+} = require('./paper-schedule-utils');
+const {
   buildQuestionImportTemplateRows,
   normalizeJudgementAnswer,
   resolveImportQuestionStatus,
@@ -155,8 +159,9 @@ const ALLOWED_SOURCE_MODES = new Set(['upload', 'external']);
 const ALLOWED_QUESTION_TYPES = new Set(['single_choice', 'multiple_choice', 'judgement', 'fill_blank']);
 const ALLOWED_DIFFICULTIES = new Set(['easy', 'medium', 'hard']);
 const ALLOWED_JOB_STATUSES = new Set(['pending', 'running', 'completed', 'partial_failed', 'published', 'failed']);
+const ALLOWED_COURSE_STATUSES = new Set(['draft', 'published', 'archived']);
 const ALLOWED_PAPER_MODES = new Set(['fixed', 'random']);
-const ALLOWED_PAPER_STATUSES = new Set(['draft', 'published', 'archived']);
+const ALLOWED_PAPER_STATUSES = new Set(['draft', 'published', 'archived', SCHEDULED_PAPER_STATUS]);
 
 const ALLOWED_DOC_EXTS = new Set(['.pdf', '.doc', '.docx', '.txt', '.md']);
 const ALLOWED_VIDEO_EXTS = new Set(['.mp4', '.webm', '.mov', '.m4v']);
@@ -431,6 +436,11 @@ const normalizeDifficulty = (value, fallback = 'medium') => {
   const alias = DIFFICULTY_ALIASES[key] || DIFFICULTY_ALIASES[raw];
   if (alias) return alias;
   return ALLOWED_DIFFICULTIES.has(key) ? key : fallback;
+};
+
+const normalizeCourseStatus = (value, fallback = 'draft') => {
+  const key = trimText(value).toLowerCase();
+  return ALLOWED_COURSE_STATUSES.has(key) ? key : fallback;
 };
 
 const normalizePaperMode = (value, fallback = 'fixed') => {
@@ -4502,7 +4512,7 @@ app.post('/api/train-exam/courses', requireContentWriter, asyncHandler(async (re
   if (!title) throw appError('课程标题不能为空', 400);
 
   const description = trimText(req.body?.description);
-  const status = normalizePaperStatus(req.body?.status, 'draft');
+  const status = normalizeCourseStatus(req.body?.status, 'draft');
   const duration = Math.max(10, Math.min(600, Number(req.body?.duration_minutes || 60)));
 
   const result = await run(
@@ -4585,7 +4595,7 @@ app.put('/api/train-exam/courses/:id', requireContentWriter, asyncHandler(async 
   const title = trimText(req.body?.title || before.title);
   if (!title) throw appError('课程标题不能为空', 400);
   const description = req.body?.description !== undefined ? trimText(req.body.description) : before.description;
-  const status = req.body?.status ? normalizePaperStatus(req.body.status, before.status) : before.status;
+  const status = req.body?.status ? normalizeCourseStatus(req.body.status, before.status) : before.status;
   const duration = req.body?.duration_minutes !== undefined
     ? Math.max(10, Math.min(600, Number(req.body.duration_minutes || 60)))
     : Number(before.duration_minutes || 60);
@@ -6789,7 +6799,32 @@ const loadPaperDetail = async (paperId) => {
   };
 };
 
+const activateDueScheduledPapers = async () => {
+  await run(
+    `UPDATE te_papers
+     SET status = 'published',
+         published_at = COALESCE(scheduled_publish_at, UTC_TIMESTAMP()),
+         scheduled_publish_at = NULL,
+         archived_at = NULL,
+         updated_at = NOW()
+     WHERE status = ?
+       AND scheduled_publish_at IS NOT NULL
+       AND scheduled_publish_at <= UTC_TIMESTAMP()`,
+    [SCHEDULED_PAPER_STATUS]
+  );
+};
+
+const ensurePaperPublishable = (paper) => {
+  if (trimText(paper.paper_mode) === 'fixed' && (!paper.fixed_questions || !paper.fixed_questions.length)) {
+    throw appError('固定试卷没有题目，不能发布', 409);
+  }
+  if (trimText(paper.paper_mode) === 'random' && (!paper.rules || !paper.rules.length)) {
+    throw appError('随机试卷缺少抽题规则，不能发布', 409);
+  }
+};
+
 app.get('/api/train-exam/papers', requireReader, asyncHandler(async (req, res) => {
+  await activateDueScheduledPapers();
   const where = [];
   if (!isElevatedTrainExamReader(req)) {
     where.push("p.status = 'published'");
@@ -6871,6 +6906,7 @@ app.post('/api/train-exam/papers', requireContentWriter, asyncHandler(async (req
 }));
 
 app.get('/api/train-exam/papers/:id', requireReader, asyncHandler(async (req, res) => {
+  await activateDueScheduledPapers();
   const id = Number(req.params.id);
   ensurePaperReadAccess(req, await getPaperAccessRowById(id));
   const paper = await loadPaperDetail(id);
@@ -6957,16 +6993,12 @@ app.post('/api/train-exam/papers/:id/publish', requirePaperPublisher, asyncHandl
   if (!before) throw appError('试卷不存在', 404);
   if (trimText(before.status) === 'published') return res.json(before);
 
-  if (trimText(before.paper_mode) === 'fixed' && (!before.fixed_questions || !before.fixed_questions.length)) {
-    throw appError('固定试卷没有题目，不能发布', 409);
-  }
-  if (trimText(before.paper_mode) === 'random' && (!before.rules || !before.rules.length)) {
-    throw appError('随机试卷缺少抽题规则，不能发布', 409);
-  }
+  ensurePaperPublishable(before);
 
   await run(
     `UPDATE te_papers
-     SET status = 'published', published_at = NOW(), archived_at = NULL, updated_by_id = ?, updated_by_name = ?, updated_at = NOW()
+     SET status = 'published', published_at = UTC_TIMESTAMP(), scheduled_publish_at = NULL, archived_at = NULL,
+         updated_by_id = ?, updated_by_name = ?, updated_at = NOW()
      WHERE id = ?`,
     [Number(req.user.id) || null, req.user.username, id]
   );
@@ -6986,6 +7018,39 @@ app.post('/api/train-exam/papers/:id/publish', requirePaperPublisher, asyncHandl
   res.json(after);
 }));
 
+app.post('/api/train-exam/papers/:id/schedule-publish', requirePaperPublisher, asyncHandler(async (req, res) => {
+  const id = Number(req.params.id);
+  const before = await loadPaperDetail(id);
+  if (!before) throw appError('试卷不存在', 404);
+  if (trimText(before.status) === 'published') throw appError('试卷已发布，不能设置定时发布', 409);
+  if (trimText(before.status) === 'archived') throw appError('已归档试卷不能设置定时发布', 409);
+
+  ensurePaperPublishable(before);
+  const scheduledPublishAt = normalizeScheduledPublishAt(req.body?.scheduled_publish_at);
+
+  await run(
+    `UPDATE te_papers
+     SET status = ?, scheduled_publish_at = ?, published_at = NULL, archived_at = NULL,
+         updated_by_id = ?, updated_by_name = ?, updated_at = NOW()
+     WHERE id = ?`,
+    [SCHEDULED_PAPER_STATUS, scheduledPublishAt, Number(req.user.id) || null, req.user.username, id]
+  );
+
+  const after = await loadPaperDetail(id);
+
+  await logOperation({
+    req,
+    action: 'PAPER_SCHEDULE_PUBLISH',
+    entity: 'paper',
+    entityId: id,
+    message: `定时发布试卷 ${id}`,
+    beforeData: { status: before.status, scheduled_publish_at: before.scheduled_publish_at || null },
+    afterData: { status: after.status, scheduled_publish_at: after.scheduled_publish_at || null },
+  });
+
+  res.json(after);
+}));
+
 app.post('/api/train-exam/papers/:id/archive', requirePaperPublisher, asyncHandler(async (req, res) => {
   const id = Number(req.params.id);
   const before = await loadPaperDetail(id);
@@ -6993,7 +7058,8 @@ app.post('/api/train-exam/papers/:id/archive', requirePaperPublisher, asyncHandl
 
   await run(
     `UPDATE te_papers
-     SET status = 'archived', archived_at = NOW(), updated_by_id = ?, updated_by_name = ?, updated_at = NOW()
+     SET status = 'archived', archived_at = NOW(), scheduled_publish_at = NULL,
+         updated_by_id = ?, updated_by_name = ?, updated_at = NOW()
      WHERE id = ?`,
     [Number(req.user.id) || null, req.user.username, id]
   );
@@ -7333,6 +7399,7 @@ const loadExamSessionPayload = async ({ sessionId, req = null, autoFinalizeOnExp
 };
 
 app.post('/api/train-exam/papers/:id/exam/start', requireReader, examStartRateLimit, asyncHandler(async (req, res) => {
+  await activateDueScheduledPapers();
   const paperId = Number(req.params.id);
   ensurePaperReadAccess(req, await getPaperAccessRowById(paperId));
   const paper = await loadPaperDetail(paperId);
@@ -8543,6 +8610,7 @@ app.get('/api/train-exam/results/:id/certificate/download', requireReader, async
 }));
 
 app.get('/api/train-exam/stats/overview', requireReader, asyncHandler(async (_req, res) => {
+  await activateDueScheduledPapers();
   const [courseRow, questionRow, paperRow, examRow, passRow] = await Promise.all([
     get('SELECT COUNT(1) AS total FROM te_courses'),
     get(

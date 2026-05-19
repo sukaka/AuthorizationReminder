@@ -65,6 +65,16 @@ build_library_candidate() {
   printf '%s/%s' "$prefix" "$image_path"
 }
 
+build_daocloud_candidate() {
+  local prefix
+  prefix=$(trim_trailing_slash "${DAOCLOUD_DOCKERHUB_PREFIX:-docker.m.daocloud.io/library}")
+  local image_path="$1"
+  if [ -z "$prefix" ]; then
+    return 0
+  fi
+  printf '%s/%s' "$prefix" "$image_path"
+}
+
 build_vendor_candidate() {
   local prefix_var="$1"
   local image_path="$2"
@@ -94,8 +104,10 @@ main() {
   } >> "$OUT_FILE"
 
   write_alias NODE_20_BOOKWORM_IMAGE node:20-bookworm \
+    "$(build_daocloud_candidate node:20-bookworm)" \
     "$(build_library_candidate node:20-bookworm)"
   write_alias NODE_20_BOOKWORM_SLIM_IMAGE node:20-bookworm-slim \
+    "$(build_daocloud_candidate node:20-bookworm-slim)" \
     "$(build_library_candidate node:20-bookworm-slim)"
   write_alias NODE_20_ALPINE_IMAGE node:20-alpine \
     "$(build_library_candidate node:20-alpine)"

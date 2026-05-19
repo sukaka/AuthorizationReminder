@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { formatDateTime } from './datetime'
+import { formatDateTime, parseStoredDateTime } from './datetime'
 import {
   clearPersistedExamSessionId,
   persistExamSessionId,
@@ -451,10 +451,43 @@ const paperModeLabel = (value) => {
 const paperStatusLabel = (value) => {
   const key = String(value || '').trim().toLowerCase()
   if (key === 'draft') return '草稿'
+  if (key === 'scheduled') return '待发布'
   if (key === 'published') return '已发布'
   if (key === 'archived') return '已归档'
   return value || '-'
 }
+
+const paperStatusClassName = (value) => {
+  const key = String(value || '').trim().toLowerCase()
+  if (key === 'scheduled') return 'badge badge-scheduled'
+  if (key === 'published') return 'badge badge-published'
+  if (key === 'archived') return 'badge badge-archived'
+  return 'badge'
+}
+
+const getShanghaiDateTimeParts = (value) => {
+  const date = value ? parseStoredDateTime(value) : new Date(Date.now() + 60 * 60 * 1000)
+  const safeDate = date && !Number.isNaN(date.getTime()) ? date : new Date(Date.now() + 60 * 60 * 1000)
+  const text = new Intl.DateTimeFormat('sv-SE', {
+    timeZone: 'Asia/Shanghai',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).format(safeDate)
+  const [datePart = '', timePart = ''] = text.split(' ')
+  return { date: datePart, time: timePart }
+}
+
+const buildScheduledPublishAt = ({ date, time }) => {
+  const dateText = String(date || '').trim()
+  const timeText = String(time || '').trim()
+  return dateText && timeText ? `${dateText}T${timeText}` : ''
+}
+
+const getPaperPublishTimeText = (p) => formatDateTime(p.scheduled_publish_at || p.published_at)
 
 const resourceTypeLabel = (value) => {
   const key = String(value || '').trim().toLowerCase()
@@ -1187,6 +1220,9 @@ function App() {
   const [paperDeletePendingId, setPaperDeletePendingId] = useState(0)
   const [selectedPaperIds, setSelectedPaperIds] = useState([])
   const [paperBatchDeleting, setPaperBatchDeleting] = useState(false)
+  const [paperScheduleDialog, setPaperScheduleDialog] = useState(null)
+  const [paperScheduleForm, setPaperScheduleForm] = useState(() => getShanghaiDateTimeParts())
+  const [paperScheduleSaving, setPaperScheduleSaving] = useState(false)
 
   const [currentSession, setCurrentSession] = useState(null)
   const [currentQuestions, setCurrentQuestions] = useState([])
@@ -3857,6 +3893,42 @@ function App() {
     }
   }
 
+  const onOpenPaperScheduleDialog = (paper) => {
+    clearFeedback()
+    setPaperScheduleDialog(paper)
+    setPaperScheduleForm(getShanghaiDateTimeParts(paper?.scheduled_publish_at))
+  }
+
+  const onClosePaperScheduleDialog = () => {
+    if (paperScheduleSaving) return
+    setPaperScheduleDialog(null)
+  }
+
+  const onSubmitPaperSchedule = async (event) => {
+    event.preventDefault()
+    if (!paperScheduleDialog?.id || paperScheduleSaving) return
+    clearFeedback()
+    const scheduledAt = buildScheduledPublishAt(paperScheduleForm)
+    if (!scheduledAt) {
+      setError('请选择定时发布的日期和时间')
+      return
+    }
+    setPaperScheduleSaving(true)
+    try {
+      await api.post(`/api/train-exam/papers/${paperScheduleDialog.id}/schedule-publish`, {
+        scheduled_publish_at: scheduledAt,
+      })
+      setMessage('试卷定时发布设置成功')
+      setPaperScheduleDialog(null)
+      await fetchPapers(true)
+      await fetchOverview(true)
+    } catch (err) {
+      setError(err.message || '设置定时发布失败')
+    } finally {
+      setPaperScheduleSaving(false)
+    }
+  }
+
   const onArchivePaper = async (id) => {
     clearFeedback()
     try {
@@ -6344,6 +6416,7 @@ function App() {
                       <th>方式</th>
                       <th>状态</th>
                       <th>及格线</th>
+                      <th>发布时间</th>
                       <th>操作</th>
                     </tr>
                   </thead>
@@ -6369,8 +6442,12 @@ function App() {
                         <td>{p.id}</td>
                         <td>{p.name}</td>
                         <td>{paperModeLabel(p.paper_mode)}</td>
-                        <td><span className="badge">{paperStatusLabel(p.status)}</span></td>
+                        <td><span className={paperStatusClassName(p.status)}>{paperStatusLabel(p.status)}</span></td>
                         <td>{p.pass_score}</td>
+                        <td>
+                          <div>{getPaperPublishTimeText(p)}</div>
+                          {String(p.status || '').toLowerCase() === 'scheduled' ? <small className="muted-text">计划发布</small> : null}
+                        </td>
                         <td>
                           <div className="row-actions">
                             {canWrite ? (
@@ -6383,13 +6460,18 @@ function App() {
                                 {paperDeletePendingId === Number(p.id) ? '删除中...' : '删除试卷'}
                               </button>
                             ) : null}
-                            {canPublishPaper && p.status !== 'published' ? <button className="warn" onClick={() => onPublishPaper(p.id)}>发布</button> : null}
+                            {canPublishPaper && p.status !== 'published' ? <button className="warn" type="button" onClick={() => onPublishPaper(p.id)}>立即发布</button> : null}
+                            {canPublishPaper && p.status !== 'published' && p.status !== 'archived' ? (
+                              <button className="ghost" type="button" onClick={() => onOpenPaperScheduleDialog(p)}>
+                                {p.status === 'scheduled' ? '调整定时' : '定时发布'}
+                              </button>
+                            ) : null}
                             {canPublishPaper && p.status === 'published' ? <button className="danger" onClick={() => onArchivePaper(p.id)}>归档</button> : null}
                             {p.status === 'published' ? <button className="primary" onClick={() => onStartExam(p.id)}>开始考试</button> : null}
                           </div>
                         </td>
                       </tr>
-                    )) : <tr><td colSpan={7}>暂无试卷</td></tr>}
+                    )) : <tr><td colSpan={8}>暂无试卷</td></tr>}
                   </tbody>
                 </table>
               </div>
@@ -8137,6 +8219,53 @@ function App() {
                   aria-label="调整课程学习弹窗大小"
                 />
               ) : null}
+            </div>
+          </div>
+        ) : null}
+
+        {paperScheduleDialog ? (
+          <div className="modal-mask" onMouseDown={(e) => { if (e.target === e.currentTarget) onClosePaperScheduleDialog() }}>
+            <div className="modal-card paper-schedule-modal">
+              <div className="modal-header">
+                <div>
+                  <p className="section-kicker">试卷发布</p>
+                  <h3>定时发布试卷</h3>
+                </div>
+                <button className="ghost" type="button" onClick={onClosePaperScheduleDialog} disabled={paperScheduleSaving}>关闭</button>
+              </div>
+              <form className="modal-body form-grid" onSubmit={onSubmitPaperSchedule}>
+                <div className="full schedule-paper-name">
+                  <label>试卷</label>
+                  <input value={paperScheduleDialog.name || `#${paperScheduleDialog.id}`} readOnly />
+                </div>
+                <div>
+                  <label>发布日期</label>
+                  <input
+                    type="date"
+                    value={paperScheduleForm.date}
+                    onChange={(e) => setPaperScheduleForm((prev) => ({ ...prev, date: e.target.value }))}
+                    required
+                  />
+                </div>
+                <div>
+                  <label>发布时间</label>
+                  <input
+                    type="time"
+                    value={paperScheduleForm.time}
+                    onChange={(e) => setPaperScheduleForm((prev) => ({ ...prev, time: e.target.value }))}
+                    required
+                  />
+                </div>
+                <div className="full schedule-publish-tip">
+                  设置后试卷进入“待发布”状态，到达所选时间后自动发布。未到时间前，普通考生不会看到该试卷。
+                </div>
+                <div className="full row-actions paper-schedule-actions">
+                  <button className="ghost" type="button" onClick={onClosePaperScheduleDialog} disabled={paperScheduleSaving}>取消</button>
+                  <button className="primary" type="submit" disabled={paperScheduleSaving}>
+                    {paperScheduleSaving ? '保存中...' : '确认定时发布'}
+                  </button>
+                </div>
+              </form>
             </div>
           </div>
         ) : null}
