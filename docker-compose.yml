@@ -115,7 +115,9 @@ services:
   web:
     build:
       context: ./web
-      args: *build_args_node_bookworm_nginx
+      args:
+        <<: *build_args_node_bookworm_nginx
+        VITE_SSO_PORTAL_URL: ${VITE_SSO_PORTAL_URL:-}
     depends_on:
       - api
       - auth

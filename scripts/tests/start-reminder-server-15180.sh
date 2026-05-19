@@ -51,6 +51,16 @@ if ! grep -q '"${AUTH_HOST_PORT:-5180}:5180"' "${ROOT_DIR}/docker-compose.yml"; 
   exit 1
 fi
 
+if ! grep -q 'ARG VITE_SSO_PORTAL_URL=' "${ROOT_DIR}/web/Dockerfile"; then
+  echo 'expected reminder web Dockerfile to accept VITE_SSO_PORTAL_URL build arg' >&2
+  exit 1
+fi
+
+if ! grep -q 'VITE_SSO_PORTAL_URL: "http://${PUBLIC_HOST:-localhost}:15180"' "${ROOT_DIR}/scripts/deploy/docker-compose.reminder-15180.yml"; then
+  echo 'expected reminder 15180 override to point web login redirects at auth 15180' >&2
+  exit 1
+fi
+
 if ! grep -q ' -f docker-compose.yml -f scripts/deploy/docker-compose.reminder-15180.yml up -d mysql auth api web$' "${LOG_FILE}"; then
   echo 'expected start script to use reminder 15180 override and only reminder services' >&2
   exit 1
