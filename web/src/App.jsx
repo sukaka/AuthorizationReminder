@@ -5890,7 +5890,7 @@ function App() {
                     />
                   </label>
                   <div className="template-vars full-row">
-                    <div className="template-vars-title">模板变量（可选）</div>
+                    <div className="template-vars-title">测试变量（仅用于测试邮箱）</div>
                     <div className="template-vars-grid">
                       <label className="form-label">
                         客户名称
@@ -5944,7 +5944,7 @@ function App() {
                       </label>
                     </div>
                     <p className="muted">
-                      可用变量：{`{customer_name} {license_name} {end_date} {days_left} {contact_name}`}
+                      可用变量：{`{customer_name} {license_name} {end_date} {days_left} {contact_name}`}；正式提醒内容请在下方“提醒模板”中配置。
                     </p>
                   </div>
                     <label className="full-row form-label">
@@ -6434,7 +6434,7 @@ function App() {
                     />
                   </label>
                   <p className="muted full-row">
-                    变量：{`{customer_name} {license_name} {end_date} {days_left} {contact_name}`}
+                    变量：{`{customer_name} {license_name} {end_date} {days_left} {contact_name}`}；也兼容双大括号写法，例如 {`{{customer_name}}`}。
                   </p>
                   <button
                     className="ghost btn btn-outline-secondary"
