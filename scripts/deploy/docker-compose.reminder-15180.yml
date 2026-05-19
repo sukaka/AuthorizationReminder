@@ -1,0 +1,7 @@
+services:
+  auth:
+    environment:
+      APP_REMINDER_URL: "http://${PUBLIC_HOST:-localhost}:18080"
+    ports:
+      - "15180:5180"
+
