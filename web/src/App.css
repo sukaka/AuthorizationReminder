@@ -552,6 +552,19 @@ textarea:focus {
   border: 1px solid rgba(148, 163, 184, 0.25);
 }
 
+.bulk-actions {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-left: auto;
+  align-items: center;
+}
+
+.bulk-actions button {
+  min-height: 40px;
+  white-space: nowrap;
+}
+
 .contact-select-row {
   flex-wrap: nowrap;
   align-items: center;

@@ -414,6 +414,10 @@ function App() {
   const [sendPlans, setSendPlans] = useState([])
   const [sendPlanPage, setSendPlanPage] = useState(1)
   const [sendPlanSelections, setSendPlanSelections] = useState([])
+  const [sendPlanSearch, setSendPlanSearch] = useState('')
+  const [sendPlanCustomerFilter, setSendPlanCustomerFilter] = useState('')
+  const [sendPlanStatusFilter, setSendPlanStatusFilter] = useState('')
+  const [bulkDeletingKey, setBulkDeletingKey] = useState('')
   const [sendPlanForm, setSendPlanForm] = useState({
     id: null,
     name: '',
@@ -1170,7 +1174,11 @@ function App() {
 
   const refreshSendPlans = async () => {
     if (!permissions.canSend) return
-    const data = await api.get('/api/send-plans')
+    const params = new URLSearchParams()
+    if (sendPlanSearch) params.append('search', sendPlanSearch)
+    if (sendPlanCustomerFilter) params.append('customer_id', sendPlanCustomerFilter)
+    if (sendPlanStatusFilter) params.append('enabled', sendPlanStatusFilter)
+    const data = await api.get(`/api/send-plans?${params.toString()}`)
     setSendPlans(data)
   }
 
@@ -1229,6 +1237,12 @@ function App() {
     if (!permissions.canSend) return
     refreshReminderLogs()
   }, [reminderFilters, authToken, permissions.canSend])
+
+  useEffect(() => {
+    if (!authToken) return
+    if (!permissions.canSend) return
+    refreshSendPlans()
+  }, [sendPlanSearch, sendPlanCustomerFilter, sendPlanStatusFilter, authToken, permissions.canSend])
 
   useEffect(() => {
     if (!authToken) return
@@ -1819,6 +1833,42 @@ function App() {
             title: '删除失败',
             message: normalizeApiError(err) || '截图删除失败',
           })
+        }
+      },
+    })
+  }
+
+  const onBulkDelete = ({
+    entityKey,
+    label,
+    endpoint,
+    mode,
+    filters,
+    count,
+    onDone,
+  }) => {
+    if (!count) {
+      showError(`当前没有可删除的${label}`)
+      return
+    }
+    const isAll = mode === 'all'
+    openConfirmDialog({
+      title: isAll ? `一键删除全部${label}` : `删除筛选${label}`,
+      message: isAll
+        ? `确认删除当前权限范围内的全部${label}？关联数据也会同步清理。`
+        : `确认删除当前筛选条件匹配的 ${count} 条${label}？关联数据也会同步清理。`,
+      confirmLabel: isAll ? '确认删除全部' : '确认删除筛选结果',
+      onConfirm: async () => {
+        const deletingKey = `${entityKey}:${mode}`
+        setBulkDeletingKey(deletingKey)
+        try {
+          const data = await api.post(endpoint, { mode, filters })
+          showMessage(`已删除 ${data.deleted || 0} 条${label}`)
+          await onDone?.()
+        } catch (err) {
+          showError(normalizeApiError(err) || `${label}删除失败`)
+        } finally {
+          setBulkDeletingKey('')
         }
       },
     })
@@ -3990,6 +4040,50 @@ function App() {
                 placeholder="搜索客户名称"
                 className="form-control"
               />
+              {permissions.canDelete && (
+                <div className="bulk-actions">
+                  <button
+                    type="button"
+                    className="danger btn btn-outline-danger"
+                    disabled={!customers.length || bulkDeletingKey === 'customers:filtered'}
+                    onClick={() =>
+                      onBulkDelete({
+                        entityKey: 'customers',
+                        label: '客户',
+                        endpoint: '/api/customers/bulk-delete',
+                        mode: 'filtered',
+                        filters: { search: customerSearch },
+                        count: customers.length,
+                        onDone: async () => {
+                          await Promise.all([refreshCustomers(), refreshContacts(), refreshLicenses(), refreshSendPlans()])
+                        },
+                      })
+                    }
+                  >
+                    {bulkDeletingKey === 'customers:filtered' ? '删除中...' : `删除筛选结果(${customers.length})`}
+                  </button>
+                  <button
+                    type="button"
+                    className="danger btn btn-outline-danger"
+                    disabled={bulkDeletingKey === 'customers:all'}
+                    onClick={() =>
+                      onBulkDelete({
+                        entityKey: 'customers',
+                        label: '客户',
+                        endpoint: '/api/customers/bulk-delete',
+                        mode: 'all',
+                        filters: {},
+                        count: Math.max(customers.length, 1),
+                        onDone: async () => {
+                          await Promise.all([refreshCustomers(), refreshContacts(), refreshLicenses(), refreshSendPlans()])
+                        },
+                      })
+                    }
+                  >
+                    {bulkDeletingKey === 'customers:all' ? '删除中...' : '删除全部'}
+                  </button>
+                </div>
+              )}
             </div>
             {permissions.canWrite && (
               <form className="form-grid inline-actions" onSubmit={onSaveCustomer}>
@@ -4136,6 +4230,54 @@ function App() {
                 <option value="1">启用</option>
                 <option value="0">禁用</option>
               </select>
+              {permissions.canDelete && (
+                <div className="bulk-actions">
+                  <button
+                    type="button"
+                    className="danger btn btn-outline-danger"
+                    disabled={!contacts.length || bulkDeletingKey === 'contacts:filtered'}
+                    onClick={() =>
+                      onBulkDelete({
+                        entityKey: 'contacts',
+                        label: '联系人',
+                        endpoint: '/api/contacts/bulk-delete',
+                        mode: 'filtered',
+                        filters: {
+                          search: contactSearch,
+                          customer_id: contactCustomerFilter,
+                          is_active: contactStatusFilter,
+                        },
+                        count: contacts.length,
+                        onDone: async () => {
+                          await Promise.all([refreshContacts(), refreshSendPlans()])
+                        },
+                      })
+                    }
+                  >
+                    {bulkDeletingKey === 'contacts:filtered' ? '删除中...' : `删除筛选结果(${contacts.length})`}
+                  </button>
+                  <button
+                    type="button"
+                    className="danger btn btn-outline-danger"
+                    disabled={bulkDeletingKey === 'contacts:all'}
+                    onClick={() =>
+                      onBulkDelete({
+                        entityKey: 'contacts',
+                        label: '联系人',
+                        endpoint: '/api/contacts/bulk-delete',
+                        mode: 'all',
+                        filters: {},
+                        count: Math.max(contacts.length, 1),
+                        onDone: async () => {
+                          await Promise.all([refreshContacts(), refreshSendPlans()])
+                        },
+                      })
+                    }
+                  >
+                    {bulkDeletingKey === 'contacts:all' ? '删除中...' : '删除全部'}
+                  </button>
+                </div>
+              )}
             </div>
             {permissions.canWrite && (
               <form className="form-grid" onSubmit={onSaveContact}>
@@ -4410,6 +4552,57 @@ function App() {
                 <option value="">截图状态</option>
                 <option value="1">未上传截图</option>
               </select>
+              {permissions.canDelete && (
+                <div className="bulk-actions">
+                  <button
+                    type="button"
+                    className="danger btn btn-outline-danger"
+                    disabled={!licenses.length || bulkDeletingKey === 'licenses:filtered'}
+                    onClick={() =>
+                      onBulkDelete({
+                        entityKey: 'licenses',
+                        label: '授权',
+                        endpoint: '/api/licenses/bulk-delete',
+                        mode: 'filtered',
+                        filters: {
+                          search: licenseSearch,
+                          customer_id: licenseCustomerFilter,
+                          status: licenseStatusFilter,
+                          quick: licenseQuickFilter,
+                          days: licenseExpiringDays,
+                          missing_screenshot: licenseMissingScreenshot,
+                        },
+                        count: licenses.length,
+                        onDone: async () => {
+                          await Promise.all([refreshLicenses(), refreshSendPlans(), refreshReminderLogs()])
+                        },
+                      })
+                    }
+                  >
+                    {bulkDeletingKey === 'licenses:filtered' ? '删除中...' : `删除筛选结果(${licenses.length})`}
+                  </button>
+                  <button
+                    type="button"
+                    className="danger btn btn-outline-danger"
+                    disabled={bulkDeletingKey === 'licenses:all'}
+                    onClick={() =>
+                      onBulkDelete({
+                        entityKey: 'licenses',
+                        label: '授权',
+                        endpoint: '/api/licenses/bulk-delete',
+                        mode: 'all',
+                        filters: {},
+                        count: Math.max(licenses.length, 1),
+                        onDone: async () => {
+                          await Promise.all([refreshLicenses(), refreshSendPlans(), refreshReminderLogs()])
+                        },
+                      })
+                    }
+                  >
+                    {bulkDeletingKey === 'licenses:all' ? '删除中...' : '删除全部'}
+                  </button>
+                </div>
+              )}
             </div>
             {permissions.canWrite && (
               <form className="form-grid" onSubmit={onSaveLicense}>
@@ -4805,6 +4998,85 @@ function App() {
                   )}
                 </div>
               </form>
+              <div className="filter-row">
+                <input
+                  value={sendPlanSearch}
+                  onChange={(e) => setSendPlanSearch(e.target.value)}
+                  placeholder="搜索计划/授权/客户"
+                  className="form-control"
+                />
+                <select
+                  className="form-select"
+                  value={sendPlanCustomerFilter}
+                  onChange={(e) => setSendPlanCustomerFilter(e.target.value)}
+                >
+                  <option value="">全部客户</option>
+                  {pagedCustomers.items.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.name}
+                    </option>
+                  ))}
+                </select>
+                <select
+                  className="form-select"
+                  value={sendPlanStatusFilter}
+                  onChange={(e) => setSendPlanStatusFilter(e.target.value)}
+                >
+                  <option value="">全部状态</option>
+                  <option value="1">启用</option>
+                  <option value="0">停用</option>
+                </select>
+                {permissions.canDelete && (
+                  <div className="bulk-actions">
+                    <button
+                      type="button"
+                      className="danger btn btn-outline-danger"
+                      disabled={!sendPlans.length || bulkDeletingKey === 'send-plans:filtered'}
+                      onClick={() =>
+                        onBulkDelete({
+                          entityKey: 'send-plans',
+                          label: '发送计划',
+                          endpoint: '/api/send-plans/bulk-delete',
+                          mode: 'filtered',
+                          filters: {
+                            search: sendPlanSearch,
+                            customer_id: sendPlanCustomerFilter,
+                            enabled: sendPlanStatusFilter,
+                          },
+                          count: sendPlans.length,
+                          onDone: async () => {
+                            setSendPlanSelections([])
+                            await refreshSendPlans()
+                          },
+                        })
+                      }
+                    >
+                      {bulkDeletingKey === 'send-plans:filtered' ? '删除中...' : `删除筛选结果(${sendPlans.length})`}
+                    </button>
+                    <button
+                      type="button"
+                      className="danger btn btn-outline-danger"
+                      disabled={bulkDeletingKey === 'send-plans:all'}
+                      onClick={() =>
+                        onBulkDelete({
+                          entityKey: 'send-plans',
+                          label: '发送计划',
+                          endpoint: '/api/send-plans/bulk-delete',
+                          mode: 'all',
+                          filters: {},
+                          count: Math.max(sendPlans.length, 1),
+                          onDone: async () => {
+                            setSendPlanSelections([])
+                            await refreshSendPlans()
+                          },
+                        })
+                      }
+                    >
+                      {bulkDeletingKey === 'send-plans:all' ? '删除中...' : '删除全部'}
+                    </button>
+                  </div>
+                )}
+              </div>
               <div className="table send-table">
                 <div className="table-row head">
                   <span>

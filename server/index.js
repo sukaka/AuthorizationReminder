@@ -44,6 +44,12 @@ const {
   importUsersFromRows,
   isUserImportExcelFile,
 } = require('./user-import');
+const {
+  buildCustomerBulkFilter,
+  buildContactBulkFilter,
+  buildLicenseBulkFilter,
+  buildSendPlanBulkFilter,
+} = require('./reminder-bulk-delete');
 
 const app = express();
 const PORT = process.env.PORT || 5179;
@@ -2376,6 +2382,72 @@ const syncContactCustomers = async (trx, contactId, customerIds) => {
   await trx.run(`INSERT INTO contact_customers (contact_id, customer_id) VALUES ${tuples}`, values);
 };
 
+const parseBulkDeletePayload = (body = {}) => ({
+  mode: body.mode === 'all' ? 'all' : 'filtered',
+  filters: body.filters && typeof body.filters === 'object' ? body.filters : {},
+});
+
+const uniqueNumberIds = (ids = []) =>
+  Array.from(
+    new Set(
+      ids
+        .map((id) => Number(id))
+        .filter((id) => Number.isFinite(id) && id > 0)
+    )
+  );
+
+const buildInPlaceholders = (ids) => ids.map(() => '?').join(', ');
+
+const runDeleteByIds = async (trx, table, column, ids) => {
+  const normalized = uniqueNumberIds(ids);
+  if (!normalized.length) return { affectedRows: 0 };
+  return trx.run(
+    `DELETE FROM ${table} WHERE ${column} IN (${buildInPlaceholders(normalized)})`,
+    normalized
+  );
+};
+
+const parseJsonArraySafe = (value) => {
+  try {
+    const parsed = JSON.parse(value || '[]');
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+};
+
+const deleteSendPlansReferencingContacts = async (trx, contactIds) => {
+  const normalized = new Set(uniqueNumberIds(contactIds));
+  if (!normalized.size) return [];
+  const plans = await trx.query('SELECT id, contact_ids FROM send_plans');
+  const planIds = plans
+    .filter((plan) =>
+      parseJsonArraySafe(plan.contact_ids).some((contactId) => normalized.has(Number(contactId)))
+    )
+    .map((plan) => plan.id);
+  await runDeleteByIds(trx, 'send_plans', 'id', planIds);
+  return uniqueNumberIds(planIds);
+};
+
+const deleteLicenseDependents = async (trx, licenseIds) => {
+  const normalized = uniqueNumberIds(licenseIds);
+  if (!normalized.length) return;
+  await runDeleteByIds(trx, 'send_plans', 'license_id', normalized);
+  await runDeleteByIds(trx, 'reminder_sent', 'license_id', normalized);
+  await runDeleteByIds(trx, 'reminder_logs', 'license_id', normalized);
+  await runDeleteByIds(trx, 'send_logs', 'license_id', normalized);
+};
+
+const deleteContactDependents = async (trx, contactIds) => {
+  const normalized = uniqueNumberIds(contactIds);
+  if (!normalized.length) return;
+  await deleteSendPlansReferencingContacts(trx, normalized);
+  await runDeleteByIds(trx, 'reminder_sent', 'contact_id', normalized);
+  await runDeleteByIds(trx, 'reminder_logs', 'contact_id', normalized);
+  await runDeleteByIds(trx, 'send_logs', 'contact_id', normalized);
+  await runDeleteByIds(trx, 'contact_customers', 'contact_id', normalized);
+};
+
 // Customers
 app.get('/api/customers', requireRole(['admin']), async (req, res) => {
   const { search } = req.query;
@@ -2449,6 +2521,59 @@ app.put('/api/customers/:id', requireRole(['admin']), async (req, res) => {
   } catch (err) {
     res.status(400).json({ error: '客户名称已存在或数据错误' });
   }
+});
+
+app.post('/api/customers/bulk-delete', requireRole(['admin']), async (req, res) => {
+  const payload = parseBulkDeletePayload(req.body);
+  const filter = buildCustomerBulkFilter({ mode: payload.mode, filters: payload.filters, scope: req.scope });
+  const targets = await db.query(`SELECT id, name FROM customers ${filter.whereSql}`, filter.params);
+  const customerIds = uniqueNumberIds(targets.map((row) => row.id));
+  const authzDeleteCustomer = await authorizeReminderAction(req, 'customer:delete', {
+    customer_in_scope: true,
+  });
+  if (!authzDeleteCustomer.allow) return res.status(403).json({ error: authzDeleteCustomer.reason || '无权限' });
+  if (!customerIds.length) return res.json({ ok: true, deleted: 0 });
+
+  const customerPlaceholders = buildInPlaceholders(customerIds);
+  const licenses = await db.query(
+    `SELECT id, screenshot_url FROM licenses WHERE customer_id IN (${customerPlaceholders})`,
+    customerIds
+  );
+  const contacts = await db.query(
+    `SELECT DISTINCT contacts.id
+     FROM contacts
+     LEFT JOIN contact_customers cc ON cc.contact_id = contacts.id
+     WHERE contacts.customer_id IN (${customerPlaceholders})
+        OR cc.customer_id IN (${customerPlaceholders})`,
+    [...customerIds, ...customerIds]
+  );
+  const licenseIds = uniqueNumberIds(licenses.map((row) => row.id));
+  const contactIds = uniqueNumberIds(contacts.map((row) => row.id));
+
+  await db.transaction(async (trx) => {
+    await deleteLicenseDependents(trx, licenseIds);
+    await deleteContactDependents(trx, contactIds);
+    await runDeleteByIds(trx, 'licenses', 'id', licenseIds);
+    await runDeleteByIds(trx, 'contacts', 'id', contactIds);
+    await runDeleteByIds(trx, 'contact_customers', 'customer_id', customerIds);
+    await runDeleteByIds(trx, 'customers', 'id', customerIds);
+  });
+
+  await Promise.all(licenses.map((row) => cleanupScreenshotFile(row.screenshot_url)));
+  await logOperation({
+    user: req.user,
+    action: 'BULK_DELETE',
+    entity: 'customer',
+    entityId: 0,
+    beforeData: {
+      mode: payload.mode,
+      filters: payload.filters,
+      customer_ids: customerIds,
+      license_count: licenseIds.length,
+      contact_count: contactIds.length,
+    },
+  });
+  res.json({ ok: true, deleted: customerIds.length });
 });
 
 app.delete('/api/customers/:id', requireRole(['admin']), async (req, res) => {
@@ -2644,6 +2769,43 @@ app.put('/api/contacts/:id', requireRole(['admin']), async (req, res) => {
           .filter((cid) => Number.isFinite(cid))
       : [],
   });
+});
+
+app.post('/api/contacts/bulk-delete', requireRole(['admin']), async (req, res) => {
+  const payload = parseBulkDeletePayload(req.body);
+  const filter = buildContactBulkFilter({ mode: payload.mode, filters: payload.filters, scope: req.scope });
+  const targets = await db.query(
+    `SELECT DISTINCT contacts.id
+     FROM contacts
+     LEFT JOIN contact_customers cc ON cc.contact_id = contacts.id
+     LEFT JOIN customers ON customers.id = cc.customer_id
+     ${filter.whereSql}`,
+    filter.params
+  );
+  const contactIds = uniqueNumberIds(targets.map((row) => row.id));
+  const authzDeleteContact = await authorizeReminderAction(req, 'contact:delete', {
+    customer_ids_in_scope: true,
+  });
+  if (!authzDeleteContact.allow) return res.status(403).json({ error: authzDeleteContact.reason || '无权限' });
+  if (!contactIds.length) return res.json({ ok: true, deleted: 0 });
+
+  await db.transaction(async (trx) => {
+    await deleteContactDependents(trx, contactIds);
+    await runDeleteByIds(trx, 'contacts', 'id', contactIds);
+  });
+
+  await logOperation({
+    user: req.user,
+    action: 'BULK_DELETE',
+    entity: 'contact',
+    entityId: 0,
+    beforeData: {
+      mode: payload.mode,
+      filters: payload.filters,
+      contact_ids: contactIds,
+    },
+  });
+  res.json({ ok: true, deleted: contactIds.length });
 });
 
 app.delete('/api/contacts/:id', requireRole(['admin']), async (req, res) => {
@@ -2944,6 +3106,43 @@ app.get('/api/licenses/:id/screenshot/content', requireRole(['admin']), async (r
     }
     return res.status(500).json({ error: '读取截图失败' });
   }
+});
+
+app.post('/api/licenses/bulk-delete', requireRole(['admin']), async (req, res) => {
+  const payload = parseBulkDeletePayload(req.body);
+  const filter = buildLicenseBulkFilter({ mode: payload.mode, filters: payload.filters, scope: req.scope });
+  const targets = await db.query(
+    `SELECT licenses.id, licenses.screenshot_url
+     FROM licenses
+     JOIN customers ON customers.id = licenses.customer_id
+     ${filter.whereSql}`,
+    filter.params
+  );
+  const licenseIds = uniqueNumberIds(targets.map((row) => row.id));
+  const authzDeleteLicense = await authorizeReminderAction(req, 'license:delete', {
+    license_in_scope: true,
+  });
+  if (!authzDeleteLicense.allow) return res.status(403).json({ error: authzDeleteLicense.reason || '无权限' });
+  if (!licenseIds.length) return res.json({ ok: true, deleted: 0 });
+
+  await db.transaction(async (trx) => {
+    await deleteLicenseDependents(trx, licenseIds);
+    await runDeleteByIds(trx, 'licenses', 'id', licenseIds);
+  });
+
+  await Promise.all(targets.map((row) => cleanupScreenshotFile(row.screenshot_url)));
+  await logOperation({
+    user: req.user,
+    action: 'BULK_DELETE',
+    entity: 'license',
+    entityId: 0,
+    beforeData: {
+      mode: payload.mode,
+      filters: payload.filters,
+      license_ids: licenseIds,
+    },
+  });
+  res.json({ ok: true, deleted: licenseIds.length });
 });
 
 app.delete('/api/licenses/:id', requireRole(['admin']), async (req, res) => {
@@ -3653,18 +3852,19 @@ app.post('/api/test/wecom', requireRole(['admin']), async (req, res) => {
 
 // Send plans
 app.get('/api/send-plans', requireRole(['admin']), async (req, res) => {
-  const where = [];
-  const params = [];
-  applyScopeFilter({ scope: req.scope, where, params, column: 'customers.id' });
-  const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
+  const filter = buildSendPlanBulkFilter({
+    mode: 'filtered',
+    filters: req.query,
+    scope: req.scope,
+  });
   const rows = await db.query(
     `SELECT send_plans.*, licenses.name AS license_name, licenses.end_date AS license_end_date, customers.name AS customer_name
      FROM send_plans
      JOIN licenses ON licenses.id = send_plans.license_id
      JOIN customers ON customers.id = licenses.customer_id
-     ${whereSql}
+     ${filter.whereSql}
      ORDER BY send_plans.id DESC`,
-    params
+    filter.params
   );
   res.json(
     rows.map((row) => ({
@@ -3800,6 +4000,43 @@ app.put('/api/send-plans/:id', requireRole(['admin']), async (req, res) => {
     channels: JSON.parse(row.channels || '[]'),
     enabled: row.enabled === 0 ? 0 : 1,
   });
+});
+
+app.post('/api/send-plans/bulk-delete', requireRole(['admin']), async (req, res) => {
+  const payload = parseBulkDeletePayload(req.body);
+  const filter = buildSendPlanBulkFilter({ mode: payload.mode, filters: payload.filters, scope: req.scope });
+  const targets = await db.query(
+    `SELECT send_plans.id
+     FROM send_plans
+     JOIN licenses ON licenses.id = send_plans.license_id
+     JOIN customers ON customers.id = licenses.customer_id
+     ${filter.whereSql}`,
+    filter.params
+  );
+  const planIds = uniqueNumberIds(targets.map((row) => row.id));
+  const authzDeletePlan = await authorizeReminderAction(req, 'send-plan:delete', {
+    contacts_in_scope: true,
+    license_in_scope: true,
+  });
+  if (!authzDeletePlan.allow) return res.status(403).json({ error: authzDeletePlan.reason || '无权限' });
+  if (!planIds.length) return res.json({ ok: true, deleted: 0 });
+
+  await db.transaction(async (trx) => {
+    await runDeleteByIds(trx, 'send_plans', 'id', planIds);
+  });
+
+  await logOperation({
+    user: req.user,
+    action: 'BULK_DELETE',
+    entity: 'send_plan',
+    entityId: 0,
+    beforeData: {
+      mode: payload.mode,
+      filters: payload.filters,
+      send_plan_ids: planIds,
+    },
+  });
+  res.json({ ok: true, deleted: planIds.length });
 });
 
 app.delete('/api/send-plans/:id', requireRole(['admin']), async (req, res) => {
