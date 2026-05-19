@@ -35,6 +35,7 @@ const {
   buildUserImportFilename,
   buildUserImportWorkbook,
   buildUserImportTemplateWorkbook,
+  buildCustomerImportTemplateWorkbook,
   importUsersFromRows,
   isUserImportExcelFile,
 } = require('./user-import');
@@ -1789,6 +1790,19 @@ app.post('/api/import/users', requireRole(['sysadmin']), importRateLimiter, uplo
 app.get('/api/import/users/template.xlsx', requireRole(['sysadmin']), async (_req, res) => {
   const download = buildDownloadHeaderMeta('用户导入模板.xlsx', 'user-import-template.xlsx');
   const workbookBuffer = buildUserImportTemplateWorkbook();
+  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  res.setHeader('Content-Disposition', download.contentDisposition);
+  res.setHeader('X-Import-Filename', download.encodedFileName);
+  res.send(workbookBuffer);
+});
+
+app.get('/api/import/customers/template.xlsx', requireRole(['admin']), async (req, res) => {
+  const authzImportCustomers = await authorizeReminderAction(req, 'import:customers', {});
+  if (!authzImportCustomers.allow) {
+    return res.status(403).json({ error: authzImportCustomers.reason || '无权限' });
+  }
+  const download = buildDownloadHeaderMeta('客户导入模板.xlsx', 'customer-import-template.xlsx');
+  const workbookBuffer = buildCustomerImportTemplateWorkbook();
   res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
   res.setHeader('Content-Disposition', download.contentDisposition);
   res.setHeader('X-Import-Filename', download.encodedFileName);

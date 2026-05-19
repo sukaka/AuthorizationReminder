@@ -978,6 +978,30 @@ paths:
           description: 服务内部错误
       description: 创建/执行 /api/import/users 需在 Authorization 请求头中携带 Bearer Token。
         请求体为 Excel 文件，成功时直接返回结果工作簿。
+  "/api/import/customers/template.xlsx":
+    get:
+      summary: 查询 /api/import/customers/template.xlsx
+      operationId: get_api_import_customers_template_xlsx
+      tags:
+      - import
+      security:
+      - bearerAuth: []
+      responses:
+        '200':
+          description: 请求成功
+          content:
+            application/vnd.openxmlformats-officedocument.spreadsheetml.sheet:
+              schema:
+                type: string
+                format: binary
+        '401':
+          description: 未认证或登录已过期
+        '403':
+          description: 无权限访问
+        '500':
+          description: 服务内部错误
+      description: 查询 /api/import/customers/template.xlsx 需在 Authorization 请求头中携带 Bearer Token。
+        成功时返回客户 Excel 导入模板工作簿。
   "/api/import/users/template.xlsx":
     get:
       summary: 查询 /api/import/users/template.xlsx

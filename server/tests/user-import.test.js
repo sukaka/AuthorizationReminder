@@ -10,6 +10,7 @@ const {
   generateImportPassword,
   buildUserImportWorkbook,
   buildUserImportTemplateWorkbook,
+  buildCustomerImportTemplateWorkbook,
   importUsersFromRows,
   isUserImportExcelFile,
   buildUserImportFilename,
@@ -202,6 +203,20 @@ test('buildUserImportTemplateWorkbook writes the expected template header and sa
     '13800000000',
     'zhangsan',
   ]);
+});
+
+test('buildCustomerImportTemplateWorkbook writes the expected template header and sample row', () => {
+  const buffer = buildCustomerImportTemplateWorkbook();
+
+  assert.ok(Buffer.isBuffer(buffer));
+
+  const workbook = xlsx.read(buffer, { type: 'buffer' });
+  assert.deepEqual(workbook.SheetNames, ['customers']);
+
+  const rows = xlsx.utils.sheet_to_json(workbook.Sheets.customers, { header: 1, defval: '' });
+
+  assert.deepEqual(rows[0], ['客户名称', '聚信销售', '渠道销售']);
+  assert.deepEqual(rows[1], ['示例客户有限公司', '张三', '李四']);
 });
 
 test('importUsersFromRows skips duplicates and returns the fixed password for created users', async () => {

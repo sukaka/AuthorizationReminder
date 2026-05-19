@@ -580,6 +580,7 @@ function App() {
   const [userImportResult, setUserImportResult] = useState(null)
   const [userImportUploading, setUserImportUploading] = useState(false)
   const [userImportTemplateDownloading, setUserImportTemplateDownloading] = useState(false)
+  const [customerImportTemplateDownloading, setCustomerImportTemplateDownloading] = useState(false)
   const [message, setMessage] = useState('')
   const [error, setError] = useState('')
   const [csrfToken, setCsrfToken] = useState('')
@@ -2596,6 +2597,40 @@ function App() {
     }
   }
 
+  const onDownloadCustomerImportTemplate = async () => {
+    if (customerImportTemplateDownloading) return
+
+    setCustomerImportTemplateDownloading(true)
+    try {
+      const res = await fetch('/api/import/customers/template.xlsx', {
+        credentials: 'include',
+      })
+      const blob = await res.blob()
+      if (!res.ok) {
+        let text = ''
+        try {
+          text = await blob.text()
+        } catch {
+          text = ''
+        }
+        throw new Error(text || '下载客户导入模板失败')
+      }
+
+      const fileName = readUserImportDownloadFilename(res.headers, 'customer-import-template.xlsx')
+      triggerUserImportDownload(blob, fileName)
+      showMessage('客户导入模板已开始下载')
+    } catch (err) {
+      const msg = normalizeApiError(err) || '下载客户导入模板失败'
+      showError(msg)
+      setModalInfo({
+        title: '客户导入模板下载失败',
+        message: msg,
+      })
+    } finally {
+      setCustomerImportTemplateDownloading(false)
+    }
+  }
+
   useEffect(() => {
     if (!authToken) return
     let cancelled = false
@@ -3920,6 +3955,15 @@ function App() {
                   onChange={(e) => onImportCustomers(e.target.files?.[0])}
                 />
               </label>
+              <button
+                type="button"
+                className="ghost btn btn-outline-secondary"
+                disabled={customerImportTemplateDownloading}
+                onClick={onDownloadCustomerImportTemplate}
+              >
+                {customerImportTemplateDownloading ? '模板下载中...' : '下载客户导入模板'}
+              </button>
+              <span className="muted">模板列：客户名称、聚信销售、渠道销售。</span>
               {customerImportResult && (
                 <span className="muted">
                   导入：{customerImportResult.created} 成功 / {customerImportResult.skipped} 跳过

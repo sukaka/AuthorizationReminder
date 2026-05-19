@@ -63,6 +63,12 @@ const USER_IMPORT_TEMPLATE_SAMPLE_ROW = Object.freeze({
   手机号: '13800000000',
   企业微信UserID: 'zhangsan',
 });
+const CUSTOMER_IMPORT_TEMPLATE_HEADERS = Object.freeze(['客户名称', '聚信销售', '渠道销售']);
+const CUSTOMER_IMPORT_TEMPLATE_SAMPLE_ROW = Object.freeze({
+  客户名称: '示例客户有限公司',
+  聚信销售: '张三',
+  渠道销售: '李四',
+});
 
 const normalizeImportRole = (value) => {
   const text = trimText(value);
@@ -168,6 +174,16 @@ const buildUserImportTemplateWorkbook = () => {
   ]);
   const workbook = xlsx.utils.book_new();
   xlsx.utils.book_append_sheet(workbook, sheet, 'template');
+  return xlsx.write(workbook, { type: 'buffer', bookType: 'xlsx' });
+};
+
+const buildCustomerImportTemplateWorkbook = () => {
+  const sheet = xlsx.utils.aoa_to_sheet([
+    CUSTOMER_IMPORT_TEMPLATE_HEADERS,
+    CUSTOMER_IMPORT_TEMPLATE_HEADERS.map((key) => CUSTOMER_IMPORT_TEMPLATE_SAMPLE_ROW[key] ?? ''),
+  ]);
+  const workbook = xlsx.utils.book_new();
+  xlsx.utils.book_append_sheet(workbook, sheet, 'customers');
   return xlsx.write(workbook, { type: 'buffer', bookType: 'xlsx' });
 };
 
@@ -304,6 +320,7 @@ module.exports = {
   generateImportPassword,
   buildUserImportWorkbook,
   buildUserImportTemplateWorkbook,
+  buildCustomerImportTemplateWorkbook,
   importUsersFromRows,
   splitImportAccess,
   normalizeImportActive,
