@@ -55,6 +55,21 @@ test('send plan bulk filter can target filtered disabled plans', () => {
 
   assert.match(filter.whereSql, /send_plans.enabled = \?/);
   assert.match(filter.whereSql, /send_plans.name LIKE \?/);
+  assert.match(filter.whereSql, /JSON_CONTAINS\(send_plans\.contact_ids, JSON_ARRAY\(contacts\.id\), '\$'\)/);
+  assert.match(filter.whereSql, /contacts.name LIKE \?/);
+  assert.match(filter.whereSql, /contacts.phone LIKE \?/);
+  assert.match(filter.whereSql, /contacts.email LIKE \?/);
+  assert.match(filter.whereSql, /contacts.wecom_id LIKE \?/);
   assert.match(filter.whereSql, /customers.id IN \(\?\)/);
-  assert.deepEqual(filter.params, ['0', '%续费%', '%续费%', '%续费%', 12]);
+  assert.deepEqual(filter.params, [
+    '0',
+    '%续费%',
+    '%续费%',
+    '%续费%',
+    '%续费%',
+    '%续费%',
+    '%续费%',
+    '%续费%',
+    12,
+  ]);
 });

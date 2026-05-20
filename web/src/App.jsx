@@ -5527,7 +5527,7 @@ function App() {
                 <input
                   value={sendPlanSearch}
                   onChange={(e) => setSendPlanSearch(e.target.value)}
-                  placeholder="搜索计划/授权/客户"
+                  placeholder="搜索计划/授权/客户/联系人"
                   className="form-control"
                 />
                 <select

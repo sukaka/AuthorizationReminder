@@ -106,8 +106,24 @@ const buildSendPlanBulkFilter = ({ mode = 'filtered', filters, scope } = {}) => 
       params.push(source.customer_id);
     }
     if (source.search) {
-      where.push('(send_plans.name LIKE ? OR licenses.name LIKE ? OR customers.name LIKE ?)');
-      params.push(`%${source.search}%`, `%${source.search}%`, `%${source.search}%`);
+      where.push(`(
+        send_plans.name LIKE ?
+        OR licenses.name LIKE ?
+        OR customers.name LIKE ?
+        OR EXISTS (
+          SELECT 1
+          FROM contacts
+          WHERE JSON_CONTAINS(send_plans.contact_ids, JSON_ARRAY(contacts.id), '$')
+            AND (
+              contacts.name LIKE ?
+              OR contacts.phone LIKE ?
+              OR contacts.email LIKE ?
+              OR contacts.wecom_id LIKE ?
+            )
+        )
+      )`);
+      const keyword = `%${source.search}%`;
+      params.push(keyword, keyword, keyword, keyword, keyword, keyword, keyword);
     }
   }
   appendScopeFilter({ scope, where, params, column: 'customers.id' });
