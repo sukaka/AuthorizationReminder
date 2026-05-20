@@ -264,6 +264,7 @@ const emptyContact = {
 const emptyLicense = {
   id: null,
   customer_id: '',
+  customer_name: '',
   name: '',
   start_date: '',
   end_date: '',
@@ -375,6 +376,10 @@ function App() {
   const [contactCustomerEditing, setContactCustomerEditing] = useState(false)
   const contactCustomerRef = useRef(null)
   const [licenseForm, setLicenseForm] = useState(emptyLicense)
+  const [licenseCustomerInput, setLicenseCustomerInput] = useState('')
+  const [licenseCustomerOpen, setLicenseCustomerOpen] = useState(false)
+  const [licenseCustomerEditing, setLicenseCustomerEditing] = useState(false)
+  const licenseCustomerRef = useRef(null)
   const [customerSearch, setCustomerSearch] = useState('')
   const [contactSearch, setContactSearch] = useState('')
   const [contactCustomerFilter, setContactCustomerFilter] = useState('')
@@ -867,6 +872,22 @@ function App() {
     return Array.from(new Set(ids))
   }
 
+  const findCustomerByName = (name) => {
+    const text = String(name || '').trim()
+    if (!text) return null
+    return customers.find((c) => c.name === text) || null
+  }
+
+  const commitLicenseCustomerInput = () => {
+    const text = String(licenseCustomerInput || '').trim()
+    const match = findCustomerByName(text)
+    setLicenseForm((prev) => ({
+      ...prev,
+      customer_id: match ? String(match.id) : '',
+      customer_name: text,
+    }))
+  }
+
   const commitContactCustomerInput = (appendSeparator = false) => {
     const names = parseCustomerNames(contactCustomerInput)
     const ids = resolveCustomerIdsByNames(names)
@@ -901,6 +922,28 @@ function App() {
     document.addEventListener('mousedown', handleClickOutside)
     return () => document.removeEventListener('mousedown', handleClickOutside)
   }, [contactCustomerOpen, contactCustomerInput])
+
+  useEffect(() => {
+    if (licenseCustomerEditing) return
+    const selected = licenseForm.customer_id
+      ? customerMap.get(String(licenseForm.customer_id))?.name || ''
+      : licenseForm.customer_name || ''
+    setLicenseCustomerInput(selected)
+  }, [licenseForm.customer_id, licenseForm.customer_name, customerMap, licenseCustomerEditing])
+
+  useEffect(() => {
+    const handleClickOutside = (event) => {
+      if (licenseCustomerRef.current && !licenseCustomerRef.current.contains(event.target)) {
+        if (licenseCustomerOpen) {
+          commitLicenseCustomerInput()
+        }
+        setLicenseCustomerOpen(false)
+        setLicenseCustomerEditing(false)
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside)
+    return () => document.removeEventListener('mousedown', handleClickOutside)
+  }, [licenseCustomerOpen, licenseCustomerInput])
 
   const buildContactLabel = (contact) => {
     const customer = contact.customer_name || ''
@@ -982,6 +1025,13 @@ function App() {
     if (!keyword) return customers
     return customers.filter((c) => c.name.includes(keyword))
   }, [customers, contactCustomerInput])
+
+  const licenseCustomerSuggestions = useMemo(() => {
+    const keyword = String(licenseCustomerInput || '').trim()
+    if (!keyword) return customers
+    const lower = keyword.toLowerCase()
+    return customers.filter((c) => String(c.name || '').toLowerCase().includes(lower))
+  }, [customers, licenseCustomerInput])
 
   const pagedCustomers = useMemo(() => paginate(customers, customerPage), [customers, customerPage])
   const pagedContacts = useMemo(() => paginate(contacts, contactPage), [contacts, contactPage])
@@ -1651,6 +1701,20 @@ function App() {
     })
   }
 
+  const onCreateLicenseForCustomer = (customer) => {
+    const customerId = String(customer?.id || '')
+    const customerName = String(customer?.name || '')
+    setLicenseForm({
+      ...emptyLicense,
+      customer_id: customerId,
+      customer_name: customerName,
+    })
+    setLicenseCustomerInput(customerName)
+    setLicenseCustomerEditing(false)
+    setLicenseCustomerOpen(false)
+    setActiveTab('licenses')
+  }
+
   const onSaveContact = async (e) => {
     e.preventDefault()
     try {
@@ -1725,8 +1789,12 @@ function App() {
   const onSaveLicense = async (e) => {
     e.preventDefault()
     try {
+      const customerName = String(licenseCustomerInput || licenseForm.customer_name || '').trim()
+      const matchedCustomer = findCustomerByName(customerName)
       const payload = {
         ...licenseForm,
+        customer_id: matchedCustomer ? String(matchedCustomer.id) : licenseForm.customer_id || '',
+        customer_name: customerName,
         reminder_days: licenseForm.reminder_days || '',
       }
       if (licenseForm.id) {
@@ -1737,6 +1805,10 @@ function App() {
         showMessage('授权已创建')
       }
       setLicenseForm(emptyLicense)
+      setLicenseCustomerInput('')
+      setLicenseCustomerEditing(false)
+      setLicenseCustomerOpen(false)
+      refreshCustomers()
       refreshLicenses()
     } catch (err) {
       showError('授权保存失败')
@@ -1747,6 +1819,7 @@ function App() {
     setLicenseForm({
       id: license.id,
       customer_id: String(license.customer_id),
+      customer_name: license.customer_name || '',
       name: license.name,
       start_date: license.start_date || '',
       end_date: license.end_date || '',
@@ -1754,6 +1827,9 @@ function App() {
       note: license.note || '',
       reminder_days: license.reminder_days || '',
     })
+    setLicenseCustomerInput(license.customer_name || '')
+    setLicenseCustomerEditing(false)
+    setLicenseCustomerOpen(false)
   }
 
   const onDeleteLicense = async (id) => {
@@ -4218,6 +4294,11 @@ function App() {
                         删除
                       </button>
                     )}
+                    {permissions.canWrite && (
+                      <button className="ghost btn btn-outline-secondary btn-sm" onClick={() => onCreateLicenseForCustomer(c)}>
+                        新增授权
+                      </button>
+                    )}
                   </span>
                 </div>
               ))}
@@ -4718,21 +4799,69 @@ function App() {
               </label>
               <label className="form-label">
                 客户名称
-                <select
-                  className="form-select"
-                  value={licenseForm.customer_id}
-                  onChange={(e) =>
-                    setLicenseForm({ ...licenseForm, customer_id: e.target.value })
-                  }
-                  required
-                >
-                  <option value="">请选择客户</option>
-                  {pagedCustomers.items.map((c) => (
-                    <option key={c.id} value={c.id}>
-                      {c.name}
-                    </option>
-                  ))}
-                </select>
+                <div className="multi-input" ref={licenseCustomerRef}>
+                  <input
+                    value={licenseCustomerInput}
+                    onFocus={() => {
+                      setLicenseCustomerEditing(true)
+                      setLicenseCustomerOpen(true)
+                    }}
+                    onBlur={() => {
+                      setTimeout(() => {
+                        if (!licenseCustomerRef.current?.contains(document.activeElement)) {
+                          commitLicenseCustomerInput()
+                          setLicenseCustomerOpen(false)
+                          setLicenseCustomerEditing(false)
+                        }
+                      }, 0)
+                    }}
+                    onChange={(e) => {
+                      setLicenseCustomerEditing(true)
+                      setLicenseCustomerOpen(true)
+                      setLicenseCustomerInput(e.target.value)
+                      const match = findCustomerByName(e.target.value)
+                      setLicenseForm((prev) => ({
+                        ...prev,
+                        customer_id: match ? String(match.id) : '',
+                        customer_name: e.target.value,
+                      }))
+                    }}
+                    placeholder="输入或选择客户名称"
+                    required
+                    className="form-control"
+                  />
+                  {licenseCustomerOpen && (
+                    <div className="multi-select-menu">
+                      {licenseCustomerSuggestions.length === 0 && (
+                        <div className="empty">没有匹配客户，可直接输入新客户名称</div>
+                      )}
+                      {licenseCustomerSuggestions.map((c) => {
+                        const selected = String(licenseForm.customer_id || '') === String(c.id)
+                        return (
+                          <button
+                            type="button"
+                            key={c.id}
+                            className={`multi-select-item ${selected ? 'selected' : ''}`}
+                            onMouseDown={(event) => event.preventDefault()}
+                            onClick={() => {
+                              setLicenseForm((prev) => ({
+                                ...prev,
+                                customer_id: String(c.id),
+                                customer_name: c.name,
+                              }))
+                              setLicenseCustomerInput(c.name)
+                              setLicenseCustomerOpen(false)
+                              setLicenseCustomerEditing(false)
+                            }}
+                          >
+                            <span>{c.name}</span>
+                            <span className="check">✓</span>
+                          </button>
+                        )
+                      })}
+                    </div>
+                  )}
+                </div>
               </label>
               <label className="form-label">
                 开始日期
@@ -4795,7 +4924,12 @@ function App() {
                 <button
                   type="button"
                   className="ghost btn btn-outline-secondary"
-                  onClick={() => setLicenseForm(emptyLicense)}
+                  onClick={() => {
+                    setLicenseForm(emptyLicense)
+                    setLicenseCustomerInput('')
+                    setLicenseCustomerEditing(false)
+                    setLicenseCustomerOpen(false)
+                  }}
                 >
                   清空
                 </button>

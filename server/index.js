@@ -2465,6 +2465,27 @@ const deleteContactDependents = async (trx, contactIds) => {
   await runDeleteByIds(trx, 'contact_customers', 'contact_id', normalized);
 };
 
+const resolveLicenseCustomerId = async ({ customerId, customerName, user }) => {
+  const id = Number(customerId);
+  if (Number.isFinite(id) && id > 0) return id;
+  const name = String(customerName || '').trim();
+  if (!name) return 0;
+  const existing = await db.get('SELECT id FROM customers WHERE name = ?', [name]);
+  if (existing) return Number(existing.id);
+  const info = await db.run(
+    'INSERT INTO customers (name, juxin_sales, channel_sales) VALUES (?, ?, ?)',
+    [name, '', '']
+  );
+  await logOperation({
+    user,
+    action: 'CREATE',
+    entity: 'customer',
+    entityId: info.insertId,
+    afterData: { name, juxin_sales: '', channel_sales: '' },
+  });
+  return Number(info.insertId);
+};
+
 // Customers
 app.get('/api/customers', requireRole(['admin']), async (req, res) => {
   const { search } = req.query;
@@ -2916,25 +2937,30 @@ app.get('/api/licenses/expiring', requireRole(['admin']), async (req, res) => {
 });
 
 app.post('/api/licenses', requireRole(['admin']), async (req, res) => {
-  const { customer_id, name, start_date, end_date, status, note, reminder_days } = req.body;
-  if (!customer_id) {
+  const { customer_id, customer_name, name, start_date, end_date, status, note, reminder_days } = req.body;
+  if (!customer_id && !String(customer_name || '').trim()) {
     return res.status(400).json({ error: '请选择客户名称' });
   }
-  const allowedLicenseSet = new Set((req.scope?.customerIds || []).map((cid) => Number(cid)));
-  const licenseInScope = req.scope?.isAdmin ? true : allowedLicenseSet.has(Number(customer_id));
-  const authzCreateLicense = await authorizeReminderAction(req, 'license:create', {
-    license_in_scope: licenseInScope,
-  });
-  if (!authzCreateLicense.allow) return res.status(403).json({ error: authzCreateLicense.reason || '无权限' });
   if (!name || !name.trim()) {
     return res.status(400).json({ error: '授权名称不能为空' });
   }
   if (!end_date) {
     return res.status(400).json({ error: '到期日期不能为空' });
   }
+  const resolvedCustomerId = await resolveLicenseCustomerId({
+    customerId: customer_id,
+    customerName: customer_name,
+    user: req.user,
+  });
+  const allowedLicenseSet = new Set((req.scope?.customerIds || []).map((cid) => Number(cid)));
+  const licenseInScope = req.scope?.isAdmin ? true : allowedLicenseSet.has(Number(resolvedCustomerId));
+  const authzCreateLicense = await authorizeReminderAction(req, 'license:create', {
+    license_in_scope: licenseInScope,
+  });
+  if (!authzCreateLicense.allow) return res.status(403).json({ error: authzCreateLicense.reason || '无权限' });
   const info = await db.run(
     'INSERT INTO licenses (customer_id, name, start_date, end_date, status, note, reminder_days) VALUES (?, ?, ?, ?, ?, ?, ?)',
-    [customer_id, name.trim(), start_date || null, end_date, status || 'ACTIVE', note || '', reminder_days || null]
+    [resolvedCustomerId, name.trim(), start_date || null, end_date, status || 'ACTIVE', note || '', reminder_days || null]
   );
   const row = await db.get(
     `SELECT licenses.*, customers.name AS customer_name
@@ -2955,8 +2981,8 @@ app.post('/api/licenses', requireRole(['admin']), async (req, res) => {
 
 app.put('/api/licenses/:id', requireRole(['admin']), async (req, res) => {
   const { id } = req.params;
-  const { customer_id, name, start_date, end_date, status, note, reminder_days } = req.body;
-  if (!customer_id) {
+  const { customer_id, customer_name, name, start_date, end_date, status, note, reminder_days } = req.body;
+  if (!customer_id && !String(customer_name || '').trim()) {
     return res.status(400).json({ error: '请选择客户名称' });
   }
   if (!name || !name.trim()) {
@@ -2967,18 +2993,23 @@ app.put('/api/licenses/:id', requireRole(['admin']), async (req, res) => {
   }
   const before = await db.get('SELECT * FROM licenses WHERE id = ?', [id]);
   if (!before) return res.status(404).json({ error: '授权不存在' });
+  const resolvedCustomerId = await resolveLicenseCustomerId({
+    customerId: customer_id,
+    customerName: customer_name,
+    user: req.user,
+  });
   const allowedUpdateLicenseSet = new Set((req.scope?.customerIds || []).map((cid) => Number(cid)));
   const licenseInScope = req.scope?.isAdmin
     ? true
     : allowedUpdateLicenseSet.has(Number(before.customer_id)) &&
-      allowedUpdateLicenseSet.has(Number(customer_id));
+      allowedUpdateLicenseSet.has(Number(resolvedCustomerId));
   const authzUpdateLicense = await authorizeReminderAction(req, 'license:update', {
     license_in_scope: licenseInScope,
   });
   if (!authzUpdateLicense.allow) return res.status(403).json({ error: authzUpdateLicense.reason || '无权限' });
   await db.run(
     'UPDATE licenses SET customer_id = ?, name = ?, start_date = ?, end_date = ?, status = ?, note = ?, reminder_days = ? WHERE id = ?',
-    [customer_id, name.trim(), start_date || null, end_date, status || 'ACTIVE', note || '', reminder_days || null, id]
+    [resolvedCustomerId, name.trim(), start_date || null, end_date, status || 'ACTIVE', note || '', reminder_days || null, id]
   );
   const row = await db.get(
     `SELECT licenses.*, customers.name AS customer_name
