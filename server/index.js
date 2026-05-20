@@ -2902,6 +2902,7 @@ app.get('/api/licenses', requireRole(['admin']), async (req, res) => {
   }
   if (missing_screenshot === '1') {
     where.push('(licenses.screenshot_url IS NULL OR licenses.screenshot_url = \'\')');
+    where.push('COALESCE(licenses.screenshot_marked_uploaded, 0) <> 1');
   }
   applyScopeFilter({ scope: req.scope, where, params, column: 'customers.id' });
   const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
@@ -3073,7 +3074,7 @@ app.post('/api/licenses/:id/screenshot', requireRole(['admin']), uploadRateLimit
     ocrError = err.message || 'OCR识别失败';
   }
   await db.run(
-    'UPDATE licenses SET screenshot_url = ?, screenshot_valid = ?, screenshot_ocr_text = ? WHERE id = ?',
+    'UPDATE licenses SET screenshot_url = ?, screenshot_valid = ?, screenshot_marked_uploaded = 0, screenshot_ocr_text = ? WHERE id = ?',
     [url, screenshotValid, ocrText || null, id]
   );
   if (license.screenshot_url && license.screenshot_url !== url) {
@@ -3095,6 +3096,34 @@ app.post('/api/licenses/:id/screenshot', requireRole(['admin']), uploadRateLimit
   });
 });
 
+app.post('/api/licenses/:id/screenshot/mark-uploaded', requireRole(['admin']), async (req, res) => {
+  const { id } = req.params;
+  const license = await db.get('SELECT * FROM licenses WHERE id = ?', [id]);
+  if (!license) {
+    return res.status(404).json({ error: '授权不存在' });
+  }
+  const okLicense = await ensureLicenseInScope(req.scope, id);
+  const authzMarkScreenshot = await authorizeReminderAction(req, 'license:screenshot:create', {
+    license_in_scope: okLicense,
+  });
+  if (!authzMarkScreenshot.allow) {
+    return res.status(403).json({ error: authzMarkScreenshot.reason || '无权限' });
+  }
+  await db.run(
+    'UPDATE licenses SET screenshot_marked_uploaded = 1, screenshot_valid = NULL, screenshot_ocr_text = NULL WHERE id = ?',
+    [id]
+  );
+  await logOperation({
+    user: req.user,
+    action: 'UPDATE',
+    entity: 'license_screenshot',
+    entityId: Number(id),
+    beforeData: { screenshot_marked_uploaded: Number(license.screenshot_marked_uploaded || 0) },
+    afterData: { screenshot_marked_uploaded: 1 },
+  });
+  res.json({ ok: true, screenshot_marked_uploaded: 1 });
+});
+
 app.delete('/api/licenses/:id/screenshot', requireRole(['admin']), async (req, res) => {
   const { id } = req.params;
   const license = await db.get('SELECT * FROM licenses WHERE id = ?', [id]);
@@ -3109,7 +3138,7 @@ app.delete('/api/licenses/:id/screenshot', requireRole(['admin']), async (req, r
     return res.status(403).json({ error: authzDeleteScreenshot.reason || '无权限' });
   }
   await db.run(
-    'UPDATE licenses SET screenshot_url = NULL, screenshot_valid = NULL, screenshot_ocr_text = NULL WHERE id = ?',
+    'UPDATE licenses SET screenshot_url = NULL, screenshot_valid = NULL, screenshot_marked_uploaded = 0, screenshot_ocr_text = NULL WHERE id = ?',
     [id]
   );
   await cleanupScreenshotFile(license.screenshot_url);
@@ -3119,7 +3148,7 @@ app.delete('/api/licenses/:id/screenshot', requireRole(['admin']), async (req, r
     entity: 'license_screenshot',
     entityId: Number(id),
     beforeData: { screenshot_url: license.screenshot_url || '' },
-    afterData: { screenshot_url: '' },
+    afterData: { screenshot_url: '', screenshot_marked_uploaded: 0 },
   });
   res.json({ ok: true });
 });

@@ -186,6 +186,7 @@ const init = async () => {
     reminder_days TEXT,
     screenshot_url VARCHAR(1024),
     screenshot_valid TINYINT,
+    screenshot_marked_uploaded TINYINT NOT NULL DEFAULT 0,
     screenshot_ocr_text TEXT,
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (customer_id) REFERENCES customers(id)
@@ -193,6 +194,7 @@ const init = async () => {
 
   await addColumnIfMissing('licenses', 'screenshot_url', 'screenshot_url VARCHAR(1024)');
   await addColumnIfMissing('licenses', 'screenshot_valid', 'screenshot_valid TINYINT');
+  await addColumnIfMissing('licenses', 'screenshot_marked_uploaded', 'screenshot_marked_uploaded TINYINT NOT NULL DEFAULT 0');
   await addColumnIfMissing('licenses', 'screenshot_ocr_text', 'screenshot_ocr_text TEXT');
 
   await run(`CREATE TABLE IF NOT EXISTS send_configs (

@@ -1948,10 +1948,24 @@ function App() {
     }
   }
 
+  const onMarkLicenseScreenshotUploaded = async (license) => {
+    if (!license?.id) return
+    try {
+      await api.post(`/api/licenses/${license.id}/screenshot/mark-uploaded`, {})
+      setModalInfo({ title: '已处理', message: '该授权已按截图已上传处理。' })
+      refreshLicenses()
+    } catch (err) {
+      setModalInfo({
+        title: '处理失败',
+        message: normalizeApiError(err) || '标记截图已上传失败',
+      })
+    }
+  }
+
   const onDeleteLicenseScreenshot = async (license) => {
     openConfirmDialog({
-      title: '删除截图',
-      message: '确认删除该截图？',
+      title: '删除截图状态',
+      message: '确认删除该截图或手动标记状态？',
       confirmLabel: '确认删除',
       onConfirm: async () => {
         try {
@@ -2942,6 +2956,9 @@ function App() {
     const diff = Math.ceil((end.getTime() - now.getTime()) / (1000 * 60 * 60 * 24))
     return Number.isNaN(diff) ? '-' : diff
   }
+
+  const hasLicenseScreenshotEvidence = (license) =>
+    Boolean(license?.screenshot_url) || Number(license?.screenshot_marked_uploaded || 0) === 1
 
   const formatDaysLeft = (value) => {
     const days = Number(value)
@@ -5152,7 +5169,7 @@ function App() {
                 </div>
               {pagedLicenses.items.map((l) => (
                 <div
-                  className={`table-row ${!l.screenshot_url ? 'missing-screenshot' : ''} ${
+                  className={`table-row ${!hasLicenseScreenshotEvidence(l) ? 'missing-screenshot' : ''} ${
                     l.screenshot_url && l.screenshot_valid === 0 ? 'invalid-screenshot' : ''
                   }`}
                   key={l.id}
@@ -5178,6 +5195,8 @@ function App() {
                         </button>
                         {l.screenshot_valid === 0 && <span className="badge-warn">异常</span>}
                       </>
+                    ) : Number(l.screenshot_marked_uploaded || 0) === 1 ? (
+                      <span className="badge-ok">已标记</span>
                     ) : (
                       <span className="text-danger">未上传</span>
                     )}
@@ -5201,9 +5220,17 @@ function App() {
                         />
                       </label>
                     )}
-                    {permissions.canWrite && l.screenshot_url && (
+                    {permissions.canWrite && !hasLicenseScreenshotEvidence(l) && (
+                      <button
+                        className="ghost btn btn-outline-secondary btn-sm"
+                        onClick={() => onMarkLicenseScreenshotUploaded(l)}
+                      >
+                        按已上传处理
+                      </button>
+                    )}
+                    {permissions.canWrite && hasLicenseScreenshotEvidence(l) && (
                       <button className="ghost btn btn-outline-secondary btn-sm" onClick={() => onDeleteLicenseScreenshot(l)}>
-                        删除截图
+                        清除截图状态
                       </button>
                     )}
                     {permissions.canDelete && (
