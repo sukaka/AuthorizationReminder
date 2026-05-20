@@ -431,8 +431,8 @@ function App() {
     name: '',
     license_id: '',
     contact_ids: [],
-    days: '60,30,20',
-    channels: ['email'],
+    days: '90,60,30,7',
+    channels: ['wecom'],
     wecom_mode: 'webhook',
     enabled: true,
     start_date: '',
@@ -492,7 +492,7 @@ function App() {
       message: '【{customer_name}】的{license_name}将于{end_date}到期，剩余{days_left}天。',
       locked: false,
     },
-    reminderSchedule: { days: '60,30,20', hour: 9, minute: 0, channels: ['email'], graceDays: 0 },
+    reminderSchedule: { days: '90,60,30,7', hour: 9, minute: 0, channels: ['wecom'], graceDays: 0 },
     retry: { maxRetries: 2, intervalMs: 2000 },
     rateLimit: { maxPerRun: 200 },
     security: normalizeSecurityConfig({
@@ -560,7 +560,7 @@ function App() {
         message: '【{customer_name}】的{license_name}将于{end_date}到期，剩余{days_left}天。',
         locked: false,
       },
-      reminderSchedule: { days: '60,30,20', hour: 9, minute: 0, channels: ['email'], graceDays: 0 },
+        reminderSchedule: { days: '90,60,30,7', hour: 9, minute: 0, channels: ['wecom'], graceDays: 0 },
       retry: { maxRetries: 2, intervalMs: 2000 },
       rateLimit: { maxPerRun: 200 },
     })
@@ -2404,8 +2404,8 @@ function App() {
         name: '',
         license_id: '',
         contact_ids: [],
-        days: '60,30,20',
-        channels: ['email'],
+        days: '90,60,30,7',
+        channels: ['wecom'],
         wecom_mode: 'webhook',
         enabled: true,
         start_date: '',
@@ -5316,7 +5316,7 @@ function App() {
                     onChange={(e) =>
                       setSendPlanForm({ ...sendPlanForm, days: e.target.value })
                     }
-                    placeholder="60,30,20"
+                    placeholder="90,60,30,7"
                     required
                     className="form-control"
                   />
@@ -5443,8 +5443,8 @@ function App() {
                           name: '',
                           license_id: '',
                           contact_ids: [],
-                          days: '60,30,20',
-                          channels: ['email'],
+                          days: '90,60,30,7',
+                          channels: ['wecom'],
                           wecom_mode: 'webhook',
                           enabled: true,
                           start_date: '',
@@ -5566,7 +5566,12 @@ function App() {
                         onChange={() => onToggleSelectPlan(plan.id)}
                       />
                     </span>
-                    <span>{plan.name}</span>
+                    <span>
+                      {plan.name}
+                      <span className={`plan-type-badge ${plan.auto_created ? 'auto' : 'manual'}`}>
+                        {plan.auto_created ? '自动' : '手动'}
+                      </span>
+                    </span>
                     <span>{plan.license_name}</span>
                     <span>
                       {plan.channels

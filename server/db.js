@@ -278,13 +278,23 @@ const init = async () => {
     channels TEXT NOT NULL,
     days TEXT NOT NULL,
     wecom_mode VARCHAR(16) NOT NULL DEFAULT 'webhook',
+    auto_created TINYINT NOT NULL DEFAULT 0,
+    auto_key VARCHAR(255),
     enabled TINYINT NOT NULL DEFAULT 1,
     start_date DATE,
     end_date DATE,
-    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE KEY uniq_send_plans_auto_key (auto_key)
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
 
   await addColumnIfMissing('send_plans', 'wecom_mode', "wecom_mode VARCHAR(16) NOT NULL DEFAULT 'webhook'");
+  await addColumnIfMissing('send_plans', 'auto_created', 'auto_created TINYINT NOT NULL DEFAULT 0');
+  await addColumnIfMissing('send_plans', 'auto_key', 'auto_key VARCHAR(255)');
+  await addIndexIfMissing(
+    'send_plans',
+    'uniq_send_plans_auto_key',
+    'CREATE UNIQUE INDEX uniq_send_plans_auto_key ON send_plans (auto_key)'
+  );
 
   await run(`CREATE TABLE IF NOT EXISTS operation_logs (
     id INT AUTO_INCREMENT PRIMARY KEY,

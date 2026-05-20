@@ -2354,14 +2354,14 @@ const normalizeScheduleConfig = (configs) => {
       .map((d) => Number(d.trim()))
       .filter((d) => Number.isFinite(d));
   }
-  if (!days.length) days = [60, 30, 20];
+  if (!days.length) days = [90, 60, 30, 7];
   const hour = Number(reminderSchedule.hour ?? 9);
   const minute = Number(reminderSchedule.minute ?? 0);
   const graceDays = Number(reminderSchedule.graceDays ?? 0);
   const channels =
     Array.isArray(reminderSchedule.channels) && reminderSchedule.channels.length
       ? reminderSchedule.channels
-      : ['email'];
+      : ['wecom'];
   return {
     days,
     hour: Number.isFinite(hour) ? hour : 9,
@@ -2486,6 +2486,106 @@ const resolveLicenseCustomerId = async ({ customerId, customerName, user }) => {
   return Number(info.insertId);
 };
 
+const DEFAULT_AUTO_REMINDER_DAYS = '90,60,30,7';
+const DEFAULT_AUTO_REMINDER_CHANNELS = ['wecom'];
+const DEFAULT_AUTO_REMINDER_WECOM_MODE = 'webhook';
+
+const uniqueIds = (items = []) =>
+  Array.from(new Set(items.map((item) => Number(item)).filter((item) => Number.isFinite(item) && item > 0)));
+
+const getActiveContactIdsForCustomer = async (customerId) => {
+  const rows = await db.query(
+    `SELECT DISTINCT contacts.id
+     FROM contacts
+     LEFT JOIN contact_customers cc ON cc.contact_id = contacts.id
+     WHERE contacts.is_active = 1
+     AND (contacts.customer_id = ? OR cc.customer_id = ?)
+     ORDER BY contacts.id ASC`,
+    [customerId, customerId]
+  );
+  return uniqueIds(rows.map((row) => row.id));
+};
+
+const syncAutoSendPlansForCustomer = async (customerId) => {
+  const normalizedCustomerId = Number(customerId);
+  if (!Number.isFinite(normalizedCustomerId) || normalizedCustomerId <= 0) return;
+
+  const licenses = await db.query(
+    `SELECT licenses.id, licenses.name, licenses.end_date, customers.name AS customer_name
+     FROM licenses
+     JOIN customers ON customers.id = licenses.customer_id
+     WHERE licenses.customer_id = ?
+     AND licenses.status = 'ACTIVE'
+     ORDER BY licenses.id ASC`,
+    [normalizedCustomerId]
+  );
+  const contactIds = await getActiveContactIdsForCustomer(normalizedCustomerId);
+  const desiredAutoKeys = licenses.map((license) => `license:${license.id}:default`);
+
+  if (!licenses.length || !contactIds.length) {
+    await db.run(
+      `DELETE send_plans
+       FROM send_plans
+       JOIN licenses ON licenses.id = send_plans.license_id
+       WHERE licenses.customer_id = ?
+       AND send_plans.auto_created = 1`,
+      [normalizedCustomerId]
+    );
+    return;
+  }
+
+  for (const license of licenses) {
+    const autoKey = `license:${license.id}:default`;
+    const planName = `${license.customer_name || '客户'} - ${license.name} - 自动到期提醒`;
+    await db.run(
+      `INSERT INTO send_plans
+        (name, license_id, contact_ids, channels, days, wecom_mode, auto_created, auto_key, enabled, start_date, end_date)
+       VALUES (?, ?, ?, ?, ?, ?, 1, ?, 1, NULL, ?)
+       ON DUPLICATE KEY UPDATE
+        name = VALUES(name),
+        license_id = VALUES(license_id),
+        contact_ids = VALUES(contact_ids),
+        channels = VALUES(channels),
+        days = VALUES(days),
+        wecom_mode = VALUES(wecom_mode),
+        enabled = VALUES(enabled),
+        start_date = VALUES(start_date),
+        end_date = VALUES(end_date)`,
+      [
+        planName,
+        license.id,
+        JSON.stringify(contactIds),
+        JSON.stringify(DEFAULT_AUTO_REMINDER_CHANNELS),
+        DEFAULT_AUTO_REMINDER_DAYS,
+        DEFAULT_AUTO_REMINDER_WECOM_MODE,
+        autoKey,
+        license.end_date || null,
+      ]
+    );
+  }
+
+  await db.run(
+    `DELETE send_plans
+     FROM send_plans
+     JOIN licenses ON licenses.id = send_plans.license_id
+     WHERE licenses.customer_id = ?
+     AND send_plans.auto_created = 1
+     AND send_plans.auto_key NOT IN (${buildInClause(desiredAutoKeys)})`,
+    [normalizedCustomerId, ...desiredAutoKeys]
+  );
+};
+
+const syncAutoSendPlansForCustomers = async (customerIds = []) => {
+  for (const customerId of uniqueIds(customerIds)) {
+    await syncAutoSendPlansForCustomer(customerId);
+  }
+};
+
+const syncAutoSendPlansForAllCustomers = async () => {
+  const rows = await db.query('SELECT id FROM customers ORDER BY id ASC');
+  await syncAutoSendPlansForCustomers(rows.map((row) => row.id));
+};
+
 // Customers
 app.get('/api/customers', requireRole(['admin']), async (req, res) => {
   const { search } = req.query;
@@ -2521,6 +2621,7 @@ app.post('/api/customers', requireRole(['admin']), async (req, res) => {
       entityId: row.id,
       afterData: row,
     });
+    await syncAutoSendPlansForCustomer(row.id);
     res.json(toJson(row));
   } catch (err) {
     res.status(400).json({ error: '客户名称已存在或数据错误' });
@@ -2555,6 +2656,7 @@ app.put('/api/customers/:id', requireRole(['admin']), async (req, res) => {
       beforeData: before,
       afterData: row,
     });
+    await syncAutoSendPlansForCustomer(row.id);
     res.json(toJson(row));
   } catch (err) {
     res.status(400).json({ error: '客户名称已存在或数据错误' });
@@ -2733,6 +2835,7 @@ app.post('/api/contacts', requireRole(['admin']), async (req, res) => {
     entityId: row.id,
     afterData: row,
   });
+  await syncAutoSendPlansForCustomers(normalizedCustomerIds);
   res.json({
     ...toJson(row),
     customer_ids: row?.customer_ids
@@ -2798,6 +2901,7 @@ app.put('/api/contacts/:id', requireRole(['admin']), async (req, res) => {
     beforeData: before,
     afterData: row,
   });
+  await syncAutoSendPlansForCustomers([...currentIds, ...normalizedCustomerIds]);
   res.json({
     ...toJson(row),
     customer_ids: row?.customer_ids
@@ -2821,6 +2925,15 @@ app.post('/api/contacts/bulk-delete', requireRole(['admin']), async (req, res) =
     filter.params
   );
   const contactIds = uniqueNumberIds(targets.map((row) => row.id));
+  const affectedCustomerRows = contactIds.length
+    ? await db.query(
+        `SELECT DISTINCT customer_id
+         FROM contact_customers
+         WHERE contact_id IN (${buildInClause(contactIds)})`,
+        contactIds
+      )
+    : [];
+  const affectedCustomerIds = affectedCustomerRows.map((row) => row.customer_id);
   const authzDeleteContact = await authorizeReminderAction(req, 'contact:delete', {
     customer_ids_in_scope: true,
   });
@@ -2843,6 +2956,7 @@ app.post('/api/contacts/bulk-delete', requireRole(['admin']), async (req, res) =
       contact_ids: contactIds,
     },
   });
+  await syncAutoSendPlansForCustomers(affectedCustomerIds);
   res.json({ ok: true, deleted: contactIds.length });
 });
 
@@ -2871,6 +2985,7 @@ app.delete('/api/contacts/:id', requireRole(['admin']), async (req, res) => {
     entityId: Number(id),
     beforeData: before,
   });
+  await syncAutoSendPlansForCustomers(currentIds);
   res.json({ ok: true });
 });
 
@@ -2977,6 +3092,7 @@ app.post('/api/licenses', requireRole(['admin']), async (req, res) => {
     entityId: row.id,
     afterData: row,
   });
+  await syncAutoSendPlansForCustomer(resolvedCustomerId);
   res.json(toJson(row));
 });
 
@@ -3027,6 +3143,7 @@ app.put('/api/licenses/:id', requireRole(['admin']), async (req, res) => {
     beforeData: before,
     afterData: row,
   });
+  await syncAutoSendPlansForCustomers([before.customer_id, resolvedCustomerId]);
   res.json(toJson(row));
 });
 
@@ -3189,13 +3306,14 @@ app.post('/api/licenses/bulk-delete', requireRole(['admin']), async (req, res) =
   const payload = parseBulkDeletePayload(req.body);
   const filter = buildLicenseBulkFilter({ mode: payload.mode, filters: payload.filters, scope: req.scope });
   const targets = await db.query(
-    `SELECT licenses.id, licenses.screenshot_url
+    `SELECT licenses.id, licenses.customer_id, licenses.screenshot_url
      FROM licenses
      JOIN customers ON customers.id = licenses.customer_id
      ${filter.whereSql}`,
     filter.params
   );
   const licenseIds = uniqueNumberIds(targets.map((row) => row.id));
+  const affectedCustomerIds = uniqueNumberIds(targets.map((row) => row.customer_id));
   const authzDeleteLicense = await authorizeReminderAction(req, 'license:delete', {
     license_in_scope: true,
   });
@@ -3219,6 +3337,7 @@ app.post('/api/licenses/bulk-delete', requireRole(['admin']), async (req, res) =
       license_ids: licenseIds,
     },
   });
+  await syncAutoSendPlansForCustomers(affectedCustomerIds);
   res.json({ ok: true, deleted: licenseIds.length });
 });
 
@@ -3241,6 +3360,7 @@ app.delete('/api/licenses/:id', requireRole(['admin']), async (req, res) => {
     entityId: Number(id),
     beforeData: before,
   });
+  await syncAutoSendPlansForCustomer(before.customer_id);
   res.json({ ok: true });
 });
 
@@ -4664,6 +4784,7 @@ app.post('/api/import/contacts', requireRole(['admin']), importRateLimiter, uplo
   let created = 0;
   let skipped = 0;
   const errors = [];
+  const affectedCustomerIds = new Set();
   let allowedNames = null;
   const customerIds = req.scope?.customerIds || [];
   if (customerIds.length) {
@@ -4734,6 +4855,7 @@ app.post('/api/import/contacts', requireRole(['admin']), importRateLimiter, uplo
         customer.id,
       ]);
       created += 1;
+      affectedCustomerIds.add(Number(customer.id));
       await logOperation({
         user: req.user,
         action: 'IMPORT',
@@ -4756,6 +4878,7 @@ app.post('/api/import/contacts', requireRole(['admin']), importRateLimiter, uplo
     total: records.length,
     errors,
   });
+  await syncAutoSendPlansForCustomers(Array.from(affectedCustomerIds));
   res.json({ ok: true, created, skipped, total: records.length, errors });
 });
 
@@ -4812,6 +4935,7 @@ app.post('/api/import/licenses', requireRole(['admin']), importRateLimiter, uplo
   let created = 0;
   let skipped = 0;
   const errors = [];
+  const affectedCustomerIds = new Set();
   for (const [index, row] of normalizedRows.entries()) {
     if (!row.customer_name || !row.name || !row.end_date) {
       skipped += 1;
@@ -4853,6 +4977,7 @@ app.post('/api/import/licenses', requireRole(['admin']), importRateLimiter, uplo
         ]
       );
       created += 1;
+      affectedCustomerIds.add(Number(customer.id));
       await logOperation({
         user: req.user,
         action: 'IMPORT',
@@ -4885,6 +5010,7 @@ app.post('/api/import/licenses', requireRole(['admin']), importRateLimiter, uplo
     total: records.length,
     errors,
   });
+  await syncAutoSendPlansForCustomers(Array.from(affectedCustomerIds));
   res.json({ ok: true, created, skipped, total: records.length, errors });
 });
 
@@ -5437,6 +5563,7 @@ const start = async () => {
   await ensureBuiltinUsers();
   await backfillOperationLogSignatures();
   await backfillOperationLogSystems();
+  await syncAutoSendPlansForAllCustomers();
   app.listen(PORT, () => {
     console.log(`Server running at http://localhost:${PORT}`);
     startReminderCron();
