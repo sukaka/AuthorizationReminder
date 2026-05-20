@@ -110,6 +110,7 @@ const tabs = [
   { key: 'contacts', label: '联系人管理' },
   { key: 'licenses', label: '授权管理' },
   { key: 'sales-licenses', label: '销售授权' },
+  { key: 'my-licenses', label: '我的授权' },
   { key: 'send', label: '发送' },
   { key: 'reminders', label: '提醒记录' },
   { key: 'imports', label: '导入记录' },
@@ -370,6 +371,8 @@ function App() {
   const [contactPage, setContactPage] = useState(1)
   const [licenses, setLicenses] = useState([])
   const [licensePage, setLicensePage] = useState(1)
+  const [myLicenses, setMyLicenses] = useState([])
+  const [myLicensesLoading, setMyLicensesLoading] = useState(false)
   const [salesLicenseOverview, setSalesLicenseOverview] = useState([])
   const [salesLicenseLoading, setSalesLicenseLoading] = useState(false)
   const [customerForm, setCustomerForm] = useState(emptyCustomer)
@@ -787,8 +790,8 @@ function App() {
     if (role === 'editor') return '标书编辑角色：可用于标书协同制作系统文档编写、模板与AI能力，提醒系统默认仅开放账号页。'
     if (role === 'sysadmin') return '仅可维护账号、安全策略和用户，不展示业务数据菜单。'
     if (role === 'auditor') return '仅可访问操作日志与审计相关能力，不允许业务写操作。'
-    if (role === 'user') return '仅可查看账号安全页，若需更多权限请联系管理员。'
-    if (role === 'sales') return '当前为兼容角色，默认仅开放账号安全页。'
+    if (role === 'user') return '可查看与本人联系方式匹配的客户授权，也可维护账号安全。'
+    if (role === 'sales') return '可查看与本人联系方式匹配的客户授权，也可维护账号安全。'
     return '请根据角色授权使用系统功能。'
   }, [currentRole])
 
@@ -804,6 +807,7 @@ function App() {
     if (tab.key === 'send' || tab.key === 'reminders') return permissions.canSend
     if (tab.key === 'imports') return permissions.canWrite
     if (tab.key === 'ops') return permissions.canAudit
+    if (tab.key === 'my-licenses') return true
     if (tab.key === 'account') return true
     return false
   })
@@ -1088,6 +1092,18 @@ function App() {
     setLicenses(data)
   }
 
+  const refreshMyLicenses = async () => {
+    setMyLicensesLoading(true)
+    try {
+      const data = await api.get('/api/my/licenses')
+      setMyLicenses(Array.isArray(data) ? data : [])
+    } catch (err) {
+      showError('我的授权加载失败')
+    } finally {
+      setMyLicensesLoading(false)
+    }
+  }
+
   const refreshSalesLicenseOverview = async () => {
     if (!permissions.canBusinessRead) return
     setSalesLicenseLoading(true)
@@ -1298,6 +1314,7 @@ function App() {
 
   useEffect(() => {
     if (!authToken) return
+    refreshMyLicenses()
     if (permissions.canBusinessRead) {
       refreshCustomers()
       refreshContacts()
@@ -1324,6 +1341,12 @@ function App() {
       refreshOperationLogs()
     }
   }, [authToken, permissions])
+
+  useEffect(() => {
+    if (!authToken) return
+    if (activeTab !== 'my-licenses') return
+    refreshMyLicenses()
+  }, [activeTab, authToken])
 
   useEffect(() => {
     if (!authToken) return
@@ -3758,6 +3781,46 @@ function App() {
         )}
 
         <main>
+        {activeTab === 'my-licenses' && (
+          <section className="panel my-licenses-panel">
+            <div className="panel-header">
+              <div>
+                <h2>我的授权</h2>
+                <p>仅展示与当前账号手机号、邮箱或企业微信匹配的客户授权。</p>
+              </div>
+              <div className="panel-actions">
+                <button className="ghost btn btn-outline-secondary" onClick={refreshMyLicenses} disabled={myLicensesLoading}>
+                  {myLicensesLoading ? '刷新中...' : '刷新'}
+                </button>
+              </div>
+            </div>
+            <div className="my-license-grid">
+              {myLicenses.map((license) => (
+                <div className="my-license-card" key={`${license.customer_id}-${license.license_id}`}>
+                  <div className="my-license-card-head">
+                    <div>
+                      <h3>{license.customer_name}</h3>
+                      <p>{license.license_name}</p>
+                    </div>
+                    <span className={`days-pill ${daysLeftTone(license.days_left)}`}>
+                      {formatDaysLeft(license.days_left)}
+                    </span>
+                  </div>
+                  <div className="my-license-meta">
+                    <span>到期日期：{license.end_date || '-'}</span>
+                    <span>授权状态：{licenseStatusLabel(license.status)}</span>
+                    <span>匹配联系人：{license.contact_name || '-'}</span>
+                  </div>
+                </div>
+              ))}
+              {!myLicensesLoading && myLicenses.length === 0 && (
+                <div className="empty-state">
+                  暂无匹配授权。请确认当前账号的手机号、邮箱或企业微信与联系人管理中的信息一致。
+                </div>
+              )}
+            </div>
+          </section>
+        )}
         {activeTab === 'dashboard' && (
           <section className="panel">
             <div className="panel-header">

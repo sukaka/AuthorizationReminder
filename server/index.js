@@ -3052,6 +3052,73 @@ app.get('/api/licenses/expiring', requireRole(['admin']), async (req, res) => {
   res.json(rows);
 });
 
+app.get('/api/my/licenses', async (req, res) => {
+  const user = await db.get(
+    'SELECT id, phone, email, wecom_id FROM users WHERE id = ?',
+    [req.user.id]
+  );
+  if (!user) return res.json([]);
+
+  const identityChecks = [];
+  const params = [];
+  const phone = String(user.phone || '').trim();
+  const email = String(user.email || '').trim();
+  const wecomId = String(user.wecom_id || '').trim();
+  if (phone) {
+    identityChecks.push('contacts.phone = ?');
+    params.push(phone);
+  }
+  if (email) {
+    identityChecks.push('contacts.email = ?');
+    params.push(email);
+  }
+  if (wecomId) {
+    identityChecks.push('contacts.wecom_id = ?');
+    params.push(wecomId);
+  }
+  if (!identityChecks.length) return res.json([]);
+
+  const rows = await db.query(
+    `SELECT DISTINCT
+      customers.id AS customer_id,
+      customers.name AS customer_name,
+      licenses.id AS license_id,
+      licenses.name AS license_name,
+      licenses.start_date,
+      licenses.end_date,
+      licenses.status,
+      DATEDIFF(licenses.end_date, CURDATE()) AS days_left,
+      contacts.id AS contact_id,
+      contacts.name AS contact_name
+     FROM contacts
+     JOIN (
+       SELECT contact_id, customer_id FROM contact_customers
+       UNION
+       SELECT id AS contact_id, customer_id FROM contacts
+     ) contact_links ON contact_links.contact_id = contacts.id
+     JOIN customers ON customers.id = contact_links.customer_id
+     JOIN licenses ON licenses.customer_id = customers.id
+     WHERE contacts.is_active = 1
+     AND (${identityChecks.join(' OR ')})
+     ORDER BY days_left ASC, licenses.end_date ASC, customers.name ASC, licenses.name ASC`,
+    params
+  );
+  res.json(
+    rows.map((row) => ({
+      customer_id: row.customer_id,
+      customer_name: row.customer_name,
+      license_id: row.license_id,
+      license_name: row.license_name,
+      start_date: row.start_date,
+      end_date: row.end_date,
+      status: row.status,
+      days_left: row.days_left === null || row.days_left === undefined ? null : Number(row.days_left),
+      contact_id: row.contact_id,
+      contact_name: row.contact_name,
+    }))
+  );
+});
+
 app.post('/api/licenses', requireRole(['admin']), async (req, res) => {
   const { customer_id, customer_name, name, start_date, end_date, status, note, reminder_days } = req.body;
   if (!customer_id && !String(customer_name || '').trim()) {
