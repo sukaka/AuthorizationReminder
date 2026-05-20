@@ -109,6 +109,7 @@ const tabs = [
   { key: 'customers', label: '客户管理' },
   { key: 'contacts', label: '联系人管理' },
   { key: 'licenses', label: '授权管理' },
+  { key: 'sales-licenses', label: '销售授权' },
   { key: 'send', label: '发送' },
   { key: 'reminders', label: '提醒记录' },
   { key: 'imports', label: '导入记录' },
@@ -369,6 +370,8 @@ function App() {
   const [contactPage, setContactPage] = useState(1)
   const [licenses, setLicenses] = useState([])
   const [licensePage, setLicensePage] = useState(1)
+  const [salesLicenseOverview, setSalesLicenseOverview] = useState([])
+  const [salesLicenseLoading, setSalesLicenseLoading] = useState(false)
   const [customerForm, setCustomerForm] = useState(emptyCustomer)
   const [contactForm, setContactForm] = useState(emptyContact)
   const [contactCustomerInput, setContactCustomerInput] = useState('')
@@ -792,7 +795,9 @@ function App() {
   const visibleTabs = tabs.filter((tab) => {
     if (isAuditOnlyUser) return tab.key === 'ops'
     if (tab.key === 'dashboard') return permissions.canDashboard
-    if (tab.key === 'customers' || tab.key === 'contacts' || tab.key === 'licenses') return permissions.canBusinessRead
+    if (tab.key === 'customers' || tab.key === 'contacts' || tab.key === 'licenses' || tab.key === 'sales-licenses') {
+      return permissions.canBusinessRead
+    }
     if (tab.key === 'config') return permissions.canConfig
     if (tab.key === 'security') return permissions.canManageSecurity
     if (tab.key === 'users') return permissions.canManageUsers
@@ -1083,6 +1088,19 @@ function App() {
     setLicenses(data)
   }
 
+  const refreshSalesLicenseOverview = async () => {
+    if (!permissions.canBusinessRead) return
+    setSalesLicenseLoading(true)
+    try {
+      const data = await api.get('/api/sales-license-overview')
+      setSalesLicenseOverview(Array.isArray(data) ? data : [])
+    } catch (err) {
+      showError('销售授权总览加载失败')
+    } finally {
+      setSalesLicenseLoading(false)
+    }
+  }
+
   const refreshReminderLogs = async () => {
     if (!permissions.canSend) return
     const params = new URLSearchParams()
@@ -1159,6 +1177,28 @@ function App() {
       URL.revokeObjectURL(url)
     } catch (err) {
       showError('操作日志导出失败')
+    }
+  }
+
+  const exportSalesLicenseOverview = async () => {
+    if (!permissions.canBusinessRead) return
+    try {
+      const res = await fetch('/api/sales-license-overview/export', {
+        credentials: 'include',
+      })
+      if (!res.ok) throw new Error('导出失败')
+      const blob = await res.blob()
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `sales_license_overview_${new Date().toISOString().slice(0, 10)}.csv`
+      document.body.appendChild(a)
+      a.click()
+      a.remove()
+      URL.revokeObjectURL(url)
+      showMessage('销售授权总览已导出')
+    } catch (err) {
+      showError('销售授权总览导出失败')
     }
   }
 
@@ -1262,6 +1302,7 @@ function App() {
       refreshCustomers()
       refreshContacts()
       refreshLicenses()
+      refreshSalesLicenseOverview()
     }
     if (permissions.canSend) {
       refreshReminderLogs()
@@ -1357,6 +1398,13 @@ function App() {
     authToken,
     permissions.canBusinessRead,
   ])
+
+  useEffect(() => {
+    if (!authToken) return
+    if (!permissions.canBusinessRead) return
+    if (activeTab !== 'sales-licenses') return
+    refreshSalesLicenseOverview()
+  }, [activeTab, authToken, permissions.canBusinessRead])
 
   const showMessage = (text) => {
     setMessage(text)
@@ -1670,6 +1718,7 @@ function App() {
       }
       setCustomerForm(emptyCustomer)
       refreshCustomers()
+      refreshSalesLicenseOverview()
     } catch (err) {
       showError('客户保存失败')
     }
@@ -1694,6 +1743,7 @@ function App() {
           await api.del(`/api/customers/${id}`)
           showMessage('客户已删除')
           refreshCustomers()
+          refreshSalesLicenseOverview()
         } catch (err) {
           showError('该客户下有联系人，无法删除')
         }
@@ -1810,6 +1860,7 @@ function App() {
       setLicenseCustomerOpen(false)
       refreshCustomers()
       refreshLicenses()
+      refreshSalesLicenseOverview()
     } catch (err) {
       showError('授权保存失败')
     }
@@ -1842,6 +1893,7 @@ function App() {
           await api.del(`/api/licenses/${id}`)
           showMessage('授权已删除')
           refreshLicenses()
+          refreshSalesLicenseOverview()
         } catch (err) {
           showError('授权删除失败')
         }
@@ -2655,6 +2707,7 @@ function App() {
       showMessage('授权导入完成')
       refreshCustomers()
       refreshLicenses()
+      refreshSalesLicenseOverview()
     } catch (err) {
       showError(err.message || '授权导入失败')
     }
@@ -2888,6 +2941,28 @@ function App() {
     const now = new Date()
     const diff = Math.ceil((end.getTime() - now.getTime()) / (1000 * 60 * 60 * 24))
     return Number.isNaN(diff) ? '-' : diff
+  }
+
+  const formatDaysLeft = (value) => {
+    const days = Number(value)
+    if (!Number.isFinite(days)) return '无到期日'
+    if (days > 0) return `还剩 ${days} 天`
+    if (days === 0) return '今天到期'
+    return `已过期 ${Math.abs(days)} 天`
+  }
+
+  const daysLeftTone = (value) => {
+    const days = Number(value)
+    if (!Number.isFinite(days)) return 'neutral'
+    if (days < 0) return 'danger'
+    if (days <= 30) return 'warning'
+    return 'success'
+  }
+
+  const licenseStatusLabel = (value) => {
+    if (value === 'ACTIVE') return '有效'
+    if (value === 'EXPIRED') return '已过期'
+    return value || '-'
   }
 
   const channelLabel = (key) => {
@@ -3265,6 +3340,24 @@ function App() {
     const preview = changes.slice(0, 3).join('；')
     return changes.length > 3 ? `${preview}；等${changes.length}项变更` : preview
   }
+
+  const salesLicenseSummary = useMemo(() => {
+    return salesLicenseOverview.reduce(
+      (acc, group) => {
+        acc.sales += 1
+        acc.customers += Number(group.customer_count || 0)
+        acc.licenses += Number(group.license_count || 0)
+        if (group.min_days_left !== null && group.min_days_left !== undefined) {
+          const days = Number(group.min_days_left)
+          if (Number.isFinite(days)) {
+            acc.minDaysLeft = acc.minDaysLeft === null ? days : Math.min(acc.minDaysLeft, days)
+          }
+        }
+        return acc
+      },
+      { sales: 0, customers: 0, licenses: 0, minDaysLeft: null }
+    )
+  }, [salesLicenseOverview])
 
   const dashboardLicenseView = useMemo(() => {
     const filtered = licenses.filter((l) => {
@@ -4129,6 +4222,92 @@ function App() {
             
           </section>
         )}
+        {activeTab === 'sales-licenses' && (
+          <section className="panel sales-license-panel">
+            <div className="panel-header">
+              <div>
+                <h2>销售授权</h2>
+                <p>按聚信销售查看名下客户与每个客户的授权到期情况。</p>
+              </div>
+              <div className="panel-actions">
+                <button className="ghost btn btn-outline-secondary" onClick={refreshSalesLicenseOverview} disabled={salesLicenseLoading}>
+                  {salesLicenseLoading ? '刷新中...' : '刷新'}
+                </button>
+                <button className="primary btn btn-primary" onClick={exportSalesLicenseOverview}>
+                  导出数据
+                </button>
+              </div>
+            </div>
+            <div className="sales-license-summary">
+              <div>
+                <strong>{salesLicenseSummary.sales}</strong>
+                <span>聚信销售</span>
+              </div>
+              <div>
+                <strong>{salesLicenseSummary.customers}</strong>
+                <span>客户</span>
+              </div>
+              <div>
+                <strong>{salesLicenseSummary.licenses}</strong>
+                <span>授权</span>
+              </div>
+              <div>
+                <strong>{formatDaysLeft(salesLicenseSummary.minDaysLeft)}</strong>
+                <span>最近到期</span>
+              </div>
+            </div>
+            <div className="sales-license-groups">
+              {salesLicenseOverview.map((group) => (
+                <div className="sales-license-group" key={group.sales_name}>
+                  <div className="sales-license-group-head">
+                    <div>
+                      <h3>{group.sales_name}</h3>
+                      <p>
+                        {Number(group.customer_count || 0)} 个客户 / {Number(group.license_count || 0)} 个授权
+                      </p>
+                    </div>
+                    <span className={`days-pill ${daysLeftTone(group.min_days_left)}`}>
+                      {formatDaysLeft(group.min_days_left)}
+                    </span>
+                  </div>
+                  <div className="sales-license-customers">
+                    {(group.customers || []).map((customer) => (
+                      <div className="sales-license-customer" key={customer.customer_id}>
+                        <div className="sales-license-customer-head">
+                          <div>
+                            <strong>{customer.customer_name}</strong>
+                            <span>{Number(customer.license_count || 0)} 个授权</span>
+                          </div>
+                          <span className={`days-pill ${daysLeftTone(customer.min_days_left)}`}>
+                            {formatDaysLeft(customer.min_days_left)}
+                          </span>
+                        </div>
+                        <div className="sales-license-list">
+                          {(customer.licenses || []).length === 0 && (
+                            <div className="sales-license-empty">暂无授权</div>
+                          )}
+                          {(customer.licenses || []).map((license) => (
+                            <div className="sales-license-row" key={license.id}>
+                              <span className="sales-license-name">{license.name}</span>
+                              <span>{license.end_date || '-'}</span>
+                              <span className={`days-pill ${daysLeftTone(license.days_left)}`}>
+                                {formatDaysLeft(license.days_left)}
+                              </span>
+                              <span>{licenseStatusLabel(license.status)}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ))}
+              {!salesLicenseLoading && salesLicenseOverview.length === 0 && (
+                <div className="empty-state">暂无销售授权数据</div>
+              )}
+            </div>
+          </section>
+        )}
         {activeTab === 'customers' && (
           <section className="panel">
             <div className="panel-header">
@@ -4194,7 +4373,13 @@ function App() {
                         filters: { search: customerSearch },
                         count: customers.length,
                         onDone: async () => {
-                          await Promise.all([refreshCustomers(), refreshContacts(), refreshLicenses(), refreshSendPlans()])
+                          await Promise.all([
+                            refreshCustomers(),
+                            refreshContacts(),
+                            refreshLicenses(),
+                            refreshSendPlans(),
+                            refreshSalesLicenseOverview(),
+                          ])
                         },
                       })
                     }
@@ -4214,7 +4399,13 @@ function App() {
                         filters: {},
                         count: Math.max(customers.length, 1),
                         onDone: async () => {
-                          await Promise.all([refreshCustomers(), refreshContacts(), refreshLicenses(), refreshSendPlans()])
+                          await Promise.all([
+                            refreshCustomers(),
+                            refreshContacts(),
+                            refreshLicenses(),
+                            refreshSendPlans(),
+                            refreshSalesLicenseOverview(),
+                          ])
                         },
                       })
                     }
@@ -4755,7 +4946,12 @@ function App() {
                         },
                         count: licenses.length,
                         onDone: async () => {
-                          await Promise.all([refreshLicenses(), refreshSendPlans(), refreshReminderLogs()])
+                          await Promise.all([
+                            refreshLicenses(),
+                            refreshSendPlans(),
+                            refreshReminderLogs(),
+                            refreshSalesLicenseOverview(),
+                          ])
                         },
                       })
                     }
@@ -4775,7 +4971,12 @@ function App() {
                         filters: {},
                         count: Math.max(licenses.length, 1),
                         onDone: async () => {
-                          await Promise.all([refreshLicenses(), refreshSendPlans(), refreshReminderLogs()])
+                          await Promise.all([
+                            refreshLicenses(),
+                            refreshSendPlans(),
+                            refreshReminderLogs(),
+                            refreshSalesLicenseOverview(),
+                          ])
                         },
                       })
                     }

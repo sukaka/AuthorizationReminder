@@ -5049,6 +5049,119 @@ app.get('/api/dashboard', requireRole(['admin']), async (req, res) => {
   });
 });
 
+const fetchSalesLicenseOverviewRows = async (scope) => {
+  const where = [];
+  const params = [];
+  applyScopeFilter({ scope, where, params, column: 'customers.id' });
+  const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
+  return db.query(
+    `SELECT
+      COALESCE(NULLIF(customers.juxin_sales, ''), '未分配聚信销售') AS sales_name,
+      customers.id AS customer_id,
+      customers.name AS customer_name,
+      licenses.id AS license_id,
+      licenses.name AS license_name,
+      licenses.end_date AS end_date,
+      licenses.status AS license_status,
+      DATEDIFF(licenses.end_date, CURDATE()) AS days_left
+     FROM customers
+     LEFT JOIN licenses ON licenses.customer_id = customers.id
+     ${whereSql}
+     ORDER BY sales_name ASC,
+      customers.name ASC,
+      CASE WHEN licenses.id IS NULL THEN 1 ELSE 0 END ASC,
+      days_left ASC,
+      licenses.end_date ASC,
+      licenses.id ASC`,
+    params
+  );
+};
+
+const buildSalesLicenseOverview = (rows = []) => {
+  const salesMap = new Map();
+  rows.forEach((row) => {
+    const salesName = row.sales_name || '未分配聚信销售';
+    if (!salesMap.has(salesName)) {
+      salesMap.set(salesName, {
+        sales_name: salesName,
+        customer_count: 0,
+        license_count: 0,
+        min_days_left: null,
+        customers: [],
+        customerMap: new Map(),
+      });
+    }
+    const group = salesMap.get(salesName);
+    const customerKey = String(row.customer_id);
+    if (!group.customerMap.has(customerKey)) {
+      const customer = {
+        customer_id: row.customer_id,
+        customer_name: row.customer_name,
+        license_count: 0,
+        min_days_left: null,
+        licenses: [],
+      };
+      group.customerMap.set(customerKey, customer);
+      group.customers.push(customer);
+      group.customer_count += 1;
+    }
+    if (!row.license_id) return;
+
+    const customer = group.customerMap.get(customerKey);
+    const daysLeft = row.days_left === null || row.days_left === undefined ? null : Number(row.days_left);
+    const license = {
+      id: row.license_id,
+      name: row.license_name,
+      end_date: row.end_date,
+      status: row.license_status,
+      days_left: Number.isFinite(daysLeft) ? daysLeft : null,
+    };
+    customer.licenses.push(license);
+    customer.license_count += 1;
+    group.license_count += 1;
+    if (license.days_left !== null) {
+      customer.min_days_left = customer.min_days_left === null ? license.days_left : Math.min(customer.min_days_left, license.days_left);
+      group.min_days_left = group.min_days_left === null ? license.days_left : Math.min(group.min_days_left, license.days_left);
+    }
+  });
+
+  return Array.from(salesMap.values()).map(({ customerMap, ...group }) => group);
+};
+
+const licenseStatusZh = (value) => {
+  if (value === 'ACTIVE') return '有效';
+  if (value === 'EXPIRED') return '已过期';
+  return value || '';
+};
+
+app.get('/api/sales-license-overview', requireRole(['admin']), async (req, res) => {
+  const rows = await fetchSalesLicenseOverviewRows(req.scope);
+  res.json(buildSalesLicenseOverview(rows));
+});
+
+app.get('/api/sales-license-overview/export', requireRole(['admin']), async (req, res) => {
+  const rows = await fetchSalesLicenseOverviewRows(req.scope);
+  const exportRows = rows.map((row) => ({
+    sales_name: row.sales_name || '未分配聚信销售',
+    customer_name: row.customer_name || '',
+    license_name: row.license_id ? row.license_name : '无授权',
+    end_date: row.license_id ? row.end_date : '',
+    days_left: row.license_id && row.days_left !== null && row.days_left !== undefined ? row.days_left : '',
+    status: row.license_id ? licenseStatusZh(row.license_status) : '',
+  }));
+  const csv = toCsv(exportRows, [
+    { key: 'sales_name', label: '聚信销售' },
+    { key: 'customer_name', label: '客户名称' },
+    { key: 'license_name', label: '授权名称' },
+    { key: 'end_date', label: '到期日期' },
+    { key: 'days_left', label: '剩余天数' },
+    { key: 'status', label: '授权状态' },
+  ]);
+  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+  res.setHeader('Content-Disposition', 'attachment; filename="sales_license_overview.csv"');
+  res.send(csv);
+});
+
 app.get('/api/reminder-logs', requireRole(['admin']), async (req, res) => {
   const { customer_id, status, days_left, date_from, date_to, is_test, error_code } = req.query;
   const where = [];
