@@ -69,6 +69,16 @@ const CUSTOMER_IMPORT_TEMPLATE_SAMPLE_ROW = Object.freeze({
   聚信销售: '张三',
   渠道销售: '李四',
 });
+const LICENSE_IMPORT_TEMPLATE_HEADERS = Object.freeze(['客户名称', '授权名称', '开始日期', '到期日期', '状态', '备注', '提醒天数']);
+const LICENSE_IMPORT_TEMPLATE_SAMPLE_ROW = Object.freeze({
+  客户名称: '示例客户有限公司',
+  授权名称: '云桌面授权',
+  开始日期: '2026-01-01',
+  到期日期: '2026-12-31',
+  状态: '有效',
+  备注: '合同编号：HT-2026-001',
+  提醒天数: '60,30,7',
+});
 
 const normalizeImportRole = (value) => {
   const text = trimText(value);
@@ -106,6 +116,38 @@ const normalizeUserImportRow = (raw = {}) => ({
   phone: trimText(pickFirst(raw, ['phone', '手机号'])),
   wecom_id: trimText(pickFirst(raw, ['wecom_id', 'wecomId', '企业微信UserID', '企业微信userid', '企业微信ID', '企业微信id'])),
   app_access: splitImportAccess(pickFirst(raw, ['app_access', '可访问系统', '系统权限'])),
+});
+
+const normalizeImportDate = (value) => {
+  if (value instanceof Date && !Number.isNaN(value.getTime())) {
+    const year = value.getFullYear();
+    const month = pad2(value.getMonth() + 1);
+    const day = pad2(value.getDate());
+    return `${year}-${month}-${day}`;
+  }
+  const text = trimText(value);
+  if (!text) return '';
+  const normalized = text.replace(/[./]/g, '-');
+  const match = normalized.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+  if (!match) return text;
+  return `${match[1]}-${pad2(match[2])}-${pad2(match[3])}`;
+};
+
+const normalizeLicenseImportStatus = (value) => {
+  const text = trimText(value).toLowerCase();
+  if (!text) return 'ACTIVE';
+  if (['expired', '已过期', '过期', '失效', '无效'].includes(text)) return 'EXPIRED';
+  return 'ACTIVE';
+};
+
+const normalizeLicenseImportRow = (raw = {}) => ({
+  customer_name: trimText(pickFirst(raw, ['customer_name', 'customer', '客户名称', '客户'])),
+  name: trimText(pickFirst(raw, ['name', 'license_name', '授权名称', '授权'])),
+  start_date: normalizeImportDate(pickFirst(raw, ['start_date', '开始日期', '开始时间'])),
+  end_date: normalizeImportDate(pickFirst(raw, ['end_date', '到期日期', '到期时间', '失效日期'])),
+  status: normalizeLicenseImportStatus(pickFirst(raw, ['status', '状态'])),
+  note: trimText(pickFirst(raw, ['note', '备注'])),
+  reminder_days: trimText(pickFirst(raw, ['reminder_days', '提醒天数'])),
 });
 
 const IMPORT_INITIAL_PASSWORD = '!b$#+^o9uF';
@@ -184,6 +226,16 @@ const buildCustomerImportTemplateWorkbook = () => {
   ]);
   const workbook = xlsx.utils.book_new();
   xlsx.utils.book_append_sheet(workbook, sheet, 'customers');
+  return xlsx.write(workbook, { type: 'buffer', bookType: 'xlsx' });
+};
+
+const buildLicenseImportTemplateWorkbook = () => {
+  const sheet = xlsx.utils.aoa_to_sheet([
+    LICENSE_IMPORT_TEMPLATE_HEADERS,
+    LICENSE_IMPORT_TEMPLATE_HEADERS.map((key) => LICENSE_IMPORT_TEMPLATE_SAMPLE_ROW[key] ?? ''),
+  ]);
+  const workbook = xlsx.utils.book_new();
+  xlsx.utils.book_append_sheet(workbook, sheet, 'licenses');
   return xlsx.write(workbook, { type: 'buffer', bookType: 'xlsx' });
 };
 
@@ -321,6 +373,8 @@ module.exports = {
   buildUserImportWorkbook,
   buildUserImportTemplateWorkbook,
   buildCustomerImportTemplateWorkbook,
+  buildLicenseImportTemplateWorkbook,
+  normalizeLicenseImportRow,
   importUsersFromRows,
   splitImportAccess,
   normalizeImportActive,

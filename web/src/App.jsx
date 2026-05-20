@@ -581,10 +581,12 @@ function App() {
   })
   const [customerImportResult, setCustomerImportResult] = useState(null)
   const [contactImportResult, setContactImportResult] = useState(null)
+  const [licenseImportResult, setLicenseImportResult] = useState(null)
   const [userImportResult, setUserImportResult] = useState(null)
   const [userImportUploading, setUserImportUploading] = useState(false)
   const [userImportTemplateDownloading, setUserImportTemplateDownloading] = useState(false)
   const [customerImportTemplateDownloading, setCustomerImportTemplateDownloading] = useState(false)
+  const [licenseImportTemplateDownloading, setLicenseImportTemplateDownloading] = useState(false)
   const [message, setMessage] = useState('')
   const [error, setError] = useState('')
   const [csrfToken, setCsrfToken] = useState('')
@@ -2555,6 +2557,33 @@ function App() {
     }
   }
 
+  const onImportLicenses = async (file) => {
+    if (!file) return
+    const formData = new FormData()
+    formData.append('file', file)
+    try {
+      const res = await fetch('/api/import/licenses', {
+        method: 'POST',
+        headers: {
+          ...(csrfToken ? { 'X-CSRF-Token': csrfToken } : {}),
+        },
+        credentials: 'include',
+        body: formData,
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || '导入失败')
+      setLicenseImportResult(data)
+      if (data.errors?.length) {
+        showError(`授权导入有 ${data.errors.length} 条错误`)
+      }
+      showMessage('授权导入完成')
+      refreshCustomers()
+      refreshLicenses()
+    } catch (err) {
+      showError(err.message || '授权导入失败')
+    }
+  }
+
   const triggerUserImportDownload = (blob, filename) => {
     const downloadUrl = window.URL.createObjectURL(blob)
     const link = document.createElement('a')
@@ -2678,6 +2707,40 @@ function App() {
       })
     } finally {
       setCustomerImportTemplateDownloading(false)
+    }
+  }
+
+  const onDownloadLicenseImportTemplate = async () => {
+    if (licenseImportTemplateDownloading) return
+
+    setLicenseImportTemplateDownloading(true)
+    try {
+      const res = await fetch('/api/import/licenses/template.xlsx', {
+        credentials: 'include',
+      })
+      const blob = await res.blob()
+      if (!res.ok) {
+        let text = ''
+        try {
+          text = await blob.text()
+        } catch {
+          text = ''
+        }
+        throw new Error(text || '下载授权导入模板失败')
+      }
+
+      const fileName = readUserImportDownloadFilename(res.headers, 'license-import-template.xlsx')
+      triggerUserImportDownload(blob, fileName)
+      showMessage('授权导入模板已开始下载')
+    } catch (err) {
+      const msg = normalizeApiError(err) || '下载授权导入模板失败'
+      showError(msg)
+      setModalInfo({
+        title: '授权导入模板下载失败',
+        message: msg,
+      })
+    } finally {
+      setLicenseImportTemplateDownloading(false)
     }
   }
 
@@ -4499,6 +4562,43 @@ function App() {
               <h2>授权管理</h2>
               <p>维护授权到期信息，支持提醒与筛选。</p>
             </div>
+            <div className="import-row">
+              <label className="import-btn">
+                批量导入（CSV/XLSX）
+                <input
+                  type="file"
+                  accept=".csv,.xlsx,.xls"
+                  onChange={(e) => onImportLicenses(e.target.files?.[0])}
+                />
+              </label>
+              <button
+                type="button"
+                className="ghost btn btn-outline-secondary"
+                disabled={licenseImportTemplateDownloading}
+                onClick={onDownloadLicenseImportTemplate}
+              >
+                {licenseImportTemplateDownloading ? '模板下载中...' : '下载授权导入模板'}
+              </button>
+              <span className="muted">模板列：客户名称、授权名称、开始日期、到期日期、状态、备注、提醒天数。</span>
+              {licenseImportResult && (
+                <span className="muted">
+                  导入：{licenseImportResult.created} 成功 / {licenseImportResult.skipped} 跳过
+                </span>
+              )}
+            </div>
+            {licenseImportResult?.errors?.length > 0 && (
+              <div className="import-errors">
+                <div className="import-errors-title">导入错误明细</div>
+                {licenseImportResult.errors.slice(0, 10).map((err, idx) => (
+                  <div key={idx} className="import-errors-item">
+                    行 {err.row}：{err.reason}
+                  </div>
+                ))}
+                {licenseImportResult.errors.length > 10 && (
+                  <div className="muted">仅展示前 10 条错误</div>
+                )}
+              </div>
+            )}
             <div className="filter-row">
               <input
                 value={licenseSearch}

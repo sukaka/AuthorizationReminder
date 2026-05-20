@@ -944,6 +944,7 @@ const authorizeReminder = (user, action, resource) => {
     action === 'license:delete' ||
     action === 'license:screenshot:create' ||
     action === 'license:screenshot:delete' ||
+    action === 'import:licenses' ||
     action === 'reminder-log:resend'
   ) {
     return bool(resource?.license_in_scope) ? allow() : deny();

@@ -41,6 +41,8 @@ const {
   buildUserImportWorkbook,
   buildUserImportTemplateWorkbook,
   buildCustomerImportTemplateWorkbook,
+  buildLicenseImportTemplateWorkbook,
+  normalizeLicenseImportRow,
   importUsersFromRows,
   isUserImportExcelFile,
 } = require('./user-import');
@@ -1814,6 +1816,21 @@ app.get('/api/import/customers/template.xlsx', requireRole(['admin']), async (re
   }
   const download = buildDownloadHeaderMeta('客户导入模板.xlsx', 'customer-import-template.xlsx');
   const workbookBuffer = buildCustomerImportTemplateWorkbook();
+  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  res.setHeader('Content-Disposition', download.contentDisposition);
+  res.setHeader('X-Import-Filename', download.encodedFileName);
+  res.send(workbookBuffer);
+});
+
+app.get('/api/import/licenses/template.xlsx', requireRole(['admin']), async (req, res) => {
+  const authzImportLicenses = await authorizeReminderAction(req, 'import:licenses', {
+    license_in_scope: true,
+  });
+  if (!authzImportLicenses.allow) {
+    return res.status(403).json({ error: authzImportLicenses.reason || '无权限' });
+  }
+  const download = buildDownloadHeaderMeta('授权导入模板.xlsx', 'license-import-template.xlsx');
+  const workbookBuffer = buildLicenseImportTemplateWorkbook();
   res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
   res.setHeader('Content-Disposition', download.contentDisposition);
   res.setHeader('X-Import-Filename', download.encodedFileName);
@@ -4672,6 +4689,135 @@ app.post('/api/import/contacts', requireRole(['admin']), importRateLimiter, uplo
   await insertImportJob({
     user: req.user,
     type: 'contacts',
+    filename: req.file?.originalname,
+    status: 'DONE',
+    created,
+    skipped,
+    total: records.length,
+    errors,
+  });
+  res.json({ ok: true, created, skipped, total: records.length, errors });
+});
+
+app.post('/api/import/licenses', requireRole(['admin']), importRateLimiter, upload.single('file'), async (req, res) => {
+  if (!req.file) {
+    return res.status(400).json({ error: '请上传CSV或Excel文件' });
+  }
+  let records = [];
+  try {
+    records = parseImportFile(req.file);
+  } catch (err) {
+    await insertImportJob({
+      user: req.user,
+      type: 'licenses',
+      filename: req.file?.originalname,
+      status: 'FAILED',
+      errorMessage: '文件解析失败',
+    });
+    return res.status(400).json({ error: '文件解析失败' });
+  }
+
+  let allowedNames = null;
+  const customerIds = req.scope?.customerIds || [];
+  if (customerIds.length) {
+    const rows = await db.query(
+      `SELECT id, name FROM customers WHERE id IN (${buildInClause(customerIds)})`,
+      customerIds
+    );
+    allowedNames = new Set(rows.map((r) => r.name));
+  }
+  const normalizedRows = records.map((row) => normalizeLicenseImportRow(row));
+  const unauthorized = normalizedRows
+    .map((row, idx) => ({ row: idx + 1, item: row }))
+    .filter(({ item }) => item.customer_name && allowedNames && !allowedNames.has(item.customer_name))
+    .map(({ row }) => ({ row, reason: '无权限导入该客户授权' }));
+  const authzImportLicenses = await authorizeReminderAction(req, 'import:licenses', {
+    license_in_scope: unauthorized.length === 0,
+  });
+  if (!authzImportLicenses.allow || unauthorized.length) {
+    await insertImportJob({
+      user: req.user,
+      type: 'licenses',
+      filename: req.file?.originalname,
+      status: 'FAILED',
+      created: 0,
+      skipped: unauthorized.length,
+      total: records.length,
+      errors: unauthorized,
+      errorMessage: '存在无权限客户授权',
+    });
+    return res.status(403).json({ error: '无权限导入该客户授权', errors: unauthorized });
+  }
+
+  let created = 0;
+  let skipped = 0;
+  const errors = [];
+  for (const [index, row] of normalizedRows.entries()) {
+    if (!row.customer_name || !row.name || !row.end_date) {
+      skipped += 1;
+      errors.push({ row: index + 1, reason: '缺少客户名称、授权名称或到期日期' });
+      continue;
+    }
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(row.end_date) || (row.start_date && !/^\d{4}-\d{2}-\d{2}$/.test(row.start_date))) {
+      skipped += 1;
+      errors.push({ row: index + 1, reason: '日期格式应为 YYYY-MM-DD' });
+      continue;
+    }
+
+    let customer = await db.get('SELECT * FROM customers WHERE name = ?', [row.customer_name]);
+    if (!customer) {
+      try {
+        const info = await db.run(
+          'INSERT INTO customers (name, juxin_sales, channel_sales) VALUES (?, ?, ?)',
+          [row.customer_name, '', '']
+        );
+        customer = await db.get('SELECT * FROM customers WHERE id = ?', [info.insertId]);
+      } catch (err) {
+        skipped += 1;
+        errors.push({ row: index + 1, reason: '客户创建失败' });
+        continue;
+      }
+    }
+
+    try {
+      const info = await db.run(
+        'INSERT INTO licenses (customer_id, name, start_date, end_date, status, note, reminder_days) VALUES (?, ?, ?, ?, ?, ?, ?)',
+        [
+          customer.id,
+          row.name,
+          row.start_date || null,
+          row.end_date,
+          row.status || 'ACTIVE',
+          row.note || '',
+          row.reminder_days || null,
+        ]
+      );
+      created += 1;
+      await logOperation({
+        user: req.user,
+        action: 'IMPORT',
+        entity: 'license',
+        entityId: info.insertId,
+        afterData: {
+          customer_id: customer.id,
+          customer_name: row.customer_name,
+          name: row.name,
+          start_date: row.start_date || null,
+          end_date: row.end_date,
+          status: row.status || 'ACTIVE',
+          note: row.note || '',
+          reminder_days: row.reminder_days || null,
+        },
+      });
+    } catch (err) {
+      skipped += 1;
+      errors.push({ row: index + 1, reason: '授权创建失败或数据错误' });
+    }
+  }
+
+  await insertImportJob({
+    user: req.user,
+    type: 'licenses',
     filename: req.file?.originalname,
     status: 'DONE',
     created,
