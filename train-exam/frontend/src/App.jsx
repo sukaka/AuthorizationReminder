@@ -792,6 +792,16 @@ const buildCandidateRecordDefault = () => ({
     average_score: 0,
     latest_exam_at: '',
   },
+  overall_evaluation: {
+    exam_count: 0,
+    course_review_count: 0,
+    exam_average_rate: 0,
+    course_average_rating: 0,
+    course_average_rate: 0,
+    overall_score: 0,
+    rating_level: 'D',
+    evaluation_text: '',
+  },
   page: 1,
   limit: 10,
   total: 0,
@@ -7353,7 +7363,29 @@ function App() {
                         <label>当前页</label>
                         <strong>{Number(candidateRecord?.page || 1)} / {Number(candidateRecord?.total_pages || 1)}</strong>
                       </div>
+                      <div className="metric">
+                        <label>综合评分</label>
+                        <strong>{Number(candidateRecord?.overall_evaluation?.overall_score || 0).toFixed(2)}</strong>
+                      </div>
+                      <div className="metric">
+                        <label>综合评级</label>
+                        <strong>{formatRatingText(candidateRecord?.overall_evaluation?.rating_level)}</strong>
+                      </div>
+                      <div className="metric">
+                        <label>考试均分率</label>
+                        <strong>{formatPercentText(candidateRecord?.overall_evaluation?.exam_average_rate)}</strong>
+                      </div>
+                      <div className="metric">
+                        <label>评价依据</label>
+                        <strong>{Number(candidateRecord?.overall_evaluation?.exam_count || 0)} 场</strong>
+                      </div>
                     </div>
+                    {candidateRecord?.overall_evaluation?.evaluation_text ? (
+                      <div className="results-ai-advice">
+                        <strong>综合评价</strong>
+                        <p>{candidateRecord.overall_evaluation.evaluation_text}</p>
+                      </div>
+                    ) : null}
                   </div>
                 </section>
 

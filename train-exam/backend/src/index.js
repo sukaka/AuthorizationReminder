@@ -64,6 +64,7 @@ const {
   normalizeAdminResultsSummary,
   buildResultReviewDetail,
   buildCandidateHistorySummary,
+  buildOverallEvaluation,
 } = require('./result-center-utils');
 const {
   canReadCourse,
@@ -7802,6 +7803,7 @@ app.get('/api/train-exam/admin/users/:userId/results', requireResultCenterReader
     },
     items: rows.map((item) => normalizeAdminResultRow(item)),
     summary: buildCandidateHistorySummary(summaryRows),
+    overall_evaluation: buildOverallEvaluation({ resultRows: summaryRows }),
     page: filters.page,
     limit: filters.limit,
     total,

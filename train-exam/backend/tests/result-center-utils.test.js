@@ -8,6 +8,7 @@ const {
   normalizeAdminResultsSummary,
   buildResultReviewDetail,
   buildCandidateHistorySummary,
+  buildOverallEvaluation,
 } = require('../src/result-center-utils');
 
 describe('result center utils', () => {
@@ -341,6 +342,60 @@ describe('result center utils', () => {
       pass_count: 2,
       average_score: 84,
       latest_exam_at: '2026-03-10 10:00:00',
+    });
+  });
+
+  it('builds overall evaluation from multiple exams and course ratings', () => {
+    expect(buildOverallEvaluation({
+      resultRows: [
+        { score: 85, total_score: 100 },
+        { score: 72, total_score: 90 },
+      ],
+      courseReviews: [
+        { rating: 5 },
+        { rating: 4 },
+      ],
+    })).toEqual({
+      exam_count: 2,
+      course_review_count: 2,
+      exam_average_rate: 82.5,
+      course_average_rating: 4.5,
+      course_average_rate: 90,
+      overall_score: 84.75,
+      rating_level: 'B',
+      evaluation_text: '整体表现良好，考试成绩和课程反馈较稳定，建议继续巩固薄弱知识点。',
+    });
+  });
+
+  it('builds overall evaluation from course ratings when no exam exists', () => {
+    expect(buildOverallEvaluation({
+      resultRows: [],
+      courseReviews: [{ rating: 3 }],
+    })).toMatchObject({
+      exam_count: 0,
+      course_review_count: 1,
+      exam_average_rate: 0,
+      course_average_rating: 3,
+      course_average_rate: 60,
+      overall_score: 60,
+      rating_level: 'C',
+    });
+  });
+
+  it('builds overall evaluation from exam rows when course ratings are not available yet', () => {
+    expect(buildOverallEvaluation({
+      resultRows: [
+        { score: 92, total_score: 100 },
+        { score: 84, total_score: 100 },
+      ],
+    })).toMatchObject({
+      exam_count: 2,
+      course_review_count: 0,
+      exam_average_rate: 88,
+      course_average_rating: 0,
+      course_average_rate: 0,
+      overall_score: 88,
+      rating_level: 'B',
     });
   });
 });

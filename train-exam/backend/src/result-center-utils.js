@@ -40,6 +40,55 @@ const calculateExamRating = (score, totalScore) => {
   return { rating_level: 'D', rating_rate: rate };
 };
 
+const buildEvaluationText = (ratingLevel) => {
+  if (ratingLevel === 'A') return '整体表现优秀，考试成绩和课程反馈都很突出，可作为后续学习标杆。';
+  if (ratingLevel === 'B') return '整体表现良好，考试成绩和课程反馈较稳定，建议继续巩固薄弱知识点。';
+  if (ratingLevel === 'C') return '整体表现合格，仍有提升空间，建议结合课程评价安排针对性复训。';
+  return '整体表现需要加强，建议优先完成课程学习并进行阶段性复考。';
+};
+
+const buildOverallEvaluation = ({ resultRows = [], courseReviews = [] } = {}) => {
+  const examItems = (Array.isArray(resultRows) ? resultRows : [])
+    .map((item) => {
+      const total = toNumber(item?.total_score, 0);
+      if (total <= 0) return null;
+      return roundTo((toNumber(item?.score, 0) / total) * 100, 2);
+    })
+    .filter((item) => item !== null);
+  const reviewItems = (Array.isArray(courseReviews) ? courseReviews : [])
+    .map((item) => toNumber(item?.rating, 0))
+    .filter((item) => item >= 1 && item <= 5);
+
+  const examAverageRate = examItems.length
+    ? roundTo(examItems.reduce((sum, item) => sum + item, 0) / examItems.length, 2)
+    : 0;
+  const courseAverageRating = reviewItems.length
+    ? roundTo(reviewItems.reduce((sum, item) => sum + item, 0) / reviewItems.length, 2)
+    : 0;
+  const courseAverageRate = courseAverageRating > 0 ? roundTo((courseAverageRating / 5) * 100, 2) : 0;
+
+  let overallScore = 0;
+  if (examItems.length && reviewItems.length) {
+    overallScore = roundTo(examAverageRate * 0.7 + courseAverageRate * 0.3, 2);
+  } else if (examItems.length) {
+    overallScore = examAverageRate;
+  } else if (reviewItems.length) {
+    overallScore = courseAverageRate;
+  }
+
+  const rating = calculateExamRating(overallScore, 100);
+  return {
+    exam_count: examItems.length,
+    course_review_count: reviewItems.length,
+    exam_average_rate: examAverageRate,
+    course_average_rating: courseAverageRating,
+    course_average_rate: courseAverageRate,
+    overall_score: overallScore,
+    rating_level: rating.rating_level,
+    evaluation_text: buildEvaluationText(rating.rating_level),
+  };
+};
+
 const parseMaybeJson = (value, fallback = null) => {
   if (value && typeof value === 'object') return value;
   const text = trimText(value);
@@ -407,4 +456,5 @@ module.exports = {
   normalizeAdminResultsSummary,
   buildResultReviewDetail,
   buildCandidateHistorySummary,
+  buildOverallEvaluation,
 };
