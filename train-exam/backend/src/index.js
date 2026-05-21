@@ -67,6 +67,12 @@ const {
   buildOverallEvaluation,
 } = require('./result-center-utils');
 const {
+  buildInstructorReviewSummary,
+  canUserReviewCourse,
+  normalizeInstructorReviewInput,
+  normalizeInstructorReviewStatus,
+} = require('./instructor-review-utils');
+const {
   canReadCourse,
   createMemoryRateLimiter,
   isDocPreviewHostAllowed,
@@ -4586,6 +4592,107 @@ app.get('/api/train-exam/courses/:id', requireReader, asyncHandler(async (req, r
   const row = await get('SELECT * FROM te_courses WHERE id = ? LIMIT 1', [id]);
   ensureCourseReadAccess(req, row);
   res.json(row);
+}));
+
+app.get('/api/train-exam/my/instructor-reviews', requireReader, asyncHandler(async (req, res) => {
+  const userId = Number(req.user.id || 0);
+  const rows = await query(
+    `SELECT r.*, c.status AS course_status
+     FROM te_instructor_reviews r
+     LEFT JOIN te_courses c ON c.id = r.course_id
+     WHERE r.user_id = ?
+     ORDER BY r.updated_at DESC, r.id DESC`,
+    [userId]
+  );
+  res.json(rows);
+}));
+
+const saveInstructorReview = async (req, res) => {
+  const courseId = Number(req.params.id);
+  const course = await get('SELECT * FROM te_courses WHERE id = ? LIMIT 1', [courseId]);
+  ensureCourseReadAccess(req, course, '仅可评价已发布课程');
+
+  const userId = Number(req.user.id || 0);
+  const [enrollment, progressRow] = await Promise.all([
+    get(
+      `SELECT id FROM te_course_enrollments
+       WHERE course_id = ? AND user_id = ? AND status = 'active'
+       LIMIT 1`,
+      [courseId, userId]
+    ),
+    get(
+      `SELECT COUNT(1) AS total
+       FROM te_resource_progress
+       WHERE course_id = ? AND user_id = ?`,
+      [courseId, userId]
+    ),
+  ]);
+
+  if (!canUserReviewCourse({ enrollment, progressCount: Number(progressRow?.total || 0) })) {
+    throw appError('请先学习课程后再评价讲师', 403);
+  }
+
+  const input = normalizeInstructorReviewInput(req.body || {});
+  const instructorName = trimText(req.body?.instructor_name || course.created_by_name || '课程讲师');
+  await run(
+    `INSERT INTO te_instructor_reviews
+      (course_id, course_title, instructor_name, user_id, username, rating, clarity_score, interaction_score, practical_score, pace_score, qa_score, feedback, anonymous)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON DUPLICATE KEY UPDATE
+      course_title = VALUES(course_title),
+      instructor_name = VALUES(instructor_name),
+      username = VALUES(username),
+      rating = VALUES(rating),
+      clarity_score = VALUES(clarity_score),
+      interaction_score = VALUES(interaction_score),
+      practical_score = VALUES(practical_score),
+      pace_score = VALUES(pace_score),
+      qa_score = VALUES(qa_score),
+      feedback = VALUES(feedback),
+      anonymous = VALUES(anonymous),
+      status = 'pending',
+      handled_by_id = NULL,
+      handled_by_name = NULL,
+      handled_at = NULL,
+      updated_at = NOW()`,
+    [
+      courseId,
+      trimText(course.title),
+      instructorName,
+      userId,
+      trimText(req.user.username),
+      input.rating,
+      input.clarity_score,
+      input.interaction_score,
+      input.practical_score,
+      input.pace_score,
+      input.qa_score,
+      input.feedback || null,
+      input.anonymous,
+    ]
+  );
+
+  const review = await get(
+    'SELECT * FROM te_instructor_reviews WHERE course_id = ? AND user_id = ? LIMIT 1',
+    [courseId, userId]
+  );
+  res.status(201).json(review);
+};
+
+app.post('/api/train-exam/courses/:id/instructor-review', requireReader, asyncHandler(saveInstructorReview));
+
+app.put('/api/train-exam/courses/:id/instructor-review', requireReader, asyncHandler(saveInstructorReview));
+
+app.get('/api/train-exam/admin/instructor-reviews', requireResultCenterReader, asyncHandler(async (_req, res) => {
+  const rows = await query(
+    `SELECT *
+     FROM te_instructor_reviews
+     ORDER BY updated_at DESC, id DESC`
+  );
+  res.json({
+    items: rows,
+    summary: buildInstructorReviewSummary(rows),
+  });
 }));
 
 app.put('/api/train-exam/courses/:id', requireContentWriter, asyncHandler(async (req, res) => {

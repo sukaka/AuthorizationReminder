@@ -13,6 +13,7 @@ test('basic viewer menu only exposes course list, paper list and results', () =>
   const block = match[1];
   assert.match(block, /课程列表/);
   assert.match(block, /试卷列表/);
+  assert.match(block, /讲师评价/);
   assert.match(block, /考试结果/);
   assert.doesNotMatch(block, /培训管理/);
   assert.doesNotMatch(block, /考试中心/);
@@ -42,4 +43,11 @@ test('admin result center starts from published paper result overview', () => {
   assert.match(appSource, /\/api\/train-exam\/admin\/results\/papers/);
   assert.match(appSource, /查看成绩/);
   assert.match(appSource, /评级分布/);
+});
+
+test('instructor reviews are exposed to basic users and admins', () => {
+  assert.match(appSource, /讲师评价/);
+  assert.match(appSource, /\/api\/train-exam\/my\/instructor-reviews/);
+  assert.match(appSource, /\/api\/train-exam\/admin\/instructor-reviews/);
+  assert.match(appSource, /\/api\/train-exam\/courses\/\$\{courseId\}\/instructor-review/);
 });

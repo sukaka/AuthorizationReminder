@@ -241,6 +241,32 @@ const createSchema = async () => {
     INDEX idx_te_course_enrollments_user (user_id, status)
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
 
+  await run(`CREATE TABLE IF NOT EXISTS te_instructor_reviews (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    course_id BIGINT NOT NULL,
+    course_title VARCHAR(255) NOT NULL,
+    instructor_name VARCHAR(128) NULL,
+    user_id BIGINT NOT NULL,
+    username VARCHAR(128) NOT NULL,
+    rating TINYINT NOT NULL DEFAULT 5,
+    clarity_score TINYINT NOT NULL DEFAULT 5,
+    interaction_score TINYINT NOT NULL DEFAULT 5,
+    practical_score TINYINT NOT NULL DEFAULT 5,
+    pace_score TINYINT NOT NULL DEFAULT 5,
+    qa_score TINYINT NOT NULL DEFAULT 5,
+    feedback TEXT NULL,
+    anonymous TINYINT NOT NULL DEFAULT 0,
+    status VARCHAR(16) NOT NULL DEFAULT 'pending',
+    handled_by_id BIGINT NULL,
+    handled_by_name VARCHAR(128) NULL,
+    handled_at DATETIME NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE KEY uk_te_instructor_reviews_course_user (course_id, user_id),
+    INDEX idx_te_instructor_reviews_status (status, updated_at),
+    INDEX idx_te_instructor_reviews_course (course_id, updated_at)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
+
   await run(`CREATE TABLE IF NOT EXISTS te_question_generation_jobs (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,
     name VARCHAR(255) NOT NULL,
