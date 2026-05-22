@@ -5189,13 +5189,6 @@ function App() {
     const inProgressResources = Math.max(0, Number(learningPath.summary?.in_progress_resources || 0))
     const notStartedResources = Math.max(0, Number(learningPath.summary?.not_started_resources || 0))
     const completionRate = normalizeLearningProgressPercent(learningPath.summary?.completion_rate)
-    const spotlightActionLabel = spotlightLearningItem
-      ? buildLearningPrimaryActionLabel(spotlightLearningItem, spotlightLearningItem.uiState)
-      : ''
-    const spotlightPrimaryDisabled = !!spotlightLearningItem && (
-      (String(spotlightLearningItem.resource_type || '').toLowerCase() === 'doc' && docPreviewLoading)
-      || (String(spotlightLearningItem.resource_type || '').toLowerCase() === 'link' && !buildResourceOpenUrl(spotlightLearningItem))
-    )
     const courseSummaryText = totalResources <= 0
       ? '当前课程还没有章节资源，稍后可在这里继续学习。'
       : completionRate >= 100
@@ -5228,34 +5221,6 @@ function App() {
               </div>
             </div>
           </section>
-
-          {spotlightLearningItem ? (
-            <section className={`course-learning-spotlight is-${spotlightLearningItem.uiState.key}`}>
-              <div className="course-learning-spotlight-label">继续学习</div>
-              <div className="course-learning-spotlight-main">
-                <div className="course-learning-spotlight-copy">
-                  <strong>第 {spotlightLearningItem.chapter_no} 章 · {spotlightLearningItem.name}</strong>
-                  <p>{spotlightLearningItem.uiState.description}</p>
-                  <div className="course-learning-spotlight-meta">
-                    <span>{resourceTypeLabel(spotlightLearningItem.resource_type)}</span>
-                    <span>当前进度 {spotlightLearningItem.uiState.progressPercent}%</span>
-                    <span>最近学习 {spotlightLearningItem.progress?.updated_at ? formatDateTime(spotlightLearningItem.progress.updated_at) : '尚未开始'}</span>
-                  </div>
-                </div>
-                <div className="course-learning-spotlight-actions">
-                  <span className={`learning-flow-badge is-${spotlightLearningItem.uiState.key}`}>{spotlightLearningItem.uiState.label}</span>
-                  <button
-                    className="primary"
-                    type="button"
-                    disabled={spotlightPrimaryDisabled}
-                    onClick={() => { void onOpenLearningResource(spotlightLearningItem) }}
-                  >
-                    {spotlightActionLabel}
-                  </button>
-                </div>
-              </div>
-            </section>
-          ) : null}
         </div>
 
         <div className="modal-body course-learning-flow-wrap">

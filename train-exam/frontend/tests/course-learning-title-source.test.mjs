@@ -11,3 +11,8 @@ test('course learning modal keeps course title only in the modal header', () => 
   assert.ok(appSource.includes('<strong id="course-learning-modal-heading">{currentLearningCourseTitle}</strong>'));
   assert.ok(!appSource.includes('<h2>{currentLearningCourseTitle}</h2>'));
 });
+
+test('course learning modal no longer renders continue learning spotlight card', () => {
+  assert.ok(!appSource.includes('course-learning-spotlight'));
+  assert.ok(!appSource.includes('继续学习</div>'));
+});
