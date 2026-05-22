@@ -1,5 +1,32 @@
 const trimText = (value) => (value === undefined || value === null ? '' : String(value).trim());
 
+const STATUS_ALIASES = {
+  draft: 'draft',
+  '草稿': 'draft',
+  published: 'published',
+  publish: 'published',
+  '已发布': 'published',
+  closed: 'closed',
+  close: 'closed',
+  '已关闭': 'closed',
+};
+
+const RATING_LABELS = {
+  5: '极好',
+  4: '优秀',
+  3: '普通',
+  2: '一般',
+  1: '极差',
+};
+
+const SCORE_KEYS = [
+  'clarity_score',
+  'interaction_score',
+  'practical_score',
+  'time_control_score',
+  'qa_score',
+];
+
 const toBoundedScore = (value, fallback = 5) => {
   const num = Number(value);
   if (!Number.isFinite(num)) return fallback;
@@ -12,25 +39,35 @@ const normalizeBooleanFlag = (value) => {
   return ['1', 'true', 'yes', 'y', 'on', '匿名'].includes(key) ? 1 : 0;
 };
 
-const normalizeInstructorReviewInput = (payload = {}) => ({
-  rating: toBoundedScore(payload.rating, 5),
-  clarity_score: toBoundedScore(payload.clarity_score, 5),
-  interaction_score: toBoundedScore(payload.interaction_score, 5),
-  practical_score: toBoundedScore(payload.practical_score, 5),
-  pace_score: toBoundedScore(payload.pace_score, 5),
-  qa_score: toBoundedScore(payload.qa_score, 5),
-  feedback: trimText(payload.feedback).slice(0, 1000),
-  anonymous: normalizeBooleanFlag(payload.anonymous),
-});
-
 const normalizeInstructorReviewStatus = (value) => {
   const key = trimText(value).toLowerCase();
-  if (['resolved', 'done', 'closed', '已处理', '处理'].includes(key)) return 'resolved';
-  return 'pending';
+  return STATUS_ALIASES[key] || 'draft';
 };
 
-const canUserReviewCourse = ({ enrollment = null, progressCount = 0 } = {}) =>
-  !!enrollment || Number(progressCount || 0) > 0;
+const normalizeInstructorQuestionnaireInput = (payload = {}) => ({
+  title: trimText(payload.title).slice(0, 255),
+  instructor_name: trimText(payload.instructor_name).slice(0, 128),
+  description: trimText(payload.description).slice(0, 2000),
+  status: normalizeInstructorReviewStatus(payload.status),
+});
+
+const getRatingLabel = (score) => RATING_LABELS[Math.max(1, Math.min(5, Math.round(Number(score || 0))))] || '极差';
+
+const normalizeInstructorReviewResponseInput = (payload = {}) => {
+  const scores = SCORE_KEYS.reduce((acc, key) => {
+    acc[key] = toBoundedScore(payload[key], 5);
+    return acc;
+  }, {});
+  const scoreTotal = SCORE_KEYS.reduce((sum, key) => sum + Number(scores[key] || 0), 0);
+  const finalScore = Number((scoreTotal / SCORE_KEYS.length).toFixed(2));
+  return {
+    ...scores,
+    final_score: finalScore,
+    rating_label: getRatingLabel(finalScore),
+    feedback: trimText(payload.feedback).slice(0, 1000),
+    anonymous: normalizeBooleanFlag(payload.anonymous),
+  };
+};
 
 const average = (rows, key) => {
   const values = rows
@@ -40,41 +77,37 @@ const average = (rows, key) => {
   return Math.round((values.reduce((sum, item) => sum + item, 0) / values.length) * 100) / 100;
 };
 
-const buildInstructorReviewSummary = (rows = []) => {
+const buildInstructorReviewQuestionnaireSummary = (rows = []) => {
   const items = Array.isArray(rows) ? rows : [];
-  const instructorRatings = new Map();
+  const ratingDistribution = {
+    '极好': 0,
+    '优秀': 0,
+    '普通': 0,
+    '一般': 0,
+    '极差': 0,
+  };
   for (const item of items) {
-    const instructor = trimText(item?.instructor_name) || '未指定讲师';
-    const list = instructorRatings.get(instructor) || [];
-    list.push(Number(item?.rating || 0));
-    instructorRatings.set(instructor, list);
+    const label = trimText(item?.rating_label) || getRatingLabel(item?.final_score);
+    if (Object.prototype.hasOwnProperty.call(ratingDistribution, label)) {
+      ratingDistribution[label] += 1;
+    }
   }
-  const excellentInstructorCount = Array.from(instructorRatings.values()).filter((list) => {
-    const valid = list.filter((item) => Number.isFinite(item) && item > 0);
-    if (!valid.length) return false;
-    const value = valid.reduce((sum, item) => sum + item, 0) / valid.length;
-    return value >= 4.5;
-  }).length;
-
   return {
-    total_reviews: items.length,
-    pending_count: items.filter((item) => normalizeInstructorReviewStatus(item?.status) === 'pending').length,
-    resolved_count: items.filter((item) => normalizeInstructorReviewStatus(item?.status) === 'resolved').length,
-    average_rating: average(items, 'rating'),
-    excellent_instructor_count: excellentInstructorCount,
-    dimensions: {
-      clarity_score: average(items, 'clarity_score'),
-      interaction_score: average(items, 'interaction_score'),
-      practical_score: average(items, 'practical_score'),
-      pace_score: average(items, 'pace_score'),
-      qa_score: average(items, 'qa_score'),
-    },
+    response_count: items.length,
+    average_final_score: average(items, 'final_score'),
+    rating_distribution: ratingDistribution,
+    dimensions: SCORE_KEYS.reduce((acc, key) => {
+      acc[key] = average(items, key);
+      return acc;
+    }, {}),
   };
 };
 
 module.exports = {
-  buildInstructorReviewSummary,
-  canUserReviewCourse,
-  normalizeInstructorReviewInput,
+  SCORE_KEYS,
+  buildInstructorReviewQuestionnaireSummary,
+  getRatingLabel,
+  normalizeInstructorQuestionnaireInput,
+  normalizeInstructorReviewResponseInput,
   normalizeInstructorReviewStatus,
 };

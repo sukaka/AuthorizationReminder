@@ -14,9 +14,10 @@ describe('viewer scope utils', () => {
     expect(isBasicViewerApiAllowed({ method: 'POST', path: '/api/train-exam/papers/9/exam/start' })).toBe(true);
     expect(isBasicViewerApiAllowed({ method: 'GET', path: '/api/train-exam/my/results' })).toBe(true);
     expect(isBasicViewerApiAllowed({ method: 'GET', path: '/api/train-exam/my/results/export.csv' })).toBe(true);
-    expect(isBasicViewerApiAllowed({ method: 'GET', path: '/api/train-exam/my/instructor-reviews' })).toBe(true);
-    expect(isBasicViewerApiAllowed({ method: 'POST', path: '/api/train-exam/courses/12/instructor-review' })).toBe(true);
-    expect(isBasicViewerApiAllowed({ method: 'PUT', path: '/api/train-exam/courses/12/instructor-review' })).toBe(true);
+    expect(isBasicViewerApiAllowed({ method: 'GET', path: '/api/train-exam/my/instructor-review-forms' })).toBe(true);
+    expect(isBasicViewerApiAllowed({ method: 'POST', path: '/api/train-exam/instructor-review-forms/12/response' })).toBe(true);
+    expect(isBasicViewerApiAllowed({ method: 'PUT', path: '/api/train-exam/instructor-review-forms/12/response' })).toBe(true);
+    expect(isBasicViewerApiAllowed({ method: 'POST', path: '/api/train-exam/courses/12/instructor-review' })).toBe(false);
     expect(isBasicViewerApiAllowed({ method: 'GET', path: '/api/train-exam/results/18' })).toBe(true);
     expect(isBasicViewerApiAllowed({ method: 'GET', path: '/api/train-exam/results/18/review-detail' })).toBe(true);
   });

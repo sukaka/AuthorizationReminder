@@ -47,7 +47,8 @@ test('admin result center starts from published paper result overview', () => {
 
 test('instructor reviews are exposed to basic users and admins', () => {
   assert.match(appSource, /讲师评价/);
-  assert.match(appSource, /\/api\/train-exam\/my\/instructor-reviews/);
-  assert.match(appSource, /\/api\/train-exam\/admin\/instructor-reviews/);
-  assert.match(appSource, /\/api\/train-exam\/courses\/\$\{courseId\}\/instructor-review/);
+  assert.match(appSource, /\/api\/train-exam\/my\/instructor-review-forms/);
+  assert.match(appSource, /\/api\/train-exam\/admin\/instructor-review-forms/);
+  assert.match(appSource, /\/api\/train-exam\/instructor-review-forms\/\$\{formId\}\/response/);
+  assert.doesNotMatch(appSource, /\/api\/train-exam\/courses\/\$\{courseId\}\/instructor-review/);
 });

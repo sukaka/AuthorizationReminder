@@ -1250,15 +1250,21 @@ function App() {
 
   const [myResults, setMyResults] = useState([])
   const [myResultsExporting, setMyResultsExporting] = useState(false)
-  const [myInstructorReviews, setMyInstructorReviews] = useState([])
-  const [adminInstructorReviews, setAdminInstructorReviews] = useState({ items: [], summary: {} })
-  const [instructorReviewForm, setInstructorReviewForm] = useState({
-    course_id: '',
-    rating: 5,
+  const [myInstructorReviewForms, setMyInstructorReviewForms] = useState([])
+  const [adminInstructorReviewForms, setAdminInstructorReviewForms] = useState([])
+  const [adminInstructorReviewResponses, setAdminInstructorReviewResponses] = useState({ form: null, items: [], summary: {} })
+  const [instructorQuestionnaireForm, setInstructorQuestionnaireForm] = useState({
+    title: '',
+    instructor_name: '',
+    description: '',
+    status: 'draft',
+  })
+  const [instructorReviewResponseForm, setInstructorReviewResponseForm] = useState({
+    form_id: '',
     clarity_score: 5,
     interaction_score: 5,
     practical_score: 5,
-    pace_score: 5,
+    time_control_score: 5,
     qa_score: 5,
     feedback: '',
     anonymous: false,
@@ -1904,39 +1910,84 @@ function App() {
     return rows
   }
 
-  const fetchMyInstructorReviews = async (silent = false) => {
+  const fetchMyInstructorReviewForms = async (silent = false) => {
     if (!silent) clearFeedback()
-    const payload = await api.get('/api/train-exam/my/instructor-reviews')
-    const rows = Array.isArray(payload) ? payload : []
-    setMyInstructorReviews(rows)
+    const payload = await api.get('/api/train-exam/my/instructor-review-forms')
+    const rows = Array.isArray(payload?.items) ? payload.items : []
+    setMyInstructorReviewForms(rows)
     return rows
   }
 
-  const fetchAdminInstructorReviews = async (silent = false) => {
+  const fetchAdminInstructorReviewForms = async (silent = false) => {
     if (!silent) clearFeedback()
-    const payload = await api.get('/api/train-exam/admin/instructor-reviews')
-    const next = payload && typeof payload === 'object' ? payload : { items: [], summary: {} }
-    setAdminInstructorReviews({
+    const payload = await api.get('/api/train-exam/admin/instructor-review-forms')
+    const rows = Array.isArray(payload?.items) ? payload.items : []
+    setAdminInstructorReviewForms(rows)
+    return rows
+  }
+
+  const fetchAdminInstructorReviewResponses = async (formId, silent = false) => {
+    const id = Number(formId || 0)
+    if (!id) return null
+    if (!silent) clearFeedback()
+    const payload = await api.get(`/api/train-exam/admin/instructor-review-forms/${id}/responses`)
+    const next = payload && typeof payload === 'object' ? payload : { form: null, items: [], summary: {} }
+    setAdminInstructorReviewResponses({
+      form: next.form || null,
       items: Array.isArray(next.items) ? next.items : [],
       summary: next.summary && typeof next.summary === 'object' ? next.summary : {},
     })
     return next
   }
 
+  const onSubmitInstructorQuestionnaire = async (e) => {
+    e.preventDefault()
+    clearFeedback()
+    try {
+      const created = await api.post('/api/train-exam/admin/instructor-review-forms', instructorQuestionnaireForm)
+      setMessage(`讲师评价问卷已创建：${created.title}`)
+      setInstructorQuestionnaireForm({ title: '', instructor_name: '', description: '', status: 'draft' })
+      await fetchAdminInstructorReviewForms(true)
+    } catch (err) {
+      setError(err.message || '创建讲师评价问卷失败')
+    }
+  }
+
+  const onUpdateInstructorQuestionnaireStatus = async (item, status) => {
+    const id = Number(item?.id || 0)
+    if (!id) return
+    clearFeedback()
+    try {
+      const updated = await api.put(`/api/train-exam/admin/instructor-review-forms/${id}`, {
+        title: item.title,
+        instructor_name: item.instructor_name,
+        description: item.description || '',
+        status,
+      })
+      setMessage(`问卷状态已更新：${updated.title}`)
+      await fetchAdminInstructorReviewForms(true)
+      if (Number(adminInstructorReviewResponses.form?.id || 0) === id) {
+        await fetchAdminInstructorReviewResponses(id, true)
+      }
+    } catch (err) {
+      setError(err.message || '更新问卷状态失败')
+    }
+  }
+
   const onSubmitInstructorReview = async (e) => {
     e.preventDefault()
     if (instructorReviewSaving) return
-    const courseId = Number(instructorReviewForm.course_id || 0)
-    if (!courseId) {
-      setError('请选择要评价的课程')
+    const formId = Number(instructorReviewResponseForm.form_id || 0)
+    if (!formId) {
+      setError('请选择要评价的讲师问卷')
       return
     }
     setInstructorReviewSaving(true)
     try {
-      await api.post(`/api/train-exam/courses/${courseId}/instructor-review`, instructorReviewForm)
+      await api.post(`/api/train-exam/instructor-review-forms/${formId}/response`, instructorReviewResponseForm)
       setMessage('讲师评价已提交')
-      setInstructorReviewForm((prev) => ({ ...prev, feedback: '' }))
-      await fetchMyInstructorReviews(true)
+      setInstructorReviewResponseForm((prev) => ({ ...prev, feedback: '' }))
+      await fetchMyInstructorReviewForms(true)
     } catch (err) {
       setError(err.message || '提交讲师评价失败')
     } finally {
@@ -5418,7 +5469,7 @@ function App() {
                   setActiveMenu('instructor-reviews')
                   try {
                     await fetchCourses(true)
-                    await fetchMyInstructorReviews(true)
+                    await fetchMyInstructorReviewForms(true)
                   } catch (err) {
                     setError(err.message || '加载讲师评价失败')
                   }
@@ -5494,7 +5545,7 @@ function App() {
                 onClick={async () => {
                   setActiveMenu('instructor-reviews')
                   try {
-                    await fetchAdminInstructorReviews(true)
+                    await fetchAdminInstructorReviewForms(true)
                   } catch (err) {
                     setError(err.message || '加载讲师评价失败')
                   }
@@ -6372,37 +6423,52 @@ function App() {
                 <div className="panel-header">
                   <div>
                     <h2>讲师评价</h2>
-                    <div className="sub">学习课程后可对讲师授课效果进行反馈。</div>
+                    <div className="sub">线下培训结束后，选择讲师评价问卷提交反馈。</div>
                   </div>
-                  <button className="ghost" type="button" onClick={() => fetchMyInstructorReviews(true)}>刷新评价</button>
+                  <button className="ghost" type="button" onClick={() => fetchMyInstructorReviewForms(true)}>刷新问卷</button>
                 </div>
                 <div className="panel-body">
                   <form className="form-grid" onSubmit={onSubmitInstructorReview}>
                     <div>
-                      <label>评价课程</label>
+                      <label>评价问卷</label>
                       <select
-                        value={instructorReviewForm.course_id}
-                        onChange={(e) => setInstructorReviewForm((prev) => ({ ...prev, course_id: e.target.value }))}
+                        value={instructorReviewResponseForm.form_id}
+                        onChange={(e) => {
+                          const formId = e.target.value
+                          const selected = myInstructorReviewForms.find((item) => Number(item.id || 0) === Number(formId || 0))
+                          setInstructorReviewResponseForm((prev) => ({
+                            ...prev,
+                            form_id: formId,
+                            clarity_score: Number(selected?.clarity_score || 5),
+                            interaction_score: Number(selected?.interaction_score || 5),
+                            practical_score: Number(selected?.practical_score || 5),
+                            time_control_score: Number(selected?.time_control_score || 5),
+                            qa_score: Number(selected?.qa_score || 5),
+                            feedback: selected?.feedback || '',
+                            anonymous: Number(selected?.anonymous || 0) === 1,
+                          }))
+                        }}
                       >
-                        <option value="">请选择课程</option>
-                        {courses.map((item) => (
-                          <option key={`review-course-${item.id}`} value={item.id}>{item.title}</option>
+                        <option value="">请选择讲师评价问卷</option>
+                        {myInstructorReviewForms.map((item) => (
+                          <option key={`review-form-${item.id}`} value={item.id}>
+                            {item.title} - {item.instructor_name}
+                          </option>
                         ))}
                       </select>
                     </div>
                     {[
-                      ['rating', '总体评分'],
-                      ['clarity_score', '讲解清晰'],
-                      ['interaction_score', '互动引导'],
-                      ['practical_score', '实用程度'],
-                      ['pace_score', '节奏控制'],
-                      ['qa_score', '答疑质量'],
+                      ['clarity_score', '授课清晰度'],
+                      ['interaction_score', '互动氛围'],
+                      ['practical_score', '内容实用性'],
+                      ['time_control_score', '时间把控'],
+                      ['qa_score', '课后答疑'],
                     ].map(([key, label]) => (
                       <div key={`review-score-${key}`}>
                         <label>{label}</label>
                         <select
-                          value={instructorReviewForm[key]}
-                          onChange={(e) => setInstructorReviewForm((prev) => ({ ...prev, [key]: Number(e.target.value) }))}
+                          value={instructorReviewResponseForm[key]}
+                          onChange={(e) => setInstructorReviewResponseForm((prev) => ({ ...prev, [key]: Number(e.target.value) }))}
                         >
                           {[5, 4, 3, 2, 1].map((score) => (
                             <option key={`${key}-${score}`} value={score}>{score} 分</option>
@@ -6413,16 +6479,16 @@ function App() {
                     <div className="full">
                       <label>反馈内容</label>
                       <textarea
-                        value={instructorReviewForm.feedback}
-                        onChange={(e) => setInstructorReviewForm((prev) => ({ ...prev, feedback: e.target.value }))}
-                        placeholder="可以写下课程讲解、案例、节奏或答疑建议"
+                        value={instructorReviewResponseForm.feedback}
+                        onChange={(e) => setInstructorReviewResponseForm((prev) => ({ ...prev, feedback: e.target.value }))}
+                        placeholder="可以写下讲师表达、课堂互动、案例、节奏或答疑建议"
                       />
                     </div>
                     <label className="full results-filter-check">
                       <input
                         type="checkbox"
-                        checked={!!instructorReviewForm.anonymous}
-                        onChange={(e) => setInstructorReviewForm((prev) => ({ ...prev, anonymous: e.target.checked }))}
+                        checked={!!instructorReviewResponseForm.anonymous}
+                        onChange={(e) => setInstructorReviewResponseForm((prev) => ({ ...prev, anonymous: e.target.checked }))}
                       />
                       <span>匿名提交</span>
                     </label>
@@ -6434,56 +6500,144 @@ function App() {
                   </form>
                 </div>
               </section>
-            ) : null}
+            ) : (
+              <section className="panel">
+                <div className="panel-header">
+                  <div>
+                    <h2>创建讲师评价问卷</h2>
+                    <div className="sub">用于线下培训课后收集讲师评价。</div>
+                  </div>
+                </div>
+                <div className="panel-body">
+                  <form className="form-grid" onSubmit={onSubmitInstructorQuestionnaire}>
+                    <div><label>问卷标题</label><input value={instructorQuestionnaireForm.title} onChange={(e) => setInstructorQuestionnaireForm((prev) => ({ ...prev, title: e.target.value }))} /></div>
+                    <div><label>讲师姓名</label><input value={instructorQuestionnaireForm.instructor_name} onChange={(e) => setInstructorQuestionnaireForm((prev) => ({ ...prev, instructor_name: e.target.value }))} /></div>
+                    <div>
+                      <label>状态</label>
+                      <select value={instructorQuestionnaireForm.status} onChange={(e) => setInstructorQuestionnaireForm((prev) => ({ ...prev, status: e.target.value }))}>
+                        <option value="draft">草稿</option>
+                        <option value="published">已发布</option>
+                        <option value="closed">已关闭</option>
+                      </select>
+                    </div>
+                    <div className="full"><label>说明</label><textarea value={instructorQuestionnaireForm.description} onChange={(e) => setInstructorQuestionnaireForm((prev) => ({ ...prev, description: e.target.value }))} placeholder="例如：2026 年第一期线下培训课后评价" /></div>
+                    <div className="full row-actions">
+                      <button className="primary" type="submit">创建问卷</button>
+                    </div>
+                  </form>
+                </div>
+              </section>
+            )}
 
             <section className="panel">
               <div className="panel-header">
-                <h2>{isBasicUser ? '我的评价记录' : '讲师评价汇总'}</h2>
+                <h2>{isBasicUser ? '可评价问卷' : '讲师评价问卷'}</h2>
                 {!isBasicUser ? (
-                  <button className="ghost" type="button" onClick={() => fetchAdminInstructorReviews(true)}>刷新汇总</button>
+                  <button className="ghost" type="button" onClick={() => fetchAdminInstructorReviewForms(true)}>刷新问卷</button>
                 ) : null}
               </div>
-              {!isBasicUser ? (
-                <div className="panel-body metric-grid">
-                  <div className="metric"><label>评价总数</label><strong>{Number(adminInstructorReviews.summary?.total_reviews || 0)}</strong></div>
-                  <div className="metric"><label>待处理</label><strong>{Number(adminInstructorReviews.summary?.pending_count || 0)}</strong></div>
-                  <div className="metric"><label>已处理</label><strong>{Number(adminInstructorReviews.summary?.resolved_count || 0)}</strong></div>
-                  <div className="metric"><label>平均评分</label><strong>{Number(adminInstructorReviews.summary?.average_rating || 0).toFixed(2)}</strong></div>
-                </div>
-              ) : null}
               <div className="panel-body table-wrap">
                 <table>
                   <thead>
                     <tr>
-                      <th>课程</th>
+                      <th>问卷</th>
                       <th>讲师</th>
-                      {!isBasicUser ? <th>学员</th> : null}
-                      <th>评分</th>
-                      <th>反馈</th>
+                      <th>{isBasicUser ? '我的评价' : '参与人数'}</th>
+                      <th>平均分</th>
                       <th>状态</th>
                       <th>更新时间</th>
+                      <th>操作</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {(isBasicUser ? myInstructorReviews : adminInstructorReviews.items).length ? (
-                      (isBasicUser ? myInstructorReviews : adminInstructorReviews.items).map((item) => (
-                        <tr key={`instructor-review-${item.id}`}>
-                          <td>{item.course_title || item.course_id}</td>
-                          <td>{item.instructor_name || '课程讲师'}</td>
-                          {!isBasicUser ? <td>{Number(item.anonymous || 0) === 1 ? '匿名' : item.username}</td> : null}
-                          <td>{Number(item.rating || 0)} 分</td>
-                          <td>{item.feedback || '-'}</td>
-                          <td><span className="badge">{String(item.status || 'pending') === 'resolved' ? '已处理' : '待处理'}</span></td>
+                    {(isBasicUser ? myInstructorReviewForms : adminInstructorReviewForms).length ? (
+                      (isBasicUser ? myInstructorReviewForms : adminInstructorReviewForms).map((item) => (
+                        <tr key={`instructor-review-form-${item.id}`}>
+                          <td>{item.title}</td>
+                          <td>{item.instructor_name || '讲师'}</td>
+                          <td>{isBasicUser ? (item.submitted ? `${Number(item.final_score || 0).toFixed(2)} 分 / ${item.rating_label || '-'}` : '未填写') : Number(item.summary?.response_count || 0)}</td>
+                          <td>{isBasicUser ? '-' : Number(item.summary?.average_final_score || 0).toFixed(2)}</td>
+                          <td><span className="badge">{String(item.status || 'draft') === 'published' ? '已发布' : String(item.status || 'draft') === 'closed' ? '已关闭' : '草稿'}</span></td>
                           <td>{formatDateTime(item.updated_at)}</td>
+                          <td>
+                            {isBasicUser ? (
+                              <button className="ghost" type="button" onClick={() => setInstructorReviewResponseForm({
+                                form_id: String(item.id),
+                                clarity_score: Number(item.clarity_score || 5),
+                                interaction_score: Number(item.interaction_score || 5),
+                                practical_score: Number(item.practical_score || 5),
+                                time_control_score: Number(item.time_control_score || 5),
+                                qa_score: Number(item.qa_score || 5),
+                                feedback: item.feedback || '',
+                                anonymous: Number(item.anonymous || 0) === 1,
+                              })}>
+                                {item.submitted ? '修改评价' : '填写评价'}
+                              </button>
+                            ) : (
+                              <div className="row-actions">
+                                <button className="ghost" type="button" onClick={() => fetchAdminInstructorReviewResponses(item.id, true)}>查看明细</button>
+                                <button className="ghost" type="button" onClick={() => onUpdateInstructorQuestionnaireStatus(item, 'published')}>发布</button>
+                                <button className="warn" type="button" onClick={() => onUpdateInstructorQuestionnaireStatus(item, 'closed')}>关闭</button>
+                              </div>
+                            )}
+                          </td>
                         </tr>
                       ))
                     ) : (
-                      <tr><td colSpan={isBasicUser ? 6 : 7}>暂无讲师评价</td></tr>
+                      <tr><td colSpan={7}>暂无讲师评价问卷</td></tr>
                     )}
                   </tbody>
                 </table>
               </div>
             </section>
+            {!isBasicUser && adminInstructorReviewResponses.form ? (
+              <section className="panel">
+                <div className="panel-header">
+                  <div>
+                    <h2>{adminInstructorReviewResponses.form.title} 明细</h2>
+                    <div className="sub">讲师：{adminInstructorReviewResponses.form.instructor_name}</div>
+                  </div>
+                </div>
+                <div className="panel-body metric-grid">
+                  <div className="metric"><label>参与人数</label><strong>{Number(adminInstructorReviewResponses.summary?.response_count || 0)}</strong></div>
+                  <div className="metric"><label>平均分</label><strong>{Number(adminInstructorReviewResponses.summary?.average_final_score || 0).toFixed(2)}</strong></div>
+                  <div className="metric"><label>极好</label><strong>{Number(adminInstructorReviewResponses.summary?.rating_distribution?.极好 || 0)}</strong></div>
+                  <div className="metric"><label>优秀</label><strong>{Number(adminInstructorReviewResponses.summary?.rating_distribution?.优秀 || 0)}</strong></div>
+                </div>
+                <div className="panel-body table-wrap">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>学员</th>
+                        <th>最终分</th>
+                        <th>清晰度</th>
+                        <th>互动</th>
+                        <th>实用</th>
+                        <th>时间</th>
+                        <th>答疑</th>
+                        <th>反馈</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {adminInstructorReviewResponses.items.length ? adminInstructorReviewResponses.items.map((item) => (
+                        <tr key={`instructor-response-${item.id}`}>
+                          <td>{Number(item.anonymous || 0) === 1 ? '匿名' : item.username}</td>
+                          <td>{Number(item.final_score || 0).toFixed(2)} / {item.rating_label || '-'}</td>
+                          <td>{Number(item.clarity_score || 0)}</td>
+                          <td>{Number(item.interaction_score || 0)}</td>
+                          <td>{Number(item.practical_score || 0)}</td>
+                          <td>{Number(item.time_control_score || 0)}</td>
+                          <td>{Number(item.qa_score || 0)}</td>
+                          <td>{item.feedback || '-'}</td>
+                        </tr>
+                      )) : (
+                        <tr><td colSpan={8}>暂无评价明细</td></tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </section>
+            ) : null}
           </>
         )}
 

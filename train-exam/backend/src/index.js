@@ -67,9 +67,9 @@ const {
   buildOverallEvaluation,
 } = require('./result-center-utils');
 const {
-  buildInstructorReviewSummary,
-  canUserReviewCourse,
-  normalizeInstructorReviewInput,
+  buildInstructorReviewQuestionnaireSummary,
+  normalizeInstructorQuestionnaireInput,
+  normalizeInstructorReviewResponseInput,
   normalizeInstructorReviewStatus,
 } = require('./instructor-review-utils');
 const {
@@ -4594,104 +4594,169 @@ app.get('/api/train-exam/courses/:id', requireReader, asyncHandler(async (req, r
   res.json(row);
 }));
 
-app.get('/api/train-exam/my/instructor-reviews', requireReader, asyncHandler(async (req, res) => {
+const getInstructorReviewFormWithSummary = async (form) => {
+  const responses = await query(
+    'SELECT * FROM te_instructor_review_responses WHERE form_id = ? ORDER BY updated_at DESC, id DESC',
+    [Number(form.id || 0)]
+  );
+  return {
+    ...form,
+    summary: buildInstructorReviewQuestionnaireSummary(responses),
+  };
+};
+
+app.get('/api/train-exam/my/instructor-review-forms', requireReader, asyncHandler(async (req, res) => {
   const userId = Number(req.user.id || 0);
   const rows = await query(
-    `SELECT r.*, c.status AS course_status
-     FROM te_instructor_reviews r
-     LEFT JOIN te_courses c ON c.id = r.course_id
-     WHERE r.user_id = ?
-     ORDER BY r.updated_at DESC, r.id DESC`,
+    `SELECT
+      f.*,
+      r.id AS response_id,
+      r.clarity_score,
+      r.interaction_score,
+      r.practical_score,
+      r.time_control_score,
+      r.qa_score,
+      r.final_score,
+      r.rating_label,
+      r.feedback,
+      r.anonymous,
+      r.created_at AS response_created_at,
+      r.updated_at AS response_updated_at
+     FROM te_instructor_review_forms f
+     LEFT JOIN te_instructor_review_responses r
+      ON r.form_id = f.id AND r.user_id = ?
+     WHERE f.status = 'published'
+     ORDER BY f.updated_at DESC, f.id DESC`,
     [userId]
   );
-  res.json(rows);
+  res.json({
+    items: rows.map((row) => ({
+      ...row,
+      submitted: Number(row.response_id || 0) > 0,
+    })),
+  });
 }));
 
-const saveInstructorReview = async (req, res) => {
-  const courseId = Number(req.params.id);
-  const course = await get('SELECT * FROM te_courses WHERE id = ? LIMIT 1', [courseId]);
-  ensureCourseReadAccess(req, course, '仅可评价已发布课程');
+const saveInstructorReviewResponse = async (req, res) => {
+  const formId = Number(req.params.id || 0);
+  const form = await get('SELECT * FROM te_instructor_review_forms WHERE id = ? LIMIT 1', [formId]);
+  if (!form) throw appError('讲师评价问卷不存在', 404);
+  if (trimText(form.status) !== 'published') throw appError('问卷未发布或已关闭，暂不能评价', 403);
 
   const userId = Number(req.user.id || 0);
-  const [enrollment, progressRow] = await Promise.all([
-    get(
-      `SELECT id FROM te_course_enrollments
-       WHERE course_id = ? AND user_id = ? AND status = 'active'
-       LIMIT 1`,
-      [courseId, userId]
-    ),
-    get(
-      `SELECT COUNT(1) AS total
-       FROM te_resource_progress
-       WHERE course_id = ? AND user_id = ?`,
-      [courseId, userId]
-    ),
-  ]);
-
-  if (!canUserReviewCourse({ enrollment, progressCount: Number(progressRow?.total || 0) })) {
-    throw appError('请先学习课程后再评价讲师', 403);
-  }
-
-  const input = normalizeInstructorReviewInput(req.body || {});
-  const instructorName = trimText(req.body?.instructor_name || course.created_by_name || '课程讲师');
+  const input = normalizeInstructorReviewResponseInput(req.body || {});
   await run(
-    `INSERT INTO te_instructor_reviews
-      (course_id, course_title, instructor_name, user_id, username, rating, clarity_score, interaction_score, practical_score, pace_score, qa_score, feedback, anonymous)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `INSERT INTO te_instructor_review_responses
+      (form_id, user_id, username, clarity_score, interaction_score, practical_score, time_control_score, qa_score, final_score, rating_label, feedback, anonymous)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON DUPLICATE KEY UPDATE
-      course_title = VALUES(course_title),
-      instructor_name = VALUES(instructor_name),
       username = VALUES(username),
-      rating = VALUES(rating),
       clarity_score = VALUES(clarity_score),
       interaction_score = VALUES(interaction_score),
       practical_score = VALUES(practical_score),
-      pace_score = VALUES(pace_score),
+      time_control_score = VALUES(time_control_score),
       qa_score = VALUES(qa_score),
+      final_score = VALUES(final_score),
+      rating_label = VALUES(rating_label),
       feedback = VALUES(feedback),
       anonymous = VALUES(anonymous),
-      status = 'pending',
-      handled_by_id = NULL,
-      handled_by_name = NULL,
-      handled_at = NULL,
       updated_at = NOW()`,
     [
-      courseId,
-      trimText(course.title),
-      instructorName,
+      formId,
       userId,
       trimText(req.user.username),
-      input.rating,
       input.clarity_score,
       input.interaction_score,
       input.practical_score,
-      input.pace_score,
+      input.time_control_score,
       input.qa_score,
+      input.final_score,
+      input.rating_label,
       input.feedback || null,
       input.anonymous,
     ]
   );
-
-  const review = await get(
-    'SELECT * FROM te_instructor_reviews WHERE course_id = ? AND user_id = ? LIMIT 1',
-    [courseId, userId]
+  const response = await get(
+    'SELECT * FROM te_instructor_review_responses WHERE form_id = ? AND user_id = ? LIMIT 1',
+    [formId, userId]
   );
-  res.status(201).json(review);
+  res.status(201).json(response);
 };
 
-app.post('/api/train-exam/courses/:id/instructor-review', requireReader, asyncHandler(saveInstructorReview));
+app.post('/api/train-exam/instructor-review-forms/:id/response', requireReader, asyncHandler(saveInstructorReviewResponse));
 
-app.put('/api/train-exam/courses/:id/instructor-review', requireReader, asyncHandler(saveInstructorReview));
+app.put('/api/train-exam/instructor-review-forms/:id/response', requireReader, asyncHandler(saveInstructorReviewResponse));
 
-app.get('/api/train-exam/admin/instructor-reviews', requireResultCenterReader, asyncHandler(async (_req, res) => {
-  const rows = await query(
+app.get('/api/train-exam/admin/instructor-review-forms', requireAdminOnly, asyncHandler(async (_req, res) => {
+  const forms = await query(
     `SELECT *
-     FROM te_instructor_reviews
+     FROM te_instructor_review_forms
      ORDER BY updated_at DESC, id DESC`
   );
+  const items = [];
+  for (const form of forms) {
+    items.push(await getInstructorReviewFormWithSummary(form));
+  }
+  res.json({ items });
+}));
+
+app.post('/api/train-exam/admin/instructor-review-forms', requireAdminOnly, asyncHandler(async (req, res) => {
+  const input = normalizeInstructorQuestionnaireInput(req.body || {});
+  if (!input.title) throw appError('问卷标题不能为空', 400);
+  if (!input.instructor_name) throw appError('讲师姓名不能为空', 400);
+  const result = await run(
+    `INSERT INTO te_instructor_review_forms
+      (title, instructor_name, description, status, created_by_id, created_by_name, updated_by_id, updated_by_name)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    [input.title, input.instructor_name, input.description || null, input.status, Number(req.user.id) || null, req.user.username, Number(req.user.id) || null, req.user.username]
+  );
+  const form = await get('SELECT * FROM te_instructor_review_forms WHERE id = ? LIMIT 1', [Number(result.insertId || 0)]);
+  res.status(201).json(await getInstructorReviewFormWithSummary(form));
+}));
+
+app.put('/api/train-exam/admin/instructor-review-forms/:id', requireAdminOnly, asyncHandler(async (req, res) => {
+  const id = Number(req.params.id || 0);
+  const before = await get('SELECT * FROM te_instructor_review_forms WHERE id = ? LIMIT 1', [id]);
+  if (!before) throw appError('讲师评价问卷不存在', 404);
+  const input = normalizeInstructorQuestionnaireInput({
+    title: req.body?.title !== undefined ? req.body.title : before.title,
+    instructor_name: req.body?.instructor_name !== undefined ? req.body.instructor_name : before.instructor_name,
+    description: req.body?.description !== undefined ? req.body.description : before.description,
+    status: req.body?.status !== undefined ? req.body.status : before.status,
+  });
+  if (!input.title) throw appError('问卷标题不能为空', 400);
+  if (!input.instructor_name) throw appError('讲师姓名不能为空', 400);
+  await run(
+    `UPDATE te_instructor_review_forms
+     SET title = ?,
+         instructor_name = ?,
+         description = ?,
+         status = ?,
+         updated_by_id = ?,
+         updated_by_name = ?,
+         updated_at = NOW()
+     WHERE id = ?`,
+    [input.title, input.instructor_name, input.description || null, input.status, Number(req.user.id) || null, req.user.username, id]
+  );
+  const after = await get('SELECT * FROM te_instructor_review_forms WHERE id = ? LIMIT 1', [id]);
+  res.json(await getInstructorReviewFormWithSummary(after));
+}));
+
+app.get('/api/train-exam/admin/instructor-review-forms/:id/responses', requireAdminOnly, asyncHandler(async (req, res) => {
+  const id = Number(req.params.id || 0);
+  const form = await get('SELECT * FROM te_instructor_review_forms WHERE id = ? LIMIT 1', [id]);
+  if (!form) throw appError('讲师评价问卷不存在', 404);
+  const rows = await query(
+    `SELECT *
+     FROM te_instructor_review_responses
+     WHERE form_id = ?
+     ORDER BY updated_at DESC, id DESC`,
+    [id]
+  );
   res.json({
+    form: await getInstructorReviewFormWithSummary(form),
     items: rows,
-    summary: buildInstructorReviewSummary(rows),
+    summary: buildInstructorReviewQuestionnaireSummary(rows),
   });
 }));
 

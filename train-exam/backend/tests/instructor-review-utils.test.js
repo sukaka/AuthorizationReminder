@@ -1,62 +1,91 @@
 const {
-  buildInstructorReviewSummary,
-  canUserReviewCourse,
-  normalizeInstructorReviewInput,
+  buildInstructorReviewQuestionnaireSummary,
+  normalizeInstructorQuestionnaireInput,
+  normalizeInstructorReviewResponseInput,
   normalizeInstructorReviewStatus,
 } = require('../src/instructor-review-utils');
 
-describe('instructor review utils', () => {
-  it('normalizes review input scores and feedback', () => {
-    expect(normalizeInstructorReviewInput({
-      rating: '5',
-      clarity_score: '4',
-      interaction_score: '3',
-      practical_score: '2',
-      pace_score: '1',
-      qa_score: '7',
-      feedback: ' 讲得清楚，案例实用 ',
+describe('instructor review questionnaire utils', () => {
+  it('normalizes questionnaire metadata', () => {
+    expect(normalizeInstructorQuestionnaireInput({
+      title: '  线下培训讲师评价 ',
+      instructor_name: ' 王老师 ',
+      description: '  第一期线下课 ',
+      status: 'published',
+    })).toEqual({
+      title: '线下培训讲师评价',
+      instructor_name: '王老师',
+      description: '第一期线下课',
+      status: 'published',
+    });
+  });
+
+  it('normalizes five dimension scores and computes final score text', () => {
+    expect(normalizeInstructorReviewResponseInput({
+      clarity_score: '5',
+      interaction_score: '4',
+      practical_score: '4',
+      time_control_score: '3',
+      qa_score: '4',
+      feedback: '  案例很实用 ',
       anonymous: 'true',
     })).toEqual({
-      rating: 5,
-      clarity_score: 4,
-      interaction_score: 3,
-      practical_score: 2,
-      pace_score: 1,
-      qa_score: 5,
-      feedback: '讲得清楚，案例实用',
+      clarity_score: 5,
+      interaction_score: 4,
+      practical_score: 4,
+      time_control_score: 3,
+      qa_score: 4,
+      final_score: 4,
+      rating_label: '优秀',
+      feedback: '案例很实用',
       anonymous: 1,
     });
   });
 
-  it('normalizes admin review statuses', () => {
-    expect(normalizeInstructorReviewStatus('resolved')).toBe('resolved');
-    expect(normalizeInstructorReviewStatus('已处理')).toBe('resolved');
-    expect(normalizeInstructorReviewStatus('pending')).toBe('pending');
-    expect(normalizeInstructorReviewStatus('unknown')).toBe('pending');
+  it('maps rounded final scores to rating labels', () => {
+    expect(normalizeInstructorReviewResponseInput({
+      clarity_score: 5,
+      interaction_score: 5,
+      practical_score: 5,
+      time_control_score: 5,
+      qa_score: 5,
+    }).rating_label).toBe('极好');
+    expect(normalizeInstructorReviewResponseInput({
+      clarity_score: 1,
+      interaction_score: 1,
+      practical_score: 1,
+      time_control_score: 1,
+      qa_score: 1,
+    }).rating_label).toBe('极差');
   });
 
-  it('allows course review after enrollment or learning progress', () => {
-    expect(canUserReviewCourse({ enrollment: { id: 1 }, progressCount: 0 })).toBe(true);
-    expect(canUserReviewCourse({ enrollment: null, progressCount: 2 })).toBe(true);
-    expect(canUserReviewCourse({ enrollment: null, progressCount: 0 })).toBe(false);
+  it('normalizes questionnaire status', () => {
+    expect(normalizeInstructorReviewStatus('published')).toBe('published');
+    expect(normalizeInstructorReviewStatus('closed')).toBe('closed');
+    expect(normalizeInstructorReviewStatus('草稿')).toBe('draft');
+    expect(normalizeInstructorReviewStatus('unknown')).toBe('draft');
   });
 
-  it('builds admin instructor review summary', () => {
-    expect(buildInstructorReviewSummary([
-      { rating: 5, status: 'resolved', instructor_name: '张老师', clarity_score: 5, interaction_score: 4, practical_score: 5, pace_score: 4, qa_score: 5 },
-      { rating: 4, status: 'pending', instructor_name: '张老师', clarity_score: 4, interaction_score: 4, practical_score: 4, pace_score: 3, qa_score: 4 },
-      { rating: 3, status: 'pending', instructor_name: '李老师', clarity_score: 3, interaction_score: 3, practical_score: 4, pace_score: 3, qa_score: 3 },
+  it('builds questionnaire summary by responses', () => {
+    expect(buildInstructorReviewQuestionnaireSummary([
+      { final_score: 5, clarity_score: 5, interaction_score: 5, practical_score: 5, time_control_score: 5, qa_score: 5 },
+      { final_score: 4, clarity_score: 4, interaction_score: 4, practical_score: 4, time_control_score: 4, qa_score: 4 },
+      { final_score: 3, clarity_score: 3, interaction_score: 3, practical_score: 3, time_control_score: 3, qa_score: 3 },
     ])).toEqual({
-      total_reviews: 3,
-      pending_count: 2,
-      resolved_count: 1,
-      average_rating: 4,
-      excellent_instructor_count: 1,
+      response_count: 3,
+      average_final_score: 4,
+      rating_distribution: {
+        极好: 1,
+        优秀: 1,
+        普通: 1,
+        一般: 0,
+        极差: 0,
+      },
       dimensions: {
         clarity_score: 4,
-        interaction_score: 3.67,
-        practical_score: 4.33,
-        pace_score: 3.33,
+        interaction_score: 4,
+        practical_score: 4,
+        time_control_score: 4,
         qa_score: 4,
       },
     });
