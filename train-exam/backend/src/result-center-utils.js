@@ -41,48 +41,42 @@ const calculateExamRating = (score, totalScore) => {
 };
 
 const buildEvaluationText = (ratingLevel) => {
-  if (ratingLevel === 'A') return '整体表现优秀，考试成绩和课程反馈都很突出，可作为后续学习标杆。';
-  if (ratingLevel === 'B') return '整体表现良好，考试成绩和课程反馈较稳定，建议继续巩固薄弱知识点。';
-  if (ratingLevel === 'C') return '整体表现合格，仍有提升空间，建议结合课程评价安排针对性复训。';
-  return '整体表现需要加强，建议优先完成课程学习并进行阶段性复考。';
+  if (ratingLevel === 'A') return '最终评价优秀，多次最终成绩平均分突出，可作为后续学习标杆。';
+  if (ratingLevel === 'B') return '最终评价良好，多次最终成绩表现较稳定，建议继续巩固薄弱知识点。';
+  if (ratingLevel === 'C') return '最终评价合格，仍有提升空间，建议结合错题和薄弱知识点安排针对性复训。';
+  return '最终评价需要加强，建议优先完成复训并在阶段性复考后重新评估。';
 };
 
-const buildOverallEvaluation = ({ resultRows = [], courseReviews = [] } = {}) => {
+const buildOverallEvaluation = ({ resultRows = [] } = {}) => {
   const examItems = (Array.isArray(resultRows) ? resultRows : [])
+    .filter((item) => toNumber(item?.is_final, 0) === 1)
     .map((item) => {
       const total = toNumber(item?.total_score, 0);
-      if (total <= 0) return null;
-      return roundTo((toNumber(item?.score, 0) / total) * 100, 2);
+      const score = toNumber(item?.score, 0);
+      return {
+        score,
+        rate: total > 0 ? roundTo((score / total) * 100, 2) : score,
+      };
     })
-    .filter((item) => item !== null);
-  const reviewItems = (Array.isArray(courseReviews) ? courseReviews : [])
-    .map((item) => toNumber(item?.rating, 0))
-    .filter((item) => item >= 1 && item <= 5);
+    .filter((item) => Number.isFinite(item.score) && Number.isFinite(item.rate));
 
   const examAverageRate = examItems.length
-    ? roundTo(examItems.reduce((sum, item) => sum + item, 0) / examItems.length, 2)
+    ? roundTo(examItems.reduce((sum, item) => sum + item.rate, 0) / examItems.length, 2)
     : 0;
-  const courseAverageRating = reviewItems.length
-    ? roundTo(reviewItems.reduce((sum, item) => sum + item, 0) / reviewItems.length, 2)
+  const finalAverageScore = examItems.length
+    ? roundTo(examItems.reduce((sum, item) => sum + item.score, 0) / examItems.length, 2)
     : 0;
-  const courseAverageRate = courseAverageRating > 0 ? roundTo((courseAverageRating / 5) * 100, 2) : 0;
-
-  let overallScore = 0;
-  if (examItems.length && reviewItems.length) {
-    overallScore = roundTo(examAverageRate * 0.7 + courseAverageRate * 0.3, 2);
-  } else if (examItems.length) {
-    overallScore = examAverageRate;
-  } else if (reviewItems.length) {
-    overallScore = courseAverageRate;
-  }
+  const overallScore = examAverageRate;
 
   const rating = calculateExamRating(overallScore, 100);
   return {
     exam_count: examItems.length,
-    course_review_count: reviewItems.length,
+    final_result_count: examItems.length,
+    final_average_score: finalAverageScore,
+    course_review_count: 0,
     exam_average_rate: examAverageRate,
-    course_average_rating: courseAverageRating,
-    course_average_rate: courseAverageRate,
+    course_average_rating: 0,
+    course_average_rate: 0,
     overall_score: overallScore,
     rating_level: rating.rating_level,
     evaluation_text: buildEvaluationText(rating.rating_level),

@@ -7883,7 +7883,7 @@ app.get('/api/train-exam/admin/users/:userId/results', requireResultCenterReader
       [...params, filters.limit, offset]
     ),
     query(
-      `SELECT r.score, r.passed, r.is_final, r.created_at
+      `SELECT r.score, r.total_score, r.passed, r.is_final, r.created_at
        FROM te_exam_results r
        LEFT JOIN te_papers p ON p.id = r.paper_id
        ${whereSql}

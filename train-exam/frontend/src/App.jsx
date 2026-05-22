@@ -794,6 +794,8 @@ const buildCandidateRecordDefault = () => ({
   },
   overall_evaluation: {
     exam_count: 0,
+    final_result_count: 0,
+    final_average_score: 0,
     course_review_count: 0,
     exam_average_rate: 0,
     course_average_rating: 0,
@@ -7544,9 +7546,9 @@ function App() {
                         </div>
                       </div>
                       <div className="results-score-card compact">
-                        <span>平均分</span>
-                        <strong>{Number(candidateRecord?.summary?.average_score || 0).toFixed(2)}</strong>
-                        <div>共 {Number(candidateRecord?.summary?.total_results || 0)} 次考试</div>
+                        <span>最终均分</span>
+                        <strong>{Number(candidateRecord?.overall_evaluation?.final_average_score ?? candidateRecord?.overall_evaluation?.overall_score ?? 0).toFixed(2)}</strong>
+                        <div>共 {Number(candidateRecord?.overall_evaluation?.final_result_count || candidateRecord?.overall_evaluation?.exam_count || 0)} 次最终成绩</div>
                       </div>
                     </div>
                     <div className="metric-grid results-detail-metrics">
@@ -7567,25 +7569,25 @@ function App() {
                         <strong>{Number(candidateRecord?.page || 1)} / {Number(candidateRecord?.total_pages || 1)}</strong>
                       </div>
                       <div className="metric">
-                        <label>综合评分</label>
-                        <strong>{Number(candidateRecord?.overall_evaluation?.overall_score || 0).toFixed(2)}</strong>
+                        <label>最终平均分</label>
+                        <strong>{Number(candidateRecord?.overall_evaluation?.final_average_score ?? candidateRecord?.overall_evaluation?.overall_score ?? 0).toFixed(2)}</strong>
                       </div>
                       <div className="metric">
-                        <label>综合评级</label>
+                        <label>最终评级</label>
                         <strong>{formatRatingText(candidateRecord?.overall_evaluation?.rating_level)}</strong>
                       </div>
                       <div className="metric">
-                        <label>考试均分率</label>
+                        <label>最终得分率</label>
                         <strong>{formatPercentText(candidateRecord?.overall_evaluation?.exam_average_rate)}</strong>
                       </div>
                       <div className="metric">
                         <label>评价依据</label>
-                        <strong>{Number(candidateRecord?.overall_evaluation?.exam_count || 0)} 场</strong>
+                        <strong>{Number(candidateRecord?.overall_evaluation?.final_result_count || candidateRecord?.overall_evaluation?.exam_count || 0)} 次最终成绩</strong>
                       </div>
                     </div>
                     {candidateRecord?.overall_evaluation?.evaluation_text ? (
                       <div className="results-ai-advice">
-                        <strong>综合评价</strong>
+                        <strong>最终评价</strong>
                         <p>{candidateRecord.overall_evaluation.evaluation_text}</p>
                       </div>
                     ) : null}

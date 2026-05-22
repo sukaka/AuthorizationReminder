@@ -345,11 +345,12 @@ describe('result center utils', () => {
     });
   });
 
-  it('builds overall evaluation from multiple exams and course ratings', () => {
+  it('builds final evaluation from final exam results only', () => {
     expect(buildOverallEvaluation({
       resultRows: [
-        { score: 85, total_score: 100 },
-        { score: 72, total_score: 90 },
+        { score: 95, total_score: 100, is_final: 1 },
+        { score: 72, total_score: 90, is_final: 0 },
+        { score: 80, total_score: 100, is_final: 1 },
       ],
       courseReviews: [
         { rating: 5 },
@@ -357,44 +358,50 @@ describe('result center utils', () => {
       ],
     })).toEqual({
       exam_count: 2,
-      course_review_count: 2,
-      exam_average_rate: 82.5,
-      course_average_rating: 4.5,
-      course_average_rate: 90,
-      overall_score: 84.75,
+      final_result_count: 2,
+      final_average_score: 87.5,
+      course_review_count: 0,
+      exam_average_rate: 87.5,
+      course_average_rating: 0,
+      course_average_rate: 0,
+      overall_score: 87.5,
       rating_level: 'B',
-      evaluation_text: '整体表现良好，考试成绩和课程反馈较稳定，建议继续巩固薄弱知识点。',
+      evaluation_text: '最终评价良好，多次最终成绩表现较稳定，建议继续巩固薄弱知识点。',
     });
   });
 
-  it('builds overall evaluation from course ratings when no exam exists', () => {
+  it('builds empty final evaluation when no final exam exists', () => {
     expect(buildOverallEvaluation({
       resultRows: [],
       courseReviews: [{ rating: 3 }],
     })).toMatchObject({
       exam_count: 0,
-      course_review_count: 1,
+      final_result_count: 0,
+      final_average_score: 0,
+      course_review_count: 0,
       exam_average_rate: 0,
-      course_average_rating: 3,
-      course_average_rate: 60,
-      overall_score: 60,
-      rating_level: 'C',
+      course_average_rating: 0,
+      course_average_rate: 0,
+      overall_score: 0,
+      rating_level: 'D',
     });
   });
 
-  it('builds overall evaluation from exam rows when course ratings are not available yet', () => {
+  it('ignores non-final exam rows for final evaluation', () => {
     expect(buildOverallEvaluation({
       resultRows: [
-        { score: 92, total_score: 100 },
-        { score: 84, total_score: 100 },
+        { score: 100, total_score: 100, is_final: 0 },
+        { score: 84, total_score: 100, is_final: 1 },
       ],
     })).toMatchObject({
-      exam_count: 2,
+      exam_count: 1,
+      final_result_count: 1,
+      final_average_score: 84,
       course_review_count: 0,
-      exam_average_rate: 88,
+      exam_average_rate: 84,
       course_average_rating: 0,
       course_average_rate: 0,
-      overall_score: 88,
+      overall_score: 84,
       rating_level: 'B',
     });
   });
