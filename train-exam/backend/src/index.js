@@ -86,6 +86,10 @@ const {
   getExamSessionExpireTs,
   shouldResumeExistingExamSession,
 } = require('./exam-session-utils');
+const {
+  resolveRetakeStartPermission,
+  shouldKeepFinalResultAfterDelete,
+} = require('./retake-opportunity-utils');
 const { isBasicViewerApiAllowed, isBasicViewerRole } = require('./viewer-scope-utils');
 const {
   isOriginAllowedForRequest,
@@ -3316,6 +3320,95 @@ const buildAdminResultPaperOptions = async ({ whereSql, params }) => {
     paper_id: Number(item.paper_id || 0),
     paper_name: resolveResultPaperName(item),
   })).filter((item) => Number(item.paper_id || 0) >= 0);
+};
+
+const getAvailableRetakeOpportunity = async ({ userId, paperId, tx = null } = {}) => {
+  const db = tx || { get };
+  return db.get(
+    `SELECT *
+     FROM te_exam_retake_opportunities
+     WHERE user_id = ? AND paper_id = ? AND remaining_count > consumed_count
+     ORDER BY id ASC
+     LIMIT 1`,
+    [Number(userId || 0), Number(paperId || 0)]
+  );
+};
+
+const consumeRetakeOpportunity = async ({ tx, opportunityId } = {}) => {
+  const id = Number(opportunityId || 0);
+  if (!id) return false;
+  const result = await tx.run(
+    `UPDATE te_exam_retake_opportunities
+     SET consumed_count = consumed_count + 1, updated_at = NOW()
+     WHERE id = ? AND remaining_count > consumed_count`,
+    [id]
+  );
+  return Number(result?.affectedRows || 0) > 0;
+};
+
+const grantRetakeOpportunity = async ({
+  tx = null,
+  paperId,
+  userId,
+  username,
+  reason,
+  grantedBy,
+} = {}) => {
+  const db = tx || { run };
+  const result = await db.run(
+    `INSERT INTO te_exam_retake_opportunities
+      (paper_id, user_id, username, remaining_count, consumed_count, reason, granted_by_id, granted_by_name)
+     VALUES (?, ?, ?, 1, 0, ?, ?, ?)`,
+    [
+      Number(paperId || 0),
+      Number(userId || 0),
+      trimText(username || `用户#${Number(userId || 0)}`),
+      trimText(reason).slice(0, 255) || null,
+      Number(grantedBy?.id || 0) || null,
+      trimText(grantedBy?.username) || null,
+    ]
+  );
+  return {
+    id: Number(result?.insertId || 0),
+    paper_id: Number(paperId || 0),
+    user_id: Number(userId || 0),
+    username: trimText(username || `用户#${Number(userId || 0)}`),
+    remaining_count: 1,
+    consumed_count: 0,
+    reason: trimText(reason),
+  };
+};
+
+const loadRetakeTarget = async ({ userId, paperId }) => {
+  const [paper, profile, latestResult, latestSession] = await Promise.all([
+    get('SELECT id, name FROM te_papers WHERE id = ? LIMIT 1', [Number(paperId || 0)]),
+    get('SELECT user_id, username FROM te_user_profiles WHERE user_id = ? LIMIT 1', [Number(userId || 0)]),
+    get(
+      `SELECT user_id, username
+       FROM te_exam_results
+       WHERE user_id = ? AND paper_id = ?
+       ORDER BY id DESC
+       LIMIT 1`,
+      [Number(userId || 0), Number(paperId || 0)]
+    ),
+    get(
+      `SELECT user_id, username
+       FROM te_exam_sessions
+       WHERE user_id = ? AND paper_id = ?
+       ORDER BY id DESC
+       LIMIT 1`,
+      [Number(userId || 0), Number(paperId || 0)]
+    ),
+  ]);
+  if (!paper) throw appError('试卷不存在', 404);
+  const username = trimText(profile?.username || latestResult?.username || latestSession?.username || `用户#${Number(userId || 0)}`);
+  return {
+    paper,
+    user: {
+      id: Number(userId || 0),
+      username,
+    },
+  };
 };
 
 const finalizeExamSession = async ({ sessionId, forceTimeout = false, req = null }) => {
@@ -7447,6 +7540,7 @@ const createExamSessionWithSnapshots = async ({
   operationAction = 'EXAM_START',
   operationMessage = '',
   operationAfterData = null,
+  retakeOpportunityId = 0,
 }) => {
   const safeSnapshots = Array.isArray(snapshots) ? snapshots : [];
   if (!safeSnapshots.length) throw appError('试卷没有可用题目，无法开始考试', 409);
@@ -7463,6 +7557,11 @@ const createExamSessionWithSnapshots = async ({
     });
 
   const sessionId = await transaction(async (tx) => {
+    if (Number(retakeOpportunityId || 0) > 0) {
+      const consumed = await consumeRetakeOpportunity({ tx, opportunityId: retakeOpportunityId });
+      if (!consumed) throw appError('补考机会已被使用，请刷新后重试', 409);
+    }
+
     const insert = await tx.run(
       `INSERT INTO te_exam_sessions
         (paper_id, user_id, username, user_department, user_position, attempt_no, status, started_at, duration_minutes, pass_score, max_attempts)
@@ -7521,6 +7620,7 @@ const createExamSessionWithSnapshots = async ({
         paper_id: Number(paperId || 0),
         attempt_no: Number(attemptNo || 1),
         question_count: answers.length,
+        retake_opportunity_id: Number(retakeOpportunityId || 0),
       },
     });
   }
@@ -7607,11 +7707,19 @@ app.post('/api/train-exam/papers/:id/exam/start', requireReader, examStartRateLi
   );
   const doneAttempts = Number(doneAttemptsRow?.total || 0);
   const maxAttempts = Math.max(1, Number(paper.max_attempts || 3));
-  if (doneAttempts >= maxAttempts) {
+  const availableRetakeOpportunity = doneAttempts >= maxAttempts
+    ? await getAvailableRetakeOpportunity({ userId, paperId })
+    : null;
+  const startPermission = resolveRetakeStartPermission({
+    doneAttempts,
+    maxAttempts,
+    availableOpportunity: availableRetakeOpportunity,
+  });
+  if (!startPermission.allowed) {
     throw appError('该试卷已达到最大考试次数', 409);
   }
 
-  const attemptNo = doneAttempts + 1;
+  const attemptNo = startPermission.attemptNo;
   let snapshots = [];
 
   if (trimText(paper.paper_mode) === 'fixed') {
@@ -7637,6 +7745,10 @@ app.post('/api/train-exam/papers/:id/exam/start', requireReader, examStartRateLi
     snapshots,
     req,
     operationAction: 'EXAM_START',
+    operationMessage: startPermission.retakeOpportunityId
+      ? `使用补考机会开始考试会话，试卷 ${paperId}`
+      : '',
+    retakeOpportunityId: startPermission.retakeOpportunityId,
   });
 
   res.status(201).json({
@@ -7881,6 +7993,112 @@ app.get('/api/train-exam/admin/results', requireResultCenterReader, asyncHandler
       users,
       papers,
     },
+  });
+}));
+
+app.post('/api/train-exam/admin/users/:userId/papers/:paperId/retake-opportunities', requireAdminOnly, asyncHandler(async (req, res) => {
+  const userId = Number(req.params.userId);
+  const paperId = Number(req.params.paperId);
+  if (!userId) throw appError('考生不存在', 404);
+  if (!paperId) throw appError('试卷不存在', 404);
+
+  const target = await loadRetakeTarget({ userId, paperId });
+  const reason = trimText(req.body?.reason || '管理员手动开放补考');
+  const opportunity = await grantRetakeOpportunity({
+    paperId,
+    userId,
+    username: target.user.username,
+    reason,
+    grantedBy: req.user,
+  });
+
+  await logOperation({
+    req,
+    action: 'RESULT_RETAKE_GRANT',
+    entity: 'exam_retake_opportunity',
+    entityId: opportunity.id,
+    message: `为 ${target.user.username} 开放补考机会`,
+    afterData: {
+      ...opportunity,
+      paper_name: target.paper.name,
+    },
+  });
+
+  res.status(201).json({
+    success: true,
+    opportunity,
+  });
+}));
+
+app.delete('/api/train-exam/admin/results/:id', requireAdminOnly, asyncHandler(async (req, res) => {
+  const resultId = Number(req.params.id);
+  if (!resultId) throw appError('考试成绩不存在', 404);
+
+  const resultRow = await get('SELECT * FROM te_exam_results WHERE id = ? LIMIT 1', [resultId]);
+  if (!resultRow) throw appError('考试成绩不存在', 404);
+  const paperId = Number(resultRow.paper_id || 0);
+  if (!paperId) throw appError('仅正式试卷成绩可删除并开放补考', 409);
+  const paperRow = await get('SELECT id FROM te_papers WHERE id = ? LIMIT 1', [paperId]);
+  if (!paperRow) throw appError('试卷不存在，无法开放补考', 409);
+
+  const certRows = await query('SELECT id, file_path FROM te_certificates WHERE result_id = ?', [resultId]);
+  const removal = await transaction(async (tx) => {
+    const removedAdvices = await tx.run('DELETE FROM te_result_ai_advices WHERE result_id = ?', [resultId]);
+    await tx.run('UPDATE te_recertification_jobs SET completed_result_id = NULL WHERE completed_result_id = ?', [resultId]);
+    const removedRecertJobs = await tx.run('DELETE FROM te_recertification_jobs WHERE result_id = ?', [resultId]);
+    const removedCertificates = await tx.run('DELETE FROM te_certificates WHERE result_id = ?', [resultId]);
+    const removedResults = await tx.run('DELETE FROM te_exam_results WHERE id = ?', [resultId]);
+    if (Number(removedResults?.affectedRows || 0) <= 0) {
+      throw appError('考试成绩不存在', 404);
+    }
+    if (!shouldKeepFinalResultAfterDelete({ deletedWasFinal: Number(resultRow.is_final || 0) === 1 })) {
+      await tx.run(
+        `UPDATE te_exam_results
+         SET is_final = 0
+         WHERE user_id = ? AND paper_id = ?`,
+        [Number(resultRow.user_id || 0), Number(resultRow.paper_id || 0)]
+      );
+    }
+    const opportunity = await grantRetakeOpportunity({
+      tx,
+      paperId,
+      userId: Number(resultRow.user_id || 0),
+      username: resultRow.username,
+      reason: '删除成绩后自动开放补考',
+      grantedBy: req.user,
+    });
+    return {
+      opportunity,
+      removed_advices: Number(removedAdvices?.affectedRows || 0),
+      removed_recert_jobs: Number(removedRecertJobs?.affectedRows || 0),
+      removed_certificates: Number(removedCertificates?.affectedRows || 0),
+    };
+  });
+
+  let removedCertificateFiles = 0;
+  for (const row of certRows) {
+    const removed = await removeCertificateFileIfExists(row?.file_path);
+    if (removed) removedCertificateFiles += 1;
+  }
+
+  await logOperation({
+    req,
+    action: 'RESULT_DELETE',
+    entity: 'exam_result',
+    entityId: resultId,
+    message: `删除考试成绩 ${resultId} 并开放补考机会`,
+    beforeData: resultRow,
+    afterData: {
+      ...removal,
+      removed_certificate_files: removedCertificateFiles,
+    },
+  });
+
+  res.json({
+    success: true,
+    deleted_result_id: resultId,
+    retake_opportunity: removal.opportunity,
+    removed_certificate_files: removedCertificateFiles,
   });
 }));
 

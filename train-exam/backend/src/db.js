@@ -528,6 +528,21 @@ const createSchema = async () => {
     INDEX idx_te_exam_results_final (is_final, created_at)
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
 
+  await run(`CREATE TABLE IF NOT EXISTS te_exam_retake_opportunities (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    paper_id BIGINT NOT NULL,
+    user_id BIGINT NOT NULL,
+    username VARCHAR(128) NOT NULL,
+    remaining_count INT NOT NULL DEFAULT 1,
+    consumed_count INT NOT NULL DEFAULT 0,
+    reason VARCHAR(255) NULL,
+    granted_by_id BIGINT NULL,
+    granted_by_name VARCHAR(128) NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    INDEX idx_te_exam_retake_user_paper (user_id, paper_id, remaining_count, consumed_count)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
+
   await run(`CREATE TABLE IF NOT EXISTS te_certificates (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,
     result_id BIGINT NOT NULL,

@@ -1427,6 +1427,7 @@ function App() {
   const [resultReviewLoading, setResultReviewLoading] = useState(false)
   const [candidateRecord, setCandidateRecord] = useState(() => buildCandidateRecordDefault())
   const [candidateRecordLoading, setCandidateRecordLoading] = useState(false)
+  const [adminResultActionPendingId, setAdminResultActionPendingId] = useState('')
   const [certTemplate, setCertTemplate] = useState({ exists: false })
   const [certTemplateFile, setCertTemplateFile] = useState(null)
   const [certTemplateInputKey, setCertTemplateInputKey] = useState(0)
@@ -2400,6 +2401,84 @@ function App() {
       if (!silent) setMessage(`已打开考生记录：用户 #${uid}`)
     } catch (err) {
       setError(err.message || '加载考生记录失败')
+    }
+  }
+
+  const refreshAdminResultViews = async ({ userId = 0 } = {}) => {
+    const tasks = [
+      fetchAdminResults(true, { page: adminResultsPagination.page, limit: adminResultsPagination.limit }),
+      fetchAdminResultPapers(true),
+    ]
+    if (activeMenu === 'student-overall') {
+      tasks.push(fetchStudentOverall(true))
+    }
+    if (resultCenterView.type === 'candidate' && Number(userId || resultCenterView.userId || 0) > 0) {
+      tasks.push(fetchCandidateRecord(Number(userId || resultCenterView.userId), {
+        silent: true,
+        page: candidateRecord.page || 1,
+        limit: candidateRecord.limit || 10,
+      }))
+    }
+    await Promise.all(tasks)
+  }
+
+  const onGrantRetakeOpportunity = async (item) => {
+    const userId = Number(item?.user_id || 0)
+    const paperId = Number(item?.paper_id || 0)
+    if (!userId || !paperId) {
+      setError('考生或试卷信息无效')
+      return
+    }
+    const username = item?.username || `用户#${userId}`
+    const paperName = item?.paper_name || `试卷#${paperId}`
+    const confirmed = window.confirm(`确认为“${username}”开放“${paperName}”的补考机会吗？`)
+    if (!confirmed) return
+    const pendingKey = `grant-${userId}-${paperId}`
+    setAdminResultActionPendingId(pendingKey)
+    clearFeedback()
+    try {
+      await api.post(`/api/train-exam/admin/users/${userId}/papers/${paperId}/retake-opportunities`, {
+        reason: '管理员手动开放补考',
+      })
+      setMessage(`已为 ${username} 开放补考机会`)
+      await refreshAdminResultViews({ userId })
+    } catch (err) {
+      setError(err.message || '开放补考机会失败')
+    } finally {
+      setAdminResultActionPendingId('')
+    }
+  }
+
+  const onDeleteAdminResult = async (item) => {
+    const resultId = Number(item?.id || 0)
+    if (!resultId) {
+      setError('考试成绩无效')
+      return
+    }
+    const username = item?.username || `用户#${item?.user_id || '-'}`
+    const paperName = item?.paper_name || `试卷#${item?.paper_id || '-'}`
+    const confirmed = window.confirm(`确认删除“${username}”在“${paperName}”的成绩 #${resultId} 吗？删除后会自动开放一次补考机会。`)
+    if (!confirmed) return
+    const pendingKey = `delete-${resultId}`
+    setAdminResultActionPendingId(pendingKey)
+    clearFeedback()
+    try {
+      await api.del(`/api/train-exam/admin/results/${resultId}`)
+      setResultReviewCache((prev) => {
+        const next = { ...prev }
+        delete next[resultId]
+        return next
+      })
+      if (Number(resultCenterView.resultId || 0) === resultId) {
+        setResultCenterView((prev) => ({ ...prev, type: prev.from === 'candidate' ? 'candidate' : 'list', resultId: 0 }))
+        setResultReviewDetail(null)
+      }
+      setMessage(`已删除成绩 #${resultId}，并开放补考机会`)
+      await refreshAdminResultViews({ userId: Number(item?.user_id || 0) })
+    } catch (err) {
+      setError(err.message || '删除考试成绩失败')
+    } finally {
+      setAdminResultActionPendingId('')
     }
   }
 
@@ -7990,6 +8069,26 @@ function App() {
                             <td>
                               <div className="row-actions">
                                 <button className="ghost" type="button" onClick={() => onOpenResultReviewDetail(item.id, { from: 'candidate', userId: item.user_id })}>查看卷面</button>
+                                {isAdminRole && Number(item.paper_id || 0) > 0 ? (
+                                  <>
+                                    <button
+                                      className="ghost"
+                                      type="button"
+                                      disabled={adminResultActionPendingId === `grant-${Number(item.user_id || 0)}-${Number(item.paper_id || 0)}`}
+                                      onClick={() => onGrantRetakeOpportunity(item)}
+                                    >
+                                      开放补考
+                                    </button>
+                                    <button
+                                      className="danger"
+                                      type="button"
+                                      disabled={adminResultActionPendingId === `delete-${Number(item.id || 0)}`}
+                                      onClick={() => onDeleteAdminResult(item)}
+                                    >
+                                      删除成绩
+                                    </button>
+                                  </>
+                                ) : null}
                               </div>
                             </td>
                           </tr>
@@ -8192,6 +8291,26 @@ function App() {
                               <div className="row-actions">
                                 <button className="ghost" type="button" onClick={() => onOpenResultReviewDetail(item.id, { from: 'list', userId: item.user_id })}>查看卷面</button>
                                 <button className="ghost" type="button" onClick={() => onOpenCandidateRecord(item.user_id, { silent: true })}>查看考生记录</button>
+                                {isAdminRole && Number(item.paper_id || 0) > 0 ? (
+                                  <>
+                                    <button
+                                      className="ghost"
+                                      type="button"
+                                      disabled={adminResultActionPendingId === `grant-${Number(item.user_id || 0)}-${Number(item.paper_id || 0)}`}
+                                      onClick={() => onGrantRetakeOpportunity(item)}
+                                    >
+                                      开放补考
+                                    </button>
+                                    <button
+                                      className="danger"
+                                      type="button"
+                                      disabled={adminResultActionPendingId === `delete-${Number(item.id || 0)}`}
+                                      onClick={() => onDeleteAdminResult(item)}
+                                    >
+                                      删除成绩
+                                    </button>
+                                  </>
+                                ) : null}
                               </div>
                             </td>
                           </tr>
