@@ -754,6 +754,130 @@ const formatRatingText = (value) => {
   return ['A', 'B', 'C', 'D'].includes(level) ? level : 'D'
 }
 
+const STUDENT_OVERALL_PAGE_LIMIT = 100
+
+const buildStudentOverallDefault = () => ({
+  sourceItems: [],
+  loading: false,
+  filters: {
+    keyword: '',
+    department: 'all',
+    evaluation: 'all',
+    range: '30',
+  },
+})
+
+const buildStudentEvaluation = (averageScore) => {
+  const score = Number(averageScore || 0)
+  if (score >= 90) return { label: '优秀', className: 'excellent', detail: '成绩稳定突出，可作为培训标杆。' }
+  if (score >= 80) return { label: '良好', className: 'good', detail: '整体掌握较好，建议继续巩固薄弱题型。' }
+  if (score >= 60) return { label: '需加强', className: 'warn', detail: '已达到基础要求，建议安排针对性复训。' }
+  return { label: '重点跟进', className: 'danger', detail: '平均表现偏低，建议优先跟进学习和复考。' }
+}
+
+const getStudentOverallRangeStart = (range) => {
+  const key = String(range || '30')
+  if (key === 'all') return 0
+  const days = Number(key || 30)
+  if (!Number.isFinite(days) || days <= 0) return 0
+  const now = new Date()
+  now.setHours(0, 0, 0, 0)
+  now.setDate(now.getDate() - days)
+  return now.getTime()
+}
+
+const isStudentOverallResultInRange = (item, range) => {
+  const startTime = getStudentOverallRangeStart(range)
+  if (!startTime) return true
+  const createdTime = new Date(String(item?.created_at || '').replace(' ', 'T')).getTime()
+  if (!Number.isFinite(createdTime)) return false
+  return createdTime >= startTime
+}
+
+const buildStudentOverallRows = ({ items = [], filters = {} } = {}) => {
+  const keyword = String(filters.keyword || '').trim().toLowerCase()
+  const departmentFilter = String(filters.department || 'all')
+  const evaluationFilter = String(filters.evaluation || 'all')
+  const groups = new Map()
+
+  ;(Array.isArray(items) ? items : [])
+    .filter((item) => isStudentOverallResultInRange(item, filters.range))
+    .forEach((item) => {
+      const userId = Number(item?.user_id || 0)
+      const username = String(item?.username || (userId ? `用户#${userId}` : '未知学员')).trim()
+      const key = userId > 0 ? `user-${userId}` : `name-${username}`
+      const current = groups.get(key) || {
+        key,
+        user_id: userId,
+        username,
+        department: String(item?.user_department || '').trim() || '-',
+        position: String(item?.user_position || '').trim() || '-',
+        total: 0,
+        scoreSum: 0,
+        passCount: 0,
+        latestExamAt: '',
+        attempts: [],
+      }
+      current.total += 1
+      current.scoreSum += Number(item?.score || 0)
+      current.passCount += Number(item?.passed || 0) === 1 ? 1 : 0
+      current.latestExamAt = current.latestExamAt || item?.created_at || ''
+      current.attempts.push({
+        id: Number(item?.id || 0),
+        paperName: String(item?.paper_name || item?.paper_id || '未命名试卷').trim(),
+        score: Number(item?.score || 0),
+        totalScore: Number(item?.total_score || 0),
+        createdAt: item?.created_at || '',
+      })
+      groups.set(key, current)
+    })
+
+  return Array.from(groups.values())
+    .map((item) => {
+      const averageScore = item.total > 0 ? Number((item.scoreSum / item.total).toFixed(2)) : 0
+      const evaluation = buildStudentEvaluation(averageScore)
+      const attempts = item.attempts
+        .sort((left, right) => new Date(String(right.createdAt || '').replace(' ', 'T')).getTime() - new Date(String(left.createdAt || '').replace(' ', 'T')).getTime())
+      return {
+        ...item,
+        attempts,
+        averageScore,
+        latestExamAt: attempts[0]?.createdAt || item.latestExamAt || '',
+        evaluation,
+      }
+    })
+    .filter((item) => {
+      if (departmentFilter !== 'all' && item.department !== departmentFilter) return false
+      if (evaluationFilter !== 'all' && item.evaluation.label !== evaluationFilter) return false
+      if (!keyword) return true
+      return [item.username, item.department, item.position]
+        .some((value) => String(value || '').toLowerCase().includes(keyword))
+    })
+    .sort((left, right) => right.averageScore - left.averageScore || right.total - left.total || left.username.localeCompare(right.username, 'zh-CN'))
+}
+
+const buildStudentOverallSummary = (rows = []) => {
+  const items = Array.isArray(rows) ? rows : []
+  const totalAttempts = items.reduce((sum, item) => sum + Number(item.total || 0), 0)
+  const weightedScoreSum = items.reduce((sum, item) => sum + (Number(item.averageScore || 0) * Number(item.total || 0)), 0)
+  const excellentCount = items.filter((item) => item.evaluation?.label === '优秀').length
+  return {
+    studentCount: items.length,
+    totalAttempts,
+    averageScore: totalAttempts > 0 ? Number((weightedScoreSum / totalAttempts).toFixed(2)) : 0,
+    excellentRate: items.length > 0 ? Number(((excellentCount / items.length) * 100).toFixed(2)) : 0,
+  }
+}
+
+const buildStudentOverallDepartments = (items = []) => {
+  const values = new Set()
+  ;(Array.isArray(items) ? items : []).forEach((item) => {
+    const department = String(item?.user_department || '').trim()
+    if (department) values.add(department)
+  })
+  return Array.from(values).sort((left, right) => left.localeCompare(right, 'zh-CN'))
+}
+
 const buildAdminResultsQueryString = ({ page = 1, limit = 20, filters = {} } = {}) => {
   const params = new URLSearchParams()
   params.set('page', String(Math.max(1, Number(page || 1))))
@@ -1297,6 +1421,7 @@ function App() {
   const [adminResultsLoading, setAdminResultsLoading] = useState(false)
   const [adminResultPapersLoading, setAdminResultPapersLoading] = useState(false)
   const [adminResultsExporting, setAdminResultsExporting] = useState(false)
+  const [studentOverall, setStudentOverall] = useState(() => buildStudentOverallDefault())
   const [resultReviewDetail, setResultReviewDetail] = useState(null)
   const [resultReviewCache, setResultReviewCache] = useState({})
   const [resultReviewLoading, setResultReviewLoading] = useState(false)
@@ -1628,14 +1753,25 @@ function App() {
     const rows = Array.isArray(myResults) ? myResults : []
     const total = rows.length
     const passCount = rows.filter((item) => Number(item?.passed || 0) === 1).length
-    const scoreSum = rows.reduce((sum, item) => sum + Number(item?.score || 0), 0)
     return {
       total,
       passCount,
       failCount: Math.max(0, total - passCount),
-      averageScore: total > 0 ? Number((scoreSum / total).toFixed(2)) : 0,
     }
   }, [myResults])
+
+  const studentOverallRows = useMemo(
+    () => buildStudentOverallRows({ items: studentOverall.sourceItems, filters: studentOverall.filters }),
+    [studentOverall.sourceItems, studentOverall.filters]
+  )
+  const studentOverallSummary = useMemo(
+    () => buildStudentOverallSummary(studentOverallRows),
+    [studentOverallRows]
+  )
+  const studentOverallDepartments = useMemo(
+    () => buildStudentOverallDepartments(studentOverall.sourceItems),
+    [studentOverall.sourceItems]
+  )
 
   const resultReviewTypeStats = useMemo(
     () => (Array.isArray(resultReviewDetail?.report?.by_type) ? resultReviewDetail.report.by_type : []),
@@ -2038,6 +2174,101 @@ function App() {
     } finally {
       setAdminResultPapersLoading(false)
     }
+  }
+
+  const fetchStudentOverall = async (silent = false) => {
+    if (!silent) clearFeedback()
+    setStudentOverall((prev) => ({ ...prev, loading: true }))
+    try {
+      const firstQuery = buildAdminResultsQueryString({
+        page: 1,
+        limit: STUDENT_OVERALL_PAGE_LIMIT,
+        filters: {
+          keyword: '',
+          user_id: '',
+          paper_id: '',
+          passed: 'all',
+          final_only: false,
+          date_from: '',
+          date_to: '',
+        },
+      })
+      const firstPayload = await api.get(`/api/train-exam/admin/results?${firstQuery}`)
+      const firstItems = Array.isArray(firstPayload?.items) ? firstPayload.items : []
+      const totalPages = Math.max(1, Number(firstPayload?.total_pages || 1))
+      const pagePayloads = []
+      for (let page = 2; page <= totalPages; page += 1) {
+        const queryString = buildAdminResultsQueryString({
+          page,
+          limit: STUDENT_OVERALL_PAGE_LIMIT,
+          filters: {
+            keyword: '',
+            user_id: '',
+            paper_id: '',
+            passed: 'all',
+            final_only: false,
+            date_from: '',
+            date_to: '',
+          },
+        })
+        pagePayloads.push(api.get(`/api/train-exam/admin/results?${queryString}`))
+      }
+      const restPayloads = await Promise.all(pagePayloads)
+      const restItems = restPayloads.flatMap((payload) => (Array.isArray(payload?.items) ? payload.items : []))
+      const sourceItems = [...firstItems, ...restItems]
+      setStudentOverall((prev) => ({
+        ...prev,
+        sourceItems,
+        loading: false,
+      }))
+      return sourceItems
+    } catch (err) {
+      setStudentOverall((prev) => ({ ...prev, loading: false }))
+      throw err
+    }
+  }
+
+  const updateStudentOverallFilters = (patch) => {
+    setStudentOverall((prev) => ({
+      ...prev,
+      filters: {
+        ...prev.filters,
+        ...(patch || {}),
+      },
+    }))
+  }
+
+  const resetStudentOverallFilters = () => {
+    setStudentOverall((prev) => ({
+      ...prev,
+      filters: buildStudentOverallDefault().filters,
+    }))
+  }
+
+  const onExportStudentOverall = () => {
+    const headers = ['学员', '部门', '岗位', '考试次数', '最近考试', '各次分数', '平均分', '总体评价']
+    const lines = [headers.join(',')]
+    studentOverallRows.forEach((item) => {
+      const attemptText = item.attempts
+        .map((attempt) => `${attempt.paperName}:${attempt.score.toFixed(2)}/${attempt.totalScore.toFixed(2)}`)
+        .join('；')
+      const cells = [
+        item.username,
+        item.department,
+        item.position,
+        item.total,
+        formatDateTime(item.latestExamAt),
+        attemptText,
+        Number(item.averageScore || 0).toFixed(2),
+        item.evaluation?.label || '-',
+      ]
+      lines.push(cells.map((value) => {
+        const text = String(value ?? '')
+        return /[",\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text
+      }).join(','))
+    })
+    const blob = new Blob([`\uFEFF${lines.join('\n')}`], { type: 'text/csv;charset=utf-8' })
+    triggerBrowserDownload(blob, `student-overall-${Date.now()}.csv`)
   }
 
   const onOpenPaperResults = async (paper) => {
@@ -5518,6 +5749,21 @@ function App() {
               >
                 讲师评价
               </button>
+              {role === 'admin' ? (
+                <button
+                  className={activeMenu === 'student-overall' ? 'active' : ''}
+                  onClick={async () => {
+                    setActiveMenu('student-overall')
+                    try {
+                      await fetchStudentOverall(true)
+                    } catch (err) {
+                      setError(err.message || '加载学员总体评价失败')
+                    }
+                  }}
+                >
+                  学员总体评价
+                </button>
+              ) : null}
               <button className={activeMenu === 'retrain' ? 'active' : ''} onClick={() => { setActiveMenu('retrain'); fetchRetrainCenter(true) }}>错题复训</button>
               {canViewAiConfig && (
                 <button className={activeMenu === 'ai-models' ? 'active' : ''} onClick={() => { setActiveMenu('ai-models'); fetchAiConfigCenter(true) }}>模型配置</button>
@@ -6508,7 +6754,7 @@ function App() {
                       <th>问卷</th>
                       <th>讲师</th>
                       <th>{isBasicUser ? '我的评价' : '参与人数'}</th>
-                      <th>平均分</th>
+                      {!isBasicUser ? <th>平均分</th> : null}
                       <th>状态</th>
                       <th>更新时间</th>
                       <th>操作</th>
@@ -6521,7 +6767,7 @@ function App() {
                           <td>{item.title}</td>
                           <td>{item.instructor_name || '讲师'}</td>
                           <td>{isBasicUser ? (item.submitted ? `${Number(item.final_score || 0).toFixed(2)} 分 / ${item.rating_label || '-'}` : '未填写') : Number(item.summary?.response_count || 0)}</td>
-                          <td>{isBasicUser ? '-' : Number(item.summary?.average_final_score || 0).toFixed(2)}</td>
+                          {!isBasicUser ? <td>{Number(item.summary?.average_final_score || 0).toFixed(2)}</td> : null}
                           <td><span className="badge">{String(item.status || 'draft') === 'published' ? '已发布' : String(item.status || 'draft') === 'closed' ? '已关闭' : '草稿'}</span></td>
                           <td>{formatDateTime(item.updated_at)}</td>
                           <td>
@@ -6549,7 +6795,7 @@ function App() {
                         </tr>
                       ))
                     ) : (
-                      <tr><td colSpan={7}>暂无讲师评价问卷</td></tr>
+                      <tr><td colSpan={isBasicUser ? 6 : 7}>暂无讲师评价问卷</td></tr>
                     )}
                   </tbody>
                 </table>
@@ -8134,10 +8380,6 @@ function App() {
                         <label>未通过次数</label>
                         <strong>{personalResultsSummary.failCount}</strong>
                       </div>
-                      <div className="metric">
-                        <label>平均分</label>
-                        <strong>{Number(personalResultsSummary.averageScore || 0).toFixed(2)}</strong>
-                      </div>
                     </div>
                   </div>
                 </section>
@@ -8190,6 +8432,189 @@ function App() {
                 </section>
               </>
             )}
+          </>
+        )}
+
+        {activeMenu === 'student-overall' && role === 'admin' && (
+          <>
+            <section className="panel student-overall-panel">
+              <div className="panel-header">
+                <div>
+                  <h2>学员总体评价</h2>
+                  <div className="sub">按学员汇总考试次数、每次成绩与平均表现，用于培训复盘。</div>
+                </div>
+                <div className="row-actions">
+                  <span className="badge admin-only-badge">仅管理员可见平均分</span>
+                  <button
+                    className="ghost"
+                    type="button"
+                    onClick={() => fetchStudentOverall()}
+                    disabled={studentOverall.loading}
+                  >
+                    {studentOverall.loading ? '刷新中...' : '刷新'}
+                  </button>
+                  <button
+                    className="primary"
+                    type="button"
+                    onClick={onExportStudentOverall}
+                    disabled={studentOverall.loading || studentOverallRows.length === 0}
+                  >
+                    导出CSV
+                  </button>
+                </div>
+              </div>
+              <div className="panel-body metric-grid">
+                <div className="metric">
+                  <label>参考学员</label>
+                  <strong>{studentOverallSummary.studentCount}</strong>
+                </div>
+                <div className="metric">
+                  <label>考试总次数</label>
+                  <strong>{studentOverallSummary.totalAttempts}</strong>
+                </div>
+                <div className="metric">
+                  <label>平均分</label>
+                  <strong>{Number(studentOverallSummary.averageScore || 0).toFixed(2)}</strong>
+                </div>
+                <div className="metric">
+                  <label>优秀率</label>
+                  <strong>{formatPercentText(studentOverallSummary.excellentRate)}</strong>
+                </div>
+              </div>
+            </section>
+
+            <section className="panel">
+              <div className="panel-header">
+                <h2>筛选条件</h2>
+                <div className="row-actions">
+                  <button className="ghost" type="button" onClick={resetStudentOverallFilters} disabled={studentOverall.loading}>
+                    清空筛选
+                  </button>
+                  <button className="primary" type="button" onClick={() => fetchStudentOverall()} disabled={studentOverall.loading}>
+                    {studentOverall.loading ? '查询中...' : '查询'}
+                  </button>
+                </div>
+              </div>
+              <div className="panel-body">
+                <div className="student-overall-filter-grid">
+                  <div>
+                    <label>关键词</label>
+                    <input
+                      value={studentOverall.filters.keyword}
+                      onChange={(e) => updateStudentOverallFilters({ keyword: e.target.value })}
+                      placeholder="搜索学员/部门"
+                    />
+                  </div>
+                  <div>
+                    <label>部门</label>
+                    <select
+                      value={studentOverall.filters.department}
+                      onChange={(e) => updateStudentOverallFilters({ department: e.target.value })}
+                    >
+                      <option value="all">全部部门</option>
+                      {studentOverallDepartments.map((department) => (
+                        <option value={department} key={`student-overall-dept-${department}`}>{department}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label>总体评价</label>
+                    <select
+                      value={studentOverall.filters.evaluation}
+                      onChange={(e) => updateStudentOverallFilters({ evaluation: e.target.value })}
+                    >
+                      <option value="all">全部评价</option>
+                      <option value="优秀">优秀</option>
+                      <option value="良好">良好</option>
+                      <option value="需加强">需加强</option>
+                      <option value="重点跟进">重点跟进</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label>时间范围</label>
+                    <select
+                      value={studentOverall.filters.range}
+                      onChange={(e) => updateStudentOverallFilters({ range: e.target.value })}
+                    >
+                      <option value="30">近30天</option>
+                      <option value="90">近90天</option>
+                      <option value="365">近一年</option>
+                      <option value="all">全部时间</option>
+                    </select>
+                  </div>
+                </div>
+              </div>
+            </section>
+
+            <section className="panel">
+              <div className="panel-header">
+                <div>
+                  <h2>学员评价明细</h2>
+                  <div className="sub">展示每名学员的考试次数、各次分数、平均分与总体评价。</div>
+                </div>
+                <span className="badge">当前 {studentOverallRows.length} 人</span>
+              </div>
+              <div className="panel-body table-wrap">
+                <table className="results-table student-overall-table">
+                  <thead>
+                    <tr>
+                      <th>学员</th>
+                      <th>部门/岗位</th>
+                      <th>考试次数</th>
+                      <th>最近考试</th>
+                      <th>各次分数</th>
+                      <th>平均分</th>
+                      <th>总体评价</th>
+                      <th>操作</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {studentOverall.loading && !studentOverallRows.length ? (
+                      <tr><td colSpan={8}>学员总体评价加载中...</td></tr>
+                    ) : studentOverallRows.length ? studentOverallRows.map((item) => (
+                      <tr key={`student-overall-${item.key}`}>
+                        <td>
+                          <div>{item.username}</div>
+                          <div className="sub">用户 #{item.user_id || '-'}</div>
+                        </td>
+                        <td>
+                          <div>{item.department}</div>
+                          <div className="sub">{item.position}</div>
+                        </td>
+                        <td>{item.total}</td>
+                        <td>{formatDateTime(item.latestExamAt)}</td>
+                        <td>
+                          <div className="student-score-chips">
+                            {item.attempts.map((attempt) => (
+                              <span className="score-chip" title={`${attempt.paperName}｜${formatDateTime(attempt.createdAt)}`} key={`student-score-${item.key}-${attempt.id}`}>
+                                {attempt.score.toFixed(2)}
+                              </span>
+                            ))}
+                          </div>
+                        </td>
+                        <td><strong className="student-average-score">{Number(item.averageScore || 0).toFixed(2)}</strong></td>
+                        <td>
+                          <span className={`student-evaluation-chip ${item.evaluation.className}`}>{item.evaluation.label}</span>
+                          <div className="sub">{item.evaluation.detail}</div>
+                        </td>
+                        <td>
+                          <button
+                            className="ghost"
+                            type="button"
+                            disabled={!item.user_id}
+                            onClick={() => onOpenCandidateRecord(item.user_id, { silent: true })}
+                          >
+                            查看明细
+                          </button>
+                        </td>
+                      </tr>
+                    )) : (
+                      <tr><td colSpan={8}>暂无符合条件的学员评价数据</td></tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </section>
           </>
         )}
 

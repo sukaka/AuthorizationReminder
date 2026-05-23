@@ -687,6 +687,102 @@ textarea:focus-visible {
   color: #334155;
 }
 
+.student-overall-panel .panel-header {
+  align-items: flex-start;
+}
+
+.admin-only-badge {
+  color: #1e40af;
+  border-color: rgba(37, 99, 235, 0.28);
+  background: linear-gradient(135deg, rgba(219, 234, 254, 0.9), rgba(224, 242, 254, 0.9));
+}
+
+.student-overall-filter-grid {
+  display: grid;
+  grid-template-columns: minmax(220px, 2fr) repeat(3, minmax(140px, 1fr));
+  gap: 12px;
+  align-items: end;
+}
+
+.student-overall-filter-grid label {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 13px;
+  color: #334155;
+  font-weight: 600;
+}
+
+.student-overall-table th,
+.student-overall-table td {
+  vertical-align: middle;
+}
+
+.student-score-chips {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  max-width: 360px;
+}
+
+.score-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 54px;
+  min-height: 26px;
+  padding: 3px 8px;
+  border-radius: 8px;
+  color: #1d4ed8;
+  font-size: 12px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  background: linear-gradient(135deg, rgba(219, 234, 254, 0.9), rgba(224, 242, 254, 0.9));
+  border: 1px solid rgba(37, 99, 235, 0.22);
+}
+
+.student-average-score {
+  color: #1d4ed8;
+  font-variant-numeric: tabular-nums;
+}
+
+.student-evaluation-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 26px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+  border: 1px solid transparent;
+  white-space: nowrap;
+}
+
+.student-evaluation-chip.excellent {
+  color: #166534;
+  background: rgba(34, 197, 94, 0.14);
+  border-color: rgba(34, 197, 94, 0.35);
+}
+
+.student-evaluation-chip.good {
+  color: #075985;
+  background: rgba(14, 165, 233, 0.14);
+  border-color: rgba(14, 165, 233, 0.32);
+}
+
+.student-evaluation-chip.warn {
+  color: #92400e;
+  background: rgba(245, 158, 11, 0.14);
+  border-color: rgba(245, 158, 11, 0.35);
+}
+
+.student-evaluation-chip.danger {
+  color: #991b1b;
+  background: rgba(220, 38, 38, 0.12);
+  border-color: rgba(220, 38, 38, 0.28);
+}
+
 .results-detail-panel {
   overflow: visible;
 }
@@ -2568,6 +2664,7 @@ th {
   }
 
   .results-filter-grid,
+  .student-overall-filter-grid,
   .results-detail-hero,
   .results-type-grid,
   .results-detail-metrics {
