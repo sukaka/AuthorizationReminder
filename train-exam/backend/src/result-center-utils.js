@@ -266,6 +266,7 @@ const normalizeAdminResultPaperSummaryRow = (item = {}) => {
     result_total: resultTotal,
     candidate_total: toPositiveInt(item.candidate_total, 0),
     final_result_count: toPositiveInt(item.final_result_count, 0),
+    timeout_count: toPositiveInt(item.timeout_count, 0),
     pass_count: passCount,
     pass_rate: resultTotal > 0 ? roundTo((passCount / resultTotal) * 100, 2) : 0,
     average_score: roundTo(item.average_score, 2),

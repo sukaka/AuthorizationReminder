@@ -434,6 +434,7 @@ const createSchema = async () => {
     pass_score DECIMAL(10,2) NOT NULL DEFAULT 80.00,
     duration_minutes INT NOT NULL DEFAULT 60,
     max_attempts INT NOT NULL DEFAULT 3,
+    exam_window_hours INT NOT NULL DEFAULT 72,
     status VARCHAR(16) NOT NULL DEFAULT 'draft',
     published_at DATETIME NULL,
     scheduled_publish_at DATETIME NULL,
@@ -544,6 +545,21 @@ const createSchema = async () => {
     INDEX idx_te_exam_retake_user_paper (user_id, paper_id, remaining_count, consumed_count)
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
 
+  await run(`CREATE TABLE IF NOT EXISTS te_exam_timeout_records (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    paper_id BIGINT NOT NULL,
+    user_id BIGINT NOT NULL,
+    username VARCHAR(128) NOT NULL,
+    paper_published_at DATETIME NULL,
+    deadline_at DATETIME NULL,
+    source VARCHAR(32) NOT NULL DEFAULT 'start',
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE KEY uk_te_exam_timeout_user_paper (paper_id, user_id),
+    INDEX idx_te_exam_timeout_paper (paper_id, created_at),
+    INDEX idx_te_exam_timeout_user (user_id, created_at)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
+
   await run(`CREATE TABLE IF NOT EXISTS te_certificates (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,
     result_id BIGINT NOT NULL,
@@ -598,6 +614,7 @@ const createSchema = async () => {
   await addColumnIfMissing('te_question_bank', 'question_category', "question_category VARCHAR(64) NOT NULL DEFAULT '未分类'");
   await addColumnIfMissing('te_instructor_review_forms', 'scheduled_publish_at', 'scheduled_publish_at DATETIME NULL');
   await addColumnIfMissing('te_papers', 'scheduled_publish_at', 'scheduled_publish_at DATETIME NULL');
+  await addColumnIfMissing('te_papers', 'exam_window_hours', 'exam_window_hours INT NOT NULL DEFAULT 72');
   await addColumnIfMissing('te_paper_question_rules', 'question_categories_json', 'question_categories_json TEXT NULL');
   await addColumnIfMissing('te_exam_sessions', 'user_department', 'user_department VARCHAR(128) NULL');
   await addColumnIfMissing('te_exam_sessions', 'user_position', 'user_position VARCHAR(128) NULL');

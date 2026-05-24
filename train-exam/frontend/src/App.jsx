@@ -489,6 +489,30 @@ const buildScheduledPublishAt = ({ date, time }) => {
 
 const getPaperPublishTimeText = (p) => formatDateTime(p.scheduled_publish_at || p.published_at)
 
+const normalizePaperExamWindowHours = (value) => {
+  const raw = String(value ?? '').trim()
+  if (!raw) return 72
+  const parsed = Number(raw)
+  if (!Number.isFinite(parsed)) return 72
+  return Math.max(1, Math.min(8760, Math.floor(parsed)))
+}
+
+const getPaperExamDeadline = (paper) => {
+  const publishedAt = parseStoredDateTime(paper?.published_at)
+  if (!publishedAt) return null
+  return new Date(publishedAt.getTime() + normalizePaperExamWindowHours(paper?.exam_window_hours) * 60 * 60 * 1000)
+}
+
+const isPaperExpiredForExam = (paper) => {
+  const deadline = getPaperExamDeadline(paper)
+  return !!deadline && Date.now() >= deadline.getTime()
+}
+
+const getPaperExamDeadlineText = (paper) => {
+  const deadline = getPaperExamDeadline(paper)
+  return deadline ? formatDateTime(deadline) : '-'
+}
+
 const instructorReviewStatusLabel = (value) => {
   const key = String(value || '').trim().toLowerCase()
   if (key === 'draft') return '草稿'
@@ -1113,6 +1137,7 @@ const createDefaultPaperForm = () => ({
   pass_score: 80,
   duration_minutes: 60,
   max_attempts: 3,
+  exam_window_hours: 72,
   fixed_question_ids: '',
   rules: [createPaperRule()],
 })
@@ -1434,6 +1459,7 @@ function App() {
   const [adminResultPapers, setAdminResultPapers] = useState([])
   const [adminResultsLoading, setAdminResultsLoading] = useState(false)
   const [adminResultPapersLoading, setAdminResultPapersLoading] = useState(false)
+  const [adminExamTimeoutRecords, setAdminExamTimeoutRecords] = useState({ paper: null, items: [], loading: false })
   const [adminResultsExporting, setAdminResultsExporting] = useState(false)
   const [studentOverall, setStudentOverall] = useState(() => buildStudentOverallDefault())
   const [resultReviewDetail, setResultReviewDetail] = useState(null)
@@ -2226,6 +2252,24 @@ function App() {
       return items
     } finally {
       setAdminResultPapersLoading(false)
+    }
+  }
+
+  const fetchAdminExamTimeoutRecords = async (paper = null) => {
+    clearFeedback()
+    const paperId = Number(paper?.paper_id || paper?.id || 0)
+    setAdminExamTimeoutRecords({ paper, items: [], loading: true })
+    try {
+      const query = paperId > 0 ? `?paper_id=${paperId}` : ''
+      const payload = await api.get(`/api/train-exam/admin/exam-timeouts${query}`)
+      setAdminExamTimeoutRecords({
+        paper,
+        items: Array.isArray(payload?.items) ? payload.items : [],
+        loading: false,
+      })
+    } catch (err) {
+      setAdminExamTimeoutRecords({ paper, items: [], loading: false })
+      setError(err.message || '加载超时用户失败')
     }
   }
 
@@ -4336,6 +4380,7 @@ function App() {
         pass_score: Number(paperForm.pass_score || 80),
         duration_minutes: Number(paperForm.duration_minutes || 60),
         max_attempts: Number(paperForm.max_attempts || 3),
+        exam_window_hours: Number(paperForm.exam_window_hours || 72),
         fixed_question_ids: paperForm.fixed_question_ids,
         rules: paperForm.paper_mode === 'random'
           ? (Array.isArray(paperForm.rules) ? paperForm.rules : []).map((rule) => ({
@@ -4403,6 +4448,25 @@ function App() {
       setError(err.message || '设置定时发布失败')
     } finally {
       setPaperScheduleSaving(false)
+    }
+  }
+
+  const onUpdatePaperExamWindow = async (paper) => {
+    if (!canWrite) return
+    const id = Number(paper?.id || 0)
+    if (!id) return
+    const currentHours = normalizePaperExamWindowHours(paper?.exam_window_hours)
+    const input = window.prompt('请输入考试有效期小时数（1-8760）', String(currentHours))
+    if (input === null) return
+    const nextHours = normalizePaperExamWindowHours(input)
+    clearFeedback()
+    try {
+      await api.put(`/api/train-exam/papers/${id}`, { exam_window_hours: nextHours })
+      setMessage(`考试有效期已更新为 ${nextHours} 小时`)
+      await fetchPapers(true)
+      await fetchOverview(true)
+    } catch (err) {
+      setError(err.message || '更新考试有效期失败')
     }
   }
 
@@ -7010,6 +7074,7 @@ function App() {
                   <div><label>及格线</label><input type="number" value={paperForm.pass_score} onChange={(e) => setPaperForm((p) => ({ ...p, pass_score: e.target.value }))} /></div>
                   <div><label>考试时长(分钟)</label><input type="number" value={paperForm.duration_minutes} onChange={(e) => setPaperForm((p) => ({ ...p, duration_minutes: e.target.value }))} /></div>
                   <div><label>最大次数</label><input type="number" value={paperForm.max_attempts} onChange={(e) => setPaperForm((p) => ({ ...p, max_attempts: e.target.value }))} /></div>
+                  <div><label>考试有效期(小时)</label><input type="number" min="1" max="8760" value={paperForm.exam_window_hours} onChange={(e) => setPaperForm((p) => ({ ...p, exam_window_hours: e.target.value }))} /></div>
                   {paperForm.paper_mode === 'fixed' ? (
                     <div className="full"><label>固定题目ID(逗号)</label><input value={paperForm.fixed_question_ids} onChange={(e) => setPaperForm((p) => ({ ...p, fixed_question_ids: e.target.value }))} /></div>
                   ) : (
@@ -7135,6 +7200,7 @@ function App() {
                       <th>方式</th>
                       <th>状态</th>
                       <th>及格线</th>
+                      <th>有效期</th>
                       <th>发布时间</th>
                       <th>操作</th>
                     </tr>
@@ -7163,6 +7229,7 @@ function App() {
                         <td>{paperModeLabel(p.paper_mode)}</td>
                         <td><span className={paperStatusClassName(p.status)}>{paperStatusLabel(p.status)}</span></td>
                         <td>{p.pass_score}</td>
+                        <td>{normalizePaperExamWindowHours(p.exam_window_hours)} 小时</td>
                         <td>
                           <div>{getPaperPublishTimeText(p)}</div>
                           {String(p.status || '').toLowerCase() === 'scheduled' ? <small className="muted-text">计划发布</small> : null}
@@ -7185,12 +7252,13 @@ function App() {
                                 {p.status === 'scheduled' ? '调整定时' : '定时发布'}
                               </button>
                             ) : null}
+                            {canWrite ? <button className="ghost" type="button" onClick={() => onUpdatePaperExamWindow(p)}>修改有效期</button> : null}
                             {canPublishPaper && p.status === 'published' ? <button className="danger" onClick={() => onArchivePaper(p.id)}>归档</button> : null}
                             {p.status === 'published' ? <button className="primary" onClick={() => onStartExam(p.id)}>开始考试</button> : null}
                           </div>
                         </td>
                       </tr>
-                    )) : <tr><td colSpan={8}>暂无试卷</td></tr>}
+                    )) : <tr><td colSpan={9}>暂无试卷</td></tr>}
                   </tbody>
                 </table>
               </div>
@@ -7216,20 +7284,29 @@ function App() {
                     <th>方式</th>
                     <th>及格线</th>
                     <th>时长(分钟)</th>
+                    <th>截止时间</th>
                     <th>操作</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {publishedPapers.length ? publishedPapers.map((item) => (
-                    <tr key={`published-paper-list-${item.id}`}>
-                      <td>{item.id}</td>
-                      <td>{item.name || '-'}</td>
-                      <td>{paperModeLabel(item.paper_mode)}</td>
-                      <td>{Number(item.pass_score || 0)}</td>
-                      <td>{Number(item.duration_minutes || 0)}</td>
-                      <td><button className="primary" onClick={() => onStartExam(item.id)}>开始考试</button></td>
-                    </tr>
-                  )) : <tr><td colSpan={6}>暂无可考试卷</td></tr>}
+                  {publishedPapers.length ? publishedPapers.map((item) => {
+                    const expired = isPaperExpiredForExam(item)
+                    return (
+                      <tr key={`published-paper-list-${item.id}`}>
+                        <td>{item.id}</td>
+                        <td>{item.name || '-'}</td>
+                        <td>{paperModeLabel(item.paper_mode)}</td>
+                        <td>{Number(item.pass_score || 0)}</td>
+                        <td>{Number(item.duration_minutes || 0)}</td>
+                        <td>{getPaperExamDeadlineText(item)}</td>
+                        <td>
+                          <button className={expired ? 'ghost' : 'primary'} onClick={() => onStartExam(item.id)} disabled={expired}>
+                            {expired ? '超过考试时间' : '开始考试'}
+                          </button>
+                        </td>
+                      </tr>
+                    )
+                  }) : <tr><td colSpan={7}>暂无可考试卷</td></tr>}
                 </tbody>
               </table>
             </div>
@@ -7258,20 +7335,29 @@ function App() {
                           <th>方式</th>
                           <th>及格线</th>
                           <th>时长(分钟)</th>
+                          <th>截止时间</th>
                           <th>操作</th>
                         </tr>
                       </thead>
                       <tbody>
-                        {publishedPapers.length ? publishedPapers.map((item) => (
-                          <tr key={`published-paper-${item.id}`}>
-                            <td>{item.id}</td>
-                            <td>{item.name || '-'}</td>
-                            <td>{paperModeLabel(item.paper_mode)}</td>
-                            <td>{Number(item.pass_score || 0)}</td>
-                            <td>{Number(item.duration_minutes || 0)}</td>
-                            <td><button className="primary" onClick={() => onStartExam(item.id)}>开始考试</button></td>
-                          </tr>
-                        )) : <tr><td colSpan={6}>暂无可考试卷</td></tr>}
+                        {publishedPapers.length ? publishedPapers.map((item) => {
+                          const expired = isPaperExpiredForExam(item)
+                          return (
+                            <tr key={`published-paper-${item.id}`}>
+                              <td>{item.id}</td>
+                              <td>{item.name || '-'}</td>
+                              <td>{paperModeLabel(item.paper_mode)}</td>
+                              <td>{Number(item.pass_score || 0)}</td>
+                              <td>{Number(item.duration_minutes || 0)}</td>
+                              <td>{getPaperExamDeadlineText(item)}</td>
+                              <td>
+                                <button className={expired ? 'ghost' : 'primary'} onClick={() => onStartExam(item.id)} disabled={expired}>
+                                  {expired ? '超过考试时间' : '开始考试'}
+                                </button>
+                              </td>
+                            </tr>
+                          )
+                        }) : <tr><td colSpan={7}>暂无可考试卷</td></tr>}
                       </tbody>
                     </table>
                   </div>
@@ -7973,6 +8059,7 @@ function App() {
                         <th>最终成绩数</th>
                         <th>平均分</th>
                         <th>通过率</th>
+                        <th>超时用户</th>
                         <th>评级分布</th>
                         <th>最近考试</th>
                         <th>操作</th>
@@ -7980,7 +8067,7 @@ function App() {
                     </thead>
                     <tbody>
                       {adminResultPapersLoading && !adminResultPaperOverview.items.length ? (
-                        <tr><td colSpan={9}>试卷成绩加载中...</td></tr>
+                        <tr><td colSpan={10}>试卷成绩加载中...</td></tr>
                       ) : adminResultPaperOverview.items.length ? adminResultPaperOverview.items.map((item) => {
                         const distribution = item.rating_distribution || {}
                         return (
@@ -7994,6 +8081,11 @@ function App() {
                             <td>{Number(item.final_result_count || 0)}</td>
                             <td>{Number(item.average_score || 0).toFixed(2)}</td>
                             <td>{formatPercentText(item.pass_rate || 0)}</td>
+                            <td>
+                              <button className="ghost" type="button" onClick={() => fetchAdminExamTimeoutRecords(item)}>
+                                {Number(item.timeout_count || 0)}
+                              </button>
+                            </td>
                             <td>
                               <div className="rating-distribution">
                                 {['A', 'B', 'C', 'D'].map((level) => (
@@ -8010,11 +8102,45 @@ function App() {
                           </tr>
                         )
                       }) : (
-                        <tr><td colSpan={9}>暂无已发布试卷</td></tr>
+                        <tr><td colSpan={10}>暂无已发布试卷</td></tr>
                       )}
                     </tbody>
                   </table>
                 </div>
+                {adminExamTimeoutRecords.paper ? (
+                  <div className="panel-body table-wrap">
+                    <div className="panel-header inline">
+                      <h3>超时用户</h3>
+                      <div className="sub">{adminExamTimeoutRecords.paper.paper_name || `试卷#${adminExamTimeoutRecords.paper.paper_id}`}</div>
+                    </div>
+                    <table>
+                      <thead>
+                        <tr>
+                          <th>用户</th>
+                          <th>试卷</th>
+                          <th>发布时间</th>
+                          <th>截止时间</th>
+                          <th>记录时间</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {adminExamTimeoutRecords.loading ? (
+                          <tr><td colSpan={5}>超时用户加载中...</td></tr>
+                        ) : adminExamTimeoutRecords.items.length ? adminExamTimeoutRecords.items.map((item) => (
+                          <tr key={`exam-timeout-${item.id}`}>
+                            <td>{item.username || `用户#${item.user_id}`}</td>
+                            <td>{item.paper_name || `试卷#${item.paper_id}`}</td>
+                            <td>{formatDateTime(item.paper_published_at)}</td>
+                            <td>{formatDateTime(item.deadline_at)}</td>
+                            <td>{formatDateTime(item.updated_at || item.created_at)}</td>
+                          </tr>
+                        )) : (
+                          <tr><td colSpan={5}>暂无超时用户</td></tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : null}
               </section>
             ) : !isBasicUser && resultCenterTab === 'results' && resultCenterView.type === 'candidate' ? (
               <>

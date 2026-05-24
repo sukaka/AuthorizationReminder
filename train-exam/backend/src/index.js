@@ -48,6 +48,11 @@ const {
   normalizeScheduledPublishAt,
 } = require('./paper-schedule-utils');
 const {
+  buildPaperExamDeadline,
+  isPaperExamExpired,
+  normalizePaperExamWindowHours,
+} = require('./paper-expiry-utils');
+const {
   buildQuestionImportTemplateRows,
   normalizeJudgementAnswer,
   resolveImportQuestionStatus,
@@ -3377,6 +3382,34 @@ const grantRetakeOpportunity = async ({
     consumed_count: 0,
     reason: trimText(reason),
   };
+};
+
+const recordPaperExamTimeout = async ({ paper, user, source = 'start' } = {}) => {
+  const paperId = Number(paper?.id || 0);
+  const userId = Number(user?.id || 0);
+  if (!paperId || !userId) return null;
+  const username = trimText(user?.username) || `用户#${userId}`;
+  const deadlineAt = buildPaperExamDeadline(paper);
+  await run(
+    `INSERT INTO te_exam_timeout_records
+      (paper_id, user_id, username, paper_published_at, deadline_at, source)
+     VALUES (?, ?, ?, ?, ?, ?)
+     ON DUPLICATE KEY UPDATE
+       username = VALUES(username),
+       paper_published_at = VALUES(paper_published_at),
+       deadline_at = VALUES(deadline_at),
+       source = VALUES(source),
+       updated_at = NOW()`,
+    [
+      paperId,
+      userId,
+      username,
+      paper?.published_at || null,
+      deadlineAt,
+      trimText(source).slice(0, 32) || 'start',
+    ]
+  );
+  return { paper_id: paperId, user_id: userId, username, deadline_at: deadlineAt };
 };
 
 const loadRetakeTarget = async ({ userId, paperId }) => {
@@ -7154,6 +7187,13 @@ app.get('/api/train-exam/papers', requireReader, asyncHandler(async (req, res) =
      ${whereSql}
      ORDER BY p.id DESC`
   );
+  if (!isElevatedTrainExamReader(req)) {
+    for (const paper of rows) {
+      if (isPaperExamExpired(paper)) {
+        await recordPaperExamTimeout({ paper, user: req.user, source: 'list' });
+      }
+    }
+  }
   res.json(rows);
 }));
 
@@ -7166,6 +7206,7 @@ app.post('/api/train-exam/papers', requireContentWriter, asyncHandler(async (req
   const passScore = Math.max(0, Math.min(100, Number(req.body?.pass_score || 80)));
   const durationMinutes = Math.max(10, Math.min(600, Number(req.body?.duration_minutes || 60)));
   const maxAttempts = Math.max(1, Math.min(20, Number(req.body?.max_attempts || 3)));
+  const examWindowHours = normalizePaperExamWindowHours(req.body?.exam_window_hours);
   const courseId = Number(req.body?.course_id || 0) || null;
   const fixedQuestionIds = parseIdArray(req.body?.fixed_question_ids);
   const rules = Array.isArray(req.body?.rules) ? req.body.rules : [];
@@ -7180,8 +7221,8 @@ app.post('/api/train-exam/papers', requireContentWriter, asyncHandler(async (req
   const created = await transaction(async (tx) => {
     const insert = await tx.run(
       `INSERT INTO te_papers
-        (name, description, paper_mode, course_id, pass_score, duration_minutes, max_attempts, status, created_by_id, created_by_name, updated_by_id, updated_by_name)
-       VALUES (?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?, ?)`,
+        (name, description, paper_mode, course_id, pass_score, duration_minutes, max_attempts, exam_window_hours, status, created_by_id, created_by_name, updated_by_id, updated_by_name)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?, ?)`,
       [
         name,
         description || null,
@@ -7190,6 +7231,7 @@ app.post('/api/train-exam/papers', requireContentWriter, asyncHandler(async (req
         passScore,
         durationMinutes,
         maxAttempts,
+        examWindowHours,
         Number(req.user.id) || null,
         req.user.username,
         Number(req.user.id) || null,
@@ -7245,6 +7287,9 @@ app.put('/api/train-exam/papers/:id', requireContentWriter, asyncHandler(async (
   const maxAttempts = req.body?.max_attempts !== undefined
     ? Math.max(1, Math.min(20, Number(req.body.max_attempts || 3)))
     : Number(before.max_attempts || 3);
+  const examWindowHours = req.body?.exam_window_hours !== undefined
+    ? normalizePaperExamWindowHours(req.body.exam_window_hours)
+    : normalizePaperExamWindowHours(before.exam_window_hours);
 
   const fixedQuestionIds = parseIdArray(req.body?.fixed_question_ids);
   const rules = Array.isArray(req.body?.rules) ? req.body.rules : [];
@@ -7259,7 +7304,7 @@ app.put('/api/train-exam/papers/:id', requireContentWriter, asyncHandler(async (
   await transaction(async (tx) => {
     await tx.run(
       `UPDATE te_papers
-       SET name = ?, description = ?, paper_mode = ?, pass_score = ?, duration_minutes = ?, max_attempts = ?,
+       SET name = ?, description = ?, paper_mode = ?, pass_score = ?, duration_minutes = ?, max_attempts = ?, exam_window_hours = ?,
            updated_by_id = ?, updated_by_name = ?, updated_at = NOW()
        WHERE id = ?`,
       [
@@ -7269,6 +7314,7 @@ app.put('/api/train-exam/papers/:id', requireContentWriter, asyncHandler(async (
         passScore,
         durationMinutes,
         maxAttempts,
+        examWindowHours,
         Number(req.user.id) || null,
         req.user.username,
         id,
@@ -7730,6 +7776,11 @@ app.post('/api/train-exam/papers/:id/exam/start', requireReader, examStartRateLi
   if (trimText(paper.status) !== 'published') throw appError('试卷未发布，不能开始考试', 409);
 
   const userId = Number(req.user.id || 0);
+  if (isPaperExamExpired(paper)) {
+    await recordPaperExamTimeout({ paper, user: req.user, source: 'start' });
+    throw appError('超过考试时间', 409);
+  }
+
   const runningSession = await get(
     `SELECT * FROM te_exam_sessions
      WHERE paper_id = ? AND user_id = ? AND status = 'started'
@@ -7933,6 +7984,7 @@ app.get('/api/train-exam/admin/results/papers', requireResultCenterReader, async
       COUNT(DISTINCT CASE WHEN r.user_id IS NOT NULL THEN r.user_id END) AS candidate_total,
       SUM(CASE WHEN r.is_final = 1 THEN 1 ELSE 0 END) AS final_result_count,
       SUM(CASE WHEN r.passed = 1 THEN 1 ELSE 0 END) AS pass_count,
+      COALESCE(t.timeout_count, 0) AS timeout_count,
       AVG(r.score) AS average_score,
       MAX(r.created_at) AS latest_result_at,
       SUM(CASE WHEN r.total_score > 0 AND (r.score / r.total_score) >= 0.9 THEN 1 ELSE 0 END) AS rating_a_count,
@@ -7941,12 +7993,55 @@ app.get('/api/train-exam/admin/results/papers', requireResultCenterReader, async
       SUM(CASE WHEN r.id IS NOT NULL AND (r.total_score <= 0 OR (r.total_score > 0 AND (r.score / r.total_score) < 0.6)) THEN 1 ELSE 0 END) AS rating_d_count
      FROM te_papers p
      LEFT JOIN te_exam_results r ON r.paper_id = p.id
+     LEFT JOIN (
+       SELECT paper_id, COUNT(1) AS timeout_count
+       FROM te_exam_timeout_records
+       GROUP BY paper_id
+     ) t ON t.paper_id = p.id
      WHERE p.status = 'published'
-     GROUP BY p.id, p.name, p.status
+     GROUP BY p.id, p.name, p.status, t.timeout_count
      ORDER BY latest_result_at DESC, p.id DESC`
   );
   res.json({
     items: rows.map((item) => normalizeAdminResultPaperSummaryRow(item)),
+  });
+}));
+
+app.get('/api/train-exam/admin/exam-timeouts', requireAdminOnly, asyncHandler(async (req, res) => {
+  const paperId = Number(req.query.paper_id || 0);
+  const where = [];
+  const params = [];
+  if (paperId > 0) {
+    where.push('t.paper_id = ?');
+    params.push(paperId);
+  }
+  const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
+  const rows = await query(
+    `SELECT
+       t.*,
+       p.name AS paper_name,
+       p.exam_window_hours
+     FROM te_exam_timeout_records t
+     LEFT JOIN te_papers p ON p.id = t.paper_id
+     ${whereSql}
+     ORDER BY t.updated_at DESC, t.id DESC
+     LIMIT 500`,
+    params
+  );
+  res.json({
+    items: rows.map((item) => ({
+      id: Number(item.id || 0),
+      paper_id: Number(item.paper_id || 0),
+      paper_name: trimText(item.paper_name),
+      user_id: Number(item.user_id || 0),
+      username: trimText(item.username),
+      paper_published_at: item.paper_published_at || '',
+      deadline_at: item.deadline_at || '',
+      exam_window_hours: normalizePaperExamWindowHours(item.exam_window_hours),
+      source: trimText(item.source),
+      created_at: item.created_at || '',
+      updated_at: item.updated_at || '',
+    })),
   });
 }));
 
