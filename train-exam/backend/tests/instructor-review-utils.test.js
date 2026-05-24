@@ -1,5 +1,6 @@
 const {
   buildInstructorReviewQuestionnaireSummary,
+  isScheduledInstructorReviewDue,
   normalizeInstructorQuestionnaireInput,
   normalizeInstructorReviewResponseInput,
   normalizeInstructorReviewStatus,
@@ -61,9 +62,27 @@ describe('instructor review questionnaire utils', () => {
 
   it('normalizes questionnaire status', () => {
     expect(normalizeInstructorReviewStatus('published')).toBe('published');
+    expect(normalizeInstructorReviewStatus('scheduled')).toBe('scheduled');
     expect(normalizeInstructorReviewStatus('closed')).toBe('closed');
     expect(normalizeInstructorReviewStatus('草稿')).toBe('draft');
     expect(normalizeInstructorReviewStatus('unknown')).toBe('draft');
+  });
+
+  it('detects scheduled instructor reviews that are due for publication', () => {
+    expect(isScheduledInstructorReviewDue({
+      status: 'scheduled',
+      scheduled_publish_at: '2026-05-24 02:00:00',
+    }, { now: new Date('2026-05-24T02:00:00Z') })).toBe(true);
+
+    expect(isScheduledInstructorReviewDue({
+      status: 'scheduled',
+      scheduled_publish_at: '2026-05-24 02:01:00',
+    }, { now: new Date('2026-05-24T02:00:00Z') })).toBe(false);
+
+    expect(isScheduledInstructorReviewDue({
+      status: 'draft',
+      scheduled_publish_at: '2026-05-24 01:00:00',
+    }, { now: new Date('2026-05-24T02:00:00Z') })).toBe(false);
   });
 
   it('builds questionnaire summary by responses', () => {

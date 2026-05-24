@@ -489,6 +489,17 @@ const buildScheduledPublishAt = ({ date, time }) => {
 
 const getPaperPublishTimeText = (p) => formatDateTime(p.scheduled_publish_at || p.published_at)
 
+const instructorReviewStatusLabel = (value) => {
+  const key = String(value || '').trim().toLowerCase()
+  if (key === 'draft') return '草稿'
+  if (key === 'scheduled') return '待发布'
+  if (key === 'published') return '已发布'
+  if (key === 'closed') return '已关闭'
+  return value || '-'
+}
+
+const getInstructorReviewPublishTimeText = (item) => formatDateTime(item?.scheduled_publish_at || item?.updated_at)
+
 const resourceTypeLabel = (value) => {
   const key = String(value || '').trim().toLowerCase()
   if (key === 'doc') return '文档'
@@ -1377,6 +1388,9 @@ function App() {
   const [myInstructorReviewForms, setMyInstructorReviewForms] = useState([])
   const [adminInstructorReviewForms, setAdminInstructorReviewForms] = useState([])
   const [adminInstructorReviewResponses, setAdminInstructorReviewResponses] = useState({ form: null, items: [], summary: {} })
+  const [instructorReviewScheduleDialog, setInstructorReviewScheduleDialog] = useState(null)
+  const [instructorReviewScheduleForm, setInstructorReviewScheduleForm] = useState(() => getShanghaiDateTimeParts())
+  const [instructorReviewScheduleSaving, setInstructorReviewScheduleSaving] = useState(false)
   const [instructorQuestionnaireForm, setInstructorQuestionnaireForm] = useState({
     title: '',
     instructor_name: '',
@@ -2108,6 +2122,44 @@ function App() {
       }
     } catch (err) {
       setError(err.message || '更新问卷状态失败')
+    }
+  }
+
+  const onOpenInstructorReviewScheduleDialog = (item) => {
+    clearFeedback()
+    setInstructorReviewScheduleDialog(item)
+    setInstructorReviewScheduleForm(getShanghaiDateTimeParts(item?.scheduled_publish_at))
+  }
+
+  const onCloseInstructorReviewScheduleDialog = () => {
+    if (instructorReviewScheduleSaving) return
+    setInstructorReviewScheduleDialog(null)
+  }
+
+  const onSubmitInstructorReviewSchedule = async (event) => {
+    event.preventDefault()
+    if (!instructorReviewScheduleDialog?.id || instructorReviewScheduleSaving) return
+    clearFeedback()
+    const scheduledAt = buildScheduledPublishAt(instructorReviewScheduleForm)
+    if (!scheduledAt) {
+      setError('请选择定时发布的日期和时间')
+      return
+    }
+    setInstructorReviewScheduleSaving(true)
+    try {
+      await api.post(`/api/train-exam/admin/instructor-review-forms/${instructorReviewScheduleDialog.id}/schedule-publish`, {
+        scheduled_publish_at: scheduledAt,
+      })
+      setMessage('讲师评价问卷定时发布设置成功')
+      setInstructorReviewScheduleDialog(null)
+      await fetchAdminInstructorReviewForms(true)
+      if (Number(adminInstructorReviewResponses.form?.id || 0) === Number(instructorReviewScheduleDialog.id || 0)) {
+        await fetchAdminInstructorReviewResponses(instructorReviewScheduleDialog.id, true)
+      }
+    } catch (err) {
+      setError(err.message || '设置讲师评价定时发布失败')
+    } finally {
+      setInstructorReviewScheduleSaving(false)
     }
   }
 
@@ -6847,8 +6899,11 @@ function App() {
                           <td>{item.instructor_name || '讲师'}</td>
                           <td>{isBasicUser ? (item.submitted ? `${Number(item.final_score || 0).toFixed(2)} 分 / ${item.rating_label || '-'}` : '未填写') : Number(item.summary?.response_count || 0)}</td>
                           {!isBasicUser ? <td>{Number(item.summary?.average_final_score || 0).toFixed(2)}</td> : null}
-                          <td><span className="badge">{String(item.status || 'draft') === 'published' ? '已发布' : String(item.status || 'draft') === 'closed' ? '已关闭' : '草稿'}</span></td>
-                          <td>{formatDateTime(item.updated_at)}</td>
+                          <td><span className="badge">{instructorReviewStatusLabel(item.status)}</span></td>
+                          <td>
+                            <div>{getInstructorReviewPublishTimeText(item)}</div>
+                            {String(item.status || '').toLowerCase() === 'scheduled' ? <small className="muted-text">计划发布</small> : null}
+                          </td>
                           <td>
                             {isBasicUser ? (
                               <button className="ghost" type="button" onClick={() => setInstructorReviewResponseForm({
@@ -6866,7 +6921,14 @@ function App() {
                             ) : (
                               <div className="row-actions">
                                 <button className="ghost" type="button" onClick={() => fetchAdminInstructorReviewResponses(item.id, true)}>查看明细</button>
-                                <button className="ghost" type="button" onClick={() => onUpdateInstructorQuestionnaireStatus(item, 'published')}>发布</button>
+                                {String(item.status || '').toLowerCase() !== 'published' ? (
+                                  <button className="ghost" type="button" onClick={() => onUpdateInstructorQuestionnaireStatus(item, 'published')}>发布</button>
+                                ) : null}
+                                {!['published', 'closed'].includes(String(item.status || '').toLowerCase()) ? (
+                                  <button className="ghost" type="button" onClick={() => onOpenInstructorReviewScheduleDialog(item)}>
+                                    {String(item.status || '').toLowerCase() === 'scheduled' ? '调整定时' : '定时发布问卷'}
+                                  </button>
+                                ) : null}
                                 <button className="warn" type="button" onClick={() => onUpdateInstructorQuestionnaireStatus(item, 'closed')}>关闭</button>
                               </div>
                             )}
@@ -9117,6 +9179,53 @@ function App() {
                   aria-label="调整课程学习弹窗大小"
                 />
               ) : null}
+            </div>
+          </div>
+        ) : null}
+
+        {instructorReviewScheduleDialog ? (
+          <div className="modal-mask" onMouseDown={(e) => { if (e.target === e.currentTarget) onCloseInstructorReviewScheduleDialog() }}>
+            <div className="modal-card paper-schedule-modal">
+              <div className="modal-header">
+                <div>
+                  <p className="section-kicker">讲师评价</p>
+                  <h3>定时发布问卷</h3>
+                </div>
+                <button className="ghost" type="button" onClick={onCloseInstructorReviewScheduleDialog} disabled={instructorReviewScheduleSaving}>关闭</button>
+              </div>
+              <form className="modal-body form-grid" onSubmit={onSubmitInstructorReviewSchedule}>
+                <div className="full schedule-paper-name">
+                  <label>问卷</label>
+                  <input value={instructorReviewScheduleDialog.title || `#${instructorReviewScheduleDialog.id}`} readOnly />
+                </div>
+                <div>
+                  <label>发布日期</label>
+                  <input
+                    type="date"
+                    value={instructorReviewScheduleForm.date}
+                    onChange={(e) => setInstructorReviewScheduleForm((prev) => ({ ...prev, date: e.target.value }))}
+                    required
+                  />
+                </div>
+                <div>
+                  <label>发布时间</label>
+                  <input
+                    type="time"
+                    value={instructorReviewScheduleForm.time}
+                    onChange={(e) => setInstructorReviewScheduleForm((prev) => ({ ...prev, time: e.target.value }))}
+                    required
+                  />
+                </div>
+                <div className="full schedule-publish-tip">
+                  设置后问卷进入“待发布”状态，到达所选时间后自动发布。未到时间前，普通用户不会看到该讲师评价问卷。
+                </div>
+                <div className="full row-actions paper-schedule-actions">
+                  <button className="ghost" type="button" onClick={onCloseInstructorReviewScheduleDialog} disabled={instructorReviewScheduleSaving}>取消</button>
+                  <button className="primary" type="submit" disabled={instructorReviewScheduleSaving}>
+                    {instructorReviewScheduleSaving ? '保存中...' : '确认定时发布'}
+                  </button>
+                </div>
+              </form>
             </div>
           </div>
         ) : null}

@@ -4698,7 +4698,20 @@ const getInstructorReviewFormWithSummary = async (form) => {
   };
 };
 
+const activateDueScheduledInstructorReviews = async () => {
+  await run(
+    `UPDATE te_instructor_review_forms
+     SET status = 'published',
+         scheduled_publish_at = NULL,
+         updated_at = NOW()
+     WHERE status = 'scheduled'
+       AND scheduled_publish_at IS NOT NULL
+       AND scheduled_publish_at <= UTC_TIMESTAMP()`
+  );
+};
+
 app.get('/api/train-exam/my/instructor-review-forms', requireReader, asyncHandler(async (req, res) => {
+  await activateDueScheduledInstructorReviews();
   const userId = Number(req.user.id || 0);
   const rows = await query(
     `SELECT
@@ -4731,6 +4744,7 @@ app.get('/api/train-exam/my/instructor-review-forms', requireReader, asyncHandle
 }));
 
 const saveInstructorReviewResponse = async (req, res) => {
+  await activateDueScheduledInstructorReviews();
   const formId = Number(req.params.id || 0);
   const form = await get('SELECT * FROM te_instructor_review_forms WHERE id = ? LIMIT 1', [formId]);
   if (!form) throw appError('讲师评价问卷不存在', 404);
@@ -4781,6 +4795,7 @@ app.post('/api/train-exam/instructor-review-forms/:id/response', requireReader, 
 app.put('/api/train-exam/instructor-review-forms/:id/response', requireReader, asyncHandler(saveInstructorReviewResponse));
 
 app.get('/api/train-exam/admin/instructor-review-forms', requireAdminOnly, asyncHandler(async (_req, res) => {
+  await activateDueScheduledInstructorReviews();
   const forms = await query(
     `SELECT *
      FROM te_instructor_review_forms
@@ -4799,8 +4814,8 @@ app.post('/api/train-exam/admin/instructor-review-forms', requireAdminOnly, asyn
   if (!input.instructor_name) throw appError('讲师姓名不能为空', 400);
   const result = await run(
     `INSERT INTO te_instructor_review_forms
-      (title, instructor_name, description, status, created_by_id, created_by_name, updated_by_id, updated_by_name)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      (title, instructor_name, description, status, scheduled_publish_at, created_by_id, created_by_name, updated_by_id, updated_by_name)
+     VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?)`,
     [input.title, input.instructor_name, input.description || null, input.status, Number(req.user.id) || null, req.user.username, Number(req.user.id) || null, req.user.username]
   );
   const form = await get('SELECT * FROM te_instructor_review_forms WHERE id = ? LIMIT 1', [Number(result.insertId || 0)]);
@@ -4825,17 +4840,52 @@ app.put('/api/train-exam/admin/instructor-review-forms/:id', requireAdminOnly, a
          instructor_name = ?,
          description = ?,
          status = ?,
+         scheduled_publish_at = CASE WHEN ? = 'scheduled' THEN scheduled_publish_at ELSE NULL END,
          updated_by_id = ?,
          updated_by_name = ?,
          updated_at = NOW()
      WHERE id = ?`,
-    [input.title, input.instructor_name, input.description || null, input.status, Number(req.user.id) || null, req.user.username, id]
+    [input.title, input.instructor_name, input.description || null, input.status, input.status, Number(req.user.id) || null, req.user.username, id]
   );
   const after = await get('SELECT * FROM te_instructor_review_forms WHERE id = ? LIMIT 1', [id]);
   res.json(await getInstructorReviewFormWithSummary(after));
 }));
 
+app.post('/api/train-exam/admin/instructor-review-forms/:id/schedule-publish', requireAdminOnly, asyncHandler(async (req, res) => {
+  const id = Number(req.params.id || 0);
+  const before = await get('SELECT * FROM te_instructor_review_forms WHERE id = ? LIMIT 1', [id]);
+  if (!before) throw appError('讲师评价问卷不存在', 404);
+  if (trimText(before.status) === 'published') throw appError('问卷已发布，不能设置定时发布', 409);
+  if (trimText(before.status) === 'closed') throw appError('已关闭问卷不能设置定时发布', 409);
+
+  const scheduledPublishAt = normalizeScheduledPublishAt(req.body?.scheduled_publish_at);
+  await run(
+    `UPDATE te_instructor_review_forms
+     SET status = 'scheduled',
+         scheduled_publish_at = ?,
+         updated_by_id = ?,
+         updated_by_name = ?,
+         updated_at = NOW()
+     WHERE id = ?`,
+    [scheduledPublishAt, Number(req.user.id) || null, req.user.username, id]
+  );
+
+  const after = await get('SELECT * FROM te_instructor_review_forms WHERE id = ? LIMIT 1', [id]);
+  await logOperation({
+    req,
+    action: 'INSTRUCTOR_REVIEW_SCHEDULE_PUBLISH',
+    entity: 'instructor_review_form',
+    entityId: id,
+    message: `定时发布讲师评价问卷 ${id}`,
+    beforeData: { status: before.status, scheduled_publish_at: before.scheduled_publish_at || null },
+    afterData: { status: after.status, scheduled_publish_at: after.scheduled_publish_at || null },
+  });
+
+  res.json(await getInstructorReviewFormWithSummary(after));
+}));
+
 app.get('/api/train-exam/admin/instructor-review-forms/:id/responses', requireAdminOnly, asyncHandler(async (req, res) => {
+  await activateDueScheduledInstructorReviews();
   const id = Number(req.params.id || 0);
   const form = await get('SELECT * FROM te_instructor_review_forms WHERE id = ? LIMIT 1', [id]);
   if (!form) throw appError('讲师评价问卷不存在', 404);

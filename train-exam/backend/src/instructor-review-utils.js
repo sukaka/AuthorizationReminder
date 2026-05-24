@@ -3,6 +3,9 @@ const trimText = (value) => (value === undefined || value === null ? '' : String
 const STATUS_ALIASES = {
   draft: 'draft',
   '草稿': 'draft',
+  scheduled: 'scheduled',
+  schedule: 'scheduled',
+  '待发布': 'scheduled',
   published: 'published',
   publish: 'published',
   '已发布': 'published',
@@ -42,6 +45,28 @@ const normalizeBooleanFlag = (value) => {
 const normalizeInstructorReviewStatus = (value) => {
   const key = trimText(value).toLowerCase();
   return STATUS_ALIASES[key] || 'draft';
+};
+
+const parseStoredUtcMysqlDateTime = (value) => {
+  const text = trimText(value);
+  const matched = text.match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})$/);
+  if (!matched) return null;
+  const [, year, month, day, hour, minute, second] = matched;
+  const date = new Date(Date.UTC(
+    Number(year),
+    Number(month) - 1,
+    Number(day),
+    Number(hour),
+    Number(minute),
+    Number(second)
+  ));
+  return Number.isNaN(date.getTime()) ? null : date;
+};
+
+const isScheduledInstructorReviewDue = (form, { now = new Date() } = {}) => {
+  if (trimText(form?.status).toLowerCase() !== 'scheduled') return false;
+  const scheduledAt = parseStoredUtcMysqlDateTime(form?.scheduled_publish_at);
+  return !!scheduledAt && scheduledAt.getTime() <= now.getTime();
 };
 
 const normalizeInstructorQuestionnaireInput = (payload = {}) => ({
@@ -107,6 +132,7 @@ module.exports = {
   SCORE_KEYS,
   buildInstructorReviewQuestionnaireSummary,
   getRatingLabel,
+  isScheduledInstructorReviewDue,
   normalizeInstructorQuestionnaireInput,
   normalizeInstructorReviewResponseInput,
   normalizeInstructorReviewStatus,

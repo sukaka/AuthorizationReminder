@@ -247,6 +247,7 @@ const createSchema = async () => {
     instructor_name VARCHAR(128) NOT NULL,
     description TEXT NULL,
     status VARCHAR(16) NOT NULL DEFAULT 'draft',
+    scheduled_publish_at DATETIME NULL,
     created_by_id BIGINT NULL,
     created_by_name VARCHAR(128) NULL,
     updated_by_id BIGINT NULL,
@@ -595,6 +596,7 @@ const createSchema = async () => {
   await addColumnIfMissing('te_question_answers', 'answer_values_text', 'answer_values_text TEXT NULL');
   await addColumnIfMissing('te_question_answers', 'answer_aliases_text', 'answer_aliases_text TEXT NULL');
   await addColumnIfMissing('te_question_bank', 'question_category', "question_category VARCHAR(64) NOT NULL DEFAULT '未分类'");
+  await addColumnIfMissing('te_instructor_review_forms', 'scheduled_publish_at', 'scheduled_publish_at DATETIME NULL');
   await addColumnIfMissing('te_papers', 'scheduled_publish_at', 'scheduled_publish_at DATETIME NULL');
   await addColumnIfMissing('te_paper_question_rules', 'question_categories_json', 'question_categories_json TEXT NULL');
   await addColumnIfMissing('te_exam_sessions', 'user_department', 'user_department VARCHAR(128) NULL');
