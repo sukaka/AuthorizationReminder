@@ -1413,6 +1413,7 @@ function App() {
   const [myInstructorReviewForms, setMyInstructorReviewForms] = useState([])
   const [adminInstructorReviewForms, setAdminInstructorReviewForms] = useState([])
   const [adminInstructorReviewResponses, setAdminInstructorReviewResponses] = useState({ form: null, items: [], summary: {} })
+  const [instructorReviewDeletePendingId, setInstructorReviewDeletePendingId] = useState(0)
   const [instructorReviewScheduleDialog, setInstructorReviewScheduleDialog] = useState(null)
   const [instructorReviewScheduleForm, setInstructorReviewScheduleForm] = useState(() => getShanghaiDateTimeParts())
   const [instructorReviewScheduleSaving, setInstructorReviewScheduleSaving] = useState(false)
@@ -2148,6 +2149,29 @@ function App() {
       }
     } catch (err) {
       setError(err.message || '更新问卷状态失败')
+    }
+  }
+
+  const onDeleteInstructorReviewForm = async (item) => {
+    const id = Number(item?.id || 0)
+    if (!id) return
+    const title = String(item?.title || `问卷#${id}`)
+    const responseCount = Number(item?.summary?.response_count || 0)
+    const confirmed = window.confirm(`确认删除讲师评价问卷“${title}”吗？将同步删除 ${responseCount} 条评价明细，删除后不可恢复。`)
+    if (!confirmed) return
+    clearFeedback()
+    setInstructorReviewDeletePendingId(id)
+    try {
+      const payload = await api.del(`/api/train-exam/admin/instructor-review-forms/${id}`)
+      setMessage(`讲师评价问卷已删除：${title}（已清理评价 ${Number(payload?.removed_responses || 0)} 条）`)
+      await fetchAdminInstructorReviewForms(true)
+      if (Number(adminInstructorReviewResponses.form?.id || 0) === id) {
+        setAdminInstructorReviewResponses({ form: null, items: [], summary: {} })
+      }
+    } catch (err) {
+      setError(err.message || '删除讲师评价问卷失败')
+    } finally {
+      setInstructorReviewDeletePendingId(0)
     }
   }
 
@@ -6994,6 +7018,14 @@ function App() {
                                   </button>
                                 ) : null}
                                 <button className="warn" type="button" onClick={() => onUpdateInstructorQuestionnaireStatus(item, 'closed')}>关闭</button>
+                                <button
+                                  className="danger"
+                                  type="button"
+                                  disabled={instructorReviewDeletePendingId === Number(item.id || 0)}
+                                  onClick={() => onDeleteInstructorReviewForm(item)}
+                                >
+                                  {instructorReviewDeletePendingId === Number(item.id || 0) ? '删除中...' : '删除问卷'}
+                                </button>
                               </div>
                             )}
                           </td>

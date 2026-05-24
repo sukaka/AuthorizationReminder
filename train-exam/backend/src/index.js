@@ -4884,6 +4884,41 @@ app.put('/api/train-exam/admin/instructor-review-forms/:id', requireAdminOnly, a
   res.json(await getInstructorReviewFormWithSummary(after));
 }));
 
+app.delete('/api/train-exam/admin/instructor-review-forms/:id', requireAdminOnly, asyncHandler(async (req, res) => {
+  const id = Number(req.params.id || 0);
+  const before = await get('SELECT * FROM te_instructor_review_forms WHERE id = ? LIMIT 1', [id]);
+  if (!before) throw appError('讲师评价问卷不存在', 404);
+  const responseCountRow = await get(
+    'SELECT COUNT(1) AS total FROM te_instructor_review_responses WHERE form_id = ?',
+    [id]
+  );
+  const removedResponses = Number(responseCountRow?.total || 0);
+
+  await transaction(async (tx) => {
+    await tx.run(
+      `DELETE FROM te_instructor_review_responses
+       WHERE form_id = ?`,
+      [id]
+    );
+    await tx.run(
+      `DELETE FROM te_instructor_review_forms
+       WHERE id = ?`,
+      [id]
+    );
+  });
+
+  await logOperation({
+    req,
+    action: 'INSTRUCTOR_REVIEW_DELETE',
+    entity: 'instructor_review_form',
+    entityId: id,
+    message: `删除讲师评价问卷 ${id}`,
+    beforeData: { ...before, response_count: removedResponses },
+  });
+
+  res.json({ success: true, id, removed_responses: removedResponses });
+}));
+
 app.post('/api/train-exam/admin/instructor-review-forms/:id/schedule-publish', requireAdminOnly, asyncHandler(async (req, res) => {
   const id = Number(req.params.id || 0);
   const before = await get('SELECT * FROM te_instructor_review_forms WHERE id = ? LIMIT 1', [id]);

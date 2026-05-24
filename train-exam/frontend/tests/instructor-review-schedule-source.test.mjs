@@ -21,3 +21,9 @@ test('instructor review list displays scheduled state and planned publish time',
   assert.match(appSource, /待发布/);
   assert.match(appSource, /计划发布/);
 });
+
+test('instructor review admin page exposes delete action', () => {
+  assert.match(appSource, /onDeleteInstructorReviewForm/);
+  assert.match(appSource, /删除问卷/);
+  assert.match(appSource, /api\.del\(`\/api\/train-exam\/admin\/instructor-review-forms\/\$\{id\}`\)/);
+});
