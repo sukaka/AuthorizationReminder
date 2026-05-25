@@ -1,6 +1,11 @@
 const crypto = require('crypto');
 const OSS = require('ali-oss');
 
+const DEFAULT_OSS_TIMEOUT = '120s';
+const DEFAULT_OSS_RETRY_MAX = 2;
+const DEFAULT_OSS_HEAD_ATTEMPTS = 3;
+const DEFAULT_OSS_HEAD_RETRY_DELAY_MS = 300;
+
 const trimText = (value) => (value === undefined || value === null ? '' : String(value).trim());
 
 const parsePositiveInt = (value, fallback) => {
@@ -9,11 +14,17 @@ const parsePositiveInt = (value, fallback) => {
   return Math.floor(num);
 };
 
+const normalizeOssEndpoint = (value) => {
+  const endpoint = trimText(value);
+  if (!endpoint) return '';
+  return endpoint.replace(/^http:\/\//i, 'https://');
+};
+
 const readOssConfigFromEnv = (env = process.env) => ({
   enabled: String(env.OSS_ENABLED || 'false').trim().toLowerCase() === 'true',
   region: trimText(env.OSS_REGION),
   bucket: trimText(env.OSS_BUCKET),
-  endpoint: trimText(env.OSS_ENDPOINT),
+  endpoint: normalizeOssEndpoint(env.OSS_ENDPOINT),
   accessKeyId: trimText(env.OSS_ACCESS_KEY_ID),
   accessKeySecret: trimText(env.OSS_ACCESS_KEY_SECRET),
   stsToken: trimText(env.OSS_STS_TOKEN),
@@ -27,7 +38,7 @@ const validateOssConfig = (config = {}) => {
     enabled: !!config.enabled,
     region: trimText(config.region),
     bucket: trimText(config.bucket),
-    endpoint: trimText(config.endpoint),
+    endpoint: normalizeOssEndpoint(config.endpoint),
     accessKeyId: trimText(config.accessKeyId),
     accessKeySecret: trimText(config.accessKeySecret),
     stsToken: trimText(config.stsToken),
@@ -52,7 +63,10 @@ const createOssClient = ({ config, OSSClient = OSS } = {}) => {
     accessKeyId: normalized.accessKeyId,
     accessKeySecret: normalized.accessKeySecret,
     stsToken: normalized.stsToken || undefined,
-    endpoint: normalized.endpoint || undefined,
+    endpoint: normalizeOssEndpoint(normalized.endpoint) || undefined,
+    secure: true,
+    timeout: DEFAULT_OSS_TIMEOUT,
+    retryMax: DEFAULT_OSS_RETRY_MAX,
   });
   return { client, config: normalized };
 };
@@ -106,11 +120,43 @@ const createManagedOssPlaybackUrl = async ({
   });
 };
 
-const headManagedOssObject = async ({ client, objectKey } = {}) => {
+const isTransientOssHeadError = (err) => {
+  const status = Number(err?.status ?? err?.statusCode ?? err?.res?.status ?? 0);
+  const code = trimText(err?.code).toUpperCase();
+  const name = trimText(err?.name).toLowerCase();
+  const message = trimText(err?.message).toLowerCase();
+  if (status === -1 || status === -2 || status >= 500) return true;
+  if (['ECONNRESET', 'ETIMEDOUT', 'EPIPE', 'ESOCKETTIMEDOUT'].includes(code)) return true;
+  if (name.includes('timeout')) return true;
+  return /socket hang up|connection reset|timeout|temporarily unavailable|network/.test(message);
+};
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, Math.max(0, Number(ms || 0))));
+
+const headManagedOssObject = async ({
+  client,
+  objectKey,
+  attempts = DEFAULT_OSS_HEAD_ATTEMPTS,
+  retryDelayMs = DEFAULT_OSS_HEAD_RETRY_DELAY_MS,
+} = {}) => {
   const key = trimText(objectKey);
   if (!key) throw new Error('objectKey 不能为空');
   if (!client || typeof client.head !== 'function') throw new Error('OSS client 不可用');
-  const result = await client.head(key);
+  const maxAttempts = Math.max(1, Math.floor(Number(attempts || DEFAULT_OSS_HEAD_ATTEMPTS)));
+  let lastError = null;
+  let result = null;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      result = await client.head(key);
+      lastError = null;
+      break;
+    } catch (err) {
+      lastError = err;
+      if (attempt >= maxAttempts || !isTransientOssHeadError(err)) throw err;
+      await sleep(Number(retryDelayMs || 0) * attempt);
+    }
+  }
+  if (lastError) throw lastError;
   const headers = result?.res?.headers || result?.headers || {};
   return {
     objectKey: key,
@@ -127,6 +173,7 @@ module.exports = {
   createManagedOssUploadSignature,
   createOssClient,
   headManagedOssObject,
+  isTransientOssHeadError,
   readOssConfigFromEnv,
   validateOssConfig,
 };
