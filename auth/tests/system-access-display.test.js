@@ -11,6 +11,7 @@ test('getSystemDisplayLabel returns Chinese labels for dedicated centers', () =>
   assert.equal(getSystemDisplayLabel('audit-center'), '审计中心');
   assert.equal(getSystemDisplayLabel('delivery'), '交付系统');
   assert.equal(getSystemDisplayLabel('prompt-center'), '提示词管理中心');
+  assert.equal(getSystemDisplayLabel('sca'), '软件成分分析平台');
 });
 
 test('summarizeSystemAccess keeps first two labels and collapses overflow count', () => {

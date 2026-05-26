@@ -1290,6 +1290,22 @@ const authorizePromptCenter = (user, action) => {
   return deny('不支持的授权动作');
 };
 
+const authorizeSca = (user, action) => {
+  if (!user) return deny('未登录');
+  if (!canAccessSystem(user, 'sca')) return deny('无权限访问软件成分分析平台');
+  const role = String(user.role || '').toLowerCase();
+  if (action === 'app:enter' || action === 'sca:read') return allow();
+  if (action === 'sca:write' || action === 'sca:project:manage') {
+    if (role === 'admin' || role === 'editor' || role === 'sysadmin') return allow();
+    return deny('仅管理员、系统管理员或业务管理员可维护软件成分分析项目');
+  }
+  if (action === 'sca:audit:read') {
+    if (role === 'auditor' || role === 'admin') return allow();
+    return deny('仅管理员或审计管理员可查看软件成分分析审计信息');
+  }
+  return deny('不支持的授权动作');
+};
+
 app.get('/api/auth/introspect', async (req, res) => {
   const user = await db.get(
     'SELECT id, username, role, app_access, mfa_enabled, mfa_methods, totp_enabled, totp_secret, email, phone, wecom_id, must_change_password FROM users WHERE id = ?',
@@ -1362,6 +1378,8 @@ app.post('/api/auth/authorize', async (req, res) => {
     result = authorizeTrainExam(user, action);
   } else if (system === 'prompt-center') {
     result = authorizePromptCenter(user, action);
+  } else if (system === 'sca') {
+    result = authorizeSca(user, action);
   }
   return res.json({ ...result, user: buildAuthUserPayload(user), scope, apps });
 });
@@ -1394,6 +1412,7 @@ app.get('/api/auth/apps', async (req, res) => {
   const tenderURL = process.env.APP_TENDER_URL || 'http://localhost:18086';
   const trainExamURL = process.env.APP_TRAIN_EXAM_URL || 'http://localhost:18087';
   const promptCenterURL = process.env.APP_PROMPT_CENTER_URL || 'http://localhost:18088';
+  const scaURL = process.env.APP_SCA_URL || 'http://localhost:18089';
   const adminCenterURL = process.env.APP_ADMIN_CENTER_URL || 'http://localhost:5180/admin-center';
   const auditCenterURL = process.env.APP_AUDIT_CENTER_URL || 'http://localhost:5180/audit-center';
   const appAccess = getUserAppAccess(user);
@@ -1447,6 +1466,10 @@ app.get('/api/auth/apps', async (req, res) => {
   if (appAccess.includes('prompt-center')) {
     const promptCenterAuth = await authorizePromptCenter(user, 'app:enter');
     apps.push({ key: 'prompt-center', name: '提示词管理中心', url: promptCenterURL, allow: !!promptCenterAuth.allow });
+  }
+  if (appAccess.includes('sca')) {
+    const scaAuth = await authorizeSca(user, 'app:enter');
+    apps.push({ key: 'sca', name: '软件成分分析平台', url: scaURL, allow: !!scaAuth.allow });
   }
   return res.json({
     user: buildAuthUserPayload(user),
@@ -2020,6 +2043,7 @@ const renderAuditCenterSections = () => ({
 	                <option value="tender">标书协同制作系统</option>
 	                <option value="train-exam">培训考试系统</option>
 	                <option value="prompt-center">提示词管理中心</option>
+	                <option value="sca">软件成分分析平台</option>
 	              </select>
 	            </label>
 	            <label class="form-label">事件
@@ -2715,7 +2739,7 @@ const renderDedicatedCenterPage = ({ nonce, config }) => {
 
     function getDefaultBusinessAccessByRole(role) {
       const normalizedRole = String(role || '').trim().toLowerCase();
-      if (normalizedRole === 'editor') return ['faq', 'tender', 'train-exam', 'prompt-center'];
+      if (normalizedRole === 'editor') return ['faq', 'tender', 'train-exam', 'prompt-center', 'sca'];
       if (normalizedRole === 'reviewer') return ['faq', 'train-exam', 'prompt-center'];
       if (normalizedRole === 'sales') return ['reminder', 'train-exam', 'prompt-center'];
       if (normalizedRole === 'admin') return systemAccessOptions.map((item) => item.key);

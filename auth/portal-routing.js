@@ -16,6 +16,7 @@ const SYSTEM_ACCESS_KEYS = Object.freeze([
   'tender',
   'train-exam',
   'prompt-center',
+  'sca',
   ADMIN_CENTER_KEY,
   AUDIT_CENTER_KEY,
 ]);
@@ -49,7 +50,7 @@ const defaultAppAccessByRole = (role) => {
   if (normalizedRole === 'admin') return [...BUSINESS_SYSTEM_ACCESS_KEYS];
   if (normalizedRole === 'sysadmin') return [ADMIN_CENTER_KEY];
   if (normalizedRole === 'auditor') return [AUDIT_CENTER_KEY, DELIVERY_KEY];
-  if (normalizedRole === 'editor') return ['faq', 'tender', 'train-exam', 'prompt-center'];
+  if (normalizedRole === 'editor') return ['faq', 'tender', 'train-exam', 'prompt-center', 'sca'];
   if (normalizedRole === 'reviewer') return ['faq', 'train-exam', 'prompt-center'];
   return ['reminder', 'train-exam', 'prompt-center'];
 };

@@ -1,0 +1,70 @@
+services:
+  sca-postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-juxin_sca}
+      POSTGRES_USER: ${POSTGRES_USER:-sca_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change_me_sca_postgres_password}
+    volumes:
+      - sca-postgres-data:/var/lib/postgresql/data
+      - ./database/init:/docker-entrypoint-initdb.d:ro
+    ports:
+      - "5433:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-sca_user} -d ${POSTGRES_DB:-juxin_sca}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  sca-redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - sca-redis-data:/data
+    ports:
+      - "6380:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  sca-api:
+    build:
+      context: ./backend
+    env_file:
+      - .env
+    depends_on:
+      sca-postgres:
+        condition: service_healthy
+      sca-redis:
+        condition: service_healthy
+    ports:
+      - "${API_PORT:-5191}:5191"
+
+  sca-worker:
+    build:
+      context: ./backend
+    env_file:
+      - .env
+    command: ["celery", "-A", "app.celery_app.celery_app", "worker", "--loglevel=INFO"]
+    depends_on:
+      sca-postgres:
+        condition: service_healthy
+      sca-redis:
+        condition: service_healthy
+
+  web-sca:
+    build:
+      context: ./frontend
+      args:
+        VITE_API_BASE: ${VITE_API_BASE:-}
+        VITE_SSO_LOGIN_URL: ${VITE_SSO_LOGIN_URL:-http://localhost:5180/login?system=sca}
+    depends_on:
+      - sca-api
+    ports:
+      - "${WEB_PORT:-18089}:80"
+
+volumes:
+  sca-postgres-data:
+  sca-redis-data:

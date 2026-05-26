@@ -101,6 +101,10 @@ test('legacy ticketing and sec-impl access folds into delivery once', () => {
   );
 });
 
+test('editor defaults include software composition analysis access', () => {
+  assert.ok(defaultAppAccessByRole('editor').includes('sca'));
+});
+
 test('dedicated center config exposes admin and audit metadata', () => {
   assert.deepEqual(getDedicatedCenterConfig(ADMIN_CENTER_KEY), {
     key: 'admin-center',
