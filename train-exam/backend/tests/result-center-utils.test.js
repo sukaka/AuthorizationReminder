@@ -21,6 +21,10 @@ describe('result center utils', () => {
   });
 
   it('normalizes admin result filters with defaults and aliases', () => {
+    expect(normalizeAdminResultsFilters({})).toMatchObject({
+      final_only: true,
+    });
+
     expect(normalizeAdminResultsFilters({
       keyword: ' 张三 ',
       user_id: '12',
@@ -62,6 +66,11 @@ describe('result center utils', () => {
   });
 
   it('builds stable where clause for admin result filters', () => {
+    expect(buildAdminResultsWhere({})).toEqual({
+      whereSql: 'WHERE r.is_final = 1',
+      params: [],
+    });
+
     expect(buildAdminResultsWhere({
       keyword: '张三',
       user_id: 12,
@@ -165,6 +174,7 @@ describe('result center utils', () => {
       result_total: 5,
       candidate_total: 3,
       final_result_count: 2,
+      timeout_count: 0,
       pass_count: 4,
       pass_rate: 80,
       average_score: 83.33,

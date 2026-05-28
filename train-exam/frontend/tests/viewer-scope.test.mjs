@@ -70,3 +70,9 @@ test('student overall evaluation is an admin-only result summary page', () => {
   assert.match(appSource, /仅管理员可见平均分/);
   assert.match(appSource, /总体评价/);
 });
+
+test('result lists default to final exam scores for retake attempts', () => {
+  assert.match(appSource, /final_only: true/);
+  assert.match(appSource, /STUDENT_OVERALL_PAGE_LIMIT,[\s\S]*?final_only: true/);
+  assert.match(appSource, /只看最终成绩/);
+});

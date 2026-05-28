@@ -180,7 +180,7 @@ const normalizeAdminResultsFilters = (filters = {}) => ({
   user_id: toPositiveInt(filters?.user_id, 0),
   paper_id: toPositiveInt(filters?.paper_id, 0),
   passed: normalizePassedFilter(filters?.passed),
-  final_only: normalizeBoolean(filters?.final_only, false),
+  final_only: normalizeBoolean(filters?.final_only, true),
   date_from: isDateText(filters?.date_from) ? trimText(filters?.date_from) : '',
   date_to: isDateText(filters?.date_to) ? trimText(filters?.date_to) : '',
   page: toPositiveInt(filters?.page, 1),
