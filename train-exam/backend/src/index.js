@@ -8022,10 +8022,10 @@ app.get('/api/train-exam/admin/results/papers', requireResultCenterReader, async
       COALESCE(t.timeout_count, 0) AS timeout_count,
       AVG(r.score) AS average_score,
       MAX(r.created_at) AS latest_result_at,
-      SUM(CASE WHEN r.total_score > 0 AND (r.score / r.total_score) >= 0.9 THEN 1 ELSE 0 END) AS rating_a_count,
-      SUM(CASE WHEN r.total_score > 0 AND (r.score / r.total_score) >= 0.8 AND (r.score / r.total_score) < 0.9 THEN 1 ELSE 0 END) AS rating_b_count,
-      SUM(CASE WHEN r.total_score > 0 AND (r.score / r.total_score) >= 0.6 AND (r.score / r.total_score) < 0.8 THEN 1 ELSE 0 END) AS rating_c_count,
-      SUM(CASE WHEN r.id IS NOT NULL AND (r.total_score <= 0 OR (r.total_score > 0 AND (r.score / r.total_score) < 0.6)) THEN 1 ELSE 0 END) AS rating_d_count
+      SUM(CASE WHEN r.is_final = 1 AND r.total_score > 0 AND (r.score / r.total_score) >= 0.9 THEN 1 ELSE 0 END) AS rating_a_count,
+      SUM(CASE WHEN r.is_final = 1 AND r.total_score > 0 AND (r.score / r.total_score) >= 0.8 AND (r.score / r.total_score) < 0.9 THEN 1 ELSE 0 END) AS rating_b_count,
+      SUM(CASE WHEN r.is_final = 1 AND r.total_score > 0 AND (r.score / r.total_score) >= 0.6 AND (r.score / r.total_score) < 0.8 THEN 1 ELSE 0 END) AS rating_c_count,
+      SUM(CASE WHEN r.is_final = 1 AND r.id IS NOT NULL AND (r.total_score <= 0 OR (r.total_score > 0 AND (r.score / r.total_score) < 0.6)) THEN 1 ELSE 0 END) AS rating_d_count
      FROM te_papers p
      LEFT JOIN te_exam_results r ON r.paper_id = p.id
      LEFT JOIN (
