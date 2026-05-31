@@ -189,6 +189,14 @@ body {
   font-size: 17px;
 }
 
+.panel-actions {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
 .capability-list {
   margin: 0;
   padding: 16px 24px 20px 36px;
@@ -212,6 +220,74 @@ body {
   display: flex;
   justify-content: flex-end;
   padding-top: 16px;
+}
+
+.stats-list {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  padding: 16px;
+}
+
+.stats-list div {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px;
+  background: #f8fafc;
+  display: grid;
+  gap: 6px;
+}
+
+.stats-list span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.stats-list strong {
+  font-size: 22px;
+}
+
+.trend {
+  display: grid;
+  gap: 10px;
+  padding: 0 16px 16px;
+}
+
+.trend-row {
+  display: grid;
+  grid-template-columns: 68px minmax(0, 1fr) 28px;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.trend-bar {
+  height: 12px;
+  display: flex;
+  overflow: hidden;
+  border-radius: 8px;
+  background: #eef2f7;
+}
+
+.trend-bar i {
+  display: block;
+  min-width: 0;
+}
+
+.trend-bar .critical {
+  background: #991b1b;
+}
+
+.trend-bar .high {
+  background: #dc2626;
+}
+
+.trend-bar .medium {
+  background: #f59e0b;
+}
+
+.trend-bar .low {
+  background: #22c55e;
 }
 
 @media (max-width: 980px) {
@@ -247,5 +323,11 @@ body {
 
   .hero-actions {
     justify-content: flex-start;
+  }
+
+  .panel-head,
+  .panel-actions {
+    align-items: flex-start;
+    flex-direction: column;
   }
 }

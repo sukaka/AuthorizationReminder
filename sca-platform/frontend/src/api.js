@@ -109,4 +109,16 @@ export const resumableUploadWithProgress = async ({ file, projectName, scanNote,
   return requestJson(`/api/sca/uploads/${session.upload_id}/complete`, { method: 'POST' })
 }
 
+export const uploadImageTarWithProgress = ({ file, scanner, onProgress }) => {
+  const formData = new FormData()
+  formData.append('scanner', scanner || 'trivy')
+  formData.append('file', file)
+  return sendWithProgress({
+    method: 'POST',
+    path: '/api/sca/image-scans/tar',
+    body: formData,
+    onProgress,
+  })
+}
+
 export { redirectToLogin }

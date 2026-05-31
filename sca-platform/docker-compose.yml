@@ -36,6 +36,8 @@ services:
       - .env
     volumes:
       - sca-upload-data:/data/sca/uploads
+      - sca-report-data:/data/sca/reports
+      - sca-sbom-data:/data/sca/sbom
     depends_on:
       sca-postgres:
         condition: service_healthy
@@ -51,6 +53,8 @@ services:
       - .env
     volumes:
       - sca-upload-data:/data/sca/uploads
+      - sca-report-data:/data/sca/reports
+      - sca-sbom-data:/data/sca/sbom
     command: ["celery", "-A", "app.celery_app.celery_app", "worker", "--loglevel=INFO"]
     depends_on:
       sca-postgres:
@@ -73,3 +77,5 @@ volumes:
   sca-postgres-data:
   sca-redis-data:
   sca-upload-data:
+  sca-report-data:
+  sca-sbom-data:

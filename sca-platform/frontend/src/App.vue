@@ -19,6 +19,18 @@
           <el-icon><Grid /></el-icon>
           <span>依赖识别</span>
         </el-menu-item>
+        <el-menu-item index="vulnerabilities">
+          <el-icon><WarningFilled /></el-icon>
+          <span>漏洞查询</span>
+        </el-menu-item>
+        <el-menu-item index="reports">
+          <el-icon><Document /></el-icon>
+          <span>报告导出</span>
+        </el-menu-item>
+        <el-menu-item index="sbom">
+          <el-icon><Files /></el-icon>
+          <span>SBOM/镜像扫描</span>
+        </el-menu-item>
         <el-menu-item index="logs">
           <el-icon><Document /></el-icon>
           <span>扫描日志</span>
@@ -36,7 +48,7 @@
         <div>
           <p class="eyebrow">Software Composition Analysis</p>
           <h1>聚信软件成分分析平台</h1>
-          <p class="sub">上传源码包后自动识别 Maven、npm、Python、Go 与 Docker 基础镜像依赖，并沉淀组件清单、依赖树与扫描日志。</p>
+          <p class="sub">上传源码包后自动识别依赖，联动 OSV、NVD 与 GitHub Advisory 查询漏洞，并生成中文安全报告、SBOM 与镜像扫描结果。</p>
         </div>
         <div class="hero-actions">
           <el-button :icon="Refresh" @click="refreshAll">刷新</el-button>
@@ -93,6 +105,9 @@
             <li>上传记录、删除与审计日志</li>
             <li>Celery 异步依赖识别</li>
             <li>依赖列表与依赖树展示</li>
+            <li>OSV / NVD / GitHub Advisory 漏洞查询</li>
+            <li>Word / PDF / Excel 中文报告导出</li>
+            <li>CycloneDX / SPDX SBOM 与镜像风险评分</li>
           </ul>
         </div>
       </section>
@@ -168,6 +183,148 @@
         </div>
       </section>
 
+      <section v-if="activeMenu === 'vulnerabilities'" class="workbench">
+        <div class="panel">
+          <div class="panel-head">
+            <h2>漏洞列表</h2>
+            <div class="panel-actions">
+              <el-select v-model="selectedProjectId" placeholder="选择项目" style="width: 220px" @change="loadProjectDetails">
+                <el-option v-for="project in projects" :key="project.id" :label="project.name" :value="project.id" />
+              </el-select>
+              <el-button type="primary" :loading="vulnerabilityQuerying" :icon="Search" @click="queryVulnerabilities">查询漏洞</el-button>
+            </div>
+          </div>
+          <el-table :data="vulnerabilities" empty-text="暂无漏洞，请先查询">
+            <el-table-column prop="severity" label="等级" width="100">
+              <template #default="{ row }">
+                <el-tag :type="severityTag(row.severity)">{{ severityLabel(row.severity) }}</el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column prop="cve_id" label="CVE" width="150" show-overflow-tooltip />
+            <el-table-column prop="package_name" label="组件" min-width="180" show-overflow-tooltip />
+            <el-table-column prop="package_version" label="版本" width="130" show-overflow-tooltip />
+            <el-table-column prop="cvss_score" label="CVSS" width="90" />
+            <el-table-column prop="fixed_version" label="修复版本" width="140" show-overflow-tooltip />
+            <el-table-column prop="description" label="漏洞详情" min-width="240" show-overflow-tooltip />
+            <el-table-column label="情报" width="130">
+              <template #default="{ row }">
+                <el-tag v-if="row.has_poc" type="warning" effect="plain">POC</el-tag>
+                <el-tag v-if="row.exploited_in_wild" type="danger" effect="plain">在野</el-tag>
+              </template>
+            </el-table-column>
+          </el-table>
+        </div>
+        <div class="panel side-panel">
+          <div class="panel-head">
+            <h2>统计与趋势</h2>
+          </div>
+          <div class="stats-list">
+            <div><span>漏洞总数</span><strong>{{ vulnerabilityStats.total }}</strong></div>
+            <div><span>平均 CVSS</span><strong>{{ vulnerabilityStats.average_cvss }}</strong></div>
+            <div><span>POC</span><strong>{{ vulnerabilityStats.poc_count }}</strong></div>
+            <div><span>在野利用</span><strong>{{ vulnerabilityStats.exploited_count }}</strong></div>
+          </div>
+          <div class="trend">
+            <div v-for="item in vulnerabilityTrend" :key="item.month" class="trend-row">
+              <span>{{ item.month }}</span>
+              <div class="trend-bar">
+                <i class="critical" :style="{ width: trendWidth(item.critical, item.total) }"></i>
+                <i class="high" :style="{ width: trendWidth(item.high, item.total) }"></i>
+                <i class="medium" :style="{ width: trendWidth(item.medium, item.total) }"></i>
+                <i class="low" :style="{ width: trendWidth(item.low, item.total) }"></i>
+              </div>
+              <b>{{ item.total }}</b>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section v-if="activeMenu === 'reports'" class="workbench">
+        <div class="panel">
+          <div class="panel-head">
+            <h2>中文安全报告</h2>
+            <div class="panel-actions">
+              <el-select v-model="selectedProjectId" placeholder="选择项目" style="width: 220px" @change="loadProjectDetails">
+                <el-option v-for="project in projects" :key="project.id" :label="project.name" :value="project.id" />
+              </el-select>
+              <el-segmented v-model="reportFormat" :options="['docx', 'pdf', 'xlsx']" />
+              <el-button type="primary" :loading="reportCreating" :icon="Document" @click="createReport">生成</el-button>
+            </div>
+          </div>
+          <el-table :data="reports" empty-text="暂无导出报告">
+            <el-table-column prop="filename" label="文件名" min-width="240" show-overflow-tooltip />
+            <el-table-column prop="format" label="格式" width="90" />
+            <el-table-column prop="status" label="状态" width="110" />
+            <el-table-column prop="created_at" label="生成时间" width="210" />
+            <el-table-column label="操作" width="110">
+              <template #default="{ row }">
+                <el-button text type="primary" @click="downloadReport(row)">下载</el-button>
+              </template>
+            </el-table-column>
+          </el-table>
+        </div>
+        <div class="panel side-panel">
+          <div class="panel-head"><h2>模板内容</h2></div>
+          <ul class="capability-list">
+            <li>项目概况、扫描时间、组件统计</li>
+            <li>漏洞统计图与风险等级统计</li>
+            <li>高危漏洞清单与修复建议</li>
+            <li>风险趋势与等保整改建议</li>
+          </ul>
+        </div>
+      </section>
+
+      <section v-if="activeMenu === 'sbom'" class="workbench">
+        <div class="panel">
+          <div class="panel-head">
+            <h2>SBOM 生成</h2>
+            <div class="panel-actions">
+              <el-select v-model="selectedProjectId" placeholder="选择项目" style="width: 220px" @change="loadProjectDetails">
+                <el-option v-for="project in projects" :key="project.id" :label="project.name" :value="project.id" />
+              </el-select>
+              <el-segmented v-model="sbomFormat" :options="['cyclonedx', 'spdx']" />
+              <el-button type="primary" :loading="sbomCreating" :icon="Files" @click="createSbom">生成</el-button>
+            </div>
+          </div>
+          <el-table :data="sboms" empty-text="暂无 SBOM">
+            <el-table-column prop="filename" label="文件名" min-width="240" show-overflow-tooltip />
+            <el-table-column prop="format" label="格式" width="120" />
+            <el-table-column prop="component_count" label="组件数" width="100" />
+            <el-table-column prop="source" label="来源" width="120" />
+            <el-table-column label="操作" width="110">
+              <template #default="{ row }">
+                <el-button text type="primary" @click="downloadSbom(row)">下载</el-button>
+              </template>
+            </el-table-column>
+          </el-table>
+        </div>
+        <div class="panel side-panel">
+          <div class="panel-head"><h2>镜像扫描</h2></div>
+          <div class="upload-form">
+            <el-form label-position="top">
+              <el-form-item label="扫描器">
+                <el-segmented v-model="imageScanForm.scanner" :options="['trivy', 'grype']" />
+              </el-form-item>
+              <el-form-item label="Docker 镜像">
+                <el-input v-model="imageScanForm.imageRef" placeholder="例如：python:3.12-alpine" />
+              </el-form-item>
+              <el-button type="primary" :loading="imageScanning" :icon="Search" @click="scanImage">扫描镜像</el-button>
+              <el-divider />
+              <el-form-item label="镜像 tar">
+                <input class="native-file" type="file" accept=".tar" @change="onImageTarChange" />
+              </el-form-item>
+              <el-progress v-if="imageUploadProgress > 0" :percentage="imageUploadProgress" />
+              <el-button :loading="imageScanning" :icon="UploadFilled" @click="scanImageTar">上传 tar 并扫描</el-button>
+            </el-form>
+          </div>
+          <el-table :data="imageScans" empty-text="暂无镜像扫描" size="small">
+            <el-table-column prop="image_ref" label="镜像" min-width="130" show-overflow-tooltip />
+            <el-table-column prop="status" label="状态" width="100" />
+            <el-table-column prop="risk_score" label="评分" width="80" />
+          </el-table>
+        </div>
+      </section>
+
       <section v-if="activeMenu === 'logs'" class="panel">
         <div class="panel-head">
           <h2>扫描日志</h2>
@@ -187,16 +344,22 @@
 
 <script setup>
 import { computed, onMounted, reactive, ref } from 'vue'
-import { Connection, DataAnalysis, Document, Grid, Refresh, UploadFilled } from '@element-plus/icons-vue'
+import { Connection, DataAnalysis, Document, Files, Grid, Refresh, Search, UploadFilled, WarningFilled } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { requestJson, resumableUploadWithProgress, uploadArchiveWithProgress } from './api'
+import { requestJson, resumableUploadWithProgress, uploadArchiveWithProgress, uploadImageTarWithProgress } from './api'
 
 const activeMenu = ref('overview')
 const loading = ref(false)
 const error = ref('')
 const uploading = ref(false)
+const vulnerabilityQuerying = ref(false)
+const reportCreating = ref(false)
+const sbomCreating = ref(false)
+const imageScanning = ref(false)
 const uploadProgress = ref(0)
+const imageUploadProgress = ref(0)
 const selectedFile = ref(null)
+const selectedImageTar = ref(null)
 const resumableMode = ref(true)
 const selectedProjectId = ref(null)
 const projects = ref([])
@@ -204,6 +367,13 @@ const uploads = ref([])
 const components = ref([])
 const dependencyTree = ref([])
 const scanLogs = ref([])
+const vulnerabilities = ref([])
+const vulnerabilityTrend = ref([])
+const reports = ref([])
+const sboms = ref([])
+const imageScans = ref([])
+const reportFormat = ref('docx')
+const sbomFormat = ref('cyclonedx')
 const overview = reactive({
   project_count: 0,
   component_count: 0,
@@ -216,6 +386,17 @@ const uploadForm = reactive({
   projectName: '',
   scanNote: '',
 })
+const imageScanForm = reactive({
+  imageRef: '',
+  scanner: 'trivy',
+})
+const vulnerabilityStats = reactive({
+  total: 0,
+  by_severity: { critical: 0, high: 0, medium: 0, low: 0, unknown: 0 },
+  poc_count: 0,
+  exploited_count: 0,
+  average_cvss: 0,
+})
 
 const userLabel = computed(() => {
   if (!overview.user?.username) return '未加载'
@@ -225,6 +406,26 @@ const userLabel = computed(() => {
 const uploadPercent = (row) => {
   if (!row?.file_size) return 0
   return Math.min(100, Math.round((Number(row.received_bytes || 0) / Number(row.file_size)) * 100))
+}
+
+const severityLabel = (severity) => ({
+  critical: '严重',
+  high: '高危',
+  medium: '中危',
+  low: '低危',
+  unknown: '未知',
+}[severity] || severity)
+
+const severityTag = (severity) => ({
+  critical: 'danger',
+  high: 'danger',
+  medium: 'warning',
+  low: 'success',
+}[severity] || 'info')
+
+const trendWidth = (value, total) => {
+  if (!total) return '0%'
+  return `${Math.max(4, Math.round((value / total) * 100))}%`
 }
 
 const loadOverview = async () => {
@@ -257,6 +458,14 @@ const loadProjectDetails = async () => {
   components.value = (await requestJson(`/api/sca/projects/${selectedProjectId.value}/components`)) || []
   dependencyTree.value = (await requestJson(`/api/sca/projects/${selectedProjectId.value}/dependency-tree`)) || []
   scanLogs.value = (await requestJson(`/api/sca/projects/${selectedProjectId.value}/scan-logs`)) || []
+  const vulnerabilityData = await requestJson(`/api/sca/projects/${selectedProjectId.value}/vulnerabilities`)
+  vulnerabilities.value = vulnerabilityData?.items || []
+  const stats = await requestJson(`/api/sca/projects/${selectedProjectId.value}/vulnerabilities/stats`)
+  if (stats) Object.assign(vulnerabilityStats, stats)
+  const trend = await requestJson(`/api/sca/projects/${selectedProjectId.value}/vulnerabilities/trend`)
+  vulnerabilityTrend.value = trend?.items || []
+  reports.value = (await requestJson(`/api/sca/projects/${selectedProjectId.value}/reports`)) || []
+  sboms.value = (await requestJson(`/api/sca/projects/${selectedProjectId.value}/sbom`)) || []
 }
 
 const refreshAll = async () => {
@@ -266,6 +475,10 @@ const refreshAll = async () => {
 
 const onFileChange = (event) => {
   selectedFile.value = event.target.files?.[0] || null
+}
+
+const onImageTarChange = (event) => {
+  selectedImageTar.value = event.target.files?.[0] || null
 }
 
 const submitUpload = async () => {
@@ -319,6 +532,120 @@ const openProject = async (project) => {
   await selectProject(project.id)
 }
 
+const queryVulnerabilities = async () => {
+  if (!selectedProjectId.value) {
+    ElMessage.warning('请先选择项目')
+    return
+  }
+  vulnerabilityQuerying.value = true
+  try {
+    const data = await requestJson(`/api/sca/projects/${selectedProjectId.value}/vulnerabilities/query`, { method: 'POST' })
+    vulnerabilities.value = data?.items || []
+    await loadProjectDetails()
+    ElMessage.success(`漏洞查询完成：${data?.total || 0} 条`)
+  } catch (err) {
+    ElMessage.error(err?.message || '漏洞查询失败')
+  } finally {
+    vulnerabilityQuerying.value = false
+  }
+}
+
+const createReport = async () => {
+  if (!selectedProjectId.value) {
+    ElMessage.warning('请先选择项目')
+    return
+  }
+  reportCreating.value = true
+  try {
+    await requestJson(`/api/sca/projects/${selectedProjectId.value}/reports`, {
+      method: 'POST',
+      body: JSON.stringify({ format: reportFormat.value }),
+    })
+    await loadProjectDetails()
+    ElMessage.success('报告已生成')
+  } catch (err) {
+    ElMessage.error(err?.message || '报告生成失败')
+  } finally {
+    reportCreating.value = false
+  }
+}
+
+const downloadReport = (row) => {
+  window.open(`/api/sca/reports/${row.id}/download`, '_blank')
+}
+
+const createSbom = async () => {
+  if (!selectedProjectId.value) {
+    ElMessage.warning('请先选择项目')
+    return
+  }
+  sbomCreating.value = true
+  try {
+    await requestJson(`/api/sca/projects/${selectedProjectId.value}/sbom`, {
+      method: 'POST',
+      body: JSON.stringify({ format: sbomFormat.value }),
+    })
+    await loadProjectDetails()
+    ElMessage.success('SBOM 已生成')
+  } catch (err) {
+    ElMessage.error(err?.message || 'SBOM 生成失败')
+  } finally {
+    sbomCreating.value = false
+  }
+}
+
+const downloadSbom = (row) => {
+  window.open(`/api/sca/sbom/${row.id}/download`, '_blank')
+}
+
+const loadImageScans = async () => {
+  imageScans.value = (await requestJson('/api/sca/image-scans')) || []
+}
+
+const scanImage = async () => {
+  if (!imageScanForm.imageRef.trim()) {
+    ElMessage.warning('请填写 Docker 镜像名称')
+    return
+  }
+  imageScanning.value = true
+  try {
+    await requestJson('/api/sca/image-scans', {
+      method: 'POST',
+      body: JSON.stringify({ image_ref: imageScanForm.imageRef.trim(), scanner: imageScanForm.scanner }),
+    })
+    await loadImageScans()
+    ElMessage.success('镜像扫描任务已完成')
+  } catch (err) {
+    ElMessage.error(err?.message || '镜像扫描失败')
+  } finally {
+    imageScanning.value = false
+  }
+}
+
+const scanImageTar = async () => {
+  if (!selectedImageTar.value) {
+    ElMessage.warning('请选择镜像 tar 文件')
+    return
+  }
+  imageScanning.value = true
+  imageUploadProgress.value = 0
+  try {
+    await uploadImageTarWithProgress({
+      file: selectedImageTar.value,
+      scanner: imageScanForm.scanner,
+      onProgress: (percent) => {
+        imageUploadProgress.value = percent
+      },
+    })
+    await loadImageScans()
+    ElMessage.success('镜像 tar 已上传并扫描')
+  } catch (err) {
+    ElMessage.error(err?.message || '镜像 tar 扫描失败')
+  } finally {
+    imageScanning.value = false
+  }
+}
+
 const enqueueTask = async () => {
   try {
     const data = await requestJson('/api/sca/tasks/demo', { method: 'POST' })
@@ -329,4 +656,5 @@ const enqueueTask = async () => {
 }
 
 onMounted(refreshAll)
+onMounted(loadImageScans)
 </script>

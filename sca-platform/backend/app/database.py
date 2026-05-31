@@ -42,6 +42,11 @@ def run_compat_migrations() -> None:
         "source_path": "VARCHAR(512) NOT NULL DEFAULT ''",
     }
     with engine.begin() as conn:
+        for foreign_key in inspector.get_foreign_keys("components"):
+            if foreign_key.get("referred_table") == "analysis_projects" and foreign_key.get("constrained_columns") == ["project_id"]:
+                name = foreign_key.get("name")
+                if name and engine.dialect.name == "postgresql":
+                    conn.execute(text(f'ALTER TABLE components DROP CONSTRAINT IF EXISTS "{name}"'))
         for column, definition in additions.items():
             if column not in existing:
                 conn.execute(text(f"ALTER TABLE components ADD COLUMN {column} {definition}"))

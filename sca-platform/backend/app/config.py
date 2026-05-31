@@ -21,6 +21,17 @@ class Settings(BaseSettings):
     upload_root: str = "/data/sca/uploads"
     upload_max_bytes: int = 200 * 1024 * 1024
     celery_task_always_eager: bool = False
+    osv_api_url: str = "https://api.osv.dev"
+    nvd_api_url: str = "https://services.nvd.nist.gov/rest/json/cves/2.0"
+    nvd_api_key: str = ""
+    github_advisory_url: str = "https://api.github.com/advisories"
+    github_token: str = ""
+    vulnerability_fetch_timeout_ms: int = 8000
+    report_root: str = "/data/sca/reports"
+    sbom_root: str = "/data/sca/sbom"
+    tool_syft_path: str = "syft"
+    tool_trivy_path: str = "trivy"
+    tool_grype_path: str = "grype"
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 

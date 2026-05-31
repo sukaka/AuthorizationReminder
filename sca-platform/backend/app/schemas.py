@@ -113,3 +113,120 @@ class DependencyTreeNode(BaseModel):
     ecosystem: str = ""
     version: str = ""
     children: list["DependencyTreeNode"] = Field(default_factory=list)
+
+
+class VulnerabilityOut(BaseModel):
+    id: int
+    project_id: int
+    component_id: int | None = None
+    source: str
+    advisory_id: str
+    cve_id: str
+    package_name: str
+    package_version: str
+    ecosystem: str
+    cvss_score: float
+    severity: str
+    description: str
+    fixed_version: str
+    published_at_text: str
+    has_poc: bool
+    exploited_in_wild: bool
+    detail_url: str
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class VulnerabilityListOut(BaseModel):
+    total: int
+    items: list[VulnerabilityOut]
+
+
+class VulnerabilityStatsOut(BaseModel):
+    total: int
+    by_severity: dict[str, int]
+    poc_count: int
+    exploited_count: int
+    average_cvss: float
+
+
+class VulnerabilityTrendItem(BaseModel):
+    month: str
+    total: int
+    critical: int = 0
+    high: int = 0
+    medium: int = 0
+    low: int = 0
+
+
+class VulnerabilityTrendOut(BaseModel):
+    items: list[VulnerabilityTrendItem]
+
+
+class CveQueryIn(BaseModel):
+    cve_id: str
+
+
+class ReportCreateIn(BaseModel):
+    format: str = Field(pattern="^(docx|pdf|xlsx)$")
+
+
+class ReportOut(BaseModel):
+    id: int
+    project_id: int
+    format: str
+    filename: str
+    status: str
+    created_by: str
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class SbomCreateIn(BaseModel):
+    format: str = Field(default="cyclonedx", pattern="^(cyclonedx|spdx)$")
+
+
+class SbomOut(BaseModel):
+    id: int
+    project_id: int
+    format: str
+    filename: str
+    component_count: int
+    status: str
+    source: str
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class ImageScanCreateIn(BaseModel):
+    image_ref: str = ""
+    scanner: str = Field(default="trivy", pattern="^(trivy|grype)$")
+
+
+class ImageScanOut(BaseModel):
+    id: int
+    image_ref: str
+    tar_path: str
+    scanner: str
+    status: str
+    risk_score: float
+    summary: str
+    created_at: datetime
+    finished_at: datetime | None = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class ImageScanFindingOut(BaseModel):
+    id: int
+    image_scan_id: int
+    package_name: str
+    package_version: str
+    vulnerability_id: str
+    severity: str
+    fixed_version: str
+    description: str
+
+    model_config = ConfigDict(from_attributes=True)

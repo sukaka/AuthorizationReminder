@@ -7,8 +7,9 @@ import uuid
 
 import redis
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile, status
+from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 from .auth import get_current_user, require_action
@@ -19,23 +20,43 @@ from .models import (
     AnalysisProject,
     Component,
     ComponentDependency,
+    ImageScan,
+    ImageScanFinding,
     Project,
+    ReportExport,
+    SbomDocument,
     ScanLog,
     ScanTask,
     UploadFileRecord,
+    VulnerabilityRecord,
 )
 from .schemas import (
+    CveQueryIn,
     ComponentOut,
     DependencyTreeNode,
+    ImageScanCreateIn,
+    ImageScanFindingOut,
+    ImageScanOut,
     OverviewOut,
     ProjectListItem,
+    ReportCreateIn,
+    ReportOut,
     ScanLogOut,
     ScanTaskOut,
+    SbomCreateIn,
+    SbomOut,
     UploadFileOut,
     UploadListOut,
     UploadSessionCreate,
     UserPayload,
+    VulnerabilityListOut,
+    VulnerabilityOut,
+    VulnerabilityStatsOut,
+    VulnerabilityTrendItem,
+    VulnerabilityTrendOut,
 )
+from .report_service import generate_report
+from .sbom_service import generate_sbom, scan_image
 from .upload_service import (
     add_upload_log,
     chunk_size,
@@ -46,6 +67,7 @@ from .upload_service import (
     to_upload_out,
     validate_archive_filename,
 )
+from .vulnerability_service import query_component_vulnerabilities, query_cve
 
 
 @asynccontextmanager
@@ -59,7 +81,7 @@ settings = get_settings()
 app = FastAPI(
     title=settings.app_name,
     version=settings.app_version,
-    description="聚信软件成分分析平台第一阶段 API，复用聚信统一登录平台。",
+    description="聚信软件成分分析平台 API，覆盖源码上传、依赖识别、漏洞查询、报告导出、SBOM 与镜像扫描。",
     lifespan=lifespan,
 )
 
@@ -400,3 +422,311 @@ async def list_scan_logs(
     await require_action("sca:read", request, user, settings)
     task_ids = select(ScanTask.id).where(ScanTask.project_id == project_id)
     return list(db.scalars(select(ScanLog).where(ScanLog.scan_task_id.in_(task_ids)).order_by(ScanLog.created_at.asc())).all())
+
+
+def _ensure_project_exists(db: Session, project_id: int) -> Project:
+    project = db.get(Project, project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="项目不存在")
+    return project
+
+
+@app.post("/api/sca/projects/{project_id}/vulnerabilities/query", response_model=VulnerabilityListOut, tags=["vulnerabilities"])
+async def query_project_vulnerabilities(
+    request: Request,
+    project_id: int,
+    user: Annotated[UserPayload, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> VulnerabilityListOut:
+    await require_action("sca:write", request, user, settings)
+    _ensure_project_exists(db, project_id)
+    components = db.scalars(select(Component).where(Component.project_id == project_id)).all()
+    db.execute(delete(VulnerabilityRecord).where(VulnerabilityRecord.project_id == project_id))
+    db.flush()
+    for component in components:
+        findings = query_component_vulnerabilities(component, settings)
+        component.vulnerability_status = "vulnerable" if findings else "clean"
+        for finding in findings:
+            db.add(
+                VulnerabilityRecord(
+                    project_id=project_id,
+                    component_id=component.id,
+                    source=finding.source,
+                    advisory_id=finding.advisory_id,
+                    cve_id=finding.cve_id,
+                    package_name=finding.package_name,
+                    package_version=finding.package_version,
+                    ecosystem=finding.ecosystem,
+                    cvss_score=finding.cvss_score,
+                    severity=finding.severity,
+                    description=finding.description,
+                    fixed_version=finding.fixed_version,
+                    published_at_text=finding.published_at,
+                    has_poc=finding.has_poc,
+                    exploited_in_wild=finding.exploited_in_wild,
+                    detail_url=finding.detail_url,
+                    raw_json="",
+                )
+            )
+    db.commit()
+    items = db.scalars(
+        select(VulnerabilityRecord).where(VulnerabilityRecord.project_id == project_id).order_by(VulnerabilityRecord.cvss_score.desc())
+    ).all()
+    return VulnerabilityListOut(total=len(items), items=list(items))
+
+
+@app.get("/api/sca/projects/{project_id}/vulnerabilities", response_model=VulnerabilityListOut, tags=["vulnerabilities"])
+async def list_project_vulnerabilities(
+    request: Request,
+    project_id: int,
+    user: Annotated[UserPayload, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> VulnerabilityListOut:
+    await require_action("sca:read", request, user, settings)
+    _ensure_project_exists(db, project_id)
+    items = db.scalars(
+        select(VulnerabilityRecord).where(VulnerabilityRecord.project_id == project_id).order_by(VulnerabilityRecord.cvss_score.desc())
+    ).all()
+    return VulnerabilityListOut(total=len(items), items=list(items))
+
+
+@app.post("/api/sca/vulnerabilities/cve", response_model=VulnerabilityListOut, tags=["vulnerabilities"])
+async def query_cve_detail(
+    request: Request,
+    payload: CveQueryIn,
+    user: Annotated[UserPayload, Depends(get_current_user)],
+) -> VulnerabilityListOut:
+    await require_action("sca:read", request, user, settings)
+    findings = query_cve(payload.cve_id, settings)
+    rows = [
+        VulnerabilityOut(
+            id=index,
+            project_id=0,
+            component_id=None,
+            source=item.source,
+            advisory_id=item.advisory_id,
+            cve_id=item.cve_id,
+            package_name=item.package_name,
+            package_version=item.package_version,
+            ecosystem=item.ecosystem,
+            cvss_score=item.cvss_score,
+            severity=item.severity,
+            description=item.description,
+            fixed_version=item.fixed_version,
+            published_at_text=item.published_at,
+            has_poc=item.has_poc,
+            exploited_in_wild=item.exploited_in_wild,
+            detail_url=item.detail_url,
+        )
+        for index, item in enumerate(findings, start=1)
+    ]
+    return VulnerabilityListOut(total=len(rows), items=rows)
+
+
+@app.get("/api/sca/projects/{project_id}/vulnerabilities/stats", response_model=VulnerabilityStatsOut, tags=["vulnerabilities"])
+async def vulnerability_stats(
+    request: Request,
+    project_id: int,
+    user: Annotated[UserPayload, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> VulnerabilityStatsOut:
+    await require_action("sca:read", request, user, settings)
+    items = db.scalars(select(VulnerabilityRecord).where(VulnerabilityRecord.project_id == project_id)).all()
+    counts = {"critical": 0, "high": 0, "medium": 0, "low": 0, "unknown": 0}
+    for item in items:
+        counts[item.severity if item.severity in counts else "unknown"] += 1
+    average_cvss = round(sum(item.cvss_score for item in items) / len(items), 2) if items else 0
+    return VulnerabilityStatsOut(
+        total=len(items),
+        by_severity=counts,
+        poc_count=sum(1 for item in items if item.has_poc),
+        exploited_count=sum(1 for item in items if item.exploited_in_wild),
+        average_cvss=average_cvss,
+    )
+
+
+@app.get("/api/sca/projects/{project_id}/vulnerabilities/trend", response_model=VulnerabilityTrendOut, tags=["vulnerabilities"])
+async def vulnerability_trend(
+    request: Request,
+    project_id: int,
+    user: Annotated[UserPayload, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> VulnerabilityTrendOut:
+    await require_action("sca:read", request, user, settings)
+    items = db.scalars(select(VulnerabilityRecord).where(VulnerabilityRecord.project_id == project_id)).all()
+    buckets: dict[str, dict[str, int]] = {}
+    for item in items:
+        month = item.published_at_text[:7] if item.published_at_text else "unknown"
+        bucket = buckets.setdefault(month, {"total": 0, "critical": 0, "high": 0, "medium": 0, "low": 0})
+        bucket["total"] += 1
+        if item.severity in bucket:
+            bucket[item.severity] += 1
+    return VulnerabilityTrendOut(items=[VulnerabilityTrendItem(month=month, **buckets[month]) for month in sorted(buckets)])
+
+
+@app.post("/api/sca/projects/{project_id}/reports", response_model=ReportOut, tags=["reports"])
+async def create_report(
+    request: Request,
+    project_id: int,
+    payload: ReportCreateIn,
+    user: Annotated[UserPayload, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> ReportOut:
+    await require_action("sca:read", request, user, settings)
+    _ensure_project_exists(db, project_id)
+    try:
+        path = generate_report(db, project_id, payload.format, settings.report_root)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    report = ReportExport(
+        project_id=project_id,
+        format=payload.format,
+        filename=path.name,
+        storage_path=str(path),
+        status="generated",
+        created_by=user.username,
+    )
+    db.add(report)
+    db.commit()
+    db.refresh(report)
+    return report
+
+
+@app.get("/api/sca/projects/{project_id}/reports", response_model=list[ReportOut], tags=["reports"])
+async def list_reports(
+    request: Request,
+    project_id: int,
+    user: Annotated[UserPayload, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> list[ReportOut]:
+    await require_action("sca:read", request, user, settings)
+    return list(db.scalars(select(ReportExport).where(ReportExport.project_id == project_id).order_by(ReportExport.created_at.desc())).all())
+
+
+@app.get("/api/sca/reports/{report_id}/download", tags=["reports"])
+async def download_report(
+    request: Request,
+    report_id: int,
+    user: Annotated[UserPayload, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> FileResponse:
+    await require_action("sca:read", request, user, settings)
+    report = db.get(ReportExport, report_id)
+    if not report or not Path(report.storage_path).exists():
+        raise HTTPException(status_code=404, detail="报告不存在")
+    return FileResponse(report.storage_path, filename=report.filename)
+
+
+@app.post("/api/sca/projects/{project_id}/sbom", response_model=SbomOut, tags=["sbom"])
+async def create_sbom(
+    request: Request,
+    project_id: int,
+    payload: SbomCreateIn,
+    user: Annotated[UserPayload, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> SbomOut:
+    await require_action("sca:read", request, user, settings)
+    _ensure_project_exists(db, project_id)
+    try:
+        path, component_count, source = generate_sbom(db, project_id, payload.format, settings)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    document = SbomDocument(
+        project_id=project_id,
+        format=payload.format,
+        filename=path.name,
+        storage_path=str(path),
+        component_count=component_count,
+        status="generated",
+        source=source,
+    )
+    db.add(document)
+    db.commit()
+    db.refresh(document)
+    return document
+
+
+@app.get("/api/sca/projects/{project_id}/sbom", response_model=list[SbomOut], tags=["sbom"])
+async def list_sbom_documents(
+    request: Request,
+    project_id: int,
+    user: Annotated[UserPayload, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> list[SbomOut]:
+    await require_action("sca:read", request, user, settings)
+    return list(db.scalars(select(SbomDocument).where(SbomDocument.project_id == project_id).order_by(SbomDocument.created_at.desc())).all())
+
+
+@app.get("/api/sca/sbom/{sbom_id}/download", tags=["sbom"])
+async def download_sbom(
+    request: Request,
+    sbom_id: int,
+    user: Annotated[UserPayload, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> FileResponse:
+    await require_action("sca:read", request, user, settings)
+    document = db.get(SbomDocument, sbom_id)
+    if not document or not Path(document.storage_path).exists():
+        raise HTTPException(status_code=404, detail="SBOM 不存在")
+    return FileResponse(document.storage_path, filename=document.filename, media_type="application/json")
+
+
+@app.post("/api/sca/image-scans", response_model=ImageScanOut, tags=["image-scan"])
+async def create_image_scan(
+    request: Request,
+    payload: ImageScanCreateIn,
+    user: Annotated[UserPayload, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> ImageScanOut:
+    await require_action("sca:write", request, user, settings)
+    if not payload.image_ref.strip():
+        raise HTTPException(status_code=400, detail="请填写镜像名称")
+    scan = ImageScan(image_ref=payload.image_ref.strip(), scanner=payload.scanner, status="running")
+    db.add(scan)
+    db.commit()
+    db.refresh(scan)
+    return scan_image(db, scan, settings)
+
+
+@app.post("/api/sca/image-scans/tar", response_model=ImageScanOut, tags=["image-scan"])
+async def upload_image_tar_scan(
+    request: Request,
+    user: Annotated[UserPayload, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+    file: Annotated[UploadFile, File()],
+    scanner: Annotated[str, Form()] = "trivy",
+) -> ImageScanOut:
+    await require_action("sca:write", request, user, settings)
+    if scanner not in {"trivy", "grype"}:
+        raise HTTPException(status_code=400, detail="仅支持 trivy 或 grype")
+    output_dir = Path(settings.sbom_root) / "images"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    filename = f"{uuid.uuid4().hex}-{file.filename or 'image.tar'}"
+    path = output_dir / filename
+    size = await save_upload_file(file, path, settings.upload_max_bytes * 10)
+    scan = ImageScan(image_ref=file.filename or "", tar_path=str(path), scanner=scanner, status="running", summary=f"已上传镜像 tar：{size} bytes")
+    db.add(scan)
+    db.commit()
+    db.refresh(scan)
+    return scan_image(db, scan, settings)
+
+
+@app.get("/api/sca/image-scans", response_model=list[ImageScanOut], tags=["image-scan"])
+async def list_image_scans(
+    request: Request,
+    user: Annotated[UserPayload, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> list[ImageScanOut]:
+    await require_action("sca:read", request, user, settings)
+    return list(db.scalars(select(ImageScan).order_by(ImageScan.created_at.desc()).limit(50)).all())
+
+
+@app.get("/api/sca/image-scans/{scan_id}/findings", response_model=list[ImageScanFindingOut], tags=["image-scan"])
+async def list_image_scan_findings(
+    request: Request,
+    scan_id: int,
+    user: Annotated[UserPayload, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> list[ImageScanFindingOut]:
+    await require_action("sca:read", request, user, settings)
+    return list(db.scalars(select(ImageScanFinding).where(ImageScanFinding.image_scan_id == scan_id)).all())

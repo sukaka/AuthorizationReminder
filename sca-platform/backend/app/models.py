@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, BigInteger, func
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text, BigInteger, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .database import Base
@@ -20,14 +20,12 @@ class AnalysisProject(Base):
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
     )
 
-    components: Mapped[list["Component"]] = relationship(back_populates="project", cascade="all, delete-orphan")
-
 
 class Component(Base):
     __tablename__ = "components"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
-    project_id: Mapped[int] = mapped_column(ForeignKey("analysis_projects.id", ondelete="CASCADE"), nullable=False)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
     package_name: Mapped[str] = mapped_column(String(160), nullable=False)
     package_version: Mapped[str] = mapped_column(String(80), nullable=False, default="")
     ecosystem: Mapped[str] = mapped_column(String(40), nullable=False, default="unknown")
@@ -37,7 +35,7 @@ class Component(Base):
     vulnerability_status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
     note: Mapped[str] = mapped_column(Text, nullable=False, default="")
 
-    project: Mapped[AnalysisProject] = relationship(back_populates="components")
+    project: Mapped["Project"] = relationship(back_populates="components")
 
 
 class Project(Base):
@@ -55,6 +53,7 @@ class Project(Base):
 
     upload_files: Mapped[list["UploadFileRecord"]] = relationship(back_populates="project", cascade="all, delete-orphan")
     scan_tasks: Mapped[list["ScanTask"]] = relationship(back_populates="project", cascade="all, delete-orphan")
+    components: Mapped[list["Component"]] = relationship(back_populates="project", cascade="all, delete-orphan")
 
 
 class UploadFileRecord(Base):
@@ -132,3 +131,96 @@ class ComponentDependency(Base):
     child_component_id: Mapped[int] = mapped_column(ForeignKey("components.id", ondelete="CASCADE"), nullable=False)
     relationship_type: Mapped[str] = mapped_column(String(40), nullable=False, default="direct")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
+class VulnerabilityRecord(Base):
+    __tablename__ = "vulnerabilities"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True)
+    component_id: Mapped[int | None] = mapped_column(ForeignKey("components.id", ondelete="SET NULL"), nullable=True, index=True)
+    source: Mapped[str] = mapped_column(String(40), nullable=False, default="osv")
+    advisory_id: Mapped[str] = mapped_column(String(160), nullable=False, default="")
+    cve_id: Mapped[str] = mapped_column(String(80), nullable=False, default="")
+    package_name: Mapped[str] = mapped_column(String(160), nullable=False)
+    package_version: Mapped[str] = mapped_column(String(80), nullable=False, default="")
+    ecosystem: Mapped[str] = mapped_column(String(40), nullable=False, default="unknown")
+    cvss_score: Mapped[float] = mapped_column(Float, nullable=False, default=0)
+    severity: Mapped[str] = mapped_column(String(20), nullable=False, default="unknown")
+    description: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    fixed_version: Mapped[str] = mapped_column(String(160), nullable=False, default="")
+    published_at_text: Mapped[str] = mapped_column(String(80), nullable=False, default="")
+    has_poc: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    exploited_in_wild: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    detail_url: Mapped[str] = mapped_column(String(512), nullable=False, default="")
+    raw_json: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+
+class VulnerabilityQueryLog(Base):
+    __tablename__ = "vulnerability_queries"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True)
+    source: Mapped[str] = mapped_column(String(40), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="success")
+    message: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
+class ReportExport(Base):
+    __tablename__ = "report_exports"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True)
+    format: Mapped[str] = mapped_column(String(12), nullable=False)
+    filename: Mapped[str] = mapped_column(String(255), nullable=False)
+    storage_path: Mapped[str] = mapped_column(String(1024), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="generated")
+    created_by: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
+class SbomDocument(Base):
+    __tablename__ = "sbom_documents"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True)
+    format: Mapped[str] = mapped_column(String(24), nullable=False, default="cyclonedx")
+    filename: Mapped[str] = mapped_column(String(255), nullable=False)
+    storage_path: Mapped[str] = mapped_column(String(1024), nullable=False)
+    component_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="generated")
+    source: Mapped[str] = mapped_column(String(40), nullable=False, default="database")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
+class ImageScan(Base):
+    __tablename__ = "image_scans"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    image_ref: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    tar_path: Mapped[str] = mapped_column(String(1024), nullable=False, default="")
+    scanner: Mapped[str] = mapped_column(String(40), nullable=False, default="trivy")
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="queued")
+    risk_score: Mapped[float] = mapped_column(Float, nullable=False, default=0)
+    summary: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    raw_json: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class ImageScanFinding(Base):
+    __tablename__ = "image_scan_findings"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    image_scan_id: Mapped[int] = mapped_column(ForeignKey("image_scans.id", ondelete="CASCADE"), nullable=False, index=True)
+    package_name: Mapped[str] = mapped_column(String(160), nullable=False, default="")
+    package_version: Mapped[str] = mapped_column(String(80), nullable=False, default="")
+    vulnerability_id: Mapped[str] = mapped_column(String(80), nullable=False, default="")
+    severity: Mapped[str] = mapped_column(String(20), nullable=False, default="unknown")
+    fixed_version: Mapped[str] = mapped_column(String(160), nullable=False, default="")
+    description: Mapped[str] = mapped_column(Text, nullable=False, default="")
