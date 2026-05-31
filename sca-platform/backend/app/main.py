@@ -25,6 +25,10 @@ from .models import (
     ImageScan,
     ImageScanFinding,
     Project,
+    BackupJob,
+    DevopsScanEvent,
+    RemediationEvent,
+    RemediationTicket,
     RiskAlert,
     RiskChangeRecord,
     RiskMonitorRun,
@@ -35,6 +39,7 @@ from .models import (
     ScanTask,
     UploadFileRecord,
     VulnerabilityRecord,
+    VulnerabilityWhitelist,
 )
 from .schemas import (
     AiTriageAnalyzeIn,
@@ -43,14 +48,28 @@ from .schemas import (
     AssetComponentListOut,
     AssetDashboardOut,
     AssetGraphOut,
+    BackupCreateIn,
+    BackupJobListOut,
+    BackupJobOut,
     CveQueryIn,
     ComponentOut,
     DependencyTreeNode,
+    DevopsDashboardOut,
+    DevopsEventListOut,
+    DevopsEventOut,
+    DevopsWebhookIn,
     ImageScanCreateIn,
     ImageScanFindingOut,
     ImageScanOut,
+    OpsConfigOut,
     OverviewOut,
     ProjectListItem,
+    RemediationEventOut,
+    RemediationTicketCreateIn,
+    RemediationTicketListOut,
+    RemediationTicketOut,
+    RemediationTransitionIn,
+    RemediationVerifyIn,
     RiskAlertOut,
     RiskChangeOut,
     RiskMonitorRunOut,
@@ -72,9 +91,14 @@ from .schemas import (
     VulnerabilityStatsOut,
     VulnerabilityTrendItem,
     VulnerabilityTrendOut,
+    WhitelistCreateIn,
+    WhitelistOut,
 )
 from .ai_triage_service import analyze_vulnerabilities_with_ai
 from .asset_service import asset_components, asset_dashboard, asset_graph
+from .devops_service import devops_dashboard, record_devops_event
+from .ops_service import plan_backup_path, production_config
+from .remediation_service import create_ticket_no, ignore_vulnerability, transition_ticket, verify_ticket
 from .report_service import generate_report
 from .risk_monitor_service import monitor_component_update, raw_json, snapshot_risk_level
 from .sbom_service import generate_sbom, scan_image
@@ -982,3 +1006,226 @@ async def assets_graph(
 ) -> AssetGraphOut:
     await require_action("sca:read", request, user, settings)
     return AssetGraphOut(**asset_graph(db))
+
+
+@app.post("/api/sca/projects/{project_id}/remediation/tickets", response_model=RemediationTicketOut, tags=["remediation"])
+async def create_remediation_ticket(
+    request: Request,
+    project_id: int,
+    payload: RemediationTicketCreateIn,
+    user: Annotated[UserPayload, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> RemediationTicketOut:
+    await require_action("sca:write", request, user, settings)
+    _ensure_project_exists(db, project_id)
+    vulnerability = db.get(VulnerabilityRecord, payload.vulnerability_id)
+    if not vulnerability or vulnerability.project_id != project_id:
+        raise HTTPException(status_code=404, detail="漏洞不存在")
+    ticket = RemediationTicket(
+        project_id=project_id,
+        vulnerability_id=vulnerability.id,
+        ticket_no=create_ticket_no(project_id, vulnerability.id),
+        assignee=payload.assignee,
+        priority=payload.priority,
+        due_date=payload.due_date,
+        fix_version=payload.fix_version or vulnerability.fixed_version,
+        created_by=user.username,
+    )
+    db.add(ticket)
+    db.flush()
+    db.add(RemediationEvent(ticket_id=ticket.id, from_status="", to_status=ticket.status, actor=user.username, comment="创建整改工单"))
+    db.commit()
+    db.refresh(ticket)
+    return ticket
+
+
+@app.get("/api/sca/projects/{project_id}/remediation/tickets", response_model=RemediationTicketListOut, tags=["remediation"])
+async def list_remediation_tickets(
+    request: Request,
+    project_id: int,
+    user: Annotated[UserPayload, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> RemediationTicketListOut:
+    await require_action("sca:read", request, user, settings)
+    items = list(db.scalars(select(RemediationTicket).where(RemediationTicket.project_id == project_id).order_by(RemediationTicket.created_at.desc())))
+    return RemediationTicketListOut(total=len(items), items=items)
+
+
+@app.post("/api/sca/remediation/tickets/{ticket_id}/transition", response_model=RemediationTicketOut, tags=["remediation"])
+async def transition_remediation_ticket(
+    request: Request,
+    ticket_id: int,
+    payload: RemediationTransitionIn,
+    user: Annotated[UserPayload, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> RemediationTicketOut:
+    await require_action("sca:write", request, user, settings)
+    ticket = db.get(RemediationTicket, ticket_id)
+    if not ticket:
+        raise HTTPException(status_code=404, detail="整改工单不存在")
+    try:
+        transition_ticket(db, ticket, payload.status, user.username, payload.comment)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    db.commit()
+    db.refresh(ticket)
+    return ticket
+
+
+@app.post("/api/sca/remediation/tickets/{ticket_id}/verify", response_model=RemediationTicketOut, tags=["remediation"])
+async def verify_remediation_ticket(
+    request: Request,
+    ticket_id: int,
+    payload: RemediationVerifyIn,
+    user: Annotated[UserPayload, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> RemediationTicketOut:
+    await require_action("sca:write", request, user, settings)
+    ticket = db.get(RemediationTicket, ticket_id)
+    if not ticket:
+        raise HTTPException(status_code=404, detail="整改工单不存在")
+    try:
+        verify_ticket(db, ticket, payload.verification_result, user.username, payload.comment)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    db.commit()
+    db.refresh(ticket)
+    return ticket
+
+
+@app.get("/api/sca/remediation/tickets/{ticket_id}/events", response_model=list[RemediationEventOut], tags=["remediation"])
+async def list_remediation_events(
+    request: Request,
+    ticket_id: int,
+    user: Annotated[UserPayload, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> list[RemediationEventOut]:
+    await require_action("sca:read", request, user, settings)
+    return list(db.scalars(select(RemediationEvent).where(RemediationEvent.ticket_id == ticket_id).order_by(RemediationEvent.created_at.asc())))
+
+
+@app.post("/api/sca/projects/{project_id}/remediation/whitelist", response_model=WhitelistOut, tags=["remediation"])
+async def create_vulnerability_whitelist(
+    request: Request,
+    project_id: int,
+    payload: WhitelistCreateIn,
+    user: Annotated[UserPayload, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> WhitelistOut:
+    await require_action("sca:write", request, user, settings)
+    vulnerability = db.get(VulnerabilityRecord, payload.vulnerability_id)
+    if not vulnerability or vulnerability.project_id != project_id:
+        raise HTTPException(status_code=404, detail="漏洞不存在")
+    row = ignore_vulnerability(db, vulnerability, payload.reason, payload.expires_at, user.username)
+    db.commit()
+    db.refresh(row)
+    return row
+
+
+@app.get("/api/sca/projects/{project_id}/remediation/whitelist", response_model=list[WhitelistOut], tags=["remediation"])
+async def list_vulnerability_whitelist(
+    request: Request,
+    project_id: int,
+    user: Annotated[UserPayload, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> list[WhitelistOut]:
+    await require_action("sca:read", request, user, settings)
+    return list(db.scalars(select(VulnerabilityWhitelist).where(VulnerabilityWhitelist.project_id == project_id).order_by(VulnerabilityWhitelist.created_at.desc())))
+
+
+@app.post("/api/sca/devops/webhooks/gitlab", response_model=DevopsEventOut, tags=["devsecops"])
+async def gitlab_webhook(
+    request: Request,
+    payload: DevopsWebhookIn,
+    db: Annotated[Session, Depends(get_db)],
+) -> DevopsEventOut:
+    event = record_devops_event(db, {**payload.model_dump(), "source": "gitlab"}, settings)
+    db.commit()
+    db.refresh(event)
+    return event
+
+
+@app.post("/api/sca/devops/webhooks/github", response_model=DevopsEventOut, tags=["devsecops"])
+async def github_actions_webhook(
+    request: Request,
+    payload: DevopsWebhookIn,
+    db: Annotated[Session, Depends(get_db)],
+) -> DevopsEventOut:
+    event = record_devops_event(db, {**payload.model_dump(), "source": "github-actions"}, settings)
+    db.commit()
+    db.refresh(event)
+    return event
+
+
+@app.post("/api/sca/devops/webhooks/jenkins", response_model=DevopsEventOut, tags=["devsecops"])
+async def jenkins_webhook(
+    request: Request,
+    payload: DevopsWebhookIn,
+    db: Annotated[Session, Depends(get_db)],
+) -> DevopsEventOut:
+    event = record_devops_event(db, {**payload.model_dump(), "source": "jenkins"}, settings)
+    db.commit()
+    db.refresh(event)
+    return event
+
+
+@app.get("/api/sca/devops/events", response_model=DevopsEventListOut, tags=["devsecops"])
+async def list_devops_events(
+    request: Request,
+    user: Annotated[UserPayload, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> DevopsEventListOut:
+    await require_action("sca:read", request, user, settings)
+    items = list(db.scalars(select(DevopsScanEvent).order_by(DevopsScanEvent.created_at.desc()).limit(100)))
+    return DevopsEventListOut(total=len(items), items=items)
+
+
+@app.get("/api/sca/devops/dashboard", response_model=DevopsDashboardOut, tags=["devsecops"])
+async def devops_dashboard_api(
+    request: Request,
+    user: Annotated[UserPayload, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> DevopsDashboardOut:
+    await require_action("sca:read", request, user, settings)
+    return DevopsDashboardOut(**devops_dashboard(list(db.scalars(select(DevopsScanEvent)))))
+
+
+@app.get("/api/sca/ops/config", response_model=OpsConfigOut, tags=["ops"])
+async def ops_config(
+    request: Request,
+    user: Annotated[UserPayload, Depends(get_current_user)],
+) -> OpsConfigOut:
+    await require_action("sca:read", request, user, settings)
+    return OpsConfigOut(**production_config(settings))
+
+
+@app.post("/api/sca/ops/backups", response_model=BackupJobOut, tags=["ops"])
+async def create_backup_job(
+    request: Request,
+    payload: BackupCreateIn,
+    user: Annotated[UserPayload, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> BackupJobOut:
+    await require_action("sca:write", request, user, settings)
+    job = BackupJob(
+        scope=payload.scope,
+        target=payload.target,
+        status="planned",
+        storage_path=plan_backup_path(settings, payload.scope),
+        summary="已创建备份计划，生产环境由定时脚本执行 pg_dump 与 volume 归档",
+    )
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+    return job
+
+
+@app.get("/api/sca/ops/backups", response_model=BackupJobListOut, tags=["ops"])
+async def list_backup_jobs(
+    request: Request,
+    user: Annotated[UserPayload, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> BackupJobListOut:
+    await require_action("sca:read", request, user, settings)
+    items = list(db.scalars(select(BackupJob).order_by(BackupJob.created_at.desc()).limit(50)))
+    return BackupJobListOut(total=len(items), items=items)

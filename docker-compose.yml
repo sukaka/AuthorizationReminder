@@ -636,10 +636,16 @@ services:
       OPENAI_API_URL: ${SCA_OPENAI_API_URL:-https://api.openai.com/v1/chat/completions}
       OPENAI_MODEL: ${SCA_OPENAI_MODEL:-gpt-4o-mini}
       OPENAI_TIMEOUT_MS: ${SCA_OPENAI_TIMEOUT_MS:-30000}
+      DEVOPS_BLOCK_SEVERITIES: ${SCA_DEVOPS_BLOCK_SEVERITIES:-critical,high}
+      REMEDIATION_OVERDUE_CHECK_SECONDS: ${SCA_REMEDIATION_OVERDUE_CHECK_SECONDS:-3600}
+      PRODUCTION_HTTPS_ENABLED: ${SCA_PRODUCTION_HTTPS_ENABLED:-true}
+      PRODUCTION_JWT_SECURE: ${SCA_PRODUCTION_JWT_SECURE:-true}
+      BACKUP_ROOT: ${SCA_BACKUP_ROOT:-/data/sca/backups}
     volumes:
       - sca-upload-data:/data/sca/uploads
       - sca-report-data:/data/sca/reports
       - sca-sbom-data:/data/sca/sbom
+      - sca-backup-data:/data/sca/backups
     depends_on:
       sca-postgres:
         condition: service_healthy
@@ -695,10 +701,16 @@ services:
       OPENAI_API_URL: ${SCA_OPENAI_API_URL:-https://api.openai.com/v1/chat/completions}
       OPENAI_MODEL: ${SCA_OPENAI_MODEL:-gpt-4o-mini}
       OPENAI_TIMEOUT_MS: ${SCA_OPENAI_TIMEOUT_MS:-30000}
+      DEVOPS_BLOCK_SEVERITIES: ${SCA_DEVOPS_BLOCK_SEVERITIES:-critical,high}
+      REMEDIATION_OVERDUE_CHECK_SECONDS: ${SCA_REMEDIATION_OVERDUE_CHECK_SECONDS:-3600}
+      PRODUCTION_HTTPS_ENABLED: ${SCA_PRODUCTION_HTTPS_ENABLED:-true}
+      PRODUCTION_JWT_SECURE: ${SCA_PRODUCTION_JWT_SECURE:-true}
+      BACKUP_ROOT: ${SCA_BACKUP_ROOT:-/data/sca/backups}
     volumes:
       - sca-upload-data:/data/sca/uploads
       - sca-report-data:/data/sca/reports
       - sca-sbom-data:/data/sca/sbom
+      - sca-backup-data:/data/sca/backups
     depends_on:
       sca-postgres:
         condition: service_healthy
@@ -750,10 +762,16 @@ services:
       OPENAI_API_URL: ${SCA_OPENAI_API_URL:-https://api.openai.com/v1/chat/completions}
       OPENAI_MODEL: ${SCA_OPENAI_MODEL:-gpt-4o-mini}
       OPENAI_TIMEOUT_MS: ${SCA_OPENAI_TIMEOUT_MS:-30000}
+      DEVOPS_BLOCK_SEVERITIES: ${SCA_DEVOPS_BLOCK_SEVERITIES:-critical,high}
+      REMEDIATION_OVERDUE_CHECK_SECONDS: ${SCA_REMEDIATION_OVERDUE_CHECK_SECONDS:-3600}
+      PRODUCTION_HTTPS_ENABLED: ${SCA_PRODUCTION_HTTPS_ENABLED:-true}
+      PRODUCTION_JWT_SECURE: ${SCA_PRODUCTION_JWT_SECURE:-true}
+      BACKUP_ROOT: ${SCA_BACKUP_ROOT:-/data/sca/backups}
     volumes:
       - sca-upload-data:/data/sca/uploads
       - sca-report-data:/data/sca/reports
       - sca-sbom-data:/data/sca/sbom
+      - sca-backup-data:/data/sca/backups
     depends_on:
       sca-postgres:
         condition: service_healthy
@@ -867,3 +885,4 @@ volumes:
   sca-upload-data:
   sca-report-data:
   sca-sbom-data:
+  sca-backup-data:

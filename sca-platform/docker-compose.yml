@@ -38,6 +38,7 @@ services:
       - sca-upload-data:/data/sca/uploads
       - sca-report-data:/data/sca/reports
       - sca-sbom-data:/data/sca/sbom
+      - sca-backup-data:/data/sca/backups
     depends_on:
       sca-postgres:
         condition: service_healthy
@@ -55,6 +56,7 @@ services:
       - sca-upload-data:/data/sca/uploads
       - sca-report-data:/data/sca/reports
       - sca-sbom-data:/data/sca/sbom
+      - sca-backup-data:/data/sca/backups
     command: ["celery", "-A", "app.celery_app.celery_app", "worker", "--loglevel=INFO"]
     depends_on:
       sca-postgres:
@@ -71,6 +73,7 @@ services:
       - sca-upload-data:/data/sca/uploads
       - sca-report-data:/data/sca/reports
       - sca-sbom-data:/data/sca/sbom
+      - sca-backup-data:/data/sca/backups
     command: ["celery", "-A", "app.celery_app.celery_app", "beat", "--loglevel=INFO", "--schedule=/tmp/celerybeat-schedule"]
     depends_on:
       sca-postgres:
@@ -95,3 +98,4 @@ volumes:
   sca-upload-data:
   sca-report-data:
   sca-sbom-data:
+  sca-backup-data:

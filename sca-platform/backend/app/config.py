@@ -45,6 +45,11 @@ class Settings(BaseSettings):
     openai_api_url: str = "https://api.openai.com/v1/chat/completions"
     openai_model: str = "gpt-4o-mini"
     openai_timeout_ms: int = 30000
+    devops_block_severities: str = "critical,high"
+    remediation_overdue_check_seconds: int = 60 * 60
+    production_https_enabled: bool = True
+    production_jwt_secure: bool = True
+    backup_root: str = "/data/sca/backups"
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 

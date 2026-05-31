@@ -243,6 +243,70 @@ CREATE TABLE IF NOT EXISTS ai_triage_results (
   confirmed_at TIMESTAMPTZ NULL
 );
 
+CREATE TABLE IF NOT EXISTS remediation_tickets (
+  id BIGSERIAL PRIMARY KEY,
+  project_id BIGINT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  vulnerability_id BIGINT NOT NULL REFERENCES vulnerabilities(id) ON DELETE CASCADE,
+  ticket_no VARCHAR(64) NOT NULL UNIQUE,
+  assignee VARCHAR(80) NOT NULL DEFAULT '',
+  priority VARCHAR(20) NOT NULL DEFAULT 'P2',
+  status VARCHAR(20) NOT NULL DEFAULT '未处理',
+  due_date VARCHAR(32) NOT NULL DEFAULT '',
+  fix_version VARCHAR(160) NOT NULL DEFAULT '',
+  verification_result VARCHAR(32) NOT NULL DEFAULT '',
+  overdue_notified BOOLEAN NOT NULL DEFAULT FALSE,
+  created_by VARCHAR(80) NOT NULL DEFAULT '',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  closed_at TIMESTAMPTZ NULL
+);
+
+CREATE TABLE IF NOT EXISTS remediation_events (
+  id BIGSERIAL PRIMARY KEY,
+  ticket_id BIGINT NOT NULL REFERENCES remediation_tickets(id) ON DELETE CASCADE,
+  from_status VARCHAR(20) NOT NULL DEFAULT '',
+  to_status VARCHAR(20) NOT NULL DEFAULT '',
+  actor VARCHAR(80) NOT NULL DEFAULT '',
+  comment TEXT NOT NULL DEFAULT '',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS vulnerability_whitelist (
+  id BIGSERIAL PRIMARY KEY,
+  project_id BIGINT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  vulnerability_id BIGINT NOT NULL REFERENCES vulnerabilities(id) ON DELETE CASCADE,
+  reason TEXT NOT NULL DEFAULT '',
+  expires_at VARCHAR(32) NOT NULL DEFAULT '',
+  created_by VARCHAR(80) NOT NULL DEFAULT '',
+  active BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS devops_scan_events (
+  id BIGSERIAL PRIMARY KEY,
+  project_id BIGINT NULL REFERENCES projects(id) ON DELETE SET NULL,
+  source VARCHAR(40) NOT NULL DEFAULT 'gitlab',
+  pipeline_id VARCHAR(120) NOT NULL DEFAULT '',
+  ref VARCHAR(160) NOT NULL DEFAULT '',
+  commit_sha VARCHAR(120) NOT NULL DEFAULT '',
+  status VARCHAR(32) NOT NULL DEFAULT 'received',
+  decision VARCHAR(32) NOT NULL DEFAULT 'passed',
+  block_reason TEXT NOT NULL DEFAULT '',
+  report_id BIGINT NULL REFERENCES report_exports(id) ON DELETE SET NULL,
+  raw_json TEXT NOT NULL DEFAULT '',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS backup_jobs (
+  id BIGSERIAL PRIMARY KEY,
+  scope VARCHAR(40) NOT NULL DEFAULT 'database',
+  target VARCHAR(120) NOT NULL DEFAULT 'local',
+  status VARCHAR(32) NOT NULL DEFAULT 'planned',
+  storage_path VARCHAR(1024) NOT NULL DEFAULT '',
+  summary TEXT NOT NULL DEFAULT '',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 CREATE INDEX IF NOT EXISTS idx_analysis_projects_risk_level ON analysis_projects(risk_level);
 CREATE INDEX IF NOT EXISTS idx_projects_status ON projects(status);
 CREATE INDEX IF NOT EXISTS idx_upload_files_project_id ON upload_files(project_id);
@@ -267,6 +331,14 @@ CREATE INDEX IF NOT EXISTS idx_risk_alerts_project_id ON risk_alerts(project_id)
 CREATE INDEX IF NOT EXISTS idx_risk_alerts_status ON risk_alerts(status);
 CREATE INDEX IF NOT EXISTS idx_ai_triage_results_project_id ON ai_triage_results(project_id);
 CREATE INDEX IF NOT EXISTS idx_ai_triage_results_vulnerability_id ON ai_triage_results(vulnerability_id);
+CREATE INDEX IF NOT EXISTS idx_remediation_tickets_project_id ON remediation_tickets(project_id);
+CREATE INDEX IF NOT EXISTS idx_remediation_tickets_vulnerability_id ON remediation_tickets(vulnerability_id);
+CREATE INDEX IF NOT EXISTS idx_remediation_tickets_status ON remediation_tickets(status);
+CREATE INDEX IF NOT EXISTS idx_remediation_events_ticket_id ON remediation_events(ticket_id);
+CREATE INDEX IF NOT EXISTS idx_vulnerability_whitelist_project_id ON vulnerability_whitelist(project_id);
+CREATE INDEX IF NOT EXISTS idx_vulnerability_whitelist_vulnerability_id ON vulnerability_whitelist(vulnerability_id);
+CREATE INDEX IF NOT EXISTS idx_devops_scan_events_project_id ON devops_scan_events(project_id);
+CREATE INDEX IF NOT EXISTS idx_devops_scan_events_decision ON devops_scan_events(decision);
 
 INSERT INTO analysis_projects (name, repository_url, risk_level, status, owner)
 VALUES ('bootstrap-demo', 'https://example.com/juxin/bootstrap-demo.git', 'medium', 'initialized', 'security')

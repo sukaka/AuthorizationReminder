@@ -391,3 +391,145 @@ class AssetGraphEdge(BaseModel):
 class AssetGraphOut(BaseModel):
     nodes: list[AssetGraphNode]
     edges: list[AssetGraphEdge]
+
+
+class RemediationTicketCreateIn(BaseModel):
+    vulnerability_id: int
+    assignee: str
+    due_date: str
+    priority: str = "P2"
+    fix_version: str = ""
+
+
+class RemediationTransitionIn(BaseModel):
+    status: str = Field(pattern="^(未处理|修复中|已修复|已忽略|待确认)$")
+    comment: str = ""
+
+
+class RemediationVerifyIn(BaseModel):
+    verification_result: str = Field(pattern="^(pass|fail)$")
+    comment: str = ""
+
+
+class RemediationTicketOut(BaseModel):
+    id: int
+    project_id: int
+    vulnerability_id: int
+    ticket_no: str
+    assignee: str
+    priority: str
+    status: str
+    due_date: str
+    fix_version: str
+    verification_result: str
+    overdue_notified: bool
+    created_by: str
+    created_at: datetime
+    updated_at: datetime
+    closed_at: datetime | None = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class RemediationTicketListOut(BaseModel):
+    total: int
+    items: list[RemediationTicketOut]
+
+
+class RemediationEventOut(BaseModel):
+    id: int
+    ticket_id: int
+    from_status: str
+    to_status: str
+    actor: str
+    comment: str
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class WhitelistCreateIn(BaseModel):
+    vulnerability_id: int
+    reason: str
+    expires_at: str = ""
+
+
+class WhitelistOut(BaseModel):
+    id: int
+    project_id: int
+    vulnerability_id: int
+    reason: str
+    expires_at: str
+    created_by: str
+    active: bool
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class DevopsWebhookIn(BaseModel):
+    project_id: int | None = None
+    project_name: str = ""
+    pipeline_id: str = ""
+    ref: str = ""
+    commit_sha: str = ""
+    source: str = "gitlab"
+
+
+class DevopsEventOut(BaseModel):
+    id: int
+    project_id: int | None = None
+    source: str
+    pipeline_id: str
+    ref: str
+    commit_sha: str
+    status: str
+    decision: str
+    block_reason: str
+    report_id: int | None = None
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class DevopsEventListOut(BaseModel):
+    total: int
+    items: list[DevopsEventOut]
+
+
+class DevopsDashboardOut(BaseModel):
+    total: int
+    blocked_count: int
+    passed_count: int
+    by_source: dict[str, int]
+
+
+class BackupCreateIn(BaseModel):
+    scope: str = "database"
+    target: str = "local"
+
+
+class BackupJobOut(BaseModel):
+    id: int
+    scope: str
+    target: str
+    status: str
+    storage_path: str
+    summary: str
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class BackupJobListOut(BaseModel):
+    total: int
+    items: list[BackupJobOut]
+
+
+class OpsConfigOut(BaseModel):
+    https_enabled: bool
+    jwt_secure: bool
+    reverse_proxy: str
+    backup_root: str
+    optimizations: list[str]
+    monitoring: list[str]

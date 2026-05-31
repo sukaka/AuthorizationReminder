@@ -43,6 +43,18 @@
           <el-icon><Share /></el-icon>
           <span>资产中心</span>
         </el-menu-item>
+        <el-menu-item index="remediation">
+          <el-icon><Document /></el-icon>
+          <span>整改闭环</span>
+        </el-menu-item>
+        <el-menu-item index="devops">
+          <el-icon><Connection /></el-icon>
+          <span>DevSecOps</span>
+        </el-menu-item>
+        <el-menu-item index="ops">
+          <el-icon><DataAnalysis /></el-icon>
+          <span>生产运维</span>
+        </el-menu-item>
         <el-menu-item index="logs">
           <el-icon><Document /></el-icon>
           <span>扫描日志</span>
@@ -466,6 +478,125 @@
         </div>
       </section>
 
+      <section v-if="activeMenu === 'remediation'" class="workbench">
+        <div class="panel">
+          <div class="panel-head">
+            <h2>漏洞整改闭环</h2>
+            <div class="panel-actions">
+              <el-select v-model="selectedProjectId" placeholder="选择项目" style="width: 220px" @change="loadProjectDetails">
+                <el-option v-for="project in projects" :key="project.id" :label="project.name" :value="project.id" />
+              </el-select>
+              <el-button type="primary" :icon="Document" @click="createRemediationTicket">创建工单</el-button>
+            </div>
+          </div>
+          <div class="ai-context">
+            <el-select v-model="remediationForm.vulnerability_id" placeholder="选择漏洞" style="width: 240px">
+              <el-option v-for="item in vulnerabilities" :key="item.id" :label="item.cve_id || item.advisory_id" :value="item.id" />
+            </el-select>
+            <el-input v-model="remediationForm.assignee" placeholder="整改人" style="width: 160px" />
+            <el-input v-model="remediationForm.due_date" placeholder="期限 YYYY-MM-DD" style="width: 170px" />
+            <el-select v-model="remediationForm.priority" style="width: 110px">
+              <el-option label="P0" value="P0" />
+              <el-option label="P1" value="P1" />
+              <el-option label="P2" value="P2" />
+              <el-option label="P3" value="P3" />
+            </el-select>
+          </div>
+          <el-table :data="remediationTickets" empty-text="暂无整改工单">
+            <el-table-column prop="ticket_no" label="工单号" min-width="170" show-overflow-tooltip />
+            <el-table-column prop="assignee" label="整改人" width="110" />
+            <el-table-column prop="priority" label="优先级" width="90" />
+            <el-table-column prop="status" label="状态" width="100" />
+            <el-table-column prop="due_date" label="期限" width="120" />
+            <el-table-column prop="verification_result" label="验证" width="90" />
+            <el-table-column label="操作" width="240">
+              <template #default="{ row }">
+                <el-button text type="primary" @click="transitionTicket(row, '修复中')">开始</el-button>
+                <el-button text type="success" @click="verifyTicket(row, 'pass')">验证通过</el-button>
+                <el-button text type="warning" @click="transitionTicket(row, '已忽略')">忽略</el-button>
+              </template>
+            </el-table-column>
+          </el-table>
+        </div>
+        <div class="panel side-panel">
+          <div class="panel-head"><h2>白名单</h2></div>
+          <div class="upload-form">
+            <el-button :icon="WarningFilled" @click="createWhitelist">加入白名单</el-button>
+          </div>
+          <el-table :data="whitelistItems" empty-text="暂无白名单" size="small">
+            <el-table-column prop="reason" label="原因" min-width="130" show-overflow-tooltip />
+            <el-table-column prop="expires_at" label="到期" width="110" />
+          </el-table>
+        </div>
+      </section>
+
+      <section v-if="activeMenu === 'devops'" class="workbench">
+        <div class="panel">
+          <div class="panel-head">
+            <h2>DevSecOps 集成</h2>
+            <div class="panel-actions">
+              <el-select v-model="selectedProjectId" placeholder="选择项目" style="width: 220px">
+                <el-option v-for="project in projects" :key="project.id" :label="project.name" :value="project.id" />
+              </el-select>
+              <el-button :icon="Connection" @click="simulateWebhook('gitlab')">GitLab</el-button>
+              <el-button :icon="Connection" @click="simulateWebhook('github')">GitHub Actions</el-button>
+              <el-button :icon="Connection" @click="simulateWebhook('jenkins')">Jenkins</el-button>
+            </div>
+          </div>
+          <section class="metric-grid asset-metrics">
+            <div class="metric"><span>流水线</span><strong>{{ devopsDashboard.total }}</strong></div>
+            <div class="metric danger"><span>阻断</span><strong>{{ devopsDashboard.blocked_count }}</strong></div>
+            <div class="metric"><span>放行</span><strong>{{ devopsDashboard.passed_count }}</strong></div>
+            <div class="metric warn"><span>来源</span><strong>{{ Object.keys(devopsDashboard.by_source || {}).length }}</strong></div>
+          </section>
+          <el-table :data="devopsEvents" empty-text="暂无流水线事件">
+            <el-table-column prop="source" label="来源" width="120" />
+            <el-table-column prop="pipeline_id" label="流水线" width="130" show-overflow-tooltip />
+            <el-table-column prop="ref" label="分支" width="120" show-overflow-tooltip />
+            <el-table-column prop="decision" label="决策" width="100" />
+            <el-table-column prop="block_reason" label="阻断原因" min-width="240" show-overflow-tooltip />
+            <el-table-column prop="created_at" label="时间" width="210" />
+          </el-table>
+        </div>
+        <div class="panel side-panel">
+          <div class="panel-head"><h2>接入方式</h2></div>
+          <ul class="capability-list">
+            <li>GitLab Webhook 自动触发</li>
+            <li>GitHub Actions 调用 API</li>
+            <li>Jenkins Pipeline 阻断发布</li>
+            <li>高危漏洞按策略拦截</li>
+          </ul>
+        </div>
+      </section>
+
+      <section v-if="activeMenu === 'ops'" class="workbench">
+        <div class="panel">
+          <div class="panel-head">
+            <h2>最终部署与优化</h2>
+            <el-button type="primary" :icon="Refresh" @click="createBackupJob">创建备份计划</el-button>
+          </div>
+          <section class="metric-grid asset-metrics">
+            <div class="metric"><span>HTTPS</span><strong>{{ opsConfig.https_enabled ? '开' : '关' }}</strong></div>
+            <div class="metric"><span>JWT 安全</span><strong>{{ opsConfig.jwt_secure ? '开' : '关' }}</strong></div>
+            <div class="metric"><span>代理</span><strong>{{ opsConfig.reverse_proxy }}</strong></div>
+            <div class="metric"><span>备份</span><strong>{{ backupJobs.length }}</strong></div>
+          </section>
+          <el-table :data="backupJobs" empty-text="暂无备份任务">
+            <el-table-column prop="scope" label="范围" width="120" />
+            <el-table-column prop="target" label="目标" width="120" />
+            <el-table-column prop="status" label="状态" width="110" />
+            <el-table-column prop="storage_path" label="路径" min-width="260" show-overflow-tooltip />
+            <el-table-column prop="created_at" label="时间" width="210" />
+          </el-table>
+        </div>
+        <div class="panel side-panel">
+          <div class="panel-head"><h2>优化项</h2></div>
+          <ul class="capability-list">
+            <li v-for="item in opsConfig.optimizations" :key="item">{{ item }}</li>
+          </ul>
+        </div>
+      </section>
+
       <section v-if="activeMenu === 'logs'" class="panel">
         <div class="panel-head">
           <h2>扫描日志</h2>
@@ -523,6 +654,10 @@ const aiResults = ref([])
 const assetComponents = ref([])
 const assetGraph = ref({ nodes: [], edges: [] })
 const assetSearch = ref('')
+const remediationTickets = ref([])
+const whitelistItems = ref([])
+const devopsEvents = ref([])
+const backupJobs = ref([])
 const reportFormat = ref('docx')
 const sbomFormat = ref('cyclonedx')
 const overview = reactive({
@@ -558,6 +693,26 @@ const assetDashboard = reactive({
   license_risk_total: 0,
   by_ecosystem: {},
   by_severity: {},
+})
+const remediationForm = reactive({
+  vulnerability_id: null,
+  assignee: '',
+  due_date: '',
+  priority: 'P2',
+})
+const devopsDashboard = reactive({
+  total: 0,
+  blocked_count: 0,
+  passed_count: 0,
+  by_source: {},
+})
+const opsConfig = reactive({
+  https_enabled: true,
+  jwt_secure: true,
+  reverse_proxy: 'nginx',
+  backup_root: '',
+  optimizations: [],
+  monitoring: [],
 })
 const vulnerabilityStats = reactive({
   total: 0,
@@ -641,6 +796,9 @@ const loadProjectDetails = async () => {
   const monitorTrend = await requestJson(`/api/sca/projects/${selectedProjectId.value}/risk-monitor/trend`)
   riskTrend.value = monitorTrend?.items || []
   aiResults.value = (await requestJson(`/api/sca/projects/${selectedProjectId.value}/ai-triage/results`)) || []
+  const tickets = await requestJson(`/api/sca/projects/${selectedProjectId.value}/remediation/tickets`)
+  remediationTickets.value = tickets?.items || []
+  whitelistItems.value = (await requestJson(`/api/sca/projects/${selectedProjectId.value}/remediation/whitelist`)) || []
 }
 
 const refreshAll = async () => {
@@ -837,6 +995,96 @@ const loadAssets = async () => {
   assetGraph.value = (await requestJson('/api/sca/assets/graph')) || { nodes: [], edges: [] }
 }
 
+const loadDevops = async () => {
+  const data = await requestJson('/api/sca/devops/dashboard')
+  if (data) Object.assign(devopsDashboard, data)
+  const events = await requestJson('/api/sca/devops/events')
+  devopsEvents.value = events?.items || []
+}
+
+const loadOps = async () => {
+  const config = await requestJson('/api/sca/ops/config')
+  if (config) Object.assign(opsConfig, config)
+  const backups = await requestJson('/api/sca/ops/backups')
+  backupJobs.value = backups?.items || []
+}
+
+const createRemediationTicket = async () => {
+  if (!selectedProjectId.value || !remediationForm.vulnerability_id) {
+    ElMessage.warning('请先选择项目和漏洞')
+    return
+  }
+  if (!remediationForm.assignee || !remediationForm.due_date) {
+    ElMessage.warning('请填写整改人和修复期限')
+    return
+  }
+  await requestJson(`/api/sca/projects/${selectedProjectId.value}/remediation/tickets`, {
+    method: 'POST',
+    body: JSON.stringify(remediationForm),
+  })
+  await loadProjectDetails()
+  ElMessage.success('整改工单已创建')
+}
+
+const transitionTicket = async (row, status) => {
+  await requestJson(`/api/sca/remediation/tickets/${row.id}/transition`, {
+    method: 'POST',
+    body: JSON.stringify({ status, comment: '页面操作' }),
+  })
+  await loadProjectDetails()
+  ElMessage.success('状态已更新')
+}
+
+const verifyTicket = async (row, verificationResult) => {
+  await requestJson(`/api/sca/remediation/tickets/${row.id}/verify`, {
+    method: 'POST',
+    body: JSON.stringify({ verification_result: verificationResult, comment: '修复验证' }),
+  })
+  await loadProjectDetails()
+  ElMessage.success('验证完成')
+}
+
+const createWhitelist = async () => {
+  if (!selectedProjectId.value || !remediationForm.vulnerability_id) {
+    ElMessage.warning('请先选择漏洞')
+    return
+  }
+  await requestJson(`/api/sca/projects/${selectedProjectId.value}/remediation/whitelist`, {
+    method: 'POST',
+    body: JSON.stringify({ vulnerability_id: remediationForm.vulnerability_id, reason: '业务确认可忽略', expires_at: '' }),
+  })
+  await loadProjectDetails()
+  ElMessage.success('已加入白名单')
+}
+
+const simulateWebhook = async (source) => {
+  if (!selectedProjectId.value) {
+    ElMessage.warning('请先选择项目')
+    return
+  }
+  const path = source === 'github' ? 'github' : source
+  await requestJson(`/api/sca/devops/webhooks/${path}`, {
+    method: 'POST',
+    body: JSON.stringify({
+      project_id: selectedProjectId.value,
+      pipeline_id: `${source}-${Date.now()}`,
+      ref: 'main',
+      commit_sha: String(Date.now()),
+    }),
+  })
+  await loadDevops()
+  ElMessage.success('流水线事件已记录')
+}
+
+const createBackupJob = async () => {
+  await requestJson('/api/sca/ops/backups', {
+    method: 'POST',
+    body: JSON.stringify({ scope: 'database', target: 'local' }),
+  })
+  await loadOps()
+  ElMessage.success('备份计划已创建')
+}
+
 const scanImage = async () => {
   if (!imageScanForm.imageRef.trim()) {
     ElMessage.warning('请填写 Docker 镜像名称')
@@ -893,4 +1141,6 @@ const enqueueTask = async () => {
 onMounted(refreshAll)
 onMounted(loadImageScans)
 onMounted(loadAssets)
+onMounted(loadDevops)
+onMounted(loadOps)
 </script>

@@ -311,3 +311,77 @@ class AiTriageResult(Base):
     raw_json: Mapped[str] = mapped_column(Text, nullable=False, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class RemediationTicket(Base):
+    __tablename__ = "remediation_tickets"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True)
+    vulnerability_id: Mapped[int] = mapped_column(ForeignKey("vulnerabilities.id", ondelete="CASCADE"), nullable=False, index=True)
+    ticket_no: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    assignee: Mapped[str] = mapped_column(String(80), nullable=False, default="")
+    priority: Mapped[str] = mapped_column(String(20), nullable=False, default="P2")
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="未处理")
+    due_date: Mapped[str] = mapped_column(String(32), nullable=False, default="")
+    fix_version: Mapped[str] = mapped_column(String(160), nullable=False, default="")
+    verification_result: Mapped[str] = mapped_column(String(32), nullable=False, default="")
+    overdue_notified: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    created_by: Mapped[str] = mapped_column(String(80), nullable=False, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+    closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class RemediationEvent(Base):
+    __tablename__ = "remediation_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    ticket_id: Mapped[int] = mapped_column(ForeignKey("remediation_tickets.id", ondelete="CASCADE"), nullable=False, index=True)
+    from_status: Mapped[str] = mapped_column(String(20), nullable=False, default="")
+    to_status: Mapped[str] = mapped_column(String(20), nullable=False, default="")
+    actor: Mapped[str] = mapped_column(String(80), nullable=False, default="")
+    comment: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
+class VulnerabilityWhitelist(Base):
+    __tablename__ = "vulnerability_whitelist"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True)
+    vulnerability_id: Mapped[int] = mapped_column(ForeignKey("vulnerabilities.id", ondelete="CASCADE"), nullable=False, index=True)
+    reason: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    expires_at: Mapped[str] = mapped_column(String(32), nullable=False, default="")
+    created_by: Mapped[str] = mapped_column(String(80), nullable=False, default="")
+    active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
+class DevopsScanEvent(Base):
+    __tablename__ = "devops_scan_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    project_id: Mapped[int | None] = mapped_column(ForeignKey("projects.id", ondelete="SET NULL"), nullable=True, index=True)
+    source: Mapped[str] = mapped_column(String(40), nullable=False, default="gitlab")
+    pipeline_id: Mapped[str] = mapped_column(String(120), nullable=False, default="")
+    ref: Mapped[str] = mapped_column(String(160), nullable=False, default="")
+    commit_sha: Mapped[str] = mapped_column(String(120), nullable=False, default="")
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="received")
+    decision: Mapped[str] = mapped_column(String(32), nullable=False, default="passed")
+    block_reason: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    report_id: Mapped[int | None] = mapped_column(ForeignKey("report_exports.id", ondelete="SET NULL"), nullable=True)
+    raw_json: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
+class BackupJob(Base):
+    __tablename__ = "backup_jobs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    scope: Mapped[str] = mapped_column(String(40), nullable=False, default="database")
+    target: Mapped[str] = mapped_column(String(120), nullable=False, default="local")
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="planned")
+    storage_path: Mapped[str] = mapped_column(String(1024), nullable=False, default="")
+    summary: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)

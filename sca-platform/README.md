@@ -1,6 +1,6 @@
 # 聚信软件成分分析平台
 
-当前版本已完成第一到第九阶段：基础项目初始化、源码上传、依赖识别、漏洞查询、报告导出、SBOM 与容器镜像扫描、持续风险监测、AI 漏洞降噪、软件资产中心。技术栈保持 FastAPI + Vue3 + Element Plus + PostgreSQL + Redis + Celery + Docker Compose，并复用聚信统一登录平台。
+当前版本已完成第一到第十二阶段：基础项目初始化、源码上传、依赖识别、漏洞查询、报告导出、SBOM 与容器镜像扫描、持续风险监测、AI 漏洞降噪、软件资产中心、漏洞整改闭环、DevSecOps 集成、最终部署与生产优化。技术栈保持 FastAPI + Vue3 + Element Plus + PostgreSQL + Redis + Celery + Docker Compose，并复用聚信统一登录平台。
 
 ## 1. 项目总体架构
 
@@ -16,10 +16,12 @@
   -> Maven Central / npm / PyPI / Go Proxy / GitHub Releases
   -> OpenAI Chat Completions JSON Schema
   -> Syft / Trivy / Grype CLI
+  -> GitLab / GitHub Actions / Jenkins Webhook
+  -> Nginx HTTPS Reverse Proxy
   -> auth:5180 / 聚信统一登录平台
 ```
 
-平台以源码包和镜像为输入，沉淀项目、上传文件、组件、漏洞、报告、SBOM、镜像扫描、持续监测、AI 降噪与软件资产记录，所有运行路径均由 Docker Compose 承载。
+平台以源码包和镜像为输入，沉淀项目、上传文件、组件、漏洞、报告、SBOM、镜像扫描、持续监测、AI 降噪、软件资产、整改工单、CI/CD 阻断事件与生产运维记录，所有运行路径均由 Docker Compose 承载。
 
 ## 2. 目录结构
 
@@ -39,9 +41,12 @@ sca-platform
 │   │   ├── config.py
 │   │   ├── database.py
 │   │   ├── dependency_parser.py
+│   │   ├── devops_service.py
 │   │   ├── main.py
 │   │   ├── models.py
+│   │   ├── ops_service.py
 │   │   ├── report_service.py
+│   │   ├── remediation_service.py
 │   │   ├── risk_monitor_service.py
 │   │   ├── schemas.py
 │   │   ├── sbom_service.py
@@ -50,10 +55,17 @@ sca-platform
 │   ├── pytest.ini
 │   ├── requirements.txt
 │   └── tests
-│       └── test_api.py
+│       ├── test_api.py
+│       ├── test_ai_triage_assets.py
+│       ├── test_remediation_devops_ops.py
+│       └── test_risk_monitor.py
 ├── database
 │   └── init
 │       └── 001_init_sca.sql
+├── deploy
+│   ├── backup.sh
+│   └── nginx
+│       └── sca-platform.conf
 ├── frontend
 │   ├── Dockerfile
 │   ├── index.html
@@ -84,6 +96,7 @@ sca-platform
 - `web-sca`：Nginx 托管 Vue3 静态文件，端口 `18089`
 - `sca-report-data`：报告文件持久化卷
 - `sca-sbom-data`：SBOM、镜像 tar 持久化卷
+- `sca-backup-data`：生产备份文件持久化卷
 
 仓库根目录 `docker-compose.yml` 也已接入同一组服务，并将统一登录入口加入 `auth`。
 
@@ -413,7 +426,197 @@ docker compose exec -T sca-api curl -sS http://localhost:5191/api/sca/projects/1
 docker compose exec -T sca-api curl -sS http://localhost:5191/api/sca/projects/1/scan-logs
 ```
 
-## 15. 启动方法
+## 15. 第十阶段：漏洞整改闭环
+
+### 工单系统
+
+整改闭环以 `remediation_tickets` 为主表，每个工单关联项目和漏洞，记录整改人、优先级、修复期限、修复版本、验证结果和超时提醒状态。`remediation_events` 记录每一次状态流转，`vulnerability_whitelist` 记录白名单和忽略原因。
+
+### 状态流转逻辑
+
+允许状态：
+
+- `未处理`
+- `修复中`
+- `待确认`
+- `已修复`
+- `已忽略`
+
+核心流转：
+
+- `未处理 -> 修复中 / 已忽略`
+- `修复中 -> 待确认 / 已忽略`
+- `待确认 -> 已修复 / 修复中 / 已忽略`
+- `已修复` 和 `已忽略` 为闭环终态
+
+复测通过会进入 `已修复`，复测失败会回到 `修复中`。白名单会将漏洞标记为 `已忽略`，并写入白名单表。
+
+### 数据库设计
+
+- `remediation_tickets`：整改工单
+- `remediation_events`：工单生命周期事件
+- `vulnerability_whitelist`：漏洞白名单和忽略记录
+- `risk_alerts`：超时提醒记录，可接入邮件通知
+
+### FastAPI 接口
+
+- `POST /api/sca/projects/{project_id}/remediation/tickets`：创建整改工单
+- `GET /api/sca/projects/{project_id}/remediation/tickets`：工单列表
+- `POST /api/sca/remediation/tickets/{ticket_id}/transition`：状态流转
+- `POST /api/sca/remediation/tickets/{ticket_id}/verify`：修复验证
+- `GET /api/sca/remediation/tickets/{ticket_id}/events`：生命周期事件
+- `POST /api/sca/projects/{project_id}/remediation/whitelist`：加入白名单并忽略
+- `GET /api/sca/projects/{project_id}/remediation/whitelist`：白名单列表
+
+### Vue3 页面
+
+菜单“整改闭环”提供项目选择、漏洞选择、整改人、修复期限、优先级、工单列表、状态操作、复测验证和白名单列表。
+
+### 邮件提醒
+
+`sca-beat` 每 `REMEDIATION_OVERDUE_CHECK_SECONDS` 秒执行 `sca.check_remediation_overdue`。超时工单会写入 `risk_alerts`，当 `NOTIFICATION_EMAIL_ENABLED=true` 时记录 `email` 通知渠道和 `NOTIFICATION_EMAIL_TO` 收件人，便于后续接入企业 SMTP。
+
+## 16. 第十一阶段：DevSecOps 集成
+
+### GitLab / GitHub Actions / Jenkins 集成
+
+CI 系统扫描完成后调用平台 webhook，平台根据项目当前漏洞等级做发布门禁判断。阻断等级由 `DEVOPS_BLOCK_SEVERITIES` 配置，默认 `critical,high`。
+
+### Webhook 逻辑
+
+1. CI 传入项目 ID 或项目名称、流水线号、分支、提交号。
+2. 平台定位项目并统计当前漏洞。
+3. 如果存在阻断等级漏洞，事件决策为 `blocked`。
+4. 否则事件决策为 `passed`。
+5. 结果写入 `devops_scan_events`，Dashboard 聚合阻断率和来源分布。
+
+### API 接口
+
+- `POST /api/sca/devops/webhooks/gitlab`
+- `POST /api/sca/devops/webhooks/github`
+- `POST /api/sca/devops/webhooks/jenkins`
+- `GET /api/sca/devops/events`
+- `GET /api/sca/devops/dashboard`
+
+### GitHub Actions 示例
+
+```yaml
+name: sca-gate
+on: [push]
+jobs:
+  sca:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Notify SCA gate
+        run: |
+          curl -fsS -X POST "$SCA_URL/api/sca/devops/webhooks/github" \
+            -H "Content-Type: application/json" \
+            -d "{\"project_name\":\"$GITHUB_REPOSITORY\",\"pipeline_id\":\"$GITHUB_RUN_ID\",\"ref\":\"$GITHUB_REF_NAME\",\"commit_sha\":\"$GITHUB_SHA\"}"
+```
+
+### Jenkins Pipeline 示例
+
+```groovy
+pipeline {
+  agent any
+  stages {
+    stage('SCA Gate') {
+      steps {
+        sh '''
+          curl -fsS -X POST "$SCA_URL/api/sca/devops/webhooks/jenkins" \
+            -H "Content-Type: application/json" \
+            -d "{\"project_name\":\"${JOB_NAME}\",\"pipeline_id\":\"${BUILD_NUMBER}\",\"ref\":\"${BRANCH_NAME}\",\"commit_sha\":\"${GIT_COMMIT}\"}"
+        '''
+      }
+    }
+  }
+}
+```
+
+### 部署方案
+
+生产环境建议只允许 CI 网段访问 webhook 路径，并通过 Nginx、WAF 或 API 网关补充签名校验。平台内的人工查看接口继续走聚信统一登录授权。
+
+## 17. 第十二阶段：最终部署与生产优化
+
+### 最终部署架构
+
+```text
+用户/CI
+  -> Nginx HTTPS
+  -> web-sca / sca-api
+  -> sca-postgres / sca-redis
+  -> sca-worker / sca-beat
+  -> Docker volumes: uploads / reports / sbom / backups
+```
+
+### Docker Compose 优化
+
+- 数据库、Redis、上传目录、报告目录、SBOM 目录和备份目录均使用 Docker volume。
+- `sca-worker` 和 `sca-beat` 与 `sca-api` 使用同一镜像，确保任务代码一致。
+- `sca-beat` 使用 `/tmp/celerybeat-schedule`，避免容器只读或权限差异导致定时任务启动失败。
+- 根目录 compose 已接入统一登录平台，项目内 compose 保留 `AUTH_DEV_BYPASS=true` 方便离线验证。
+
+### Nginx 与 HTTPS
+
+配置文件：`deploy/nginx/sca-platform.conf`。
+
+- 80 自动跳转 443
+- TLS 1.2 / 1.3
+- HSTS、X-Frame-Options、Referrer-Policy
+- `/api/` 反向代理到 `sca-api:5191`
+- `/` 反向代理到 `web-sca:80`
+
+证书路径示例：
+
+```text
+/etc/nginx/certs/sca.example.com.crt
+/etc/nginx/certs/sca.example.com.key
+```
+
+### JWT 安全
+
+平台业务接口复用聚信统一登录平台，后端通过 `juxin_auth_token` 调用统一登录的 introspect/authorize 接口。生产环境建议：
+
+- `AUTH_DEV_BYPASS=false`
+- Cookie 开启 `HttpOnly`、`Secure`、`SameSite`
+- Nginx 全站 HTTPS
+- 统一登录侧开启短期访问令牌和刷新令牌轮换
+
+### 自动备份方案
+
+脚本：`deploy/backup.sh`。
+
+```bash
+cd /Users/zhanglei/Documents/codex-new/sca-platform
+BACKUP_DIR=/data/sca/backups ./deploy/backup.sh
+```
+
+建议生产 crontab：
+
+```cron
+30 2 * * * cd /opt/juxin/sca-platform && BACKUP_DIR=/data/sca/backups ./deploy/backup.sh >> /var/log/sca-backup.log 2>&1
+```
+
+### 系统监控方案
+
+- 健康检查：`GET /health`
+- 就绪检查：`GET /ready`
+- 容器状态：`docker compose ps`
+- API 日志：`docker compose logs -f sca-api`
+- Worker 日志：`docker compose logs -f sca-worker sca-beat`
+- 备份记录：`GET /api/sca/ops/backups`
+- 运维配置：`GET /api/sca/ops/config`
+
+### PostgreSQL / Redis 优化建议
+
+- PostgreSQL：开启自动 vacuum，按数据量调整 `shared_buffers`、`work_mem`、连接池上限，并定期检查慢 SQL。
+- Redis：开启持久化或托管高可用实例，限制最大内存和淘汰策略，单独使用 broker/result/cache DB。
+- Celery：生产环境按扫描规模增加 worker 并发，长任务建议拆分队列。
+- Nginx：按上传包大小调整 `client_max_body_size` 和代理超时。
+
+## 18. 启动方法
 
 Linux/macOS：
 
@@ -445,7 +648,7 @@ cp .env.example .env
 - 后端：`http://localhost:5191`
 - 统一登录：`http://localhost:5180`
 
-## 16. 测试方法
+## 19. 测试方法
 
 Linux/macOS：
 
@@ -482,7 +685,7 @@ cd /Users/zhanglei/Documents/codex-new/sca-platform
 docker compose build web-sca
 ```
 
-第七到第九阶段单独验证：
+第十到第十二阶段单独验证：
 
 ```bash
 cd /Users/zhanglei/Documents/codex-new/sca-platform
@@ -490,13 +693,23 @@ docker compose run --rm --no-deps \
   -e PYTHONPATH=/app \
   -e DATABASE_URL=sqlite:////tmp/sca-test.db \
   -e AUTH_DEV_BYPASS=true \
+  -e DEVOPS_BLOCK_SEVERITIES=critical,high \
   -e CELERY_TASK_ALWAYS_EAGER=true \
   -v "$PWD/backend/tests:/app/tests:ro" \
   sca-api pytest -o cache_dir=/tmp/.pytest_cache -o asyncio_default_fixture_loop_scope=function \
-  tests/test_risk_monitor.py tests/test_ai_triage_assets.py
+  tests/test_remediation_devops_ops.py
 ```
 
-## 17. 如何验证上传、漏洞、报告、SBOM、监测和资产成功
+完整 Docker Compose 配置验证：
+
+```bash
+cd /Users/zhanglei/Documents/codex-new/sca-platform
+docker compose config
+cd /Users/zhanglei/Documents/codex-new
+docker compose config
+```
+
+## 20. 如何验证上传、漏洞、报告、SBOM、监测、资产和闭环成功
 
 1. 前端访问 `http://localhost:18089`
 2. 进入“源码上传”
@@ -512,9 +725,12 @@ docker compose run --rm --no-deps \
 12. 进入“持续监测”，点击“立即监测”，能看到更新建议、提醒和趋势
 13. 进入“AI 降噪”，勾选业务上下文并点击“批量分析”
 14. 进入“资产中心”，能看到全局组件、漏洞、EOL、License 风险和图谱
-15. 进入“扫描日志”，能看到解析日志和识别数量
+15. 进入“整改闭环”，选择漏洞并创建工单，能执行“开始处理”“复测通过”“忽略”
+16. 进入“DevSecOps”，点击模拟 GitLab/GitHub/Jenkins 事件，高危漏洞会展示阻断结果
+17. 进入“生产运维”，能看到 HTTPS、JWT、备份目录和备份计划
+18. 进入“扫描日志”，能看到解析日志和识别数量
 
-## 18. 常见报错解决方案
+## 21. 常见报错解决方案
 
 ### 端口被占用
 
@@ -611,6 +827,43 @@ Compose 已将 Beat schedule 写到 `/tmp/celerybeat-schedule`。如果自定义
 
 ```bash
 --schedule=/tmp/celerybeat-schedule
+```
+
+### DevSecOps Webhook 返回 blocked
+
+说明项目存在 `DEVOPS_BLOCK_SEVERITIES` 命中的漏洞。可先在“整改闭环”创建工单并修复验证，或确认业务隔离后进入白名单。
+
+### 整改工单没有超时提醒
+
+确认 `sca-beat` 正在运行，并检查超时周期：
+
+```bash
+docker compose ps sca-beat
+docker compose logs sca-beat
+```
+
+```bash
+REMEDIATION_OVERDUE_CHECK_SECONDS=3600
+NOTIFICATION_EMAIL_ENABLED=true
+NOTIFICATION_EMAIL_TO=security@example.com
+```
+
+### HTTPS 证书路径错误
+
+确认 `deploy/nginx/sca-platform.conf` 中的证书路径与实际挂载一致：
+
+```text
+/etc/nginx/certs/sca.example.com.crt
+/etc/nginx/certs/sca.example.com.key
+```
+
+### 自动备份目录不可写
+
+确认宿主机备份目录和 Docker volume 均存在，并让执行用户拥有写入权限：
+
+```bash
+mkdir -p /data/sca/backups
+chmod 750 /data/sca/backups
 ```
 
 ### AI 降噪没有调用 OpenAI
