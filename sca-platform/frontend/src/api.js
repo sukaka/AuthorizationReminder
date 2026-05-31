@@ -7,6 +7,15 @@ const redirectToLogin = () => {
   window.location.href = target.toString()
 }
 
+const parseMaybeJson = (text) => {
+  if (!text) return null
+  try {
+    return JSON.parse(text)
+  } catch {
+    return null
+  }
+}
+
 export const requestJson = async (path, options = {}) => {
   const response = await fetch(`${API_BASE}${path}`, {
     credentials: 'include',
@@ -28,6 +37,76 @@ export const requestJson = async (path, options = {}) => {
     throw new Error(data?.detail || data?.error || `请求失败(${response.status})`)
   }
   return data
+}
+
+const sendWithProgress = ({ method, path, body, headers = {}, onProgress }) =>
+  new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest()
+    xhr.open(method, `${API_BASE}${path}`, true)
+    xhr.withCredentials = true
+    Object.entries(headers).forEach(([key, value]) => xhr.setRequestHeader(key, value))
+    xhr.upload.onprogress = (event) => {
+      if (event.lengthComputable && typeof onProgress === 'function') {
+        onProgress(Math.round((event.loaded / event.total) * 100))
+      }
+    }
+    xhr.onload = () => {
+      if (xhr.status === 401) {
+        redirectToLogin()
+        resolve(null)
+        return
+      }
+      const data = parseMaybeJson(xhr.responseText)
+      if (xhr.status >= 200 && xhr.status < 300) {
+        resolve(data)
+        return
+      }
+      reject(new Error(data?.detail || data?.error || `请求失败(${xhr.status})`))
+    }
+    xhr.onerror = () => reject(new Error('网络请求失败'))
+    xhr.send(body)
+  })
+
+export const uploadArchiveWithProgress = ({ file, projectName, scanNote, onProgress }) => {
+  const formData = new FormData()
+  formData.append('project_name', projectName)
+  formData.append('scan_note', scanNote || '')
+  formData.append('file', file)
+  return sendWithProgress({
+    method: 'POST',
+    path: '/api/sca/uploads',
+    body: formData,
+    onProgress,
+  })
+}
+
+export const resumableUploadWithProgress = async ({ file, projectName, scanNote, onProgress }) => {
+  const chunkSize = 2 * 1024 * 1024
+  const totalChunks = Math.max(1, Math.ceil(file.size / chunkSize))
+  const session = await requestJson('/api/sca/uploads/sessions', {
+    method: 'POST',
+    body: JSON.stringify({
+      project_name: projectName,
+      scan_note: scanNote || '',
+      filename: file.name,
+      total_size: file.size,
+      total_chunks: totalChunks,
+    }),
+  })
+  if (!session) return null
+  for (let index = 0; index < totalChunks; index += 1) {
+    const start = index * chunkSize
+    const end = Math.min(file.size, start + chunkSize)
+    await sendWithProgress({
+      method: 'PUT',
+      path: `/api/sca/uploads/${session.upload_id}/chunks/${index}`,
+      body: file.slice(start, end),
+    })
+    if (typeof onProgress === 'function') {
+      onProgress(Math.round(((index + 1) / totalChunks) * 100))
+    }
+  }
+  return requestJson(`/api/sca/uploads/${session.upload_id}/complete`, { method: 'POST' })
 }
 
 export { redirectToLogin }

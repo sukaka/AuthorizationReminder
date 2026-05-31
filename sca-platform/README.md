@@ -31,9 +31,11 @@ sca-platform
 │   │   ├── celery_app.py
 │   │   ├── config.py
 │   │   ├── database.py
+│   │   ├── dependency_parser.py
 │   │   ├── main.py
 │   │   ├── models.py
-│   │   └── schemas.py
+│   │   ├── schemas.py
+│   │   └── upload_service.py
 │   ├── pytest.ini
 │   ├── requirements.txt
 │   └── tests
@@ -101,7 +103,95 @@ CELERY_RESULT_BACKEND=redis://sca-redis:6379/2
 - 健康检查：`http://localhost:5191/health`
 - 就绪检查：`http://localhost:5191/ready`
 
-## 7. 启动方法
+## 7. 第二阶段：源码上传模块
+
+### 数据库 SQL
+
+初始化 SQL 位于 `database/init/001_init_sca.sql`，核心表：
+
+- `projects`：项目名称、扫描备注、状态、负责人
+- `upload_files`：上传文件记录、断点续传 `upload_id`、大小、路径、状态
+- `upload_logs`：上传会话、分片、完成与删除日志
+
+### FastAPI 上传接口
+
+- `POST /api/sca/uploads`：普通上传，表单字段 `project_name`、`scan_note`、`file`
+- `POST /api/sca/uploads/sessions`：创建断点续传会话
+- `PUT /api/sca/uploads/{upload_id}/chunks/{chunk_index}`：上传分片
+- `POST /api/sca/uploads/{upload_id}/complete`：合并分片并进入扫描
+- `GET /api/sca/uploads`：文件列表
+- `DELETE /api/sca/uploads/{upload_file_id}`：删除上传文件和本地文件
+
+文件保存目录为 `/data/sca/uploads`，由 Docker volume `sca-upload-data` 持久化。大小限制由 `UPLOAD_MAX_BYTES` 控制，默认 `209715200`（200 MB）。
+
+### Vue3 上传页面
+
+前端菜单“源码上传”提供：
+
+- 项目名称
+- 扫描备注
+- zip / tar.gz / tgz 文件选择
+- 普通上传 / 断点续传切换
+- 上传进度条
+- 上传文件列表和删除操作
+
+## 8. 第三阶段：依赖识别模块
+
+### 依赖解析逻辑
+
+解析器位于 `backend/app/dependency_parser.py`，支持：
+
+- `pom.xml`：解析 Maven `groupId:artifactId` 与 `version`
+- `package.json`：解析 npm `dependencies`、`devDependencies`、`peerDependencies`、`optionalDependencies`
+- `requirements.txt`：解析 PyPI 包名和版本约束
+- `go.mod`：解析 Go `require`
+- `Dockerfile`：解析 `FROM image:tag`
+
+### FastAPI 接口
+
+- `GET /api/sca/projects`：项目列表
+- `GET /api/sca/projects/{project_id}/components`：依赖列表
+- `GET /api/sca/projects/{project_id}/dependency-tree`：依赖树
+- `GET /api/sca/projects/{project_id}/scan-tasks`：扫描任务
+- `GET /api/sca/projects/{project_id}/scan-logs`：扫描日志
+
+### Celery 任务
+
+上传完成后自动创建 `scan_tasks` 记录，并投递 `sca.scan_uploaded_file`：
+
+1. 安全解压源码包，阻止路径穿越
+2. 查找支持的依赖文件
+3. 写入 `components`
+4. 写入 `component_dependencies`
+5. 写入 `scan_logs`
+6. 更新上传状态为 `scanned` 或 `failed`
+
+### 示例数据
+
+容器内验证示例：
+
+```bash
+docker compose exec -T sca-api sh -lc 'python - << "PY"
+from pathlib import Path
+import zipfile
+p = Path("/tmp/sca-demo.zip")
+with zipfile.ZipFile(p, "w") as z:
+    z.writestr("requirements.txt", "fastapi==0.115.6\n")
+    z.writestr("package.json", "{\"dependencies\":{\"vue\":\"^3.5.13\"}}")
+print(p)
+PY
+curl -sS -F project_name=docker-demo -F scan_note=container-upload-check -F file=@/tmp/sca-demo.zip http://localhost:5191/api/sca/uploads'
+```
+
+验证依赖：
+
+```bash
+docker compose exec -T sca-api curl -sS http://localhost:5191/api/sca/projects/1/components
+docker compose exec -T sca-api curl -sS http://localhost:5191/api/sca/projects/1/dependency-tree
+docker compose exec -T sca-api curl -sS http://localhost:5191/api/sca/projects/1/scan-logs
+```
+
+## 9. 启动方法
 
 Linux/macOS：
 
@@ -133,7 +223,7 @@ cp .env.example .env
 - 后端：`http://localhost:5191`
 - 统一登录：`http://localhost:5180`
 
-## 8. 测试方法
+## 10. 测试方法
 
 Linux/macOS：
 
@@ -162,7 +252,19 @@ docker compose run --rm --no-deps \
   sca-api pytest -o cache_dir=/tmp/.pytest_cache -o asyncio_default_fixture_loop_scope=function tests
 ```
 
-## 9. 常见报错解决方案
+## 11. 如何验证上传成功
+
+1. 前端访问 `http://localhost:18089`
+2. 进入“源码上传”
+3. 填写项目名称和扫描备注
+4. 选择 `.zip`、`.tar.gz` 或 `.tgz`
+5. 点击“上传并扫描”
+6. 上传进度到 `100%`
+7. 文件列表中状态从 `completed/scanning` 变为 `scanned`
+8. 进入“依赖识别”，能看到依赖列表和依赖树
+9. 进入“扫描日志”，能看到解析日志和识别数量
+
+## 12. 常见报错解决方案
 
 ### 端口被占用
 
@@ -193,3 +295,34 @@ docker compose logs sca-redis sca-worker
 ### 统一登录平台不可用
 
 项目内独立 compose 默认 `AUTH_DEV_BYPASS=true`，用于本地骨架验证。根目录 compose 使用真实统一登录，需先启动 `auth` 服务。
+
+### 上传文件过大
+
+调整 `.env` 中：
+
+```bash
+UPLOAD_MAX_BYTES=209715200
+```
+
+根目录 compose 对应变量为：
+
+```bash
+SCA_UPLOAD_MAX_BYTES=209715200
+```
+
+### 只支持指定压缩格式
+
+源码包必须是 `.zip`、`.tar.gz` 或 `.tgz`。其它格式会返回 `400`。
+
+### 断点续传合并失败
+
+确认所有分片都已上传，且 `total_size` 与最终合并大小一致。失败后可重新创建上传会话。
+
+### 扫描失败
+
+查看扫描日志：
+
+```bash
+docker compose exec -T sca-api curl -sS http://localhost:5191/api/sca/projects/<project_id>/scan-logs
+docker compose logs sca-worker
+```

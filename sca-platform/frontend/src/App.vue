@@ -6,22 +6,22 @@
         <small>软件成分分析平台</small>
       </div>
 
-      <el-menu class="menu" :default-active="activeMenu">
+      <el-menu class="menu" :default-active="activeMenu" @select="activeMenu = $event">
         <el-menu-item index="overview">
           <el-icon><DataAnalysis /></el-icon>
           <span>平台总览</span>
         </el-menu-item>
-        <el-menu-item index="projects">
-          <el-icon><FolderOpened /></el-icon>
-          <span>项目资产</span>
+        <el-menu-item index="upload">
+          <el-icon><UploadFilled /></el-icon>
+          <span>源码上传</span>
         </el-menu-item>
         <el-menu-item index="components">
           <el-icon><Grid /></el-icon>
-          <span>组件清单</span>
+          <span>依赖识别</span>
         </el-menu-item>
-        <el-menu-item index="policy">
-          <el-icon><Lock /></el-icon>
-          <span>策略基线</span>
+        <el-menu-item index="logs">
+          <el-icon><Document /></el-icon>
+          <span>扫描日志</span>
         </el-menu-item>
       </el-menu>
 
@@ -36,17 +36,17 @@
         <div>
           <p class="eyebrow">Software Composition Analysis</p>
           <h1>聚信软件成分分析平台</h1>
-          <p class="sub">第一阶段已接入 FastAPI、PostgreSQL、Redis、Celery 与统一登录，后续可扩展 SBOM、漏洞库和许可证策略。</p>
+          <p class="sub">上传源码包后自动识别 Maven、npm、Python、Go 与 Docker 基础镜像依赖，并沉淀组件清单、依赖树与扫描日志。</p>
         </div>
         <div class="hero-actions">
-          <el-button :icon="Refresh" @click="loadOverview">刷新</el-button>
+          <el-button :icon="Refresh" @click="refreshAll">刷新</el-button>
           <el-button type="primary" :icon="Connection" @click="enqueueTask">测试任务队列</el-button>
         </div>
       </section>
 
       <el-alert v-if="error" :title="error" type="error" show-icon :closable="false" />
 
-      <section class="metric-grid" v-loading="loading">
+      <section v-if="activeMenu === 'overview'" class="metric-grid" v-loading="loading">
         <div class="metric">
           <span>分析项目</span>
           <strong>{{ overview.project_count }}</strong>
@@ -65,21 +65,21 @@
         </div>
       </section>
 
-      <section class="workbench">
+      <section v-if="activeMenu === 'overview'" class="workbench">
         <div class="panel">
           <div class="panel-head">
             <h2>最近分析项目</h2>
-            <el-tag>Bootstrap</el-tag>
+            <el-tag>Docker Ready</el-tag>
           </div>
-          <el-table :data="overview.recent_projects" empty-text="暂无项目，等待下一阶段接入代码仓库扫描">
+          <el-table :data="projects" empty-text="暂无项目，请先上传源码包">
             <el-table-column prop="name" label="项目名称" min-width="160" />
-            <el-table-column prop="owner" label="负责人" width="120" />
-            <el-table-column prop="risk_level" label="风险" width="110">
+            <el-table-column prop="status" label="状态" width="120" />
+            <el-table-column prop="scan_note" label="扫描备注" min-width="180" show-overflow-tooltip />
+            <el-table-column label="操作" width="110">
               <template #default="{ row }">
-                <el-tag :type="riskTag(row.risk_level)">{{ row.risk_level }}</el-tag>
+                <el-button text type="primary" @click="openProject(row)">查看依赖</el-button>
               </template>
             </el-table-column>
-            <el-table-column prop="status" label="状态" width="130" />
           </el-table>
         </div>
 
@@ -88,13 +88,98 @@
             <h2>阶段能力</h2>
           </div>
           <ul class="capability-list">
-            <li>统一登录平台鉴权</li>
-            <li>FastAPI Swagger 文档</li>
-            <li>PostgreSQL 初始化脚本</li>
-            <li>Redis + Celery 异步任务</li>
-            <li>Docker Compose 一键启动</li>
+            <li>zip / tar.gz 源码上传</li>
+            <li>断点续传与文件大小限制</li>
+            <li>上传记录、删除与审计日志</li>
+            <li>Celery 异步依赖识别</li>
+            <li>依赖列表与依赖树展示</li>
           </ul>
         </div>
+      </section>
+
+      <section v-if="activeMenu === 'upload'" class="workbench upload-grid">
+        <div class="panel">
+          <div class="panel-head">
+            <h2>源码上传</h2>
+            <el-switch v-model="resumableMode" active-text="断点续传" inactive-text="普通上传" />
+          </div>
+          <div class="upload-form">
+            <el-form label-position="top">
+              <el-form-item label="项目名称">
+                <el-input v-model="uploadForm.projectName" placeholder="例如：juxin-auth-service" />
+              </el-form-item>
+              <el-form-item label="扫描备注">
+                <el-input v-model="uploadForm.scanNote" type="textarea" :rows="3" placeholder="记录本次扫描范围、分支或版本" />
+              </el-form-item>
+              <el-form-item label="源码包">
+                <input class="native-file" type="file" accept=".zip,.tar.gz,.tgz" @change="onFileChange" />
+              </el-form-item>
+              <el-progress v-if="uploadProgress > 0" :percentage="uploadProgress" />
+              <div class="form-actions">
+                <el-button type="primary" :loading="uploading" :icon="UploadFilled" @click="submitUpload">上传并扫描</el-button>
+              </div>
+            </el-form>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-head">
+            <h2>上传文件列表</h2>
+            <el-button :icon="Refresh" @click="loadUploads">刷新</el-button>
+          </div>
+          <el-table :data="uploads" empty-text="暂无上传文件">
+            <el-table-column prop="project_name" label="项目" min-width="140" />
+            <el-table-column prop="original_filename" label="文件名" min-width="160" show-overflow-tooltip />
+            <el-table-column prop="status" label="状态" width="105" />
+            <el-table-column label="进度" width="130">
+              <template #default="{ row }">{{ uploadPercent(row) }}%</template>
+            </el-table-column>
+            <el-table-column label="操作" width="150">
+              <template #default="{ row }">
+                <el-button text type="primary" @click="selectProject(row.project_id)">依赖</el-button>
+                <el-button text type="danger" @click="deleteUpload(row)">删除</el-button>
+              </template>
+            </el-table-column>
+          </el-table>
+        </div>
+      </section>
+
+      <section v-if="activeMenu === 'components'" class="workbench">
+        <div class="panel">
+          <div class="panel-head">
+            <h2>依赖列表</h2>
+            <el-select v-model="selectedProjectId" placeholder="选择项目" style="width: 240px" @change="loadProjectDetails">
+              <el-option v-for="project in projects" :key="project.id" :label="project.name" :value="project.id" />
+            </el-select>
+          </div>
+          <el-table :data="components" empty-text="暂无依赖，请等待扫描完成">
+            <el-table-column prop="ecosystem" label="生态" width="110" />
+            <el-table-column prop="package_name" label="依赖名称" min-width="220" show-overflow-tooltip />
+            <el-table-column prop="package_version" label="版本" width="140" show-overflow-tooltip />
+            <el-table-column prop="scope" label="范围" width="110" />
+            <el-table-column prop="source_path" label="来源文件" min-width="180" show-overflow-tooltip />
+          </el-table>
+        </div>
+        <div class="panel side-panel">
+          <div class="panel-head">
+            <h2>依赖树</h2>
+          </div>
+          <el-tree :data="dependencyTree" node-key="id" default-expand-all :props="{ label: 'label', children: 'children' }" />
+        </div>
+      </section>
+
+      <section v-if="activeMenu === 'logs'" class="panel">
+        <div class="panel-head">
+          <h2>扫描日志</h2>
+          <el-select v-model="selectedProjectId" placeholder="选择项目" style="width: 240px" @change="loadProjectDetails">
+            <el-option v-for="project in projects" :key="project.id" :label="project.name" :value="project.id" />
+          </el-select>
+        </div>
+        <el-table :data="scanLogs" empty-text="暂无扫描日志">
+          <el-table-column prop="level" label="级别" width="100" />
+          <el-table-column prop="message" label="日志内容" min-width="260" show-overflow-tooltip />
+          <el-table-column prop="created_at" label="时间" width="210" />
+        </el-table>
       </section>
     </main>
   </div>
@@ -102,13 +187,23 @@
 
 <script setup>
 import { computed, onMounted, reactive, ref } from 'vue'
-import { Connection, DataAnalysis, FolderOpened, Grid, Lock, Refresh } from '@element-plus/icons-vue'
-import { ElMessage } from 'element-plus'
-import { requestJson } from './api'
+import { Connection, DataAnalysis, Document, Grid, Refresh, UploadFilled } from '@element-plus/icons-vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import { requestJson, resumableUploadWithProgress, uploadArchiveWithProgress } from './api'
 
 const activeMenu = ref('overview')
 const loading = ref(false)
 const error = ref('')
+const uploading = ref(false)
+const uploadProgress = ref(0)
+const selectedFile = ref(null)
+const resumableMode = ref(true)
+const selectedProjectId = ref(null)
+const projects = ref([])
+const uploads = ref([])
+const components = ref([])
+const dependencyTree = ref([])
+const scanLogs = ref([])
 const overview = reactive({
   project_count: 0,
   component_count: 0,
@@ -117,16 +212,19 @@ const overview = reactive({
   recent_projects: [],
   user: null,
 })
+const uploadForm = reactive({
+  projectName: '',
+  scanNote: '',
+})
 
 const userLabel = computed(() => {
   if (!overview.user?.username) return '未加载'
   return `${overview.user.username} / ${overview.user.role}`
 })
 
-const riskTag = (value) => {
-  if (value === 'high') return 'danger'
-  if (value === 'medium') return 'warning'
-  return 'success'
+const uploadPercent = (row) => {
+  if (!row?.file_size) return 0
+  return Math.min(100, Math.round((Number(row.received_bytes || 0) / Number(row.file_size)) * 100))
 }
 
 const loadOverview = async () => {
@@ -142,6 +240,85 @@ const loadOverview = async () => {
   }
 }
 
+const loadProjects = async () => {
+  projects.value = (await requestJson('/api/sca/projects')) || []
+  if (!selectedProjectId.value && projects.value.length) {
+    selectedProjectId.value = projects.value[0].id
+  }
+}
+
+const loadUploads = async () => {
+  const data = await requestJson('/api/sca/uploads')
+  uploads.value = data?.items || []
+}
+
+const loadProjectDetails = async () => {
+  if (!selectedProjectId.value) return
+  components.value = (await requestJson(`/api/sca/projects/${selectedProjectId.value}/components`)) || []
+  dependencyTree.value = (await requestJson(`/api/sca/projects/${selectedProjectId.value}/dependency-tree`)) || []
+  scanLogs.value = (await requestJson(`/api/sca/projects/${selectedProjectId.value}/scan-logs`)) || []
+}
+
+const refreshAll = async () => {
+  await Promise.all([loadOverview(), loadProjects(), loadUploads()])
+  await loadProjectDetails()
+}
+
+const onFileChange = (event) => {
+  selectedFile.value = event.target.files?.[0] || null
+}
+
+const submitUpload = async () => {
+  if (!uploadForm.projectName.trim()) {
+    ElMessage.warning('请填写项目名称')
+    return
+  }
+  if (!selectedFile.value) {
+    ElMessage.warning('请选择源码包')
+    return
+  }
+  uploading.value = true
+  uploadProgress.value = 0
+  try {
+    const uploader = resumableMode.value ? resumableUploadWithProgress : uploadArchiveWithProgress
+    const uploaded = await uploader({
+      file: selectedFile.value,
+      projectName: uploadForm.projectName.trim(),
+      scanNote: uploadForm.scanNote,
+      onProgress: (percent) => {
+        uploadProgress.value = percent
+      },
+    })
+    if (uploaded?.project_id) {
+      selectedProjectId.value = uploaded.project_id
+      ElMessage.success('上传成功，已进入依赖识别流程')
+    }
+    await refreshAll()
+    activeMenu.value = 'components'
+  } catch (err) {
+    ElMessage.error(err?.message || '上传失败')
+  } finally {
+    uploading.value = false
+  }
+}
+
+const deleteUpload = async (row) => {
+  await ElMessageBox.confirm(`确认删除 ${row.original_filename}？`, '删除上传文件', { type: 'warning' })
+  await requestJson(`/api/sca/uploads/${row.id}`, { method: 'DELETE' })
+  ElMessage.success('已删除')
+  await refreshAll()
+}
+
+const selectProject = async (projectId) => {
+  selectedProjectId.value = projectId
+  activeMenu.value = 'components'
+  await loadProjectDetails()
+}
+
+const openProject = async (project) => {
+  await selectProject(project.id)
+}
+
 const enqueueTask = async () => {
   try {
     const data = await requestJson('/api/sca/tasks/demo', { method: 'POST' })
@@ -151,5 +328,5 @@ const enqueueTask = async () => {
   }
 }
 
-onMounted(loadOverview)
+onMounted(refreshAll)
 </script>

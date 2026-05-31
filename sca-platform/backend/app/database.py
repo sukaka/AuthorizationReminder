@@ -1,6 +1,6 @@
 from collections.abc import Generator
 
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 from .config import get_settings
@@ -28,6 +28,23 @@ def init_db() -> None:
     from . import models  # noqa: F401
 
     Base.metadata.create_all(bind=engine)
+    run_compat_migrations()
+
+
+def run_compat_migrations() -> None:
+    inspector = inspect(engine)
+    if not inspector.has_table("components"):
+        return
+    existing = {column["name"] for column in inspector.get_columns("components")}
+    additions = {
+        "ecosystem": "VARCHAR(40) NOT NULL DEFAULT 'unknown'",
+        "scope": "VARCHAR(40) NOT NULL DEFAULT 'runtime'",
+        "source_path": "VARCHAR(512) NOT NULL DEFAULT ''",
+    }
+    with engine.begin() as conn:
+        for column, definition in additions.items():
+            if column not in existing:
+                conn.execute(text(f"ALTER TABLE components ADD COLUMN {column} {definition}"))
 
 
 def check_database() -> bool:

@@ -18,6 +18,9 @@ class Settings(BaseSettings):
     auth_fetch_timeout_ms: int = 5000
     auth_dev_bypass: bool = False
     cors_origins: str = Field(default="http://localhost:18089,http://127.0.0.1:18089")
+    upload_root: str = "/data/sca/uploads"
+    upload_max_bytes: int = 200 * 1024 * 1024
+    celery_task_always_eager: bool = False
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 

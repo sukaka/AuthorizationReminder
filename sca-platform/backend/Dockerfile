@@ -13,7 +13,9 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY app ./app
-RUN adduser --disabled-password --gecos "" appuser
+RUN adduser --disabled-password --gecos "" appuser \
+    && mkdir -p /data/sca/uploads \
+    && chown -R appuser:appuser /data/sca
 USER appuser
 
 EXPOSE 5191

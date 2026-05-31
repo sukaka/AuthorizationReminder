@@ -609,6 +609,11 @@ services:
       AUTH_FETCH_TIMEOUT_MS: 5000
       AUTH_DEV_BYPASS: "false"
       CORS_ORIGINS: "http://localhost:18089,http://127.0.0.1:18089,http://${PUBLIC_HOST:-localhost}:18089"
+      UPLOAD_ROOT: "/data/sca/uploads"
+      UPLOAD_MAX_BYTES: ${SCA_UPLOAD_MAX_BYTES:-209715200}
+      CELERY_TASK_ALWAYS_EAGER: "false"
+    volumes:
+      - sca-upload-data:/data/sca/uploads
     depends_on:
       sca-postgres:
         condition: service_healthy
@@ -637,6 +642,11 @@ services:
       AUTH_COOKIE_NAME: "juxin_auth_token"
       AUTH_DEV_BYPASS: "false"
       CORS_ORIGINS: "http://localhost:18089,http://127.0.0.1:18089,http://${PUBLIC_HOST:-localhost}:18089"
+      UPLOAD_ROOT: "/data/sca/uploads"
+      UPLOAD_MAX_BYTES: ${SCA_UPLOAD_MAX_BYTES:-209715200}
+      CELERY_TASK_ALWAYS_EAGER: "false"
+    volumes:
+      - sca-upload-data:/data/sca/uploads
     depends_on:
       sca-postgres:
         condition: service_healthy
@@ -747,3 +757,4 @@ volumes:
   train-exam-data:
   sca-postgres-data:
   sca-redis-data:
+  sca-upload-data:

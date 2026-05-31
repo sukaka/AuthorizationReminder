@@ -34,6 +34,8 @@ services:
       context: ./backend
     env_file:
       - .env
+    volumes:
+      - sca-upload-data:/data/sca/uploads
     depends_on:
       sca-postgres:
         condition: service_healthy
@@ -47,6 +49,8 @@ services:
       context: ./backend
     env_file:
       - .env
+    volumes:
+      - sca-upload-data:/data/sca/uploads
     command: ["celery", "-A", "app.celery_app.celery_app", "worker", "--loglevel=INFO"]
     depends_on:
       sca-postgres:
@@ -68,3 +72,4 @@ services:
 volumes:
   sca-postgres-data:
   sca-redis-data:
+  sca-upload-data:
