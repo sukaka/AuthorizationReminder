@@ -166,6 +166,83 @@ CREATE TABLE IF NOT EXISTS image_scan_findings (
   description TEXT NOT NULL DEFAULT ''
 );
 
+CREATE TABLE IF NOT EXISTS risk_monitor_runs (
+  id BIGSERIAL PRIMARY KEY,
+  status VARCHAR(32) NOT NULL DEFAULT 'running',
+  summary TEXT NOT NULL DEFAULT '',
+  checked_projects INTEGER NOT NULL DEFAULT 0,
+  updated_components INTEGER NOT NULL DEFAULT 0,
+  started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  finished_at TIMESTAMPTZ NULL
+);
+
+CREATE TABLE IF NOT EXISTS risk_monitor_snapshots (
+  id BIGSERIAL PRIMARY KEY,
+  project_id BIGINT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  component_id BIGINT NULL REFERENCES components(id) ON DELETE SET NULL,
+  component_name VARCHAR(160) NOT NULL,
+  current_version VARCHAR(80) NOT NULL DEFAULT '',
+  latest_version VARCHAR(80) NOT NULL DEFAULT '',
+  latest_source VARCHAR(40) NOT NULL DEFAULT '',
+  update_available BOOLEAN NOT NULL DEFAULT FALSE,
+  version_delta VARCHAR(20) NOT NULL DEFAULT 'none',
+  eol_status VARCHAR(32) NOT NULL DEFAULT 'unknown',
+  eol_date VARCHAR(40) NOT NULL DEFAULT '',
+  vulnerability_count INTEGER NOT NULL DEFAULT 0,
+  risk_level VARCHAR(20) NOT NULL DEFAULT 'low',
+  recommendation TEXT NOT NULL DEFAULT '',
+  raw_json TEXT NOT NULL DEFAULT '',
+  checked_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS risk_change_records (
+  id BIGSERIAL PRIMARY KEY,
+  project_id BIGINT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  component_id BIGINT NULL REFERENCES components(id) ON DELETE SET NULL,
+  change_type VARCHAR(40) NOT NULL,
+  before_value TEXT NOT NULL DEFAULT '',
+  after_value TEXT NOT NULL DEFAULT '',
+  message TEXT NOT NULL DEFAULT '',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS risk_alerts (
+  id BIGSERIAL PRIMARY KEY,
+  project_id BIGINT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  component_id BIGINT NULL REFERENCES components(id) ON DELETE SET NULL,
+  level VARCHAR(20) NOT NULL DEFAULT 'medium',
+  title VARCHAR(200) NOT NULL,
+  message TEXT NOT NULL DEFAULT '',
+  status VARCHAR(32) NOT NULL DEFAULT 'open',
+  notification_channel VARCHAR(40) NOT NULL DEFAULT '',
+  email_to VARCHAR(255) NOT NULL DEFAULT '',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  acknowledged_at TIMESTAMPTZ NULL
+);
+
+CREATE TABLE IF NOT EXISTS ai_triage_results (
+  id BIGSERIAL PRIMARY KEY,
+  project_id BIGINT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  vulnerability_id BIGINT NOT NULL REFERENCES vulnerabilities(id) ON DELETE CASCADE,
+  ai_risk_level VARCHAR(20) NOT NULL DEFAULT 'Review',
+  noise_reason TEXT NOT NULL DEFAULT '',
+  immediate_fix BOOLEAN NOT NULL DEFAULT FALSE,
+  suspected_false_positive BOOLEAN NOT NULL DEFAULT FALSE,
+  remediation TEXT NOT NULL DEFAULT '',
+  fix_deadline VARCHAR(80) NOT NULL DEFAULT '',
+  risk_explanation TEXT NOT NULL DEFAULT '',
+  priority_score DOUBLE PRECISION NOT NULL DEFAULT 0,
+  human_status VARCHAR(32) NOT NULL DEFAULT 'pending',
+  exposure_context TEXT NOT NULL DEFAULT '',
+  token_prompt INTEGER NOT NULL DEFAULT 0,
+  token_completion INTEGER NOT NULL DEFAULT 0,
+  token_total INTEGER NOT NULL DEFAULT 0,
+  model VARCHAR(80) NOT NULL DEFAULT '',
+  raw_json TEXT NOT NULL DEFAULT '',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  confirmed_at TIMESTAMPTZ NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_analysis_projects_risk_level ON analysis_projects(risk_level);
 CREATE INDEX IF NOT EXISTS idx_projects_status ON projects(status);
 CREATE INDEX IF NOT EXISTS idx_upload_files_project_id ON upload_files(project_id);
@@ -183,6 +260,13 @@ CREATE INDEX IF NOT EXISTS idx_vulnerability_queries_project_id ON vulnerability
 CREATE INDEX IF NOT EXISTS idx_report_exports_project_id ON report_exports(project_id);
 CREATE INDEX IF NOT EXISTS idx_sbom_documents_project_id ON sbom_documents(project_id);
 CREATE INDEX IF NOT EXISTS idx_image_scan_findings_scan_id ON image_scan_findings(image_scan_id);
+CREATE INDEX IF NOT EXISTS idx_risk_monitor_snapshots_project_id ON risk_monitor_snapshots(project_id);
+CREATE INDEX IF NOT EXISTS idx_risk_monitor_snapshots_component_id ON risk_monitor_snapshots(component_id);
+CREATE INDEX IF NOT EXISTS idx_risk_change_records_project_id ON risk_change_records(project_id);
+CREATE INDEX IF NOT EXISTS idx_risk_alerts_project_id ON risk_alerts(project_id);
+CREATE INDEX IF NOT EXISTS idx_risk_alerts_status ON risk_alerts(status);
+CREATE INDEX IF NOT EXISTS idx_ai_triage_results_project_id ON ai_triage_results(project_id);
+CREATE INDEX IF NOT EXISTS idx_ai_triage_results_vulnerability_id ON ai_triage_results(vulnerability_id);
 
 INSERT INTO analysis_projects (name, repository_url, risk_level, status, owner)
 VALUES ('bootstrap-demo', 'https://example.com/juxin/bootstrap-demo.git', 'medium', 'initialized', 'security')

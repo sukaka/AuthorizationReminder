@@ -224,3 +224,90 @@ class ImageScanFinding(Base):
     severity: Mapped[str] = mapped_column(String(20), nullable=False, default="unknown")
     fixed_version: Mapped[str] = mapped_column(String(160), nullable=False, default="")
     description: Mapped[str] = mapped_column(Text, nullable=False, default="")
+
+
+class RiskMonitorRun(Base):
+    __tablename__ = "risk_monitor_runs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="running")
+    summary: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    checked_projects: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    updated_components: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class RiskMonitorSnapshot(Base):
+    __tablename__ = "risk_monitor_snapshots"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True)
+    component_id: Mapped[int | None] = mapped_column(ForeignKey("components.id", ondelete="SET NULL"), nullable=True, index=True)
+    component_name: Mapped[str] = mapped_column(String(160), nullable=False)
+    current_version: Mapped[str] = mapped_column(String(80), nullable=False, default="")
+    latest_version: Mapped[str] = mapped_column(String(80), nullable=False, default="")
+    latest_source: Mapped[str] = mapped_column(String(40), nullable=False, default="")
+    update_available: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    version_delta: Mapped[str] = mapped_column(String(20), nullable=False, default="none")
+    eol_status: Mapped[str] = mapped_column(String(32), nullable=False, default="unknown")
+    eol_date: Mapped[str] = mapped_column(String(40), nullable=False, default="")
+    vulnerability_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    risk_level: Mapped[str] = mapped_column(String(20), nullable=False, default="low")
+    recommendation: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    raw_json: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    checked_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
+class RiskChangeRecord(Base):
+    __tablename__ = "risk_change_records"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True)
+    component_id: Mapped[int | None] = mapped_column(ForeignKey("components.id", ondelete="SET NULL"), nullable=True, index=True)
+    change_type: Mapped[str] = mapped_column(String(40), nullable=False)
+    before_value: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    after_value: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    message: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
+class RiskAlert(Base):
+    __tablename__ = "risk_alerts"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True)
+    component_id: Mapped[int | None] = mapped_column(ForeignKey("components.id", ondelete="SET NULL"), nullable=True, index=True)
+    level: Mapped[str] = mapped_column(String(20), nullable=False, default="medium")
+    title: Mapped[str] = mapped_column(String(200), nullable=False)
+    message: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="open")
+    notification_channel: Mapped[str] = mapped_column(String(40), nullable=False, default="")
+    email_to: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    acknowledged_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class AiTriageResult(Base):
+    __tablename__ = "ai_triage_results"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True)
+    vulnerability_id: Mapped[int] = mapped_column(ForeignKey("vulnerabilities.id", ondelete="CASCADE"), nullable=False, index=True)
+    ai_risk_level: Mapped[str] = mapped_column(String(20), nullable=False, default="Review")
+    noise_reason: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    immediate_fix: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    suspected_false_positive: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    remediation: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    fix_deadline: Mapped[str] = mapped_column(String(80), nullable=False, default="")
+    risk_explanation: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    priority_score: Mapped[float] = mapped_column(Float, nullable=False, default=0)
+    human_status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
+    exposure_context: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    token_prompt: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    token_completion: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    token_total: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    model: Mapped[str] = mapped_column(String(80), nullable=False, default="")
+    raw_json: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

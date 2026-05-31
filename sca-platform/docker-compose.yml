@@ -62,6 +62,22 @@ services:
       sca-redis:
         condition: service_healthy
 
+  sca-beat:
+    build:
+      context: ./backend
+    env_file:
+      - .env
+    volumes:
+      - sca-upload-data:/data/sca/uploads
+      - sca-report-data:/data/sca/reports
+      - sca-sbom-data:/data/sca/sbom
+    command: ["celery", "-A", "app.celery_app.celery_app", "beat", "--loglevel=INFO", "--schedule=/tmp/celerybeat-schedule"]
+    depends_on:
+      sca-postgres:
+        condition: service_healthy
+      sca-redis:
+        condition: service_healthy
+
   web-sca:
     build:
       context: ./frontend

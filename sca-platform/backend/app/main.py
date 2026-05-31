@@ -2,6 +2,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Annotated
+import json
 import shutil
 import uuid
 
@@ -18,11 +19,16 @@ from .config import Settings, get_settings
 from .database import check_database, get_db, init_db
 from .models import (
     AnalysisProject,
+    AiTriageResult,
     Component,
     ComponentDependency,
     ImageScan,
     ImageScanFinding,
     Project,
+    RiskAlert,
+    RiskChangeRecord,
+    RiskMonitorRun,
+    RiskMonitorSnapshot,
     ReportExport,
     SbomDocument,
     ScanLog,
@@ -31,6 +37,12 @@ from .models import (
     VulnerabilityRecord,
 )
 from .schemas import (
+    AiTriageAnalyzeIn,
+    AiTriageConfirmIn,
+    AiTriageOut,
+    AssetComponentListOut,
+    AssetDashboardOut,
+    AssetGraphOut,
     CveQueryIn,
     ComponentOut,
     DependencyTreeNode,
@@ -39,6 +51,12 @@ from .schemas import (
     ImageScanOut,
     OverviewOut,
     ProjectListItem,
+    RiskAlertOut,
+    RiskChangeOut,
+    RiskMonitorRunOut,
+    RiskMonitorSnapshotOut,
+    RiskTrendItem,
+    RiskTrendOut,
     ReportCreateIn,
     ReportOut,
     ScanLogOut,
@@ -55,7 +73,10 @@ from .schemas import (
     VulnerabilityTrendItem,
     VulnerabilityTrendOut,
 )
+from .ai_triage_service import analyze_vulnerabilities_with_ai
+from .asset_service import asset_components, asset_dashboard, asset_graph
 from .report_service import generate_report
+from .risk_monitor_service import monitor_component_update, raw_json, snapshot_risk_level
 from .sbom_service import generate_sbom, scan_image
 from .upload_service import (
     add_upload_log,
@@ -81,7 +102,7 @@ settings = get_settings()
 app = FastAPI(
     title=settings.app_name,
     version=settings.app_version,
-    description="聚信软件成分分析平台 API，覆盖源码上传、依赖识别、漏洞查询、报告导出、SBOM 与镜像扫描。",
+    description="聚信软件成分分析平台 API，覆盖源码上传、依赖识别、漏洞查询、报告导出、SBOM、镜像扫描、持续监测、AI 降噪与资产中心。",
     lifespan=lifespan,
 )
 
@@ -730,3 +751,234 @@ async def list_image_scan_findings(
 ) -> list[ImageScanFindingOut]:
     await require_action("sca:read", request, user, settings)
     return list(db.scalars(select(ImageScanFinding).where(ImageScanFinding.image_scan_id == scan_id)).all())
+
+
+@app.post("/api/sca/projects/{project_id}/risk-monitor/run", response_model=RiskMonitorRunOut, tags=["risk-monitor"])
+async def run_project_risk_monitor(
+    request: Request,
+    project_id: int,
+    user: Annotated[UserPayload, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> RiskMonitorRunOut:
+    await require_action("sca:write", request, user, settings)
+    _ensure_project_exists(db, project_id)
+    run = RiskMonitorRun(status="running", summary="手动持续风险监测执行中")
+    db.add(run)
+    db.flush()
+    components = list(db.scalars(select(Component).where(Component.project_id == project_id)))
+    updated = 0
+    for component in components:
+        data = monitor_component_update(component, settings)
+        vulnerability_count = db.scalar(select(func.count(VulnerabilityRecord.id)).where(VulnerabilityRecord.component_id == component.id)) or 0
+        risk_level = snapshot_risk_level(bool(data["update_available"]), str(data["version_delta"]), str(data["eol_status"]), vulnerability_count)
+        snapshot = RiskMonitorSnapshot(
+            project_id=project_id,
+            component_id=component.id,
+            component_name=component.package_name,
+            current_version=component.package_version,
+            latest_version=str(data["latest_version"]),
+            latest_source=str(data["latest_source"]),
+            update_available=bool(data["update_available"]),
+            version_delta=str(data["version_delta"]),
+            eol_status=str(data["eol_status"]),
+            eol_date=str(data["eol_date"]),
+            vulnerability_count=vulnerability_count,
+            risk_level=risk_level,
+            recommendation=str(data["recommendation"]),
+            raw_json=raw_json(data.get("raw") or {}),
+        )
+        db.add(snapshot)
+        if snapshot.update_available:
+            updated += 1
+            db.add(
+                RiskChangeRecord(
+                    project_id=project_id,
+                    component_id=component.id,
+                    change_type="version_update",
+                    before_value=component.package_version,
+                    after_value=snapshot.latest_version,
+                    message=snapshot.recommendation,
+                )
+            )
+            db.add(
+                RiskAlert(
+                    project_id=project_id,
+                    component_id=component.id,
+                    level=risk_level if risk_level in {"high", "medium", "low"} else "medium",
+                    title=f"{component.package_name} 存在版本更新",
+                    message=snapshot.recommendation,
+                    notification_channel="email" if settings.notification_email_enabled else "",
+                    email_to=settings.notification_email_to,
+                )
+            )
+    run.status = "success"
+    run.checked_projects = 1
+    run.updated_components = updated
+    run.summary = f"已监测组件 {len(components)} 个，发现更新 {updated} 个"
+    run.finished_at = datetime.now(timezone.utc)
+    db.commit()
+    db.refresh(run)
+    return run
+
+
+@app.get("/api/sca/projects/{project_id}/risk-monitor/snapshots", response_model=list[RiskMonitorSnapshotOut], tags=["risk-monitor"])
+async def list_risk_snapshots(
+    request: Request,
+    project_id: int,
+    user: Annotated[UserPayload, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> list[RiskMonitorSnapshotOut]:
+    await require_action("sca:read", request, user, settings)
+    return list(db.scalars(select(RiskMonitorSnapshot).where(RiskMonitorSnapshot.project_id == project_id).order_by(RiskMonitorSnapshot.checked_at.desc())).all())
+
+
+@app.get("/api/sca/projects/{project_id}/risk-monitor/alerts", response_model=list[RiskAlertOut], tags=["risk-monitor"])
+async def list_risk_alerts(
+    request: Request,
+    project_id: int,
+    user: Annotated[UserPayload, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> list[RiskAlertOut]:
+    await require_action("sca:read", request, user, settings)
+    return list(db.scalars(select(RiskAlert).where(RiskAlert.project_id == project_id).order_by(RiskAlert.created_at.desc())).all())
+
+
+@app.get("/api/sca/projects/{project_id}/risk-monitor/changes", response_model=list[RiskChangeOut], tags=["risk-monitor"])
+async def list_risk_changes(
+    request: Request,
+    project_id: int,
+    user: Annotated[UserPayload, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> list[RiskChangeOut]:
+    await require_action("sca:read", request, user, settings)
+    return list(db.scalars(select(RiskChangeRecord).where(RiskChangeRecord.project_id == project_id).order_by(RiskChangeRecord.created_at.desc())).all())
+
+
+@app.get("/api/sca/projects/{project_id}/risk-monitor/trend", response_model=RiskTrendOut, tags=["risk-monitor"])
+async def risk_monitor_trend(
+    request: Request,
+    project_id: int,
+    user: Annotated[UserPayload, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> RiskTrendOut:
+    await require_action("sca:read", request, user, settings)
+    alerts = db.scalars(select(RiskAlert).where(RiskAlert.project_id == project_id)).all()
+    buckets: dict[str, dict[str, int]] = {}
+    for alert in alerts:
+        day = alert.created_at.strftime("%Y-%m-%d")
+        bucket = buckets.setdefault(day, {"total": 0, "critical": 0, "high": 0, "medium": 0, "low": 0})
+        bucket["total"] += 1
+        if alert.level in bucket:
+            bucket[alert.level] += 1
+    return RiskTrendOut(items=[RiskTrendItem(day=day, **buckets[day]) for day in sorted(buckets)])
+
+
+@app.post("/api/sca/projects/{project_id}/ai-triage/analyze", response_model=list[AiTriageOut], tags=["ai-triage"])
+async def analyze_ai_triage(
+    request: Request,
+    project_id: int,
+    payload: AiTriageAnalyzeIn,
+    user: Annotated[UserPayload, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> list[AiTriageOut]:
+    await require_action("sca:write", request, user, settings)
+    _ensure_project_exists(db, project_id)
+    vulnerabilities = list(
+        db.scalars(
+            select(VulnerabilityRecord).where(
+                VulnerabilityRecord.project_id == project_id,
+                VulnerabilityRecord.id.in_(payload.vulnerability_ids),
+            )
+        )
+    )
+    context = payload.context.model_dump()
+    analyzed = analyze_vulnerabilities_with_ai(vulnerabilities, context, settings)
+    rows: list[AiTriageResult] = []
+    for item in analyzed:
+        usage = item.get("token_usage") or {}
+        row = AiTriageResult(
+            project_id=project_id,
+            vulnerability_id=int(item["vulnerability_id"]),
+            ai_risk_level=str(item["ai_risk_level"]),
+            noise_reason=str(item["noise_reason"]),
+            immediate_fix=bool(item["immediate_fix"]),
+            suspected_false_positive=bool(item["suspected_false_positive"]),
+            remediation=str(item["remediation"]),
+            fix_deadline=str(item["fix_deadline"]),
+            risk_explanation=str(item["risk_explanation"]),
+            priority_score=float(item["priority_score"]),
+            exposure_context=json.dumps(context, ensure_ascii=False),
+            token_prompt=int(usage.get("prompt_tokens") or 0),
+            token_completion=int(usage.get("completion_tokens") or 0),
+            token_total=int(usage.get("total_tokens") or 0),
+            model=str(item.get("model") or settings.openai_model),
+            raw_json=json.dumps(item.get("raw") or {}, ensure_ascii=False),
+        )
+        db.add(row)
+        rows.append(row)
+    db.commit()
+    for row in rows:
+        db.refresh(row)
+    return rows
+
+
+@app.get("/api/sca/projects/{project_id}/ai-triage/results", response_model=list[AiTriageOut], tags=["ai-triage"])
+async def list_ai_triage_results(
+    request: Request,
+    project_id: int,
+    user: Annotated[UserPayload, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> list[AiTriageOut]:
+    await require_action("sca:read", request, user, settings)
+    return list(db.scalars(select(AiTriageResult).where(AiTriageResult.project_id == project_id).order_by(AiTriageResult.priority_score.desc())).all())
+
+
+@app.post("/api/sca/ai-triage/{result_id}/confirm", response_model=AiTriageOut, tags=["ai-triage"])
+async def confirm_ai_triage_result(
+    request: Request,
+    result_id: int,
+    payload: AiTriageConfirmIn,
+    user: Annotated[UserPayload, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> AiTriageOut:
+    await require_action("sca:write", request, user, settings)
+    row = db.get(AiTriageResult, result_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="AI 降噪结果不存在")
+    row.human_status = payload.human_status
+    row.confirmed_at = datetime.now(timezone.utc)
+    db.commit()
+    db.refresh(row)
+    return row
+
+
+@app.get("/api/sca/assets/dashboard", response_model=AssetDashboardOut, tags=["assets"])
+async def assets_dashboard(
+    request: Request,
+    user: Annotated[UserPayload, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> AssetDashboardOut:
+    await require_action("sca:read", request, user, settings)
+    return AssetDashboardOut(**asset_dashboard(db))
+
+
+@app.get("/api/sca/assets/components", response_model=AssetComponentListOut, tags=["assets"])
+async def list_asset_components(
+    request: Request,
+    user: Annotated[UserPayload, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+    search: str = "",
+) -> AssetComponentListOut:
+    await require_action("sca:read", request, user, settings)
+    items = asset_components(db, search)
+    return AssetComponentListOut(total=len(items), items=items)
+
+
+@app.get("/api/sca/assets/graph", response_model=AssetGraphOut, tags=["assets"])
+async def assets_graph(
+    request: Request,
+    user: Annotated[UserPayload, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> AssetGraphOut:
+    await require_action("sca:read", request, user, settings)
+    return AssetGraphOut(**asset_graph(db))

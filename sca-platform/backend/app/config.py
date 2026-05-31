@@ -32,6 +32,19 @@ class Settings(BaseSettings):
     tool_syft_path: str = "syft"
     tool_trivy_path: str = "trivy"
     tool_grype_path: str = "grype"
+    risk_monitor_interval_seconds: int = 6 * 60 * 60
+    github_api_url: str = "https://api.github.com"
+    maven_search_url: str = "https://search.maven.org/solrsearch/select"
+    npm_registry_url: str = "https://registry.npmjs.org"
+    pypi_api_url: str = "https://pypi.org/pypi"
+    go_proxy_url: str = "https://proxy.golang.org"
+    eol_api_url: str = "https://endoflife.date/api"
+    notification_email_enabled: bool = False
+    notification_email_to: str = ""
+    openai_api_key: str = ""
+    openai_api_url: str = "https://api.openai.com/v1/chat/completions"
+    openai_model: str = "gpt-4o-mini"
+    openai_timeout_ms: int = 30000
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 

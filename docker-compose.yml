@@ -623,6 +623,19 @@ services:
       TOOL_SYFT_PATH: ${SCA_TOOL_SYFT_PATH:-syft}
       TOOL_TRIVY_PATH: ${SCA_TOOL_TRIVY_PATH:-trivy}
       TOOL_GRYPE_PATH: ${SCA_TOOL_GRYPE_PATH:-grype}
+      RISK_MONITOR_INTERVAL_SECONDS: ${SCA_RISK_MONITOR_INTERVAL_SECONDS:-21600}
+      GITHUB_API_URL: ${SCA_GITHUB_API_URL:-https://api.github.com}
+      MAVEN_SEARCH_URL: ${SCA_MAVEN_SEARCH_URL:-https://search.maven.org/solrsearch/select}
+      NPM_REGISTRY_URL: ${SCA_NPM_REGISTRY_URL:-https://registry.npmjs.org}
+      PYPI_API_URL: ${SCA_PYPI_API_URL:-https://pypi.org/pypi}
+      GO_PROXY_URL: ${SCA_GO_PROXY_URL:-https://proxy.golang.org}
+      EOL_API_URL: ${SCA_EOL_API_URL:-https://endoflife.date/api}
+      NOTIFICATION_EMAIL_ENABLED: ${SCA_NOTIFICATION_EMAIL_ENABLED:-false}
+      NOTIFICATION_EMAIL_TO: ${SCA_NOTIFICATION_EMAIL_TO:-}
+      OPENAI_API_KEY: ${SCA_OPENAI_API_KEY:-}
+      OPENAI_API_URL: ${SCA_OPENAI_API_URL:-https://api.openai.com/v1/chat/completions}
+      OPENAI_MODEL: ${SCA_OPENAI_MODEL:-gpt-4o-mini}
+      OPENAI_TIMEOUT_MS: ${SCA_OPENAI_TIMEOUT_MS:-30000}
     volumes:
       - sca-upload-data:/data/sca/uploads
       - sca-report-data:/data/sca/reports
@@ -669,6 +682,74 @@ services:
       TOOL_SYFT_PATH: ${SCA_TOOL_SYFT_PATH:-syft}
       TOOL_TRIVY_PATH: ${SCA_TOOL_TRIVY_PATH:-trivy}
       TOOL_GRYPE_PATH: ${SCA_TOOL_GRYPE_PATH:-grype}
+      RISK_MONITOR_INTERVAL_SECONDS: ${SCA_RISK_MONITOR_INTERVAL_SECONDS:-21600}
+      GITHUB_API_URL: ${SCA_GITHUB_API_URL:-https://api.github.com}
+      MAVEN_SEARCH_URL: ${SCA_MAVEN_SEARCH_URL:-https://search.maven.org/solrsearch/select}
+      NPM_REGISTRY_URL: ${SCA_NPM_REGISTRY_URL:-https://registry.npmjs.org}
+      PYPI_API_URL: ${SCA_PYPI_API_URL:-https://pypi.org/pypi}
+      GO_PROXY_URL: ${SCA_GO_PROXY_URL:-https://proxy.golang.org}
+      EOL_API_URL: ${SCA_EOL_API_URL:-https://endoflife.date/api}
+      NOTIFICATION_EMAIL_ENABLED: ${SCA_NOTIFICATION_EMAIL_ENABLED:-false}
+      NOTIFICATION_EMAIL_TO: ${SCA_NOTIFICATION_EMAIL_TO:-}
+      OPENAI_API_KEY: ${SCA_OPENAI_API_KEY:-}
+      OPENAI_API_URL: ${SCA_OPENAI_API_URL:-https://api.openai.com/v1/chat/completions}
+      OPENAI_MODEL: ${SCA_OPENAI_MODEL:-gpt-4o-mini}
+      OPENAI_TIMEOUT_MS: ${SCA_OPENAI_TIMEOUT_MS:-30000}
+    volumes:
+      - sca-upload-data:/data/sca/uploads
+      - sca-report-data:/data/sca/reports
+      - sca-sbom-data:/data/sca/sbom
+    depends_on:
+      sca-postgres:
+        condition: service_healthy
+      sca-redis:
+        condition: service_healthy
+
+  sca-beat:
+    build:
+      context: ./sca-platform/backend
+      dockerfile: Dockerfile
+    command: ["celery", "-A", "app.celery_app.celery_app", "beat", "--loglevel=INFO", "--schedule=/tmp/celerybeat-schedule"]
+    environment:
+      APP_NAME: "聚信软件成分分析平台"
+      APP_ENV: dev
+      APP_VERSION: ${SCA_APP_VERSION:-0.1.0}
+      DATABASE_URL: "postgresql+psycopg://sca_user:${SCA_POSTGRES_PASSWORD}@sca-postgres:5432/juxin_sca"
+      REDIS_URL: "redis://sca-redis:6379/0"
+      CELERY_BROKER_URL: "redis://sca-redis:6379/1"
+      CELERY_RESULT_BACKEND: "redis://sca-redis:6379/2"
+      AUTH_SERVICE_URL: "http://auth:5180"
+      AUTH_SYSTEM_KEY: "sca"
+      AUTH_COOKIE_NAME: "juxin_auth_token"
+      AUTH_DEV_BYPASS: "false"
+      CORS_ORIGINS: "http://localhost:18089,http://127.0.0.1:18089,http://${PUBLIC_HOST:-localhost}:18089"
+      UPLOAD_ROOT: "/data/sca/uploads"
+      UPLOAD_MAX_BYTES: ${SCA_UPLOAD_MAX_BYTES:-209715200}
+      CELERY_TASK_ALWAYS_EAGER: "false"
+      OSV_API_URL: ${SCA_OSV_API_URL:-https://api.osv.dev}
+      NVD_API_URL: ${SCA_NVD_API_URL:-https://services.nvd.nist.gov/rest/json/cves/2.0}
+      NVD_API_KEY: ${SCA_NVD_API_KEY:-}
+      GITHUB_ADVISORY_URL: ${SCA_GITHUB_ADVISORY_URL:-https://api.github.com/advisories}
+      GITHUB_TOKEN: ${SCA_GITHUB_TOKEN:-}
+      VULNERABILITY_FETCH_TIMEOUT_MS: ${SCA_VULNERABILITY_FETCH_TIMEOUT_MS:-8000}
+      REPORT_ROOT: "/data/sca/reports"
+      SBOM_ROOT: "/data/sca/sbom"
+      TOOL_SYFT_PATH: ${SCA_TOOL_SYFT_PATH:-syft}
+      TOOL_TRIVY_PATH: ${SCA_TOOL_TRIVY_PATH:-trivy}
+      TOOL_GRYPE_PATH: ${SCA_TOOL_GRYPE_PATH:-grype}
+      RISK_MONITOR_INTERVAL_SECONDS: ${SCA_RISK_MONITOR_INTERVAL_SECONDS:-21600}
+      GITHUB_API_URL: ${SCA_GITHUB_API_URL:-https://api.github.com}
+      MAVEN_SEARCH_URL: ${SCA_MAVEN_SEARCH_URL:-https://search.maven.org/solrsearch/select}
+      NPM_REGISTRY_URL: ${SCA_NPM_REGISTRY_URL:-https://registry.npmjs.org}
+      PYPI_API_URL: ${SCA_PYPI_API_URL:-https://pypi.org/pypi}
+      GO_PROXY_URL: ${SCA_GO_PROXY_URL:-https://proxy.golang.org}
+      EOL_API_URL: ${SCA_EOL_API_URL:-https://endoflife.date/api}
+      NOTIFICATION_EMAIL_ENABLED: ${SCA_NOTIFICATION_EMAIL_ENABLED:-false}
+      NOTIFICATION_EMAIL_TO: ${SCA_NOTIFICATION_EMAIL_TO:-}
+      OPENAI_API_KEY: ${SCA_OPENAI_API_KEY:-}
+      OPENAI_API_URL: ${SCA_OPENAI_API_URL:-https://api.openai.com/v1/chat/completions}
+      OPENAI_MODEL: ${SCA_OPENAI_MODEL:-gpt-4o-mini}
+      OPENAI_TIMEOUT_MS: ${SCA_OPENAI_TIMEOUT_MS:-30000}
     volumes:
       - sca-upload-data:/data/sca/uploads
       - sca-report-data:/data/sca/reports

@@ -10,7 +10,8 @@ from sqlalchemy import delete
 from .config import get_settings
 from .database import SessionLocal, init_db
 from .dependency_parser import parse_source_dependencies
-from .models import Component, ComponentDependency, ScanLog, ScanTask, UploadFileRecord
+from .models import Component, ComponentDependency, RiskAlert, RiskChangeRecord, RiskMonitorRun, RiskMonitorSnapshot, ScanLog, ScanTask, UploadFileRecord, VulnerabilityRecord
+from .risk_monitor_service import monitor_component_update, raw_json, snapshot_risk_level
 
 settings = get_settings()
 
@@ -21,6 +22,12 @@ celery_app = Celery(
 )
 celery_app.conf.broker_connection_retry_on_startup = True
 celery_app.conf.task_always_eager = settings.celery_task_always_eager
+celery_app.conf.beat_schedule = {
+    "sca-risk-monitor": {
+        "task": "sca.monitor_risks",
+        "schedule": settings.risk_monitor_interval_seconds,
+    }
+}
 
 
 def _safe_target(root: Path, member_name: str) -> Path:
@@ -135,3 +142,70 @@ def scan_uploaded_file(scan_task_id: int) -> dict[str, int | str]:
             db.add(ScanLog(scan_task_id=task.id, level="error", message=str(exc)))
             db.commit()
             return {"status": "failed", "components": 0}
+
+
+@celery_app.task(name="sca.monitor_risks")
+def monitor_risks() -> dict[str, int | str]:
+    init_db()
+    with SessionLocal() as db:
+        run = RiskMonitorRun(status="running", summary="持续风险监测执行中")
+        db.add(run)
+        db.flush()
+        components = db.query(Component).all()
+        updated = 0
+        for component in components:
+            data = monitor_component_update(component, settings)
+            vulnerability_count = db.query(VulnerabilityRecord).filter_by(component_id=component.id).count()
+            risk_level = snapshot_risk_level(
+                bool(data["update_available"]),
+                str(data["version_delta"]),
+                str(data["eol_status"]),
+                vulnerability_count,
+            )
+            snapshot = RiskMonitorSnapshot(
+                project_id=component.project_id,
+                component_id=component.id,
+                component_name=component.package_name,
+                current_version=component.package_version,
+                latest_version=str(data["latest_version"]),
+                latest_source=str(data["latest_source"]),
+                update_available=bool(data["update_available"]),
+                version_delta=str(data["version_delta"]),
+                eol_status=str(data["eol_status"]),
+                eol_date=str(data["eol_date"]),
+                vulnerability_count=vulnerability_count,
+                risk_level=risk_level,
+                recommendation=str(data["recommendation"]),
+                raw_json=raw_json(data.get("raw") or {}),
+            )
+            db.add(snapshot)
+            if snapshot.update_available:
+                updated += 1
+                db.add(
+                    RiskChangeRecord(
+                        project_id=component.project_id,
+                        component_id=component.id,
+                        change_type="version_update",
+                        before_value=component.package_version,
+                        after_value=snapshot.latest_version,
+                        message=snapshot.recommendation,
+                    )
+                )
+                db.add(
+                    RiskAlert(
+                        project_id=component.project_id,
+                        component_id=component.id,
+                        level=risk_level if risk_level in {"high", "medium", "low"} else "medium",
+                        title=f"{component.package_name} 存在版本更新",
+                        message=snapshot.recommendation,
+                        notification_channel="email" if settings.notification_email_enabled else "",
+                        email_to=settings.notification_email_to,
+                    )
+                )
+        run.status = "success"
+        run.checked_projects = len({component.project_id for component in components})
+        run.updated_components = updated
+        run.summary = f"已监测组件 {len(components)} 个，发现更新 {updated} 个"
+        run.finished_at = datetime.now(timezone.utc)
+        db.commit()
+        return {"status": "success", "components": len(components), "updates": updated}

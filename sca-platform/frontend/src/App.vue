@@ -31,6 +31,18 @@
           <el-icon><Files /></el-icon>
           <span>SBOM/镜像扫描</span>
         </el-menu-item>
+        <el-menu-item index="monitor">
+          <el-icon><Bell /></el-icon>
+          <span>持续监测</span>
+        </el-menu-item>
+        <el-menu-item index="ai">
+          <el-icon><MagicStick /></el-icon>
+          <span>AI 降噪</span>
+        </el-menu-item>
+        <el-menu-item index="assets">
+          <el-icon><Share /></el-icon>
+          <span>资产中心</span>
+        </el-menu-item>
         <el-menu-item index="logs">
           <el-icon><Document /></el-icon>
           <span>扫描日志</span>
@@ -48,7 +60,7 @@
         <div>
           <p class="eyebrow">Software Composition Analysis</p>
           <h1>聚信软件成分分析平台</h1>
-          <p class="sub">上传源码包后自动识别依赖，联动 OSV、NVD 与 GitHub Advisory 查询漏洞，并生成中文安全报告、SBOM 与镜像扫描结果。</p>
+          <p class="sub">上传源码包后自动识别依赖，联动漏洞情报、报告、SBOM、持续监测、AI 降噪与资产中心，形成可追踪的软件供应链风险闭环。</p>
         </div>
         <div class="hero-actions">
           <el-button :icon="Refresh" @click="refreshAll">刷新</el-button>
@@ -108,6 +120,7 @@
             <li>OSV / NVD / GitHub Advisory 漏洞查询</li>
             <li>Word / PDF / Excel 中文报告导出</li>
             <li>CycloneDX / SPDX SBOM 与镜像风险评分</li>
+            <li>持续风险监测、AI 降噪与软件资产地图</li>
           </ul>
         </div>
       </section>
@@ -325,6 +338,134 @@
         </div>
       </section>
 
+      <section v-if="activeMenu === 'monitor'" class="workbench">
+        <div class="panel">
+          <div class="panel-head">
+            <h2>持续风险监测</h2>
+            <div class="panel-actions">
+              <el-select v-model="selectedProjectId" placeholder="选择项目" style="width: 220px" @change="loadProjectDetails">
+                <el-option v-for="project in projects" :key="project.id" :label="project.name" :value="project.id" />
+              </el-select>
+              <el-button type="primary" :loading="monitorRunning" :icon="Bell" @click="runRiskMonitor">立即监测</el-button>
+            </div>
+          </div>
+          <el-table :data="riskSnapshots" empty-text="暂无监测快照">
+            <el-table-column prop="risk_level" label="风险" width="90">
+              <template #default="{ row }"><el-tag :type="severityTag(row.risk_level)">{{ severityLabel(row.risk_level) }}</el-tag></template>
+            </el-table-column>
+            <el-table-column prop="component_name" label="组件" min-width="180" show-overflow-tooltip />
+            <el-table-column prop="current_version" label="当前版本" width="120" show-overflow-tooltip />
+            <el-table-column prop="latest_version" label="最新版本" width="120" show-overflow-tooltip />
+            <el-table-column prop="version_delta" label="更新级别" width="100" />
+            <el-table-column prop="eol_status" label="生命周期" width="110" />
+            <el-table-column prop="recommendation" label="更新建议" min-width="240" show-overflow-tooltip />
+          </el-table>
+        </div>
+        <div class="panel side-panel">
+          <div class="panel-head"><h2>风险提醒</h2></div>
+          <div class="trend">
+            <div v-for="item in riskTrend" :key="item.day" class="trend-row">
+              <span>{{ item.day }}</span>
+              <div class="trend-bar">
+                <i class="high" :style="{ width: trendWidth(item.high, item.total) }"></i>
+                <i class="medium" :style="{ width: trendWidth(item.medium, item.total) }"></i>
+                <i class="low" :style="{ width: trendWidth(item.low, item.total) }"></i>
+              </div>
+              <b>{{ item.total }}</b>
+            </div>
+          </div>
+          <el-table :data="riskAlerts" empty-text="暂无提醒" size="small">
+            <el-table-column prop="level" label="等级" width="80" />
+            <el-table-column prop="title" label="提醒" min-width="160" show-overflow-tooltip />
+          </el-table>
+        </div>
+      </section>
+
+      <section v-if="activeMenu === 'ai'" class="workbench">
+        <div class="panel">
+          <div class="panel-head">
+            <h2>AI 漏洞降噪</h2>
+            <div class="panel-actions">
+              <el-select v-model="selectedProjectId" placeholder="选择项目" style="width: 220px" @change="loadProjectDetails">
+                <el-option v-for="project in projects" :key="project.id" :label="project.name" :value="project.id" />
+              </el-select>
+              <el-button type="primary" :loading="aiAnalyzing" :icon="MagicStick" @click="runAiTriage">批量分析</el-button>
+            </div>
+          </div>
+          <div class="ai-context">
+            <el-checkbox v-model="aiContext.internet_exposed">公网</el-checkbox>
+            <el-checkbox v-model="aiContext.core_business">核心业务</el-checkbox>
+            <el-checkbox v-model="aiContext.actually_called">实际调用</el-checkbox>
+            <el-checkbox v-model="aiContext.runtime_path">运行路径</el-checkbox>
+            <el-checkbox v-model="aiContext.has_waf_ips">WAF/IPS</el-checkbox>
+            <el-select v-model="aiContext.fix_complexity" style="width: 140px">
+              <el-option label="低复杂度" value="low" />
+              <el-option label="中复杂度" value="medium" />
+              <el-option label="高复杂度" value="high" />
+            </el-select>
+          </div>
+          <el-table :data="aiResults" empty-text="暂无 AI 分析结果">
+            <el-table-column prop="ai_risk_level" label="AI 等级" width="100" />
+            <el-table-column prop="priority_score" label="优先级" width="90" />
+            <el-table-column prop="noise_reason" label="降噪原因" min-width="220" show-overflow-tooltip />
+            <el-table-column prop="remediation" label="修复建议" min-width="220" show-overflow-tooltip />
+            <el-table-column prop="fix_deadline" label="期限" width="100" />
+            <el-table-column prop="token_total" label="Token" width="90" />
+            <el-table-column label="人工确认" width="150">
+              <template #default="{ row }">
+                <el-button text type="primary" @click="confirmAi(row, 'accepted')">确认</el-button>
+                <el-button text type="warning" @click="confirmAi(row, 'false_positive')">误报</el-button>
+              </template>
+            </el-table-column>
+          </el-table>
+        </div>
+        <div class="panel side-panel">
+          <div class="panel-head"><h2>排序因素</h2></div>
+          <ul class="capability-list">
+            <li>公网、核心业务、实际调用、运行路径</li>
+            <li>POC、在野利用、开发/测试依赖</li>
+            <li>WAF/IPS、修复复杂度、人工确认</li>
+          </ul>
+        </div>
+      </section>
+
+      <section v-if="activeMenu === 'assets'" class="workbench">
+        <div class="panel">
+          <div class="panel-head">
+            <h2>软件资产中心</h2>
+            <div class="panel-actions">
+              <el-input v-model="assetSearch" placeholder="搜索组件" style="width: 220px" @keyup.enter="loadAssets" />
+              <el-button :icon="Search" @click="loadAssets">搜索</el-button>
+            </div>
+          </div>
+          <section class="metric-grid asset-metrics">
+            <div class="metric"><span>组件</span><strong>{{ assetDashboard.component_total }}</strong></div>
+            <div class="metric danger"><span>漏洞</span><strong>{{ assetDashboard.vulnerability_total }}</strong></div>
+            <div class="metric warn"><span>EOL</span><strong>{{ assetDashboard.eol_total }}</strong></div>
+            <div class="metric"><span>License 风险</span><strong>{{ assetDashboard.license_risk_total }}</strong></div>
+          </section>
+          <el-table :data="assetComponents" empty-text="暂无资产">
+            <el-table-column prop="highest_severity" label="风险" width="90" />
+            <el-table-column prop="package_name" label="组件" min-width="180" show-overflow-tooltip />
+            <el-table-column prop="ecosystem" label="生态" width="100" />
+            <el-table-column prop="project_count" label="项目数" width="90" />
+            <el-table-column prop="version_count" label="版本数" width="90" />
+            <el-table-column prop="vulnerability_count" label="漏洞数" width="90" />
+            <el-table-column prop="eol_status" label="EOL" width="90" />
+            <el-table-column prop="license_name" label="License" width="130" show-overflow-tooltip />
+          </el-table>
+        </div>
+        <div class="panel side-panel">
+          <div class="panel-head"><h2>组件图谱</h2></div>
+          <div class="graph-list">
+            <div v-for="node in assetGraph.nodes.slice(0, 14)" :key="node.id" class="graph-node">
+              <span>{{ node.type }}</span>
+              <strong>{{ node.label }}</strong>
+            </div>
+          </div>
+        </div>
+      </section>
+
       <section v-if="activeMenu === 'logs'" class="panel">
         <div class="panel-head">
           <h2>扫描日志</h2>
@@ -344,7 +485,7 @@
 
 <script setup>
 import { computed, onMounted, reactive, ref } from 'vue'
-import { Connection, DataAnalysis, Document, Files, Grid, Refresh, Search, UploadFilled, WarningFilled } from '@element-plus/icons-vue'
+import { Bell, Connection, DataAnalysis, Document, Files, Grid, MagicStick, Refresh, Search, Share, UploadFilled, WarningFilled } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { requestJson, resumableUploadWithProgress, uploadArchiveWithProgress, uploadImageTarWithProgress } from './api'
 
@@ -356,6 +497,8 @@ const vulnerabilityQuerying = ref(false)
 const reportCreating = ref(false)
 const sbomCreating = ref(false)
 const imageScanning = ref(false)
+const monitorRunning = ref(false)
+const aiAnalyzing = ref(false)
 const uploadProgress = ref(0)
 const imageUploadProgress = ref(0)
 const selectedFile = ref(null)
@@ -372,6 +515,14 @@ const vulnerabilityTrend = ref([])
 const reports = ref([])
 const sboms = ref([])
 const imageScans = ref([])
+const riskSnapshots = ref([])
+const riskAlerts = ref([])
+const riskTrend = ref([])
+const riskChanges = ref([])
+const aiResults = ref([])
+const assetComponents = ref([])
+const assetGraph = ref({ nodes: [], edges: [] })
+const assetSearch = ref('')
 const reportFormat = ref('docx')
 const sbomFormat = ref('cyclonedx')
 const overview = reactive({
@@ -389,6 +540,24 @@ const uploadForm = reactive({
 const imageScanForm = reactive({
   imageRef: '',
   scanner: 'trivy',
+})
+const aiContext = reactive({
+  internet_exposed: false,
+  core_business: false,
+  actually_called: false,
+  runtime_path: false,
+  has_waf_ips: false,
+  fix_complexity: 'medium',
+})
+const assetDashboard = reactive({
+  project_total: 0,
+  component_total: 0,
+  vulnerability_total: 0,
+  high_risk_total: 0,
+  eol_total: 0,
+  license_risk_total: 0,
+  by_ecosystem: {},
+  by_severity: {},
 })
 const vulnerabilityStats = reactive({
   total: 0,
@@ -466,6 +635,12 @@ const loadProjectDetails = async () => {
   vulnerabilityTrend.value = trend?.items || []
   reports.value = (await requestJson(`/api/sca/projects/${selectedProjectId.value}/reports`)) || []
   sboms.value = (await requestJson(`/api/sca/projects/${selectedProjectId.value}/sbom`)) || []
+  riskSnapshots.value = (await requestJson(`/api/sca/projects/${selectedProjectId.value}/risk-monitor/snapshots`)) || []
+  riskAlerts.value = (await requestJson(`/api/sca/projects/${selectedProjectId.value}/risk-monitor/alerts`)) || []
+  riskChanges.value = (await requestJson(`/api/sca/projects/${selectedProjectId.value}/risk-monitor/changes`)) || []
+  const monitorTrend = await requestJson(`/api/sca/projects/${selectedProjectId.value}/risk-monitor/trend`)
+  riskTrend.value = monitorTrend?.items || []
+  aiResults.value = (await requestJson(`/api/sca/projects/${selectedProjectId.value}/ai-triage/results`)) || []
 }
 
 const refreshAll = async () => {
@@ -602,6 +777,66 @@ const loadImageScans = async () => {
   imageScans.value = (await requestJson('/api/sca/image-scans')) || []
 }
 
+const runRiskMonitor = async () => {
+  if (!selectedProjectId.value) {
+    ElMessage.warning('请先选择项目')
+    return
+  }
+  monitorRunning.value = true
+  try {
+    const data = await requestJson(`/api/sca/projects/${selectedProjectId.value}/risk-monitor/run`, { method: 'POST' })
+    await loadProjectDetails()
+    ElMessage.success(data?.summary || '持续风险监测完成')
+  } catch (err) {
+    ElMessage.error(err?.message || '持续风险监测失败')
+  } finally {
+    monitorRunning.value = false
+  }
+}
+
+const runAiTriage = async () => {
+  if (!selectedProjectId.value) {
+    ElMessage.warning('请先选择项目')
+    return
+  }
+  const ids = vulnerabilities.value.map((item) => item.id)
+  if (!ids.length) {
+    ElMessage.warning('请先查询漏洞')
+    return
+  }
+  aiAnalyzing.value = true
+  try {
+    aiResults.value = await requestJson(`/api/sca/projects/${selectedProjectId.value}/ai-triage/analyze`, {
+      method: 'POST',
+      body: JSON.stringify({ vulnerability_ids: ids, context: aiContext }),
+    })
+    ElMessage.success('AI 降噪分析完成')
+  } catch (err) {
+    ElMessage.error(err?.message || 'AI 降噪失败')
+  } finally {
+    aiAnalyzing.value = false
+  }
+}
+
+const confirmAi = async (row, status) => {
+  await requestJson(`/api/sca/ai-triage/${row.id}/confirm`, {
+    method: 'POST',
+    body: JSON.stringify({ human_status: status }),
+  })
+  await loadProjectDetails()
+  ElMessage.success('已确认')
+}
+
+const loadAssets = async () => {
+  const dashboard = await requestJson('/api/sca/assets/dashboard')
+  if (dashboard) Object.assign(assetDashboard, dashboard)
+  const params = new URLSearchParams()
+  if (assetSearch.value.trim()) params.set('search', assetSearch.value.trim())
+  const componentsData = await requestJson(`/api/sca/assets/components?${params.toString()}`)
+  assetComponents.value = componentsData?.items || []
+  assetGraph.value = (await requestJson('/api/sca/assets/graph')) || { nodes: [], edges: [] }
+}
+
 const scanImage = async () => {
   if (!imageScanForm.imageRef.trim()) {
     ElMessage.warning('请填写 Docker 镜像名称')
@@ -657,4 +892,5 @@ const enqueueTask = async () => {
 
 onMounted(refreshAll)
 onMounted(loadImageScans)
+onMounted(loadAssets)
 </script>

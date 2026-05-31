@@ -230,3 +230,164 @@ class ImageScanFindingOut(BaseModel):
     description: str
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class RiskMonitorRunOut(BaseModel):
+    id: int
+    status: str
+    summary: str
+    checked_projects: int
+    updated_components: int
+    started_at: datetime
+    finished_at: datetime | None = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class RiskMonitorSnapshotOut(BaseModel):
+    id: int
+    project_id: int
+    component_id: int | None = None
+    component_name: str
+    current_version: str
+    latest_version: str
+    latest_source: str
+    update_available: bool
+    version_delta: str
+    eol_status: str
+    eol_date: str
+    vulnerability_count: int
+    risk_level: str
+    recommendation: str
+    checked_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class RiskChangeOut(BaseModel):
+    id: int
+    project_id: int
+    component_id: int | None = None
+    change_type: str
+    before_value: str
+    after_value: str
+    message: str
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class RiskAlertOut(BaseModel):
+    id: int
+    project_id: int
+    component_id: int | None = None
+    level: str
+    title: str
+    message: str
+    status: str
+    notification_channel: str
+    email_to: str
+    created_at: datetime
+    acknowledged_at: datetime | None = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class RiskTrendItem(BaseModel):
+    day: str
+    total: int
+    critical: int = 0
+    high: int = 0
+    medium: int = 0
+    low: int = 0
+
+
+class RiskTrendOut(BaseModel):
+    items: list[RiskTrendItem]
+
+
+class AiTriageContext(BaseModel):
+    internet_exposed: bool = False
+    core_business: bool = False
+    actually_called: bool = False
+    runtime_path: bool = False
+    has_waf_ips: bool = False
+    fix_complexity: str = "medium"
+    extra: dict[str, object] = Field(default_factory=dict)
+
+
+class AiTriageAnalyzeIn(BaseModel):
+    vulnerability_ids: list[int]
+    context: AiTriageContext = Field(default_factory=AiTriageContext)
+
+
+class AiTriageConfirmIn(BaseModel):
+    human_status: str = Field(pattern="^(accepted|false_positive|deferred|ignored)$")
+
+
+class AiTriageOut(BaseModel):
+    id: int
+    project_id: int
+    vulnerability_id: int
+    ai_risk_level: str
+    noise_reason: str
+    immediate_fix: bool
+    suspected_false_positive: bool
+    remediation: str
+    fix_deadline: str
+    risk_explanation: str
+    priority_score: float
+    human_status: str
+    token_prompt: int
+    token_completion: int
+    token_total: int
+    model: str
+    created_at: datetime
+    confirmed_at: datetime | None = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class AssetDashboardOut(BaseModel):
+    project_total: int
+    component_total: int
+    vulnerability_total: int
+    high_risk_total: int
+    eol_total: int
+    license_risk_total: int
+    by_ecosystem: dict[str, int]
+    by_severity: dict[str, int]
+
+
+class AssetComponentOut(BaseModel):
+    package_name: str
+    ecosystem: str
+    project_count: int
+    version_count: int
+    vulnerability_count: int
+    highest_severity: str
+    eol_status: str = "unknown"
+    license_name: str = "unknown"
+
+
+class AssetComponentListOut(BaseModel):
+    total: int
+    items: list[AssetComponentOut]
+
+
+class AssetGraphNode(BaseModel):
+    id: str
+    label: str
+    type: str
+    risk: str = "low"
+
+
+class AssetGraphEdge(BaseModel):
+    source: str
+    target: str
+    label: str = ""
+
+
+class AssetGraphOut(BaseModel):
+    nodes: list[AssetGraphNode]
+    edges: list[AssetGraphEdge]

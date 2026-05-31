@@ -1,6 +1,6 @@
 # 聚信软件成分分析平台
 
-当前版本已完成第一到第六阶段：基础项目初始化、源码上传、依赖识别、漏洞查询、报告导出、SBOM 与容器镜像扫描。技术栈保持 FastAPI + Vue3 + Element Plus + PostgreSQL + Redis + Celery + Docker Compose，并复用聚信统一登录平台。
+当前版本已完成第一到第九阶段：基础项目初始化、源码上传、依赖识别、漏洞查询、报告导出、SBOM 与容器镜像扫描、持续风险监测、AI 漏洞降噪、软件资产中心。技术栈保持 FastAPI + Vue3 + Element Plus + PostgreSQL + Redis + Celery + Docker Compose，并复用聚信统一登录平台。
 
 ## 1. 项目总体架构
 
@@ -11,12 +11,15 @@
   -> sca-postgres:5432 / PostgreSQL
   -> sca-redis:6379 / Redis
   -> sca-worker / Celery
+  -> sca-beat / Celery Beat
   -> OSV / NVD / GitHub Advisory
+  -> Maven Central / npm / PyPI / Go Proxy / GitHub Releases
+  -> OpenAI Chat Completions JSON Schema
   -> Syft / Trivy / Grype CLI
   -> auth:5180 / 聚信统一登录平台
 ```
 
-平台以源码包和镜像为输入，沉淀项目、上传文件、组件、漏洞、报告、SBOM、镜像扫描记录，所有运行路径均由 Docker Compose 承载。
+平台以源码包和镜像为输入，沉淀项目、上传文件、组件、漏洞、报告、SBOM、镜像扫描、持续监测、AI 降噪与软件资产记录，所有运行路径均由 Docker Compose 承载。
 
 ## 2. 目录结构
 
@@ -30,6 +33,8 @@ sca-platform
 │   ├── Dockerfile
 │   ├── app
 │   │   ├── auth.py
+│   │   ├── ai_triage_service.py
+│   │   ├── asset_service.py
 │   │   ├── celery_app.py
 │   │   ├── config.py
 │   │   ├── database.py
@@ -37,6 +42,7 @@ sca-platform
 │   │   ├── main.py
 │   │   ├── models.py
 │   │   ├── report_service.py
+│   │   ├── risk_monitor_service.py
 │   │   ├── schemas.py
 │   │   ├── sbom_service.py
 │   │   ├── upload_service.py
@@ -74,6 +80,7 @@ sca-platform
 - `sca-redis`：Redis 7，供缓存和 Celery 使用
 - `sca-api`：FastAPI，端口 `5191`
 - `sca-worker`：Celery worker
+- `sca-beat`：Celery Beat，定时触发持续风险监测
 - `web-sca`：Nginx 托管 Vue3 静态文件，端口 `18089`
 - `sca-report-data`：报告文件持久化卷
 - `sca-sbom-data`：SBOM、镜像 tar 持久化卷
@@ -253,6 +260,123 @@ CELERY_RESULT_BACKEND=redis://sca-redis:6379/2
 - `GET /api/sca/image-scans`：镜像扫描列表
 - `GET /api/sca/image-scans/{scan_id}/findings`：镜像漏洞明细
 
+## 12. 第七阶段：持续风险监测
+
+### GitHub API 调用
+
+服务位于 `backend/app/risk_monitor_service.py`，GitHub Release 使用：
+
+```text
+GET {GITHUB_API_URL}/repos/{owner}/{repo}/releases/latest
+Authorization: Bearer {GITHUB_TOKEN}
+```
+
+### Maven / PyPI / npm / Go 查询逻辑
+
+- Maven：`MAVEN_SEARCH_URL?q=g:"groupId" AND a:"artifactId"&rows=1&wt=json`
+- npm：`{NPM_REGISTRY_URL}/{package}`，读取 `dist-tags.latest`
+- PyPI：`{PYPI_API_URL}/{package}/json`，读取 `info.version`
+- Go：`{GO_PROXY_URL}/{module}/@latest`，读取 `Version`
+
+### 版本比较算法
+
+`compare_versions()` 支持 `v1.2.3`、预发布后缀、主/次/补丁比较；`version_delta()` 输出 `major/minor/patch/none`。
+
+### Celery 定时任务
+
+`sca-beat` 每 `RISK_MONITOR_INTERVAL_SECONDS` 秒触发 `sca.monitor_risks`：
+
+1. 查询组件最新版本和生命周期状态
+2. 统计组件关联漏洞变化
+3. 写入 `risk_monitor_snapshots`
+4. 写入 `risk_change_records`
+5. 产生 `risk_alerts`
+6. 如启用邮件通知，记录通知渠道和收件人
+
+### API 接口
+
+- `POST /api/sca/projects/{project_id}/risk-monitor/run`：手动执行项目监测
+- `GET /api/sca/projects/{project_id}/risk-monitor/snapshots`：监测快照
+- `GET /api/sca/projects/{project_id}/risk-monitor/alerts`：风险提醒
+- `GET /api/sca/projects/{project_id}/risk-monitor/changes`：历史变化记录
+- `GET /api/sca/projects/{project_id}/risk-monitor/trend`：提醒趋势图数据
+
+### Vue3 页面
+
+菜单“持续监测”提供项目选择、立即监测、版本更新建议、EOL 状态、风险提醒和趋势条形图。
+
+## 13. 第八阶段：AI 漏洞降噪与优先级排序
+
+### OpenAI API 集成
+
+服务位于 `backend/app/ai_triage_service.py`，通过 Chat Completions 调用：
+
+```text
+POST {OPENAI_API_URL}
+model={OPENAI_MODEL}
+response_format.type=json_schema
+```
+
+未配置 `OPENAI_API_KEY` 时自动使用本地规则降级，结果标记为 `local-heuristic`，便于开发和离线测试。
+
+### Prompt 模板
+
+系统提示要求模型不要只按 CVSS 排序，必须综合公网暴露、核心业务、实际调用、运行路径、POC、在野利用、依赖范围、WAF/IPS 与修复复杂度。
+
+### JSON Schema
+
+模型必须输出：
+
+- `ai_risk_level`：`P0/P1/P2/P3/Ignore/Review`
+- `noise_reason`
+- `immediate_fix`
+- `suspected_false_positive`
+- `remediation`
+- `fix_deadline`
+- `risk_explanation`
+- `priority_score`
+
+### 脱敏方案
+
+`sanitize_for_ai()` 会递归脱敏 `token/secret/password/authorization/cookie/api_key`，并移除 URL 中的用户名密码。AI 请求只发送漏洞必要字段和业务上下文，不发送源码文件内容。
+
+### 数据库设计
+
+新增 `ai_triage_results`，记录 AI 风险等级、降噪原因、修复建议、人工确认状态、模型名和 token 统计。
+
+### API 接口
+
+- `POST /api/sca/projects/{project_id}/ai-triage/analyze`：批量 AI 分析
+- `GET /api/sca/projects/{project_id}/ai-triage/results`：AI 结果列表
+- `POST /api/sca/ai-triage/{result_id}/confirm`：人工确认、误报、延期、忽略
+
+### Vue3 页面
+
+菜单“AI 降噪”提供上下文勾选、批量分析、Token 统计、修复期限和人工确认。
+
+## 14. 第九阶段：软件资产中心
+
+### Dashboard 页面
+
+菜单“资产中心”提供全局组件库、全局漏洞统计、风险趋势、风险分布、EOL 统计、License 风险统计和资产搜索。
+
+### 图谱设计
+
+`asset_graph()` 输出项目节点、组件节点、项目组件关系、组件依赖关系。
+
+### 风险统计逻辑
+
+- 全局组件库按 `ecosystem + package_name` 聚合
+- 风险排序结合最高漏洞等级和漏洞数量
+- EOL 来源于持续监测快照
+- License 风险默认识别 `GPL/AGPL/LGPL/unknown`
+
+### API 接口
+
+- `GET /api/sca/assets/dashboard`
+- `GET /api/sca/assets/components?search=`
+- `GET /api/sca/assets/graph`
+
 ### Celery 任务
 
 上传完成后自动创建 `scan_tasks` 记录，并投递 `sca.scan_uploaded_file`：
@@ -289,7 +413,7 @@ docker compose exec -T sca-api curl -sS http://localhost:5191/api/sca/projects/1
 docker compose exec -T sca-api curl -sS http://localhost:5191/api/sca/projects/1/scan-logs
 ```
 
-## 12. 启动方法
+## 15. 启动方法
 
 Linux/macOS：
 
@@ -321,7 +445,7 @@ cp .env.example .env
 - 后端：`http://localhost:5191`
 - 统一登录：`http://localhost:5180`
 
-## 13. 测试方法
+## 16. 测试方法
 
 Linux/macOS：
 
@@ -358,7 +482,21 @@ cd /Users/zhanglei/Documents/codex-new/sca-platform
 docker compose build web-sca
 ```
 
-## 14. 如何验证上传、漏洞、报告和 SBOM 成功
+第七到第九阶段单独验证：
+
+```bash
+cd /Users/zhanglei/Documents/codex-new/sca-platform
+docker compose run --rm --no-deps \
+  -e PYTHONPATH=/app \
+  -e DATABASE_URL=sqlite:////tmp/sca-test.db \
+  -e AUTH_DEV_BYPASS=true \
+  -e CELERY_TASK_ALWAYS_EAGER=true \
+  -v "$PWD/backend/tests:/app/tests:ro" \
+  sca-api pytest -o cache_dir=/tmp/.pytest_cache -o asyncio_default_fixture_loop_scope=function \
+  tests/test_risk_monitor.py tests/test_ai_triage_assets.py
+```
+
+## 17. 如何验证上传、漏洞、报告、SBOM、监测和资产成功
 
 1. 前端访问 `http://localhost:18089`
 2. 进入“源码上传”
@@ -371,9 +509,12 @@ docker compose build web-sca
 9. 进入“漏洞查询”，点击“查询漏洞”，能看到漏洞列表、统计和趋势
 10. 进入“报告导出”，生成并下载 Word / PDF / Excel 报告
 11. 进入“SBOM/镜像扫描”，生成 CycloneDX / SPDX，或输入镜像名进行扫描
-12. 进入“扫描日志”，能看到解析日志和识别数量
+12. 进入“持续监测”，点击“立即监测”，能看到更新建议、提醒和趋势
+13. 进入“AI 降噪”，勾选业务上下文并点击“批量分析”
+14. 进入“资产中心”，能看到全局组件、漏洞、EOL、License 风险和图谱
+15. 进入“扫描日志”，能看到解析日志和识别数量
 
-## 15. 常见报错解决方案
+## 18. 常见报错解决方案
 
 ### 端口被占用
 
@@ -463,6 +604,25 @@ TOOL_GRYPE_PATH=grype
 docker compose logs sca-api
 docker compose exec sca-api ls -lah /data/sca/reports /data/sca/sbom
 ```
+
+### Celery Beat 权限错误
+
+Compose 已将 Beat schedule 写到 `/tmp/celerybeat-schedule`。如果自定义命令，请保留：
+
+```bash
+--schedule=/tmp/celerybeat-schedule
+```
+
+### AI 降噪没有调用 OpenAI
+
+确认已通过环境变量配置密钥，密钥不要写入代码：
+
+```bash
+OPENAI_API_KEY=your_key
+OPENAI_MODEL=gpt-4o-mini
+```
+
+未配置时系统会使用本地规则降级，页面仍可测试流程。
 
 ### 扫描失败
 
