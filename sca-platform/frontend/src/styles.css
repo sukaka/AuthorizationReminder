@@ -333,6 +333,47 @@ body {
   overflow-wrap: anywhere;
 }
 
+.component-evidence {
+  padding: 12px 18px 14px;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  background: #f8fafc;
+}
+
+.component-evidence div {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.component-evidence strong,
+.component-evidence code {
+  overflow-wrap: anywhere;
+}
+
+.component-evidence code {
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #ffffff;
+  color: #344054;
+}
+
+.component-evidence .evidence-text {
+  grid-column: 1 / -1;
+}
+
+.component-evidence .conflict code {
+  border-color: rgba(217, 119, 6, 0.4);
+  color: #92400e;
+  background: #fffbeb;
+}
+
+.version-text {
+  margin-left: 6px;
+}
+
 @media (max-width: 980px) {
   .app-shell {
     grid-template-columns: 1fr;
@@ -345,6 +386,10 @@ body {
 
   .metric-grid,
   .workbench {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .component-evidence {
     grid-template-columns: 1fr 1fr;
   }
 }
@@ -372,5 +417,9 @@ body {
   .panel-actions {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .component-evidence {
+    grid-template-columns: 1fr;
   }
 }

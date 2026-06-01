@@ -193,10 +193,55 @@
             </el-select>
           </div>
           <el-table :data="components" empty-text="暂无依赖，请等待扫描完成">
+            <el-table-column type="expand">
+              <template #default="{ row }">
+                <div class="component-evidence">
+                  <div>
+                    <span class="muted">标准包名</span>
+                    <strong>{{ row.normalized_name || row.package_name }}</strong>
+                  </div>
+                  <div>
+                    <span class="muted">PURL</span>
+                    <strong>{{ row.purl || '-' }}</strong>
+                  </div>
+                  <div>
+                    <span class="muted">CPE</span>
+                    <strong>{{ row.cpe || '-' }}</strong>
+                  </div>
+                  <div>
+                    <span class="muted">证据文件</span>
+                    <strong>{{ row.evidence_file || row.source_path || '-' }}{{ row.evidence_line ? `:${row.evidence_line}` : '' }}</strong>
+                  </div>
+                  <div>
+                    <span class="muted">识别方式</span>
+                    <strong>{{ row.detected_by || '-' }} / {{ row.evidence_level || '-' }}</strong>
+                  </div>
+                  <div>
+                    <span class="muted">置信度</span>
+                    <strong>{{ Math.round((row.confidence_score || 0) * 100) }}%</strong>
+                  </div>
+                  <div class="evidence-text">
+                    <span class="muted">证据文本</span>
+                    <code>{{ row.evidence_text || '-' }}</code>
+                  </div>
+                  <div v-if="row.version_conflict" class="evidence-text conflict">
+                    <span class="muted">版本来源不一致</span>
+                    <code>{{ row.conflict_reason }}</code>
+                  </div>
+                </div>
+              </template>
+            </el-table-column>
             <el-table-column prop="ecosystem" label="生态" width="110" />
             <el-table-column prop="package_name" label="依赖名称" min-width="220" show-overflow-tooltip />
-            <el-table-column prop="package_version" label="版本" width="140" show-overflow-tooltip />
+            <el-table-column prop="package_version" label="版本" width="140" show-overflow-tooltip>
+              <template #default="{ row }">
+                <el-tag v-if="row.version_conflict" type="warning" effect="plain">不一致</el-tag>
+                <span class="version-text">{{ row.package_version }}</span>
+              </template>
+            </el-table-column>
             <el-table-column prop="scope" label="范围" width="110" />
+            <el-table-column prop="dependency_type" label="类型" width="120" />
+            <el-table-column prop="detected_by" label="来源" width="110" />
             <el-table-column prop="source_path" label="来源文件" min-width="180" show-overflow-tooltip />
           </el-table>
         </div>

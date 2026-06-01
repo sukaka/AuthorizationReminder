@@ -211,6 +211,8 @@ def _enqueue_scan(db: Session, record: UploadFileRecord) -> None:
     )
     db.add(scan_task)
     db.flush()
+    # Celery worker uses a separate DB session; commit before enqueue so it can read the task.
+    db.commit()
     scan_uploaded_file.apply_async(args=[scan_task.id], task_id=celery_task_id)
     db.refresh(record)
 

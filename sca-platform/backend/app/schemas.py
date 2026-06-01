@@ -15,9 +15,26 @@ class ComponentOut(BaseModel):
     project_id: int
     package_name: str
     package_version: str
+    normalized_name: str = ""
+    package_manager: str = ""
+    purl: str = ""
+    cpe: str = ""
+    group_id: str = ""
+    artifact_id: str = ""
+    version_normalized: str = ""
     ecosystem: str = "unknown"
     scope: str = "runtime"
+    dependency_type: str = "direct"
     source_path: str = ""
+    source_file: str = ""
+    evidence_level: str = "manifest"
+    evidence_file: str = ""
+    evidence_line: int = 0
+    evidence_text: str = ""
+    detected_by: str = "manifest"
+    confidence_score: float = 0
+    version_conflict: bool = False
+    conflict_reason: str = ""
     license_name: str
     vulnerability_status: str
 

@@ -169,10 +169,29 @@ CELERY_RESULT_BACKEND=redis://sca-redis:6379/2
 解析器位于 `backend/app/dependency_parser.py`，支持：
 
 - `pom.xml`：解析 Maven `groupId:artifactId` 与 `version`
-- `package.json`：解析 npm `dependencies`、`devDependencies`、`peerDependencies`、`optionalDependencies`
+- `package.json` / `package-lock.json`：解析 npm `dependencies`、`devDependencies`、`peerDependencies`、`optionalDependencies`，存在 lock 文件时优先使用实际安装版本
 - `requirements.txt`：解析 PyPI 包名和版本约束
 - `go.mod`：解析 Go `require`
 - `Dockerfile`：解析 `FROM image:tag`
+
+### 准确率与证据链增强
+
+组件记录新增标准化字段和证据字段，兼容已有 `package_name/package_version/ecosystem/scope`：
+
+- 标准字段：`normalized_name`、`package_manager`、`purl`、`cpe`、`group_id`、`artifact_id`、`version_normalized`、`dependency_type`
+- 证据字段：`evidence_file`、`evidence_line`、`evidence_text`、`detected_by`、`evidence_level`、`confidence_score`
+- 冲突字段：`version_conflict`、`conflict_reason`
+
+当前策略：
+
+- Maven 尽量生成 `pkg:maven/group/artifact@version`
+- npm 保留 scope，例如 `@vue/runtime-core`，并生成 PURL
+- PyPI 按 PEP 503 风格统一大小写、下划线、点和中划线
+- Go module 保留完整 module path
+- Dockerfile 基础镜像标记为 `dependency_type=base_image`
+- manifest 负责直接依赖证据，lock 文件负责实际安装版本；两者不一致时前端展示“版本来源不一致”
+
+前端“依赖识别”表格可展开每个组件查看证据链、PURL、置信度和版本冲突原因。
 
 ### FastAPI 接口
 

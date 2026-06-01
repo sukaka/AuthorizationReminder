@@ -40,6 +40,23 @@ def run_compat_migrations() -> None:
         "ecosystem": "VARCHAR(40) NOT NULL DEFAULT 'unknown'",
         "scope": "VARCHAR(40) NOT NULL DEFAULT 'runtime'",
         "source_path": "VARCHAR(512) NOT NULL DEFAULT ''",
+        "normalized_name": "VARCHAR(200) NOT NULL DEFAULT ''",
+        "package_manager": "VARCHAR(40) NOT NULL DEFAULT ''",
+        "purl": "VARCHAR(512) NOT NULL DEFAULT ''",
+        "cpe": "VARCHAR(512) NOT NULL DEFAULT ''",
+        "group_id": "VARCHAR(160) NOT NULL DEFAULT ''",
+        "artifact_id": "VARCHAR(160) NOT NULL DEFAULT ''",
+        "version_normalized": "VARCHAR(80) NOT NULL DEFAULT ''",
+        "dependency_type": "VARCHAR(40) NOT NULL DEFAULT 'direct'",
+        "source_file": "VARCHAR(512) NOT NULL DEFAULT ''",
+        "evidence_level": "VARCHAR(40) NOT NULL DEFAULT 'manifest'",
+        "evidence_file": "VARCHAR(512) NOT NULL DEFAULT ''",
+        "evidence_line": "INTEGER NOT NULL DEFAULT 0",
+        "evidence_text": "TEXT NOT NULL DEFAULT ''",
+        "detected_by": "VARCHAR(80) NOT NULL DEFAULT 'manifest'",
+        "confidence_score": "FLOAT NOT NULL DEFAULT 0",
+        "version_conflict": "BOOLEAN NOT NULL DEFAULT FALSE",
+        "conflict_reason": "TEXT NOT NULL DEFAULT ''",
     }
     with engine.begin() as conn:
         for foreign_key in inspector.get_foreign_keys("components"):

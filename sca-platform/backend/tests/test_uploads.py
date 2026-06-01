@@ -54,6 +54,12 @@ def test_upload_zip_records_file_and_project(monkeypatch, tmp_path):
         assert listing["total"] == 1
         assert listing["items"][0]["scan_note"] == "第二阶段上传测试"
 
+        components = client.get(f"/api/sca/projects/{uploaded['project_id']}/components").json()
+        assert components[0]["normalized_name"] == "fastapi"
+        assert components[0]["purl"] == "pkg:pypi/fastapi@0.115.6"
+        assert components[0]["evidence_file"] == "requirements.txt"
+        assert components[0]["confidence_score"] > 0
+
         delete_response = client.delete(f"/api/sca/uploads/{uploaded['id']}")
         assert delete_response.status_code == 200
         assert client.get("/api/sca/uploads").json()["total"] == 0

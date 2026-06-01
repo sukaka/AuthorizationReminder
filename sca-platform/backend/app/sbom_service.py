@@ -34,8 +34,14 @@ def cyclonedx_from_database(project: Project, components: list[Component]) -> di
                 "type": "library" if component.ecosystem != "docker" else "container",
                 "name": component.package_name,
                 "version": component.package_version,
-                "purl": f"pkg:{component.ecosystem}/{component.package_name}@{component.package_version}",
+                "purl": component.purl or f"pkg:{component.ecosystem}/{component.package_name}@{component.package_version}",
                 "licenses": [{"license": {"name": component.license_name}}],
+                "evidence": {
+                    "source": {
+                        "name": component.evidence_file or component.source_path,
+                        "line": component.evidence_line,
+                    }
+                },
             }
             for component in components
         ],

@@ -24,9 +24,26 @@ CREATE TABLE IF NOT EXISTS components (
   project_id BIGINT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
   package_name VARCHAR(160) NOT NULL,
   package_version VARCHAR(80) NOT NULL DEFAULT '',
+  normalized_name VARCHAR(200) NOT NULL DEFAULT '',
+  package_manager VARCHAR(40) NOT NULL DEFAULT '',
+  purl VARCHAR(512) NOT NULL DEFAULT '',
+  cpe VARCHAR(512) NOT NULL DEFAULT '',
+  group_id VARCHAR(160) NOT NULL DEFAULT '',
+  artifact_id VARCHAR(160) NOT NULL DEFAULT '',
+  version_normalized VARCHAR(80) NOT NULL DEFAULT '',
   ecosystem VARCHAR(40) NOT NULL DEFAULT 'unknown',
   scope VARCHAR(40) NOT NULL DEFAULT 'runtime',
+  dependency_type VARCHAR(40) NOT NULL DEFAULT 'direct',
   source_path VARCHAR(512) NOT NULL DEFAULT '',
+  source_file VARCHAR(512) NOT NULL DEFAULT '',
+  evidence_level VARCHAR(40) NOT NULL DEFAULT 'manifest',
+  evidence_file VARCHAR(512) NOT NULL DEFAULT '',
+  evidence_line INTEGER NOT NULL DEFAULT 0,
+  evidence_text TEXT NOT NULL DEFAULT '',
+  detected_by VARCHAR(80) NOT NULL DEFAULT 'manifest',
+  confidence_score DOUBLE PRECISION NOT NULL DEFAULT 0,
+  version_conflict BOOLEAN NOT NULL DEFAULT FALSE,
+  conflict_reason TEXT NOT NULL DEFAULT '',
   license_name VARCHAR(120) NOT NULL DEFAULT 'unknown',
   vulnerability_status VARCHAR(32) NOT NULL DEFAULT 'pending',
   note TEXT NOT NULL DEFAULT ''
@@ -314,6 +331,8 @@ CREATE INDEX IF NOT EXISTS idx_upload_files_upload_id ON upload_files(upload_id)
 CREATE INDEX IF NOT EXISTS idx_scan_tasks_project_id ON scan_tasks(project_id);
 CREATE INDEX IF NOT EXISTS idx_components_project_id ON components(project_id);
 CREATE INDEX IF NOT EXISTS idx_components_ecosystem ON components(ecosystem);
+CREATE INDEX IF NOT EXISTS idx_components_normalized_name ON components(normalized_name);
+CREATE INDEX IF NOT EXISTS idx_components_purl ON components(purl);
 CREATE INDEX IF NOT EXISTS idx_components_vulnerability_status ON components(vulnerability_status);
 CREATE INDEX IF NOT EXISTS idx_component_dependencies_project_id ON component_dependencies(project_id);
 CREATE INDEX IF NOT EXISTS idx_vulnerabilities_project_id ON vulnerabilities(project_id);
