@@ -144,6 +144,21 @@ class VulnerabilityOut(BaseModel):
     ecosystem: str
     cvss_score: float
     severity: str
+    epss_score: float = 0
+    cisa_kev: bool = False
+    confidence_score: float = 0.7
+    match_status: str = "affected"
+    matched_by: str = ""
+    match_reason: str = ""
+    version_range: str = ""
+    needs_human_review: bool = False
+    false_positive_possibility: str = "medium"
+    risk_priority: str = "Review"
+    risk_score: float = 0
+    priority_reason: str = ""
+    suggested_deadline: str = "人工确认后排期"
+    remediation_type: str = "人工确认"
+    business_impact: str = ""
     description: str
     fixed_version: str
     published_at_text: str

@@ -60,14 +60,18 @@ def _project_data(db: Session, project_id: int) -> tuple[Project, list[Component
 
 def _risk_counts(vulnerabilities: list[VulnerabilityRecord]) -> dict[str, int]:
     counts = {"critical": 0, "high": 0, "medium": 0, "low": 0, "unknown": 0}
-    for vulnerability in vulnerabilities:
+    for vulnerability in _confirmed_vulnerabilities(vulnerabilities):
         counts[vulnerability.severity if vulnerability.severity in counts else "unknown"] += 1
     return counts
 
 
+def _confirmed_vulnerabilities(vulnerabilities: list[VulnerabilityRecord]) -> list[VulnerabilityRecord]:
+    return [item for item in vulnerabilities if item.match_status == "affected" and not item.needs_human_review]
+
+
 def _report_lines(project: Project, components: list[Component], vulnerabilities: list[VulnerabilityRecord]) -> list[str]:
     counts = _risk_counts(vulnerabilities)
-    high_risk = [item for item in vulnerabilities if item.severity in {"critical", "high"}]
+    high_risk = [item for item in _confirmed_vulnerabilities(vulnerabilities) if item.severity in {"critical", "high"}]
     return [
         "聚信软件成分安全分析报告",
         "企业 Logo：JUXIN",

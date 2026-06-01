@@ -18,17 +18,22 @@ def highest_severity(values: list[str]) -> str:
     return max(values, key=lambda item: SEVERITY_SCORE.get(item, 0))
 
 
+def confirmed_vulnerabilities(vulnerabilities: list[VulnerabilityRecord]) -> list[VulnerabilityRecord]:
+    return [item for item in vulnerabilities if item.match_status == "affected" and not item.needs_human_review]
+
+
 def asset_dashboard(db: Session) -> dict:
     components = list(db.scalars(select(Component)))
     vulnerabilities = list(db.scalars(select(VulnerabilityRecord)))
+    confirmed = confirmed_vulnerabilities(vulnerabilities)
     snapshots = list(db.scalars(select(RiskMonitorSnapshot)))
     by_ecosystem = Counter(component.ecosystem for component in components)
-    by_severity = Counter(vulnerability.severity for vulnerability in vulnerabilities)
+    by_severity = Counter(vulnerability.severity for vulnerability in confirmed)
     return {
         "project_total": db.scalar(select(func.count(Project.id))) or 0,
         "component_total": len(components),
         "vulnerability_total": len(vulnerabilities),
-        "high_risk_total": sum(1 for item in vulnerabilities if item.severity in {"critical", "high"}),
+        "high_risk_total": sum(1 for item in confirmed if item.severity in {"critical", "high"}),
         "eol_total": sum(1 for item in snapshots if item.eol_status in {"eol", "review"}),
         "license_risk_total": sum(1 for item in components if item.license_name in RISKY_LICENSES),
         "by_ecosystem": dict(by_ecosystem),
@@ -38,7 +43,7 @@ def asset_dashboard(db: Session) -> dict:
 
 def asset_components(db: Session, search: str = "") -> list[dict]:
     components = list(db.scalars(select(Component)))
-    vulnerabilities = list(db.scalars(select(VulnerabilityRecord)))
+    vulnerabilities = confirmed_vulnerabilities(list(db.scalars(select(VulnerabilityRecord))))
     snapshots = list(db.scalars(select(RiskMonitorSnapshot)))
     grouped: dict[tuple[str, str], dict] = {}
     vuln_by_package: dict[tuple[str, str], list[VulnerabilityRecord]] = defaultdict(list)
@@ -87,6 +92,7 @@ def asset_graph(db: Session) -> dict:
     components = list(db.scalars(select(Component)))
     dependencies = list(db.scalars(select(ComponentDependency)))
     vulnerabilities = list(db.scalars(select(VulnerabilityRecord)))
+    vulnerabilities = confirmed_vulnerabilities(vulnerabilities)
     vuln_by_component = defaultdict(list)
     for vulnerability in vulnerabilities:
         vuln_by_component[vulnerability.component_id].append(vulnerability.severity)

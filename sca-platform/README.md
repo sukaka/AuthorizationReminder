@@ -205,18 +205,35 @@ CELERY_RESULT_BACKEND=redis://sca-redis:6379/2
 
 ### 漏洞查询逻辑
 
-后端服务位于 `backend/app/vulnerability_service.py`，按组件名称、版本和生态进行查询：
+后端服务位于 `backend/app/vulnerability_service.py`，按 PURL、CPE、生态、包名、版本范围和漏洞源进行综合匹配，禁止只靠组件名称直接判定 CVE：
 
-- OSV：调用 `POST /v1/query`，归一化 CVE、CVSS、修复版本、发布时间、POC、在野利用标记
-- NVD：调用 CVE 2.0 API，支持 `keywordSearch` 与独立 CVE 查询
-- GitHub Advisory：配置 `GITHUB_TOKEN` 后调用 GitHub Advisory API；未配置时自动跳过，不影响 OSV/NVD
+- OSV：调用 `POST /v1/query`，优先使用 PURL 和 ecosystem/name，再用 affected ranges 判断当前版本是否受影响
+- NVD：调用 CVE 2.0 API，支持独立 CVE 查询；`keywordSearch` 结果默认标记为待人工确认，避免名称模糊误报
+- GitHub Advisory：配置 `GITHUB_TOKEN` 后调用 GitHub Advisory API；结合 patched_versions 判断影响范围
 - CVSS：支持 CVSS v3 向量转基础分，并映射 `critical/high/medium/low/unknown`
+- 版本范围：`backend/app/version_compare.py` 统一处理 semver、Maven、PEP440、Go pseudo version、Docker tag 和不规则版本号；无法判断时标记 `match_status=unknown`
+
+### 漏洞可信度与风险优先级
+
+每条漏洞新增：
+
+- 匹配字段：`confidence_score`、`match_status`、`matched_by`、`match_reason`、`version_range`、`needs_human_review`
+- 风险字段：`risk_priority`、`risk_score`、`priority_reason`、`suggested_deadline`、`remediation_type`、`business_impact`、`false_positive_possibility`
+- 情报字段：`epss_score`、`cisa_kev`
+
+评分策略：
+
+- PURL/CPE 精确匹配且版本范围命中：高可信
+- `ecosystem + name + version range` 命中：中高可信
+- 名称匹配但无版本范围：低可信，进入待人工确认
+- 无法判断版本范围：`match_status=unknown`，不进入高危统计和 DevSecOps 阻断
+- 风险优先级综合 CVSS、CISA KEV、POC、在野利用、运行时/开发测试依赖、安全版本和 RCE/认证/权限/数据泄露关键词，不只按 CVSS 排序
 
 ### 数据库设计
 
 初始化 SQL 位于 `database/init/001_init_sca.sql`，新增：
 
-- `vulnerabilities`：CVE 编号、CVSS、描述、修复版本、发布时间、等级、POC、在野利用
+- `vulnerabilities`：CVE 编号、CVSS、可信度、匹配状态、风险优先级、修复期限、业务影响、描述、修复版本、发布时间、POC、在野利用
 - `vulnerability_queries`：漏洞源查询审计日志
 
 ### FastAPI 接口
@@ -229,7 +246,7 @@ CELERY_RESULT_BACKEND=redis://sca-redis:6379/2
 
 ### Vue3 页面
 
-前端菜单“漏洞查询”提供项目选择、漏洞查询、漏洞列表、等级标签、POC/在野利用标记、统计卡片和趋势条形图。
+前端菜单“漏洞查询”提供项目选择、漏洞查询、漏洞列表、等级标签、优先级、风险分、可信度、匹配状态、POC/在野利用标记、统计卡片和趋势条形图，并支持筛选高可信、中可信、低可信、待确认和疑似误报漏洞。
 
 ## 10. 第五阶段：报告导出模块
 

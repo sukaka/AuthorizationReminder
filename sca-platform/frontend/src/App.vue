@@ -261,20 +261,47 @@
               <el-select v-model="selectedProjectId" placeholder="选择项目" style="width: 220px" @change="loadProjectDetails">
                 <el-option v-for="project in projects" :key="project.id" :label="project.name" :value="project.id" />
               </el-select>
+              <el-select v-model="vulnerabilityFilter" placeholder="可信度筛选" style="width: 170px">
+                <el-option label="全部漏洞" value="all" />
+                <el-option label="高可信漏洞" value="high" />
+                <el-option label="中可信漏洞" value="medium" />
+                <el-option label="低可信漏洞" value="low" />
+                <el-option label="待确认漏洞" value="review" />
+                <el-option label="疑似误报漏洞" value="false_positive" />
+              </el-select>
               <el-button type="primary" :loading="vulnerabilityQuerying" :icon="Search" @click="queryVulnerabilities">查询漏洞</el-button>
             </div>
           </div>
-          <el-table :data="vulnerabilities" empty-text="暂无漏洞，请先查询">
+          <el-table :data="filteredVulnerabilities" empty-text="暂无漏洞，请先查询">
             <el-table-column prop="severity" label="等级" width="100">
               <template #default="{ row }">
                 <el-tag :type="severityTag(row.severity)">{{ severityLabel(row.severity) }}</el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column prop="risk_priority" label="优先级" width="100">
+              <template #default="{ row }">
+                <el-tag :type="priorityTag(row.risk_priority)">{{ row.risk_priority || 'Review' }}</el-tag>
               </template>
             </el-table-column>
             <el-table-column prop="cve_id" label="CVE" width="150" show-overflow-tooltip />
             <el-table-column prop="package_name" label="组件" min-width="180" show-overflow-tooltip />
             <el-table-column prop="package_version" label="版本" width="130" show-overflow-tooltip />
             <el-table-column prop="cvss_score" label="CVSS" width="90" />
+            <el-table-column prop="risk_score" label="风险分" width="90" />
+            <el-table-column label="可信度" width="120">
+              <template #default="{ row }">
+                <el-tag :type="confidenceTag(row.confidence_score, row.needs_human_review)" effect="plain">
+                  {{ Math.round((row.confidence_score || 0) * 100) }}%
+                </el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column prop="match_status" label="匹配" width="110">
+              <template #default="{ row }">
+                <el-tag :type="row.match_status === 'affected' ? 'success' : 'warning'" effect="plain">{{ row.match_status }}</el-tag>
+              </template>
+            </el-table-column>
             <el-table-column prop="fixed_version" label="修复版本" width="140" show-overflow-tooltip />
+            <el-table-column prop="priority_reason" label="优先级原因" min-width="220" show-overflow-tooltip />
             <el-table-column prop="description" label="漏洞详情" min-width="240" show-overflow-tooltip />
             <el-table-column label="情报" width="130">
               <template #default="{ row }">
@@ -687,6 +714,7 @@ const components = ref([])
 const dependencyTree = ref([])
 const scanLogs = ref([])
 const vulnerabilities = ref([])
+const vulnerabilityFilter = ref('all')
 const vulnerabilityTrend = ref([])
 const reports = ref([])
 const sboms = ref([])
@@ -772,6 +800,19 @@ const userLabel = computed(() => {
   return `${overview.user.username} / ${overview.user.role}`
 })
 
+const filteredVulnerabilities = computed(() => {
+  if (vulnerabilityFilter.value === 'all') return vulnerabilities.value
+  return vulnerabilities.value.filter((item) => {
+    const confidence = Number(item.confidence_score || 0)
+    if (vulnerabilityFilter.value === 'high') return confidence >= 0.85 && !item.needs_human_review
+    if (vulnerabilityFilter.value === 'medium') return confidence >= 0.55 && confidence < 0.85 && !item.needs_human_review
+    if (vulnerabilityFilter.value === 'low') return confidence < 0.55 && !item.needs_human_review
+    if (vulnerabilityFilter.value === 'review') return item.needs_human_review || item.match_status === 'unknown' || item.risk_priority === 'Review'
+    if (vulnerabilityFilter.value === 'false_positive') return item.false_positive_possibility === 'high' || item.risk_priority === 'Ignore'
+    return true
+  })
+})
+
 const uploadPercent = (row) => {
   if (!row?.file_size) return 0
   return Math.min(100, Math.round((Number(row.received_bytes || 0) / Number(row.file_size)) * 100))
@@ -791,6 +832,22 @@ const severityTag = (severity) => ({
   medium: 'warning',
   low: 'success',
 }[severity] || 'info')
+
+const priorityTag = (priority) => ({
+  P0: 'danger',
+  P1: 'danger',
+  P2: 'warning',
+  P3: 'success',
+  Review: 'info',
+  Ignore: 'info',
+}[priority] || 'info')
+
+const confidenceTag = (confidence, review) => {
+  if (review) return 'warning'
+  if (confidence >= 0.85) return 'success'
+  if (confidence >= 0.55) return 'warning'
+  return 'info'
+}
 
 const trendWidth = (value, total) => {
   if (!total) return '0%'

@@ -123,12 +123,33 @@ def test_vulnerability_stats_and_trend(monkeypatch, tmp_path):
                     published_at_text="2024-03-01T00:00:00Z",
                 )
             )
+            db.add(
+                models.VulnerabilityRecord(
+                    project_id=project.id,
+                    component_id=component.id,
+                    source="nvd",
+                    advisory_id="CVE-2024-REVIEW",
+                    cve_id="CVE-2024-REVIEW",
+                    package_name="demo",
+                    package_version="1.0.0",
+                    ecosystem="npm",
+                    cvss_score=9.8,
+                    severity="critical",
+                    description="needs review",
+                    fixed_version="",
+                    published_at_text="2024-03-02T00:00:00Z",
+                    match_status="unknown",
+                    needs_human_review=True,
+                    confidence_score=0.35,
+                )
+            )
             db.commit()
             project_id = project.id
 
         stats = test_client.get(f"/api/sca/projects/{project_id}/vulnerabilities/stats").json()
         trend = test_client.get(f"/api/sca/projects/{project_id}/vulnerabilities/trend").json()
 
-    assert stats["total"] == 1
+    assert stats["total"] == 2
     assert stats["by_severity"]["high"] == 1
+    assert stats["by_severity"]["critical"] == 0
     assert trend["items"][0]["month"] == "2024-03"

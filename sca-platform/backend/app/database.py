@@ -58,6 +58,23 @@ def run_compat_migrations() -> None:
         "version_conflict": "BOOLEAN NOT NULL DEFAULT FALSE",
         "conflict_reason": "TEXT NOT NULL DEFAULT ''",
     }
+    vulnerability_additions = {
+        "epss_score": "FLOAT NOT NULL DEFAULT 0",
+        "cisa_kev": "BOOLEAN NOT NULL DEFAULT FALSE",
+        "confidence_score": "FLOAT NOT NULL DEFAULT 0.7",
+        "match_status": "VARCHAR(32) NOT NULL DEFAULT 'affected'",
+        "matched_by": "VARCHAR(80) NOT NULL DEFAULT ''",
+        "match_reason": "TEXT NOT NULL DEFAULT ''",
+        "version_range": "VARCHAR(240) NOT NULL DEFAULT ''",
+        "needs_human_review": "BOOLEAN NOT NULL DEFAULT FALSE",
+        "false_positive_possibility": "VARCHAR(32) NOT NULL DEFAULT 'medium'",
+        "risk_priority": "VARCHAR(16) NOT NULL DEFAULT 'Review'",
+        "risk_score": "FLOAT NOT NULL DEFAULT 0",
+        "priority_reason": "TEXT NOT NULL DEFAULT ''",
+        "suggested_deadline": "VARCHAR(80) NOT NULL DEFAULT '人工确认后排期'",
+        "remediation_type": "VARCHAR(40) NOT NULL DEFAULT '人工确认'",
+        "business_impact": "TEXT NOT NULL DEFAULT ''",
+    }
     with engine.begin() as conn:
         for foreign_key in inspector.get_foreign_keys("components"):
             if foreign_key.get("referred_table") == "analysis_projects" and foreign_key.get("constrained_columns") == ["project_id"]:
@@ -67,6 +84,11 @@ def run_compat_migrations() -> None:
         for column, definition in additions.items():
             if column not in existing:
                 conn.execute(text(f"ALTER TABLE components ADD COLUMN {column} {definition}"))
+        if inspector.has_table("vulnerabilities"):
+            vulnerability_existing = {column["name"] for column in inspector.get_columns("vulnerabilities")}
+            for column, definition in vulnerability_additions.items():
+                if column not in vulnerability_existing:
+                    conn.execute(text(f"ALTER TABLE vulnerabilities ADD COLUMN {column} {definition}"))
 
 
 def check_database() -> bool:

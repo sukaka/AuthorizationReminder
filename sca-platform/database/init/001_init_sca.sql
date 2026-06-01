@@ -116,6 +116,21 @@ CREATE TABLE IF NOT EXISTS vulnerabilities (
   ecosystem VARCHAR(40) NOT NULL DEFAULT 'unknown',
   cvss_score DOUBLE PRECISION NOT NULL DEFAULT 0,
   severity VARCHAR(20) NOT NULL DEFAULT 'unknown',
+  epss_score DOUBLE PRECISION NOT NULL DEFAULT 0,
+  cisa_kev BOOLEAN NOT NULL DEFAULT FALSE,
+  confidence_score DOUBLE PRECISION NOT NULL DEFAULT 0.7,
+  match_status VARCHAR(32) NOT NULL DEFAULT 'affected',
+  matched_by VARCHAR(80) NOT NULL DEFAULT '',
+  match_reason TEXT NOT NULL DEFAULT '',
+  version_range VARCHAR(240) NOT NULL DEFAULT '',
+  needs_human_review BOOLEAN NOT NULL DEFAULT FALSE,
+  false_positive_possibility VARCHAR(32) NOT NULL DEFAULT 'medium',
+  risk_priority VARCHAR(16) NOT NULL DEFAULT 'Review',
+  risk_score DOUBLE PRECISION NOT NULL DEFAULT 0,
+  priority_reason TEXT NOT NULL DEFAULT '',
+  suggested_deadline VARCHAR(80) NOT NULL DEFAULT '人工确认后排期',
+  remediation_type VARCHAR(40) NOT NULL DEFAULT '人工确认',
+  business_impact TEXT NOT NULL DEFAULT '',
   description TEXT NOT NULL DEFAULT '',
   fixed_version VARCHAR(160) NOT NULL DEFAULT '',
   published_at_text VARCHAR(80) NOT NULL DEFAULT '',
@@ -339,6 +354,8 @@ CREATE INDEX IF NOT EXISTS idx_vulnerabilities_project_id ON vulnerabilities(pro
 CREATE INDEX IF NOT EXISTS idx_vulnerabilities_component_id ON vulnerabilities(component_id);
 CREATE INDEX IF NOT EXISTS idx_vulnerabilities_cve_id ON vulnerabilities(cve_id);
 CREATE INDEX IF NOT EXISTS idx_vulnerabilities_severity ON vulnerabilities(severity);
+CREATE INDEX IF NOT EXISTS idx_vulnerabilities_match_status ON vulnerabilities(match_status);
+CREATE INDEX IF NOT EXISTS idx_vulnerabilities_risk_priority ON vulnerabilities(risk_priority);
 CREATE INDEX IF NOT EXISTS idx_vulnerability_queries_project_id ON vulnerability_queries(project_id);
 CREATE INDEX IF NOT EXISTS idx_report_exports_project_id ON report_exports(project_id);
 CREATE INDEX IF NOT EXISTS idx_sbom_documents_project_id ON sbom_documents(project_id);

@@ -506,6 +506,21 @@ async def query_project_vulnerabilities(
                     ecosystem=finding.ecosystem,
                     cvss_score=finding.cvss_score,
                     severity=finding.severity,
+                    epss_score=finding.epss_score,
+                    cisa_kev=finding.cisa_kev,
+                    confidence_score=finding.confidence_score,
+                    match_status=finding.match_status,
+                    matched_by=finding.matched_by,
+                    match_reason=finding.match_reason,
+                    version_range=finding.version_range,
+                    needs_human_review=finding.needs_human_review,
+                    false_positive_possibility=finding.false_positive_possibility,
+                    risk_priority=finding.risk_priority,
+                    risk_score=finding.risk_score,
+                    priority_reason=finding.priority_reason,
+                    suggested_deadline=finding.suggested_deadline,
+                    remediation_type=finding.remediation_type,
+                    business_impact=finding.business_impact,
                     description=finding.description,
                     fixed_version=finding.fixed_version,
                     published_at_text=finding.published_at,
@@ -517,7 +532,7 @@ async def query_project_vulnerabilities(
             )
     db.commit()
     items = db.scalars(
-        select(VulnerabilityRecord).where(VulnerabilityRecord.project_id == project_id).order_by(VulnerabilityRecord.cvss_score.desc())
+        select(VulnerabilityRecord).where(VulnerabilityRecord.project_id == project_id).order_by(VulnerabilityRecord.risk_score.desc(), VulnerabilityRecord.cvss_score.desc())
     ).all()
     return VulnerabilityListOut(total=len(items), items=list(items))
 
@@ -532,7 +547,7 @@ async def list_project_vulnerabilities(
     await require_action("sca:read", request, user, settings)
     _ensure_project_exists(db, project_id)
     items = db.scalars(
-        select(VulnerabilityRecord).where(VulnerabilityRecord.project_id == project_id).order_by(VulnerabilityRecord.cvss_score.desc())
+        select(VulnerabilityRecord).where(VulnerabilityRecord.project_id == project_id).order_by(VulnerabilityRecord.risk_score.desc(), VulnerabilityRecord.cvss_score.desc())
     ).all()
     return VulnerabilityListOut(total=len(items), items=list(items))
 
@@ -558,6 +573,21 @@ async def query_cve_detail(
             ecosystem=item.ecosystem,
             cvss_score=item.cvss_score,
             severity=item.severity,
+            epss_score=item.epss_score,
+            cisa_kev=item.cisa_kev,
+            confidence_score=item.confidence_score,
+            match_status=item.match_status,
+            matched_by=item.matched_by,
+            match_reason=item.match_reason,
+            version_range=item.version_range,
+            needs_human_review=item.needs_human_review,
+            false_positive_possibility=item.false_positive_possibility,
+            risk_priority=item.risk_priority,
+            risk_score=item.risk_score,
+            priority_reason=item.priority_reason,
+            suggested_deadline=item.suggested_deadline,
+            remediation_type=item.remediation_type,
+            business_impact=item.business_impact,
             description=item.description,
             fixed_version=item.fixed_version,
             published_at_text=item.published_at,
@@ -579,10 +609,11 @@ async def vulnerability_stats(
 ) -> VulnerabilityStatsOut:
     await require_action("sca:read", request, user, settings)
     items = db.scalars(select(VulnerabilityRecord).where(VulnerabilityRecord.project_id == project_id)).all()
+    confirmed_items = [item for item in items if item.match_status == "affected" and not item.needs_human_review]
     counts = {"critical": 0, "high": 0, "medium": 0, "low": 0, "unknown": 0}
-    for item in items:
+    for item in confirmed_items:
         counts[item.severity if item.severity in counts else "unknown"] += 1
-    average_cvss = round(sum(item.cvss_score for item in items) / len(items), 2) if items else 0
+    average_cvss = round(sum(item.cvss_score for item in confirmed_items) / len(confirmed_items), 2) if confirmed_items else 0
     return VulnerabilityStatsOut(
         total=len(items),
         by_severity=counts,
@@ -600,7 +631,11 @@ async def vulnerability_trend(
     db: Annotated[Session, Depends(get_db)],
 ) -> VulnerabilityTrendOut:
     await require_action("sca:read", request, user, settings)
-    items = db.scalars(select(VulnerabilityRecord).where(VulnerabilityRecord.project_id == project_id)).all()
+    items = [
+        item
+        for item in db.scalars(select(VulnerabilityRecord).where(VulnerabilityRecord.project_id == project_id)).all()
+        if item.match_status == "affected" and not item.needs_human_review
+    ]
     buckets: dict[str, dict[str, int]] = {}
     for item in items:
         month = item.published_at_text[:7] if item.published_at_text else "unknown"
