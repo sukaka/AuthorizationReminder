@@ -149,7 +149,7 @@ CELERY_RESULT_BACKEND=redis://sca-redis:6379/2
 - `GET /api/sca/uploads`：文件列表
 - `DELETE /api/sca/uploads/{upload_file_id}`：删除上传文件和本地文件
 
-文件保存目录为 `/data/sca/uploads`，由 Docker volume `sca-upload-data` 持久化。大小限制由 `UPLOAD_MAX_BYTES` 控制，默认 `209715200`（200 MB）。
+文件保存目录为 `/data/sca/uploads`，由 Docker volume `sca-upload-data` 持久化。平台不设置应用层上传大小上限；实际可上传大小取决于 Docker volume/磁盘空间、反向代理、网关和网络超时。生产 Nginx 模板已配置 `client_max_body_size 0`。
 
 ### Vue3 上传页面
 
@@ -673,7 +673,7 @@ BACKUP_DIR=/data/sca/backups ./deploy/backup.sh
 - PostgreSQL：开启自动 vacuum，按数据量调整 `shared_buffers`、`work_mem`、连接池上限，并定期检查慢 SQL。
 - Redis：开启持久化或托管高可用实例，限制最大内存和淘汰策略，单独使用 broker/result/cache DB。
 - Celery：生产环境按扫描规模增加 worker 并发，长任务建议拆分队列。
-- Nginx：按上传包大小调整 `client_max_body_size` 和代理超时。
+- Nginx：保持 `client_max_body_size 0` 以允许大文件上传，并按网络环境调整代理超时、Docker volume 和磁盘容量。
 
 ## 18. 启动方法
 
@@ -821,19 +821,9 @@ docker compose logs sca-redis sca-worker
 
 项目内独立 compose 默认 `AUTH_DEV_BYPASS=true`，用于本地骨架验证。根目录 compose 使用真实统一登录，需先启动 `auth` 服务。
 
-### 上传文件过大
+### 上传大文件仍失败
 
-调整 `.env` 中：
-
-```bash
-UPLOAD_MAX_BYTES=209715200
-```
-
-根目录 compose 对应变量为：
-
-```bash
-SCA_UPLOAD_MAX_BYTES=209715200
-```
+平台已取消应用层上传大小限制，不再通过 `UPLOAD_MAX_BYTES` 控制文件大小。如仍出现 413 或连接中断，请检查外层 Nginx/网关/负载均衡是否限制了请求体大小，生产 Nginx 配置需保持 `client_max_body_size 0`；同时检查 Docker volume、磁盘空间和代理超时。
 
 ### 只支持指定压缩格式
 

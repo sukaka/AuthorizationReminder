@@ -610,7 +610,6 @@ services:
       AUTH_DEV_BYPASS: "false"
       CORS_ORIGINS: "http://localhost:18089,http://127.0.0.1:18089,http://${PUBLIC_HOST:-localhost}:18089"
       UPLOAD_ROOT: "/data/sca/uploads"
-      UPLOAD_MAX_BYTES: ${SCA_UPLOAD_MAX_BYTES:-209715200}
       CELERY_TASK_ALWAYS_EAGER: "false"
       OSV_API_URL: ${SCA_OSV_API_URL:-https://api.osv.dev}
       NVD_API_URL: ${SCA_NVD_API_URL:-https://services.nvd.nist.gov/rest/json/cves/2.0}
@@ -675,7 +674,6 @@ services:
       AUTH_DEV_BYPASS: "false"
       CORS_ORIGINS: "http://localhost:18089,http://127.0.0.1:18089,http://${PUBLIC_HOST:-localhost}:18089"
       UPLOAD_ROOT: "/data/sca/uploads"
-      UPLOAD_MAX_BYTES: ${SCA_UPLOAD_MAX_BYTES:-209715200}
       CELERY_TASK_ALWAYS_EAGER: "false"
       OSV_API_URL: ${SCA_OSV_API_URL:-https://api.osv.dev}
       NVD_API_URL: ${SCA_NVD_API_URL:-https://services.nvd.nist.gov/rest/json/cves/2.0}
@@ -736,7 +734,6 @@ services:
       AUTH_DEV_BYPASS: "false"
       CORS_ORIGINS: "http://localhost:18089,http://127.0.0.1:18089,http://${PUBLIC_HOST:-localhost}:18089"
       UPLOAD_ROOT: "/data/sca/uploads"
-      UPLOAD_MAX_BYTES: ${SCA_UPLOAD_MAX_BYTES:-209715200}
       CELERY_TASK_ALWAYS_EAGER: "false"
       OSV_API_URL: ${SCA_OSV_API_URL:-https://api.osv.dev}
       NVD_API_URL: ${SCA_NVD_API_URL:-https://services.nvd.nist.gov/rest/json/cves/2.0}

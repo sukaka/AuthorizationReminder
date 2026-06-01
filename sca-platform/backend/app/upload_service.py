@@ -5,7 +5,7 @@ import shutil
 import uuid
 from pathlib import Path
 
-from fastapi import HTTPException, UploadFile, status
+from fastapi import HTTPException, UploadFile
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -93,7 +93,7 @@ def remove_upload_artifacts(root: Path, record: UploadFileRecord) -> None:
             continue
 
 
-async def save_upload_file(upload: UploadFile, destination: Path, max_bytes: int) -> int:
+async def save_upload_file(upload: UploadFile, destination: Path) -> int:
     destination.parent.mkdir(parents=True, exist_ok=True)
     total = 0
     try:
@@ -103,8 +103,6 @@ async def save_upload_file(upload: UploadFile, destination: Path, max_bytes: int
                 if not chunk:
                     break
                 total += len(chunk)
-                if total > max_bytes:
-                    raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail="上传文件超过大小限制")
                 output.write(chunk)
     except Exception:
         destination.unlink(missing_ok=True)

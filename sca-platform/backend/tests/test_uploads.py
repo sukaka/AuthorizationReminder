@@ -5,11 +5,11 @@ import zipfile
 from fastapi.testclient import TestClient
 
 
-def build_client(monkeypatch, tmp_path, max_bytes=1024 * 1024):
+def build_client(monkeypatch, tmp_path, ignored_max_bytes_env=1024 * 1024):
     monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path / 'sca-upload-test.db'}")
     monkeypatch.setenv("AUTH_DEV_BYPASS", "true")
     monkeypatch.setenv("UPLOAD_ROOT", str(tmp_path / "uploads"))
-    monkeypatch.setenv("UPLOAD_MAX_BYTES", str(max_bytes))
+    monkeypatch.setenv("UPLOAD_MAX_BYTES", str(ignored_max_bytes_env))
     monkeypatch.setenv("CELERY_TASK_ALWAYS_EAGER", "true")
 
     from app import config
@@ -65,17 +65,35 @@ def test_upload_zip_records_file_and_project(monkeypatch, tmp_path):
         assert client.get("/api/sca/uploads").json()["total"] == 0
 
 
-def test_upload_rejects_oversized_archive(monkeypatch, tmp_path):
+def test_upload_does_not_reject_archive_by_platform_size_limit(monkeypatch, tmp_path):
     archive = make_zip({"requirements.txt": "fastapi==0.115.6\n"})
 
-    with build_client(monkeypatch, tmp_path, max_bytes=16) as client:
+    with build_client(monkeypatch, tmp_path, ignored_max_bytes_env=16) as client:
         response = client.post(
             "/api/sca/uploads",
             data={"project_name": "too-large", "scan_note": ""},
             files={"file": ("demo.zip", archive, "application/zip")},
         )
 
-        assert response.status_code == 413
+        assert response.status_code == 200
+        assert response.json()["file_size"] == len(archive)
+
+
+def test_resumable_session_does_not_reject_declared_large_file(monkeypatch, tmp_path):
+    with build_client(monkeypatch, tmp_path, ignored_max_bytes_env=16) as client:
+        response = client.post(
+            "/api/sca/uploads/sessions",
+            json={
+                "project_name": "large-session",
+                "scan_note": "不限制大小",
+                "filename": "source.zip",
+                "total_size": 1024 * 1024 * 1024,
+                "total_chunks": 2,
+            },
+        )
+
+        assert response.status_code == 200
+        assert response.json()["file_size"] == 1024 * 1024 * 1024
 
 
 def test_resumable_upload_merges_chunks(monkeypatch, tmp_path):

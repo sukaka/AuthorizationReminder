@@ -19,7 +19,6 @@ class Settings(BaseSettings):
     auth_dev_bypass: bool = False
     cors_origins: str = Field(default="http://localhost:18089,http://127.0.0.1:18089")
     upload_root: str = "/data/sca/uploads"
-    upload_max_bytes: int = 200 * 1024 * 1024
     celery_task_always_eager: bool = False
     osv_api_url: str = "https://api.osv.dev"
     nvd_api_url: str = "https://services.nvd.nist.gov/rest/json/cves/2.0"

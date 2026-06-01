@@ -233,7 +233,7 @@ async def upload_source_archive(
     upload_root = Path(settings.upload_root)
     ensure_upload_dirs(upload_root)
     destination = upload_root / "archives" / _stored_name(upload_id, filename)
-    size = await save_upload_file(file, destination, settings.upload_max_bytes)
+    size = await save_upload_file(file, destination)
 
     project = ensure_project(db, project_name, scan_note, user.username)
     record = UploadFileRecord(
@@ -269,8 +269,8 @@ async def create_upload_session(
 ) -> UploadFileOut:
     await require_action("sca:write", request, user, settings)
     filename = validate_archive_filename(payload.filename)
-    if payload.total_size <= 0 or payload.total_size > settings.upload_max_bytes:
-        raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail="上传文件超过大小限制")
+    if payload.total_size <= 0:
+        raise HTTPException(status_code=400, detail="文件大小必须大于 0")
     if payload.total_chunks <= 0 or payload.total_chunks > 10000:
         raise HTTPException(status_code=400, detail="分片数量不合法")
     project = ensure_project(db, payload.project_name, payload.scan_note, user.username)
@@ -318,8 +318,8 @@ async def upload_chunk(
     chunk_path = chunk_dir / f"{chunk_index:08d}.part"
     chunk_path.write_bytes(chunk)
     received = sum(chunk_size(chunk_dir / f"{index:08d}.part") for index in range(record.total_chunks))
-    if received > settings.upload_max_bytes or received > record.file_size:
-        raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail="上传文件超过大小限制")
+    if received > record.file_size:
+        raise HTTPException(status_code=400, detail="已上传分片大小超过声明大小")
     record.received_bytes = received
     record.status = "uploading"
     add_upload_log(db, record.id, "chunk_uploaded", f"已上传分片 {chunk_index + 1}/{record.total_chunks}")
@@ -809,7 +809,7 @@ async def upload_image_tar_scan(
     output_dir.mkdir(parents=True, exist_ok=True)
     filename = f"{uuid.uuid4().hex}-{file.filename or 'image.tar'}"
     path = output_dir / filename
-    size = await save_upload_file(file, path, settings.upload_max_bytes * 10)
+    size = await save_upload_file(file, path)
     scan = ImageScan(image_ref=file.filename or "", tar_path=str(path), scanner=scanner, status="running", summary=f"已上传镜像 tar：{size} bytes")
     db.add(scan)
     db.commit()
