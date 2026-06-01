@@ -67,7 +67,6 @@ class Project(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
     )
-
     upload_files: Mapped[list["UploadFileRecord"]] = relationship(back_populates="project", cascade="all, delete-orphan")
     scan_tasks: Mapped[list["ScanTask"]] = relationship(back_populates="project", cascade="all, delete-orphan")
     components: Mapped[list["Component"]] = relationship(back_populates="project", cascade="all, delete-orphan")
@@ -179,6 +178,11 @@ class VulnerabilityRecord(Base):
     suggested_deadline: Mapped[str] = mapped_column(String(80), nullable=False, default="人工确认后排期")
     remediation_type: Mapped[str] = mapped_column(String(40), nullable=False, default="人工确认")
     business_impact: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    reachability_status: Mapped[str] = mapped_column(String(32), nullable=False, default="unknown")
+    reachability_evidence: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    entry_points: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    related_files: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    call_path_summary: Mapped[str] = mapped_column(Text, nullable=False, default="")
     description: Mapped[str] = mapped_column(Text, nullable=False, default="")
     fixed_version: Mapped[str] = mapped_column(String(160), nullable=False, default="")
     published_at_text: Mapped[str] = mapped_column(String(80), nullable=False, default="")
@@ -190,6 +194,7 @@ class VulnerabilityRecord(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
     )
+    component: Mapped[Component | None] = relationship()
 
 
 class VulnerabilityQueryLog(Base):
@@ -340,6 +345,18 @@ class AiTriageResult(Base):
     token_completion: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     token_total: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     model: Mapped[str] = mapped_column(String(80), nullable=False, default="")
+    ai_schema_version: Mapped[str] = mapped_column(String(32), nullable=False, default="ai-triage-v2")
+    input_hash: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    ai_priority: Mapped[str] = mapped_column(String(20), nullable=False, default="Review")
+    confidence: Mapped[float] = mapped_column(Float, nullable=False, default=0)
+    is_likely_false_positive: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    evidence_summary: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    business_impact: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    fix_advice: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    temporary_mitigation: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    need_manual_review: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    manual_review_reason: Mapped[str] = mapped_column(Text, nullable=False, default="")
     raw_json: Mapped[str] = mapped_column(Text, nullable=False, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

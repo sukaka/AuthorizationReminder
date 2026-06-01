@@ -229,11 +229,29 @@ CELERY_RESULT_BACKEND=redis://sca-redis:6379/2
 - 无法判断版本范围：`match_status=unknown`，不进入高危统计和 DevSecOps 阻断
 - 风险优先级综合 CVSS、CISA KEV、POC、在野利用、运行时/开发测试依赖、安全版本和 RCE/认证/权限/数据泄露关键词，不只按 CVSS 排序
 
+### 轻量级可达性分析
+
+服务位于 `backend/app/reachability_service.py`，漏洞查询入库时会基于最新上传源码的解压目录执行轻量静态分析：
+
+- Java：识别 `import`、Spring `Controller`、`Service`、`Mapper`、`GetMapping/PostMapping/RequestMapping`
+- Python：识别 `import`、`from xxx import xxx`、FastAPI / Flask / Django 路由
+- Node.js：识别 `require`、`import`、Express / NestJS / Vue / React 入口
+
+输出字段：
+
+- `reachability_status`：`reachable / possibly_reachable / not_found / unknown`
+- `reachability_evidence`
+- `entry_points`
+- `related_files`
+- `call_path_summary`
+
+如果漏洞组件没有任何 import 或调用证据，但项目存在入口点，会标记为“未发现调用证据”。前端漏洞列表可展开查看判断原因、入口点、相关文件和调用证据。
+
 ### 数据库设计
 
 初始化 SQL 位于 `database/init/001_init_sca.sql`，新增：
 
-- `vulnerabilities`：CVE 编号、CVSS、可信度、匹配状态、风险优先级、修复期限、业务影响、描述、修复版本、发布时间、POC、在野利用
+- `vulnerabilities`：CVE 编号、CVSS、可信度、匹配状态、风险优先级、可达性证据、修复期限、业务影响、描述、修复版本、发布时间、POC、在野利用
 - `vulnerability_queries`：漏洞源查询审计日志
 
 ### FastAPI 接口
@@ -370,20 +388,25 @@ response_format.type=json_schema
 
 ### Prompt 模板
 
-系统提示要求模型不要只按 CVSS 排序，必须综合公网暴露、核心业务、实际调用、运行路径、POC、在野利用、依赖范围、WAF/IPS 与修复复杂度。
+系统提示要求模型只基于系统提供的结构化上下文分析，不允许捏造 PoC、在野利用、KEV、EPSS、可达性或业务事实。上下文不足时必须输出 `Review`。
+
+输入上下文包括项目上下文、组件信息、漏洞信息、匹配证据、版本判断结果、运行时依赖、公网暴露、核心业务、POC、KEV、EPSS、可达性、修复版本、防护措施和历史人工处置记录。
 
 ### JSON Schema
 
-模型必须输出：
+模型必须输出严格 JSON：
 
-- `ai_risk_level`：`P0/P1/P2/P3/Ignore/Review`
-- `noise_reason`
-- `immediate_fix`
-- `suspected_false_positive`
-- `remediation`
+- `ai_priority`：`P0/P1/P2/P3/Review/Ignore`
+- `confidence`
+- `is_likely_false_positive`
+- `reason`
+- `evidence_summary`
+- `business_impact`
+- `fix_advice`
 - `fix_deadline`
-- `risk_explanation`
-- `priority_score`
+- `temporary_mitigation`
+- `need_manual_review`
+- `manual_review_reason`
 
 ### 脱敏方案
 
@@ -391,7 +414,7 @@ response_format.type=json_schema
 
 ### 数据库设计
 
-新增 `ai_triage_results`，记录 AI 风险等级、降噪原因、修复建议、人工确认状态、模型名和 token 统计。
+新增 `ai_triage_results`，记录 AI 风险等级、降噪原因、修复建议、人工确认状态、模型名、token 统计、`ai_schema_version` 和 `input_hash`。同一漏洞在上下文未变化时复用已有结论，便于审计和节省 Token。
 
 ### API 接口
 
@@ -401,7 +424,7 @@ response_format.type=json_schema
 
 ### Vue3 页面
 
-菜单“AI 降噪”提供上下文勾选、批量分析、Token 统计、修复期限和人工确认。
+菜单“AI 降噪”提供上下文勾选、批量分析、置信度、证据摘要、Token 统计、修复期限和人工确认。
 
 ## 14. 第九阶段：软件资产中心
 

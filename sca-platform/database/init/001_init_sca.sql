@@ -131,6 +131,11 @@ CREATE TABLE IF NOT EXISTS vulnerabilities (
   suggested_deadline VARCHAR(80) NOT NULL DEFAULT '人工确认后排期',
   remediation_type VARCHAR(40) NOT NULL DEFAULT '人工确认',
   business_impact TEXT NOT NULL DEFAULT '',
+  reachability_status VARCHAR(32) NOT NULL DEFAULT 'unknown',
+  reachability_evidence TEXT NOT NULL DEFAULT '',
+  entry_points TEXT NOT NULL DEFAULT '',
+  related_files TEXT NOT NULL DEFAULT '',
+  call_path_summary TEXT NOT NULL DEFAULT '',
   description TEXT NOT NULL DEFAULT '',
   fixed_version VARCHAR(160) NOT NULL DEFAULT '',
   published_at_text VARCHAR(80) NOT NULL DEFAULT '',
@@ -270,6 +275,18 @@ CREATE TABLE IF NOT EXISTS ai_triage_results (
   token_completion INTEGER NOT NULL DEFAULT 0,
   token_total INTEGER NOT NULL DEFAULT 0,
   model VARCHAR(80) NOT NULL DEFAULT '',
+  ai_schema_version VARCHAR(32) NOT NULL DEFAULT 'ai-triage-v2',
+  input_hash VARCHAR(64) NOT NULL DEFAULT '',
+  ai_priority VARCHAR(20) NOT NULL DEFAULT 'Review',
+  confidence DOUBLE PRECISION NOT NULL DEFAULT 0,
+  is_likely_false_positive BOOLEAN NOT NULL DEFAULT FALSE,
+  reason TEXT NOT NULL DEFAULT '',
+  evidence_summary TEXT NOT NULL DEFAULT '',
+  business_impact TEXT NOT NULL DEFAULT '',
+  fix_advice TEXT NOT NULL DEFAULT '',
+  temporary_mitigation TEXT NOT NULL DEFAULT '',
+  need_manual_review BOOLEAN NOT NULL DEFAULT FALSE,
+  manual_review_reason TEXT NOT NULL DEFAULT '',
   raw_json TEXT NOT NULL DEFAULT '',
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   confirmed_at TIMESTAMPTZ NULL
@@ -356,6 +373,7 @@ CREATE INDEX IF NOT EXISTS idx_vulnerabilities_cve_id ON vulnerabilities(cve_id)
 CREATE INDEX IF NOT EXISTS idx_vulnerabilities_severity ON vulnerabilities(severity);
 CREATE INDEX IF NOT EXISTS idx_vulnerabilities_match_status ON vulnerabilities(match_status);
 CREATE INDEX IF NOT EXISTS idx_vulnerabilities_risk_priority ON vulnerabilities(risk_priority);
+CREATE INDEX IF NOT EXISTS idx_vulnerabilities_reachability_status ON vulnerabilities(reachability_status);
 CREATE INDEX IF NOT EXISTS idx_vulnerability_queries_project_id ON vulnerability_queries(project_id);
 CREATE INDEX IF NOT EXISTS idx_report_exports_project_id ON report_exports(project_id);
 CREATE INDEX IF NOT EXISTS idx_sbom_documents_project_id ON sbom_documents(project_id);
@@ -367,6 +385,7 @@ CREATE INDEX IF NOT EXISTS idx_risk_alerts_project_id ON risk_alerts(project_id)
 CREATE INDEX IF NOT EXISTS idx_risk_alerts_status ON risk_alerts(status);
 CREATE INDEX IF NOT EXISTS idx_ai_triage_results_project_id ON ai_triage_results(project_id);
 CREATE INDEX IF NOT EXISTS idx_ai_triage_results_vulnerability_id ON ai_triage_results(vulnerability_id);
+CREATE INDEX IF NOT EXISTS idx_ai_triage_results_input_hash ON ai_triage_results(input_hash);
 CREATE INDEX IF NOT EXISTS idx_remediation_tickets_project_id ON remediation_tickets(project_id);
 CREATE INDEX IF NOT EXISTS idx_remediation_tickets_vulnerability_id ON remediation_tickets(vulnerability_id);
 CREATE INDEX IF NOT EXISTS idx_remediation_tickets_status ON remediation_tickets(status);

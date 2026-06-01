@@ -94,12 +94,13 @@ from .schemas import (
     WhitelistCreateIn,
     WhitelistOut,
 )
-from .ai_triage_service import analyze_vulnerabilities_with_ai
+from .ai_triage_service import analyze_vulnerabilities_with_ai, cached_ai_result
 from .asset_service import asset_components, asset_dashboard, asset_graph
 from .devops_service import devops_dashboard, record_devops_event
 from .ops_service import plan_backup_path, production_config
 from .remediation_service import create_ticket_no, ignore_vulnerability, transition_ticket, verify_ticket
 from .report_service import generate_report
+from .reachability_service import analyze_component_reachability
 from .risk_monitor_service import monitor_component_update, raw_json, snapshot_risk_level
 from .sbom_service import generate_sbom, scan_image
 from .upload_service import (
@@ -478,6 +479,18 @@ def _ensure_project_exists(db: Session, project_id: int) -> Project:
     return project
 
 
+def _latest_source_root(db: Session, project_id: int) -> Path | None:
+    record = db.scalar(
+        select(UploadFileRecord)
+        .where(UploadFileRecord.project_id == project_id, UploadFileRecord.status.in_(["scanned", "scanning", "completed"]))
+        .order_by(UploadFileRecord.created_at.desc())
+    )
+    if not record:
+        return None
+    root = Path(settings.upload_root) / "extracted" / record.upload_id
+    return root if root.exists() else None
+
+
 @app.post("/api/sca/projects/{project_id}/vulnerabilities/query", response_model=VulnerabilityListOut, tags=["vulnerabilities"])
 async def query_project_vulnerabilities(
     request: Request,
@@ -491,6 +504,7 @@ async def query_project_vulnerabilities(
     db.execute(delete(VulnerabilityRecord).where(VulnerabilityRecord.project_id == project_id))
     db.flush()
     for component in components:
+        reachability = analyze_component_reachability(component, _latest_source_root(db, project_id))
         findings = query_component_vulnerabilities(component, settings)
         component.vulnerability_status = "vulnerable" if findings else "clean"
         for finding in findings:
@@ -521,6 +535,11 @@ async def query_project_vulnerabilities(
                     suggested_deadline=finding.suggested_deadline,
                     remediation_type=finding.remediation_type,
                     business_impact=finding.business_impact,
+                    reachability_status=reachability.reachability_status,
+                    reachability_evidence=reachability.reachability_evidence,
+                    entry_points=reachability.entry_points,
+                    related_files=reachability.related_files,
+                    call_path_summary=reachability.call_path_summary,
                     description=finding.description,
                     fixed_version=finding.fixed_version,
                     published_at_text=finding.published_at,
@@ -588,6 +607,11 @@ async def query_cve_detail(
             suggested_deadline=item.suggested_deadline,
             remediation_type=item.remediation_type,
             business_impact=item.business_impact,
+            reachability_status=getattr(item, "reachability_status", "unknown"),
+            reachability_evidence=getattr(item, "reachability_evidence", ""),
+            entry_points=getattr(item, "entry_points", ""),
+            related_files=getattr(item, "related_files", ""),
+            call_path_summary=getattr(item, "call_path_summary", ""),
             description=item.description,
             fixed_version=item.fixed_version,
             published_at_text=item.published_at,
@@ -953,8 +977,15 @@ async def analyze_ai_triage(
         )
     )
     context = payload.context.model_dump()
-    analyzed = analyze_vulnerabilities_with_ai(vulnerabilities, context, settings)
     rows: list[AiTriageResult] = []
+    missing: list[VulnerabilityRecord] = []
+    for vulnerability in vulnerabilities:
+        cached = cached_ai_result(db, project_id, vulnerability, context)
+        if cached:
+            rows.append(cached)
+        else:
+            missing.append(vulnerability)
+    analyzed = analyze_vulnerabilities_with_ai(missing, context, settings) if missing else []
     for item in analyzed:
         usage = item.get("token_usage") or {}
         row = AiTriageResult(
@@ -973,6 +1004,18 @@ async def analyze_ai_triage(
             token_completion=int(usage.get("completion_tokens") or 0),
             token_total=int(usage.get("total_tokens") or 0),
             model=str(item.get("model") or settings.openai_model),
+            ai_schema_version=str(item.get("ai_schema_version") or "ai-triage-v2"),
+            input_hash=str(item.get("input_hash") or ""),
+            ai_priority=str(item.get("ai_priority") or item["ai_risk_level"]),
+            confidence=float(item.get("confidence") or 0),
+            is_likely_false_positive=bool(item.get("is_likely_false_positive")),
+            reason=str(item.get("reason") or item["noise_reason"]),
+            evidence_summary=str(item.get("evidence_summary") or item["risk_explanation"]),
+            business_impact=str(item.get("business_impact") or ""),
+            fix_advice=str(item.get("fix_advice") or item["remediation"]),
+            temporary_mitigation=str(item.get("temporary_mitigation") or ""),
+            need_manual_review=bool(item.get("need_manual_review")),
+            manual_review_reason=str(item.get("manual_review_reason") or ""),
             raw_json=json.dumps(item.get("raw") or {}, ensure_ascii=False),
         )
         db.add(row)

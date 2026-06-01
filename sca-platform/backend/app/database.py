@@ -74,6 +74,25 @@ def run_compat_migrations() -> None:
         "suggested_deadline": "VARCHAR(80) NOT NULL DEFAULT '人工确认后排期'",
         "remediation_type": "VARCHAR(40) NOT NULL DEFAULT '人工确认'",
         "business_impact": "TEXT NOT NULL DEFAULT ''",
+        "reachability_status": "VARCHAR(32) NOT NULL DEFAULT 'unknown'",
+        "reachability_evidence": "TEXT NOT NULL DEFAULT ''",
+        "entry_points": "TEXT NOT NULL DEFAULT ''",
+        "related_files": "TEXT NOT NULL DEFAULT ''",
+        "call_path_summary": "TEXT NOT NULL DEFAULT ''",
+    }
+    ai_triage_additions = {
+        "ai_schema_version": "VARCHAR(32) NOT NULL DEFAULT 'ai-triage-v2'",
+        "input_hash": "VARCHAR(64) NOT NULL DEFAULT ''",
+        "ai_priority": "VARCHAR(20) NOT NULL DEFAULT 'Review'",
+        "confidence": "FLOAT NOT NULL DEFAULT 0",
+        "is_likely_false_positive": "BOOLEAN NOT NULL DEFAULT FALSE",
+        "reason": "TEXT NOT NULL DEFAULT ''",
+        "evidence_summary": "TEXT NOT NULL DEFAULT ''",
+        "business_impact": "TEXT NOT NULL DEFAULT ''",
+        "fix_advice": "TEXT NOT NULL DEFAULT ''",
+        "temporary_mitigation": "TEXT NOT NULL DEFAULT ''",
+        "need_manual_review": "BOOLEAN NOT NULL DEFAULT FALSE",
+        "manual_review_reason": "TEXT NOT NULL DEFAULT ''",
     }
     with engine.begin() as conn:
         for foreign_key in inspector.get_foreign_keys("components"):
@@ -89,6 +108,11 @@ def run_compat_migrations() -> None:
             for column, definition in vulnerability_additions.items():
                 if column not in vulnerability_existing:
                     conn.execute(text(f"ALTER TABLE vulnerabilities ADD COLUMN {column} {definition}"))
+        if inspector.has_table("ai_triage_results"):
+            ai_existing = {column["name"] for column in inspector.get_columns("ai_triage_results")}
+            for column, definition in ai_triage_additions.items():
+                if column not in ai_existing:
+                    conn.execute(text(f"ALTER TABLE ai_triage_results ADD COLUMN {column} {definition}"))
 
 
 def check_database() -> bool:

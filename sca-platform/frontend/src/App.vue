@@ -273,6 +273,32 @@
             </div>
           </div>
           <el-table :data="filteredVulnerabilities" empty-text="暂无漏洞，请先查询">
+            <el-table-column type="expand">
+              <template #default="{ row }">
+                <div class="component-evidence">
+                  <div>
+                    <span class="muted">可达性</span>
+                    <strong>{{ reachabilityLabel(row.reachability_status) }}</strong>
+                  </div>
+                  <div>
+                    <span class="muted">入口点</span>
+                    <strong>{{ row.entry_points || '-' }}</strong>
+                  </div>
+                  <div>
+                    <span class="muted">相关文件</span>
+                    <strong>{{ row.related_files || '-' }}</strong>
+                  </div>
+                  <div class="evidence-text">
+                    <span class="muted">判断原因</span>
+                    <code>{{ row.call_path_summary || '暂无可达性分析结论' }}</code>
+                  </div>
+                  <div class="evidence-text">
+                    <span class="muted">调用证据</span>
+                    <code>{{ row.reachability_evidence || '未发现调用证据' }}</code>
+                  </div>
+                </div>
+              </template>
+            </el-table-column>
             <el-table-column prop="severity" label="等级" width="100">
               <template #default="{ row }">
                 <el-tag :type="severityTag(row.severity)">{{ severityLabel(row.severity) }}</el-tag>
@@ -298,6 +324,11 @@
             <el-table-column prop="match_status" label="匹配" width="110">
               <template #default="{ row }">
                 <el-tag :type="row.match_status === 'affected' ? 'success' : 'warning'" effect="plain">{{ row.match_status }}</el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column prop="reachability_status" label="可达性" width="130">
+              <template #default="{ row }">
+                <el-tag :type="reachabilityTag(row.reachability_status)" effect="plain">{{ reachabilityLabel(row.reachability_status) }}</el-tag>
               </template>
             </el-table-column>
             <el-table-column prop="fixed_version" label="修复版本" width="140" show-overflow-tooltip />
@@ -490,9 +521,13 @@
           </div>
           <el-table :data="aiResults" empty-text="暂无 AI 分析结果">
             <el-table-column prop="ai_risk_level" label="AI 等级" width="100" />
+            <el-table-column prop="confidence" label="置信度" width="90">
+              <template #default="{ row }">{{ Math.round((row.confidence || 0) * 100) }}%</template>
+            </el-table-column>
             <el-table-column prop="priority_score" label="优先级" width="90" />
-            <el-table-column prop="noise_reason" label="降噪原因" min-width="220" show-overflow-tooltip />
-            <el-table-column prop="remediation" label="修复建议" min-width="220" show-overflow-tooltip />
+            <el-table-column prop="reason" label="降噪原因" min-width="220" show-overflow-tooltip />
+            <el-table-column prop="evidence_summary" label="证据摘要" min-width="220" show-overflow-tooltip />
+            <el-table-column prop="fix_advice" label="修复建议" min-width="220" show-overflow-tooltip />
             <el-table-column prop="fix_deadline" label="期限" width="100" />
             <el-table-column prop="token_total" label="Token" width="90" />
             <el-table-column label="人工确认" width="150">
@@ -848,6 +883,20 @@ const confidenceTag = (confidence, review) => {
   if (confidence >= 0.55) return 'warning'
   return 'info'
 }
+
+const reachabilityLabel = (status) => ({
+  reachable: '可达',
+  possibly_reachable: '可能可达',
+  not_found: '未发现调用证据',
+  unknown: '未知',
+}[status] || status || '未知')
+
+const reachabilityTag = (status) => ({
+  reachable: 'danger',
+  possibly_reachable: 'warning',
+  not_found: 'info',
+  unknown: 'info',
+}[status] || 'info')
 
 const trendWidth = (value, total) => {
   if (!total) return '0%'

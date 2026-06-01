@@ -159,6 +159,11 @@ class VulnerabilityOut(BaseModel):
     suggested_deadline: str = "人工确认后排期"
     remediation_type: str = "人工确认"
     business_impact: str = ""
+    reachability_status: str = "unknown"
+    reachability_evidence: str = ""
+    entry_points: str = ""
+    related_files: str = ""
+    call_path_summary: str = ""
     description: str
     fixed_version: str
     published_at_text: str
@@ -374,6 +379,18 @@ class AiTriageOut(BaseModel):
     token_completion: int
     token_total: int
     model: str
+    ai_schema_version: str = "ai-triage-v2"
+    input_hash: str = ""
+    ai_priority: str = "Review"
+    confidence: float = 0
+    is_likely_false_positive: bool = False
+    reason: str = ""
+    evidence_summary: str = ""
+    business_impact: str = ""
+    fix_advice: str = ""
+    temporary_mitigation: str = ""
+    need_manual_review: bool = False
+    manual_review_reason: str = ""
     created_at: datetime
     confirmed_at: datetime | None = None
 
