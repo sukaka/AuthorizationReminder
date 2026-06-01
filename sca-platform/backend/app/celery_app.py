@@ -13,7 +13,6 @@ from .dependency_parser import parse_source_dependencies
 from .models import (
     Component,
     ComponentDependency,
-    RemediationTicket,
     RiskAlert,
     RiskChangeRecord,
     RiskMonitorRun,
@@ -247,25 +246,9 @@ def monitor_risks() -> dict[str, int | str]:
 @celery_app.task(name="sca.check_remediation_overdue")
 def check_remediation_overdue() -> dict[str, int | str]:
     init_db()
-    from .remediation_service import is_overdue
+    from .remediation_service import mark_overdue_tickets
 
     with SessionLocal() as db:
-        tickets = db.query(RemediationTicket).filter(RemediationTicket.status.notin_(["已修复", "已忽略"])).all()
-        notified = 0
-        for ticket in tickets:
-            if not ticket.overdue_notified and is_overdue(ticket):
-                ticket.overdue_notified = True
-                db.add(
-                    RiskAlert(
-                        project_id=ticket.project_id,
-                        component_id=None,
-                        level="high",
-                        title=f"整改工单超时：{ticket.ticket_no}",
-                        message=f"整改人 {ticket.assignee} 的工单已超过期限 {ticket.due_date}",
-                        notification_channel="email" if settings.notification_email_enabled else "",
-                        email_to=settings.notification_email_to,
-                    )
-                )
-                notified += 1
+        result = mark_overdue_tickets(db, settings.notification_email_enabled, settings.notification_email_to)
         db.commit()
-        return {"status": "success", "overdue": notified}
+        return result

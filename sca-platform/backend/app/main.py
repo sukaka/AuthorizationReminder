@@ -44,6 +44,7 @@ from .models import (
 from .schemas import (
     AiTriageAnalyzeIn,
     AiTriageConfirmIn,
+    AiTriageMetaOut,
     AiTriageOut,
     AssetComponentListOut,
     AssetDashboardOut,
@@ -94,11 +95,18 @@ from .schemas import (
     WhitelistCreateIn,
     WhitelistOut,
 )
-from .ai_triage_service import analyze_vulnerabilities_with_ai, cached_ai_result
+from .ai_triage_service import (
+    AI_SCHEMA_VERSION,
+    AI_TRIAGE_JSON_SCHEMA,
+    AI_TRIAGE_PROMPT_TEMPLATE,
+    SENSITIVE_KEYS,
+    analyze_vulnerabilities_with_ai,
+    cached_ai_result,
+)
 from .asset_service import asset_components, asset_dashboard, asset_graph
 from .devops_service import devops_dashboard, record_devops_event
 from .ops_service import plan_backup_path, production_config
-from .remediation_service import create_ticket_no, ignore_vulnerability, transition_ticket, verify_ticket
+from .remediation_service import create_ticket_no, ignore_vulnerability, mark_overdue_tickets, transition_ticket, verify_ticket
 from .report_service import generate_report
 from .reachability_service import analyze_component_reachability
 from .risk_monitor_service import monitor_component_update, raw_json, snapshot_risk_level
@@ -1026,6 +1034,21 @@ async def analyze_ai_triage(
     return rows
 
 
+@app.get("/api/sca/ai-triage/meta", response_model=AiTriageMetaOut, tags=["ai-triage"])
+async def ai_triage_meta(
+    request: Request,
+    user: Annotated[UserPayload, Depends(get_current_user)],
+) -> AiTriageMetaOut:
+    await require_action("sca:read", request, user, settings)
+    return AiTriageMetaOut(
+        schema_version=AI_SCHEMA_VERSION,
+        prompt_template=AI_TRIAGE_PROMPT_TEMPLATE,
+        json_schema=AI_TRIAGE_JSON_SCHEMA,
+        supported_priorities=["P0", "P1", "P2", "P3", "Review", "Ignore"],
+        redaction_keys=sorted(SENSITIVE_KEYS),
+    )
+
+
 @app.get("/api/sca/projects/{project_id}/ai-triage/results", response_model=list[AiTriageOut], tags=["ai-triage"])
 async def list_ai_triage_results(
     request: Request,
@@ -1054,6 +1077,18 @@ async def confirm_ai_triage_result(
     db.commit()
     db.refresh(row)
     return row
+
+
+@app.post("/api/sca/remediation/overdue/check", tags=["remediation"])
+async def check_remediation_overdue_api(
+    request: Request,
+    user: Annotated[UserPayload, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> dict[str, int | str]:
+    await require_action("sca:write", request, user, settings)
+    result = mark_overdue_tickets(db, settings.notification_email_enabled, settings.notification_email_to)
+    db.commit()
+    return result
 
 
 @app.get("/api/sca/assets/dashboard", response_model=AssetDashboardOut, tags=["assets"])

@@ -397,6 +397,14 @@ class AiTriageOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class AiTriageMetaOut(BaseModel):
+    schema_version: str
+    prompt_template: str
+    json_schema: dict[str, object]
+    supported_priorities: list[str]
+    redaction_keys: list[str]
+
+
 class AssetDashboardOut(BaseModel):
     project_total: int
     component_total: int
@@ -406,17 +414,25 @@ class AssetDashboardOut(BaseModel):
     license_risk_total: int
     by_ecosystem: dict[str, int]
     by_severity: dict[str, int]
+    risk_distribution: dict[str, int] = Field(default_factory=dict)
+    eol_distribution: dict[str, int] = Field(default_factory=dict)
+    license_distribution: dict[str, int] = Field(default_factory=dict)
+    risk_trend: list[dict[str, object]] = Field(default_factory=list)
+    top_risky_projects: list[dict[str, object]] = Field(default_factory=list)
 
 
 class AssetComponentOut(BaseModel):
     package_name: str
     ecosystem: str
     project_count: int
+    project_ids: list[int] = Field(default_factory=list)
+    project_names: str = ""
     version_count: int
     vulnerability_count: int
     highest_severity: str
     eol_status: str = "unknown"
     license_name: str = "unknown"
+    risk_score: float = 0
 
 
 class AssetComponentListOut(BaseModel):

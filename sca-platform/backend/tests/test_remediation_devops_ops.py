@@ -9,6 +9,7 @@ def build_client(monkeypatch, tmp_path):
     monkeypatch.setenv("AUTH_DEV_BYPASS", "true")
     monkeypatch.setenv("APP_VERSION", "0.1.0")
     monkeypatch.setenv("DEVOPS_BLOCK_SEVERITIES", "critical,high")
+    monkeypatch.setenv("REPORT_ROOT", str(tmp_path / "reports"))
 
     from app import config
 
@@ -48,6 +49,8 @@ def seed_vulnerability(database, models, severity="high"):
             ecosystem="npm",
             cvss_score=8.1,
             severity=severity,
+            risk_priority="P1",
+            risk_score=86,
             description="demo",
             fixed_version="1.0.1",
             has_poc=True,
@@ -81,6 +84,24 @@ def test_remediation_ticket_lifecycle_and_ignore(monkeypatch, tmp_path):
     assert tickets["total"] == 1
 
 
+def test_remediation_overdue_check_creates_alert(monkeypatch, tmp_path):
+    client, _main, models, database = build_client(monkeypatch, tmp_path)
+    with client as test_client:
+        project_id, vulnerability_id = seed_vulnerability(database, models)
+        created = test_client.post(
+            f"/api/sca/projects/{project_id}/remediation/tickets",
+            json={"vulnerability_id": vulnerability_id, "assignee": "sec_owner", "due_date": "2020-01-01", "priority": "P1"},
+        )
+        result = test_client.post("/api/sca/remediation/overdue/check").json()
+        alerts = test_client.get(f"/api/sca/projects/{project_id}/risk-monitor/alerts").json()
+        events = test_client.get(f"/api/sca/remediation/tickets/{created.json()['id']}/events").json()
+
+    assert result["overdue"] == 1
+    assert result["notified"] == 1
+    assert alerts[0]["title"].startswith("整改工单超时")
+    assert any("超时提醒" in item["comment"] for item in events)
+
+
 def test_devops_webhook_blocks_high_risk_and_records_event(monkeypatch, tmp_path):
     client, _main, models, database = build_client(monkeypatch, tmp_path)
     with client as test_client:
@@ -94,6 +115,7 @@ def test_devops_webhook_blocks_high_risk_and_records_event(monkeypatch, tmp_path
 
     assert response.status_code == 200
     assert response.json()["decision"] == "blocked"
+    assert response.json()["report_id"]
     assert events["items"][0]["block_reason"]
     assert dashboard["blocked_count"] == 1
 

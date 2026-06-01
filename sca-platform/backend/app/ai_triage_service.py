@@ -63,6 +63,13 @@ AI_TRIAGE_JSON_SCHEMA = {
 
 AI_SCHEMA_VERSION = "ai-triage-v2"
 
+AI_TRIAGE_PROMPT_TEMPLATE = (
+    "你是企业软件供应链安全分析专家。必须只基于系统提供的结构化上下文分析，禁止捏造 PoC、"
+    "在野利用、KEV、EPSS、可达性或业务事实。不要只按照 CVSS 排序，必须综合公网暴露、"
+    "核心业务、实际调用、运行路径、PoC、在野利用、开发/测试依赖、WAF/IPS、防护措施和修复复杂度。"
+    "如果上下文不足，必须输出 Review 并说明人工复核原因。只输出符合 JSON Schema 的 JSON。"
+)
+
 
 def sanitize_for_ai(value: Any) -> Any:
     if isinstance(value, dict):
@@ -148,8 +155,12 @@ def structured_item(item: VulnerabilityRecord, context: dict[str, Any]) -> dict[
         },
         "runtime_and_business": {
             "runtime_dependency": bool(component is not None and getattr(component, "scope", "") == "runtime"),
+            "development_dependency": bool(component is not None and "dev" in f"{getattr(component, 'scope', '')} {getattr(component, 'dependency_type', '')}".lower()),
+            "test_dependency": bool(component is not None and "test" in f"{getattr(component, 'scope', '')} {getattr(component, 'dependency_type', '')}".lower()),
             "internet_exposed": bool(context.get("internet_exposed")),
             "core_business": bool(context.get("core_business")),
+            "actually_called": bool(context.get("actually_called")),
+            "runtime_path": bool(context.get("runtime_path")),
             "has_waf_ips": bool(context.get("has_waf_ips")),
             "fix_complexity": context.get("fix_complexity", "medium"),
         },
@@ -167,11 +178,7 @@ def build_prompt(vulnerabilities: list[VulnerabilityRecord], context: dict[str, 
         "context": sanitize_for_ai(context),
         "items": [structured_item(item, context) for item in vulnerabilities],
     }
-    system = (
-        "你是企业软件供应链安全分析专家。必须只基于用户提供的结构化上下文分析，禁止捏造 PoC、在野利用、"
-        "KEV、EPSS、可达性或业务事实。上下文不足时必须输出 Review，并说明需要人工确认。"
-        "只输出符合 JSON Schema 的 JSON，不允许输出散文。"
-    )
+    system = AI_TRIAGE_PROMPT_TEMPLATE
     user = "请对以下漏洞批量降噪与优先级排序：\n" + json.dumps(payload, ensure_ascii=False)
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]
 
@@ -181,7 +188,14 @@ def _heuristic_result(item: VulnerabilityRecord, context: dict[str, Any]) -> dic
     exposed = bool(context.get("internet_exposed"))
     core = bool(context.get("core_business"))
     waf = bool(context.get("has_waf_ips"))
-    test_dep = item.package_version.lower().startswith("dev") or item.ecosystem == "test"
+    try:
+        component = getattr(item, "component", None)
+    except Exception:
+        component = None
+    dependency_text = f"{getattr(component, 'scope', '')} {getattr(component, 'dependency_type', '')}".lower()
+    dev_dep = "dev" in dependency_text
+    test_dep = "test" in dependency_text or item.package_version.lower().startswith("dev") or item.ecosystem == "test"
+    fix_complexity = str(context.get("fix_complexity") or "medium").lower()
     score = item.cvss_score
     score += 20 if item.exploited_in_wild else 0
     score += 12 if item.has_poc else 0
@@ -189,7 +203,10 @@ def _heuristic_result(item: VulnerabilityRecord, context: dict[str, Any]) -> dic
     score += 8 if core else 0
     score += 8 if runtime else 0
     score -= 12 if waf else 0
+    score -= 10 if dev_dep else 0
     score -= 15 if test_dep else 0
+    score -= 8 if fix_complexity == "high" else 0
+    score += 4 if fix_complexity == "low" and item.fixed_version else 0
     if score >= 45:
         level = "P0"
         deadline = "24小时内"
@@ -208,7 +225,14 @@ def _heuristic_result(item: VulnerabilityRecord, context: dict[str, Any]) -> dic
     if item.needs_human_review or item.match_status != "affected":
         level = "Review"
         deadline = "人工确认后排期"
-    evidence = f"匹配：{item.matched_by or 'unknown'}；版本：{item.match_status}；可达性：{item.reachability_status}"
+    if test_dep and item.reachability_status == "not_found" and not item.exploited_in_wild:
+        level = "Ignore" if item.match_status == "affected" else "Review"
+        deadline = "下个迭代复核"
+    evidence = (
+        f"匹配：{item.matched_by or 'unknown'}；版本：{item.match_status}；可达性：{item.reachability_status}；"
+        f"公网：{exposed}；核心业务：{core}；PoC：{item.has_poc}；在野利用：{item.exploited_in_wild}；"
+        f"开发依赖：{dev_dep}；测试依赖：{test_dep}；WAF/IPS：{waf}；修复复杂度：{fix_complexity}"
+    )
     reason = "未配置 OpenAI API Key，使用本地结构化规则；结论仅基于系统上下文"
     return {
         "vulnerability_id": item.id,

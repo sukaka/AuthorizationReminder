@@ -390,7 +390,7 @@ response_format.type=json_schema
 
 系统提示要求模型只基于系统提供的结构化上下文分析，不允许捏造 PoC、在野利用、KEV、EPSS、可达性或业务事实。上下文不足时必须输出 `Review`。
 
-输入上下文包括项目上下文、组件信息、漏洞信息、匹配证据、版本判断结果、运行时依赖、公网暴露、核心业务、POC、KEV、EPSS、可达性、修复版本、防护措施和历史人工处置记录。
+输入上下文包括项目上下文、组件信息、漏洞信息、匹配证据、版本判断结果、运行时依赖、开发依赖、测试依赖、公网暴露、核心业务、实际调用、运行路径、POC、KEV、EPSS、可达性、修复版本、防护措施、修复复杂度和历史人工处置记录。
 
 ### JSON Schema
 
@@ -419,12 +419,13 @@ response_format.type=json_schema
 ### API 接口
 
 - `POST /api/sca/projects/{project_id}/ai-triage/analyze`：批量 AI 分析
+- `GET /api/sca/ai-triage/meta`：输出 Prompt 模板、JSON Schema、支持优先级和脱敏字段
 - `GET /api/sca/projects/{project_id}/ai-triage/results`：AI 结果列表
 - `POST /api/sca/ai-triage/{result_id}/confirm`：人工确认、误报、延期、忽略
 
 ### Vue3 页面
 
-菜单“AI 降噪”提供上下文勾选、批量分析、置信度、证据摘要、Token 统计、修复期限和人工确认。
+菜单“AI 降噪”提供上下文勾选、批量分析、置信度、证据摘要、Token 统计、修复期限、人工确认、Prompt 版本、输出等级和脱敏字段展示。
 
 ## 14. 第九阶段：软件资产中心
 
@@ -439,9 +440,11 @@ response_format.type=json_schema
 ### 风险统计逻辑
 
 - 全局组件库按 `ecosystem + package_name` 聚合
-- 风险排序结合最高漏洞等级和漏洞数量
+- 风险排序结合最高漏洞等级、P0/P1 分布、漏洞数量和组件风险分
 - EOL 来源于持续监测快照
 - License 风险默认识别 `GPL/AGPL/LGPL/unknown`
+- Dashboard 返回风险分布、EOL 分布、License 分布、风险趋势和 Top 风险项目
+- 组件资产返回 `project_ids`、`project_names` 和 `risk_score`，便于定位项目关联
 
 ### API 接口
 
@@ -524,12 +527,13 @@ docker compose exec -T sca-api curl -sS http://localhost:5191/api/sca/projects/1
 - `POST /api/sca/remediation/tickets/{ticket_id}/transition`：状态流转
 - `POST /api/sca/remediation/tickets/{ticket_id}/verify`：修复验证
 - `GET /api/sca/remediation/tickets/{ticket_id}/events`：生命周期事件
+- `POST /api/sca/remediation/overdue/check`：手动执行超时提醒检查
 - `POST /api/sca/projects/{project_id}/remediation/whitelist`：加入白名单并忽略
 - `GET /api/sca/projects/{project_id}/remediation/whitelist`：白名单列表
 
 ### Vue3 页面
 
-菜单“整改闭环”提供项目选择、漏洞选择、整改人、修复期限、优先级、工单列表、状态操作、复测验证和白名单列表。
+菜单“整改闭环”提供项目选择、漏洞选择、整改人、修复期限、优先级、工单列表、状态操作、复测验证、白名单列表和手动超时提醒。
 
 ### 邮件提醒
 
@@ -539,15 +543,16 @@ docker compose exec -T sca-api curl -sS http://localhost:5191/api/sca/projects/1
 
 ### GitLab / GitHub Actions / Jenkins 集成
 
-CI 系统扫描完成后调用平台 webhook，平台根据项目当前漏洞等级做发布门禁判断。阻断等级由 `DEVOPS_BLOCK_SEVERITIES` 配置，默认 `critical,high`。
+CI 系统扫描完成后调用平台 webhook，平台根据项目当前漏洞等级和风险优先级做发布门禁判断。阻断策略优先识别 P0/P1、KEV、在野利用和已确认阻断等级漏洞；阻断等级仍可由 `DEVOPS_BLOCK_SEVERITIES` 配置，默认 `critical,high`。
 
 ### Webhook 逻辑
 
 1. CI 传入项目 ID 或项目名称、流水线号、分支、提交号。
 2. 平台定位项目并统计当前漏洞。
-3. 如果存在阻断等级漏洞，事件决策为 `blocked`。
-4. 否则事件决策为 `passed`。
-5. 结果写入 `devops_scan_events`，Dashboard 聚合阻断率和来源分布。
+3. 自动生成 PDF 安全报告并关联到流水线事件。
+4. 如果存在 P0/P1、KEV、在野利用或阻断等级漏洞，事件决策为 `blocked`。
+5. 否则事件决策为 `passed`。
+6. 结果写入 `devops_scan_events`，Dashboard 聚合阻断率和来源分布。
 
 ### API 接口
 

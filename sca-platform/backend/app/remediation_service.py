@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
 
-from .models import RemediationEvent, RemediationTicket, VulnerabilityRecord, VulnerabilityWhitelist
+from .models import RemediationEvent, RemediationTicket, RiskAlert, VulnerabilityRecord, VulnerabilityWhitelist
 
 
 VALID_TRANSITIONS = {
@@ -66,3 +66,38 @@ def is_overdue(ticket: RemediationTicket) -> bool:
     except ValueError:
         return False
     return due < datetime.now(timezone.utc)
+
+
+def mark_overdue_tickets(db: Session, email_enabled: bool = False, email_to: str = "") -> dict[str, int | str]:
+    tickets = db.query(RemediationTicket).filter(RemediationTicket.status.notin_(["已修复", "已忽略"])).all()
+    notified = 0
+    overdue_total = 0
+    for ticket in tickets:
+        if not is_overdue(ticket):
+            continue
+        overdue_total += 1
+        if ticket.overdue_notified:
+            continue
+        ticket.overdue_notified = True
+        db.add(
+            RiskAlert(
+                project_id=ticket.project_id,
+                component_id=None,
+                level="high",
+                title=f"整改工单超时：{ticket.ticket_no}",
+                message=f"整改人 {ticket.assignee} 的工单已超过期限 {ticket.due_date}，优先级 {ticket.priority}",
+                notification_channel="email" if email_enabled else "",
+                email_to=email_to,
+            )
+        )
+        db.add(
+            RemediationEvent(
+                ticket_id=ticket.id,
+                from_status=ticket.status,
+                to_status=ticket.status,
+                actor="system",
+                comment=f"超时提醒：期限 {ticket.due_date}",
+            )
+        )
+        notified += 1
+    return {"status": "success", "overdue": overdue_total, "notified": notified}

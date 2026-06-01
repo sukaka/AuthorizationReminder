@@ -7,7 +7,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .config import Settings
-from .models import DevopsScanEvent, Project, VulnerabilityRecord
+from .models import DevopsScanEvent, Project, ReportExport, VulnerabilityRecord
+from .report_service import generate_report
 
 
 def block_severities(settings: Settings) -> set[str]:
@@ -30,21 +31,45 @@ def evaluate_release_gate(db: Session, project: Project | None, settings: Settin
         db.scalars(
             select(VulnerabilityRecord).where(
                 VulnerabilityRecord.project_id == project.id,
-                VulnerabilityRecord.severity.in_(severities),
                 VulnerabilityRecord.match_status == "affected",
                 VulnerabilityRecord.needs_human_review.is_(False),
             )
         )
     )
+    blockers = [
+        item
+        for item in blockers
+        if item.risk_priority in {"P0", "P1"}
+        or item.severity in severities
+        or item.cisa_kev
+        or item.exploited_in_wild
+    ]
     if blockers:
-        cves = ", ".join((item.cve_id or item.advisory_id) for item in blockers[:5])
-        return "blocked", f"发现阻断级别漏洞 {len(blockers)} 个：{cves}"
+        cves = ", ".join(f"{item.risk_priority or item.severity}:{item.cve_id or item.advisory_id}" for item in blockers[:5])
+        return "blocked", f"发现发布阻断风险 {len(blockers)} 个（P0/P1、KEV、在野利用或阻断等级漏洞）：{cves}"
     return "passed", "未发现阻断级别漏洞"
 
 
 def record_devops_event(db: Session, payload: dict, settings: Settings) -> DevopsScanEvent:
     project = resolve_project(db, payload.get("project_id"), payload.get("project_name", ""))
     decision, reason = evaluate_release_gate(db, project, settings)
+    report_id = None
+    if project:
+        try:
+            report_path = generate_report(db, project.id, "pdf", settings.report_root)
+            report = ReportExport(
+                project_id=project.id,
+                format="pdf",
+                filename=report_path.name,
+                storage_path=str(report_path),
+                status="generated",
+                created_by="devops",
+            )
+            db.add(report)
+            db.flush()
+            report_id = report.id
+        except Exception:
+            report_id = None
     event = DevopsScanEvent(
         project_id=project.id if project else None,
         source=str(payload.get("source") or "gitlab"),
@@ -54,6 +79,7 @@ def record_devops_event(db: Session, payload: dict, settings: Settings) -> Devop
         status="scanned",
         decision=decision,
         block_reason=reason if decision == "blocked" else "",
+        report_id=report_id,
         raw_json=json.dumps(payload, ensure_ascii=False),
     )
     db.add(event)

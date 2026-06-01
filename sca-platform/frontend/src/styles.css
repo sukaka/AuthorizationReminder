@@ -314,6 +314,36 @@ body {
   padding: 16px;
 }
 
+.meta-stack,
+.distribution-board {
+  display: grid;
+  gap: 10px;
+  padding: 16px;
+  border-bottom: 1px solid var(--line);
+}
+
+.meta-stack div,
+.distribution-board div {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: #f8fafc;
+  display: grid;
+  gap: 5px;
+}
+
+.meta-stack span,
+.distribution-board span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.meta-stack strong,
+.distribution-board strong {
+  overflow-wrap: anywhere;
+  line-height: 1.55;
+}
+
 .graph-node {
   border: 1px solid var(--line);
   border-radius: 8px;

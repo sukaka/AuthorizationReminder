@@ -113,11 +113,15 @@ def test_ai_triage_uses_json_result_and_records_tokens(monkeypatch, tmp_path):
             },
         )
         confirmed = test_client.post(f"/api/sca/ai-triage/{response.json()[0]['id']}/confirm", json={"human_status": "accepted"})
+        meta = test_client.get("/api/sca/ai-triage/meta").json()
 
     assert response.status_code == 200
     assert response.json()[0]["ai_risk_level"] == "P0"
     assert response.json()[0]["token_total"] == 150
     assert confirmed.json()["human_status"] == "accepted"
+    assert meta["schema_version"] == "ai-triage-v2"
+    assert "P0" in meta["supported_priorities"]
+    assert "json_schema" in meta
 
 
 def test_asset_dashboard_and_search(monkeypatch, tmp_path):
@@ -149,5 +153,9 @@ def test_asset_dashboard_and_search(monkeypatch, tmp_path):
     assert dashboard["component_total"] == 1
     assert dashboard["vulnerability_total"] == 1
     assert dashboard["eol_total"] == 1
+    assert dashboard["risk_distribution"]
+    assert dashboard["top_risky_projects"][0]["project_name"] == "AI项目"
     assert components["items"][0]["package_name"] == "spring-core"
+    assert components["items"][0]["project_names"] == "AI项目"
+    assert components["items"][0]["risk_score"] > 0
     assert graph["nodes"]

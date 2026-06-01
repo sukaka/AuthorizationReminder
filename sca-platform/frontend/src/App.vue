@@ -613,6 +613,11 @@
         </div>
         <div class="panel side-panel">
           <div class="panel-head"><h2>排序因素</h2></div>
+          <div class="meta-stack">
+            <div><span>Prompt 版本</span><strong>{{ aiMeta.schema_version || '-' }}</strong></div>
+            <div><span>输出等级</span><strong>{{ (aiMeta.supported_priorities || []).join(' / ') || '-' }}</strong></div>
+            <div><span>脱敏字段</span><strong>{{ (aiMeta.redaction_keys || []).join(', ') || '-' }}</strong></div>
+          </div>
           <ul class="capability-list">
             <li>公网、核心业务、实际调用、运行路径</li>
             <li>POC、在野利用、开发/测试依赖</li>
@@ -638,9 +643,11 @@
           </section>
           <el-table :data="assetComponents" empty-text="暂无资产">
             <el-table-column prop="highest_severity" label="风险" width="90" />
+            <el-table-column prop="risk_score" label="风险分" width="90" />
             <el-table-column prop="package_name" label="组件" min-width="180" show-overflow-tooltip />
             <el-table-column prop="ecosystem" label="生态" width="100" />
             <el-table-column prop="project_count" label="项目数" width="90" />
+            <el-table-column prop="project_names" label="关联项目" min-width="180" show-overflow-tooltip />
             <el-table-column prop="version_count" label="版本数" width="90" />
             <el-table-column prop="vulnerability_count" label="漏洞数" width="90" />
             <el-table-column prop="eol_status" label="EOL" width="90" />
@@ -649,6 +656,20 @@
         </div>
         <div class="panel side-panel">
           <div class="panel-head"><h2>组件图谱</h2></div>
+          <div class="distribution-board">
+            <div>
+              <span>风险分布</span>
+              <strong>{{ formatDistribution(assetDashboard.risk_distribution) }}</strong>
+            </div>
+            <div>
+              <span>EOL 分布</span>
+              <strong>{{ formatDistribution(assetDashboard.eol_distribution) }}</strong>
+            </div>
+            <div>
+              <span>License 分布</span>
+              <strong>{{ formatDistribution(assetDashboard.license_distribution) }}</strong>
+            </div>
+          </div>
           <div class="graph-list">
             <div v-for="node in assetGraph.nodes.slice(0, 14)" :key="node.id" class="graph-node">
               <span>{{ node.type }}</span>
@@ -666,6 +687,7 @@
               <el-select v-model="selectedProjectId" placeholder="选择项目" style="width: 220px" @change="loadProjectDetails">
                 <el-option v-for="project in projects" :key="project.id" :label="project.name" :value="project.id" />
               </el-select>
+              <el-button :icon="Bell" @click="checkOverdueTickets">超时提醒</el-button>
               <el-button type="primary" :icon="Document" @click="createRemediationTicket">创建工单</el-button>
             </div>
           </div>
@@ -734,6 +756,7 @@
             <el-table-column prop="pipeline_id" label="流水线" width="130" show-overflow-tooltip />
             <el-table-column prop="ref" label="分支" width="120" show-overflow-tooltip />
             <el-table-column prop="decision" label="决策" width="100" />
+            <el-table-column prop="report_id" label="报告" width="90" />
             <el-table-column prop="block_reason" label="阻断原因" min-width="240" show-overflow-tooltip />
             <el-table-column prop="created_at" label="时间" width="210" />
           </el-table>
@@ -899,6 +922,7 @@ const riskAlerts = ref([])
 const riskTrend = ref([])
 const riskChanges = ref([])
 const aiResults = ref([])
+const aiMeta = ref({ schema_version: '', supported_priorities: [], redaction_keys: [] })
 const assetComponents = ref([])
 const assetGraph = ref({ nodes: [], edges: [] })
 const assetSearch = ref('')
@@ -1213,6 +1237,12 @@ const trendWidth = (value, total) => {
   return `${Math.max(4, Math.round((value / total) * 100))}%`
 }
 
+const formatDistribution = (value) => {
+  const entries = Object.entries(value || {})
+  if (!entries.length) return '-'
+  return entries.map(([key, count]) => `${key}:${count}`).join(' / ')
+}
+
 const loadOverview = async () => {
   loading.value = true
   error.value = ''
@@ -1456,6 +1486,11 @@ const loadAssets = async () => {
   assetGraph.value = (await requestJson('/api/sca/assets/graph')) || { nodes: [], edges: [] }
 }
 
+const loadAiMeta = async () => {
+  const meta = await requestJson('/api/sca/ai-triage/meta')
+  if (meta) aiMeta.value = meta
+}
+
 const loadDevops = async () => {
   const data = await requestJson('/api/sca/devops/dashboard')
   if (data) Object.assign(devopsDashboard, data)
@@ -1485,6 +1520,12 @@ const createRemediationTicket = async () => {
   })
   await loadProjectDetails()
   ElMessage.success('整改工单已创建')
+}
+
+const checkOverdueTickets = async () => {
+  const result = await requestJson('/api/sca/remediation/overdue/check', { method: 'POST' })
+  await loadProjectDetails()
+  ElMessage.success(`超时检查完成：超时 ${result?.overdue || 0}，新增提醒 ${result?.notified || 0}`)
 }
 
 const transitionTicket = async (row, status) => {
@@ -1600,6 +1641,7 @@ const enqueueTask = async () => {
 }
 
 onMounted(refreshAll)
+onMounted(loadAiMeta)
 onMounted(loadImageScans)
 onMounted(loadAssets)
 onMounted(loadDevops)
