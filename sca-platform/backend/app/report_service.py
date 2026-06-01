@@ -52,9 +52,7 @@ def _project_data(db: Session, project_id: int) -> tuple[Project, list[Component
     if not project:
         raise ValueError("项目不存在")
     components = list(db.scalars(select(Component).where(Component.project_id == project_id).order_by(Component.ecosystem, Component.package_name)))
-    vulnerabilities = list(
-        db.scalars(select(VulnerabilityRecord).where(VulnerabilityRecord.project_id == project_id).order_by(VulnerabilityRecord.cvss_score.desc()))
-    )
+    vulnerabilities = list(db.scalars(select(VulnerabilityRecord).where(VulnerabilityRecord.project_id == project_id)))
     return project, components, vulnerabilities
 
 
@@ -69,17 +67,96 @@ def _confirmed_vulnerabilities(vulnerabilities: list[VulnerabilityRecord]) -> li
     return [item for item in vulnerabilities if item.match_status == "affected" and not item.needs_human_review]
 
 
+def _priority_rank(value: str) -> int:
+    return {"P0": 0, "P1": 1, "P2": 2, "P3": 3, "Review": 4, "Ignore": 5}.get(value or "Review", 4)
+
+
+def _priority_sorted(vulnerabilities: list[VulnerabilityRecord]) -> list[VulnerabilityRecord]:
+    return sorted(vulnerabilities, key=lambda item: (_priority_rank(item.risk_priority), -float(item.risk_score or 0), -float(item.cvss_score or 0)))
+
+
+def _confidence_groups(vulnerabilities: list[VulnerabilityRecord]) -> dict[str, int]:
+    groups = {"confirmed": 0, "review": 0, "false_positive": 0}
+    for item in vulnerabilities:
+        if item.risk_priority == "Ignore" or item.false_positive_possibility == "high":
+            groups["false_positive"] += 1
+        elif item.needs_human_review or item.match_status == "unknown" or item.risk_priority == "Review":
+            groups["review"] += 1
+        else:
+            groups["confirmed"] += 1
+    return groups
+
+
+def _release_advice(vulnerabilities: list[VulnerabilityRecord]) -> str:
+    priorities = {item.risk_priority for item in vulnerabilities}
+    if "P0" in priorities:
+        return "不建议上线：存在 P0 级风险，需立即整改并复测。"
+    if "P1" in priorities:
+        return "建议整改后上线：存在 P1 级风险，应完成升级或缓解措施后再发布。"
+    if priorities & {"Review"}:
+        return "谨慎上线：存在待确认漏洞，建议完成证据复核后再进入生产发布。"
+    return "可按流程上线：未发现需要阻断发布的已确认高优先级漏洞。"
+
+
+def _natural_summary(project: Project, components: list[Component], vulnerabilities: list[VulnerabilityRecord]) -> str:
+    confirmed = _confirmed_vulnerabilities(vulnerabilities)
+    priority_counts = {level: sum(1 for item in confirmed if item.risk_priority == level) for level in ("P0", "P1", "P2", "P3")}
+    risky_components = ", ".join(dict.fromkeys(item.package_name for item in _priority_sorted(confirmed)[:5])) or "暂无集中风险组件"
+    urgent = priority_counts["P0"] + priority_counts["P1"]
+    if urgent:
+        risk_text = f"本次扫描发现 {urgent} 个需要优先整改的 P0/P1 风险"
+    else:
+        risk_text = "本次扫描未发现需要立即阻断的 P0/P1 已确认风险"
+    return f"{risk_text}，风险主要集中在 {risky_components}。{_release_advice(confirmed)} 项目备注：{project.scan_note or '无'}。组件总数 {len(components)}，漏洞记录 {len(vulnerabilities)}。"
+
+
+def _fix_command(component: Component | None, vulnerability: VulnerabilityRecord) -> str:
+    name = vulnerability.package_name
+    fixed = vulnerability.fixed_version or "安全版本"
+    ecosystem = (vulnerability.ecosystem or getattr(component, "ecosystem", "") or "").lower()
+    if ecosystem in {"maven", "java"}:
+        return f"Maven：将 {name} 的版本升级到 {fixed}，并执行 mvn dependency:tree 验证传递依赖。"
+    if ecosystem in {"npm", "node", "javascript"}:
+        return f"npm：优先修改 package.json/lockfile 到 {name}@{fixed}，再执行 npm install 与 npm audit 验证。"
+    if ecosystem in {"pypi", "python"}:
+        return f"pip：执行 pip install {name}=={fixed}，并同步 requirements.txt/poetry.lock。"
+    if ecosystem in {"go", "golang"}:
+        return f"Go：执行 go get {name}@{fixed}，再运行 go mod tidy。"
+    if ecosystem in {"docker", "container"}:
+        return f"Docker：将基础镜像或镜像组件 {name} 升级到 {fixed}，重新构建并扫描镜像。"
+    return f"通用：将 {name} 升级到 {fixed}，升级后重新扫描确认漏洞消除。"
+
+
 def _report_lines(project: Project, components: list[Component], vulnerabilities: list[VulnerabilityRecord]) -> list[str]:
     counts = _risk_counts(vulnerabilities)
-    high_risk = [item for item in _confirmed_vulnerabilities(vulnerabilities) if item.severity in {"critical", "high"}]
-    return [
+    confirmed = _confirmed_vulnerabilities(vulnerabilities)
+    high_risk = [item for item in confirmed if item.severity in {"critical", "high"}]
+    confidence = _confidence_groups(vulnerabilities)
+    component_by_id = {item.id: item for item in components}
+    priority_items = _priority_sorted(confirmed)
+    priority_lines = [
+        f"{item.risk_priority or 'Review'}：{item.cve_id or item.advisory_id} / {item.package_name} {item.package_version}，建议期限 {item.suggested_deadline}"
+        for item in priority_items[:12]
+    ]
+    fix_lines = [_fix_command(component_by_id.get(item.component_id or 0), item) for item in priority_items[:12]]
+    lines = [
         "聚信软件成分安全分析报告",
         "企业 Logo：JUXIN",
+        "一、本次扫描结论摘要",
+        _natural_summary(project, components, vulnerabilities),
+        f"上线建议：{_release_advice(confirmed)}",
+        "是否需要立即整改：" + ("是，存在 P0/P1 风险。" if any(item.risk_priority in {"P0", "P1"} for item in confirmed) else "否，建议按常规整改计划推进。"),
         f"项目概况：{project.name}",
         f"扫描时间：{datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}",
         f"扫描备注：{project.scan_note}",
         f"组件统计：共 {len(components)} 个组件",
         f"漏洞统计：共 {len(vulnerabilities)} 个漏洞，严重 {counts['critical']}，高危 {counts['high']}，中危 {counts['medium']}，低危 {counts['low']}",
+        "二、漏洞可信度说明",
+        f"已确认漏洞：{confidence['confirmed']}；待确认漏洞：{confidence['review']}；疑似误报漏洞：{confidence['false_positive']}。报告统计默认以已确认漏洞为主，待确认和疑似误报单独列示，避免误报影响管理层判断。",
+        "三、整改优先级清单",
+        "；".join(priority_lines) if priority_lines else "暂无需要整改的已确认漏洞。",
+        "四、开发修复建议",
+        "；".join(fix_lines) if fix_lines else "暂无开发侧升级命令建议。",
         "漏洞统计图：critical/high/medium/low = "
         + "/".join(str(counts[key]) for key in ("critical", "high", "medium", "low")),
         "高危漏洞：" + ("；".join(f"{item.cve_id or item.advisory_id} {item.package_name} {item.cvss_score}" for item in high_risk[:10]) or "暂无"),
@@ -87,6 +164,7 @@ def _report_lines(project: Project, components: list[Component], vulnerabilities
         "风险趋势：按漏洞发布时间持续跟踪新增漏洞，建议每次源码变更或镜像发布前重新扫描。",
         "等保整改建议：建立组件台账、漏洞处置闭环、补丁验证记录和供应链安全审计证据。",
     ]
+    return lines
 
 
 def _write_docx(path: Path, lines: list[str]) -> None:
@@ -144,9 +222,37 @@ def generate_report(db: Session, project_id: int, fmt: str, report_root: str) ->
     if fmt == "docx":
         _write_docx(path, lines)
     elif fmt == "xlsx":
-        rows = [["项目", project.name], ["组件数", str(len(components))], ["漏洞数", str(len(vulnerabilities))], ["整改建议", lines[-2]]]
-        rows.extend([["CVE", "组件", "版本", "等级", "CVSS", "修复版本"]])
-        rows.extend([[item.cve_id, item.package_name, item.package_version, item.severity, str(item.cvss_score), item.fixed_version] for item in vulnerabilities])
+        confidence = _confidence_groups(vulnerabilities)
+        rows = [
+            ["本次扫描结论摘要", _natural_summary(project, components, vulnerabilities)],
+            ["上线建议", _release_advice(_confirmed_vulnerabilities(vulnerabilities))],
+            ["组件数", str(len(components))],
+            ["漏洞数", str(len(vulnerabilities))],
+            ["已确认漏洞", str(confidence["confirmed"])],
+            ["待确认漏洞", str(confidence["review"])],
+            ["疑似误报漏洞", str(confidence["false_positive"])],
+            ["整改建议", lines[-2]],
+            [],
+            ["整改优先级清单"],
+            ["优先级", "CVE/公告", "组件", "当前版本", "等级", "风险分", "修复版本", "建议期限", "修复命令"],
+        ]
+        component_by_id = {item.id: item for item in components}
+        rows.extend(
+            [
+                [
+                    item.risk_priority,
+                    item.cve_id or item.advisory_id,
+                    item.package_name,
+                    item.package_version,
+                    item.severity,
+                    str(item.risk_score),
+                    item.fixed_version,
+                    item.suggested_deadline,
+                    _fix_command(component_by_id.get(item.component_id or 0), item),
+                ]
+                for item in _priority_sorted(_confirmed_vulnerabilities(vulnerabilities))
+            ]
+        )
         _write_xlsx(path, rows)
     elif fmt == "pdf":
         _write_pdf(path, lines)

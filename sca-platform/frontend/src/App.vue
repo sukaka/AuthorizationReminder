@@ -272,6 +272,69 @@
               <el-button type="primary" :loading="vulnerabilityQuerying" :icon="Search" @click="queryVulnerabilities">查询漏洞</el-button>
             </div>
           </div>
+          <div class="risk-command">
+            <div class="quick-filters">
+              <el-button :type="quickFilters.p01 ? 'primary' : 'default'" plain @click="toggleQuickFilter('p01')">只看 P0/P1</el-button>
+              <el-button :type="quickFilters.hideDev ? 'primary' : 'default'" plain @click="toggleQuickFilter('hideDev')">隐藏开发依赖</el-button>
+              <el-button :type="quickFilters.hideTest ? 'primary' : 'default'" plain @click="toggleQuickFilter('hideTest')">隐藏测试依赖</el-button>
+              <el-button :type="quickFilters.publicOnly ? 'primary' : 'default'" plain @click="toggleQuickFilter('publicOnly')">只看公网项目</el-button>
+              <el-button :type="quickFilters.reachableOnly ? 'primary' : 'default'" plain @click="toggleQuickFilter('reachableOnly')">只看可达漏洞</el-button>
+              <el-button :type="quickFilters.kevOnly ? 'danger' : 'default'" plain @click="toggleQuickFilter('kevOnly')">只看 KEV</el-button>
+              <el-button :type="quickFilters.pocOnly ? 'warning' : 'default'" plain @click="toggleQuickFilter('pocOnly')">只看有 PoC</el-button>
+              <el-button :type="quickFilters.reviewOnly ? 'warning' : 'default'" plain @click="toggleQuickFilter('reviewOnly')">需要人工确认</el-button>
+              <el-button :type="quickFilters.falsePositiveOnly ? 'info' : 'default'" plain @click="toggleQuickFilter('falsePositiveOnly')">疑似误报</el-button>
+              <el-button text @click="resetQuickFilters">清空</el-button>
+            </div>
+            <el-segmented v-model="projectResultView" :options="resultViewOptions" />
+          </div>
+
+          <section class="scan-result-board" :class="`is-${projectResultView}`">
+            <template v-if="projectResultView === 'management'">
+              <div class="scan-brief">
+                <span>管理层结论</span>
+                <strong>{{ managementSummary.title }}</strong>
+                <p>{{ managementSummary.description }}</p>
+              </div>
+              <div class="scan-kpis">
+                <div><span>风险等级</span><strong>{{ managementSummary.level }}</strong></div>
+                <div><span>P0/P1</span><strong>{{ p01Count }}</strong></div>
+                <div><span>整改进度</span><strong>{{ remediationProgress }}%</strong></div>
+                <div><span>可信漏洞</span><strong>{{ trustedVulnerabilityCount }}</strong></div>
+              </div>
+              <div class="mini-trend">
+                <div v-for="item in vulnerabilityTrend" :key="item.month">
+                  <span>{{ item.month }}</span>
+                  <i :style="{ height: trendHeight(item.total) }"></i>
+                  <b>{{ item.total }}</b>
+                </div>
+              </div>
+            </template>
+            <template v-else-if="projectResultView === 'security'">
+              <div class="security-lanes">
+                <div v-for="level in ['P0', 'P1', 'P2', 'Review']" :key="level">
+                  <span>{{ level }}</span>
+                  <strong>{{ priorityCount(level) }}</strong>
+                  <p>{{ priorityTopReason(level) }}</p>
+                </div>
+              </div>
+              <div class="evidence-strip">
+                <span>匹配证据：{{ evidenceCoverage.match }} 条</span>
+                <span>可达证据：{{ evidenceCoverage.reachability }} 条</span>
+                <span>待确认：{{ reviewCount }} 条</span>
+              </div>
+            </template>
+            <template v-else>
+              <div class="developer-fix-list">
+                <div v-for="item in developerFixItems" :key="item.id">
+                  <strong>{{ item.package_name }} {{ item.package_version }}</strong>
+                  <code>{{ fixCommand(item) }}</code>
+                  <span>{{ item.related_files || componentSource(item) || '影响文件待补充' }}</span>
+                  <el-tag :type="priorityTag(item.risk_priority)" effect="plain">{{ item.risk_priority || 'Review' }}</el-tag>
+                </div>
+              </div>
+            </template>
+          </section>
+
           <el-table :data="filteredVulnerabilities" empty-text="暂无漏洞，请先查询">
             <el-table-column type="expand">
               <template #default="{ row }">
@@ -336,8 +399,14 @@
             <el-table-column prop="description" label="漏洞详情" min-width="240" show-overflow-tooltip />
             <el-table-column label="情报" width="130">
               <template #default="{ row }">
+                <el-tag v-if="row.cisa_kev" type="danger" effect="plain">KEV</el-tag>
                 <el-tag v-if="row.has_poc" type="warning" effect="plain">POC</el-tag>
                 <el-tag v-if="row.exploited_in_wild" type="danger" effect="plain">在野</el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column label="操作" fixed="right" width="110">
+              <template #default="{ row }">
+                <el-button text type="primary" @click="openVulnerabilityDetail(row)">详情</el-button>
               </template>
             </el-table-column>
           </el-table>
@@ -398,6 +467,10 @@
             <li>漏洞统计图与风险等级统计</li>
             <li>高危漏洞清单与修复建议</li>
             <li>风险趋势与等保整改建议</li>
+            <li>本次扫描结论摘要与上线建议</li>
+            <li>漏洞可信度说明：已确认、待确认、疑似误报</li>
+            <li>按 P0/P1/P2/P3 输出整改优先级</li>
+            <li>Maven / npm / pip / Go / Docker 修复命令</li>
           </ul>
         </div>
       </section>
@@ -718,6 +791,69 @@
         </el-table>
       </section>
     </main>
+
+    <el-drawer v-model="vulnerabilityDrawerVisible" size="46%" class="vuln-drawer" :title="selectedVulnerabilityTitle">
+      <template v-if="selectedVulnerability">
+        <section class="detail-summary">
+          <el-tag :type="priorityTag(selectedVulnerability.risk_priority)">{{ selectedVulnerability.risk_priority || 'Review' }}</el-tag>
+          <el-tag :type="severityTag(selectedVulnerability.severity)">{{ severityLabel(selectedVulnerability.severity) }}</el-tag>
+          <el-tag :type="confidenceTag(selectedVulnerability.confidence_score, selectedVulnerability.needs_human_review)" effect="plain">
+            可信度 {{ Math.round((selectedVulnerability.confidence_score || 0) * 100) }}%
+          </el-tag>
+          <p>{{ selectedVulnerability.description || '暂无漏洞摘要' }}</p>
+        </section>
+
+        <section class="detail-grid">
+          <div><span>影响组件</span><strong>{{ selectedVulnerability.package_name }}</strong></div>
+          <div><span>当前版本</span><strong>{{ selectedVulnerability.package_version || '-' }}</strong></div>
+          <div><span>受影响版本范围</span><strong>{{ selectedVulnerability.version_range || selectedVulnerability.match_reason || '-' }}</strong></div>
+          <div><span>修复版本</span><strong>{{ selectedVulnerability.fixed_version || '待确认' }}</strong></div>
+          <div><span>相关项目</span><strong>{{ selectedProject?.name || '-' }}</strong></div>
+          <div><span>发布时间</span><strong>{{ selectedVulnerability.published_at_text || '-' }}</strong></div>
+        </section>
+
+        <section class="detail-section">
+          <h3>匹配证据</h3>
+          <p>{{ selectedVulnerability.matched_by || '未知来源' }}：{{ selectedVulnerability.match_reason || '暂无匹配说明' }}</p>
+          <code>{{ selectedComponent?.evidence_file || selectedComponent?.source_path || '-' }}{{ selectedComponent?.evidence_line ? `:${selectedComponent.evidence_line}` : '' }} {{ selectedComponent?.evidence_text || '' }}</code>
+        </section>
+
+        <section class="detail-section">
+          <h3>可达性证据</h3>
+          <p>{{ reachabilityLabel(selectedVulnerability.reachability_status) }}：{{ selectedVulnerability.call_path_summary || '暂无调用路径摘要' }}</p>
+          <code>{{ selectedVulnerability.reachability_evidence || '未发现调用证据' }}</code>
+          <small>入口点：{{ selectedVulnerability.entry_points || '-' }}；相关文件：{{ selectedVulnerability.related_files || '-' }}</small>
+        </section>
+
+        <section class="detail-section">
+          <h3>AI 降噪结果</h3>
+          <template v-if="selectedAiResult">
+            <p>{{ selectedAiResult.ai_priority }} / 置信度 {{ Math.round((selectedAiResult.confidence || 0) * 100) }}%：{{ selectedAiResult.reason || selectedAiResult.noise_reason }}</p>
+            <code>{{ selectedAiResult.evidence_summary || selectedAiResult.risk_explanation }}</code>
+          </template>
+          <p v-else>暂无 AI 降噪结论，可在“AI 降噪”中批量分析。</p>
+        </section>
+
+        <section class="detail-section">
+          <h3>处置建议</h3>
+          <p>{{ selectedVulnerability.remediation_type }}：{{ selectedVulnerability.priority_reason || selectedVulnerability.business_impact || '建议人工复核后处理' }}</p>
+          <code>{{ fixCommand(selectedVulnerability) }}</code>
+          <small>建议期限：{{ selectedVulnerability.suggested_deadline }}</small>
+        </section>
+
+        <section class="detail-section">
+          <h3>历史处置记录</h3>
+          <div v-if="vulnerabilityHistory.length" class="history-list">
+            <div v-for="item in vulnerabilityHistory" :key="item.id || `${item.ticket_id}-${item.created_at}`">
+              <span>{{ item.created_at || item.updated_at }}</span>
+              <strong>{{ item.to_status || item.status || item.human_status }}</strong>
+              <p>{{ item.comment || item.ticket_no || item.manual_review_reason || '页面记录' }}</p>
+            </div>
+          </div>
+          <p v-else>暂无处置记录。</p>
+        </section>
+      </template>
+    </el-drawer>
   </div>
 </template>
 
@@ -750,6 +886,10 @@ const dependencyTree = ref([])
 const scanLogs = ref([])
 const vulnerabilities = ref([])
 const vulnerabilityFilter = ref('all')
+const vulnerabilityDrawerVisible = ref(false)
+const selectedVulnerability = ref(null)
+const vulnerabilityHistory = ref([])
+const projectResultView = ref('management')
 const vulnerabilityTrend = ref([])
 const reports = ref([])
 const sboms = ref([])
@@ -768,6 +908,22 @@ const devopsEvents = ref([])
 const backupJobs = ref([])
 const reportFormat = ref('docx')
 const sbomFormat = ref('cyclonedx')
+const resultViewOptions = [
+  { label: '管理层视图', value: 'management' },
+  { label: '安全人员视图', value: 'security' },
+  { label: '研发人员视图', value: 'developer' },
+]
+const quickFilters = reactive({
+  p01: false,
+  hideDev: false,
+  hideTest: false,
+  publicOnly: false,
+  reachableOnly: false,
+  kevOnly: false,
+  pocOnly: false,
+  reviewOnly: false,
+  falsePositiveOnly: false,
+})
 const overview = reactive({
   project_count: 0,
   component_count: 0,
@@ -835,18 +991,172 @@ const userLabel = computed(() => {
   return `${overview.user.username} / ${overview.user.role}`
 })
 
+const selectedProject = computed(() => projects.value.find((project) => project.id === selectedProjectId.value) || null)
+
+const projectIsInternetExposed = computed(() => {
+  const text = `${selectedProject.value?.name || ''} ${selectedProject.value?.scan_note || ''}`.toLowerCase()
+  return /公网|internet|public|external|prod|生产/.test(text)
+})
+
+const componentForVulnerability = (item) =>
+  components.value.find((component) => component.id === item?.component_id)
+  || components.value.find((component) => component.package_name === item?.package_name && component.package_version === item?.package_version)
+  || null
+
+const selectedComponent = computed(() => componentForVulnerability(selectedVulnerability.value))
+
+const selectedAiResult = computed(() => aiResults.value.find((item) => item.vulnerability_id === selectedVulnerability.value?.id) || null)
+
+const selectedVulnerabilityTitle = computed(() => {
+  if (!selectedVulnerability.value) return '漏洞详情'
+  return `${selectedVulnerability.value.cve_id || selectedVulnerability.value.advisory_id || '漏洞'} · ${selectedVulnerability.value.package_name}`
+})
+
+const isDevDependency = (item) => {
+  const component = componentForVulnerability(item)
+  const text = `${component?.scope || ''} ${component?.dependency_type || ''}`.toLowerCase()
+  return text.includes('dev') || text.includes('development')
+}
+
+const isTestDependency = (item) => {
+  const component = componentForVulnerability(item)
+  const text = `${component?.scope || ''} ${component?.dependency_type || ''}`.toLowerCase()
+  return text.includes('test') || text.includes('pytest') || text.includes('spec')
+}
+
+const isReviewVulnerability = (item) => item.needs_human_review || item.match_status === 'unknown' || item.risk_priority === 'Review'
+
+const isFalsePositiveCandidate = (item) => item.false_positive_possibility === 'high' || item.risk_priority === 'Ignore'
+
 const filteredVulnerabilities = computed(() => {
-  if (vulnerabilityFilter.value === 'all') return vulnerabilities.value
   return vulnerabilities.value.filter((item) => {
     const confidence = Number(item.confidence_score || 0)
-    if (vulnerabilityFilter.value === 'high') return confidence >= 0.85 && !item.needs_human_review
-    if (vulnerabilityFilter.value === 'medium') return confidence >= 0.55 && confidence < 0.85 && !item.needs_human_review
-    if (vulnerabilityFilter.value === 'low') return confidence < 0.55 && !item.needs_human_review
-    if (vulnerabilityFilter.value === 'review') return item.needs_human_review || item.match_status === 'unknown' || item.risk_priority === 'Review'
-    if (vulnerabilityFilter.value === 'false_positive') return item.false_positive_possibility === 'high' || item.risk_priority === 'Ignore'
+    if (vulnerabilityFilter.value === 'high' && !(confidence >= 0.85 && !item.needs_human_review)) return false
+    if (vulnerabilityFilter.value === 'medium' && !(confidence >= 0.55 && confidence < 0.85 && !item.needs_human_review)) return false
+    if (vulnerabilityFilter.value === 'low' && !(confidence < 0.55 && !item.needs_human_review)) return false
+    if (vulnerabilityFilter.value === 'review' && !isReviewVulnerability(item)) return false
+    if (vulnerabilityFilter.value === 'false_positive' && !isFalsePositiveCandidate(item)) return false
+    if (quickFilters.p01 && !['P0', 'P1'].includes(item.risk_priority)) return false
+    if (quickFilters.hideDev && isDevDependency(item)) return false
+    if (quickFilters.hideTest && isTestDependency(item)) return false
+    if (quickFilters.publicOnly && !projectIsInternetExposed.value) return false
+    if (quickFilters.reachableOnly && item.reachability_status !== 'reachable') return false
+    if (quickFilters.kevOnly && !item.cisa_kev) return false
+    if (quickFilters.pocOnly && !item.has_poc) return false
+    if (quickFilters.reviewOnly && !isReviewVulnerability(item)) return false
+    if (quickFilters.falsePositiveOnly && !isFalsePositiveCandidate(item)) return false
     return true
   })
 })
+
+const trustedVulnerabilityCount = computed(() => vulnerabilities.value.filter((item) => item.match_status === 'affected' && !item.needs_human_review).length)
+
+const p01Count = computed(() => vulnerabilities.value.filter((item) => ['P0', 'P1'].includes(item.risk_priority)).length)
+
+const reviewCount = computed(() => vulnerabilities.value.filter(isReviewVulnerability).length)
+
+const remediationProgress = computed(() => {
+  if (!remediationTickets.value.length) return 0
+  const closed = remediationTickets.value.filter((item) => ['已修复', '已忽略'].includes(item.status)).length
+  return Math.round((closed / remediationTickets.value.length) * 100)
+})
+
+const managementSummary = computed(() => {
+  if (p01Count.value > 0) {
+    return {
+      level: '高',
+      title: '建议整改后再上线',
+      description: `当前项目存在 ${p01Count.value} 个 P0/P1 风险，建议优先完成修复验证。`,
+    }
+  }
+  if (reviewCount.value > 0) {
+    return {
+      level: '中',
+      title: '存在待确认风险',
+      description: `当前有 ${reviewCount.value} 个漏洞需要人工复核，建议安全人员确认后再决策。`,
+    }
+  }
+  return {
+    level: '低',
+    title: '未发现阻断风险',
+    description: '当前未发现 P0/P1 已确认漏洞，可按常规整改节奏推进。',
+  }
+})
+
+const evidenceCoverage = computed(() => ({
+  match: vulnerabilities.value.filter((item) => item.match_reason || item.matched_by).length,
+  reachability: vulnerabilities.value.filter((item) => item.reachability_evidence).length,
+}))
+
+const developerFixItems = computed(() => filteredVulnerabilities.value.filter((item) => item.fixed_version || item.risk_priority !== 'Ignore').slice(0, 8))
+
+const toggleQuickFilter = (key) => {
+  quickFilters[key] = !quickFilters[key]
+}
+
+const resetQuickFilters = () => {
+  Object.keys(quickFilters).forEach((key) => {
+    quickFilters[key] = false
+  })
+  vulnerabilityFilter.value = 'all'
+}
+
+const priorityCount = (level) => vulnerabilities.value.filter((item) => item.risk_priority === level).length
+
+const priorityTopReason = (level) => {
+  const item = vulnerabilities.value.find((row) => row.risk_priority === level)
+  return item?.priority_reason || '暂无代表性风险'
+}
+
+const trendHeight = (value) => `${Math.max(10, Math.min(76, Number(value || 0) * 12))}px`
+
+const componentSource = (item) => {
+  const component = componentForVulnerability(item)
+  if (!component) return ''
+  return component.evidence_file || component.source_path || component.source_file || ''
+}
+
+const fixCommand = (item) => {
+  const name = item?.package_name || 'package'
+  const fixed = item?.fixed_version || '安全版本'
+  const ecosystem = String(item?.ecosystem || componentForVulnerability(item)?.ecosystem || '').toLowerCase()
+  if (['maven', 'java'].includes(ecosystem)) return `mvn versions:use-dep-version -Dincludes=${name} -DdepVersion=${fixed}`
+  if (['npm', 'node', 'javascript'].includes(ecosystem)) return `npm install ${name}@${fixed}`
+  if (['pypi', 'python'].includes(ecosystem)) return `pip install ${name}==${fixed}`
+  if (['go', 'golang'].includes(ecosystem)) return `go get ${name}@${fixed}`
+  if (['docker', 'container'].includes(ecosystem)) return `更新 Dockerfile 基础镜像或组件 ${name}:${fixed}`
+  return `升级 ${name} 到 ${fixed} 后重新扫描`
+}
+
+const openVulnerabilityDetail = async (row) => {
+  selectedVulnerability.value = row
+  vulnerabilityDrawerVisible.value = true
+  vulnerabilityHistory.value = []
+  const relatedTickets = remediationTickets.value.filter((ticket) => ticket.vulnerability_id === row.id)
+  vulnerabilityHistory.value = relatedTickets.map((ticket) => ({
+    id: `ticket-${ticket.id}`,
+    created_at: ticket.updated_at || ticket.created_at,
+    status: ticket.status,
+    ticket_no: `${ticket.ticket_no} / ${ticket.assignee}`,
+  }))
+  const ai = aiResults.value.find((item) => item.vulnerability_id === row.id)
+  if (ai?.human_status && ai.human_status !== 'pending') {
+    vulnerabilityHistory.value.push({
+      id: `ai-${ai.id}`,
+      created_at: ai.confirmed_at || ai.created_at,
+      human_status: `AI 人工确认：${ai.human_status}`,
+      manual_review_reason: ai.manual_review_reason || ai.reason,
+    })
+  }
+  for (const ticket of relatedTickets) {
+    try {
+      const events = await requestJson(`/api/sca/remediation/tickets/${ticket.id}/events`)
+      vulnerabilityHistory.value.push(...(events || []))
+    } catch {
+      // 历史事件加载失败不影响详情查看。
+    }
+  }
+}
 
 const uploadPercent = (row) => {
   if (!row?.file_size) return 0

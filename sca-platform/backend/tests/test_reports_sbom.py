@@ -1,4 +1,6 @@
 import importlib
+import zipfile
+from io import BytesIO
 
 from fastapi.testclient import TestClient
 
@@ -60,6 +62,11 @@ def seed_project(database, models):
                 description="高危漏洞示例",
                 fixed_version="0.115.7",
                 published_at_text="2024-05-01T00:00:00Z",
+                confidence_score=0.92,
+                risk_priority="P1",
+                risk_score=88,
+                suggested_deadline="7 天内修复",
+                priority_reason="高危且存在安全版本",
             )
         )
         db.commit()
@@ -78,6 +85,24 @@ def test_report_exports_generate_downloadable_files(monkeypatch, tmp_path):
             downloaded = test_client.get(f"/api/sca/reports/{report['id']}/download")
             assert downloaded.status_code == 200
             assert downloaded.content.startswith(magic)
+
+
+def test_report_includes_management_summary_confidence_and_priority(monkeypatch, tmp_path):
+    client, _main, models, database = build_client(monkeypatch, tmp_path)
+    with client as test_client:
+        project_id = seed_project(database, models)
+        created = test_client.post(f"/api/sca/projects/{project_id}/reports", json={"format": "docx"})
+        report = created.json()
+        downloaded = test_client.get(f"/api/sca/reports/{report['id']}/download")
+
+    with zipfile.ZipFile(BytesIO(downloaded.content)) as archive:
+        document = archive.read("word/document.xml").decode("utf-8")
+
+    assert "本次扫描结论摘要" in document
+    assert "漏洞可信度说明" in document
+    assert "整改优先级清单" in document
+    assert "开发修复建议" in document
+    assert "pip install fastapi==0.115.7" in document
 
 
 def test_sbom_export_uses_database_components_when_tool_is_unavailable(monkeypatch, tmp_path):
