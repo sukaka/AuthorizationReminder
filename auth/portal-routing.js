@@ -23,6 +23,7 @@ const SYSTEM_ACCESS_KEYS = Object.freeze([
 const BUSINESS_SYSTEM_ACCESS_KEYS = Object.freeze(
   SYSTEM_ACCESS_KEYS.filter((key) => key !== ADMIN_CENTER_KEY && key !== AUDIT_CENTER_KEY)
 );
+const REQUIRED_BUSINESS_PORTAL_KEYS = Object.freeze(['train-exam', 'prompt-center', 'sca']);
 
 const normalizePortalRole = (role) => String(role || '').trim().toLowerCase();
 const normalizeSystemAccessKey = (key) => {
@@ -51,8 +52,8 @@ const defaultAppAccessByRole = (role) => {
   if (normalizedRole === 'sysadmin') return [ADMIN_CENTER_KEY];
   if (normalizedRole === 'auditor') return [AUDIT_CENTER_KEY, DELIVERY_KEY];
   if (normalizedRole === 'editor') return ['faq', 'tender', 'train-exam', 'prompt-center', 'sca'];
-  if (normalizedRole === 'reviewer') return ['faq', 'train-exam', 'prompt-center'];
-  return ['reminder', 'train-exam', 'prompt-center'];
+  if (normalizedRole === 'reviewer') return ['faq', 'train-exam', 'prompt-center', 'sca'];
+  return ['reminder', 'train-exam', 'prompt-center', 'sca'];
 };
 
 const resolveUserAppAccess = (user) => {
@@ -70,11 +71,10 @@ const resolveUserAppAccess = (user) => {
         .filter((item) => BUSINESS_SYSTEM_ACCESS_KEYS.includes(item))
     )
   );
-  if (!normalized.includes('train-exam') && !['sysadmin', 'auditor'].includes(normalizedRole)) {
-    normalized.push('train-exam');
-  }
-  if (!normalized.includes('prompt-center') && !['sysadmin', 'auditor'].includes(normalizedRole)) {
-    normalized.push('prompt-center');
+  if (!['sysadmin', 'auditor'].includes(normalizedRole)) {
+    for (const key of REQUIRED_BUSINESS_PORTAL_KEYS) {
+      if (!normalized.includes(key)) normalized.push(key);
+    }
   }
   return normalized;
 };

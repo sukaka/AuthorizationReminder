@@ -2740,10 +2740,10 @@ const renderDedicatedCenterPage = ({ nonce, config }) => {
     function getDefaultBusinessAccessByRole(role) {
       const normalizedRole = String(role || '').trim().toLowerCase();
       if (normalizedRole === 'editor') return ['faq', 'tender', 'train-exam', 'prompt-center', 'sca'];
-      if (normalizedRole === 'reviewer') return ['faq', 'train-exam', 'prompt-center'];
-      if (normalizedRole === 'sales') return ['reminder', 'train-exam', 'prompt-center'];
+      if (normalizedRole === 'reviewer') return ['faq', 'train-exam', 'prompt-center', 'sca'];
+      if (normalizedRole === 'sales') return ['reminder', 'train-exam', 'prompt-center', 'sca'];
       if (normalizedRole === 'admin') return systemAccessOptions.map((item) => item.key);
-      return ['reminder', 'train-exam', 'prompt-center'];
+      return ['reminder', 'train-exam', 'prompt-center', 'sca'];
     }
 
     function setCheckedValues(selector, values) {

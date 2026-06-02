@@ -97,12 +97,19 @@ test('sysadmin and auditor ignore legacy non-dedicated app_access', () => {
 test('legacy ticketing and sec-impl access folds into delivery once', () => {
   assert.deepEqual(
     resolveUserAppAccess({ role: 'editor', app_access: '["ticketing","sec-impl","faq"]' }),
-    ['delivery', 'faq', 'train-exam', 'prompt-center']
+    ['delivery', 'faq', 'train-exam', 'prompt-center', 'sca']
   );
 });
 
 test('editor defaults include software composition analysis access', () => {
   assert.ok(defaultAppAccessByRole('editor').includes('sca'));
+});
+
+test('legacy business users receive software composition analysis portal access', () => {
+  assert.deepEqual(
+    resolveUserAppAccess({ role: 'user', app_access: '["reminder"]' }),
+    ['reminder', 'train-exam', 'prompt-center', 'sca']
+  );
 });
 
 test('dedicated center config exposes admin and audit metadata', () => {
