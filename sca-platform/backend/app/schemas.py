@@ -108,6 +108,25 @@ class UploadListOut(BaseModel):
     items: list[UploadFileOut]
 
 
+class SystemConfigOut(BaseModel):
+    upload_max_file_size_mb: int
+    upload_max_file_size_bytes: int
+    openai_api_key_configured: bool
+    openai_api_key_masked: str = ""
+    openai_base_url: str
+    openai_model: str
+    openai_timeout_ms: int
+
+
+class SystemConfigUpdateIn(BaseModel):
+    upload_max_file_size_mb: int = Field(default=2048, ge=0, le=102400)
+    openai_api_key: str = ""
+    openai_base_url: str = Field(default="https://api.openai.com/v1", max_length=512)
+    openai_model: str = Field(default="gpt-4o-mini", max_length=120)
+    openai_timeout_ms: int = Field(default=30000, ge=1000, le=300000)
+    clear_openai_api_key: bool = False
+
+
 class ProjectListItem(BaseModel):
     id: int
     name: str

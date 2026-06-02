@@ -566,7 +566,7 @@ services:
     environment:
       POSTGRES_DB: juxin_sca
       POSTGRES_USER: sca_user
-      POSTGRES_PASSWORD: ${SCA_POSTGRES_PASSWORD}
+      POSTGRES_PASSWORD: ${SCA_POSTGRES_PASSWORD:-change_me_sca_postgres_password}
     volumes:
       - sca-postgres-data:/var/lib/postgresql/data
       - ./sca-platform/database/init:/docker-entrypoint-initdb.d:ro
@@ -599,7 +599,7 @@ services:
       APP_NAME: "聚信软件成分分析平台"
       APP_ENV: dev
       APP_VERSION: ${SCA_APP_VERSION:-0.1.0}
-      DATABASE_URL: "postgresql+psycopg://sca_user:${SCA_POSTGRES_PASSWORD}@sca-postgres:5432/juxin_sca"
+      DATABASE_URL: "postgresql+psycopg://sca_user:${SCA_POSTGRES_PASSWORD:-change_me_sca_postgres_password}@sca-postgres:5432/juxin_sca"
       REDIS_URL: "redis://sca-redis:6379/0"
       CELERY_BROKER_URL: "redis://sca-redis:6379/1"
       CELERY_RESULT_BACKEND: "redis://sca-redis:6379/2"
@@ -664,7 +664,7 @@ services:
       APP_NAME: "聚信软件成分分析平台"
       APP_ENV: dev
       APP_VERSION: ${SCA_APP_VERSION:-0.1.0}
-      DATABASE_URL: "postgresql+psycopg://sca_user:${SCA_POSTGRES_PASSWORD}@sca-postgres:5432/juxin_sca"
+      DATABASE_URL: "postgresql+psycopg://sca_user:${SCA_POSTGRES_PASSWORD:-change_me_sca_postgres_password}@sca-postgres:5432/juxin_sca"
       REDIS_URL: "redis://sca-redis:6379/0"
       CELERY_BROKER_URL: "redis://sca-redis:6379/1"
       CELERY_RESULT_BACKEND: "redis://sca-redis:6379/2"
@@ -724,7 +724,7 @@ services:
       APP_NAME: "聚信软件成分分析平台"
       APP_ENV: dev
       APP_VERSION: ${SCA_APP_VERSION:-0.1.0}
-      DATABASE_URL: "postgresql+psycopg://sca_user:${SCA_POSTGRES_PASSWORD}@sca-postgres:5432/juxin_sca"
+      DATABASE_URL: "postgresql+psycopg://sca_user:${SCA_POSTGRES_PASSWORD:-change_me_sca_postgres_password}@sca-postgres:5432/juxin_sca"
       REDIS_URL: "redis://sca-redis:6379/0"
       CELERY_BROKER_URL: "redis://sca-redis:6379/1"
       CELERY_RESULT_BACKEND: "redis://sca-redis:6379/2"
@@ -787,7 +787,7 @@ services:
       APP_NAME: "聚信软件成分分析平台"
       APP_ENV: dev
       APP_VERSION: ${SCA_APP_VERSION:-0.1.0}
-      DATABASE_URL: "postgresql+psycopg://sca_user:${SCA_POSTGRES_PASSWORD}@sca-postgres:5432/juxin_sca"
+      DATABASE_URL: "postgresql+psycopg://sca_user:${SCA_POSTGRES_PASSWORD:-change_me_sca_postgres_password}@sca-postgres:5432/juxin_sca"
       REDIS_URL: "redis://sca-redis:6379/0"
       CELERY_BROKER_URL: "redis://sca-redis:6379/1"
       CELERY_RESULT_BACKEND: "redis://sca-redis:6379/2"
@@ -858,7 +858,7 @@ services:
       ALPINE_DATABASE_URL: "jdbc:postgresql://sca-postgres:5432/juxin_sca"
       ALPINE_DATABASE_DRIVER: org.postgresql.Driver
       ALPINE_DATABASE_USERNAME: sca_user
-      ALPINE_DATABASE_PASSWORD: ${SCA_POSTGRES_PASSWORD}
+      ALPINE_DATABASE_PASSWORD: ${SCA_POSTGRES_PASSWORD:-change_me_sca_postgres_password}
       ALPINE_DATABASE_POOL_ENABLED: "true"
     volumes:
       - dependency-track-data:/data

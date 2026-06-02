@@ -208,6 +208,27 @@ body {
   padding: 18px;
 }
 
+.config-form {
+  padding: 18px;
+}
+
+.config-section {
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 18px;
+  margin-bottom: 18px;
+}
+
+.config-section:last-child {
+  border-bottom: 0;
+  margin-bottom: 0;
+  padding-bottom: 0;
+}
+
+.config-section h3 {
+  margin: 0 0 14px;
+  font-size: 15px;
+}
+
 .native-file {
   width: 100%;
   border: 1px solid var(--line);

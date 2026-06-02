@@ -55,6 +55,10 @@
           <el-icon><DataAnalysis /></el-icon>
           <span>生产运维</span>
         </el-menu-item>
+        <el-menu-item index="system-config">
+          <el-icon><Setting /></el-icon>
+          <span>系统配置</span>
+        </el-menu-item>
         <el-menu-item index="logs">
           <el-icon><Document /></el-icon>
           <span>扫描日志</span>
@@ -854,6 +858,59 @@
         </div>
       </section>
 
+      <section v-if="activeMenu === 'system-config'" class="workbench">
+        <div class="panel">
+          <div class="panel-head">
+            <h2>系统配置</h2>
+            <el-button type="primary" :loading="systemConfigSaving" @click="saveSystemConfig">保存配置</el-button>
+          </div>
+          <el-form class="config-form" label-position="top">
+            <section class="config-section">
+              <h3>上传限制</h3>
+              <el-form-item label="上传文件大小上限（MB）">
+                <el-input-number v-model="systemConfig.upload_max_file_size_mb" :min="0" :max="102400" :step="100" />
+              </el-form-item>
+              <p class="sub">设置为 0 表示不在应用层限制文件大小；当前断点续传每片 512KB。</p>
+            </section>
+            <section class="config-section">
+              <h3>大模型配置</h3>
+              <el-form-item label="OpenAI API Key">
+                <el-input
+                  v-model="systemConfig.openai_api_key"
+                  type="password"
+                  show-password
+                  :placeholder="systemConfig.openai_api_key_configured ? `已配置：${systemConfig.openai_api_key_masked}` : '请输入 API Key'"
+                />
+              </el-form-item>
+              <el-form-item label="BaseURL">
+                <el-input v-model="systemConfig.openai_base_url" placeholder="例如：https://api.openai.com/v1" />
+              </el-form-item>
+              <el-form-item label="模型">
+                <el-input v-model="systemConfig.openai_model" placeholder="例如：gpt-4o-mini、deepseek-chat、qwen-plus" />
+              </el-form-item>
+              <el-form-item label="超时时间（毫秒）">
+                <el-input-number v-model="systemConfig.openai_timeout_ms" :min="1000" :max="300000" :step="1000" />
+              </el-form-item>
+              <el-checkbox v-model="systemConfig.clear_openai_api_key">清空已保存的 API Key</el-checkbox>
+            </section>
+          </el-form>
+        </div>
+        <div class="panel side-panel">
+          <div class="panel-head"><h2>当前状态</h2></div>
+          <section class="metric-grid asset-metrics">
+            <div class="metric"><span>上传上限</span><strong>{{ systemConfig.upload_max_file_size_mb || '不限' }} MB</strong></div>
+            <div class="metric"><span>API Key</span><strong>{{ systemConfig.openai_api_key_configured ? '已配置' : '未配置' }}</strong></div>
+            <div class="metric"><span>模型</span><strong>{{ systemConfig.openai_model || '-' }}</strong></div>
+            <div class="metric"><span>超时</span><strong>{{ systemConfig.openai_timeout_ms }} ms</strong></div>
+          </section>
+          <ul class="capability-list">
+            <li>保存后上传限制立即生效</li>
+            <li>AI 降噪会优先使用页面配置</li>
+            <li>API Key 不会在接口中明文返回</li>
+          </ul>
+        </div>
+      </section>
+
       <section v-if="activeMenu === 'logs'" class="panel">
         <div class="panel-head">
           <h2>扫描日志</h2>
@@ -955,7 +1012,7 @@
 
 <script setup>
 import { computed, onMounted, reactive, ref } from 'vue'
-import { Bell, Connection, DataAnalysis, Document, Files, Grid, MagicStick, Refresh, Search, Share, UploadFilled, WarningFilled } from '@element-plus/icons-vue'
+import { Bell, Connection, DataAnalysis, Document, Files, Grid, MagicStick, Refresh, Search, Setting, Share, UploadFilled, WarningFilled } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { apiUrl, requestJson, resumableUploadWithProgress, uploadArchiveWithProgress, uploadImageTarWithProgress } from './api'
 
@@ -969,6 +1026,7 @@ const sbomCreating = ref(false)
 const imageScanning = ref(false)
 const monitorRunning = ref(false)
 const aiAnalyzing = ref(false)
+const systemConfigSaving = ref(false)
 const uploadProgress = ref(0)
 const imageUploadProgress = ref(0)
 const selectedFile = ref(null)
@@ -1099,6 +1157,17 @@ const opsConfig = reactive({
   backup_root: '',
   optimizations: [],
   monitoring: [],
+})
+const systemConfig = reactive({
+  upload_max_file_size_mb: 2048,
+  upload_max_file_size_bytes: 2048 * 1024 * 1024,
+  openai_api_key: '',
+  openai_api_key_configured: false,
+  openai_api_key_masked: '',
+  openai_base_url: 'https://api.openai.com/v1',
+  openai_model: 'gpt-4o-mini',
+  openai_timeout_ms: 30000,
+  clear_openai_api_key: false,
 })
 const vulnerabilityStats = reactive({
   total: 0,
@@ -1478,6 +1547,7 @@ const submitUpload = async () => {
       file: selectedFile.value,
       projectName: uploadForm.projectName.trim(),
       scanNote: uploadForm.scanNote,
+      maxUploadSizeMb: systemConfig.upload_max_file_size_mb,
       onProgress: (percent) => {
         uploadProgress.value = percent
       },
@@ -1661,6 +1731,44 @@ const loadOps = async () => {
   backupJobs.value = backups?.items || []
 }
 
+const applySystemConfig = (config) => {
+  if (!config) return
+  Object.assign(systemConfig, {
+    ...config,
+    openai_api_key: '',
+    clear_openai_api_key: false,
+  })
+}
+
+const loadSystemConfig = async () => {
+  const config = await requestJson('/api/sca/system-config')
+  applySystemConfig(config)
+}
+
+const saveSystemConfig = async () => {
+  systemConfigSaving.value = true
+  try {
+    const payload = {
+      upload_max_file_size_mb: Number(systemConfig.upload_max_file_size_mb || 0),
+      openai_api_key: systemConfig.openai_api_key || '',
+      openai_base_url: systemConfig.openai_base_url || 'https://api.openai.com/v1',
+      openai_model: systemConfig.openai_model || 'gpt-4o-mini',
+      openai_timeout_ms: Number(systemConfig.openai_timeout_ms || 30000),
+      clear_openai_api_key: Boolean(systemConfig.clear_openai_api_key),
+    }
+    const saved = await requestJson('/api/sca/system-config', {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    })
+    applySystemConfig(saved)
+    ElMessage.success('系统配置已保存')
+  } catch (err) {
+    ElMessage.error(err?.message || '系统配置保存失败')
+  } finally {
+    systemConfigSaving.value = false
+  }
+}
+
 const createRemediationTicket = async () => {
   if (!selectedProjectId.value || !remediationForm.vulnerability_id) {
     ElMessage.warning('请先选择项目和漏洞')
@@ -1802,4 +1910,5 @@ onMounted(loadImageScans)
 onMounted(loadAssets)
 onMounted(loadDevops)
 onMounted(loadOps)
+onMounted(loadSystemConfig)
 </script>

@@ -69,7 +69,17 @@ const sendWithProgress = ({ method, path, body, headers = {}, onProgress }) =>
     xhr.send(body)
   })
 
-export const uploadArchiveWithProgress = ({ file, projectName, scanNote, onProgress }) => {
+const ensureFileSizeAllowed = (file, maxUploadSizeMb) => {
+  const limitMb = Number(maxUploadSizeMb || 0)
+  if (!file || !Number.isFinite(limitMb) || limitMb <= 0) return
+  const limitBytes = limitMb * 1024 * 1024
+  if (file.size > limitBytes) {
+    throw new Error(`文件超过系统配置的上传大小上限：${limitMb} MB`)
+  }
+}
+
+export const uploadArchiveWithProgress = ({ file, projectName, scanNote, maxUploadSizeMb, onProgress }) => {
+  ensureFileSizeAllowed(file, maxUploadSizeMb)
   const formData = new FormData()
   formData.append('project_name', projectName)
   formData.append('scan_note', scanNote || '')
@@ -82,8 +92,9 @@ export const uploadArchiveWithProgress = ({ file, projectName, scanNote, onProgr
   })
 }
 
-export const resumableUploadWithProgress = async ({ file, projectName, scanNote, onProgress }) => {
-  const chunkSize = 2 * 1024 * 1024
+export const resumableUploadWithProgress = async ({ file, projectName, scanNote, maxUploadSizeMb, onProgress }) => {
+  ensureFileSizeAllowed(file, maxUploadSizeMb)
+  const chunkSize = 512 * 1024
   const totalChunks = Math.max(1, Math.ceil(file.size / chunkSize))
   const session = await requestJson('/api/sca/uploads/sessions', {
     method: 'POST',

@@ -38,6 +38,7 @@ from .models import (
     SbomDocument,
     ScanLog,
     ScanTask,
+    SystemSetting,
     UploadFileRecord,
     VulnerabilityRecord,
     VulnerabilityWhitelist,
@@ -87,6 +88,8 @@ from .schemas import (
     ScanTaskOut,
     SbomCreateIn,
     SbomOut,
+    SystemConfigOut,
+    SystemConfigUpdateIn,
     UploadFileOut,
     UploadListOut,
     UploadSessionCreate,
@@ -151,6 +154,102 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+SYSTEM_CONFIG_UPLOAD_MAX_MB = "upload_max_file_size_mb"
+SYSTEM_CONFIG_OPENAI_API_KEY = "openai_api_key"
+SYSTEM_CONFIG_OPENAI_BASE_URL = "openai_base_url"
+SYSTEM_CONFIG_OPENAI_MODEL = "openai_model"
+SYSTEM_CONFIG_OPENAI_TIMEOUT_MS = "openai_timeout_ms"
+DEFAULT_UPLOAD_MAX_FILE_SIZE_MB = 2048
+DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1"
+
+
+def _setting_map(db: Session) -> dict[str, str]:
+    return {item.key: item.value for item in db.scalars(select(SystemSetting)).all()}
+
+
+def _to_int(value: object, fallback: int, min_value: int = 0, max_value: int = 102400) -> int:
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return fallback
+    return max(min_value, min(max_value, number))
+
+
+def _normalize_openai_base_url(value: str) -> str:
+    text = str(value or "").strip().rstrip("/")
+    if not text:
+        return DEFAULT_OPENAI_BASE_URL
+    if text.endswith("/chat/completions"):
+        text = text[: -len("/chat/completions")]
+    return text.rstrip("/") or DEFAULT_OPENAI_BASE_URL
+
+
+def _openai_chat_url(base_url: str) -> str:
+    return f"{_normalize_openai_base_url(base_url)}/chat/completions"
+
+
+def _mask_secret(value: str) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    if len(text) <= 8:
+        return f"{text[:2]}****"
+    return f"{text[:4]}****{text[-4:]}"
+
+
+def _system_config_payload(db: Session) -> SystemConfigOut:
+    values = _setting_map(db)
+    upload_mb = _to_int(values.get(SYSTEM_CONFIG_UPLOAD_MAX_MB), DEFAULT_UPLOAD_MAX_FILE_SIZE_MB)
+    api_key = str(values.get(SYSTEM_CONFIG_OPENAI_API_KEY) or settings.openai_api_key or "").strip()
+    base_url = _normalize_openai_base_url(values.get(SYSTEM_CONFIG_OPENAI_BASE_URL) or settings.openai_api_url)
+    model = str(values.get(SYSTEM_CONFIG_OPENAI_MODEL) or settings.openai_model or "gpt-4o-mini").strip() or "gpt-4o-mini"
+    timeout_ms = _to_int(values.get(SYSTEM_CONFIG_OPENAI_TIMEOUT_MS), settings.openai_timeout_ms, 1000, 300000)
+    return SystemConfigOut(
+        upload_max_file_size_mb=upload_mb,
+        upload_max_file_size_bytes=upload_mb * 1024 * 1024 if upload_mb > 0 else 0,
+        openai_api_key_configured=bool(api_key),
+        openai_api_key_masked=_mask_secret(api_key),
+        openai_base_url=base_url,
+        openai_model=model,
+        openai_timeout_ms=timeout_ms,
+    )
+
+
+def _upsert_setting(db: Session, key: str, value: object, username: str) -> None:
+    row = db.scalar(select(SystemSetting).where(SystemSetting.key == key))
+    if row:
+        row.value = str(value)
+        row.updated_by = username
+        return
+    db.add(SystemSetting(key=key, value=str(value), updated_by=username))
+
+
+def _effective_ai_settings(db: Session) -> Settings:
+    values = _setting_map(db)
+    api_key = str(values.get(SYSTEM_CONFIG_OPENAI_API_KEY) or settings.openai_api_key or "").strip()
+    base_url = _normalize_openai_base_url(values.get(SYSTEM_CONFIG_OPENAI_BASE_URL) or settings.openai_api_url)
+    model = str(values.get(SYSTEM_CONFIG_OPENAI_MODEL) or settings.openai_model or "gpt-4o-mini").strip() or "gpt-4o-mini"
+    timeout_ms = _to_int(values.get(SYSTEM_CONFIG_OPENAI_TIMEOUT_MS), settings.openai_timeout_ms, 1000, 300000)
+    return settings.model_copy(update={
+        "openai_api_key": api_key,
+        "openai_api_url": _openai_chat_url(base_url),
+        "openai_model": model,
+        "openai_timeout_ms": timeout_ms,
+    })
+
+
+def _upload_limit_bytes(db: Session) -> int:
+    values = _setting_map(db)
+    upload_mb = _to_int(values.get(SYSTEM_CONFIG_UPLOAD_MAX_MB), DEFAULT_UPLOAD_MAX_FILE_SIZE_MB)
+    return upload_mb * 1024 * 1024 if upload_mb > 0 else 0
+
+
+def _ensure_upload_size_allowed(db: Session, size: int) -> None:
+    limit_bytes = _upload_limit_bytes(db)
+    if limit_bytes > 0 and size > limit_bytes:
+        limit_mb = round(limit_bytes / 1024 / 1024, 2)
+        raise HTTPException(status_code=413, detail=f"文件超过系统配置的上传大小上限：{limit_mb} MB")
+
 
 @app.get("/health", tags=["system"])
 def health(settings: Annotated[Settings, Depends(get_settings)]) -> dict[str, str]:
@@ -168,6 +267,37 @@ def ready(settings: Annotated[Settings, Depends(get_settings)]) -> dict[str, obj
 @app.get("/api/sca/me", response_model=UserPayload, tags=["auth"])
 async def me(user: Annotated[UserPayload, Depends(get_current_user)]) -> UserPayload:
     return user
+
+
+@app.get("/api/sca/system-config", response_model=SystemConfigOut, tags=["system"])
+async def get_system_config(
+    request: Request,
+    user: Annotated[UserPayload, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> SystemConfigOut:
+    await require_action("sca:read", request, user, settings)
+    return _system_config_payload(db)
+
+
+@app.put("/api/sca/system-config", response_model=SystemConfigOut, tags=["system"])
+async def update_system_config(
+    request: Request,
+    payload: SystemConfigUpdateIn,
+    user: Annotated[UserPayload, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> SystemConfigOut:
+    await require_action("sca:write", request, user, settings)
+    username = str(user.username or "system")
+    _upsert_setting(db, SYSTEM_CONFIG_UPLOAD_MAX_MB, payload.upload_max_file_size_mb, username)
+    _upsert_setting(db, SYSTEM_CONFIG_OPENAI_BASE_URL, _normalize_openai_base_url(payload.openai_base_url), username)
+    _upsert_setting(db, SYSTEM_CONFIG_OPENAI_MODEL, payload.openai_model.strip() or "gpt-4o-mini", username)
+    _upsert_setting(db, SYSTEM_CONFIG_OPENAI_TIMEOUT_MS, payload.openai_timeout_ms, username)
+    if payload.clear_openai_api_key:
+        _upsert_setting(db, SYSTEM_CONFIG_OPENAI_API_KEY, "", username)
+    elif payload.openai_api_key.strip():
+        _upsert_setting(db, SYSTEM_CONFIG_OPENAI_API_KEY, payload.openai_api_key.strip(), username)
+    db.commit()
+    return _system_config_payload(db)
 
 
 @app.get("/api/sca/overview", response_model=OverviewOut, tags=["sca"])
@@ -246,6 +376,11 @@ async def upload_source_archive(
     ensure_upload_dirs(upload_root)
     destination = upload_root / "archives" / _stored_name(upload_id, filename)
     size = await save_upload_file(file, destination)
+    try:
+        _ensure_upload_size_allowed(db, size)
+    except HTTPException:
+        destination.unlink(missing_ok=True)
+        raise
 
     project = ensure_project(db, project_name, scan_note, user.username)
     record = UploadFileRecord(
@@ -283,6 +418,7 @@ async def create_upload_session(
     filename = validate_archive_filename(payload.filename)
     if payload.total_size <= 0:
         raise HTTPException(status_code=400, detail="文件大小必须大于 0")
+    _ensure_upload_size_allowed(db, payload.total_size)
     if payload.total_chunks <= 0 or payload.total_chunks > 10000:
         raise HTTPException(status_code=400, detail="分片数量不合法")
     project = ensure_project(db, payload.project_name, payload.scan_note, user.username)
@@ -325,6 +461,7 @@ async def upload_chunk(
     chunk = await request.body()
     if not chunk:
         raise HTTPException(status_code=400, detail="分片内容不能为空")
+    _ensure_upload_size_allowed(db, len(chunk))
     chunk_dir = Path(settings.upload_root) / "chunks" / upload_id
     chunk_dir.mkdir(parents=True, exist_ok=True)
     chunk_path = chunk_dir / f"{chunk_index:08d}.part"
@@ -1113,15 +1250,20 @@ async def analyze_ai_triage(
         )
     )
     context = payload.context.model_dump()
+    effective_settings = _effective_ai_settings(db)
     rows: list[AiTriageResult] = []
     missing: list[VulnerabilityRecord] = []
     for vulnerability in vulnerabilities:
         cached = cached_ai_result(db, project_id, vulnerability, context)
-        if cached:
+        cache_matches_ai_runtime = (
+            not effective_settings.openai_api_key
+            or (cached and cached.model == effective_settings.openai_model and cached.model != "local-heuristic")
+        )
+        if cached and cache_matches_ai_runtime:
             rows.append(cached)
         else:
             missing.append(vulnerability)
-    analyzed = analyze_vulnerabilities_with_ai(missing, context, settings) if missing else []
+    analyzed = analyze_vulnerabilities_with_ai(missing, context, effective_settings) if missing else []
     for item in analyzed:
         usage = item.get("token_usage") or {}
         row = AiTriageResult(
@@ -1139,7 +1281,7 @@ async def analyze_ai_triage(
             token_prompt=int(usage.get("prompt_tokens") or 0),
             token_completion=int(usage.get("completion_tokens") or 0),
             token_total=int(usage.get("total_tokens") or 0),
-            model=str(item.get("model") or settings.openai_model),
+            model=str(item.get("model") or effective_settings.openai_model),
             ai_schema_version=str(item.get("ai_schema_version") or "ai-triage-v2"),
             input_hash=str(item.get("input_hash") or ""),
             ai_priority=str(item.get("ai_priority") or item["ai_risk_level"]),
