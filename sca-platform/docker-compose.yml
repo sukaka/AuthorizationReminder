@@ -139,7 +139,7 @@ services:
       context: ./frontend
       args:
         VITE_API_BASE: ${VITE_API_BASE:-}
-        VITE_SSO_LOGIN_URL: ${VITE_SSO_LOGIN_URL:-http://localhost:5180/login?system=sca}
+        VITE_SSO_LOGIN_URL: ${VITE_SSO_LOGIN_URL:-http://localhost:5180/portal?system=sca}
     depends_on:
       - sca-api
     ports:

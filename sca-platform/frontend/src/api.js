@@ -1,5 +1,5 @@
 const API_BASE = import.meta.env.VITE_API_BASE || ''
-const SSO_LOGIN_URL = import.meta.env.VITE_SSO_LOGIN_URL || 'http://localhost:5180/login?system=sca'
+const SSO_LOGIN_URL = import.meta.env.VITE_SSO_LOGIN_URL || 'http://localhost:5180/portal?system=sca'
 
 export const apiUrl = (path) => `${API_BASE}${path}`
 

@@ -5,7 +5,7 @@ FROM ${NODE_20_ALPINE_IMAGE} AS build
 WORKDIR /app
 
 ARG VITE_API_BASE=
-ARG VITE_SSO_LOGIN_URL=http://localhost:5180/login?system=sca
+ARG VITE_SSO_LOGIN_URL=http://localhost:5180/portal?system=sca
 ENV VITE_API_BASE=${VITE_API_BASE}
 ENV VITE_SSO_LOGIN_URL=${VITE_SSO_LOGIN_URL}
 
