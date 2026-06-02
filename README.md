@@ -127,7 +127,7 @@ export PUBLIC_HOST='服务器公网IP或域名，不带协议和端口'
 ./scripts/deploy/docker-compose-aliyun.sh start mysql auth prompt-center-api web-prompt-center
 
 # 仅 软件成分分析平台
-./scripts/deploy/docker-compose-aliyun.sh start auth sca-postgres sca-redis sca-api sca-worker web-sca
+./scripts/deploy/docker-compose-aliyun.sh start auth sca-postgres sca-redis sca-api sca-worker sca-scanner-worker web-sca
 
 # 仅 CMDB 系统
 ./scripts/deploy/docker-compose-aliyun.sh start mysql auth cmdb-mysql-init cmdb web-cmdb

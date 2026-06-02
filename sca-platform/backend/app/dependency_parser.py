@@ -85,6 +85,7 @@ SUGGESTED_MATERIALS = [
     "go.mod / go.sum",
     "composer.lock",
     "Gemfile.lock",
+    "packages.config / *.csproj",
     "SBOM 文件",
     "Docker 镜像 tar",
     "war / jar 包",
@@ -106,6 +107,7 @@ STANDARD_MANIFESTS = {
     "gemfile",
     "composer.json",
     "cargo.toml",
+    "packages.config",
 }
 
 LOCK_FILES = {
@@ -293,6 +295,8 @@ def _normalize_component(component: ParsedComponent) -> ParsedComponent:
         component.purl = component.purl or f"pkg:golang/{component.name}@{component.version_normalized}"
     elif component.ecosystem == "docker" and has_usable_version:
         component.purl = component.purl or f"pkg:docker/{component.name}@{component.version_normalized}"
+    elif component.ecosystem == "nuget" and has_usable_version:
+        component.purl = component.purl or f"pkg:nuget/{quote(component.name, safe='')}@{component.version_normalized}"
     return component
 
 
@@ -474,17 +478,22 @@ def _xml_text(element: ET.Element, name: str) -> str:
     return (child.text or "").strip() if child is not None else ""
 
 
+def _parse_xml_root(path: Path) -> ET.Element:
+    text = path.read_text(encoding="utf-8-sig", errors="ignore").lstrip()
+    return ET.fromstring(text)
+
+
 def _parse_pom(path: Path, root: Path, result: ParseResult) -> None:
     source_path = _relative(path, root)
-    tree = ET.parse(path)
+    xml_root = _parse_xml_root(path)
     managed_versions: dict[tuple[str, str], str] = {}
-    for managed in tree.findall(".//dependencyManagement//dependency") + tree.findall(".//{*}dependencyManagement//{*}dependency"):
+    for managed in xml_root.findall(".//dependencyManagement//dependency") + xml_root.findall(".//{*}dependencyManagement//{*}dependency"):
         managed_group = _xml_text(managed, "groupId")
         managed_artifact = _xml_text(managed, "artifactId")
         managed_version = _xml_text(managed, "version")
         if managed_group and managed_artifact and managed_version:
             managed_versions[(managed_group, managed_artifact)] = managed_version
-    for dep in tree.findall(".//dependency") + tree.findall(".//{*}dependency"):
+    for dep in xml_root.findall(".//dependency") + xml_root.findall(".//{*}dependency"):
         group_id = _xml_text(dep, "groupId")
         artifact_id = _xml_text(dep, "artifactId")
         if not artifact_id:
@@ -512,6 +521,71 @@ def _parse_pom(path: Path, root: Path, result: ParseResult) -> None:
                 confidence_score=0.84 if resolved_version else 0.58,
                 declared_version=version,
                 resolved_version=resolved_version,
+            ),
+        )
+
+
+def _parse_packages_config(path: Path, root: Path, result: ParseResult) -> None:
+    source_path = _relative(path, root)
+    xml_root = _parse_xml_root(path)
+    for package in xml_root.findall(".//package") + xml_root.findall(".//{*}package"):
+        name = str(package.attrib.get("id") or "").strip()
+        if not name:
+            continue
+        version = str(package.attrib.get("version") or "").strip()
+        line, text = _line_evidence(path, name)
+        _add_component(
+            result,
+            ParsedComponent(
+                "nuget",
+                name,
+                version,
+                "runtime",
+                source_path,
+                package_manager="nuget",
+                dependency_type="direct",
+                evidence_level="manifest",
+                evidence_file=source_path,
+                evidence_line=line,
+                evidence_text=text,
+                detected_by="manifest",
+                confidence_score=0.86 if version else 0.58,
+                detection_method="packages_config",
+                declared_version=version,
+                resolved_version=version,
+            ),
+        )
+
+
+def _parse_csproj(path: Path, root: Path, result: ParseResult) -> None:
+    source_path = _relative(path, root)
+    xml_root = _parse_xml_root(path)
+    references = xml_root.findall(".//PackageReference") + xml_root.findall(".//{*}PackageReference")
+    for reference in references:
+        name = str(reference.attrib.get("Include") or reference.attrib.get("Update") or "").strip()
+        if not name:
+            continue
+        version = str(reference.attrib.get("Version") or "").strip() or _xml_text(reference, "Version")
+        line, text = _line_evidence(path, name)
+        _add_component(
+            result,
+            ParsedComponent(
+                "nuget",
+                name,
+                version,
+                "runtime",
+                source_path,
+                package_manager="nuget",
+                dependency_type="direct",
+                evidence_level="manifest",
+                evidence_file=source_path,
+                evidence_line=line,
+                evidence_text=text,
+                detected_by="manifest",
+                confidence_score=0.84 if version else 0.56,
+                detection_method="csproj_package_reference",
+                declared_version=version,
+                resolved_version=version,
             ),
         )
 
@@ -946,6 +1020,7 @@ def parse_source_dependencies(root: Path) -> ParseResult:
         "go.mod": _parse_go_mod,
         "go.sum": _parse_go_sum,
         "pom.xml": _parse_pom,
+        "packages.config": _parse_packages_config,
         "build.gradle": _parse_gradle,
         "build.gradle.kts": _parse_gradle,
         "dockerfile": _parse_dockerfile,
@@ -955,13 +1030,15 @@ def parse_source_dependencies(root: Path) -> ParseResult:
     }
     all_files = [path for path in root.rglob("*") if path.is_file()]
     result.has_standard_manifest = any(
-        path.name.lower() in STANDARD_MANIFESTS and "node_modules/" not in _relative(path, root).replace("\\", "/")
+        (path.name.lower() in STANDARD_MANIFESTS or path.name.lower().endswith(".csproj"))
+        and "node_modules/" not in _relative(path, root).replace("\\", "/")
         for path in all_files
     )
     for path in root.rglob("*"):
         if not path.is_file():
             continue
-        handler = handlers.get(path.name.lower())
+        lower_name = path.name.lower()
+        handler = _parse_csproj if lower_name.endswith(".csproj") else handlers.get(lower_name)
         if not handler:
             continue
         try:

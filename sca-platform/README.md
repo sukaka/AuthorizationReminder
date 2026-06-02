@@ -703,7 +703,7 @@ Copy-Item .env.example .env
 ```bash
 cd /Users/zhanglei/Documents/codex-new
 cp .env.example .env
-./scripts/deploy/docker-compose-aliyun.sh rebuild mysql auth sca-postgres sca-redis sca-api sca-worker web-sca
+./scripts/deploy/docker-compose-aliyun.sh rebuild mysql auth sca-postgres sca-redis sca-api sca-worker sca-scanner-worker web-sca
 ```
 
 访问地址：

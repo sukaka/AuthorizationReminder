@@ -41,6 +41,47 @@ def test_dependency_parser_reads_common_manifests(tmp_path):
     assert result.dependencies
 
 
+def test_dependency_parser_reads_nuget_packages_config_and_csproj_references(tmp_path):
+    (tmp_path / "packages.config").write_text(
+        """
+        <?xml version="1.0" encoding="utf-8"?>
+        <packages>
+          <package id="Newtonsoft.Json" version="12.0.1" targetFramework="net40" />
+          <package id="StackExchange.Redis" version="1.2.1" targetFramework="net40" />
+        </packages>
+        """,
+        encoding="utf-8",
+    )
+    (tmp_path / "App.csproj").write_text(
+        """
+        <Project Sdk="Microsoft.NET.Sdk">
+          <ItemGroup>
+            <PackageReference Include="Serilog" Version="3.1.1" />
+            <PackageReference Include="Microsoft.Extensions.Logging">
+              <Version>8.0.0</Version>
+            </PackageReference>
+          </ItemGroup>
+        </Project>
+        """,
+        encoding="utf-8",
+    )
+
+    from app.dependency_parser import parse_source_dependencies
+
+    result = parse_source_dependencies(Path(tmp_path))
+    by_name = {item.name: item for item in result.components}
+
+    assert result.has_standard_manifest is True
+    assert result.fallback_enabled is False
+    assert by_name["Newtonsoft.Json"].ecosystem == "nuget"
+    assert by_name["Newtonsoft.Json"].version == "12.0.1"
+    assert by_name["Newtonsoft.Json"].purl == "pkg:nuget/Newtonsoft.Json@12.0.1"
+    assert by_name["StackExchange.Redis"].source_path == "packages.config"
+    assert by_name["Serilog"].version == "3.1.1"
+    assert by_name["Microsoft.Extensions.Logging"].version == "8.0.0"
+    assert by_name["Serilog"].source_path == "App.csproj"
+
+
 def test_dependency_parser_standardizes_components_and_uses_lock_evidence(tmp_path):
     (tmp_path / "package.json").write_text(
         '{"dependencies":{"@vue/runtime-core":"^3.5.13"},"devDependencies":{"vite":"^6.0.0"}}',
