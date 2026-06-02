@@ -1,0 +1,191 @@
+ALTER TABLE components ADD COLUMN IF NOT EXISTS scan_mode VARCHAR(48) NOT NULL DEFAULT 'manifest_scan';
+ALTER TABLE components ADD COLUMN IF NOT EXISTS detection_method VARCHAR(80) NOT NULL DEFAULT 'manifest';
+ALTER TABLE components ADD COLUMN IF NOT EXISTS evidence_type VARCHAR(80) NOT NULL DEFAULT 'manifest';
+ALTER TABLE components ADD COLUMN IF NOT EXISTS confidence_level VARCHAR(32) NOT NULL DEFAULT 'Medium';
+ALTER TABLE components ADD COLUMN IF NOT EXISTS need_manual_confirm BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE components ADD COLUMN IF NOT EXISTS version_detected BOOLEAN NOT NULL DEFAULT TRUE;
+ALTER TABLE components ADD COLUMN IF NOT EXISTS need_manual_version_confirm BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE components ADD COLUMN IF NOT EXISTS declared_version VARCHAR(160) NOT NULL DEFAULT '';
+ALTER TABLE components ADD COLUMN IF NOT EXISTS resolved_version VARCHAR(160) NOT NULL DEFAULT '';
+ALTER TABLE components ADD COLUMN IF NOT EXISTS version_lock_status VARCHAR(64) NOT NULL DEFAULT '已锁定版本';
+ALTER TABLE components ADD COLUMN IF NOT EXISTS version_risk_type VARCHAR(64) NOT NULL DEFAULT '';
+ALTER TABLE components ADD COLUMN IF NOT EXISTS risk_explanation TEXT NOT NULL DEFAULT '';
+ALTER TABLE components ADD COLUMN IF NOT EXISTS fix_recommendation TEXT NOT NULL DEFAULT '';
+ALTER TABLE components ADD COLUMN IF NOT EXISTS sha1 VARCHAR(64) NOT NULL DEFAULT '';
+ALTER TABLE components ADD COLUMN IF NOT EXISTS sha256 VARCHAR(96) NOT NULL DEFAULT '';
+ALTER TABLE components ADD COLUMN IF NOT EXISTS component_file_size BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE components ADD COLUMN IF NOT EXISTS component_file_path VARCHAR(1024) NOT NULL DEFAULT '';
+ALTER TABLE components ADD COLUMN IF NOT EXISTS component_file_name VARCHAR(255) NOT NULL DEFAULT '';
+
+ALTER TABLE scan_tasks ADD COLUMN IF NOT EXISTS parent_task_id BIGINT NULL REFERENCES scan_tasks(id) ON DELETE CASCADE;
+ALTER TABLE scan_tasks ADD COLUMN IF NOT EXISTS task_type VARCHAR(80) NOT NULL DEFAULT 'project_scan_task';
+ALTER TABLE scan_tasks ADD COLUMN IF NOT EXISTS engine_name VARCHAR(80) NOT NULL DEFAULT '';
+ALTER TABLE scan_tasks ADD COLUMN IF NOT EXISTS progress INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE scan_tasks ADD COLUMN IF NOT EXISTS timeout_seconds INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE scan_tasks ADD COLUMN IF NOT EXISTS error_message TEXT NOT NULL DEFAULT '';
+ALTER TABLE scan_tasks ADD COLUMN IF NOT EXISTS raw_result_path VARCHAR(1024) NOT NULL DEFAULT '';
+ALTER TABLE scan_tasks ADD COLUMN IF NOT EXISTS normalized_result_path VARCHAR(1024) NOT NULL DEFAULT '';
+ALTER TABLE scan_tasks ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+
+CREATE TABLE IF NOT EXISTS scanner_engines (
+  id BIGSERIAL PRIMARY KEY,
+  name VARCHAR(80) NOT NULL UNIQUE,
+  display_name VARCHAR(120) NOT NULL DEFAULT '',
+  engine_type VARCHAR(40) NOT NULL DEFAULT 'local_scanner',
+  version VARCHAR(80) NOT NULL DEFAULT '',
+  enabled BOOLEAN NOT NULL DEFAULT TRUE,
+  config_json TEXT NOT NULL DEFAULT '{}',
+  last_health_status VARCHAR(32) NOT NULL DEFAULT 'unknown',
+  last_health_check_at TIMESTAMPTZ NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS scanner_task_results (
+  id BIGSERIAL PRIMARY KEY,
+  project_id BIGINT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  scan_id BIGINT NOT NULL REFERENCES scan_tasks(id) ON DELETE CASCADE,
+  scan_task_id BIGINT NOT NULL REFERENCES scan_tasks(id) ON DELETE CASCADE,
+  engine_name VARCHAR(80) NOT NULL DEFAULT '',
+  status VARCHAR(32) NOT NULL DEFAULT 'pending',
+  component_count INTEGER NOT NULL DEFAULT 0,
+  vulnerability_count INTEGER NOT NULL DEFAULT 0,
+  license_count INTEGER NOT NULL DEFAULT 0,
+  raw_result_path VARCHAR(1024) NOT NULL DEFAULT '',
+  normalized_result_path VARCHAR(1024) NOT NULL DEFAULT '',
+  html_report_path VARCHAR(1024) NOT NULL DEFAULT '',
+  stdout_log_path VARCHAR(1024) NOT NULL DEFAULT '',
+  stderr_log_path VARCHAR(1024) NOT NULL DEFAULT '',
+  error_message TEXT NOT NULL DEFAULT '',
+  started_at TIMESTAMPTZ NULL,
+  finished_at TIMESTAMPTZ NULL,
+  duration_seconds INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS dependency_track_projects (
+  id BIGSERIAL PRIMARY KEY,
+  local_project_id BIGINT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  dependency_track_project_uuid VARCHAR(80) NOT NULL DEFAULT '',
+  dependency_track_project_name VARCHAR(160) NOT NULL DEFAULT '',
+  dependency_track_project_version VARCHAR(80) NOT NULL DEFAULT '',
+  bom_uploaded_at TIMESTAMPTZ NULL,
+  last_fetch_at TIMESTAMPTZ NULL,
+  last_metrics_json TEXT NOT NULL DEFAULT '{}',
+  last_status VARCHAR(40) NOT NULL DEFAULT 'pending',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS raw_scan_artifacts (
+  id BIGSERIAL PRIMARY KEY,
+  project_id BIGINT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  scan_id BIGINT NOT NULL REFERENCES scan_tasks(id) ON DELETE CASCADE,
+  engine_name VARCHAR(80) NOT NULL DEFAULT '',
+  artifact_type VARCHAR(80) NOT NULL DEFAULT 'raw_json',
+  file_path VARCHAR(1024) NOT NULL DEFAULT '',
+  file_name VARCHAR(255) NOT NULL DEFAULT '',
+  file_size BIGINT NOT NULL DEFAULT 0,
+  sha256 VARCHAR(96) NOT NULL DEFAULT '',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS normalized_components (
+  id BIGSERIAL PRIMARY KEY,
+  project_id BIGINT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  scan_id BIGINT NOT NULL REFERENCES scan_tasks(id) ON DELETE CASCADE,
+  source_engine VARCHAR(80) NOT NULL DEFAULT '',
+  package_name VARCHAR(200) NOT NULL DEFAULT '',
+  normalized_name VARCHAR(200) NOT NULL DEFAULT '',
+  ecosystem VARCHAR(60) NOT NULL DEFAULT 'unknown',
+  package_manager VARCHAR(60) NOT NULL DEFAULT '',
+  version VARCHAR(160) NOT NULL DEFAULT '',
+  version_normalized VARCHAR(160) NOT NULL DEFAULT '',
+  purl VARCHAR(512) NOT NULL DEFAULT '',
+  cpe VARCHAR(512) NOT NULL DEFAULT '',
+  license VARCHAR(160) NOT NULL DEFAULT '',
+  dependency_type VARCHAR(60) NOT NULL DEFAULT 'direct',
+  scope VARCHAR(60) NOT NULL DEFAULT 'runtime',
+  source_file VARCHAR(512) NOT NULL DEFAULT '',
+  evidence_file VARCHAR(512) NOT NULL DEFAULT '',
+  evidence_text TEXT NOT NULL DEFAULT '',
+  confidence_score DOUBLE PRECISION NOT NULL DEFAULT 0,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS normalized_vulnerabilities (
+  id BIGSERIAL PRIMARY KEY,
+  project_id BIGINT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  scan_id BIGINT NOT NULL REFERENCES scan_tasks(id) ON DELETE CASCADE,
+  source_engine VARCHAR(80) NOT NULL DEFAULT '',
+  vulnerability_id VARCHAR(160) NOT NULL DEFAULT '',
+  cve_id VARCHAR(80) NOT NULL DEFAULT '',
+  ghsa_id VARCHAR(120) NOT NULL DEFAULT '',
+  osv_id VARCHAR(120) NOT NULL DEFAULT '',
+  title VARCHAR(255) NOT NULL DEFAULT '',
+  description TEXT NOT NULL DEFAULT '',
+  severity VARCHAR(32) NOT NULL DEFAULT 'unknown',
+  cvss_score DOUBLE PRECISION NOT NULL DEFAULT 0,
+  cvss_vector VARCHAR(255) NOT NULL DEFAULT '',
+  affected_package VARCHAR(200) NOT NULL DEFAULT '',
+  affected_version_range VARCHAR(240) NOT NULL DEFAULT '',
+  current_version VARCHAR(160) NOT NULL DEFAULT '',
+  fixed_versions TEXT NOT NULL DEFAULT '[]',
+  references_json TEXT NOT NULL DEFAULT '[]',
+  has_poc BOOLEAN NOT NULL DEFAULT FALSE,
+  has_exploit BOOLEAN NOT NULL DEFAULT FALSE,
+  kev BOOLEAN NOT NULL DEFAULT FALSE,
+  match_confidence DOUBLE PRECISION NOT NULL DEFAULT 0,
+  raw_source TEXT NOT NULL DEFAULT '',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS merged_components (
+  id BIGSERIAL PRIMARY KEY,
+  project_id BIGINT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  scan_id BIGINT NOT NULL REFERENCES scan_tasks(id) ON DELETE CASCADE,
+  package_name VARCHAR(200) NOT NULL DEFAULT '',
+  normalized_name VARCHAR(200) NOT NULL DEFAULT '',
+  ecosystem VARCHAR(60) NOT NULL DEFAULT 'unknown',
+  package_manager VARCHAR(60) NOT NULL DEFAULT '',
+  version VARCHAR(160) NOT NULL DEFAULT '',
+  purl VARCHAR(512) NOT NULL DEFAULT '',
+  cpe VARCHAR(512) NOT NULL DEFAULT '',
+  license VARCHAR(160) NOT NULL DEFAULT '',
+  detected_by_engines TEXT NOT NULL DEFAULT '[]',
+  engine_count INTEGER NOT NULL DEFAULT 0,
+  evidence_list_json TEXT NOT NULL DEFAULT '[]',
+  merged_confidence_score DOUBLE PRECISION NOT NULL DEFAULT 0,
+  confidence_level VARCHAR(32) NOT NULL DEFAULT 'Review',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS merged_vulnerabilities (
+  id BIGSERIAL PRIMARY KEY,
+  project_id BIGINT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  scan_id BIGINT NOT NULL REFERENCES scan_tasks(id) ON DELETE CASCADE,
+  component_id BIGINT NULL REFERENCES merged_components(id) ON DELETE SET NULL,
+  vulnerability_id VARCHAR(160) NOT NULL DEFAULT '',
+  cve_id VARCHAR(80) NOT NULL DEFAULT '',
+  ghsa_id VARCHAR(120) NOT NULL DEFAULT '',
+  osv_id VARCHAR(120) NOT NULL DEFAULT '',
+  title VARCHAR(255) NOT NULL DEFAULT '',
+  description TEXT NOT NULL DEFAULT '',
+  severity VARCHAR(32) NOT NULL DEFAULT 'unknown',
+  cvss_score DOUBLE PRECISION NOT NULL DEFAULT 0,
+  affected_version_range VARCHAR(240) NOT NULL DEFAULT '',
+  current_version VARCHAR(160) NOT NULL DEFAULT '',
+  fixed_versions_json TEXT NOT NULL DEFAULT '[]',
+  detected_by_engines TEXT NOT NULL DEFAULT '[]',
+  engine_count INTEGER NOT NULL DEFAULT 0,
+  vulnerability_sources_json TEXT NOT NULL DEFAULT '[]',
+  multi_engine_confidence_score DOUBLE PRECISION NOT NULL DEFAULT 0,
+  confidence_level VARCHAR(32) NOT NULL DEFAULT 'Review',
+  confidence_reason TEXT NOT NULL DEFAULT '',
+  engine_agreement VARCHAR(40) NOT NULL DEFAULT 'single_source',
+  disagreement_summary TEXT NOT NULL DEFAULT '',
+  need_manual_review BOOLEAN NOT NULL DEFAULT TRUE,
+  manual_review_reason TEXT NOT NULL DEFAULT '',
+  risk_priority VARCHAR(20) NOT NULL DEFAULT 'Review',
+  ai_priority VARCHAR(20) NOT NULL DEFAULT 'Review',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);

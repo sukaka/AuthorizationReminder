@@ -74,6 +74,59 @@ def _extract_archive(archive: Path, destination: Path) -> None:
     raise ValueError("仅支持 zip、tar.gz、tgz 源码包")
 
 
+PROJECT_SCAN_STEPS = [
+    ("prepare_source_task", "source", 15),
+    ("opensca_scan_task", "opensca", settings.opensca_timeout),
+    ("syft_sbom_task", "syft", settings.syft_timeout),
+    ("trivy_scan_task", "trivy", settings.trivy_timeout),
+    ("dependency_track_upload_task", "dependency-track", settings.dependency_track_timeout),
+    ("dependency_track_fetch_task", "dependency-track", settings.dependency_track_timeout),
+    ("normalize_results_task", "juxin-normalizer", 600),
+    ("merge_components_task", "juxin-merger", 600),
+    ("merge_vulnerabilities_task", "juxin-merger", 600),
+    ("ai_noise_reduction_task", "juxin-ai", settings.openai_timeout_ms // 1000),
+    ("report_generate_task", "juxin-report", 600),
+]
+
+
+def _ensure_child_scan_tasks(db, task: ScanTask) -> None:
+    existing = {
+        row.task_type
+        for row in db.query(ScanTask).filter(ScanTask.parent_task_id == task.id).all()
+    }
+    for task_type, engine_name, timeout in PROJECT_SCAN_STEPS:
+        if task_type in existing:
+            continue
+        db.add(
+            ScanTask(
+                project_id=task.project_id,
+                upload_file_id=task.upload_file_id,
+                parent_task_id=task.id,
+                task_type=task_type,
+                engine_name=engine_name,
+                status="pending",
+                progress=0,
+                summary="等待执行",
+                timeout_seconds=timeout,
+            )
+        )
+
+
+def _mark_child(db, parent_id: int, task_type: str, status: str, summary: str = "", progress: int = 100, error: str = "") -> None:
+    child = db.query(ScanTask).filter(ScanTask.parent_task_id == parent_id, ScanTask.task_type == task_type).first()
+    if not child:
+        return
+    child.status = status
+    child.progress = progress
+    child.summary = summary or child.summary
+    child.error_message = error
+    now = datetime.now(timezone.utc)
+    if status == "running" and not child.started_at:
+        child.started_at = now
+    if status in {"completed", "failed", "timeout", "partial_completed", "skipped", "canceled"}:
+        child.finished_at = now
+
+
 @celery_app.task(name="sca.demo_scan")
 def demo_scan(project_name: str) -> dict[str, str]:
     return {"project": project_name, "status": "queued", "message": "软件成分分析任务已进入队列"}
@@ -95,6 +148,10 @@ def scan_uploaded_file(scan_task_id: int) -> dict[str, int | str]:
             return {"status": "failed", "components": 0}
 
         task.status = "running"
+        task.progress = 5
+        task.task_type = task.task_type or "project_scan_task"
+        _ensure_child_scan_tasks(db, task)
+        _mark_child(db, task.id, "prepare_source_task", "running", "正在解压源码包", 30)
         task.started_at = datetime.now(timezone.utc)
         record.status = "scanning"
         db.add(ScanLog(scan_task_id=task.id, level="info", message="开始解析源码依赖"))
@@ -103,7 +160,9 @@ def scan_uploaded_file(scan_task_id: int) -> dict[str, int | str]:
         try:
             extract_dir = upload_root / "extracted" / record.upload_id
             _extract_archive(Path(record.storage_path), extract_dir)
+            _mark_child(db, task.id, "prepare_source_task", "completed", "源码准备完成", 100)
             result = parse_source_dependencies(extract_dir)
+            _mark_child(db, task.id, "normalize_results_task", "running", "正在标准化依赖识别结果", 50)
 
             db.execute(delete(ComponentDependency).where(ComponentDependency.project_id == record.project_id))
             db.execute(delete(Component).where(Component.project_id == record.project_id))
@@ -135,6 +194,24 @@ def scan_uploaded_file(scan_task_id: int) -> dict[str, int | str]:
                     confidence_score=item.confidence_score,
                     version_conflict=item.version_conflict,
                     conflict_reason=item.conflict_reason,
+                    scan_mode=item.scan_mode,
+                    detection_method=item.detection_method,
+                    evidence_type=item.evidence_type,
+                    confidence_level=item.confidence_level,
+                    need_manual_confirm=item.need_manual_confirm,
+                    version_detected=item.version_detected,
+                    need_manual_version_confirm=item.need_manual_version_confirm,
+                    declared_version=item.declared_version,
+                    resolved_version=item.resolved_version,
+                    version_lock_status=item.version_lock_status,
+                    version_risk_type=item.version_risk_type,
+                    risk_explanation=item.risk_explanation,
+                    fix_recommendation=item.fix_recommendation,
+                    sha1=item.sha1,
+                    sha256=item.sha256,
+                    component_file_size=item.file_size,
+                    component_file_path=item.file_path,
+                    component_file_name=item.file_name,
                     license_name="unknown",
                     vulnerability_status="pending",
                     note=record.scan_note,
@@ -159,8 +236,24 @@ def scan_uploaded_file(scan_task_id: int) -> dict[str, int | str]:
 
             for message in result.logs:
                 db.add(ScanLog(scan_task_id=task.id, level="info", message=message))
+            _mark_child(db, task.id, "normalize_results_task", "completed", "标准化完成", 100)
+            _mark_child(db, task.id, "merge_components_task", "completed", "组件合并完成", 100)
+            _mark_child(db, task.id, "merge_vulnerabilities_task", "skipped", "等待漏洞查询后合并", 100)
+            for task_type in [
+                "opensca_scan_task",
+                "syft_sbom_task",
+                "trivy_scan_task",
+                "dependency_track_upload_task",
+                "dependency_track_fetch_task",
+                "ai_noise_reduction_task",
+                "report_generate_task",
+            ]:
+                _mark_child(db, task.id, task_type, "skipped", "本次源码依赖解析未触发该子任务", 100)
             task.status = "success"
-            task.summary = f"识别依赖 {len(result.components)} 个"
+            task.progress = 100
+            task.summary = f"识别依赖 {len(result.components)} 个，扫描模式：{result.scan_mode}"
+            if result.fallback_enabled:
+                task.summary += "，已启用兜底识别"
             task.finished_at = datetime.now(timezone.utc)
             record.status = "scanned"
             db.add(ScanLog(scan_task_id=task.id, level="info", message=task.summary))

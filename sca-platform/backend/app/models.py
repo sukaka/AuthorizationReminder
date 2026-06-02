@@ -48,6 +48,24 @@ class Component(Base):
     confidence_score: Mapped[float] = mapped_column(Float, nullable=False, default=0)
     version_conflict: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     conflict_reason: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    scan_mode: Mapped[str] = mapped_column(String(48), nullable=False, default="manifest_scan")
+    detection_method: Mapped[str] = mapped_column(String(80), nullable=False, default="manifest")
+    evidence_type: Mapped[str] = mapped_column(String(80), nullable=False, default="manifest")
+    confidence_level: Mapped[str] = mapped_column(String(32), nullable=False, default="Medium")
+    need_manual_confirm: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    version_detected: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    need_manual_version_confirm: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    declared_version: Mapped[str] = mapped_column(String(160), nullable=False, default="")
+    resolved_version: Mapped[str] = mapped_column(String(160), nullable=False, default="")
+    version_lock_status: Mapped[str] = mapped_column(String(64), nullable=False, default="已锁定版本")
+    version_risk_type: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    risk_explanation: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    fix_recommendation: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    sha1: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    sha256: Mapped[str] = mapped_column(String(96), nullable=False, default="")
+    component_file_size: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    component_file_path: Mapped[str] = mapped_column(String(1024), nullable=False, default="")
+    component_file_name: Mapped[str] = mapped_column(String(255), nullable=False, default="")
     license_name: Mapped[str] = mapped_column(String(120), nullable=False, default="unknown")
     vulnerability_status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
     note: Mapped[str] = mapped_column(Text, nullable=False, default="")
@@ -115,15 +133,205 @@ class ScanTask(Base):
     project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True)
     upload_file_id: Mapped[int] = mapped_column(ForeignKey("upload_files.id", ondelete="CASCADE"), nullable=False)
     celery_task_id: Mapped[str] = mapped_column(String(128), nullable=False, default="")
+    parent_task_id: Mapped[int | None] = mapped_column(ForeignKey("scan_tasks.id", ondelete="CASCADE"), nullable=True, index=True)
+    task_type: Mapped[str] = mapped_column(String(80), nullable=False, default="project_scan_task")
+    engine_name: Mapped[str] = mapped_column(String(80), nullable=False, default="")
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="queued")
+    progress: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     summary: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    timeout_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    error_message: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    raw_result_path: Mapped[str] = mapped_column(String(1024), nullable=False, default="")
+    normalized_result_path: Mapped[str] = mapped_column(String(1024), nullable=False, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
 
     project: Mapped[Project] = relationship(back_populates="scan_tasks")
     upload_file: Mapped[UploadFileRecord] = relationship(back_populates="scan_tasks")
     logs: Mapped[list["ScanLog"]] = relationship(back_populates="scan_task", cascade="all, delete-orphan")
+
+
+class ScannerEngine(Base):
+    __tablename__ = "scanner_engines"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(80), nullable=False, unique=True, index=True)
+    display_name: Mapped[str] = mapped_column(String(120), nullable=False, default="")
+    engine_type: Mapped[str] = mapped_column(String(40), nullable=False, default="local_scanner")
+    version: Mapped[str] = mapped_column(String(80), nullable=False, default="")
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    config_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    last_health_status: Mapped[str] = mapped_column(String(32), nullable=False, default="unknown")
+    last_health_check_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+
+
+class ScannerTaskResult(Base):
+    __tablename__ = "scanner_task_results"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True)
+    scan_id: Mapped[int] = mapped_column(ForeignKey("scan_tasks.id", ondelete="CASCADE"), nullable=False, index=True)
+    scan_task_id: Mapped[int] = mapped_column(ForeignKey("scan_tasks.id", ondelete="CASCADE"), nullable=False, index=True)
+    engine_name: Mapped[str] = mapped_column(String(80), nullable=False, default="")
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
+    component_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    vulnerability_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    license_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    raw_result_path: Mapped[str] = mapped_column(String(1024), nullable=False, default="")
+    normalized_result_path: Mapped[str] = mapped_column(String(1024), nullable=False, default="")
+    html_report_path: Mapped[str] = mapped_column(String(1024), nullable=False, default="")
+    stdout_log_path: Mapped[str] = mapped_column(String(1024), nullable=False, default="")
+    stderr_log_path: Mapped[str] = mapped_column(String(1024), nullable=False, default="")
+    error_message: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    duration_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+
+class DependencyTrackProject(Base):
+    __tablename__ = "dependency_track_projects"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    local_project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True)
+    dependency_track_project_uuid: Mapped[str] = mapped_column(String(80), nullable=False, default="")
+    dependency_track_project_name: Mapped[str] = mapped_column(String(160), nullable=False, default="")
+    dependency_track_project_version: Mapped[str] = mapped_column(String(80), nullable=False, default="")
+    bom_uploaded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_fetch_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_metrics_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    last_status: Mapped[str] = mapped_column(String(40), nullable=False, default="pending")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+
+
+class RawScanArtifact(Base):
+    __tablename__ = "raw_scan_artifacts"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True)
+    scan_id: Mapped[int] = mapped_column(ForeignKey("scan_tasks.id", ondelete="CASCADE"), nullable=False, index=True)
+    engine_name: Mapped[str] = mapped_column(String(80), nullable=False, default="")
+    artifact_type: Mapped[str] = mapped_column(String(80), nullable=False, default="raw_json")
+    file_path: Mapped[str] = mapped_column(String(1024), nullable=False, default="")
+    file_name: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    file_size: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    sha256: Mapped[str] = mapped_column(String(96), nullable=False, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
+class NormalizedComponent(Base):
+    __tablename__ = "normalized_components"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True)
+    scan_id: Mapped[int] = mapped_column(ForeignKey("scan_tasks.id", ondelete="CASCADE"), nullable=False, index=True)
+    source_engine: Mapped[str] = mapped_column(String(80), nullable=False, default="")
+    package_name: Mapped[str] = mapped_column(String(200), nullable=False, default="")
+    normalized_name: Mapped[str] = mapped_column(String(200), nullable=False, default="")
+    ecosystem: Mapped[str] = mapped_column(String(60), nullable=False, default="unknown")
+    package_manager: Mapped[str] = mapped_column(String(60), nullable=False, default="")
+    version: Mapped[str] = mapped_column(String(160), nullable=False, default="")
+    version_normalized: Mapped[str] = mapped_column(String(160), nullable=False, default="")
+    purl: Mapped[str] = mapped_column(String(512), nullable=False, default="")
+    cpe: Mapped[str] = mapped_column(String(512), nullable=False, default="")
+    license: Mapped[str] = mapped_column(String(160), nullable=False, default="")
+    dependency_type: Mapped[str] = mapped_column(String(60), nullable=False, default="direct")
+    scope: Mapped[str] = mapped_column(String(60), nullable=False, default="runtime")
+    source_file: Mapped[str] = mapped_column(String(512), nullable=False, default="")
+    evidence_file: Mapped[str] = mapped_column(String(512), nullable=False, default="")
+    evidence_text: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    confidence_score: Mapped[float] = mapped_column(Float, nullable=False, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
+class NormalizedVulnerability(Base):
+    __tablename__ = "normalized_vulnerabilities"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True)
+    scan_id: Mapped[int] = mapped_column(ForeignKey("scan_tasks.id", ondelete="CASCADE"), nullable=False, index=True)
+    source_engine: Mapped[str] = mapped_column(String(80), nullable=False, default="")
+    vulnerability_id: Mapped[str] = mapped_column(String(160), nullable=False, default="")
+    cve_id: Mapped[str] = mapped_column(String(80), nullable=False, default="")
+    ghsa_id: Mapped[str] = mapped_column(String(120), nullable=False, default="")
+    osv_id: Mapped[str] = mapped_column(String(120), nullable=False, default="")
+    title: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    description: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    severity: Mapped[str] = mapped_column(String(32), nullable=False, default="unknown")
+    cvss_score: Mapped[float] = mapped_column(Float, nullable=False, default=0)
+    cvss_vector: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    affected_package: Mapped[str] = mapped_column(String(200), nullable=False, default="")
+    affected_version_range: Mapped[str] = mapped_column(String(240), nullable=False, default="")
+    current_version: Mapped[str] = mapped_column(String(160), nullable=False, default="")
+    fixed_versions: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    references_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    has_poc: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    has_exploit: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    kev: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    match_confidence: Mapped[float] = mapped_column(Float, nullable=False, default=0)
+    raw_source: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
+class MergedComponent(Base):
+    __tablename__ = "merged_components"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True)
+    scan_id: Mapped[int] = mapped_column(ForeignKey("scan_tasks.id", ondelete="CASCADE"), nullable=False, index=True)
+    package_name: Mapped[str] = mapped_column(String(200), nullable=False, default="")
+    normalized_name: Mapped[str] = mapped_column(String(200), nullable=False, default="")
+    ecosystem: Mapped[str] = mapped_column(String(60), nullable=False, default="unknown")
+    package_manager: Mapped[str] = mapped_column(String(60), nullable=False, default="")
+    version: Mapped[str] = mapped_column(String(160), nullable=False, default="")
+    purl: Mapped[str] = mapped_column(String(512), nullable=False, default="")
+    cpe: Mapped[str] = mapped_column(String(512), nullable=False, default="")
+    license: Mapped[str] = mapped_column(String(160), nullable=False, default="")
+    detected_by_engines: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    engine_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    evidence_list_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    merged_confidence_score: Mapped[float] = mapped_column(Float, nullable=False, default=0)
+    confidence_level: Mapped[str] = mapped_column(String(32), nullable=False, default="Review")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
+class MergedVulnerability(Base):
+    __tablename__ = "merged_vulnerabilities"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True)
+    scan_id: Mapped[int] = mapped_column(ForeignKey("scan_tasks.id", ondelete="CASCADE"), nullable=False, index=True)
+    component_id: Mapped[int | None] = mapped_column(ForeignKey("merged_components.id", ondelete="SET NULL"), nullable=True)
+    vulnerability_id: Mapped[str] = mapped_column(String(160), nullable=False, default="")
+    cve_id: Mapped[str] = mapped_column(String(80), nullable=False, default="")
+    ghsa_id: Mapped[str] = mapped_column(String(120), nullable=False, default="")
+    osv_id: Mapped[str] = mapped_column(String(120), nullable=False, default="")
+    title: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    description: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    severity: Mapped[str] = mapped_column(String(32), nullable=False, default="unknown")
+    cvss_score: Mapped[float] = mapped_column(Float, nullable=False, default=0)
+    affected_version_range: Mapped[str] = mapped_column(String(240), nullable=False, default="")
+    current_version: Mapped[str] = mapped_column(String(160), nullable=False, default="")
+    fixed_versions_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    detected_by_engines: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    engine_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    vulnerability_sources_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    multi_engine_confidence_score: Mapped[float] = mapped_column(Float, nullable=False, default=0)
+    confidence_level: Mapped[str] = mapped_column(String(32), nullable=False, default="Review")
+    confidence_reason: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    engine_agreement: Mapped[str] = mapped_column(String(40), nullable=False, default="single_source")
+    disagreement_summary: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    need_manual_review: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    manual_review_reason: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    risk_priority: Mapped[str] = mapped_column(String(20), nullable=False, default="Review")
+    ai_priority: Mapped[str] = mapped_column(String(20), nullable=False, default="Review")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
 
 class ScanLog(Base):

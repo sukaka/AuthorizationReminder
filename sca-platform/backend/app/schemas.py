@@ -35,6 +35,24 @@ class ComponentOut(BaseModel):
     confidence_score: float = 0
     version_conflict: bool = False
     conflict_reason: str = ""
+    scan_mode: str = "manifest_scan"
+    detection_method: str = "manifest"
+    evidence_type: str = "manifest"
+    confidence_level: str = "Medium"
+    need_manual_confirm: bool = False
+    version_detected: bool = True
+    need_manual_version_confirm: bool = False
+    declared_version: str = ""
+    resolved_version: str = ""
+    version_lock_status: str = "已锁定版本"
+    version_risk_type: str = ""
+    risk_explanation: str = ""
+    fix_recommendation: str = ""
+    sha1: str = ""
+    sha256: str = ""
+    component_file_size: int = 0
+    component_file_path: str = ""
+    component_file_name: str = ""
     license_name: str
     vulnerability_status: str
 
@@ -105,11 +123,55 @@ class ScanTaskOut(BaseModel):
     project_id: int
     upload_file_id: int
     celery_task_id: str
+    parent_task_id: int | None = None
+    task_type: str = "project_scan_task"
+    engine_name: str = ""
     status: str
+    progress: int = 0
     summary: str
+    timeout_seconds: int = 0
+    error_message: str = ""
+    raw_result_path: str = ""
+    normalized_result_path: str = ""
     created_at: datetime
     started_at: datetime | None = None
     finished_at: datetime | None = None
+    updated_at: datetime | None = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class ComponentManualVersionIn(BaseModel):
+    version: str
+    package_manager: str = ""
+    purl: str = ""
+    note: str = ""
+
+
+class ScanCompletenessOut(BaseModel):
+    project_id: int
+    has_standard_manifest: bool
+    scan_mode: str
+    component_count: int
+    high_confidence_count: int
+    medium_confidence_count: int
+    low_confidence_count: int
+    unknown_version_count: int
+    manual_confirm_count: int
+    fallback_enabled: bool
+    message: str
+    suggestions: list[str] = Field(default_factory=list)
+
+
+class DependencyTrackStatusOut(BaseModel):
+    local_project_id: int
+    dependency_track_project_uuid: str = ""
+    dependency_track_project_name: str = ""
+    dependency_track_project_version: str = ""
+    bom_uploaded_at: datetime | None = None
+    last_fetch_at: datetime | None = None
+    last_metrics_json: str = "{}"
+    last_status: str = "pending"
 
     model_config = ConfigDict(from_attributes=True)
 

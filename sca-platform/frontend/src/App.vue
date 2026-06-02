@@ -192,6 +192,22 @@
               <el-option v-for="project in projects" :key="project.id" :label="project.name" :value="project.id" />
             </el-select>
           </div>
+          <el-alert
+            v-if="scanCompleteness.message"
+            class="scan-completeness-alert"
+            type="warning"
+            show-icon
+            :closable="false"
+            :title="scanCompleteness.message"
+          />
+          <section class="scan-completeness-grid">
+            <div><span>扫描模式</span><strong>{{ scanCompleteness.scan_mode || '-' }}</strong></div>
+            <div><span>高可信</span><strong>{{ scanCompleteness.high_confidence_count || 0 }}</strong></div>
+            <div><span>中可信</span><strong>{{ scanCompleteness.medium_confidence_count || 0 }}</strong></div>
+            <div><span>低可信</span><strong>{{ scanCompleteness.low_confidence_count || 0 }}</strong></div>
+            <div><span>未知版本</span><strong>{{ scanCompleteness.unknown_version_count || 0 }}</strong></div>
+            <div><span>待确认</span><strong>{{ scanCompleteness.manual_confirm_count || 0 }}</strong></div>
+          </section>
           <el-table :data="components" empty-text="暂无依赖，请等待扫描完成">
             <el-table-column type="expand">
               <template #default="{ row }">
@@ -214,15 +230,31 @@
                   </div>
                   <div>
                     <span class="muted">识别方式</span>
-                    <strong>{{ row.detected_by || '-' }} / {{ row.evidence_level || '-' }}</strong>
+                    <strong>{{ row.detected_by || '-' }} / {{ row.detection_method || row.evidence_level || '-' }}</strong>
                   </div>
                   <div>
                     <span class="muted">置信度</span>
-                    <strong>{{ Math.round((row.confidence_score || 0) * 100) }}%</strong>
+                    <strong>{{ row.confidence_level || '-' }} / {{ Math.round((row.confidence_score || 0) * 100) }}%</strong>
+                  </div>
+                  <div>
+                    <span class="muted">版本锁定</span>
+                    <strong>{{ row.version_lock_status || '-' }}</strong>
+                  </div>
+                  <div>
+                    <span class="muted">实际版本</span>
+                    <strong>{{ row.resolved_version || row.package_version || '-' }}</strong>
+                  </div>
+                  <div>
+                    <span class="muted">文件指纹</span>
+                    <strong>{{ row.sha256 ? `${row.component_file_name || 'artifact'} / ${row.sha256.slice(0, 16)}...` : '-' }}</strong>
                   </div>
                   <div class="evidence-text">
                     <span class="muted">证据文本</span>
                     <code>{{ row.evidence_text || '-' }}</code>
+                  </div>
+                  <div v-if="row.version_risk_type" class="evidence-text conflict">
+                    <span class="muted">{{ row.version_risk_type }}</span>
+                    <code>{{ row.risk_explanation }} {{ row.fix_recommendation }}</code>
                   </div>
                   <div v-if="row.version_conflict" class="evidence-text conflict">
                     <span class="muted">版本来源不一致</span>
@@ -241,13 +273,35 @@
             </el-table-column>
             <el-table-column prop="scope" label="范围" width="110" />
             <el-table-column prop="dependency_type" label="类型" width="120" />
+            <el-table-column prop="confidence_level" label="可信度" width="115">
+              <template #default="{ row }">
+                <el-tag :type="componentConfidenceTag(row.confidence_level)" effect="plain">{{ row.confidence_level }}</el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column prop="version_lock_status" label="版本风险" width="145">
+              <template #default="{ row }">
+                <el-tag :type="row.version_risk_type ? 'warning' : 'success'" effect="plain">
+                  {{ row.version_risk_type || row.version_lock_status }}
+                </el-tag>
+              </template>
+            </el-table-column>
             <el-table-column prop="detected_by" label="来源" width="110" />
             <el-table-column prop="source_path" label="来源文件" min-width="180" show-overflow-tooltip />
+            <el-table-column label="操作" width="110">
+              <template #default="{ row }">
+                <el-button v-if="row.need_manual_version_confirm || row.package_version === 'unknown'" text type="primary" @click="manualVersion(row)">补录版本</el-button>
+              </template>
+            </el-table-column>
           </el-table>
         </div>
         <div class="panel side-panel">
           <div class="panel-head">
             <h2>依赖树</h2>
+          </div>
+          <div class="meta-stack dependency-track-status">
+            <div><span>DTrack 状态</span><strong>{{ dependencyTrackStatus.last_status || 'not_linked' }}</strong></div>
+            <div><span>项目 UUID</span><strong>{{ dependencyTrackStatus.dependency_track_project_uuid || '-' }}</strong></div>
+            <div><span>BOM 上传</span><strong>{{ dependencyTrackStatus.bom_uploaded_at || '-' }}</strong></div>
           </div>
           <el-tree :data="dependencyTree" node-key="id" default-expand-all :props="{ label: 'label', children: 'children' }" />
         </div>
@@ -807,6 +861,25 @@
             <el-option v-for="project in projects" :key="project.id" :label="project.name" :value="project.id" />
           </el-select>
         </div>
+        <el-table :data="scanTasks" empty-text="暂无扫描任务" class="task-table">
+          <el-table-column prop="task_type" label="任务节点" min-width="200" />
+          <el-table-column prop="engine_name" label="引擎" width="150" />
+          <el-table-column prop="status" label="状态" width="130">
+            <template #default="{ row }">
+              <el-tag :type="taskStatusTag(row.status)" effect="plain">{{ row.status }}</el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column prop="progress" label="进度" width="150">
+            <template #default="{ row }"><el-progress :percentage="row.progress || 0" /></template>
+          </el-table-column>
+          <el-table-column prop="summary" label="摘要" min-width="220" show-overflow-tooltip />
+          <el-table-column prop="error_message" label="错误" min-width="180" show-overflow-tooltip />
+          <el-table-column label="操作" width="120">
+            <template #default="{ row }">
+              <el-button v-if="row.parent_task_id && ['failed', 'timeout'].includes(row.status)" text type="primary" @click="rerunScanTask(row)">重跑</el-button>
+            </template>
+          </el-table-column>
+        </el-table>
         <el-table :data="scanLogs" empty-text="暂无扫描日志">
           <el-table-column prop="level" label="级别" width="100" />
           <el-table-column prop="message" label="日志内容" min-width="260" show-overflow-tooltip />
@@ -907,6 +980,31 @@ const uploads = ref([])
 const components = ref([])
 const dependencyTree = ref([])
 const scanLogs = ref([])
+const scanTasks = ref([])
+const scanCompleteness = reactive({
+  project_id: 0,
+  has_standard_manifest: false,
+  scan_mode: '',
+  component_count: 0,
+  high_confidence_count: 0,
+  medium_confidence_count: 0,
+  low_confidence_count: 0,
+  unknown_version_count: 0,
+  manual_confirm_count: 0,
+  fallback_enabled: false,
+  message: '',
+  suggestions: [],
+})
+const dependencyTrackStatus = reactive({
+  local_project_id: 0,
+  dependency_track_project_uuid: '',
+  dependency_track_project_name: '',
+  dependency_track_project_version: '',
+  bom_uploaded_at: '',
+  last_fetch_at: '',
+  last_metrics_json: '{}',
+  last_status: 'not_linked',
+})
 const vulnerabilities = ref([])
 const vulnerabilityFilter = ref('all')
 const vulnerabilityDrawerVisible = ref(false)
@@ -1218,6 +1316,26 @@ const confidenceTag = (confidence, review) => {
   return 'info'
 }
 
+const componentConfidenceTag = (level) => ({
+  High: 'success',
+  'Medium-High': 'success',
+  Medium: 'warning',
+  Low: 'info',
+  Review: 'warning',
+}[level] || 'info')
+
+const taskStatusTag = (status) => ({
+  completed: 'success',
+  success: 'success',
+  running: 'primary',
+  pending: 'info',
+  queued: 'info',
+  skipped: 'info',
+  partial_completed: 'warning',
+  failed: 'danger',
+  timeout: 'danger',
+}[status] || 'info')
+
 const reachabilityLabel = (status) => ({
   reachable: '可达',
   possibly_reachable: '可能可达',
@@ -1272,6 +1390,11 @@ const loadProjectDetails = async () => {
   if (!selectedProjectId.value) return
   components.value = (await requestJson(`/api/sca/projects/${selectedProjectId.value}/components`)) || []
   dependencyTree.value = (await requestJson(`/api/sca/projects/${selectedProjectId.value}/dependency-tree`)) || []
+  const completeness = await requestJson(`/api/sca/projects/${selectedProjectId.value}/scan-completeness`)
+  if (completeness) Object.assign(scanCompleteness, completeness)
+  const dtrack = await requestJson(`/api/sca/projects/${selectedProjectId.value}/dependency-track`)
+  if (dtrack) Object.assign(dependencyTrackStatus, dtrack)
+  scanTasks.value = (await requestJson(`/api/sca/projects/${selectedProjectId.value}/scan-tasks`)) || []
   scanLogs.value = (await requestJson(`/api/sca/projects/${selectedProjectId.value}/scan-logs`)) || []
   const vulnerabilityData = await requestJson(`/api/sca/projects/${selectedProjectId.value}/vulnerabilities`)
   vulnerabilities.value = vulnerabilityData?.items || []
@@ -1290,6 +1413,39 @@ const loadProjectDetails = async () => {
   const tickets = await requestJson(`/api/sca/projects/${selectedProjectId.value}/remediation/tickets`)
   remediationTickets.value = tickets?.items || []
   whitelistItems.value = (await requestJson(`/api/sca/projects/${selectedProjectId.value}/remediation/whitelist`)) || []
+}
+
+const manualVersion = async (row) => {
+  try {
+    const { value } = await ElMessageBox.prompt(`为 ${row.package_name} 补录实际版本`, '人工补录版本', {
+      confirmButtonText: '保存',
+      cancelButtonText: '取消',
+      inputValue: row.package_version === 'unknown' ? '' : row.package_version,
+      inputPlaceholder: '例如：2.14.1',
+    })
+    const payload = {
+      version: value,
+      package_manager: row.package_manager || '',
+      purl: row.purl || '',
+      note: '人工补录版本，建议重新执行漏洞匹配',
+    }
+    await requestJson(`/api/sca/components/${row.id}/manual-version`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
+    })
+    ElMessage.success('已补录版本，可重新查询漏洞')
+    await loadProjectDetails()
+  } catch (err) {
+    if (err !== 'cancel') {
+      ElMessage.error(err?.message || '补录失败')
+    }
+  }
+}
+
+const rerunScanTask = async (row) => {
+  await requestJson(`/api/sca/scan-tasks/${row.id}/rerun`, { method: 'POST' })
+  ElMessage.success('已标记为待重跑')
+  await loadProjectDetails()
 }
 
 const refreshAll = async () => {

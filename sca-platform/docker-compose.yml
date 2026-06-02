@@ -39,6 +39,8 @@ services:
       - sca-report-data:/data/sca/reports
       - sca-sbom-data:/data/sca/sbom
       - sca-backup-data:/data/sca/backups
+      - sca-scanner-results:/data/scanner-results
+      - sca-trivy-cache:/data/trivy-cache
     depends_on:
       sca-postgres:
         condition: service_healthy
@@ -57,6 +59,8 @@ services:
       - sca-report-data:/data/sca/reports
       - sca-sbom-data:/data/sca/sbom
       - sca-backup-data:/data/sca/backups
+      - sca-scanner-results:/data/scanner-results
+      - sca-trivy-cache:/data/trivy-cache
     command: ["celery", "-A", "app.celery_app.celery_app", "worker", "--loglevel=INFO"]
     depends_on:
       sca-postgres:
@@ -74,12 +78,58 @@ services:
       - sca-report-data:/data/sca/reports
       - sca-sbom-data:/data/sca/sbom
       - sca-backup-data:/data/sca/backups
+      - sca-scanner-results:/data/scanner-results
+      - sca-trivy-cache:/data/trivy-cache
     command: ["celery", "-A", "app.celery_app.celery_app", "beat", "--loglevel=INFO", "--schedule=/tmp/celerybeat-schedule"]
     depends_on:
       sca-postgres:
         condition: service_healthy
       sca-redis:
         condition: service_healthy
+
+  scanner-worker:
+    build:
+      context: ./backend
+    env_file:
+      - .env
+    volumes:
+      - sca-upload-data:/data/sca/uploads
+      - sca-report-data:/data/sca/reports
+      - sca-sbom-data:/data/sca/sbom
+      - sca-scanner-results:/data/scanner-results
+      - sca-trivy-cache:/data/trivy-cache
+    command: ["celery", "-A", "app.celery_app.celery_app", "worker", "--loglevel=INFO", "--queues=scanner,celery"]
+    depends_on:
+      sca-postgres:
+        condition: service_healthy
+      sca-redis:
+        condition: service_healthy
+
+  dependency-track-apiserver:
+    image: dependencytrack/apiserver:4.12.2
+    environment:
+      ALPINE_DATABASE_MODE: external
+      ALPINE_DATABASE_URL: jdbc:postgresql://sca-postgres:5432/${POSTGRES_DB:-juxin_sca}
+      ALPINE_DATABASE_DRIVER: org.postgresql.Driver
+      ALPINE_DATABASE_USERNAME: ${POSTGRES_USER:-sca_user}
+      ALPINE_DATABASE_PASSWORD: ${POSTGRES_PASSWORD:-change_me_sca_postgres_password}
+      ALPINE_DATABASE_POOL_ENABLED: "true"
+    volumes:
+      - dependency-track-data:/data
+    depends_on:
+      sca-postgres:
+        condition: service_healthy
+    ports:
+      - "${DEPENDENCY_TRACK_API_PORT:-18090}:8080"
+
+  dependency-track-frontend:
+    image: dependencytrack/frontend:4.12.2
+    environment:
+      API_BASE_URL: ${DEPENDENCY_TRACK_PUBLIC_API_URL:-http://localhost:18090}
+    depends_on:
+      - dependency-track-apiserver
+    ports:
+      - "${DEPENDENCY_TRACK_WEB_PORT:-18091}:8080"
 
   web-sca:
     build:
@@ -99,3 +149,6 @@ volumes:
   sca-report-data:
   sca-sbom-data:
   sca-backup-data:
+  sca-scanner-results:
+  sca-trivy-cache:
+  dependency-track-data:

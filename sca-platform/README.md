@@ -939,3 +939,116 @@ OPENAI_MODEL=gpt-4o-mini
 docker compose exec -T sca-api curl -sS http://localhost:5191/api/sca/projects/<project_id>/scan-logs
 docker compose logs sca-worker
 ```
+## 20. 多工具联合扫描、兜底识别与未锁定版本风险
+
+本阶段在现有模块上做兼容增强，不重复开发上传、依赖识别、漏洞查询和报告模块。
+
+### 四引擎联动架构
+
+- OpenSCA：本地源码 SCA 识别与国产漏洞/License 补充来源
+- Syft：SBOM 生成引擎，输出 CycloneDX JSON 与 SPDX JSON
+- Trivy：文件系统、镜像、SBOM 漏洞扫描引擎
+- OWASP Dependency-Track：SBOM 风险管理平台，通过 API 创建项目、上传 CycloneDX BOM、拉取组件/漏洞/License/指标
+
+Dependency-Track 不作为本地命令扫描器使用。聚信 SCA 作为统一入口，负责任务编排、原始报告保存、标准化、去重合并、可信度评分、AI 降噪和统一报告。
+
+### 新增后端模块
+
+- `backend/app/scanners/base.py`：命令执行、日志、原始结果保存、标准数据结构
+- `backend/app/scanners/opensca_client.py`：OpenSCA 命令封装
+- `backend/app/scanners/syft_client.py`：Syft CycloneDX/SPDX SBOM 生成封装
+- `backend/app/scanners/trivy_client.py`：Trivy fs/image 扫描封装
+- `backend/app/scanners/dependency_track_client.py`：Dependency-Track API 客户端
+- `backend/app/scanners/normalizers/*`：OpenSCA、Syft、Trivy、Dependency-Track 结果标准化
+- `backend/app/scanners/merger/*`：组件去重、漏洞去重、多引擎可信度评分
+
+### 扫描任务状态
+
+每个主扫描任务会创建子任务节点：源码准备、OpenSCA、Syft、Trivy、Dependency-Track 上传/拉取、标准化、组件合并、漏洞合并、AI 降噪和报告生成。某个工具失败不会导致系统崩溃；工具未安装或 DTrack 不可用时显示 failed/skipped，主流程仍可展示本地依赖识别结果。
+
+### 无清单兜底识别
+
+当没有发现项目级 `pom.xml`、`package.json`、`requirements.txt`、`go.mod` 等标准清单时，系统不会直接判定无法扫描，会进入兜底识别模式：
+
+- Java：扫描 jar/war/ear、WEB-INF/lib、lib、plugins；优先解析 `META-INF/maven/**/pom.properties`，否则从文件名提取组件和版本
+- Node.js：扫描 `node_modules/**/package.json`，保留 npm scope
+- Python：扫描 `*.dist-info/METADATA`、`*.egg-info/PKG-INFO` 和 import/from import；仅 import 识别时版本为 `unknown`
+- Go/PHP/Ruby/Rust：解析 `go.sum`、`composer.lock`、`Gemfile.lock`、`Cargo.lock`
+- 二进制/归档：计算 sha1、sha256、文件大小、文件路径和文件名，作为后续人工确认和跨项目复用依据
+
+未知版本不会被丢弃，统一保存为 `unknown`，标记 `need_manual_version_confirm=true`，不直接进入高危确认统计。前端提供人工补录版本接口，补录后可重新执行漏洞查询。
+
+### 依赖版本未锁定风险
+
+依赖解析时会识别：
+
+- 已锁定版本：精确、唯一、可复现版本，例如 `requests==2.32.3`、Maven `<version>2.15.3</version>`、Go `v1.9.1`
+- 未锁定版本风险：只声明包名，没有版本号
+- 版本范围风险：`>=`、`^`、`~`、Maven `[5.0,6.0)`、Gradle `1.+`
+- 动态版本风险：`latest`、`latest.release`、`SNAPSHOT`
+- 版本缺失风险：无法解析实际版本
+
+如果 lock 文件能解析实际版本，漏洞匹配使用实际版本，同时报告声明源依赖文件存在未锁定或范围风险。
+
+### 新增 API
+
+- `GET /api/sca/projects/{project_id}/scan-completeness`：扫描完整性、扫描模式、可信度统计、未知版本数量、补充材料建议
+- `PATCH /api/sca/components/{component_id}/manual-version`：人工补录组件实际版本和 PURL
+- `GET /api/sca/projects/{project_id}/dependency-track`：Dependency-Track 联动状态
+- `POST /api/sca/scan-tasks/{scan_task_id}/rerun`：失败/超时子任务重新执行标记
+
+### Docker Compose 更新
+
+新增服务和卷：
+
+- `scanner-worker`：扫描命令执行 Worker
+- `dependency-track-apiserver`：Dependency-Track API 服务
+- `dependency-track-frontend`：Dependency-Track 前端
+- `sca-scanner-results`：原始扫描报告持久化
+- `sca-trivy-cache`：Trivy 缓存持久化
+- `dependency-track-data`：Dependency-Track 数据持久化
+
+### 运行方法
+
+所有服务都在 Docker 中运行：
+
+```bash
+cd sca-platform
+cp .env.example .env
+# 按需填写 DEPENDENCY_TRACK_API_KEY、OPENAI_API_KEY、GITHUB_TOKEN 等环境变量
+docker compose up -d --build
+```
+
+访问：
+
+- 聚信 SCA 前端：`http://localhost:18089`
+- FastAPI Swagger：`http://localhost:5191/docs`
+- Dependency-Track API：`http://localhost:18090`
+- Dependency-Track 前端：`http://localhost:18091`
+
+### 测试方法
+
+不要在本机直接启动服务。使用 Docker 执行测试：
+
+```bash
+cd sca-platform
+docker compose build sca-api
+docker compose run --rm sca-api pytest -q
+```
+
+建议测试样例：
+
+- Maven 项目：验证 `pom.xml`、dependencyManagement、jar pom.properties、OpenSCA/Syft/Trivy 子任务状态
+- npm 项目：验证 `package.json` 的 `^/~ latest` 风险、`package-lock.json` 实际版本
+- Python 项目：验证 `requirements.txt` 精确/未声明/范围版本、import 兜底识别
+- Docker 镜像：验证 Syft image 和 Trivy image 扫描输出目录
+- Dependency-Track 不可用：验证本地扫描仍完成，子任务展示 failed/skipped
+- 重复漏洞：验证多来源合并为一条并保留来源证据
+
+### 常见报错
+
+- 413 Request Entity Too Large：平台应用层不限制上传大小。检查外层 Nginx/网关是否设置 `client_max_body_size 0`，优先使用断点续传。
+- OpenSCA/Syft/Trivy 命令不存在：scanner-worker 镜像中未安装对应工具；任务会显示 failed，不影响本地依赖识别。
+- Dependency-Track API Key 错误：配置 `DEPENDENCY_TRACK_API_KEY` 后重启容器，再重新上传 BOM 或重跑子任务。
+- Trivy 数据库下载失败：检查容器网络和 `sca-trivy-cache` 卷权限；可预热缓存后重试。
+- 无清单文件组件少：报告会提示补充 lock 文件、SBOM、运行目录、jar/war、Docker 镜像 tar 或依赖树输出以提高准确率。

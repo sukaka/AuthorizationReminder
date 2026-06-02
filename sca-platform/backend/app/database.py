@@ -57,6 +57,35 @@ def run_compat_migrations() -> None:
         "confidence_score": "FLOAT NOT NULL DEFAULT 0",
         "version_conflict": "BOOLEAN NOT NULL DEFAULT FALSE",
         "conflict_reason": "TEXT NOT NULL DEFAULT ''",
+        "scan_mode": "VARCHAR(48) NOT NULL DEFAULT 'manifest_scan'",
+        "detection_method": "VARCHAR(80) NOT NULL DEFAULT 'manifest'",
+        "evidence_type": "VARCHAR(80) NOT NULL DEFAULT 'manifest'",
+        "confidence_level": "VARCHAR(32) NOT NULL DEFAULT 'Medium'",
+        "need_manual_confirm": "BOOLEAN NOT NULL DEFAULT FALSE",
+        "version_detected": "BOOLEAN NOT NULL DEFAULT TRUE",
+        "need_manual_version_confirm": "BOOLEAN NOT NULL DEFAULT FALSE",
+        "declared_version": "VARCHAR(160) NOT NULL DEFAULT ''",
+        "resolved_version": "VARCHAR(160) NOT NULL DEFAULT ''",
+        "version_lock_status": "VARCHAR(64) NOT NULL DEFAULT '已锁定版本'",
+        "version_risk_type": "VARCHAR(64) NOT NULL DEFAULT ''",
+        "risk_explanation": "TEXT NOT NULL DEFAULT ''",
+        "fix_recommendation": "TEXT NOT NULL DEFAULT ''",
+        "sha1": "VARCHAR(64) NOT NULL DEFAULT ''",
+        "sha256": "VARCHAR(96) NOT NULL DEFAULT ''",
+        "component_file_size": "BIGINT NOT NULL DEFAULT 0",
+        "component_file_path": "VARCHAR(1024) NOT NULL DEFAULT ''",
+        "component_file_name": "VARCHAR(255) NOT NULL DEFAULT ''",
+    }
+    scan_task_additions = {
+        "parent_task_id": "INTEGER",
+        "task_type": "VARCHAR(80) NOT NULL DEFAULT 'project_scan_task'",
+        "engine_name": "VARCHAR(80) NOT NULL DEFAULT ''",
+        "progress": "INTEGER NOT NULL DEFAULT 0",
+        "timeout_seconds": "INTEGER NOT NULL DEFAULT 0",
+        "error_message": "TEXT NOT NULL DEFAULT ''",
+        "raw_result_path": "VARCHAR(1024) NOT NULL DEFAULT ''",
+        "normalized_result_path": "VARCHAR(1024) NOT NULL DEFAULT ''",
+        "updated_at": "TIMESTAMP DEFAULT CURRENT_TIMESTAMP",
     }
     vulnerability_additions = {
         "epss_score": "FLOAT NOT NULL DEFAULT 0",
@@ -103,6 +132,11 @@ def run_compat_migrations() -> None:
         for column, definition in additions.items():
             if column not in existing:
                 conn.execute(text(f"ALTER TABLE components ADD COLUMN {column} {definition}"))
+        if inspector.has_table("scan_tasks"):
+            scan_task_existing = {column["name"] for column in inspector.get_columns("scan_tasks")}
+            for column, definition in scan_task_additions.items():
+                if column not in scan_task_existing:
+                    conn.execute(text(f"ALTER TABLE scan_tasks ADD COLUMN {column} {definition}"))
         if inspector.has_table("vulnerabilities"):
             vulnerability_existing = {column["name"] for column in inspector.get_columns("vulnerabilities")}
             for column, definition in vulnerability_additions.items():

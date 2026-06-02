@@ -111,3 +111,136 @@ def test_dependency_parser_standardizes_components_and_uses_lock_evidence(tmp_pa
     image_component = by_name["eclipse-temurin"]
     assert image_component.dependency_type == "base_image"
     assert image_component.evidence_text == "FROM eclipse-temurin:21-jre"
+
+
+def test_dependency_parser_classifies_unlocked_and_range_versions(tmp_path):
+    (tmp_path / "requirements.txt").write_text(
+        "requests==2.32.3\nflask\nuvicorn>=0.32\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "package.json").write_text(
+        '{"dependencies":{"lodash":"^4.17.0","react":"~18.2.0","left-pad":"latest"}}',
+        encoding="utf-8",
+    )
+    (tmp_path / "go.mod").write_text(
+        "module demo\nrequire github.com/gin-gonic/gin v1.9.1\n",
+        encoding="utf-8",
+    )
+
+    from app.dependency_parser import parse_source_dependencies
+
+    result = parse_source_dependencies(Path(tmp_path))
+    by_name = {item.name: item for item in result.components}
+
+    assert by_name["requests"].version == "2.32.3"
+    assert by_name["requests"].version_lock_status == "已锁定版本"
+    assert by_name["requests"].version_risk_type == ""
+    assert by_name["flask"].version == "unknown"
+    assert by_name["flask"].version_risk_type == "版本缺失风险"
+    assert by_name["flask"].need_manual_version_confirm is True
+    assert by_name["uvicorn"].version_lock_status == "版本范围风险"
+    assert by_name["lodash"].version_lock_status == "版本范围风险"
+    assert by_name["react"].version_lock_status == "版本范围风险"
+    assert by_name["left-pad"].version_lock_status == "动态版本风险"
+    assert by_name["github.com/gin-gonic/gin"].version_lock_status == "已锁定版本"
+
+
+def test_dependency_parser_uses_node_lock_actual_version_but_keeps_range_risk(tmp_path):
+    (tmp_path / "package.json").write_text(
+        '{"dependencies":{"lodash":"^4.17.0"}}',
+        encoding="utf-8",
+    )
+    (tmp_path / "package-lock.json").write_text(
+        '{"packages":{"node_modules/lodash":{"version":"4.17.21"}}}',
+        encoding="utf-8",
+    )
+
+    from app.dependency_parser import parse_source_dependencies
+
+    result = parse_source_dependencies(Path(tmp_path))
+    item = result.components[0]
+
+    assert item.name == "lodash"
+    assert item.version == "4.17.21"
+    assert item.resolved_version == "4.17.21"
+    assert item.declared_version == "^4.17.0"
+    assert item.version_lock_status == "基于实际版本匹配"
+    assert item.version_risk_type == "版本范围风险"
+    assert item.detected_by == "lock"
+
+
+def test_dependency_parser_fallback_detects_jar_metadata_when_no_manifest(tmp_path):
+    import zipfile
+
+    jar_path = tmp_path / "log4j-core-2.14.1.jar"
+    with zipfile.ZipFile(jar_path, "w") as jar:
+        jar.writestr(
+            "META-INF/maven/org.apache.logging.log4j/log4j-core/pom.properties",
+            "groupId=org.apache.logging.log4j\nartifactId=log4j-core\nversion=2.14.1\n",
+        )
+
+    from app.dependency_parser import parse_source_dependencies
+
+    result = parse_source_dependencies(Path(tmp_path))
+    item = result.components[0]
+
+    assert result.has_standard_manifest is False
+    assert result.fallback_enabled is True
+    assert result.scan_mode == "binary_scan"
+    assert item.name == "org.apache.logging.log4j:log4j-core"
+    assert item.purl == "pkg:maven/org.apache.logging.log4j/log4j-core@2.14.1"
+    assert item.detection_method == "jar_pom_properties"
+    assert item.confidence_level == "High"
+    assert item.sha256
+
+
+def test_dependency_parser_fallback_detects_python_import_unknown_version(tmp_path):
+    (tmp_path / "main.py").write_text("import PIL\nfrom yaml import safe_load\n", encoding="utf-8")
+
+    from app.dependency_parser import parse_source_dependencies
+
+    result = parse_source_dependencies(Path(tmp_path))
+    by_name = {item.name: item for item in result.components}
+
+    assert result.fallback_enabled is True
+    assert result.scan_mode == "source_heuristic_scan"
+    assert by_name["Pillow"].version == "unknown"
+    assert by_name["Pillow"].need_manual_version_confirm is True
+    assert by_name["Pillow"].confidence_level == "Review"
+    assert by_name["PyYAML"].evidence_text == "from yaml import safe_load"
+
+
+def test_dependency_parser_reads_gradle_go_and_language_lock_files(tmp_path):
+    (tmp_path / "build.gradle").write_text(
+        "dependencies {\n  implementation 'com.example:demo:1.+'\n}\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "go.sum").write_text(
+        "github.com/pkg/errors v0.9.1 h1:abc\n"
+        "github.com/pkg/errors v0.9.1/go.mod h1:def\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "composer.lock").write_text(
+        '{"packages":[{"name":"monolog/monolog","version":"2.9.1"}]}',
+        encoding="utf-8",
+    )
+    (tmp_path / "Cargo.lock").write_text(
+        '[[package]]\nname = "serde"\nversion = "1.0.217"\n\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "Gemfile.lock").write_text(
+        "GEM\n  specs:\n    rack (3.0.8)\n",
+        encoding="utf-8",
+    )
+
+    from app.dependency_parser import parse_source_dependencies
+
+    result = parse_source_dependencies(Path(tmp_path))
+    by_name = {item.name: item for item in result.components}
+
+    assert by_name["com.example:demo"].version_lock_status == "版本范围风险"
+    assert by_name["github.com/pkg/errors"].version == "v0.9.1"
+    assert by_name["github.com/pkg/errors"].detected_by == "lock"
+    assert by_name["monolog/monolog"].ecosystem == "composer"
+    assert by_name["serde"].ecosystem == "cargo"
+    assert by_name["rack"].ecosystem == "gem"

@@ -14,8 +14,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY app ./app
 RUN adduser --disabled-password --gecos "" appuser \
-    && mkdir -p /data/sca/uploads \
-    && chown -R appuser:appuser /data/sca
+    && mkdir -p /data/sca/uploads /data/scanner-results /data/trivy-cache \
+    && chown -R appuser:appuser /data/sca /data/scanner-results /data/trivy-cache
 USER appuser
 
 EXPOSE 5191

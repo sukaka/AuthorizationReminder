@@ -22,6 +22,7 @@ from .models import (
     AiTriageResult,
     Component,
     ComponentDependency,
+    DependencyTrackProject,
     ImageScan,
     ImageScanFinding,
     Project,
@@ -54,6 +55,8 @@ from .schemas import (
     BackupJobOut,
     CveQueryIn,
     ComponentOut,
+    ComponentManualVersionIn,
+    DependencyTrackStatusOut,
     DependencyTreeNode,
     DevopsDashboardOut,
     DevopsEventListOut,
@@ -80,6 +83,7 @@ from .schemas import (
     ReportCreateIn,
     ReportOut,
     ScanLogOut,
+    ScanCompletenessOut,
     ScanTaskOut,
     SbomCreateIn,
     SbomOut,
@@ -421,6 +425,90 @@ async def list_components(
     return list(db.scalars(select(Component).where(Component.project_id == project_id).order_by(Component.ecosystem, Component.package_name)).all())
 
 
+@app.get("/api/sca/projects/{project_id}/scan-completeness", response_model=ScanCompletenessOut, tags=["sca"])
+async def scan_completeness(
+    request: Request,
+    project_id: int,
+    user: Annotated[UserPayload, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> ScanCompletenessOut:
+    await require_action("sca:read", request, user, settings)
+    _ensure_project_exists(db, project_id)
+    components = db.scalars(select(Component).where(Component.project_id == project_id)).all()
+    modes = {component.scan_mode for component in components if component.scan_mode}
+    has_standard_manifest = any(component.scan_mode in {"manifest_scan", "lockfile_scan", "mixed_scan"} and component.detected_by != "fallback" for component in components)
+    fallback_enabled = any(component.detected_by == "fallback" for component in components)
+    message = ""
+    suggestions: list[str] = []
+    if fallback_enabled or not has_standard_manifest:
+        message = "当前项目未发现标准依赖清单文件，系统已通过二进制、目录、源码导入语句等方式进行兜底识别。识别结果可能不完整，建议上传完整源码、SBOM、lock 文件或运行环境镜像以提升准确率。"
+        suggestions = [
+            "pom.xml / build.gradle",
+            "package.json / package-lock.json / yarn.lock / pnpm-lock.yaml",
+            "requirements.txt / poetry.lock / Pipfile.lock",
+            "go.mod / go.sum",
+            "composer.lock",
+            "Gemfile.lock",
+            "SBOM 文件",
+            "Docker 镜像 tar",
+            "war / jar 包",
+            "运行目录",
+            "pip freeze 输出",
+            "npm list 输出",
+            "mvn dependency:tree 输出",
+        ]
+    return ScanCompletenessOut(
+        project_id=project_id,
+        has_standard_manifest=has_standard_manifest,
+        scan_mode="mixed_scan" if len(modes) > 1 else (next(iter(modes)) if modes else "unknown"),
+        component_count=len(components),
+        high_confidence_count=sum(1 for component in components if component.confidence_level == "High"),
+        medium_confidence_count=sum(1 for component in components if component.confidence_level in {"Medium", "Medium-High"}),
+        low_confidence_count=sum(1 for component in components if component.confidence_level == "Low"),
+        unknown_version_count=sum(1 for component in components if component.package_version == "unknown" or not component.version_detected),
+        manual_confirm_count=sum(1 for component in components if component.need_manual_confirm or component.need_manual_version_confirm),
+        fallback_enabled=fallback_enabled,
+        message=message,
+        suggestions=suggestions,
+    )
+
+
+@app.patch("/api/sca/components/{component_id}/manual-version", response_model=ComponentOut, tags=["sca"])
+async def update_component_manual_version(
+    request: Request,
+    component_id: int,
+    payload: ComponentManualVersionIn,
+    user: Annotated[UserPayload, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> ComponentOut:
+    await require_action("sca:write", request, user, settings)
+    component = db.get(Component, component_id)
+    if not component:
+        raise HTTPException(status_code=404, detail="组件不存在")
+    version = payload.version.strip()
+    if not version:
+        raise HTTPException(status_code=400, detail="版本号不能为空")
+    component.package_version = version
+    component.version_normalized = version
+    component.resolved_version = version
+    component.version_detected = True
+    component.need_manual_version_confirm = False
+    component.need_manual_confirm = False
+    component.version_lock_status = "人工补录版本"
+    component.version_risk_type = ""
+    component.risk_explanation = "组件版本由人工补录，可重新执行漏洞匹配。"
+    component.fix_recommendation = ""
+    if payload.package_manager:
+        component.package_manager = payload.package_manager
+    if payload.purl:
+        component.purl = payload.purl
+    if payload.note:
+        component.note = payload.note
+    db.commit()
+    db.refresh(component)
+    return component
+
+
 @app.get("/api/sca/projects/{project_id}/dependency-tree", response_model=list[DependencyTreeNode], tags=["sca"])
 async def dependency_tree(
     request: Request,
@@ -466,6 +554,46 @@ async def list_scan_tasks(
 ) -> list[ScanTaskOut]:
     await require_action("sca:read", request, user, settings)
     return list(db.scalars(select(ScanTask).where(ScanTask.project_id == project_id).order_by(ScanTask.created_at.desc())).all())
+
+
+@app.post("/api/sca/scan-tasks/{scan_task_id}/rerun", response_model=ScanTaskOut, tags=["sca"])
+async def rerun_scan_subtask(
+    request: Request,
+    scan_task_id: int,
+    user: Annotated[UserPayload, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> ScanTaskOut:
+    await require_action("sca:write", request, user, settings)
+    task = db.get(ScanTask, scan_task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="扫描任务不存在")
+    if task.parent_task_id is None:
+        raise HTTPException(status_code=400, detail="主任务请通过重新上传或重新扫描触发")
+    task.status = "pending"
+    task.progress = 0
+    task.error_message = ""
+    task.summary = "已加入重新执行队列"
+    task.started_at = None
+    task.finished_at = None
+    db.add(ScanLog(scan_task_id=task.parent_task_id, level="info", message=f"子任务已标记重新执行：{task.task_type}"))
+    db.commit()
+    db.refresh(task)
+    return task
+
+
+@app.get("/api/sca/projects/{project_id}/dependency-track", response_model=DependencyTrackStatusOut, tags=["sca"])
+async def dependency_track_status(
+    request: Request,
+    project_id: int,
+    user: Annotated[UserPayload, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> DependencyTrackStatusOut:
+    await require_action("sca:read", request, user, settings)
+    _ensure_project_exists(db, project_id)
+    row = db.scalar(select(DependencyTrackProject).where(DependencyTrackProject.local_project_id == project_id))
+    if not row:
+        return DependencyTrackStatusOut(local_project_id=project_id, last_status="not_linked")
+    return row
 
 
 @app.get("/api/sca/projects/{project_id}/scan-logs", response_model=list[ScanLogOut], tags=["sca"])

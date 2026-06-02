@@ -9,7 +9,7 @@ from pathlib import Path
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from .models import Component, Project, VulnerabilityRecord
+from .models import Component, Project, ScanTask, VulnerabilityRecord
 
 
 CONTENT_TYPES = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
@@ -87,6 +87,30 @@ def _confidence_groups(vulnerabilities: list[VulnerabilityRecord]) -> dict[str, 
     return groups
 
 
+def _component_confidence_groups(components: list[Component]) -> dict[str, int]:
+    return {
+        "high": sum(1 for item in components if item.confidence_level == "High"),
+        "medium": sum(1 for item in components if item.confidence_level in {"Medium", "Medium-High"}),
+        "low": sum(1 for item in components if item.confidence_level == "Low"),
+        "review": sum(1 for item in components if item.confidence_level == "Review"),
+        "unknown_version": sum(1 for item in components if item.package_version == "unknown" or not item.version_detected),
+        "manual_confirm": sum(1 for item in components if item.need_manual_confirm or item.need_manual_version_confirm),
+    }
+
+
+def _scan_task_summary(db: Session, project_id: int) -> dict[str, int]:
+    tasks = list(db.scalars(select(ScanTask).where(ScanTask.project_id == project_id)))
+    return {
+        "opensca": sum(1 for item in tasks if item.engine_name == "opensca" and item.status in {"completed", "success"}),
+        "syft": sum(1 for item in tasks if item.engine_name == "syft" and item.status in {"completed", "success"}),
+        "trivy": sum(1 for item in tasks if item.engine_name == "trivy" and item.status in {"completed", "success"}),
+        "dependency_track": sum(1 for item in tasks if item.engine_name == "dependency-track" and item.status in {"completed", "success"}),
+        "failed": sum(1 for item in tasks if item.status in {"failed", "timeout"}),
+        "skipped": sum(1 for item in tasks if item.status == "skipped"),
+        "partial": sum(1 for item in tasks if item.status == "partial_completed"),
+    }
+
+
 def _release_advice(vulnerabilities: list[VulnerabilityRecord]) -> str:
     priorities = {item.risk_priority for item in vulnerabilities}
     if "P0" in priorities:
@@ -127,18 +151,27 @@ def _fix_command(component: Component | None, vulnerability: VulnerabilityRecord
     return f"通用：将 {name} 升级到 {fixed}，升级后重新扫描确认漏洞消除。"
 
 
-def _report_lines(project: Project, components: list[Component], vulnerabilities: list[VulnerabilityRecord]) -> list[str]:
+def _report_lines(project: Project, components: list[Component], vulnerabilities: list[VulnerabilityRecord], scan_tasks: dict[str, int] | None = None) -> list[str]:
     counts = _risk_counts(vulnerabilities)
     confirmed = _confirmed_vulnerabilities(vulnerabilities)
     high_risk = [item for item in confirmed if item.severity in {"critical", "high"}]
     confidence = _confidence_groups(vulnerabilities)
+    component_confidence = _component_confidence_groups(components)
+    scan_tasks = scan_tasks or {}
     component_by_id = {item.id: item for item in components}
     priority_items = _priority_sorted(confirmed)
+    fallback_enabled = any(item.detected_by == "fallback" for item in components)
+    modes = sorted({item.scan_mode for item in components if item.scan_mode})
+    unlocked_components = [item for item in components if item.version_risk_type]
     priority_lines = [
         f"{item.risk_priority or 'Review'}：{item.cve_id or item.advisory_id} / {item.package_name} {item.package_version}，建议期限 {item.suggested_deadline}"
         for item in priority_items[:12]
     ]
     fix_lines = [_fix_command(component_by_id.get(item.component_id or 0), item) for item in priority_items[:12]]
+    unlocked_lines = [
+        f"{item.ecosystem} / {item.source_file or item.source_path} / {item.package_name} / 声明版本 {item.declared_version or '未声明'} / 实际版本 {item.resolved_version or item.package_version} / {item.version_risk_type or item.version_lock_status} / {item.risk_explanation}"
+        for item in unlocked_components[:20]
+    ]
     lines = [
         "聚信软件成分安全分析报告",
         "企业 Logo：JUXIN",
@@ -157,6 +190,14 @@ def _report_lines(project: Project, components: list[Component], vulnerabilities
         "；".join(priority_lines) if priority_lines else "暂无需要整改的已确认漏洞。",
         "四、开发修复建议",
         "；".join(fix_lines) if fix_lines else "暂无开发侧升级命令建议。",
+        "五、多工具扫描结果汇总",
+        "本平台采用多工具联合分析机制，综合 OpenSCA、Syft、Trivy 与 OWASP Dependency-Track 的结果，对开源组件、SBOM、漏洞、License 和风险指标进行标准化、去重、合并和可信度评分。最终结果不是单一扫描器输出，而是经过多源交叉验证后的统一风险视图。",
+        f"OpenSCA 成功任务数：{scan_tasks.get('opensca', 0)}；Syft 成功任务数：{scan_tasks.get('syft', 0)}；Trivy 成功任务数：{scan_tasks.get('trivy', 0)}；Dependency-Track 成功任务数：{scan_tasks.get('dependency_track', 0)}；失败/超时任务数：{scan_tasks.get('failed', 0)}；跳过任务数：{scan_tasks.get('skipped', 0)}。",
+        f"高可信组件：{component_confidence['high']}；中可信组件：{component_confidence['medium']}；低可信组件：{component_confidence['low']}；待确认组件：{component_confidence['review']}。",
+        "六、扫描完整性与识别可信度说明",
+        f"是否启用兜底识别：{'是' if fallback_enabled else '否'}；扫描模式：{', '.join(modes) or 'unknown'}；版本未知组件：{component_confidence['unknown_version']}；待人工确认组件：{component_confidence['manual_confirm']}。",
+        "本次扫描未发现完整依赖清单文件时，平台会启用兜底识别模式。由于缺少标准依赖声明或锁定文件，部分组件版本可能无法精确确认，相关漏洞结果已按可信度进行区分，低可信和版本未知结果不直接纳入高危漏洞结论。",
+        "依赖版本未锁定风险：" + ("；".join(unlocked_lines) if unlocked_lines else "暂无未锁定版本、版本范围或版本缺失风险。"),
         "漏洞统计图：critical/high/medium/low = "
         + "/".join(str(counts[key]) for key in ("critical", "high", "medium", "low")),
         "高危漏洞：" + ("；".join(f"{item.cve_id or item.advisory_id} {item.package_name} {item.cvss_score}" for item in high_risk[:10]) or "暂无"),
@@ -214,11 +255,12 @@ trailer << /Root 1 0 R >>
 
 def generate_report(db: Session, project_id: int, fmt: str, report_root: str) -> Path:
     project, components, vulnerabilities = _project_data(db, project_id)
+    scan_tasks = _scan_task_summary(db, project_id)
     output_dir = Path(report_root)
     output_dir.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
     path = output_dir / f"juxin-sca-report-{project_id}-{timestamp}.{fmt}"
-    lines = _report_lines(project, components, vulnerabilities)
+    lines = _report_lines(project, components, vulnerabilities, scan_tasks)
     if fmt == "docx":
         _write_docx(path, lines)
     elif fmt == "xlsx":
@@ -231,11 +273,41 @@ def generate_report(db: Session, project_id: int, fmt: str, report_root: str) ->
             ["已确认漏洞", str(confidence["confirmed"])],
             ["待确认漏洞", str(confidence["review"])],
             ["疑似误报漏洞", str(confidence["false_positive"])],
+            ["OpenSCA 成功任务数", str(scan_tasks["opensca"])],
+            ["Syft 成功任务数", str(scan_tasks["syft"])],
+            ["Trivy 成功任务数", str(scan_tasks["trivy"])],
+            ["Dependency-Track 成功任务数", str(scan_tasks["dependency_track"])],
+            ["版本未知组件", str(_component_confidence_groups(components)["unknown_version"])],
+            ["待人工确认组件", str(_component_confidence_groups(components)["manual_confirm"])],
             ["整改建议", lines[-2]],
             [],
-            ["整改优先级清单"],
-            ["优先级", "CVE/公告", "组件", "当前版本", "等级", "风险分", "修复版本", "建议期限", "修复命令"],
+            ["依赖版本锁定风险"],
+            ["生态", "依赖文件", "依赖名称", "声明版本", "实际版本", "版本锁定状态", "风险类型", "风险说明", "修复建议"],
         ]
+        rows.extend(
+            [
+                [
+                    item.ecosystem,
+                    item.source_file or item.source_path,
+                    item.package_name,
+                    item.declared_version,
+                    item.resolved_version or item.package_version,
+                    item.version_lock_status,
+                    item.version_risk_type,
+                    item.risk_explanation,
+                    item.fix_recommendation,
+                ]
+                for item in components
+                if item.version_risk_type or item.need_manual_version_confirm
+            ]
+        )
+        rows.extend(
+            [
+                [],
+                ["整改优先级清单"],
+                ["优先级", "CVE/公告", "组件", "当前版本", "等级", "风险分", "修复版本", "建议期限", "修复命令"],
+            ]
+        )
         component_by_id = {item.id: item for item in components}
         rows.extend(
             [

@@ -404,6 +404,43 @@ body {
   margin-left: 6px;
 }
 
+.scan-completeness-alert {
+  margin: 14px 18px 0;
+}
+
+.scan-completeness-grid {
+  margin: 14px 18px;
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.scan-completeness-grid div {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: #f8fafc;
+  display: grid;
+  gap: 5px;
+}
+
+.scan-completeness-grid span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.scan-completeness-grid strong {
+  overflow-wrap: anywhere;
+}
+
+.dependency-track-status {
+  border-top: 0;
+}
+
+.task-table {
+  border-bottom: 1px solid var(--line);
+}
+
 .risk-command {
   display: grid;
   gap: 12px;
@@ -629,7 +666,8 @@ body {
 
   .scan-kpis,
   .security-lanes,
-  .detail-grid {
+  .detail-grid,
+  .scan-completeness-grid {
     grid-template-columns: 1fr 1fr;
   }
 
@@ -669,7 +707,8 @@ body {
 
   .scan-kpis,
   .security-lanes,
-  .detail-grid {
+  .detail-grid,
+  .scan-completeness-grid {
     grid-template-columns: 1fr;
   }
 
