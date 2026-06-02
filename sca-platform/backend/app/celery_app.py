@@ -13,16 +13,22 @@ from .dependency_parser import parse_source_dependencies
 from .models import (
     Component,
     ComponentDependency,
+    DependencyTrackProject,
+    RawScanArtifact,
     RiskAlert,
     RiskChangeRecord,
     RiskMonitorRun,
     RiskMonitorSnapshot,
     ScanLog,
     ScanTask,
+    ScannerTaskResult,
     UploadFileRecord,
     VulnerabilityRecord,
 )
 from .risk_monitor_service import monitor_component_update, raw_json, snapshot_risk_level
+from .scanners import opensca_client, syft_client, trivy_client
+from .scanners.base import ScannerCommandResult, file_sha256
+from .scanners.dependency_track_client import DependencyTrackClient
 
 settings = get_settings()
 
@@ -33,6 +39,9 @@ celery_app = Celery(
 )
 celery_app.conf.broker_connection_retry_on_startup = True
 celery_app.conf.task_always_eager = settings.celery_task_always_eager
+celery_app.conf.task_routes = {
+    "sca.scan_uploaded_file": {"queue": "scanner"},
+}
 celery_app.conf.beat_schedule = {
     "sca-risk-monitor": {
         "task": "sca.monitor_risks",
@@ -127,6 +136,131 @@ def _mark_child(db, parent_id: int, task_type: str, status: str, summary: str = 
         child.finished_at = now
 
 
+def _child_task(db, parent_id: int, task_type: str) -> ScanTask | None:
+    return db.query(ScanTask).filter(ScanTask.parent_task_id == parent_id, ScanTask.task_type == task_type).first()
+
+
+def _record_artifact(db, task: ScanTask, engine_name: str, artifact_type: str, path_text: str) -> None:
+    if not path_text:
+        return
+    path = Path(path_text)
+    if not path.exists() or not path.is_file():
+        return
+    db.add(
+        RawScanArtifact(
+            project_id=task.project_id,
+            scan_id=task.id,
+            engine_name=engine_name,
+            artifact_type=artifact_type,
+            file_path=str(path),
+            file_name=path.name,
+            file_size=path.stat().st_size,
+            sha256=file_sha256(path),
+        )
+    )
+
+
+def _record_scanner_result(
+    db,
+    parent_task: ScanTask,
+    task_type: str,
+    result: ScannerCommandResult,
+    component_count: int = 0,
+    vulnerability_count: int = 0,
+    license_count: int = 0,
+) -> None:
+    child = _child_task(db, parent_task.id, task_type)
+    if not child:
+        return
+    child.raw_result_path = result.raw_result_path
+    child.error_message = result.error_message
+    child.summary = result.error_message or ("执行完成" if result.status == "completed" else result.status)
+    child.status = result.status
+    child.progress = 100
+    child.finished_at = datetime.now(timezone.utc)
+    db.add(
+        ScannerTaskResult(
+            project_id=parent_task.project_id,
+            scan_id=parent_task.id,
+            scan_task_id=child.id,
+            engine_name=result.engine_name,
+            status=result.status,
+            component_count=component_count,
+            vulnerability_count=vulnerability_count,
+            license_count=license_count,
+            raw_result_path=result.raw_result_path,
+            stdout_log_path=result.stdout_log_path,
+            stderr_log_path=result.stderr_log_path,
+            error_message=result.error_message,
+            started_at=child.started_at,
+            finished_at=child.finished_at,
+        )
+    )
+    _record_artifact(db, parent_task, result.engine_name, "raw_json", result.raw_result_path)
+    _record_artifact(db, parent_task, result.engine_name, "stdout_log", result.stdout_log_path)
+    _record_artifact(db, parent_task, result.engine_name, "stderr_log", result.stderr_log_path)
+
+
+def _run_scanner_children(db, task: ScanTask, extract_dir: Path) -> None:
+    _mark_child(db, task.id, "opensca_scan_task", "running", "正在执行 OpenSCA 扫描", 20)
+    opensca_result = opensca_client.scan_source(extract_dir, Path(settings.opensca_output_dir) / str(task.id), settings)
+    _record_scanner_result(db, task, "opensca_scan_task", opensca_result)
+    db.add(ScanLog(scan_task_id=task.id, level="info", message=f"OpenSCA: {opensca_result.status} {opensca_result.error_message}".strip()))
+
+    _mark_child(db, task.id, "syft_sbom_task", "running", "正在执行 Syft SBOM 生成", 20)
+    syft_results = syft_client.generate_sbom(str(extract_dir), Path(settings.syft_output_dir) / str(task.id), settings)
+    syft_statuses = [item.status for item in syft_results]
+    syft_result = next((item for item in syft_results if item.raw_result_path.endswith("cyclonedx.json")), syft_results[0])
+    _record_scanner_result(db, task, "syft_sbom_task", syft_result)
+    for item in syft_results[1:]:
+        _record_artifact(db, task, item.engine_name, "spdx_bom" if "spdx" in item.raw_result_path else "raw_json", item.raw_result_path)
+    db.add(ScanLog(scan_task_id=task.id, level="info", message=f"Syft: {','.join(syft_statuses)} {syft_result.error_message}".strip()))
+
+    _mark_child(db, task.id, "trivy_scan_task", "running", "正在执行 Trivy 文件系统扫描", 20)
+    trivy_result = trivy_client.scan_fs(extract_dir, Path(settings.trivy_output_dir) / str(task.id), settings)
+    _record_scanner_result(db, task, "trivy_scan_task", trivy_result)
+    db.add(ScanLog(scan_task_id=task.id, level="info", message=f"Trivy: {trivy_result.status} {trivy_result.error_message}".strip()))
+
+    dtrack = DependencyTrackClient(settings)
+    if not dtrack.enabled():
+        _mark_child(db, task.id, "dependency_track_upload_task", "skipped", "Dependency-Track 未配置 API Key", 100)
+        _mark_child(db, task.id, "dependency_track_fetch_task", "skipped", "Dependency-Track 未配置 API Key", 100)
+        return
+    bom_path = Path(syft_result.raw_result_path) if syft_result.raw_result_path else Path()
+    if not bom_path.exists():
+        _mark_child(db, task.id, "dependency_track_upload_task", "failed", "缺少 CycloneDX BOM，无法上传 Dependency-Track", 100, "缺少 CycloneDX BOM")
+        _mark_child(db, task.id, "dependency_track_fetch_task", "skipped", "等待 BOM 上传成功后拉取", 100)
+        return
+    try:
+        _mark_child(db, task.id, "dependency_track_upload_task", "running", "正在上传 CycloneDX BOM", 40)
+        project_name = task.project.name if task.project else f"project-{task.project_id}"
+        project = dtrack.create_project(project_name, "latest")
+        project_uuid = str(project.get("uuid") or "")
+        dtrack.upload_bom(project_uuid, bom_path)
+        row = db.query(DependencyTrackProject).filter(DependencyTrackProject.local_project_id == task.project_id).first()
+        if not row:
+            row = DependencyTrackProject(local_project_id=task.project_id)
+            db.add(row)
+        row.dependency_track_project_uuid = project_uuid
+        row.dependency_track_project_name = project_name
+        row.dependency_track_project_version = "latest"
+        row.bom_uploaded_at = datetime.now(timezone.utc)
+        row.last_status = "bom_uploaded"
+        _mark_child(db, task.id, "dependency_track_upload_task", "completed", "BOM 已上传 Dependency-Track", 100)
+
+        _mark_child(db, task.id, "dependency_track_fetch_task", "running", "正在拉取 Dependency-Track 指标", 40)
+        metrics = dtrack.fetch_metrics(project_uuid)
+        row.last_metrics_json = raw_json(metrics)
+        row.last_fetch_at = datetime.now(timezone.utc)
+        row.last_status = "fetched"
+        _mark_child(db, task.id, "dependency_track_fetch_task", "completed", "Dependency-Track 指标已拉取", 100)
+    except Exception as exc:
+        message = str(exc)
+        _mark_child(db, task.id, "dependency_track_upload_task", "failed", message, 100, message)
+        _mark_child(db, task.id, "dependency_track_fetch_task", "skipped", "Dependency-Track 上传失败，跳过拉取", 100)
+        db.add(ScanLog(scan_task_id=task.id, level="error", message=f"Dependency-Track: {message}"))
+
+
 @celery_app.task(name="sca.demo_scan")
 def demo_scan(project_name: str) -> dict[str, str]:
     return {"project": project_name, "status": "queued", "message": "软件成分分析任务已进入队列"}
@@ -161,6 +295,7 @@ def scan_uploaded_file(scan_task_id: int) -> dict[str, int | str]:
             extract_dir = upload_root / "extracted" / record.upload_id
             _extract_archive(Path(record.storage_path), extract_dir)
             _mark_child(db, task.id, "prepare_source_task", "completed", "源码准备完成", 100)
+            _run_scanner_children(db, task, extract_dir)
             result = parse_source_dependencies(extract_dir)
             _mark_child(db, task.id, "normalize_results_task", "running", "正在标准化依赖识别结果", 50)
 
@@ -240,11 +375,6 @@ def scan_uploaded_file(scan_task_id: int) -> dict[str, int | str]:
             _mark_child(db, task.id, "merge_components_task", "completed", "组件合并完成", 100)
             _mark_child(db, task.id, "merge_vulnerabilities_task", "skipped", "等待漏洞查询后合并", 100)
             for task_type in [
-                "opensca_scan_task",
-                "syft_sbom_task",
-                "trivy_scan_task",
-                "dependency_track_upload_task",
-                "dependency_track_fetch_task",
                 "ai_noise_reduction_task",
                 "report_generate_task",
             ]:

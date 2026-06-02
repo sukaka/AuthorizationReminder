@@ -1,0 +1,30 @@
+FROM anchore/syft:latest AS syft
+FROM aquasec/trivy:latest AS trivy
+FROM opensca/opensca-cli:latest AS opensca
+
+FROM python:3.12-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
+WORKDIR /app
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends curl ca-certificates git \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=syft /syft /usr/local/bin/syft
+COPY --from=trivy /usr/local/bin/trivy /usr/local/bin/trivy
+COPY --from=opensca /app/opensca-cli /usr/local/bin/opensca
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY app ./app
+RUN adduser --disabled-password --gecos "" appuser \
+    && mkdir -p /data/sca/uploads /data/scanner-results /data/trivy-cache \
+    && chown -R appuser:appuser /data/sca /data/scanner-results /data/trivy-cache \
+    && chmod +x /usr/local/bin/syft /usr/local/bin/trivy /usr/local/bin/opensca
+USER appuser
+
+CMD ["celery", "-A", "app.celery_app.celery_app", "worker", "--loglevel=INFO", "--queues=scanner,celery"]

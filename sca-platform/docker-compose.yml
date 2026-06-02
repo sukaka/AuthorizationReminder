@@ -34,6 +34,8 @@ services:
       context: ./backend
     env_file:
       - .env
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - sca-upload-data:/data/sca/uploads
       - sca-report-data:/data/sca/reports
@@ -90,6 +92,7 @@ services:
   scanner-worker:
     build:
       context: ./backend
+      dockerfile: Dockerfile.scanner
     env_file:
       - .env
     volumes:

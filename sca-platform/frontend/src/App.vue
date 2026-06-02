@@ -957,7 +957,7 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import { Bell, Connection, DataAnalysis, Document, Files, Grid, MagicStick, Refresh, Search, Share, UploadFilled, WarningFilled } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { requestJson, resumableUploadWithProgress, uploadArchiveWithProgress, uploadImageTarWithProgress } from './api'
+import { apiUrl, requestJson, resumableUploadWithProgress, uploadArchiveWithProgress, uploadImageTarWithProgress } from './api'
 
 const activeMenu = ref('overview')
 const loading = ref(false)
@@ -1551,7 +1551,7 @@ const createReport = async () => {
 }
 
 const downloadReport = (row) => {
-  window.open(`/api/sca/reports/${row.id}/download`, '_blank')
+  window.open(apiUrl(`/api/sca/reports/${row.id}/download`), '_blank')
 }
 
 const createSbom = async () => {

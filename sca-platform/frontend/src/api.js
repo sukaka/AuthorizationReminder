@@ -1,6 +1,8 @@
 const API_BASE = import.meta.env.VITE_API_BASE || ''
 const SSO_LOGIN_URL = import.meta.env.VITE_SSO_LOGIN_URL || 'http://localhost:5180/login?system=sca'
 
+export const apiUrl = (path) => `${API_BASE}${path}`
+
 const redirectToLogin = () => {
   const target = new URL(SSO_LOGIN_URL, window.location.origin)
   target.searchParams.set('redirect', window.location.href)

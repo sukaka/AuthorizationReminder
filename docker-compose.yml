@@ -715,6 +715,69 @@ services:
       sca-redis:
         condition: service_healthy
 
+  sca-scanner-worker:
+    build:
+      context: ./sca-platform/backend
+      dockerfile: Dockerfile.scanner
+    command: ["celery", "-A", "app.celery_app.celery_app", "worker", "--loglevel=INFO", "--queues=scanner,celery"]
+    environment:
+      APP_NAME: "聚信软件成分分析平台"
+      APP_ENV: dev
+      APP_VERSION: ${SCA_APP_VERSION:-0.1.0}
+      DATABASE_URL: "postgresql+psycopg://sca_user:${SCA_POSTGRES_PASSWORD}@sca-postgres:5432/juxin_sca"
+      REDIS_URL: "redis://sca-redis:6379/0"
+      CELERY_BROKER_URL: "redis://sca-redis:6379/1"
+      CELERY_RESULT_BACKEND: "redis://sca-redis:6379/2"
+      AUTH_SERVICE_URL: "http://auth:5180"
+      AUTH_SYSTEM_KEY: "sca"
+      AUTH_COOKIE_NAME: "juxin_auth_token"
+      AUTH_DEV_BYPASS: "false"
+      CORS_ORIGINS: "http://localhost:18089,http://127.0.0.1:18089,http://${PUBLIC_HOST:-localhost}:18089"
+      UPLOAD_ROOT: "/data/sca/uploads"
+      CELERY_TASK_ALWAYS_EAGER: "false"
+      REPORT_ROOT: "/data/sca/reports"
+      SBOM_ROOT: "/data/sca/sbom"
+      OPENSCA_ENABLED: ${SCA_OPENSCA_ENABLED:-true}
+      OPENSCA_PATH: "/usr/local/bin/opensca"
+      OPENSCA_TIMEOUT: ${SCA_OPENSCA_TIMEOUT:-3600}
+      OPENSCA_OUTPUT_DIR: "/data/scanner-results/opensca"
+      SYFT_ENABLED: ${SCA_SYFT_ENABLED:-true}
+      SYFT_PATH: "/usr/local/bin/syft"
+      SYFT_TIMEOUT: ${SCA_SYFT_TIMEOUT:-1800}
+      SYFT_OUTPUT_DIR: "/data/scanner-results/syft"
+      SYFT_DEFAULT_FORMATS: ${SCA_SYFT_DEFAULT_FORMATS:-cyclonedx-json,spdx-json}
+      TRIVY_ENABLED: ${SCA_TRIVY_ENABLED:-true}
+      TRIVY_PATH: "/usr/local/bin/trivy"
+      TRIVY_TIMEOUT: ${SCA_TRIVY_TIMEOUT:-3600}
+      TRIVY_CACHE_DIR: "/data/trivy-cache"
+      TRIVY_OUTPUT_DIR: "/data/scanner-results/trivy"
+      DEPENDENCY_TRACK_ENABLED: ${SCA_DEPENDENCY_TRACK_ENABLED:-true}
+      DEPENDENCY_TRACK_URL: "http://dependency-track-apiserver:8080"
+      DEPENDENCY_TRACK_API_KEY: ${SCA_DEPENDENCY_TRACK_API_KEY:-}
+      DEPENDENCY_TRACK_TIMEOUT: ${SCA_DEPENDENCY_TRACK_TIMEOUT:-1800}
+      DEPENDENCY_TRACK_AUTO_CREATE_PROJECT: ${SCA_DEPENDENCY_TRACK_AUTO_CREATE_PROJECT:-true}
+      DEPENDENCY_TRACK_UPLOAD_BOM: ${SCA_DEPENDENCY_TRACK_UPLOAD_BOM:-true}
+      DEPENDENCY_TRACK_FETCH_FINDINGS: ${SCA_DEPENDENCY_TRACK_FETCH_FINDINGS:-true}
+      MULTI_ENGINE_MERGE_ENABLED: ${SCA_MULTI_ENGINE_MERGE_ENABLED:-true}
+      LOW_CONFIDENCE_AUTO_REVIEW: ${SCA_LOW_CONFIDENCE_AUTO_REVIEW:-true}
+      SAVE_RAW_REPORTS: ${SCA_SAVE_RAW_REPORTS:-true}
+      OPENAI_API_KEY: ${SCA_OPENAI_API_KEY:-}
+      OPENAI_API_URL: ${SCA_OPENAI_API_URL:-https://api.openai.com/v1/chat/completions}
+      OPENAI_MODEL: ${SCA_OPENAI_MODEL:-gpt-4o-mini}
+      OPENAI_TIMEOUT_MS: ${SCA_OPENAI_TIMEOUT_MS:-30000}
+    volumes:
+      - sca-upload-data:/data/sca/uploads
+      - sca-report-data:/data/sca/reports
+      - sca-sbom-data:/data/sca/sbom
+      - sca-backup-data:/data/sca/backups
+      - sca-scanner-results:/data/scanner-results
+      - sca-trivy-cache:/data/trivy-cache
+    depends_on:
+      sca-postgres:
+        condition: service_healthy
+      sca-redis:
+        condition: service_healthy
+
   sca-beat:
     build:
       context: ./sca-platform/backend
@@ -787,6 +850,32 @@ services:
       - auth
     ports:
       - "18089:80"
+
+  dependency-track-apiserver:
+    image: dependencytrack/apiserver:4.12.2
+    environment:
+      ALPINE_DATABASE_MODE: external
+      ALPINE_DATABASE_URL: "jdbc:postgresql://sca-postgres:5432/juxin_sca"
+      ALPINE_DATABASE_DRIVER: org.postgresql.Driver
+      ALPINE_DATABASE_USERNAME: sca_user
+      ALPINE_DATABASE_PASSWORD: ${SCA_POSTGRES_PASSWORD}
+      ALPINE_DATABASE_POOL_ENABLED: "true"
+    volumes:
+      - dependency-track-data:/data
+    depends_on:
+      sca-postgres:
+        condition: service_healthy
+    ports:
+      - "18090:8080"
+
+  dependency-track-frontend:
+    image: dependencytrack/frontend:4.12.2
+    environment:
+      API_BASE_URL: ${SCA_DEPENDENCY_TRACK_PUBLIC_API_URL:-http://localhost:18090}
+    depends_on:
+      - dependency-track-apiserver
+    ports:
+      - "18091:8080"
 
   onlyoffice:
     build:
@@ -883,3 +972,6 @@ volumes:
   sca-report-data:
   sca-sbom-data:
   sca-backup-data:
+  sca-scanner-results:
+  sca-trivy-cache:
+  dependency-track-data:
