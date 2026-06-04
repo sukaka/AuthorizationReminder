@@ -1110,6 +1110,7 @@ const monitorRunning = ref(false)
 const aiAnalyzing = ref(false)
 const systemConfigSaving = ref(false)
 const deletingProjectId = ref(null)
+const taskPollingPaused = ref(false)
 const uploadProgress = ref(0)
 const imageUploadProgress = ref(0)
 const selectedFile = ref(null)
@@ -1124,6 +1125,7 @@ const scanLogs = ref([])
 const scanTasks = ref([])
 let projectDetailsLoading = false
 let taskRefreshTimer = null
+let taskPollingGatewayWarningShown = false
 const scanCompleteness = reactive({
   project_id: 0,
   has_standard_manifest: false,
@@ -1648,6 +1650,8 @@ const loadProjectDetails = async () => {
     const tickets = await requestJson(`/api/sca/projects/${selectedProjectId.value}/remediation/tickets`)
     remediationTickets.value = tickets?.items || []
     whitelistItems.value = (await requestJson(`/api/sca/projects/${selectedProjectId.value}/remediation/whitelist`)) || []
+    taskPollingPaused.value = false
+    taskPollingGatewayWarningShown = false
   } finally {
     projectDetailsLoading = false
   }
@@ -1687,6 +1691,7 @@ const rerunScanTask = async (row) => {
 }
 
 const refreshAll = async () => {
+  taskPollingPaused.value = false
   await Promise.all([loadOverview(), loadProjects(), loadUploads()])
   await loadProjectDetails()
 }
@@ -1788,6 +1793,7 @@ const queryVulnerabilities = async () => {
     return
   }
   vulnerabilityQuerying.value = true
+  taskPollingPaused.value = false
   try {
     const data = await requestJson(`/api/sca/projects/${selectedProjectId.value}/vulnerabilities/query`, { method: 'POST' })
     await loadProjectDetails()
@@ -2115,11 +2121,18 @@ const enqueueTask = async () => {
 onMounted(refreshAll)
 onMounted(() => {
   taskRefreshTimer = window.setInterval(async () => {
-    if (!selectedProjectId.value || !hasActiveProjectTasks.value) return
+    if (!selectedProjectId.value || taskPollingPaused.value || !hasActiveProjectTasks.value) return
     try {
       await loadProjectDetails()
       await loadUploads()
     } catch (err) {
+      if (err?.isGatewayError) {
+        taskPollingPaused.value = true
+        if (!taskPollingGatewayWarningShown) {
+          ElMessage.warning('SCA API 网关或后端暂不可用，已暂停扫描状态自动刷新，请刷新页面或稍后重试。')
+          taskPollingGatewayWarningShown = true
+        }
+      }
       console.warn('[SCA] refresh active tasks failed', err?.message || err)
     }
   }, 5000)

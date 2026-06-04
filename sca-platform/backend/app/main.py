@@ -899,6 +899,8 @@ async def list_scan_tasks(
     db: Annotated[Session, Depends(get_db)],
 ) -> list[ScanTaskOut]:
     await require_action("sca:read", request, user, settings)
+    if _close_stale_vulnerability_query_tasks(db, project_id):
+        db.commit()
     return list(db.scalars(select(ScanTask).where(ScanTask.project_id == project_id).order_by(ScanTask.created_at.desc())).all())
 
 
@@ -970,6 +972,53 @@ def _latest_upload_record(db: Session, project_id: int) -> UploadFileRecord | No
     return record
 
 
+ACTIVE_SCAN_STATUSES = {"queued", "pending", "running"}
+VULNERABILITY_QUERY_STALE_SECONDS = 600
+
+
+def _as_utc(value: datetime | None) -> datetime | None:
+    if not value:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
+def _is_stale_vulnerability_query_task(task: ScanTask, now: datetime | None = None) -> bool:
+    if task.task_type != "vulnerability_query_task" or task.status not in ACTIVE_SCAN_STATUSES:
+        return False
+    last_update = _as_utc(task.updated_at) or _as_utc(task.started_at) or _as_utc(task.created_at)
+    if not last_update:
+        return False
+    now = now or datetime.now(timezone.utc)
+    stale_after = max(VULNERABILITY_QUERY_STALE_SECONDS, int(task.timeout_seconds or 0) * 5)
+    return (now - last_update).total_seconds() >= stale_after
+
+
+def _close_stale_vulnerability_query_tasks(db: Session, project_id: int) -> int:
+    now = datetime.now(timezone.utc)
+    message = "任务执行中断：后台漏洞查询任务已不在执行队列中，可能因服务重启、worker 中断或代理异常导致，请重新查询漏洞。"
+    tasks = db.scalars(
+        select(ScanTask).where(
+            ScanTask.project_id == project_id,
+            ScanTask.task_type == "vulnerability_query_task",
+            ScanTask.status.in_(ACTIVE_SCAN_STATUSES),
+        )
+    ).all()
+    closed = 0
+    for task in tasks:
+        if not _is_stale_vulnerability_query_task(task, now):
+            continue
+        task.status = "timeout"
+        task.progress = 100
+        task.summary = message
+        task.error_message = message
+        task.finished_at = now
+        db.add(ScanLog(scan_task_id=task.id, level="warning", message=message))
+        closed += 1
+    return closed
+
+
 @app.post("/api/sca/projects/{project_id}/vulnerabilities/query", status_code=status.HTTP_202_ACCEPTED, tags=["vulnerabilities"])
 async def query_project_vulnerabilities(
     request: Request,
@@ -979,12 +1028,14 @@ async def query_project_vulnerabilities(
     await require_action("sca:write", request, user, settings)
     with SessionLocal() as db:
         _ensure_project_exists(db, project_id)
+        if _close_stale_vulnerability_query_tasks(db, project_id):
+            db.commit()
         existing = db.scalar(
             select(ScanTask)
             .where(
                 ScanTask.project_id == project_id,
                 ScanTask.task_type == "vulnerability_query_task",
-                ScanTask.status.in_(["queued", "pending", "running"]),
+                ScanTask.status.in_(ACTIVE_SCAN_STATUSES),
             )
             .order_by(ScanTask.created_at.desc())
         )

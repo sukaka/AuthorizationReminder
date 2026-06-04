@@ -1,4 +1,5 @@
 import importlib
+from datetime import datetime, timedelta, timezone
 
 from fastapi.testclient import TestClient
 
@@ -90,6 +91,110 @@ def test_query_component_vulnerabilities_enqueues_async_task(monkeypatch, tmp_pa
     assert data["status"] == "queued"
     assert data["message"] == "漏洞查询任务已入队，请稍后刷新查看结果"
     assert enqueued["args"] == [data["task_id"]]
+
+
+def test_query_component_vulnerabilities_times_out_stale_running_task(monkeypatch, tmp_path):
+    client, main, models, database = build_client(monkeypatch, tmp_path)
+    enqueued = {}
+
+    def fake_apply_async(*, args, task_id):
+        enqueued["args"] = args
+        enqueued["task_id"] = task_id
+
+    monkeypatch.setattr(main.query_project_vulnerabilities_task, "apply_async", fake_apply_async)
+    with client as test_client:
+        with database.SessionLocal() as db:
+            project = models.Project(name="陈旧漏洞任务项目", scan_note="demo")
+            db.add(project)
+            db.flush()
+            upload = models.UploadFileRecord(
+                project_id=project.id,
+                upload_id="upload-stale-vuln",
+                original_filename="demo.zip",
+                stored_filename="demo.zip",
+                storage_path="/tmp/demo.zip",
+                status="scanned",
+            )
+            db.add(upload)
+            db.flush()
+            db.add(models.Component(project_id=project.id, package_name="demo-lib", package_version="1.0.0", ecosystem="pypi"))
+            stale_task = models.ScanTask(
+                project_id=project.id,
+                upload_file_id=upload.id,
+                celery_task_id="lost-vuln-task",
+                task_type="vulnerability_query_task",
+                engine_name="juxin-vuln-intel",
+                status="running",
+                progress=87,
+                summary="正在查询漏洞情报：120/131 typedarray",
+                timeout_seconds=60,
+                started_at=datetime.now(timezone.utc) - timedelta(minutes=30),
+                updated_at=datetime.now(timezone.utc) - timedelta(minutes=20),
+            )
+            db.add(stale_task)
+            db.commit()
+            project_id = project.id
+            stale_task_id = stale_task.id
+
+        response = test_client.post(f"/api/sca/projects/{project_id}/vulnerabilities/query")
+
+        assert response.status_code == 202
+        data = response.json()
+        assert data["task_id"] != stale_task_id
+        assert data["status"] == "queued"
+        assert enqueued["args"] == [data["task_id"]]
+
+        with database.SessionLocal() as db:
+            old_task = db.get(models.ScanTask, stale_task_id)
+            assert old_task.status == "timeout"
+            assert old_task.progress == 100
+            assert "任务执行中断" in old_task.summary
+
+
+def test_list_scan_tasks_marks_stale_running_task_timeout(monkeypatch, tmp_path):
+    client, _main, models, database = build_client(monkeypatch, tmp_path)
+    with client as test_client:
+        with database.SessionLocal() as db:
+            project = models.Project(name="陈旧扫描日志项目", scan_note="demo")
+            db.add(project)
+            db.flush()
+            upload = models.UploadFileRecord(
+                project_id=project.id,
+                upload_id="upload-stale-list",
+                original_filename="demo.zip",
+                stored_filename="demo.zip",
+                storage_path="/tmp/demo.zip",
+                status="scanned",
+            )
+            db.add(upload)
+            db.flush()
+            task = models.ScanTask(
+                project_id=project.id,
+                upload_file_id=upload.id,
+                celery_task_id="lost-list-task",
+                task_type="vulnerability_query_task",
+                engine_name="juxin-vuln-intel",
+                status="running",
+                progress=87,
+                summary="正在查询漏洞情报：120/131 typedarray",
+                timeout_seconds=60,
+                started_at=datetime.now(timezone.utc) - timedelta(minutes=30),
+                updated_at=datetime.now(timezone.utc) - timedelta(minutes=20),
+            )
+            db.add(task)
+            db.commit()
+            project_id = project.id
+            task_id = task.id
+
+        response = test_client.get(f"/api/sca/projects/{project_id}/scan-tasks")
+
+    assert response.status_code == 200
+    rows = response.json()
+    stale_row = next(row for row in rows if row["id"] == task_id)
+    assert stale_row["status"] == "timeout"
+    assert stale_row["progress"] == 100
+    assert "任务执行中断" in stale_row["summary"]
+
 
 def test_project_vulnerability_query_task_persists_results(monkeypatch, tmp_path):
     client, main, models, database = build_client(monkeypatch, tmp_path)
