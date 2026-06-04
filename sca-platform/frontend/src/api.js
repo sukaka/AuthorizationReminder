@@ -18,6 +18,9 @@ const parseMaybeJson = (text) => {
   }
 }
 
+const nonJsonResponseMessage = (status) =>
+  `服务返回了非 JSON 响应(${status})，可能是前端代理或后端服务异常，请刷新页面或检查 SCA API 服务状态。`
+
 export const requestJson = async (path, options = {}) => {
   const response = await fetch(`${API_BASE}${path}`, {
     credentials: 'include',
@@ -34,7 +37,11 @@ export const requestJson = async (path, options = {}) => {
   }
 
   const text = await response.text()
-  const data = text ? JSON.parse(text) : null
+  const contentType = response.headers.get('content-type') || ''
+  const data = parseMaybeJson(text)
+  if (text && !data && !contentType.includes('application/json')) {
+    throw new Error(nonJsonResponseMessage(response.status))
+  }
   if (!response.ok) {
     throw new Error(data?.detail || data?.error || `请求失败(${response.status})`)
   }
