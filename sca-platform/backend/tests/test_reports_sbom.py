@@ -315,7 +315,9 @@ def test_xlsx_report_matches_reference_workbook_with_metadata_and_license_policy
     assert sheets["审计资产列表"][0] == ["组件", "版本", "是否最新版本", "最新版本", "组ID", "组件类型", "组件路径", "许可证", "风险等级", "漏洞分布", "依赖关系", "推荐版本"]
     assert ["fastapi", "0.115.6", "否", "0.115.7", "fastapi", "开源组件", "requirements.txt", "MIT", "高危风险", "严重0；高危1；中危0；低危0", "直接引入", "0.115.7"] in sheets["审计资产列表"]
     assert sheets["资产漏洞信息"][0][:12] == ["漏洞编号", "严重程度", "发布日期", "CWE", "项目名", "组件", "版本", "漏洞利用难度", "创建日期", "组ID", "版本日期", "组件年龄"]
-    assert ["CVE-2024-9999", "高危风险", "2024-05-01", "CWE-79", "报告项目 v1.0", "fastapi", "0.115.6", "容易", "2026.06.04", "fastapi", "2024-12-01", "1.5年"] in sheets["资产漏洞信息"]
+    assert ["CVE-2024-9999", "高危风险", "2024-05-01", "CWE-79", "报告项目 v1.0", "fastapi", "0.115.6", "容易", "2026.06.04", "fastapi", "2024-12-01", "1.5年"] in [
+        row[:12] for row in sheets["资产漏洞信息"][1:]
+    ]
     license_rows = sheets["许可协议信息"]
     assert license_rows[1] == ["许可协议简称", "许可协议全称", "风险说明", "使用范围", "使用条件", "使用限制", "是否兼容GPL", "OSI认证", "FSF认证", "风险等级", "许可描述"]
     assert any(row[0] == "MIT" and row[10] for row in license_rows)
@@ -419,6 +421,46 @@ def test_xlsx_report_uses_clear_labels_for_unmonitored_unknown_component_fields(
     assert "未声明" in license_names
     assert "WTFPL" in license_names
     assert "unknown" not in license_names
+
+
+def test_xlsx_report_lists_review_vulnerabilities_in_asset_vulnerability_sheet(monkeypatch, tmp_path):
+    client, _main, models, database = build_client(monkeypatch, tmp_path)
+    with client as test_client:
+        project_id = seed_project(database, models)
+        with database.SessionLocal() as db:
+            vulnerability = db.query(models.VulnerabilityRecord).filter_by(project_id=project_id).one()
+            vulnerability.match_status = "unknown"
+            vulnerability.needs_human_review = True
+            vulnerability.risk_priority = "Review"
+            vulnerability.confidence_score = 0.35
+            db.commit()
+
+        created = test_client.post(
+            f"/api/sca/projects/{project_id}/reports",
+            json={"format": "xlsx", "metadata": report_metadata()},
+        )
+        report = created.json()
+        downloaded = test_client.get(f"/api/sca/reports/{report['id']}/download")
+
+    sheets = workbook_values(downloaded.content)
+    rows = sheets["资产漏洞信息"]
+
+    assert rows[0][:13] == [
+        "漏洞编号",
+        "严重程度",
+        "发布日期",
+        "CWE",
+        "项目名",
+        "组件",
+        "版本",
+        "漏洞利用难度",
+        "创建日期",
+        "组ID",
+        "版本日期",
+        "组件年龄",
+        "确认状态",
+    ]
+    assert any(row[0] == "CVE-2024-9999" and row[12] == "待确认" for row in rows[1:])
 
 
 def test_sbom_export_uses_database_components_when_tool_is_unavailable(monkeypatch, tmp_path):

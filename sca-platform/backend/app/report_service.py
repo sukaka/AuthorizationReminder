@@ -176,12 +176,21 @@ def _priority_sorted(vulnerabilities: list[VulnerabilityRecord]) -> list[Vulnera
     return sorted(vulnerabilities, key=lambda item: (_priority_rank(item.risk_priority), -float(item.risk_score or 0), -float(item.cvss_score or 0)))
 
 
+def _vulnerability_review_status(item: VulnerabilityRecord) -> str:
+    if item.risk_priority == "Ignore" or item.false_positive_possibility == "high":
+        return "疑似误报"
+    if item.needs_human_review or item.match_status == "unknown" or item.risk_priority == "Review":
+        return "待确认"
+    return "已确认"
+
+
 def _confidence_groups(vulnerabilities: list[VulnerabilityRecord]) -> dict[str, int]:
     groups = {"confirmed": 0, "review": 0, "false_positive": 0}
     for item in vulnerabilities:
-        if item.risk_priority == "Ignore" or item.false_positive_possibility == "high":
+        status = _vulnerability_review_status(item)
+        if status == "疑似误报":
             groups["false_positive"] += 1
-        elif item.needs_human_review or item.match_status == "unknown" or item.risk_priority == "Review":
+        elif status == "待确认":
             groups["review"] += 1
         else:
             groups["confirmed"] += 1
@@ -919,9 +928,9 @@ def _write_xlsx_report(
         )
 
     vulnerability_sheet = workbook.create_sheet("资产漏洞信息")
-    vulnerability_sheet.append(["漏洞编号", "严重程度", "发布日期", "CWE", "项目名", "组件", "版本", "漏洞利用难度", "创建日期", "组ID", "版本日期", "组件年龄"])
+    vulnerability_sheet.append(["漏洞编号", "严重程度", "发布日期", "CWE", "项目名", "组件", "版本", "漏洞利用难度", "创建日期", "组ID", "版本日期", "组件年龄", "确认状态", "可信度"])
     component_by_id = {component.id: component for component in components}
-    for item in _priority_sorted(confirmed):
+    for item in _priority_sorted(vulnerabilities):
         component = component_by_id.get(item.component_id or 0)
         snapshot = version_cache.get(item.component_id or 0)
         vulnerability_sheet.append(
@@ -938,6 +947,8 @@ def _write_xlsx_report(
                 _component_group_id(component, item),
                 _version_date(snapshot),
                 _component_age(snapshot),
+                _vulnerability_review_status(item),
+                f"{round(float(item.confidence_score or 0) * 100)}%",
             ]
         )
 

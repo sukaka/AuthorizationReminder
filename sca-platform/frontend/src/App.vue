@@ -80,7 +80,6 @@
         </div>
         <div class="hero-actions">
           <el-button :icon="Refresh" @click="refreshAll">刷新</el-button>
-          <el-button type="primary" :icon="Connection" @click="enqueueTask">测试任务队列</el-button>
         </div>
       </section>
 
@@ -916,7 +915,10 @@
         <div class="panel">
           <div class="panel-head">
             <h2>最终部署与优化</h2>
-            <el-button type="primary" :icon="Refresh" @click="createBackupJob">创建备份计划</el-button>
+            <div class="panel-actions">
+              <el-button :icon="Connection" @click="enqueueTask">队列健康检查</el-button>
+              <el-button type="primary" :icon="Refresh" @click="createBackupJob">创建备份计划</el-button>
+            </div>
           </div>
           <section class="metric-grid asset-metrics">
             <div class="metric"><span>HTTPS</span><strong>{{ opsConfig.https_enabled ? '开' : '关' }}</strong></div>
@@ -2112,9 +2114,9 @@ const scanImageTar = async () => {
 const enqueueTask = async () => {
   try {
     const data = await requestJson('/api/sca/tasks/demo', { method: 'POST' })
-    if (data?.task_id) ElMessage.success(`任务已入队：${data.task_id}`)
+    if (data?.task_id) ElMessage.success(`队列链路正常，检查任务已入队：${data.task_id}`)
   } catch (err) {
-    ElMessage.error(err?.message || '任务提交失败')
+    ElMessage.error(err?.message || '队列健康检查失败')
   }
 }
 
