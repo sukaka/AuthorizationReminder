@@ -29,6 +29,8 @@ test('nginx re-resolves sca-api after backend container recreation', () => {
     assert.match(source, /resolver 127\.0\.0\.11/)
     assert.match(source, /set \$sca_api_upstream http:\/\/sca-api:5191;/)
     assert.match(source, /proxy_pass \$sca_api_upstream;/)
+    assert.match(source, /proxy_send_timeout 300s;/)
+    assert.match(source, /proxy_read_timeout 300s;/)
   }
 })
 

@@ -7,6 +7,7 @@ import shutil
 import uuid
 
 import redis
+from fastapi.concurrency import run_in_threadpool
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile, status
 from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -16,7 +17,7 @@ from sqlalchemy.orm import Session
 from .auth import get_current_user, require_action
 from .celery_app import demo_scan, scan_uploaded_file
 from .config import Settings, get_settings
-from .database import check_database, get_db, init_db
+from .database import SessionLocal, check_database, get_db, init_db
 from .models import (
     AnalysisProject,
     AiTriageResult,
@@ -764,70 +765,75 @@ def _latest_source_root(db: Session, project_id: int) -> Path | None:
     return root if root.exists() else None
 
 
+def _query_project_vulnerabilities_blocking(project_id: int) -> VulnerabilityListOut:
+    with SessionLocal() as db:
+        _ensure_project_exists(db, project_id)
+        components = db.scalars(select(Component).where(Component.project_id == project_id)).all()
+        db.execute(delete(VulnerabilityRecord).where(VulnerabilityRecord.project_id == project_id))
+        db.flush()
+        source_root = _latest_source_root(db, project_id)
+        for component in components:
+            reachability = analyze_component_reachability(component, source_root)
+            findings = query_component_vulnerabilities(component, settings)
+            component.vulnerability_status = "vulnerable" if findings else "clean"
+            for finding in findings:
+                db.add(
+                    VulnerabilityRecord(
+                        project_id=project_id,
+                        component_id=component.id,
+                        source=finding.source,
+                        advisory_id=finding.advisory_id,
+                        cve_id=finding.cve_id,
+                        cwe_id=finding.cwe_id,
+                        package_name=finding.package_name,
+                        package_version=finding.package_version,
+                        ecosystem=finding.ecosystem,
+                        cvss_score=finding.cvss_score,
+                        severity=finding.severity,
+                        epss_score=finding.epss_score,
+                        cisa_kev=finding.cisa_kev,
+                        confidence_score=finding.confidence_score,
+                        match_status=finding.match_status,
+                        matched_by=finding.matched_by,
+                        match_reason=finding.match_reason,
+                        version_range=finding.version_range,
+                        needs_human_review=finding.needs_human_review,
+                        false_positive_possibility=finding.false_positive_possibility,
+                        risk_priority=finding.risk_priority,
+                        risk_score=finding.risk_score,
+                        priority_reason=finding.priority_reason,
+                        suggested_deadline=finding.suggested_deadline,
+                        remediation_type=finding.remediation_type,
+                        business_impact=finding.business_impact,
+                        reachability_status=reachability.reachability_status,
+                        reachability_evidence=reachability.reachability_evidence,
+                        entry_points=reachability.entry_points,
+                        related_files=reachability.related_files,
+                        call_path_summary=reachability.call_path_summary,
+                        description=finding.description,
+                        fixed_version=finding.fixed_version,
+                        published_at_text=finding.published_at,
+                        has_poc=finding.has_poc,
+                        exploited_in_wild=finding.exploited_in_wild,
+                        detail_url=finding.detail_url,
+                        raw_json="",
+                    )
+                )
+        db.commit()
+        items = db.scalars(
+            select(VulnerabilityRecord).where(VulnerabilityRecord.project_id == project_id).order_by(VulnerabilityRecord.risk_score.desc(), VulnerabilityRecord.cvss_score.desc())
+        ).all()
+        return VulnerabilityListOut(total=len(items), items=[VulnerabilityOut.model_validate(item) for item in items])
+
+
 @app.post("/api/sca/projects/{project_id}/vulnerabilities/query", response_model=VulnerabilityListOut, tags=["vulnerabilities"])
 async def query_project_vulnerabilities(
     request: Request,
     project_id: int,
     user: Annotated[UserPayload, Depends(get_current_user)],
-    db: Annotated[Session, Depends(get_db)],
 ) -> VulnerabilityListOut:
     await require_action("sca:write", request, user, settings)
-    _ensure_project_exists(db, project_id)
-    components = db.scalars(select(Component).where(Component.project_id == project_id)).all()
-    db.execute(delete(VulnerabilityRecord).where(VulnerabilityRecord.project_id == project_id))
-    db.flush()
-    for component in components:
-        reachability = analyze_component_reachability(component, _latest_source_root(db, project_id))
-        findings = query_component_vulnerabilities(component, settings)
-        component.vulnerability_status = "vulnerable" if findings else "clean"
-        for finding in findings:
-            db.add(
-                VulnerabilityRecord(
-                    project_id=project_id,
-                    component_id=component.id,
-                    source=finding.source,
-                    advisory_id=finding.advisory_id,
-                    cve_id=finding.cve_id,
-                    cwe_id=finding.cwe_id,
-                    package_name=finding.package_name,
-                    package_version=finding.package_version,
-                    ecosystem=finding.ecosystem,
-                    cvss_score=finding.cvss_score,
-                    severity=finding.severity,
-                    epss_score=finding.epss_score,
-                    cisa_kev=finding.cisa_kev,
-                    confidence_score=finding.confidence_score,
-                    match_status=finding.match_status,
-                    matched_by=finding.matched_by,
-                    match_reason=finding.match_reason,
-                    version_range=finding.version_range,
-                    needs_human_review=finding.needs_human_review,
-                    false_positive_possibility=finding.false_positive_possibility,
-                    risk_priority=finding.risk_priority,
-                    risk_score=finding.risk_score,
-                    priority_reason=finding.priority_reason,
-                    suggested_deadline=finding.suggested_deadline,
-                    remediation_type=finding.remediation_type,
-                    business_impact=finding.business_impact,
-                    reachability_status=reachability.reachability_status,
-                    reachability_evidence=reachability.reachability_evidence,
-                    entry_points=reachability.entry_points,
-                    related_files=reachability.related_files,
-                    call_path_summary=reachability.call_path_summary,
-                    description=finding.description,
-                    fixed_version=finding.fixed_version,
-                    published_at_text=finding.published_at,
-                    has_poc=finding.has_poc,
-                    exploited_in_wild=finding.exploited_in_wild,
-                    detail_url=finding.detail_url,
-                    raw_json="",
-                )
-            )
-    db.commit()
-    items = db.scalars(
-        select(VulnerabilityRecord).where(VulnerabilityRecord.project_id == project_id).order_by(VulnerabilityRecord.risk_score.desc(), VulnerabilityRecord.cvss_score.desc())
-    ).all()
-    return VulnerabilityListOut(total=len(items), items=list(items))
+    return await run_in_threadpool(_query_project_vulnerabilities_blocking, project_id)
 
 
 @app.get("/api/sca/projects/{project_id}/vulnerabilities", response_model=VulnerabilityListOut, tags=["vulnerabilities"])

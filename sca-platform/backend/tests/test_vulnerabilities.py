@@ -96,6 +96,29 @@ def test_query_component_vulnerabilities_persists_results(monkeypatch, tmp_path)
     assert data["items"][0]["severity"] == "critical"
 
 
+def test_project_vulnerability_query_uses_threadpool(monkeypatch, tmp_path):
+    client, main, models, database = build_client(monkeypatch, tmp_path)
+    called = {}
+
+    async def fake_run_in_threadpool(fn, *args, **kwargs):
+        called["function"] = fn.__name__
+        return fn(*args, **kwargs)
+
+    monkeypatch.setattr(main, "run_in_threadpool", fake_run_in_threadpool)
+
+    with client as test_client:
+        with database.SessionLocal() as db:
+            project = models.Project(name="线程池漏洞项目", scan_note="demo")
+            db.add(project)
+            db.commit()
+            project_id = project.id
+
+        response = test_client.post(f"/api/sca/projects/{project_id}/vulnerabilities/query")
+
+    assert response.status_code == 200
+    assert called["function"] == "_query_project_vulnerabilities_blocking"
+
+
 def test_vulnerability_stats_and_trend(monkeypatch, tmp_path):
     client, main, models, database = build_client(monkeypatch, tmp_path)
     with client as test_client:
