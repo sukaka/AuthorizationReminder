@@ -27,7 +27,7 @@ from .models import (
 )
 from .risk_monitor_service import monitor_component_update, raw_json, snapshot_risk_level
 from .scanners import opensca_client, syft_client, trivy_client
-from .scanners.base import ScannerCommandResult, file_sha256
+from .scanners.base import ScannerCommandResult, command_to_log_line, file_sha256
 from .scanners.dependency_track_client import DependencyTrackClient
 
 settings = get_settings()
@@ -172,12 +172,19 @@ def _record_scanner_result(
     child = _child_task(db, parent_task.id, task_type)
     if not child:
         return
+    stored_error_message = (
+        f"{result.error_type}: {result.error_message}"
+        if result.error_type and result.error_message
+        else result.error_message
+    )
     child.raw_result_path = result.raw_result_path
-    child.error_message = result.error_message
-    child.summary = result.error_message or ("执行完成" if result.status == "completed" else result.status)
+    child.error_message = stored_error_message
+    child.summary = stored_error_message or ("执行完成" if result.status == "completed" else result.status)
     child.status = result.status
     child.progress = 100
     child.finished_at = datetime.now(timezone.utc)
+    html_report_path = next((item for item in result.report_files if item.endswith(".html")), "")
+    sarif_report_path = next((item for item in result.report_files if item.endswith(".sarif")), "")
     db.add(
         ScannerTaskResult(
             project_id=parent_task.project_id,
@@ -189,14 +196,27 @@ def _record_scanner_result(
             vulnerability_count=vulnerability_count,
             license_count=license_count,
             raw_result_path=result.raw_result_path,
+            normalized_result_path=sarif_report_path,
+            html_report_path=html_report_path,
             stdout_log_path=result.stdout_log_path,
             stderr_log_path=result.stderr_log_path,
-            error_message=result.error_message,
+            error_message=stored_error_message,
             started_at=child.started_at,
             finished_at=child.finished_at,
         )
     )
-    _record_artifact(db, parent_task, result.engine_name, "raw_json", result.raw_result_path)
+    if result.command:
+        db.add(ScanLog(scan_task_id=parent_task.id, level="info", message=f"{result.engine_name} 执行命令: {command_to_log_line(result.command)}"))
+    if result.command_log_path:
+        db.add(ScanLog(scan_task_id=parent_task.id, level="info", message=f"{result.engine_name} 命令日志: {result.command_log_path}"))
+    if result.report_files:
+        db.add(ScanLog(scan_task_id=parent_task.id, level="info", message=f"{result.engine_name} 报告文件: {', '.join(result.report_files)}"))
+    for report_file in result.report_files:
+        suffix = Path(report_file).suffix.lower()
+        artifact_type = "html_report" if suffix == ".html" else "sarif_report" if suffix == ".sarif" else "raw_json"
+        _record_artifact(db, parent_task, result.engine_name, artifact_type, report_file)
+    if not result.report_files:
+        _record_artifact(db, parent_task, result.engine_name, "raw_json", result.raw_result_path)
     _record_artifact(db, parent_task, result.engine_name, "stdout_log", result.stdout_log_path)
     _record_artifact(db, parent_task, result.engine_name, "stderr_log", result.stderr_log_path)
 

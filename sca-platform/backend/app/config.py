@@ -43,6 +43,9 @@ class Settings(BaseSettings):
     trivy_enabled: bool = True
     trivy_path: str = "/usr/local/bin/trivy"
     trivy_timeout: int = 3600
+    trivy_command_timeout: str = "30m"
+    trivy_db_repositories: str = "ghcr.io/aquasecurity/trivy-db:2,public.ecr.aws/aquasecurity/trivy-db:2,mirror.gcr.io/aquasec/trivy-db:2"
+    trivy_skip_db_update_on_cache: bool = True
     trivy_cache_dir: str = "/data/trivy-cache"
     trivy_output_dir: str = "/data/scanner-results/trivy"
     dependency_track_enabled: bool = True

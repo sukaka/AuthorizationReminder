@@ -163,7 +163,74 @@ def _component_confidence_groups(components: list[Component]) -> dict[str, int]:
     }
 
 
-def _scan_task_summary(db: Session, project_id: int) -> dict[str, int]:
+def _status_label(status: str) -> str:
+    return {
+        "completed": "成功",
+        "success": "成功",
+        "failed": "失败",
+        "timeout": "超时",
+        "skipped": "跳过",
+        "partial_completed": "部分完成",
+        "running": "执行中",
+        "pending": "等待中",
+    }.get(status, status or "未知")
+
+
+def _scan_tool_details(tasks: list[ScanTask]) -> list[dict[str, str]]:
+    parent_ids = [item.id for item in tasks if item.parent_task_id is None]
+    latest_parent_id = max(parent_ids) if parent_ids else None
+    detail_tasks = [
+        item
+        for item in tasks
+        if item.engine_name in {"opensca", "syft", "trivy", "dependency-track"}
+        and (latest_parent_id is None or item.parent_task_id == latest_parent_id)
+    ]
+    return [
+        {
+            "engine": item.engine_name,
+            "status": item.status,
+            "status_label": _status_label(item.status),
+            "reason": item.error_message or item.summary or "",
+            "report_path": item.raw_result_path or item.normalized_result_path or "",
+        }
+        for item in sorted(detail_tasks, key=lambda row: row.id)
+    ]
+
+
+def _tool_status_text(details: object) -> str:
+    if not isinstance(details, list) or not details:
+        return "暂无工具状态明细。"
+    lines = []
+    for item in details:
+        if not isinstance(item, dict):
+            continue
+        reason = str(item.get("reason") or "无")
+        report_path = str(item.get("report_path") or "无")
+        lines.append(f"{item.get('engine')}：{item.get('status_label')}；原因/提示：{reason}；报告文件：{report_path}")
+    return "；".join(lines) if lines else "暂无工具状态明细。"
+
+
+def _tool_status_rows(scan_tasks: dict[str, object]) -> list[list[object]]:
+    rows: list[list[object]] = [["扫描引擎", "状态", "失败原因/提示", "报告文件路径"]]
+    details = scan_tasks.get("details")
+    if isinstance(details, list):
+        for item in details:
+            if not isinstance(item, dict):
+                continue
+            rows.append(
+                [
+                    item.get("engine") or "-",
+                    item.get("status_label") or item.get("status") or "-",
+                    item.get("reason") or "无",
+                    item.get("report_path") or "无",
+                ]
+            )
+    if len(rows) == 1:
+        rows.append(["-", "暂无", "暂无工具状态明细", "无"])
+    return rows
+
+
+def _scan_task_summary(db: Session, project_id: int) -> dict[str, object]:
     tasks = list(db.scalars(select(ScanTask).where(ScanTask.project_id == project_id)))
     return {
         "opensca": sum(1 for item in tasks if item.engine_name == "opensca" and item.status in {"completed", "success"}),
@@ -173,6 +240,7 @@ def _scan_task_summary(db: Session, project_id: int) -> dict[str, int]:
         "failed": sum(1 for item in tasks if item.status in {"failed", "timeout"}),
         "skipped": sum(1 for item in tasks if item.status == "skipped"),
         "partial": sum(1 for item in tasks if item.status == "partial_completed"),
+        "details": _scan_tool_details(tasks),
     }
 
 
@@ -216,7 +284,7 @@ def _fix_command(component: Component | None, vulnerability: VulnerabilityRecord
     return f"通用：将 {name} 升级到 {fixed}，升级后重新扫描确认漏洞消除。"
 
 
-def _report_lines(project: Project, components: list[Component], vulnerabilities: list[VulnerabilityRecord], scan_tasks: dict[str, int] | None = None) -> list[str]:
+def _report_lines(project: Project, components: list[Component], vulnerabilities: list[VulnerabilityRecord], scan_tasks: dict[str, object] | None = None) -> list[str]:
     counts = _risk_counts(vulnerabilities)
     confirmed = _confirmed_vulnerabilities(vulnerabilities)
     high_risk = [item for item in confirmed if item.severity in {"critical", "high"}]
@@ -258,6 +326,7 @@ def _report_lines(project: Project, components: list[Component], vulnerabilities
         "五、多工具扫描结果汇总",
         "本平台采用多工具联合分析机制，综合 OpenSCA、Syft、Trivy 与 OWASP Dependency-Track 的结果，对开源组件、SBOM、漏洞、License 和风险指标进行标准化、去重、合并和可信度评分。最终结果不是单一扫描器输出，而是经过多源交叉验证后的统一风险视图。",
         f"OpenSCA 成功任务数：{scan_tasks.get('opensca', 0)}；Syft 成功任务数：{scan_tasks.get('syft', 0)}；Trivy 成功任务数：{scan_tasks.get('trivy', 0)}；Dependency-Track 成功任务数：{scan_tasks.get('dependency_track', 0)}；失败/超时任务数：{scan_tasks.get('failed', 0)}；跳过任务数：{scan_tasks.get('skipped', 0)}。",
+        "工具状态明细：" + _tool_status_text(scan_tasks.get("details")),
         f"高可信组件：{component_confidence['high']}；中可信组件：{component_confidence['medium']}；低可信组件：{component_confidence['low']}；待确认组件：{component_confidence['review']}。",
         "六、扫描完整性与识别可信度说明",
         f"是否启用兜底识别：{'是' if fallback_enabled else '否'}；扫描模式：{', '.join(modes) or 'unknown'}；版本未知组件：{component_confidence['unknown_version']}；待人工确认组件：{component_confidence['manual_confirm']}。",
@@ -517,7 +586,7 @@ def _write_docx(
     project: Project,
     components: list[Component],
     vulnerabilities: list[VulnerabilityRecord],
-    scan_tasks: dict[str, int],
+    scan_tasks: dict[str, object],
     metadata: dict[str, str],
     version_cache: dict[int, RiskMonitorSnapshot],
 ) -> None:
@@ -640,6 +709,8 @@ def _write_docx(
                 ["失败/超时", scan_tasks.get("failed", 0)],
             ]
         ),
+        _paragraph("工具状态明细", style="Heading2"),
+        _table(_tool_status_rows(scan_tasks)),
         _paragraph("组件安全测试", style="Heading2"),
         _table(_vulnerability_rows(vulnerabilities)),
         _paragraph("11 审计结论及建议", style="Heading1"),

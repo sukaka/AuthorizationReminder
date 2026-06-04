@@ -188,6 +188,70 @@ def test_report_includes_management_summary_confidence_and_priority(monkeypatch,
     assert "pip install fastapi==0.115.7" in document
 
 
+def test_docx_report_includes_tool_status_reason_and_report_path(monkeypatch, tmp_path):
+    client, _main, models, database = build_client(monkeypatch, tmp_path)
+    with client as test_client:
+        project_id = seed_project(database, models)
+        with database.SessionLocal() as db:
+            upload = models.UploadFileRecord(
+                project_id=project_id,
+                upload_id="upload-1",
+                original_filename="source.zip",
+                storage_path=str(tmp_path / "source.zip"),
+                status="scanned",
+            )
+            db.add(upload)
+            db.flush()
+            parent = models.ScanTask(
+                project_id=project_id,
+                upload_file_id=upload.id,
+                task_type="project_scan_task",
+                status="success",
+                progress=100,
+            )
+            db.add(parent)
+            db.flush()
+            db.add(
+                models.ScanTask(
+                    project_id=project_id,
+                    upload_file_id=upload.id,
+                    parent_task_id=parent.id,
+                    task_type="trivy_scan_task",
+                    engine_name="trivy",
+                    status="failed",
+                    progress=100,
+                    summary="DB 下载失败",
+                    error_message="DB_DOWNLOAD_FAILED: Trivy 漏洞库下载失败",
+                    raw_result_path="/data/scanner-results/trivy/1/trivy-result.json",
+                )
+            )
+            db.add(
+                models.ScanTask(
+                    project_id=project_id,
+                    upload_file_id=upload.id,
+                    parent_task_id=parent.id,
+                    task_type="opensca_scan_task",
+                    engine_name="opensca",
+                    status="completed",
+                    progress=100,
+                    summary="执行完成",
+                    raw_result_path="/data/scanner-results/opensca/1/opensca-result.json",
+                )
+            )
+            db.commit()
+        created = test_client.post(f"/api/sca/projects/{project_id}/reports", json={"format": "docx"})
+        report = created.json()
+        downloaded = test_client.get(f"/api/sca/reports/{report['id']}/download")
+
+    with zipfile.ZipFile(BytesIO(downloaded.content)) as archive:
+        document = archive.read("word/document.xml").decode("utf-8")
+
+    assert "工具状态明细" in document
+    assert "DB_DOWNLOAD_FAILED: Trivy 漏洞库下载失败" in document
+    assert "/data/scanner-results/trivy/1/trivy-result.json" in document
+    assert "/data/scanner-results/opensca/1/opensca-result.json" in document
+
+
 def test_docx_report_uses_export_metadata_and_extended_fields(monkeypatch, tmp_path):
     client, _main, models, database = build_client(monkeypatch, tmp_path)
     with client as test_client:
