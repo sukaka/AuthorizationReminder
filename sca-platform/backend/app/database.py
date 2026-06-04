@@ -88,6 +88,7 @@ def run_compat_migrations() -> None:
         "updated_at": "TIMESTAMP DEFAULT CURRENT_TIMESTAMP",
     }
     vulnerability_additions = {
+        "cwe_id": "VARCHAR(80) NOT NULL DEFAULT ''",
         "epss_score": "FLOAT NOT NULL DEFAULT 0",
         "cisa_kev": "BOOLEAN NOT NULL DEFAULT FALSE",
         "confidence_score": "FLOAT NOT NULL DEFAULT 0.7",
@@ -123,6 +124,10 @@ def run_compat_migrations() -> None:
         "need_manual_review": "BOOLEAN NOT NULL DEFAULT FALSE",
         "manual_review_reason": "TEXT NOT NULL DEFAULT ''",
     }
+    risk_monitor_snapshot_additions = {
+        "current_version_published_at": "VARCHAR(40) NOT NULL DEFAULT ''",
+        "component_age_years": "FLOAT NOT NULL DEFAULT 0",
+    }
     with engine.begin() as conn:
         for foreign_key in inspector.get_foreign_keys("components"):
             if foreign_key.get("referred_table") == "analysis_projects" and foreign_key.get("constrained_columns") == ["project_id"]:
@@ -147,6 +152,11 @@ def run_compat_migrations() -> None:
             for column, definition in ai_triage_additions.items():
                 if column not in ai_existing:
                     conn.execute(text(f"ALTER TABLE ai_triage_results ADD COLUMN {column} {definition}"))
+        if inspector.has_table("risk_monitor_snapshots"):
+            snapshot_existing = {column["name"] for column in inspector.get_columns("risk_monitor_snapshots")}
+            for column, definition in risk_monitor_snapshot_additions.items():
+                if column not in snapshot_existing:
+                    conn.execute(text(f"ALTER TABLE risk_monitor_snapshots ADD COLUMN {column} {definition}"))
 
 
 def check_database() -> bool:

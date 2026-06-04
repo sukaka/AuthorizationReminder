@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any
 
 import httpx
@@ -15,6 +16,7 @@ from .models import Component
 class VersionInfo:
     latest_version: str = ""
     latest_source: str = ""
+    current_version_published_at: str = ""
     raw: dict[str, Any] | None = None
 
 
@@ -58,6 +60,37 @@ def _client(settings: Settings) -> httpx.Client:
     return httpx.Client(timeout=settings.vulnerability_fetch_timeout_ms / 1000, headers=headers)
 
 
+def _date_text(value: Any) -> str:
+    if not value:
+        return ""
+    if isinstance(value, (int, float)):
+        try:
+            return datetime.fromtimestamp(value / 1000 if value > 10_000_000_000 else value, timezone.utc).strftime("%Y-%m-%d")
+        except (OverflowError, OSError, ValueError):
+            return ""
+    text = str(value).strip()
+    if not text:
+        return ""
+    normalized = text.replace("Z", "+00:00")
+    try:
+        return datetime.fromisoformat(normalized).date().isoformat()
+    except ValueError:
+        match = re.search(r"\d{4}-\d{2}-\d{2}", text)
+        return match.group(0) if match else ""
+
+
+def component_age_years(published_at: str, now: datetime | None = None) -> float:
+    date_text = _date_text(published_at)
+    if not date_text:
+        return 0
+    try:
+        published = datetime.fromisoformat(date_text).replace(tzinfo=timezone.utc)
+    except ValueError:
+        return 0
+    reference = now or datetime.now(timezone.utc)
+    return round(max((reference - published).days, 0) / 365, 1)
+
+
 def query_github_latest_release(repo: str, settings: Settings) -> VersionInfo:
     repo = repo.strip().removeprefix("https://github.com/").strip("/")
     if not repo or "/" not in repo:
@@ -66,13 +99,16 @@ def query_github_latest_release(repo: str, settings: Settings) -> VersionInfo:
         response = client.get(f"{settings.github_api_url.rstrip('/')}/repos/{repo}/releases/latest")
         response.raise_for_status()
     data = response.json()
-    return VersionInfo(str(data.get("tag_name") or data.get("name") or ""), "github", data)
+    return VersionInfo(str(data.get("tag_name") or data.get("name") or ""), "github", _date_text(data.get("published_at") or data.get("created_at")), data)
 
 
 def query_maven_latest(component: Component, settings: Settings) -> VersionInfo:
-    if ":" not in component.package_name:
+    package_name = component.package_name
+    if ":" not in package_name and component.group_id and component.artifact_id:
+        package_name = f"{component.group_id}:{component.artifact_id}"
+    if ":" not in package_name:
         return VersionInfo()
-    group_id, artifact_id = component.package_name.split(":", 1)
+    group_id, artifact_id = package_name.split(":", 1)
     params = {"q": f'g:"{group_id}" AND a:"{artifact_id}"', "rows": 1, "wt": "json"}
     with _client(settings) as client:
         response = client.get(settings.maven_search_url, params=params)
@@ -81,7 +117,8 @@ def query_maven_latest(component: Component, settings: Settings) -> VersionInfo:
     docs = data.get("response", {}).get("docs", [])
     if not docs:
         return VersionInfo()
-    return VersionInfo(str(docs[0].get("latestVersion") or ""), "maven", docs[0])
+    current_date = _date_text(docs[0].get("timestamp")) if str(docs[0].get("latestVersion") or "") == component.package_version else ""
+    return VersionInfo(str(docs[0].get("latestVersion") or ""), "maven", current_date, docs[0])
 
 
 def query_npm_latest(component: Component, settings: Settings) -> VersionInfo:
@@ -89,7 +126,7 @@ def query_npm_latest(component: Component, settings: Settings) -> VersionInfo:
         response = client.get(f"{settings.npm_registry_url.rstrip('/')}/{component.package_name}")
         response.raise_for_status()
     data = response.json()
-    return VersionInfo(str(data.get("dist-tags", {}).get("latest") or ""), "npm", data.get("dist-tags", {}))
+    return VersionInfo(str(data.get("dist-tags", {}).get("latest") or ""), "npm", _date_text((data.get("time") or {}).get(component.package_version)), data)
 
 
 def query_pypi_latest(component: Component, settings: Settings) -> VersionInfo:
@@ -97,7 +134,10 @@ def query_pypi_latest(component: Component, settings: Settings) -> VersionInfo:
         response = client.get(f"{settings.pypi_api_url.rstrip('/')}/{component.package_name}/json")
         response.raise_for_status()
     data = response.json()
-    return VersionInfo(str(data.get("info", {}).get("version") or ""), "pypi", data.get("info", {}))
+    releases = data.get("releases") or {}
+    current_release = releases.get(component.package_version) or []
+    current_date = _date_text(current_release[0].get("upload_time_iso_8601")) if current_release and isinstance(current_release[0], dict) else ""
+    return VersionInfo(str(data.get("info", {}).get("version") or ""), "pypi", current_date, data.get("info", {}))
 
 
 def query_go_latest(component: Component, settings: Settings) -> VersionInfo:
@@ -105,7 +145,7 @@ def query_go_latest(component: Component, settings: Settings) -> VersionInfo:
         response = client.get(f"{settings.go_proxy_url.rstrip('/')}/{component.package_name}/@latest")
         response.raise_for_status()
     data = response.json()
-    return VersionInfo(str(data.get("Version") or ""), "go", data)
+    return VersionInfo(str(data.get("Version") or ""), "go", _date_text(data.get("Time")), data)
 
 
 def detect_eol(component: Component, latest_version: str, settings: Settings) -> tuple[str, str]:
@@ -153,6 +193,8 @@ def monitor_component_update(component: Component, settings: Settings) -> dict[s
         "eol_status": eol_status,
         "eol_date": eol_date,
         "recommendation": recommendation,
+        "current_version_published_at": latest.current_version_published_at,
+        "component_age_years": component_age_years(latest.current_version_published_at),
         "raw": latest.raw or {},
     }
 

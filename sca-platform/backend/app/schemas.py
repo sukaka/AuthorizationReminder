@@ -220,6 +220,7 @@ class VulnerabilityOut(BaseModel):
     source: str
     advisory_id: str
     cve_id: str
+    cwe_id: str = ""
     package_name: str
     package_version: str
     ecosystem: str
@@ -285,8 +286,26 @@ class CveQueryIn(BaseModel):
     cve_id: str
 
 
+class ReportMetadataIn(BaseModel):
+    client_name: str = ""
+    client_address: str = ""
+    contact_name: str = ""
+    contact_phone: str = ""
+    contact_email: str = ""
+    organization_name: str = ""
+    audit_address: str = ""
+    auditor_name: str = ""
+    reviewer_name: str = ""
+    quality_reviewer_name: str = ""
+    accepted_date: str = ""
+    audit_start_date: str = ""
+    audit_end_date: str = ""
+    version_number: str = ""
+
+
 class ReportCreateIn(BaseModel):
     format: str = Field(pattern="^(docx|pdf|xlsx)$")
+    metadata: ReportMetadataIn = Field(default_factory=ReportMetadataIn)
 
 
 class ReportOut(BaseModel):
@@ -372,6 +391,8 @@ class RiskMonitorSnapshotOut(BaseModel):
     latest_source: str
     update_available: bool
     version_delta: str
+    current_version_published_at: str = ""
+    component_age_years: float = 0
     eol_status: str
     eol_date: str
     vulnerability_count: int

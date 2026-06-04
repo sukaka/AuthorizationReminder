@@ -47,6 +47,8 @@ def test_project_monitor_persists_snapshot_alert_and_change(monkeypatch, tmp_pat
             "eol_status": "active",
             "eol_date": "",
             "recommendation": "建议升级到 1.2.0",
+            "current_version_published_at": "2024-01-15",
+            "component_age_years": 2.4,
             "raw": {"dist-tags": {"latest": "1.2.0"}},
         }
 
@@ -68,6 +70,8 @@ def test_project_monitor_persists_snapshot_alert_and_change(monkeypatch, tmp_pat
     assert response.status_code == 200
     assert response.json()["updated_components"] == 1
     assert snapshots[0]["latest_version"] == "1.2.0"
+    assert snapshots[0]["current_version_published_at"] == "2024-01-15"
+    assert snapshots[0]["component_age_years"] == 2.4
     assert alerts[0]["level"] == "medium"
     assert changes[0]["change_type"] == "version_update"
 

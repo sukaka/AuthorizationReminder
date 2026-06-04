@@ -533,6 +533,87 @@
         </div>
       </section>
 
+      <el-dialog v-model="reportMetadataDialogVisible" title="报告属性信息" width="760px">
+        <el-form label-position="top" class="metadata-form">
+          <el-row :gutter="16">
+            <el-col :span="12">
+              <el-form-item label="委托单位名称">
+                <el-input v-model="reportMetadata.client_name" placeholder="例如：XXXX公司" />
+              </el-form-item>
+            </el-col>
+            <el-col :span="12">
+              <el-form-item label="版本号">
+                <el-input v-model="reportMetadata.version_number" placeholder="例如：V1.0" />
+              </el-form-item>
+            </el-col>
+            <el-col :span="24">
+              <el-form-item label="委托单位地址">
+                <el-input v-model="reportMetadata.client_address" />
+              </el-form-item>
+            </el-col>
+            <el-col :span="8">
+              <el-form-item label="联系人">
+                <el-input v-model="reportMetadata.contact_name" />
+              </el-form-item>
+            </el-col>
+            <el-col :span="8">
+              <el-form-item label="联系电话">
+                <el-input v-model="reportMetadata.contact_phone" />
+              </el-form-item>
+            </el-col>
+            <el-col :span="8">
+              <el-form-item label="邮箱">
+                <el-input v-model="reportMetadata.contact_email" />
+              </el-form-item>
+            </el-col>
+            <el-col :span="12">
+              <el-form-item label="审计机构名称">
+                <el-input v-model="reportMetadata.organization_name" placeholder="例如：XXXXXX有限公司" />
+              </el-form-item>
+            </el-col>
+            <el-col :span="12">
+              <el-form-item label="审计地点">
+                <el-input v-model="reportMetadata.audit_address" />
+              </el-form-item>
+            </el-col>
+            <el-col :span="8">
+              <el-form-item label="审计人员">
+                <el-input v-model="reportMetadata.auditor_name" />
+              </el-form-item>
+            </el-col>
+            <el-col :span="8">
+              <el-form-item label="审核人员">
+                <el-input v-model="reportMetadata.reviewer_name" />
+              </el-form-item>
+            </el-col>
+            <el-col :span="8">
+              <el-form-item label="质量人员">
+                <el-input v-model="reportMetadata.quality_reviewer_name" />
+              </el-form-item>
+            </el-col>
+            <el-col :span="8">
+              <el-form-item label="代码接收日期">
+                <el-input v-model="reportMetadata.accepted_date" placeholder="YYYY.MM.DD" />
+              </el-form-item>
+            </el-col>
+            <el-col :span="8">
+              <el-form-item label="审计开始日期">
+                <el-input v-model="reportMetadata.audit_start_date" placeholder="YYYY.MM.DD" />
+              </el-form-item>
+            </el-col>
+            <el-col :span="8">
+              <el-form-item label="审计结束日期">
+                <el-input v-model="reportMetadata.audit_end_date" placeholder="YYYY.MM.DD" />
+              </el-form-item>
+            </el-col>
+          </el-row>
+        </el-form>
+        <template #footer>
+          <el-button @click="reportMetadataDialogVisible = false">取消</el-button>
+          <el-button type="primary" :loading="reportCreating" @click="submitReport">生成报告</el-button>
+        </template>
+      </el-dialog>
+
       <section v-if="activeMenu === 'sbom'" class="workbench">
         <div class="panel">
           <div class="panel-head">
@@ -1087,7 +1168,25 @@ const whitelistItems = ref([])
 const devopsEvents = ref([])
 const backupJobs = ref([])
 const reportFormat = ref('docx')
+const reportMetadataDialogVisible = ref(false)
 const sbomFormat = ref('cyclonedx')
+const todayText = () => new Date().toISOString().slice(0, 10).replaceAll('-', '.')
+const reportMetadata = reactive({
+  client_name: '',
+  client_address: '',
+  contact_name: '',
+  contact_phone: '',
+  contact_email: '',
+  organization_name: '',
+  audit_address: '',
+  auditor_name: '',
+  reviewer_name: '',
+  quality_reviewer_name: '',
+  accepted_date: todayText(),
+  audit_start_date: todayText(),
+  audit_end_date: todayText(),
+  version_number: 'V1.0',
+})
 const resultViewOptions = [
   { label: '管理层视图', value: 'management' },
   { label: '安全人员视图', value: 'security' },
@@ -1605,13 +1704,22 @@ const createReport = async () => {
     ElMessage.warning('请先选择项目')
     return
   }
+  reportMetadataDialogVisible.value = true
+}
+
+const submitReport = async () => {
+  if (!selectedProjectId.value) {
+    ElMessage.warning('请先选择项目')
+    return
+  }
   reportCreating.value = true
   try {
     await requestJson(`/api/sca/projects/${selectedProjectId.value}/reports`, {
       method: 'POST',
-      body: JSON.stringify({ format: reportFormat.value }),
+      body: JSON.stringify({ format: reportFormat.value, metadata: reportMetadata }),
     })
     await loadProjectDetails()
+    reportMetadataDialogVisible.value = false
     ElMessage.success('报告已生成')
   } catch (err) {
     ElMessage.error(err?.message || '报告生成失败')

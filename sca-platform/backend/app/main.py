@@ -788,6 +788,7 @@ async def query_project_vulnerabilities(
                     source=finding.source,
                     advisory_id=finding.advisory_id,
                     cve_id=finding.cve_id,
+                    cwe_id=finding.cwe_id,
                     package_name=finding.package_name,
                     package_version=finding.package_version,
                     ecosystem=finding.ecosystem,
@@ -860,6 +861,7 @@ async def query_cve_detail(
             source=item.source,
             advisory_id=item.advisory_id,
             cve_id=item.cve_id,
+            cwe_id=getattr(item, "cwe_id", ""),
             package_name=item.package_name,
             package_version=item.package_version,
             ecosystem=item.ecosystem,
@@ -954,7 +956,7 @@ async def create_report(
     await require_action("sca:read", request, user, settings)
     _ensure_project_exists(db, project_id)
     try:
-        path = generate_report(db, project_id, payload.format, settings.report_root)
+        path = generate_report(db, project_id, payload.format, settings.report_root, payload.metadata.model_dump())
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     report = ReportExport(
@@ -1138,6 +1140,8 @@ async def run_project_risk_monitor(
             latest_source=str(data["latest_source"]),
             update_available=bool(data["update_available"]),
             version_delta=str(data["version_delta"]),
+            current_version_published_at=str(data.get("current_version_published_at") or ""),
+            component_age_years=float(data.get("component_age_years") or 0),
             eol_status=str(data["eol_status"]),
             eol_date=str(data["eol_date"]),
             vulnerability_count=vulnerability_count,

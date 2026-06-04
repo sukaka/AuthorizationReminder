@@ -3,13 +3,18 @@ from __future__ import annotations
 import html
 import json
 import zipfile
+from collections import Counter, defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
+from openpyxl import Workbook
+from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+from openpyxl.utils import get_column_letter
 
-from .models import Component, Project, ScanTask, VulnerabilityRecord
+from .license_policy import license_policy
+from .models import Component, Project, RiskMonitorSnapshot, ScanTask, UploadFileRecord, VulnerabilityRecord
 
 
 CONTENT_TYPES = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
@@ -66,6 +71,8 @@ SEVERITY_LABELS = {
     "unknown": "未知风险",
 }
 
+COMPONENT_RISK_RANK = {"严重风险": 4, "高危风险": 3, "中危风险": 2, "低危风险": 1, "未知风险": 0, "无漏洞": -1}
+
 
 def _project_data(db: Session, project_id: int) -> tuple[Project, list[Component], list[VulnerabilityRecord]]:
     project = db.get(Project, project_id)
@@ -74,6 +81,44 @@ def _project_data(db: Session, project_id: int) -> tuple[Project, list[Component
     components = list(db.scalars(select(Component).where(Component.project_id == project_id).order_by(Component.ecosystem, Component.package_name)))
     vulnerabilities = list(db.scalars(select(VulnerabilityRecord).where(VulnerabilityRecord.project_id == project_id)))
     return project, components, vulnerabilities
+
+
+def _report_metadata(metadata: dict[str, object] | None = None) -> dict[str, str]:
+    today = datetime.now(timezone.utc).strftime("%Y.%m.%d")
+    defaults = {
+        "client_name": "XXXX公司",
+        "client_address": "",
+        "contact_name": "",
+        "contact_phone": "",
+        "contact_email": "",
+        "organization_name": "XXXXXX有限公司",
+        "audit_address": "",
+        "auditor_name": "平台自动扫描",
+        "reviewer_name": "安全分析人员",
+        "quality_reviewer_name": "质量审核人员",
+        "accepted_date": today,
+        "audit_start_date": today,
+        "audit_end_date": today,
+        "version_number": "V1.0",
+    }
+    for key, value in (metadata or {}).items():
+        if key in defaults and value not in {None, ""}:
+            defaults[key] = str(value)
+    return defaults
+
+
+def _latest_version_cache(db: Session, project_id: int) -> dict[int, RiskMonitorSnapshot]:
+    snapshots = list(db.scalars(select(RiskMonitorSnapshot).where(RiskMonitorSnapshot.project_id == project_id)))
+    snapshots.sort(key=lambda item: ((item.checked_at.isoformat() if item.checked_at else ""), item.id or 0), reverse=True)
+    latest: dict[int, RiskMonitorSnapshot] = {}
+    for snapshot in snapshots:
+        if snapshot.component_id and snapshot.component_id not in latest:
+            latest[snapshot.component_id] = snapshot
+    return latest
+
+
+def _upload_records(db: Session, project_id: int) -> list[UploadFileRecord]:
+    return list(db.scalars(select(UploadFileRecord).where(UploadFileRecord.project_id == project_id).order_by(UploadFileRecord.created_at.desc())))
 
 
 def _risk_counts(vulnerabilities: list[VulnerabilityRecord]) -> dict[str, int]:
@@ -300,6 +345,101 @@ def _severity_label(value: str | None) -> str:
     return SEVERITY_LABELS.get(value or "unknown", value or "未知风险")
 
 
+def _date_only(value: object) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    return text[:10].replace("/", "-")
+
+
+def _component_group_id(component: Component | None, vulnerability: VulnerabilityRecord | None = None) -> str:
+    if component:
+        return component.group_id or component.normalized_name or component.package_name
+    return vulnerability.package_name if vulnerability else ""
+
+
+def _component_type(component: Component) -> str:
+    return "开源组件"
+
+
+def _dependency_label(value: str) -> str:
+    text = (value or "").lower()
+    if text in {"indirect", "transitive"}:
+        return "间接引入"
+    if text == "base_image":
+        return "基础镜像"
+    return "直接引入"
+
+
+def _version_date(snapshot: RiskMonitorSnapshot | None) -> str:
+    return snapshot.current_version_published_at if snapshot and snapshot.current_version_published_at else "未知"
+
+
+def _component_age(snapshot: RiskMonitorSnapshot | None) -> str:
+    if snapshot and snapshot.component_age_years:
+        return f"{snapshot.component_age_years:.1f}年"
+    return "未知"
+
+
+def _is_latest(snapshot: RiskMonitorSnapshot | None) -> str:
+    if not snapshot or not snapshot.latest_version:
+        return "待确认"
+    return "否" if snapshot.update_available else "是"
+
+
+def _latest_version(snapshot: RiskMonitorSnapshot | None) -> str:
+    return snapshot.latest_version if snapshot and snapshot.latest_version else "待确认"
+
+
+def _component_vulnerabilities(vulnerabilities: list[VulnerabilityRecord]) -> dict[int, list[VulnerabilityRecord]]:
+    grouped: dict[int, list[VulnerabilityRecord]] = defaultdict(list)
+    for item in _confirmed_vulnerabilities(vulnerabilities):
+        if item.component_id:
+            grouped[item.component_id].append(item)
+    return grouped
+
+
+def _component_risk_label(items: list[VulnerabilityRecord]) -> str:
+    if not items:
+        return "无漏洞"
+    severities = {item.severity for item in items}
+    if "critical" in severities:
+        return "严重风险"
+    if "high" in severities:
+        return "高危风险"
+    if "medium" in severities:
+        return "中危风险"
+    if "low" in severities:
+        return "低危风险"
+    return "未知风险"
+
+
+def _vulnerability_distribution(items: list[VulnerabilityRecord]) -> str | int:
+    if not items:
+        return 0
+    counts = Counter(item.severity if item.severity in SEVERITY_LABELS else "unknown" for item in items)
+    return f"严重{counts['critical']}；高危{counts['high']}；中危{counts['medium']}；低危{counts['low']}"
+
+
+def _recommended_version(component: Component, items: list[VulnerabilityRecord], snapshot: RiskMonitorSnapshot | None) -> str:
+    fixed = next((item.fixed_version for item in items if item.fixed_version), "")
+    if fixed:
+        return fixed
+    if snapshot and snapshot.latest_version:
+        return snapshot.latest_version
+    return "待确认"
+
+
+def _exploit_difficulty(item: VulnerabilityRecord) -> str:
+    if item.exploited_in_wild or item.has_poc or item.cvss_score >= 7:
+        return "容易"
+    if item.cvss_score >= 4:
+        return "一般"
+    if item.cvss_score > 0:
+        return "困难"
+    return "未知"
+
+
 def _report_date() -> str:
     return datetime.now(timezone.utc).strftime("%Y年%m月%d日")
 
@@ -378,6 +518,8 @@ def _write_docx(
     components: list[Component],
     vulnerabilities: list[VulnerabilityRecord],
     scan_tasks: dict[str, int],
+    metadata: dict[str, str],
+    version_cache: dict[int, RiskMonitorSnapshot],
 ) -> None:
     confirmed = _confirmed_vulnerabilities(vulnerabilities)
     confidence = _confidence_groups(vulnerabilities)
@@ -407,11 +549,11 @@ def _write_docx(
         "附录C\t安全编码规范要求\t13",
     ]
     paragraphs = [
-        _paragraph("XXXX有限公司", align="center", size=24),
+        _paragraph(metadata["client_name"], align="center", size=24),
         _paragraph(project.name, align="center", size=28, bold=True),
         _paragraph("软件成分分析报告", style="Title"),
         _paragraph(date_text, align="center", size=22),
-        _paragraph("XXXXXX有限公司", align="center", size=22),
+        _paragraph(metadata["organization_name"], align="center", size=22),
         _paragraph("版权所有  侵权必究", align="center", size=18),
         _page_break(),
         _paragraph("声 明", style="Heading1", align="center"),
@@ -425,11 +567,14 @@ def _write_docx(
         _table(
             [
                 ["项目名称 / Project Name", f"{project.name}SCA审计"],
-                ["系统名称 / Software Name", project.name, "版本号 / Version Number", project.scan_note or "V1.0"],
-                ["委托单位名称 / Client Name", "XXXX公司"],
-                ["审计机构名称 / Organization Name", "XXXXXX有限公司"],
+                ["系统名称 / Software Name", project.name, "版本号 / Version Number", metadata["version_number"]],
+                ["委托单位名称 / Client Name", metadata["client_name"]],
+                ["委托单位地址 / Client Address", metadata["client_address"]],
+                ["联系人姓名 / Contactor Name", metadata["contact_name"], "联系电话 / Phone", metadata["contact_phone"], "邮箱 / E-mail", metadata["contact_email"]],
+                ["审计机构名称 / Organization Name", metadata["organization_name"]],
+                ["审计地点 / Audit Address", metadata["audit_address"]],
                 ["样品内容及数量 / Audit Sample", f"系统源代码、系统开源组件 [{len(components)}]"],
-                ["代码接收日期 / Accepted Date", date_text, "审计日期 / Testing Date", date_text],
+                ["代码接收日期 / Accepted Date", metadata["accepted_date"], "审计日期 / Testing Date", f"{metadata['audit_start_date']}至{metadata['audit_end_date']}"],
                 ["审计标准 / Audit Standard", "以《GB/T 39412-2020 信息安全技术 代码安全审查规范》及开源组件漏洞库为主要依据。"],
             ],
             header_rows=0,
@@ -467,15 +612,18 @@ def _write_docx(
         _paragraph("4.2 审查组件清单", style="Heading2"),
         _table([["序号", "检测目标", "组件依赖文件包"], *_source_files(project, components)]),
         _paragraph("5 人员安排", style="Heading1"),
-        _table([["编号", "参与人员", "负责内容"], ["1", "平台自动扫描", "组件识别、SBOM 生成、漏洞匹配"], ["2", "安全分析人员", "风险确认、报告审查、整改建议"]]),
+        _table([["编号", "参与人员", "负责内容"], ["1", metadata["auditor_name"], "组件识别、SBOM 生成、漏洞匹配、报告编制"], ["2", metadata["reviewer_name"], "风险确认、报告审查、整改建议"], ["3", metadata["quality_reviewer_name"], "质量审核"]]),
         _paragraph("6 组件提交活跃度统计", style="Heading1"),
-        _table([["序号", "组件名称", "当前版本", "发布日期", "活跃度", "活跃度参考说明"], *[[index, item.package_name, item.package_version, "未知", "待确认", "建议结合组件仓库活跃度复核"] for index, item in enumerate(components[:20], start=1)]]),
+        _table([["序号", "组件名称", "当前版本", "发布日期", "活跃度", "活跃度参考说明"], *[[index, item.package_name, item.package_version, _version_date(version_cache.get(item.id)), "待确认" if not version_cache.get(item.id) else "正常", f"组件年龄：{_component_age(version_cache.get(item.id))}"] for index, item in enumerate(components[:20], start=1)]]),
         _paragraph("7 风险组件最新版本", style="Heading1"),
-        _table([["序号", "组件名称", "当前版本", "建议升级版本", "是否需要升级"], *[[index, item.package_name, item.package_version, item.fixed_version or "安全版本", "是"] for index, item in enumerate(priority_items[:20], start=1)]] or [["序号", "组件名称", "当前版本", "建议升级版本", "是否需要升级"], ["-", "暂无", "-", "-", "否"]]),
-        _paragraph("8 版权许可协议风险提示", style="Heading1"),
+        _table([["序号", "组件名称", "当前版本", "最新版本", "当前版本是否最新版本"], *[[index, item.package_name, item.package_version, _latest_version(version_cache.get(item.component_id or 0)), _is_latest(version_cache.get(item.component_id or 0))] for index, item in enumerate(priority_items[:20], start=1)]] or [["序号", "组件名称", "当前版本", "最新版本", "当前版本是否最新版本"], ["-", "暂无", "-", "-", "待确认"]]),
+        _paragraph("8 风险组件版本年龄统计", style="Heading1"),
+        _table([["序号", "组件名称", "当前版本", "发布日期", "组件版本年龄"], *[[index, item.package_name, item.package_version, _version_date(version_cache.get(item.id)), _component_age(version_cache.get(item.id))] for index, item in enumerate(components[:20], start=1)]]),
+        _paragraph("9 版权许可协议风险提示", style="Heading1"),
         _paragraph("许可证风险需结合组件使用方式、分发方式、修改情况和企业合规要求进行复核。下表列出本次识别到的组件许可证信息。"),
+        _table([["许可协议简称", "许可协议全称", "风险说明", "使用范围", "版权/使用条件", "使用限制", "是否兼容GPL"], *[[license_policy(name).short_name if license_policy(name).short_name != "待确认" else name, license_policy(name).full_name, license_policy(name).risk_note, license_policy(name).scope, license_policy(name).conditions, license_policy(name).limitations, license_policy(name).gpl_compatible] for name in sorted({item.license_name or "unknown" for item in components})]]),
         _table([["序号", "组件名称", "当前版本", "许可协议"], *[[index, item.package_name, item.package_version, item.license_name or "未知"] for index, item in enumerate(components[:80], start=1)]]),
-        _paragraph("9 组件安全审计结果汇总", style="Heading1"),
+        _paragraph("10 组件安全审计结果汇总", style="Heading1"),
         _paragraph("本次扫描结论摘要", style="Heading2"),
         _paragraph(_natural_summary(project, components, vulnerabilities)),
         _table(_risk_rows(vulnerabilities)),
@@ -494,7 +642,7 @@ def _write_docx(
         ),
         _paragraph("组件安全测试", style="Heading2"),
         _table(_vulnerability_rows(vulnerabilities)),
-        _paragraph("10 审计结论及建议", style="Heading1"),
+        _paragraph("11 审计结论及建议", style="Heading1"),
         _paragraph(f"上线建议：{_release_advice(confirmed)}"),
         _paragraph("整改优先级清单", style="Heading2"),
         _table([["优先级", "CVE/公告", "组件", "当前版本", "等级", "风险分", "修复版本", "建议期限"], *[[item.risk_priority or "Review", item.cve_id or item.advisory_id, item.package_name, item.package_version, _severity_label(item.severity), item.risk_score, item.fixed_version or "安全版本", item.suggested_deadline or "按计划修复"] for item in priority_items[:20]]] or [["优先级", "CVE/公告", "组件", "当前版本", "等级", "风险分", "修复版本", "建议期限"], ["-", "暂无", "-", "-", "-", "-", "-", "-"]]),
@@ -506,12 +654,13 @@ def _write_docx(
         for item in priority_items[:20]:
             paragraphs.extend(
                 [
-                    _table([["组件名称", item.package_name], ["当前版本", item.package_version], ["风险等级", _severity_label(item.severity)], ["检出时间", item.published_at_text or date_text]], header_rows=0),
+                    _table([["组件名称", item.package_name], ["当前版本", item.package_version], ["风险等级", _severity_label(item.severity)], ["检出时间", item.published_at_text or date_text], ["版本日期", _version_date(version_cache.get(item.component_id or 0))], ["组件年龄", _component_age(version_cache.get(item.component_id or 0))]], header_rows=0),
                     _table(
                         [
                             ["漏洞名称", item.advisory_id or item.cve_id or "组件漏洞"],
                             ["风险等级", _severity_label(item.severity)],
                             ["CVE编号", item.cve_id or item.advisory_id or "待确认"],
+                            ["CWE编号", item.cwe_id or "-"],
                             ["受影响组件", f"{item.package_name} {item.package_version}"],
                             ["发布时间", item.published_at_text or "未知"],
                             ["漏洞描述", item.description or item.priority_reason or "暂无描述"],
@@ -539,6 +688,8 @@ def _write_docx(
                     ["组件治理", "建立组件台账、版本锁定、漏洞响应和复测闭环。"],
                 ]
             ),
+            _paragraph("附录D 审计人员详细信息", style="Heading1"),
+            _table([["姓    名", metadata["auditor_name"]], ["角色", "人工审计，撰写报告"], ["复核人员", metadata["reviewer_name"]], ["质量审核", metadata["quality_reviewer_name"]]], header_rows=0),
         ]
     )
     section = '<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="720" w:footer="720" w:gutter="0"/></w:sectPr>'
@@ -549,6 +700,161 @@ def _write_docx(
         archive.writestr("_rels/.rels", WORD_RELS)
         archive.writestr("word/styles.xml", WORD_STYLES)
         archive.writestr("word/document.xml", document)
+
+
+def _style_workbook(workbook: Workbook) -> None:
+    header_fill = PatternFill("solid", fgColor="D9EAF7")
+    title_fill = PatternFill("solid", fgColor="1F4E79")
+    title_font = Font(color="FFFFFF", bold=True)
+    header_font = Font(bold=True)
+    border = Border(
+        left=Side(style="thin", color="CBD5E1"),
+        right=Side(style="thin", color="CBD5E1"),
+        top=Side(style="thin", color="CBD5E1"),
+        bottom=Side(style="thin", color="CBD5E1"),
+    )
+    for sheet in workbook.worksheets:
+        for row in sheet.iter_rows():
+            for cell in row:
+                cell.alignment = Alignment(vertical="center", wrap_text=True)
+                cell.border = border
+                if cell.row == 1:
+                    cell.fill = title_fill
+                    cell.font = title_font
+                elif cell.row == 2 or all(sheet.cell(cell.row, index).value is not None for index in range(1, min(sheet.max_column, 4) + 1)):
+                    if cell.row in {2, 11} or cell.row == 1:
+                        cell.fill = header_fill
+                        cell.font = header_font
+        for column_index in range(1, sheet.max_column + 1):
+            max_length = 10
+            for cell in sheet[get_column_letter(column_index)]:
+                max_length = max(max_length, len(str(cell.value or "")))
+            sheet.column_dimensions[get_column_letter(column_index)].width = min(max(max_length + 2, 12), 42)
+        sheet.freeze_panes = "A2"
+
+
+def _write_xlsx_report(
+    path: Path,
+    project: Project,
+    components: list[Component],
+    vulnerabilities: list[VulnerabilityRecord],
+    metadata: dict[str, str],
+    version_cache: dict[int, RiskMonitorSnapshot],
+    upload_records: list[UploadFileRecord],
+) -> None:
+    workbook = Workbook()
+    task_sheet = workbook.active
+    task_sheet.title = "任务信息"
+    latest_upload = upload_records[0] if upload_records else None
+    task_sheet.append(["任务信息", None])
+    task_sheet.append(["项目名称", project.name])
+    task_sheet.append(["任务文件信息", latest_upload.original_filename if latest_upload else project.scan_note or "系统源代码"])
+    task_sheet.append(["特征文件", components[0].package_name if components else "待确认"])
+    task_sheet.append(["任务标签", components[0].source_file or components[0].source_path if components else project.scan_note])
+    task_sheet.append(["审计人员", metadata["auditor_name"]])
+    task_sheet.append(["创建时间", metadata["accepted_date"]])
+    task_sheet.append(["完成时间", metadata["audit_end_date"]])
+
+    confirmed = _confirmed_vulnerabilities(vulnerabilities)
+    vulnerabilities_by_component = _component_vulnerabilities(vulnerabilities)
+    component_risks = [_component_risk_label(vulnerabilities_by_component.get(component.id, [])) for component in components]
+    overview = workbook.create_sheet("审计概览")
+    component_counts = Counter(component_risks)
+    vuln_counts = _risk_counts(vulnerabilities)
+    overview_rows = [
+        ["组件安全分布", None],
+        ["组件等级", "数量"],
+        ["高危组件", component_counts["高危风险"] + component_counts["严重风险"]],
+        ["中危组件", component_counts["中危风险"]],
+        ["低危组件", component_counts["低危风险"]],
+        ["未知风险组件", component_counts["未知风险"]],
+        ["未知版本组件", sum(1 for component in components if component.package_version == "unknown" or not component.version_detected)],
+        ["无漏洞组件", component_counts["无漏洞"]],
+        [],
+        ["漏洞等级分布", None],
+        ["组件等级", "数量"],
+        ["严重漏洞", vuln_counts["critical"]],
+        ["高危漏洞", vuln_counts["high"]],
+        ["中危漏洞", vuln_counts["medium"]],
+        ["低危漏洞", vuln_counts["low"]],
+        ["未知漏洞", vuln_counts["unknown"]],
+        [],
+        ["基础统计", None],
+        ["组件数量", len(components)],
+        ["漏洞数量", len(vulnerabilities)],
+        ["已确认漏洞", len(confirmed)],
+    ]
+    for row in overview_rows:
+        overview.append(row)
+
+    asset_sheet = workbook.create_sheet("审计资产列表")
+    asset_sheet.append(["组件", "版本", "是否最新版本", "最新版本", "组ID", "组件类型", "组件路径", "许可证", "风险等级", "漏洞分布", "依赖关系", "推荐版本"])
+    for component in components:
+        items = vulnerabilities_by_component.get(component.id, [])
+        snapshot = version_cache.get(component.id)
+        asset_sheet.append(
+            [
+                component.package_name,
+                component.package_version,
+                _is_latest(snapshot),
+                _latest_version(snapshot),
+                component.group_id or component.normalized_name or component.package_name,
+                _component_type(component),
+                component.source_file or component.source_path,
+                component.license_name or "未知",
+                _component_risk_label(items),
+                _vulnerability_distribution(items),
+                _dependency_label(component.dependency_type),
+                _recommended_version(component, items, snapshot),
+            ]
+        )
+
+    vulnerability_sheet = workbook.create_sheet("资产漏洞信息")
+    vulnerability_sheet.append(["漏洞编号", "严重程度", "发布日期", "CWE", "项目名", "组件", "版本", "漏洞利用难度", "创建日期", "组ID", "版本日期", "组件年龄"])
+    component_by_id = {component.id: component for component in components}
+    for item in _priority_sorted(confirmed):
+        component = component_by_id.get(item.component_id or 0)
+        snapshot = version_cache.get(item.component_id or 0)
+        vulnerability_sheet.append(
+            [
+                item.cve_id or item.advisory_id,
+                _severity_label(item.severity),
+                _date_only(item.published_at_text) or "未知",
+                item.cwe_id or "-",
+                f"{project.name} {project.scan_note or metadata['version_number']}".strip(),
+                item.package_name,
+                item.package_version,
+                _exploit_difficulty(item),
+                metadata["audit_end_date"],
+                _component_group_id(component, item),
+                _version_date(snapshot),
+                _component_age(snapshot),
+            ]
+        )
+
+    license_sheet = workbook.create_sheet("许可协议信息")
+    license_sheet.append(["许可协议信息", None])
+    license_sheet.append(["许可协议简称", "许可协议全称", "风险说明", "使用范围", "使用条件", "使用限制", "是否兼容GPL", "OSI认证", "FSF认证", "风险等级", "许可描述"])
+    seen_licenses = sorted({component.license_name or "unknown" for component in components})
+    for name in seen_licenses:
+        policy = license_policy(name)
+        license_sheet.append(
+            [
+                policy.short_name if policy.short_name != "待确认" else name,
+                policy.full_name,
+                policy.risk_note,
+                policy.scope,
+                policy.conditions,
+                policy.limitations,
+                policy.gpl_compatible,
+                policy.osi_approved,
+                policy.fsf_approved,
+                policy.risk_level,
+                policy.description,
+            ]
+        )
+    _style_workbook(workbook)
+    workbook.save(path)
 
 
 def _write_xlsx(path: Path, rows: list[list[str]]) -> None:
@@ -586,79 +892,21 @@ trailer << /Root 1 0 R >>
     path.write_bytes(body.encode("utf-8"))
 
 
-def generate_report(db: Session, project_id: int, fmt: str, report_root: str) -> Path:
+def generate_report(db: Session, project_id: int, fmt: str, report_root: str, metadata: dict[str, object] | None = None) -> Path:
     project, components, vulnerabilities = _project_data(db, project_id)
     scan_tasks = _scan_task_summary(db, project_id)
+    report_metadata = _report_metadata(metadata)
+    version_cache = _latest_version_cache(db, project_id)
+    uploads = _upload_records(db, project_id)
     output_dir = Path(report_root)
     output_dir.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
     path = output_dir / f"juxin-sca-report-{project_id}-{timestamp}.{fmt}"
     lines = _report_lines(project, components, vulnerabilities, scan_tasks)
     if fmt == "docx":
-        _write_docx(path, project, components, vulnerabilities, scan_tasks)
+        _write_docx(path, project, components, vulnerabilities, scan_tasks, report_metadata, version_cache)
     elif fmt == "xlsx":
-        confidence = _confidence_groups(vulnerabilities)
-        rows = [
-            ["本次扫描结论摘要", _natural_summary(project, components, vulnerabilities)],
-            ["上线建议", _release_advice(_confirmed_vulnerabilities(vulnerabilities))],
-            ["组件数", str(len(components))],
-            ["漏洞数", str(len(vulnerabilities))],
-            ["已确认漏洞", str(confidence["confirmed"])],
-            ["待确认漏洞", str(confidence["review"])],
-            ["疑似误报漏洞", str(confidence["false_positive"])],
-            ["OpenSCA 成功任务数", str(scan_tasks["opensca"])],
-            ["Syft 成功任务数", str(scan_tasks["syft"])],
-            ["Trivy 成功任务数", str(scan_tasks["trivy"])],
-            ["Dependency-Track 成功任务数", str(scan_tasks["dependency_track"])],
-            ["版本未知组件", str(_component_confidence_groups(components)["unknown_version"])],
-            ["待人工确认组件", str(_component_confidence_groups(components)["manual_confirm"])],
-            ["整改建议", lines[-2]],
-            [],
-            ["依赖版本锁定风险"],
-            ["生态", "依赖文件", "依赖名称", "声明版本", "实际版本", "版本锁定状态", "风险类型", "风险说明", "修复建议"],
-        ]
-        rows.extend(
-            [
-                [
-                    item.ecosystem,
-                    item.source_file or item.source_path,
-                    item.package_name,
-                    item.declared_version,
-                    item.resolved_version or item.package_version,
-                    item.version_lock_status,
-                    item.version_risk_type,
-                    item.risk_explanation,
-                    item.fix_recommendation,
-                ]
-                for item in components
-                if item.version_risk_type or item.need_manual_version_confirm
-            ]
-        )
-        rows.extend(
-            [
-                [],
-                ["整改优先级清单"],
-                ["优先级", "CVE/公告", "组件", "当前版本", "等级", "风险分", "修复版本", "建议期限", "修复命令"],
-            ]
-        )
-        component_by_id = {item.id: item for item in components}
-        rows.extend(
-            [
-                [
-                    item.risk_priority,
-                    item.cve_id or item.advisory_id,
-                    item.package_name,
-                    item.package_version,
-                    item.severity,
-                    str(item.risk_score),
-                    item.fixed_version,
-                    item.suggested_deadline,
-                    _fix_command(component_by_id.get(item.component_id or 0), item),
-                ]
-                for item in _priority_sorted(_confirmed_vulnerabilities(vulnerabilities))
-            ]
-        )
-        _write_xlsx(path, rows)
+        _write_xlsx_report(path, project, components, vulnerabilities, report_metadata, version_cache, uploads)
     elif fmt == "pdf":
         _write_pdf(path, lines)
     else:

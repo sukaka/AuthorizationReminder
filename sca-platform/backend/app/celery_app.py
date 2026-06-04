@@ -388,6 +388,11 @@ def scan_uploaded_file(scan_task_id: int) -> dict[str, int | str]:
             record.status = "scanned"
             db.add(ScanLog(scan_task_id=task.id, level="info", message=task.summary))
             db.commit()
+            try:
+                monitor_project_versions.delay(record.project_id)
+            except Exception as exc:
+                db.add(ScanLog(scan_task_id=task.id, level="warning", message=f"版本补齐任务触发失败：{exc}"))
+                db.commit()
             return {"status": "success", "components": len(result.components)}
         except Exception as exc:
             task.status = "failed"
@@ -426,6 +431,8 @@ def monitor_risks() -> dict[str, int | str]:
                 latest_source=str(data["latest_source"]),
                 update_available=bool(data["update_available"]),
                 version_delta=str(data["version_delta"]),
+                current_version_published_at=str(data.get("current_version_published_at") or ""),
+                component_age_years=float(data.get("component_age_years") or 0),
                 eol_status=str(data["eol_status"]),
                 eol_date=str(data["eol_date"]),
                 vulnerability_count=vulnerability_count,
@@ -464,6 +471,44 @@ def monitor_risks() -> dict[str, int | str]:
         run.finished_at = datetime.now(timezone.utc)
         db.commit()
         return {"status": "success", "components": len(components), "updates": updated}
+
+
+@celery_app.task(name="sca.monitor_project_versions")
+def monitor_project_versions(project_id: int) -> dict[str, int | str]:
+    init_db()
+    with SessionLocal() as db:
+        components = db.query(Component).filter_by(project_id=project_id).all()
+        for component in components:
+            data = monitor_component_update(component, settings)
+            vulnerability_count = db.query(VulnerabilityRecord).filter_by(component_id=component.id).count()
+            risk_level = snapshot_risk_level(
+                bool(data["update_available"]),
+                str(data["version_delta"]),
+                str(data["eol_status"]),
+                vulnerability_count,
+            )
+            db.add(
+                RiskMonitorSnapshot(
+                    project_id=component.project_id,
+                    component_id=component.id,
+                    component_name=component.package_name,
+                    current_version=component.package_version,
+                    latest_version=str(data["latest_version"]),
+                    latest_source=str(data["latest_source"]),
+                    update_available=bool(data["update_available"]),
+                    version_delta=str(data["version_delta"]),
+                    current_version_published_at=str(data.get("current_version_published_at") or ""),
+                    component_age_years=float(data.get("component_age_years") or 0),
+                    eol_status=str(data["eol_status"]),
+                    eol_date=str(data["eol_date"]),
+                    vulnerability_count=vulnerability_count,
+                    risk_level=risk_level,
+                    recommendation=str(data["recommendation"]),
+                    raw_json=raw_json(data.get("raw") or {}),
+                )
+            )
+        db.commit()
+        return {"status": "success", "components": len(components), "project_id": project_id}
 
 
 @celery_app.task(name="sca.check_remediation_overdue")
