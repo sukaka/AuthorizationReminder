@@ -96,8 +96,18 @@ def test_report_includes_management_summary_confidence_and_priority(monkeypatch,
         downloaded = test_client.get(f"/api/sca/reports/{report['id']}/download")
 
     with zipfile.ZipFile(BytesIO(downloaded.content)) as archive:
+        names = set(archive.namelist())
         document = archive.read("word/document.xml").decode("utf-8")
 
+    assert "word/styles.xml" in names
+    assert "<w:tbl>" in document
+    assert "软件成分分析报告" in document
+    assert "报告属性信息" in document
+    assert "目  录" in document
+    assert "系统基本情况" in document
+    assert "组件安全审计结果汇总" in document
+    assert "组件安全审计缺陷详情" in document
+    assert "组件安全审计清单" in document
     assert "本次扫描结论摘要" in document
     assert "漏洞可信度说明" in document
     assert "整改优先级清单" in document
