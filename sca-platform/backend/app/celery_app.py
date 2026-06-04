@@ -10,6 +10,7 @@ from sqlalchemy import delete
 from .config import get_settings
 from .database import SessionLocal, init_db
 from .dependency_parser import parse_source_dependencies
+from .reachability_service import analyze_component_reachability
 from .models import (
     Component,
     ComponentDependency,
@@ -29,6 +30,7 @@ from .risk_monitor_service import monitor_component_update, raw_json, snapshot_r
 from .scanners import opensca_client, syft_client, trivy_client
 from .scanners.base import ScannerCommandResult, command_to_log_line, file_sha256
 from .scanners.dependency_track_client import DependencyTrackClient
+from .vulnerability_service import query_component_vulnerabilities
 
 settings = get_settings()
 
@@ -41,6 +43,7 @@ celery_app.conf.broker_connection_retry_on_startup = True
 celery_app.conf.task_always_eager = settings.celery_task_always_eager
 celery_app.conf.task_routes = {
     "sca.scan_uploaded_file": {"queue": "scanner"},
+    "sca.query_project_vulnerabilities": {"queue": "scanner"},
 }
 celery_app.conf.beat_schedule = {
     "sca-risk-monitor": {
@@ -140,6 +143,18 @@ def _child_task(db, parent_id: int, task_type: str) -> ScanTask | None:
     return db.query(ScanTask).filter(ScanTask.parent_task_id == parent_id, ScanTask.task_type == task_type).first()
 
 
+def _mark_parent(db, task: ScanTask, status: str, progress: int, summary: str, error: str = "") -> None:
+    task.status = status
+    task.progress = max(0, min(100, progress))
+    task.summary = summary
+    task.error_message = error
+    now = datetime.now(timezone.utc)
+    if status == "running" and not task.started_at:
+        task.started_at = now
+    if status in {"success", "completed", "failed", "timeout", "partial_completed", "skipped", "canceled"}:
+        task.finished_at = now
+
+
 def _record_artifact(db, task: ScanTask, engine_name: str, artifact_type: str, path_text: str) -> None:
     if not path_text:
         return
@@ -223,11 +238,17 @@ def _record_scanner_result(
 
 def _run_scanner_children(db, task: ScanTask, extract_dir: Path) -> None:
     _mark_child(db, task.id, "opensca_scan_task", "running", "正在执行 OpenSCA 扫描", 20)
+    _mark_parent(db, task, "running", 20, "正在执行 OpenSCA 扫描")
+    db.commit()
     opensca_result = opensca_client.scan_source(extract_dir, Path(settings.opensca_output_dir) / str(task.id), settings)
     _record_scanner_result(db, task, "opensca_scan_task", opensca_result)
     db.add(ScanLog(scan_task_id=task.id, level="info", message=f"OpenSCA: {opensca_result.status} {opensca_result.error_message}".strip()))
+    _mark_parent(db, task, "running", 40, "OpenSCA 扫描完成，正在生成 SBOM")
+    db.commit()
 
     _mark_child(db, task.id, "syft_sbom_task", "running", "正在执行 Syft SBOM 生成", 20)
+    _mark_parent(db, task, "running", 45, "正在执行 Syft SBOM 生成")
+    db.commit()
     syft_results = syft_client.generate_sbom(str(extract_dir), Path(settings.syft_output_dir) / str(task.id), settings)
     syft_statuses = [item.status for item in syft_results]
     syft_result = next((item for item in syft_results if item.raw_result_path.endswith("cyclonedx.json")), syft_results[0])
@@ -235,24 +256,36 @@ def _run_scanner_children(db, task: ScanTask, extract_dir: Path) -> None:
     for item in syft_results[1:]:
         _record_artifact(db, task, item.engine_name, "spdx_bom" if "spdx" in item.raw_result_path else "raw_json", item.raw_result_path)
     db.add(ScanLog(scan_task_id=task.id, level="info", message=f"Syft: {','.join(syft_statuses)} {syft_result.error_message}".strip()))
+    _mark_parent(db, task, "running", 60, "SBOM 生成完成，正在执行 Trivy 扫描")
+    db.commit()
 
     _mark_child(db, task.id, "trivy_scan_task", "running", "正在执行 Trivy 文件系统扫描", 20)
+    _mark_parent(db, task, "running", 65, "正在执行 Trivy 文件系统扫描")
+    db.commit()
     trivy_result = trivy_client.scan_fs(extract_dir, Path(settings.trivy_output_dir) / str(task.id), settings)
     _record_scanner_result(db, task, "trivy_scan_task", trivy_result)
     db.add(ScanLog(scan_task_id=task.id, level="info", message=f"Trivy: {trivy_result.status} {trivy_result.error_message}".strip()))
+    _mark_parent(db, task, "running", 75, "Trivy 扫描完成，正在处理 Dependency-Track")
+    db.commit()
 
     dtrack = DependencyTrackClient(settings)
     if not dtrack.enabled():
         _mark_child(db, task.id, "dependency_track_upload_task", "skipped", "Dependency-Track 未配置 API Key", 100)
         _mark_child(db, task.id, "dependency_track_fetch_task", "skipped", "Dependency-Track 未配置 API Key", 100)
+        _mark_parent(db, task, "running", 82, "Dependency-Track 未配置，正在标准化本地结果")
+        db.commit()
         return
     bom_path = Path(syft_result.raw_result_path) if syft_result.raw_result_path else Path()
     if not bom_path.exists():
         _mark_child(db, task.id, "dependency_track_upload_task", "failed", "缺少 CycloneDX BOM，无法上传 Dependency-Track", 100, "缺少 CycloneDX BOM")
         _mark_child(db, task.id, "dependency_track_fetch_task", "skipped", "等待 BOM 上传成功后拉取", 100)
+        _mark_parent(db, task, "running", 82, "缺少 BOM，跳过 Dependency-Track，正在标准化本地结果")
+        db.commit()
         return
     try:
         _mark_child(db, task.id, "dependency_track_upload_task", "running", "正在上传 CycloneDX BOM", 40)
+        _mark_parent(db, task, "running", 78, "正在上传 CycloneDX BOM")
+        db.commit()
         project_name = task.project.name if task.project else f"project-{task.project_id}"
         project = dtrack.create_project(project_name, "latest")
         project_uuid = str(project.get("uuid") or "")
@@ -269,21 +302,136 @@ def _run_scanner_children(db, task: ScanTask, extract_dir: Path) -> None:
         _mark_child(db, task.id, "dependency_track_upload_task", "completed", "BOM 已上传 Dependency-Track", 100)
 
         _mark_child(db, task.id, "dependency_track_fetch_task", "running", "正在拉取 Dependency-Track 指标", 40)
+        _mark_parent(db, task, "running", 82, "正在拉取 Dependency-Track 指标")
+        db.commit()
         metrics = dtrack.fetch_metrics(project_uuid)
         row.last_metrics_json = raw_json(metrics)
         row.last_fetch_at = datetime.now(timezone.utc)
         row.last_status = "fetched"
         _mark_child(db, task.id, "dependency_track_fetch_task", "completed", "Dependency-Track 指标已拉取", 100)
+        _mark_parent(db, task, "running", 85, "Dependency-Track 处理完成，正在标准化本地结果")
+        db.commit()
     except Exception as exc:
         message = str(exc)
         _mark_child(db, task.id, "dependency_track_upload_task", "failed", message, 100, message)
         _mark_child(db, task.id, "dependency_track_fetch_task", "skipped", "Dependency-Track 上传失败，跳过拉取", 100)
         db.add(ScanLog(scan_task_id=task.id, level="error", message=f"Dependency-Track: {message}"))
+        _mark_parent(db, task, "running", 85, "Dependency-Track 失败，正在标准化本地结果")
+        db.commit()
+
+
+def _latest_source_root(db, project_id: int) -> Path | None:
+    record = (
+        db.query(UploadFileRecord)
+        .filter(UploadFileRecord.project_id == project_id, UploadFileRecord.status.in_(["scanned", "scanning", "completed"]))
+        .order_by(UploadFileRecord.created_at.desc())
+        .first()
+    )
+    if not record:
+        return None
+    root = Path(settings.upload_root) / "extracted" / record.upload_id
+    return root if root.exists() else None
+
+
+def _persist_vulnerability_findings(db, project_id: int, component: Component, source_root: Path | None) -> int:
+    reachability = analyze_component_reachability(component, source_root)
+    findings = query_component_vulnerabilities(component, settings)
+    component.vulnerability_status = "vulnerable" if findings else "clean"
+    for finding in findings:
+        db.add(
+            VulnerabilityRecord(
+                project_id=project_id,
+                component_id=component.id,
+                source=finding.source,
+                advisory_id=finding.advisory_id,
+                cve_id=finding.cve_id,
+                cwe_id=finding.cwe_id,
+                package_name=finding.package_name,
+                package_version=finding.package_version,
+                ecosystem=finding.ecosystem,
+                cvss_score=finding.cvss_score,
+                severity=finding.severity,
+                epss_score=finding.epss_score,
+                cisa_kev=finding.cisa_kev,
+                confidence_score=finding.confidence_score,
+                match_status=finding.match_status,
+                matched_by=finding.matched_by,
+                match_reason=finding.match_reason,
+                version_range=finding.version_range,
+                needs_human_review=finding.needs_human_review,
+                false_positive_possibility=finding.false_positive_possibility,
+                risk_priority=finding.risk_priority,
+                risk_score=finding.risk_score,
+                priority_reason=finding.priority_reason,
+                suggested_deadline=finding.suggested_deadline,
+                remediation_type=finding.remediation_type,
+                business_impact=finding.business_impact,
+                reachability_status=reachability.reachability_status,
+                reachability_evidence=reachability.reachability_evidence,
+                entry_points=reachability.entry_points,
+                related_files=reachability.related_files,
+                call_path_summary=reachability.call_path_summary,
+                description=finding.description,
+                fixed_version=finding.fixed_version,
+                published_at_text=finding.published_at,
+                has_poc=finding.has_poc,
+                exploited_in_wild=finding.exploited_in_wild,
+                detail_url=finding.detail_url,
+                raw_json="",
+            )
+        )
+    return len(findings)
 
 
 @celery_app.task(name="sca.demo_scan")
 def demo_scan(project_name: str) -> dict[str, str]:
     return {"project": project_name, "status": "queued", "message": "软件成分分析任务已进入队列"}
+
+
+@celery_app.task(name="sca.query_project_vulnerabilities")
+def query_project_vulnerabilities_task(scan_task_id: int) -> dict[str, int | str]:
+    init_db()
+    with SessionLocal() as db:
+        task = db.get(ScanTask, scan_task_id)
+        if not task:
+            return {"status": "missing", "vulnerabilities": 0}
+        try:
+            _mark_parent(db, task, "running", 5, "正在准备漏洞查询任务")
+            db.add(ScanLog(scan_task_id=task.id, level="info", message="开始异步查询组件漏洞情报"))
+            db.commit()
+
+            components = db.query(Component).filter_by(project_id=task.project_id).order_by(Component.id.asc()).all()
+            db.execute(delete(VulnerabilityRecord).where(VulnerabilityRecord.project_id == task.project_id))
+            source_root = _latest_source_root(db, task.project_id)
+            total_components = len(components)
+            total_findings = 0
+            if not components:
+                _mark_parent(db, task, "success", 100, "项目暂无组件，漏洞查询已结束")
+                db.commit()
+                return {"status": "success", "vulnerabilities": 0}
+
+            for index, component in enumerate(components, start=1):
+                _mark_parent(
+                    db,
+                    task,
+                    "running",
+                    5 + int(index / total_components * 90),
+                    f"正在查询漏洞情报：{index}/{total_components} {component.package_name}",
+                )
+                total_findings += _persist_vulnerability_findings(db, task.project_id, component, source_root)
+                if index == 1 or index == total_components or index % 5 == 0:
+                    db.commit()
+
+            _mark_parent(db, task, "success", 100, f"漏洞查询完成：组件 {total_components} 个，漏洞 {total_findings} 条")
+            db.add(ScanLog(scan_task_id=task.id, level="info", message=task.summary))
+            db.commit()
+            return {"status": "success", "vulnerabilities": total_findings, "components": total_components}
+        except Exception as exc:
+            message = str(exc)
+            _mark_parent(db, task, "failed", 100, message, message)
+            db.add(ScanLog(scan_task_id=task.id, level="error", message=f"漏洞查询失败：{message}"))
+            db.commit()
+            return {"status": "failed", "vulnerabilities": 0}
 
 
 @celery_app.task(name="sca.scan_uploaded_file")
@@ -301,12 +449,10 @@ def scan_uploaded_file(scan_task_id: int) -> dict[str, int | str]:
             db.commit()
             return {"status": "failed", "components": 0}
 
-        task.status = "running"
-        task.progress = 5
         task.task_type = task.task_type or "project_scan_task"
         _ensure_child_scan_tasks(db, task)
+        _mark_parent(db, task, "running", 5, "开始解析源码依赖")
         _mark_child(db, task.id, "prepare_source_task", "running", "正在解压源码包", 30)
-        task.started_at = datetime.now(timezone.utc)
         record.status = "scanning"
         db.add(ScanLog(scan_task_id=task.id, level="info", message="开始解析源码依赖"))
         db.commit()
@@ -315,9 +461,13 @@ def scan_uploaded_file(scan_task_id: int) -> dict[str, int | str]:
             extract_dir = upload_root / "extracted" / record.upload_id
             _extract_archive(Path(record.storage_path), extract_dir)
             _mark_child(db, task.id, "prepare_source_task", "completed", "源码准备完成", 100)
+            _mark_parent(db, task, "running", 15, "源码准备完成")
+            db.commit()
             _run_scanner_children(db, task, extract_dir)
             result = parse_source_dependencies(extract_dir)
             _mark_child(db, task.id, "normalize_results_task", "running", "正在标准化依赖识别结果", 50)
+            _mark_parent(db, task, "running", 88, "正在标准化依赖识别结果")
+            db.commit()
 
             db.execute(delete(ComponentDependency).where(ComponentDependency.project_id == record.project_id))
             db.execute(delete(Component).where(Component.project_id == record.project_id))
@@ -392,19 +542,19 @@ def scan_uploaded_file(scan_task_id: int) -> dict[str, int | str]:
             for message in result.logs:
                 db.add(ScanLog(scan_task_id=task.id, level="info", message=message))
             _mark_child(db, task.id, "normalize_results_task", "completed", "标准化完成", 100)
+            _mark_parent(db, task, "running", 93, "标准化完成，正在合并组件")
             _mark_child(db, task.id, "merge_components_task", "completed", "组件合并完成", 100)
+            _mark_parent(db, task, "running", 96, "组件合并完成")
             _mark_child(db, task.id, "merge_vulnerabilities_task", "skipped", "等待漏洞查询后合并", 100)
             for task_type in [
                 "ai_noise_reduction_task",
                 "report_generate_task",
             ]:
                 _mark_child(db, task.id, task_type, "skipped", "本次源码依赖解析未触发该子任务", 100)
-            task.status = "success"
-            task.progress = 100
-            task.summary = f"识别依赖 {len(result.components)} 个，扫描模式：{result.scan_mode}"
+            summary = f"识别依赖 {len(result.components)} 个，扫描模式：{result.scan_mode}"
             if result.fallback_enabled:
-                task.summary += "，已启用兜底识别"
-            task.finished_at = datetime.now(timezone.utc)
+                summary += "，已启用兜底识别"
+            _mark_parent(db, task, "success", 100, summary)
             record.status = "scanned"
             db.add(ScanLog(scan_task_id=task.id, level="info", message=task.summary))
             db.commit()
@@ -415,9 +565,7 @@ def scan_uploaded_file(scan_task_id: int) -> dict[str, int | str]:
                 db.commit()
             return {"status": "success", "components": len(result.components)}
         except Exception as exc:
-            task.status = "failed"
-            task.summary = str(exc)
-            task.finished_at = datetime.now(timezone.utc)
+            _mark_parent(db, task, "failed", 100, str(exc), str(exc))
             record.status = "failed"
             db.add(ScanLog(scan_task_id=task.id, level="error", message=str(exc)))
             db.commit()

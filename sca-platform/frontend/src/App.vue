@@ -1092,7 +1092,7 @@
 </template>
 
 <script setup>
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
 import { Bell, Connection, DataAnalysis, Document, Files, Grid, MagicStick, Refresh, Search, Setting, Share, UploadFilled, WarningFilled } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { apiUrl, requestJson, resumableUploadWithProgress, uploadArchiveWithProgress, uploadImageTarWithProgress } from './api'
@@ -1120,6 +1120,8 @@ const components = ref([])
 const dependencyTree = ref([])
 const scanLogs = ref([])
 const scanTasks = ref([])
+let projectDetailsLoading = false
+let taskRefreshTimer = null
 const scanCompleteness = reactive({
   project_id: 0,
   has_standard_manifest: false,
@@ -1523,6 +1525,11 @@ const trendWidth = (value, total) => {
   return `${Math.max(4, Math.round((value / total) * 100))}%`
 }
 
+const hasActiveProjectTasks = computed(() => scanTasks.value.some((task) => (
+  ['pending', 'queued', 'running'].includes(task.status)
+  || task.task_type === 'vulnerability_query_task' && ['pending', 'queued', 'running'].includes(task.status)
+)))
+
 const formatDistribution = (value) => {
   const entries = Object.entries(value || {})
   if (!entries.length) return '-'
@@ -1556,31 +1563,37 @@ const loadUploads = async () => {
 
 const loadProjectDetails = async () => {
   if (!selectedProjectId.value) return
-  components.value = (await requestJson(`/api/sca/projects/${selectedProjectId.value}/components`)) || []
-  dependencyTree.value = (await requestJson(`/api/sca/projects/${selectedProjectId.value}/dependency-tree`)) || []
-  const completeness = await requestJson(`/api/sca/projects/${selectedProjectId.value}/scan-completeness`)
-  if (completeness) Object.assign(scanCompleteness, completeness)
-  const dtrack = await requestJson(`/api/sca/projects/${selectedProjectId.value}/dependency-track`)
-  if (dtrack) Object.assign(dependencyTrackStatus, dtrack)
-  scanTasks.value = (await requestJson(`/api/sca/projects/${selectedProjectId.value}/scan-tasks`)) || []
-  scanLogs.value = (await requestJson(`/api/sca/projects/${selectedProjectId.value}/scan-logs`)) || []
-  const vulnerabilityData = await requestJson(`/api/sca/projects/${selectedProjectId.value}/vulnerabilities`)
-  vulnerabilities.value = vulnerabilityData?.items || []
-  const stats = await requestJson(`/api/sca/projects/${selectedProjectId.value}/vulnerabilities/stats`)
-  if (stats) Object.assign(vulnerabilityStats, stats)
-  const trend = await requestJson(`/api/sca/projects/${selectedProjectId.value}/vulnerabilities/trend`)
-  vulnerabilityTrend.value = trend?.items || []
-  reports.value = (await requestJson(`/api/sca/projects/${selectedProjectId.value}/reports`)) || []
-  sboms.value = (await requestJson(`/api/sca/projects/${selectedProjectId.value}/sbom`)) || []
-  riskSnapshots.value = (await requestJson(`/api/sca/projects/${selectedProjectId.value}/risk-monitor/snapshots`)) || []
-  riskAlerts.value = (await requestJson(`/api/sca/projects/${selectedProjectId.value}/risk-monitor/alerts`)) || []
-  riskChanges.value = (await requestJson(`/api/sca/projects/${selectedProjectId.value}/risk-monitor/changes`)) || []
-  const monitorTrend = await requestJson(`/api/sca/projects/${selectedProjectId.value}/risk-monitor/trend`)
-  riskTrend.value = monitorTrend?.items || []
-  aiResults.value = (await requestJson(`/api/sca/projects/${selectedProjectId.value}/ai-triage/results`)) || []
-  const tickets = await requestJson(`/api/sca/projects/${selectedProjectId.value}/remediation/tickets`)
-  remediationTickets.value = tickets?.items || []
-  whitelistItems.value = (await requestJson(`/api/sca/projects/${selectedProjectId.value}/remediation/whitelist`)) || []
+  if (projectDetailsLoading) return
+  projectDetailsLoading = true
+  try {
+    components.value = (await requestJson(`/api/sca/projects/${selectedProjectId.value}/components`)) || []
+    dependencyTree.value = (await requestJson(`/api/sca/projects/${selectedProjectId.value}/dependency-tree`)) || []
+    const completeness = await requestJson(`/api/sca/projects/${selectedProjectId.value}/scan-completeness`)
+    if (completeness) Object.assign(scanCompleteness, completeness)
+    const dtrack = await requestJson(`/api/sca/projects/${selectedProjectId.value}/dependency-track`)
+    if (dtrack) Object.assign(dependencyTrackStatus, dtrack)
+    scanTasks.value = (await requestJson(`/api/sca/projects/${selectedProjectId.value}/scan-tasks`)) || []
+    scanLogs.value = (await requestJson(`/api/sca/projects/${selectedProjectId.value}/scan-logs`)) || []
+    const vulnerabilityData = await requestJson(`/api/sca/projects/${selectedProjectId.value}/vulnerabilities`)
+    vulnerabilities.value = vulnerabilityData?.items || []
+    const stats = await requestJson(`/api/sca/projects/${selectedProjectId.value}/vulnerabilities/stats`)
+    if (stats) Object.assign(vulnerabilityStats, stats)
+    const trend = await requestJson(`/api/sca/projects/${selectedProjectId.value}/vulnerabilities/trend`)
+    vulnerabilityTrend.value = trend?.items || []
+    reports.value = (await requestJson(`/api/sca/projects/${selectedProjectId.value}/reports`)) || []
+    sboms.value = (await requestJson(`/api/sca/projects/${selectedProjectId.value}/sbom`)) || []
+    riskSnapshots.value = (await requestJson(`/api/sca/projects/${selectedProjectId.value}/risk-monitor/snapshots`)) || []
+    riskAlerts.value = (await requestJson(`/api/sca/projects/${selectedProjectId.value}/risk-monitor/alerts`)) || []
+    riskChanges.value = (await requestJson(`/api/sca/projects/${selectedProjectId.value}/risk-monitor/changes`)) || []
+    const monitorTrend = await requestJson(`/api/sca/projects/${selectedProjectId.value}/risk-monitor/trend`)
+    riskTrend.value = monitorTrend?.items || []
+    aiResults.value = (await requestJson(`/api/sca/projects/${selectedProjectId.value}/ai-triage/results`)) || []
+    const tickets = await requestJson(`/api/sca/projects/${selectedProjectId.value}/remediation/tickets`)
+    remediationTickets.value = tickets?.items || []
+    whitelistItems.value = (await requestJson(`/api/sca/projects/${selectedProjectId.value}/remediation/whitelist`)) || []
+  } finally {
+    projectDetailsLoading = false
+  }
 }
 
 const manualVersion = async (row) => {
@@ -1689,9 +1702,8 @@ const queryVulnerabilities = async () => {
   vulnerabilityQuerying.value = true
   try {
     const data = await requestJson(`/api/sca/projects/${selectedProjectId.value}/vulnerabilities/query`, { method: 'POST' })
-    vulnerabilities.value = data?.items || []
     await loadProjectDetails()
-    ElMessage.success(`漏洞查询完成：${data?.total || 0} 条`)
+    ElMessage.success(data?.task_id ? `漏洞查询任务已入队：${data.task_id}` : '漏洞查询任务已入队')
   } catch (err) {
     ElMessage.error(err?.message || '漏洞查询失败')
   } finally {
@@ -2013,6 +2025,20 @@ const enqueueTask = async () => {
 }
 
 onMounted(refreshAll)
+onMounted(() => {
+  taskRefreshTimer = window.setInterval(async () => {
+    if (!selectedProjectId.value || !hasActiveProjectTasks.value) return
+    try {
+      await loadProjectDetails()
+      await loadUploads()
+    } catch (err) {
+      console.warn('[SCA] refresh active tasks failed', err?.message || err)
+    }
+  }, 5000)
+})
+onUnmounted(() => {
+  if (taskRefreshTimer) window.clearInterval(taskRefreshTimer)
+})
 onMounted(loadAiMeta)
 onMounted(loadImageScans)
 onMounted(loadAssets)

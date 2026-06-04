@@ -47,3 +47,18 @@ def test_overview_returns_bootstrap_counts(monkeypatch, tmp_path):
         assert response.status_code == 200
         assert response.json()["project_count"] == 0
         assert response.json()["component_count"] == 0
+
+
+def test_api_errors_use_unified_json_shape(monkeypatch, tmp_path):
+    with build_client(monkeypatch, tmp_path) as client:
+        response = client.get("/api/sca/projects/404/dependency-track")
+
+        assert response.status_code == 404
+        assert response.headers["content-type"].startswith("application/json")
+        assert response.json() == {
+            "success": False,
+            "code": "NOT_FOUND",
+            "message": "项目不存在",
+            "data": None,
+            "detail": "项目不存在",
+        }

@@ -3,19 +3,22 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Annotated
 import json
+import logging
 import shutil
+import time
 import uuid
 
 import redis
-from fastapi.concurrency import run_in_threadpool
+from fastapi.exceptions import RequestValidationError
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile, status
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy import delete, func, select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from .auth import get_current_user, require_action
-from .celery_app import demo_scan, scan_uploaded_file
+from . import celery_app as celery_app
+from .celery_app import demo_scan, query_project_vulnerabilities_task, scan_uploaded_file
 from .config import Settings, get_settings
 from .database import SessionLocal, check_database, get_db, init_db
 from .models import (
@@ -116,7 +119,6 @@ from .devops_service import devops_dashboard, record_devops_event
 from .ops_service import plan_backup_path, production_config
 from .remediation_service import create_ticket_no, ignore_vulnerability, mark_overdue_tickets, transition_ticket, verify_ticket
 from .report_service import generate_report
-from .reachability_service import analyze_component_reachability
 from .risk_monitor_service import monitor_component_update, raw_json, snapshot_risk_level
 from .sbom_service import generate_sbom, scan_image
 from .upload_service import (
@@ -129,7 +131,7 @@ from .upload_service import (
     to_upload_out,
     validate_archive_filename,
 )
-from .vulnerability_service import query_component_vulnerabilities, query_cve
+from .vulnerability_service import query_cve
 
 
 @asynccontextmanager
@@ -140,6 +142,7 @@ async def lifespan(_app: FastAPI):
 
 
 settings = get_settings()
+logger = logging.getLogger("sca.api")
 app = FastAPI(
     title=settings.app_name,
     version=settings.app_version,
@@ -154,6 +157,91 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+def _api_error_code(status_code: int) -> str:
+    return {
+        400: "BAD_REQUEST",
+        401: "UNAUTHORIZED",
+        403: "FORBIDDEN",
+        404: "NOT_FOUND",
+        409: "CONFLICT",
+        413: "PAYLOAD_TOO_LARGE",
+        422: "VALIDATION_ERROR",
+        500: "INTERNAL_SERVER_ERROR",
+        502: "GATEWAY_OR_BACKEND_UNAVAILABLE",
+        503: "GATEWAY_OR_BACKEND_UNAVAILABLE",
+        504: "GATEWAY_TIMEOUT_OR_BACKEND_TIMEOUT",
+    }.get(status_code, f"HTTP_{status_code}")
+
+
+def _api_error_message(status_code: int, detail: object = "") -> str:
+    if status_code == 504:
+        return "接口处理超时，请稍后重试或检查后端服务状态"
+    if status_code in {502, 503}:
+        return "后端服务暂不可用，请稍后重试或检查服务状态"
+    if isinstance(detail, str) and detail:
+        return detail
+    if detail:
+        return str(detail)
+    return "请求处理失败"
+
+
+def _api_error_response(status_code: int, detail: object = "") -> JSONResponse:
+    message = _api_error_message(status_code, detail)
+    return JSONResponse(
+        status_code=status_code,
+        content={
+            "success": False,
+            "code": _api_error_code(status_code),
+            "message": message,
+            "data": None,
+            "detail": message,
+        },
+    )
+
+
+@app.middleware("http")
+async def api_request_logging(request: Request, call_next):
+    started = time.perf_counter()
+    status_code = 500
+    error_type = ""
+    try:
+        response = await call_next(request)
+        status_code = response.status_code
+        if status_code >= 400:
+            error_type = _api_error_code(status_code)
+        return response
+    except TimeoutError as exc:
+        status_code = 504
+        error_type = type(exc).__name__
+        logger.exception("api_request_exception method=%s path=%s errorType=%s", request.method, request.url.path, error_type)
+        return _api_error_response(status_code, str(exc))
+    except Exception as exc:
+        status_code = 500
+        error_type = type(exc).__name__
+        logger.exception("api_request_exception method=%s path=%s errorType=%s", request.method, request.url.path, error_type)
+        return _api_error_response(status_code, "服务内部错误")
+    finally:
+        duration_ms = round((time.perf_counter() - started) * 1000, 2)
+        log_message = "api_request method=%s path=%s status=%s durationMs=%s errorType=%s"
+        args = (request.method, request.url.path, status_code, duration_ms, error_type or "-")
+        if duration_ms >= 10000:
+            logger.warning(log_message + " slow=true asyncRecommendation=true", *args)
+        elif status_code >= 400:
+            logger.warning(log_message, *args)
+        else:
+            logger.info(log_message, *args)
+
+
+@app.exception_handler(HTTPException)
+async def http_exception_handler(_request: Request, exc: HTTPException) -> JSONResponse:
+    return _api_error_response(exc.status_code, exc.detail)
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(_request: Request, exc: RequestValidationError) -> JSONResponse:
+    return _api_error_response(status.HTTP_422_UNPROCESSABLE_ENTITY, exc.errors())
 
 SYSTEM_CONFIG_UPLOAD_MAX_MB = "upload_max_file_size_mb"
 SYSTEM_CONFIG_OPENAI_API_KEY = "openai_api_key"
@@ -753,87 +841,55 @@ def _ensure_project_exists(db: Session, project_id: int) -> Project:
     return project
 
 
-def _latest_source_root(db: Session, project_id: int) -> Path | None:
+def _latest_upload_record(db: Session, project_id: int) -> UploadFileRecord | None:
     record = db.scalar(
         select(UploadFileRecord)
-        .where(UploadFileRecord.project_id == project_id, UploadFileRecord.status.in_(["scanned", "scanning", "completed"]))
+        .where(UploadFileRecord.project_id == project_id)
         .order_by(UploadFileRecord.created_at.desc())
     )
-    if not record:
-        return None
-    root = Path(settings.upload_root) / "extracted" / record.upload_id
-    return root if root.exists() else None
+    return record
 
 
-def _query_project_vulnerabilities_blocking(project_id: int) -> VulnerabilityListOut:
-    with SessionLocal() as db:
-        _ensure_project_exists(db, project_id)
-        components = db.scalars(select(Component).where(Component.project_id == project_id)).all()
-        db.execute(delete(VulnerabilityRecord).where(VulnerabilityRecord.project_id == project_id))
-        db.flush()
-        source_root = _latest_source_root(db, project_id)
-        for component in components:
-            reachability = analyze_component_reachability(component, source_root)
-            findings = query_component_vulnerabilities(component, settings)
-            component.vulnerability_status = "vulnerable" if findings else "clean"
-            for finding in findings:
-                db.add(
-                    VulnerabilityRecord(
-                        project_id=project_id,
-                        component_id=component.id,
-                        source=finding.source,
-                        advisory_id=finding.advisory_id,
-                        cve_id=finding.cve_id,
-                        cwe_id=finding.cwe_id,
-                        package_name=finding.package_name,
-                        package_version=finding.package_version,
-                        ecosystem=finding.ecosystem,
-                        cvss_score=finding.cvss_score,
-                        severity=finding.severity,
-                        epss_score=finding.epss_score,
-                        cisa_kev=finding.cisa_kev,
-                        confidence_score=finding.confidence_score,
-                        match_status=finding.match_status,
-                        matched_by=finding.matched_by,
-                        match_reason=finding.match_reason,
-                        version_range=finding.version_range,
-                        needs_human_review=finding.needs_human_review,
-                        false_positive_possibility=finding.false_positive_possibility,
-                        risk_priority=finding.risk_priority,
-                        risk_score=finding.risk_score,
-                        priority_reason=finding.priority_reason,
-                        suggested_deadline=finding.suggested_deadline,
-                        remediation_type=finding.remediation_type,
-                        business_impact=finding.business_impact,
-                        reachability_status=reachability.reachability_status,
-                        reachability_evidence=reachability.reachability_evidence,
-                        entry_points=reachability.entry_points,
-                        related_files=reachability.related_files,
-                        call_path_summary=reachability.call_path_summary,
-                        description=finding.description,
-                        fixed_version=finding.fixed_version,
-                        published_at_text=finding.published_at,
-                        has_poc=finding.has_poc,
-                        exploited_in_wild=finding.exploited_in_wild,
-                        detail_url=finding.detail_url,
-                        raw_json="",
-                    )
-                )
-        db.commit()
-        items = db.scalars(
-            select(VulnerabilityRecord).where(VulnerabilityRecord.project_id == project_id).order_by(VulnerabilityRecord.risk_score.desc(), VulnerabilityRecord.cvss_score.desc())
-        ).all()
-        return VulnerabilityListOut(total=len(items), items=[VulnerabilityOut.model_validate(item) for item in items])
-
-
-@app.post("/api/sca/projects/{project_id}/vulnerabilities/query", response_model=VulnerabilityListOut, tags=["vulnerabilities"])
+@app.post("/api/sca/projects/{project_id}/vulnerabilities/query", status_code=status.HTTP_202_ACCEPTED, tags=["vulnerabilities"])
 async def query_project_vulnerabilities(
     request: Request,
     project_id: int,
     user: Annotated[UserPayload, Depends(get_current_user)],
-) -> VulnerabilityListOut:
+) -> dict[str, int | str]:
     await require_action("sca:write", request, user, settings)
-    return await run_in_threadpool(_query_project_vulnerabilities_blocking, project_id)
+    with SessionLocal() as db:
+        _ensure_project_exists(db, project_id)
+        existing = db.scalar(
+            select(ScanTask)
+            .where(
+                ScanTask.project_id == project_id,
+                ScanTask.task_type == "vulnerability_query_task",
+                ScanTask.status.in_(["queued", "pending", "running"]),
+            )
+            .order_by(ScanTask.created_at.desc())
+        )
+        if existing:
+            return {"task_id": existing.id, "status": existing.status, "message": "漏洞查询任务已在执行，请稍后刷新查看结果"}
+        upload = _latest_upload_record(db, project_id)
+        if not upload:
+            raise HTTPException(status_code=400, detail="请先上传源码并完成依赖识别后再查询漏洞")
+        celery_task_id = uuid.uuid4().hex
+        task = ScanTask(
+            project_id=project_id,
+            upload_file_id=upload.id,
+            celery_task_id=celery_task_id,
+            task_type="vulnerability_query_task",
+            engine_name="juxin-vuln-intel",
+            status="queued",
+            progress=0,
+            summary="等待漏洞查询任务执行",
+            timeout_seconds=max(60, settings.vulnerability_fetch_timeout_ms // 1000),
+        )
+        db.add(task)
+        db.commit()
+        db.refresh(task)
+    query_project_vulnerabilities_task.apply_async(args=[task.id], task_id=celery_task_id)
+    return {"task_id": task.id, "status": "queued", "message": "漏洞查询任务已入队，请稍后刷新查看结果"}
 
 
 @app.get("/api/sca/projects/{project_id}/vulnerabilities", response_model=VulnerabilityListOut, tags=["vulnerabilities"])

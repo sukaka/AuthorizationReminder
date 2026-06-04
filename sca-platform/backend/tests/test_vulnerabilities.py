@@ -16,11 +16,13 @@ def build_client(monkeypatch, tmp_path):
     import app.database as database
     import app.models as models
     import app.vulnerability_service as vulnerability_service
+    import app.celery_app as celery_app
     import app.main as main
 
     importlib.reload(database)
     importlib.reload(models)
     importlib.reload(vulnerability_service)
+    importlib.reload(celery_app)
     importlib.reload(main)
     return TestClient(main.app), main, models, database
 
@@ -52,7 +54,44 @@ def test_normalizes_osv_records_to_required_fields():
     assert record.has_poc is True
 
 
-def test_query_component_vulnerabilities_persists_results(monkeypatch, tmp_path):
+def test_query_component_vulnerabilities_enqueues_async_task(monkeypatch, tmp_path):
+    client, main, models, database = build_client(monkeypatch, tmp_path)
+    enqueued = {}
+
+    def fake_apply_async(*, args, task_id):
+        enqueued["args"] = args
+        enqueued["task_id"] = task_id
+
+    monkeypatch.setattr(main.query_project_vulnerabilities_task, "apply_async", fake_apply_async)
+    with client as test_client:
+        with database.SessionLocal() as db:
+            project = models.Project(name="漏洞项目", scan_note="demo")
+            db.add(project)
+            db.flush()
+            db.add(
+                models.UploadFileRecord(
+                    project_id=project.id,
+                    upload_id="upload-vuln-async",
+                    original_filename="demo.zip",
+                    stored_filename="demo.zip",
+                    storage_path="/tmp/demo.zip",
+                    status="scanned",
+                )
+            )
+            db.add(models.Component(project_id=project.id, package_name="demo-lib", package_version="1.0.0", ecosystem="pypi"))
+            db.commit()
+            project_id = project.id
+
+        response = test_client.post(f"/api/sca/projects/{project_id}/vulnerabilities/query")
+
+    assert response.status_code == 202
+    data = response.json()
+    assert data["task_id"] > 0
+    assert data["status"] == "queued"
+    assert data["message"] == "漏洞查询任务已入队，请稍后刷新查看结果"
+    assert enqueued["args"] == [data["task_id"]]
+
+def test_project_vulnerability_query_task_persists_results(monkeypatch, tmp_path):
     client, main, models, database = build_client(monkeypatch, tmp_path)
 
     def fake_query(component, settings):
@@ -77,46 +116,46 @@ def test_query_component_vulnerabilities_persists_results(monkeypatch, tmp_path)
             )
         ]
 
-    monkeypatch.setattr(main, "query_component_vulnerabilities", fake_query)
+    monkeypatch.setattr(main.celery_app, "query_component_vulnerabilities", fake_query)
+
     with client as test_client:
         with database.SessionLocal() as db:
-            project = models.Project(name="漏洞项目", scan_note="demo")
+            project = models.Project(name="异步漏洞项目", scan_note="demo")
             db.add(project)
             db.flush()
+            upload = models.UploadFileRecord(
+                project_id=project.id,
+                upload_id="upload-vuln-worker",
+                original_filename="demo.zip",
+                stored_filename="demo.zip",
+                storage_path="/tmp/demo.zip",
+                status="scanned",
+            )
+            db.add(upload)
+            db.flush()
             db.add(models.Component(project_id=project.id, package_name="demo-lib", package_version="1.0.0", ecosystem="pypi"))
+            task = models.ScanTask(
+                project_id=project.id,
+                upload_file_id=upload.id,
+                celery_task_id="vuln-task",
+                task_type="vulnerability_query_task",
+                engine_name="juxin-vuln-intel",
+                status="queued",
+                summary="等待漏洞查询任务执行",
+            )
+            db.add(task)
             db.commit()
+            task_id = task.id
             project_id = project.id
 
-        response = test_client.post(f"/api/sca/projects/{project_id}/vulnerabilities/query")
+        result = main.celery_app.query_project_vulnerabilities_task(task_id)
+        vulnerability_response = test_client.get(f"/api/sca/projects/{project_id}/vulnerabilities")
 
-    assert response.status_code == 200
-    data = response.json()
+    assert result["status"] == "success"
+    assert result["vulnerabilities"] == 1
+    data = vulnerability_response.json()
     assert data["total"] == 1
     assert data["items"][0]["cve_id"] == "CVE-2024-0001"
-    assert data["items"][0]["severity"] == "critical"
-
-
-def test_project_vulnerability_query_uses_threadpool(monkeypatch, tmp_path):
-    client, main, models, database = build_client(monkeypatch, tmp_path)
-    called = {}
-
-    async def fake_run_in_threadpool(fn, *args, **kwargs):
-        called["function"] = fn.__name__
-        return fn(*args, **kwargs)
-
-    monkeypatch.setattr(main, "run_in_threadpool", fake_run_in_threadpool)
-
-    with client as test_client:
-        with database.SessionLocal() as db:
-            project = models.Project(name="线程池漏洞项目", scan_note="demo")
-            db.add(project)
-            db.commit()
-            project_id = project.id
-
-        response = test_client.post(f"/api/sca/projects/{project_id}/vulnerabilities/query")
-
-    assert response.status_code == 200
-    assert called["function"] == "_query_project_vulnerabilities_blocking"
 
 
 def test_vulnerability_stats_and_trend(monkeypatch, tmp_path):

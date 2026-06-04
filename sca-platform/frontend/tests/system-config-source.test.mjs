@@ -29,8 +29,10 @@ test('nginx re-resolves sca-api after backend container recreation', () => {
     assert.match(source, /resolver 127\.0\.0\.11/)
     assert.match(source, /set \$sca_api_upstream http:\/\/sca-api:5191;/)
     assert.match(source, /proxy_pass \$sca_api_upstream;/)
+    assert.match(source, /proxy_connect_timeout 300s;/)
     assert.match(source, /proxy_send_timeout 300s;/)
     assert.match(source, /proxy_read_timeout 300s;/)
+    assert.match(source, /send_timeout 300s;/)
   }
 })
 
@@ -38,4 +40,12 @@ test('api client reports non-json proxy errors without leaking JSON parse syntax
   assert.match(apiSource, /content-type/)
   assert.match(apiSource, /服务返回了非 JSON 响应/)
   assert.match(apiSource, /parseMaybeJson\(text\)/)
+})
+
+test('project task status refreshes while asynchronous jobs are active', () => {
+  assert.match(appSource, /hasActiveProjectTasks/)
+  assert.match(appSource, /setInterval/)
+  assert.match(appSource, /clearInterval/)
+  assert.match(appSource, /vulnerability_query_task/)
+  assert.match(appSource, /task_id/)
 })
