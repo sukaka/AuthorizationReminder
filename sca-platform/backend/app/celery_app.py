@@ -517,7 +517,7 @@ def scan_uploaded_file(scan_task_id: int) -> dict[str, int | str]:
                     component_file_size=item.file_size,
                     component_file_path=item.file_path,
                     component_file_name=item.file_name,
-                    license_name="unknown",
+                    license_name=item.license_name or "未声明",
                     vulnerability_status="pending",
                     note=record.scan_note,
                 )

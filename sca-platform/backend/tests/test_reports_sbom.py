@@ -321,6 +321,106 @@ def test_xlsx_report_matches_reference_workbook_with_metadata_and_license_policy
     assert any(row[0] == "MIT" and row[10] for row in license_rows)
 
 
+def test_xlsx_report_uses_clear_labels_for_unmonitored_unknown_component_fields(monkeypatch, tmp_path):
+    client, _main, models, database = build_client(monkeypatch, tmp_path)
+    with client as test_client:
+        project_id = seed_project(database, models)
+        with database.SessionLocal() as db:
+            db.query(models.VulnerabilityRecord).filter_by(project_id=project_id).delete()
+            db.query(models.Component).filter_by(project_id=project_id).delete()
+            db.add(
+                models.Component(
+                    project_id=project_id,
+                    package_name="axios",
+                    package_version="^0.21.1",
+                    version_normalized="0.21.1",
+                    ecosystem="npm",
+                    normalized_name="axios",
+                    dependency_type="direct",
+                    source_file="package.json",
+                    license_name="unknown",
+                    version_detected=True,
+                    need_manual_version_confirm=True,
+                    declared_version="^0.21.1",
+                    resolved_version="",
+                    version_lock_status="版本范围风险",
+                    version_risk_type="版本范围风险",
+                )
+            )
+            db.add(
+                models.Component(
+                    project_id=project_id,
+                    package_name="requests",
+                    package_version="unknown",
+                    version_normalized="unknown",
+                    ecosystem="pypi",
+                    normalized_name="requests",
+                    dependency_type="direct",
+                    source_file="requirements.txt",
+                    license_name="",
+                    version_detected=False,
+                    need_manual_version_confirm=True,
+                    declared_version="",
+                    resolved_version="",
+                    version_lock_status="未锁定版本风险",
+                    version_risk_type="版本缺失风险",
+                )
+            )
+            db.add(
+                models.Component(
+                    project_id=project_id,
+                    package_name="left-pad",
+                    package_version="1.3.0",
+                    version_normalized="1.3.0",
+                    ecosystem="npm",
+                    normalized_name="left-pad",
+                    dependency_type="direct",
+                    source_file="package-lock.json",
+                    license_name="WTFPL",
+                    version_detected=True,
+                )
+            )
+            db.commit()
+        created = test_client.post(f"/api/sca/projects/{project_id}/reports", json={"format": "xlsx"})
+        report = created.json()
+        downloaded = test_client.get(f"/api/sca/reports/{report['id']}/download")
+
+    sheets = workbook_values(downloaded.content)
+
+    assert [
+        "axios",
+        "0.21.1（声明：^0.21.1）",
+        "未执行版本监测",
+        "未执行版本监测",
+        "axios",
+        "开源组件",
+        "package.json",
+        "未声明",
+        "无漏洞",
+        0,
+        "直接引入",
+        "暂无推荐",
+    ] in sheets["审计资产列表"]
+    assert [
+        "requests",
+        "未声明版本",
+        "未执行版本监测",
+        "未执行版本监测",
+        "requests",
+        "开源组件",
+        "requirements.txt",
+        "未声明",
+        "无漏洞",
+        0,
+        "直接引入",
+        "暂无推荐",
+    ] in sheets["审计资产列表"]
+    license_names = [row[0] for row in sheets["许可协议信息"][2:]]
+    assert "未声明" in license_names
+    assert "WTFPL" in license_names
+    assert "unknown" not in license_names
+
+
 def test_sbom_export_uses_database_components_when_tool_is_unavailable(monkeypatch, tmp_path):
     client, _main, models, database = build_client(monkeypatch, tmp_path)
     with client as test_client:

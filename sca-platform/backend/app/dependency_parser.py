@@ -47,6 +47,7 @@ class ParsedComponent:
     version_risk_type: str = ""
     risk_explanation: str = ""
     fix_recommendation: str = ""
+    license_name: str = ""
     sha1: str = ""
     sha256: str = ""
     file_size: int = 0
@@ -252,6 +253,24 @@ def _line_evidence(path: Path, needle: str) -> tuple[int, str]:
     return 0, ""
 
 
+def _license_text(value: object) -> str:
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, dict):
+        for key in ("type", "name", "id"):
+            text = _license_text(value.get(key))
+            if text:
+                return text
+    if isinstance(value, list):
+        values = [text for item in value if (text := _license_text(item))]
+        return " OR ".join(dict.fromkeys(values))
+    return ""
+
+
+def _package_license(data: dict[str, object]) -> str:
+    return _license_text(data.get("license")) or _license_text(data.get("licenses"))
+
+
 def _normalize_component(component: ParsedComponent) -> ParsedComponent:
     component.package_manager = component.package_manager or component.ecosystem
     component.source_file = component.source_file or component.source_path
@@ -371,6 +390,7 @@ def _parse_package_lock(path: Path, root: Path, result: ParseResult) -> None:
         dependency_type = "direct" if name in manifest_deps else "indirect"
         conflict = bool(manifest_version and _normalize_version(manifest_version) != _normalize_version(version))
         line, text = _line_evidence(path, name)
+        license_name = _package_license(payload)
         _add_component(
             result,
             ParsedComponent(
@@ -389,6 +409,7 @@ def _parse_package_lock(path: Path, root: Path, result: ParseResult) -> None:
                 conflict_reason=f"{manifest_file} 声明 {manifest_version}，package-lock.json 锁定 {version}" if conflict else "",
                 declared_version=manifest_version,
                 resolved_version=version,
+                license_name=license_name,
             ),
         )
 
@@ -770,6 +791,7 @@ def _parse_node_modules_package(path: Path, root: Path, result: ParseResult) -> 
     data = json.loads(path.read_text(encoding="utf-8"))
     name = str(data.get("name") or "")
     version = str(data.get("version") or "")
+    license_name = _package_license(data)
     if not name:
         return
     _add_component(
@@ -791,6 +813,7 @@ def _parse_node_modules_package(path: Path, root: Path, result: ParseResult) -> 
             evidence_type="package.json",
             declared_version=version,
             resolved_version=version,
+            license_name=license_name,
         ),
     )
 
@@ -798,15 +821,28 @@ def _parse_node_modules_package(path: Path, root: Path, result: ParseResult) -> 
 def _parse_python_metadata(path: Path, root: Path, result: ParseResult) -> None:
     rel = _relative(path, root)
     metadata: dict[str, str] = {}
+    classifiers: list[str] = []
     for raw_line in path.read_text(encoding="utf-8", errors="ignore").splitlines():
         if ": " not in raw_line:
             continue
         key, value = raw_line.split(": ", 1)
-        if key in {"Name", "Version"}:
+        if key in {"Name", "Version", "License"}:
             metadata[key] = value.strip()
+        elif key == "Classifier":
+            classifiers.append(value.strip())
     if not metadata.get("Name"):
         return
     version = metadata.get("Version", "")
+    license_name = metadata.get("License", "")
+    if not license_name or license_name.lower() in {"unknown", "license", "n/a"}:
+        license_name = next(
+            (
+                classifier.rsplit("::", 1)[-1].strip()
+                for classifier in classifiers
+                if classifier.lower().startswith("license ::") and classifier.rsplit("::", 1)[-1].strip()
+            ),
+            "",
+        )
     _add_component(
         result,
         ParsedComponent(
@@ -826,6 +862,7 @@ def _parse_python_metadata(path: Path, root: Path, result: ParseResult) -> None:
             evidence_type="dist-info",
             declared_version=version,
             resolved_version=version,
+            license_name=license_name,
         ),
     )
 
@@ -907,6 +944,7 @@ def _parse_composer_lock(path: Path, root: Path, result: ParseResult) -> None:
         for package in data.get(section, []) if isinstance(data, dict) else []:
             name = str(package.get("name") or "")
             version = str(package.get("version") or "")
+            license_name = _license_text(package.get("license"))
             if not name:
                 continue
             _add_component(
@@ -928,6 +966,7 @@ def _parse_composer_lock(path: Path, root: Path, result: ParseResult) -> None:
                     evidence_type="lock",
                     declared_version=version,
                     resolved_version=version,
+                    license_name=license_name,
                 ),
             )
 

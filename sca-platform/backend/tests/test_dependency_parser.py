@@ -210,6 +210,43 @@ def test_dependency_parser_uses_node_lock_actual_version_but_keeps_range_risk(tm
     assert item.detected_by == "lock"
 
 
+def test_dependency_parser_reads_license_metadata_from_lock_and_installed_packages(tmp_path):
+    locked = tmp_path / "locked"
+    locked.mkdir()
+    (locked / "package.json").write_text(
+        '{"dependencies":{"lodash":"^4.17.0"}}',
+        encoding="utf-8",
+    )
+    (locked / "package-lock.json").write_text(
+        '{"packages":{"node_modules/lodash":{"version":"4.17.21","license":"MIT"}}}',
+        encoding="utf-8",
+    )
+
+    installed = tmp_path / "installed"
+    (installed / "node_modules" / "left-pad").mkdir(parents=True)
+    (installed / "node_modules" / "left-pad" / "package.json").write_text(
+        '{"name":"left-pad","version":"1.3.0","license":"WTFPL"}',
+        encoding="utf-8",
+    )
+
+    python = tmp_path / "python"
+    (python / "demo-1.0.dist-info").mkdir(parents=True)
+    (python / "demo-1.0.dist-info" / "METADATA").write_text(
+        "Metadata-Version: 2.1\nName: demo\nVersion: 1.0\nLicense: Apache-2.0\n",
+        encoding="utf-8",
+    )
+
+    from app.dependency_parser import parse_source_dependencies
+
+    locked_result = parse_source_dependencies(locked)
+    installed_result = parse_source_dependencies(installed)
+    python_result = parse_source_dependencies(python)
+
+    assert locked_result.components[0].license_name == "MIT"
+    assert installed_result.components[0].license_name == "WTFPL"
+    assert python_result.components[0].license_name == "Apache-2.0"
+
+
 def test_dependency_parser_fallback_detects_jar_metadata_when_no_manifest(tmp_path):
     import zipfile
 

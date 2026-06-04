@@ -72,6 +72,42 @@ SEVERITY_LABELS = {
 }
 
 COMPONENT_RISK_RANK = {"严重风险": 4, "高危风险": 3, "中危风险": 2, "低危风险": 1, "未知风险": 0, "无漏洞": -1}
+UNKNOWN_TEXT_VALUES = {"", "unknown", "none", "null", "n/a", "na", "待确认", "未知"}
+
+
+def _is_unknown_text(value: object) -> bool:
+    return str(value or "").strip().lower() in UNKNOWN_TEXT_VALUES
+
+
+def _display_license(value: object) -> str:
+    text = str(value or "").strip()
+    return "未声明" if _is_unknown_text(text) else text
+
+
+def _looks_like_version_range(value: object) -> bool:
+    text = str(value or "").strip().lower()
+    return bool(
+        text.startswith(("^", "~", ">", "<", ">=", "<=", "~=", "[", "("))
+        or "," in text
+        or "*" in text
+        or text.endswith(".+")
+        or " - " in text
+        or text in {"latest", "latest.release", "latest.integration", "snapshot"}
+        or text.endswith("-snapshot")
+    )
+
+
+def _display_component_version(component: Component) -> str:
+    current = str(component.package_version or "").strip()
+    if _is_unknown_text(current) or not component.version_detected:
+        return "未声明版本"
+    declared = str(component.declared_version or "").strip()
+    normalized = str(component.version_normalized or "").strip()
+    if _looks_like_version_range(current) and not _is_unknown_text(normalized) and normalized != current:
+        return f"{normalized}（声明：{current}）"
+    if declared and declared != current and _looks_like_version_range(declared):
+        return f"{current}（声明：{declared}）"
+    return current
 
 
 def _project_data(db: Session, project_id: int) -> tuple[Project, list[Component], list[VulnerabilityRecord]]:
@@ -452,12 +488,14 @@ def _component_age(snapshot: RiskMonitorSnapshot | None) -> str:
 
 def _is_latest(snapshot: RiskMonitorSnapshot | None) -> str:
     if not snapshot or not snapshot.latest_version:
-        return "待确认"
+        return "未执行版本监测" if not snapshot else "未获取到最新版本"
     return "否" if snapshot.update_available else "是"
 
 
 def _latest_version(snapshot: RiskMonitorSnapshot | None) -> str:
-    return snapshot.latest_version if snapshot and snapshot.latest_version else "待确认"
+    if not snapshot:
+        return "未执行版本监测"
+    return snapshot.latest_version if snapshot.latest_version else "未获取到最新版本"
 
 
 def _component_vulnerabilities(vulnerabilities: list[VulnerabilityRecord]) -> dict[int, list[VulnerabilityRecord]]:
@@ -496,7 +534,7 @@ def _recommended_version(component: Component, items: list[VulnerabilityRecord],
         return fixed
     if snapshot and snapshot.latest_version:
         return snapshot.latest_version
-    return "待确认"
+    return "暂无推荐"
 
 
 def _exploit_difficulty(item: VulnerabilityRecord) -> str:
@@ -536,9 +574,9 @@ def _component_rows(components: list[Component], limit: int = 120) -> list[list[
             [
                 index,
                 component.package_name,
-                component.package_version or "unknown",
+                _display_component_version(component),
                 component.ecosystem or "unknown",
-                component.license_name or "未知",
+                _display_license(component.license_name),
                 component.confidence_level or "High",
             ]
             for index, component in enumerate(components[:limit], start=1)
@@ -683,15 +721,15 @@ def _write_docx(
         _paragraph("5 人员安排", style="Heading1"),
         _table([["编号", "参与人员", "负责内容"], ["1", metadata["auditor_name"], "组件识别、SBOM 生成、漏洞匹配、报告编制"], ["2", metadata["reviewer_name"], "风险确认、报告审查、整改建议"], ["3", metadata["quality_reviewer_name"], "质量审核"]]),
         _paragraph("6 组件提交活跃度统计", style="Heading1"),
-        _table([["序号", "组件名称", "当前版本", "发布日期", "活跃度", "活跃度参考说明"], *[[index, item.package_name, item.package_version, _version_date(version_cache.get(item.id)), "待确认" if not version_cache.get(item.id) else "正常", f"组件年龄：{_component_age(version_cache.get(item.id))}"] for index, item in enumerate(components[:20], start=1)]]),
+        _table([["序号", "组件名称", "当前版本", "发布日期", "活跃度", "活跃度参考说明"], *[[index, item.package_name, _display_component_version(item), _version_date(version_cache.get(item.id)), "未执行版本监测" if not version_cache.get(item.id) else "正常", f"组件年龄：{_component_age(version_cache.get(item.id))}"] for index, item in enumerate(components[:20], start=1)]]),
         _paragraph("7 风险组件最新版本", style="Heading1"),
         _table([["序号", "组件名称", "当前版本", "最新版本", "当前版本是否最新版本"], *[[index, item.package_name, item.package_version, _latest_version(version_cache.get(item.component_id or 0)), _is_latest(version_cache.get(item.component_id or 0))] for index, item in enumerate(priority_items[:20], start=1)]] or [["序号", "组件名称", "当前版本", "最新版本", "当前版本是否最新版本"], ["-", "暂无", "-", "-", "待确认"]]),
         _paragraph("8 风险组件版本年龄统计", style="Heading1"),
-        _table([["序号", "组件名称", "当前版本", "发布日期", "组件版本年龄"], *[[index, item.package_name, item.package_version, _version_date(version_cache.get(item.id)), _component_age(version_cache.get(item.id))] for index, item in enumerate(components[:20], start=1)]]),
+        _table([["序号", "组件名称", "当前版本", "发布日期", "组件版本年龄"], *[[index, item.package_name, _display_component_version(item), _version_date(version_cache.get(item.id)), _component_age(version_cache.get(item.id))] for index, item in enumerate(components[:20], start=1)]]),
         _paragraph("9 版权许可协议风险提示", style="Heading1"),
         _paragraph("许可证风险需结合组件使用方式、分发方式、修改情况和企业合规要求进行复核。下表列出本次识别到的组件许可证信息。"),
-        _table([["许可协议简称", "许可协议全称", "风险说明", "使用范围", "版权/使用条件", "使用限制", "是否兼容GPL"], *[[license_policy(name).short_name if license_policy(name).short_name != "待确认" else name, license_policy(name).full_name, license_policy(name).risk_note, license_policy(name).scope, license_policy(name).conditions, license_policy(name).limitations, license_policy(name).gpl_compatible] for name in sorted({item.license_name or "unknown" for item in components})]]),
-        _table([["序号", "组件名称", "当前版本", "许可协议"], *[[index, item.package_name, item.package_version, item.license_name or "未知"] for index, item in enumerate(components[:80], start=1)]]),
+        _table([["许可协议简称", "许可协议全称", "风险说明", "使用范围", "版权/使用条件", "使用限制", "是否兼容GPL"], *[[license_policy(name).short_name if license_policy(name).short_name != "待确认" else name, license_policy(name).full_name, license_policy(name).risk_note, license_policy(name).scope, license_policy(name).conditions, license_policy(name).limitations, license_policy(name).gpl_compatible] for name in sorted({_display_license(item.license_name) for item in components})]]),
+        _table([["序号", "组件名称", "当前版本", "许可协议"], *[[index, item.package_name, _display_component_version(item), _display_license(item.license_name)] for index, item in enumerate(components[:80], start=1)]]),
         _paragraph("10 组件安全审计结果汇总", style="Heading1"),
         _paragraph("本次扫描结论摘要", style="Heading2"),
         _paragraph(_natural_summary(project, components, vulnerabilities)),
@@ -866,13 +904,13 @@ def _write_xlsx_report(
         asset_sheet.append(
             [
                 component.package_name,
-                component.package_version,
+                _display_component_version(component),
                 _is_latest(snapshot),
                 _latest_version(snapshot),
                 component.group_id or component.normalized_name or component.package_name,
                 _component_type(component),
                 component.source_file or component.source_path,
-                component.license_name or "未知",
+                _display_license(component.license_name),
                 _component_risk_label(items),
                 _vulnerability_distribution(items),
                 _dependency_label(component.dependency_type),
@@ -906,7 +944,7 @@ def _write_xlsx_report(
     license_sheet = workbook.create_sheet("许可协议信息")
     license_sheet.append(["许可协议信息", None])
     license_sheet.append(["许可协议简称", "许可协议全称", "风险说明", "使用范围", "使用条件", "使用限制", "是否兼容GPL", "OSI认证", "FSF认证", "风险等级", "许可描述"])
-    seen_licenses = sorted({component.license_name or "unknown" for component in components})
+    seen_licenses = sorted({_display_license(component.license_name) for component in components})
     for name in seen_licenses:
         policy = license_policy(name)
         license_sheet.append(

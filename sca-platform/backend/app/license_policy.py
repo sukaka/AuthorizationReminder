@@ -19,17 +19,17 @@ class LicensePolicy:
 
 
 UNKNOWN_LICENSE = LicensePolicy(
-    short_name="待确认",
-    full_name="待确认",
-    risk_note="许可证信息未命中内置规则，建议人工复核。",
-    scope="待确认",
-    conditions="待确认",
-    limitations="待确认",
-    gpl_compatible="待确认",
-    osi_approved="待确认",
-    fsf_approved="待确认",
-    risk_level="待确认",
-    description="当前版本仅内置常见开源许可证规则，未命中的许可证不自动推断风险。",
+    short_name="未声明",
+    full_name="未声明或无法自动识别",
+    risk_note="源码或元数据中未提供可识别许可证信息，建议人工复核。",
+    scope="需人工确认",
+    conditions="需人工确认",
+    limitations="需人工确认",
+    gpl_compatible="需人工确认",
+    osi_approved="需人工确认",
+    fsf_approved="需人工确认",
+    risk_level="需人工确认",
+    description="当前组件未命中内置常见开源许可证规则，平台不自动推断许可证风险。",
 )
 
 LICENSE_POLICIES = {
@@ -52,7 +52,8 @@ LICENSE_POLICIES = {
 
 
 def normalize_license_name(value: str) -> str:
-    return (value or "unknown").strip()
+    text = (value or "").strip()
+    return "未声明" if text.lower() in {"", "unknown", "none", "null", "n/a", "na", "待确认", "未知"} else text
 
 
 def license_policy(value: str) -> LicensePolicy:
@@ -76,4 +77,18 @@ def license_policy(value: str) -> LicensePolicy:
         return LICENSE_POLICIES["gpl-3.0"] if "3" in key else LICENSE_POLICIES["gpl-2.0"]
     if "public domain" in key:
         return LICENSE_POLICIES["public domain"]
+    if text != UNKNOWN_LICENSE.short_name:
+        return LicensePolicy(
+            text,
+            f"{text}（未命中内置规则）",
+            UNKNOWN_LICENSE.risk_note,
+            UNKNOWN_LICENSE.scope,
+            UNKNOWN_LICENSE.conditions,
+            UNKNOWN_LICENSE.limitations,
+            UNKNOWN_LICENSE.gpl_compatible,
+            UNKNOWN_LICENSE.osi_approved,
+            UNKNOWN_LICENSE.fsf_approved,
+            UNKNOWN_LICENSE.risk_level,
+            UNKNOWN_LICENSE.description,
+        )
     return UNKNOWN_LICENSE
