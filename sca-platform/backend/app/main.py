@@ -29,9 +29,14 @@ from .models import (
     DependencyTrackProject,
     ImageScan,
     ImageScanFinding,
+    MergedComponent,
+    MergedVulnerability,
+    NormalizedComponent,
+    NormalizedVulnerability,
     Project,
     BackupJob,
     DevopsScanEvent,
+    RawScanArtifact,
     RemediationEvent,
     RemediationTicket,
     RiskAlert,
@@ -41,10 +46,13 @@ from .models import (
     ReportExport,
     SbomDocument,
     ScanLog,
+    ScannerTaskResult,
     ScanTask,
     SystemSetting,
     UploadFileRecord,
+    UploadLog,
     VulnerabilityRecord,
+    VulnerabilityQueryLog,
     VulnerabilityWhitelist,
 )
 from .schemas import (
@@ -638,6 +646,118 @@ async def list_projects(
 ) -> list[ProjectListItem]:
     await require_action("sca:read", request, user, settings)
     return list(db.scalars(select(Project).order_by(Project.created_at.desc())).all())
+
+
+def _remove_path(path_text: str, seen: set[str]) -> int:
+    text = str(path_text or "").strip()
+    if not text:
+        return 0
+    path = Path(text)
+    key = str(path)
+    if key in seen:
+        return 0
+    seen.add(key)
+    try:
+        if path.is_dir():
+            shutil.rmtree(path)
+            return 1
+        if path.exists() or path.is_symlink():
+            path.unlink()
+            return 1
+    except FileNotFoundError:
+        return 0
+    return 0
+
+
+def _delete_project_artifacts(db: Session, project_id: int) -> int:
+    seen: set[str] = set()
+    removed = 0
+    upload_root = Path(settings.upload_root)
+    for record in db.scalars(select(UploadFileRecord).where(UploadFileRecord.project_id == project_id)).all():
+        removed += _remove_path(record.storage_path, seen)
+        removed += _remove_path(str(upload_root / "chunks" / record.upload_id), seen)
+        removed += _remove_path(str(upload_root / "extracted" / record.upload_id), seen)
+    for report in db.scalars(select(ReportExport).where(ReportExport.project_id == project_id)).all():
+        removed += _remove_path(report.storage_path, seen)
+    for document in db.scalars(select(SbomDocument).where(SbomDocument.project_id == project_id)).all():
+        removed += _remove_path(document.storage_path, seen)
+    for task in db.scalars(select(ScanTask).where(ScanTask.project_id == project_id)).all():
+        removed += _remove_path(task.raw_result_path, seen)
+        removed += _remove_path(task.normalized_result_path, seen)
+    for result in db.scalars(select(ScannerTaskResult).where(ScannerTaskResult.project_id == project_id)).all():
+        for path in [
+            result.raw_result_path,
+            result.normalized_result_path,
+            result.html_report_path,
+            result.stdout_log_path,
+            result.stderr_log_path,
+        ]:
+            removed += _remove_path(path, seen)
+    for artifact in db.scalars(select(RawScanArtifact).where(RawScanArtifact.project_id == project_id)).all():
+        removed += _remove_path(artifact.file_path, seen)
+    return removed
+
+
+def _delete_project_records(db: Session, project_id: int) -> None:
+    scan_ids = list(db.scalars(select(ScanTask.id).where(ScanTask.project_id == project_id)).all())
+    upload_ids = list(db.scalars(select(UploadFileRecord.id).where(UploadFileRecord.project_id == project_id)).all())
+    ticket_ids = list(db.scalars(select(RemediationTicket.id).where(RemediationTicket.project_id == project_id)).all())
+    if ticket_ids:
+        db.query(RemediationEvent).filter(RemediationEvent.ticket_id.in_(ticket_ids)).delete(synchronize_session=False)
+    if scan_ids:
+        db.query(ScanLog).filter(ScanLog.scan_task_id.in_(scan_ids)).delete(synchronize_session=False)
+    if upload_ids:
+        db.query(UploadLog).filter(UploadLog.upload_file_id.in_(upload_ids)).delete(synchronize_session=False)
+    for model in [
+        DevopsScanEvent,
+        MergedVulnerability,
+        MergedComponent,
+        NormalizedVulnerability,
+        NormalizedComponent,
+        RawScanArtifact,
+        ScannerTaskResult,
+        DependencyTrackProject,
+        VulnerabilityWhitelist,
+        RemediationTicket,
+        AiTriageResult,
+        RiskAlert,
+        RiskChangeRecord,
+        RiskMonitorSnapshot,
+        SbomDocument,
+        ReportExport,
+        VulnerabilityQueryLog,
+        VulnerabilityRecord,
+        ComponentDependency,
+        Component,
+        ScanTask,
+        UploadFileRecord,
+        AnalysisProject,
+    ]:
+        if model is DependencyTrackProject:
+            column = "local_project_id"
+        elif model is AnalysisProject:
+            column = "id"
+        else:
+            column = "project_id"
+        db.query(model).filter(getattr(model, column) == project_id).delete(synchronize_session=False)
+    project = db.get(Project, project_id)
+    if project:
+        db.delete(project)
+
+
+@app.delete("/api/sca/projects/{project_id}", tags=["sca"])
+async def delete_project(
+    request: Request,
+    project_id: int,
+    user: Annotated[UserPayload, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> dict[str, int | str]:
+    await require_action("sca:write", request, user, settings)
+    _ensure_project_exists(db, project_id)
+    removed_files = _delete_project_artifacts(db, project_id)
+    _delete_project_records(db, project_id)
+    db.commit()
+    return {"status": "deleted", "project_id": project_id, "removed_files": removed_files}
 
 
 @app.get("/api/sca/projects/{project_id}/components", response_model=list[ComponentOut], tags=["sca"])

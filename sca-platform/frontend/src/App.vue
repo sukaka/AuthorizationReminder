@@ -115,9 +115,10 @@
             <el-table-column prop="name" label="项目名称" min-width="160" />
             <el-table-column prop="status" label="状态" width="120" />
             <el-table-column prop="scan_note" label="扫描备注" min-width="180" show-overflow-tooltip />
-            <el-table-column label="操作" width="110">
+            <el-table-column label="操作" width="180">
               <template #default="{ row }">
-                <el-button text type="primary" @click="openProject(row)">查看依赖</el-button>
+                <el-button text type="primary" :icon="Connection" @click="openProject(row)">查看依赖</el-button>
+                <el-button text type="danger" :icon="Delete" :loading="deletingProjectId === row.id" @click="deleteProject(row)">删除</el-button>
               </template>
             </el-table-column>
           </el-table>
@@ -1093,7 +1094,7 @@
 
 <script setup>
 import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
-import { Bell, Connection, DataAnalysis, Document, Files, Grid, MagicStick, Refresh, Search, Setting, Share, UploadFilled, WarningFilled } from '@element-plus/icons-vue'
+import { Bell, Connection, DataAnalysis, Delete, Document, Files, Grid, MagicStick, Refresh, Search, Setting, Share, UploadFilled, WarningFilled } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { apiUrl, requestJson, resumableUploadWithProgress, uploadArchiveWithProgress, uploadImageTarWithProgress } from './api'
 
@@ -1108,6 +1109,7 @@ const imageScanning = ref(false)
 const monitorRunning = ref(false)
 const aiAnalyzing = ref(false)
 const systemConfigSaving = ref(false)
+const deletingProjectId = ref(null)
 const uploadProgress = ref(0)
 const imageUploadProgress = ref(0)
 const selectedFile = ref(null)
@@ -1549,11 +1551,66 @@ const loadOverview = async () => {
   }
 }
 
+const clearProjectDetails = () => {
+  components.value = []
+  dependencyTree.value = []
+  scanLogs.value = []
+  scanTasks.value = []
+  vulnerabilities.value = []
+  vulnerabilityTrend.value = []
+  reports.value = []
+  sboms.value = []
+  riskSnapshots.value = []
+  riskAlerts.value = []
+  riskChanges.value = []
+  riskTrend.value = []
+  aiResults.value = []
+  remediationTickets.value = []
+  whitelistItems.value = []
+  selectedVulnerability.value = null
+  vulnerabilityDrawerVisible.value = false
+  vulnerabilityHistory.value = []
+  Object.assign(vulnerabilityStats, {
+    total: 0,
+    by_severity: { critical: 0, high: 0, medium: 0, low: 0, unknown: 0 },
+    poc_count: 0,
+    exploited_count: 0,
+    average_cvss: 0,
+  })
+  Object.assign(scanCompleteness, {
+    project_id: 0,
+    has_standard_manifest: false,
+    scan_mode: '',
+    component_count: 0,
+    high_confidence_count: 0,
+    medium_confidence_count: 0,
+    low_confidence_count: 0,
+    unknown_version_count: 0,
+    manual_confirm_count: 0,
+    fallback_enabled: false,
+    message: '',
+    suggestions: [],
+  })
+  Object.assign(dependencyTrackStatus, {
+    local_project_id: 0,
+    dependency_track_project_uuid: '',
+    dependency_track_project_name: '',
+    dependency_track_project_version: '',
+    bom_uploaded_at: '',
+    last_fetch_at: '',
+    last_metrics_json: '{}',
+    last_status: 'not_linked',
+  })
+}
+
 const loadProjects = async () => {
   projects.value = (await requestJson('/api/sca/projects')) || []
-  if (!selectedProjectId.value && projects.value.length) {
+  if (selectedProjectId.value && !projects.value.some((project) => project.id === selectedProjectId.value)) {
+    selectedProjectId.value = projects.value[0]?.id || null
+  } else if (!selectedProjectId.value && projects.value.length) {
     selectedProjectId.value = projects.value[0].id
   }
+  if (!selectedProjectId.value) clearProjectDetails()
 }
 
 const loadUploads = async () => {
@@ -1682,6 +1739,37 @@ const deleteUpload = async (row) => {
   await requestJson(`/api/sca/uploads/${row.id}`, { method: 'DELETE' })
   ElMessage.success('已删除')
   await refreshAll()
+}
+
+const deleteProject = async (row) => {
+  try {
+    await ElMessageBox.confirm(
+      `确认从整个 SCA 系统中删除项目“${row.name}”？该操作会删除项目、上传文件、依赖、漏洞、扫描任务、报告、SBOM、监测、AI 降噪和整改记录，且不可恢复。`,
+      '全系统删除项目',
+      {
+        type: 'warning',
+        confirmButtonText: '全系统删除',
+        cancelButtonText: '取消',
+        confirmButtonClass: 'el-button--danger',
+      },
+    )
+    deletingProjectId.value = row.id
+    const deletedSelected = selectedProjectId.value === row.id
+    if (deletedSelected) {
+      selectedProjectId.value = null
+      clearProjectDetails()
+    }
+    await requestJson(`/api/sca/projects/${row.id}`, { method: 'DELETE' })
+    ElMessage.success('项目已从整个系统删除')
+    await Promise.all([loadOverview(), loadProjects(), loadUploads()])
+    await loadProjectDetails()
+  } catch (err) {
+    if (err !== 'cancel') {
+      ElMessage.error(err?.message || '删除项目失败')
+    }
+  } finally {
+    deletingProjectId.value = null
+  }
 }
 
 const selectProject = async (projectId) => {
