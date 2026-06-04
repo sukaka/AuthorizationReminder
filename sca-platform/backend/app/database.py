@@ -75,6 +75,10 @@ def run_compat_migrations() -> None:
         "component_file_size": "BIGINT NOT NULL DEFAULT 0",
         "component_file_path": "VARCHAR(1024) NOT NULL DEFAULT ''",
         "component_file_name": "VARCHAR(255) NOT NULL DEFAULT ''",
+        "license_raw": "VARCHAR(240) NOT NULL DEFAULT ''",
+        "license_source": "VARCHAR(80) NOT NULL DEFAULT ''",
+        "license_confidence": "FLOAT NOT NULL DEFAULT 0",
+        "license_needs_review": "BOOLEAN NOT NULL DEFAULT FALSE",
     }
     scan_task_additions = {
         "parent_task_id": "INTEGER",

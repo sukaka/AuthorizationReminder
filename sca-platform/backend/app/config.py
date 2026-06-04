@@ -7,7 +7,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     app_name: str = "聚信软件成分分析平台"
     app_env: str = "dev"
-    app_version: str = "0.1.0"
+    app_version: str = "5.62.0"
     database_url: str = "sqlite:///./sca-dev.db"
     redis_url: str = "redis://localhost:6379/0"
     celery_broker_url: str = "redis://localhost:6379/1"
@@ -61,9 +61,12 @@ class Settings(BaseSettings):
     risk_monitor_interval_seconds: int = 6 * 60 * 60
     github_api_url: str = "https://api.github.com"
     maven_search_url: str = "https://search.maven.org/solrsearch/select"
+    maven_repository_url: str = "https://repo1.maven.org/maven2"
     npm_registry_url: str = "https://registry.npmjs.org"
     pypi_api_url: str = "https://pypi.org/pypi"
     go_proxy_url: str = "https://proxy.golang.org"
+    license_enrichment_enabled: bool = True
+    license_enrichment_timeout_ms: int = 5000
     eol_api_url: str = "https://endoflife.date/api"
     notification_email_enabled: bool = False
     notification_email_to: str = ""

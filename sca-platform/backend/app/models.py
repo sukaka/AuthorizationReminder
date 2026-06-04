@@ -67,6 +67,10 @@ class Component(Base):
     component_file_path: Mapped[str] = mapped_column(String(1024), nullable=False, default="")
     component_file_name: Mapped[str] = mapped_column(String(255), nullable=False, default="")
     license_name: Mapped[str] = mapped_column(String(120), nullable=False, default="unknown")
+    license_raw: Mapped[str] = mapped_column(String(240), nullable=False, default="")
+    license_source: Mapped[str] = mapped_column(String(80), nullable=False, default="")
+    license_confidence: Mapped[float] = mapped_column(Float, nullable=False, default=0)
+    license_needs_review: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     vulnerability_status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
     note: Mapped[str] = mapped_column(Text, nullable=False, default="")
 
@@ -206,6 +210,22 @@ class DependencyTrackProject(Base):
     last_fetch_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_metrics_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
     last_status: Mapped[str] = mapped_column(String(40), nullable=False, default="pending")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+
+
+class PackageLicenseCache(Base):
+    __tablename__ = "package_license_cache"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    ecosystem: Mapped[str] = mapped_column(String(40), nullable=False, index=True)
+    package_name: Mapped[str] = mapped_column(String(240), nullable=False, index=True)
+    package_version: Mapped[str] = mapped_column(String(120), nullable=False, default="")
+    license_name: Mapped[str] = mapped_column(String(120), nullable=False, default="")
+    license_raw: Mapped[str] = mapped_column(String(240), nullable=False, default="")
+    license_source: Mapped[str] = mapped_column(String(80), nullable=False, default="")
+    license_confidence: Mapped[float] = mapped_column(Float, nullable=False, default=0)
+    license_needs_review: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
 

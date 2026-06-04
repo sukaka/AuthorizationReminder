@@ -5,11 +5,16 @@ from collections import Counter, defaultdict
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from .license_policy import license_policy, normalize_license_name
 from .models import Component, ComponentDependency, Project, RiskMonitorSnapshot, VulnerabilityRecord
 
 
 SEVERITY_SCORE = {"critical": 5, "high": 4, "medium": 3, "low": 2, "unknown": 1}
-RISKY_LICENSES = {"GPL-2.0", "GPL-3.0", "AGPL-3.0", "LGPL-3.0", "unknown"}
+
+
+def _is_risky_license(value: str) -> bool:
+    policy = license_policy(value)
+    return policy.risk_level in {"中风险", "高风险", "需人工确认"}
 
 
 def highest_severity(values: list[str]) -> str:
@@ -32,7 +37,7 @@ def asset_dashboard(db: Session) -> dict:
     by_severity = Counter(vulnerability.severity for vulnerability in confirmed)
     risk_distribution = Counter(vulnerability.risk_priority or "Review" for vulnerability in confirmed)
     eol_distribution = Counter(snapshot.eol_status or "unknown" for snapshot in snapshots)
-    license_distribution = Counter(component.license_name or "unknown" for component in components)
+    license_distribution = Counter(normalize_license_name(component.license_name or "unknown") for component in components)
     project_risk = []
     for project in projects:
         project_vulnerabilities = [item for item in confirmed if item.project_id == project.id]
@@ -52,7 +57,7 @@ def asset_dashboard(db: Session) -> dict:
         "vulnerability_total": len(vulnerabilities),
         "high_risk_total": sum(1 for item in confirmed if item.severity in {"critical", "high"}),
         "eol_total": sum(1 for item in snapshots if item.eol_status in {"eol", "review"}),
-        "license_risk_total": sum(1 for item in components if item.license_name in RISKY_LICENSES),
+        "license_risk_total": sum(1 for item in components if _is_risky_license(item.license_name)),
         "by_ecosystem": dict(by_ecosystem),
         "by_severity": dict(by_severity),
         "risk_distribution": dict(risk_distribution),
@@ -86,6 +91,9 @@ def asset_components(db: Session, search: str = "") -> list[dict]:
                 "project_names": set(),
                 "versions": set(),
                 "license_name": component.license_name,
+                "license_source": component.license_source,
+                "license_confidence": component.license_confidence,
+                "license_needs_review": component.license_needs_review,
                 "eol_status": "unknown",
             },
         )
@@ -110,6 +118,9 @@ def asset_components(db: Session, search: str = "") -> list[dict]:
                 "highest_severity": highest_severity([vulnerability.severity for vulnerability in vulns]),
                 "eol_status": item["eol_status"],
                 "license_name": item["license_name"],
+                "license_source": item["license_source"],
+                "license_confidence": item["license_confidence"],
+                "license_needs_review": item["license_needs_review"],
                 "risk_score": SEVERITY_SCORE.get(highest_severity([vulnerability.severity for vulnerability in vulns]), 0) * 20 + len(vulns) * 3,
             }
         )

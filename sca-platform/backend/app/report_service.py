@@ -13,7 +13,7 @@ from openpyxl import Workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
-from .license_policy import license_policy
+from .license_policy import license_policy, normalize_license_name
 from .models import Component, Project, RiskMonitorSnapshot, ScanTask, UploadFileRecord, VulnerabilityRecord
 
 
@@ -80,8 +80,70 @@ def _is_unknown_text(value: object) -> bool:
 
 
 def _display_license(value: object) -> str:
-    text = str(value or "").strip()
+    text = normalize_license_name(str(value or "").strip())
     return "未声明" if _is_unknown_text(text) else text
+
+
+def _license_source_label(value: object) -> str:
+    source = str(value or "").strip()
+    mapping = {
+        "npm_registry": "npm 注册表",
+        "pypi_registry": "PyPI 注册表",
+        "maven_pom": "Maven POM",
+        "package-lock.json": "package-lock.json",
+        "composer.lock": "composer.lock",
+        "METADATA": "Python METADATA",
+    }
+    return mapping.get(source, source or "未识别")
+
+
+def _component_examples(names: list[str], limit: int = 12) -> str:
+    unique = sorted(dict.fromkeys(name for name in names if name))
+    if len(unique) <= limit:
+        return "、".join(unique)
+    return "、".join(unique[:limit]) + f" 等 {len(unique)} 个"
+
+
+def _license_confidence(values: list[float]) -> str:
+    usable = [float(value) for value in values if value]
+    if not usable:
+        return "需人工确认"
+    return f"{round(sum(usable) / len(usable) * 100)}%"
+
+
+def _license_rows(components: list[Component]) -> list[list[object]]:
+    grouped: dict[str, dict[str, object]] = {}
+    for component in components:
+        name = _display_license(component.license_name)
+        item = grouped.setdefault(name, {"components": [], "sources": [], "confidence": []})
+        item["components"].append(component.package_name)
+        item["sources"].append(component.license_source)
+        item["confidence"].append(component.license_confidence)
+    rows: list[list[object]] = []
+    for name in sorted(grouped, key=lambda value: (value == "未声明", value)):
+        policy = license_policy(name)
+        item = grouped[name]
+        sources = sorted(dict.fromkeys(_license_source_label(source) for source in item["sources"]))
+        rows.append(
+            [
+                policy.short_name,
+                policy.full_name,
+                policy.risk_note,
+                policy.scope,
+                policy.conditions,
+                policy.limitations,
+                policy.gpl_compatible,
+                policy.osi_approved,
+                policy.fsf_approved,
+                policy.risk_level,
+                policy.description,
+                len(item["components"]),
+                _component_examples(item["components"]),
+                "、".join(sources) if sources else "未识别",
+                _license_confidence(item["confidence"]),
+            ]
+        )
+    return rows
 
 
 def _looks_like_version_range(value: object) -> bool:
@@ -954,25 +1016,9 @@ def _write_xlsx_report(
 
     license_sheet = workbook.create_sheet("许可协议信息")
     license_sheet.append(["许可协议信息", None])
-    license_sheet.append(["许可协议简称", "许可协议全称", "风险说明", "使用范围", "使用条件", "使用限制", "是否兼容GPL", "OSI认证", "FSF认证", "风险等级", "许可描述"])
-    seen_licenses = sorted({_display_license(component.license_name) for component in components})
-    for name in seen_licenses:
-        policy = license_policy(name)
-        license_sheet.append(
-            [
-                policy.short_name if policy.short_name != "待确认" else name,
-                policy.full_name,
-                policy.risk_note,
-                policy.scope,
-                policy.conditions,
-                policy.limitations,
-                policy.gpl_compatible,
-                policy.osi_approved,
-                policy.fsf_approved,
-                policy.risk_level,
-                policy.description,
-            ]
-        )
+    license_sheet.append(["许可协议简称", "许可协议全称", "风险说明", "使用范围", "使用条件", "使用限制", "是否兼容GPL", "OSI认证", "FSF认证", "风险等级", "许可描述", "组件数量", "涉及组件", "识别来源", "可信度"])
+    for row in _license_rows(components):
+        license_sheet.append(row)
     _style_workbook(workbook)
     workbook.save(path)
 

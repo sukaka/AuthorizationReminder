@@ -218,7 +218,7 @@ def test_dependency_parser_reads_license_metadata_from_lock_and_installed_packag
         encoding="utf-8",
     )
     (locked / "package-lock.json").write_text(
-        '{"packages":{"node_modules/lodash":{"version":"4.17.21","license":"MIT"}}}',
+        '{"packages":{"node_modules/lodash":{"version":"4.17.21","license":"Apache License 2.0"}}}',
         encoding="utf-8",
     )
 
@@ -242,7 +242,9 @@ def test_dependency_parser_reads_license_metadata_from_lock_and_installed_packag
     installed_result = parse_source_dependencies(installed)
     python_result = parse_source_dependencies(python)
 
-    assert locked_result.components[0].license_name == "MIT"
+    assert locked_result.components[0].license_name == "Apache-2.0"
+    assert locked_result.components[0].license_source == "package-lock.json"
+    assert locked_result.components[0].license_confidence >= 0.9
     assert installed_result.components[0].license_name == "WTFPL"
     assert python_result.components[0].license_name == "Apache-2.0"
 

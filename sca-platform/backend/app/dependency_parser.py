@@ -9,6 +9,8 @@ from hashlib import sha1, sha256
 from pathlib import Path
 from urllib.parse import quote
 
+from .license_policy import is_unknown_license, license_requires_review, normalize_license_name
+
 
 @dataclass
 class ParsedComponent:
@@ -48,6 +50,10 @@ class ParsedComponent:
     risk_explanation: str = ""
     fix_recommendation: str = ""
     license_name: str = ""
+    license_raw: str = ""
+    license_source: str = ""
+    license_confidence: float = 0
+    license_needs_review: bool = False
     sha1: str = ""
     sha256: str = ""
     file_size: int = 0
@@ -294,6 +300,14 @@ def _normalize_component(component: ParsedComponent) -> ParsedComponent:
     )
     component.need_manual_confirm = component.need_manual_confirm or component.need_manual_version_confirm or component.version == "unknown"
     component.confidence_level = component.confidence_level or _confidence_level(component.confidence_score, component.version)
+    raw_license = component.license_raw or component.license_name
+    component.license_raw = raw_license
+    component.license_name = normalize_license_name(raw_license)
+    if not component.license_source and not is_unknown_license(component.license_name):
+        component.license_source = component.evidence_file or component.source_file or component.source_path or component.detected_by
+    if not component.license_confidence and not is_unknown_license(component.license_name):
+        component.license_confidence = 0.92 if component.evidence_level in {"lock", "metadata"} else 0.72
+    component.license_needs_review = component.license_needs_review or license_requires_review(component.license_name)
     if component.ecosystem == "pypi":
         component.normalized_name = component.normalized_name or _normalize_pypi_name(component.name)
     else:
@@ -410,6 +424,9 @@ def _parse_package_lock(path: Path, root: Path, result: ParseResult) -> None:
                 declared_version=manifest_version,
                 resolved_version=version,
                 license_name=license_name,
+                license_raw=license_name,
+                license_source=source_path if license_name else "",
+                license_confidence=0.95 if license_name else 0,
             ),
         )
 
@@ -814,6 +831,9 @@ def _parse_node_modules_package(path: Path, root: Path, result: ParseResult) -> 
             declared_version=version,
             resolved_version=version,
             license_name=license_name,
+            license_raw=license_name,
+            license_source=rel if license_name else "",
+            license_confidence=0.9 if license_name else 0,
         ),
     )
 
@@ -863,6 +883,9 @@ def _parse_python_metadata(path: Path, root: Path, result: ParseResult) -> None:
             declared_version=version,
             resolved_version=version,
             license_name=license_name,
+            license_raw=license_name,
+            license_source=rel if license_name else "",
+            license_confidence=0.92 if license_name else 0,
         ),
     )
 
@@ -967,6 +990,9 @@ def _parse_composer_lock(path: Path, root: Path, result: ParseResult) -> None:
                     declared_version=version,
                     resolved_version=version,
                     license_name=license_name,
+                    license_raw=license_name,
+                    license_source=rel if license_name else "",
+                    license_confidence=0.9 if license_name else 0,
                 ),
             )
 

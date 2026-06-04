@@ -10,6 +10,7 @@ from sqlalchemy import delete
 from .config import get_settings
 from .database import SessionLocal, init_db
 from .dependency_parser import parse_source_dependencies
+from .license_enrichment_service import enrich_missing_component_licenses
 from .reachability_service import analyze_component_reachability
 from .models import (
     Component,
@@ -44,6 +45,7 @@ celery_app.conf.task_always_eager = settings.celery_task_always_eager
 celery_app.conf.task_routes = {
     "sca.scan_uploaded_file": {"queue": "scanner"},
     "sca.query_project_vulnerabilities": {"queue": "scanner"},
+    "sca.enrich_project_licenses": {"queue": "scanner"},
 }
 celery_app.conf.beat_schedule = {
     "sca-risk-monitor": {
@@ -95,6 +97,7 @@ PROJECT_SCAN_STEPS = [
     ("dependency_track_fetch_task", "dependency-track", settings.dependency_track_timeout),
     ("normalize_results_task", "juxin-normalizer", 600),
     ("merge_components_task", "juxin-merger", 600),
+    ("license_enrichment_task", "juxin-license", settings.license_enrichment_timeout_ms // 1000),
     ("merge_vulnerabilities_task", "juxin-merger", 600),
     ("ai_noise_reduction_task", "juxin-ai", settings.openai_timeout_ms // 1000),
     ("report_generate_task", "juxin-report", 600),
@@ -518,6 +521,10 @@ def scan_uploaded_file(scan_task_id: int) -> dict[str, int | str]:
                     component_file_path=item.file_path,
                     component_file_name=item.file_name,
                     license_name=item.license_name or "未声明",
+                    license_raw=item.license_raw,
+                    license_source=item.license_source,
+                    license_confidence=item.license_confidence,
+                    license_needs_review=item.license_needs_review,
                     vulnerability_status="pending",
                     note=record.scan_note,
                 )
@@ -545,6 +552,10 @@ def scan_uploaded_file(scan_task_id: int) -> dict[str, int | str]:
             _mark_parent(db, task, "running", 93, "标准化完成，正在合并组件")
             _mark_child(db, task.id, "merge_components_task", "completed", "组件合并完成", 100)
             _mark_parent(db, task, "running", 96, "组件合并完成")
+            if settings.celery_task_always_eager:
+                _mark_child(db, task.id, "license_enrichment_task", "skipped", "同步测试模式下跳过异步许可证补全", 100)
+            else:
+                _mark_child(db, task.id, "license_enrichment_task", "pending", "等待自动匹配许可协议", 0)
             _mark_child(db, task.id, "merge_vulnerabilities_task", "skipped", "等待漏洞查询后合并", 100)
             for task_type in [
                 "ai_noise_reduction_task",
@@ -558,6 +569,12 @@ def scan_uploaded_file(scan_task_id: int) -> dict[str, int | str]:
             record.status = "scanned"
             db.add(ScanLog(scan_task_id=task.id, level="info", message=task.summary))
             db.commit()
+            if not settings.celery_task_always_eager:
+                try:
+                    enrich_project_licenses.delay(record.project_id, task.id)
+                except Exception as exc:
+                    db.add(ScanLog(scan_task_id=task.id, level="warning", message=f"许可证补全任务触发失败：{exc}"))
+                    db.commit()
             try:
                 monitor_project_versions.delay(record.project_id)
             except Exception as exc:
@@ -570,6 +587,30 @@ def scan_uploaded_file(scan_task_id: int) -> dict[str, int | str]:
             db.add(ScanLog(scan_task_id=task.id, level="error", message=str(exc)))
             db.commit()
             return {"status": "failed", "components": 0}
+
+
+@celery_app.task(name="sca.enrich_project_licenses")
+def enrich_project_licenses(project_id: int, parent_task_id: int | None = None) -> dict[str, int | str]:
+    init_db()
+    with SessionLocal() as db:
+        if parent_task_id:
+            _mark_child(db, parent_task_id, "license_enrichment_task", "running", "正在自动匹配许可协议", 10)
+            db.add(ScanLog(scan_task_id=parent_task_id, level="info", message="开始自动匹配许可协议信息"))
+            db.commit()
+        try:
+            stats = enrich_missing_component_licenses(db, project_id)
+            if parent_task_id:
+                summary = f"许可证匹配完成：候选 {stats['total']} 个，更新 {stats['updated']} 个，缓存命中 {stats['cached']} 个，失败 {stats['failed']} 个"
+                _mark_child(db, parent_task_id, "license_enrichment_task", "completed", summary, 100)
+                db.add(ScanLog(scan_task_id=parent_task_id, level="info", message=summary))
+            db.commit()
+            return {"status": "success", **stats}
+        except Exception as exc:
+            if parent_task_id:
+                _mark_child(db, parent_task_id, "license_enrichment_task", "failed", "许可证匹配失败", 100, str(exc))
+                db.add(ScanLog(scan_task_id=parent_task_id, level="error", message=f"许可证匹配失败：{exc}"))
+            db.commit()
+            return {"status": "failed", "total": 0, "updated": 0, "cached": 0, "failed": 1}
 
 
 @celery_app.task(name="sca.monitor_risks")

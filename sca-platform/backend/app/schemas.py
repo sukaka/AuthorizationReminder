@@ -54,6 +54,10 @@ class ComponentOut(BaseModel):
     component_file_path: str = ""
     component_file_name: str = ""
     license_name: str
+    license_raw: str = ""
+    license_source: str = ""
+    license_confidence: float = 0
+    license_needs_review: bool = False
     vulnerability_status: str
 
     model_config = ConfigDict(from_attributes=True)
@@ -534,6 +538,9 @@ class AssetComponentOut(BaseModel):
     highest_severity: str
     eol_status: str = "unknown"
     license_name: str = "unknown"
+    license_source: str = ""
+    license_confidence: float = 0
+    license_needs_review: bool = False
     risk_score: float = 0
 
 

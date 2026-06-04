@@ -319,8 +319,24 @@ def test_xlsx_report_matches_reference_workbook_with_metadata_and_license_policy
         row[:12] for row in sheets["资产漏洞信息"][1:]
     ]
     license_rows = sheets["许可协议信息"]
-    assert license_rows[1] == ["许可协议简称", "许可协议全称", "风险说明", "使用范围", "使用条件", "使用限制", "是否兼容GPL", "OSI认证", "FSF认证", "风险等级", "许可描述"]
-    assert any(row[0] == "MIT" and row[10] for row in license_rows)
+    assert license_rows[1] == [
+        "许可协议简称",
+        "许可协议全称",
+        "风险说明",
+        "使用范围",
+        "使用条件",
+        "使用限制",
+        "是否兼容GPL",
+        "OSI认证",
+        "FSF认证",
+        "风险等级",
+        "许可描述",
+        "组件数量",
+        "涉及组件",
+        "识别来源",
+        "可信度",
+    ]
+    assert any(row[0] == "MIT" and row[10] and row[11] == 1 and row[12] == "fastapi" for row in license_rows)
 
 
 def test_xlsx_report_uses_clear_labels_for_unmonitored_unknown_component_fields(monkeypatch, tmp_path):
@@ -421,6 +437,10 @@ def test_xlsx_report_uses_clear_labels_for_unmonitored_unknown_component_fields(
     assert "未声明" in license_names
     assert "WTFPL" in license_names
     assert "unknown" not in license_names
+    unknown_row = next(row for row in sheets["许可协议信息"][2:] if row[0] == "未声明")
+    assert unknown_row[11] == 2
+    assert "axios" in unknown_row[12]
+    assert "requests" in unknown_row[12]
 
 
 def test_xlsx_report_lists_review_vulnerabilities_in_asset_vulnerability_sheet(monkeypatch, tmp_path):
