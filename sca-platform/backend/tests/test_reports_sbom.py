@@ -314,10 +314,36 @@ def test_xlsx_report_matches_reference_workbook_with_metadata_and_license_policy
     assert ["无漏洞组件", 0] in sheets["审计概览"]
     assert sheets["审计资产列表"][0] == ["组件", "版本", "是否最新版本", "最新版本", "组ID", "组件类型", "组件路径", "许可证", "风险等级", "漏洞分布", "依赖关系", "推荐版本"]
     assert ["fastapi", "0.115.6", "否", "0.115.7", "fastapi", "开源组件", "requirements.txt", "MIT", "高危风险", "严重0；高危1；中危0；低危0", "直接引入", "0.115.7"] in sheets["审计资产列表"]
-    assert sheets["资产漏洞信息"][0][:12] == ["漏洞编号", "严重程度", "发布日期", "CWE", "项目名", "组件", "版本", "漏洞利用难度", "创建日期", "组ID", "版本日期", "组件年龄"]
+    assert sheets["资产漏洞信息"][0] == [
+        "漏洞编号",
+        "严重程度",
+        "发布日期",
+        "CWE",
+        "项目名",
+        "组件",
+        "版本",
+        "漏洞利用难度",
+        "创建日期",
+        "组ID",
+        "版本日期",
+        "组件年龄",
+        "活跃度",
+        "活跃度说明",
+        "漏洞描述",
+        "解决方案参考",
+        "补充信息",
+        "确认状态",
+        "可信度",
+    ]
     assert ["CVE-2024-9999", "高危风险", "2024-05-01", "CWE-79", "报告项目 v1.0", "fastapi", "0.115.6", "容易", "2026.06.04", "fastapi", "2024-12-01", "1.5年"] in [
         row[:12] for row in sheets["资产漏洞信息"][1:]
     ]
+    vulnerability_row = next(row for row in sheets["资产漏洞信息"][1:] if row[0] == "CVE-2024-9999")
+    assert vulnerability_row[12] == "活跃"
+    assert "0.115.7" in vulnerability_row[13]
+    assert vulnerability_row[14] == "高危漏洞示例"
+    assert "pip install fastapi==0.115.7" in vulnerability_row[15]
+    assert "高危且存在安全版本" in vulnerability_row[16]
     license_rows = sheets["许可协议信息"]
     assert license_rows[1] == [
         "许可协议简称",
@@ -465,7 +491,7 @@ def test_xlsx_report_lists_review_vulnerabilities_in_asset_vulnerability_sheet(m
     sheets = workbook_values(downloaded.content)
     rows = sheets["资产漏洞信息"]
 
-    assert rows[0][:13] == [
+    assert rows[0][:18] == [
         "漏洞编号",
         "严重程度",
         "发布日期",
@@ -478,9 +504,102 @@ def test_xlsx_report_lists_review_vulnerabilities_in_asset_vulnerability_sheet(m
         "组ID",
         "版本日期",
         "组件年龄",
+        "活跃度",
+        "活跃度说明",
+        "漏洞描述",
+        "解决方案参考",
+        "补充信息",
         "确认状态",
     ]
-    assert any(row[0] == "CVE-2024-9999" and row[12] == "待确认" for row in rows[1:])
+    assert any(row[0] == "CVE-2024-9999" and row[17] == "待确认" for row in rows[1:])
+
+
+def test_xlsx_vulnerability_sheet_uses_component_version_and_enriched_fields(monkeypatch, tmp_path):
+    client, _main, models, database = build_client(monkeypatch, tmp_path)
+    with client as test_client:
+        project_id = seed_project(database, models)
+        with database.SessionLocal() as db:
+            db.query(models.VulnerabilityRecord).filter_by(project_id=project_id).delete()
+            db.query(models.RiskMonitorSnapshot).filter_by(project_id=project_id).delete()
+            component = db.query(models.Component).filter_by(project_id=project_id, package_name="fastapi").one()
+            component.package_name = "axios"
+            component.package_version = "^0.21.1"
+            component.version_normalized = "0.21.1"
+            component.declared_version = "^0.21.1"
+            component.resolved_version = "0.21.1"
+            component.ecosystem = "npm"
+            component.normalized_name = "axios"
+            component.group_id = "axios"
+            component.source_file = "package.json"
+            component.version_detected = True
+            db.flush()
+            db.add(
+                models.VulnerabilityRecord(
+                    project_id=project_id,
+                    component_id=component.id,
+                    source="osv",
+                    advisory_id="GHSA-demo-axios",
+                    cve_id="CVE-2024-12345",
+                    package_name="axios",
+                    package_version="unknown",
+                    ecosystem="npm",
+                    cvss_score=7.5,
+                    severity="high",
+                    description="Axios 请求处理存在安全缺陷，攻击者可能绕过校验。",
+                    fixed_version="0.21.4",
+                    published_at_text="2024-03-20T00:00:00Z",
+                    cwe_id="CWE-918",
+                    confidence_score=0.86,
+                    risk_priority="P1",
+                    risk_score=82,
+                    priority_reason="运行时依赖且存在安全版本",
+                    business_impact="公网接口代理请求可能受影响",
+                    reachability_status="reachable",
+                    reachability_evidence="src/api.js:2 import axios",
+                    call_path_summary="src/api.js -> axios",
+                    detail_url="https://osv.dev/vulnerability/GHSA-demo-axios",
+                )
+            )
+            db.add(
+                models.RiskMonitorSnapshot(
+                    project_id=project_id,
+                    component_id=component.id,
+                    component_name=component.package_name,
+                    current_version="0.21.1",
+                    latest_version="0.21.4",
+                    latest_source="npm",
+                    update_available=True,
+                    version_delta="patch",
+                    current_version_published_at="2020-12-01",
+                    component_age_years=5.5,
+                    eol_status="review",
+                    vulnerability_count=1,
+                    risk_level="high",
+                    recommendation="建议升级到 0.21.4",
+                )
+            )
+            db.commit()
+
+        created = test_client.post(
+            f"/api/sca/projects/{project_id}/reports",
+            json={"format": "xlsx", "metadata": report_metadata()},
+        )
+        report = created.json()
+        downloaded = test_client.get(f"/api/sca/reports/{report['id']}/download")
+
+    rows = workbook_values(downloaded.content)["资产漏洞信息"]
+    row = next(item for item in rows[1:] if item[0] == "CVE-2024-12345")
+
+    assert row[6] == "0.21.1（声明：^0.21.1）"
+    assert row[10] == "2020-12-01"
+    assert row[11] == "5.5年"
+    assert row[12] == "活跃"
+    assert "0.21.4" in row[13]
+    assert row[14] == "Axios 请求处理存在安全缺陷，攻击者可能绕过校验。"
+    assert "axios@0.21.4" in row[15]
+    assert "https://osv.dev/vulnerability/GHSA-demo-axios" in row[15]
+    assert "公网接口代理请求可能受影响" in row[16]
+    assert "src/api.js:2 import axios" in row[16]
 
 
 def test_sbom_export_uses_database_components_when_tool_is_unavailable(monkeypatch, tmp_path):

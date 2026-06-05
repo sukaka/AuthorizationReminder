@@ -172,6 +172,22 @@ def _display_component_version(component: Component) -> str:
     return current
 
 
+def _vulnerability_component_version(component: Component | None, vulnerability: VulnerabilityRecord) -> str:
+    if component:
+        display_version = _display_component_version(component)
+        if display_version != "未声明版本":
+            return display_version
+    vulnerability_version = str(vulnerability.package_version or "").strip()
+    if not _is_unknown_text(vulnerability_version):
+        return vulnerability_version
+    if component:
+        for candidate in (component.resolved_version, component.version_normalized, component.package_version):
+            text = str(candidate or "").strip()
+            if not _is_unknown_text(text):
+                return text
+    return "未声明版本"
+
+
 def _project_data(db: Session, project_id: int) -> tuple[Project, list[Component], list[VulnerabilityRecord]]:
     project = db.get(Project, project_id)
     if not project:
@@ -557,6 +573,43 @@ def _component_age(snapshot: RiskMonitorSnapshot | None) -> str:
     return "未知"
 
 
+def _component_activity(snapshot: RiskMonitorSnapshot | None) -> tuple[str, str]:
+    if not snapshot:
+        return ("待确认", "未执行版本监测，缺少版本发布日期、最新版本和维护状态信息。")
+    age = float(snapshot.component_age_years or 0)
+    eol_status = str(snapshot.eol_status or "").strip().lower()
+    eol_values = {"eol", "end_of_life", "deprecated", "unsupported", "retired", "abandoned", "inactive", "已停更", "停止维护"}
+    if eol_status in eol_values:
+        activity = "已停更"
+    elif snapshot.update_available:
+        activity = "活跃"
+    elif eol_status in {"review", "suspected", "待确认", "需复核"}:
+        activity = "待确认"
+    elif age >= 5:
+        activity = "已停更"
+    elif age >= 3:
+        activity = "低活跃"
+    else:
+        activity = "正常"
+
+    details = []
+    if snapshot.current_version_published_at:
+        details.append(f"版本发布日期：{snapshot.current_version_published_at}")
+    if age:
+        details.append(f"组件年龄：{age:.1f}年")
+    if snapshot.latest_version:
+        details.append(f"最新版本：{snapshot.latest_version}")
+    if snapshot.update_available:
+        details.append(f"存在可升级版本，版本差异：{snapshot.version_delta or '待确认'}")
+    if eol_status in {"review", "suspected", "待确认", "需复核"}:
+        details.append("生命周期状态需复核")
+    if snapshot.recommendation:
+        details.append(snapshot.recommendation)
+    if not details:
+        details.append("版本监测未返回可用于判断活跃度的详细信息。")
+    return activity, "；".join(details)
+
+
 def _is_latest(snapshot: RiskMonitorSnapshot | None) -> str:
     if not snapshot or not snapshot.latest_version:
         return "未执行版本监测" if not snapshot else "未获取到最新版本"
@@ -616,6 +669,52 @@ def _exploit_difficulty(item: VulnerabilityRecord) -> str:
     if item.cvss_score > 0:
         return "困难"
     return "未知"
+
+
+def _vulnerability_reference_url(item: VulnerabilityRecord) -> str:
+    if item.detail_url:
+        return item.detail_url
+    if item.advisory_id and item.source == "osv":
+        return f"https://osv.dev/vulnerability/{item.advisory_id}"
+    if item.cve_id:
+        return f"https://nvd.nist.gov/vuln/detail/{item.cve_id}"
+    return ""
+
+
+def _vulnerability_description(item: VulnerabilityRecord) -> str:
+    return item.description or item.priority_reason or item.business_impact or "暂无描述"
+
+
+def _vulnerability_solution_reference(component: Component | None, item: VulnerabilityRecord) -> str:
+    lines = [_fix_command(component, item)]
+    if item.fixed_version:
+        lines.append(f"修复版本：{item.fixed_version}")
+    reference_url = _vulnerability_reference_url(item)
+    if reference_url:
+        lines.append(f"参考链接：{reference_url}")
+    return "\n".join(lines)
+
+
+def _vulnerability_extra_info(item: VulnerabilityRecord) -> str:
+    details = []
+    if item.priority_reason:
+        details.append(f"优先级依据：{item.priority_reason}")
+    if item.business_impact:
+        details.append(f"业务影响：{item.business_impact}")
+    if item.match_reason:
+        details.append(f"匹配依据：{item.match_reason}")
+    if item.version_range:
+        details.append(f"影响版本范围：{item.version_range}")
+    reachability_parts = []
+    if item.reachability_status and item.reachability_status != "unknown":
+        reachability_parts.append(item.reachability_status)
+    if item.reachability_evidence:
+        reachability_parts.append(item.reachability_evidence)
+    if reachability_parts:
+        details.append("可达性：" + "；".join(reachability_parts))
+    if item.call_path_summary:
+        details.append(f"调用路径：{item.call_path_summary}")
+    return "；".join(details) if details else "暂无补充信息"
 
 
 def _report_date() -> str:
@@ -990,11 +1089,34 @@ def _write_xlsx_report(
         )
 
     vulnerability_sheet = workbook.create_sheet("资产漏洞信息")
-    vulnerability_sheet.append(["漏洞编号", "严重程度", "发布日期", "CWE", "项目名", "组件", "版本", "漏洞利用难度", "创建日期", "组ID", "版本日期", "组件年龄", "确认状态", "可信度"])
+    vulnerability_sheet.append(
+        [
+            "漏洞编号",
+            "严重程度",
+            "发布日期",
+            "CWE",
+            "项目名",
+            "组件",
+            "版本",
+            "漏洞利用难度",
+            "创建日期",
+            "组ID",
+            "版本日期",
+            "组件年龄",
+            "活跃度",
+            "活跃度说明",
+            "漏洞描述",
+            "解决方案参考",
+            "补充信息",
+            "确认状态",
+            "可信度",
+        ]
+    )
     component_by_id = {component.id: component for component in components}
     for item in _priority_sorted(vulnerabilities):
         component = component_by_id.get(item.component_id or 0)
         snapshot = version_cache.get(item.component_id or 0)
+        activity, activity_note = _component_activity(snapshot)
         vulnerability_sheet.append(
             [
                 item.cve_id or item.advisory_id,
@@ -1003,12 +1125,17 @@ def _write_xlsx_report(
                 item.cwe_id or "-",
                 f"{project.name} {project.scan_note or metadata['version_number']}".strip(),
                 item.package_name,
-                item.package_version,
+                _vulnerability_component_version(component, item),
                 _exploit_difficulty(item),
                 metadata["audit_end_date"],
                 _component_group_id(component, item),
                 _version_date(snapshot),
                 _component_age(snapshot),
+                activity,
+                activity_note,
+                _vulnerability_description(item),
+                _vulnerability_solution_reference(component, item),
+                _vulnerability_extra_info(item),
                 _vulnerability_review_status(item),
                 f"{round(float(item.confidence_score or 0) * 100)}%",
             ]
