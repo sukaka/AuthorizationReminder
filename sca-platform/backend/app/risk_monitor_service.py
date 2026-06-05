@@ -21,6 +21,8 @@ class VersionInfo:
 
 
 VERSION_RE = re.compile(r"v?(\d+)(?:\.(\d+))?(?:\.(\d+))?(?:[-+._]?([0-9A-Za-z.-]+))?")
+UNKNOWN_VERSION_VALUES = {"", "unknown", "none", "null", "n/a", "na", "未声明", "未知"}
+VERSION_RANGE_PREFIXES = ("^", "~", ">=", "<=", ">", "<", "=", "~=", "v")
 
 
 def _parse_version(value: str) -> tuple[int, int, int, int, str]:
@@ -51,6 +53,41 @@ def version_delta(current: str, latest: str) -> str:
     if latest_parts[1] > current_parts[1]:
         return "minor"
     return "patch"
+
+
+def _usable_version(value: Any) -> str:
+    text = str(value or "").strip()
+    if text.lower() in UNKNOWN_VERSION_VALUES:
+        return ""
+    return text
+
+
+def _normalized_version_candidate(value: Any) -> str:
+    text = _usable_version(value)
+    if not text:
+        return ""
+    text = text.split("||", 1)[0].split(",", 1)[0].strip()
+    if " - " in text:
+        text = text.split(" - ", 1)[0].strip()
+    while True:
+        cleaned = text.strip()
+        for prefix in VERSION_RANGE_PREFIXES:
+            if cleaned.startswith(prefix):
+                cleaned = cleaned[len(prefix) :].strip()
+                break
+        else:
+            break
+        text = cleaned
+    match = VERSION_RE.search(text)
+    return match.group(0).removeprefix("v") if match else ""
+
+
+def current_component_version(component: Component) -> str:
+    for candidate in (component.resolved_version, component.version_normalized, component.package_version, component.declared_version):
+        version = _normalized_version_candidate(candidate)
+        if version:
+            return version
+    return ""
 
 
 def _client(settings: Settings) -> httpx.Client:
@@ -103,6 +140,7 @@ def query_github_latest_release(repo: str, settings: Settings) -> VersionInfo:
 
 
 def query_maven_latest(component: Component, settings: Settings) -> VersionInfo:
+    current_version = current_component_version(component)
     package_name = component.package_name
     if ":" not in package_name and component.group_id and component.artifact_id:
         package_name = f"{component.group_id}:{component.artifact_id}"
@@ -117,41 +155,46 @@ def query_maven_latest(component: Component, settings: Settings) -> VersionInfo:
     docs = data.get("response", {}).get("docs", [])
     if not docs:
         return VersionInfo()
-    current_date = _date_text(docs[0].get("timestamp")) if str(docs[0].get("latestVersion") or "") == component.package_version else ""
+    current_date = _date_text(docs[0].get("timestamp")) if str(docs[0].get("latestVersion") or "") == current_version else ""
     return VersionInfo(str(docs[0].get("latestVersion") or ""), "maven", current_date, docs[0])
 
 
 def query_npm_latest(component: Component, settings: Settings) -> VersionInfo:
+    current_version = current_component_version(component)
     with _client(settings) as client:
         response = client.get(f"{settings.npm_registry_url.rstrip('/')}/{component.package_name}")
         response.raise_for_status()
     data = response.json()
-    return VersionInfo(str(data.get("dist-tags", {}).get("latest") or ""), "npm", _date_text((data.get("time") or {}).get(component.package_version)), data)
+    return VersionInfo(str(data.get("dist-tags", {}).get("latest") or ""), "npm", _date_text((data.get("time") or {}).get(current_version)), data)
 
 
 def query_pypi_latest(component: Component, settings: Settings) -> VersionInfo:
+    current_version = current_component_version(component)
     with _client(settings) as client:
         response = client.get(f"{settings.pypi_api_url.rstrip('/')}/{component.package_name}/json")
         response.raise_for_status()
     data = response.json()
     releases = data.get("releases") or {}
-    current_release = releases.get(component.package_version) or []
+    current_release = releases.get(current_version) or []
     current_date = _date_text(current_release[0].get("upload_time_iso_8601")) if current_release and isinstance(current_release[0], dict) else ""
     return VersionInfo(str(data.get("info", {}).get("version") or ""), "pypi", current_date, data.get("info", {}))
 
 
 def query_go_latest(component: Component, settings: Settings) -> VersionInfo:
+    current_version = current_component_version(component)
     with _client(settings) as client:
         response = client.get(f"{settings.go_proxy_url.rstrip('/')}/{component.package_name}/@latest")
         response.raise_for_status()
     data = response.json()
-    return VersionInfo(str(data.get("Version") or ""), "go", _date_text(data.get("Time")), data)
+    current_date = _date_text(data.get("Time")) if str(data.get("Version") or "").removeprefix("v") == current_version else ""
+    return VersionInfo(str(data.get("Version") or ""), "go", current_date, data)
 
 
 def detect_eol(component: Component, latest_version: str, settings: Settings) -> tuple[str, str]:
-    if component.ecosystem == "docker" and component.package_version in {"latest", ""}:
+    current_version = current_component_version(component)
+    if component.ecosystem == "docker" and not current_version:
         return "review", ""
-    if latest_version and version_delta(component.package_version, latest_version) == "major":
+    if latest_version and current_version and version_delta(current_version, latest_version) == "major":
         return "review", ""
     return "active", ""
 
@@ -174,9 +217,10 @@ def _latest_for_component(component: Component, settings: Settings) -> VersionIn
 
 
 def monitor_component_update(component: Component, settings: Settings) -> dict[str, Any]:
+    current_version = current_component_version(component)
     latest = _latest_for_component(component, settings)
-    update_available = bool(latest.latest_version and compare_versions(component.package_version, latest.latest_version) < 0)
-    delta = version_delta(component.package_version, latest.latest_version) if latest.latest_version else "unknown"
+    update_available = bool(current_version and latest.latest_version and compare_versions(current_version, latest.latest_version) < 0)
+    delta = version_delta(current_version, latest.latest_version) if current_version and latest.latest_version else "unknown"
     eol_status, eol_date = detect_eol(component, latest.latest_version, settings)
     recommendation = "当前版本暂无更新建议"
     if update_available:
@@ -185,7 +229,7 @@ def monitor_component_update(component: Component, settings: Settings) -> dict[s
         recommendation += "；请同步确认生命周期状态"
     return {
         "component_name": component.package_name,
-        "current_version": component.package_version,
+        "current_version": current_version,
         "latest_version": latest.latest_version,
         "latest_source": latest.latest_source,
         "update_available": update_available,

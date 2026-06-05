@@ -24,6 +24,51 @@ def build_client(monkeypatch, tmp_path):
     return TestClient(main.app), main, models, database
 
 
+class FakeResponse:
+    def __init__(self, payload):
+        self._payload = payload
+
+    def raise_for_status(self):
+        return None
+
+    def json(self):
+        return self._payload
+
+
+class FakeRegistryClient:
+    def __init__(self, *args, **kwargs):
+        pass
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return False
+
+    def get(self, url):
+        if "registry.npmjs.org" in url:
+            return FakeResponse(
+                {
+                    "dist-tags": {"latest": "0.21.4"},
+                    "time": {
+                        "0.21.1": "2020-12-21T19:24:23.120Z",
+                        "0.21.4": "2021-03-09T16:52:11.012Z",
+                    },
+                }
+            )
+        if "pypi.org" in url:
+            return FakeResponse(
+                {
+                    "info": {"version": "2.32.5"},
+                    "releases": {
+                        "2.32.3": [{"upload_time_iso_8601": "2024-05-29T15:42:24.000Z"}],
+                        "2.32.5": [{"upload_time_iso_8601": "2025-08-18T20:46:00.000Z"}],
+                    },
+                }
+            )
+        return FakeResponse({})
+
+
 def test_version_compare_handles_semver_and_prerelease():
     from app.risk_monitor_service import compare_versions
 
@@ -31,6 +76,51 @@ def test_version_compare_handles_semver_and_prerelease():
     assert compare_versions("2.0.0", "1.9.9") > 0
     assert compare_versions("1.0.0-rc1", "1.0.0") < 0
     assert compare_versions("v1.10.0", "1.9.9") > 0
+
+
+def test_monitor_uses_normalized_npm_version_for_publish_date(monkeypatch):
+    from app.config import Settings
+    from app.models import Component
+    from app import risk_monitor_service
+
+    monkeypatch.setattr(risk_monitor_service.httpx, "Client", FakeRegistryClient)
+    component = Component(
+        package_name="axios",
+        package_version="^0.21.1",
+        version_normalized="0.21.1",
+        declared_version="^0.21.1",
+        ecosystem="npm",
+    )
+
+    data = risk_monitor_service.monitor_component_update(component, Settings())
+
+    assert data["current_version"] == "0.21.1"
+    assert data["latest_version"] == "0.21.4"
+    assert data["current_version_published_at"] == "2020-12-21"
+    assert data["component_age_years"] > 0
+
+
+def test_monitor_uses_resolved_pypi_version_for_publish_date(monkeypatch):
+    from app.config import Settings
+    from app.models import Component
+    from app import risk_monitor_service
+
+    monkeypatch.setattr(risk_monitor_service.httpx, "Client", FakeRegistryClient)
+    component = Component(
+        package_name="requests",
+        package_version=">=2.32",
+        version_normalized="2.32.3",
+        resolved_version="2.32.3",
+        declared_version=">=2.32",
+        ecosystem="pypi",
+    )
+
+    data = risk_monitor_service.monitor_component_update(component, Settings())
+
+    assert data["current_version"] == "2.32.3"
+    assert data["latest_version"] == "2.32.5"
+    assert data["current_version_published_at"] == "2024-05-29"
+    assert data["component_age_years"] > 0
 
 
 def test_project_monitor_persists_snapshot_alert_and_change(monkeypatch, tmp_path):

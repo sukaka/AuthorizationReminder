@@ -1368,7 +1368,7 @@ async def run_project_risk_monitor(
             project_id=project_id,
             component_id=component.id,
             component_name=component.package_name,
-            current_version=component.package_version,
+            current_version=str(data.get("current_version") or component.package_version),
             latest_version=str(data["latest_version"]),
             latest_source=str(data["latest_source"]),
             update_available=bool(data["update_available"]),
@@ -1390,7 +1390,7 @@ async def run_project_risk_monitor(
                     project_id=project_id,
                     component_id=component.id,
                     change_type="version_update",
-                    before_value=component.package_version,
+                    before_value=str(data.get("current_version") or component.package_version),
                     after_value=snapshot.latest_version,
                     message=snapshot.recommendation,
                 )
