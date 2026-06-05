@@ -501,6 +501,69 @@ def test_xlsx_report_uses_clear_labels_for_unmonitored_unknown_component_fields(
     assert "requests" in unknown_row[12]
 
 
+def test_xlsx_report_displays_inferred_latest_version_for_unknown_component(monkeypatch, tmp_path):
+    client, _main, models, database = build_client(monkeypatch, tmp_path)
+    with client as test_client:
+        project_id = seed_project(database, models)
+        with database.SessionLocal() as db:
+            db.query(models.VulnerabilityRecord).filter_by(project_id=project_id).delete()
+            db.query(models.Component).filter_by(project_id=project_id).delete()
+            component = models.Component(
+                project_id=project_id,
+                package_name="chardet",
+                package_version="unknown",
+                version_normalized="unknown",
+                ecosystem="pypi",
+                normalized_name="chardet",
+                dependency_type="direct",
+                source_file="requirements.txt",
+                license_name="LGPL-2.1-only",
+                version_detected=False,
+                need_manual_version_confirm=True,
+                version_lock_status="未锁定版本风险",
+                version_risk_type="版本缺失风险",
+                risk_explanation="版本缺失，按默认安装行为推断为最新版本。",
+            )
+            db.add(component)
+            db.flush()
+            db.add(
+                models.RiskMonitorSnapshot(
+                    project_id=project_id,
+                    component_id=component.id,
+                    component_name=component.package_name,
+                    current_version="7.4.3",
+                    latest_version="7.4.3",
+                    latest_source="pypi",
+                    current_version_published_at="2026-04-01",
+                    component_age_years=0.2,
+                    recommendation="未声明版本，按默认安装行为以最新版本 7.4.3 作为当前推断版本；建议补充 lock 文件。",
+                )
+            )
+            db.commit()
+
+        created = test_client.post(f"/api/sca/projects/{project_id}/reports", json={"format": "xlsx"})
+        report = created.json()
+        downloaded = test_client.get(f"/api/sca/reports/{report['id']}/download")
+
+    sheets = workbook_values(downloaded.content)
+
+    assert ["未知版本组件", 0] in sheets["审计概览"]
+    assert [
+        "chardet",
+        "7.4.3（未声明，按默认安装推断）",
+        "是",
+        "7.4.3",
+        "chardet",
+        "开源组件",
+        "requirements.txt",
+        "LGPL-2.1-only",
+        "无漏洞",
+        0,
+        "直接引入",
+        "7.4.3",
+    ] in sheets["审计资产列表"]
+
+
 def test_xlsx_report_lists_review_vulnerabilities_in_asset_vulnerability_sheet(monkeypatch, tmp_path):
     client, _main, models, database = build_client(monkeypatch, tmp_path)
     with client as test_client:

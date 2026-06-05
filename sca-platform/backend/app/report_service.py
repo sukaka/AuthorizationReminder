@@ -160,7 +160,30 @@ def _looks_like_version_range(value: object) -> bool:
     )
 
 
-def _display_component_version(component: Component) -> str:
+def _snapshot_inferred_version(component: Component, snapshot: RiskMonitorSnapshot | None) -> str:
+    if not snapshot:
+        return ""
+    current = str(component.package_version or "").strip()
+    snapshot_version = str(snapshot.current_version or "").strip()
+    if (_is_unknown_text(current) or not component.version_detected) and not _is_unknown_text(snapshot_version):
+        return snapshot_version
+    return ""
+
+
+def _component_unknown_version_count(components: list[Component], version_cache: dict[int, RiskMonitorSnapshot] | None = None) -> int:
+    version_cache = version_cache or {}
+    return sum(
+        1
+        for component in components
+        if (_is_unknown_text(component.package_version) or not component.version_detected)
+        and not _snapshot_inferred_version(component, version_cache.get(component.id))
+    )
+
+
+def _display_component_version(component: Component, snapshot: RiskMonitorSnapshot | None = None) -> str:
+    inferred_version = _snapshot_inferred_version(component, snapshot)
+    if inferred_version:
+        return f"{inferred_version}（未声明，按默认安装推断）"
     current = str(component.package_version or "").strip()
     if _is_unknown_text(current) or not component.version_detected:
         return "未声明版本"
@@ -276,13 +299,13 @@ def _confidence_groups(vulnerabilities: list[VulnerabilityRecord]) -> dict[str, 
     return groups
 
 
-def _component_confidence_groups(components: list[Component]) -> dict[str, int]:
+def _component_confidence_groups(components: list[Component], version_cache: dict[int, RiskMonitorSnapshot] | None = None) -> dict[str, int]:
     return {
         "high": sum(1 for item in components if item.confidence_level == "High"),
         "medium": sum(1 for item in components if item.confidence_level in {"Medium", "Medium-High"}),
         "low": sum(1 for item in components if item.confidence_level == "Low"),
         "review": sum(1 for item in components if item.confidence_level == "Review"),
-        "unknown_version": sum(1 for item in components if item.package_version == "unknown" or not item.version_detected),
+        "unknown_version": _component_unknown_version_count(components, version_cache),
         "manual_confirm": sum(1 for item in components if item.need_manual_confirm or item.need_manual_version_confirm),
     }
 
@@ -408,12 +431,18 @@ def _fix_command(component: Component | None, vulnerability: VulnerabilityRecord
     return f"通用：将 {name} 升级到 {fixed}，升级后重新扫描确认漏洞消除。"
 
 
-def _report_lines(project: Project, components: list[Component], vulnerabilities: list[VulnerabilityRecord], scan_tasks: dict[str, object] | None = None) -> list[str]:
+def _report_lines(
+    project: Project,
+    components: list[Component],
+    vulnerabilities: list[VulnerabilityRecord],
+    scan_tasks: dict[str, object] | None = None,
+    version_cache: dict[int, RiskMonitorSnapshot] | None = None,
+) -> list[str]:
     counts = _risk_counts(vulnerabilities)
     confirmed = _confirmed_vulnerabilities(vulnerabilities)
     high_risk = [item for item in confirmed if item.severity in {"critical", "high"}]
     confidence = _confidence_groups(vulnerabilities)
-    component_confidence = _component_confidence_groups(components)
+    component_confidence = _component_confidence_groups(components, version_cache)
     scan_tasks = scan_tasks or {}
     component_by_id = {item.id: item for item in components}
     priority_items = _priority_sorted(confirmed)
@@ -824,14 +853,15 @@ def _source_files(project: Project, components: list[Component]) -> list[list[ob
     return files or [[1, project.name, project.scan_note or "系统源代码"]]
 
 
-def _component_rows(components: list[Component], limit: int = 120) -> list[list[object]]:
+def _component_rows(components: list[Component], version_cache: dict[int, RiskMonitorSnapshot] | None = None, limit: int = 120) -> list[list[object]]:
+    version_cache = version_cache or {}
     rows = [["序号", "组件名称", "当前版本", "组件类型", "许可协议", "识别可信度"]]
     rows.extend(
         [
             [
                 index,
                 component.package_name,
-                _display_component_version(component),
+                _display_component_version(component, version_cache.get(component.id)),
                 component.ecosystem or "unknown",
                 _display_license(component.license_name),
                 component.confidence_level or "High",
@@ -984,7 +1014,7 @@ def _write_docx(
 ) -> None:
     confirmed = _confirmed_vulnerabilities(vulnerabilities)
     confidence = _confidence_groups(vulnerabilities)
-    component_confidence = _component_confidence_groups(components)
+    component_confidence = _component_confidence_groups(components, version_cache)
     priority_items = _priority_sorted(confirmed)
     component_by_id = {item.id: item for item in components}
     date_text = _report_date()
@@ -1055,15 +1085,15 @@ def _write_docx(
         _paragraph("5 人员安排", style="Heading1"),
         _table([["编号", "参与人员", "负责内容"], ["1", metadata["auditor_name"], "组件识别、SBOM 生成、漏洞匹配、报告编制"], ["2", metadata["reviewer_name"], "风险确认、报告审查、整改建议"], ["3", metadata["quality_reviewer_name"], "质量审核"]]),
         _paragraph("6 组件提交活跃度统计", style="Heading1"),
-        _table([["序号", "组件名称", "当前版本", "发布日期", "活跃度", "活跃度参考说明"], *[[index, item.package_name, _display_component_version(item), _version_date(version_cache.get(item.id)), "未执行版本监测" if not version_cache.get(item.id) else "正常", f"组件年龄：{_component_age(version_cache.get(item.id))}"] for index, item in enumerate(components[:20], start=1)]]),
+        _table([["序号", "组件名称", "当前版本", "发布日期", "活跃度", "活跃度参考说明"], *[[index, item.package_name, _display_component_version(item, version_cache.get(item.id)), _version_date(version_cache.get(item.id)), "未执行版本监测" if not version_cache.get(item.id) else "正常", f"组件年龄：{_component_age(version_cache.get(item.id))}"] for index, item in enumerate(components[:20], start=1)]]),
         _paragraph("7 风险组件最新版本", style="Heading1"),
         _table([["序号", "组件名称", "当前版本", "最新版本", "当前版本是否最新版本"], *[[index, item.package_name, item.package_version, _latest_version(version_cache.get(item.component_id or 0)), _is_latest(version_cache.get(item.component_id or 0))] for index, item in enumerate(priority_items[:20], start=1)]] or [["序号", "组件名称", "当前版本", "最新版本", "当前版本是否最新版本"], ["-", "暂无", "-", "-", "待确认"]]),
         _paragraph("8 风险组件版本年龄统计", style="Heading1"),
-        _table([["序号", "组件名称", "当前版本", "发布日期", "组件版本年龄"], *[[index, item.package_name, _display_component_version(item), _version_date(version_cache.get(item.id)), _component_age(version_cache.get(item.id))] for index, item in enumerate(components[:20], start=1)]]),
+        _table([["序号", "组件名称", "当前版本", "发布日期", "组件版本年龄"], *[[index, item.package_name, _display_component_version(item, version_cache.get(item.id)), _version_date(version_cache.get(item.id)), _component_age(version_cache.get(item.id))] for index, item in enumerate(components[:20], start=1)]]),
         _paragraph("9 版权许可协议风险提示", style="Heading1"),
         _paragraph("许可证风险需结合组件使用方式、分发方式、修改情况和企业合规要求进行复核。下表列出本次识别到的组件许可证信息。"),
         _table([["许可协议简称", "许可协议全称", "风险说明", "使用范围", "版权/使用条件", "使用限制", "是否兼容GPL"], *[[license_policy(name).short_name if license_policy(name).short_name != "待确认" else name, license_policy(name).full_name, license_policy(name).risk_note, license_policy(name).scope, license_policy(name).conditions, license_policy(name).limitations, license_policy(name).gpl_compatible] for name in sorted({_display_license(item.license_name) for item in components})]]),
-        _table([["序号", "组件名称", "当前版本", "许可协议"], *[[index, item.package_name, _display_component_version(item), _display_license(item.license_name)] for index, item in enumerate(components[:80], start=1)]]),
+        _table([["序号", "组件名称", "当前版本", "许可协议"], *[[index, item.package_name, _display_component_version(item, version_cache.get(item.id)), _display_license(item.license_name)] for index, item in enumerate(components[:80], start=1)]]),
         _paragraph("10 组件安全审计结果汇总", style="Heading1"),
         _paragraph("本次扫描结论摘要", style="Heading2"),
         _paragraph(_natural_summary(project, components, vulnerabilities)),
@@ -1119,7 +1149,7 @@ def _write_docx(
         [
             _paragraph("附录B 组件安全审计清单", style="Heading1"),
             _paragraph(f"高可信组件：{component_confidence['high']}；中可信组件：{component_confidence['medium']}；低可信组件：{component_confidence['low']}；待确认组件：{component_confidence['review']}。"),
-            _table(_component_rows(components)),
+            _table(_component_rows(components, version_cache)),
             _paragraph("附录C 安全编码规范要求", style="Heading1"),
             _table(
                 [
@@ -1211,7 +1241,7 @@ def _write_xlsx_report(
         ["中危组件", component_counts["中危风险"]],
         ["低危组件", component_counts["低危风险"]],
         ["未知风险组件", component_counts["未知风险"]],
-        ["未知版本组件", sum(1 for component in components if component.package_version == "unknown" or not component.version_detected)],
+        ["未知版本组件", _component_unknown_version_count(components, version_cache)],
         ["无漏洞组件", component_counts["无漏洞"]],
         [],
         ["漏洞等级分布", None],
@@ -1238,7 +1268,7 @@ def _write_xlsx_report(
         asset_sheet.append(
             [
                 component.package_name,
-                _display_component_version(component),
+                _display_component_version(component, snapshot),
                 _is_latest(snapshot),
                 _latest_version(snapshot),
                 component.group_id or component.normalized_name or component.package_name,
@@ -1359,7 +1389,7 @@ def generate_report(db: Session, project_id: int, fmt: str, report_root: str, me
     output_dir.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
     path = output_dir / f"juxin-sca-report-{project_id}-{timestamp}.{fmt}"
-    lines = _report_lines(project, components, vulnerabilities, scan_tasks)
+    lines = _report_lines(project, components, vulnerabilities, scan_tasks, version_cache)
     if fmt == "docx":
         _write_docx(path, project, components, vulnerabilities, scan_tasks, report_metadata, version_cache)
     elif fmt == "xlsx":

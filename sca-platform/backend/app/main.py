@@ -158,6 +158,43 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+
+UNKNOWN_VERSION_VALUES = {"", "unknown", "none", "null", "n/a", "na", "未声明", "未知"}
+
+
+def _is_unknown_version(value: object) -> bool:
+    return str(value or "").strip().lower() in UNKNOWN_VERSION_VALUES
+
+
+def _latest_snapshot_by_component(db: Session, project_id: int) -> dict[int, RiskMonitorSnapshot]:
+    snapshots = list(db.scalars(select(RiskMonitorSnapshot).where(RiskMonitorSnapshot.project_id == project_id)))
+    snapshots.sort(key=lambda item: ((item.checked_at.isoformat() if item.checked_at else ""), item.id or 0), reverse=True)
+    latest: dict[int, RiskMonitorSnapshot] = {}
+    for snapshot in snapshots:
+        if snapshot.component_id and snapshot.component_id not in latest:
+            latest[snapshot.component_id] = snapshot
+    return latest
+
+
+def _component_out_with_inferred_version(component: Component, snapshot: RiskMonitorSnapshot | None) -> dict[str, object]:
+    data = ComponentOut.model_validate(component).model_dump()
+    inferred_version = str(snapshot.current_version or "").strip() if snapshot else ""
+    if (_is_unknown_version(component.package_version) or not component.version_detected) and not _is_unknown_version(inferred_version):
+        data["package_version"] = inferred_version
+        data["version_normalized"] = inferred_version
+        data["resolved_version"] = inferred_version
+        data["risk_explanation"] = (
+            f"版本未声明；按默认安装行为推断为当前最新版本 {inferred_version}。"
+            "该推断用于版本年龄、发布日期和漏洞匹配展示，但仍建议补充精确版本号或 lock 文件保证构建可复现。"
+        )
+        data["fix_recommendation"] = "建议补充 requirements.txt 精确版本、pip freeze 输出、poetry.lock 或 Pipfile.lock，固化实际安装版本。"
+    return data
+
+
+def _has_inferred_version(component: Component, snapshot: RiskMonitorSnapshot | None) -> bool:
+    inferred_version = str(snapshot.current_version or "").strip() if snapshot else ""
+    return bool((_is_unknown_version(component.package_version) or not component.version_detected) and not _is_unknown_version(inferred_version))
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origin_list,
@@ -766,9 +803,11 @@ async def list_components(
     project_id: int,
     user: Annotated[UserPayload, Depends(get_current_user)],
     db: Annotated[Session, Depends(get_db)],
-) -> list[ComponentOut]:
+) -> list[dict[str, object]]:
     await require_action("sca:read", request, user, settings)
-    return list(db.scalars(select(Component).where(Component.project_id == project_id).order_by(Component.ecosystem, Component.package_name)).all())
+    components = list(db.scalars(select(Component).where(Component.project_id == project_id).order_by(Component.ecosystem, Component.package_name)).all())
+    snapshots = _latest_snapshot_by_component(db, project_id)
+    return [_component_out_with_inferred_version(component, snapshots.get(component.id)) for component in components]
 
 
 @app.get("/api/sca/projects/{project_id}/scan-completeness", response_model=ScanCompletenessOut, tags=["sca"])
@@ -781,6 +820,7 @@ async def scan_completeness(
     await require_action("sca:read", request, user, settings)
     _ensure_project_exists(db, project_id)
     components = db.scalars(select(Component).where(Component.project_id == project_id)).all()
+    snapshots = _latest_snapshot_by_component(db, project_id)
     modes = {component.scan_mode for component in components if component.scan_mode}
     has_standard_manifest = any(component.scan_mode in {"manifest_scan", "lockfile_scan", "mixed_scan"} and component.detected_by != "fallback" for component in components)
     fallback_enabled = any(component.detected_by == "fallback" for component in components)
@@ -811,7 +851,7 @@ async def scan_completeness(
         high_confidence_count=sum(1 for component in components if component.confidence_level == "High"),
         medium_confidence_count=sum(1 for component in components if component.confidence_level in {"Medium", "Medium-High"}),
         low_confidence_count=sum(1 for component in components if component.confidence_level == "Low"),
-        unknown_version_count=sum(1 for component in components if component.package_version == "unknown" or not component.version_detected),
+        unknown_version_count=sum(1 for component in components if (_is_unknown_version(component.package_version) or not component.version_detected) and not _has_inferred_version(component, snapshots.get(component.id))),
         manual_confirm_count=sum(1 for component in components if component.need_manual_confirm or component.need_manual_version_confirm),
         fallback_enabled=fallback_enabled,
         message=message,

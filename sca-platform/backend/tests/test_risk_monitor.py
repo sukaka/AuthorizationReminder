@@ -59,10 +59,11 @@ class FakeRegistryClient:
         if "pypi.org" in url:
             return FakeResponse(
                 {
-                    "info": {"version": "2.32.5"},
+                    "info": {"version": "7.4.3" if "chardet" in url else "2.32.5"},
                     "releases": {
                         "2.32.3": [{"upload_time_iso_8601": "2024-05-29T15:42:24.000Z"}],
                         "2.32.5": [{"upload_time_iso_8601": "2025-08-18T20:46:00.000Z"}],
+                        "7.4.3": [{"upload_time_iso_8601": "2026-04-01T10:15:30.000Z"}],
                     },
                 }
             )
@@ -121,6 +122,85 @@ def test_monitor_uses_resolved_pypi_version_for_publish_date(monkeypatch):
     assert data["latest_version"] == "2.32.5"
     assert data["current_version_published_at"] == "2024-05-29"
     assert data["component_age_years"] > 0
+
+
+def test_monitor_infers_latest_version_when_manifest_has_no_version(monkeypatch):
+    from app.config import Settings
+    from app.models import Component
+    from app import risk_monitor_service
+
+    monkeypatch.setattr(risk_monitor_service.httpx, "Client", FakeRegistryClient)
+    component = Component(
+        package_name="chardet",
+        package_version="unknown",
+        version_normalized="unknown",
+        declared_version="",
+        resolved_version="",
+        version_detected=False,
+        ecosystem="pypi",
+    )
+
+    data = risk_monitor_service.monitor_component_update(component, Settings())
+
+    assert data["current_version"] == "7.4.3"
+    assert data["latest_version"] == "7.4.3"
+    assert data["update_available"] is False
+    assert data["version_delta"] == "none"
+    assert data["current_version_published_at"] == "2026-04-01"
+    assert data["component_age_years"] > 0
+    assert "未声明版本" in data["recommendation"]
+    assert "默认安装" in data["recommendation"]
+
+
+def test_component_list_overlays_inferred_version_from_latest_snapshot(monkeypatch, tmp_path):
+    client, _main, models, database = build_client(monkeypatch, tmp_path)
+    with client as test_client:
+        with database.SessionLocal() as db:
+            project = models.Project(name="推断版本项目", scan_note="demo")
+            db.add(project)
+            db.flush()
+            component = models.Component(
+                project_id=project.id,
+                package_name="chardet",
+                package_version="unknown",
+                version_normalized="unknown",
+                ecosystem="pypi",
+                normalized_name="chardet",
+                source_file="requirements.txt",
+                version_detected=False,
+                need_manual_version_confirm=True,
+                version_lock_status="未锁定版本风险",
+                version_risk_type="版本缺失风险",
+                risk_explanation="版本缺失，按默认安装行为推断为最新版本。",
+            )
+            db.add(component)
+            db.flush()
+            db.add(
+                models.RiskMonitorSnapshot(
+                    project_id=project.id,
+                    component_id=component.id,
+                    component_name=component.package_name,
+                    current_version="7.4.3",
+                    latest_version="7.4.3",
+                    latest_source="pypi",
+                    current_version_published_at="2026-04-01",
+                    component_age_years=0.2,
+                    recommendation="未声明版本，按默认安装行为以最新版本 7.4.3 作为当前推断版本；建议补充 lock 文件。",
+                )
+            )
+            db.commit()
+            project_id = project.id
+
+        rows = test_client.get(f"/api/sca/projects/{project_id}/components").json()
+        completeness = test_client.get(f"/api/sca/projects/{project_id}/scan-completeness").json()
+
+    assert rows[0]["package_name"] == "chardet"
+    assert rows[0]["package_version"] == "7.4.3"
+    assert rows[0]["resolved_version"] == "7.4.3"
+    assert rows[0]["version_risk_type"] == "版本缺失风险"
+    assert "推断" in rows[0]["risk_explanation"]
+    assert completeness["unknown_version_count"] == 0
+    assert completeness["manual_confirm_count"] == 1
 
 
 def test_project_monitor_persists_snapshot_alert_and_change(monkeypatch, tmp_path):

@@ -194,7 +194,7 @@ def _classify_version(declared: str, resolved: str = "") -> dict[str, object]:
             "risk": "版本缺失风险",
             "detected": False,
             "manual": True,
-            "explanation": "版本缺失，漏洞结果可能不准确。",
+            "explanation": "版本未声明；常见安装工具会按默认解析规则安装当前最新版本，系统可在风险监测中按最新版本推断，但构建结果仍不可复现。",
         }
     if _is_dynamic_version(raw):
         return {
@@ -294,7 +294,7 @@ def _normalize_component(component: ParsedComponent) -> ParsedComponent:
     component.need_manual_version_confirm = bool(version_state["manual"])
     component.risk_explanation = component.risk_explanation or str(version_state["explanation"])
     component.fix_recommendation = component.fix_recommendation or (
-        "建议补充精确版本号，或使用对应生态的 lock 文件 / 依赖锁定机制，以提高漏洞扫描准确性和构建可复现性。"
+        "建议补充精确版本号，或使用对应生态的 lock 文件 / 依赖锁定机制；未声明版本可按默认安装最新版本推断，但不应替代可复现构建证据。"
         if component.need_manual_version_confirm
         else ""
     )
