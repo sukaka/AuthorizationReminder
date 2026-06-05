@@ -3949,7 +3949,7 @@ const sendToContacts = async ({
     results.push({
       contactId: contact.id,
       name: contact.name,
-      customer: contact.customer_name,
+      customer: license?.customer_name || contact.customer_name,
       channels: channelResults,
     });
   }

@@ -11,7 +11,7 @@ const replaceTokens = (template, context = {}) => {
 
 const buildContext = ({ contact, license, subject, message }) => ({
   contact_name: contact?.name || '',
-  customer_name: contact?.customer_name || license?.customer_name || '',
+  customer_name: license?.customer_name || contact?.customer_name || '',
   contact_phone: contact?.phone || '',
   contact_email: contact?.email || '',
   wecom_id: contact?.wecom_id || '',
