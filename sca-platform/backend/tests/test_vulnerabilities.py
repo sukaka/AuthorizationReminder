@@ -263,6 +263,214 @@ def test_project_vulnerability_query_task_persists_results(monkeypatch, tmp_path
     assert data["items"][0]["cve_id"] == "CVE-2024-0001"
 
 
+def test_project_vulnerability_query_uses_inferred_snapshot_version_and_logs_sources(monkeypatch, tmp_path):
+    client, main, models, database = build_client(monkeypatch, tmp_path)
+    queried_versions = []
+
+    def fake_query(component, settings):
+        from app.vulnerability_service import VulnerabilityFinding
+
+        queried_versions.append(component.package_version)
+        return [
+            VulnerabilityFinding(
+                source="osv",
+                advisory_id="OSV-2026-1",
+                cve_id="CVE-2026-0001",
+                package_name=component.package_name,
+                package_version=component.package_version,
+                ecosystem=component.ecosystem,
+                cvss_score=9.1,
+                severity="critical",
+                description="远程代码执行漏洞",
+                fixed_version="5.0.0",
+                published_at="2026-01-01T00:00:00Z",
+            )
+        ]
+
+    monkeypatch.setattr(main.celery_app, "query_component_vulnerabilities", fake_query)
+
+    with client as test_client:
+        with database.SessionLocal() as db:
+            project = models.Project(name="推断漏洞版本项目", scan_note="demo")
+            db.add(project)
+            db.flush()
+            upload = models.UploadFileRecord(
+                project_id=project.id,
+                upload_id="upload-inferred-vuln",
+                original_filename="demo.zip",
+                stored_filename="demo.zip",
+                storage_path="/tmp/demo.zip",
+                status="scanned",
+            )
+            db.add(upload)
+            db.flush()
+            component = models.Component(
+                project_id=project.id,
+                package_name="rsa",
+                package_version="unknown",
+                version_normalized="unknown",
+                ecosystem="pypi",
+                version_detected=False,
+                need_manual_version_confirm=True,
+            )
+            db.add(component)
+            db.flush()
+            db.add(
+                models.RiskMonitorSnapshot(
+                    project_id=project.id,
+                    component_id=component.id,
+                    component_name="rsa",
+                    current_version="4.9.1",
+                    latest_version="4.9.1",
+                    latest_source="pypi",
+                    current_version_published_at="2025-04-16",
+                    component_age_years=1.1,
+                    recommendation="未声明版本，按默认安装行为以最新版本 4.9.1 作为当前推断版本。",
+                )
+            )
+            task = models.ScanTask(
+                project_id=project.id,
+                upload_file_id=upload.id,
+                celery_task_id="vuln-inferred-task",
+                task_type="vulnerability_query_task",
+                engine_name="juxin-vuln-intel",
+                status="queued",
+                summary="等待漏洞查询任务执行",
+            )
+            db.add(task)
+            db.commit()
+            task_id = task.id
+            project_id = project.id
+
+        result = main.celery_app.query_project_vulnerabilities_task(task_id)
+        vulnerabilities = test_client.get(f"/api/sca/projects/{project_id}/vulnerabilities").json()
+        logs = test_client.get(f"/api/sca/projects/{project_id}/scan-logs").json()
+
+    assert result["status"] == "success"
+    assert queried_versions == ["4.9.1"]
+    assert vulnerabilities["items"][0]["package_version"] == "4.9.1"
+    coverage_log = " ".join(row["message"] for row in logs)
+    assert "漏洞源覆盖检查" in coverage_log
+    assert "CVE/NVD" in coverage_log
+    assert "OSV" in coverage_log
+    assert "GHSA" in coverage_log
+
+
+def test_list_vulnerabilities_overlays_inferred_version_for_existing_unknown_record(monkeypatch, tmp_path):
+    client, _main, models, database = build_client(monkeypatch, tmp_path)
+    with client as test_client:
+        with database.SessionLocal() as db:
+            project = models.Project(name="历史漏洞版本项目", scan_note="demo")
+            db.add(project)
+            db.flush()
+            component = models.Component(
+                project_id=project.id,
+                package_name="requests",
+                package_version="unknown",
+                version_normalized="unknown",
+                ecosystem="pypi",
+                version_detected=False,
+                need_manual_version_confirm=True,
+            )
+            db.add(component)
+            db.flush()
+            db.add(
+                models.RiskMonitorSnapshot(
+                    project_id=project.id,
+                    component_id=component.id,
+                    component_name="requests",
+                    current_version="2.34.2",
+                    latest_version="2.34.2",
+                    latest_source="pypi",
+                    current_version_published_at="2026-05-14",
+                    component_age_years=0.1,
+                    recommendation="未声明版本，按默认安装行为以最新版本 2.34.2 作为当前推断版本。",
+                )
+            )
+            db.add(
+                models.VulnerabilityRecord(
+                    project_id=project.id,
+                    component_id=component.id,
+                    source="nvd",
+                    advisory_id="CVE-2006-0697",
+                    cve_id="CVE-2006-0697",
+                    package_name="requests",
+                    package_version="unknown",
+                    ecosystem="pypi",
+                    cvss_score=10,
+                    severity="critical",
+                    description="历史记录仍为 unknown",
+                    fixed_version="",
+                )
+            )
+            db.commit()
+            project_id = project.id
+
+        response = test_client.get(f"/api/sca/projects/{project_id}/vulnerabilities")
+
+    assert response.json()["items"][0]["package_version"] == "2.34.2"
+
+
+def test_github_advisory_query_runs_without_token(monkeypatch):
+    from app.config import Settings
+    from app.models import Component
+    from app import vulnerability_service
+
+    captured = {}
+
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return [
+                {
+                    "ghsa_id": "GHSA-demo-1234",
+                    "cve_id": "CVE-2026-1234",
+                    "summary": "demo advisory",
+                    "cvss": {"score": 7.5},
+                    "severity": "high",
+                    "published_at": "2026-02-01T00:00:00Z",
+                    "html_url": "https://github.com/advisories/GHSA-demo-1234",
+                    "references": ["https://example.com/poc"],
+                    "vulnerabilities": [
+                        {
+                            "package": {"name": "requests", "ecosystem": "pypi"},
+                            "patched_versions": "<2.0.0",
+                        }
+                    ],
+                }
+            ]
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            return None
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def get(self, url, params=None, headers=None):
+            captured["url"] = url
+            captured["params"] = params or {}
+            captured["headers"] = headers or {}
+            return FakeResponse()
+
+    monkeypatch.setattr(vulnerability_service.httpx, "Client", FakeClient)
+    component = Component(project_id=1, package_name="requests", normalized_name="requests", package_version="1.0.0", ecosystem="pypi")
+
+    findings = vulnerability_service.query_github(component, Settings(github_token=""))
+
+    assert captured["url"].endswith("/advisories")
+    assert "Authorization" not in captured["headers"]
+    assert "requests 1.0.0" in captured["params"]["query"]
+    assert findings[0].source == "github"
+    assert findings[0].advisory_id == "GHSA-demo-1234"
+    assert findings[0].cve_id == "CVE-2026-1234"
+
+
 def test_vulnerability_stats_and_trend(monkeypatch, tmp_path):
     client, main, models, database = build_client(monkeypatch, tmp_path)
     with client as test_client:

@@ -31,9 +31,11 @@ from .risk_monitor_service import monitor_component_update, raw_json, snapshot_r
 from .scanners import opensca_client, syft_client, trivy_client
 from .scanners.base import ScannerCommandResult, command_to_log_line, file_sha256
 from .scanners.dependency_track_client import DependencyTrackClient
-from .vulnerability_service import query_component_vulnerabilities
+from .vulnerability_service import query_component_vulnerabilities, vulnerability_source_status
 
 settings = get_settings()
+
+UNKNOWN_VERSION_VALUES = {"", "unknown", "none", "null", "n/a", "na", "未声明", "未知"}
 
 celery_app = Celery(
     "juxin_sca",
@@ -336,9 +338,115 @@ def _latest_source_root(db, project_id: int) -> Path | None:
     return root if root.exists() else None
 
 
+def _is_unknown_version(value: object) -> bool:
+    return str(value or "").strip().lower() in UNKNOWN_VERSION_VALUES
+
+
+def _latest_monitor_snapshot(db, component: Component) -> RiskMonitorSnapshot | None:
+    return (
+        db.query(RiskMonitorSnapshot)
+        .filter_by(project_id=component.project_id, component_id=component.id)
+        .order_by(RiskMonitorSnapshot.checked_at.desc(), RiskMonitorSnapshot.id.desc())
+        .first()
+    )
+
+
+def _snapshot_current_version(snapshot: RiskMonitorSnapshot | None) -> str:
+    version = str(snapshot.current_version or "").strip() if snapshot else ""
+    return "" if _is_unknown_version(version) else version
+
+
+def _persist_inferred_monitor_snapshot(db, component: Component, data: dict[str, object]) -> str:
+    version = str(data.get("current_version") or "").strip()
+    if _is_unknown_version(version):
+        return ""
+    db.add(
+        RiskMonitorSnapshot(
+            project_id=component.project_id,
+            component_id=component.id,
+            component_name=component.package_name,
+            current_version=version,
+            latest_version=str(data.get("latest_version") or ""),
+            latest_source=str(data.get("latest_source") or ""),
+            update_available=bool(data.get("update_available")),
+            version_delta=str(data.get("version_delta") or "unknown"),
+            current_version_published_at=str(data.get("current_version_published_at") or ""),
+            component_age_years=float(data.get("component_age_years") or 0),
+            eol_status=str(data.get("eol_status") or "unknown"),
+            eol_date=str(data.get("eol_date") or ""),
+            vulnerability_count=db.query(VulnerabilityRecord).filter_by(component_id=component.id).count(),
+            risk_level="review",
+            recommendation=str(data.get("recommendation") or "未声明版本，按默认安装行为以最新版本作为当前推断版本。"),
+            raw_json=raw_json(data.get("raw") or {}),
+        )
+    )
+    return version
+
+
+def _inferred_component_version(db, component: Component) -> str:
+    if not (_is_unknown_version(component.package_version) or not component.version_detected):
+        return ""
+    snapshot_version = _snapshot_current_version(_latest_monitor_snapshot(db, component))
+    if snapshot_version:
+        return snapshot_version
+    try:
+        return _persist_inferred_monitor_snapshot(db, component, monitor_component_update(component, settings))
+    except Exception:
+        return ""
+
+
+def _component_for_vulnerability_query(db, component: Component) -> Component:
+    inferred_version = _inferred_component_version(db, component)
+    if not inferred_version:
+        return component
+    purl = component.purl
+    if purl and "@" in purl:
+        purl = f"{purl.rsplit('@', 1)[0]}@{inferred_version}"
+    return Component(
+        id=component.id,
+        project_id=component.project_id,
+        package_name=component.package_name,
+        package_version=inferred_version,
+        normalized_name=component.normalized_name,
+        package_manager=component.package_manager,
+        purl=purl,
+        cpe=component.cpe,
+        group_id=component.group_id,
+        artifact_id=component.artifact_id,
+        version_normalized=inferred_version,
+        ecosystem=component.ecosystem,
+        scope=component.scope,
+        dependency_type=component.dependency_type,
+        source_path=component.source_path,
+        source_file=component.source_file,
+        evidence_level=component.evidence_level,
+        evidence_file=component.evidence_file,
+        evidence_text=component.evidence_text,
+        detected_by=component.detected_by,
+        confidence_score=component.confidence_score,
+        version_conflict=component.version_conflict,
+        conflict_reason=component.conflict_reason,
+        scan_mode=component.scan_mode,
+        detection_method=component.detection_method,
+        evidence_type=component.evidence_type,
+        confidence_level=component.confidence_level,
+        need_manual_confirm=component.need_manual_confirm,
+        version_detected=True,
+        need_manual_version_confirm=component.need_manual_version_confirm,
+        declared_version=component.declared_version,
+        resolved_version=inferred_version,
+        version_lock_status=component.version_lock_status,
+        version_risk_type=component.version_risk_type,
+        risk_explanation=component.risk_explanation,
+        fix_recommendation=component.fix_recommendation,
+        license_name=component.license_name,
+    )
+
+
 def _persist_vulnerability_findings(db, project_id: int, component: Component, source_root: Path | None) -> int:
     reachability = analyze_component_reachability(component, source_root)
-    findings = query_component_vulnerabilities(component, settings)
+    query_component = _component_for_vulnerability_query(db, component)
+    findings = query_component_vulnerabilities(query_component, settings)
     component.vulnerability_status = "vulnerable" if findings else "clean"
     for finding in findings:
         db.add(
@@ -401,6 +509,15 @@ def query_project_vulnerabilities_task(scan_task_id: int) -> dict[str, int | str
         try:
             _mark_parent(db, task, "running", 5, "正在准备漏洞查询任务")
             db.add(ScanLog(scan_task_id=task.id, level="info", message="开始异步查询组件漏洞情报"))
+            coverage = vulnerability_source_status(settings)
+            db.add(
+                ScanLog(
+                    scan_task_id=task.id,
+                    level="info",
+                    message="漏洞源覆盖检查："
+                    + "；".join(f"{item.label}={'已启用' if item.enabled else '未启用'}（{item.detail}）" for item in coverage),
+                )
+            )
             db.commit()
 
             components = db.query(Component).filter_by(project_id=task.project_id).order_by(Component.id.asc()).all()

@@ -195,6 +195,14 @@ def _has_inferred_version(component: Component, snapshot: RiskMonitorSnapshot | 
     inferred_version = str(snapshot.current_version or "").strip() if snapshot else ""
     return bool((_is_unknown_version(component.package_version) or not component.version_detected) and not _is_unknown_version(inferred_version))
 
+
+def _vulnerability_out_with_inferred_version(vulnerability: VulnerabilityRecord, snapshot: RiskMonitorSnapshot | None) -> dict[str, object]:
+    data = VulnerabilityOut.model_validate(vulnerability).model_dump()
+    inferred_version = str(snapshot.current_version or "").strip() if snapshot else ""
+    if _is_unknown_version(vulnerability.package_version) and not _is_unknown_version(inferred_version):
+        data["package_version"] = inferred_version
+    return data
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origin_list,
@@ -1115,7 +1123,8 @@ async def list_project_vulnerabilities(
     items = db.scalars(
         select(VulnerabilityRecord).where(VulnerabilityRecord.project_id == project_id).order_by(VulnerabilityRecord.risk_score.desc(), VulnerabilityRecord.cvss_score.desc())
     ).all()
-    return VulnerabilityListOut(total=len(items), items=list(items))
+    snapshots = _latest_snapshot_by_component(db, project_id)
+    return VulnerabilityListOut(total=len(items), items=[_vulnerability_out_with_inferred_version(item, snapshots.get(item.component_id or 0)) for item in items])
 
 
 @app.post("/api/sca/vulnerabilities/cve", response_model=VulnerabilityListOut, tags=["vulnerabilities"])

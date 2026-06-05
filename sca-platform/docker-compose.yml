@@ -35,7 +35,7 @@ services:
     env_file:
       - .env
     environment:
-      APP_VERSION: ${SCA_APP_VERSION:-5.64.1}
+      APP_VERSION: ${SCA_APP_VERSION:-5.64.2}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
@@ -59,7 +59,7 @@ services:
     env_file:
       - .env
     environment:
-      APP_VERSION: ${SCA_APP_VERSION:-5.64.1}
+      APP_VERSION: ${SCA_APP_VERSION:-5.64.2}
     volumes:
       - sca-upload-data:/data/sca/uploads
       - sca-report-data:/data/sca/reports
@@ -80,7 +80,7 @@ services:
     env_file:
       - .env
     environment:
-      APP_VERSION: ${SCA_APP_VERSION:-5.64.1}
+      APP_VERSION: ${SCA_APP_VERSION:-5.64.2}
     volumes:
       - sca-upload-data:/data/sca/uploads
       - sca-report-data:/data/sca/reports
@@ -102,7 +102,7 @@ services:
     env_file:
       - .env
     environment:
-      APP_VERSION: ${SCA_APP_VERSION:-5.64.1}
+      APP_VERSION: ${SCA_APP_VERSION:-5.64.2}
     volumes:
       - sca-upload-data:/data/sca/uploads
       - sca-report-data:/data/sca/reports
