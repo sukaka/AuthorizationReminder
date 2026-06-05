@@ -188,6 +188,38 @@ def test_report_includes_management_summary_confidence_and_priority(monkeypatch,
     assert "pip install fastapi==0.115.7" in document
 
 
+def test_docx_report_uses_formal_cover_and_property_table_layout(monkeypatch, tmp_path):
+    client, _main, models, database = build_client(monkeypatch, tmp_path)
+    with client as test_client:
+        project_id = seed_project(database, models)
+        created = test_client.post(
+            f"/api/sca/projects/{project_id}/reports",
+            json={"format": "docx", "metadata": report_metadata()},
+        )
+        report = created.json()
+        downloaded = test_client.get(f"/api/sca/reports/{report['id']}/download")
+
+    with zipfile.ZipFile(BytesIO(downloaded.content)) as archive:
+        document = archive.read("word/document.xml").decode("utf-8")
+
+    assert "聚信测试委托单位" in document
+    assert "报告项目" in document
+    assert "软件成分分析报告" in document
+    assert "2026 年 06 月 05 日" in document
+    assert "版权所有" in document
+    assert "侵权必究" in document
+    assert "项目名称 / Project Name" not in document
+    assert "Project Name" in document
+    assert "Version Number" in document
+    assert "Reference" in document
+    assert "Document" in document
+    assert "需求依据" in document
+    assert '<w:tblGrid>' in document
+    assert '<w:gridSpan w:val="5"/>' in document
+    assert '<w:tblW w:w="9026" w:type="dxa"/>' in document
+    assert '<w:top w:val="single" w:sz="8" w:color="000000"/>' in document
+
+
 def test_docx_report_includes_tool_status_reason_and_report_path(monkeypatch, tmp_path):
     client, _main, models, database = build_client(monkeypatch, tmp_path)
     with client as test_client:

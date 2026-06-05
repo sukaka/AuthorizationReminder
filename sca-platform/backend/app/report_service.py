@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import html
 import json
+import re
 import zipfile
 from collections import Counter, defaultdict
 from datetime import datetime, timezone
@@ -470,6 +471,12 @@ def _xml_text(value: object) -> str:
     return html.escape(text.replace("\n", " / "))
 
 
+PAGE_WIDTH_DXA = 11906
+PAGE_HEIGHT_DXA = 16838
+PAGE_MARGIN_DXA = 1440
+CONTENT_WIDTH_DXA = PAGE_WIDTH_DXA - PAGE_MARGIN_DXA * 2
+
+
 def _run(text: object, *, bold: bool = False, size: int | None = None, color: str | None = None) -> str:
     props = []
     if bold:
@@ -492,12 +499,24 @@ def _paragraph(
     size: int | None = None,
     color: str | None = None,
     page_break: bool = False,
+    before: int | None = None,
+    after: int | None = None,
+    line: int | None = None,
 ) -> str:
     p_props = []
     if style:
         p_props.append(f'<w:pStyle w:val="{style}"/>')
     if align:
         p_props.append(f'<w:jc w:val="{align}"/>')
+    if before is not None or after is not None or line is not None:
+        spacing = []
+        if before is not None:
+            spacing.append(f'w:before="{before}"')
+        if after is not None:
+            spacing.append(f'w:after="{after}"')
+        if line is not None:
+            spacing.append(f'w:line="{line}" w:lineRule="auto"')
+        p_props.append(f"<w:spacing {' '.join(spacing)}/>")
     properties = f"<w:pPr>{''.join(p_props)}</w:pPr>" if p_props else ""
     content = _run(text, bold=bold, size=size, color=color) if text != "" else ""
     if page_break:
@@ -509,28 +528,96 @@ def _page_break() -> str:
     return _paragraph(page_break=True)
 
 
-def _table_cell(value: object, *, header: bool = False, cols: int = 1) -> str:
+def _cell_spec(value: object, **overrides: object) -> dict[str, object]:
+    data = {"value": value}
+    data.update(overrides)
+    return data
+
+
+def _cell_paragraphs(value: object, *, align: str | None, bold: bool, size: int | None = None) -> str:
+    if isinstance(value, (list, tuple)):
+        values = list(value)
+    else:
+        values = str(value or "").splitlines() or [""]
+    return "".join(_paragraph(item, align=align, bold=bold, size=size, after=0, line=300) for item in values)
+
+
+def _table_cell(
+    value: object,
+    *,
+    header: bool = False,
+    cols: int = 1,
+    width: int | None = None,
+    align: str | None = None,
+    fill: str | None = None,
+    bold: bool | None = None,
+    size: int | None = None,
+) -> str:
     span = f'<w:gridSpan w:val="{cols}"/>' if cols > 1 else ""
-    fill = '<w:shd w:fill="E5E7EB"/>' if header else ""
-    props = f"<w:tcPr>{span}{fill}<w:tcMar><w:top w:w=\"80\" w:type=\"dxa\"/><w:left w:w=\"80\" w:type=\"dxa\"/><w:bottom w:w=\"80\" w:type=\"dxa\"/><w:right w:w=\"80\" w:type=\"dxa\"/></w:tcMar></w:tcPr>"
-    return f"<w:tc>{props}{_paragraph(value, bold=header)}</w:tc>"
+    shading = f'<w:shd w:fill="{fill or "E5E7EB"}"/>' if header or fill else ""
+    cell_width = f'<w:tcW w:w="{width}" w:type="dxa"/>' if width else ""
+    props = (
+        f"<w:tcPr>{cell_width}{span}{shading}<w:vAlign w:val=\"center\"/>"
+        '<w:tcMar><w:top w:w="110" w:type="dxa"/><w:left w:w="140" w:type="dxa"/>'
+        '<w:bottom w:w="110" w:type="dxa"/><w:right w:w="140" w:type="dxa"/></w:tcMar></w:tcPr>'
+    )
+    content = _cell_paragraphs(value, align=align, bold=header if bold is None else bold, size=size)
+    return f"<w:tc>{props}{content}</w:tc>"
 
 
-def _table(rows: list[list[object]], *, header_rows: int = 1) -> str:
+def _table(
+    rows: list[list[object]],
+    *,
+    header_rows: int = 1,
+    widths: list[int] | None = None,
+    border_color: str = "CBD5E1",
+    border_size: int = 4,
+    table_width: int = CONTENT_WIDTH_DXA,
+) -> str:
+    if not rows:
+        return ""
+    column_count = len(widths) if widths else max(len(row) for row in rows)
+    if not widths:
+        base = table_width // column_count
+        widths = [base] * column_count
+        widths[-1] += table_width - sum(widths)
     body = []
     for index, row in enumerate(rows):
-        cells = "".join(_table_cell(value, header=index < header_rows) for value in row)
+        grid_index = 0
+        cell_xml = []
+        for value in row:
+            if isinstance(value, dict):
+                cell_value = value.get("value", "")
+                cols = int(value.get("cols") or 1)
+                header = bool(value.get("header", index < header_rows))
+                align = str(value.get("align") or ("center" if header else "left"))
+                fill = str(value.get("fill") or "") or None
+                bold = bool(value.get("bold")) if "bold" in value else None
+                size = int(value["size"]) if value.get("size") else None
+            else:
+                cell_value = value
+                cols = 1
+                header = index < header_rows
+                align = "center" if header else "left"
+                fill = None
+                bold = None
+                size = None
+            width = sum(widths[grid_index : grid_index + cols])
+            cell_xml.append(_table_cell(cell_value, header=header, cols=cols, width=width, align=align, fill=fill, bold=bold, size=size))
+            grid_index += cols
+        cells = "".join(cell_xml)
         body.append(f"<w:tr>{cells}</w:tr>")
     borders = (
-        '<w:tblBorders><w:top w:val="single" w:sz="4" w:color="CBD5E1"/>'
-        '<w:left w:val="single" w:sz="4" w:color="CBD5E1"/>'
-        '<w:bottom w:val="single" w:sz="4" w:color="CBD5E1"/>'
-        '<w:right w:val="single" w:sz="4" w:color="CBD5E1"/>'
-        '<w:insideH w:val="single" w:sz="4" w:color="CBD5E1"/>'
-        '<w:insideV w:val="single" w:sz="4" w:color="CBD5E1"/></w:tblBorders>'
+        f'<w:tblBorders><w:top w:val="single" w:sz="{border_size}" w:color="{border_color}"/>'
+        f'<w:left w:val="single" w:sz="{border_size}" w:color="{border_color}"/>'
+        f'<w:bottom w:val="single" w:sz="{border_size}" w:color="{border_color}"/>'
+        f'<w:right w:val="single" w:sz="{border_size}" w:color="{border_color}"/>'
+        f'<w:insideH w:val="single" w:sz="{border_size}" w:color="{border_color}"/>'
+        f'<w:insideV w:val="single" w:sz="{border_size}" w:color="{border_color}"/></w:tblBorders>'
     )
-    props = f'<w:tblPr><w:tblW w:w="5000" w:type="pct"/>{borders}</w:tblPr>'
-    return f"<w:tbl>{props}{''.join(body)}</w:tbl>"
+    props = f'<w:tblPr><w:tblW w:w="{sum(widths)}" w:type="dxa"/><w:tblLayout w:type="fixed"/>{borders}</w:tblPr>'
+    grid = f"<w:tblGrid>{''.join(f'<w:gridCol w:w=\"{width}\"/>' for width in widths)}</w:tblGrid>"
+    return f"<w:tbl>{props}{grid}{''.join(body)}</w:tbl>"
 
 
 def _severity_label(value: str | None) -> str:
@@ -789,6 +876,103 @@ def _vulnerability_rows(vulnerabilities: list[VulnerabilityRecord], limit: int =
     return rows
 
 
+def _cover_date(value: str) -> str:
+    match = re.search(r"(\d{4})年(\d{2})月(\d{2})日", value)
+    if not match:
+        return value
+    year, month, day = match.groups()
+    return f"{year} 年 {month} 月 {day} 日"
+
+
+def _cover_page(project: Project, metadata: dict[str, str], date_text: str) -> list[str]:
+    return [
+        _paragraph(metadata["client_name"], align="center", bold=True, size=44, before=760, after=360),
+        _paragraph(project.name, align="center", bold=True, size=40, after=1180),
+        _paragraph("软件成分分析报告", align="center", bold=True, size=34, after=3300),
+        _paragraph(_cover_date(date_text), align="center", size=32, after=2100),
+        _paragraph(metadata["organization_name"], align="center", bold=True, size=26, after=300),
+        _paragraph("版权所有  侵权必究", align="center", bold=True, size=24),
+        _page_break(),
+    ]
+
+
+def _report_properties_table(project: Project, components: list[Component], metadata: dict[str, str]) -> str:
+    label_fill = "F2F2F2"
+    widths = [2050, 1500, 1400, 1600, 1000, 1476]
+    audit_dates = f"{metadata['audit_start_date']} 至 {metadata['audit_end_date']}"
+    rows = [
+        [
+            _cell_spec(["项目名称", "Project Name"], header=True, fill=label_fill, align="center", bold=True),
+            _cell_spec(f"{project.name} SCA 审计", cols=5, align="left", size=22),
+        ],
+        [
+            _cell_spec(["系统名称", "Software Name"], header=True, fill=label_fill, align="center", bold=True),
+            _cell_spec(project.name, cols=2, align="left", size=22),
+            _cell_spec(["版本号", "Version Number"], header=True, fill=label_fill, align="center", bold=True),
+            _cell_spec(metadata["version_number"], cols=2, align="center", size=22),
+        ],
+        [
+            _cell_spec(["委托单位名称", "Client Name"], header=True, fill=label_fill, align="center", bold=True),
+            _cell_spec(metadata["client_name"], cols=5, align="left", size=22),
+        ],
+        [
+            _cell_spec(["委托单位地址", "Client Address"], header=True, fill=label_fill, align="center", bold=True),
+            _cell_spec(metadata["client_address"], cols=5, align="left", size=22),
+        ],
+        [
+            _cell_spec(["联系人姓名", "Contactor Name"], header=True, fill=label_fill, align="center", bold=True),
+            _cell_spec(metadata["contact_name"], align="left", size=22),
+            _cell_spec(["联系电话", "Phone"], header=True, fill=label_fill, align="center", bold=True),
+            _cell_spec(metadata["contact_phone"], align="left", size=22),
+            _cell_spec(["邮箱", "E-mail"], header=True, fill=label_fill, align="center", bold=True),
+            _cell_spec(metadata["contact_email"], align="left", size=20),
+        ],
+        [
+            _cell_spec(["审计机构名称", "Organization", "Name"], header=True, fill=label_fill, align="center", bold=True),
+            _cell_spec(metadata["organization_name"], cols=5, align="left", size=22),
+        ],
+        [
+            _cell_spec(["审计地点", "Audit Address"], header=True, fill=label_fill, align="center", bold=True),
+            _cell_spec(metadata["audit_address"], cols=5, align="left", size=22),
+        ],
+        [
+            _cell_spec(["样品内容及数量", "Audit Sample"], header=True, fill=label_fill, align="center", bold=True),
+            _cell_spec(f"系统源代码、系统开源组件 [{len(components)}]", cols=3, align="left", size=21),
+            _cell_spec("其他 无", cols=2, align="center", size=21),
+        ],
+        [
+            _cell_spec(["代码接收日期", "Accepted Date"], header=True, fill=label_fill, align="center", bold=True),
+            _cell_spec(metadata["accepted_date"], align="center", size=21),
+            _cell_spec(["审计日期", "Testing Date"], header=True, fill=label_fill, align="center", bold=True),
+            _cell_spec(audit_dates, cols=3, align="center", size=21),
+        ],
+        [
+            _cell_spec(["审计标准", "Audit Standard"], header=True, fill=label_fill, align="center", bold=True),
+            _cell_spec("●  以《GB/T 39412-2020 信息安全技术 代码安全审查规范》为主要依据。", cols=5, align="left", size=20),
+        ],
+        [
+            _cell_spec(["参考文件", "Reference", "Document"], header=True, fill=label_fill, align="center", bold=True),
+            _cell_spec(
+                [
+                    "●  GB/T 39412-2020 信息安全技术 代码安全审查规范",
+                    "●  OWASP 代码安全审查指南",
+                    "●  CWE 代码安全审查指南",
+                    "●  ISO/IEC 27034 应用安全标准",
+                    "●  Python/C/C++/Java/PHP/Javascript 安全编码规范",
+                ],
+                cols=5,
+                align="left",
+                size=20,
+            ),
+        ],
+        [
+            _cell_spec("需求依据", header=True, fill=label_fill, align="center", bold=True),
+            _cell_spec("●  《代码安全审计实施方案》", cols=5, align="left", size=20),
+        ],
+    ]
+    return _table(rows, header_rows=0, widths=widths, border_color="000000", border_size=8)
+
+
 def _write_docx(
     path: Path,
     project: Project,
@@ -826,36 +1010,16 @@ def _write_docx(
         "附录C\t安全编码规范要求\t13",
     ]
     paragraphs = [
-        _paragraph(metadata["client_name"], align="center", size=24),
-        _paragraph(project.name, align="center", size=28, bold=True),
-        _paragraph("软件成分分析报告", style="Title"),
-        _paragraph(date_text, align="center", size=22),
-        _paragraph(metadata["organization_name"], align="center", size=22),
-        _paragraph("版权所有  侵权必究", align="center", size=18),
-        _page_break(),
+        *_cover_page(project, metadata, date_text),
         _paragraph("声 明", style="Heading1", align="center"),
         _paragraph("本报告无审核人员和授权签字人签字无效；"),
         _paragraph("本报告涂改无效；"),
         _paragraph("未经委托单位书面批准，不得复制报告（完整复制除外）；"),
         _paragraph("本报告审计结果仅对委托单位当时提供的源代码、依赖清单、构建产物和开源组件信息有效。当被测代码发生变更后，报告结论需重新验证。"),
         _paragraph("本报告结论的有效性建立在委托单位提供材料真实性和扫描环境完整性的基础上。"),
-        _paragraph("报告属性信息", style="Heading1", align="center"),
-        _paragraph("(Report Properties Information)", style="Subtitle"),
-        _table(
-            [
-                ["项目名称 / Project Name", f"{project.name}SCA审计"],
-                ["系统名称 / Software Name", project.name, "版本号 / Version Number", metadata["version_number"]],
-                ["委托单位名称 / Client Name", metadata["client_name"]],
-                ["委托单位地址 / Client Address", metadata["client_address"]],
-                ["联系人姓名 / Contactor Name", metadata["contact_name"], "联系电话 / Phone", metadata["contact_phone"], "邮箱 / E-mail", metadata["contact_email"]],
-                ["审计机构名称 / Organization Name", metadata["organization_name"]],
-                ["审计地点 / Audit Address", metadata["audit_address"]],
-                ["样品内容及数量 / Audit Sample", f"系统源代码、系统开源组件 [{len(components)}]"],
-                ["代码接收日期 / Accepted Date", metadata["accepted_date"], "审计日期 / Testing Date", f"{metadata['audit_start_date']}至{metadata['audit_end_date']}"],
-                ["审计标准 / Audit Standard", "以《GB/T 39412-2020 信息安全技术 代码安全审查规范》及开源组件漏洞库为主要依据。"],
-            ],
-            header_rows=0,
-        ),
+        _paragraph("报告属性信息", align="center", bold=True, size=30, before=240, after=120),
+        _paragraph("(Report Properties Information)", align="center", bold=True, size=25, after=120),
+        _report_properties_table(project, components, metadata),
         _page_break(),
         _paragraph("目  录", style="Title"),
         *[_paragraph(item, style="TOC") for item in toc_items],
