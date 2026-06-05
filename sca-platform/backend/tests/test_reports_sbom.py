@@ -160,6 +160,23 @@ def test_report_exports_generate_downloadable_files(monkeypatch, tmp_path):
             assert downloaded.content.startswith(magic)
 
 
+def test_report_can_be_deleted_with_file_removed(monkeypatch, tmp_path):
+    client, _main, models, database = build_client(monkeypatch, tmp_path)
+    with client as test_client:
+        project_id = seed_project(database, models)
+        created = test_client.post(f"/api/sca/projects/{project_id}/reports", json={"format": "docx"})
+        assert created.status_code == 200
+        report = created.json()
+
+        deleted = test_client.delete(f"/api/sca/reports/{report['id']}")
+        downloaded = test_client.get(f"/api/sca/reports/{report['id']}/download")
+
+    assert deleted.status_code == 200
+    assert deleted.json()["status"] == "deleted"
+    assert downloaded.status_code == 404
+    assert not (tmp_path / "reports" / report["filename"]).exists()
+
+
 def test_report_includes_management_summary_confidence_and_priority(monkeypatch, tmp_path):
     client, _main, models, database = build_client(monkeypatch, tmp_path)
     with client as test_client:

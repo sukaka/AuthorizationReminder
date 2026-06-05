@@ -6,7 +6,7 @@
         <small>软件成分分析平台</small>
       </div>
 
-      <el-menu class="menu" :default-active="activeMenu" @select="activeMenu = $event">
+      <el-menu class="menu" :default-active="activeMenu" @select="handleMenuSelect">
         <el-menu-item index="overview">
           <el-icon><DataAnalysis /></el-icon>
           <span>平台总览</span>
@@ -511,9 +511,10 @@
             <el-table-column prop="format" label="格式" width="90" />
             <el-table-column prop="status" label="状态" width="110" />
             <el-table-column prop="created_at" label="生成时间" width="210" />
-            <el-table-column label="操作" width="110">
+            <el-table-column label="操作" width="160">
               <template #default="{ row }">
                 <el-button text type="primary" @click="downloadReport(row)">下载</el-button>
+                <el-button text type="danger" :loading="reportDeletingId === row.id" @click="deleteReport(row)">删除</el-button>
               </template>
             </el-table-column>
           </el-table>
@@ -620,7 +621,7 @@
             <h2>SBOM 生成</h2>
             <div class="panel-actions">
               <el-select v-model="selectedProjectId" placeholder="选择项目" style="width: 220px" @change="loadProjectDetails">
-                <el-option v-for="project in projects" :key="project.id" :label="project.name" :value="project.id" />
+                <el-option v-for="project in aiProjectOptions" :key="project.id" :label="project.name" :value="project.id" />
               </el-select>
               <el-segmented v-model="sbomFormat" :options="['cyclonedx', 'spdx']" />
               <el-button type="primary" :loading="sbomCreating" :icon="Files" @click="createSbom">生成</el-button>
@@ -946,7 +947,10 @@
         <div class="panel">
           <div class="panel-head">
             <h2>系统配置</h2>
-            <el-button type="primary" :loading="systemConfigSaving" @click="saveSystemConfig">保存配置</el-button>
+            <div class="panel-actions">
+              <el-button :loading="systemConfigTesting" @click="testOpenaiConfig">测试模型</el-button>
+              <el-button type="primary" :loading="systemConfigSaving" @click="saveSystemConfig">保存配置</el-button>
+            </div>
           </div>
           <el-form class="config-form" label-position="top">
             <section class="config-section">
@@ -1111,7 +1115,9 @@ const imageScanning = ref(false)
 const monitorRunning = ref(false)
 const aiAnalyzing = ref(false)
 const systemConfigSaving = ref(false)
+const systemConfigTesting = ref(false)
 const deletingProjectId = ref(null)
+const reportDeletingId = ref(null)
 const taskPollingPaused = ref(false)
 const uploadProgress = ref(0)
 const imageUploadProgress = ref(0)
@@ -1290,6 +1296,10 @@ const userLabel = computed(() => {
 })
 
 const selectedProject = computed(() => projects.value.find((project) => project.id === selectedProjectId.value) || null)
+
+const latestProject = computed(() => projects.value[0] || null)
+
+const aiProjectOptions = computed(() => (latestProject.value ? [latestProject.value] : []))
 
 const projectIsInternetExposed = computed(() => {
   const text = `${selectedProject.value?.name || ''} ${selectedProject.value?.scan_note || ''}`.toLowerCase()
@@ -1607,6 +1617,14 @@ const clearProjectDetails = () => {
   })
 }
 
+const handleMenuSelect = async (menu) => {
+  activeMenu.value = menu
+  if (menu === 'ai' && latestProject.value && selectedProjectId.value !== latestProject.value.id) {
+    selectedProjectId.value = latestProject.value.id
+    await loadProjectDetails()
+  }
+}
+
 const loadProjects = async () => {
   projects.value = (await requestJson('/api/sca/projects')) || []
   if (selectedProjectId.value && !projects.value.some((project) => project.id === selectedProjectId.value)) {
@@ -1840,6 +1858,20 @@ const downloadReport = (row) => {
   window.open(apiUrl(`/api/sca/reports/${row.id}/download`), '_blank')
 }
 
+const deleteReport = async (row) => {
+  await ElMessageBox.confirm(`确认删除报告「${row.filename}」吗？`, '删除报告', { type: 'warning' })
+  reportDeletingId.value = row.id
+  try {
+    await requestJson(`/api/sca/reports/${row.id}`, { method: 'DELETE' })
+    await loadProjectDetails()
+    ElMessage.success('报告已删除')
+  } catch (err) {
+    ElMessage.error(err?.message || '报告删除失败')
+  } finally {
+    reportDeletingId.value = null
+  }
+}
+
 const createSbom = async () => {
   if (!selectedProjectId.value) {
     ElMessage.warning('请先选择项目')
@@ -1982,6 +2014,29 @@ const saveSystemConfig = async () => {
     ElMessage.error(err?.message || '系统配置保存失败')
   } finally {
     systemConfigSaving.value = false
+  }
+}
+
+const testOpenaiConfig = async () => {
+  systemConfigTesting.value = true
+  try {
+    const payload = {
+      upload_max_file_size_mb: Number(systemConfig.upload_max_file_size_mb || 0),
+      openai_api_key: systemConfig.openai_api_key || '',
+      openai_base_url: systemConfig.openai_base_url || 'https://api.openai.com/v1',
+      openai_model: systemConfig.openai_model || 'gpt-4o-mini',
+      openai_timeout_ms: Number(systemConfig.openai_timeout_ms || 30000),
+      clear_openai_api_key: Boolean(systemConfig.clear_openai_api_key),
+    }
+    const result = await requestJson('/api/sca/system-config/test-openai', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    })
+    ElMessage.success(result?.message || '模型连接测试成功')
+  } catch (err) {
+    ElMessage.error(err?.message || '模型连接测试失败')
+  } finally {
+    systemConfigTesting.value = false
   }
 }
 

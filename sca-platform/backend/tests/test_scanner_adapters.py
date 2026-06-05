@@ -4,6 +4,7 @@ import subprocess
 from pathlib import Path
 
 from app.config import Settings
+from app.scanners.dependency_track_client import DependencyTrackClient
 from app.scanners.opensca_client import OpenSCAAdapter
 from app.scanners.trivy_client import TrivyAdapter
 
@@ -75,3 +76,42 @@ def test_opensca_invalid_argument_returns_structured_error_without_trivy_flags(m
     assert "-log" in scan_command
     assert "-format" not in scan_command
     assert "--output" not in scan_command
+
+
+def test_dependency_track_bom_upload_accepts_empty_success_response(monkeypatch, tmp_path):
+    bom_path = tmp_path / "bom.json"
+    bom_path.write_text('{"bomFormat":"CycloneDX","components":[]}', encoding="utf-8")
+
+    class FakeResponse:
+        status_code = 200
+        text = ""
+        content = b""
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            raise ValueError("Expecting value: line 1 column 1 (char 0)")
+
+    class FakeClient:
+        def __init__(self, **_kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def put(self, url, json):
+            assert url.endswith("/api/v1/bom")
+            assert json["project"] == "project-uuid"
+            return FakeResponse()
+
+    monkeypatch.setattr("app.scanners.dependency_track_client.httpx.Client", FakeClient)
+
+    result = DependencyTrackClient(
+        Settings(dependency_track_api_key="odt_test", dependency_track_url="http://dependency-track")
+    ).upload_bom("project-uuid", bom_path)
+
+    assert result == {}

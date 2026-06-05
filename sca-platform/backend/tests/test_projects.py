@@ -164,3 +164,105 @@ def test_delete_missing_project_returns_404(monkeypatch, tmp_path):
         response = test_client.delete("/api/sca/projects/999")
 
     assert response.status_code == 404
+
+
+def test_rerun_failed_child_scan_task_requeues_parent_scan(monkeypatch, tmp_path):
+    client, models, database = build_client(monkeypatch, tmp_path)
+    captured = {}
+
+    def fake_apply_async(args, task_id):
+        captured["args"] = args
+        captured["task_id"] = task_id
+
+    with client as test_client:
+        monkeypatch.setattr("app.main.scan_uploaded_file.apply_async", fake_apply_async)
+        with database.SessionLocal() as db:
+            project = models.Project(name="rerun-project", scan_note="")
+            db.add(project)
+            db.flush()
+            upload = models.UploadFileRecord(
+                project_id=project.id,
+                upload_id="upload-rerun",
+                original_filename="source.zip",
+                storage_path=str(tmp_path / "source.zip"),
+                status="scanned",
+            )
+            db.add(upload)
+            db.flush()
+            parent = models.ScanTask(project_id=project.id, upload_file_id=upload.id, status="success", task_type="project_scan_task")
+            db.add(parent)
+            db.flush()
+            child = models.ScanTask(
+                project_id=project.id,
+                upload_file_id=upload.id,
+                parent_task_id=parent.id,
+                task_type="dependency_track_upload_task",
+                engine_name="dependency-track",
+                status="failed",
+                summary="Expecting value",
+                error_message="Expecting value",
+            )
+            db.add(child)
+            db.commit()
+            child_id = child.id
+            parent_id = parent.id
+
+        response = test_client.post(f"/api/sca/scan-tasks/{child_id}/rerun")
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "pending"
+    assert captured["args"] == [parent_id]
+    assert captured["task_id"]
+
+
+def test_scan_tasks_reconcile_dependency_track_upload_status(monkeypatch, tmp_path):
+    client, models, database = build_client(monkeypatch, tmp_path)
+    with client as test_client:
+        with database.SessionLocal() as db:
+            project = models.Project(name="dtrack-reconcile", scan_note="")
+            db.add(project)
+            db.flush()
+            upload = models.UploadFileRecord(
+                project_id=project.id,
+                upload_id="upload-dtrack",
+                original_filename="source.zip",
+                storage_path=str(tmp_path / "source.zip"),
+                status="scanned",
+            )
+            db.add(upload)
+            db.flush()
+            parent = models.ScanTask(project_id=project.id, upload_file_id=upload.id, status="success", task_type="project_scan_task")
+            db.add(parent)
+            db.flush()
+            db.add(
+                models.ScanTask(
+                    project_id=project.id,
+                    upload_file_id=upload.id,
+                    parent_task_id=parent.id,
+                    task_type="dependency_track_upload_task",
+                    engine_name="dependency-track",
+                    status="failed",
+                    progress=100,
+                    summary="Expecting value",
+                    error_message="Expecting value",
+                )
+            )
+            db.add(
+                models.DependencyTrackProject(
+                    local_project_id=project.id,
+                    dependency_track_project_uuid="dt-uuid",
+                    dependency_track_project_name="dtrack-reconcile",
+                    dependency_track_project_version="latest",
+                    last_status="bom_uploaded",
+                )
+            )
+            db.commit()
+            project_id = project.id
+
+        response = test_client.get(f"/api/sca/projects/{project_id}/scan-tasks")
+
+    assert response.status_code == 200
+    upload_task = next(item for item in response.json() if item["task_type"] == "dependency_track_upload_task")
+    assert upload_task["status"] == "completed"
+    assert upload_task["summary"] == "BOM 已上传 Dependency-Track"
+    assert upload_task["error_message"] == ""

@@ -8,6 +8,7 @@ import shutil
 import time
 import uuid
 
+import httpx
 import redis
 from fastapi.exceptions import RequestValidationError
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile, status
@@ -101,6 +102,7 @@ from .schemas import (
     SbomCreateIn,
     SbomOut,
     SystemConfigOut,
+    SystemConfigTestOut,
     SystemConfigUpdateIn,
     UploadFileOut,
     UploadListOut,
@@ -229,14 +231,14 @@ def _api_error_code(status_code: int) -> str:
 
 
 def _api_error_message(status_code: int, detail: object = "") -> str:
-    if status_code == 504:
-        return "接口处理超时，请稍后重试或检查后端服务状态"
-    if status_code in {502, 503}:
-        return "后端服务暂不可用，请稍后重试或检查服务状态"
     if isinstance(detail, str) and detail:
         return detail
     if detail:
         return str(detail)
+    if status_code == 504:
+        return "接口处理超时，请稍后重试或检查后端服务状态"
+    if status_code in {502, 503}:
+        return "后端服务暂不可用，请稍后重试或检查服务状态"
     return "请求处理失败"
 
 
@@ -366,18 +368,108 @@ def _upsert_setting(db: Session, key: str, value: object, username: str) -> None
     db.add(SystemSetting(key=key, value=str(value), updated_by=username))
 
 
-def _effective_ai_settings(db: Session) -> Settings:
+def _effective_ai_settings(db: Session, override: SystemConfigUpdateIn | None = None) -> Settings:
     values = _setting_map(db)
-    api_key = str(values.get(SYSTEM_CONFIG_OPENAI_API_KEY) or settings.openai_api_key or "").strip()
-    base_url = _normalize_openai_base_url(values.get(SYSTEM_CONFIG_OPENAI_BASE_URL) or settings.openai_api_url)
-    model = str(values.get(SYSTEM_CONFIG_OPENAI_MODEL) or settings.openai_model or "gpt-4o-mini").strip() or "gpt-4o-mini"
-    timeout_ms = _to_int(values.get(SYSTEM_CONFIG_OPENAI_TIMEOUT_MS), settings.openai_timeout_ms, 1000, 300000)
+    if override:
+        if override.clear_openai_api_key:
+            api_key = ""
+        else:
+            api_key = str(override.openai_api_key or values.get(SYSTEM_CONFIG_OPENAI_API_KEY) or settings.openai_api_key or "").strip()
+        base_url = _normalize_openai_base_url(override.openai_base_url or values.get(SYSTEM_CONFIG_OPENAI_BASE_URL) or settings.openai_api_url)
+        model = str(override.openai_model or values.get(SYSTEM_CONFIG_OPENAI_MODEL) or settings.openai_model or "gpt-4o-mini").strip() or "gpt-4o-mini"
+        timeout_ms = _to_int(override.openai_timeout_ms, settings.openai_timeout_ms, 1000, 300000)
+    else:
+        api_key = str(values.get(SYSTEM_CONFIG_OPENAI_API_KEY) or settings.openai_api_key or "").strip()
+        base_url = _normalize_openai_base_url(values.get(SYSTEM_CONFIG_OPENAI_BASE_URL) or settings.openai_api_url)
+        model = str(values.get(SYSTEM_CONFIG_OPENAI_MODEL) or settings.openai_model or "gpt-4o-mini").strip() or "gpt-4o-mini"
+        timeout_ms = _to_int(values.get(SYSTEM_CONFIG_OPENAI_TIMEOUT_MS), settings.openai_timeout_ms, 1000, 300000)
     return settings.model_copy(update={
         "openai_api_key": api_key,
         "openai_api_url": _openai_chat_url(base_url),
         "openai_model": model,
         "openai_timeout_ms": timeout_ms,
     })
+
+
+def _provider_error_detail(response: httpx.Response | None) -> str:
+    if response is None:
+        return ""
+    try:
+        data = response.json()
+    except ValueError:
+        data = None
+    if isinstance(data, dict):
+        error = data.get("error")
+        if isinstance(error, dict):
+            for key in ("message", "detail", "code"):
+                if error.get(key):
+                    return str(error[key])
+        for key in ("message", "detail", "error"):
+            if data.get(key):
+                return str(data[key])
+    text = response.text.strip()
+    return text[:300] if text else ""
+
+
+def _openai_http_error_message(exc: httpx.HTTPStatusError) -> str:
+    status_code = exc.response.status_code if exc.response is not None else 0
+    detail = _provider_error_detail(exc.response)
+    if status_code in {401, 403}:
+        prefix = "模型服务认证失败，请检查 API Key、账号权限或 BaseURL"
+    elif status_code == 404:
+        prefix = "模型服务地址不可用，请检查 BaseURL 是否应包含 /v1"
+    elif status_code == 429:
+        prefix = "模型服务限流或额度不足，请稍后重试或检查账户额度"
+    elif 400 <= status_code < 500:
+        prefix = "模型服务拒绝请求，请检查模型名称、BaseURL 和请求参数"
+    else:
+        prefix = "模型服务暂不可用"
+    return f"{prefix}（HTTP {status_code}{'：' + detail if detail else ''}）"
+
+
+def _test_openai_connection(effective_settings: Settings) -> SystemConfigTestOut:
+    if not effective_settings.openai_api_key:
+        raise HTTPException(status_code=400, detail="请先填写或保存 OpenAI API Key")
+    started = time.perf_counter()
+    body = {
+        "model": effective_settings.openai_model,
+        "messages": [
+            {"role": "system", "content": "你是 SCA 平台的大模型连通性测试助手。"},
+            {"role": "user", "content": "请只回复 ok。"},
+        ],
+        "temperature": 0,
+        "max_tokens": 8,
+    }
+    headers = {"Authorization": f"Bearer {effective_settings.openai_api_key}", "Content-Type": "application/json"}
+    try:
+        with httpx.Client(timeout=effective_settings.openai_timeout_ms / 1000) as client:
+            response = client.post(effective_settings.openai_api_url, headers=headers, json=body)
+            response.raise_for_status()
+        data = response.json()
+    except httpx.HTTPStatusError as exc:
+        raise HTTPException(status_code=502, detail=_openai_http_error_message(exc)) from exc
+    except httpx.TimeoutException as exc:
+        raise HTTPException(status_code=504, detail="模型服务请求超时，请检查网络、BaseURL 或调大超时时间") from exc
+    except httpx.RequestError as exc:
+        raise HTTPException(status_code=502, detail=f"模型服务连接失败：{exc}") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=502, detail="模型服务返回了非 JSON 响应，请检查 BaseURL 是否指向 OpenAI 兼容接口") from exc
+    content = ""
+    try:
+        content = str(data["choices"][0]["message"]["content"]).strip()
+    except (KeyError, IndexError, TypeError):
+        content = ""
+    if not content:
+        raise HTTPException(status_code=502, detail="模型服务响应格式不符合 OpenAI Chat Completions 规范")
+    usage = data.get("usage") if isinstance(data, dict) else {}
+    return SystemConfigTestOut(
+        success=True,
+        message="模型连接测试成功",
+        openai_base_url=_normalize_openai_base_url(effective_settings.openai_api_url),
+        model=effective_settings.openai_model,
+        latency_ms=round((time.perf_counter() - started) * 1000),
+        token_total=int((usage or {}).get("total_tokens") or 0),
+    )
 
 
 def _upload_limit_bytes(db: Session) -> int:
@@ -440,6 +532,17 @@ async def update_system_config(
         _upsert_setting(db, SYSTEM_CONFIG_OPENAI_API_KEY, payload.openai_api_key.strip(), username)
     db.commit()
     return _system_config_payload(db)
+
+
+@app.post("/api/sca/system-config/test-openai", response_model=SystemConfigTestOut, tags=["system"])
+async def test_system_config_openai(
+    request: Request,
+    payload: SystemConfigUpdateIn,
+    user: Annotated[UserPayload, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> SystemConfigTestOut:
+    await require_action("sca:write", request, user, settings)
+    return _test_openai_connection(_effective_ai_settings(db, payload))
 
 
 @app.get("/api/sca/overview", response_model=OverviewOut, tags=["sca"])
@@ -947,7 +1050,7 @@ async def list_scan_tasks(
     db: Annotated[Session, Depends(get_db)],
 ) -> list[ScanTaskOut]:
     await require_action("sca:read", request, user, settings)
-    if _close_stale_vulnerability_query_tasks(db, project_id):
+    if _close_stale_vulnerability_query_tasks(db, project_id) or _reconcile_dependency_track_task_status(db, project_id):
         db.commit()
     return list(db.scalars(select(ScanTask).where(ScanTask.project_id == project_id).order_by(ScanTask.created_at.desc())).all())
 
@@ -965,15 +1068,27 @@ async def rerun_scan_subtask(
         raise HTTPException(status_code=404, detail="扫描任务不存在")
     if task.parent_task_id is None:
         raise HTTPException(status_code=400, detail="主任务请通过重新上传或重新扫描触发")
+    parent = db.get(ScanTask, task.parent_task_id)
+    if not parent:
+        raise HTTPException(status_code=404, detail="主扫描任务不存在")
+    celery_task_id = uuid.uuid4().hex
     task.status = "pending"
     task.progress = 0
     task.error_message = ""
     task.summary = "已加入重新执行队列"
     task.started_at = None
     task.finished_at = None
-    db.add(ScanLog(scan_task_id=task.parent_task_id, level="info", message=f"子任务已标记重新执行：{task.task_type}"))
+    parent.status = "queued"
+    parent.progress = 0
+    parent.error_message = ""
+    parent.summary = f"已加入重新执行队列：{task.task_type}"
+    parent.celery_task_id = celery_task_id
+    parent.started_at = None
+    parent.finished_at = None
+    db.add(ScanLog(scan_task_id=parent.id, level="info", message=f"子任务已触发重新执行：{task.task_type}"))
     db.commit()
     db.refresh(task)
+    scan_uploaded_file.apply_async(args=[parent.id], task_id=celery_task_id)
     return task
 
 
@@ -1065,6 +1180,35 @@ def _close_stale_vulnerability_query_tasks(db: Session, project_id: int) -> int:
         db.add(ScanLog(scan_task_id=task.id, level="warning", message=message))
         closed += 1
     return closed
+
+
+def _reconcile_dependency_track_task_status(db: Session, project_id: int) -> int:
+    status_row = db.scalar(select(DependencyTrackProject).where(DependencyTrackProject.local_project_id == project_id))
+    if not status_row or status_row.last_status not in {"bom_uploaded", "fetched"}:
+        return 0
+    tasks = db.scalars(
+        select(ScanTask).where(
+            ScanTask.project_id == project_id,
+            ScanTask.task_type.in_(["dependency_track_upload_task", "dependency_track_fetch_task"]),
+        )
+    ).all()
+    changed = 0
+    for task in tasks:
+        if task.task_type == "dependency_track_upload_task" and task.status != "completed":
+            task.status = "completed"
+            task.progress = 100
+            task.summary = "BOM 已上传 Dependency-Track"
+            task.error_message = ""
+            task.finished_at = task.finished_at or datetime.now(timezone.utc)
+            changed += 1
+        if task.task_type == "dependency_track_fetch_task" and status_row.last_status == "fetched" and task.status != "completed":
+            task.status = "completed"
+            task.progress = 100
+            task.summary = "Dependency-Track 指标已拉取"
+            task.error_message = ""
+            task.finished_at = task.finished_at or datetime.now(timezone.utc)
+            changed += 1
+    return changed
 
 
 @app.post("/api/sca/projects/{project_id}/vulnerabilities/query", status_code=status.HTTP_202_ACCEPTED, tags=["vulnerabilities"])
@@ -1278,6 +1422,23 @@ async def download_report(
     if not report or not Path(report.storage_path).exists():
         raise HTTPException(status_code=404, detail="报告不存在")
     return FileResponse(report.storage_path, filename=report.filename)
+
+
+@app.delete("/api/sca/reports/{report_id}", tags=["reports"])
+async def delete_report(
+    request: Request,
+    report_id: int,
+    user: Annotated[UserPayload, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> dict[str, int | str]:
+    await require_action("sca:write", request, user, settings)
+    report = db.get(ReportExport, report_id)
+    if not report:
+        raise HTTPException(status_code=404, detail="报告不存在")
+    removed_files = _remove_path(report.storage_path, set())
+    db.delete(report)
+    db.commit()
+    return {"status": "deleted", "report_id": report_id, "removed_files": removed_files}
 
 
 @app.post("/api/sca/projects/{project_id}/sbom", response_model=SbomOut, tags=["sbom"])
@@ -1549,7 +1710,16 @@ async def analyze_ai_triage(
             rows.append(cached)
         else:
             missing.append(vulnerability)
-    analyzed = analyze_vulnerabilities_with_ai(missing, context, effective_settings) if missing else []
+    try:
+        analyzed = analyze_vulnerabilities_with_ai(missing, context, effective_settings) if missing else []
+    except httpx.HTTPStatusError as exc:
+        raise HTTPException(status_code=502, detail=_openai_http_error_message(exc)) from exc
+    except httpx.TimeoutException as exc:
+        raise HTTPException(status_code=504, detail="模型服务请求超时，请检查网络、BaseURL 或调大超时时间") from exc
+    except httpx.RequestError as exc:
+        raise HTTPException(status_code=502, detail=f"模型服务连接失败：{exc}") from exc
+    except (KeyError, ValueError, TypeError) as exc:
+        raise HTTPException(status_code=502, detail=f"模型服务响应格式不符合预期：{exc}") from exc
     for item in analyzed:
         usage = item.get("token_usage") or {}
         row = AiTriageResult(

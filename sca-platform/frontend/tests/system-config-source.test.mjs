@@ -16,6 +16,9 @@ test('system config menu exposes upload and OpenAI settings', () => {
   assert.match(appSource, /openai_base_url/)
   assert.match(appSource, /openai_model/)
   assert.match(appSource, /\/api\/sca\/system-config/)
+  assert.match(appSource, /testOpenaiConfig/)
+  assert.match(appSource, /测试模型/)
+  assert.match(appSource, /\/api\/sca\/system-config\/test-openai/)
 })
 
 test('uploads use runtime config and nginx allows configured request bodies', () => {
@@ -48,4 +51,12 @@ test('project task status refreshes while asynchronous jobs are active', () => {
   assert.match(appSource, /clearInterval/)
   assert.match(appSource, /vulnerability_query_task/)
   assert.match(appSource, /task_id/)
+})
+
+test('ai view hides historical project noise and reports can be deleted', () => {
+  assert.match(appSource, /aiProjectOptions/)
+  assert.match(appSource, /latestProject/)
+  assert.match(appSource, /menu === 'ai'/)
+  assert.match(appSource, /deleteReport/)
+  assert.match(appSource, /api\/sca\/reports\/\$\{row\.id\}/)
 })

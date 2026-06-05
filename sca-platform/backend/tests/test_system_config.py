@@ -1,5 +1,6 @@
 import importlib
 
+import httpx
 from fastapi.testclient import TestClient
 
 
@@ -156,3 +157,101 @@ def test_ai_triage_uses_runtime_system_config(monkeypatch, tmp_path):
         "model": "qwen-plus",
         "timeout": 65000,
     }
+
+
+def test_ai_triage_reports_provider_auth_failure_without_500(monkeypatch, tmp_path):
+    client, main, models, database = build_client(monkeypatch, tmp_path)
+
+    def fake_analyze(_vulnerabilities, _context, settings):
+        request = httpx.Request("POST", settings.openai_api_url)
+        response = httpx.Response(401, request=request, json={"error": {"message": "invalid api key"}})
+        raise httpx.HTTPStatusError("auth failed", request=request, response=response)
+
+    monkeypatch.setattr(main, "analyze_vulnerabilities_with_ai", fake_analyze)
+    with client as test_client:
+        project_id, vulnerability_id = seed_vulnerability(database, models)
+        test_client.put(
+            "/api/sca/system-config",
+            json={
+                "upload_max_file_size_mb": 50,
+                "openai_api_key": "sk-runtime",
+                "openai_base_url": "https://api.deepseek.com",
+                "openai_model": "deepseek-chat",
+                "openai_timeout_ms": 30000,
+            },
+        )
+        response = test_client.post(
+            f"/api/sca/projects/{project_id}/ai-triage/analyze",
+            json={
+                "vulnerability_ids": [vulnerability_id],
+                "context": {
+                    "internet_exposed": True,
+                    "core_business": True,
+                    "actually_called": True,
+                    "runtime_path": True,
+                    "has_waf_ips": False,
+                    "fix_complexity": "medium",
+                },
+            },
+        )
+
+    assert response.status_code == 502
+    assert response.json()["code"] == "GATEWAY_OR_BACKEND_UNAVAILABLE"
+    assert "模型服务认证失败" in response.json()["message"]
+    assert "invalid api key" in response.json()["message"]
+
+
+def test_system_config_can_test_openai_model_without_saving(monkeypatch, tmp_path):
+    client, _main, _models, _database = build_client(monkeypatch, tmp_path)
+    captured = {}
+
+    class FakeResponse:
+        status_code = 200
+        content = b'{"choices":[{"message":{"content":"ok"}}],"usage":{"total_tokens":3}}'
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"choices": [{"message": {"content": "ok"}}], "usage": {"total_tokens": 3}}
+
+    class FakeClient:
+        def __init__(self, timeout):
+            captured["timeout"] = timeout
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def post(self, url, headers, json):
+            captured["url"] = url
+            captured["auth"] = headers.get("Authorization", "")
+            captured["model"] = json.get("model")
+            return FakeResponse()
+
+    monkeypatch.setattr("app.main.httpx.Client", FakeClient)
+    with client as test_client:
+        response = test_client.post(
+            "/api/sca/system-config/test-openai",
+            json={
+                "upload_max_file_size_mb": 50,
+                "openai_api_key": "sk-unsaved",
+                "openai_base_url": "https://llm.example.com/v1/chat/completions",
+                "openai_model": "model-test",
+                "openai_timeout_ms": 12000,
+            },
+        )
+        config_after = test_client.get("/api/sca/system-config").json()
+
+    assert response.status_code == 200
+    assert response.json()["success"] is True
+    assert response.json()["model"] == "model-test"
+    assert captured == {
+        "timeout": 12,
+        "url": "https://llm.example.com/v1/chat/completions",
+        "auth": "Bearer sk-unsaved",
+        "model": "model-test",
+    }
+    assert config_after["openai_api_key_configured"] is False

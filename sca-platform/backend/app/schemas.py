@@ -131,6 +131,15 @@ class SystemConfigUpdateIn(BaseModel):
     clear_openai_api_key: bool = False
 
 
+class SystemConfigTestOut(BaseModel):
+    success: bool
+    message: str
+    openai_base_url: str
+    model: str
+    latency_ms: int
+    token_total: int = 0
+
+
 class ProjectListItem(BaseModel):
     id: int
     name: str

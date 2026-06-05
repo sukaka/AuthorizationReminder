@@ -8,6 +8,16 @@ import httpx
 from ..config import Settings
 
 
+def _json_or_empty(response: httpx.Response) -> dict[str, object]:
+    if not response.content or not response.text.strip():
+        return {}
+    try:
+        data = response.json()
+    except ValueError:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
 class DependencyTrackClient:
     def __init__(self, settings: Settings):
         self.settings = settings
@@ -41,7 +51,7 @@ class DependencyTrackClient:
         with httpx.Client(timeout=self.timeout, headers=self.headers) as client:
             response = client.put(f"{self.base_url}/api/v1/bom", json=payload)
             response.raise_for_status()
-            return response.json()
+            return _json_or_empty(response)
 
     def fetch_components(self, project_uuid: str) -> list[dict[str, object]]:
         with httpx.Client(timeout=self.timeout, headers=self.headers) as client:
@@ -63,4 +73,3 @@ class DependencyTrackClient:
             response.raise_for_status()
             data = response.json()
             return data if isinstance(data, dict) else {}
-
