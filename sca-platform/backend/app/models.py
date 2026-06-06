@@ -214,6 +214,21 @@ class DependencyTrackProject(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
 
 
+class DependencyTrackLicense(Base):
+    __tablename__ = "dependency_track_licenses"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    license_id: Mapped[str] = mapped_column(String(160), nullable=False, unique=True, index=True)
+    name: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    osi_approved: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    fsf_libre: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    deprecated: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    reference_url: Mapped[str] = mapped_column(String(512), nullable=False, default="")
+    source: Mapped[str] = mapped_column(String(80), nullable=False, default="dependency-track")
+    raw_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    synced_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
 class PackageLicenseCache(Base):
     __tablename__ = "package_license_cache"
 

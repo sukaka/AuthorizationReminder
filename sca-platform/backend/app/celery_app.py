@@ -24,6 +24,7 @@ from .models import (
     ScanLog,
     ScanTask,
     ScannerTaskResult,
+    SystemSetting,
     UploadFileRecord,
     VulnerabilityRecord,
 )
@@ -36,6 +37,8 @@ from .vulnerability_service import query_component_vulnerabilities, vulnerabilit
 settings = get_settings()
 
 UNKNOWN_VERSION_VALUES = {"", "unknown", "none", "null", "n/a", "na", "未声明", "未知"}
+SYSTEM_CONFIG_DEPENDENCY_TRACK_URL = "dependency_track_url"
+SYSTEM_CONFIG_DEPENDENCY_TRACK_API_KEY = "dependency_track_api_key"
 
 celery_app = Celery(
     "juxin_sca",
@@ -241,6 +244,16 @@ def _record_scanner_result(
     _record_artifact(db, parent_task, result.engine_name, "stderr_log", result.stderr_log_path)
 
 
+def _effective_dependency_track_settings(db):
+    rows = db.query(SystemSetting).filter(
+        SystemSetting.key.in_([SYSTEM_CONFIG_DEPENDENCY_TRACK_URL, SYSTEM_CONFIG_DEPENDENCY_TRACK_API_KEY])
+    ).all()
+    values = {row.key: str(row.value or "").strip() for row in rows}
+    url = (values.get(SYSTEM_CONFIG_DEPENDENCY_TRACK_URL) or settings.dependency_track_url or "").rstrip("/")
+    api_key = values.get(SYSTEM_CONFIG_DEPENDENCY_TRACK_API_KEY) or settings.dependency_track_api_key or ""
+    return settings.model_copy(update={"dependency_track_url": url, "dependency_track_api_key": api_key.strip()})
+
+
 def _run_scanner_children(db, task: ScanTask, extract_dir: Path) -> None:
     _mark_child(db, task.id, "opensca_scan_task", "running", "正在执行 OpenSCA 扫描", 20)
     _mark_parent(db, task, "running", 20, "正在执行 OpenSCA 扫描")
@@ -273,7 +286,8 @@ def _run_scanner_children(db, task: ScanTask, extract_dir: Path) -> None:
     _mark_parent(db, task, "running", 75, "Trivy 扫描完成，正在处理 Dependency-Track")
     db.commit()
 
-    dtrack = DependencyTrackClient(settings)
+    dtrack_settings = _effective_dependency_track_settings(db)
+    dtrack = DependencyTrackClient(dtrack_settings)
     if not dtrack.enabled():
         _mark_child(db, task.id, "dependency_track_upload_task", "skipped", "Dependency-Track 未配置 API Key", 100)
         _mark_child(db, task.id, "dependency_track_fetch_task", "skipped", "Dependency-Track 未配置 API Key", 100)

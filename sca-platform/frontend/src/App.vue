@@ -43,6 +43,10 @@
           <el-icon><Share /></el-icon>
           <span>资产中心</span>
         </el-menu-item>
+        <el-menu-item index="licenses">
+          <el-icon><Files /></el-icon>
+          <span>许可证库</span>
+        </el-menu-item>
         <el-menu-item index="remediation">
           <el-icon><Document /></el-icon>
           <span>整改闭环</span>
@@ -110,7 +114,7 @@
             <h2>最近分析项目</h2>
             <el-tag>Docker Ready</el-tag>
           </div>
-          <el-table :data="projects" empty-text="暂无项目，请先上传源码包">
+          <el-table :data="pagedProjects" empty-text="暂无项目，请先上传源码包">
             <el-table-column prop="name" label="项目名称" min-width="160" />
             <el-table-column prop="status" label="状态" width="120" />
             <el-table-column prop="scan_note" label="扫描备注" min-width="180" show-overflow-tooltip />
@@ -121,6 +125,16 @@
               </template>
             </el-table-column>
           </el-table>
+          <el-pagination
+            class="table-pagination"
+            background
+            layout="total, sizes, prev, pager, next"
+            :page-sizes="pageSizeOptions"
+            :total="projects.length"
+            v-model:current-page="pagination.projects.page"
+            v-model:page-size="pagination.projects.pageSize"
+            @size-change="handlePageSizeChange('projects', $event)"
+          />
         </div>
 
         <div class="panel side-panel">
@@ -171,7 +185,7 @@
             <h2>上传文件列表</h2>
             <el-button :icon="Refresh" @click="loadUploads">刷新</el-button>
           </div>
-          <el-table :data="uploads" empty-text="暂无上传文件">
+          <el-table :data="pagedUploads" empty-text="暂无上传文件">
             <el-table-column prop="project_name" label="项目" min-width="140" />
             <el-table-column prop="original_filename" label="文件名" min-width="160" show-overflow-tooltip />
             <el-table-column prop="status" label="状态" width="105" />
@@ -185,6 +199,16 @@
               </template>
             </el-table-column>
           </el-table>
+          <el-pagination
+            class="table-pagination"
+            background
+            layout="total, sizes, prev, pager, next"
+            :page-sizes="pageSizeOptions"
+            :total="uploads.length"
+            v-model:current-page="pagination.uploads.page"
+            v-model:page-size="pagination.uploads.pageSize"
+            @size-change="handlePageSizeChange('uploads', $event)"
+          />
         </div>
       </section>
 
@@ -193,7 +217,7 @@
           <div class="panel-head">
             <h2>依赖列表</h2>
             <el-select v-model="selectedProjectId" placeholder="选择项目" style="width: 240px" @change="loadProjectDetails">
-              <el-option v-for="project in projects" :key="project.id" :label="project.name" :value="project.id" />
+              <el-option v-for="project in projectOptions" :key="project.id" :label="project.name" :value="project.id" />
             </el-select>
           </div>
           <el-alert
@@ -212,7 +236,7 @@
             <div><span>未知版本</span><strong>{{ scanCompleteness.unknown_version_count || 0 }}</strong></div>
             <div><span>待确认</span><strong>{{ scanCompleteness.manual_confirm_count || 0 }}</strong></div>
           </section>
-          <el-table :data="components" empty-text="暂无依赖，请等待扫描完成">
+          <el-table :data="pagedComponents" empty-text="暂无依赖，请等待扫描完成">
             <el-table-column type="expand">
               <template #default="{ row }">
                 <div class="component-evidence">
@@ -297,6 +321,16 @@
               </template>
             </el-table-column>
           </el-table>
+          <el-pagination
+            class="table-pagination"
+            background
+            layout="total, sizes, prev, pager, next"
+            :page-sizes="pageSizeOptions"
+            :total="components.length"
+            v-model:current-page="pagination.components.page"
+            v-model:page-size="pagination.components.pageSize"
+            @size-change="handlePageSizeChange('components', $event)"
+          />
         </div>
         <div class="panel side-panel">
           <div class="panel-head">
@@ -317,7 +351,7 @@
             <h2>漏洞列表</h2>
             <div class="panel-actions">
               <el-select v-model="selectedProjectId" placeholder="选择项目" style="width: 220px" @change="loadProjectDetails">
-                <el-option v-for="project in projects" :key="project.id" :label="project.name" :value="project.id" />
+                <el-option v-for="project in projectOptions" :key="project.id" :label="project.name" :value="project.id" />
               </el-select>
               <el-select v-model="vulnerabilityFilter" placeholder="可信度筛选" style="width: 170px">
                 <el-option label="全部漏洞" value="all" />
@@ -393,7 +427,7 @@
             </template>
           </section>
 
-          <el-table :data="filteredVulnerabilities" empty-text="暂无漏洞，请先查询">
+          <el-table :data="pagedFilteredVulnerabilities" empty-text="暂无漏洞，请先查询">
             <el-table-column type="expand">
               <template #default="{ row }">
                 <div class="component-evidence">
@@ -468,6 +502,16 @@
               </template>
             </el-table-column>
           </el-table>
+          <el-pagination
+            class="table-pagination"
+            background
+            layout="total, sizes, prev, pager, next"
+            :page-sizes="pageSizeOptions"
+            :total="filteredVulnerabilities.length"
+            v-model:current-page="pagination.vulnerabilities.page"
+            v-model:page-size="pagination.vulnerabilities.pageSize"
+            @size-change="handlePageSizeChange('vulnerabilities', $event)"
+          />
         </div>
         <div class="panel side-panel">
           <div class="panel-head">
@@ -500,13 +544,13 @@
             <h2>中文安全报告</h2>
             <div class="panel-actions">
               <el-select v-model="selectedProjectId" placeholder="选择项目" style="width: 220px" @change="loadProjectDetails">
-                <el-option v-for="project in projects" :key="project.id" :label="project.name" :value="project.id" />
+                <el-option v-for="project in projectOptions" :key="project.id" :label="project.name" :value="project.id" />
               </el-select>
               <el-segmented v-model="reportFormat" :options="['docx', 'pdf', 'xlsx']" />
               <el-button type="primary" :loading="reportCreating" :icon="Document" @click="createReport">生成</el-button>
             </div>
           </div>
-          <el-table :data="reports" empty-text="暂无导出报告">
+          <el-table :data="pagedReports" empty-text="暂无导出报告">
             <el-table-column prop="filename" label="文件名" min-width="240" show-overflow-tooltip />
             <el-table-column prop="format" label="格式" width="90" />
             <el-table-column prop="status" label="状态" width="110" />
@@ -518,6 +562,16 @@
               </template>
             </el-table-column>
           </el-table>
+          <el-pagination
+            class="table-pagination"
+            background
+            layout="total, sizes, prev, pager, next"
+            :page-sizes="pageSizeOptions"
+            :total="reports.length"
+            v-model:current-page="pagination.reports.page"
+            v-model:page-size="pagination.reports.pageSize"
+            @size-change="handlePageSizeChange('reports', $event)"
+          />
         </div>
         <div class="panel side-panel">
           <div class="panel-head"><h2>模板内容</h2></div>
@@ -621,13 +675,13 @@
             <h2>SBOM 生成</h2>
             <div class="panel-actions">
               <el-select v-model="selectedProjectId" placeholder="选择项目" style="width: 220px" @change="loadProjectDetails">
-                <el-option v-for="project in aiProjectOptions" :key="project.id" :label="project.name" :value="project.id" />
+                <el-option v-for="project in projectOptions" :key="project.id" :label="project.name" :value="project.id" />
               </el-select>
               <el-segmented v-model="sbomFormat" :options="['cyclonedx', 'spdx']" />
               <el-button type="primary" :loading="sbomCreating" :icon="Files" @click="createSbom">生成</el-button>
             </div>
           </div>
-          <el-table :data="sboms" empty-text="暂无 SBOM">
+          <el-table :data="pagedSboms" empty-text="暂无 SBOM">
             <el-table-column prop="filename" label="文件名" min-width="240" show-overflow-tooltip />
             <el-table-column prop="format" label="格式" width="120" />
             <el-table-column prop="component_count" label="组件数" width="100" />
@@ -638,6 +692,16 @@
               </template>
             </el-table-column>
           </el-table>
+          <el-pagination
+            class="table-pagination"
+            background
+            layout="total, sizes, prev, pager, next"
+            :page-sizes="pageSizeOptions"
+            :total="sboms.length"
+            v-model:current-page="pagination.sboms.page"
+            v-model:page-size="pagination.sboms.pageSize"
+            @size-change="handlePageSizeChange('sboms', $event)"
+          />
         </div>
         <div class="panel side-panel">
           <div class="panel-head"><h2>镜像扫描</h2></div>
@@ -658,11 +722,21 @@
               <el-button :loading="imageScanning" :icon="UploadFilled" @click="scanImageTar">上传 tar 并扫描</el-button>
             </el-form>
           </div>
-          <el-table :data="imageScans" empty-text="暂无镜像扫描" size="small">
+          <el-table :data="pagedImageScans" empty-text="暂无镜像扫描" size="small">
             <el-table-column prop="image_ref" label="镜像" min-width="130" show-overflow-tooltip />
             <el-table-column prop="status" label="状态" width="100" />
             <el-table-column prop="risk_score" label="评分" width="80" />
           </el-table>
+          <el-pagination
+            class="table-pagination compact"
+            background
+            layout="total, sizes, prev, pager, next"
+            :page-sizes="pageSizeOptions"
+            :total="imageScans.length"
+            v-model:current-page="pagination.imageScans.page"
+            v-model:page-size="pagination.imageScans.pageSize"
+            @size-change="handlePageSizeChange('imageScans', $event)"
+          />
         </div>
       </section>
 
@@ -672,12 +746,12 @@
             <h2>持续风险监测</h2>
             <div class="panel-actions">
               <el-select v-model="selectedProjectId" placeholder="选择项目" style="width: 220px" @change="loadProjectDetails">
-                <el-option v-for="project in projects" :key="project.id" :label="project.name" :value="project.id" />
+                <el-option v-for="project in projectOptions" :key="project.id" :label="project.name" :value="project.id" />
               </el-select>
               <el-button type="primary" :loading="monitorRunning" :icon="Bell" @click="runRiskMonitor">立即监测</el-button>
             </div>
           </div>
-          <el-table :data="riskSnapshots" empty-text="暂无监测快照">
+          <el-table :data="pagedRiskSnapshots" empty-text="暂无监测快照">
             <el-table-column prop="risk_level" label="风险" width="90">
               <template #default="{ row }"><el-tag :type="severityTag(row.risk_level)">{{ severityLabel(row.risk_level) }}</el-tag></template>
             </el-table-column>
@@ -688,6 +762,16 @@
             <el-table-column prop="eol_status" label="生命周期" width="110" />
             <el-table-column prop="recommendation" label="更新建议" min-width="240" show-overflow-tooltip />
           </el-table>
+          <el-pagination
+            class="table-pagination"
+            background
+            layout="total, sizes, prev, pager, next"
+            :page-sizes="pageSizeOptions"
+            :total="riskSnapshots.length"
+            v-model:current-page="pagination.riskSnapshots.page"
+            v-model:page-size="pagination.riskSnapshots.pageSize"
+            @size-change="handlePageSizeChange('riskSnapshots', $event)"
+          />
         </div>
         <div class="panel side-panel">
           <div class="panel-head"><h2>风险提醒</h2></div>
@@ -702,10 +786,20 @@
               <b>{{ item.total }}</b>
             </div>
           </div>
-          <el-table :data="riskAlerts" empty-text="暂无提醒" size="small">
+          <el-table :data="pagedRiskAlerts" empty-text="暂无提醒" size="small">
             <el-table-column prop="level" label="等级" width="80" />
             <el-table-column prop="title" label="提醒" min-width="160" show-overflow-tooltip />
           </el-table>
+          <el-pagination
+            class="table-pagination compact"
+            background
+            layout="total, sizes, prev, pager, next"
+            :page-sizes="pageSizeOptions"
+            :total="riskAlerts.length"
+            v-model:current-page="pagination.riskAlerts.page"
+            v-model:page-size="pagination.riskAlerts.pageSize"
+            @size-change="handlePageSizeChange('riskAlerts', $event)"
+          />
         </div>
       </section>
 
@@ -715,7 +809,7 @@
             <h2>AI 漏洞降噪</h2>
             <div class="panel-actions">
               <el-select v-model="selectedProjectId" placeholder="选择项目" style="width: 220px" @change="loadProjectDetails">
-                <el-option v-for="project in projects" :key="project.id" :label="project.name" :value="project.id" />
+                <el-option v-for="project in projectOptions" :key="project.id" :label="project.name" :value="project.id" />
               </el-select>
               <el-button type="primary" :loading="aiAnalyzing" :icon="MagicStick" @click="runAiTriage">批量分析</el-button>
             </div>
@@ -732,7 +826,7 @@
               <el-option label="高复杂度" value="high" />
             </el-select>
           </div>
-          <el-table :data="aiResults" empty-text="暂无 AI 分析结果">
+          <el-table :data="pagedAiResults" empty-text="暂无 AI 分析结果">
             <el-table-column prop="ai_risk_level" label="AI 等级" width="100" />
             <el-table-column prop="confidence" label="置信度" width="90">
               <template #default="{ row }">{{ Math.round((row.confidence || 0) * 100) }}%</template>
@@ -750,6 +844,16 @@
               </template>
             </el-table-column>
           </el-table>
+          <el-pagination
+            class="table-pagination"
+            background
+            layout="total, sizes, prev, pager, next"
+            :page-sizes="pageSizeOptions"
+            :total="aiResults.length"
+            v-model:current-page="pagination.aiResults.page"
+            v-model:page-size="pagination.aiResults.pageSize"
+            @size-change="handlePageSizeChange('aiResults', $event)"
+          />
         </div>
         <div class="panel side-panel">
           <div class="panel-head"><h2>排序因素</h2></div>
@@ -781,7 +885,7 @@
             <div class="metric warn"><span>EOL</span><strong>{{ assetDashboard.eol_total }}</strong></div>
             <div class="metric"><span>License 风险</span><strong>{{ assetDashboard.license_risk_total }}</strong></div>
           </section>
-          <el-table :data="assetComponents" empty-text="暂无资产">
+          <el-table :data="pagedAssetComponents" empty-text="暂无资产">
             <el-table-column prop="highest_severity" label="风险" width="90" />
             <el-table-column prop="risk_score" label="风险分" width="90" />
             <el-table-column prop="package_name" label="组件" min-width="180" show-overflow-tooltip />
@@ -793,6 +897,16 @@
             <el-table-column prop="eol_status" label="EOL" width="90" />
             <el-table-column prop="license_name" label="License" width="130" show-overflow-tooltip />
           </el-table>
+          <el-pagination
+            class="table-pagination"
+            background
+            layout="total, sizes, prev, pager, next"
+            :page-sizes="pageSizeOptions"
+            :total="assetComponents.length"
+            v-model:current-page="pagination.assetComponents.page"
+            v-model:page-size="pagination.assetComponents.pageSize"
+            @size-change="handlePageSizeChange('assetComponents', $event)"
+          />
         </div>
         <div class="panel side-panel">
           <div class="panel-head"><h2>组件图谱</h2></div>
@@ -819,13 +933,59 @@
         </div>
       </section>
 
+      <section v-if="activeMenu === 'licenses'" class="workbench">
+        <div class="panel">
+          <div class="panel-head">
+            <h2>许可证库</h2>
+            <div class="panel-actions">
+              <el-button :icon="Refresh" @click="loadLicenseCatalog">刷新</el-button>
+              <el-button type="primary" :loading="licenseCatalogSyncing" :icon="Connection" @click="syncLicenseCatalog">同步 Dependency-Track</el-button>
+            </div>
+          </div>
+          <el-table :data="pagedLicenseCatalog" empty-text="暂无许可证">
+            <el-table-column prop="license_id" label="SPDX ID" min-width="150" show-overflow-tooltip />
+            <el-table-column prop="name" label="License 名称" min-width="220" show-overflow-tooltip />
+            <el-table-column label="OSI" width="90">
+              <template #default="{ row }"><el-tag :type="row.osi_approved ? 'success' : 'info'" effect="plain">{{ row.osi_approved ? '是' : '否' }}</el-tag></template>
+            </el-table-column>
+            <el-table-column label="FSF" width="90">
+              <template #default="{ row }"><el-tag :type="row.fsf_libre ? 'success' : 'info'" effect="plain">{{ row.fsf_libre ? '是' : '否' }}</el-tag></template>
+            </el-table-column>
+            <el-table-column label="弃用" width="90">
+              <template #default="{ row }"><el-tag :type="row.deprecated ? 'warning' : 'success'" effect="plain">{{ row.deprecated ? '是' : '否' }}</el-tag></template>
+            </el-table-column>
+            <el-table-column prop="reference_url" label="来源链接" min-width="260" show-overflow-tooltip />
+            <el-table-column prop="synced_at" label="同步时间" width="210" />
+          </el-table>
+          <el-pagination
+            class="table-pagination"
+            background
+            layout="total, sizes, prev, pager, next"
+            :page-sizes="pageSizeOptions"
+            :total="licenseCatalog.length"
+            v-model:current-page="pagination.licenseCatalog.page"
+            v-model:page-size="pagination.licenseCatalog.pageSize"
+            @size-change="handlePageSizeChange('licenseCatalog', $event)"
+          />
+        </div>
+        <div class="panel side-panel">
+          <div class="panel-head"><h2>同步状态</h2></div>
+          <section class="metric-grid asset-metrics">
+            <div class="metric"><span>本地数量</span><strong>{{ licenseCatalog.length }}</strong></div>
+            <div class="metric"><span>DTrack 数量</span><strong>{{ systemConfig.dependency_track_license_count || 0 }}</strong></div>
+            <div class="metric"><span>DTrack Key</span><strong>{{ systemConfig.dependency_track_api_key_configured ? '已配置' : '未配置' }}</strong></div>
+            <div class="metric"><span>地址</span><strong>{{ systemConfig.dependency_track_url || '-' }}</strong></div>
+          </section>
+        </div>
+      </section>
+
       <section v-if="activeMenu === 'remediation'" class="workbench">
         <div class="panel">
           <div class="panel-head">
             <h2>漏洞整改闭环</h2>
             <div class="panel-actions">
               <el-select v-model="selectedProjectId" placeholder="选择项目" style="width: 220px" @change="loadProjectDetails">
-                <el-option v-for="project in projects" :key="project.id" :label="project.name" :value="project.id" />
+                <el-option v-for="project in projectOptions" :key="project.id" :label="project.name" :value="project.id" />
               </el-select>
               <el-button :icon="Bell" @click="checkOverdueTickets">超时提醒</el-button>
               <el-button type="primary" :icon="Document" @click="createRemediationTicket">创建工单</el-button>
@@ -844,7 +1004,7 @@
               <el-option label="P3" value="P3" />
             </el-select>
           </div>
-          <el-table :data="remediationTickets" empty-text="暂无整改工单">
+          <el-table :data="pagedRemediationTickets" empty-text="暂无整改工单">
             <el-table-column prop="ticket_no" label="工单号" min-width="170" show-overflow-tooltip />
             <el-table-column prop="assignee" label="整改人" width="110" />
             <el-table-column prop="priority" label="优先级" width="90" />
@@ -859,16 +1019,36 @@
               </template>
             </el-table-column>
           </el-table>
+          <el-pagination
+            class="table-pagination"
+            background
+            layout="total, sizes, prev, pager, next"
+            :page-sizes="pageSizeOptions"
+            :total="remediationTickets.length"
+            v-model:current-page="pagination.remediationTickets.page"
+            v-model:page-size="pagination.remediationTickets.pageSize"
+            @size-change="handlePageSizeChange('remediationTickets', $event)"
+          />
         </div>
         <div class="panel side-panel">
           <div class="panel-head"><h2>白名单</h2></div>
           <div class="upload-form">
             <el-button :icon="WarningFilled" @click="createWhitelist">加入白名单</el-button>
           </div>
-          <el-table :data="whitelistItems" empty-text="暂无白名单" size="small">
+          <el-table :data="pagedWhitelistItems" empty-text="暂无白名单" size="small">
             <el-table-column prop="reason" label="原因" min-width="130" show-overflow-tooltip />
             <el-table-column prop="expires_at" label="到期" width="110" />
           </el-table>
+          <el-pagination
+            class="table-pagination compact"
+            background
+            layout="total, sizes, prev, pager, next"
+            :page-sizes="pageSizeOptions"
+            :total="whitelistItems.length"
+            v-model:current-page="pagination.whitelistItems.page"
+            v-model:page-size="pagination.whitelistItems.pageSize"
+            @size-change="handlePageSizeChange('whitelistItems', $event)"
+          />
         </div>
       </section>
 
@@ -878,7 +1058,7 @@
             <h2>DevSecOps 集成</h2>
             <div class="panel-actions">
               <el-select v-model="selectedProjectId" placeholder="选择项目" style="width: 220px">
-                <el-option v-for="project in projects" :key="project.id" :label="project.name" :value="project.id" />
+                <el-option v-for="project in projectOptions" :key="project.id" :label="project.name" :value="project.id" />
               </el-select>
               <el-button :icon="Connection" @click="simulateWebhook('gitlab')">GitLab</el-button>
               <el-button :icon="Connection" @click="simulateWebhook('github')">GitHub Actions</el-button>
@@ -891,7 +1071,7 @@
             <div class="metric"><span>放行</span><strong>{{ devopsDashboard.passed_count }}</strong></div>
             <div class="metric warn"><span>来源</span><strong>{{ Object.keys(devopsDashboard.by_source || {}).length }}</strong></div>
           </section>
-          <el-table :data="devopsEvents" empty-text="暂无流水线事件">
+          <el-table :data="pagedDevopsEvents" empty-text="暂无流水线事件">
             <el-table-column prop="source" label="来源" width="120" />
             <el-table-column prop="pipeline_id" label="流水线" width="130" show-overflow-tooltip />
             <el-table-column prop="ref" label="分支" width="120" show-overflow-tooltip />
@@ -900,6 +1080,16 @@
             <el-table-column prop="block_reason" label="阻断原因" min-width="240" show-overflow-tooltip />
             <el-table-column prop="created_at" label="时间" width="210" />
           </el-table>
+          <el-pagination
+            class="table-pagination"
+            background
+            layout="total, sizes, prev, pager, next"
+            :page-sizes="pageSizeOptions"
+            :total="devopsEvents.length"
+            v-model:current-page="pagination.devopsEvents.page"
+            v-model:page-size="pagination.devopsEvents.pageSize"
+            @size-change="handlePageSizeChange('devopsEvents', $event)"
+          />
         </div>
         <div class="panel side-panel">
           <div class="panel-head"><h2>接入方式</h2></div>
@@ -927,13 +1117,23 @@
             <div class="metric"><span>代理</span><strong>{{ opsConfig.reverse_proxy }}</strong></div>
             <div class="metric"><span>备份</span><strong>{{ backupJobs.length }}</strong></div>
           </section>
-          <el-table :data="backupJobs" empty-text="暂无备份任务">
+          <el-table :data="pagedBackupJobs" empty-text="暂无备份任务">
             <el-table-column prop="scope" label="范围" width="120" />
             <el-table-column prop="target" label="目标" width="120" />
             <el-table-column prop="status" label="状态" width="110" />
             <el-table-column prop="storage_path" label="路径" min-width="260" show-overflow-tooltip />
             <el-table-column prop="created_at" label="时间" width="210" />
           </el-table>
+          <el-pagination
+            class="table-pagination"
+            background
+            layout="total, sizes, prev, pager, next"
+            :page-sizes="pageSizeOptions"
+            :total="backupJobs.length"
+            v-model:current-page="pagination.backupJobs.page"
+            v-model:page-size="pagination.backupJobs.pageSize"
+            @size-change="handlePageSizeChange('backupJobs', $event)"
+          />
         </div>
         <div class="panel side-panel">
           <div class="panel-head"><h2>优化项</h2></div>
@@ -981,6 +1181,21 @@
               </el-form-item>
               <el-checkbox v-model="systemConfig.clear_openai_api_key">清空已保存的 API Key</el-checkbox>
             </section>
+            <section class="config-section">
+              <h3>Dependency-Track 配置</h3>
+              <el-form-item label="API 地址">
+                <el-input v-model="systemConfig.dependency_track_url" placeholder="例如：http://dependency-track-apiserver:8080" />
+              </el-form-item>
+              <el-form-item label="API Key">
+                <el-input
+                  v-model="systemConfig.dependency_track_api_key"
+                  type="password"
+                  show-password
+                  :placeholder="systemConfig.dependency_track_api_key_configured ? `已配置：${systemConfig.dependency_track_api_key_masked}` : '请输入 Dependency-Track API Key'"
+                />
+              </el-form-item>
+              <el-checkbox v-model="systemConfig.clear_dependency_track_api_key">清空已保存的 Dependency-Track API Key</el-checkbox>
+            </section>
           </el-form>
         </div>
         <div class="panel side-panel">
@@ -990,10 +1205,13 @@
             <div class="metric"><span>API Key</span><strong>{{ systemConfig.openai_api_key_configured ? '已配置' : '未配置' }}</strong></div>
             <div class="metric"><span>模型</span><strong>{{ systemConfig.openai_model || '-' }}</strong></div>
             <div class="metric"><span>超时</span><strong>{{ systemConfig.openai_timeout_ms }} ms</strong></div>
+            <div class="metric"><span>DTrack Key</span><strong>{{ systemConfig.dependency_track_api_key_configured ? '已配置' : '未配置' }}</strong></div>
+            <div class="metric"><span>DTrack 许可证</span><strong>{{ systemConfig.dependency_track_license_count || 0 }}</strong></div>
           </section>
           <ul class="capability-list">
             <li>保存后上传限制立即生效</li>
             <li>AI 降噪会优先使用页面配置</li>
+            <li>Dependency-Track 配置会用于扫描任务和许可证同步</li>
             <li>API Key 不会在接口中明文返回</li>
           </ul>
         </div>
@@ -1003,10 +1221,10 @@
         <div class="panel-head">
           <h2>扫描日志</h2>
           <el-select v-model="selectedProjectId" placeholder="选择项目" style="width: 240px" @change="loadProjectDetails">
-            <el-option v-for="project in projects" :key="project.id" :label="project.name" :value="project.id" />
+            <el-option v-for="project in projectOptions" :key="project.id" :label="project.name" :value="project.id" />
           </el-select>
         </div>
-        <el-table :data="scanTasks" empty-text="暂无扫描任务" class="task-table">
+        <el-table :data="pagedScanTasks" empty-text="暂无扫描任务" class="task-table">
           <el-table-column prop="task_type" label="任务节点" min-width="200" />
           <el-table-column prop="engine_name" label="引擎" width="150" />
           <el-table-column prop="status" label="状态" width="130">
@@ -1025,11 +1243,31 @@
             </template>
           </el-table-column>
         </el-table>
-        <el-table :data="scanLogs" empty-text="暂无扫描日志">
+        <el-pagination
+          class="table-pagination"
+          background
+          layout="total, sizes, prev, pager, next"
+          :page-sizes="pageSizeOptions"
+          :total="scanTasks.length"
+          v-model:current-page="pagination.scanTasks.page"
+          v-model:page-size="pagination.scanTasks.pageSize"
+          @size-change="handlePageSizeChange('scanTasks', $event)"
+        />
+        <el-table :data="pagedScanLogs" empty-text="暂无扫描日志">
           <el-table-column prop="level" label="级别" width="100" />
           <el-table-column prop="message" label="日志内容" min-width="260" show-overflow-tooltip />
           <el-table-column prop="created_at" label="时间" width="210" />
         </el-table>
+        <el-pagination
+          class="table-pagination"
+          background
+          layout="total, sizes, prev, pager, next"
+          :page-sizes="pageSizeOptions"
+          :total="scanLogs.length"
+          v-model:current-page="pagination.scanLogs.page"
+          v-model:page-size="pagination.scanLogs.pageSize"
+          @size-change="handlePageSizeChange('scanLogs', $event)"
+        />
       </section>
     </main>
 
@@ -1118,6 +1356,7 @@ const systemConfigSaving = ref(false)
 const systemConfigTesting = ref(false)
 const deletingProjectId = ref(null)
 const reportDeletingId = ref(null)
+const licenseCatalogSyncing = ref(false)
 const taskPollingPaused = ref(false)
 const uploadProgress = ref(0)
 const imageUploadProgress = ref(0)
@@ -1177,6 +1416,7 @@ const aiMeta = ref({ schema_version: '', supported_priorities: [], redaction_key
 const assetComponents = ref([])
 const assetGraph = ref({ nodes: [], edges: [] })
 const assetSearch = ref('')
+const licenseCatalog = ref([])
 const remediationTickets = ref([])
 const whitelistItems = ref([])
 const devopsEvents = ref([])
@@ -1281,6 +1521,34 @@ const systemConfig = reactive({
   openai_model: 'gpt-4o-mini',
   openai_timeout_ms: 30000,
   clear_openai_api_key: false,
+  dependency_track_url: '',
+  dependency_track_api_key: '',
+  dependency_track_api_key_configured: false,
+  dependency_track_api_key_masked: '',
+  dependency_track_license_count: 0,
+  clear_dependency_track_api_key: false,
+})
+const pageSizeOptions = [10, 20, 50]
+const createPaginationState = () => ({ page: 1, pageSize: 10 })
+const pagination = reactive({
+  projects: createPaginationState(),
+  uploads: createPaginationState(),
+  components: createPaginationState(),
+  vulnerabilities: createPaginationState(),
+  reports: createPaginationState(),
+  sboms: createPaginationState(),
+  imageScans: createPaginationState(),
+  riskSnapshots: createPaginationState(),
+  riskAlerts: createPaginationState(),
+  aiResults: createPaginationState(),
+  assetComponents: createPaginationState(),
+  licenseCatalog: createPaginationState(),
+  remediationTickets: createPaginationState(),
+  whitelistItems: createPaginationState(),
+  devopsEvents: createPaginationState(),
+  backupJobs: createPaginationState(),
+  scanTasks: createPaginationState(),
+  scanLogs: createPaginationState(),
 })
 const vulnerabilityStats = reactive({
   total: 0,
@@ -1299,7 +1567,7 @@ const selectedProject = computed(() => projects.value.find((project) => project.
 
 const latestProject = computed(() => projects.value[0] || null)
 
-const aiProjectOptions = computed(() => (latestProject.value ? [latestProject.value] : []))
+const projectOptions = computed(() => (latestProject.value ? [latestProject.value] : []))
 
 const projectIsInternetExposed = computed(() => {
   const text = `${selectedProject.value?.name || ''} ${selectedProject.value?.scan_note || ''}`.toLowerCase()
@@ -1356,6 +1624,39 @@ const filteredVulnerabilities = computed(() => {
     return true
   })
 })
+
+const paginateRows = (rows, key) => {
+  const items = Array.isArray(rows) ? rows : []
+  const state = pagination[key]
+  const totalPages = Math.max(1, Math.ceil(items.length / state.pageSize))
+  const page = Math.min(Math.max(1, state.page), totalPages)
+  const start = (page - 1) * state.pageSize
+  return items.slice(start, start + state.pageSize)
+}
+
+const handlePageSizeChange = (key, size) => {
+  pagination[key].pageSize = Number(size || 10)
+  pagination[key].page = 1
+}
+
+const pagedProjects = computed(() => paginateRows(projects.value, 'projects'))
+const pagedUploads = computed(() => paginateRows(uploads.value, 'uploads'))
+const pagedComponents = computed(() => paginateRows(components.value, 'components'))
+const pagedFilteredVulnerabilities = computed(() => paginateRows(filteredVulnerabilities.value, 'vulnerabilities'))
+const pagedReports = computed(() => paginateRows(reports.value, 'reports'))
+const pagedSboms = computed(() => paginateRows(sboms.value, 'sboms'))
+const pagedImageScans = computed(() => paginateRows(imageScans.value, 'imageScans'))
+const pagedRiskSnapshots = computed(() => paginateRows(riskSnapshots.value, 'riskSnapshots'))
+const pagedRiskAlerts = computed(() => paginateRows(riskAlerts.value, 'riskAlerts'))
+const pagedAiResults = computed(() => paginateRows(aiResults.value, 'aiResults'))
+const pagedAssetComponents = computed(() => paginateRows(assetComponents.value, 'assetComponents'))
+const pagedLicenseCatalog = computed(() => paginateRows(licenseCatalog.value, 'licenseCatalog'))
+const pagedRemediationTickets = computed(() => paginateRows(remediationTickets.value, 'remediationTickets'))
+const pagedWhitelistItems = computed(() => paginateRows(whitelistItems.value, 'whitelistItems'))
+const pagedDevopsEvents = computed(() => paginateRows(devopsEvents.value, 'devopsEvents'))
+const pagedBackupJobs = computed(() => paginateRows(backupJobs.value, 'backupJobs'))
+const pagedScanTasks = computed(() => paginateRows(scanTasks.value, 'scanTasks'))
+const pagedScanLogs = computed(() => paginateRows(scanLogs.value, 'scanLogs'))
 
 const trustedVulnerabilityCount = computed(() => vulnerabilities.value.filter((item) => item.match_status === 'affected' && !item.needs_human_review).length)
 
@@ -1627,10 +1928,10 @@ const handleMenuSelect = async (menu) => {
 
 const loadProjects = async () => {
   projects.value = (await requestJson('/api/sca/projects')) || []
-  if (selectedProjectId.value && !projects.value.some((project) => project.id === selectedProjectId.value)) {
-    selectedProjectId.value = projects.value[0]?.id || null
-  } else if (!selectedProjectId.value && projects.value.length) {
-    selectedProjectId.value = projects.value[0].id
+  if (selectedProjectId.value && !projectOptions.value.some((project) => project.id === selectedProjectId.value)) {
+    selectedProjectId.value = projectOptions.value[0]?.id || null
+  } else if (!selectedProjectId.value && projectOptions.value.length) {
+    selectedProjectId.value = projectOptions.value[0].id
   }
   if (!selectedProjectId.value) clearProjectDetails()
 }
@@ -1960,6 +2261,24 @@ const loadAssets = async () => {
   assetGraph.value = (await requestJson('/api/sca/assets/graph')) || { nodes: [], edges: [] }
 }
 
+const loadLicenseCatalog = async () => {
+  licenseCatalog.value = (await requestJson('/api/sca/licenses')) || []
+}
+
+const syncLicenseCatalog = async () => {
+  licenseCatalogSyncing.value = true
+  try {
+    const result = await requestJson('/api/sca/licenses/sync', { method: 'POST' })
+    await loadLicenseCatalog()
+    await loadSystemConfig()
+    ElMessage.success(`许可证同步完成：${result?.synced || 0}/${result?.total || 0}`)
+  } catch (err) {
+    ElMessage.error(err?.message || '许可证同步失败')
+  } finally {
+    licenseCatalogSyncing.value = false
+  }
+}
+
 const loadAiMeta = async () => {
   const meta = await requestJson('/api/sca/ai-triage/meta')
   if (meta) aiMeta.value = meta
@@ -1985,6 +2304,8 @@ const applySystemConfig = (config) => {
     ...config,
     openai_api_key: '',
     clear_openai_api_key: false,
+    dependency_track_api_key: '',
+    clear_dependency_track_api_key: false,
   })
 }
 
@@ -2003,6 +2324,9 @@ const saveSystemConfig = async () => {
       openai_model: systemConfig.openai_model || 'gpt-4o-mini',
       openai_timeout_ms: Number(systemConfig.openai_timeout_ms || 30000),
       clear_openai_api_key: Boolean(systemConfig.clear_openai_api_key),
+      dependency_track_url: systemConfig.dependency_track_url || '',
+      dependency_track_api_key: systemConfig.dependency_track_api_key || '',
+      clear_dependency_track_api_key: Boolean(systemConfig.clear_dependency_track_api_key),
     }
     const saved = await requestJson('/api/sca/system-config', {
       method: 'PUT',
@@ -2027,6 +2351,9 @@ const testOpenaiConfig = async () => {
       openai_model: systemConfig.openai_model || 'gpt-4o-mini',
       openai_timeout_ms: Number(systemConfig.openai_timeout_ms || 30000),
       clear_openai_api_key: Boolean(systemConfig.clear_openai_api_key),
+      dependency_track_url: systemConfig.dependency_track_url || '',
+      dependency_track_api_key: systemConfig.dependency_track_api_key || '',
+      clear_dependency_track_api_key: Boolean(systemConfig.clear_dependency_track_api_key),
     }
     const result = await requestJson('/api/sca/system-config/test-openai', {
       method: 'POST',
@@ -2200,6 +2527,7 @@ onUnmounted(() => {
 onMounted(loadAiMeta)
 onMounted(loadImageScans)
 onMounted(loadAssets)
+onMounted(loadLicenseCatalog)
 onMounted(loadDevops)
 onMounted(loadOps)
 onMounted(loadSystemConfig)

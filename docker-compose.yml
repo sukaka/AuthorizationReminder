@@ -598,7 +598,7 @@ services:
     environment:
       APP_NAME: "聚信软件成分分析平台"
       APP_ENV: dev
-      APP_VERSION: ${SCA_APP_VERSION:-5.65.0}
+      APP_VERSION: ${SCA_APP_VERSION:-5.66.0}
       DATABASE_URL: "postgresql+psycopg://sca_user:${SCA_POSTGRES_PASSWORD:-change_me_sca_postgres_password}@sca-postgres:5432/juxin_sca"
       REDIS_URL: "redis://sca-redis:6379/0"
       CELERY_BROKER_URL: "redis://sca-redis:6379/1"
@@ -663,7 +663,7 @@ services:
     environment:
       APP_NAME: "聚信软件成分分析平台"
       APP_ENV: dev
-      APP_VERSION: ${SCA_APP_VERSION:-5.65.0}
+      APP_VERSION: ${SCA_APP_VERSION:-5.66.0}
       DATABASE_URL: "postgresql+psycopg://sca_user:${SCA_POSTGRES_PASSWORD:-change_me_sca_postgres_password}@sca-postgres:5432/juxin_sca"
       REDIS_URL: "redis://sca-redis:6379/0"
       CELERY_BROKER_URL: "redis://sca-redis:6379/1"
@@ -723,7 +723,7 @@ services:
     environment:
       APP_NAME: "聚信软件成分分析平台"
       APP_ENV: dev
-      APP_VERSION: ${SCA_APP_VERSION:-5.65.0}
+      APP_VERSION: ${SCA_APP_VERSION:-5.66.0}
       DATABASE_URL: "postgresql+psycopg://sca_user:${SCA_POSTGRES_PASSWORD:-change_me_sca_postgres_password}@sca-postgres:5432/juxin_sca"
       REDIS_URL: "redis://sca-redis:6379/0"
       CELERY_BROKER_URL: "redis://sca-redis:6379/1"
@@ -751,13 +751,13 @@ services:
       TRIVY_TIMEOUT: ${SCA_TRIVY_TIMEOUT:-3600}
       TRIVY_CACHE_DIR: "/data/trivy-cache"
       TRIVY_OUTPUT_DIR: "/data/scanner-results/trivy"
-      DEPENDENCY_TRACK_ENABLED: ${SCA_DEPENDENCY_TRACK_ENABLED:-true}
-      DEPENDENCY_TRACK_URL: "http://dependency-track-apiserver:8080"
-      DEPENDENCY_TRACK_API_KEY: ${SCA_DEPENDENCY_TRACK_API_KEY:-}
-      DEPENDENCY_TRACK_TIMEOUT: ${SCA_DEPENDENCY_TRACK_TIMEOUT:-1800}
-      DEPENDENCY_TRACK_AUTO_CREATE_PROJECT: ${SCA_DEPENDENCY_TRACK_AUTO_CREATE_PROJECT:-true}
-      DEPENDENCY_TRACK_UPLOAD_BOM: ${SCA_DEPENDENCY_TRACK_UPLOAD_BOM:-true}
-      DEPENDENCY_TRACK_FETCH_FINDINGS: ${SCA_DEPENDENCY_TRACK_FETCH_FINDINGS:-true}
+      DEPENDENCY_TRACK_ENABLED: ${SCA_DEPENDENCY_TRACK_ENABLED:-${DEPENDENCY_TRACK_ENABLED:-true}}
+      DEPENDENCY_TRACK_URL: ${SCA_DEPENDENCY_TRACK_URL:-${DEPENDENCY_TRACK_URL:-http://dependency-track-apiserver:8080}}
+      DEPENDENCY_TRACK_API_KEY: ${SCA_DEPENDENCY_TRACK_API_KEY:-${DEPENDENCY_TRACK_API_KEY:-}}
+      DEPENDENCY_TRACK_TIMEOUT: ${SCA_DEPENDENCY_TRACK_TIMEOUT:-${DEPENDENCY_TRACK_TIMEOUT:-1800}}
+      DEPENDENCY_TRACK_AUTO_CREATE_PROJECT: ${SCA_DEPENDENCY_TRACK_AUTO_CREATE_PROJECT:-${DEPENDENCY_TRACK_AUTO_CREATE_PROJECT:-true}}
+      DEPENDENCY_TRACK_UPLOAD_BOM: ${SCA_DEPENDENCY_TRACK_UPLOAD_BOM:-${DEPENDENCY_TRACK_UPLOAD_BOM:-true}}
+      DEPENDENCY_TRACK_FETCH_FINDINGS: ${SCA_DEPENDENCY_TRACK_FETCH_FINDINGS:-${DEPENDENCY_TRACK_FETCH_FINDINGS:-true}}
       MULTI_ENGINE_MERGE_ENABLED: ${SCA_MULTI_ENGINE_MERGE_ENABLED:-true}
       LOW_CONFIDENCE_AUTO_REVIEW: ${SCA_LOW_CONFIDENCE_AUTO_REVIEW:-true}
       SAVE_RAW_REPORTS: ${SCA_SAVE_RAW_REPORTS:-true}
@@ -786,7 +786,7 @@ services:
     environment:
       APP_NAME: "聚信软件成分分析平台"
       APP_ENV: dev
-      APP_VERSION: ${SCA_APP_VERSION:-5.65.0}
+      APP_VERSION: ${SCA_APP_VERSION:-5.66.0}
       DATABASE_URL: "postgresql+psycopg://sca_user:${SCA_POSTGRES_PASSWORD:-change_me_sca_postgres_password}@sca-postgres:5432/juxin_sca"
       REDIS_URL: "redis://sca-redis:6379/0"
       CELERY_BROKER_URL: "redis://sca-redis:6379/1"
@@ -866,16 +866,16 @@ services:
       sca-postgres:
         condition: service_healthy
     ports:
-      - "18090:8080"
+      - "${SCA_DEPENDENCY_TRACK_API_PORT:-${DEPENDENCY_TRACK_API_PORT:-18090}}:8080"
 
   dependency-track-frontend:
     image: dependencytrack/frontend:4.12.2
     environment:
-      API_BASE_URL: ${SCA_DEPENDENCY_TRACK_PUBLIC_API_URL:-http://localhost:18090}
+      API_BASE_URL: ${SCA_DEPENDENCY_TRACK_PUBLIC_API_URL:-${DEPENDENCY_TRACK_PUBLIC_API_URL:-http://localhost:18090}}
     depends_on:
       - dependency-track-apiserver
     ports:
-      - "18091:8080"
+      - "${SCA_DEPENDENCY_TRACK_WEB_PORT:-${DEPENDENCY_TRACK_WEB_PORT:-18091}}:8080"
 
   onlyoffice:
     build:

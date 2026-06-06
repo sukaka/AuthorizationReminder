@@ -11,6 +11,7 @@ def build_client(monkeypatch, tmp_path):
     monkeypatch.setenv("CELERY_TASK_ALWAYS_EAGER", "true")
     monkeypatch.setenv("UPLOAD_ROOT", str(tmp_path / "uploads"))
     monkeypatch.setenv("OPENAI_API_KEY", "")
+    monkeypatch.setenv("DEPENDENCY_TRACK_API_KEY", "")
 
     from app import config
 
@@ -67,21 +68,27 @@ def test_system_config_masks_key_and_enforces_upload_limit(monkeypatch, tmp_path
         defaults = test_client.get("/api/sca/system-config").json()
         assert defaults["upload_max_file_size_mb"] > 0
         assert defaults["openai_api_key_configured"] is False
+        assert defaults["dependency_track_api_key_configured"] is False
 
         saved = test_client.put(
             "/api/sca/system-config",
             json={
                 "upload_max_file_size_mb": 1,
-                "openai_api_key": "sk-test-secret",
+                "openai_api_key": "example-openai-api-key",
                 "openai_base_url": "https://llm.example.com/v1",
                 "openai_model": "deepseek-chat",
                 "openai_timeout_ms": 45000,
+                "dependency_track_url": "http://dependency-track.local",
+                "dependency_track_api_key": "example-dtrack-api-key",
             },
         )
         assert saved.status_code == 200
         assert saved.json()["openai_api_key_configured"] is True
-        assert "sk-test-secret" not in str(saved.json())
-        assert saved.json()["openai_api_key_masked"].startswith("sk-t")
+        assert saved.json()["dependency_track_api_key_configured"] is True
+        assert "example-openai-api-key" not in str(saved.json())
+        assert "example-dtrack-api-key" not in str(saved.json())
+        assert saved.json()["openai_api_key_masked"].startswith("exam")
+        assert saved.json()["dependency_track_api_key_masked"].startswith("exam")
 
         too_large = test_client.post(
             "/api/sca/uploads/sessions",
@@ -129,7 +136,7 @@ def test_ai_triage_uses_runtime_system_config(monkeypatch, tmp_path):
             "/api/sca/system-config",
             json={
                 "upload_max_file_size_mb": 50,
-                "openai_api_key": "sk-runtime",
+                "openai_api_key": "example-runtime-openai-key",
                 "openai_base_url": "https://llm.example.com/v1",
                 "openai_model": "qwen-plus",
                 "openai_timeout_ms": 65000,
@@ -152,7 +159,7 @@ def test_ai_triage_uses_runtime_system_config(monkeypatch, tmp_path):
 
     assert response.status_code == 200
     assert captured == {
-        "api_key": "sk-runtime",
+        "api_key": "example-runtime-openai-key",
         "api_url": "https://llm.example.com/v1/chat/completions",
         "model": "qwen-plus",
         "timeout": 65000,
@@ -174,7 +181,7 @@ def test_ai_triage_reports_provider_auth_failure_without_500(monkeypatch, tmp_pa
             "/api/sca/system-config",
             json={
                 "upload_max_file_size_mb": 50,
-                "openai_api_key": "sk-runtime",
+                "openai_api_key": "example-runtime-openai-key",
                 "openai_base_url": "https://api.deepseek.com",
                 "openai_model": "deepseek-chat",
                 "openai_timeout_ms": 30000,
@@ -207,13 +214,13 @@ def test_system_config_can_test_openai_model_without_saving(monkeypatch, tmp_pat
 
     class FakeResponse:
         status_code = 200
-        content = b'{"choices":[{"message":{"content":"ok"}}],"usage":{"total_tokens":3}}'
+        content = b'{"choices":[{"message":{"content":"{\\"items\\":[]}"}}],"usage":{"total_tokens":3}}'
 
         def raise_for_status(self):
             return None
 
         def json(self):
-            return {"choices": [{"message": {"content": "ok"}}], "usage": {"total_tokens": 3}}
+            return {"choices": [{"message": {"content": '{"items":[]}'}}], "usage": {"total_tokens": 3}}
 
     class FakeClient:
         def __init__(self, timeout):
@@ -229,6 +236,7 @@ def test_system_config_can_test_openai_model_without_saving(monkeypatch, tmp_pat
             captured["url"] = url
             captured["auth"] = headers.get("Authorization", "")
             captured["model"] = json.get("model")
+            captured["response_format"] = json.get("response_format", {}).get("type")
             return FakeResponse()
 
     monkeypatch.setattr("app.main.httpx.Client", FakeClient)
@@ -237,7 +245,7 @@ def test_system_config_can_test_openai_model_without_saving(monkeypatch, tmp_pat
             "/api/sca/system-config/test-openai",
             json={
                 "upload_max_file_size_mb": 50,
-                "openai_api_key": "sk-unsaved",
+                "openai_api_key": "example-unsaved-openai-key",
                 "openai_base_url": "https://llm.example.com/v1/chat/completions",
                 "openai_model": "model-test",
                 "openai_timeout_ms": 12000,
@@ -251,7 +259,72 @@ def test_system_config_can_test_openai_model_without_saving(monkeypatch, tmp_pat
     assert captured == {
         "timeout": 12,
         "url": "https://llm.example.com/v1/chat/completions",
-        "auth": "Bearer sk-unsaved",
+        "auth": "Bearer example-unsaved-openai-key",
         "model": "model-test",
+        "response_format": "json_schema",
     }
     assert config_after["openai_api_key_configured"] is False
+
+
+def test_dependency_track_license_catalog_sync_uses_runtime_config(monkeypatch, tmp_path):
+    client, _main, models, database = build_client(monkeypatch, tmp_path)
+    captured = {}
+
+    class FakeDependencyTrackClient:
+        def __init__(self, settings):
+            captured["url"] = settings.dependency_track_url
+            captured["api_key"] = settings.dependency_track_api_key
+
+        def enabled(self):
+            return True
+
+        def fetch_licenses(self):
+            return [
+                {
+                    "licenseId": "MIT",
+                    "name": "MIT License",
+                    "isOsiApproved": True,
+                    "isFsfLibre": True,
+                    "isDeprecatedLicenseId": False,
+                    "seeAlso": ["https://opensource.org/license/mit"],
+                },
+                {
+                    "licenseId": "GPL-3.0-only",
+                    "name": "GNU General Public License v3.0 only",
+                    "isOsiApproved": True,
+                    "isFsfLibre": True,
+                    "isDeprecatedLicenseId": False,
+                },
+            ]
+
+    monkeypatch.setattr("app.main.DependencyTrackClient", FakeDependencyTrackClient)
+    with client as test_client:
+        saved = test_client.put(
+            "/api/sca/system-config",
+            json={
+                "upload_max_file_size_mb": 50,
+                "dependency_track_url": "http://dependency-track.local",
+                "dependency_track_api_key": "example-dtrack-runtime-key",
+            },
+        )
+        response = test_client.post("/api/sca/licenses/sync")
+        licenses = test_client.get("/api/sca/licenses").json()
+
+    assert saved.status_code == 200
+    assert response.status_code == 200
+    assert response.json()["synced"] == 2
+    assert captured == {"url": "http://dependency-track.local", "api_key": "example-dtrack-runtime-key"}
+    assert [item["license_id"] for item in licenses] == ["GPL-3.0-only", "MIT"]
+    assert licenses[1]["name"] == "MIT License"
+    assert licenses[1]["osi_approved"] is True
+    with database.SessionLocal() as db:
+        assert db.query(models.DependencyTrackLicense).count() == 2
+
+
+def test_dependency_track_license_sync_reports_missing_api_key(monkeypatch, tmp_path):
+    client, _main, _models, _database = build_client(monkeypatch, tmp_path)
+    with client as test_client:
+        response = test_client.post("/api/sca/licenses/sync")
+
+    assert response.status_code == 400
+    assert "Dependency-Track API Key" in response.json()["detail"]

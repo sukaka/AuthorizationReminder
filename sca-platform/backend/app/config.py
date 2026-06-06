@@ -7,7 +7,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     app_name: str = "聚信软件成分分析平台"
     app_env: str = "dev"
-    app_version: str = "5.65.0"
+    app_version: str = "5.66.0"
     database_url: str = "sqlite:///./sca-dev.db"
     redis_url: str = "redis://localhost:6379/0"
     celery_broker_url: str = "redis://localhost:6379/1"
@@ -33,7 +33,7 @@ class Settings(BaseSettings):
     tool_grype_path: str = "grype"
     opensca_enabled: bool = True
     opensca_path: str = "/usr/local/bin/opensca"
-    opensca_timeout: int = 3600
+    opensca_timeout: int = 900
     opensca_output_dir: str = "/data/scanner-results/opensca"
     syft_enabled: bool = True
     syft_path: str = "/usr/local/bin/syft"

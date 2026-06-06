@@ -36,9 +36,9 @@ const nonJsonResponseMessage = (status) =>
 
 const buildHttpError = ({ url, status, contentType, responseText, data, fallbackMessage }) => {
   const preview = responsePreview(responseText)
-  const message = GATEWAY_ERROR_STATUSES.has(status)
+  const message = data?.message || data?.detail || data?.error || (GATEWAY_ERROR_STATUSES.has(status)
     ? gatewayMessage(status)
-    : data?.message || data?.detail || data?.error || fallbackMessage || `请求失败(${status})`
+    : fallbackMessage || `请求失败(${status})`)
   const error = new Error(message)
   error.url = url
   error.status = status

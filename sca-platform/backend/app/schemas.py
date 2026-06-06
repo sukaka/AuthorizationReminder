@@ -120,6 +120,10 @@ class SystemConfigOut(BaseModel):
     openai_base_url: str
     openai_model: str
     openai_timeout_ms: int
+    dependency_track_url: str = ""
+    dependency_track_api_key_configured: bool = False
+    dependency_track_api_key_masked: str = ""
+    dependency_track_license_count: int = 0
 
 
 class SystemConfigUpdateIn(BaseModel):
@@ -129,6 +133,9 @@ class SystemConfigUpdateIn(BaseModel):
     openai_model: str = Field(default="gpt-4o-mini", max_length=120)
     openai_timeout_ms: int = Field(default=30000, ge=1000, le=300000)
     clear_openai_api_key: bool = False
+    dependency_track_url: str = Field(default="", max_length=512)
+    dependency_track_api_key: str = ""
+    clear_dependency_track_api_key: bool = False
 
 
 class SystemConfigTestOut(BaseModel):
@@ -138,6 +145,27 @@ class SystemConfigTestOut(BaseModel):
     model: str
     latency_ms: int
     token_total: int = 0
+
+
+class DependencyTrackLicenseOut(BaseModel):
+    id: int
+    license_id: str
+    name: str
+    osi_approved: bool = False
+    fsf_libre: bool = False
+    deprecated: bool = False
+    reference_url: str = ""
+    source: str = "dependency-track"
+    synced_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class LicenseCatalogSyncOut(BaseModel):
+    status: str
+    synced: int
+    total: int
+    source: str = "dependency-track"
 
 
 class ProjectListItem(BaseModel):

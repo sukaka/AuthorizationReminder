@@ -27,6 +27,7 @@ from .models import (
     AiTriageResult,
     Component,
     ComponentDependency,
+    DependencyTrackLicense,
     DependencyTrackProject,
     ImageScan,
     ImageScanFinding,
@@ -72,6 +73,7 @@ from .schemas import (
     ComponentManualVersionIn,
     DependencyTrackStatusOut,
     DependencyTreeNode,
+    DependencyTrackLicenseOut,
     DevopsDashboardOut,
     DevopsEventListOut,
     DevopsEventOut,
@@ -79,6 +81,7 @@ from .schemas import (
     ImageScanCreateIn,
     ImageScanFindingOut,
     ImageScanOut,
+    LicenseCatalogSyncOut,
     OpsConfigOut,
     OverviewOut,
     ProjectListItem,
@@ -131,6 +134,7 @@ from .remediation_service import create_ticket_no, ignore_vulnerability, mark_ov
 from .report_service import generate_report
 from .risk_monitor_service import monitor_component_update, raw_json, snapshot_risk_level
 from .sbom_service import generate_sbom, scan_image
+from .scanners.dependency_track_client import DependencyTrackClient
 from .upload_service import (
     add_upload_log,
     chunk_size,
@@ -303,6 +307,8 @@ SYSTEM_CONFIG_OPENAI_API_KEY = "openai_api_key"
 SYSTEM_CONFIG_OPENAI_BASE_URL = "openai_base_url"
 SYSTEM_CONFIG_OPENAI_MODEL = "openai_model"
 SYSTEM_CONFIG_OPENAI_TIMEOUT_MS = "openai_timeout_ms"
+SYSTEM_CONFIG_DEPENDENCY_TRACK_URL = "dependency_track_url"
+SYSTEM_CONFIG_DEPENDENCY_TRACK_API_KEY = "dependency_track_api_key"
 DEFAULT_UPLOAD_MAX_FILE_SIZE_MB = 2048
 DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1"
 
@@ -348,6 +354,9 @@ def _system_config_payload(db: Session) -> SystemConfigOut:
     base_url = _normalize_openai_base_url(values.get(SYSTEM_CONFIG_OPENAI_BASE_URL) or settings.openai_api_url)
     model = str(values.get(SYSTEM_CONFIG_OPENAI_MODEL) or settings.openai_model or "gpt-4o-mini").strip() or "gpt-4o-mini"
     timeout_ms = _to_int(values.get(SYSTEM_CONFIG_OPENAI_TIMEOUT_MS), settings.openai_timeout_ms, 1000, 300000)
+    dependency_track_url = str(values.get(SYSTEM_CONFIG_DEPENDENCY_TRACK_URL) or settings.dependency_track_url or "").strip()
+    dependency_track_api_key = str(values.get(SYSTEM_CONFIG_DEPENDENCY_TRACK_API_KEY) or settings.dependency_track_api_key or "").strip()
+    dependency_track_license_count = db.scalar(select(func.count(DependencyTrackLicense.id))) or 0
     return SystemConfigOut(
         upload_max_file_size_mb=upload_mb,
         upload_max_file_size_bytes=upload_mb * 1024 * 1024 if upload_mb > 0 else 0,
@@ -356,6 +365,10 @@ def _system_config_payload(db: Session) -> SystemConfigOut:
         openai_base_url=base_url,
         openai_model=model,
         openai_timeout_ms=timeout_ms,
+        dependency_track_url=dependency_track_url,
+        dependency_track_api_key_configured=bool(dependency_track_api_key),
+        dependency_track_api_key_masked=_mask_secret(dependency_track_api_key),
+        dependency_track_license_count=dependency_track_license_count,
     )
 
 
@@ -389,6 +402,65 @@ def _effective_ai_settings(db: Session, override: SystemConfigUpdateIn | None = 
         "openai_model": model,
         "openai_timeout_ms": timeout_ms,
     })
+
+
+def _normalize_dependency_track_url(value: str) -> str:
+    text = str(value or "").strip().rstrip("/")
+    return text or settings.dependency_track_url
+
+
+def _effective_dependency_track_settings(db: Session, override: SystemConfigUpdateIn | None = None) -> Settings:
+    values = _setting_map(db)
+    if override is not None:
+        url = _normalize_dependency_track_url(override.dependency_track_url or values.get(SYSTEM_CONFIG_DEPENDENCY_TRACK_URL) or settings.dependency_track_url)
+        if override.clear_dependency_track_api_key:
+            api_key = ""
+        else:
+            api_key = str(override.dependency_track_api_key or values.get(SYSTEM_CONFIG_DEPENDENCY_TRACK_API_KEY) or settings.dependency_track_api_key or "").strip()
+    else:
+        url = _normalize_dependency_track_url(values.get(SYSTEM_CONFIG_DEPENDENCY_TRACK_URL) or settings.dependency_track_url)
+        api_key = str(values.get(SYSTEM_CONFIG_DEPENDENCY_TRACK_API_KEY) or settings.dependency_track_api_key or "").strip()
+    return settings.model_copy(update={"dependency_track_url": url, "dependency_track_api_key": api_key})
+
+
+def _bool_from_dependency_track(value: object) -> bool:
+    if isinstance(value, bool):
+        return value
+    text = str(value or "").strip().lower()
+    return text in {"true", "1", "yes", "y"}
+
+
+def _license_reference_url(payload: dict[str, object]) -> str:
+    see_also = payload.get("seeAlso") or payload.get("see_also")
+    if isinstance(see_also, list) and see_also:
+        return str(see_also[0] or "")
+    return str(payload.get("referenceUrl") or payload.get("reference") or payload.get("url") or "")
+
+
+def _upsert_dependency_track_license(db: Session, payload: dict[str, object], synced_at: datetime) -> bool:
+    license_id = str(
+        payload.get("licenseId")
+        or payload.get("licenseID")
+        or payload.get("spdxLicenseId")
+        or payload.get("spdx_license_id")
+        or payload.get("id")
+        or ""
+    ).strip()
+    if not license_id:
+        return False
+    row = db.scalar(select(DependencyTrackLicense).where(DependencyTrackLicense.license_id == license_id))
+    if not row:
+        row = DependencyTrackLicense(license_id=license_id)
+        db.add(row)
+    row.name = str(payload.get("name") or license_id).strip()
+    row.osi_approved = _bool_from_dependency_track(payload.get("isOsiApproved") or payload.get("osiApproved"))
+    row.fsf_libre = _bool_from_dependency_track(payload.get("isFsfLibre") or payload.get("fsfLibre"))
+    row.deprecated = _bool_from_dependency_track(payload.get("isDeprecatedLicenseId") or payload.get("isDeprecated") or payload.get("deprecated"))
+    row.reference_url = _license_reference_url(payload)
+    row.source = "dependency-track"
+    row.raw_json = json.dumps(payload, ensure_ascii=False, default=str)
+    row.synced_at = synced_at
+    return True
 
 
 def _provider_error_detail(response: httpx.Response | None) -> str:
@@ -434,11 +506,12 @@ def _test_openai_connection(effective_settings: Settings) -> SystemConfigTestOut
     body = {
         "model": effective_settings.openai_model,
         "messages": [
-            {"role": "system", "content": "你是 SCA 平台的大模型连通性测试助手。"},
-            {"role": "user", "content": "请只回复 ok。"},
+            {"role": "system", "content": AI_TRIAGE_PROMPT_TEMPLATE},
+            {"role": "user", "content": "这是一次 AI 降噪结构化输出兼容性测试，请按 schema 返回空 items 数组。"},
         ],
         "temperature": 0,
-        "max_tokens": 8,
+        "max_tokens": 64,
+        "response_format": {"type": "json_schema", "json_schema": AI_TRIAGE_JSON_SCHEMA},
     }
     headers = {"Authorization": f"Bearer {effective_settings.openai_api_key}", "Content-Type": "application/json"}
     try:
@@ -454,13 +527,25 @@ def _test_openai_connection(effective_settings: Settings) -> SystemConfigTestOut
         raise HTTPException(status_code=502, detail=f"模型服务连接失败：{exc}") from exc
     except ValueError as exc:
         raise HTTPException(status_code=502, detail="模型服务返回了非 JSON 响应，请检查 BaseURL 是否指向 OpenAI 兼容接口") from exc
-    content = ""
+    raw_content = None
     try:
-        content = str(data["choices"][0]["message"]["content"]).strip()
+        raw_content = data["choices"][0]["message"]["content"]
     except (KeyError, IndexError, TypeError):
-        content = ""
-    if not content:
+        raw_content = None
+    if isinstance(raw_content, str):
+        content = raw_content.strip()
+        if not content:
+            raise HTTPException(status_code=502, detail="模型服务响应格式不符合 OpenAI Chat Completions 规范")
+        try:
+            parsed_content = json.loads(content)
+        except ValueError as exc:
+            raise HTTPException(status_code=502, detail="模型服务响应不是 AI 降噪所需的 JSON Schema 输出，请检查模型是否支持 response_format=json_schema") from exc
+    elif isinstance(raw_content, dict):
+        parsed_content = raw_content
+    else:
         raise HTTPException(status_code=502, detail="模型服务响应格式不符合 OpenAI Chat Completions 规范")
+    if not isinstance(parsed_content, dict) or not isinstance(parsed_content.get("items"), list):
+        raise HTTPException(status_code=502, detail="模型服务响应不符合 AI 降噪 JSON Schema，请检查模型兼容性")
     usage = data.get("usage") if isinstance(data, dict) else {}
     return SystemConfigTestOut(
         success=True,
@@ -526,10 +611,15 @@ async def update_system_config(
     _upsert_setting(db, SYSTEM_CONFIG_OPENAI_BASE_URL, _normalize_openai_base_url(payload.openai_base_url), username)
     _upsert_setting(db, SYSTEM_CONFIG_OPENAI_MODEL, payload.openai_model.strip() or "gpt-4o-mini", username)
     _upsert_setting(db, SYSTEM_CONFIG_OPENAI_TIMEOUT_MS, payload.openai_timeout_ms, username)
+    _upsert_setting(db, SYSTEM_CONFIG_DEPENDENCY_TRACK_URL, _normalize_dependency_track_url(payload.dependency_track_url), username)
     if payload.clear_openai_api_key:
         _upsert_setting(db, SYSTEM_CONFIG_OPENAI_API_KEY, "", username)
     elif payload.openai_api_key.strip():
         _upsert_setting(db, SYSTEM_CONFIG_OPENAI_API_KEY, payload.openai_api_key.strip(), username)
+    if payload.clear_dependency_track_api_key:
+        _upsert_setting(db, SYSTEM_CONFIG_DEPENDENCY_TRACK_API_KEY, "", username)
+    elif payload.dependency_track_api_key.strip():
+        _upsert_setting(db, SYSTEM_CONFIG_DEPENDENCY_TRACK_API_KEY, payload.dependency_track_api_key.strip(), username)
     db.commit()
     return _system_config_payload(db)
 
@@ -543,6 +633,45 @@ async def test_system_config_openai(
 ) -> SystemConfigTestOut:
     await require_action("sca:write", request, user, settings)
     return _test_openai_connection(_effective_ai_settings(db, payload))
+
+
+@app.post("/api/sca/licenses/sync", response_model=LicenseCatalogSyncOut, tags=["licenses"])
+async def sync_license_catalog(
+    request: Request,
+    user: Annotated[UserPayload, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> LicenseCatalogSyncOut:
+    await require_action("sca:write", request, user, settings)
+    effective_settings = _effective_dependency_track_settings(db)
+    client = DependencyTrackClient(effective_settings)
+    if not client.enabled():
+        raise HTTPException(status_code=400, detail="请先配置 Dependency-Track API Key")
+    try:
+        rows = client.fetch_licenses()
+    except httpx.HTTPStatusError as exc:
+        detail = _provider_error_detail(exc.response) or str(exc)
+        raise HTTPException(status_code=502, detail=f"Dependency-Track License 同步失败：{detail}") from exc
+    except httpx.TimeoutException as exc:
+        raise HTTPException(status_code=504, detail="Dependency-Track License 同步超时，请检查服务状态或调大超时时间") from exc
+    except httpx.RequestError as exc:
+        raise HTTPException(status_code=502, detail=f"Dependency-Track License 同步连接失败：{exc}") from exc
+    synced_at = datetime.now(timezone.utc)
+    synced = 0
+    for row in rows:
+        if isinstance(row, dict) and _upsert_dependency_track_license(db, row, synced_at):
+            synced += 1
+    db.commit()
+    return LicenseCatalogSyncOut(status="success", synced=synced, total=len(rows))
+
+
+@app.get("/api/sca/licenses", response_model=list[DependencyTrackLicenseOut], tags=["licenses"])
+async def list_license_catalog(
+    request: Request,
+    user: Annotated[UserPayload, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> list[DependencyTrackLicenseOut]:
+    await require_action("sca:read", request, user, settings)
+    return list(db.scalars(select(DependencyTrackLicense).order_by(DependencyTrackLicense.license_id.asc())).all())
 
 
 @app.get("/api/sca/overview", response_model=OverviewOut, tags=["sca"])
@@ -1050,7 +1179,13 @@ async def list_scan_tasks(
     db: Annotated[Session, Depends(get_db)],
 ) -> list[ScanTaskOut]:
     await require_action("sca:read", request, user, settings)
-    if _close_stale_vulnerability_query_tasks(db, project_id) or _reconcile_dependency_track_task_status(db, project_id):
+    if any(
+        [
+            _close_stale_vulnerability_query_tasks(db, project_id),
+            _close_stale_scan_tasks(db, project_id),
+            _reconcile_dependency_track_task_status(db, project_id),
+        ]
+    ):
         db.commit()
     return list(db.scalars(select(ScanTask).where(ScanTask.project_id == project_id).order_by(ScanTask.created_at.desc())).all())
 
@@ -1172,6 +1307,43 @@ def _close_stale_vulnerability_query_tasks(db: Session, project_id: int) -> int:
     for task in tasks:
         if not _is_stale_vulnerability_query_task(task, now):
             continue
+        task.status = "timeout"
+        task.progress = 100
+        task.summary = message
+        task.error_message = message
+        task.finished_at = now
+        db.add(ScanLog(scan_task_id=task.id, level="warning", message=message))
+        closed += 1
+    return closed
+
+
+def _is_stale_scan_task(task: ScanTask, now: datetime | None = None) -> bool:
+    if task.task_type == "vulnerability_query_task" or task.status not in ACTIVE_SCAN_STATUSES:
+        return False
+    timeout_seconds = int(task.timeout_seconds or 0)
+    if timeout_seconds <= 0:
+        return False
+    started_at = _as_utc(task.started_at) or _as_utc(task.created_at) or _as_utc(task.updated_at)
+    if not started_at:
+        return False
+    now = now or datetime.now(timezone.utc)
+    return (now - started_at).total_seconds() >= timeout_seconds
+
+
+def _close_stale_scan_tasks(db: Session, project_id: int) -> int:
+    now = datetime.now(timezone.utc)
+    tasks = db.scalars(
+        select(ScanTask).where(
+            ScanTask.project_id == project_id,
+            ScanTask.status.in_(ACTIVE_SCAN_STATUSES),
+        )
+    ).all()
+    closed = 0
+    for task in tasks:
+        if not _is_stale_scan_task(task, now):
+            continue
+        engine = task.engine_name or task.task_type or "扫描任务"
+        message = f"任务执行超时：{engine} 超过 {int(task.timeout_seconds or 0)}s 未完成，请检查 worker 或扫描工具日志后重试。"
         task.status = "timeout"
         task.progress = 100
         task.summary = message

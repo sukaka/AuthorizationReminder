@@ -73,3 +73,10 @@ class DependencyTrackClient:
             response.raise_for_status()
             data = response.json()
             return data if isinstance(data, dict) else {}
+
+    def fetch_licenses(self) -> list[dict[str, object]]:
+        with httpx.Client(timeout=self.timeout, headers=self.headers) as client:
+            response = client.get(f"{self.base_url}/api/v1/license")
+            response.raise_for_status()
+            data = response.json()
+            return data if isinstance(data, list) else []

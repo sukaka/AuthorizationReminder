@@ -5,7 +5,7 @@ import json
 import re
 import zipfile
 from collections import Counter, defaultdict
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from sqlalchemy import select
@@ -833,7 +833,21 @@ def _vulnerability_extra_info(item: VulnerabilityRecord) -> str:
     return "；".join(details) if details else "暂无补充信息"
 
 
-def _report_date() -> str:
+def _metadata_date(value: str) -> datetime | None:
+    for fmt in ("%Y.%m.%d", "%Y-%m-%d", "%Y/%m/%d"):
+        try:
+            return datetime.strptime(value, fmt)
+        except ValueError:
+            continue
+    return None
+
+
+def _report_date(metadata: dict[str, str] | None = None) -> str:
+    audit_end_date = str((metadata or {}).get("audit_end_date") or "").strip()
+    if audit_end_date:
+        parsed = _metadata_date(audit_end_date)
+        if parsed:
+            return (parsed + timedelta(days=1)).strftime("%Y年%m月%d日")
     return datetime.now(timezone.utc).strftime("%Y年%m月%d日")
 
 
@@ -1017,7 +1031,7 @@ def _write_docx(
     component_confidence = _component_confidence_groups(components, version_cache)
     priority_items = _priority_sorted(confirmed)
     component_by_id = {item.id: item for item in components}
-    date_text = _report_date()
+    date_text = _report_date(metadata)
     toc_items = [
         "1\t项目概述\t1",
         "1.1\t审核目的\t1",

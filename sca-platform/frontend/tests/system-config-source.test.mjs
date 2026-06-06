@@ -8,6 +8,7 @@ const appSource = fs.readFileSync(path.join(root, 'src', 'App.vue'), 'utf8')
 const apiSource = fs.readFileSync(path.join(root, 'src', 'api.js'), 'utf8')
 const nginxSource = fs.readFileSync(path.join(root, 'nginx.conf'), 'utf8')
 const deployNginxSource = fs.readFileSync(path.join(root, '..', 'deploy', 'nginx', 'sca-platform.conf'), 'utf8')
+const composeSource = fs.readFileSync(path.join(root, '..', '..', 'docker-compose.yml'), 'utf8')
 
 test('system config menu exposes upload and OpenAI settings', () => {
   assert.match(appSource, /index="system-config"/)
@@ -19,6 +20,8 @@ test('system config menu exposes upload and OpenAI settings', () => {
   assert.match(appSource, /testOpenaiConfig/)
   assert.match(appSource, /测试模型/)
   assert.match(appSource, /\/api\/sca\/system-config\/test-openai/)
+  assert.match(appSource, /dependency_track_url/)
+  assert.match(appSource, /dependency_track_api_key/)
 })
 
 test('uploads use runtime config and nginx allows configured request bodies', () => {
@@ -53,10 +56,41 @@ test('project task status refreshes while asynchronous jobs are active', () => {
   assert.match(appSource, /task_id/)
 })
 
-test('ai view hides historical project noise and reports can be deleted', () => {
-  assert.match(appSource, /aiProjectOptions/)
+test('project selectors hide historical project noise and reports can be deleted', () => {
+  assert.match(appSource, /projectOptions/)
   assert.match(appSource, /latestProject/)
-  assert.match(appSource, /menu === 'ai'/)
+  assert.match(appSource, /v-for="project in projectOptions"/)
   assert.match(appSource, /deleteReport/)
   assert.match(appSource, /api\/sca\/reports\/\$\{row\.id\}/)
+})
+
+test('license catalog can be synchronized and displayed', () => {
+  assert.match(appSource, /index="licenses"/)
+  assert.match(appSource, />许可证库</)
+  assert.match(appSource, /licenseCatalog/)
+  assert.match(appSource, /syncLicenseCatalog/)
+  assert.match(appSource, /\/api\/sca\/licenses\/sync/)
+  assert.match(appSource, /\/api\/sca\/licenses/)
+  assert.match(appSource, /prop="license_name" label="License"/)
+})
+
+test('gateway json errors prefer backend detail over generic proxy text', () => {
+  assert.match(apiSource, /data\?\.message \|\| data\?\.detail \|\| data\?\.error \|\| \(GATEWAY_ERROR_STATUSES\.has\(status\)/)
+})
+
+test('dependency track env works with prefixed and standalone variables', () => {
+  assert.match(composeSource, /DEPENDENCY_TRACK_API_KEY: \$\{SCA_DEPENDENCY_TRACK_API_KEY:-\$\{DEPENDENCY_TRACK_API_KEY:-\}\}/)
+  assert.match(composeSource, /DEPENDENCY_TRACK_TIMEOUT: \$\{SCA_DEPENDENCY_TRACK_TIMEOUT:-\$\{DEPENDENCY_TRACK_TIMEOUT:-1800\}\}/)
+})
+
+test('tables expose default pagination controls', () => {
+  assert.match(appSource, /const pageSizeOptions = \[10, 20, 50\]/)
+  assert.match(appSource, /const paginateRows = /)
+  assert.match(appSource, /:page-sizes="pageSizeOptions"/)
+  assert.match(appSource, /:data="pagedProjects"/)
+  assert.match(appSource, /:data="pagedUploads"/)
+  assert.match(appSource, /:data="pagedComponents"/)
+  assert.match(appSource, /:data="pagedFilteredVulnerabilities"/)
+  assert.match(appSource, /:data="pagedAiResults"/)
+  assert.match(appSource, /:data="pagedLicenseCatalog"/)
 })

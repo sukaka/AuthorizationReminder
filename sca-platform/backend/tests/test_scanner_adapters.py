@@ -4,6 +4,7 @@ import subprocess
 from pathlib import Path
 
 from app.config import Settings
+from app.scanners.base import ScannerCommandResult
 from app.scanners.dependency_track_client import DependencyTrackClient
 from app.scanners.opensca_client import OpenSCAAdapter
 from app.scanners.trivy_client import TrivyAdapter
@@ -76,6 +77,23 @@ def test_opensca_invalid_argument_returns_structured_error_without_trivy_flags(m
     assert "-log" in scan_command
     assert "-format" not in scan_command
     assert "--output" not in scan_command
+
+
+def test_opensca_uses_short_default_timeout(monkeypatch, tmp_path):
+    captured = {}
+
+    def fake_run_scanner_command(engine_name, command, output_path, stdout_path, stderr_path, timeout, command_log_path):
+        captured["timeout"] = timeout
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text("[]", encoding="utf-8")
+        return ScannerCommandResult(engine_name=engine_name, status="completed", command=command, raw_result_path=str(output_path))
+
+    monkeypatch.setattr("app.scanners.opensca_client.run_scanner_command", fake_run_scanner_command)
+    settings = Settings(opensca_path=_fake_tool(tmp_path, "opensca"))
+
+    OpenSCAAdapter(settings).scan_source(tmp_path / "project", tmp_path / "reports")
+
+    assert captured["timeout"] <= 900
 
 
 def test_dependency_track_bom_upload_accepts_empty_success_response(monkeypatch, tmp_path):

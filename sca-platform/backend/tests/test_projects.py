@@ -1,4 +1,5 @@
 import importlib
+from datetime import datetime, timedelta, timezone
 
 from fastapi.testclient import TestClient
 
@@ -266,3 +267,61 @@ def test_scan_tasks_reconcile_dependency_track_upload_status(monkeypatch, tmp_pa
     assert upload_task["status"] == "completed"
     assert upload_task["summary"] == "BOM 已上传 Dependency-Track"
     assert upload_task["error_message"] == ""
+
+
+def test_scan_tasks_close_stale_running_opensca_task(monkeypatch, tmp_path):
+    client, models, database = build_client(monkeypatch, tmp_path)
+    with client as test_client:
+        with database.SessionLocal() as db:
+            project = models.Project(name="stale-opensca", scan_note="")
+            db.add(project)
+            db.flush()
+            upload = models.UploadFileRecord(
+                project_id=project.id,
+                upload_id="upload-stale",
+                original_filename="source.zip",
+                storage_path=str(tmp_path / "source.zip"),
+                status="scanning",
+            )
+            db.add(upload)
+            db.flush()
+            parent = models.ScanTask(
+                project_id=project.id,
+                upload_file_id=upload.id,
+                status="running",
+                progress=20,
+                summary="正在执行 OpenSCA 扫描",
+                task_type="project_scan_task",
+                timeout_seconds=600,
+                started_at=datetime.now(timezone.utc) - timedelta(minutes=20),
+            )
+            db.add(parent)
+            db.flush()
+            db.add(
+                models.ScanTask(
+                    project_id=project.id,
+                    upload_file_id=upload.id,
+                    parent_task_id=parent.id,
+                    task_type="opensca_scan_task",
+                    engine_name="opensca",
+                    status="running",
+                    progress=20,
+                    summary="正在执行 OpenSCA 扫描",
+                    timeout_seconds=600,
+                    started_at=datetime.now(timezone.utc) - timedelta(minutes=20),
+                )
+            )
+            db.commit()
+            project_id = project.id
+
+        response = test_client.get(f"/api/sca/projects/{project_id}/scan-tasks")
+
+    assert response.status_code == 200
+    tasks = response.json()
+    opensca_task = next(item for item in tasks if item["task_type"] == "opensca_scan_task")
+    parent_task = next(item for item in tasks if item["task_type"] == "project_scan_task")
+    assert opensca_task["status"] == "timeout"
+    assert opensca_task["progress"] == 100
+    assert "超时" in opensca_task["summary"]
+    assert parent_task["status"] == "timeout"
+    assert parent_task["progress"] == 100
