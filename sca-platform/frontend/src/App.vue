@@ -1567,7 +1567,7 @@ const selectedProject = computed(() => projects.value.find((project) => project.
 
 const latestProject = computed(() => projects.value[0] || null)
 
-const projectOptions = computed(() => (latestProject.value ? [latestProject.value] : []))
+const projectOptions = computed(() => projects.value)
 
 const projectIsInternetExposed = computed(() => {
   const text = `${selectedProject.value?.name || ''} ${selectedProject.value?.scan_note || ''}`.toLowerCase()
