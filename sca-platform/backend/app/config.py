@@ -66,7 +66,7 @@ class Settings(BaseSettings):
     pypi_api_url: str = "https://pypi.org/pypi"
     go_proxy_url: str = "https://proxy.golang.org"
     license_enrichment_enabled: bool = True
-    license_enrichment_timeout_ms: int = 5000
+    license_enrichment_timeout_ms: int = 120000
     eol_api_url: str = "https://endoflife.date/api"
     notification_email_enabled: bool = False
     notification_email_to: str = ""
