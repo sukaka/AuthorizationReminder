@@ -11,6 +11,7 @@ const {
   buildUserImportWorkbook,
   buildUserImportTemplateWorkbook,
   buildCustomerImportTemplateWorkbook,
+  buildCustomerImportTemplateCsv,
   importUsersFromRows,
   isUserImportExcelFile,
   buildUserImportFilename,
@@ -217,6 +218,12 @@ test('buildCustomerImportTemplateWorkbook writes the expected template header an
 
   assert.deepEqual(rows[0], ['客户名称', '聚信销售', '渠道销售']);
   assert.deepEqual(rows[1], ['示例客户有限公司', '张三', '李四']);
+});
+
+test('buildCustomerImportTemplateCsv writes an importable csv template', () => {
+  const csv = buildCustomerImportTemplateCsv();
+
+  assert.equal(csv, '客户名称,聚信销售,渠道销售\n示例客户有限公司,张三,李四\n');
 });
 
 test('importUsersFromRows skips duplicates and returns the fixed password for created users', async () => {
