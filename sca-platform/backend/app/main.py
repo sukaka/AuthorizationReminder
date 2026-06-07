@@ -308,6 +308,7 @@ SYSTEM_CONFIG_OPENAI_BASE_URL = "openai_base_url"
 SYSTEM_CONFIG_OPENAI_MODEL = "openai_model"
 SYSTEM_CONFIG_OPENAI_TIMEOUT_MS = "openai_timeout_ms"
 SYSTEM_CONFIG_DEPENDENCY_TRACK_URL = "dependency_track_url"
+SYSTEM_CONFIG_DEPENDENCY_TRACK_ENABLED = "dependency_track_enabled"
 SYSTEM_CONFIG_DEPENDENCY_TRACK_API_KEY = "dependency_track_api_key"
 DEFAULT_UPLOAD_MAX_FILE_SIZE_MB = 2048
 DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1"
@@ -347,6 +348,17 @@ def _mask_secret(value: str) -> str:
     return f"{text[:4]}****{text[-4:]}"
 
 
+def _bool_from_setting(value: object, fallback: bool) -> bool:
+    if isinstance(value, bool):
+        return value
+    text = str(value or "").strip().lower()
+    if text in {"true", "1", "yes", "y"}:
+        return True
+    if text in {"false", "0", "no", "n"}:
+        return False
+    return fallback
+
+
 def _system_config_payload(db: Session) -> SystemConfigOut:
     values = _setting_map(db)
     upload_mb = _to_int(values.get(SYSTEM_CONFIG_UPLOAD_MAX_MB), DEFAULT_UPLOAD_MAX_FILE_SIZE_MB)
@@ -354,6 +366,7 @@ def _system_config_payload(db: Session) -> SystemConfigOut:
     base_url = _normalize_openai_base_url(values.get(SYSTEM_CONFIG_OPENAI_BASE_URL) or settings.openai_api_url)
     model = str(values.get(SYSTEM_CONFIG_OPENAI_MODEL) or settings.openai_model or "gpt-4o-mini").strip() or "gpt-4o-mini"
     timeout_ms = _to_int(values.get(SYSTEM_CONFIG_OPENAI_TIMEOUT_MS), settings.openai_timeout_ms, 1000, 300000)
+    dependency_track_enabled = _bool_from_setting(values.get(SYSTEM_CONFIG_DEPENDENCY_TRACK_ENABLED), settings.dependency_track_enabled)
     dependency_track_url = str(values.get(SYSTEM_CONFIG_DEPENDENCY_TRACK_URL) or settings.dependency_track_url or "").strip()
     dependency_track_api_key = str(values.get(SYSTEM_CONFIG_DEPENDENCY_TRACK_API_KEY) or settings.dependency_track_api_key or "").strip()
     dependency_track_license_count = db.scalar(select(func.count(DependencyTrackLicense.id))) or 0
@@ -365,6 +378,7 @@ def _system_config_payload(db: Session) -> SystemConfigOut:
         openai_base_url=base_url,
         openai_model=model,
         openai_timeout_ms=timeout_ms,
+        dependency_track_enabled=dependency_track_enabled,
         dependency_track_url=dependency_track_url,
         dependency_track_api_key_configured=bool(dependency_track_api_key),
         dependency_track_api_key_masked=_mask_secret(dependency_track_api_key),
@@ -417,10 +431,12 @@ def _effective_dependency_track_settings(db: Session, override: SystemConfigUpda
             api_key = ""
         else:
             api_key = str(override.dependency_track_api_key or values.get(SYSTEM_CONFIG_DEPENDENCY_TRACK_API_KEY) or settings.dependency_track_api_key or "").strip()
+        enabled = override.dependency_track_enabled if override.dependency_track_enabled is not None else _bool_from_setting(values.get(SYSTEM_CONFIG_DEPENDENCY_TRACK_ENABLED), settings.dependency_track_enabled)
     else:
         url = _normalize_dependency_track_url(values.get(SYSTEM_CONFIG_DEPENDENCY_TRACK_URL) or settings.dependency_track_url)
         api_key = str(values.get(SYSTEM_CONFIG_DEPENDENCY_TRACK_API_KEY) or settings.dependency_track_api_key or "").strip()
-    return settings.model_copy(update={"dependency_track_url": url, "dependency_track_api_key": api_key})
+        enabled = _bool_from_setting(values.get(SYSTEM_CONFIG_DEPENDENCY_TRACK_ENABLED), settings.dependency_track_enabled)
+    return settings.model_copy(update={"dependency_track_url": url, "dependency_track_api_key": api_key, "dependency_track_enabled": enabled})
 
 
 def _bool_from_dependency_track(value: object) -> bool:
@@ -622,6 +638,7 @@ async def update_system_config(
     _upsert_setting(db, SYSTEM_CONFIG_OPENAI_BASE_URL, _normalize_openai_base_url(payload.openai_base_url), username)
     _upsert_setting(db, SYSTEM_CONFIG_OPENAI_MODEL, payload.openai_model.strip() or "gpt-4o-mini", username)
     _upsert_setting(db, SYSTEM_CONFIG_OPENAI_TIMEOUT_MS, payload.openai_timeout_ms, username)
+    _upsert_setting(db, SYSTEM_CONFIG_DEPENDENCY_TRACK_ENABLED, "true" if payload.dependency_track_enabled else "false", username)
     _upsert_setting(db, SYSTEM_CONFIG_DEPENDENCY_TRACK_URL, _normalize_dependency_track_url(payload.dependency_track_url), username)
     if payload.clear_openai_api_key:
         _upsert_setting(db, SYSTEM_CONFIG_OPENAI_API_KEY, "", username)
@@ -656,7 +673,7 @@ async def sync_license_catalog(
     effective_settings = _effective_dependency_track_settings(db)
     client = DependencyTrackClient(effective_settings)
     if not client.enabled():
-        raise HTTPException(status_code=400, detail="请先配置 Dependency-Track API Key")
+        raise HTTPException(status_code=400, detail="Dependency-Track 未启用或未配置 API Key，请在「系统配置」中设置")
     try:
         rows = client.fetch_licenses()
     except httpx.HTTPStatusError as exc:

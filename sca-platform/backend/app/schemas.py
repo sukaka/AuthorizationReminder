@@ -120,6 +120,7 @@ class SystemConfigOut(BaseModel):
     openai_base_url: str
     openai_model: str
     openai_timeout_ms: int
+    dependency_track_enabled: bool = True
     dependency_track_url: str = ""
     dependency_track_api_key_configured: bool = False
     dependency_track_api_key_masked: str = ""
@@ -133,6 +134,7 @@ class SystemConfigUpdateIn(BaseModel):
     openai_model: str = Field(default="gpt-4o-mini", max_length=120)
     openai_timeout_ms: int = Field(default=30000, ge=1000, le=300000)
     clear_openai_api_key: bool = False
+    dependency_track_enabled: bool = True
     dependency_track_url: str = Field(default="", max_length=512)
     dependency_track_api_key: str = ""
     clear_dependency_track_api_key: bool = False
