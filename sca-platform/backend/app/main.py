@@ -503,12 +503,13 @@ def _test_openai_connection(effective_settings: Settings) -> SystemConfigTestOut
     if not effective_settings.openai_api_key:
         raise HTTPException(status_code=400, detail="请先填写或保存 OpenAI API Key")
     started = time.perf_counter()
-    body = {
+    messages = [
+        {"role": "system", "content": AI_TRIAGE_PROMPT_TEMPLATE},
+        {"role": "user", "content": "这是一次 AI 降噪结构化输出兼容性测试，请按 schema 返回空 items 数组。"},
+    ]
+    body: dict[str, object] = {
         "model": effective_settings.openai_model,
-        "messages": [
-            {"role": "system", "content": AI_TRIAGE_PROMPT_TEMPLATE},
-            {"role": "user", "content": "这是一次 AI 降噪结构化输出兼容性测试，请按 schema 返回空 items 数组。"},
-        ],
+        "messages": messages,
         "temperature": 0,
         "max_tokens": 64,
         "response_format": {"type": "json_schema", "json_schema": AI_TRIAGE_JSON_SCHEMA},
@@ -517,6 +518,16 @@ def _test_openai_connection(effective_settings: Settings) -> SystemConfigTestOut
     try:
         with httpx.Client(timeout=effective_settings.openai_timeout_ms / 1000) as client:
             response = client.post(effective_settings.openai_api_url, headers=headers, json=body)
+            if response.status_code == 400:
+                try:
+                    error_data = response.json()
+                    error_msg = str(error_data.get("error", {}).get("message", ""))
+                except Exception:
+                    error_msg = response.text
+                if JSON_SCHEMA_UNAVAILABLE_PATTERN in error_msg:
+                    body.pop("response_format", None)
+                    body["messages"] = _append_json_instructions(messages)
+                    response = client.post(effective_settings.openai_api_url, headers=headers, json=body)
             response.raise_for_status()
         data = response.json()
     except httpx.HTTPStatusError as exc:
@@ -533,11 +544,11 @@ def _test_openai_connection(effective_settings: Settings) -> SystemConfigTestOut
     except (KeyError, IndexError, TypeError):
         raw_content = None
     if isinstance(raw_content, str):
-        content = raw_content.strip()
-        if not content:
+        response_content = raw_content.strip()
+        if not response_content:
             raise HTTPException(status_code=502, detail="模型服务响应格式不符合 OpenAI Chat Completions 规范")
         try:
-            parsed_content = json.loads(content)
+            parsed_content = json.loads(response_content)
         except ValueError as exc:
             raise HTTPException(status_code=502, detail="模型服务响应不是 AI 降噪所需的 JSON Schema 输出，请检查模型是否支持 response_format=json_schema") from exc
     elif isinstance(raw_content, dict):

@@ -46,6 +46,7 @@ services:
       - "3308:3306"
 
   api:
+    image: codex-new-api:latest
     build:
       context: .
       args: *build_args_root_app
@@ -75,6 +76,7 @@ services:
       - "5179:5179"
 
   auth:
+    image: codex-new-auth:latest
     build:
       context: .
       dockerfile: auth/Dockerfile
@@ -592,6 +594,7 @@ services:
       retries: 10
 
   sca-api:
+    image: codex-new-sca-api:latest
     build:
       context: ./sca-platform/backend
       dockerfile: Dockerfile
@@ -656,6 +659,7 @@ services:
       - "5191:5191"
 
   sca-worker:
+    image: codex-new-sca-worker:latest
     build:
       context: ./sca-platform/backend
       dockerfile: Dockerfile
@@ -716,6 +720,7 @@ services:
         condition: service_healthy
 
   sca-scanner-worker:
+    image: codex-new-sca-scanner-worker:latest
     build:
       context: ./sca-platform/backend
       dockerfile: Dockerfile.scanner
@@ -779,6 +784,7 @@ services:
         condition: service_healthy
 
   sca-beat:
+    image: codex-new-sca-beat:latest
     build:
       context: ./sca-platform/backend
       dockerfile: Dockerfile
@@ -839,6 +845,7 @@ services:
         condition: service_healthy
 
   web-sca:
+    image: codex-new-web-sca:latest
     build:
       context: ./sca-platform/frontend
       args:

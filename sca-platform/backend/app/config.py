@@ -7,7 +7,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     app_name: str = "聚信软件成分分析平台"
     app_env: str = "dev"
-    app_version: str = "5.66.0"
+    app_version: str = "5.66.1"
     database_url: str = "sqlite:///./sca-dev.db"
     redis_url: str = "redis://localhost:6379/0"
     celery_broker_url: str = "redis://localhost:6379/1"
@@ -73,7 +73,7 @@ class Settings(BaseSettings):
     openai_api_key: str = ""
     openai_api_url: str = "https://api.openai.com/v1/chat/completions"
     openai_model: str = "gpt-4o-mini"
-    openai_timeout_ms: int = 30000
+    openai_timeout_ms: int = 120000
     devops_block_severities: str = "critical,high"
     remediation_overdue_check_seconds: int = 60 * 60
     production_https_enabled: bool = True

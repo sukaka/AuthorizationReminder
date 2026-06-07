@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from hashlib import sha256
 from typing import Any
 
@@ -9,6 +10,10 @@ import httpx
 from sqlalchemy.orm import Session
 
 from .config import Settings
+import logging
+
+logger = logging.getLogger(__name__)
+
 from .models import AiTriageResult, Component, Project, RemediationEvent, RemediationTicket, VulnerabilityRecord
 
 
@@ -60,6 +65,13 @@ AI_TRIAGE_JSON_SCHEMA = {
     },
     "strict": True,
 }
+
+JSON_SCHEMA_UNAVAILABLE_PATTERN = "response_format type is unavailable"
+
+AI_TRIAGE_JSON_FORMAT_INSTRUCTIONS = (
+    "\n你必须严格按以下 JSON Schema 输出，只输出 JSON，不要包含 markdown 代码块标记：\n"
+    + json.dumps(AI_TRIAGE_JSON_SCHEMA["schema"], ensure_ascii=False)
+)
 
 AI_SCHEMA_VERSION = "ai-triage-v2"
 
@@ -271,19 +283,12 @@ def analyze_vulnerabilities_with_ai(
         return [_heuristic_result(item, context) for item in vulnerabilities]
 
     messages = build_prompt(vulnerabilities, context)
-    body = {
-        "model": settings.openai_model,
-        "messages": messages,
-        "response_format": {"type": "json_schema", "json_schema": AI_TRIAGE_JSON_SCHEMA},
-    }
-    headers = {"Authorization": f"Bearer {settings.openai_api_key}", "Content-Type": "application/json"}
-    with httpx.Client(timeout=settings.openai_timeout_ms / 1000) as client:
-        response = client.post(settings.openai_api_url, headers=headers, json=body)
-        response.raise_for_status()
-    data = response.json()
-    content = data["choices"][0]["message"]["content"]
-    parsed = json.loads(content)
-    usage = data.get("usage") or {}
+    data, usage, model_used = _call_openai_with_fallback(messages, settings)
+    try:
+        response_content = data["choices"][0]["message"]["content"]
+        parsed = json.loads(response_content)
+    except (KeyError, IndexError, TypeError, ValueError) as exc:
+        raise ValueError(f"模型服务响应格式不符合预期：{exc}") from exc
     results = []
     for item in parsed.get("items", []):
         source = next((vulnerability for vulnerability in vulnerabilities if vulnerability.id == int(item["vulnerability_id"])), None)
@@ -302,10 +307,68 @@ def analyze_vulnerabilities_with_ai(
             "completion_tokens": int(usage.get("completion_tokens") or 0),
             "total_tokens": int(usage.get("total_tokens") or 0),
         }
-        item["model"] = settings.openai_model
+        item["model"] = model_used
         item["raw"] = data
         results.append(item)
     return results
+
+
+def _call_openai_with_fallback(
+    messages: list[dict[str, str]],
+    settings: Settings,
+) -> tuple[dict[str, Any], dict[str, Any], str]:
+    """Call OpenAI-compatible API with json_schema, fallback to text mode if unsupported."""
+    headers = {"Authorization": f"Bearer {settings.openai_api_key}", "Content-Type": "application/json"}
+    body: dict[str, Any] = {
+        "model": settings.openai_model,
+        "messages": messages,
+        "temperature": 0,
+        "max_tokens": 16384,
+        "response_format": {"type": "json_schema", "json_schema": AI_TRIAGE_JSON_SCHEMA},
+    }
+    max_retries = 2
+    last_exc: Exception | None = None
+    for attempt in range(max_retries):
+        try:
+            with httpx.Client(timeout=settings.openai_timeout_ms / 1000) as client:
+                response = client.post(settings.openai_api_url, headers=headers, json=body)
+                if response.status_code == 400:
+                    try:
+                        error_data = response.json()
+                        error_msg = str(error_data.get("error", {}).get("message", ""))
+                    except Exception:
+                        error_msg = response.text
+                    if JSON_SCHEMA_UNAVAILABLE_PATTERN in error_msg:
+                        logger.warning("json_schema unsupported by model %s, falling back to text mode", settings.openai_model)
+                        body.pop("response_format", None)
+                        body["messages"] = _append_json_instructions(messages)
+                        response = client.post(settings.openai_api_url, headers=headers, json=body)
+                response.raise_for_status()
+            data = response.json()
+            usage = data.get("usage") or {}
+            model_used = str(data.get("model") or settings.openai_model)
+            return data, usage, model_used
+        except httpx.TimeoutException as exc:
+            last_exc = exc
+            if attempt < max_retries - 1:
+                logger.warning(
+                    "AI model timeout on attempt %d/%d, retrying in 3s...", 
+                    attempt + 1, max_retries
+                )
+                time.sleep(3)
+        except Exception:
+            raise
+    raise last_exc  # type: ignore[misc]
+
+
+def _append_json_instructions(messages: list[dict[str, str]]) -> list[dict[str, str]]:
+    result = []
+    for msg in messages:
+        if msg["role"] == "system":
+            result.append({"role": "system", "content": msg["content"] + AI_TRIAGE_JSON_FORMAT_INSTRUCTIONS})
+        else:
+            result.append(dict(msg))
+    return result
 
 
 def cached_ai_result(db: Session, project_id: int, vulnerability: VulnerabilityRecord, context: dict[str, Any]) -> AiTriageResult | None:
