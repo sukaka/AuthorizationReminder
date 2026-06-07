@@ -811,6 +811,9 @@
               <el-select v-model="selectedProjectId" placeholder="选择项目" style="width: 220px" @change="loadProjectDetails">
                 <el-option v-for="project in projectOptions" :key="project.id" :label="project.name" :value="project.id" />
               </el-select>
+              <el-select v-model="selectedModelId" placeholder="选择模型" style="width: 160px" clearable>
+                <el-option v-for="m in systemConfig.ai_models" :key="m.id" :label="m.label || m.model_name" :value="m.id" />
+              </el-select>
               <el-button type="primary" :loading="aiAnalyzing" :icon="MagicStick" @click="runAiTriage">批量分析</el-button>
             </div>
           </div>
@@ -1148,7 +1151,6 @@
           <div class="panel-head">
             <h2>系统配置</h2>
             <div class="panel-actions">
-              <el-button :loading="systemConfigTesting" @click="testOpenaiConfig">测试模型</el-button>
               <el-button type="primary" :loading="systemConfigSaving" @click="saveSystemConfig">保存配置</el-button>
             </div>
           </div>
@@ -1162,24 +1164,34 @@
             </section>
             <section class="config-section">
               <h3>大模型配置</h3>
-              <el-form-item label="OpenAI API Key">
-                <el-input
-                  v-model="systemConfig.openai_api_key"
-                  type="password"
-                  show-password
-                  :placeholder="systemConfig.openai_api_key_configured ? `已配置：${systemConfig.openai_api_key_masked}` : '请输入 API Key'"
-                />
-              </el-form-item>
-              <el-form-item label="BaseURL">
-                <el-input v-model="systemConfig.openai_base_url" placeholder="例如：https://api.openai.com/v1" />
-              </el-form-item>
-              <el-form-item label="模型">
-                <el-input v-model="systemConfig.openai_model" placeholder="例如：gpt-4o-mini、deepseek-chat、qwen-plus" />
-              </el-form-item>
-              <el-form-item label="超时时间（毫秒）">
-                <el-input-number v-model="systemConfig.openai_timeout_ms" :min="1000" :max="300000" :step="1000" />
-              </el-form-item>
-              <el-checkbox v-model="systemConfig.clear_openai_api_key">清空已保存的 API Key</el-checkbox>
+              <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+                <span style="color:#909399;font-size:13px">{{ systemConfig.ai_models.length }} 个模型</span>
+                <el-button size="small" type="primary" @click="openModelDialog()">添加模型</el-button>
+              </div>
+              <el-table :data="systemConfig.ai_models" size="small" style="width:100%">
+                <el-table-column prop="label" label="名称" min-width="120">
+                  <template #default="{ row }">
+                    <strong>{{ row.label || '未命名' }}</strong>
+                    <el-tag v-if="row.is_default" size="small" type="success" style="margin-left:6px">默认</el-tag>
+                  </template>
+                </el-table-column>
+                <el-table-column prop="model_name" label="模型" min-width="120" show-overflow-tooltip />
+                <el-table-column prop="api_base_url" label="BaseURL" min-width="140" show-overflow-tooltip />
+                <el-table-column prop="has_api_key" label="Key" width="70">
+                  <template #default="{ row }">{{ row.has_api_key ? '已配置' : '未配置' }}</template>
+                </el-table-column>
+                <el-table-column label="操作" width="150">
+                  <template #default="{ row }">
+                    <el-button size="small" text type="primary" @click="openModelDialog(row)">编辑</el-button>
+                    <el-button size="small" text type="primary" @click="testModelConnection(row)">测试</el-button>
+                    <el-popconfirm title="确定删除此模型配置？" @confirm="deleteModel(row.id)">
+                      <template #reference>
+                        <el-button size="small" text type="danger">删除</el-button>
+                      </template>
+                    </el-popconfirm>
+                  </template>
+                </el-table-column>
+              </el-table>
             </section>
             <section class="config-section">
               <h3>Dependency-Track 配置</h3>
@@ -1197,25 +1209,45 @@
               <el-checkbox v-model="systemConfig.clear_dependency_track_api_key">清空已保存的 Dependency-Track API Key</el-checkbox>
             </section>
           </el-form>
+
+          <el-dialog v-model="systemConfig.modelDialogVisible" :title="systemConfig.editingModel?.id ? '编辑模型' : '添加模型'" width="560px">
+            <el-form v-if="systemConfig.editingModel" label-position="top">
+              <el-form-item label="名称">
+                <el-input v-model="systemConfig.editingModel.label" placeholder="例如：GPT-4o生产、DeepSeek测试" />
+              </el-form-item>
+              <el-form-item label="API Key">
+                <el-input v-model="systemConfig.editingModel.api_key" type="password" show-password :placeholder="systemConfig.editingModel.id && systemConfig.editingModel.has_api_key ? '留空则不修改已保存的 Key' : '请输入 API Key'" />
+              </el-form-item>
+              <el-form-item label="BaseURL">
+                <el-input v-model="systemConfig.editingModel.api_base_url" placeholder="https://api.openai.com/v1" />
+              </el-form-item>
+              <el-form-item label="模型名">
+                <el-input v-model="systemConfig.editingModel.model_name" placeholder="gpt-4o-mini" />
+              </el-form-item>
+              <el-form-item label="超时（毫秒）">
+                <el-input-number v-model="systemConfig.editingModel.timeout_ms" :min="1000" :max="300000" :step="1000" />
+              </el-form-item>
+              <el-checkbox v-model="systemConfig.editingModel.is_default">设为默认模型</el-checkbox>
+            </el-form>
+            <template #footer>
+              <el-button @click="systemConfig.modelDialogVisible = false">取消</el-button>
+              <el-button type="primary" :loading="systemConfigSaving" @click="saveModel">保存</el-button>
+            </template>
+          </el-dialog>
         </div>
+
         <div class="panel side-panel">
           <div class="panel-head"><h2>当前状态</h2></div>
           <section class="metric-grid asset-metrics">
             <div class="metric"><span>上传上限</span><strong>{{ systemConfig.upload_max_file_size_mb || '不限' }} MB</strong></div>
-            <div class="metric"><span>API Key</span><strong>{{ systemConfig.openai_api_key_configured ? '已配置' : '未配置' }}</strong></div>
-            <div class="metric"><span>模型</span><strong>{{ systemConfig.openai_model || '-' }}</strong></div>
-            <div class="metric"><span>超时</span><strong>{{ systemConfig.openai_timeout_ms }} ms</strong></div>
+            <div class="metric"><span>模型数</span><strong>{{ systemConfig.ai_models.length }}</strong></div>
+            <div class="metric"><span>默认模型</span><strong>{{ systemConfig.ai_models.find(m => m.is_default)?.model_name || '-' }}</strong></div>
             <div class="metric"><span>DTrack Key</span><strong>{{ systemConfig.dependency_track_api_key_configured ? '已配置' : '未配置' }}</strong></div>
             <div class="metric"><span>DTrack 许可证</span><strong>{{ systemConfig.dependency_track_license_count || 0 }}</strong></div>
           </section>
-          <ul class="capability-list">
-            <li>保存后上传限制立即生效</li>
-            <li>AI 降噪会优先使用页面配置</li>
-            <li>Dependency-Track 配置会用于扫描任务和许可证同步</li>
-            <li>API Key 不会在接口中明文返回</li>
-          </ul>
         </div>
       </section>
+
 
       <section v-if="activeMenu === 'logs'" class="panel">
         <div class="panel-head">
@@ -1352,6 +1384,7 @@ const sbomCreating = ref(false)
 const imageScanning = ref(false)
 const monitorRunning = ref(false)
 const aiAnalyzing = ref(false)
+const selectedModelId = ref(null)
 const systemConfigSaving = ref(false)
 const systemConfigTesting = ref(false)
 const deletingProjectId = ref(null)
@@ -1514,19 +1547,15 @@ const opsConfig = reactive({
 const systemConfig = reactive({
   upload_max_file_size_mb: 2048,
   upload_max_file_size_bytes: 2048 * 1024 * 1024,
-  openai_api_key: '',
-  openai_api_key_configured: false,
-  openai_api_key_masked: '',
-  openai_base_url: 'https://api.openai.com/v1',
-  openai_model: 'gpt-4o-mini',
-  openai_timeout_ms: 30000,
-  clear_openai_api_key: false,
   dependency_track_url: '',
   dependency_track_api_key: '',
   dependency_track_api_key_configured: false,
   dependency_track_api_key_masked: '',
   dependency_track_license_count: 0,
   clear_dependency_track_api_key: false,
+  ai_models: [],
+  editingModel: null,
+  modelDialogVisible: false,
 })
 const pageSizeOptions = [10, 20, 50]
 const createPaginationState = () => ({ page: 1, pageSize: 10 })
@@ -2230,9 +2259,11 @@ const runAiTriage = async () => {
   }
   aiAnalyzing.value = true
   try {
+    const body = { vulnerability_ids: ids, context: aiContext }
+    if (selectedModelId.value) body.model_id = selectedModelId.value
     aiResults.value = await requestJson(`/api/sca/projects/${selectedProjectId.value}/ai-triage/analyze`, {
       method: 'POST',
-      body: JSON.stringify({ vulnerability_ids: ids, context: aiContext }),
+      body: JSON.stringify(body),
     })
     ElMessage.success('AI 降噪分析完成')
   } catch (err) {
@@ -2302,8 +2333,7 @@ const applySystemConfig = (config) => {
   if (!config) return
   Object.assign(systemConfig, {
     ...config,
-    openai_api_key: '',
-    clear_openai_api_key: false,
+    ai_models: config.ai_models || [],
     dependency_track_api_key: '',
     clear_dependency_track_api_key: false,
   })
@@ -2319,11 +2349,6 @@ const saveSystemConfig = async () => {
   try {
     const payload = {
       upload_max_file_size_mb: Number(systemConfig.upload_max_file_size_mb || 0),
-      openai_api_key: systemConfig.openai_api_key || '',
-      openai_base_url: systemConfig.openai_base_url || 'https://api.openai.com/v1',
-      openai_model: systemConfig.openai_model || 'gpt-4o-mini',
-      openai_timeout_ms: Number(systemConfig.openai_timeout_ms || 30000),
-      clear_openai_api_key: Boolean(systemConfig.clear_openai_api_key),
       dependency_track_url: systemConfig.dependency_track_url || '',
       dependency_track_api_key: systemConfig.dependency_track_api_key || '',
       clear_dependency_track_api_key: Boolean(systemConfig.clear_dependency_track_api_key),
@@ -2341,29 +2366,63 @@ const saveSystemConfig = async () => {
   }
 }
 
-const testOpenaiConfig = async () => {
+const testModelConnection = async (model) => {
   systemConfigTesting.value = true
   try {
-    const payload = {
-      upload_max_file_size_mb: Number(systemConfig.upload_max_file_size_mb || 0),
-      openai_api_key: systemConfig.openai_api_key || '',
-      openai_base_url: systemConfig.openai_base_url || 'https://api.openai.com/v1',
-      openai_model: systemConfig.openai_model || 'gpt-4o-mini',
-      openai_timeout_ms: Number(systemConfig.openai_timeout_ms || 30000),
-      clear_openai_api_key: Boolean(systemConfig.clear_openai_api_key),
-      dependency_track_url: systemConfig.dependency_track_url || '',
-      dependency_track_api_key: systemConfig.dependency_track_api_key || '',
-      clear_dependency_track_api_key: Boolean(systemConfig.clear_dependency_track_api_key),
-    }
-    const result = await requestJson('/api/sca/system-config/test-openai', {
+    const result = await requestJson(`/api/sca/system-config/test-openai?model_id=${model.id}`, {
       method: 'POST',
-      body: JSON.stringify(payload),
     })
-    ElMessage.success(result?.message || '模型连接测试成功')
+    ElMessage.success(result?.message || `${model.model_name} 连接测试成功`)
   } catch (err) {
     ElMessage.error(err?.message || '模型连接测试失败')
   } finally {
     systemConfigTesting.value = false
+  }
+}
+
+const openModelDialog = (model = null) => {
+  systemConfig.editingModel = model
+    ? { ...model, api_key: '' }
+    : { label: '', provider: 'openai', api_key: '', api_base_url: 'https://api.openai.com/v1', model_name: '', timeout_ms: 30000, is_default: false }
+  systemConfig.modelDialogVisible = true
+}
+
+const saveModel = async () => {
+  systemConfigSaving.value = true
+  try {
+    const m = systemConfig.editingModel
+    const payload = {
+      label: m.label || '',
+      provider: m.provider || 'openai',
+      api_key: m.api_key || '',
+      api_base_url: m.api_base_url || 'https://api.openai.com/v1',
+      model_name: m.model_name || '',
+      timeout_ms: Number(m.timeout_ms || 30000),
+      is_default: Boolean(m.is_default),
+    }
+    if (m.id) {
+      if (!payload.api_key) delete payload.api_key
+      await requestJson(`/api/sca/ai-models/${m.id}`, { method: 'PUT', body: JSON.stringify(payload) })
+    } else {
+      await requestJson('/api/sca/ai-models', { method: 'POST', body: JSON.stringify(payload) })
+    }
+    systemConfig.modelDialogVisible = false
+    await loadSystemConfig()
+    ElMessage.success(m.id ? '模型已更新' : '模型已添加')
+  } catch (err) {
+    ElMessage.error(err?.message || '保存模型失败')
+  } finally {
+    systemConfigSaving.value = false
+  }
+}
+
+const deleteModel = async (id) => {
+  try {
+    await requestJson(`/api/sca/ai-models/${id}`, { method: 'DELETE' })
+    await loadSystemConfig()
+    ElMessage.success('模型已删除')
+  } catch (err) {
+    ElMessage.error(err?.message || '删除模型失败')
   }
 }
 

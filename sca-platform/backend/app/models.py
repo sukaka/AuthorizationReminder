@@ -690,3 +690,17 @@ class BackupJob(Base):
     storage_path: Mapped[str] = mapped_column(String(1024), nullable=False, default="")
     summary: Mapped[str] = mapped_column(Text, nullable=False, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+class AIModelConfig(Base):
+    __tablename__ = "ai_model_configs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    label: Mapped[str] = mapped_column(String(80), nullable=False)
+    provider: Mapped[str] = mapped_column(String(40), nullable=False, default="openai")
+    api_key: Mapped[str] = mapped_column(String(512), nullable=False, default="")
+    api_base_url: Mapped[str] = mapped_column(String(512), nullable=False, default="https://api.openai.com/v1")
+    model_name: Mapped[str] = mapped_column(String(120), nullable=False, default="gpt-4o-mini")
+    timeout_ms: Mapped[int] = mapped_column(Integer, nullable=False, default=30000)
+    is_default: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)

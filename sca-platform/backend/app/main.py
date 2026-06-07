@@ -14,7 +14,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile, status
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.orm import Session
 
 from .auth import get_current_user, require_action
@@ -23,6 +23,7 @@ from .celery_app import demo_scan, query_project_vulnerabilities_task, scan_uplo
 from .config import Settings, get_settings
 from .database import SessionLocal, check_database, get_db, init_db
 from .models import (
+    AIModelConfig,
     AnalysisProject,
     AiTriageResult,
     Component,
@@ -58,6 +59,7 @@ from .models import (
     VulnerabilityWhitelist,
 )
 from .schemas import (
+    AIModelConfigCreateIn, AIModelConfigOut, AIModelConfigUpdateIn,
     AiTriageAnalyzeIn,
     AiTriageConfirmIn,
     AiTriageMetaOut,
@@ -303,10 +305,10 @@ async def validation_exception_handler(_request: Request, exc: RequestValidation
     return _api_error_response(status.HTTP_422_UNPROCESSABLE_ENTITY, exc.errors())
 
 SYSTEM_CONFIG_UPLOAD_MAX_MB = "upload_max_file_size_mb"
-SYSTEM_CONFIG_OPENAI_API_KEY = "openai_api_key"
-SYSTEM_CONFIG_OPENAI_BASE_URL = "openai_base_url"
-SYSTEM_CONFIG_OPENAI_MODEL = "openai_model"
-SYSTEM_CONFIG_OPENAI_TIMEOUT_MS = "openai_timeout_ms"
+# SYSTEM_CONFIG_OPENAI_API_KEY = "openai_api_key"
+# SYSTEM_CONFIG_OPENAI_BASE_URL = "openai_base_url"
+# SYSTEM_CONFIG_OPENAI_MODEL = "openai_model"
+# SYSTEM_CONFIG_OPENAI_TIMEOUT_MS = "openai_timeout_ms"
 SYSTEM_CONFIG_DEPENDENCY_TRACK_URL = "dependency_track_url"
 SYSTEM_CONFIG_DEPENDENCY_TRACK_ENABLED = "dependency_track_enabled"
 SYSTEM_CONFIG_DEPENDENCY_TRACK_API_KEY = "dependency_track_api_key"
@@ -359,30 +361,54 @@ def _bool_from_setting(value: object, fallback: bool) -> bool:
     return fallback
 
 
+def _ai_model_to_settings(model: AIModelConfig) -> Settings:
+    effective = Settings()
+    effective.openai_api_key = model.api_key or settings.openai_api_key
+    effective.openai_api_url = model.api_base_url or settings.openai_api_url
+    effective.openai_model = model.model_name or settings.openai_model
+    effective.openai_timeout_ms = model.timeout_ms or settings.openai_timeout_ms
+    return effective
+
+def _ai_model_list(db: Session) -> list[AIModelConfigOut]:
+    rows = db.scalars(select(AIModelConfig).order_by(AIModelConfig.id.asc())).all()
+    return [
+        AIModelConfigOut(
+            id=r.id,
+            label=r.label,
+            provider=r.provider,
+            api_base_url=r.api_base_url,
+            model_name=r.model_name,
+            timeout_ms=r.timeout_ms,
+            is_default=r.is_default,
+            has_api_key=bool((r.api_key or "").strip()),
+        )
+        for r in rows
+    ]
+
+
+def _ai_model_detail(db: Session, model_id: int) -> AIModelConfig:
+    model = db.get(AIModelConfig, model_id)
+    if not model:
+        raise HTTPException(status_code=404, detail="模型配置不存在")
+    return model
+
 def _system_config_payload(db: Session) -> SystemConfigOut:
     values = _setting_map(db)
     upload_mb = _to_int(values.get(SYSTEM_CONFIG_UPLOAD_MAX_MB), DEFAULT_UPLOAD_MAX_FILE_SIZE_MB)
-    api_key = str(values.get(SYSTEM_CONFIG_OPENAI_API_KEY) or settings.openai_api_key or "").strip()
-    base_url = _normalize_openai_base_url(values.get(SYSTEM_CONFIG_OPENAI_BASE_URL) or settings.openai_api_url)
-    model = str(values.get(SYSTEM_CONFIG_OPENAI_MODEL) or settings.openai_model or "gpt-4o-mini").strip() or "gpt-4o-mini"
-    timeout_ms = _to_int(values.get(SYSTEM_CONFIG_OPENAI_TIMEOUT_MS), settings.openai_timeout_ms, 1000, 300000)
     dependency_track_enabled = _bool_from_setting(values.get(SYSTEM_CONFIG_DEPENDENCY_TRACK_ENABLED), settings.dependency_track_enabled)
     dependency_track_url = str(values.get(SYSTEM_CONFIG_DEPENDENCY_TRACK_URL) or settings.dependency_track_url or "").strip()
     dependency_track_api_key = str(values.get(SYSTEM_CONFIG_DEPENDENCY_TRACK_API_KEY) or settings.dependency_track_api_key or "").strip()
     dependency_track_license_count = db.scalar(select(func.count(DependencyTrackLicense.id))) or 0
+    ai_models = _ai_model_list(db)
     return SystemConfigOut(
         upload_max_file_size_mb=upload_mb,
         upload_max_file_size_bytes=upload_mb * 1024 * 1024 if upload_mb > 0 else 0,
-        openai_api_key_configured=bool(api_key),
-        openai_api_key_masked=_mask_secret(api_key),
-        openai_base_url=base_url,
-        openai_model=model,
-        openai_timeout_ms=timeout_ms,
         dependency_track_enabled=dependency_track_enabled,
         dependency_track_url=dependency_track_url,
         dependency_track_api_key_configured=bool(dependency_track_api_key),
         dependency_track_api_key_masked=_mask_secret(dependency_track_api_key),
         dependency_track_license_count=dependency_track_license_count,
+        ai_models=ai_models,
     )
 
 
@@ -395,27 +421,14 @@ def _upsert_setting(db: Session, key: str, value: object, username: str) -> None
     db.add(SystemSetting(key=key, value=str(value), updated_by=username))
 
 
-def _effective_ai_settings(db: Session, override: SystemConfigUpdateIn | None = None) -> Settings:
-    values = _setting_map(db)
-    if override:
-        if override.clear_openai_api_key:
-            api_key = ""
-        else:
-            api_key = str(override.openai_api_key or values.get(SYSTEM_CONFIG_OPENAI_API_KEY) or settings.openai_api_key or "").strip()
-        base_url = _normalize_openai_base_url(override.openai_base_url or values.get(SYSTEM_CONFIG_OPENAI_BASE_URL) or settings.openai_api_url)
-        model = str(override.openai_model or values.get(SYSTEM_CONFIG_OPENAI_MODEL) or settings.openai_model or "gpt-4o-mini").strip() or "gpt-4o-mini"
-        timeout_ms = _to_int(override.openai_timeout_ms, settings.openai_timeout_ms, 1000, 300000)
+def _effective_ai_settings(db: Session, model_id: int | None = None) -> Settings:
+    if model_id:
+        model = db.get(AIModelConfig, model_id)
     else:
-        api_key = str(values.get(SYSTEM_CONFIG_OPENAI_API_KEY) or settings.openai_api_key or "").strip()
-        base_url = _normalize_openai_base_url(values.get(SYSTEM_CONFIG_OPENAI_BASE_URL) or settings.openai_api_url)
-        model = str(values.get(SYSTEM_CONFIG_OPENAI_MODEL) or settings.openai_model or "gpt-4o-mini").strip() or "gpt-4o-mini"
-        timeout_ms = _to_int(values.get(SYSTEM_CONFIG_OPENAI_TIMEOUT_MS), settings.openai_timeout_ms, 1000, 300000)
-    return settings.model_copy(update={
-        "openai_api_key": api_key,
-        "openai_api_url": _openai_chat_url(base_url),
-        "openai_model": model,
-        "openai_timeout_ms": timeout_ms,
-    })
+        model = db.scalar(select(AIModelConfig).where(AIModelConfig.is_default == True).limit(1))
+    if model:
+        return _ai_model_to_settings(model)
+    return settings
 
 
 def _normalize_dependency_track_url(value: str) -> str:
@@ -635,15 +648,8 @@ async def update_system_config(
     await require_action("sca:write", request, user, settings)
     username = str(user.username or "system")
     _upsert_setting(db, SYSTEM_CONFIG_UPLOAD_MAX_MB, payload.upload_max_file_size_mb, username)
-    _upsert_setting(db, SYSTEM_CONFIG_OPENAI_BASE_URL, _normalize_openai_base_url(payload.openai_base_url), username)
-    _upsert_setting(db, SYSTEM_CONFIG_OPENAI_MODEL, payload.openai_model.strip() or "gpt-4o-mini", username)
-    _upsert_setting(db, SYSTEM_CONFIG_OPENAI_TIMEOUT_MS, payload.openai_timeout_ms, username)
     _upsert_setting(db, SYSTEM_CONFIG_DEPENDENCY_TRACK_ENABLED, "true" if payload.dependency_track_enabled else "false", username)
     _upsert_setting(db, SYSTEM_CONFIG_DEPENDENCY_TRACK_URL, _normalize_dependency_track_url(payload.dependency_track_url), username)
-    if payload.clear_openai_api_key:
-        _upsert_setting(db, SYSTEM_CONFIG_OPENAI_API_KEY, "", username)
-    elif payload.openai_api_key.strip():
-        _upsert_setting(db, SYSTEM_CONFIG_OPENAI_API_KEY, payload.openai_api_key.strip(), username)
     if payload.clear_dependency_track_api_key:
         _upsert_setting(db, SYSTEM_CONFIG_DEPENDENCY_TRACK_API_KEY, "", username)
     elif payload.dependency_track_api_key.strip():
@@ -652,15 +658,115 @@ async def update_system_config(
     return _system_config_payload(db)
 
 
+@app.get("/api/sca/ai-models", response_model=list[AIModelConfigOut], tags=["ai-models"])
+async def list_ai_models(
+    request: Request,
+    user: Annotated[UserPayload, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> list[AIModelConfigOut]:
+    await require_action("sca:read", request, user, settings)
+    return _ai_model_list(db)
+
+
+@app.post("/api/sca/ai-models", response_model=AIModelConfigOut, status_code=status.HTTP_201_CREATED, tags=["ai-models"])
+async def create_ai_model(
+    request: Request,
+    payload: AIModelConfigCreateIn,
+    user: Annotated[UserPayload, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> AIModelConfigOut:
+    await require_action("sca:write", request, user, settings)
+    if payload.is_default:
+        _clear_default_model(db)
+    model = AIModelConfig(
+        label=payload.label.strip(),
+        provider=payload.provider.strip() or "openai",
+        api_key=payload.api_key.strip(),
+        api_base_url=payload.api_base_url.strip() or "https://api.openai.com/v1",
+        model_name=payload.model_name.strip() or "gpt-4o-mini",
+        timeout_ms=payload.timeout_ms,
+        is_default=payload.is_default,
+    )
+    db.add(model)
+    db.commit()
+    db.refresh(model)
+    return AIModelConfigOut(
+        id=model.id,
+        label=model.label,
+        provider=model.provider,
+        api_base_url=model.api_base_url,
+        model_name=model.model_name,
+        timeout_ms=model.timeout_ms,
+        is_default=model.is_default,
+        has_api_key=bool(model.api_key.strip()),
+    )
+
+
+@app.put("/api/sca/ai-models/{model_id}", response_model=AIModelConfigOut, tags=["ai-models"])
+async def update_ai_model(
+    request: Request,
+    model_id: int,
+    payload: AIModelConfigUpdateIn,
+    user: Annotated[UserPayload, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> AIModelConfigOut:
+    await require_action("sca:write", request, user, settings)
+    model = _ai_model_detail(db, model_id)
+    if payload.label is not None:
+        model.label = payload.label.strip()
+    if payload.provider is not None:
+        model.provider = payload.provider.strip() or "openai"
+    if payload.api_key is not None and payload.api_key.strip():
+        model.api_key = payload.api_key.strip()
+    if payload.api_base_url is not None:
+        model.api_base_url = payload.api_base_url.strip() or "https://api.openai.com/v1"
+    if payload.model_name is not None:
+        model.model_name = payload.model_name.strip() or "gpt-4o-mini"
+    if payload.timeout_ms is not None:
+        model.timeout_ms = payload.timeout_ms
+    if payload.is_default is not None:
+        if payload.is_default:
+            _clear_default_model(db)
+        model.is_default = payload.is_default
+    db.commit()
+    db.refresh(model)
+    return AIModelConfigOut(
+        id=model.id,
+        label=model.label,
+        provider=model.provider,
+        api_base_url=model.api_base_url,
+        model_name=model.model_name,
+        timeout_ms=model.timeout_ms,
+        is_default=model.is_default,
+        has_api_key=bool(model.api_key.strip()),
+    )
+
+
+@app.delete("/api/sca/ai-models/{model_id}", status_code=status.HTTP_204_NO_CONTENT, tags=["ai-models"])
+async def delete_ai_model(
+    request: Request,
+    model_id: int,
+    user: Annotated[UserPayload, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+):
+    await require_action("sca:write", request, user, settings)
+    model = _ai_model_detail(db, model_id)
+    db.delete(model)
+    db.commit()
+
+
+def _clear_default_model(db: Session) -> None:
+    db.execute(update(AIModelConfig).where(AIModelConfig.is_default == True).values(is_default=False))
+
 @app.post("/api/sca/system-config/test-openai", response_model=SystemConfigTestOut, tags=["system"])
 async def test_system_config_openai(
     request: Request,
-    payload: SystemConfigUpdateIn,
     user: Annotated[UserPayload, Depends(get_current_user)],
     db: Annotated[Session, Depends(get_db)],
+    model_id: int = 0,
 ) -> SystemConfigTestOut:
     await require_action("sca:write", request, user, settings)
-    return _test_openai_connection(_effective_ai_settings(db, payload))
+    return _test_openai_connection(_effective_ai_settings(db, model_id if model_id else None))
 
 
 @app.post("/api/sca/licenses/sync", response_model=LicenseCatalogSyncOut, tags=["licenses"])
@@ -1897,7 +2003,7 @@ async def analyze_ai_triage(
         )
     )
     context = payload.context.model_dump()
-    effective_settings = _effective_ai_settings(db)
+    effective_settings = _effective_ai_settings(db, payload.model_id)
     rows: list[AiTriageResult] = []
     missing: list[VulnerabilityRecord] = []
     for vulnerability in vulnerabilities:

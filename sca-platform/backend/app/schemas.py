@@ -112,28 +112,49 @@ class UploadListOut(BaseModel):
     items: list[UploadFileOut]
 
 
+# --- AI Model Config CRUD ---
+
+class AIModelConfigOut(BaseModel):
+    id: int
+    label: str
+    provider: str
+    api_base_url: str
+    model_name: str
+    timeout_ms: int
+    is_default: bool
+    has_api_key: bool
+
+class AIModelConfigCreateIn(BaseModel):
+    label: str = Field(default="", max_length=80)
+    provider: str = Field(default="openai", max_length=40)
+    api_key: str = ""
+    api_base_url: str = Field(default="https://api.openai.com/v1", max_length=512)
+    model_name: str = Field(default="gpt-4o-mini", max_length=120)
+    timeout_ms: int = Field(default=30000, ge=1000, le=300000)
+    is_default: bool = False
+
+class AIModelConfigUpdateIn(BaseModel):
+    label: str | None = Field(default=None, max_length=80)
+    provider: str | None = Field(default=None, max_length=40)
+    api_key: str | None = None
+    api_base_url: str | None = Field(default=None, max_length=512)
+    model_name: str | None = Field(default=None, max_length=120)
+    timeout_ms: int | None = Field(default=None, ge=1000, le=300000)
+    is_default: bool | None = None
+
 class SystemConfigOut(BaseModel):
     upload_max_file_size_mb: int
     upload_max_file_size_bytes: int
-    openai_api_key_configured: bool
-    openai_api_key_masked: str = ""
-    openai_base_url: str
-    openai_model: str
-    openai_timeout_ms: int
     dependency_track_enabled: bool = True
     dependency_track_url: str = ""
     dependency_track_api_key_configured: bool = False
     dependency_track_api_key_masked: str = ""
     dependency_track_license_count: int = 0
+    ai_models: list[AIModelConfigOut] = []
 
 
 class SystemConfigUpdateIn(BaseModel):
     upload_max_file_size_mb: int = Field(default=2048, ge=0, le=102400)
-    openai_api_key: str = ""
-    openai_base_url: str = Field(default="https://api.openai.com/v1", max_length=512)
-    openai_model: str = Field(default="gpt-4o-mini", max_length=120)
-    openai_timeout_ms: int = Field(default=30000, ge=1000, le=300000)
-    clear_openai_api_key: bool = False
     dependency_track_enabled: bool = True
     dependency_track_url: str = Field(default="", max_length=512)
     dependency_track_api_key: str = ""
@@ -499,6 +520,7 @@ class AiTriageContext(BaseModel):
 
 
 class AiTriageAnalyzeIn(BaseModel):
+    model_id: int | None = None
     vulnerability_ids: list[int]
     context: AiTriageContext = Field(default_factory=AiTriageContext)
 
