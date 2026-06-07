@@ -226,8 +226,10 @@ def _classify_version(declared: str, resolved: str = "") -> dict[str, object]:
 
 def _is_version_range(version: str) -> bool:
     value = version.strip()
+    # 去掉 ^ 和 ~ 前缀，^1.2.3 本质上是 >=1.2.3 <2.0.0 的锁定范围
+    value = value.lstrip("^~").strip()
     return bool(
-        value.startswith(("^", "~", ">", "<", ">=", "<=", "~=", "[", "("))
+        value.startswith((">", "<", ">=", "<=", "~=", "[", "("))
         or "," in value
         or "*" in value
         or value.endswith(".+")

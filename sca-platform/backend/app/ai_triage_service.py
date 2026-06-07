@@ -17,6 +17,10 @@ logger = logging.getLogger(__name__)
 from .models import AiTriageResult, Component, Project, RemediationEvent, RemediationTicket, VulnerabilityRecord
 
 
+
+# Kimi API 限制请求体 2MB，留 0.5MB 余量给 headers 和 system prompt
+MAX_PAYLOAD_BYTES = int(1.5 * 1024 * 1024)  # 1.5 MB
+
 SENSITIVE_KEYS = {"token", "secret", "password", "authorization", "cookie", "api_key", "apikey"}
 
 AI_TRIAGE_JSON_SCHEMA = {
@@ -79,7 +83,11 @@ AI_TRIAGE_PROMPT_TEMPLATE = (
     "你是企业软件供应链安全分析专家。必须只基于系统提供的结构化上下文分析，禁止捏造 PoC、"
     "在野利用、KEV、EPSS、可达性或业务事实。不要只按照 CVSS 排序，必须综合公网暴露、"
     "核心业务、实际调用、运行路径、PoC、在野利用、开发/测试依赖、WAF/IPS、防护措施和修复复杂度。"
-    "如果上下文不足，必须输出 Review 并说明人工复核原因。只输出符合 JSON Schema 的 JSON。"
+    "如果上下文不足，必须输出 Review 并说明人工复核原因。"
+    "所有输出内容必须使用简体中文，包括 reason、evidence_summary、fix_advice、business_impact、"
+    "temporary_mitigation 等字段。"
+    "重要：必须对输入的每一条漏洞都输出对应的分析结果，不得省略、不得合并、不得筛选。"
+    "items 数组长度必须等于输入漏洞数量。只输出符合 JSON Schema 的 JSON。"
 )
 
 
@@ -141,7 +149,7 @@ def structured_item(item: VulnerabilityRecord, context: dict[str, Any]) -> dict[
             "cve_id": item.cve_id,
             "cvss": item.cvss_score,
             "severity": item.severity,
-            "description": item.description[:1200],
+            "description": item.description[:800],
             "fixed_version": item.fixed_version,
             "published_at": item.published_at_text,
             "has_poc": item.has_poc,
@@ -160,10 +168,10 @@ def structured_item(item: VulnerabilityRecord, context: dict[str, Any]) -> dict[
         },
         "reachability": {
             "status": item.reachability_status,
-            "evidence": item.reachability_evidence,
-            "entry_points": item.entry_points,
-            "related_files": item.related_files,
-            "call_path_summary": item.call_path_summary,
+            "evidence": item.reachability_evidence[:600],
+            "entry_points": item.entry_points[:400],
+            "related_files": item.related_files[:400],
+            "call_path_summary": item.call_path_summary[:300],
         },
         "runtime_and_business": {
             "runtime_dependency": bool(component is not None and getattr(component, "scope", "") == "runtime"),
@@ -195,7 +203,7 @@ def build_prompt(vulnerabilities: list[VulnerabilityRecord], context: dict[str, 
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]
 
 
-def _heuristic_result(item: VulnerabilityRecord, context: dict[str, Any]) -> dict[str, Any]:
+def _heuristic_result(item: VulnerabilityRecord, context: dict[str, Any], reason_override: str = "") -> dict[str, Any]:
     runtime = bool(context.get("runtime_path") or context.get("actually_called") or item.reachability_status == "reachable")
     exposed = bool(context.get("internet_exposed"))
     core = bool(context.get("core_business"))
@@ -245,7 +253,7 @@ def _heuristic_result(item: VulnerabilityRecord, context: dict[str, Any]) -> dic
         f"公网：{exposed}；核心业务：{core}；PoC：{item.has_poc}；在野利用：{item.exploited_in_wild}；"
         f"开发依赖：{dev_dep}；测试依赖：{test_dep}；WAF/IPS：{waf}；修复复杂度：{fix_complexity}"
     )
-    reason = "未配置 OpenAI API Key，使用本地结构化规则；结论仅基于系统上下文"
+    reason = reason_override or "未配置 OpenAI API Key，使用本地结构化规则；结论仅基于系统上下文"
     return {
         "vulnerability_id": item.id,
         "ai_priority": level,
@@ -274,31 +282,70 @@ def _heuristic_result(item: VulnerabilityRecord, context: dict[str, Any]) -> dic
     }
 
 
-def analyze_vulnerabilities_with_ai(
+def _call_ai_batch(
     vulnerabilities: list[VulnerabilityRecord],
     context: dict[str, Any],
     settings: Settings,
 ) -> list[dict[str, Any]]:
-    if not settings.openai_api_key:
-        return [_heuristic_result(item, context) for item in vulnerabilities]
-
+    """Call AI for a single batch of vulnerabilities."""
+    import time as _time
     messages = build_prompt(vulnerabilities, context)
-    data, usage, model_used = _call_openai_with_fallback(messages, settings)
+    payload_bytes = len(json.dumps(messages, ensure_ascii=False).encode("utf-8"))
+    # Split large batches: max 5 vulns per call (avoid timeout)
+    max_per_batch = 3
+    if len(vulnerabilities) > max_per_batch:
+        total_batches = (len(vulnerabilities) + max_per_batch - 1) // max_per_batch
+        results = []
+        for i in range(0, len(vulnerabilities), max_per_batch):
+            batch_num = i // max_per_batch + 1
+            chunk = vulnerabilities[i:i + max_per_batch]
+            logger.info("AI 降噪进度：批次 %d/%d，正在分析 %d 条漏洞（%s...）",
+                batch_num, total_batches, len(chunk),
+                ", ".join(v.package_name for v in chunk[:3]))
+            try:
+                chunk_results = _call_ai_batch(chunk, context, settings)
+                results.extend(chunk_results)
+                logger.info("AI 降噪进度：批次 %d/%d 完成，获得 %d 条结果",
+                    batch_num, total_batches, len(chunk_results))
+            except Exception as exc:
+                logger.warning("AI 降噪进度：批次 %d/%d 失败：%s，使用本地规则",
+                    batch_num, total_batches, str(exc)[:100])
+                results.extend([_heuristic_result(item, context) for item in chunk])
+            # Brief pause between batches to avoid rate limiting
+            if i + max_per_batch < len(vulnerabilities):
+                _time.sleep(1)
+        return results
+    
+    if payload_bytes > MAX_PAYLOAD_BYTES and len(vulnerabilities) > 1:
+        # Still too large, split into smaller chunks
+        mid = len(vulnerabilities) // 2
+        left = _call_ai_batch(vulnerabilities[:mid], context, settings)
+        right = _call_ai_batch(vulnerabilities[mid:], context, settings)
+        return left + right
+    
     try:
+        data, usage, model_used = _call_openai_with_fallback(messages, settings)
         response_content = data["choices"][0]["message"]["content"]
         parsed = json.loads(response_content)
-    except (KeyError, IndexError, TypeError, ValueError) as exc:
-        raise ValueError(f"模型服务响应格式不符合预期：{exc}") from exc
+        logger.info("AI 降噪：单批次分析完成，Token 用量 prompt=%d completion=%d total=%d",
+            int(usage.get("prompt_tokens") or 0),
+            int(usage.get("completion_tokens") or 0),
+            int(usage.get("total_tokens") or 0))
+    except Exception as exc:
+        reason = f"AI 模型调用失败（{str(exc)[:120]}），降级为本地规则"
+        logger.warning("AI batch call failed (%d vulns, %d bytes): %s, falling back to heuristic", len(vulnerabilities), payload_bytes, exc)
+        return [_heuristic_result(item, context, reason) for item in vulnerabilities]
+    
     results = []
     for item in parsed.get("items", []):
-        source = next((vulnerability for vulnerability in vulnerabilities if vulnerability.id == int(item["vulnerability_id"])), None)
-        priority = str(item["ai_priority"])
+        source = next((v for v in vulnerabilities if v.id == int(item["vulnerability_id"])), None)
+        priority = str(item.get("ai_priority") or item.get("ai_risk_level") or "Review")
         item["ai_risk_level"] = priority
-        item["noise_reason"] = str(item["reason"])
+        item["noise_reason"] = str(item.get("reason") or "")
         item["immediate_fix"] = priority in {"P0", "P1"}
-        item["suspected_false_positive"] = bool(item["is_likely_false_positive"])
-        item["remediation"] = str(item["fix_advice"])
-        item["risk_explanation"] = str(item["evidence_summary"])
+        item["suspected_false_positive"] = bool(item.get("is_likely_false_positive"))
+        item["remediation"] = str(item.get("fix_advice") or "")
+        item["risk_explanation"] = str(item.get("evidence_summary") or "")
         item["priority_score"] = float(item.get("confidence") or 0) * 100
         item["ai_schema_version"] = AI_SCHEMA_VERSION
         item["input_hash"] = triage_input_hash(source, context) if source else ""
@@ -313,6 +360,25 @@ def analyze_vulnerabilities_with_ai(
     return results
 
 
+def analyze_vulnerabilities_with_ai(
+    vulnerabilities: list[VulnerabilityRecord],
+    context: dict[str, Any],
+    settings: Settings,
+) -> list[dict[str, Any]]:
+    if not settings.openai_api_key:
+        logger.info("AI 降噪：未配置 API Key，使用本地规则分析 %d 条漏洞", len(vulnerabilities))
+        return [_heuristic_result(item, context) for item in vulnerabilities]
+    logger.info("AI 降噪：开始批量分析 %d 条漏洞，模型 %s", len(vulnerabilities), settings.openai_model)
+    start = time.time()
+    results = _call_ai_batch(vulnerabilities, context, settings)
+    elapsed = time.time() - start
+    ai_count = sum(1 for r in results if r.get("model") != "local-heuristic")
+    heuristic_count = len(results) - ai_count
+    logger.info("AI 降噪：完成，共 %d 条（AI %d 条 + 本地规则 %d 条），耗时 %.1fs",
+        len(results), ai_count, heuristic_count, elapsed)
+    return results
+
+
 def _call_openai_with_fallback(
     messages: list[dict[str, str]],
     settings: Settings,
@@ -323,7 +389,7 @@ def _call_openai_with_fallback(
         "model": settings.openai_model,
         "messages": messages,
         "temperature": 0,
-        "max_tokens": 16384,
+        "max_tokens": 4096,
         "response_format": {"type": "json_schema", "json_schema": AI_TRIAGE_JSON_SCHEMA},
     }
     max_retries = 2

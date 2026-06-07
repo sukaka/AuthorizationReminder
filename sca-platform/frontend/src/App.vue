@@ -1269,8 +1269,9 @@
           </el-table-column>
           <el-table-column prop="summary" label="摘要" min-width="220" show-overflow-tooltip />
           <el-table-column prop="error_message" label="错误" min-width="180" show-overflow-tooltip />
-          <el-table-column label="操作" width="120">
+          <el-table-column label="操作" width="160">
             <template #default="{ row }">
+              <el-button v-if="row.task_type === 'vulnerability_query_task' && ['queued', 'pending', 'running'].includes(row.status)" text type="danger" :loading="stoppingTaskId === row.id" @click="stopVulnerabilityQuery(row)">停止</el-button>
               <el-button v-if="row.parent_task_id && ['failed', 'timeout'].includes(row.status)" text type="primary" @click="rerunScanTask(row)">重跑</el-button>
             </template>
           </el-table-column>
@@ -2154,6 +2155,22 @@ const queryVulnerabilities = async () => {
     vulnerabilityQuerying.value = false
   }
 }
+
+const stoppingTaskId = ref(null)
+const stopVulnerabilityQuery = async (row) => {
+  if (!selectedProjectId.value) return
+  stoppingTaskId.value = row.id
+  try {
+    await requestJson(`/api/sca/projects/${selectedProjectId.value}/vulnerabilities/query/stop`, { method: 'POST' })
+    await loadProjectDetails()
+    ElMessage.success('漏洞查询任务已停止')
+  } catch (err) {
+    ElMessage.error(err?.message || '停止失败')
+  } finally {
+    stoppingTaskId.value = null
+  }
+}
+
 
 const createReport = async () => {
   if (!selectedProjectId.value) {

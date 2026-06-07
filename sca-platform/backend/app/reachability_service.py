@@ -16,7 +16,7 @@ class ReachabilityResult:
     call_path_summary: str = ""
 
 
-TEXT_SUFFIXES = {".java", ".py", ".js", ".jsx", ".ts", ".tsx", ".vue"}
+TEXT_SUFFIXES = {".java", ".py", ".js", ".jsx", ".ts", ".tsx", ".vue", ".go", ".rb", ".php", ".cs", ".rs", ".swift", ".kt", ".scala", ".groovy"}
 ENTRY_PATTERNS = [
     re.compile(r"@(RestController|Controller|GetMapping|PostMapping|RequestMapping)\b"),
     re.compile(r"@(app|router)\.(get|post|put|delete|patch)\("),

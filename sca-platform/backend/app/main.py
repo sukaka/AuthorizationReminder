@@ -19,7 +19,7 @@ from sqlalchemy.orm import Session
 
 from .auth import get_current_user, require_action
 from . import celery_app as celery_app
-from .celery_app import demo_scan, query_project_vulnerabilities_task, scan_uploaded_file
+from .celery_app import celery_app, demo_scan, query_project_vulnerabilities_task, scan_uploaded_file
 from .config import Settings, get_settings
 from .database import SessionLocal, check_database, get_db, init_db
 from .models import (
@@ -1559,6 +1559,38 @@ async def query_project_vulnerabilities(
         db.refresh(task)
     query_project_vulnerabilities_task.apply_async(args=[task.id], task_id=celery_task_id)
     return {"task_id": task.id, "status": "queued", "message": "漏洞查询任务已入队，请稍后刷新查看结果"}
+
+
+
+@app.post("/api/sca/projects/{project_id}/vulnerabilities/query/stop", status_code=status.HTTP_200_OK, tags=["vulnerabilities"])
+async def stop_vulnerability_query(
+    request: Request,
+    project_id: int,
+    user: Annotated[UserPayload, Depends(get_current_user)],
+) -> dict[str, int | str]:
+    await require_action("sca:write", request, user, settings)
+    with SessionLocal() as db:
+        _ensure_project_exists(db, project_id)
+        task = db.scalar(
+            select(ScanTask)
+            .where(
+                ScanTask.project_id == project_id,
+                ScanTask.task_type == "vulnerability_query_task",
+                ScanTask.status.in_(ACTIVE_SCAN_STATUSES),
+            )
+            .order_by(ScanTask.created_at.desc())
+        )
+        if not task:
+            raise HTTPException(status_code=404, detail="没有正在执行的漏洞查询任务")
+        # Revoke the Celery task
+        if task.celery_task_id:
+            celery_app.control.revoke(task.celery_task_id, terminate=True)
+        task.status = "cancelled"
+        task.summary = "用户手动停止"
+        task.progress = 100
+        task.finished_at = datetime.now(timezone.utc)
+        db.commit()
+        return {"task_id": task.id, "status": "cancelled", "message": "漏洞查询任务已停止"}
 
 
 @app.get("/api/sca/projects/{project_id}/vulnerabilities", response_model=VulnerabilityListOut, tags=["vulnerabilities"])

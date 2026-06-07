@@ -340,16 +340,38 @@ def _run_scanner_children(db, task: ScanTask, extract_dir: Path) -> None:
 
 
 def _latest_source_root(db, project_id: int) -> Path | None:
+    # 优先查找已扫描/扫描中的上传文件
     record = (
         db.query(UploadFileRecord)
         .filter(UploadFileRecord.project_id == project_id, UploadFileRecord.status.in_(["scanned", "scanning", "completed"]))
         .order_by(UploadFileRecord.created_at.desc())
         .first()
     )
-    if not record:
-        return None
-    root = Path(settings.upload_root) / "extracted" / record.upload_id
-    return root if root.exists() else None
+    if record:
+        root = Path(settings.upload_root) / "extracted" / record.upload_id
+        if root.exists():
+            return root
+    # 回退：查找任何状态的上传文件（包括 uploading/uploaded）
+    any_record = (
+        db.query(UploadFileRecord)
+        .filter(UploadFileRecord.project_id == project_id, UploadFileRecord.status.in_(["uploading", "uploaded", "processing"]))
+        .order_by(UploadFileRecord.created_at.desc())
+        .first()
+    )
+    if any_record:
+        root = Path(settings.upload_root) / "extracted" / any_record.upload_id
+        if root.exists():
+            return root
+    # 最后回退：扫描所有 extracted 目录查找匹配的项目文件
+    extracted_root = Path(settings.upload_root) / "extracted"
+    if extracted_root.exists():
+        for child in sorted(extracted_root.iterdir(), key=lambda p: p.stat().st_mtime, reverse=True):
+            if child.is_dir():
+                # 检查是否有任何源码文件
+                for src_file in child.rglob("*"):
+                    if src_file.is_file() and src_file.suffix.lower() in {".java", ".py", ".js", ".jsx", ".ts", ".tsx", ".vue", ".go", ".rb", ".php", ".cs", ".rs"}:
+                        return child
+    return None
 
 
 def _is_unknown_version(value: object) -> bool:

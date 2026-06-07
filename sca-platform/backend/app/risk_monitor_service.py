@@ -22,7 +22,7 @@ class VersionInfo:
 
 VERSION_RE = re.compile(r"v?(\d+)(?:\.(\d+))?(?:\.(\d+))?(?:[-+._]?([0-9A-Za-z.-]+))?")
 UNKNOWN_VERSION_VALUES = {"", "unknown", "none", "null", "n/a", "na", "未声明", "未知"}
-VERSION_RANGE_PREFIXES = ("^", "~", ">=", "<=", ">", "<", "=", "~=", "v")
+VERSION_RANGE_PREFIXES = (">=", "<=", ">", "<", "=", "~=", "v")
 
 
 def _parse_version(value: str) -> tuple[int, int, int, int, str]:

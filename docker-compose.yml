@@ -770,6 +770,12 @@ services:
       OPENAI_API_URL: ${SCA_OPENAI_API_URL:-https://api.openai.com/v1/chat/completions}
       OPENAI_MODEL: ${SCA_OPENAI_MODEL:-gpt-4o-mini}
       OPENAI_TIMEOUT_MS: ${SCA_OPENAI_TIMEOUT_MS:-30000}
+      OSV_API_URL: ${SCA_OSV_API_URL:-https://api.osv.dev}
+      NVD_API_URL: ${SCA_NVD_API_URL:-https://services.nvd.nist.gov/rest/json/cves/2.0}
+      NVD_API_KEY: ${SCA_NVD_API_KEY:-}
+      GITHUB_ADVISORY_URL: ${SCA_GITHUB_ADVISORY_URL:-https://api.github.com/advisories}
+      GITHUB_TOKEN: ${SCA_GITHUB_TOKEN:-}
+      VULNERABILITY_FETCH_TIMEOUT_MS: ${SCA_VULNERABILITY_FETCH_TIMEOUT_MS:-8000}
     volumes:
       - sca-upload-data:/data/sca/uploads
       - sca-report-data:/data/sca/reports

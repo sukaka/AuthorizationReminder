@@ -19,4 +19,4 @@ RUN adduser --disabled-password --gecos "" appuser \
 USER appuser
 
 EXPOSE 5191
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "5191"]
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "5191", "--workers", "4"]
