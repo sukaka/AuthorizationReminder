@@ -402,6 +402,11 @@ CREATE INDEX IF NOT EXISTS idx_vulnerability_whitelist_project_id ON vulnerabili
 CREATE INDEX IF NOT EXISTS idx_vulnerability_whitelist_vulnerability_id ON vulnerability_whitelist(vulnerability_id);
 CREATE INDEX IF NOT EXISTS idx_devops_scan_events_project_id ON devops_scan_events(project_id);
 CREATE INDEX IF NOT EXISTS idx_devops_scan_events_decision ON devops_scan_events(decision);
+CREATE INDEX IF NOT EXISTS idx_scan_tasks_project_type_status_created ON scan_tasks(project_id, task_type, status, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_vulnerabilities_project_risk_cvss ON vulnerabilities(project_id, risk_score DESC, cvss_score DESC);
+CREATE INDEX IF NOT EXISTS idx_upload_files_project_created ON upload_files(project_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_scan_logs_task_created ON scan_logs(scan_task_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_risk_snapshots_project_component_checked ON risk_monitor_snapshots(project_id, component_id, checked_at DESC);
 
 INSERT INTO analysis_projects (name, repository_url, risk_level, status, owner)
 VALUES ('bootstrap-demo', 'https://example.com/juxin/bootstrap-demo.git', 'medium', 'initialized', 'security')

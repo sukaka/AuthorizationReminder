@@ -1,15 +1,19 @@
 import importlib
+import hashlib
+import hmac
+import json
 
 from fastapi.testclient import TestClient
 
 
-def build_client(monkeypatch, tmp_path):
+def build_client(monkeypatch, tmp_path, webhook_secret=""):
     db_path = tmp_path / "sca-test.db"
     monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path}")
     monkeypatch.setenv("AUTH_DEV_BYPASS", "true")
     monkeypatch.setenv("APP_VERSION", "0.1.0")
     monkeypatch.setenv("DEVOPS_BLOCK_SEVERITIES", "critical,high")
     monkeypatch.setenv("REPORT_ROOT", str(tmp_path / "reports"))
+    monkeypatch.setenv("SCA_WEBHOOK_SECRET", webhook_secret)
 
     from app import config
 
@@ -118,6 +122,48 @@ def test_devops_webhook_blocks_high_risk_and_records_event(monkeypatch, tmp_path
     assert response.json()["report_id"]
     assert events["items"][0]["block_reason"]
     assert dashboard["blocked_count"] == 1
+
+
+def test_devops_webhooks_verify_platform_secrets(monkeypatch, tmp_path):
+    secret = "test-webhook-secret"
+    client, _main, models, database = build_client(monkeypatch, tmp_path, webhook_secret=secret)
+    with client as test_client:
+        project_id, _vulnerability_id = seed_vulnerability(database, models)
+        payload = {
+            "project_id": project_id,
+            "pipeline_id": "secure-1",
+            "ref": "main",
+            "commit_sha": "abc",
+            "source": "ignored",
+        }
+        body = json.dumps(payload, separators=(",", ":")).encode()
+        signature = "sha256=" + hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
+
+        github_rejected = test_client.post("/api/sca/devops/webhooks/github", content=body, headers={"content-type": "application/json"})
+        github_accepted = test_client.post(
+            "/api/sca/devops/webhooks/github",
+            content=body,
+            headers={"content-type": "application/json", "x-hub-signature-256": signature},
+        )
+        gitlab_rejected = test_client.post("/api/sca/devops/webhooks/gitlab", json=payload)
+        gitlab_accepted = test_client.post(
+            "/api/sca/devops/webhooks/gitlab",
+            json=payload,
+            headers={"x-gitlab-token": secret},
+        )
+        jenkins_rejected = test_client.post("/api/sca/devops/webhooks/jenkins", json=payload)
+        jenkins_accepted = test_client.post(
+            "/api/sca/devops/webhooks/jenkins",
+            json=payload,
+            headers={"x-sca-webhook-token": secret},
+        )
+
+    assert github_rejected.status_code == 401
+    assert github_accepted.status_code == 200
+    assert gitlab_rejected.status_code == 401
+    assert gitlab_accepted.status_code == 200
+    assert jenkins_rejected.status_code == 401
+    assert jenkins_accepted.status_code == 200
 
 
 def test_ops_config_and_backup_job(monkeypatch, tmp_path):

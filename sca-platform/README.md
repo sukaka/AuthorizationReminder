@@ -2,6 +2,15 @@
 
 当前版本已完成第一到第十二阶段：基础项目初始化、源码上传、依赖识别、漏洞查询、报告导出、SBOM 与容器镜像扫描、持续风险监测、AI 漏洞降噪、软件资产中心、漏洞整改闭环、DevSecOps 集成、最终部署与生产优化。技术栈保持 FastAPI + Vue3 + Element Plus + PostgreSQL + Redis + Celery + Docker Compose，并复用聚信统一登录平台。
 
+## 生产部署安全清单
+
+- 将 `.env` 中 `POSTGRES_PASSWORD` 替换为至少 16 位随机强密码；Compose 对缺失密码直接拒绝启动。
+- 配置 `SCA_WEBHOOK_SECRET`，或分别配置 GitHub、GitLab、Jenkins 密钥，并在网关限制 CI 来源网段。
+- 按容量设置上传、分片和解压限制，监控 `/data/sca`、扫描结果和 Trivy 缓存磁盘占用。
+- 通过反向代理启用 HTTPS，保留 300 秒以上扫描接口超时，并设置磁盘、数据库、Redis 和 worker 告警。
+- 定期执行 `scripts/test-linux.sh`，覆盖前后端测试、构建、`npm audit` 和 `pip-audit`。
+- 定期演练 PostgreSQL、上传文件、报告和 SBOM 的备份恢复，并按计划升级已固定版本的扫描器镜像。
+
 ## 1. 项目总体架构
 
 ```text
@@ -547,7 +556,7 @@ CI 系统扫描完成后调用平台 webhook，平台根据项目当前漏洞等
 
 ### Webhook 逻辑
 
-1. CI 传入项目 ID 或项目名称、流水线号、分支、提交号。
+1. 平台先校验 CI 请求签名或共享密钥，再接收项目 ID 或项目名称、流水线号、分支、提交号。
 2. 平台定位项目并统计当前漏洞。
 3. 自动生成 PDF 安全报告并关联到流水线事件。
 4. 如果存在 P0/P1、KEV、在野利用或阻断等级漏洞，事件决策为 `blocked`。
@@ -564,6 +573,8 @@ CI 系统扫描完成后调用平台 webhook，平台根据项目当前漏洞等
 
 ### GitHub Actions 示例
 
+GitHub 使用请求体 HMAC SHA-256 签名，密钥通过 `GITHUB_WEBHOOK_SECRET` 配置；未单独配置时回退到 `SCA_WEBHOOK_SECRET`。
+
 ```yaml
 name: sca-gate
 on: [push]
@@ -574,9 +585,12 @@ jobs:
       - uses: actions/checkout@v4
       - name: Notify SCA gate
         run: |
+          body="{\"project_name\":\"$GITHUB_REPOSITORY\",\"pipeline_id\":\"$GITHUB_RUN_ID\",\"ref\":\"$GITHUB_REF_NAME\",\"commit_sha\":\"$GITHUB_SHA\"}"
+          signature="$(printf '%s' "$body" | openssl dgst -sha256 -hmac "$SCA_WEBHOOK_SECRET" -hex | sed 's/^.* /sha256=/')"
           curl -fsS -X POST "$SCA_URL/api/sca/devops/webhooks/github" \
             -H "Content-Type: application/json" \
-            -d "{\"project_name\":\"$GITHUB_REPOSITORY\",\"pipeline_id\":\"$GITHUB_RUN_ID\",\"ref\":\"$GITHUB_REF_NAME\",\"commit_sha\":\"$GITHUB_SHA\"}"
+            -H "X-Hub-Signature-256: $signature" \
+            -d "$body"
 ```
 
 ### Jenkins Pipeline 示例
@@ -590,6 +604,7 @@ pipeline {
         sh '''
           curl -fsS -X POST "$SCA_URL/api/sca/devops/webhooks/jenkins" \
             -H "Content-Type: application/json" \
+            -H "X-SCA-Webhook-Token: ${SCA_WEBHOOK_SECRET}" \
             -d "{\"project_name\":\"${JOB_NAME}\",\"pipeline_id\":\"${BUILD_NUMBER}\",\"ref\":\"${BRANCH_NAME}\",\"commit_sha\":\"${GIT_COMMIT}\"}"
         '''
       }
@@ -600,7 +615,7 @@ pipeline {
 
 ### 部署方案
 
-生产环境建议只允许 CI 网段访问 webhook 路径，并通过 Nginx、WAF 或 API 网关补充签名校验。平台内的人工查看接口继续走聚信统一登录授权。
+GitLab 使用 `X-Gitlab-Token`，Jenkins 使用 `X-SCA-Webhook-Token` 或 `Authorization: Bearer ...`。生产环境必须配置平台专用密钥，并建议额外通过 Nginx、WAF 或 API 网关限制 CI 网段。平台内的人工查看接口继续走聚信统一登录授权。
 
 ## 17. 第十二阶段：最终部署与生产优化
 

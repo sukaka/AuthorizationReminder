@@ -161,6 +161,18 @@ def run_compat_migrations() -> None:
             for column, definition in risk_monitor_snapshot_additions.items():
                 if column not in snapshot_existing:
                     conn.execute(text(f"ALTER TABLE risk_monitor_snapshots ADD COLUMN {column} {definition}"))
+        index_statements = [
+            "CREATE INDEX IF NOT EXISTS idx_scan_tasks_project_type_status_created ON scan_tasks(project_id, task_type, status, created_at DESC)",
+            "CREATE INDEX IF NOT EXISTS idx_vulnerabilities_project_risk_cvss ON vulnerabilities(project_id, risk_score DESC, cvss_score DESC)",
+            "CREATE INDEX IF NOT EXISTS idx_upload_files_project_created ON upload_files(project_id, created_at DESC)",
+            "CREATE INDEX IF NOT EXISTS idx_scan_logs_task_created ON scan_logs(scan_task_id, created_at)",
+            "CREATE INDEX IF NOT EXISTS idx_risk_snapshots_project_component_checked ON risk_monitor_snapshots(project_id, component_id, checked_at DESC)",
+        ]
+        existing_tables = set(inspector.get_table_names())
+        index_tables = ["scan_tasks", "vulnerabilities", "upload_files", "scan_logs", "risk_monitor_snapshots"]
+        for table, statement in zip(index_tables, index_statements, strict=True):
+            if table in existing_tables:
+                conn.execute(text(statement))
 
 
 def check_database() -> bool:

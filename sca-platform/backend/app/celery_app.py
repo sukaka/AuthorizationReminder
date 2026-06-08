@@ -1,6 +1,8 @@
 import shutil
+import stat
 import tarfile
 import zipfile
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -73,24 +75,140 @@ def _safe_target(root: Path, member_name: str) -> Path:
     return target
 
 
-def _extract_archive(archive: Path, destination: Path) -> None:
+@dataclass(frozen=True)
+class ArchiveExtractionLimits:
+    max_files: int = 20000
+    max_total_bytes: int = 4 * 1024 * 1024 * 1024
+    max_file_bytes: int = 512 * 1024 * 1024
+    max_compression_ratio: float = 200.0
+
+
+def _archive_limits() -> ArchiveExtractionLimits:
+    return ArchiveExtractionLimits(
+        max_files=settings.archive_max_files,
+        max_total_bytes=settings.archive_max_total_bytes,
+        max_file_bytes=settings.archive_max_file_bytes,
+        max_compression_ratio=settings.archive_max_compression_ratio,
+    )
+
+
+def _check_archive_totals(file_count: int, total_bytes: int, file_bytes: int, limits: ArchiveExtractionLimits) -> None:
+    if limits.max_files > 0 and file_count > limits.max_files:
+        raise ValueError(f"压缩包文件数超过限制: {limits.max_files}")
+    if limits.max_file_bytes > 0 and file_bytes > limits.max_file_bytes:
+        raise ValueError(f"压缩包单文件大小超过限制: {limits.max_file_bytes}")
+    if limits.max_total_bytes > 0 and total_bytes > limits.max_total_bytes:
+        raise ValueError(f"压缩包解压总大小超过限制: {limits.max_total_bytes}")
+
+
+def _copy_archive_member(source, target: Path, limits: ArchiveExtractionLimits, total_bytes: int) -> int:
+    written = 0
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with target.open("wb") as output:
+        while True:
+            chunk = source.read(1024 * 1024)
+            if not chunk:
+                break
+            written += len(chunk)
+            _check_archive_totals(0, total_bytes + written, written, limits)
+            output.write(chunk)
+    return written
+
+
+def _zip_member_is_special(member: zipfile.ZipInfo) -> bool:
+    mode = member.external_attr >> 16
+    file_type = stat.S_IFMT(mode)
+    return file_type not in {0, stat.S_IFREG, stat.S_IFDIR}
+
+
+def _extract_zip(archive: Path, destination: Path, limits: ArchiveExtractionLimits) -> None:
+    total_bytes = 0
+    file_count = 0
+    with zipfile.ZipFile(archive) as zipped:
+        for member in zipped.infolist():
+            target = _safe_target(destination, member.filename)
+            file_count += 1
+            _check_archive_totals(file_count, total_bytes, 0, limits)
+            if member.flag_bits & 0x1:
+                raise ValueError(f"压缩包包含加密文件: {member.filename}")
+            if _zip_member_is_special(member):
+                raise ValueError(f"压缩包包含链接或特殊文件: {member.filename}")
+            if member.is_dir():
+                target.mkdir(parents=True, exist_ok=True)
+                continue
+            total_bytes += member.file_size
+            _check_archive_totals(file_count, total_bytes, member.file_size, limits)
+            if member.file_size > 0:
+                if member.compress_size <= 0:
+                    raise ValueError(f"压缩包文件压缩比异常: {member.filename}")
+                ratio = member.file_size / member.compress_size
+                if limits.max_compression_ratio > 0 and ratio > limits.max_compression_ratio:
+                    raise ValueError(f"压缩包文件压缩比超过限制: {member.filename}")
+
+        actual_total = 0
+        for member in zipped.infolist():
+            if member.is_dir():
+                continue
+            target = _safe_target(destination, member.filename)
+            with zipped.open(member, "r") as source:
+                actual_total += _copy_archive_member(source, target, limits, actual_total)
+
+
+def _extract_tar(archive: Path, destination: Path, limits: ArchiveExtractionLimits) -> None:
+    total_bytes = 0
+    file_count = 0
+    with tarfile.open(archive, "r:gz") as tar:
+        members = tar.getmembers()
+        for member in members:
+            target = _safe_target(destination, member.name)
+            file_count += 1
+            _check_archive_totals(file_count, total_bytes, 0, limits)
+            if member.isdir():
+                target.mkdir(parents=True, exist_ok=True)
+                continue
+            if not member.isfile():
+                raise ValueError(f"压缩包包含链接或特殊文件: {member.name}")
+            total_bytes += member.size
+            _check_archive_totals(file_count, total_bytes, member.size, limits)
+        compressed_size = archive.stat().st_size
+        if total_bytes > 0 and compressed_size > 0:
+            ratio = total_bytes / compressed_size
+            if limits.max_compression_ratio > 0 and ratio > limits.max_compression_ratio:
+                raise ValueError("压缩包整体压缩比超过限制")
+
+        actual_total = 0
+        for member in members:
+            if not member.isfile():
+                continue
+            source = tar.extractfile(member)
+            if source is None:
+                raise ValueError(f"无法读取压缩包成员: {member.name}")
+            with source:
+                target = _safe_target(destination, member.name)
+                actual_total += _copy_archive_member(source, target, limits, actual_total)
+
+
+def _extract_archive(
+    archive: Path,
+    destination: Path,
+    limits: ArchiveExtractionLimits | None = None,
+) -> None:
     if destination.exists():
         shutil.rmtree(destination)
     destination.mkdir(parents=True, exist_ok=True)
-    lower = archive.name.lower()
-    if lower.endswith(".zip"):
-        with zipfile.ZipFile(archive) as zipped:
-            for member in zipped.infolist():
-                _safe_target(destination, member.filename)
-            zipped.extractall(destination)
-        return
-    if lower.endswith(".tar.gz") or lower.endswith(".tgz"):
-        with tarfile.open(archive, "r:gz") as tar:
-            for member in tar.getmembers():
-                _safe_target(destination, member.name)
-            tar.extractall(destination)
-        return
-    raise ValueError("仅支持 zip、tar.gz、tgz 源码包")
+    extraction_limits = limits or _archive_limits()
+    try:
+        lower = archive.name.lower()
+        if lower.endswith(".zip"):
+            _extract_zip(archive, destination, extraction_limits)
+            return
+        if lower.endswith(".tar.gz") or lower.endswith(".tgz"):
+            _extract_tar(archive, destination, extraction_limits)
+            return
+        raise ValueError("仅支持 zip、tar.gz、tgz 源码包")
+    except Exception:
+        shutil.rmtree(destination, ignore_errors=True)
+        raise
 
 
 PROJECT_SCAN_STEPS = [

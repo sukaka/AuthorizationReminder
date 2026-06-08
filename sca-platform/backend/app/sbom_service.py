@@ -105,14 +105,28 @@ def scan_image(db: Session, payload: ImageScan, settings: Settings) -> ImageScan
         command = [scanner_path, "image", "--format", "json", target]
     else:
         command = [scanner_path, target, "-o", "json"]
+    output_dir = Path(settings.sbom_root) / "image-scans"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    stdout_path = output_dir / f"{payload.id or 'pending'}-{payload.scanner}.stdout.log"
+    stderr_path = output_dir / f"{payload.id or 'pending'}-{payload.scanner}.stderr.log"
     try:
-        completed = subprocess.run(command, check=False, capture_output=True, text=True, timeout=300)
-        payload.raw_json = completed.stdout[:200000]
+        with stdout_path.open("w", encoding="utf-8") as stdout_handle, stderr_path.open("w", encoding="utf-8") as stderr_handle:
+            completed = subprocess.run(
+                command,
+                check=False,
+                stdout=stdout_handle,
+                stderr=stderr_handle,
+                text=True,
+                timeout=300,
+            )
+        raw_output = stdout_path.read_text(encoding="utf-8", errors="replace")
+        error_output = stderr_path.read_text(encoding="utf-8", errors="replace")
+        payload.raw_json = raw_output[:200000]
         if completed.returncode != 0:
             payload.status = "failed"
-            payload.summary = completed.stderr[:1000] or "镜像扫描失败"
+            payload.summary = error_output[-1000:] or "镜像扫描失败"
         else:
-            severity_counts = _save_findings(db, payload, completed.stdout)
+            severity_counts = _save_findings(db, payload, raw_output)
             payload.status = "success"
             payload.risk_score = _risk_score(severity_counts)
             payload.summary = "镜像扫描完成：" + ", ".join(f"{key}={value}" for key, value in severity_counts.items())

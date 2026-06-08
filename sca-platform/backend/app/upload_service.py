@@ -5,7 +5,7 @@ import shutil
 import uuid
 from pathlib import Path
 
-from fastapi import HTTPException, UploadFile
+from fastapi import HTTPException, Request, UploadFile
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -115,3 +115,39 @@ def chunk_size(path: Path) -> int:
         return os.path.getsize(path)
     except FileNotFoundError:
         return 0
+
+
+async def save_request_chunk(
+    request: Request,
+    destination: Path,
+    max_bytes: int,
+    remaining_bytes: int,
+) -> int:
+    temporary_path = destination.with_suffix(".uploading")
+    written = 0
+    try:
+        with temporary_path.open("wb") as output:
+            async for chunk in request.stream():
+                if not chunk:
+                    continue
+                written += len(chunk)
+                if max_bytes > 0 and written > max_bytes:
+                    raise HTTPException(status_code=413, detail="分片大小超过服务端限制")
+                if written > remaining_bytes:
+                    raise HTTPException(status_code=400, detail="已上传分片大小超过声明大小")
+                output.write(chunk)
+        if written <= 0:
+            raise HTTPException(status_code=400, detail="分片内容不能为空")
+        temporary_path.replace(destination)
+        return written
+    except Exception:
+        temporary_path.unlink(missing_ok=True)
+        raise
+
+
+def uploaded_chunk_indexes(chunk_dir: Path, total_chunks: int) -> list[int]:
+    return [
+        index
+        for index in range(total_chunks)
+        if chunk_size(chunk_dir / f"{index:08d}.part") > 0
+    ]

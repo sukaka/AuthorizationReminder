@@ -1971,36 +1971,76 @@ const loadUploads = async () => {
   uploads.value = data?.items || []
 }
 
+const settledValue = (result, fallback) => result.status === 'fulfilled' ? result.value : fallback
+
+const loadProjectActivity = async () => {
+  if (!selectedProjectId.value) return false
+  const wasActive = hasActiveProjectTasks.value
+  const [tasksResult, logsResult, uploadsResult] = await Promise.allSettled([
+    requestJson(`/api/sca/projects/${selectedProjectId.value}/scan-tasks`),
+    requestJson(`/api/sca/projects/${selectedProjectId.value}/scan-logs`),
+    requestJson('/api/sca/uploads'),
+  ])
+  scanTasks.value = settledValue(tasksResult, scanTasks.value) || []
+  scanLogs.value = settledValue(logsResult, scanLogs.value) || []
+  const uploadData = settledValue(uploadsResult, null)
+  if (uploadData) uploads.value = uploadData.items || []
+  return wasActive && !hasActiveProjectTasks.value
+}
+
 const loadProjectDetails = async () => {
   if (!selectedProjectId.value) return
   if (projectDetailsLoading) return
   projectDetailsLoading = true
   try {
-    components.value = (await requestJson(`/api/sca/projects/${selectedProjectId.value}/components`)) || []
-    dependencyTree.value = (await requestJson(`/api/sca/projects/${selectedProjectId.value}/dependency-tree`)) || []
-    const completeness = await requestJson(`/api/sca/projects/${selectedProjectId.value}/scan-completeness`)
+    const projectId = selectedProjectId.value
+    const { loadProjectDetailRequests } = await import('./composables/projectDataLoader.js')
+    const [
+      componentsResult,
+      dependencyTreeResult,
+      completenessResult,
+      dtrackResult,
+      tasksResult,
+      logsResult,
+      vulnerabilityResult,
+      statsResult,
+      trendResult,
+      reportsResult,
+      sbomsResult,
+      snapshotsResult,
+      alertsResult,
+      changesResult,
+      monitorTrendResult,
+      aiResult,
+      ticketsResult,
+      whitelistResult,
+    ] = await loadProjectDetailRequests(projectId)
+    if (projectId !== selectedProjectId.value) return
+    components.value = settledValue(componentsResult, components.value) || []
+    dependencyTree.value = settledValue(dependencyTreeResult, dependencyTree.value) || []
+    const completeness = settledValue(completenessResult, null)
     if (completeness) Object.assign(scanCompleteness, completeness)
-    const dtrack = await requestJson(`/api/sca/projects/${selectedProjectId.value}/dependency-track`)
+    const dtrack = settledValue(dtrackResult, null)
     if (dtrack) Object.assign(dependencyTrackStatus, dtrack)
-    scanTasks.value = (await requestJson(`/api/sca/projects/${selectedProjectId.value}/scan-tasks`)) || []
-    scanLogs.value = (await requestJson(`/api/sca/projects/${selectedProjectId.value}/scan-logs`)) || []
-    const vulnerabilityData = await requestJson(`/api/sca/projects/${selectedProjectId.value}/vulnerabilities`)
+    scanTasks.value = settledValue(tasksResult, scanTasks.value) || []
+    scanLogs.value = settledValue(logsResult, scanLogs.value) || []
+    const vulnerabilityData = settledValue(vulnerabilityResult, null)
     vulnerabilities.value = vulnerabilityData?.items || []
-    const stats = await requestJson(`/api/sca/projects/${selectedProjectId.value}/vulnerabilities/stats`)
+    const stats = settledValue(statsResult, null)
     if (stats) Object.assign(vulnerabilityStats, stats)
-    const trend = await requestJson(`/api/sca/projects/${selectedProjectId.value}/vulnerabilities/trend`)
+    const trend = settledValue(trendResult, null)
     vulnerabilityTrend.value = trend?.items || []
-    reports.value = (await requestJson(`/api/sca/projects/${selectedProjectId.value}/reports`)) || []
-    sboms.value = (await requestJson(`/api/sca/projects/${selectedProjectId.value}/sbom`)) || []
-    riskSnapshots.value = (await requestJson(`/api/sca/projects/${selectedProjectId.value}/risk-monitor/snapshots`)) || []
-    riskAlerts.value = (await requestJson(`/api/sca/projects/${selectedProjectId.value}/risk-monitor/alerts`)) || []
-    riskChanges.value = (await requestJson(`/api/sca/projects/${selectedProjectId.value}/risk-monitor/changes`)) || []
-    const monitorTrend = await requestJson(`/api/sca/projects/${selectedProjectId.value}/risk-monitor/trend`)
+    reports.value = settledValue(reportsResult, reports.value) || []
+    sboms.value = settledValue(sbomsResult, sboms.value) || []
+    riskSnapshots.value = settledValue(snapshotsResult, riskSnapshots.value) || []
+    riskAlerts.value = settledValue(alertsResult, riskAlerts.value) || []
+    riskChanges.value = settledValue(changesResult, riskChanges.value) || []
+    const monitorTrend = settledValue(monitorTrendResult, null)
     riskTrend.value = monitorTrend?.items || []
-    aiResults.value = (await requestJson(`/api/sca/projects/${selectedProjectId.value}/ai-triage/results`)) || []
-    const tickets = await requestJson(`/api/sca/projects/${selectedProjectId.value}/remediation/tickets`)
+    aiResults.value = settledValue(aiResult, aiResults.value) || []
+    const tickets = settledValue(ticketsResult, null)
     remediationTickets.value = tickets?.items || []
-    whitelistItems.value = (await requestJson(`/api/sca/projects/${selectedProjectId.value}/remediation/whitelist`)) || []
+    whitelistItems.value = settledValue(whitelistResult, whitelistItems.value) || []
     taskPollingPaused.value = false
     taskPollingGatewayWarningShown = false
   } finally {
@@ -2583,8 +2623,8 @@ onMounted(() => {
   taskRefreshTimer = window.setInterval(async () => {
     if (!selectedProjectId.value || taskPollingPaused.value || !hasActiveProjectTasks.value) return
     try {
-      await loadProjectDetails()
-      await loadUploads()
+      const completed = await loadProjectActivity()
+      if (completed) await loadProjectDetails()
     } catch (err) {
       if (err?.isGatewayError) {
         taskPollingPaused.value = true

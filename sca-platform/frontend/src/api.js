@@ -2,6 +2,9 @@ const viteEnv = import.meta.env || {}
 const API_BASE = viteEnv.VITE_API_BASE || ''
 const SSO_LOGIN_URL = viteEnv.VITE_SSO_LOGIN_URL || 'http://localhost:5180/portal?system=sca'
 const GATEWAY_ERROR_STATUSES = new Set([502, 503, 504])
+const UPLOAD_CHUNK_SIZE = Math.max(1, Number(viteEnv.VITE_UPLOAD_CHUNK_SIZE_MB || 4)) * 1024 * 1024
+const UPLOAD_CONCURRENCY = Math.max(1, Math.min(6, Number(viteEnv.VITE_UPLOAD_CONCURRENCY || 3)))
+const UPLOAD_MAX_RETRIES = Math.max(0, Math.min(5, Number(viteEnv.VITE_UPLOAD_MAX_RETRIES || 3)))
 
 export const apiUrl = (path) => `${API_BASE}${path}`
 
@@ -193,34 +196,113 @@ export const uploadArchiveWithProgress = ({ file, projectName, scanNote, maxUplo
   })
 }
 
-export const resumableUploadWithProgress = async ({ file, projectName, scanNote, maxUploadSizeMb, onProgress }) => {
-  ensureFileSizeAllowed(file, maxUploadSizeMb)
-  const chunkSize = 512 * 1024
-  const totalChunks = Math.max(1, Math.ceil(file.size / chunkSize))
-  const session = await requestJson('/api/sca/uploads/sessions', {
-    method: 'POST',
-    body: JSON.stringify({
-      project_name: projectName,
-      scan_note: scanNote || '',
-      filename: file.name,
-      total_size: file.size,
-      total_chunks: totalChunks,
-    }),
-  })
-  if (!session) return null
-  for (let index = 0; index < totalChunks; index += 1) {
-    const start = index * chunkSize
-    const end = Math.min(file.size, start + chunkSize)
-    await sendWithProgress({
-      method: 'PUT',
-      path: `/api/sca/uploads/${session.upload_id}/chunks/${index}`,
-      body: file.slice(start, end),
-    })
-    if (typeof onProgress === 'function') {
-      onProgress(Math.round(((index + 1) / totalChunks) * 100))
+const uploadResumeKey = (file, projectName) =>
+  `sca-upload:${projectName}:${file.name}:${file.size}:${file.lastModified || 0}`
+
+const readResumeState = (key) => {
+  try {
+    return JSON.parse(globalThis.localStorage?.getItem(key) || 'null')
+  } catch {
+    return null
+  }
+}
+
+const writeResumeState = (key, state) => {
+  try {
+    globalThis.localStorage?.setItem(key, JSON.stringify(state))
+  } catch {
+    // Browser storage may be unavailable in private or restricted contexts.
+  }
+}
+
+const clearResumeState = (key) => {
+  try {
+    globalThis.localStorage?.removeItem(key)
+  } catch {
+    // Ignore storage cleanup failures after a completed upload.
+  }
+}
+
+const sleep = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds))
+
+const shouldRetryUpload = (error) =>
+  !error?.status || error.status === 408 || error.status === 425 || error.status === 429 || error.status >= 500
+
+const uploadChunkWithRetry = async ({ uploadId, index, body }) => {
+  let attempt = 0
+  while (true) {
+    try {
+      return await sendWithProgress({
+        method: 'PUT',
+        path: `/api/sca/uploads/${uploadId}/chunks/${index}`,
+        body,
+      })
+    } catch (error) {
+      if (!shouldRetryUpload(error) || attempt >= UPLOAD_MAX_RETRIES) throw error
+      attempt += 1
+      await sleep(250 * (2 ** (attempt - 1)))
     }
   }
-  return requestJson(`/api/sca/uploads/${session.upload_id}/complete`, { method: 'POST' })
+}
+
+export const resumableUploadWithProgress = async ({ file, projectName, scanNote, maxUploadSizeMb, onProgress }) => {
+  ensureFileSizeAllowed(file, maxUploadSizeMb)
+  const chunkSize = UPLOAD_CHUNK_SIZE
+  const totalChunks = Math.max(1, Math.ceil(file.size / chunkSize))
+  const resumeKey = uploadResumeKey(file, projectName)
+  const saved = readResumeState(resumeKey)
+  let session = null
+  if (saved?.upload_id) {
+    try {
+      const state = await requestJson(`/api/sca/uploads/sessions/${saved.upload_id}`)
+      if (state?.file_size === file.size && state?.total_chunks === totalChunks && state?.filename === file.name) {
+        session = state
+      }
+    } catch {
+      clearResumeState(resumeKey)
+    }
+  }
+  if (!session) {
+    session = await requestJson('/api/sca/uploads/sessions', {
+      method: 'POST',
+      body: JSON.stringify({
+        project_name: projectName,
+        scan_note: scanNote || '',
+        filename: file.name,
+        total_size: file.size,
+        total_chunks: totalChunks,
+      }),
+    })
+  }
+  if (!session) return null
+  const uploadedChunks = new Set(session.uploaded_chunks || saved?.uploaded_chunks || [])
+  writeResumeState(resumeKey, { upload_id: session.upload_id, uploaded_chunks: [...uploadedChunks] })
+  let completedChunks = uploadedChunks.size
+  const pending = Array.from({ length: totalChunks }, (_, index) => index).filter((index) => !uploadedChunks.has(index))
+  let cursor = 0
+  const workers = Array.from({ length: Math.min(UPLOAD_CONCURRENCY, pending.length) }, async () => {
+    while (cursor < pending.length) {
+      const index = pending[cursor]
+      cursor += 1
+      const start = index * chunkSize
+      const end = Math.min(file.size, start + chunkSize)
+      await uploadChunkWithRetry({
+        uploadId: session.upload_id,
+        index,
+        body: file.slice(start, end),
+      })
+      uploadedChunks.add(index)
+      completedChunks += 1
+      writeResumeState(resumeKey, { upload_id: session.upload_id, uploaded_chunks: [...uploadedChunks] })
+      if (typeof onProgress === 'function') {
+        onProgress(Math.round((completedChunks / totalChunks) * 100))
+      }
+    }
+  })
+  await Promise.all(workers)
+  const result = await requestJson(`/api/sca/uploads/${session.upload_id}/complete`, { method: 'POST' })
+  clearResumeState(resumeKey)
+  return result
 }
 
 export const uploadImageTarWithProgress = ({ file, scanner, onProgress }) => {

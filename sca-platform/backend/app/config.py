@@ -7,7 +7,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     app_name: str = "聚信软件成分分析平台"
     app_env: str = "dev"
-    app_version: str = "5.66.1"
+    app_version: str = "5.68.0"
     database_url: str = "sqlite:///./sca-dev.db"
     redis_url: str = "redis://localhost:6379/0"
     celery_broker_url: str = "redis://localhost:6379/1"
@@ -19,6 +19,11 @@ class Settings(BaseSettings):
     auth_dev_bypass: bool = False
     cors_origins: str = Field(default="http://localhost:18089,http://127.0.0.1:18089")
     upload_root: str = "/data/sca/uploads"
+    upload_chunk_max_bytes: int = 16 * 1024 * 1024
+    archive_max_files: int = 20000
+    archive_max_total_bytes: int = 4 * 1024 * 1024 * 1024
+    archive_max_file_bytes: int = 512 * 1024 * 1024
+    archive_max_compression_ratio: float = 200.0
     celery_task_always_eager: bool = False
     osv_api_url: str = "https://api.osv.dev"
     nvd_api_url: str = "https://services.nvd.nist.gov/rest/json/cves/2.0"
@@ -75,6 +80,10 @@ class Settings(BaseSettings):
     openai_model: str = "gpt-4o-mini"
     openai_timeout_ms: int = 120000
     devops_block_severities: str = "critical,high"
+    sca_webhook_secret: str = ""
+    github_webhook_secret: str = ""
+    gitlab_webhook_secret: str = ""
+    jenkins_webhook_secret: str = ""
     remediation_overdue_check_seconds: int = 60 * 60
     production_https_enabled: bool = True
     production_jwt_secure: bool = True
