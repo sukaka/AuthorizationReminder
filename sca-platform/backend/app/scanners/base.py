@@ -49,6 +49,8 @@ class NormalizedComponentData:
     evidence_file: str = ""
     evidence_text: str = ""
     confidence_score: float = 0.7
+    sha1: str = ""
+    gav: str = ""
 
 
 @dataclass
@@ -73,6 +75,11 @@ class NormalizedVulnerabilityData:
     kev: bool = False
     match_confidence: float = 0.5
     raw_source: str = ""
+    affected_purl: str = ""
+    affected_cpe: str = ""
+    affected_sha1: str = ""
+    affected_gav: str = ""
+    suppressed: bool = False
 
 
 def write_json(path: Path, payload: object) -> Path:
