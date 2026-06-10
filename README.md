@@ -1,6 +1,6 @@
 # 聚信多系统业务平台
 
-本仓库是一个基于统一登录（SSO）的多系统业务平台，包含以下 11 个业务域：
+本仓库是一个基于统一登录（SSO）的多系统业务平台，包含以下 12 个业务域：
 
 - 授权到期提醒（Reminder）
 - 工单管理（Ticketing）
@@ -13,6 +13,7 @@
 - 培训考试系统（Train-Exam）
 - 提示词管理中心（Prompt Center）
 - 软件成分分析平台（SCA）
+- 统一大屏展示中心（Big Screen）
 
 目标是：统一账号登录、按系统授权访问、业务库隔离、可通过 Docker Compose 一键启动。
 
@@ -31,6 +32,7 @@
 - `train-exam-api`：培训考试系统后端（Node.js + Excel 导题 + 自动评分 + 证书）
 - `prompt-center-api`：提示词管理中心后端（Node.js + 部门分类 + 版本审计）
 - `sca-api`：软件成分分析平台后端（Python FastAPI + PostgreSQL + Redis + Celery）
+- `big-screen-api`：统一大屏 BFF（模板、播放列表、数据适配、健康与离线资源）
 - `web*`：各系统前端（Nginx + 静态资源）
 
 ### 1.2 数据库策略
@@ -44,6 +46,7 @@
 - `juxin_tender`（标书系统）
 - `juxin_train_exam`（培训考试系统）
 - `juxin_prompt_center`（提示词管理中心）
+- `juxin_big_screen`（统一大屏展示中心）
 - `juxin_sca`（软件成分分析平台，PostgreSQL）
 
 > 说明：统一实例 + 独立库，兼顾运维成本与业务隔离。
@@ -159,6 +162,8 @@ cd /Users/zhanglei/Documents/codex-new
 | 系统 | 地址 |
 |---|---|
 | 统一登录 | `http://localhost:5180` |
+| 统一大屏展示中心 | `http://localhost:18092` |
+| 统一大屏后端 | `http://localhost:5192` |
 | 提醒前端 | `http://localhost:18080` |
 | 提醒后端 | `http://localhost:5179` |
 | 工单前端 | `http://localhost:18081` |
@@ -351,6 +356,7 @@ npm run test:rbac
 ├── train-exam/            # 培训考试系统（Node + Web）
 ├── prompt-center/         # 提示词管理中心（Node + Web）
 ├── sca-platform/          # 软件成分分析平台（FastAPI + Vue3）
+├── big-screen-center/     # 统一大屏展示中心（Express + Vue3）
 ├── cmdb/                  # CMDB（Go + Web）
 ├── docs/                  # 发布、测试、设计文档
 └── docker-compose.yml     # 统一编排
