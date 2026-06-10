@@ -22,8 +22,15 @@ test('auditor defaults to audit-center access', () => {
 test('admin defaults to delivery instead of ticketing and sec-impl', () => {
   const access = defaultAppAccessByRole('admin');
   assert.ok(access.includes('delivery'));
+  assert.ok(access.includes('big-screen'));
   assert.equal(access.includes('ticketing'), false);
   assert.equal(access.includes('sec-impl'), false);
+});
+
+test('ordinary business roles receive unified big-screen portal access', () => {
+  for (const role of ['editor', 'reviewer', 'user']) {
+    assert.ok(defaultAppAccessByRole(role).includes('big-screen'), `${role} should include big-screen`);
+  }
 });
 
 test('sysadmin without requested system redirects to admin-center', () => {
@@ -97,7 +104,7 @@ test('sysadmin and auditor ignore legacy non-dedicated app_access', () => {
 test('legacy ticketing and sec-impl access folds into delivery once', () => {
   assert.deepEqual(
     resolveUserAppAccess({ role: 'editor', app_access: '["ticketing","sec-impl","faq"]' }),
-    ['delivery', 'faq', 'train-exam', 'prompt-center', 'sca']
+    ['delivery', 'faq', 'train-exam', 'prompt-center', 'sca', 'big-screen']
   );
 });
 
@@ -108,7 +115,7 @@ test('editor defaults include software composition analysis access', () => {
 test('legacy business users receive software composition analysis portal access', () => {
   assert.deepEqual(
     resolveUserAppAccess({ role: 'user', app_access: '["reminder"]' }),
-    ['reminder', 'train-exam', 'prompt-center', 'sca']
+    ['reminder', 'train-exam', 'prompt-center', 'sca', 'big-screen']
   );
 });
 

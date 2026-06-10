@@ -94,6 +94,7 @@ const {
   defaultAppAccessByRole,
   getDedicatedCenterConfig,
 } = require('./portal-routing');
+const { authorizeBigScreen } = require('./big-screen-authorization');
 const { version: AUTH_PACKAGE_VERSION } = require('./package.json');
 
 const app = express();
@@ -1380,6 +1381,8 @@ app.post('/api/auth/authorize', async (req, res) => {
     result = authorizePromptCenter(user, action);
   } else if (system === 'sca') {
     result = authorizeSca(user, action);
+  } else if (system === 'big-screen') {
+    result = authorizeBigScreen(user, action);
   }
   return res.json({ ...result, user: buildAuthUserPayload(user), scope, apps });
 });
@@ -1413,6 +1416,7 @@ app.get('/api/auth/apps', async (req, res) => {
   const trainExamURL = process.env.APP_TRAIN_EXAM_URL || 'http://localhost:18087';
   const promptCenterURL = process.env.APP_PROMPT_CENTER_URL || 'http://localhost:18088';
   const scaURL = process.env.APP_SCA_URL || 'http://localhost:18089';
+  const bigScreenURL = process.env.APP_BIG_SCREEN_URL || 'http://localhost:18092';
   const adminCenterURL = process.env.APP_ADMIN_CENTER_URL || 'http://localhost:5180/admin-center';
   const auditCenterURL = process.env.APP_AUDIT_CENTER_URL || 'http://localhost:5180/audit-center';
   const appAccess = getUserAppAccess(user);
@@ -1470,6 +1474,10 @@ app.get('/api/auth/apps', async (req, res) => {
   if (appAccess.includes('sca')) {
     const scaAuth = await authorizeSca(user, 'app:enter');
     apps.push({ key: 'sca', name: '软件成分分析平台', url: scaURL, allow: !!scaAuth.allow });
+  }
+  if (appAccess.includes('big-screen')) {
+    const bigScreenAuth = authorizeBigScreen(user, 'app:enter');
+    apps.push({ key: 'big-screen', name: '统一大屏展示中心', url: bigScreenURL, allow: !!bigScreenAuth.allow });
   }
   return res.json({
     user: buildAuthUserPayload(user),

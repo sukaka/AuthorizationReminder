@@ -20,3 +20,7 @@ test('auth Dockerfile packages user import email helper', () => {
 test('auth Dockerfile packages audit log display helper', () => {
   assert.match(source, /COPY auth\/audit-log-display\.js \.\/auth\/audit-log-display\.js/);
 });
+
+test('auth Dockerfile packages unified big-screen authorization helper', () => {
+  assert.match(source, /COPY auth\/big-screen-authorization\.js \.\/auth\/big-screen-authorization\.js/);
+});

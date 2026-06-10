@@ -9,6 +9,7 @@ const SYSTEM_DISPLAY_OPTIONS = Object.freeze([
   { key: 'train-exam', label: '培训考试系统', shortLabel: '培训考试系统' },
   { key: 'prompt-center', label: '提示词管理中心', shortLabel: '提示词中心' },
   { key: 'sca', label: '软件成分分析平台', shortLabel: 'SCA平台' },
+  { key: 'big-screen', label: '统一大屏展示中心', shortLabel: '大屏中心' },
   { key: 'admin-center', label: '管理中心', shortLabel: '管理中心' },
   { key: 'audit-center', label: '审计中心', shortLabel: '审计中心' },
 ]);
