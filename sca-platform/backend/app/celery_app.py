@@ -342,6 +342,7 @@ def _record_scanner_result(
             stdout_log_path=result.stdout_log_path,
             stderr_log_path=result.stderr_log_path,
             error_message=stored_error_message,
+            duration_seconds=result.duration_seconds,
             started_at=child.started_at,
             finished_at=child.finished_at,
         )

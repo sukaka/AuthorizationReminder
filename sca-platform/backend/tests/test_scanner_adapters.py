@@ -4,7 +4,8 @@ import subprocess
 from pathlib import Path
 
 from app.config import Settings
-from app.scanners.base import ScannerCommandResult, run_scanner_command
+from app.scanners import base as scanner_base
+from app.scanners.base import ScannerCommandResult, redact_command, run_scanner_command
 from app.scanners.dependency_track_client import DependencyTrackClient
 from app.scanners.opensca_client import OpenSCAAdapter
 from app.scanners.trivy_client import TrivyAdapter
@@ -167,3 +168,32 @@ def test_scanner_command_streams_to_files_and_returns_bounded_summaries(monkeypa
     assert stderr_path.stat().st_size <= 128
     assert len(result.stdout.encode()) <= 32
     assert len(result.stderr.encode()) <= 32
+
+
+def test_scanner_command_records_elapsed_seconds(monkeypatch, tmp_path):
+    monkeypatch.setattr(subprocess, "run", lambda command, **_kwargs: subprocess.CompletedProcess(command, 0))
+    monkeypatch.setattr(scanner_base.time, "monotonic", iter([10.0, 12.6]).__next__)
+    tool = _fake_tool(tmp_path, "scanner")
+
+    result = run_scanner_command(
+        "demo",
+        [tool],
+        tmp_path / "result.json",
+        tmp_path / "stdout.log",
+        tmp_path / "stderr.log",
+        timeout=30,
+    )
+
+    assert result.duration_seconds == 3
+
+
+def test_dependency_check_nvd_api_key_is_redacted():
+    assert redact_command(["dependency-check", "--nvdApiKey", "secret-value"]) == [
+        "dependency-check",
+        "--nvdApiKey",
+        "***",
+    ]
+    assert redact_command(["dependency-check", "--nvdApiKey=secret-value"]) == [
+        "dependency-check",
+        "--nvdApiKey=***",
+    ]
