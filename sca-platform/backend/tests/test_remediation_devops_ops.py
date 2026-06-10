@@ -12,7 +12,9 @@ def build_client(monkeypatch, tmp_path, webhook_secret=""):
     monkeypatch.setenv("AUTH_DEV_BYPASS", "true")
     monkeypatch.setenv("APP_VERSION", "0.1.0")
     monkeypatch.setenv("DEVOPS_BLOCK_SEVERITIES", "critical,high")
+    monkeypatch.setenv("UPLOAD_ROOT", str(tmp_path / "uploads"))
     monkeypatch.setenv("REPORT_ROOT", str(tmp_path / "reports"))
+    monkeypatch.setenv("BACKUP_ROOT", str(tmp_path / "backups"))
     monkeypatch.setenv("SCA_WEBHOOK_SECRET", webhook_secret)
 
     from app import config
@@ -23,6 +25,7 @@ def build_client(monkeypatch, tmp_path, webhook_secret=""):
     import app.remediation_service as remediation_service
     import app.devops_service as devops_service
     import app.ops_service as ops_service
+    import app.routers.devops as devops_router
     import app.main as main
 
     importlib.reload(database)
@@ -30,6 +33,7 @@ def build_client(monkeypatch, tmp_path, webhook_secret=""):
     importlib.reload(remediation_service)
     importlib.reload(devops_service)
     importlib.reload(ops_service)
+    importlib.reload(devops_router)
     importlib.reload(main)
     return TestClient(main.app), main, models, database
 
@@ -122,6 +126,35 @@ def test_devops_webhook_blocks_high_risk_and_records_event(monkeypatch, tmp_path
     assert response.json()["report_id"]
     assert events["items"][0]["block_reason"]
     assert dashboard["blocked_count"] == 1
+
+
+def test_devops_gate_ignores_dependency_check_only_finding(monkeypatch, tmp_path):
+    client, _main, models, database = build_client(monkeypatch, tmp_path)
+    with client as test_client:
+        project_id, vulnerability_id = seed_vulnerability(
+            database,
+            models,
+            severity="critical",
+        )
+        with database.SessionLocal() as db:
+            finding = db.get(models.VulnerabilityRecord, vulnerability_id)
+            finding.source = "dependency-check"
+            finding.gate_eligible = False
+            finding.confirmation_status = "single_source"
+            finding.match_status = "affected"
+            finding.needs_human_review = False
+            db.commit()
+        response = test_client.post(
+            "/api/sca/devops/webhooks/gitlab",
+            json={
+                "project_id": project_id,
+                "pipeline_id": "gl-dc",
+                "ref": "main",
+                "commit_sha": "abc",
+            },
+        )
+
+    assert response.json()["decision"] == "passed"
 
 
 def test_devops_webhooks_verify_platform_secrets(monkeypatch, tmp_path):

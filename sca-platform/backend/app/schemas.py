@@ -316,6 +316,40 @@ class VulnerabilityOut(BaseModel):
     has_poc: bool
     exploited_in_wild: bool
     detail_url: str
+    confirmation_status: str = "single_source"
+    confirmation_engines: str = "[]"
+    gate_eligible: bool = True
+    review_reason: str = ""
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class DependencyCheckStatusOut(BaseModel):
+    enabled: bool
+    version: str
+    status: str
+    last_started_at: str = ""
+    last_success_at: str = ""
+    message: str = ""
+    stale: bool
+    data_dir: str
+    total_scans: int = 0
+    failed_scans: int = 0
+    skipped_scans: int = 0
+    p50_duration_seconds: int = 0
+    p95_duration_seconds: int = 0
+
+
+class RawScanArtifactOut(BaseModel):
+    id: int
+    project_id: int
+    scan_id: int
+    engine_name: str
+    artifact_type: str
+    file_name: str
+    file_size: int
+    sha256: str
+    created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
 

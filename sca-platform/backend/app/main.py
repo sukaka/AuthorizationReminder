@@ -19,7 +19,13 @@ from sqlalchemy.orm import Session
 
 from .auth import get_current_user, require_action
 from . import celery_app as celery_app
-from .celery_app import celery_app, demo_scan, query_project_vulnerabilities_task, scan_uploaded_file
+from .celery_app import (
+    celery_app,
+    demo_scan,
+    query_project_vulnerabilities_task,
+    scan_uploaded_file,
+    update_dependency_check_data,
+)
 from .config import Settings, get_settings
 from .database import SessionLocal, check_database, get_db, init_db
 from .models import (
@@ -73,6 +79,7 @@ from .schemas import (
     CveQueryIn,
     ComponentOut,
     ComponentManualVersionIn,
+    DependencyCheckStatusOut,
     DependencyTrackStatusOut,
     DependencyTreeNode,
     DependencyTrackLicenseOut,
@@ -83,6 +90,7 @@ from .schemas import (
     OpsConfigOut,
     OverviewOut,
     ProjectListItem,
+    RawScanArtifactOut,
     RemediationEventOut,
     RemediationTicketCreateIn,
     RemediationTicketListOut,
@@ -1402,6 +1410,137 @@ async def dependency_track_status(
     if not row:
         return DependencyTrackStatusOut(local_project_id=project_id, last_status="not_linked")
     return row
+
+
+def _percentile(values: list[int], ratio: float) -> int:
+    if not values:
+        return 0
+    ordered = sorted(values)
+    index = min(
+        len(ordered) - 1,
+        max(0, round((len(ordered) - 1) * ratio)),
+    )
+    return ordered[index]
+
+
+def _dependency_check_cache_stale(last_success_at: str) -> bool:
+    if not last_success_at:
+        return True
+    try:
+        parsed = datetime.fromisoformat(last_success_at.replace("Z", "+00:00"))
+    except ValueError:
+        return True
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    age_seconds = (datetime.now(timezone.utc) - parsed.astimezone(timezone.utc)).total_seconds()
+    return age_seconds > settings.dependency_check_cache_stale_seconds
+
+
+@app.get(
+    "/api/sca/dependency-check/status",
+    response_model=DependencyCheckStatusOut,
+    tags=["sca"],
+)
+async def dependency_check_status(
+    request: Request,
+    user: Annotated[UserPayload, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> DependencyCheckStatusOut:
+    await require_action("sca:read", request, user, settings)
+    values = _setting_map(db)
+    rows = list(
+        db.scalars(
+            select(ScannerTaskResult)
+            .where(ScannerTaskResult.engine_name == "dependency-check")
+            .order_by(
+                ScannerTaskResult.finished_at.desc(),
+                ScannerTaskResult.id.desc(),
+            )
+            .limit(500)
+        )
+    )
+    durations = [row.duration_seconds for row in rows if row.duration_seconds >= 0]
+    last_success_at = values.get("dependency_check_cache_last_success_at", "")
+    return DependencyCheckStatusOut(
+        enabled=settings.dependency_check_enabled,
+        version=values.get(
+            "dependency_check_cache_version",
+            settings.dependency_check_version,
+        ),
+        status=values.get("dependency_check_cache_status", "not_initialized"),
+        last_started_at=values.get("dependency_check_cache_last_started_at", ""),
+        last_success_at=last_success_at,
+        message=values.get("dependency_check_cache_message", ""),
+        stale=_dependency_check_cache_stale(last_success_at),
+        data_dir=settings.dependency_check_data_dir,
+        total_scans=len(rows),
+        failed_scans=sum(row.status in {"failed", "timeout"} for row in rows),
+        skipped_scans=sum(row.status == "skipped" for row in rows),
+        p50_duration_seconds=_percentile(durations, 0.50),
+        p95_duration_seconds=_percentile(durations, 0.95),
+    )
+
+
+@app.post("/api/sca/dependency-check/cache/update", tags=["sca"])
+async def trigger_dependency_check_cache_update(
+    request: Request,
+    user: Annotated[UserPayload, Depends(get_current_user)],
+) -> dict[str, str]:
+    await require_action("sca:write", request, user, settings)
+    task_id = str(uuid.uuid4())
+    update_dependency_check_data.apply_async(task_id=task_id)
+    return {
+        "task_id": task_id,
+        "status": "queued",
+        "message": "Dependency-Check 漏洞库更新任务已入队",
+    }
+
+
+@app.get(
+    "/api/sca/projects/{project_id}/scan-artifacts",
+    response_model=list[RawScanArtifactOut],
+    tags=["sca"],
+)
+async def list_scan_artifacts(
+    request: Request,
+    project_id: int,
+    user: Annotated[UserPayload, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> list[RawScanArtifactOut]:
+    await require_action("sca:read", request, user, settings)
+    _ensure_project_exists(db, project_id)
+    return list(
+        db.scalars(
+            select(RawScanArtifact)
+            .where(RawScanArtifact.project_id == project_id)
+            .order_by(RawScanArtifact.created_at.desc(), RawScanArtifact.id.desc())
+        )
+    )
+
+
+@app.get("/api/sca/raw-artifacts/{artifact_id}/download", tags=["sca"])
+async def download_raw_scan_artifact(
+    request: Request,
+    artifact_id: int,
+    user: Annotated[UserPayload, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> FileResponse:
+    await require_action("sca:read", request, user, settings)
+    artifact = db.get(RawScanArtifact, artifact_id)
+    if not artifact:
+        raise HTTPException(status_code=404, detail="扫描制品不存在")
+    path = Path(artifact.file_path).resolve()
+    allowed_root = Path(settings.dependency_check_output_dir).resolve().parent
+    if allowed_root != path and allowed_root not in path.parents:
+        raise HTTPException(status_code=403, detail="扫描制品路径不安全")
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="扫描制品文件不存在")
+    return FileResponse(
+        path,
+        filename=artifact.file_name,
+        media_type="application/octet-stream",
+        content_disposition_type="attachment",
+    )
 
 
 @app.get("/api/sca/projects/{project_id}/scan-logs", response_model=list[ScanLogOut], tags=["sca"])
