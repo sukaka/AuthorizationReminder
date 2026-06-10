@@ -5,6 +5,7 @@ import { useDataChannel } from '../composables/useDataChannel'
 import { usePerformanceProfile } from '../composables/usePerformanceProfile'
 import { useScreenScale } from '../composables/useScreenScale'
 import type { JsonValue, ScreenTemplate } from '../types'
+import SourceHealthBar from './SourceHealthBar.vue'
 import WidgetHost from './widgets/WidgetHost.vue'
 
 const props = defineProps<{
@@ -81,7 +82,16 @@ const data = computed<JsonValue>(() =>
     ? mockData[props.template.systemKey]
     : channel.envelope.value?.data || {},
 )
-const sourceStatus = computed(() => isMock.value ? 'mock' : channel.state.value)
+const dataStatus = computed(() => {
+  if (isMock.value) return 'mock' as const
+  if (channel.envelope.value) return channel.envelope.value.status
+  return channel.state.value === 'loading' ? 'loading' : 'error'
+})
+const generatedAt = computed(() =>
+  isMock.value
+    ? new Date().toISOString()
+    : channel.envelope.value?.generatedAt || null,
+)
 const canvasStyle = computed(() => ({
   width: `${transform.value.designWidth}px`,
   height: `${transform.value.designHeight}px`,
@@ -104,7 +114,12 @@ const canvasStyle = computed(() => ({
           <h1>{{ template.name }}</h1>
         </div>
         <div class="screen-heading__meta">
-          <span :data-source-status="sourceStatus">SOURCE · {{ sourceStatus }}</span>
+          <SourceHealthBar
+            :status="dataStatus"
+            :generated-at="generatedAt"
+            :stale="channel.envelope.value?.stale || false"
+            :unavailable-sources="channel.envelope.value?.unavailableSources || []"
+          />
           <strong>{{ new Date().toLocaleDateString('zh-CN') }}</strong>
           <RouterLink class="screen-exit" to="/">模板目录</RouterLink>
         </div>

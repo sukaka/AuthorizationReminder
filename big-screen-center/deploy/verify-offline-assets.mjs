@@ -23,6 +23,9 @@ const cssUrlPattern = /url\(\s*(?:(['"`])((?:\\.|(?!\1).)*)\1|([^'"`\s)]+))\s*\)
 const markupTagPattern = /<[A-Za-z][^>]*>/gs
 const markupAttributePattern =
   /\b([\w:-]+)\s*=\s*(?:(['"])((?:\\.|(?!\2).)*)\2|([^\s'"`=<>]+))/gis
+const sideEffectImportPattern =
+  /^\s*import\s*(['"])([^'"\n]+)\1\s*;?\s*$/gm
+const fromImportPattern = /\bfrom\s*(['"])([^'"]+)\1/g
 const srcsetAttributePattern =
   /\bsrcset\s*=\s*(?:(['"])((?:\\.|(?!\1).)*)\1|([^>]*?))(?=\s+[\w:-]+\s*=|\/?>$)/gis
 const resourceExtensionPattern =
@@ -147,6 +150,10 @@ async function verifyFile(file, failures) {
 
   const contents = await readFile(file, 'utf8')
   const displayPath = path.relative(projectRoot, file)
+  const moduleImports = new Set([
+    ...[...contents.matchAll(sideEffectImportPattern)].map((match) => match[2]),
+    ...[...contents.matchAll(fromImportPattern)].map((match) => match[2]),
+  ])
 
   if (containsRemoteUrl(contents)) {
     failures.push(`${displayPath}: remote or protocol-relative URL is not allowed`)
@@ -154,6 +161,9 @@ async function verifyFile(file, failures) {
 
   let checkedReferences = 0
   for (const [reference, hasResourceContext] of extractReferences(contents)) {
+    if (moduleImports.has(reference)) {
+      continue
+    }
     const rawReference = reference.split(/[?#]/, 1)[0]
     const shouldCheckReference =
       resourceExtensionPattern.test(rawReference) ||
@@ -227,7 +237,14 @@ for (const file of scannedFiles) {
   checkedReferences += await verifyFile(file, failures)
 }
 
-const templateCount = templateFiles.filter((file) => textExtensionPattern.test(file)).length
+const templateIds = new Set()
+for (const file of templateFiles.filter((candidate) => textExtensionPattern.test(candidate))) {
+  const contents = await readFile(file, 'utf8')
+  for (const match of contents.matchAll(/['"]((?:sca|train|remind)-0[1-9])['"]/g)) {
+    templateIds.add(match[1])
+  }
+}
+const templateCount = templateIds.size
 
 if (failures.length > 0) {
   console.error('Offline asset verification failed:')
@@ -239,4 +256,5 @@ if (failures.length > 0) {
   console.log(
     `Offline asset verification passed: ${templateCount} templates, ${checkedReferences} resource references checked.`,
   )
+  console.log(`offline assets verified: ${templateCount} templates`)
 }

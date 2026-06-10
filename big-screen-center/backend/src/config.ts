@@ -1,3 +1,5 @@
+import path from 'node:path'
+
 const numberFromEnv = (value: string | undefined, fallback: number, minimum: number) => {
   const parsed = Number(value)
   return Number.isFinite(parsed) && parsed >= minimum ? parsed : fallback
@@ -10,6 +12,22 @@ const listFromEnv = (value: string | undefined, fallback: string[]) => {
     .filter(Boolean)
   return items.length ? items : fallback
 }
+
+const httpsOriginsFromEnv = (value: string | undefined) =>
+  listFromEnv(value, []).map((item) => {
+    const origin = new URL(item)
+    if (
+      origin.protocol !== 'https:'
+      || origin.username
+      || origin.password
+      || origin.pathname !== '/'
+      || origin.search
+      || origin.hash
+    ) {
+      throw new Error('BIG_SCREEN_EXTERNAL_ORIGIN_ALLOWLIST only accepts HTTPS origins')
+    }
+    return origin.origin
+  })
 
 export const config = Object.freeze({
   auth: {
@@ -36,6 +54,14 @@ export const config = Object.freeze({
     trainExamUrl: process.env.TRAIN_EXAM_API_URL || 'http://localhost:5188',
     reminderUrl: process.env.REMINDER_API_URL || 'http://localhost:5179',
     timeoutMs: numberFromEnv(process.env.SOURCE_FETCH_TIMEOUT_MS, 4000, 500),
+  },
+  resources: {
+    assetsRoot: process.env.BIG_SCREEN_ASSETS_ROOT
+      || path.resolve(process.cwd(), '../assets'),
+    publicKey: process.env.BIG_SCREEN_RESOURCE_PUBLIC_KEY || '',
+    externalOrigins: httpsOriginsFromEnv(
+      process.env.BIG_SCREEN_EXTERNAL_ORIGIN_ALLOWLIST,
+    ),
   },
   corsOrigins: listFromEnv(process.env.CORS_ORIGINS, [
     'http://localhost:18092',

@@ -23,9 +23,20 @@ const fallbackWidget = computed<WidgetDefinition>(() => ({
   config: { ...props.widget.config, variant: 'polar-fallback' },
 }))
 
-const hasWebGl = () =>
-  typeof window.WebGLRenderingContext !== 'undefined'
-  || typeof window.WebGL2RenderingContext !== 'undefined'
+const hasWebGl = () => {
+  if (
+    typeof window.WebGLRenderingContext === 'undefined'
+    && typeof window.WebGL2RenderingContext === 'undefined'
+  ) {
+    return false
+  }
+  try {
+    const canvas = document.createElement('canvas')
+    return Boolean(canvas.getContext('webgl2') || canvas.getContext('webgl'))
+  } catch {
+    return false
+  }
+}
 
 onMounted(async () => {
   const loader = resolveSceneLoader(sceneKey.value)

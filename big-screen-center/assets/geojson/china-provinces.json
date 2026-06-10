@@ -1,0 +1,29 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "properties": { "name": "华北" },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[[108, 36], [119, 36], [119, 42], [108, 42], [108, 36]]]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": { "name": "华东" },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[[115, 27], [123, 27], [123, 36], [115, 36], [115, 27]]]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": { "name": "华南" },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[[105, 20], [118, 20], [118, 27], [105, 27], [105, 20]]]
+      }
+    }
+  ]
+}

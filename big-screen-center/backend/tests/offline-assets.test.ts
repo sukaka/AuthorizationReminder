@@ -69,6 +69,26 @@ describe('offline asset verification', () => {
     expect(result.stdout).toContain('Offline asset verification passed')
   })
 
+  it('reports the number of template ids declared in the catalog', async () => {
+    const ids = [
+      'sca-01', 'sca-02', 'sca-03', 'sca-04', 'sca-05',
+      'train-01', 'train-02', 'train-03', 'train-04',
+      'remind-01', 'remind-02', 'remind-03',
+    ]
+    const result = await runVerifier(
+      '// fixture',
+      'assets/fixture.txt',
+      (projectRoot) => writeProjectFile(
+        projectRoot,
+        'frontend/src/templates/manifests.ts',
+        `export const ids = ${JSON.stringify(ids)}`,
+      ),
+    )
+
+    expect(result.status).toBe(0)
+    expect(result.stdout).toContain('offline assets verified: 12 templates')
+  })
+
   it.each(['http://cdn.example/a.png', 'https://cdn.example/a.png'])(
     'continues to reject %s',
     async (url) => {
@@ -106,6 +126,8 @@ describe('offline asset verification', () => {
   it.each([
     '// comment\nconst value = 1\n',
     "import helper from '../../outside.js'\n",
+    "import './styles/base.css'\n",
+    "import 'maplibre-gl/dist/maplibre-gl.css'\n",
     'const label = "../../outside"\n',
   ])('does not treat non-resource text as an asset reference', async (contents) => {
     const result = await runVerifier(contents)

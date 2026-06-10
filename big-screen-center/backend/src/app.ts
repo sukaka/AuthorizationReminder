@@ -12,10 +12,17 @@ import {
 } from './cache.js'
 import { config } from './config.js'
 import { createDataRouter } from './routes/data.js'
+import { createHealthRouter } from './routes/health.js'
 import { createPlaylistRouter } from './routes/playlists.js'
+import { createResourceRouter } from './routes/resources.js'
 import { createTemplateRouter } from './routes/templates.js'
+import {
+  ResourcePackStore,
+  type ResourcePackService,
+} from './resource-pack-store.js'
 import type { StoreDatabase } from './store-types.js'
 import { StreamHub } from './stream-hub.js'
+import type { SourceHealthMap } from './routes/health.js'
 
 export interface CreateAppOptions {
   service?: MetricService
@@ -23,6 +30,8 @@ export interface CreateAppOptions {
   authorize?: (request: Request) => Promise<AuthorizationContext>
   streamHub?: StreamHub
   database?: StoreDatabase
+  getSourceHealth?: () => Promise<SourceHealthMap> | SourceHealthMap
+  resourcePacks?: ResourcePackService
 }
 
 const createDefaultMetricService = (snapshots?: SnapshotStore) =>
@@ -72,6 +81,19 @@ export const createApp = (options: CreateAppOptions = {}) => {
     application.use('/api/big-screen', createPlaylistRouter({
       database: options.database,
       authorize: options.authorize,
+    }))
+    application.use('/api/big-screen', createHealthRouter({
+      database: options.database,
+      getSources: options.getSourceHealth,
+    }))
+    application.use('/api/big-screen', createResourceRouter({
+      database: options.database,
+      authorize: options.authorize,
+      resourcePacks: options.resourcePacks || new ResourcePackStore({
+        database: options.database,
+        assetsRoot: config.resources.assetsRoot,
+        publicKey: config.resources.publicKey,
+      }),
     }))
   }
 
