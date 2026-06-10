@@ -14,6 +14,9 @@ const protocolRelativeUrlPatterns = [
   /@import\s+(?:url\(\s*)?(?:['"`]\s*)?\/\//i,
 ]
 const quotedValuePattern = /(['"`])((?:\\.|(?!\1).)*)\1/gs
+const cssUrlPattern = /url\(\s*(?:(['"`])((?:\\.|(?!\1).)*)\1|([^'"`\s)]+))\s*\)/gis
+const resourceAttributePattern =
+  /\b(?:src|href)\s*=\s*(?:(['"`])((?:\\.|(?!\1).)*)\1|([^\s'"`=<>]+))/gis
 const resourceExtensionPattern =
   /\.(?:avif|bin|css|csv|eot|fbx|geojson|gif|glb|gltf|jpeg|jpg|json|ktx2|mp3|mp4|obj|otf|png|svg|ttf|webm|webp|woff2?)$/i
 const textExtensionPattern = /\.(?:css|csv|geojson|html|js|json|mjs|svg|ts|tsx|txt|vue)$/i
@@ -56,7 +59,18 @@ function resolveResourceReference(sourceFile, reference) {
 }
 
 function extractReferences(contents) {
-  return [...contents.matchAll(quotedValuePattern)].map((match) => match[2])
+  const references = new Set(
+    [...contents.matchAll(quotedValuePattern)].map((match) => match[2]),
+  )
+
+  for (const match of contents.matchAll(cssUrlPattern)) {
+    references.add(match[2] ?? match[3])
+  }
+  for (const match of contents.matchAll(resourceAttributePattern)) {
+    references.add(match[2] ?? match[3])
+  }
+
+  return references
 }
 
 function containsRemoteUrl(contents) {
@@ -81,14 +95,7 @@ async function verifyFile(file, failures) {
   let checkedReferences = 0
   for (const reference of extractReferences(contents)) {
     const bareReference = reference.split(/[?#]/, 1)[0]
-    const isAssetFileReference =
-      isWithin(assetsRoot, file) &&
-      (bareReference.startsWith('../') ||
-        bareReference.includes('/../') ||
-        bareReference.startsWith('/assets/') ||
-        bareReference.startsWith('assets/'))
-
-    if (!resourceExtensionPattern.test(bareReference) && !isAssetFileReference) {
+    if (!resourceExtensionPattern.test(bareReference)) {
       continue
     }
 

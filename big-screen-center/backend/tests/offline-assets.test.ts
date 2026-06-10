@@ -67,4 +67,29 @@ describe('offline asset verification', () => {
     expect(result.status).toBe(1)
     expect(result.stderr).toContain('resource path escapes assets')
   })
+
+  it.each([
+    'body { background: url(../../outside.png); }',
+    'body { background: url("../../outside.png"); }',
+    '<img src=../../outside.png>',
+    '<img src="../../outside.png">',
+    '<link href=../../outside.css>',
+    "<link href='../../outside.css'>",
+  ])('rejects a resource path that escapes assets in %s', async (contents) => {
+    const result = await runVerifier(contents)
+
+    expect(result.status).toBe(1)
+    expect(result.stderr).toContain('resource path escapes assets')
+  })
+
+  it.each([
+    '// comment\nconst value = 1\n',
+    "import helper from '../../outside.js'\n",
+    'const label = "../../outside"\n',
+  ])('does not treat non-resource text as an asset reference', async (contents) => {
+    const result = await runVerifier(contents)
+
+    expect(result.status).toBe(0)
+    expect(result.stdout).toContain('Offline asset verification passed')
+  })
 })
