@@ -92,4 +92,34 @@ describe('offline asset verification', () => {
     expect(result.status).toBe(0)
     expect(result.stdout).toContain('Offline asset verification passed')
   })
+
+  it.each([
+    '<video poster=../../outside.png>',
+    '<object data=../../outside.svg>',
+    '<img srcset=../../a.png 1x,../../b.png 2x>',
+  ])('rejects an unquoted resource attribute that escapes assets in %s', async (contents) => {
+    const result = await runVerifier(contents)
+
+    expect(result.status).toBe(1)
+    expect(result.stderr).toContain('resource path escapes assets')
+  })
+
+  it('accepts an unquoted srcset whose candidates stay within assets', async () => {
+    const result = await runVerifier(
+      '<img srcset=/assets/a.png 1x, /assets/b.png 2x>',
+    )
+
+    expect(result.status).toBe(0)
+    expect(result.stdout).toContain('Offline asset verification passed')
+  })
+
+  it.each(['<div data-id=123>', '<button aria-label=x>'])(
+    'does not treat metadata attributes as asset references in %s',
+    async (contents) => {
+      const result = await runVerifier(contents)
+
+      expect(result.status).toBe(0)
+      expect(result.stdout).toContain('Offline asset verification passed')
+    },
+  )
 })

@@ -15,10 +15,14 @@ const protocolRelativeUrlPatterns = [
 ]
 const quotedValuePattern = /(['"`])((?:\\.|(?!\1).)*)\1/gs
 const cssUrlPattern = /url\(\s*(?:(['"`])((?:\\.|(?!\1).)*)\1|([^'"`\s)]+))\s*\)/gis
-const resourceAttributePattern =
-  /\b(?:src|href)\s*=\s*(?:(['"`])((?:\\.|(?!\1).)*)\1|([^\s'"`=<>]+))/gis
+const markupTagPattern = /<[A-Za-z][^>]*>/gs
+const markupAttributePattern =
+  /\b([\w:-]+)\s*=\s*(?:(['"])((?:\\.|(?!\2).)*)\2|([^\s'"`=<>]+))/gis
+const srcsetAttributePattern =
+  /\bsrcset\s*=\s*(?:(['"])((?:\\.|(?!\1).)*)\1|([^>]*?))(?=\s+[\w:-]+\s*=|\/?>$)/gis
 const resourceExtensionPattern =
   /\.(?:avif|bin|css|csv|eot|fbx|geojson|gif|glb|gltf|jpeg|jpg|json|ktx2|mp3|mp4|obj|otf|png|svg|ttf|webm|webp|woff2?)$/i
+const explicitAssetPathPattern = /^(?:\/?assets\/|\.\.?\/)/
 const textExtensionPattern = /\.(?:css|csv|geojson|html|js|json|mjs|svg|ts|tsx|txt|vue)$/i
 
 async function listFiles(directory) {
@@ -59,15 +63,32 @@ function resolveResourceReference(sourceFile, reference) {
 }
 
 function extractReferences(contents) {
-  const references = new Set(
-    [...contents.matchAll(quotedValuePattern)].map((match) => match[2]),
+  const references = new Map(
+    [...contents.matchAll(quotedValuePattern)].map((match) => [match[2], false]),
   )
 
   for (const match of contents.matchAll(cssUrlPattern)) {
-    references.add(match[2] ?? match[3])
+    references.set(match[2] ?? match[3], true)
   }
-  for (const match of contents.matchAll(resourceAttributePattern)) {
-    references.add(match[2] ?? match[3])
+
+  for (const tagMatch of contents.matchAll(markupTagPattern)) {
+    const tag = tagMatch[0]
+
+    for (const match of tag.matchAll(markupAttributePattern)) {
+      if (match[1].toLowerCase() !== 'srcset') {
+        references.set(match[3] ?? match[4], true)
+      }
+    }
+
+    for (const match of tag.matchAll(srcsetAttributePattern)) {
+      const srcset = match[2] ?? match[3]
+      for (const candidate of srcset.split(',')) {
+        const reference = candidate.trim().split(/\s+/, 1)[0]
+        if (reference) {
+          references.set(reference, true)
+        }
+      }
+    }
   }
 
   return references
@@ -93,9 +114,13 @@ async function verifyFile(file, failures) {
   }
 
   let checkedReferences = 0
-  for (const reference of extractReferences(contents)) {
+  for (const [reference, hasResourceContext] of extractReferences(contents)) {
     const bareReference = reference.split(/[?#]/, 1)[0]
-    if (!resourceExtensionPattern.test(bareReference)) {
+    const isResourceReference =
+      resourceExtensionPattern.test(bareReference) ||
+      (hasResourceContext && explicitAssetPathPattern.test(bareReference))
+
+    if (!isResourceReference) {
       continue
     }
 
