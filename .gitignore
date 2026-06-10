@@ -10,6 +10,8 @@ ticketing/web/dist
 device-flow/frontend/dist
 sec-impl/frontend/dist
 prompt-center/frontend/dist
+big-screen-center/**/dist
+*.tsbuildinfo
 .DS_Store
 npm-debug.log
 yarn.lock

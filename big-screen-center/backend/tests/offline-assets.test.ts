@@ -212,7 +212,7 @@ describe('offline asset verification', () => {
   })
 
   it(
-    'build scripts typecheck without creating generated output',
+    'build scripts create production output without emitting test artifacts',
     async () => {
       const projectRoot = path.resolve(backendRoot, '..')
       const frontendRoot = path.join(projectRoot, 'frontend')
@@ -235,8 +235,9 @@ describe('offline asset verification', () => {
 
       expect(backendBuild.status, backendBuild.stderr || backendBuild.stdout).toBe(0)
       expect(frontendBuild.status, frontendBuild.stderr || frontendBuild.stdout).toBe(0)
-      expect(await pathExists(backendDist)).toBe(false)
-      expect(await pathExists(frontendDist)).toBe(false)
+      expect(await pathExists(path.join(backendDist, 'server.js'))).toBe(true)
+      expect(await pathExists(path.join(backendDist, 'tests'))).toBe(false)
+      expect(await pathExists(path.join(frontendDist, 'index.html'))).toBe(true)
       expect(await pathExists(viteConfigOutput)).toBe(false)
       expect(await pathExists(frontendTsBuildInfo)).toBe(false)
     },
