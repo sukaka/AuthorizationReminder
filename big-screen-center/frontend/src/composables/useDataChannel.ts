@@ -14,6 +14,7 @@ interface DataChannelOptions {
   filters: Ref<Record<string, JsonValue>>
   mode: Ref<RefreshMode>
   intervalMs: Ref<number>
+  enabled?: Ref<boolean>
 }
 
 const queryString = (filters: Record<string, JsonValue>) => {
@@ -67,6 +68,11 @@ export function useDataChannel(options: DataChannelOptions) {
 
   const start = () => {
     stop()
+    if (options.enabled?.value === false) {
+      state.value = 'idle'
+      error.value = ''
+      return
+    }
     if (options.mode.value !== 'sse' || typeof EventSource === 'undefined') {
       startPolling()
       return
@@ -91,6 +97,7 @@ export function useDataChannel(options: DataChannelOptions) {
       options.metricKey,
       options.mode,
       options.intervalMs,
+      ...(options.enabled ? [options.enabled] : []),
       () => JSON.stringify(options.filters.value),
     ],
     start,

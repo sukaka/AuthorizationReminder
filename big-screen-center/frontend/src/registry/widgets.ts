@@ -7,9 +7,9 @@ type WidgetLoader = () => Promise<{ default: Component }>
 const placeholder = () => import('../components/widgets/WidgetPlaceholder.vue')
 
 export const widgetRegistry: Record<RegisteredWidgetType, WidgetLoader> = {
-  'metric-cards': placeholder,
-  echart: placeholder,
-  'three-scene': placeholder,
+  'metric-cards': () => import('../components/widgets/MetricCards.vue'),
+  echart: () => import('../components/widgets/EChartPanel.vue'),
+  'three-scene': () => import('../components/widgets/ThreeScene.vue'),
   graph: placeholder,
   map: placeholder,
   'status-matrix': placeholder,

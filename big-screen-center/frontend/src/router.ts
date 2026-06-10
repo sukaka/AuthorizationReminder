@@ -1,7 +1,7 @@
 import { createRouter, createWebHistory } from 'vue-router'
 
 import CatalogView from './views/CatalogView.vue'
-import PlayerPlaceholder from './views/PlayerPlaceholder.vue'
+import PlayerView from './views/PlayerView.vue'
 
 export const router = createRouter({
   history: createWebHistory(),
@@ -10,7 +10,7 @@ export const router = createRouter({
     {
       path: '/play/:templateId',
       name: 'player',
-      component: PlayerPlaceholder,
+      component: PlayerView,
       props: true,
     },
     { path: '/:pathMatch(.*)*', redirect: '/' },
