@@ -55,10 +55,27 @@ describe('PlaylistStore', () => {
       name: '安全与培训轮播',
       ownerUserId: 7,
       items: [
-        { templateId: 'sca-01', versionId: 101, durationSeconds: 30 },
-        { templateId: 'train-02', versionId: 202, durationSeconds: 45 },
+        {
+          templateId: 'sca-01',
+          versionId: 101,
+          durationSeconds: 30,
+          transition: 'fade',
+          filters: {},
+        },
+        {
+          templateId: 'train-02',
+          versionId: 202,
+          durationSeconds: 45,
+          transition: 'slide',
+          filters: {},
+        },
       ],
-      schedule: { mode: 'manual' },
+      schedule: [{
+        timezone: 'Asia/Shanghai',
+        daysOfWeek: [1, 2, 3, 4, 5],
+        startTime: '09:00',
+        endTime: '18:00',
+      }],
     })
 
     expect(playlist.id).toBe(1)
@@ -73,7 +90,13 @@ describe('PlaylistStore', () => {
       store.create({
         name: '无效轮播',
         ownerUserId: 7,
-        items: [{ templateId: 'remind-01', versionId: 999, durationSeconds: 30 }],
+        items: [{
+          templateId: 'remind-01',
+          versionId: 999,
+          durationSeconds: 30,
+          transition: 'fade',
+          filters: {},
+        }],
       }),
     ).rejects.toThrow('播放列表只能引用已发布版本')
 
@@ -81,8 +104,57 @@ describe('PlaylistStore', () => {
       store.create({
         name: '错配轮播',
         ownerUserId: 7,
-        items: [{ templateId: 'train-01', versionId: 101, durationSeconds: 30 }],
+        items: [{
+          templateId: 'train-01',
+          versionId: 101,
+          durationSeconds: 30,
+          transition: 'fade',
+          filters: {},
+        }],
       }),
     ).rejects.toThrow('播放列表版本与模板不匹配')
+  })
+
+  it('rejects invalid durations and overlapping schedules', async () => {
+    const memory = createPlaylistDatabase()
+    const store = new PlaylistStore(memory.database)
+
+    await expect(store.create({
+      name: '时长错误',
+      ownerUserId: 7,
+      items: [{
+        templateId: 'sca-01',
+        versionId: 101,
+        durationSeconds: 5,
+        transition: 'fade',
+        filters: {},
+      }],
+    })).rejects.toThrow()
+
+    await expect(store.create({
+      name: '日程冲突',
+      ownerUserId: 7,
+      items: [{
+        templateId: 'sca-01',
+        versionId: 101,
+        durationSeconds: 30,
+        transition: 'fade',
+        filters: {},
+      }],
+      schedule: [
+        {
+          timezone: 'Asia/Shanghai',
+          daysOfWeek: [1],
+          startTime: '09:00',
+          endTime: '12:00',
+        },
+        {
+          timezone: 'Asia/Shanghai',
+          daysOfWeek: [1],
+          startTime: '11:00',
+          endTime: '13:00',
+        },
+      ],
+    })).rejects.toThrow('同一播放列表不允许重叠日程')
   })
 })

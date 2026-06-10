@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
+import { useRoute } from 'vue-router'
 
 import { screenManifests } from '../templates/manifests'
 import type { SystemKey } from '../types'
@@ -11,6 +12,10 @@ const systems: Array<{ key: SystemKey | 'all'; label: string; code: string }> = 
   { key: 'reminder', label: '授权提醒', code: '03' },
 ]
 const activeSystem = ref<SystemKey | 'all'>('all')
+const route = useRoute()
+const notice = computed(() =>
+  route.query.notice === 'desktop-editor' ? '请在桌面端编辑' : '',
+)
 const visibleTemplates = computed(() =>
   activeSystem.value === 'all'
     ? screenManifests
@@ -23,6 +28,7 @@ const systemLabel = (key: SystemKey) =>
 
 <template>
   <main class="catalog">
+    <p v-if="notice" class="catalog__notice" role="status">{{ notice }}</p>
     <header class="catalog__header">
       <div>
         <p class="section-code">CATALOG / 12</p>
@@ -63,7 +69,10 @@ const systemLabel = (key: SystemKey) =>
           <span>{{ template.effectsProfile.toUpperCase() }}</span>
           <span>{{ template.refreshPolicy.mode.toUpperCase() }}</span>
         </div>
-        <RouterLink :to="`/play/${template.id}`">进入预览</RouterLink>
+        <div class="template-row__actions">
+          <RouterLink :to="`/play/${template.id}`">进入预览</RouterLink>
+          <RouterLink :to="`/edit/${template.id}`">编辑布局</RouterLink>
+        </div>
       </article>
     </section>
   </main>

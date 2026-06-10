@@ -12,6 +12,7 @@ import {
 } from './cache.js'
 import { config } from './config.js'
 import { createDataRouter } from './routes/data.js'
+import { createPlaylistRouter } from './routes/playlists.js'
 import { createTemplateRouter } from './routes/templates.js'
 import type { StoreDatabase } from './store-types.js'
 import { StreamHub } from './stream-hub.js'
@@ -65,6 +66,10 @@ export const createApp = (options: CreateAppOptions = {}) => {
   }))
   if (options.database) {
     application.use('/api/big-screen', createTemplateRouter({
+      database: options.database,
+      authorize: options.authorize,
+    }))
+    application.use('/api/big-screen', createPlaylistRouter({
       database: options.database,
       authorize: options.authorize,
     }))
