@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from datetime import datetime, timezone
 from pathlib import Path
+import xml.etree.ElementTree as ET
 
 import pytest
 from sqlalchemy import create_engine
@@ -18,6 +19,21 @@ from app.scanners.dependency_check_cache import (
     nvd_property_file,
 )
 from app.scanners.dependency_check_client import DependencyCheckAdapter
+
+
+def test_dependency_check_suppression_is_valid_xml():
+    path = Path(__file__).parents[1] / "dependency-check-suppression.xml"
+    root = ET.parse(path).getroot()
+    assert root.tag.endswith("suppressions")
+
+
+def test_compose_mounts_dependency_check_data():
+    compose = (Path(__file__).parents[2] / "docker-compose.yml").read_text(encoding="utf-8")
+    assert "sca-dependency-check-data:/data/dependency-check" in compose
+    assert (
+        "./backend/dependency-check-suppression.xml:/etc/dependency-check/suppression.xml:ro"
+        in compose
+    )
 
 
 def _session_factory(tmp_path: Path):

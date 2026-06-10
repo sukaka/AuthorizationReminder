@@ -1,6 +1,7 @@
 FROM anchore/syft:v1.45.1 AS syft
 FROM aquasec/trivy:0.71.0 AS trivy
 FROM opensca/opensca-cli@sha256:4de6af4bc2a2c33586ce471c62b85db66815f17a9dff51eb2c9423025c86829d AS opensca
+FROM owasp/dependency-check:12.1.9 AS dependency_check
 
 FROM python:3.12-slim
 
@@ -10,21 +11,23 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /app
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends curl ca-certificates git \
+    && apt-get install -y --no-install-recommends curl ca-certificates git default-jre-headless \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=syft /syft /usr/local/bin/syft
 COPY --from=trivy /usr/local/bin/trivy /usr/local/bin/trivy
 COPY --from=opensca /app/opensca-cli /usr/local/bin/opensca
+COPY --from=dependency_check /usr/share/dependency-check /opt/dependency-check
+COPY dependency-check-suppression.xml /etc/dependency-check/suppression.xml
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY app ./app
 RUN adduser --disabled-password --gecos "" appuser \
-    && mkdir -p /data/sca/uploads /data/sca/reports /data/sca/sbom /data/sca/backups /data/scanner-results /data/trivy-cache \
-    && chown -R appuser:appuser /data/sca /data/scanner-results /data/trivy-cache \
-    && chmod +x /usr/local/bin/syft /usr/local/bin/trivy /usr/local/bin/opensca
+    && mkdir -p /data/sca/uploads /data/sca/reports /data/sca/sbom /data/sca/backups /data/scanner-results/dependency-check /data/trivy-cache /data/dependency-check \
+    && chown -R appuser:appuser /data/sca /data/scanner-results /data/trivy-cache /data/dependency-check \
+    && chmod +x /usr/local/bin/syft /usr/local/bin/trivy /usr/local/bin/opensca /opt/dependency-check/bin/dependency-check.sh
 USER appuser
 
 CMD ["celery", "-A", "app.celery_app.celery_app", "worker", "--loglevel=INFO", "--queues=scanner,celery"]
