@@ -236,6 +236,61 @@
             <div><span>未知版本</span><strong>{{ scanCompleteness.unknown_version_count || 0 }}</strong></div>
             <div><span>待确认</span><strong>{{ scanCompleteness.manual_confirm_count || 0 }}</strong></div>
           </section>
+          <section class="dependency-check-summary">
+            <div>
+              <span>Dependency-Check</span>
+              <strong>{{ dependencyCheckTask?.status || '未运行' }}</strong>
+            </div>
+            <div>
+              <span>工具版本</span>
+              <strong>{{ dependencyCheckStatus.version || '-' }}</strong>
+            </div>
+            <div>
+              <span>漏洞库更新</span>
+              <strong :class="{ 'status-warning': dependencyCheckStatus.stale }">
+                {{ dependencyCheckStatus.last_success_at || '未初始化' }}
+              </strong>
+            </div>
+            <div>
+              <span>独立发现</span>
+              <strong>{{ dependencyCheckIndependentCount }}</strong>
+            </div>
+            <div>
+              <span>交叉确认</span>
+              <strong>{{ dependencyCheckConfirmedCount }}</strong>
+            </div>
+            <div>
+              <span>P95 耗时</span>
+              <strong>{{ dependencyCheckStatus.p95_duration_seconds || 0 }}s</strong>
+            </div>
+            <div>
+              <span>失败/跳过</span>
+              <strong>{{ dependencyCheckStatus.failed_scans || 0 }}/{{ dependencyCheckStatus.skipped_scans || 0 }}</strong>
+            </div>
+          </section>
+          <el-alert
+            v-if="dependencyCheckTask?.summary"
+            class="dependency-check-alert"
+            :title="dependencyCheckTask.summary"
+            :type="dependencyCheckTask.status === 'failed' ? 'warning' : 'info'"
+            :closable="false"
+            show-icon
+          />
+          <div class="dependency-check-artifacts">
+            <span>原始扫描证据</span>
+            <div v-if="dependencyCheckArtifacts.length">
+              <el-button
+                v-for="artifact in dependencyCheckArtifacts"
+                :key="artifact.id"
+                text
+                type="primary"
+                @click="downloadScanArtifact(artifact)"
+              >
+                {{ artifact.file_name }}
+              </el-button>
+            </div>
+            <small v-else>本项目暂无 Dependency-Check 报告</small>
+          </div>
           <el-table :data="pagedComponents" empty-text="暂无依赖，请等待扫描完成">
             <el-table-column type="expand">
               <template #default="{ row }">
@@ -479,6 +534,17 @@
             <el-table-column prop="match_status" label="匹配" width="110">
               <template #default="{ row }">
                 <el-tag :type="row.match_status === 'affected' ? 'success' : 'warning'" effect="plain">{{ row.match_status }}</el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column label="确认状态" width="170">
+              <template #default="{ row }">
+                <el-tag
+                  :type="row.confirmation_status === 'cross_confirmed' ? 'success' : 'warning'"
+                  effect="plain"
+                >
+                  {{ row.confirmation_status === 'cross_confirmed' ? '多引擎确认' : '待人工复核' }}
+                </el-tag>
+                <small v-if="!row.gate_eligible" class="gate-note">不参与门禁</small>
               </template>
             </el-table-column>
             <el-table-column prop="reachability_status" label="可达性" width="130">
@@ -1431,6 +1497,22 @@ const dependencyTrackStatus = reactive({
   last_metrics_json: '{}',
   last_status: 'not_linked',
 })
+const dependencyCheckStatus = reactive({
+  enabled: true,
+  version: '',
+  status: 'unknown',
+  last_started_at: '',
+  last_success_at: '',
+  message: '',
+  stale: true,
+  data_dir: '',
+  total_scans: 0,
+  failed_scans: 0,
+  skipped_scans: 0,
+  p50_duration_seconds: 0,
+  p95_duration_seconds: 0,
+})
+const scanArtifacts = ref([])
 const vulnerabilities = ref([])
 const vulnerabilityFilter = ref('all')
 const vulnerabilityDrawerVisible = ref(false)
@@ -1694,6 +1776,27 @@ const p01Count = computed(() => vulnerabilities.value.filter((item) => ['P0', 'P
 
 const reviewCount = computed(() => vulnerabilities.value.filter(isReviewVulnerability).length)
 
+const dependencyCheckArtifacts = computed(() => (
+  scanArtifacts.value.filter((item) => item.engine_name === 'dependency-check')
+))
+
+const dependencyCheckTask = computed(() => (
+  scanTasks.value.find((item) => item.task_type === 'dependency_check_scan_task') || null
+))
+
+const dependencyCheckIndependentCount = computed(() => (
+  vulnerabilities.value.filter((item) => (
+    item.source === 'dependency-check' && item.confirmation_status === 'single_source'
+  )).length
+))
+
+const dependencyCheckConfirmedCount = computed(() => (
+  vulnerabilities.value.filter((item) => (
+    (item.confirmation_engines || '').includes('dependency-check')
+    && item.confirmation_status === 'cross_confirmed'
+  )).length
+))
+
 const remediationProgress = computed(() => {
   if (!remediationTickets.value.length) return 0
   const closed = remediationTickets.value.filter((item) => ['已修复', '已忽略'].includes(item.status)).length
@@ -1912,6 +2015,7 @@ const clearProjectDetails = () => {
   aiResults.value = []
   remediationTickets.value = []
   whitelistItems.value = []
+  scanArtifacts.value = []
   selectedVulnerability.value = null
   vulnerabilityDrawerVisible.value = false
   vulnerabilityHistory.value = []
@@ -1945,6 +2049,21 @@ const clearProjectDetails = () => {
     last_fetch_at: '',
     last_metrics_json: '{}',
     last_status: 'not_linked',
+  })
+  Object.assign(dependencyCheckStatus, {
+    enabled: true,
+    version: '',
+    status: 'unknown',
+    last_started_at: '',
+    last_success_at: '',
+    message: '',
+    stale: true,
+    data_dir: '',
+    total_scans: 0,
+    failed_scans: 0,
+    skipped_scans: 0,
+    p50_duration_seconds: 0,
+    p95_duration_seconds: 0,
   })
 }
 
@@ -2014,6 +2133,8 @@ const loadProjectDetails = async () => {
       aiResult,
       ticketsResult,
       whitelistResult,
+      dependencyCheckResult,
+      scanArtifactsResult,
     ] = await loadProjectDetailRequests(projectId)
     if (projectId !== selectedProjectId.value) return
     components.value = settledValue(componentsResult, components.value) || []
@@ -2041,6 +2162,9 @@ const loadProjectDetails = async () => {
     const tickets = settledValue(ticketsResult, null)
     remediationTickets.value = tickets?.items || []
     whitelistItems.value = settledValue(whitelistResult, whitelistItems.value) || []
+    const dependencyCheck = settledValue(dependencyCheckResult, null)
+    if (dependencyCheck) Object.assign(dependencyCheckStatus, dependencyCheck)
+    scanArtifacts.value = settledValue(scanArtifactsResult, scanArtifacts.value) || []
     taskPollingPaused.value = false
     taskPollingGatewayWarningShown = false
   } finally {
@@ -2243,6 +2367,10 @@ const submitReport = async () => {
 
 const downloadReport = (row) => {
   window.open(apiUrl(`/api/sca/reports/${row.id}/download`), '_blank')
+}
+
+const downloadScanArtifact = (artifact) => {
+  window.open(apiUrl(`/api/sca/raw-artifacts/${artifact.id}/download`), '_blank')
 }
 
 const deleteReport = async (row) => {

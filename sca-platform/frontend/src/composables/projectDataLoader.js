@@ -19,4 +19,6 @@ export const loadProjectDetailRequests = (projectId) => Promise.allSettled([
   requestJson(`/api/sca/projects/${projectId}/ai-triage/results`),
   requestJson(`/api/sca/projects/${projectId}/remediation/tickets`),
   requestJson(`/api/sca/projects/${projectId}/remediation/whitelist`),
+  requestJson('/api/sca/dependency-check/status'),
+  requestJson(`/api/sca/projects/${projectId}/scan-artifacts`),
 ])
