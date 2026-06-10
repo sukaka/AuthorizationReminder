@@ -1,10 +1,67 @@
-import express from 'express'
+import cors from 'cors'
+import express, { type Request } from 'express'
 
-export const app = express()
+import type { AuthorizationContext } from './auth.js'
+import { createScaAdapter } from './adapters/sca.js'
+import { createTrainExamAdapter } from './adapters/train-exam.js'
+import { createReminderAdapter } from './adapters/reminder.js'
+import {
+  MetricCache,
+  MetricService,
+  type SnapshotStore,
+} from './cache.js'
+import { config } from './config.js'
+import { createDataRouter } from './routes/data.js'
+import { StreamHub } from './stream-hub.js'
 
-app.get('/health', (_request, response) => {
-  response.json({
-    status: 'ok',
-    service: 'big-screen-backend',
+export interface CreateAppOptions {
+  service?: MetricService
+  snapshots?: SnapshotStore
+  authorize?: (request: Request) => Promise<AuthorizationContext>
+  streamHub?: StreamHub
+}
+
+const createDefaultMetricService = (snapshots?: SnapshotStore) =>
+  new MetricService({
+    adapters: [
+      createScaAdapter(),
+      createTrainExamAdapter(),
+      createReminderAdapter(),
+    ],
+    cache: new MetricCache(),
+    snapshots,
   })
-})
+
+export const createApp = (options: CreateAppOptions = {}) => {
+  const application = express()
+  const allowedOrigins = new Set(config.corsOrigins)
+  application.disable('x-powered-by')
+  application.use(cors({
+    credentials: true,
+    origin(origin, callback) {
+      if (!origin || allowedOrigins.has(origin)) {
+        callback(null, true)
+        return
+      }
+      callback(new Error('CORS origin is not allowed'))
+    },
+  }))
+  application.use(express.json({ limit: '64kb' }))
+
+  application.get('/health', (_request, response) => {
+    response.json({
+      status: 'ok',
+      service: 'big-screen-backend',
+    })
+  })
+
+  application.use('/api/big-screen', createDataRouter({
+    service: options.service || createDefaultMetricService(options.snapshots),
+    authorize: options.authorize,
+    streamHub: options.streamHub,
+  }))
+
+  return application
+}
+
+export const app = createApp()
