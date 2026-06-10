@@ -1,31 +1,41 @@
 from __future__ import annotations
 
-from collections import defaultdict
 from dataclasses import asdict
 
 from ..base import NormalizedComponentData
+from ..identity import group_by_shared_keys, stable_component_keys
 from .confidence_engine import component_confidence
 
 
-def _key(item: NormalizedComponentData) -> tuple[str, str, str]:
-    if item.purl:
-        return ("purl", item.purl, "")
-    if item.ecosystem and item.normalized_name and item.version:
-        return ("eco", item.ecosystem, f"{item.normalized_name}@{item.version}")
-    if item.package_manager and item.package_name and item.version:
-        return ("pm", item.package_manager, f"{item.package_name}@{item.version}")
+def _keys(item: NormalizedComponentData) -> list[str]:
+    keys = stable_component_keys(
+        sha1=item.sha1,
+        gav=item.gav,
+        purl=item.purl,
+        ecosystem=item.ecosystem,
+        name=item.normalized_name or item.package_name,
+        version=item.version,
+    )
+    if keys:
+        return keys
     if item.cpe:
-        return ("cpe", item.cpe, "")
-    return ("name", item.normalized_name or item.package_name, item.version)
+        return [f"cpe-candidate:{item.cpe.lower()}"]
+    return [f"name:{(item.normalized_name or item.package_name).lower()}@{item.version}"]
 
 
 def merge_components(rows: list[NormalizedComponentData]) -> list[dict[str, object]]:
-    grouped: dict[tuple[str, str, str], list[NormalizedComponentData]] = defaultdict(list)
-    for row in rows:
-        grouped[_key(row)].append(row)
     merged: list[dict[str, object]] = []
-    for group in grouped.values():
-        best = max(group, key=lambda item: (bool(item.purl), bool(item.cpe), item.confidence_score))
+    for group in group_by_shared_keys(rows, _keys):
+        best = max(
+            group,
+            key=lambda item: (
+                bool(item.sha1),
+                bool(item.gav),
+                bool(item.purl),
+                bool(item.cpe),
+                item.confidence_score,
+            ),
+        )
         engines = sorted({item.source_engine for item in group if item.source_engine})
         score, level = component_confidence(
             len(engines),
@@ -44,4 +54,3 @@ def merge_components(rows: list[NormalizedComponentData]) -> list[dict[str, obje
             }
         )
     return merged
-
