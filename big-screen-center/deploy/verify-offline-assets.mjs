@@ -8,7 +8,11 @@ const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '
 const assetsRoot = path.join(projectRoot, 'assets')
 const templatesRoot = path.join(projectRoot, 'frontend', 'src', 'templates')
 const remoteUrlPattern = /https?:\/\//i
-const protocolRelativeUrlPattern = /(?:url\(\s*|['"`]\s*)\/\//i
+const protocolRelativeUrlPatterns = [
+  /(?:url\(\s*|['"`]\s*)\/\//i,
+  /\b[\w:-]+\s*=\s*(?:['"`]\s*)?\/\//i,
+  /@import\s+(?:url\(\s*)?(?:['"`]\s*)?\/\//i,
+]
 const quotedValuePattern = /(['"`])((?:\\.|(?!\1).)*)\1/gs
 const resourceExtensionPattern =
   /\.(?:avif|bin|css|csv|eot|fbx|geojson|gif|glb|gltf|jpeg|jpg|json|ktx2|mp3|mp4|obj|otf|png|svg|ttf|webm|webp|woff2?)$/i
@@ -55,6 +59,13 @@ function extractReferences(contents) {
   return [...contents.matchAll(quotedValuePattern)].map((match) => match[2])
 }
 
+function containsRemoteUrl(contents) {
+  return (
+    remoteUrlPattern.test(contents) ||
+    protocolRelativeUrlPatterns.some((pattern) => pattern.test(contents))
+  )
+}
+
 async function verifyFile(file, failures) {
   if (!textExtensionPattern.test(file)) {
     return 0
@@ -63,7 +74,7 @@ async function verifyFile(file, failures) {
   const contents = await readFile(file, 'utf8')
   const displayPath = path.relative(projectRoot, file)
 
-  if (remoteUrlPattern.test(contents) || protocolRelativeUrlPattern.test(contents)) {
+  if (containsRemoteUrl(contents)) {
     failures.push(`${displayPath}: remote or protocol-relative URL is not allowed`)
   }
 
