@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { readdir, readFile, stat } from 'node:fs/promises'
+import { readdir, readFile, realpath, stat } from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -189,10 +189,21 @@ async function verifyFile(file, failures) {
       const resolvedStat = await stat(resolved)
       if (!resolvedStat.isFile()) {
         failures.push(`${displayPath}: resource target is not a file: ${reference}`)
+        continue
+      }
+
+      const [realAssetsRoot, realResourcePath] = await Promise.all([
+        realpath(assetsRoot),
+        realpath(resolved),
+      ])
+      if (!isWithin(realAssetsRoot, realResourcePath)) {
+        failures.push(`${displayPath}: resource real path escapes assets: ${reference}`)
       }
     } catch (error) {
       if (error.code === 'ENOENT') {
         failures.push(`${displayPath}: resource target does not exist: ${reference}`)
+      } else if (error.code === 'ELOOP') {
+        failures.push(`${displayPath}: resource target cannot be resolved: ${reference}`)
       } else {
         throw error
       }

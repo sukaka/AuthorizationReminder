@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process'
-import { copyFile, mkdir, mkdtemp, rm, stat, writeFile } from 'node:fs/promises'
+import { copyFile, mkdir, mkdtemp, rm, stat, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -202,6 +202,21 @@ describe('offline asset verification', () => {
 
     expect(result.status).toBe(0)
     expect(result.stdout).toContain('Offline asset verification passed')
+  })
+
+  it('rejects an asset symlink whose real target escapes assets', async () => {
+    const result = await runVerifier(
+      '<img src=/assets/link.png>',
+      'frontend/src/App.vue',
+      async (projectRoot) => {
+        await writeProjectFile(projectRoot, 'outside.png', 'outside')
+        await mkdir(path.join(projectRoot, 'assets'), { recursive: true })
+        await symlink('../outside.png', path.join(projectRoot, 'assets/link.png'))
+      },
+    )
+
+    expect(result.status).toBe(1)
+    expect(result.stderr).toContain('resource real path escapes assets')
   })
 
   it('does not decode-check a non-resource percent string', async () => {
