@@ -1,12 +1,17 @@
 #!/usr/bin/env node
 
-import { readdir, readFile } from 'node:fs/promises'
+import { readdir, readFile, stat } from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const assetsRoot = path.join(projectRoot, 'assets')
+const frontendRoot = path.join(projectRoot, 'frontend')
+const frontendSrcRoot = path.join(frontendRoot, 'src')
+const frontendPublicRoot = path.join(frontendRoot, 'public')
+const frontendIndexHtml = path.join(frontendRoot, 'index.html')
 const templatesRoot = path.join(projectRoot, 'frontend', 'src', 'templates')
+const ignoredDirectoryNames = new Set(['node_modules', 'dist', 'coverage', 'test-results'])
 const remoteUrlPattern = /https?:\/\//i
 const protocolRelativeUrlPatterns = [
   /(?:url\(\s*|['"`]\s*)\/\//i,
@@ -31,6 +36,9 @@ async function listFiles(directory) {
     const nestedFiles = await Promise.all(
       entries.map((entry) => {
         const entryPath = path.join(directory, entry.name)
+        if (entry.isDirectory() && ignoredDirectoryNames.has(entry.name)) {
+          return []
+        }
         return entry.isDirectory() ? listFiles(entryPath) : [entryPath]
       }),
     )
@@ -44,22 +52,51 @@ async function listFiles(directory) {
   }
 }
 
+async function collectExistingFiles(candidates) {
+  const files = []
+
+  for (const candidate of candidates) {
+    try {
+      const candidateStat = await stat(candidate)
+      if (candidateStat.isDirectory()) {
+        files.push(...(await listFiles(candidate)))
+      } else if (candidateStat.isFile()) {
+        files.push(candidate)
+      }
+    } catch (error) {
+      if (error.code !== 'ENOENT') {
+        throw error
+      }
+    }
+  }
+
+  return [...new Set(files)]
+}
+
 function isWithin(parent, candidate) {
   const relative = path.relative(parent, candidate)
   return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative))
 }
 
+function normalizeReference(reference) {
+  const withoutFragment = reference.split(/[?#]/, 1)[0]
+
+  try {
+    return { value: decodeURIComponent(withoutFragment) }
+  } catch {
+    return { error: `invalid URL encoding in resource path: ${reference}` }
+  }
+}
+
 function resolveResourceReference(sourceFile, reference) {
-  const normalized = reference.split(/[?#]/, 1)[0]
-
-  if (normalized.startsWith('/assets/')) {
-    return path.join(assetsRoot, normalized.slice('/assets/'.length))
+  if (reference.startsWith('/assets/')) {
+    return path.join(assetsRoot, reference.slice('/assets/'.length))
   }
-  if (normalized.startsWith('assets/')) {
-    return path.join(assetsRoot, normalized.slice('assets/'.length))
+  if (reference.startsWith('assets/')) {
+    return path.join(assetsRoot, reference.slice('assets/'.length))
   }
 
-  return path.resolve(path.dirname(sourceFile), normalized)
+  return path.resolve(path.dirname(sourceFile), reference)
 }
 
 function extractReferences(contents) {
@@ -95,9 +132,11 @@ function extractReferences(contents) {
 }
 
 function containsRemoteUrl(contents) {
+  const normalizedContents = contents.replaceAll('\\/', '/')
+
   return (
-    remoteUrlPattern.test(contents) ||
-    protocolRelativeUrlPatterns.some((pattern) => pattern.test(contents))
+    remoteUrlPattern.test(normalizedContents) ||
+    protocolRelativeUrlPatterns.some((pattern) => pattern.test(normalizedContents))
   )
 }
 
@@ -115,19 +154,48 @@ async function verifyFile(file, failures) {
 
   let checkedReferences = 0
   for (const [reference, hasResourceContext] of extractReferences(contents)) {
-    const bareReference = reference.split(/[?#]/, 1)[0]
-    const isResourceReference =
+    const rawReference = reference.split(/[?#]/, 1)[0]
+    const shouldCheckReference =
+      resourceExtensionPattern.test(rawReference) ||
+      (hasResourceContext && explicitAssetPathPattern.test(rawReference))
+
+    if (!shouldCheckReference) {
+      continue
+    }
+
+    const normalizedReference = normalizeReference(reference)
+    if (normalizedReference.error) {
+      failures.push(`${displayPath}: ${normalizedReference.error}`)
+      continue
+    }
+
+    const bareReference = normalizedReference.value
+    const isDecodedResourceReference =
       resourceExtensionPattern.test(bareReference) ||
       (hasResourceContext && explicitAssetPathPattern.test(bareReference))
 
-    if (!isResourceReference) {
+    if (!isDecodedResourceReference) {
       continue
     }
 
     checkedReferences += 1
-    const resolved = resolveResourceReference(file, reference)
+    const resolved = resolveResourceReference(file, bareReference)
     if (!isWithin(assetsRoot, resolved)) {
       failures.push(`${displayPath}: resource path escapes assets: ${reference}`)
+      continue
+    }
+
+    try {
+      const resolvedStat = await stat(resolved)
+      if (!resolvedStat.isFile()) {
+        failures.push(`${displayPath}: resource target is not a file: ${reference}`)
+      }
+    } catch (error) {
+      if (error.code === 'ENOENT') {
+        failures.push(`${displayPath}: resource target does not exist: ${reference}`)
+      } else {
+        throw error
+      }
     }
   }
 
@@ -135,11 +203,16 @@ async function verifyFile(file, failures) {
 }
 
 const templateFiles = await listFiles(templatesRoot)
-const assetFiles = await listFiles(assetsRoot)
+const scannedFiles = await collectExistingFiles([
+  frontendSrcRoot,
+  frontendIndexHtml,
+  frontendPublicRoot,
+  assetsRoot,
+])
 const failures = []
 let checkedReferences = 0
 
-for (const file of [...templateFiles, ...assetFiles]) {
+for (const file of scannedFiles) {
   checkedReferences += await verifyFile(file, failures)
 }
 

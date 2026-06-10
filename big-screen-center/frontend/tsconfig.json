@@ -5,6 +5,7 @@
     "moduleResolution": "Bundler",
     "strict": true,
     "jsx": "preserve",
+    "noEmit": true,
     "resolveJsonModule": true,
     "allowSyntheticDefaultImports": true,
     "types": ["vite/client", "vitest/globals"]
