@@ -16,7 +16,20 @@ const createMemoryTemplateDatabase = () => {
   }> = []
 
   const executor: SqlExecutor = {
-    async query<T>() {
+    async query<T>(sql: string, params: unknown[] = []) {
+      if (sql.includes('FROM screen_versions')) {
+        const templateId = String(params[0])
+        return versions
+          .filter((item) => item.templateId === templateId)
+          .sort((left, right) => right.version - left.version)
+          .map((item) => ({
+            id: item.id,
+            template_id: item.templateId,
+            version_no: item.version,
+            config_json: item.configJson,
+            published_by: item.publishedBy,
+          })) as T[]
+      }
       return [] as T[]
     },
     async get<T>(sql: string, params: unknown[] = []) {
@@ -31,6 +44,18 @@ const createMemoryTemplateDatabase = () => {
           .filter((item) => item.templateId === templateId)
           .reduce((max, item) => Math.max(max, item.version), 0)
         return { version_no: latest } as T
+      }
+      if (sql.includes('FROM screen_versions') && sql.includes('version_no = ?')) {
+        const item = versions.find((candidate) =>
+          candidate.templateId === String(params[0])
+          && candidate.version === Number(params[1]))
+        return (item ? {
+          id: item.id,
+          template_id: item.templateId,
+          version_no: item.version,
+          config_json: item.configJson,
+          published_by: item.publishedBy,
+        } : null) as T | null
       }
       return null
     },
@@ -91,6 +116,23 @@ describe('TemplateStore', () => {
     await expect(
       store.saveDraft('sca-01', 9, { html: '<script>alert(1)</script>' }),
     ).rejects.toThrow(/Forbidden/)
+  })
+
+  it('rolls back by publishing a new immutable version', async () => {
+    const memory = createMemoryTemplateDatabase()
+    const store = new TemplateStore(memory.database)
+    await store.saveDraft('sca-01', 9, { effectsProfile: 'medium' })
+    await store.publish('sca-01', 9)
+    await store.saveDraft('sca-01', 9, { effectsProfile: 'low' })
+    await store.publish('sca-01', 9)
+
+    const rollback = await store.rollback('sca-01', 1, 9)
+    const versions = await store.listVersions('sca-01')
+
+    expect(rollback.version).toBe(3)
+    expect(rollback.config).toEqual({ effectsProfile: 'medium' })
+    expect(versions.map((item) => item.version)).toEqual([3, 2, 1])
+    expect(memory.versions).toHaveLength(3)
   })
 })
 

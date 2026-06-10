@@ -6,6 +6,14 @@ interface DraftRow {
   config_json: string | JsonValue
 }
 
+interface VersionRow {
+  id: number | string
+  template_id: string
+  version_no: number | string
+  config_json: string | JsonValue
+  published_by: number | string
+}
+
 interface LatestVersionRow {
   version_no: number | string
 }
@@ -29,6 +37,56 @@ const parseStoredJson = (value: string | JsonValue) =>
 
 export class TemplateStore {
   constructor(private readonly database: StoreDatabase) {}
+
+  async getDraft(templateId: string, ownerUserId: number) {
+    assertTemplateId(templateId)
+    const draft = await this.database.get<DraftRow>(
+      `SELECT config_json
+       FROM screen_drafts
+       WHERE template_id = ? AND owner_user_id = ?`,
+      [templateId, ownerUserId],
+    )
+    return draft ? parseStoredJson(draft.config_json) : null
+  }
+
+  async listVersions(templateId: string): Promise<PublishedTemplateVersion[]> {
+    assertTemplateId(templateId)
+    const rows = await this.database.query<VersionRow>(
+      `SELECT id, template_id, version_no, config_json, published_by
+       FROM screen_versions
+       WHERE template_id = ?
+       ORDER BY version_no DESC`,
+      [templateId],
+    )
+    return rows.map((row) => ({
+      id: Number(row.id),
+      templateId: row.template_id,
+      version: Number(row.version_no),
+      config: parseStoredJson(row.config_json),
+      publishedBy: Number(row.published_by),
+    }))
+  }
+
+  async getVersion(templateId: string, version: number) {
+    assertTemplateId(templateId)
+    if (!Number.isInteger(version) || version <= 0) {
+      throw new Error('模板版本号无效')
+    }
+    const row = await this.database.get<VersionRow>(
+      `SELECT id, template_id, version_no, config_json, published_by
+       FROM screen_versions
+       WHERE template_id = ? AND version_no = ?`,
+      [templateId, version],
+    )
+    if (!row) throw new Error('模板历史版本不存在')
+    return {
+      id: Number(row.id),
+      templateId: row.template_id,
+      version: Number(row.version_no),
+      config: parseStoredJson(row.config_json),
+      publishedBy: Number(row.published_by),
+    }
+  }
 
   async saveDraft(templateId: string, ownerUserId: number, config: JsonValue) {
     assertTemplateId(templateId)
@@ -77,5 +135,15 @@ export class TemplateStore {
         publishedBy,
       }
     })
+  }
+
+  async rollback(
+    templateId: string,
+    historicalVersion: number,
+    publishedBy: number,
+  ) {
+    const historical = await this.getVersion(templateId, historicalVersion)
+    await this.saveDraft(templateId, publishedBy, historical.config)
+    return this.publish(templateId, publishedBy)
   }
 }

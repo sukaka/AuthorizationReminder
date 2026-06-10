@@ -5,6 +5,7 @@ import { closeDatabase, initializeDatabase } from './db.js'
 const port = Number(process.env.PORT || 5192)
 const database = await initializeDatabase()
 const app = createApp({
+  database,
   snapshots: new MysqlSnapshotStore(database),
 })
 

@@ -12,6 +12,8 @@ import {
 } from './cache.js'
 import { config } from './config.js'
 import { createDataRouter } from './routes/data.js'
+import { createTemplateRouter } from './routes/templates.js'
+import type { StoreDatabase } from './store-types.js'
 import { StreamHub } from './stream-hub.js'
 
 export interface CreateAppOptions {
@@ -19,6 +21,7 @@ export interface CreateAppOptions {
   snapshots?: SnapshotStore
   authorize?: (request: Request) => Promise<AuthorizationContext>
   streamHub?: StreamHub
+  database?: StoreDatabase
 }
 
 const createDefaultMetricService = (snapshots?: SnapshotStore) =>
@@ -60,6 +63,12 @@ export const createApp = (options: CreateAppOptions = {}) => {
     authorize: options.authorize,
     streamHub: options.streamHub,
   }))
+  if (options.database) {
+    application.use('/api/big-screen', createTemplateRouter({
+      database: options.database,
+      authorize: options.authorize,
+    }))
+  }
 
   return application
 }
