@@ -28,7 +28,12 @@ const widgetComponent = computed(() => {
     :data="data"
     :performance-profile="performanceProfile"
   />
-  <section v-else class="widget-error" role="alert">
+  <section
+    v-else
+    class="widget-error"
+    role="alert"
+    data-widget-error="true"
+  >
     <span>REGISTRY / 404</span>
     <strong>未注册组件</strong>
     <p>组件类型“{{ widget.type }}”不在本地白名单中，已阻止加载。</p>

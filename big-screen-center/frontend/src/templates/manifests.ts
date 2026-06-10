@@ -34,9 +34,25 @@ export const TEMPLATE_BLUEPRINTS = [
 >
 
 const layoutAreas = ['metrics', 'core', 'trend', 'ranking', 'health']
+const pluginMatrix: Record<string, string[]> = {
+  'sca-01': ['three', 'echarts'],
+  'sca-02': ['echarts-gl', 'tsparticles'],
+  'sca-03': ['three', 'g6'],
+  'sca-04': ['three', 'echarts'],
+  'sca-05': ['animejs', 'echarts'],
+  'train-01': ['three', 'echarts'],
+  'train-02': ['echarts', 'sse'],
+  'train-03': ['echarts-gl', 'g6'],
+  'train-04': ['three', 'animejs'],
+  'remind-01': ['three', 'echarts'],
+  'remind-02': ['g6', 'echarts'],
+  'remind-03': ['maplibre', 'g6', 'echarts'],
+}
 
 export const screenManifests: ScreenTemplate[] = TEMPLATE_BLUEPRINTS.map(
   ([id, systemKey, name, metricKey, visualKey, refreshMode, coreType, themeKey]) => {
+    const rankingType: RegisteredWidgetType =
+      id === 'sca-03' || id === 'remind-03' ? 'graph' : 'ranking-table'
     const widgets: WidgetDefinition[] = [
       {
         id: `${id}-metrics`,
@@ -48,7 +64,7 @@ export const screenManifests: ScreenTemplate[] = TEMPLATE_BLUEPRINTS.map(
         minHeight: 2,
         maxWidth: 12,
         maxHeight: 4,
-        config: { variant: 'metrics' },
+        config: { variant: `${id}-metrics` },
       },
       {
         id: `${id}-core`,
@@ -60,7 +76,11 @@ export const screenManifests: ScreenTemplate[] = TEMPLATE_BLUEPRINTS.map(
         minHeight: 5,
         maxWidth: 18,
         maxHeight: 12,
-        config: { variant: 'core', visualKey },
+        config: {
+          variant: `${id}-core`,
+          visualKey,
+          plugins: pluginMatrix[id],
+        },
       },
       {
         id: `${id}-trend`,
@@ -72,11 +92,11 @@ export const screenManifests: ScreenTemplate[] = TEMPLATE_BLUEPRINTS.map(
         minHeight: 3,
         maxWidth: 12,
         maxHeight: 8,
-        config: { variant: 'trend' },
+        config: { variant: `${id}-trend`, visualKey },
       },
       {
         id: `${id}-ranking`,
-        type: 'ranking-table',
+        type: rankingType,
         dataSourceKey: metricKey,
         layoutArea: 'ranking',
         optional: true,
@@ -84,7 +104,7 @@ export const screenManifests: ScreenTemplate[] = TEMPLATE_BLUEPRINTS.map(
         minHeight: 3,
         maxWidth: 12,
         maxHeight: 8,
-        config: { variant: 'ranking' },
+        config: { variant: `${id}-ranking`, visualKey },
       },
       {
         id: `${id}-health`,
@@ -96,7 +116,7 @@ export const screenManifests: ScreenTemplate[] = TEMPLATE_BLUEPRINTS.map(
         minHeight: 1,
         maxWidth: 8,
         maxHeight: 3,
-        config: { variant: 'health' },
+        config: { variant: `${id}-health` },
       },
     ]
 

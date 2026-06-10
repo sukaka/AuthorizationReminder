@@ -24,15 +24,36 @@ describe('screen manifests', () => {
 
   it('includes metrics, core visual, trend, ranking, and health widgets', () => {
     for (const template of screenManifests) {
-      const variants = template.widgets.map((widget) => widget.config.variant)
+      const areas = template.widgets.map((widget) => widget.layoutArea)
       expect(template.widgets.some((widget) => widget.type === 'metric-cards')).toBe(true)
-      expect(variants).toEqual(expect.arrayContaining(['core', 'trend', 'ranking', 'health']))
+      expect(areas).toEqual(expect.arrayContaining([
+        'metrics',
+        'core',
+        'trend',
+        'ranking',
+        'health',
+      ]))
     }
   })
 
-  it('limits every template to one persistent Three.js scene', () => {
+  it('ships twelve differentiated template signatures', () => {
+    const signatures = screenManifests.map((template) =>
+      template.widgets
+        .map((widget) => `${widget.type}:${String(widget.config.variant)}`)
+        .sort()
+        .join('|'),
+    )
+
+    expect(screenManifests).toHaveLength(12)
+    expect(new Set(signatures).size).toBe(12)
+  })
+
+  it('keeps one persistent three scene at most', () => {
     for (const template of screenManifests) {
-      expect(template.widgets.filter((widget) => widget.type === 'three-scene').length).toBeLessThanOrEqual(1)
+      const scenes = template.widgets.filter(
+        (widget) => widget.type === 'three-scene',
+      )
+      expect(scenes.length).toBeLessThanOrEqual(1)
     }
   })
 })

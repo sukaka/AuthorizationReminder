@@ -16,6 +16,9 @@ export const sceneRegistry = {
   'risk-globe': () => import('../scenes/createRiskGlobe'),
   'course-galaxy': () => import('../scenes/createCourseGalaxy'),
   'expiry-orbit': () => import('../scenes/createExpiryOrbit'),
+  'dependency-space': () => import('../scenes/createRiskGlobe'),
+  'scan-pipeline': () => import('../scenes/createExpiryOrbit'),
+  'growth-stairway': () => import('../scenes/createCourseGalaxy'),
 } as const satisfies Record<string, () => Promise<SceneModule>>
 
 export type SceneKey = keyof typeof sceneRegistry

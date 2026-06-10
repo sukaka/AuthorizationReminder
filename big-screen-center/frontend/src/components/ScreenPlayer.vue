@@ -44,6 +44,14 @@ const mockData: Record<string, Record<string, JsonValue>> = {
 
 const { transform } = useScreenScale()
 const { profile } = usePerformanceProfile(props.template.effectsProfile)
+const performanceProfile = computed(() => {
+  const forced = import.meta.env.DEV
+    ? window.sessionStorage.getItem('big-screen-profile')
+    : null
+  return forced === 'high' || forced === 'medium' || forced === 'low'
+    ? forced
+    : profile.value
+})
 const filters = ref<Record<string, JsonValue>>({})
 const systemKey = computed(() => props.template.systemKey)
 const metricKey = computed(() => props.template.widgets[0]?.dataSourceKey || '')
@@ -51,7 +59,13 @@ const mode = computed(() => props.template.refreshPolicy.mode)
 const intervalMs = computed(() => props.template.refreshPolicy.intervalMs)
 const isMock = computed(() =>
   typeof window !== 'undefined'
-  && new URLSearchParams(window.location.search).get('mock') === '1',
+  && (
+    new URLSearchParams(window.location.search).get('mock') === '1'
+    || (
+      import.meta.env.DEV
+      && window.sessionStorage.getItem('big-screen-mock') === '1'
+    )
+  ),
 )
 const channelEnabled = computed(() => !isMock.value)
 const channel = useDataChannel({
@@ -92,6 +106,7 @@ const canvasStyle = computed(() => ({
         <div class="screen-heading__meta">
           <span :data-source-status="sourceStatus">SOURCE · {{ sourceStatus }}</span>
           <strong>{{ new Date().toLocaleDateString('zh-CN') }}</strong>
+          <RouterLink class="screen-exit" to="/">模板目录</RouterLink>
         </div>
       </header>
 
@@ -105,7 +120,7 @@ const canvasStyle = computed(() => ({
           <WidgetHost
             :widget="widget"
             :data="data"
-            :performance-profile="profile"
+            :performance-profile="performanceProfile"
           />
         </div>
       </section>
@@ -180,6 +195,18 @@ const canvasStyle = computed(() => ({
 .screen-heading__meta strong {
   font-size: 16px;
   font-weight: 500;
+}
+
+.screen-exit {
+  color: var(--screen-accent);
+  font-size: 10px;
+  letter-spacing: 0.16em;
+  text-decoration: none;
+}
+
+.screen-exit:hover {
+  text-decoration: underline;
+  text-underline-offset: 5px;
 }
 
 .screen-grid {
