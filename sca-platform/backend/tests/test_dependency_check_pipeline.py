@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -363,3 +364,223 @@ def test_run_scanner_children_saves_dependency_track_payloads(monkeypatch, tmp_p
     assert json.loads(findings_path.read_text(encoding="utf-8")) == [
         {"vulnerability": {"vulnId": "CVE-2022-42889"}}
     ]
+
+
+def test_java_project_runs_dependency_check(monkeypatch, tmp_path: Path):
+    import app.celery_app as celery_module
+
+    calls: list[Path] = []
+    Session = _session_factory(tmp_path)
+    parent_id = _seed_pipeline_scan(Session)
+    source = tmp_path / "java-source"
+    source.mkdir()
+    (source / "pom.xml").write_text("<project/>", encoding="utf-8")
+    effective_settings = celery_module.settings.model_copy(
+        update={"dependency_check_output_dir": str(tmp_path / "dependency-check")}
+    )
+    monkeypatch.setattr(celery_module, "settings", effective_settings)
+
+    def fake_scan(_self, source_dir, output_dir, _project_name):
+        report = output_dir / "dependency-check-report.json"
+        report.parent.mkdir(parents=True, exist_ok=True)
+        report.write_text('{"dependencies":[]}', encoding="utf-8")
+        calls.append(source_dir)
+        return ScannerCommandResult(
+            "dependency-check",
+            "completed",
+            [],
+            raw_result_path=str(report),
+            report_files=[str(report)],
+        )
+
+    monkeypatch.setattr(celery_module.DependencyCheckAdapter, "scan_source", fake_scan)
+
+    with Session() as db:
+        parent = db.get(models.ScanTask, parent_id)
+        result = celery_module._run_dependency_check_child(db, parent, source)
+        db.commit()
+
+    with Session() as db:
+        child = (
+            db.query(models.ScanTask)
+            .filter_by(parent_task_id=parent_id, task_type="dependency_check_scan_task")
+            .one()
+        )
+        assert child.status == "completed"
+    assert result.status == "completed"
+    assert calls == [source]
+
+
+def test_non_java_project_marks_dependency_check_skipped(monkeypatch, tmp_path: Path):
+    import app.celery_app as celery_module
+
+    Session = _session_factory(tmp_path)
+    parent_id = _seed_pipeline_scan(Session)
+    source = tmp_path / "node-source"
+    source.mkdir()
+    (source / "package.json").write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(
+        celery_module.DependencyCheckAdapter,
+        "scan_source",
+        lambda *_args: pytest.fail("non-Java project should not run Dependency-Check"),
+    )
+
+    with Session() as db:
+        parent = db.get(models.ScanTask, parent_id)
+        result = celery_module._run_dependency_check_child(db, parent, source)
+        db.commit()
+
+    with Session() as db:
+        child = (
+            db.query(models.ScanTask)
+            .filter_by(parent_task_id=parent_id, task_type="dependency_check_scan_task")
+            .one()
+        )
+        assert child.status == "skipped"
+        assert "未发现 Java" in child.summary
+    assert result.status == "skipped"
+
+
+def test_dependency_check_failure_is_recorded_without_raising(monkeypatch, tmp_path: Path):
+    import app.celery_app as celery_module
+
+    Session = _session_factory(tmp_path)
+    parent_id = _seed_pipeline_scan(Session)
+    source = tmp_path / "failed-java-source"
+    source.mkdir()
+    (source / "build.gradle").write_text("plugins {}", encoding="utf-8")
+    monkeypatch.setattr(
+        celery_module.DependencyCheckAdapter,
+        "scan_source",
+        lambda *_args: ScannerCommandResult(
+            "dependency-check",
+            "failed",
+            [],
+            error_message="simulated failure",
+        ),
+    )
+
+    with Session() as db:
+        parent = db.get(models.ScanTask, parent_id)
+        result = celery_module._run_dependency_check_child(db, parent, source)
+        db.commit()
+        assert parent.status == "running"
+
+    with Session() as db:
+        child = (
+            db.query(models.ScanTask)
+            .filter_by(parent_task_id=parent_id, task_type="dependency_check_scan_task")
+            .one()
+        )
+        assert child.status == "failed"
+        assert "simulated failure" in child.error_message
+    assert result.status == "failed"
+
+
+def test_dependency_check_lock_timeout_is_recorded_as_skipped(monkeypatch, tmp_path: Path):
+    import app.celery_app as celery_module
+
+    Session = _session_factory(tmp_path)
+    parent_id = _seed_pipeline_scan(Session)
+    source = tmp_path / "locked-java-source"
+    source.mkdir()
+    (source / "pom.xml").write_text("<project/>", encoding="utf-8")
+
+    def fail_with_lock_timeout(*_args):
+        raise DependencyCheckLockTimeout("cache busy")
+
+    monkeypatch.setattr(celery_module.DependencyCheckAdapter, "scan_source", fail_with_lock_timeout)
+
+    with Session() as db:
+        parent = db.get(models.ScanTask, parent_id)
+        result = celery_module._run_dependency_check_child(db, parent, source)
+        db.commit()
+
+    assert result.status == "skipped"
+    assert result.error_type == "CACHE_LOCK_TIMEOUT"
+
+
+def test_dependency_check_unexpected_error_does_not_fail_parent(monkeypatch, tmp_path: Path):
+    import app.celery_app as celery_module
+
+    Session = _session_factory(tmp_path)
+    parent_id = _seed_pipeline_scan(Session)
+    source = tmp_path / "broken-java-source"
+    source.mkdir()
+    (source / "pom.xml").write_text("<project/>", encoding="utf-8")
+    monkeypatch.setattr(
+        celery_module.DependencyCheckAdapter,
+        "scan_source",
+        lambda *_args: (_ for _ in ()).throw(PermissionError("output denied")),
+    )
+
+    with Session() as db:
+        parent = db.get(models.ScanTask, parent_id)
+        result = celery_module._run_dependency_check_child(db, parent, source)
+        db.commit()
+        assert parent.status == "running"
+
+    assert result.status == "failed"
+    assert result.error_type == "EXECUTION_FAILED"
+    assert "output denied" in result.error_message
+
+
+def test_cache_update_records_last_success(tmp_path: Path):
+    from app.celery_app import _record_dependency_check_cache_result
+
+    Session = _session_factory(tmp_path)
+    result = ScannerCommandResult("dependency-check-update", "completed", [])
+    with Session() as db:
+        _record_dependency_check_cache_result(
+            db,
+            result,
+            started=datetime(2026, 6, 9, tzinfo=timezone.utc),
+            version="12.1.9",
+        )
+        db.commit()
+        values = {row.key: row.value for row in db.query(models.SystemSetting).all()}
+
+    assert values["dependency_check_cache_status"] == "completed"
+    assert values["dependency_check_cache_last_success_at"]
+    assert values["dependency_check_cache_version"] == "12.1.9"
+
+
+def test_failed_cache_update_preserves_previous_success_time(tmp_path: Path):
+    from app.celery_app import _record_dependency_check_cache_result
+
+    Session = _session_factory(tmp_path)
+    with Session() as db:
+        db.add(
+            models.SystemSetting(
+                key="dependency_check_cache_last_success_at",
+                value="2026-06-08T00:00:00+00:00",
+                updated_by="system",
+            )
+        )
+        db.commit()
+        _record_dependency_check_cache_result(
+            db,
+            ScannerCommandResult(
+                "dependency-check-update",
+                "failed",
+                [],
+                error_message="network unavailable",
+            ),
+            started=datetime(2026, 6, 9, tzinfo=timezone.utc),
+            version="12.1.9",
+        )
+        db.commit()
+        values = {row.key: row.value for row in db.query(models.SystemSetting).all()}
+
+    assert values["dependency_check_cache_status"] == "failed"
+    assert values["dependency_check_cache_last_success_at"] == "2026-06-08T00:00:00+00:00"
+
+
+def test_dependency_check_update_is_routed_and_scheduled():
+    from app.celery_app import celery_app
+
+    assert celery_app.conf.task_routes["sca.update_dependency_check_data"]["queue"] == "scanner"
+    assert (
+        celery_app.conf.beat_schedule["sca-dependency-check-data-update"]["task"]
+        == "sca.update_dependency_check_data"
+    )

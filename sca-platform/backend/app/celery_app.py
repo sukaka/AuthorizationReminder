@@ -38,7 +38,10 @@ from .models import (
 from .risk_monitor_service import monitor_component_update, raw_json, snapshot_risk_level
 from .scanners import opensca_client, syft_client, trivy_client
 from .scanners.base import ScannerCommandResult, command_to_log_line, file_sha256, write_json
+from .scanners.dependency_check_cache import DependencyCheckLockTimeout
+from .scanners.dependency_check_client import DependencyCheckAdapter
 from .scanners.dependency_track_client import DependencyTrackClient
+from .scanners.java_detector import detect_java_project
 from .vulnerability_service import query_component_vulnerabilities, vulnerability_source_status
 
 settings = get_settings()
@@ -58,6 +61,7 @@ celery_app.conf.task_routes = {
     "sca.scan_uploaded_file": {"queue": "scanner"},
     "sca.query_project_vulnerabilities": {"queue": "scanner"},
     "sca.enrich_project_licenses": {"queue": "scanner"},
+    "sca.update_dependency_check_data": {"queue": "scanner"},
 }
 celery_app.conf.beat_schedule = {
     "sca-risk-monitor": {
@@ -67,7 +71,11 @@ celery_app.conf.beat_schedule = {
     "sca-remediation-overdue": {
         "task": "sca.check_remediation_overdue",
         "schedule": settings.remediation_overdue_check_seconds,
-    }
+    },
+    "sca-dependency-check-data-update": {
+        "task": "sca.update_dependency_check_data",
+        "schedule": settings.dependency_check_update_interval_seconds,
+    },
 }
 
 
@@ -221,6 +229,7 @@ PROJECT_SCAN_STEPS = [
     ("opensca_scan_task", "opensca", settings.opensca_timeout),
     ("syft_sbom_task", "syft", settings.syft_timeout),
     ("trivy_scan_task", "trivy", settings.trivy_timeout),
+    ("dependency_check_scan_task", "dependency-check", settings.dependency_check_timeout),
     ("dependency_track_upload_task", "dependency-track", settings.dependency_track_timeout),
     ("dependency_track_fetch_task", "dependency-track", settings.dependency_track_timeout),
     ("normalize_results_task", "juxin-normalizer", 600),
@@ -378,6 +387,66 @@ def _effective_dependency_track_settings(db):
     return settings.model_copy(update={"dependency_track_url": url, "dependency_track_api_key": api_key.strip()})
 
 
+def _run_dependency_check_child(
+    db,
+    task: ScanTask,
+    extract_dir: Path,
+) -> ScannerCommandResult:
+    detection = detect_java_project(
+        extract_dir,
+        max_files=settings.dependency_check_detection_max_files,
+        max_depth=settings.dependency_check_detection_max_depth,
+        max_matches=settings.dependency_check_detection_max_matches,
+    )
+    if not detection.enabled:
+        result = ScannerCommandResult(
+            "dependency-check",
+            "skipped",
+            [],
+            error_message="未发现 Java 构建文件或 JAR/WAR/EAR",
+        )
+        _record_scanner_result(db, task, "dependency_check_scan_task", result)
+        return result
+
+    reason = (
+        f"自动触发：{', '.join(detection.reasons)}；"
+        f"样例：{', '.join(detection.matched_paths[:5])}"
+    )
+    _mark_child(
+        db,
+        task.id,
+        "dependency_check_scan_task",
+        "running",
+        reason,
+        20,
+    )
+    try:
+        result = DependencyCheckAdapter(settings).scan_source(
+            extract_dir,
+            Path(settings.dependency_check_output_dir) / str(task.id),
+            task.project.name if task.project else f"project-{task.project_id}",
+        )
+    except DependencyCheckLockTimeout as exc:
+        result = ScannerCommandResult(
+            "dependency-check",
+            "skipped",
+            [],
+            error_type="CACHE_LOCK_TIMEOUT",
+            error_message=str(exc),
+            warnings=[str(exc)],
+        )
+    except Exception as exc:
+        result = ScannerCommandResult(
+            "dependency-check",
+            "failed",
+            [],
+            error_type="EXECUTION_FAILED",
+            error_message=str(exc),
+        )
+    _record_scanner_result(db, task, "dependency_check_scan_task", result)
+    return result
+
+
 def _run_scanner_children(db, task: ScanTask, extract_dir: Path) -> dict[str, Path]:
     report_paths: dict[str, Path] = {}
     _mark_child(db, task.id, "opensca_scan_task", "running", "正在执行 OpenSCA 扫描", 20)
@@ -414,7 +483,25 @@ def _run_scanner_children(db, task: ScanTask, extract_dir: Path) -> dict[str, Pa
     if trivy_result.raw_result_path:
         report_paths["trivy"] = Path(trivy_result.raw_result_path)
     db.add(ScanLog(scan_task_id=task.id, level="info", message=f"Trivy: {trivy_result.status} {trivy_result.error_message}".strip()))
-    _mark_parent(db, task, "running", 75, "Trivy 扫描完成，正在处理 Dependency-Track")
+    _mark_parent(db, task, "running", 75, "Trivy 扫描完成，正在执行 Dependency-Check")
+    db.commit()
+
+    dependency_check_result = _run_dependency_check_child(db, task, extract_dir)
+    if dependency_check_result.raw_result_path:
+        report_paths["dependency-check"] = Path(dependency_check_result.raw_result_path)
+    db.add(
+        ScanLog(
+            scan_task_id=task.id,
+            level="info"
+            if dependency_check_result.status in {"completed", "skipped"}
+            else "warning",
+            message=(
+                f"Dependency-Check: {dependency_check_result.status} "
+                f"{dependency_check_result.error_message}"
+            ).strip(),
+        )
+    )
+    _mark_parent(db, task, "running", 78, "Dependency-Check 处理完成，正在处理 Dependency-Track")
     db.commit()
 
     dtrack_settings = _effective_dependency_track_settings(db)
@@ -488,6 +575,105 @@ def _run_scanner_children(db, task: ScanTask, extract_dir: Path) -> dict[str, Pa
         _mark_parent(db, task, "running", 85, "Dependency-Track 失败，正在标准化本地结果")
         db.commit()
     return report_paths
+
+
+def _set_system_setting(db, key: str, value: object, updated_by: str) -> None:
+    row = db.query(SystemSetting).filter(SystemSetting.key == key).first()
+    if row is None:
+        row = SystemSetting(key=key)
+        db.add(row)
+    row.value = str(value or "")
+    row.updated_by = updated_by
+
+
+def _record_dependency_check_cache_result(
+    db,
+    result: ScannerCommandResult,
+    *,
+    started: datetime,
+    version: str,
+) -> None:
+    _set_system_setting(db, "dependency_check_cache_status", result.status, "system")
+    _set_system_setting(
+        db,
+        "dependency_check_cache_last_started_at",
+        started.isoformat(),
+        "system",
+    )
+    _set_system_setting(db, "dependency_check_cache_version", version, "system")
+    _set_system_setting(
+        db,
+        "dependency_check_cache_message",
+        result.error_message or result.message,
+        "system",
+    )
+    if result.status == "completed":
+        _set_system_setting(
+            db,
+            "dependency_check_cache_last_success_at",
+            datetime.now(timezone.utc).isoformat(),
+            "system",
+        )
+
+
+@celery_app.task(name="sca.update_dependency_check_data")
+def update_dependency_check_data() -> dict[str, str]:
+    init_db()
+    started = datetime.now(timezone.utc)
+    output_dir = (
+        Path(settings.dependency_check_output_dir)
+        / "data-update"
+        / started.strftime("%Y%m%dT%H%M%SZ")
+    )
+    with SessionLocal() as db:
+        _set_system_setting(db, "dependency_check_cache_status", "running", "system")
+        _set_system_setting(
+            db,
+            "dependency_check_cache_last_started_at",
+            started.isoformat(),
+            "system",
+        )
+        db.commit()
+        if not settings.dependency_check_enabled:
+            result = ScannerCommandResult(
+                "dependency-check-update",
+                "skipped",
+                [],
+                error_message="Dependency-Check 未启用",
+            )
+        else:
+            try:
+                result = DependencyCheckAdapter(settings).update_data(
+                    output_dir,
+                    settings.nvd_api_key,
+                )
+            except DependencyCheckLockTimeout as exc:
+                result = ScannerCommandResult(
+                    "dependency-check-update",
+                    "failed",
+                    [],
+                    error_type="CACHE_LOCK_TIMEOUT",
+                    error_message=str(exc),
+                )
+            except Exception as exc:
+                result = ScannerCommandResult(
+                    "dependency-check-update",
+                    "failed",
+                    [],
+                    error_type="UPDATE_FAILED",
+                    error_message=str(exc),
+                )
+        _record_dependency_check_cache_result(
+            db,
+            result,
+            started=started,
+            version=settings.dependency_check_version,
+        )
+        db.commit()
+        return {
+            "status": result.status,
+            "message": result.error_message or result.message,
+        }
 
 
 def _latest_source_root(db, project_id: int) -> Path | None:
