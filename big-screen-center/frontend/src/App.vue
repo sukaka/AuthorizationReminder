@@ -1,50 +1,87 @@
 <template>
-  <main class="scaffold">
-    <p class="eyebrow">JUXIN VISUAL OPERATIONS</p>
-    <h1>统一大屏展示中心</h1>
-    <p>正在建立模板目录、数据接入与全屏播放能力。</p>
-  </main>
+  <div class="app-shell">
+    <header class="topline">
+      <RouterLink to="/" class="brand">
+        <span class="brand__mark">JX</span>
+        <span>
+          <strong>统一大屏展示中心</strong>
+          <small>VISUAL OPERATIONS ATLAS</small>
+        </span>
+      </RouterLink>
+      <div class="topline__status">
+        <span class="status-dot" aria-hidden="true" />
+        数据通道待命
+      </div>
+    </header>
+    <RouterView />
+  </div>
 </template>
 
 <style scoped>
-:global(*) {
-  box-sizing: border-box;
+.topline {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  min-height: 68px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 clamp(24px, 4vw, 64px);
+  background: color-mix(in oklch, var(--canvas), transparent 6%);
+  border-bottom: 1px solid var(--line-strong);
 }
 
-:global(body) {
-  margin: 0;
-  color: #e6f7ff;
-  background:
-    radial-gradient(circle at 50% 20%, rgb(18 76 106 / 55%), transparent 42%),
-    #03111e;
-  font-family: Inter, "PingFang SC", "Microsoft YaHei", sans-serif;
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  color: var(--ink-strong);
+  text-decoration: none;
 }
 
-.scaffold {
-  min-height: 100vh;
+.brand__mark {
+  width: 34px;
+  height: 34px;
   display: grid;
-  align-content: center;
-  justify-items: center;
-  padding: 48px;
-  text-align: center;
+  place-items: center;
+  color: var(--canvas);
+  background: var(--accent-warm);
+  font-family: var(--font-display);
+  font-weight: 800;
 }
 
-.eyebrow {
-  margin: 0 0 16px;
-  color: #5ee7ff;
-  font-size: 12px;
-  letter-spacing: 0.28em;
+.brand strong,
+.brand small {
+  display: block;
 }
 
-h1 {
-  margin: 0;
-  font-size: clamp(42px, 6vw, 88px);
-  letter-spacing: 0.08em;
+.brand strong {
+  font-family: var(--font-display);
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
 }
 
-.scaffold > p:last-child {
-  margin: 24px 0 0;
-  color: #9bb9ca;
-  font-size: 18px;
+.brand small {
+  margin-top: 3px;
+  color: var(--ink-muted);
+  font-size: 8px;
+  letter-spacing: 0.16em;
+}
+
+.topline__status {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  color: var(--ink-muted);
+  font-size: 11px;
+}
+
+.status-dot {
+  width: 7px;
+  height: 7px;
+  background: var(--accent-signal);
+  border-radius: 50%;
+  box-shadow: 0 0 0 4px color-mix(in oklch, var(--accent-signal), transparent 84%);
 }
 </style>

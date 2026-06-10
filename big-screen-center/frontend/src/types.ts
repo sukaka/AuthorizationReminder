@@ -59,3 +59,17 @@ export interface ScreenTemplate {
     intervalMs: number
   }
 }
+
+export type DataStatus = 'ok' | 'partial' | 'stale' | 'empty' | 'error'
+
+export interface MetricEnvelope<T extends JsonValue = JsonValue> {
+  schemaVersion: '1.0'
+  systemKey: SystemKey
+  metricKey: string
+  generatedAt: string
+  sourceUpdatedAt: string | null
+  stale: boolean
+  status: DataStatus
+  data: T
+  unavailableSources: string[]
+}
