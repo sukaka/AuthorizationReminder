@@ -14,6 +14,11 @@ from .database import SessionLocal, init_db
 from .dependency_parser import parse_source_dependencies
 from .license_enrichment_service import enrich_missing_component_licenses
 from .reachability_service import analyze_component_reachability
+from .scanner_result_service import (
+    latest_completed_project_scan,
+    persist_scan_results,
+    promote_dependency_check_findings,
+)
 from .models import (
     Component,
     ComponentDependency,
@@ -32,7 +37,7 @@ from .models import (
 )
 from .risk_monitor_service import monitor_component_update, raw_json, snapshot_risk_level
 from .scanners import opensca_client, syft_client, trivy_client
-from .scanners.base import ScannerCommandResult, command_to_log_line, file_sha256
+from .scanners.base import ScannerCommandResult, command_to_log_line, file_sha256, write_json
 from .scanners.dependency_track_client import DependencyTrackClient
 from .vulnerability_service import query_component_vulnerabilities, vulnerability_source_status
 
@@ -373,12 +378,15 @@ def _effective_dependency_track_settings(db):
     return settings.model_copy(update={"dependency_track_url": url, "dependency_track_api_key": api_key.strip()})
 
 
-def _run_scanner_children(db, task: ScanTask, extract_dir: Path) -> None:
+def _run_scanner_children(db, task: ScanTask, extract_dir: Path) -> dict[str, Path]:
+    report_paths: dict[str, Path] = {}
     _mark_child(db, task.id, "opensca_scan_task", "running", "正在执行 OpenSCA 扫描", 20)
     _mark_parent(db, task, "running", 20, "正在执行 OpenSCA 扫描")
     db.commit()
     opensca_result = opensca_client.scan_source(extract_dir, Path(settings.opensca_output_dir) / str(task.id), settings)
     _record_scanner_result(db, task, "opensca_scan_task", opensca_result)
+    if opensca_result.raw_result_path:
+        report_paths["opensca"] = Path(opensca_result.raw_result_path)
     db.add(ScanLog(scan_task_id=task.id, level="info", message=f"OpenSCA: {opensca_result.status} {opensca_result.error_message}".strip()))
     _mark_parent(db, task, "running", 40, "OpenSCA 扫描完成，正在生成 SBOM")
     db.commit()
@@ -390,6 +398,8 @@ def _run_scanner_children(db, task: ScanTask, extract_dir: Path) -> None:
     syft_statuses = [item.status for item in syft_results]
     syft_result = next((item for item in syft_results if item.raw_result_path.endswith("cyclonedx.json")), syft_results[0])
     _record_scanner_result(db, task, "syft_sbom_task", syft_result)
+    if syft_result.raw_result_path:
+        report_paths["syft"] = Path(syft_result.raw_result_path)
     for item in syft_results[1:]:
         _record_artifact(db, task, item.engine_name, "spdx_bom" if "spdx" in item.raw_result_path else "raw_json", item.raw_result_path)
     db.add(ScanLog(scan_task_id=task.id, level="info", message=f"Syft: {','.join(syft_statuses)} {syft_result.error_message}".strip()))
@@ -401,6 +411,8 @@ def _run_scanner_children(db, task: ScanTask, extract_dir: Path) -> None:
     db.commit()
     trivy_result = trivy_client.scan_fs(extract_dir, Path(settings.trivy_output_dir) / str(task.id), settings)
     _record_scanner_result(db, task, "trivy_scan_task", trivy_result)
+    if trivy_result.raw_result_path:
+        report_paths["trivy"] = Path(trivy_result.raw_result_path)
     db.add(ScanLog(scan_task_id=task.id, level="info", message=f"Trivy: {trivy_result.status} {trivy_result.error_message}".strip()))
     _mark_parent(db, task, "running", 75, "Trivy 扫描完成，正在处理 Dependency-Track")
     db.commit()
@@ -412,14 +424,14 @@ def _run_scanner_children(db, task: ScanTask, extract_dir: Path) -> None:
         _mark_child(db, task.id, "dependency_track_fetch_task", "skipped", "Dependency-Track 未配置 API Key", 100)
         _mark_parent(db, task, "running", 82, "Dependency-Track 未配置，正在标准化本地结果")
         db.commit()
-        return
+        return report_paths
     bom_path = Path(syft_result.raw_result_path) if syft_result.raw_result_path else Path()
     if not bom_path.exists():
         _mark_child(db, task.id, "dependency_track_upload_task", "failed", "缺少 CycloneDX BOM，无法上传 Dependency-Track", 100, "缺少 CycloneDX BOM")
         _mark_child(db, task.id, "dependency_track_fetch_task", "skipped", "等待 BOM 上传成功后拉取", 100)
         _mark_parent(db, task, "running", 82, "缺少 BOM，跳过 Dependency-Track，正在标准化本地结果")
         db.commit()
-        return
+        return report_paths
     try:
         _mark_child(db, task.id, "dependency_track_upload_task", "running", "正在上传 CycloneDX BOM", 40)
         _mark_parent(db, task, "running", 78, "正在上传 CycloneDX BOM")
@@ -443,6 +455,25 @@ def _run_scanner_children(db, task: ScanTask, extract_dir: Path) -> None:
         _mark_parent(db, task, "running", 82, "正在拉取 Dependency-Track 指标")
         db.commit()
         metrics = dtrack.fetch_metrics(project_uuid)
+        components = dtrack.fetch_components(project_uuid)
+        findings = (
+            dtrack.fetch_findings(project_uuid)
+            if dtrack_settings.dependency_track_fetch_findings
+            else []
+        )
+        dtrack_dir = Path(settings.dependency_check_output_dir).parent / "dependency-track" / str(task.id)
+        dtrack_components_path = write_json(
+            dtrack_dir / "dependency-track-components.json",
+            components,
+        )
+        dtrack_findings_path = write_json(
+            dtrack_dir / "dependency-track-findings.json",
+            findings,
+        )
+        report_paths["dependency-track-components"] = dtrack_components_path
+        report_paths["dependency-track-findings"] = dtrack_findings_path
+        _record_artifact(db, task, "dependency-track", "raw_json", str(dtrack_components_path))
+        _record_artifact(db, task, "dependency-track", "raw_json", str(dtrack_findings_path))
         row.last_metrics_json = raw_json(metrics)
         row.last_fetch_at = datetime.now(timezone.utc)
         row.last_status = "fetched"
@@ -456,6 +487,7 @@ def _run_scanner_children(db, task: ScanTask, extract_dir: Path) -> None:
         db.add(ScanLog(scan_task_id=task.id, level="error", message=f"Dependency-Track: {message}"))
         _mark_parent(db, task, "running", 85, "Dependency-Track 失败，正在标准化本地结果")
         db.commit()
+    return report_paths
 
 
 def _latest_source_root(db, project_id: int) -> Path | None:
@@ -697,6 +729,13 @@ def query_project_vulnerabilities_task(scan_task_id: int) -> dict[str, int | str
                 if index == 1 or index == total_components or index % 5 == 0:
                     db.commit()
 
+            latest_scan = latest_completed_project_scan(db, task.project_id)
+            if latest_scan:
+                total_findings += promote_dependency_check_findings(
+                    db,
+                    task.project_id,
+                    latest_scan.id,
+                )
             _mark_parent(db, task, "success", 100, f"漏洞查询完成：组件 {total_components} 个，漏洞 {total_findings} 条")
             db.add(ScanLog(scan_task_id=task.id, level="info", message=task.summary))
             db.commit()
@@ -738,7 +777,7 @@ def scan_uploaded_file(scan_task_id: int) -> dict[str, int | str]:
             _mark_child(db, task.id, "prepare_source_task", "completed", "源码准备完成", 100)
             _mark_parent(db, task, "running", 15, "源码准备完成")
             db.commit()
-            _run_scanner_children(db, task, extract_dir)
+            scanner_report_paths = _run_scanner_children(db, task, extract_dir)
             result = parse_source_dependencies(extract_dir)
             _mark_child(db, task.id, "normalize_results_task", "running", "正在标准化依赖识别结果", 50)
             _mark_parent(db, task, "running", 88, "正在标准化依赖识别结果")
@@ -820,7 +859,16 @@ def scan_uploaded_file(scan_task_id: int) -> dict[str, int | str]:
 
             for message in result.logs:
                 db.add(ScanLog(scan_task_id=task.id, level="info", message=message))
-            _mark_child(db, task.id, "normalize_results_task", "completed", "标准化完成", 100)
+            counts = persist_scan_results(db, task, scanner_report_paths)
+            promoted = promote_dependency_check_findings(db, task.project_id, task.id)
+            _mark_child(
+                db,
+                task.id,
+                "normalize_results_task",
+                "completed",
+                f"标准化完成：组件 {counts['components']}，漏洞 {counts['vulnerabilities']}",
+                100,
+            )
             _mark_parent(db, task, "running", 93, "标准化完成，正在合并组件")
             _mark_child(db, task.id, "merge_components_task", "completed", "组件合并完成", 100)
             _mark_parent(db, task, "running", 96, "组件合并完成")
@@ -828,7 +876,14 @@ def scan_uploaded_file(scan_task_id: int) -> dict[str, int | str]:
                 _mark_child(db, task.id, "license_enrichment_task", "skipped", "同步测试模式下跳过异步许可证补全", 100)
             else:
                 _mark_child(db, task.id, "license_enrichment_task", "pending", "等待自动匹配许可协议", 0)
-            _mark_child(db, task.id, "merge_vulnerabilities_task", "skipped", "等待漏洞查询后合并", 100)
+            _mark_child(
+                db,
+                task.id,
+                "merge_vulnerabilities_task",
+                "completed",
+                f"漏洞合并完成：归一化 {counts['vulnerabilities']}，晋升 {promoted}",
+                100,
+            )
             for task_type in [
                 "ai_noise_reduction_task",
                 "report_generate_task",

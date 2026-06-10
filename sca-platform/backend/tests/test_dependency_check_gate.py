@@ -1,13 +1,24 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
+
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
 
 from app import models
+from app.database import Base
 from app.scanners.base import NormalizedComponentData, NormalizedVulnerabilityData
 from app.scanners.merger.component_merger import merge_components
 from app.scanners.merger.vulnerability_merger import merge_vulnerabilities
 from app.scanners.normalizers.dependency_track_normalizer import normalize_dependency_track_findings
 from app.scanners.normalizers.trivy_normalizer import normalize_trivy
+
+
+def _session_factory(tmp_path: Path):
+    engine = create_engine(f"sqlite:///{tmp_path / 'dependency-check-gate.db'}")
+    Base.metadata.create_all(engine)
+    return sessionmaker(bind=engine, autoflush=False, autocommit=False)
 
 
 def dependency_check_row() -> NormalizedVulnerabilityData:
@@ -164,3 +175,105 @@ def test_confirmation_and_stable_identity_columns_exist():
     }
     assert expected_confirmation_columns <= set(models.MergedVulnerability.__table__.columns.keys())
     assert expected_confirmation_columns <= set(models.VulnerabilityRecord.__table__.columns.keys())
+
+
+def _seed_promotion_rows(db, *, external_source: str = ""):
+    project = models.Project(name=f"promotion-{external_source or 'single'}")
+    upload = models.UploadFileRecord(
+        project=project,
+        upload_id=f"promotion-{external_source or 'single'}-u1",
+        original_filename="source.zip",
+    )
+    scan = models.ScanTask(project=project, upload_file=upload, status="success")
+    component = models.Component(
+        project=project,
+        package_name="commons-text",
+        package_version="1.9",
+        normalized_name="commons-text",
+        version_normalized="1.9",
+        ecosystem="maven",
+        purl="pkg:maven/org.apache.commons/commons-text@1.9",
+    )
+    db.add_all([project, upload, scan, component])
+    db.flush()
+    if external_source:
+        db.add(
+            models.VulnerabilityRecord(
+                project_id=project.id,
+                component_id=component.id,
+                source=external_source,
+                advisory_id="CVE-2022-42889",
+                cve_id="CVE-2022-42889",
+                package_name="commons-text",
+                package_version="1.9",
+                ecosystem="maven",
+                severity="critical",
+                match_status="affected",
+                needs_human_review=False,
+                gate_eligible=True,
+            )
+        )
+    db.add(
+        models.MergedVulnerability(
+            project_id=project.id,
+            scan_id=scan.id,
+            vulnerability_id="CVE-2022-42889",
+            cve_id="CVE-2022-42889",
+            detected_by_engines='["dependency-check"]',
+            vulnerability_sources_json=json.dumps(
+                [
+                    {
+                        "source_engine": "dependency-check",
+                        "affected_purl": component.purl,
+                        "affected_package": component.package_name,
+                        "current_version": component.package_version,
+                        "references": ["https://nvd.nist.gov/vuln/detail/CVE-2022-42889"],
+                    }
+                ]
+            ),
+            confirmation_status="single_source",
+            gate_eligible=False,
+            need_manual_review=True,
+            review_reason="Dependency-Check 单引擎发现，等待其他引擎确认",
+        )
+    )
+    db.commit()
+    return project.id, scan.id
+
+
+def test_single_source_dependency_check_is_promoted_as_pending_review(tmp_path: Path):
+    from app.scanner_result_service import promote_dependency_check_findings
+
+    Session = _session_factory(tmp_path)
+    with Session() as db:
+        project_id, scan_id = _seed_promotion_rows(db)
+
+        created = promote_dependency_check_findings(db, project_id, scan_id)
+        db.commit()
+
+        finding = db.query(models.VulnerabilityRecord).filter_by(project_id=project_id).one()
+        assert created == 1
+        assert finding.source == "dependency-check"
+        assert finding.match_status == "unknown"
+        assert finding.needs_human_review is True
+        assert finding.gate_eligible is False
+        assert finding.confirmation_status == "single_source"
+
+
+def test_external_vulnerability_remains_gate_eligible_when_dependency_check_confirms(tmp_path: Path):
+    from app.scanner_result_service import promote_dependency_check_findings
+
+    Session = _session_factory(tmp_path)
+    with Session() as db:
+        project_id, scan_id = _seed_promotion_rows(db, external_source="osv")
+
+        created = promote_dependency_check_findings(db, project_id, scan_id)
+        db.commit()
+
+        external = db.query(models.VulnerabilityRecord).filter_by(project_id=project_id).one()
+        assert created == 0
+        assert external.gate_eligible is True
+        assert external.match_status == "affected"
+        assert external.needs_human_review is False
+        assert external.confirmation_status == "cross_confirmed"
+        assert set(json.loads(external.confirmation_engines)) == {"dependency-check", "osv"}
