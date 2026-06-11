@@ -36,14 +36,23 @@ export const isLocalPreviewHost = (hostname: string) =>
   || hostname === '127.0.0.1'
   || hostname === '::1'
 
-export const shouldUseLocalPreviewFallback = ({
-  hostname,
-  isMock,
-  hasEnvelope,
-  state,
-}: {
-  hostname: string
-  isMock: boolean
-  hasEnvelope: boolean
-  state: 'idle' | 'loading' | 'live' | 'stale' | 'error'
-}) => !isMock && !hasEnvelope && state === 'error' && isLocalPreviewHost(hostname)
+export const buildUnifiedLoginUrl = (currentHref: string) => {
+  const currentUrl = new URL(currentHref)
+  const loginUrl = new URL(
+    isLocalPreviewHost(currentUrl.hostname)
+      ? `${currentUrl.protocol}//${currentUrl.hostname}:5180/portal`
+      : '/portal',
+    currentUrl.origin,
+  )
+  loginUrl.searchParams.set('system', 'big-screen')
+  return loginUrl.toString()
+}
+
+export const navigateToUnifiedLogin = (currentHref: string) => {
+  const target = buildUnifiedLoginUrl(currentHref)
+  try {
+    window.location.assign(target)
+  } catch (_error) {
+    window.location.href = target
+  }
+}

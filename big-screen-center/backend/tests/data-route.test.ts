@@ -7,6 +7,39 @@ import type { MetricAdapter } from '../src/adapters/types.js'
 import type { MetricEnvelope } from '../src/contracts.js'
 
 describe('big-screen data route', () => {
+  it('exposes a lightweight auth check for protected screen entries', async () => {
+    const app = createApp({
+      authorize: async () => ({
+        user: { id: 7, username: 'viewer', role: 'user' },
+        apps: ['big-screen', 'sca'],
+        allowedSystems: ['sca'],
+        screenRole: 'viewer',
+        scope: {},
+      }),
+    })
+
+    const response = await request(app)
+      .get('/api/big-screen/auth/check')
+      .set('Cookie', 'juxin_auth_token=test')
+
+    expect(response.status).toBe(204)
+    expect(response.text).toBe('')
+  })
+
+  it('rejects the auth check when unified login is missing', async () => {
+    const app = createApp({
+      authorize: async () => {
+        throw Object.assign(new Error('请先登录'), { statusCode: 401 })
+      },
+    })
+
+    const response = await request(app)
+      .get('/api/big-screen/auth/check')
+
+    expect(response.status).toBe(401)
+    expect(response.body.error).toBe('请先登录')
+  })
+
   it('returns stale snapshot when the source times out', async () => {
     const okEnvelope: MetricEnvelope<{ total: number }> = {
       schemaVersion: '1.0',

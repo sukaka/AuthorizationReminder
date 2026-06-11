@@ -76,6 +76,15 @@ export const createDataRouter = ({
 }: DataRouterOptions) => {
   const router = Router()
 
+  router.get('/auth/check', async (request, response) => {
+    try {
+      await authorize(request)
+      response.status(204).end()
+    } catch (error) {
+      sendError(response, error)
+    }
+  })
+
   router.get('/data/:systemKey/:metricKey', async (request, response) => {
     try {
       const auth = await authorize(request)

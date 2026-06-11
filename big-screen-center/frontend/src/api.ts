@@ -1,3 +1,5 @@
+import { navigateToUnifiedLogin } from './preview-data'
+
 export class ApiError extends Error {
   constructor(
     message: string,
@@ -6,6 +8,12 @@ export class ApiError extends Error {
     super(message)
     this.name = 'ApiError'
   }
+}
+
+const redirectToLoginOnUnauthorized = () => {
+  if (typeof window === 'undefined') return
+  if (new URLSearchParams(window.location.search).get('mock') === '1') return
+  navigateToUnifiedLogin(window.location.href)
 }
 
 export async function apiRequest<T>(
@@ -28,6 +36,7 @@ export async function apiRequest<T>(
     error?: string
   }
   if (!response.ok) {
+    if (response.status === 401) redirectToLoginOnUnauthorized()
     throw new ApiError(payload.error || '大屏服务请求失败', response.status)
   }
   return payload as T

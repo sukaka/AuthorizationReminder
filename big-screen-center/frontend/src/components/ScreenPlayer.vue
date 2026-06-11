@@ -1,12 +1,12 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 
 import { useDataChannel } from '../composables/useDataChannel'
 import { usePerformanceProfile } from '../composables/usePerformanceProfile'
 import { useScreenScale } from '../composables/useScreenScale'
 import {
+  navigateToUnifiedLogin,
   previewData,
-  shouldUseLocalPreviewFallback,
 } from '../preview-data'
 import type { JsonValue, ScreenTemplate } from '../types'
 import SourceHealthBar from './SourceHealthBar.vue'
@@ -42,6 +42,7 @@ const isMock = computed(() =>
   ),
 )
 const channelEnabled = computed(() => !isMock.value)
+const redirectingToLogin = ref(false)
 const channel = useDataChannel({
   systemKey,
   metricKey,
@@ -49,17 +50,28 @@ const channel = useDataChannel({
   mode,
   intervalMs,
   enabled: channelEnabled,
+  onUnauthorized: () => {
+    if (redirectingToLogin.value || typeof window === 'undefined') return
+    redirectingToLogin.value = true
+    navigateToUnifiedLogin(window.location.href)
+  },
 })
-const usePreviewFallback = computed(() =>
-  typeof window !== 'undefined'
-  && shouldUseLocalPreviewFallback({
-    hostname: window.location.hostname,
-    isMock: isMock.value,
-    hasEnvelope: Boolean(channel.envelope.value),
-    state: channel.state.value,
-  }),
+watch(
+  [channel.errorStatusCode, channel.error, isMock],
+  ([statusCode, errorMessage, mockMode]) => {
+    if (
+      mockMode
+      || redirectingToLogin.value
+      || typeof window === 'undefined'
+      || (statusCode !== 401 && errorMessage !== '请先登录')
+    ) {
+      return
+    }
+    redirectingToLogin.value = true
+    navigateToUnifiedLogin(window.location.href)
+  },
 )
-const usePreviewData = computed(() => isMock.value || usePreviewFallback.value)
+const usePreviewData = computed(() => isMock.value)
 const data = computed<JsonValue>(() =>
   usePreviewData.value
     ? previewData[props.template.systemKey]

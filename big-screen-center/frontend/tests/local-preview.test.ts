@@ -1,42 +1,33 @@
 import { describe, expect, it } from 'vitest'
 
 import {
+  buildUnifiedLoginUrl,
   isLocalPreviewHost,
-  shouldUseLocalPreviewFallback,
 } from '../src/preview-data'
 
-describe('local preview fallback', () => {
+describe('local preview helpers', () => {
   it.each(['localhost', '127.0.0.1', '::1'])(
-    'allows local preview data on %s',
+    'recognizes local preview host %s',
     (hostname) => {
       expect(isLocalPreviewHost(hostname)).toBe(true)
     },
   )
 
-  it('uses preview data for local API failures before an envelope exists', () => {
-    expect(shouldUseLocalPreviewFallback({
-      hostname: '127.0.0.1',
-      isMock: false,
-      hasEnvelope: false,
-      state: 'error',
-    })).toBe(true)
+  it('builds the unified login URL on 127.0.0.1', () => {
+    expect(buildUnifiedLoginUrl('http://127.0.0.1:18092/play/train-03')).toBe(
+      'http://127.0.0.1:5180/portal?system=big-screen',
+    )
   })
 
-  it('does not hide production API failures', () => {
-    expect(shouldUseLocalPreviewFallback({
-      hostname: 'dashboard.example.com',
-      isMock: false,
-      hasEnvelope: false,
-      state: 'error',
-    })).toBe(false)
+  it('builds the unified login URL on localhost', () => {
+    expect(buildUnifiedLoginUrl('http://localhost:18092/play/sca-03')).toBe(
+      'http://localhost:5180/portal?system=big-screen',
+    )
   })
 
-  it('does not replace a real envelope after data has loaded once', () => {
-    expect(shouldUseLocalPreviewFallback({
-      hostname: 'localhost',
-      isMock: false,
-      hasEnvelope: true,
-      state: 'error',
-    })).toBe(false)
+  it('uses the same origin portal path outside local preview', () => {
+    expect(buildUnifiedLoginUrl('https://dashboard.example.com/play/sca-03')).toBe(
+      'https://dashboard.example.com/portal?system=big-screen',
+    )
   })
 })

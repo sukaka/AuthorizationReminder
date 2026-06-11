@@ -16,6 +16,7 @@ interface DataChannelOptions {
   mode: Ref<RefreshMode>
   intervalMs: Ref<number>
   enabled?: Ref<boolean>
+  onUnauthorized?: () => void
 }
 
 const queryString = (filters: Record<string, JsonValue>) => {
@@ -30,6 +31,12 @@ const queryString = (filters: Record<string, JsonValue>) => {
   }
   const query = params.toString()
   return query ? `?${query}` : ''
+}
+
+const getApiStatusCode = (error: unknown) => {
+  if (error instanceof ApiError) return error.statusCode
+  const candidate = error as { statusCode?: unknown }
+  return typeof candidate.statusCode === 'number' ? candidate.statusCode : null
 }
 
 export function useDataChannel(options: DataChannelOptions) {
@@ -61,9 +68,10 @@ export function useDataChannel(options: DataChannelOptions) {
     } catch (requestError) {
       state.value = 'error'
       error.value = requestError instanceof Error ? requestError.message : '大屏数据加载失败'
-      errorStatusCode.value = requestError instanceof ApiError
-        ? requestError.statusCode
-        : null
+      errorStatusCode.value = getApiStatusCode(requestError)
+      if (errorStatusCode.value === 401 || error.value === '请先登录') {
+        options.onUnauthorized?.()
+      }
     }
   }
 

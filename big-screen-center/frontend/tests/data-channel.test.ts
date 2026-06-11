@@ -59,4 +59,31 @@ describe('useDataChannel', () => {
     })
     wrapper.unmount()
   })
+
+  it('calls onUnauthorized when a data request returns 401', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(
+      JSON.stringify({ error: '请先登录' }),
+      { status: 401, headers: { 'Content-Type': 'application/json' } },
+    )))
+    const onUnauthorized = vi.fn()
+
+    const wrapper = mount(defineComponent({
+      setup() {
+        return useDataChannel({
+          systemKey: ref('train-exam'),
+          metricKey: ref('organization-capability'),
+          filters: ref({}),
+          mode: ref('poll'),
+          intervalMs: ref(60_000),
+          onUnauthorized,
+        })
+      },
+      template: '<div />',
+    }))
+
+    await vi.waitFor(() => {
+      expect(onUnauthorized).toHaveBeenCalledTimes(1)
+    })
+    wrapper.unmount()
+  })
 })
