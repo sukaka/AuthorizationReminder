@@ -4,6 +4,10 @@ import { computed, ref } from 'vue'
 import { useDataChannel } from '../composables/useDataChannel'
 import { usePerformanceProfile } from '../composables/usePerformanceProfile'
 import { useScreenScale } from '../composables/useScreenScale'
+import {
+  previewData,
+  shouldUseLocalPreviewFallback,
+} from '../preview-data'
 import type { JsonValue, ScreenTemplate } from '../types'
 import SourceHealthBar from './SourceHealthBar.vue'
 import WidgetHost from './widgets/WidgetHost.vue'
@@ -11,37 +15,6 @@ import WidgetHost from './widgets/WidgetHost.vue'
 const props = defineProps<{
   template: ScreenTemplate
 }>()
-
-const mockData: Record<string, Record<string, JsonValue>> = {
-  sca: {
-    totalProjects: 6631,
-    criticalRisks: 48,
-    vulnerableComponents: 1276,
-    healthyRate: 86,
-    high: 48,
-    medium: 179,
-    low: 463,
-  },
-  'train-exam': {
-    activeCourses: 128,
-    learners: 8426,
-    completionRate: 91,
-    certificates: 3268,
-    mandatory: 96,
-    elective: 72,
-    overdue: 17,
-  },
-  reminder: {
-    expiring7d: 42,
-    expiring30d: 186,
-    riskAmount: 2680,
-    deliveryRate: 94,
-    day7: 42,
-    day30: 186,
-    day60: 324,
-    day90: 491,
-  },
-}
 
 const { transform } = useScreenScale()
 const { profile } = usePerformanceProfile(props.template.effectsProfile)
@@ -77,21 +50,37 @@ const channel = useDataChannel({
   intervalMs,
   enabled: channelEnabled,
 })
+const usePreviewFallback = computed(() =>
+  typeof window !== 'undefined'
+  && shouldUseLocalPreviewFallback({
+    hostname: window.location.hostname,
+    isMock: isMock.value,
+    hasEnvelope: Boolean(channel.envelope.value),
+    state: channel.state.value,
+  }),
+)
+const usePreviewData = computed(() => isMock.value || usePreviewFallback.value)
 const data = computed<JsonValue>(() =>
-  isMock.value
-    ? mockData[props.template.systemKey]
+  usePreviewData.value
+    ? previewData[props.template.systemKey]
     : channel.envelope.value?.data || {},
 )
 const dataStatus = computed(() => {
-  if (isMock.value) return 'mock' as const
+  if (usePreviewData.value) return 'mock' as const
   if (channel.envelope.value) return channel.envelope.value.status
   return channel.state.value === 'loading' ? 'loading' : 'error'
 })
 const generatedAt = computed(() =>
-  isMock.value
+  usePreviewData.value
     ? new Date().toISOString()
     : channel.envelope.value?.generatedAt || null,
 )
+const stale = computed(() => usePreviewData.value
+  ? false
+  : channel.envelope.value?.stale || false)
+const unavailableSources = computed(() => usePreviewData.value
+  ? []
+  : channel.envelope.value?.unavailableSources || [])
 const canvasStyle = computed(() => ({
   width: `${transform.value.designWidth}px`,
   height: `${transform.value.designHeight}px`,
@@ -117,8 +106,8 @@ const canvasStyle = computed(() => ({
           <SourceHealthBar
             :status="dataStatus"
             :generated-at="generatedAt"
-            :stale="channel.envelope.value?.stale || false"
-            :unavailable-sources="channel.envelope.value?.unavailableSources || []"
+            :stale="stale"
+            :unavailable-sources="unavailableSources"
           />
           <strong>{{ new Date().toLocaleDateString('zh-CN') }}</strong>
           <RouterLink class="screen-exit" to="/">模板目录</RouterLink>

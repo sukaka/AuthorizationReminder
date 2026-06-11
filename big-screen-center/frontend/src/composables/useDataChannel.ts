@@ -1,6 +1,7 @@
 import { onUnmounted, ref, shallowRef, watch, type Ref } from 'vue'
 
 import { apiRequest } from '../api'
+import { ApiError } from '../api'
 import type {
   JsonValue,
   MetricEnvelope,
@@ -35,6 +36,7 @@ export function useDataChannel(options: DataChannelOptions) {
   const envelope = shallowRef<MetricEnvelope | null>(null)
   const state = ref<'idle' | 'loading' | 'live' | 'stale' | 'error'>('idle')
   const error = ref('')
+  const errorStatusCode = ref<number | null>(null)
   let timer = 0
   let eventSource: EventSource | null = null
 
@@ -55,9 +57,13 @@ export function useDataChannel(options: DataChannelOptions) {
       envelope.value = next
       state.value = next.stale ? 'stale' : next.status === 'error' ? 'error' : 'live'
       error.value = ''
+      errorStatusCode.value = null
     } catch (requestError) {
       state.value = 'error'
       error.value = requestError instanceof Error ? requestError.message : '大屏数据加载失败'
+      errorStatusCode.value = requestError instanceof ApiError
+        ? requestError.statusCode
+        : null
     }
   }
 
@@ -71,6 +77,7 @@ export function useDataChannel(options: DataChannelOptions) {
     if (options.enabled?.value === false) {
       state.value = 'idle'
       error.value = ''
+      errorStatusCode.value = null
       return
     }
     if (options.mode.value !== 'sse' || typeof EventSource === 'undefined') {
@@ -105,5 +112,5 @@ export function useDataChannel(options: DataChannelOptions) {
   )
   onUnmounted(stop)
 
-  return { envelope, state, error, refresh: load, stop }
+  return { envelope, state, error, errorStatusCode, refresh: load, stop }
 }
