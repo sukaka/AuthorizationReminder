@@ -133,6 +133,36 @@ describe('metric adapters', () => {
     ])
   })
 
+  it('projects nested upstream numbers into top-level screen metrics', async () => {
+    const reminder = createReminderAdapter({
+      baseUrl: 'http://api:5179',
+      fetchImpl: vi.fn(async () => jsonResponse({
+        expiring7d: 42,
+        expiring30d: 186,
+        riskAmount: 2680,
+        deliveryRate: 94,
+        trend: [{ day: '2026-06-12', total: 7 }],
+      })),
+    })
+
+    const envelope = await reminder.getMetric('expiry-risk', {}, {})
+
+    expect(envelope.status).toBe('ok')
+    expect(envelope.data).toMatchObject({
+      expiring7d: 42,
+      expiring30d: 186,
+      riskAmount: 2680,
+      deliveryRate: 94,
+      trendCount: 1,
+      dashboard: {
+        expiring7d: 42,
+        expiring30d: 186,
+        riskAmount: 2680,
+        deliveryRate: 94,
+      },
+    })
+  })
+
   it('does not share scoped metric responses between users', async () => {
     let calls = 0
     const source: MetricAdapter = {
