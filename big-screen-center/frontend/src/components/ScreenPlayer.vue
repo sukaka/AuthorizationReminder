@@ -111,7 +111,7 @@ const canvasStyle = computed(() => ({
     >
       <header class="screen-heading">
         <div>
-          <span>JX / VISUAL OPERATIONS</span>
+          <span>聚信 / 可视化运营</span>
           <h1>{{ template.name }}</h1>
         </div>
         <div class="screen-heading__meta">

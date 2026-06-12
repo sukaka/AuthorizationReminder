@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 
+import { widgetTitle } from '../../metric-labels'
 import { resolveSceneLoader, type ManagedScene } from '../../registry/scenes'
 import type { EffectsProfile, JsonValue, WidgetDefinition } from '../../types'
 import EChartPanel from './EChartPanel.vue'
@@ -17,6 +18,7 @@ let managedScene: ManagedScene | null = null
 let observer: ResizeObserver | null = null
 
 const sceneKey = computed(() => String(props.widget.config.visualKey || ''))
+const sceneTitle = computed(() => widgetTitle(sceneKey.value))
 const fallbackWidget = computed<WidgetDefinition>(() => ({
   ...props.widget,
   type: 'echart',
@@ -88,8 +90,8 @@ onUnmounted(() => {
     />
     <div v-else ref="host" class="three-scene__canvas" />
     <div class="three-scene__label">
-      <span>LIVE MODEL</span>
-      <strong>{{ sceneKey }}</strong>
+      <span>实时模型</span>
+      <strong>{{ sceneTitle }}</strong>
     </div>
   </section>
 </template>

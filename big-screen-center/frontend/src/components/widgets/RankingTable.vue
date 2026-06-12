@@ -31,7 +31,7 @@ const title = computed(() => widgetTitle(props.widget.config.variant))
     <div class="ranking-table__content">
       <header>
         <span>排行 / {{ title }}</span>
-        <strong>TOP {{ rows.length }}</strong>
+        <strong>前 {{ rows.length }} 项</strong>
       </header>
       <ol>
         <li v-for="([key, value], index) in rows" :key="key">

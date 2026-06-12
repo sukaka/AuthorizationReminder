@@ -31,7 +31,7 @@ const systemLabel = (key: SystemKey) =>
     <p v-if="notice" class="catalog__notice" role="status">{{ notice }}</p>
     <header class="catalog__header">
       <div>
-        <p class="section-code">CATALOG / 12</p>
+        <p class="section-code">模板目录 / 12</p>
         <h1>选择一个视角，<br class="desktop-break">让系统开始叙事。</h1>
       </div>
       <p class="catalog__brief">
@@ -66,8 +66,8 @@ const systemLabel = (key: SystemKey) =>
         </div>
         <div class="template-row__meta">
           <span>{{ template.layouts.widescreen.width }} × {{ template.layouts.widescreen.height }}</span>
-          <span>{{ template.effectsProfile.toUpperCase() }}</span>
-          <span>{{ template.refreshPolicy.mode.toUpperCase() }}</span>
+          <span>{{ template.effectsProfile === 'high' ? '高动效' : template.effectsProfile }}</span>
+          <span>{{ template.refreshPolicy.mode === 'sse' ? '实时推送' : '定时刷新' }}</span>
         </div>
         <div class="template-row__actions">
           <RouterLink :to="`/play/${template.id}`">进入预览</RouterLink>

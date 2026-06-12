@@ -5,7 +5,7 @@
         <span class="brand__mark">JX</span>
         <span>
           <strong>统一大屏展示中心</strong>
-          <small>VISUAL OPERATIONS ATLAS</small>
+          <small>可视化运营图谱</small>
         </span>
       </RouterLink>
       <div class="topline__status">

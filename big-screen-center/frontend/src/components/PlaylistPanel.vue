@@ -24,7 +24,7 @@ defineEmits<{
     data-mobile-playback-controls
   >
     <div>
-      <span>PLAYLIST / {{ currentIndex + 1 }} OF {{ items.length }}</span>
+      <span>播放清单 / 第 {{ currentIndex + 1 }} 项 / 共 {{ items.length }} 项</span>
       <strong>{{ items[currentIndex]?.templateId }}</strong>
     </div>
     <div class="playlist-panel__controls">

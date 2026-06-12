@@ -11,6 +11,15 @@ const props = defineProps<{
 }>()
 
 const visibleStatus = computed(() => props.stale ? 'stale' : props.status)
+const statusLabel = computed(() => ({
+  empty: '无数据',
+  error: '异常',
+  loading: '加载中',
+  mock: '演示',
+  ok: '正常',
+  partial: '部分可用',
+  stale: '已过期',
+})[visibleStatus.value] || '未知')
 
 const formatTime = (value: string | null) => {
   if (!value) return '等待数据'
@@ -25,7 +34,7 @@ const formatTime = (value: string | null) => {
   <div class="source-health" :data-source-status="visibleStatus">
     <span :class="`source-health__dot source-health__dot--${visibleStatus}`" />
     <div>
-      <strong>{{ visibleStatus.toUpperCase() }}</strong>
+      <strong>{{ statusLabel }}</strong>
       <small>生成 {{ formatTime(generatedAt) }}</small>
     </div>
     <em v-if="unavailableSources.length">
