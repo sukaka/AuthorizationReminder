@@ -1,3 +1,5 @@
+name: codex-new
+
 x-build-args-root-app: &build_args_root_app
   NODE_20_BOOKWORM_IMAGE: ${NODE_20_BOOKWORM_IMAGE:-node:20-bookworm}
   NODE_20_BOOKWORM_SLIM_IMAGE: ${NODE_20_BOOKWORM_SLIM_IMAGE:-node:20-bookworm-slim}
@@ -880,7 +882,7 @@ services:
       MYSQL_PORT: 3306
       MYSQL_DATABASE: juxin_big_screen
       MYSQL_USER: big_screen_user
-      MYSQL_PASSWORD: ${BIG_SCREEN_MYSQL_PASSWORD}
+      MYSQL_PASSWORD: ${BIG_SCREEN_MYSQL_PASSWORD:-${MYSQL_SHARED_APP_PASSWORD}}
       MYSQL_ADMIN_USER: root
       MYSQL_ADMIN_PASSWORD: ${MYSQL_ROOT_PASSWORD}
       SCA_API_URL: "http://sca-api:5191"
