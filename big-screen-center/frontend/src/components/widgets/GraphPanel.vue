@@ -3,6 +3,7 @@ import { Graph } from '@antv/g6'
 import { onMounted, onUnmounted, ref } from 'vue'
 
 import type { EffectsProfile, JsonValue, WidgetDefinition } from '../../types'
+import { metricLabel, numericMetricEntries, widgetTitle } from '../../metric-labels'
 
 const props = defineProps<{
   widget: WidgetDefinition
@@ -14,21 +15,14 @@ const host = ref<HTMLElement | null>(null)
 let graph: Graph | null = null
 let observer: ResizeObserver | null = null
 
-const numericEntries = () => {
-  if (!props.data || typeof props.data !== 'object' || Array.isArray(props.data)) return []
-  return Object.entries(props.data)
-    .filter((entry): entry is [string, number] => typeof entry[1] === 'number')
-    .slice(0, 9)
-}
-
 onMounted(async () => {
   if (!host.value) return
-  const entries = numericEntries()
+  const entries = numericMetricEntries(props.data, 9)
   const nodes = [
-    { id: 'hub', data: { label: String(props.widget.config.visualKey || 'CORE') } },
+    { id: 'hub', data: { label: widgetTitle(props.widget.config.variant || props.widget.config.visualKey || 'core') } },
     ...entries.map(([key, value], index) => ({
       id: key,
-      data: { label: key, value },
+      data: { label: metricLabel(key), value },
       style: { size: 22 + Math.min(value / 100, 28), x: 120 + (index % 3) * 180, y: 110 + Math.floor(index / 3) * 150 },
     })),
   ]
@@ -74,7 +68,7 @@ onUnmounted(() => {
 <template>
   <section class="graph-panel" data-widget="graph" data-widget-type="graph">
     <div ref="host" class="graph-panel__canvas" />
-    <span>{{ widget.config.variant }}</span>
+    <span>{{ widgetTitle(widget.config.variant) }}</span>
   </section>
 </template>
 

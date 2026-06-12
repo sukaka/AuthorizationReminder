@@ -10,6 +10,7 @@ import {
 import { CanvasRenderer } from 'echarts/renderers'
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 
+import { metricLabel, numericMetricEntries } from '../../metric-labels'
 import type { EffectsProfile, JsonValue, WidgetDefinition } from '../../types'
 import ParticleVeil from './ParticleVeil.vue'
 
@@ -27,36 +28,8 @@ let observer: ResizeObserver | null = null
 let glReady = false
 let entranceAnimation: { cancel?: () => void } | null = null
 
-const axisLabels: Record<string, string> = {
-  totalProjects: '项目',
-  criticalRisks: '严重',
-  vulnerableComponents: '组件',
-  healthyRate: '健康',
-  activeCourses: '课程',
-  learners: '学员',
-  completionRate: '完成',
-  certificates: '证书',
-  expiring7d: '7天',
-  expiring30d: '30天',
-  riskAmount: '金额',
-  deliveryRate: '触达',
-  mandatory: '必修',
-  elective: '选修',
-  overdue: '逾期',
-  high: '高危',
-  medium: '中危',
-  low: '低危',
-  day7: '7天',
-  day30: '30天',
-  day60: '60天',
-  day90: '90天',
-}
-
 const numericEntries = computed(() => {
-  if (!props.data || typeof props.data !== 'object' || Array.isArray(props.data)) return []
-  return Object.entries(props.data)
-    .filter((entry): entry is [string, number] => typeof entry[1] === 'number')
-    .slice(0, 7)
+  return numericMetricEntries(props.data, 7)
 })
 
 const visualKey = computed(() => String(props.widget.config.visualKey || ''))
@@ -87,7 +60,7 @@ const render = async () => {
           polar: { radius: ['28%', '78%'] },
           angleAxis: {
             type: 'category',
-            data: entries.map(([key]) => axisLabels[key] || key),
+            data: entries.map(([key]) => metricLabel(key)),
             axisLabel: { color: '#c7baa4', fontSize: 10 },
           },
           radiusAxis: { axisLabel: { show: false }, splitLine: { lineStyle: { color: '#584c3d' } } },
@@ -118,7 +91,7 @@ const render = async () => {
             },
             xAxis3D: {
               type: 'category',
-              data: entries.map(([key]) => axisLabels[key] || key),
+              data: entries.map(([key]) => metricLabel(key)),
               axisLabel: { color: '#c7baa4' },
             },
             yAxis3D: { type: 'value', max: 1, axisLabel: { show: false } },
@@ -136,7 +109,7 @@ const render = async () => {
           grid: { left: 36, right: 20, top: 30, bottom: 34 },
           xAxis: {
             type: 'category',
-            data: entries.map(([key]) => axisLabels[key] || key),
+            data: entries.map(([key]) => metricLabel(key)),
             axisLabel: { color: '#9f927d', interval: 0 },
             axisLine: { lineStyle: { color: '#584c3d' } },
           },

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 
+import { metricLabel, numericMetricEntries } from '../../metric-labels'
 import type { EffectsProfile, JsonValue, WidgetDefinition } from '../../types'
 
 const props = defineProps<{
@@ -9,29 +10,11 @@ const props = defineProps<{
   performanceProfile: EffectsProfile
 }>()
 
-const labels: Record<string, string> = {
-  totalProjects: '项目总量',
-  criticalRisks: '严重风险',
-  vulnerableComponents: '风险组件',
-  healthyRate: '健康率',
-  activeCourses: '进行中课程',
-  learners: '参训人数',
-  completionRate: '完成率',
-  certificates: '证书签发',
-  expiring7d: '7 天到期',
-  expiring30d: '30 天到期',
-  riskAmount: '风险金额',
-  deliveryRate: '提醒触达率',
-}
-
 const cards = computed(() => {
-  if (!props.data || typeof props.data !== 'object' || Array.isArray(props.data)) return []
-  return Object.entries(props.data)
-    .filter((entry): entry is [string, number] => typeof entry[1] === 'number')
-    .slice(0, 4)
+  return numericMetricEntries(props.data, 4)
     .map(([key, value]) => ({
       key,
-      label: labels[key] || key.replace(/([A-Z])/g, ' $1').trim(),
+      label: metricLabel(key),
       value,
       suffix: key.toLowerCase().includes('rate') ? '%' : '',
     }))

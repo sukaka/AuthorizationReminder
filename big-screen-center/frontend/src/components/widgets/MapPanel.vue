@@ -4,6 +4,7 @@ import 'maplibre-gl/dist/maplibre-gl.css'
 import { onMounted, onUnmounted, ref } from 'vue'
 
 import type { EffectsProfile, JsonValue, WidgetDefinition } from '../../types'
+import { widgetTitle } from '../../metric-labels'
 
 defineProps<{
   widget: WidgetDefinition
@@ -34,8 +35,8 @@ onUnmounted(() => map?.remove())
   <section class="map-panel" data-widget="map" data-widget-type="map">
     <div ref="host" class="map-panel__canvas" />
     <div class="map-panel__legend">
-      <span>LOCAL GEOJSON</span>
-      <strong>{{ widget.config.variant }}</strong>
+      <span>本地离线地图</span>
+      <strong>{{ widgetTitle(widget.config.variant) }}</strong>
     </div>
   </section>
 </template>

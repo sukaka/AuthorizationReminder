@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 
+import { metricLabel, numericMetricEntries, widgetTitle } from '../../metric-labels'
 import type { EffectsProfile, JsonValue, WidgetDefinition } from '../../types'
 import TechFrame from './TechFrame.vue'
 
@@ -11,14 +12,13 @@ const props = defineProps<{
 }>()
 
 const rows = computed(() => {
-  if (!props.data || typeof props.data !== 'object' || Array.isArray(props.data)) return []
-  return Object.entries(props.data)
-    .filter((entry): entry is [string, number] => typeof entry[1] === 'number')
+  return numericMetricEntries(props.data, 30)
     .sort((left, right) => right[1] - left[1])
     .slice(0, 8)
 })
 
 const maximum = computed(() => Math.max(...rows.value.map((row) => row[1]), 1))
+const title = computed(() => widgetTitle(props.widget.config.variant))
 </script>
 
 <template>
@@ -30,14 +30,14 @@ const maximum = computed(() => Math.max(...rows.value.map((row) => row[1]), 1))
   >
     <div class="ranking-table__content">
       <header>
-        <span>RANK / {{ widget.config.variant }}</span>
+        <span>排行 / {{ title }}</span>
         <strong>TOP {{ rows.length }}</strong>
       </header>
       <ol>
         <li v-for="([key, value], index) in rows" :key="key">
           <b>{{ String(index + 1).padStart(2, '0') }}</b>
           <div>
-            <span>{{ key }}</span>
+            <span>{{ metricLabel(key) }}</span>
             <i :style="{ width: `${(value / maximum) * 100}%` }" />
           </div>
           <strong>{{ value.toLocaleString() }}</strong>
