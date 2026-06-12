@@ -2,6 +2,14 @@ export type SystemKey = 'sca' | 'train-exam' | 'reminder'
 export type EffectsProfile = 'high' | 'medium' | 'low'
 export type LayoutKey = 'widescreen' | 'ultrawide'
 export type RefreshMode = 'poll' | 'sse' | 'manual'
+export type InteractionSource =
+  | 'metric-card'
+  | 'echart'
+  | 'ranking'
+  | 'status-matrix'
+  | 'graph'
+  | 'map'
+  | 'three'
 export type RegisteredWidgetType =
   | 'metric-cards'
   | 'echart'
@@ -44,6 +52,29 @@ export interface FilterDefinition {
   required: boolean
 }
 
+export interface MetricInteractionDefinition {
+  key: string
+  label: string
+  group: string
+  relatedKeys: string[]
+  detailPath: string
+  description: string
+}
+
+export interface InteractionTarget extends MetricInteractionDefinition {
+  value?: number | string
+  unit?: string
+  source: InteractionSource
+  sourceWidgetId: string
+  templateId: string
+  filters: Record<string, string | number | boolean>
+}
+
+export interface InteractionSnapshot {
+  hovered: InteractionTarget | null
+  locked: InteractionTarget | null
+}
+
 export interface ScreenTemplate {
   id: string
   systemKey: SystemKey
@@ -54,6 +85,7 @@ export interface ScreenTemplate {
   layouts: Record<LayoutKey, LayoutDefinition>
   widgets: WidgetDefinition[]
   filters: FilterDefinition[]
+  interactions: MetricInteractionDefinition[]
   refreshPolicy: {
     mode: RefreshMode
     intervalMs: number

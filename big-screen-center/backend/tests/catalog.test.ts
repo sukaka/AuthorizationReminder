@@ -65,6 +65,16 @@ const baseTemplate = {
     },
   ],
   filters: [],
+  interactions: [
+    {
+      key: 'criticalRisks',
+      label: '严重风险',
+      group: 'risk',
+      relatedKeys: [],
+      detailPath: '/',
+      description: '严重风险数量',
+    },
+  ],
   refreshPolicy: { mode: 'poll', intervalMs: 30000 },
 } as const
 
@@ -153,6 +163,38 @@ describe('ScreenTemplateSchema', () => {
 })
 
 describe('screenCatalog', () => {
+  it('accepts catalog interactions and rejects unsafe detail paths', () => {
+    const parsed = ScreenTemplateSchema.parse(screenCatalog[0])
+    const interactions = parsed.interactions
+
+    expect(
+      interactions.length > 0
+        && interactions.every((item) => item.detailPath === '/'),
+    ).toBe(true)
+
+    for (const detailPath of [
+      'javascript:alert(1)',
+      '//evil.example/a',
+      'https://evil.example/a',
+    ]) {
+      expect(() =>
+        ScreenTemplateSchema.parse({
+          ...screenCatalog[0],
+          interactions: [
+            {
+              key: 'criticalRisks',
+              label: '严重风险',
+              group: 'risk',
+              relatedKeys: [],
+              detailPath,
+              description: '严重风险数量',
+            },
+          ],
+        }),
+      ).toThrow()
+    }
+  })
+
   it('contains twelve schema-valid templates distributed 5/4/3', () => {
     expect(screenCatalog).toHaveLength(12)
     expect(screenCatalog.map((template) => ScreenTemplateSchema.parse(template))).toHaveLength(12)

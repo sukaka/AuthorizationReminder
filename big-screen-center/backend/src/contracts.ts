@@ -96,6 +96,25 @@ export const WidgetSchema = z
     { message: 'Widget min size must not exceed max size' },
   )
 
+const MetricKeySchema = z.string().regex(/^[a-zA-Z][a-zA-Z0-9_]*$/)
+const SafeDetailPathSchema = z.string().regex(
+  /^(?:\/|\/[a-zA-Z0-9_-]+(?:\/[a-zA-Z0-9_-]+)*\/?)$/,
+)
+
+export const MetricInteractionSchema = z
+  .object({
+    key: MetricKeySchema,
+    label: z.string().min(1).max(40),
+    group: z.string().regex(/^[a-z][a-z0-9-]*$/),
+    relatedKeys: z.array(MetricKeySchema),
+    detailPath: SafeDetailPathSchema,
+    description: z.string().min(2).max(160),
+  })
+  .refine((interaction) => !interaction.relatedKeys.includes(interaction.key), {
+    message: 'Interaction related keys must not include itself',
+    path: ['relatedKeys'],
+  })
+
 export const ScreenTemplateSchema = z
   .object({
     id: z.string().regex(/^(sca|train|remind)-0[1-9]$/),
@@ -116,6 +135,7 @@ export const ScreenTemplateSchema = z
         required: z.boolean(),
       }),
     ),
+    interactions: z.array(MetricInteractionSchema).min(1),
     refreshPolicy: z.object({
       mode: z.enum(['poll', 'sse', 'manual']),
       intervalMs: z.number().int().min(5000).max(600000),
@@ -129,6 +149,9 @@ export const ScreenTemplateSchema = z
     }[template.systemKey]
     const widescreenAreas = new Set(template.layouts.widescreen.areas)
     const ultrawideAreas = new Set(template.layouts.ultrawide.areas)
+    const interactionsByKey = new Map(
+      template.interactions.map((interaction) => [interaction.key, interaction]),
+    )
 
     if (!template.id.startsWith(expectedPrefix)) {
       context.addIssue({
@@ -155,9 +178,37 @@ export const ScreenTemplateSchema = z
         })
       }
     })
+
+    if (interactionsByKey.size !== template.interactions.length) {
+      context.addIssue({
+        code: 'custom',
+        message: 'Interaction keys must be unique',
+        path: ['interactions'],
+      })
+    }
+
+    template.interactions.forEach((interaction, index) => {
+      interaction.relatedKeys.forEach((relatedKey, relatedIndex) => {
+        const related = interactionsByKey.get(relatedKey)
+        if (!related) {
+          context.addIssue({
+            code: 'custom',
+            message: 'Interaction related key must exist in the template',
+            path: ['interactions', index, 'relatedKeys', relatedIndex],
+          })
+        } else if (related.group !== interaction.group) {
+          context.addIssue({
+            code: 'custom',
+            message: 'Interaction related keys must use the same group',
+            path: ['interactions', index, 'relatedKeys', relatedIndex],
+          })
+        }
+      })
+    })
   })
 
 export type ScreenTemplate = z.infer<typeof ScreenTemplateSchema>
+export type MetricInteraction = z.infer<typeof MetricInteractionSchema>
 export type SystemKey = z.infer<typeof SystemKeySchema>
 export type DataStatus = z.infer<typeof DataStatusSchema>
 

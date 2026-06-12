@@ -4,6 +4,7 @@ import type {
   SystemKey,
   WidgetDefinition,
 } from '../types'
+import { createMetricInteractions } from '../interactions/metric-interactions'
 
 type RefreshMode = 'poll' | 'sse'
 
@@ -133,6 +134,7 @@ export const screenManifests: ScreenTemplate[] = TEMPLATE_BLUEPRINTS.map(
       },
       widgets,
       filters: [{ key: 'dateRange', type: 'date-range', required: false }],
+      interactions: createMetricInteractions(systemKey),
       refreshPolicy: {
         mode: refreshMode,
         intervalMs: refreshMode === 'sse' ? 10000 : 60000,
