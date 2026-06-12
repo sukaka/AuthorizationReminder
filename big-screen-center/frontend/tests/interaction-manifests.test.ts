@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
+import { screenCatalog } from '../../backend/src/catalog'
 import { screenManifests } from '../src/templates/manifests'
 
 describe('template interaction manifests', () => {
@@ -13,6 +14,7 @@ describe('template interaction manifests', () => {
         .toBe(interactions.length)
       for (const item of interactions) {
         expect(item.label).toMatch(/[\u4e00-\u9fff]/)
+        expect(item.group).toMatch(/^[a-z][a-z0-9-]*$/)
         expect(item.description).toMatch(/[\u4e00-\u9fff]/)
         expect(item.detailPath).toBe('/')
         expect(item.relatedKeys).not.toContain(item.key)
@@ -31,5 +33,13 @@ describe('template interaction manifests', () => {
         }
       }
     }
+  })
+
+  it('keeps frontend and backend interaction catalogs equivalent', () => {
+    expect(
+      screenManifests.map(({ id, interactions }) => ({ id, interactions })),
+    ).toEqual(
+      screenCatalog.map(({ id, interactions }) => ({ id, interactions })),
+    )
   })
 })

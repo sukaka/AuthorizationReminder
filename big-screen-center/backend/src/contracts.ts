@@ -104,11 +104,15 @@ const SafeDetailPathSchema = z.string().regex(
 export const MetricInteractionSchema = z
   .object({
     key: MetricKeySchema,
-    label: z.string().min(1).max(40),
+    label: z.string().trim().min(1).max(40),
     group: z.string().regex(/^[a-z][a-z0-9-]*$/),
-    relatedKeys: z.array(MetricKeySchema),
+    relatedKeys: z
+      .array(MetricKeySchema)
+      .refine((keys) => new Set(keys).size === keys.length, {
+        message: 'Interaction related keys must be unique',
+      }),
     detailPath: SafeDetailPathSchema,
-    description: z.string().min(2).max(160),
+    description: z.string().trim().min(2).max(160),
   })
   .refine((interaction) => !interaction.relatedKeys.includes(interaction.key), {
     message: 'Interaction related keys must not include itself',

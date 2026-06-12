@@ -18,7 +18,7 @@ interface TemplateBlueprint {
   themeKey: string
 }
 
-const interactionKeysBySystem: Record<SystemKey, string[]> = {
+const interactionKeysBySystem = {
   sca: [
     'project_count',
     'component_total',
@@ -68,9 +68,11 @@ const interactionKeysBySystem: Record<SystemKey, string[]> = {
     'customer_count',
     'license_count',
   ],
-}
+} as const satisfies Record<SystemKey, readonly string[]>
 
-const interactionGroupByKey: Record<string, string> = {
+type InteractionKey = (typeof interactionKeysBySystem)[SystemKey][number]
+
+const interactionGroupByKey = {
   project_count: 'asset',
   component_total: 'asset',
   assets: 'asset',
@@ -114,9 +116,9 @@ const interactionGroupByKey: Record<string, string> = {
   deliveryRate: 'delivery',
   customer_count: 'customer',
   license_count: 'customer',
-}
+} satisfies Record<InteractionKey, string>
 
-const interactionLabelByKey: Record<string, string> = {
+const interactionLabelByKey = {
   project_count: '项目数量',
   component_total: '组件总数',
   vulnerability_total: '漏洞总数',
@@ -160,10 +162,10 @@ const interactionLabelByKey: Record<string, string> = {
   day90: '90 天内到期',
   customer_count: '客户数量',
   license_count: '授权数量',
-}
+} satisfies Record<InteractionKey, string>
 
 const createMetricInteractions = (systemKey: SystemKey) => {
-  const keys = interactionKeysBySystem[systemKey]
+  const keys: readonly InteractionKey[] = interactionKeysBySystem[systemKey]
   return keys.map((key) => {
     const group = interactionGroupByKey[key]
     const label = interactionLabelByKey[key]

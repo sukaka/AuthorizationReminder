@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest'
 
 import { screenCatalog } from '../src/catalog.js'
-import { ScreenTemplateSchema } from '../src/contracts.js'
+import {
+  MetricInteractionSchema,
+  ScreenTemplateSchema,
+} from '../src/contracts.js'
 
 const baseTemplate = {
   id: 'sca-01',
@@ -159,6 +162,32 @@ describe('ScreenTemplateSchema', () => {
         ),
       }),
     ).toThrow('Template may contain at most one Three.js scene')
+  })
+
+  it.each([
+    ['blank label', { label: '   ' }],
+    ['blank description', { description: '   ' }],
+  ])('rejects interaction metadata with %s', (_name, override) => {
+    expect(() =>
+      ScreenTemplateSchema.parse({
+        ...baseTemplate,
+        interactions: [
+          {
+            ...baseTemplate.interactions[0],
+            ...override,
+          },
+        ],
+      }),
+    ).toThrow()
+  })
+
+  it('rejects duplicate interaction related keys', () => {
+    expect(() =>
+      MetricInteractionSchema.parse({
+        ...baseTemplate.interactions[0],
+        relatedKeys: ['high', 'high'],
+      }),
+    ).toThrow()
   })
 })
 

@@ -1,10 +1,9 @@
-import { metricLabel } from '../metric-labels'
 import type {
   MetricInteractionDefinition,
   SystemKey,
 } from '../types'
 
-const keysBySystem: Record<SystemKey, string[]> = {
+const keysBySystem = {
   sca: [
     'project_count',
     'component_total',
@@ -54,9 +53,11 @@ const keysBySystem: Record<SystemKey, string[]> = {
     'customer_count',
     'license_count',
   ],
-}
+} as const satisfies Record<SystemKey, readonly string[]>
 
-const groupByKey: Record<string, string> = {
+type InteractionKey = (typeof keysBySystem)[SystemKey][number]
+
+const groupByKey = {
   project_count: 'asset',
   component_total: 'asset',
   assets: 'asset',
@@ -100,21 +101,61 @@ const groupByKey: Record<string, string> = {
   deliveryRate: 'delivery',
   customer_count: 'customer',
   license_count: 'customer',
-}
+} satisfies Record<InteractionKey, string>
 
-const labelOverrides: Record<string, string> = {
+const labelByKey = {
+  project_count: '项目数量',
+  component_total: '组件总数',
+  vulnerability_total: '漏洞总数',
+  criticalRisks: '严重风险',
+  high: '高危',
+  medium: '中危',
+  low: '低危',
+  vulnerableComponents: '风险组件',
+  healthyRate: '健康率',
+  blocked_count: '阻断任务',
+  assets: '资产',
   devops: '研发运维',
-}
-
-const labelFor = (key: string) => labelOverrides[key] || metricLabel(key)
+  course_total: '课程总数',
+  question_total: '题目总数',
+  question_published_total: '已发布题目',
+  question_draft_total: '草稿题目',
+  paper_total: '试卷总数',
+  paper_published_total: '已发布试卷',
+  exam_total: '考试总数',
+  final_result_total: '最终成绩数',
+  final_passed_total: '最终通过数',
+  pass_rate: '通过率',
+  activeCourses: '进行中课程',
+  learners: '参训人数',
+  completionRate: '完成率',
+  certificates: '证书签发',
+  expiring: '到期授权',
+  todayDue: '今日到期',
+  totalReminders: '提醒总数',
+  successRate: '触达成功率',
+  total: '总数',
+  success: '成功触达',
+  channelBreakdown_sms_total: '短信提醒总数',
+  expiring7d: '7 天到期',
+  expiring30d: '30 天到期',
+  riskAmount: '风险金额',
+  deliveryRate: '提醒触达率',
+  day7: '7 天内到期',
+  day30: '30 天内到期',
+  day60: '60 天内到期',
+  day90: '90 天内到期',
+  customer_count: '客户数量',
+  license_count: '授权数量',
+} satisfies Record<InteractionKey, string>
 
 export const createMetricInteractions = (
   systemKey: SystemKey,
 ): MetricInteractionDefinition[] => {
-  const keys = keysBySystem[systemKey]
+  const keys: readonly InteractionKey[] = keysBySystem[systemKey]
   return keys.map((key) => {
     const group = groupByKey[key]
-    const label = labelFor(key)
+    const label = labelByKey[key]
     return {
       key,
       label,
