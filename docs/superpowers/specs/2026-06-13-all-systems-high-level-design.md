@@ -525,7 +525,9 @@ SCA 外部依赖分为四类：
 
 ### 9.1 当前部署方式
 
-根 `docker-compose.yml` 编排：
+当前部署基线是仓库根目录 `docker-compose.yml`。它不是补充脚本，而是本地、测试和中小规模交付环境的主运行拓扑。
+
+根 Compose 编排：
 
 - 统一认证、11 个现役业务系统及其前端。
 - MySQL、SCA PostgreSQL、SCA Redis。
@@ -537,7 +539,129 @@ SCA 外部依赖分为四类：
 
 当前部署适合单机开发、测试和中小规模交付。所有服务位于同一 Compose 网络，通过服务名访问。
 
-### 9.2 配置与密钥
+### 9.2 Docker Compose 分层
+
+当前 Compose 可按五层理解：
+
+| 层级 | Compose 服务 | 作用 |
+| --- | --- | --- |
+| 接入层 | `auth`、各 `web-*`、`web`、`web-cmdb` | 提供统一门户、专用中心和各系统前端静态站点 |
+| 业务 API 层 | `api`、`delivery-api`、`inventory-api`、`device-flow-api`、`faq-api`、`tender-api`、`train-exam-api`、`prompt-center-api`、`sca-api`、`big-screen-api`、`cmdb` | 承载业务接口、鉴权、审计和领域逻辑 |
+| 异步任务层 | `sca-worker`、`sca-scanner-worker`、`sca-beat` | 执行 SCA 长耗时扫描、持续风险监测和定时任务 |
+| 集成服务层 | `shipping-gateway`、`onlyoffice`、`train-exam-onlyoffice`、`dependency-track-apiserver`、`dependency-track-frontend` | 提供物流、在线文档编辑和 SBOM/漏洞辅助分析能力 |
+| 数据与初始化层 | `mysql`、`sca-postgres`、`sca-redis`、`cmdb-mysql-init` | 提供关系型数据库、缓存/队列和一次性数据库初始化 |
+
+从高层设计角度看，Compose 同时承担三件事：
+
+- **运行编排**：定义服务、镜像、构建上下文、端口和依赖关系。
+- **环境注入**：通过 `.env`、环境变量和构建参数注入数据库、密钥、CORS、外部服务地址。
+- **数据挂载**：通过命名卷保存数据库、文档、上传文件、报告、SBOM、扫描结果和缓存。
+
+### 9.3 镜像与构建策略
+
+Compose 中存在两类镜像来源：
+
+- **本地构建镜像**：业务 API、业务前端、Auth、CMDB、SCA API/Worker、OnlyOffice 字体镜像等由仓库目录构建。
+- **第三方基础镜像**：MySQL、PostgreSQL、Redis、Dependency-Track、Node、Nginx、Go、Alpine 等通过环境变量指定或使用默认镜像。
+
+高层构建策略为：
+
+- Node 系服务以 Node 20 为主，前端构建后由 Nginx 承载静态资源。
+- CMDB 使用 Go 1.22 构建。
+- SCA 后端使用 Python/FastAPI，并拆分普通运行镜像和扫描 Worker 镜像。
+- 镜像源通过 `NODE_20_*_IMAGE`、`NGINX_ALPINE_IMAGE`、`MYSQL_IMAGE`、`ONLYOFFICE_DOCUMENTSERVER_IMAGE` 等变量覆盖，便于在国内镜像源或企业私有仓库中部署。
+- 日常启动优先复用已有镜像；代码变更、首次部署或基础镜像变化时再执行重建。
+
+### 9.4 端口暴露策略
+
+当前端口映射按“门户、业务前端、业务 API、数据服务、辅助服务”分组：
+
+| 类别 | 当前端口 | 说明 |
+| --- | --- | --- |
+| 统一门户 | `5180` | Auth、门户、管理中心、审计中心 |
+| 业务前端 | `18080`、`18082`-`18089`、`18092`、`8090` | Reminder、Inventory、Device Flow、Delivery、FAQ、Tender、Train Exam、Prompt Center、SCA、Big Screen、CMDB |
+| 业务 API | `5179`、`5183`-`5189`、`5191`、`5192` | 各业务后端 API |
+| 集成服务 | `5190`、`18090`、`18091` | 物流网关、Dependency-Track API 和前端 |
+| 数据服务 | `53308`、`55433`、`56380` | MySQL、SCA PostgreSQL、SCA Redis 的宿主机映射 |
+| 历史兼容 | `18081`、`5182` | Ticketing 前后端仍存在于 Compose，但不作为现役门户入口 |
+
+生产环境建议：
+
+- 只通过统一 HTTPS 入口暴露门户和业务前端。
+- 数据库、Redis、Dependency-Track 管理入口不直接暴露公网。
+- 业务 API 优先由反向代理或内网访问控制承载。
+- 端口映射应形成环境清单，避免测试环境和生产环境混用。
+
+### 9.5 数据卷与持久化策略
+
+当前 Compose 定义的持久化卷包括：
+
+| 数据卷 | 主要使用方 | 保存内容 |
+| --- | --- | --- |
+| `mysql-data` | MySQL | Auth、Reminder、Delivery、CMDB、Inventory、Device、FAQ、Tender、Train、Prompt、Big Screen 等 MySQL 数据 |
+| `faq-data` | FAQ | 上传文件、预览、草稿和可编辑文档 |
+| `tender-data` | Tender | 标书上传、版本、草稿、素材、水印、预览和编辑文件 |
+| `train-exam-data` | Train Exam | 课程资源、导入文件和证书 |
+| `sca-postgres-data` | SCA PostgreSQL | SCA 与 Dependency-Track 关系型数据 |
+| `sca-redis-data` | SCA Redis | Redis AOF、缓存、任务状态相关数据 |
+| `sca-upload-data` | SCA | 源码上传文件 |
+| `sca-report-data` | SCA | 报告文件 |
+| `sca-sbom-data` | SCA | SBOM 和镜像分析文件 |
+| `sca-backup-data` | SCA | SCA 备份文件 |
+| `sca-scanner-results` | SCA Scanner Worker | 多引擎扫描原始结果 |
+| `sca-trivy-cache` | SCA Scanner Worker | Trivy 缓存 |
+| `dependency-track-data` | Dependency-Track | Dependency-Track 应用数据 |
+
+备份设计必须覆盖数据库和文件卷两类对象。只备份 MySQL 会导致 FAQ、Tender、Train Exam、SCA 的文件型数据无法完整恢复。
+
+### 9.6 启动依赖与健康检查
+
+Compose 当前通过 `depends_on` 描述主要启动依赖：
+
+- 大多数业务 API 依赖 `mysql` 和 `auth`。
+- FAQ/Tender 依赖 `onlyoffice`。
+- Train Exam 依赖 `train-exam-onlyoffice`。
+- SCA API/Worker/Beat 依赖 `sca-postgres` 和 `sca-redis` 健康检查。
+- Big Screen 依赖 `mysql`、`auth`、`api`、`train-exam-api` 和 `sca-api`。
+- CMDB 依赖一次性任务 `cmdb-mysql-init` 完成数据库初始化。
+
+需要注意：
+
+- `depends_on` 只能保证容器启动顺序，不能替代业务就绪检查。
+- SCA 的 PostgreSQL 和 Redis 已配置容器级健康检查，是当前较完整的就绪依赖样板。
+- 其他系统仍需要补充应用级 `/health` 或 `/ready` 检查，并纳入发布验证脚本。
+- 初始化任务和业务迁移应保持幂等，避免容器重启后重复写入脏数据。
+
+### 9.7 Docker 运维命令基线
+
+日常运维建议统一使用仓库脚本，而不是手写长命令：
+
+```bash
+# 启动已有镜像，适合日常验证
+./scripts/deploy/docker-compose-aliyun.sh start
+
+# 代码、Dockerfile 或依赖变更后重建
+./scripts/deploy/docker-compose-aliyun.sh rebuild
+
+# 只验证某个系统，可追加服务名
+./scripts/deploy/docker-compose-aliyun.sh start mysql auth sca-postgres sca-redis sca-api web-sca
+
+# 查看容器状态和日志
+docker compose ps
+docker compose logs -f auth sca-api web-sca
+```
+
+建议形成标准发布步骤：
+
+1. 校验 `.env` 必填项。
+2. 拉取代码和目标分支。
+3. 执行最快相关测试。
+4. 重建受影响服务。
+5. 启动服务并检查健康接口。
+6. 验证门户、系统切换、退出登录和目标业务主流程。
+7. 记录版本号、镜像标签、提交号和回退点。
+
+### 9.8 配置与密钥
 
 - `.env.example` 只提供变量结构，真实密码和密钥必须由部署环境提供。
 - 数据库密码、JWT 密钥、审计签名密钥、文档密钥和第三方令牌不得提交到 Git。
@@ -547,7 +671,7 @@ SCA 外部依赖分为四类：
 
 当前 Compose 仍存在开发默认值和固定示例密钥。它们可以支持本地启动，但必须列为生产部署前置检查项。
 
-### 9.3 启停与健康检查
+### 9.9 启停与健康检查
 
 推荐的运维顺序：
 

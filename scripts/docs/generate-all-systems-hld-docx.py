@@ -22,7 +22,7 @@ ROOT = Path(__file__).resolve().parents[2]
 SOURCE = ROOT / "docs/superpowers/specs/2026-06-13-all-systems-high-level-design.md"
 OUTPUT_DIR = ROOT / "outputs/all-systems-hld"
 DOCX_PATH = OUTPUT_DIR / "聚信多系统业务平台高层设计.docx"
-DOCUMENT_VERSION = "5.70.15"
+DOCUMENT_VERSION = "5.70.16"
 FONT_CANDIDATES = [
     Path("/System/Library/Fonts/STHeiti Medium.ttc"),
     Path("/System/Library/Fonts/STHeiti Light.ttc"),
