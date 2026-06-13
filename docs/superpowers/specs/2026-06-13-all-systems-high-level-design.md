@@ -60,78 +60,77 @@
 
 ## 3. 全局架构
 
-### 3.1 逻辑分层
+### 3.1 容器化总体分层
 
 ```mermaid
 flowchart TB
-  User["业务用户 / 管理员 / 审计员"] --> Portal["统一认证与门户<br/>auth : 5180"]
+  User["业务用户 / 管理员 / 审计员"] --> Auth["auth 容器<br/>统一门户 / 管理中心 / 审计中心<br/>5180"]
 
-  Portal --> Admin["管理中心<br/>用户、部门、安全策略"]
-  Portal --> Audit["审计中心<br/>聚合查询、验签、导出"]
+  subgraph Compose["Docker Compose 网络"]
+    Auth
 
-  Portal --> Reminder["Reminder"]
-  Portal --> Delivery["Delivery"]
-  Portal --> CMDB["CMDB"]
-  Portal --> Inventory["Inventory"]
-  Portal --> Device["Device Flow"]
-  Portal --> FAQ["FAQ"]
-  Portal --> Tender["Tender"]
-  Portal --> Train["Train Exam"]
-  Portal --> Prompt["Prompt Center"]
-  Portal --> SCA["SCA"]
-  Portal --> Screen["Big Screen"]
+    subgraph Web["前端容器 / Nginx"]
+      WebMain["web"]
+      WebDelivery["web-delivery"]
+      WebCmdb["web-cmdb"]
+      WebInventory["web-inventory"]
+      WebDevice["web-device-flow"]
+      WebFaq["web-faq"]
+      WebTender["web-tender"]
+      WebTrain["web-train-exam"]
+      WebPrompt["web-prompt-center"]
+      WebSca["web-sca"]
+      WebScreen["web-big-screen"]
+    end
 
-  subgraph Services["业务服务与集成层"]
-    Reminder
-    Delivery
-    CMDB
-    Inventory
-    Device
-    FAQ
-    Tender
-    Train
-    Prompt
-    SCA
-    Screen
-    Shipping["物流网关"]
-    Docs["OnlyOffice 文档服务"]
-    Scanner["扫描引擎 / Dependency-Track"]
+    subgraph Api["业务 API 容器"]
+      ReminderApi["api"]
+      DeliveryApi["delivery-api"]
+      CmdbApi["cmdb"]
+      InventoryApi["inventory-api"]
+      DeviceApi["device-flow-api"]
+      FaqApi["faq-api"]
+      TenderApi["tender-api"]
+      TrainApi["train-exam-api"]
+      PromptApi["prompt-center-api"]
+      ScaApi["sca-api"]
+      ScreenApi["big-screen-api"]
+    end
+
+    subgraph Async["异步与集成容器"]
+      ScaWorker["sca-worker / sca-scanner-worker / sca-beat"]
+      Shipping["shipping-gateway"]
+      Docs["onlyoffice / train-exam-onlyoffice"]
+      DT["dependency-track-apiserver / frontend"]
+    end
+
+    subgraph Data["数据与持久化容器 / 卷"]
+      MySQL["mysql<br/>mysql-data"]
+      PostgreSQL["sca-postgres<br/>sca-postgres-data"]
+      Redis["sca-redis<br/>sca-redis-data"]
+      Volumes["faq-data / tender-data / train-exam-data<br/>sca-upload/report/sbom/cache"]
+    end
   end
 
-  Inventory --> Shipping
-  FAQ --> Docs
-  Tender --> Docs
-  Train --> Docs
-  SCA --> Scanner
-  Screen --> Reminder
-  Screen --> Train
-  Screen --> SCA
+  Auth --> Web
+  Web --> Api
+  Api --> Auth
+  Api --> MySQL
+  ScaApi --> PostgreSQL
+  ScaApi --> Redis
+  ScaApi --> ScaWorker
+  ScaWorker --> PostgreSQL
+  ScaWorker --> Redis
+  ScaWorker --> Volumes
+  InventoryApi --> Shipping
+  FaqApi --> Docs
+  TenderApi --> Docs
+  TrainApi --> Docs
+  ScreenApi --> ReminderApi
+  ScreenApi --> TrainApi
+  ScreenApi --> ScaApi
 
-  subgraph Data["数据与任务基础设施"]
-    MySQL["MySQL 8<br/>多业务 Schema"]
-    PostgreSQL["PostgreSQL 16<br/>SCA"]
-    Redis["Redis 7<br/>SCA 缓存与 Celery"]
-    Volumes["文件与报告持久化卷"]
-  end
-
-  Reminder --> MySQL
-  Delivery --> MySQL
-  CMDB --> MySQL
-  Inventory --> MySQL
-  Device --> MySQL
-  FAQ --> MySQL
-  Tender --> MySQL
-  Train --> MySQL
-  Prompt --> MySQL
-  Screen --> MySQL
-  SCA --> PostgreSQL
-  SCA --> Redis
-  FAQ --> Volumes
-  Tender --> Volumes
-  Train --> Volumes
-  SCA --> Volumes
-
-  Legacy["历史兼容资产<br/>Ticketing / Sec-Impl"] -. "兼容迁移" .-> Delivery
+  Legacy["历史兼容容器<br/>ticketing / web-ticketing"] -. "门户权限归一化" .-> DeliveryApi
 ```
 
 ### 3.2 架构风格

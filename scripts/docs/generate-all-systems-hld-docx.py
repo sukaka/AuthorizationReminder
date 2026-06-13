@@ -22,7 +22,7 @@ ROOT = Path(__file__).resolve().parents[2]
 SOURCE = ROOT / "docs/superpowers/specs/2026-06-13-all-systems-high-level-design.md"
 OUTPUT_DIR = ROOT / "outputs/all-systems-hld"
 DOCX_PATH = OUTPUT_DIR / "聚信多系统业务平台高层设计.docx"
-DOCUMENT_VERSION = "5.70.16"
+DOCUMENT_VERSION = "5.70.17"
 FONT_CANDIDATES = [
     Path("/System/Library/Fonts/STHeiti Medium.ttc"),
     Path("/System/Library/Fonts/STHeiti Light.ttc"),
@@ -124,50 +124,80 @@ def save_diagram(image: Image.Image, name: str) -> Path:
 
 
 def draw_overview() -> Path:
-    image, draw = canvas("聚信多系统业务平台总体架构", "当前真实架构：统一门户 + 11 个业务系统 + 共享基础设施")
-    round_rect(draw, (80, 180, 2120, 300), PALE_BLUE, BLUE)
-    centered_text(draw, (80, 180, 2120, 300), "访问与平台层：统一认证门户  |  管理中心  |  审计中心", 34, NAVY, True)
+    image, draw = canvas("聚信多系统业务平台总体架构（容器化视图）", "高层视角：业务系统一眼可读；Docker 容器以服务名徽标呈现")
 
-    system_names = [
-        "授权提醒", "交付系统", "CMDB", "库存管理", "设备流转", "文档管理",
-        "标书协同", "培训考试", "提示词中心", "SCA", "统一大屏",
+    round_rect(draw, (85, 170, 2115, 1235), "#F7FAFC", "#9BB3C5", width=4)
+    draw.text((120, 198), "Docker Compose 网络：codex-new", font=pil_font(32, True), fill=NAVY)
+
+    access_boxes = [
+        (130, 275, 500, 405, "用户访问\n浏览器 / 域名 / localhost", BLUE),
+        (675, 275, 1095, 405, "统一入口容器\n`auth` : 5180\nPortal / Admin / Audit", NAVY),
+        (1270, 275, 2025, 405, "统一鉴权\nCookie: juxin_auth_token\n业务 API -> /api/auth/introspect", TEAL),
     ]
-    colors = [BLUE, TEAL, PURPLE, ORANGE, CYAN, GREEN, PURPLE, BLUE, TEAL, RED, NAVY]
-    box_w, box_h, gap = 300, 105, 35
-    first_x = 90
-    for idx, name in enumerate(system_names):
-        row = 0 if idx < 6 else 1
-        col = idx if row == 0 else idx - 6
-        x = first_x + col * (box_w + gap)
-        if row == 1:
-            x += 165
-        y = 365 + row * 145
-        round_rect(draw, (x, y, x + box_w, y + box_h), WHITE, colors[idx], width=4)
-        centered_text(draw, (x, y, x + box_w, y + box_h), name, 28, colors[idx], True)
+    for x1, y1, x2, y2, text, color in access_boxes:
+        round_rect(draw, (x1, y1, x2, y2), WHITE, color, width=4)
+        centered_text(draw, (x1, y1, x2, y2), text.replace("`", ""), 24, color, True)
+    arrow(draw, (510, 340), (660, 340), BLUE)
+    arrow(draw, (1105, 340), (1255, 340), MUTED)
 
-    arrow(draw, (1100, 300), (1100, 350), BLUE)
-    round_rect(draw, (80, 690, 2120, 850), LIGHT, "#9BB3C5")
-    centered_text(
-        draw,
-        (80, 690, 2120, 850),
-        "业务服务与集成层\nNode.js/Express  |  Go/Gin  |  Python/FastAPI  |  物流网关  |  OnlyOffice  |  扫描引擎",
-        30,
-        INK,
-        True,
-    )
-    arrow(draw, (1100, 655), (1100, 690), MUTED)
+    round_rect(draw, (120, 475, 1495, 905), PALE_BLUE, BLUE, width=4)
+    draw.text((155, 500), "11 个业务系统容器组（每组至少包含 Web 容器 + API 容器）", font=pil_font(28, True), fill=NAVY)
+    systems = [
+        ("Reminder", "web + api", BLUE),
+        ("Delivery", "web-delivery + delivery-api", TEAL),
+        ("CMDB", "web-cmdb + cmdb", PURPLE),
+        ("Inventory", "web-inventory + inventory-api", ORANGE),
+        ("Device Flow", "web-device-flow + device-flow-api", CYAN),
+        ("FAQ", "web-faq + faq-api", GREEN),
+        ("Tender", "web-tender + tender-api", PURPLE),
+        ("Train Exam", "web-train-exam + train-exam-api", BLUE),
+        ("Prompt Center", "web-prompt-center +\nprompt-center-api", TEAL),
+        ("SCA", "web-sca + sca-api + workers", RED),
+        ("Big Screen", "web-big-screen +\nbig-screen-api", NAVY),
+    ]
+    card_w, card_h = 310, 92
+    for idx, (name, services, color) in enumerate(systems):
+        row, col = divmod(idx, 4)
+        x = 155 + col * 330
+        y = 555 + row * 112
+        round_rect(draw, (x, y, x + card_w, y + card_h), WHITE, color, width=3)
+        draw.text((x + 18, y + 14), name, font=pil_font(24, True), fill=color)
+        draw.multiline_text((x + 18, y + 50), services, font=pil_font(16), fill=INK, spacing=2)
+
+    round_rect(draw, (1550, 475, 2045, 905), WHITE, ORANGE, width=4)
+    centered_text(draw, (1550, 500, 2045, 560), "共享容器组", 30, ORANGE, True)
+    shared_items = [
+        ("异步任务", "sca-worker / scanner / beat", RED),
+        ("文档编辑", "onlyoffice / train-exam-onlyoffice", ORANGE),
+        ("物流网关", "shipping-gateway", TEAL),
+        ("SBOM 分析", "dependency-track API / Web", PURPLE),
+    ]
+    for idx, (title, value, color) in enumerate(shared_items):
+        y = 590 + idx * 72
+        draw.ellipse((1590, y, 1622, y + 32), fill=color)
+        draw.text((1640, y - 2), title, font=pil_font(21, True), fill=color)
+        draw.text((1640, y + 28), value, font=pil_font(17), fill=INK)
+
+    arrow(draw, (815, 405), (815, 460), MUTED)
+    arrow(draw, (1495, 690), (1535, 690), MUTED)
 
     data_boxes = [
-        (100, 960, 570, 1165, "MySQL 8\n多业务 Schema", BLUE),
-        (640, 960, 1050, 1165, "PostgreSQL 16\nSCA 主数据", PURPLE),
-        (1120, 960, 1530, 1165, "Redis 7\n缓存与 Celery", RED),
-        (1600, 960, 2100, 1165, "持久化文件卷\n文档 / 报告 / SBOM", TEAL),
+        (135, 1010, 525, 1160, "MySQL\nmysql\n53308 -> 3306\nmysql-data", BLUE),
+        (610, 1010, 1000, 1160, "SCA PostgreSQL\nsca-postgres\n55433 -> 5432", PURPLE),
+        (1085, 1010, 1475, 1160, "SCA Redis\nsca-redis\n56380 -> 6379", RED),
+        (1560, 1010, 2030, 1160, "业务文件卷\nfaq/tender/train-exam\nsca upload/report/sbom/cache", TEAL),
     ]
-    for x1, y1, x2, y2, label, color in data_boxes:
+    for x1, y1, x2, y2, text, color in data_boxes:
         round_rect(draw, (x1, y1, x2, y2), WHITE, color, width=4)
-        centered_text(draw, (x1, y1, x2, y2), label, 29, color, True)
-    arrow(draw, (1100, 850), (1100, 935), MUTED)
-    draw.text((85, 1235), "历史兼容：Ticketing / Sec-Impl 的门户权限键统一归一化为 Delivery", font=pil_font(25), fill=MUTED)
+        centered_text(draw, (x1, y1, x2, y2), text, 21, color, True)
+    arrow(draw, (815, 905), (815, 990), MUTED)
+
+    draw.text(
+        (125, 1200),
+        "说明：主图保留高层直观性；完整端口、卷、depends_on 与健康检查在第 9 章 Docker Compose 设计中展开。",
+        font=pil_font(23),
+        fill=MUTED,
+    )
     return save_diagram(image, "01-platform-overview.png")
 
 
@@ -553,7 +583,7 @@ def add_markdown(document: Document, markdown: str, diagrams: dict[str, Path]) -
             index += 1
             if language == "mermaid":
                 key = "overview" if mermaid_index == 0 else "auth"
-                caption = "图 1  平台总体架构" if mermaid_index == 0 else "图 4  统一认证与系统访问流程"
+                caption = "图 1  平台总体架构（含容器）" if mermaid_index == 0 else "图 4  统一认证与系统访问流程"
                 add_diagram(document, diagrams[key], caption)
                 mermaid_index += 1
             else:
