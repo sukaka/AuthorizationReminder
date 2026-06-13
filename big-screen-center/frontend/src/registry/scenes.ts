@@ -1,10 +1,22 @@
-import type { EffectsProfile } from '../types'
+import type { EffectsProfile, InteractionSnapshot } from '../types'
+
+export interface SceneInteractionDatum {
+  key: string
+  value?: number
+}
+
+export interface SceneInteractionHandlers {
+  onHover(target: SceneInteractionDatum | null): void
+  onSelect(target: SceneInteractionDatum): void
+}
 
 export interface ManagedScene {
   start(): void
   pause(): void
   resize(width: number, height: number, pixelRatio: number): void
   update(data: unknown): void
+  setInteraction?(snapshot: InteractionSnapshot): void
+  setInteractionHandlers?(handlers: SceneInteractionHandlers): void
   dispose(): void
 }
 

@@ -1,7 +1,12 @@
 import * as THREE from 'three'
 
-import type { EffectsProfile } from '../types'
-import type { ManagedScene } from '../registry/scenes'
+import { numericMetricEntries } from '../metric-labels'
+import type { EffectsProfile, InteractionSnapshot, JsonValue } from '../types'
+import type {
+  ManagedScene,
+  SceneInteractionDatum,
+  SceneInteractionHandlers,
+} from '../registry/scenes'
 
 interface OrbitSceneOptions {
   colors: [number, number, number]
@@ -48,6 +53,8 @@ export function createOrbitScene(
   root.rotation.x = options.tilt
   scene.add(root)
 
+  const selectableObjects: THREE.Mesh[] = []
+
   options.colors.forEach((color, index) => {
     const geometry = new THREE.TorusGeometry(1.25 + index * 0.68, 0.018, 10, 180)
     const material = new THREE.MeshBasicMaterial({
@@ -58,7 +65,10 @@ export function createOrbitScene(
     const ring = new THREE.Mesh(geometry, material)
     ring.rotation.x = Math.PI / 2 + index * 0.22
     ring.rotation.y = index * 0.37
+    ring.userData.baseColor = color
+    ring.userData.baseOpacity = 0.42 + index * 0.12
     root.add(ring)
+    selectableObjects.push(ring)
   })
 
   const core = new THREE.Mesh(
@@ -70,7 +80,14 @@ export function createOrbitScene(
       opacity: 0.76,
     }),
   )
+  core.userData.baseColor = options.colors[0]
+  core.userData.baseOpacity = 0.76
   root.add(core)
+  selectableObjects.push(core)
+
+  const raycaster = new THREE.Raycaster()
+  const pointer = new THREE.Vector2()
+  let interactionHandlers: SceneInteractionHandlers | null = null
 
   const count = particleCount[profile]
   if (count > 0) {
@@ -101,6 +118,79 @@ export function createOrbitScene(
   let frameId = 0
   let running = false
   let disposed = false
+
+  const datumFromObject = (object: THREE.Object3D): SceneInteractionDatum | null => {
+    const key = String(object.userData.metricKey || '')
+    const value = Number(object.userData.metricValue)
+    if (!key) return null
+    return {
+      key,
+      value: Number.isFinite(value) ? value : undefined,
+    }
+  }
+
+  const hitTest = (event: PointerEvent) => {
+    const bounds = renderer.domElement.getBoundingClientRect()
+    const width = Math.max(bounds.width, 1)
+    const height = Math.max(bounds.height, 1)
+    pointer.x = ((event.clientX - bounds.left) / width) * 2 - 1
+    pointer.y = -(((event.clientY - bounds.top) / height) * 2 - 1)
+    raycaster.setFromCamera(pointer, camera)
+    const [hit] = raycaster.intersectObjects(selectableObjects, false)
+    return hit?.object ? datumFromObject(hit.object) : null
+  }
+
+  const onPointerMove = (event: PointerEvent) => {
+    interactionHandlers?.onHover(hitTest(event))
+  }
+
+  const onPointerLeave = () => {
+    interactionHandlers?.onHover(null)
+  }
+
+  const onClick = (event: PointerEvent) => {
+    const datum = hitTest(event)
+    if (datum) interactionHandlers?.onSelect(datum)
+  }
+
+  renderer.domElement.addEventListener('pointermove', onPointerMove)
+  renderer.domElement.addEventListener('pointerleave', onPointerLeave)
+  renderer.domElement.addEventListener('click', onClick)
+
+  const applyObjectRelation = (
+    object: THREE.Mesh,
+    relation: 'primary' | 'related' | 'none',
+  ) => {
+    const material = object.material as THREE.MeshBasicMaterial
+    const baseColor = Number(object.userData.baseColor || options.colors[0])
+    material.color.set(relation === 'primary' ? 0xffffff : baseColor)
+    material.opacity = relation === 'primary'
+      ? 0.95
+      : relation === 'related'
+        ? Math.max(Number(object.userData.baseOpacity || 0.5), 0.72)
+        : 0.28
+    if (profile !== 'low') {
+      object.scale.setScalar(relation === 'primary' ? 1.1 : 1)
+    }
+  }
+
+  const setInteraction = (snapshot: InteractionSnapshot) => {
+    const active = snapshot.hovered || snapshot.locked
+    selectableObjects.forEach((object) => {
+      const key = String(object.userData.metricKey || '')
+      if (!active || !key) {
+        applyObjectRelation(object, 'none')
+        return
+      }
+      const relation = active.key === key
+        ? 'primary'
+        : active.relatedKeys.includes(key)
+          ? 'related'
+          : 'none'
+      applyObjectRelation(object, relation)
+    })
+    renderer.render(scene, camera)
+  }
 
   const render = () => {
     if (!running || disposed) return
@@ -142,11 +232,30 @@ export function createOrbitScene(
       const serialized = JSON.stringify(data)
       const signal = Math.min(serialized.length / 5000, 1)
       core.scale.setScalar(0.88 + signal * 0.28)
+      const entries = numericMetricEntries(data as JsonValue, selectableObjects.length)
+      selectableObjects.forEach((object, index) => {
+        const entry = entries[index]
+        if (!entry) {
+          delete object.userData.metricKey
+          delete object.userData.metricValue
+          return
+        }
+        const [key, value] = entry
+        object.userData.metricKey = key
+        object.userData.metricValue = value
+      })
+    },
+    setInteraction,
+    setInteractionHandlers(handlers) {
+      interactionHandlers = handlers
     },
     dispose() {
       disposed = true
       pause()
       document.removeEventListener('visibilitychange', onVisibilityChange)
+      renderer.domElement.removeEventListener('pointermove', onPointerMove)
+      renderer.domElement.removeEventListener('pointerleave', onPointerLeave)
+      renderer.domElement.removeEventListener('click', onClick)
       scene.traverse((object) => {
         if (!(object instanceof THREE.Mesh || object instanceof THREE.Points)) return
         object.geometry.dispose()

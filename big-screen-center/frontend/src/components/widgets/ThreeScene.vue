@@ -4,6 +4,7 @@ import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { widgetTitle } from '../../metric-labels'
 import { resolveSceneLoader, type ManagedScene } from '../../registry/scenes'
 import type { EffectsProfile, JsonValue, WidgetDefinition } from '../../types'
+import { useScreenInteraction } from '../../interactions/useScreenInteraction'
 import EChartPanel from './EChartPanel.vue'
 
 const props = defineProps<{
@@ -14,6 +15,7 @@ const props = defineProps<{
 
 const host = ref<HTMLElement | null>(null)
 const failed = ref(false)
+const interaction = useScreenInteraction()
 let managedScene: ManagedScene | null = null
 let observer: ResizeObserver | null = null
 
@@ -49,6 +51,23 @@ onMounted(async () => {
   try {
     const module = await loader()
     managedScene = module.createScene(host.value, props.performanceProfile)
+    managedScene.setInteractionHandlers?.({
+      onHover(target) {
+        if (!target) {
+          interaction.leave()
+          return
+        }
+        interaction.hover(
+          interaction.targetFor(props.widget, target.key, target.value, 'three'),
+        )
+      },
+      onSelect(target) {
+        interaction.lock(
+          interaction.targetFor(props.widget, target.key, target.value, 'three'),
+        )
+      },
+    })
+    managedScene.setInteraction?.(interaction.snapshot.value)
     managedScene.update(props.data)
     observer = new ResizeObserver(([entry]) => {
       managedScene?.resize(
@@ -69,6 +88,11 @@ onMounted(async () => {
 })
 
 watch(() => props.data, (next) => managedScene?.update(next), { deep: true })
+watch(
+  () => interaction.snapshot.value,
+  (snapshot) => managedScene?.setInteraction?.(snapshot),
+  { deep: true },
+)
 onUnmounted(() => {
   observer?.disconnect()
   managedScene?.dispose()
