@@ -910,9 +910,9 @@ services:
       dockerfile: Dockerfile
       args:
         <<: *build_args_node_alpine_nginx
-        VITE_SCA_APP_URL: ${VITE_SCA_APP_URL:-http://localhost:18089}
-        VITE_TRAIN_EXAM_APP_URL: ${VITE_TRAIN_EXAM_APP_URL:-http://localhost:18087}
-        VITE_REMINDER_APP_URL: ${VITE_REMINDER_APP_URL:-http://localhost:18080}
+        VITE_SCA_APP_URL: ${VITE_SCA_APP_URL:-}
+        VITE_TRAIN_EXAM_APP_URL: ${VITE_TRAIN_EXAM_APP_URL:-}
+        VITE_REMINDER_APP_URL: ${VITE_REMINDER_APP_URL:-}
     depends_on:
       big-screen-api:
         condition: service_started

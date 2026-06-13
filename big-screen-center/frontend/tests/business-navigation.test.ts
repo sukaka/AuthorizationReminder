@@ -1,3 +1,6 @@
+import { execFileSync } from 'node:child_process'
+import { resolve } from 'node:path'
+
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import {
@@ -10,6 +13,7 @@ const viteEnvKeys = [
   'VITE_TRAIN_EXAM_APP_URL',
   'VITE_REMINDER_APP_URL',
 ] as const
+const repositoryRoot = resolve(process.cwd(), '../..')
 
 describe('business navigation', () => {
   beforeEach(() => {
@@ -142,5 +146,34 @@ describe('business navigation', () => {
 
     expect(url).toBe('https://screen.example.com/')
     expect(url).not.toMatch(/^javascript:/)
+  })
+
+  it('keeps business origins empty in the default big-screen build', () => {
+    const env = { ...process.env }
+    for (const key of viteEnvKeys) delete env[key]
+
+    const config = JSON.parse(execFileSync(
+      'docker',
+      ['compose', 'config', '--format', 'json'],
+      {
+        cwd: repositoryRoot,
+        encoding: 'utf8',
+        env,
+      },
+    )) as {
+      services: {
+        'web-big-screen': {
+          build: {
+            args: Record<string, string>
+          }
+        }
+      }
+    }
+
+    expect(config.services['web-big-screen'].build.args).toMatchObject({
+      VITE_SCA_APP_URL: '',
+      VITE_TRAIN_EXAM_APP_URL: '',
+      VITE_REMINDER_APP_URL: '',
+    })
   })
 })
