@@ -1,4 +1,4 @@
-import { execFileSync } from 'node:child_process'
+import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -149,31 +149,16 @@ describe('business navigation', () => {
   })
 
   it('keeps business origins empty in the default big-screen build', () => {
-    const env = { ...process.env }
-    for (const key of viteEnvKeys) delete env[key]
+    const compose = readFileSync(
+      resolve(repositoryRoot, 'docker-compose.yml'),
+      'utf8',
+    )
 
-    const config = JSON.parse(execFileSync(
-      'docker',
-      ['compose', 'config', '--format', 'json'],
-      {
-        cwd: repositoryRoot,
-        encoding: 'utf8',
-        env,
-      },
-    )) as {
-      services: {
-        'web-big-screen': {
-          build: {
-            args: Record<string, string>
-          }
-        }
-      }
-    }
-
-    expect(config.services['web-big-screen'].build.args).toMatchObject({
-      VITE_SCA_APP_URL: '',
-      VITE_TRAIN_EXAM_APP_URL: '',
-      VITE_REMINDER_APP_URL: '',
-    })
+    expect(compose).toContain('VITE_SCA_APP_URL: ${VITE_SCA_APP_URL:-}')
+    expect(compose).toContain('VITE_TRAIN_EXAM_APP_URL: ${VITE_TRAIN_EXAM_APP_URL:-}')
+    expect(compose).toContain('VITE_REMINDER_APP_URL: ${VITE_REMINDER_APP_URL:-}')
+    expect(compose).not.toContain('VITE_SCA_APP_URL: ${VITE_SCA_APP_URL:-http://localhost')
+    expect(compose).not.toContain('VITE_TRAIN_EXAM_APP_URL: ${VITE_TRAIN_EXAM_APP_URL:-http://localhost')
+    expect(compose).not.toContain('VITE_REMINDER_APP_URL: ${VITE_REMINDER_APP_URL:-http://localhost')
   })
 })
