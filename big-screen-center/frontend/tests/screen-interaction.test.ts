@@ -202,6 +202,74 @@ describe('screen interaction controller', () => {
     })
   })
 
+  it('returns isolated active clones for hovered and locked targets', () => {
+    const controller = createScreenInteractionController()
+    const locked = target('risks', 12, ['critical-risks'])
+    const hovered = target('licenses', 8, ['risks'])
+    locked.filters.region = 'north'
+    hovered.filters.region = 'south'
+
+    controller.lock(locked)
+    controller.hover(hovered)
+
+    const activeHover = controller.active()!
+    activeHover.key = 'mutated-hover'
+    activeHover.relatedKeys.push('mutated-hover-related')
+    activeHover.filters.region = 'mutated-hover-filter'
+
+    expect(controller.snapshot().hovered).toMatchObject({
+      key: 'licenses',
+      relatedKeys: ['risks'],
+      filters: { region: 'south' },
+    })
+    expect(controller.relationFor('licenses')).toBe('primary')
+    expect(controller.relationFor('risks')).toBe('related')
+
+    controller.leave()
+    const activeLock = controller.active()!
+    activeLock.key = 'mutated-lock'
+    activeLock.relatedKeys.push('mutated-lock-related')
+    activeLock.filters.region = 'mutated-lock-filter'
+
+    expect(controller.snapshot().locked).toMatchObject({
+      key: 'risks',
+      relatedKeys: ['critical-risks'],
+      filters: { region: 'north' },
+    })
+    expect(controller.relationFor('risks')).toBe('primary')
+    expect(controller.relationFor('critical-risks')).toBe('related')
+  })
+
+  it('publishes once after each state operation', () => {
+    const changes: InteractionSnapshot[] = []
+    const controller = createScreenInteractionController((snapshot) => {
+      changes.push(snapshot)
+    })
+    const hovered = target('risks', 12)
+    const locked = target('licenses', 8)
+
+    controller.hover(hovered)
+    expect(changes).toHaveLength(1)
+    expect(changes[0]).toEqual({ hovered, locked: null })
+
+    controller.leave()
+    expect(changes).toHaveLength(2)
+    expect(changes[1]).toEqual({ hovered: null, locked: null })
+
+    controller.lock(locked)
+    expect(changes).toHaveLength(3)
+    expect(changes[2]).toEqual({ hovered: null, locked })
+
+    controller.clear()
+    expect(changes).toHaveLength(4)
+    expect(changes[3]).toEqual({ hovered: null, locked: null })
+
+    controller.refresh({})
+    expect(changes).toHaveLength(5)
+    expect(changes[4]).toEqual({ hovered: null, locked: null })
+    expect(changes[4]).not.toBe(changes[3])
+  })
+
   it('publishes independent snapshots with isolated nested target state', () => {
     const changes: InteractionSnapshot[] = []
     const publishedTargets: InteractionTarget[] = []

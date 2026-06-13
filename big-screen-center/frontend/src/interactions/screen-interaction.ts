@@ -37,7 +37,10 @@ export const createScreenInteractionController = (
     hovered: hovered ? cloneTarget(hovered) : null,
     locked: locked ? cloneTarget(locked) : null,
   })
-  const active = () => hovered ?? locked
+  const active = () => {
+    const target = hovered ?? locked
+    return target ? cloneTarget(target) : null
+  }
   const publish = () => onChange?.(snapshot())
   const refreshTarget = (
     target: InteractionTarget | null,
