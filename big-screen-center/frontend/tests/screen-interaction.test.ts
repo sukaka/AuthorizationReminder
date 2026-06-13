@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'vitest'
 
 import { createScreenInteractionController } from '../src/interactions/screen-interaction'
-import type { InteractionSnapshot, InteractionTarget } from '../src/types'
+import type {
+  InteractionSnapshot,
+  InteractionTarget,
+  JsonValue,
+} from '../src/types'
 
 const target = (
   key: string,
@@ -28,7 +32,7 @@ describe('screen interaction controller', () => {
 
     expect(controller.snapshot()).toEqual({ hovered: null, locked: null })
     controller.hover(hovered)
-    expect(controller.active()).toBe(hovered)
+    expect(controller.active()).toEqual(hovered)
 
     controller.leave()
 
@@ -43,11 +47,11 @@ describe('screen interaction controller', () => {
 
     controller.lock(locked)
     controller.hover(hovered)
-    expect(controller.active()).toBe(hovered)
+    expect(controller.active()).toEqual(hovered)
 
     controller.leave()
 
-    expect(controller.active()).toBe(locked)
+    expect(controller.active()).toEqual(locked)
     expect(controller.snapshot()).toEqual({ hovered: null, locked })
   })
 
@@ -60,7 +64,7 @@ describe('screen interaction controller', () => {
     controller.lock(second)
     controller.lock(second)
 
-    expect(controller.active()).toBe(second)
+    expect(controller.active()).toEqual(second)
     expect(controller.snapshot()).toEqual({ hovered: null, locked: second })
   })
 
@@ -75,7 +79,7 @@ describe('screen interaction controller', () => {
     controller.lock(next)
 
     expect(controller.snapshot()).toEqual({ hovered: null, locked: next })
-    expect(controller.active()).toBe(next)
+    expect(controller.active()).toEqual(next)
   })
 
   it('classifies only the active and explicitly related metrics', () => {
@@ -101,73 +105,136 @@ describe('screen interaction controller', () => {
     expect(controller.snapshot()).toEqual({ hovered: null, locked: null })
   })
 
-  it('refreshes locked number and string values while clearing hover', () => {
+  it('refreshes existing hovered and locked number or string values', () => {
     const controller = createScreenInteractionController()
     const locked = target('risks', 12)
+    const hovered = target('licenses', 8)
+
+    controller.lock(locked)
+    controller.hover(hovered)
+    controller.refresh({ risks: '14 项', licenses: 9 })
+
+    expect(controller.snapshot()).toEqual({
+      hovered: { ...hovered, value: 9 },
+      locked: { ...locked, value: '14 项' },
+    })
+    expect(controller.active()).toEqual({ ...hovered, value: 9 })
+  })
+
+  it('updates and preserves a hover-only target when its key remains', () => {
+    const controller = createScreenInteractionController()
+    const hovered = target('licenses', 8)
+
+    controller.hover(hovered)
+    controller.refresh({ licenses: '9 项' })
+
+    expect(controller.snapshot()).toEqual({
+      hovered: { ...hovered, value: '9 项' },
+      locked: null,
+    })
+  })
+
+  it('clears a missing hover and falls back to a refreshed lock', () => {
+    const controller = createScreenInteractionController()
+    const locked = target('risks', 12)
+
     controller.lock(locked)
     controller.hover(target('licenses', 8))
+    controller.refresh({ risks: 14 })
 
-    controller.refresh({ risks: 14, licenses: 9 })
     expect(controller.snapshot()).toEqual({
       hovered: null,
       locked: { ...locked, value: 14 },
     })
-
-    controller.refresh({ risks: '14 项' })
-    expect(controller.snapshot().locked?.value).toBe('14 项')
+    expect(controller.active()).toEqual({ ...locked, value: 14 })
   })
 
-  it('clears invalid locks and clears hover even without a lock', () => {
-    const invalidValues = [
-      {},
-      [],
-    ]
+  it('clears targets whose metrics are missing or not number or string', () => {
+    const invalidValues: JsonValue[] = [{}, [], null, true]
 
     for (const invalidValue of invalidValues) {
       const controller = createScreenInteractionController()
       controller.lock(target('risks', 12))
       controller.hover(target('licenses', 8))
 
-      controller.refresh({ risks: invalidValue })
+      controller.refresh({
+        risks: invalidValue,
+        licenses: invalidValue,
+      })
 
       expect(controller.snapshot()).toEqual({ hovered: null, locked: null })
     }
-
-    const missing = createScreenInteractionController()
-    missing.lock(target('risks', 12))
-    missing.refresh({ licenses: 9 })
-    expect(missing.snapshot()).toEqual({ hovered: null, locked: null })
-
-    const hoverOnly = createScreenInteractionController()
-    hoverOnly.hover(target('licenses', 8))
-    hoverOnly.refresh({ licenses: 9 })
-    expect(hoverOnly.snapshot()).toEqual({ hovered: null, locked: null })
   })
 
-  it('publishes independent snapshots that cannot replace internal state', () => {
+  it('safely clears state for non-object refresh payloads', () => {
+    const payloads: JsonValue[] = [null, [], 'payload']
+
+    for (const payload of payloads) {
+      const controller = createScreenInteractionController()
+      controller.lock(target('risks', 12))
+      controller.hover(target('licenses', 8))
+
+      expect(() => controller.refresh(payload)).not.toThrow()
+      expect(controller.snapshot()).toEqual({ hovered: null, locked: null })
+    }
+  })
+
+  it('clones accepted targets and returned snapshots deeply enough for state', () => {
+    const controller = createScreenInteractionController()
+    const hovered = target('risks', 12, ['licenses'])
+    hovered.filters.region = 'north'
+
+    controller.hover(hovered)
+    hovered.key = 'mutated-input'
+    hovered.relatedKeys.push('mutated-input-related')
+    hovered.filters.region = 'mutated-input-filter'
+
+    const snapshot = controller.snapshot()
+    snapshot.hovered!.key = 'mutated-snapshot'
+    snapshot.hovered!.relatedKeys.push('mutated-snapshot-related')
+    snapshot.hovered!.filters.region = 'mutated-snapshot-filter'
+    snapshot.hovered = null
+
+    expect(controller.snapshot().hovered).toMatchObject({
+      key: 'risks',
+      relatedKeys: ['licenses'],
+      filters: { region: 'north' },
+    })
+  })
+
+  it('publishes independent snapshots with isolated nested target state', () => {
     const changes: InteractionSnapshot[] = []
+    const publishedTargets: InteractionTarget[] = []
     const controller = createScreenInteractionController((snapshot) => {
       changes.push(snapshot)
+      const published = snapshot.hovered ?? snapshot.locked
+      if (published) {
+        publishedTargets.push(published)
+        published.key = 'mutated-change'
+        published.relatedKeys.push('mutated-change-related')
+        published.filters.region = 'mutated-change-filter'
+      }
       snapshot.hovered = null
       snapshot.locked = null
     })
-    const hovered = target('risks', 12)
-    const locked = target('licenses', 8)
+    const hovered = target('risks', 12, ['licenses'])
+    hovered.filters.region = 'north'
 
     controller.hover(hovered)
-    expect(controller.active()).toBe(hovered)
+    controller.refresh({ risks: 14 })
 
-    const snapshot = controller.snapshot()
-    snapshot.hovered = null
-    expect(controller.active()).toBe(hovered)
-
-    controller.leave()
-    controller.lock(locked)
-    controller.clear()
-    controller.refresh({ licenses: 9 })
-
-    expect(changes).toHaveLength(5)
-    expect(new Set(changes).size).toBe(5)
-    expect(controller.snapshot()).toEqual({ hovered: null, locked: null })
+    expect(changes).toHaveLength(2)
+    expect(new Set(changes).size).toBe(2)
+    expect(publishedTargets).toHaveLength(2)
+    expect(publishedTargets[0]).not.toBe(publishedTargets[1])
+    expect(publishedTargets[0]?.relatedKeys)
+      .not.toBe(publishedTargets[1]?.relatedKeys)
+    expect(publishedTargets[0]?.filters).not.toBe(publishedTargets[1]?.filters)
+    expect(controller.snapshot().hovered).toMatchObject({
+      key: 'risks',
+      value: 14,
+      relatedKeys: ['licenses'],
+      filters: { region: 'north' },
+    })
   })
 })
