@@ -1,6 +1,10 @@
 <script setup lang="ts">
 import { BarChart, LineChart } from 'echarts/charts'
-import { GridComponent, PolarComponent } from 'echarts/components'
+import {
+  GridComponent,
+  PolarComponent,
+  TooltipComponent,
+} from 'echarts/components'
 import {
   init,
   use,
@@ -12,6 +16,7 @@ import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 
 import { metricLabel, numericMetricEntries } from '../../metric-labels'
 import type { EffectsProfile, JsonValue, WidgetDefinition } from '../../types'
+import { useScreenInteraction } from '../../interactions/useScreenInteraction'
 import ParticleVeil from './ParticleVeil.vue'
 
 const props = defineProps<{
@@ -20,13 +25,32 @@ const props = defineProps<{
   performanceProfile: EffectsProfile
 }>()
 
-use([BarChart, LineChart, GridComponent, PolarComponent, CanvasRenderer])
+use([
+  BarChart,
+  LineChart,
+  GridComponent,
+  PolarComponent,
+  TooltipComponent,
+  CanvasRenderer,
+])
 
 const host = ref<HTMLElement | null>(null)
+const interaction = useScreenInteraction()
 let chart: EChartsType | null = null
 let observer: ResizeObserver | null = null
 let glReady = false
 let entranceAnimation: { cancel?: () => void } | null = null
+let chartEventsBound = false
+
+type ChartEventPayload = {
+  data?: {
+    metricKey?: unknown
+    metricValue?: unknown
+    value?: unknown
+  }
+  name?: unknown
+  value?: unknown
+}
 
 const numericEntries = computed(() => {
   return numericMetricEntries(props.data, 7)
@@ -43,6 +67,68 @@ const usesParticles = computed(() =>
   && props.performanceProfile === 'high',
 )
 
+const metricValueFromPayload = (payload: ChartEventPayload) => {
+  const raw = payload.data?.metricValue ?? payload.data?.value ?? payload.value
+  if (Array.isArray(raw)) return Number(raw[raw.length - 1])
+  return Number(raw)
+}
+
+const metricKeyFromPayload = (payload: ChartEventPayload) =>
+  String(payload.data?.metricKey || '')
+
+const targetFromChartPayload = (payload: unknown) => {
+  if (!payload || typeof payload !== 'object') return null
+  const chartPayload = payload as ChartEventPayload
+  const key = metricKeyFromPayload(chartPayload)
+  const value = metricValueFromPayload(chartPayload)
+  if (!key || !Number.isFinite(value)) return null
+  return interaction.targetFor(props.widget, key, value, 'echart')
+}
+
+const onChartHover = (payload?: unknown) => {
+  const target = targetFromChartPayload(payload)
+  if (target) interaction.hover(target)
+}
+
+const onChartClick = (payload?: unknown) => {
+  const target = targetFromChartPayload(payload)
+  if (target) interaction.lock(target)
+}
+
+const onChartGlobalOut = () => {
+  interaction.leave()
+}
+
+const bindChartEvents = () => {
+  if (!chart || chartEventsBound) return
+  chart.on('mouseover', onChartHover)
+  chart.on('click', onChartClick)
+  chart.on('globalout', onChartGlobalOut)
+  chartEventsBound = true
+}
+
+const syncChartInteraction = () => {
+  if (!chart) return
+  chart.dispatchAction({ type: 'downplay' })
+  chart.dispatchAction({ type: 'hideTip' })
+  numericEntries.value.forEach(([key], dataIndex) => {
+    const relation = interaction.relationFor(key)
+    if (relation === 'none') return
+    chart?.dispatchAction({ type: 'highlight', dataIndex })
+    if (relation === 'primary') {
+      chart?.dispatchAction({ type: 'showTip', dataIndex })
+    }
+  })
+}
+
+const formatTooltip = (params: unknown) => {
+  const payload = params as ChartEventPayload
+  const key = metricKeyFromPayload(payload)
+  const value = metricValueFromPayload(payload)
+  const label = key ? metricLabel(key) : String(payload.name || '指标')
+  return `${label}<br/>${Number.isFinite(value) ? value : '-'}`
+}
+
 const render = async () => {
   await nextTick()
   if (!host.value) return
@@ -51,12 +137,14 @@ const render = async () => {
     glReady = true
   }
   chart ||= init(host.value, undefined, { renderer: 'canvas' })
+  bindChartEvents()
   const entries = numericEntries.value
   const fallback = props.widget.config.variant === 'polar-fallback'
   const option: EChartsCoreOption =
     fallback
       ? {
           animation: props.performanceProfile !== 'low',
+          tooltip: { trigger: 'item', formatter: formatTooltip },
           polar: { radius: ['28%', '78%'] },
           angleAxis: {
             type: 'category',
@@ -67,7 +155,12 @@ const render = async () => {
           series: [{
             type: 'bar',
             coordinateSystem: 'polar',
-            data: entries.map(([, value]) => value),
+            data: entries.map(([key, value]) => ({
+              value,
+              name: metricLabel(key),
+              metricKey: key,
+              metricValue: value,
+            })),
             roundCap: true,
             itemStyle: { color: '#f2b84b' },
           }],
@@ -75,6 +168,7 @@ const render = async () => {
       : usesGl.value
         ? {
             animation: props.performanceProfile !== 'low',
+            tooltip: { trigger: 'item', formatter: formatTooltip },
             grid3D: {
               boxWidth: 120,
               boxDepth: 38,
@@ -98,7 +192,12 @@ const render = async () => {
             zAxis3D: { type: 'value', axisLabel: { color: '#9f927d' } },
             series: [{
               type: 'bar3D',
-              data: entries.map(([, value], index) => [index, 0, value]),
+              data: entries.map(([key, value], index) => ({
+                value: [index, 0, value],
+                name: metricLabel(key),
+                metricKey: key,
+                metricValue: value,
+              })),
               bevelSize: 0.3,
               itemStyle: { color: '#f2b84b', opacity: 0.86 },
               shading: 'lambert',
@@ -106,6 +205,7 @@ const render = async () => {
           }
         : {
           animation: props.performanceProfile !== 'low',
+          tooltip: { trigger: 'item', formatter: formatTooltip },
           grid: { left: 36, right: 20, top: 30, bottom: 34 },
           xAxis: {
             type: 'category',
@@ -122,16 +222,23 @@ const render = async () => {
             type: 'line',
             smooth: true,
             symbolSize: 8,
-            data: entries.map(([, value]) => value),
+            data: entries.map(([key, value]) => ({
+              value,
+              name: metricLabel(key),
+              metricKey: key,
+              metricValue: value,
+            })),
             lineStyle: { color: '#f2b84b', width: 3 },
             itemStyle: { color: '#b9d86b' },
             areaStyle: { color: 'rgba(242, 184, 75, .12)' },
           }],
         }
   chart.setOption(option, true)
+  syncChartInteraction()
 }
 
 watch(() => [props.data, props.performanceProfile], render, { deep: true })
+watch(() => interaction.snapshot.value, syncChartInteraction, { deep: true })
 
 onMounted(() => {
   void render()
@@ -155,7 +262,13 @@ onMounted(() => {
 onUnmounted(() => {
   entranceAnimation?.cancel?.()
   observer?.disconnect()
+  if (chart && chartEventsBound) {
+    chart.off('mouseover', onChartHover)
+    chart.off('click', onChartClick)
+    chart.off('globalout', onChartGlobalOut)
+  }
   chart?.dispose()
+  chartEventsBound = false
 })
 </script>
 
