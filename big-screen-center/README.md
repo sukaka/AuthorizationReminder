@@ -20,6 +20,13 @@ npm --prefix big-screen-center/frontend run dev
 
 后端默认监听 `5192`，前端开发服务默认监听 `5173`。生产入口由 Compose 暴露为 `http://localhost:18092`。
 
+## 模板交互
+
+- 悬停指标可预览同模板关联数据，点击后锁定并打开底部分析台。
+- 点击其他指标切换锁定，点击空白、关闭按钮或按 Esc 清除。
+- “前往业务系统”只打开白名单内路径，并过滤敏感查询参数。
+- `VITE_SCA_APP_URL`、`VITE_TRAIN_EXAM_APP_URL`、`VITE_REMINDER_APP_URL` 可覆盖三个业务系统前端地址。
+
 ## Operations
 
 - `GET /api/big-screen/health`: 数据库及 `sca`、`train-exam`、`reminder` 来源健康状态。

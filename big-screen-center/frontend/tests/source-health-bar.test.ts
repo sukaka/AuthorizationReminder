@@ -30,7 +30,7 @@ describe('SourceHealthBar', () => {
     })
 
     expect(wrapper.attributes('data-source-status')).toBe('stale')
-    expect(wrapper.text()).toContain('STALE')
+    expect(wrapper.text()).toContain('已过期')
     expect(wrapper.text()).toContain('等待数据')
   })
 })

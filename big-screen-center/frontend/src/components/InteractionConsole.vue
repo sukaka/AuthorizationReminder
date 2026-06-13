@@ -31,7 +31,7 @@ defineEmits<{
 
 const currentHref = computed(() =>
   props.currentHref
-  || (typeof window !== 'undefined' ? window.location.href : 'http://localhost/'),
+  || (typeof window !== 'undefined' ? window.location.href : '/'),
 )
 
 const detailUrl = computed(() => {

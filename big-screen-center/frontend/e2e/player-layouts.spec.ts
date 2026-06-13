@@ -32,6 +32,7 @@ for (const [systemKey, label] of groups) {
           page.locator(`.screen-grid__area--core [data-widget="${coreType}"]`),
         ).toBeVisible({ timeout: 60_000 })
         await expect(page.locator('[data-source-status]')).toHaveCount(1)
+        await expect(page.locator('[data-interaction-console]')).toHaveCount(0)
         await expect(page.locator('[data-widget-error="true"]')).toHaveCount(0)
       })
 
@@ -44,6 +45,7 @@ for (const [systemKey, label] of groups) {
           page.locator(`.screen-grid__area--core [data-widget="${coreType}"]`),
         ).toBeVisible()
         await expect(page.locator('[data-source-status]')).toHaveCount(1)
+        await expect(page.locator('[data-interaction-console]')).toHaveCount(0)
         await expect(page.locator('[data-widget-error="true"]')).toHaveCount(0)
         await page.locator('.screen-exit').click()
         await expect(page.locator(`a[href="/play/${id}"]`)).toBeVisible()
