@@ -64,6 +64,20 @@ describe('screen interaction controller', () => {
     expect(controller.snapshot()).toEqual({ hovered: null, locked: second })
   })
 
+  it('clears an active hover when locking another target', () => {
+    const controller = createScreenInteractionController()
+    const first = target('risks', 12)
+    const hovered = target('licenses', 8)
+    const next = target('critical-risks', 3)
+
+    controller.lock(first)
+    controller.hover(hovered)
+    controller.lock(next)
+
+    expect(controller.snapshot()).toEqual({ hovered: null, locked: next })
+    expect(controller.active()).toBe(next)
+  })
+
   it('classifies only the active and explicitly related metrics', () => {
     const controller = createScreenInteractionController()
     controller.lock(target('risks', 12, ['critical-risks', 'licenses']))
