@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import { Graph } from '@antv/g6'
-import { onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 
 import type { EffectsProfile, JsonValue, WidgetDefinition } from '../../types'
 import { metricLabel, numericMetricEntries, widgetTitle } from '../../metric-labels'
+import { useScreenInteraction } from '../../interactions/useScreenInteraction'
 
 const props = defineProps<{
   widget: WidgetDefinition
@@ -12,21 +13,85 @@ const props = defineProps<{
 }>()
 
 const host = ref<HTMLElement | null>(null)
+const interaction = useScreenInteraction()
 let graph: Graph | null = null
 let observer: ResizeObserver | null = null
 
+type GraphNodeEvent = {
+  target?: {
+    id?: unknown
+    getID?: () => unknown
+  }
+  item?: {
+    id?: unknown
+    getID?: () => unknown
+  }
+}
+
+const entries = computed(() => numericMetricEntries(props.data, 9))
+const valuesByKey = computed(() => new Map(entries.value))
+
+const nodeIdFromEvent = (event?: unknown) => {
+  if (!event || typeof event !== 'object') return ''
+  const payload = event as GraphNodeEvent
+  return String(
+    payload.target?.id
+    || payload.target?.getID?.()
+    || payload.item?.id
+    || payload.item?.getID?.()
+    || '',
+  )
+}
+
+const targetForNode = (event?: unknown) => {
+  const key = nodeIdFromEvent(event)
+  const value = valuesByKey.value.get(key)
+  if (!key || value === undefined) return null
+  return interaction.targetFor(props.widget, key, value, 'graph')
+}
+
+const onNodeEnter = (event?: unknown) => {
+  const target = targetForNode(event)
+  if (target) interaction.hover(target)
+}
+
+const onNodeLeave = () => {
+  interaction.leave()
+}
+
+const onNodeClick = (event?: unknown) => {
+  const target = targetForNode(event)
+  if (target) interaction.lock(target)
+}
+
+const onCanvasClick = () => {
+  interaction.clear()
+}
+
+const syncGraphInteraction = () => {
+  if (!graph) return
+  entries.value.forEach(([key]) => {
+    const relation = interaction.relationFor(key)
+    const state = relation === 'primary'
+      ? ['selected']
+      : relation === 'related'
+        ? ['active']
+        : []
+    graph?.setElementState(key, state)
+  })
+}
+
 onMounted(async () => {
   if (!host.value) return
-  const entries = numericMetricEntries(props.data, 9)
   const nodes = [
     { id: 'hub', data: { label: widgetTitle(props.widget.config.variant || props.widget.config.visualKey || 'core') } },
-    ...entries.map(([key, value], index) => ({
+    ...entries.value.map(([key, value], index) => ({
       id: key,
-      data: { label: metricLabel(key), value },
+      data: { label: metricLabel(key), value, metricKey: key, metricValue: value },
       style: { size: 22 + Math.min(value / 100, 28), x: 120 + (index % 3) * 180, y: 110 + Math.floor(index / 3) * 150 },
     })),
   ]
-  const edges = entries.map(([key]) => ({ source: 'hub', target: key }))
+  const edges = entries.value.map(([key]) => ({ source: 'hub', target: key }))
 
   graph = new Graph({
     container: host.value,
@@ -53,14 +118,25 @@ onMounted(async () => {
     },
   })
   await graph.render()
+  graph.on('node:pointerenter', onNodeEnter)
+  graph.on('node:pointerleave', onNodeLeave)
+  graph.on('node:click', onNodeClick)
+  graph.on('canvas:click', onCanvasClick)
+  syncGraphInteraction()
   observer = new ResizeObserver(([entry]) => {
     graph?.setSize(entry.contentRect.width, entry.contentRect.height)
   })
   observer.observe(host.value)
 })
 
+watch(() => interaction.snapshot.value, syncGraphInteraction, { deep: true })
+
 onUnmounted(() => {
   observer?.disconnect()
+  graph?.off('node:pointerenter', onNodeEnter)
+  graph?.off('node:pointerleave', onNodeLeave)
+  graph?.off('node:click', onNodeClick)
+  graph?.off('canvas:click', onCanvasClick)
   graph?.destroy()
 })
 </script>
