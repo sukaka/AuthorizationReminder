@@ -1,14 +1,16 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, toRef, watch } from 'vue'
 
 import { useDataChannel } from '../composables/useDataChannel'
 import { usePerformanceProfile } from '../composables/usePerformanceProfile'
 import { useScreenScale } from '../composables/useScreenScale'
+import { provideScreenInteraction } from '../interactions/useScreenInteraction'
 import {
   navigateToUnifiedLogin,
   previewData,
 } from '../preview-data'
 import type { JsonValue, ScreenTemplate } from '../types'
+import InteractionConsole from './InteractionConsole.vue'
 import SourceHealthBar from './SourceHealthBar.vue'
 import WidgetHost from './widgets/WidgetHost.vue'
 
@@ -77,6 +79,11 @@ const data = computed<JsonValue>(() =>
     ? previewData[props.template.systemKey]
     : channel.envelope.value?.data || {},
 )
+const interaction = provideScreenInteraction(
+  toRef(props, 'template'),
+  data,
+  filters,
+)
 const dataStatus = computed(() => {
   if (usePreviewData.value) return 'mock' as const
   if (channel.envelope.value) return channel.envelope.value.status
@@ -98,6 +105,41 @@ const canvasStyle = computed(() => ({
   height: `${transform.value.designHeight}px`,
   transform: `translate(${transform.value.offsetX}px, ${transform.value.offsetY}px) scale(${transform.value.scaleX})`,
 }))
+
+const metricValue = (key: string) => {
+  const current = data.value
+  if (!current || typeof current !== 'object' || Array.isArray(current)) {
+    return undefined
+  }
+  const value = current[key]
+  return typeof value === 'number' || typeof value === 'string'
+    ? value
+    : undefined
+}
+const lockedTarget = computed(() => interaction.snapshot.value.locked)
+const relatedMetrics = computed(() => {
+  const locked = lockedTarget.value
+  if (!locked) return []
+  const byKey = new Map(
+    props.template.interactions.map((item) => [item.key, item]),
+  )
+  return locked.relatedKeys
+    .map((key) => byKey.get(key))
+    .filter((item): item is NonNullable<typeof item> => Boolean(item))
+    .map((item) => ({
+      ...item,
+      value: metricValue(item.key),
+      unit: item.key.toLowerCase().includes('rate') ? '%' : undefined,
+    }))
+})
+
+const clearInteraction = () => interaction.clear()
+const onKeydown = (event: KeyboardEvent) => {
+  if (event.key === 'Escape') clearInteraction()
+}
+
+onMounted(() => window.addEventListener('keydown', onKeydown))
+onUnmounted(() => window.removeEventListener('keydown', onKeydown))
 </script>
 
 <template>
@@ -108,6 +150,7 @@ const canvasStyle = computed(() => ({
       :style="canvasStyle"
       :data-screen-layout="transform.layout"
       data-screen-ready="true"
+      @click.self="clearInteraction"
     >
       <header class="screen-heading">
         <div>
@@ -140,6 +183,13 @@ const canvasStyle = computed(() => ({
           />
         </div>
       </section>
+
+      <InteractionConsole
+        :target="lockedTarget"
+        :related="relatedMetrics"
+        :system-key="template.systemKey"
+        @close="clearInteraction"
+      />
     </section>
   </main>
 </template>
