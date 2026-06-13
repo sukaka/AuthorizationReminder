@@ -1,9 +1,13 @@
 # 聚信多系统业务平台高层设计
 
-> 文档状态：已确认设计  
-> 编制日期：2026-06-13  
-> 适用版本：`5.70.12` 及后续兼容版本  
-> 主要读者：技术负责人、研发人员、测试人员、部署与运维交接人员  
+> 文档状态：已确认设计
+>
+> 编制日期：2026-06-13
+>
+> 适用版本：`5.70.12` 及后续兼容版本
+>
+> 主要读者：技术负责人、研发人员、测试人员、部署与运维交接人员
+>
 > 现状基准：仓库根 `docker-compose.yml`、`auth/portal-routing.js` 与各系统当前实现
 
 ## 1. 文档定位
@@ -212,8 +216,10 @@ flowchart TB
 
 ### 5.1 授权到期提醒系统
 
-**系统键：** `reminder`  
-**目录：** 根后端 `server`、前端 `web`  
+**系统键：** `reminder`
+
+**目录：** 根后端 `server`、前端 `web`
+
 **技术栈：** Node.js/Express、React/Vite、MySQL
 
 核心职责：
@@ -227,8 +233,10 @@ Reminder 与 Auth 共用 `juxin_reminder`，属于当前最明显的历史共享
 
 ### 5.2 交付系统
 
-**系统键：** `delivery`  
-**目录：** `delivery`  
+**系统键：** `delivery`
+
+**目录：** `delivery`
+
 **技术栈：** Node.js/Express、React/Vite、MySQL
 
 核心职责：
@@ -243,8 +251,10 @@ Reminder 与 Auth 共用 `juxin_reminder`，属于当前最明显的历史共享
 
 ### 5.3 CMDB 系统
 
-**系统键：** `cmdb`  
-**目录：** `cmdb`  
+**系统键：** `cmdb`
+
+**目录：** `cmdb`
+
 **技术栈：** Go/Gin、React/Vite、MySQL
 
 核心职责：
@@ -258,8 +268,10 @@ Reminder 与 Auth 共用 `juxin_reminder`，属于当前最明显的历史共享
 
 ### 5.4 库存管理系统
 
-**系统键：** `inventory`  
-**目录：** `inventory-system`  
+**系统键：** `inventory`
+
+**目录：** `inventory-system`
+
 **技术栈：** Node.js/Express、React/Vite、MySQL
 
 核心职责：
@@ -274,8 +286,10 @@ Reminder 与 Auth 共用 `juxin_reminder`，属于当前最明显的历史共享
 
 ### 5.5 设备流转系统
 
-**系统键：** `device-flow`  
-**目录：** `device-flow`  
+**系统键：** `device-flow`
+
+**目录：** `device-flow`
+
 **技术栈：** Node.js/Express、React/Vite、MySQL
 
 核心职责：
@@ -289,8 +303,10 @@ Reminder 与 Auth 共用 `juxin_reminder`，属于当前最明显的历史共享
 
 ### 5.6 文档管理系统
 
-**系统键：** `faq`  
-**目录：** `faq`  
+**系统键：** `faq`
+
+**目录：** `faq`
+
 **技术栈：** Node.js/Express、React/Vite、MySQL、OnlyOffice
 
 核心职责：
@@ -305,8 +321,10 @@ FAQ 的文档文件、预览、草稿和可编辑版本位于持久化卷。数�
 
 ### 5.7 标书协同制作系统
 
-**系统键：** `tender`  
-**目录：** `tender`  
+**系统键：** `tender`
+
+**目录：** `tender`
+
 **技术栈：** Node.js/Express、React/Vite、MySQL、OnlyOffice
 
 核心职责：
@@ -320,8 +338,10 @@ Tender 与 FAQ 共用 OnlyOffice 实例和文档 JWT 密钥，但使用独立数
 
 ### 5.8 培训考试系统
 
-**系统键：** `train-exam`  
-**目录：** `train-exam`  
+**系统键：** `train-exam`
+
+**目录：** `train-exam`
+
 **技术栈：** Node.js/Express、React/Vite、MySQL、OnlyOffice
 
 核心职责：
@@ -336,8 +356,10 @@ Train Exam 使用独立 OnlyOffice 实例，避免与 FAQ/Tender 的文档密钥
 
 ### 5.9 提示词管理中心
 
-**系统键：** `prompt-center`  
-**目录：** `prompt-center`  
+**系统键：** `prompt-center`
+
+**目录：** `prompt-center`
+
 **技术栈：** Node.js/Express、React/Vite、MySQL
 
 核心职责：
@@ -351,8 +373,10 @@ Train Exam 使用独立 OnlyOffice 实例，避免与 FAQ/Tender 的文档密钥
 
 ### 5.10 软件成分分析平台
 
-**系统键：** `sca`  
-**目录：** `sca-platform`  
+**系统键：** `sca`
+
+**目录：** `sca-platform`
+
 **技术栈：** Python/FastAPI、Vue 3/Element Plus、PostgreSQL、Redis、Celery
 
 核心职责：
@@ -370,8 +394,10 @@ SCA 依赖 OSV、NVD、GitHub Advisory、各语言包仓库和可选 AI 服务�
 
 ### 5.11 统一大屏展示中心
 
-**系统键：** `big-screen`  
-**目录：** `big-screen-center`  
+**系统键：** `big-screen`
+
+**目录：** `big-screen-center`
+
 **技术栈：** TypeScript/Express、Vue 3、ECharts、Three.js、MySQL
 
 核心职责：
