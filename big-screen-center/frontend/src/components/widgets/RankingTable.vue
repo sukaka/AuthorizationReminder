@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 
+import { useScreenInteraction } from '../../interactions/useScreenInteraction'
 import { metricLabel, numericMetricEntries, widgetTitle } from '../../metric-labels'
-import type { EffectsProfile, JsonValue, WidgetDefinition } from '../../types'
+import type { EffectsProfile, InteractionSource, JsonValue, WidgetDefinition } from '../../types'
 import TechFrame from './TechFrame.vue'
 
 const props = defineProps<{
@@ -10,15 +11,28 @@ const props = defineProps<{
   data: JsonValue
   performanceProfile: EffectsProfile
 }>()
+const interaction = useScreenInteraction()
 
 const rows = computed(() => {
   return numericMetricEntries(props.data, 30)
     .sort((left, right) => right[1] - left[1])
     .slice(0, 8)
+    .map(([key, value]) => ({
+      key,
+      label: metricLabel(key),
+      value,
+    }))
 })
 
-const maximum = computed(() => Math.max(...rows.value.map((row) => row[1]), 1))
+const maximum = computed(() => Math.max(...rows.value.map((row) => row.value), 1))
 const title = computed(() => widgetTitle(props.widget.config.variant))
+const source: InteractionSource = 'ranking'
+const preview = (key: string, value: number) =>
+  interaction.hover(interaction.targetFor(props.widget, key, value, source))
+const select = (key: string, value: number) =>
+  interaction.lock(interaction.targetFor(props.widget, key, value, source))
+const relation = (key: string) => interaction.relationFor(key)
+const pressed = (key: string) => interaction.snapshot.value.locked?.key === key
 </script>
 
 <template>
@@ -34,13 +48,28 @@ const title = computed(() => widgetTitle(props.widget.config.variant))
         <strong>前 {{ rows.length }} 项</strong>
       </header>
       <ol>
-        <li v-for="([key, value], index) in rows" :key="key">
+        <li
+          v-for="(row, index) in rows"
+          :key="row.key"
+          role="button"
+          tabindex="0"
+          :data-interaction-key="row.key"
+          :data-interaction-state="relation(row.key)"
+          :data-performance-profile="performanceProfile"
+          :aria-pressed="pressed(row.key)"
+          :aria-label="`${row.label}：${row.value}`"
+          @mouseenter="preview(row.key, row.value)"
+          @mouseleave="interaction.leave()"
+          @click.stop="select(row.key, row.value)"
+          @keydown.enter.prevent="select(row.key, row.value)"
+          @keydown.space.prevent="select(row.key, row.value)"
+        >
           <b>{{ String(index + 1).padStart(2, '0') }}</b>
           <div>
-            <span>{{ metricLabel(key) }}</span>
-            <i :style="{ width: `${(value / maximum) * 100}%` }" />
+            <span>{{ row.label }}</span>
+            <i :style="{ width: `${(row.value / maximum) * 100}%` }" />
           </div>
-          <strong>{{ value.toLocaleString() }}</strong>
+          <strong>{{ row.value.toLocaleString() }}</strong>
         </li>
       </ol>
     </div>
@@ -79,6 +108,32 @@ ol {
 li {
   grid-template-columns: 32px minmax(0, 1fr) auto;
   gap: 14px;
+  padding: 4px 0;
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition:
+    border-color 180ms ease,
+    background-color 180ms ease,
+    transform 180ms ease;
+}
+
+li:focus-visible {
+  outline: 2px solid var(--screen-accent);
+  outline-offset: 3px;
+}
+
+li[data-interaction-state="primary"] {
+  border-color: var(--screen-accent);
+  background: color-mix(in srgb, var(--screen-accent), transparent 88%);
+  transform: translateX(4px);
+}
+
+li[data-interaction-state="related"] {
+  border-color: color-mix(in srgb, var(--screen-accent), transparent 45%);
+}
+
+li[data-performance-profile="low"] {
+  transform: none;
 }
 
 li b {

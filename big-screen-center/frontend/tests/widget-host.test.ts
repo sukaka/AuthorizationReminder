@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest'
 
 import WidgetHost from '../src/components/widgets/WidgetHost.vue'
 import type { WidgetDefinition } from '../src/types'
+import { mountWithInteraction } from './helpers/interaction'
 
 const widget = (type: string): WidgetDefinition => ({
   id: 'test-widget',
@@ -19,12 +20,10 @@ const widget = (type: string): WidgetDefinition => ({
 
 describe('WidgetHost', () => {
   it('loads registered widget types from the code-owned registry', async () => {
-    const wrapper = mount(WidgetHost, {
-      props: {
-        widget: widget('metric-cards'),
-        data: { total: 12 },
-        performanceProfile: 'high',
-      },
+    const { wrapper } = mountWithInteraction(WidgetHost, {
+      widget: widget('metric-cards'),
+      data: { total: 12 },
+      performanceProfile: 'high',
     })
     await flushPromises()
 

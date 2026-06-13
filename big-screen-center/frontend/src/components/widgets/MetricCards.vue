@@ -1,14 +1,16 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 
+import { useScreenInteraction } from '../../interactions/useScreenInteraction'
 import { metricLabel, numericMetricEntries } from '../../metric-labels'
-import type { EffectsProfile, JsonValue, WidgetDefinition } from '../../types'
+import type { EffectsProfile, InteractionSource, JsonValue, WidgetDefinition } from '../../types'
 
 const props = defineProps<{
   widget: WidgetDefinition
   data: JsonValue
   performanceProfile: EffectsProfile
 }>()
+const interaction = useScreenInteraction()
 
 const cards = computed(() => {
   return numericMetricEntries(props.data, 4)
@@ -19,6 +21,14 @@ const cards = computed(() => {
       suffix: key.toLowerCase().includes('rate') ? '%' : '',
     }))
 })
+
+const source: InteractionSource = 'metric-card'
+const preview = (key: string, value: number) =>
+  interaction.hover(interaction.targetFor(props.widget, key, value, source))
+const select = (key: string, value: number) =>
+  interaction.lock(interaction.targetFor(props.widget, key, value, source))
+const relation = (key: string) => interaction.relationFor(key)
+const pressed = (key: string) => interaction.snapshot.value.locked?.key === key
 </script>
 
 <template>
@@ -27,7 +37,22 @@ const cards = computed(() => {
     data-widget="metric-cards"
     data-widget-type="metric-cards"
   >
-    <article v-for="card in cards" :key="card.key">
+    <article
+      v-for="card in cards"
+      :key="card.key"
+      role="button"
+      tabindex="0"
+      :data-interaction-key="card.key"
+      :data-interaction-state="relation(card.key)"
+      :data-performance-profile="performanceProfile"
+      :aria-pressed="pressed(card.key)"
+      :aria-label="`${card.label}：${card.value}`"
+      @mouseenter="preview(card.key, card.value)"
+      @mouseleave="interaction.leave()"
+      @click.stop="select(card.key, card.value)"
+      @keydown.enter.prevent="select(card.key, card.value)"
+      @keydown.space.prevent="select(card.key, card.value)"
+    >
       <span>{{ card.label }}</span>
       <strong>{{ card.value.toLocaleString() }}<small>{{ card.suffix }}</small></strong>
       <i aria-hidden="true" />
@@ -50,6 +75,31 @@ article {
   overflow: hidden;
   background: linear-gradient(135deg, rgb(255 255 255 / 5%), transparent 62%);
   border: 1px solid var(--screen-line);
+  transition:
+    border-color 180ms ease,
+    box-shadow 180ms ease,
+    transform 180ms ease;
+  cursor: pointer;
+}
+
+article:focus-visible {
+  outline: 2px solid var(--screen-accent);
+  outline-offset: 3px;
+}
+
+article[data-interaction-state="primary"] {
+  border-color: var(--screen-accent);
+  box-shadow: 0 0 24px color-mix(in srgb, var(--screen-accent), transparent 62%);
+  transform: translateY(-3px);
+}
+
+article[data-interaction-state="related"] {
+  border-color: color-mix(in srgb, var(--screen-accent), transparent 32%);
+}
+
+article[data-performance-profile="low"] {
+  box-shadow: none;
+  transform: none;
 }
 
 span {
@@ -80,5 +130,11 @@ i {
   height: 2px;
   background: var(--screen-accent);
   box-shadow: 0 0 18px var(--screen-accent);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  article {
+    transform: none !important;
+  }
 }
 </style>

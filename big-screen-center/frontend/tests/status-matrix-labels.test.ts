@@ -1,8 +1,8 @@
-import { mount } from '@vue/test-utils'
 import { describe, expect, it } from 'vitest'
 
 import StatusMatrix from '../src/components/widgets/StatusMatrix.vue'
 import type { WidgetDefinition } from '../src/types'
+import { mountWithInteraction } from './helpers/interaction'
 
 const widget: WidgetDefinition = {
   id: 'remind-02-health',
@@ -19,17 +19,15 @@ const widget: WidgetDefinition = {
 
 describe('StatusMatrix labels', () => {
   it('explains health cells with Chinese labels', () => {
-    const wrapper = mount(StatusMatrix, {
-      props: {
-        widget,
-        data: {
-          expiring: 0,
-          todayDue: 0,
-          totalReminders: 0,
-          successRate: 94,
-        },
-        performanceProfile: 'high',
+    const { wrapper } = mountWithInteraction(StatusMatrix, {
+      widget,
+      data: {
+        expiring: 0,
+        todayDue: 0,
+        totalReminders: 0,
+        successRate: 94,
       },
+      performanceProfile: 'high',
     })
 
     expect(wrapper.text()).toContain('数据健康矩阵')
