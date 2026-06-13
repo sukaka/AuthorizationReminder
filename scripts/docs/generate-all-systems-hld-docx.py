@@ -22,7 +22,7 @@ ROOT = Path(__file__).resolve().parents[2]
 SOURCE = ROOT / "docs/superpowers/specs/2026-06-13-all-systems-high-level-design.md"
 OUTPUT_DIR = ROOT / "outputs/all-systems-hld"
 DOCX_PATH = OUTPUT_DIR / "聚信多系统业务平台高层设计.docx"
-DOCUMENT_VERSION = "5.70.17"
+DOCUMENT_VERSION = "5.70.18"
 FONT_CANDIDATES = [
     Path("/System/Library/Fonts/STHeiti Medium.ttc"),
     Path("/System/Library/Fonts/STHeiti Light.ttc"),
@@ -131,8 +131,8 @@ def draw_overview() -> Path:
 
     access_boxes = [
         (130, 275, 500, 405, "用户访问\n浏览器 / 域名 / localhost", BLUE),
-        (675, 275, 1095, 405, "统一入口容器\n`auth` : 5180\nPortal / Admin / Audit", NAVY),
-        (1270, 275, 2025, 405, "统一鉴权\nCookie: juxin_auth_token\n业务 API -> /api/auth/introspect", TEAL),
+        (675, 275, 1095, 405, "统一入口容器\n`auth` : 5180\n统一门户 / 管理后台 / 审计中心", NAVY),
+        (1270, 275, 2025, 405, "统一鉴权\n会话令牌: juxin_auth_token\n业务接口 -> /api/auth/introspect", TEAL),
     ]
     for x1, y1, x2, y2, text, color in access_boxes:
         round_rect(draw, (x1, y1, x2, y2), WHITE, color, width=4)
@@ -141,19 +141,19 @@ def draw_overview() -> Path:
     arrow(draw, (1105, 340), (1255, 340), MUTED)
 
     round_rect(draw, (120, 475, 1495, 905), PALE_BLUE, BLUE, width=4)
-    draw.text((155, 500), "11 个业务系统容器组（每组至少包含 Web 容器 + API 容器）", font=pil_font(28, True), fill=NAVY)
+    draw.text((155, 500), "11 个业务系统容器组（每组至少包含前端容器 + 接口容器）", font=pil_font(28, True), fill=NAVY)
     systems = [
-        ("Reminder", "web + api", BLUE),
-        ("Delivery", "web-delivery + delivery-api", TEAL),
-        ("CMDB", "web-cmdb + cmdb", PURPLE),
-        ("Inventory", "web-inventory + inventory-api", ORANGE),
-        ("Device Flow", "web-device-flow + device-flow-api", CYAN),
-        ("FAQ", "web-faq + faq-api", GREEN),
-        ("Tender", "web-tender + tender-api", PURPLE),
-        ("Train Exam", "web-train-exam + train-exam-api", BLUE),
-        ("Prompt Center", "web-prompt-center +\nprompt-center-api", TEAL),
-        ("SCA", "web-sca + sca-api + workers", RED),
-        ("Big Screen", "web-big-screen +\nbig-screen-api", NAVY),
+        ("授权提醒", "web + api", BLUE),
+        ("交付系统", "web-delivery + delivery-api", TEAL),
+        ("配置管理", "web-cmdb + cmdb", PURPLE),
+        ("库存管理", "web-inventory + inventory-api", ORANGE),
+        ("设备流转", "web-device-flow + device-flow-api", CYAN),
+        ("文档管理", "web-faq + faq-api", GREEN),
+        ("标书协同", "web-tender + tender-api", PURPLE),
+        ("培训考试", "web-train-exam + train-exam-api", BLUE),
+        ("提示词中心", "web-prompt-center +\nprompt-center-api", TEAL),
+        ("软件成分分析", "web-sca + sca-api + workers", RED),
+        ("统一大屏", "web-big-screen +\nbig-screen-api", NAVY),
     ]
     card_w, card_h = 310, 92
     for idx, (name, services, color) in enumerate(systems):
@@ -170,7 +170,7 @@ def draw_overview() -> Path:
         ("异步任务", "sca-worker / scanner / beat", RED),
         ("文档编辑", "onlyoffice / train-exam-onlyoffice", ORANGE),
         ("物流网关", "shipping-gateway", TEAL),
-        ("SBOM 分析", "dependency-track API / Web", PURPLE),
+        ("软件物料分析", "dependency-track 接口 / 前端", PURPLE),
     ]
     for idx, (title, value, color) in enumerate(shared_items):
         y = 590 + idx * 72
@@ -183,8 +183,8 @@ def draw_overview() -> Path:
 
     data_boxes = [
         (135, 1010, 525, 1160, "MySQL\nmysql\n53308 -> 3306\nmysql-data", BLUE),
-        (610, 1010, 1000, 1160, "SCA PostgreSQL\nsca-postgres\n55433 -> 5432", PURPLE),
-        (1085, 1010, 1475, 1160, "SCA Redis\nsca-redis\n56380 -> 6379", RED),
+        (610, 1010, 1000, 1160, "软件成分分析 PostgreSQL\nsca-postgres\n55433 -> 5432", PURPLE),
+        (1085, 1010, 1475, 1160, "软件成分分析 Redis\nsca-redis\n56380 -> 6379", RED),
         (1560, 1010, 2030, 1160, "业务文件卷\nfaq/tender/train-exam\nsca upload/report/sbom/cache", TEAL),
     ]
     for x1, y1, x2, y2, text, color in data_boxes:
@@ -194,7 +194,7 @@ def draw_overview() -> Path:
 
     draw.text(
         (125, 1200),
-        "说明：主图保留高层直观性；完整端口、卷、depends_on 与健康检查在第 9 章 Docker Compose 设计中展开。",
+        "说明：主图保留高层直观性；完整端口、数据卷、启动依赖与健康检查在第 9 章 Docker Compose 设计中展开。",
         font=pil_font(23),
         fill=MUTED,
     )
@@ -202,14 +202,14 @@ def draw_overview() -> Path:
 
 
 def draw_auth_flow() -> Path:
-    image, draw = canvas("统一认证与系统访问流程", "HttpOnly Cookie、门户授权、业务 API 二次鉴权")
+    image, draw = canvas("统一认证与系统访问流程", "统一会话、门户授权、业务接口二次鉴权")
     nodes = [
         ("用户浏览器", 80, BLUE),
-        ("Auth 登录\n5180", 420, NAVY),
+        ("统一认证\n5180", 420, NAVY),
         ("门户应用清单\n/api/auth/apps", 790, TEAL),
         ("业务前端", 1190, CYAN),
-        ("业务 API", 1510, ORANGE),
-        ("Auth Introspection\n系统键校验", 1820, PURPLE),
+        ("业务接口", 1510, ORANGE),
+        ("认证内省\n系统键校验", 1820, PURPLE),
     ]
     y1, y2 = 430, 620
     for label, x, color in nodes:
@@ -221,11 +221,11 @@ def draw_auth_flow() -> Path:
         arrow(draw, (x + 8, 525), (next_x - 8, 525), MUTED)
 
     steps = [
-        "1. 登录并设置会话 Cookie",
+        "1. 登录并设置统一会话",
         "2. 获取用户可访问系统",
         "3. 跳转目标业务前端",
-        "4. 请求携带统一 Cookie",
-        "5. API 校验身份、角色与系统键",
+        "4. 请求携带统一会话",
+        "5. 接口校验身份、角色与系统键",
     ]
     start_x = 140
     for idx, step in enumerate(steps):
@@ -237,7 +237,7 @@ def draw_auth_flow() -> Path:
     centered_text(
         draw,
         (1240, 770, 2080, 1140),
-        "授权原则\n\n前端菜单只负责展示\n业务后端必须再次鉴权\n系统键与资源范围同时校验\nAuth 不可用时拒绝受保护操作",
+        "授权原则\n\n前端菜单只负责展示\n业务后端必须再次鉴权\n系统键与资源范围同时校验\n认证服务不可用时拒绝受保护操作",
         30,
         NAVY,
         True,
@@ -246,20 +246,20 @@ def draw_auth_flow() -> Path:
 
 
 def draw_data_topology() -> Path:
-    image, draw = canvas("平台数据拓扑", "单 MySQL 实例多 Schema；SCA 独立 PostgreSQL / Redis；文件卷单独备份")
+    image, draw = canvas("平台数据拓扑", "单 MySQL 实例多业务库；SCA 独立 PostgreSQL / Redis；文件卷单独备份")
     round_rect(draw, (80, 200, 1380, 1160), PALE_BLUE, BLUE, width=4)
     centered_text(draw, (110, 220, 520, 300), "MySQL 8 单实例", 38, NAVY, True)
     schemas = [
-        ("juxin_reminder", "Auth / Reminder\n历史 Ticketing", BLUE),
-        ("juxin_delivery", "Delivery", TEAL),
-        ("cmdb", "CMDB", PURPLE),
-        ("juxin_inventory", "Inventory", ORANGE),
-        ("juxin_device_flow", "Device Flow", CYAN),
-        ("juxin_faq", "FAQ\nTrain Exam 附加读取", GREEN),
-        ("juxin_tender", "Tender", PURPLE),
-        ("juxin_train_exam", "Train Exam", BLUE),
-        ("juxin_prompt_center", "Prompt Center", TEAL),
-        ("juxin_big_screen", "Big Screen", NAVY),
+        ("juxin_reminder", "认证 / 授权提醒\n历史工单", BLUE),
+        ("juxin_delivery", "交付系统", TEAL),
+        ("cmdb", "配置管理", PURPLE),
+        ("juxin_inventory", "库存管理", ORANGE),
+        ("juxin_device_flow", "设备流转", CYAN),
+        ("juxin_faq", "文档管理\n培训考试附加读取", GREEN),
+        ("juxin_tender", "标书协同", PURPLE),
+        ("juxin_train_exam", "培训考试", BLUE),
+        ("juxin_prompt_center", "提示词中心", TEAL),
+        ("juxin_big_screen", "统一大屏", NAVY),
     ]
     for idx, (schema, owner, color) in enumerate(schemas):
         row, col = divmod(idx, 2)
@@ -270,20 +270,20 @@ def draw_data_topology() -> Path:
         draw.text((x + 25, y + 65), owner, font=pil_font(22), fill=INK)
 
     side_boxes = [
-        (1490, 220, 2100, 470, "PostgreSQL 16\njuxin_sca\nSCA + Dependency-Track", PURPLE),
-        (1490, 535, 2100, 755, "Redis 7\n缓存 / Broker / 结果", RED),
-        (1490, 820, 2100, 1120, "文件与对象数据\nFAQ / Tender / Train Exam\nSCA 报告 / SBOM / 扫描结果", TEAL),
+        (1490, 220, 2100, 470, "PostgreSQL 16\njuxin_sca\n软件成分分析 + Dependency-Track", PURPLE),
+        (1490, 535, 2100, 755, "Redis 7\n缓存 / 队列 / 结果", RED),
+        (1490, 820, 2100, 1120, "文件与对象数据\n文档 / 标书 / 培训考试\nSCA 报告 / SBOM / 扫描结果", TEAL),
     ]
     for x1, y1, x2, y2, text, color in side_boxes:
         round_rect(draw, (x1, y1, x2, y2), WHITE, color, width=4)
         centered_text(draw, (x1, y1, x2, y2), text, 29, color, True)
     arrow(draw, (1380, 630), (1470, 630), MUTED)
-    draw.text((100, 1230), "治理重点：独立最小权限账号、跨库直连改 API、数据库与文件卷配套恢复", font=pil_font(26), fill=MUTED)
+    draw.text((100, 1230), "治理重点：独立最小权限账号、跨库直连改接口、数据库与文件卷配套恢复", font=pil_font(26), fill=MUTED)
     return save_diagram(image, "03-data-topology.png")
 
 
 def draw_deployment() -> Path:
-    image, draw = canvas("当前 Docker Compose 部署关系", "单 Compose 网络，前端静态站点、业务 API 与共享中间件分层运行")
+    image, draw = canvas("当前 Docker Compose 部署关系", "单 Compose 网络，前端静态站点、业务接口与共享中间件分层运行")
     round_rect(draw, (70, 185, 2130, 1190), "#F7FAFC", "#9BB3C5", width=4)
     draw.text((100, 205), "Docker Compose 网络", font=pil_font(32, True), fill=NAVY)
 
@@ -292,14 +292,14 @@ def draw_deployment() -> Path:
     arrow(draw, (460, 380), (580, 380), BLUE)
 
     round_rect(draw, (590, 260, 1080, 500), PALE_BLUE, NAVY, width=4)
-    centered_text(draw, (590, 260, 1080, 500), "接入层\nAuth Portal\n11 套 Web / Nginx\n宿主机端口 18080-18092 / 8090", 29, NAVY, True)
+    centered_text(draw, (590, 260, 1080, 500), "接入层\n认证门户\n11 套前端 / Nginx\n宿主机端口 18080-18092 / 8090", 29, NAVY, True)
     arrow(draw, (1090, 380), (1210, 380), MUTED)
 
     round_rect(draw, (1220, 240, 2050, 520), WHITE, TEAL, width=4)
     centered_text(
         draw,
         (1220, 240, 2050, 520),
-        "服务层\nReminder / Delivery / CMDB / Inventory\nDevice / FAQ / Tender / Train Exam\nPrompt / SCA / Big Screen",
+        "服务层\n授权提醒 / 交付 / 配置 / 库存\n设备流转 / 文档 / 标书 / 培训考试\n提示词 / SCA / 统一大屏",
         28,
         TEAL,
         True,
@@ -320,7 +320,7 @@ def draw_deployment() -> Path:
     centered_text(
         draw,
         (320, 1000, 1880, 1135),
-        "异步与集成：SCA Worker / Scanner Worker / Beat  |  Dependency-Track  |  Shipping Gateway  |  持久化卷",
+        "异步与集成：SCA 任务 / 扫描任务 / 定时任务  |  Dependency-Track  |  物流网关  |  持久化卷",
         27,
         INK,
         True,
@@ -583,7 +583,7 @@ def add_markdown(document: Document, markdown: str, diagrams: dict[str, Path]) -
             index += 1
             if language == "mermaid":
                 key = "overview" if mermaid_index == 0 else "auth"
-                caption = "图 1  平台总体架构（含容器）" if mermaid_index == 0 else "图 4  统一认证与系统访问流程"
+                caption = "图 1  平台总体架构（含容器）" if mermaid_index == 0 else "图 3  统一认证与系统访问流程"
                 add_diagram(document, diagrams[key], caption)
                 mermaid_index += 1
             else:
@@ -611,7 +611,7 @@ def add_markdown(document: Document, markdown: str, diagrams: dict[str, Path]) -
             if text.startswith("7. 数据架构"):
                 add_diagram(document, diagrams["data"], "图 2  平台数据拓扑")
             elif text.startswith("9. 部署架构"):
-                add_diagram(document, diagrams["deployment"], "图 3  当前 Docker Compose 部署关系")
+                add_diagram(document, diagrams["deployment"], "图 4  当前 Docker Compose 部署关系")
             index += 1
             continue
 

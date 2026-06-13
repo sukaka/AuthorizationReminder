@@ -4,7 +4,7 @@
 >
 > 编制日期：2026-06-13
 >
-> 适用版本：`5.70.12` 及后续兼容版本
+> 适用版本：`5.70.18` 及后续兼容版本
 >
 > 主要读者：技术负责人、研发人员、测试人员、部署与运维交接人员
 >
@@ -64,51 +64,51 @@
 
 ```mermaid
 flowchart TB
-  User["业务用户 / 管理员 / 审计员"] --> Auth["auth 容器<br/>统一门户 / 管理中心 / 审计中心<br/>5180"]
+  User["业务用户 / 管理员 / 审计员"] --> Auth["统一入口容器<br/>auth / 5180<br/>统一门户 / 管理后台 / 审计中心"]
 
   subgraph Compose["Docker Compose 网络"]
     Auth
 
     subgraph Web["前端容器 / Nginx"]
-      WebMain["web"]
-      WebDelivery["web-delivery"]
-      WebCmdb["web-cmdb"]
-      WebInventory["web-inventory"]
-      WebDevice["web-device-flow"]
-      WebFaq["web-faq"]
-      WebTender["web-tender"]
-      WebTrain["web-train-exam"]
-      WebPrompt["web-prompt-center"]
-      WebSca["web-sca"]
-      WebScreen["web-big-screen"]
+      WebMain["授权提醒前端<br/>web"]
+      WebDelivery["交付前端<br/>web-delivery"]
+      WebCmdb["配置管理前端<br/>web-cmdb"]
+      WebInventory["库存前端<br/>web-inventory"]
+      WebDevice["设备流转前端<br/>web-device-flow"]
+      WebFaq["文档前端<br/>web-faq"]
+      WebTender["标书前端<br/>web-tender"]
+      WebTrain["培训考试前端<br/>web-train-exam"]
+      WebPrompt["提示词前端<br/>web-prompt-center"]
+      WebSca["软件成分分析前端<br/>web-sca"]
+      WebScreen["统一大屏前端<br/>web-big-screen"]
     end
 
-    subgraph Api["业务 API 容器"]
-      ReminderApi["api"]
-      DeliveryApi["delivery-api"]
-      CmdbApi["cmdb"]
-      InventoryApi["inventory-api"]
-      DeviceApi["device-flow-api"]
-      FaqApi["faq-api"]
-      TenderApi["tender-api"]
-      TrainApi["train-exam-api"]
-      PromptApi["prompt-center-api"]
-      ScaApi["sca-api"]
-      ScreenApi["big-screen-api"]
+    subgraph Api["业务接口容器"]
+      ReminderApi["授权提醒接口<br/>api"]
+      DeliveryApi["交付接口<br/>delivery-api"]
+      CmdbApi["配置管理接口<br/>cmdb"]
+      InventoryApi["库存接口<br/>inventory-api"]
+      DeviceApi["设备流转接口<br/>device-flow-api"]
+      FaqApi["文档接口<br/>faq-api"]
+      TenderApi["标书接口<br/>tender-api"]
+      TrainApi["培训考试接口<br/>train-exam-api"]
+      PromptApi["提示词接口<br/>prompt-center-api"]
+      ScaApi["软件成分分析接口<br/>sca-api"]
+      ScreenApi["统一大屏接口<br/>big-screen-api"]
     end
 
     subgraph Async["异步与集成容器"]
-      ScaWorker["sca-worker / sca-scanner-worker / sca-beat"]
-      Shipping["shipping-gateway"]
-      Docs["onlyoffice / train-exam-onlyoffice"]
-      DT["dependency-track-apiserver / frontend"]
+      ScaWorker["SCA 任务 / 扫描 / 定时<br/>sca-worker / sca-scanner-worker / sca-beat"]
+      Shipping["物流网关<br/>shipping-gateway"]
+      Docs["在线文档编辑<br/>onlyoffice / train-exam-onlyoffice"]
+      DT["软件物料分析辅助<br/>dependency-track-apiserver / frontend"]
     end
 
     subgraph Data["数据与持久化容器 / 卷"]
-      MySQL["mysql<br/>mysql-data"]
-      PostgreSQL["sca-postgres<br/>sca-postgres-data"]
-      Redis["sca-redis<br/>sca-redis-data"]
-      Volumes["faq-data / tender-data / train-exam-data<br/>sca-upload/report/sbom/cache"]
+      MySQL["MySQL 数据<br/>mysql / mysql-data"]
+      PostgreSQL["SCA PostgreSQL<br/>sca-postgres / sca-postgres-data"]
+      Redis["SCA Redis<br/>sca-redis / sca-redis-data"]
+      Volumes["业务文件卷<br/>faq/tender/train-exam<br/>sca-upload/report/sbom/cache"]
     end
   end
 
@@ -474,17 +474,17 @@ CMDB 已预留 Outbox 设计，后续引入事件总线时可作为平台事件�
 ```mermaid
 sequenceDiagram
   participant U as 用户浏览器
-  participant P as Auth Portal
+  participant P as 统一认证门户
   participant W as 业务前端
-  participant A as 业务 API
-  participant I as Auth Introspection
+  participant A as 业务接口
+  participant I as 认证内省
 
   U->>P: 登录
-  P-->>U: 设置 HttpOnly 会话 Cookie
+  P-->>U: 设置统一会话令牌
   U->>P: 获取可访问系统
   P-->>U: 返回系统入口与授权范围
   U->>W: 进入业务系统
-  W->>A: 携带 Cookie 请求 API
+  W->>A: 携带统一会话请求接口
   A->>I: 校验会话和系统键
   I-->>A: 返回用户、角色、应用范围
   A-->>W: 返回授权后的业务数据
