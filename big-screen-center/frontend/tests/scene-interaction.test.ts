@@ -1,5 +1,6 @@
 import { flushPromises } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import * as THREE from 'three'
 
 import ThreeScene from '../src/components/widgets/ThreeScene.vue'
 import { createOrbitScene } from '../src/scenes/createOrbitScene'
@@ -136,6 +137,7 @@ describe('scene interactions', () => {
     vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({} as never)
     vi.spyOn(window, 'requestAnimationFrame').mockReturnValue(1)
     vi.spyOn(window, 'cancelAnimationFrame').mockImplementation(() => {})
+    vi.mocked(THREE.WebGLRenderer).mockClear()
     mocks.setInteractionHandlers.mockClear()
     mocks.setInteraction.mockClear()
     mocks.createScene.mockReset()
@@ -183,6 +185,77 @@ describe('scene interactions', () => {
 
     handlers.onHover(null)
     expect(api.snapshot.value.hovered).toBeNull()
+  })
+
+  it('delegates WebGL capability checks to the scene renderer', async () => {
+    const getContext = vi.mocked(HTMLCanvasElement.prototype.getContext)
+
+    mountWithInteraction(ThreeScene, {
+      widget,
+      data: { criticalRisks: 48 },
+      performanceProfile: 'high',
+    })
+    await flushPromises()
+
+    expect(mocks.createScene).toHaveBeenCalledOnce()
+    expect(getContext).not.toHaveBeenCalled()
+  })
+
+  it('reuses the validated canvas and context in the Three.js renderer', () => {
+    const context = {} as WebGL2RenderingContext
+    vi.mocked(HTMLCanvasElement.prototype.getContext).mockReturnValue(context)
+    const container = document.createElement('div')
+
+    const scene = createOrbitScene(container, 'high', {
+      colors: [0xffb23f, 0xe85d3f, 0x9bd46a],
+      ringCount: 5,
+      tilt: -0.22,
+    })
+
+    expect(THREE.WebGLRenderer).toHaveBeenCalledWith(expect.objectContaining({
+      canvas: expect.any(HTMLCanvasElement),
+      context,
+    }))
+    scene.dispose()
+  })
+
+  it('fails before constructing Three.js when WebGL2 is unavailable', () => {
+    vi.mocked(HTMLCanvasElement.prototype.getContext).mockReturnValue(null)
+    const container = document.createElement('div')
+
+    expect(() => createOrbitScene(container, 'high', {
+      colors: [0xffb23f, 0xe85d3f, 0x9bd46a],
+      ringCount: 5,
+      tilt: -0.22,
+    })).toThrow('WebGL2 context is unavailable')
+    expect(THREE.WebGLRenderer).not.toHaveBeenCalled()
+    expect(container.children).toHaveLength(0)
+  })
+
+  it('removes renderer errors before showing the chart fallback', async () => {
+    mocks.createScene.mockImplementation((container: HTMLElement) => {
+      container.textContent = 'Sorry, your browser does not support WebGL'
+      throw new Error('Error creating WebGL context')
+    })
+
+    const { wrapper } = mountWithInteraction(ThreeScene, {
+      widget,
+      data: { criticalRisks: 48 },
+      performanceProfile: 'high',
+    }, {
+      global: {
+        stubs: {
+          EChartPanel: {
+            template: '<div data-widget="echart">图表降级</div>',
+          },
+        },
+      },
+    })
+    await flushPromises()
+
+    expect(wrapper.find('[data-three-fallback="risk-globe"]').exists()).toBe(true)
+    expect(wrapper.find('[data-widget="echart"]').exists()).toBe(true)
+    expect(wrapper.text()).not.toContain('Sorry, your browser does not support WebGL')
   })
 
   it('disposes pointer handlers with the scene', () => {

@@ -27,24 +27,9 @@ const fallbackWidget = computed<WidgetDefinition>(() => ({
   config: { ...props.widget.config, variant: 'polar-fallback' },
 }))
 
-const hasWebGl = () => {
-  if (
-    typeof window.WebGLRenderingContext === 'undefined'
-    && typeof window.WebGL2RenderingContext === 'undefined'
-  ) {
-    return false
-  }
-  try {
-    const canvas = document.createElement('canvas')
-    return Boolean(canvas.getContext('webgl2') || canvas.getContext('webgl'))
-  } catch {
-    return false
-  }
-}
-
 onMounted(async () => {
   const loader = resolveSceneLoader(sceneKey.value)
-  if (!host.value || !loader || !hasWebGl() || props.performanceProfile === 'low') {
+  if (!host.value || !loader || props.performanceProfile === 'low') {
     failed.value = true
     return
   }
@@ -81,9 +66,10 @@ onMounted(async () => {
     managedScene.resize(bounds.width, bounds.height, window.devicePixelRatio || 1)
     managedScene.start()
   } catch {
-    failed.value = true
     managedScene?.dispose()
     managedScene = null
+    host.value?.replaceChildren()
+    failed.value = true
   }
 })
 

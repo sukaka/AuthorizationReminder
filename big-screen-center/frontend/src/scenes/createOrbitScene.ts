@@ -41,7 +41,21 @@ export function createOrbitScene(
   profile: EffectsProfile,
   options: OrbitSceneOptions,
 ): ManagedScene {
-  const renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true })
+  const canvas = document.createElement('canvas')
+  const contextAttributes: WebGLContextAttributes = {
+    alpha: true,
+    antialias: true,
+  }
+  const context = canvas.getContext('webgl2', contextAttributes)
+  if (!context) {
+    throw new Error('WebGL2 context is unavailable')
+  }
+  const renderer = new THREE.WebGLRenderer({
+    alpha: true,
+    antialias: true,
+    canvas,
+    context,
+  })
   renderer.setClearColor(0x000000, 0)
   container.appendChild(renderer.domElement)
 
