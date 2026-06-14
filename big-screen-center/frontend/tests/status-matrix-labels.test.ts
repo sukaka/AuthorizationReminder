@@ -35,4 +35,44 @@ describe('StatusMatrix labels', () => {
     expect(wrapper.text()).toContain('触达成功率')
     expect(wrapper.find('[title="触达成功率：94"]').exists()).toBe(true)
   })
+
+  it('uses a distinct explanation for core status matrices', () => {
+    const coreWidget: WidgetDefinition = {
+      ...widget,
+      id: 'train-02-core',
+      layoutArea: 'core',
+      config: { variant: 'train-02-core' },
+    }
+    const healthWidget: WidgetDefinition = {
+      ...widget,
+      id: 'train-02-health',
+      layoutArea: 'health',
+      config: { variant: 'train-02-health' },
+    }
+
+    const core = mountWithInteraction(StatusMatrix, {
+      widget: coreWidget,
+      data: {
+        course_total: 3,
+        question_total: 105,
+        exam_total: 2,
+        pass_rate: 0,
+      },
+      performanceProfile: 'high',
+    })
+    const health = mountWithInteraction(StatusMatrix, {
+      widget: healthWidget,
+      data: {
+        course_total: 3,
+        question_total: 105,
+        exam_total: 2,
+        pass_rate: 0,
+      },
+      performanceProfile: 'high',
+    })
+
+    expect(core.wrapper.text()).toContain('展示考试、题库、试卷与通过率的实时指标分布。')
+    expect(health.wrapper.text()).toContain('下方格子表示关键指标健康度，颜色越亮越需要关注。')
+    expect(core.wrapper.text()).not.toContain('下方格子表示关键指标健康度，颜色越亮越需要关注。')
+  })
 })

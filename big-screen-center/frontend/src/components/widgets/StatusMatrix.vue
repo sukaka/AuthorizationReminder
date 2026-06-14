@@ -24,6 +24,18 @@ const cells = computed(() => {
 })
 
 const title = computed(() => widgetTitle(props.widget.config.variant))
+const isHealthMatrix = computed(() =>
+  props.widget.layoutArea === 'health'
+  || String(props.widget.config.variant || '').endsWith('-health'),
+)
+const hint = computed(() =>
+  isHealthMatrix.value
+    ? '下方格子表示关键指标健康度，颜色越亮越需要关注。'
+    : '展示考试、题库、试卷与通过率的实时指标分布。',
+)
+const legendLabel = computed(() =>
+  isHealthMatrix.value ? '数据健康矩阵图例' : '实时指标矩阵图例',
+)
 const source: InteractionSource = 'status-matrix'
 const statusText = (level: string) => {
   if (level === 'healthy') return '正常'
@@ -46,8 +58,8 @@ const pressed = (key: string) => interaction.snapshot.value.locked?.key === key
     data-widget="status-matrix"
     data-widget-type="status-matrix"
   >
-    <p class="status-matrix__hint">下方格子表示关键指标健康度，颜色越亮越需要关注。</p>
-    <p class="status-matrix__legend" aria-label="数据健康矩阵图例">
+    <p class="status-matrix__hint">{{ hint }}</p>
+    <p class="status-matrix__legend" :aria-label="legendLabel">
       <span>正常</span>
       <span>关注</span>
       <span>暂无数据</span>
