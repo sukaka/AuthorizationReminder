@@ -9,6 +9,10 @@ import {
   navigateToUnifiedLogin,
   previewData,
 } from '../preview-data'
+import {
+  provideScreenTheme,
+  screenThemeCssVariables,
+} from '../theme/screen-theme'
 import type { JsonValue, ScreenTemplate } from '../types'
 import InteractionConsole from './InteractionConsole.vue'
 import SourceHealthBar from './SourceHealthBar.vue'
@@ -30,6 +34,7 @@ const performanceProfile = computed(() => {
 })
 const filters = ref<Record<string, JsonValue>>({})
 const systemKey = computed(() => props.template.systemKey)
+const theme = provideScreenTheme(systemKey)
 const metricKey = computed(() => props.template.widgets[0]?.dataSourceKey || '')
 const mode = computed(() => props.template.refreshPolicy.mode)
 const intervalMs = computed(() => props.template.refreshPolicy.intervalMs)
@@ -104,6 +109,7 @@ const canvasStyle = computed(() => ({
   width: `${transform.value.designWidth}px`,
   height: `${transform.value.designHeight}px`,
   transform: `translate(${transform.value.offsetX}px, ${transform.value.offsetY}px) scale(${transform.value.scaleX})`,
+  ...screenThemeCssVariables(theme.value),
 }))
 
 const metricValue = (key: string) => {
@@ -149,6 +155,7 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown))
       :class="`screen-canvas--${template.systemKey}`"
       :style="canvasStyle"
       :data-screen-layout="transform.layout"
+      :data-screen-theme="template.systemKey"
       data-screen-ready="true"
       @click.self="clearInteraction"
     >
@@ -200,34 +207,21 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown))
   inset: 0;
   z-index: 100;
   overflow: hidden;
-  background: #100e0b;
+  background: var(--screen-stage, #e9f2f7);
 }
 
 .screen-canvas {
-  --screen-accent: #f2b84b;
-  --screen-signal: #b8d26f;
-  --screen-muted: #a99b84;
-  --screen-line: rgb(216 190 146 / 20%);
   position: absolute;
   left: 0;
   top: 0;
   padding: 38px 52px 42px;
-  color: #f4ead7;
+  color: var(--screen-text);
   background:
-    linear-gradient(90deg, rgb(255 255 255 / 2%) 1px, transparent 1px) 0 0 / 72px 72px,
-    linear-gradient(rgb(255 255 255 / 2%) 1px, transparent 1px) 0 0 / 72px 72px,
-    radial-gradient(circle at 50% 30%, #352a1c 0, #17130e 48%, #0f0d0a 100%);
+    linear-gradient(90deg, var(--screen-grid) 1px, transparent 1px) 0 0 / 72px 72px,
+    linear-gradient(var(--screen-grid) 1px, transparent 1px) 0 0 / 72px 72px,
+    radial-gradient(circle at 50% 30%, color-mix(in srgb, var(--screen-accent-secondary), transparent 87%), transparent 38%),
+    linear-gradient(145deg, var(--screen-surface-solid), var(--screen-canvas));
   transform-origin: left top;
-}
-
-.screen-canvas--train-exam {
-  --screen-accent: #73c6a6;
-  --screen-signal: #f4c65e;
-}
-
-.screen-canvas--reminder {
-  --screen-accent: #ff775d;
-  --screen-signal: #f2b84b;
 }
 
 .screen-heading {

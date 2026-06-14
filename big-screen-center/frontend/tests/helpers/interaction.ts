@@ -6,8 +6,13 @@ import {
   screenInteractionKey,
   type ScreenInteractionApi,
 } from '../../src/interactions/useScreenInteraction'
+import {
+  screenThemeFor,
+  screenThemeKey,
+} from '../../src/theme/screen-theme'
 import type {
   InteractionTarget,
+  SystemKey,
   WidgetDefinition,
 } from '../../src/types'
 
@@ -15,6 +20,7 @@ export const mountWithInteraction = (
   component: Component,
   props: Record<string, unknown>,
   options: ComponentMountingOptions<Component> = {},
+  systemKey: SystemKey = 'sca',
 ) => {
   const snapshot = ref({
     hovered: null,
@@ -24,6 +30,7 @@ export const mountWithInteraction = (
     locked: InteractionTarget | null
   })
   const active = computed(() => snapshot.value.hovered || snapshot.value.locked)
+  const theme = computed(() => screenThemeFor(systemKey))
 
   const api: ScreenInteractionApi = {
     snapshot,
@@ -70,6 +77,7 @@ export const mountWithInteraction = (
       provide: {
         ...options.global?.provide,
         [screenInteractionKey as symbol]: api,
+        [screenThemeKey as symbol]: theme,
       },
     },
   })
