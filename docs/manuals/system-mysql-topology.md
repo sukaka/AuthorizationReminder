@@ -26,7 +26,8 @@
 - MySQL 仍是单实例多 Schema，但现役业务 Schema 使用独立最小权限运行账号。
 - SCA 独立使用 PostgreSQL、Redis、Celery 和扫描 Worker。
 - FAQ 与 Tender 共用 OnlyOffice；Train Exam 使用独立 OnlyOffice。
-- 每个现役业务后端统一暴露 `/api/health`、`/api/ready`、`/api/version`、`/api/build`。
+- 每个现役业务后端统一暴露 `/api/health`、`/api/ready`、`/api/version`、`/api/build`、`/api/metrics`。
+- 每个现役业务后端统一返回 `X-Request-Id`，结构化访问日志包含 `request_id`、状态码和 `duration_ms`。
 
 ## 系统级架构图
 
@@ -166,6 +167,7 @@ flowchart LR
 | `/api/ready` | 就绪检查，应覆盖数据库等关键依赖 |
 | `/api/version` | 返回服务名和应用版本 |
 | `/api/build` | 返回版本、提交号和构建时间 |
+| `/api/metrics` | 返回进程级 HTTP 请求量、错误数、并发数、耗时和状态码分布 |
 
 CMDB 后端未直接映射宿主机端口，需通过容器内地址或前置代理检查。
 

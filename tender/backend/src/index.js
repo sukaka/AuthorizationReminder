@@ -190,6 +190,68 @@ const BUILD_COMMIT = process.env.BUILD_COMMIT || process.env.GIT_COMMIT || '';
 const BUILD_TIME = process.env.BUILD_TIME || process.env.BUILT_AT || '';
 const weakSecrets = new Set(['dev-secret-change-me', 'change-me', '123456', 'password', '']);
 
+const observabilityMetrics = {
+  service: APP_NAME,
+  startedAt: new Date().toISOString(),
+  requestTotal: 0,
+  errorTotal: 0,
+  inFlight: 0,
+  durationMsTotal: 0,
+  durationMsMax: 0,
+  statusCounts: {},
+};
+
+const normalizeRequestId = (value) => {
+  const text = String(value || '').trim();
+  if (!text) return '';
+  return text.slice(0, 128).replace(/[^a-zA-Z0-9_.:-]/g, '');
+};
+
+const buildMetricsSnapshot = () => ({
+  service: APP_NAME,
+  started_at: observabilityMetrics.startedAt,
+  uptime_seconds: Math.round(process.uptime()),
+  request_total: observabilityMetrics.requestTotal,
+  error_total: observabilityMetrics.errorTotal,
+  in_flight: observabilityMetrics.inFlight,
+  duration_ms_avg: observabilityMetrics.requestTotal
+    ? Number((observabilityMetrics.durationMsTotal / observabilityMetrics.requestTotal).toFixed(2))
+    : 0,
+  duration_ms_max: Number(observabilityMetrics.durationMsMax.toFixed(2)),
+  status_counts: observabilityMetrics.statusCounts,
+});
+
+const observabilityMiddleware = (req, res, next) => {
+  const startedAt = process.hrtime.bigint();
+  const requestId = normalizeRequestId(req.get('X-Request-Id') || req.get('X-Correlation-Id')) || crypto.randomUUID();
+  req.requestId = requestId;
+  res.setHeader('X-Request-Id', requestId);
+  observabilityMetrics.inFlight += 1;
+
+  res.on('finish', () => {
+    const durationMs = Number(process.hrtime.bigint() - startedAt) / 1_000_000;
+    const statusCode = Number(res.statusCode || 0);
+    observabilityMetrics.inFlight = Math.max(0, observabilityMetrics.inFlight - 1);
+    observabilityMetrics.requestTotal += 1;
+    observabilityMetrics.durationMsTotal += durationMs;
+    observabilityMetrics.durationMsMax = Math.max(observabilityMetrics.durationMsMax, durationMs);
+    observabilityMetrics.statusCounts[statusCode] = (observabilityMetrics.statusCounts[statusCode] || 0) + 1;
+    if (statusCode >= 500) observabilityMetrics.errorTotal += 1;
+    console.info(JSON.stringify({
+      type: 'http_access',
+      service: APP_NAME,
+      request_id: requestId,
+      method: req.method,
+      path: req.originalUrl?.split('?')[0] || req.path,
+      status: statusCode,
+      duration_ms: Number(durationMs.toFixed(2)),
+      remote_ip: req.ip || req.socket?.remoteAddress || '',
+    }));
+  });
+
+  next();
+};
+
 const ALLOWED_BID_UPLOAD_EXTS = new Set(['.doc', '.docx', '.pdf']);
 const ALLOWED_BID_UPLOAD_MIME = new Set([
   'application/msword',
@@ -321,6 +383,7 @@ app.disable('x-powered-by');
 if (process.env.TRUST_PROXY_HOPS) {
   app.set('trust proxy', Number(process.env.TRUST_PROXY_HOPS));
 }
+app.use(observabilityMiddleware);
 app.use(
   helmet({
     contentSecurityPolicy: {
@@ -6398,6 +6461,7 @@ const asyncHandler = (fn) => (req, res, next) => Promise.resolve(fn(req, res, ne
 
 const authRequired = asyncHandler(async (req, _res, next) => {
   if (req.path === '/health') return next();
+  if (['/api/health', '/api/ready', '/api/version', '/api/build', '/api/metrics'].includes(req.path)) return next();
   if (req.path.startsWith('/api/tender/editor/callback/')) return next();
   if (/^\/api\/tender\/drafts\/\d+\/download\.docx$/.test(req.path)) return next();
   if (/^\/api\/tender\/bids\/generate\/jobs\/\d+\/source\/download\.docx$/.test(req.path)) return next();
@@ -9662,6 +9726,10 @@ app.get('/api/build', (_req, res) => {
     commit: BUILD_COMMIT,
     buildTime: BUILD_TIME,
   });
+});
+
+app.get('/api/metrics', (_req, res) => {
+  res.json(buildMetricsSnapshot());
 });
 
 app.get('/api/tender/bootstrap', asyncHandler(async (req, res) => {

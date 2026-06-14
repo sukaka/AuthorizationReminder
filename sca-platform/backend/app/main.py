@@ -174,6 +174,17 @@ app = FastAPI(
 )
 app.include_router(devops_router)
 
+OBSERVABILITY_METRICS = {
+    "service": "sca",
+    "started_at": datetime.now(timezone.utc).isoformat(),
+    "request_total": 0,
+    "error_total": 0,
+    "in_flight": 0,
+    "duration_ms_total": 0.0,
+    "duration_ms_max": 0.0,
+    "status_counts": {},
+}
+
 
 UNKNOWN_VERSION_VALUES = {"", "unknown", "none", "null", "n/a", "na", "未声明", "未知"}
 
@@ -275,32 +286,83 @@ async def api_request_logging(request: Request, call_next):
     started = time.perf_counter()
     status_code = 500
     error_type = ""
+    request_id = str(request.headers.get("X-Request-Id") or request.headers.get("X-Correlation-Id") or uuid.uuid4())[:128]
+    request.state.request_id = request_id
+    OBSERVABILITY_METRICS["in_flight"] += 1
     try:
         response = await call_next(request)
         status_code = response.status_code
         if status_code >= 400:
             error_type = _api_error_code(status_code)
+        response.headers["X-Request-Id"] = request_id
         return response
     except TimeoutError as exc:
         status_code = 504
         error_type = type(exc).__name__
-        logger.exception("api_request_exception method=%s path=%s errorType=%s", request.method, request.url.path, error_type)
-        return _api_error_response(status_code, str(exc))
+        logger.exception(
+            json.dumps(
+                {
+                    "type": "api_request_exception",
+                    "service": "sca",
+                    "request_id": request_id,
+                    "method": request.method,
+                    "path": request.url.path,
+                    "error_type": error_type,
+                },
+                ensure_ascii=False,
+            )
+        )
+        response = _api_error_response(status_code, str(exc))
+        response.headers["X-Request-Id"] = request_id
+        return response
     except Exception as exc:
         status_code = 500
         error_type = type(exc).__name__
-        logger.exception("api_request_exception method=%s path=%s errorType=%s", request.method, request.url.path, error_type)
-        return _api_error_response(status_code, "服务内部错误")
+        logger.exception(
+            json.dumps(
+                {
+                    "type": "api_request_exception",
+                    "service": "sca",
+                    "request_id": request_id,
+                    "method": request.method,
+                    "path": request.url.path,
+                    "error_type": error_type,
+                },
+                ensure_ascii=False,
+            )
+        )
+        response = _api_error_response(status_code, "服务内部错误")
+        response.headers["X-Request-Id"] = request_id
+        return response
     finally:
         duration_ms = round((time.perf_counter() - started) * 1000, 2)
-        log_message = "api_request method=%s path=%s status=%s durationMs=%s errorType=%s"
-        args = (request.method, request.url.path, status_code, duration_ms, error_type or "-")
+        OBSERVABILITY_METRICS["in_flight"] = max(0, int(OBSERVABILITY_METRICS["in_flight"]) - 1)
+        OBSERVABILITY_METRICS["request_total"] += 1
+        OBSERVABILITY_METRICS["duration_ms_total"] += duration_ms
+        OBSERVABILITY_METRICS["duration_ms_max"] = max(float(OBSERVABILITY_METRICS["duration_ms_max"]), duration_ms)
+        status_key = str(status_code)
+        status_counts = OBSERVABILITY_METRICS["status_counts"]
+        status_counts[status_key] = status_counts.get(status_key, 0) + 1
+        if status_code >= 500:
+            OBSERVABILITY_METRICS["error_total"] += 1
+        log_payload = {
+            "type": "http_access",
+            "service": "sca",
+            "request_id": request_id,
+            "method": request.method,
+            "path": request.url.path,
+            "status": status_code,
+            "duration_ms": duration_ms,
+            "error_type": error_type or "",
+            "remote_ip": request.client.host if request.client else "",
+        }
+        log_message = json.dumps(log_payload, ensure_ascii=False)
         if duration_ms >= 10000:
-            logger.warning(log_message + " slow=true asyncRecommendation=true", *args)
+            logger.warning(log_message)
         elif status_code >= 400:
-            logger.warning(log_message, *args)
+            logger.warning(log_message)
         else:
-            logger.info(log_message, *args)
+            logger.info(log_message)
 
 
 @app.exception_handler(HTTPException)
@@ -654,6 +716,23 @@ def api_build(settings: Annotated[Settings, Depends(get_settings)]) -> dict[str,
         "version": settings.app_version,
         "commit": os.getenv("BUILD_COMMIT") or os.getenv("GIT_COMMIT") or "",
         "buildTime": os.getenv("BUILD_TIME") or os.getenv("BUILT_AT") or "",
+    }
+
+
+@app.get("/api/metrics", tags=["system"])
+def api_metrics() -> dict[str, object]:
+    request_total = int(OBSERVABILITY_METRICS["request_total"])
+    duration_ms_total = float(OBSERVABILITY_METRICS["duration_ms_total"])
+    return {
+        "service": "sca",
+        "started_at": OBSERVABILITY_METRICS["started_at"],
+        "uptime_seconds": round(time.monotonic()),
+        "request_total": request_total,
+        "error_total": OBSERVABILITY_METRICS["error_total"],
+        "in_flight": OBSERVABILITY_METRICS["in_flight"],
+        "duration_ms_avg": round(duration_ms_total / request_total, 2) if request_total else 0,
+        "duration_ms_max": OBSERVABILITY_METRICS["duration_ms_max"],
+        "status_counts": OBSERVABILITY_METRICS["status_counts"],
     }
 
 

@@ -252,6 +252,7 @@ curl -sS http://localhost:5179/api/health
 curl -sS http://localhost:5179/api/ready
 curl -sS http://localhost:5179/api/version
 curl -sS http://localhost:5179/api/build
+curl -sS http://localhost:5179/api/metrics
 curl -sS http://localhost:5185/api/health
 curl -sS http://localhost:5183/api/health
 curl -sS http://localhost:5184/api/health
@@ -265,6 +266,8 @@ curl -sS http://localhost:5192/api/health
 # CMDB 后端未直接映射宿主机端口，可从容器内检查
 docker compose exec cmdb wget -qO- http://127.0.0.1:8088/api/health
 ```
+
+所有 11 个现役业务后端都统一暴露 `/api/metrics`，并在响应头返回 `X-Request-Id`。服务侧访问日志输出结构化 JSON，包含 `request_id`、请求路径、状态码和 `duration_ms`。
 
 ### 6.2 设备流转自动化脚本
 ```bash
@@ -340,7 +343,8 @@ npm run test:rbac
 - 上传接口限制 MIME、大小与行数（批量导入）
 - 生产配置不在 Compose 中内置固定示例密钥、弱默认密码或共享数据库口令。
 - 现役业务 Schema 使用独立运行账号，初始化权限和运行权限分离。
-- 现役业务后端统一暴露 `/api/health`、`/api/ready`、`/api/version`、`/api/build`。
+- 现役业务后端统一暴露 `/api/health`、`/api/ready`、`/api/version`、`/api/build`、`/api/metrics`。
+- 现役业务后端统一贯穿 `X-Request-Id`，结构化访问日志包含 `request_id` 和 `duration_ms`。
 
 ## 9. 目录结构
 

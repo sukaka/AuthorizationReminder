@@ -41,6 +41,38 @@ const CALLBACK_WORKER_INTERVAL_MS = Math.max(10000, Number(process.env.CALLBACK_
 const CALLBACK_WORKER_BATCH = Math.max(1, Math.min(100, Number(process.env.CALLBACK_WORKER_BATCH || 20)));
 const OPS_METRIC_RETENTION_DAYS = Math.max(3, Number(process.env.OPS_METRIC_RETENTION_DAYS || 14));
 const TRACK_LINK_BASE_URL = String(process.env.TRACK_LINK_BASE_URL || '').trim();
+
+const observabilityMetrics = {
+  service: SERVICE_NAME,
+  startedAt: new Date().toISOString(),
+  requestTotal: 0,
+  errorTotal: 0,
+  inFlight: 0,
+  durationMsTotal: 0,
+  durationMsMax: 0,
+  statusCounts: {},
+};
+
+const normalizeRequestId = (value) => {
+  const text = String(value || '').trim();
+  if (!text) return '';
+  return text.slice(0, 128).replace(/[^a-zA-Z0-9_.:-]/g, '');
+};
+
+const buildMetricsSnapshot = () => ({
+  service: SERVICE_NAME,
+  started_at: observabilityMetrics.startedAt,
+  uptime_seconds: Math.round(process.uptime()),
+  request_total: observabilityMetrics.requestTotal,
+  error_total: observabilityMetrics.errorTotal,
+  in_flight: observabilityMetrics.inFlight,
+  duration_ms_avg: observabilityMetrics.requestTotal
+    ? Number((observabilityMetrics.durationMsTotal / observabilityMetrics.requestTotal).toFixed(2))
+    : 0,
+  duration_ms_max: Number(observabilityMetrics.durationMsMax.toFixed(2)),
+  status_counts: observabilityMetrics.statusCounts,
+});
+
 const UPLOAD_ALLOWED_MIME = new Set(
   String(
     process.env.UPLOAD_ALLOWED_MIME ||
@@ -158,16 +190,38 @@ app.use(cors(corsOptions));
 app.use(express.json({ limit: '2mb' }));
 
 app.use((req, res, next) => {
-  const startedAt = Date.now();
+  const startedAt = process.hrtime.bigint();
+  const requestId = normalizeRequestId(req.get('X-Request-Id') || req.get('X-Correlation-Id')) || crypto.randomUUID();
+  req.requestId = requestId;
+  res.setHeader('X-Request-Id', requestId);
+  observabilityMetrics.inFlight += 1;
+
   res.on('finish', () => {
     const routePath =
       trimText(req.route?.path) ||
       trimText(req.baseUrl && req.path ? `${req.baseUrl}${req.path}` : '') ||
       trimText(req.path) ||
       '/';
-    const latency = Math.max(0, Date.now() - startedAt);
+    const durationMs = Number(process.hrtime.bigint() - startedAt) / 1_000_000;
+    const latency = Math.max(0, Math.round(durationMs));
     const statusCode = Number(res.statusCode || 0);
     const isError = statusCode >= 500 ? 1 : 0;
+    observabilityMetrics.inFlight = Math.max(0, observabilityMetrics.inFlight - 1);
+    observabilityMetrics.requestTotal += 1;
+    observabilityMetrics.durationMsTotal += durationMs;
+    observabilityMetrics.durationMsMax = Math.max(observabilityMetrics.durationMsMax, durationMs);
+    observabilityMetrics.statusCounts[statusCode] = (observabilityMetrics.statusCounts[statusCode] || 0) + 1;
+    if (isError) observabilityMetrics.errorTotal += 1;
+    console.info(JSON.stringify({
+      type: 'http_access',
+      service: SERVICE_NAME,
+      request_id: requestId,
+      method: req.method,
+      path: req.originalUrl?.split('?')[0] || req.path,
+      status: statusCode,
+      duration_ms: Number(durationMs.toFixed(2)),
+      remote_ip: req.ip || req.socket?.remoteAddress || '',
+    }));
     query(
       `INSERT INTO device_ops_metrics
        (method, route_path, status_code, latency_ms, is_error)
@@ -366,7 +420,7 @@ const requireAuditReader = (req, _res, next) => {
   return next();
 };
 
-const PUBLIC_OPERATION_PATHS = new Set(['/api/health', '/api/ready', '/api/version', '/api/build']);
+const PUBLIC_OPERATION_PATHS = new Set(['/api/health', '/api/ready', '/api/version', '/api/build', '/api/metrics']);
 
 const authRequired = asyncHandler(async (req, _res, next) => {
   if (PUBLIC_OPERATION_PATHS.has(req.path)) return next();
@@ -386,6 +440,7 @@ const auditorAuditPathAllowList = new Set([
   '/api/ready',
   '/api/version',
   '/api/build',
+  '/api/metrics',
   '/api/auth/me',
   '/api/device-flow/logs',
   '/api/device-flow/audit/verify',
@@ -2468,6 +2523,13 @@ app.get(
       commit: BUILD_COMMIT,
       buildTime: BUILD_TIME,
     });
+  })
+);
+
+app.get(
+  '/api/metrics',
+  asyncHandler(async (_req, res) => {
+    res.json(buildMetricsSnapshot());
   })
 );
 

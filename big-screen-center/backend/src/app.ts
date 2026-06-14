@@ -1,5 +1,6 @@
 import cors from 'cors'
-import express, { type Request } from 'express'
+import { randomUUID } from 'node:crypto'
+import express, { type NextFunction, type Request, type Response } from 'express'
 
 import type { AuthorizationContext } from './auth.js'
 import { createScaAdapter } from './adapters/sca.js'
@@ -29,6 +30,77 @@ const appVersion = process.env.APP_VERSION || process.env.npm_package_version ||
 const buildCommit = process.env.BUILD_COMMIT || process.env.GIT_COMMIT || ''
 const buildTime = process.env.BUILD_TIME || process.env.BUILT_AT || ''
 
+const observabilityMetrics: {
+  service: string
+  startedAt: string
+  requestTotal: number
+  errorTotal: number
+  inFlight: number
+  durationMsTotal: number
+  durationMsMax: number
+  statusCounts: Record<string, number>
+} = {
+  service: serviceName,
+  startedAt: new Date().toISOString(),
+  requestTotal: 0,
+  errorTotal: 0,
+  inFlight: 0,
+  durationMsTotal: 0,
+  durationMsMax: 0,
+  statusCounts: {},
+}
+
+const normalizeRequestId = (value: unknown) => {
+  const text = String(value || '').trim()
+  if (!text) return ''
+  return text.slice(0, 128).replace(/[^a-zA-Z0-9_.:-]/g, '')
+}
+
+const buildMetricsSnapshot = () => ({
+  service: serviceName,
+  started_at: observabilityMetrics.startedAt,
+  uptime_seconds: Math.round(process.uptime()),
+  request_total: observabilityMetrics.requestTotal,
+  error_total: observabilityMetrics.errorTotal,
+  in_flight: observabilityMetrics.inFlight,
+  duration_ms_avg: observabilityMetrics.requestTotal
+    ? Number((observabilityMetrics.durationMsTotal / observabilityMetrics.requestTotal).toFixed(2))
+    : 0,
+  duration_ms_max: Number(observabilityMetrics.durationMsMax.toFixed(2)),
+  status_counts: observabilityMetrics.statusCounts,
+})
+
+const observabilityMiddleware = (request: Request, response: Response, next: NextFunction) => {
+  const startedAt = process.hrtime.bigint()
+  const requestId =
+    normalizeRequestId(request.get('X-Request-Id') || request.get('X-Correlation-Id')) || randomUUID()
+  response.setHeader('X-Request-Id', requestId)
+  observabilityMetrics.inFlight += 1
+
+  response.on('finish', () => {
+    const durationMs = Number(process.hrtime.bigint() - startedAt) / 1_000_000
+    const statusCode = Number(response.statusCode || 0)
+    observabilityMetrics.inFlight = Math.max(0, observabilityMetrics.inFlight - 1)
+    observabilityMetrics.requestTotal += 1
+    observabilityMetrics.durationMsTotal += durationMs
+    observabilityMetrics.durationMsMax = Math.max(observabilityMetrics.durationMsMax, durationMs)
+    observabilityMetrics.statusCounts[String(statusCode)] = (observabilityMetrics.statusCounts[String(statusCode)] || 0) + 1
+    if (statusCode >= 500) observabilityMetrics.errorTotal += 1
+    console.info(JSON.stringify({
+      type: 'http_access',
+      service: serviceName,
+      request_id: requestId,
+      method: request.method,
+      path: request.originalUrl?.split('?')[0] || request.path,
+      status: statusCode,
+      duration_ms: Number(durationMs.toFixed(2)),
+      remote_ip: request.ip || request.socket.remoteAddress || '',
+    }))
+  })
+
+  next()
+}
+
 export interface CreateAppOptions {
   service?: MetricService
   snapshots?: SnapshotStore
@@ -54,6 +126,7 @@ export const createApp = (options: CreateAppOptions = {}) => {
   const application = express()
   const allowedOrigins = new Set(config.corsOrigins)
   application.disable('x-powered-by')
+  application.use(observabilityMiddleware)
   application.use(cors({
     credentials: true,
     origin(origin, callback) {
@@ -119,6 +192,10 @@ export const createApp = (options: CreateAppOptions = {}) => {
       commit: buildCommit,
       buildTime,
     })
+  })
+
+  application.get('/api/metrics', (_request, response) => {
+    response.json(buildMetricsSnapshot())
   })
 
   application.use('/api/big-screen', createDataRouter({

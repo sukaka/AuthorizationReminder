@@ -110,6 +110,31 @@ test('active business backends expose unified operational endpoints', () => {
   }
 });
 
+test('active business backends implement the observability baseline', () => {
+  const serviceEntryFiles = [
+    'server/index.js',
+    'delivery/backend/src/index.js',
+    'inventory-system/backend/src/index.js',
+    'device-flow/backend/src/index.js',
+    'faq/backend/src/index.js',
+    'tender/backend/src/index.js',
+    'train-exam/backend/src/index.js',
+    'prompt-center/backend/src/index.js',
+    'big-screen-center/backend/src/app.ts',
+    'sca-platform/backend/app/main.py',
+    'cmdb/internal/handler/router.go',
+  ];
+
+  for (const relativePath of serviceEntryFiles) {
+    const source = read(relativePath);
+    assert.match(source, /\/api\/metrics/, `${relativePath} missing /api/metrics`);
+    assert.match(source, /X-Request-Id/i, `${relativePath} missing X-Request-Id propagation`);
+    assert.match(source, /request[_I]d|request_id/, `${relativePath} missing request id field`);
+    assert.match(source, /duration[_Mms]*|latency|elapsed/, `${relativePath} missing request duration metric`);
+    assert.match(source, /JSON\.stringify|logger\.info|logrus|zap|Structured|structured/i, `${relativePath} missing structured access log`);
+  }
+});
+
 test('high-level design documents OWASP Top 10:2025 controls and hardening backlog', () => {
   const hldPath = 'docs/superpowers/specs/2026-06-13-all-systems-high-level-design.md';
   assert.equal(exists(hldPath), true);

@@ -1,6 +1,7 @@
 require('dotenv').config();
 
 const cors = require('cors');
+const crypto = require('node:crypto');
 const express = require('express');
 const helmet = require('helmet');
 const mysql = require('mysql2/promise');
@@ -49,6 +50,68 @@ const TRUSTED_PROXIES = String(process.env.TRUSTED_PROXIES || '')
   .split(',')
   .map((item) => item.trim())
   .filter(Boolean);
+
+const observabilityMetrics = {
+  service: SERVICE_NAME,
+  startedAt: new Date().toISOString(),
+  requestTotal: 0,
+  errorTotal: 0,
+  inFlight: 0,
+  durationMsTotal: 0,
+  durationMsMax: 0,
+  statusCounts: {},
+};
+
+const normalizeRequestId = (value) => {
+  const text = String(value || '').trim();
+  if (!text) return '';
+  return text.slice(0, 128).replace(/[^a-zA-Z0-9_.:-]/g, '');
+};
+
+const buildMetricsSnapshot = () => ({
+  service: SERVICE_NAME,
+  started_at: observabilityMetrics.startedAt,
+  uptime_seconds: Math.round(process.uptime()),
+  request_total: observabilityMetrics.requestTotal,
+  error_total: observabilityMetrics.errorTotal,
+  in_flight: observabilityMetrics.inFlight,
+  duration_ms_avg: observabilityMetrics.requestTotal
+    ? Number((observabilityMetrics.durationMsTotal / observabilityMetrics.requestTotal).toFixed(2))
+    : 0,
+  duration_ms_max: Number(observabilityMetrics.durationMsMax.toFixed(2)),
+  status_counts: observabilityMetrics.statusCounts,
+});
+
+const observabilityMiddleware = (req, res, next) => {
+  const startedAt = process.hrtime.bigint();
+  const requestId = normalizeRequestId(req.get('X-Request-Id') || req.get('X-Correlation-Id')) || crypto.randomUUID();
+  req.requestId = requestId;
+  res.setHeader('X-Request-Id', requestId);
+  observabilityMetrics.inFlight += 1;
+
+  res.on('finish', () => {
+    const durationMs = Number(process.hrtime.bigint() - startedAt) / 1_000_000;
+    const statusCode = Number(res.statusCode || 0);
+    observabilityMetrics.inFlight = Math.max(0, observabilityMetrics.inFlight - 1);
+    observabilityMetrics.requestTotal += 1;
+    observabilityMetrics.durationMsTotal += durationMs;
+    observabilityMetrics.durationMsMax = Math.max(observabilityMetrics.durationMsMax, durationMs);
+    observabilityMetrics.statusCounts[statusCode] = (observabilityMetrics.statusCounts[statusCode] || 0) + 1;
+    if (statusCode >= 500) observabilityMetrics.errorTotal += 1;
+    console.info(JSON.stringify({
+      type: 'http_access',
+      service: SERVICE_NAME,
+      request_id: requestId,
+      method: req.method,
+      path: req.originalUrl?.split('?')[0] || req.path,
+      status: statusCode,
+      duration_ms: Number(durationMs.toFixed(2)),
+      remote_ip: req.ip || req.socket?.remoteAddress || '',
+    }));
+  });
+
+  next();
+};
 
 const SHIPPING_STATUS = {
   PENDING: 'PENDING',
@@ -113,6 +176,7 @@ if (TRUSTED_PROXIES.length) {
   app.set('trust proxy', TRUSTED_PROXIES.length === 1 ? TRUSTED_PROXIES[0] : TRUSTED_PROXIES);
 }
 
+app.use(observabilityMiddleware);
 app.use(
   helmet({
     contentSecurityPolicy: {
@@ -1096,7 +1160,7 @@ const extractCookieToken = (cookieHeader) => {
   return '';
 };
 
-const PUBLIC_OPERATION_PATHS = new Set(['/api/health', '/api/ready', '/api/version', '/api/build']);
+const PUBLIC_OPERATION_PATHS = new Set(['/api/health', '/api/ready', '/api/version', '/api/build', '/api/metrics']);
 
 const authRequired = asyncHandler(async (req, _res, next) => {
   if (PUBLIC_OPERATION_PATHS.has(req.path)) return next();
@@ -1415,6 +1479,13 @@ app.get(
       commit: BUILD_COMMIT,
       buildTime: BUILD_TIME,
     });
+  })
+);
+
+app.get(
+  '/api/metrics',
+  asyncHandler(async (_req, res) => {
+    res.json(buildMetricsSnapshot());
   })
 );
 
