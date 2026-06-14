@@ -35,6 +35,7 @@ use([
 ])
 
 const host = ref<HTMLElement | null>(null)
+const glUnavailable = ref(false)
 const interaction = useScreenInteraction()
 let chart: EChartsType | null = null
 let observer: ResizeObserver | null = null
@@ -63,6 +64,7 @@ const usesGl = computed(() =>
 )
 const usesParticles = computed(() =>
   usesGl.value
+  && !glUnavailable.value
   && visualKey.value === 'threat-radar'
   && props.performanceProfile === 'high',
 )
@@ -107,6 +109,17 @@ const bindChartEvents = () => {
   chartEventsBound = true
 }
 
+const disposeChart = () => {
+  if (chart && chartEventsBound) {
+    chart.off('mouseover', onChartHover)
+    chart.off('click', onChartClick)
+    chart.off('globalout', onChartGlobalOut)
+  }
+  chart?.dispose()
+  chart = null
+  chartEventsBound = false
+}
+
 const syncChartInteraction = () => {
   if (!chart) return
   chart.dispatchAction({ type: 'downplay' })
@@ -140,6 +153,7 @@ const render = async () => {
   bindChartEvents()
   const entries = numericEntries.value
   const fallback = props.widget.config.variant === 'polar-fallback'
+  const activeGl = usesGl.value && !glUnavailable.value
   const option: EChartsCoreOption =
     fallback
       ? {
@@ -165,7 +179,7 @@ const render = async () => {
             itemStyle: { color: '#f2b84b' },
           }],
         }
-      : usesGl.value
+      : activeGl
         ? {
             animation: props.performanceProfile !== 'low',
             tooltip: { trigger: 'item', formatter: formatTooltip },
@@ -234,6 +248,13 @@ const render = async () => {
           }],
         }
   chart.setOption(option, true)
+  if (activeGl && host.value.querySelector('.ecgl-nowebgl')) {
+    glUnavailable.value = true
+    disposeChart()
+    host.value.replaceChildren()
+    await render()
+    return
+  }
   syncChartInteraction()
 }
 
@@ -262,13 +283,7 @@ onMounted(() => {
 onUnmounted(() => {
   entranceAnimation?.cancel?.()
   observer?.disconnect()
-  if (chart && chartEventsBound) {
-    chart.off('mouseover', onChartHover)
-    chart.off('click', onChartClick)
-    chart.off('globalout', onChartGlobalOut)
-  }
-  chart?.dispose()
-  chartEventsBound = false
+  disposeChart()
 })
 </script>
 
@@ -278,7 +293,11 @@ onUnmounted(() => {
       v-if="usesParticles"
       :id="`particles-${widget.id}`"
     />
-    <div ref="host" class="echart-panel__canvas" />
+    <div
+      ref="host"
+      class="echart-panel__canvas"
+      :data-gl-fallback="glUnavailable ? visualKey : undefined"
+    />
   </section>
 </template>
 
@@ -300,5 +319,9 @@ onUnmounted(() => {
 .echart-panel__canvas {
   position: relative;
   z-index: 1;
+}
+
+.echart-panel__canvas :deep(.ecgl-nowebgl) {
+  display: none;
 }
 </style>
