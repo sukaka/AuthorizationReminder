@@ -257,6 +257,10 @@ fi
 request_status POST "/api/device-flow/jobs/$VERSION_JOB_ID/stages/receive" 409 '{"expected_version":99999,"remark":"bad version"}' >/dev/null
 
 echo "[23/27] 审批作废流程可用"
+OPEN_BEFORE_CANCEL="$(
+  request_status GET '/api/device-flow/dashboard/summary' 200 |
+    node -e "const fs=require('fs');const d=JSON.parse(fs.readFileSync(0,'utf8'));console.log(d.totals?.open_jobs ?? '');"
+)"
 CR_JOB="$(request_json POST /api/device-flow/jobs '{"device_sn":"SN-CR-001","customer_name":"ChangeRequestCustomer","remark":"cr test"}')"
 CR_JOB_ID="$(printf '%s' "$CR_JOB" | extract_json_field id)"
 if [[ -z "$CR_JOB_ID" ]]; then
@@ -274,6 +278,14 @@ CR_JOB_DETAIL="$(request_status GET "/api/device-flow/jobs/$CR_JOB_ID" 200)"
 CR_STATUS="$(printf '%s' "$CR_JOB_DETAIL" | extract_json_field status)"
 if [[ "$CR_STATUS" != "VOIDED" ]]; then
   echo "[ERROR] 作废审批后状态异常，期望 VOIDED，实际: $CR_STATUS"
+  exit 1
+fi
+OPEN_AFTER_CANCEL="$(
+  request_status GET '/api/device-flow/dashboard/summary' 200 |
+    node -e "const fs=require('fs');const d=JSON.parse(fs.readFileSync(0,'utf8'));console.log(d.totals?.open_jobs ?? '');"
+)"
+if [[ "$OPEN_AFTER_CANCEL" != "$OPEN_BEFORE_CANCEL" ]]; then
+  echo "[ERROR] 作废单不应计入待处理：before=${OPEN_BEFORE_CANCEL}, after=${OPEN_AFTER_CANCEL}"
   exit 1
 fi
 

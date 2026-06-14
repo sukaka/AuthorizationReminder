@@ -1,4 +1,5 @@
 const mysql = require('mysql2/promise');
+const { buildBootstrapStatements } = require('./db-bootstrap');
 
 const DB_HOST = process.env.MYSQL_HOST || '127.0.0.1';
 const DB_PORT = Number(process.env.MYSQL_PORT || 3306);
@@ -21,13 +22,6 @@ const DEFAULT_SLA_RULES = [
 let pool;
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-
-const ensureSafeIdentifier = (value, name) => {
-  if (!/^[a-zA-Z0-9_]+$/.test(value || '')) {
-    throw new Error(`${name} contains unsafe characters`);
-  }
-  return value;
-};
 
 const buildPool = ({ database, user, password } = {}) =>
   mysql.createPool({
@@ -59,18 +53,18 @@ const bootstrapDatabase = async () => {
   const adminPassword =
     process.env.MYSQL_ADMIN_PASSWORD !== undefined ? process.env.MYSQL_ADMIN_PASSWORD : DB_PASSWORD;
 
-  const safeDbName = ensureSafeIdentifier(DB_NAME, 'MYSQL_DATABASE');
-  const safeAppUser = ensureSafeIdentifier(DB_USER, 'MYSQL_USER');
-
   const adminPool = buildPool({ user: adminUser, password: adminPassword });
   await waitForDb(adminPool, 'mysql admin connection');
 
   try {
-    await adminPool.query(
-      `CREATE DATABASE IF NOT EXISTS \`${safeDbName}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`
-    );
-    await adminPool.query(`GRANT ALL PRIVILEGES ON \`${safeDbName}\`.* TO '${safeAppUser}'@'%'`);
-    await adminPool.query('FLUSH PRIVILEGES');
+    const statements = buildBootstrapStatements({
+      database: DB_NAME,
+      user: DB_USER,
+      password: DB_PASSWORD,
+    });
+    for (const statement of statements) {
+      await adminPool.query(statement.sql, statement.params || []);
+    }
   } finally {
     await adminPool.end();
   }

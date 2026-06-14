@@ -167,6 +167,8 @@ main() {
   ensure_value AUTH_CONFIG_SECRET_KEY hex
   ensure_value AUTH_BUILTIN_ACCOUNT_DEFAULT_PASSWORD required_plain
   ensure_value PUBLIC_HOST host_or_localhost
+  ensure_value DEVICE_FLOW_MYSQL_PASSWORD pass
+  ensure_value DEVICE_FLOW_AUDIT_SIGNING_KEY hex
   ensure_value FAQ_MYSQL_PASSWORD pass
   ensure_value FAQ_DOC_EDITOR_JWT_SECRET hex
   ensure_value SEC_IMPL_MYSQL_PASSWORD pass

@@ -13,6 +13,7 @@ const {
   isOriginAllowedForRequest,
   normalizeOrigin,
 } = require('./cors-origin');
+const { planCallbackDeliveries } = require('./callback-delivery-policy');
 const { get, initDb, query, transaction } = require('./db');
 
 const app = express();
@@ -1676,7 +1677,7 @@ const runSlaReminderCheck = async ({ actor, requestIp, maxScan = 300 }) => {
             r.remind_interval_minutes
      FROM device_jobs j
      JOIN device_sla_rules r ON r.stage_code = j.current_stage AND r.enabled = 1
-     WHERE j.status <> 'COMPLETED'
+     WHERE j.status = 'OPEN'
        AND TIMESTAMPDIFF(HOUR, j.updated_at, NOW()) >= r.threshold_hours
      ORDER BY j.updated_at ASC
      LIMIT ?`,
@@ -1699,7 +1700,7 @@ const runSlaReminderCheck = async ({ actor, requestIp, maxScan = 300 }) => {
          WHERE id = ? FOR UPDATE`,
         [item.id]
       );
-      if (!job || String(job.status || '').toUpperCase() === 'COMPLETED') return null;
+      if (!job || String(job.status || '').toUpperCase() !== 'OPEN') return null;
 
       const rule = await tx.get(
         `SELECT threshold_hours, remind_interval_minutes, enabled
@@ -1808,7 +1809,7 @@ const getSlaSummary = async (minOverdueHours, reminderPaging = { page: 1, limit:
               r.threshold_hours
        FROM device_jobs j
        JOIN device_sla_rules r ON r.stage_code = j.current_stage AND r.enabled = 1
-       WHERE j.status <> 'COMPLETED'
+       WHERE j.status = 'OPEN'
          AND TIMESTAMPDIFF(HOUR, j.updated_at, NOW()) >= r.threshold_hours
          AND TIMESTAMPDIFF(HOUR, j.updated_at, NOW()) >= ?
        ORDER BY overdue_hours DESC, j.updated_at ASC
@@ -2030,14 +2031,35 @@ const buildCallbackSignature = (secret, body) =>
 
 const runCallbackWorkerBatch = async ({ maxEvents = CALLBACK_WORKER_BATCH } = {}) => {
   const limit = Math.max(1, Math.min(Number(maxEvents || CALLBACK_WORKER_BATCH), 100));
-  const pending = await query(
-    `SELECT id, event_type, job_id, payload, attempt_count
-     FROM device_callback_events
-     WHERE status = 'PENDING' AND next_retry_at <= NOW()
-     ORDER BY id ASC
-     LIMIT ?`,
-    [limit]
-  );
+  const pending = await transaction(async (tx) => {
+    await tx.run(
+      `UPDATE device_callback_events
+       SET status = 'PENDING', next_retry_at = NOW(), updated_at = NOW()
+       WHERE status = 'PROCESSING'
+         AND updated_at < DATE_SUB(NOW(), INTERVAL 10 MINUTE)
+       LIMIT 100`
+    );
+    const rows = await tx.query(
+      `SELECT id, event_type, job_id, payload, attempt_count
+       FROM device_callback_events
+       WHERE status = 'PENDING' AND next_retry_at <= NOW()
+       ORDER BY id ASC
+       LIMIT ?
+       FOR UPDATE SKIP LOCKED`,
+      [limit]
+    );
+    if (rows.length > 0) {
+      const ids = rows.map((item) => Number(item.id)).filter((item) => item > 0);
+      const placeholders = ids.map(() => '?').join(',');
+      await tx.run(
+        `UPDATE device_callback_events
+         SET status = 'PROCESSING', updated_at = NOW()
+         WHERE id IN (${placeholders})`,
+        ids
+      );
+    }
+    return rows;
+  });
   const summary = {
     scanned: pending.length,
     success: 0,
@@ -2068,12 +2090,30 @@ const runCallbackWorkerBatch = async ({ maxEvents = CALLBACK_WORKER_BATCH } = {}
       continue;
     }
 
-    let allSuccess = true;
-    let retryLimit = 3;
-    for (const sub of subscriptions) {
+    const deliveryStats = await query(
+      `SELECT callback_id,
+              COUNT(*) AS attempt_count,
+              MAX(
+                CASE
+                  WHEN response_code >= 200 AND response_code < 300
+                   AND (error_message IS NULL OR error_message = '')
+                  THEN 1 ELSE 0
+                END
+              ) AS succeeded
+       FROM device_callback_deliveries
+       WHERE event_id = ?
+       GROUP BY callback_id`,
+      [eventId]
+    );
+    const deliveryPlan = planCallbackDeliveries(subscriptions, deliveryStats);
+    let successCount = deliveryPlan.succeeded.length;
+    let exhaustedCount = deliveryPlan.exhausted.length;
+    let needsRetry = false;
+    let lastHttpCode = null;
+
+    for (const sub of deliveryPlan.pending) {
       const callbackId = Number(sub.id);
       const timeoutMs = Math.max(1000, Math.min(Number(sub.timeout_ms || 5000), 15000));
-      retryLimit = Math.max(retryLimit, Number(sub.retry_limit || 3));
       const bodyText = JSON.stringify({
         event: eventType,
         event_id: eventId,
@@ -2100,13 +2140,12 @@ const runCallbackWorkerBatch = async ({ maxEvents = CALLBACK_WORKER_BATCH } = {}
           timeoutMs
         );
         responseCode = Number(resp.status || 0);
+        lastHttpCode = responseCode || lastHttpCode;
         responseBody = trimText(await resp.text()).slice(0, 2000);
         if (responseCode < 200 || responseCode >= 300) {
-          allSuccess = false;
           errorMessage = `HTTP ${responseCode}`;
         }
       } catch (err) {
-        allSuccess = false;
         errorMessage = trimText(err?.message) || 'callback request failed';
       }
       const durationMs = Date.now() - startedAt;
@@ -2117,7 +2156,7 @@ const runCallbackWorkerBatch = async ({ maxEvents = CALLBACK_WORKER_BATCH } = {}
         [
           eventId,
           callbackId,
-          Number(eventRow.attempt_count || 0) + 1,
+          Number(sub.delivery_attempt_no || 1),
           bodyText,
           responseCode || null,
           responseBody || null,
@@ -2125,10 +2164,18 @@ const runCallbackWorkerBatch = async ({ maxEvents = CALLBACK_WORKER_BATCH } = {}
           errorMessage || null,
         ]
       );
+
+      if (!errorMessage && responseCode >= 200 && responseCode < 300) {
+        successCount += 1;
+      } else if (Number(sub.delivery_attempt_no || 1) >= Math.max(1, Number(sub.retry_limit || 1))) {
+        exhaustedCount += 1;
+      } else {
+        needsRetry = true;
+      }
     }
 
     const nextAttempt = Number(eventRow.attempt_count || 0) + 1;
-    if (allSuccess) {
+    if (successCount === subscriptions.length) {
       await query(
         `UPDATE device_callback_events
          SET status = 'SUCCESS', attempt_count = ?, last_error = NULL, last_http_code = 200, updated_at = NOW()
@@ -2136,12 +2183,13 @@ const runCallbackWorkerBatch = async ({ maxEvents = CALLBACK_WORKER_BATCH } = {}
         [nextAttempt, eventId]
       );
       summary.success += 1;
-    } else if (nextAttempt >= retryLimit) {
+    } else if (!needsRetry && exhaustedCount > 0) {
       await query(
         `UPDATE device_callback_events
-         SET status = 'GAVE_UP', attempt_count = ?, last_error = 'callback delivery failed', updated_at = NOW()
+         SET status = 'GAVE_UP', attempt_count = ?, last_error = 'callback delivery failed',
+             last_http_code = ?, updated_at = NOW()
          WHERE id = ?`,
-        [nextAttempt, eventId]
+        [nextAttempt, lastHttpCode, eventId]
       );
       summary.failed += 1;
     } else {
@@ -2151,9 +2199,10 @@ const runCallbackWorkerBatch = async ({ maxEvents = CALLBACK_WORKER_BATCH } = {}
              attempt_count = ?,
              next_retry_at = DATE_ADD(NOW(), INTERVAL ? SECOND),
              last_error = 'callback delivery failed',
+             last_http_code = ?,
              updated_at = NOW()
          WHERE id = ?`,
-        [nextAttempt, Math.min(1800, 30 * nextAttempt), eventId]
+        [nextAttempt, Math.min(1800, 30 * nextAttempt), lastHttpCode, eventId]
       );
       summary.retried += 1;
     }
@@ -2641,7 +2690,7 @@ app.get(
         query(`SELECT j.current_stage, COUNT(*) AS total FROM device_jobs j ${jobWhereSql} GROUP BY j.current_stage`, jobParams),
         get(`SELECT COUNT(*) AS total FROM device_jobs j ${jobWhereSql}`, jobParams),
         get(
-          `SELECT COUNT(*) AS total FROM device_jobs j ${appendWhereClause(jobWhereSql, "j.status <> 'COMPLETED'")}`,
+          `SELECT COUNT(*) AS total FROM device_jobs j ${appendWhereClause(jobWhereSql, "j.status = 'OPEN'")}`,
           jobParams
         ),
         get(
@@ -2669,7 +2718,7 @@ app.get(
            FROM device_jobs j
            ${appendWhereClause(
              jobWhereSql,
-             "j.status <> 'COMPLETED' AND TIMESTAMPDIFF(DAY, j.updated_at, NOW()) >= ?"
+             "j.status = 'OPEN' AND TIMESTAMPDIFF(DAY, j.updated_at, NOW()) >= ?"
            )}
            ORDER BY j.updated_at ASC
            LIMIT 100`,
@@ -3765,65 +3814,81 @@ app.post(
 
     if (!file) throw appError('请上传文件');
 
-    const saved = await transaction(async (tx) => {
-      const job = await tx.get('SELECT id, current_stage FROM device_jobs WHERE id = ? FOR UPDATE', [jobId]);
-      if (!job) throw appError('流转单不存在', 404);
+    let persisted = false;
+    try {
+      const saved = await transaction(async (tx) => {
+        const job = await tx.get('SELECT id, current_stage FROM device_jobs WHERE id = ? FOR UPDATE', [jobId]);
+        if (!job) throw appError('流转单不存在', 404);
 
-      let stageCodeFinal = stageCode;
-      if (stageCodeFinal && !STAGES.includes(stageCodeFinal)) throw appError('stage_code 非法');
-      if (!stageCodeFinal) stageCodeFinal = String(job.current_stage || '');
+        let stageCodeFinal = stageCode;
+        if (stageCodeFinal && !STAGES.includes(stageCodeFinal)) throw appError('stage_code 非法');
+        if (!stageCodeFinal) stageCodeFinal = String(job.current_stage || '');
 
-      if (stageRecordId) {
-        const stageRecord = await tx.get('SELECT id FROM device_stage_records WHERE id = ? AND job_id = ?', [stageRecordId, jobId]);
-        if (!stageRecord) throw appError('阶段记录不存在或不匹配');
-      }
+        if (stageRecordId) {
+          const stageRecord = await tx.get('SELECT id FROM device_stage_records WHERE id = ? AND job_id = ?', [stageRecordId, jobId]);
+          if (!stageRecord) throw appError('阶段记录不存在或不匹配');
+        }
 
-      const result = await tx.run(
-        `INSERT INTO device_attachments
-         (job_id, stage_record_id, stage_code, file_name, stored_name, file_path, mime_type, file_size, remark, uploaded_by_sub, uploaded_by_name, uploaded_by_role)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [
+        const result = await tx.run(
+          `INSERT INTO device_attachments
+           (job_id, stage_record_id, stage_code, file_name, stored_name, file_path, mime_type, file_size, remark, uploaded_by_sub, uploaded_by_name, uploaded_by_role)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [
+            jobId,
+            stageRecordId,
+            stageCodeFinal,
+            trimText(file.originalname) || file.filename,
+            file.filename,
+            path.resolve(file.path),
+            trimText(file.mimetype),
+            Number(file.size || 0),
+            remark || null,
+            actor.sub,
+            actor.name,
+            actor.role,
+          ]
+        );
+
+        const attachmentId = Number(result.insertId || 0);
+        const row = await tx.get('SELECT * FROM device_attachments WHERE id = ?', [attachmentId]);
+
+        await writeOperationLogTx(tx, {
           jobId,
-          stageRecordId,
-          stageCodeFinal,
-          trimText(file.originalname) || file.filename,
-          file.filename,
-          path.resolve(file.path),
-          trimText(file.mimetype),
-          Number(file.size || 0),
-          remark || null,
-          actor.sub,
-          actor.name,
-          actor.role,
-        ]
-      );
+          userSub: actor.sub,
+          username: actor.name,
+          userRole: actor.role,
+          action: 'UPLOAD_ATTACHMENT',
+          entity: 'device_attachment',
+          entityId: attachmentId,
+          message: `上传附件 ${row.file_name}`,
+          beforeData: null,
+          afterData: {
+            attachment_id: attachmentId,
+            stage_code: row.stage_code,
+            file_name: row.file_name,
+            file_size: Number(row.file_size || 0),
+          },
+          requestIp: req.ip,
+        });
 
-      const attachmentId = Number(result.insertId || 0);
-      const row = await tx.get('SELECT * FROM device_attachments WHERE id = ?', [attachmentId]);
-
-      await writeOperationLogTx(tx, {
-        jobId,
-        userSub: actor.sub,
-        username: actor.name,
-        userRole: actor.role,
-        action: 'UPLOAD_ATTACHMENT',
-        entity: 'device_attachment',
-        entityId: attachmentId,
-        message: `上传附件 ${row.file_name}`,
-        beforeData: null,
-        afterData: {
-          attachment_id: attachmentId,
-          stage_code: row.stage_code,
-          file_name: row.file_name,
-          file_size: Number(row.file_size || 0),
-        },
-        requestIp: req.ip,
+        return row;
       });
 
-      return row;
-    });
-
-    res.status(201).json(toPublicAttachment(saved));
+      persisted = true;
+      res.status(201).json(toPublicAttachment(saved));
+    } catch (err) {
+      if (!persisted && file?.path) {
+        const resolved = path.resolve(file.path);
+        if (resolved.startsWith(`${UPLOAD_ROOT}${path.sep}`) && fs.existsSync(resolved)) {
+          try {
+            fs.unlinkSync(resolved);
+          } catch (_cleanupErr) {
+            // Keep the request error primary; retention maintenance can handle a failed cleanup.
+          }
+        }
+      }
+      throw err;
+    }
   })
 );
 
@@ -4651,7 +4716,7 @@ app.get(
           row.updated_at,
           row.shipped_at,
           overdue,
-          overdue >= overdueDays ? '是' : '否',
+          String(row.status || '').toUpperCase() === 'OPEN' && overdue >= overdueDays ? '是' : '否',
         ]
           .map(escapeCsvCell)
           .join(',')

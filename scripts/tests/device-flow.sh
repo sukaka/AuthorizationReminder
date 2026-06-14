@@ -19,6 +19,7 @@ wait_http_status "$DEVICE_FLOW_API_BASE/api/health" "200" "device-flow-api-healt
 wait_http_status "$DEVICE_FLOW_WEB_BASE" "200" "device-flow-web"
 
 run_node_check "device-flow/backend/src/index.js"
+run_npm_script_if_exists "device-flow/backend" "test"
 run_npm_script_if_exists "device-flow/frontend" "build"
 
 if [[ "$RUN_E2E" == "1" ]]; then
@@ -29,6 +30,11 @@ if [[ "$RUN_E2E" == "1" ]]; then
 
   run_cmd "设备流转 smoke-e2e" env API_BASE="$DEVICE_FLOW_API_BASE" AUTH_TOKEN="$ADMIN_TOKEN" bash "$ROOT_DIR/device-flow/scripts/smoke-e2e.sh"
   run_cmd "设备流转 regression-api" env API_BASE="$DEVICE_FLOW_API_BASE" AUTH_TOKEN="$ADMIN_TOKEN" bash "$ROOT_DIR/device-flow/scripts/regression-api.sh"
+  run_cmd "设备流转上传失败清理回归" env \
+    API_BASE="$DEVICE_FLOW_API_BASE" \
+    AUTH_TOKEN="$ADMIN_TOKEN" \
+    ROOT_DIR="$ROOT_DIR" \
+    bash "$ROOT_DIR/device-flow/scripts/upload-cleanup-regression.sh"
 
   if [[ "$RUN_RBAC" == "1" ]]; then
     BUILTIN_PASS="${BUILTIN_PASSWORD:-${BUILTIN_ACCOUNT_DEFAULT_PASSWORD:-Dm1vbnqsILIVjUa5sWixBFos60bKdEKC}}"
