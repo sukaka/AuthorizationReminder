@@ -1164,25 +1164,25 @@ function App() {
     setShippingTotal(Number(result?.meta?.totalCount || 0))
   }
 
-  const refreshAll = async () => {
+  const refreshAll = async (currentUser = user) => {
     setLoading(true)
     try {
-      const tasks = [
-        refreshSummary(),
-        refreshDashboardInsights(insightsDays),
-        refreshProducts(),
-        refreshStorage(),
-        refreshUsage(),
-        refreshBalances(),
-        refreshLowStock(),
-        refreshLedger(),
-        refreshTraceability(),
-        refreshOrderLists(),
-        refreshShippingOrders(),
-      ]
-      if (canViewAudit) {
-        tasks.push(refreshOperationLogs())
-      }
+      const auditOnly = currentUser?.role === 'auditor'
+      const tasks = auditOnly
+        ? [refreshOperationLogs()]
+        : [
+            refreshSummary(),
+            refreshDashboardInsights(insightsDays),
+            refreshProducts(),
+            refreshStorage(),
+            refreshUsage(),
+            refreshBalances(),
+            refreshLowStock(),
+            refreshLedger(),
+            refreshTraceability(),
+            refreshOrderLists(),
+            refreshShippingOrders(),
+          ]
       await Promise.all(tasks)
       clearTips()
     } catch (err) {
@@ -1250,7 +1250,7 @@ function App() {
   useEffect(() => {
     if (!token) return
     refreshCurrentUser()
-      .then(() => refreshAll())
+      .then((currentUser) => refreshAll(currentUser))
       .catch((err) => showError(err.message))
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token])
@@ -1263,28 +1263,28 @@ function App() {
   }, [balanceKeywordInput])
 
   useEffect(() => {
-    if (!token) return
+    if (!token || !user || isAuditOnlyUser) return
     refreshBalances().catch((err) => showError(err.message))
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [balanceKeyword, balanceLowOnly, balancePage, balanceLimit])
+  }, [balanceKeyword, balanceLowOnly, balancePage, balanceLimit, user, isAuditOnlyUser])
 
   useEffect(() => {
-    if (!token) return
+    if (!token || !user || isAuditOnlyUser) return
     refreshLedger().catch((err) => showError(err.message))
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ledgerFilter, ledgerPage, ledgerLimit])
+  }, [ledgerFilter, ledgerPage, ledgerLimit, user, isAuditOnlyUser])
 
   useEffect(() => {
-    if (!token) return
+    if (!token || !user || isAuditOnlyUser) return
     refreshTraceability().catch((err) => showError(err.message))
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [token, traceFilter])
+  }, [token, traceFilter, user, isAuditOnlyUser])
 
   useEffect(() => {
-    if (!token) return
+    if (!token || !user || isAuditOnlyUser) return
     refreshShippingOrders().catch((err) => showError(err.message))
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [shippingFilter, shippingPage, shippingLimit])
+  }, [shippingFilter, shippingPage, shippingLimit, user, isAuditOnlyUser])
 
   useEffect(() => {
     if (!token || !canViewAudit) return
@@ -1293,12 +1293,12 @@ function App() {
   }, [token, canViewAudit, operationLogFilter, operationLogPage, operationLogLimit])
 
   useEffect(() => {
-    if (!token) return
+    if (!token || isAuditOnlyUser) return
     if (activeMenu !== 'insights') return
     refreshInsightsPanel(insightsDays)
       .catch((err) => showError(err.message))
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [token, activeMenu, insightsDays])
+  }, [token, activeMenu, insightsDays, isAuditOnlyUser])
 
   useEffect(() => {
     const maxPage = Math.max(1, Math.ceil(Math.max(balanceTotal, 0) / balanceLimit))

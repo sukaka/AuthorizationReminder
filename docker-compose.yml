@@ -268,7 +268,7 @@ services:
       args: *build_args_node_alpine
     environment:
       PORT: 5184
-      APP_VERSION: ${APP_VERSION:-5.74.2}
+      APP_VERSION: ${APP_VERSION:-5.74.3}
       AUTH_SERVICE_URL: "http://auth:5180"
       AUTH_SYSTEM_KEY: "device-flow"
       AUTH_FETCH_TIMEOUT_MS: 5000

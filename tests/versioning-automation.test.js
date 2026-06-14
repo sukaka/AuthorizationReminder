@@ -177,6 +177,44 @@ test('syncRepositoryVersion aligns Device Flow packages with the platform versio
   }
 });
 
+test('syncRepositoryVersion aligns Inventory packages with the platform version', () => {
+  const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-version-inventory-align-'));
+
+  writeJson(path.join(rootDir, 'package.json'), { name: 'root', version: '5.74.2' });
+  writeJson(path.join(rootDir, 'package-lock.json'), makePackageLock('5.74.2'));
+  for (const packageDir of [
+    'inventory-system/backend',
+    'inventory-system/frontend',
+    'inventory-system/shipping-gateway',
+  ]) {
+    writeJson(path.join(rootDir, packageDir, 'package.json'), { name: packageDir, version: '5.8.0' });
+    writeJson(path.join(rootDir, packageDir, 'package-lock.json'), makePackageLock('5.8.0'));
+  }
+
+  const changedFiles = syncRepositoryVersion({
+    rootDir,
+    currentVersion: '5.74.2',
+    nextVersion: '5.74.3',
+  });
+
+  for (const packageDir of [
+    'inventory-system/backend',
+    'inventory-system/frontend',
+    'inventory-system/shipping-gateway',
+  ]) {
+    assert.ok(changedFiles.includes(`${packageDir}/package.json`));
+    assert.ok(changedFiles.includes(`${packageDir}/package-lock.json`));
+    assert.equal(
+      JSON.parse(fs.readFileSync(path.join(rootDir, packageDir, 'package.json'), 'utf8')).version,
+      '5.74.3'
+    );
+    assert.equal(
+      JSON.parse(fs.readFileSync(path.join(rootDir, packageDir, 'package-lock.json'), 'utf8')).packages[''].version,
+      '5.74.3'
+    );
+  }
+});
+
 test('syncRepositoryVersion ignores nested worktree directories', () => {
   const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-version-worktree-ignore-'));
 

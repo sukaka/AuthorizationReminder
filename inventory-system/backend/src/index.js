@@ -9,7 +9,15 @@ const {
   isOriginAllowedForRequest,
   normalizeOrigin,
 } = require('./cors-origin');
+const {
+  canAccessInventory,
+  canAuditorAccessInventoryPath,
+} = require('./auth-access-policy');
 const { get, initDb, query, run, transaction } = require('./db');
+const {
+  findDuplicateStocktakeTarget,
+  getStocktakeTraceabilityConflict,
+} = require('./stocktake-policy');
 
 const app = express();
 const PORT = Number(process.env.PORT || 5183);
@@ -1126,7 +1134,7 @@ const introspectToken = async (token) => {
     throw appError('登录状态无效', 401);
   }
 
-  if (AUTH_SYSTEM_KEY && !apps.includes(AUTH_SYSTEM_KEY)) {
+  if (AUTH_SYSTEM_KEY && !canAccessInventory({ role: user.role, apps, systemKey: AUTH_SYSTEM_KEY })) {
     throw appError('无权限访问库存管理系统', 403);
   }
 
@@ -1189,6 +1197,13 @@ const requireRole = (...roles) => (req, _res, next) => {
 const requireInventoryEditor = requireRole('admin', 'sysadmin');
 const requireInventoryOperator = requireRole('admin', 'sysadmin');
 const requireAuditViewer = requireRole('auditor');
+
+const restrictAuditorToAudit = (req, _res, next) => {
+  if (canAuditorAccessInventoryPath({ role: req.user?.role, method: req.method, path: req.path })) {
+    return next();
+  }
+  return next(appError('auditor 仅可访问审计相关接口', 403));
+};
 
 const ensureEntityExists = async (table, id, label) => {
   const row = await get(`SELECT id FROM ${table} WHERE id = ?`, [id]);
@@ -1443,6 +1458,7 @@ const writeOperationLogTx = async (tx, payload) => {
 
 app.use('/api', apiRateLimiter);
 app.use(authRequired);
+app.use(restrictAuditorToAudit);
 
 app.get(
   '/api/health',
@@ -4236,6 +4252,13 @@ app.post(
       };
     });
 
+    const duplicateTarget = findDuplicateStocktakeTarget(payloadItems);
+    if (duplicateTarget) {
+      throw appError(
+        `第${duplicateTarget.duplicateIndex + 1}行与第${duplicateTarget.firstIndex + 1}行的商品和存放位置重复`
+      );
+    }
+
     const result = await transaction(async (tx) => {
       const orderNo = buildOrderNo('TAKE');
       const orderResult = await tx.run(
@@ -4263,6 +4286,35 @@ app.post(
         const systemQty = Number(balanceRow?.quantity || 0);
         const countedQty = item.countedQty;
         const diffQty = Number((countedQty - systemQty).toFixed(3));
+
+        if (diffQty !== 0) {
+          const batchBalanceRow = await tx.get(
+            `SELECT id
+             FROM inventory_batch_balances
+             WHERE product_id = ? AND storage_location_id = ? AND qty_balance > 0
+             LIMIT 1
+             FOR UPDATE`,
+            [item.productId, item.storageLocationId]
+          );
+          const inStockSerialRow = await tx.get(
+            `SELECT id
+             FROM inventory_serial_numbers
+             WHERE product_id = ? AND storage_location_id = ? AND status = ?
+             LIMIT 1
+             FOR UPDATE`,
+            [item.productId, item.storageLocationId, SERIAL_STATUS.IN_STOCK]
+          );
+          const traceabilityConflict = getStocktakeTraceabilityConflict({
+            hasAdjustment: true,
+            hasBatchBalance: Boolean(batchBalanceRow),
+            hasInStockSerial: Boolean(inStockSerialRow),
+          });
+          if (traceabilityConflict) {
+            throw appError(
+              `商品ID ${item.productId} 在存放位置ID ${item.storageLocationId} 存在批次或序列号库存，暂不支持直接总量盘点`
+            );
+          }
+        }
 
         await tx.run(
           `INSERT INTO stocktake_items
