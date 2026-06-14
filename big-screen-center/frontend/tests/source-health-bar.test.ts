@@ -17,6 +17,21 @@ describe('SourceHealthBar', () => {
     expect(wrapper.attributes('data-source-status')).toBe('partial')
     expect(wrapper.text()).toContain('生成')
     expect(wrapper.text()).toContain('2 个来源不可用')
+    expect(wrapper.text()).toContain('软件成分分析、授权提醒')
+  })
+
+  it('names unavailable adapter sources instead of only showing a count', () => {
+    const wrapper = mount(SourceHealthBar, {
+      props: {
+        status: 'partial',
+        generatedAt: '2026-06-11T08:09:10.000Z',
+        stale: false,
+        unavailableSources: ['dependencyCheck', 'passTrend', 'unknown-source'],
+      },
+    })
+
+    expect(wrapper.text()).toContain('3 个来源不可用')
+    expect(wrapper.text()).toContain('Dependency-Check、考试通过趋势、unknown-source')
   })
 
   it('uses the stale state as the visible status', () => {

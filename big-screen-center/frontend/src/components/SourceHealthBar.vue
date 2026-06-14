@@ -21,6 +21,28 @@ const statusLabel = computed(() => ({
   stale: '已过期',
 })[visibleStatus.value] || '未知')
 
+const sourceLabels: Record<string, string> = {
+  sca: '软件成分分析',
+  'train-exam': '培训考试',
+  reminder: '授权提醒',
+  overview: '总览接口',
+  assets: '资产接口',
+  dependencyCheck: 'Dependency-Check',
+  devops: 'DevOps接口',
+  passTrend: '考试通过趋势',
+  organization: '组织统计',
+  dashboard: '提醒看板',
+  salesOverview: '销售授权总览',
+}
+
+const unavailableSourceNames = computed(() =>
+  props.unavailableSources.map((source) => sourceLabels[source] || source),
+)
+
+const unavailableSourceText = computed(() =>
+  unavailableSourceNames.value.join('、'),
+)
+
 const formatTime = (value: string | null) => {
   if (!value) return '等待数据'
   const parsed = new Date(value)
@@ -37,8 +59,11 @@ const formatTime = (value: string | null) => {
       <strong>{{ statusLabel }}</strong>
       <small>生成 {{ formatTime(generatedAt) }}</small>
     </div>
-    <em v-if="unavailableSources.length">
-      {{ unavailableSources.length }} 个来源不可用
+    <em
+      v-if="unavailableSources.length"
+      :title="unavailableSourceText"
+    >
+      {{ unavailableSources.length }} 个来源不可用：{{ unavailableSourceText }}
     </em>
   </div>
 </template>
