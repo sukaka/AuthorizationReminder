@@ -17,6 +17,10 @@ const { get, initDb, query, transaction } = require('./db');
 
 const app = express();
 const PORT = Number(process.env.PORT || 5184);
+const SERVICE_NAME = 'device-flow';
+const APP_VERSION = process.env.APP_VERSION || process.env.npm_package_version || 'unknown';
+const BUILD_COMMIT = process.env.BUILD_COMMIT || process.env.GIT_COMMIT || '';
+const BUILD_TIME = process.env.BUILD_TIME || process.env.BUILT_AT || '';
 const AUTH_SERVICE_URL = process.env.AUTH_SERVICE_URL || 'http://localhost:5180';
 const AUTH_SYSTEM_KEY = String(process.env.AUTH_SYSTEM_KEY || 'device-flow').trim() || 'device-flow';
 const AUTH_COOKIE_NAME = String(process.env.AUTH_COOKIE_NAME || 'juxin_auth_token').trim() || 'juxin_auth_token';
@@ -27,7 +31,7 @@ const SLA_AUTO_RUN_INTERVAL_MS = Math.max(60000, Number(process.env.SLA_AUTO_RUN
 const UPLOAD_ROOT = path.resolve(process.env.UPLOAD_ROOT || './uploads/device-flow');
 const UPLOAD_MAX_FILE_SIZE = Math.max(1024 * 100, Number(process.env.UPLOAD_MAX_FILE_SIZE_MB || 10) * 1024 * 1024);
 const ARCHIVE_ROOT = path.resolve(process.env.ARCHIVE_ROOT || './uploads/device-flow-archive');
-const AUDIT_SIGNING_KEY = String(process.env.AUDIT_SIGNING_KEY || process.env.JWT_SECRET || 'device-flow-audit-signing-key');
+const AUDIT_SIGNING_KEY = String(process.env.AUDIT_SIGNING_KEY || process.env.JWT_SECRET || '');
 const weakSecrets = new Set(['dev-secret-change-me', 'change-me', '123456', 'password', '']);
 const MAX_BATCH_STAGE_JOB_IDS = Math.max(1, Math.min(500, Number(process.env.MAX_BATCH_STAGE_JOB_IDS || 200)));
 const MAX_IMPORT_ROWS = Math.max(1, Math.min(5000, Number(process.env.MAX_IMPORT_ROWS || 500)));
@@ -362,8 +366,10 @@ const requireAuditReader = (req, _res, next) => {
   return next();
 };
 
+const PUBLIC_OPERATION_PATHS = new Set(['/api/health', '/api/ready', '/api/version', '/api/build']);
+
 const authRequired = asyncHandler(async (req, _res, next) => {
-  if (req.path === '/api/health') return next();
+  if (PUBLIC_OPERATION_PATHS.has(req.path)) return next();
   if (req.path.startsWith('/api/external/device-flow/')) return next();
   const token = extractBearerToken(req.headers.authorization) || extractCookieToken(req.headers.cookie);
   if (!token) throw appError('未登录', 401);
@@ -377,6 +383,9 @@ const authRequired = asyncHandler(async (req, _res, next) => {
 
 const auditorAuditPathAllowList = new Set([
   '/api/health',
+  '/api/ready',
+  '/api/version',
+  '/api/build',
   '/api/auth/me',
   '/api/device-flow/logs',
   '/api/device-flow/audit/verify',
@@ -2427,7 +2436,38 @@ app.use(restrictAuditorToAudit);
 app.get(
   '/api/health',
   asyncHandler(async (_req, res) => {
-    res.json({ ok: true, service: 'device-flow', time: new Date().toISOString() });
+    res.json({ status: 'ok', service: SERVICE_NAME, time: new Date().toISOString() });
+  })
+);
+
+app.get(
+  '/api/ready',
+  asyncHandler(async (_req, res) => {
+    try {
+      await get('SELECT 1 AS ok');
+      res.json({ status: 'ok', service: SERVICE_NAME, database: 'ok' });
+    } catch (_err) {
+      res.status(503).json({ status: 'degraded', service: SERVICE_NAME, database: 'error' });
+    }
+  })
+);
+
+app.get(
+  '/api/version',
+  asyncHandler(async (_req, res) => {
+    res.json({ service: SERVICE_NAME, version: APP_VERSION });
+  })
+);
+
+app.get(
+  '/api/build',
+  asyncHandler(async (_req, res) => {
+    res.json({
+      service: SERVICE_NAME,
+      version: APP_VERSION,
+      commit: BUILD_COMMIT,
+      buildTime: BUILD_TIME,
+    });
   })
 );
 

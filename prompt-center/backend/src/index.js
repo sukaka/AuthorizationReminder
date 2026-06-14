@@ -18,6 +18,10 @@ const service = require('./prompt-service');
 
 const app = express();
 const PORT = Number(process.env.PORT || 5189);
+const SERVICE_NAME = 'prompt-center';
+const APP_VERSION = process.env.APP_VERSION || process.env.npm_package_version || 'unknown';
+const BUILD_COMMIT = process.env.BUILD_COMMIT || process.env.GIT_COMMIT || '';
+const BUILD_TIME = process.env.BUILD_TIME || process.env.BUILT_AT || '';
 const CSRF_COOKIE_NAME = String(process.env.PROMPT_CENTER_CSRF_COOKIE_NAME || 'prompt_center_csrf_token').trim()
   || 'prompt_center_csrf_token';
 const CSRF_SECURE = process.env.CSRF_SECURE === 'true';
@@ -70,7 +74,33 @@ const validateCsrfToken = (req, _res, next) => {
 };
 
 app.get('/health', (_req, res) => {
-  res.json({ ok: true, service: 'prompt-center' });
+  res.json({ status: 'ok', service: SERVICE_NAME });
+});
+
+app.get('/api/health', (_req, res) => {
+  res.json({ status: 'ok', service: SERVICE_NAME });
+});
+
+app.get('/api/ready', async (_req, res) => {
+  try {
+    await db.get('SELECT 1 AS ok');
+    res.json({ status: 'ok', service: SERVICE_NAME, database: 'ok' });
+  } catch (_err) {
+    res.status(503).json({ status: 'degraded', service: SERVICE_NAME, database: 'error' });
+  }
+});
+
+app.get('/api/version', (_req, res) => {
+  res.json({ service: SERVICE_NAME, version: APP_VERSION });
+});
+
+app.get('/api/build', (_req, res) => {
+  res.json({
+    service: SERVICE_NAME,
+    version: APP_VERSION,
+    commit: BUILD_COMMIT,
+    buildTime: BUILD_TIME,
+  });
 });
 
 const router = express.Router();

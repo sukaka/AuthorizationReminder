@@ -12,6 +12,10 @@ const { get, initDb, query, run, transaction } = require('./db');
 
 const app = express();
 const PORT = Number(process.env.PORT || 5183);
+const SERVICE_NAME = 'inventory';
+const APP_VERSION = process.env.APP_VERSION || process.env.npm_package_version || 'unknown';
+const BUILD_COMMIT = process.env.BUILD_COMMIT || process.env.GIT_COMMIT || '';
+const BUILD_TIME = process.env.BUILD_TIME || process.env.BUILT_AT || '';
 const AUTH_SERVICE_URL = process.env.AUTH_SERVICE_URL || 'http://localhost:5180';
 const AUTH_SYSTEM_KEY = String(process.env.AUTH_SYSTEM_KEY || 'inventory').trim();
 const AUTH_COOKIE_NAME = String(process.env.AUTH_COOKIE_NAME || 'juxin_auth_token').trim() || 'juxin_auth_token';
@@ -35,7 +39,7 @@ const SHIPPING_TRACKING_AUTO_SYNC_BATCH = Math.min(
 );
 const MYSQL_HOST = process.env.MYSQL_HOST || '127.0.0.1';
 const MYSQL_PORT = Number(process.env.MYSQL_PORT || 3306);
-const MYSQL_USER = process.env.MYSQL_USER || 'juxin';
+const MYSQL_USER = process.env.MYSQL_USER || 'inventory_user';
 const MYSQL_PASSWORD = process.env.MYSQL_PASSWORD || '';
 const AUTH_FETCH_TIMEOUT_MS = Math.max(1000, Number(process.env.AUTH_FETCH_TIMEOUT_MS || 5000));
 const RATE_LIMIT_WINDOW_SEC = Math.min(600, Math.max(1, Number(process.env.RATE_LIMIT_WINDOW_SEC || 60)));
@@ -1092,8 +1096,10 @@ const extractCookieToken = (cookieHeader) => {
   return '';
 };
 
+const PUBLIC_OPERATION_PATHS = new Set(['/api/health', '/api/ready', '/api/version', '/api/build']);
+
 const authRequired = asyncHandler(async (req, _res, next) => {
-  if (req.path === '/api/health') return next();
+  if (PUBLIC_OPERATION_PATHS.has(req.path)) return next();
   const token = extractBearerToken(req.headers.authorization) || extractCookieToken(req.headers.cookie);
   if (!token) {
     throw appError('未登录', 401);
@@ -1377,7 +1383,38 @@ app.use(authRequired);
 app.get(
   '/api/health',
   asyncHandler(async (_req, res) => {
-    res.json({ ok: true, service: 'inventory', ts: new Date().toISOString() });
+    res.json({ status: 'ok', service: SERVICE_NAME, time: new Date().toISOString() });
+  })
+);
+
+app.get(
+  '/api/ready',
+  asyncHandler(async (_req, res) => {
+    try {
+      await get('SELECT 1 AS ok');
+      res.json({ status: 'ok', service: SERVICE_NAME, database: 'ok' });
+    } catch (_err) {
+      res.status(503).json({ status: 'degraded', service: SERVICE_NAME, database: 'error' });
+    }
+  })
+);
+
+app.get(
+  '/api/version',
+  asyncHandler(async (_req, res) => {
+    res.json({ service: SERVICE_NAME, version: APP_VERSION });
+  })
+);
+
+app.get(
+  '/api/build',
+  asyncHandler(async (_req, res) => {
+    res.json({
+      service: SERVICE_NAME,
+      version: APP_VERSION,
+      commit: BUILD_COMMIT,
+      buildTime: BUILD_TIME,
+    });
   })
 );
 

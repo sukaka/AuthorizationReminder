@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Annotated
 import json
 import logging
+import os
 import shutil
 import time
 import uuid
@@ -622,12 +623,38 @@ def health(settings: Annotated[Settings, Depends(get_settings)]) -> dict[str, st
     return {"status": "ok", "app": settings.app_name, "version": settings.app_version}
 
 
+@app.get("/api/health", tags=["system"])
+def api_health(settings: Annotated[Settings, Depends(get_settings)]) -> dict[str, str]:
+    return {"status": "ok", "service": "sca", "version": settings.app_version}
+
+
 @app.get("/ready", tags=["system"])
 def ready(settings: Annotated[Settings, Depends(get_settings)]) -> dict[str, object]:
     db_ok = check_database()
     redis_client = redis.Redis.from_url(settings.redis_url, socket_connect_timeout=1, socket_timeout=1)
     redis_ok = bool(redis_client.ping())
     return {"status": "ok" if db_ok and redis_ok else "degraded", "database": db_ok, "redis": redis_ok}
+
+
+@app.get("/api/ready", tags=["system"])
+def api_ready(settings: Annotated[Settings, Depends(get_settings)]) -> dict[str, object]:
+    result = ready(settings)
+    return {"service": "sca", **result}
+
+
+@app.get("/api/version", tags=["system"])
+def api_version(settings: Annotated[Settings, Depends(get_settings)]) -> dict[str, str]:
+    return {"service": "sca", "version": settings.app_version}
+
+
+@app.get("/api/build", tags=["system"])
+def api_build(settings: Annotated[Settings, Depends(get_settings)]) -> dict[str, str]:
+    return {
+        "service": "sca",
+        "version": settings.app_version,
+        "commit": os.getenv("BUILD_COMMIT") or os.getenv("GIT_COMMIT") or "",
+        "buildTime": os.getenv("BUILD_TIME") or os.getenv("BUILT_AT") or "",
+    }
 
 
 @app.get("/api/sca/me", response_model=UserPayload, tags=["auth"])

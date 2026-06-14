@@ -50,6 +50,10 @@ const parseHostFromUrl = (value) => {
 };
 
 const PORT = Number(process.env.PORT || 5186);
+const SERVICE_NAME = 'faq';
+const APP_VERSION = process.env.APP_VERSION || process.env.npm_package_version || 'unknown';
+const BUILD_COMMIT = process.env.BUILD_COMMIT || process.env.GIT_COMMIT || '';
+const BUILD_TIME = process.env.BUILD_TIME || process.env.BUILT_AT || '';
 const AUTH_SERVICE_URL = process.env.AUTH_SERVICE_URL || 'http://localhost:5180';
 const AUTH_SYSTEM_KEY = String(process.env.AUTH_SYSTEM_KEY || 'faq').trim() || 'faq';
 const AUTH_COOKIE_NAME = String(process.env.AUTH_COOKIE_NAME || 'juxin_auth_token').trim() || 'juxin_auth_token';
@@ -1940,7 +1944,29 @@ const uploadSingle = (fieldName) => (req, res, next) => {
 };
 
 app.get('/api/health', (_req, res) => {
-  res.json({ ok: true, service: 'faq-api' });
+  res.json({ status: 'ok', service: SERVICE_NAME });
+});
+
+app.get('/api/ready', async (_req, res) => {
+  try {
+    await get('SELECT 1 AS ok');
+    res.json({ status: 'ok', service: SERVICE_NAME, database: 'ok' });
+  } catch (_err) {
+    res.status(503).json({ status: 'degraded', service: SERVICE_NAME, database: 'error' });
+  }
+});
+
+app.get('/api/version', (_req, res) => {
+  res.json({ service: SERVICE_NAME, version: APP_VERSION });
+});
+
+app.get('/api/build', (_req, res) => {
+  res.json({
+    service: SERVICE_NAME,
+    version: APP_VERSION,
+    commit: BUILD_COMMIT,
+    buildTime: BUILD_TIME,
+  });
 });
 
 const handleDraftDownload = async (req, res) => {

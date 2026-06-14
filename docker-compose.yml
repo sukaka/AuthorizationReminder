@@ -39,8 +39,8 @@ services:
     environment:
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
       MYSQL_DATABASE: juxin_reminder
-      MYSQL_USER: juxin
-      MYSQL_PASSWORD: ${MYSQL_SHARED_APP_PASSWORD}
+      MYSQL_USER: reminder_user
+      MYSQL_PASSWORD: ${REMINDER_MYSQL_PASSWORD}
     volumes:
       - mysql-data:/var/lib/mysql
       - ./scripts/deploy/run-mysql.sh:/scripts/run-mysql.sh:ro
@@ -58,8 +58,8 @@ services:
       AUTH_SERVICE_URL: "http://auth:5180"
       MYSQL_HOST: mysql
       MYSQL_PORT: 3306
-      MYSQL_USER: juxin
-      MYSQL_PASSWORD: ${MYSQL_SHARED_APP_PASSWORD}
+      MYSQL_USER: reminder_user
+      MYSQL_PASSWORD: ${REMINDER_MYSQL_PASSWORD}
       MYSQL_DATABASE: juxin_reminder
       MYSQL_ADMIN_USER: root
       MYSQL_ADMIN_PASSWORD: ${MYSQL_ROOT_PASSWORD}
@@ -140,14 +140,14 @@ services:
       AUTH_SERVICE_URL: "http://auth:5180"
       MYSQL_HOST: mysql
       MYSQL_PORT: 3306
-      MYSQL_USER: juxin
-      MYSQL_PASSWORD: ${MYSQL_SHARED_APP_PASSWORD}
+      MYSQL_USER: reminder_user
+      MYSQL_PASSWORD: ${REMINDER_MYSQL_PASSWORD}
       MYSQL_DATABASE: juxin_reminder
       MYSQL_ADMIN_USER: root
       MYSQL_ADMIN_PASSWORD: ${MYSQL_ROOT_PASSWORD}
       CORS_ORIGINS: "http://localhost:5180,http://127.0.0.1:5180,http://${PUBLIC_HOST:-localhost}:5180,http://localhost:18080,http://127.0.0.1:18080,http://${PUBLIC_HOST:-localhost}:18080,http://localhost:18081,http://127.0.0.1:18081,http://${PUBLIC_HOST:-localhost}:18081,http://localhost:8090,http://127.0.0.1:8090,http://${PUBLIC_HOST:-localhost}:8090"
-      JWT_SECRET: "3122c0763b7728783ce33c724c81fcdf3b9c77fe33cdc3cbfe5a6f4a896634ea"
-      AUDIT_SIGNING_KEY: "53bc691c095c27647ff02d056637f09482b963d7c9a104454e44376b685b8c3e"
+      JWT_SECRET: ${AUTH_JWT_SECRET}
+      AUDIT_SIGNING_KEY: ${AUTH_AUDIT_SIGNING_KEY}
       SECURITY_STRICT_MODE: "true"
       AUTH_FETCH_TIMEOUT_MS: 4000
       AUTH_COOKIE_NAME: "juxin_auth_token"
@@ -196,7 +196,7 @@ services:
       args: *build_args_node_alpine
     environment:
       PORT: 5190
-      SHIPPING_GATEWAY_TOKEN: "inventory-shipping-gateway-dev-token"
+      SHIPPING_GATEWAY_TOKEN: ${SHIPPING_GATEWAY_TOKEN}
       SHIPPING_GATEWAY_TIMEOUT_MS: 8000
       CORS_ORIGINS: "http://localhost:5183,http://127.0.0.1:5183,http://${PUBLIC_HOST:-localhost}:5183,http://localhost:18082,http://127.0.0.1:18082,http://${PUBLIC_HOST:-localhost}:18082"
       RATE_LIMIT_WINDOW_SEC: 60
@@ -233,8 +233,8 @@ services:
       AUTH_COOKIE_NAME: "juxin_auth_token"
       MYSQL_HOST: mysql
       MYSQL_PORT: 3306
-      MYSQL_USER: juxin
-      MYSQL_PASSWORD: ${MYSQL_SHARED_APP_PASSWORD}
+      MYSQL_USER: inventory_user
+      MYSQL_PASSWORD: ${INVENTORY_MYSQL_PASSWORD}
       MYSQL_DATABASE: juxin_inventory
       MYSQL_ADMIN_USER: root
       MYSQL_ADMIN_PASSWORD: ${MYSQL_ROOT_PASSWORD}
@@ -242,7 +242,7 @@ services:
       RATE_LIMIT_WINDOW_SEC: 60
       RATE_LIMIT_MAX: 300
       SHIPPING_TRACKING_API_URL: "http://shipping-gateway:5190/api/track/query"
-      SHIPPING_TRACKING_API_TOKEN: "inventory-shipping-gateway-dev-token"
+      SHIPPING_TRACKING_API_TOKEN: ${SHIPPING_GATEWAY_TOKEN}
       SHIPPING_TRACKING_API_TIMEOUT_MS: 8000
       REMINDER_WEBHOOK_TIMEOUT_MS: 5000
     depends_on:
@@ -274,8 +274,8 @@ services:
       AUTH_COOKIE_NAME: "juxin_auth_token"
       MYSQL_HOST: mysql
       MYSQL_PORT: 3306
-      MYSQL_USER: juxin
-      MYSQL_PASSWORD: ${MYSQL_SHARED_APP_PASSWORD}
+      MYSQL_USER: device_flow_user
+      MYSQL_PASSWORD: ${DEVICE_FLOW_MYSQL_PASSWORD}
       MYSQL_DATABASE: juxin_device_flow
       MYSQL_ADMIN_USER: root
       MYSQL_ADMIN_PASSWORD: ${MYSQL_ROOT_PASSWORD}
@@ -284,7 +284,7 @@ services:
       SLA_AUTO_RUN_INTERVAL_MS: 300000
       MAX_BATCH_STAGE_JOB_IDS: 200
       MAX_IMPORT_ROWS: 500
-      AUDIT_SIGNING_KEY: "device-flow-audit-signing-key-change-me"
+      AUDIT_SIGNING_KEY: ${DEVICE_FLOW_AUDIT_SIGNING_KEY}
       UPLOAD_ROOT: "/tmp/device-flow/uploads"
       UPLOAD_MAX_FILE_SIZE_MB: 10
     depends_on:
@@ -316,7 +316,7 @@ services:
       MYSQL_HOST: mysql
       MYSQL_PORT: 3306
       MYSQL_USER: delivery_user
-      MYSQL_PASSWORD: ${DELIVERY_MYSQL_PASSWORD:-delivery_dev_password_change_me}
+      MYSQL_PASSWORD: ${DELIVERY_MYSQL_PASSWORD}
       MYSQL_DATABASE: juxin_delivery
       MYSQL_ADMIN_USER: root
       MYSQL_ADMIN_PASSWORD: ${MYSQL_ROOT_PASSWORD}
@@ -325,7 +325,7 @@ services:
       SLA_AUTO_RUN_INTERVAL_MS: 300000
       MAX_BATCH_STAGE_JOB_IDS: 200
       MAX_IMPORT_ROWS: 500
-      AUDIT_SIGNING_KEY: "delivery-audit-signing-key-change-me"
+      AUDIT_SIGNING_KEY: ${DELIVERY_AUDIT_SIGNING_KEY}
       UPLOAD_ROOT: "/tmp/delivery/uploads"
       UPLOAD_MAX_FILE_SIZE_MB: 10
     depends_on:
@@ -429,8 +429,8 @@ services:
       DOC_EDITOR_CALLBACK_BASE_URL: "http://tender-api:5187"
       DOC_EDITOR_JWT_SECRET: ${FAQ_DOC_EDITOR_JWT_SECRET}
       EDITOR_SESSION_TTL_MINUTES: 120
-      AUDIT_SIGNING_KEY: "tender-audit-signing-key-change-me"
-      CONFIG_SECRET_KEY: "tender-config-secret-change-me-32chars"
+      AUDIT_SIGNING_KEY: ${TENDER_AUDIT_SIGNING_KEY}
+      CONFIG_SECRET_KEY: ${TENDER_CONFIG_SECRET_KEY}
       AUDIT_RETENTION_DAYS: 365
       AUDIT_CLEANUP_INTERVAL_MS: 86400000
       OCR_ACCESS_KEY_ID: ""
@@ -571,7 +571,7 @@ services:
     environment:
       POSTGRES_DB: juxin_sca
       POSTGRES_USER: sca_user
-      POSTGRES_PASSWORD: ${SCA_POSTGRES_PASSWORD:-change_me_sca_postgres_password}
+      POSTGRES_PASSWORD: ${SCA_POSTGRES_PASSWORD}
     volumes:
       - sca-postgres-data:/var/lib/postgresql/data
       - ./sca-platform/database/init:/docker-entrypoint-initdb.d:ro
@@ -605,7 +605,7 @@ services:
       APP_NAME: "聚信软件成分分析平台"
       APP_ENV: dev
       APP_VERSION: ${SCA_APP_VERSION:-5.66.0}
-      DATABASE_URL: "postgresql+psycopg://sca_user:${SCA_POSTGRES_PASSWORD:-change_me_sca_postgres_password}@sca-postgres:5432/juxin_sca"
+      DATABASE_URL: "postgresql+psycopg://sca_user:${SCA_POSTGRES_PASSWORD}@sca-postgres:5432/juxin_sca"
       REDIS_URL: "redis://sca-redis:6379/0"
       CELERY_BROKER_URL: "redis://sca-redis:6379/1"
       CELERY_RESULT_BACKEND: "redis://sca-redis:6379/2"
@@ -671,7 +671,7 @@ services:
       APP_NAME: "聚信软件成分分析平台"
       APP_ENV: dev
       APP_VERSION: ${SCA_APP_VERSION:-5.66.0}
-      DATABASE_URL: "postgresql+psycopg://sca_user:${SCA_POSTGRES_PASSWORD:-change_me_sca_postgres_password}@sca-postgres:5432/juxin_sca"
+      DATABASE_URL: "postgresql+psycopg://sca_user:${SCA_POSTGRES_PASSWORD}@sca-postgres:5432/juxin_sca"
       REDIS_URL: "redis://sca-redis:6379/0"
       CELERY_BROKER_URL: "redis://sca-redis:6379/1"
       CELERY_RESULT_BACKEND: "redis://sca-redis:6379/2"
@@ -732,7 +732,7 @@ services:
       APP_NAME: "聚信软件成分分析平台"
       APP_ENV: dev
       APP_VERSION: ${SCA_APP_VERSION:-5.66.0}
-      DATABASE_URL: "postgresql+psycopg://sca_user:${SCA_POSTGRES_PASSWORD:-change_me_sca_postgres_password}@sca-postgres:5432/juxin_sca"
+      DATABASE_URL: "postgresql+psycopg://sca_user:${SCA_POSTGRES_PASSWORD}@sca-postgres:5432/juxin_sca"
       REDIS_URL: "redis://sca-redis:6379/0"
       CELERY_BROKER_URL: "redis://sca-redis:6379/1"
       CELERY_RESULT_BACKEND: "redis://sca-redis:6379/2"
@@ -802,7 +802,7 @@ services:
       APP_NAME: "聚信软件成分分析平台"
       APP_ENV: dev
       APP_VERSION: ${SCA_APP_VERSION:-5.66.0}
-      DATABASE_URL: "postgresql+psycopg://sca_user:${SCA_POSTGRES_PASSWORD:-change_me_sca_postgres_password}@sca-postgres:5432/juxin_sca"
+      DATABASE_URL: "postgresql+psycopg://sca_user:${SCA_POSTGRES_PASSWORD}@sca-postgres:5432/juxin_sca"
       REDIS_URL: "redis://sca-redis:6379/0"
       CELERY_BROKER_URL: "redis://sca-redis:6379/1"
       CELERY_RESULT_BACKEND: "redis://sca-redis:6379/2"
@@ -882,7 +882,7 @@ services:
       MYSQL_PORT: 3306
       MYSQL_DATABASE: juxin_big_screen
       MYSQL_USER: big_screen_user
-      MYSQL_PASSWORD: ${BIG_SCREEN_MYSQL_PASSWORD:-${MYSQL_SHARED_APP_PASSWORD}}
+      MYSQL_PASSWORD: ${BIG_SCREEN_MYSQL_PASSWORD}
       MYSQL_ADMIN_USER: root
       MYSQL_ADMIN_PASSWORD: ${MYSQL_ROOT_PASSWORD}
       SCA_API_URL: "http://sca-api:5191"
@@ -928,7 +928,7 @@ services:
       ALPINE_DATABASE_URL: "jdbc:postgresql://sca-postgres:5432/juxin_sca"
       ALPINE_DATABASE_DRIVER: org.postgresql.Driver
       ALPINE_DATABASE_USERNAME: sca_user
-      ALPINE_DATABASE_PASSWORD: ${SCA_POSTGRES_PASSWORD:-change_me_sca_postgres_password}
+      ALPINE_DATABASE_PASSWORD: ${SCA_POSTGRES_PASSWORD}
       ALPINE_DATABASE_POOL_ENABLED: "true"
     volumes:
       - dependency-track-data:/data

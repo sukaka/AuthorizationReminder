@@ -131,7 +131,7 @@ const AUTH_SYSTEM_KEY = String(process.env.AUTH_SYSTEM_KEY || 'tender').trim() |
 const AUTH_COOKIE_NAME = String(process.env.AUTH_COOKIE_NAME || 'juxin_auth_token').trim() || 'juxin_auth_token';
 const AUTH_FETCH_TIMEOUT_MS = Math.max(1000, Number(process.env.AUTH_FETCH_TIMEOUT_MS || 5000));
 const SECURITY_STRICT_MODE = process.env.SECURITY_STRICT_MODE === 'true' || process.env.NODE_ENV === 'production';
-const AUDIT_SIGNING_KEY = String(process.env.AUDIT_SIGNING_KEY || 'tender-audit-signing-key-change-me').trim();
+const AUDIT_SIGNING_KEY = String(process.env.AUDIT_SIGNING_KEY || '').trim();
 const CONFIG_SECRET_KEY = String(process.env.CONFIG_SECRET_KEY || '').trim();
 
 const FILE_MAX_BYTES = Math.max(1024 * 100, Number(process.env.UPLOAD_MAX_FILE_SIZE_MB || 30) * 1024 * 1024);
@@ -185,6 +185,9 @@ const OCR_TIMEOUT_MS_DEFAULT = 15000;
 
 const SECRET_MASK = '******';
 const APP_NAME = 'tender';
+const APP_VERSION = process.env.APP_VERSION || process.env.npm_package_version || 'unknown';
+const BUILD_COMMIT = process.env.BUILD_COMMIT || process.env.GIT_COMMIT || '';
+const BUILD_TIME = process.env.BUILD_TIME || process.env.BUILT_AT || '';
 const weakSecrets = new Set(['dev-secret-change-me', 'change-me', '123456', 'password', '']);
 
 const ALLOWED_BID_UPLOAD_EXTS = new Set(['.doc', '.docx', '.pdf']);
@@ -9632,7 +9635,33 @@ const collectOwnLibrarySnapshot = async (inputSnapshot = {}) => {
 };
 
 app.get('/health', (_req, res) => {
-  res.json({ ok: true, app: APP_NAME });
+  res.json({ status: 'ok', service: APP_NAME });
+});
+
+app.get('/api/health', (_req, res) => {
+  res.json({ status: 'ok', service: APP_NAME });
+});
+
+app.get('/api/ready', async (_req, res) => {
+  try {
+    await get('SELECT 1 AS ok');
+    res.json({ status: 'ok', service: APP_NAME, database: 'ok' });
+  } catch (_err) {
+    res.status(503).json({ status: 'degraded', service: APP_NAME, database: 'error' });
+  }
+});
+
+app.get('/api/version', (_req, res) => {
+  res.json({ service: APP_NAME, version: APP_VERSION });
+});
+
+app.get('/api/build', (_req, res) => {
+  res.json({
+    service: APP_NAME,
+    version: APP_VERSION,
+    commit: BUILD_COMMIT,
+    buildTime: BUILD_TIME,
+  });
 });
 
 app.get('/api/tender/bootstrap', asyncHandler(async (req, res) => {

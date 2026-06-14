@@ -3,6 +3,7 @@ package handler
 import (
 	"database/sql"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -29,6 +30,27 @@ func NewRouter(cfg config.Config, sqlDB *sql.DB) *gin.Engine {
 
 	r.GET("/healthz", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"status": "ok", "service": cfg.AppName})
+	})
+	r.GET("/api/health", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"status": "ok", "service": cfg.AppName})
+	})
+	r.GET("/api/ready", func(c *gin.Context) {
+		if err := sqlDB.Ping(); err != nil {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"status": "degraded", "service": cfg.AppName, "database": "error"})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"status": "ok", "service": cfg.AppName, "database": "ok"})
+	})
+	r.GET("/api/version", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"service": cfg.AppName, "version": os.Getenv("APP_VERSION")})
+	})
+	r.GET("/api/build", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{
+			"service":   cfg.AppName,
+			"version":   os.Getenv("APP_VERSION"),
+			"commit":    firstNonEmpty(os.Getenv("BUILD_COMMIT"), os.Getenv("GIT_COMMIT")),
+			"buildTime": firstNonEmpty(os.Getenv("BUILD_TIME"), os.Getenv("BUILT_AT")),
+		})
 	})
 	r.NoRoute(func(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "not found"})

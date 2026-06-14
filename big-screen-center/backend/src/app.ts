@@ -24,6 +24,11 @@ import type { StoreDatabase } from './store-types.js'
 import { StreamHub } from './stream-hub.js'
 import type { SourceHealthMap } from './routes/health.js'
 
+const serviceName = 'big-screen'
+const appVersion = process.env.APP_VERSION || process.env.npm_package_version || 'unknown'
+const buildCommit = process.env.BUILD_COMMIT || process.env.GIT_COMMIT || ''
+const buildTime = process.env.BUILD_TIME || process.env.BUILT_AT || ''
+
 export interface CreateAppOptions {
   service?: MetricService
   snapshots?: SnapshotStore
@@ -64,7 +69,55 @@ export const createApp = (options: CreateAppOptions = {}) => {
   application.get('/health', (_request, response) => {
     response.json({
       status: 'ok',
-      service: 'big-screen-backend',
+      service: serviceName,
+    })
+  })
+
+  application.get('/api/health', (_request, response) => {
+    response.json({
+      status: 'ok',
+      service: serviceName,
+    })
+  })
+
+  application.get('/api/ready', async (_request, response) => {
+    if (!options.database) {
+      response.json({
+        status: 'ok',
+        service: serviceName,
+        database: 'not-configured',
+      })
+      return
+    }
+    try {
+      await options.database.query('SELECT 1')
+      response.json({
+        status: 'ok',
+        service: serviceName,
+        database: 'ok',
+      })
+    } catch {
+      response.status(503).json({
+        status: 'degraded',
+        service: serviceName,
+        database: 'error',
+      })
+    }
+  })
+
+  application.get('/api/version', (_request, response) => {
+    response.json({
+      service: serviceName,
+      version: appVersion,
+    })
+  })
+
+  application.get('/api/build', (_request, response) => {
+    response.json({
+      service: serviceName,
+      version: appVersion,
+      commit: buildCommit,
+      buildTime,
     })
   })
 

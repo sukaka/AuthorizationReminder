@@ -55,6 +55,10 @@ const {
 
 const app = express();
 const PORT = process.env.PORT || 5179;
+const SERVICE_NAME = 'reminder';
+const APP_VERSION = process.env.APP_VERSION || process.env.npm_package_version || 'unknown';
+const BUILD_COMMIT = process.env.BUILD_COMMIT || process.env.GIT_COMMIT || '';
+const BUILD_TIME = process.env.BUILD_TIME || process.env.BUILT_AT || '';
 const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret-change-me';
 const CONFIG_SECRET_KEY = process.env.CONFIG_SECRET_KEY || '';
 const AUTH_SERVICE_URL = process.env.AUTH_SERVICE_URL || 'http://auth:5180';
@@ -5594,7 +5598,29 @@ const startReminderCron = () => {
 };
 
 app.get('/api/health', (req, res) => {
-  res.json({ ok: true });
+  res.json({ status: 'ok', service: SERVICE_NAME });
+});
+
+app.get('/api/ready', async (req, res) => {
+  try {
+    await db.get('SELECT 1 AS ok');
+    res.json({ status: 'ok', service: SERVICE_NAME, database: 'ok' });
+  } catch (err) {
+    res.status(503).json({ status: 'degraded', service: SERVICE_NAME, database: 'error' });
+  }
+});
+
+app.get('/api/version', (req, res) => {
+  res.json({ service: SERVICE_NAME, version: APP_VERSION });
+});
+
+app.get('/api/build', (req, res) => {
+  res.json({
+    service: SERVICE_NAME,
+    version: APP_VERSION,
+    commit: BUILD_COMMIT,
+    buildTime: BUILD_TIME,
+  });
 });
 
 const webDistPath = path.join(__dirname, '..', 'web', 'dist');

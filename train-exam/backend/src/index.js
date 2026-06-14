@@ -104,6 +104,10 @@ const {
 const app = express();
 
 const PORT = Number(process.env.PORT || 5188);
+const SERVICE_NAME = 'train-exam';
+const APP_VERSION = process.env.APP_VERSION || process.env.npm_package_version || 'unknown';
+const BUILD_COMMIT = process.env.BUILD_COMMIT || process.env.GIT_COMMIT || '';
+const BUILD_TIME = process.env.BUILD_TIME || process.env.BUILT_AT || '';
 const AUTH_SERVICE_URL = process.env.AUTH_SERVICE_URL || 'http://localhost:5180';
 const AUTH_SYSTEM_KEY = String(process.env.AUTH_SYSTEM_KEY || 'train-exam').trim() || 'train-exam';
 const AUTH_COOKIE_NAME = String(process.env.AUTH_COOKIE_NAME || 'juxin_auth_token').trim() || 'juxin_auth_token';
@@ -111,7 +115,7 @@ const AUTH_FETCH_TIMEOUT_MS = Math.max(1000, Number(process.env.AUTH_FETCH_TIMEO
 const SECURITY_STRICT_MODE = process.env.SECURITY_STRICT_MODE === 'true' || process.env.NODE_ENV === 'production';
 const CSRF_COOKIE_NAME = String(process.env.TRAIN_EXAM_CSRF_COOKIE_NAME || 'train_exam_csrf_token').trim() || 'train_exam_csrf_token';
 const CSRF_SECURE = process.env.CSRF_SECURE === 'true';
-const AUDIT_SIGNING_KEY = String(process.env.AUDIT_SIGNING_KEY || 'train-exam-audit-signing-key-change-me').trim();
+const AUDIT_SIGNING_KEY = String(process.env.AUDIT_SIGNING_KEY || '').trim();
 const AI_ALLOW_PRIVATE_BASE_URLS = process.env.AI_ALLOW_PRIVATE_BASE_URLS === 'true';
 const AI_ALLOW_INSECURE_HTTP = process.env.AI_ALLOW_INSECURE_HTTP === 'true';
 
@@ -4380,8 +4384,30 @@ const generateResultAdvice = async ({ req, resultId, force = false }) => {
 app.get('/api/health', (_req, res) => {
   res.json({
     status: 'ok',
-    system: 'train-exam',
+    service: SERVICE_NAME,
     timestamp: Date.now(),
+  });
+});
+
+app.get('/api/ready', async (_req, res) => {
+  try {
+    await get('SELECT 1 AS ok');
+    res.json({ status: 'ok', service: SERVICE_NAME, database: 'ok' });
+  } catch (_err) {
+    res.status(503).json({ status: 'degraded', service: SERVICE_NAME, database: 'error' });
+  }
+});
+
+app.get('/api/version', (_req, res) => {
+  res.json({ service: SERVICE_NAME, version: APP_VERSION });
+});
+
+app.get('/api/build', (_req, res) => {
+  res.json({
+    service: SERVICE_NAME,
+    version: APP_VERSION,
+    commit: BUILD_COMMIT,
+    buildTime: BUILD_TIME,
   });
 });
 
