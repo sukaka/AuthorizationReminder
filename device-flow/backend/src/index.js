@@ -8,13 +8,21 @@ const helmet = require('helmet');
 const multer = require('multer');
 const path = require('path');
 const QRCode = require('qrcode');
-const XLSX = require('xlsx');
 const {
   isOriginAllowedForRequest,
   normalizeOrigin,
 } = require('./cors-origin');
 const { planCallbackDeliveries } = require('./callback-delivery-policy');
+const {
+  assertSafeCallbackUrl,
+  parseAllowedHosts,
+} = require('./callback-url-policy');
+const { canAccessDeviceFlow } = require('./auth-access-policy');
 const { get, initDb, query, transaction } = require('./db');
+const {
+  buildWorkbookBuffer,
+  readFirstWorksheetRows,
+} = require('./workbook');
 
 const app = express();
 const PORT = Number(process.env.PORT || 5184);
@@ -40,6 +48,7 @@ const DUAL_SIGN_TOKEN_TTL_MINUTES = Math.max(5, Number(process.env.DUAL_SIGN_TOK
 const JOB_LOCK_TTL_SECONDS = Math.max(30, Number(process.env.JOB_LOCK_TTL_SECONDS || 300));
 const CALLBACK_WORKER_INTERVAL_MS = Math.max(10000, Number(process.env.CALLBACK_WORKER_INTERVAL_MS || 30000));
 const CALLBACK_WORKER_BATCH = Math.max(1, Math.min(100, Number(process.env.CALLBACK_WORKER_BATCH || 20)));
+const CALLBACK_ALLOWED_HOSTS = parseAllowedHosts(process.env.CALLBACK_ALLOWED_HOSTS);
 const OPS_METRIC_RETENTION_DAYS = Math.max(3, Number(process.env.OPS_METRIC_RETENTION_DAYS || 14));
 const TRACK_LINK_BASE_URL = String(process.env.TRACK_LINK_BASE_URL || '').trim();
 
@@ -380,7 +389,9 @@ const introspectToken = async (token) => {
   const user = data?.user;
   const apps = Array.isArray(data?.apps) ? data.apps : [];
   if (!user || user.id === undefined || !user.username) throw appError('登录状态无效', 401);
-  if (AUTH_SYSTEM_KEY && !apps.includes(AUTH_SYSTEM_KEY)) throw appError('无权限访问设备流转系统', 403);
+  if (AUTH_SYSTEM_KEY && !canAccessDeviceFlow({ role: user.role, apps, systemKey: AUTH_SYSTEM_KEY })) {
+    throw appError('无权限访问设备流转系统', 403);
+  }
 
   return {
     user: {
@@ -1411,19 +1422,13 @@ const mapImportRow = (rawRow) => {
   return output;
 };
 
-const parseImportWorkbookRowsWithErrors = (fileBuffer) => {
-  let workbook;
+const parseImportWorkbookRowsWithErrors = async (fileBuffer) => {
+  let rows;
   try {
-    workbook = XLSX.read(fileBuffer, { type: 'buffer', cellDates: false });
-  } catch (_err) {
-    throw appError('Excel 文件解析失败，请检查文件格式');
+    rows = await readFirstWorksheetRows(fileBuffer);
+  } catch (err) {
+    throw appError(trimText(err?.message) || 'Excel 文件解析失败，请检查文件格式');
   }
-  const sheetName = Array.isArray(workbook.SheetNames) && workbook.SheetNames.length > 0 ? workbook.SheetNames[0] : '';
-  if (!sheetName) throw appError('Excel 文件缺少工作表');
-  const sheet = workbook.Sheets[sheetName];
-  if (!sheet) throw appError('Excel 工作表为空');
-
-  const rows = XLSX.utils.sheet_to_json(sheet, { defval: '' });
   if (!Array.isArray(rows) || rows.length === 0) throw appError('导入文件为空');
   if (rows.length > MAX_IMPORT_ROWS) throw appError(`单次最多导入 ${MAX_IMPORT_ROWS} 行`);
 
@@ -1450,8 +1455,8 @@ const parseImportWorkbookRowsWithErrors = (fileBuffer) => {
   };
 };
 
-const parseImportWorkbookRows = (fileBuffer) => {
-  const parsed = parseImportWorkbookRowsWithErrors(fileBuffer);
+const parseImportWorkbookRows = async (fileBuffer) => {
+  const parsed = await parseImportWorkbookRowsWithErrors(fileBuffer);
   if (parsed.errors.length > 0) {
     throw appError(`导入校验失败：${parsed.errors.slice(0, 8).join('；')}`);
   }
@@ -1521,7 +1526,7 @@ const precheckImportRows = async (rows) => {
   };
 };
 
-const buildJobsWorkbookBuffer = (rows) => {
+const buildJobsWorkbookBuffer = async (rows) => {
   const exportRows = rows.map((item) => ({
     流转单号: item.job_no,
     设备SN: item.device_sn,
@@ -1535,13 +1540,10 @@ const buildJobsWorkbookBuffer = (rows) => {
     更新时间: item.updated_at,
     创建时间: item.created_at,
   }));
-  const sheet = XLSX.utils.json_to_sheet(exportRows);
-  const workbook = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(workbook, sheet, 'Jobs');
-  return XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' });
+  return buildWorkbookBuffer({ sheetName: 'Jobs', rows: exportRows });
 };
 
-const buildImportTemplateBuffer = () => {
+const buildImportTemplateBuffer = async () => {
   const templateRows = [
     {
       设备SN: 'SN-EXAMPLE-001',
@@ -1560,10 +1562,7 @@ const buildImportTemplateBuffer = () => {
       备注: '',
     },
   ];
-  const sheet = XLSX.utils.json_to_sheet(templateRows);
-  const workbook = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(workbook, sheet, 'ImportTemplate');
-  return XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' });
+  return buildWorkbookBuffer({ sheetName: 'ImportTemplate', rows: templateRows });
 };
 
 const createJobWithActor = async ({ actor, jobData, requestIp, source = 'manual' }) => {
@@ -2001,17 +2000,15 @@ const rebuildAuditChainHashes = async () => {
   };
 };
 
-const ensureAllowedCallbackUrl = (rawUrl) => {
-  const value = trimText(rawUrl);
-  if (!value) throw appError('callback_url 不能为空');
-  let parsed;
+const ensureAllowedCallbackUrl = async (rawUrl) => {
   try {
-    parsed = new URL(value);
-  } catch (_err) {
-    throw appError('callback_url 非法');
+    const parsed = await assertSafeCallbackUrl(rawUrl, {
+      allowedHosts: CALLBACK_ALLOWED_HOSTS,
+    });
+    return parsed.toString();
+  } catch (err) {
+    throw appError(trimText(err?.message) || 'callback_url 非法');
   }
-  if (!['http:', 'https:'].includes(parsed.protocol)) throw appError('callback_url 仅支持 http/https');
-  return parsed.toString();
 };
 
 const enqueueCallbackEventTx = async (tx, { eventType, jobId = null, payload }) => {
@@ -2126,10 +2123,14 @@ const runCallbackWorkerBatch = async ({ maxEvents = CALLBACK_WORKER_BATCH } = {}
       let responseBody = '';
       let errorMessage = '';
       try {
+        const safeCallbackUrl = await assertSafeCallbackUrl(sub.callback_url, {
+          allowedHosts: CALLBACK_ALLOWED_HOSTS,
+        });
         const resp = await fetchWithTimeout(
-          sub.callback_url,
+          safeCallbackUrl.toString(),
           {
             method: 'POST',
+            redirect: 'manual',
             headers: {
               'Content-Type': 'application/json',
               'X-Device-Flow-Event': eventType,
@@ -3473,7 +3474,7 @@ app.post(
     const file = req.file;
     if (!file) throw appError('请上传 Excel 文件');
     const dryRun = toBool(req.query?.dry_run) || toBool(req.body?.dry_run);
-    const parsedRows = parseImportWorkbookRowsWithErrors(file.buffer);
+    const parsedRows = await parseImportWorkbookRowsWithErrors(file.buffer);
     const precheck = await precheckImportRows(parsedRows.rows);
     const basicErrors = parsedRows.errors.map((message) => ({ code: 'BASIC_VALIDATION', message }));
     const mergedErrors = [...basicErrors, ...precheck.errors];
@@ -4591,7 +4592,7 @@ app.post(
 app.get(
   '/api/device-flow/templates/jobs-import.xlsx',
   asyncHandler(async (_req, res) => {
-    const buffer = buildImportTemplateBuffer();
+    const buffer = await buildImportTemplateBuffer();
     const filename = 'device-flow-import-template.xlsx';
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
@@ -4644,7 +4645,7 @@ app.get(
       params
     );
 
-    const buffer = buildJobsWorkbookBuffer(rows);
+    const buffer = await buildJobsWorkbookBuffer(rows);
     const filename = `device-flow-jobs-${Date.now()}.xlsx`;
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
@@ -4977,7 +4978,7 @@ app.post(
   asyncHandler(async (req, res) => {
     const actor = getActor(req);
     const name = trimText(req.body?.name);
-    const callbackUrl = ensureAllowedCallbackUrl(req.body?.callback_url);
+    const callbackUrl = await ensureAllowedCallbackUrl(req.body?.callback_url);
     const events = Array.isArray(req.body?.events) ? req.body.events.map((item) => trimText(item).toLowerCase()).filter(Boolean) : [];
     if (!name) throw appError('name 不能为空');
     if (events.length === 0) throw appError('events 不能为空');
@@ -5051,7 +5052,9 @@ app.put(
       if (!current) throw appError('订阅不存在', 404);
 
       const name = trimText(req.body?.name) || trimText(current.name);
-      const callbackUrl = req.body?.callback_url ? ensureAllowedCallbackUrl(req.body.callback_url) : current.callback_url;
+      const callbackUrl = req.body?.callback_url
+        ? await ensureAllowedCallbackUrl(req.body.callback_url)
+        : current.callback_url;
       const events = Array.isArray(req.body?.events)
         ? req.body.events.map((item) => trimText(item).toLowerCase()).filter(Boolean)
         : String(current.events || '')

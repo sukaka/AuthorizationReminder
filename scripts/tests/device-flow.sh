@@ -20,6 +20,7 @@ wait_http_status "$DEVICE_FLOW_WEB_BASE" "200" "device-flow-web"
 
 run_node_check "device-flow/backend/src/index.js"
 run_npm_script_if_exists "device-flow/backend" "test"
+run_cmd "设备流转 RBAC 测试账号单元测试" node --test "$ROOT_DIR/device-flow/scripts/rbac-test-users.test.js"
 run_npm_script_if_exists "device-flow/frontend" "build"
 
 if [[ "$RUN_E2E" == "1" ]]; then
@@ -37,18 +38,48 @@ if [[ "$RUN_E2E" == "1" ]]; then
     bash "$ROOT_DIR/device-flow/scripts/upload-cleanup-regression.sh"
 
   if [[ "$RUN_RBAC" == "1" ]]; then
-    BUILTIN_PASS="${BUILTIN_PASSWORD:-${BUILTIN_ACCOUNT_DEFAULT_PASSWORD:-Dm1vbnqsILIVjUa5sWixBFos60bKdEKC}}"
-    ADMIN_USER="${ADMIN_USERNAME:-admin}"
-    AUDITOR_USER="${AUDITOR_USERNAME:-auditor}"
-    SYSADMIN_USER="${SYSADMIN_USERNAME:-sysadmin}"
+    require_cmd docker
+    RBAC_RUN_ID="$(node -e "process.stdout.write(require('node:crypto').randomBytes(6).toString('hex'))")"
+    RBAC_TEST_PASSWORD="$(node -e "process.stdout.write(require('node:crypto').randomBytes(32).toString('base64url'))")"
+    RBAC_COMPOSE_ARGS=()
+    if [[ -n "${COMPOSE_ENV_FILE:-}" ]]; then
+      RBAC_COMPOSE_ARGS+=(--env-file "$COMPOSE_ENV_FILE")
+    elif [[ -f "$ROOT_DIR/.env" ]]; then
+      RBAC_COMPOSE_ARGS+=(--env-file "$ROOT_DIR/.env")
+    fi
 
-    ADMIN_PASS="${ADMIN_PASSWORD:-$BUILTIN_PASS}"
-    AUDITOR_PASS="${AUDITOR_PASSWORD:-$BUILTIN_PASS}"
-    SYSADMIN_PASS="${SYSADMIN_PASSWORD:-$BUILTIN_PASS}"
+    rbac_test_users() {
+      local mode="$1"
+      (
+        cd "$ROOT_DIR"
+        docker compose "${RBAC_COMPOSE_ARGS[@]}" exec -T auth \
+          node - "$mode" "$RBAC_RUN_ID" "$RBAC_TEST_PASSWORD" \
+          < "$ROOT_DIR/device-flow/scripts/rbac-test-users.js"
+      )
+    }
 
-    ADMIN_TOKEN_RBAC="${AUTH_TOKEN_ADMIN:-$(resolve_auth_token_for_user "$ADMIN_USER" "$ADMIN_PASS")}"
-    AUDITOR_TOKEN_RBAC="${AUTH_TOKEN_AUDITOR:-$(resolve_auth_token_for_user "$AUDITOR_USER" "$AUDITOR_PASS")}"
-    SYSADMIN_TOKEN_RBAC="${AUTH_TOKEN_SYSADMIN:-$(resolve_auth_token_for_user "$SYSADMIN_USER" "$SYSADMIN_PASS")}"
+    rbac_test_users setup
+    cleanup_rbac_users() {
+      rbac_test_users cleanup >/dev/null 2>&1 || true
+    }
+    trap cleanup_rbac_users EXIT
+
+    ADMIN_USER="device_flow_rbac_admin_${RBAC_RUN_ID}"
+    AUDITOR_USER="device_flow_rbac_auditor_${RBAC_RUN_ID}"
+    SYSADMIN_USER="device_flow_rbac_sysadmin_${RBAC_RUN_ID}"
+    rbac_login_id() {
+      local role="$1"
+      node -e '
+        const { buildTestUsers } = require(process.argv[1]);
+        const user = buildTestUsers(process.argv[2]).find((item) => item.role === process.argv[3]);
+        if (!user) process.exit(1);
+        process.stdout.write(user.phone);
+      ' "$ROOT_DIR/device-flow/scripts/rbac-test-users.js" "$RBAC_RUN_ID" "$role"
+    }
+
+    ADMIN_TOKEN_RBAC="$(resolve_auth_token_for_user "$(rbac_login_id admin)" "$RBAC_TEST_PASSWORD")"
+    AUDITOR_TOKEN_RBAC="$(resolve_auth_token_for_user "$(rbac_login_id auditor)" "$RBAC_TEST_PASSWORD")"
+    SYSADMIN_TOKEN_RBAC="$(resolve_auth_token_for_user "$(rbac_login_id sysadmin)" "$RBAC_TEST_PASSWORD")"
 
     run_cmd "设备流转 rbac-matrix" env \
       API_BASE="$DEVICE_FLOW_API_BASE" \
@@ -58,6 +89,9 @@ if [[ "$RUN_E2E" == "1" ]]; then
       AUTH_TOKEN_SYSADMIN="$SYSADMIN_TOKEN_RBAC" \
       EXPECT_SYSADMIN_DEVICE_FLOW_ACCESS="${EXPECT_SYSADMIN_DEVICE_FLOW_ACCESS:-false}" \
       bash "$ROOT_DIR/device-flow/scripts/rbac-matrix.sh"
+
+    cleanup_rbac_users
+    trap - EXIT
   else
     log "跳过 device-flow RBAC（RUN_RBAC=${RUN_RBAC}）"
   fi

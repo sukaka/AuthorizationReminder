@@ -224,7 +224,7 @@ if [[ "$BATCH_STAGE" != "RECEIVED" ]]; then
   exit 1
 fi
 
-echo "[20/27] 扫码解析接口可用"
+echo "[20/28] 扫码解析接口可用"
 SCAN_RESP="$(request_status POST '/api/device-flow/scan/parse' 200 '{"scan_input":"SN:SN-SCAN-001;IN:IN-SCAN-001;OUT:OUT-SCAN-001"}')"
 SCAN_RAW="$(printf '%s' "$SCAN_RESP" | extract_json_field raw)"
 if [[ -z "$SCAN_RAW" ]]; then
@@ -232,7 +232,7 @@ if [[ -z "$SCAN_RAW" ]]; then
   exit 1
 fi
 
-echo "[21/27] 导入预校验模式可用"
+echo "[21/28] 导入预校验模式可用"
 TMP_IMPORT_FILE="$(mktemp /tmp/device-flow-import-XXXXXX.csv)"
 trap 'rm -f "$TMP_HW_FILE" "$TMP_TEST_FILE1" "$TMP_TEST_FILE2" "$TMP_IMPORT_FILE"' EXIT
 cat > "$TMP_IMPORT_FILE" <<'EOF'
@@ -247,7 +247,7 @@ if [[ "$PRECHECK_HTTP" != "200" ]]; then
 fi
 rm -f /tmp/device-flow-precheck.json
 
-echo "[22/27] 版本冲突保护（应 409）"
+echo "[22/28] 版本冲突保护（应 409）"
 VERSION_JOB="$(request_json POST /api/device-flow/jobs '{"device_sn":"SN-VER-001","customer_name":"VersionCheck","remark":"version test"}')"
 VERSION_JOB_ID="$(printf '%s' "$VERSION_JOB" | extract_json_field id)"
 if [[ -z "$VERSION_JOB_ID" ]]; then
@@ -256,7 +256,7 @@ if [[ -z "$VERSION_JOB_ID" ]]; then
 fi
 request_status POST "/api/device-flow/jobs/$VERSION_JOB_ID/stages/receive" 409 '{"expected_version":99999,"remark":"bad version"}' >/dev/null
 
-echo "[23/27] 审批作废流程可用"
+echo "[23/28] 审批作废流程可用"
 OPEN_BEFORE_CANCEL="$(
   request_status GET '/api/device-flow/dashboard/summary' 200 |
     node -e "const fs=require('fs');const d=JSON.parse(fs.readFileSync(0,'utf8'));console.log(d.totals?.open_jobs ?? '');"
@@ -289,7 +289,7 @@ if [[ "$OPEN_AFTER_CANCEL" != "$OPEN_BEFORE_CANCEL" ]]; then
   exit 1
 fi
 
-echo "[24/27] 标签打印JSON可用"
+echo "[24/28] 标签打印JSON可用"
 LABEL_JSON="$(request_status GET "/api/device-flow/jobs/$JOB_ID/labels/device?format=json" 200)"
 TRACK_URL="$(printf '%s' "$LABEL_JSON" | extract_json_field track_url)"
 if [[ -z "$TRACK_URL" ]]; then
@@ -297,7 +297,7 @@ if [[ -z "$TRACK_URL" ]]; then
   exit 1
 fi
 
-echo "[25/27] 交付周期报表可用"
+echo "[25/28] 交付周期报表可用"
 CYCLE_RESP="$(request_status GET '/api/device-flow/reports/cycle' 200)"
 CYCLE_TS="$(printf '%s' "$CYCLE_RESP" | extract_json_field generated_at)"
 if [[ -z "$CYCLE_TS" ]]; then
@@ -305,7 +305,7 @@ if [[ -z "$CYCLE_TS" ]]; then
   exit 1
 fi
 
-echo "[26/27] 系统操作看板可用"
+echo "[26/28] 系统操作看板可用"
 OPS_RESP="$(request_status GET '/api/device-flow/ops/dashboard' 200)"
 OPS_TS="$(printf '%s' "$OPS_RESP" | extract_json_field generated_at)"
 if [[ -z "$OPS_TS" ]]; then
@@ -313,12 +313,16 @@ if [[ -z "$OPS_TS" ]]; then
   exit 1
 fi
 
-echo "[27/27] 数据保留 dry-run 可用"
+echo "[27/28] 数据保留 dry-run 可用"
 RETENTION_RESP="$(request_status POST '/api/device-flow/retention/run?dry_run=true' 200 '{}')"
 RETENTION_SCANNED="$(printf '%s' "$RETENTION_RESP" | extract_json_field scanned)"
 if [[ -z "$RETENTION_SCANNED" ]]; then
   echo "[ERROR] 保留策略执行返回异常: $RETENTION_RESP"
   exit 1
 fi
+
+echo "[28/28] 回调订阅拒绝回环地址"
+request_status POST '/api/device-flow/callback/subscriptions' 400 \
+  '{"name":"blocked-loopback","callback_url":"http://127.0.0.1:8080/hook","events":["job.created"]}' >/dev/null
 
 echo "[OK] 回归校验通过，JOB_ID=$JOB_ID"

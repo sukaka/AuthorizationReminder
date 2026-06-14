@@ -11,8 +11,10 @@ const MINOR_PREFIX_RE = /^(?:(?:feat|minor|perf)(?:\([^)]+\))?:)/i;
 const PATCH_PREFIX_RE = /^(?:(?:fix|patch|docs|chore|style|refactor|test|build|ci|revert)(?:\([^)]+\))?:|revert\b)/i;
 
 const TEXT_VERSION_FILES = [
+  '.env.example',
   'auth/index.js',
   'docs/versioning.md',
+  'docker-compose.yml',
   'README.md',
   'scripts/deploy/bootstrap-full-server.sh',
   'scripts/tests/bootstrap-full-server.sh',
@@ -21,6 +23,8 @@ const TEXT_VERSION_FILES = [
 const FORCE_VERSION_PACKAGE_DIRS = new Set([
   '.',
   'auth',
+  'device-flow/backend',
+  'device-flow/frontend',
   'train-exam/backend',
   'train-exam/frontend',
   'web',

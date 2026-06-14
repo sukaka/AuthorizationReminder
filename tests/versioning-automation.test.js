@@ -64,6 +64,8 @@ test('syncRepositoryVersion updates live version files and bootstrap references'
   writeJson(path.join(rootDir, 'auth/package-lock.json'), makePackageLock('4.1.4'));
   writeJson(path.join(rootDir, 'web/package.json'), { name: 'web', version: '4.1.4' });
   writeJson(path.join(rootDir, 'web/package-lock.json'), makePackageLock('4.1.4'));
+  writeText(path.join(rootDir, '.env.example'), 'APP_VERSION=4.1.4\n');
+  writeText(path.join(rootDir, 'docker-compose.yml'), 'APP_VERSION: ${APP_VERSION:-4.1.4}\n');
   writeText(path.join(rootDir, 'auth/index.js'), "const RELEASE_VERSION = '4.1.4';\n");
   writeText(
     path.join(rootDir, 'docs/versioning.md'),
@@ -114,6 +116,8 @@ test('syncRepositoryVersion updates live version files and bootstrap references'
   assert.equal(JSON.parse(fs.readFileSync(path.join(rootDir, 'package-lock.json'), 'utf8')).version, '4.2.0');
   assert.equal(JSON.parse(fs.readFileSync(path.join(rootDir, 'package-lock.json'), 'utf8')).packages[''].version, '4.2.0');
   assert.equal(JSON.parse(fs.readFileSync(path.join(rootDir, 'auth/package.json'), 'utf8')).version, '4.2.0');
+  assert.match(fs.readFileSync(path.join(rootDir, '.env.example'), 'utf8'), /APP_VERSION=4\.2\.0/);
+  assert.match(fs.readFileSync(path.join(rootDir, 'docker-compose.yml'), 'utf8'), /APP_VERSION:-4\.2\.0/);
   assert.match(fs.readFileSync(path.join(rootDir, 'auth/index.js'), 'utf8'), /RELEASE_VERSION = '4\.2\.0'/);
   assert.match(fs.readFileSync(path.join(rootDir, 'docs/versioning.md'), 'utf8'), /当前整套系统口径版本：`4\.2\.0`/);
   assert.match(fs.readFileSync(path.join(rootDir, 'README.md'), 'utf8'), /codex\/4\.2\.0/);
@@ -141,6 +145,36 @@ test('syncRepositoryVersion aligns web package even when it lagged behind root v
   assert.equal(JSON.parse(fs.readFileSync(path.join(rootDir, 'web/package.json'), 'utf8')).version, '5.24.2');
   assert.equal(JSON.parse(fs.readFileSync(path.join(rootDir, 'web/package-lock.json'), 'utf8')).version, '5.24.2');
   assert.equal(JSON.parse(fs.readFileSync(path.join(rootDir, 'web/package-lock.json'), 'utf8')).packages[''].version, '5.24.2');
+});
+
+test('syncRepositoryVersion aligns Device Flow packages with the platform version', () => {
+  const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-version-device-flow-align-'));
+
+  writeJson(path.join(rootDir, 'package.json'), { name: 'root', version: '5.74.1' });
+  writeJson(path.join(rootDir, 'package-lock.json'), makePackageLock('5.74.1'));
+  for (const packageDir of ['device-flow/backend', 'device-flow/frontend']) {
+    writeJson(path.join(rootDir, packageDir, 'package.json'), { name: packageDir, version: '5.8.0' });
+    writeJson(path.join(rootDir, packageDir, 'package-lock.json'), makePackageLock('5.8.0'));
+  }
+
+  const changedFiles = syncRepositoryVersion({
+    rootDir,
+    currentVersion: '5.74.1',
+    nextVersion: '5.74.2',
+  });
+
+  for (const packageDir of ['device-flow/backend', 'device-flow/frontend']) {
+    assert.ok(changedFiles.includes(`${packageDir}/package.json`));
+    assert.ok(changedFiles.includes(`${packageDir}/package-lock.json`));
+    assert.equal(
+      JSON.parse(fs.readFileSync(path.join(rootDir, packageDir, 'package.json'), 'utf8')).version,
+      '5.74.2'
+    );
+    assert.equal(
+      JSON.parse(fs.readFileSync(path.join(rootDir, packageDir, 'package-lock.json'), 'utf8')).packages[''].version,
+      '5.74.2'
+    );
+  }
 });
 
 test('syncRepositoryVersion ignores nested worktree directories', () => {

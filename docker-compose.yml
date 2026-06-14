@@ -268,6 +268,7 @@ services:
       args: *build_args_node_alpine
     environment:
       PORT: 5184
+      APP_VERSION: ${APP_VERSION:-5.74.2}
       AUTH_SERVICE_URL: "http://auth:5180"
       AUTH_SYSTEM_KEY: "device-flow"
       AUTH_FETCH_TIMEOUT_MS: 5000
@@ -285,6 +286,7 @@ services:
       MAX_BATCH_STAGE_JOB_IDS: 200
       MAX_IMPORT_ROWS: 500
       AUDIT_SIGNING_KEY: ${DEVICE_FLOW_AUDIT_SIGNING_KEY}
+      CALLBACK_ALLOWED_HOSTS: ${CALLBACK_ALLOWED_HOSTS:-}
       UPLOAD_ROOT: "/tmp/device-flow/uploads"
       UPLOAD_MAX_FILE_SIZE_MB: 10
     depends_on:
