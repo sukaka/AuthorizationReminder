@@ -143,6 +143,31 @@ test('syncRepositoryVersion aligns web package even when it lagged behind root v
   assert.equal(JSON.parse(fs.readFileSync(path.join(rootDir, 'web/package-lock.json'), 'utf8')).packages[''].version, '5.24.2');
 });
 
+test('syncRepositoryVersion updates Expo app version file', () => {
+  const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-version-mobile-app-'));
+
+  writeJson(path.join(rootDir, 'package.json'), { name: 'root', version: '5.72.3' });
+  writeJson(path.join(rootDir, 'mobile-app/app.json'), {
+    expo: {
+      name: '聚信移动工作台',
+      slug: 'juxin-mobile-app',
+      version: '5.72.3',
+    },
+  });
+
+  const changedFiles = syncRepositoryVersion({
+    rootDir,
+    currentVersion: '5.72.3',
+    nextVersion: '5.73.0',
+  });
+
+  assert.ok(changedFiles.includes('mobile-app/app.json'));
+  assert.equal(
+    JSON.parse(fs.readFileSync(path.join(rootDir, 'mobile-app/app.json'), 'utf8')).expo.version,
+    '5.73.0'
+  );
+});
+
 test('syncRepositoryVersion ignores nested worktree directories', () => {
   const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-version-worktree-ignore-'));
 

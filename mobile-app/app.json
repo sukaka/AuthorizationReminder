@@ -1,0 +1,15 @@
+{
+  "expo": {
+    "name": "聚信移动工作台",
+    "slug": "juxin-mobile-app",
+    "version": "5.73.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "ios": {
+      "bundleIdentifier": "com.juxin.mobile"
+    },
+    "android": {
+      "package": "com.juxin.mobile"
+    }
+  }
+}

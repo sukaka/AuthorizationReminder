@@ -13,6 +13,7 @@ const PATCH_PREFIX_RE = /^(?:(?:fix|patch|docs|chore|style|refactor|test|build|c
 const TEXT_VERSION_FILES = [
   'auth/index.js',
   'docs/versioning.md',
+  'mobile-app/app.json',
   'README.md',
   'scripts/deploy/bootstrap-full-server.sh',
   'scripts/tests/bootstrap-full-server.sh',

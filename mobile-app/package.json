@@ -1,0 +1,24 @@
+{
+  "name": "juxin-mobile-app",
+  "version": "5.73.0",
+  "private": true,
+  "type": "module",
+  "main": "node_modules/expo/AppEntry.js",
+  "scripts": {
+    "start": "expo start",
+    "android": "expo start --android",
+    "ios": "expo start --ios",
+    "test": "node --test tests/*.test.mjs",
+    "build:android:preview": "eas build --platform android --profile preview",
+    "build:ios:preview": "eas build --platform ios --profile preview"
+  },
+  "dependencies": {
+    "@react-native-async-storage/async-storage": "^2.1.2",
+    "@react-native-cookies/cookies": "^6.2.1",
+    "expo": "^53.0.0",
+    "expo-status-bar": "^2.2.3",
+    "react": "19.0.0",
+    "react-native": "0.79.5",
+    "react-native-webview": "^13.13.5"
+  }
+}

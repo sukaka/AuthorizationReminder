@@ -23,3 +23,7 @@ server/data.db-*
 !.env.example
 .worktrees/
 .tmp_*
+mobile-app/.expo/
+mobile-app/dist/
+mobile-app/android/
+mobile-app/ios/

@@ -1,11 +1,15 @@
 {
   "name": "codex-new",
-  "version": "5.72.3",
+  "version": "5.73.0",
   "description": "",
   "main": "index.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
     "test:versioning": "node --test tests/versioning-automation.test.js",
+    "mobile:start": "npm --prefix mobile-app run start",
+    "mobile:test": "npm --prefix mobile-app test",
+    "mobile:android:preview": "npm --prefix mobile-app run build:android:preview",
+    "mobile:ios:preview": "npm --prefix mobile-app run build:ios:preview",
     "hooks:install": "node scripts/versioning/install-hooks.js",
     "dev": "concurrently \"npm run dev:server\" \"npm run dev:web\"",
     "dev:server": "nodemon server/index.js",
