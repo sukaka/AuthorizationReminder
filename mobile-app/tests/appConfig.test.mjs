@@ -9,6 +9,7 @@ import {
 test('creates localhost development URLs by default', () => {
   const config = createMobileAppConfig({});
 
+  assert.equal(config.environment, 'development');
   assert.equal(config.auth.baseUrl, 'http://localhost:5180');
   assert.equal(config.auth.loginUrl, 'http://localhost:5180/api/auth/login');
   assert.equal(config.auth.meUrl, 'http://localhost:5180/api/auth/me');
@@ -38,6 +39,12 @@ test('uses https protocol when EXPO_PUBLIC_APP_PROTOCOL is https', () => {
 
   assert.equal(config.auth.baseUrl, 'https://app.example.com:5180');
   assert.equal(config.systems[0].url, 'https://app.example.com:18087');
+});
+
+test('uses EXPO_PUBLIC_APP_ENV when provided', () => {
+  const config = createMobileAppConfig({ EXPO_PUBLIC_APP_ENV: 'staging' });
+
+  assert.equal(config.environment, 'staging');
 });
 
 test('uses PUBLIC_HOST when EXPO_PUBLIC_APP_HOST is not set', () => {

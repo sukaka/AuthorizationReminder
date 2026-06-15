@@ -2,7 +2,7 @@
   "expo": {
     "name": "聚信移动工作台",
     "slug": "juxin-mobile-app",
-    "version": "5.73.1",
+    "version": "5.73.2",
     "orientation": "portrait",
     "userInterfaceStyle": "light",
     "ios": {

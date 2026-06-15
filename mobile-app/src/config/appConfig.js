@@ -52,6 +52,7 @@ export const createMobileAppConfig = (env = {}) => {
   const authBaseUrl = createBaseUrl({ protocol, host, port: AUTH_PORT });
 
   return {
+    environment: env.EXPO_PUBLIC_APP_ENV || 'development',
     auth: {
       cookieName: AUTH_COOKIE_NAME,
       baseUrl: authBaseUrl,
