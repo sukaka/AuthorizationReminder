@@ -1,6 +1,6 @@
 {
   "name": "juxin-sca-web",
-  "version": "5.73.2",
+  "version": "5.74.0",
   "private": true,
   "type": "module",
   "scripts": {
