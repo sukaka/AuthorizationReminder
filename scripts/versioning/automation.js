@@ -13,10 +13,13 @@ const PATCH_PREFIX_RE = /^(?:(?:fix|patch|docs|chore|style|refactor|test|build|c
 const TEXT_VERSION_FILES = [
   'auth/index.js',
   'docs/versioning.md',
-  'mobile-app/app.json',
   'README.md',
   'scripts/deploy/bootstrap-full-server.sh',
   'scripts/tests/bootstrap-full-server.sh',
+];
+
+const EXPO_APP_VERSION_FILES = [
+  'mobile-app/app.json',
 ];
 
 const FORCE_VERSION_PACKAGE_DIRS = new Set([
@@ -140,6 +143,17 @@ const updateTextVersionFile = ({ filePath, currentVersion, nextVersion }) => {
   return true;
 };
 
+const updateExpoAppVersionFile = ({ filePath, nextVersion }) => {
+  if (!fs.existsSync(filePath)) return false;
+  const original = readText(filePath);
+  const json = JSON.parse(original);
+  if (!json.expo || json.expo.version === nextVersion) return false;
+
+  json.expo.version = nextVersion;
+  writeText(filePath, `${JSON.stringify(json, null, 2)}\n`);
+  return true;
+};
+
 const readRootVersion = (rootDir) => {
   const rootPackagePath = path.join(rootDir, 'package.json');
   const rootPackage = JSON.parse(readText(rootPackagePath));
@@ -174,6 +188,13 @@ const syncRepositoryVersion = ({ rootDir, currentVersion = '', nextVersion = '' 
   for (const relativePath of TEXT_VERSION_FILES) {
     const filePath = path.join(resolvedRoot, relativePath);
     if (updateTextVersionFile({ filePath, currentVersion: sourceVersion, nextVersion })) {
+      changedFiles.add(relativePath);
+    }
+  }
+
+  for (const relativePath of EXPO_APP_VERSION_FILES) {
+    const filePath = path.join(resolvedRoot, relativePath);
+    if (updateExpoAppVersionFile({ filePath, nextVersion })) {
       changedFiles.add(relativePath);
     }
   }

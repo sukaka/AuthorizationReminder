@@ -1,6 +1,6 @@
 {
   "name": "juxin-mobile-app",
-  "version": "5.73.0",
+  "version": "5.73.1",
   "private": true,
   "type": "module",
   "main": "node_modules/expo/AppEntry.js",
@@ -20,5 +20,8 @@
     "react": "19.0.0",
     "react-native": "0.79.5",
     "react-native-webview": "^13.13.5"
+  },
+  "devDependencies": {
+    "eas-cli": "^16.0.0"
   }
 }

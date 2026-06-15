@@ -4,6 +4,7 @@ const DEFAULT_PROTOCOL = 'http';
 const HTTPS_PROTOCOL = 'https';
 const DEFAULT_HOST = 'localhost';
 const AUTH_PORT = 5180;
+const HOST_SCHEME_RE = /^(https?):\/\/(.+)$/i;
 
 const SYSTEM_DEFINITIONS = [
   {
@@ -26,17 +27,28 @@ const SYSTEM_DEFINITIONS = [
   },
 ];
 
-const resolveProtocol = (env) => (
-  env.EXPO_PUBLIC_APP_PROTOCOL === HTTPS_PROTOCOL ? HTTPS_PROTOCOL : DEFAULT_PROTOCOL
-);
+const normalizeHost = (value) => {
+  const rawHost = String(value || DEFAULT_HOST).trim();
+  const match = rawHost.match(HOST_SCHEME_RE);
+  const inferredProtocol = match ? match[1].toLowerCase() : '';
+  const host = (match ? match[2] : rawHost).replace(/\/+$/, '') || DEFAULT_HOST;
 
-const resolveHost = (env) => env.EXPO_PUBLIC_APP_HOST || env.PUBLIC_HOST || DEFAULT_HOST;
+  return { host, inferredProtocol };
+};
+
+const resolveConnection = (env) => {
+  const { host, inferredProtocol } = normalizeHost(env.EXPO_PUBLIC_APP_HOST || env.PUBLIC_HOST);
+  const protocol = env.EXPO_PUBLIC_APP_PROTOCOL === HTTPS_PROTOCOL || inferredProtocol === HTTPS_PROTOCOL
+    ? HTTPS_PROTOCOL
+    : DEFAULT_PROTOCOL;
+
+  return { protocol, host };
+};
 
 const createBaseUrl = ({ protocol, host, port }) => `${protocol}://${host}:${port}`;
 
 export const createMobileAppConfig = (env = {}) => {
-  const protocol = resolveProtocol(env);
-  const host = resolveHost(env);
+  const { protocol, host } = resolveConnection(env);
   const authBaseUrl = createBaseUrl({ protocol, host, port: AUTH_PORT });
 
   return {

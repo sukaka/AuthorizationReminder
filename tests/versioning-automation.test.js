@@ -143,7 +143,7 @@ test('syncRepositoryVersion aligns web package even when it lagged behind root v
   assert.equal(JSON.parse(fs.readFileSync(path.join(rootDir, 'web/package-lock.json'), 'utf8')).packages[''].version, '5.24.2');
 });
 
-test('syncRepositoryVersion updates Expo app version file', () => {
+test('syncRepositoryVersion forces stale Expo app version file to next version', () => {
   const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-version-mobile-app-'));
 
   writeJson(path.join(rootDir, 'package.json'), { name: 'root', version: '5.72.3' });
@@ -151,7 +151,7 @@ test('syncRepositoryVersion updates Expo app version file', () => {
     expo: {
       name: '聚信移动工作台',
       slug: 'juxin-mobile-app',
-      version: '5.72.3',
+      version: '5.10.0',
     },
   });
 

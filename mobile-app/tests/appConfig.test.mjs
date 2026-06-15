@@ -30,6 +30,37 @@ test('uses EXPO_PUBLIC_APP_HOST for phone-accessible development URLs', () => {
   );
 });
 
+test('uses https protocol when EXPO_PUBLIC_APP_PROTOCOL is https', () => {
+  const config = createMobileAppConfig({
+    EXPO_PUBLIC_APP_PROTOCOL: 'https',
+    EXPO_PUBLIC_APP_HOST: 'app.example.com',
+  });
+
+  assert.equal(config.auth.baseUrl, 'https://app.example.com:5180');
+  assert.equal(config.systems[0].url, 'https://app.example.com:18087');
+});
+
+test('uses PUBLIC_HOST when EXPO_PUBLIC_APP_HOST is not set', () => {
+  const config = createMobileAppConfig({ PUBLIC_HOST: '10.8.0.2' });
+
+  assert.equal(config.auth.baseUrl, 'http://10.8.0.2:5180');
+});
+
+test('normalizes host whitespace, scheme, and trailing slash', () => {
+  const config = createMobileAppConfig({
+    EXPO_PUBLIC_APP_PROTOCOL: 'https',
+    EXPO_PUBLIC_APP_HOST: ' https://example.com/ ',
+  });
+
+  assert.equal(config.auth.baseUrl, 'https://example.com:5180');
+});
+
+test('infers https when host includes an https scheme', () => {
+  const config = createMobileAppConfig({ EXPO_PUBLIC_APP_HOST: 'https://example.com/' });
+
+  assert.equal(config.auth.baseUrl, 'https://example.com:5180');
+});
+
 test('resolves systems by key', () => {
   const config = createMobileAppConfig({ EXPO_PUBLIC_APP_HOST: '10.0.0.8' });
 
