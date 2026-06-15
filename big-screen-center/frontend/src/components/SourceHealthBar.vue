@@ -53,7 +53,7 @@ const formatTime = (value: string | null) => {
 </script>
 
 <template>
-  <div class="source-health" :data-source-status="visibleStatus">
+  <div class="source-health source-health--light" :data-source-status="visibleStatus">
     <span :class="`source-health__dot source-health__dot--${visibleStatus}`" />
     <div>
       <strong>{{ statusLabel }}</strong>
@@ -91,12 +91,13 @@ const formatTime = (value: string | null) => {
 
 .source-health__dot--partial,
 .source-health__dot--stale {
-  background: var(--screen-accent);
+  background: var(--screen-warning);
+  box-shadow: 0 0 12px var(--screen-warning);
 }
 
 .source-health__dot--error {
-  background: #ff775d;
-  box-shadow: 0 0 12px #ff775d;
+  background: var(--screen-danger);
+  box-shadow: 0 0 12px var(--screen-danger);
 }
 
 .source-health strong,
@@ -105,7 +106,7 @@ const formatTime = (value: string | null) => {
 }
 
 .source-health strong {
-  color: #f4ead7;
+  color: var(--screen-text);
   font-size: 10px;
   letter-spacing: 0.16em;
 }

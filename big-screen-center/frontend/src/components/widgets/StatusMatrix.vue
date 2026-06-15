@@ -31,7 +31,7 @@ const isHealthMatrix = computed(() =>
 const hint = computed(() =>
   isHealthMatrix.value
     ? '下方格子表示关键指标健康度，颜色越亮越需要关注。'
-    : '展示考试、题库、试卷与通过率的实时指标分布。',
+    : '展示业务核心指标的实时规模、发布量和完成情况。',
 )
 const legendLabel = computed(() =>
   isHealthMatrix.value ? '数据健康矩阵图例' : '实时指标矩阵图例',
@@ -74,6 +74,7 @@ const pressed = (key: string) => interaction.snapshot.value.locked?.key === key
         :data-interaction-key="cell.key"
         :data-interaction-state="relation(cell.key)"
         :data-performance-profile="performanceProfile"
+        :data-status-level="cell.level"
         :aria-pressed="pressed(cell.key)"
         :aria-label="`${cell.label}：${cell.value}，状态${statusText(cell.level)}`"
         :title="`${cell.label}：${cell.value}`"
@@ -123,7 +124,7 @@ const pressed = (key: string) => interaction.snapshot.value.locked?.key === key
 }
 
 .status-matrix__legend span:nth-child(2)::before {
-  background: #ff775d;
+  background: var(--screen-warning);
 }
 
 .status-matrix__legend span:nth-child(3)::before {
@@ -138,8 +139,9 @@ const pressed = (key: string) => interaction.snapshot.value.locked?.key === key
   gap: 3px;
   padding: 6px 8px;
   overflow: hidden;
-  background: color-mix(in srgb, var(--screen-muted), transparent 72%);
+  background: var(--screen-surface);
   border: 1px solid var(--screen-line);
+  box-shadow: 0 10px 28px var(--screen-shadow);
   cursor: pointer;
   transition:
     border-color 180ms ease,
@@ -187,11 +189,15 @@ const pressed = (key: string) => interaction.snapshot.value.locked?.key === key
 }
 
 .status-matrix__cell--healthy {
-  background: var(--screen-signal) !important;
-  box-shadow: 0 0 14px color-mix(in srgb, var(--screen-signal), transparent 55%);
+  background: color-mix(in srgb, var(--screen-signal), white 84%) !important;
+  box-shadow: none;
 }
 
 .status-matrix__cell--alert {
-  background: #ff775d !important;
+  background: color-mix(in srgb, var(--screen-warning), white 82%) !important;
+}
+
+.status-matrix__cell--idle {
+  background: var(--screen-idle) !important;
 }
 </style>

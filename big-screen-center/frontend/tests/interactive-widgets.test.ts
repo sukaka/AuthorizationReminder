@@ -30,6 +30,8 @@ describe('interactive metric widgets', () => {
       data: { criticalRisks: 48, high: 12 },
       performanceProfile: 'high',
     })
+    expect(wrapper.get('[data-widget="metric-cards"]')
+      .attributes('data-theme-surface')).toBe('bright')
     const card = wrapper.get('[data-interaction-key="criticalRisks"]')
 
     await card.trigger('mouseenter')
@@ -78,6 +80,9 @@ describe('interactive metric widgets', () => {
 
     const cell = wrapper.get('[data-interaction-key="successRate"]')
     expect(cell.attributes('aria-label')).toBe('触达成功率：94，状态正常')
+    expect(cell.attributes('data-status-level')).toBe('healthy')
+    expect(wrapper.get('[data-interaction-key="totalReminders"]')
+      .attributes('data-status-level')).toBe('idle')
     expect(wrapper.text()).toContain('正常')
     expect(wrapper.text()).toContain('关注')
     expect(wrapper.text()).toContain('暂无数据')

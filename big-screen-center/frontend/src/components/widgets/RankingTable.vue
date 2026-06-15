@@ -159,7 +159,7 @@ li i {
   display: block;
   height: 2px;
   margin-top: 7px;
-  background: var(--screen-accent);
+  background: linear-gradient(90deg, var(--screen-accent), var(--screen-accent-secondary));
 }
 
 li strong {

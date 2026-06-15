@@ -27,8 +27,9 @@
   align-items: center;
   justify-content: space-between;
   padding: 0 clamp(24px, 4vw, 64px);
-  background: color-mix(in oklch, var(--canvas), transparent 6%);
+  background: rgb(255 255 255 / 94%);
   border-bottom: 1px solid var(--line-strong);
+  box-shadow: 0 8px 28px rgb(34 92 129 / 6%);
 }
 
 .brand {
@@ -44,7 +45,7 @@
   height: 34px;
   display: grid;
   place-items: center;
-  color: var(--canvas);
+  color: #ffffff;
   background: var(--accent-warm);
   font-family: var(--font-display);
   font-weight: 800;

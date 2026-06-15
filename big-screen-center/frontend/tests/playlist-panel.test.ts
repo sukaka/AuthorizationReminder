@@ -1,5 +1,7 @@
+import { mount } from '@vue/test-utils'
 import { describe, expect, it } from 'vitest'
 
+import PlaylistPanel from '../src/components/PlaylistPanel.vue'
 import { createPlaylistController } from '../src/playlist'
 
 const items = [
@@ -46,5 +48,21 @@ describe('playlist controller', () => {
     controller.sync(35_000)
 
     expect(controller.current().templateId).toBe('train-01')
+  })
+
+  it('renders playback controls with the mobile controls hook', () => {
+    const wrapper = mount(PlaylistPanel, {
+      props: {
+        items,
+        currentIndex: 0,
+        paused: false,
+        controlsVisible: true,
+      },
+    })
+
+    expect(wrapper.get('[data-mobile-playback-controls]').classes())
+      .toContain('playlist-panel')
+    expect(wrapper.text()).toContain('播放清单')
+    expect(wrapper.text()).toContain('sca-01')
   })
 })

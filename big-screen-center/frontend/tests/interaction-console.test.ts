@@ -98,6 +98,8 @@ describe('InteractionConsole', () => {
     })
 
     expect(wrapper.get('[data-interaction-console]').text()).toContain('严重风险')
+    expect(wrapper.get('[data-interaction-console]').classes())
+      .toContain('interaction-console--light')
     expect(wrapper.text()).toContain('高危')
     await wrapper.get('[aria-label="关闭联动分析台"]').trigger('click')
     expect(wrapper.emitted('close')).toHaveLength(1)

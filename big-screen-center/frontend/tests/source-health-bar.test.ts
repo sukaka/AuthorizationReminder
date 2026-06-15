@@ -15,6 +15,7 @@ describe('SourceHealthBar', () => {
     })
 
     expect(wrapper.attributes('data-source-status')).toBe('partial')
+    expect(wrapper.classes()).toContain('source-health--light')
     expect(wrapper.text()).toContain('生成')
     expect(wrapper.text()).toContain('2 个来源不可用')
     expect(wrapper.text()).toContain('软件成分分析、授权提醒')

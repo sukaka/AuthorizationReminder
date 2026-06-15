@@ -36,6 +36,7 @@ const pressed = (key: string) => interaction.snapshot.value.locked?.key === key
     class="metric-cards"
     data-widget="metric-cards"
     data-widget-type="metric-cards"
+    data-theme-surface="bright"
   >
     <article
       v-for="card in cards"
@@ -73,8 +74,9 @@ article {
   min-width: 0;
   padding: 22px 24px;
   overflow: hidden;
-  background: linear-gradient(135deg, rgb(255 255 255 / 5%), transparent 62%);
+  background: var(--screen-surface);
   border: 1px solid var(--screen-line);
+  box-shadow: 0 10px 28px var(--screen-shadow);
   transition:
     border-color 180ms ease,
     box-shadow 180ms ease,
@@ -89,7 +91,7 @@ article:focus-visible {
 
 article[data-interaction-state="primary"] {
   border-color: var(--screen-accent);
-  box-shadow: 0 0 24px color-mix(in srgb, var(--screen-accent), transparent 62%);
+  box-shadow: 0 16px 34px color-mix(in srgb, var(--screen-accent), transparent 87%);
   transform: translateY(-3px);
 }
 
@@ -111,6 +113,7 @@ span {
 strong {
   display: block;
   margin-top: 12px;
+  color: var(--screen-text);
   font-family: var(--font-display);
   font-size: 46px;
   font-weight: 500;
@@ -128,8 +131,8 @@ i {
   bottom: 18px;
   width: 54px;
   height: 2px;
-  background: var(--screen-accent);
-  box-shadow: 0 0 18px var(--screen-accent);
+  background: linear-gradient(90deg, var(--screen-accent), var(--screen-accent-secondary));
+  box-shadow: none;
 }
 
 @media (prefers-reduced-motion: reduce) {

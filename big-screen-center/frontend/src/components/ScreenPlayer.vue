@@ -105,11 +105,11 @@ const stale = computed(() => usePreviewData.value
 const unavailableSources = computed(() => usePreviewData.value
   ? []
   : channel.envelope.value?.unavailableSources || [])
+const stageStyle = computed(() => screenThemeCssVariables(theme.value))
 const canvasStyle = computed(() => ({
   width: `${transform.value.designWidth}px`,
   height: `${transform.value.designHeight}px`,
   transform: `translate(${transform.value.offsetX}px, ${transform.value.offsetY}px) scale(${transform.value.scaleX})`,
-  ...screenThemeCssVariables(theme.value),
 }))
 
 const metricValue = (key: string) => {
@@ -149,7 +149,7 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown))
 </script>
 
 <template>
-  <main class="screen-stage">
+  <main class="screen-stage" :style="stageStyle">
     <section
       class="screen-canvas"
       :class="`screen-canvas--${template.systemKey}`"

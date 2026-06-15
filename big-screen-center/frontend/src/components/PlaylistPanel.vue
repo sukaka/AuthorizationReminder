@@ -53,9 +53,10 @@ defineEmits<{
   justify-content: space-between;
   gap: 24px;
   padding: 15px 18px;
-  color: #f4ead7;
-  background: rgb(19 16 12 / 92%);
-  border: 1px solid rgb(242 184 75 / 38%);
+  color: var(--screen-text, var(--ink-strong));
+  background: var(--screen-surface-solid, #ffffff);
+  border: 1px solid var(--screen-line, var(--line-strong));
+  box-shadow: 0 16px 40px var(--screen-shadow, rgb(34 92 129 / 12%));
   backdrop-filter: blur(14px);
   transform: translateX(-50%);
 }
@@ -66,7 +67,7 @@ defineEmits<{
 }
 
 .playlist-panel span {
-  color: #aa9b83;
+  color: var(--screen-muted, var(--ink-muted));
   font-size: 9px;
   letter-spacing: 0.16em;
 }
@@ -87,9 +88,9 @@ defineEmits<{
 button {
   min-height: 38px;
   padding: 0 13px;
-  color: #f4ead7;
-  background: #2a241c;
-  border: 1px solid rgb(244 234 215 / 18%);
+  color: var(--screen-text, var(--ink-strong));
+  background: color-mix(in srgb, var(--screen-accent, var(--accent-warm)), white 90%);
+  border: 1px solid var(--screen-line, var(--line-strong));
   cursor: pointer;
 }
 

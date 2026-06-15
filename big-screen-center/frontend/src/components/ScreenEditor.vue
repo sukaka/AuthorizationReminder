@@ -207,8 +207,9 @@ button {
 }
 
 button.primary {
-  color: var(--canvas);
-  background: var(--accent-warm);
+  color: #ffffff;
+  background: #0f5fc9;
+  border-color: #0f5fc9;
 }
 
 .screen-editor__status {
@@ -221,7 +222,7 @@ button.primary {
   background:
     linear-gradient(90deg, var(--line-soft) 1px, transparent 1px) 0 0 / 64px 64px,
     linear-gradient(var(--line-soft) 1px, transparent 1px) 0 0 / 64px 64px,
-    var(--surface);
+    #f4f9fc;
   border: 1px solid var(--line-strong);
 }
 
@@ -230,8 +231,9 @@ button.primary {
   align-content: space-between;
   padding: 18px;
   overflow: hidden;
-  background: var(--surface-raised);
+  background: #ffffff;
   border: 1px solid var(--line-strong);
+  box-shadow: 0 8px 22px rgb(34 92 129 / 8%);
 }
 
 .grid-stack-item-content span {

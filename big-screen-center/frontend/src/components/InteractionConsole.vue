@@ -72,7 +72,7 @@ const openDetail = () => {
   <Transition name="interaction-console">
     <aside
       v-if="target"
-      class="interaction-console"
+      class="interaction-console interaction-console--light"
       data-interaction-console
       aria-live="polite"
       @click.stop
@@ -132,11 +132,10 @@ const openDetail = () => {
   gap: 22px;
   align-items: center;
   padding: 20px 24px;
-  background:
-    linear-gradient(135deg, rgb(255 255 255 / 8%), rgb(255 255 255 / 2%)),
-    rgb(17 14 10 / 92%);
+  color: var(--screen-text);
+  background: var(--screen-surface-solid);
   border: 1px solid var(--screen-accent);
-  box-shadow: 0 -12px 42px rgb(0 0 0 / 34%);
+  box-shadow: 0 -12px 42px var(--screen-shadow);
   backdrop-filter: blur(14px);
 }
 
@@ -167,7 +166,7 @@ const openDetail = () => {
 
 .interaction-console p {
   margin: 0;
-  color: #f4ead7;
+  color: var(--screen-text);
   font-size: 13px;
   line-height: 1.8;
 }
@@ -181,7 +180,7 @@ const openDetail = () => {
 .interaction-console em {
   padding: 4px 8px;
   font-style: normal;
-  background: rgb(255 255 255 / 6%);
+  background: color-mix(in srgb, var(--screen-accent), white 92%);
   border: 1px solid var(--screen-line);
 }
 
@@ -193,7 +192,7 @@ const openDetail = () => {
 .interaction-console button {
   min-width: 112px;
   padding: 9px 14px;
-  color: #100e0b;
+  color: #ffffff;
   background: var(--screen-accent);
   border: 0;
   cursor: pointer;
@@ -201,7 +200,7 @@ const openDetail = () => {
 }
 
 .interaction-console button:last-child {
-  color: #f4ead7;
+  color: var(--screen-text);
   background: transparent;
   border: 1px solid var(--screen-line);
 }
