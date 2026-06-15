@@ -1,182 +1,182 @@
-# Mobile App Design
+# 移动 App 设计
 
-Date: 2026-06-15
+日期：2026-06-15
 
-## Goal
+## 目标
 
-Build an internal mobile app for iOS and Android so users can access existing business systems without opening a desktop browser or manually entering system URLs on a mobile browser.
+建设一个内部使用的 iOS/安卓移动 App，让用户可以在手机上集中访问现有业务系统，不再依赖电脑浏览器，也不需要每次在手机浏览器里手动输入系统地址。
 
-The first release uses a hybrid model: the app provides native login flow, a native system launcher, and in-app web access to existing systems. High-frequency workflows can be converted to mobile-native screens later.
+第一版采用混合模式：App 提供原生登录流程、原生系统入口页，并在 App 内打开现有系统网页。后续可以把高频业务流程逐步改造成移动端原生页面。
 
-## First Release Scope
+## 第一版范围
 
-The first release includes three systems:
+第一版包含 3 个系统：
 
-- Training Exam
-- Inventory Management
-- Device Flow
+- 培训考试
+- 库存管理
+- 设备流转
 
-The app starts with unified login. After login succeeds, users land on a home screen with the three system entries. Selecting a system opens its existing web page inside the app.
+App 启动后先进入统一登录。登录成功后，用户进入首页，并看到 3 个系统入口。点击任一入口后，App 在内嵌页面中打开对应系统的现有网页。
 
-## Out of Scope
+## 暂不包含
 
-The first release does not rebuild each business system as a full native mobile experience. It also does not target public app store launch. Distribution is internal test distribution only.
+第一版不把 3 个业务系统完整重做成原生移动端体验，也不直接面向公开应用商店发布。分发方式先按内部测试包处理。
 
-## Technology Choice
+## 技术方案
 
-Use React Native with Expo.
+使用 React Native + Expo。
 
-Reasons:
+选择原因：
 
-- One codebase can build iOS and Android apps.
-- Expo/EAS supports internal test builds for Android and iOS.
-- The app can start as a native shell around existing web systems.
-- Future high-frequency workflows can be implemented as native React Native screens without replacing the whole app.
+- 一套代码可以同时构建 iOS 和安卓 App。
+- Expo/EAS 支持 iOS 和安卓内部测试构建。
+- 第一版可以先作为现有 Web 系统的移动端原生外壳。
+- 后续高频业务流程可以继续用 React Native 做成原生页面，不需要推倒重来。
 
-## App Structure
+## App 结构
 
-### Auth
+### Auth 认证模块
 
-Auth owns unified login, session detection, session persistence, and logout.
+Auth 负责统一登录、会话检测、会话保存和退出登录。
 
-On app startup:
+App 启动时：
 
-1. Check whether a valid local session exists.
-2. If no valid session exists, show the unified login flow.
-3. If a valid session exists, open the home screen.
+1. 检查本地是否存在有效会话。
+2. 如果没有有效会话，展示统一登录流程。
+3. 如果存在有效会话，进入首页。
 
-On logout:
+退出登录时：
 
-1. Clear app-side session state.
-2. Clear web session state used by embedded systems where supported.
-3. Return to the unified login flow.
+1. 清理 App 侧会话状态。
+2. 在现有系统支持的前提下，清理内嵌网页使用的 Web 会话状态。
+3. 返回统一登录流程。
 
-### Home
+### Home 首页
 
-Home is a native screen with three system entries:
+Home 是原生首页，包含 3 个系统入口：
 
-- Training Exam
-- Inventory Management
-- Device Flow
+- 培训考试
+- 库存管理
+- 设备流转
 
-Each entry uses config-driven metadata:
+每个入口通过配置驱动，包含：
 
-- Display name
-- System key
-- Target URL
-- Optional description
-- Optional icon
+- 展示名称
+- 系统标识
+- 目标地址
+- 可选说明
+- 可选图标
 
-The home screen should stay simple and operational. It is not a marketing page.
+首页保持简洁、清晰、偏工作台风格，不做营销型页面。
 
-### System WebView
+### SystemWebView 系统内嵌页
 
-SystemWebView opens the selected system inside the app.
+SystemWebView 用于在 App 内打开用户选择的系统。
 
-Expected controls:
+需要支持的操作：
 
-- Back to home
-- Web back when the embedded page has history
-- Refresh
-- Loading state
-- Error retry
-- Logout entry
+- 返回首页
+- 当内嵌网页存在历史记录时，支持网页后退
+- 刷新
+- 加载状态
+- 错误重试
+- 退出登录入口
 
-Expected states:
+需要覆盖的状态：
 
-- Loading
-- Loaded
-- Network or server error
-- Login expired
+- 加载中
+- 已加载
+- 网络或服务错误
+- 登录过期
 
-If login expires, the app should return to the unified login flow.
+如果检测到登录过期，App 应返回统一登录流程。
 
-### Config
+### Config 配置模块
 
-Configuration keeps environment-specific URLs out of screen code.
+Config 用于集中管理不同环境的系统地址，避免把地址散落在页面代码里。
 
-Required values:
+必要配置包括：
 
-- Unified login URL or auth endpoint
-- Training Exam URL
-- Inventory Management URL
-- Device Flow URL
-- Environment name
+- 统一登录地址或认证接口
+- 培训考试系统地址
+- 库存管理系统地址
+- 设备流转系统地址
+- 环境名称
 
-The first implementation can support a development environment and leave room for staging/production values.
+第一版实现时可以先支持开发环境，并为测试/生产环境预留配置结构。
 
-### Build And Distribution
+### 构建与分发
 
-Use Expo/EAS profiles to build internal test packages:
+使用 Expo/EAS 配置内部测试构建：
 
-- Android APK or internal distribution build
-- iOS internal distribution through TestFlight, ad hoc, or enterprise provisioning depending on available Apple account setup
+- 安卓：APK 或内部测试分发构建
+- iOS：根据 Apple 账号条件选择 TestFlight、Ad Hoc 或企业签名
 
-Public app store submission is a later decision.
+公开应用商店上架留到后续再决定。
 
-## Session Strategy
+## 会话策略
 
-The app should integrate with the existing unified login system. The preferred user experience is:
+App 需要接入现有统一登录系统。目标体验是：
 
-1. Open app.
-2. Log in with unified account.
-3. Enter the app home screen.
-4. Open any of the three systems without logging in again.
+1. 打开 App。
+2. 使用统一账号登录。
+3. 进入 App 首页。
+4. 打开 3 个系统中的任意一个时，不需要重复登录。
 
-Implementation details depend on the existing unified login system. During implementation, inspect whether it uses cookie-based sessions, token-based auth, or redirect-based SSO. The app should choose the least invasive integration that preserves the current server-side security model.
+具体实现取决于现有统一登录机制。实施阶段需要先确认统一登录使用的是 Cookie 会话、Token 认证、跳转式单点登录，还是混合方式。App 应优先选择对现有服务端安全模型影响最小的集成方式。
 
-## Error Handling
+## 错误处理
 
-Network failure:
+网络失败：
 
-- Show an app-level error state.
-- Provide retry and back-to-home actions.
+- 展示 App 级错误状态。
+- 提供重试和返回首页操作。
 
-System URL failure:
+系统地址访问失败：
 
-- Show the failed system name.
-- Provide retry and back-to-home actions.
+- 展示失败的系统名称。
+- 提供重试和返回首页操作。
 
-Login expiration:
+登录过期：
 
-- Clear stale app-side auth state.
-- Return to unified login.
+- 清理过期的 App 侧认证状态。
+- 返回统一登录。
 
-Unsupported external navigation:
+不支持的外部跳转：
 
-- Keep allowed business system URLs inside the app.
-- Open external links only when explicitly allowed by config.
+- 配置允许的业务系统地址继续留在 App 内打开。
+- 外部链接只有在配置明确允许时才打开。
 
-## Testing Strategy
+## 测试策略
 
-Unit-level tests:
+单元测试重点：
 
-- Auth state detection
-- System config mapping
-- URL selection for each system
-- Logout state cleanup
+- 认证状态判断
+- 系统配置映射
+- 每个系统的 URL 选择
+- 退出登录后的状态清理
 
-Integration/manual tests:
+集成测试和人工真机测试重点：
 
-- Android test build installs successfully.
-- iOS internal test build installs successfully.
-- Unified login opens on first app launch.
-- Successful login reaches the home screen.
-- Each of the three systems loads inside the app.
-- Login state is preserved across the three systems.
-- Logout returns to login.
-- Network failure shows retry and back-to-home actions.
+- 安卓测试包可以成功安装。
+- iOS 内部测试包可以成功安装。
+- 首次打开 App 会进入统一登录。
+- 登录成功后进入首页。
+- 3 个系统都能在 App 内打开。
+- 登录状态能在 3 个系统之间保持。
+- 退出登录后返回登录页。
+- 网络失败时显示重试和返回首页操作。
 
-## Risks And Open Implementation Checks
+## 风险与实施前检查
 
-The design is intentionally stable, but implementation must verify these details from existing systems:
+设计方向已经明确，但实施前需要从现有系统中确认以下细节：
 
-- Exact unified login mechanism: cookie, token, redirect, or mixed.
-- Whether WebView can share the required session state across all three target systems.
-- Whether any target system blocks embedded WebView access.
-- Whether iOS distribution will use TestFlight, ad hoc signing, or enterprise signing.
-- Whether Android distribution should produce a direct APK or an internal app bundle flow.
+- 统一登录的准确机制：Cookie、Token、跳转式单点登录或混合方式。
+- WebView 是否可以在 3 个目标系统之间共享所需会话状态。
+- 目标系统是否限制在 WebView 中打开。
+- iOS 内部分发采用 TestFlight、Ad Hoc 还是企业签名。
+- 安卓分发使用直接 APK，还是内部测试包流程。
 
-## Success Criteria
+## 成功标准
 
-The first release is successful when a tester can install the app on iOS or Android, log in once through the unified login system, see the three system entries, open each system inside the app, and return or retry cleanly when a page fails to load.
+第一版成功的标准是：测试人员可以在 iOS 或安卓设备上安装 App，使用统一登录系统登录一次，看到 3 个系统入口，在 App 内打开每个系统，并且在页面加载失败时可以清晰地重试或返回首页。
