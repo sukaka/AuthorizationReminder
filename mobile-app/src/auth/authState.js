@@ -19,11 +19,14 @@ const createAnonymousAuthState = (error = '') => ({
   error,
 });
 
-const isPlainUserObject = (user) => (
-  user !== null
-  && typeof user === 'object'
-  && !Array.isArray(user)
-);
+const isPlainUserObject = (user) => {
+  if (user === null || typeof user !== 'object' || Array.isArray(user)) {
+    return false;
+  }
+
+  const prototype = Object.getPrototypeOf(user);
+  return prototype === Object.prototype || prototype === null;
+};
 
 const normalizeErrorMessage = (value, defaultMessage = DEFAULT_LOGIN_FAILURE_ERROR) => {
   if (typeof value === 'string') {

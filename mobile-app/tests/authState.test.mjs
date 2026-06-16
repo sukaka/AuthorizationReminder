@@ -57,7 +57,17 @@ test('login success with missing user returns anonymous state', () => {
 });
 
 test('login success with invalid user returns anonymous state', () => {
-  const invalidUsers = [null, [], 'admin'];
+  class LocalUser {}
+
+  const invalidUsers = [
+    null,
+    [],
+    'admin',
+    new Date(),
+    new Map(),
+    new Error('bad'),
+    new LocalUser(),
+  ];
 
   for (const user of invalidUsers) {
     assert.deepEqual(authReducer(createInitialAuthState(), {
@@ -199,7 +209,7 @@ test('login failure defaults unknown error values', () => {
     error: '',
   };
 
-  for (const error of [{ code: 'E_LOGIN' }, 500, true]) {
+  for (const error of [{ code: 'E_LOGIN' }, 500, true, null]) {
     assert.deepEqual(authReducer(state, { type: 'loginFailure', error }), {
       status: 'anonymous',
       token: '',
