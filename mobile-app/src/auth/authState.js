@@ -25,16 +25,20 @@ const isPlainUserObject = (user) => (
   && !Array.isArray(user)
 );
 
-const normalizeLoginFailureError = (error) => {
-  if (typeof error === 'string') {
-    return error || DEFAULT_LOGIN_FAILURE_ERROR;
+const normalizeErrorMessage = (value, defaultMessage = DEFAULT_LOGIN_FAILURE_ERROR) => {
+  if (typeof value === 'string') {
+    return value.trim() || defaultMessage;
   }
 
-  if (error instanceof Error) {
-    return error.message || DEFAULT_LOGIN_FAILURE_ERROR;
+  if (value instanceof Error) {
+    return normalizeErrorMessage(value.message, defaultMessage);
   }
 
-  return error ? String(error) : DEFAULT_LOGIN_FAILURE_ERROR;
+  if (!value) {
+    return defaultMessage;
+  }
+
+  return String(value) || defaultMessage;
 };
 
 export const authReducer = (state = createInitialAuthState(), action = {}) => {
@@ -68,7 +72,7 @@ export const authReducer = (state = createInitialAuthState(), action = {}) => {
       };
     }
     case 'loginFailure':
-      return createAnonymousAuthState(normalizeLoginFailureError(action.error));
+      return createAnonymousAuthState(normalizeErrorMessage(action.error));
     case 'logout':
       return createAnonymousAuthState();
     default:

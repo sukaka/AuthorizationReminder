@@ -56,6 +56,23 @@ test('login success with missing user returns anonymous state', () => {
   });
 });
 
+test('login success with invalid user returns anonymous state', () => {
+  const invalidUsers = [null, [], 'admin'];
+
+  for (const user of invalidUsers) {
+    assert.deepEqual(authReducer(createInitialAuthState(), {
+      type: 'loginSuccess',
+      token: 'abc',
+      user,
+    }), {
+      status: 'anonymous',
+      token: '',
+      user: null,
+      error: '登录状态无效，请重新登录',
+    });
+  }
+});
+
 test('login success trims a valid token', () => {
   const user = { username: 'admin', app_access: ['inventory'] };
   const next = authReducer(createInitialAuthState(), {
@@ -131,11 +148,32 @@ test('login failure clears auth details and stores errors', () => {
     error: 'bad credentials',
   });
 
+  assert.deepEqual(authReducer(state, { type: 'loginFailure', error: '  bad credentials  ' }), {
+    status: 'anonymous',
+    token: '',
+    user: null,
+    error: 'bad credentials',
+  });
+
+  assert.deepEqual(authReducer(state, { type: 'loginFailure', error: '   ' }), {
+    status: 'anonymous',
+    token: '',
+    user: null,
+    error: '登录失败',
+  });
+
   assert.deepEqual(authReducer(state, { type: 'loginFailure', error: new Error('network down') }), {
     status: 'anonymous',
     token: '',
     user: null,
     error: 'network down',
+  });
+
+  assert.deepEqual(authReducer(state, { type: 'loginFailure', error: new Error('') }), {
+    status: 'anonymous',
+    token: '',
+    user: null,
+    error: '登录失败',
   });
 
   assert.deepEqual(authReducer(state, { type: 'loginFailure' }), {
