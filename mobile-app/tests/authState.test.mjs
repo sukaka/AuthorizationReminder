@@ -191,6 +191,24 @@ test('login failure clears auth details and stores errors', () => {
   });
 });
 
+test('login failure defaults unknown error values', () => {
+  const state = {
+    status: 'authenticating',
+    token: 'abc',
+    user: { username: 'admin' },
+    error: '',
+  };
+
+  for (const error of [{ code: 'E_LOGIN' }, 500, true]) {
+    assert.deepEqual(authReducer(state, { type: 'loginFailure', error }), {
+      status: 'anonymous',
+      token: '',
+      user: null,
+      error: '登录失败',
+    });
+  }
+});
+
 test('logout clears user and token', () => {
   const next = authReducer(
     { status: 'authenticated', token: 'abc', user: { username: 'admin' }, error: '' },

@@ -34,11 +34,7 @@ const normalizeErrorMessage = (value, defaultMessage = DEFAULT_LOGIN_FAILURE_ERR
     return normalizeErrorMessage(value.message, defaultMessage);
   }
 
-  if (!value) {
-    return defaultMessage;
-  }
-
-  return String(value) || defaultMessage;
+  return defaultMessage;
 };
 
 export const authReducer = (state = createInitialAuthState(), action = {}) => {

@@ -1,6 +1,6 @@
 {
   "name": "juxin-big-screen-backend",
-  "version": "5.74.3",
+  "version": "5.74.4",
   "private": true,
   "type": "module",
   "scripts": {
