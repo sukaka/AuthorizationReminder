@@ -4,6 +4,8 @@ const ANONYMOUS_AUTH_STATE = {
   user: null,
   error: '',
 };
+const INVALID_AUTH_STATE_ERROR = '登录状态无效，请重新登录';
+const DEFAULT_LOGIN_FAILURE_ERROR = '登录失败';
 
 export const createInitialAuthState = () => ({
   status: 'checking',
@@ -16,6 +18,24 @@ const createAnonymousAuthState = (error = '') => ({
   ...ANONYMOUS_AUTH_STATE,
   error,
 });
+
+const isPlainUserObject = (user) => (
+  user !== null
+  && typeof user === 'object'
+  && !Array.isArray(user)
+);
+
+const normalizeLoginFailureError = (error) => {
+  if (typeof error === 'string') {
+    return error || DEFAULT_LOGIN_FAILURE_ERROR;
+  }
+
+  if (error instanceof Error) {
+    return error.message || DEFAULT_LOGIN_FAILURE_ERROR;
+  }
+
+  return error ? String(error) : DEFAULT_LOGIN_FAILURE_ERROR;
+};
 
 export const authReducer = (state = createInitialAuthState(), action = {}) => {
   switch (action.type) {
@@ -33,15 +53,22 @@ export const authReducer = (state = createInitialAuthState(), action = {}) => {
         status: 'authenticating',
         error: '',
       };
-    case 'loginSuccess':
+    case 'loginSuccess': {
+      const token = typeof action.token === 'string' ? action.token.trim() : '';
+
+      if (!token || !isPlainUserObject(action.user)) {
+        return createAnonymousAuthState(INVALID_AUTH_STATE_ERROR);
+      }
+
       return {
         status: 'authenticated',
-        token: typeof action.token === 'string' ? action.token : '',
+        token,
         user: action.user || null,
         error: '',
       };
+    }
     case 'loginFailure':
-      return createAnonymousAuthState(action.error || '登录失败');
+      return createAnonymousAuthState(normalizeLoginFailureError(action.error));
     case 'logout':
       return createAnonymousAuthState();
     default:
@@ -59,6 +86,7 @@ export const isUserAllowedForSystem = (user, systemKey) => {
   }
 
   return typeof systemKey === 'string'
+    && systemKey.trim() !== ''
     && Array.isArray(user.app_access)
     && user.app_access.includes(systemKey);
 };

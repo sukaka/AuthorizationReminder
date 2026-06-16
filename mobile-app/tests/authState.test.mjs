@@ -27,6 +27,51 @@ test('stores login success state', () => {
   assert.equal(next.user.username, 'admin');
 });
 
+test('login success with empty token returns anonymous state', () => {
+  const next = authReducer(createInitialAuthState(), {
+    type: 'loginSuccess',
+    token: '   ',
+    user: { username: 'admin', app_access: ['inventory'] },
+  });
+
+  assert.deepEqual(next, {
+    status: 'anonymous',
+    token: '',
+    user: null,
+    error: '登录状态无效，请重新登录',
+  });
+});
+
+test('login success with missing user returns anonymous state', () => {
+  const next = authReducer(createInitialAuthState(), {
+    type: 'loginSuccess',
+    token: 'abc',
+  });
+
+  assert.deepEqual(next, {
+    status: 'anonymous',
+    token: '',
+    user: null,
+    error: '登录状态无效，请重新登录',
+  });
+});
+
+test('login success trims a valid token', () => {
+  const user = { username: 'admin', app_access: ['inventory'] };
+  const next = authReducer(createInitialAuthState(), {
+    type: 'loginSuccess',
+    token: '  abc  ',
+    user,
+  });
+
+  assert.deepEqual(next, {
+    status: 'authenticated',
+    token: 'abc',
+    user,
+    error: '',
+  });
+});
+
 test('checking keeps current auth details and clears errors', () => {
   const user = { username: 'admin', app_access: ['inventory'] };
   const next = authReducer(
@@ -86,7 +131,21 @@ test('login failure clears auth details and stores errors', () => {
     error: 'bad credentials',
   });
 
+  assert.deepEqual(authReducer(state, { type: 'loginFailure', error: new Error('network down') }), {
+    status: 'anonymous',
+    token: '',
+    user: null,
+    error: 'network down',
+  });
+
   assert.deepEqual(authReducer(state, { type: 'loginFailure' }), {
+    status: 'anonymous',
+    token: '',
+    user: null,
+    error: '登录失败',
+  });
+
+  assert.deepEqual(authReducer(state, { type: 'loginFailure', error: '' }), {
     status: 'anonymous',
     token: '',
     user: null,
@@ -115,8 +174,24 @@ test('system access follows app_access when present', () => {
   assert.equal(isUserAllowedForSystem(user, 'inventory'), false);
 });
 
+test('non-admin users without array app_access cannot access systems', () => {
+  assert.equal(isUserAllowedForSystem({ role: 'user' }, 'inventory'), false);
+  assert.equal(isUserAllowedForSystem({ role: 'user', app_access: 'inventory' }, 'inventory'), false);
+});
+
+test('blank system key denies access for non-admin users', () => {
+  const user = { role: 'user', app_access: ['', '  ', 'inventory'] };
+
+  assert.equal(isUserAllowedForSystem(user, ''), false);
+  assert.equal(isUserAllowedForSystem(user, '  '), false);
+});
+
 test('admin can access all mobile systems', () => {
   assert.equal(isUserAllowedForSystem({ role: 'admin', app_access: [] }, 'inventory'), true);
+});
+
+test('admin can access mobile systems without app_access', () => {
+  assert.equal(isUserAllowedForSystem({ role: 'admin' }, 'inventory'), true);
 });
 
 test('unknown action preserves state object', () => {
