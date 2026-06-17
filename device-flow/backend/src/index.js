@@ -667,7 +667,8 @@ const ensureReworkTransition = (fromStage, toStage) => {
 
 const normalizeDepartment = (department) => trimText(department).toUpperCase();
 
-const findMatchedPermissionPolicy = async ({ role, department, actionCode, stageCode }) => {
+const findMatchedPermissionPolicy = async ({ userSub, role, department, actionCode, stageCode }) => {
+  const user = trimText(userSub);
   const roleCode = trimText(role).toLowerCase();
   const deptCode = normalizeDepartment(department) || '*';
   const action = trimText(actionCode).toLowerCase();
@@ -675,14 +676,18 @@ const findMatchedPermissionPolicy = async ({ role, department, actionCode, stage
   if (!roleCode || !action) return null;
 
   const rows = await query(
-    `SELECT role_code, department_code, action_code, stage_code, effect
+    `SELECT user_sub, user_name, role_code, department_code, action_code, stage_code, effect
      FROM device_permission_policies
      WHERE enabled = 1
-       AND role_code IN (?, '*')
+       AND (
+         (user_sub <> '' AND user_sub = ?)
+         OR (user_sub = '' AND role_code IN (?, '*'))
+       )
        AND department_code IN (?, '*')
        AND action_code IN (?, '*')
        AND stage_code IN (?, '*')
      ORDER BY
+       (user_sub <> '') DESC,
        (role_code <> '*') DESC,
        (department_code <> '*') DESC,
        (action_code <> '*') DESC,
@@ -690,7 +695,7 @@ const findMatchedPermissionPolicy = async ({ role, department, actionCode, stage
        (effect = 'DENY') DESC,
        id DESC
      LIMIT 1`,
-    [roleCode, deptCode, action, stage]
+    [user, roleCode, deptCode, action, stage]
   );
   return rows[0] || null;
 };
@@ -703,6 +708,7 @@ const roleInDefaults = (role, defaultRoles) => {
 
 const resolvePermissionAllowed = async ({ actor, actionCode, stageCode = '*', defaultRoles = [] }) => {
   const policy = await findMatchedPermissionPolicy({
+    userSub: actor?.sub,
     role: actor?.role,
     department: actor?.department,
     actionCode,
@@ -3329,7 +3335,7 @@ app.get(
   requireOperationPermission('button.permission-manage'),
   asyncHandler(async (_req, res) => {
     const rows = await query(
-      `SELECT id, role_code, department_code, action_code, stage_code, effect, enabled, note, updated_at
+      `SELECT id, user_sub, user_name, role_code, department_code, action_code, stage_code, effect, enabled, note, updated_at
        FROM device_permission_policies
        ORDER BY id ASC
        LIMIT 5000`
@@ -3337,6 +3343,8 @@ app.get(
     res.json(
       rows.map((item) => ({
         id: Number(item.id),
+        user_sub: item.user_sub || '',
+        user_name: item.user_name || '',
         role_code: item.role_code,
         department_code: item.department_code,
         action_code: item.action_code,
@@ -3362,22 +3370,26 @@ app.put(
 
     await transaction(async (tx) => {
       for (const item of policies) {
-        const roleCode = trimText(item?.role_code).toLowerCase() || '*';
+        const userSub = trimText(item?.user_sub);
+        const userName = trimText(item?.user_name);
+        const roleCode = userSub ? userSub.slice(0, 32) : (trimText(item?.role_code).toLowerCase() || '*');
         const deptCode = normalizeDepartment(item?.department_code) || '*';
         const actionCode = trimText(item?.action_code).toLowerCase() || '*';
         const stageCode = trimText(item?.stage_code).toUpperCase() || '*';
         const effect = trimText(item?.effect).toUpperCase() || 'ALLOW';
+        if (!userSub && roleCode === '*') throw appError('请选择用户');
         if (!['ALLOW', 'DENY'].includes(effect)) throw appError('effect 仅支持 ALLOW / DENY');
         const enabled = item?.enabled === undefined ? 1 : item?.enabled ? 1 : 0;
         const note = trimText(item?.note);
         await tx.run(
           `INSERT INTO device_permission_policies
-           (role_code, department_code, action_code, stage_code, effect, enabled, note)
-           VALUES (?, ?, ?, ?, ?, ?, ?)
+           (user_sub, user_name, role_code, department_code, action_code, stage_code, effect, enabled, note)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
            ON DUPLICATE KEY UPDATE
+             user_name = VALUES(user_name),
              enabled = VALUES(enabled),
              note = VALUES(note)`,
-          [roleCode, deptCode, actionCode, stageCode, effect, enabled, note || null]
+          [userSub, userName, roleCode, deptCode, actionCode, stageCode, effect, enabled, note || null]
         );
       }
 
@@ -3397,7 +3409,7 @@ app.put(
     });
 
     const rows = await query(
-      `SELECT id, role_code, department_code, action_code, stage_code, effect, enabled, note, updated_at
+      `SELECT id, user_sub, user_name, role_code, department_code, action_code, stage_code, effect, enabled, note, updated_at
        FROM device_permission_policies
        ORDER BY id ASC
        LIMIT 5000`
@@ -3405,6 +3417,8 @@ app.put(
     res.json(
       rows.map((item) => ({
         id: Number(item.id),
+        user_sub: item.user_sub || '',
+        user_name: item.user_name || '',
         role_code: item.role_code,
         department_code: item.department_code,
         action_code: item.action_code,

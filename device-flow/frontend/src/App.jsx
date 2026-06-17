@@ -34,6 +34,35 @@ const timelineActionLabelMap = {
   REWORK: '退回重做',
 }
 
+const auditActionLabelMap = {
+  CREATE: '创建记录',
+  CREATE_JOB: '创建流转单',
+  UPDATE_ATTACHMENT_UPLOAD_SETTING: '更新附件上传配置',
+  SLA_REMINDER: '生成SLA催办',
+  RETENTION_RUN: '执行留存清理',
+  SCAN_APPLY: '扫码应用',
+  UPDATE_SLA_RULES: '更新SLA规则',
+  DELETE_SLA_REMINDER: '删除催办记录',
+  PURGE_SLA_REMINDERS: '清空催办记录',
+  UPSERT_HW_TEMPLATES: '更新硬件模板',
+  UPSERT_PERMISSION_POLICIES: '更新权限策略',
+  UPDATE_DUAL_SIGN_POLICY: '更新双签策略',
+  LOCK_JOB: '锁定流转单',
+  UNLOCK_JOB: '解锁流转单',
+  DELETE_ATTACHMENT: '删除附件',
+  UPLOAD_ATTACHMENT: '上传附件',
+  REWORK: '退回重做',
+  CANCEL: '取消流转单',
+  CHANGE_REQUEST_WITHDRAW: '撤回变更申请',
+  CHANGE_REQUEST_REJECT: '驳回变更申请',
+  CHANGE_REQUEST_APPROVE: '通过变更申请',
+  WITHDRAW_APPROVED: '批准撤回',
+  UPDATE_RETENTION_POLICIES: '更新留存策略',
+  CREATE_CALLBACK_SUBSCRIPTION: '创建回调订阅',
+  UPDATE_CALLBACK_SUBSCRIPTION: '更新回调订阅',
+  CREATE_API_CLIENT: '创建API客户端',
+}
+
 const nextActionByStage = {
   CREATED: 'receive',
   RECEIVED: 'hardware-check',
@@ -228,6 +257,29 @@ const stageText = (value) => {
 const timelineActionText = (value) => {
   const key = String(value || '').toUpperCase()
   return timelineActionLabelMap[key] || value || '-'
+}
+
+const auditActionText = (value) => {
+  const key = String(value || '').toUpperCase()
+  return auditActionLabelMap[key] || timelineActionLabelMap[key] || value || '-'
+}
+
+const auditActionOptions = [
+  { value: '', label: '全部动作' },
+  ...Object.entries(auditActionLabelMap).map(([value, label]) => ({ value, label })),
+]
+
+const roleText = (value) => {
+  const key = normalizeRole(value)
+  const map = {
+    sysadmin: '系统管理员',
+    admin: '管理员',
+    auditor: '审计员',
+    reviewer: '审核员',
+    editor: '编辑员',
+    user: '普通用户',
+  }
+  return map[key] || value || '-'
 }
 
 const getPortalBaseUrl = () => {
@@ -823,7 +875,7 @@ function App() {
   const canDeleteSlaReminder = permissionButtonAllowed('slaReminderDelete')
   const canManagePermissions = permissionButtonAllowed('permissionManage')
   const canEditAttachmentUploadSetting = permissionButtonAllowed('attachmentSettings')
-  const canReadAuditLogs = permissionMenuAllowed('audit')
+  const canReadAuditLogs = isAuditOnlyUser && permissionMenuAllowed('audit')
   const sidebarMenuItems = useMemo(() => {
     const items = [
       { key: 'dashboard', label: '看板总览' },
@@ -864,11 +916,23 @@ function App() {
     }))
     const stageOptions = (Array.isArray(meta.stage_actions) ? meta.stage_actions : []).map((item) => ({
       value: item.action_code,
-      label: `阶段：${item.label || item.action}`,
+      label: `流程动作：${item.label || item.action}`,
       stage_code: item.stage_code,
     }))
     return [...menuOptions, ...buttonOptions, ...stageOptions]
   }, [permissionMeta])
+
+  const permissionUserOptions = useMemo(
+    () =>
+      (Array.isArray(systemUsers) ? systemUsers : []).map((item) => ({
+        value: String(item.id),
+        label: `${item.username} · ${roleText(item.role)}${item.department_code ? ` · ${item.department_code}` : ''}`,
+        name: item.username,
+        role: item.role,
+        department_code: item.department_code || '*',
+      })),
+    [systemUsers],
+  )
 
   const permissionOverviewGroups = useMemo(() => {
     const meta = permissionMeta || {}
@@ -1309,15 +1373,23 @@ function App() {
     }
   }
 
-  const normalizePermissionPolicyDraft = (item = {}) => ({
-    role_code: trimText(item.role_code || '*').toLowerCase() || '*',
-    department_code: trimText(item.department_code || '*').toUpperCase() || '*',
-    action_code: trimText(item.action_code || 'menu.jobs').toLowerCase() || 'menu.jobs',
-    stage_code: trimText(item.stage_code || '*').toUpperCase() || '*',
-    effect: trimText(item.effect || 'ALLOW').toUpperCase() === 'DENY' ? 'DENY' : 'ALLOW',
-    enabled: item.enabled === undefined ? true : Boolean(item.enabled),
-    note: trimText(item.note || ''),
-  })
+  const normalizePermissionPolicyDraft = (item = {}) => {
+    const actionCodes = Array.isArray(item.selected_action_codes)
+      ? item.selected_action_codes
+      : [item.action_code || 'menu.jobs']
+    return {
+      user_sub: trimText(item.user_sub || ''),
+      user_name: trimText(item.user_name || ''),
+      role_code: trimText(item.role_code || '*').toLowerCase() || '*',
+      department_code: trimText(item.department_code || '*').toUpperCase() || '*',
+      action_code: trimText(item.action_code || actionCodes[0] || 'menu.jobs').toLowerCase() || 'menu.jobs',
+      selected_action_codes: Array.from(new Set(actionCodes.map((code) => trimText(code).toLowerCase()).filter(Boolean))),
+      stage_code: trimText(item.stage_code || '*').toUpperCase() || '*',
+      effect: trimText(item.effect || 'ALLOW').toUpperCase() === 'DENY' ? 'DENY' : 'ALLOW',
+      enabled: item.enabled === undefined ? true : Boolean(item.enabled),
+      note: trimText(item.note || ''),
+    }
+  }
 
   const refreshPermissionEffective = async () => {
     const data = await apiRequest('/api/device-flow/permissions/effective')
@@ -1350,9 +1422,12 @@ function App() {
     setPermissionPolicyDrafts((prev) => [
       ...prev,
       normalizePermissionPolicyDraft({
+        user_sub: '',
+        user_name: '',
         role_code: '*',
         department_code: '*',
         action_code: 'menu.jobs',
+        selected_action_codes: ['menu.jobs'],
         stage_code: '*',
         effect: 'ALLOW',
         enabled: true,
@@ -1376,7 +1451,23 @@ function App() {
     if (permissionPolicyDrafts.length === 0) return showError('请至少保留一条权限策略')
     try {
       setPermissionLoading(true)
-      const rows = permissionPolicyDrafts.map(normalizePermissionPolicyDraft)
+      const rows = permissionPolicyDrafts.flatMap((item) => {
+        const normalized = normalizePermissionPolicyDraft(item)
+        const codes = normalized.selected_action_codes.length ? normalized.selected_action_codes : [normalized.action_code]
+        const userOption = permissionUserOptions.find((entry) => entry.value === normalized.user_sub)
+        return codes.map((code) => {
+          const option = permissionActionOptions.find((entry) => entry.value === code)
+          return {
+            ...normalized,
+            user_name: userOption?.name || normalized.user_name,
+            role_code: userOption?.role || normalized.role_code,
+            department_code: userOption?.department_code || normalized.department_code,
+            action_code: code,
+            stage_code: option?.stage_code || normalized.stage_code || '*',
+          }
+        })
+      })
+      if (rows.some((item) => !item.user_sub)) return showError('请选择用户')
       const saved = await apiRequest('/api/device-flow/permissions/policies', {
         method: 'PUT',
         body: { policies: rows },
@@ -2611,7 +2702,7 @@ function App() {
                             <tr key={`recent-log-${item.id}`}>
                               <td>{parseApiDate(item.created_at)}</td>
                               <td>{item.username || '-'}</td>
-                              <td>{item.action || '-'}</td>
+                              <td>{auditActionText(item.action)}</td>
                               <td>
                                 {item.job_id ? (
                                   <button
@@ -3104,7 +3195,7 @@ function App() {
                 <div>
                   <strong>策略明细</strong>
                   <div className="muted">
-                    默认沿用系统角色权限；命中策略后，DENY 优先于 ALLOW。部门为空时使用 * 表示全部部门。
+                    在这里选择用户并配置权限项；用户角色仍在系统管理中维护。命中策略后，DENY 优先于 ALLOW。
                   </div>
                 </div>
                 <span className="muted">已加载 {Number(permissionPolicies.length || 0)} 条</span>
@@ -3113,10 +3204,10 @@ function App() {
                 <table className="table">
                   <thead>
                     <tr>
-                      <th>角色</th>
+                      <th>用户</th>
                       <th>部门</th>
-                      <th>动作</th>
-                      <th>阶段</th>
+                      <th>权限项</th>
+                      <th>适用阶段</th>
                       <th>结果</th>
                       <th>启用</th>
                       <th>备注</th>
@@ -3128,12 +3219,21 @@ function App() {
                       <tr key={`permission-policy-${idx}`}>
                         <td>
                           <select
-                            value={item.role_code}
-                            onChange={(e) => updatePermissionPolicyDraft(idx, { role_code: e.target.value })}
-                            disabled={!canManagePermissions}
+                            value={item.user_sub}
+                            onChange={(e) => {
+                              const selected = permissionUserOptions.find((entry) => entry.value === e.target.value)
+                              updatePermissionPolicyDraft(idx, {
+                                user_sub: e.target.value,
+                                user_name: selected?.name || '',
+                                role_code: selected?.role || '*',
+                                department_code: selected?.department_code || '*',
+                              })
+                            }}
+                            disabled={!canManagePermissions || systemUsersLoading}
                           >
-                            {(Array.isArray(permissionMeta?.roles) ? permissionMeta.roles : ['admin', 'sysadmin', 'user', 'editor', 'reviewer', 'auditor', '*']).map((role) => (
-                              <option key={role} value={role}>{role}</option>
+                            <option value="">{systemUsersLoading ? '用户加载中...' : '选择用户'}</option>
+                            {permissionUserOptions.map((option) => (
+                              <option key={option.value} value={option.value}>{option.label}</option>
                             ))}
                           </select>
                         </td>
@@ -3147,15 +3247,20 @@ function App() {
                         </td>
                         <td>
                           <select
-                            value={item.action_code}
+                            multiple
+                            value={item.selected_action_codes}
                             onChange={(e) => {
-                              const option = permissionActionOptions.find((entry) => entry.value === e.target.value)
+                              const values = Array.from(e.target.selectedOptions).map((option) => option.value)
+                              const first = values[0] || 'menu.jobs'
+                              const option = permissionActionOptions.find((entry) => entry.value === first)
                               updatePermissionPolicyDraft(idx, {
-                                action_code: e.target.value,
+                                action_code: first,
+                                selected_action_codes: values,
                                 stage_code: option?.stage_code || '*',
                               })
                             }}
                             disabled={!canManagePermissions}
+                            size={4}
                           >
                             {(permissionActionOptions.length ? permissionActionOptions : [{ value: 'menu.jobs', label: '菜单：流转单列表' }]).map((option) => (
                               <option key={option.value} value={option.value}>{option.label}</option>
@@ -3654,14 +3759,17 @@ function App() {
                 </div>
                 <div className="field">
                   <label>动作</label>
-                  <input
+                  <select
                     value={auditFilter.action}
                     onChange={(e) => {
                       setAuditPage(1)
-                      setAuditFilter((prev) => ({ ...prev, action: e.target.value.toUpperCase() }))
+                      setAuditFilter((prev) => ({ ...prev, action: e.target.value }))
                     }}
-                    placeholder="如 STAGE_TEST"
-                  />
+                  >
+                    {auditActionOptions.map((item) => (
+                      <option key={item.value || 'all'} value={item.value}>{item.label}</option>
+                    ))}
+                  </select>
                 </div>
                 <div className="field">
                   <label>操作人</label>
@@ -3714,8 +3822,8 @@ function App() {
                       <tr key={`audit-${row.id}`}>
                         <td>{parseApiDate(row.created_at)}</td>
                         <td>{row.username || '-'}</td>
-                        <td>{row.user_role || '-'}</td>
-                        <td>{row.action || '-'}</td>
+                        <td>{roleText(row.user_role)}</td>
+                        <td>{auditActionText(row.action)}</td>
                         <td>
                           {row.job_id ? (
                             <button

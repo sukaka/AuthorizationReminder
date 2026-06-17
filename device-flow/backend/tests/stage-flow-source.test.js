@@ -85,6 +85,27 @@ test('frontend permission page groups policies by business permission category',
   assert.match(frontendApp, /策略明细/);
 });
 
+test('permission policies target users and allow selecting multiple permissions at once', () => {
+  assert.match(backendIndex, /user_sub/);
+  assert.match(backendIndex, /user_name/);
+  assert.match(backendIndex, /findMatchedPermissionPolicy = async \(\{ userSub,/);
+  assert.match(frontendApp, /selected_action_codes/);
+  assert.match(frontendApp, /permissionUserOptions/);
+  assert.match(frontendApp, /multiple/);
+  assert.match(frontendApp, /选择用户/);
+  assert.match(frontendApp, /权限项/);
+});
+
+test('audit log entry is auditor-only and rendered with chinese labels', () => {
+  assert.match(backendIndex, /const AUDIT_READER_ROLES = new Set\(\['auditor'\]\)/);
+  assert.match(frontendApp, /const canReadAuditLogs = isAuditOnlyUser && permissionMenuAllowed\('audit'\)/);
+  assert.match(frontendApp, /auditActionLabelMap/);
+  assert.match(frontendApp, /auditActionText/);
+  assert.match(frontendApp, /roleText/);
+  assert.match(frontendApp, /创建流转单/);
+  assert.match(frontendApp, /更新权限策略/);
+});
+
 test('frontend labels and flow copy match the required operation flow', () => {
   for (const stage of expectedStages) {
     assert.match(frontendApp, new RegExp(`${stage}:`), `frontend should label ${stage}`);

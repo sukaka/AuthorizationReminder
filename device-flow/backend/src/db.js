@@ -454,6 +454,8 @@ const createSchema = async () => {
 
   await run(`CREATE TABLE IF NOT EXISTS device_permission_policies (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    user_sub VARCHAR(64) NOT NULL DEFAULT '',
+    user_name VARCHAR(128) NOT NULL DEFAULT '',
     role_code VARCHAR(32) NOT NULL DEFAULT '*',
     department_code VARCHAR(64) NOT NULL DEFAULT '*',
     action_code VARCHAR(64) NOT NULL DEFAULT '*',
@@ -596,6 +598,8 @@ const createSchema = async () => {
   await addColumnIfMissing('device_dual_sign_sessions', 'expected_second_signer_sub', 'expected_second_signer_sub VARCHAR(64) NULL');
   await addColumnIfMissing('device_dual_sign_sessions', 'expected_second_signer_name', 'expected_second_signer_name VARCHAR(128) NULL');
   await addColumnIfMissing('device_dual_sign_sessions', 'expected_second_signer_role', 'expected_second_signer_role VARCHAR(32) NULL');
+  await addColumnIfMissing('device_permission_policies', 'user_sub', "user_sub VARCHAR(64) NOT NULL DEFAULT ''");
+  await addColumnIfMissing('device_permission_policies', 'user_name', "user_name VARCHAR(128) NOT NULL DEFAULT ''");
   await addIndexIfMissing('device_jobs', 'idx_jobs_status_updated', 'status, updated_at');
   await addIndexIfMissing('device_jobs', 'idx_jobs_model_stage', 'device_model, current_stage');
   await addIndexIfMissing('device_jobs', 'idx_jobs_stage_status_updated', 'current_stage, status, updated_at');
