@@ -48,6 +48,11 @@ const nextActionByStage = {
   OUTBOUNDED_FOR_SHIP: 'ship',
 }
 
+const optionalNextActionsByStage = {
+  HARDWARE_CHECKED: ['warehouse-after-hardware', 'os-install'],
+  PACKED: ['warehouse-after-pack', 'ship'],
+}
+
 const actionLabelMap = {
   receive: '执行收货',
   'hardware-check': '执行硬件检查',
@@ -670,6 +675,7 @@ function App() {
   })
 
   const [advanceForm, setAdvanceForm] = useState({ ...initialAdvanceForm })
+  const [selectedAdvanceAction, setSelectedAdvanceAction] = useState('')
 
   const [reworkForm, setReworkForm] = useState({
     target_stage: 'RECEIVED',
@@ -770,7 +776,13 @@ function App() {
     [],
   )
 
-  const nextAction = detail ? nextActionByStage[String(detail.current_stage || '').toUpperCase()] : ''
+  const currentStage = detail ? String(detail.current_stage || '').toUpperCase() : ''
+  const availableNextActions = detail
+    ? optionalNextActionsByStage[currentStage] || (nextActionByStage[currentStage] ? [nextActionByStage[currentStage]] : [])
+    : []
+  const nextAction = availableNextActions.includes(selectedAdvanceAction)
+    ? selectedAdvanceAction
+    : (availableNextActions[0] || '')
   const nextStageCode = nextAction ? String(({
     receive: 'RECEIVED',
     'hardware-check': 'HARDWARE_CHECKED',
@@ -1979,6 +1991,10 @@ function App() {
   }, [selectedJobId, token, isAuditOnlyUser])
 
   useEffect(() => {
+    setSelectedAdvanceAction('')
+  }, [detail?.id, detail?.current_stage])
+
+  useEffect(() => {
     if (!detailModalOpen) return
     const onKeyDown = (event) => {
       if (event.key !== 'Escape') return
@@ -2931,6 +2947,21 @@ function App() {
                         <div style={{ marginTop: 16 }} className="panel-subsection">
                           <strong>阶段执行表单</strong>
                           <div className="grid" style={{ marginTop: 8 }}>
+                            {availableNextActions.length > 1 ? (
+                              <div className="field" style={{ gridColumn: '1 / -1' }}>
+                                <label>下一动作</label>
+                                <select
+                                  value={nextAction}
+                                  onChange={(e) => setSelectedAdvanceAction(e.target.value)}
+                                >
+                                  {availableNextActions.map((action) => (
+                                    <option key={action} value={action}>
+                                      {actionLabelMap[action] || action}
+                                    </option>
+                                  ))}
+                                </select>
+                              </div>
+                            ) : null}
                             <div className="field" style={{ gridColumn: '1 / -1' }}>
                               <label>阶段备注</label>
                               <textarea

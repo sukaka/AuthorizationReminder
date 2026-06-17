@@ -28,6 +28,18 @@ test('backend stage list includes stock and outbound checkpoints in order', () =
   assert.deepEqual(actualStages, expectedStages);
 });
 
+test('backend allows skipping optional stock and outbound checkpoint pairs', () => {
+  assert.match(backendIndex, /HARDWARE_CHECKED:\s*'OS_INSTALLED'/);
+  assert.match(backendIndex, /PACKED:\s*'SHIPPED'/);
+  assert.match(backendIndex, /OPTIONAL_STAGE_SKIPS/);
+});
+
+test('frontend exposes optional next actions for stock checkpoint stages', () => {
+  assert.match(frontendApp, /HARDWARE_CHECKED:\s*\['warehouse-after-hardware',\s*'os-install'\]/);
+  assert.match(frontendApp, /PACKED:\s*\['warehouse-after-pack',\s*'ship'\]/);
+  assert.match(frontendApp, /setSelectedAdvanceAction/);
+});
+
 test('frontend labels and flow copy match the required operation flow', () => {
   for (const stage of expectedStages) {
     assert.match(frontendApp, new RegExp(`${stage}:`), `frontend should label ${stage}`);

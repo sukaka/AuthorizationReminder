@@ -71,6 +71,10 @@ const STAGES = [
   'OUTBOUNDED_FOR_SHIP',
   'SHIPPED',
 ];
+const OPTIONAL_STAGE_SKIPS = {
+  HARDWARE_CHECKED: 'OS_INSTALLED',
+  PACKED: 'SHIPPED',
+};
 const CHANGE_REQUEST_TYPES = new Set(['WITHDRAW', 'CANCEL', 'CORRECT']);
 const CHANGE_REQUEST_STATUS = {
   PENDING: 'PENDING',
@@ -619,9 +623,12 @@ const parseBatchJobIds = (rawIds) => {
 const stageIndex = (stage) => STAGES.indexOf(String(stage || '').toUpperCase());
 
 const ensureForwardTransition = (fromStage, toStage) => {
-  const fromIndex = stageIndex(fromStage);
-  const toIndex = stageIndex(toStage);
+  const from = String(fromStage || '').toUpperCase();
+  const to = String(toStage || '').toUpperCase();
+  const fromIndex = stageIndex(from);
+  const toIndex = stageIndex(to);
   if (fromIndex < 0 || toIndex < 0) throw appError('状态非法');
+  if (OPTIONAL_STAGE_SKIPS[from] === to) return;
   if (toIndex !== fromIndex + 1) throw appError(`流程必须按顺序推进：${fromStage} -> ${toStage}`);
 };
 
