@@ -2707,7 +2707,7 @@ function App() {
 
                   {canReadAuditLogs ? (
                     <div className="panel-subsection" style={{ marginTop: 14 }}>
-                      <strong>最近操作日志</strong>
+                      <strong>最近审计日志</strong>
                       <div className="table-wrap" style={{ marginTop: 8 }}>
                         <table className="table">
                           <thead>

@@ -105,6 +105,8 @@ test('audit log entry is auditor-only and rendered with chinese labels', () => {
   assert.match(frontendApp, /auditActionLabelMap/);
   assert.match(frontendApp, /auditActionText/);
   assert.match(frontendApp, /auditMessageText/);
+  assert.match(frontendApp, /最近审计日志/);
+  assert.doesNotMatch(frontendApp, /最近操作日志/);
   assert.match(frontendApp, /roleText/);
   assert.match(frontendApp, /创建流转单/);
   assert.match(frontendApp, /更新权限策略/);
