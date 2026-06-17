@@ -465,6 +465,35 @@ button {
   background: linear-gradient(180deg, #ffffff, #f8fbff);
 }
 
+.detail-tabbar {
+  display: flex;
+  gap: 8px;
+  margin-top: 14px;
+  padding: 6px;
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  border-radius: 12px;
+  background: #f8fafc;
+  overflow-x: auto;
+}
+
+.detail-tabbar button {
+  border: 1px solid transparent;
+  background: transparent;
+  color: #475569;
+  border-radius: 9px;
+  padding: 8px 12px;
+  min-width: 92px;
+  white-space: nowrap;
+}
+
+.detail-tabbar button.active {
+  color: var(--accent);
+  background: #fff;
+  border-color: rgba(37, 99, 235, 0.28);
+  box-shadow: 0 6px 14px rgba(15, 23, 42, 0.08);
+  font-weight: 700;
+}
+
 .section-title-row {
   display: flex;
   justify-content: space-between;

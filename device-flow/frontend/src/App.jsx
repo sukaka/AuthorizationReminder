@@ -669,6 +669,14 @@ const defaultPermissionEffective = {
   stageActions: {},
 }
 
+const detailTabs = [
+  { key: 'advance', label: '执行推进' },
+  { key: 'attachments', label: '附件留证' },
+  { key: 'responsibility', label: '责任节点' },
+  { key: 'rework', label: '退回处理' },
+  { key: 'history', label: '流转记录' },
+]
+
 const formatFileSize = (bytes) => {
   const size = Number(bytes || 0)
   if (!Number.isFinite(size) || size < 0) return '-'
@@ -698,6 +706,7 @@ function App() {
   const [detailModalOpen, setDetailModalOpen] = useState(false)
   const [detailModalPosition, setDetailModalPosition] = useState({ x: 0, y: 0 })
   const [detailModalDragging, setDetailModalDragging] = useState(false)
+  const [activeDetailTab, setActiveDetailTab] = useState('advance')
   const detailModalRef = useRef(null)
   const detailModalDragRef = useRef(null)
 
@@ -2230,6 +2239,7 @@ function App() {
 
   useEffect(() => {
     setSelectedAdvanceAction('')
+    setActiveDetailTab('advance')
   }, [detail?.id, detail?.current_stage])
 
   useEffect(() => {
@@ -3340,6 +3350,20 @@ function App() {
                           ))}
                         </div>
 
+                        <div className="detail-tabbar">
+                          {detailTabs.map((item) => (
+                            <button
+                              type="button"
+                              className={activeDetailTab === item.key ? 'active' : ''}
+                              key={item.key}
+                              onClick={() => setActiveDetailTab(item.key)}
+                            >
+                              {item.label}
+                            </button>
+                          ))}
+                        </div>
+
+                        {activeDetailTab === 'responsibility' ? (
                         <div style={{ marginTop: 16 }} className="panel-subsection">
                           <strong>关键节点责任人</strong>
                           <div className="table-wrap" style={{ marginTop: 8 }}>
@@ -3365,7 +3389,9 @@ function App() {
                             </table>
                           </div>
                         </div>
+                        ) : null}
 
+                        {activeDetailTab === 'advance' ? (
                         <div style={{ marginTop: 16 }} className="panel-subsection detail-workbench">
                           <div className="section-title-row">
                             <div>
@@ -3416,7 +3442,9 @@ function App() {
                             {nextAction && !canRunNextAction ? <span className="muted">当前角色无权限执行该阶段</span> : null}
                           </div>
                         </div>
+                        ) : null}
 
+                        {activeDetailTab === 'rework' ? (
                         <div style={{ marginTop: 16 }} className="panel-subsection">
                           <strong>退回重做</strong>
                           <div className="toolbar" style={{ marginTop: 8 }}>
@@ -3440,7 +3468,9 @@ function App() {
                             </button>
                           </div>
                         </div>
+                        ) : null}
 
+                        {activeDetailTab === 'attachments' ? (
                         <div style={{ marginTop: 16 }} className="panel-subsection">
                           <div className="section-title-row">
                             <div>
@@ -3557,7 +3587,9 @@ function App() {
                             </table>
                           </div>
                         </div>
+                        ) : null}
 
+                        {activeDetailTab === 'history' ? (
                         <div style={{ marginTop: 14 }}>
                           <strong>阶段时间轴</strong>
                           <div className="timeline" style={{ marginTop: 8 }}>
@@ -3581,6 +3613,7 @@ function App() {
                             ) : null}
                           </div>
                         </div>
+                        ) : null}
                       </>
                     )}
                   </div>

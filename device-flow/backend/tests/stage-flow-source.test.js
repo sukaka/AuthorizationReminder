@@ -66,6 +66,17 @@ test('frontend detail page is organized as a task workbench with guided optional
   assert.match(frontendApp, /留证要求/);
 });
 
+test('frontend detail workbench separates dense content into tabs', () => {
+  assert.match(frontendApp, /detailTabs/);
+  assert.match(frontendApp, /activeDetailTab/);
+  assert.match(frontendApp, /detail-tabbar/);
+  assert.match(frontendApp, /执行推进/);
+  assert.match(frontendApp, /附件留证/);
+  assert.match(frontendApp, /责任节点/);
+  assert.match(frontendApp, /退回处理/);
+  assert.match(frontendApp, /流转记录/);
+});
+
 test('frontend permission page groups policies by business permission category', () => {
   assert.match(frontendApp, /菜单权限/);
   assert.match(frontendApp, /操作权限/);
