@@ -14,6 +14,16 @@ const {
   normalizeOrigin,
 } = require('./cors-origin');
 const { get, initDb, query, transaction } = require('./db');
+const {
+  attachmentUploadMbToBytes,
+  getDefaultAttachmentUploadMaxMb,
+  normalizeAttachmentUploadMaxMb,
+  toAttachmentUploadSettingResponse,
+} = require('./upload-settings');
+const {
+  assertExpectedSecondSigner,
+  normalizeExpectedSecondSigner,
+} = require('./dual-sign');
 
 const app = express();
 const PORT = Number(process.env.PORT || 5184);
@@ -25,7 +35,7 @@ const SECURITY_STRICT_MODE = process.env.SECURITY_STRICT_MODE === 'true' || proc
 const DASHBOARD_OVERDUE_DAYS = Math.max(1, Number(process.env.DASHBOARD_OVERDUE_DAYS || 3));
 const SLA_AUTO_RUN_INTERVAL_MS = Math.max(60000, Number(process.env.SLA_AUTO_RUN_INTERVAL_MS || 5 * 60 * 1000));
 const UPLOAD_ROOT = path.resolve(process.env.UPLOAD_ROOT || './uploads/device-flow');
-const UPLOAD_MAX_FILE_SIZE = Math.max(1024 * 100, Number(process.env.UPLOAD_MAX_FILE_SIZE_MB || 10) * 1024 * 1024);
+const ATTACHMENT_UPLOAD_SETTING_KEY = 'attachment_upload_max_file_size_mb';
 const ARCHIVE_ROOT = path.resolve(process.env.ARCHIVE_ROOT || './uploads/device-flow-archive');
 const AUDIT_SIGNING_KEY = String(process.env.AUDIT_SIGNING_KEY || process.env.JWT_SECRET || 'device-flow-audit-signing-key');
 const weakSecrets = new Set(['dev-secret-change-me', 'change-me', '123456', 'password', '']);
@@ -47,7 +57,20 @@ const UPLOAD_ALLOWED_MIME = new Set(
     .filter(Boolean)
 );
 
-const STAGES = ['CREATED', 'RECEIVED', 'HARDWARE_CHECKED', 'OS_INSTALLED', 'TESTED', 'APPROVED', 'PACKED', 'SHIPPED'];
+const STAGES = [
+  'CREATED',
+  'RECEIVED',
+  'HARDWARE_CHECKED',
+  'WAREHOUSED_AFTER_HARDWARE',
+  'OUTBOUNDED_FOR_INSTALL',
+  'OS_INSTALLED',
+  'TESTED',
+  'APPROVED',
+  'PACKED',
+  'WAREHOUSED_AFTER_PACK',
+  'OUTBOUNDED_FOR_SHIP',
+  'SHIPPED',
+];
 const CHANGE_REQUEST_TYPES = new Set(['WITHDRAW', 'CANCEL', 'CORRECT']);
 const CHANGE_REQUEST_STATUS = {
   PENDING: 'PENDING',
@@ -64,40 +87,56 @@ const AUDIT_READER_ROLES = new Set(['auditor']);
 const ACTION_TO_STAGE = {
   receive: 'RECEIVED',
   'hardware-check': 'HARDWARE_CHECKED',
+  'warehouse-after-hardware': 'WAREHOUSED_AFTER_HARDWARE',
+  'outbound-for-install': 'OUTBOUNDED_FOR_INSTALL',
   'os-install': 'OS_INSTALLED',
   test: 'TESTED',
   approve: 'APPROVED',
   pack: 'PACKED',
+  'warehouse-after-pack': 'WAREHOUSED_AFTER_PACK',
+  'outbound-for-ship': 'OUTBOUNDED_FOR_SHIP',
   ship: 'SHIPPED',
 };
 const ACTION_ALLOWED_ROLES = {
   receive: new Set(['admin', 'sysadmin']),
   'hardware-check': new Set(['admin', 'sysadmin']),
+  'warehouse-after-hardware': new Set(['admin', 'sysadmin']),
+  'outbound-for-install': new Set(['admin', 'sysadmin']),
   'os-install': new Set(['admin', 'sysadmin']),
   test: new Set(['admin', 'sysadmin']),
   approve: new Set(['admin', 'sysadmin']),
   pack: new Set(['admin', 'sysadmin']),
+  'warehouse-after-pack': new Set(['admin', 'sysadmin']),
+  'outbound-for-ship': new Set(['admin', 'sysadmin']),
   ship: new Set(['admin', 'sysadmin']),
 };
 const ACTION_PERMISSION_CODE = {
   receive: 'stage.receive',
   'hardware-check': 'stage.hardware-check',
+  'warehouse-after-hardware': 'stage.warehouse-after-hardware',
+  'outbound-for-install': 'stage.outbound-for-install',
   'os-install': 'stage.os-install',
   test: 'stage.test',
   approve: 'stage.approve',
   pack: 'stage.pack',
+  'warehouse-after-pack': 'stage.warehouse-after-pack',
+  'outbound-for-ship': 'stage.outbound-for-ship',
   ship: 'stage.ship',
 };
 const SLA_TRACKED_STAGES = STAGES.filter((stage) => stage !== 'SHIPPED');
 const SLA_STAGE_LABEL = {
   CREATED: '已创建',
-  RECEIVED: '已收货',
-  HARDWARE_CHECKED: '硬件已检查',
-  OS_INSTALLED: '系统已安装',
-  TESTED: '已测试',
-  APPROVED: '已审核',
-  PACKED: '已装箱',
-  SHIPPED: '已发货',
+  RECEIVED: '收货',
+  HARDWARE_CHECKED: '硬件检查',
+  WAREHOUSED_AFTER_HARDWARE: '入库',
+  OUTBOUNDED_FOR_INSTALL: '出库',
+  OS_INSTALLED: '系统安装',
+  TESTED: '测试',
+  APPROVED: '审核',
+  PACKED: '装箱',
+  WAREHOUSED_AFTER_PACK: '入库',
+  OUTBOUNDED_FOR_SHIP: '出库',
+  SHIPPED: '发货',
 };
 
 const defaultOrigins = ['http://localhost:18083', 'http://127.0.0.1:18083'].map(normalizeOrigin);
@@ -183,18 +222,22 @@ if (!fs.existsSync(ARCHIVE_ROOT)) {
   fs.mkdirSync(ARCHIVE_ROOT, { recursive: true });
 }
 
-const upload = multer({
-  storage: multer.diskStorage({
-    destination: (_req, _file, cb) => cb(null, UPLOAD_ROOT),
-    filename: (_req, file, cb) => {
-      const ext = path.extname(file.originalname || '').toLowerCase();
-      const safeExt = /^[a-z0-9.]+$/.test(ext.replace('.', '')) ? ext : '';
-      const unique = `${Date.now()}-${crypto.randomUUID()}`;
-      cb(null, `${unique}${safeExt}`);
-    },
-  }),
+let attachmentUploadMaxFileSizeMb = getDefaultAttachmentUploadMaxMb();
+
+const attachmentStorage = multer.diskStorage({
+  destination: (_req, _file, cb) => cb(null, UPLOAD_ROOT),
+  filename: (_req, file, cb) => {
+    const ext = path.extname(file.originalname || '').toLowerCase();
+    const safeExt = /^[a-z0-9.]+$/.test(ext.replace('.', '')) ? ext : '';
+    const unique = `${Date.now()}-${crypto.randomUUID()}`;
+    cb(null, `${unique}${safeExt}`);
+  },
+});
+
+const createAttachmentUpload = () => multer({
+  storage: attachmentStorage,
   limits: {
-    fileSize: UPLOAD_MAX_FILE_SIZE,
+    fileSize: attachmentUploadMbToBytes(attachmentUploadMaxFileSizeMb),
   },
   fileFilter: (_req, file, cb) => {
     const mime = String(file.mimetype || '').trim().toLowerCase();
@@ -206,6 +249,8 @@ const upload = multer({
     return cb(null, true);
   },
 });
+
+const uploadAttachmentFile = (req, res, next) => createAttachmentUpload().single('file')(req, res, next);
 
 const importUpload = multer({
   storage: multer.memoryStorage(),
@@ -372,6 +417,7 @@ const authRequired = asyncHandler(async (req, _res, next) => {
   const auth = await introspectToken(token);
   req.user = auth.user;
   req.authApps = auth.apps;
+  req.authToken = token;
   next();
 });
 
@@ -711,6 +757,20 @@ const buildStagePayload = (action, rawPayload) => {
     });
   }
 
+  if (action === 'warehouse-after-hardware') {
+    return compactObject({
+      warehouse_location: trimText(payload.warehouse_location),
+      warehouse_note: trimText(payload.warehouse_note),
+    });
+  }
+
+  if (action === 'outbound-for-install') {
+    return compactObject({
+      outbound_target: trimText(payload.outbound_target),
+      outbound_note: trimText(payload.outbound_note),
+    });
+  }
+
   if (action === 'test') {
     return compactObject({
       boot_test: normalizeFlag(payload.boot_test),
@@ -736,6 +796,20 @@ const buildStagePayload = (action, rawPayload) => {
       accessory_check: normalizeFlag(payload.accessory_check),
       box_no: trimText(payload.box_no),
       pack_note: trimText(payload.pack_note),
+    });
+  }
+
+  if (action === 'warehouse-after-pack') {
+    return compactObject({
+      warehouse_location: trimText(payload.warehouse_location),
+      warehouse_note: trimText(payload.warehouse_note),
+    });
+  }
+
+  if (action === 'outbound-for-ship') {
+    return compactObject({
+      outbound_target: trimText(payload.outbound_target),
+      outbound_note: trimText(payload.outbound_note),
     });
   }
 
@@ -904,6 +978,49 @@ const getDualSignPolicyForStage = async (stageCode) => {
   return {
     enabled: Number(row.enabled || 0) === 1,
     requiredSigners: Math.max(1, Number(row.required_signers || 1)),
+  };
+};
+
+const fetchDeviceFlowUserDirectory = async (token) => {
+  if (!token) throw appError('登录凭证缺失，无法加载复签人', 401);
+  const resp = await fetchWithTimeout(
+    `${AUTH_SERVICE_URL}/api/auth/system-users?system=device-flow`,
+    {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    },
+    AUTH_FETCH_TIMEOUT_MS
+  );
+  let payload = null;
+  try {
+    const rawText = await resp.text();
+    payload = rawText ? JSON.parse(rawText) : null;
+  } catch (_err) {
+    payload = null;
+  }
+  if (!resp.ok) {
+    throw appError(payload?.error || '复签人列表加载失败', resp.status || 502);
+  }
+  return Array.isArray(payload) ? payload : [];
+};
+
+const resolveExpectedSecondSigner = async ({ req, expectedSub, firstSignerSub }) => {
+  let normalizedSub;
+  try {
+    normalizedSub = normalizeExpectedSecondSigner(expectedSub);
+  } catch (err) {
+    throw appError(err.message);
+  }
+  if (normalizedSub === trimText(firstSignerSub)) throw appError('第二复签人不能选择首签人本人', 409);
+  const users = await fetchDeviceFlowUserDirectory(req.authToken);
+  const user = users.find((item) => trimText(item?.id) === normalizedSub);
+  if (!user) throw appError('指定复签人不存在或无设备流转访问权限', 400);
+  return {
+    sub: normalizedSub,
+    name: trimText(user.username),
+    role: normalizeRole(user.role),
   };
 };
 
@@ -1112,6 +1229,55 @@ const writeOperationLogTx = async (tx, payload) => {
       }
     }
   }
+};
+
+const loadAttachmentUploadSetting = async () => {
+  const fallback = getDefaultAttachmentUploadMaxMb();
+  const row = await get('SELECT setting_value FROM device_system_settings WHERE setting_key = ?', [
+    ATTACHMENT_UPLOAD_SETTING_KEY,
+  ]);
+  try {
+    attachmentUploadMaxFileSizeMb = normalizeAttachmentUploadMaxMb(row?.setting_value || fallback);
+  } catch (err) {
+    attachmentUploadMaxFileSizeMb = fallback;
+    console.warn('[device-flow] invalid attachment upload setting, fallback to default:', err?.message || err);
+  }
+  return toAttachmentUploadSettingResponse(attachmentUploadMaxFileSizeMb);
+};
+
+const saveAttachmentUploadSetting = async ({ valueMb, actor, requestIp }) => {
+  const normalizedValue = normalizeAttachmentUploadMaxMb(valueMb);
+  await transaction(async (tx) => {
+    const beforeRow = await tx.get('SELECT setting_value FROM device_system_settings WHERE setting_key = ? FOR UPDATE', [
+      ATTACHMENT_UPLOAD_SETTING_KEY,
+    ]);
+    await tx.run(
+      `INSERT INTO device_system_settings
+       (setting_key, setting_value, note, updated_by_sub, updated_by_name, updated_by_role)
+       VALUES (?, ?, '附件上传大小上限（MB）', ?, ?, ?)
+       ON DUPLICATE KEY UPDATE
+         setting_value = VALUES(setting_value),
+         updated_by_sub = VALUES(updated_by_sub),
+         updated_by_name = VALUES(updated_by_name),
+         updated_by_role = VALUES(updated_by_role)`,
+      [ATTACHMENT_UPLOAD_SETTING_KEY, String(normalizedValue), actor.sub, actor.name, actor.role]
+    );
+    await writeOperationLogTx(tx, {
+      jobId: null,
+      userSub: actor.sub,
+      username: actor.name,
+      userRole: actor.role,
+      action: 'UPDATE_ATTACHMENT_UPLOAD_SETTING',
+      entity: 'device_system_settings',
+      entityId: null,
+      message: `更新附件上传大小上限为 ${normalizedValue}MB`,
+      beforeData: { max_file_size_mb: Number(beforeRow?.setting_value || 0) || null },
+      afterData: { max_file_size_mb: normalizedValue },
+      requestIp,
+    });
+  });
+  attachmentUploadMaxFileSizeMb = normalizedValue;
+  return toAttachmentUploadSettingResponse(normalizedValue);
 };
 
 const appendStageRecordTx = async (tx, payload) => {
@@ -3235,6 +3401,7 @@ app.get(
     const rows = await query(
       `SELECT id, token, job_id, action, from_stage, to_stage,
               first_signer_name, first_signer_role,
+              expected_second_signer_sub, expected_second_signer_name, expected_second_signer_role,
               second_signer_name, second_signer_role,
               status, expires_at, completed_at, created_at
        FROM device_dual_sign_sessions
@@ -3649,7 +3816,7 @@ app.delete(
 app.post(
   '/api/device-flow/jobs/:id/attachments',
   requireAttachmentUploader,
-  upload.single('file'),
+  uploadAttachmentFile,
   asyncHandler(async (req, res) => {
     const jobId = Number(req.params.id || 0);
     if (!Number.isInteger(jobId) || jobId <= 0) throw appError('ID非法');
@@ -3756,6 +3923,11 @@ app.post(
       if (!signatureInput) throw appError('双人复核阶段必须提供电子签名', 400);
 
       if (!dualSignToken) {
+        const expectedSecondSigner = await resolveExpectedSecondSigner({
+          req,
+          expectedSub: req.body?.expected_second_signer_sub,
+          firstSignerSub: actor.sub,
+        });
         const created = await transaction(async (tx) => {
           const current = await tx.get('SELECT id, current_stage, status, row_version FROM device_jobs WHERE id = ? FOR UPDATE', [id]);
           if (!current) throw appError('流转单不存在', 404);
@@ -3788,8 +3960,9 @@ app.post(
           const insertRes = await tx.run(
             `INSERT INTO device_dual_sign_sessions
              (token, job_id, action, from_stage, to_stage, stage_payload, remark, request_ip, expected_version,
-              first_signer_sub, first_signer_name, first_signer_role, first_signature, status, expires_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'PENDING_SECOND', DATE_ADD(NOW(), INTERVAL ? MINUTE))`,
+              first_signer_sub, first_signer_name, first_signer_role, first_signature,
+              expected_second_signer_sub, expected_second_signer_name, expected_second_signer_role, status, expires_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'PENDING_SECOND', DATE_ADD(NOW(), INTERVAL ? MINUTE))`,
             [
               token,
               id,
@@ -3804,6 +3977,9 @@ app.post(
               actor.name,
               actor.role,
               signHash,
+              expectedSecondSigner.sub,
+              expectedSecondSigner.name,
+              expectedSecondSigner.role,
               DUAL_SIGN_TOKEN_TTL_MINUTES,
             ]
           );
@@ -3822,6 +3998,8 @@ app.post(
               dual_sign_token: token,
               action,
               to_stage: toStage,
+              expected_second_signer_sub: expectedSecondSigner.sub,
+              expected_second_signer_name: expectedSecondSigner.name,
               expires_in_minutes: DUAL_SIGN_TOKEN_TTL_MINUTES,
             },
             requestIp: req.ip,
@@ -3830,6 +4008,9 @@ app.post(
           return {
             dual_sign_token: token,
             expected_version: Number(current.row_version || 0),
+            expected_second_signer_sub: expectedSecondSigner.sub,
+            expected_second_signer_name: expectedSecondSigner.name,
+            expected_second_signer_role: expectedSecondSigner.role,
             expires_in_minutes: DUAL_SIGN_TOKEN_TTL_MINUTES,
           };
         });
@@ -3858,6 +4039,17 @@ app.post(
         }
         if (trimText(sessionRow.first_signer_sub) === trimText(actor.sub)) {
           throw appError('双人复核必须由不同人员完成', 409);
+        }
+        if (trimText(sessionRow.expected_second_signer_sub)) {
+          try {
+            assertExpectedSecondSigner({
+              expectedSub: sessionRow.expected_second_signer_sub,
+              actorSub: actor.sub,
+              expectedName: sessionRow.expected_second_signer_name,
+            });
+          } catch (err) {
+            throw appError(err.message, 409);
+          }
         }
 
         await tx.run(
@@ -4673,6 +4865,36 @@ app.get(
 );
 
 app.get(
+  '/api/device-flow/settings/attachment-upload',
+  requireWriter,
+  asyncHandler(async (_req, res) => {
+    const setting = await loadAttachmentUploadSetting();
+    res.json(setting);
+  })
+);
+
+app.put(
+  '/api/device-flow/settings/attachment-upload',
+  requireWriter,
+  asyncHandler(async (req, res) => {
+    const actor = getActor(req);
+    if (!CHANGE_REVIEW_ROLES.has(normalizeRole(actor.role))) throw appError('仅管理员可修改附件上传配置', 403);
+    let maxFileSizeMb;
+    try {
+      maxFileSizeMb = normalizeAttachmentUploadMaxMb(req.body?.max_file_size_mb);
+    } catch (err) {
+      throw appError(err.message);
+    }
+    const setting = await saveAttachmentUploadSetting({
+      valueMb: maxFileSizeMb,
+      actor,
+      requestIp: req.ip,
+    });
+    res.json(setting);
+  })
+);
+
+app.get(
   '/api/device-flow/retention/policies',
   requireWriter,
   asyncHandler(async (_req, res) => {
@@ -5207,7 +5429,10 @@ const startMaintenanceRunner = () => {
 app.use((err, _req, res, _next) => {
   if (err instanceof multer.MulterError) {
     if (err.code === 'LIMIT_FILE_SIZE') {
-      return res.status(400).json({ error: `文件过大，最大支持 ${Math.floor(UPLOAD_MAX_FILE_SIZE / 1024 / 1024)}MB` });
+      return res.status(413).json({
+        error: `文件过大，最大支持 ${attachmentUploadMaxFileSizeMb}MB`,
+        max_file_size_mb: attachmentUploadMaxFileSizeMb,
+      });
     }
     return res.status(400).json({ error: err.message || '文件上传失败' });
   }
@@ -5224,6 +5449,7 @@ const start = async () => {
   try {
     validateSecurityBootstrap();
     await initDb();
+    await loadAttachmentUploadSetting();
     const auditRebuild = await rebuildAuditChainHashes();
     if (auditRebuild.updated > 0) {
       console.log(`[device-flow][audit] rebuilt ${auditRebuild.updated}/${auditRebuild.total} chain hashes`);

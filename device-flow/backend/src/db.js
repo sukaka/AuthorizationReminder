@@ -173,6 +173,15 @@ const seedDefaultRetentionPolicies = async () => {
   );
 };
 
+const seedDefaultSystemSettings = async () => {
+  await run(
+    `INSERT IGNORE INTO device_system_settings
+     (setting_key, setting_value, note)
+     VALUES ('attachment_upload_max_file_size_mb', ?, '附件上传大小上限（MB）')`,
+    [String(process.env.UPLOAD_MAX_FILE_SIZE_MB || 10)]
+  );
+};
+
 const transaction = async (fn) => {
   const conn = await pool.getConnection();
   try {
@@ -410,6 +419,9 @@ const createSchema = async () => {
     first_signer_name VARCHAR(128) NULL,
     first_signer_role VARCHAR(32) NULL,
     first_signature VARCHAR(256) NULL,
+    expected_second_signer_sub VARCHAR(64) NULL,
+    expected_second_signer_name VARCHAR(128) NULL,
+    expected_second_signer_role VARCHAR(32) NULL,
     second_signer_sub VARCHAR(64) NULL,
     second_signer_name VARCHAR(128) NULL,
     second_signer_role VARCHAR(32) NULL,
@@ -463,6 +475,19 @@ const createSchema = async () => {
     enabled TINYINT NOT NULL DEFAULT 1,
     updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     UNIQUE KEY uk_retention_target (target_type)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
+
+  await run(`CREATE TABLE IF NOT EXISTS device_system_settings (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    setting_key VARCHAR(128) NOT NULL,
+    setting_value VARCHAR(1024) NOT NULL DEFAULT '',
+    note VARCHAR(255) NULL,
+    updated_by_sub VARCHAR(64) NULL,
+    updated_by_name VARCHAR(128) NULL,
+    updated_by_role VARCHAR(32) NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE KEY uk_system_setting_key (setting_key)
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
 
   await run(`CREATE TABLE IF NOT EXISTS device_job_locks (
@@ -568,6 +593,9 @@ const createSchema = async () => {
   await addColumnIfMissing('device_attachments', 'purge_after', 'purge_after DATETIME NULL');
   await addColumnIfMissing('device_attachments', 'deleted_at', 'deleted_at DATETIME NULL');
   await addColumnIfMissing('device_dual_sign_sessions', 'expected_version', 'expected_version BIGINT NOT NULL DEFAULT 0');
+  await addColumnIfMissing('device_dual_sign_sessions', 'expected_second_signer_sub', 'expected_second_signer_sub VARCHAR(64) NULL');
+  await addColumnIfMissing('device_dual_sign_sessions', 'expected_second_signer_name', 'expected_second_signer_name VARCHAR(128) NULL');
+  await addColumnIfMissing('device_dual_sign_sessions', 'expected_second_signer_role', 'expected_second_signer_role VARCHAR(32) NULL');
   await addIndexIfMissing('device_jobs', 'idx_jobs_status_updated', 'status, updated_at');
   await addIndexIfMissing('device_jobs', 'idx_jobs_model_stage', 'device_model, current_stage');
   await addIndexIfMissing('device_jobs', 'idx_jobs_stage_status_updated', 'current_stage, status, updated_at');
@@ -582,6 +610,7 @@ const createSchema = async () => {
   await seedDefaultSlaRules();
   await seedDefaultDualSignPolicies();
   await seedDefaultRetentionPolicies();
+  await seedDefaultSystemSettings();
 };
 
 const initDb = async () => {

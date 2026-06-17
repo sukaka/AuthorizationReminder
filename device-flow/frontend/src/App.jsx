@@ -5,23 +5,31 @@ const API_BASE = import.meta.env.VITE_API_BASE || ''
 
 const stageLabelMap = {
   CREATED: '已创建',
-  RECEIVED: '已收货',
-  HARDWARE_CHECKED: '硬件已检查',
-  OS_INSTALLED: '系统已安装',
-  TESTED: '已测试',
-  APPROVED: '已审核',
-  PACKED: '已装箱',
-  SHIPPED: '已发货',
+  RECEIVED: '收货',
+  HARDWARE_CHECKED: '硬件检查',
+  WAREHOUSED_AFTER_HARDWARE: '入库',
+  OUTBOUNDED_FOR_INSTALL: '出库',
+  OS_INSTALLED: '系统安装',
+  TESTED: '测试',
+  APPROVED: '审核',
+  PACKED: '装箱',
+  WAREHOUSED_AFTER_PACK: '入库',
+  OUTBOUNDED_FOR_SHIP: '出库',
+  SHIPPED: '发货',
 }
 
 const timelineActionLabelMap = {
   CREATE: '创建流转单',
   RECEIVE: '执行收货',
   'HARDWARE-CHECK': '执行硬件检查',
+  'WAREHOUSE-AFTER-HARDWARE': '执行入库',
+  'OUTBOUND-FOR-INSTALL': '执行出库',
   'OS-INSTALL': '执行系统安装',
   TEST: '执行测试',
   APPROVE: '执行审核',
   PACK: '执行装箱',
+  'WAREHOUSE-AFTER-PACK': '执行入库',
+  'OUTBOUND-FOR-SHIP': '执行出库',
   SHIP: '执行发货',
   REWORK: '退回重做',
 }
@@ -29,30 +37,42 @@ const timelineActionLabelMap = {
 const nextActionByStage = {
   CREATED: 'receive',
   RECEIVED: 'hardware-check',
-  HARDWARE_CHECKED: 'os-install',
+  HARDWARE_CHECKED: 'warehouse-after-hardware',
+  WAREHOUSED_AFTER_HARDWARE: 'outbound-for-install',
+  OUTBOUNDED_FOR_INSTALL: 'os-install',
   OS_INSTALLED: 'test',
   TESTED: 'approve',
   APPROVED: 'pack',
-  PACKED: 'ship',
+  PACKED: 'warehouse-after-pack',
+  WAREHOUSED_AFTER_PACK: 'outbound-for-ship',
+  OUTBOUNDED_FOR_SHIP: 'ship',
 }
 
 const actionLabelMap = {
   receive: '执行收货',
   'hardware-check': '执行硬件检查',
+  'warehouse-after-hardware': '执行入库',
+  'outbound-for-install': '执行出库',
   'os-install': '执行系统安装',
   test: '执行测试',
   approve: '执行审核',
   pack: '执行装箱',
+  'warehouse-after-pack': '执行入库',
+  'outbound-for-ship': '执行出库',
   ship: '执行发货',
 }
 
 const actionAllowedRoles = {
   receive: ['admin', 'sysadmin'],
   'hardware-check': ['admin', 'sysadmin'],
+  'warehouse-after-hardware': ['admin', 'sysadmin'],
+  'outbound-for-install': ['admin', 'sysadmin'],
   'os-install': ['admin', 'sysadmin'],
   test: ['admin', 'sysadmin'],
   approve: ['admin', 'sysadmin'],
   pack: ['admin', 'sysadmin'],
+  'warehouse-after-pack': ['admin', 'sysadmin'],
+  'outbound-for-ship': ['admin', 'sysadmin'],
   ship: ['admin', 'sysadmin'],
 }
 
@@ -65,6 +85,10 @@ const payloadLabelMap = {
   nic_match: '网卡匹配',
   serial_match: '序列号匹配',
   hardware_note: '硬件检查备注',
+  warehouse_location: '库位',
+  warehouse_note: '入库备注',
+  outbound_target: '出库去向',
+  outbound_note: '出库备注',
   os_name: '系统名称',
   os_version: '系统版本',
   install_mode: '安装方式',
@@ -127,6 +151,10 @@ const initialAdvanceForm = {
   nic_match: 'PASS',
   serial_match: 'PASS',
   hardware_note: '',
+  warehouse_location: '',
+  warehouse_note: '',
+  outbound_target: '',
+  outbound_note: '',
   os_name: '',
   os_version: '',
   install_mode: '',
@@ -149,6 +177,7 @@ const initialAdvanceForm = {
   shipped_note: '',
   signature: '',
   dual_sign_token: '',
+  expected_second_signer_sub: '',
 }
 
 const parseApiDate = (value) => {
@@ -281,6 +310,18 @@ const buildStagePayloadByAction = (action, form) => {
       hardware_note: form.hardware_note,
     }
   }
+  if (action === 'warehouse-after-hardware' || action === 'warehouse-after-pack') {
+    return {
+      warehouse_location: form.warehouse_location,
+      warehouse_note: form.warehouse_note,
+    }
+  }
+  if (action === 'outbound-for-install' || action === 'outbound-for-ship') {
+    return {
+      outbound_target: form.outbound_target,
+      outbound_note: form.outbound_note,
+    }
+  }
   if (action === 'os-install') {
     return {
       os_name: form.os_name,
@@ -334,7 +375,7 @@ const ensureFailNote = (result, note, remark, label) => {
   return ''
 }
 
-const validateAdvanceForm = (action, form) => {
+const validateAdvanceForm = (action, form, currentUserId = '') => {
   const remark = trimText(form.remark)
   if (!action) return ''
 
@@ -352,6 +393,8 @@ const validateAdvanceForm = (action, form) => {
 
   if (action === 'test') {
     if (!trimText(form.signature)) return '测试阶段双人复核要求填写电子签名'
+    if (!trimText(form.dual_sign_token) && !trimText(form.expected_second_signer_sub)) return '请选择第二复签人'
+    if (!trimText(form.dual_sign_token) && String(form.expected_second_signer_sub) === String(currentUserId || '')) return '第二复签人不能选择当前用户'
     if (trimText(form.burnin_hours)) {
       const burnin = Number(form.burnin_hours)
       if (!Number.isFinite(burnin) || burnin < 0 || burnin > 9999) return '老化时长必须是 0-9999 的数字'
@@ -361,6 +404,8 @@ const validateAdvanceForm = (action, form) => {
 
   if (action === 'approve') {
     if (!trimText(form.signature)) return '审核阶段双人复核要求填写电子签名'
+    if (!trimText(form.dual_sign_token) && !trimText(form.expected_second_signer_sub)) return '请选择第二复签人'
+    if (!trimText(form.dual_sign_token) && String(form.expected_second_signer_sub) === String(currentUserId || '')) return '第二复签人不能选择当前用户'
     return ensureFailNote(form.approve_result, `${trimText(form.approve_note)}${trimText(form.reviewer_comment)}`, remark, '审核结论')
   }
 
@@ -551,10 +596,14 @@ const batchPayloadTemplateMap = {
     serial_match: 'PASS',
     hardware_note: '',
   },
+  'warehouse-after-hardware': { warehouse_location: '', warehouse_note: '硬件检查后入库' },
+  'outbound-for-install': { outbound_target: '系统安装', outbound_note: '系统安装前出库' },
   'os-install': { os_name: 'JXOS', os_version: '1.0.0', install_result: 'PASS', install_note: '' },
   test: { boot_test: 'PASS', network_test: 'PASS', stress_test: 'PASS', test_result: 'PASS', test_note: '' },
   approve: { approve_result: 'PASS', approve_note: '批量审核通过' },
   pack: { package_check: 'PASS', accessory_check: 'PASS', box_no: 'BOX-BATCH-001', pack_note: '' },
+  'warehouse-after-pack': { warehouse_location: '', warehouse_note: '装箱后入库' },
+  'outbound-for-ship': { outbound_target: '客户发货', outbound_note: '发货前出库' },
   ship: { carrier: 'SF', shipped_note: '批量发货' },
 }
 
@@ -571,6 +620,21 @@ const parseBatchJobIdsText = (value) => {
         .filter((item) => Number.isInteger(item) && item > 0),
     ),
   )
+}
+
+const defaultAttachmentUploadSetting = {
+  max_file_size_mb: 10,
+  max_file_size_bytes: 10 * 1024 * 1024,
+  min_file_size_mb: 1,
+  max_allowed_file_size_mb: 200,
+}
+
+const formatFileSize = (bytes) => {
+  const size = Number(bytes || 0)
+  if (!Number.isFinite(size) || size < 0) return '-'
+  if (size >= 1024 * 1024) return `${(size / 1024 / 1024).toFixed(size >= 10 * 1024 * 1024 ? 1 : 2)} MB`
+  if (size >= 1024) return `${Math.round(size / 1024)} KB`
+  return `${Math.round(size)} B`
 }
 
 function App() {
@@ -618,6 +682,11 @@ function App() {
     remark: '',
     file: null,
   })
+  const [attachmentUploadSetting, setAttachmentUploadSetting] = useState(defaultAttachmentUploadSetting)
+  const [attachmentUploadSettingForm, setAttachmentUploadSettingForm] = useState(String(defaultAttachmentUploadSetting.max_file_size_mb))
+  const [attachmentUploadSettingLoading, setAttachmentUploadSettingLoading] = useState(false)
+  const [systemUsers, setSystemUsers] = useState([])
+  const [systemUsersLoading, setSystemUsersLoading] = useState(false)
 
   const [dashboard, setDashboard] = useState(null)
   const [dashboardLoading, setDashboardLoading] = useState(false)
@@ -705,24 +774,48 @@ function App() {
   const nextStageCode = nextAction ? String(({
     receive: 'RECEIVED',
     'hardware-check': 'HARDWARE_CHECKED',
+    'warehouse-after-hardware': 'WAREHOUSED_AFTER_HARDWARE',
+    'outbound-for-install': 'OUTBOUNDED_FOR_INSTALL',
     'os-install': 'OS_INSTALLED',
     test: 'TESTED',
     approve: 'APPROVED',
     pack: 'PACKED',
+    'warehouse-after-pack': 'WAREHOUSED_AFTER_PACK',
+    'outbound-for-ship': 'OUTBOUNDED_FOR_SHIP',
     ship: 'SHIPPED',
   }[nextAction] || '')).toUpperCase() : ''
   const canRunNextAction = roleCanDoAction(user?.role, nextAction)
   const responsibilityRows = useMemo(() => {
     if (!detail) return []
-    return [
-      { stage: 'RECEIVED', by: detail.received_by_name, role: detail.received_by_role, at: detail.received_at },
-      { stage: 'HARDWARE_CHECKED', by: detail.hardware_checked_by_name, role: detail.hardware_checked_by_role, at: detail.hardware_checked_at },
-      { stage: 'OS_INSTALLED', by: detail.os_installed_by_name, role: detail.os_installed_by_role, at: detail.os_installed_at },
-      { stage: 'TESTED', by: detail.tested_by_name, role: detail.tested_by_role, at: detail.tested_at },
-      { stage: 'APPROVED', by: detail.approved_by_name, role: detail.approved_by_role, at: detail.approved_at },
-      { stage: 'PACKED', by: detail.packed_by_name, role: detail.packed_by_role, at: detail.packed_at },
-      { stage: 'SHIPPED', by: detail.shipped_by_name, role: detail.shipped_by_role, at: detail.shipped_at },
-    ]
+    const records = Array.isArray(detail.stage_records) ? detail.stage_records : []
+    const latestByStage = new Map()
+    records.forEach((item) => {
+      const stage = String(item.to_stage || '').toUpperCase()
+      if (stage && !latestByStage.has(stage)) latestByStage.set(stage, item)
+    })
+    const fallbackByStage = {
+      RECEIVED: { by: detail.received_by_name, role: detail.received_by_role, at: detail.received_at },
+      HARDWARE_CHECKED: { by: detail.hardware_checked_by_name, role: detail.hardware_checked_by_role, at: detail.hardware_checked_at },
+      OS_INSTALLED: { by: detail.os_installed_by_name, role: detail.os_installed_by_role, at: detail.os_installed_at },
+      TESTED: { by: detail.tested_by_name, role: detail.tested_by_role, at: detail.tested_at },
+      APPROVED: { by: detail.approved_by_name, role: detail.approved_by_role, at: detail.approved_at },
+      PACKED: { by: detail.packed_by_name, role: detail.packed_by_role, at: detail.packed_at },
+      SHIPPED: { by: detail.shipped_by_name, role: detail.shipped_by_role, at: detail.shipped_at },
+    }
+    return stageSequence
+      .filter((stage) => stage !== 'CREATED')
+      .map((stage) => {
+        const record = latestByStage.get(stage)
+        if (record) {
+          return {
+            stage,
+            by: record.operator_name,
+            role: record.operator_role,
+            at: record.operated_at,
+          }
+        }
+        return { stage, ...(fallbackByStage[stage] || {}) }
+      })
   }, [detail])
 
   const reworkTargetOptions = useMemo(() => {
@@ -732,6 +825,17 @@ function App() {
     if (currentIndex <= 0) return []
     return stageSequence.slice(0, currentIndex).map((stage) => ({ value: stage, label: stageLabelMap[stage] || stage }))
   }, [detail])
+
+  const dualSignUserOptions = useMemo(
+    () =>
+      (Array.isArray(systemUsers) ? systemUsers : [])
+        .filter((item) => ['admin', 'sysadmin'].includes(normalizeRole(item?.role)))
+        .map((item) => ({
+          value: String(item.id),
+          label: `${item.username} · ${item.role}`,
+        })),
+    [systemUsers],
+  )
 
   const summary = useMemo(() => {
     const byStage = jobs.reduce((acc, item) => {
@@ -1014,6 +1118,60 @@ function App() {
       )
     } finally {
       setSlaLoading(false)
+    }
+  }
+
+  const refreshAttachmentUploadSetting = async () => {
+    setAttachmentUploadSettingLoading(true)
+    try {
+      const data = await apiRequest('/api/device-flow/settings/attachment-upload')
+      const next = {
+        ...defaultAttachmentUploadSetting,
+        ...(data || {}),
+      }
+      setAttachmentUploadSetting(next)
+      setAttachmentUploadSettingForm(String(Number(next.max_file_size_mb || defaultAttachmentUploadSetting.max_file_size_mb)))
+      return next
+    } finally {
+      setAttachmentUploadSettingLoading(false)
+    }
+  }
+
+  const refreshSystemUsers = async () => {
+    setSystemUsersLoading(true)
+    try {
+      const rows = await apiRequest('/api/auth/system-users?system=device-flow')
+      setSystemUsers(Array.isArray(rows) ? rows : [])
+    } finally {
+      setSystemUsersLoading(false)
+    }
+  }
+
+  const onSaveAttachmentUploadSetting = async () => {
+    if (!canWrite) return showError('当前角色无权限修改附件上传配置')
+    const maxFileSizeMb = Number(attachmentUploadSettingForm)
+    const minFileSizeMb = Number(attachmentUploadSetting?.min_file_size_mb || 1)
+    const maxAllowedFileSizeMb = Number(attachmentUploadSetting?.max_allowed_file_size_mb || 200)
+    if (!Number.isInteger(maxFileSizeMb) || maxFileSizeMb < minFileSizeMb || maxFileSizeMb > maxAllowedFileSizeMb) {
+      return showError(`附件上传上限必须是 ${minFileSizeMb}-${maxAllowedFileSizeMb} 的整数 MB`)
+    }
+    try {
+      setAttachmentUploadSettingLoading(true)
+      const data = await apiRequest('/api/device-flow/settings/attachment-upload', {
+        method: 'PUT',
+        body: { max_file_size_mb: maxFileSizeMb },
+      })
+      const next = {
+        ...defaultAttachmentUploadSetting,
+        ...(data || {}),
+      }
+      setAttachmentUploadSetting(next)
+      setAttachmentUploadSettingForm(String(Number(next.max_file_size_mb || maxFileSizeMb)))
+      showSuccess(`附件上传上限已保存为 ${Number(next.max_file_size_mb || maxFileSizeMb)}MB`)
+    } catch (err) {
+      showError(err.message)
+    } finally {
+      setAttachmentUploadSettingLoading(false)
     }
   }
 
@@ -1302,7 +1460,7 @@ function App() {
   const onAdvanceStage = async () => {
     if (!detail || !nextAction) return
     if (!canRunNextAction) return showError('当前角色无权执行该阶段动作')
-    const validationError = validateAdvanceForm(nextAction, advanceForm)
+    const validationError = validateAdvanceForm(nextAction, advanceForm, user?.id)
     if (validationError) return showError(validationError)
 
     try {
@@ -1317,6 +1475,8 @@ function App() {
         payload.signature = trimText(advanceForm.signature)
         if (trimText(advanceForm.dual_sign_token)) {
           payload.dual_sign_token = trimText(advanceForm.dual_sign_token)
+        } else {
+          payload.expected_second_signer_sub = trimText(advanceForm.expected_second_signer_sub)
         }
       }
 
@@ -1329,8 +1489,9 @@ function App() {
           ...prev,
           dual_sign_token: String(resp.dual_sign_token || ''),
           signature: '',
+          expected_second_signer_sub: String(resp.expected_second_signer_sub || prev.expected_second_signer_sub || ''),
         }))
-        showSuccess(`首签已提交，待第二人复签。会签令牌：${resp.dual_sign_token}`)
+        showSuccess(`首签已提交，待 ${resp.expected_second_signer_name || '指定人员'} 复签。会签令牌：${resp.dual_sign_token}`)
         await refreshDetail()
         return
       }
@@ -1344,6 +1505,7 @@ function App() {
         outbound_tracking_no: '',
         signature: '',
         dual_sign_token: '',
+        expected_second_signer_sub: '',
       }))
       await Promise.all([refreshJobs(), refreshDashboard()])
       await refreshDetail()
@@ -1379,6 +1541,10 @@ function App() {
     if (!detail) return
     if (!canUpload) return showError('当前角色无权上传附件')
     if (!attachmentForm.file) return showError('请选择要上传的文件')
+    const maxFileSizeBytes = Number(attachmentUploadSetting?.max_file_size_bytes || 0)
+    if (maxFileSizeBytes > 0 && Number(attachmentForm.file.size || 0) > maxFileSizeBytes) {
+      return showError(`文件大小 ${formatFileSize(attachmentForm.file.size)} 超过当前上限 ${attachmentUploadSetting.max_file_size_mb}MB`)
+    }
 
     try {
       setBusy(true)
@@ -1552,6 +1718,44 @@ function App() {
       </div>
     )
 
+    const selectedSecondSigner = dualSignUserOptions.find((item) => item.value === String(advanceForm.expected_second_signer_sub || ''))
+    const renderDualSignFields = () => (
+      <>
+        <div className="field">
+          <label>电子签名（必填）</label>
+          <input
+            value={advanceForm.signature}
+            onChange={(e) => setAdvanceForm((prev) => ({ ...prev, signature: e.target.value }))}
+            placeholder="输入签名口令或签名串"
+          />
+        </div>
+        <div className="field">
+          <label>指定复签人</label>
+          <select
+            value={advanceForm.expected_second_signer_sub}
+            onChange={(e) => setAdvanceForm((prev) => ({ ...prev, expected_second_signer_sub: e.target.value }))}
+            disabled={Boolean(trimText(advanceForm.dual_sign_token)) || systemUsersLoading}
+          >
+            <option value="">{systemUsersLoading ? '加载中...' : '请选择第二复签人'}</option>
+            {dualSignUserOptions.map((item) => (
+              <option key={item.value} value={item.value}>{item.label}</option>
+            ))}
+          </select>
+          {trimText(advanceForm.dual_sign_token) && selectedSecondSigner ? (
+            <span className="muted">本次会签指定由 {selectedSecondSigner.label} 复签</span>
+          ) : null}
+        </div>
+        <div className="field">
+          <label>双签令牌（第二人复签时填写）</label>
+          <input
+            value={advanceForm.dual_sign_token}
+            onChange={(e) => setAdvanceForm((prev) => ({ ...prev, dual_sign_token: e.target.value }))}
+            placeholder="首签后自动回填"
+          />
+        </div>
+      </>
+    )
+
     if (nextAction === 'receive') {
       return (
         <>
@@ -1582,6 +1786,44 @@ function App() {
           <div className="field" style={{ gridColumn: '1 / -1' }}>
             <label>硬件检查备注</label>
             <textarea value={advanceForm.hardware_note} onChange={(e) => setAdvanceForm((prev) => ({ ...prev, hardware_note: e.target.value }))} />
+          </div>
+        </>
+      )
+    }
+
+    if (nextAction === 'warehouse-after-hardware' || nextAction === 'warehouse-after-pack') {
+      return (
+        <>
+          <div className="field">
+            <label>库位</label>
+            <input
+              value={advanceForm.warehouse_location}
+              onChange={(e) => setAdvanceForm((prev) => ({ ...prev, warehouse_location: e.target.value }))}
+              placeholder="可填写库位/货架/区域"
+            />
+          </div>
+          <div className="field" style={{ gridColumn: '1 / -1' }}>
+            <label>入库备注</label>
+            <textarea value={advanceForm.warehouse_note} onChange={(e) => setAdvanceForm((prev) => ({ ...prev, warehouse_note: e.target.value }))} />
+          </div>
+        </>
+      )
+    }
+
+    if (nextAction === 'outbound-for-install' || nextAction === 'outbound-for-ship') {
+      return (
+        <>
+          <div className="field">
+            <label>出库去向</label>
+            <input
+              value={advanceForm.outbound_target}
+              onChange={(e) => setAdvanceForm((prev) => ({ ...prev, outbound_target: e.target.value }))}
+              placeholder={nextAction === 'outbound-for-install' ? '系统安装' : '客户发货'}
+            />
+          </div>
+          <div className="field" style={{ gridColumn: '1 / -1' }}>
+            <label>出库备注</label>
+            <textarea value={advanceForm.outbound_note} onChange={(e) => setAdvanceForm((prev) => ({ ...prev, outbound_note: e.target.value }))} />
           </div>
         </>
       )
@@ -1626,22 +1868,7 @@ function App() {
             <label>测试备注</label>
             <textarea value={advanceForm.test_note} onChange={(e) => setAdvanceForm((prev) => ({ ...prev, test_note: e.target.value }))} />
           </div>
-          <div className="field">
-            <label>电子签名（必填）</label>
-            <input
-              value={advanceForm.signature}
-              onChange={(e) => setAdvanceForm((prev) => ({ ...prev, signature: e.target.value }))}
-              placeholder="输入签名口令或签名串"
-            />
-          </div>
-          <div className="field">
-            <label>双签令牌（第二人复签时填写）</label>
-            <input
-              value={advanceForm.dual_sign_token}
-              onChange={(e) => setAdvanceForm((prev) => ({ ...prev, dual_sign_token: e.target.value }))}
-              placeholder="首签后自动回填"
-            />
-          </div>
+          {renderDualSignFields()}
         </>
       )
     }
@@ -1658,22 +1885,7 @@ function App() {
             <label>审核意见</label>
             <textarea value={advanceForm.reviewer_comment} onChange={(e) => setAdvanceForm((prev) => ({ ...prev, reviewer_comment: e.target.value }))} />
           </div>
-          <div className="field">
-            <label>电子签名（必填）</label>
-            <input
-              value={advanceForm.signature}
-              onChange={(e) => setAdvanceForm((prev) => ({ ...prev, signature: e.target.value }))}
-              placeholder="输入签名口令或签名串"
-            />
-          </div>
-          <div className="field">
-            <label>双签令牌（第二人复签时填写）</label>
-            <input
-              value={advanceForm.dual_sign_token}
-              onChange={(e) => setAdvanceForm((prev) => ({ ...prev, dual_sign_token: e.target.value }))}
-              placeholder="首签后自动回填"
-            />
-          </div>
+          {renderDualSignFields()}
         </>
       )
     }
@@ -1856,6 +2068,18 @@ function App() {
   }, [token, activeMenu, slaReminderPage])
 
   useEffect(() => {
+    if (!token || isAuditOnlyUser) return
+    refreshAttachmentUploadSetting().catch((err) => showError(err.message))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token, isAuditOnlyUser])
+
+  useEffect(() => {
+    if (!token || isAuditOnlyUser) return
+    refreshSystemUsers().catch((err) => showError(err.message))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token, isAuditOnlyUser])
+
+  useEffect(() => {
     const action = batchStageForm.action
     const template = cloneBatchPayloadTemplate(action)
     if (!template) return
@@ -1948,7 +2172,7 @@ function App() {
           <div>
             <div className="muted">DEVICE FLOW V1</div>
             <h1>设备收货到发货全链路追踪</h1>
-            <div className="sub">流程：收货 → 硬件检查 → 系统安装 → 测试 → 审核 → 装箱 → 发货</div>
+            <div className="sub">流程：收货 → 硬件检查 → 入库 → 出库 → 系统安装 → 测试 → 审核 → 装箱 → 入库 → 出库 → 发货</div>
           </div>
           <div className="toolbar">
             <div className="status-card">
@@ -2769,9 +2993,41 @@ function App() {
                                 type="file"
                                 onChange={(e) => {
                                   const file = e.target.files && e.target.files[0] ? e.target.files[0] : null
+                                  const maxFileSizeBytes = Number(attachmentUploadSetting?.max_file_size_bytes || 0)
+                                  if (file && maxFileSizeBytes > 0 && Number(file.size || 0) > maxFileSizeBytes) {
+                                    showError(`文件大小 ${formatFileSize(file.size)} 超过当前上限 ${attachmentUploadSetting.max_file_size_mb}MB`)
+                                    e.target.value = ''
+                                    setAttachmentForm((prev) => ({ ...prev, file: null }))
+                                    return
+                                  }
                                   setAttachmentForm((prev) => ({ ...prev, file }))
                                 }}
                               />
+                              {attachmentForm.file ? <span className="muted">当前文件：{formatFileSize(attachmentForm.file.size)}</span> : null}
+                            </div>
+                            <div className="field">
+                              <label>上传上限（MB）</label>
+                              <div className="toolbar">
+                                <input
+                                  type="number"
+                                  min={Number(attachmentUploadSetting?.min_file_size_mb || 1)}
+                                  max={Number(attachmentUploadSetting?.max_allowed_file_size_mb || 200)}
+                                  step="1"
+                                  value={attachmentUploadSettingForm}
+                                  onChange={(e) => setAttachmentUploadSettingForm(e.target.value)}
+                                  disabled={!canWrite || attachmentUploadSettingLoading}
+                                />
+                                <button
+                                  className="btn"
+                                  onClick={onSaveAttachmentUploadSetting}
+                                  disabled={!canWrite || attachmentUploadSettingLoading}
+                                >
+                                  {attachmentUploadSettingLoading ? '保存中...' : '保存'}
+                                </button>
+                              </div>
+                              <span className="muted">
+                                当前上限：{Number(attachmentUploadSetting?.max_file_size_mb || attachmentUploadSettingForm || 10)}MB
+                              </span>
                             </div>
                             <div className="field" style={{ gridColumn: '1 / -1' }}>
                               <label>附件备注</label>
@@ -2804,7 +3060,7 @@ function App() {
                                   <tr key={item.id}>
                                     <td>{item.file_name}</td>
                                     <td>{stageText(item.stage_code)}</td>
-                                    <td>{Math.round(Number(item.file_size || 0) / 1024)} KB</td>
+                                    <td>{formatFileSize(item.file_size)}</td>
                                     <td>{item.uploaded_by_name || '-'}</td>
                                     <td>{parseApiDate(item.uploaded_at)}</td>
                                     <td>{item.remark || '-'}</td>

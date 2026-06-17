@@ -76,6 +76,9 @@ const {
   summarizeSystemAccess,
 } = require('./system-access-display');
 const {
+  buildSystemUserDirectory,
+} = require('./system-user-directory');
+const {
   buildDownloadHeaderMeta,
   buildAdminCenterUsersExportWorkbook,
   buildUserImportFilename,
@@ -1483,6 +1486,23 @@ app.get('/api/auth/apps', async (req, res) => {
     user: buildAuthUserPayload(user),
     apps: apps.filter((item) => item.allow),
   });
+});
+
+app.get('/api/auth/system-users', async (req, res) => {
+  const system = String(req.query?.system || '').trim();
+  if (!system) return res.status(400).json({ error: 'system 不能为空' });
+  const user = await db.get(
+    'SELECT id, username, role, app_access, mfa_enabled, mfa_methods, totp_enabled, totp_secret, email, phone, wecom_id, must_change_password FROM users WHERE id = ?',
+    [req.user.id]
+  );
+  if (!user) return res.status(401).json({ error: '登录已过期' });
+  if (!canAccessSystem(user, system) && String(user.role || '').toLowerCase() !== 'sysadmin') {
+    return res.status(403).json({ error: '无权限查看该系统用户' });
+  }
+  const rows = await db.query(
+    'SELECT id, username, role, is_active, app_access, department_code FROM users ORDER BY username ASC'
+  );
+  return res.json(buildSystemUserDirectory(rows, system));
 });
 
 const RELEASE_VERSION = AUTH_PACKAGE_VERSION;
