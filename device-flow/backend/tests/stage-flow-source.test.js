@@ -55,6 +55,25 @@ test('frontend renders permission settings and uses effective permissions for me
   assert.match(frontendApp, /onSavePermissionPolicies/);
 });
 
+test('frontend detail page is organized as a task workbench with guided optional actions', () => {
+  assert.match(frontendApp, /详情工作台/);
+  assert.match(frontendApp, /detail-workbench/);
+  assert.match(frontendApp, /workflow-stepper/);
+  assert.match(frontendApp, /推荐动作/);
+  assert.match(frontendApp, /可选路径/);
+  assert.match(frontendApp, /跳过入库，直接系统安装/);
+  assert.match(frontendApp, /跳过入库，直接发货/);
+  assert.match(frontendApp, /留证要求/);
+});
+
+test('frontend permission page groups policies by business permission category', () => {
+  assert.match(frontendApp, /菜单权限/);
+  assert.match(frontendApp, /操作权限/);
+  assert.match(frontendApp, /阶段权限/);
+  assert.match(frontendApp, /permission-overview-grid/);
+  assert.match(frontendApp, /策略明细/);
+});
+
 test('frontend labels and flow copy match the required operation flow', () => {
   for (const stage of expectedStages) {
     assert.match(frontendApp, new RegExp(`${stage}:`), `frontend should label ${stage}`);

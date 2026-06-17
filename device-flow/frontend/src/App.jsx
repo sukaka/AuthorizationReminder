@@ -67,6 +67,34 @@ const actionLabelMap = {
   ship: '执行发货',
 }
 
+const stageContextMap = {
+  RECEIVED: '确认设备已到场',
+  HARDWARE_CHECKED: '硬件核对与留证',
+  WAREHOUSED_AFTER_HARDWARE: '检查后暂存',
+  OUTBOUNDED_FOR_INSTALL: '安装前领出',
+  OS_INSTALLED: '按需安装系统',
+  TESTED: '测试结果需复核',
+  APPROVED: '审核结论',
+  PACKED: '包装与配件确认',
+  WAREHOUSED_AFTER_PACK: '装箱后暂存',
+  OUTBOUNDED_FOR_SHIP: '发货前领出',
+  SHIPPED: '客户发货完成',
+}
+
+const actionGuidanceMap = {
+  receive: { title: '确认收货', hint: '登记来件信息，开始设备流转。' },
+  'hardware-check': { title: '完成硬件检查', hint: '核对 CPU、内存、磁盘、网卡、序列号，并补充检查留证。' },
+  'warehouse-after-hardware': { title: '执行入库', hint: '设备检查后需要暂存时，记录库位后入库。' },
+  'outbound-for-install': { title: '执行出库', hint: '设备准备安装系统时，从库存领出。' },
+  'os-install': { title: '跳过入库，直接系统安装', hint: '设备检查后不暂存，立即进入系统安装。' },
+  test: { title: '完成测试', hint: '记录开机、网络、压力测试结果，并指定复签人。' },
+  approve: { title: '完成审核', hint: '审核测试结论，必要时进行双人复核。' },
+  pack: { title: '完成装箱', hint: '确认包装、配件和箱号。' },
+  'warehouse-after-pack': { title: '执行入库', hint: '装箱后暂无客户订单时，先入库等待发货。' },
+  'outbound-for-ship': { title: '执行出库', hint: '客户采购后，从库存领出准备发货。' },
+  ship: { title: '跳过入库，直接发货', hint: '装箱后已有客户订单，直接登记物流并发货。' },
+}
+
 const actionAllowedRoles = {
   receive: ['admin', 'sysadmin'],
   'hardware-check': ['admin', 'sysadmin'],
@@ -833,6 +861,42 @@ function App() {
     return [...menuOptions, ...buttonOptions, ...stageOptions]
   }, [permissionMeta])
 
+  const permissionOverviewGroups = useMemo(() => {
+    const meta = permissionMeta || {}
+    const menus = Array.isArray(meta.menus) ? meta.menus : []
+    const buttons = Array.isArray(meta.buttons) ? meta.buttons : []
+    const stageActions = Array.isArray(meta.stage_actions) ? meta.stage_actions : []
+    return [
+      {
+        title: '菜单权限',
+        description: '决定用户登录后能看到哪些业务页面。',
+        rows: menus.map((item) => ({
+          key: item.key || item.code,
+          label: item.label || item.key || item.code,
+          allowed: permissionMenuAllowed(item.key),
+        })),
+      },
+      {
+        title: '操作权限',
+        description: '控制上传、删除、批量、SLA、权限管理等按钮。',
+        rows: buttons.map((item) => ({
+          key: item.key || item.code,
+          label: item.label || item.key || item.code,
+          allowed: permissionButtonAllowed(item.key),
+        })),
+      },
+      {
+        title: '阶段权限',
+        description: '控制用户能否推进收货、检查、安装、审核、发货等节点。',
+        rows: stageActions.map((item) => ({
+          key: item.action || item.action_code,
+          label: item.label || actionLabelMap[item.action] || item.action,
+          allowed: permissionStageActionAllowed(item.action),
+        })),
+      },
+    ]
+  }, [permissionMeta, permissionEffective, user?.role])
+
   const currentStage = detail ? String(detail.current_stage || '').toUpperCase() : ''
   const availableNextActions = detail
     ? optionalNextActionsByStage[currentStage] || (nextActionByStage[currentStage] ? [nextActionByStage[currentStage]] : [])
@@ -854,6 +918,36 @@ function App() {
     ship: 'SHIPPED',
   }[nextAction] || '')).toUpperCase() : ''
   const canRunNextAction = permissionStageActionAllowed(nextAction)
+  const workflowSteps = useMemo(() => {
+    if (!detail) return []
+    const currentIndex = stageSequence.indexOf(currentStage)
+    return stageSequence
+      .filter((stage) => stage !== 'CREATED')
+      .map((stage) => {
+        const index = stageSequence.indexOf(stage)
+        const state = stage === currentStage ? 'current' : (currentIndex >= 0 && index < currentIndex ? 'done' : 'todo')
+        return {
+          stage,
+          state,
+          label: stageText(stage),
+          context: stageContextMap[stage] || '',
+        }
+      })
+  }, [detail, currentStage])
+  const attachmentCountByStage = useMemo(() => {
+    const map = {}
+    const attachments = Array.isArray(detail?.attachments) ? detail.attachments : []
+    attachments.forEach((item) => {
+      const stage = String(item.stage_code || '').toUpperCase()
+      if (!stage) return
+      map[stage] = (map[stage] || 0) + 1
+    })
+    return map
+  }, [detail])
+  const evidenceStageCode = nextStageCode || currentStage
+  const evidenceStageCount = Number(attachmentCountByStage[evidenceStageCode] || 0)
+  const evidenceRequired = evidenceStageCode === 'HARDWARE_CHECKED' || evidenceStageCode === 'TESTED'
+  const evidenceStatusText = evidenceRequired ? (evidenceStageCount > 0 ? '已满足' : '待补充') : '按需上传'
   const responsibilityRows = useMemo(() => {
     if (!detail) return []
     const records = Array.isArray(detail.stage_records) ? detail.stage_records : []
@@ -2974,8 +3068,36 @@ function App() {
               </div>
             </div>
             <div className="panel-body">
-              <div className="muted" style={{ marginBottom: 10 }}>
-                默认沿用系统角色权限；命中策略后，DENY 优先于 ALLOW。部门为空时使用 * 表示全部部门。
+              <div className="permission-overview-grid">
+                {permissionOverviewGroups.map((group) => (
+                  <div className="permission-overview-card" key={group.title}>
+                    <div className="section-title-row">
+                      <div>
+                        <strong>{group.title}</strong>
+                        <div className="muted">{group.description}</div>
+                      </div>
+                      <span className="stage-chip">{group.rows.filter((item) => item.allowed).length}/{group.rows.length}</span>
+                    </div>
+                    <div className="permission-pill-list">
+                      {group.rows.slice(0, 10).map((item) => (
+                        <span className={item.allowed ? 'allowed' : 'denied'} key={`${group.title}-${item.key}`}>
+                          {item.label}
+                        </span>
+                      ))}
+                      {group.rows.length > 10 ? <span>还有 {group.rows.length - 10} 项</span> : null}
+                      {group.rows.length === 0 ? <span>暂无元数据</span> : null}
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <div className="section-title-row" style={{ marginTop: 16, marginBottom: 10 }}>
+                <div>
+                  <strong>策略明细</strong>
+                  <div className="muted">
+                    默认沿用系统角色权限；命中策略后，DENY 优先于 ALLOW。部门为空时使用 * 表示全部部门。
+                  </div>
+                </div>
+                <span className="muted">已加载 {Number(permissionPolicies.length || 0)} 条</span>
               </div>
               <div className="table-wrap">
                 <table className="table">
@@ -3180,7 +3302,7 @@ function App() {
                 >
                   <header className="floating-modal-header" onPointerDown={onStartDetailModalDrag}>
                     <div>
-                      <h3>流转详情</h3>
+                      <h3>详情工作台</h3>
                       <div className="muted">流转单号：{detailMatchesSelection ? detail?.job_no || '-' : '-'} | 拖动标题栏可移动</div>
                     </div>
                     <button type="button" className="btn" onClick={closeDetailModal}>关闭</button>
@@ -3195,7 +3317,7 @@ function App() {
                       <div className="muted">未找到流转详情</div>
                     ) : (
                       <>
-                        <div className="grid">
+                        <div className="grid detail-summary-grid">
                           <div className="field"><label>流转单号</label><input value={detail.job_no || '-'} readOnly /></div>
                           <div className="field"><label>设备SN</label><input value={detail.device_sn || '-'} readOnly /></div>
                           <div className="field"><label>客户</label><input value={detail.customer_name || '-'} readOnly /></div>
@@ -3204,6 +3326,18 @@ function App() {
                           <div className="field"><label>发货单号</label><input value={detail.outbound_tracking_no || '-'} readOnly /></div>
                           <div className="field"><label>收货时间</label><input value={parseApiDate(detail.received_at)} readOnly /></div>
                           <div className="field"><label>发货时间</label><input value={parseApiDate(detail.shipped_at)} readOnly /></div>
+                        </div>
+
+                        <div className="workflow-stepper">
+                          {workflowSteps.map((item) => (
+                            <div className={`workflow-step ${item.state}`} key={`workflow-${item.stage}`}>
+                              <div className="workflow-dot" />
+                              <div>
+                                <strong>{item.label}</strong>
+                                <span>{item.context}</span>
+                              </div>
+                            </div>
+                          ))}
                         </div>
 
                         <div style={{ marginTop: 16 }} className="panel-subsection">
@@ -3232,24 +3366,39 @@ function App() {
                           </div>
                         </div>
 
-                        <div style={{ marginTop: 16 }} className="panel-subsection">
-                          <strong>阶段执行表单</strong>
+                        <div style={{ marginTop: 16 }} className="panel-subsection detail-workbench">
+                          <div className="section-title-row">
+                            <div>
+                              <strong>推荐动作</strong>
+                              <div className="muted">先判断业务路径，再填写当前动作需要的信息。</div>
+                            </div>
+                            {nextAction ? <span className="stage-chip">{stageText(nextStageCode)}</span> : null}
+                          </div>
                           <div className="grid" style={{ marginTop: 8 }}>
-                            {availableNextActions.length > 1 ? (
-                              <div className="field" style={{ gridColumn: '1 / -1' }}>
-                                <label>下一动作</label>
-                                <select
-                                  value={nextAction}
-                                  onChange={(e) => setSelectedAdvanceAction(e.target.value)}
-                                >
-                                  {availableNextActions.map((action) => (
-                                    <option key={action} value={action}>
-                                      {actionLabelMap[action] || action}
-                                    </option>
-                                  ))}
-                                </select>
+                            {availableNextActions.length > 0 ? (
+                              <div className="action-choice-grid" style={{ gridColumn: '1 / -1' }}>
+                                {availableNextActions.map((action, idx) => {
+                                  const guidance = actionGuidanceMap[action] || { title: actionLabelMap[action] || action, hint: '' }
+                                  const allowed = permissionStageActionAllowed(action)
+                                  const selected = action === nextAction
+                                  return (
+                                    <button
+                                      type="button"
+                                      className={`action-choice ${selected ? 'selected' : ''}`}
+                                      key={action}
+                                      onClick={() => setSelectedAdvanceAction(action)}
+                                      disabled={!allowed}
+                                    >
+                                      <span>{idx === 0 ? '推荐动作' : '可选路径'}</span>
+                                      <strong>{guidance.title}</strong>
+                                      <em>{guidance.hint}</em>
+                                    </button>
+                                  )
+                                })}
                               </div>
-                            ) : null}
+                            ) : (
+                              <div className="empty-state" style={{ gridColumn: '1 / -1' }}>流程已完成，当前无需继续推进。</div>
+                            )}
                             <div className="field" style={{ gridColumn: '1 / -1' }}>
                               <label>阶段备注</label>
                               <textarea
@@ -3293,7 +3442,15 @@ function App() {
                         </div>
 
                         <div style={{ marginTop: 16 }} className="panel-subsection">
-                          <strong>附件上传与留证</strong>
+                          <div className="section-title-row">
+                            <div>
+                              <strong>附件上传与留证</strong>
+                              <div className="muted">留证要求：当前关注“{stageText(evidenceStageCode)}”，已上传 {evidenceStageCount} 个附件。</div>
+                            </div>
+                            <span className={`evidence-badge ${evidenceRequired && evidenceStageCount === 0 ? 'warning' : ''}`}>
+                              {evidenceStatusText}
+                            </span>
+                          </div>
                           <div className="grid" style={{ marginTop: 8 }}>
                             <div className="field">
                               <label>所属阶段</label>
@@ -3356,8 +3513,8 @@ function App() {
                           <div className="toolbar" style={{ marginTop: 8 }}>
                             <button className="btn btn-primary" onClick={onUploadAttachment} disabled={busy || !canUpload}>上传附件</button>
                             {!canUpload ? <span className="muted">当前角色无上传权限</span> : null}
-                            {(nextStageCode === 'HARDWARE_CHECKED' || nextStageCode === 'TESTED') ? (
-                              <span className="muted">提示：推进到“{stageText(nextStageCode)}”前，需先上传该阶段至少1个附件。</span>
+                            {evidenceRequired ? (
+                              <span className="muted">提示：推进到“{stageText(evidenceStageCode)}”前，需先上传该阶段至少1个附件。</span>
                             ) : null}
                           </div>
 
