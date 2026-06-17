@@ -99,11 +99,17 @@ test('permission policies target users and allow selecting multiple permissions 
 test('audit log entry is auditor-only and rendered with chinese labels', () => {
   assert.match(backendIndex, /const AUDIT_READER_ROLES = new Set\(\['auditor'\]\)/);
   assert.match(frontendApp, /const canReadAuditLogs = isAuditOnlyUser && permissionMenuAllowed\('audit'\)/);
+  assert.match(backendIndex, /const canReadOperationLogs = AUDIT_READER_ROLES\.has\(normalizeRole\(req\.user\?\.role\)\)/);
+  assert.match(backendIndex, /recent_logs: canReadOperationLogs \? recentRows\.map\(toPublicOperationLog\) : \[\]/);
+  assert.match(frontendApp, /\{canReadAuditLogs \? \(\s*<div className="panel-subsection" style=\{\{ marginTop: 14 \}\}>/);
   assert.match(frontendApp, /auditActionLabelMap/);
   assert.match(frontendApp, /auditActionText/);
+  assert.match(frontendApp, /auditMessageText/);
   assert.match(frontendApp, /roleText/);
   assert.match(frontendApp, /创建流转单/);
   assert.match(frontendApp, /更新权限策略/);
+  assert.match(frontendApp, /发起双人复核测试/);
+  assert.match(frontendApp, /return `阶段推进 \$\{stageText\(stageAdvanceMatch\[1\]\)\} → \$\{stageText\(stageAdvanceMatch\[2\]\)\}`/);
 });
 
 test('frontend labels and flow copy match the required operation flow', () => {

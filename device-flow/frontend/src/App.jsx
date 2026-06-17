@@ -51,6 +51,7 @@ const auditActionLabelMap = {
   UNLOCK_JOB: '解锁流转单',
   DELETE_ATTACHMENT: '删除附件',
   UPLOAD_ATTACHMENT: '上传附件',
+  DUAL_SIGN_TEST_INIT: '发起双人复核测试',
   REWORK: '退回重做',
   CANCEL: '取消流转单',
   CHANGE_REQUEST_WITHDRAW: '撤回变更申请',
@@ -261,12 +262,32 @@ const timelineActionText = (value) => {
 
 const auditActionText = (value) => {
   const key = String(value || '').toUpperCase()
+  if (key.startsWith('STAGE_')) {
+    const stageAction = key.slice(6)
+    return timelineActionLabelMap[stageAction] || value || '-'
+  }
   return auditActionLabelMap[key] || timelineActionLabelMap[key] || value || '-'
+}
+
+const auditMessageText = (value) => {
+  const text = String(value || '').trim()
+  if (!text) return '-'
+  const stageAdvanceMatch = text.match(/^阶段推进\s+([A-Z_]+)\s*->\s*([A-Z_]+)$/i)
+  if (stageAdvanceMatch) {
+    return `阶段推进 ${stageText(stageAdvanceMatch[1])} → ${stageText(stageAdvanceMatch[2])}`
+  }
+  return Object.entries(stageLabelMap).reduce(
+    (result, [code, label]) => result.replace(new RegExp(`\\b${code}\\b`, 'g'), label),
+    text,
+  )
 }
 
 const auditActionOptions = [
   { value: '', label: '全部动作' },
   ...Object.entries(auditActionLabelMap).map(([value, label]) => ({ value, label })),
+  ...Object.entries(timelineActionLabelMap)
+    .filter(([value]) => !['CREATE', 'REWORK'].includes(value))
+    .map(([value, label]) => ({ value: `STAGE_${value}`, label })),
 ]
 
 const roleText = (value) => {
@@ -2684,49 +2705,51 @@ function App() {
                     </div>
                   </div>
 
-                  <div className="panel-subsection" style={{ marginTop: 14 }}>
-                    <strong>最近操作日志</strong>
-                    <div className="table-wrap" style={{ marginTop: 8 }}>
-                      <table className="table">
-                        <thead>
-                          <tr>
-                            <th>时间</th>
-                            <th>操作人</th>
-                            <th>动作</th>
-                            <th>流转单号</th>
-                            <th>说明</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {(Array.isArray(dashboard?.recent_logs) ? dashboard.recent_logs : []).map((item) => (
-                            <tr key={`recent-log-${item.id}`}>
-                              <td>{parseApiDate(item.created_at)}</td>
-                              <td>{item.username || '-'}</td>
-                              <td>{auditActionText(item.action)}</td>
-                              <td>
-                                {item.job_id ? (
-                                  <button
-                                    type="button"
-                                    className="text-link"
-                                    onClick={() => onOpenJobDetail(item.job_id)}
-                                    disabled={busy}
-                                  >
-                                    {item.job_no || `#${item.job_id}`}
-                                  </button>
-                                ) : (
-                                  item.job_no || '-'
-                                )}
-                              </td>
-                              <td>{item.message || '-'}</td>
+                  {canReadAuditLogs ? (
+                    <div className="panel-subsection" style={{ marginTop: 14 }}>
+                      <strong>最近操作日志</strong>
+                      <div className="table-wrap" style={{ marginTop: 8 }}>
+                        <table className="table">
+                          <thead>
+                            <tr>
+                              <th>时间</th>
+                              <th>操作人</th>
+                              <th>动作</th>
+                              <th>流转单号</th>
+                              <th>说明</th>
                             </tr>
-                          ))}
-                          {(Array.isArray(dashboard?.recent_logs) ? dashboard.recent_logs : []).length === 0 ? (
-                            <tr><td colSpan={5} className="muted">暂无日志</td></tr>
-                          ) : null}
-                        </tbody>
-                      </table>
+                          </thead>
+                          <tbody>
+                            {(Array.isArray(dashboard?.recent_logs) ? dashboard.recent_logs : []).map((item) => (
+                              <tr key={`recent-log-${item.id}`}>
+                                <td>{parseApiDate(item.created_at)}</td>
+                                <td>{item.username || '-'}</td>
+                                <td>{auditActionText(item.action)}</td>
+                                <td>
+                                  {item.job_id ? (
+                                    <button
+                                      type="button"
+                                      className="text-link"
+                                      onClick={() => onOpenJobDetail(item.job_id)}
+                                      disabled={busy}
+                                    >
+                                      {item.job_no || `#${item.job_id}`}
+                                    </button>
+                                  ) : (
+                                    item.job_no || '-'
+                                  )}
+                                </td>
+                                <td>{auditMessageText(item.message)}</td>
+                              </tr>
+                            ))}
+                            {(Array.isArray(dashboard?.recent_logs) ? dashboard.recent_logs : []).length === 0 ? (
+                              <tr><td colSpan={5} className="muted">暂无日志</td></tr>
+                            ) : null}
+                          </tbody>
+                        </table>
+                      </div>
                     </div>
-                  </div>
+                  ) : null}
                 </>
               )}
             </div>
@@ -3839,7 +3862,7 @@ function App() {
                           )}
                         </td>
                         <td>{row.device_sn || '-'}</td>
-                        <td>{row.message || '-'}</td>
+                        <td>{auditMessageText(row.message)}</td>
                         <td>{row.request_ip || '-'}</td>
                         <td>{buildAuditChangeSummary(row.before_data, row.after_data)}</td>
                       </tr>

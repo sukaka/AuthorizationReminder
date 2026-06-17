@@ -2788,6 +2788,7 @@ app.get(
     const stage = parseStageFilter(req.query.stage, 'stage');
     const customer = trimText(req.query.customer);
     const { whereSql: jobWhereSql, params: jobParams } = buildDashboardJobWhere({ stage, customer });
+    const canReadOperationLogs = AUDIT_READER_ROLES.has(normalizeRole(req.user?.role));
 
     const [stageRows, totalRow, openRow, completedRow, createdTodayRow, shippedTodayRow, overdueRows, recentRows] =
       await Promise.all([
@@ -2828,19 +2829,21 @@ app.get(
            LIMIT 100`,
           [...jobParams, overdueDays]
         ),
-        query(
-          `SELECT l.*,
-                  j.job_no,
-                  j.device_sn,
-                  j.customer_name,
-                  j.current_stage
-           FROM device_operation_logs l
-           LEFT JOIN device_jobs j ON j.id = l.job_id
-           ${jobWhereSql}
-           ORDER BY l.id DESC
-           LIMIT 20`,
-          jobParams
-        ),
+        canReadOperationLogs
+          ? query(
+              `SELECT l.*,
+                      j.job_no,
+                      j.device_sn,
+                      j.customer_name,
+                      j.current_stage
+               FROM device_operation_logs l
+               LEFT JOIN device_jobs j ON j.id = l.job_id
+               ${jobWhereSql}
+               ORDER BY l.id DESC
+               LIMIT 20`,
+              jobParams
+            )
+          : Promise.resolve([]),
       ]);
 
     const stageCountMap = {};
@@ -2875,7 +2878,7 @@ app.get(
         ...item,
         overdue_days: Number(item.overdue_days || 0),
       })),
-      recent_logs: recentRows.map(toPublicOperationLog),
+      recent_logs: canReadOperationLogs ? recentRows.map(toPublicOperationLog) : [],
     });
   })
 );
