@@ -634,6 +634,13 @@ const defaultAttachmentUploadSetting = {
   max_allowed_file_size_mb: 200,
 }
 
+const defaultPermissionEffective = {
+  loaded: false,
+  menus: {},
+  buttons: {},
+  stageActions: {},
+}
+
 const formatFileSize = (bytes) => {
   const size = Number(bytes || 0)
   if (!Number.isFinite(size) || size < 0) return '-'
@@ -693,6 +700,11 @@ function App() {
   const [attachmentUploadSettingLoading, setAttachmentUploadSettingLoading] = useState(false)
   const [systemUsers, setSystemUsers] = useState([])
   const [systemUsersLoading, setSystemUsersLoading] = useState(false)
+  const [permissionEffective, setPermissionEffective] = useState(defaultPermissionEffective)
+  const [permissionMeta, setPermissionMeta] = useState(null)
+  const [permissionPolicies, setPermissionPolicies] = useState([])
+  const [permissionPolicyDrafts, setPermissionPolicyDrafts] = useState([])
+  const [permissionLoading, setPermissionLoading] = useState(false)
 
   const [dashboard, setDashboard] = useState(null)
   const [dashboardLoading, setDashboardLoading] = useState(false)
@@ -740,27 +752,54 @@ function App() {
     onConfirm: null,
   })
 
-  const canWrite = user?.role === 'admin' || user?.role === 'sysadmin'
-  const canUpload = ['admin', 'sysadmin'].includes(normalizeRole(user?.role))
-  const canRework = ['admin', 'sysadmin'].includes(normalizeRole(user?.role))
-  const canDeleteAttachment = ['admin', 'sysadmin'].includes(normalizeRole(user?.role))
+  const isBaseWriter = user?.role === 'admin' || user?.role === 'sysadmin'
   const isAuditOnlyUser = normalizeRole(user?.role) === 'auditor'
-  const canReadAuditLogs = isAuditOnlyUser
+  const permissionMenuFallback = (key) => {
+    if (isAuditOnlyUser) return ['audit', 'audit-verify'].includes(key)
+    if (isBaseWriter) return ['dashboard', 'sla', 'batch', 'jobs', 'create', 'permissions'].includes(key)
+    return ['dashboard', 'jobs'].includes(key)
+  }
+  const permissionButtonFallback = (key) => {
+    if (['auditExport', 'auditVerify'].includes(key)) return isAuditOnlyUser
+    return isBaseWriter
+  }
+  const permissionMenuAllowed = (key) => {
+    if (permissionEffective.loaded) return permissionEffective.menus?.[key] === true
+    return permissionMenuFallback(key)
+  }
+  const permissionButtonAllowed = (key) => {
+    if (permissionEffective.loaded) return permissionEffective.buttons?.[key] === true
+    return permissionButtonFallback(key)
+  }
+  const permissionStageActionAllowed = (action) => {
+    if (permissionEffective.loaded) return permissionEffective.stageActions?.[action] === true
+    return roleCanDoAction(user?.role, action)
+  }
+  const canCreateJob = permissionButtonAllowed('createJob')
+  const canBatchImport = permissionButtonAllowed('batchImport')
+  const canBatchStage = permissionButtonAllowed('batchStage')
+  const canUpload = permissionButtonAllowed('attachmentUpload')
+  const canRework = permissionButtonAllowed('rework')
+  const canDeleteAttachment = permissionButtonAllowed('attachmentDelete')
+  const canEditSla = permissionButtonAllowed('slaWrite')
+  const canRunSla = permissionButtonAllowed('slaRun')
+  const canDeleteSlaReminder = permissionButtonAllowed('slaReminderDelete')
+  const canManagePermissions = permissionButtonAllowed('permissionManage')
+  const canEditAttachmentUploadSetting = permissionButtonAllowed('attachmentSettings')
+  const canReadAuditLogs = permissionMenuAllowed('audit')
   const sidebarMenuItems = useMemo(() => {
-    if (isAuditOnlyUser) {
-      return [
-        { key: 'audit', label: '审计日志' },
-        { key: 'audit-verify', label: '审计验签' },
-      ]
-    }
-    return [
+    const items = [
       { key: 'dashboard', label: '看板总览' },
       { key: 'sla', label: 'SLA催办' },
       { key: 'batch', label: '批量处理' },
       { key: 'jobs', label: '流转单列表' },
       { key: 'create', label: '新建流转单' },
+      { key: 'permissions', label: '权限设置' },
+      { key: 'audit', label: '审计日志' },
+      { key: 'audit-verify', label: '审计验签' },
     ]
-  }, [isAuditOnlyUser])
+    return items.filter((item) => permissionMenuAllowed(item.key))
+  }, [permissionEffective, isAuditOnlyUser, isBaseWriter])
   const detailMatchesSelection = Number(detail?.id || 0) === Number(selectedJobId || 0)
 
   const stageOptions = useMemo(
@@ -775,6 +814,24 @@ function App() {
     () => Object.entries(actionLabelMap).map(([value, label]) => ({ value, label })),
     [],
   )
+
+  const permissionActionOptions = useMemo(() => {
+    const meta = permissionMeta || {}
+    const menuOptions = (Array.isArray(meta.menus) ? meta.menus : []).map((item) => ({
+      value: item.code,
+      label: `菜单：${item.label || item.key}`,
+    }))
+    const buttonOptions = (Array.isArray(meta.buttons) ? meta.buttons : []).map((item) => ({
+      value: item.code,
+      label: `按钮：${item.label || item.key}`,
+    }))
+    const stageOptions = (Array.isArray(meta.stage_actions) ? meta.stage_actions : []).map((item) => ({
+      value: item.action_code,
+      label: `阶段：${item.label || item.action}`,
+      stage_code: item.stage_code,
+    }))
+    return [...menuOptions, ...buttonOptions, ...stageOptions]
+  }, [permissionMeta])
 
   const currentStage = detail ? String(detail.current_stage || '').toUpperCase() : ''
   const availableNextActions = detail
@@ -796,7 +853,7 @@ function App() {
     'outbound-for-ship': 'OUTBOUNDED_FOR_SHIP',
     ship: 'SHIPPED',
   }[nextAction] || '')).toUpperCase() : ''
-  const canRunNextAction = roleCanDoAction(user?.role, nextAction)
+  const canRunNextAction = permissionStageActionAllowed(nextAction)
   const responsibilityRows = useMemo(() => {
     if (!detail) return []
     const records = Array.isArray(detail.stage_records) ? detail.stage_records : []
@@ -1149,6 +1206,90 @@ function App() {
     }
   }
 
+  const normalizePermissionPolicyDraft = (item = {}) => ({
+    role_code: trimText(item.role_code || '*').toLowerCase() || '*',
+    department_code: trimText(item.department_code || '*').toUpperCase() || '*',
+    action_code: trimText(item.action_code || 'menu.jobs').toLowerCase() || 'menu.jobs',
+    stage_code: trimText(item.stage_code || '*').toUpperCase() || '*',
+    effect: trimText(item.effect || 'ALLOW').toUpperCase() === 'DENY' ? 'DENY' : 'ALLOW',
+    enabled: item.enabled === undefined ? true : Boolean(item.enabled),
+    note: trimText(item.note || ''),
+  })
+
+  const refreshPermissionEffective = async () => {
+    const data = await apiRequest('/api/device-flow/permissions/effective')
+    setPermissionEffective({
+      loaded: true,
+      menus: data?.menus || {},
+      buttons: data?.buttons || {},
+      stageActions: data?.stageActions || {},
+    })
+    return data
+  }
+
+  const refreshPermissionSettings = async () => {
+    setPermissionLoading(true)
+    try {
+      const [meta, policies] = await Promise.all([
+        apiRequest('/api/device-flow/permissions/meta'),
+        apiRequest('/api/device-flow/permissions/policies'),
+      ])
+      const rows = Array.isArray(policies) ? policies : []
+      setPermissionMeta(meta || null)
+      setPermissionPolicies(rows)
+      setPermissionPolicyDrafts(rows.map(normalizePermissionPolicyDraft))
+    } finally {
+      setPermissionLoading(false)
+    }
+  }
+
+  const onAddPermissionPolicy = () => {
+    setPermissionPolicyDrafts((prev) => [
+      ...prev,
+      normalizePermissionPolicyDraft({
+        role_code: '*',
+        department_code: '*',
+        action_code: 'menu.jobs',
+        stage_code: '*',
+        effect: 'ALLOW',
+        enabled: true,
+        note: '',
+      }),
+    ])
+  }
+
+  const updatePermissionPolicyDraft = (index, patch) => {
+    setPermissionPolicyDrafts((prev) =>
+      prev.map((item, idx) => (idx === index ? normalizePermissionPolicyDraft({ ...item, ...patch }) : item)),
+    )
+  }
+
+  const removePermissionPolicyDraft = (index) => {
+    setPermissionPolicyDrafts((prev) => prev.filter((_item, idx) => idx !== index))
+  }
+
+  const onSavePermissionPolicies = async () => {
+    if (!canManagePermissions) return showError('当前角色无权限保存权限策略')
+    if (permissionPolicyDrafts.length === 0) return showError('请至少保留一条权限策略')
+    try {
+      setPermissionLoading(true)
+      const rows = permissionPolicyDrafts.map(normalizePermissionPolicyDraft)
+      const saved = await apiRequest('/api/device-flow/permissions/policies', {
+        method: 'PUT',
+        body: { policies: rows },
+      })
+      const nextRows = Array.isArray(saved) ? saved : []
+      setPermissionPolicies(nextRows)
+      setPermissionPolicyDrafts(nextRows.map(normalizePermissionPolicyDraft))
+      await refreshPermissionEffective()
+      showSuccess(`权限策略已保存，共 ${nextRows.length} 条`)
+    } catch (err) {
+      showError(err.message)
+    } finally {
+      setPermissionLoading(false)
+    }
+  }
+
   const refreshSystemUsers = async () => {
     setSystemUsersLoading(true)
     try {
@@ -1160,7 +1301,7 @@ function App() {
   }
 
   const onSaveAttachmentUploadSetting = async () => {
-    if (!canWrite) return showError('当前角色无权限修改附件上传配置')
+    if (!canEditAttachmentUploadSetting) return showError('当前角色无权限修改附件上传配置')
     const maxFileSizeMb = Number(attachmentUploadSettingForm)
     const minFileSizeMb = Number(attachmentUploadSetting?.min_file_size_mb || 1)
     const maxAllowedFileSizeMb = Number(attachmentUploadSetting?.max_allowed_file_size_mb || 200)
@@ -1190,7 +1331,7 @@ function App() {
   const onDeleteSlaReminder = async (item) => {
     const reminderId = Number(item?.id || 0)
     if (!reminderId) return showError('催办记录ID无效')
-    if (!canWrite) return showError('当前角色无权限删除催办记录')
+    if (!canDeleteSlaReminder) return showError('当前角色无权限删除催办记录')
     openConfirmDialog({
       title: '删除催办记录',
       message: `确认删除催办记录 #${reminderId}？删除后不可恢复。`,
@@ -1211,7 +1352,7 @@ function App() {
   }
 
   const onClearSlaReminders = async () => {
-    if (!canWrite) return showError('当前角色无权限删除催办记录')
+    if (!canDeleteSlaReminder) return showError('当前角色无权限删除催办记录')
     openConfirmDialog({
       title: '一键清空催办记录',
       message: '确认清空全部催办记录？该操作不可恢复。',
@@ -1233,7 +1374,7 @@ function App() {
   }
 
   const onSaveSlaRules = async () => {
-    if (!canWrite) return showError('当前角色无权限修改 SLA 规则')
+    if (!canEditSla) return showError('当前角色无权限修改 SLA 规则')
     try {
       setBusy(true)
       const rules = slaRuleForm.map((item) => ({
@@ -1256,7 +1397,7 @@ function App() {
   }
 
   const onRunSlaNow = async () => {
-    if (!canWrite) return showError('当前角色无权限执行催办')
+    if (!canRunSla) return showError('当前角色无权限执行催办')
     try {
       setBusy(true)
       const result = await apiRequest('/api/device-flow/sla/run', {
@@ -1332,7 +1473,7 @@ function App() {
   }
 
   const onBatchImportJobs = async () => {
-    if (!canWrite) return showError('当前角色无权限导入')
+    if (!canBatchImport) return showError('当前角色无权限导入')
     if (!batchImportFile) return showError('请先选择导入文件')
     try {
       setBusy(true)
@@ -1354,6 +1495,7 @@ function App() {
   }
 
   const onBatchAdvanceStage = async () => {
+    if (!canBatchStage) return showError('当前角色无权限执行批量推进')
     const jobIds = parseBatchJobIdsText(batchStageForm.job_ids_text)
     if (jobIds.length === 0) return showError('请填写至少1个流转单 ID')
 
@@ -1432,6 +1574,7 @@ function App() {
   const refreshAll = async () => {
     setLoading(true)
     try {
+      await refreshPermissionEffective()
       if (isAuditOnlyUser) {
         await refreshAuditLogs()
         clearTips()
@@ -1450,6 +1593,7 @@ function App() {
 
   const onCreateJob = async (e) => {
     e.preventDefault()
+    if (!canCreateJob) return showError('当前角色无权限创建流转单')
     try {
       setBusy(true)
       const created = await apiRequest('/api/device-flow/jobs', {
@@ -2084,6 +2228,19 @@ function App() {
   }, [token, activeMenu, slaReminderPage])
 
   useEffect(() => {
+    if (!token) return
+    if (activeMenu !== 'permissions') return
+    refreshPermissionSettings().catch((err) => showError(err.message))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token, activeMenu])
+
+  useEffect(() => {
+    if (!token || sidebarMenuItems.length === 0) return
+    if (sidebarMenuItems.some((item) => item.key === activeMenu)) return
+    setActiveMenu(sidebarMenuItems[0].key)
+  }, [token, activeMenu, sidebarMenuItems])
+
+  useEffect(() => {
     if (!token || isAuditOnlyUser) return
     refreshAttachmentUploadSetting().catch((err) => showError(err.message))
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -2389,8 +2546,8 @@ function App() {
                 <button className="btn" onClick={() => refreshSlaSummary()} disabled={slaLoading}>
                   {slaLoading ? '加载中...' : '刷新'}
                 </button>
-                <button className="btn" onClick={onRunSlaNow} disabled={busy || !canWrite}>立即执行催办</button>
-                <button className="btn btn-primary" onClick={onSaveSlaRules} disabled={busy || !canWrite}>保存规则</button>
+                <button className="btn" onClick={onRunSlaNow} disabled={busy || !canRunSla}>立即执行催办</button>
+                <button className="btn btn-primary" onClick={onSaveSlaRules} disabled={busy || !canEditSla}>保存规则</button>
               </div>
             </div>
             <div className="panel-body">
@@ -2520,7 +2677,7 @@ function App() {
                   <div className="panel-subsection" style={{ marginTop: 12 }}>
                     <div className="toolbar" style={{ justifyContent: 'space-between' }}>
                       <strong>最近催办记录</strong>
-                      {canWrite ? (
+                      {canDeleteSlaReminder ? (
                         <button className="btn btn-danger" onClick={onClearSlaReminders} disabled={busy || slaLoading || slaReminderTotal <= 0}>
                           一键删除
                         </button>
@@ -2535,7 +2692,7 @@ function App() {
                             <th>阶段</th>
                             <th>超时/阈值(小时)</th>
                             <th>说明</th>
-                            {canWrite ? <th>操作</th> : null}
+                            {canDeleteSlaReminder ? <th>操作</th> : null}
                           </tr>
                         </thead>
                         <tbody>
@@ -2550,7 +2707,7 @@ function App() {
                               <td>{stageText(item.stage_code)}</td>
                               <td>{Number(item.overdue_hours || 0)} / {Number(item.threshold_hours || 0)}</td>
                               <td>{item.message || '-'}</td>
-                              {canWrite ? (
+                              {canDeleteSlaReminder ? (
                                 <td>
                                   <button className="btn btn-danger" onClick={() => onDeleteSlaReminder(item)} disabled={busy || slaLoading}>
                                     删除
@@ -2560,7 +2717,7 @@ function App() {
                             </tr>
                           ))}
                           {(Array.isArray(slaData?.recent_reminders) ? slaData.recent_reminders : []).length === 0 ? (
-                            <tr><td colSpan={canWrite ? 6 : 5} className="muted">暂无催办记录</td></tr>
+                            <tr><td colSpan={canDeleteSlaReminder ? 6 : 5} className="muted">暂无催办记录</td></tr>
                           ) : null}
                         </tbody>
                       </table>
@@ -2596,9 +2753,9 @@ function App() {
                     }}
                   />
                   <button className="btn" onClick={onBatchDownloadTemplate} disabled={busy}>下载导入模板</button>
-                  <button className="btn btn-primary" onClick={onBatchImportJobs} disabled={busy || !canWrite}>执行导入</button>
+                  <button className="btn btn-primary" onClick={onBatchImportJobs} disabled={busy || !canBatchImport}>执行导入</button>
                 </div>
-                {!canWrite ? <div className="muted" style={{ marginTop: 6 }}>当前角色无导入权限</div> : null}
+                {!canBatchImport ? <div className="muted" style={{ marginTop: 6 }}>当前角色无导入权限</div> : null}
                 {batchImportResult ? (
                   <div className="muted" style={{ marginTop: 8 }}>
                     导入结果：总计 {Number(batchImportResult.total_rows || 0)}，成功 {Number(batchImportResult.success_count || 0)}，失败 {Number(batchImportResult.failure_count || 0)}
@@ -2732,7 +2889,7 @@ function App() {
                   </div>
                 </div>
                 <div className="toolbar" style={{ marginTop: 10 }}>
-                  <button className="btn btn-primary" onClick={onBatchAdvanceStage} disabled={busy}>执行批量推进</button>
+                  <button className="btn btn-primary" onClick={onBatchAdvanceStage} disabled={busy || !canBatchStage}>执行批量推进</button>
                 </div>
                 {batchStageResult ? (
                   <div className="muted" style={{ marginTop: 8 }}>
@@ -2790,12 +2947,143 @@ function App() {
                   <textarea value={createForm.remark} onChange={(e) => setCreateForm((prev) => ({ ...prev, remark: e.target.value }))} />
                 </div>
                 <div className="toolbar" style={{ gridColumn: '1 / -1' }}>
-                  <button className="btn btn-primary" type="submit" disabled={!canWrite || busy}>
+                  <button className="btn btn-primary" type="submit" disabled={!canCreateJob || busy}>
                     {busy ? '提交中...' : '创建流转单'}
                   </button>
-                  {!canWrite ? <span className="muted">当前角色无写权限</span> : null}
+                  {!canCreateJob ? <span className="muted">当前角色无创建权限</span> : null}
                 </div>
               </form>
+            </div>
+          </section>
+        ) : null}
+
+        {activeMenu === 'permissions' ? (
+          <section className="panel">
+            <div className="panel-header">
+              <strong>权限设置</strong>
+              <div className="toolbar">
+                <button className="btn" onClick={refreshPermissionSettings} disabled={permissionLoading}>
+                  {permissionLoading ? '加载中...' : '刷新'}
+                </button>
+                <button className="btn" onClick={onAddPermissionPolicy} disabled={!canManagePermissions || permissionLoading}>
+                  新增策略
+                </button>
+                <button className="btn btn-primary" onClick={onSavePermissionPolicies} disabled={!canManagePermissions || permissionLoading}>
+                  保存策略
+                </button>
+              </div>
+            </div>
+            <div className="panel-body">
+              <div className="muted" style={{ marginBottom: 10 }}>
+                默认沿用系统角色权限；命中策略后，DENY 优先于 ALLOW。部门为空时使用 * 表示全部部门。
+              </div>
+              <div className="table-wrap">
+                <table className="table">
+                  <thead>
+                    <tr>
+                      <th>角色</th>
+                      <th>部门</th>
+                      <th>动作</th>
+                      <th>阶段</th>
+                      <th>结果</th>
+                      <th>启用</th>
+                      <th>备注</th>
+                      <th>操作</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {permissionPolicyDrafts.map((item, idx) => (
+                      <tr key={`permission-policy-${idx}`}>
+                        <td>
+                          <select
+                            value={item.role_code}
+                            onChange={(e) => updatePermissionPolicyDraft(idx, { role_code: e.target.value })}
+                            disabled={!canManagePermissions}
+                          >
+                            {(Array.isArray(permissionMeta?.roles) ? permissionMeta.roles : ['admin', 'sysadmin', 'user', 'editor', 'reviewer', 'auditor', '*']).map((role) => (
+                              <option key={role} value={role}>{role}</option>
+                            ))}
+                          </select>
+                        </td>
+                        <td>
+                          <input
+                            value={item.department_code}
+                            onChange={(e) => updatePermissionPolicyDraft(idx, { department_code: e.target.value })}
+                            disabled={!canManagePermissions}
+                            placeholder="*"
+                          />
+                        </td>
+                        <td>
+                          <select
+                            value={item.action_code}
+                            onChange={(e) => {
+                              const option = permissionActionOptions.find((entry) => entry.value === e.target.value)
+                              updatePermissionPolicyDraft(idx, {
+                                action_code: e.target.value,
+                                stage_code: option?.stage_code || '*',
+                              })
+                            }}
+                            disabled={!canManagePermissions}
+                          >
+                            {(permissionActionOptions.length ? permissionActionOptions : [{ value: 'menu.jobs', label: '菜单：流转单列表' }]).map((option) => (
+                              <option key={option.value} value={option.value}>{option.label}</option>
+                            ))}
+                          </select>
+                        </td>
+                        <td>
+                          <select
+                            value={item.stage_code}
+                            onChange={(e) => updatePermissionPolicyDraft(idx, { stage_code: e.target.value })}
+                            disabled={!canManagePermissions}
+                          >
+                            <option value="*">全部阶段</option>
+                            {Object.entries(stageLabelMap).map(([stage, label]) => (
+                              <option key={stage} value={stage}>{label}</option>
+                            ))}
+                          </select>
+                        </td>
+                        <td>
+                          <select
+                            value={item.effect}
+                            onChange={(e) => updatePermissionPolicyDraft(idx, { effect: e.target.value })}
+                            disabled={!canManagePermissions}
+                          >
+                            <option value="ALLOW">允许</option>
+                            <option value="DENY">拒绝</option>
+                          </select>
+                        </td>
+                        <td>
+                          <input
+                            type="checkbox"
+                            checked={Boolean(item.enabled)}
+                            onChange={(e) => updatePermissionPolicyDraft(idx, { enabled: e.target.checked })}
+                            disabled={!canManagePermissions}
+                          />
+                        </td>
+                        <td>
+                          <input
+                            value={item.note}
+                            onChange={(e) => updatePermissionPolicyDraft(idx, { note: e.target.value })}
+                            disabled={!canManagePermissions}
+                            placeholder="可选"
+                          />
+                        </td>
+                        <td>
+                          <button className="btn btn-danger" onClick={() => removePermissionPolicyDraft(idx)} disabled={!canManagePermissions || permissionPolicyDrafts.length <= 1}>
+                            移除
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                    {permissionPolicyDrafts.length === 0 ? (
+                      <tr><td colSpan={8} className="muted">暂无权限策略</td></tr>
+                    ) : null}
+                  </tbody>
+                </table>
+              </div>
+              <div className="muted" style={{ marginTop: 10 }}>
+                当前已加载策略：{Number(permissionPolicies.length || 0)} 条
+              </div>
             </div>
           </section>
         ) : null}
@@ -3046,12 +3334,12 @@ function App() {
                                   step="1"
                                   value={attachmentUploadSettingForm}
                                   onChange={(e) => setAttachmentUploadSettingForm(e.target.value)}
-                                  disabled={!canWrite || attachmentUploadSettingLoading}
+                                  disabled={!canEditAttachmentUploadSetting || attachmentUploadSettingLoading}
                                 />
                                 <button
                                   className="btn"
                                   onClick={onSaveAttachmentUploadSetting}
-                                  disabled={!canWrite || attachmentUploadSettingLoading}
+                                  disabled={!canEditAttachmentUploadSetting || attachmentUploadSettingLoading}
                                 >
                                   {attachmentUploadSettingLoading ? '保存中...' : '保存'}
                                 </button>

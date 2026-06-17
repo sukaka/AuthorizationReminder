@@ -40,6 +40,21 @@ test('frontend exposes optional next actions for stock checkpoint stages', () =>
   assert.match(frontendApp, /setSelectedAdvanceAction/);
 });
 
+test('backend exposes permission metadata and effective permissions for the current user', () => {
+  assert.match(backendIndex, /\/api\/device-flow\/permissions\/meta/);
+  assert.match(backendIndex, /\/api\/device-flow\/permissions\/effective/);
+  assert.match(backendIndex, /MENU_PERMISSION_DEFINITIONS/);
+  assert.match(backendIndex, /BUTTON_PERMISSION_DEFINITIONS/);
+});
+
+test('frontend renders permission settings and uses effective permissions for menus and buttons', () => {
+  assert.match(frontendApp, /activeMenu === 'permissions'/);
+  assert.match(frontendApp, /refreshPermissionEffective/);
+  assert.match(frontendApp, /permissionMenuAllowed/);
+  assert.match(frontendApp, /permissionButtonAllowed/);
+  assert.match(frontendApp, /onSavePermissionPolicies/);
+});
+
 test('frontend labels and flow copy match the required operation flow', () => {
   for (const stage of expectedStages) {
     assert.match(frontendApp, new RegExp(`${stage}:`), `frontend should label ${stage}`);

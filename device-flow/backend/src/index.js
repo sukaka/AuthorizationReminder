@@ -142,6 +142,31 @@ const SLA_STAGE_LABEL = {
   OUTBOUNDED_FOR_SHIP: '出库',
   SHIPPED: '发货',
 };
+const MENU_PERMISSION_DEFINITIONS = [
+  { code: 'menu.dashboard', key: 'dashboard', label: '看板总览', defaultRoles: ['admin', 'sysadmin', 'user', 'editor', 'reviewer'] },
+  { code: 'menu.sla', key: 'sla', label: 'SLA催办', defaultRoles: ['admin', 'sysadmin'] },
+  { code: 'menu.batch', key: 'batch', label: '批量处理', defaultRoles: ['admin', 'sysadmin'] },
+  { code: 'menu.jobs', key: 'jobs', label: '流转单列表', defaultRoles: ['admin', 'sysadmin', 'user', 'editor', 'reviewer'] },
+  { code: 'menu.create', key: 'create', label: '新建流转单', defaultRoles: ['admin', 'sysadmin'] },
+  { code: 'menu.permissions', key: 'permissions', label: '权限设置', defaultRoles: ['admin', 'sysadmin'] },
+  { code: 'menu.audit', key: 'audit', label: '审计日志', defaultRoles: ['auditor'] },
+  { code: 'menu.audit-verify', key: 'audit-verify', label: '审计验签', defaultRoles: ['auditor'] },
+];
+const BUTTON_PERMISSION_DEFINITIONS = [
+  { code: 'button.create-job', key: 'createJob', label: '创建流转单', defaultRoles: ['admin', 'sysadmin'] },
+  { code: 'button.batch-import', key: 'batchImport', label: '批量导入', defaultRoles: ['admin', 'sysadmin'] },
+  { code: 'button.batch-stage', key: 'batchStage', label: '批量推进', defaultRoles: ['admin', 'sysadmin'] },
+  { code: 'button.sla-write', key: 'slaWrite', label: '保存SLA规则', defaultRoles: ['admin', 'sysadmin'] },
+  { code: 'button.sla-run', key: 'slaRun', label: '执行SLA催办', defaultRoles: ['admin', 'sysadmin'] },
+  { code: 'button.sla-reminder-delete', key: 'slaReminderDelete', label: '删除催办记录', defaultRoles: ['admin', 'sysadmin'] },
+  { code: 'button.attachment-upload', key: 'attachmentUpload', label: '上传附件', defaultRoles: ['admin', 'sysadmin'] },
+  { code: 'button.attachment-delete', key: 'attachmentDelete', label: '删除附件', defaultRoles: ['admin', 'sysadmin'] },
+  { code: 'button.attachment-settings', key: 'attachmentSettings', label: '附件上传配置', defaultRoles: ['admin', 'sysadmin'] },
+  { code: 'button.rework', key: 'rework', label: '退回重做', defaultRoles: ['admin', 'sysadmin'] },
+  { code: 'button.permission-manage', key: 'permissionManage', label: '保存权限策略', defaultRoles: ['admin', 'sysadmin'] },
+  { code: 'button.audit-export', key: 'auditExport', label: '导出审计日志', defaultRoles: ['auditor'] },
+  { code: 'button.audit-verify', key: 'auditVerify', label: '审计验签', defaultRoles: ['auditor'] },
+];
 
 const defaultOrigins = ['http://localhost:18083', 'http://127.0.0.1:18083'].map(normalizeOrigin);
 const allowedOrigins = (process.env.CORS_ORIGINS || '')
@@ -428,6 +453,7 @@ const authRequired = asyncHandler(async (req, _res, next) => {
 const auditorAuditPathAllowList = new Set([
   '/api/health',
   '/api/auth/me',
+  '/api/device-flow/permissions/effective',
   '/api/device-flow/logs',
   '/api/device-flow/audit/verify',
   '/api/device-flow/reports/audit.csv',
@@ -669,27 +695,77 @@ const findMatchedPermissionPolicy = async ({ role, department, actionCode, stage
   return rows[0] || null;
 };
 
-const ensureActionPermission = async ({ action, actor, stageCode }) => {
-  const allowedRoles = ACTION_ALLOWED_ROLES[action];
-  if (!allowedRoles) throw appError('不支持的阶段动作');
+const roleInDefaults = (role, defaultRoles) => {
+  const roleCode = normalizeRole(role);
+  const roles = Array.isArray(defaultRoles) ? defaultRoles.map((item) => trimText(item).toLowerCase()) : [];
+  return roles.includes('*') || roles.includes(roleCode);
+};
 
-  const actionCode = ACTION_PERMISSION_CODE[action] || '';
+const resolvePermissionAllowed = async ({ actor, actionCode, stageCode = '*', defaultRoles = [] }) => {
   const policy = await findMatchedPermissionPolicy({
     role: actor?.role,
     department: actor?.department,
     actionCode,
     stageCode,
   });
-  if (policy) {
-    if (trimText(policy.effect).toUpperCase() === 'DENY') {
-      throw appError(`权限策略拒绝该动作: ${action}`, 403);
-    }
-    return;
-  }
+  if (policy) return trimText(policy.effect).toUpperCase() !== 'DENY';
+  return roleInDefaults(actor?.role, defaultRoles);
+};
 
-  if (!allowedRoles.has(normalizeRole(actor?.role))) {
+const requireOperationPermission = (actionCode, defaultRoles = ['admin', 'sysadmin'], stageCode = '*') =>
+  asyncHandler(async (req, _res, next) => {
+    const actor = getActor(req);
+    const allowed = await resolvePermissionAllowed({ actor, actionCode, stageCode, defaultRoles });
+    if (!allowed) throw appError(`无权限执行动作: ${actionCode}`, 403);
+    next();
+  });
+
+const ensureActionPermission = async ({ action, actor, stageCode }) => {
+  const allowedRoles = ACTION_ALLOWED_ROLES[action];
+  if (!allowedRoles) throw appError('不支持的阶段动作');
+
+  const actionCode = ACTION_PERMISSION_CODE[action] || '';
+  const allowed = await resolvePermissionAllowed({
+    actor,
+    actionCode,
+    stageCode,
+    defaultRoles: Array.from(allowedRoles),
+  });
+  if (!allowed) {
     throw appError(`当前角色无权限执行动作: ${action}`, 403);
   }
+};
+
+const buildEffectivePermissions = async (actor) => {
+  const menus = {};
+  for (const item of MENU_PERMISSION_DEFINITIONS) {
+    menus[item.key] = await resolvePermissionAllowed({
+      actor,
+      actionCode: item.code,
+      defaultRoles: item.defaultRoles,
+    });
+  }
+
+  const buttons = {};
+  for (const item of BUTTON_PERMISSION_DEFINITIONS) {
+    buttons[item.key] = await resolvePermissionAllowed({
+      actor,
+      actionCode: item.code,
+      defaultRoles: item.defaultRoles,
+    });
+  }
+
+  const stageActions = {};
+  for (const [action, stage] of Object.entries(ACTION_TO_STAGE)) {
+    stageActions[action] = await resolvePermissionAllowed({
+      actor,
+      actionCode: ACTION_PERMISSION_CODE[action],
+      stageCode: stage,
+      defaultRoles: Array.from(ACTION_ALLOWED_ROLES[action] || []),
+    });
+  }
+
+  return { menus, buttons, stageActions };
 };
 
 const buildJobNo = () => {
@@ -2812,7 +2888,7 @@ app.get(
 
 app.put(
   '/api/device-flow/sla/rules',
-  requireWriter,
+  requireOperationPermission('button.sla-write'),
   asyncHandler(async (req, res) => {
     const actor = getActor(req);
     const parsedRules = normalizeSlaRuleInput(req.body?.rules);
@@ -2854,7 +2930,7 @@ app.put(
 
 app.post(
   '/api/device-flow/sla/run',
-  requireWriter,
+  requireOperationPermission('button.sla-run'),
   asyncHandler(async (req, res) => {
     const actor = getActor(req);
     const maxScanRaw = Number(req.body?.max_scan || 300);
@@ -2870,7 +2946,7 @@ app.post(
 
 app.delete(
   '/api/device-flow/sla/reminders/:id',
-  requireWriter,
+  requireOperationPermission('button.sla-reminder-delete'),
   asyncHandler(async (req, res) => {
     const reminderId = Number(req.params.id || 0);
     if (!Number.isInteger(reminderId) || reminderId <= 0) throw appError('id 参数非法');
@@ -2910,7 +2986,7 @@ app.delete(
 
 app.delete(
   '/api/device-flow/sla/reminders',
-  requireWriter,
+  requireOperationPermission('button.sla-reminder-delete'),
   asyncHandler(async (req, res) => {
     const actor = getActor(req);
     const totalRow = await get('SELECT COUNT(*) AS total FROM device_sla_reminders');
@@ -3043,7 +3119,7 @@ app.get(
 
 app.post(
   '/api/device-flow/jobs',
-  requireWriter,
+  requireOperationPermission('button.create-job'),
   asyncHandler(async (req, res) => {
     const actor = getActor(req);
     const createdRow = await createJobWithActor({
@@ -3215,8 +3291,42 @@ app.get(
 );
 
 app.get(
+  '/api/device-flow/permissions/meta',
+  requireOperationPermission('button.permission-manage'),
+  asyncHandler(async (_req, res) => {
+    res.json({
+      roles: ['admin', 'sysadmin', 'user', 'editor', 'reviewer', 'auditor', '*'],
+      effects: ['ALLOW', 'DENY'],
+      menus: MENU_PERMISSION_DEFINITIONS,
+      buttons: BUTTON_PERMISSION_DEFINITIONS,
+      stage_actions: Object.entries(ACTION_TO_STAGE).map(([action, stage]) => ({
+        action,
+        action_code: ACTION_PERMISSION_CODE[action],
+        label: SLA_STAGE_LABEL[stage] ? `执行${SLA_STAGE_LABEL[stage]}` : action,
+        stage_code: stage,
+        stage_label: SLA_STAGE_LABEL[stage] || stage,
+        default_roles: Array.from(ACTION_ALLOWED_ROLES[action] || []),
+      })),
+      stages: STAGES.map((stage) => ({ stage_code: stage, stage_label: SLA_STAGE_LABEL[stage] || stage })),
+    });
+  })
+);
+
+app.get(
+  '/api/device-flow/permissions/effective',
+  asyncHandler(async (req, res) => {
+    const actor = getActor(req);
+    const permissions = await buildEffectivePermissions(actor);
+    res.json({
+      user: actor,
+      ...permissions,
+    });
+  })
+);
+
+app.get(
   '/api/device-flow/permissions/policies',
-  requireWriter,
+  requireOperationPermission('button.permission-manage'),
   asyncHandler(async (_req, res) => {
     const rows = await query(
       `SELECT id, role_code, department_code, action_code, stage_code, effect, enabled, note, updated_at
@@ -3242,7 +3352,7 @@ app.get(
 
 app.put(
   '/api/device-flow/permissions/policies',
-  requireWriter,
+  requireOperationPermission('button.permission-manage'),
   asyncHandler(async (req, res) => {
     const actor = getActor(req);
     if (!CHANGE_REVIEW_ROLES.has(normalizeRole(actor.role))) throw appError('仅管理员可修改权限策略', 403);
@@ -3489,7 +3599,7 @@ app.post(
 
 app.post(
   '/api/device-flow/import/jobs.xlsx',
-  requireWriter,
+  requireOperationPermission('button.batch-import'),
   importUpload.single('file'),
   asyncHandler(async (req, res) => {
     const actor = getActor(req);
@@ -3762,7 +3872,7 @@ app.get(
 
 app.delete(
   '/api/device-flow/attachments/:id',
-  requireAttachmentDeleter,
+  requireOperationPermission('button.attachment-delete'),
   asyncHandler(async (req, res) => {
     const id = Number(req.params.id || 0);
     if (!Number.isInteger(id) || id <= 0) throw appError('ID非法');
@@ -3822,7 +3932,7 @@ app.delete(
 
 app.post(
   '/api/device-flow/jobs/:id/attachments',
-  requireAttachmentUploader,
+  requireOperationPermission('button.attachment-upload'),
   uploadAttachmentFile,
   asyncHandler(async (req, res) => {
     const jobId = Number(req.params.id || 0);
@@ -4155,7 +4265,13 @@ app.post(
 app.post(
   '/api/device-flow/jobs/:id/rework',
   asyncHandler(async (req, res) => {
-    if (!REWORK_ALLOWED_ROLES.has(normalizeRole(req.user?.role))) {
+    const actor = getActor(req);
+    const canRework = await resolvePermissionAllowed({
+      actor,
+      actionCode: 'button.rework',
+      defaultRoles: Array.from(REWORK_ALLOWED_ROLES),
+    });
+    if (!canRework) {
       throw appError('当前角色无权限执行退回', 403);
     }
 
@@ -4168,8 +4284,6 @@ app.post(
     const expectedVersion = parseExpectedVersion(req);
     if (!targetStage || !STAGES.includes(targetStage)) throw appError('退回目标阶段非法');
     if (!reason) throw appError('退回原因不能为空');
-
-    const actor = getActor(req);
 
     const updated = await transaction(async (tx) => {
       const current = await tx.get('SELECT * FROM device_jobs WHERE id = ? FOR UPDATE', [id]);
@@ -4873,7 +4987,6 @@ app.get(
 
 app.get(
   '/api/device-flow/settings/attachment-upload',
-  requireWriter,
   asyncHandler(async (_req, res) => {
     const setting = await loadAttachmentUploadSetting();
     res.json(setting);
