@@ -838,6 +838,7 @@ const buildStagePayload = (action, rawPayload) => {
 
   if (action === 'os-install') {
     return compactObject({
+      device_sn: trimText(payload.device_sn).toUpperCase(),
       os_name: trimText(payload.os_name),
       os_version: trimText(payload.os_version),
       install_mode: trimText(payload.install_mode),
@@ -1458,6 +1459,9 @@ const advanceStageJob = async ({
       updateFields.hardware_checked_by_role = actor.role;
       updateFields.hardware_checked_at = 'NOW()';
     } else if (toStage === 'OS_INSTALLED') {
+      if (trimText(stagePayload.device_sn)) {
+        updateFields.device_sn = trimText(stagePayload.device_sn).toUpperCase();
+      }
       updateFields.os_installed_by_sub = actor.sub;
       updateFields.os_installed_by_name = actor.name;
       updateFields.os_installed_by_role = actor.role;
@@ -1625,7 +1629,6 @@ const parseImportWorkbookRowsWithErrors = (fileBuffer) => {
     if (!mapped.device_sn && !mapped.customer_name && !mapped.sales_order_no && !mapped.inbound_tracking_no && !mapped.remark) {
       return;
     }
-    if (!mapped.device_sn) errors.push(`第 ${lineNo} 行：device_sn/设备SN 不能为空`);
     if (!mapped.customer_name) errors.push(`第 ${lineNo} 行：customer_name/客户名称 不能为空`);
     mappedRows.push({
       ...mapped,
@@ -1734,20 +1737,20 @@ const buildJobsWorkbookBuffer = (rows) => {
 const buildImportTemplateBuffer = () => {
   const templateRows = [
     {
-      设备SN: 'SN-EXAMPLE-001',
+      设备SN: '',
       设备型号: 'NSG-2000',
       客户名称: '示例客户A',
       销售订单号: 'SO-20260219-001',
       来件快递单号: 'IN-TRACK-001',
-      备注: '首批导入示例',
+      备注: '设备SN可在系统安装完成后补录',
     },
     {
-      设备SN: 'SN-EXAMPLE-002',
+      设备SN: '',
       设备型号: 'NSG-3000',
       客户名称: '示例客户B',
       销售订单号: '',
       来件快递单号: '',
-      备注: '',
+      备注: '设备SN可留空',
     },
   ];
   const sheet = XLSX.utils.json_to_sheet(templateRows);
@@ -1764,7 +1767,6 @@ const createJobWithActor = async ({ actor, jobData, requestIp, source = 'manual'
   const inboundTrackingNo = trimText(jobData?.inbound_tracking_no);
   const remark = trimText(jobData?.remark);
 
-  if (!deviceSn) throw appError('设备SN不能为空');
   if (!customerName) throw appError('客户名称不能为空');
 
   let createdId = 0;

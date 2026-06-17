@@ -218,6 +218,7 @@ const initialAdvanceForm = {
   warehouse_note: '',
   outbound_target: '',
   outbound_note: '',
+  device_sn: '',
   os_name: '',
   os_version: '',
   install_mode: '',
@@ -430,6 +431,7 @@ const buildStagePayloadByAction = (action, form) => {
   }
   if (action === 'os-install') {
     return {
+      device_sn: form.device_sn,
       os_name: form.os_name,
       os_version: form.os_version,
       install_mode: form.install_mode,
@@ -473,6 +475,8 @@ const buildStagePayloadByAction = (action, form) => {
 }
 
 const trimText = (value) => String(value || '').trim()
+
+const deviceSnText = (value) => trimText(value) || '待安装后补录'
 
 const ensureFailNote = (result, note, remark, label) => {
   if (result === 'FAIL' && !trimText(note) && !trimText(remark)) {
@@ -704,7 +708,7 @@ const batchPayloadTemplateMap = {
   },
   'warehouse-after-hardware': { warehouse_location: '', warehouse_note: '硬件检查后入库' },
   'outbound-for-install': { outbound_target: '系统安装', outbound_note: '系统安装前出库' },
-  'os-install': { os_name: 'JXOS', os_version: '1.0.0', install_result: 'PASS', install_note: '' },
+  'os-install': { device_sn: '', os_name: 'JXOS', os_version: '1.0.0', install_result: 'PASS', install_note: '' },
   test: { boot_test: 'PASS', network_test: 'PASS', stress_test: 'PASS', test_result: 'PASS', test_note: '' },
   approve: { approve_result: 'PASS', approve_note: '批量审核通过' },
   pack: { package_check: 'PASS', accessory_check: 'PASS', box_no: 'BOX-BATCH-001', pack_note: '' },
@@ -2204,6 +2208,14 @@ function App() {
       return (
         <>
           <div className="field">
+            <label>设备SN（系统安装后补录）</label>
+            <input
+              value={advanceForm.device_sn}
+              onChange={(e) => setAdvanceForm((prev) => ({ ...prev, device_sn: e.target.value }))}
+              placeholder="系统安装完成后填写"
+            />
+          </div>
+          <div className="field">
             <label>系统名称</label>
             <input value={advanceForm.os_name} onChange={(e) => setAdvanceForm((prev) => ({ ...prev, os_name: e.target.value }))} />
           </div>
@@ -2690,7 +2702,7 @@ function App() {
                                   {item.job_no || `#${item.id}`}
                                 </button>
                               </td>
-                              <td>{item.device_sn}</td>
+                              <td>{deviceSnText(item.device_sn)}</td>
                               <td>{item.customer_name || '-'}</td>
                               <td>{stageText(item.current_stage)}</td>
                               <td>{Number(item.overdue_days || 0)}</td>
@@ -2876,7 +2888,7 @@ function App() {
                                   {item.job_no || `#${item.id}`}
                                 </button>
                               </td>
-                              <td>{item.device_sn || '-'}</td>
+                              <td>{deviceSnText(item.device_sn)}</td>
                               <td>{item.customer_name || '-'}</td>
                               <td>{stageText(item.current_stage)}</td>
                               <td>{Number(item.overdue_hours || 0)}</td>
@@ -2989,7 +3001,7 @@ function App() {
                     <input
                       value={batchExportFilter.keyword}
                       onChange={(e) => setBatchExportFilter((prev) => ({ ...prev, keyword: e.target.value }))}
-                      placeholder="单号/SN/客户"
+                      placeholder="单号/客户/来件/SN"
                     />
                   </div>
                   <div className="field">
@@ -3127,12 +3139,11 @@ function App() {
             <div className="panel-body">
               <form className="grid" onSubmit={onCreateJob}>
                 <div className="field">
-                  <label>设备SN *</label>
+                  <label>设备SN（系统安装后补录）</label>
                   <input
                     value={createForm.device_sn}
                     onChange={(e) => setCreateForm((prev) => ({ ...prev, device_sn: e.target.value }))}
-                    placeholder="如：SN-001"
-                    required
+                    placeholder="可留空，系统安装完成后填写"
                   />
                 </div>
                 <div className="field">
@@ -3357,7 +3368,7 @@ function App() {
                   <input
                     value={filters.keyword}
                     onChange={(e) => setFilters((prev) => ({ ...prev, keyword: e.target.value }))}
-                    placeholder="搜索单号/SN/客户"
+                    placeholder="搜索单号/客户/来件/SN"
                   />
                   <select value={filters.stage} onChange={(e) => setFilters((prev) => ({ ...prev, stage: e.target.value }))}>
                     {stageOptions.map((item) => (
@@ -3388,7 +3399,7 @@ function App() {
                       {jobs.map((row) => (
                         <tr key={row.id}>
                           <td>{row.job_no}</td>
-                          <td>{row.device_sn}</td>
+                          <td>{deviceSnText(row.device_sn)}</td>
                           <td>{row.customer_name || '-'}</td>
                           <td>{row.inbound_tracking_no || '-'}</td>
                           <td>{row.outbound_tracking_no || '-'}</td>
@@ -3457,7 +3468,7 @@ function App() {
                       <>
                         <div className="grid detail-summary-grid">
                           <div className="field"><label>流转单号</label><input value={detail.job_no || '-'} readOnly /></div>
-                          <div className="field"><label>设备SN</label><input value={detail.device_sn || '-'} readOnly /></div>
+                          <div className="field"><label>设备SN</label><input value={deviceSnText(detail.device_sn)} readOnly /></div>
                           <div className="field"><label>客户</label><input value={detail.customer_name || '-'} readOnly /></div>
                           <div className="field"><label>当前阶段</label><input value={stageText(detail.current_stage)} readOnly /></div>
                           <div className="field"><label>来件单号</label><input value={detail.inbound_tracking_no || '-'} readOnly /></div>
@@ -3813,7 +3824,7 @@ function App() {
                       setAuditPage(1)
                       setAuditFilter((prev) => ({ ...prev, keyword: e.target.value }))
                     }}
-                    placeholder="支持流转单号/SN/客户/动作/说明"
+                    placeholder="支持流转单号/客户/SN/动作/说明"
                   />
                 </div>
               </div>
@@ -3861,7 +3872,7 @@ function App() {
                             row.job_no || '-'
                           )}
                         </td>
-                        <td>{row.device_sn || '-'}</td>
+                        <td>{deviceSnText(row.device_sn)}</td>
                         <td>{auditMessageText(row.message)}</td>
                         <td>{row.request_ip || '-'}</td>
                         <td>{buildAuditChangeSummary(row.before_data, row.after_data)}</td>

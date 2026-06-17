@@ -124,6 +124,17 @@ test('frontend labels and flow copy match the required operation flow', () => {
   );
 });
 
+test('device SN is optional before system installation and can be filled during OS install', () => {
+  assert.doesNotMatch(backendIndex, /设备SN不能为空/);
+  assert.doesNotMatch(backendIndex, /device_sn\/设备SN 不能为空/);
+  assert.match(backendIndex, /device_sn: trimText\(payload\.device_sn\)\.toUpperCase\(\)/);
+  assert.match(backendIndex, /updateFields\.device_sn = trimText\(stagePayload\.device_sn\)\.toUpperCase\(\)/);
+  assert.match(frontendApp, /设备SN（系统安装后补录）/);
+  assert.doesNotMatch(frontendApp, /设备SN \*/);
+  assert.match(frontendApp, /待安装后补录/);
+  assert.match(frontendApp, /placeholder="系统安装完成后填写"/);
+});
+
 test('frontend key responsibility rows use stage records for repeated stages', () => {
   assert.match(frontendApp, /detail\.stage_records/);
   assert.match(frontendApp, /operator_name/);
