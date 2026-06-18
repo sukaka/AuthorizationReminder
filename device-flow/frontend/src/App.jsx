@@ -1090,12 +1090,12 @@ function App() {
   const dualSignUserOptions = useMemo(
     () =>
       (Array.isArray(systemUsers) ? systemUsers : [])
-        .filter((item) => ['admin', 'sysadmin'].includes(normalizeRole(item?.role)))
+        .filter((item) => String(item?.id) !== String(currentUserId || ''))
         .map((item) => ({
           value: String(item.id),
-          label: `${item.username} · ${item.role}`,
+          label: `${item.username} · ${roleText(item.role)}${item.department_code ? ` · ${item.department_code}` : ''}`,
         })),
-    [systemUsers],
+    [currentUserId, systemUsers],
   )
 
   const summary = useMemo(() => {

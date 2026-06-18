@@ -24,6 +24,7 @@ const {
   assertExpectedSecondSigner,
   normalizeExpectedSecondSigner,
 } = require('./dual-sign');
+const { buildJobVisibilityScope } = require('./job-visibility');
 
 const app = express();
 const PORT = Number(process.env.PORT || 5184);
@@ -492,6 +493,67 @@ const getActor = (req) => ({
   department: String(req.user?.department || ''),
 });
 
+const appendJobVisibilityScope = ({ where, params, actor, jobAlias = 'j' }) => {
+  const scope = buildJobVisibilityScope({ actor, jobAlias });
+  if (!scope.sql) return;
+  where.push(scope.sql);
+  params.push(...scope.params);
+};
+
+const getVisibleJobById = async ({ jobId, actor, db = { get } }) => {
+  const where = ['j.id = ?'];
+  const params = [jobId];
+  appendJobVisibilityScope({ where, params, actor, jobAlias: 'j' });
+  return db.get(`SELECT j.* FROM device_jobs j WHERE ${where.join(' AND ')} LIMIT 1`, params);
+};
+
+const requireVisibleJob = asyncHandler(async (req, _res, next) => {
+  const jobId = Number(req.params.id || 0);
+  if (!Number.isInteger(jobId) || jobId <= 0) throw appError('ID非法');
+  const job = await getVisibleJobById({ jobId, actor: getActor(req) });
+  if (!job) throw appError('流转单不存在或无权访问', 404);
+  req.visibleJob = job;
+  next();
+});
+
+const requireVisibleAttachment = asyncHandler(async (req, _res, next) => {
+  const attachmentId = Number(req.params.id || 0);
+  if (!Number.isInteger(attachmentId) || attachmentId <= 0) throw appError('ID非法');
+  const where = ['a.id = ?', 'a.deleted_at IS NULL'];
+  const params = [attachmentId];
+  appendJobVisibilityScope({ where, params, actor: getActor(req), jobAlias: 'j' });
+  const row = await get(
+    `SELECT a.*
+     FROM device_attachments a
+     JOIN device_jobs j ON j.id = a.job_id
+     WHERE ${where.join(' AND ')}
+     LIMIT 1`,
+    params
+  );
+  if (!row) throw appError('附件不存在或无权访问', 404);
+  req.visibleAttachment = row;
+  next();
+});
+
+const requireVisibleChangeRequest = asyncHandler(async (req, _res, next) => {
+  const requestId = Number(req.params.id || 0);
+  if (!Number.isInteger(requestId) || requestId <= 0) throw appError('ID非法');
+  const where = ['cr.id = ?'];
+  const params = [requestId];
+  appendJobVisibilityScope({ where, params, actor: getActor(req), jobAlias: 'j' });
+  const row = await get(
+    `SELECT cr.*
+     FROM device_change_requests cr
+     JOIN device_jobs j ON j.id = cr.job_id
+     WHERE ${where.join(' AND ')}
+     LIMIT 1`,
+    params
+  );
+  if (!row) throw appError('审批单不存在或无权访问', 404);
+  req.visibleChangeRequest = row;
+  next();
+});
+
 const parsePaging = (rawPage, rawLimit) => {
   const page = Number(rawPage || 1);
   const limit = Number(rawLimit || 20);
@@ -520,9 +582,11 @@ const parseStageFilter = (rawValue, fieldName = 'stage') => {
   return stage;
 };
 
-const buildDashboardJobWhere = ({ stage, customer }) => {
+const buildDashboardJobWhere = ({ stage, customer, actor }) => {
   const where = [];
   const params = [];
+
+  appendJobVisibilityScope({ where, params, actor, jobAlias: 'j' });
 
   if (stage) {
     where.push('j.current_stage = ?');
@@ -1975,7 +2039,7 @@ const runSlaReminderCheck = async ({ actor, requestIp, maxScan = 300 }) => {
   return summary;
 };
 
-const getSlaSummary = async (minOverdueHours, reminderPaging = { page: 1, limit: 10, offset: 0 }) => {
+const getSlaSummary = async (minOverdueHours, reminderPaging = { page: 1, limit: 10, offset: 0 }, actor) => {
   const minHours = Number.isInteger(minOverdueHours) && minOverdueHours >= 0 ? minOverdueHours : 0;
   const safeReminderPaging = {
     page: Number.isInteger(reminderPaging.page) && reminderPaging.page > 0 ? reminderPaging.page : 1,
@@ -1986,6 +2050,9 @@ const getSlaSummary = async (minOverdueHours, reminderPaging = { page: 1, limit:
     offset:
       Number.isInteger(reminderPaging.offset) && reminderPaging.offset >= 0 ? reminderPaging.offset : 0,
   };
+  const visibility = buildJobVisibilityScope({ actor, jobAlias: 'j' });
+  const overdueVisibilitySql = visibility.sql ? ` AND ${visibility.sql}` : '';
+  const reminderVisibilitySql = visibility.sql ? `WHERE ${visibility.sql}` : '';
 
   const [rules, overdueRows, reminderTotalRow, reminderRows] = await Promise.all([
     listSlaRules(),
@@ -2004,11 +2071,18 @@ const getSlaSummary = async (minOverdueHours, reminderPaging = { page: 1, limit:
        WHERE j.status <> 'COMPLETED'
          AND TIMESTAMPDIFF(HOUR, j.updated_at, NOW()) >= r.threshold_hours
          AND TIMESTAMPDIFF(HOUR, j.updated_at, NOW()) >= ?
+         ${overdueVisibilitySql}
        ORDER BY overdue_hours DESC, j.updated_at ASC
       LIMIT 200`,
-      [minHours]
+      [minHours, ...visibility.params]
     ),
-    get('SELECT COUNT(*) AS total FROM device_sla_reminders'),
+    get(
+      `SELECT COUNT(*) AS total
+       FROM device_sla_reminders r
+       JOIN device_jobs j ON j.id = r.job_id
+       ${reminderVisibilitySql}`,
+      visibility.params
+    ),
     query(
       `SELECT r.id,
               r.job_id,
@@ -2021,10 +2095,11 @@ const getSlaSummary = async (minOverdueHours, reminderPaging = { page: 1, limit:
               j.device_sn,
               j.customer_name
        FROM device_sla_reminders r
-       LEFT JOIN device_jobs j ON j.id = r.job_id
+       JOIN device_jobs j ON j.id = r.job_id
+       ${reminderVisibilitySql}
        ORDER BY r.id DESC
        LIMIT ? OFFSET ?`,
-      [safeReminderPaging.limit, safeReminderPaging.offset]
+      [...visibility.params, safeReminderPaging.limit, safeReminderPaging.offset]
     ),
   ]);
 
@@ -2552,9 +2627,10 @@ const runRetentionForAttachments = async ({ actor, requestIp, dryRun = false } =
   };
 };
 
-const buildCycleReport = async ({ fromDate = '', toDate = '' } = {}) => {
+const buildCycleReport = async ({ fromDate = '', toDate = '', actor } = {}) => {
   const where = [];
   const params = [];
+  appendJobVisibilityScope({ where, params, actor, jobAlias: 'j' });
   if (fromDate) {
     where.push('s.operated_at >= CONCAT(?, " 00:00:00")');
     params.push(fromDate);
@@ -2711,6 +2787,7 @@ app.post(
 app.post(
   '/api/device-flow/jobs/:id/scan/apply',
   requireWriter,
+  requireVisibleJob,
   asyncHandler(async (req, res) => {
     const id = Number(req.params.id || 0);
     if (!Number.isInteger(id) || id <= 0) throw appError('ID非法');
@@ -2789,7 +2866,11 @@ app.get(
       Number.isInteger(overdueDaysRaw) && overdueDaysRaw > 0 ? Math.min(overdueDaysRaw, 30) : DASHBOARD_OVERDUE_DAYS;
     const stage = parseStageFilter(req.query.stage, 'stage');
     const customer = trimText(req.query.customer);
-    const { whereSql: jobWhereSql, params: jobParams } = buildDashboardJobWhere({ stage, customer });
+    const { whereSql: jobWhereSql, params: jobParams } = buildDashboardJobWhere({
+      stage,
+      customer,
+      actor: getActor(req),
+    });
     const canReadOperationLogs = AUDIT_READER_ROLES.has(normalizeRole(req.user?.role));
 
     const [stageRows, totalRow, openRow, completedRow, createdTodayRow, shippedTodayRow, overdueRows, recentRows] =
@@ -2892,7 +2973,7 @@ app.get(
     const minOverdueHours =
       Number.isInteger(minOverdueHoursRaw) && minOverdueHoursRaw >= 0 ? Math.min(minOverdueHoursRaw, 720) : 0;
     const reminderPaging = parsePaging(req.query.page, req.query.limit || 10);
-    const summary = await getSlaSummary(minOverdueHours, reminderPaging);
+    const summary = await getSlaSummary(minOverdueHours, reminderPaging, getActor(req));
     res.json(summary);
   })
 );
@@ -3152,22 +3233,23 @@ app.get(
 
     const where = [];
     const params = [];
+    appendJobVisibilityScope({ where, params, actor: getActor(req), jobAlias: 'j' });
     if (keyword) {
       where.push(
-        '(job_no LIKE ? OR device_sn LIKE ? OR customer_name LIKE ? OR sales_order_no LIKE ? OR inbound_tracking_no LIKE ? OR outbound_tracking_no LIKE ?)'
+        '(j.job_no LIKE ? OR j.device_sn LIKE ? OR j.customer_name LIKE ? OR j.sales_order_no LIKE ? OR j.inbound_tracking_no LIKE ? OR j.outbound_tracking_no LIKE ?)'
       );
       params.push(`%${keyword}%`, `%${keyword}%`, `%${keyword}%`, `%${keyword}%`, `%${keyword}%`, `%${keyword}%`);
     }
     if (stage) {
       if (!STAGES.includes(stage)) throw appError('stage 参数非法');
-      where.push('current_stage = ?');
+      where.push('j.current_stage = ?');
       params.push(stage);
     }
 
     const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
-    const totalRow = await get(`SELECT COUNT(*) AS total FROM device_jobs ${whereSql}`, params);
+    const totalRow = await get(`SELECT COUNT(*) AS total FROM device_jobs j ${whereSql}`, params);
     const rows = await query(
-      `SELECT * FROM device_jobs ${whereSql} ORDER BY id DESC LIMIT ? OFFSET ?`,
+      `SELECT j.* FROM device_jobs j ${whereSql} ORDER BY j.id DESC LIMIT ? OFFSET ?`,
       [...params, paging.limit, paging.offset]
     );
 
@@ -3274,6 +3356,7 @@ app.put(
 
 app.get(
   '/api/device-flow/jobs/:id/hardware-baseline',
+  requireVisibleJob,
   asyncHandler(async (req, res) => {
     const id = Number(req.params.id || 0);
     if (!Number.isInteger(id) || id <= 0) throw appError('ID非法');
@@ -3526,23 +3609,25 @@ app.get(
     const status = trimText(req.query.status).toUpperCase();
     const where = [];
     const params = [];
+    appendJobVisibilityScope({ where, params, actor: getActor(req), jobAlias: 'j' });
     if (status) {
-      where.push('status = ?');
+      where.push('ds.status = ?');
       params.push(status);
     }
     if (!status) {
-      where.push("status IN ('PENDING_SECOND', 'PROCESSING', 'EXPIRED', 'COMPLETED')");
+      where.push("ds.status IN ('PENDING_SECOND', 'PROCESSING', 'EXPIRED', 'COMPLETED')");
     }
     const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
     const rows = await query(
-      `SELECT id, token, job_id, action, from_stage, to_stage,
-              first_signer_name, first_signer_role,
-              expected_second_signer_sub, expected_second_signer_name, expected_second_signer_role,
-              second_signer_name, second_signer_role,
-              status, expires_at, completed_at, created_at
-       FROM device_dual_sign_sessions
+      `SELECT ds.id, ds.token, ds.job_id, ds.action, ds.from_stage, ds.to_stage,
+              ds.first_signer_name, ds.first_signer_role,
+              ds.expected_second_signer_sub, ds.expected_second_signer_name, ds.expected_second_signer_role,
+              ds.second_signer_name, ds.second_signer_role,
+              ds.status, ds.expires_at, ds.completed_at, ds.created_at
+       FROM device_dual_sign_sessions ds
+       JOIN device_jobs j ON j.id = ds.job_id
        ${whereSql}
-       ORDER BY id DESC
+       ORDER BY ds.id DESC
        LIMIT 500`,
       params
     );
@@ -3581,6 +3666,8 @@ app.post(
     const failures = [];
     for (const jobId of jobIds) {
       try {
+        const visibleJob = await getVisibleJobById({ jobId, actor });
+        if (!visibleJob) throw appError('流转单不存在或无权访问', 404);
         const updated = await advanceStageJob({
           jobId,
           action,
@@ -3689,12 +3776,12 @@ app.post(
 
 app.get(
   '/api/device-flow/jobs/:id',
+  requireVisibleJob,
   asyncHandler(async (req, res) => {
     const id = Number(req.params.id || 0);
     if (!Number.isInteger(id) || id <= 0) throw appError('ID非法');
 
-    const job = await get('SELECT * FROM device_jobs WHERE id = ?', [id]);
-    if (!job) throw appError('流转单不存在', 404);
+    const job = req.visibleJob;
 
     const [stageRecords, operationLogs, attachments] = await Promise.all([
       query('SELECT * FROM device_stage_records WHERE job_id = ? ORDER BY id DESC', [id]),
@@ -3716,6 +3803,7 @@ app.get(
 
 app.get(
   '/api/device-flow/jobs/:id/lock',
+  requireVisibleJob,
   asyncHandler(async (req, res) => {
     const id = Number(req.params.id || 0);
     if (!Number.isInteger(id) || id <= 0) throw appError('ID非法');
@@ -3743,6 +3831,7 @@ app.get(
 app.post(
   '/api/device-flow/jobs/:id/lock',
   requireWriter,
+  requireVisibleJob,
   asyncHandler(async (req, res) => {
     const id = Number(req.params.id || 0);
     if (!Number.isInteger(id) || id <= 0) throw appError('ID非法');
@@ -3818,6 +3907,7 @@ app.post(
 app.delete(
   '/api/device-flow/jobs/:id/lock',
   requireWriter,
+  requireVisibleJob,
   asyncHandler(async (req, res) => {
     const id = Number(req.params.id || 0);
     if (!Number.isInteger(id) || id <= 0) throw appError('ID非法');
@@ -3860,6 +3950,7 @@ app.delete(
 
 app.get(
   '/api/device-flow/jobs/:id/attachments',
+  requireVisibleJob,
   asyncHandler(async (req, res) => {
     const id = Number(req.params.id || 0);
     if (!Number.isInteger(id) || id <= 0) throw appError('ID非法');
@@ -3874,12 +3965,12 @@ app.get(
 
 app.get(
   '/api/device-flow/attachments/:id/download',
+  requireVisibleAttachment,
   asyncHandler(async (req, res) => {
     const id = Number(req.params.id || 0);
     if (!Number.isInteger(id) || id <= 0) throw appError('ID非法');
 
-    const row = await get('SELECT * FROM device_attachments WHERE id = ? AND deleted_at IS NULL', [id]);
-    if (!row) throw appError('附件不存在', 404);
+    const row = req.visibleAttachment;
 
     const resolved = path.resolve(row.file_path);
     if (!resolved.startsWith(UPLOAD_ROOT)) throw appError('附件路径非法', 400);
@@ -3892,6 +3983,7 @@ app.get(
 app.delete(
   '/api/device-flow/attachments/:id',
   requireOperationPermission('button.attachment-delete'),
+  requireVisibleAttachment,
   asyncHandler(async (req, res) => {
     const id = Number(req.params.id || 0);
     if (!Number.isInteger(id) || id <= 0) throw appError('ID非法');
@@ -3952,6 +4044,7 @@ app.delete(
 app.post(
   '/api/device-flow/jobs/:id/attachments',
   requireOperationPermission('button.attachment-upload'),
+  requireVisibleJob,
   uploadAttachmentFile,
   asyncHandler(async (req, res) => {
     const jobId = Number(req.params.id || 0);
@@ -4030,6 +4123,7 @@ app.post(
 
 app.post(
   '/api/device-flow/jobs/:id/stages/:action',
+  requireVisibleJob,
   asyncHandler(async (req, res) => {
     const id = Number(req.params.id || 0);
     if (!Number.isInteger(id) || id <= 0) throw appError('ID非法');
@@ -4283,6 +4377,7 @@ app.post(
 
 app.post(
   '/api/device-flow/jobs/:id/rework',
+  requireVisibleJob,
   asyncHandler(async (req, res) => {
     const actor = getActor(req);
     const canRework = await resolvePermissionAllowed({
@@ -4374,6 +4469,7 @@ app.post(
 
 app.get(
   '/api/device-flow/jobs/:id/change-requests',
+  requireVisibleJob,
   asyncHandler(async (req, res) => {
     const id = Number(req.params.id || 0);
     if (!Number.isInteger(id) || id <= 0) throw appError('ID非法');
@@ -4397,6 +4493,7 @@ app.get(
 app.post(
   '/api/device-flow/jobs/:id/change-requests',
   requireWriter,
+  requireVisibleJob,
   asyncHandler(async (req, res) => {
     const id = Number(req.params.id || 0);
     if (!Number.isInteger(id) || id <= 0) throw appError('ID非法');
@@ -4495,6 +4592,7 @@ app.post(
 app.post(
   '/api/device-flow/change-requests/:id/withdraw',
   requireWriter,
+  requireVisibleChangeRequest,
   asyncHandler(async (req, res) => {
     const id = Number(req.params.id || 0);
     if (!Number.isInteger(id) || id <= 0) throw appError('ID非法');
@@ -4547,6 +4645,7 @@ app.post(
 app.post(
   '/api/device-flow/change-requests/:id/reject',
   requireWriter,
+  requireVisibleChangeRequest,
   asyncHandler(async (req, res) => {
     const id = Number(req.params.id || 0);
     if (!Number.isInteger(id) || id <= 0) throw appError('ID非法');
@@ -4599,6 +4698,7 @@ app.post(
 app.post(
   '/api/device-flow/change-requests/:id/approve',
   requireWriter,
+  requireVisibleChangeRequest,
   asyncHandler(async (req, res) => {
     const id = Number(req.params.id || 0);
     if (!Number.isInteger(id) || id <= 0) throw appError('ID非法');
@@ -4772,6 +4872,7 @@ app.get(
     const stage = parseStageFilter(req.query.stage, 'stage');
     const where = [];
     const params = [];
+    appendJobVisibilityScope({ where, params, actor: getActor(req), jobAlias: 'j' });
 
     if (keyword) {
       where.push(
@@ -4825,7 +4926,7 @@ app.get(
       Number.isInteger(overdueDaysRaw) && overdueDaysRaw > 0 ? Math.min(overdueDaysRaw, 30) : DASHBOARD_OVERDUE_DAYS;
     const stage = parseStageFilter(req.query.stage, 'stage');
     const customer = trimText(req.query.customer);
-    const { whereSql, params } = buildDashboardJobWhere({ stage, customer });
+    const { whereSql, params } = buildDashboardJobWhere({ stage, customer, actor: getActor(req) });
 
     const rows = await query(
       `SELECT j.id,
@@ -4990,6 +5091,7 @@ app.get(
     const report = await buildCycleReport({
       fromDate: from,
       toDate: to,
+      actor: getActor(req),
     });
     res.json(report);
   })
@@ -5404,6 +5506,7 @@ app.get(
 
 app.get(
   '/api/device-flow/jobs/:id/labels/:type',
+  requireVisibleJob,
   asyncHandler(async (req, res) => {
     const id = Number(req.params.id || 0);
     if (!Number.isInteger(id) || id <= 0) throw appError('ID非法');

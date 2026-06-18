@@ -135,6 +135,27 @@ test('device SN is optional before system installation and can be filled during 
   assert.match(frontendApp, /placeholder="系统安装完成后填写"/);
 });
 
+test('backend scopes jobs to admins, creators, and permanent second signers', () => {
+  assert.match(backendIndex, /require\('\.\/job-visibility'\)/);
+  assert.match(backendIndex, /const appendJobVisibilityScope =/);
+  assert.match(backendIndex, /const requireVisibleJob = asyncHandler/);
+  assert.match(backendIndex, /流转单不存在或无权访问', 404/);
+  assert.match(
+    backendIndex,
+    /'\/api\/device-flow\/jobs',\s*asyncHandler\(async \(req, res\) => \{[\s\S]*?appendJobVisibilityScope\(\{ where, params, actor: getActor\(req\), jobAlias: 'j' \}\)/
+  );
+  assert.match(
+    backendIndex,
+    /'\/api\/device-flow\/jobs\/:id',\s*requireVisibleJob,\s*asyncHandler/
+  );
+});
+
+test('second signer selector includes every eligible device-flow user except the current user', () => {
+  assert.doesNotMatch(frontendApp, /\.filter\(\(item\) => \['admin', 'sysadmin'\]\.includes\(normalizeRole\(item\?\.role\)\)\)/);
+  assert.match(frontendApp, /\.filter\(\(item\) => String\(item\?\.id\) !== String\(currentUserId \|\| ''\)\)/);
+  assert.match(frontendApp, /label: `\$\{item\.username\} · \$\{roleText\(item\.role\)\}/);
+});
+
 test('frontend key responsibility rows use stage records for repeated stages', () => {
   assert.match(frontendApp, /detail\.stage_records/);
   assert.match(frontendApp, /operator_name/);
