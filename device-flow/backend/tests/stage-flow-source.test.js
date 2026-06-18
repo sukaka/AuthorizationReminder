@@ -156,6 +156,19 @@ test('second signer selector includes every active user except the current user'
   assert.match(frontendApp, /label: `\$\{item\.username\} · \$\{roleText\(item\.role\)\}/);
 });
 
+test('second signer selector supports fuzzy username search and keyboard selection', () => {
+  assert.match(frontendApp, /const SearchableUserSelect =/);
+  assert.match(frontendApp, /option\.username\.toLocaleLowerCase\('zh-CN'\)\.includes\(normalizedQuery\)/);
+  assert.match(frontendApp, /role="combobox"/);
+  assert.match(frontendApp, /aria-expanded=\{open\}/);
+  assert.match(frontendApp, /event\.key === 'ArrowDown'/);
+  assert.match(frontendApp, /event\.key === 'ArrowUp'/);
+  assert.match(frontendApp, /event\.key === 'Enter'/);
+  assert.match(frontendApp, /event\.key === 'Escape'/);
+  assert.match(frontendApp, /未找到用户/);
+  assert.doesNotMatch(frontendApp, /<select\s+value=\{advanceForm\.expected_second_signer_sub\}/);
+});
+
 test('frontend key responsibility rows use stage records for repeated stages', () => {
   assert.match(frontendApp, /detail\.stage_records/);
   assert.match(frontendApp, /operator_name/);

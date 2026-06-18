@@ -762,6 +762,121 @@ const formatFileSize = (bytes) => {
   return `${Math.round(size)} B`
 }
 
+const SearchableUserSelect = ({ options, value, onChange, disabled = false, loading = false }) => {
+  const rootRef = useRef(null)
+  const [open, setOpen] = useState(false)
+  const [query, setQuery] = useState('')
+  const [highlightedIndex, setHighlightedIndex] = useState(0)
+  const selected = options.find((option) => option.value === String(value || ''))
+  const normalizedQuery = query.trim().toLocaleLowerCase('zh-CN')
+  const filteredOptions = useMemo(
+    () => options.filter((option) => option.username.toLocaleLowerCase('zh-CN').includes(normalizedQuery)),
+    [normalizedQuery, options],
+  )
+
+  useEffect(() => {
+    setHighlightedIndex(0)
+  }, [normalizedQuery])
+
+  useEffect(() => {
+    const onPointerDown = (event) => {
+      if (!rootRef.current?.contains(event.target)) {
+        setOpen(false)
+        setQuery('')
+      }
+    }
+    document.addEventListener('mousedown', onPointerDown)
+    return () => document.removeEventListener('mousedown', onPointerDown)
+  }, [])
+
+  const chooseOption = (option) => {
+    onChange(option.value)
+    setOpen(false)
+    setQuery('')
+  }
+
+  const onKeyDown = (event) => {
+    if (event.key === 'ArrowDown') {
+      event.preventDefault()
+      setOpen(true)
+      setHighlightedIndex((index) => Math.min(index + 1, Math.max(filteredOptions.length - 1, 0)))
+    } else if (event.key === 'ArrowUp') {
+      event.preventDefault()
+      setOpen(true)
+      setHighlightedIndex((index) => Math.max(index - 1, 0))
+    } else if (event.key === 'Enter' && open && filteredOptions[highlightedIndex]) {
+      event.preventDefault()
+      chooseOption(filteredOptions[highlightedIndex])
+    } else if (event.key === 'Escape') {
+      setOpen(false)
+      setQuery('')
+    }
+  }
+
+  return (
+    <div className="searchable-user-select" ref={rootRef}>
+      <div className="searchable-user-select-control">
+        <input
+          role="combobox"
+          aria-autocomplete="list"
+          aria-controls="second-signer-options"
+          aria-expanded={open}
+          autoComplete="off"
+          value={open ? query : selected?.label || ''}
+          placeholder={loading ? '用户加载中...' : '输入用户名搜索'}
+          disabled={disabled || loading}
+          onFocus={() => {
+            setQuery('')
+            setOpen(true)
+          }}
+          onChange={(event) => {
+            setQuery(event.target.value)
+            setOpen(true)
+            if (value) onChange('')
+          }}
+          onKeyDown={onKeyDown}
+        />
+        {value && !disabled && !loading ? (
+          <button
+            type="button"
+            className="searchable-user-select-clear"
+            aria-label="清除复签人"
+            title="清除复签人"
+            onClick={() => {
+              onChange('')
+              setQuery('')
+            }}
+          >
+            ×
+          </button>
+        ) : null}
+      </div>
+      {open && !disabled && !loading ? (
+        <div className="searchable-user-select-options" id="second-signer-options" role="listbox">
+          {filteredOptions.length > 0 ? (
+            filteredOptions.map((option, index) => (
+              <button
+                type="button"
+                role="option"
+                aria-selected={option.value === String(value || '')}
+                className={`searchable-user-select-option ${index === highlightedIndex ? 'highlighted' : ''}`}
+                key={option.value}
+                onMouseDown={(event) => event.preventDefault()}
+                onMouseEnter={() => setHighlightedIndex(index)}
+                onClick={() => chooseOption(option)}
+              >
+                {option.label}
+              </button>
+            ))
+          ) : (
+            <div className="searchable-user-select-empty">未找到用户</div>
+          )}
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
 function App() {
   const [token, setToken] = useState('')
   const [user, setUser] = useState(null)
@@ -1093,6 +1208,7 @@ function App() {
         .filter((item) => String(item?.id) !== String(currentUserId || ''))
         .map((item) => ({
           value: String(item.id),
+          username: String(item.username || ''),
           label: `${item.username} · ${roleText(item.role)}${item.department_code ? ` · ${item.department_code}` : ''}`,
         })),
     [currentUserId, systemUsers],
@@ -2106,16 +2222,13 @@ function App() {
         </div>
         <div className="field">
           <label>指定复签人</label>
-          <select
+          <SearchableUserSelect
+            options={dualSignUserOptions}
             value={advanceForm.expected_second_signer_sub}
-            onChange={(e) => setAdvanceForm((prev) => ({ ...prev, expected_second_signer_sub: e.target.value }))}
+            onChange={(nextValue) => setAdvanceForm((prev) => ({ ...prev, expected_second_signer_sub: nextValue }))}
             disabled={Boolean(trimText(advanceForm.dual_sign_token)) || systemUsersLoading}
-          >
-            <option value="">{systemUsersLoading ? '加载中...' : '请选择第二复签人'}</option>
-            {dualSignUserOptions.map((item) => (
-              <option key={item.value} value={item.value}>{item.label}</option>
-            ))}
-          </select>
+            loading={systemUsersLoading}
+          />
           {trimText(advanceForm.dual_sign_token) && selectedSecondSigner ? (
             <span className="muted">本次会签指定由 {selectedSecondSigner.label} 复签</span>
           ) : null}
