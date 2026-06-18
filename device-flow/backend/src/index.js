@@ -1170,7 +1170,7 @@ const resolveExpectedSecondSigner = async ({ req, expectedSub, firstSignerSub })
   if (normalizedSub === trimText(firstSignerSub)) throw appError('第二复签人不能选择首签人本人', 409);
   const users = await fetchDeviceFlowUserDirectory(req.authToken);
   const user = users.find((item) => trimText(item?.id) === normalizedSub);
-  if (!user) throw appError('指定复签人不存在或无设备流转访问权限', 400);
+  if (!user) throw appError('指定复签人不存在或已停用', 400);
   return {
     sub: normalizedSub,
     name: trimText(user.username),

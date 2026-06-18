@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 
 const { buildSystemUserDirectory } = require('../system-user-directory');
 
-test('buildSystemUserDirectory returns active users with access to the requested system', () => {
+test('buildSystemUserDirectory returns every active user for device-flow signer selection', () => {
   const rows = [
     { id: 1, username: 'admin', role: 'admin', is_active: 1, app_access: '["device-flow"]', department_code: 'OPS' },
     { id: 2, username: 'tester', role: 'user', is_active: 1, app_access: '["device-flow"]', department_code: 'QA' },
@@ -13,9 +13,17 @@ test('buildSystemUserDirectory returns active users with access to the requested
 
   const result = buildSystemUserDirectory(rows, 'device-flow');
 
-  assert.equal(result.length, 2);
-  assert.deepEqual(result.map((item) => item.username), ['admin', 'tester']);
-  assert.ok(result.every((item) => item.app_access.includes('device-flow')));
+  assert.equal(result.length, 3);
+  assert.deepEqual(result.map((item) => item.username), ['admin', 'tester', 'other']);
+});
+
+test('buildSystemUserDirectory keeps app access filtering for other systems', () => {
+  const rows = [
+    { id: 1, username: 'faq-user', role: 'user', is_active: 1, app_access: '["faq"]', department_code: 'OPS' },
+    { id: 2, username: 'other-user', role: 'user', is_active: 1, app_access: '["delivery"]', department_code: 'QA' },
+  ];
+
+  assert.deepEqual(buildSystemUserDirectory(rows, 'faq').map((item) => item.username), ['faq-user']);
 });
 
 test('buildSystemUserDirectory keeps sysadmin candidates for device-flow authorization checks', () => {

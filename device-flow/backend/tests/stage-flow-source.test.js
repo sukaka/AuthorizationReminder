@@ -150,7 +150,7 @@ test('backend scopes jobs to admins, creators, and permanent second signers', ()
   );
 });
 
-test('second signer selector includes every eligible device-flow user except the current user', () => {
+test('second signer selector includes every active user except the current user', () => {
   assert.doesNotMatch(frontendApp, /\.filter\(\(item\) => \['admin', 'sysadmin'\]\.includes\(normalizeRole\(item\?\.role\)\)\)/);
   assert.match(frontendApp, /\.filter\(\(item\) => String\(item\?\.id\) !== String\(currentUserId \|\| ''\)\)/);
   assert.match(frontendApp, /label: `\$\{item\.username\} · \$\{roleText\(item\.role\)\}/);

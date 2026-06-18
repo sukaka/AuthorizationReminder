@@ -18,8 +18,9 @@ const canAppearInSystemDirectory = (row, systemKey) => {
   if (Number(row?.is_active || 0) !== 1) return false;
   const normalized = normalizeUserRow(row);
   if (!normalized) return false;
+  if (systemKey === 'device-flow') return true;
   if (normalized.app_access.includes(systemKey)) return true;
-  return systemKey === 'device-flow' && normalized.role === 'sysadmin';
+  return false;
 };
 
 const buildSystemUserDirectory = (rows, systemKey) => {
