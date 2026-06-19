@@ -11,6 +11,7 @@ device-flow/frontend/dist
 sec-impl/frontend/dist
 prompt-center/frontend/dist
 big-screen-center/**/dist
+juxin-ai-assistant/apps/desktop/dist
 *.tsbuildinfo
 .DS_Store
 npm-debug.log
