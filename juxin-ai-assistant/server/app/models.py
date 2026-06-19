@@ -159,3 +159,88 @@ class GenerationRecord(TimestampMixin, Base):
     latency_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
     usage_json: Mapped[dict] = mapped_column(JSON, default=dict)
     error_code: Mapped[str] = mapped_column(String(64), default="")
+    parent_generation_id: Mapped[int | None] = mapped_column(
+        foreign_key_type,
+        ForeignKey("ai_generation_records.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    error_message_safe: Mapped[str] = mapped_column(Text, default="")
+    knowledge_refs_json: Mapped[list] = mapped_column(JSON, default=list)
+
+
+class KnowledgeItem(TimestampMixin, Base):
+    __tablename__ = "ai_knowledge_items"
+
+    id: Mapped[int] = mapped_column(primary_key_type, primary_key=True, autoincrement=True)
+    uuid: Mapped[str] = mapped_column(
+        String(36),
+        unique=True,
+        default=lambda: str(uuid_lib.uuid4()),
+    )
+    title: Mapped[str] = mapped_column(String(255))
+    category: Mapped[str] = mapped_column(String(64), index=True)
+    tags_json: Mapped[list] = mapped_column(JSON, default=list)
+    keywords_json: Mapped[list] = mapped_column(JSON, default=list)
+    content_ciphertext: Mapped[bytes] = mapped_column(LargeBinary)
+    content_nonce: Mapped[bytes] = mapped_column(LargeBinary)
+    key_version: Mapped[str] = mapped_column(String(32))
+    priority: Mapped[int] = mapped_column(Integer, default=0)
+    status: Mapped[str] = mapped_column(String(16), default="ACTIVE", index=True)
+    created_by: Mapped[str] = mapped_column(String(64))
+    updated_by: Mapped[str] = mapped_column(String(64))
+
+
+class KnowledgeTaskLink(TimestampMixin, Base):
+    __tablename__ = "ai_knowledge_task_links"
+    __table_args__ = (UniqueConstraint("knowledge_id", "task_id"),)
+
+    id: Mapped[int] = mapped_column(primary_key_type, primary_key=True, autoincrement=True)
+    knowledge_id: Mapped[int] = mapped_column(
+        foreign_key_type,
+        ForeignKey("ai_knowledge_items.id", ondelete="CASCADE"),
+        index=True,
+    )
+    task_id: Mapped[int] = mapped_column(
+        foreign_key_type,
+        ForeignKey("ai_tasks.id", ondelete="CASCADE"),
+        index=True,
+    )
+
+
+class FeedbackRecord(TimestampMixin, Base):
+    __tablename__ = "ai_feedback_records"
+    __table_args__ = (
+        UniqueConstraint("generation_id", "sso_user_id", "feedback_type"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key_type, primary_key=True, autoincrement=True)
+    uuid: Mapped[str] = mapped_column(
+        String(36),
+        unique=True,
+        default=lambda: str(uuid_lib.uuid4()),
+    )
+    generation_id: Mapped[int] = mapped_column(
+        foreign_key_type,
+        ForeignKey("ai_generation_records.id", ondelete="CASCADE"),
+        index=True,
+    )
+    sso_user_id: Mapped[str] = mapped_column(String(64), index=True)
+    feedback_type: Mapped[str] = mapped_column(String(32))
+    content_ciphertext: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+    content_nonce: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+    key_version: Mapped[str] = mapped_column(String(32))
+
+
+class UserFavorite(TimestampMixin, Base):
+    __tablename__ = "ai_user_favorites"
+    __table_args__ = (UniqueConstraint("sso_user_id", "task_id"),)
+
+    id: Mapped[int] = mapped_column(primary_key_type, primary_key=True, autoincrement=True)
+    sso_user_id: Mapped[str] = mapped_column(String(64), index=True)
+    task_id: Mapped[int] = mapped_column(
+        foreign_key_type,
+        ForeignKey("ai_tasks.id", ondelete="CASCADE"),
+        index=True,
+    )
