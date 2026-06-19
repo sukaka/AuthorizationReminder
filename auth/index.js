@@ -1310,6 +1310,18 @@ const authorizeSca = (user, action) => {
   return deny('不支持的授权动作');
 };
 
+const authorizeAiAssistant = (user, action) => {
+  if (!user) return deny('未登录');
+  if (!canAccessSystem(user, 'ai-assistant')) return deny('无权限访问聚信 AI 助手');
+  const role = String(user.role || '').toLowerCase();
+  if (action === 'app:enter' || action === 'ai_assistant:read' || action === 'ai_assistant:use') return allow();
+  if (action === 'ai_assistant:manage') {
+    if (role === 'admin' || role === 'sysadmin') return allow();
+    return deny('仅管理员或系统管理员可管理聚信 AI 助手');
+  }
+  return deny('不支持的授权动作');
+};
+
 app.get('/api/auth/introspect', async (req, res) => {
   const user = await db.get(
     'SELECT id, username, role, app_access, mfa_enabled, mfa_methods, totp_enabled, totp_secret, email, phone, wecom_id, must_change_password FROM users WHERE id = ?',
@@ -1386,6 +1398,8 @@ app.post('/api/auth/authorize', async (req, res) => {
     result = authorizeSca(user, action);
   } else if (system === 'big-screen') {
     result = authorizeBigScreen(user, action);
+  } else if (system === 'ai-assistant') {
+    result = authorizeAiAssistant(user, action);
   }
   return res.json({ ...result, user: buildAuthUserPayload(user), scope, apps });
 });
@@ -1420,6 +1434,7 @@ app.get('/api/auth/apps', async (req, res) => {
   const promptCenterURL = process.env.APP_PROMPT_CENTER_URL || 'http://localhost:18088';
   const scaURL = process.env.APP_SCA_URL || 'http://localhost:18089';
   const bigScreenURL = process.env.APP_BIG_SCREEN_URL || 'http://localhost:18092';
+  const aiAssistantURL = process.env.APP_AI_ASSISTANT_URL || 'http://localhost:18093';
   const adminCenterURL = process.env.APP_ADMIN_CENTER_URL || 'http://localhost:5180/admin-center';
   const auditCenterURL = process.env.APP_AUDIT_CENTER_URL || 'http://localhost:5180/audit-center';
   const appAccess = getUserAppAccess(user);
@@ -1481,6 +1496,10 @@ app.get('/api/auth/apps', async (req, res) => {
   if (appAccess.includes('big-screen')) {
     const bigScreenAuth = authorizeBigScreen(user, 'app:enter');
     apps.push({ key: 'big-screen', name: '统一大屏展示中心', url: bigScreenURL, allow: !!bigScreenAuth.allow });
+  }
+  if (appAccess.includes('ai-assistant')) {
+    const aiAssistantAuth = authorizeAiAssistant(user, 'app:enter');
+    apps.push({ key: 'ai-assistant', name: '聚信 AI 助手', url: aiAssistantURL, allow: !!aiAssistantAuth.allow });
   }
   return res.json({
     user: buildAuthUserPayload(user),

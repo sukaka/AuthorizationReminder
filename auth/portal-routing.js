@@ -18,13 +18,14 @@ const SYSTEM_ACCESS_KEYS = Object.freeze([
   'prompt-center',
   'sca',
   'big-screen',
+  'ai-assistant',
   ADMIN_CENTER_KEY,
   AUDIT_CENTER_KEY,
 ]);
 const BUSINESS_SYSTEM_ACCESS_KEYS = Object.freeze(
   SYSTEM_ACCESS_KEYS.filter((key) => key !== ADMIN_CENTER_KEY && key !== AUDIT_CENTER_KEY)
 );
-const REQUIRED_BUSINESS_PORTAL_KEYS = Object.freeze(['train-exam', 'prompt-center', 'sca', 'big-screen']);
+const REQUIRED_BUSINESS_PORTAL_KEYS = Object.freeze(['train-exam', 'prompt-center', 'sca', 'big-screen', 'ai-assistant']);
 
 const normalizePortalRole = (role) => String(role || '').trim().toLowerCase();
 const normalizeSystemAccessKey = (key) => {
@@ -52,9 +53,9 @@ const defaultAppAccessByRole = (role) => {
   if (normalizedRole === 'admin') return [...BUSINESS_SYSTEM_ACCESS_KEYS];
   if (normalizedRole === 'sysadmin') return [ADMIN_CENTER_KEY];
   if (normalizedRole === 'auditor') return [AUDIT_CENTER_KEY, DELIVERY_KEY];
-  if (normalizedRole === 'editor') return ['faq', 'tender', 'train-exam', 'prompt-center', 'sca', 'big-screen'];
-  if (normalizedRole === 'reviewer') return ['faq', 'train-exam', 'prompt-center', 'sca', 'big-screen'];
-  return ['reminder', 'train-exam', 'prompt-center', 'sca', 'big-screen'];
+  if (normalizedRole === 'editor') return ['faq', 'tender', 'train-exam', 'prompt-center', 'sca', 'big-screen', 'ai-assistant'];
+  if (normalizedRole === 'reviewer') return ['faq', 'train-exam', 'prompt-center', 'sca', 'big-screen', 'ai-assistant'];
+  return ['reminder', 'train-exam', 'prompt-center', 'sca', 'big-screen', 'ai-assistant'];
 };
 
 const resolveUserAppAccess = (user) => {

@@ -23,6 +23,7 @@ test('admin defaults to delivery instead of ticketing and sec-impl', () => {
   const access = defaultAppAccessByRole('admin');
   assert.ok(access.includes('delivery'));
   assert.ok(access.includes('big-screen'));
+  assert.ok(access.includes('ai-assistant'));
   assert.equal(access.includes('ticketing'), false);
   assert.equal(access.includes('sec-impl'), false);
 });
@@ -30,6 +31,12 @@ test('admin defaults to delivery instead of ticketing and sec-impl', () => {
 test('ordinary business roles receive unified big-screen portal access', () => {
   for (const role of ['editor', 'reviewer', 'user']) {
     assert.ok(defaultAppAccessByRole(role).includes('big-screen'), `${role} should include big-screen`);
+  }
+});
+
+test('ordinary business roles receive unified AI assistant portal access', () => {
+  for (const role of ['editor', 'reviewer', 'user']) {
+    assert.ok(defaultAppAccessByRole(role).includes('ai-assistant'), `${role} should include ai-assistant`);
   }
 });
 
@@ -104,7 +111,7 @@ test('sysadmin and auditor ignore legacy non-dedicated app_access', () => {
 test('legacy ticketing and sec-impl access folds into delivery once', () => {
   assert.deepEqual(
     resolveUserAppAccess({ role: 'editor', app_access: '["ticketing","sec-impl","faq"]' }),
-    ['delivery', 'faq', 'train-exam', 'prompt-center', 'sca', 'big-screen']
+    ['delivery', 'faq', 'train-exam', 'prompt-center', 'sca', 'big-screen', 'ai-assistant']
   );
 });
 
@@ -115,7 +122,7 @@ test('editor defaults include software composition analysis access', () => {
 test('legacy business users receive software composition analysis portal access', () => {
   assert.deepEqual(
     resolveUserAppAccess({ role: 'user', app_access: '["reminder"]' }),
-    ['reminder', 'train-exam', 'prompt-center', 'sca', 'big-screen']
+    ['reminder', 'train-exam', 'prompt-center', 'sca', 'big-screen', 'ai-assistant']
   );
 });
 

@@ -22,4 +22,8 @@ server/data.db-*
 .env.*
 !.env.example
 .worktrees/
+juxin-ai-assistant/server/.venv/
+juxin-ai-assistant/server/.pytest_cache/
+juxin-ai-assistant/server/**/__pycache__/
+juxin-ai-assistant/server/**/*.py[cod]
 .tmp_*
