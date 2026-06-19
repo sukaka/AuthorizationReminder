@@ -40,3 +40,22 @@
 - 根 `.env` 尚未包含新变量时，Compose 验收需通过进程环境提供同一随机 `PROMPT_CENTER_RUNTIME_TOKEN`、AI 数据库密码和内容加密密钥；不要把实际值写入仓库或日志。
 - Auth 全量测试在当前隔离工作树缺少 `xlsx`、`bcryptjs`，且一个既有大屏 Compose 断言与当前 YAML 形式不一致；AI 助手相关统一登录来源测试单独通过。
 - 前端测试在 Node 25 下会输出无效 `--localstorage-file` 路径警告，但测试通过。
+
+## Phase 2 进度
+
+- 已推送 Task 1–8 服务端批次，远端最新提交 `c107dc2`。
+- 新增员工数据迁移 `0002_employee_features`：知识、反馈、收藏、生成父子关系、完成时间、安全错误和知识引用。
+- 动态字段权威校验、敏感确认摘要、基础知识检索、个人历史、删除、重新生成、收藏、首页和反馈 API 已完成。
+- 服务端全量当前为 73 passed。
+- 八类助手共 88 个任务已写入 `server/catalog/assistants.json`，商务投标不含合同、报价或回款。
+- 真实 MySQL 已升级到 `0002_employee_features`；首次 MySQL 迁移暴露 TEXT/JSON 默认值不兼容，已改为可从部分 DDL 状态恢复并验证成功。
+- 真实数据库当前为 8 个助手、88 个任务、266 个字段、88 个绑定；工作总结 ACTIVE，其余 87 个因 Prompt 尚未发布保持 DRAFT。
+- 完整目录种子真实运行两次，第二次新增助手、任务、字段和绑定均为 0。
+- API 容器已重建且 healthy，未登录 session 仍为 401。
+
+## Phase 2 下一步
+
+- 在 Prompt Center 正式创建并发布目录中缺失的 87 个任务 Prompt；不得在 AI 服务复制运行时 Prompt 正文。
+- 再次运行 `seed_catalog.py`，使 88 个任务全部 ACTIVE。
+- 继续 Task 9 员工工作台、设备草稿和加密待同步队列。
+- 完成 Task 10 OpenAPI 密钥边界、E2E、双主题截图、文档与全量验收。
