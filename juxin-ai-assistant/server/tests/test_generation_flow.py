@@ -181,3 +181,26 @@ def test_complete_rejects_wrong_token_and_repeated_completion(
     )
     assert completed.status_code == 200
     assert repeated.status_code == 409
+
+
+def test_prepare_returns_stable_validation_code_before_prompt_lookup(
+    generation_client,
+    generation_db,
+    seeded_task,
+    respx_mock,
+) -> None:
+    response = generation_client.post(
+        "/api/ai/generations/prepare",
+        json={
+            "task_uuid": seeded_task.uuid,
+            "inputs": {
+                "work_content": "有效内容",
+                "api_key": "不应被服务端接收",
+            },
+        },
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"]["code"] == "TASK_INPUT_INVALID"
+    assert generation_db.scalar(select(GenerationRecord)) is None
+    assert not respx_mock.calls

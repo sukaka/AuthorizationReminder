@@ -10,6 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .crypto import ContentCipher
+from .field_validation import FieldValidationError, validate_task_inputs
 from .models import GenerationRecord, Task, TaskField, TaskPromptBinding
 from .prompt_client import PromptCenterClient, render_prompt
 from .schemas import CompleteGenerationIn, PrepareGenerationIn, SessionPayload
@@ -22,10 +23,6 @@ class PreparedGeneration:
     messages: list[dict[str, str]]
     temperature: float
     safety_notice: str
-
-
-def _missing_required(value: object) -> bool:
-    return value is None or (isinstance(value, str) and not value.strip())
 
 
 async def prepare_generation(
@@ -46,26 +43,28 @@ async def prepare_generation(
         .where(TaskField.task_id == task.id)
         .order_by(TaskField.sort_order.asc(), TaskField.id.asc())
     ))
-    allowed_keys = {field.field_key for field in fields}
-    unknown_keys = sorted(set(request.inputs) - allowed_keys)
-    if unknown_keys:
+    try:
+        normalized_inputs = validate_task_inputs(
+            [
+                {
+                    "field_key": field.field_key,
+                    "field_type": field.field_type,
+                    "required": field.required,
+                    "options_json": field.options_json or [],
+                    "validation_json": field.validation_json or {},
+                }
+                for field in fields
+            ],
+            request.inputs,
+        )
+    except FieldValidationError as exc:
         raise HTTPException(
             status_code=422,
-            detail=f"存在未定义字段：{'、'.join(unknown_keys)}",
-        )
-    missing_keys = [
-        field.field_key
-        for field in fields
-        if field.required and (
-            field.field_key not in request.inputs
-            or _missing_required(request.inputs.get(field.field_key))
-        )
-    ]
-    if missing_keys:
-        raise HTTPException(
-            status_code=422,
-            detail=f"缺少必填字段：{'、'.join(missing_keys)}",
-        )
+            detail={
+                "code": "TASK_INPUT_INVALID",
+                "message": str(exc),
+            },
+        ) from exc
     binding = db.scalar(
         select(TaskPromptBinding).where(
             TaskPromptBinding.task_id == task.id,
@@ -91,7 +90,7 @@ async def prepare_generation(
     except (httpx.HTTPError, ValueError) as exc:
         raise HTTPException(status_code=503, detail="提示词中心暂不可用") from exc
     try:
-        rendered_prompt = render_prompt(prompt["content"], request.inputs)
+        rendered_prompt = render_prompt(prompt["content"], normalized_inputs)
         prompt_version = int(prompt["version_no"])
     except (KeyError, TypeError, ValueError) as exc:
         raise HTTPException(status_code=422, detail=str(exc) or "Prompt 配置无效") from exc
@@ -99,7 +98,7 @@ async def prepare_generation(
     generation_uuid = str(uuid_lib.uuid4())
     completion_token = secrets.token_urlsafe(32)
     encrypted = cipher.encrypt_json(
-        {"inputs": request.inputs},
+        {"inputs": normalized_inputs},
         generation_uuid.encode(),
     )
     record = GenerationRecord(
