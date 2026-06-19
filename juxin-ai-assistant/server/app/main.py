@@ -25,6 +25,7 @@ from .schemas import (
     TaskFieldOut,
     TaskOut,
 )
+from .sensitive import SensitiveDetector, derive_confirmation_key
 
 
 settings = get_settings()
@@ -95,6 +96,14 @@ def get_content_cipher(
     return ContentCipher(current_settings.content_encryption_key)
 
 
+def get_sensitive_detector(
+    current_settings: Annotated[Settings, Depends(get_settings)],
+) -> SensitiveDetector:
+    return SensitiveDetector(
+        derive_confirmation_key(current_settings.content_encryption_key)
+    )
+
+
 @app.get("/api/ai/session", response_model=SessionPayload)
 async def session(
     payload: Annotated[SessionPayload, Depends(get_session)],
@@ -156,6 +165,10 @@ async def prepare_generation_route(
     db: Annotated[Session, Depends(get_db)],
     prompt_client: Annotated[PromptCenterClient, Depends(get_prompt_client)],
     cipher: Annotated[ContentCipher, Depends(get_content_cipher)],
+    sensitive_detector: Annotated[
+        SensitiveDetector,
+        Depends(get_sensitive_detector),
+    ],
 ) -> PrepareGenerationOut:
     await require_action(
         "ai_assistant:use",
@@ -170,6 +183,7 @@ async def prepare_generation_route(
         prompt_client,
         cipher,
         current_settings.content_encryption_key_version,
+        sensitive_detector,
     )
     return PrepareGenerationOut(**prepared.__dict__)
 

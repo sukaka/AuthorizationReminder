@@ -204,3 +204,55 @@ def test_prepare_returns_stable_validation_code_before_prompt_lookup(
     assert response.json()["detail"]["code"] == "TASK_INPUT_INVALID"
     assert generation_db.scalar(select(GenerationRecord)) is None
     assert not respx_mock.calls
+
+
+def test_prepare_requires_current_sensitive_confirmation_digest(
+    generation_client,
+    generation_db,
+    seeded_task,
+    respx_mock,
+) -> None:
+    body = {
+        "task_uuid": seeded_task.uuid,
+        "inputs": {"work_content": "联系 13800138000 完成统一登录接入"},
+    }
+
+    warning = generation_client.post("/api/ai/generations/prepare", json=body)
+
+    assert warning.status_code == 409
+    payload = warning.json()["detail"]
+    assert payload["code"] == "SENSITIVE_CONFIRMATION_REQUIRED"
+    assert payload["findings"] == [
+        {
+            "code": "PHONE",
+            "field": "work_content",
+            "preview": "***",
+        }
+    ]
+    assert "13800138000" not in json.dumps(payload, ensure_ascii=False)
+    assert generation_db.scalar(select(GenerationRecord)) is None
+    assert not respx_mock.calls
+
+    mock_published_prompt(respx_mock)
+    confirmed = generation_client.post(
+        "/api/ai/generations/prepare",
+        json={
+            **body,
+            "sensitive_confirmation_digest": payload["confirmation_digest"],
+        },
+    )
+    assert confirmed.status_code == 201
+
+    changed = generation_client.post(
+        "/api/ai/generations/prepare",
+        json={
+            **body,
+            "inputs": {"work_content": "联系 13900139000 完成统一登录接入"},
+            "sensitive_confirmation_digest": payload["confirmation_digest"],
+        },
+    )
+    assert changed.status_code == 409
+    assert (
+        changed.json()["detail"]["confirmation_digest"]
+        != payload["confirmation_digest"]
+    )

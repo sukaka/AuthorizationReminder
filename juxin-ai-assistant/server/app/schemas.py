@@ -46,6 +46,11 @@ class PrepareGenerationIn(BaseModel):
 
     task_uuid: str = Field(min_length=1, max_length=64)
     inputs: dict[str, object]
+    sensitive_confirmation_digest: str | None = Field(
+        default=None,
+        min_length=64,
+        max_length=64,
+    )
 
 
 class MessageOut(BaseModel):

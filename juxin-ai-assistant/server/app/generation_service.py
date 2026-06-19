@@ -14,6 +14,7 @@ from .field_validation import FieldValidationError, validate_task_inputs
 from .models import GenerationRecord, Task, TaskField, TaskPromptBinding
 from .prompt_client import PromptCenterClient, render_prompt
 from .schemas import CompleteGenerationIn, PrepareGenerationIn, SessionPayload
+from .sensitive import SensitiveDetector
 
 
 @dataclass(frozen=True)
@@ -32,6 +33,7 @@ async def prepare_generation(
     prompt_client: PromptCenterClient,
     cipher: ContentCipher,
     key_version: str,
+    sensitive_detector: SensitiveDetector,
 ) -> PreparedGeneration:
     task = db.scalar(
         select(Task).where(Task.uuid == request.task_uuid, Task.status == "ACTIVE")
@@ -65,6 +67,27 @@ async def prepare_generation(
                 "message": str(exc),
             },
         ) from exc
+    sensitive_scan = sensitive_detector.scan(normalized_inputs)
+    if sensitive_scan.findings and not sensitive_detector.is_confirmed(
+        sensitive_scan,
+        request.sensitive_confirmation_digest,
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "SENSITIVE_CONFIRMATION_REQUIRED",
+                "message": "检测到敏感信息，请确认后继续",
+                "findings": [
+                    {
+                        "code": finding.code,
+                        "field": finding.field,
+                        "preview": finding.preview,
+                    }
+                    for finding in sensitive_scan.findings
+                ],
+                "confirmation_digest": sensitive_scan.confirmation_digest,
+            },
+        )
     binding = db.scalar(
         select(TaskPromptBinding).where(
             TaskPromptBinding.task_id == task.id,
