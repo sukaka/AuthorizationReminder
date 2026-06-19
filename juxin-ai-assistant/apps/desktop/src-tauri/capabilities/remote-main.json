@@ -4,7 +4,7 @@
   "description": "聚信 AI 助手固定远程工作台权限",
   "windows": ["main"],
   "remote": {
-    "urls": ["https://ai-assistant.invalid"]
+    "urls": ["http://localhost:18093"]
   },
   "permissions": [
     "core:default",

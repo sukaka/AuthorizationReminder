@@ -48,17 +48,32 @@ export function ModelProfilesPage() {
               <span className={profile.hasApiKey ? 'secret-ready' : 'secret-missing'}>
                 {profile.hasApiKey ? '密钥已配置' : '未配置'}
               </span>
-              {!profile.isDefault && (
+              <div className="model-actions">
                 <button
                   onClick={async () => {
-                    await invoke('model_profile_set_default', { profileId: profile.id });
+                    const result = await invoke<{ message: string }>('model_profile_test', { profileId: profile.id });
+                    setMessage(result.message);
+                  }}
+                  type="button"
+                >测试连接</button>
+                {!profile.isDefault && (
+                  <button
+                    onClick={async () => {
+                      await invoke('model_profile_set_default', { profileId: profile.id });
+                      await load();
+                    }}
+                    type="button"
+                  >设为默认</button>
+                )}
+                <button
+                  className="danger-link"
+                  onClick={async () => {
+                    await invoke('model_profile_delete', { profileId: profile.id });
                     await load();
                   }}
                   type="button"
-                >
-                  设为默认
-                </button>
-              )}
+                >删除</button>
+              </div>
             </article>
           ))}
         </div>

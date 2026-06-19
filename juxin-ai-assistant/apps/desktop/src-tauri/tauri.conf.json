@@ -18,7 +18,7 @@
         "height": 820,
         "minWidth": 960,
         "minHeight": 640,
-        "url": "https://ai-assistant.invalid"
+        "url": "http://localhost:18093"
       }
     ],
     "security": {

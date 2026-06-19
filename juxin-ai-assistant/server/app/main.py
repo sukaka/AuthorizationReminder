@@ -7,12 +7,14 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
 
 from sqlalchemy.orm import Session
+from sqlalchemy import select
 
 from .auth import get_session, require_action
 from .config import Settings, get_settings
 from .crypto import ContentCipher
 from .database import get_db
 from .generation_service import complete_generation, prepare_generation
+from .models import Task, TaskField
 from .prompt_client import PromptCenterClient
 from .schemas import (
     CompleteGenerationIn,
@@ -20,6 +22,8 @@ from .schemas import (
     PrepareGenerationIn,
     PrepareGenerationOut,
     SessionPayload,
+    TaskFieldOut,
+    TaskOut,
 )
 
 
@@ -96,6 +100,47 @@ async def session(
     payload: Annotated[SessionPayload, Depends(get_session)],
 ) -> SessionPayload:
     return payload
+
+
+@app.get("/api/ai/tasks/{task_code}", response_model=TaskOut)
+def get_task(
+    task_code: str,
+    _session_payload: Annotated[SessionPayload, Depends(get_session)],
+    db: Annotated[Session, Depends(get_db)],
+) -> TaskOut:
+    task = db.scalar(
+        select(Task).where(Task.code == task_code, Task.status == "ACTIVE")
+    )
+    if task is None:
+        from fastapi import HTTPException
+
+        raise HTTPException(status_code=404, detail="任务不存在或尚未发布")
+    fields = db.scalars(
+        select(TaskField)
+        .where(TaskField.task_id == task.id)
+        .order_by(TaskField.sort_order, TaskField.id)
+    ).all()
+    return TaskOut(
+        uuid=task.uuid,
+        code=task.code,
+        name=task.name,
+        description=task.description,
+        output_format=task.output_format,
+        safety_notice=task.safety_notice,
+        fields=[
+            TaskFieldOut(
+                field_key=field.field_key,
+                label=field.label,
+                field_type=field.field_type.upper(),
+                required=field.required,
+                placeholder=field.placeholder,
+                example=field.example,
+                options=field.options_json or [],
+                validation=field.validation_json or {},
+            )
+            for field in fields
+        ],
+    )
 
 
 @app.post(

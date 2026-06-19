@@ -4,6 +4,7 @@ mod model_client;
 mod model_profiles;
 
 use std::sync::{Arc, Mutex};
+use std::collections::HashMap;
 
 use commands::AppState;
 use keychain::SystemKeychain;
@@ -20,6 +21,7 @@ pub fn run() {
                 profiles_path,
                 profiles: Mutex::new(profiles),
                 secrets: Arc::new(SystemKeychain),
+                cancellations: Mutex::new(HashMap::new()),
             });
             Ok(())
         })

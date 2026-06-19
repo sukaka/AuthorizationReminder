@@ -47,3 +47,27 @@ def test_bootstrap_uses_schema_scoped_privileges_and_parameterized_password() ->
     assert "GRANT OPTION" not in grant_statement
     assert "SELECT, INSERT, UPDATE, DELETE, CREATE, ALTER, DROP, INDEX, REFERENCES" in grant_statement
     connection.close.assert_called_once_with()
+
+
+def test_parameterized_user_statements_escape_mysql_wildcard_percent() -> None:
+    cursor = MagicMock()
+    connection = MagicMock()
+    connection.cursor.return_value.__enter__.return_value = cursor
+
+    bootstrap_database(
+        {
+            "MYSQL_ADMIN_PASSWORD": "root-secret",
+            "MYSQL_DATABASE": "juxin_ai_assistant",
+            "MYSQL_USER": "ai_assistant_user",
+            "MYSQL_PASSWORD": "app-secret",
+        },
+        connect=MagicMock(return_value=connection),
+    )
+
+    parameterized = [
+        call.args
+        for call in cursor.execute.call_args_list
+        if len(call.args) == 2
+    ]
+    for statement, parameters in parameterized:
+        statement % tuple("%s" for _ in parameters)

@@ -20,6 +20,27 @@ class SessionPayload(BaseModel):
     apps: list[str]
 
 
+class TaskFieldOut(BaseModel):
+    field_key: str
+    label: str
+    field_type: str
+    required: bool
+    placeholder: str = ""
+    example: str = ""
+    options: list[str] = Field(default_factory=list)
+    validation: dict = Field(default_factory=dict)
+
+
+class TaskOut(BaseModel):
+    uuid: str
+    code: str
+    name: str
+    description: str
+    output_format: str
+    safety_notice: str
+    fields: list[TaskFieldOut]
+
+
 class PrepareGenerationIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

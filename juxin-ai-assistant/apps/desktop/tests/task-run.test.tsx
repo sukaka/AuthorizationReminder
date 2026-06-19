@@ -117,3 +117,55 @@ it('keeps API keys out of the browser-only experience', () => {
   expect(screen.getByText('生成能力仅在聚信 AI 助手桌面客户端中可用')).toBeInTheDocument();
   expect(screen.queryByLabelText(/API Key/i)).not.toBeInTheDocument();
 });
+
+it('cancels the active local request with its request id', async () => {
+  let resolveGeneration: ((value: unknown) => void) | undefined;
+  const pendingGeneration = new Promise((resolve) => {
+    resolveGeneration = resolve;
+  });
+  server.use(
+    http.post('/api/ai/generations/prepare', () =>
+      HttpResponse.json(
+        {
+          generation_uuid: 'gen-cancel',
+          completion_token: 'complete-cancel',
+          messages: [{ role: 'user', content: '待取消' }],
+          temperature: 0.3,
+          safety_notice: '需人工复核',
+        },
+        { status: 201 },
+      ),
+    ),
+  );
+  invokeMock.mockImplementation((command: string) => {
+    if (command === 'model_profile_list') {
+      return Promise.resolve([
+        {
+          id: 'profile-1',
+          displayName: '公司模型',
+          baseUrl: 'https://model.example/v1/',
+          modelId: 'example-model',
+          temperature: 0.3,
+          timeoutSeconds: 60,
+          isDefault: true,
+          hasApiKey: true,
+        },
+      ]);
+    }
+    if (command === 'model_generate') return pendingGeneration;
+    if (command === 'model_cancel') {
+      resolveGeneration?.({ output: '', latencyMs: 0, usage: {} });
+      return Promise.resolve();
+    }
+    return Promise.reject(new Error(`unexpected command: ${command}`));
+  });
+
+  render(<TaskRunPage task={workSummaryTask} />);
+  await userEvent.type(screen.getByLabelText('工作内容'), '需要中止的生成');
+  await userEvent.click(screen.getByRole('button', { name: '开始生成' }));
+  await userEvent.click(await screen.findByRole('button', { name: '停止生成' }));
+
+  const generateCall = invokeMock.mock.calls.find(([command]) => command === 'model_generate');
+  const cancelCall = invokeMock.mock.calls.find(([command]) => command === 'model_cancel');
+  expect(cancelCall?.[1].requestId).toBe(generateCall?.[1].requestId);
+});

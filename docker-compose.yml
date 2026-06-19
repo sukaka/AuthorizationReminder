@@ -46,6 +46,11 @@ services:
       - ./scripts/deploy/run-mysql.sh:/scripts/run-mysql.sh:ro
     ports:
       - "53308:3306"
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p$$MYSQL_ROOT_PASSWORD --silent"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
 
   api:
     image: codex-new-api:latest
@@ -557,6 +562,11 @@ services:
       - auth
     ports:
       - "5189:5189"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:5189/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
 
   web-prompt-center:
     build:
@@ -567,6 +577,77 @@ services:
       - auth
     ports:
       - "18088:80"
+
+  ai-assistant-db-init:
+    build:
+      context: ./juxin-ai-assistant/server
+    command:
+      - /bin/sh
+      - -c
+      - python scripts/bootstrap_db.py && alembic upgrade head && python -m scripts.seed
+    environment:
+      MYSQL_HOST: mysql
+      MYSQL_PORT: 3306
+      MYSQL_DATABASE: juxin_ai_assistant
+      MYSQL_USER: ai_assistant_user
+      MYSQL_PASSWORD: ${AI_ASSISTANT_MYSQL_PASSWORD}
+      MYSQL_ADMIN_USER: root
+      MYSQL_ADMIN_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      DATABASE_URL: "mysql+pymysql://ai_assistant_user:${AI_ASSISTANT_MYSQL_PASSWORD}@mysql:3306/juxin_ai_assistant"
+      AUTH_SERVICE_URL: "http://auth:5180"
+      PROMPT_CENTER_URL: "http://prompt-center-api:5189"
+      PROMPT_CENTER_RUNTIME_TOKEN: ${PROMPT_CENTER_RUNTIME_TOKEN}
+      CONTENT_ENCRYPTION_KEY: ${AI_CONTENT_ENCRYPTION_KEY}
+      WORK_SUMMARY_PROMPT_ID: ${AI_WORK_SUMMARY_PROMPT_ID}
+      SEED_REQUIRE_PUBLISHED: "${AI_SEED_REQUIRE_PUBLISHED:-true}"
+    depends_on:
+      mysql:
+        condition: service_healthy
+      prompt-center-api:
+        condition: service_healthy
+    restart: "no"
+
+  ai-assistant-api:
+    build:
+      context: ./juxin-ai-assistant/server
+    environment:
+      APP_VERSION: "1.0.0"
+      DATABASE_URL: "mysql+pymysql://ai_assistant_user:${AI_ASSISTANT_MYSQL_PASSWORD}@mysql:3306/juxin_ai_assistant"
+      AUTH_SERVICE_URL: "http://auth:5180"
+      AUTH_SYSTEM_KEY: "ai-assistant"
+      AUTH_COOKIE_NAME: "juxin_auth_token"
+      PROMPT_CENTER_URL: "http://prompt-center-api:5189"
+      PROMPT_CENTER_RUNTIME_TOKEN: ${PROMPT_CENTER_RUNTIME_TOKEN}
+      CONTENT_ENCRYPTION_KEY: ${AI_CONTENT_ENCRYPTION_KEY}
+      CONTENT_ENCRYPTION_KEY_VERSION: "v1"
+      PUBLIC_URL: "http://${PUBLIC_HOST:-localhost}:18093"
+      CORS_ORIGINS: "http://localhost:18093,http://127.0.0.1:18093,http://${PUBLIC_HOST:-localhost}:18093"
+    depends_on:
+      ai-assistant-db-init:
+        condition: service_completed_successfully
+      auth:
+        condition: service_started
+      prompt-center-api:
+        condition: service_started
+    ports:
+      - "5193:5193"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:5193/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  web-ai-assistant:
+    build:
+      context: ./juxin-ai-assistant/apps/desktop
+      args: *build_args_node_alpine_nginx
+    depends_on:
+      ai-assistant-api:
+        condition: service_healthy
+      auth:
+        condition: service_started
+    ports:
+      - "18093:80"
 
   sca-postgres:
     image: postgres:16-alpine

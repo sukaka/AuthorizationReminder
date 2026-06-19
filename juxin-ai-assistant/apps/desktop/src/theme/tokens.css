@@ -578,6 +578,16 @@ input:focus-visible {
   opacity: .64;
 }
 
+.secondary-action {
+  margin-left: 10px;
+  padding: 10px 15px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-elevated);
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
 .form-error {
   color: var(--danger);
   font-size: 12px;
@@ -633,7 +643,7 @@ input:focus-visible {
 .models-list article {
   padding: 14px 4px;
   display: grid;
-  grid-template-columns: 1fr auto auto;
+  grid-template-columns: 1fr auto;
   align-items: center;
   gap: 12px;
   border-bottom: 1px solid var(--border);
@@ -657,6 +667,17 @@ input:focus-visible {
   background: transparent;
   color: var(--accent);
   cursor: pointer;
+}
+
+.model-actions {
+  grid-column: 1 / -1;
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+}
+
+.models-list .danger-link {
+  color: var(--danger);
 }
 
 .secret-ready,

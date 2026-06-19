@@ -36,6 +36,7 @@ export function TaskRunPage({ task }: { task: TaskDefinition }) {
   const [output, setOutput] = useState('');
   const [status, setStatus] = useState<'idle' | 'preparing' | 'generating' | 'saving' | 'done'>('idle');
   const [error, setError] = useState('');
+  const [requestId, setRequestId] = useState('');
 
   useEffect(() => {
     if (!desktopAvailable) return;
@@ -81,12 +82,13 @@ export function TaskRunPage({ task }: { task: TaskDefinition }) {
       const prepared = (await prepareResponse.json()) as PreparedGeneration;
 
       setStatus('generating');
-      const requestId = crypto.randomUUID();
+      const currentRequestId = crypto.randomUUID();
+      setRequestId(currentRequestId);
       const generated = await invoke<ModelGenerateResult>('model_generate', {
         profileId: selectedProfile.id,
         messages: prepared.messages,
         temperature: prepared.temperature,
-        requestId,
+        requestId: currentRequestId,
       });
       setOutput(generated.output);
 
@@ -109,14 +111,21 @@ export function TaskRunPage({ task }: { task: TaskDefinition }) {
       );
       if (!completeResponse.ok) throw new Error(`COMPLETE_${completeResponse.status}`);
       setStatus('done');
+      setRequestId('');
     } catch (generationError) {
       setStatus('idle');
+      setRequestId('');
       setError(
         generationError instanceof Error
           ? generationError.message
           : '生成失败，请检查本地模型配置后重试',
       );
     }
+  };
+
+  const stop = async () => {
+    if (!requestId) return;
+    await invoke('model_cancel', { requestId });
   };
 
   if (!desktopAvailable) {
@@ -206,6 +215,9 @@ export function TaskRunPage({ task }: { task: TaskDefinition }) {
                 ? '正在保存…'
                 : '开始生成'}
         </button>
+        {status === 'generating' && (
+          <button className="secondary-action" onClick={stop} type="button">停止生成</button>
+        )}
       </form>
 
       <article className="result-panel">

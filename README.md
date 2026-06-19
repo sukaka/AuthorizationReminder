@@ -1,6 +1,6 @@
 # 聚信多系统业务平台
 
-本仓库是一个基于统一登录（SSO）的多系统业务平台，包含以下 12 个业务域：
+本仓库是一个基于统一登录（SSO）的多系统业务平台，包含以下 13 个业务域：
 
 - 授权到期提醒（Reminder）
 - 工单管理（Ticketing）
@@ -14,6 +14,7 @@
 - 提示词管理中心（Prompt Center）
 - 软件成分分析平台（SCA）
 - 统一大屏展示中心（Big Screen）
+- 聚信 AI 助手（Juxin AI Assistant）
 
 目标是：统一账号登录、按系统授权访问、业务库隔离、可通过 Docker Compose 一键启动。
 
@@ -33,6 +34,8 @@
 - `prompt-center-api`：提示词管理中心后端（Node.js + 部门分类 + 版本审计）
 - `sca-api`：软件成分分析平台后端（Python FastAPI + PostgreSQL + Redis + Celery）
 - `big-screen-api`：统一大屏 BFF（模板、播放列表、数据适配、健康与离线资源）
+- `ai-assistant-api`：聚信 AI 助手 FastAPI 服务（任务、Prompt 编排、加密历史）
+- `web-ai-assistant`：macOS 风格浅色/深色工作台；桌面生成由 Tauri 本地模型桥接
 - `web*`：各系统前端（Nginx + 静态资源）
 
 ### 1.2 数据库策略
@@ -47,6 +50,7 @@
 - `juxin_train_exam`（培训考试系统）
 - `juxin_prompt_center`（提示词管理中心）
 - `juxin_big_screen`（统一大屏展示中心）
+- `juxin_ai_assistant`（聚信 AI 助手）
 - `juxin_sca`（软件成分分析平台，PostgreSQL）
 
 > 说明：统一实例 + 独立库，兼顾运维成本与业务隔离。
@@ -129,6 +133,9 @@ export PUBLIC_HOST='服务器公网IP或域名，不带协议和端口'
 # 仅 提示词管理中心
 ./scripts/deploy/docker-compose-aliyun.sh start mysql auth prompt-center-api web-prompt-center
 
+# 聚信 AI 助手（复用统一登录、现有 MySQL 和提示词中心）
+./scripts/deploy/docker-compose-aliyun.sh start mysql auth prompt-center-api ai-assistant-db-init ai-assistant-api web-ai-assistant
+
 # 仅 软件成分分析平台
 ./scripts/deploy/docker-compose-aliyun.sh start auth sca-postgres sca-redis sca-api sca-worker sca-scanner-worker web-sca
 
@@ -141,6 +148,51 @@ export PUBLIC_HOST='服务器公网IP或域名，不带协议和端口'
 > 说明：`faq-api` 与 `tender-api` 复用同一个 `onlyoffice` 实例时，`DOC_EDITOR_JWT_SECRET` 必须保持一致。`train-exam-api` 已拆分为独立的 `train-exam-onlyoffice` 实例与独立密钥，不应再与 FAQ / 标书系统共用文档密钥。
 
 > 培训考试系统的阿里云 OSS 受管视频现在支持在前端“模型配置”页直接维护；`train-exam-api` 的 `OSS_*` 环境变量仍保留为默认值/兜底配置。OSS 桶需允许浏览器 `PUT` 上传，并放行 `Content-Type`、`ETag` 等必要头。
+
+### 2.3.1 聚信 AI 助手
+
+聚信 AI 助手不提供独立账号密码登录。Web 与 Tauri 远程工作台都复用统一登录的 `juxin_auth_token` Cookie；未登录时跳转现有统一登录，用户与部门权限继续由 `auth` 管理。
+
+部署前需要在根 `.env` 配置：
+
+- `AI_ASSISTANT_MYSQL_PASSWORD`：独立 schema 用户密码。
+- `PROMPT_CENTER_RUNTIME_TOKEN`：AI 服务与提示词中心共用的至少 32 字符服务令牌。
+- `AI_CONTENT_ENCRYPTION_KEY`：32 字节 URL-safe Base64 内容加密密钥。
+- `AI_WORK_SUMMARY_PROMPT_ID`：提示词中心中已经发布的“工作总结” Prompt ID。
+- `AI_SEED_REQUIRE_PUBLISHED`：生产环境保持 `true`，Prompt 未发布时阻止初始化成功。
+
+首次启动会在现有 MySQL 容器创建 `juxin_ai_assistant` schema，执行 Alembic 迁移并幂等初始化“工作总结”。当指定 Prompt 尚未发布时，任务保持 DRAFT，生产种子默认失败并给出明确提示。
+
+需要单独重跑幂等种子时，在 API 镜像或已安装服务端依赖的环境执行：
+
+```bash
+cd juxin-ai-assistant/server
+python -m scripts.seed
+```
+
+用户可在桌面客户端保存多个 OpenAI 兼容模型。模型元数据只在当前电脑保存，API Key 只进入系统钥匙串，服务端不接收、存储或代理模型密钥。普通浏览器可以查看工作台，但生成按钮会提示改用桌面客户端。
+
+本地 Web 开发：
+
+```bash
+npm --prefix juxin-ai-assistant/apps/desktop install
+npm --prefix juxin-ai-assistant/apps/desktop run dev
+```
+
+Tauri 调试构建：
+
+```bash
+PATH="$HOME/.cargo/bin:$PATH" npm --prefix juxin-ai-assistant/apps/desktop run tauri -- build --debug --no-bundle
+```
+
+阶段 1 一键测试：
+
+```bash
+AI_ASSISTANT_PYTHON="$PWD/juxin-ai-assistant/server/.venv/bin/python" \
+CARGO_BIN="$HOME/.cargo/bin/cargo" \
+SKIP_COMPOSE_UP=1 \
+bash scripts/tests/ai-assistant.sh
+```
 
 ### 2.4 工单系统改动后自动重启镜像
 已在 `docker-compose.yml` 为 `ticketing` 与 `web-ticketing` 配置 `develop.watch`（动作是 `rebuild`）。
@@ -164,6 +216,8 @@ cd /Users/zhanglei/Documents/codex-new
 | 统一登录 | `http://localhost:5180` |
 | 统一大屏展示中心 | `http://localhost:18092` |
 | 统一大屏后端 | `http://localhost:5192` |
+| 聚信 AI 助手 | `http://localhost:18093` |
+| 聚信 AI 助手后端 | `http://localhost:5193` |
 | 提醒前端 | `http://localhost:18080` |
 | 提醒后端 | `http://localhost:5179` |
 | 工单前端 | `http://localhost:18081` |

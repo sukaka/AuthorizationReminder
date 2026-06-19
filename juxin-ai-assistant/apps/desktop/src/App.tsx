@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 
-import { ApiError, getSession, type SessionPayload } from './api/client';
+import { ApiError, getAuthPortalUrl, getSession, getTask, type SessionPayload } from './api/client';
 import { ModelProfilesPage } from './pages/ModelProfilesPage';
 import { TaskRunPage, type TaskDefinition } from './pages/TaskRunPage';
 
@@ -17,38 +17,18 @@ const assistantGroups = [
   ['商务投标', '标书分析与响应材料'],
 ];
 
-const workSummaryTask: TaskDefinition = {
-  uuid: 'work-summary',
-  name: '工作总结',
-  description: '把零散进展整理成结构清晰、重点明确、适合汇报的工作总结。',
-  safety_notice: '生成内容需由员工复核后再对外发送。',
-  fields: [
-    {
-      field_key: 'work_content',
-      label: '工作内容',
-      field_type: 'TEXTAREA',
-      required: true,
-      placeholder: '例如：完成统一登录接入、修复三个生产问题、推进客户验收……',
-    },
-    {
-      field_key: 'period',
-      label: '总结周期',
-      field_type: 'TEXT',
-      required: false,
-      placeholder: '例如：本周、2026 年 6 月',
-    },
-    {
-      field_key: 'audience',
-      label: '阅读对象',
-      field_type: 'SELECT',
-      required: false,
-      options: ['直属领导', '项目组', '部门全员', '客户'],
-    },
-  ],
-};
-
 function Workspace({ session }: { session: SessionPayload }) {
   const [page, setPage] = useState<'home' | 'task' | 'models'>('home');
+  const [task, setTask] = useState<TaskDefinition | null>(null);
+  const [taskError, setTaskError] = useState('');
+
+  const openWorkSummary = () => {
+    setTaskError('');
+    setPage('task');
+    getTask('work-summary')
+      .then(setTask)
+      .catch(() => setTaskError('工作总结任务尚未发布或服务暂不可用'));
+  };
 
   return (
     <div className="app-frame">
@@ -59,7 +39,7 @@ function Workspace({ session }: { session: SessionPayload }) {
         </div>
         <nav aria-label="主导航">
           <button className={page === 'home' ? 'is-current' : ''} onClick={() => setPage('home')} type="button">工作台</button>
-          <button className={page === 'task' ? 'is-current' : ''} onClick={() => setPage('task')} type="button">全部助手</button>
+          <button className={page === 'task' ? 'is-current' : ''} onClick={openWorkSummary} type="button">全部助手</button>
           <button type="button">历史记录</button>
           <button className={page === 'models' ? 'is-current' : ''} onClick={() => setPage('models')} type="button">个人模型</button>
         </nav>
@@ -78,7 +58,9 @@ function Workspace({ session }: { session: SessionPayload }) {
         ) : page === 'task' ? (
           <>
             <button className="back-button" onClick={() => setPage('home')} type="button">‹ 返回工作台</button>
-            <TaskRunPage task={workSummaryTask} />
+            {task
+              ? <TaskRunPage task={task} />
+              : <section className="desktop-required"><p>{taskError || '正在加载任务…'}</p></section>}
           </>
         ) : (
           <>
@@ -100,7 +82,7 @@ function Workspace({ session }: { session: SessionPayload }) {
                 <h2>今天想完成什么？</h2>
                 <p>选择一个具体任务，聚信会准备好结构、提示词与输出要求。</p>
               </div>
-              <button onClick={() => setPage('task')} type="button">开始工作总结 <span>→</span></button>
+              <button onClick={openWorkSummary} type="button">开始工作总结 <span>→</span></button>
             </section>
 
             <section className="section-block" id="assistants">
@@ -109,14 +91,14 @@ function Workspace({ session }: { session: SessionPayload }) {
                   <span className="eyebrow">快捷入口</span>
                   <h2>常用助手</h2>
                 </div>
-                <button className="link-button" onClick={() => setPage('task')} type="button">查看全部</button>
+                <button className="link-button" onClick={openWorkSummary} type="button">查看全部</button>
               </div>
               <div className="assistant-grid">
                 {assistantGroups.map(([name, description], index) => (
                   <button
                     className="assistant-row"
                     key={name}
-                    onClick={() => index === 0 && setPage('task')}
+                    onClick={() => index === 0 && openWorkSummary()}
                     type="button"
                   >
                     <span className={`assistant-glyph tone-${index + 1}`}>{name.slice(0, 1)}</span>
@@ -156,7 +138,7 @@ function StatusView({ kind }: { kind: 'checking' | 'forbidden' | 'error' }) {
           ? '你的统一账号尚未获得聚信 AI 助手访问权限。'
           : '无法连接聚信 AI 助手服务，请稍后再试。'}
       </p>
-      <a href={import.meta.env.VITE_AUTH_PUBLIC_URL || 'http://localhost:5180'}>
+      <a href={getAuthPortalUrl()}>
         返回统一门户
       </a>
     </main>

@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
@@ -14,6 +15,7 @@ pub struct AppState {
     pub profiles_path: PathBuf,
     pub profiles: Mutex<Vec<ModelProfilePublic>>,
     pub secrets: Arc<dyn SecretStore>,
+    pub cancellations: Mutex<HashMap<String, tokio::sync::watch::Sender<bool>>>,
 }
 
 #[derive(Serialize)]
@@ -99,21 +101,33 @@ pub fn model_profile_set_default(
 }
 
 #[tauri::command]
-pub fn model_profile_test(
+pub async fn model_profile_test(
     state: tauri::State<'_, AppState>,
     profile_id: String,
 ) -> Result<ModelConnectionStatus, String> {
-    let profiles = state
-        .profiles
-        .lock()
-        .map_err(|_| "本地模型配置暂不可用".to_string())?;
-    let profile = profiles
-        .iter()
-        .find(|profile| profile.id == profile_id)
-        .ok_or_else(|| "模型配置不存在".to_string())?;
+    let profile = {
+        let profiles = state
+            .profiles
+            .lock()
+            .map_err(|_| "本地模型配置暂不可用".to_string())?;
+        profiles
+            .iter()
+            .find(|profile| profile.id == profile_id)
+            .cloned()
+            .ok_or_else(|| "模型配置不存在".to_string())?
+    };
+    let base_url = crate::model_client::validate_base_url(&profile.base_url)
+        .map_err(|_| "MODEL_URL_INVALID".to_string())?;
+    crate::model_client::test_connection(
+        &base_url,
+        state.secrets.get(&profile.id)?,
+        profile.timeout_seconds,
+    )
+    .await
+    .map_err(|error| error.to_string())?;
     Ok(ModelConnectionStatus {
         ok: true,
-        message: format!("{} 配置可用", profile.display_name),
+        message: format!("{} 连接成功", profile.display_name),
     })
 }
 
@@ -150,8 +164,14 @@ pub async fn model_generate(
     let base_url = crate::model_client::validate_base_url(&profile.base_url)
         .map_err(|_| "MODEL_URL_INVALID".to_string())?;
     let api_key = state.secrets.get(&profile.id)?;
+    let (cancel_sender, cancel_receiver) = tokio::sync::watch::channel(false);
+    state
+        .cancellations
+        .lock()
+        .map_err(|_| "MODEL_REQUEST_STATE_UNAVAILABLE".to_string())?
+        .insert(request_id.clone(), cancel_sender);
 
-    generate(
+    let result = generate(
         &app,
         &base_url,
         &profile.model_id,
@@ -160,12 +180,27 @@ pub async fn model_generate(
         temperature.clamp(0.0, 2.0),
         profile.timeout_seconds,
         &request_id,
+        cancel_receiver,
     )
-    .await
-    .map_err(|error| error.to_string())
+    .await;
+    if let Ok(mut cancellations) = state.cancellations.lock() {
+        cancellations.remove(&request_id);
+    }
+    result.map_err(|error| error.to_string())
 }
 
 #[tauri::command]
-pub fn model_cancel() -> Result<(), String> {
+pub fn model_cancel(
+    state: tauri::State<'_, AppState>,
+    request_id: String,
+) -> Result<(), String> {
+    let sender = state
+        .cancellations
+        .lock()
+        .map_err(|_| "MODEL_REQUEST_STATE_UNAVAILABLE".to_string())?
+        .remove(&request_id);
+    if let Some(sender) = sender {
+        let _ = sender.send(true);
+    }
     Ok(())
 }

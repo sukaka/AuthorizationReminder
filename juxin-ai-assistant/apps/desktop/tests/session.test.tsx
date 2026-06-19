@@ -3,9 +3,15 @@ import { HttpResponse, http } from 'msw';
 import { describe, expect, it } from 'vitest';
 
 import App from '../src/App';
+import { getAuthPortalUrl } from '../src/api/client';
 import { server } from './setup';
 
 describe('unified session shell', () => {
+  it('uses the existing unified portal instead of inventing a child login route', () => {
+    expect(getAuthPortalUrl()).toBe('http://localhost:5180/portal?system=ai-assistant');
+    expect(getAuthPortalUrl()).not.toContain('/login');
+  });
+
   it('renders the authenticated workspace without a password form', async () => {
     server.use(
       http.get('/api/ai/session', () =>

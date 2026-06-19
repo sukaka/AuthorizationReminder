@@ -5,6 +5,7 @@ use reqwest::redirect::Policy;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter};
 use thiserror::Error;
+use tokio::sync::watch;
 use url::{Host, Url};
 use zeroize::Zeroizing;
 
@@ -35,6 +36,8 @@ pub enum ModelClientError {
     Protocol,
     #[error("MODEL_CONNECTION_FAILED")]
     Connection,
+    #[error("MODEL_CANCELLED")]
+    Cancelled,
 }
 
 #[derive(Clone, Serialize)]
@@ -102,13 +105,13 @@ pub fn parse_sse_line(line: &str) -> Result<Option<String>, ModelClientError> {
         .and_then(|choice| choice.delta.content.clone()))
 }
 
-fn completion_url(base_url: &Url) -> Result<Url, ModelClientError> {
+fn endpoint_url(base_url: &Url, path: &str) -> Result<Url, ModelClientError> {
     let mut normalized = base_url.clone();
     if !normalized.path().ends_with('/') {
         normalized.set_path(&format!("{}/", normalized.path()));
     }
     normalized
-        .join("chat/completions")
+        .join(path)
         .map_err(|_| ModelClientError::Protocol)
 }
 
@@ -121,6 +124,7 @@ pub async fn generate(
     temperature: f32,
     timeout_seconds: u64,
     request_id: &str,
+    mut cancel: watch::Receiver<bool>,
 ) -> Result<ModelGenerateResult, ModelClientError> {
     let client = reqwest::Client::builder()
         .redirect(Policy::none())
@@ -134,7 +138,9 @@ pub async fn generate(
         "stream": true,
         "stream_options": { "include_usage": true },
     });
-    let mut request = client.post(completion_url(base_url)?).json(&body);
+    let mut request = client
+        .post(endpoint_url(base_url, "chat/completions")?)
+        .json(&body);
     if let Some(secret) = api_key {
         let protected = Zeroizing::new(secret);
         request = request.bearer_auth(protected.as_str());
@@ -161,7 +167,19 @@ pub async fn generate(
     let mut output = String::new();
     let mut usage = serde_json::json!({});
 
-    while let Some(chunk) = stream.next().await {
+    loop {
+        let next = tokio::select! {
+            changed = cancel.changed() => {
+                if changed.is_ok() && *cancel.borrow() {
+                    return Err(ModelClientError::Cancelled);
+                }
+                continue;
+            }
+            next = stream.next() => next,
+        };
+        let Some(chunk) = next else {
+            break;
+        };
         let chunk = chunk.map_err(|error| {
             if error.is_timeout() {
                 ModelClientError::Timeout
@@ -218,9 +236,41 @@ pub async fn generate(
     })
 }
 
+pub async fn test_connection(
+    base_url: &Url,
+    api_key: Option<String>,
+    timeout_seconds: u64,
+) -> Result<(), ModelClientError> {
+    let client = reqwest::Client::builder()
+        .redirect(Policy::none())
+        .timeout(Duration::from_secs(timeout_seconds.min(30)))
+        .build()
+        .map_err(|_| ModelClientError::Connection)?;
+    let url = endpoint_url(base_url, "models")?;
+    let mut request = client.get(url);
+    if let Some(secret) = api_key {
+        let protected = Zeroizing::new(secret);
+        request = request.bearer_auth(protected.as_str());
+        drop(protected);
+    }
+    let response = request.send().await.map_err(|error| {
+        if error.is_timeout() {
+            ModelClientError::Timeout
+        } else {
+            ModelClientError::Connection
+        }
+    })?;
+    match response.status().as_u16() {
+        200..=299 => Ok(()),
+        401 | 403 => Err(ModelClientError::Auth),
+        429 => Err(ModelClientError::RateLimited),
+        _ => Err(ModelClientError::Connection),
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{parse_sse_line, validate_base_url, ModelClientError};
+    use super::{endpoint_url, parse_sse_line, validate_base_url, ModelClientError};
 
     #[test]
     fn allows_https_and_loopback_http() {
@@ -251,6 +301,24 @@ mod tests {
         assert_eq!(
             parse_sse_line("data: not-json").unwrap_err(),
             ModelClientError::Protocol,
+        );
+    }
+
+    #[test]
+    fn cancellation_has_a_stable_error_code() {
+        assert_eq!(ModelClientError::Cancelled.to_string(), "MODEL_CANCELLED");
+    }
+
+    #[test]
+    fn preserves_the_base_path_for_model_endpoints() {
+        let base = validate_base_url("https://api.example.com/v1").unwrap();
+        assert_eq!(
+            endpoint_url(&base, "models").unwrap().as_str(),
+            "https://api.example.com/v1/models",
+        );
+        assert_eq!(
+            endpoint_url(&base, "chat/completions").unwrap().as_str(),
+            "https://api.example.com/v1/chat/completions",
         );
     }
 }
