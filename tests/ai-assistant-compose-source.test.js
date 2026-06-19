@@ -21,12 +21,16 @@ test('compose registers AI assistant against existing platform services', () => 
   assert.match(compose, /^  ai-assistant-db-init:/m);
   assert.match(compose, /^  ai-assistant-api:/m);
   assert.match(compose, /^  web-ai-assistant:/m);
+  assert.match(compose, /^  prompt-center-ai-seed:/m);
   assert.match(compose, /MYSQL_DATABASE: juxin_ai_assistant/);
   assert.match(compose, /AUTH_SERVICE_URL: "http:\/\/auth:5180"/);
   assert.match(compose, /PROMPT_CENTER_URL: "http:\/\/prompt-center-api:5189"/);
   assert.match(compose, /PROMPT_CENTER_RUNTIME_TOKEN: \$\{PROMPT_CENTER_RUNTIME_TOKEN\}/);
-  assert.match(compose, /python -m scripts\.seed/);
-  assert.match(compose, /python scripts\/seed_catalog\.py/);
+  assert.match(compose, /seed-ai-assistant-prompts\.js/);
+  assert.match(
+    compose,
+    /python scripts\/seed_catalog\.py --force-config --require-all-published/,
+  );
   assert.doesNotMatch(compose, /ai-assistant-sqlite/);
 });
 

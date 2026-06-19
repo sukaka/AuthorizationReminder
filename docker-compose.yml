@@ -538,9 +538,10 @@ services:
       - "18087:80"
 
   prompt-center-api:
+    image: codex-new-prompt-center-api:latest
     build:
-      context: ./prompt-center/backend
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: prompt-center/backend/Dockerfile
       args: *build_args_node_bookworm_slim
     environment:
       PORT: 5189
@@ -568,6 +569,24 @@ services:
       timeout: 5s
       retries: 12
 
+  prompt-center-ai-seed:
+    image: codex-new-prompt-center-api:latest
+    command: ["node", "scripts/seed-ai-assistant-prompts.js"]
+    environment:
+      MYSQL_HOST: mysql
+      MYSQL_PORT: 3306
+      MYSQL_USER: prompt_center_user
+      MYSQL_PASSWORD: ${PROMPT_CENTER_MYSQL_PASSWORD}
+      MYSQL_DATABASE: juxin_prompt_center
+      MYSQL_ADMIN_USER: root
+      MYSQL_ADMIN_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+    depends_on:
+      mysql:
+        condition: service_healthy
+      prompt-center-api:
+        condition: service_healthy
+    restart: "no"
+
   web-prompt-center:
     build:
       context: ./prompt-center/frontend
@@ -584,7 +603,7 @@ services:
     command:
       - /bin/sh
       - -c
-      - python scripts/bootstrap_db.py && alembic upgrade head && python -m scripts.seed && python scripts/seed_catalog.py
+      - python scripts/bootstrap_db.py && alembic upgrade head && python scripts/seed_catalog.py --force-config --require-all-published
     environment:
       MYSQL_HOST: mysql
       MYSQL_PORT: 3306
@@ -605,6 +624,8 @@ services:
         condition: service_healthy
       prompt-center-api:
         condition: service_healthy
+      prompt-center-ai-seed:
+        condition: service_completed_successfully
     restart: "no"
 
   ai-assistant-api:
