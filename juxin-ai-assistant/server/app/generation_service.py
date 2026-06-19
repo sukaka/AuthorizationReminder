@@ -4,6 +4,7 @@ import json
 import secrets
 import uuid as uuid_lib
 from dataclasses import dataclass
+from datetime import UTC, datetime
 
 import httpx
 from fastapi import HTTPException
@@ -231,5 +232,7 @@ def complete_generation(
     record.usage_json = request.usage
     record.status = "COMPLETED"
     record.error_code = ""
+    record.error_message_safe = ""
+    record.finished_at = datetime.now(UTC)
     db.commit()
     return record

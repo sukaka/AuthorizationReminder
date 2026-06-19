@@ -1,8 +1,9 @@
 from collections.abc import Awaitable, Callable
+from datetime import datetime
 from typing import Annotated
 
 import httpx
-from fastapi import Depends, FastAPI, Request
+from fastapi import Depends, FastAPI, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
 
@@ -14,14 +15,24 @@ from .config import Settings, get_settings
 from .crypto import ContentCipher
 from .database import get_db
 from .generation_service import complete_generation, prepare_generation
+from .history_service import (
+    HistoryFilters,
+    get_history_detail,
+    list_history,
+    load_regeneration_source,
+    tombstone_history,
+)
 from .knowledge import KnowledgeRetriever
-from .models import Task, TaskField
+from .models import GenerationRecord, Task, TaskField
 from .prompt_client import PromptCenterClient
 from .schemas import (
     CompleteGenerationIn,
     CompleteGenerationOut,
+    HistoryDetailOut,
+    HistoryListOut,
     PrepareGenerationIn,
     PrepareGenerationOut,
+    RegenerateOut,
     SessionPayload,
     TaskFieldOut,
     TaskOut,
@@ -198,6 +209,145 @@ async def prepare_generation_route(
         knowledge_retriever,
     )
     return PrepareGenerationOut(**prepared.__dict__)
+
+
+@app.get("/api/ai/generations", response_model=HistoryListOut)
+def generation_history(
+    session_payload: Annotated[SessionPayload, Depends(get_session)],
+    db: Annotated[Session, Depends(get_db)],
+    task_uuid: str | None = None,
+    assistant_code: str | None = None,
+    status: str | None = None,
+    created_from: datetime | None = None,
+    created_to: datetime | None = None,
+    page: Annotated[int, Query(ge=1)] = 1,
+    page_size: Annotated[int, Query(ge=1, le=100)] = 20,
+) -> HistoryListOut:
+    items, total = list_history(
+        db,
+        str(session_payload.user.id),
+        HistoryFilters(
+            task_uuid=task_uuid,
+            assistant_code=assistant_code,
+            status=status,
+            created_from=created_from,
+            created_to=created_to,
+        ),
+        page=page,
+        page_size=page_size,
+    )
+    return HistoryListOut(
+        items=items,
+        total=total,
+        page=page,
+        page_size=page_size,
+    )
+
+
+@app.get(
+    "/api/ai/generations/{generation_uuid}",
+    response_model=HistoryDetailOut,
+)
+def generation_history_detail(
+    generation_uuid: str,
+    session_payload: Annotated[SessionPayload, Depends(get_session)],
+    db: Annotated[Session, Depends(get_db)],
+    cipher: Annotated[ContentCipher, Depends(get_content_cipher)],
+) -> HistoryDetailOut:
+    return HistoryDetailOut(
+        **get_history_detail(
+            db,
+            str(session_payload.user.id),
+            generation_uuid,
+            cipher,
+        )
+    )
+
+
+@app.delete("/api/ai/generations/{generation_uuid}", status_code=204)
+async def delete_generation_history(
+    generation_uuid: str,
+    request: Request,
+    session_payload: Annotated[SessionPayload, Depends(get_session)],
+    current_settings: Annotated[Settings, Depends(get_settings)],
+    db: Annotated[Session, Depends(get_db)],
+    cipher: Annotated[ContentCipher, Depends(get_content_cipher)],
+) -> Response:
+    await require_action(
+        "ai_assistant:use",
+        request,
+        session_payload,
+        current_settings,
+    )
+    tombstone_history(
+        db,
+        str(session_payload.user.id),
+        generation_uuid,
+        cipher,
+    )
+    return Response(status_code=204)
+
+
+@app.post(
+    "/api/ai/generations/{generation_uuid}/regenerate",
+    response_model=RegenerateOut,
+    status_code=201,
+)
+async def regenerate_history(
+    generation_uuid: str,
+    request: Request,
+    session_payload: Annotated[SessionPayload, Depends(get_session)],
+    current_settings: Annotated[Settings, Depends(get_settings)],
+    db: Annotated[Session, Depends(get_db)],
+    prompt_client: Annotated[PromptCenterClient, Depends(get_prompt_client)],
+    cipher: Annotated[ContentCipher, Depends(get_content_cipher)],
+    sensitive_detector: Annotated[
+        SensitiveDetector,
+        Depends(get_sensitive_detector),
+    ],
+    knowledge_retriever: Annotated[
+        KnowledgeRetriever,
+        Depends(get_knowledge_retriever),
+    ],
+) -> RegenerateOut:
+    await require_action(
+        "ai_assistant:use",
+        request,
+        session_payload,
+        current_settings,
+    )
+    parent, task, inputs = load_regeneration_source(
+        db,
+        str(session_payload.user.id),
+        generation_uuid,
+        cipher,
+    )
+    scan = sensitive_detector.scan(inputs)
+    prepared = await prepare_generation(
+        db,
+        session_payload,
+        PrepareGenerationIn(
+            task_uuid=task.uuid,
+            inputs=inputs,
+            sensitive_confirmation_digest=scan.confirmation_digest,
+        ),
+        prompt_client,
+        cipher,
+        current_settings.content_encryption_key_version,
+        sensitive_detector,
+        knowledge_retriever,
+    )
+    child = db.scalar(
+        select(GenerationRecord).where(
+            GenerationRecord.uuid == prepared.generation_uuid
+        )
+    )
+    child.parent_generation_id = parent.id
+    db.commit()
+    return RegenerateOut(
+        **prepared.__dict__,
+        parent_generation_uuid=parent.uuid,
+    )
 
 
 @app.post(

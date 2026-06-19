@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from pydantic import BaseModel, ConfigDict, Field
 
 
@@ -80,3 +82,37 @@ class CompleteGenerationIn(BaseModel):
 class CompleteGenerationOut(BaseModel):
     generation_uuid: str
     status: str
+
+
+class HistoryItemOut(BaseModel):
+    uuid: str
+    task_uuid: str
+    task_name: str
+    assistant_code: str
+    assistant_name: str
+    status: str
+    model_display_name: str
+    model_id: str
+    prompt_version: int
+    latency_ms: int | None = None
+    usage: dict = Field(default_factory=dict)
+    created_at: datetime
+    finished_at: datetime | None = None
+
+
+class HistoryListOut(BaseModel):
+    items: list[HistoryItemOut]
+    total: int
+    page: int
+    page_size: int
+
+
+class HistoryDetailOut(HistoryItemOut):
+    parent_generation_uuid: str | None = None
+    input: dict[str, object]
+    output: str | None = None
+    knowledge_refs: list[dict] = Field(default_factory=list)
+
+
+class RegenerateOut(PrepareGenerationOut):
+    parent_generation_uuid: str

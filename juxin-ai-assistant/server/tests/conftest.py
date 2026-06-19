@@ -1,5 +1,7 @@
 import base64
+import hashlib
 import os
+from types import SimpleNamespace
 
 import pytest
 from sqlalchemy import create_engine
@@ -93,3 +95,100 @@ def seeded_task(generation_db):
     ])
     generation_db.commit()
     return task
+
+
+@pytest.fixture
+def active_task(seeded_task):
+    return seeded_task
+
+
+@pytest.fixture
+def client_for_user(generation_db):
+    from fastapi.testclient import TestClient
+    from fastapi import Request
+
+    from app.auth import get_session
+    from app.database import get_db
+    from app.main import app
+    from app.schemas import AuthScope, SessionPayload, UserPayload
+
+    clients: list[TestClient] = []
+
+    async def session_override(request: Request) -> SessionPayload:
+        user_id = request.headers["x-test-user-id"]
+        return SessionPayload(
+            user=UserPayload(
+                id=user_id,
+                username=f"user-{user_id}",
+                role="employee",
+            ),
+            scope=AuthScope(department="测试部", managed_departments=[]),
+            apps=["ai-assistant"],
+        )
+
+    app.dependency_overrides[get_db] = lambda: generation_db
+    app.dependency_overrides[get_session] = session_override
+
+    def factory(user_id: str) -> TestClient:
+        client = TestClient(
+            app,
+            headers={"X-Test-User-ID": user_id},
+        )
+        client.__enter__()
+        clients.append(client)
+        return client
+
+    try:
+        yield factory
+    finally:
+        for client in reversed(clients):
+            client.__exit__(None, None, None)
+        app.dependency_overrides.pop(get_session, None)
+        app.dependency_overrides.pop(get_db, None)
+
+
+@pytest.fixture
+def records(generation_db, seeded_task):
+    from app.crypto import ContentCipher
+    from app.models import GenerationRecord
+
+    cipher = ContentCipher(
+        base64.urlsafe_b64encode(b"k" * 32).decode("ascii")
+    )
+
+    def create(uuid: str, user_id: str, content: str) -> GenerationRecord:
+        encrypted_input = cipher.encrypt_json(
+            {"inputs": {"work_content": content}},
+            uuid.encode(),
+        )
+        encrypted_output = cipher.encrypt_json(
+            {"output": f"{content} 的生成结果"},
+            uuid.encode(),
+        )
+        record = GenerationRecord(
+            uuid=uuid,
+            sso_user_id=user_id,
+            username_snapshot=f"user-{user_id}",
+            department_snapshot="测试部",
+            task_id=seeded_task.id,
+            prompt_external_id=7,
+            prompt_version=3,
+            input_ciphertext=encrypted_input.ciphertext,
+            input_nonce=encrypted_input.nonce,
+            output_ciphertext=encrypted_output.ciphertext,
+            output_nonce=encrypted_output.nonce,
+            key_version="v1",
+            completion_token_hash=hashlib.sha256(b"completed").digest(),
+            model_display_name="本地模型",
+            model_id="local-model",
+            status="COMPLETED",
+            usage_json={"input_tokens": 10, "output_tokens": 20},
+        )
+        generation_db.add(record)
+        generation_db.flush()
+        return record
+
+    u1 = create("generation-u1", "u-1", "用户一内容")
+    u2 = create("generation-u2", "u-2", "用户二内容")
+    generation_db.commit()
+    return SimpleNamespace(u1=u1, u2=u2)
