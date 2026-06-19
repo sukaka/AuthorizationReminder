@@ -12,6 +12,10 @@ const tauriCapability = fs.readFileSync(
   'utf8',
 );
 const readme = fs.readFileSync('README.md', 'utf8');
+const serverDockerfile = fs.readFileSync(
+  'juxin-ai-assistant/server/Dockerfile',
+  'utf8',
+);
 
 test('compose registers AI assistant against existing platform services', () => {
   assert.match(compose, /^  ai-assistant-db-init:/m);
@@ -22,6 +26,7 @@ test('compose registers AI assistant against existing platform services', () => 
   assert.match(compose, /PROMPT_CENTER_URL: "http:\/\/prompt-center-api:5189"/);
   assert.match(compose, /PROMPT_CENTER_RUNTIME_TOKEN: \$\{PROMPT_CENTER_RUNTIME_TOKEN\}/);
   assert.match(compose, /python -m scripts\.seed/);
+  assert.match(compose, /python scripts\/seed_catalog\.py/);
   assert.doesNotMatch(compose, /ai-assistant-sqlite/);
 });
 
@@ -41,4 +46,8 @@ test('desktop opens the deployed local workspace with an exact remote capability
 test('phase one operations document the strict idempotent seed command', () => {
   assert.match(readme, /AI_SEED_REQUIRE_PUBLISHED/);
   assert.match(readme, /python -m scripts\.seed/);
+});
+
+test('AI assistant image packages the complete employee catalog', () => {
+  assert.match(serverDockerfile, /COPY catalog \.\/catalog/);
 });

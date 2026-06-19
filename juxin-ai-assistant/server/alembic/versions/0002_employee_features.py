@@ -39,38 +39,81 @@ def _timestamps() -> list[sa.Column]:
 
 
 def upgrade() -> None:
+    inspector = sa.inspect(op.get_bind())
+    generation_columns = {
+        item["name"]
+        for item in inspector.get_columns("ai_generation_records")
+    }
+    generation_foreign_keys = {
+        item.get("name")
+        for item in inspector.get_foreign_keys("ai_generation_records")
+    }
+    generation_indexes = {
+        item["name"]
+        for item in inspector.get_indexes("ai_generation_records")
+    }
     with op.batch_alter_table("ai_generation_records") as batch_op:
-        batch_op.add_column(
-            sa.Column("parent_generation_id", _id_type(), nullable=True)
-        )
-        batch_op.add_column(sa.Column("finished_at", sa.DateTime(), nullable=True))
-        batch_op.add_column(
-            sa.Column(
-                "error_message_safe",
-                sa.Text(),
-                server_default="",
-                nullable=False,
+        if "parent_generation_id" not in generation_columns:
+            batch_op.add_column(
+                sa.Column("parent_generation_id", _id_type(), nullable=True)
             )
-        )
-        batch_op.add_column(
-            sa.Column(
-                "knowledge_refs_json",
-                sa.JSON(),
-                server_default=sa.text("'[]'"),
-                nullable=False,
+        if "finished_at" not in generation_columns:
+            batch_op.add_column(
+                sa.Column("finished_at", sa.DateTime(), nullable=True)
             )
+        if "error_message_safe" not in generation_columns:
+            batch_op.add_column(
+                sa.Column("error_message_safe", sa.Text(), nullable=True)
+            )
+        if "knowledge_refs_json" not in generation_columns:
+            batch_op.add_column(
+                sa.Column("knowledge_refs_json", sa.JSON(), nullable=True)
+            )
+        if (
+            "fk_ai_generation_records_parent_generation_id"
+            not in generation_foreign_keys
+        ):
+            batch_op.create_foreign_key(
+                "fk_ai_generation_records_parent_generation_id",
+                "ai_generation_records",
+                ["parent_generation_id"],
+                ["id"],
+                ondelete="SET NULL",
+            )
+        if (
+            "ix_ai_generation_records_parent_generation_id"
+            not in generation_indexes
+        ):
+            batch_op.create_index(
+                "ix_ai_generation_records_parent_generation_id",
+                ["parent_generation_id"],
+                unique=False,
+            )
+
+    op.execute(
+        sa.text(
+            "UPDATE ai_generation_records "
+            "SET error_message_safe = '' "
+            "WHERE error_message_safe IS NULL"
         )
-        batch_op.create_foreign_key(
-            "fk_ai_generation_records_parent_generation_id",
-            "ai_generation_records",
-            ["parent_generation_id"],
-            ["id"],
-            ondelete="SET NULL",
+    )
+    op.execute(
+        sa.text(
+            "UPDATE ai_generation_records "
+            "SET knowledge_refs_json = :empty_json "
+            "WHERE knowledge_refs_json IS NULL"
+        ).bindparams(empty_json="[]")
+    )
+    with op.batch_alter_table("ai_generation_records") as batch_op:
+        batch_op.alter_column(
+            "error_message_safe",
+            existing_type=sa.Text(),
+            nullable=False,
         )
-        batch_op.create_index(
-            "ix_ai_generation_records_parent_generation_id",
-            ["parent_generation_id"],
-            unique=False,
+        batch_op.alter_column(
+            "knowledge_refs_json",
+            existing_type=sa.JSON(),
+            nullable=False,
         )
 
     op.create_table(

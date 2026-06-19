@@ -584,7 +584,7 @@ services:
     command:
       - /bin/sh
       - -c
-      - python scripts/bootstrap_db.py && alembic upgrade head && python -m scripts.seed
+      - python scripts/bootstrap_db.py && alembic upgrade head && python -m scripts.seed && python scripts/seed_catalog.py
     environment:
       MYSQL_HOST: mysql
       MYSQL_PORT: 3306
