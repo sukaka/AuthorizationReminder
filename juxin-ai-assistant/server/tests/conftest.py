@@ -192,3 +192,43 @@ def records(generation_db, seeded_task):
     u2 = create("generation-u2", "u-2", "用户二内容")
     generation_db.commit()
     return SimpleNamespace(u1=u1, u2=u2)
+
+
+@pytest.fixture
+def completed_generation(generation_db, seeded_task):
+    from app.crypto import ContentCipher
+    from app.models import GenerationRecord
+
+    cipher = ContentCipher(
+        base64.urlsafe_b64encode(b"k" * 32).decode("ascii")
+    )
+    uuid = "completed-generation-dev"
+    encrypted_input = cipher.encrypt_json(
+        {"inputs": {"work_content": "完成内容"}},
+        uuid.encode(),
+    )
+    encrypted_output = cipher.encrypt_json(
+        {"output": "完成结果"},
+        uuid.encode(),
+    )
+    record = GenerationRecord(
+        uuid=uuid,
+        sso_user_id="dev",
+        username_snapshot="dev_admin",
+        department_snapshot="通用",
+        task_id=seeded_task.id,
+        prompt_external_id=7,
+        prompt_version=3,
+        input_ciphertext=encrypted_input.ciphertext,
+        input_nonce=encrypted_input.nonce,
+        output_ciphertext=encrypted_output.ciphertext,
+        output_nonce=encrypted_output.nonce,
+        key_version="v1",
+        completion_token_hash=hashlib.sha256(b"completed").digest(),
+        model_display_name="本地模型",
+        model_id="local-model",
+        status="COMPLETED",
+    )
+    generation_db.add(record)
+    generation_db.commit()
+    return record

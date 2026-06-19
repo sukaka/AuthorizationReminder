@@ -1,6 +1,7 @@
 from datetime import datetime
+from enum import Enum
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class UserPayload(BaseModel):
@@ -133,3 +134,35 @@ class HomeOut(BaseModel):
     recent_tasks: list[TaskCardOut]
     recent_generations: list[HistoryItemOut]
     safety_reminders: list[str]
+
+
+class FeedbackType(str, Enum):
+    USEFUL = "USEFUL"
+    INACCURATE = "INACCURATE"
+    WRONG_FORMAT = "WRONG_FORMAT"
+    TOO_VAGUE = "TOO_VAGUE"
+    NEEDS_EXPERTISE = "NEEDS_EXPERTISE"
+    NOT_CLIENT_READY = "NOT_CLIENT_READY"
+    OTHER = "OTHER"
+
+
+class FeedbackIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    feedback_type: FeedbackType
+    content: str | None = Field(default=None, max_length=4_000)
+
+    @model_validator(mode="after")
+    def validate_other_content(self) -> "FeedbackIn":
+        if (
+            self.feedback_type == FeedbackType.OTHER
+            and not (self.content or "").strip()
+        ):
+            raise ValueError("OTHER 反馈必须填写补充说明")
+        return self
+
+
+class FeedbackOut(BaseModel):
+    uuid: str
+    generation_uuid: str
+    feedback_type: FeedbackType

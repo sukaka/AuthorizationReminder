@@ -16,6 +16,7 @@ from .auth import get_session, require_action
 from .config import Settings, get_settings
 from .crypto import ContentCipher
 from .database import get_db
+from .feedback_service import create_feedback
 from .generation_service import complete_generation, prepare_generation
 from .history_service import (
     HistoryFilters,
@@ -30,6 +31,8 @@ from .prompt_client import PromptCenterClient
 from .schemas import (
     CompleteGenerationIn,
     CompleteGenerationOut,
+    FeedbackIn,
+    FeedbackOut,
     HistoryDetailOut,
     HistoryItemOut,
     HistoryListOut,
@@ -356,6 +359,42 @@ def home(
             "提交敏感信息前请确认处理范围和必要性。",
             "模型配置与 API Key 仅保存在当前设备。",
         ],
+    )
+
+
+@app.post(
+    "/api/ai/generations/{generation_uuid}/feedback",
+    response_model=FeedbackOut,
+    status_code=201,
+)
+async def submit_feedback(
+    generation_uuid: str,
+    body: FeedbackIn,
+    request: Request,
+    session_payload: Annotated[SessionPayload, Depends(get_session)],
+    current_settings: Annotated[Settings, Depends(get_settings)],
+    db: Annotated[Session, Depends(get_db)],
+    cipher: Annotated[ContentCipher, Depends(get_content_cipher)],
+) -> FeedbackOut:
+    await require_action(
+        "ai_assistant:use",
+        request,
+        session_payload,
+        current_settings,
+    )
+    record = create_feedback(
+        db,
+        str(session_payload.user.id),
+        generation_uuid,
+        body.feedback_type,
+        body.content,
+        cipher,
+        current_settings.content_encryption_key_version,
+    )
+    return FeedbackOut(
+        uuid=record.uuid,
+        generation_uuid=generation_uuid,
+        feedback_type=body.feedback_type,
     )
 
 
