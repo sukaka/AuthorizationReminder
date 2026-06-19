@@ -2,8 +2,10 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use serde::Serialize;
+use tauri::AppHandle;
 
 use crate::keychain::SecretStore;
+use crate::model_client::{generate, ChatMessage, ModelGenerateResult};
 use crate::model_profiles::{
     save_profiles, set_default_profile, upsert_profile, ModelProfileInput, ModelProfilePublic,
 };
@@ -116,8 +118,51 @@ pub fn model_profile_test(
 }
 
 #[tauri::command]
-pub fn model_generate() -> Result<(), String> {
-    Err("模型生成桥将在连接测试后启用".to_string())
+pub async fn model_generate(
+    app: AppHandle,
+    state: tauri::State<'_, AppState>,
+    profile_id: String,
+    messages: Vec<ChatMessage>,
+    temperature: f32,
+    request_id: String,
+) -> Result<ModelGenerateResult, String> {
+    if request_id.is_empty() || request_id.len() > 128 || messages.is_empty() || messages.len() > 128 {
+        return Err("MODEL_INVALID_REQUEST".to_string());
+    }
+    if messages.iter().any(|message| {
+        !matches!(message.role.as_str(), "system" | "user" | "assistant")
+            || message.content.is_empty()
+            || message.content.len() > 2_000_000
+    }) {
+        return Err("MODEL_INVALID_REQUEST".to_string());
+    }
+    let profile = {
+        let profiles = state
+            .profiles
+            .lock()
+            .map_err(|_| "MODEL_PROFILE_UNAVAILABLE".to_string())?;
+        profiles
+            .iter()
+            .find(|profile| profile.id == profile_id)
+            .cloned()
+            .ok_or_else(|| "MODEL_PROFILE_NOT_FOUND".to_string())?
+    };
+    let base_url = crate::model_client::validate_base_url(&profile.base_url)
+        .map_err(|_| "MODEL_URL_INVALID".to_string())?;
+    let api_key = state.secrets.get(&profile.id)?;
+
+    generate(
+        &app,
+        &base_url,
+        &profile.model_id,
+        api_key,
+        messages,
+        temperature.clamp(0.0, 2.0),
+        profile.timeout_seconds,
+        &request_id,
+    )
+    .await
+    .map_err(|error| error.to_string())
 }
 
 #[tauri::command]

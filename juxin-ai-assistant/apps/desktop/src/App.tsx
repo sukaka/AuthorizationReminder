@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
 
 import { ApiError, getSession, type SessionPayload } from './api/client';
+import { ModelProfilesPage } from './pages/ModelProfilesPage';
+import { TaskRunPage, type TaskDefinition } from './pages/TaskRunPage';
 
 type ViewState =
   | { kind: 'checking' }
@@ -9,13 +11,45 @@ type ViewState =
   | { kind: 'error' };
 
 const assistantGroups = [
-  ['通用助手', '总结、润色与日常表达'],
+  ['工作总结', '总结、润色与日常表达'],
   ['销售助手', '客户沟通与商机推进'],
   ['产品交付', '方案、计划与复盘'],
   ['商务投标', '标书分析与响应材料'],
 ];
 
+const workSummaryTask: TaskDefinition = {
+  uuid: 'work-summary',
+  name: '工作总结',
+  description: '把零散进展整理成结构清晰、重点明确、适合汇报的工作总结。',
+  safety_notice: '生成内容需由员工复核后再对外发送。',
+  fields: [
+    {
+      field_key: 'work_content',
+      label: '工作内容',
+      field_type: 'TEXTAREA',
+      required: true,
+      placeholder: '例如：完成统一登录接入、修复三个生产问题、推进客户验收……',
+    },
+    {
+      field_key: 'period',
+      label: '总结周期',
+      field_type: 'TEXT',
+      required: false,
+      placeholder: '例如：本周、2026 年 6 月',
+    },
+    {
+      field_key: 'audience',
+      label: '阅读对象',
+      field_type: 'SELECT',
+      required: false,
+      options: ['直属领导', '项目组', '部门全员', '客户'],
+    },
+  ],
+};
+
 function Workspace({ session }: { session: SessionPayload }) {
+  const [page, setPage] = useState<'home' | 'task' | 'models'>('home');
+
   return (
     <div className="app-frame">
       <aside className="sidebar">
@@ -24,10 +58,10 @@ function Workspace({ session }: { session: SessionPayload }) {
           <strong>聚信 AI 助手</strong>
         </div>
         <nav aria-label="主导航">
-          <a className="is-current" href="#workspace">工作台</a>
-          <a href="#assistants">全部助手</a>
-          <a href="#history">历史记录</a>
-          <a href="#models">个人模型</a>
+          <button className={page === 'home' ? 'is-current' : ''} onClick={() => setPage('home')} type="button">工作台</button>
+          <button className={page === 'task' ? 'is-current' : ''} onClick={() => setPage('task')} type="button">全部助手</button>
+          <button type="button">历史记录</button>
+          <button className={page === 'models' ? 'is-current' : ''} onClick={() => setPage('models')} type="button">个人模型</button>
         </nav>
         <div className="sidebar-foot">
           <span className="presence-dot" />
@@ -39,48 +73,64 @@ function Workspace({ session }: { session: SessionPayload }) {
       </aside>
 
       <main className="workspace" id="workspace">
-        <header className="topbar">
-          <div>
-            <span className="eyebrow">企业智能工作台</span>
-            <h1>上午好，{session.user.username}</h1>
-          </div>
-          <label className="search-field">
-            <span>⌕</span>
-            <input aria-label="搜索助手或任务" placeholder="搜索助手或任务" />
-            <kbd>⌘ K</kbd>
-          </label>
-        </header>
+        {page === 'models' ? (
+          <ModelProfilesPage />
+        ) : page === 'task' ? (
+          <>
+            <button className="back-button" onClick={() => setPage('home')} type="button">‹ 返回工作台</button>
+            <TaskRunPage task={workSummaryTask} />
+          </>
+        ) : (
+          <>
+            <header className="topbar">
+              <div>
+                <span className="eyebrow">企业智能工作台</span>
+                <h1>上午好，{session.user.username}</h1>
+              </div>
+              <label className="search-field">
+                <span>⌕</span>
+                <input aria-label="搜索助手或任务" placeholder="搜索助手或任务" />
+                <kbd>⌘ K</kbd>
+              </label>
+            </header>
 
-        <section className="hero-panel">
-          <div>
-            <span className="hero-kicker">从任务开始，不必从 Prompt 开始</span>
-            <h2>今天想完成什么？</h2>
-            <p>选择一个具体任务，聚信会准备好结构、提示词与输出要求。</p>
-          </div>
-          <button type="button">浏览全部任务 <span>→</span></button>
-        </section>
+            <section className="hero-panel">
+              <div>
+                <span className="hero-kicker">从任务开始，不必从 Prompt 开始</span>
+                <h2>今天想完成什么？</h2>
+                <p>选择一个具体任务，聚信会准备好结构、提示词与输出要求。</p>
+              </div>
+              <button onClick={() => setPage('task')} type="button">开始工作总结 <span>→</span></button>
+            </section>
 
-        <section className="section-block" id="assistants">
-          <div className="section-heading">
-            <div>
-              <span className="eyebrow">快捷入口</span>
-              <h2>常用助手</h2>
-            </div>
-            <a href="#assistants">查看全部</a>
-          </div>
-          <div className="assistant-grid">
-            {assistantGroups.map(([name, description], index) => (
-              <button className="assistant-row" key={name} type="button">
-                <span className={`assistant-glyph tone-${index + 1}`}>{name.slice(0, 1)}</span>
-                <span>
-                  <strong>{name}</strong>
-                  <small>{description}</small>
-                </span>
-                <span className="row-arrow">›</span>
-              </button>
-            ))}
-          </div>
-        </section>
+            <section className="section-block" id="assistants">
+              <div className="section-heading">
+                <div>
+                  <span className="eyebrow">快捷入口</span>
+                  <h2>常用助手</h2>
+                </div>
+                <button className="link-button" onClick={() => setPage('task')} type="button">查看全部</button>
+              </div>
+              <div className="assistant-grid">
+                {assistantGroups.map(([name, description], index) => (
+                  <button
+                    className="assistant-row"
+                    key={name}
+                    onClick={() => index === 0 && setPage('task')}
+                    type="button"
+                  >
+                    <span className={`assistant-glyph tone-${index + 1}`}>{name.slice(0, 1)}</span>
+                    <span>
+                      <strong>{name}</strong>
+                      <small>{description}</small>
+                    </span>
+                    <span className="row-arrow">›</span>
+                  </button>
+                ))}
+              </div>
+            </section>
+          </>
+        )}
       </main>
     </div>
   );
