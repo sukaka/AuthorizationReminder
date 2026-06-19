@@ -1,0 +1,19 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "remote-main",
+  "description": "聚信 AI 助手固定远程工作台权限",
+  "windows": ["main"],
+  "remote": {
+    "urls": ["https://ai-assistant.invalid"]
+  },
+  "permissions": [
+    "core:default",
+    "allow-model-profile-list",
+    "allow-model-profile-upsert",
+    "allow-model-profile-delete",
+    "allow-model-profile-set-default",
+    "allow-model-profile-test",
+    "allow-model-generate",
+    "allow-model-cancel"
+  ]
+}

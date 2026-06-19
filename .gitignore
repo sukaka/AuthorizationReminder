@@ -12,6 +12,8 @@ sec-impl/frontend/dist
 prompt-center/frontend/dist
 big-screen-center/**/dist
 juxin-ai-assistant/apps/desktop/dist
+juxin-ai-assistant/apps/desktop/src-tauri/gen
+juxin-ai-assistant/apps/desktop/src-tauri/target
 *.tsbuildinfo
 .DS_Store
 npm-debug.log
