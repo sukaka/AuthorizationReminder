@@ -7,8 +7,10 @@ from fastapi import Depends, FastAPI, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
 
+from sqlalchemy import delete, func, select
+from sqlalchemy.dialects.mysql import insert as mysql_insert
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
-from sqlalchemy import select
 
 from .auth import get_session, require_action
 from .config import Settings, get_settings
@@ -23,17 +25,20 @@ from .history_service import (
     tombstone_history,
 )
 from .knowledge import KnowledgeRetriever
-from .models import GenerationRecord, Task, TaskField
+from .models import Assistant, GenerationRecord, Task, TaskField, UserFavorite
 from .prompt_client import PromptCenterClient
 from .schemas import (
     CompleteGenerationIn,
     CompleteGenerationOut,
     HistoryDetailOut,
+    HistoryItemOut,
     HistoryListOut,
+    HomeOut,
     PrepareGenerationIn,
     PrepareGenerationOut,
     RegenerateOut,
     SessionPayload,
+    TaskCardOut,
     TaskFieldOut,
     TaskOut,
 )
@@ -166,6 +171,190 @@ def get_task(
                 validation=field.validation_json or {},
             )
             for field in fields
+        ],
+    )
+
+
+def _task_card(
+    task: Task,
+    assistant: Assistant,
+    last_used_at: datetime | None = None,
+) -> TaskCardOut:
+    return TaskCardOut(
+        task_uuid=task.uuid,
+        task_code=task.code,
+        task_name=task.name,
+        description=task.description,
+        assistant_code=assistant.code,
+        assistant_name=assistant.name,
+        last_used_at=last_used_at,
+    )
+
+
+def _history_item(
+    record: GenerationRecord,
+    task: Task,
+    assistant: Assistant,
+) -> HistoryItemOut:
+    return HistoryItemOut(
+        uuid=record.uuid,
+        task_uuid=task.uuid,
+        task_name=task.name,
+        assistant_code=assistant.code,
+        assistant_name=assistant.name,
+        status=record.status,
+        model_display_name=record.model_display_name,
+        model_id=record.model_id,
+        prompt_version=record.prompt_version,
+        latency_ms=record.latency_ms,
+        usage=record.usage_json or {},
+        created_at=record.created_at,
+        finished_at=record.finished_at,
+    )
+
+
+@app.put("/api/ai/favorites/{task_uuid}", status_code=204)
+async def add_favorite(
+    task_uuid: str,
+    request: Request,
+    session_payload: Annotated[SessionPayload, Depends(get_session)],
+    current_settings: Annotated[Settings, Depends(get_settings)],
+    db: Annotated[Session, Depends(get_db)],
+) -> Response:
+    await require_action(
+        "ai_assistant:use",
+        request,
+        session_payload,
+        current_settings,
+    )
+    task = db.scalar(
+        select(Task).where(Task.uuid == task_uuid, Task.status == "ACTIVE")
+    )
+    if task is None:
+        from fastapi import HTTPException
+
+        raise HTTPException(status_code=404, detail="任务不存在或尚未发布")
+    values = {
+        "sso_user_id": str(session_payload.user.id),
+        "task_id": task.id,
+    }
+    dialect = db.get_bind().dialect.name
+    if dialect == "mysql":
+        db.execute(mysql_insert(UserFavorite).values(**values).prefix_with("IGNORE"))
+    elif dialect == "sqlite":
+        db.execute(
+            sqlite_insert(UserFavorite)
+            .values(**values)
+            .on_conflict_do_nothing(
+                index_elements=["sso_user_id", "task_id"]
+            )
+        )
+    elif db.scalar(
+        select(UserFavorite.id).where(
+            UserFavorite.sso_user_id == values["sso_user_id"],
+            UserFavorite.task_id == task.id,
+        )
+    ) is None:
+        db.add(UserFavorite(**values))
+    db.commit()
+    return Response(status_code=204)
+
+
+@app.delete("/api/ai/favorites/{task_uuid}", status_code=204)
+async def remove_favorite(
+    task_uuid: str,
+    request: Request,
+    session_payload: Annotated[SessionPayload, Depends(get_session)],
+    current_settings: Annotated[Settings, Depends(get_settings)],
+    db: Annotated[Session, Depends(get_db)],
+) -> Response:
+    await require_action(
+        "ai_assistant:use",
+        request,
+        session_payload,
+        current_settings,
+    )
+    task_id = db.scalar(select(Task.id).where(Task.uuid == task_uuid))
+    if task_id is not None:
+        db.execute(
+            delete(UserFavorite).where(
+                UserFavorite.sso_user_id == str(session_payload.user.id),
+                UserFavorite.task_id == task_id,
+            )
+        )
+        db.commit()
+    return Response(status_code=204)
+
+
+@app.get("/api/ai/home", response_model=HomeOut)
+def home(
+    session_payload: Annotated[SessionPayload, Depends(get_session)],
+    db: Annotated[Session, Depends(get_db)],
+) -> HomeOut:
+    user_id = str(session_payload.user.id)
+    favorite_rows = db.execute(
+        select(Task, Assistant)
+        .join(UserFavorite, UserFavorite.task_id == Task.id)
+        .join(Assistant, Assistant.id == Task.assistant_id)
+        .where(
+            UserFavorite.sso_user_id == user_id,
+            Task.status == "ACTIVE",
+            Assistant.status == "ACTIVE",
+        )
+        .order_by(UserFavorite.created_at.desc())
+        .limit(50)
+    ).all()
+    latest_by_task = (
+        select(
+            GenerationRecord.task_id.label("task_id"),
+            func.max(GenerationRecord.created_at).label("last_used_at"),
+        )
+        .where(
+            GenerationRecord.sso_user_id == user_id,
+            GenerationRecord.status != "DELETED",
+        )
+        .group_by(GenerationRecord.task_id)
+        .subquery()
+    )
+    recent_task_rows = db.execute(
+        select(Task, Assistant, latest_by_task.c.last_used_at)
+        .join(latest_by_task, latest_by_task.c.task_id == Task.id)
+        .join(Assistant, Assistant.id == Task.assistant_id)
+        .where(Task.status == "ACTIVE", Assistant.status == "ACTIVE")
+        .order_by(latest_by_task.c.last_used_at.desc())
+        .limit(8)
+    ).all()
+    recent_generation_rows = db.execute(
+        select(GenerationRecord, Task, Assistant)
+        .join(Task, Task.id == GenerationRecord.task_id)
+        .join(Assistant, Assistant.id == Task.assistant_id)
+        .where(
+            GenerationRecord.sso_user_id == user_id,
+            GenerationRecord.status != "DELETED",
+        )
+        .order_by(
+            GenerationRecord.created_at.desc(),
+            GenerationRecord.id.desc(),
+        )
+        .limit(8)
+    ).all()
+    return HomeOut(
+        favorites=[
+            _task_card(task, assistant)
+            for task, assistant in favorite_rows
+        ],
+        recent_tasks=[
+            _task_card(task, assistant, last_used_at)
+            for task, assistant, last_used_at in recent_task_rows
+        ],
+        recent_generations=[
+            _history_item(record, task, assistant)
+            for record, task, assistant in recent_generation_rows
+        ],
+        safety_reminders=[
+            "生成内容必须由员工复核后再使用。",
+            "提交敏感信息前请确认处理范围和必要性。",
+            "模型配置与 API Key 仅保存在当前设备。",
         ],
     )
 

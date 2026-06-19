@@ -116,3 +116,20 @@ class HistoryDetailOut(HistoryItemOut):
 
 class RegenerateOut(PrepareGenerationOut):
     parent_generation_uuid: str
+
+
+class TaskCardOut(BaseModel):
+    task_uuid: str
+    task_code: str
+    task_name: str
+    description: str
+    assistant_code: str
+    assistant_name: str
+    last_used_at: datetime | None = None
+
+
+class HomeOut(BaseModel):
+    favorites: list[TaskCardOut]
+    recent_tasks: list[TaskCardOut]
+    recent_generations: list[HistoryItemOut]
+    safety_reminders: list[str]
