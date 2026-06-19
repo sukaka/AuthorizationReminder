@@ -543,6 +543,7 @@ services:
       AUTH_SYSTEM_KEY: "prompt-center"
       AUTH_FETCH_TIMEOUT_MS: 5000
       AUTH_COOKIE_NAME: "juxin_auth_token"
+      PROMPT_CENTER_RUNTIME_TOKEN: ${PROMPT_CENTER_RUNTIME_TOKEN}
       MYSQL_HOST: mysql
       MYSQL_PORT: 3306
       MYSQL_USER: prompt_center_user
