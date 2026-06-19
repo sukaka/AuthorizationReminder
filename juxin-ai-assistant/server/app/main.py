@@ -6,9 +6,21 @@ from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
 
-from .auth import get_session
+from sqlalchemy.orm import Session
+
+from .auth import get_session, require_action
 from .config import Settings, get_settings
-from .schemas import SessionPayload
+from .crypto import ContentCipher
+from .database import get_db
+from .generation_service import complete_generation, prepare_generation
+from .prompt_client import PromptCenterClient
+from .schemas import (
+    CompleteGenerationIn,
+    CompleteGenerationOut,
+    PrepareGenerationIn,
+    PrepareGenerationOut,
+    SessionPayload,
+)
 
 
 settings = get_settings()
@@ -63,11 +75,90 @@ def health() -> dict[str, str]:
     }
 
 
+def get_prompt_client(
+    current_settings: Annotated[Settings, Depends(get_settings)],
+) -> PromptCenterClient:
+    return PromptCenterClient(
+        current_settings.prompt_center_url,
+        current_settings.prompt_center_runtime_token,
+        current_settings.auth_fetch_timeout_ms / 1000,
+    )
+
+
+def get_content_cipher(
+    current_settings: Annotated[Settings, Depends(get_settings)],
+) -> ContentCipher:
+    return ContentCipher(current_settings.content_encryption_key)
+
+
 @app.get("/api/ai/session", response_model=SessionPayload)
 async def session(
     payload: Annotated[SessionPayload, Depends(get_session)],
 ) -> SessionPayload:
     return payload
+
+
+@app.post(
+    "/api/ai/generations/prepare",
+    response_model=PrepareGenerationOut,
+    status_code=201,
+)
+async def prepare_generation_route(
+    body: PrepareGenerationIn,
+    request: Request,
+    session_payload: Annotated[SessionPayload, Depends(get_session)],
+    current_settings: Annotated[Settings, Depends(get_settings)],
+    db: Annotated[Session, Depends(get_db)],
+    prompt_client: Annotated[PromptCenterClient, Depends(get_prompt_client)],
+    cipher: Annotated[ContentCipher, Depends(get_content_cipher)],
+) -> PrepareGenerationOut:
+    await require_action(
+        "ai_assistant:use",
+        request,
+        session_payload,
+        current_settings,
+    )
+    prepared = await prepare_generation(
+        db,
+        session_payload,
+        body,
+        prompt_client,
+        cipher,
+        current_settings.content_encryption_key_version,
+    )
+    return PrepareGenerationOut(**prepared.__dict__)
+
+
+@app.post(
+    "/api/ai/generations/{generation_uuid}/complete",
+    response_model=CompleteGenerationOut,
+)
+async def complete_generation_route(
+    generation_uuid: str,
+    body: CompleteGenerationIn,
+    request: Request,
+    session_payload: Annotated[SessionPayload, Depends(get_session)],
+    current_settings: Annotated[Settings, Depends(get_settings)],
+    db: Annotated[Session, Depends(get_db)],
+    cipher: Annotated[ContentCipher, Depends(get_content_cipher)],
+) -> CompleteGenerationOut:
+    await require_action(
+        "ai_assistant:use",
+        request,
+        session_payload,
+        current_settings,
+    )
+    record = complete_generation(
+        db,
+        session_payload,
+        generation_uuid,
+        body,
+        cipher,
+    )
+    return CompleteGenerationOut(
+        generation_uuid=record.uuid,
+        status=record.status,
+    )
 
 
 @app.post("/api/ai/logout", status_code=204)

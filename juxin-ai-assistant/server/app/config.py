@@ -1,3 +1,5 @@
+import base64
+import binascii
 from functools import lru_cache
 
 from pydantic import Field, model_validator
@@ -27,7 +29,19 @@ class Settings(BaseSettings):
         if not self.auth_dev_bypass:
             if len(self.prompt_center_runtime_token) < 32:
                 raise ValueError("PROMPT_CENTER_RUNTIME_TOKEN 至少需要 32 个字符")
-            if len(self.content_encryption_key) < 43:
+            normalized_key = self.content_encryption_key.strip()
+            padded_key = normalized_key + ("=" * (-len(normalized_key) % 4))
+            try:
+                decoded_key = base64.b64decode(
+                    padded_key.encode("ascii"),
+                    altchars=b"-_",
+                    validate=True,
+                )
+            except (UnicodeEncodeError, binascii.Error, ValueError) as exc:
+                raise ValueError(
+                    "CONTENT_ENCRYPTION_KEY 必须是 32 字节 URL-safe base64"
+                ) from exc
+            if len(decoded_key) != 32:
                 raise ValueError("CONTENT_ENCRYPTION_KEY 必须是 32 字节 URL-safe base64")
         return self
 
