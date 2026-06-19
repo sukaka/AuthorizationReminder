@@ -1,5 +1,6 @@
 import hashlib
 import hmac
+import json
 import secrets
 import uuid as uuid_lib
 from dataclasses import dataclass
@@ -11,6 +12,7 @@ from sqlalchemy.orm import Session
 
 from .crypto import ContentCipher
 from .field_validation import FieldValidationError, validate_task_inputs
+from .knowledge import KnowledgeRetriever
 from .models import GenerationRecord, Task, TaskField, TaskPromptBinding
 from .prompt_client import PromptCenterClient, render_prompt
 from .schemas import CompleteGenerationIn, PrepareGenerationIn, SessionPayload
@@ -34,6 +36,7 @@ async def prepare_generation(
     cipher: ContentCipher,
     key_version: str,
     sensitive_detector: SensitiveDetector,
+    knowledge_retriever: KnowledgeRetriever,
 ) -> PreparedGeneration:
     task = db.scalar(
         select(Task).where(Task.uuid == request.task_uuid, Task.status == "ACTIVE")
@@ -117,6 +120,33 @@ async def prepare_generation(
         prompt_version = int(prompt["version_no"])
     except (KeyError, TypeError, ValueError) as exc:
         raise HTTPException(status_code=422, detail=str(exc) or "Prompt 配置无效") from exc
+    knowledge_items = knowledge_retriever.retrieve(
+        db,
+        task.id,
+        normalized_inputs,
+    )
+    field_by_key = {field.field_key: field for field in fields}
+    input_lines = []
+    for key, value in normalized_inputs.items():
+        label = field_by_key[key].label
+        rendered_value = (
+            json.dumps(value, ensure_ascii=False)
+            if isinstance(value, (list, dict))
+            else str(value)
+        )
+        input_lines.append(f"{label}：{rendered_value}")
+    if knowledge_items:
+        input_lines.extend(
+            [
+                "",
+                "----- 参考知识开始 -----",
+                *[
+                    f"[{item.title}]\n{item.content}"
+                    for item in knowledge_items
+                ],
+                "----- 参考知识结束 -----",
+            ]
+        )
 
     generation_uuid = str(uuid_lib.uuid4())
     completion_token = secrets.token_urlsafe(32)
@@ -137,6 +167,14 @@ async def prepare_generation(
         key_version=key_version,
         completion_token_hash=hashlib.sha256(completion_token.encode()).digest(),
         status="PENDING",
+        knowledge_refs_json=[
+            {
+                "uuid": item.uuid,
+                "title": item.title,
+                "score": item.score,
+            }
+            for item in knowledge_items
+        ],
     )
     db.add(record)
     db.commit()
@@ -147,11 +185,12 @@ async def prepare_generation(
             {
                 "role": "system",
                 "content": (
-                    f"你正在执行“{task.name}”。输出格式：{task.output_format}。"
-                    f"{task.safety_notice}"
+                    "公司安全规则：不得编造事实，不得泄露秘密，输出必须由员工复核。"
+                    f"\n\n任务 Prompt：\n{rendered_prompt}"
+                    f"\n\n输出格式：{task.output_format}。{task.safety_notice}"
                 ),
             },
-            {"role": "user", "content": rendered_prompt},
+            {"role": "user", "content": "\n".join(input_lines)},
         ],
         temperature=0.3,
         safety_notice=task.safety_notice,

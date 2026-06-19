@@ -14,6 +14,7 @@ from .config import Settings, get_settings
 from .crypto import ContentCipher
 from .database import get_db
 from .generation_service import complete_generation, prepare_generation
+from .knowledge import KnowledgeRetriever
 from .models import Task, TaskField
 from .prompt_client import PromptCenterClient
 from .schemas import (
@@ -104,6 +105,12 @@ def get_sensitive_detector(
     )
 
 
+def get_knowledge_retriever(
+    cipher: Annotated[ContentCipher, Depends(get_content_cipher)],
+) -> KnowledgeRetriever:
+    return KnowledgeRetriever(cipher)
+
+
 @app.get("/api/ai/session", response_model=SessionPayload)
 async def session(
     payload: Annotated[SessionPayload, Depends(get_session)],
@@ -169,6 +176,10 @@ async def prepare_generation_route(
         SensitiveDetector,
         Depends(get_sensitive_detector),
     ],
+    knowledge_retriever: Annotated[
+        KnowledgeRetriever,
+        Depends(get_knowledge_retriever),
+    ],
 ) -> PrepareGenerationOut:
     await require_action(
         "ai_assistant:use",
@@ -184,6 +195,7 @@ async def prepare_generation_route(
         cipher,
         current_settings.content_encryption_key_version,
         sensitive_detector,
+        knowledge_retriever,
     )
     return PrepareGenerationOut(**prepared.__dict__)
 
