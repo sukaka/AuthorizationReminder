@@ -1,15 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
 
-const DRAFT_TTL_MS = 7 * 24 * 60 * 60 * 1_000;
-
-type DraftEnvelope = {
-  values: Record<string, unknown>;
-  expiresAt: number;
-};
-
-function draftKey(userId: string, taskUuid: string) {
-  return `draft:${userId}:${taskUuid}`;
-}
+type DraftRecord = { task_id: string; content: string; saved_at: number };
 
 function assertNoSecretKeys(value: unknown): void {
   if (!value || typeof value !== 'object') return;
@@ -25,45 +16,36 @@ export async function saveDraft(
   userId: string,
   taskUuid: string,
   values: Record<string, unknown>,
-  now = Date.now(),
+  _now = Date.now(),
 ): Promise<void> {
   assertNoSecretKeys(values);
-  const envelope: DraftEnvelope = {
-    values,
-    expiresAt: now + DRAFT_TTL_MS,
-  };
-  await invoke('device_store_set', {
-    key: draftKey(userId, taskUuid),
-    value: JSON.stringify(envelope),
-    encrypted: true,
+  await invoke('local_draft_save', {
+    userId,
+    taskId: taskUuid,
+    content: JSON.stringify(values),
   });
 }
 
 export async function loadDraft(
   userId: string,
   taskUuid: string,
-  now = Date.now(),
+  _now = Date.now(),
 ): Promise<Record<string, unknown> | null> {
-  const key = draftKey(userId, taskUuid);
-  const raw = await invoke<string | null>('device_store_get', {
-    key,
-    encrypted: true,
+  const draft = await invoke<DraftRecord | null>('local_draft_load', {
+    userId,
+    taskId: taskUuid,
   });
-  if (!raw) return null;
-  let envelope: DraftEnvelope;
+  if (!draft) return null;
   try {
-    envelope = JSON.parse(raw) as DraftEnvelope;
+    const values = JSON.parse(draft.content) as unknown;
+    return values && typeof values === 'object' && !Array.isArray(values)
+      ? values as Record<string, unknown>
+      : null;
   } catch {
-    await invoke('device_store_delete', { key });
     return null;
   }
-  if (!envelope.expiresAt || envelope.expiresAt <= now) {
-    await invoke('device_store_delete', { key });
-    return null;
-  }
-  return envelope.values;
 }
 
 export async function deleteDraft(userId: string, taskUuid: string): Promise<void> {
-  await invoke('device_store_delete', { key: draftKey(userId, taskUuid) });
+  await invoke('local_draft_delete', { userId, taskId: taskUuid });
 }

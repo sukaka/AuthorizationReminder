@@ -5,6 +5,31 @@ use uuid::Uuid;
 
 use crate::model_client::validate_base_url;
 
+pub fn model_secret_account(profile_id: &str) -> String {
+    format!("model-profile:{profile_id}")
+}
+
+pub fn ensure_secret_origin_safe(
+    existing: Option<&ModelProfilePublic>,
+    proposed_base_url: &str,
+    has_existing_secret: bool,
+    replacement_secret: Option<&str>,
+) -> Result<(), String> {
+    let has_replacement = replacement_secret.is_some_and(|value| !value.trim().is_empty());
+    if !has_existing_secret || has_replacement {
+        return Ok(());
+    }
+    let Some(existing) = existing else {
+        return Ok(());
+    };
+    let current = validate_base_url(&existing.base_url)?;
+    let proposed = validate_base_url(proposed_base_url.trim())?;
+    if current.origin() != proposed.origin() {
+        return Err("MODEL_API_KEY_REENTRY_REQUIRED".to_string());
+    }
+    Ok(())
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ModelProfileInput {
@@ -24,7 +49,7 @@ impl ModelProfileInput {
     }
 }
 
-#[derive(Clone, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ModelProfilePublic {
     pub id: String,
@@ -110,7 +135,8 @@ pub fn save_profiles(path: &Path, profiles: &[ModelProfilePublic]) -> Result<(),
         fs::create_dir_all(parent).map_err(|_| "无法创建本地配置目录".to_string())?;
     }
     let temporary = path.with_extension("json.tmp");
-    let bytes = serde_json::to_vec_pretty(profiles).map_err(|_| "无法编码本地模型配置".to_string())?;
+    let bytes =
+        serde_json::to_vec_pretty(profiles).map_err(|_| "无法编码本地模型配置".to_string())?;
     fs::write(&temporary, bytes).map_err(|_| "无法保存本地模型配置".to_string())?;
     fs::rename(temporary, path).map_err(|_| "无法提交本地模型配置".to_string())
 }
@@ -128,8 +154,8 @@ pub fn set_default_profile(profiles: &mut [ModelProfilePublic], id: &str) -> Res
 #[cfg(test)]
 mod tests {
     use super::{
-        load_profiles, save_profiles, set_default_profile, upsert_profile, ModelProfileInput,
-        ModelProfilePublic,
+        ensure_secret_origin_safe, load_profiles, model_secret_account, save_profiles,
+        set_default_profile, upsert_profile, ModelProfileInput, ModelProfilePublic,
     };
 
     fn input(id: &str, is_default: bool) -> ModelProfileInput {
@@ -162,8 +188,17 @@ mod tests {
         upsert_profile(&mut profiles, input("one", true), true).unwrap();
         upsert_profile(&mut profiles, input("two", true), true).unwrap();
 
-        assert_eq!(profiles.iter().filter(|profile| profile.is_default).count(), 1);
-        assert!(profiles.iter().find(|profile| profile.id == "two").unwrap().is_default);
+        assert_eq!(
+            profiles.iter().filter(|profile| profile.is_default).count(),
+            1
+        );
+        assert!(
+            profiles
+                .iter()
+                .find(|profile| profile.id == "two")
+                .unwrap()
+                .is_default
+        );
     }
 
     #[test]
@@ -188,5 +223,36 @@ mod tests {
         upsert_profile(&mut profiles, input("one", true), false).unwrap();
 
         assert!(set_default_profile(&mut profiles, "missing").is_err());
+    }
+
+    #[test]
+    fn api_key_must_be_reentered_when_profile_origin_changes() {
+        let mut profiles = Vec::<ModelProfilePublic>::new();
+        let existing = upsert_profile(&mut profiles, input("one", true), true).unwrap();
+
+        let error =
+            ensure_secret_origin_safe(Some(&existing), "https://other.example.com/v1", true, None)
+                .unwrap_err();
+
+        assert_eq!(error, "MODEL_API_KEY_REENTRY_REQUIRED");
+        assert!(ensure_secret_origin_safe(
+            Some(&existing),
+            "https://other.example.com/v1",
+            true,
+            Some("replacement-secret"),
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn model_secret_accounts_cannot_collide_with_the_device_storage_key() {
+        assert_eq!(
+            model_secret_account("device-storage-key"),
+            "model-profile:device-storage-key"
+        );
+        assert_ne!(
+            model_secret_account("device-storage-key"),
+            "device-storage-key"
+        );
     }
 }

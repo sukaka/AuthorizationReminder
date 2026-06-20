@@ -50,6 +50,7 @@ it('renders user-scoped home metadata and removes a favorite optimistically', as
     user: { id: 'u-1', username: '张磊', role: 'employee' },
     scope: { department: '技术部', managedDepartments: [] },
     apps: ['ai-assistant'],
+    local_binding_token: 'signed-binding-token',
   }} onOpenTask={vi.fn()} onShowAssistants={vi.fn()} />);
 
   expect(await screen.findByText('上午好，张磊')).toBeInTheDocument();

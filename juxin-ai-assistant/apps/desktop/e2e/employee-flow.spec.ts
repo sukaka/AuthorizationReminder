@@ -55,12 +55,14 @@ async function installTauriBridge(page: Page) {
   await page.addInitScript(({ draft }) => {
     const callbacks = new Map<number, (message: unknown) => void>();
     const eventCallbacks = new Map<string, number>();
-    const deviceStore = new Map<string, string>([
-      ['draft:u-e2e:task-sales-quote', JSON.stringify({
-        values: { background: draft },
-        expiresAt: Date.now() + 60_000,
-      })],
+    const drafts = new Map<string, { task_id: string; content: string; saved_at: number }>([
+      ['u-e2e:task-sales-quote', {
+        task_id: 'task-sales-quote',
+        content: JSON.stringify({ background: draft }),
+        saved_at: Math.floor(Date.now() / 1000),
+      }],
     ]);
+    const queues = new Map<string, Array<{ id: string; payload: string; status: string; created_at: number }>>();
     let callbackId = 1;
     let generationCount = 0;
     const modelProcessSecret = 'e2e-model-process-secret';
@@ -77,6 +79,7 @@ async function installTauriBridge(page: Page) {
           callbacks.delete(id);
         },
         async invoke(command: string, args: Record<string, any> = {}) {
+          if (command === 'local_session_bind') return null;
           if (command === 'model_profile_list') {
             return [{
               id: 'profile-e2e', displayName: 'E2E 本地模型',
@@ -84,14 +87,31 @@ async function installTauriBridge(page: Page) {
               temperature: 0.3, timeoutSeconds: 60, isDefault: true, hasApiKey: true,
             }];
           }
-          if (command === 'device_store_get') return deviceStore.get(args.key) ?? null;
-          if (command === 'device_store_set') {
-            deviceStore.set(args.key, args.value);
+          if (command === 'local_draft_load') return drafts.get(`${args.userId}:${args.taskId}`) ?? null;
+          if (command === 'local_draft_save') {
+            drafts.set(`${args.userId}:${args.taskId}`, {
+              task_id: args.taskId, content: args.content, saved_at: Math.floor(Date.now() / 1000),
+            });
             return null;
           }
-          if (command === 'device_store_delete') {
-            deviceStore.delete(args.key);
+          if (command === 'local_draft_delete') {
+            drafts.delete(`${args.userId}:${args.taskId}`);
             return null;
+          }
+          if (command === 'local_queue_list') return queues.get(args.userId) ?? [];
+          if (command === 'local_queue_push') {
+            const current = (queues.get(args.userId) ?? []).filter((item) => item.id !== args.resultId);
+            current.push({ id: args.resultId, payload: args.payload, status: 'pending', created_at: Date.now() });
+            queues.set(args.userId, current);
+            return null;
+          }
+          if (command === 'local_queue_remove') {
+            queues.set(args.userId, (queues.get(args.userId) ?? []).filter((item) => item.id !== args.resultId));
+            return null;
+          }
+          if (command === 'local_logout') {
+            for (const key of drafts.keys()) if (key.startsWith(`${args.userId}:`)) drafts.delete(key);
+            return { drafts_deleted: 1, completed_deleted: 0, pending_deleted: 0 };
           }
           if (command === 'plugin:event|listen') {
             eventCallbacks.set(args.event, args.handler);
@@ -151,6 +171,7 @@ async function mockApi(page: Page, state: E2eState) {
         user: { id: 'u-e2e', username: '端到端员工', role: 'employee' },
         scope: { department: '销售部', managedDepartments: [] },
         apps: ['ai-assistant'],
+        local_binding_token: 'e2e-local-binding-token',
       } });
     }
     if (path === '/api/ai/home') {

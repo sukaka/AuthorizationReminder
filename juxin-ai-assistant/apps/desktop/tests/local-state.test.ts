@@ -3,6 +3,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { loadDraft, saveDraft } from '../src/local/drafts';
 import {
   enqueuePendingResult,
+  logoutLocalUser,
   syncPendingResults,
   type PendingResult,
 } from '../src/local/syncQueue';
@@ -13,33 +14,22 @@ vi.mock('@tauri-apps/api/core', () => ({ invoke: invokeMock }));
 beforeEach(() => invokeMock.mockReset());
 afterEach(() => vi.unstubAllGlobals());
 
-it('stores task drafts under the signed-in user and expires them after seven days', async () => {
+it('stores and loads task drafts through the user-isolated Rust queue', async () => {
   invokeMock.mockResolvedValueOnce(undefined);
   await saveDraft('u-1', 'task-1', { background: '本周进展' }, 1_000);
 
-  expect(invokeMock).toHaveBeenCalledWith('device_store_set', {
-    key: 'draft:u-1:task-1',
-    value: expect.any(String),
-    encrypted: true,
+  expect(invokeMock).toHaveBeenCalledWith('local_draft_save', {
+    userId: 'u-1',
+    taskId: 'task-1',
+    content: JSON.stringify({ background: '本周进展' }),
   });
-  const saved = JSON.parse(invokeMock.mock.calls[0][1].value);
-  expect(saved).toEqual({
-    values: { background: '本周进展' },
-    expiresAt: 1_000 + 7 * 24 * 60 * 60 * 1_000,
-  });
-  expect(invokeMock.mock.calls[0][1].value).not.toMatch(/api.?key/i);
+  expect(invokeMock.mock.calls[0][1].content).not.toMatch(/api.?key/i);
 
   invokeMock.mockReset();
-  invokeMock.mockResolvedValueOnce(JSON.stringify(saved));
+  invokeMock.mockResolvedValueOnce({
+    task_id: 'task-1', content: JSON.stringify({ background: '本周进展' }), saved_at: 1,
+  });
   expect(await loadDraft('u-1', 'task-1', 2_000)).toEqual({ background: '本周进展' });
-
-  invokeMock.mockReset();
-  invokeMock.mockResolvedValueOnce(JSON.stringify({ ...saved, expiresAt: 999 }));
-  invokeMock.mockResolvedValueOnce(undefined);
-  expect(await loadDraft('u-1', 'task-1', 2_000)).toBeNull();
-  expect(invokeMock).toHaveBeenLastCalledWith('device_store_delete', {
-    key: 'draft:u-1:task-1',
-  });
 });
 
 it('queues a failed completion with retry metadata in encrypted device storage', async () => {
@@ -56,18 +46,14 @@ it('queues a failed completion with retry metadata in encrypted device storage',
   };
   invokeMock.mockResolvedValueOnce(null).mockResolvedValueOnce(undefined);
 
-  await enqueuePendingResult(item);
+  await enqueuePendingResult('u-1', item);
 
-  expect(invokeMock).toHaveBeenNthCalledWith(1, 'device_store_get', {
-    key: 'pending-result-sync',
-    encrypted: true,
+  expect(invokeMock).toHaveBeenCalledWith('local_queue_push', {
+    userId: 'u-1',
+    resultId: 'gen-1',
+    payload: JSON.stringify(item),
   });
-  expect(invokeMock).toHaveBeenNthCalledWith(2, 'device_store_set', {
-    key: 'pending-result-sync',
-    value: JSON.stringify([item]),
-    encrypted: true,
-  });
-  expect(invokeMock.mock.calls[1][1].value).not.toMatch(/api.?key/i);
+  expect(invokeMock.mock.calls[0][1].payload).not.toMatch(/api.?key/i);
 });
 
 it('retries due pending results and removes a successfully synchronized item', async () => {
@@ -76,11 +62,13 @@ it('retries due pending results and removes a successfully synchronized item', a
     modelDisplayName: '公司模型', modelId: 'model-1', latencyMs: 20, usage: {},
     retryCount: 1, nextRetryAt: 4_000,
   };
-  invokeMock.mockResolvedValueOnce(JSON.stringify([item])).mockResolvedValueOnce(undefined);
+  invokeMock.mockResolvedValueOnce([{
+    id: item.generationUuid, payload: JSON.stringify(item), status: 'pending', created_at: 1,
+  }]).mockResolvedValueOnce(undefined);
   const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 200 }));
   vi.stubGlobal('fetch', fetchMock);
 
-  await syncPendingResults(5_000);
+  await syncPendingResults('u-1', 5_000);
 
   expect(fetchMock).toHaveBeenCalledWith('/api/ai/generations/gen-retry/complete', {
     method: 'POST',
@@ -91,7 +79,14 @@ it('retries due pending results and removes a successfully synchronized item', a
       model_display_name: '公司模型', model_id: 'model-1', latency_ms: 20, usage: {},
     }),
   });
-  expect(invokeMock).toHaveBeenLastCalledWith('device_store_delete', {
-    key: 'pending-result-sync',
+  expect(invokeMock).toHaveBeenLastCalledWith('local_queue_remove', {
+    userId: 'u-1',
+    resultId: 'gen-retry',
   });
+});
+
+it('logs out only the current local user without deleting unsynced results', async () => {
+  invokeMock.mockResolvedValueOnce({ drafts_deleted: 2, completed_deleted: 0, pending_deleted: 0 });
+  await logoutLocalUser('u-1');
+  expect(invokeMock).toHaveBeenCalledWith('local_logout', { userId: 'u-1' });
 });

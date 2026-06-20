@@ -221,13 +221,14 @@ it('cancels the active local request with its request id', async () => {
 it('restores and saves a user-scoped encrypted device draft', async () => {
   invokeMock.mockImplementation((command: string) => {
     if (command === 'model_profile_list') return Promise.resolve([]);
-    if (command === 'device_store_get') {
-      return Promise.resolve(JSON.stringify({
-        values: { work_content: '设备草稿' },
-        expiresAt: Date.now() + 60_000,
-      }));
+    if (command === 'local_draft_load') {
+      return Promise.resolve({
+        task_id: 'task-1',
+        content: JSON.stringify({ work_content: '设备草稿' }),
+        saved_at: Math.floor(Date.now() / 1000),
+      });
     }
-    if (command === 'device_store_set') return Promise.resolve();
+    if (command === 'local_draft_save') return Promise.resolve();
     return Promise.resolve();
   });
 
@@ -236,11 +237,8 @@ it('restores and saves a user-scoped encrypted device draft', async () => {
   expect(await screen.findByDisplayValue('设备草稿')).toBeInTheDocument();
   await userEvent.type(screen.getByLabelText('工作内容'), '继续');
   await waitFor(() => expect(invokeMock).toHaveBeenCalledWith(
-    'device_store_set',
-    expect.objectContaining({
-      key: 'draft:u-draft:task-1',
-      encrypted: true,
-    }),
+    'local_draft_save',
+    expect.objectContaining({ userId: 'u-draft', taskId: 'task-1' }),
   ));
 });
 
@@ -275,8 +273,9 @@ it('keeps a completed local result in the encrypted pending queue when sync fail
     if (command === 'model_generate') {
       return Promise.resolve({ output: '离线结果', latencyMs: 20, usage: {} });
     }
-    if (command === 'device_store_get') return Promise.resolve(null);
-    if (command === 'device_store_set') return Promise.resolve();
+    if (command === 'local_draft_load') return Promise.resolve(null);
+    if (command === 'local_queue_push') return Promise.resolve();
+    if (command === 'local_draft_delete') return Promise.resolve();
     return Promise.resolve();
   });
 
@@ -286,8 +285,8 @@ it('keeps a completed local result in the encrypted pending queue when sync fail
 
   expect(await screen.findByText('结果已保存在本机，恢复连接后自动同步')).toBeInTheDocument();
   expect(invokeMock).toHaveBeenCalledWith(
-    'device_store_set',
-    expect.objectContaining({ key: 'pending-result-sync', encrypted: true }),
+    'local_queue_push',
+    expect.objectContaining({ userId: 'u-1', resultId: 'gen-offline' }),
   );
 });
 

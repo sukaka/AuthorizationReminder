@@ -115,17 +115,31 @@ fn endpoint_url(base_url: &Url, path: &str) -> Result<Url, ModelClientError> {
         .map_err(|_| ModelClientError::Protocol)
 }
 
+pub struct ModelGenerateRequest<'a> {
+    pub base_url: &'a Url,
+    pub model_id: &'a str,
+    pub api_key: Option<String>,
+    pub messages: Vec<ChatMessage>,
+    pub temperature: f32,
+    pub timeout_seconds: u64,
+    pub request_id: &'a str,
+    pub cancel: watch::Receiver<bool>,
+}
+
 pub async fn generate(
     app: &AppHandle,
-    base_url: &Url,
-    model_id: &str,
-    api_key: Option<String>,
-    messages: Vec<ChatMessage>,
-    temperature: f32,
-    timeout_seconds: u64,
-    request_id: &str,
-    mut cancel: watch::Receiver<bool>,
+    request: ModelGenerateRequest<'_>,
 ) -> Result<ModelGenerateResult, ModelClientError> {
+    let ModelGenerateRequest {
+        base_url,
+        model_id,
+        api_key,
+        messages,
+        temperature,
+        timeout_seconds,
+        request_id,
+        mut cancel,
+    } = request;
     let client = reqwest::Client::builder()
         .redirect(Policy::none())
         .timeout(Duration::from_secs(timeout_seconds))
@@ -187,9 +201,7 @@ pub async fn generate(
                 ModelClientError::Connection
             }
         })?;
-        pending.push_str(
-            std::str::from_utf8(&chunk).map_err(|_| ModelClientError::Protocol)?,
-        );
+        pending.push_str(std::str::from_utf8(&chunk).map_err(|_| ModelClientError::Protocol)?);
 
         while let Some(index) = pending.find('\n') {
             let line = pending[..index].trim_end_matches('\r').to_string();

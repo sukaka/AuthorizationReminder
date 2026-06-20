@@ -70,6 +70,7 @@ it('shows all assistants regardless of the signed-in department and supports tas
         user: { id: 'u-sales', username: '销售员工', role: 'employee' },
         scope: { department: '销售部', managedDepartments: [] },
         apps: ['ai-assistant'],
+        local_binding_token: 'signed-binding-token',
       }),
     ),
     http.get('/api/ai/home', () =>
@@ -96,6 +97,11 @@ it('shows all assistants regardless of the signed-in department and supports tas
   );
 
   render(<App />);
+  await waitFor(() => {
+    expect(invokeMock).toHaveBeenCalledWith('local_session_bind', {
+      token: 'signed-binding-token',
+    });
+  });
   await userEvent.click(await screen.findByRole('button', { name: '全部助手' }));
 
   for (const name of assistantNames) {

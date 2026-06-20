@@ -9,6 +9,7 @@ export type SessionPayload = {
     managedDepartments: string[];
   };
   apps: string[];
+  local_binding_token: string;
 };
 
 export type TaskFieldPayload = {

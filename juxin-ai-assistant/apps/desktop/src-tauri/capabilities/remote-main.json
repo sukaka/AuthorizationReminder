@@ -4,10 +4,19 @@
   "description": "聚信 AI 助手固定远程工作台权限",
   "windows": ["main"],
   "remote": {
-    "urls": ["http://localhost:18093"]
+    "urls": ["https://ai-assistant.invalid/*"]
   },
   "permissions": [
     "core:default",
+    "allow-local-session-bind",
+    "allow-local-draft-save",
+    "allow-local-draft-load",
+    "allow-local-draft-delete",
+    "allow-local-queue-push",
+    "allow-local-queue-list",
+    "allow-local-queue-remove",
+    "allow-local-cache-clear",
+    "allow-local-logout",
     "allow-model-profile-list",
     "allow-model-profile-upsert",
     "allow-model-profile-delete",

@@ -19,6 +19,7 @@ describe('unified session shell', () => {
           user: { id: 'u-1', username: '张磊', role: 'employee' },
           scope: { department: '技术部', managedDepartments: [] },
           apps: ['ai-assistant'],
+          local_binding_token: 'signed-binding-token',
         }),
       ),
     );

@@ -1,7 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
 
-const QUEUE_KEY = 'pending-result-sync';
-
 export type PendingResult = {
   generationUuid: string;
   completionToken: string;
@@ -14,68 +12,65 @@ export type PendingResult = {
   nextRetryAt: number;
 };
 
-export async function loadPendingResults(): Promise<PendingResult[]> {
-  const raw = await invoke<string | null>('device_store_get', {
-    key: QUEUE_KEY,
-    encrypted: true,
-  });
-  if (!raw) return [];
-  try {
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed as PendingResult[] : [];
-  } catch {
-    return [];
-  }
-}
+type LocalQueueRecord = {
+  id: string;
+  payload: string;
+  status: 'pending' | 'completed';
+  created_at: number;
+};
 
-async function savePendingResults(items: PendingResult[]): Promise<void> {
-  if (items.length === 0) {
-    await invoke('device_store_delete', { key: QUEUE_KEY });
-    return;
-  }
-  await invoke('device_store_set', {
-    key: QUEUE_KEY,
-    value: JSON.stringify(items),
-    encrypted: true,
+export async function loadPendingResults(userId: string): Promise<PendingResult[]> {
+  const records = await invoke<LocalQueueRecord[]>('local_queue_list', { userId });
+  return records.flatMap((record) => {
+    if (record.status !== 'pending') return [];
+    try {
+      const parsed = JSON.parse(record.payload) as PendingResult;
+      return parsed?.generationUuid === record.id ? [parsed] : [];
+    } catch {
+      return [];
+    }
   });
 }
 
-export async function enqueuePendingResult(item: PendingResult): Promise<void> {
-  const current = await loadPendingResults();
-  const withoutDuplicate = current.filter(
-    (candidate) => candidate.generationUuid !== item.generationUuid,
-  );
-  await savePendingResults([...withoutDuplicate, item]);
+export async function enqueuePendingResult(
+  userId: string,
+  item: PendingResult,
+): Promise<void> {
+  await invoke('local_queue_push', {
+    userId,
+    resultId: item.generationUuid,
+    payload: JSON.stringify(item),
+  });
 }
 
-export async function removePendingResult(generationUuid: string): Promise<void> {
-  const current = await loadPendingResults();
-  await savePendingResults(
-    current.filter((item) => item.generationUuid !== generationUuid),
-  );
+export async function removePendingResult(
+  userId: string,
+  generationUuid: string,
+): Promise<void> {
+  await invoke('local_queue_remove', { userId, resultId: generationUuid });
 }
 
 export async function reschedulePendingResult(
+  userId: string,
   item: PendingResult,
   now = Date.now(),
 ): Promise<void> {
   const retryCount = item.retryCount + 1;
   const delay = Math.min(60 * 60 * 1_000, 2 ** retryCount * 5_000);
-  await enqueuePendingResult({
+  await enqueuePendingResult(userId, {
     ...item,
     retryCount,
     nextRetryAt: now + delay,
   });
 }
 
-export async function syncPendingResults(now = Date.now()): Promise<void> {
-  const current = await loadPendingResults();
-  const remaining: PendingResult[] = [];
+export async function syncPendingResults(
+  userId: string,
+  now = Date.now(),
+): Promise<void> {
+  const current = await loadPendingResults(userId);
   for (const item of current) {
-    if (item.nextRetryAt > now) {
-      remaining.push(item);
-      continue;
-    }
+    if (item.nextRetryAt > now) continue;
     try {
       const response = await fetch(
         `/api/ai/generations/${encodeURIComponent(item.generationUuid)}/complete`,
@@ -94,14 +89,13 @@ export async function syncPendingResults(now = Date.now()): Promise<void> {
         },
       );
       if (!response.ok) throw new Error(`SYNC_${response.status}`);
+      await removePendingResult(userId, item.generationUuid);
     } catch {
-      const retryCount = item.retryCount + 1;
-      remaining.push({
-        ...item,
-        retryCount,
-        nextRetryAt: now + Math.min(60 * 60 * 1_000, 2 ** retryCount * 5_000),
-      });
+      await reschedulePendingResult(userId, item, now);
     }
   }
-  await savePendingResults(remaining);
+}
+
+export async function logoutLocalUser(userId: string): Promise<void> {
+  await invoke('local_logout', { userId });
 }

@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { invoke } from '@tauri-apps/api/core';
 
 import {
   ApiError,
@@ -12,7 +13,22 @@ import { AssistantsPage } from './pages/AssistantsPage';
 import { HistoryPage } from './pages/HistoryPage';
 import { HomePage } from './pages/HomePage';
 import { TaskRunPage, type TaskDefinition } from './pages/TaskRunPage';
-import { syncPendingResults } from './local/syncQueue';
+import { logoutLocalUser, syncPendingResults } from './local/syncQueue';
+import { AuditPage } from './pages/admin/AuditPage';
+import { GovernanceCenter } from './pages/admin/GovernanceCenter';
+import { StatsPage } from './pages/admin/StatsPage';
+import { SuggestionsPage } from './pages/admin/SuggestionsPage';
+
+type WorkspacePage =
+  | 'home'
+  | 'assistants'
+  | 'history'
+  | 'task'
+  | 'models'
+  | 'governance'
+  | 'department-stats'
+  | 'suggestions'
+  | 'audit';
 
 type ViewState =
   | { kind: 'checking' }
@@ -21,24 +37,36 @@ type ViewState =
   | { kind: 'error' };
 
 function Workspace({ session }: { session: SessionPayload }) {
-  const [page, setPage] = useState<'home' | 'assistants' | 'history' | 'task' | 'models'>('home');
+  const [page, setPage] = useState<WorkspacePage>('home');
   const [task, setTask] = useState<TaskDefinition | null>(null);
   const [taskError, setTaskError] = useState('');
+  const role = session.user.role.trim().toLowerCase();
+  const isAdmin = role === 'admin' || role === 'sysadmin';
+  const canAudit = role === 'admin' || role === 'auditor';
+  const isManager = session.scope.managedDepartments.length > 0;
 
   useEffect(() => {
     if (!window.__TAURI_INTERNALS__) return;
     const sync = () => {
-      syncPendingResults().catch(() => undefined);
+      syncPendingResults(String(session.user.id)).catch(() => undefined);
     };
     sync();
     window.addEventListener('online', sync);
     return () => window.removeEventListener('online', sync);
-  }, []);
+  }, [session.user.id]);
 
   const openTask = (nextTask: TaskPayload) => {
     setTask(nextTask);
     setTaskError('');
     setPage('task');
+  };
+
+  const logout = async () => {
+    if (window.__TAURI_INTERNALS__) {
+      await logoutLocalUser(String(session.user.id)).catch(() => undefined);
+    }
+    await fetch('/api/ai/logout', { method: 'POST', credentials: 'include' }).catch(() => undefined);
+    window.location.assign(getAuthPortalUrl());
   };
 
   return (
@@ -49,10 +77,18 @@ function Workspace({ session }: { session: SessionPayload }) {
           <strong>聚信 AI 助手</strong>
         </div>
         <nav aria-label="主导航">
-          <button className={page === 'home' ? 'is-current' : ''} onClick={() => setPage('home')} type="button">工作台</button>
-          <button className={page === 'assistants' ? 'is-current' : ''} onClick={() => setPage('assistants')} type="button">全部助手</button>
-          <button className={page === 'history' ? 'is-current' : ''} onClick={() => setPage('history')} type="button">历史记录</button>
-          <button className={page === 'models' ? 'is-current' : ''} onClick={() => setPage('models')} type="button">个人模型</button>
+          <button aria-current={page === 'home' ? 'page' : undefined} className={page === 'home' ? 'is-current' : ''} onClick={() => setPage('home')} type="button">工作台</button>
+          <button aria-current={page === 'assistants' ? 'page' : undefined} className={page === 'assistants' ? 'is-current' : ''} onClick={() => setPage('assistants')} type="button">全部助手</button>
+          <button aria-current={page === 'history' ? 'page' : undefined} className={page === 'history' ? 'is-current' : ''} onClick={() => setPage('history')} type="button">历史记录</button>
+          <button aria-current={page === 'models' ? 'page' : undefined} className={page === 'models' ? 'is-current' : ''} onClick={() => setPage('models')} type="button">个人模型</button>
+          {isManager ? (
+            <>
+              <button aria-current={page === 'department-stats' ? 'page' : undefined} className={page === 'department-stats' ? 'is-current' : ''} onClick={() => setPage('department-stats')} type="button">部门数据</button>
+              <button aria-current={page === 'suggestions' ? 'page' : undefined} className={page === 'suggestions' ? 'is-current' : ''} onClick={() => setPage('suggestions')} type="button">提交建议</button>
+            </>
+          ) : null}
+          {isAdmin ? <button aria-current={page === 'governance' ? 'page' : undefined} className={page === 'governance' ? 'is-current' : ''} onClick={() => setPage('governance')} type="button">治理中心</button> : null}
+          {!isAdmin && canAudit ? <button aria-current={page === 'audit' ? 'page' : undefined} className={page === 'audit' ? 'is-current' : ''} onClick={() => setPage('audit')} type="button">审计日志</button> : null}
         </nav>
         <div className="sidebar-foot">
           <span className="presence-dot" />
@@ -60,12 +96,21 @@ function Workspace({ session }: { session: SessionPayload }) {
             <strong>{session.user.username}</strong>
             <small>{session.scope.department || '聚信员工'}</small>
           </div>
+          <button aria-label="退出登录" className="logout-button" onClick={() => void logout()} type="button">退出</button>
         </div>
       </aside>
 
       <main className="workspace" id="workspace">
         {page === 'models' ? (
           <ModelProfilesPage />
+        ) : page === 'governance' ? (
+          <GovernanceCenter session={session} />
+        ) : page === 'department-stats' ? (
+          <StatsPage manager />
+        ) : page === 'suggestions' ? (
+          <SuggestionsPage departments={session.scope.managedDepartments} />
+        ) : page === 'audit' ? (
+          <AuditPage />
         ) : page === 'assistants' ? (
           <AssistantsPage onOpenTask={openTask} />
         ) : page === 'history' ? (
@@ -122,7 +167,12 @@ export default function App() {
   useEffect(() => {
     let active = true;
     getSession()
-      .then((session) => {
+      .then(async (session) => {
+        if (window.__TAURI_INTERNALS__) {
+          await invoke('local_session_bind', {
+            token: session.local_binding_token,
+          });
+        }
         if (active) setState({ kind: 'ready', session });
       })
       .catch((error: unknown) => {

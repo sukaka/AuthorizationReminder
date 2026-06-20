@@ -6,55 +6,20 @@ use serde::Serialize;
 use tauri::AppHandle;
 
 use crate::keychain::SecretStore;
-use crate::model_client::{generate, ChatMessage, ModelGenerateResult};
+use crate::model_client::{generate, ChatMessage, ModelGenerateRequest, ModelGenerateResult};
+use crate::model_profile_store::commit_model_profile_upsert;
 use crate::model_profiles::{
-    save_profiles, set_default_profile, upsert_profile, ModelProfileInput, ModelProfilePublic,
+    model_secret_account, save_profiles, set_default_profile, ModelProfileInput, ModelProfilePublic,
 };
 
 pub struct AppState {
     pub profiles_path: PathBuf,
-    pub device_store_path: PathBuf,
+    pub local_storage_path: PathBuf,
     pub profiles: Mutex<Vec<ModelProfilePublic>>,
     pub secrets: Arc<dyn SecretStore>,
     pub cancellations: Mutex<HashMap<String, tokio::sync::watch::Sender<bool>>>,
-}
-
-#[tauri::command]
-pub fn device_store_get(
-    state: tauri::State<'_, AppState>,
-    key: String,
-    encrypted: bool,
-) -> Result<Option<String>, String> {
-    crate::device_store::get_value(
-        &state.device_store_path,
-        state.secrets.as_ref(),
-        &key,
-        encrypted,
-    )
-}
-
-#[tauri::command]
-pub fn device_store_set(
-    state: tauri::State<'_, AppState>,
-    key: String,
-    value: String,
-    encrypted: bool,
-) -> Result<(), String> {
-    crate::device_store::set_value(
-        &state.device_store_path,
-        state.secrets.as_ref(),
-        &key,
-        &value,
-        encrypted,
-    )
-}
-
-#[tauri::command]
-pub fn device_store_delete(
-    state: tauri::State<'_, AppState>,
-    key: String,
-) -> Result<(), String> {
-    crate::device_store::delete_value(&state.device_store_path, &key)
+    pub local_user: crate::local_commands::LocalUserSession,
+    pub binding_base_url: url::Url,
 }
 
 #[derive(Serialize)]
@@ -65,7 +30,9 @@ pub struct ModelConnectionStatus {
 }
 
 #[tauri::command]
-pub fn model_profile_list(state: tauri::State<'_, AppState>) -> Result<Vec<ModelProfilePublic>, String> {
+pub fn model_profile_list(
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<ModelProfilePublic>, String> {
     state
         .profiles
         .lock()
@@ -76,40 +43,25 @@ pub fn model_profile_list(state: tauri::State<'_, AppState>) -> Result<Vec<Model
 #[tauri::command]
 pub fn model_profile_upsert(
     state: tauri::State<'_, AppState>,
-    mut input: ModelProfileInput,
+    input: ModelProfileInput,
 ) -> Result<ModelProfilePublic, String> {
-    let secret = input.take_api_key();
-    let profile_id = input
-        .id
-        .clone()
-        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-    input.id = Some(profile_id.clone());
-    let existing_secret = state.secrets.get(&profile_id)?.is_some();
-    let has_api_key = match secret.as_deref() {
-        Some(value) if value.trim().is_empty() => false,
-        Some(_) => true,
-        None => existing_secret,
-    };
-
     let mut profiles = state
         .profiles
         .lock()
         .map_err(|_| "本地模型配置暂不可用".to_string())?;
-    let profile = upsert_profile(&mut profiles, input, has_api_key)?;
-
-    if let Some(value) = secret {
-        if value.trim().is_empty() {
-            state.secrets.delete(&profile_id)?;
-        } else {
-            state.secrets.set(&profile_id, value.trim())?;
-        }
-    }
-    save_profiles(&state.profiles_path, &profiles)?;
-    Ok(profile)
+    commit_model_profile_upsert(
+        &state.profiles_path,
+        &mut profiles,
+        state.secrets.as_ref(),
+        input,
+    )
 }
 
 #[tauri::command]
-pub fn model_profile_delete(state: tauri::State<'_, AppState>, profile_id: String) -> Result<(), String> {
+pub fn model_profile_delete(
+    state: tauri::State<'_, AppState>,
+    profile_id: String,
+) -> Result<(), String> {
     let mut profiles = state
         .profiles
         .lock()
@@ -122,7 +74,7 @@ pub fn model_profile_delete(state: tauri::State<'_, AppState>, profile_id: Strin
     if !profiles.is_empty() && !profiles.iter().any(|profile| profile.is_default) {
         profiles[0].is_default = true;
     }
-    state.secrets.delete(&profile_id)?;
+    state.secrets.delete(&model_secret_account(&profile_id))?;
     save_profiles(&state.profiles_path, &profiles)
 }
 
@@ -159,7 +111,7 @@ pub async fn model_profile_test(
         .map_err(|_| "MODEL_URL_INVALID".to_string())?;
     crate::model_client::test_connection(
         &base_url,
-        state.secrets.get(&profile.id)?,
+        state.secrets.get(&model_secret_account(&profile.id))?,
         profile.timeout_seconds,
     )
     .await
@@ -179,7 +131,11 @@ pub async fn model_generate(
     temperature: f32,
     request_id: String,
 ) -> Result<ModelGenerateResult, String> {
-    if request_id.is_empty() || request_id.len() > 128 || messages.is_empty() || messages.len() > 128 {
+    if request_id.is_empty()
+        || request_id.len() > 128
+        || messages.is_empty()
+        || messages.len() > 128
+    {
         return Err("MODEL_INVALID_REQUEST".to_string());
     }
     if messages.iter().any(|message| {
@@ -202,7 +158,7 @@ pub async fn model_generate(
     };
     let base_url = crate::model_client::validate_base_url(&profile.base_url)
         .map_err(|_| "MODEL_URL_INVALID".to_string())?;
-    let api_key = state.secrets.get(&profile.id)?;
+    let api_key = state.secrets.get(&model_secret_account(&profile.id))?;
     let (cancel_sender, cancel_receiver) = tokio::sync::watch::channel(false);
     state
         .cancellations
@@ -212,14 +168,16 @@ pub async fn model_generate(
 
     let result = generate(
         &app,
-        &base_url,
-        &profile.model_id,
-        api_key,
-        messages,
-        temperature.clamp(0.0, 2.0),
-        profile.timeout_seconds,
-        &request_id,
-        cancel_receiver,
+        ModelGenerateRequest {
+            base_url: &base_url,
+            model_id: &profile.model_id,
+            api_key,
+            messages,
+            temperature: temperature.clamp(0.0, 2.0),
+            timeout_seconds: profile.timeout_seconds,
+            request_id: &request_id,
+            cancel: cancel_receiver,
+        },
     )
     .await;
     if let Ok(mut cancellations) = state.cancellations.lock() {
@@ -229,10 +187,7 @@ pub async fn model_generate(
 }
 
 #[tauri::command]
-pub fn model_cancel(
-    state: tauri::State<'_, AppState>,
-    request_id: String,
-) -> Result<(), String> {
+pub fn model_cancel(state: tauri::State<'_, AppState>, request_id: String) -> Result<(), String> {
     let sender = state
         .cancellations
         .lock()

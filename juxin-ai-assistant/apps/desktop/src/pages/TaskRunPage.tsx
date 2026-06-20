@@ -123,18 +123,22 @@ export function TaskRunPage({ task, userId }: { task: TaskDefinition; userId?: s
       },
     );
     if (!completeResponse.ok) {
-      await enqueuePendingResult({
-        generationUuid: prepared.generation_uuid,
-        completionToken: prepared.completion_token,
-        output: generated.output,
-        modelDisplayName: selectedProfile.displayName,
-        modelId: selectedProfile.modelId,
-        latencyMs: generated.latencyMs,
-        usage: generated.usage,
-        retryCount: 0,
-        nextRetryAt: Date.now() + 5_000,
-      });
-      setSyncMessage('结果已保存在本机，恢复连接后自动同步');
+      if (userId) {
+        await enqueuePendingResult(userId, {
+          generationUuid: prepared.generation_uuid,
+          completionToken: prepared.completion_token,
+          output: generated.output,
+          modelDisplayName: selectedProfile.displayName,
+          modelId: selectedProfile.modelId,
+          latencyMs: generated.latencyMs,
+          usage: generated.usage,
+          retryCount: 0,
+          nextRetryAt: Date.now() + 5_000,
+        });
+        setSyncMessage('结果已保存在本机，恢复连接后自动同步');
+      } else {
+        setSyncMessage('结果尚未同步，请保持当前页面并稍后重试');
+      }
     } else {
       setSyncMessage('结果已同步');
     }

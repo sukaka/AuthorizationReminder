@@ -1,0 +1,44 @@
+[[permission]]
+identifier = "allow-local-session-bind"
+description = "允许将本机加密存储绑定到当前 SSO 用户"
+commands.allow = ["local_session_bind"]
+
+[[permission]]
+identifier = "allow-local-draft-save"
+description = "允许按当前 SSO 用户保存加密草稿"
+commands.allow = ["local_draft_save"]
+
+[[permission]]
+identifier = "allow-local-draft-load"
+description = "允许按当前 SSO 用户读取加密草稿"
+commands.allow = ["local_draft_load"]
+
+[[permission]]
+identifier = "allow-local-draft-delete"
+description = "允许删除当前 SSO 用户的指定草稿"
+commands.allow = ["local_draft_delete"]
+
+[[permission]]
+identifier = "allow-local-queue-push"
+description = "允许按当前 SSO 用户写入加密待同步结果"
+commands.allow = ["local_queue_push"]
+
+[[permission]]
+identifier = "allow-local-queue-list"
+description = "允许按当前 SSO 用户列出加密待同步结果"
+commands.allow = ["local_queue_list"]
+
+[[permission]]
+identifier = "allow-local-queue-remove"
+description = "允许删除当前 SSO 用户已同步的指定结果"
+commands.allow = ["local_queue_remove"]
+
+[[permission]]
+identifier = "allow-local-cache-clear"
+description = "允许清理当前 SSO 用户的本地缓存"
+commands.allow = ["local_cache_clear"]
+
+[[permission]]
+identifier = "allow-local-logout"
+description = "允许清理当前 SSO 用户的本地会话草稿"
+commands.allow = ["local_logout"]

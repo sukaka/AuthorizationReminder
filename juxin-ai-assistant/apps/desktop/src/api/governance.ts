@@ -1,0 +1,159 @@
+import { ApiError } from './client';
+
+export type GovernanceList<T> = { items: T[]; total: number };
+
+export type AdminTask = {
+  uuid: string;
+  assistant_uuid: string;
+  code: string;
+  name: string;
+  status: 'DRAFT' | 'ACTIVE' | 'DISABLED';
+  prompt_binding?: {
+    prompt_external_id: number;
+    version_policy: 'PUBLISHED' | 'PINNED';
+    pinned_version?: number | null;
+    status: 'ACTIVE' | 'DISABLED';
+  } | null;
+  fields?: AdminTaskField[];
+};
+
+export type AdminTaskField = {
+  field_key: string;
+  label: string;
+  field_type: string;
+  required: boolean;
+  placeholder?: string;
+  options?: string[];
+  validation?: Record<string, unknown>;
+};
+
+export type TaskConfigurationInput = {
+  task: { status: AdminTask['status'] };
+  fields: AdminTaskField[];
+  prompt_binding: {
+    prompt_external_id: number;
+    version_policy: 'PUBLISHED' | 'PINNED';
+    pinned_version?: number;
+    status: 'ACTIVE' | 'DISABLED';
+  };
+};
+
+export type KnowledgeItem = {
+  uuid: string;
+  title: string;
+  category: string;
+  status: string;
+  tags: string[];
+  keywords: string[];
+  task_uuids: string[];
+  priority: number;
+};
+
+export type Suggestion = {
+  uuid: string;
+  department_code: string;
+  suggestion_type: 'COMMON_TASK_CHANGE' | 'PROMPT_CHANGE';
+  status: 'PENDING' | 'APPROVED' | 'REJECTED';
+  task_uuid?: string | null;
+  reviewed_by?: string | null;
+  reviewed_at?: string | null;
+  content?: string;
+  review_comment?: string | null;
+};
+
+export type StatsPayload = {
+  total: number;
+  completion_rate?: number;
+  failure_rate?: number;
+  departments?: string[];
+  by_department?: Record<string, number>;
+  task_ranking?: Array<{ name: string; count: number }>;
+  daily_trend?: Array<{ date: string; count: number }>;
+  feedback_distribution?: Record<string, number>;
+};
+
+export type AuditItem = {
+  id: string | number;
+  sso_user_id: string;
+  username_snapshot: string;
+  action: string;
+  entity_type: string;
+  entity_uuid?: string | null;
+  result: string;
+  metadata_json?: Record<string, unknown>;
+  created_at: string;
+};
+
+async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const response = await fetch(path, {
+    credentials: 'include',
+    ...init,
+    headers: init?.body
+      ? { 'Content-Type': 'application/json', ...init.headers }
+      : init?.headers,
+  });
+  const payload = response.status === 204 ? null : await response.json().catch(() => null);
+  if (!response.ok) throw new ApiError(response.status, 'GOVERNANCE_REQUEST_FAILED', payload);
+  return payload as T;
+}
+
+export const governanceApi = {
+  tasks: () => request<GovernanceList<AdminTask>>('/api/ai/admin/tasks'),
+  createTask: (payload: Record<string, unknown>) => request<AdminTask>(
+    '/api/ai/admin/tasks', { method: 'POST', body: JSON.stringify(payload) },
+  ),
+  saveTask: (uuid: string, payload: Record<string, unknown>) => request<AdminTask>(
+    `/api/ai/admin/tasks/${encodeURIComponent(uuid)}`,
+    { method: 'PUT', body: JSON.stringify(payload) },
+  ),
+  saveTaskConfiguration: (uuid: string, payload: TaskConfigurationInput) => request<AdminTask>(
+    `/api/ai/admin/tasks/${encodeURIComponent(uuid)}/configuration`,
+    { method: 'PUT', body: JSON.stringify(payload) },
+  ),
+  replaceTaskFields: (uuid: string, fields: AdminTaskField[]) => request<AdminTask>(
+    `/api/ai/admin/tasks/${encodeURIComponent(uuid)}/fields`,
+    { method: 'PUT', body: JSON.stringify({ fields }) },
+  ),
+  bindTaskPrompt: (
+    uuid: string,
+    payload: { prompt_external_id: number; version_policy: 'PUBLISHED' | 'PINNED'; pinned_version?: number; status: 'ACTIVE' | 'DISABLED' },
+  ) => request<AdminTask>(
+    `/api/ai/admin/tasks/${encodeURIComponent(uuid)}/prompt-binding`,
+    { method: 'PUT', body: JSON.stringify(payload) },
+  ),
+  deleteTask: (uuid: string) => request<void>(
+    `/api/ai/admin/tasks/${encodeURIComponent(uuid)}`, { method: 'DELETE' },
+  ),
+  knowledge: () => request<GovernanceList<KnowledgeItem>>('/api/ai/admin/knowledge'),
+  createKnowledge: (payload: Record<string, unknown>) => request<KnowledgeItem>(
+    '/api/ai/admin/knowledge',
+    { method: 'POST', body: JSON.stringify(payload) },
+  ),
+  updateKnowledge: (uuid: string, payload: Record<string, unknown>) => request<KnowledgeItem>(
+    `/api/ai/admin/knowledge/${encodeURIComponent(uuid)}`,
+    { method: 'PUT', body: JSON.stringify(payload) },
+  ),
+  disableKnowledge: (uuid: string) => request<void>(
+    `/api/ai/admin/knowledge/${encodeURIComponent(uuid)}`, { method: 'DELETE' },
+  ),
+  suggestions: () => request<GovernanceList<Suggestion>>('/api/ai/admin/suggestions'),
+  submitSuggestion: (payload: Record<string, unknown>) => request<Suggestion>(
+    '/api/ai/suggestions',
+    { method: 'POST', body: JSON.stringify(payload) },
+  ),
+  reviewSuggestion: (uuid: string, decision: 'APPROVE' | 'REJECT') => request<Suggestion>(
+    `/api/ai/admin/suggestions/${encodeURIComponent(uuid)}/review`,
+    { method: 'POST', body: JSON.stringify({ decision }) },
+  ),
+  settings: () => request<Record<string, unknown>>('/api/ai/admin/settings'),
+  saveSettings: (payload: Record<string, unknown>) => request<Record<string, unknown>>(
+    '/api/ai/admin/settings',
+    { method: 'PUT', body: JSON.stringify(payload) },
+  ),
+  stats: (manager: boolean) => request<StatsPayload>(
+    manager ? '/api/ai/department-stats' : '/api/ai/admin/stats',
+  ),
+  audit: (query = '') => request<GovernanceList<AuditItem>>(
+    `/api/ai/admin/audit-logs${query ? `?${query}` : ''}`,
+  ),
+};
