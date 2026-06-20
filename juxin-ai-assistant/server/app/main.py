@@ -21,6 +21,7 @@ from .admin.router import create_governance_router
 from .config import Settings, get_settings
 from .crypto import ContentCipher
 from .database import get_db
+from .desktop_bootstrap import DesktopBootstrap, build_desktop_bootstrap
 from .feedback_service import create_feedback
 from .generation_service import complete_generation, prepare_generation
 from .history_service import (
@@ -150,6 +151,13 @@ def health() -> dict[str, str]:
         "service": "juxin-ai-assistant",
         "version": settings.app_version,
     }
+
+
+@app.get("/api/ai/desktop/bootstrap", response_model=DesktopBootstrap)
+def desktop_bootstrap(
+    current_settings: Annotated[Settings, Depends(get_settings)],
+) -> DesktopBootstrap:
+    return build_desktop_bootstrap(current_settings)
 
 
 def get_prompt_client(

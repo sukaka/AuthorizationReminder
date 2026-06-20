@@ -23,6 +23,11 @@ docker compose --env-file "$TMP_ENV" -f "${ROOT_DIR}/docker-compose.yml" config 
 
 grep -q 'http://8.141.81.201:5180' "$TMP_OUT"
 grep -q 'http://8.141.81.201:18087' "$TMP_OUT"
+grep -q 'AUTH_PUBLIC_URL: http://8.141.81.201:5180' "$TMP_OUT"
+if grep -q 'AUTH_PUBLIC_URL: http://localhost:5180' "$TMP_OUT"; then
+  echo 'remote compose must not publish a localhost auth portal' >&2
+  exit 1
+fi
 if grep -q 'http://:18087' "$TMP_OUT"; then
   echo 'rendered compose contains invalid PUBLIC_HOST expansion' >&2
   exit 1

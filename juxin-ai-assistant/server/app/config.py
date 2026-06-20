@@ -1,8 +1,9 @@
 import base64
 import binascii
 from functools import lru_cache
+from urllib.parse import urlsplit
 
-from pydantic import Field, model_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -11,6 +12,7 @@ class Settings(BaseSettings):
     app_version: str = "1.0.0"
     database_url: str = "sqlite+pysqlite:///./juxin-ai-assistant-dev.db"
     auth_service_url: str = "http://auth:5180"
+    auth_public_url: str = "http://localhost:5180"
     auth_system_key: str = "ai-assistant"
     auth_cookie_name: str = "juxin_auth_token"
     auth_fetch_timeout_ms: int = Field(default=5000, ge=1000, le=30000)
@@ -25,6 +27,11 @@ class Settings(BaseSettings):
     cors_origins: str = "http://localhost:18093,http://127.0.0.1:18093"
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
+    @field_validator("auth_public_url")
+    @classmethod
+    def validate_auth_public_url(cls, value: str) -> str:
+        return normalize_auth_public_url(value)
 
     @model_validator(mode="after")
     def validate_production_secrets(self) -> "Settings":
@@ -67,3 +74,29 @@ class Settings(BaseSettings):
 @lru_cache
 def get_settings() -> Settings:
     return Settings()
+
+
+def normalize_auth_public_url(raw: str) -> str:
+    try:
+        parsed = urlsplit(raw)
+        port = parsed.port
+    except ValueError as exc:
+        raise ValueError("AUTH_PUBLIC_URL 必须是安全的公开 Origin") from exc
+    is_loopback = parsed.hostname in {"localhost", "127.0.0.1", "::1"}
+    is_allowed_scheme = parsed.scheme == "https" or (
+        parsed.scheme == "http" and is_loopback
+    )
+    if (
+        not is_allowed_scheme
+        or parsed.hostname is None
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.path not in {"", "/"}
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise ValueError("AUTH_PUBLIC_URL 必须是安全的公开 Origin")
+    host = f"[{parsed.hostname}]" if ":" in parsed.hostname else parsed.hostname
+    default_port = 443 if parsed.scheme == "https" else 80
+    authority = host if port in {None, default_port} else f"{host}:{port}"
+    return f"{parsed.scheme}://{authority}"
