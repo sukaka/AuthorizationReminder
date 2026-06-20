@@ -78,6 +78,37 @@ def test_session_forwards_only_unified_cookie(
     assert outbound.content == b""
 
 
+def test_session_normalizes_structured_department_scope(
+    sso_client: TestClient,
+    respx_mock,
+) -> None:
+    respx_mock.get("http://auth.test:5180/api/auth/introspect").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "user": {"id": 9, "username": "manager", "role": "employee"},
+                "scope": {
+                    "department": {"code": "SALES", "name": "销售部", "is_active": 1},
+                    "managedDepartments": [
+                        {"code": "SALES", "name": "销售部", "is_active": 1},
+                        {"code": "DELIVERY", "name": "交付部", "is_active": 1},
+                    ],
+                },
+                "apps": ["ai-assistant"],
+            },
+        )
+    )
+    sso_client.cookies.set("juxin_auth_token", "opaque-session")
+
+    response = sso_client.get("/api/ai/session")
+
+    assert response.status_code == 200
+    assert response.json()["scope"] == {
+        "department": "SALES",
+        "managedDepartments": ["SALES", "DELIVERY"],
+    }
+
+
 def test_session_denies_user_without_ai_assistant_access(
     sso_client: TestClient,
     respx_mock,
@@ -210,3 +241,26 @@ async def test_require_action_maps_unified_denial_to_403(
 
     assert captured.value.status_code == 403
     assert captured.value.detail == "无使用权限"
+
+
+@pytest.mark.asyncio
+async def test_require_action_forwards_department_resource(
+    sso_settings: Settings,
+    respx_mock,
+) -> None:
+    authorize = respx_mock.post("http://auth.test:5180/api/auth/authorize").mock(
+        return_value=httpx.Response(200, json={"allow": True})
+    )
+
+    await require_action(
+        "ai_assistant:task:suggest",
+        request_with_auth_cookie(),
+        build_session_payload(),
+        sso_settings,
+        resource={"department_code": "SALES"},
+    )
+
+    assert authorize.calls[0].request.content == (
+        b'{"system":"ai-assistant","action":"ai_assistant:task:suggest",'
+        b'"resource":{"department_code":"SALES"}}'
+    )

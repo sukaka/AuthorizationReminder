@@ -1,6 +1,7 @@
 import httpx
 from sqlalchemy import select
 
+from app.governance_models import AuditLog
 from app.models import GenerationRecord
 
 
@@ -49,12 +50,22 @@ def test_delete_tombstones_owner_ciphertext_only(
     assert records.u1.status == "DELETED"
     assert records.u1.input_ciphertext != before
     assert records.u1.output_ciphertext == records.u1.input_ciphertext
+    audit = generation_db.scalar(
+        select(AuditLog).where(AuditLog.action == "generation.delete")
+    )
+    assert audit is not None
+    assert audit.entity_uuid == records.u1.uuid
+    assert audit.metadata_json == {
+        "generation_uuid": records.u1.uuid,
+        "status": "DELETED",
+    }
 
 
 def test_regenerate_creates_child_record(
     client_for_user,
     generation_db,
     records,
+    seeded_task,
     respx_mock,
 ) -> None:
     respx_mock.get(
@@ -86,3 +97,15 @@ def test_regenerate_creates_child_record(
     )
     assert child.parent_generation_id == records.u1.id
     assert child.sso_user_id == "u-1"
+    audit = generation_db.scalar(
+        select(AuditLog).where(AuditLog.action == "generation.regenerate")
+    )
+    assert audit is not None
+    assert audit.entity_uuid == child.uuid
+    assert audit.metadata_json == {
+        "generation_uuid": child.uuid,
+        "task_uuid": seeded_task.uuid,
+        "prompt_external_id": 7,
+        "prompt_version": 4,
+        "status": "PENDING",
+    }

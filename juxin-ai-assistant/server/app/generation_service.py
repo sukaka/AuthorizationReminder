@@ -38,7 +38,7 @@ async def prepare_generation(
     key_version: str,
     sensitive_detector: SensitiveDetector,
     knowledge_retriever: KnowledgeRetriever,
-) -> PreparedGeneration:
+) -> tuple[PreparedGeneration, GenerationRecord]:
     task = db.scalar(
         select(Task).where(Task.uuid == request.task_uuid, Task.status == "ACTIVE")
     )
@@ -178,23 +178,26 @@ async def prepare_generation(
         ],
     )
     db.add(record)
-    db.commit()
-    return PreparedGeneration(
-        generation_uuid=generation_uuid,
-        completion_token=completion_token,
-        messages=[
-            {
-                "role": "system",
-                "content": (
-                    "公司安全规则：不得编造事实，不得泄露秘密，输出必须由员工复核。"
-                    f"\n\n任务 Prompt：\n{rendered_prompt}"
-                    f"\n\n输出格式：{task.output_format}。{task.safety_notice}"
-                ),
-            },
-            {"role": "user", "content": "\n".join(input_lines)},
-        ],
-        temperature=0.3,
-        safety_notice=task.safety_notice,
+    db.flush()
+    return (
+        PreparedGeneration(
+            generation_uuid=generation_uuid,
+            completion_token=completion_token,
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "公司安全规则：不得编造事实，不得泄露秘密，输出必须由员工复核。"
+                        f"\n\n任务 Prompt：\n{rendered_prompt}"
+                        f"\n\n输出格式：{task.output_format}。{task.safety_notice}"
+                    ),
+                },
+                {"role": "user", "content": "\n".join(input_lines)},
+            ],
+            temperature=0.3,
+            safety_notice=task.safety_notice,
+        ),
+        record,
     )
 
 
@@ -234,5 +237,5 @@ def complete_generation(
     record.error_code = ""
     record.error_message_safe = ""
     record.finished_at = datetime.now(UTC)
-    db.commit()
+    db.flush()
     return record

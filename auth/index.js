@@ -98,6 +98,7 @@ const {
   getDedicatedCenterConfig,
 } = require('./portal-routing');
 const { authorizeBigScreen } = require('./big-screen-authorization');
+const { authorizeAiAssistant } = require('./ai-assistant-authorization');
 const { version: AUTH_PACKAGE_VERSION } = require('./package.json');
 
 const app = express();
@@ -1310,18 +1311,6 @@ const authorizeSca = (user, action) => {
   return deny('不支持的授权动作');
 };
 
-const authorizeAiAssistant = (user, action) => {
-  if (!user) return deny('未登录');
-  if (!canAccessSystem(user, 'ai-assistant')) return deny('无权限访问聚信 AI 助手');
-  const role = String(user.role || '').toLowerCase();
-  if (action === 'app:enter' || action === 'ai_assistant:read' || action === 'ai_assistant:use') return allow();
-  if (action === 'ai_assistant:manage') {
-    if (role === 'admin' || role === 'sysadmin') return allow();
-    return deny('仅管理员或系统管理员可管理聚信 AI 助手');
-  }
-  return deny('不支持的授权动作');
-};
-
 app.get('/api/auth/introspect', async (req, res) => {
   const user = await db.get(
     'SELECT id, username, role, app_access, mfa_enabled, mfa_methods, totp_enabled, totp_secret, email, phone, wecom_id, must_change_password FROM users WHERE id = ?',
@@ -1399,7 +1388,18 @@ app.post('/api/auth/authorize', async (req, res) => {
   } else if (system === 'big-screen') {
     result = authorizeBigScreen(user, action);
   } else if (system === 'ai-assistant') {
-    result = authorizeAiAssistant(user, action);
+    result = authorizeAiAssistant(user, action, scope, resource);
+  }
+  if (system === 'ai-assistant' && !result.allow) {
+    await logOperation({
+      user,
+      system: 'ai-assistant',
+      action: 'authorization.denied',
+      entity: 'action',
+      entityId: String(action || ''),
+      afterData: { reason: String(result.reason || '无权限') },
+      requestIp: req.ip,
+    });
   }
   return res.json({ ...result, user: buildAuthUserPayload(user), scope, apps });
 });
@@ -5458,6 +5458,7 @@ const auditCenterRemoteBaseUrls = Object.freeze({
   tender: process.env.AUDIT_SOURCE_TENDER_URL || 'http://localhost:5187',
   'train-exam': process.env.AUDIT_SOURCE_TRAIN_EXAM_URL || 'http://localhost:5188',
   'prompt-center': process.env.AUDIT_SOURCE_PROMPT_CENTER_URL || 'http://localhost:5189',
+  'ai-assistant': process.env.AUDIT_SOURCE_AI_ASSISTANT_URL || 'http://localhost:5193',
   cmdb: process.env.AUDIT_SOURCE_CMDB_URL || 'http://localhost:8088',
 });
 const auditCenterLogsService = createAuditCenterLogsService({

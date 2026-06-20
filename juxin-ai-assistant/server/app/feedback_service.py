@@ -44,17 +44,8 @@ def create_feedback(
         key_version=key_version,
     )
     db.add(record)
-    db.flush()
-    normalized_content = (content or "").strip()
-    if normalized_content:
-        encrypted = cipher.encrypt_json(
-            {"content": normalized_content},
-            record.uuid.encode(),
-        )
-        record.content_ciphertext = encrypted.ciphertext
-        record.content_nonce = encrypted.nonce
     try:
-        db.commit()
+        db.flush()
     except IntegrityError as exc:
         db.rollback()
         raise HTTPException(
@@ -64,5 +55,13 @@ def create_feedback(
                 "message": "该反馈类型已提交",
             },
         ) from exc
-    db.refresh(record)
+    normalized_content = (content or "").strip()
+    if normalized_content:
+        encrypted = cipher.encrypt_json(
+            {"content": normalized_content},
+            record.uuid.encode(),
+        )
+        record.content_ciphertext = encrypted.ciphertext
+        record.content_nonce = encrypted.nonce
+    db.flush()
     return record

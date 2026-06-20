@@ -1,5 +1,6 @@
 from sqlalchemy import select
 
+from app.governance_models import AuditLog
 from app.models import FeedbackRecord
 
 
@@ -16,6 +17,7 @@ ALLOWED = {
 
 def test_owner_can_submit_each_feedback_type(
     generation_client,
+    generation_db,
     completed_generation,
 ) -> None:
     for feedback_type in ALLOWED:
@@ -28,6 +30,15 @@ def test_owner_can_submit_each_feedback_type(
         )
         assert response.status_code == 201
         assert response.json()["feedback_type"] == feedback_type
+
+    audits = list(generation_db.scalars(
+        select(AuditLog).where(AuditLog.action == "generation.feedback")
+    ))
+    assert {audit.metadata_json["feedback_type"] for audit in audits} == ALLOWED
+    assert all(
+        audit.entity_uuid == completed_generation.uuid
+        for audit in audits
+    )
 
 
 def test_feedback_never_stores_plain_comment(
@@ -71,6 +82,7 @@ def test_feedback_requires_owner_valid_type_and_other_content(
 
 def test_duplicate_feedback_type_is_rejected(
     generation_client,
+    generation_db,
     completed_generation,
 ) -> None:
     url = f"/api/ai/generations/{completed_generation.uuid}/feedback"
@@ -80,3 +92,6 @@ def test_duplicate_feedback_type_is_rejected(
     duplicate = generation_client.post(url, json=body)
     assert duplicate.status_code == 409
     assert duplicate.json()["detail"]["code"] == "FEEDBACK_DUPLICATE"
+    assert len(list(generation_db.scalars(
+        select(AuditLog).where(AuditLog.action == "generation.feedback")
+    ))) == 1

@@ -3,7 +3,9 @@ from datetime import datetime
 from typing import Annotated
 
 import httpx
-from fastapi import Depends, FastAPI, Query, Request
+from fastapi import Depends, FastAPI, HTTPException, Query, Request
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
 
@@ -13,6 +15,9 @@ from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
 
 from .auth import get_session, require_action
+from .admin.errors import GovernanceError
+from .admin.route_common import write_request_audit
+from .admin.router import create_governance_router
 from .config import Settings, get_settings
 from .crypto import ContentCipher
 from .database import get_db
@@ -26,6 +31,11 @@ from .history_service import (
     tombstone_history,
 )
 from .knowledge import KnowledgeRetriever
+from .local_binding import (
+    LocalBindingTokenError,
+    issue_local_binding_token,
+    verify_local_binding_token,
+)
 from .models import Assistant, GenerationRecord, Task, TaskField, UserFavorite
 from .prompt_client import PromptCenterClient
 from .schemas import (
@@ -42,6 +52,9 @@ from .schemas import (
     PrepareGenerationIn,
     PrepareGenerationOut,
     RegenerateOut,
+    LocalBindingVerifyIn,
+    LocalBindingVerifyOut,
+    SessionOut,
     SessionPayload,
     TaskCardOut,
     TaskFieldOut,
@@ -66,7 +79,12 @@ async def enforce_write_origin(
     request: Request,
     call_next: Callable[[Request], Awaitable[Response]],
 ) -> Response:
-    if request.method not in {"GET", "HEAD", "OPTIONS"} and not settings.auth_dev_bypass:
+    verify_path = "/api/ai/local-binding/verify"
+    if (
+        request.method not in {"GET", "HEAD", "OPTIONS"}
+        and request.url.path != verify_path
+        and not settings.auth_dev_bypass
+    ):
         if request.headers.get("origin", "") not in settings.allowed_origins:
             return JSONResponse(
                 status_code=403,
@@ -90,6 +108,38 @@ async def unhandled_error(_request: Request, _error: Exception) -> JSONResponse:
             "message": "服务暂不可用",
             "data": None,
         },
+    )
+
+
+@app.exception_handler(GovernanceError)
+async def governance_error(
+    _request: Request,
+    error: GovernanceError,
+) -> JSONResponse:
+    return JSONResponse(
+        status_code=error.status_code,
+        content={
+            "success": False,
+            "code": error.code,
+            "message": error.message,
+            "data": None,
+        },
+    )
+
+
+@app.exception_handler(RequestValidationError)
+async def request_validation_error(
+    request: Request,
+    error: RequestValidationError,
+) -> JSONResponse:
+    if request.url.path == "/api/ai/local-binding/verify":
+        return JSONResponse(
+            status_code=401,
+            content={"detail": "LOCAL_BINDING_TOKEN_INVALID"},
+        )
+    return JSONResponse(
+        status_code=422,
+        content={"detail": jsonable_encoder(error.errors())},
     )
 
 
@@ -132,11 +182,36 @@ def get_knowledge_retriever(
     return KnowledgeRetriever(cipher)
 
 
-@app.get("/api/ai/session", response_model=SessionPayload)
+@app.get("/api/ai/session", response_model=SessionOut)
 async def session(
     payload: Annotated[SessionPayload, Depends(get_session)],
-) -> SessionPayload:
-    return payload
+    current_settings: Annotated[Settings, Depends(get_settings)],
+) -> SessionOut:
+    return SessionOut(
+        **payload.model_dump(),
+        local_binding_token=issue_local_binding_token(
+            str(payload.user.id),
+            current_settings.ai_local_binding_secret,
+        ),
+    )
+
+
+@app.post("/api/ai/local-binding/verify", response_model=LocalBindingVerifyOut)
+async def verify_local_binding(
+    body: LocalBindingVerifyIn,
+    current_settings: Annotated[Settings, Depends(get_settings)],
+) -> LocalBindingVerifyOut:
+    try:
+        user_id = verify_local_binding_token(
+            body.token,
+            current_settings.ai_local_binding_secret,
+        )
+    except LocalBindingTokenError as exc:
+        raise HTTPException(
+            status_code=401,
+            detail="LOCAL_BINDING_TOKEN_INVALID",
+        ) from exc
+    return LocalBindingVerifyOut(user_id=user_id)
 
 
 def _task_out(task: Task, fields: list[TaskField]) -> TaskOut:
@@ -466,6 +541,20 @@ async def submit_feedback(
         cipher,
         current_settings.content_encryption_key_version,
     )
+    write_request_audit(
+        db,
+        session_payload,
+        request,
+        current_settings,
+        action="generation.feedback",
+        entity_type="generation",
+        entity_uuid=generation_uuid,
+        metadata={
+            "generation_uuid": generation_uuid,
+            "feedback_type": body.feedback_type.value,
+        },
+    )
+    db.commit()
     return FeedbackOut(
         uuid=record.uuid,
         generation_uuid=generation_uuid,
@@ -501,7 +590,7 @@ async def prepare_generation_route(
         session_payload,
         current_settings,
     )
-    prepared = await prepare_generation(
+    prepared, record = await prepare_generation(
         db,
         session_payload,
         body,
@@ -511,6 +600,23 @@ async def prepare_generation_route(
         sensitive_detector,
         knowledge_retriever,
     )
+    write_request_audit(
+        db,
+        session_payload,
+        request,
+        current_settings,
+        action="generation.prepare",
+        entity_type="generation",
+        entity_uuid=record.uuid,
+        metadata={
+            "task_uuid": body.task_uuid,
+            "generation_uuid": record.uuid,
+            "prompt_external_id": record.prompt_external_id,
+            "prompt_version": record.prompt_version,
+            "status": record.status,
+        },
+    )
+    db.commit()
     return PrepareGenerationOut(**prepared.__dict__)
 
 
@@ -588,6 +694,20 @@ async def delete_generation_history(
         generation_uuid,
         cipher,
     )
+    write_request_audit(
+        db,
+        session_payload,
+        request,
+        current_settings,
+        action="generation.delete",
+        entity_type="generation",
+        entity_uuid=generation_uuid,
+        metadata={
+            "generation_uuid": generation_uuid,
+            "status": "DELETED",
+        },
+    )
+    db.commit()
     return Response(status_code=204)
 
 
@@ -626,7 +746,7 @@ async def regenerate_history(
         cipher,
     )
     scan = sensitive_detector.scan(inputs)
-    prepared = await prepare_generation(
+    prepared, child = await prepare_generation(
         db,
         session_payload,
         PrepareGenerationIn(
@@ -640,12 +760,23 @@ async def regenerate_history(
         sensitive_detector,
         knowledge_retriever,
     )
-    child = db.scalar(
-        select(GenerationRecord).where(
-            GenerationRecord.uuid == prepared.generation_uuid
-        )
-    )
     child.parent_generation_id = parent.id
+    write_request_audit(
+        db,
+        session_payload,
+        request,
+        current_settings,
+        action="generation.regenerate",
+        entity_type="generation",
+        entity_uuid=child.uuid,
+        metadata={
+            "task_uuid": task.uuid,
+            "generation_uuid": child.uuid,
+            "prompt_external_id": child.prompt_external_id,
+            "prompt_version": child.prompt_version,
+            "status": child.status,
+        },
+    )
     db.commit()
     return RegenerateOut(
         **prepared.__dict__,
@@ -679,6 +810,20 @@ async def complete_generation_route(
         body,
         cipher,
     )
+    write_request_audit(
+        db,
+        session_payload,
+        request,
+        current_settings,
+        action="generation.complete",
+        entity_type="generation",
+        entity_uuid=generation_uuid,
+        metadata={
+            "generation_uuid": generation_uuid,
+            "status": record.status,
+        },
+    )
+    db.commit()
     return CompleteGenerationOut(
         generation_uuid=record.uuid,
         status=record.status,
@@ -712,3 +857,11 @@ async def logout(
     response = Response(status_code=204)
     response.delete_cookie(current_settings.auth_cookie_name, path="/")
     return response
+
+
+app.include_router(
+    create_governance_router(
+        get_prompt_client,
+        get_content_cipher,
+    )
+)

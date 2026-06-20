@@ -281,6 +281,37 @@ const REMOTE_SOURCE_DEFINITIONS = Object.freeze({
       return normalizeAuditRow('prompt-center', row);
     },
   }),
+  'ai-assistant': Object.freeze({
+    key: 'ai-assistant',
+    listPath: '/api/ai/admin/audit-logs',
+    buildListQuery(query, take) {
+      const params = new URLSearchParams();
+      params.set('limit', String(Math.min(take, 500)));
+      if (query.username) params.set('username', normalizeText(query.username));
+      if (query.action) params.set('action', normalizeText(query.action));
+      if (query.entity) params.set('entity', normalizeText(query.entity));
+      if (query.date_from) params.set('date_from', normalizeText(query.date_from));
+      if (query.date_to) params.set('date_to', normalizeText(query.date_to));
+      return params;
+    },
+    extractRows(data) {
+      return Array.isArray(data?.items) ? data.items : [];
+    },
+    normalizeRow(row) {
+      const metadata = row?.metadata_json && typeof row.metadata_json === 'object'
+        ? row.metadata_json
+        : {};
+      return normalizeAuditRow('ai-assistant', {
+        ...row,
+        user_id: row.sso_user_id,
+        user_sub: row.sso_user_id,
+        username: row.username_snapshot,
+        entity: row.entity_type,
+        entity_id: row.entity_uuid,
+        after_data: { ...metadata, result: row.result || null },
+      });
+    },
+  }),
   cmdb: Object.freeze({
     key: 'cmdb',
     listPath: '/api/v1/audit/logs',

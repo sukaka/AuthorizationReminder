@@ -51,8 +51,8 @@ const parseAppAccessRaw = (value) => {
 const defaultAppAccessByRole = (role) => {
   const normalizedRole = normalizePortalRole(role);
   if (normalizedRole === 'admin') return [...BUSINESS_SYSTEM_ACCESS_KEYS];
-  if (normalizedRole === 'sysadmin') return [ADMIN_CENTER_KEY];
-  if (normalizedRole === 'auditor') return [AUDIT_CENTER_KEY, DELIVERY_KEY];
+  if (normalizedRole === 'sysadmin') return [ADMIN_CENTER_KEY, 'ai-assistant'];
+  if (normalizedRole === 'auditor') return [AUDIT_CENTER_KEY, DELIVERY_KEY, 'ai-assistant'];
   if (normalizedRole === 'editor') return ['faq', 'tender', 'train-exam', 'prompt-center', 'sca', 'big-screen', 'ai-assistant'];
   if (normalizedRole === 'reviewer') return ['faq', 'train-exam', 'prompt-center', 'sca', 'big-screen', 'ai-assistant'];
   return ['reminder', 'train-exam', 'prompt-center', 'sca', 'big-screen', 'ai-assistant'];

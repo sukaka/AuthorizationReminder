@@ -61,6 +61,8 @@ async def require_action(
     request: Request,
     session: SessionPayload,
     settings: Settings,
+    *,
+    resource: dict[str, Any] | None = None,
 ) -> SessionPayload:
     if settings.auth_dev_bypass:
         return session
@@ -74,9 +76,15 @@ async def require_action(
             timeout=settings.auth_fetch_timeout_ms / 1000,
             cookies={settings.auth_cookie_name: token},
         ) as client:
+            body: dict[str, Any] = {
+                "system": settings.auth_system_key,
+                "action": action,
+            }
+            if resource:
+                body["resource"] = resource
             response = await client.post(
                 "/api/auth/authorize",
-                json={"system": settings.auth_system_key, "action": action},
+                json=body,
             )
     except httpx.HTTPError as exc:
         raise HTTPException(status_code=503, detail="统一登录平台暂不可用") from exc

@@ -186,7 +186,7 @@ def tombstone_history(
     record.error_code = ""
     record.error_message_safe = ""
     record.status = "DELETED"
-    db.commit()
+    db.flush()
 
 
 def load_regeneration_source(

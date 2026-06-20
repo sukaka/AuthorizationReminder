@@ -16,6 +16,8 @@ os.environ.setdefault(
 )
 os.environ.setdefault("PROMPT_CENTER_RUNTIME_TOKEN", "r" * 32)
 os.environ.setdefault("PROMPT_CENTER_URL", "http://prompt.test:5189")
+os.environ.setdefault("AUDIT_HASH_SALT", "a" * 32)
+os.environ.setdefault("AI_LOCAL_BINDING_SECRET", "local-binding-test-secret-32-bytes!!")
 
 
 @pytest.fixture

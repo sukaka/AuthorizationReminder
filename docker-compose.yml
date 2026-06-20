@@ -111,6 +111,7 @@ services:
       APP_AI_ASSISTANT_URL: "http://${PUBLIC_HOST:-localhost}:18093"
       AUDIT_SOURCE_DELIVERY_URL: "http://delivery-api:5185"
       AUDIT_SOURCE_PROMPT_CENTER_URL: "http://prompt-center-api:5189"
+      AUDIT_SOURCE_AI_ASSISTANT_URL: "http://ai-assistant-api:5193"
       AUTH_COOKIE_NAME: "juxin_auth_token"
       AUTH_COOKIE_SECURE: "${AUTH_COOKIE_SECURE:-false}"
       AUTH_COOKIE_SAMESITE: "lax"
@@ -571,6 +572,7 @@ services:
 
   prompt-center-ai-seed:
     image: codex-new-prompt-center-api:latest
+    pull_policy: never
     command: ["node", "scripts/seed-ai-assistant-prompts.js"]
     environment:
       MYSQL_HOST: mysql
@@ -617,6 +619,8 @@ services:
       PROMPT_CENTER_URL: "http://prompt-center-api:5189"
       PROMPT_CENTER_RUNTIME_TOKEN: ${PROMPT_CENTER_RUNTIME_TOKEN}
       CONTENT_ENCRYPTION_KEY: ${AI_CONTENT_ENCRYPTION_KEY}
+      AUDIT_HASH_SALT: ${AI_ASSISTANT_AUDIT_HASH_SALT}
+      AI_LOCAL_BINDING_SECRET: ${AI_LOCAL_BINDING_SECRET}
       WORK_SUMMARY_PROMPT_ID: ${AI_WORK_SUMMARY_PROMPT_ID}
       SEED_REQUIRE_PUBLISHED: "${AI_SEED_REQUIRE_PUBLISHED:-true}"
     depends_on:
@@ -641,6 +645,8 @@ services:
       PROMPT_CENTER_RUNTIME_TOKEN: ${PROMPT_CENTER_RUNTIME_TOKEN}
       CONTENT_ENCRYPTION_KEY: ${AI_CONTENT_ENCRYPTION_KEY}
       CONTENT_ENCRYPTION_KEY_VERSION: "v1"
+      AUDIT_HASH_SALT: ${AI_ASSISTANT_AUDIT_HASH_SALT}
+      AI_LOCAL_BINDING_SECRET: ${AI_LOCAL_BINDING_SECRET}
       PUBLIC_URL: "http://${PUBLIC_HOST:-localhost}:18093"
       CORS_ORIGINS: "http://localhost:18093,http://127.0.0.1:18093,http://${PUBLIC_HOST:-localhost}:18093"
     depends_on:

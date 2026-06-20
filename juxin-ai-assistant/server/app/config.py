@@ -19,6 +19,8 @@ class Settings(BaseSettings):
     prompt_center_runtime_token: str = ""
     content_encryption_key: str = ""
     content_encryption_key_version: str = "v1"
+    audit_hash_salt: str = ""
+    ai_local_binding_secret: str = ""
     public_url: str = "http://localhost:18093"
     cors_origins: str = "http://localhost:18093,http://127.0.0.1:18093"
 
@@ -26,6 +28,14 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_production_secrets(self) -> "Settings":
+        if len(self.ai_local_binding_secret) < 32:
+            raise ValueError("AI_LOCAL_BINDING_SECRET 至少需要 32 个字符")
+        if self.ai_local_binding_secret in {
+            self.content_encryption_key,
+            self.audit_hash_salt,
+            self.prompt_center_runtime_token,
+        }:
+            raise ValueError("AI_LOCAL_BINDING_SECRET 必须使用独立密钥")
         if not self.auth_dev_bypass:
             if len(self.prompt_center_runtime_token) < 32:
                 raise ValueError("PROMPT_CENTER_RUNTIME_TOKEN 至少需要 32 个字符")
@@ -43,6 +53,10 @@ class Settings(BaseSettings):
                 ) from exc
             if len(decoded_key) != 32:
                 raise ValueError("CONTENT_ENCRYPTION_KEY 必须是 32 字节 URL-safe base64")
+            if len(self.audit_hash_salt) < 32:
+                raise ValueError("AUDIT_HASH_SALT 至少需要 32 个字符")
+            if self.audit_hash_salt == self.content_encryption_key:
+                raise ValueError("AUDIT_HASH_SALT 不得复用 CONTENT_ENCRYPTION_KEY")
         return self
 
     @property

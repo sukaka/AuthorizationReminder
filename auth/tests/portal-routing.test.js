@@ -11,12 +11,12 @@ const {
   resolvePortalRedirectTarget,
 } = require('../portal-routing');
 
-test('sysadmin defaults to admin-center access', () => {
-  assert.deepEqual(defaultAppAccessByRole('sysadmin'), ['admin-center']);
+test('sysadmin defaults to admin-center and AI assistant access', () => {
+  assert.deepEqual(defaultAppAccessByRole('sysadmin'), ['admin-center', 'ai-assistant']);
 });
 
-test('auditor defaults to audit-center access', () => {
-  assert.deepEqual(defaultAppAccessByRole('auditor'), ['audit-center', 'delivery']);
+test('auditor defaults to audit-center, delivery, and AI assistant access', () => {
+  assert.deepEqual(defaultAppAccessByRole('auditor'), ['audit-center', 'delivery', 'ai-assistant']);
 });
 
 test('admin defaults to delivery instead of ticketing and sec-impl', () => {
@@ -38,6 +38,11 @@ test('ordinary business roles receive unified AI assistant portal access', () =>
   for (const role of ['editor', 'reviewer', 'user']) {
     assert.ok(defaultAppAccessByRole(role).includes('ai-assistant'), `${role} should include ai-assistant`);
   }
+});
+
+test('system and audit administrators receive AI assistant access for their scoped actions', () => {
+  assert.deepEqual(defaultAppAccessByRole('sysadmin'), ['admin-center', 'ai-assistant']);
+  assert.deepEqual(defaultAppAccessByRole('auditor'), ['audit-center', 'delivery', 'ai-assistant']);
 });
 
 test('sysadmin without requested system redirects to admin-center', () => {
@@ -104,8 +109,8 @@ test('admin never receives dedicated centers even when legacy app_access contain
 });
 
 test('sysadmin and auditor ignore legacy non-dedicated app_access', () => {
-  assert.deepEqual(resolveUserAppAccess({ role: 'sysadmin', app_access: '["reminder","admin-center"]' }), [ADMIN_CENTER_KEY]);
-  assert.deepEqual(resolveUserAppAccess({ role: 'auditor', app_access: '["faq","audit-center"]' }), [AUDIT_CENTER_KEY, 'delivery']);
+  assert.deepEqual(resolveUserAppAccess({ role: 'sysadmin', app_access: '["reminder","admin-center"]' }), [ADMIN_CENTER_KEY, 'ai-assistant']);
+  assert.deepEqual(resolveUserAppAccess({ role: 'auditor', app_access: '["faq","audit-center"]' }), [AUDIT_CENTER_KEY, 'delivery', 'ai-assistant']);
 });
 
 test('legacy ticketing and sec-impl access folds into delivery once', () => {

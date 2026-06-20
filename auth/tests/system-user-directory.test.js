@@ -32,6 +32,6 @@ test('buildSystemUserDirectory keeps sysadmin candidates for device-flow authori
   ];
 
   assert.deepEqual(buildSystemUserDirectory(rows, 'device-flow'), [
-    { id: 5, username: 'sysadmin', role: 'sysadmin', department_code: 'TECH', app_access: ['admin-center'] },
+    { id: 5, username: 'sysadmin', role: 'sysadmin', department_code: 'TECH', app_access: ['admin-center', 'ai-assistant'] },
   ]);
 });

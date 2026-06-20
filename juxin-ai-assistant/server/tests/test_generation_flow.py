@@ -6,6 +6,7 @@ import httpx
 from sqlalchemy import select
 
 from app.crypto import ContentCipher, EncryptedPayload
+from app.governance_models import AuditLog
 from app.models import GenerationRecord
 
 
@@ -68,6 +69,43 @@ def test_prepare_returns_provider_neutral_messages_and_stores_ciphertext(
     assert record.completion_token_hash != payload["completion_token"].encode()
 
 
+def test_prepare_writes_body_free_audit_in_the_generation_transaction(
+    generation_client,
+    generation_db,
+    seeded_task,
+    respx_mock,
+) -> None:
+    # Given: an active task backed by a published Prompt Center version.
+    mock_published_prompt(respx_mock)
+
+    # When: an employee prepares a generation.
+    response = generation_client.post(
+        "/api/ai/generations/prepare",
+        json={
+            "task_uuid": seeded_task.uuid,
+            "inputs": {"work_content": "private employee input"},
+        },
+    )
+
+    # Then: the generation and its body-free audit event commit together.
+    assert response.status_code == 201
+    generation = generation_db.scalar(select(GenerationRecord))
+    audit = generation_db.scalar(
+        select(AuditLog).where(AuditLog.action == "generation.prepare")
+    )
+    assert generation is not None
+    assert audit is not None
+    assert audit.entity_uuid == generation.uuid
+    assert audit.metadata_json == {
+        "task_uuid": seeded_task.uuid,
+        "generation_uuid": generation.uuid,
+        "prompt_external_id": 7,
+        "prompt_version": 3,
+        "status": "PENDING",
+    }
+    assert "private employee input" not in repr(audit.metadata_json)
+
+
 def test_complete_encrypts_output_and_records_non_secret_model_metadata(
     generation_client,
     generation_db,
@@ -107,6 +145,16 @@ def test_complete_encrypts_output_and_records_non_secret_model_metadata(
         record.uuid.encode(),
     )
     assert decrypted == {"output": "这是生成结果"}
+    audit = generation_db.scalar(
+        select(AuditLog).where(AuditLog.action == "generation.complete")
+    )
+    assert audit is not None
+    assert audit.entity_uuid == record.uuid
+    assert audit.metadata_json == {
+        "generation_uuid": record.uuid,
+        "status": "COMPLETED",
+    }
+    assert "这是生成结果" not in repr(audit.metadata_json)
 
 
 def test_complete_rejects_another_sso_user(
@@ -152,6 +200,7 @@ def test_complete_rejects_another_sso_user(
 
 def test_complete_rejects_wrong_token_and_repeated_completion(
     generation_client,
+    generation_db,
     seeded_task,
     respx_mock,
 ) -> None:
@@ -181,6 +230,9 @@ def test_complete_rejects_wrong_token_and_repeated_completion(
     )
     assert completed.status_code == 200
     assert repeated.status_code == 409
+    assert len(list(generation_db.scalars(
+        select(AuditLog).where(AuditLog.action == "generation.complete")
+    ))) == 1
 
 
 def test_prepare_returns_stable_validation_code_before_prompt_lookup(

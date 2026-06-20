@@ -1,7 +1,8 @@
 from datetime import datetime
 from enum import Enum
+from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class UserPayload(BaseModel):
@@ -16,11 +17,50 @@ class AuthScope(BaseModel):
     department: str | None = None
     managed_departments: list[str] = Field(default_factory=list, alias="managedDepartments")
 
+    @staticmethod
+    def _department_key(value: Any) -> str | None:
+        if value is None:
+            return None
+        if isinstance(value, dict):
+            value = value.get("code") or value.get("name")
+        normalized = str(value).strip()
+        return normalized or None
+
+    @field_validator("department", mode="before")
+    @classmethod
+    def normalize_department(cls, value: Any) -> str | None:
+        return cls._department_key(value)
+
+    @field_validator("managed_departments", mode="before")
+    @classmethod
+    def normalize_managed_departments(cls, value: Any) -> list[str]:
+        if not isinstance(value, list):
+            return []
+        return [
+            key
+            for item in value
+            if (key := cls._department_key(item)) is not None
+        ]
+
 
 class SessionPayload(BaseModel):
     user: UserPayload
     scope: AuthScope
     apps: list[str]
+
+
+class SessionOut(SessionPayload):
+    local_binding_token: str
+
+
+class LocalBindingVerifyIn(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    token: str = Field(min_length=1, max_length=4096)
+
+
+class LocalBindingVerifyOut(BaseModel):
+    user_id: str
 
 
 class TaskFieldOut(BaseModel):

@@ -8,9 +8,10 @@ const source = fs.readFileSync(path.join(root, 'auth', 'index.js'), 'utf8');
 const compose = fs.readFileSync(path.join(root, 'docker-compose.yml'), 'utf8');
 
 test('unified auth authorize route supports the AI assistant system key', () => {
-  assert.match(source, /const authorizeAiAssistant = \(user, action\) => \{/);
+  assert.match(source, /require\('\.\/ai-assistant-authorization'\)/);
   assert.match(source, /system === 'ai-assistant'/);
-  assert.match(source, /result = authorizeAiAssistant\(user, action\);/);
+  assert.match(source, /result = authorizeAiAssistant\(user, action, scope, resource\);/);
+  assert.doesNotMatch(source, /const authorizeAiAssistant = \(user, action/);
 });
 
 test('unified portal exposes the AI assistant entry', () => {

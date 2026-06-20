@@ -12,6 +12,7 @@ const tauriCapability = fs.readFileSync(
   'utf8',
 );
 const readme = fs.readFileSync('README.md', 'utf8');
+const envExample = fs.readFileSync('.env.example', 'utf8');
 const serverDockerfile = fs.readFileSync(
   'juxin-ai-assistant/server/Dockerfile',
   'utf8',
@@ -27,6 +28,8 @@ test('compose registers AI assistant against existing platform services', () => 
   assert.match(compose, /PROMPT_CENTER_URL: "http:\/\/prompt-center-api:5189"/);
   assert.match(compose, /PROMPT_CENTER_RUNTIME_TOKEN: \$\{PROMPT_CENTER_RUNTIME_TOKEN\}/);
   assert.match(compose, /seed-ai-assistant-prompts\.js/);
+  const seedService = compose.split('\n  prompt-center-ai-seed:')[1].split('\n  web-prompt-center:')[0];
+  assert.match(seedService, /pull_policy: never/);
   assert.match(
     compose,
     /python scripts\/seed_catalog\.py --force-config --require-all-published/,
@@ -40,11 +43,26 @@ test('AI assistant web remains an SSO workspace without child login credentials'
   assert.doesNotMatch(compose, /AI_ASSISTANT_JWT/);
 });
 
-test('desktop opens the deployed local workspace with an exact remote capability', () => {
+test('AI assistant migration and runtime receive all required independent secrets', () => {
+  const dbInitService = compose
+    .split('\n  ai-assistant-db-init:')[1]
+    .split('\n  ai-assistant-api:')[0];
+  const apiService = compose
+    .split('\n  ai-assistant-api:')[1]
+    .split('\n  web-ai-assistant:')[0];
+
+  assert.match(dbInitService, /AUDIT_HASH_SALT: \$\{AI_ASSISTANT_AUDIT_HASH_SALT\}/);
+  assert.match(apiService, /AUDIT_HASH_SALT: \$\{AI_ASSISTANT_AUDIT_HASH_SALT\}/);
+  assert.match(dbInitService, /AI_LOCAL_BINDING_SECRET: \$\{AI_LOCAL_BINDING_SECRET\}/);
+  assert.match(apiService, /AI_LOCAL_BINDING_SECRET: \$\{AI_LOCAL_BINDING_SECRET\}/);
+  assert.match(envExample, /^AI_LOCAL_BINDING_SECRET=.+$/m);
+});
+
+test('desktop keeps local dev separate from the generated exact HTTPS capability', () => {
   assert.match(tauriConfig, /"url": "http:\/\/localhost:18093"/);
-  assert.match(tauriCapability, /"urls": \["http:\/\/localhost:18093"\]/);
-  assert.doesNotMatch(tauriConfig, /ai-assistant\.invalid/);
-  assert.doesNotMatch(tauriCapability, /ai-assistant\.invalid/);
+  assert.match(tauriCapability, /"urls": \["https:\/\/ai-assistant\.invalid\/\*"\]/);
+  assert.doesNotMatch(tauriCapability, /http:\/\/localhost/);
+  assert.doesNotMatch(tauriCapability, /https:\/\/\*/);
 });
 
 test('phase one operations document the strict idempotent seed command', () => {

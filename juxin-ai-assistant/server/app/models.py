@@ -16,6 +16,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
+from . import governance_models as governance_models
 from .database import Base
 
 
@@ -77,6 +78,7 @@ class Task(TimestampMixin, Base):
     safety_notice: Mapped[str] = mapped_column(Text, default="生成内容需人工复核")
     sort_order: Mapped[int] = mapped_column(Integer, default=0)
     status: Mapped[str] = mapped_column(String(16), default="DRAFT", index=True)
+    ever_active: Mapped[bool] = mapped_column(Boolean, default=False)
     created_by: Mapped[str] = mapped_column(String(64), default="system")
     updated_by: Mapped[str] = mapped_column(String(64), default="system")
 

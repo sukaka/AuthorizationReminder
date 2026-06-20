@@ -17,6 +17,7 @@ COPY auth/portal-routing.js ./auth/portal-routing.js
 COPY auth/system-access-display.js ./auth/system-access-display.js
 COPY auth/system-user-directory.js ./auth/system-user-directory.js
 COPY auth/big-screen-authorization.js ./auth/big-screen-authorization.js
+COPY auth/ai-assistant-authorization.js ./auth/ai-assistant-authorization.js
 COPY auth/csrf-security.js ./auth/csrf-security.js
 COPY auth/password-security.js ./auth/password-security.js
 COPY auth/session-security.js ./auth/session-security.js
