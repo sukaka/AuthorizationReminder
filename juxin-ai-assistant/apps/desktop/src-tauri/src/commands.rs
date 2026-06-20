@@ -13,9 +13,48 @@ use crate::model_profiles::{
 
 pub struct AppState {
     pub profiles_path: PathBuf,
+    pub device_store_path: PathBuf,
     pub profiles: Mutex<Vec<ModelProfilePublic>>,
     pub secrets: Arc<dyn SecretStore>,
     pub cancellations: Mutex<HashMap<String, tokio::sync::watch::Sender<bool>>>,
+}
+
+#[tauri::command]
+pub fn device_store_get(
+    state: tauri::State<'_, AppState>,
+    key: String,
+    encrypted: bool,
+) -> Result<Option<String>, String> {
+    crate::device_store::get_value(
+        &state.device_store_path,
+        state.secrets.as_ref(),
+        &key,
+        encrypted,
+    )
+}
+
+#[tauri::command]
+pub fn device_store_set(
+    state: tauri::State<'_, AppState>,
+    key: String,
+    value: String,
+    encrypted: bool,
+) -> Result<(), String> {
+    crate::device_store::set_value(
+        &state.device_store_path,
+        state.secrets.as_ref(),
+        &key,
+        &value,
+        encrypted,
+    )
+}
+
+#[tauri::command]
+pub fn device_store_delete(
+    state: tauri::State<'_, AppState>,
+    key: String,
+) -> Result<(), String> {
+    crate::device_store::delete_value(&state.device_store_path, &key)
 }
 
 #[derive(Serialize)]

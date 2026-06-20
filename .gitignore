@@ -14,6 +14,7 @@ big-screen-center/**/dist
 juxin-ai-assistant/apps/desktop/dist
 juxin-ai-assistant/apps/desktop/src-tauri/gen
 juxin-ai-assistant/apps/desktop/src-tauri/target
+juxin-ai-assistant/apps/desktop/output/playwright/results/
 *.tsbuildinfo
 .DS_Store
 npm-debug.log

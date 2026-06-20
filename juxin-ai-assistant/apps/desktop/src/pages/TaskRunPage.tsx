@@ -1,23 +1,23 @@
 import { invoke } from '@tauri-apps/api/core';
 import { useEffect, useMemo, useState } from 'react';
 
-import type { ModelGenerateResult, ModelProfile } from '../types/tauri';
+import {
+  SensitiveWarningDialog,
+  type SensitiveFinding,
+} from '../components/SensitiveWarningDialog';
+import {
+  DynamicTaskForm,
+  type DynamicFieldDefinition,
+} from '../components/DynamicTaskForm';
+import { FeedbackPanel } from '../components/FeedbackPanel';
+import { deleteDraft, loadDraft, saveDraft } from '../local/drafts';
+import { generateLocalModel } from '../local/modelStream';
+import { enqueuePendingResult } from '../local/syncQueue';
+import type { ModelProfile } from '../types/tauri';
+import type { TaskPayload } from '../api/client';
 
-type TaskField = {
-  field_key: string;
-  label: string;
-  field_type: 'TEXT' | 'TEXTAREA' | 'SELECT' | 'MULTISELECT' | 'DATE' | 'NUMBER' | 'SWITCH';
-  required: boolean;
-  placeholder?: string;
-  options?: string[];
-};
-
-export type TaskDefinition = {
-  uuid: string;
-  name: string;
-  description: string;
-  safety_notice: string;
-  fields: TaskField[];
+export type TaskDefinition = Omit<TaskPayload, 'fields'> & {
+  fields: DynamicFieldDefinition[];
 };
 
 type PreparedGeneration = {
@@ -28,15 +28,24 @@ type PreparedGeneration = {
   safety_notice: string;
 };
 
-export function TaskRunPage({ task }: { task: TaskDefinition }) {
+type SensitiveConfirmation = {
+  digest: string;
+  findings: SensitiveFinding[];
+};
+
+export function TaskRunPage({ task, userId }: { task: TaskDefinition; userId?: string }) {
   const desktopAvailable = Boolean(window.__TAURI_INTERNALS__);
   const [profiles, setProfiles] = useState<ModelProfile[]>([]);
   const [profileId, setProfileId] = useState('');
-  const [values, setValues] = useState<Record<string, string | boolean>>({});
+  const [values, setValues] = useState<Record<string, unknown>>({});
   const [output, setOutput] = useState('');
   const [status, setStatus] = useState<'idle' | 'preparing' | 'generating' | 'saving' | 'done'>('idle');
   const [error, setError] = useState('');
   const [requestId, setRequestId] = useState('');
+  const [sensitiveConfirmation, setSensitiveConfirmation] = useState<SensitiveConfirmation | null>(null);
+  const [draftReady, setDraftReady] = useState(!userId);
+  const [syncMessage, setSyncMessage] = useState('');
+  const [generationUuid, setGenerationUuid] = useState('');
 
   useEffect(() => {
     if (!desktopAvailable) return;
@@ -48,16 +57,95 @@ export function TaskRunPage({ task }: { task: TaskDefinition }) {
       .catch(() => setError('无法读取当前设备的模型配置'));
   }, [desktopAvailable]);
 
+  useEffect(() => {
+    if (!desktopAvailable || !userId) return;
+    let active = true;
+    setDraftReady(false);
+    loadDraft(userId, task.uuid)
+      .then((draft) => {
+        if (active && draft) setValues(draft);
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        if (active) setDraftReady(true);
+      });
+    return () => {
+      active = false;
+    };
+  }, [desktopAvailable, task.uuid, userId]);
+
+  useEffect(() => {
+    if (!desktopAvailable || !userId || !draftReady) return;
+    const timer = window.setTimeout(() => {
+      saveDraft(userId, task.uuid, values).catch(() => undefined);
+    }, 300);
+    return () => window.clearTimeout(timer);
+  }, [desktopAvailable, draftReady, task.uuid, userId, values]);
+
   const selectedProfile = useMemo(
     () => profiles.find((profile) => profile.id === profileId),
     [profileId, profiles],
   );
 
-  const setValue = (fieldKey: string, value: string | boolean) => {
+  const setValue = (fieldKey: string, value: unknown) => {
     setValues((current) => ({ ...current, [fieldKey]: value }));
   };
 
-  const generate = async () => {
+  const runPrepared = async (prepared: PreparedGeneration) => {
+    if (!selectedProfile) throw new Error('请先配置一个本地模型');
+    setStatus('generating');
+    setOutput('');
+    const currentRequestId = crypto.randomUUID();
+    setRequestId(currentRequestId);
+    const generated = await generateLocalModel({
+      profileId: selectedProfile.id,
+      messages: prepared.messages,
+      temperature: prepared.temperature,
+      requestId: currentRequestId,
+    }, (delta) => setOutput((current) => current + delta));
+    setOutput(generated.output);
+
+    setStatus('saving');
+    const completeResponse = await fetch(
+      `/api/ai/generations/${prepared.generation_uuid}/complete`,
+      {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          completion_token: prepared.completion_token,
+          output: generated.output,
+          model_display_name: selectedProfile.displayName,
+          model_id: selectedProfile.modelId,
+          latency_ms: generated.latencyMs,
+          usage: generated.usage,
+        }),
+      },
+    );
+    if (!completeResponse.ok) {
+      await enqueuePendingResult({
+        generationUuid: prepared.generation_uuid,
+        completionToken: prepared.completion_token,
+        output: generated.output,
+        modelDisplayName: selectedProfile.displayName,
+        modelId: selectedProfile.modelId,
+        latencyMs: generated.latencyMs,
+        usage: generated.usage,
+        retryCount: 0,
+        nextRetryAt: Date.now() + 5_000,
+      });
+      setSyncMessage('结果已保存在本机，恢复连接后自动同步');
+    } else {
+      setSyncMessage('结果已同步');
+    }
+    setGenerationUuid(prepared.generation_uuid);
+    setStatus('done');
+    setRequestId('');
+    setSensitiveConfirmation(null);
+    if (userId) await deleteDraft(userId, task.uuid).catch(() => undefined);
+  };
+
+  const generate = async (confirmationDigest?: string) => {
     setError('');
     for (const field of task.fields) {
       if (field.required && !values[field.field_key]) {
@@ -71,47 +159,44 @@ export function TaskRunPage({ task }: { task: TaskDefinition }) {
     }
 
     try {
+      setSyncMessage('');
       setStatus('preparing');
       const prepareResponse = await fetch('/api/ai/generations/prepare', {
         method: 'POST',
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ task_uuid: task.uuid, inputs: values }),
+        body: JSON.stringify({
+          task_uuid: task.uuid,
+          inputs: values,
+          ...(confirmationDigest
+            ? { sensitive_confirmation_digest: confirmationDigest }
+            : {}),
+        }),
       });
-      if (!prepareResponse.ok) throw new Error(`PREPARE_${prepareResponse.status}`);
+      if (!prepareResponse.ok) {
+        const payload = await prepareResponse.json().catch(() => null) as {
+          detail?: {
+            code?: string;
+            confirmation_digest?: string;
+            findings?: SensitiveFinding[];
+          };
+        } | null;
+        if (
+          prepareResponse.status === 409
+          && payload?.detail?.code === 'SENSITIVE_CONFIRMATION_REQUIRED'
+          && payload.detail.confirmation_digest
+        ) {
+          setSensitiveConfirmation({
+            digest: payload.detail.confirmation_digest,
+            findings: payload.detail.findings || [],
+          });
+          setStatus('idle');
+          return;
+        }
+        throw new Error(`PREPARE_${prepareResponse.status}`);
+      }
       const prepared = (await prepareResponse.json()) as PreparedGeneration;
-
-      setStatus('generating');
-      const currentRequestId = crypto.randomUUID();
-      setRequestId(currentRequestId);
-      const generated = await invoke<ModelGenerateResult>('model_generate', {
-        profileId: selectedProfile.id,
-        messages: prepared.messages,
-        temperature: prepared.temperature,
-        requestId: currentRequestId,
-      });
-      setOutput(generated.output);
-
-      setStatus('saving');
-      const completeResponse = await fetch(
-        `/api/ai/generations/${prepared.generation_uuid}/complete`,
-        {
-          method: 'POST',
-          credentials: 'include',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            completion_token: prepared.completion_token,
-            output: generated.output,
-            model_display_name: selectedProfile.displayName,
-            model_id: selectedProfile.modelId,
-            latency_ms: generated.latencyMs,
-            usage: generated.usage,
-          }),
-        },
-      );
-      if (!completeResponse.ok) throw new Error(`COMPLETE_${completeResponse.status}`);
-      setStatus('done');
-      setRequestId('');
+      await runPrepared(prepared);
     } catch (generationError) {
       setStatus('idle');
       setRequestId('');
@@ -121,6 +206,33 @@ export function TaskRunPage({ task }: { task: TaskDefinition }) {
           : '生成失败，请检查本地模型配置后重试',
       );
     }
+  };
+
+  const regenerate = async () => {
+    if (!generationUuid || !selectedProfile) return;
+    setError('');
+    setSyncMessage('');
+    try {
+      setStatus('preparing');
+      const response = await fetch(
+        `/api/ai/generations/${encodeURIComponent(generationUuid)}/regenerate`,
+        { method: 'POST', credentials: 'include' },
+      );
+      if (!response.ok) throw new Error(`REGENERATE_${response.status}`);
+      await runPrepared(await response.json() as PreparedGeneration);
+    } catch (regenerationError) {
+      setStatus('done');
+      setRequestId('');
+      setError(
+        regenerationError instanceof Error
+          ? regenerationError.message
+          : '重新生成失败，请稍后重试',
+      );
+    }
+  };
+
+  const copyOutput = async () => {
+    if (output) await navigator.clipboard?.writeText(output);
   };
 
   const stop = async () => {
@@ -165,46 +277,13 @@ export function TaskRunPage({ task }: { task: TaskDefinition }) {
           </select>
         </div>
 
-        {task.fields.map((field) => (
-          <label className="dynamic-field" key={field.field_key}>
-            <span>{field.label}{field.required ? ' *' : ''}</span>
-            {field.field_type === 'TEXTAREA' ? (
-              <textarea
-                aria-label={field.label}
-                onChange={(event) => setValue(field.field_key, event.target.value)}
-                placeholder={field.placeholder}
-                rows={8}
-              />
-            ) : field.field_type === 'SELECT' ? (
-              <select
-                aria-label={field.label}
-                onChange={(event) => setValue(field.field_key, event.target.value)}
-              >
-                <option value="">请选择</option>
-                {field.options?.map((option) => <option key={option}>{option}</option>)}
-              </select>
-            ) : field.field_type === 'SWITCH' ? (
-              <input
-                aria-label={field.label}
-                onChange={(event) => setValue(field.field_key, event.target.checked)}
-                type="checkbox"
-              />
-            ) : (
-              <input
-                aria-label={field.label}
-                onChange={(event) => setValue(field.field_key, event.target.value)}
-                placeholder={field.placeholder}
-                type={field.field_type === 'DATE' ? 'date' : field.field_type === 'NUMBER' ? 'number' : 'text'}
-              />
-            )}
-          </label>
-        ))}
+        <DynamicTaskForm fields={task.fields} onChange={setValue} values={values} />
 
         {error && <p className="form-error" role="alert">{error}</p>}
         <button
           className="primary-action"
           disabled={status !== 'idle' && status !== 'done'}
-          onClick={generate}
+          onClick={() => generate()}
           type="button"
         >
           {status === 'preparing'
@@ -221,9 +300,26 @@ export function TaskRunPage({ task }: { task: TaskDefinition }) {
       </form>
 
       <article className="result-panel">
-        <span className="eyebrow">生成结果</span>
+        <span className="eyebrow">输出预览</span>
         {output ? <pre>{output}</pre> : <p>完成左侧信息后，结果会在这里流式呈现。</p>}
+        {syncMessage ? <p className="sync-status" role="status">{syncMessage}</p> : null}
+        {output ? (
+          <div className="result-actions">
+            <button className="secondary-action" onClick={copyOutput} type="button">复制全文</button>
+            <button className="secondary-action" disabled={status !== 'done'} onClick={regenerate} type="button">重新生成</button>
+          </div>
+        ) : null}
+        {generationUuid && status === 'done' ? (
+          <FeedbackPanel generationUuid={generationUuid} />
+        ) : null}
       </article>
+      {sensitiveConfirmation ? (
+        <SensitiveWarningDialog
+          findings={sensitiveConfirmation.findings}
+          onCancel={() => setSensitiveConfirmation(null)}
+          onConfirm={() => generate(sensitiveConfirmation.digest)}
+        />
+      ) : null}
     </section>
   );
 }

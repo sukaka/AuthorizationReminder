@@ -29,6 +29,8 @@ from .knowledge import KnowledgeRetriever
 from .models import Assistant, GenerationRecord, Task, TaskField, UserFavorite
 from .prompt_client import PromptCenterClient
 from .schemas import (
+    CatalogAssistantOut,
+    CatalogOut,
     CompleteGenerationIn,
     CompleteGenerationOut,
     FeedbackIn,
@@ -137,24 +139,7 @@ async def session(
     return payload
 
 
-@app.get("/api/ai/tasks/{task_code}", response_model=TaskOut)
-def get_task(
-    task_code: str,
-    _session_payload: Annotated[SessionPayload, Depends(get_session)],
-    db: Annotated[Session, Depends(get_db)],
-) -> TaskOut:
-    task = db.scalar(
-        select(Task).where(Task.code == task_code, Task.status == "ACTIVE")
-    )
-    if task is None:
-        from fastapi import HTTPException
-
-        raise HTTPException(status_code=404, detail="任务不存在或尚未发布")
-    fields = db.scalars(
-        select(TaskField)
-        .where(TaskField.task_id == task.id)
-        .order_by(TaskField.sort_order, TaskField.id)
-    ).all()
+def _task_out(task: Task, fields: list[TaskField]) -> TaskOut:
     return TaskOut(
         uuid=task.uuid,
         code=task.code,
@@ -176,6 +161,96 @@ def get_task(
             for field in fields
         ],
     )
+
+
+@app.get("/api/ai/catalog", response_model=CatalogOut)
+def catalog(
+    _session_payload: Annotated[SessionPayload, Depends(get_session)],
+    db: Annotated[Session, Depends(get_db)],
+    query: str = "",
+) -> CatalogOut:
+    normalized_query = query.strip().casefold()
+    assistants = db.scalars(
+        select(Assistant)
+        .where(Assistant.status == "ACTIVE")
+        .order_by(Assistant.sort_order, Assistant.id)
+    ).all()
+    result: list[CatalogAssistantOut] = []
+    for assistant in assistants:
+        tasks = db.scalars(
+            select(Task)
+            .where(
+                Task.assistant_id == assistant.id,
+                Task.status == "ACTIVE",
+            )
+            .order_by(Task.sort_order, Task.id)
+        ).all()
+        assistant_matches = bool(
+            normalized_query
+            and normalized_query
+            in f"{assistant.name} {assistant.description}".casefold()
+        )
+        matching_tasks = [
+            task
+            for task in tasks
+            if not normalized_query
+            or assistant_matches
+            or normalized_query
+            in f"{task.name} {task.description}".casefold()
+        ]
+        if not matching_tasks:
+            continue
+        task_ids = [task.id for task in matching_tasks]
+        fields_by_task: dict[int, list[TaskField]] = {
+            task_id: []
+            for task_id in task_ids
+        }
+        fields = db.scalars(
+            select(TaskField)
+            .where(TaskField.task_id.in_(task_ids))
+            .order_by(
+                TaskField.task_id,
+                TaskField.sort_order,
+                TaskField.id,
+            )
+        ).all()
+        for field in fields:
+            fields_by_task[field.task_id].append(field)
+        result.append(
+            CatalogAssistantOut(
+                uuid=assistant.uuid,
+                code=assistant.code,
+                name=assistant.name,
+                description=assistant.description,
+                icon=assistant.icon,
+                tasks=[
+                    _task_out(task, fields_by_task[task.id])
+                    for task in matching_tasks
+                ],
+            )
+        )
+    return CatalogOut(assistants=result)
+
+
+@app.get("/api/ai/tasks/{task_code}", response_model=TaskOut)
+def get_task(
+    task_code: str,
+    _session_payload: Annotated[SessionPayload, Depends(get_session)],
+    db: Annotated[Session, Depends(get_db)],
+) -> TaskOut:
+    task = db.scalar(
+        select(Task).where(Task.code == task_code, Task.status == "ACTIVE")
+    )
+    if task is None:
+        from fastapi import HTTPException
+
+        raise HTTPException(status_code=404, detail="任务不存在或尚未发布")
+    fields = db.scalars(
+        select(TaskField)
+        .where(TaskField.task_id == task.id)
+        .order_by(TaskField.sort_order, TaskField.id)
+    ).all()
+    return _task_out(task, list(fields))
 
 
 def _task_card(

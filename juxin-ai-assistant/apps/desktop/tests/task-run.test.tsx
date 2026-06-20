@@ -4,15 +4,22 @@ import { HttpResponse, http } from 'msw';
 import { beforeEach, expect, it, vi } from 'vitest';
 
 import { TaskRunPage, type TaskDefinition } from '../src/pages/TaskRunPage';
+import type { ModelGenerateResult } from '../src/types/tauri';
 import { server } from './setup';
 
-const { invokeMock } = vi.hoisted(() => ({ invokeMock: vi.fn() }));
+const { invokeMock, listenMock } = vi.hoisted(() => ({
+  invokeMock: vi.fn(),
+  listenMock: vi.fn(),
+}));
 vi.mock('@tauri-apps/api/core', () => ({ invoke: invokeMock }));
+vi.mock('@tauri-apps/api/event', () => ({ listen: listenMock }));
 
 const workSummaryTask: TaskDefinition = {
   uuid: 'task-1',
+  code: 'work-summary',
   name: '工作总结',
   description: '把零散工作整理成结构清晰、可直接发送的总结。',
+  output_format: 'Markdown',
   safety_notice: '需人工复核',
   fields: [
     {
@@ -34,10 +41,51 @@ const workSummaryTask: TaskDefinition = {
 
 beforeEach(() => {
   invokeMock.mockReset();
+  listenMock.mockReset();
+  listenMock.mockResolvedValue(() => undefined);
   Object.defineProperty(window, '__TAURI_INTERNALS__', {
     configurable: true,
     value: {},
   });
+});
+
+it('renders model delta events before the local request completes', async () => {
+  let deltaHandler: ((event: { payload: { delta: string } }) => void) | undefined;
+  let finishGeneration: ((value: ModelGenerateResult) => void) | undefined;
+  const pending = new Promise<ModelGenerateResult>((resolve) => {
+    finishGeneration = resolve;
+  });
+  listenMock.mockImplementation((_event: string, handler: typeof deltaHandler) => {
+    deltaHandler = handler;
+    return Promise.resolve(() => undefined);
+  });
+  server.use(
+    http.post('/api/ai/generations/prepare', () => HttpResponse.json({
+      generation_uuid: 'gen-stream', completion_token: 'complete-stream',
+      messages: [{ role: 'user', content: '流式生成' }], temperature: 0.3, safety_notice: '需人工复核',
+    }, { status: 201 })),
+    http.post('/api/ai/generations/gen-stream/complete', () =>
+      HttpResponse.json({ generation_uuid: 'gen-stream', status: 'COMPLETED' })),
+  );
+  invokeMock.mockImplementation((command: string) => {
+    if (command === 'model_profile_list') return Promise.resolve([{
+      id: 'profile-1', displayName: '公司模型', baseUrl: 'https://model.example/v1/',
+      modelId: 'model-1', temperature: 0.3, timeoutSeconds: 60, isDefault: true, hasApiKey: true,
+    }]);
+    if (command === 'model_generate') return pending;
+    return Promise.resolve();
+  });
+
+  render(<TaskRunPage task={workSummaryTask} />);
+  await userEvent.type(screen.getByLabelText('工作内容'), '测试流式');
+  await userEvent.click(screen.getByRole('button', { name: '开始生成' }));
+  await waitFor(() => expect(deltaHandler).toBeDefined());
+  deltaHandler?.({ payload: { delta: '第一段' } });
+
+  expect(await screen.findByText('第一段')).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: '停止生成' })).toBeInTheDocument();
+  finishGeneration?.({ output: '第一段第二段', latencyMs: 10, usage: {} });
+  expect(await screen.findByText('第一段第二段')).toBeInTheDocument();
 });
 
 it('prepares provider-neutral messages, invokes Tauri and completes history', async () => {
@@ -168,4 +216,138 @@ it('cancels the active local request with its request id', async () => {
   const generateCall = invokeMock.mock.calls.find(([command]) => command === 'model_generate');
   const cancelCall = invokeMock.mock.calls.find(([command]) => command === 'model_cancel');
   expect(cancelCall?.[1].requestId).toBe(generateCall?.[1].requestId);
+});
+
+it('restores and saves a user-scoped encrypted device draft', async () => {
+  invokeMock.mockImplementation((command: string) => {
+    if (command === 'model_profile_list') return Promise.resolve([]);
+    if (command === 'device_store_get') {
+      return Promise.resolve(JSON.stringify({
+        values: { work_content: '设备草稿' },
+        expiresAt: Date.now() + 60_000,
+      }));
+    }
+    if (command === 'device_store_set') return Promise.resolve();
+    return Promise.resolve();
+  });
+
+  render(<TaskRunPage task={workSummaryTask} userId="u-draft" />);
+
+  expect(await screen.findByDisplayValue('设备草稿')).toBeInTheDocument();
+  await userEvent.type(screen.getByLabelText('工作内容'), '继续');
+  await waitFor(() => expect(invokeMock).toHaveBeenCalledWith(
+    'device_store_set',
+    expect.objectContaining({
+      key: 'draft:u-draft:task-1',
+      encrypted: true,
+    }),
+  ));
+});
+
+it('keeps a completed local result in the encrypted pending queue when sync fails', async () => {
+  server.use(
+    http.post('/api/ai/generations/prepare', () =>
+      HttpResponse.json({
+        generation_uuid: 'gen-offline',
+        completion_token: 'complete-offline',
+        messages: [{ role: 'user', content: '生成' }],
+        temperature: 0.3,
+        safety_notice: '需人工复核',
+      }, { status: 201 }),
+    ),
+    http.post('/api/ai/generations/gen-offline/complete', () =>
+      HttpResponse.json({ detail: 'offline' }, { status: 503 }),
+    ),
+  );
+  invokeMock.mockImplementation((command: string) => {
+    if (command === 'model_profile_list') {
+      return Promise.resolve([{
+        id: 'profile-1',
+        displayName: '公司模型',
+        baseUrl: 'https://model.example/v1/',
+        modelId: 'model-1',
+        temperature: 0.3,
+        timeoutSeconds: 60,
+        isDefault: true,
+        hasApiKey: true,
+      }]);
+    }
+    if (command === 'model_generate') {
+      return Promise.resolve({ output: '离线结果', latencyMs: 20, usage: {} });
+    }
+    if (command === 'device_store_get') return Promise.resolve(null);
+    if (command === 'device_store_set') return Promise.resolve();
+    return Promise.resolve();
+  });
+
+  render(<TaskRunPage task={workSummaryTask} userId="u-1" />);
+  await userEvent.type(screen.getByLabelText('工作内容'), '离线生成');
+  await userEvent.click(screen.getByRole('button', { name: '开始生成' }));
+
+  expect(await screen.findByText('结果已保存在本机，恢复连接后自动同步')).toBeInTheDocument();
+  expect(invokeMock).toHaveBeenCalledWith(
+    'device_store_set',
+    expect.objectContaining({ key: 'pending-result-sync', encrypted: true }),
+  );
+});
+
+it('submits result feedback and regenerates through the local model boundary', async () => {
+  const feedbackRequest = vi.fn();
+  const regenerateRequest = vi.fn();
+  server.use(
+    http.post('/api/ai/generations/prepare', () =>
+      HttpResponse.json({
+        generation_uuid: 'gen-first',
+        completion_token: 'complete-first',
+        messages: [{ role: 'user', content: '第一次' }],
+        temperature: 0.3,
+        safety_notice: '需人工复核',
+      }, { status: 201 }),
+    ),
+    http.post('/api/ai/generations/gen-first/complete', () =>
+      HttpResponse.json({ generation_uuid: 'gen-first', status: 'COMPLETED' })),
+    http.post('/api/ai/generations/gen-first/feedback', async ({ request }) => {
+      feedbackRequest(await request.json());
+      return HttpResponse.json({ uuid: 'feedback-1', generation_uuid: 'gen-first', feedback_type: 'USEFUL' }, { status: 201 });
+    }),
+    http.post('/api/ai/generations/gen-first/regenerate', () => {
+      regenerateRequest();
+      return HttpResponse.json({
+        generation_uuid: 'gen-second',
+        completion_token: 'complete-second',
+        parent_generation_uuid: 'gen-first',
+        messages: [{ role: 'user', content: '第二次' }],
+        temperature: 0.3,
+        safety_notice: '需人工复核',
+      }, { status: 201 });
+    }),
+    http.post('/api/ai/generations/gen-second/complete', () =>
+      HttpResponse.json({ generation_uuid: 'gen-second', status: 'COMPLETED' })),
+  );
+  let generateCount = 0;
+  invokeMock.mockImplementation((command: string) => {
+    if (command === 'model_profile_list') return Promise.resolve([{
+      id: 'profile-1', displayName: '公司模型', baseUrl: 'https://model.example/v1/',
+      modelId: 'model-1', temperature: 0.3, timeoutSeconds: 60, isDefault: true, hasApiKey: true,
+    }]);
+    if (command === 'model_generate') {
+      generateCount += 1;
+      return Promise.resolve({ output: generateCount === 1 ? '初版结果' : '新版结果', latencyMs: 10, usage: {} });
+    }
+    return Promise.resolve();
+  });
+
+  render(<TaskRunPage task={workSummaryTask} />);
+  await userEvent.type(screen.getByLabelText('工作内容'), '生成内容');
+  await userEvent.click(screen.getByRole('button', { name: '开始生成' }));
+  expect(await screen.findByText('初版结果')).toBeInTheDocument();
+
+  await userEvent.click(screen.getByRole('radio', { name: '有帮助' }));
+  await userEvent.click(screen.getByRole('button', { name: '提交反馈' }));
+  await waitFor(() => expect(feedbackRequest).toHaveBeenCalledWith({ feedback_type: 'USEFUL' }));
+
+  await userEvent.click(screen.getByRole('button', { name: '重新生成' }));
+  expect(await screen.findByText('新版结果')).toBeInTheDocument();
+  expect(regenerateRequest).toHaveBeenCalledTimes(1);
+  expect(generateCount).toBe(2);
 });

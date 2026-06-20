@@ -16,6 +16,7 @@ step "AI assistant backend tests"
 )
 run_npm_script_if_exists "juxin-ai-assistant/apps/desktop" "test"
 run_npm_script_if_exists "juxin-ai-assistant/apps/desktop" "build"
+run_npm_script_if_exists "juxin-ai-assistant/apps/desktop" "test:e2e"
 run_cmd "AI assistant Rust tests" "$CARGO_BIN" test --manifest-path "$ROOT_DIR/juxin-ai-assistant/apps/desktop/src-tauri/Cargo.toml"
 
 compose_up mysql auth prompt-center-api ai-assistant-db-init ai-assistant-api web-ai-assistant

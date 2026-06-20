@@ -1618,10 +1618,12 @@ dependencies = [
 name = "juxin-ai-assistant"
 version = "1.0.0"
 dependencies = [
+ "base64 0.22.1",
  "futures-util",
  "keyring",
  "maplit",
  "reqwest 0.12.28",
+ "ring",
  "serde",
  "serde_json",
  "tauri",

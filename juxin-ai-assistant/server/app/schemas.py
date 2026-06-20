@@ -44,6 +44,19 @@ class TaskOut(BaseModel):
     fields: list[TaskFieldOut]
 
 
+class CatalogAssistantOut(BaseModel):
+    uuid: str
+    code: str
+    name: str
+    description: str
+    icon: str
+    tasks: list[TaskOut]
+
+
+class CatalogOut(BaseModel):
+    assistants: list[CatalogAssistantOut]
+
+
 class PrepareGenerationIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
