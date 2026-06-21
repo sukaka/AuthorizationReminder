@@ -1,9 +1,8 @@
-use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use serde::Serialize;
-use tauri::AppHandle;
+use tauri::{Manager, WebviewWindow};
 
 use crate::keychain::SecretStore;
 use crate::model_client::{generate, ChatMessage, ModelGenerateRequest, ModelGenerateResult};
@@ -17,9 +16,18 @@ pub struct AppState {
     pub local_storage_path: PathBuf,
     pub profiles: Mutex<Vec<ModelProfilePublic>>,
     pub secrets: Arc<dyn SecretStore>,
-    pub cancellations: Mutex<HashMap<String, tokio::sync::watch::Sender<bool>>>,
+    pub cancellations: Mutex<crate::model_cancellation::ModelCancellationRegistry>,
     pub local_user: crate::local_commands::LocalUserSession,
-    pub binding_base_url: url::Url,
+}
+
+impl AppState {
+    pub fn cancel_all_model_requests(&self) -> Result<(), String> {
+        self.cancellations
+            .lock()
+            .map_err(|_| "MODEL_REQUEST_STATE_UNAVAILABLE".to_string())?
+            .cancel_all();
+        Ok(())
+    }
 }
 
 #[derive(Serialize)]
@@ -31,8 +39,12 @@ pub struct ModelConnectionStatus {
 
 #[tauri::command]
 pub fn model_profile_list(
+    window: WebviewWindow,
     state: tauri::State<'_, AppState>,
+    windows: tauri::State<'_, crate::window_manager::WindowManagerState>,
 ) -> Result<Vec<ModelProfilePublic>, String> {
+    crate::window_manager::guard_business(&window, &windows)?;
+    state.local_user.require_bound()?;
     state
         .profiles
         .lock()
@@ -42,9 +54,13 @@ pub fn model_profile_list(
 
 #[tauri::command]
 pub fn model_profile_upsert(
+    window: WebviewWindow,
     state: tauri::State<'_, AppState>,
+    windows: tauri::State<'_, crate::window_manager::WindowManagerState>,
     input: ModelProfileInput,
 ) -> Result<ModelProfilePublic, String> {
+    crate::window_manager::guard_business(&window, &windows)?;
+    state.local_user.require_bound()?;
     let mut profiles = state
         .profiles
         .lock()
@@ -59,9 +75,13 @@ pub fn model_profile_upsert(
 
 #[tauri::command]
 pub fn model_profile_delete(
+    window: WebviewWindow,
     state: tauri::State<'_, AppState>,
+    windows: tauri::State<'_, crate::window_manager::WindowManagerState>,
     profile_id: String,
 ) -> Result<(), String> {
+    crate::window_manager::guard_business(&window, &windows)?;
+    state.local_user.require_bound()?;
     let mut profiles = state
         .profiles
         .lock()
@@ -80,9 +100,13 @@ pub fn model_profile_delete(
 
 #[tauri::command]
 pub fn model_profile_set_default(
+    window: WebviewWindow,
     state: tauri::State<'_, AppState>,
+    windows: tauri::State<'_, crate::window_manager::WindowManagerState>,
     profile_id: String,
 ) -> Result<(), String> {
+    crate::window_manager::guard_business(&window, &windows)?;
+    state.local_user.require_bound()?;
     let mut profiles = state
         .profiles
         .lock()
@@ -93,9 +117,13 @@ pub fn model_profile_set_default(
 
 #[tauri::command]
 pub async fn model_profile_test(
+    window: WebviewWindow,
     state: tauri::State<'_, AppState>,
+    windows: tauri::State<'_, crate::window_manager::WindowManagerState>,
     profile_id: String,
 ) -> Result<ModelConnectionStatus, String> {
+    crate::window_manager::guard_business(&window, &windows)?;
+    state.local_user.require_bound()?;
     let profile = {
         let profiles = state
             .profiles
@@ -124,13 +152,17 @@ pub async fn model_profile_test(
 
 #[tauri::command]
 pub async fn model_generate(
-    app: AppHandle,
+    window: WebviewWindow,
     state: tauri::State<'_, AppState>,
+    windows: tauri::State<'_, crate::window_manager::WindowManagerState>,
     profile_id: String,
     messages: Vec<ChatMessage>,
     temperature: f32,
     request_id: String,
 ) -> Result<ModelGenerateResult, String> {
+    crate::window_manager::guard_business(&window, &windows)?;
+    state.local_user.require_bound()?;
+    let app = window.app_handle().clone();
     if request_id.is_empty()
         || request_id.len() > 128
         || messages.is_empty()
@@ -159,12 +191,12 @@ pub async fn model_generate(
     let base_url = crate::model_client::validate_base_url(&profile.base_url)
         .map_err(|_| "MODEL_URL_INVALID".to_string())?;
     let api_key = state.secrets.get(&model_secret_account(&profile.id))?;
-    let (cancel_sender, cancel_receiver) = tokio::sync::watch::channel(false);
-    state
+    let cancellation = state
         .cancellations
         .lock()
         .map_err(|_| "MODEL_REQUEST_STATE_UNAVAILABLE".to_string())?
-        .insert(request_id.clone(), cancel_sender);
+        .start(&request_id);
+    let cancel_receiver = cancellation.receiver().clone();
 
     let result = generate(
         &app,
@@ -181,20 +213,24 @@ pub async fn model_generate(
     )
     .await;
     if let Ok(mut cancellations) = state.cancellations.lock() {
-        cancellations.remove(&request_id);
+        cancellations.finish(&cancellation);
     }
     result.map_err(|error| error.to_string())
 }
 
 #[tauri::command]
-pub fn model_cancel(state: tauri::State<'_, AppState>, request_id: String) -> Result<(), String> {
-    let sender = state
+pub fn model_cancel(
+    window: WebviewWindow,
+    state: tauri::State<'_, AppState>,
+    windows: tauri::State<'_, crate::window_manager::WindowManagerState>,
+    request_id: String,
+) -> Result<(), String> {
+    crate::window_manager::guard_business(&window, &windows)?;
+    state.local_user.require_bound()?;
+    state
         .cancellations
         .lock()
         .map_err(|_| "MODEL_REQUEST_STATE_UNAVAILABLE".to_string())?
-        .remove(&request_id);
-    if let Some(sender) = sender {
-        let _ = sender.send(true);
-    }
+        .cancel(&request_id);
     Ok(())
 }

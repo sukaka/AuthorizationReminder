@@ -17,6 +17,17 @@ export type ModelGenerateResult = {
 
 declare global {
   interface Window {
-    __TAURI_INTERNALS__?: unknown;
+    __JUXIN_DESKTOP_AUTH_PORTAL__?: string;
+    __TAURI_INTERNALS__?: {
+      invoke?: (
+        command: string,
+        args?: Record<string, unknown>,
+      ) => Promise<unknown>;
+      metadata?: {
+        currentWebview?: {
+          label?: string;
+        };
+      };
+    };
   }
 }

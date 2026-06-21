@@ -8,6 +8,7 @@ import type {
   DesktopBridge,
   ProbeFailureKind,
 } from '../src/remote/desktopBridge';
+import { desktopBridge } from '../src/remote/desktopBridge';
 
 type FakeBridgeOptions = {
   readonly localLauncher?: boolean;
@@ -15,6 +16,9 @@ type FakeBridgeOptions = {
   readonly lastSuccessfulCheckAt?: string | null;
   readonly probeFailure?: ProbeFailureKind;
   readonly saveFailure?: boolean;
+  readonly registerWorkspaceRecovery?: (
+    listener: (recovery: { readonly reason: ProbeFailureKind }) => void,
+  ) => void;
 };
 
 function fakeBridge(options: FakeBridgeOptions = {}): DesktopBridge {
@@ -36,11 +40,16 @@ function fakeBridge(options: FakeBridgeOptions = {}): DesktopBridge {
       ? vi.fn().mockRejectedValue(new Error('connection'))
       : vi.fn().mockResolvedValue(undefined),
     openWorkspace: vi.fn().mockResolvedValue(undefined),
+    onWorkspaceRecovered: vi.fn().mockImplementation(async (listener) => {
+      options.registerWorkspaceRecovery?.(listener);
+      return () => undefined;
+    }),
   };
 }
 
 afterEach(() => {
   vi.restoreAllMocks();
+  Reflect.deleteProperty(window, '__TAURI_INTERNALS__');
 });
 
 async function readyServerInput(): Promise<HTMLInputElement> {
@@ -51,6 +60,14 @@ async function readyServerInput(): Promise<HTMLInputElement> {
 }
 
 describe('local launcher', () => {
+  it('recognizes the launcher label in a Tauri development URL', () => {
+    window.__TAURI_INTERNALS__ = {
+      metadata: { currentWebview: { label: 'launcher' } },
+    };
+
+    expect(desktopBridge.isLocalLauncherContext()).toBe(true);
+  });
+
   it('shows product introduction before any business network request', async () => {
     const fetchSpy = vi.spyOn(globalThis, 'fetch');
 
@@ -260,6 +277,34 @@ describe('local launcher', () => {
     expect(input).toBeDisabled();
     expect(screen.getByRole('button', { name: '测试连接' })).toBeDisabled();
     finishWorkspace?.();
+  });
+
+  it('restores server controls when the native workspace falls back', async () => {
+    const user = userEvent.setup();
+    let recover:
+      | ((recovery: { readonly reason: ProbeFailureKind }) => void)
+      | undefined;
+    const bridge = fakeBridge({
+      savedOrigin: 'https://ai.example.com',
+      lastSuccessfulCheckAt: '2026-06-21T04:00:00Z',
+      registerWorkspaceRecovery: (listener) => {
+        recover = listener;
+      },
+    });
+
+    render(<LauncherPage bridge={bridge} />);
+    await user.click(
+      await screen.findByRole('button', { name: '使用统一登录' }),
+    );
+    expect(screen.getByLabelText('远程服务地址')).toBeDisabled();
+
+    recover?.({ reason: 'timeout' });
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      '服务器暂未响应，请稍后重试或修改地址。',
+    );
+    expect(screen.getByLabelText('远程服务地址')).toBeEnabled();
+    expect(screen.getByRole('button', { name: '重新测试' })).toBeEnabled();
   });
 
   it('accepts loopback HTTP in a development launcher build', async () => {

@@ -67,11 +67,23 @@ function Workspace({ session }: { session: SessionPayload }) {
   };
 
   const logout = async () => {
-    if (window.__TAURI_INTERNALS__) {
-      await logoutLocalUser(String(session.user.id)).catch(() => undefined);
+    try {
+      await fetch('/api/ai/logout', {
+        method: 'POST',
+        credentials: 'include',
+      });
+    } catch (error: unknown) {
+      if (!(error instanceof TypeError)) throw error;
     }
-    await fetch('/api/ai/logout', { method: 'POST', credentials: 'include' }).catch(() => undefined);
-    window.location.assign(getAuthPortalUrl());
+    if (window.__TAURI_INTERNALS__) {
+      try {
+        await logoutLocalUser(String(session.user.id));
+      } catch {
+        window.location.assign(getAuthPortalUrl());
+      }
+    } else {
+      window.location.assign(getAuthPortalUrl());
+    }
   };
 
   return (
@@ -162,6 +174,18 @@ function StatusView({ kind }: { kind: 'checking' | 'forbidden' | 'error' }) {
       <a href={getAuthPortalUrl()}>
         返回统一门户
       </a>
+      {window.__TAURI_INTERNALS__ ? (
+        <button
+          type="button"
+          onClick={() => {
+            void invoke('workspace_close').catch(() => {
+              window.location.assign(getAuthPortalUrl());
+            });
+          }}
+        >
+          返回启动页
+        </button>
+      ) : null}
     </main>
   );
 }
@@ -189,14 +213,24 @@ function RemoteWorkspace() {
           await invoke('local_session_bind', {
             token: session.local_binding_token,
           });
+          await invoke('workspace_ready');
         }
         if (active) setState({ kind: 'ready', session });
       })
       .catch((error: unknown) => {
         if (!active || (error instanceof ApiError && error.status === 401)) return;
-        setState({
-          kind: error instanceof ApiError && error.status === 403 ? 'forbidden' : 'error',
-        });
+        const kind =
+          error instanceof ApiError && error.status === 403
+            ? 'forbidden'
+            : 'error';
+        if (window.__TAURI_INTERNALS__) {
+          void invoke('workspace_status', {
+            status: kind === 'forbidden' ? 'forbidden' : 'network-error',
+          }).catch(() => {
+            window.location.assign(getAuthPortalUrl());
+          });
+        }
+        setState({ kind });
       });
     return () => {
       active = false;

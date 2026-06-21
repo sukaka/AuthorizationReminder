@@ -113,6 +113,31 @@ async function readJson<T>(response: Response, code: string): Promise<T> {
 }
 
 export function getAuthPortalUrl(): string {
+  if (
+    window.__TAURI_INTERNALS__ &&
+    typeof window.__JUXIN_DESKTOP_AUTH_PORTAL__ === 'string'
+  ) {
+    try {
+      const portal = new URL(window.__JUXIN_DESKTOP_AUTH_PORTAL__);
+      const isLoopback =
+        portal.hostname === 'localhost' ||
+        portal.hostname === '127.0.0.1' ||
+        portal.hostname === '[::1]';
+      const isSafeScheme =
+        portal.protocol === 'https:' ||
+        (import.meta.env.DEV && portal.protocol === 'http:' && isLoopback);
+      if (
+        isSafeScheme &&
+        !portal.username &&
+        !portal.password &&
+        !portal.hash
+      ) {
+        return portal.toString();
+      }
+    } catch {
+      // Fall back to the build-time portal below.
+    }
+  }
   const authUrl = import.meta.env.VITE_AUTH_PUBLIC_URL || 'http://localhost:5180';
   return `${authUrl.replace(/\/$/, '')}/portal?system=ai-assistant`;
 }

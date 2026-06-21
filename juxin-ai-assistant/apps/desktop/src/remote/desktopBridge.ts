@@ -1,5 +1,6 @@
 import { getVersion } from '@tauri-apps/api/app';
 import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 
 export type ProbeFailureKind =
   | 'dns'
@@ -19,12 +20,19 @@ export type ProbeSuccess = {
   readonly authPortalUrl: string;
 };
 
+export type WorkspaceRecovery = {
+  readonly reason: ProbeFailureKind | null;
+};
+
 export interface DesktopBridge {
   readonly isLocalLauncherContext: () => boolean;
   readonly getServerConfig: () => Promise<ServerConfigSnapshot>;
   readonly probeServer: (origin: string) => Promise<ProbeSuccess>;
   readonly saveServerConfig: (origin: string) => Promise<void>;
   readonly openWorkspace: (origin: string) => Promise<void>;
+  readonly onWorkspaceRecovered: (
+    listener: (recovery: WorkspaceRecovery) => void,
+  ) => Promise<() => void>;
 }
 
 export class DesktopProbeError extends Error {
@@ -95,7 +103,21 @@ export const desktopBridge: DesktopBridge = {
     ) {
       return true;
     }
-    if (!window.__TAURI_INTERNALS__) return false;
+    const internals = window.__TAURI_INTERNALS__;
+    if (!internals) return false;
+    if (
+      typeof internals === 'object' &&
+      'metadata' in internals &&
+      typeof internals.metadata === 'object' &&
+      internals.metadata !== null &&
+      'currentWebview' in internals.metadata &&
+      typeof internals.metadata.currentWebview === 'object' &&
+      internals.metadata.currentWebview !== null &&
+      'label' in internals.metadata.currentWebview &&
+      typeof internals.metadata.currentWebview.label === 'string'
+    ) {
+      return internals.metadata.currentWebview.label === 'launcher';
+    }
     return (
       window.location.protocol === 'tauri:' ||
       window.location.hostname === 'tauri.localhost'
@@ -115,4 +137,8 @@ export const desktopBridge: DesktopBridge = {
   openWorkspace: async (origin) => {
     await invoke('workspace_open', { origin });
   },
+  onWorkspaceRecovered: async (listener) =>
+    listen<WorkspaceRecovery>('workspace-recovered', (event) => {
+      listener(event.payload);
+    }),
 };

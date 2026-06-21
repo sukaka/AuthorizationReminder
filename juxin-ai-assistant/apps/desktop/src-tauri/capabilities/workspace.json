@@ -1,13 +1,21 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
-  "identifier": "remote-main",
-  "description": "聚信 AI 助手固定远程工作台权限",
-  "windows": ["main"],
+  "identifier": "workspace",
+  "description": "聚信 AI 助手远程业务工作台权限",
+  "windows": ["workspace"],
   "remote": {
-    "urls": ["https://ai-assistant.invalid/*"]
+    "urls": [
+      "https://*:*/*",
+      "http://localhost:*/*",
+      "http://127.0.0.1:*/*"
+    ]
   },
   "permissions": [
-    "core:default",
+    "core:event:allow-listen",
+    "core:event:allow-unlisten",
+    "allow-workspace-ready",
+    "allow-workspace-status",
+    "allow-workspace-close",
     "allow-local-session-bind",
     "allow-local-draft-save",
     "allow-local-draft-load",

@@ -1,3 +1,4 @@
+pub mod command_origin;
 mod commands;
 pub mod keychain;
 pub mod local_binding;
@@ -5,6 +6,7 @@ mod local_commands;
 mod local_crypto;
 pub mod local_queue;
 mod local_types;
+pub mod model_cancellation;
 mod model_client;
 pub mod model_profile_store;
 pub mod model_profiles;
@@ -12,13 +14,13 @@ pub mod server_config;
 mod server_probe;
 pub mod tray;
 pub mod updater_policy;
+pub mod window_manager;
 
-use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use commands::AppState;
 use keychain::SystemKeychain;
-use local_binding::{configured_binding_base_url, LocalUserSession};
+use local_binding::LocalUserSession;
 use model_profile_store::migrate_legacy_model_secrets;
 use model_profiles::load_profiles;
 use tauri::Manager;
@@ -47,6 +49,7 @@ pub fn run() {
         }))
         .setup(move |app| {
             let app_data_dir = app.path().app_data_dir()?;
+            let app_config_dir = app.path().app_config_dir()?;
             let profiles_path = app_data_dir.join("model-profiles.json");
             let profiles = load_profiles(&profiles_path).map_err(std::io::Error::other)?;
             let secrets: Arc<dyn keychain::SecretStore> = Arc::new(SystemKeychain);
@@ -57,25 +60,46 @@ pub fn run() {
                 local_storage_path: app_data_dir.join("secure-local"),
                 profiles: Mutex::new(profiles),
                 secrets,
-                cancellations: Mutex::new(HashMap::new()),
+                cancellations: Mutex::new(model_cancellation::ModelCancellationRegistry::default()),
                 local_user: LocalUserSession::default(),
-                binding_base_url: configured_binding_base_url().map_err(std::io::Error::other)?,
             });
+            app.manage(
+                window_manager::WindowManagerState::load(&app_config_dir)
+                    .map_err(std::io::Error::other)?,
+            );
             tray::install_tray(app)?;
             tray::restore_main(app.handle());
             updater_policy::schedule_check(app.handle(), &setup_policy);
             Ok(())
         })
-        .on_window_event(|window, event| {
-            if window.label() != "main" {
-                return;
-            }
-            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                if window.state::<LifecycleState>().close_action() == CloseAction::Hide {
+        .on_window_event(|window, event| match event {
+            tauri::WindowEvent::CloseRequested { api, .. } => match window.label() {
+                "launcher"
+                    if window.state::<LifecycleState>().close_action() == CloseAction::Hide =>
+                {
                     api.prevent_close();
                     let _ = window.hide();
                 }
+                "workspace" => {
+                    let _ = window.state::<AppState>().cancel_all_model_requests();
+                    let was_active = window_manager::workspace_closed(
+                        &window.state::<window_manager::WindowManagerState>(),
+                    );
+                    if was_active {
+                        window_manager::emit_workspace_recovery(window.app_handle(), None);
+                    }
+                    let _ = window_manager::show_launcher(window.app_handle());
+                }
+                _ => {}
+            },
+            tauri::WindowEvent::Destroyed if window.label() == "workspace" => {
+                let _ = window.state::<AppState>().cancel_all_model_requests();
+                window_manager::workspace_closed(
+                    &window.state::<window_manager::WindowManagerState>(),
+                );
+                let _ = window_manager::show_launcher(window.app_handle());
             }
+            _ => {}
         })
         .invoke_handler(tauri::generate_handler![
             local_commands::local_session_bind,
@@ -94,6 +118,14 @@ pub fn run() {
             commands::model_profile_test,
             commands::model_generate,
             commands::model_cancel,
+            window_manager::server_config_get,
+            window_manager::server_probe,
+            window_manager::server_config_save,
+            window_manager::workspace_open,
+            window_manager::workspace_ready,
+            window_manager::workspace_status,
+            window_manager::workspace_close,
+            window_manager::launcher_show,
         ])
         .build(tauri::generate_context!())
         .expect("failed to build 聚信 AI 助手");

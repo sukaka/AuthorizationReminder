@@ -219,7 +219,8 @@ pub async fn generate(
                 }
                 if let Some(delta) = delta {
                     output.push_str(&delta);
-                    app.emit(
+                    app.emit_to(
+                        "workspace",
                         &format!("model://delta/{request_id}"),
                         DeltaEvent {
                             request_id,
@@ -235,7 +236,8 @@ pub async fn generate(
     if output.is_empty() {
         return Err(ModelClientError::Protocol);
     }
-    app.emit(
+    app.emit_to(
+        "workspace",
         &format!("model://done/{request_id}"),
         DoneEvent { request_id },
     )

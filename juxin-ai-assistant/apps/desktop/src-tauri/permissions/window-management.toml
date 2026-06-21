@@ -1,0 +1,39 @@
+[[permission]]
+identifier = "allow-server-config-get"
+description = "允许本地启动器读取已验证的服务器配置"
+commands.allow = ["server_config_get"]
+
+[[permission]]
+identifier = "allow-server-probe"
+description = "允许本地启动器探测服务器桌面协议"
+commands.allow = ["server_probe"]
+
+[[permission]]
+identifier = "allow-server-config-save"
+description = "允许本地启动器保存最近探测成功的服务器"
+commands.allow = ["server_config_save"]
+
+[[permission]]
+identifier = "allow-workspace-open"
+description = "允许本地启动器打开已保存且验证成功的工作台"
+commands.allow = ["workspace_open"]
+
+[[permission]]
+identifier = "allow-workspace-close"
+description = "允许远程工作台关闭自身并恢复本地启动器"
+commands.allow = ["workspace_close"]
+
+[[permission]]
+identifier = "allow-workspace-ready"
+description = "允许已验证业务工作台完成本地会话绑定后显示自身"
+commands.allow = ["workspace_ready"]
+
+[[permission]]
+identifier = "allow-workspace-status"
+description = "允许受信任业务页面显示无权限状态或触发网络故障恢复"
+commands.allow = ["workspace_status"]
+
+[[permission]]
+identifier = "allow-launcher-show"
+description = "允许本地启动器显示并聚焦自身"
+commands.allow = ["launcher_show"]

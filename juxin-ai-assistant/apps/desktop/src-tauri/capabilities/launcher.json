@@ -1,0 +1,16 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "launcher",
+  "description": "聚信 AI 助手本地服务器配置启动器权限",
+  "windows": ["launcher"],
+  "permissions": [
+    "core:app:allow-version",
+    "core:event:allow-listen",
+    "core:event:allow-unlisten",
+    "allow-server-config-get",
+    "allow-server-probe",
+    "allow-server-config-save",
+    "allow-workspace-open",
+    "allow-launcher-show"
+  ]
+}

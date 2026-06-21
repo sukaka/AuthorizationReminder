@@ -12,18 +12,18 @@
   "app": {
     "windows": [
       {
-        "label": "main",
+        "label": "launcher",
         "title": "聚信 AI 助手",
-        "width": 1280,
-        "height": 820,
+        "width": 1120,
+        "height": 720,
         "minWidth": 900,
         "minHeight": 640,
-        "url": "http://localhost:18093"
+        "url": "index.html"
       }
     ],
     "security": {
       "csp": "default-src 'self'; connect-src 'self' https://ai-assistant.invalid; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'",
-      "capabilities": ["remote-main"]
+      "capabilities": ["launcher", "workspace"]
     }
   },
   "bundle": {

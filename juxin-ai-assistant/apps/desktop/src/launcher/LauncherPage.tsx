@@ -147,6 +147,42 @@ export function LauncherPage({
     };
   }, [bridge]);
 
+  useEffect(() => {
+    let active = true;
+    let unlisten: (() => void) | undefined;
+    bridge
+      .onWorkspaceRecovered((recovery) => {
+        if (!active) return;
+        setState((current) => {
+          const origin =
+            current.kind === 'booting' ? savedOrigin ?? '' : current.origin;
+          return recovery.reason
+            ? {
+                kind: 'server-unreachable',
+                origin,
+                reason: recovery.reason,
+              }
+            : { kind: 'server-ready', origin };
+        });
+      })
+      .then((stop) => {
+        if (active) {
+          unlisten = stop;
+        } else {
+          stop();
+        }
+      })
+      .catch(() => {
+        if (active) {
+          setAuxiliaryNotice('工作台恢复通知暂不可用，可重新测试连接。');
+        }
+      });
+    return () => {
+      active = false;
+      unlisten?.();
+    };
+  }, [bridge, savedOrigin]);
+
   const validation = useMemo(
     () => validateServerOrigin(originInput, import.meta.env.DEV),
     [originInput],

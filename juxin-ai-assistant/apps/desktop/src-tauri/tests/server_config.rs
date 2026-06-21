@@ -73,6 +73,13 @@ fn development_origin_allows_only_loopback_http() {
 }
 
 #[test]
+fn development_ipv6_loopback_normalizes_to_capability_safe_localhost() {
+    let origin = ServerOrigin::parse("http://[::1]:18093").unwrap();
+
+    assert_eq!(origin.as_str(), "http://localhost:18093");
+}
+
+#[test]
 fn probe_rejects_invalid_timeout_budgets() {
     assert_eq!(
         DesktopProbe::with_timeouts(Duration::ZERO, Duration::from_secs(1))

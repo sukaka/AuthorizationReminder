@@ -60,7 +60,16 @@ impl LifecycleState {
 }
 
 pub fn restore_main<R: Runtime>(app: &AppHandle<R>) {
-    let Some(window) = app.get_webview_window("main") else {
+    let workspace_ready = app
+        .try_state::<crate::commands::AppState>()
+        .is_some_and(|state| state.local_user.require_bound().is_ok());
+    let window = if workspace_ready {
+        app.get_webview_window("workspace")
+            .or_else(|| app.get_webview_window("launcher"))
+    } else {
+        app.get_webview_window("launcher")
+    };
+    let Some(window) = window else {
         return;
     };
     let action = app.state::<LifecycleState>().restore_action();
@@ -95,7 +104,10 @@ pub fn install_tray<R: Runtime>(app: &App<R>) -> tauri::Result<()> {
         .on_menu_event(|app, event| match event.id().as_ref() {
             "tray-open" => restore_main(app),
             "tray-hide" => {
-                if let Some(window) = app.get_webview_window("main") {
+                if let Some(window) = app
+                    .get_webview_window("workspace")
+                    .or_else(|| app.get_webview_window("launcher"))
+                {
                     let _ = window.hide();
                 }
             }

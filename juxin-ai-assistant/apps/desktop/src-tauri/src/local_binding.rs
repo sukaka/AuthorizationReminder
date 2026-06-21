@@ -47,6 +47,27 @@ impl LocalUserSession {
         }
     }
 
+    pub fn require_bound(&self) -> Result<(), String> {
+        let current = self
+            .user_id
+            .lock()
+            .map_err(|_| "LOCAL_USER_SESSION_UNAVAILABLE".to_string())?;
+        if current.is_some() {
+            Ok(())
+        } else {
+            Err("LOCAL_USER_SESSION_REQUIRED".to_string())
+        }
+    }
+
+    pub fn clear(&self) -> Result<(), String> {
+        let mut current = self
+            .user_id
+            .lock()
+            .map_err(|_| "LOCAL_USER_SESSION_UNAVAILABLE".to_string())?;
+        *current = None;
+        Ok(())
+    }
+
     pub fn logout<T, F>(&self, user_id: &str, cleanup: F) -> Result<T, String>
     where
         F: FnOnce(&str) -> Result<T, String>,

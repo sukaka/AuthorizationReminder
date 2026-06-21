@@ -45,6 +45,14 @@ impl ServerOrigin {
         if !trusted_scheme {
             return Err(ServerOriginError::Invalid);
         }
+        let mut parsed = parsed;
+        if parsed.scheme() == "http"
+            && matches!(parsed.host(), Some(Host::Ipv6(address)) if address.is_loopback())
+        {
+            parsed
+                .set_host(Some("localhost"))
+                .map_err(|_| ServerOriginError::Invalid)?;
+        }
         let normalized = Url::parse(&parsed.origin().ascii_serialization())
             .map_err(|_| ServerOriginError::Invalid)?;
         Ok(Self(normalized))
@@ -52,6 +60,10 @@ impl ServerOrigin {
 
     pub fn as_str(&self) -> &str {
         self.0.as_str().trim_end_matches('/')
+    }
+
+    pub const fn as_url(&self) -> &Url {
+        &self.0
     }
 
     pub(crate) fn endpoint(&self) -> Result<Url, ProbeError> {
