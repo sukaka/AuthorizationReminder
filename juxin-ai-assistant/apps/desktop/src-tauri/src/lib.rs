@@ -8,6 +8,8 @@ mod local_types;
 mod model_client;
 pub mod model_profile_store;
 pub mod model_profiles;
+pub mod server_config;
+mod server_probe;
 pub mod tray;
 pub mod updater_policy;
 
