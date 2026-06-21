@@ -18,6 +18,11 @@ import { AuditPage } from './pages/admin/AuditPage';
 import { GovernanceCenter } from './pages/admin/GovernanceCenter';
 import { StatsPage } from './pages/admin/StatsPage';
 import { SuggestionsPage } from './pages/admin/SuggestionsPage';
+import { LauncherPage } from './launcher/LauncherPage';
+import {
+  desktopBridge,
+  type DesktopBridge,
+} from './remote/desktopBridge';
 
 type WorkspacePage =
   | 'home'
@@ -161,7 +166,19 @@ function StatusView({ kind }: { kind: 'checking' | 'forbidden' | 'error' }) {
   );
 }
 
-export default function App() {
+type AppProps = {
+  readonly bridge?: DesktopBridge;
+};
+
+export default function App({ bridge = desktopBridge }: AppProps) {
+  if (bridge.isLocalLauncherContext()) {
+    return <LauncherPage bridge={bridge} />;
+  }
+
+  return <RemoteWorkspace />;
+}
+
+function RemoteWorkspace() {
   const [state, setState] = useState<ViewState>({ kind: 'checking' });
 
   useEffect(() => {
