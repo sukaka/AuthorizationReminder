@@ -157,3 +157,60 @@ export const governanceApi = {
     `/api/ai/admin/audit-logs${query ? `?${query}` : ''}`,
   ),
 };
+
+// Desktop Update Publishing
+
+export type DesktopUpdateRelease = {
+  uuid: string;
+  agent_version: string;
+  channel: 'lan-test' | 'production';
+  status: 'DRAFT' | 'PUBLISHED' | 'WITHDRAWN';
+  release_notes: string;
+  created_by: string;
+  created_at: string;
+  published_at: string | null;
+  withdrawn_at: string | null;
+  artifacts: DesktopUpdateArtifact[];
+};
+
+export type DesktopUpdateArtifact = {
+  target: string;
+  file_name: string;
+  content_type: string;
+  size_bytes: number;
+  sha256: string;
+  created_at: string;
+};
+
+export const desktopUpdateApi = {
+  list: (channel?: string) => {
+    const qs = channel ? `?channel=${encodeURIComponent(channel)}` : '';
+    return request<DesktopUpdateRelease[]>(`/api/ai/admin/desktop-updates${qs}`);
+  },
+  create: (payload: { agent_version: string; channel: string; release_notes: string }) =>
+    request<DesktopUpdateRelease>('/api/ai/admin/desktop-updates', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  upload: (releaseUuid: string, file: File, target: string, sha256: string, signature: string) => {
+    const form = new FormData();
+    form.append('file', file);
+    form.append('target', target);
+    form.append('sha256', sha256);
+    form.append('signature', signature);
+    return request<DesktopUpdateArtifact>(
+      `/api/ai/admin/desktop-updates/${encodeURIComponent(releaseUuid)}/artifacts`,
+      { method: 'POST', body: form },
+    );
+  },
+  publish: (releaseUuid: string) =>
+    request<DesktopUpdateRelease>(
+      `/api/ai/admin/desktop-updates/${encodeURIComponent(releaseUuid)}/publish`,
+      { method: 'POST' },
+    ),
+  withdraw: (releaseUuid: string) =>
+    request<DesktopUpdateRelease>(
+      `/api/ai/admin/desktop-updates/${encodeURIComponent(releaseUuid)}/withdraw`,
+      { method: 'POST' },
+    ),
+};

@@ -3,13 +3,14 @@ import { useState } from 'react';
 import type { SessionPayload } from '../../api/client';
 import { AdminLinksPage } from './AdminLinksPage';
 import { AuditPage } from './AuditPage';
+import { DesktopUpdatesPage } from './DesktopUpdatesPage';
 import { KnowledgeAdminPage } from './KnowledgeAdminPage';
 import { SettingsPage } from './SettingsPage';
 import { StatsPage } from './StatsPage';
 import { SuggestionsPage } from './SuggestionsPage';
 import { TaskAdminPage } from './TaskAdminPage';
 
-type GovernancePage = 'tasks' | 'knowledge' | 'suggestions' | 'stats' | 'audit' | 'settings' | 'links';
+type GovernancePage = 'tasks' | 'knowledge' | 'suggestions' | 'stats' | 'audit' | 'settings' | 'links' | 'desktop-updates';
 
 const ITEMS: Array<{ page: GovernancePage; label: string }> = [
   { page: 'tasks', label: '任务管理' },
@@ -18,6 +19,7 @@ const ITEMS: Array<{ page: GovernancePage; label: string }> = [
   { page: 'stats', label: '全局统计' },
   { page: 'audit', label: '审计日志' },
   { page: 'settings', label: '系统设置' },
+  { page: 'desktop-updates', label: '桌面端更新' },
   { page: 'links', label: '管理入口' },
 ];
 
@@ -25,7 +27,7 @@ export function GovernanceCenter({ session }: { session: SessionPayload }) {
   const [page, setPage] = useState<GovernancePage>('tasks');
   const items = session.user.role.trim().toLowerCase() === 'admin'
     ? ITEMS
-    : ITEMS.filter((item) => item.page !== 'audit');
+    : ITEMS.filter((item) => item.page !== 'audit' && item.page !== 'desktop-updates');
   return (
     <div className="governance-shell">
       <nav aria-label="治理导航" className="governance-nav">
@@ -41,7 +43,8 @@ export function GovernanceCenter({ session }: { session: SessionPayload }) {
             : page === 'stats' ? <StatsPage />
               : page === 'audit' ? <AuditPage />
                 : page === 'settings' ? <SettingsPage />
-                  : <AdminLinksPage />}
+                  : page === 'desktop-updates' ? <DesktopUpdatesPage />
+                    : <AdminLinksPage />}
     </div>
   );
 }
