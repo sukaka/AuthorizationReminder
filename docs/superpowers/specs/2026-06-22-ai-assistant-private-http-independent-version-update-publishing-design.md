@@ -1,7 +1,7 @@
 # 聚信 AI 助手内网调试、独立版本与更新发布设计规格
 
 **日期：** 2026-06-22
-**状态：** 产品方案已确认，待书面规格复核
+**状态：** 用户已确认，进入实施计划
 **Agent 初始版本：** `1.0.0`
 **适用平台：** macOS Apple Silicon arm64、Windows 10/11 x64
 
@@ -137,9 +137,10 @@ npm run agent:version -- major|minor|patch
 
 开发机或受保护 CI：
 
-1. 使用 Agent 独立版本构建 macOS arm64、Windows x64 安装包。
+1. 使用 Agent 独立版本构建首次安装包和 Tauri 更新产物。
 2. 完成平台代码签名。
-3. 生成 Tauri 更新产物。
+3. macOS arm64 生成 DMG 和 `.app.tar.gz` 更新产物；Windows x64
+   生成 MSI/NSIS 首装包和 `.nsis.zip` 更新产物。
 4. 使用 Tauri 更新私钥签名。
 5. 输出发布描述文件、公开签名、SHA-256、平台、架构、文件大小和更新说明。
 6. 将产物上传到更新服务。
@@ -237,7 +238,7 @@ Content-Type: multipart/form-data
 target=darwin-aarch64
 sha256=<64位小写十六进制>
 signature=<Tauri公开签名>
-file=<预构建升级包>
+file=<预构建 .app.tar.gz 或 .nsis.zip 更新产物>
 ```
 
 上传流程：
@@ -250,6 +251,9 @@ file=<预构建升级包>
 
 服务端不能验证 Tauri 私钥是否正确，但客户端安装前必须使用内置公钥验证签名。
 测试和 CI 还应使用 Tauri 工具对上传样本执行端到端验证。
+
+DMG、MSI 和普通 NSIS EXE 用于首次安装，不作为此接口的更新文件。管理员上传页只
+接受 Tauri `createUpdaterArtifacts` 生成的更新产物及其 `.sig` 内容。
 
 ### 6.3 发布与撤回
 
