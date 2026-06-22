@@ -203,6 +203,43 @@ fn stale_workspace_timeout_cannot_match_a_rebuilt_window() {
 }
 
 #[test]
+fn stale_workspace_lease_cannot_authorize_a_late_binding_response() {
+    // Given: token verification started in workspace A.
+    let origin = production_origin("https://a.example.com");
+    let mut trust = ServerTrustState::new(None);
+    trust.activate_workspace(origin.clone());
+    let lease = trust.active_workspace_lease().unwrap();
+
+    // When: the workspace is revoked and rebuilt at the same Origin.
+    trust.deactivate_workspace();
+    trust.activate_workspace(origin);
+
+    // Then: the old async verification lease is no longer current.
+    assert!(!trust.is_workspace_lease_current(&lease));
+}
+
+#[test]
+fn binding_captures_and_guards_its_workspace_lease_in_one_step() {
+    // Given: the native binding command and window trust implementation.
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let commands = fs::read_to_string(root.join("src/local_commands.rs")).unwrap();
+    let manager = fs::read_to_string(root.join("src/window_manager.rs")).unwrap();
+    let bind_start = commands.find("pub async fn local_session_bind(").unwrap();
+    let bind_end = commands[bind_start..]
+        .find("pub fn local_draft_save(")
+        .map(|offset| bind_start + offset)
+        .unwrap();
+    let bind = &commands[bind_start..bind_end];
+
+    // When / Then: token verification receives a lease captured while its caller
+    // window is checked under the same trust lock, never two independent reads.
+    assert!(manager.contains("pub fn workspace_lease_for_window("));
+    assert!(bind.contains("workspace_lease_for_window(&window)?"));
+    assert!(!bind.contains("guard_business(&window"));
+    assert!(!bind.contains("active_workspace_lease()?"));
+}
+
+#[test]
 fn closing_workspace_revokes_the_active_business_origin() {
     let origin = production_origin("https://a.example.com");
     let mut trust = ServerTrustState::new(None);
@@ -272,6 +309,16 @@ fn capabilities_separate_launcher_and_workspace_commands() {
     assert!(workspace_permissions
         .iter()
         .any(|value| value == "allow-workspace-status"));
+    for command in ["allow-local-legacy-export", "allow-local-legacy-delete"] {
+        assert!(
+            workspace_permissions.iter().any(|value| value == command),
+            "{command}"
+        );
+        assert!(
+            !launcher_permissions.iter().any(|value| value == command),
+            "{command}"
+        );
+    }
     assert!(!launcher_permissions
         .iter()
         .any(|value| value == "allow-model-generate"));
@@ -351,6 +398,7 @@ fn changing_server_clears_session_cookies_and_the_old_workspace() {
     let manager = fs::read_to_string(root.join("src/window_manager.rs")).unwrap();
 
     assert!(manager.contains("app_state.local_user.clear()"));
+    assert!(manager.contains("clear_drafts_for_origin("));
     assert!(manager.contains("clear_window_cookies(&window)"));
     assert!(manager.contains("clear_window_cookies(&workspace)"));
     assert!(manager.contains("workspace.close()"));

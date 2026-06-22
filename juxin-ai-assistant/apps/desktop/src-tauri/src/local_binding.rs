@@ -59,6 +59,13 @@ impl LocalUserSession {
         }
     }
 
+    pub fn current_user_id(&self) -> Result<Option<String>, String> {
+        self.user_id
+            .lock()
+            .map(|current| current.clone())
+            .map_err(|_| "LOCAL_USER_SESSION_UNAVAILABLE".to_string())
+    }
+
     pub fn clear(&self) -> Result<(), String> {
         let mut current = self
             .user_id

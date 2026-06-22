@@ -39,6 +39,16 @@ description = "允许清理当前 SSO 用户的本地缓存"
 commands.allow = ["local_cache_clear"]
 
 [[permission]]
+identifier = "allow-local-legacy-export"
+description = "允许当前 SSO 用户导出无法确认服务器归属的旧版本机数据"
+commands.allow = ["local_legacy_export"]
+
+[[permission]]
+identifier = "allow-local-legacy-delete"
+description = "允许当前 SSO 用户删除无法确认服务器归属的旧版本机数据"
+commands.allow = ["local_legacy_delete"]
+
+[[permission]]
 identifier = "allow-local-logout"
 description = "允许清理当前 SSO 用户的本地会话草稿"
 commands.allow = ["local_logout"]

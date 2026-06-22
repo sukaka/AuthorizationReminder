@@ -89,3 +89,9 @@ pub struct CacheClearReport {
     pub completed_deleted: usize,
     pub pending_deleted: usize,
 }
+
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub struct LegacyUnassignedData {
+    pub drafts: Vec<DraftInput>,
+    pub pending_results: Vec<PendingResult>,
+}

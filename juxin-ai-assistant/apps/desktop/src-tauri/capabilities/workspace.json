@@ -24,6 +24,8 @@
     "allow-local-queue-list",
     "allow-local-queue-remove",
     "allow-local-cache-clear",
+    "allow-local-legacy-export",
+    "allow-local-legacy-delete",
     "allow-local-logout",
     "allow-model-profile-list",
     "allow-model-profile-upsert",

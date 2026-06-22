@@ -13,10 +13,19 @@ export type PendingResult = {
 };
 
 type LocalQueueRecord = {
-  id: string;
-  payload: string;
-  status: 'pending' | 'completed';
-  created_at: number;
+  readonly id: string;
+  readonly payload: string;
+  readonly status: 'pending' | 'completed';
+  readonly created_at: number;
+};
+
+export type LegacyUnassignedData = {
+  readonly drafts: readonly {
+    readonly task_id: string;
+    readonly content: string;
+    readonly saved_at: number;
+  }[];
+  readonly pending_results: readonly LocalQueueRecord[];
 };
 
 export async function loadPendingResults(userId: string): Promise<PendingResult[]> {
@@ -98,4 +107,14 @@ export async function syncPendingResults(
 
 export async function logoutLocalUser(userId: string): Promise<void> {
   await invoke('local_logout', { userId });
+}
+
+export async function exportLegacyUnassigned(
+  userId: string,
+): Promise<LegacyUnassignedData> {
+  return invoke<LegacyUnassignedData>('local_legacy_export', { userId });
+}
+
+export async function deleteLegacyUnassigned(userId: string): Promise<void> {
+  await invoke('local_legacy_delete', { userId });
 }

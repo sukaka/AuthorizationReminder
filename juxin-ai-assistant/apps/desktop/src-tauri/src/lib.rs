@@ -4,7 +4,10 @@ pub mod keychain;
 pub mod local_binding;
 mod local_commands;
 mod local_crypto;
+mod local_legacy;
+mod local_legacy_commands;
 pub mod local_queue;
+mod local_record_store;
 mod local_types;
 pub mod model_cancellation;
 mod model_client;
@@ -61,6 +64,7 @@ pub fn run() {
                 profiles: Mutex::new(profiles),
                 secrets,
                 cancellations: Mutex::new(model_cancellation::ModelCancellationRegistry::default()),
+                local_storage_lock: Mutex::new(()),
                 local_user: LocalUserSession::default(),
             });
             app.manage(
@@ -110,6 +114,8 @@ pub fn run() {
             local_commands::local_queue_list,
             local_commands::local_queue_remove,
             local_commands::local_cache_clear,
+            local_legacy_commands::local_legacy_export,
+            local_legacy_commands::local_legacy_delete,
             local_commands::local_logout,
             commands::model_profile_list,
             commands::model_profile_upsert,

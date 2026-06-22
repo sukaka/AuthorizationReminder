@@ -34,6 +34,18 @@ struct SuccessfulProbe {
     auth_portal_url: Url,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct WorkspaceLease {
+    origin: ServerOrigin,
+    generation: u64,
+}
+
+impl WorkspaceLease {
+    pub const fn origin(&self) -> &ServerOrigin {
+        &self.origin
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct WorkspaceNavigationPolicy {
     business_origin: ServerOrigin,
@@ -179,6 +191,18 @@ impl ServerTrustState {
         self.active_workspace.as_ref()
     }
 
+    pub fn active_workspace_lease(&self) -> Option<WorkspaceLease> {
+        self.active_workspace.as_ref().map(|origin| WorkspaceLease {
+            origin: origin.clone(),
+            generation: self.workspace_generation,
+        })
+    }
+
+    pub fn is_workspace_lease_current(&self, lease: &WorkspaceLease) -> bool {
+        self.workspace_generation == lease.generation
+            && self.active_workspace.as_ref() == Some(&lease.origin)
+    }
+
     pub fn deactivate_workspace(&mut self) -> bool {
         let was_active = self.active_workspace.is_some();
         self.active_workspace = None;
@@ -242,6 +266,38 @@ impl WindowManagerState {
             .cloned()
             .ok_or_else(|| "WORKSPACE_NOT_ACTIVE".to_string())
     }
+
+    pub fn workspace_lease_for_window(
+        &self,
+        window: &WebviewWindow,
+    ) -> Result<WorkspaceLease, String> {
+        let trust = self
+            .trust
+            .lock()
+            .map_err(|_| "SERVER_TRUST_STATE_UNAVAILABLE".to_string())?;
+        let lease = trust
+            .active_workspace_lease()
+            .ok_or_else(|| "WORKSPACE_NOT_ACTIVE".to_string())?;
+        guard_window(window, CommandScope::Business, Some(lease.origin()))?;
+        Ok(lease)
+    }
+
+    pub fn with_current_workspace_lease<T>(
+        &self,
+        window: &WebviewWindow,
+        lease: &WorkspaceLease,
+        operation: impl FnOnce(&ServerOrigin) -> Result<T, String>,
+    ) -> Result<T, String> {
+        let trust = self
+            .trust
+            .lock()
+            .map_err(|_| "SERVER_TRUST_STATE_UNAVAILABLE".to_string())?;
+        if !trust.is_workspace_lease_current(lease) {
+            return Err("WORKSPACE_LEASE_STALE".to_string());
+        }
+        guard_window(window, CommandScope::Business, Some(lease.origin()))?;
+        operation(lease.origin())
+    }
 }
 
 #[tauri::command]
@@ -299,7 +355,7 @@ pub fn server_config_save(
 ) -> Result<(), String> {
     guard_window(&window, CommandScope::Launcher, None)?;
     let origin = ServerOrigin::parse(&origin).map_err(|error| error.to_string())?;
-    let (config, switching) = {
+    let (config, switching, previous_origin) = {
         let trust = state
             .trust
             .lock()
@@ -307,12 +363,26 @@ pub fn server_config_save(
         (
             trust.config_after_successful_probe(&origin)?,
             trust.will_switch_to(&origin),
+            trust.saved().map(|saved| saved.server_origin().clone()),
         )
     };
     if switching {
         workspace_closed(&state);
         let mut cleanup_result = Ok(());
         merge_cleanup_result(&mut cleanup_result, app_state.cancel_all_model_requests());
+        if let (Some(user_id), Some(previous_origin)) = (
+            app_state.local_user.current_user_id()?,
+            previous_origin.as_ref(),
+        ) {
+            merge_cleanup_result(
+                &mut cleanup_result,
+                crate::local_commands::clear_drafts_for_origin(
+                    &app_state,
+                    &user_id,
+                    previous_origin,
+                ),
+            );
+        }
         merge_cleanup_result(&mut cleanup_result, app_state.local_user.clear());
         merge_cleanup_result(&mut cleanup_result, clear_window_cookies(&window));
         if let Some(workspace) = app.get_webview_window("workspace") {

@@ -2,7 +2,9 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 
 import { loadDraft, saveDraft } from '../src/local/drafts';
 import {
+  deleteLegacyUnassigned,
   enqueuePendingResult,
+  exportLegacyUnassigned,
   logoutLocalUser,
   syncPendingResults,
   type PendingResult,
@@ -89,4 +91,24 @@ it('logs out only the current local user without deleting unsynced results', asy
   invokeMock.mockResolvedValueOnce({ drafts_deleted: 2, completed_deleted: 0, pending_deleted: 0 });
   await logoutLocalUser('u-1');
   expect(invokeMock).toHaveBeenCalledWith('local_logout', { userId: 'u-1' });
+});
+
+it('exports or deletes legacy-unassigned data without adding an origin argument', async () => {
+  invokeMock.mockResolvedValueOnce({
+    drafts: [],
+    pending_results: [],
+  });
+  expect(await exportLegacyUnassigned('u-1')).toEqual({
+    drafts: [],
+    pending_results: [],
+  });
+  expect(invokeMock).toHaveBeenLastCalledWith('local_legacy_export', {
+    userId: 'u-1',
+  });
+
+  invokeMock.mockResolvedValueOnce(undefined);
+  await deleteLegacyUnassigned('u-1');
+  expect(invokeMock).toHaveBeenLastCalledWith('local_legacy_delete', {
+    userId: 'u-1',
+  });
 });

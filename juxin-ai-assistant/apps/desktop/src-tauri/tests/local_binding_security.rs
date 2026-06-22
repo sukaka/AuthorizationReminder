@@ -77,6 +77,19 @@ fn verified_identity_switch_logs_out_previous_user_before_binding() {
 }
 
 #[test]
+fn current_user_id_is_available_for_origin_switch_cleanup() {
+    let session = LocalUserSession::default();
+    assert_eq!(session.current_user_id().unwrap(), None);
+
+    session.bind_verified("user-1", |_| Ok(())).unwrap();
+
+    assert_eq!(
+        session.current_user_id().unwrap(),
+        Some("user-1".to_string())
+    );
+}
+
+#[test]
 fn failed_previous_user_cleanup_preserves_existing_binding() {
     // Given: an existing verified binding.
     let session = LocalUserSession::default();

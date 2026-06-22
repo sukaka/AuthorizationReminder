@@ -17,6 +17,7 @@ pub struct AppState {
     pub profiles: Mutex<Vec<ModelProfilePublic>>,
     pub secrets: Arc<dyn SecretStore>,
     pub cancellations: Mutex<crate::model_cancellation::ModelCancellationRegistry>,
+    pub local_storage_lock: Mutex<()>,
     pub local_user: crate::local_commands::LocalUserSession,
 }
 

@@ -2,12 +2,39 @@ use crate::commands::AppState;
 use crate::local_binding::verify_binding_token;
 pub use crate::local_binding::LocalUserSession;
 use crate::local_queue::{
-    CacheClearOptions, CacheClearReport, DraftInput, LocalQueue, PendingResult, QueueStatus,
+    configured_legacy_origin, CacheClearOptions, CacheClearReport, DraftInput, LocalQueue,
+    LocalQueueError, PendingResult, QueueStatus,
 };
 use tauri::{AppHandle, WebviewWindow};
 
 fn queue(state: &AppState) -> LocalQueue<'_> {
-    LocalQueue::new(&state.local_storage_path, state.secrets.as_ref())
+    match configured_legacy_origin() {
+        Some(origin) => LocalQueue::with_legacy_origin(
+            &state.local_storage_path,
+            state.secrets.as_ref(),
+            origin,
+        ),
+        None => LocalQueue::new(&state.local_storage_path, state.secrets.as_ref()),
+    }
+}
+
+pub(crate) fn with_queue<T>(
+    state: &AppState,
+    operation: impl FnOnce(&LocalQueue<'_>) -> Result<T, LocalQueueError>,
+) -> Result<T, String> {
+    let _guard = state
+        .local_storage_lock
+        .lock()
+        .map_err(|_| "LOCAL_STORAGE_UNAVAILABLE".to_string())?;
+    operation(&queue(state)).map_err(|error| error.to_string())
+}
+
+pub(crate) fn clear_drafts_for_origin(
+    state: &AppState,
+    user_id: &str,
+    origin: &crate::server_config::ServerOrigin,
+) -> Result<(), String> {
+    with_queue(state, |queue| queue.logout(user_id, origin).map(|_| ()))
 }
 
 #[tauri::command]
@@ -17,14 +44,12 @@ pub async fn local_session_bind(
     windows: tauri::State<'_, crate::window_manager::WindowManagerState>,
     token: String,
 ) -> Result<(), String> {
-    crate::window_manager::guard_business(&window, &windows)?;
-    let origin = windows.active_origin()?;
-    let user_id = verify_binding_token(origin.as_url(), &token).await?;
-    state.local_user.bind_verified(&user_id, |previous| {
-        queue(&state)
-            .logout(previous)
-            .map(|_| ())
-            .map_err(|error| error.to_string())
+    let lease = windows.workspace_lease_for_window(&window)?;
+    let user_id = verify_binding_token(lease.origin().as_url(), &token).await?;
+    windows.with_current_workspace_lease(&window, &lease, |origin| {
+        state.local_user.bind_verified(&user_id, |previous| {
+            with_queue(&state, |queue| queue.logout(previous, origin).map(|_| ()))
+        })
     })
 }
 
@@ -38,10 +63,11 @@ pub fn local_draft_save(
     content: String,
 ) -> Result<(), String> {
     crate::window_manager::guard_business(&window, &windows)?;
+    let origin = windows.active_origin()?;
     state.local_user.authorize(&user_id)?;
-    queue(&state)
-        .save_draft(&user_id, DraftInput::new(&task_id, &content))
-        .map_err(|error| error.to_string())
+    with_queue(&state, |queue| {
+        queue.save_draft(&user_id, &origin, DraftInput::new(&task_id, &content))
+    })
 }
 
 #[tauri::command]
@@ -53,10 +79,11 @@ pub fn local_draft_load(
     task_id: String,
 ) -> Result<Option<DraftInput>, String> {
     crate::window_manager::guard_business(&window, &windows)?;
+    let origin = windows.active_origin()?;
     state.local_user.authorize(&user_id)?;
-    queue(&state)
-        .load_draft(&user_id, &task_id)
-        .map_err(|error| error.to_string())
+    with_queue(&state, |queue| {
+        queue.load_draft(&user_id, &origin, &task_id)
+    })
 }
 
 #[tauri::command]
@@ -68,10 +95,11 @@ pub fn local_draft_delete(
     task_id: String,
 ) -> Result<(), String> {
     crate::window_manager::guard_business(&window, &windows)?;
+    let origin = windows.active_origin()?;
     state.local_user.authorize(&user_id)?;
-    queue(&state)
-        .delete_draft(&user_id, &task_id)
-        .map_err(|error| error.to_string())
+    with_queue(&state, |queue| {
+        queue.delete_draft(&user_id, &origin, &task_id)
+    })
 }
 
 #[tauri::command]
@@ -84,13 +112,15 @@ pub fn local_queue_push(
     payload: String,
 ) -> Result<(), String> {
     crate::window_manager::guard_business(&window, &windows)?;
+    let origin = windows.active_origin()?;
     state.local_user.authorize(&user_id)?;
-    queue(&state)
-        .push(
+    with_queue(&state, |queue| {
+        queue.push(
             &user_id,
+            &origin,
             PendingResult::new(&result_id, &payload, QueueStatus::Pending),
         )
-        .map_err(|error| error.to_string())
+    })
 }
 
 #[tauri::command]
@@ -101,10 +131,9 @@ pub fn local_queue_list(
     user_id: String,
 ) -> Result<Vec<PendingResult>, String> {
     crate::window_manager::guard_business(&window, &windows)?;
+    let origin = windows.active_origin()?;
     state.local_user.authorize(&user_id)?;
-    queue(&state)
-        .list(&user_id)
-        .map_err(|error| error.to_string())
+    with_queue(&state, |queue| queue.list(&user_id, &origin))
 }
 
 #[tauri::command]
@@ -116,10 +145,9 @@ pub fn local_queue_remove(
     result_id: String,
 ) -> Result<(), String> {
     crate::window_manager::guard_business(&window, &windows)?;
+    let origin = windows.active_origin()?;
     state.local_user.authorize(&user_id)?;
-    queue(&state)
-        .remove(&user_id, &result_id)
-        .map_err(|error| error.to_string())
+    with_queue(&state, |queue| queue.remove(&user_id, &origin, &result_id))
 }
 
 #[tauri::command]
@@ -131,15 +159,16 @@ pub fn local_cache_clear(
     delete_unsynced: bool,
 ) -> Result<CacheClearReport, String> {
     crate::window_manager::guard_business(&window, &windows)?;
+    let origin = windows.active_origin()?;
     state.local_user.authorize(&user_id)?;
     let options = if delete_unsynced {
         CacheClearOptions::delete_all()
     } else {
         CacheClearOptions::preserve_unsynced()
     };
-    queue(&state)
-        .clear_cache(&user_id, options)
-        .map_err(|error| error.to_string())
+    with_queue(&state, |queue| {
+        queue.clear_cache(&user_id, &origin, options)
+    })
 }
 
 #[tauri::command]
@@ -151,11 +180,10 @@ pub fn local_logout(
     user_id: String,
 ) -> Result<CacheClearReport, String> {
     crate::window_manager::guard_business(&window, &windows)?;
+    let origin = windows.active_origin()?;
     state.cancel_all_model_requests()?;
     let report = state.local_user.logout(&user_id, |verified_user_id| {
-        queue(&state)
-            .logout(verified_user_id)
-            .map_err(|error| error.to_string())
+        with_queue(&state, |queue| queue.logout(verified_user_id, &origin))
     })?;
     crate::window_manager::workspace_closed(&windows);
     let mut cleanup_result = Ok(());

@@ -1,23 +1,30 @@
-use std::fs::{self, File};
-use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use serde::de::DeserializeOwned;
-
 use crate::keychain::SecretStore;
-use crate::local_crypto::{decrypt, device_key, encrypt};
+use crate::local_legacy::{delete_unassigned, export_unassigned, migrate_legacy_records};
+use crate::local_record_store::{LocalRecordStore, RecordKind};
 pub use crate::local_types::{
-    CacheClearOptions, CacheClearReport, DraftInput, LocalQueueError, PendingResult, QueueStatus,
+    CacheClearOptions, CacheClearReport, DraftInput, LegacyUnassignedData, LocalQueueError,
+    PendingResult, QueueStatus,
 };
+use crate::server_config::ServerOrigin;
 
 const MAX_PENDING_RESULTS: usize = 100;
 const MAX_QUEUE_BYTES: usize = 20 * 1024 * 1024;
 const DRAFT_RETENTION_SECONDS: u64 = 7 * 24 * 60 * 60;
 
+pub fn configured_legacy_origin() -> Option<ServerOrigin> {
+    option_env!("AI_ASSISTANT_LEGACY_SERVER_ORIGIN")
+        .filter(|value| !value.is_empty())
+        .and_then(|value| ServerOrigin::parse(value).ok())
+}
+
 pub struct LocalQueue<'a> {
     root: PathBuf,
     secrets: &'a dyn SecretStore,
+    records: LocalRecordStore<'a>,
+    legacy_origin: Option<ServerOrigin>,
 }
 
 impl<'a> LocalQueue<'a> {
@@ -25,92 +32,127 @@ impl<'a> LocalQueue<'a> {
         Self {
             root: root.to_path_buf(),
             secrets,
+            records: LocalRecordStore::new(root, secrets),
+            legacy_origin: None,
         }
     }
 
-    pub fn push(&self, user_id: &str, result: PendingResult) -> Result<(), LocalQueueError> {
-        validate_identifier(user_id)?;
-        validate_identifier(&result.id)?;
-        let mut results: Vec<PendingResult> = self.read(user_id, "sync-queue")?;
-        results.retain(|item| item.id != result.id);
+    pub fn with_legacy_origin(
+        root: &Path,
+        secrets: &'a dyn SecretStore,
+        legacy_origin: ServerOrigin,
+    ) -> Self {
+        Self {
+            root: root.to_path_buf(),
+            secrets,
+            records: LocalRecordStore::new(root, secrets),
+            legacy_origin: Some(legacy_origin),
+        }
+    }
+
+    pub fn push(
+        &self,
+        user_id: &str,
+        origin: &ServerOrigin,
+        result: PendingResult,
+    ) -> Result<(), LocalQueueError> {
+        self.migrate_legacy(user_id)?;
+        let results = self.list_current(user_id, origin)?;
         let pending_count = results
             .iter()
-            .filter(|item| item.status == QueueStatus::Pending)
+            .filter(|item| item.status == QueueStatus::Pending && item.id != result.id)
             .count();
         if result.status == QueueStatus::Pending && pending_count >= MAX_PENDING_RESULTS {
             return Err(LocalQueueError::QueueLimit);
         }
-        results.push(result);
-        let serialized = serde_json::to_vec(&results).map_err(|_| LocalQueueError::Corrupt)?;
-        if serialized.len() > MAX_QUEUE_BYTES {
+        let existing_bytes = results
+            .iter()
+            .filter(|item| item.id != result.id)
+            .map(|item| serde_json::to_vec(item).map(|bytes| bytes.len()))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|_| LocalQueueError::Corrupt)?
+            .into_iter()
+            .sum::<usize>();
+        let result_bytes = serde_json::to_vec(&result).map_err(|_| LocalQueueError::Corrupt)?;
+        if existing_bytes.saturating_add(result_bytes.len()) > MAX_QUEUE_BYTES {
             return Err(LocalQueueError::QueueLimit);
         }
-        self.write(user_id, "sync-queue", &serialized)
+        self.records.write(
+            user_id,
+            origin,
+            RecordKind::PendingResult,
+            &result.id,
+            &result,
+        )
     }
 
-    pub fn list(&self, user_id: &str) -> Result<Vec<PendingResult>, LocalQueueError> {
-        self.read(user_id, "sync-queue")
+    pub fn list(
+        &self,
+        user_id: &str,
+        origin: &ServerOrigin,
+    ) -> Result<Vec<PendingResult>, LocalQueueError> {
+        self.migrate_legacy(user_id)?;
+        self.list_current(user_id, origin)
     }
 
-    pub fn remove(&self, user_id: &str, result_id: &str) -> Result<(), LocalQueueError> {
-        validate_identifier(user_id)?;
-        validate_identifier(result_id)?;
-        let mut results: Vec<PendingResult> = self.read(user_id, "sync-queue")?;
-        let original_len = results.len();
-        results.retain(|item| item.id != result_id);
-        if results.len() == original_len {
-            return Ok(());
-        }
-        if results.is_empty() {
-            return self.remove_file(user_id, "sync-queue");
-        }
-        let serialized = serde_json::to_vec(&results).map_err(|_| LocalQueueError::Corrupt)?;
-        self.write(user_id, "sync-queue", &serialized)
+    pub fn remove(
+        &self,
+        user_id: &str,
+        origin: &ServerOrigin,
+        result_id: &str,
+    ) -> Result<(), LocalQueueError> {
+        self.migrate_legacy(user_id)?;
+        self.records
+            .remove(user_id, origin, RecordKind::PendingResult, result_id)
     }
 
-    pub fn save_draft(&self, user_id: &str, draft: DraftInput) -> Result<(), LocalQueueError> {
-        validate_identifier(user_id)?;
-        validate_identifier(&draft.task_id)?;
-        let mut drafts: Vec<DraftInput> = self.read(user_id, "drafts")?;
-        drafts.retain(|item| item.task_id != draft.task_id);
-        drafts.push(draft);
-        let serialized = serde_json::to_vec(&drafts).map_err(|_| LocalQueueError::Corrupt)?;
-        self.write(user_id, "drafts", &serialized)
+    pub fn save_draft(
+        &self,
+        user_id: &str,
+        origin: &ServerOrigin,
+        draft: DraftInput,
+    ) -> Result<(), LocalQueueError> {
+        self.migrate_legacy(user_id)?;
+        self.records
+            .write(user_id, origin, RecordKind::Draft, &draft.task_id, &draft)
     }
 
     pub fn load_draft(
         &self,
         user_id: &str,
+        origin: &ServerOrigin,
         task_id: &str,
     ) -> Result<Option<DraftInput>, LocalQueueError> {
-        validate_identifier(task_id)?;
-        let drafts: Vec<DraftInput> = self.read(user_id, "drafts")?;
+        self.migrate_legacy(user_id)?;
+        let draft: Option<DraftInput> =
+            self.records
+                .read(user_id, origin, RecordKind::Draft, task_id)?;
         let oldest_allowed = unix_seconds().saturating_sub(DRAFT_RETENTION_SECONDS);
-        Ok(drafts
-            .into_iter()
-            .find(|draft| draft.task_id == task_id && draft.saved_at >= oldest_allowed))
+        Ok(draft.filter(|item| item.saved_at >= oldest_allowed))
     }
 
-    pub fn delete_draft(&self, user_id: &str, task_id: &str) -> Result<(), LocalQueueError> {
-        validate_identifier(user_id)?;
-        validate_identifier(task_id)?;
-        let mut drafts: Vec<DraftInput> = self.read(user_id, "drafts")?;
-        let original_len = drafts.len();
-        drafts.retain(|draft| draft.task_id != task_id);
-        if drafts.len() == original_len {
-            return Ok(());
-        }
-        if drafts.is_empty() {
-            return self.remove_file(user_id, "drafts");
-        }
-        let serialized = serde_json::to_vec(&drafts).map_err(|_| LocalQueueError::Corrupt)?;
-        self.write(user_id, "drafts", &serialized)
+    pub fn delete_draft(
+        &self,
+        user_id: &str,
+        origin: &ServerOrigin,
+        task_id: &str,
+    ) -> Result<(), LocalQueueError> {
+        self.migrate_legacy(user_id)?;
+        self.records
+            .remove(user_id, origin, RecordKind::Draft, task_id)
     }
 
-    pub fn logout(&self, user_id: &str) -> Result<CacheClearReport, LocalQueueError> {
-        validate_identifier(user_id)?;
-        let drafts: Vec<DraftInput> = self.read(user_id, "drafts")?;
-        self.remove_file(user_id, "drafts")?;
+    pub fn logout(
+        &self,
+        user_id: &str,
+        origin: &ServerOrigin,
+    ) -> Result<CacheClearReport, LocalQueueError> {
+        self.migrate_legacy(user_id)?;
+        let drafts: Vec<DraftInput> = self.records.list(user_id, origin, RecordKind::Draft)?;
+        for draft in &drafts {
+            self.records
+                .remove(user_id, origin, RecordKind::Draft, &draft.task_id)?;
+        }
         Ok(CacheClearReport {
             drafts_deleted: drafts.len(),
             ..CacheClearReport::default()
@@ -120,37 +162,30 @@ impl<'a> LocalQueue<'a> {
     pub fn clear_cache(
         &self,
         user_id: &str,
+        origin: &ServerOrigin,
         options: CacheClearOptions,
     ) -> Result<CacheClearReport, LocalQueueError> {
-        validate_identifier(user_id)?;
-        let drafts: Vec<DraftInput> = self.read(user_id, "drafts")?;
-        let results: Vec<PendingResult> = self.read(user_id, "sync-queue")?;
+        self.migrate_legacy(user_id)?;
+        let drafts: Vec<DraftInput> = self.records.list(user_id, origin, RecordKind::Draft)?;
+        let results = self.list_current(user_id, origin)?;
+        for draft in &drafts {
+            self.records
+                .remove(user_id, origin, RecordKind::Draft, &draft.task_id)?;
+        }
         let completed_deleted = results
             .iter()
             .filter(|item| item.status == QueueStatus::Completed)
             .count();
-        let pending_deleted = if options.delete_unsynced {
-            results
-                .iter()
-                .filter(|item| item.status == QueueStatus::Pending)
-                .count()
-        } else {
-            0
-        };
-        let retained: Vec<PendingResult> = if options.delete_unsynced {
-            Vec::new()
-        } else {
-            results
-                .into_iter()
-                .filter(|item| item.status == QueueStatus::Pending)
-                .collect()
-        };
-        self.remove_file(user_id, "drafts")?;
-        if retained.is_empty() {
-            self.remove_file(user_id, "sync-queue")?;
-        } else {
-            let serialized = serde_json::to_vec(&retained).map_err(|_| LocalQueueError::Corrupt)?;
-            self.write(user_id, "sync-queue", &serialized)?;
+        let pending_deleted = results
+            .iter()
+            .filter(|item| options.delete_unsynced && item.status == QueueStatus::Pending)
+            .count();
+        for result in results.iter().filter(|item| {
+            item.status == QueueStatus::Completed
+                || (options.delete_unsynced && item.status == QueueStatus::Pending)
+        }) {
+            self.records
+                .remove(user_id, origin, RecordKind::PendingResult, &result.id)?;
         }
         Ok(CacheClearReport {
             drafts_deleted: drafts.len(),
@@ -159,54 +194,37 @@ impl<'a> LocalQueue<'a> {
         })
     }
 
-    fn read<T>(&self, user_id: &str, purpose: &str) -> Result<T, LocalQueueError>
-    where
-        T: DeserializeOwned + Default,
-    {
-        validate_identifier(user_id)?;
-        let path = self.path(user_id, purpose);
-        if !path.exists() {
-            return Ok(T::default());
-        }
-        let envelope = fs::read(path).map_err(|_| LocalQueueError::Io)?;
-        let plaintext = decrypt(&device_key(self.secrets)?, user_id, purpose, &envelope)?;
-        serde_json::from_slice(&plaintext).map_err(|_| LocalQueueError::Corrupt)
+    pub fn export_legacy_unassigned(
+        &self,
+        user_id: &str,
+    ) -> Result<LegacyUnassignedData, LocalQueueError> {
+        self.migrate_legacy(user_id)?;
+        export_unassigned(&self.root, self.secrets, user_id)
     }
 
-    fn write(&self, user_id: &str, purpose: &str, plaintext: &[u8]) -> Result<(), LocalQueueError> {
-        fs::create_dir_all(&self.root).map_err(|_| LocalQueueError::Io)?;
-        let envelope = encrypt(&device_key(self.secrets)?, user_id, purpose, plaintext)?;
-        let destination = self.path(user_id, purpose);
-        let temporary = destination.with_extension("bin.tmp");
-        let mut file = File::create(&temporary).map_err(|_| LocalQueueError::Io)?;
-        file.write_all(&envelope).map_err(|_| LocalQueueError::Io)?;
-        file.sync_all().map_err(|_| LocalQueueError::Io)?;
-        fs::rename(temporary, destination).map_err(|_| LocalQueueError::Io)
+    pub fn delete_legacy_unassigned(&self, user_id: &str) -> Result<(), LocalQueueError> {
+        self.migrate_legacy(user_id)?;
+        delete_unassigned(&self.root, user_id)
     }
 
-    fn remove_file(&self, user_id: &str, purpose: &str) -> Result<(), LocalQueueError> {
-        let path = self.path(user_id, purpose);
-        if path.exists() {
-            fs::remove_file(path).map_err(|_| LocalQueueError::Io)?;
-        }
-        Ok(())
+    fn list_current(
+        &self,
+        user_id: &str,
+        origin: &ServerOrigin,
+    ) -> Result<Vec<PendingResult>, LocalQueueError> {
+        self.records
+            .list(user_id, origin, RecordKind::PendingResult)
     }
 
-    fn path(&self, user_id: &str, purpose: &str) -> PathBuf {
-        self.root.join(format!("{purpose}-{user_id}.bin"))
+    fn migrate_legacy(&self, user_id: &str) -> Result<(), LocalQueueError> {
+        migrate_legacy_records(
+            &self.root,
+            self.secrets,
+            &self.records,
+            user_id,
+            self.legacy_origin.as_ref(),
+        )
     }
-}
-
-fn validate_identifier(value: &str) -> Result<(), LocalQueueError> {
-    if value.is_empty()
-        || value.len() > 128
-        || !value
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
-    {
-        return Err(LocalQueueError::InvalidInput);
-    }
-    Ok(())
 }
 
 pub(crate) fn unix_seconds() -> u64 {

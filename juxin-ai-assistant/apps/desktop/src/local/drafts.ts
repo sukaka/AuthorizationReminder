@@ -1,6 +1,10 @@
 import { invoke } from '@tauri-apps/api/core';
 
-type DraftRecord = { task_id: string; content: string; saved_at: number };
+type DraftRecord = {
+  readonly task_id: string;
+  readonly content: string;
+  readonly saved_at: number;
+};
 
 function assertNoSecretKeys(value: unknown): void {
   if (!value || typeof value !== 'object') return;
