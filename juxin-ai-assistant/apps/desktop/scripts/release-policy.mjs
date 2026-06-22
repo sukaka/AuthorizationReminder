@@ -21,11 +21,15 @@ export function resolveUpdatePolicy(input) {
   if (input.enabled !== true) {
     return { enabled: false, mayRequestUpdates: false };
   }
-  const endpointIsSecure = typeof input.endpoint === "string"
-    && input.endpoint.startsWith("https://");
+  const buildMode = input.buildMode ?? "production";
+  const allowsPrivateHttp = buildMode === "lan-test" || buildMode === "development";
+  const protocolOk = allowsPrivateHttp
+    ? (input.endpoint?.startsWith("https://") || input.endpoint?.startsWith("http://"))
+    : input.endpoint?.startsWith("https://");
   const hasPublicKey = typeof input.publicKey === "string" && input.publicKey.trim().length > 0;
-  if (!endpointIsSecure || !hasPublicKey) {
-    throw new Error("enabled updater requires an HTTPS endpoint and public key");
+  if (!protocolOk || !hasPublicKey) {
+    const protocolLabel = allowsPrivateHttp ? "HTTPS 或 HTTP" : "HTTPS";
+    throw new Error(`已启用更新需要 ${protocolLabel} 端点和公钥`);
   }
   return {
     enabled: true,

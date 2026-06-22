@@ -45,7 +45,7 @@ for (const invalid of [
   test(`update policy rejects incomplete enabled settings: ${JSON.stringify(invalid)}`, () => {
     // Given: updater was enabled without a complete secure configuration.
     // When / Then: policy parsing rejects the invalid state.
-    assert.throws(() => resolveUpdatePolicy(invalid), /enabled updater requires/i);
+    assert.throws(() => resolveUpdatePolicy(invalid), /已启用更新需要/i);
   });
 }
 
