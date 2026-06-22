@@ -24,6 +24,32 @@ export type WorkspaceRecovery = {
   readonly reason: ProbeFailureKind | null;
 };
 
+export type UpdateInfo = {
+  readonly version: string;
+  readonly notes: string;
+  readonly contentLength: number | null;
+};
+
+export type UpdateFailureStage = 'check' | 'download' | 'install' | 'defer';
+
+export type UpdateStatus =
+  | { readonly kind: 'idle'; readonly enabled: boolean }
+  | { readonly kind: 'checking' }
+  | { readonly kind: 'available'; readonly update: UpdateInfo }
+  | {
+      readonly kind: 'downloading';
+      readonly update: UpdateInfo;
+      readonly received: number;
+      readonly total: number | null;
+    }
+  | { readonly kind: 'installing'; readonly update: UpdateInfo }
+  | {
+      readonly kind: 'failed';
+      readonly stage: UpdateFailureStage;
+      readonly update: UpdateInfo | null;
+      readonly message: string;
+    };
+
 export interface DesktopBridge {
   readonly isLocalLauncherContext: () => boolean;
   readonly getServerConfig: () => Promise<ServerConfigSnapshot>;
@@ -32,6 +58,14 @@ export interface DesktopBridge {
   readonly openWorkspace: (origin: string) => Promise<void>;
   readonly onWorkspaceRecovered: (
     listener: (recovery: WorkspaceRecovery) => void,
+  ) => Promise<() => void>;
+  readonly getUpdateStatus: () => Promise<UpdateStatus>;
+  readonly checkForUpdates: () => Promise<UpdateStatus>;
+  readonly downloadAndInstallUpdate: () => Promise<void>;
+  readonly cancelUpdate: () => Promise<void>;
+  readonly deferUpdate: () => Promise<void>;
+  readonly onUpdateStatusChanged: (
+    listener: (status: UpdateStatus) => void,
   ) => Promise<() => void>;
 }
 
@@ -139,6 +173,21 @@ export const desktopBridge: DesktopBridge = {
   },
   onWorkspaceRecovered: async (listener) =>
     listen<WorkspaceRecovery>('workspace-recovered', (event) => {
+      listener(event.payload);
+    }),
+  getUpdateStatus: async () => invoke<UpdateStatus>('update_status'),
+  checkForUpdates: async () => invoke<UpdateStatus>('update_check'),
+  downloadAndInstallUpdate: async () => {
+    await invoke('update_download_and_install');
+  },
+  cancelUpdate: async () => {
+    await invoke('update_cancel');
+  },
+  deferUpdate: async () => {
+    await invoke('update_defer');
+  },
+  onUpdateStatusChanged: async (listener) =>
+    listen<UpdateStatus>('update-status-changed', (event) => {
       listener(event.payload);
     }),
 };

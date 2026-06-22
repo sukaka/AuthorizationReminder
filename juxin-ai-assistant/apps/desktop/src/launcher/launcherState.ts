@@ -15,27 +15,39 @@ export type LauncherState =
       readonly reason: ProbeFailureKind;
     }
   | { readonly kind: 'authenticating'; readonly origin: string }
-  | { readonly kind: 'workspace-ready'; readonly origin: string }
-  | {
-      readonly kind: 'update-available';
-      readonly origin: string;
-      readonly version: string;
-    }
-  | {
-      readonly kind: 'updating';
-      readonly origin: string;
-      readonly progress: number;
-    }
-  | {
-      readonly kind: 'update-failed';
-      readonly origin: string;
-      readonly message: string;
-    };
+  | { readonly kind: 'workspace-ready'; readonly origin: string };
 
 export type OriginValidation =
   | { readonly kind: 'empty' }
   | { readonly kind: 'invalid'; readonly message: string }
   | { readonly kind: 'valid'; readonly origin: string };
+
+export function launcherStatusContent(state: LauncherState) {
+  switch (state.kind) {
+    case 'booting':
+      return { tone: 'neutral', message: '正在读取本机设置…' } as const;
+    case 'needs-server':
+      return {
+        tone: state.notice ? 'neutral' : 'muted',
+        message: state.notice ?? '请先填写远程服务地址并测试连接。',
+      } as const;
+    case 'checking':
+      return { tone: 'neutral', message: '正在验证服务和登录能力…' } as const;
+    case 'server-ready':
+      return { tone: 'success', message: '连接成功，可以使用统一登录。' } as const;
+    case 'server-unreachable':
+      return {
+        tone: 'danger',
+        message: probeFailureMessage(state.reason),
+      } as const;
+    case 'authenticating':
+      return { tone: 'neutral', message: '正在打开统一登录…' } as const;
+    case 'workspace-ready':
+      return { tone: 'success', message: '工作台已就绪。' } as const;
+    default:
+      return assertNever(state);
+  }
+}
 
 export function validateServerOrigin(
   raw: string,

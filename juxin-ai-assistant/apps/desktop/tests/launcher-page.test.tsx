@@ -7,6 +7,7 @@ import { LauncherPage } from '../src/launcher/LauncherPage';
 import type {
   DesktopBridge,
   ProbeFailureKind,
+  UpdateStatus,
 } from '../src/remote/desktopBridge';
 import { desktopBridge } from '../src/remote/desktopBridge';
 
@@ -19,6 +20,14 @@ type FakeBridgeOptions = {
   readonly registerWorkspaceRecovery?: (
     listener: (recovery: { readonly reason: ProbeFailureKind }) => void,
   ) => void;
+  readonly updateStatus?: UpdateStatus;
+  readonly checkResult?: UpdateStatus;
+  readonly checkFailure?: boolean;
+  readonly installFailure?: boolean;
+  readonly cancelFailure?: boolean;
+  readonly deferFailure?: boolean;
+  readonly registerUpdateStatus?: (listener: (status: UpdateStatus) => void) => void;
+  readonly updateCallOrder?: string[];
 };
 
 function fakeBridge(options: FakeBridgeOptions = {}): DesktopBridge {
@@ -42,6 +51,29 @@ function fakeBridge(options: FakeBridgeOptions = {}): DesktopBridge {
     openWorkspace: vi.fn().mockResolvedValue(undefined),
     onWorkspaceRecovered: vi.fn().mockImplementation(async (listener) => {
       options.registerWorkspaceRecovery?.(listener);
+      return () => undefined;
+    }),
+    getUpdateStatus: vi.fn().mockImplementation(async () => {
+      options.updateCallOrder?.push('status');
+      return options.updateStatus ?? { kind: 'idle', enabled: true };
+    }),
+    checkForUpdates: options.checkFailure
+      ? vi.fn().mockRejectedValue(new Error('check failed'))
+      : vi.fn().mockResolvedValue(
+          options.checkResult ?? { kind: 'idle', enabled: true },
+        ),
+    downloadAndInstallUpdate: options.installFailure
+      ? vi.fn().mockRejectedValue(new Error('download failed'))
+      : vi.fn().mockResolvedValue(undefined),
+    cancelUpdate: options.cancelFailure
+      ? vi.fn().mockRejectedValue(new Error('cancel failed'))
+      : vi.fn().mockResolvedValue(undefined),
+    deferUpdate: options.deferFailure
+      ? vi.fn().mockRejectedValue(new Error('defer failed'))
+      : vi.fn().mockResolvedValue(undefined),
+    onUpdateStatusChanged: vi.fn().mockImplementation(async (listener) => {
+      options.updateCallOrder?.push('listen');
+      options.registerUpdateStatus?.(listener);
       return () => undefined;
     }),
   };
@@ -130,11 +162,155 @@ describe('local launcher', () => {
     ).toBeVisible();
 
     await user.click(screen.getByRole('button', { name: '检查更新' }));
+    expect(await screen.findByText('当前已是最新版本。')).toBeVisible();
+  });
+
+  it('subscribes before reading update status and releases the listener', async () => {
+    const order: string[] = [];
+    const unlisten = vi.fn();
+    const bridge = fakeBridge({ updateCallOrder: order });
+    vi.mocked(bridge.onUpdateStatusChanged).mockImplementation(async () => {
+      order.push('listen');
+      return unlisten;
+    });
+
+    const view = render(<LauncherPage bridge={bridge} />);
+    await waitFor(() => expect(bridge.getUpdateStatus).toHaveBeenCalledOnce());
+    expect(order).toEqual(['listen', 'status']);
+
+    view.unmount();
+    expect(unlisten).toHaveBeenCalledOnce();
+  });
+
+  it('keeps server controls available while checking for updates', async () => {
+    const user = userEvent.setup();
+    let finishCheck: ((status: UpdateStatus) => void) | undefined;
+    const bridge = fakeBridge({
+      savedOrigin: 'https://ai.example.com',
+      lastSuccessfulCheckAt: '2026-06-21T04:00:00Z',
+    });
+    vi.mocked(bridge.checkForUpdates).mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          finishCheck = resolve;
+        }),
+    );
+
+    render(<LauncherPage bridge={bridge} />);
+    const input = await readyServerInput();
+    await user.click(screen.getByRole('button', { name: '检查更新' }));
+
+    expect(screen.getByRole('button', { name: '正在检查…' })).toBeDisabled();
+    expect(input).toBeEnabled();
+    expect(screen.getByRole('button', { name: '使用统一登录' })).toBeEnabled();
+    finishCheck?.({ kind: 'idle', enabled: true });
+    expect(await screen.findByText('当前已是最新版本。')).toBeVisible();
+  });
+
+  it('reports a check failure without opening a modal or blocking login', async () => {
+    const user = userEvent.setup();
+    const bridge = fakeBridge({
+      checkFailure: true,
+      savedOrigin: 'https://ai.example.com',
+      lastSuccessfulCheckAt: '2026-06-21T04:00:00Z',
+    });
+
+    render(<LauncherPage bridge={bridge} />);
+    await readyServerInput();
+    await user.click(screen.getByRole('button', { name: '检查更新' }));
+
+    expect(await screen.findByText('暂时无法检查更新，当前版本仍可继续使用。')).toBeVisible();
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(screen.getByLabelText('远程服务地址')).toBeEnabled();
+    expect(screen.getByRole('button', { name: '使用统一登录' })).toBeEnabled();
+  });
+
+  it('opens an update dialog from a native status event', async () => {
+    let emitUpdate: ((status: UpdateStatus) => void) | undefined;
+    const bridge = fakeBridge({
+      registerUpdateStatus: (listener) => {
+        emitUpdate = listener;
+      },
+    });
+
+    render(<LauncherPage bridge={bridge} />);
+    await readyServerInput();
+    emitUpdate?.({
+      kind: 'available',
+      update: {
+        contentLength: 18_600_000,
+        notes: '优化启动速度',
+        version: '1.1.0',
+      },
+    });
+
     expect(
-      screen.getByText(
-        '自动更新将在正式发布构建启用；当前开发构建不会连接更新服务。',
-      ),
+      await screen.findByRole('dialog', { name: '发现新版本 1.1.0' }),
     ).toBeVisible();
+  });
+
+  it.each([
+    [
+      '稍后提醒',
+      { deferFailure: true },
+      '暂时无法保存提醒时间，请稍后重试。',
+    ],
+    [
+      '下载并安装',
+      { installFailure: true },
+      '暂时无法开始下载更新，请稍后重试。',
+    ],
+  ] as const)(
+    'keeps a failed %s action visible inside the update dialog',
+    async (action, failure, message) => {
+      const user = userEvent.setup();
+      const bridge = fakeBridge({
+        ...failure,
+        updateStatus: {
+          kind: 'available',
+          update: {
+            contentLength: 18_600_000,
+            notes: '优化启动速度',
+            version: '1.1.0',
+          },
+        },
+      });
+
+      render(<LauncherPage bridge={bridge} />);
+      await user.click(
+        await screen.findByRole('button', { name: action }),
+      );
+
+      expect(await screen.findByRole('alert')).toHaveTextContent(message);
+      expect(screen.getByRole('dialog')).toBeVisible();
+    },
+  );
+
+  it('keeps a failed cancellation visible inside the update dialog', async () => {
+    const user = userEvent.setup();
+    const bridge = fakeBridge({
+      cancelFailure: true,
+      updateStatus: {
+        kind: 'downloading',
+        update: {
+          contentLength: 18_600_000,
+          notes: '优化启动速度',
+          version: '1.1.0',
+        },
+        received: 4_000,
+        total: 10_000,
+      },
+    });
+
+    render(<LauncherPage bridge={bridge} />);
+    await user.click(
+      await screen.findByRole('button', { name: '取消下载' }),
+    );
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      '更新已进入安装阶段，不能再取消。',
+    );
+    expect(screen.getByRole('dialog')).toBeVisible();
   });
 
   it('associates the address field with validation and help text', () => {

@@ -203,6 +203,7 @@
 
 .launcher-primary,
 .launcher-secondary {
+  appearance: none;
   min-height: 44px;
   padding: 0 var(--space-5);
   border-radius: 10px;
@@ -339,6 +340,126 @@
   opacity: .65;
 }
 
+.launcher-link:disabled {
+  cursor: not-allowed;
+  opacity: .46;
+}
+
+.update-dialog {
+  width: min(520px, calc(100vw - var(--space-8)));
+  max-height: calc(100vh - var(--space-8));
+  margin: auto;
+  padding: var(--space-8);
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  background: var(--surface-elevated);
+  color: var(--text-primary);
+  box-shadow: var(--shadow);
+}
+
+.update-dialog::backdrop {
+  background: var(--modal-backdrop);
+}
+
+.update-dialog-heading h2:focus {
+  outline: none;
+}
+
+.update-dialog-heading h2 {
+  margin: var(--space-2) 0 0;
+  font-size: 24px;
+  line-height: 1.25;
+  letter-spacing: -.025em;
+}
+
+.update-dialog-heading p,
+.update-dialog-installing {
+  margin: var(--space-3) 0 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.update-dialog-installing {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.update-dialog-release {
+  margin-top: var(--space-6);
+  padding: var(--space-5);
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--surface-solid);
+}
+
+.update-dialog-release strong,
+.update-dialog-progress strong,
+.update-dialog-failure strong {
+  font-size: 13px;
+}
+
+.update-dialog-release p {
+  max-height: 128px;
+  margin: var(--space-2) 0 0;
+  overflow: auto;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.update-dialog-release p span {
+  display: block;
+}
+
+.update-dialog-release > span,
+.update-dialog-progress span {
+  flex: 0 0 auto;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.update-dialog-progress {
+  margin-top: var(--space-5);
+}
+
+.update-dialog-progress div {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-4);
+}
+
+.update-dialog-progress progress {
+  width: 100%;
+  margin-top: var(--space-3);
+  accent-color: var(--accent);
+}
+
+.update-dialog-failure {
+  margin-top: var(--space-5);
+  padding: var(--space-4);
+  display: grid;
+  gap: var(--space-2);
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--danger) 10%, var(--surface-solid));
+  color: var(--danger-text);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.update-dialog-actions {
+  margin-top: var(--space-6);
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-3);
+}
+
 @media (max-width: 860px) {
   .launcher-shell {
     grid-template-columns: 1fr;
@@ -387,11 +508,28 @@
   .launcher-actions {
     grid-template-columns: 1fr;
   }
+
+  .update-dialog {
+    width: calc(100vw - var(--space-8));
+    padding: var(--space-6) var(--space-5);
+  }
+
+  .update-dialog-release,
+  .update-dialog-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
 }
 
 @media (prefers-reduced-transparency: reduce) {
   .launcher-console {
     background: var(--surface-solid);
     backdrop-filter: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .update-dialog {
+    scroll-behavior: auto;
   }
 }

@@ -18,10 +18,15 @@
 | Text/secondary | `--text-secondary` | `#6c7078` | `#a8abb2` | 说明、元信息 |
 | Border | `--border` | `rgb(60 60 67 / 14%)` | `rgb(235 235 245 / 14%)` | 分隔线、输入框 |
 | Action | `--accent` | `#007aff` | `#0a84ff` | 主操作、焦点 |
+| Action/strong | `--accent-strong` | `#0066cc` | `#0066cc` | 主按钮默认状态 |
+| Action/text | `--accent-text` | `#0066cc` | `#409cff` | 链接和强调文字 |
 | Action/soft | `--accent-soft` | `#e8f2ff` | `#173652` | 选中和信息提示 |
 | Status/success | `--success` | `#248a3d` | `#30d158` | 连接成功、同步完成 |
+| Status/success text | `--success-text` | `#1f7a35` | `#30d158` | 成功状态文字 |
 | Status/warning | `--warning` | `#b25000` | `#ff9f0a` | 更新提示、需确认 |
 | Status/error | `--danger` | `#ff3b30` | `#ff453a` | 连接失败、危险操作 |
+| Status/error text | `--danger-text` | `#d70015` | `#ff6961` | 错误状态文字 |
+| Modal backdrop | `--modal-backdrop` | `rgb(23 24 26 / 28%)` | `rgb(0 0 0 / 58%)` | 模态弹窗遮罩 |
 | Sidebar | `--sidebar` | `rgb(236 238 242 / 82%)` | `rgb(30 31 34 / 88%)` | 工作台导航 |
 
 ### Rules

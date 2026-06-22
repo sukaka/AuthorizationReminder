@@ -1,5 +1,3 @@
-use tauri::{AppHandle, Runtime};
-use tauri_plugin_updater::UpdaterExt;
 use thiserror::Error;
 use url::Url;
 
@@ -20,11 +18,12 @@ pub enum UpdaterPolicyError {
 }
 
 impl UpdaterPolicy {
-    pub fn from_env<F>(read: F) -> Result<Self, UpdaterPolicyError>
-    where
-        F: Fn(&str) -> Option<String>,
-    {
-        let enabled = match read("AI_UPDATER_ENABLED").as_deref() {
+    pub fn from_build(
+        enabled: Option<&str>,
+        endpoint: Option<&str>,
+        public_key: Option<&str>,
+    ) -> Result<Self, UpdaterPolicyError> {
+        let enabled = match enabled {
             None | Some("") | Some("false") => false,
             Some("true") => true,
             Some(_) => return Err(UpdaterPolicyError::InvalidEnabledFlag),
@@ -32,16 +31,15 @@ impl UpdaterPolicy {
         if !enabled {
             return Ok(Self::Disabled);
         }
-
-        let endpoint = read("UPDATER_URL")
+        let endpoint = endpoint
             .ok_or(UpdaterPolicyError::SecureEndpointRequired)
-            .and_then(|raw| parse_endpoint(&raw))?;
-        let public_key = read("UPDATER_PUBLIC_KEY")
+            .and_then(parse_endpoint)?;
+        let public_key = public_key
             .filter(|value| !value.trim().is_empty())
             .ok_or(UpdaterPolicyError::PublicKeyRequired)?;
         Ok(Self::Enabled {
             endpoint,
-            public_key,
+            public_key: public_key.to_string(),
         })
     }
 
@@ -80,21 +78,4 @@ fn parse_endpoint(raw: &str) -> Result<Url, UpdaterPolicyError> {
         return Err(UpdaterPolicyError::SecureEndpointRequired);
     }
     Ok(endpoint)
-}
-
-pub fn schedule_check<R: Runtime>(app: &AppHandle<R>, policy: &UpdaterPolicy) {
-    let Some(endpoint) = policy.endpoint().cloned() else {
-        return;
-    };
-    let app = app.clone();
-    tauri::async_runtime::spawn(async move {
-        let result = async {
-            let updater = app.updater_builder().endpoints(vec![endpoint])?.build()?;
-            updater.check().await
-        }
-        .await;
-        if let Err(error) = result {
-            eprintln!("自动更新检查失败: {error}");
-        }
-    });
 }

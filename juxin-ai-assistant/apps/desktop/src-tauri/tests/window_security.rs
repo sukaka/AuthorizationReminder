@@ -325,7 +325,23 @@ fn capabilities_separate_launcher_and_workspace_commands() {
     assert!(workspace_permissions
         .iter()
         .any(|value| value == "allow-model-generate"));
-    for forbidden in ["shell:", "fs:", "http:", "updater:allow-set"] {
+    for command in [
+        "allow-update-status",
+        "allow-update-check",
+        "allow-update-download-and-install",
+        "allow-update-cancel",
+        "allow-update-defer",
+    ] {
+        assert!(
+            launcher_permissions.iter().any(|value| value == command),
+            "{command}"
+        );
+        assert!(
+            workspace_permissions.iter().any(|value| value == command),
+            "{command}"
+        );
+    }
+    for forbidden in ["shell:", "fs:", "http:", "updater:"] {
         assert!(
             launcher_permissions
                 .iter()
@@ -357,7 +373,12 @@ fn capabilities_separate_launcher_and_workspace_commands() {
             "allow-server-probe",
             "allow-server-config-save",
             "allow-workspace-open",
-            "allow-launcher-show"
+            "allow-launcher-show",
+            "allow-update-status",
+            "allow-update-check",
+            "allow-update-download-and-install",
+            "allow-update-cancel",
+            "allow-update-defer"
         ])
     );
     assert!(workspace_permissions

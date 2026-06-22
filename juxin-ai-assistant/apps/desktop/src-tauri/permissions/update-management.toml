@@ -1,0 +1,24 @@
+[[permission]]
+identifier = "allow-update-status"
+description = "允许受信任桌面窗口读取签名更新状态"
+commands.allow = ["update_status"]
+
+[[permission]]
+identifier = "allow-update-check"
+description = "允许受信任桌面窗口通过固定发布地址检查签名更新"
+commands.allow = ["update_check"]
+
+[[permission]]
+identifier = "allow-update-download-and-install"
+description = "允许受信任桌面窗口下载、验签并安装已发现的更新"
+commands.allow = ["update_download_and_install"]
+
+[[permission]]
+identifier = "allow-update-cancel"
+description = "允许受信任桌面窗口取消仍在下载的更新"
+commands.allow = ["update_cancel"]
+
+[[permission]]
+identifier = "allow-update-defer"
+description = "允许受信任桌面窗口稍后提醒同一版本更新"
+commands.allow = ["update_defer"]

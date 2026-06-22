@@ -16,6 +16,9 @@ pub mod model_profiles;
 pub mod server_config;
 mod server_probe;
 pub mod tray;
+mod update_commands;
+mod update_manager;
+pub mod update_state;
 pub mod updater_policy;
 pub mod window_manager;
 
@@ -31,8 +34,12 @@ use tray::{CloseAction, LifecycleState, TrayPreference};
 use updater_policy::UpdaterPolicy;
 
 pub fn run() {
-    let updater_policy = UpdaterPolicy::from_env(|key| std::env::var(key).ok())
-        .unwrap_or_else(|error| panic!("自动更新配置无效: {error}"));
+    let updater_policy = UpdaterPolicy::from_build(
+        option_env!("AI_UPDATER_ENABLED"),
+        option_env!("AI_UPDATER_URL"),
+        option_env!("AI_UPDATER_PUBLIC_KEY"),
+    )
+    .unwrap_or_else(|error| panic!("自动更新配置无效: {error}"));
     let mut builder =
         tauri::Builder::default().plugin(tauri_plugin_single_instance::init(|app, _, _| {
             tray::restore_main(app);
@@ -53,6 +60,7 @@ pub fn run() {
         .setup(move |app| {
             let app_data_dir = app.path().app_data_dir()?;
             let app_config_dir = app.path().app_config_dir()?;
+            let update_manager = update_manager::UpdateManagerState::new(setup_policy.enabled());
             let profiles_path = app_data_dir.join("model-profiles.json");
             let profiles = load_profiles(&profiles_path).map_err(std::io::Error::other)?;
             let secrets: Arc<dyn keychain::SecretStore> = Arc::new(SystemKeychain);
@@ -71,9 +79,14 @@ pub fn run() {
                 window_manager::WindowManagerState::load(&app_config_dir)
                     .map_err(std::io::Error::other)?,
             );
+            app.manage(update_manager.clone());
             tray::install_tray(app)?;
             tray::restore_main(app.handle());
-            updater_policy::schedule_check(app.handle(), &setup_policy);
+            update_commands::schedule_checks(
+                app.handle().clone(),
+                update_manager,
+                setup_policy.clone(),
+            );
             Ok(())
         })
         .on_window_event(|window, event| match event {
@@ -132,6 +145,11 @@ pub fn run() {
             window_manager::workspace_status,
             window_manager::workspace_close,
             window_manager::launcher_show,
+            update_commands::update_status,
+            update_commands::update_check,
+            update_commands::update_download_and_install,
+            update_commands::update_cancel,
+            update_commands::update_defer,
         ])
         .build(tauri::generate_context!())
         .expect("failed to build 聚信 AI 助手");
