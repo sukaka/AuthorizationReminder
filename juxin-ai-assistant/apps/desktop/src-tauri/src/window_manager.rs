@@ -12,7 +12,8 @@ use url::Url;
 use crate::command_origin::{guard_window, same_origin, CommandScope};
 use crate::commands::AppState;
 use crate::server_config::{
-    load_server_config, save_server_config, DesktopProbe, ServerConfig, ServerOrigin,
+    default_server_config, load_server_config, save_server_config, DesktopProbe, ServerConfig,
+    ServerOrigin,
 };
 
 const SERVER_CONFIG_FILE: &str = "server-config.json";
@@ -306,11 +307,16 @@ pub fn server_config_get(
     state: tauri::State<'_, WindowManagerState>,
 ) -> Result<Option<ServerConfig>, String> {
     guard_window(&window, CommandScope::Launcher, None)?;
-    state
+    let saved = state
         .trust
         .lock()
         .map(|trust| trust.saved().cloned())
-        .map_err(|_| "SERVER_TRUST_STATE_UNAVAILABLE".to_string())
+        .map_err(|_| "SERVER_TRUST_STATE_UNAVAILABLE".to_string())?;
+    match saved {
+        Some(config) => Ok(Some(config)),
+        None => default_server_config(option_env!("AI_ASSISTANT_DEFAULT_SERVER_ORIGIN"))
+            .map_err(|error| error.to_string()),
+    }
 }
 
 #[tauri::command]

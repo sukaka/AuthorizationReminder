@@ -362,6 +362,29 @@ describe('local launcher', () => {
     ).toBeEnabled();
   });
 
+  it('prefills an unverified build default without treating it as saved trust', async () => {
+    const user = userEvent.setup();
+    const bridge = fakeBridge({
+      savedOrigin: 'https://default.example.com',
+      lastSuccessfulCheckAt: null,
+    });
+    const confirm = vi.spyOn(window, 'confirm');
+
+    render(<LauncherPage bridge={bridge} />);
+    const input = await readyServerInput();
+    expect(input).toHaveValue('https://default.example.com');
+    expect(screen.getByRole('button', { name: '使用统一登录' })).toBeDisabled();
+
+    await user.clear(input);
+    await user.type(input, 'https://new.example.com');
+    await user.click(screen.getByRole('button', { name: '测试连接' }));
+
+    expect(confirm).not.toHaveBeenCalled();
+    expect(bridge.saveServerConfig).toHaveBeenCalledWith(
+      'https://new.example.com',
+    );
+  });
+
   it('does not enable login when saving a successful probe fails', async () => {
     const user = userEvent.setup();
 
@@ -524,6 +547,7 @@ describe('local launcher', () => {
     const user = userEvent.setup();
     const bridge = fakeBridge({
       savedOrigin: 'https://old.example.com',
+      lastSuccessfulCheckAt: '2026-06-21T04:00:00Z',
     });
     const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
 

@@ -29,8 +29,11 @@ export function useServerFlow(
       .then((config) => {
         if (!active) return;
         const origin = config.serverOrigin ?? '';
+        const trustedOrigin = config.lastSuccessfulCheckAt
+          ? config.serverOrigin
+          : null;
         setOriginInput(origin);
-        setSavedOrigin(config.serverOrigin);
+        setSavedOrigin(trustedOrigin);
         setCurrentVersion(config.currentVersion);
         setState(
           config.serverOrigin && config.lastSuccessfulCheckAt

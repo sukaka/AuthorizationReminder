@@ -67,14 +67,17 @@ test("default update policy cannot make update requests", async () => {
   assert.deepEqual(policy, { enabled: false });
 });
 
-test("macOS build is arm64-only and pins an HTTPS workbench URL", async () => {
+test("macOS build is arm64-only and separates optional server and updater trust", async () => {
   // Given: the macOS release script.
   const script = await readFile(resolve(deliveryScriptsDirectory, "build-macos-arm64.sh"), "utf8");
 
   // When / Then: architecture and remote URL are guarded before packaging.
   assert.match(script, /aarch64-apple-darwin/);
-  assert.match(script, /https:\/\//);
-  assert.match(script, /WORKBENCH_URL/);
+  assert.match(script, /AI_ASSISTANT_DEFAULT_SERVER_ORIGIN/);
+  assert.match(script, /AI_UPDATER_ENABLED/);
+  assert.match(script, /AI_UPDATER_URL/);
+  assert.match(script, /AI_UPDATER_PUBLIC_KEY/);
+  assert.doesNotMatch(script, /AI_ASSISTANT_PUBLIC_URL/);
   assert.match(script, /--config src-tauri\/tauri\.generated\.conf\.json -- --locked/);
   assert.match(script, /lipo -archs/);
   assert.match(script, /codesign --verify/);
@@ -92,6 +95,11 @@ test("Windows build is x64-only and keeps signing secrets in environment variabl
   assert.match(script, /x86_64-pc-windows-msvc/);
   assert.match(script, /TAURI_SIGNING_PRIVATE_KEY/);
   assert.match(script, /TAURI_SIGNING_PRIVATE_KEY_PASSWORD/);
+  assert.match(script, /AI_ASSISTANT_DEFAULT_SERVER_ORIGIN/);
+  assert.match(script, /AI_UPDATER_ENABLED/);
+  assert.match(script, /AI_UPDATER_URL/);
+  assert.match(script, /AI_UPDATER_PUBLIC_KEY/);
+  assert.doesNotMatch(script, /AI_ASSISTANT_PUBLIC_URL/);
   assert.match(script, /--config src-tauri\/tauri\.generated\.conf\.json -- --locked/);
   assert.match(script, /dumpbin/);
   assert.match(script, /Get-AuthenticodeSignature/);
@@ -112,4 +120,6 @@ test("desktop CI keeps Cargo dependencies locked while bundling", async () => {
   );
   assert.doesNotMatch(workflow, /uses:\s*[^\s@]+@v\d+/);
   assert.match(workflow, /actions\/checkout@11bd71901bbe5b1630ceea73d27597364c9af683/);
+  assert.match(workflow, /npm exec playwright install chromium/);
+  assert.match(workflow, /npm run test:e2e -- e2e\/launcher-flow\.spec\.ts/);
 });

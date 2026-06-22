@@ -114,28 +114,20 @@ fn validate_user_id(user_id: &str) -> Result<&str, String> {
 }
 
 pub fn validate_binding_base_url(raw: &str, allow_loopback: bool) -> Result<Url, String> {
-    let url = Url::parse(raw).map_err(|_| "AI_ASSISTANT_PUBLIC_URL_INVALID".to_string())?;
+    let url = Url::parse(raw).map_err(|_| "SERVER_ORIGIN_INVALID".to_string())?;
     let exact_origin = url.username().is_empty()
         && url.password().is_none()
         && url.path() == "/"
         && url.query().is_none()
         && url.fragment().is_none();
     if !exact_origin {
-        return Err("AI_ASSISTANT_PUBLIC_URL_INVALID".to_string());
+        return Err("SERVER_ORIGIN_INVALID".to_string());
     }
     match url.scheme() {
         "https" => Ok(url),
         "http" if allow_loopback && is_loopback(&url) => Ok(url),
-        _ => Err("AI_ASSISTANT_PUBLIC_URL_INVALID".to_string()),
+        _ => Err("SERVER_ORIGIN_INVALID".to_string()),
     }
-}
-
-pub fn configured_binding_base_url() -> Result<Url, String> {
-    let configured = option_env!("AI_ASSISTANT_PUBLIC_URL").unwrap_or("");
-    if configured.is_empty() && cfg!(debug_assertions) {
-        return validate_binding_base_url("http://127.0.0.1:18093", true);
-    }
-    validate_binding_base_url(configured, cfg!(debug_assertions))
 }
 
 pub async fn verify_binding_token(base_url: &Url, token: &str) -> Result<String, String> {

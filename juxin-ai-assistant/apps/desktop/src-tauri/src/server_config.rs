@@ -131,6 +131,13 @@ impl ServerConfig {
     }
 }
 
+pub fn default_server_config(raw: Option<&str>) -> Result<Option<ServerConfig>, ServerOriginError> {
+    raw.filter(|value| !value.is_empty())
+        .map(ServerOrigin::parse_production)
+        .transpose()
+        .map(|origin| origin.map(|origin| ServerConfig::new(origin, None)))
+}
+
 #[derive(Clone, Copy, Debug, Error, Eq, PartialEq)]
 pub enum ServerConfigError {
     #[error("无法读取桌面服务配置")]

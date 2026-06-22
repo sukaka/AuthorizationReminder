@@ -1,12 +1,55 @@
 param(
-  [Parameter(Mandatory = $true)][string]$PublicUrl,
+  [Alias('PublicUrl')][string]$DefaultServerOrigin = $env:AI_ASSISTANT_DEFAULT_SERVER_ORIGIN,
   [switch]$DryRun
 )
 
 $ErrorActionPreference = 'Stop'
-$uri = [Uri]$PublicUrl
-if ($uri.Scheme -ne 'https' -or $uri.UserInfo -or $uri.Host.Contains('*') -or $uri.PathAndQuery -ne '/' -or $uri.Fragment) {
-  throw 'PublicUrl 必须是无路径、无凭据的 HTTPS origin'
+
+function Assert-HttpsUrl {
+  param(
+    [Parameter(Mandatory = $true)][string]$Name,
+    [Parameter(Mandatory = $true)][string]$Value,
+    [switch]$ExactOrigin
+  )
+
+  $uri = $null
+  $valid = [Uri]::TryCreate($Value, [UriKind]::Absolute, [ref]$uri) `
+    -and $uri.Scheme -eq 'https' `
+    -and -not $uri.UserInfo `
+    -and -not $uri.Host.Contains('*') `
+    -and -not $uri.Fragment
+  if ($ExactOrigin) {
+    $valid = $valid -and $uri.PathAndQuery -eq '/'
+  }
+  if (-not $valid) {
+    throw "$Name 必须是合法、无凭据的 HTTPS $(if ($ExactOrigin) { 'origin' } else { 'URL' })"
+  }
+}
+
+if ([string]::IsNullOrWhiteSpace($DefaultServerOrigin)) {
+  Remove-Item Env:AI_ASSISTANT_DEFAULT_SERVER_ORIGIN -ErrorAction SilentlyContinue
+} else {
+  Assert-HttpsUrl -Name 'AI_ASSISTANT_DEFAULT_SERVER_ORIGIN' -Value $DefaultServerOrigin -ExactOrigin
+  $env:AI_ASSISTANT_DEFAULT_SERVER_ORIGIN = ([Uri]$DefaultServerOrigin).GetLeftPart([UriPartial]::Authority)
+}
+
+$updaterEnabled = if ([string]::IsNullOrWhiteSpace($env:AI_UPDATER_ENABLED)) {
+  'false'
+} else {
+  $env:AI_UPDATER_ENABLED
+}
+if ($updaterEnabled -notin @('true', 'false')) {
+  throw 'AI_UPDATER_ENABLED 只能为 true 或 false'
+}
+$env:AI_UPDATER_ENABLED = $updaterEnabled
+if ($updaterEnabled -eq 'true') {
+  Assert-HttpsUrl -Name 'AI_UPDATER_URL' -Value $env:AI_UPDATER_URL
+  if ([string]::IsNullOrWhiteSpace($env:AI_UPDATER_PUBLIC_KEY)) {
+    throw 'AI_UPDATER_PUBLIC_KEY 在启用自动更新时不能为空'
+  }
+} else {
+  Remove-Item Env:AI_UPDATER_URL -ErrorAction SilentlyContinue
+  Remove-Item Env:AI_UPDATER_PUBLIC_KEY -ErrorAction SilentlyContinue
 }
 
 $target = 'x86_64-pc-windows-msvc'
@@ -34,7 +77,6 @@ if (-not (Get-Command 'cl.exe' -ErrorAction SilentlyContinue)) {
   throw '缺少 MSVC Build Tools；请安装 Visual Studio 2022 Desktop development with C++'
 }
 
-$env:AI_ASSISTANT_PUBLIC_URL = $uri.GetLeftPart([UriPartial]::Authority)
 # 可选签名值只从 CI/当前进程环境读取，绝不写入文件：
 $null = $env:TAURI_SIGNING_PRIVATE_KEY
 $null = $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD

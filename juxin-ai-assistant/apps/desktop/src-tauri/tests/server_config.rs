@@ -7,8 +7,8 @@ use std::time::Duration;
 
 use chrono::{TimeZone, Utc};
 use juxin_ai_assistant_lib::server_config::{
-    load_server_config, save_server_config, DesktopProbe, ProbeFailureKind, ServerConfig,
-    ServerConfigError, ServerOrigin,
+    default_server_config, load_server_config, save_server_config, DesktopProbe, ProbeFailureKind,
+    ServerConfig, ServerConfigError, ServerOrigin,
 };
 
 fn serve_once(
@@ -57,6 +57,17 @@ fn production_origin_normalizes_host_default_port_and_trailing_slash() {
     let origin = ServerOrigin::parse_production("https://AI.Example.com:443/").unwrap();
 
     assert_eq!(origin.as_str(), "https://ai.example.com");
+}
+
+#[test]
+fn optional_default_server_prefills_only_a_production_https_origin() {
+    let config = default_server_config(Some("https://AI.Example.com:443/"))
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(config.server_origin().as_str(), "https://ai.example.com");
+    assert_eq!(default_server_config(None).unwrap(), None);
+    assert!(default_server_config(Some("http://ai.example.com")).is_err());
 }
 
 #[test]
