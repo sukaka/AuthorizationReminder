@@ -4,6 +4,8 @@ const os = require('node:os');
 const { execFileSync } = require('node:child_process');
 
 const VERSION_PREFIX_RE = /^\[v\d+\.\d+\.\d+\]\s+/i;
+const AGENT_VERSION_PREFIX_RE = /^\[agent-v\d+\.\d+\.\d+\]\s+/i;
+const ANY_VERSION_PREFIX_RE = /^(?:\[v\d+\.\d+\.\d+\]|\[agent-v\d+\.\d+\.\d+\])\s+/i;
 const VERSION_RE = /^\d+\.\d+\.\d+$/;
 const SKIP_PREFIX_RE = /^(?:fixup!|squash!|merge\b)/i;
 const MAJOR_PREFIX_RE = /^(?:(?:breaking|major)(?:\([^)]+\))?:|[a-z][\w-]*(?:\([^)]+\))?!:)/i;
@@ -24,6 +26,10 @@ const FORCE_VERSION_PACKAGE_DIRS = new Set([
   'train-exam/backend',
   'train-exam/frontend',
   'web',
+]);
+
+const INDEPENDENT_PACKAGE_DIRS = new Set([
+  'juxin-ai-assistant/apps/desktop',
 ]);
 
 const WALK_IGNORE_DIRS = new Set([
@@ -49,13 +55,15 @@ const toPosixRelative = (rootDir, filePath) => path.relative(rootDir, filePath).
 
 const getCommitSummary = (message) => String(message || '').replace(/\r\n/g, '\n').split('\n')[0].trim();
 
-const stripVersionPrefix = (summary) => String(summary || '').replace(VERSION_PREFIX_RE, '').trim();
+const stripVersionPrefix = (summary) => String(summary || '').replace(ANY_VERSION_PREFIX_RE, '').trim();
+
+const isAgentVersionCommit = (message) => AGENT_VERSION_PREFIX_RE.test(getCommitSummary(message));
 
 const normalizeCommitMessage = (message) => {
   const text = String(message || '').replace(/\r\n/g, '\n');
   const lines = text.split('\n');
   if (!lines.length) return '';
-  lines[0] = stripVersionPrefix(lines[0]);
+  lines[0] = String(lines[0] || '').replace(VERSION_PREFIX_RE, '').trim();
   return lines.join('\n').replace(/\n+$/, '\n');
 };
 
@@ -98,6 +106,8 @@ const walkForPackageJson = (rootDir, startDir = rootDir, result = []) => {
     const fullPath = path.join(startDir, entry.name);
     if (entry.isDirectory()) {
       if (WALK_IGNORE_DIRS.has(entry.name)) continue;
+      const relativeDir = toPosixRelative(rootDir, fullPath);
+      if (INDEPENDENT_PACKAGE_DIRS.has(relativeDir)) continue;
       walkForPackageJson(rootDir, fullPath, result);
       continue;
     }
@@ -337,6 +347,9 @@ const applyVersioningToHeadCommit = ({ rootDir }) => {
 
   const fullMessage = git({ rootDir: resolvedRoot, args: ['log', '-1', '--pretty=%B'] });
   const rawSummary = getCommitSummary(fullMessage);
+  if (isAgentVersionCommit(rawSummary)) {
+    return { skipped: true, reason: 'agent-version' };
+  }
   if (VERSION_PREFIX_RE.test(rawSummary)) {
     return { skipped: true, reason: 'already-versioned' };
   }
@@ -403,6 +416,7 @@ module.exports = {
   bumpVersion,
   buildVersionBranchName,
   buildVersionedCommitMessage,
+  isAgentVersionCommit,
   normalizeCommitMessage,
   parseCommitBumpType,
   pushCurrentBranch,

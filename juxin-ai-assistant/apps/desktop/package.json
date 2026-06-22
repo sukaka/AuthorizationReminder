@@ -1,6 +1,6 @@
 {
   "name": "juxin-ai-assistant-desktop",
-  "version": "5.89.0",
+  "version": "1.0.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -9,6 +9,7 @@
     "build": "tsc --noEmit && vite build",
     "test": "vitest run",
     "test:e2e": "playwright test",
+    "agent:version": "node scripts/agent-version.mjs",
     "config:render": "node scripts/render-tauri-config.mjs",
     "tauri": "tauri"
   },
