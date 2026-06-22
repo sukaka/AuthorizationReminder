@@ -1,5 +1,6 @@
 from fastapi import APIRouter
 
+from .desktop_update_routes import create_desktop_update_admin_router
 from .governance_routes import create_governance_write_router
 from .knowledge_routes import create_knowledge_router
 from .reporting_routes import create_reporting_router
@@ -16,4 +17,5 @@ def create_governance_router(
     router.include_router(create_knowledge_router(cipher_dependency))
     router.include_router(create_governance_write_router(cipher_dependency))
     router.include_router(create_reporting_router())
+    router.include_router(create_desktop_update_admin_router())
     return router

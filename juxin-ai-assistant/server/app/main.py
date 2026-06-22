@@ -18,6 +18,7 @@ from .auth import get_session, require_action
 from .admin.errors import GovernanceError
 from .admin.route_common import write_request_audit
 from .admin.router import create_governance_router
+from .desktop_update_public import create_desktop_update_public_router
 from .config import Settings, get_settings
 from .crypto import ContentCipher
 from .database import get_db
@@ -872,4 +873,9 @@ app.include_router(
         get_prompt_client,
         get_content_cipher,
     )
+)
+
+app.include_router(
+    create_desktop_update_public_router(),
+    prefix="/api/ai",
 )
