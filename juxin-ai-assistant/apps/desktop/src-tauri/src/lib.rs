@@ -1,3 +1,4 @@
+pub mod build_mode;
 pub mod command_origin;
 mod commands;
 pub mod keychain;

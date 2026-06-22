@@ -1,11 +1,12 @@
-use std::net::IpAddr;
 use std::sync::Mutex;
 use std::time::Duration;
 
 use reqwest::redirect::Policy;
 use serde::{Deserialize, Serialize};
-use url::{Host, Url};
+use url::Url;
 
+use crate::build_mode::BuildMode;
+use crate::server_config::ServerOrigin;
 const VERIFY_PATH: &str = "/api/ai/local-binding/verify";
 const VERIFY_ERROR: &str = "LOCAL_BINDING_VERIFICATION_FAILED";
 
@@ -113,21 +114,10 @@ fn validate_user_id(user_id: &str) -> Result<&str, String> {
     Ok(normalized)
 }
 
-pub fn validate_binding_base_url(raw: &str, allow_loopback: bool) -> Result<Url, String> {
-    let url = Url::parse(raw).map_err(|_| "SERVER_ORIGIN_INVALID".to_string())?;
-    let exact_origin = url.username().is_empty()
-        && url.password().is_none()
-        && url.path() == "/"
-        && url.query().is_none()
-        && url.fragment().is_none();
-    if !exact_origin {
-        return Err("SERVER_ORIGIN_INVALID".to_string());
-    }
-    match url.scheme() {
-        "https" => Ok(url),
-        "http" if allow_loopback && is_loopback(&url) => Ok(url),
-        _ => Err("SERVER_ORIGIN_INVALID".to_string()),
-    }
+pub fn validate_binding_base_url(raw: &str, mode: impl Into<BuildMode>) -> Result<Url, String> {
+    ServerOrigin::parse_for_mode(raw, mode.into())
+        .map(|origin| origin.as_url().clone())
+        .map_err(|_| "SERVER_ORIGIN_INVALID".to_string())
 }
 
 pub async fn verify_binding_token(base_url: &Url, token: &str) -> Result<String, String> {
@@ -157,13 +147,4 @@ pub async fn verify_binding_token(base_url: &Url, token: &str) -> Result<String,
         .await
         .map_err(|_| VERIFY_ERROR.to_string())?;
     validate_user_id(&body.user_id).map(str::to_string)
-}
-
-fn is_loopback(url: &Url) -> bool {
-    match url.host() {
-        Some(Host::Domain(domain)) => domain.eq_ignore_ascii_case("localhost"),
-        Some(Host::Ipv4(address)) => IpAddr::V4(address).is_loopback(),
-        Some(Host::Ipv6(address)) => IpAddr::V6(address).is_loopback(),
-        None => false,
-    }
 }

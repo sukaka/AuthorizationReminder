@@ -1,5 +1,4 @@
 use std::error::Error as StdError;
-use std::net::IpAddr;
 use std::sync::OnceLock;
 use std::time::Duration;
 
@@ -10,6 +9,7 @@ use thiserror::Error;
 use tokio::{net::lookup_host, time::timeout};
 use url::{Host, Url};
 
+use crate::build_mode::BuildMode;
 use crate::server_config::{raw_authority_has_userinfo, ServerOrigin};
 
 const PRODUCT: &str = "juxin-ai-assistant";
@@ -97,6 +97,7 @@ struct BootstrapContract {
 
 #[derive(Debug)]
 pub struct DesktopProbe {
+    mode: BuildMode,
     connect_timeout: Duration,
     total_timeout: Duration,
     native_root_certificates: Vec<reqwest::Certificate>,
@@ -104,12 +105,24 @@ pub struct DesktopProbe {
 
 impl DesktopProbe {
     pub fn new() -> Result<Self, ProbeError> {
-        Self::with_timeouts(Duration::from_secs(5), Duration::from_secs(10))
+        Self::for_mode(BuildMode::from_build())
+    }
+
+    pub fn for_mode(mode: BuildMode) -> Result<Self, ProbeError> {
+        Self::with_timeouts_for_mode(Duration::from_secs(5), Duration::from_secs(10), mode)
     }
 
     pub fn with_timeouts(
         connect_timeout: Duration,
         total_timeout: Duration,
+    ) -> Result<Self, ProbeError> {
+        Self::with_timeouts_for_mode(connect_timeout, total_timeout, BuildMode::from_build())
+    }
+
+    pub fn with_timeouts_for_mode(
+        connect_timeout: Duration,
+        total_timeout: Duration,
+        mode: BuildMode,
     ) -> Result<Self, ProbeError> {
         if connect_timeout.is_zero() || total_timeout.is_zero() || connect_timeout > total_timeout {
             return Err(ProbeError::InvalidTimeouts);
@@ -129,6 +142,7 @@ impl DesktopProbe {
             return Err(ProbeError::Tls);
         }
         Ok(Self {
+            mode,
             connect_timeout,
             total_timeout,
             native_root_certificates,
@@ -160,7 +174,7 @@ impl DesktopProbe {
             }
             body.extend_from_slice(&chunk);
         }
-        validate_contract(&body, cfg!(debug_assertions) && origin.is_loopback_http())
+        validate_contract(&body, self.mode)
     }
 
     async fn client_for(&self, origin: &ServerOrigin) -> Result<reqwest::Client, ProbeError> {
@@ -194,10 +208,7 @@ impl DesktopProbe {
     }
 }
 
-fn validate_contract(
-    body: &[u8],
-    allow_loopback_http_portal: bool,
-) -> Result<ProbeSuccess, ProbeError> {
+fn validate_contract(body: &[u8], mode: BuildMode) -> Result<ProbeSuccess, ProbeError> {
     let contract: BootstrapContract =
         serde_json::from_slice(body).map_err(|_| ProbeError::InvalidResponse)?;
     if contract.product != PRODUCT {
@@ -208,11 +219,7 @@ fn validate_contract(
     }
     let auth_portal_url =
         Url::parse(&contract.auth_portal_url).map_err(|_| ProbeError::UnsafeAuthPortal)?;
-    let safe_scheme = auth_portal_url.scheme() == "https"
-        || (auth_portal_url.scheme() == "http"
-            && allow_loopback_http_portal
-            && is_loopback(&auth_portal_url));
-    let safe_portal = safe_scheme
+    let safe_portal = mode.allows_url(&contract.auth_portal_url, &auth_portal_url)
         && auth_portal_url.host().is_some()
         && auth_portal_url.username().is_empty()
         && auth_portal_url.password().is_none()
@@ -223,15 +230,6 @@ fn validate_contract(
         return Err(ProbeError::UnsafeAuthPortal);
     }
     Ok(ProbeSuccess { auth_portal_url })
-}
-
-fn is_loopback(url: &Url) -> bool {
-    match url.host() {
-        Some(Host::Domain(domain)) => domain.eq_ignore_ascii_case("localhost"),
-        Some(Host::Ipv4(address)) => IpAddr::V4(address).is_loopback(),
-        Some(Host::Ipv6(address)) => IpAddr::V6(address).is_loopback(),
-        None => false,
-    }
 }
 
 fn classify_transport_error(error: reqwest::Error) -> ProbeError {

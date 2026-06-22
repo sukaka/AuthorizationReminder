@@ -1,6 +1,5 @@
 use std::fs;
 use std::io::Write;
-use std::net::IpAddr;
 use std::path::Path;
 
 use chrono::{DateTime, Utc};
@@ -9,6 +8,7 @@ use tempfile::NamedTempFile;
 use thiserror::Error;
 use url::{Host, Url};
 
+use crate::build_mode::BuildMode;
 pub use crate::server_probe::{DesktopProbe, ProbeError, ProbeFailureKind, ProbeSuccess};
 
 const SCHEMA_VERSION: u8 = 1;
@@ -19,14 +19,14 @@ pub struct ServerOrigin(Url);
 
 impl ServerOrigin {
     pub fn parse(raw: &str) -> Result<Self, ServerOriginError> {
-        Self::parse_with_policy(raw, cfg!(debug_assertions))
+        Self::parse_for_mode(raw, BuildMode::from_build())
     }
 
     pub fn parse_production(raw: &str) -> Result<Self, ServerOriginError> {
-        Self::parse_with_policy(raw, false)
+        Self::parse_for_mode(raw, BuildMode::Production)
     }
 
-    fn parse_with_policy(raw: &str, allow_loopback_http: bool) -> Result<Self, ServerOriginError> {
+    pub fn parse_for_mode(raw: &str, mode: BuildMode) -> Result<Self, ServerOriginError> {
         let parsed = Url::parse(raw).map_err(|_| ServerOriginError::Invalid)?;
         let exact_origin = parsed.host().is_some()
             && parsed.username().is_empty()
@@ -40,9 +40,7 @@ impl ServerOrigin {
         if !exact_origin {
             return Err(ServerOriginError::Invalid);
         }
-        let trusted_scheme = parsed.scheme() == "https"
-            || (parsed.scheme() == "http" && allow_loopback_http && is_loopback(&parsed));
-        if !trusted_scheme {
+        if !mode.allows_url(raw, &parsed) {
             return Err(ServerOriginError::Invalid);
         }
         let mut parsed = parsed;
@@ -74,10 +72,6 @@ impl ServerOrigin {
 
     pub(crate) const fn url(&self) -> &Url {
         &self.0
-    }
-
-    pub(crate) fn is_loopback_http(&self) -> bool {
-        self.0.scheme() == "http" && is_loopback(&self.0)
     }
 }
 
@@ -137,7 +131,7 @@ impl ServerConfig {
 
 pub fn default_server_config(raw: Option<&str>) -> Result<Option<ServerConfig>, ServerOriginError> {
     raw.filter(|value| !value.is_empty())
-        .map(ServerOrigin::parse_production)
+        .map(ServerOrigin::parse)
         .transpose()
         .map(|origin| origin.map(|origin| ServerConfig::new(origin, None)))
 }
@@ -184,15 +178,6 @@ pub fn save_server_config(path: &Path, config: &ServerConfig) -> Result<(), Serv
         .persist(path)
         .map_err(|_| ServerConfigError::Persist)?;
     Ok(())
-}
-
-fn is_loopback(url: &Url) -> bool {
-    match url.host() {
-        Some(Host::Domain(domain)) => domain.eq_ignore_ascii_case("localhost"),
-        Some(Host::Ipv4(address)) => IpAddr::V4(address).is_loopback(),
-        Some(Host::Ipv6(address)) => IpAddr::V6(address).is_loopback(),
-        None => false,
-    }
 }
 
 pub(crate) fn raw_authority_has_userinfo(raw: &str) -> bool {

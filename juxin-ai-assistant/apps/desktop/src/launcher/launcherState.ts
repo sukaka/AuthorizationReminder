@@ -1,4 +1,8 @@
 import type { ProbeFailureKind } from '../remote/desktopBridge';
+export {
+  validateServerOrigin,
+  type OriginValidation,
+} from '../buildMode';
 
 export type LauncherState =
   | { readonly kind: 'booting' }
@@ -16,11 +20,6 @@ export type LauncherState =
     }
   | { readonly kind: 'authenticating'; readonly origin: string }
   | { readonly kind: 'workspace-ready'; readonly origin: string };
-
-export type OriginValidation =
-  | { readonly kind: 'empty' }
-  | { readonly kind: 'invalid'; readonly message: string }
-  | { readonly kind: 'valid'; readonly origin: string };
 
 export function launcherStatusContent(state: LauncherState) {
   switch (state.kind) {
@@ -47,48 +46,6 @@ export function launcherStatusContent(state: LauncherState) {
     default:
       return assertNever(state);
   }
-}
-
-export function validateServerOrigin(
-  raw: string,
-  allowLoopbackHttp: boolean,
-): OriginValidation {
-  const value = raw.trim();
-  if (!value) return { kind: 'empty' };
-
-  let url: URL;
-  try {
-    url = new URL(value);
-  } catch {
-    return {
-      kind: 'invalid',
-      message: '请输入不含路径、参数或账号信息的 HTTPS 地址。',
-    };
-  }
-
-  const isLoopback =
-    url.hostname === 'localhost' ||
-    url.hostname === '127.0.0.1' ||
-    url.hostname === '[::1]';
-  const isTrustedScheme =
-    url.protocol === 'https:' ||
-    (allowLoopbackHttp && url.protocol === 'http:' && isLoopback);
-  const isExactOrigin =
-    Boolean(url.hostname) &&
-    !url.username &&
-    !url.password &&
-    url.pathname === '/' &&
-    !url.search &&
-    !url.hash &&
-    !value.includes('*');
-
-  if (!isTrustedScheme || !isExactOrigin) {
-    return {
-      kind: 'invalid',
-      message: '请输入不含路径、参数或账号信息的 HTTPS 地址。',
-    };
-  }
-  return { kind: 'valid', origin: url.origin };
 }
 
 export function probeFailureMessage(kind: ProbeFailureKind): string {

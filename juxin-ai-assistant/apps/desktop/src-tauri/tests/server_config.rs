@@ -6,6 +6,7 @@ use std::thread;
 use std::time::Duration;
 
 use chrono::{TimeZone, Utc};
+use juxin_ai_assistant_lib::build_mode::BuildMode;
 use juxin_ai_assistant_lib::server_config::{
     default_server_config, load_server_config, save_server_config, DesktopProbe, ProbeFailureKind,
     ServerConfig, ServerConfigError, ServerOrigin,
@@ -78,15 +79,21 @@ fn development_origin_allows_only_loopback_http() {
         "http://127.0.0.1:18093",
         "http://[::1]:18093",
     ] {
-        assert!(ServerOrigin::parse(raw).is_ok(), "{raw}");
+        assert!(
+            ServerOrigin::parse_for_mode(raw, BuildMode::Development).is_ok(),
+            "{raw}"
+        );
     }
 
-    assert!(ServerOrigin::parse("http://192.168.1.8:18093").is_err());
+    assert!(
+        ServerOrigin::parse_for_mode("http://192.168.1.8:18093", BuildMode::Production).is_err()
+    );
 }
 
 #[test]
 fn development_ipv6_loopback_normalizes_to_capability_safe_localhost() {
-    let origin = ServerOrigin::parse("http://[::1]:18093").unwrap();
+    let origin =
+        ServerOrigin::parse_for_mode("http://[::1]:18093", BuildMode::Development).unwrap();
 
     assert_eq!(origin.as_str(), "http://localhost:18093");
 }
@@ -207,9 +214,13 @@ async fn probe_accepts_supported_desktop_contract() {
     })
     .to_string();
     let (base_url, server, request) = serve_once("200 OK", body, Duration::ZERO);
-    let origin = ServerOrigin::parse(&base_url).unwrap();
+    let origin = ServerOrigin::parse_for_mode(&base_url, BuildMode::Development).unwrap();
 
-    let result = DesktopProbe::new().unwrap().probe(&origin).await.unwrap();
+    let result = DesktopProbe::for_mode(BuildMode::Development)
+        .unwrap()
+        .probe(&origin)
+        .await
+        .unwrap();
     server.join().unwrap();
     let request = request.recv().unwrap();
 
@@ -222,22 +233,26 @@ async fn probe_accepts_supported_desktop_contract() {
 }
 
 #[tokio::test]
-async fn debug_probe_accepts_loopback_http_auth_portal() {
+async fn development_probe_accepts_private_http_auth_portal() {
     let body = serde_json::json!({
         "product": "juxin-ai-assistant",
         "protocolVersion": 1,
-        "authPortalUrl": "http://127.0.0.1:5180/portal?system=ai-assistant"
+        "authPortalUrl": "http://192.168.20.15:5180/portal?system=ai-assistant"
     })
     .to_string();
     let (base_url, server, _) = serve_once("200 OK", body, Duration::ZERO);
-    let origin = ServerOrigin::parse(&base_url).unwrap();
+    let origin = ServerOrigin::parse_for_mode(&base_url, BuildMode::Development).unwrap();
 
-    let result = DesktopProbe::new().unwrap().probe(&origin).await.unwrap();
+    let result = DesktopProbe::for_mode(BuildMode::Development)
+        .unwrap()
+        .probe(&origin)
+        .await
+        .unwrap();
     server.join().unwrap();
 
     assert_eq!(
         result.auth_portal_url().as_str(),
-        "http://127.0.0.1:5180/portal?system=ai-assistant"
+        "http://192.168.20.15:5180/portal?system=ai-assistant"
     );
 }
 
@@ -313,9 +328,9 @@ async fn probe_classifies_contract_and_http_failures() {
 
     for (status, body, expected) in cases {
         let (base_url, server, _) = serve_once(status, body, Duration::ZERO);
-        let origin = ServerOrigin::parse(&base_url).unwrap();
+        let origin = ServerOrigin::parse_for_mode(&base_url, BuildMode::Development).unwrap();
 
-        let error = DesktopProbe::new()
+        let error = DesktopProbe::for_mode(BuildMode::Development)
             .unwrap()
             .probe(&origin)
             .await
@@ -333,9 +348,9 @@ async fn probe_does_not_follow_redirects() {
         String::new(),
         Duration::ZERO,
     );
-    let origin = ServerOrigin::parse(&base_url).unwrap();
+    let origin = ServerOrigin::parse_for_mode(&base_url, BuildMode::Development).unwrap();
 
-    let error = DesktopProbe::new()
+    let error = DesktopProbe::for_mode(BuildMode::Development)
         .unwrap()
         .probe(&origin)
         .await
@@ -354,9 +369,9 @@ async fn probe_rejects_responses_larger_than_sixteen_kibibytes() {
     })
     .to_string();
     let (base_url, server, _) = serve_once("200 OK", body, Duration::ZERO);
-    let origin = ServerOrigin::parse(&base_url).unwrap();
+    let origin = ServerOrigin::parse_for_mode(&base_url, BuildMode::Development).unwrap();
 
-    let error = DesktopProbe::new()
+    let error = DesktopProbe::for_mode(BuildMode::Development)
         .unwrap()
         .probe(&origin)
         .await
@@ -375,9 +390,13 @@ async fn probe_classifies_total_timeout() {
     })
     .to_string();
     let (base_url, server, _) = serve_once("200 OK", body, Duration::from_millis(100));
-    let origin = ServerOrigin::parse(&base_url).unwrap();
-    let probe =
-        DesktopProbe::with_timeouts(Duration::from_millis(20), Duration::from_millis(30)).unwrap();
+    let origin = ServerOrigin::parse_for_mode(&base_url, BuildMode::Development).unwrap();
+    let probe = DesktopProbe::with_timeouts_for_mode(
+        Duration::from_millis(20),
+        Duration::from_millis(30),
+        BuildMode::Development,
+    )
+    .unwrap();
 
     let error = probe.probe(&origin).await.unwrap_err();
     server.join().unwrap();
@@ -418,9 +437,10 @@ async fn probe_classifies_connection_refusal() {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap();
     drop(listener);
-    let origin = ServerOrigin::parse(&format!("http://{address}")).unwrap();
+    let origin =
+        ServerOrigin::parse_for_mode(&format!("http://{address}"), BuildMode::Development).unwrap();
 
-    let error = DesktopProbe::new()
+    let error = DesktopProbe::for_mode(BuildMode::Development)
         .unwrap()
         .probe(&origin)
         .await

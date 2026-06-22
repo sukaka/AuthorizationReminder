@@ -3,6 +3,7 @@ import type { Dispatch, SetStateAction } from 'react';
 
 import type { DesktopBridge } from '../remote/desktopBridge';
 import { toProbeFailure } from '../remote/desktopBridge';
+import { buildMode } from '../buildMode';
 import {
   launcherStatusContent,
   type LauncherState,
@@ -85,7 +86,7 @@ export function useServerFlow(
   }, [bridge, savedOrigin, setNotice]);
 
   const validation = useMemo(
-    () => validateServerOrigin(originInput, import.meta.env.DEV),
+    () => validateServerOrigin(originInput, buildMode),
     [originInput],
   );
   const busy =
