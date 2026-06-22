@@ -26,6 +26,15 @@ class Settings(BaseSettings):
     public_url: str = "http://localhost:18093"
     cors_origins: str = "http://localhost:18093,http://127.0.0.1:18093"
 
+    # Desktop update publishing
+    desktop_update_storage_dir: str = "/var/lib/juxin-ai-assistant/desktop-updates"
+    desktop_update_max_bytes: int = Field(
+        default=1_073_741_824,
+        ge=1_048_576,
+        le=2_147_483_648,
+    )
+    desktop_update_public_base_url: str = ""
+
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     @field_validator("auth_public_url")
