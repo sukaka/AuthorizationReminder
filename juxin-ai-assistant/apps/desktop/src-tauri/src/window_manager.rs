@@ -1,7 +1,8 @@
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
@@ -13,7 +14,7 @@ use crate::command_origin::{guard_window, same_origin, CommandScope};
 use crate::commands::AppState;
 use crate::server_config::{
     default_server_config, load_server_config, save_server_config, DesktopProbe, ServerConfig,
-    ServerOrigin,
+    ServerConfigError, ServerOrigin,
 };
 
 const SERVER_CONFIG_FILE: &str = "server-config.json";
@@ -238,6 +239,7 @@ impl ServerTrustState {
 
 pub struct WindowManagerState {
     config_path: PathBuf,
+    configuration_warning: Option<String>,
     trust: Mutex<ServerTrustState>,
     probe: DesktopProbe,
 }
@@ -251,12 +253,35 @@ pub struct ProbeResult {
 impl WindowManagerState {
     pub fn load(config_dir: &Path) -> Result<Self, String> {
         let config_path = config_dir.join(SERVER_CONFIG_FILE);
-        let saved = load_server_config(&config_path).map_err(|error| error.to_string())?;
+        let (saved, configuration_warning) = match load_server_config(&config_path) {
+            Ok(saved) => (saved, None),
+            Err(ServerConfigError::InvalidFormat | ServerConfigError::UnsupportedSchema) => {
+                let suffix = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .map_or(0, |duration| duration.as_nanos());
+                let quarantine = config_dir.join(format!("{SERVER_CONFIG_FILE}.corrupt-{suffix}"));
+                let warning = if fs::rename(&config_path, quarantine).is_ok() {
+                    "本机服务器配置已损坏，已安全隔离。请重新填写并测试地址。"
+                } else {
+                    "本机服务器配置已损坏，已忽略旧配置。请重新填写并测试地址。"
+                };
+                (None, Some(warning.to_string()))
+            }
+            Err(_) => (
+                None,
+                Some("暂时无法读取本机服务器配置。请重新填写并测试地址。".to_string()),
+            ),
+        };
         Ok(Self {
             config_path,
+            configuration_warning,
             trust: Mutex::new(ServerTrustState::new(saved)),
             probe: DesktopProbe::new().map_err(|error| error.to_string())?,
         })
+    }
+
+    pub fn configuration_warning(&self) -> Option<&str> {
+        self.configuration_warning.as_deref()
     }
 
     pub fn active_origin(&self) -> Result<ServerOrigin, String> {
@@ -301,22 +326,39 @@ impl WindowManagerState {
     }
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ServerConfigSnapshot {
+    server_origin: Option<String>,
+    last_successful_check_at: Option<chrono::DateTime<Utc>>,
+    configuration_warning: Option<String>,
+}
+
 #[tauri::command]
 pub fn server_config_get(
     window: WebviewWindow,
     state: tauri::State<'_, WindowManagerState>,
-) -> Result<Option<ServerConfig>, String> {
+) -> Result<ServerConfigSnapshot, String> {
     guard_window(&window, CommandScope::Launcher, None)?;
     let saved = state
         .trust
         .lock()
         .map(|trust| trust.saved().cloned())
         .map_err(|_| "SERVER_TRUST_STATE_UNAVAILABLE".to_string())?;
-    match saved {
-        Some(config) => Ok(Some(config)),
+    let config = match saved {
+        Some(config) => Some(config),
         None => default_server_config(option_env!("AI_ASSISTANT_DEFAULT_SERVER_ORIGIN"))
-            .map_err(|error| error.to_string()),
-    }
+            .map_err(|error| error.to_string())?,
+    };
+    Ok(ServerConfigSnapshot {
+        server_origin: config
+            .as_ref()
+            .map(|value| value.server_origin().as_str().to_string()),
+        last_successful_check_at: config
+            .as_ref()
+            .and_then(ServerConfig::last_successful_check_at),
+        configuration_warning: state.configuration_warning.clone(),
+    })
 }
 
 #[tauri::command]

@@ -174,9 +174,37 @@ textarea:focus-visible {
   margin-top: auto;
   padding: 14px 8px 0;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 10px;
   border-top: 1px solid var(--border);
+}
+
+.workspace-update-control {
+  display: grid;
+  flex: 0 0 100%;
+  gap: 4px;
+  width: 100%;
+}
+
+.workspace-update-control button {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.workspace-update-control button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.workspace-update-control small {
+  color: var(--text-secondary);
+  line-height: 1.4;
 }
 
 .sidebar-foot div {

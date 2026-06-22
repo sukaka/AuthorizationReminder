@@ -10,6 +10,7 @@ use juxin_ai_assistant_lib::server_config::{
     default_server_config, load_server_config, save_server_config, DesktopProbe, ProbeFailureKind,
     ServerConfig, ServerConfigError, ServerOrigin,
 };
+use juxin_ai_assistant_lib::window_manager::WindowManagerState;
 
 fn serve_once(
     status: &'static str,
@@ -159,6 +160,27 @@ fn corrupted_server_config_is_reported_without_overwrite() {
 
     assert_eq!(error, ServerConfigError::InvalidFormat);
     assert_eq!(fs::read(path).unwrap(), b"{not-json");
+}
+
+#[test]
+fn corrupted_server_config_is_quarantined_and_launcher_state_recovers() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("server-config.json");
+    fs::write(&path, b"{not-json").unwrap();
+
+    let state = WindowManagerState::load(directory.path()).unwrap();
+    let quarantined = fs::read_dir(directory.path())
+        .unwrap()
+        .filter_map(Result::ok)
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .find(|name| name.starts_with("server-config.json.corrupt-"));
+
+    assert!(!path.exists());
+    assert!(quarantined.is_some());
+    assert_eq!(
+        state.configuration_warning(),
+        Some("本机服务器配置已损坏，已安全隔离。请重新填写并测试地址。")
+    );
 }
 
 #[test]

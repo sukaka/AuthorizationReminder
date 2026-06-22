@@ -56,6 +56,12 @@ const catalog = {
 
 beforeEach(() => {
   invokeMock.mockReset();
+  invokeMock.mockImplementation((command: string) => {
+    if (command === 'update_status') {
+      return Promise.resolve({ kind: 'idle', enabled: true });
+    }
+    return Promise.resolve(undefined);
+  });
   Object.defineProperty(window, '__TAURI_INTERNALS__', {
     configurable: true,
     value: {},

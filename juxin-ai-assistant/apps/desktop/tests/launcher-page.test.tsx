@@ -150,18 +150,29 @@ describe('local launcher', () => {
     expect(screen.getByRole('button', { name: '检查更新' })).toHaveFocus();
   });
 
-  it('explains protected local drafts and development update availability', async () => {
+  it('opens a protected local drafts and pending-sync status entry', async () => {
     const user = userEvent.setup();
 
     render(<LauncherPage bridge={fakeBridge()} />);
     await user.click(screen.getByRole('button', { name: '查看本机草稿' }));
-    expect(
-      screen.getByText(
-        '本机草稿将在统一登录确认身份后开放，避免不同用户查看彼此内容。',
-      ),
-    ).toBeVisible();
+    const dialog = screen.getByRole('dialog', { name: '本机草稿与待同步' });
+    expect(dialog).toBeVisible();
+    expect(dialog).toHaveTextContent('草稿内容');
+    expect(dialog).toHaveTextContent('待同步结果');
+    expect(dialog).toHaveTextContent('统一登录确认身份后开放');
 
-    await user.click(screen.getByRole('button', { name: '检查更新' }));
+    await user.click(screen.getByRole('button', { name: '关闭本机数据状态' }));
+    expect(dialog).not.toBeInTheDocument();
+  });
+
+  it('allows a manual update check from the launcher', async () => {
+    const user = userEvent.setup();
+
+    render(<LauncherPage bridge={fakeBridge()} />);
+
+    const check = await screen.findByRole('button', { name: '检查更新' });
+    await waitFor(() => expect(check).toBeEnabled());
+    await user.click(check);
     expect(await screen.findByText('当前已是最新版本。')).toBeVisible();
   });
 

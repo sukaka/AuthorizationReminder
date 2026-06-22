@@ -79,7 +79,11 @@ async function installTauriBridge(page: Page) {
           callbacks.delete(id);
         },
         async invoke(command: string, args: Record<string, any> = {}) {
-          if (command === 'local_session_bind') return null;
+          if (
+            command === 'local_session_bind' ||
+            command === 'workspace_ready' ||
+            command === 'workspace_status'
+          ) return null;
           if (command === 'model_profile_list') {
             return [{
               id: 'profile-e2e', displayName: 'E2E 本地模型',

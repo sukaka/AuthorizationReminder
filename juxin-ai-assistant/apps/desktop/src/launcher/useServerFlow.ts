@@ -35,6 +35,9 @@ export function useServerFlow(
         setOriginInput(origin);
         setSavedOrigin(trustedOrigin);
         setCurrentVersion(config.currentVersion);
+        if (config.configurationWarning) {
+          setNotice(config.configurationWarning);
+        }
         setState(
           config.serverOrigin && config.lastSuccessfulCheckAt
             ? { kind: 'server-ready', origin: config.serverOrigin }

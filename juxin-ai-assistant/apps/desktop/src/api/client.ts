@@ -106,6 +106,10 @@ export class ApiError extends Error {
 
 async function readJson<T>(response: Response, code: string): Promise<T> {
   const payload = await response.json().catch(() => null);
+  if (response.status === 401) {
+    window.location.assign(getAuthPortalUrl());
+    throw new ApiError(401, 'AUTH_REDIRECT', payload);
+  }
   if (!response.ok) {
     throw new ApiError(response.status, code, payload);
   }

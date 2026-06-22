@@ -14,6 +14,7 @@ export type ServerConfigSnapshot = {
   readonly serverOrigin: string | null;
   readonly lastSuccessfulCheckAt: string | null;
   readonly currentVersion: string;
+  readonly configurationWarning?: string | null;
 };
 
 export type ProbeSuccess = {
@@ -121,11 +122,13 @@ async function getServerConfig(): Promise<ServerConfigSnapshot> {
   const config = await invoke<{
     readonly serverOrigin?: string;
     readonly lastSuccessfulCheckAt?: string;
+    readonly configurationWarning?: string;
   } | null>('server_config_get');
   return {
     serverOrigin: config?.serverOrigin ?? null,
     lastSuccessfulCheckAt: config?.lastSuccessfulCheckAt ?? null,
     currentVersion: await getVersion(),
+    configurationWarning: config?.configurationWarning ?? null,
   };
 }
 

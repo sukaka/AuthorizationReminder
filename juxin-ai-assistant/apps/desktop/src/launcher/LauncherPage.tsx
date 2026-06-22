@@ -1,4 +1,7 @@
+import { useState } from 'react';
+
 import { desktopBridge, type DesktopBridge } from '../remote/desktopBridge';
+import { LocalDataDialog } from './LocalDataDialog';
 import { LauncherIntro } from './LauncherIntro';
 import { UpdateDialog } from './UpdateDialog';
 import { useServerFlow } from './useServerFlow';
@@ -14,6 +17,7 @@ export function LauncherPage({
 }: LauncherPageProps) {
   const update = useUpdateFlow(bridge);
   const server = useServerFlow(bridge, update.setNotice);
+  const [showLocalData, setShowLocalData] = useState(false);
 
   return (
     <>
@@ -29,6 +33,9 @@ export function LauncherPage({
           returnFocusRef={update.triggerRef}
           status={update.dialogStatus}
         />
+      ) : null}
+      {showLocalData ? (
+        <LocalDataDialog onClose={() => setShowLocalData(false)} />
       ) : null}
       <main className="launcher-shell">
         <LauncherIntro />
@@ -103,11 +110,7 @@ export function LauncherPage({
           </button>
           <button
             className="launcher-secondary"
-            onClick={() =>
-              update.setNotice(
-                '本机草稿将在统一登录确认身份后开放，避免不同用户查看彼此内容。',
-              )
-            }
+            onClick={() => setShowLocalData(true)}
             type="button"
           >
             查看本机草稿

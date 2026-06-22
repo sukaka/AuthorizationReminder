@@ -129,6 +129,10 @@ impl ServerConfig {
     pub const fn server_origin(&self) -> &ServerOrigin {
         &self.server_origin
     }
+
+    pub const fn last_successful_check_at(&self) -> Option<DateTime<Utc>> {
+        self.last_successful_check_at
+    }
 }
 
 pub fn default_server_config(raw: Option<&str>) -> Result<Option<ServerConfig>, ServerOriginError> {

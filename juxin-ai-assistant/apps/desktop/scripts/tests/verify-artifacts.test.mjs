@@ -29,7 +29,7 @@ function pe64(machine) {
 test("artifact verifier checks manifest files and SHA256 digests", async () => {
   // Given: an artifact and a matching manifest in a temporary release directory.
   const directory = await mkdtemp(join(tmpdir(), "juxin-release-"));
-  const file = "Juxin.AI.Assistant_1.0.0_aarch64.dmg";
+  const file = `Juxin.AI.Assistant_${releaseMetadata.version}_aarch64.dmg`;
   const architectureFile = "juxin-ai-assistant-macos";
   const bytes = Buffer.from("release-artifact");
   const architectureBytes = machO64(0x0100000c);
@@ -37,7 +37,7 @@ test("artifact verifier checks manifest files and SHA256 digests", async () => {
   await writeFile(join(directory, architectureFile), architectureBytes);
   await writeFile(join(directory, "manifest.json"), JSON.stringify({
     platformVersion: releaseMetadata.platformVersion,
-    version: "1.0.0",
+    version: releaseMetadata.version,
     artifacts: [{
       file,
       platform: "macos",
@@ -58,12 +58,12 @@ test("artifact verifier checks manifest files and SHA256 digests", async () => {
 test("artifact verifier rejects a checksum mismatch", async () => {
   // Given: an artifact whose manifest digest is incorrect.
   const directory = await mkdtemp(join(tmpdir(), "juxin-release-"));
-  const file = "Juxin.AI.Assistant_1.0.0_x64-setup.exe";
+  const file = `Juxin.AI.Assistant_${releaseMetadata.version}_x64-setup.exe`;
   const bytes = pe64(0x8664);
   await writeFile(join(directory, file), bytes);
   await writeFile(join(directory, "manifest.json"), JSON.stringify({
     platformVersion: releaseMetadata.platformVersion,
-    version: "1.0.0",
+    version: releaseMetadata.version,
     artifacts: [{
       file,
       platform: "windows",
@@ -80,7 +80,7 @@ test("artifact verifier rejects a checksum mismatch", async () => {
 
 test("artifact verifier rejects a manifest that lies about a Mach-O architecture", async () => {
   const directory = await mkdtemp(join(tmpdir(), "juxin-release-"));
-  const file = "Juxin.AI.Assistant_1.0.0_aarch64.dmg";
+  const file = `Juxin.AI.Assistant_${releaseMetadata.version}_aarch64.dmg`;
   const architectureFile = "juxin-ai-assistant-macos";
   const bytes = Buffer.from("release-artifact");
   const architectureBytes = machO64(0x01000007);
@@ -88,7 +88,7 @@ test("artifact verifier rejects a manifest that lies about a Mach-O architecture
   await writeFile(join(directory, architectureFile), architectureBytes);
   await writeFile(join(directory, "manifest.json"), JSON.stringify({
     platformVersion: releaseMetadata.platformVersion,
-    version: "1.0.0",
+    version: releaseMetadata.version,
     artifacts: [{
       file,
       platform: "macos",
@@ -104,12 +104,12 @@ test("artifact verifier rejects a manifest that lies about a Mach-O architecture
 
 test("artifact verifier rejects a manifest that lies about a PE architecture", async () => {
   const directory = await mkdtemp(join(tmpdir(), "juxin-release-"));
-  const file = "Juxin.AI.Assistant_1.0.0_x64-setup.exe";
+  const file = `Juxin.AI.Assistant_${releaseMetadata.version}_x64-setup.exe`;
   const bytes = pe64(0xaa64);
   await writeFile(join(directory, file), bytes);
   await writeFile(join(directory, "manifest.json"), JSON.stringify({
     platformVersion: releaseMetadata.platformVersion,
-    version: "1.0.0",
+    version: releaseMetadata.version,
     artifacts: [{
       file,
       platform: "windows",

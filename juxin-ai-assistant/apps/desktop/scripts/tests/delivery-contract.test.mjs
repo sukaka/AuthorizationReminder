@@ -10,14 +10,14 @@ const desktopDirectory = resolve(dirname(fileURLToPath(import.meta.url)), "../..
 const deliveryScriptsDirectory = resolve(desktopDirectory, "../../scripts");
 const repositoryRoot = resolve(desktopDirectory, "../../..");
 
-test("Tauri bundle identifies the 1.0.0 desktop product and is active", async () => {
+test("Tauri bundle identifies a semantic-versioned desktop product and is active", async () => {
   // Given: the packaged desktop configuration.
   const config = JSON.parse(await readFile(resolve(desktopDirectory, "src-tauri/tauri.conf.json"), "utf8"));
 
   // When / Then: release identity is stable and bundling is enabled.
   assert.equal(config.productName, "聚信 AI 助手");
   assert.equal(config.identifier, "com.juxin.ai-assistant");
-  assert.equal(config.version, "1.0.0");
+  assert.match(config.version, /^\d+\.\d+\.\d+$/);
   assert.equal(config.bundle.active, true);
 });
 

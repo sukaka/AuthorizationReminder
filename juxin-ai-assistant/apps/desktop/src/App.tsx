@@ -19,6 +19,7 @@ import { GovernanceCenter } from './pages/admin/GovernanceCenter';
 import { StatsPage } from './pages/admin/StatsPage';
 import { SuggestionsPage } from './pages/admin/SuggestionsPage';
 import { LauncherPage } from './launcher/LauncherPage';
+import { WorkspaceUpdateControl } from './launcher/WorkspaceUpdateControl';
 import {
   desktopBridge,
   type DesktopBridge,
@@ -108,6 +109,7 @@ function Workspace({ session }: { session: SessionPayload }) {
           {!isAdmin && canAudit ? <button aria-current={page === 'audit' ? 'page' : undefined} className={page === 'audit' ? 'is-current' : ''} onClick={() => setPage('audit')} type="button">审计日志</button> : null}
         </nav>
         <div className="sidebar-foot">
+          <WorkspaceUpdateControl />
           <span className="presence-dot" />
           <div>
             <strong>{session.user.username}</strong>
