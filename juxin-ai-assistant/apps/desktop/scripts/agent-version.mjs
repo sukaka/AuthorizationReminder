@@ -4,22 +4,29 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const STABLE_SEMVER_RE = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
+const MAX_SAFE_INTEGER = BigInt(Number.MAX_SAFE_INTEGER);
 const CARGO_PACKAGE_NAME = "juxin-ai-assistant";
 
 const assertStableSemver = (version) => {
-  if (!STABLE_SEMVER_RE.test(String(version ?? ""))) {
+  const normalized = String(version ?? "");
+  if (!STABLE_SEMVER_RE.test(normalized)) {
     throw new Error(`版本号必须是稳定三段 SemVer：${version}`);
   }
-  return version;
+  const segments = normalized.split(".").map(BigInt);
+  if (segments.some((segment) => segment > MAX_SAFE_INTEGER)) {
+    throw new Error(`版本号分段必须是安全整数：${version}`);
+  }
+  return normalized;
 };
 
 export const bumpAgentVersion = (version, bumpType) => {
-  assertStableSemver(version);
-  const [major, minor, patchVersion] = version.split(".").map(Number);
-  if (bumpType === "major") return `${major + 1}.0.0`;
-  if (bumpType === "minor") return `${major}.${minor + 1}.0`;
-  if (bumpType === "patch") return `${major}.${minor}.${patchVersion + 1}`;
-  throw new Error(`不支持的 Agent 版本升级级别：${bumpType}`);
+  const [major, minor, patchVersion] = assertStableSemver(version).split(".").map(BigInt);
+  let nextVersion;
+  if (bumpType === "major") nextVersion = `${major + 1n}.0.0`;
+  else if (bumpType === "minor") nextVersion = `${major}.${minor + 1n}.0`;
+  else if (bumpType === "patch") nextVersion = `${major}.${minor}.${patchVersion + 1n}`;
+  else throw new Error(`不支持的 Agent 版本升级级别：${bumpType}`);
+  return assertStableSemver(nextVersion);
 };
 
 export const parseAgentVersionArgs = (args) => {
@@ -65,17 +72,24 @@ const replaceManifestVersion = (text, nextVersion, relativePath) => {
   );
 };
 
-const writeAtomically = async (updates) => {
+export const writeAtomically = async (
+  updates,
+  {
+    rename: renameFile = rename,
+    rm: removeFile = rm,
+    writeFile: writeTextFile = writeFile,
+  } = {},
+) => {
   const temporaryFiles = [];
   const replacedFiles = [];
   try {
     for (const update of updates) {
       const temporaryPath = `${update.filePath}.${process.pid}.${Math.random().toString(36).slice(2)}.tmp`;
-      await writeFile(temporaryPath, update.content, "utf8");
+      await writeTextFile(temporaryPath, update.content, "utf8");
       temporaryFiles.push({ ...update, temporaryPath });
     }
     for (const update of temporaryFiles) {
-      await rename(update.temporaryPath, update.filePath);
+      await renameFile(update.temporaryPath, update.filePath);
       replacedFiles.push(update);
     }
   } catch (error) {
@@ -83,15 +97,17 @@ const writeAtomically = async (updates) => {
       for (const update of replacedFiles.reverse()) {
         const rollbackPath = `${update.filePath}.${process.pid}.${Math.random().toString(36).slice(2)}.rollback`;
         temporaryFiles.push({ temporaryPath: rollbackPath });
-        await writeFile(rollbackPath, update.original, "utf8");
-        await rename(rollbackPath, update.filePath);
+        await writeTextFile(rollbackPath, update.original, "utf8");
+        await renameFile(rollbackPath, update.filePath);
       }
     } catch (rollbackError) {
       throw new Error(`${error.message}；回滚 Agent 版本文件失败：${rollbackError.message}`);
     }
     throw error;
   } finally {
-    await Promise.all(temporaryFiles.map(({ temporaryPath }) => rm(temporaryPath, { force: true })));
+    await Promise.all(
+      temporaryFiles.map(({ temporaryPath }) => removeFile(temporaryPath, { force: true })),
+    );
   }
 };
 
@@ -135,6 +151,7 @@ export const syncAgentVersion = async ({ desktopDir, bumpType, setVersion }) => 
   packageJson.version = nextVersion;
   packageLock.version = nextVersion;
   packageLock.packages[""].version = nextVersion;
+  tauriConfig.version = nextVersion;
   cargoLockPackage.sections[cargoLockPackage.index] = cargoLockPackage.sections[
     cargoLockPackage.index
   ].replace(/^version\s*=\s*"[^"]+"\s*$/m, `version = "${nextVersion}"`);
@@ -144,10 +161,7 @@ export const syncAgentVersion = async ({ desktopDir, bumpType, setVersion }) => 
     `${JSON.stringify(packageLock, null, 2)}\n`,
     replaceManifestVersion(originals[2], nextVersion, relativePaths[2]),
     cargoLockPackage.sections.join(""),
-    originals[4].replace(
-      /("version"\s*:\s*")[^"]+(")/,
-      `$1${nextVersion}$2`,
-    ),
+    `${JSON.stringify(tauriConfig, null, 2)}\n`,
   ];
   const updates = filePaths
     .map((filePath, index) => ({
