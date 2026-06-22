@@ -282,3 +282,42 @@ class AuditLogOut(BaseModel):
 class AuditLogListOut(BaseModel):
     items: list[AuditLogOut]
     total: int
+
+
+# Desktop Update Publishing schemas
+
+class DesktopUpdateCreateIn(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    agent_version: str = Field(min_length=1, max_length=32)
+    channel: str = Field(min_length=1, max_length=16)
+    release_notes: str = Field(default="", max_length=20_000)
+
+
+class DesktopUpdateReleaseOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    uuid: str
+    agent_version: str
+    channel: str
+    status: str
+    release_notes: str
+    created_by: str
+    created_at: datetime
+    published_at: datetime | None = None
+    withdrawn_at: datetime | None = None
+
+
+class DesktopUpdateArtifactOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    target: str
+    file_name: str
+    content_type: str
+    size_bytes: int
+    sha256: str
+    created_at: datetime
+
+
+class DesktopUpdateReleaseDetailOut(DesktopUpdateReleaseOut):
+    artifacts: list[DesktopUpdateArtifactOut] = Field(default_factory=list)
