@@ -117,7 +117,7 @@ describe('local launcher', () => {
       screen.getByRole('button', { name: '使用统一登录' }),
     ).toBeDisabled();
     expect(screen.getByRole('button', { name: '查看本机草稿' })).toBeEnabled();
-    expect(await screen.findByText('当前版本 1.0.0')).toBeVisible();
+    expect(await screen.findByText((content) => content.includes('Agent 1.0.0'))).toBeVisible();
     expect(screen.getByRole('button', { name: '检查更新' })).toBeEnabled();
     expect(fetchSpy).not.toHaveBeenCalled();
   });
@@ -461,7 +461,7 @@ describe('local launcher', () => {
       lastSuccessfulCheckAt: null,
       currentVersion: '1.0.0',
     });
-    expect(await screen.findByText('当前版本 1.0.0')).toBeVisible();
+    expect(await screen.findByText((content) => content.includes('Agent 1.0.0'))).toBeVisible();
     expect(screen.getByLabelText('远程服务地址')).toBeEnabled();
   });
 

@@ -22,18 +22,15 @@ function baseConfig() {
 }
 
 test("release config starts locally and keeps updater trust separate", () => {
-  // Given: independent optional business and mandatory signed-updater build inputs.
   const businessOrigin = "https://ai.example.com";
-
-  // When: the release configuration is generated.
   const config = buildReleaseConfig(baseConfig(), {
+    buildMode: "production",
     defaultServerOrigin: businessOrigin,
     updaterEnabled: "true",
     updaterEndpoint: "https://updates.example.com/latest.json",
     updaterPublicKey: "public-key",
   });
 
-  // Then: startup remains local and only the updater trust enters Tauri config.
   assert.equal(config.app.windows[0].label, "launcher");
   assert.equal(config.app.windows[0].url, "index.html");
   assert.deepEqual(config.app.security.capabilities, ["launcher", "workspace"]);
@@ -47,18 +44,114 @@ test("release config starts locally and keeps updater trust separate", () => {
 });
 
 test("default business origin is optional when updater is disabled", () => {
-  // Given / When: a development or unsigned package has no remote defaults.
   const config = buildReleaseConfig(baseConfig(), {
+    buildMode: "production",
     defaultServerOrigin: "",
     updaterEnabled: "false",
     updaterEndpoint: "",
     updaterPublicKey: "",
   });
 
-  // Then: the local launcher still builds without updater network trust.
   assert.equal(config.app.windows[0].url, "index.html");
   assert.equal(config.bundle.createUpdaterArtifacts, false);
   assert.equal(config.plugins?.updater, undefined);
+});
+
+// Lan-test build mode tests
+test("lan-test build includes workspace-private-http capability", () => {
+  const config = buildReleaseConfig(baseConfig(), {
+    buildMode: "lan-test",
+    defaultServerOrigin: "http://192.168.20.15:5193",
+    updaterEnabled: "true",
+    updaterEndpoint: "http://192.168.20.15:5193/api/ai/desktop/updates/lan-test/{{target}}/{{arch}}/latest.json",
+    updaterPublicKey: "PUBLIC-KEY",
+  });
+
+  assert.deepEqual(config.app.security.capabilities, [
+    "launcher",
+    "workspace",
+    "workspace-private-http",
+  ]);
+  assert.equal(config.bundle.createUpdaterArtifacts, true);
+});
+
+test("development build also includes workspace-private-http", () => {
+  const config = buildReleaseConfig(baseConfig(), {
+    buildMode: "development",
+    defaultServerOrigin: "http://localhost:5193",
+    updaterEnabled: "false",
+    updaterEndpoint: "",
+    updaterPublicKey: "",
+  });
+
+  assert.deepEqual(config.app.security.capabilities, [
+    "launcher",
+    "workspace",
+    "workspace-private-http",
+  ]);
+});
+
+test("production rejects HTTP default server origin", () => {
+  assert.throws(() => buildReleaseConfig(baseConfig(), {
+    buildMode: "production",
+    defaultServerOrigin: "http://192.168.20.15:5193",
+    updaterEnabled: "false",
+    updaterEndpoint: "",
+    updaterPublicKey: "",
+  }), /AI_ASSISTANT_DEFAULT_SERVER_ORIGIN/);
+});
+
+test("lan-test accepts private HTTP origin", () => {
+  const config = buildReleaseConfig(baseConfig(), {
+    buildMode: "lan-test",
+    defaultServerOrigin: "http://192.168.20.15:5193",
+    updaterEnabled: "false",
+    updaterEndpoint: "",
+    updaterPublicKey: "",
+  });
+  assert.equal(config.app.security.capabilities.length, 3);
+});
+
+test("lan-test accepts HTTPS origin", () => {
+  const config = buildReleaseConfig(baseConfig(), {
+    buildMode: "lan-test",
+    defaultServerOrigin: "https://ai.intranet.local",
+    updaterEnabled: "false",
+    updaterEndpoint: "",
+    updaterPublicKey: "",
+  });
+  assert.equal(config.app.security.capabilities.length, 3);
+});
+
+test("lan-test accepts HTTP updater endpoint", () => {
+  const config = buildReleaseConfig(baseConfig(), {
+    buildMode: "lan-test",
+    defaultServerOrigin: "https://ai.intranet.local",
+    updaterEnabled: "true",
+    updaterEndpoint: "http://192.168.20.15:5193/updates/{{target}}/{{arch}}/latest.json",
+    updaterPublicKey: "PUBLIC-KEY",
+  });
+  assert.equal(config.bundle.createUpdaterArtifacts, true);
+});
+
+test("production rejects HTTP updater endpoint", () => {
+  assert.throws(() => buildReleaseConfig(baseConfig(), {
+    buildMode: "production",
+    defaultServerOrigin: "https://ai.example.com",
+    updaterEnabled: "true",
+    updaterEndpoint: "http://192.168.20.15:5193/updates/{{target}}/{{arch}}/latest.json",
+    updaterPublicKey: "PUBLIC-KEY",
+  }), /AI_UPDATER_URL/);
+});
+
+test("invalid buildMode is rejected", () => {
+  assert.throws(() => buildReleaseConfig(baseConfig(), {
+    buildMode: "staging",
+    defaultServerOrigin: "",
+    updaterEnabled: "false",
+    updaterEndpoint: "",
+    updaterPublicKey: "",
+  }), /buildMode/);
 });
 
 for (const unsafe of [
@@ -71,6 +164,7 @@ for (const unsafe of [
 ]) {
   test(`release config rejects unsafe default business origin ${unsafe}`, () => {
     assert.throws(() => buildReleaseConfig(baseConfig(), {
+      buildMode: "production",
       defaultServerOrigin: unsafe,
       updaterEnabled: "false",
       updaterEndpoint: "",
@@ -81,16 +175,19 @@ for (const unsafe of [
 
 for (const inputs of [
   {
+    buildMode: "production",
     updaterEnabled: "true",
     updaterEndpoint: "http://updates.example.com/latest.json",
     updaterPublicKey: "public-key",
   },
   {
+    buildMode: "production",
     updaterEnabled: "true",
     updaterEndpoint: "https://updates.example.com/latest.json",
     updaterPublicKey: "",
   },
   {
+    buildMode: "production",
     updaterEnabled: "sometimes",
     updaterEndpoint: "",
     updaterPublicKey: "",

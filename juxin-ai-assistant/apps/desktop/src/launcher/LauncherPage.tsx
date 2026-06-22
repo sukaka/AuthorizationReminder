@@ -1,5 +1,6 @@
 import { useState } from 'react';
 
+import { buildMode, buildChannelLabel } from '../buildMode';
 import { desktopBridge, type DesktopBridge } from '../remote/desktopBridge';
 import { LocalDataDialog } from './LocalDataDialog';
 import { LauncherIntro } from './LauncherIntro';
@@ -18,6 +19,18 @@ export function LauncherPage({
   const update = useUpdateFlow(bridge);
   const server = useServerFlow(bridge, update.setNotice);
   const [showLocalData, setShowLocalData] = useState(false);
+
+  const isInsecureMode =
+    buildMode !== 'production' &&
+    server.state.kind === 'server-ready' &&
+    server.originInput.startsWith('http://');
+
+  const helpProtocol =
+    buildMode === 'production'
+      ? '正式环境仅接受 HTTPS；本机开发构建可连接 localhost。'
+      : buildMode === 'lan-test'
+        ? '内网测试版支持私有 IP HTTP 和 HTTPS 地址。'
+        : '开发构建可连接 localhost 和私有 IP 地址。';
 
   return (
     <>
@@ -46,7 +59,10 @@ export function LauncherPage({
             <span className="launcher-eyebrow">开始使用</span>
             <h2>连接企业服务</h2>
           </div>
-          <span className="launcher-version">当前版本 {server.currentVersion}</span>
+          <span className="launcher-version">
+            Agent {server.currentVersion}{' '}
+            {buildMode !== 'production' ? `· ${buildChannelLabel}` : ''}
+          </span>
         </header>
 
         <div className="launcher-form">
@@ -59,7 +75,13 @@ export function LauncherPage({
               id="server-origin"
               inputMode="url"
               onChange={(event) => server.updateInput(event.target.value)}
-              placeholder="https://ai.example.com"
+              placeholder={
+                buildMode === 'production'
+                  ? 'https://ai.example.com'
+                  : buildMode === 'lan-test'
+                    ? 'http://192.168.20.15:5193'
+                    : 'http://localhost:5193'
+              }
               spellCheck={false}
               value={server.originInput}
             />
@@ -95,8 +117,13 @@ export function LauncherPage({
             </p>
           )}
           <p className="launcher-help" id="server-origin-help">
-            正式环境仅接受 HTTPS；本机开发构建可连接 localhost。
+            {helpProtocol}
           </p>
+          {isInsecureMode ? (
+            <p className="launcher-insecure-warning" role="alert">
+              内网 HTTP 测试模式：通信未加密，仅用于受控局域网。
+            </p>
+          ) : null}
         </div>
 
         <div className="launcher-actions">
