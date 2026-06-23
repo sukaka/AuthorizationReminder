@@ -1,3 +1,5 @@
+import copy
+import hashlib
 import json
 import subprocess
 import sys
@@ -984,8 +986,6 @@ def test_v110_document_rules_cover_formal_and_informal_outputs() -> None:
 
 
 def test_v110_source_refs_and_static_json_are_deterministic() -> None:
-    import hashlib
-
     manifest, report, _ = _load_v110_artifacts()
 
     for name in ("tasks", "knowledge", "quality_rules", "excluded"):
@@ -1012,3 +1012,22 @@ def test_v110_source_refs_and_static_json_are_deterministic() -> None:
         + "\n"
         == V110_REPORT.read_text(encoding="utf-8")
     )
+
+
+def test_v110_report_payload_hash_is_self_consistent() -> None:
+    _, report, _ = _load_v110_artifacts()
+    report_payload = copy.deepcopy(report)
+    report_payload["artifact_sha256"]["report_payload"] = ""
+    serialized_payload = (
+        json.dumps(
+            report_payload,
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n"
+    ).encode()
+
+    assert report["artifact_sha256"]["report_payload"] == hashlib.sha256(
+        serialized_payload
+    ).hexdigest()
