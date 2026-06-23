@@ -83,8 +83,8 @@
     }
   ],
   "artifact_sha256": {
-    "manifest": "0cf9e51293bafd6e7ad85a02a70f9a8d9db85fe50c105da95e6f6cb7335ccaca",
-    "report_payload": "862349830024e6126eb064d2a1b591097835a8359cf5923775d8777e7df153fc"
+    "manifest": "853870c67981fe4d8e15fb5e77f6e8501c45d87f297ed022ff8fd8e0b5f235aa",
+    "report_payload": "22e7618de2fa7d8ee2028db555f9591abc0e84eb4de448a276b1f4d788173cb3"
   },
   "blank_slot_decisions": [
     {
@@ -5918,7 +5918,7 @@
     },
     {
       "field_key": "choice_slot_03",
-      "field_type": "SELECT",
+      "field_type": "MULTISELECT",
       "label": "参考资料",
       "line_number": 14,
       "options_json": [
@@ -5977,7 +5977,7 @@
     },
     {
       "field_key": "choice_slot_02",
-      "field_type": "SELECT",
+      "field_type": "MULTISELECT",
       "label": "核心目的",
       "line_number": 11,
       "options_json": [
@@ -6036,7 +6036,7 @@
     },
     {
       "field_key": "choice_slot_03",
-      "field_type": "SELECT",
+      "field_type": "MULTISELECT",
       "label": "汇报目标",
       "line_number": 13,
       "options_json": [
@@ -6134,7 +6134,7 @@
     },
     {
       "field_key": "choice_slot_04",
-      "field_type": "SELECT",
+      "field_type": "MULTISELECT",
       "label": "客户关注点",
       "line_number": 16,
       "options_json": [
@@ -6156,7 +6156,7 @@
     },
     {
       "field_key": "choice_slot_01",
-      "field_type": "SELECT",
+      "field_type": "MULTISELECT",
       "label": "项目类型",
       "line_number": 10,
       "options_json": [
@@ -6301,7 +6301,7 @@
     },
     {
       "field_key": "choice_slot_02",
-      "field_type": "SELECT",
+      "field_type": "MULTISELECT",
       "label": "使用场景",
       "line_number": 12,
       "options_json": [
@@ -6323,7 +6323,7 @@
     },
     {
       "field_key": "choice_slot_03",
-      "field_type": "SELECT",
+      "field_type": "MULTISELECT",
       "label": "参考资料",
       "line_number": 13,
       "options_json": [
@@ -6344,7 +6344,7 @@
     },
     {
       "field_key": "choice_slot_01",
-      "field_type": "SELECT",
+      "field_type": "MULTISELECT",
       "label": "客户关注点",
       "line_number": 9,
       "options_json": [
@@ -6364,7 +6364,7 @@
     },
     {
       "field_key": "choice_slot_02",
-      "field_type": "SELECT",
+      "field_type": "MULTISELECT",
       "label": "业务特点",
       "line_number": 10,
       "options_json": [
@@ -6405,7 +6405,7 @@
     },
     {
       "field_key": "choice_slot_02",
-      "field_type": "SELECT",
+      "field_type": "MULTISELECT",
       "label": "已有安全产品",
       "line_number": 11,
       "options_json": [
@@ -6469,7 +6469,7 @@
     },
     {
       "field_key": "choice_slot_05",
-      "field_type": "SELECT",
+      "field_type": "MULTISELECT",
       "label": "本次目标",
       "line_number": 14,
       "options_json": [
@@ -6581,7 +6581,7 @@
     },
     {
       "field_key": "choice_slot_06",
-      "field_type": "SELECT",
+      "field_type": "MULTISELECT",
       "label": "期望防护范围",
       "line_number": 14,
       "options_json": [
@@ -6658,7 +6658,7 @@
     },
     {
       "field_key": "choice_slot_02",
-      "field_type": "SELECT",
+      "field_type": "MULTISELECT",
       "label": "资质证书材料",
       "line_number": 14,
       "options_json": [
@@ -6699,7 +6699,7 @@
     },
     {
       "field_key": "choice_slot_02",
-      "field_type": "SELECT",
+      "field_type": "MULTISELECT",
       "label": "已有安全产品",
       "line_number": 10,
       "options_json": [
@@ -6720,7 +6720,7 @@
     },
     {
       "field_key": "choice_slot_03",
-      "field_type": "SELECT",
+      "field_type": "MULTISELECT",
       "label": "客户关注点",
       "line_number": 11,
       "options_json": [
@@ -6800,7 +6800,7 @@
     },
     {
       "field_key": "choice_slot_03",
-      "field_type": "SELECT",
+      "field_type": "MULTISELECT",
       "label": "汇报目标",
       "line_number": 11,
       "options_json": [
@@ -6819,7 +6819,7 @@
     },
     {
       "field_key": "choice_slot_04",
-      "field_type": "SELECT",
+      "field_type": "MULTISELECT",
       "label": "客户痛点",
       "line_number": 12,
       "options_json": [
@@ -6841,7 +6841,7 @@
     },
     {
       "field_key": "choice_slot_05",
-      "field_type": "SELECT",
+      "field_type": "MULTISELECT",
       "label": "产品重点",
       "line_number": 13,
       "options_json": [
@@ -6902,7 +6902,7 @@
     },
     {
       "field_key": "choice_slot_03",
-      "field_type": "SELECT",
+      "field_type": "MULTISELECT",
       "label": "证明材料",
       "line_number": 16,
       "options_json": [
@@ -7075,7 +7075,7 @@
     },
     {
       "field_key": "choice_slot_01",
-      "field_type": "SELECT",
+      "field_type": "MULTISELECT",
       "label": "服务类型",
       "line_number": 6,
       "options_json": [
@@ -7096,7 +7096,7 @@
     },
     {
       "field_key": "choice_slot_01",
-      "field_type": "SELECT",
+      "field_type": "MULTISELECT",
       "label": "测试类型",
       "line_number": 7,
       "options_json": [
@@ -7234,7 +7234,7 @@
     },
     {
       "field_key": "choice_slot_01",
-      "field_type": "SELECT",
+      "field_type": "MULTISELECT",
       "label": "需要材料",
       "line_number": 7,
       "options_json": [
@@ -7255,7 +7255,7 @@
     },
     {
       "field_key": "choice_slot_02",
-      "field_type": "SELECT",
+      "field_type": "MULTISELECT",
       "label": "使用场景",
       "line_number": 8,
       "options_json": [
@@ -7314,7 +7314,7 @@
     },
     {
       "field_key": "choice_slot_02",
-      "field_type": "SELECT",
+      "field_type": "MULTISELECT",
       "label": "客户需要的制度模板",
       "line_number": 7,
       "options_json": [
@@ -7377,7 +7377,7 @@
     },
     {
       "field_key": "choice_slot_02",
-      "field_type": "SELECT",
+      "field_type": "MULTISELECT",
       "label": "证明材料",
       "line_number": 13,
       "options_json": [
@@ -7586,7 +7586,7 @@
     },
     {
       "field_key": "choice_slot_01",
-      "field_type": "SELECT",
+      "field_type": "MULTISELECT",
       "label": "事项类型",
       "line_number": 4,
       "options_json": [
@@ -43049,7 +43049,7 @@
     },
     {
       "field_key": "choice_slot_03",
-      "field_type": "SELECT",
+      "field_type": "MULTISELECT",
       "label": "参考资料",
       "line_number": 14,
       "options_json": [
@@ -43108,7 +43108,7 @@
     },
     {
       "field_key": "choice_slot_02",
-      "field_type": "SELECT",
+      "field_type": "MULTISELECT",
       "label": "核心目的",
       "line_number": 11,
       "options_json": [
@@ -43167,7 +43167,7 @@
     },
     {
       "field_key": "choice_slot_03",
-      "field_type": "SELECT",
+      "field_type": "MULTISELECT",
       "label": "汇报目标",
       "line_number": 13,
       "options_json": [
@@ -43265,7 +43265,7 @@
     },
     {
       "field_key": "choice_slot_04",
-      "field_type": "SELECT",
+      "field_type": "MULTISELECT",
       "label": "客户关注点",
       "line_number": 16,
       "options_json": [
@@ -43287,7 +43287,7 @@
     },
     {
       "field_key": "choice_slot_01",
-      "field_type": "SELECT",
+      "field_type": "MULTISELECT",
       "label": "项目类型",
       "line_number": 10,
       "options_json": [
@@ -43432,7 +43432,7 @@
     },
     {
       "field_key": "choice_slot_02",
-      "field_type": "SELECT",
+      "field_type": "MULTISELECT",
       "label": "使用场景",
       "line_number": 12,
       "options_json": [
@@ -43454,7 +43454,7 @@
     },
     {
       "field_key": "choice_slot_03",
-      "field_type": "SELECT",
+      "field_type": "MULTISELECT",
       "label": "参考资料",
       "line_number": 13,
       "options_json": [
@@ -43475,7 +43475,7 @@
     },
     {
       "field_key": "choice_slot_01",
-      "field_type": "SELECT",
+      "field_type": "MULTISELECT",
       "label": "客户关注点",
       "line_number": 9,
       "options_json": [
@@ -43495,7 +43495,7 @@
     },
     {
       "field_key": "choice_slot_02",
-      "field_type": "SELECT",
+      "field_type": "MULTISELECT",
       "label": "业务特点",
       "line_number": 10,
       "options_json": [
@@ -43536,7 +43536,7 @@
     },
     {
       "field_key": "choice_slot_02",
-      "field_type": "SELECT",
+      "field_type": "MULTISELECT",
       "label": "已有安全产品",
       "line_number": 11,
       "options_json": [
@@ -43600,7 +43600,7 @@
     },
     {
       "field_key": "choice_slot_05",
-      "field_type": "SELECT",
+      "field_type": "MULTISELECT",
       "label": "本次目标",
       "line_number": 14,
       "options_json": [
@@ -43712,7 +43712,7 @@
     },
     {
       "field_key": "choice_slot_06",
-      "field_type": "SELECT",
+      "field_type": "MULTISELECT",
       "label": "期望防护范围",
       "line_number": 14,
       "options_json": [
@@ -43789,7 +43789,7 @@
     },
     {
       "field_key": "choice_slot_02",
-      "field_type": "SELECT",
+      "field_type": "MULTISELECT",
       "label": "资质证书材料",
       "line_number": 14,
       "options_json": [
@@ -43830,7 +43830,7 @@
     },
     {
       "field_key": "choice_slot_02",
-      "field_type": "SELECT",
+      "field_type": "MULTISELECT",
       "label": "已有安全产品",
       "line_number": 10,
       "options_json": [
@@ -43851,7 +43851,7 @@
     },
     {
       "field_key": "choice_slot_03",
-      "field_type": "SELECT",
+      "field_type": "MULTISELECT",
       "label": "客户关注点",
       "line_number": 11,
       "options_json": [
@@ -43931,7 +43931,7 @@
     },
     {
       "field_key": "choice_slot_03",
-      "field_type": "SELECT",
+      "field_type": "MULTISELECT",
       "label": "汇报目标",
       "line_number": 11,
       "options_json": [
@@ -43950,7 +43950,7 @@
     },
     {
       "field_key": "choice_slot_04",
-      "field_type": "SELECT",
+      "field_type": "MULTISELECT",
       "label": "客户痛点",
       "line_number": 12,
       "options_json": [
@@ -43972,7 +43972,7 @@
     },
     {
       "field_key": "choice_slot_05",
-      "field_type": "SELECT",
+      "field_type": "MULTISELECT",
       "label": "产品重点",
       "line_number": 13,
       "options_json": [
@@ -44033,7 +44033,7 @@
     },
     {
       "field_key": "choice_slot_03",
-      "field_type": "SELECT",
+      "field_type": "MULTISELECT",
       "label": "证明材料",
       "line_number": 16,
       "options_json": [
@@ -44206,7 +44206,7 @@
     },
     {
       "field_key": "choice_slot_01",
-      "field_type": "SELECT",
+      "field_type": "MULTISELECT",
       "label": "服务类型",
       "line_number": 6,
       "options_json": [
@@ -44227,7 +44227,7 @@
     },
     {
       "field_key": "choice_slot_01",
-      "field_type": "SELECT",
+      "field_type": "MULTISELECT",
       "label": "测试类型",
       "line_number": 7,
       "options_json": [
@@ -44365,7 +44365,7 @@
     },
     {
       "field_key": "choice_slot_01",
-      "field_type": "SELECT",
+      "field_type": "MULTISELECT",
       "label": "需要材料",
       "line_number": 7,
       "options_json": [
@@ -44386,7 +44386,7 @@
     },
     {
       "field_key": "choice_slot_02",
-      "field_type": "SELECT",
+      "field_type": "MULTISELECT",
       "label": "使用场景",
       "line_number": 8,
       "options_json": [
@@ -44445,7 +44445,7 @@
     },
     {
       "field_key": "choice_slot_02",
-      "field_type": "SELECT",
+      "field_type": "MULTISELECT",
       "label": "客户需要的制度模板",
       "line_number": 7,
       "options_json": [
@@ -44508,7 +44508,7 @@
     },
     {
       "field_key": "choice_slot_02",
-      "field_type": "SELECT",
+      "field_type": "MULTISELECT",
       "label": "证明材料",
       "line_number": 13,
       "options_json": [
@@ -44717,7 +44717,7 @@
     },
     {
       "field_key": "choice_slot_01",
-      "field_type": "SELECT",
+      "field_type": "MULTISELECT",
       "label": "事项类型",
       "line_number": 4,
       "options_json": [

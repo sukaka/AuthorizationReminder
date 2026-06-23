@@ -3,6 +3,7 @@ import hashlib
 import json
 import subprocess
 import sys
+from collections import Counter
 from pathlib import Path
 
 
@@ -391,12 +392,59 @@ def test_v110_prompt_variables_match_complete_fields() -> None:
         assert re.findall(r"\[[^\]\n]+\]", task["prompt"]) == []
         for index, field in enumerate(task["fields"], start=1):
             assert field["sort_order"] == index * 10
-            assert field["field_type"] in {"TEXT", "TEXTAREA", "SELECT"}
+            assert field["field_type"] in {
+                "TEXT",
+                "TEXTAREA",
+                "SELECT",
+                "MULTISELECT",
+            }
             assert isinstance(field["required"], bool)
             assert isinstance(field["options_json"], list)
             assert isinstance(field["validation_json"], dict)
             if field["field_type"] == "SELECT":
                 assert field["options_json"]
+                assert (
+                    field["validation_json"].get("selection_mode")
+                    != "MULTIPLE"
+                )
+            if field["field_type"] == "MULTISELECT":
+                assert field["options_json"]
+                assert (
+                    field["validation_json"].get("selection_mode")
+                    == "MULTIPLE"
+                )
+
+
+def test_v110_multiple_choice_fields_use_multiselect_and_match_audit() -> None:
+    manifest, report, _ = _load_v110_artifacts()
+    multiple_fields = [
+        (task, field)
+        for task in manifest["tasks"]
+        for field in task["fields"]
+        if field["validation_json"].get("selection_mode") == "MULTIPLE"
+    ]
+
+    assert len(multiple_fields) == 26
+    assert len({task["code"] for task, _ in multiple_fields}) == 19
+    assert all(
+        field["field_type"] == "MULTISELECT"
+        and field["options_json"]
+        for _, field in multiple_fields
+    )
+
+    audited_field_types = {
+        section: {
+            (item["source_ref"], item["field_key"]): item["field_type"]
+            for item in report[section]
+            if item.get("resolution") == "FIELD"
+            and item.get("field_type")
+        }
+        for section in ("choice_slot_decisions", "review_decisions")
+    }
+    for task, field in multiple_fields:
+        identity = (task["source_ref"], field["field_key"])
+        for section in audited_field_types.values():
+            assert section[identity] == "MULTISELECT"
 
 
 def _residual_fill_placeholders(prompt: str) -> list[str]:
@@ -850,6 +898,20 @@ def test_v110_multiline_input_slots_are_fully_reviewed() -> None:
         assert field["placeholder"]
 
 
+def _input_slot_candidate_counter(items: list[dict]) -> Counter:
+    return Counter(
+        (
+            item["task_code"],
+            item["source_ref"],
+            item["line_number"],
+            item["line"],
+            item["detection"],
+            item.get("field_key"),
+        )
+        for item in items
+    )
+
+
 def test_v110_input_slot_candidate_conservation() -> None:
     manifest, report, _ = _load_v110_artifacts()
     scanned = [
@@ -858,17 +920,11 @@ def test_v110_input_slot_candidate_conservation() -> None:
         for candidate in _current_input_slot_candidates(task)
     ]
     audited = report["input_slot_candidates"]
-    identity = lambda item: (
-        item["task_code"],
-        item["source_ref"],
-        item["line_number"],
-        item["line"],
-        item["detection"],
-    )
 
-    assert {identity(item) for item in scanned} == {
-        identity(item) for item in audited
-    }
+    assert len(scanned) == len(audited)
+    assert _input_slot_candidate_counter(
+        scanned
+    ) == _input_slot_candidate_counter(audited)
     assert len(audited) == (
         report["counts"]["input_slot_candidates_fieldized"]
         + report["counts"]["input_slot_candidates_excluded"]
@@ -906,6 +962,31 @@ def test_v110_input_slot_candidate_conservation() -> None:
         )
         for item in report["choice_slot_decisions"]
     }
+
+
+def test_input_slot_candidate_counter_preserves_duplicates() -> None:
+    candidate = {
+        "task_code": "duplicate-fixture",
+        "source_ref": "V1.10｜测试部分｜测试分类｜重复样例",
+        "line_number": 1,
+        "line": "字段：{{field}}",
+        "detection": "VARIABLE",
+        "field_key": "field",
+    }
+
+    assert _input_slot_candidate_counter(
+        [candidate, candidate]
+    ) != _input_slot_candidate_counter([candidate])
+
+
+def test_v110_report_included_matches_manifest_tasks() -> None:
+    manifest, report, _ = _load_v110_artifacts()
+    identity = lambda item: (item["code"], item["source_ref"])
+
+    assert len(report["included"]) == len(manifest["tasks"])
+    assert Counter(map(identity, report["included"])) == Counter(
+        map(identity, manifest["tasks"])
+    )
 
 
 def test_v110_choice_slots_preserve_ordered_options() -> None:

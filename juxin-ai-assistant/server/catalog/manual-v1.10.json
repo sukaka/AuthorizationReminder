@@ -3922,7 +3922,7 @@
         {
           "example": "",
           "field_key": "choice_slot_03",
-          "field_type": "SELECT",
+          "field_type": "MULTISELECT",
           "label": "参考资料",
           "options_json": [
             "产品彩页",
@@ -4120,7 +4120,7 @@
         {
           "example": "",
           "field_key": "choice_slot_02",
-          "field_type": "SELECT",
+          "field_type": "MULTISELECT",
           "label": "核心目的",
           "options_json": [
             "品牌宣传",
@@ -4248,7 +4248,7 @@
         {
           "example": "",
           "field_key": "choice_slot_03",
-          "field_type": "SELECT",
+          "field_type": "MULTISELECT",
           "label": "汇报目标",
           "options_json": [
             "产品介绍",
@@ -4518,7 +4518,7 @@
         {
           "example": "",
           "field_key": "choice_slot_04",
-          "field_type": "SELECT",
+          "field_type": "MULTISELECT",
           "label": "客户关注点",
           "options_json": [
             "合规",
@@ -4631,7 +4631,7 @@
         {
           "example": "",
           "field_key": "choice_slot_01",
-          "field_type": "SELECT",
+          "field_type": "MULTISELECT",
           "label": "项目类型",
           "options_json": [
             "等保建设",
@@ -5212,7 +5212,7 @@
         {
           "example": "",
           "field_key": "choice_slot_02",
-          "field_type": "SELECT",
+          "field_type": "MULTISELECT",
           "label": "使用场景",
           "options_json": [
             "网站安全防护",
@@ -5242,7 +5242,7 @@
         {
           "example": "",
           "field_key": "choice_slot_03",
-          "field_type": "SELECT",
+          "field_type": "MULTISELECT",
           "label": "参考资料",
           "options_json": [
             "产品彩页",
@@ -5298,7 +5298,7 @@
         {
           "example": "",
           "field_key": "choice_slot_01",
-          "field_type": "SELECT",
+          "field_type": "MULTISELECT",
           "label": "客户关注点",
           "options_json": [
             "是否重复建设",
@@ -5324,7 +5324,7 @@
         {
           "example": "",
           "field_key": "choice_slot_02",
-          "field_type": "SELECT",
+          "field_type": "MULTISELECT",
           "label": "业务特点",
           "options_json": [
             "网站数量",
@@ -5417,7 +5417,7 @@
         {
           "example": "",
           "field_key": "choice_slot_02",
-          "field_type": "SELECT",
+          "field_type": "MULTISELECT",
           "label": "已有安全产品",
           "options_json": [
             "WAF",
@@ -5503,7 +5503,7 @@
         {
           "example": "",
           "field_key": "choice_slot_05",
-          "field_type": "SELECT",
+          "field_type": "MULTISELECT",
           "label": "本次目标",
           "options_json": [
             "初次交流",
@@ -5671,7 +5671,7 @@
         {
           "example": "",
           "field_key": "choice_slot_06",
-          "field_type": "SELECT",
+          "field_type": "MULTISELECT",
           "label": "期望防护范围",
           "options_json": [
             "单个系统",
@@ -5902,7 +5902,7 @@
         {
           "example": "",
           "field_key": "choice_slot_02",
-          "field_type": "SELECT",
+          "field_type": "MULTISELECT",
           "label": "资质证书材料",
           "options_json": [
             "软著",
@@ -6045,7 +6045,7 @@
         {
           "example": "",
           "field_key": "choice_slot_02",
-          "field_type": "SELECT",
+          "field_type": "MULTISELECT",
           "label": "已有安全产品",
           "options_json": [
             "WAF",
@@ -6073,7 +6073,7 @@
         {
           "example": "",
           "field_key": "choice_slot_03",
-          "field_type": "SELECT",
+          "field_type": "MULTISELECT",
           "label": "客户关注点",
           "options_json": [
             "价格",
@@ -6205,7 +6205,7 @@
         {
           "example": "",
           "field_key": "choice_slot_03",
-          "field_type": "SELECT",
+          "field_type": "MULTISELECT",
           "label": "汇报目标",
           "options_json": [
             "产品介绍",
@@ -6229,7 +6229,7 @@
         {
           "example": "",
           "field_key": "choice_slot_04",
-          "field_type": "SELECT",
+          "field_type": "MULTISELECT",
           "label": "客户痛点",
           "options_json": [
             "资产不清",
@@ -6259,7 +6259,7 @@
         {
           "example": "",
           "field_key": "choice_slot_05",
-          "field_type": "SELECT",
+          "field_type": "MULTISELECT",
           "label": "产品重点",
           "options_json": [
             "Web/API资产",
@@ -6378,7 +6378,7 @@
         {
           "example": "",
           "field_key": "choice_slot_03",
-          "field_type": "SELECT",
+          "field_type": "MULTISELECT",
           "label": "证明材料",
           "options_json": [
             "截图",
@@ -9790,7 +9790,7 @@
         {
           "example": "",
           "field_key": "choice_slot_01",
-          "field_type": "SELECT",
+          "field_type": "MULTISELECT",
           "label": "服务类型",
           "options_json": [
             "等保测评配合",
@@ -10229,7 +10229,7 @@
         {
           "example": "",
           "field_key": "choice_slot_01",
-          "field_type": "SELECT",
+          "field_type": "MULTISELECT",
           "label": "测试类型",
           "options_json": [
             "功能测试",
@@ -15715,7 +15715,7 @@
         {
           "example": "",
           "field_key": "choice_slot_01",
-          "field_type": "SELECT",
+          "field_type": "MULTISELECT",
           "label": "需要材料",
           "options_json": [
             "企业简介",
@@ -15743,7 +15743,7 @@
         {
           "example": "",
           "field_key": "choice_slot_02",
-          "field_type": "SELECT",
+          "field_type": "MULTISELECT",
           "label": "使用场景",
           "options_json": [
             "客户拜访",
@@ -15972,7 +15972,7 @@
         {
           "example": "",
           "field_key": "choice_slot_02",
-          "field_type": "SELECT",
+          "field_type": "MULTISELECT",
           "label": "客户需要的制度模板",
           "options_json": [
             "安全管理制度",
@@ -16161,7 +16161,7 @@
         {
           "example": "",
           "field_key": "choice_slot_02",
-          "field_type": "SELECT",
+          "field_type": "MULTISELECT",
           "label": "证明材料",
           "options_json": [
             "截图",
@@ -17088,7 +17088,7 @@
         {
           "example": "",
           "field_key": "choice_slot_01",
-          "field_type": "SELECT",
+          "field_type": "MULTISELECT",
           "label": "事项类型",
           "options_json": [
             "平台账号",
