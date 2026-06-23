@@ -397,13 +397,21 @@ def test_v110_prompt_variables_match_complete_fields() -> None:
                 assert field["options_json"]
 
 
-def _blank_input_slots(prompt: str) -> list[str]:
+def _unresolved_input_slots(prompt: str) -> list[str]:
     import re
 
     slots = []
     lines = prompt.splitlines()
     for index, line in enumerate(lines):
         stripped = line.strip().lstrip("-•*").strip()
+        bracket_slot = re.fullmatch(
+            r"([^：:{}【】]{1,50})[：:]\s*"
+            r"【(?:请)?(?:填写|粘贴)[^】]*】",
+            stripped,
+        )
+        if bracket_slot is not None:
+            slots.append(bracket_slot.group(1).strip())
+            continue
         if "|" in stripped:
             cells = [cell.strip() for cell in stripped.strip("|").split("|")]
             if cells and not all(re.fullmatch(r":?-{3,}:?", cell) for cell in cells):
@@ -418,6 +426,16 @@ def _blank_input_slots(prompt: str) -> list[str]:
             and (index == 0 or "{{" not in lines[index - 1])
         ):
             slots.append(fill_block.group(1).strip())
+        if (
+            index + 1 < len(lines)
+            and re.fullmatch(r"[^：:{}【】]{1,50}[：:]", stripped)
+            and re.fullmatch(
+                r"【(?:请)?(?:填写|粘贴)[^】]*】",
+                lines[index + 1].strip(),
+            )
+        ):
+            slots.append(stripped.rstrip("：:").strip())
+            continue
         match = re.fullmatch(r"([^：:{}]{1,40})[：:]\s*", stripped)
         if match is None:
             continue
@@ -441,9 +459,9 @@ def test_v110_has_no_silent_blank_input_slots() -> None:
     manifest, report, _ = _load_v110_artifacts()
 
     missing = {
-        task["code"]: _blank_input_slots(task["prompt"])
+        task["code"]: _unresolved_input_slots(task["prompt"])
         for task in manifest["tasks"]
-        if _blank_input_slots(task["prompt"])
+        if _unresolved_input_slots(task["prompt"])
     }
 
     assert missing == {}
@@ -474,6 +492,33 @@ def test_v110_has_no_silent_blank_input_slots() -> None:
             decision["field_key"],
         )
         for decision in report["blank_slot_decisions"]
+    }
+    assert report["counts"]["reviewed_bracket_slots"] == len(
+        report["bracket_slot_decisions"]
+    )
+    assert report["counts"]["reviewed_bracket_slots"] == 64
+    assert len(
+        {
+            decision["task_code"]
+            for decision in report["bracket_slot_decisions"]
+        }
+    ) == 19
+    bracket_audit_keys = {
+        (
+            decision["source_ref"],
+            decision["original_slot"],
+            decision["field_key"],
+        )
+        for decision in report["review_decisions"]
+        if decision.get("review_origin") == "BRACKET_SLOT"
+    }
+    assert bracket_audit_keys == {
+        (
+            decision["source_ref"],
+            decision["original_slot"],
+            decision["field_key"],
+        )
+        for decision in report["bracket_slot_decisions"]
     }
 
 
