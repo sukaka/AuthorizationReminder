@@ -2,6 +2,7 @@ from sqlalchemy import create_engine, inspect
 
 from app.database import Base
 from app import models  # noqa: F401
+from app.models import Assistant, Task
 
 
 FOUNDATION_TABLES = {
@@ -61,3 +62,43 @@ def test_generation_lookup_indexes_cover_owner_task_and_status() -> None:
     }
 
     assert {"sso_user_id", "task_id", "status"}.issubset(indexed_columns)
+
+
+def test_task_supports_manual_source_and_document_metadata(generation_db) -> None:
+    assistant = Assistant(code="formal", name="正式文档助手")
+    generation_db.add(assistant)
+    generation_db.flush()
+    task = Task(
+        assistant_id=assistant.id,
+        code="formal-report",
+        name="正式报告",
+        source_version="V1.10",
+        source_ref="V1.10｜第六部分｜实施报告",
+        document_type="REPORT",
+        formal_document=True,
+    )
+    generation_db.add(task)
+    generation_db.flush()
+
+    assert task.source_version == "V1.10"
+    assert task.source_ref == "V1.10｜第六部分｜实施报告"
+    assert task.document_type == "REPORT"
+    assert task.formal_document is True
+
+
+def test_task_document_metadata_defaults(generation_db) -> None:
+    assistant = Assistant(code="plain", name="普通文档助手")
+    generation_db.add(assistant)
+    generation_db.flush()
+    task = Task(
+        assistant_id=assistant.id,
+        code="plain-text",
+        name="普通文本",
+    )
+    generation_db.add(task)
+    generation_db.flush()
+
+    assert task.source_version == ""
+    assert task.source_ref == ""
+    assert task.document_type == "PLAIN_TEXT"
+    assert task.formal_document is False
