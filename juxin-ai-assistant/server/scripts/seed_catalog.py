@@ -11,6 +11,23 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
 CATALOG_PATH = ROOT_DIR / "catalog" / "assistants.json"
+FIELD_TYPES = {
+    "TEXT",
+    "TEXTAREA",
+    "NUMBER",
+    "DATE",
+    "DATETIME",
+    "SELECT",
+    "MULTISELECT",
+    "CHECKBOX",
+}
+REQUIRED_TASK_FIELDS = (
+    "prompt_content",
+    "source_version",
+    "source_ref",
+    "document_type",
+    "formal_document",
+)
 
 
 def load_catalog(path: Path = CATALOG_PATH) -> dict[str, Any]:
@@ -46,9 +63,22 @@ def validate_catalog(catalog: dict[str, Any]) -> None:
                 raise ValueError(f"Prompt ID 重复：{prompt_id}")
             task_codes.add(task_code)
             prompt_ids.add(prompt_id)
+            for required_field in REQUIRED_TASK_FIELDS:
+                if required_field not in task:
+                    raise ValueError(
+                        f"任务 {task_code} 缺少 {required_field}"
+                    )
+            if not str(task["prompt_content"]).strip():
+                raise ValueError(f"任务 {task_code} 的 prompt_content 为空")
+            if not str(task["document_type"]).strip():
+                raise ValueError(f"任务 {task_code} 的 document_type 为空")
+            if not isinstance(task["formal_document"], bool):
+                raise ValueError(
+                    f"任务 {task_code} 的 formal_document 必须为布尔值"
+                )
             fields = task.get("fields")
-            if not isinstance(fields, list) or not fields:
-                raise ValueError(f"任务 {task_code} 没有动态字段")
+            if not isinstance(fields, list):
+                raise ValueError(f"任务 {task_code} 的动态字段格式无效")
             field_keys: set[str] = set()
             for field in fields:
                 field_key = str(field.get("field_key") or "").strip()
@@ -61,7 +91,69 @@ def validate_catalog(catalog: dict[str, Any]) -> None:
                     raise ValueError(
                         f"任务 {task_code} 引用了未知字段模板：{template_name}"
                     )
+                field_type = str(
+                    field.get("field_type")
+                    or (
+                        templates.get(template_name, {})
+                        if template_name
+                        else {}
+                    ).get("field_type")
+                    or "TEXTAREA"
+                ).upper()
+                if field_type not in FIELD_TYPES:
+                    raise ValueError(
+                        f"任务 {task_code} 的字段类型无效：{field_type}"
+                    )
                 field_keys.add(field_key)
+
+
+def normalize_staged_prompts(
+    catalog: dict[str, Any],
+    staged_prompts: dict[int | str, int] | None,
+) -> dict[int, int] | None:
+    if staged_prompts is None:
+        return None
+    if not isinstance(staged_prompts, dict):
+        raise ValueError("staged prompts 必须是 Prompt ID 到版本号的映射")
+    normalized: dict[int, int] = {}
+    for raw_prompt_id, raw_version in staged_prompts.items():
+        try:
+            prompt_id = int(raw_prompt_id)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"非法 Prompt ID：{raw_prompt_id}") from exc
+        if (
+            isinstance(raw_version, bool)
+            or not isinstance(raw_version, int)
+            or raw_version <= 0
+        ):
+            raise ValueError(
+                f"Prompt {prompt_id} 的 staged version 无效"
+            )
+        if prompt_id in normalized:
+            raise ValueError(f"Prompt ID 重复：{prompt_id}")
+        normalized[prompt_id] = raw_version
+
+    catalog_prompt_ids = {
+        int(task["prompt_external_id"])
+        for assistant in catalog["assistants"]
+        for task in assistant["tasks"]
+    }
+    staged_prompt_ids = set(normalized)
+    missing = sorted(catalog_prompt_ids - staged_prompt_ids)
+    unknown = sorted(staged_prompt_ids - catalog_prompt_ids)
+    if missing or unknown:
+        raise ValueError(
+            "staged prompts 映射不完整"
+            f"；缺失：{missing}；未知：{unknown}"
+        )
+    return normalized
+
+
+def load_staged_prompts(path: Path) -> dict[int | str, int]:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError("staged prompts 文件必须是 JSON 对象")
+    return payload
 
 
 def expand_field(
@@ -98,12 +190,17 @@ async def seed_catalog(
     prompt_client,
     *,
     force_config: bool = False,
+    staged_prompts: dict[int | str, int] | None = None,
+    finalize_published: bool = False,
 ) -> dict[str, Any]:
     from sqlalchemy import select
 
     from app.models import Assistant, Task, TaskField, TaskPromptBinding
 
     validate_catalog(catalog)
+    normalized_staged = normalize_staged_prompts(catalog, staged_prompts)
+    if finalize_published and normalized_staged is None:
+        raise ValueError("--finalize-published 必须配合 --staged-prompts")
     entries: list[tuple[dict, dict, int, bool]] = []
     missing_prompts: list[dict[str, Any]] = []
     for assistant_definition in catalog["assistants"]:
@@ -119,16 +216,41 @@ async def seed_catalog(
                     )
                 )
             prompt_id = int(task_definition["prompt_external_id"])
-            if existing_binding is not None and not force_config:
+            if (
+                normalized_staged is not None
+                and existing_binding is not None
+                and not force_config
+                and existing_binding.prompt_external_id != prompt_id
+            ):
+                raise ValueError(
+                    "任务 "
+                    f"{task_definition['code']} 已绑定管理员自定义 Prompt "
+                    f"{existing_binding.prompt_external_id}；"
+                    "使用 --staged-prompts 前请先确认并传入 --force-config"
+                )
+            if (
+                existing_binding is not None
+                and not force_config
+                and normalized_staged is None
+            ):
                 prompt_id = existing_binding.prompt_external_id
+            prompt_version = (
+                normalized_staged[prompt_id]
+                if normalized_staged is not None
+                else None
+            )
             try:
-                await prompt_client.get_published(prompt_id)
+                await prompt_client.get_published(
+                    prompt_id,
+                    version=prompt_version,
+                )
             except (LookupError, ValueError):
                 published = False
                 missing_prompts.append(
                     {
                         "task_code": task_definition["code"],
                         "prompt_external_id": prompt_id,
+                        "prompt_version": prompt_version,
                     }
                 )
             else:
@@ -141,6 +263,14 @@ async def seed_catalog(
                     published,
                 )
             )
+    if normalized_staged is not None and missing_prompts:
+        raise ValueError(
+            "staged Prompt 版本尚未发布："
+            + "、".join(
+                f"{item['prompt_external_id']}@{item['prompt_version']}"
+                for item in missing_prompts
+            )
+        )
 
     report: dict[str, Any] = {
         "assistants_created": 0,
@@ -199,6 +329,10 @@ async def seed_catalog(
                     description=task_definition["description"],
                     output_format=task_definition["output_format"],
                     safety_notice=task_definition["safety_notice"],
+                    source_version=task_definition["source_version"],
+                    source_ref=task_definition["source_ref"],
+                    document_type=task_definition["document_type"],
+                    formal_document=task_definition["formal_document"],
                     sort_order=task_sort_order,
                     status="ACTIVE" if published else "DRAFT",
                 )
@@ -215,6 +349,12 @@ async def seed_catalog(
                     task.description = task_definition["description"]
                     task.output_format = task_definition["output_format"]
                     task.safety_notice = task_definition["safety_notice"]
+                    task.source_version = task_definition["source_version"]
+                    task.source_ref = task_definition["source_ref"]
+                    task.document_type = task_definition["document_type"]
+                    task.formal_document = task_definition[
+                        "formal_document"
+                    ]
                     task.sort_order = (
                         assistant_definition["tasks"].index(task_definition) + 1
                     ) * 10
@@ -247,25 +387,62 @@ async def seed_catalog(
                         "sort_order",
                     ):
                         setattr(field, key, definition[key])
+            if force_config:
+                configured_field_keys = {
+                    raw_field["field_key"]
+                    for raw_field in task_definition["fields"]
+                }
+                for field_key, field in existing_fields.items():
+                    if field_key not in configured_field_keys:
+                        db.delete(field)
 
             binding = db.scalar(
                 select(TaskPromptBinding).where(
                     TaskPromptBinding.task_id == task.id
                 )
             )
+            should_finalize_binding = False
             if binding is None:
                 binding = TaskPromptBinding(
                     task_id=task.id,
                     prompt_external_id=prompt_id,
-                    version_policy="PUBLISHED",
+                    version_policy=(
+                        "PINNED"
+                        if normalized_staged is not None
+                        else "PUBLISHED"
+                    ),
+                    pinned_version=(
+                        normalized_staged[prompt_id]
+                        if normalized_staged is not None
+                        else None
+                    ),
                     status="ACTIVE" if published else "DISABLED",
                 )
                 db.add(binding)
                 report["bindings_created"] += 1
             else:
-                if force_config:
+                should_finalize_binding = (
+                    finalize_published
+                    and normalized_staged is not None
+                    and binding.status == "ACTIVE"
+                    and binding.prompt_external_id == prompt_id
+                    and binding.version_policy == "PINNED"
+                    and binding.pinned_version == normalized_staged[prompt_id]
+                )
+                if should_finalize_binding:
+                    binding.status = "ACTIVE" if published else "DISABLED"
+                    binding.version_policy = "PUBLISHED"
+                    binding.pinned_version = None
+                elif not finalize_published:
+                    if force_config:
+                        binding.prompt_external_id = prompt_id
+                    binding.status = "ACTIVE" if published else "DISABLED"
+                    if normalized_staged is not None:
+                        binding.prompt_external_id = prompt_id
+                        binding.version_policy = "PINNED"
+                        binding.pinned_version = normalized_staged[prompt_id]
+                elif force_config:
                     binding.prompt_external_id = prompt_id
-                binding.status = "ACTIVE" if published else "DISABLED"
         db.commit()
     except Exception:
         db.rollback()
@@ -303,11 +480,18 @@ async def async_main(args: argparse.Namespace) -> int:
         settings.auth_fetch_timeout_ms / 1000,
     )
     with SessionLocal() as db:
+        staged_prompts = (
+            load_staged_prompts(Path(args.staged_prompts))
+            if args.staged_prompts
+            else None
+        )
         report = await seed_catalog(
             db,
             catalog,
             client,
             force_config=args.force_config,
+            staged_prompts=staged_prompts,
+            finalize_published=args.finalize_published,
         )
     print(json.dumps(report, ensure_ascii=False))
     if args.require_all_published and report["missing_prompts"]:
@@ -320,6 +504,8 @@ def main() -> None:
     parser.add_argument("--validate-only", action="store_true")
     parser.add_argument("--force-config", action="store_true")
     parser.add_argument("--require-all-published", action="store_true")
+    parser.add_argument("--staged-prompts")
+    parser.add_argument("--finalize-published", action="store_true")
     raise SystemExit(asyncio.run(async_main(parser.parse_args())))
 
 
