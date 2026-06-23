@@ -1,5 +1,6 @@
 import argparse
 import asyncio
+import hashlib
 import json
 import sys
 from pathlib import Path
@@ -9,6 +10,12 @@ from typing import Any
 ROOT_DIR = Path(__file__).resolve().parents[1]
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
+
+from app.quality_rules import (
+    QUALITY_RULE_SEED_ACTOR,
+    parse_quality_rule_tags,
+    strict_string_tags,
+)
 
 CATALOG_PATH = ROOT_DIR / "catalog" / "assistants.json"
 MANUAL_MANIFEST_PATH = ROOT_DIR / "catalog" / "manual-v1.10.json"
@@ -237,6 +244,27 @@ def manual_knowledge_category(item: dict[str, Any]) -> str:
     return "COMPANY"
 
 
+def quality_rule_key(item: dict[str, Any]) -> str:
+    assistant_code = str(item.get("assistant_code") or "").strip()
+    source_ref = str(item.get("source_ref") or "").strip()
+    identity = "\n".join((assistant_code, source_ref))
+    digest = hashlib.sha256(identity.encode()).hexdigest()[:16]
+    return f"quality-rule-{assistant_code}-{digest}"
+
+
+def _is_seed_owned_quality_rule(
+    item,
+    *,
+    assistant_codes: set[str],
+) -> bool:
+    parsed = parse_quality_rule_tags(item.tags_json)
+    return (
+        parsed is not None
+        and parsed.assistant_code in assistant_codes
+        and item.created_by == QUALITY_RULE_SEED_ACTOR
+    )
+
+
 def upsert_manual_knowledge(
     db,
     item: dict[str, Any],
@@ -244,6 +272,8 @@ def upsert_manual_knowledge(
     tasks_by_code: dict[str, Any],
     cipher,
     key_version: str,
+    *,
+    require_seed_owned_key: bool = False,
 ) -> int:
     from sqlalchemy import delete, select
 
@@ -263,15 +293,22 @@ def upsert_manual_knowledge(
     ]
     if original_category:
         tags.append(f"manual-category:{original_category}")
+    tags.extend(str(tag) for tag in item.get("tags", []) if str(tag))
     category = manual_knowledge_category(item)
-    existing = next(
-        (
-            row
-            for row in db.scalars(select(KnowledgeItem)).all()
-            if key_tag in (row.tags_json or [])
-        ),
-        None,
-    )
+    matches = [
+        row
+        for row in db.scalars(select(KnowledgeItem)).all()
+        if (
+            (row_tags := strict_string_tags(row.tags_json)) is not None
+            and key_tag in row_tags
+        )
+    ]
+    if require_seed_owned_key:
+        if len(matches) > 1:
+            raise ValueError(f"质量规则 key 重复：{key}")
+        if matches and matches[0].created_by != QUALITY_RULE_SEED_ACTOR:
+            raise ValueError(f"质量规则 key 已被非 seed 知识占用：{key}")
+    existing = matches[0] if matches else None
     if existing is None:
         import uuid as uuid_lib
 
@@ -295,8 +332,8 @@ def upsert_manual_knowledge(
             key_version=key_version,
             priority=int(item.get("priority") or 0),
             status="ACTIVE",
-            created_by="manual-v1.10-seed",
-            updated_by="manual-v1.10-seed",
+            created_by=QUALITY_RULE_SEED_ACTOR,
+            updated_by=QUALITY_RULE_SEED_ACTOR,
         )
         db.add(knowledge)
         db.flush()
@@ -319,7 +356,7 @@ def upsert_manual_knowledge(
         knowledge.key_version = key_version
         knowledge.priority = int(item.get("priority") or 0)
         knowledge.status = "ACTIVE"
-        knowledge.updated_by = "manual-v1.10-seed"
+        knowledge.updated_by = QUALITY_RULE_SEED_ACTOR
 
     linked_tasks = resolve_knowledge_tasks(item, catalog, tasks_by_code)
     db.execute(
@@ -334,6 +371,77 @@ def upsert_manual_knowledge(
         ]
     )
     return 1
+
+
+def upsert_manual_quality_rules(
+    db,
+    rules: list[dict[str, Any]],
+    catalog: dict[str, Any],
+    tasks_by_code: dict[str, Any],
+    cipher,
+    key_version: str,
+) -> int:
+    from sqlalchemy import delete, select
+
+    from app.models import KnowledgeItem, KnowledgeTaskLink
+
+    assistant_codes = {
+        assistant["code"] for assistant in catalog["assistants"]
+    }
+    known_assistant_codes = {
+        assistant["code"] for assistant in load_catalog()["assistants"]
+    }
+    upserted = 0
+    desired_keys: set[str] = set()
+    for item in rules:
+        if item.get("classification") != "QUALITY_RULE":
+            continue
+        assistant_code = str(item.get("assistant_code") or "").strip()
+        if assistant_code not in known_assistant_codes:
+            raise ValueError(
+                f"质量规则引用未知助手：{assistant_code or '<empty>'}"
+            )
+        if assistant_code not in assistant_codes:
+            continue
+        normalized_rule = {
+            **item,
+            "key": quality_rule_key(item),
+            "title": item.get("source_title") or item.get("title"),
+            "content": item.get("prompt"),
+            "task_scopes": [f"assistant:{assistant_code}"],
+            "tags": [
+                "quality-rule",
+                f"assistant:{assistant_code}",
+            ],
+        }
+        desired_keys.add(normalized_rule["key"])
+        upserted += upsert_manual_knowledge(
+            db,
+            normalized_rule,
+            catalog,
+            tasks_by_code,
+            cipher,
+            key_version,
+            require_seed_owned_key=True,
+        )
+    for knowledge in db.scalars(select(KnowledgeItem)).all():
+        if not _is_seed_owned_quality_rule(
+            knowledge,
+            assistant_codes=assistant_codes,
+        ):
+            continue
+        parsed = parse_quality_rule_tags(knowledge.tags_json)
+        assert parsed is not None
+        if parsed.key in desired_keys:
+            continue
+        knowledge.status = "INACTIVE"
+        knowledge.updated_by = QUALITY_RULE_SEED_ACTOR
+        db.execute(
+            delete(KnowledgeTaskLink).where(
+                KnowledgeTaskLink.knowledge_id == knowledge.id
+            )
+        )
+    return upserted
 
 
 async def seed_catalog(
@@ -461,6 +569,7 @@ async def seed_catalog(
         "bindings_created": 0,
         "missing_prompts": missing_prompts,
         "knowledge_upserted": 0,
+        "quality_rules_upserted": 0,
     }
     assistants_by_code: dict[str, Assistant] = {}
     try:
@@ -641,6 +750,14 @@ async def seed_catalog(
                 cipher,
                 key_version,
             )
+        report["quality_rules_upserted"] += upsert_manual_quality_rules(
+            db,
+            manual_manifest.get("quality_rules", []),
+            catalog,
+            tasks_by_code,
+            cipher,
+            key_version,
+        )
         db.commit()
     except Exception:
         db.rollback()

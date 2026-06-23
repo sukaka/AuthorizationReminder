@@ -1,10 +1,12 @@
 import json
+import os
 from copy import deepcopy
 from pathlib import Path
 
 import pytest
 from sqlalchemy import func, select
 
+from app.crypto import ContentCipher, EncryptedPayload
 from app.models import (
     Assistant,
     KnowledgeItem,
@@ -259,6 +261,557 @@ async def test_catalog_seed_upserts_manual_knowledge_and_task_links(
         "COMPLIANCE",
         "TECHNICAL",
     }
+
+
+@pytest.mark.asyncio
+async def test_catalog_seed_upserts_quality_rules_idempotently_and_scopes_links(
+    generation_db,
+) -> None:
+    from scripts.seed_catalog import load_catalog, seed_catalog
+
+    catalog = load_catalog()
+    manifest = load_json(MANIFEST_PATH)
+    cipher = ContentCipher(os.environ["CONTENT_ENCRYPTION_KEY"])
+
+    await seed_catalog(
+        generation_db,
+        catalog,
+        PublishedCatalogPrompts(),
+        force_config=True,
+        cipher=cipher,
+        key_version="v1",
+    )
+    first_rules = generation_db.scalars(
+        select(KnowledgeItem).where(
+            KnowledgeItem.tags_json.contains("quality-rule")
+        )
+    ).all()
+    first_by_key = {
+        next(
+            tag.removeprefix("key:")
+            for tag in item.tags_json
+            if tag.startswith("key:")
+        ): item.uuid
+        for item in first_rules
+    }
+
+    await seed_catalog(
+        generation_db,
+        catalog,
+        PublishedCatalogPrompts(),
+        force_config=True,
+        cipher=cipher,
+        key_version="v1",
+    )
+    rules = generation_db.scalars(
+        select(KnowledgeItem).where(
+            KnowledgeItem.tags_json.contains("quality-rule")
+        )
+    ).all()
+    second_by_key = {
+        next(
+            tag.removeprefix("key:")
+            for tag in item.tags_json
+            if tag.startswith("key:")
+        ): item.uuid
+        for item in rules
+    }
+
+    assert len(rules) == len(manifest["quality_rules"]) == 12
+    assert second_by_key == first_by_key
+    assert all(
+        {"manual:V1.10", "quality-rule"} <= set(item.tags_json)
+        for item in rules
+    )
+    assert all(
+        item.category
+        in {
+            "COMPANY",
+            "PRODUCT",
+            "SERVICE",
+            "SALES_SCRIPT",
+            "DELIVERY",
+            "TENDER",
+            "FAQ",
+            "CASE",
+            "TRAINING",
+            "COMPLIANCE",
+            "TECHNICAL",
+        }
+        for item in rules
+    )
+    by_title = {
+        rule["source_title"]: rule["prompt"]
+        for rule in manifest["quality_rules"]
+    }
+    assert all(
+        item.content_ciphertext != by_title[item.title].encode()
+        for item in rules
+    )
+    assert {
+        cipher.decrypt_json(
+            EncryptedPayload(
+                ciphertext=item.content_ciphertext,
+                nonce=item.content_nonce,
+            ),
+            item.uuid.encode(),
+        )["content"]
+        for item in rules
+    } == {content.strip() for content in by_title.values()}
+
+    for rule in rules:
+        assistant_tag = next(
+            tag for tag in rule.tags_json if tag.startswith("assistant:")
+        )
+        assistant_code = assistant_tag.split(":", 1)[1]
+        linked_assistants = set(
+            generation_db.scalars(
+                select(Assistant.code)
+                .join(Task, Task.assistant_id == Assistant.id)
+                .join(
+                    KnowledgeTaskLink,
+                    KnowledgeTaskLink.task_id == Task.id,
+                )
+                .where(KnowledgeTaskLink.knowledge_id == rule.id)
+            ).all()
+        )
+        assert linked_assistants == {assistant_code}
+
+    catalog_task_count = sum(
+        len(assistant["tasks"]) for assistant in catalog["assistants"]
+    )
+    assert generation_db.scalar(
+        select(func.count()).select_from(Task)
+    ) == catalog_task_count
+
+
+@pytest.mark.asyncio
+async def test_catalog_seed_rejects_quality_rule_for_unknown_assistant(
+    generation_db,
+) -> None:
+    from scripts.seed_catalog import load_catalog, seed_catalog
+
+    manifest = load_json(MANIFEST_PATH)
+    manifest["quality_rules"][0]["assistant_code"] = "unknown-assistant"
+
+    with pytest.raises(ValueError, match="unknown-assistant"):
+        await seed_catalog(
+            generation_db,
+            load_catalog(),
+            PublishedCatalogPrompts(),
+            manual_manifest=manifest,
+        )
+
+
+@pytest.mark.asyncio
+async def test_quality_rule_title_change_updates_same_seeded_row(
+    generation_db,
+) -> None:
+    from scripts.seed_catalog import load_catalog, seed_catalog
+
+    catalog = load_catalog()
+    manifest = load_json(MANIFEST_PATH)
+    await seed_catalog(
+        generation_db,
+        catalog,
+        PublishedCatalogPrompts(),
+        manual_manifest=manifest,
+    )
+    original = generation_db.scalar(
+        select(KnowledgeItem).where(
+            KnowledgeItem.title
+            == manifest["quality_rules"][0]["source_title"]
+        )
+    )
+    assert original is not None
+    original_uuid = original.uuid
+
+    changed = deepcopy(manifest)
+    changed["quality_rules"][0]["source_title"] = "更新后的规则标题"
+    await seed_catalog(
+        generation_db,
+        catalog,
+        PublishedCatalogPrompts(),
+        manual_manifest=changed,
+    )
+
+    updated = generation_db.scalar(
+        select(KnowledgeItem).where(
+            KnowledgeItem.title == "更新后的规则标题"
+        )
+    )
+    active_rules = [
+        row
+        for row in generation_db.scalars(select(KnowledgeItem)).all()
+        if row.status == "ACTIVE"
+        and isinstance(row.tags_json, list)
+        and "quality-rule" in row.tags_json
+    ]
+    assert updated is not None
+    assert updated.uuid == original_uuid
+    assert len(active_rules) == 12
+
+
+@pytest.mark.asyncio
+async def test_quality_rule_removal_deactivates_only_current_seed_rules(
+    generation_db,
+) -> None:
+    from app.admin.knowledge_admin import update_knowledge
+    from app.admin.schemas import KnowledgeUpdateIn
+    from scripts.seed_catalog import (
+        load_catalog,
+        quality_rule_key,
+        seed_catalog,
+    )
+
+    catalog = load_catalog()
+    manifest = load_json(MANIFEST_PATH)
+    cipher = ContentCipher(os.environ["CONTENT_ENCRYPTION_KEY"])
+    await seed_catalog(
+        generation_db,
+        catalog,
+        PublishedCatalogPrompts(),
+        manual_manifest=manifest,
+        cipher=cipher,
+        key_version="v1",
+    )
+    removed_rule = manifest["quality_rules"][0]
+    removed_key_tag = f"key:{quality_rule_key(removed_rule)}"
+    removed = next(
+        row
+        for row in generation_db.scalars(select(KnowledgeItem)).all()
+        if isinstance(row.tags_json, list)
+        and removed_key_tag in row.tags_json
+    )
+    linked_task = generation_db.scalar(
+        select(Task)
+        .join(
+            KnowledgeTaskLink,
+            KnowledgeTaskLink.task_id == Task.id,
+        )
+        .where(KnowledgeTaskLink.knowledge_id == removed.id)
+    )
+    assert linked_task is not None
+    update_knowledge(
+        generation_db,
+        removed.uuid,
+        KnowledgeUpdateIn(content="管理员临时修改后又从 manifest 删除"),
+        "admin-user",
+        cipher,
+        "v1",
+    )
+    generation_db.commit()
+    assert removed.updated_by == "admin-user"
+
+    def add_protected_rule(
+        *,
+        uuid: str,
+        tags: list[str],
+        created_by: str,
+    ) -> KnowledgeItem:
+        encrypted = cipher.encrypt_json({"content": uuid}, uuid.encode())
+        item = KnowledgeItem(
+            uuid=uuid,
+            title=uuid,
+            category="COMPANY",
+            tags_json=tags,
+            keywords_json=[],
+            content_ciphertext=encrypted.ciphertext,
+            content_nonce=encrypted.nonce,
+            key_version="v1",
+            priority=0,
+            status="ACTIVE",
+            created_by=created_by,
+            updated_by=created_by,
+        )
+        generation_db.add(item)
+        generation_db.flush()
+        generation_db.add(
+            KnowledgeTaskLink(
+                knowledge_id=item.id,
+                task_id=linked_task.id,
+            )
+        )
+        return item
+
+    admin_rule = add_protected_rule(
+        uuid="admin-quality-rule",
+        tags=[
+            "manual:V1.10",
+            "quality-rule",
+            "assistant:presales",
+            "key:quality-rule-presales-ffffffffffffffff",
+        ],
+        created_by="admin-user",
+    )
+    older_rule = add_protected_rule(
+        uuid="older-quality-rule",
+        tags=[
+            "manual:V1.09",
+            "quality-rule",
+            "assistant:presales",
+            "key:quality-rule-presales-eeeeeeeeeeeeeeee",
+        ],
+        created_by="manual-v1.10-seed",
+    )
+    invalid_key_rule = add_protected_rule(
+        uuid="invalid-key-quality-rule",
+        tags=[
+            "manual:V1.10",
+            "quality-rule",
+            "assistant:presales",
+            "key:quality-rule-presales-not-a-seed-hash",
+        ],
+        created_by="manual-v1.10-seed",
+    )
+    generation_db.commit()
+
+    reduced = deepcopy(manifest)
+    reduced["quality_rules"] = reduced["quality_rules"][1:]
+    await seed_catalog(
+        generation_db,
+        catalog,
+        PublishedCatalogPrompts(),
+        manual_manifest=reduced,
+        cipher=cipher,
+        key_version="v1",
+    )
+
+    generation_db.refresh(removed)
+    generation_db.refresh(admin_rule)
+    generation_db.refresh(older_rule)
+    generation_db.refresh(invalid_key_rule)
+    company = generation_db.scalar(
+        select(KnowledgeItem).where(
+            KnowledgeItem.title
+            == "聚信得仁公司知识与官网口径 V1.10"
+        )
+    )
+    assert removed.status == "INACTIVE"
+    assert generation_db.scalar(
+        select(func.count())
+        .select_from(KnowledgeTaskLink)
+        .where(KnowledgeTaskLink.knowledge_id == removed.id)
+    ) == 0
+    assert admin_rule.status == "ACTIVE"
+    assert older_rule.status == "ACTIVE"
+    assert invalid_key_rule.status == "ACTIVE"
+    assert generation_db.scalar(
+        select(func.count())
+        .select_from(KnowledgeTaskLink)
+        .where(KnowledgeTaskLink.knowledge_id == invalid_key_rule.id)
+    ) == 1
+    assert company is not None and company.status == "ACTIVE"
+
+
+@pytest.mark.asyncio
+async def test_quality_rule_seed_rejects_admin_key_occupancy_and_rolls_back(
+    generation_db,
+) -> None:
+    from scripts.seed_catalog import load_catalog, quality_rule_key, seed_catalog
+
+    catalog = load_catalog()
+    manifest = load_json(MANIFEST_PATH)
+    rule = manifest["quality_rules"][0]
+    key_tag = f"key:{quality_rule_key(rule)}"
+    cipher = ContentCipher(os.environ["CONTENT_ENCRYPTION_KEY"])
+    assistant = Assistant(
+        code="admin-protected",
+        name="管理员保护助手",
+        status="ACTIVE",
+    )
+    generation_db.add(assistant)
+    generation_db.flush()
+    task = Task(
+        assistant_id=assistant.id,
+        code="admin-protected-task",
+        name="管理员保护任务",
+        status="ACTIVE",
+    )
+    generation_db.add(task)
+    generation_db.flush()
+    encrypted = cipher.encrypt_json(
+        {"content": "管理员原始内容"},
+        b"admin-key-occupancy",
+    )
+    occupied = KnowledgeItem(
+        uuid="admin-key-occupancy",
+        title="管理员占用的 key",
+        category="COMPANY",
+        tags_json=[key_tag, "admin-owned"],
+        keywords_json=[],
+        content_ciphertext=encrypted.ciphertext,
+        content_nonce=encrypted.nonce,
+        key_version="v1",
+        priority=7,
+        status="ACTIVE",
+        created_by="admin-user",
+        updated_by="admin-user",
+    )
+    generation_db.add(occupied)
+    generation_db.flush()
+    generation_db.add(
+        KnowledgeTaskLink(knowledge_id=occupied.id, task_id=task.id)
+    )
+    generation_db.commit()
+
+    with pytest.raises(ValueError, match="非 seed"):
+        await seed_catalog(
+            generation_db,
+            catalog,
+            PublishedCatalogPrompts(),
+            manual_manifest=manifest,
+            cipher=cipher,
+            key_version="v1",
+        )
+
+    generation_db.refresh(occupied)
+    payload = cipher.decrypt_json(
+        EncryptedPayload(
+            occupied.content_ciphertext,
+            occupied.content_nonce,
+        ),
+        occupied.uuid.encode(),
+    )
+    assert payload["content"] == "管理员原始内容"
+    assert occupied.tags_json == [key_tag, "admin-owned"]
+    assert occupied.created_by == occupied.updated_by == "admin-user"
+    assert generation_db.scalar(
+        select(func.count())
+        .select_from(KnowledgeTaskLink)
+        .where(KnowledgeTaskLink.knowledge_id == occupied.id)
+    ) == 1
+
+
+@pytest.mark.asyncio
+async def test_quality_rule_seed_rejects_duplicate_key_rows_and_rolls_back(
+    generation_db,
+) -> None:
+    from scripts.seed_catalog import load_catalog, quality_rule_key, seed_catalog
+
+    catalog = load_catalog()
+    manifest = load_json(MANIFEST_PATH)
+    key_tag = f"key:{quality_rule_key(manifest['quality_rules'][0])}"
+    cipher = ContentCipher(os.environ["CONTENT_ENCRYPTION_KEY"])
+    rows = []
+    for index in range(2):
+        uuid = f"duplicate-quality-key-{index}"
+        encrypted = cipher.encrypt_json(
+            {"content": f"重复原始内容 {index}"},
+            uuid.encode(),
+        )
+        row = KnowledgeItem(
+            uuid=uuid,
+            title=f"重复规则 {index}",
+            category="COMPANY",
+            tags_json=[
+                "manual:V1.10",
+                "quality-rule",
+                "assistant:presales",
+                key_tag,
+            ],
+            keywords_json=[],
+            content_ciphertext=encrypted.ciphertext,
+            content_nonce=encrypted.nonce,
+            key_version="v1",
+            priority=index,
+            status="ACTIVE",
+            created_by="manual-v1.10-seed",
+            updated_by="manual-v1.10-seed",
+        )
+        generation_db.add(row)
+        rows.append(row)
+    generation_db.commit()
+
+    with pytest.raises(ValueError, match="重复"):
+        await seed_catalog(
+            generation_db,
+            catalog,
+            PublishedCatalogPrompts(),
+            manual_manifest=manifest,
+            cipher=cipher,
+            key_version="v1",
+        )
+
+    assert generation_db.scalar(
+        select(func.count()).select_from(KnowledgeItem)
+    ) == 2
+    for index, row in enumerate(rows):
+        generation_db.refresh(row)
+        payload = cipher.decrypt_json(
+            EncryptedPayload(
+                row.content_ciphertext,
+                row.content_nonce,
+            ),
+            row.uuid.encode(),
+        )
+        assert payload["content"] == f"重复原始内容 {index}"
+        assert row.status == "ACTIVE"
+
+
+@pytest.mark.asyncio
+async def test_quality_rule_seed_restores_admin_updated_seed_row(
+    generation_db,
+) -> None:
+    from app.admin.knowledge_admin import update_knowledge
+    from app.admin.schemas import KnowledgeUpdateIn
+    from scripts.seed_catalog import load_catalog, quality_rule_key, seed_catalog
+
+    catalog = load_catalog()
+    manifest = load_json(MANIFEST_PATH)
+    rule = manifest["quality_rules"][0]
+    cipher = ContentCipher(os.environ["CONTENT_ENCRYPTION_KEY"])
+    await seed_catalog(
+        generation_db,
+        catalog,
+        PublishedCatalogPrompts(),
+        manual_manifest=manifest,
+        cipher=cipher,
+        key_version="v1",
+    )
+    key_tag = f"key:{quality_rule_key(rule)}"
+    seeded = next(
+        row
+        for row in generation_db.scalars(select(KnowledgeItem)).all()
+        if isinstance(row.tags_json, list) and key_tag in row.tags_json
+    )
+    original_uuid = seeded.uuid
+    update_knowledge(
+        generation_db,
+        seeded.uuid,
+        KnowledgeUpdateIn(content="管理员临时改写"),
+        "admin-user",
+        cipher,
+        "v1",
+    )
+    generation_db.commit()
+    assert seeded.updated_by == "admin-user"
+
+    await seed_catalog(
+        generation_db,
+        catalog,
+        PublishedCatalogPrompts(),
+        manual_manifest=manifest,
+        cipher=cipher,
+        key_version="v1",
+    )
+
+    generation_db.refresh(seeded)
+    payload = cipher.decrypt_json(
+        EncryptedPayload(
+            seeded.content_ciphertext,
+            seeded.content_nonce,
+        ),
+        seeded.uuid.encode(),
+    )
+    assert seeded.uuid == original_uuid
+    assert seeded.created_by == seeded.updated_by == "manual-v1.10-seed"
+    assert payload["content"] == rule["prompt"].strip()
+    assert generation_db.scalar(
+        select(func.count())
+        .select_from(KnowledgeTaskLink)
+        .where(KnowledgeTaskLink.knowledge_id == seeded.id)
+    ) > 0
 
 
 @pytest.mark.asyncio

@@ -14,6 +14,9 @@ class RetrievedKnowledge:
     content: str
     score: int
     priority: int
+    tags: tuple[str, ...]
+    created_by: str
+    updated_by: str
 
 
 class KnowledgeRetriever:
@@ -25,7 +28,7 @@ class KnowledgeRetriever:
         db: Session,
         task_id: int,
         inputs: dict[str, object],
-        limit: int = 8,
+        limit: int | None = 8,
     ) -> list[RetrievedKnowledge]:
         query_text = " ".join(str(value) for value in inputs.values()).lower()
         rows = db.scalars(
@@ -41,6 +44,11 @@ class KnowledgeRetriever:
         ).all()
         ranked: list[RetrievedKnowledge] = []
         for row in rows:
+            tags = row.tags_json
+            if not isinstance(tags, list) or not all(
+                isinstance(tag, str) for tag in tags
+            ):
+                continue
             keywords = [
                 str(item).strip().lower()
                 for item in row.keywords_json or []
@@ -61,10 +69,15 @@ class KnowledgeRetriever:
                     content=str(payload.get("content", "")),
                     score=score,
                     priority=row.priority,
+                    tags=tuple(tags),
+                    created_by=row.created_by,
+                    updated_by=row.updated_by,
                 )
             )
         ranked.sort(
             key=lambda item: (item.score, item.priority, item.uuid),
             reverse=True,
         )
+        if limit is None:
+            return ranked
         return ranked[: max(0, min(limit, 20))]

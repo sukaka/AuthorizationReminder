@@ -14,11 +14,19 @@ from sqlalchemy.orm import Session
 from .crypto import ContentCipher
 from .document_governance import render_document_governance
 from .field_validation import FieldValidationError, validate_task_inputs
-from .knowledge import KnowledgeRetriever
+from .knowledge import KnowledgeRetriever, RetrievedKnowledge
 from .models import GenerationRecord, Task, TaskField, TaskPromptBinding
 from .prompt_client import PromptCenterClient, render_prompt
+from .quality_rules import (
+    is_trusted_quality_rule,
+    parse_quality_rule_tags,
+)
 from .schemas import CompleteGenerationIn, PrepareGenerationIn, SessionPayload
 from .sensitive import SensitiveDetector
+
+QUALITY_RULE_MAX_COUNT = 20
+QUALITY_RULE_MAX_CHARS = 32_000
+REFERENCE_KNOWLEDGE_LIMIT = 8
 
 
 @dataclass(frozen=True)
@@ -28,6 +36,60 @@ class PreparedGeneration:
     messages: list[dict[str, str]]
     temperature: float
     safety_notice: str
+
+
+def _is_trusted_quality_rule(
+    item: RetrievedKnowledge,
+    assistant_code: str,
+) -> bool:
+    return is_trusted_quality_rule(
+        item.tags,
+        assistant_code=assistant_code,
+        created_by=item.created_by,
+        updated_by=item.updated_by,
+    )
+
+
+def _render_quality_rules(
+    items: list[RetrievedKnowledge],
+    assistant_code: str,
+) -> tuple[str, list[RetrievedKnowledge]]:
+    trusted = [
+        item
+        for item in items
+        if _is_trusted_quality_rule(item, assistant_code)
+    ]
+    trusted.sort(
+        key=lambda item: (
+            (
+                parsed.key
+                if (
+                    parsed := parse_quality_rule_tags(
+                        item.tags,
+                        expected_assistant_code=assistant_code,
+                    )
+                )
+                else ""
+            ),
+            item.title,
+            item.uuid,
+        )
+    )
+    rendered: list[str] = []
+    selected: list[RetrievedKnowledge] = []
+    used_chars = 0
+    for item in trusted[:QUALITY_RULE_MAX_COUNT]:
+        entry = f"[{item.title}]\n{item.content}"
+        separator_chars = 2 if rendered else 0
+        remaining = QUALITY_RULE_MAX_CHARS - used_chars - separator_chars
+        if remaining <= 0:
+            break
+        rendered.append(entry[:remaining])
+        selected.append(item)
+        used_chars += separator_chars + min(len(entry), remaining)
+        if len(entry) > remaining:
+            break
+    return "\n\n".join(rendered), selected
 
 
 async def prepare_generation(
@@ -126,7 +188,24 @@ async def prepare_generation(
         db,
         task.id,
         normalized_inputs,
+        limit=None,
     )
+    assistant_code = task.assistant.code
+    quality_rules = [
+        item
+        for item in knowledge_items
+        if _is_trusted_quality_rule(item, assistant_code)
+    ]
+    reference_items = [
+        item
+        for item in knowledge_items
+        if not _is_trusted_quality_rule(item, assistant_code)
+    ][:REFERENCE_KNOWLEDGE_LIMIT]
+    rendered_quality_rules, injected_quality_rules = _render_quality_rules(
+        quality_rules,
+        assistant_code,
+    )
+    injected_knowledge_items = injected_quality_rules + reference_items
     field_by_key = {field.field_key: field for field in fields}
     input_lines = []
     for key, value in normalized_inputs.items():
@@ -137,14 +216,14 @@ async def prepare_generation(
             else str(value)
         )
         input_lines.append(f"{label}：{rendered_value}")
-    if knowledge_items:
+    if reference_items:
         input_lines.extend(
             [
                 "",
                 "----- 参考知识开始 -----",
                 *[
                     f"[{item.title}]\n{item.content}"
-                    for item in knowledge_items
+                    for item in reference_items
                 ],
                 "----- 参考知识结束 -----",
             ]
@@ -160,6 +239,11 @@ async def prepare_generation(
     ]
     if governance:
         system_parts.append(governance)
+    if rendered_quality_rules:
+        system_parts.append(
+            "必须遵守的质量规则：\n"
+            + rendered_quality_rules
+        )
 
     generation_uuid = str(uuid_lib.uuid4())
     completion_token = secrets.token_urlsafe(32)
@@ -186,7 +270,7 @@ async def prepare_generation(
                 "title": item.title,
                 "score": item.score,
             }
-            for item in knowledge_items
+            for item in injected_knowledge_items
         ],
     )
     db.add(record)
