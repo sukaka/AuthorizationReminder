@@ -3,6 +3,7 @@ import hashlib
 import json
 
 import httpx
+import pytest
 from sqlalchemy import select
 
 from app.crypto import ContentCipher, EncryptedPayload
@@ -67,6 +68,47 @@ def test_prepare_returns_provider_neutral_messages_and_stores_ciphertext(
     assert record.prompt_external_id == 7
     assert record.prompt_version == 3
     assert record.completion_token_hash != payload["completion_token"].encode()
+
+
+def test_formal_report_system_message_includes_document_governance_once(
+    generation_client,
+    generation_db,
+    seeded_task,
+    respx_mock,
+) -> None:
+    seeded_task.formal_document = True
+    seeded_task.document_type = "REPORT"
+    generation_db.commit()
+
+    response = prepare_generation(generation_client, seeded_task, respx_mock)
+
+    assert response.status_code == 201
+    system_content = response.json()["messages"][0]["content"]
+    assert system_content.count("聚信得仁公司级统一输出总控要求") == 1
+    assert "【当前文档类型固定结构】" in system_content
+    assert "工作概述、执行过程、结果统计" in system_content
+
+
+@pytest.mark.parametrize("document_type", ["COMMUNICATION", "PLAIN_TEXT"])
+def test_non_formal_messages_do_not_include_document_template_rules(
+    generation_client,
+    generation_db,
+    seeded_task,
+    respx_mock,
+    document_type,
+) -> None:
+    seeded_task.formal_document = False
+    seeded_task.document_type = document_type
+    generation_db.commit()
+
+    response = prepare_generation(generation_client, seeded_task, respx_mock)
+
+    assert response.status_code == 201
+    system_content = response.json()["messages"][0]["content"]
+    assert "聚信得仁公司级统一输出总控要求" not in system_content
+    assert "封面包含" not in system_content
+    assert "页眉显示" not in system_content
+    assert "需要表格的内容必须使用标准表格" not in system_content
 
 
 def test_prepare_writes_body_free_audit_in_the_generation_transaction(

@@ -12,6 +12,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .crypto import ContentCipher
+from .document_governance import render_document_governance
 from .field_validation import FieldValidationError, validate_task_inputs
 from .knowledge import KnowledgeRetriever
 from .models import GenerationRecord, Task, TaskField, TaskPromptBinding
@@ -148,6 +149,17 @@ async def prepare_generation(
                 "----- 参考知识结束 -----",
             ]
         )
+    governance = render_document_governance(
+        formal_document=task.formal_document,
+        document_type=task.document_type,
+    )
+    system_parts = [
+        "公司安全规则：不得编造事实，不得泄露秘密，输出必须由员工复核。",
+        f"任务 Prompt：\n{rendered_prompt}",
+        f"输出格式：{task.output_format}。{task.safety_notice}",
+    ]
+    if governance:
+        system_parts.append(governance)
 
     generation_uuid = str(uuid_lib.uuid4())
     completion_token = secrets.token_urlsafe(32)
@@ -186,11 +198,7 @@ async def prepare_generation(
             messages=[
                 {
                     "role": "system",
-                    "content": (
-                        "公司安全规则：不得编造事实，不得泄露秘密，输出必须由员工复核。"
-                        f"\n\n任务 Prompt：\n{rendered_prompt}"
-                        f"\n\n输出格式：{task.output_format}。{task.safety_notice}"
-                    ),
+                    "content": "\n\n".join(system_parts),
                 },
                 {"role": "user", "content": "\n".join(input_lines)},
             ],
