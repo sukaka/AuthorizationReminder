@@ -259,6 +259,38 @@ def test_prompt_binding_is_validated_before_commit(
     assert binding.pinned_version == 5
 
 
+def test_admin_prompt_binding_update_cancels_catalog_rollout(
+    generation_db,
+    seeded_task,
+) -> None:
+    binding = generation_db.scalar(
+        select(TaskPromptBinding).where(
+            TaskPromptBinding.task_id == seeded_task.id
+        )
+    )
+    binding.rollout_token = "active-rollout-token"
+    generation_db.commit()
+    app.dependency_overrides[get_db] = lambda: generation_db
+    app.dependency_overrides[get_prompt_client] = lambda: PublishedPromptStub()
+
+    try:
+        with TestClient(app) as client:
+            response = client.put(
+                f"/api/ai/admin/tasks/{seeded_task.uuid}/prompt-binding",
+                json={
+                    "prompt_external_id": 42,
+                    "version_policy": "PUBLISHED",
+                    "status": "ACTIVE",
+                },
+            )
+    finally:
+        app.dependency_overrides.pop(get_db, None)
+        app.dependency_overrides.pop(get_prompt_client, None)
+
+    assert response.status_code == 200
+    assert binding.rollout_token is None
+
+
 def test_previously_active_task_cannot_be_deleted_after_returning_to_draft(
     generation_db,
     seeded_task,

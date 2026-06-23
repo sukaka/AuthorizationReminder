@@ -51,6 +51,11 @@ def test_foundation_tables_constraints_and_ciphertext_boundary() -> None:
     assert frozenset({"code"}) in unique_column_sets("ai_tasks")
     assert frozenset({"task_id", "field_key"}) in unique_column_sets("ai_task_fields")
     assert frozenset({"task_id"}) in unique_column_sets("ai_task_prompt_bindings")
+    assert "ai_prompt_catalog_rollouts" in inspector.get_table_names()
+    assert "rollout_token" in {
+        column["name"]
+        for column in inspector.get_columns("ai_task_prompt_bindings")
+    }
 
 
 def test_generation_lookup_indexes_cover_owner_task_and_status() -> None:

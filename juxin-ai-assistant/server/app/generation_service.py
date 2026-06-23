@@ -165,10 +165,13 @@ async def prepare_generation(
         raise HTTPException(status_code=409, detail="任务尚未绑定可用 Prompt")
     requested_version = (
         binding.pinned_version
-        if binding.version_policy == "PINNED"
+        if binding.version_policy in {"PINNED", "ROLLOUT"}
         else None
     )
-    if binding.version_policy == "PINNED" and requested_version is None:
+    if (
+        binding.version_policy in {"PINNED", "ROLLOUT"}
+        and requested_version is None
+    ):
         raise HTTPException(status_code=409, detail="任务固定版本配置无效")
     try:
         prompt = await prompt_client.get_published(

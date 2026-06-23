@@ -30,10 +30,11 @@ def test_migration_revision_graph_is_single_linear_head() -> None:
         migration_config("sqlite+pysqlite:///:memory:")
     )
 
-    assert script.get_heads() == ["0005_task_document_metadata"]
+    assert script.get_heads() == ["0006_prompt_catalog_rollouts"]
     assert [
         revision.revision for revision in script.walk_revisions()
     ] == [
+        "0006_prompt_catalog_rollouts",
         "0005_task_document_metadata",
         "0004_desktop_updates",
         "0003_governance",
@@ -249,3 +250,41 @@ def test_task_document_metadata_migration_round_trip(tmp_path: Path) -> None:
             )
         ).one()
     assert tuple(row) == ("", "", "PLAIN_TEXT", False)
+
+
+def test_prompt_catalog_rollout_migration_round_trip(tmp_path: Path) -> None:
+    database_path = tmp_path / "prompt-rollout.db"
+    database_url = f"sqlite+pysqlite:///{database_path}"
+    config = migration_config(database_url)
+    engine = create_engine(database_url)
+
+    command.upgrade(config, "0005_task_document_metadata")
+    command.upgrade(config, "0006_prompt_catalog_rollouts")
+    inspector = inspect(engine)
+
+    assert "ai_prompt_catalog_rollouts" in inspector.get_table_names()
+    assert {
+        "id",
+        "token",
+        "status",
+        "force_config",
+        "target_json",
+        "frozen_tasks_json",
+        "created_at",
+        "updated_at",
+    } == {
+        column["name"]
+        for column in inspector.get_columns("ai_prompt_catalog_rollouts")
+    }
+    assert "rollout_token" in {
+        column["name"]
+        for column in inspector.get_columns("ai_task_prompt_bindings")
+    }
+
+    command.downgrade(config, "0005_task_document_metadata")
+    inspector = inspect(engine)
+    assert "ai_prompt_catalog_rollouts" not in inspector.get_table_names()
+    assert "rollout_token" not in {
+        column["name"]
+        for column in inspector.get_columns("ai_task_prompt_bindings")
+    }

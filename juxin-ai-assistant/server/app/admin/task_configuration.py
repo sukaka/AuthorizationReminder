@@ -67,6 +67,7 @@ def _upsert_prompt_binding(
     binding.prompt_external_id = body.prompt_external_id
     binding.version_policy = body.version_policy.value
     binding.pinned_version = body.pinned_version
+    binding.rollout_token = None
     binding.status = body.status
     binding.updated_by = actor_id
     task.updated_by = actor_id

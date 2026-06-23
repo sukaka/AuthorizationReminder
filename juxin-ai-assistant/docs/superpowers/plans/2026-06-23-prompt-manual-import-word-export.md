@@ -475,7 +475,7 @@ task.formal_document = bool(task_definition.get("formal_document", False))
 
 Only apply catalog-controlled values when the task is new or `--force-config` is used, matching existing admin-edit preservation behavior.
 
-- [ ] **Step 6: Support staged Prompt versions**
+- [ ] **Step 6: Support atomic staged Prompt rollout**
 
 Add `--staged-prompts PATH` to `seed_catalog.py`. The JSON maps Prompt IDs to staged version numbers:
 
@@ -486,15 +486,27 @@ Add `--staged-prompts PATH` to `seed_catalog.py`. The JSON maps Prompt IDs to st
 }
 ```
 
-When supplied, seed each binding as:
+Before Prompt Center activation, validate every target through
+`get_staged(prompt_id, version)`, but do not apply the new catalog,
+fields, knowledge, assistants, or tasks. Freeze each existing active
+binding to the version it is already running:
 
 ```python
-binding.version_policy = "PINNED"
-binding.pinned_version = staged_versions[str(prompt_id)]
+binding.version_policy = "ROLLOUT"
+binding.pinned_version = current_published_version
 binding.status = "ACTIVE"
 ```
 
-Validate every pinned version through `get_published(prompt_id, version)` before committing the assistant DB transaction. Add `--finalize-published` to switch matching bindings back to `PUBLISHED` and clear `pinned_version` only after Prompt Center activation succeeds.
+Treat `ROLLOUT` as an internal fixed-version policy during generation.
+After Prompt Center activation, `--finalize-published` must lock and
+verify the same rollout marker and every exact published target before
+applying the catalog, fields, knowledge, and bindings in one assistant
+database transaction. New tasks become visible only in this
+transaction. Finalize switches target bindings to `PUBLISHED`, clears
+`pinned_version`, is a no-op when safely retried after success, and
+fails the whole batch if an administrator changed a binding during the
+rollout window. Pass the same `--force-config` authorization to stage
+and finalize.
 
 - [ ] **Step 7: Verify UUID preservation**
 
@@ -1275,6 +1287,9 @@ cp server/juxin-ai-assistant-dev.db \
 docker compose -f ../docker-compose.yml exec -T mysql mysqldump \
   -u root -p"$MYSQL_ROOT_PASSWORD" juxin_prompt_center \
   > "/tmp/juxin-prompt-center-before-v1.10-$(date +%Y%m%d%H%M%S).sql"
+docker compose -f ../docker-compose.yml exec -T mysql mysqldump \
+  -u root -p"$MYSQL_ROOT_PASSWORD" juxin_ai_assistant \
+  > "/tmp/juxin-ai-assistant-mysql-before-v1.10-$(date +%Y%m%d%H%M%S).sql"
 ```
 
 Expected: both backup files exist and are non-empty.
@@ -1294,27 +1309,28 @@ docker compose -f ../docker-compose.yml run --rm \
 
 Expected: report shows the dynamic Prompt count and staged versions; existing runtime Prompt content remains unchanged.
 
-- [ ] **Step 3: Migrate and pin assistant tasks to staged versions**
+- [ ] **Step 3: Validate the staged catalog and freeze the old runtime**
 
 Run:
 
 ```bash
-cd server
-source .venv/bin/activate
-alembic upgrade head
-python scripts/seed_catalog.py \
-  --force-config \
-  --require-all-published \
-  --staged-prompts catalog/prompt-stage-v1.10.json
+docker compose -f ../docker-compose.yml run --rm --no-deps \
+  -v "$PWD/server:/app" \
+  ai-assistant-db-init \
+  /bin/sh -lc "alembic upgrade head && python scripts/seed_catalog.py \
+    --force-config \
+    --require-all-published \
+    --staged-prompts catalog/prompt-stage-v1.10.json"
 ```
 
 Expected:
 
 - `missing_prompts` is empty.
-- Existing task UUIDs remain unchanged.
-- New presales and software-testing assistants are active.
-- Knowledge items and links are created.
-- Updated task bindings use `PINNED` with the staged version.
+- Existing task configuration, fields, knowledge, UUIDs, and visibility
+  remain unchanged.
+- New assistants and tasks do not exist in the assistant database yet.
+- Existing active bindings use internal `ROLLOUT`, pinned to the old
+  published version they were already running.
 
 - [ ] **Step 4: Activate Prompt Center versions**
 
@@ -1335,31 +1351,45 @@ Expected: activation completes in one Prompt Center transaction.
 Run:
 
 ```bash
-cd server
-source .venv/bin/activate
-python scripts/seed_catalog.py \
-  --finalize-published \
-  --staged-prompts catalog/prompt-stage-v1.10.json
+docker compose -f ../docker-compose.yml run --rm --no-deps \
+  -v "$PWD/server:/app" \
+  ai-assistant-db-init \
+  /bin/sh -lc "python scripts/seed_catalog.py \
+    --force-config \
+    --finalize-published \
+    --staged-prompts catalog/prompt-stage-v1.10.json"
 ```
 
-Expected: matching bindings use `PUBLISHED` and have `pinned_version = NULL`.
+Expected:
+
+- The same rollout marker is accepted; any administrator binding change
+  fails the entire finalize without partial catalog updates.
+- Existing task UUIDs remain unchanged.
+- New presales and software-testing assistants and tasks become active.
+- Task configuration, fields, knowledge, and quality rules update in the
+  same transaction as the bindings.
+- Matching bindings use `PUBLISHED` and have `pinned_version = NULL`.
 
 - [ ] **Step 6: Run integrity queries**
 
 Run:
 
 ```bash
-sqlite3 server/juxin-ai-assistant-dev.db "
+docker compose -f ../docker-compose.yml exec -T mysql mysql \
+  -u root -p"$MYSQL_ROOT_PASSWORD" juxin_ai_assistant -N -e "
 SELECT COUNT(*) FROM ai_tasks WHERE status='ACTIVE';
 SELECT COUNT(*) FROM ai_task_prompt_bindings WHERE status='ACTIVE';
 SELECT COUNT(*) FROM ai_tasks WHERE source_version='V1.10';
 SELECT COUNT(*) FROM ai_knowledge_items WHERE tags_json LIKE '%manual:V1.10%';
 SELECT COUNT(*) FROM ai_task_prompt_bindings
- WHERE version_policy <> 'PUBLISHED' OR pinned_version IS NOT NULL;
+ WHERE version_policy <> 'PUBLISHED'
+    OR pinned_version IS NOT NULL
+    OR rollout_token IS NOT NULL;
+SELECT COUNT(*) FROM ai_prompt_catalog_rollouts WHERE status='FINALIZED';
 "
 ```
 
-Expected: active task and active binding counts match; V1.10 tasks and knowledge counts are non-zero; the final query returns `0`.
+Expected: active task and active binding counts match; V1.10 tasks and knowledge counts are non-zero; the binding anomaly query returns `0`; the finalized rollout query returns `1`.
 
 - [ ] **Step 7: Smoke test API**
 

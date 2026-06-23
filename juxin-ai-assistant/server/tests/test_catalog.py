@@ -4,7 +4,8 @@ from copy import deepcopy
 from pathlib import Path
 
 import pytest
-from sqlalchemy import func, select
+from sqlalchemy import create_engine, event, func, select
+from sqlalchemy.orm import Session
 
 from app.crypto import ContentCipher, EncryptedPayload
 from app.models import (
@@ -969,9 +970,11 @@ class VersionedCatalogPrompts:
         self,
         published_versions: dict[int, int],
         staged_versions: dict[int, int] | None = None,
+        contents: dict[tuple[int, int], str] | None = None,
     ) -> None:
         self.published_versions = published_versions
         self.staged_versions = staged_versions or published_versions
+        self.contents = contents or {}
         self.calls: list[tuple[int, int | None]] = []
         self.staged_calls: list[tuple[int, int]] = []
 
@@ -982,12 +985,20 @@ class VersionedCatalogPrompts:
     ) -> dict:
         self.calls.append((prompt_id, version))
         published = self.published_versions[prompt_id]
-        if version is not None and version != published:
+        resolved_version = version or published
+        if (
+            version is not None
+            and (prompt_id, version) not in self.contents
+            and version != published
+        ):
             raise LookupError("版本未发布")
         return {
             "prompt_id": prompt_id,
-            "version_no": published,
-            "content": "处理 {{background}}",
+            "version_no": resolved_version,
+            "content": self.contents.get(
+                (prompt_id, resolved_version),
+                "处理 {{background}}",
+            ),
         }
 
     async def get_staged(self, prompt_id: int, version: int) -> dict:
@@ -998,28 +1009,330 @@ class VersionedCatalogPrompts:
         return {
             "prompt_id": prompt_id,
             "version_no": staged,
-            "content": "处理 {{background}}",
+            "content": self.contents.get(
+                (prompt_id, staged),
+                "处理 {{background}}",
+            ),
         }
 
 
+def file_generation_sessions(tmp_path):
+    from app import models  # noqa: F401
+    from app.database import Base
+
+    engine = create_engine(
+        f"sqlite+pysqlite:///{tmp_path / 'rollout-race.db'}",
+        connect_args={"check_same_thread": False, "timeout": 2},
+    )
+
+    @event.listens_for(engine, "connect")
+    def enable_wal(dbapi_connection, _connection_record) -> None:
+        cursor = dbapi_connection.cursor()
+        cursor.execute("PRAGMA journal_mode=WAL")
+        cursor.close()
+
+    Base.metadata.create_all(engine)
+    return (
+        engine,
+        Session(engine, expire_on_commit=False),
+        Session(engine, expire_on_commit=False),
+    )
+
+
+class CallbackVersionedPrompts(VersionedCatalogPrompts):
+    def __init__(self, *args, on_published=None, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.on_published = on_published
+
+    async def get_published(
+        self,
+        prompt_id: int,
+        version: int | None = None,
+    ) -> dict:
+        if self.on_published is not None:
+            callback = self.on_published
+            self.on_published = None
+            callback()
+        return await super().get_published(prompt_id, version)
+
+
 @pytest.mark.asyncio
-async def test_staged_prompts_pin_validated_versions(generation_db) -> None:
+async def test_stage_detects_admin_binding_change_after_remote_snapshot(
+    tmp_path,
+) -> None:
     from scripts.seed_catalog import seed_catalog
 
+    engine, rollout_db, admin_db = file_generation_sessions(tmp_path)
+    try:
+        catalog = single_task_catalog()
+        await seed_catalog(
+            rollout_db,
+            catalog,
+            VersionedCatalogPrompts({7: 2}),
+        )
+
+        def admin_changes_binding() -> None:
+            binding = admin_db.scalar(select(TaskPromptBinding))
+            binding.prompt_external_id = 99
+            binding.updated_by = "admin-user"
+            admin_db.commit()
+
+        client = CallbackVersionedPrompts(
+            {7: 2},
+            staged_versions={7: 3},
+            on_published=admin_changes_binding,
+        )
+        with pytest.raises(ValueError, match="发布窗口.*管理员"):
+            await seed_catalog(
+                rollout_db,
+                catalog,
+                client,
+                force_config=True,
+                staged_prompts={7: 3},
+            )
+
+        rollout_db.expire_all()
+        binding = rollout_db.scalar(select(TaskPromptBinding))
+        assert binding.prompt_external_id == 99
+        assert binding.version_policy == "PUBLISHED"
+        assert binding.pinned_version is None
+        assert binding.rollout_token is None
+    finally:
+        rollout_db.close()
+        admin_db.close()
+        engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_finalize_detects_admin_binding_change_after_remote_validation(
+    tmp_path,
+) -> None:
+    from scripts.seed_catalog import seed_catalog
+
+    engine, rollout_db, admin_db = file_generation_sessions(tmp_path)
+    try:
+        catalog = single_task_catalog()
+        await seed_catalog(
+            rollout_db,
+            catalog,
+            VersionedCatalogPrompts({7: 2}),
+        )
+        await seed_catalog(
+            rollout_db,
+            catalog,
+            VersionedCatalogPrompts({7: 2}, staged_versions={7: 3}),
+            force_config=True,
+            staged_prompts={7: 3},
+        )
+
+        def admin_changes_binding() -> None:
+            binding = admin_db.scalar(select(TaskPromptBinding))
+            binding.prompt_external_id = 99
+            binding.version_policy = "PUBLISHED"
+            binding.pinned_version = None
+            binding.rollout_token = None
+            binding.updated_by = "admin-user"
+            admin_db.commit()
+
+        client = CallbackVersionedPrompts(
+            {7: 3},
+            staged_versions={7: 3},
+            on_published=admin_changes_binding,
+        )
+        with pytest.raises(ValueError, match="发布窗口.*管理员"):
+            await seed_catalog(
+                rollout_db,
+                catalog,
+                client,
+                force_config=True,
+                staged_prompts={7: 3},
+                finalize_published=True,
+            )
+
+        rollout_db.expire_all()
+        binding = rollout_db.scalar(select(TaskPromptBinding))
+        assert binding.prompt_external_id == 99
+        assert binding.updated_by == "admin-user"
+    finally:
+        rollout_db.close()
+        admin_db.close()
+        engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_direct_finalize_requires_existing_staged_rollout(
+    generation_db,
+) -> None:
+    from scripts.seed_catalog import seed_catalog
+
+    with pytest.raises(ValueError, match="尚未暂存"):
+        await seed_catalog(
+            generation_db,
+            single_task_catalog(),
+            VersionedCatalogPrompts({7: 3}, staged_versions={7: 3}),
+            force_config=True,
+            staged_prompts={7: 3},
+            finalize_published=True,
+        )
+
+    assert generation_db.scalar(select(func.count()).select_from(Task)) == 0
+
+
+@pytest.mark.asyncio
+async def test_finalized_retry_does_not_access_prompt_center(
+    generation_db,
+) -> None:
+    from scripts.seed_catalog import seed_catalog
+
+    catalog = single_task_catalog()
     client = VersionedCatalogPrompts({7: 2}, staged_versions={7: 3})
+    await seed_catalog(generation_db, catalog, client)
     await seed_catalog(
         generation_db,
-        single_task_catalog(),
+        catalog,
         client,
+        force_config=True,
         staged_prompts={7: 3},
     )
-    binding = generation_db.scalar(select(TaskPromptBinding))
+    client.published_versions = {7: 3}
+    await seed_catalog(
+        generation_db,
+        catalog,
+        client,
+        force_config=True,
+        staged_prompts={7: 3},
+        finalize_published=True,
+    )
 
-    assert client.calls == []
-    assert client.staged_calls == [(7, 3)]
-    assert binding.version_policy == "PINNED"
-    assert binding.pinned_version == 3
+    class OfflinePromptCenter:
+        async def get_published(self, *_args, **_kwargs):
+            raise AssertionError("FINALIZED retry must not call Prompt Center")
+
+        async def get_staged(self, *_args, **_kwargs):
+            raise AssertionError("FINALIZED retry must not call Prompt Center")
+
+    report = await seed_catalog(
+        generation_db,
+        catalog,
+        OfflinePromptCenter(),
+        force_config=True,
+        staged_prompts={7: 3},
+        finalize_published=True,
+    )
+
+    assert report["already_finalized"] is True
+
+
+@pytest.mark.asyncio
+async def test_staged_rollout_freezes_existing_runtime_without_applying_catalog(
+    generation_db,
+) -> None:
+    from scripts.seed_catalog import seed_catalog
+
+    old_catalog = single_task_catalog()
+    old_task_definition = old_catalog["assistants"][0]["tasks"][0]
+    old_task_definition["name"] = "旧任务"
+    old_task_definition["source_version"] = "V1.9"
+    old_task_definition["fields"][0]["label"] = "旧字段"
+    old_manifest = {
+        "knowledge": [
+            {
+                "classification": "KNOWLEDGE",
+                "key": "rollout-knowledge",
+                "title": "旧知识",
+                "content": "旧内容",
+                "assistant_code": "general",
+                "task_scopes": ["sample"],
+            }
+        ],
+        "quality_rules": [],
+    }
+    target_catalog = deepcopy(old_catalog)
+    target_task_definition = target_catalog["assistants"][0]["tasks"][0]
+    target_task_definition["name"] = "新任务"
+    target_task_definition["source_version"] = "V1.10"
+    target_task_definition["fields"][0]["label"] = "新字段"
+    new_task_definition = deepcopy(target_task_definition)
+    new_task_definition.update(
+        code="new-sample",
+        name="新增任务",
+        prompt_external_id=8,
+    )
+    target_catalog["assistants"][0]["tasks"].append(new_task_definition)
+    target_manifest = {
+        "knowledge": [
+            {
+                "classification": "KNOWLEDGE",
+                "key": "rollout-knowledge",
+                "title": "新知识",
+                "content": "新内容",
+                "assistant_code": "general",
+                "task_scopes": ["sample", "new-sample"],
+            }
+        ],
+        "quality_rules": [],
+    }
+    client = VersionedCatalogPrompts(
+        {7: 2},
+        staged_versions={7: 3, 8: 1},
+    )
+    await seed_catalog(
+        generation_db,
+        old_catalog,
+        client,
+        force_config=True,
+        manual_manifest=old_manifest,
+    )
+    existing = generation_db.scalar(select(Task).where(Task.code == "sample"))
+    identity = (existing.id, existing.uuid)
+
+    await seed_catalog(
+        generation_db,
+        target_catalog,
+        client,
+        force_config=True,
+        staged_prompts={7: 3, 8: 1},
+        manual_manifest=target_manifest,
+    )
+    await seed_catalog(
+        generation_db,
+        target_catalog,
+        client,
+        force_config=True,
+        staged_prompts={7: 3, 8: 1},
+        manual_manifest=target_manifest,
+    )
+    generation_db.expire_all()
+    existing = generation_db.scalar(select(Task).where(Task.code == "sample"))
+    binding = generation_db.scalar(
+        select(TaskPromptBinding).where(
+            TaskPromptBinding.task_id == existing.id
+        )
+    )
+    field = generation_db.scalar(
+        select(TaskField).where(TaskField.task_id == existing.id)
+    )
+
+    assert (existing.id, existing.uuid) == identity
+    assert existing.name == "旧任务"
+    assert existing.source_version == "V1.9"
+    assert field.label == "旧字段"
+    assert generation_db.scalar(
+        select(Task).where(Task.code == "new-sample")
+    ) is None
+    assert generation_db.scalar(
+        select(KnowledgeItem.title).where(
+            KnowledgeItem.tags_json.contains("key:rollout-knowledge")
+        )
+    ) == "旧知识"
+    assert binding.prompt_external_id == 7
+    assert binding.version_policy == "ROLLOUT"
+    assert binding.pinned_version == 2
     assert binding.status == "ACTIVE"
+    assert binding.updated_by == "catalog-seed"
+    assert binding.rollout_token is not None
+    assert client.staged_calls == [(7, 3), (8, 1)]
+    assert client.calls[-1] == (7, None)
 
 
 @pytest.mark.asyncio
@@ -1044,6 +1357,7 @@ async def test_staged_prompts_reject_remote_identity_mismatch(
             staged_prompts={7: 3},
         )
 
+    assert generation_db.in_transaction() is False
     assert generation_db.scalar(
         select(func.count()).select_from(Assistant)
     ) == 0
@@ -1057,6 +1371,11 @@ async def test_staged_prompt_identity_uses_seed_whitespace_normalization(
 
     catalog = single_task_catalog()
     catalog["assistants"][0]["tasks"][0]["prompt_content"] += "\n\n"
+    await seed_catalog(
+        generation_db,
+        single_task_catalog(),
+        VersionedCatalogPrompts({7: 2}),
+    )
 
     await seed_catalog(
         generation_db,
@@ -1066,7 +1385,8 @@ async def test_staged_prompt_identity_uses_seed_whitespace_normalization(
     )
 
     binding = generation_db.scalar(select(TaskPromptBinding))
-    assert binding.pinned_version == 3
+    assert binding.version_policy == "ROLLOUT"
+    assert binding.pinned_version == 2
 
 
 @pytest.mark.asyncio
@@ -1137,96 +1457,437 @@ async def test_staged_prompts_reject_unpublished_version_atomically(
             staged_prompts={7: 3},
         )
 
+    assert generation_db.in_transaction() is False
     assert generation_db.scalar(
         select(func.count()).select_from(Assistant)
     ) == 0
 
 
 @pytest.mark.asyncio
-async def test_finalize_published_only_matching_active_bindings(
+async def test_staged_validation_failure_preserves_existing_runtime(
     generation_db,
 ) -> None:
     from scripts.seed_catalog import seed_catalog
 
     catalog = single_task_catalog()
-    client = VersionedCatalogPrompts({7: 2})
     await seed_catalog(
         generation_db,
         catalog,
-        client,
-        staged_prompts={7: 2},
+        VersionedCatalogPrompts({7: 2}),
     )
-    await seed_catalog(
-        generation_db,
-        catalog,
-        client,
-        staged_prompts={7: 2},
-        finalize_published=True,
-    )
+    task = generation_db.scalar(select(Task).where(Task.code == "sample"))
     binding = generation_db.scalar(select(TaskPromptBinding))
+    identity = (task.id, task.uuid, task.name)
 
+    with pytest.raises(ValueError, match="不存在或不可用"):
+        await seed_catalog(
+            generation_db,
+            catalog,
+            VersionedCatalogPrompts({7: 2}, staged_versions={7: 2}),
+            staged_prompts={7: 3},
+        )
+
+    generation_db.expire_all()
+    task = generation_db.scalar(select(Task).where(Task.code == "sample"))
+    binding = generation_db.scalar(select(TaskPromptBinding))
+    assert (task.id, task.uuid, task.name) == identity
     assert binding.version_policy == "PUBLISHED"
     assert binding.pinned_version is None
-    assert binding.status == "ACTIVE"
 
 
 @pytest.mark.asyncio
-async def test_finalize_published_leaves_mismatched_binding_pinned(
+async def test_finalize_published_applies_catalog_atomically_after_activation(
+    generation_db,
+) -> None:
+    from scripts.seed_catalog import seed_catalog
+
+    old_catalog = single_task_catalog()
+    target_catalog = deepcopy(old_catalog)
+    target_task = target_catalog["assistants"][0]["tasks"][0]
+    target_task["name"] = "已更新任务"
+    target_task["fields"][0]["label"] = "已更新字段"
+    new_task = deepcopy(target_task)
+    new_task.update(
+        code="new-sample",
+        name="新增任务",
+        prompt_external_id=8,
+    )
+    target_catalog["assistants"][0]["tasks"].append(new_task)
+    target_manifest = {
+        "knowledge": [
+            {
+                "classification": "KNOWLEDGE",
+                "key": "finalize-only-knowledge",
+                "title": "仅 finalize 生效",
+                "content": "发布完成后才注入",
+                "assistant_code": "general",
+                "task_scopes": ["sample", "new-sample"],
+            }
+        ],
+        "quality_rules": [],
+    }
+    client = VersionedCatalogPrompts(
+        {7: 2},
+        staged_versions={7: 3, 8: 1},
+    )
+    await seed_catalog(
+        generation_db,
+        old_catalog,
+        client,
+        manual_manifest={"knowledge": [], "quality_rules": []},
+    )
+    before = generation_db.scalar(select(Task).where(Task.code == "sample"))
+    identity = (before.id, before.uuid)
+    await seed_catalog(
+        generation_db,
+        target_catalog,
+        client,
+        force_config=True,
+        staged_prompts={7: 3, 8: 1},
+        manual_manifest=target_manifest,
+    )
+    client.published_versions = {7: 3, 8: 1}
+    frozen = generation_db.scalar(select(TaskPromptBinding))
+    assert frozen.version_policy == "ROLLOUT"
+    assert frozen.pinned_version == 2
+    assert generation_db.scalar(
+        select(KnowledgeItem).where(
+            KnowledgeItem.tags_json.contains("key:finalize-only-knowledge")
+        )
+    ) is None
+
+    await seed_catalog(
+        generation_db,
+        target_catalog,
+        client,
+        force_config=True,
+        staged_prompts={7: 3, 8: 1},
+        finalize_published=True,
+        manual_manifest=target_manifest,
+    )
+    await seed_catalog(
+        generation_db,
+        target_catalog,
+        client,
+        force_config=True,
+        staged_prompts={7: 3, 8: 1},
+        finalize_published=True,
+        manual_manifest=target_manifest,
+    )
+    generation_db.expire_all()
+    existing = generation_db.scalar(select(Task).where(Task.code == "sample"))
+    added = generation_db.scalar(select(Task).where(Task.code == "new-sample"))
+    fields = {
+        field.task_id: field
+        for field in generation_db.scalars(select(TaskField)).all()
+    }
+    bindings = {
+        binding.task_id: binding
+        for binding in generation_db.scalars(select(TaskPromptBinding)).all()
+    }
+
+    assert (existing.id, existing.uuid) == identity
+    assert existing.name == "已更新任务"
+    assert fields[existing.id].label == "已更新字段"
+    assert added is not None
+    assert added.status == "ACTIVE"
+    for task in (existing, added):
+        assert bindings[task.id].version_policy == "PUBLISHED"
+        assert bindings[task.id].pinned_version is None
+        assert bindings[task.id].status == "ACTIVE"
+        assert bindings[task.id].updated_by == "catalog-seed"
+        assert bindings[task.id].rollout_token is None
+    knowledge = generation_db.scalar(
+        select(KnowledgeItem).where(
+            KnowledgeItem.tags_json.contains("key:finalize-only-knowledge")
+        )
+    )
+    assert knowledge is not None
+    assert generation_db.scalar(
+        select(func.count())
+        .select_from(KnowledgeTaskLink)
+        .where(KnowledgeTaskLink.knowledge_id == knowledge.id)
+    ) == 2
+
+
+@pytest.mark.asyncio
+async def test_finalize_requires_same_force_authorization(generation_db) -> None:
+    from scripts.seed_catalog import seed_catalog
+
+    catalog = single_task_catalog()
+    client = VersionedCatalogPrompts({7: 2}, staged_versions={7: 3})
+    await seed_catalog(generation_db, catalog, client)
+    await seed_catalog(
+        generation_db,
+        catalog,
+        client,
+        force_config=True,
+        staged_prompts={7: 3},
+    )
+    client.published_versions = {7: 3}
+
+    with pytest.raises(ValueError, match="--force-config"):
+        await seed_catalog(
+            generation_db,
+            catalog,
+            client,
+            staged_prompts={7: 3},
+            finalize_published=True,
+        )
+
+    binding = generation_db.scalar(select(TaskPromptBinding))
+    assert binding.version_policy == "ROLLOUT"
+    assert binding.pinned_version == 2
+
+
+@pytest.mark.asyncio
+async def test_finalized_retry_is_noop_for_later_admin_configuration(
     generation_db,
 ) -> None:
     from scripts.seed_catalog import seed_catalog
 
     catalog = single_task_catalog()
-    client = VersionedCatalogPrompts({7: 2})
+    manifest = {
+        "knowledge": [
+            {
+                "classification": "KNOWLEDGE",
+                "key": "retry-noop-knowledge",
+                "title": "目录知识",
+                "content": "目录内容",
+                "assistant_code": "general",
+                "task_scopes": ["sample"],
+            }
+        ],
+        "quality_rules": [],
+    }
+    client = VersionedCatalogPrompts({7: 2}, staged_versions={7: 3})
     await seed_catalog(
         generation_db,
         catalog,
         client,
-        staged_prompts={7: 2},
+        manual_manifest={"knowledge": [], "quality_rules": []},
     )
-    binding = generation_db.scalar(select(TaskPromptBinding))
-    binding.pinned_version = 1
+    await seed_catalog(
+        generation_db,
+        catalog,
+        client,
+        force_config=True,
+        staged_prompts={7: 3},
+        manual_manifest=manifest,
+    )
+    client.published_versions = {7: 3}
+    await seed_catalog(
+        generation_db,
+        catalog,
+        client,
+        force_config=True,
+        staged_prompts={7: 3},
+        finalize_published=True,
+        manual_manifest=manifest,
+    )
+    task = generation_db.scalar(select(Task).where(Task.code == "sample"))
+    field = generation_db.scalar(
+        select(TaskField).where(TaskField.task_id == task.id)
+    )
+    knowledge = generation_db.scalar(
+        select(KnowledgeItem).where(
+            KnowledgeItem.tags_json.contains("key:retry-noop-knowledge")
+        )
+    )
+    task.name = "管理员任务名"
+    task.status = "INACTIVE"
+    field.label = "管理员字段名"
+    knowledge.title = "管理员知识名"
     generation_db.commit()
 
-    await seed_catalog(
+    report = await seed_catalog(
         generation_db,
         catalog,
         client,
-        staged_prompts={7: 2},
+        force_config=True,
+        staged_prompts={7: 3},
         finalize_published=True,
+        manual_manifest=manifest,
     )
-    generation_db.refresh(binding)
 
-    assert binding.version_policy == "PINNED"
-    assert binding.pinned_version == 1
+    generation_db.expire_all()
+    task = generation_db.scalar(select(Task).where(Task.code == "sample"))
+    field = generation_db.scalar(
+        select(TaskField).where(TaskField.task_id == task.id)
+    )
+    knowledge = generation_db.scalar(
+        select(KnowledgeItem).where(
+            KnowledgeItem.tags_json.contains("key:retry-noop-knowledge")
+        )
+    )
+    assert report["already_finalized"] is True
+    assert task.name == "管理员任务名"
+    assert task.status == "INACTIVE"
+    assert field.label == "管理员字段名"
+    assert knowledge.title == "管理员知识名"
 
 
 @pytest.mark.asyncio
-async def test_finalize_published_leaves_inactive_matching_binding_pinned(
+async def test_finalize_missing_target_cleans_transaction_and_keeps_rollout(
     generation_db,
 ) -> None:
     from scripts.seed_catalog import seed_catalog
 
     catalog = single_task_catalog()
-    client = VersionedCatalogPrompts({7: 2})
+    client = VersionedCatalogPrompts({7: 2}, staged_versions={7: 3})
+    await seed_catalog(generation_db, catalog, client)
     await seed_catalog(
         generation_db,
         catalog,
         client,
-        staged_prompts={7: 2},
+        force_config=True,
+        staged_prompts={7: 3},
+    )
+
+    with pytest.raises(ValueError, match="不存在或不可用"):
+        await seed_catalog(
+            generation_db,
+            catalog,
+            client,
+            force_config=True,
+            staged_prompts={7: 3},
+            finalize_published=True,
+        )
+
+    assert generation_db.in_transaction() is False
+    binding = generation_db.scalar(select(TaskPromptBinding))
+    assert binding.version_policy == "ROLLOUT"
+    assert binding.pinned_version == 2
+
+
+@pytest.mark.asyncio
+async def test_finalize_rejects_task_status_change_while_still_frozen(
+    generation_db,
+) -> None:
+    from scripts.seed_catalog import seed_catalog
+
+    catalog = single_task_catalog()
+    client = VersionedCatalogPrompts({7: 2}, staged_versions={7: 3})
+    await seed_catalog(generation_db, catalog, client)
+    await seed_catalog(
+        generation_db,
+        catalog,
+        client,
+        force_config=True,
+        staged_prompts={7: 3},
+    )
+    task = generation_db.scalar(select(Task).where(Task.code == "sample"))
+    task.status = "INACTIVE"
+    generation_db.commit()
+    client.published_versions = {7: 3}
+
+    with pytest.raises(ValueError, match="发布窗口.*管理员"):
+        await seed_catalog(
+            generation_db,
+            catalog,
+            client,
+            force_config=True,
+            staged_prompts={7: 3},
+            finalize_published=True,
+        )
+
+    assert generation_db.in_transaction() is False
+    generation_db.refresh(task)
+    assert task.status == "INACTIVE"
+
+
+@pytest.mark.asyncio
+async def test_finalize_rejects_admin_binding_change_without_partial_updates(
+    generation_db,
+) -> None:
+    from scripts.seed_catalog import seed_catalog
+
+    old_catalog = single_task_catalog()
+    target_catalog = deepcopy(old_catalog)
+    target_catalog["assistants"][0]["tasks"][0]["name"] = "不得提前更新"
+    new_task = deepcopy(target_catalog["assistants"][0]["tasks"][0])
+    new_task.update(code="new-sample", prompt_external_id=8)
+    target_catalog["assistants"][0]["tasks"].append(new_task)
+    client = VersionedCatalogPrompts(
+        {7: 2},
+        staged_versions={7: 3, 8: 1},
+    )
+    await seed_catalog(generation_db, old_catalog, client)
+    await seed_catalog(
+        generation_db,
+        target_catalog,
+        client,
+        force_config=True,
+        staged_prompts={7: 3, 8: 1},
     )
     binding = generation_db.scalar(select(TaskPromptBinding))
-    binding.status = "DISABLED"
+    binding.version_policy = "PUBLISHED"
+    binding.pinned_version = None
+    binding.updated_by = "admin-user"
     generation_db.commit()
+    client.published_versions = {7: 3, 8: 1}
 
-    await seed_catalog(
+    with pytest.raises(ValueError, match="发布窗口.*管理员"):
+        await seed_catalog(
+            generation_db,
+            target_catalog,
+            client,
+            force_config=True,
+            staged_prompts={7: 3, 8: 1},
+            finalize_published=True,
+        )
+
+    assert generation_db.in_transaction() is False
+    generation_db.expire_all()
+    existing = generation_db.scalar(select(Task).where(Task.code == "sample"))
+    assert existing.name == "示例任务"
+    assert generation_db.scalar(
+        select(Task).where(Task.code == "new-sample")
+    ) is None
+
+
+@pytest.mark.asyncio
+async def test_finalize_rolls_back_catalog_changes_on_seed_failure(
+    generation_db,
+    monkeypatch,
+) -> None:
+    import scripts.seed_catalog as seed_module
+
+    old_catalog = single_task_catalog()
+    target_catalog = deepcopy(old_catalog)
+    target_catalog["assistants"][0]["tasks"][0]["name"] = "不得半切"
+    client = VersionedCatalogPrompts({7: 2}, staged_versions={7: 3})
+    await seed_module.seed_catalog(generation_db, old_catalog, client)
+    await seed_module.seed_catalog(
         generation_db,
-        catalog,
+        target_catalog,
         client,
-        staged_prompts={7: 2},
-        finalize_published=True,
+        force_config=True,
+        staged_prompts={7: 3},
     )
-    generation_db.refresh(binding)
+    client.published_versions = {7: 3}
 
-    assert binding.version_policy == "PINNED"
+    def fail_quality_rules(*_args, **_kwargs):
+        raise RuntimeError("seed failure")
+
+    monkeypatch.setattr(
+        seed_module,
+        "upsert_manual_quality_rules",
+        fail_quality_rules,
+    )
+    with pytest.raises(RuntimeError, match="seed failure"):
+        await seed_module.seed_catalog(
+            generation_db,
+            target_catalog,
+            client,
+            force_config=True,
+            staged_prompts={7: 3},
+            finalize_published=True,
+        )
+
+    generation_db.expire_all()
+    task = generation_db.scalar(select(Task).where(Task.code == "sample"))
+    binding = generation_db.scalar(select(TaskPromptBinding))
+    assert task.name == "示例任务"
+    assert binding.version_policy == "ROLLOUT"
     assert binding.pinned_version == 2

@@ -129,9 +129,29 @@ class TaskPromptBinding(TimestampMixin, Base):
     prompt_external_id: Mapped[int] = mapped_column(BigInteger)
     version_policy: Mapped[str] = mapped_column(String(16), default="PUBLISHED")
     pinned_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    rollout_token: Mapped[str | None] = mapped_column(
+        String(64),
+        nullable=True,
+        index=True,
+    )
     status: Mapped[str] = mapped_column(String(16), default="ACTIVE", index=True)
     created_by: Mapped[str] = mapped_column(String(64), default="system")
     updated_by: Mapped[str] = mapped_column(String(64), default="system")
+
+
+class PromptCatalogRollout(TimestampMixin, Base):
+    __tablename__ = "ai_prompt_catalog_rollouts"
+
+    id: Mapped[int] = mapped_column(
+        primary_key_type,
+        primary_key=True,
+        autoincrement=True,
+    )
+    token: Mapped[str] = mapped_column(String(64), unique=True)
+    status: Mapped[str] = mapped_column(String(16), index=True)
+    force_config: Mapped[bool] = mapped_column(Boolean, default=False)
+    target_json: Mapped[dict] = mapped_column(JSON)
+    frozen_tasks_json: Mapped[list] = mapped_column(JSON, default=list)
 
 
 class GenerationRecord(TimestampMixin, Base):

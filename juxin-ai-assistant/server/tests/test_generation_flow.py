@@ -8,7 +8,7 @@ from sqlalchemy import select
 
 from app.crypto import ContentCipher, EncryptedPayload
 from app.governance_models import AuditLog
-from app.models import GenerationRecord
+from app.models import GenerationRecord, TaskPromptBinding
 
 
 TEST_KEY = base64.urlsafe_b64encode(b"k" * 32).decode("ascii")
@@ -68,6 +68,44 @@ def test_prepare_returns_provider_neutral_messages_and_stores_ciphertext(
     assert record.prompt_external_id == 7
     assert record.prompt_version == 3
     assert record.completion_token_hash != payload["completion_token"].encode()
+
+
+@pytest.mark.parametrize("version_policy", ["PINNED", "ROLLOUT"])
+def test_prepare_requests_fixed_version_for_pinned_and_rollout_bindings(
+    generation_client,
+    generation_db,
+    seeded_task,
+    respx_mock,
+    version_policy,
+) -> None:
+    binding = generation_db.scalar(
+        select(TaskPromptBinding).where(
+            TaskPromptBinding.task_id == seeded_task.id
+        )
+    )
+    binding.version_policy = version_policy
+    binding.pinned_version = 2
+    generation_db.commit()
+    route = respx_mock.get(
+        "http://prompt.test:5189/api/prompt-center/runtime/prompts/7/published",
+        params={"version": "2"},
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={**PUBLISHED_PROMPT, "version_no": 2},
+        )
+    )
+
+    response = generation_client.post(
+        "/api/ai/generations/prepare",
+        json={
+            "task_uuid": seeded_task.uuid,
+            "inputs": {"work_content": "固定版本"},
+        },
+    )
+
+    assert response.status_code == 201
+    assert route.called
 
 
 def test_formal_report_system_message_includes_document_governance_once(

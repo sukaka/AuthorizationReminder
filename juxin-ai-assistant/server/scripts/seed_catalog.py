@@ -36,6 +36,7 @@ REQUIRED_TASK_FIELDS = (
     "document_type",
     "formal_document",
 )
+CATALOG_SEED_ACTOR = "catalog-seed"
 
 
 def load_catalog(path: Path = CATALOG_PATH) -> dict[str, Any]:
@@ -162,6 +163,29 @@ def load_staged_prompts(path: Path) -> dict[int | str, int]:
     if not isinstance(payload, dict):
         raise ValueError("staged prompts 文件必须是 JSON 对象")
     return payload
+
+
+def rollout_token(
+    catalog: dict[str, Any],
+    staged_prompts: dict[int, int],
+    manual_manifest: dict[str, Any],
+    *,
+    force_config: bool,
+) -> str:
+    payload = {
+        "catalog": catalog,
+        "staged_prompts": staged_prompts,
+        "manual_manifest": manual_manifest,
+        "force_config": force_config,
+    }
+    return hashlib.sha256(
+        json.dumps(
+            payload,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+    ).hexdigest()
 
 
 def load_manual_manifest(path: Path = MANUAL_MANIFEST_PATH) -> dict[str, Any]:
@@ -444,6 +468,556 @@ def upsert_manual_quality_rules(
     return upserted
 
 
+def _rollout_report(**extra: Any) -> dict[str, Any]:
+    return {
+        "assistants_created": 0,
+        "tasks_created": 0,
+        "fields_created": 0,
+        "bindings_created": 0,
+        "missing_prompts": [],
+        "knowledge_upserted": 0,
+        "quality_rules_upserted": 0,
+        "bindings_frozen": 0,
+        **extra,
+    }
+
+
+def _binding_snapshot(binding) -> dict[str, Any] | None:
+    if binding is None:
+        return None
+    return {
+        "id": binding.id,
+        "task_id": binding.task_id,
+        "prompt_external_id": binding.prompt_external_id,
+        "version_policy": binding.version_policy,
+        "pinned_version": binding.pinned_version,
+        "status": binding.status,
+        "updated_by": binding.updated_by,
+        "rollout_token": binding.rollout_token,
+    }
+
+
+def _binding_matches(binding, snapshot: dict[str, Any] | None) -> bool:
+    if snapshot is None:
+        return binding is None
+    return binding is not None and all(
+        getattr(binding, key) == value
+        for key, value in snapshot.items()
+    )
+
+
+def _load_rollout(db, token: str):
+    from sqlalchemy import select
+
+    from app.models import PromptCatalogRollout
+
+    return db.scalar(
+        select(PromptCatalogRollout)
+        .where(PromptCatalogRollout.token == token)
+        .execution_options(populate_existing=True)
+    )
+
+
+def _verify_staged_rollout(db, rollout) -> None:
+    from sqlalchemy import select
+
+    from app.models import Task, TaskPromptBinding
+
+    target_codes = set(rollout.target_json["task_codes"])
+    expected_codes = {
+        snapshot["task_code"]
+        for snapshot in rollout.frozen_tasks_json
+    }
+    current_codes = set(
+        db.scalars(
+            select(Task.code).where(Task.code.in_(target_codes))
+        ).all()
+    )
+    if current_codes != expected_codes:
+        raise ValueError("发布窗口任务集合已被管理员修改")
+    for snapshot in rollout.frozen_tasks_json:
+        task = db.scalar(
+            select(Task)
+            .where(Task.id == snapshot["task_id"])
+            .execution_options(populate_existing=True)
+        )
+        if (
+            task is None
+            or task.code != snapshot["task_code"]
+            or task.status != snapshot["task_status"]
+            or task.updated_by != snapshot["task_updated_by"]
+        ):
+            raise ValueError(
+                f"任务 {snapshot['task_code']} 的发布窗口状态已被管理员修改"
+            )
+        binding = db.scalar(
+            select(TaskPromptBinding)
+            .where(TaskPromptBinding.task_id == task.id)
+            .execution_options(populate_existing=True)
+        )
+        if snapshot["was_active"]:
+            expected = {
+                **snapshot["binding"],
+                "version_policy": "ROLLOUT",
+                "pinned_version": snapshot["frozen_version"],
+                "updated_by": CATALOG_SEED_ACTOR,
+                "rollout_token": rollout.token,
+            }
+        else:
+            expected = snapshot["binding"]
+        if not _binding_matches(binding, expected):
+            raise ValueError(
+                f"任务 {snapshot['task_code']} 的发布窗口绑定已被管理员修改"
+            )
+
+
+async def _validate_rollout_targets(
+    catalog: dict[str, Any],
+    staged_prompts: dict[int, int],
+    prompt_client,
+    *,
+    staged: bool,
+) -> list[tuple[dict, dict, int, bool]]:
+    entries: list[tuple[dict, dict, int, bool]] = []
+    missing: list[str] = []
+    for assistant_definition in catalog["assistants"]:
+        for task_definition in assistant_definition["tasks"]:
+            prompt_id = int(task_definition["prompt_external_id"])
+            version = staged_prompts[prompt_id]
+            try:
+                if staged:
+                    prompt = await prompt_client.get_staged(
+                        prompt_id,
+                        version=version,
+                    )
+                else:
+                    prompt = await prompt_client.get_published(
+                        prompt_id,
+                        version=version,
+                    )
+            except (LookupError, ValueError):
+                missing.append(f"{prompt_id}@{version}")
+                continue
+            if (
+                prompt.get("prompt_id") != prompt_id
+                or prompt.get("version_no") != version
+                or prompt.get("content")
+                != str(task_definition["prompt_content"]).strip()
+            ):
+                raise ValueError(
+                    "staged Prompt 版本与目录不一致："
+                    f"{prompt_id}@{version}"
+                )
+            entries.append(
+                (
+                    assistant_definition,
+                    task_definition,
+                    prompt_id,
+                    True,
+                )
+            )
+    if missing:
+        raise ValueError(
+            "staged Prompt 版本不存在或不可用：" + "、".join(missing)
+        )
+    return entries
+
+
+async def stage_catalog_rollout(
+    db,
+    catalog: dict[str, Any],
+    staged_prompts: dict[int, int],
+    manual_manifest: dict[str, Any],
+    prompt_client,
+    *,
+    token: str,
+    force_config: bool,
+) -> dict[str, Any]:
+    from sqlalchemy import select, update
+    from sqlalchemy.exc import IntegrityError
+
+    from app.models import (
+        PromptCatalogRollout,
+        Task,
+        TaskPromptBinding,
+    )
+
+    existing_rollout = _load_rollout(db, token)
+    if existing_rollout is not None:
+        try:
+            if existing_rollout.status == "FINALIZED":
+                return _rollout_report(already_finalized=True)
+            if existing_rollout.status != "STAGED":
+                raise ValueError("发布窗口正在处理中，请稍后重试")
+            _verify_staged_rollout(db, existing_rollout)
+            return _rollout_report(already_staged=True)
+        finally:
+            db.rollback()
+
+    snapshots: list[dict[str, Any]] = []
+    target_codes = [
+        task["code"]
+        for assistant in catalog["assistants"]
+        for task in assistant["tasks"]
+    ]
+    definitions = {
+        task["code"]: task
+        for assistant in catalog["assistants"]
+        for task in assistant["tasks"]
+    }
+    tasks = db.scalars(
+        select(Task)
+        .where(Task.code.in_(target_codes))
+        .execution_options(populate_existing=True)
+    ).all()
+    for task in tasks:
+        binding = db.scalar(
+            select(TaskPromptBinding)
+            .where(TaskPromptBinding.task_id == task.id)
+            .execution_options(populate_existing=True)
+        )
+        if binding is not None and binding.rollout_token is not None:
+            db.rollback()
+            raise ValueError(
+                f"任务 {task.code} 已处于其他发布窗口"
+            )
+        if (
+            task.status == "ACTIVE"
+            and (binding is None or binding.status != "ACTIVE")
+        ):
+            db.rollback()
+            raise ValueError(
+                f"任务 {task.code} 没有可冻结的 ACTIVE Prompt 绑定"
+            )
+        if (
+            task.status == "ACTIVE"
+            and binding.version_policy == "PINNED"
+            and not force_config
+        ):
+            db.rollback()
+            raise ValueError(
+                f"任务 {task.code} 使用管理员 PINNED 绑定；"
+                "请确认并传入 --force-config"
+            )
+        target_prompt_id = int(
+            definitions[task.code]["prompt_external_id"]
+        )
+        if (
+            task.status == "ACTIVE"
+            and binding.prompt_external_id != target_prompt_id
+            and not force_config
+        ):
+            db.rollback()
+            raise ValueError(
+                f"任务 {task.code} 已绑定管理员自定义 Prompt "
+                f"{binding.prompt_external_id}；"
+                "请确认并传入 --force-config"
+            )
+        if (
+            task.status == "ACTIVE"
+            and binding.version_policy not in {"PUBLISHED", "PINNED"}
+        ):
+            db.rollback()
+            raise ValueError(
+                f"任务 {task.code} 已处于其他发布窗口或绑定被管理员修改"
+            )
+        definition = definitions[task.code]
+        snapshots.append(
+            {
+                "task_id": task.id,
+                "task_code": task.code,
+                "task_status": task.status,
+                "task_updated_by": task.updated_by,
+                "was_active": task.status == "ACTIVE",
+                "binding": _binding_snapshot(binding),
+                "target_prompt_external_id": int(
+                    definition["prompt_external_id"]
+                ),
+                "target_version": staged_prompts[
+                    int(definition["prompt_external_id"])
+                ],
+                "frozen_version": None,
+            }
+        )
+    db.rollback()
+
+    await _validate_rollout_targets(
+        catalog,
+        staged_prompts,
+        prompt_client,
+        staged=True,
+    )
+    for snapshot in snapshots:
+        if not snapshot["was_active"]:
+            continue
+        binding = snapshot["binding"]
+        try:
+            if binding["version_policy"] == "PINNED":
+                frozen_version = binding["pinned_version"]
+                if frozen_version is None:
+                    raise ValueError("固定版本为空")
+                prompt = await prompt_client.get_published(
+                    binding["prompt_external_id"],
+                    version=frozen_version,
+                )
+            else:
+                prompt = await prompt_client.get_published(
+                    binding["prompt_external_id"],
+                )
+                frozen_version = int(prompt["version_no"])
+            if (
+                prompt.get("prompt_id")
+                != binding["prompt_external_id"]
+                or int(prompt["version_no"]) != frozen_version
+                or frozen_version <= 0
+            ):
+                raise ValueError("Prompt 身份不一致")
+        except (KeyError, LookupError, TypeError, ValueError) as exc:
+            raise ValueError(
+                f"任务 {snapshot['task_code']} 的当前已发布 Prompt 不可冻结"
+            ) from exc
+        snapshot["frozen_version"] = frozen_version
+
+    rollout = PromptCatalogRollout(
+        token=token,
+        status="STAGED",
+        force_config=force_config,
+        target_json={
+            "staged_prompts": {
+                str(key): value
+                for key, value in staged_prompts.items()
+            },
+            "task_codes": target_codes,
+        },
+        frozen_tasks_json=snapshots,
+    )
+    try:
+        db.add(rollout)
+        db.flush()
+        frozen_count = 0
+        for snapshot in snapshots:
+            task = db.scalar(
+                select(Task)
+                .where(Task.id == snapshot["task_id"])
+                .execution_options(populate_existing=True)
+            )
+            if (
+                task is None
+                or task.code != snapshot["task_code"]
+                or task.status != snapshot["task_status"]
+                or task.updated_by != snapshot["task_updated_by"]
+            ):
+                raise ValueError(
+                    f"任务 {snapshot['task_code']} 的发布窗口状态已被管理员修改"
+                )
+            current_binding = db.scalar(
+                select(TaskPromptBinding)
+                .where(TaskPromptBinding.task_id == task.id)
+                .execution_options(populate_existing=True)
+            )
+            if not _binding_matches(
+                current_binding,
+                snapshot["binding"],
+            ):
+                raise ValueError(
+                    f"任务 {snapshot['task_code']} 的发布窗口绑定已被管理员修改"
+                )
+            if not snapshot["was_active"]:
+                continue
+            binding = snapshot["binding"]
+            conditions = [
+                TaskPromptBinding.id == binding["id"],
+                TaskPromptBinding.task_id == binding["task_id"],
+                TaskPromptBinding.prompt_external_id
+                == binding["prompt_external_id"],
+                TaskPromptBinding.version_policy
+                == binding["version_policy"],
+                TaskPromptBinding.pinned_version
+                == binding["pinned_version"],
+                TaskPromptBinding.status == binding["status"],
+                TaskPromptBinding.updated_by == binding["updated_by"],
+                TaskPromptBinding.rollout_token
+                == binding["rollout_token"],
+            ]
+            result = db.execute(
+                update(TaskPromptBinding)
+                .where(*conditions)
+                .values(
+                    version_policy="ROLLOUT",
+                    pinned_version=snapshot["frozen_version"],
+                    rollout_token=token,
+                    updated_by=CATALOG_SEED_ACTOR,
+                ),
+                execution_options={"synchronize_session": False},
+            )
+            if result.rowcount != 1:
+                raise ValueError(
+                    f"任务 {snapshot['task_code']} 的发布窗口绑定已被管理员修改"
+                )
+            frozen_count += 1
+        db.commit()
+        return _rollout_report(bindings_frozen=frozen_count)
+    except IntegrityError:
+        db.rollback()
+        retry = _load_rollout(db, token)
+        try:
+            if retry is None or retry.status != "STAGED":
+                raise ValueError("发布窗口并发创建失败")
+            _verify_staged_rollout(db, retry)
+            return _rollout_report(already_staged=True)
+        finally:
+            db.rollback()
+    except Exception:
+        db.rollback()
+        raise
+
+
+def load_finalize_rollout(
+    db,
+    token: str,
+    staged_prompts: dict[int, int],
+    target_codes: list[str],
+    *,
+    force_config: bool,
+):
+    from sqlalchemy import select
+
+    from app.models import PromptCatalogRollout
+
+    rollout = _load_rollout(db, token)
+    try:
+        if rollout is None:
+            expected_prompts = {
+                str(key): value
+                for key, value in staged_prompts.items()
+            }
+            candidates = db.scalars(
+                select(PromptCatalogRollout).where(
+                    PromptCatalogRollout.status.in_(
+                        {"STAGED", "FINALIZED"}
+                    )
+                )
+            ).all()
+            if any(
+                candidate.target_json.get("staged_prompts")
+                == expected_prompts
+                and candidate.target_json.get("task_codes")
+                == target_codes
+                and candidate.force_config != force_config
+                for candidate in candidates
+            ):
+                raise ValueError(
+                    "--force-config 必须与 stage 时的授权保持一致"
+                )
+            raise ValueError("Prompt 目录尚未暂存，不能直接 finalize")
+        if rollout.status == "FINALIZED":
+            return None, _rollout_report(already_finalized=True)
+        if rollout.status != "STAGED":
+            raise ValueError("发布窗口正在处理中，请稍后重试")
+        payload = {
+            "token": rollout.token,
+            "force_config": rollout.force_config,
+            "target_json": rollout.target_json,
+            "frozen_tasks_json": rollout.frozen_tasks_json,
+        }
+        return payload, None
+    finally:
+        db.rollback()
+
+
+def claim_finalize_rollout(db, rollout_payload: dict[str, Any]) -> None:
+    from sqlalchemy import select, update
+
+    from app.models import (
+        PromptCatalogRollout,
+        Task,
+        TaskPromptBinding,
+    )
+
+    token = rollout_payload["token"]
+    result = db.execute(
+        update(PromptCatalogRollout)
+        .where(
+            PromptCatalogRollout.token == token,
+            PromptCatalogRollout.status == "STAGED",
+        )
+        .values(status="FINALIZING"),
+        execution_options={"synchronize_session": False},
+    )
+    if result.rowcount != 1:
+        raise ValueError("发布窗口已被其他进程处理")
+
+    expected_codes = {
+        snapshot["task_code"]
+        for snapshot in rollout_payload["frozen_tasks_json"]
+    }
+    target_codes = set(rollout_payload["target_json"]["task_codes"])
+    current_codes = set(
+        db.scalars(
+            select(Task.code).where(Task.code.in_(target_codes))
+        ).all()
+    )
+    if current_codes != expected_codes:
+        raise ValueError("发布窗口任务集合已被管理员修改")
+
+    for snapshot in rollout_payload["frozen_tasks_json"]:
+        task = db.scalar(
+            select(Task)
+            .where(Task.id == snapshot["task_id"])
+            .execution_options(populate_existing=True)
+        )
+        if (
+            task is None
+            or task.code != snapshot["task_code"]
+            or task.status != snapshot["task_status"]
+            or task.updated_by != snapshot["task_updated_by"]
+        ):
+            raise ValueError(
+                f"任务 {snapshot['task_code']} 的发布窗口状态已被管理员修改"
+            )
+        binding = db.scalar(
+            select(TaskPromptBinding)
+            .where(TaskPromptBinding.task_id == task.id)
+            .execution_options(populate_existing=True)
+        )
+        if snapshot["was_active"]:
+            old_binding = snapshot["binding"]
+            result = db.execute(
+                update(TaskPromptBinding)
+                .where(
+                    TaskPromptBinding.id == old_binding["id"],
+                    TaskPromptBinding.task_id == task.id,
+                    TaskPromptBinding.prompt_external_id
+                    == old_binding["prompt_external_id"],
+                    TaskPromptBinding.version_policy == "ROLLOUT",
+                    TaskPromptBinding.pinned_version
+                    == snapshot["frozen_version"],
+                    TaskPromptBinding.status == "ACTIVE",
+                    TaskPromptBinding.updated_by == CATALOG_SEED_ACTOR,
+                    TaskPromptBinding.rollout_token == token,
+                )
+                .values(
+                    prompt_external_id=snapshot[
+                        "target_prompt_external_id"
+                    ],
+                    version_policy="PUBLISHED",
+                    pinned_version=None,
+                    rollout_token=None,
+                    updated_by=CATALOG_SEED_ACTOR,
+                ),
+                execution_options={"synchronize_session": False},
+            )
+            if result.rowcount != 1:
+                raise ValueError(
+                    f"任务 {snapshot['task_code']} 的发布窗口绑定已被管理员修改"
+                )
+        elif not _binding_matches(binding, snapshot["binding"]):
+            raise ValueError(
+                f"任务 {snapshot['task_code']} 的发布窗口绑定已被管理员修改"
+            )
+    db.expire_all()
+
+
 async def seed_catalog(
     db,
     catalog: dict[str, Any],
@@ -456,10 +1030,16 @@ async def seed_catalog(
     cipher=None,
     key_version: str | None = None,
 ) -> dict[str, Any]:
-    from sqlalchemy import select
+    from sqlalchemy import select, update
 
     from app.crypto import ContentCipher
-    from app.models import Assistant, Task, TaskField, TaskPromptBinding
+    from app.models import (
+        Assistant,
+        PromptCatalogRollout,
+        Task,
+        TaskField,
+        TaskPromptBinding,
+    )
 
     validate_catalog(catalog)
     if manual_manifest is None:
@@ -477,90 +1057,93 @@ async def seed_catalog(
         raise ValueError("--finalize-published 必须配合 --staged-prompts")
     entries: list[tuple[dict, dict, int, bool]] = []
     missing_prompts: list[dict[str, Any]] = []
-    for assistant_definition in catalog["assistants"]:
-        for task_definition in assistant_definition["tasks"]:
-            existing_task = db.scalar(
-                select(Task).where(Task.code == task_definition["code"])
-            )
-            existing_binding = None
-            if existing_task is not None:
-                existing_binding = db.scalar(
-                    select(TaskPromptBinding).where(
-                        TaskPromptBinding.task_id == existing_task.id
-                    )
-                )
-            prompt_id = int(task_definition["prompt_external_id"])
-            if (
-                normalized_staged is not None
-                and existing_binding is not None
-                and not force_config
-                and existing_binding.prompt_external_id != prompt_id
-            ):
-                raise ValueError(
-                    "任务 "
-                    f"{task_definition['code']} 已绑定管理员自定义 Prompt "
-                    f"{existing_binding.prompt_external_id}；"
-                    "使用 --staged-prompts 前请先确认并传入 --force-config"
-                )
-            if (
-                existing_binding is not None
-                and not force_config
-                and normalized_staged is None
-            ):
-                prompt_id = existing_binding.prompt_external_id
-            prompt_version = (
-                normalized_staged[prompt_id]
-                if normalized_staged is not None
-                else None
-            )
-            try:
-                if normalized_staged is not None and not finalize_published:
-                    prompt = await prompt_client.get_staged(
-                        prompt_id,
-                        version=prompt_version,
-                    )
-                else:
-                    prompt = await prompt_client.get_published(
-                        prompt_id,
-                        version=prompt_version,
-                    )
-            except (LookupError, ValueError):
-                published = False
-                missing_prompts.append(
-                    {
-                        "task_code": task_definition["code"],
-                        "prompt_external_id": prompt_id,
-                        "prompt_version": prompt_version,
-                    }
-                )
-            else:
-                if normalized_staged is not None and (
-                    prompt.get("prompt_id") != prompt_id
-                    or prompt.get("version_no") != prompt_version
-                    or prompt.get("content")
-                    != str(task_definition["prompt_content"]).strip()
-                ):
-                    raise ValueError(
-                        "staged Prompt 版本与目录不一致："
-                        f"{prompt_id}@{prompt_version}"
-                    )
-                published = True
-            entries.append(
-                (
-                    assistant_definition,
-                    task_definition,
-                    prompt_id,
-                    published,
-                )
-            )
-    if normalized_staged is not None and missing_prompts:
-        raise ValueError(
-            "staged Prompt 版本不存在或不可用："
-            + "、".join(
-                f"{item['prompt_external_id']}@{item['prompt_version']}"
-                for item in missing_prompts
-            )
+    finalize_rollout = None
+    if normalized_staged is not None:
+        token = rollout_token(
+            catalog,
+            normalized_staged,
+            manual_manifest,
+            force_config=force_config,
         )
+        if not finalize_published:
+            return await stage_catalog_rollout(
+                db,
+                catalog,
+                normalized_staged,
+                manual_manifest,
+                prompt_client,
+                token=token,
+                force_config=force_config,
+            )
+        finalize_rollout, finalized_report = load_finalize_rollout(
+            db,
+            token,
+            normalized_staged,
+            [
+                task["code"]
+                for assistant in catalog["assistants"]
+                for task in assistant["tasks"]
+            ],
+            force_config=force_config,
+        )
+        if finalized_report is not None:
+            return finalized_report
+        try:
+            entries = await _validate_rollout_targets(
+                catalog,
+                normalized_staged,
+                prompt_client,
+                staged=False,
+            )
+        except Exception:
+            db.rollback()
+            raise
+    else:
+        try:
+            for assistant_definition in catalog["assistants"]:
+                for task_definition in assistant_definition["tasks"]:
+                    existing_task = db.scalar(
+                        select(Task).where(
+                            Task.code == task_definition["code"]
+                        )
+                    )
+                    existing_binding = None
+                    if existing_task is not None:
+                        existing_binding = db.scalar(
+                            select(TaskPromptBinding).where(
+                                TaskPromptBinding.task_id
+                                == existing_task.id
+                            )
+                        )
+                    prompt_id = int(
+                        task_definition["prompt_external_id"]
+                    )
+                    if existing_binding is not None and not force_config:
+                        prompt_id = existing_binding.prompt_external_id
+                    try:
+                        await prompt_client.get_published(prompt_id)
+                    except (LookupError, ValueError):
+                        published = False
+                        missing_prompts.append(
+                            {
+                                "task_code": task_definition["code"],
+                                "prompt_external_id": prompt_id,
+                                "prompt_version": None,
+                            }
+                        )
+                    else:
+                        published = True
+                    entries.append(
+                        (
+                            assistant_definition,
+                            task_definition,
+                            prompt_id,
+                            published,
+                        )
+                    )
+        except Exception:
+            db.rollback()
+            raise
 
     report: dict[str, Any] = {
         "assistants_created": 0,
@@ -573,6 +1156,8 @@ async def seed_catalog(
     }
     assistants_by_code: dict[str, Assistant] = {}
     try:
+        if finalize_rollout is not None:
+            claim_finalize_rollout(db, finalize_rollout)
         for assistant_definition in catalog["assistants"]:
             assistant = db.scalar(
                 select(Assistant).where(
@@ -693,48 +1278,34 @@ async def seed_catalog(
                     TaskPromptBinding.task_id == task.id
                 )
             )
-            should_finalize_binding = False
             if binding is None:
                 binding = TaskPromptBinding(
                     task_id=task.id,
                     prompt_external_id=prompt_id,
-                    version_policy=(
-                        "PINNED"
-                        if normalized_staged is not None
-                        else "PUBLISHED"
-                    ),
-                    pinned_version=(
-                        normalized_staged[prompt_id]
-                        if normalized_staged is not None
-                        else None
-                    ),
+                    version_policy="PUBLISHED",
+                    pinned_version=None,
+                    rollout_token=None,
                     status="ACTIVE" if published else "DISABLED",
+                    updated_by=(
+                        CATALOG_SEED_ACTOR
+                        if finalize_rollout is not None
+                        else "system"
+                    ),
                 )
                 db.add(binding)
                 report["bindings_created"] += 1
             else:
-                should_finalize_binding = (
-                    finalize_published
-                    and normalized_staged is not None
-                    and binding.status == "ACTIVE"
-                    and binding.prompt_external_id == prompt_id
-                    and binding.version_policy == "PINNED"
-                    and binding.pinned_version == normalized_staged[prompt_id]
-                )
-                if should_finalize_binding:
+                if finalize_published and normalized_staged is not None:
+                    binding.prompt_external_id = prompt_id
                     binding.status = "ACTIVE" if published else "DISABLED"
                     binding.version_policy = "PUBLISHED"
                     binding.pinned_version = None
-                elif not finalize_published:
+                    binding.rollout_token = None
+                    binding.updated_by = CATALOG_SEED_ACTOR
+                else:
                     if force_config:
                         binding.prompt_external_id = prompt_id
                     binding.status = "ACTIVE" if published else "DISABLED"
-                    if normalized_staged is not None:
-                        binding.prompt_external_id = prompt_id
-                        binding.version_policy = "PINNED"
-                        binding.pinned_version = normalized_staged[prompt_id]
-                elif force_config:
-                    binding.prompt_external_id = prompt_id
         tasks_by_code = {
             task.code: task
             for task in db.scalars(select(Task)).all()
@@ -758,6 +1329,19 @@ async def seed_catalog(
             cipher,
             key_version,
         )
+        if finalize_rollout is not None:
+            finalized = db.execute(
+                update(PromptCatalogRollout)
+                .where(
+                    PromptCatalogRollout.token
+                    == finalize_rollout["token"],
+                    PromptCatalogRollout.status == "FINALIZING",
+                )
+                .values(status="FINALIZED"),
+                execution_options={"synchronize_session": False},
+            )
+            if finalized.rowcount != 1:
+                raise ValueError("发布窗口完成状态写入失败")
         db.commit()
     except Exception:
         db.rollback()
