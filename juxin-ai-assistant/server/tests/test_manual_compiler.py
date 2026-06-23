@@ -14,6 +14,22 @@ CATALOG = SERVER_ROOT / "catalog" / "assistants.json"
 V110_MANIFEST = SERVER_ROOT / "catalog" / "manual-v1.10.json"
 V110_REPORT = SERVER_ROOT / "catalog" / "manual-v1.10-report.json"
 PROMPT_VARIABLE_PATTERN = r"\{\{([a-z][a-z0-9_]*)\}\}"
+NON_INPUT_COLON_LABEL_PATTERN = (
+    r"^(?:要求|写作要求|回答原则|注意|请注意|请重点检查|重点检查|"
+    r"请覆盖以下维度|请严格按照以下字段输出测试用例表|"
+    r"请优先从软件产品功能角度设计测试|"
+    r"安全测试不是本次主线，只需要适当补充|"
+    r"安全能力只作为功能结果验证，例如|"
+    r"填写执行测试前需要具备的条件，例如|"
+    r"填写可使用的测试数据，例如|"
+    r"至少覆盖以下异议|每个异议输出|表格格式如下|"
+    r"请从以下角度检查|并补充覆盖以下业务要点|"
+    r"然后补充覆盖以下业务要点|"
+    r"如需表格，表格样式和字段规则遵循第三部分总控模块，"
+    r"业务字段至少包括|请生成以下类型数据|"
+    r"待办任务表字段包括|交接类别至少包括|"
+    r"其中“测试内容”至少包括)$"
+)
 
 
 def _entry(result: dict, title: str) -> dict:
@@ -334,10 +350,10 @@ def test_v110_classification_partition_and_review_counts() -> None:
     assert report["counts"]["excluded"] == len(manifest["excluded"])
     assert report["counts"]["unresolved"] == 0
     assert report["counts"]["reviewed_unresolved_groups"] == 84
-    assert report["counts"]["reviewed_unresolved_items"] == len(
+    assert report["counts"]["reviewed_unresolved_items"] == 525
+    assert report["counts"]["total_review_decisions"] == len(
         report["review_decisions"]
     )
-    assert report["counts"]["reviewed_unresolved_items"] == 525
     assert report["counts"]["additional_unlabeled_fields"] == len(
         report["additional_field_decisions"]
     )
@@ -379,6 +395,132 @@ def test_v110_prompt_variables_match_complete_fields() -> None:
             assert isinstance(field["validation_json"], dict)
             if field["field_type"] == "SELECT":
                 assert field["options_json"]
+
+
+def _blank_input_slots(prompt: str) -> list[str]:
+    import re
+
+    slots = []
+    lines = prompt.splitlines()
+    for index, line in enumerate(lines):
+        stripped = line.strip().lstrip("-•*").strip()
+        if "|" in stripped:
+            cells = [cell.strip() for cell in stripped.strip("|").split("|")]
+            if cells and not all(re.fullmatch(r":?-{3,}:?", cell) for cell in cells):
+                slots.extend(
+                    f"表格空单元#{cell_index}"
+                    for cell_index, cell in enumerate(cells, start=1)
+                    if not cell
+                )
+        fill_block = re.fullmatch(r"【(?:请)?(?:填写|粘贴)([^】]+)】", stripped)
+        if (
+            fill_block is not None
+            and (index == 0 or "{{" not in lines[index - 1])
+        ):
+            slots.append(fill_block.group(1).strip())
+        match = re.fullmatch(r"([^：:{}]{1,40})[：:]\s*", stripped)
+        if match is None:
+            continue
+        label = match.group(1).strip()
+        if re.fullmatch(NON_INPUT_COLON_LABEL_PATTERN, label):
+            continue
+        if re.fullmatch(r"字段\d+", label):
+            continue
+        if re.match(
+            r"^(?:请|以下|最后|同时|然后|每|可考虑|在第三部分|"
+            r"问题需要|训练|回答结构|PPT建议|满分|方案应包括|"
+            r"信息收集表|每套方案|改写要求|重点识别)",
+            label,
+        ):
+            continue
+        slots.append(label)
+    return slots
+
+
+def test_v110_has_no_silent_blank_input_slots() -> None:
+    manifest, report, _ = _load_v110_artifacts()
+
+    missing = {
+        task["code"]: _blank_input_slots(task["prompt"])
+        for task in manifest["tasks"]
+        if _blank_input_slots(task["prompt"])
+    }
+
+    assert missing == {}
+    assert report["counts"]["reviewed_blank_slots"] == len(
+        report["blank_slot_decisions"]
+    )
+    assert report["counts"]["reviewed_blank_slots"] > 0
+    assert all(
+        decision["resolution"] == "FIELD"
+        and decision["original_slot"].endswith(("：", ":"))
+        and decision["field_key"]
+        and decision["replacements"] > 0
+        for decision in report["blank_slot_decisions"]
+    )
+    blank_audit_keys = {
+        (
+            decision["source_ref"],
+            decision["original_slot"],
+            decision["field_key"],
+        )
+        for decision in report["review_decisions"]
+        if decision.get("review_origin") == "BLANK_SLOT"
+    }
+    assert blank_audit_keys == {
+        (
+            decision["source_ref"],
+            decision["original_slot"],
+            decision["field_key"],
+        )
+        for decision in report["blank_slot_decisions"]
+    }
+
+
+def test_v110_rejects_semantically_unequal_alias_merges() -> None:
+    manifest, report, _ = _load_v110_artifacts()
+    forbidden = {
+        "security-service-plan",
+        "project-proposal",
+        "bid-error-check",
+        "delivery-solution",
+        "implementation-plan",
+        "troubleshooting-report",
+        "software-test-plan",
+        "training-plan",
+        "administrative-policy-optimization",
+    }
+    merged_codes = {
+        task["merge_existing_code"]
+        for task in manifest["tasks"]
+        if task["merge_existing_code"] is not None
+    }
+
+    assert merged_codes.isdisjoint(forbidden)
+    assert all(
+        decision["equivalence"]["input"]
+        and decision["equivalence"]["output"]
+        and decision["equivalence"]["scene"]
+        for decision in report["merged"]
+    )
+
+
+def test_v110_document_rules_cover_formal_and_informal_outputs() -> None:
+    manifest, _, _ = _load_v110_artifacts()
+    tasks = {task["code"]: task for task in manifest["tasks"]}
+    cases = {
+        "project-weekly-report": ("REPORT", True),
+        "meeting-minutes": ("MINUTES", True),
+        "v110-delivery-080": ("REPORT", True),
+        "v110-presales-044": ("BID_DOCUMENT", True),
+        "v110-delivery-085": ("CHECKLIST", True),
+        "v110-sales-010": ("COMMUNICATION", False),
+        "v110-sales-014": ("COMMUNICATION", False),
+    }
+
+    for code, expected in cases.items():
+        task = tasks[code]
+        assert (task["document_type"], task["formal_document"]) == expected
 
 
 def test_v110_source_refs_and_static_json_are_deterministic() -> None:
