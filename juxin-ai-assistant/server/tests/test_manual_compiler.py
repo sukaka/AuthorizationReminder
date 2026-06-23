@@ -10,6 +10,10 @@ if str(SERVER_ROOT) not in sys.path:
 
 FIXTURE = Path(__file__).parent / "fixtures" / "manual-mini.docx"
 SCRIPT = SERVER_ROOT / "scripts" / "compile_prompt_manual.py"
+CATALOG = SERVER_ROOT / "catalog" / "assistants.json"
+V110_MANIFEST = SERVER_ROOT / "catalog" / "manual-v1.10.json"
+V110_REPORT = SERVER_ROOT / "catalog" / "manual-v1.10-report.json"
+PROMPT_VARIABLE_PATTERN = r"\{\{([a-z][a-z0-9_]*)\}\}"
 
 
 def _entry(result: dict, title: str) -> dict:
@@ -207,3 +211,202 @@ def test_cli_reports_missing_and_invalid_docx_with_nonzero_exit(
 
         assert completed.returncode != 0
         assert "无法编译 DOCX" in completed.stderr
+
+
+def _load_v110_artifacts() -> tuple[dict, dict, dict]:
+    return (
+        json.loads(V110_MANIFEST.read_text(encoding="utf-8")),
+        json.loads(V110_REPORT.read_text(encoding="utf-8")),
+        json.loads(CATALOG.read_text(encoding="utf-8")),
+    )
+
+
+def test_v110_reviewed_manifest_integrity() -> None:
+    manifest, report, _ = _load_v110_artifacts()
+    required_task_keys = {
+        "assistant_code",
+        "code",
+        "name",
+        "aliases",
+        "merge_existing_code",
+        "prompt_external_id",
+        "document_type",
+        "formal_document",
+        "source_ref",
+        "scene",
+        "prompt",
+        "fields",
+    }
+    required_field_keys = {
+        "field_key",
+        "label",
+        "field_type",
+        "required",
+        "placeholder",
+        "example",
+        "options_json",
+        "validation_json",
+        "sort_order",
+    }
+
+    assert manifest["source"]["version"] == "V1.10"
+    assert len(manifest["tasks"]) > 88
+    assert manifest["unresolved"] == []
+    assert report["unresolved"] == []
+    for task in manifest["tasks"]:
+        assert required_task_keys <= task.keys()
+        assert task["prompt"].strip()
+        assert task["source_ref"].startswith("V1.10｜")
+        assert task["assistant_code"] in {
+            "general",
+            "sales",
+            "presales",
+            "delivery",
+            "software-testing",
+            "hr",
+            "tender",
+            "security",
+            "documents",
+            "training",
+        }
+        assert isinstance(task["formal_document"], bool)
+        assert isinstance(task["aliases"], list)
+        assert all(required_field_keys <= field.keys() for field in task["fields"])
+        assert len({field["field_key"] for field in task["fields"]}) == len(
+            task["fields"]
+        )
+
+
+def test_v110_ids_codes_and_merge_links_are_auditable() -> None:
+    manifest, report, catalog = _load_v110_artifacts()
+    catalog_tasks = {
+        task["code"]: task
+        for assistant in catalog["assistants"]
+        for task in assistant["tasks"]
+    }
+    tasks = manifest["tasks"]
+    ids = [task["prompt_external_id"] for task in tasks]
+    codes = [task["code"] for task in tasks]
+    new_ids = sorted(
+        task["prompt_external_id"]
+        for task in tasks
+        if task["merge_existing_code"] is None
+    )
+
+    assert len(ids) == len(set(ids))
+    assert len(codes) == len(set(codes))
+    assert new_ids == list(range(1089, 1089 + len(new_ids)))
+    for task in tasks:
+        existing_code = task["merge_existing_code"]
+        if existing_code is None:
+            assert task["prompt_external_id"] >= 1089
+            continue
+        assert existing_code in catalog_tasks
+        assert (
+            task["prompt_external_id"]
+            == catalog_tasks[existing_code]["prompt_external_id"]
+        )
+        assert any(
+            decision["code"] == task["code"]
+            and decision["existing_code"] == existing_code
+            and decision["basis"] in {"EXACT_NAME", "APPROVED_ALIAS"}
+            for decision in report["merged"]
+        )
+
+
+def test_v110_classification_partition_and_review_counts() -> None:
+    manifest, report, _ = _load_v110_artifacts()
+    partition_names = ("tasks", "knowledge", "quality_rules", "excluded")
+    source_refs = [
+        item["source_ref"]
+        for name in partition_names
+        for item in manifest[name]
+    ]
+
+    assert len(source_refs) == len(set(source_refs))
+    assert report["counts"]["tasks"] == len(manifest["tasks"])
+    assert report["counts"]["merged"] == len(report["merged"])
+    assert report["counts"]["new"] == len(report["new"])
+    assert report["counts"]["knowledge"] == len(manifest["knowledge"])
+    assert report["counts"]["quality_rules"] == len(
+        manifest["quality_rules"]
+    )
+    assert report["counts"]["excluded"] == len(manifest["excluded"])
+    assert report["counts"]["unresolved"] == 0
+    assert report["counts"]["reviewed_unresolved_groups"] == 84
+    assert report["counts"]["reviewed_unresolved_items"] == len(
+        report["review_decisions"]
+    )
+    assert report["counts"]["reviewed_unresolved_items"] == 525
+    assert report["counts"]["additional_unlabeled_fields"] == len(
+        report["additional_field_decisions"]
+    )
+    assert report["review_decisions"]
+    assert all(
+        decision["replacements"] > 0
+        for decision in report["review_decisions"]
+        if decision["resolution"] == "FIELD"
+    )
+    assert all(
+        decision["replacements"] > 0
+        for decision in report["additional_field_decisions"]
+    )
+    assert {
+        decision["classification"]
+        for decision in report["classification_decisions"]
+    } == {"TASK", "KNOWLEDGE", "QUALITY_RULE", "EXCLUDED"}
+    for item in manifest["excluded"]:
+        assert item["source_title"]
+        assert item["classification"] == "EXCLUDED"
+        assert item["reason"]
+
+
+def test_v110_prompt_variables_match_complete_fields() -> None:
+    import re
+
+    manifest, _, _ = _load_v110_artifacts()
+    for task in manifest["tasks"]:
+        variables = set(re.findall(PROMPT_VARIABLE_PATTERN, task["prompt"]))
+        field_keys = {field["field_key"] for field in task["fields"]}
+
+        assert variables == field_keys
+        assert re.findall(r"\[[^\]\n]+\]", task["prompt"]) == []
+        for index, field in enumerate(task["fields"], start=1):
+            assert field["sort_order"] == index * 10
+            assert field["field_type"] in {"TEXT", "TEXTAREA", "SELECT"}
+            assert isinstance(field["required"], bool)
+            assert isinstance(field["options_json"], list)
+            assert isinstance(field["validation_json"], dict)
+            if field["field_type"] == "SELECT":
+                assert field["options_json"]
+
+
+def test_v110_source_refs_and_static_json_are_deterministic() -> None:
+    import hashlib
+
+    manifest, report, _ = _load_v110_artifacts()
+
+    for name in ("tasks", "knowledge", "quality_rules", "excluded"):
+        for item in manifest[name]:
+            parts = item["source_ref"].split("｜")
+            assert parts[0] == "V1.10"
+            assert len(parts) >= 4
+            assert all(parts)
+            assert "部分" in parts[1]
+    assert report["artifact_sha256"]["manifest"] == hashlib.sha256(
+        V110_MANIFEST.read_bytes()
+    ).hexdigest()
+    assert report["review_rules"]["merge"] == (
+        "仅精确名称或报告中明确批准的别名允许合并；禁止隐式模糊匹配。"
+    )
+    assert report["review_rules"]["formal_document"]
+    assert (
+        json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True)
+        + "\n"
+        == V110_MANIFEST.read_text(encoding="utf-8")
+    )
+    assert (
+        json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True)
+        + "\n"
+        == V110_REPORT.read_text(encoding="utf-8")
+    )
