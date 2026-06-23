@@ -522,6 +522,185 @@ def test_v110_has_no_silent_blank_input_slots() -> None:
     }
 
 
+def _current_input_slot_candidates(task: dict) -> list[dict]:
+    import re
+
+    candidates = []
+    for line_number, line in enumerate(task["prompt"].splitlines(), start=1):
+        stripped = line.strip().lstrip("-•*").strip()
+        variable = re.fullmatch(
+            r"(?:【)?([^：:{}【】]{1,60})(?:】)?[：:]?\s*"
+            r"\{\{([a-z][a-z0-9_]*)\}\}",
+            stripped,
+        )
+        bracket_fill = re.fullmatch(
+            r"([^：:{}【】]{1,60})[：:]\s*"
+            r"【(?:请)?(?:填写|粘贴)[^】]*】",
+            stripped,
+        )
+        empty_colon = re.fullmatch(
+            r"([^：:{}【】]{1,60})[：:]\s*",
+            stripped,
+        )
+        bracket_choice = re.fullmatch(
+            r"([^：:{}【】]{1,60})[：:]\s*"
+            r"【([^】]+(?:\s/\s|／|、)[^】]+)】",
+            stripped,
+        )
+        naked_choice = re.fullmatch(
+            r"([^：:{}【】]{1,60})[：:]\s*"
+            r"([^【】{}\n]+(?:\s/\s|／|、)[^【】{}\n]+)",
+            stripped,
+        )
+        if variable is not None:
+            detection = "VARIABLE"
+            label, field_key = variable.groups()
+        elif bracket_fill is not None:
+            detection = "BRACKET_FILL"
+            label, field_key = bracket_fill.group(1), None
+        elif empty_colon is not None:
+            detection = "EMPTY_COLON"
+            label, field_key = empty_colon.group(1), None
+        elif bracket_choice is not None:
+            detection = "BRACKET_CHOICE"
+            label, field_key = bracket_choice.group(1), None
+        elif naked_choice is not None:
+            detection = "NAKED_CHOICE"
+            label, field_key = naked_choice.group(1), None
+        else:
+            continue
+        candidates.append(
+            {
+                "task_code": task["code"],
+                "source_ref": task["source_ref"],
+                "line_number": line_number,
+                "line": stripped,
+                "label": label.strip(),
+                "detection": detection,
+                "field_key": field_key,
+            }
+        )
+    return candidates
+
+
+def test_v110_input_slot_scanner_recognizes_supported_shapes() -> None:
+    task = {
+        "code": "scanner-fixture",
+        "source_ref": "V1.10｜测试部分｜测试分类｜扫描器样例",
+        "prompt": "\n".join(
+            (
+                "已有变量：{{existing_value}}",
+                "填写槽：【填写内容】",
+                "空值槽：",
+                "中文枚举：【是／否／待确认】",
+                "裸枚举：高、中、低",
+                "输出要求：按章节 / 表格输出",
+            )
+        ),
+    }
+
+    assert [
+        candidate["detection"]
+        for candidate in _current_input_slot_candidates(task)
+    ] == [
+        "VARIABLE",
+        "BRACKET_FILL",
+        "EMPTY_COLON",
+        "BRACKET_CHOICE",
+        "NAKED_CHOICE",
+        "NAKED_CHOICE",
+    ]
+
+
+def test_v110_input_slot_candidate_conservation() -> None:
+    manifest, report, _ = _load_v110_artifacts()
+    scanned = [
+        candidate
+        for task in manifest["tasks"]
+        for candidate in _current_input_slot_candidates(task)
+    ]
+    audited = report["input_slot_candidates"]
+    identity = lambda item: (
+        item["task_code"],
+        item["source_ref"],
+        item["line_number"],
+        item["line"],
+        item["detection"],
+    )
+
+    assert {identity(item) for item in scanned} == {
+        identity(item) for item in audited
+    }
+    assert len(audited) == (
+        report["counts"]["input_slot_candidates_fieldized"]
+        + report["counts"]["input_slot_candidates_excluded"]
+    )
+    assert all(item["resolution"] in {"FIELD", "EXCLUDED"} for item in audited)
+    assert all(
+        item["field_key"] and item["reason"]
+        if item["resolution"] == "FIELD"
+        else item["reason"] and item["field_key"] is None
+        for item in audited
+    )
+    assert all(
+        item["resolution"] == "EXCLUDED"
+        for item in audited
+        if item["detection"] in {"BRACKET_CHOICE", "NAKED_CHOICE"}
+    )
+    assert report["counts"]["reviewed_choice_slots"] == len(
+        report["choice_slot_decisions"]
+    )
+    assert report["counts"]["reviewed_choice_slots"] > 0
+    choice_audit = {
+        (
+            item["source_ref"],
+            item["original_slot"],
+            item["field_key"],
+        )
+        for item in report["review_decisions"]
+        if item.get("review_origin") == "CHOICE_SLOT"
+    }
+    assert choice_audit == {
+        (
+            item["source_ref"],
+            item["original_slot"],
+            item["field_key"],
+        )
+        for item in report["choice_slot_decisions"]
+    }
+
+
+def test_v110_choice_slots_preserve_ordered_options() -> None:
+    manifest, _, _ = _load_v110_artifacts()
+    tasks = {task["code"]: task for task in manifest["tasks"]}
+    cases = {
+        ("v110-presales-038", "面向客户"): [
+            "政府",
+            "事业单位",
+            "医疗",
+            "教育",
+            "企业",
+            "云上业务单位",
+            "中小企业",
+            "渠道伙伴",
+        ],
+        ("v110-presales-043", "等保级别"): ["二级", "三级", "待确认"],
+        ("v110-tender-181", "是否需要商务提供模板"): [
+            "是",
+            "否",
+            "待确认",
+        ],
+    }
+
+    for (task_code, label), options in cases.items():
+        field = next(
+            field for field in tasks[task_code]["fields"]
+            if field["label"] == label
+        )
+        assert field["field_type"] == "SELECT"
+        assert field["options_json"] == options
+
+
 def test_v110_rejects_semantically_unequal_alias_merges() -> None:
     manifest, report, _ = _load_v110_artifacts()
     forbidden = {
