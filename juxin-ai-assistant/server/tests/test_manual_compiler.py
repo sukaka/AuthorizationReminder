@@ -397,6 +397,133 @@ def test_v110_prompt_variables_match_complete_fields() -> None:
                 assert field["options_json"]
 
 
+def _residual_fill_placeholders(prompt: str) -> list[str]:
+    import re
+
+    return re.findall(
+        r"【[^】\n]*(?:填写|粘贴)[^】\n]*】"
+        r"|\[[^\]\n]*(?:填写|粘贴)[^\]\n]*\]",
+        prompt,
+    )
+
+
+def test_v110_has_no_unaudited_residual_fill_placeholders() -> None:
+    manifest, report, _ = _load_v110_artifacts()
+    scanned = {
+        (task["code"], task["source_ref"], placeholder)
+        for task in manifest["tasks"]
+        for placeholder in _residual_fill_placeholders(task["prompt"])
+    }
+    excluded = {
+        (
+            decision["task_code"],
+            decision["source_ref"],
+            decision["original"],
+        )
+        for decision in report.get("residual_placeholder_decisions", [])
+        if decision["action"] == "EXCLUDED"
+    }
+
+    assert scanned == excluded
+
+
+def test_v110_residual_placeholder_removals_are_conserved() -> None:
+    _, report, _ = _load_v110_artifacts()
+    expected = {
+        (
+            "v110-presales-045",
+            "blank_slot_01",
+            "【粘贴招标参数】",
+        ),
+        (
+            "v110-presales-045",
+            "blank_slot_02",
+            "【填写产品名称和已确认能力】",
+        ),
+        (
+            "v110-presales-046",
+            "blank_slot_01",
+            "【粘贴标书内容】",
+        ),
+        (
+            "v110-presales-049",
+            "blank_slot_01",
+            "【粘贴会议原文或录音转写文本】",
+        ),
+        (
+            "v110-presales-056",
+            "blank_slot_01",
+            "【粘贴相关内容】",
+        ),
+        (
+            "v110-presales-057",
+            "blank_slot_01",
+            "【粘贴招标参数】",
+        ),
+        (
+            "v110-presales-058",
+            "blank_slot_01",
+            "【粘贴参数】",
+        ),
+        (
+            "v110-presales-058",
+            "blank_slot_02",
+            "【粘贴已确认能力】",
+        ),
+        (
+            "v110-presales-061",
+            "blank_slot_01",
+            "【粘贴标书内容】",
+        ),
+        (
+            "v110-presales-061",
+            "blank_slot_02",
+            "【粘贴招标要求】",
+        ),
+    }
+    decisions = report.get("residual_placeholder_decisions", [])
+    removed = {
+        (
+            decision["task_code"],
+            decision["field_key"],
+            decision["original"],
+        )
+        for decision in decisions
+        if decision["action"] == "REMOVED_REDUNDANT_PLACEHOLDER"
+    }
+
+    assert removed == expected
+    assert report["counts"]["reviewed_residual_placeholders"] == len(decisions)
+    assert all(
+        decision["source_ref"]
+        and decision["field_key"]
+        and decision["reason"]
+        and decision["replacements"] == 1
+        for decision in decisions
+    )
+    residual_audit = {
+        (
+            decision["task_code"],
+            decision["source_ref"],
+            decision["field_key"],
+            decision["original"],
+            decision["action"],
+        )
+        for decision in report["review_decisions"]
+        if decision.get("review_origin") == "RESIDUAL_PLACEHOLDER"
+    }
+    assert residual_audit == {
+        (
+            decision["task_code"],
+            decision["source_ref"],
+            decision["field_key"],
+            decision["original"],
+            decision["action"],
+        )
+        for decision in decisions
+    }
+
+
 def _unresolved_input_slots(prompt: str) -> list[str]:
     import re
 
