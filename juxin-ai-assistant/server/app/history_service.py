@@ -161,6 +161,40 @@ def get_history_detail(
     }
 
 
+def load_generation_export_payload(
+    db: Session,
+    user_id: str,
+    generation_uuid: str,
+    cipher: ContentCipher,
+) -> dict[str, object]:
+    record = get_owned_record(db, user_id, generation_uuid)
+    if record.status != "COMPLETED":
+        raise HTTPException(status_code=409, detail="生成记录尚未完成")
+    if record.output_ciphertext is None or record.output_nonce is None:
+        raise HTTPException(status_code=409, detail="生成结果不可导出")
+    task, _assistant = db.execute(
+        select(Task, Assistant)
+        .join(Assistant, Assistant.id == Task.assistant_id)
+        .where(Task.id == record.task_id)
+    ).one()
+    output_payload = cipher.decrypt_json(
+        EncryptedPayload(record.output_ciphertext, record.output_nonce),
+        record.uuid.encode(),
+    )
+    output = output_payload.get("output")
+    if output is None:
+        raise HTTPException(status_code=409, detail="生成结果不可导出")
+    return {
+        "task_name": task.name,
+        "task_uuid": task.uuid,
+        "department": record.department_snapshot,
+        "author": record.username_snapshot,
+        "output": str(output),
+        "version": f"V{record.prompt_version}",
+        "file_name": f"{task.name}-{record.uuid}.docx",
+    }
+
+
 def tombstone_history(
     db: Session,
     user_id: str,

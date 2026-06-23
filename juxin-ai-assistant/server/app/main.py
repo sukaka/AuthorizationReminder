@@ -1,6 +1,7 @@
 from collections.abc import Awaitable, Callable
 from datetime import datetime
 from typing import Annotated
+from urllib.parse import quote
 
 import httpx
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
@@ -29,6 +30,7 @@ from .history_service import (
     HistoryFilters,
     get_history_detail,
     list_history,
+    load_generation_export_payload,
     load_regeneration_source,
     tombstone_history,
 )
@@ -63,6 +65,7 @@ from .schemas import (
     TaskOut,
 )
 from .sensitive import SensitiveDetector, derive_confirmation_key
+from .word_export import render_generation_docx
 
 
 settings = get_settings()
@@ -189,6 +192,33 @@ def get_knowledge_retriever(
     cipher: Annotated[ContentCipher, Depends(get_content_cipher)],
 ) -> KnowledgeRetriever:
     return KnowledgeRetriever(cipher)
+
+
+def _safe_export_filename(file_name: str) -> str:
+    cleaned = "".join(
+        char
+        for char in file_name
+        if char not in {"/", "\\", ":", "\r", "\n", '"', ";"}
+        and ord(char) >= 32
+        and ord(char) != 127
+    ).strip()
+    return cleaned or "generation.docx"
+
+
+def _content_disposition_for_download(file_name: str) -> str:
+    safe_name = _safe_export_filename(file_name)
+    ascii_name = "".join(
+        char
+        if char.isascii()
+        and (char.isalnum() or char in {" ", ".", "_", "-", "(", ")"})
+        else "_"
+        for char in safe_name
+    ).strip()
+    ascii_name = ascii_name or "generation.docx"
+    return (
+        f'attachment; filename="{ascii_name}"; '
+        f"filename*=UTF-8''{quote(safe_name, safe='')}"
+    )
 
 
 @app.get("/api/ai/session", response_model=SessionOut)
@@ -679,6 +709,64 @@ def generation_history_detail(
             generation_uuid,
             cipher,
         )
+    )
+
+
+@app.get("/api/ai/generations/{generation_uuid}/export.docx")
+async def export_generation_word(
+    generation_uuid: str,
+    request: Request,
+    session_payload: Annotated[SessionPayload, Depends(get_session)],
+    current_settings: Annotated[Settings, Depends(get_settings)],
+    db: Annotated[Session, Depends(get_db)],
+    cipher: Annotated[ContentCipher, Depends(get_content_cipher)],
+) -> Response:
+    await require_action(
+        "ai_assistant:use",
+        request,
+        session_payload,
+        current_settings,
+    )
+    payload = load_generation_export_payload(
+        db,
+        str(session_payload.user.id),
+        generation_uuid,
+        cipher,
+    )
+    document = render_generation_docx(
+        title=str(payload["task_name"]),
+        task_name=str(payload["task_name"]),
+        department=str(payload["department"]),
+        author=str(payload["author"]),
+        output=str(payload["output"]),
+        version=str(payload["version"]),
+    )
+    write_request_audit(
+        db,
+        session_payload,
+        request,
+        current_settings,
+        action="generation.export_word",
+        entity_type="generation",
+        entity_uuid=generation_uuid,
+        metadata={
+            "generation_uuid": generation_uuid,
+            "task_uuid": str(payload["task_uuid"]),
+            "status": "COMPLETED",
+        },
+    )
+    db.commit()
+    return Response(
+        content=document,
+        media_type=(
+            "application/vnd.openxmlformats-officedocument."
+            "wordprocessingml.document"
+        ),
+        headers={
+            "Content-Disposition": _content_disposition_for_download(
+                str(payload["file_name"])
+            ),
+        },
     )
 
 
