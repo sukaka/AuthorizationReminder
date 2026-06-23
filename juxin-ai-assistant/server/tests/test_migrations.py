@@ -2,6 +2,7 @@ from pathlib import Path
 
 from alembic import command
 from alembic.config import Config
+from alembic.script import ScriptDirectory
 from sqlalchemy import create_engine, inspect, text
 
 SERVER_ROOT = Path(__file__).resolve().parents[1]
@@ -24,6 +25,23 @@ def migration_config(database_url: str) -> Config:
     return config
 
 
+def test_migration_revision_graph_is_single_linear_head() -> None:
+    script = ScriptDirectory.from_config(
+        migration_config("sqlite+pysqlite:///:memory:")
+    )
+
+    assert script.get_heads() == ["0005_task_document_metadata"]
+    assert [
+        revision.revision for revision in script.walk_revisions()
+    ] == [
+        "0005_task_document_metadata",
+        "0004_desktop_updates",
+        "0003_governance",
+        "0002_employee_features",
+        "0001_foundation",
+    ]
+
+
 def test_foundation_migration_round_trip(tmp_path: Path) -> None:
     database_path = tmp_path / "migration.db"
     database_url = f"sqlite+pysqlite:///{database_path}"
@@ -38,6 +56,105 @@ def test_foundation_migration_round_trip(tmp_path: Path) -> None:
 
     command.upgrade(config, "head")
     assert FOUNDATION_TABLES.issubset(set(inspect(engine).get_table_names()))
+
+
+def test_desktop_update_migration_matches_models(tmp_path: Path) -> None:
+    database_path = tmp_path / "desktop-update-schema.db"
+    database_url = f"sqlite+pysqlite:///{database_path}"
+    config = migration_config(database_url)
+    engine = create_engine(database_url)
+
+    command.upgrade(config, "0004_desktop_updates")
+    inspector = inspect(engine)
+
+    release_columns = {
+        column["name"]
+        for column in inspector.get_columns("ai_desktop_update_releases")
+    }
+    artifact_columns = {
+        column["name"]
+        for column in inspector.get_columns("ai_desktop_update_artifacts")
+    }
+    assert release_columns == {
+        "id",
+        "uuid",
+        "agent_version",
+        "channel",
+        "status",
+        "release_notes",
+        "created_by",
+        "created_at",
+        "published_at",
+        "withdrawn_at",
+    }
+    assert artifact_columns == {
+        "id",
+        "release_id",
+        "target",
+        "file_name",
+        "storage_key",
+        "content_type",
+        "size_bytes",
+        "sha256",
+        "tauri_signature",
+        "created_at",
+    }
+
+    release_uniques = {
+        frozenset(constraint["column_names"])
+        for constraint in inspector.get_unique_constraints(
+            "ai_desktop_update_releases"
+        )
+    }
+    artifact_uniques = {
+        frozenset(constraint["column_names"])
+        for constraint in inspector.get_unique_constraints(
+            "ai_desktop_update_artifacts"
+        )
+    }
+    assert release_uniques == {
+        frozenset({"uuid"}),
+        frozenset({"channel", "agent_version"}),
+    }
+    assert artifact_uniques == {
+        frozenset({"release_id", "target"}),
+        frozenset({"storage_key"}),
+        frozenset({"sha256"}),
+    }
+
+    release_checks = {
+        constraint["name"]
+        for constraint in inspector.get_check_constraints(
+            "ai_desktop_update_releases"
+        )
+    }
+    artifact_checks = {
+        constraint["name"]
+        for constraint in inspector.get_check_constraints(
+            "ai_desktop_update_artifacts"
+        )
+    }
+    assert release_checks == {
+        "ck_desktop_update_release_channel",
+        "ck_desktop_update_release_status",
+    }
+    assert artifact_checks == {"ck_desktop_update_artifact_target"}
+
+    release_indexes = {
+        frozenset(index["column_names"])
+        for index in inspector.get_indexes("ai_desktop_update_releases")
+    }
+    artifact_indexes = {
+        frozenset(index["column_names"])
+        for index in inspector.get_indexes("ai_desktop_update_artifacts")
+    }
+    assert release_indexes == {
+        frozenset({"agent_version"}),
+        frozenset({"channel"}),
+        frozenset({"status"}),
+    }
+    assert artifact_indexes == {frozenset({"release_id"})}
+    assert inspector.get_foreign_keys("ai_desktop_update_artifacts") == []
 
 
 def test_task_document_metadata_migration_round_trip(tmp_path: Path) -> None:
