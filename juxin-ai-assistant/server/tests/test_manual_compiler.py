@@ -526,7 +526,55 @@ def _current_input_slot_candidates(task: dict) -> list[dict]:
     import re
 
     candidates = []
-    for line_number, line in enumerate(task["prompt"].splitlines(), start=1):
+    lines = task["prompt"].splitlines()
+    multiline_line_numbers = set()
+    for index, line in enumerate(lines):
+        title = re.fullmatch(r"【([^】]{1,60})】", line.strip())
+        if title is None:
+            continue
+        label = title.group(1).strip()
+        if re.search(
+            r"(?:输出|内容|分析|测试|文档格式|语言|结论|用例设计)要求"
+            r"|(?:固定|输出)结构|内容要点$",
+            label,
+        ):
+            continue
+        next_index = index + 1
+        while next_index < len(lines) and not lines[next_index].strip():
+            next_index += 1
+        if next_index >= len(lines):
+            continue
+        next_line = lines[next_index].strip()
+        variable = re.fullmatch(
+            r"\{\{([a-z][a-z0-9_]*)\}\}",
+            next_line,
+        )
+        instruction = re.match(
+            r"^(?:请)?(?:填写|粘贴|详细描述|请输入|上传|在这里粘贴)",
+            next_line,
+        )
+        if variable is None and instruction is None:
+            continue
+        candidates.append(
+            {
+                "task_code": task["code"],
+                "source_ref": task["source_ref"],
+                "line_number": next_index + 1,
+                "line": next_line,
+                "label": label,
+                "detection": (
+                    "MULTILINE_VARIABLE"
+                    if variable is not None
+                    else "MULTILINE_FILL"
+                ),
+                "field_key": variable.group(1) if variable is not None else None,
+            }
+        )
+        multiline_line_numbers.add(next_index + 1)
+
+    for line_number, line in enumerate(lines, start=1):
+        if line_number in multiline_line_numbers:
+            continue
         stripped = line.strip().lstrip("-•*").strip()
         variable = re.fullmatch(
             r"(?:【)?([^：:{}【】]{1,60})(?:】)?[：:]?\s*"
@@ -580,7 +628,7 @@ def _current_input_slot_candidates(task: dict) -> list[dict]:
                 "field_key": field_key,
             }
         )
-    return candidates
+    return sorted(candidates, key=lambda item: item["line_number"])
 
 
 def test_v110_input_slot_scanner_recognizes_supported_shapes() -> None:
@@ -595,6 +643,14 @@ def test_v110_input_slot_scanner_recognizes_supported_shapes() -> None:
                 "中文枚举：【是／否／待确认】",
                 "裸枚举：高、中、低",
                 "输出要求：按章节 / 表格输出",
+                "【系统名称】",
+                "",
+                "填写系统名称",
+                "【功能说明】",
+                "详细描述业务用途",
+                "【不可跨越】",
+                "【输出要求】",
+                "填写这行不是不可跨越标题的输入",
             )
         ),
     }
@@ -609,7 +665,60 @@ def test_v110_input_slot_scanner_recognizes_supported_shapes() -> None:
         "BRACKET_CHOICE",
         "NAKED_CHOICE",
         "NAKED_CHOICE",
+        "MULTILINE_FILL",
+        "MULTILINE_FILL",
     ]
+
+
+def test_v110_multiline_input_slots_are_fully_reviewed() -> None:
+    manifest, report, _ = _load_v110_artifacts()
+    tasks = {task["code"]: task for task in manifest["tasks"]}
+    decisions = report["multiline_slot_decisions"]
+
+    assert len(decisions) == 55
+    assert len({item["task_code"] for item in decisions}) == 24
+    assert report["counts"]["reviewed_multiline_slots"] == len(decisions)
+    assert all(
+        item["resolution"] == "FIELD"
+        and item["field_key"]
+        and item["reason"]
+        and item["replacements"] > 0
+        for item in decisions
+    )
+    audit_keys = {
+        (
+            item["source_ref"],
+            item["original_slot"],
+            item["field_key"],
+        )
+        for item in report["review_decisions"]
+        if item.get("review_origin") == "MULTILINE_SLOT"
+    }
+    assert audit_keys == {
+        (
+            item["source_ref"],
+            item["original_slot"],
+            item["field_key"],
+        )
+        for item in decisions
+    }
+
+    cases = {
+        ("v110-software-testing-105", "需求内容"): "TEXTAREA",
+        ("v110-software-testing-107", "系统名称"): "TEXT",
+        ("v110-software-testing-107", "功能说明"): "TEXTAREA",
+        ("v110-software-testing-114", "接口地址"): "TEXT",
+        ("v110-software-testing-114", "请求参数"): "TEXTAREA",
+        ("v110-software-testing-117", "截图或日志"): "TEXTAREA",
+        ("v110-delivery-096", "需求说明"): "TEXTAREA",
+    }
+    for (task_code, label), field_type in cases.items():
+        field = next(
+            field for field in tasks[task_code]["fields"]
+            if field["label"] == label
+        )
+        assert field["field_type"] == field_type
+        assert field["placeholder"]
 
 
 def test_v110_input_slot_candidate_conservation() -> None:
