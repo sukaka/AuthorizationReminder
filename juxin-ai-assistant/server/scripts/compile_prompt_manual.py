@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+import argparse
 import hashlib
+import json
 import re
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 from xml.etree import ElementTree
-from zipfile import ZipFile
+from zipfile import BadZipFile, ZipFile
 
 
 WORD_NAMESPACE = (
@@ -32,8 +35,17 @@ INDEPENDENT_CHECK_TASKS = {
     "商务全流程风险检查清单",
     "文档遗漏检查",
 }
-KNOWLEDGE_TITLES = {"公司知识库"}
-QUALITY_RULE_TITLES = {"统一输出质量规则"}
+KNOWLEDGE_TITLES = {
+    "公司知识库",
+    "统一的公司知识提示词",
+    "统一公司知识提示词",
+}
+QUALITY_RULE_TITLES = {
+    "统一输出质量规则",
+    "产品名称与术语规范",
+    "WDSP资料使用规则",
+    "型号参数使用规则",
+}
 
 BUSINESS_SECTIONS = {
     "第四部分": "销售",
@@ -72,10 +84,17 @@ FIELD_KEY_BY_LABEL = {
     "时间范围": "time_range",
 }
 
-PLACEHOLDER_PATTERN = re.compile(
-    r"(?P<label>[\u4e00-\u9fffA-Za-z0-9（）()、/]+)"
+FIELD_PLACEHOLDER_PATTERN = re.compile(
+    r"【(?P<bracket_label>[^】\n]+)】"
+    r"(?P<spacing>\s*)"
+    r"(?P<bracket_placeholder>\[[^\]\n]+\])"
+    r"|"
+    r"(?P<colon_label>[\u4e00-\u9fffA-Za-z0-9（）()、/]+)"
     r"(?P<separator>[：:])"
-    r"(?P<placeholder>\[[^\]\n]+\])"
+    r"(?P<colon_placeholder>\[[^\]\n]+\])"
+)
+TITLE_NUMBER_PATTERN = re.compile(
+    r"^\s*(?:(?:\d+|[一二三四五六七八九十百]+)[.．、]\s*)+"
 )
 
 
@@ -97,16 +116,26 @@ def read_paragraphs(path: str | Path) -> list[Paragraph]:
             if style_node is not None
             else ""
         )
-        text = "".join(
-            value.text or "" for value in node.iter(f"{W}t")
-        )
+        parts: list[str] = []
+        for value in node.iter():
+            if value.tag == f"{W}t":
+                parts.append(value.text or "")
+            elif value.tag in {f"{W}br", f"{W}cr"}:
+                parts.append("\n")
+            elif value.tag == f"{W}tab":
+                parts.append("\t")
+        text = "".join(parts)
         if text:
             paragraphs.append(Paragraph(style=style, text=text))
     return paragraphs
 
 
+def _normalized_title(title: str) -> str:
+    return TITLE_NUMBER_PATTERN.sub("", title.strip()).strip()
+
+
 def classify_candidate(title: str) -> str:
-    normalized = title.strip()
+    normalized = _normalized_title(title)
     if normalized in INDEPENDENT_CHECK_TASKS:
         return "TASK"
     if any(
@@ -133,10 +162,11 @@ def _extract_fields(
     seen_fields: set[str] = set()
     seen_unresolved: set[tuple[str, str]] = set()
 
-    def replace(match: re.Match[str]) -> str:
-        raw_label = match.group("label")
+    def register(
+        raw_label: str,
+        placeholder: str,
+    ) -> str | None:
         label = _field_label(raw_label)
-        placeholder = match.group("placeholder")
         field_key = FIELD_KEY_BY_LABEL.get(label)
         if field_key is None:
             unresolved_key = (label, placeholder)
@@ -145,7 +175,7 @@ def _extract_fields(
                 unresolved.append(
                     {"label": label, "placeholder": placeholder}
                 )
-            return match.group(0)
+            return None
         if field_key not in seen_fields:
             seen_fields.add(field_key)
             fields.append(
@@ -161,12 +191,35 @@ def _extract_fields(
                     "sort_order": len(fields) * 10 + 10,
                 }
             )
+        return field_key
+
+    def replace(match: re.Match[str]) -> str:
+        raw_label = (
+            match.group("bracket_label")
+            or match.group("colon_label")
+        )
+        placeholder = (
+            match.group("bracket_placeholder")
+            or match.group("colon_placeholder")
+        )
+        field_key = register(
+            raw_label,
+            placeholder,
+        )
+        if field_key is None:
+            return match.group(0)
+        if match.group("bracket_label") is not None:
+            return (
+                f"【{raw_label}】{match.group('spacing')}"
+                f"{{{{{field_key}}}}}"
+            )
         return (
             f"{raw_label}{match.group('separator')}"
             f"{{{{{field_key}}}}}"
         )
 
-    return PLACEHOLDER_PATTERN.sub(replace, prompt), fields, unresolved
+    prompt = FIELD_PLACEHOLDER_PATTERN.sub(replace, prompt)
+    return prompt, fields, unresolved
 
 
 def _section_name(heading: str) -> str | None:
@@ -182,19 +235,51 @@ def _section_name(heading: str) -> str | None:
 
 
 def _governance(paragraphs: list[Paragraph]) -> dict[str, str]:
-    title = "聚信得仁公司级统一输出总控要求"
-    content: list[str] = []
-    collecting = False
-    for paragraph in paragraphs:
-        text = paragraph.text.strip()
-        if paragraph.style == "Heading2" and text == title:
-            collecting = True
+    default_title = "聚信得仁公司级统一输出总控要求"
+    for index, paragraph in enumerate(paragraphs):
+        normalized = re.sub(r"\s+", "", paragraph.text)
+        if paragraph.style not in {"Heading1", "Heading2"}:
             continue
-        if collecting and paragraph.style in {"Heading1", "Heading2"}:
-            break
-        if collecting:
-            content.append(paragraph.text)
-    return {"title": title, "content": "\n".join(content)}
+        if (
+            "统一输出总控模块" not in normalized
+            and "统一输出总控要求" not in normalized
+        ):
+            continue
+        body: list[str] = []
+        for following in paragraphs[index + 1 :]:
+            if following.style == "Heading1":
+                break
+            if (
+                paragraph.style == "Heading2"
+                and following.style == "Heading2"
+            ):
+                break
+            if following.style == "Prompt标题":
+                continue
+            if following.style in {"Prompt正文", "正文", ""}:
+                body.append(following.text)
+            if (
+                following.style == "Prompt正文"
+                and "统一输出总控要求" in following.text
+            ):
+                match = re.search(
+                    r"【([^】]*统一输出总控要求)】",
+                    following.text,
+                )
+                return {
+                    "title": (
+                        match.group(1)
+                        if match is not None
+                        else default_title
+                    ),
+                    "content": following.text,
+                }
+        if body:
+            return {
+                "title": default_title,
+                "content": "\n".join(body),
+            }
+    return {"title": default_title, "content": ""}
 
 
 def compile_manual(
@@ -214,20 +299,19 @@ def compile_manual(
         if candidate is None:
             return
         classification = classify_candidate(candidate["source_title"])
-        if classification != "EXCLUDED":
-            prompt = "\n".join(candidate.pop("_prompt_parts"))
-            scene = "\n".join(candidate.pop("_scene_parts"))
-            prompt, fields, unresolved = _extract_fields(prompt)
-            candidate.update(
-                {
-                    "scene": scene,
-                    "prompt": prompt,
-                    "classification": classification,
-                    "fields": fields,
-                    "unresolved": unresolved,
-                }
-            )
-            entries.append(candidate)
+        prompt = "\n".join(candidate.pop("_prompt_parts"))
+        scene = "\n".join(candidate.pop("_scene_parts"))
+        prompt, fields, unresolved = _extract_fields(prompt)
+        candidate.update(
+            {
+                "scene": scene,
+                "prompt": prompt,
+                "classification": classification,
+                "fields": fields,
+                "unresolved": unresolved,
+            }
+        )
+        entries.append(candidate)
         candidate = None
 
     for paragraph in paragraphs:
@@ -242,7 +326,7 @@ def compile_manual(
             continue
         if paragraph.style == "Heading2":
             finish_candidate()
-            category = text
+            category = _normalized_title(text)
             prompt_part = None
             if section == "售前" and text.endswith("提示词"):
                 candidate = {
@@ -254,6 +338,20 @@ def compile_manual(
                 }
             continue
         if paragraph.style == "Heading3":
+            normalized_heading = _normalized_title(text)
+            if candidate is not None and normalized_heading in {
+                "使用场景",
+                "标准Prompt",
+                "标准提示词",
+                "使用注意事项",
+            }:
+                prompt_part = {
+                    "使用场景": "scene",
+                    "标准Prompt": "prompt",
+                    "标准提示词": "prompt",
+                    "使用注意事项": "ignore",
+                }[normalized_heading]
+                continue
             finish_candidate()
             prompt_part = None
             candidate = {
@@ -270,13 +368,27 @@ def compile_manual(
             prompt_part = {
                 "使用场景": "scene",
                 "提示词": "prompt",
+                "标准Prompt": "prompt",
+                "标准提示词": "prompt",
             }.get(text)
             continue
-        if paragraph.style != "Prompt正文":
+        if paragraph.style not in {"Prompt正文", "正文", ""}:
+            continue
+        scene_match = re.match(
+            r"^适用场景[：:]\s*(.*)$",
+            paragraph.text,
+            flags=re.DOTALL,
+        )
+        if prompt_part is None and scene_match is not None:
+            candidate["_scene_parts"].append(
+                scene_match.group(1).strip()
+            )
             continue
         if prompt_part == "scene":
             candidate["_scene_parts"].append(paragraph.text)
         elif prompt_part == "prompt":
+            candidate["_prompt_parts"].append(paragraph.text)
+        elif prompt_part != "ignore":
             candidate["_prompt_parts"].append(paragraph.text)
 
     finish_candidate()
@@ -286,3 +398,117 @@ def compile_manual(
         "governance": _governance(paragraphs),
         "entries": entries,
     }
+
+
+def build_manifest(compiled: dict[str, Any]) -> dict[str, Any]:
+    entries = compiled["entries"]
+    unresolved = [
+        {
+            "section": entry["section"],
+            "source_title": entry["source_title"],
+            "items": entry["unresolved"],
+        }
+        for entry in entries
+        if entry["unresolved"]
+    ]
+    return {
+        "source": compiled["source"],
+        "governance": compiled["governance"],
+        "tasks": [
+            entry
+            for entry in entries
+            if entry["classification"] == "TASK"
+        ],
+        "knowledge": [
+            entry
+            for entry in entries
+            if entry["classification"] == "KNOWLEDGE"
+        ],
+        "quality_rules": [
+            entry
+            for entry in entries
+            if entry["classification"] == "QUALITY_RULE"
+        ],
+        "excluded": [
+            entry
+            for entry in entries
+            if entry["classification"] == "EXCLUDED"
+        ],
+        "unresolved": unresolved,
+    }
+
+
+def build_report(manifest: dict[str, Any]) -> dict[str, Any]:
+    names = (
+        "tasks",
+        "knowledge",
+        "quality_rules",
+        "excluded",
+        "unresolved",
+    )
+    return {
+        "counts": {
+            name: len(manifest[name])
+            for name in names
+        },
+        **{
+            name: manifest[name]
+            for name in names
+        },
+    }
+
+
+def _write_json(path: Path, value: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            value,
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        description="编译聚信得仁 DOCX Prompt 手册",
+    )
+    parser.add_argument("--input", required=True, type=Path)
+    parser.add_argument("--output", required=True, type=Path)
+    parser.add_argument("--report", required=True, type=Path)
+    parser.add_argument(
+        "--source-version",
+        default="V1.10",
+    )
+    args = parser.parse_args(argv)
+    try:
+        compiled = compile_manual(
+            args.input,
+            args.source_version,
+        )
+        manifest = build_manifest(compiled)
+        report = build_report(manifest)
+        _write_json(args.output, manifest)
+        _write_json(args.report, report)
+    except (
+        BadZipFile,
+        ElementTree.ParseError,
+        KeyError,
+        OSError,
+    ) as error:
+        print(
+            f"无法编译 DOCX：{error}",
+            file=sys.stderr,
+        )
+        return 1
+    print(
+        json.dumps(report["counts"], ensure_ascii=False, sort_keys=True)
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
