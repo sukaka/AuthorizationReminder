@@ -406,10 +406,16 @@ async def seed_catalog(
                 else None
             )
             try:
-                await prompt_client.get_published(
-                    prompt_id,
-                    version=prompt_version,
-                )
+                if normalized_staged is not None and not finalize_published:
+                    prompt = await prompt_client.get_staged(
+                        prompt_id,
+                        version=prompt_version,
+                    )
+                else:
+                    prompt = await prompt_client.get_published(
+                        prompt_id,
+                        version=prompt_version,
+                    )
             except (LookupError, ValueError):
                 published = False
                 missing_prompts.append(
@@ -420,6 +426,16 @@ async def seed_catalog(
                     }
                 )
             else:
+                if normalized_staged is not None and (
+                    prompt.get("prompt_id") != prompt_id
+                    or prompt.get("version_no") != prompt_version
+                    or prompt.get("content")
+                    != str(task_definition["prompt_content"]).strip()
+                ):
+                    raise ValueError(
+                        "staged Prompt 版本与目录不一致："
+                        f"{prompt_id}@{prompt_version}"
+                    )
                 published = True
             entries.append(
                 (
@@ -431,7 +447,7 @@ async def seed_catalog(
             )
     if normalized_staged is not None and missing_prompts:
         raise ValueError(
-            "staged Prompt 版本尚未发布："
+            "staged Prompt 版本不存在或不可用："
             + "、".join(
                 f"{item['prompt_external_id']}@{item['prompt_version']}"
                 for item in missing_prompts

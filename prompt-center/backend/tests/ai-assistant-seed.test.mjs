@@ -171,6 +171,10 @@ describe('AI assistant prompt seed', () => {
     const secondStage = await seed.stageAiAssistantPrompts(database, catalog, {
       force: true,
     });
+    const stagedVersion = database.versions.find(
+      (item) => item.prompt_id === 1002 && item.version_no === 2
+    );
+    stagedVersion.tags_json = JSON.parse(stagedVersion.tags_json);
     await seed.activateStagedPrompts(database, catalog, stage.stagedVersions);
     const afterActivation = await service.getPublishedPrompt(database, 1002);
 

@@ -81,12 +81,16 @@ const validatePromptDefinitions = (prompts) => {
 };
 
 
+const parseStoredTags = (value) =>
+  Array.isArray(value) ? value : JSON.parse(value || '[]');
+
+
 const samePromptVersion = (row, prompt) =>
   row
   && row.title === prompt.title
   && String(row.summary || '') === String(prompt.summary || '')
   && row.content === prompt.content
-  && JSON.stringify(JSON.parse(row.tags_json || '[]')) === JSON.stringify(prompt.tags);
+  && JSON.stringify(parseStoredTags(row.tags_json)) === JSON.stringify(prompt.tags);
 
 
 const publishPromptVersion = async (

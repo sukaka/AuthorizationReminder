@@ -52,6 +52,41 @@ async def test_prompt_client_maps_missing_published_prompt_to_lookup_error(
         await client.get_published(7)
 
 
+@pytest.mark.asyncio
+async def test_prompt_client_validates_staged_version_with_runtime_token(
+    respx_mock,
+) -> None:
+    staged_prompt = {
+        "prompt_id": 7,
+        "version_no": 4,
+        "content": "草稿版本 {{工作内容}}",
+    }
+    route = respx_mock.get(
+        "http://prompt.test:5189/api/prompt-center/runtime/prompts/7/staged",
+        params={"version": "4"},
+    ).mock(return_value=httpx.Response(200, json=staged_prompt))
+    client = PromptCenterClient("http://prompt.test:5189", "r" * 32)
+
+    result = await client.get_staged(7, version=4)
+
+    assert result == staged_prompt
+    assert route.calls[0].request.headers["x-prompt-runtime-token"] == "r" * 32
+
+
+@pytest.mark.asyncio
+async def test_prompt_client_maps_missing_staged_version_to_lookup_error(
+    respx_mock,
+) -> None:
+    respx_mock.get(
+        "http://prompt.test:5189/api/prompt-center/runtime/prompts/7/staged",
+        params={"version": "99"},
+    ).mock(return_value=httpx.Response(404, json={"error": "暂存 Prompt 版本不存在"}))
+    client = PromptCenterClient("http://prompt.test:5189", "r" * 32)
+
+    with pytest.raises(LookupError, match="暂存 Prompt 版本不存在"):
+        await client.get_staged(7, version=99)
+
+
 def test_render_prompt_supports_spaced_variables_and_structured_values() -> None:
     rendered = render_prompt(
         "客户：{{ 客户名称 }}\n事项：{{事项}}",

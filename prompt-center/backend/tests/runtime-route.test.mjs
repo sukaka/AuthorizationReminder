@@ -15,6 +15,9 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const runtimeRouteLayer = () => app._router.stack.find(
   (layer) => layer.route?.path === '/api/prompt-center/runtime/prompts/:id/published'
 );
+const stagedRouteLayer = () => app._router.stack.find(
+  (layer) => layer.route?.path === '/api/prompt-center/runtime/prompts/:id/staged'
+);
 
 
 describe('runtime prompt route', () => {
@@ -57,6 +60,47 @@ describe('runtime prompt route', () => {
 
     expect(service.getPublishedPrompt).toHaveBeenCalledWith(expect.anything(), '7', '2');
     expect(res.json).toHaveBeenCalledWith(published);
+    expect(next).not.toHaveBeenCalled();
+  });
+
+  test('protects staged validation with the runtime token', () => {
+    const layer = stagedRouteLayer();
+
+    expect(layer).toBeDefined();
+    const guard = layer.route.stack.at(0).handle;
+    const req = { get: vi.fn().mockReturnValue('') };
+    const res = {
+      status: vi.fn().mockReturnThis(),
+      json: vi.fn(),
+    };
+    const next = vi.fn();
+
+    guard(req, res, next);
+
+    expect(res.status).toHaveBeenCalledWith(401);
+    expect(next).not.toHaveBeenCalled();
+  });
+
+  test('forwards an exact version to the staged reader', async () => {
+    const staged = {
+      prompt_id: 7,
+      version_no: 4,
+      content: '草稿版本',
+    };
+    vi.spyOn(service, 'getStagedPromptVersion').mockResolvedValue(staged);
+    const handler = stagedRouteLayer().route.stack.at(-1).handle;
+    const req = { params: { id: '7' }, query: { version: '4' } };
+    const res = { json: vi.fn() };
+    const next = vi.fn();
+
+    await handler(req, res, next);
+
+    expect(service.getStagedPromptVersion).toHaveBeenCalledWith(
+      expect.anything(),
+      '7',
+      '4'
+    );
+    expect(res.json).toHaveBeenCalledWith(staged);
     expect(next).not.toHaveBeenCalled();
   });
 

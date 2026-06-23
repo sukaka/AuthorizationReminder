@@ -44,6 +44,28 @@ class PromptCenterClient:
             raise ValueError("Prompt Center 返回格式无效")
         return payload
 
+    async def get_staged(
+        self,
+        prompt_id: int,
+        version: int,
+    ) -> dict[str, Any]:
+        async with httpx.AsyncClient(
+            base_url=self.base_url,
+            timeout=self.timeout_seconds,
+            headers={"x-prompt-runtime-token": self.runtime_token},
+        ) as client:
+            response = await client.get(
+                f"/api/prompt-center/runtime/prompts/{prompt_id}/staged",
+                params={"version": str(version)},
+            )
+        if response.status_code == 404:
+            raise LookupError("暂存 Prompt 版本不存在")
+        response.raise_for_status()
+        payload = response.json()
+        if not isinstance(payload, dict):
+            raise ValueError("Prompt Center 返回格式无效")
+        return payload
+
 
 def _render_value(value: object) -> str:
     if isinstance(value, (dict, list, tuple)):

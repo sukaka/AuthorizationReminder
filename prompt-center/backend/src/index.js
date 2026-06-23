@@ -89,6 +89,18 @@ app.get(
   })
 );
 
+app.get(
+  '/api/prompt-center/runtime/prompts/:id/staged',
+  requireRuntimeToken,
+  asyncHandler(async (req, res) => {
+    res.json(await service.getStagedPromptVersion(
+      db,
+      req.params.id,
+      req.query.version
+    ));
+  })
+);
+
 const router = express.Router();
 router.use(authRequired);
 

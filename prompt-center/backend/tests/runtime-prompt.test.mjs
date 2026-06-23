@@ -65,4 +65,32 @@ describe('runtime prompt reader', () => {
       [7, 2]
     );
   });
+
+  test('validates an exact staged version without publishing the prompt', async () => {
+    const db = {
+      get: vi.fn().mockResolvedValue({
+        prompt_id: 7,
+        version_no: 4,
+        content: '草稿版本 {{工作内容}}',
+      }),
+    };
+
+    await expect(service.getStagedPromptVersion(db, 7, 4)).resolves.toEqual({
+      prompt_id: 7,
+      version_no: 4,
+      content: '草稿版本 {{工作内容}}',
+    });
+    expect(db.get).toHaveBeenCalledWith(
+      expect.not.stringContaining("p.status = 'published'"),
+      [7, 4]
+    );
+  });
+
+  test('rejects a missing staged version', async () => {
+    const db = { get: vi.fn().mockResolvedValue(null) };
+
+    await expect(service.getStagedPromptVersion(db, 7, 99)).rejects.toMatchObject({
+      statusCode: 404,
+    });
+  });
 });

@@ -412,9 +412,15 @@ def single_task_catalog() -> dict:
 
 
 class VersionedCatalogPrompts:
-    def __init__(self, published_versions: dict[int, int]) -> None:
+    def __init__(
+        self,
+        published_versions: dict[int, int],
+        staged_versions: dict[int, int] | None = None,
+    ) -> None:
         self.published_versions = published_versions
+        self.staged_versions = staged_versions or published_versions
         self.calls: list[tuple[int, int | None]] = []
+        self.staged_calls: list[tuple[int, int]] = []
 
     async def get_published(
         self,
@@ -428,7 +434,18 @@ class VersionedCatalogPrompts:
         return {
             "prompt_id": prompt_id,
             "version_no": published,
-            "content": "Prompt",
+            "content": "处理 {{background}}",
+        }
+
+    async def get_staged(self, prompt_id: int, version: int) -> dict:
+        self.staged_calls.append((prompt_id, version))
+        staged = self.staged_versions[prompt_id]
+        if version != staged:
+            raise LookupError("暂存版本不存在")
+        return {
+            "prompt_id": prompt_id,
+            "version_no": staged,
+            "content": "处理 {{background}}",
         }
 
 
@@ -436,7 +453,7 @@ class VersionedCatalogPrompts:
 async def test_staged_prompts_pin_validated_versions(generation_db) -> None:
     from scripts.seed_catalog import seed_catalog
 
-    client = VersionedCatalogPrompts({7: 3})
+    client = VersionedCatalogPrompts({7: 2}, staged_versions={7: 3})
     await seed_catalog(
         generation_db,
         single_task_catalog(),
@@ -445,10 +462,58 @@ async def test_staged_prompts_pin_validated_versions(generation_db) -> None:
     )
     binding = generation_db.scalar(select(TaskPromptBinding))
 
-    assert client.calls == [(7, 3)]
+    assert client.calls == []
+    assert client.staged_calls == [(7, 3)]
     assert binding.version_policy == "PINNED"
     assert binding.pinned_version == 3
     assert binding.status == "ACTIVE"
+
+
+@pytest.mark.asyncio
+async def test_staged_prompts_reject_remote_identity_mismatch(
+    generation_db,
+) -> None:
+    from scripts.seed_catalog import seed_catalog
+
+    class MismatchedStagedPrompt(VersionedCatalogPrompts):
+        async def get_staged(self, prompt_id: int, version: int) -> dict:
+            return {
+                "prompt_id": prompt_id,
+                "version_no": version,
+                "content": "被替换的 Prompt",
+            }
+
+    with pytest.raises(ValueError, match="与目录不一致"):
+        await seed_catalog(
+            generation_db,
+            single_task_catalog(),
+            MismatchedStagedPrompt({7: 2}, staged_versions={7: 3}),
+            staged_prompts={7: 3},
+        )
+
+    assert generation_db.scalar(
+        select(func.count()).select_from(Assistant)
+    ) == 0
+
+
+@pytest.mark.asyncio
+async def test_staged_prompt_identity_uses_seed_whitespace_normalization(
+    generation_db,
+) -> None:
+    from scripts.seed_catalog import seed_catalog
+
+    catalog = single_task_catalog()
+    catalog["assistants"][0]["tasks"][0]["prompt_content"] += "\n\n"
+
+    await seed_catalog(
+        generation_db,
+        catalog,
+        VersionedCatalogPrompts({7: 2}, staged_versions={7: 3}),
+        staged_prompts={7: 3},
+    )
+
+    binding = generation_db.scalar(select(TaskPromptBinding))
+    assert binding.pinned_version == 3
 
 
 @pytest.mark.asyncio
@@ -511,7 +576,7 @@ async def test_staged_prompts_reject_unpublished_version_atomically(
 ) -> None:
     from scripts.seed_catalog import seed_catalog
 
-    with pytest.raises(ValueError, match="尚未发布"):
+    with pytest.raises(ValueError, match="不存在或不可用"):
         await seed_catalog(
             generation_db,
             single_task_catalog(),
