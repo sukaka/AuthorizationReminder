@@ -14,7 +14,7 @@ import { deleteDraft, loadDraft, saveDraft } from '../local/drafts';
 import { generateLocalModel } from '../local/modelStream';
 import { enqueuePendingResult } from '../local/syncQueue';
 import type { ModelProfile } from '../types/tauri';
-import type { TaskPayload } from '../api/client';
+import { downloadGenerationWord, type TaskPayload } from '../api/client';
 
 export type TaskDefinition = Omit<TaskPayload, 'fields'> & {
   fields: DynamicFieldDefinition[];
@@ -46,6 +46,7 @@ export function TaskRunPage({ task, userId }: { task: TaskDefinition; userId?: s
   const [draftReady, setDraftReady] = useState(!userId);
   const [syncMessage, setSyncMessage] = useState('');
   const [generationUuid, setGenerationUuid] = useState('');
+  const [exporting, setExporting] = useState(false);
 
   useEffect(() => {
     if (!desktopAvailable) return;
@@ -239,6 +240,19 @@ export function TaskRunPage({ task, userId }: { task: TaskDefinition; userId?: s
     if (output) await navigator.clipboard?.writeText(output);
   };
 
+  const exportWord = async () => {
+    if (!generationUuid) return;
+    setError('');
+    setExporting(true);
+    try {
+      await downloadGenerationWord(generationUuid);
+    } catch {
+      setError('Word 导出失败，请稍后重试');
+    } finally {
+      setExporting(false);
+    }
+  };
+
   const stop = async () => {
     if (!requestId) return;
     await invoke('model_cancel', { requestId });
@@ -311,6 +325,14 @@ export function TaskRunPage({ task, userId }: { task: TaskDefinition; userId?: s
           <div className="result-actions">
             <button className="secondary-action" onClick={copyOutput} type="button">复制全文</button>
             <button className="secondary-action" disabled={status !== 'done'} onClick={regenerate} type="button">重新生成</button>
+            <button
+              className="secondary-action"
+              disabled={status !== 'done' || exporting || syncMessage !== '结果已同步'}
+              onClick={() => void exportWord()}
+              type="button"
+            >
+              {exporting ? '正在导出…' : '导出 Word'}
+            </button>
           </div>
         ) : null}
         {generationUuid && status === 'done' ? (

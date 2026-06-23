@@ -225,6 +225,51 @@ export async function deleteHistory(generationUuid: string): Promise<void> {
   if (!response.ok) throw new ApiError(response.status, 'HISTORY_DELETE_FAILED');
 }
 
+function trimHeaderValue(value: string): string {
+  const trimmed = value.trim();
+  if (trimmed.startsWith('"') && trimmed.endsWith('"')) {
+    return trimmed.slice(1, -1).replace(/\\"/g, '"');
+  }
+  return trimmed;
+}
+
+function readAttachmentFileName(headers: Headers): string {
+  const disposition = headers.get('Content-Disposition');
+  if (!disposition) return '';
+  const parts = disposition.split(';').map((part) => part.trim());
+  const encodedFileName = parts.find((part) =>
+    part.toLowerCase().startsWith('filename*='));
+  if (encodedFileName) {
+    const value = trimHeaderValue(encodedFileName.slice(encodedFileName.indexOf('=') + 1));
+    const encoded = value.includes("''") ? value.slice(value.indexOf("''") + 2) : value;
+    try {
+      return decodeURIComponent(encoded);
+    } catch {
+      return encoded;
+    }
+  }
+  const fileName = parts.find((part) =>
+    part.toLowerCase().startsWith('filename='));
+  return fileName
+    ? trimHeaderValue(fileName.slice(fileName.indexOf('=') + 1))
+    : '';
+}
+
+export async function downloadGenerationWord(generationUuid: string): Promise<void> {
+  const response = await fetch(
+    `/api/ai/generations/${encodeURIComponent(generationUuid)}/export.docx`,
+    { credentials: 'include' },
+  );
+  if (!response.ok) throw new ApiError(response.status, 'WORD_EXPORT_FAILED');
+  const blob = await response.blob();
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = readAttachmentFileName(response.headers) || '聚信得仁文档.docx';
+  anchor.click();
+  URL.revokeObjectURL(url);
+}
+
 export type FeedbackType =
   | 'USEFUL'
   | 'INACCURATE'

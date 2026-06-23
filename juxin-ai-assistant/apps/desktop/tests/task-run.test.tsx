@@ -154,6 +154,74 @@ it('prepares provider-neutral messages, invokes Tauri and completes history', as
   );
 });
 
+it('downloads Word only after the result is synchronized', async () => {
+  Object.defineProperty(URL, 'createObjectURL', {
+    configurable: true,
+    value: vi.fn(() => 'blob:word-export'),
+  });
+  Object.defineProperty(URL, 'revokeObjectURL', {
+    configurable: true,
+    value: vi.fn(),
+  });
+  const click = vi.spyOn(HTMLAnchorElement.prototype, 'click')
+    .mockImplementation(() => undefined);
+  server.use(
+    http.post('/api/ai/generations/prepare', () =>
+      HttpResponse.json(
+        {
+          generation_uuid: 'gen-1',
+          completion_token: 'complete-1',
+          messages: [{ role: 'user', content: '总结本周工作' }],
+          temperature: 0.3,
+          safety_notice: '需人工复核',
+        },
+        { status: 201 },
+      ),
+    ),
+    http.post('/api/ai/generations/gen-1/complete', () =>
+      HttpResponse.json({ generation_uuid: 'gen-1', status: 'COMPLETED' }),
+    ),
+    http.get('/api/ai/generations/gen-1/export.docx', () =>
+      new HttpResponse(new Blob(['docx']), {
+        headers: {
+          'Content-Type': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+          'Content-Disposition': "attachment; filename*=UTF-8''work.docx",
+        },
+      })),
+  );
+  invokeMock
+    .mockResolvedValueOnce([
+      {
+        id: 'profile-1',
+        displayName: '公司模型',
+        baseUrl: 'https://model.example/v1/',
+        modelId: 'example-model',
+        temperature: 0.3,
+        timeoutSeconds: 60,
+        isDefault: true,
+        hasApiKey: true,
+      },
+    ])
+    .mockResolvedValueOnce({
+      output: '# 本周总结',
+      latencyMs: 120,
+      usage: { input_tokens: 12, output_tokens: 24 },
+    });
+
+  try {
+    render(<TaskRunPage task={workSummaryTask} />);
+
+    await userEvent.type(screen.getByLabelText('工作内容'), '完成统一登录接入');
+    await userEvent.click(screen.getByRole('button', { name: '开始生成' }));
+
+    expect(await screen.findByRole('button', { name: '导出 Word' })).toBeEnabled();
+    await userEvent.click(screen.getByRole('button', { name: '导出 Word' }));
+    await waitFor(() => expect(click).toHaveBeenCalled());
+  } finally {
+    click.mockRestore();
+  }
+});
+
 it('keeps API keys out of the browser-only experience', () => {
   Object.defineProperty(window, '__TAURI_INTERNALS__', {
     configurable: true,
@@ -284,6 +352,7 @@ it('keeps a completed local result in the encrypted pending queue when sync fail
   await userEvent.click(screen.getByRole('button', { name: '开始生成' }));
 
   expect(await screen.findByText('结果已保存在本机，恢复连接后自动同步')).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: '导出 Word' })).toBeDisabled();
   expect(invokeMock).toHaveBeenCalledWith(
     'local_queue_push',
     expect.objectContaining({ userId: 'u-1', resultId: 'gen-offline' }),
