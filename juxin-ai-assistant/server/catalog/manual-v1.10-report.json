@@ -83,8 +83,8 @@
     }
   ],
   "artifact_sha256": {
-    "manifest": "853870c67981fe4d8e15fb5e77f6e8501c45d87f297ed022ff8fd8e0b5f235aa",
-    "report_payload": "22e7618de2fa7d8ee2028db555f9591abc0e84eb4de448a276b1f4d788173cb3"
+    "manifest": "e55c58d1af42ca8cbf64bb8ba1001f4754d8dca83137aa657e1747bd551a0465",
+    "report_payload": "936fd9daf95fd584fa03bb5ffc2ef4b5589031a0b4c4917cdc338f0627d96dc3"
   },
   "blank_slot_decisions": [
     {

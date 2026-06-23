@@ -10,5 +10,5 @@ def test_health_exposes_service_and_version() -> None:
     assert response.json() == {
         "status": "ok",
         "service": "juxin-ai-assistant",
-        "version": "1.0.0",
+        "version": "1.2.0",
     }
