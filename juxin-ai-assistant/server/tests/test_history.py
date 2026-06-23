@@ -95,6 +95,39 @@ def test_generation_export_audit_excludes_body_and_filename(
     assert "filename" not in repr(audit.metadata_json).lower()
 
 
+def test_generation_export_failure_writes_body_free_audit(
+    client_for_user,
+    generation_db,
+    records,
+    seeded_task,
+    monkeypatch,
+) -> None:
+    def fail_render(**_kwargs):
+        raise RuntimeError("docx renderer saw 用户一内容 的生成结果")
+
+    monkeypatch.setattr("app.main.render_generation_docx", fail_render)
+
+    response = client_for_user("u-1").get(
+        f"/api/ai/generations/{records.u1.uuid}/export.docx"
+    )
+
+    assert response.status_code == 500
+    generation_db.refresh(records.u1)
+    assert records.u1.status == "COMPLETED"
+    audit = generation_db.scalar(
+        select(AuditLog).where(AuditLog.action == "generation.export_word")
+    )
+    assert audit is not None
+    assert audit.metadata_json == {
+        "generation_uuid": records.u1.uuid,
+        "task_uuid": seeded_task.uuid,
+        "status": "FAILED",
+    }
+    assert "用户一内容 的生成结果" not in repr(audit.metadata_json)
+    assert "filename" not in repr(audit.metadata_json).lower()
+    assert "renderer saw" not in repr(audit.metadata_json)
+
+
 def test_delete_tombstones_owner_ciphertext_only(
     client_for_user,
     generation_db,

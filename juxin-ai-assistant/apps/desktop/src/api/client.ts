@@ -267,7 +267,7 @@ export async function downloadGenerationWord(generationUuid: string): Promise<vo
   anchor.href = url;
   anchor.download = readAttachmentFileName(response.headers) || '聚信得仁文档.docx';
   anchor.click();
-  URL.revokeObjectURL(url);
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 export type FeedbackType =

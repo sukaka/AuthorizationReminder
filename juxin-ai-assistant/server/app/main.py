@@ -733,14 +733,35 @@ async def export_generation_word(
         generation_uuid,
         cipher,
     )
-    document = render_generation_docx(
-        title=str(payload["task_name"]),
-        task_name=str(payload["task_name"]),
-        department=str(payload["department"]),
-        author=str(payload["author"]),
-        output=str(payload["output"]),
-        version=str(payload["version"]),
-    )
+    try:
+        document = render_generation_docx(
+            title=str(payload["task_name"]),
+            task_name=str(payload["task_name"]),
+            department=str(payload["department"]),
+            author=str(payload["author"]),
+            output=str(payload["output"]),
+            version=str(payload["version"]),
+        )
+    except Exception as exc:
+        write_request_audit(
+            db,
+            session_payload,
+            request,
+            current_settings,
+            action="generation.export_word",
+            entity_type="generation",
+            entity_uuid=generation_uuid,
+            metadata={
+                "generation_uuid": generation_uuid,
+                "task_uuid": str(payload["task_uuid"]),
+                "status": "FAILED",
+            },
+        )
+        db.commit()
+        raise HTTPException(
+            status_code=500,
+            detail="Word 生成失败，请稍后重试",
+        ) from exc
     write_request_audit(
         db,
         session_payload,

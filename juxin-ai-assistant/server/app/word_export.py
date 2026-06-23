@@ -24,6 +24,20 @@ FINAL_REVIEW_SECTIONS = (
     "下一步动作",
 )
 
+CHINESE_NUMERALS = (
+    "",
+    "一",
+    "二",
+    "三",
+    "四",
+    "五",
+    "六",
+    "七",
+    "八",
+    "九",
+    "十",
+)
+
 
 def render_generation_docx(
     *,
@@ -36,6 +50,7 @@ def render_generation_docx(
 ) -> bytes:
     document = Document()
     _configure_document(document, title=title, version=version)
+    heading_numbers = [0, 0, 0]
 
     _add_cover_page(
         document,
@@ -45,11 +60,16 @@ def render_generation_docx(
         author=author,
         version=version,
     )
-    _add_revision_table(document, author=author, version=version)
+    _add_revision_table(
+        document,
+        author=author,
+        version=version,
+        heading_numbers=heading_numbers,
+    )
 
     _add_heading(document, f"《{title}》", 0)
-    _render_markdown_blocks(document, output)
-    _add_missing_final_review_sections(document, output)
+    _render_markdown_blocks(document, output, heading_numbers)
+    _add_missing_final_review_sections(document, output, heading_numbers)
 
     buffer = BytesIO()
     document.save(buffer)
@@ -127,8 +147,14 @@ def _add_cover_page(
     document.add_page_break()
 
 
-def _add_revision_table(document: Document, *, author: str, version: str) -> None:
-    _add_heading(document, "修订记录", 1)
+def _add_revision_table(
+    document: Document,
+    *,
+    author: str,
+    version: str,
+    heading_numbers: list[int],
+) -> None:
+    _add_heading(document, "修订记录", 1, heading_numbers)
     table = document.add_table(rows=2, cols=5)
     table.style = "Table Grid"
     table.alignment = WD_TABLE_ALIGNMENT.CENTER
@@ -148,7 +174,11 @@ def _add_revision_table(document: Document, *, author: str, version: str) -> Non
     document.add_paragraph()
 
 
-def _render_markdown_blocks(document: Document, markdown: str) -> None:
+def _render_markdown_blocks(
+    document: Document,
+    markdown: str,
+    heading_numbers: list[int],
+) -> None:
     lines = markdown.splitlines()
     index = 0
     paragraph_buffer: list[str] = []
@@ -192,7 +222,12 @@ def _render_markdown_blocks(document: Document, markdown: str) -> None:
         heading = re.match(r"^(#{1,3})\s+(.+)$", stripped)
         if heading:
             flush_paragraph()
-            _add_heading(document, heading.group(2).strip(), len(heading.group(1)))
+            _add_heading(
+                document,
+                heading.group(2).strip(),
+                len(heading.group(1)),
+                heading_numbers,
+            )
             index += 1
             continue
 
@@ -211,22 +246,76 @@ def _render_markdown_blocks(document: Document, markdown: str) -> None:
     flush_paragraph()
 
 
-def _add_missing_final_review_sections(document: Document, output: str) -> None:
+def _add_missing_final_review_sections(
+    document: Document,
+    output: str,
+    heading_numbers: list[int],
+) -> None:
     for heading in FINAL_REVIEW_SECTIONS:
         if heading in output:
             continue
-        _add_heading(document, heading, 1)
+        _add_heading(document, heading, 1, heading_numbers)
         _add_body_paragraph(document, "待确认")
 
 
-def _add_heading(document: Document, text: str, level: int) -> Paragraph:
+def _add_heading(
+    document: Document,
+    text: str,
+    level: int,
+    heading_numbers: list[int] | None = None,
+) -> Paragraph:
     if level == 0:
         paragraph = document.add_paragraph(style="Title")
         paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
     else:
         paragraph = document.add_paragraph(style=f"Heading {min(level, 3)}")
+        if heading_numbers is not None:
+            text = _number_heading(text, min(level, 3), heading_numbers)
     _add_text_run(paragraph, text, font="黑体", bold=True)
     return paragraph
+
+
+def _number_heading(text: str, level: int, heading_numbers: list[int]) -> str:
+    text = _strip_heading_number(text, level)
+    _advance_heading_number(level, heading_numbers)
+    if level == 1:
+        return f"{_to_chinese_number(heading_numbers[0])}、{text}"
+    if level == 2:
+        return f"{heading_numbers[1]}. {text}"
+    return f"（{heading_numbers[2]}）{text}"
+
+
+def _advance_heading_number(level: int, heading_numbers: list[int]) -> None:
+    if level == 1:
+        heading_numbers[0] += 1
+        heading_numbers[1] = 0
+        heading_numbers[2] = 0
+    elif level == 2:
+        heading_numbers[1] += 1
+        heading_numbers[2] = 0
+    else:
+        heading_numbers[2] += 1
+
+
+def _strip_heading_number(text: str, level: int) -> str:
+    if level == 1:
+        return re.sub(r"^[一二三四五六七八九十百千万零〇两]+、\s*", "", text)
+    if level == 2:
+        return re.sub(r"^\d+[.)]\s*", "", text)
+    return re.sub(r"^（\d+）\s*", "", text)
+
+
+def _to_chinese_number(value: int) -> str:
+    if 0 < value < len(CHINESE_NUMERALS):
+        return CHINESE_NUMERALS[value]
+    if 10 < value < 20:
+        return f"十{CHINESE_NUMERALS[value - 10]}"
+    if value == 20:
+        return "二十"
+    if 20 < value < 100:
+        tens, ones = divmod(value, 10)
+        return f"{CHINESE_NUMERALS[tens]}十{CHINESE_NUMERALS[ones]}"
+    return str(value)
 
 
 def _add_body_paragraph(document: Document, text: str) -> Paragraph:

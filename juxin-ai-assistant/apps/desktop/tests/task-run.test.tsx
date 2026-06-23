@@ -168,9 +168,10 @@ it('downloads Word only after the result is synchronized', async () => {
     configurable: true,
     value: vi.fn(() => 'blob:word-export'),
   });
+  const revoke = vi.fn();
   Object.defineProperty(URL, 'revokeObjectURL', {
     configurable: true,
-    value: vi.fn(),
+    value: revoke,
   });
   const click = vi.spyOn(HTMLAnchorElement.prototype, 'click')
     .mockImplementation(() => undefined);
@@ -226,6 +227,11 @@ it('downloads Word only after the result is synchronized', async () => {
     expect(await screen.findByRole('button', { name: '导出 Word' })).toBeEnabled();
     await userEvent.click(screen.getByRole('button', { name: '导出 Word' }));
     await waitFor(() => expect(click).toHaveBeenCalled());
+    expect(revoke).not.toHaveBeenCalled();
+    await waitFor(
+      () => expect(revoke).toHaveBeenCalledWith('blob:word-export'),
+      { timeout: 1500 },
+    );
   } finally {
     click.mockRestore();
   }
