@@ -762,11 +762,21 @@ textarea:focus-visible {
 
 .task-run-layout {
   display: grid;
-  grid-template-columns: minmax(180px, .72fr) minmax(360px, 1.35fr) minmax(260px, 1fr);
   gap: 16px;
 }
 
-.task-brief,
+.task-summary {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(260px, .45fr);
+  gap: 24px;
+}
+
+.task-workspace {
+  display: grid;
+  grid-template-columns: minmax(300px, 43fr) minmax(420px, 57fr);
+  gap: 16px;
+}
+
 .task-form,
 .result-panel,
 .desktop-required,
@@ -778,26 +788,31 @@ textarea:focus-visible {
   box-shadow: 0 12px 36px rgb(24 31 46 / 5%);
 }
 
-.task-brief,
 .task-form,
 .result-panel {
   min-height: 560px;
   padding: 24px;
 }
 
-.task-brief h2,
+.task-summary h2,
 .models-page h2 {
   margin: 7px 0 12px;
   font-size: 27px;
   letter-spacing: -.04em;
 }
 
-.task-brief p,
+.task-summary p,
 .result-panel > p,
 .models-page header p {
+  margin-bottom: 0;
   color: var(--text-secondary);
   font-size: 13px;
   line-height: 1.7;
+}
+
+.task-summary .safety-note {
+  align-self: start;
+  margin-top: 0;
 }
 
 .safety-note {
@@ -886,6 +901,11 @@ textarea:focus-visible {
 .form-error {
   color: var(--danger);
   font-size: 12px;
+}
+
+.result-panel {
+  min-width: 0;
+  overflow: hidden;
 }
 
 .result-panel pre {
@@ -1503,6 +1523,13 @@ textarea:focus-visible {
   to { transform: rotate(360deg); }
 }
 
+@media (max-width: 1060px) {
+  .task-summary,
+  .task-workspace {
+    grid-template-columns: 1fr;
+  }
+}
+
 @media (max-width: 760px) {
   .app-frame {
     grid-template-columns: 1fr;
@@ -1579,7 +1606,8 @@ textarea:focus-visible {
     border-bottom: 0;
   }
 
-  .task-run-layout,
+  .task-summary,
+  .task-workspace,
   .models-grid,
   .history-layout,
   .governance-shell,
@@ -1617,7 +1645,6 @@ textarea:focus-visible {
     grid-template-columns: 1fr;
   }
 
-  .task-brief,
   .task-form,
   .result-panel {
     min-height: auto;

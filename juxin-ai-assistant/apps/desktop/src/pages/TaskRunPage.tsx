@@ -270,75 +270,79 @@ export function TaskRunPage({ task, userId }: { task: TaskDefinition; userId?: s
 
   return (
     <section className="task-run-layout">
-      <aside className="task-brief">
-        <span className="eyebrow">当前任务</span>
-        <h2>{task.name}</h2>
-        <p>{task.description}</p>
-        <div className="safety-note">{task.safety_notice}</div>
-      </aside>
-
-      <form className="task-form" onSubmit={(event) => event.preventDefault()}>
-        <div className="task-panel-heading">
-          <div>
-            <span className="eyebrow">填写信息</span>
-            <h3>告诉聚信这次要处理的内容</h3>
-          </div>
-          <select
-            aria-label="本地模型"
-            onChange={(event) => setProfileId(event.target.value)}
-            value={profileId}
-          >
-            <option value="">选择模型</option>
-            {profiles.map((profile) => (
-              <option key={profile.id} value={profile.id}>{profile.displayName}</option>
-            ))}
-          </select>
+      <header className="task-summary">
+        <div>
+          <span className="eyebrow">当前任务</span>
+          <h2>{task.name}</h2>
+          <p>{task.description}</p>
         </div>
+        <div className="safety-note">{task.safety_notice}</div>
+      </header>
 
-        <DynamicTaskForm fields={task.fields} onChange={setValue} values={values} />
-
-        {error && <p className="form-error" role="alert">{error}</p>}
-        <button
-          className="primary-action"
-          disabled={status !== 'idle' && status !== 'done'}
-          onClick={() => generate()}
-          type="button"
-        >
-          {status === 'preparing'
-            ? '正在准备…'
-            : status === 'generating'
-              ? '正在生成…'
-              : status === 'saving'
-                ? '正在保存…'
-                : '开始生成'}
-        </button>
-        {status === 'generating' && (
-          <button className="secondary-action" onClick={stop} type="button">停止生成</button>
-        )}
-      </form>
-
-      <article className="result-panel">
-        <span className="eyebrow">输出预览</span>
-        {output ? <pre>{output}</pre> : <p>完成左侧信息后，结果会在这里流式呈现。</p>}
-        {syncMessage ? <p className="sync-status" role="status">{syncMessage}</p> : null}
-        {output ? (
-          <div className="result-actions">
-            <button className="secondary-action" onClick={copyOutput} type="button">复制全文</button>
-            <button className="secondary-action" disabled={status !== 'done'} onClick={regenerate} type="button">重新生成</button>
-            <button
-              className="secondary-action"
-              disabled={status !== 'done' || exporting || syncMessage !== '结果已同步'}
-              onClick={() => void exportWord()}
-              type="button"
+      <div className="task-workspace">
+        <form className="task-form" onSubmit={(event) => event.preventDefault()}>
+          <div className="task-panel-heading">
+            <div>
+              <span className="eyebrow">填写信息</span>
+              <h3>告诉聚信这次要处理的内容</h3>
+            </div>
+            <select
+              aria-label="本地模型"
+              onChange={(event) => setProfileId(event.target.value)}
+              value={profileId}
             >
-              {exporting ? '正在导出…' : '导出 Word'}
-            </button>
+              <option value="">选择模型</option>
+              {profiles.map((profile) => (
+                <option key={profile.id} value={profile.id}>{profile.displayName}</option>
+              ))}
+            </select>
           </div>
-        ) : null}
-        {generationUuid && status === 'done' ? (
-          <FeedbackPanel generationUuid={generationUuid} />
-        ) : null}
-      </article>
+
+          <DynamicTaskForm fields={task.fields} onChange={setValue} values={values} />
+
+          {error && <p className="form-error" role="alert">{error}</p>}
+          <button
+            className="primary-action"
+            disabled={status !== 'idle' && status !== 'done'}
+            onClick={() => generate()}
+            type="button"
+          >
+            {status === 'preparing'
+              ? '正在准备…'
+              : status === 'generating'
+                ? '正在生成…'
+                : status === 'saving'
+                  ? '正在保存…'
+                  : '开始生成'}
+          </button>
+          {status === 'generating' && (
+            <button className="secondary-action" onClick={stop} type="button">停止生成</button>
+          )}
+        </form>
+
+        <article className="result-panel">
+          <span className="eyebrow">输出预览</span>
+          {output ? <pre>{output}</pre> : <p>完成左侧信息后，结果会在这里流式呈现。</p>}
+          {syncMessage ? <p className="sync-status" role="status">{syncMessage}</p> : null}
+          {output ? (
+            <div className="result-actions">
+              <button className="secondary-action" onClick={copyOutput} type="button">复制全文</button>
+              <button className="secondary-action" disabled={status !== 'done'} onClick={regenerate} type="button">重新生成</button>
+              <button
+                className="secondary-action"
+                disabled={status !== 'done' || exporting || syncMessage !== '结果已同步'}
+                onClick={() => void exportWord()}
+                type="button"
+              >
+                {exporting ? '正在导出…' : '导出 Word'}
+              </button>
+            </div>
+          ) : null}
+          {generationUuid && status === 'done' ? (
+            <FeedbackPanel generationUuid={generationUuid} />
+          ) : null}
+        </article>
+      </div>
       {sensitiveConfirmation ? (
         <SensitiveWarningDialog
           findings={sensitiveConfirmation.findings}

@@ -70,3 +70,13 @@ describe('launcher color contrast', () => {
     ).toBeGreaterThanOrEqual(4.5);
   });
 });
+
+describe('task run layout', () => {
+  it('keeps the task summary and work area responsive without changing theme colors', () => {
+    expect(css).toMatch(/\.task-summary\s*{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)\s+minmax\(260px,\s*\.45fr\)/s);
+    expect(css).toMatch(/\.task-workspace\s*{[^}]*grid-template-columns:\s*minmax\(300px,\s*43fr\)\s+minmax\(420px,\s*57fr\)/s);
+    expect(css).toMatch(/\.result-panel\s*{[^}]*min-width:\s*0;[^}]*overflow:\s*hidden;/s);
+    expect(css).toMatch(/@media\s*\(max-width:\s*1060px\)[\s\S]*?\.task-summary,[\s\S]*?\.task-workspace[\s\S]*?grid-template-columns:\s*1fr;/);
+    expect(css).toMatch(/@media\s*\(max-width:\s*760px\)[\s\S]*?\.task-summary,[\s\S]*?\.task-workspace[\s\S]*?grid-template-columns:\s*1fr;/);
+  });
+});

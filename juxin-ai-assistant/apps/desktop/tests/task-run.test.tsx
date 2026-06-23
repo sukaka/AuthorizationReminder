@@ -41,12 +41,21 @@ const workSummaryTask: TaskDefinition = {
 
 beforeEach(() => {
   invokeMock.mockReset();
+  invokeMock.mockResolvedValue([]);
   listenMock.mockReset();
   listenMock.mockResolvedValue(() => undefined);
   Object.defineProperty(window, '__TAURI_INTERNALS__', {
     configurable: true,
     value: {},
   });
+});
+
+it('renders a top task summary and two-column work area', () => {
+  const { container } = render(<TaskRunPage task={workSummaryTask} />);
+  expect(container.querySelector('.task-summary')).toBeInTheDocument();
+  expect(container.querySelector('.task-workspace')).toBeInTheDocument();
+  expect(container.querySelector('.task-workspace > .task-form')).toBeInTheDocument();
+  expect(container.querySelector('.task-workspace > .result-panel')).toBeInTheDocument();
 });
 
 it('renders model delta events before the local request completes', async () => {
