@@ -11,6 +11,7 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
 CATALOG_PATH = ROOT_DIR / "catalog" / "assistants.json"
+MANUAL_MANIFEST_PATH = ROOT_DIR / "catalog" / "manual-v1.10.json"
 FIELD_TYPES = {
     "TEXT",
     "TEXTAREA",
@@ -156,6 +157,10 @@ def load_staged_prompts(path: Path) -> dict[int | str, int]:
     return payload
 
 
+def load_manual_manifest(path: Path = MANUAL_MANIFEST_PATH) -> dict[str, Any]:
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
 def expand_field(
     catalog: dict[str, Any],
     raw_field: dict[str, Any],
@@ -184,6 +189,153 @@ def expand_field(
     return template
 
 
+def resolve_knowledge_tasks(
+    item: dict[str, Any],
+    catalog: dict[str, Any],
+    tasks_by_code: dict[str, Any],
+) -> list[Any]:
+    scopes = item.get("task_scopes") or []
+    if "*" in scopes:
+        return list(tasks_by_code.values())
+
+    resolved: list[Any] = []
+    seen: set[int] = set()
+    for scope in scopes:
+        if isinstance(scope, str) and scope.startswith("assistant:"):
+            assistant_code = scope.split(":", 1)[1]
+            assistant = next(
+                (
+                    candidate
+                    for candidate in catalog["assistants"]
+                    if candidate["code"] == assistant_code
+                ),
+                None,
+            )
+            if assistant is None:
+                continue
+            task_codes = [task["code"] for task in assistant["tasks"]]
+        else:
+            task_codes = [str(scope)]
+        for task_code in task_codes:
+            task = tasks_by_code.get(task_code)
+            if task is not None and task.id not in seen:
+                resolved.append(task)
+                seen.add(task.id)
+    return resolved
+
+
+def manual_knowledge_category(item: dict[str, Any]) -> str:
+    assistant_code = str(item.get("assistant_code") or "")
+    if assistant_code == "delivery":
+        return "DELIVERY"
+    if assistant_code == "tender":
+        return "TENDER"
+    if assistant_code == "presales":
+        return "PRODUCT"
+    if assistant_code == "software-testing":
+        return "TECHNICAL"
+    return "COMPANY"
+
+
+def upsert_manual_knowledge(
+    db,
+    item: dict[str, Any],
+    catalog: dict[str, Any],
+    tasks_by_code: dict[str, Any],
+    cipher,
+    key_version: str,
+) -> int:
+    from sqlalchemy import delete, select
+
+    from app.models import KnowledgeItem, KnowledgeTaskLink
+
+    key = str(item.get("key") or "").strip()
+    if not key:
+        raise ValueError("手册知识缺少稳定 key")
+    content = str(item.get("content") or item.get("prompt") or "").strip()
+    if not content:
+        raise ValueError(f"手册知识 {key} 内容为空")
+    key_tag = f"key:{key}"
+    original_category = item.get("category")
+    tags = [
+        f"manual:{catalog.get('source_version', 'V1.10')}",
+        key_tag,
+    ]
+    if original_category:
+        tags.append(f"manual-category:{original_category}")
+    category = manual_knowledge_category(item)
+    existing = next(
+        (
+            row
+            for row in db.scalars(select(KnowledgeItem)).all()
+            if key_tag in (row.tags_json or [])
+        ),
+        None,
+    )
+    if existing is None:
+        import uuid as uuid_lib
+
+        item_uuid = str(uuid_lib.uuid4())
+        encrypted = cipher.encrypt_json(
+            {"content": content},
+            item_uuid.encode(),
+        )
+        knowledge = KnowledgeItem(
+            uuid=item_uuid,
+            title=item["title"],
+            category=category,
+            tags_json=tags,
+            keywords_json=[
+                item.get("title"),
+                original_category,
+                item.get("source_title"),
+            ],
+            content_ciphertext=encrypted.ciphertext,
+            content_nonce=encrypted.nonce,
+            key_version=key_version,
+            priority=int(item.get("priority") or 0),
+            status="ACTIVE",
+            created_by="manual-v1.10-seed",
+            updated_by="manual-v1.10-seed",
+        )
+        db.add(knowledge)
+        db.flush()
+    else:
+        knowledge = existing
+        encrypted = cipher.encrypt_json(
+            {"content": content},
+            knowledge.uuid.encode(),
+        )
+        knowledge.title = item["title"]
+        knowledge.category = category
+        knowledge.tags_json = tags
+        knowledge.keywords_json = [
+            item.get("title"),
+            original_category,
+            item.get("source_title"),
+        ]
+        knowledge.content_ciphertext = encrypted.ciphertext
+        knowledge.content_nonce = encrypted.nonce
+        knowledge.key_version = key_version
+        knowledge.priority = int(item.get("priority") or 0)
+        knowledge.status = "ACTIVE"
+        knowledge.updated_by = "manual-v1.10-seed"
+
+    linked_tasks = resolve_knowledge_tasks(item, catalog, tasks_by_code)
+    db.execute(
+        delete(KnowledgeTaskLink).where(
+            KnowledgeTaskLink.knowledge_id == knowledge.id
+        )
+    )
+    db.add_all(
+        [
+            KnowledgeTaskLink(knowledge_id=knowledge.id, task_id=task.id)
+            for task in linked_tasks
+        ]
+    )
+    return 1
+
+
 async def seed_catalog(
     db,
     catalog: dict[str, Any],
@@ -192,12 +344,26 @@ async def seed_catalog(
     force_config: bool = False,
     staged_prompts: dict[int | str, int] | None = None,
     finalize_published: bool = False,
+    manual_manifest: dict[str, Any] | None = None,
+    cipher=None,
+    key_version: str | None = None,
 ) -> dict[str, Any]:
     from sqlalchemy import select
 
+    from app.crypto import ContentCipher
     from app.models import Assistant, Task, TaskField, TaskPromptBinding
 
     validate_catalog(catalog)
+    if manual_manifest is None:
+        manual_manifest = load_manual_manifest()
+    if cipher is None:
+        from app.config import get_settings
+
+        settings = get_settings()
+        cipher = ContentCipher(settings.content_encryption_key)
+        key_version = settings.content_encryption_key_version
+    if key_version is None:
+        key_version = "v1"
     normalized_staged = normalize_staged_prompts(catalog, staged_prompts)
     if finalize_published and normalized_staged is None:
         raise ValueError("--finalize-published 必须配合 --staged-prompts")
@@ -278,6 +444,7 @@ async def seed_catalog(
         "fields_created": 0,
         "bindings_created": 0,
         "missing_prompts": missing_prompts,
+        "knowledge_upserted": 0,
     }
     assistants_by_code: dict[str, Assistant] = {}
     try:
@@ -443,6 +610,21 @@ async def seed_catalog(
                         binding.pinned_version = normalized_staged[prompt_id]
                 elif force_config:
                     binding.prompt_external_id = prompt_id
+        tasks_by_code = {
+            task.code: task
+            for task in db.scalars(select(Task)).all()
+        }
+        for item in manual_manifest.get("knowledge", []):
+            if item.get("classification") != "KNOWLEDGE":
+                continue
+            report["knowledge_upserted"] += upsert_manual_knowledge(
+                db,
+                item,
+                catalog,
+                tasks_by_code,
+                cipher,
+                key_version,
+            )
         db.commit()
     except Exception:
         db.rollback()

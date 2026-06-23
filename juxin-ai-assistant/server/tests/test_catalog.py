@@ -5,7 +5,14 @@ from pathlib import Path
 import pytest
 from sqlalchemy import func, select
 
-from app.models import Assistant, Task, TaskField, TaskPromptBinding
+from app.models import (
+    Assistant,
+    KnowledgeItem,
+    KnowledgeTaskLink,
+    Task,
+    TaskField,
+    TaskPromptBinding,
+)
 
 CATALOG_PATH = Path("catalog/assistants.json")
 MANIFEST_PATH = Path("catalog/manual-v1.10.json")
@@ -210,6 +217,48 @@ async def test_catalog_seed_keeps_missing_prompts_draft(generation_db) -> None:
     assert set(
         generation_db.scalars(select(Task.status)).all()
     ) == {"DRAFT"}
+
+
+@pytest.mark.asyncio
+async def test_catalog_seed_upserts_manual_knowledge_and_task_links(
+    generation_db,
+) -> None:
+    from scripts.seed_catalog import load_catalog, seed_catalog
+
+    report = await seed_catalog(
+        generation_db,
+        load_catalog(),
+        PublishedCatalogPrompts(),
+        force_config=True,
+    )
+
+    assert report["knowledge_upserted"] > 0
+    company = generation_db.scalar(
+        select(KnowledgeItem).where(
+            KnowledgeItem.title == "聚信得仁公司知识与官网口径 V1.10"
+        )
+    )
+    assert company is not None
+    assert generation_db.scalar(
+        select(func.count())
+        .select_from(KnowledgeTaskLink)
+        .where(KnowledgeTaskLink.knowledge_id == company.id)
+    ) > 88
+    assert set(
+        generation_db.scalars(select(KnowledgeItem.category)).all()
+    ) <= {
+        "COMPANY",
+        "PRODUCT",
+        "SERVICE",
+        "SALES_SCRIPT",
+        "DELIVERY",
+        "TENDER",
+        "FAQ",
+        "CASE",
+        "TRAINING",
+        "COMPLIANCE",
+        "TECHNICAL",
+    }
 
 
 @pytest.mark.asyncio
