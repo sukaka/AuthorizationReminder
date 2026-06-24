@@ -210,7 +210,8 @@ async fn probe_accepts_supported_desktop_contract() {
     let body = serde_json::json!({
         "product": "juxin-ai-assistant",
         "protocolVersion": 1,
-        "authPortalUrl": "https://auth.example.test/portal?system=ai-assistant"
+        "authPortalUrl": "https://auth.example.test/portal?system=ai-assistant",
+        "workspaceUrl": "http://localhost:18093"
     })
     .to_string();
     let (base_url, server, request) = serve_once("200 OK", body, Duration::ZERO);
@@ -228,6 +229,7 @@ async fn probe_accepts_supported_desktop_contract() {
         result.auth_portal_url().as_str(),
         "https://auth.example.test/portal?system=ai-assistant"
     );
+    assert_eq!(result.workspace_url().as_str(), "http://localhost:18093/");
     assert!(request.starts_with("GET /api/ai/desktop/bootstrap HTTP/1.1\r\n"));
     assert!(!request.to_ascii_lowercase().contains("\r\ncookie:"));
 }
@@ -237,7 +239,8 @@ async fn development_probe_accepts_private_http_auth_portal() {
     let body = serde_json::json!({
         "product": "juxin-ai-assistant",
         "protocolVersion": 1,
-        "authPortalUrl": "http://192.168.20.15:5180/portal?system=ai-assistant"
+        "authPortalUrl": "http://192.168.20.15:5180/portal?system=ai-assistant",
+        "workspaceUrl": "http://192.168.20.15:18093"
     })
     .to_string();
     let (base_url, server, _) = serve_once("200 OK", body, Duration::ZERO);
@@ -254,6 +257,10 @@ async fn development_probe_accepts_private_http_auth_portal() {
         result.auth_portal_url().as_str(),
         "http://192.168.20.15:5180/portal?system=ai-assistant"
     );
+    assert_eq!(
+        result.workspace_url().as_str(),
+        "http://192.168.20.15:18093/"
+    );
 }
 
 #[tokio::test]
@@ -264,7 +271,8 @@ async fn probe_classifies_contract_and_http_failures() {
             serde_json::json!({
                 "product": "juxin-ai-assistant",
                 "protocolVersion": 1,
-                "authPortalUrl": "https://auth.example.test/portal"
+                "authPortalUrl": "https://auth.example.test/portal",
+                "workspaceUrl": "https://workspace.example.test"
             })
             .to_string(),
             ProbeFailureKind::HttpStatus,
@@ -274,7 +282,8 @@ async fn probe_classifies_contract_and_http_failures() {
             serde_json::json!({
                 "product": "another-product",
                 "protocolVersion": 1,
-                "authPortalUrl": "https://auth.example.test/portal"
+                "authPortalUrl": "https://auth.example.test/portal",
+                "workspaceUrl": "https://workspace.example.test"
             })
             .to_string(),
             ProbeFailureKind::ProductMismatch,
@@ -284,7 +293,8 @@ async fn probe_classifies_contract_and_http_failures() {
             serde_json::json!({
                 "product": "juxin-ai-assistant",
                 "protocolVersion": 2,
-                "authPortalUrl": "https://auth.example.test/portal"
+                "authPortalUrl": "https://auth.example.test/portal",
+                "workspaceUrl": "https://workspace.example.test"
             })
             .to_string(),
             ProbeFailureKind::ProtocolIncompatible,
@@ -294,7 +304,8 @@ async fn probe_classifies_contract_and_http_failures() {
             serde_json::json!({
                 "product": "juxin-ai-assistant",
                 "protocolVersion": 70_000,
-                "authPortalUrl": "https://auth.example.test/portal"
+                "authPortalUrl": "https://auth.example.test/portal",
+                "workspaceUrl": "https://workspace.example.test"
             })
             .to_string(),
             ProbeFailureKind::ProtocolIncompatible,
@@ -304,7 +315,8 @@ async fn probe_classifies_contract_and_http_failures() {
             serde_json::json!({
                 "product": "juxin-ai-assistant",
                 "protocolVersion": 1,
-                "authPortalUrl": "http://auth.example.test/portal"
+                "authPortalUrl": "http://auth.example.test/portal",
+                "workspaceUrl": "https://workspace.example.test"
             })
             .to_string(),
             ProbeFailureKind::UnsafeAuthPortal,
@@ -314,7 +326,8 @@ async fn probe_classifies_contract_and_http_failures() {
             serde_json::json!({
                 "product": "juxin-ai-assistant",
                 "protocolVersion": 1,
-                "authPortalUrl": "https://@auth.example.test/portal"
+                "authPortalUrl": "https://@auth.example.test/portal",
+                "workspaceUrl": "https://workspace.example.test"
             })
             .to_string(),
             ProbeFailureKind::UnsafeAuthPortal,
@@ -365,7 +378,8 @@ async fn probe_rejects_responses_larger_than_sixteen_kibibytes() {
     let body = serde_json::json!({
         "product": "juxin-ai-assistant",
         "protocolVersion": 1,
-        "authPortalUrl": format!("https://auth.example.test/{}", "a".repeat(17_000))
+        "authPortalUrl": format!("https://auth.example.test/{}", "a".repeat(17_000)),
+        "workspaceUrl": "https://workspace.example.test"
     })
     .to_string();
     let (base_url, server, _) = serve_once("200 OK", body, Duration::ZERO);
@@ -386,7 +400,8 @@ async fn probe_classifies_total_timeout() {
     let body = serde_json::json!({
         "product": "juxin-ai-assistant",
         "protocolVersion": 1,
-        "authPortalUrl": "https://auth.example.test/portal"
+        "authPortalUrl": "https://auth.example.test/portal",
+        "workspaceUrl": "https://workspace.example.test"
     })
     .to_string();
     let (base_url, server, _) = serve_once("200 OK", body, Duration::from_millis(100));

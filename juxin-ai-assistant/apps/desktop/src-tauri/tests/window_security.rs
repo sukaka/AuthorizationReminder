@@ -91,19 +91,48 @@ fn auth_portal_navigation_is_allowed_without_business_ipc_authority() {
     // Given: a probed business origin with a separate safe SSO portal.
     let business = production_origin("https://ai.example.com");
     let portal = url::Url::parse("https://auth.example.com/portal").unwrap();
+    let workspace = url::Url::parse("https://workspace.example.com").unwrap();
     let saved = ServerConfig::new(business.clone(), None);
     let mut trust = ServerTrustState::new(Some(saved));
-    trust.record_probe_success_with_portal(business.clone(), portal);
+    trust.record_probe_success_with_portal(business.clone(), portal, workspace.clone());
     let policy = trust.navigation_policy(&business).unwrap();
     let portal_page = url::Url::parse("https://auth.example.com/portal/callback").unwrap();
+    let workspace_page = url::Url::parse("https://workspace.example.com/tasks").unwrap();
     let hostile_portal = url::Url::parse("https://auth.example.com.evil.test/portal").unwrap();
     let portal_caller = CallerContext::new("workspace", portal_page.as_str()).unwrap();
 
-    // When / Then: navigation can complete SSO, but IPC remains business-origin only.
+    // When / Then: navigation can complete SSO and land on the web workspace,
+    // but the SSO portal itself never receives business IPC authority.
     assert!(policy.allows(&portal_page));
+    assert!(policy.allows(&workspace_page));
+    assert!(policy.is_business(&workspace_page));
     assert!(!policy.allows(&hostile_portal));
     assert_eq!(
         authorize(&portal_caller, CommandScope::Business, Some(&business)),
+        Err(CommandOriginError::Unauthorized)
+    );
+}
+
+#[test]
+fn business_ipc_uses_workspace_web_origin_not_api_origin() {
+    // Given: a trusted API origin with a separate browser workspace origin.
+    let api = production_origin("https://api.example.com");
+    let workspace = production_origin("https://workspace.example.com");
+    let workspace_caller =
+        CallerContext::new("workspace", "https://workspace.example.com/tasks").unwrap();
+    let api_caller = CallerContext::new("workspace", "https://api.example.com/tasks").unwrap();
+
+    // When / Then: native IPC belongs to the loaded workspace web app, not the API origin.
+    assert_eq!(
+        authorize(&workspace_caller, CommandScope::Business, Some(&workspace)),
+        Ok(())
+    );
+    assert_eq!(
+        authorize(&api_caller, CommandScope::Business, Some(&workspace)),
+        Err(CommandOriginError::Unauthorized)
+    );
+    assert_eq!(
+        authorize(&workspace_caller, CommandScope::Business, Some(&api)),
         Err(CommandOriginError::Unauthorized)
     );
 }
@@ -176,13 +205,20 @@ fn stale_probe_completion_cannot_replace_the_latest_result() {
     let origin_b = production_origin("https://b.example.com");
     let portal_a = url::Url::parse("https://auth-a.example.com/portal").unwrap();
     let portal_b = url::Url::parse("https://auth-b.example.com/portal").unwrap();
+    let workspace_a = url::Url::parse("https://workspace-a.example.com").unwrap();
+    let workspace_b = url::Url::parse("https://workspace-b.example.com").unwrap();
     let mut trust = ServerTrustState::new(None);
     let probe_a = trust.begin_probe();
     let probe_b = trust.begin_probe();
 
     // When: B completes first and A completes late.
-    assert!(trust.record_probe_success_if_current(probe_b, origin_b.clone(), portal_b));
-    assert!(!trust.record_probe_success_if_current(probe_a, origin_a, portal_a));
+    assert!(trust.record_probe_success_if_current(
+        probe_b,
+        origin_b.clone(),
+        portal_b,
+        workspace_b
+    ));
+    assert!(!trust.record_probe_success_if_current(probe_a, origin_a, portal_a, workspace_a));
 
     // Then: only the latest origin can be saved.
     assert!(trust.config_after_successful_probe(&origin_b).is_ok());
@@ -193,9 +229,9 @@ fn stale_workspace_timeout_cannot_match_a_rebuilt_window() {
     // Given: workspace A is closed and workspace B is opened at the same origin.
     let origin = production_origin("https://a.example.com");
     let mut trust = ServerTrustState::new(None);
-    let generation_a = trust.activate_workspace(origin.clone());
+    let generation_a = trust.activate_workspace(origin.clone(), origin.clone());
     trust.deactivate_workspace();
-    let generation_b = trust.activate_workspace(origin);
+    let generation_b = trust.activate_workspace(origin.clone(), origin);
 
     // When / Then: only B's generation remains current.
     assert!(!trust.is_workspace_generation_current(generation_a));
@@ -207,12 +243,12 @@ fn stale_workspace_lease_cannot_authorize_a_late_binding_response() {
     // Given: token verification started in workspace A.
     let origin = production_origin("https://a.example.com");
     let mut trust = ServerTrustState::new(None);
-    trust.activate_workspace(origin.clone());
+    trust.activate_workspace(origin.clone(), origin.clone());
     let lease = trust.active_workspace_lease().unwrap();
 
     // When: the workspace is revoked and rebuilt at the same Origin.
     trust.deactivate_workspace();
-    trust.activate_workspace(origin);
+    trust.activate_workspace(origin.clone(), origin);
 
     // Then: the old async verification lease is no longer current.
     assert!(!trust.is_workspace_lease_current(&lease));
@@ -243,7 +279,7 @@ fn binding_captures_and_guards_its_workspace_lease_in_one_step() {
 fn closing_workspace_revokes_the_active_business_origin() {
     let origin = production_origin("https://a.example.com");
     let mut trust = ServerTrustState::new(None);
-    trust.activate_workspace(origin.clone());
+    trust.activate_workspace(origin.clone(), origin.clone());
     assert_eq!(trust.active_workspace(), Some(&origin));
 
     trust.deactivate_workspace();

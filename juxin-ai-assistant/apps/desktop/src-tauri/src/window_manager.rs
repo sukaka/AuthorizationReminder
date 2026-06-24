@@ -26,6 +26,7 @@ pub struct ServerTrustState {
     recent_probe: Option<SuccessfulProbe>,
     probe_generation: u64,
     active_workspace: Option<ServerOrigin>,
+    active_workspace_web_origin: Option<ServerOrigin>,
     workspace_generation: u64,
     workspace_ready: bool,
 }
@@ -34,11 +35,13 @@ pub struct ServerTrustState {
 struct SuccessfulProbe {
     origin: ServerOrigin,
     auth_portal_url: Url,
+    workspace_url: Url,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct WorkspaceLease {
     origin: ServerOrigin,
+    web_origin: ServerOrigin,
     generation: u64,
 }
 
@@ -50,18 +53,18 @@ impl WorkspaceLease {
 
 #[derive(Clone, Debug)]
 pub struct WorkspaceNavigationPolicy {
-    business_origin: ServerOrigin,
+    workspace_origin: ServerOrigin,
     auth_portal_url: Url,
 }
 
 impl WorkspaceNavigationPolicy {
     pub fn allows(&self, candidate: &Url) -> bool {
-        same_origin(candidate, self.business_origin.as_url())
+        same_origin(candidate, self.workspace_origin.as_url())
             || same_origin(candidate, &self.auth_portal_url)
     }
 
     pub fn is_business(&self, candidate: &Url) -> bool {
-        same_origin(candidate, self.business_origin.as_url())
+        same_origin(candidate, self.workspace_origin.as_url())
     }
 
     pub fn is_auth_portal(&self, candidate: &Url) -> bool {
@@ -80,6 +83,7 @@ impl ServerTrustState {
             recent_probe: None,
             probe_generation: 0,
             active_workspace: None,
+            active_workspace_web_origin: None,
             workspace_generation: 0,
             workspace_ready: false,
         }
@@ -87,7 +91,8 @@ impl ServerTrustState {
 
     pub fn record_probe_success(&mut self, origin: ServerOrigin) {
         let portal = Url::parse(origin.as_str()).unwrap_or_else(|_| origin.as_url().clone());
-        self.record_probe_success_with_portal(origin, portal);
+        let workspace = origin.as_url().clone();
+        self.record_probe_success_with_portal(origin, portal, workspace);
     }
 
     pub fn begin_probe(&mut self) -> u64 {
@@ -96,10 +101,16 @@ impl ServerTrustState {
         self.probe_generation
     }
 
-    pub fn record_probe_success_with_portal(&mut self, origin: ServerOrigin, auth_portal_url: Url) {
+    pub fn record_probe_success_with_portal(
+        &mut self,
+        origin: ServerOrigin,
+        auth_portal_url: Url,
+        workspace_url: Url,
+    ) {
         self.recent_probe = Some(SuccessfulProbe {
             origin,
             auth_portal_url,
+            workspace_url,
         });
     }
 
@@ -108,11 +119,12 @@ impl ServerTrustState {
         generation: u64,
         origin: ServerOrigin,
         auth_portal_url: Url,
+        workspace_url: Url,
     ) -> bool {
         if generation != self.probe_generation {
             return false;
         }
-        self.record_probe_success_with_portal(origin, auth_portal_url);
+        self.record_probe_success_with_portal(origin, auth_portal_url, workspace_url);
         true
     }
 
@@ -164,6 +176,7 @@ impl ServerTrustState {
         self.saved = Some(config);
         if switched {
             self.active_workspace = None;
+            self.active_workspace_web_origin = None;
             self.workspace_generation = self.workspace_generation.wrapping_add(1);
             self.workspace_ready = false;
         }
@@ -179,8 +192,10 @@ impl ServerTrustState {
             .recent_probe
             .as_ref()
             .ok_or_else(|| "SERVER_ORIGIN_NOT_PROBED".to_string())?;
+        let workspace_origin = ServerOrigin::parse(probe.workspace_url.as_str())
+            .map_err(|_| "WORKSPACE_ORIGIN_INVALID".to_string())?;
         Ok(WorkspaceNavigationPolicy {
-            business_origin: origin.clone(),
+            workspace_origin,
             auth_portal_url: probe.auth_portal_url.clone(),
         })
     }
@@ -193,29 +208,40 @@ impl ServerTrustState {
         self.active_workspace.as_ref()
     }
 
+    pub const fn active_workspace_web_origin(&self) -> Option<&ServerOrigin> {
+        self.active_workspace_web_origin.as_ref()
+    }
+
     pub fn active_workspace_lease(&self) -> Option<WorkspaceLease> {
-        self.active_workspace.as_ref().map(|origin| WorkspaceLease {
-            origin: origin.clone(),
-            generation: self.workspace_generation,
-        })
+        self.active_workspace
+            .as_ref()
+            .zip(self.active_workspace_web_origin.as_ref())
+            .map(|(origin, web_origin)| WorkspaceLease {
+                origin: origin.clone(),
+                web_origin: web_origin.clone(),
+                generation: self.workspace_generation,
+            })
     }
 
     pub fn is_workspace_lease_current(&self, lease: &WorkspaceLease) -> bool {
         self.workspace_generation == lease.generation
             && self.active_workspace.as_ref() == Some(&lease.origin)
+            && self.active_workspace_web_origin.as_ref() == Some(&lease.web_origin)
     }
 
     pub fn deactivate_workspace(&mut self) -> bool {
         let was_active = self.active_workspace.is_some();
         self.active_workspace = None;
+        self.active_workspace_web_origin = None;
         self.workspace_generation = self.workspace_generation.wrapping_add(1);
         self.workspace_ready = false;
         was_active
     }
 
-    pub fn activate_workspace(&mut self, origin: ServerOrigin) -> u64 {
+    pub fn activate_workspace(&mut self, origin: ServerOrigin, web_origin: ServerOrigin) -> u64 {
         self.workspace_generation = self.workspace_generation.wrapping_add(1);
         self.active_workspace = Some(origin);
+        self.active_workspace_web_origin = Some(web_origin);
         self.workspace_ready = false;
         self.workspace_generation
     }
@@ -248,6 +274,7 @@ pub struct WindowManagerState {
 #[serde(rename_all = "camelCase")]
 pub struct ProbeResult {
     auth_portal_url: String,
+    workspace_url: String,
 }
 
 impl WindowManagerState {
@@ -293,6 +320,15 @@ impl WindowManagerState {
             .ok_or_else(|| "WORKSPACE_NOT_ACTIVE".to_string())
     }
 
+    pub fn active_web_origin(&self) -> Result<ServerOrigin, String> {
+        self.trust
+            .lock()
+            .map_err(|_| "SERVER_TRUST_STATE_UNAVAILABLE".to_string())?
+            .active_workspace_web_origin()
+            .cloned()
+            .ok_or_else(|| "WORKSPACE_NOT_ACTIVE".to_string())
+    }
+
     pub fn workspace_lease_for_window(
         &self,
         window: &WebviewWindow,
@@ -304,7 +340,7 @@ impl WindowManagerState {
         let lease = trust
             .active_workspace_lease()
             .ok_or_else(|| "WORKSPACE_NOT_ACTIVE".to_string())?;
-        guard_window(window, CommandScope::Business, Some(lease.origin()))?;
+        guard_window(window, CommandScope::Business, Some(&lease.web_origin))?;
         Ok(lease)
     }
 
@@ -321,7 +357,7 @@ impl WindowManagerState {
         if !trust.is_workspace_lease_current(lease) {
             return Err("WORKSPACE_LEASE_STALE".to_string());
         }
-        guard_window(window, CommandScope::Business, Some(lease.origin()))?;
+        guard_window(window, CommandScope::Business, Some(&lease.web_origin))?;
         operation(lease.origin())
     }
 }
@@ -380,16 +416,23 @@ pub async fn server_probe(
         .await
         .map_err(|error| format!("{:?}", error.kind()))?;
     let auth_portal_url = result.auth_portal_url().clone();
+    let workspace_url = result.workspace_url().clone();
     let recorded = state
         .trust
         .lock()
         .map_err(|_| "SERVER_TRUST_STATE_UNAVAILABLE".to_string())?
-        .record_probe_success_if_current(probe_generation, origin, auth_portal_url.clone());
+        .record_probe_success_if_current(
+            probe_generation,
+            origin,
+            auth_portal_url.clone(),
+            workspace_url.clone(),
+        );
     if !recorded {
         return Err("SERVER_PROBE_STALE".to_string());
     }
     Ok(ProbeResult {
         auth_portal_url: auth_portal_url.to_string(),
+        workspace_url: workspace_url.to_string(),
     })
 }
 
@@ -489,6 +532,7 @@ pub async fn workspace_open(
                 probe_generation,
                 origin.clone(),
                 result.auth_portal_url().clone(),
+                result.workspace_url().clone(),
             );
         if !recorded {
             return Err("SERVER_PROBE_STALE".to_string());
@@ -502,6 +546,7 @@ pub async fn workspace_open(
         trust.authorize_workspace_open(&origin)?;
         trust.navigation_policy(&origin)?
     };
+    let workspace_web_origin = navigation_policy.workspace_origin.clone();
     if let Some(workspace) = app.get_webview_window("workspace") {
         let current = workspace
             .url()
@@ -528,7 +573,7 @@ pub async fn workspace_open(
         .trust
         .lock()
         .map_err(|_| "SERVER_TRUST_STATE_UNAVAILABLE".to_string())?
-        .activate_workspace(origin);
+        .activate_workspace(origin, workspace_web_origin);
     let build_result = WebviewWindowBuilder::new(
         &app,
         "workspace",
@@ -688,7 +733,7 @@ pub(crate) fn merge_cleanup_result(aggregate: &mut Result<(), String>, next: Res
 }
 
 pub fn guard_business(window: &WebviewWindow, state: &WindowManagerState) -> Result<(), String> {
-    let active = state.active_origin()?;
+    let active = state.active_web_origin()?;
     guard_window(window, CommandScope::Business, Some(&active))
 }
 

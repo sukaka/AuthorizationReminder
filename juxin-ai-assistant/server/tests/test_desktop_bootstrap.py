@@ -32,6 +32,7 @@ def test_desktop_bootstrap_requires_no_session(
         "authPortalUrl": (
             "https://auth.example.test/portal?system=ai-assistant"
         ),
+        "workspaceUrl": "http://localhost:18093/",
     }
 
 
@@ -53,6 +54,7 @@ def test_desktop_bootstrap_ignores_forwarded_authority(
     assert response.json()["authPortalUrl"] == (
         "https://auth.example.test/portal?system=ai-assistant"
     )
+    assert response.json()["workspaceUrl"] == "http://localhost:18093/"
     assert "attacker.example" not in response.text
 
 

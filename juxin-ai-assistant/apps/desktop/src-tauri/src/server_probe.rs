@@ -79,11 +79,16 @@ impl ProbeError {
 #[derive(Debug)]
 pub struct ProbeSuccess {
     auth_portal_url: Url,
+    workspace_url: Url,
 }
 
 impl ProbeSuccess {
     pub const fn auth_portal_url(&self) -> &Url {
         &self.auth_portal_url
+    }
+
+    pub const fn workspace_url(&self) -> &Url {
+        &self.workspace_url
     }
 }
 
@@ -93,6 +98,7 @@ struct BootstrapContract {
     product: String,
     protocol_version: u64,
     auth_portal_url: String,
+    workspace_url: String,
 }
 
 #[derive(Debug)]
@@ -219,6 +225,8 @@ fn validate_contract(body: &[u8], mode: BuildMode) -> Result<ProbeSuccess, Probe
     }
     let auth_portal_url =
         Url::parse(&contract.auth_portal_url).map_err(|_| ProbeError::UnsafeAuthPortal)?;
+    let workspace_url =
+        Url::parse(&contract.workspace_url).map_err(|_| ProbeError::UnsafeAuthPortal)?;
     let safe_portal = mode.allows_url(&contract.auth_portal_url, &auth_portal_url)
         && auth_portal_url.host().is_some()
         && auth_portal_url.username().is_empty()
@@ -229,7 +237,22 @@ fn validate_contract(body: &[u8], mode: BuildMode) -> Result<ProbeSuccess, Probe
     if !safe_portal {
         return Err(ProbeError::UnsafeAuthPortal);
     }
-    Ok(ProbeSuccess { auth_portal_url })
+    let safe_workspace = mode.allows_url(&contract.workspace_url, &workspace_url)
+        && workspace_url.host().is_some()
+        && workspace_url.username().is_empty()
+        && workspace_url.password().is_none()
+        && workspace_url.path() == "/"
+        && workspace_url.query().is_none()
+        && workspace_url.fragment().is_none()
+        && !raw_authority_has_userinfo(&contract.workspace_url)
+        && !contract.workspace_url.contains('*');
+    if !safe_workspace {
+        return Err(ProbeError::UnsafeAuthPortal);
+    }
+    Ok(ProbeSuccess {
+        auth_portal_url,
+        workspace_url,
+    })
 }
 
 fn classify_transport_error(error: reqwest::Error) -> ProbeError {
