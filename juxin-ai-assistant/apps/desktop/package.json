@@ -11,6 +11,8 @@
     "test:e2e": "playwright test",
     "agent:version": "node scripts/agent-version.mjs",
     "config:render": "node scripts/render-tauri-config.mjs",
+    "tauri:build:lan-test": "node scripts/tauri-build.mjs lan-test",
+    "tauri:build:production": "node scripts/tauri-build.mjs production",
     "tauri": "tauri"
   },
   "dependencies": {

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import {
@@ -7,11 +8,26 @@ import {
   validateUpdateEndpoint,
 } from "../build-mode.mjs";
 
+const packageJson = JSON.parse(
+  readFileSync(new URL("../../package.json", import.meta.url), "utf8"),
+);
+
 test("parseBuildMode accepts only the three fixed build modes", () => {
   assert.equal(parseBuildMode("development"), "development");
   assert.equal(parseBuildMode("lan-test"), "lan-test");
   assert.equal(parseBuildMode("production"), "production");
   assert.throws(() => parseBuildMode("preview"), /build mode/i);
+});
+
+test("lan-test package build is a dedicated cross-platform Tauri script", () => {
+  assert.equal(
+    packageJson.scripts["tauri:build:lan-test"],
+    "node scripts/tauri-build.mjs lan-test",
+  );
+  assert.equal(
+    packageJson.scripts["tauri:build:production"],
+    "node scripts/tauri-build.mjs production",
+  );
 });
 
 test("private HTTP business origins are limited to non-production builds", () => {
