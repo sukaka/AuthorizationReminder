@@ -18,6 +18,10 @@
   min-width: 0;
 }
 
+.launcher-intro {
+  transform: translateY(clamp(-42px, -4vh, -24px));
+}
+
 .launcher-brand {
   display: flex;
   align-items: center;
@@ -515,6 +519,10 @@
   .launcher-shell {
     grid-template-columns: 1fr;
     align-items: start;
+  }
+
+  .launcher-intro {
+    transform: none;
   }
 
   .launcher-copy {

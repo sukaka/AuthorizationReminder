@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { HttpResponse, http } from 'msw';
 import { beforeEach, expect, it, vi } from 'vitest';
@@ -247,6 +247,68 @@ it('keeps API keys out of the browser-only experience', () => {
 
   expect(screen.getByText('生成能力仅在聚信 AI 助手桌面客户端中可用')).toBeInTheDocument();
   expect(screen.queryByLabelText(/API Key/i)).not.toBeInTheDocument();
+});
+
+it('shows sensitive findings with task field labels and hides empty fields', async () => {
+  const sensitiveTask: TaskDefinition = {
+    ...workSummaryTask,
+    fields: [
+      {
+        field_key: 'blank_slot_05',
+        label: '登录账号密码',
+        field_type: 'TEXT',
+        required: false,
+        placeholder: '如需模型处理再填写',
+      },
+      {
+        field_key: 'blank_slot_06',
+        label: '备用账号密码',
+        field_type: 'TEXT',
+        required: false,
+        placeholder: '可留空',
+      },
+    ],
+  };
+  server.use(
+    http.post('/api/ai/generations/prepare', () =>
+      HttpResponse.json({
+        detail: {
+          code: 'SENSITIVE_CONFIRMATION_REQUIRED',
+          confirmation_digest: 'digest-sensitive',
+          findings: [
+            { code: 'ACCOUNT_PASSWORD', field: 'blank_slot_05', preview: '***' },
+            { code: 'ACCOUNT_PASSWORD', field: 'blank_slot_06', preview: '***' },
+          ],
+        },
+      }, { status: 409 }),
+    ),
+  );
+  invokeMock.mockImplementation((command: string) => {
+    if (command === 'model_profile_list') {
+      return Promise.resolve([{
+        id: 'profile-1',
+        displayName: '公司模型',
+        baseUrl: 'https://model.example/v1/',
+        modelId: 'model-1',
+        temperature: 0.3,
+        timeoutSeconds: 60,
+        isDefault: true,
+        hasApiKey: true,
+      }]);
+    }
+    return Promise.resolve();
+  });
+
+  render(<TaskRunPage task={sensitiveTask} />);
+  await userEvent.type(screen.getByLabelText('登录账号密码'), 'admin/password: secret');
+  await userEvent.click(screen.getByRole('button', { name: '开始生成' }));
+
+  const dialog = await screen.findByRole('dialog', { name: '检测到敏感信息' });
+  expect(dialog).toBeInTheDocument();
+  expect(within(dialog).getByText('登录账号密码')).toBeInTheDocument();
+  expect(within(dialog).queryByText('blank_slot_05')).not.toBeInTheDocument();
+  expect(within(dialog).queryByText('blank_slot_06')).not.toBeInTheDocument();
+  expect(within(dialog).queryByText('备用账号密码')).not.toBeInTheDocument();
 });
 
 it('cancels the active local request with its request id', async () => {

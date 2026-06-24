@@ -5,7 +5,7 @@ const VALUE_POINTS: readonly {
   readonly detail: ReactNode;
 }[] = [
   {
-    title: '八类助手，88 项常用任务',
+    title: '十类助手，258 项常用任务',
     detail: (
       <>
         描述你要完成的工作，助手会

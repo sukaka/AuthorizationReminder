@@ -33,6 +33,39 @@ type SensitiveConfirmation = {
   findings: SensitiveFinding[];
 };
 
+function hasMeaningfulSensitiveValue(value: unknown): boolean {
+  if (value == null) return false;
+  if (typeof value === 'string') return value.trim().length > 0;
+  if (Array.isArray(value)) return value.some(hasMeaningfulSensitiveValue);
+  if (typeof value === 'object') {
+    return Object.values(value as Record<string, unknown>).some(hasMeaningfulSensitiveValue);
+  }
+  return true;
+}
+
+function getSensitiveFieldLabel(
+  fieldKey: string,
+  fields: DynamicFieldDefinition[],
+): string {
+  const label = fields.find((field) => field.field_key === fieldKey)?.label.trim();
+  if (label) return label;
+  if (/^(?:blank|manual|reviewed|choice|bracket)_slot_\d+$/i.test(fieldKey)) return '输入内容';
+  return fieldKey || '输入内容';
+}
+
+function presentSensitiveFindings(
+  findings: SensitiveFinding[],
+  fields: DynamicFieldDefinition[],
+  values: Record<string, unknown>,
+): SensitiveFinding[] {
+  return findings
+    .filter((finding) => hasMeaningfulSensitiveValue(values[finding.field]))
+    .map((finding) => ({
+      ...finding,
+      field: getSensitiveFieldLabel(finding.field, fields),
+    }));
+}
+
 export function TaskRunPage({ task, userId }: { task: TaskDefinition; userId?: string }) {
   const desktopAvailable = Boolean(window.__TAURI_INTERNALS__);
   const [profiles, setProfiles] = useState<ModelProfile[]>([]);
@@ -191,9 +224,18 @@ export function TaskRunPage({ task, userId }: { task: TaskDefinition; userId?: s
           && payload?.detail?.code === 'SENSITIVE_CONFIRMATION_REQUIRED'
           && payload.detail.confirmation_digest
         ) {
+          const findings = presentSensitiveFindings(
+            payload.detail.findings || [],
+            task.fields,
+            values,
+          );
+          if (!findings.length) {
+            await generate(payload.detail.confirmation_digest);
+            return;
+          }
           setSensitiveConfirmation({
             digest: payload.detail.confirmation_digest,
-            findings: payload.detail.findings || [],
+            findings,
           });
           setStatus('idle');
           return;
