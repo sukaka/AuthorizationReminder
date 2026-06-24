@@ -20,8 +20,27 @@ from docx.text.run import Run
 FINAL_REVIEW_SECTIONS = (
     "待确认事项",
     "需人工复核事项",
-    "不建议直接对外发送内容",
-    "下一步动作",
+    "不建议直接对外发送的内容",
+    "可以直接落地执行的下一步动作",
+)
+
+COMPANY_REQUIRED_SECTIONS = (
+    "基本信息",
+    "背景说明",
+    "目标与范围",
+    "主要内容",
+    "执行步骤或工作安排",
+    "表格清单或结果统计",
+    "风险与注意事项",
+    "需确认事项",
+    "交付物或附件",
+    "结论与下一步计划",
+)
+
+FACT_RISK_CONTROL_ITEMS = (
+    ("已知事实", "根据当前信息，建议进一步确认。"),
+    ("合理判断", "根据当前信息，建议进一步确认。"),
+    ("风险提醒", "涉及价格、合同、招投标、开票、回款、劳动关系、法律责任、测试结论、安全风险、交付周期、验收结论和对外承诺等内容，需人工复核。"),
 )
 
 CHINESE_NUMERALS = (
@@ -69,6 +88,8 @@ def render_generation_docx(
 
     _add_heading(document, f"《{title}》", 0)
     _render_markdown_blocks(document, output, heading_numbers)
+    _add_missing_company_required_sections(document, output, heading_numbers)
+    _add_missing_fact_risk_control_items(document, output)
     _add_missing_final_review_sections(document, output, heading_numbers)
 
     buffer = BytesIO()
@@ -97,12 +118,14 @@ def _configure_document(document: Document, *, title: str, version: str) -> None
     header_paragraph = section.header.paragraphs[0]
     header_paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
     _add_text_run(header_paragraph, f"聚信得仁｜{title}｜{version}", bold=True)
-    _set_paragraph_bottom_border(header_paragraph, color="4472C4")
+    _set_paragraph_bottom_border(header_paragraph, color="C00000")
 
     footer_paragraph = section.footer.paragraphs[0]
     footer_paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    _add_text_run(footer_paragraph, "聚信得仁科技有限公司｜内部资料 注意保密｜第 ")
+    _add_text_run(footer_paragraph, "北京聚信得仁科技有限公司｜内部资料 注意保密 / 客户项目交付文档｜第 ")
     _add_field(footer_paragraph, "PAGE")
+    _add_text_run(footer_paragraph, " 页 / 共 ")
+    _add_field(footer_paragraph, "NUMPAGES")
     _add_text_run(footer_paragraph, " 页")
 
 
@@ -116,6 +139,12 @@ def _add_cover_page(
     version: str,
 ) -> None:
     document.add_paragraph()
+    document.add_paragraph()
+
+    brand = document.add_paragraph()
+    brand.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    _add_text_run(brand, "聚信得仁", font="黑体", size=16, bold=True)
+
     document.add_paragraph()
 
     title_paragraph = document.add_paragraph()
@@ -258,6 +287,32 @@ def _add_missing_final_review_sections(
         _add_body_paragraph(document, "待确认")
 
 
+def _add_missing_company_required_sections(
+    document: Document,
+    output: str,
+    heading_numbers: list[int],
+) -> None:
+    for heading in COMPANY_REQUIRED_SECTIONS:
+        if heading in output:
+            continue
+        _add_heading(document, heading, 1, heading_numbers)
+        if heading == "风险与注意事项":
+            for label, value in FACT_RISK_CONTROL_ITEMS:
+                _add_body_paragraph(document, f"{label}：{value}")
+            _add_body_paragraph(document, "待确认事项：待确认。")
+        elif heading in {"表格清单或结果统计", "交付物或附件"}:
+            _add_body_paragraph(document, "暂无")
+        else:
+            _add_body_paragraph(document, "待确认")
+
+
+def _add_missing_fact_risk_control_items(document: Document, output: str) -> None:
+    existing_text = "\n".join(paragraph.text for paragraph in document.paragraphs)
+    for label, value in FACT_RISK_CONTROL_ITEMS:
+        if label not in output and label not in existing_text:
+            _add_body_paragraph(document, f"{label}：{value}")
+
+
 def _add_heading(
     document: Document,
     text: str,
@@ -348,6 +403,7 @@ def _add_pipe_table(document: Document, lines: list[str]) -> None:
     for row_index, row_values in enumerate(rows):
         for col_index in range(max_columns):
             value = row_values[col_index] if col_index < len(row_values) else ""
+            value = value.strip() or "待确认"
             _write_cell(
                 table.cell(row_index, col_index),
                 value,
