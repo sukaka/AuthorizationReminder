@@ -1,3 +1,5 @@
+import { invoke } from '@tauri-apps/api/core';
+
 export type SessionPayload = {
   user: {
     id: string | number;
@@ -255,19 +257,35 @@ function readAttachmentFileName(headers: Headers): string {
     : '';
 }
 
-export async function downloadGenerationWord(generationUuid: string): Promise<void> {
+export type WordDownloadResult =
+  | { kind: 'desktop'; path: string }
+  | { kind: 'browser' };
+
+export async function downloadGenerationWord(generationUuid: string): Promise<WordDownloadResult> {
   const response = await fetch(
     `/api/ai/generations/${encodeURIComponent(generationUuid)}/export.docx`,
     { credentials: 'include' },
   );
   if (!response.ok) throw new ApiError(response.status, 'WORD_EXPORT_FAILED');
-  const blob = await response.blob();
+  const bytes = new Uint8Array(await response.arrayBuffer());
+  const fileName = readAttachmentFileName(response.headers) || '聚信得仁文档.docx';
+  if (window.__TAURI_INTERNALS__) {
+    const path = await invoke<string>('generation_word_save', {
+      fileName,
+      bytes: Array.from(bytes),
+    });
+    return { kind: 'desktop', path };
+  }
+  const blob = new Blob([bytes], {
+    type: response.headers.get('Content-Type') || 'application/octet-stream',
+  });
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement('a');
   anchor.href = url;
-  anchor.download = readAttachmentFileName(response.headers) || '聚信得仁文档.docx';
+  anchor.download = fileName;
   anchor.click();
   window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+  return { kind: 'browser' };
 }
 
 export type FeedbackType =

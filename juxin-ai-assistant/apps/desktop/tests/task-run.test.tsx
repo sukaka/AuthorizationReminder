@@ -163,18 +163,7 @@ it('prepares provider-neutral messages, invokes Tauri and completes history', as
   );
 });
 
-it('downloads Word only after the result is synchronized', async () => {
-  Object.defineProperty(URL, 'createObjectURL', {
-    configurable: true,
-    value: vi.fn(() => 'blob:word-export'),
-  });
-  const revoke = vi.fn();
-  Object.defineProperty(URL, 'revokeObjectURL', {
-    configurable: true,
-    value: revoke,
-  });
-  const click = vi.spyOn(HTMLAnchorElement.prototype, 'click')
-    .mockImplementation(() => undefined);
+it('saves Word through the desktop shell after the result is synchronized', async () => {
   server.use(
     http.post('/api/ai/generations/prepare', () =>
       HttpResponse.json(
@@ -192,15 +181,16 @@ it('downloads Word only after the result is synchronized', async () => {
       HttpResponse.json({ generation_uuid: 'gen-1', status: 'COMPLETED' }),
     ),
     http.get('/api/ai/generations/gen-1/export.docx', () =>
-      new HttpResponse(new Blob(['docx']), {
+      new HttpResponse(new Uint8Array([100, 111, 99, 120]), {
         headers: {
           'Content-Type': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
           'Content-Disposition': "attachment; filename*=UTF-8''work.docx",
         },
       })),
   );
-  invokeMock
-    .mockResolvedValueOnce([
+  invokeMock.mockImplementation((command: string, payload?: unknown) => {
+    if (command === 'model_profile_list') {
+      return Promise.resolve([
       {
         id: 'profile-1',
         displayName: '公司模型',
@@ -211,30 +201,40 @@ it('downloads Word only after the result is synchronized', async () => {
         isDefault: true,
         hasApiKey: true,
       },
-    ])
-    .mockResolvedValueOnce({
+      ]);
+    }
+    if (command === 'model_generate') {
+      return Promise.resolve({
       output: '# 本周总结',
       latencyMs: 120,
       usage: { input_tokens: 12, output_tokens: 24 },
-    });
+      });
+    }
+    if (command === 'generation_word_save') {
+      expect(payload).toEqual({
+        fileName: 'work.docx',
+        bytes: [100, 111, 99, 120],
+      });
+      return Promise.resolve('/Users/test/Downloads/work.docx');
+    }
+    return Promise.resolve();
+  });
 
-  try {
-    render(<TaskRunPage task={workSummaryTask} />);
+  render(<TaskRunPage task={workSummaryTask} />);
 
-    await userEvent.type(screen.getByLabelText('工作内容'), '完成统一登录接入');
-    await userEvent.click(screen.getByRole('button', { name: '开始生成' }));
+  await userEvent.type(screen.getByLabelText('工作内容'), '完成统一登录接入');
+  await userEvent.click(screen.getByRole('button', { name: '开始生成' }));
 
-    expect(await screen.findByRole('button', { name: '导出 Word' })).toBeEnabled();
-    await userEvent.click(screen.getByRole('button', { name: '导出 Word' }));
-    await waitFor(() => expect(click).toHaveBeenCalled());
-    expect(revoke).not.toHaveBeenCalled();
-    await waitFor(
-      () => expect(revoke).toHaveBeenCalledWith('blob:word-export'),
-      { timeout: 1500 },
-    );
-  } finally {
-    click.mockRestore();
-  }
+  expect(await screen.findByRole('button', { name: '导出 Word' })).toBeEnabled();
+  await userEvent.click(screen.getByRole('button', { name: '导出 Word' }));
+
+  await waitFor(() =>
+    expect(invokeMock).toHaveBeenCalledWith('generation_word_save', {
+      fileName: 'work.docx',
+      bytes: [100, 111, 99, 120],
+    }),
+  );
+  expect(await screen.findByText('Word 已保存到：/Users/test/Downloads/work.docx')).toBeInTheDocument();
 });
 
 it('keeps API keys out of the browser-only experience', () => {

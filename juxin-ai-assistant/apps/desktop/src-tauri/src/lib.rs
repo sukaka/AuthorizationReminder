@@ -1,6 +1,7 @@
 pub mod build_mode;
 pub mod command_origin;
 mod commands;
+mod file_export_commands;
 pub mod keychain;
 pub mod local_binding;
 mod local_commands;
@@ -138,6 +139,7 @@ pub fn run() {
             commands::model_profile_test,
             commands::model_generate,
             commands::model_cancel,
+            file_export_commands::generation_word_save,
             window_manager::server_config_get,
             window_manager::server_probe,
             window_manager::server_config_save,

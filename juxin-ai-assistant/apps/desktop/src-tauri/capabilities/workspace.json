@@ -28,6 +28,7 @@
     "allow-local-legacy-export",
     "allow-local-legacy-delete",
     "allow-local-logout",
+    "allow-generation-word-save",
     "allow-model-profile-list",
     "allow-model-profile-upsert",
     "allow-model-profile-delete",

@@ -78,6 +78,7 @@ export function TaskRunPage({ task, userId }: { task: TaskDefinition; userId?: s
   const [sensitiveConfirmation, setSensitiveConfirmation] = useState<SensitiveConfirmation | null>(null);
   const [draftReady, setDraftReady] = useState(!userId);
   const [syncMessage, setSyncMessage] = useState('');
+  const [exportMessage, setExportMessage] = useState('');
   const [generationUuid, setGenerationUuid] = useState('');
   const [exporting, setExporting] = useState(false);
 
@@ -285,9 +286,15 @@ export function TaskRunPage({ task, userId }: { task: TaskDefinition; userId?: s
   const exportWord = async () => {
     if (!generationUuid) return;
     setError('');
+    setExportMessage('');
     setExporting(true);
     try {
-      await downloadGenerationWord(generationUuid);
+      const result = await downloadGenerationWord(generationUuid);
+      setExportMessage(
+        result.kind === 'desktop'
+          ? `Word 已保存到：${result.path}`
+          : 'Word 下载已开始',
+      );
     } catch {
       setError('Word 导出失败，请稍后重试');
     } finally {
@@ -366,6 +373,7 @@ export function TaskRunPage({ task, userId }: { task: TaskDefinition; userId?: s
           <span className="eyebrow">输出预览</span>
           {output ? <pre>{output}</pre> : <p>完成左侧信息后，结果会在这里流式呈现。</p>}
           {syncMessage ? <p className="sync-status" role="status">{syncMessage}</p> : null}
+          {exportMessage ? <p className="sync-status" role="status">{exportMessage}</p> : null}
           {output ? (
             <div className="result-actions">
               <button className="secondary-action" onClick={copyOutput} type="button">复制全文</button>
