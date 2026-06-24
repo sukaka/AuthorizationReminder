@@ -36,7 +36,6 @@ def upgrade() -> None:
         sa.Column(
             "release_notes",
             sa.Text(),
-            server_default="",
             nullable=False,
         ),
         sa.Column("created_by", sa.String(64), nullable=False),

@@ -1,3 +1,4 @@
+import ast
 from pathlib import Path
 
 from alembic import command
@@ -156,6 +157,37 @@ def test_desktop_update_migration_matches_models(tmp_path: Path) -> None:
     }
     assert artifact_indexes == {frozenset({"release_id"})}
     assert inspector.get_foreign_keys("ai_desktop_update_artifacts") == []
+
+
+def test_desktop_update_text_columns_do_not_use_mysql_defaults() -> None:
+    migration_path = SERVER_ROOT / "alembic" / "versions" / "0004_desktop_updates.py"
+    tree = ast.parse(migration_path.read_text(encoding="utf-8"))
+
+    text_columns_with_defaults: list[str] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        if not (
+            isinstance(node.func, ast.Attribute)
+            and node.func.attr == "Column"
+            and len(node.args) >= 2
+            and isinstance(node.args[0], ast.Constant)
+            and isinstance(node.args[0].value, str)
+        ):
+            continue
+        type_call = node.args[1]
+        is_text = (
+            isinstance(type_call, ast.Call)
+            and isinstance(type_call.func, ast.Attribute)
+            and type_call.func.attr == "Text"
+        )
+        has_server_default = any(
+            keyword.arg == "server_default" for keyword in node.keywords
+        )
+        if is_text and has_server_default:
+            text_columns_with_defaults.append(node.args[0].value)
+
+    assert text_columns_with_defaults == []
 
 
 def test_task_document_metadata_migration_round_trip(tmp_path: Path) -> None:
