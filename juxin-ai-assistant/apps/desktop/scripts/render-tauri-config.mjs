@@ -76,6 +76,12 @@ export function buildReleaseConfig(baseConfig, inputs) {
     ? ["launcher", "workspace", "workspace-private-http"]
     : ["launcher", "workspace"];
   config.app.security.csp = LOCAL_CSP;
+  if (!config.bundle.macOS) config.bundle.macOS = {};
+  if (allowsPrivateHttp) {
+    config.bundle.macOS.infoPlist = "Info.lan-test.plist";
+  } else {
+    delete config.bundle.macOS.infoPlist;
+  }
   config.bundle.createUpdaterArtifacts = inputs.updaterEnabled === "true";
 
   if (inputs.updaterEnabled === "true") {

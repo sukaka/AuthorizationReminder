@@ -487,6 +487,15 @@ fn workspace_stays_hidden_until_an_allowed_page_finishes_loading() {
 }
 
 #[test]
+fn workspace_initially_loads_the_auth_portal_not_the_business_root() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let source = fs::read_to_string(root.join("src/window_manager.rs")).unwrap();
+
+    assert!(source.contains("WebviewUrl::External(navigation_policy.auth_portal_url().clone())"));
+    assert!(!source.contains("WebviewUrl::External(workspace_url)"));
+}
+
+#[test]
 fn model_command_session_gate_requires_a_verified_binding() {
     // Given: a local session before and after verified SSO binding.
     let session = LocalUserSession::default();

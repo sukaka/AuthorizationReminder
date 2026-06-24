@@ -502,8 +502,6 @@ pub async fn workspace_open(
         trust.authorize_workspace_open(&origin)?;
         trust.navigation_policy(&origin)?
     };
-    let workspace_url =
-        Url::parse(origin.as_str()).map_err(|_| "WORKSPACE_ORIGIN_INVALID".to_string())?;
     if let Some(workspace) = app.get_webview_window("workspace") {
         let current = workspace
             .url()
@@ -531,57 +529,60 @@ pub async fn workspace_open(
         .lock()
         .map_err(|_| "SERVER_TRUST_STATE_UNAVAILABLE".to_string())?
         .activate_workspace(origin);
-    let build_result =
-        WebviewWindowBuilder::new(&app, "workspace", WebviewUrl::External(workspace_url))
-            .title("聚信 AI 助手")
-            .inner_size(1280.0, 820.0)
-            .min_inner_size(900.0, 640.0)
-            .visible(false)
-            .initialization_script(initialization_script)
-            .on_navigation(move |url| {
-                let allowed = navigation_policy.allows(url);
-                if !allowed {
-                    recover_workspace(
-                        launcher.app_handle(),
-                        &launcher.state::<WindowManagerState>(),
-                        Some("connection"),
-                    );
-                }
-                allowed
-            })
-            .on_page_load(move |workspace, payload| {
-                if payload.event() == PageLoadEvent::Started {
-                    let epoch = navigation_epoch_for_load.fetch_add(1, Ordering::AcqRel) + 1;
-                    if navigation_for_load.allows(payload.url()) {
-                        schedule_workspace_ready_timeout(
-                            app_for_load.clone(),
-                            origin_for_load.clone(),
-                            payload.url().clone(),
-                            navigation_for_load.is_business(payload.url()),
-                            workspace_generation,
-                            Arc::clone(&navigation_epoch_for_load),
-                            epoch,
-                        );
-                    }
-                } else if payload.event() == PageLoadEvent::Finished
-                    && navigation_for_load.is_auth_portal(payload.url())
-                {
-                    let shown = workspace
-                        .show()
-                        .and_then(|()| workspace.set_focus())
-                        .map_err(|error| error.to_string());
-                    if shown.is_ok() {
-                        navigation_epoch_for_load.fetch_add(1, Ordering::AcqRel);
-                    } else {
-                        recover_workspace(
-                            workspace.app_handle(),
-                            &workspace.state::<WindowManagerState>(),
-                            Some("connection"),
-                        );
-                    }
-                }
-            })
-            .build();
+    let build_result = WebviewWindowBuilder::new(
+        &app,
+        "workspace",
+        WebviewUrl::External(navigation_policy.auth_portal_url().clone()),
+    )
+    .title("聚信 AI 助手")
+    .inner_size(1280.0, 820.0)
+    .min_inner_size(900.0, 640.0)
+    .visible(false)
+    .initialization_script(initialization_script)
+    .on_navigation(move |url| {
+        let allowed = navigation_policy.allows(url);
+        if !allowed {
+            recover_workspace(
+                launcher.app_handle(),
+                &launcher.state::<WindowManagerState>(),
+                Some("connection"),
+            );
+        }
+        allowed
+    })
+    .on_page_load(move |workspace, payload| {
+        if payload.event() == PageLoadEvent::Started {
+            let epoch = navigation_epoch_for_load.fetch_add(1, Ordering::AcqRel) + 1;
+            if navigation_for_load.allows(payload.url()) {
+                schedule_workspace_ready_timeout(
+                    app_for_load.clone(),
+                    origin_for_load.clone(),
+                    payload.url().clone(),
+                    navigation_for_load.is_business(payload.url()),
+                    workspace_generation,
+                    Arc::clone(&navigation_epoch_for_load),
+                    epoch,
+                );
+            }
+        } else if payload.event() == PageLoadEvent::Finished
+            && navigation_for_load.is_auth_portal(payload.url())
+        {
+            let shown = workspace
+                .show()
+                .and_then(|()| workspace.set_focus())
+                .map_err(|error| error.to_string());
+            if shown.is_ok() {
+                navigation_epoch_for_load.fetch_add(1, Ordering::AcqRel);
+            } else {
+                recover_workspace(
+                    workspace.app_handle(),
+                    &workspace.state::<WindowManagerState>(),
+                    Some("connection"),
+                );
+            }
+        }
+    })
+    .build();
     match build_result {
         Ok(workspace) => {
             drop(workspace);

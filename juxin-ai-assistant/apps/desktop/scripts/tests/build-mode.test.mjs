@@ -7,6 +7,7 @@ import {
   validateBusinessOrigin,
   validateUpdateEndpoint,
 } from "../build-mode.mjs";
+import { buildReleaseConfig } from "../render-tauri-config.mjs";
 
 const packageJson = JSON.parse(
   readFileSync(new URL("../../package.json", import.meta.url), "utf8"),
@@ -28,6 +29,41 @@ test("lan-test package build is a dedicated cross-platform Tauri script", () => 
     packageJson.scripts["tauri:build:production"],
     "node scripts/tauri-build.mjs production",
   );
+});
+
+test("private HTTP builds merge the macOS WebView ATS exception plist only outside production", () => {
+  const baseConfig = {
+    app: {
+      windows: [{ label: "launcher", url: "index.html" }],
+      security: {
+        capabilities: ["launcher", "workspace"],
+        csp: "",
+      },
+    },
+    bundle: {
+      macOS: {
+        minimumSystemVersion: "11.0",
+      },
+    },
+  };
+
+  const lanTest = buildReleaseConfig(baseConfig, {
+    buildMode: "lan-test",
+    defaultServerOrigin: "",
+    updaterEnabled: "false",
+    updaterEndpoint: "",
+    updaterPublicKey: "",
+  });
+  assert.equal(lanTest.bundle.macOS.infoPlist, "Info.lan-test.plist");
+
+  const production = buildReleaseConfig(baseConfig, {
+    buildMode: "production",
+    defaultServerOrigin: "",
+    updaterEnabled: "false",
+    updaterEndpoint: "",
+    updaterPublicKey: "",
+  });
+  assert.equal(production.bundle.macOS.infoPlist, undefined);
 });
 
 test("private HTTP business origins are limited to non-production builds", () => {
