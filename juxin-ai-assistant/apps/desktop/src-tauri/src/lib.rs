@@ -27,9 +27,8 @@ pub mod window_manager;
 use std::sync::{Arc, Mutex};
 
 use commands::AppState;
-use keychain::SystemKeychain;
+use keychain::LocalEncryptedSecretStore;
 use local_binding::LocalUserSession;
-use model_profile_store::migrate_legacy_model_secrets;
 use model_profiles::load_profiles;
 use tauri::Manager;
 use tray::{CloseAction, LifecycleState, TrayPreference};
@@ -65,9 +64,9 @@ pub fn run() {
             let update_manager = update_manager::UpdateManagerState::new(setup_policy.enabled());
             let profiles_path = app_data_dir.join("model-profiles.json");
             let profiles = load_profiles(&profiles_path).map_err(std::io::Error::other)?;
-            let secrets: Arc<dyn keychain::SecretStore> = Arc::new(SystemKeychain);
-            migrate_legacy_model_secrets(&profiles, secrets.as_ref())
-                .map_err(std::io::Error::other)?;
+            let secrets: Arc<dyn keychain::SecretStore> = Arc::new(LocalEncryptedSecretStore::new(
+                &app_data_dir.join("secrets"),
+            )?);
             app.manage(AppState {
                 profiles_path,
                 local_storage_path: app_data_dir.join("secure-local"),

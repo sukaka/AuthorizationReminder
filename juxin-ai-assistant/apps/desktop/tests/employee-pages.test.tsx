@@ -54,6 +54,8 @@ it('renders user-scoped home metadata and removes a favorite optimistically', as
   }} onOpenTask={vi.fn()} onShowAssistants={vi.fn()} />);
 
   expect(await screen.findByText('上午好，张磊')).toBeInTheDocument();
+  expect(screen.getByText('十类助手已经准备好结构、提示词与输出要求。')).toBeInTheDocument();
+  expect(screen.queryByText('八类助手已经准备好结构、提示词与输出要求。')).not.toBeInTheDocument();
   expect(screen.getByText('工作总结')).toBeInTheDocument();
   await userEvent.click(screen.getByRole('button', { name: '取消收藏 工作总结' }));
   await waitFor(() => expect(removeFavorite).toHaveBeenCalled());

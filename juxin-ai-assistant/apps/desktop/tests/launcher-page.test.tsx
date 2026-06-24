@@ -111,7 +111,8 @@ describe('local launcher', () => {
     expect(screen.getByText('十类助手，258 项常用任务')).toBeVisible();
     expect(screen.queryByText('八类助手，88 项常用任务')).not.toBeInTheDocument();
     expect(screen.getByText('统一 SSO 安全登录')).toBeVisible();
-    expect(screen.getByText('模型密钥保存在系统钥匙串')).toBeVisible();
+    expect(screen.getByText('模型密钥加密保存在本机')).toBeVisible();
+    expect(screen.queryByText('模型密钥保存在系统钥匙串')).not.toBeInTheDocument();
     expect(screen.getByText('草稿与待同步内容保留在本机')).toBeVisible();
     expect(screen.getByLabelText('远程服务地址')).toBeVisible();
     expect(

@@ -35,7 +35,7 @@ export function ModelProfilesPage() {
       <header>
         <span className="eyebrow">仅保存在当前设备</span>
         <h2>个人模型</h2>
-        <p>模型地址与模型 ID 保存在本机；API Key 进入系统钥匙串，页面无法读取明文。</p>
+        <p>模型地址与模型 ID 保存在本机；API Key 使用本机加密文件保存，页面无法读取明文。</p>
       </header>
       <div className="models-grid">
         <div className="models-list">

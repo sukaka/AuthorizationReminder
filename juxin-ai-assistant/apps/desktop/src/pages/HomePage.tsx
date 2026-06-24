@@ -75,9 +75,9 @@ export function HomePage({ session, onOpenTask, onShowAssistants }: HomePageProp
 
       <section className="hero-panel">
         <div>
-          <span className="hero-kicker">从任务开始，不必从 Prompt 开始</span>
+          <span className="hero-kicker">从任务开始，不必自己写提示词</span>
           <h2>今天想完成什么？</h2>
-          <p>八类助手已经准备好结构、提示词与输出要求。</p>
+          <p>十类助手已经准备好结构、提示词与输出要求。</p>
         </div>
         <button onClick={onShowAssistants} type="button">浏览全部助手 <span>→</span></button>
       </section>

@@ -25,7 +25,7 @@ const VALUE_POINTS: readonly {
     ),
   },
   {
-    title: '模型密钥保存在系统钥匙串',
+    title: '模型密钥加密保存在本机',
     detail: (
       <>
         个人模型配置

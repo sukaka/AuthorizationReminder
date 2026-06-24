@@ -56,6 +56,7 @@ it('renders a top task summary and two-column work area', () => {
   expect(container.querySelector('.task-workspace')).toBeInTheDocument();
   expect(container.querySelector('.task-workspace > .task-form')).toBeInTheDocument();
   expect(container.querySelector('.task-workspace > .result-panel')).toBeInTheDocument();
+  expect(screen.queryByText('为什么会访问钥匙串？')).not.toBeInTheDocument();
 });
 
 it('renders model delta events before the local request completes', async () => {
