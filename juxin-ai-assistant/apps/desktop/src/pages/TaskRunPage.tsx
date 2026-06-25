@@ -90,6 +90,30 @@ function getGenerationErrorCode(error: unknown): string {
   return match?.[0] || 'LOCAL_MODEL_FAILED';
 }
 
+function getPositiveUsageNumber(usage: Record<string, unknown>, key: string): number {
+  const value = usage[key];
+  return typeof value === 'number' && Number.isFinite(value) && value > 0
+    ? value
+    : 0;
+}
+
+function formatCompletedTokenUsage(output: string, usage: Record<string, unknown>): string {
+  const totalTokens = getPositiveUsageNumber(usage, 'total_tokens');
+  if (totalTokens > 0) return `本次生成约 ${Math.round(totalTokens)} tokens`;
+
+  const inputTokens =
+    getPositiveUsageNumber(usage, 'input_tokens')
+    || getPositiveUsageNumber(usage, 'prompt_tokens');
+  const outputTokens =
+    getPositiveUsageNumber(usage, 'output_tokens')
+    || getPositiveUsageNumber(usage, 'completion_tokens');
+  const knownTokens = inputTokens + outputTokens;
+  if (knownTokens > 0) return `本次生成约 ${Math.round(knownTokens)} tokens`;
+
+  if (!output.trim()) return '';
+  return `本次输出约 ${Math.max(1, Math.ceil(output.length / 4))} tokens`;
+}
+
 export function TaskRunPage({ task, userId }: { task: TaskDefinition; userId?: string }) {
   const desktopAvailable = Boolean(window.__TAURI_INTERNALS__);
   const [profiles, setProfiles] = useState<ModelProfile[]>([]);
@@ -156,11 +180,7 @@ export function TaskRunPage({ task, userId }: { task: TaskDefinition; userId?: s
     if (!selectedProfile) throw new Error('请先配置一个本地模型');
     setStatus('generating');
     setOutput('');
-    setContextUsageText(
-      prepared.context_usage
-        ? `上下文约 ${prepared.context_usage.estimated_tokens} tokens`
-        : '',
-    );
+    setContextUsageText('');
     setActiveGenerationUuid(prepared.generation_uuid);
     const currentRequestId = crypto.randomUUID();
     setRequestId(currentRequestId);
@@ -189,6 +209,7 @@ export function TaskRunPage({ task, userId }: { task: TaskDefinition; userId?: s
     });
     void auditLocalModel('MODEL_COMPLETED', { latencyMs: generated.latencyMs });
     setOutput(generated.output);
+    setContextUsageText(formatCompletedTokenUsage(generated.output, generated.usage));
 
     setStatus('saving');
     const completeResponse = await fetch(

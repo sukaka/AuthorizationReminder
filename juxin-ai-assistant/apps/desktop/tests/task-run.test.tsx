@@ -73,6 +73,7 @@ it('renders model delta events before the local request completes', async () => 
     http.post('/api/ai/generations/prepare', () => HttpResponse.json({
       generation_uuid: 'gen-stream', completion_token: 'complete-stream',
       messages: [{ role: 'user', content: '流式生成' }], temperature: 0.3, safety_notice: '需人工复核',
+      context_usage: { characters: 1236, estimated_tokens: 309, estimator: 'rough_chars_div_4' },
     }, { status: 201 })),
     http.post('/api/ai/generations/gen-stream/complete', () =>
       HttpResponse.json({ generation_uuid: 'gen-stream', status: 'COMPLETED' })),
@@ -93,9 +94,15 @@ it('renders model delta events before the local request completes', async () => 
   deltaHandler?.({ payload: { delta: '第一段' } });
 
   expect(await screen.findByText('第一段')).toBeInTheDocument();
+  expect(screen.queryByText(/tokens/)).not.toBeInTheDocument();
   expect(screen.getByRole('button', { name: '停止生成' })).toBeInTheDocument();
-  finishGeneration?.({ output: '第一段第二段', latencyMs: 10, usage: {} });
+  finishGeneration?.({
+    output: '第一段第二段',
+    latencyMs: 10,
+    usage: { input_tokens: 12, output_tokens: 24 },
+  });
   expect(await screen.findByText('第一段第二段')).toBeInTheDocument();
+  expect(await screen.findByText('本次生成约 36 tokens')).toBeInTheDocument();
 });
 
 it('prepares provider-neutral messages, invokes Tauri and completes history', async () => {
@@ -148,7 +155,8 @@ it('prepares provider-neutral messages, invokes Tauri and completes history', as
   await userEvent.click(screen.getByRole('button', { name: '开始生成' }));
 
   expect(await screen.findByText('本周总结')).toBeInTheDocument();
-  expect(screen.getByText('上下文约 309 tokens')).toBeInTheDocument();
+  expect(screen.queryByText('上下文约 309 tokens')).not.toBeInTheDocument();
+  expect(screen.getByText('本次生成约 36 tokens')).toBeInTheDocument();
   expect(screen.queryByText('# 本周总结')).not.toBeInTheDocument();
   expect(invokeMock).toHaveBeenCalledWith(
     'model_generate',
