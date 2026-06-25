@@ -10,6 +10,7 @@ import {
   type DynamicFieldDefinition,
 } from '../components/DynamicTaskForm';
 import { FeedbackPanel } from '../components/FeedbackPanel';
+import { OutputReader } from '../components/OutputReader';
 import { deleteDraft, loadDraft, saveDraft } from '../local/drafts';
 import { generateLocalModel } from '../local/modelStream';
 import { enqueuePendingResult } from '../local/syncQueue';
@@ -441,7 +442,7 @@ export function TaskRunPage({ task, userId }: { task: TaskDefinition; userId?: s
         <article className="result-panel">
           <span className="eyebrow">输出预览</span>
           {contextUsageText ? <p className="context-usage">{contextUsageText}</p> : null}
-          {output ? <pre>{output}</pre> : <p>完成左侧信息后，结果会在这里流式呈现。</p>}
+          <OutputReader emptyText="完成左侧信息后，结果会在这里流式呈现。" text={output} />
           {syncMessage ? <p className="sync-status" role="status">{syncMessage}</p> : null}
           {exportMessage ? <p className="sync-status" role="status">{exportMessage}</p> : null}
           {output ? (

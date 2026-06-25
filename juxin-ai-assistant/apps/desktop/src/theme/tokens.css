@@ -908,6 +908,36 @@ textarea:focus-visible {
   overflow: hidden;
 }
 
+.output-reader {
+  max-width: 100%;
+  margin: 18px 0;
+  overflow-wrap: anywhere;
+  font-size: 14px;
+  line-height: 1.78;
+  color: var(--text-primary);
+}
+
+.output-reader h3 {
+  margin: 22px 0 8px;
+  font-size: 15px;
+  line-height: 1.5;
+}
+
+.output-reader h3:first-child {
+  margin-top: 0;
+}
+
+.output-reader p {
+  margin: 8px 0;
+}
+
+.output-empty {
+  margin: 18px 0;
+  color: var(--text-secondary);
+  font-size: 14px;
+  line-height: 1.75;
+}
+
 .result-panel pre {
   max-width: 100%;
   overflow: auto;
@@ -1199,14 +1229,6 @@ textarea:focus-visible {
 .history-detail > header > span {
   color: var(--text-secondary);
   font-size: 11px;
-}
-
-.history-detail > pre {
-  margin: 24px 0;
-  white-space: pre-wrap;
-  font-family: inherit;
-  font-size: 14px;
-  line-height: 1.75;
 }
 
 .history-actions,

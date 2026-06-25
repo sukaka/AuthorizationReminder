@@ -147,8 +147,9 @@ it('prepares provider-neutral messages, invokes Tauri and completes history', as
   await userEvent.type(screen.getByLabelText('工作内容'), '完成统一登录接入');
   await userEvent.click(screen.getByRole('button', { name: '开始生成' }));
 
-  expect(await screen.findByText('# 本周总结')).toBeInTheDocument();
+  expect(await screen.findByText('本周总结')).toBeInTheDocument();
   expect(screen.getByText('上下文约 309 tokens')).toBeInTheDocument();
+  expect(screen.queryByText('# 本周总结')).not.toBeInTheDocument();
   expect(invokeMock).toHaveBeenCalledWith(
     'model_generate',
     expect.objectContaining({
@@ -169,7 +170,6 @@ it('prepares provider-neutral messages, invokes Tauri and completes history', as
     ),
   );
 });
-
 
 it('emits body-free local model lifecycle audit events', async () => {
   const auditRequest = vi.fn();

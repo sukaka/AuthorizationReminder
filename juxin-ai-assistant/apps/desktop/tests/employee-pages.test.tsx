@@ -137,11 +137,11 @@ it('loads encrypted history detail only after selection and supports delete', as
   expect(await screen.findByText('工作总结')).toBeInTheDocument();
   expect(detailRequest).not.toHaveBeenCalled();
   await userEvent.click(screen.getByRole('button', { name: /工作总结/ }));
-  expect(await screen.findByText('# 完成情况')).toBeInTheDocument();
+  expect(await screen.findByRole('heading', { name: '完成情况' })).toBeInTheDocument();
   expect(detailRequest).toHaveBeenCalledTimes(1);
   await userEvent.click(screen.getByRole('button', { name: '删除记录' }));
   await waitFor(() => expect(deleteRequest).toHaveBeenCalled());
-  expect(screen.queryByText('# 完成情况')).not.toBeInTheDocument();
+  expect(screen.queryByRole('heading', { name: '完成情况' })).not.toBeInTheDocument();
 });
 
 it('offers seven feedback types and requires text only for other feedback', async () => {

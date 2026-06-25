@@ -8,6 +8,7 @@ import {
   type HistoryItemPayload,
 } from '../api/client';
 import { FeedbackPanel } from '../components/FeedbackPanel';
+import { OutputReader } from '../components/OutputReader';
 
 export function HistoryPage() {
   const [items, setItems] = useState<HistoryItemPayload[]>([]);
@@ -89,7 +90,7 @@ export function HistoryPage() {
           {detail ? (
             <>
               <header><div><span className="eyebrow">{detail.assistant_name}</span><h2>{detail.task_name}</h2></div><span>{detail.model_display_name}</span></header>
-              <pre>{detail.output || '本次生成没有可显示的输出'}</pre>
+              <OutputReader emptyText="本次生成没有可显示的输出" text={detail.output} />
               <div className="history-actions">
                 <button className="secondary-action" onClick={copy} type="button">复制全文</button>
                 <button className="danger-action" onClick={remove} type="button">删除记录</button>
