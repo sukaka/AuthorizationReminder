@@ -1,31 +1,48 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 import { uploadTaskAttachment, type AttachmentPayload } from '../api/client';
 
 type AttachmentUploadProps = {
   taskUuid: string;
   onChange: (attachments: AttachmentPayload[]) => void;
+  onUploadingChange?: (uploading: boolean) => void;
 };
 
-export function AttachmentUpload({ taskUuid, onChange }: AttachmentUploadProps) {
+type UploadingItem = {
+  id: string;
+  fileName: string;
+};
+
+export function AttachmentUpload({
+  taskUuid,
+  onChange,
+  onUploadingChange,
+}: AttachmentUploadProps) {
   const [items, setItems] = useState<AttachmentPayload[]>([]);
-  const [uploadingFileName, setUploadingFileName] = useState('');
+  const [uploadingItems, setUploadingItems] = useState<UploadingItem[]>([]);
   const [error, setError] = useState('');
+  const nextUploadId = useRef(0);
+
+  useEffect(() => {
+    onChange(items);
+  }, [items, onChange]);
+
+  useEffect(() => {
+    onUploadingChange?.(uploadingItems.length > 0);
+  }, [onUploadingChange, uploadingItems.length]);
 
   const upload = async (file: File) => {
+    const uploadId = String(nextUploadId.current);
+    nextUploadId.current += 1;
     setError('');
-    setUploadingFileName(file.name);
+    setUploadingItems((current) => current.concat({ id: uploadId, fileName: file.name }));
     try {
       const item = await uploadTaskAttachment(taskUuid, file);
-      setItems((current) => {
-        const next = current.concat(item);
-        onChange(next);
-        return next;
-      });
+      setItems((current) => current.concat(item));
     } catch {
       setError('文件上传失败，请确认文件类型和大小后重试');
     } finally {
-      setUploadingFileName('');
+      setUploadingItems((current) => current.filter((item) => item.id !== uploadId));
     }
   };
 
@@ -45,7 +62,9 @@ export function AttachmentUpload({ taskUuid, onChange }: AttachmentUploadProps) 
           type="file"
         />
       </label>
-      {uploadingFileName ? <p className="attachment-status">{uploadingFileName} 上传中…</p> : null}
+      {uploadingItems.map((item) => (
+        <p className="attachment-status" key={item.id}>{item.fileName} 上传中…</p>
+      ))}
       {items.length ? (
         <ul>
           {items.map((item) => (

@@ -134,6 +134,7 @@ export function TaskRunPage({ task, userId }: { task: TaskDefinition; userId?: s
   const [contextUsageText, setContextUsageText] = useState('');
   const [exporting, setExporting] = useState(false);
   const [attachments, setAttachments] = useState<AttachmentPayload[]>([]);
+  const [attachmentsUploading, setAttachmentsUploading] = useState(false);
 
   useEffect(() => {
     if (!desktopAvailable) return;
@@ -270,6 +271,10 @@ export function TaskRunPage({ task, userId }: { task: TaskDefinition; userId?: s
         setError(`请填写${field.label}`);
         return;
       }
+    }
+    if (attachmentsUploading) {
+      setError('参考材料仍在上传，请稍后生成');
+      return;
     }
     if (!selectedProfile) {
       setError('请先配置一个本地模型');
@@ -443,12 +448,19 @@ export function TaskRunPage({ task, userId }: { task: TaskDefinition; userId?: s
           </div>
 
           <DynamicTaskForm fields={task.fields} onChange={setValue} values={values} />
-          <AttachmentUpload taskUuid={task.uuid} onChange={setAttachments} />
+          <AttachmentUpload
+            taskUuid={task.uuid}
+            onChange={setAttachments}
+            onUploadingChange={setAttachmentsUploading}
+          />
 
+          {attachmentsUploading ? (
+            <p className="attachment-status" role="status">参考材料仍在上传，请稍后生成</p>
+          ) : null}
           {error && <p className="form-error" role="alert">{error}</p>}
           <button
             className="primary-action"
-            disabled={status !== 'idle' && status !== 'done'}
+            disabled={(status !== 'idle' && status !== 'done') || attachmentsUploading}
             onClick={() => generate()}
             type="button"
           >

@@ -181,6 +181,7 @@ it('prepares provider-neutral messages, invokes Tauri and completes history', as
 
 it('uploads reference material and includes attachment ids in prepare request', async () => {
   const prepareRequest = vi.fn();
+  const formDataAppend = vi.spyOn(FormData.prototype, 'append');
   server.use(
     http.post('/api/ai/attachments', () => HttpResponse.json({
       attachment_uuid: 'att-1',
@@ -221,6 +222,12 @@ it('uploads reference material and includes attachment ids in prepare request', 
   await userEvent.type(screen.getByLabelText('工作内容'), '生成会议纪要');
   const file = new File(['会议内容'], 'meeting.txt', { type: 'text/plain' });
   await userEvent.upload(screen.getByLabelText('上传参考材料'), file);
+  expect(formDataAppend).toHaveBeenCalledWith('task_uuid', 'task-1');
+  expect(formDataAppend).toHaveBeenCalledWith(
+    'file',
+    expect.objectContaining({ name: 'meeting.txt' }),
+  );
+  formDataAppend.mockRestore();
   expect(await screen.findByText('meeting.txt')).toBeInTheDocument();
   await userEvent.click(screen.getByRole('button', { name: '开始生成' }));
 
@@ -228,6 +235,60 @@ it('uploads reference material and includes attachment ids in prepare request', 
   expect(prepareRequest).toHaveBeenCalledWith(expect.objectContaining({
     attachment_uuids: ['att-1'],
   }));
+});
+
+it('blocks generation while reference material is still uploading', async () => {
+  const prepareRequest = vi.fn();
+  server.use(
+    http.post('/api/ai/attachments', async () => {
+      await new Promise((resolve) => {
+        window.setTimeout(resolve, 150);
+      });
+      return HttpResponse.json({
+        attachment_uuid: 'att-pending',
+        file_name: 'meeting.txt',
+        file_type: 'text/plain',
+        file_size: 12,
+        status: 'READY',
+        extracted_characters: 6,
+      }, { status: 201 });
+    }),
+    http.post('/api/ai/generations/prepare', async ({ request }) => {
+      prepareRequest(await request.json());
+      return HttpResponse.json({
+        generation_uuid: 'gen-should-not-start',
+        completion_token: 'complete-should-not-start',
+        messages: [{ role: 'user', content: '不应开始' }],
+        temperature: 0.3,
+        safety_notice: '需人工复核',
+      }, { status: 201 });
+    }),
+  );
+  invokeMock.mockResolvedValueOnce([{
+    id: 'profile-1',
+    displayName: '公司模型',
+    baseUrl: 'https://model.example/v1/',
+    modelId: 'example-model',
+    temperature: 0.3,
+    timeoutSeconds: 60,
+    isDefault: true,
+    hasApiKey: true,
+  }]);
+
+  render(<TaskRunPage task={workSummaryTask} />);
+  await userEvent.type(screen.getByLabelText('工作内容'), '生成会议纪要');
+  const file = new File(['会议内容'], 'meeting.txt', { type: 'text/plain' });
+  await userEvent.upload(screen.getByLabelText('上传参考材料'), file);
+
+  const startButton = screen.getByRole('button', { name: '开始生成' });
+  await userEvent.click(startButton);
+
+  expect(startButton).toBeDisabled();
+  expect(screen.getByText('参考材料仍在上传，请稍后生成')).toBeInTheDocument();
+  await new Promise((resolve) => {
+    window.setTimeout(resolve, 20);
+  });
+  expect(prepareRequest).not.toHaveBeenCalled();
 });
 
 it('emits body-free local model lifecycle audit events', async () => {
