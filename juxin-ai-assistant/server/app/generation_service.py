@@ -11,6 +11,7 @@ from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from .context_builder import build_untrusted_content_block
 from .crypto import ContentCipher
 from .document_governance import render_document_governance
 from .field_validation import FieldValidationError, validate_task_inputs
@@ -26,6 +27,7 @@ from .sensitive import SensitiveDetector
 
 QUALITY_RULE_MAX_COUNT = 20
 QUALITY_RULE_MAX_CHARS = 32_000
+QUALITY_RULE_SOURCE_NOTICE = "来源：公司治理知识库，作为强约束执行。"
 REFERENCE_KNOWLEDGE_LIMIT = 8
 
 
@@ -78,10 +80,11 @@ def _render_quality_rules(
     rendered: list[str] = []
     selected: list[RetrievedKnowledge] = []
     used_chars = 0
+    content_max_chars = QUALITY_RULE_MAX_CHARS - len(QUALITY_RULE_SOURCE_NOTICE) - 1
     for item in trusted[:QUALITY_RULE_MAX_COUNT]:
         entry = f"[{item.title}]\n{item.content}"
         separator_chars = 2 if rendered else 0
-        remaining = QUALITY_RULE_MAX_CHARS - used_chars - separator_chars
+        remaining = content_max_chars - used_chars - separator_chars
         if remaining <= 0:
             break
         rendered.append(entry[:remaining])
@@ -219,17 +222,23 @@ async def prepare_generation(
             else str(value)
         )
         input_lines.append(f"{label}：{rendered_value}")
+    user_input_block = build_untrusted_content_block(
+        title="员工输入",
+        content="\n".join(input_lines),
+        source="user_input",
+    )
+    user_parts = [user_input_block]
     if reference_items:
-        input_lines.extend(
-            [
-                "",
-                "----- 参考知识开始 -----",
-                *[
-                    f"[{item.title}]\n{item.content}"
-                    for item in reference_items
-                ],
-                "----- 参考知识结束 -----",
-            ]
+        reference_content = "\n\n".join(
+            f"[{item.title}]\n{item.content}"
+            for item in reference_items
+        )
+        user_parts.append(
+            build_untrusted_content_block(
+                title="参考知识",
+                content=reference_content,
+                source="knowledge:task-reference",
+            )
         )
     governance = render_document_governance(
         formal_document=task.formal_document,
@@ -245,6 +254,7 @@ async def prepare_generation(
     if rendered_quality_rules:
         system_parts.append(
             "必须遵守的质量规则：\n"
+            f"{QUALITY_RULE_SOURCE_NOTICE}\n"
             + rendered_quality_rules
         )
 
@@ -287,7 +297,7 @@ async def prepare_generation(
                     "role": "system",
                     "content": "\n\n".join(system_parts),
                 },
-                {"role": "user", "content": "\n".join(input_lines)},
+                {"role": "user", "content": "\n\n".join(user_parts)},
             ],
             temperature=0.3,
             safety_notice=task.safety_notice,
