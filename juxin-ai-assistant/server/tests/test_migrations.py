@@ -329,13 +329,68 @@ def test_0007_adds_task_template_metadata(tmp_path: Path) -> None:
     config = migration_config(database_url)
     engine = create_engine(database_url)
 
+    command.upgrade(config, "0006_prompt_catalog_rollouts")
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO ai_assistants "
+                "(uuid, code, name, description, icon, sort_order, status, "
+                "created_by, updated_by) "
+                "VALUES (:uuid, :code, :name, '', 'sparkles', 0, 'ACTIVE', "
+                "'system', 'system')"
+            ),
+            {
+                "uuid": "00000000-0000-0000-0000-000000000007",
+                "code": "template-migration-assistant",
+                "name": "模板迁移助手",
+            },
+        )
+        assistant_id = connection.execute(
+            text(
+                "SELECT id FROM ai_assistants "
+                "WHERE code = 'template-migration-assistant'"
+            )
+        ).scalar_one()
+        connection.execute(
+            text(
+                "INSERT INTO ai_tasks "
+                "(uuid, assistant_id, code, name, description, output_format, "
+                "safety_notice, source_version, source_ref, document_type, "
+                "formal_document, sort_order, status, ever_active, created_by, "
+                "updated_by) "
+                "VALUES (:uuid, :assistant_id, :code, :name, '', 'Markdown', "
+                "'生成内容需人工复核', '', '', 'PLAIN_TEXT', 0, 0, 'ACTIVE', "
+                "1, 'system', 'system')"
+            ),
+            {
+                "uuid": "00000000-0000-0000-0000-000000000008",
+                "assistant_id": assistant_id,
+                "code": "template-migration-task",
+                "name": "模板迁移任务",
+            },
+        )
+
     command.upgrade(config, "0007_task_templates_and_attachments")
     inspector = inspect(engine)
-    task_columns = {column["name"] for column in inspector.get_columns("ai_tasks")}
+    task_columns = {
+        column["name"]: column
+        for column in inspector.get_columns("ai_tasks")
+    }
 
     assert "document_template_code" in task_columns
     assert "output_schema_json" in task_columns
     assert "attachment_policy_json" in task_columns
+    assert task_columns["document_template_code"]["nullable"] is False
+    assert task_columns["document_template_code"]["default"] is None
+    assert task_columns["output_schema_json"]["nullable"] is True
+    assert task_columns["attachment_policy_json"]["nullable"] is True
+    with engine.connect() as connection:
+        assert connection.execute(
+            text(
+                "SELECT document_template_code FROM ai_tasks "
+                "WHERE code = 'template-migration-task'"
+            )
+        ).scalar_one() == ""
 
     command.downgrade(config, "0006_prompt_catalog_rollouts")
     inspector = inspect(engine)

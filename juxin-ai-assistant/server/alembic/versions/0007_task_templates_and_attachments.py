@@ -28,6 +28,13 @@ def upgrade() -> None:
         batch_op.add_column(sa.Column("output_schema_json", sa.JSON(), nullable=True))
         batch_op.add_column(sa.Column("attachment_policy_json", sa.JSON(), nullable=True))
 
+    with op.batch_alter_table("ai_tasks") as batch_op:
+        batch_op.alter_column(
+            "document_template_code",
+            existing_type=sa.String(length=64),
+            server_default=None,
+        )
+
 
 def downgrade() -> None:
     with op.batch_alter_table("ai_tasks") as batch_op:
