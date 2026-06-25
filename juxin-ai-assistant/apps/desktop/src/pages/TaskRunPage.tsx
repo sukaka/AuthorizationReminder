@@ -14,7 +14,11 @@ import { deleteDraft, loadDraft, saveDraft } from '../local/drafts';
 import { generateLocalModel } from '../local/modelStream';
 import { enqueuePendingResult } from '../local/syncQueue';
 import type { ModelProfile } from '../types/tauri';
-import { downloadGenerationWord, type TaskPayload } from '../api/client';
+import {
+  downloadGenerationWord,
+  reportGenerationFailure,
+  type TaskPayload,
+} from '../api/client';
 
 export type TaskDefinition = Omit<TaskPayload, 'fields'> & {
   fields: DynamicFieldDefinition[];
@@ -64,6 +68,18 @@ function presentSensitiveFindings(
       ...finding,
       field: getSensitiveFieldLabel(finding.field, fields),
     }));
+}
+
+function getGenerationErrorMessage(error: unknown): string {
+  return error instanceof Error
+    ? error.message
+    : '生成失败，请检查本地模型配置后重试';
+}
+
+function getGenerationErrorCode(error: unknown): string {
+  const message = getGenerationErrorMessage(error);
+  const match = message.match(/^[A-Z][A-Z0-9_]+/);
+  return match?.[0] || 'LOCAL_MODEL_FAILED';
 }
 
 export function TaskRunPage({ task, userId }: { task: TaskDefinition; userId?: string }) {
@@ -244,15 +260,20 @@ export function TaskRunPage({ task, userId }: { task: TaskDefinition; userId?: s
         throw new Error(`PREPARE_${prepareResponse.status}`);
       }
       const prepared = (await prepareResponse.json()) as PreparedGeneration;
-      await runPrepared(prepared);
+      try {
+        await runPrepared(prepared);
+      } catch (generationError) {
+        await reportGenerationFailure(prepared.generation_uuid, {
+          completionToken: prepared.completion_token,
+          errorCode: getGenerationErrorCode(generationError),
+          errorMessage: getGenerationErrorMessage(generationError),
+        }).catch(() => undefined);
+        throw generationError;
+      }
     } catch (generationError) {
       setStatus('idle');
       setRequestId('');
-      setError(
-        generationError instanceof Error
-          ? generationError.message
-          : '生成失败，请检查本地模型配置后重试',
-      );
+      setError(getGenerationErrorMessage(generationError));
     }
   };
 

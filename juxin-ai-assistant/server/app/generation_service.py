@@ -22,7 +22,12 @@ from .quality_rules import (
     is_trusted_quality_rule,
     parse_quality_rule_tags,
 )
-from .schemas import CompleteGenerationIn, PrepareGenerationIn, SessionPayload
+from .schemas import (
+    CompleteGenerationIn,
+    GenerationFailureIn,
+    PrepareGenerationIn,
+    SessionPayload,
+)
 from .sensitive import SensitiveDetector
 
 QUALITY_RULE_MAX_COUNT = 20
@@ -344,3 +349,43 @@ def complete_generation(
     record.finished_at = datetime.now(UTC)
     db.flush()
     return record
+
+
+def fail_generation(
+    db: Session,
+    session: SessionPayload,
+    generation_uuid: str,
+    request: GenerationFailureIn,
+) -> GenerationRecord:
+    record = db.scalar(
+        select(GenerationRecord)
+        .where(GenerationRecord.uuid == generation_uuid)
+        .with_for_update()
+    )
+    if record is None:
+        raise HTTPException(status_code=404, detail="生成记录不存在")
+    if record.sso_user_id != str(session.user.id):
+        raise HTTPException(status_code=403, detail="无权更新该生成记录")
+    if record.status != "PENDING":
+        raise HTTPException(status_code=409, detail="生成记录状态不可变更")
+    actual_hash = hashlib.sha256(request.completion_token.encode()).digest()
+    if not hmac.compare_digest(record.completion_token_hash, actual_hash):
+        raise HTTPException(status_code=403, detail="生成完成凭据无效")
+
+    record.status = "FAILED"
+    record.error_code = request.error_code[:64]
+    record.error_message_safe = _sanitize_generation_error_message(
+        request.error_message or request.error_code
+    )
+    record.finished_at = datetime.now(UTC)
+    db.flush()
+    return record
+
+
+def _sanitize_generation_error_message(message: str) -> str:
+    forbidden_terms = ("api key", "apikey", "token", "authorization", "secret")
+    sanitized = message.strip()
+    lowered = sanitized.lower()
+    if any(term in lowered for term in forbidden_terms):
+        return "本地模型调用失败，请检查模型配置后重试"
+    return sanitized[:500]

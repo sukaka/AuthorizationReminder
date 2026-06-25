@@ -269,6 +269,38 @@ def test_complete_encrypts_output_and_records_non_secret_model_metadata(
     assert "这是生成结果" not in repr(audit.metadata_json)
 
 
+def test_generation_failure_writeback_marks_pending_failed(
+    generation_client,
+    generation_db,
+    seeded_task,
+    respx_mock,
+) -> None:
+    prepared = prepare_generation(generation_client, seeded_task, respx_mock).json()
+
+    response = generation_client.post(
+        f"/api/ai/generations/{prepared['generation_uuid']}/fail",
+        json={
+            "completion_token": prepared["completion_token"],
+            "error_code": "MODEL_AUTH_FAILED",
+            "error_message": "请检查 API Key 是否正确、账户是否有余额",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "generation_uuid": prepared["generation_uuid"],
+        "status": "FAILED",
+    }
+    record = generation_db.scalar(
+        select(GenerationRecord).where(
+            GenerationRecord.uuid == prepared["generation_uuid"]
+        )
+    )
+    assert record.status == "FAILED"
+    assert record.error_code == "MODEL_AUTH_FAILED"
+    assert "API Key" not in record.error_message_safe
+
+
 def test_complete_rejects_another_sso_user(
     generation_client,
     generation_db,

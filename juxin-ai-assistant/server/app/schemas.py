@@ -138,6 +138,14 @@ class CompleteGenerationOut(BaseModel):
     status: str
 
 
+class GenerationFailureIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    completion_token: str = Field(min_length=1, max_length=256)
+    error_code: str = Field(min_length=1, max_length=64)
+    error_message: str | None = Field(default=None, max_length=500)
+
+
 class HistoryItemOut(BaseModel):
     uuid: str
     task_uuid: str

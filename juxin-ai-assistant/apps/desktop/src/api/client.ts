@@ -181,6 +181,29 @@ export async function getTask(taskCode: string): Promise<TaskPayload> {
   );
 }
 
+export async function reportGenerationFailure(
+  generationUuid: string,
+  payload: {
+    completionToken: string;
+    errorCode: string;
+    errorMessage?: string;
+  },
+): Promise<void> {
+  await readJson(
+    await fetch(`/api/ai/generations/${encodeURIComponent(generationUuid)}/fail`, {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        completion_token: payload.completionToken,
+        error_code: payload.errorCode,
+        ...(payload.errorMessage ? { error_message: payload.errorMessage } : {}),
+      }),
+    }),
+    'GENERATION_FAIL_WRITEBACK_FAILED',
+  );
+}
+
 export async function putFavorite(taskUuid: string): Promise<void> {
   const response = await fetch(
     `/api/ai/favorites/${encodeURIComponent(taskUuid)}`,

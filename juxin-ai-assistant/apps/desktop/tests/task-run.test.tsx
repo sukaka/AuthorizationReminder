@@ -164,6 +164,61 @@ it('prepares provider-neutral messages, invokes Tauri and completes history', as
   );
 });
 
+it('writes back a failed pending generation when the local model fails', async () => {
+  const failRequest = vi.fn();
+  server.use(
+    http.post('/api/ai/generations/prepare', () =>
+      HttpResponse.json(
+        {
+          generation_uuid: 'gen-failed',
+          completion_token: 'complete-failed',
+          messages: [{ role: 'user', content: '总结本周工作' }],
+          temperature: 0.3,
+          safety_notice: '需人工复核',
+        },
+        { status: 201 },
+      ),
+    ),
+    http.post('/api/ai/generations/gen-failed/fail', async ({ request }) => {
+      failRequest(await request.json());
+      return HttpResponse.json({ generation_uuid: 'gen-failed', status: 'FAILED' });
+    }),
+  );
+  invokeMock.mockImplementation((command: string) => {
+    if (command === 'model_profile_list') {
+      return Promise.resolve([
+        {
+          id: 'profile-1',
+          displayName: '公司模型',
+          baseUrl: 'https://model.example/v1/',
+          modelId: 'example-model',
+          temperature: 0.3,
+          timeoutSeconds: 60,
+          isDefault: true,
+          hasApiKey: true,
+        },
+      ]);
+    }
+    if (command === 'model_generate') {
+      return Promise.reject(new Error('MODEL_AUTH_FAILED — 请检查 API Key 是否正确'));
+    }
+    return Promise.resolve();
+  });
+
+  render(<TaskRunPage task={workSummaryTask} />);
+
+  await userEvent.type(screen.getByLabelText('工作内容'), '完成统一登录接入');
+  await userEvent.click(screen.getByRole('button', { name: '开始生成' }));
+
+  await waitFor(() =>
+    expect(failRequest).toHaveBeenCalledWith({
+      completion_token: 'complete-failed',
+      error_code: 'MODEL_AUTH_FAILED',
+      error_message: 'MODEL_AUTH_FAILED — 请检查 API Key 是否正确',
+    }),
+  );
+});
+
 it('saves Word through the desktop shell after the result is synchronized', async () => {
   server.use(
     http.post('/api/ai/generations/prepare', () =>

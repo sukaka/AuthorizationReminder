@@ -25,7 +25,7 @@ from .crypto import ContentCipher
 from .database import get_db
 from .desktop_bootstrap import DesktopBootstrap, build_desktop_bootstrap
 from .feedback_service import create_feedback
-from .generation_service import complete_generation, prepare_generation
+from .generation_service import complete_generation, fail_generation, prepare_generation
 from .history_service import (
     HistoryFilters,
     get_history_detail,
@@ -49,6 +49,7 @@ from .schemas import (
     CompleteGenerationOut,
     FeedbackIn,
     FeedbackOut,
+    GenerationFailureIn,
     HistoryDetailOut,
     HistoryItemOut,
     HistoryListOut,
@@ -939,6 +940,51 @@ async def complete_generation_route(
         metadata={
             "generation_uuid": generation_uuid,
             "status": record.status,
+        },
+    )
+    db.commit()
+    return CompleteGenerationOut(
+        generation_uuid=record.uuid,
+        status=record.status,
+    )
+
+
+@app.post(
+    "/api/ai/generations/{generation_uuid}/fail",
+    response_model=CompleteGenerationOut,
+)
+async def fail_generation_route(
+    generation_uuid: str,
+    body: GenerationFailureIn,
+    request: Request,
+    session_payload: Annotated[SessionPayload, Depends(get_session)],
+    current_settings: Annotated[Settings, Depends(get_settings)],
+    db: Annotated[Session, Depends(get_db)],
+) -> CompleteGenerationOut:
+    await require_action(
+        "ai_assistant:use",
+        request,
+        session_payload,
+        current_settings,
+    )
+    record = fail_generation(
+        db,
+        session_payload,
+        generation_uuid,
+        body,
+    )
+    write_request_audit(
+        db,
+        session_payload,
+        request,
+        current_settings,
+        action="generation.fail",
+        entity_type="generation",
+        entity_uuid=generation_uuid,
+        metadata={
+            "generation_uuid": generation_uuid,
+            "status": record.status,
+            "error_code": record.error_code,
         },
     )
     db.commit()
