@@ -1,4 +1,5 @@
 from fastapi.testclient import TestClient
+from sqlalchemy import select
 
 from app.database import get_db
 from app.governance_models import AuditLog
@@ -124,3 +125,54 @@ def test_audit_api_caps_page_size_at_500(generation_db) -> None:
 
     # Then: request validation rejects the oversized page.
     assert response.status_code == 422
+
+
+def test_local_model_audit_event_records_body_free_metadata(
+    generation_client,
+    generation_db,
+) -> None:
+    response = generation_client.post(
+        "/api/ai/audit/local-model-events",
+        json={
+            "generation_uuid": "00000000-0000-4000-8000-000000000001",
+            "event": "MODEL_FAILED",
+            "model_id": "qwen-plus",
+            "provider": "openai-compatible",
+            "latency_ms": 1234,
+            "error_code": "MODEL_AUTH_FAILED",
+        },
+    )
+
+    assert response.status_code == 204
+    record = generation_db.scalar(
+        select(AuditLog).where(AuditLog.action == "generation.local_model_event")
+    )
+    assert record is not None
+    assert record.entity_type == "generation"
+    assert record.entity_uuid == "00000000-0000-4000-8000-000000000001"
+    assert record.metadata_json == {
+        "generation_uuid": "00000000-0000-4000-8000-000000000001",
+        "event": "MODEL_FAILED",
+        "model_id": "qwen-plus",
+        "provider": "openai-compatible",
+        "latency_ms": 1234,
+        "error_code": "MODEL_AUTH_FAILED",
+    }
+
+
+def test_local_model_audit_event_rejects_sensitive_text_fields(
+    generation_client,
+    generation_db,
+) -> None:
+    response = generation_client.post(
+        "/api/ai/audit/local-model-events",
+        json={
+            "generation_uuid": "00000000-0000-4000-8000-000000000001",
+            "event": "MODEL_FAILED",
+            "prompt": "secret prompt must not be accepted",
+            "output": "secret output must not be accepted",
+        },
+    )
+
+    assert response.status_code == 422
+    assert generation_db.scalar(select(AuditLog)) is None

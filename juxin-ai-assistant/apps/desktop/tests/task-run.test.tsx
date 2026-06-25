@@ -164,6 +164,82 @@ it('prepares provider-neutral messages, invokes Tauri and completes history', as
   );
 });
 
+
+it('emits body-free local model lifecycle audit events', async () => {
+  const auditRequest = vi.fn();
+  server.use(
+    http.post('/api/ai/generations/prepare', () =>
+      HttpResponse.json(
+        {
+          generation_uuid: 'gen-audit',
+          completion_token: 'complete-audit',
+          messages: [{ role: 'user', content: '总结本周工作' }],
+          temperature: 0.3,
+          safety_notice: '需人工复核',
+        },
+        { status: 201 },
+      ),
+    ),
+    http.post('/api/ai/audit/local-model-events', async ({ request }) => {
+      auditRequest(await request.json());
+      return new HttpResponse(null, { status: 204 });
+    }),
+    http.post('/api/ai/generations/gen-audit/complete', () =>
+      HttpResponse.json({ generation_uuid: 'gen-audit', status: 'COMPLETED' })),
+  );
+  invokeMock.mockImplementation((command: string) => {
+    if (command === 'model_profile_list') {
+      return Promise.resolve([
+        {
+          id: 'profile-1',
+          displayName: '公司模型',
+          baseUrl: 'https://model.example/v1/',
+          modelId: 'example-model',
+          temperature: 0.3,
+          timeoutSeconds: 60,
+          isDefault: true,
+          hasApiKey: true,
+        },
+      ]);
+    }
+    if (command === 'model_generate') {
+      return Promise.resolve({
+        output: '本周总结',
+        latencyMs: 120,
+        usage: { input_tokens: 12, output_tokens: 24 },
+      });
+    }
+    return Promise.resolve();
+  });
+
+  render(<TaskRunPage task={workSummaryTask} />);
+
+  await userEvent.type(screen.getByLabelText('工作内容'), '完成统一登录接入');
+  await userEvent.click(screen.getByRole('button', { name: '开始生成' }));
+
+  await waitFor(() =>
+    expect(auditRequest).toHaveBeenCalledWith(
+      expect.objectContaining({
+        generation_uuid: 'gen-audit',
+        event: 'MODEL_COMPLETED',
+        model_id: 'example-model',
+        provider: 'local-desktop',
+        latency_ms: 120,
+      }),
+    ),
+  );
+  expect(auditRequest).toHaveBeenCalledWith(
+    expect.objectContaining({
+      generation_uuid: 'gen-audit',
+      event: 'MODEL_STARTED',
+      model_id: 'example-model',
+      provider: 'local-desktop',
+    }),
+  );
+  expect(JSON.stringify(auditRequest.mock.calls)).not.toContain('总结本周工作');
+  expect(JSON.stringify(auditRequest.mock.calls)).not.toContain('本周总结');
+});
+
 it('writes back a failed pending generation when the local model fails', async () => {
   const failRequest = vi.fn();
   server.use(

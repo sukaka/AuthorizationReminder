@@ -204,6 +204,44 @@ export async function reportGenerationFailure(
   );
 }
 
+
+export type LocalModelAuditEvent =
+  | 'MODEL_STARTED'
+  | 'MODEL_COMPLETED'
+  | 'MODEL_CANCELLED'
+  | 'MODEL_FAILED'
+  | 'MODEL_SYNC_PENDING';
+
+export async function reportLocalModelAuditEvent(payload: {
+  generationUuid: string;
+  event: LocalModelAuditEvent;
+  modelId?: string;
+  provider?: string;
+  latencyMs?: number;
+  errorCode?: string;
+}): Promise<void> {
+  const response = await fetch('/api/ai/audit/local-model-events', {
+    method: 'POST',
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      generation_uuid: payload.generationUuid,
+      event: payload.event,
+      ...(payload.modelId ? { model_id: payload.modelId } : {}),
+      ...(payload.provider ? { provider: payload.provider } : {}),
+      ...(payload.latencyMs != null ? { latency_ms: payload.latencyMs } : {}),
+      ...(payload.errorCode ? { error_code: payload.errorCode } : {}),
+    }),
+  });
+  if (response.status === 401) {
+    window.location.assign(getAuthPortalUrl());
+    throw new ApiError(401, 'AUTH_REDIRECT');
+  }
+  if (!response.ok) {
+    throw new ApiError(response.status, 'LOCAL_MODEL_AUDIT_FAILED');
+  }
+}
+
 export async function putFavorite(taskUuid: string): Promise<void> {
   const response = await fetch(
     `/api/ai/favorites/${encodeURIComponent(taskUuid)}`,

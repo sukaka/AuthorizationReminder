@@ -16,7 +16,9 @@ import { enqueuePendingResult } from '../local/syncQueue';
 import type { ModelProfile } from '../types/tauri';
 import {
   downloadGenerationWord,
+  reportLocalModelAuditEvent,
   reportGenerationFailure,
+  type LocalModelAuditEvent,
   type TaskPayload,
 } from '../api/client';
 
@@ -96,6 +98,7 @@ export function TaskRunPage({ task, userId }: { task: TaskDefinition; userId?: s
   const [syncMessage, setSyncMessage] = useState('');
   const [exportMessage, setExportMessage] = useState('');
   const [generationUuid, setGenerationUuid] = useState('');
+  const [activeGenerationUuid, setActiveGenerationUuid] = useState('');
   const [exporting, setExporting] = useState(false);
 
   useEffect(() => {
@@ -146,14 +149,33 @@ export function TaskRunPage({ task, userId }: { task: TaskDefinition; userId?: s
     if (!selectedProfile) throw new Error('请先配置一个本地模型');
     setStatus('generating');
     setOutput('');
+    setActiveGenerationUuid(prepared.generation_uuid);
     const currentRequestId = crypto.randomUUID();
     setRequestId(currentRequestId);
+    const auditLocalModel = (
+      event: LocalModelAuditEvent,
+      options: { latencyMs?: number; errorCode?: string } = {},
+    ) => reportLocalModelAuditEvent({
+      generationUuid: prepared.generation_uuid,
+      event,
+      modelId: selectedProfile.modelId,
+      provider: 'local-desktop',
+      ...options,
+    }).catch(() => undefined);
+
+    void auditLocalModel('MODEL_STARTED');
     const generated = await generateLocalModel({
       profileId: selectedProfile.id,
       messages: prepared.messages,
       temperature: prepared.temperature,
       requestId: currentRequestId,
-    }, (delta) => setOutput((current) => current + delta));
+    }, (delta) => setOutput((current) => current + delta)).catch((modelError) => {
+      void auditLocalModel('MODEL_FAILED', {
+        errorCode: getGenerationErrorCode(modelError),
+      });
+      throw modelError;
+    });
+    void auditLocalModel('MODEL_COMPLETED', { latencyMs: generated.latencyMs });
     setOutput(generated.output);
 
     setStatus('saving');
@@ -186,6 +208,10 @@ export function TaskRunPage({ task, userId }: { task: TaskDefinition; userId?: s
           retryCount: 0,
           nextRetryAt: Date.now() + 5_000,
         });
+        void auditLocalModel('MODEL_SYNC_PENDING', {
+          latencyMs: generated.latencyMs,
+          errorCode: `COMPLETE_${completeResponse.status}`,
+        });
         setSyncMessage('结果已保存在本机，恢复连接后自动同步');
       } else {
         setSyncMessage('结果尚未同步，请保持当前页面并稍后重试');
@@ -196,6 +222,7 @@ export function TaskRunPage({ task, userId }: { task: TaskDefinition; userId?: s
     setGenerationUuid(prepared.generation_uuid);
     setStatus('done');
     setRequestId('');
+    setActiveGenerationUuid('');
     setSensitiveConfirmation(null);
     if (userId) await deleteDraft(userId, task.uuid).catch(() => undefined);
   };
@@ -273,6 +300,7 @@ export function TaskRunPage({ task, userId }: { task: TaskDefinition; userId?: s
     } catch (generationError) {
       setStatus('idle');
       setRequestId('');
+      setActiveGenerationUuid('');
       setError(getGenerationErrorMessage(generationError));
     }
   };
@@ -292,6 +320,7 @@ export function TaskRunPage({ task, userId }: { task: TaskDefinition; userId?: s
     } catch (regenerationError) {
       setStatus('done');
       setRequestId('');
+      setActiveGenerationUuid('');
       setError(
         regenerationError instanceof Error
           ? regenerationError.message
@@ -325,6 +354,14 @@ export function TaskRunPage({ task, userId }: { task: TaskDefinition; userId?: s
 
   const stop = async () => {
     if (!requestId) return;
+    if (activeGenerationUuid && selectedProfile) {
+      reportLocalModelAuditEvent({
+        generationUuid: activeGenerationUuid,
+        event: 'MODEL_CANCELLED',
+        modelId: selectedProfile.modelId,
+        provider: 'local-desktop',
+      }).catch(() => undefined);
+    }
     await invoke('model_cancel', { requestId });
   };
 

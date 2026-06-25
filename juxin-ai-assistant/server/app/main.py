@@ -54,6 +54,7 @@ from .schemas import (
     HistoryItemOut,
     HistoryListOut,
     HomeOut,
+    LocalModelAuditEventIn,
     PrepareGenerationIn,
     PrepareGenerationOut,
     RegenerateOut,
@@ -992,6 +993,42 @@ async def fail_generation_route(
         generation_uuid=record.uuid,
         status=record.status,
     )
+
+
+
+@app.post("/api/ai/audit/local-model-events", status_code=204)
+async def record_local_model_audit_event(
+    body: LocalModelAuditEventIn,
+    request: Request,
+    session_payload: Annotated[SessionPayload, Depends(get_session)],
+    current_settings: Annotated[Settings, Depends(get_settings)],
+    db: Annotated[Session, Depends(get_db)],
+) -> Response:
+    await require_action(
+        "ai_assistant:use",
+        request,
+        session_payload,
+        current_settings,
+    )
+    write_request_audit(
+        db,
+        session_payload,
+        request,
+        current_settings,
+        action="generation.local_model_event",
+        entity_type="generation",
+        entity_uuid=body.generation_uuid,
+        metadata={
+            "generation_uuid": body.generation_uuid,
+            "event": body.event,
+            "model_id": body.model_id,
+            "provider": body.provider,
+            "latency_ms": body.latency_ms,
+            "error_code": body.error_code,
+        },
+    )
+    db.commit()
+    return Response(status_code=204)
 
 
 @app.post("/api/ai/logout", status_code=204)

@@ -1,6 +1,6 @@
 from datetime import datetime
 from enum import Enum
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -144,6 +144,24 @@ class GenerationFailureIn(BaseModel):
     completion_token: str = Field(min_length=1, max_length=256)
     error_code: str = Field(min_length=1, max_length=64)
     error_message: str | None = Field(default=None, max_length=500)
+
+
+
+class LocalModelAuditEventIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    generation_uuid: str = Field(min_length=1, max_length=64)
+    event: Literal[
+        "MODEL_STARTED",
+        "MODEL_COMPLETED",
+        "MODEL_CANCELLED",
+        "MODEL_FAILED",
+        "MODEL_SYNC_PENDING",
+    ]
+    model_id: str | None = Field(default=None, max_length=128)
+    provider: str | None = Field(default=None, max_length=128)
+    latency_ms: int | None = Field(default=None, ge=0, le=3_600_000)
+    error_code: str | None = Field(default=None, max_length=64)
 
 
 class HistoryItemOut(BaseModel):
