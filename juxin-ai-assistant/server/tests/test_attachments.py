@@ -1,6 +1,7 @@
 import asyncio
 import os
 from io import BytesIO
+from zipfile import ZipFile
 
 import pytest
 from docx import Document
@@ -28,6 +29,25 @@ def _build_docx_bytes(*, paragraph_text: str = "会议段落") -> bytes:
     document = Document()
     document.add_paragraph(paragraph_text)
     document.save(buffer)
+    return buffer.getvalue()
+
+
+def _build_docx_table_bytes() -> bytes:
+    buffer = BytesIO()
+    document = Document()
+    table = document.add_table(rows=2, cols=2)
+    table.cell(0, 0).text = "事项"
+    table.cell(0, 1).text = "负责人"
+    table.cell(1, 0).text = "项目甲"
+    document.save(buffer)
+    return buffer.getvalue()
+
+
+def _build_zip_bytes(entries: dict[str, bytes]) -> bytes:
+    buffer = BytesIO()
+    with ZipFile(buffer, "w") as archive:
+        for name, content in entries.items():
+            archive.writestr(name, content)
     return buffer.getvalue()
 
 
@@ -101,6 +121,40 @@ def test_upload_docx_attachment_extracts_paragraph_text(
     assert body["extracted_characters"] >= len(text)
 
 
+def test_upload_docx_attachment_extracts_table_text(
+    generation_client,
+    generation_db,
+    seeded_task,
+):
+    from app.attachments import load_owned_attachment_texts
+    from app.crypto import ContentCipher
+
+    response = _upload(
+        generation_client,
+        task_uuid=seeded_task.uuid,
+        file_name="table.docx",
+        content=_build_docx_table_bytes(),
+        content_type=(
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        ),
+    )
+
+    assert response.status_code == 201
+
+    cipher = ContentCipher(os.environ["CONTENT_ENCRYPTION_KEY"])
+    _, extracted_text = load_owned_attachment_texts(
+        generation_db,
+        "dev",
+        seeded_task.id,
+        [response.json()["uuid"]],
+        cipher,
+    )[0]
+    assert "事项" in extracted_text
+    assert "负责人" in extracted_text
+    assert "项目甲" in extracted_text
+    assert "待确认" in extracted_text
+
+
 def test_upload_bad_docx_attachment_returns_clear_parse_error(
     generation_client,
     seeded_task,
@@ -110,6 +164,34 @@ def test_upload_bad_docx_attachment_returns_clear_parse_error(
         task_uuid=seeded_task.uuid,
         file_name="bad.docx",
         content=b"not a docx",
+        content_type=(
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        ),
+    )
+
+    assert response.status_code == 422
+    assert "DOCX" in response.text
+    assert "无法解析" in response.text
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        _build_zip_bytes({}),
+        _build_zip_bytes({"[Content_Types].xml": b"<Types>"}),
+    ],
+    ids=["empty-zip", "malformed-content-types"],
+)
+def test_upload_malformed_zip_docx_attachment_returns_clear_parse_error(
+    generation_client,
+    seeded_task,
+    content,
+):
+    response = _upload(
+        generation_client,
+        task_uuid=seeded_task.uuid,
+        file_name="malformed.docx",
+        content=content,
         content_type=(
             "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
         ),

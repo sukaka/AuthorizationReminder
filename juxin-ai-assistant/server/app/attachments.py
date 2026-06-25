@@ -6,6 +6,7 @@ from zipfile import BadZipFile
 from docx import Document
 from docx.opc.exceptions import PackageNotFoundError
 from fastapi import HTTPException, UploadFile
+from lxml.etree import XMLSyntaxError
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -50,7 +51,7 @@ def _extract_text(file_name: str, data: bytes) -> str:
 
     try:
         document = Document(BytesIO(data))
-    except (BadZipFile, PackageNotFoundError) as exc:
+    except (BadZipFile, KeyError, PackageNotFoundError, XMLSyntaxError) as exc:
         raise HTTPException(status_code=422, detail="DOCX 文件无法解析") from exc
 
     parts: list[str] = []
