@@ -31,10 +31,11 @@ def test_migration_revision_graph_is_single_linear_head() -> None:
         migration_config("sqlite+pysqlite:///:memory:")
     )
 
-    assert script.get_heads() == ["0006_prompt_catalog_rollouts"]
+    assert script.get_heads() == ["0007_task_templates_and_attachments"]
     assert [
         revision.revision for revision in script.walk_revisions()
     ] == [
+        "0007_task_templates_and_attachments",
         "0006_prompt_catalog_rollouts",
         "0005_task_document_metadata",
         "0004_desktop_updates",
@@ -320,3 +321,23 @@ def test_prompt_catalog_rollout_migration_round_trip(tmp_path: Path) -> None:
         column["name"]
         for column in inspector.get_columns("ai_task_prompt_bindings")
     }
+
+
+def test_0007_adds_task_template_metadata(tmp_path: Path) -> None:
+    database_path = tmp_path / "task-template-metadata.db"
+    database_url = f"sqlite+pysqlite:///{database_path}"
+    config = migration_config(database_url)
+    engine = create_engine(database_url)
+
+    command.upgrade(config, "0007_task_templates_and_attachments")
+    inspector = inspect(engine)
+    task_columns = {column["name"] for column in inspector.get_columns("ai_tasks")}
+
+    assert "document_template_code" in task_columns
+    assert "output_schema_json" in task_columns
+    assert "attachment_policy_json" in task_columns
+
+    command.downgrade(config, "0006_prompt_catalog_rollouts")
+    inspector = inspect(engine)
+    task_columns = {column["name"] for column in inspector.get_columns("ai_tasks")}
+    assert "document_template_code" not in task_columns

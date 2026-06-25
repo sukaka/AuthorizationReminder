@@ -81,6 +81,8 @@ class TaskOut(BaseModel):
     description: str
     output_format: str
     safety_notice: str
+    document_template_code: str = ""
+    attachment_policy: dict[str, Any] | None = None
     fields: list[TaskFieldOut]
 
 
