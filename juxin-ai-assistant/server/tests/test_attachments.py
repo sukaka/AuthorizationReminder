@@ -101,6 +101,25 @@ def test_upload_docx_attachment_extracts_paragraph_text(
     assert body["extracted_characters"] >= len(text)
 
 
+def test_upload_bad_docx_attachment_returns_clear_parse_error(
+    generation_client,
+    seeded_task,
+):
+    response = _upload(
+        generation_client,
+        task_uuid=seeded_task.uuid,
+        file_name="bad.docx",
+        content=b"not a docx",
+        content_type=(
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        ),
+    )
+
+    assert response.status_code == 422
+    assert "DOCX" in response.text
+    assert "无法解析" in response.text
+
+
 def test_upload_attachment_requires_ai_assistant_use_permission(
     monkeypatch,
     generation_client,

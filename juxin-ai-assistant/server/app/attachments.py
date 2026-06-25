@@ -1,8 +1,10 @@
 import hashlib
 import uuid as uuid_lib
 from io import BytesIO
+from zipfile import BadZipFile
 
 from docx import Document
+from docx.opc.exceptions import PackageNotFoundError
 from fastapi import HTTPException, UploadFile
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -46,7 +48,11 @@ def _extract_text(file_name: str, data: bytes) -> str:
                 detail="文本附件必须使用 UTF-8 编码",
             ) from exc
 
-    document = Document(BytesIO(data))
+    try:
+        document = Document(BytesIO(data))
+    except (BadZipFile, PackageNotFoundError) as exc:
+        raise HTTPException(status_code=422, detail="DOCX 文件无法解析") from exc
+
     parts: list[str] = []
     parts.extend(
         paragraph.text for paragraph in document.paragraphs if paragraph.text.strip()
