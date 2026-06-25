@@ -96,6 +96,15 @@ export type HomePayload = {
   safety_reminders: string[];
 };
 
+export type IntentCandidatePayload = {
+  task_uuid: string;
+  task_code: string;
+  task_name: string;
+  assistant_name: string;
+  score: number;
+  reasons: string[];
+};
+
 export class ApiError extends Error {
   constructor(
     public readonly status: number,
@@ -178,6 +187,20 @@ export async function getTask(taskCode: string): Promise<TaskPayload> {
       credentials: 'include',
     }),
     'TASK_FAILED',
+  );
+}
+
+export async function routeIntent(query: string): Promise<{
+  candidates: IntentCandidatePayload[];
+}> {
+  return readJson(
+    await fetch('/api/ai/intent/route', {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query }),
+    }),
+    'INTENT_ROUTE_FAILED',
   );
 }
 

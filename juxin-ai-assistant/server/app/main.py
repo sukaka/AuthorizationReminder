@@ -34,6 +34,7 @@ from .history_service import (
     load_regeneration_source,
     tombstone_history,
 )
+from .intent_router import route_intent
 from .knowledge import KnowledgeRetriever
 from .local_binding import (
     LocalBindingTokenError,
@@ -54,6 +55,9 @@ from .schemas import (
     HistoryItemOut,
     HistoryListOut,
     HomeOut,
+    IntentCandidateOut,
+    IntentRouteIn,
+    IntentRouteOut,
     LocalModelAuditEventIn,
     PrepareGenerationIn,
     PrepareGenerationOut,
@@ -346,6 +350,67 @@ def catalog(
             )
         )
     return CatalogOut(assistants=result)
+
+
+@app.post("/api/ai/intent/route", response_model=IntentRouteOut)
+def route_task_intent(
+    body: IntentRouteIn,
+    _session_payload: Annotated[SessionPayload, Depends(get_session)],
+    db: Annotated[Session, Depends(get_db)],
+) -> IntentRouteOut:
+    rows = db.execute(
+        select(Task, Assistant)
+        .join(Assistant, Assistant.id == Task.assistant_id)
+        .where(Task.status == "ACTIVE", Assistant.status == "ACTIVE")
+        .order_by(Assistant.sort_order, Task.sort_order, Task.id)
+    ).all()
+    task_ids = [task.id for task, _assistant in rows]
+    fields_by_task: dict[int, list[str]] = {task_id: [] for task_id in task_ids}
+    if task_ids:
+        fields = db.scalars(
+            select(TaskField)
+            .where(TaskField.task_id.in_(task_ids))
+            .order_by(TaskField.task_id, TaskField.sort_order, TaskField.id)
+        ).all()
+        for field in fields:
+            fields_by_task[field.task_id].extend(
+                item
+                for item in (
+                    field.label,
+                    field.placeholder,
+                    field.example,
+                    field.field_key,
+                )
+                if item
+            )
+
+    candidates = route_intent(
+        body.query,
+        [
+            {
+                "uuid": task.uuid,
+                "code": task.code,
+                "name": task.name,
+                "description": task.description,
+                "assistant_name": assistant.name,
+                "field_keywords": fields_by_task.get(task.id, []),
+            }
+            for task, assistant in rows
+        ],
+    )
+    return IntentRouteOut(
+        candidates=[
+            IntentCandidateOut(
+                task_uuid=item["uuid"],
+                task_code=item["code"],
+                task_name=item["name"],
+                assistant_name=item["assistant_name"],
+                score=item["score"],
+                reasons=item["reasons"],
+            )
+            for item in candidates
+        ]
+    )
 
 
 @app.get("/api/ai/tasks/{task_code}", response_model=TaskOut)

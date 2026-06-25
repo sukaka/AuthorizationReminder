@@ -97,6 +97,25 @@ class CatalogOut(BaseModel):
     assistants: list[CatalogAssistantOut]
 
 
+class IntentRouteIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    query: str = Field(min_length=1, max_length=500)
+
+
+class IntentCandidateOut(BaseModel):
+    task_uuid: str
+    task_code: str
+    task_name: str
+    assistant_name: str
+    score: int
+    reasons: list[str]
+
+
+class IntentRouteOut(BaseModel):
+    candidates: list[IntentCandidateOut]
+
+
 class PrepareGenerationIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

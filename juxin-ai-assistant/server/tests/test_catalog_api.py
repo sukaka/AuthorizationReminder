@@ -67,3 +67,24 @@ def test_catalog_search_matches_assistant_and_task(
 
     assert matched["assistants"][0]["tasks"][0]["name"] == "会议纪要"
     assert missing == {"assistants": []}
+
+def test_intent_route_returns_ranked_active_task_candidates(
+    generation_client,
+    generation_db,
+    seeded_task,
+) -> None:
+    seeded_task.name = "工作总结"
+    seeded_task.description = "整理周期工作成果"
+    generation_db.commit()
+
+    response = generation_client.post(
+        "/api/ai/intent/route",
+        json={"query": "帮我整理这周工作总结"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["candidates"][0]["task_uuid"] == seeded_task.uuid
+    assert payload["candidates"][0]["task_code"] == seeded_task.code
+    assert payload["candidates"][0]["score"] > 0
+    assert "任务名称匹配：工作总结" in payload["candidates"][0]["reasons"]
