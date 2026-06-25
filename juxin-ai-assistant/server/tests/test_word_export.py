@@ -55,6 +55,51 @@ def test_document_template_render_keeps_single_fixed_heading_with_user_content()
     assert "客户名称：A" in text
 
 
+def test_work_plan_template_renders_without_duplicate_fixed_headings():
+    template = get_document_template("work_plan_v1")
+    payload = DocumentRenderPayload(
+        title="阶段工作计划",
+        task_name="工作计划",
+        department="产品交付部",
+        author="张三",
+        version="1.0.0",
+        output="# 一、任务说明\n\n正文\n\n# 二、基本信息\n\n重复基本信息",
+    )
+
+    document = Document(BytesIO(template.render_docx(payload)))
+    headings = [
+        paragraph.text
+        for paragraph in document.paragraphs
+        if paragraph.style.name in {"Heading 1", "Heading 2", "Heading 3"}
+    ]
+    basic_info_headings = [heading for heading in headings if heading.endswith("基本信息")]
+
+    assert template.name == "阶段工作计划模板"
+    assert len(basic_info_headings) == 1
+    assert any(heading.endswith("工作目标与范围") for heading in headings)
+
+
+def test_meeting_minutes_template_renders_action_item_table():
+    template = get_document_template("meeting_minutes_v1")
+    payload = DocumentRenderPayload(
+        title="会议纪要",
+        task_name="会议纪要",
+        department="产品交付部",
+        author="张三",
+        version="1.0.0",
+        output="会议讨论了项目进度。",
+    )
+
+    document = Document(BytesIO(template.render_docx(payload)))
+    table_texts = [
+        [cell.text for cell in row.cells]
+        for table in document.tables
+        for row in table.rows
+    ]
+
+    assert ["序号", "事项", "责任人", "截止时间", "状态", "备注"] in table_texts
+
+
 def test_company_word_style_constants_are_named():
     assert COMPANY_WORD_STYLE["page"]["top_margin_cm"] == 2.5
     assert COMPANY_WORD_STYLE["page"]["left_margin_cm"] == 2.8
