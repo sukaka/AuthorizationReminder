@@ -1,5 +1,15 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
+from typing import Literal
+
+
+@dataclass(frozen=True)
+class ContextSection:
+    kind: Literal["system", "user"]
+    title: str
+    content: str
+
 
 def build_untrusted_content_block(*, title: str, content: str, source: str) -> str:
     safe_title = title.strip() or "资料"
@@ -12,3 +22,22 @@ def build_untrusted_content_block(*, title: str, content: str, source: str) -> s
         f"{content}\n"
         f"【不可信资料区结束：{safe_title}】"
     )
+
+
+def build_messages(sections: list[ContextSection]) -> list[dict[str, str]]:
+    system_parts: list[str] = []
+    user_parts: list[str] = []
+    for section in sections:
+        content = section.content.strip()
+        text = f"## {section.title}\n{content}".strip()
+        if section.kind == "system":
+            system_parts.append(text)
+        else:
+            user_parts.append(text)
+
+    messages: list[dict[str, str]] = []
+    if system_parts:
+        messages.append({"role": "system", "content": "\n\n".join(system_parts)})
+    if user_parts:
+        messages.append({"role": "user", "content": "\n\n".join(user_parts)})
+    return messages

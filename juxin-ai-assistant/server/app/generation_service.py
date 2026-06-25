@@ -11,7 +11,11 @@ from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from .context_builder import build_untrusted_content_block
+from .context_builder import (
+    ContextSection,
+    build_messages,
+    build_untrusted_content_block,
+)
 from .crypto import ContentCipher
 from .document_governance import render_document_governance
 from .field_validation import FieldValidationError, validate_task_inputs
@@ -232,35 +236,55 @@ async def prepare_generation(
         content="\n".join(input_lines),
         source="user_input",
     )
-    user_parts = [user_input_block]
+    sections = [
+        ContextSection(
+            kind="system",
+            title="公司安全规则",
+            content="不得编造事实，不得泄露秘密，输出必须由员工复核。",
+        ),
+        ContextSection(
+            kind="system",
+            title="任务 Prompt",
+            content=rendered_prompt,
+        ),
+        ContextSection(
+            kind="system",
+            title="输出格式",
+            content=f"{task.output_format}。{task.safety_notice}",
+        ),
+        ContextSection(kind="user", title="员工输入", content=user_input_block),
+    ]
     if reference_items:
         reference_content = "\n\n".join(
             f"[{item.title}]\n{item.content}"
             for item in reference_items
         )
-        user_parts.append(
-            build_untrusted_content_block(
+        sections.append(
+            ContextSection(
+                kind="user",
                 title="参考知识",
-                content=reference_content,
-                source="knowledge:task-reference",
+                content=build_untrusted_content_block(
+                    title="参考知识",
+                    content=reference_content,
+                    source="knowledge:task-reference",
+                ),
             )
         )
     governance = render_document_governance(
         formal_document=task.formal_document,
         document_type=task.document_type,
     )
-    system_parts = [
-        "公司安全规则：不得编造事实，不得泄露秘密，输出必须由员工复核。",
-        f"任务 Prompt：\n{rendered_prompt}",
-        f"输出格式：{task.output_format}。{task.safety_notice}",
-    ]
     if governance:
-        system_parts.append(governance)
+        sections.append(
+            ContextSection(kind="system", title="文档治理规则", content=governance)
+        )
     if rendered_quality_rules:
-        system_parts.append(
-            "必须遵守的质量规则：\n"
-            f"{QUALITY_RULE_SOURCE_NOTICE}\n"
-            + rendered_quality_rules
+        sections.append(
+            ContextSection(
+                kind="system",
+                title="必须遵守的质量规则",
+                content=f"{QUALITY_RULE_SOURCE_NOTICE}\n{rendered_quality_rules}",
+            )
         )
 
     generation_uuid = str(uuid_lib.uuid4())
@@ -297,13 +321,7 @@ async def prepare_generation(
         PreparedGeneration(
             generation_uuid=generation_uuid,
             completion_token=completion_token,
-            messages=[
-                {
-                    "role": "system",
-                    "content": "\n\n".join(system_parts),
-                },
-                {"role": "user", "content": "\n\n".join(user_parts)},
-            ],
+            messages=build_messages(sections),
             temperature=0.3,
             safety_notice=task.safety_notice,
         ),
