@@ -6,7 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .crypto import ContentCipher
-from .models import GenerationAttachment, GenerationRecord, Task
+from .models import GenerationAttachment, Task
 
 
 MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024
@@ -18,6 +18,8 @@ def _safe_file_name(raw_name: str | None) -> str:
     file_name = (raw_name or "").replace("\\", "/").rsplit("/", 1)[-1].strip()
     if not file_name:
         raise HTTPException(status_code=422, detail="文件名不能为空")
+    if len(file_name) > 255:
+        raise HTTPException(status_code=422, detail="文件名不能超过 255 个字符")
     return file_name
 
 
@@ -29,7 +31,6 @@ def _file_suffix(file_name: str) -> str:
 async def create_attachment(
     db: Session,
     sso_user_id: str,
-    generation_uuid: str,
     task_uuid: str,
     file: UploadFile,
     cipher: ContentCipher,
@@ -40,17 +41,6 @@ async def create_attachment(
     )
     if task is None:
         raise HTTPException(status_code=404, detail="任务不存在或未启用")
-    generation = db.scalar(
-        select(GenerationRecord).where(
-            GenerationRecord.uuid == generation_uuid,
-            GenerationRecord.sso_user_id == sso_user_id,
-            GenerationRecord.status != "DELETED",
-        )
-    )
-    if generation is None:
-        raise HTTPException(status_code=404, detail="生成记录不存在或不可访问")
-    if generation.task_id != task.id:
-        raise HTTPException(status_code=409, detail="附件任务与生成记录不匹配")
 
     file_name = _safe_file_name(file.filename)
     suffix = _file_suffix(file_name)
@@ -75,7 +65,6 @@ async def create_attachment(
         uuid=attachment_uuid,
         sso_user_id=sso_user_id,
         task_id=task.id,
-        generation_id=generation.id,
         file_name=file_name,
         file_type=(file.content_type or "application/octet-stream")[:128],
         file_size=len(content),
@@ -87,6 +76,6 @@ async def create_attachment(
         error_code="",
     )
     db.add(attachment)
-    db.commit()
+    db.flush()
     db.refresh(attachment)
     return attachment, len(extracted_text)

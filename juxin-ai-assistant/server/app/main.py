@@ -766,7 +766,6 @@ async def submit_feedback(
 )
 async def upload_attachment(
     task_uuid: Annotated[str, Form()],
-    generation_uuid: Annotated[str, Form()],
     file: Annotated[UploadFile, File()],
     request: Request,
     session_payload: Annotated[SessionPayload, Depends(get_session)],
@@ -780,35 +779,35 @@ async def upload_attachment(
         session_payload,
         current_settings,
     )
-    attachment, extracted_characters = await create_attachment(
-        db,
-        str(session_payload.user.id),
-        generation_uuid,
-        task_uuid,
-        file,
-        cipher,
-        current_settings.content_encryption_key_version,
-    )
-    write_request_audit(
-        db,
-        session_payload,
-        request,
-        current_settings,
-        action="generation_attachment.upload",
-        entity_type="generation_attachment",
-        entity_uuid=attachment.uuid,
-        metadata={
-            "attachment_uuid": attachment.uuid,
-            "generation_uuid": generation_uuid,
-            "task_uuid": task_uuid,
-            "file_name": attachment.file_name,
-            "file_type": attachment.file_type,
-            "file_size": attachment.file_size,
-            "content_sha256": attachment.content_sha256,
-            "status": attachment.status,
-        },
-    )
-    db.commit()
+    try:
+        attachment, extracted_characters = await create_attachment(
+            db,
+            str(session_payload.user.id),
+            task_uuid,
+            file,
+            cipher,
+            current_settings.content_encryption_key_version,
+        )
+        write_request_audit(
+            db,
+            session_payload,
+            request,
+            current_settings,
+            action="generation_attachment.upload",
+            entity_type="generation_attachment",
+            entity_uuid=attachment.uuid,
+            metadata={
+                "attachment_uuid": attachment.uuid,
+                "task_uuid": task_uuid,
+                "file_type": attachment.file_type,
+                "file_size": attachment.file_size,
+                "status": attachment.status,
+            },
+        )
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
     return AttachmentOut(
         uuid=attachment.uuid,
         name=attachment.file_name,
