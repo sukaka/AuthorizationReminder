@@ -97,6 +97,23 @@ class CatalogOut(BaseModel):
     assistants: list[CatalogAssistantOut]
 
 
+class CapabilityOut(BaseModel):
+    task_uuid: str
+    task_code: str
+    task_name: str
+    assistant_name: str
+    task_status: str
+    input_fields: list[TaskFieldOut]
+    output_format: str
+    document_type: str
+    prompt_binding_status: Literal["configured", "missing", "stale"]
+    knowledge_link_count: int
+
+
+class CapabilityListOut(BaseModel):
+    items: list[CapabilityOut]
+
+
 class IntentRouteIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

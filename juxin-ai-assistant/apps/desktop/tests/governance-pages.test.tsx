@@ -61,6 +61,7 @@ it('saves task, fields, and published Prompt binding in one atomic request', asy
   };
   server.use(
     http.get('/api/ai/admin/tasks', () => HttpResponse.json({ items: [task], total: 1 })),
+    http.get('/api/ai/capabilities', () => HttpResponse.json({ items: [] })),
     http.put('/api/ai/admin/tasks/task-1/configuration', async ({ request }) => {
       configurationSpy(await request.json());
       return HttpResponse.json(task);
@@ -93,4 +94,33 @@ it('saves task, fields, and published Prompt binding in one atomic request', asy
     },
   }));
   expect(legacyRequestSpy).not.toHaveBeenCalled();
+});
+
+it('shows task capability health without exposing prompt or knowledge bodies', async () => {
+  server.use(
+    http.get('/api/ai/admin/tasks', () => HttpResponse.json({ items: [], total: 0 })),
+    http.get('/api/ai/capabilities', () => HttpResponse.json({
+      items: [{
+        task_uuid: 'task-1',
+        task_code: 'work-summary',
+        task_name: '工作总结',
+        assistant_name: '内部同事',
+        task_status: 'ACTIVE',
+        input_fields: [{ field_key: 'content', label: '工作内容', field_type: 'TEXTAREA', required: true }],
+        output_format: '正式文档',
+        document_type: 'FORMAL_DOCUMENT',
+        prompt_binding_status: 'configured',
+        knowledge_link_count: 2,
+      }],
+    })),
+  );
+
+  render(<TaskAdminPage />);
+  await userEvent.click(screen.getByRole('button', { name: '刷新任务' }));
+
+  expect(await screen.findByText('能力健康')).toBeInTheDocument();
+  expect(screen.getByText('工作总结')).toBeInTheDocument();
+  expect(screen.getByText('Prompt 已配置')).toBeInTheDocument();
+  expect(screen.getByText('字段 1 个 · 知识 2 条 · ACTIVE')).toBeInTheDocument();
+  expect(screen.queryByText(/prompt body|knowledge body/i)).not.toBeInTheDocument();
 });

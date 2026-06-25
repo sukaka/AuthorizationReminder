@@ -27,6 +27,19 @@ export type AdminTaskField = {
   validation?: Record<string, unknown>;
 };
 
+export type TaskCapability = {
+  task_uuid: string;
+  task_code: string;
+  task_name: string;
+  assistant_name: string;
+  task_status: string;
+  input_fields: AdminTaskField[];
+  output_format: string;
+  document_type: string;
+  prompt_binding_status: 'configured' | 'missing' | 'stale';
+  knowledge_link_count: number;
+};
+
 export type TaskConfigurationInput = {
   task: { status: AdminTask['status'] };
   fields: AdminTaskField[];
@@ -99,6 +112,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const governanceApi = {
   tasks: () => request<GovernanceList<AdminTask>>('/api/ai/admin/tasks'),
+  capabilities: () => request<{ items: TaskCapability[] }>('/api/ai/capabilities'),
   createTask: (payload: Record<string, unknown>) => request<AdminTask>(
     '/api/ai/admin/tasks', { method: 'POST', body: JSON.stringify(payload) },
   ),

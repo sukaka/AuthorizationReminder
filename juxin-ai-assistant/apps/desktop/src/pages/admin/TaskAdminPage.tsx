@@ -1,6 +1,6 @@
 import { useState } from 'react';
 
-import { governanceApi, type AdminTask, type AdminTaskField } from '../../api/governance';
+import { governanceApi, type AdminTask, type AdminTaskField, type TaskCapability } from '../../api/governance';
 import { AdminPageState, RequestNotice } from './AdminPageState';
 
 export const SUPPORTED_FIELD_TYPES = [
@@ -16,6 +16,7 @@ export function TaskAdminPage() {
   const [promptVersion, setPromptVersion] = useState(1);
   const [versionPolicy, setVersionPolicy] = useState<'PUBLISHED' | 'PINNED'>('PUBLISHED');
   const [fields, setFields] = useState<AdminTaskField[]>([]);
+  const [capabilities, setCapabilities] = useState<TaskCapability[]>([]);
   const [newTask, setNewTask] = useState({ assistant_uuid: '', code: '', name: '' });
 
   const selectTask = (item: AdminTask) => {
@@ -31,8 +32,12 @@ export function TaskAdminPage() {
   const refresh = async () => {
     setNotice('正在读取任务…');
     try {
-      const payload = await governanceApi.tasks();
+      const [payload, capabilityPayload] = await Promise.all([
+        governanceApi.tasks(),
+        governanceApi.capabilities(),
+      ]);
       setItems(payload.items);
+      setCapabilities(capabilityPayload.items);
       setNotice(payload.items.length ? '' : '暂无任务');
     } catch {
       setNotice('无法读取任务，请确认治理权限。');
@@ -82,6 +87,12 @@ export function TaskAdminPage() {
     } catch { setNotice('只能删除从未启用且没有生成记录的草稿；请改为停用。'); }
   };
 
+  const promptBindingLabel = (status: TaskCapability['prompt_binding_status']) => {
+    if (status === 'configured') return 'Prompt 已配置';
+    if (status === 'missing') return 'Prompt 缺失';
+    return 'Prompt 需检查';
+  };
+
   return (
     <AdminPageState title="任务管理" description="维护任务状态、字段结构与已发布 Prompt 的绑定关系。">
       <div className="admin-toolbar">
@@ -95,6 +106,23 @@ export function TaskAdminPage() {
         <button className="secondary-action" type="submit">新建草稿</button>
       </form>
       <RequestNotice message={notice} />
+      {capabilities.length ? (
+        <section className="capability-health" aria-label="能力健康">
+          <h2>能力健康</h2>
+          <div className="task-card-list compact">
+            {capabilities.map((capability) => (
+              <article key={capability.task_uuid}>
+                <strong>{capability.task_name}</strong>
+                <span>{capability.assistant_name} · {capability.output_format}</span>
+                <small>{promptBindingLabel(capability.prompt_binding_status)}</small>
+                <small>
+                  字段 {capability.input_fields.length} 个 · 知识 {capability.knowledge_link_count} 条 · {capability.task_status}
+                </small>
+              </article>
+            ))}
+          </div>
+        </section>
+      ) : null}
       <div className="governance-split">
         <div className="governance-list" aria-label="任务列表">
           {items.map((item) => (

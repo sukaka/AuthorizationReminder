@@ -42,9 +42,12 @@ from .local_binding import (
     verify_local_binding_token,
 )
 from .models import Assistant, GenerationRecord, Task, TaskField, UserFavorite
+from .models import KnowledgeTaskLink, TaskPromptBinding
 from .prompt_client import PromptCenterClient
 from .schemas import (
     CatalogAssistantOut,
+    CapabilityListOut,
+    CapabilityOut,
     CatalogOut,
     CompleteGenerationIn,
     CompleteGenerationOut,
@@ -350,6 +353,89 @@ def catalog(
             )
         )
     return CatalogOut(assistants=result)
+
+
+@app.get("/api/ai/capabilities", response_model=CapabilityListOut)
+async def capabilities(
+    request: Request,
+    session_payload: Annotated[SessionPayload, Depends(get_session)],
+    current_settings: Annotated[Settings, Depends(get_settings)],
+    db: Annotated[Session, Depends(get_db)],
+) -> CapabilityListOut:
+    await require_action(
+        "ai_assistant:admin",
+        request,
+        session_payload,
+        current_settings,
+    )
+    rows = db.execute(
+        select(Task, Assistant)
+        .join(Assistant, Assistant.id == Task.assistant_id)
+        .order_by(Assistant.sort_order, Task.sort_order, Task.id)
+    ).all()
+    task_ids = [task.id for task, _assistant in rows]
+    fields_by_task: dict[int, list[TaskField]] = {task_id: [] for task_id in task_ids}
+    bindings_by_task: dict[int, TaskPromptBinding] = {}
+    knowledge_counts: dict[int, int] = {task_id: 0 for task_id in task_ids}
+
+    if task_ids:
+        fields = db.scalars(
+            select(TaskField)
+            .where(TaskField.task_id.in_(task_ids))
+            .order_by(TaskField.task_id, TaskField.sort_order, TaskField.id)
+        ).all()
+        for field in fields:
+            fields_by_task[field.task_id].append(field)
+
+        bindings = db.scalars(
+            select(TaskPromptBinding)
+            .where(TaskPromptBinding.task_id.in_(task_ids))
+        ).all()
+        bindings_by_task = {binding.task_id: binding for binding in bindings}
+
+        count_rows = db.execute(
+            select(KnowledgeTaskLink.task_id, func.count(KnowledgeTaskLink.id))
+            .where(KnowledgeTaskLink.task_id.in_(task_ids))
+            .group_by(KnowledgeTaskLink.task_id)
+        ).all()
+        knowledge_counts.update({task_id: count for task_id, count in count_rows})
+
+    items: list[CapabilityOut] = []
+    for task, assistant in rows:
+        binding = bindings_by_task.get(task.id)
+        if binding is None:
+            prompt_binding_status = "missing"
+        elif binding.status == "ACTIVE":
+            prompt_binding_status = "configured"
+        else:
+            prompt_binding_status = "stale"
+        items.append(
+            CapabilityOut(
+                task_uuid=task.uuid,
+                task_code=task.code,
+                task_name=task.name,
+                assistant_name=assistant.name,
+                task_status=task.status,
+                input_fields=[
+                    TaskFieldOut(
+                        field_key=field.field_key,
+                        label=field.label,
+                        field_type=field.field_type.upper(),
+                        required=field.required,
+                        placeholder=field.placeholder,
+                        example=field.example,
+                        options=field.options_json or [],
+                        validation=field.validation_json or {},
+                    )
+                    for field in fields_by_task.get(task.id, [])
+                ],
+                output_format=task.output_format,
+                document_type=task.document_type,
+                prompt_binding_status=prompt_binding_status,
+                knowledge_link_count=knowledge_counts.get(task.id, 0),
+            )
+        )
+    return CapabilityListOut(items=items)
 
 
 @app.post("/api/ai/intent/route", response_model=IntentRouteOut)
