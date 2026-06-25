@@ -34,11 +34,16 @@ class FixedStructureTemplate(GenericDocumentTemplate):
         for line in output.splitlines():
             match = HEADING_PATTERN.match(line.strip())
             if match:
+                heading_level = len(match.group(1))
                 fixed_heading = fixed_by_normalized_heading.get(
                     normalize_heading_text(match.group(2))
                 )
                 if fixed_heading:
                     current_fixed_heading = fixed_heading
+                    continue
+
+                if current_fixed_heading and heading_level > 1:
+                    sections[current_fixed_heading].append(line)
                     continue
 
                 current_fixed_heading = None

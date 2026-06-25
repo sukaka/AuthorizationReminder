@@ -89,6 +89,16 @@ def test_work_plan_template_preserves_content_under_canonical_heading():
     assert normalized.index("客户名称：A") < normalized.index("# 背景说明")
 
 
+def test_work_plan_template_keeps_nested_heading_inside_fixed_section():
+    template = get_document_template("work_plan_v1")
+
+    normalized = template.normalize_output("# 基本信息\n\n## 客户信息\n\n客户名称：A")
+
+    assert normalized.index("# 基本信息") < normalized.index("## 客户信息")
+    assert normalized.index("## 客户信息") < normalized.index("客户名称：A")
+    assert normalized.index("客户名称：A") < normalized.index("# 背景说明")
+
+
 def test_meeting_minutes_template_renders_action_item_table():
     template = get_document_template("meeting_minutes_v1")
     payload = DocumentRenderPayload(
