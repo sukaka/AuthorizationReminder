@@ -3,6 +3,7 @@ from io import BytesIO
 from docx import Document
 from docx.oxml.ns import qn
 
+from app.document_templates.base import DocumentRenderPayload
 from app.document_templates.registry import get_document_template
 from app.document_templates.structure_validator import strip_duplicate_template_headings
 from app.word_export import COMPANY_WORD_STYLE, render_generation_docx
@@ -26,6 +27,32 @@ def test_structure_validator_strips_duplicate_company_headings():
     assert "# 三、背景说明" not in cleaned
     assert "重复内容" in cleaned
     assert "重复背景" in cleaned
+
+
+def test_document_template_render_keeps_single_fixed_heading_with_user_content():
+    template = get_document_template("generic_v1")
+
+    payload = template.render_docx(
+        DocumentRenderPayload(
+            title="客户项目交付报告",
+            task_name="项目交付",
+            department="产品交付部",
+            author="张三",
+            output="# 基本信息\n\n客户名称：A",
+            version="1.0.0",
+        )
+    )
+
+    document = Document(BytesIO(payload))
+    headings = [
+        paragraph.text
+        for paragraph in document.paragraphs
+        if paragraph.style.name in {"Heading 1", "Heading 2", "Heading 3"}
+    ]
+    text = "\n".join(paragraph.text for paragraph in document.paragraphs)
+
+    assert sum(heading.endswith("基本信息") for heading in headings) == 1
+    assert "客户名称：A" in text
 
 
 def test_company_word_style_constants_are_named():

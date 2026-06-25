@@ -3,9 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Sequence
 
-from app.word_export import render_generation_docx
-
-from .base import DocumentRenderPayload
+from .base import DocumentRenderPayload, DocumentTemplate
 from .company_style import COMPANY_REQUIRED_SECTIONS, FINAL_REVIEW_SECTIONS
 from .structure_validator import strip_duplicate_template_headings
 
@@ -23,6 +21,8 @@ class GenericDocumentTemplate:
         )
 
     def render_docx(self, payload: DocumentRenderPayload) -> bytes:
+        from app.word_export import render_generation_docx
+
         return render_generation_docx(
             title=payload.title,
             task_name=payload.task_name,
@@ -39,5 +39,5 @@ DOCUMENT_TEMPLATES = {
 }
 
 
-def get_document_template(template_code: str | None):
+def get_document_template(template_code: str | None) -> DocumentTemplate:
     return DOCUMENT_TEMPLATES.get(template_code or "", GENERIC_TEMPLATE)
