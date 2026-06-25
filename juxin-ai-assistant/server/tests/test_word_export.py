@@ -3,7 +3,14 @@ from io import BytesIO
 from docx import Document
 from docx.oxml.ns import qn
 
-from app.word_export import render_generation_docx
+from app.word_export import COMPANY_WORD_STYLE, render_generation_docx
+
+
+def test_company_word_style_constants_are_named():
+    assert COMPANY_WORD_STYLE["page"]["top_margin_cm"] == 2.5
+    assert COMPANY_WORD_STYLE["page"]["left_margin_cm"] == 2.8
+    assert COMPANY_WORD_STYLE["brand"]["header_line_color"] in {"C00000", "D9D9D9"}
+    assert "基本信息" in COMPANY_WORD_STYLE["required_sections"]
 
 
 def test_render_word_uses_v110_page_and_brand_rules():

@@ -43,6 +43,30 @@ FACT_RISK_CONTROL_ITEMS = (
     ("风险提醒", "涉及价格、合同、招投标、开票、回款、劳动关系、法律责任、测试结论、安全风险、交付周期、验收结论和对外承诺等内容，需人工复核。"),
 )
 
+COMPANY_WORD_STYLE = {
+    "page": {
+        "top_margin_cm": 2.5,
+        "bottom_margin_cm": 2.5,
+        "left_margin_cm": 2.8,
+        "right_margin_cm": 2.8,
+        "header_distance_cm": 1.3,
+        "footer_distance_cm": 1.3,
+    },
+    "font": {
+        "body": "宋体",
+        "heading": "黑体",
+    },
+    "brand": {
+        "name": "聚信得仁",
+        "company": "北京聚信得仁科技有限公司",
+        "header_line_color": "C00000",
+        "table_header_fill": "D9EAF7",
+        "confidentiality": "内部资料 注意保密",
+    },
+    "required_sections": COMPANY_REQUIRED_SECTIONS,
+    "final_review_sections": FINAL_REVIEW_SECTIONS,
+}
+
 CHINESE_NUMERALS = (
     "",
     "一",
@@ -98,31 +122,37 @@ def render_generation_docx(
 
 
 def _configure_document(document: Document, *, title: str, version: str) -> None:
+    page_style = COMPANY_WORD_STYLE["page"]
+    font_style = COMPANY_WORD_STYLE["font"]
+    brand_style = COMPANY_WORD_STYLE["brand"]
     section = document.sections[0]
     section.orientation = WD_ORIENT.PORTRAIT
     section.page_width = Cm(21)
     section.page_height = Cm(29.7)
-    section.top_margin = Cm(2.5)
-    section.bottom_margin = Cm(2.5)
-    section.left_margin = Cm(2.8)
-    section.right_margin = Cm(2.8)
-    section.header_distance = Cm(1.3)
-    section.footer_distance = Cm(1.3)
+    section.top_margin = Cm(page_style["top_margin_cm"])
+    section.bottom_margin = Cm(page_style["bottom_margin_cm"])
+    section.left_margin = Cm(page_style["left_margin_cm"])
+    section.right_margin = Cm(page_style["right_margin_cm"])
+    section.header_distance = Cm(page_style["header_distance_cm"])
+    section.footer_distance = Cm(page_style["footer_distance_cm"])
 
     styles = document.styles
-    _set_style_font(styles["Normal"], "宋体", 11)
-    _set_style_font(styles["Title"], "黑体", 22, bold=True)
+    _set_style_font(styles["Normal"], font_style["body"], 11)
+    _set_style_font(styles["Title"], font_style["heading"], 22, bold=True)
     for style_name, size in (("Heading 1", 16), ("Heading 2", 14), ("Heading 3", 12)):
-        _set_style_font(styles[style_name], "黑体", size, bold=True)
+        _set_style_font(styles[style_name], font_style["heading"], size, bold=True)
 
     header_paragraph = section.header.paragraphs[0]
     header_paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    _add_text_run(header_paragraph, f"聚信得仁｜{title}｜{version}", bold=True)
-    _set_paragraph_bottom_border(header_paragraph, color="C00000")
+    _add_text_run(header_paragraph, f"{brand_style['name']}｜{title}｜{version}", bold=True)
+    _set_paragraph_bottom_border(header_paragraph, color=brand_style["header_line_color"])
 
     footer_paragraph = section.footer.paragraphs[0]
     footer_paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    _add_text_run(footer_paragraph, "北京聚信得仁科技有限公司｜内部资料 注意保密 / 客户项目交付文档｜第 ")
+    _add_text_run(
+        footer_paragraph,
+        f"{brand_style['company']}｜{brand_style['confidentiality']} / 客户项目交付文档｜第 ",
+    )
     _add_field(footer_paragraph, "PAGE")
     _add_text_run(footer_paragraph, " 页 / 共 ")
     _add_field(footer_paragraph, "NUMPAGES")
@@ -138,22 +168,24 @@ def _add_cover_page(
     author: str,
     version: str,
 ) -> None:
+    font_style = COMPANY_WORD_STYLE["font"]
+    brand_style = COMPANY_WORD_STYLE["brand"]
     document.add_paragraph()
     document.add_paragraph()
 
     brand = document.add_paragraph()
     brand.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    _add_text_run(brand, "聚信得仁", font="黑体", size=16, bold=True)
+    _add_text_run(brand, brand_style["name"], font=font_style["heading"], size=16, bold=True)
 
     document.add_paragraph()
 
     title_paragraph = document.add_paragraph()
     title_paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    _add_text_run(title_paragraph, f"《{title}》", font="黑体", size=24, bold=True)
+    _add_text_run(title_paragraph, f"《{title}》", font=font_style["heading"], size=24, bold=True)
 
     subtitle = document.add_paragraph()
     subtitle.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    _add_text_run(subtitle, "聚信得仁公司级 AI 生成文档", font="宋体", size=14)
+    _add_text_run(subtitle, f"{brand_style['name']}公司级 AI 生成文档", font=font_style["body"], size=14)
 
     document.add_paragraph()
     metadata = [
@@ -164,13 +196,13 @@ def _add_cover_page(
         ("编制单位", department or "待确认"),
         ("编制人员", author or "待确认"),
         ("日期", date.today().isoformat()),
-        ("保密级别", "内部资料 注意保密"),
+        ("保密级别", brand_style["confidentiality"]),
     ]
     table = document.add_table(rows=len(metadata), cols=2)
     table.alignment = WD_TABLE_ALIGNMENT.CENTER
     table.style = "Table Grid"
     for row, (label, value) in zip(table.rows, metadata):
-        _write_cell(row.cells[0], label, bold=True, shading="D9EAF7")
+        _write_cell(row.cells[0], label, bold=True, shading=brand_style["table_header_fill"])
         _write_cell(row.cells[1], value)
 
     document.add_page_break()
@@ -183,6 +215,7 @@ def _add_revision_table(
     version: str,
     heading_numbers: list[int],
 ) -> None:
+    brand_style = COMPANY_WORD_STYLE["brand"]
     _add_heading(document, "修订记录", 1, heading_numbers)
     table = document.add_table(rows=2, cols=5)
     table.style = "Table Grid"
@@ -196,7 +229,7 @@ def _add_revision_table(
         "待确认",
     )
     for cell, text in zip(table.rows[0].cells, headers):
-        _write_cell(cell, text, bold=True, shading="D9EAF7")
+        _write_cell(cell, text, bold=True, shading=brand_style["table_header_fill"])
     for cell, text in zip(table.rows[1].cells, values):
         _write_cell(cell, text)
 
@@ -319,6 +352,7 @@ def _add_heading(
     level: int,
     heading_numbers: list[int] | None = None,
 ) -> Paragraph:
+    font_style = COMPANY_WORD_STYLE["font"]
     if level == 0:
         paragraph = document.add_paragraph(style="Title")
         paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
@@ -326,7 +360,7 @@ def _add_heading(
         paragraph = document.add_paragraph(style=f"Heading {min(level, 3)}")
         if heading_numbers is not None:
             text = _number_heading(text, min(level, 3), heading_numbers)
-    _add_text_run(paragraph, text, font="黑体", bold=True)
+    _add_text_run(paragraph, text, font=font_style["heading"], bold=True)
     return paragraph
 
 
@@ -408,7 +442,7 @@ def _add_pipe_table(document: Document, lines: list[str]) -> None:
                 table.cell(row_index, col_index),
                 value,
                 bold=row_index == 0,
-                shading="D9EAF7" if row_index == 0 else None,
+                shading=COMPANY_WORD_STYLE["brand"]["table_header_fill"] if row_index == 0 else None,
             )
 
     document.add_paragraph()
@@ -440,11 +474,12 @@ def _add_text_run(
     paragraph: Paragraph,
     text: str,
     *,
-    font: str = "宋体",
+    font: str | None = None,
     size: int | None = None,
     bold: bool = False,
 ) -> Run:
     run = paragraph.add_run(text)
+    font = font or COMPANY_WORD_STYLE["font"]["body"]
     run.font.name = font
     run.font.bold = bold
     if size is not None:
