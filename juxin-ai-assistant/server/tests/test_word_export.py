@@ -3,7 +3,29 @@ from io import BytesIO
 from docx import Document
 from docx.oxml.ns import qn
 
+from app.document_templates.registry import get_document_template
+from app.document_templates.structure_validator import strip_duplicate_template_headings
 from app.word_export import COMPANY_WORD_STYLE, render_generation_docx
+
+
+def test_document_template_registry_returns_fallback_for_unknown_code():
+    template = get_document_template("")
+
+    assert template.code == "generic_v1"
+    assert template.name == "通用正式文档模板"
+
+
+def test_structure_validator_strips_duplicate_company_headings():
+    cleaned = strip_duplicate_template_headings(
+        "# 一、任务说明\n\n正文\n\n# 二、基本信息\n\n重复内容\n\n# 三、背景说明\n\n重复背景",
+        fixed_headings=("基本信息", "背景说明"),
+    )
+
+    assert "任务说明" in cleaned
+    assert "# 二、基本信息" not in cleaned
+    assert "# 三、背景说明" not in cleaned
+    assert "重复内容" in cleaned
+    assert "重复背景" in cleaned
 
 
 def test_company_word_style_constants_are_named():
