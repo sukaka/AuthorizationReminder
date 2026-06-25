@@ -6,12 +6,12 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .crypto import ContentCipher
-from .models import GenerationAttachment, Task
+from .models import GenerationAttachment, GenerationRecord, Task
 
 
 MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024
 SUPPORTED_TEXT_SUFFIXES = {".txt", ".md"}
-UNSUPPORTED_TYPE_MESSAGE = "当前仅支持 txt、md、docx、pdf 文件"
+UNSUPPORTED_TYPE_MESSAGE = "当前仅支持 txt、md"
 
 
 def _safe_file_name(raw_name: str | None) -> str:
@@ -29,6 +29,7 @@ def _file_suffix(file_name: str) -> str:
 async def create_attachment(
     db: Session,
     sso_user_id: str,
+    generation_uuid: str,
     task_uuid: str,
     file: UploadFile,
     cipher: ContentCipher,
@@ -39,13 +40,24 @@ async def create_attachment(
     )
     if task is None:
         raise HTTPException(status_code=404, detail="任务不存在或未启用")
+    generation = db.scalar(
+        select(GenerationRecord).where(
+            GenerationRecord.uuid == generation_uuid,
+            GenerationRecord.sso_user_id == sso_user_id,
+            GenerationRecord.status != "DELETED",
+        )
+    )
+    if generation is None:
+        raise HTTPException(status_code=404, detail="生成记录不存在或不可访问")
+    if generation.task_id != task.id:
+        raise HTTPException(status_code=409, detail="附件任务与生成记录不匹配")
 
     file_name = _safe_file_name(file.filename)
     suffix = _file_suffix(file_name)
     if suffix not in SUPPORTED_TEXT_SUFFIXES:
         raise HTTPException(status_code=415, detail=UNSUPPORTED_TYPE_MESSAGE)
 
-    content = await file.read()
+    content = await file.read(MAX_ATTACHMENT_BYTES + 1)
     if len(content) > MAX_ATTACHMENT_BYTES:
         raise HTTPException(status_code=413, detail="附件大小不能超过 20 MB")
 
@@ -63,8 +75,9 @@ async def create_attachment(
         uuid=attachment_uuid,
         sso_user_id=sso_user_id,
         task_id=task.id,
+        generation_id=generation.id,
         file_name=file_name,
-        file_type=suffix.lstrip("."),
+        file_type=(file.content_type or "application/octet-stream")[:128],
         file_size=len(content),
         content_sha256=hashlib.sha256(content).hexdigest(),
         extracted_text_ciphertext=encrypted.ciphertext,

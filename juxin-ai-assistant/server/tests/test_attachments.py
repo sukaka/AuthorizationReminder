@@ -1,37 +1,200 @@
+import pytest
 from sqlalchemy import select
+
+
+def _upload(
+    client,
+    *,
+    task_uuid: str,
+    generation_uuid: str,
+    file_name: str = "meeting.txt",
+    content: bytes = "会议内容".encode("utf-8"),
+    content_type: str = "text/plain",
+):
+    return client.post(
+        "/api/ai/attachments",
+        data={
+            "task_uuid": task_uuid,
+            "generation_uuid": generation_uuid,
+        },
+        files={"file": (file_name, content, content_type)},
+    )
 
 
 def test_upload_txt_attachment_extracts_and_encrypts_text(
     generation_client,
     generation_db,
     seeded_task,
+    completed_generation,
 ):
     from app.models import GenerationAttachment
 
-    response = generation_client.post(
-        "/api/ai/attachments",
-        data={"task_uuid": seeded_task.uuid},
-        files={
-            "file": (
-                "meeting.txt",
-                "会议内容".encode("utf-8"),
-                "text/plain",
-            )
-        },
+    response = _upload(
+        generation_client,
+        task_uuid=seeded_task.uuid,
+        generation_uuid=completed_generation.uuid,
     )
 
     assert response.status_code == 201
     body = response.json()
-    assert body["file_name"] == "meeting.txt"
+    assert body["uuid"]
+    assert body["name"] == "meeting.txt"
+    assert body["type"] == "text/plain"
+    assert body["size"] == len("会议内容".encode("utf-8"))
+    assert body["created_at"]
     assert body["status"] == "READY"
     assert body["extracted_characters"] == 4
 
     attachment = generation_db.scalar(
-        select(GenerationAttachment).where(
-            GenerationAttachment.uuid == body["attachment_uuid"]
-        )
+        select(GenerationAttachment).where(GenerationAttachment.uuid == body["uuid"])
     )
     assert attachment is not None
+    assert attachment.generation_id == completed_generation.id
     assert attachment.file_name == "meeting.txt"
     assert attachment.extracted_text_ciphertext
     assert "会议内容".encode("utf-8") not in attachment.extracted_text_ciphertext
+
+
+def test_upload_md_attachment_is_supported(
+    generation_client,
+    seeded_task,
+    completed_generation,
+):
+    response = _upload(
+        generation_client,
+        task_uuid=seeded_task.uuid,
+        generation_uuid=completed_generation.uuid,
+        file_name="notes.md",
+        content="# 纪要".encode("utf-8"),
+        content_type="text/markdown",
+    )
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["name"] == "notes.md"
+    assert body["type"] == "text/markdown"
+    assert body["extracted_characters"] == 4
+
+
+def test_upload_attachment_requires_ai_assistant_use_permission(
+    monkeypatch,
+    generation_client,
+    seeded_task,
+    completed_generation,
+):
+    from app import main as main_module
+
+    calls: list[str] = []
+
+    async def fake_require_action(action, request, session, settings, *, resource=None):
+        calls.append(action)
+        return session
+
+    monkeypatch.setattr(main_module, "require_action", fake_require_action)
+
+    response = _upload(
+        generation_client,
+        task_uuid=seeded_task.uuid,
+        generation_uuid=completed_generation.uuid,
+    )
+
+    assert response.status_code == 201
+    assert calls == ["ai_assistant:use"]
+
+
+def test_upload_attachment_rejects_generation_owned_by_other_user(
+    client_for_user,
+    records,
+    seeded_task,
+):
+    client = client_for_user("u-1")
+
+    response = _upload(
+        client,
+        task_uuid=seeded_task.uuid,
+        generation_uuid=records.u2.uuid,
+    )
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "生成记录不存在或不可访问"
+
+
+def test_upload_attachment_rejects_task_generation_mismatch(
+    generation_client,
+    generation_db,
+    seeded_task,
+    completed_generation,
+):
+    from app.models import Task
+
+    other_task = Task(
+        assistant_id=seeded_task.assistant_id,
+        code="other-attachment-task",
+        name="其他附件任务",
+        output_format="Markdown",
+        safety_notice="生成内容需人工复核",
+        status="ACTIVE",
+    )
+    generation_db.add(other_task)
+    generation_db.commit()
+
+    response = _upload(
+        generation_client,
+        task_uuid=other_task.uuid,
+        generation_uuid=completed_generation.uuid,
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "附件任务与生成记录不匹配"
+
+
+@pytest.mark.parametrize("file_name", ["report.pdf", "meeting.docx", "image.png"])
+def test_upload_unsupported_attachment_type_returns_clear_error(
+    generation_client,
+    seeded_task,
+    completed_generation,
+    file_name,
+):
+    response = _upload(
+        generation_client,
+        task_uuid=seeded_task.uuid,
+        generation_uuid=completed_generation.uuid,
+        file_name=file_name,
+        content=b"content",
+        content_type="application/octet-stream",
+    )
+
+    assert response.status_code == 415
+    assert response.json()["detail"] == "当前仅支持 txt、md"
+
+
+def test_upload_attachment_rejects_non_utf8_text(
+    generation_client,
+    seeded_task,
+    completed_generation,
+):
+    response = _upload(
+        generation_client,
+        task_uuid=seeded_task.uuid,
+        generation_uuid=completed_generation.uuid,
+        content=b"\xff\xfe",
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == "文本附件必须使用 UTF-8 编码"
+
+
+def test_upload_attachment_rejects_files_larger_than_20mb(
+    generation_client,
+    seeded_task,
+    completed_generation,
+):
+    response = _upload(
+        generation_client,
+        task_uuid=seeded_task.uuid,
+        generation_uuid=completed_generation.uuid,
+        content=b"x" * (20 * 1024 * 1024 + 1),
+    )
+
+    assert response.status_code == 413
+    assert response.json()["detail"] == "附件大小不能超过 20 MB"

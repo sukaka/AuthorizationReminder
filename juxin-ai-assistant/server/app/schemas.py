@@ -168,6 +168,11 @@ class PrepareGenerationOut(BaseModel):
 
 
 class AttachmentOut(BaseModel):
+    uuid: str
+    name: str
+    type: str
+    size: int
+    created_at: datetime
     attachment_uuid: str
     file_name: str
     file_type: str

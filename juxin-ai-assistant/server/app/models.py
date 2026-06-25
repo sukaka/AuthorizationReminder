@@ -221,9 +221,9 @@ class GenerationAttachment(TimestampMixin, Base):
         index=True,
     )
     file_name: Mapped[str] = mapped_column(String(255))
-    file_type: Mapped[str] = mapped_column(String(32))
+    file_type: Mapped[str] = mapped_column(String(128))
     file_size: Mapped[int] = mapped_column(Integer)
-    content_sha256: Mapped[str] = mapped_column(String(64))
+    content_sha256: Mapped[str] = mapped_column(String(64), index=True)
     extracted_text_ciphertext: Mapped[bytes] = mapped_column(LargeBinary)
     extracted_text_nonce: Mapped[bytes] = mapped_column(LargeBinary)
     key_version: Mapped[str] = mapped_column(String(32))

@@ -766,6 +766,7 @@ async def submit_feedback(
 )
 async def upload_attachment(
     task_uuid: Annotated[str, Form()],
+    generation_uuid: Annotated[str, Form()],
     file: Annotated[UploadFile, File()],
     request: Request,
     session_payload: Annotated[SessionPayload, Depends(get_session)],
@@ -782,6 +783,7 @@ async def upload_attachment(
     attachment, extracted_characters = await create_attachment(
         db,
         str(session_payload.user.id),
+        generation_uuid,
         task_uuid,
         file,
         cipher,
@@ -797,6 +799,7 @@ async def upload_attachment(
         entity_uuid=attachment.uuid,
         metadata={
             "attachment_uuid": attachment.uuid,
+            "generation_uuid": generation_uuid,
             "task_uuid": task_uuid,
             "file_name": attachment.file_name,
             "file_type": attachment.file_type,
@@ -807,6 +810,11 @@ async def upload_attachment(
     )
     db.commit()
     return AttachmentOut(
+        uuid=attachment.uuid,
+        name=attachment.file_name,
+        type=attachment.file_type,
+        size=attachment.file_size,
+        created_at=attachment.created_at,
         attachment_uuid=attachment.uuid,
         file_name=attachment.file_name,
         file_type=attachment.file_type,

@@ -56,7 +56,7 @@ def upgrade() -> None:
             nullable=True,
         ),
         sa.Column("file_name", sa.String(length=255), nullable=False),
-        sa.Column("file_type", sa.String(length=32), nullable=False),
+        sa.Column("file_type", sa.String(length=128), nullable=False),
         sa.Column("file_size", sa.Integer(), nullable=False),
         sa.Column("content_sha256", sa.String(length=64), nullable=False),
         sa.Column("extracted_text_ciphertext", sa.LargeBinary(), nullable=False),
@@ -102,6 +102,11 @@ def upgrade() -> None:
             unique=False,
         )
         batch_op.create_index(
+            batch_op.f("ix_ai_generation_attachments_content_sha256"),
+            ["content_sha256"],
+            unique=False,
+        )
+        batch_op.create_index(
             batch_op.f("ix_ai_generation_attachments_sso_user_id"),
             ["sso_user_id"],
             unique=False,
@@ -135,6 +140,7 @@ def downgrade() -> None:
         batch_op.drop_index(batch_op.f("ix_ai_generation_attachments_task_id"))
         batch_op.drop_index(batch_op.f("ix_ai_generation_attachments_status"))
         batch_op.drop_index(batch_op.f("ix_ai_generation_attachments_sso_user_id"))
+        batch_op.drop_index(batch_op.f("ix_ai_generation_attachments_content_sha256"))
         batch_op.drop_index(batch_op.f("ix_ai_generation_attachments_generation_id"))
     op.drop_table("ai_generation_attachments")
 

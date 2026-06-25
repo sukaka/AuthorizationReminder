@@ -384,6 +384,43 @@ def test_0007_adds_task_template_metadata(tmp_path: Path) -> None:
     assert task_columns["document_template_code"]["default"] is None
     assert task_columns["output_schema_json"]["nullable"] is True
     assert task_columns["attachment_policy_json"]["nullable"] is True
+    assert "ai_generation_attachments" in inspector.get_table_names()
+
+    attachment_columns = {
+        column["name"]: column
+        for column in inspector.get_columns("ai_generation_attachments")
+    }
+    assert attachment_columns["file_type"]["type"].length == 128
+    assert {
+        "id",
+        "uuid",
+        "sso_user_id",
+        "task_id",
+        "generation_id",
+        "file_name",
+        "file_type",
+        "file_size",
+        "content_sha256",
+        "extracted_text_ciphertext",
+        "extracted_text_nonce",
+        "key_version",
+        "status",
+        "error_code",
+        "created_at",
+        "updated_at",
+    } == set(attachment_columns)
+    attachment_indexes = {
+        frozenset(index["column_names"])
+        for index in inspector.get_indexes("ai_generation_attachments")
+    }
+    assert {
+        frozenset({"content_sha256"}),
+        frozenset({"generation_id"}),
+        frozenset({"sso_user_id"}),
+        frozenset({"status"}),
+        frozenset({"task_id"}),
+    }.issubset(attachment_indexes)
+
     with engine.connect() as connection:
         assert connection.execute(
             text(
@@ -394,6 +431,7 @@ def test_0007_adds_task_template_metadata(tmp_path: Path) -> None:
 
     command.downgrade(config, "0006_prompt_catalog_rollouts")
     inspector = inspect(engine)
+    assert "ai_generation_attachments" not in inspector.get_table_names()
     task_columns = {column["name"] for column in inspector.get_columns("ai_tasks")}
     assert {
         "document_template_code",

@@ -1,6 +1,7 @@
 from pathlib import Path
+from typing import Annotated
 
-from fastapi import APIRouter, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
@@ -25,8 +26,8 @@ def create_desktop_update_public_router() -> APIRouter:
         channel: str,
         target: str,
         arch: str,
-        db: Session = None,
-        settings: Settings = None,
+        db: Annotated[Session, Depends(get_db)],
+        settings: Annotated[Settings, Depends(get_settings)],
     ):
         if db is None:
             raise HTTPException(500, "Database not available")
@@ -91,7 +92,7 @@ def create_desktop_update_public_router() -> APIRouter:
     async def download_artifact(
         storage_key: str,
         request: Request,
-        settings: Settings = None,
+        settings: Annotated[Settings, Depends(get_settings)],
     ):
         if settings is None:
             settings = get_settings()
