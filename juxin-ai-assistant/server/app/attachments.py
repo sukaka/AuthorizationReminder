@@ -1,6 +1,8 @@
 import hashlib
 import uuid as uuid_lib
+from io import BytesIO
 
+from docx import Document
 from fastapi import HTTPException, UploadFile
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -10,8 +12,9 @@ from .models import GenerationAttachment, Task
 
 
 MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024
-SUPPORTED_TEXT_SUFFIXES = {".txt", ".md"}
-UNSUPPORTED_TYPE_MESSAGE = "当前仅支持 txt、md"
+SUPPORTED_TEXT_SUFFIXES = {".txt", ".md", ".docx", ".pdf"}
+UNSUPPORTED_TYPE_MESSAGE = "当前仅支持 txt、md、docx"
+PDF_UNSUPPORTED_MESSAGE = "PDF 文本提取将在下一步启用；扫描件暂不支持 OCR"
 
 
 def _safe_file_name(raw_name: str | None) -> str:
@@ -26,6 +29,32 @@ def _safe_file_name(raw_name: str | None) -> str:
 def _file_suffix(file_name: str) -> str:
     dot_index = file_name.rfind(".")
     return file_name[dot_index:].lower() if dot_index >= 0 else ""
+
+
+def _extract_text(file_name: str, data: bytes) -> str:
+    suffix = _file_suffix(file_name)
+    if suffix not in SUPPORTED_TEXT_SUFFIXES:
+        raise HTTPException(status_code=415, detail=UNSUPPORTED_TYPE_MESSAGE)
+    if suffix == ".pdf":
+        raise HTTPException(status_code=422, detail=PDF_UNSUPPORTED_MESSAGE)
+    if suffix in {".txt", ".md"}:
+        try:
+            return data.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise HTTPException(
+                status_code=422,
+                detail="文本附件必须使用 UTF-8 编码",
+            ) from exc
+
+    document = Document(BytesIO(data))
+    parts: list[str] = []
+    parts.extend(
+        paragraph.text for paragraph in document.paragraphs if paragraph.text.strip()
+    )
+    for table in document.tables:
+        for row in table.rows:
+            parts.append(" | ".join(cell.text.strip() or "待确认" for cell in row.cells))
+    return "\n".join(parts).strip()
 
 
 async def create_attachment(
@@ -43,18 +72,11 @@ async def create_attachment(
         raise HTTPException(status_code=404, detail="任务不存在或未启用")
 
     file_name = _safe_file_name(file.filename)
-    suffix = _file_suffix(file_name)
-    if suffix not in SUPPORTED_TEXT_SUFFIXES:
-        raise HTTPException(status_code=415, detail=UNSUPPORTED_TYPE_MESSAGE)
-
     content = await file.read(MAX_ATTACHMENT_BYTES + 1)
     if len(content) > MAX_ATTACHMENT_BYTES:
         raise HTTPException(status_code=413, detail="附件大小不能超过 20 MB")
 
-    try:
-        extracted_text = content.decode("utf-8")
-    except UnicodeDecodeError as exc:
-        raise HTTPException(status_code=422, detail="文本附件必须使用 UTF-8 编码") from exc
+    extracted_text = _extract_text(file_name, content)
 
     attachment_uuid = str(uuid_lib.uuid4())
     encrypted = cipher.encrypt_json(

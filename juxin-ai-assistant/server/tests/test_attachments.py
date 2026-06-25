@@ -3,6 +3,7 @@ import os
 from io import BytesIO
 
 import pytest
+from docx import Document
 from sqlalchemy import select
 from starlette.datastructures import Headers
 
@@ -20,6 +21,14 @@ def _upload(
         data={"task_uuid": task_uuid},
         files={"file": (file_name, content, content_type)},
     )
+
+
+def _build_docx_bytes(*, paragraph_text: str = "会议段落") -> bytes:
+    buffer = BytesIO()
+    document = Document()
+    document.add_paragraph(paragraph_text)
+    document.save(buffer)
+    return buffer.getvalue()
 
 
 def test_upload_txt_attachment_extracts_and_encrypts_text(
@@ -68,6 +77,28 @@ def test_upload_md_attachment_is_supported(
     assert body["name"] == "notes.md"
     assert body["type"] == "text/markdown"
     assert body["extracted_characters"] == 4
+
+
+def test_upload_docx_attachment_extracts_paragraph_text(
+    generation_client,
+    seeded_task,
+):
+    text = "会议段落"
+
+    response = _upload(
+        generation_client,
+        task_uuid=seeded_task.uuid,
+        file_name="meeting.docx",
+        content=_build_docx_bytes(paragraph_text=text),
+        content_type=(
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        ),
+    )
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["name"] == "meeting.docx"
+    assert body["extracted_characters"] >= len(text)
 
 
 def test_upload_attachment_requires_ai_assistant_use_permission(
@@ -146,22 +177,36 @@ def test_upload_rolls_back_attachment_when_audit_fails(
     assert generation_db.scalar(select(GenerationAttachment)) is None
 
 
-@pytest.mark.parametrize("file_name", ["report.pdf", "meeting.docx", "image.png"])
 def test_upload_unsupported_attachment_type_returns_clear_error(
     generation_client,
     seeded_task,
-    file_name,
 ):
     response = _upload(
         generation_client,
         task_uuid=seeded_task.uuid,
-        file_name=file_name,
+        file_name="image.png",
         content=b"content",
-        content_type="application/octet-stream",
+        content_type="image/png",
     )
 
     assert response.status_code == 415
-    assert response.json()["detail"] == "当前仅支持 txt、md"
+    assert response.json()["detail"] == "当前仅支持 txt、md、docx"
+
+
+def test_upload_pdf_attachment_returns_clear_not_yet_supported_error(
+    generation_client,
+    seeded_task,
+):
+    response = _upload(
+        generation_client,
+        task_uuid=seeded_task.uuid,
+        file_name="report.pdf",
+        content=b"%PDF-1.7",
+        content_type="application/pdf",
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == "PDF 文本提取将在下一步启用；扫描件暂不支持 OCR"
 
 
 def test_upload_attachment_rejects_non_utf8_text(
