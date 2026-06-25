@@ -2,6 +2,7 @@ from app.context_builder import (
     ContextSection,
     build_messages,
     build_untrusted_content_block,
+    estimate_context_usage,
 )
 
 
@@ -43,3 +44,11 @@ def test_build_messages_preserves_company_rule_order():
     assert messages[0]["content"].index("公司安全规则") < messages[0]["content"].index("任务 Prompt")
     assert messages[1]["role"] == "user"
     assert "员工输入" in messages[1]["content"]
+
+
+def test_estimate_context_usage_returns_chars_and_rough_tokens():
+    usage = estimate_context_usage(["一二三四", "abcdef"])
+
+    assert usage["characters"] == 10
+    assert usage["estimated_tokens"] >= 3
+    assert usage["estimator"] == "rough_chars_div_4"

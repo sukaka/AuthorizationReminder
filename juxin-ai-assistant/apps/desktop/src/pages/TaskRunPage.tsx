@@ -32,6 +32,11 @@ type PreparedGeneration = {
   messages: Array<{ role: string; content: string }>;
   temperature: number;
   safety_notice: string;
+  context_usage?: {
+    characters: number;
+    estimated_tokens: number;
+    estimator: string;
+  };
 };
 
 type SensitiveConfirmation = {
@@ -99,6 +104,7 @@ export function TaskRunPage({ task, userId }: { task: TaskDefinition; userId?: s
   const [exportMessage, setExportMessage] = useState('');
   const [generationUuid, setGenerationUuid] = useState('');
   const [activeGenerationUuid, setActiveGenerationUuid] = useState('');
+  const [contextUsageText, setContextUsageText] = useState('');
   const [exporting, setExporting] = useState(false);
 
   useEffect(() => {
@@ -149,6 +155,11 @@ export function TaskRunPage({ task, userId }: { task: TaskDefinition; userId?: s
     if (!selectedProfile) throw new Error('请先配置一个本地模型');
     setStatus('generating');
     setOutput('');
+    setContextUsageText(
+      prepared.context_usage
+        ? `上下文约 ${prepared.context_usage.estimated_tokens} tokens`
+        : '',
+    );
     setActiveGenerationUuid(prepared.generation_uuid);
     const currentRequestId = crypto.randomUUID();
     setRequestId(currentRequestId);
@@ -429,6 +440,7 @@ export function TaskRunPage({ task, userId }: { task: TaskDefinition; userId?: s
 
         <article className="result-panel">
           <span className="eyebrow">输出预览</span>
+          {contextUsageText ? <p className="context-usage">{contextUsageText}</p> : null}
           {output ? <pre>{output}</pre> : <p>完成左侧信息后，结果会在这里流式呈现。</p>}
           {syncMessage ? <p className="sync-status" role="status">{syncMessage}</p> : null}
           {exportMessage ? <p className="sync-status" role="status">{exportMessage}</p> : null}

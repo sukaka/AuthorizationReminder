@@ -68,6 +68,9 @@ def test_prepare_returns_provider_neutral_messages_and_stores_ciphertext(
     assert record.prompt_external_id == 7
     assert record.prompt_version == 3
     assert record.completion_token_hash != payload["completion_token"].encode()
+    assert payload["context_usage"]["characters"] > 0
+    assert payload["context_usage"]["estimated_tokens"] > 0
+    assert payload["context_usage"]["estimator"] == "rough_chars_div_4"
 
 
 def test_prepare_wraps_employee_input_as_untrusted_material(

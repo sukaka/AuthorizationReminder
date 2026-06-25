@@ -15,6 +15,7 @@ from .context_builder import (
     ContextSection,
     build_messages,
     build_untrusted_content_block,
+    estimate_context_usage,
 )
 from .crypto import ContentCipher
 from .document_governance import render_document_governance
@@ -47,6 +48,7 @@ class PreparedGeneration:
     messages: list[dict[str, str]]
     temperature: float
     safety_notice: str
+    context_usage: dict[str, int | str]
 
 
 def _is_trusted_quality_rule(
@@ -286,6 +288,11 @@ async def prepare_generation(
                 content=f"{QUALITY_RULE_SOURCE_NOTICE}\n{rendered_quality_rules}",
             )
         )
+    messages = build_messages(sections)
+    context_usage = estimate_context_usage([
+        message["content"]
+        for message in messages
+    ])
 
     generation_uuid = str(uuid_lib.uuid4())
     completion_token = secrets.token_urlsafe(32)
@@ -321,9 +328,10 @@ async def prepare_generation(
         PreparedGeneration(
             generation_uuid=generation_uuid,
             completion_token=completion_token,
-            messages=build_messages(sections),
+            messages=messages,
             temperature=0.3,
             safety_notice=task.safety_notice,
+            context_usage=context_usage,
         ),
         record,
     )

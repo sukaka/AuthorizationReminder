@@ -109,6 +109,11 @@ it('prepares provider-neutral messages, invokes Tauri and completes history', as
           messages: [{ role: 'user', content: '总结本周工作' }],
           temperature: 0.3,
           safety_notice: '需人工复核',
+          context_usage: {
+            characters: 1236,
+            estimated_tokens: 309,
+            estimator: 'rough_chars_div_4',
+          },
         },
         { status: 201 },
       ),
@@ -143,6 +148,7 @@ it('prepares provider-neutral messages, invokes Tauri and completes history', as
   await userEvent.click(screen.getByRole('button', { name: '开始生成' }));
 
   expect(await screen.findByText('# 本周总结')).toBeInTheDocument();
+  expect(screen.getByText('上下文约 309 tokens')).toBeInTheDocument();
   expect(invokeMock).toHaveBeenCalledWith(
     'model_generate',
     expect.objectContaining({

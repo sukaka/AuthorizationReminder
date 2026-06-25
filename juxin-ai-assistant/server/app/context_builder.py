@@ -41,3 +41,13 @@ def build_messages(sections: list[ContextSection]) -> list[dict[str, str]]:
     if user_parts:
         messages.append({"role": "user", "content": "\n\n".join(user_parts)})
     return messages
+
+
+def estimate_context_usage(contents: list[str]) -> dict[str, int | str]:
+    characters = sum(len(item) for item in contents)
+    estimated_tokens = max(1, (characters + 3) // 4)
+    return {
+        "characters": characters,
+        "estimated_tokens": estimated_tokens,
+        "estimator": "rough_chars_div_4",
+    }

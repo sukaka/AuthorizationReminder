@@ -114,12 +114,19 @@ class MessageOut(BaseModel):
     content: str
 
 
+class ContextUsageOut(BaseModel):
+    characters: int
+    estimated_tokens: int
+    estimator: str
+
+
 class PrepareGenerationOut(BaseModel):
     generation_uuid: str
     completion_token: str
     messages: list[MessageOut]
     temperature: float = 0.3
     safety_notice: str
+    context_usage: ContextUsageOut
 
 
 class CompleteGenerationIn(BaseModel):
