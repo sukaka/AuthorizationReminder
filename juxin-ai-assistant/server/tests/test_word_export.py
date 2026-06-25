@@ -79,6 +79,16 @@ def test_work_plan_template_renders_without_duplicate_fixed_headings():
     assert any(heading.endswith("工作目标与范围") for heading in headings)
 
 
+def test_work_plan_template_preserves_content_under_canonical_heading():
+    template = get_document_template("work_plan_v1")
+
+    normalized = template.normalize_output("# 二、基本信息\n\n客户名称：A")
+
+    assert "# 基本信息\n\n客户名称：A" in normalized
+    assert normalized.index("# 基本信息") < normalized.index("客户名称：A")
+    assert normalized.index("客户名称：A") < normalized.index("# 背景说明")
+
+
 def test_meeting_minutes_template_renders_action_item_table():
     template = get_document_template("meeting_minutes_v1")
     payload = DocumentRenderPayload(
@@ -98,6 +108,21 @@ def test_meeting_minutes_template_renders_action_item_table():
     ]
 
     assert ["序号", "事项", "责任人", "截止时间", "状态", "备注"] in table_texts
+
+
+def test_meeting_minutes_template_places_default_table_in_action_item_section():
+    template = get_document_template("meeting_minutes_v1")
+
+    normalized = template.normalize_output("会议讨论了项目进度。")
+
+    assert normalized.index("# 待办事项表") < normalized.index("| 序号 | 事项 | 责任人 | 截止时间 | 状态 | 备注 |")
+    assert normalized.index("| 序号 | 事项 | 责任人 | 截止时间 | 状态 | 备注 |") < normalized.index("# 风险与分歧")
+
+
+def test_project_report_template_is_registered():
+    template = get_document_template("project_report_v1")
+
+    assert template.name == "项目汇报模板"
 
 
 def test_company_word_style_constants_are_named():

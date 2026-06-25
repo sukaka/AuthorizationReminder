@@ -6,10 +6,10 @@ from .base import GenericDocumentTemplate
 from .structure_validator import (
     HEADING_PATTERN,
     normalize_heading_text,
-    strip_duplicate_template_headings,
 )
 
 
+ACTION_ITEM_HEADER = "| 序号 | 事项 | 责任人 | 截止时间 | 状态 | 备注 |"
 ACTION_ITEM_TABLE = """| 序号 | 事项 | 责任人 | 截止时间 | 状态 | 备注 |
 |---|---|---|---|---|---|
 | 1 | 待确认 | 待确认 | 待确认 | 待确认 | 待确认 |"""
@@ -18,32 +18,77 @@ ACTION_ITEM_TABLE = """| 序号 | 事项 | 责任人 | 截止时间 | 状态 | �
 @dataclass(frozen=True)
 class FixedStructureTemplate(GenericDocumentTemplate):
     def normalize_output(self, output: str) -> str:
-        cleaned = strip_duplicate_template_headings(
-            output,
-            fixed_headings=self.fixed_headings,
-        )
-        present_headings = {
-            normalize_heading_text(match.group(2))
-            for line in cleaned.splitlines()
-            if (match := HEADING_PATTERN.match(line.strip()))
-        }
-        sections = [
-            f"# {heading}\n\n待确认"
+        preserved_lines, sections = self._parse_sections(output)
+        sections = self._normalize_sections(sections)
+        return self._build_output(preserved_lines, sections)
+
+    def _parse_sections(self, output: str) -> tuple[list[str], dict[str, list[str]]]:
+        fixed_by_normalized_heading = {
+            normalize_heading_text(heading): heading
             for heading in self.fixed_headings
-            if normalize_heading_text(heading) not in present_headings
+        }
+        sections = {heading: [] for heading in self.fixed_headings}
+        preserved_lines: list[str] = []
+        current_fixed_heading: str | None = None
+
+        for line in output.splitlines():
+            match = HEADING_PATTERN.match(line.strip())
+            if match:
+                fixed_heading = fixed_by_normalized_heading.get(
+                    normalize_heading_text(match.group(2))
+                )
+                if fixed_heading:
+                    current_fixed_heading = fixed_heading
+                    continue
+
+                current_fixed_heading = None
+                preserved_lines.append(line)
+                continue
+
+            if current_fixed_heading:
+                sections[current_fixed_heading].append(line)
+            else:
+                preserved_lines.append(line)
+
+        return preserved_lines, sections
+
+    def _normalize_sections(self, sections: dict[str, list[str]]) -> dict[str, list[str]]:
+        return sections
+
+    def _build_output(self, preserved_lines: list[str], sections: dict[str, list[str]]) -> str:
+        preserved = "\n".join(_strip_outer_blank_lines(preserved_lines)).strip()
+        sections = [
+            f"# {heading}\n\n{_section_text(sections[heading])}"
+            for heading in self.fixed_headings
         ]
 
-        return "\n\n".join(part for part in (cleaned, *sections) if part).strip()
+        return "\n\n".join(part for part in (preserved, *sections) if part).strip()
 
 
 @dataclass(frozen=True)
 class MeetingMinutesTemplate(FixedStructureTemplate):
-    def normalize_output(self, output: str) -> str:
-        normalized = super().normalize_output(output)
-        if "| 序号 | 事项 | 责任人 | 截止时间 | 状态 | 备注 |" in normalized:
-            return normalized
+    def _normalize_sections(self, sections: dict[str, list[str]]) -> dict[str, list[str]]:
+        action_item_lines = sections["待办事项表"]
+        if ACTION_ITEM_HEADER not in "\n".join(action_item_lines):
+            sections = {heading: list(lines) for heading, lines in sections.items()}
+            sections["待办事项表"] = ACTION_ITEM_TABLE.splitlines()
 
-        return f"{normalized}\n\n{ACTION_ITEM_TABLE}".strip()
+        return sections
+
+
+def _section_text(lines: list[str]) -> str:
+    text = "\n".join(_strip_outer_blank_lines(lines)).strip()
+    return text or "待确认"
+
+
+def _strip_outer_blank_lines(lines: list[str]) -> list[str]:
+    start = 0
+    end = len(lines)
+    while start < end and not lines[start].strip():
+        start += 1
+    while end > start and not lines[end - 1].strip():
+        end -= 1
+    return lines[start:end]
 
 
 WORK_PLAN_TEMPLATE = FixedStructureTemplate(
