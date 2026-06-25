@@ -872,6 +872,62 @@ textarea:focus-visible {
   resize: vertical;
 }
 
+.attachment-upload {
+  margin-top: 17px;
+  padding: 14px;
+  display: grid;
+  gap: 12px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--surface-elevated) 70%, transparent);
+}
+
+.attachment-upload label {
+  display: grid;
+  gap: 8px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.attachment-upload small,
+.attachment-status {
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.attachment-upload input {
+  width: 100%;
+  color: var(--text-secondary);
+}
+
+.attachment-upload ul {
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+  list-style: none;
+}
+
+.attachment-upload li {
+  padding: 10px 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border-radius: 10px;
+  background: var(--surface-elevated);
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.attachment-upload li strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--text-primary);
+}
+
 .primary-action {
   margin-top: 22px;
   padding: 11px 17px;

@@ -9,6 +9,7 @@ import {
   DynamicTaskForm,
   type DynamicFieldDefinition,
 } from '../components/DynamicTaskForm';
+import { AttachmentUpload } from '../components/AttachmentUpload';
 import { FeedbackPanel } from '../components/FeedbackPanel';
 import { OutputReader } from '../components/OutputReader';
 import { deleteDraft, loadDraft, saveDraft } from '../local/drafts';
@@ -19,6 +20,7 @@ import {
   downloadGenerationWord,
   reportLocalModelAuditEvent,
   reportGenerationFailure,
+  type AttachmentPayload,
   type LocalModelAuditEvent,
   type TaskPayload,
 } from '../api/client';
@@ -131,6 +133,7 @@ export function TaskRunPage({ task, userId }: { task: TaskDefinition; userId?: s
   const [activeGenerationUuid, setActiveGenerationUuid] = useState('');
   const [contextUsageText, setContextUsageText] = useState('');
   const [exporting, setExporting] = useState(false);
+  const [attachments, setAttachments] = useState<AttachmentPayload[]>([]);
 
   useEffect(() => {
     if (!desktopAvailable) return;
@@ -283,6 +286,7 @@ export function TaskRunPage({ task, userId }: { task: TaskDefinition; userId?: s
         body: JSON.stringify({
           task_uuid: task.uuid,
           inputs: values,
+          attachment_uuids: attachments.map((attachment) => attachment.attachment_uuid),
           ...(confirmationDigest
             ? { sensitive_confirmation_digest: confirmationDigest }
             : {}),
@@ -439,6 +443,7 @@ export function TaskRunPage({ task, userId }: { task: TaskDefinition; userId?: s
           </div>
 
           <DynamicTaskForm fields={task.fields} onChange={setValue} values={values} />
+          <AttachmentUpload taskUuid={task.uuid} onChange={setAttachments} />
 
           {error && <p className="form-error" role="alert">{error}</p>}
           <button

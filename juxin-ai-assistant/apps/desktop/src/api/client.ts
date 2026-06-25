@@ -96,6 +96,15 @@ export type HomePayload = {
   safety_reminders: string[];
 };
 
+export type AttachmentPayload = {
+  attachment_uuid: string;
+  file_name: string;
+  file_type: string;
+  file_size: number;
+  status: string;
+  extracted_characters: number;
+};
+
 export type IntentCandidatePayload = {
   task_uuid: string;
   task_code: string;
@@ -202,6 +211,40 @@ export async function routeIntent(query: string): Promise<{
     }),
     'INTENT_ROUTE_FAILED',
   );
+}
+
+function normalizeAttachmentPayload(payload: unknown): AttachmentPayload {
+  const value = payload as Partial<AttachmentPayload> & {
+    uuid?: string;
+    name?: string;
+    type?: string;
+    size?: number;
+  };
+  return {
+    attachment_uuid: String(value.attachment_uuid ?? value.uuid ?? ''),
+    file_name: String(value.file_name ?? value.name ?? ''),
+    file_type: String(value.file_type ?? value.type ?? ''),
+    file_size: Number(value.file_size ?? value.size ?? 0),
+    status: String(value.status ?? ''),
+    extracted_characters: Number(value.extracted_characters ?? 0),
+  };
+}
+
+export async function uploadTaskAttachment(
+  taskUuid: string,
+  file: File,
+): Promise<AttachmentPayload> {
+  const form = new FormData();
+  form.append('task_uuid', taskUuid);
+  form.append('file', file);
+  return normalizeAttachmentPayload(await readJson(
+    await fetch('/api/ai/attachments', {
+      method: 'POST',
+      credentials: 'include',
+      body: form,
+    }),
+    'ATTACHMENT_UPLOAD_FAILED',
+  ));
 }
 
 export async function reportGenerationFailure(

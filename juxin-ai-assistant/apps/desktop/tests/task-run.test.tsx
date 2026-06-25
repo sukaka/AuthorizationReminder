@@ -179,6 +179,57 @@ it('prepares provider-neutral messages, invokes Tauri and completes history', as
   );
 });
 
+it('uploads reference material and includes attachment ids in prepare request', async () => {
+  const prepareRequest = vi.fn();
+  server.use(
+    http.post('/api/ai/attachments', () => HttpResponse.json({
+      attachment_uuid: 'att-1',
+      file_name: 'meeting.txt',
+      file_type: 'text/plain',
+      file_size: 12,
+      status: 'READY',
+      extracted_characters: 6,
+    }, { status: 201 })),
+    http.post('/api/ai/generations/prepare', async ({ request }) => {
+      prepareRequest(await request.json());
+      return HttpResponse.json({
+        generation_uuid: 'gen-attachment',
+        completion_token: 'complete-attachment',
+        messages: [{ role: 'user', content: '生成会议纪要' }],
+        temperature: 0.3,
+        safety_notice: '需人工复核',
+        context_usage: { characters: 10, estimated_tokens: 3, estimator: 'rough_chars_div_4' },
+      }, { status: 201 });
+    }),
+    http.post('/api/ai/generations/gen-attachment/complete', () =>
+      HttpResponse.json({ generation_uuid: 'gen-attachment', status: 'COMPLETED' })),
+  );
+  invokeMock
+    .mockResolvedValueOnce([{
+      id: 'profile-1',
+      displayName: '公司模型',
+      baseUrl: 'https://model.example/v1/',
+      modelId: 'example-model',
+      temperature: 0.3,
+      timeoutSeconds: 60,
+      isDefault: true,
+      hasApiKey: true,
+    }])
+    .mockResolvedValueOnce({ output: '会议纪要', latencyMs: 10, usage: {} });
+
+  render(<TaskRunPage task={workSummaryTask} />);
+  await userEvent.type(screen.getByLabelText('工作内容'), '生成会议纪要');
+  const file = new File(['会议内容'], 'meeting.txt', { type: 'text/plain' });
+  await userEvent.upload(screen.getByLabelText('上传参考材料'), file);
+  expect(await screen.findByText('meeting.txt')).toBeInTheDocument();
+  await userEvent.click(screen.getByRole('button', { name: '开始生成' }));
+
+  await waitFor(() => expect(prepareRequest).toHaveBeenCalled());
+  expect(prepareRequest).toHaveBeenCalledWith(expect.objectContaining({
+    attachment_uuids: ['att-1'],
+  }));
+});
+
 it('emits body-free local model lifecycle audit events', async () => {
   const auditRequest = vi.fn();
   server.use(
