@@ -42,6 +42,48 @@ def test_owner_downloads_completed_generation_word(client_for_user, records) -> 
     assert response.content.startswith(b"PK")
 
 
+def test_export_uses_task_document_template(
+    client_for_user,
+    generation_db,
+    records,
+    seeded_task,
+    monkeypatch,
+) -> None:
+    seeded_task.document_template_code = "meeting_minutes_v1"
+    generation_db.commit()
+    captured = {}
+
+    def fake_get_template(template_code):
+        captured["template_code"] = template_code
+
+        class FakeTemplate:
+            code = "meeting_minutes_v1"
+            name = "Fake"
+
+            def render_docx(self, payload):
+                captured["title"] = payload.title
+                return b"docx"
+
+        return FakeTemplate()
+
+    import app.main as main_module
+
+    monkeypatch.setattr(
+        main_module,
+        "get_document_template",
+        fake_get_template,
+        raising=False,
+    )
+
+    response = client_for_user("u-1").get(
+        f"/api/ai/generations/{records.u1.uuid}/export.docx"
+    )
+
+    assert response.status_code == 200
+    assert captured["template_code"] == "meeting_minutes_v1"
+    assert captured["title"] == seeded_task.name
+
+
 def test_other_user_cannot_export_generation(client_for_user, records) -> None:
     response = client_for_user("u-2").get(
         f"/api/ai/generations/{records.u1.uuid}/export.docx"
@@ -102,10 +144,17 @@ def test_generation_export_failure_writes_body_free_audit(
     seeded_task,
     monkeypatch,
 ) -> None:
-    def fail_render(**_kwargs):
-        raise RuntimeError("docx renderer saw 用户一内容 的生成结果")
+    class FailingTemplate:
+        code = "generic_v1"
+        name = "Failing"
 
-    monkeypatch.setattr("app.main.render_generation_docx", fail_render)
+        def render_docx(self, _payload):
+            raise RuntimeError("docx renderer saw 用户一内容 的生成结果")
+
+    monkeypatch.setattr(
+        "app.main.get_document_template",
+        lambda _template_code: FailingTemplate(),
+    )
 
     response = client_for_user("u-1").get(
         f"/api/ai/generations/{records.u1.uuid}/export.docx"

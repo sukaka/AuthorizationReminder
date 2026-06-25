@@ -24,6 +24,8 @@ from .config import Settings, get_settings
 from .crypto import ContentCipher
 from .database import get_db
 from .desktop_bootstrap import DesktopBootstrap, build_desktop_bootstrap
+from .document_templates.base import DocumentRenderPayload
+from .document_templates.registry import get_document_template
 from .feedback_service import create_feedback
 from .generation_service import complete_generation, fail_generation, prepare_generation
 from .history_service import (
@@ -74,7 +76,6 @@ from .schemas import (
     TaskOut,
 )
 from .sensitive import SensitiveDetector, derive_confirmation_key
-from .word_export import render_generation_docx
 
 
 settings = get_settings()
@@ -889,13 +890,19 @@ async def export_generation_word(
         cipher,
     )
     try:
-        document = render_generation_docx(
-            title=str(payload["task_name"]),
-            task_name=str(payload["task_name"]),
-            department=str(payload["department"]),
-            author=str(payload["author"]),
-            output=str(payload["output"]),
-            version=str(payload["version"]),
+        template = get_document_template(
+            str(payload.get("document_template_code") or "")
+        )
+        document = template.render_docx(
+            DocumentRenderPayload(
+                title=str(payload["task_name"]),
+                task_name=str(payload["task_name"]),
+                department=str(payload["department"]),
+                author=str(payload["author"]),
+                output=str(payload["output"]),
+                version=str(payload["version"]),
+                inputs=dict(payload.get("input") or {}),
+            )
         )
     except Exception as exc:
         write_request_audit(

@@ -187,6 +187,7 @@ def load_generation_export_payload(
     return {
         "task_name": task.name,
         "task_uuid": task.uuid,
+        "document_template_code": task.document_template_code,
         "department": record.department_snapshot,
         "author": record.username_snapshot,
         "output": str(output),
