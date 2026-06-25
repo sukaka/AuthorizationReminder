@@ -11,6 +11,7 @@ from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from .attachments import load_owned_attachment_texts
 from .context_builder import (
     ContextSection,
     build_messages,
@@ -238,6 +239,13 @@ async def prepare_generation(
         content="\n".join(input_lines),
         source="user_input",
     )
+    attachment_texts = load_owned_attachment_texts(
+        db,
+        str(session.user.id),
+        task.id,
+        request.attachment_uuids,
+        cipher,
+    )
     sections = [
         ContextSection(
             kind="system",
@@ -256,6 +264,22 @@ async def prepare_generation(
         ),
         ContextSection(kind="user", title="员工输入", content=user_input_block),
     ]
+    if attachment_texts:
+        attachment_content = "\n\n".join(
+            f"[{record.file_name}]\n{text}"
+            for record, text in attachment_texts
+        )
+        sections.append(
+            ContextSection(
+                kind="user",
+                title="上传材料",
+                content=build_untrusted_content_block(
+                    title="上传材料",
+                    content=attachment_content,
+                    source="attachment:upload",
+                ),
+            )
+        )
     if reference_items:
         reference_content = "\n\n".join(
             f"[{item.title}]\n{item.content}"
@@ -327,6 +351,8 @@ async def prepare_generation(
     )
     db.add(record)
     db.flush()
+    for attachment, _text in attachment_texts:
+        attachment.generation_id = record.id
     return (
         PreparedGeneration(
             generation_uuid=generation_uuid,

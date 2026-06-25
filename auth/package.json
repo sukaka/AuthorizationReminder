@@ -1,6 +1,6 @@
 {
   "name": "juxin-auth",
-  "version": "5.101.2",
+  "version": "5.102.0",
   "private": true,
   "main": "index.js",
   "dependencies": {

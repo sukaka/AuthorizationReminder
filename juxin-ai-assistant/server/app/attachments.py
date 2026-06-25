@@ -5,7 +5,7 @@ from fastapi import HTTPException, UploadFile
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from .crypto import ContentCipher
+from .crypto import ContentCipher, EncryptedPayload
 from .models import GenerationAttachment, Task
 
 
@@ -79,3 +79,39 @@ async def create_attachment(
     db.flush()
     db.refresh(attachment)
     return attachment, len(extracted_text)
+
+
+def load_owned_attachment_texts(
+    db: Session,
+    sso_user_id: str,
+    task_id: int,
+    attachment_uuids: list[str],
+    cipher: ContentCipher,
+) -> list[tuple[GenerationAttachment, str]]:
+    if not attachment_uuids:
+        return []
+
+    records = list(db.scalars(
+        select(GenerationAttachment).where(
+            GenerationAttachment.uuid.in_(attachment_uuids),
+            GenerationAttachment.sso_user_id == sso_user_id,
+            GenerationAttachment.task_id == task_id,
+            GenerationAttachment.status == "READY",
+        )
+    ))
+    records_by_uuid = {record.uuid: record for record in records}
+    if len(records_by_uuid) != len(attachment_uuids):
+        raise HTTPException(status_code=404, detail="附件不存在或无权访问")
+
+    loaded: list[tuple[GenerationAttachment, str]] = []
+    for attachment_uuid in attachment_uuids:
+        record = records_by_uuid[attachment_uuid]
+        payload = cipher.decrypt_json(
+            EncryptedPayload(
+                record.extracted_text_ciphertext,
+                record.extracted_text_nonce,
+            ),
+            record.uuid.encode(),
+        )
+        loaded.append((record, str(payload.get("text", ""))))
+    return loaded
