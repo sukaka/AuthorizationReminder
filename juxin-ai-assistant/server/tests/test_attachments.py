@@ -51,6 +51,37 @@ def _build_zip_bytes(entries: dict[str, bytes]) -> bytes:
     return buffer.getvalue()
 
 
+def _build_docx_package_bytes(document_xml: bytes) -> bytes:
+    return _build_zip_bytes({
+        "[Content_Types].xml": b"""<?xml version="1.0" encoding="UTF-8"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
+</Types>""",
+        "_rels/.rels": b"""<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>
+</Relationships>""",
+        "word/document.xml": document_xml,
+    })
+
+
+def _load_attachment_text(generation_db, seeded_task, attachment_uuid: str) -> str:
+    from app.attachments import load_owned_attachment_texts
+    from app.crypto import ContentCipher
+
+    cipher = ContentCipher(os.environ["CONTENT_ENCRYPTION_KEY"])
+    _, extracted_text = load_owned_attachment_texts(
+        generation_db,
+        "dev",
+        seeded_task.id,
+        [attachment_uuid],
+        cipher,
+    )[0]
+    return extracted_text
+
+
 def test_upload_txt_attachment_extracts_and_encrypts_text(
     generation_client,
     generation_db,
@@ -101,6 +132,7 @@ def test_upload_md_attachment_is_supported(
 
 def test_upload_docx_attachment_extracts_paragraph_text(
     generation_client,
+    generation_db,
     seeded_task,
 ):
     text = "会议段落"
@@ -119,6 +151,7 @@ def test_upload_docx_attachment_extracts_paragraph_text(
     body = response.json()
     assert body["name"] == "meeting.docx"
     assert body["extracted_characters"] >= len(text)
+    assert text in _load_attachment_text(generation_db, seeded_task, body["uuid"])
 
 
 def test_upload_docx_attachment_extracts_table_text(
@@ -126,9 +159,6 @@ def test_upload_docx_attachment_extracts_table_text(
     generation_db,
     seeded_task,
 ):
-    from app.attachments import load_owned_attachment_texts
-    from app.crypto import ContentCipher
-
     response = _upload(
         generation_client,
         task_uuid=seeded_task.uuid,
@@ -141,14 +171,11 @@ def test_upload_docx_attachment_extracts_table_text(
 
     assert response.status_code == 201
 
-    cipher = ContentCipher(os.environ["CONTENT_ENCRYPTION_KEY"])
-    _, extracted_text = load_owned_attachment_texts(
+    extracted_text = _load_attachment_text(
         generation_db,
-        "dev",
-        seeded_task.id,
-        [response.json()["uuid"]],
-        cipher,
-    )[0]
+        seeded_task,
+        response.json()["uuid"],
+    )
     assert "事项" in extracted_text
     assert "负责人" in extracted_text
     assert "项目甲" in extracted_text
@@ -164,6 +191,30 @@ def test_upload_bad_docx_attachment_returns_clear_parse_error(
         task_uuid=seeded_task.uuid,
         file_name="bad.docx",
         content=b"not a docx",
+        content_type=(
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        ),
+    )
+
+    assert response.status_code == 422
+    assert "DOCX" in response.text
+    assert "无法解析" in response.text
+
+
+def test_upload_docx_with_invalid_document_body_returns_clear_parse_error(
+    generation_client,
+    seeded_task,
+):
+    response = _upload(
+        generation_client,
+        task_uuid=seeded_task.uuid,
+        file_name="invalid-body.docx",
+        content=_build_docx_package_bytes(
+            b"""<?xml version="1.0" encoding="UTF-8"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:notBody/>
+</w:document>"""
+        ),
         content_type=(
             "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
         ),

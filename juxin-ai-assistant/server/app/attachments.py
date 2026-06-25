@@ -1,12 +1,9 @@
 import hashlib
 import uuid as uuid_lib
 from io import BytesIO
-from zipfile import BadZipFile
 
 from docx import Document
-from docx.opc.exceptions import PackageNotFoundError
 from fastapi import HTTPException, UploadFile
-from lxml.etree import XMLSyntaxError
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -34,6 +31,28 @@ def _file_suffix(file_name: str) -> str:
     return file_name[dot_index:].lower() if dot_index >= 0 else ""
 
 
+def _parse_docx_text(data: bytes) -> str:
+    try:
+        document = Document(BytesIO(data))
+        parts: list[str] = []
+        parts.extend(
+            paragraph.text
+            for paragraph in document.paragraphs
+            if paragraph.text.strip()
+        )
+        for table in document.tables:
+            for row in table.rows:
+                parts.append(
+                    " | ".join(
+                        cell.text.strip() or "待确认"
+                        for cell in row.cells
+                    )
+                )
+        return "\n".join(parts).strip()
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail="DOCX 文件无法解析") from exc
+
+
 def _extract_text(file_name: str, data: bytes) -> str:
     suffix = _file_suffix(file_name)
     if suffix not in SUPPORTED_TEXT_SUFFIXES:
@@ -49,19 +68,7 @@ def _extract_text(file_name: str, data: bytes) -> str:
                 detail="文本附件必须使用 UTF-8 编码",
             ) from exc
 
-    try:
-        document = Document(BytesIO(data))
-    except (BadZipFile, KeyError, PackageNotFoundError, XMLSyntaxError) as exc:
-        raise HTTPException(status_code=422, detail="DOCX 文件无法解析") from exc
-
-    parts: list[str] = []
-    parts.extend(
-        paragraph.text for paragraph in document.paragraphs if paragraph.text.strip()
-    )
-    for table in document.tables:
-        for row in table.rows:
-            parts.append(" | ".join(cell.text.strip() or "待确认" for cell in row.cells))
-    return "\n".join(parts).strip()
+    return _parse_docx_text(data)
 
 
 async def create_attachment(
