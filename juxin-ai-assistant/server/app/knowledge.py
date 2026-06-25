@@ -14,6 +14,9 @@ class RetrievedKnowledge:
     content: str
     score: int
     priority: int
+    matched_keywords: tuple[str, ...]
+    clipped: bool
+    original_characters: int
     tags: tuple[str, ...]
     created_by: str
     updated_by: str
@@ -29,6 +32,7 @@ class KnowledgeRetriever:
         task_id: int,
         inputs: dict[str, object],
         limit: int | None = 8,
+        max_chars: int | None = None,
     ) -> list[RetrievedKnowledge]:
         query_text = " ".join(str(value) for value in inputs.values()).lower()
         rows = db.scalars(
@@ -54,7 +58,12 @@ class KnowledgeRetriever:
                 for item in row.keywords_json or []
                 if str(item).strip()
             ]
-            score = sum(keyword in query_text for keyword in keywords)
+            matched_keywords = tuple(
+                keyword
+                for keyword in keywords
+                if keyword in query_text
+            )
+            score = len(matched_keywords)
             payload = self._cipher.decrypt_json(
                 EncryptedPayload(
                     ciphertext=row.content_ciphertext,
@@ -62,13 +71,22 @@ class KnowledgeRetriever:
                 ),
                 row.uuid.encode(),
             )
+            content = str(payload.get("content", ""))
+            original_characters = len(content)
+            clipped = False
+            if max_chars is not None and max_chars >= 0 and len(content) > max_chars:
+                content = content[:max_chars]
+                clipped = True
             ranked.append(
                 RetrievedKnowledge(
                     uuid=row.uuid,
                     title=row.title,
-                    content=str(payload.get("content", "")),
+                    content=content,
                     score=score,
                     priority=row.priority,
+                    matched_keywords=matched_keywords,
+                    clipped=clipped,
+                    original_characters=original_characters,
                     tags=tuple(tags),
                     created_by=row.created_by,
                     updated_by=row.updated_by,

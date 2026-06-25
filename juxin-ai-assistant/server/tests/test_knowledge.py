@@ -96,6 +96,70 @@ def test_retrieval_filters_active_task_links_and_orders_priority(
     assert [item.content for item in results] == ["高优先级", "低优先级"]
 
 
+def test_retrieval_returns_explanation_for_matched_keywords(
+    generation_db,
+    seeded_task,
+) -> None:
+    cipher = ContentCipher(
+        "a2tra2tra2tra2tra2tra2tra2tra2tra2tra2tra2s="
+    )
+    add_knowledge(
+        generation_db,
+        cipher,
+        seeded_task.id,
+        uuid="knowledge-delivery",
+        title="交付说明",
+        keywords=["实施", "验收"],
+        priority=5,
+        content="实施报告和验收计划需要分开说明。",
+    )
+
+    results = KnowledgeRetriever(cipher).retrieve(
+        generation_db,
+        seeded_task.id,
+        {"background": "需要实施报告和验收计划"},
+        limit=8,
+    )
+
+    first = results[0]
+    assert first.matched_keywords == ("实施", "验收")
+    assert first.score == 2
+    assert first.priority == 5
+    assert first.clipped is False
+    assert first.original_characters == len("实施报告和验收计划需要分开说明。")
+
+
+def test_retrieval_clips_long_content_when_max_chars_is_set(
+    generation_db,
+    seeded_task,
+) -> None:
+    cipher = ContentCipher(
+        "a2tra2tra2tra2tra2tra2tra2tra2tra2tra2tra2s="
+    )
+    add_knowledge(
+        generation_db,
+        cipher,
+        seeded_task.id,
+        uuid="knowledge-long",
+        title="长知识",
+        keywords=["实施"],
+        priority=1,
+        content="0123456789abcdef",
+    )
+
+    result = KnowledgeRetriever(cipher).retrieve(
+        generation_db,
+        seeded_task.id,
+        {"background": "实施"},
+        limit=1,
+        max_chars=6,
+    )[0]
+
+    assert result.content == "012345"
+    assert result.clipped is True
+    assert result.original_characters == 16
+
+
 def test_retrieval_skips_knowledge_with_invalid_tags_json(
     generation_db,
     seeded_task,
@@ -197,7 +261,10 @@ def test_prepare_appends_traceable_knowledge_without_copying_plaintext(
         {
             "uuid": "knowledge-login",
             "title": "统一登录规范",
+            "matched_keywords": ["统一登录"],
             "score": 1,
+            "priority": 10,
+            "clipped": False,
         }
     ]
     assert "统一登录必须复用现有 SSO。".encode() not in record.input_ciphertext
@@ -631,7 +698,7 @@ def test_prepare_bounds_and_deterministically_orders_quality_rules(
 
     assert response.status_code == 201
     system = response.json()["messages"][0]["content"]
-    quality_section = system.split("必须遵守的质量规则：\n", 1)[1]
+    quality_section = system.split("## 必须遵守的质量规则\n", 1)[1]
     present_markers = [
         marker
         for marker in (f"RULE-{index:02d}" for index in range(22))

@@ -317,7 +317,10 @@ async def prepare_generation(
             {
                 "uuid": item.uuid,
                 "title": item.title,
+                "matched_keywords": list(item.matched_keywords),
                 "score": item.score,
+                "priority": item.priority,
+                "clipped": item.clipped,
             }
             for item in injected_knowledge_items
         ],
