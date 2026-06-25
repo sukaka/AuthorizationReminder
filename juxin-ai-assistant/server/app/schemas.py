@@ -167,6 +167,15 @@ class PrepareGenerationOut(BaseModel):
     context_usage: ContextUsageOut
 
 
+class AttachmentOut(BaseModel):
+    attachment_uuid: str
+    file_name: str
+    file_type: str
+    file_size: int
+    status: str
+    extracted_characters: int
+
+
 class CompleteGenerationIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

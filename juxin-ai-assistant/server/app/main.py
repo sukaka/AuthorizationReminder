@@ -4,7 +4,7 @@ from typing import Annotated
 from urllib.parse import quote
 
 import httpx
-from fastapi import Depends, FastAPI, HTTPException, Query, Request
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
@@ -15,6 +15,7 @@ from sqlalchemy.dialects.mysql import insert as mysql_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
 
+from .attachments import create_attachment
 from .auth import get_session, require_action
 from .admin.errors import GovernanceError
 from .admin.route_common import write_request_audit
@@ -47,6 +48,7 @@ from .models import Assistant, GenerationRecord, Task, TaskField, UserFavorite
 from .models import KnowledgeTaskLink, TaskPromptBinding
 from .prompt_client import PromptCenterClient
 from .schemas import (
+    AttachmentOut,
     CatalogAssistantOut,
     CapabilityListOut,
     CapabilityOut,
@@ -754,6 +756,63 @@ async def submit_feedback(
         uuid=record.uuid,
         generation_uuid=generation_uuid,
         feedback_type=body.feedback_type,
+    )
+
+
+@app.post(
+    "/api/ai/attachments",
+    response_model=AttachmentOut,
+    status_code=201,
+)
+async def upload_attachment(
+    task_uuid: Annotated[str, Form()],
+    file: Annotated[UploadFile, File()],
+    request: Request,
+    session_payload: Annotated[SessionPayload, Depends(get_session)],
+    current_settings: Annotated[Settings, Depends(get_settings)],
+    db: Annotated[Session, Depends(get_db)],
+    cipher: Annotated[ContentCipher, Depends(get_content_cipher)],
+) -> AttachmentOut:
+    await require_action(
+        "ai_assistant:use",
+        request,
+        session_payload,
+        current_settings,
+    )
+    attachment, extracted_characters = await create_attachment(
+        db,
+        str(session_payload.user.id),
+        task_uuid,
+        file,
+        cipher,
+        current_settings.content_encryption_key_version,
+    )
+    write_request_audit(
+        db,
+        session_payload,
+        request,
+        current_settings,
+        action="generation_attachment.upload",
+        entity_type="generation_attachment",
+        entity_uuid=attachment.uuid,
+        metadata={
+            "attachment_uuid": attachment.uuid,
+            "task_uuid": task_uuid,
+            "file_name": attachment.file_name,
+            "file_type": attachment.file_type,
+            "file_size": attachment.file_size,
+            "content_sha256": attachment.content_sha256,
+            "status": attachment.status,
+        },
+    )
+    db.commit()
+    return AttachmentOut(
+        attachment_uuid=attachment.uuid,
+        file_name=attachment.file_name,
+        file_type=attachment.file_type,
+        file_size=attachment.file_size,
+        status=attachment.status,
+        extracted_characters=extracted_characters,
     )
 
 

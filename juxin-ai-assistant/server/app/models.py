@@ -199,6 +199,38 @@ class GenerationRecord(TimestampMixin, Base):
     knowledge_refs_json: Mapped[list] = mapped_column(JSON, default=list)
 
 
+class GenerationAttachment(TimestampMixin, Base):
+    __tablename__ = "ai_generation_attachments"
+
+    id: Mapped[int] = mapped_column(primary_key_type, primary_key=True, autoincrement=True)
+    uuid: Mapped[str] = mapped_column(
+        String(36),
+        unique=True,
+        default=lambda: str(uuid_lib.uuid4()),
+    )
+    sso_user_id: Mapped[str] = mapped_column(String(64), index=True)
+    task_id: Mapped[int] = mapped_column(
+        foreign_key_type,
+        ForeignKey("ai_tasks.id"),
+        index=True,
+    )
+    generation_id: Mapped[int | None] = mapped_column(
+        foreign_key_type,
+        ForeignKey("ai_generation_records.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    file_name: Mapped[str] = mapped_column(String(255))
+    file_type: Mapped[str] = mapped_column(String(32))
+    file_size: Mapped[int] = mapped_column(Integer)
+    content_sha256: Mapped[str] = mapped_column(String(64))
+    extracted_text_ciphertext: Mapped[bytes] = mapped_column(LargeBinary)
+    extracted_text_nonce: Mapped[bytes] = mapped_column(LargeBinary)
+    key_version: Mapped[str] = mapped_column(String(32))
+    status: Mapped[str] = mapped_column(String(24), default="READY", index=True)
+    error_code: Mapped[str] = mapped_column(String(64), default="")
+
+
 class KnowledgeItem(TimestampMixin, Base):
     __tablename__ = "ai_knowledge_items"
 
