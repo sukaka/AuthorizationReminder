@@ -340,4 +340,8 @@ def test_0007_adds_task_template_metadata(tmp_path: Path) -> None:
     command.downgrade(config, "0006_prompt_catalog_rollouts")
     inspector = inspect(engine)
     task_columns = {column["name"] for column in inspector.get_columns("ai_tasks")}
-    assert "document_template_code" not in task_columns
+    assert {
+        "document_template_code",
+        "output_schema_json",
+        "attachment_policy_json",
+    }.isdisjoint(task_columns)

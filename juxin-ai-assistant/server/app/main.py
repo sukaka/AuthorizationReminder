@@ -270,6 +270,8 @@ def _task_out(task: Task, fields: list[TaskField]) -> TaskOut:
         description=task.description,
         output_format=task.output_format,
         safety_notice=task.safety_notice,
+        document_template_code=task.document_template_code,
+        attachment_policy=task.attachment_policy_json,
         fields=[
             TaskFieldOut(
                 field_key=field.field_key,

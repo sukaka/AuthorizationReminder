@@ -20,6 +20,8 @@ def test_catalog_returns_all_active_assistants_without_prompt_internals(
         code="quote-explanation",
         name="报价说明生成",
         description="生成报价说明",
+        document_template_code="quote-docx",
+        attachment_policy_json={"max_files": 3, "required": True},
         status="ACTIVE",
     )
     generation_db.add(quote)
@@ -45,6 +47,17 @@ def test_catalog_returns_all_active_assistants_without_prompt_internals(
     assert "prompt_external_id" not in serialized
     assert "version_policy" not in serialized
     assert "prompt_content" not in serialized
+    quote_payload = next(
+        task
+        for assistant in payload["assistants"]
+        for task in assistant["tasks"]
+        if task["code"] == "quote-explanation"
+    )
+    assert quote_payload["document_template_code"] == "quote-docx"
+    assert quote_payload["attachment_policy"] == {
+        "max_files": 3,
+        "required": True,
+    }
 
 
 def test_catalog_search_matches_assistant_and_task(
