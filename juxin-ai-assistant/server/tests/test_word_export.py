@@ -119,6 +119,16 @@ def test_meeting_minutes_template_places_default_table_in_action_item_section():
     assert normalized.index("| 序号 | 事项 | 责任人 | 截止时间 | 状态 | 备注 |") < normalized.index("# 风险与分歧")
 
 
+def test_meeting_minutes_template_preserves_action_item_content_before_default_table():
+    template = get_document_template("meeting_minutes_v1")
+
+    normalized = template.normalize_output("# 待办事项表\n\n请张三跟进客户")
+
+    assert normalized.index("# 待办事项表") < normalized.index("请张三跟进客户")
+    assert normalized.index("请张三跟进客户") < normalized.index("| 序号 | 事项 | 责任人 | 截止时间 | 状态 | 备注 |")
+    assert normalized.index("| 序号 | 事项 | 责任人 | 截止时间 | 状态 | 备注 |") < normalized.index("# 风险与分歧")
+
+
 def test_project_report_template_is_registered():
     template = get_document_template("project_report_v1")
 

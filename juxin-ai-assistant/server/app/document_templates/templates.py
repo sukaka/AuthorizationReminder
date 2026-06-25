@@ -71,7 +71,11 @@ class MeetingMinutesTemplate(FixedStructureTemplate):
         action_item_lines = sections["待办事项表"]
         if ACTION_ITEM_HEADER not in "\n".join(action_item_lines):
             sections = {heading: list(lines) for heading, lines in sections.items()}
-            sections["待办事项表"] = ACTION_ITEM_TABLE.splitlines()
+            existing_lines = _strip_outer_blank_lines(action_item_lines)
+            table_lines = ACTION_ITEM_TABLE.splitlines()
+            sections["待办事项表"] = (
+                [*existing_lines, "", *table_lines] if existing_lines else table_lines
+            )
 
         return sections
 
