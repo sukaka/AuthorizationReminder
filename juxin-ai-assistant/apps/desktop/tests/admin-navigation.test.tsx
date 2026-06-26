@@ -25,6 +25,8 @@ it('shows AI governance pages to admin without user or server model forms', asyn
   session('admin');
   render(<App />);
 
+  expect(await screen.findByRole('button', { name: '部门数据' })).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: '提交建议' })).toBeInTheDocument();
   await userEvent.click(await screen.findByRole('button', { name: '治理中心' }));
   expect(screen.getByRole('button', { name: '任务管理' })).toBeInTheDocument();
   expect(screen.getByRole('button', { name: '知识库' })).toBeInTheDocument();
@@ -33,20 +35,30 @@ it('shows AI governance pages to admin without user or server model forms', asyn
   expect(screen.queryByRole('button', { name: '新增用户' })).not.toBeInTheDocument();
 });
 
-it('keeps audit navigation aligned with the narrower audit capability', async () => {
+it('hides admin-only entries from sysadmin users', async () => {
   session('sysadmin');
   render(<App />);
-  await userEvent.click(await screen.findByRole('button', { name: '治理中心' }));
-  expect(screen.getByRole('button', { name: '任务管理' })).toBeInTheDocument();
+
+  expect(await screen.findByRole('button', { name: '工作台' })).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: '全部助手' })).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: '历史记录' })).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: '个人模型' })).toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: '治理中心' })).not.toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: '部门数据' })).not.toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: '提交建议' })).not.toBeInTheDocument();
   expect(screen.queryByRole('button', { name: '审计日志' })).not.toBeInTheDocument();
 });
 
-it('shows department data and suggestions only to department managers', async () => {
+it('hides department data and suggestions from non-admin department managers', async () => {
   session('employee', ['销售部']);
   render(<App />);
 
-  expect(await screen.findByRole('button', { name: '部门数据' })).toBeInTheDocument();
-  expect(screen.getByRole('button', { name: '提交建议' })).toBeInTheDocument();
+  expect(await screen.findByRole('button', { name: '工作台' })).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: '全部助手' })).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: '历史记录' })).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: '个人模型' })).toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: '部门数据' })).not.toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: '提交建议' })).not.toBeInTheDocument();
   expect(screen.queryByRole('button', { name: '治理中心' })).not.toBeInTheDocument();
 });
 

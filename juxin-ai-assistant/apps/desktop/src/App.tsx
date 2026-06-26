@@ -14,7 +14,6 @@ import { HistoryPage } from './pages/HistoryPage';
 import { HomePage } from './pages/HomePage';
 import { TaskRunPage, type TaskDefinition } from './pages/TaskRunPage';
 import { logoutLocalUser, syncPendingResults } from './local/syncQueue';
-import { AuditPage } from './pages/admin/AuditPage';
 import { GovernanceCenter } from './pages/admin/GovernanceCenter';
 import { StatsPage } from './pages/admin/StatsPage';
 import { SuggestionsPage } from './pages/admin/SuggestionsPage';
@@ -33,8 +32,7 @@ type WorkspacePage =
   | 'models'
   | 'governance'
   | 'department-stats'
-  | 'suggestions'
-  | 'audit';
+  | 'suggestions';
 
 type ViewState =
   | { kind: 'checking' }
@@ -47,9 +45,7 @@ function Workspace({ session }: { session: SessionPayload }) {
   const [task, setTask] = useState<TaskDefinition | null>(null);
   const [taskError, setTaskError] = useState('');
   const role = session.user.role.trim().toLowerCase();
-  const isAdmin = role === 'admin' || role === 'sysadmin';
-  const canAudit = role === 'admin' || role === 'auditor';
-  const isManager = session.scope.managedDepartments.length > 0;
+  const isAdmin = role === 'admin';
 
   useEffect(() => {
     if (!window.__TAURI_INTERNALS__) return;
@@ -60,6 +56,16 @@ function Workspace({ session }: { session: SessionPayload }) {
     window.addEventListener('online', sync);
     return () => window.removeEventListener('online', sync);
   }, [session.user.id]);
+
+  useEffect(() => {
+    if (!isAdmin && (
+      page === 'department-stats'
+      || page === 'suggestions'
+      || page === 'governance'
+    )) {
+      setPage('home');
+    }
+  }, [isAdmin, page]);
 
   const openTask = (nextTask: TaskPayload) => {
     setTask(nextTask);
@@ -99,14 +105,13 @@ function Workspace({ session }: { session: SessionPayload }) {
           <button aria-current={page === 'assistants' ? 'page' : undefined} className={page === 'assistants' ? 'is-current' : ''} onClick={() => setPage('assistants')} type="button">全部助手</button>
           <button aria-current={page === 'history' ? 'page' : undefined} className={page === 'history' ? 'is-current' : ''} onClick={() => setPage('history')} type="button">历史记录</button>
           <button aria-current={page === 'models' ? 'page' : undefined} className={page === 'models' ? 'is-current' : ''} onClick={() => setPage('models')} type="button">个人模型</button>
-          {isManager ? (
+          {isAdmin ? (
             <>
               <button aria-current={page === 'department-stats' ? 'page' : undefined} className={page === 'department-stats' ? 'is-current' : ''} onClick={() => setPage('department-stats')} type="button">部门数据</button>
               <button aria-current={page === 'suggestions' ? 'page' : undefined} className={page === 'suggestions' ? 'is-current' : ''} onClick={() => setPage('suggestions')} type="button">提交建议</button>
+              <button aria-current={page === 'governance' ? 'page' : undefined} className={page === 'governance' ? 'is-current' : ''} onClick={() => setPage('governance')} type="button">治理中心</button>
             </>
           ) : null}
-          {isAdmin ? <button aria-current={page === 'governance' ? 'page' : undefined} className={page === 'governance' ? 'is-current' : ''} onClick={() => setPage('governance')} type="button">治理中心</button> : null}
-          {!isAdmin && canAudit ? <button aria-current={page === 'audit' ? 'page' : undefined} className={page === 'audit' ? 'is-current' : ''} onClick={() => setPage('audit')} type="button">审计日志</button> : null}
         </nav>
         <div className="sidebar-foot">
           <WorkspaceUpdateControl />
@@ -122,14 +127,12 @@ function Workspace({ session }: { session: SessionPayload }) {
       <main className="workspace" id="workspace">
         {page === 'models' ? (
           <ModelProfilesPage />
-        ) : page === 'governance' ? (
+        ) : page === 'governance' && isAdmin ? (
           <GovernanceCenter session={session} />
-        ) : page === 'department-stats' ? (
+        ) : page === 'department-stats' && isAdmin ? (
           <StatsPage manager />
-        ) : page === 'suggestions' ? (
+        ) : page === 'suggestions' && isAdmin ? (
           <SuggestionsPage departments={session.scope.managedDepartments} />
-        ) : page === 'audit' ? (
-          <AuditPage />
         ) : page === 'assistants' ? (
           <AssistantsPage onOpenTask={openTask} />
         ) : page === 'history' ? (
