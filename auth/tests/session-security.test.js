@@ -57,3 +57,14 @@ test('isSessionRecordValid accepts matching active sessions', () => {
     true
   );
 });
+
+test('isSessionRecordValid treats MySQL DATETIME strings as UTC', () => {
+  assert.equal(
+    isSessionRecordValid({
+      tokenSessionId: 'sess-1',
+      sessionRecord: { session_id: 'sess-1', revoked_at: null, expires_at: '2026-06-26 01:38:40' },
+      nowMs: Date.parse('2026-06-26T01:36:21Z'),
+    }),
+    true
+  );
+});
