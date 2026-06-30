@@ -216,6 +216,11 @@ def _render_markdown_blocks(
             index += 1
             continue
 
+        if _is_markdown_divider(stripped):
+            flush_paragraph()
+            index += 1
+            continue
+
         if stripped.startswith("```"):
             flush_paragraph()
             index += 1
@@ -237,12 +242,21 @@ def _render_markdown_blocks(
             _add_pipe_table(document, table_lines)
             continue
 
+        if stripped.startswith(">"):
+            flush_paragraph()
+            quote_lines: list[str] = []
+            while index < len(lines) and lines[index].strip().startswith(">"):
+                quote_lines.append(lines[index].strip().lstrip(">").strip())
+                index += 1
+            _add_quote_block(document, quote_lines)
+            continue
+
         heading = re.match(r"^(#{1,3})\s+(.+)$", stripped)
         if heading:
             flush_paragraph()
             _add_heading(
                 document,
-                heading.group(2).strip(),
+                _clean_markdown_text(heading.group(2).strip()),
                 len(heading.group(1)),
                 heading_numbers,
             )
@@ -254,14 +268,35 @@ def _render_markdown_blocks(
             flush_paragraph()
             style = "List Number" if list_item.group(1)[0].isdigit() else "List Bullet"
             paragraph = document.add_paragraph(style=style)
-            _add_text_run(paragraph, list_item.group(2).strip())
+            _add_text_run(paragraph, _clean_markdown_text(list_item.group(2).strip()))
             index += 1
             continue
 
-        paragraph_buffer.append(line)
+        paragraph_buffer.append(_clean_markdown_text(line))
         index += 1
 
     flush_paragraph()
+
+
+def _clean_markdown_text(text: str) -> str:
+    cleaned = (
+        text.strip()
+        .replace("\\*", "*")
+        .replace("\\#", "#")
+        .replace("\\`", "`")
+        .replace("\\_", "_")
+        .replace("\\>", ">")
+        .replace("\\-", "-")
+        .replace("\\+", "+")
+        .replace("\\|", "|")
+        .replace("\\[", "[")
+        .replace("\\]", "]")
+    )
+    return cleaned.replace("**", "").replace("__", "").replace("`", "").strip()
+
+
+def _is_markdown_divider(text: str) -> bool:
+    return bool(re.fullmatch(r"[-*_]{3,}", text.strip()))
 
 
 def _add_missing_final_review_sections(
@@ -378,6 +413,15 @@ def _add_code_block(document: Document, lines: Iterable[str]) -> None:
         _add_text_run(paragraph, line, font="Courier New")
 
 
+def _add_quote_block(document: Document, lines: Iterable[str]) -> None:
+    for line in lines:
+        paragraph = document.add_paragraph()
+        paragraph.paragraph_format.left_indent = Cm(0.5)
+        paragraph.paragraph_format.line_spacing = 1.5
+        run = _add_text_run(paragraph, _clean_markdown_text(line))
+        run.font.italic = True
+
+
 def _add_pipe_table(document: Document, lines: list[str]) -> None:
     rows = [_split_pipe_row(line) for line in lines]
     rows = [row for row in rows if row and not _is_separator_row(row)]
@@ -393,7 +437,7 @@ def _add_pipe_table(document: Document, lines: list[str]) -> None:
     for row_index, row_values in enumerate(rows):
         for col_index in range(max_columns):
             value = row_values[col_index] if col_index < len(row_values) else ""
-            value = value.strip() or "待确认"
+            value = _clean_markdown_text(value.strip()) or "待确认"
             _write_cell(
                 table.cell(row_index, col_index),
                 value,

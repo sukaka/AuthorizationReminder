@@ -246,7 +246,38 @@ def test_render_word_renumbers_existing_heading_prefixes():
     assert "2. 2. 建设范围" not in headings
 
 
-def test_render_word_preserves_unrecognized_text():
+def test_render_word_cleans_markdown_markers_from_business_output():
+    payload = render_generation_docx(
+        title="客户评分建议",
+        task_name="客户评分",
+        department="销售部",
+        author="张三",
+        output=(
+            "**75分（满分100分）**\n\n"
+            "**8. 评分依据**\n\n"
+            "* **行业匹配度（20/20）**：网络安全行业，客户群匹配。\n"
+            "* **预算可行性（10/20）**：预算紧张。\n\n"
+            "---\n\n"
+            "## 9. 建议跟进级别\n\n"
+            "**A级（重点跟进）**"
+        ),
+        version="V1.0",
+    )
+
+    document = Document(BytesIO(payload))
+    text = "\n".join(paragraph.text for paragraph in document.paragraphs)
+
+    assert "75分（满分100分）" in text
+    assert "8. 评分依据" in text
+    assert "行业匹配度（20/20）：网络安全行业，客户群匹配。" in text
+    assert "预算可行性（10/20）：预算紧张。" in text
+    assert "建议跟进级别" in text
+    assert "A级（重点跟进）" in text
+    assert "**" not in text
+    assert "---" not in text
+
+
+def test_render_word_preserves_text_while_cleaning_unmatched_markers():
     payload = render_generation_docx(
         title="异常语法报告",
         task_name="异常语法",
@@ -259,7 +290,8 @@ def test_render_word_preserves_unrecognized_text():
     document = Document(BytesIO(payload))
     text = "\n".join(paragraph.text for paragraph in document.paragraphs)
 
-    assert "未闭合 **文本" in text
+    assert "未闭合 文本" in text
+    assert "**" not in text
 
 
 def test_render_word_applies_company_output_control_footer_and_brand_line():
@@ -344,3 +376,21 @@ def test_render_word_fills_blank_table_cells_with_pending_confirmation():
     )
 
     assert data_table.cell(1, 1).text == "待确认"
+
+
+def test_render_word_supports_markdown_quote_blocks():
+    payload = render_generation_docx(
+        title="引用块测试",
+        task_name="聊天导出",
+        department="产品交付部",
+        author="张三",
+        output="> 客户原话：需要下周完成验收\n> 请保留引用内容",
+        version="1.0.0",
+    )
+
+    document = Document(BytesIO(payload))
+    text = "\n".join(paragraph.text for paragraph in document.paragraphs)
+
+    assert "客户原话：需要下周完成验收" in text
+    assert "请保留引用内容" in text
+    assert "> 客户原话" not in text

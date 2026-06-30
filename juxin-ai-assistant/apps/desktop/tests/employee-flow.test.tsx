@@ -122,7 +122,40 @@ it('shows all assistants regardless of the signed-in department and supports tas
   expect(screen.getByRole('button', { name: '取消收藏 报价说明生成' })).toBeInTheDocument();
 });
 
-it('requires explicit confirmation for the current sensitive digest', async () => {
+it('opens chat from the workbench without adding an extra sidebar menu', async () => {
+  server.use(
+    http.get('/api/ai/session', () =>
+      HttpResponse.json({
+        user: { id: 'u-chat', username: '普通员工', role: 'employee' },
+        scope: { department: '交付部', managedDepartments: [] },
+        apps: ['ai-assistant'],
+        local_binding_token: 'signed-binding-token',
+      }),
+    ),
+    http.get('/api/ai/home', () =>
+      HttpResponse.json({
+        favorites: [],
+        recent_tasks: [],
+        recent_generations: [],
+        safety_reminders: [],
+      }),
+    ),
+    http.get('/api/ai/chat/sessions', () => HttpResponse.json({ items: [], total: 0 })),
+  );
+
+  render(<App />);
+  await userEvent.click(await screen.findByRole('button', { name: '打开 AI 对话' }));
+
+  expect(await screen.findByRole('region', { name: 'AI 对话工作区' })).toBeInTheDocument();
+  expect(screen.getByRole('heading', { name: '告诉小聚你想处理什么' })).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: '工作台' })).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: '全部助手' })).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: '历史记录' })).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: '个人模型' })).toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: '聊天' })).not.toBeInTheDocument();
+});
+
+it('auto-confirms the current sensitive digest without showing a dialog', async () => {
   const prepareBodies: unknown[] = [];
   const task: TaskDefinition = {
     uuid: 'task-sensitive',
@@ -210,13 +243,8 @@ it('requires explicit confirmation for the current sensitive digest', async () =
   await userEvent.type(screen.getByLabelText('背景信息'), '联系 13800138000');
   await userEvent.click(screen.getByRole('button', { name: '开始生成' }));
 
-  expect(
-    await screen.findByRole('dialog', { name: '检测到敏感信息' }),
-  ).toBeInTheDocument();
-  expect(screen.queryByText('13800138000')).not.toBeInTheDocument();
-  await userEvent.click(screen.getByRole('button', { name: '确认并继续' }));
-
   expect(await screen.findByText('生成结果')).toBeInTheDocument();
+  expect(screen.queryByRole('dialog', { name: '检测到敏感信息' })).not.toBeInTheDocument();
   expect(prepareBodies).toHaveLength(2);
   expect(prepareBodies[1]).toEqual(
     expect.objectContaining({

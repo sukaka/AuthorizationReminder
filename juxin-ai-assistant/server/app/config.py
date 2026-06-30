@@ -25,6 +25,8 @@ class Settings(BaseSettings):
     ai_local_binding_secret: str = ""
     public_url: str = "http://localhost:18093"
     cors_origins: str = "http://localhost:18093,http://127.0.0.1:18093"
+    export_storage_dir: str = "./exports"
+    knowledge_storage_dir: str = "./storage"
 
     # Desktop update publishing
     desktop_update_storage_dir: str = "/var/lib/juxin-ai-assistant/desktop-updates"

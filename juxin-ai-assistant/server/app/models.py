@@ -270,6 +270,266 @@ class KnowledgeTaskLink(TimestampMixin, Base):
     )
 
 
+class KnowledgeBase(TimestampMixin, Base):
+    __tablename__ = "ai_knowledge_bases"
+
+    id: Mapped[int] = mapped_column(primary_key_type, primary_key=True, autoincrement=True)
+    uuid: Mapped[str] = mapped_column(
+        String(36),
+        unique=True,
+        default=lambda: str(uuid_lib.uuid4()),
+    )
+    name: Mapped[str] = mapped_column(String(128))
+    description: Mapped[str] = mapped_column(Text, default="")
+    scope: Mapped[str] = mapped_column(String(24), default="company", index=True)
+    owner_user_id: Mapped[str] = mapped_column(String(64), default="", index=True)
+    department_id: Mapped[str] = mapped_column(String(64), default="", index=True)
+    project_id: Mapped[str] = mapped_column(String(64), default="", index=True)
+    created_by: Mapped[str] = mapped_column(String(64), default="", index=True)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class KnowledgeFile(TimestampMixin, Base):
+    __tablename__ = "ai_knowledge_files"
+
+    def __init__(self, **kwargs):
+        for key, value in kwargs.items():
+            setattr(self, key, value)
+        if getattr(self, "original_file_name", None) is None:
+            self.original_file_name = getattr(self, "file_name", "")
+        if getattr(self, "stored_file_name", None) is None:
+            self.stored_file_name = ""
+        if getattr(self, "file_path", None) is None:
+            self.file_path = ""
+        defaults = {
+            "category": "个人素材",
+            "document_type": "其他",
+            "tags_json": [],
+            "summary": "",
+            "parse_status": "parsed",
+            "index_status": "indexed",
+            "source_type": "user_upload",
+            "usage_type": "personal_reference",
+            "review_status": "draft",
+            "rag_enabled": False,
+            "reference_enabled": True,
+            "rag_scope": "personal",
+            "permission_scope": "private",
+            "owner_user_id": getattr(self, "sso_user_id", ""),
+            "conversation_id": "",
+            "version": 1,
+            "is_current_version": True,
+            "uploaded_by": getattr(self, "sso_user_id", ""),
+            "reviewed_by": "",
+            "review_comment": "",
+            "usage_count": 0,
+        }
+        for key, value in defaults.items():
+            if getattr(self, key, None) is None:
+                setattr(self, key, value)
+
+    id: Mapped[int] = mapped_column(primary_key_type, primary_key=True, autoincrement=True)
+    uuid: Mapped[str] = mapped_column(
+        String(36),
+        unique=True,
+        default=lambda: str(uuid_lib.uuid4()),
+    )
+    knowledge_base_id: Mapped[int | None] = mapped_column(
+        foreign_key_type,
+        ForeignKey("ai_knowledge_bases.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    sso_user_id: Mapped[str] = mapped_column(String(64), index=True)
+    file_name: Mapped[str] = mapped_column(String(255))
+    original_file_name: Mapped[str] = mapped_column(String(255), default="")
+    stored_file_name: Mapped[str] = mapped_column(String(255), default="")
+    file_type: Mapped[str] = mapped_column(String(128))
+    file_size: Mapped[int] = mapped_column(Integer)
+    file_path: Mapped[str] = mapped_column(String(1024), default="")
+    category: Mapped[str] = mapped_column(String(64), default="个人素材", index=True)
+    document_type: Mapped[str] = mapped_column(String(64), default="其他", index=True)
+    tags_json: Mapped[list] = mapped_column(JSON, default=list)
+    summary: Mapped[str] = mapped_column(Text, default="")
+    parse_status: Mapped[str] = mapped_column(String(24), default="parsed", index=True)
+    index_status: Mapped[str] = mapped_column(String(24), default="indexed", index=True)
+    source_type: Mapped[str] = mapped_column(String(24), default="user_upload", index=True)
+    usage_type: Mapped[str] = mapped_column(String(32), default="personal_reference", index=True)
+    review_status: Mapped[str] = mapped_column(String(24), default="draft", index=True)
+    rag_enabled: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    reference_enabled: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    rag_scope: Mapped[str] = mapped_column(String(24), default="personal", index=True)
+    permission_scope: Mapped[str] = mapped_column(String(24), default="private", index=True)
+    owner_user_id: Mapped[str] = mapped_column(String(64), default="", index=True)
+    conversation_id: Mapped[str] = mapped_column(String(64), default="", index=True)
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    parent_file_id: Mapped[int | None] = mapped_column(foreign_key_type, nullable=True)
+    is_current_version: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    replaced_by_file_id: Mapped[int | None] = mapped_column(foreign_key_type, nullable=True)
+    uploaded_by: Mapped[str] = mapped_column(String(64), default="", index=True)
+    reviewed_by: Mapped[str] = mapped_column(String(64), default="", index=True)
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    review_comment: Mapped[str] = mapped_column(Text, default="")
+    content_sha256: Mapped[str] = mapped_column(String(64), index=True)
+    visibility: Mapped[str] = mapped_column(String(24), default="PRIVATE", index=True)
+    status: Mapped[str] = mapped_column(String(24), default="READY", index=True)
+    error_code: Mapped[str] = mapped_column(String(64), default="")
+    key_version: Mapped[str] = mapped_column(String(32))
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    hard_deleted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    usage_count: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class KnowledgeChunk(TimestampMixin, Base):
+    __tablename__ = "ai_knowledge_chunks"
+    __table_args__ = (UniqueConstraint("file_id", "chunk_index"),)
+
+    id: Mapped[int] = mapped_column(primary_key_type, primary_key=True, autoincrement=True)
+    chunk_id: Mapped[str] = mapped_column(String(64), unique=True)
+    file_id: Mapped[int] = mapped_column(
+        foreign_key_type,
+        ForeignKey("ai_knowledge_files.id", ondelete="CASCADE"),
+        index=True,
+    )
+    knowledge_base_id: Mapped[int | None] = mapped_column(
+        foreign_key_type,
+        ForeignKey("ai_knowledge_bases.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    file_name: Mapped[str] = mapped_column(String(255))
+    chunk_text_ciphertext: Mapped[bytes] = mapped_column(LargeBinary)
+    chunk_text_nonce: Mapped[bytes] = mapped_column(LargeBinary)
+    page_number: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    section_title: Mapped[str] = mapped_column(String(255), default="")
+    chunk_index: Mapped[int] = mapped_column(Integer)
+    token_estimate: Mapped[int] = mapped_column(Integer, default=0)
+    token_count: Mapped[int] = mapped_column(Integer, default=0)
+    metadata_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    embedding_id: Mapped[str] = mapped_column(String(128), default="", index=True)
+    status: Mapped[str] = mapped_column(String(24), default="READY", index=True)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class KnowledgeSearchLog(TimestampMixin, Base):
+    __tablename__ = "ai_knowledge_search_logs"
+
+    id: Mapped[int] = mapped_column(primary_key_type, primary_key=True, autoincrement=True)
+    user_id: Mapped[str] = mapped_column(String(64), index=True)
+    question: Mapped[str] = mapped_column(Text)
+    mode: Mapped[str] = mapped_column(String(64), default="", index=True)
+    search_type: Mapped[str] = mapped_column(String(32), index=True)
+    knowledge_base_ids_json: Mapped[list] = mapped_column(JSON, default=list)
+    filters_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    retrieved_chunk_ids_json: Mapped[list] = mapped_column(JSON, default=list)
+    answer_message_id: Mapped[str] = mapped_column(String(64), default="", index=True)
+
+
+class KnowledgeReviewLog(TimestampMixin, Base):
+    __tablename__ = "ai_knowledge_review_logs"
+
+    id: Mapped[int] = mapped_column(primary_key_type, primary_key=True, autoincrement=True)
+    file_id: Mapped[int] = mapped_column(
+        foreign_key_type,
+        ForeignKey("ai_knowledge_files.id", ondelete="CASCADE"),
+        index=True,
+    )
+    user_id: Mapped[str] = mapped_column(String(64), index=True)
+    reviewer_id: Mapped[str] = mapped_column(String(64), default="", index=True)
+    action: Mapped[str] = mapped_column(String(32), index=True)
+    old_status: Mapped[str] = mapped_column(String(24), default="")
+    new_status: Mapped[str] = mapped_column(String(24), default="")
+    comment: Mapped[str] = mapped_column(Text, default="")
+
+
+class ChatSession(TimestampMixin, Base):
+    __tablename__ = "ai_chat_sessions"
+
+    id: Mapped[int] = mapped_column(primary_key_type, primary_key=True, autoincrement=True)
+    uuid: Mapped[str] = mapped_column(
+        String(36),
+        unique=True,
+        default=lambda: str(uuid_lib.uuid4()),
+    )
+    sso_user_id: Mapped[str] = mapped_column(String(64), index=True)
+    title: Mapped[str] = mapped_column(String(255), default="新会话")
+    mode: Mapped[str] = mapped_column(String(24), default="NORMAL", index=True)
+    status: Mapped[str] = mapped_column(String(24), default="active", index=True)
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    hard_deleted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class ChatMessage(TimestampMixin, Base):
+    __tablename__ = "ai_chat_messages"
+
+    id: Mapped[int] = mapped_column(primary_key_type, primary_key=True, autoincrement=True)
+    uuid: Mapped[str] = mapped_column(
+        String(36),
+        unique=True,
+        default=lambda: str(uuid_lib.uuid4()),
+    )
+    session_id: Mapped[int] = mapped_column(
+        foreign_key_type,
+        ForeignKey("ai_chat_sessions.id", ondelete="CASCADE"),
+        index=True,
+    )
+    sso_user_id: Mapped[str] = mapped_column(String(64), index=True)
+    role: Mapped[str] = mapped_column(String(16), index=True)
+    content_ciphertext: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+    content_nonce: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+    key_version: Mapped[str] = mapped_column(String(32), default="")
+    status: Mapped[str] = mapped_column(String(24), default="PENDING", index=True)
+    model_display_name: Mapped[str] = mapped_column(String(128), default="")
+    model_id: Mapped[str] = mapped_column(String(128), default="")
+    usage_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    latency_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    completion_token_hash: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+    error_code: Mapped[str] = mapped_column(String(64), default="")
+    error_message_safe: Mapped[str] = mapped_column(Text, default="")
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class ChatMessageSource(TimestampMixin, Base):
+    __tablename__ = "ai_chat_message_sources"
+
+    id: Mapped[int] = mapped_column(primary_key_type, primary_key=True, autoincrement=True)
+    message_id: Mapped[int] = mapped_column(
+        foreign_key_type,
+        ForeignKey("ai_chat_messages.id", ondelete="CASCADE"),
+        index=True,
+    )
+    source_type: Mapped[str] = mapped_column(String(32), index=True)
+    source_uuid: Mapped[str] = mapped_column(String(64), default="")
+    title: Mapped[str] = mapped_column(String(255), default="")
+    file_name: Mapped[str] = mapped_column(String(255), default="")
+    chunk_id: Mapped[str] = mapped_column(String(64), default="")
+    page_number: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    section_title: Mapped[str] = mapped_column(String(255), default="")
+    chunk_index: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    score: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class ExportRecord(TimestampMixin, Base):
+    __tablename__ = "export_records"
+
+    id: Mapped[int] = mapped_column(primary_key_type, primary_key=True, autoincrement=True)
+    uuid: Mapped[str] = mapped_column(
+        String(36),
+        unique=True,
+        default=lambda: str(uuid_lib.uuid4()),
+    )
+    conversation_id: Mapped[str] = mapped_column(String(64), index=True)
+    message_id: Mapped[str] = mapped_column(String(64), default="", index=True)
+    file_name: Mapped[str] = mapped_column(String(255))
+    file_path: Mapped[str] = mapped_column(String(1024))
+    export_type: Mapped[str] = mapped_column(String(32), index=True)
+    template_name: Mapped[str] = mapped_column(String(64), default="juxin_standard")
+    created_by: Mapped[str] = mapped_column(String(64), index=True)
+
+
 class FeedbackRecord(TimestampMixin, Base):
     __tablename__ = "ai_feedback_records"
     __table_args__ = (

@@ -4,6 +4,8 @@ export type ModelProfile = {
   baseUrl: string;
   modelId: string;
   temperature: number;
+  maxOutputTokens: number;
+  maxAutoContinues: number;
   timeoutSeconds: number;
   isDefault: boolean;
   hasApiKey: boolean;
@@ -12,7 +14,10 @@ export type ModelProfile = {
 export type ModelGenerateResult = {
   output: string;
   latencyMs: number;
-  usage: Record<string, number>;
+  usage: Record<string, unknown>;
+  finishReason?: string | null;
+  truncated?: boolean;
+  autoContinueCount?: number;
 };
 
 declare global {

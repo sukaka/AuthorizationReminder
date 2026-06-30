@@ -2,10 +2,6 @@ import { invoke } from '@tauri-apps/api/core';
 import { useEffect, useMemo, useState } from 'react';
 
 import {
-  SensitiveWarningDialog,
-  type SensitiveFinding,
-} from '../components/SensitiveWarningDialog';
-import {
   DynamicTaskForm,
   type DynamicFieldDefinition,
 } from '../components/DynamicTaskForm';
@@ -14,9 +10,10 @@ import { FeedbackPanel } from '../components/FeedbackPanel';
 import { OutputReader } from '../components/OutputReader';
 import { deleteDraft, loadDraft, saveDraft } from '../local/drafts';
 import { generateLocalModel } from '../local/modelStream';
-import { enqueuePendingResult } from '../local/syncQueue';
+import { enqueuePendingResult, syncPendingResults } from '../local/syncQueue';
 import type { ModelProfile } from '../types/tauri';
 import {
+  apiFetch,
   downloadGenerationWord,
   reportLocalModelAuditEvent,
   reportGenerationFailure,
@@ -24,6 +21,12 @@ import {
   type LocalModelAuditEvent,
   type TaskPayload,
 } from '../api/client';
+import {
+  checkLoopQuality,
+  shouldRunLoopQualityCheck,
+  type AgentLoopMessage,
+  type LoopTraceStep,
+} from '../api/agentLoop';
 
 export type TaskDefinition = Omit<TaskPayload, 'fields'> & {
   fields: DynamicFieldDefinition[];
@@ -40,45 +43,18 @@ type PreparedGeneration = {
     estimated_tokens: number;
     estimator: string;
   };
+  knowledge_refs?: KnowledgeRef[];
+  loop_trace?: LoopTraceStep[];
 };
 
-type SensitiveConfirmation = {
-  digest: string;
-  findings: SensitiveFinding[];
+type KnowledgeRef = {
+  uuid: string;
+  title: string;
+  matched_keywords?: string[];
+  score?: number;
+  priority?: number;
+  clipped?: boolean;
 };
-
-function hasMeaningfulSensitiveValue(value: unknown): boolean {
-  if (value == null) return false;
-  if (typeof value === 'string') return value.trim().length > 0;
-  if (Array.isArray(value)) return value.some(hasMeaningfulSensitiveValue);
-  if (typeof value === 'object') {
-    return Object.values(value as Record<string, unknown>).some(hasMeaningfulSensitiveValue);
-  }
-  return true;
-}
-
-function getSensitiveFieldLabel(
-  fieldKey: string,
-  fields: DynamicFieldDefinition[],
-): string {
-  const label = fields.find((field) => field.field_key === fieldKey)?.label.trim();
-  if (label) return label;
-  if (/^(?:blank|manual|reviewed|choice|bracket)_slot_\d+$/i.test(fieldKey)) return '输入内容';
-  return fieldKey || '输入内容';
-}
-
-function presentSensitiveFindings(
-  findings: SensitiveFinding[],
-  fields: DynamicFieldDefinition[],
-  values: Record<string, unknown>,
-): SensitiveFinding[] {
-  return findings
-    .filter((finding) => hasMeaningfulSensitiveValue(values[finding.field]))
-    .map((finding) => ({
-      ...finding,
-      field: getSensitiveFieldLabel(finding.field, fields),
-    }));
-}
 
 function getGenerationErrorMessage(error: unknown): string {
   return error instanceof Error
@@ -116,6 +92,10 @@ function formatCompletedTokenUsage(output: string, usage: Record<string, unknown
   return `本次输出约 ${Math.max(1, Math.ceil(output.length / 4))} tokens`;
 }
 
+function isLengthLimitedFinish(reason?: string | null): boolean {
+  return String(reason || '').trim().toLowerCase() === 'length';
+}
+
 export function TaskRunPage({ task, userId }: { task: TaskDefinition; userId?: string }) {
   const desktopAvailable = Boolean(window.__TAURI_INTERNALS__);
   const [profiles, setProfiles] = useState<ModelProfile[]>([]);
@@ -125,16 +105,17 @@ export function TaskRunPage({ task, userId }: { task: TaskDefinition; userId?: s
   const [status, setStatus] = useState<'idle' | 'preparing' | 'generating' | 'saving' | 'done'>('idle');
   const [error, setError] = useState('');
   const [requestId, setRequestId] = useState('');
-  const [sensitiveConfirmation, setSensitiveConfirmation] = useState<SensitiveConfirmation | null>(null);
   const [draftReady, setDraftReady] = useState(!userId);
   const [syncMessage, setSyncMessage] = useState('');
   const [exportMessage, setExportMessage] = useState('');
   const [generationUuid, setGenerationUuid] = useState('');
   const [activeGenerationUuid, setActiveGenerationUuid] = useState('');
   const [contextUsageText, setContextUsageText] = useState('');
+  const [generationWarning, setGenerationWarning] = useState('');
   const [exporting, setExporting] = useState(false);
   const [attachments, setAttachments] = useState<AttachmentPayload[]>([]);
   const [attachmentsUploading, setAttachmentsUploading] = useState(false);
+  const [knowledgeRefs, setKnowledgeRefs] = useState<KnowledgeRef[]>([]);
 
   useEffect(() => {
     if (!desktopAvailable) return;
@@ -185,6 +166,8 @@ export function TaskRunPage({ task, userId }: { task: TaskDefinition; userId?: s
     setStatus('generating');
     setOutput('');
     setContextUsageText('');
+    setGenerationWarning('');
+    setKnowledgeRefs(prepared.knowledge_refs ?? []);
     setActiveGenerationUuid(prepared.generation_uuid);
     const currentRequestId = crypto.randomUUID();
     setRequestId(currentRequestId);
@@ -200,7 +183,7 @@ export function TaskRunPage({ task, userId }: { task: TaskDefinition; userId?: s
     }).catch(() => undefined);
 
     void auditLocalModel('MODEL_STARTED');
-    const generated = await generateLocalModel({
+    let generated = await generateLocalModel({
       profileId: selectedProfile.id,
       messages: prepared.messages,
       temperature: prepared.temperature,
@@ -213,14 +196,44 @@ export function TaskRunPage({ task, userId }: { task: TaskDefinition; userId?: s
     });
     void auditLocalModel('MODEL_COMPLETED', { latencyMs: generated.latencyMs });
     setOutput(generated.output);
+    if (shouldRunLoopQualityCheck(prepared.loop_trace)) {
+      for (let retryCount = 0; retryCount < 2; retryCount += 1) {
+        const check = await checkLoopQuality({
+          mode: 'normal',
+          answer: generated.output,
+          usedKnowledge: (prepared.knowledge_refs ?? []).length > 0,
+          retryCount,
+          messages: prepared.messages as AgentLoopMessage[],
+        }).catch(() => null);
+        if (!check || check.passed || !check.retry_allowed || !check.revision_messages.length) {
+          break;
+        }
+        setGenerationWarning('已根据聚信质量检查自动修正初稿。');
+        setOutput('');
+        generated = await generateLocalModel({
+          profileId: selectedProfile.id,
+          messages: check.revision_messages,
+          temperature: prepared.temperature,
+          requestId: `${currentRequestId}-revise-${retryCount + 1}`,
+        }, (delta) => setOutput((current) => current + delta)).catch((modelError) => {
+          void auditLocalModel('MODEL_FAILED', {
+            errorCode: getGenerationErrorCode(modelError),
+          });
+          throw modelError;
+        });
+        setOutput(generated.output);
+      }
+    }
     setContextUsageText(formatCompletedTokenUsage(generated.output, generated.usage));
+    if (generated.truncated || isLengthLimitedFinish(generated.finishReason)) {
+      setGenerationWarning('模型达到输出长度上限，当前内容可能未完整。建议点击重新生成，或使用支持更长输出的模型。');
+    }
 
     setStatus('saving');
-    const completeResponse = await fetch(
+    const completeResponse = await apiFetch(
       `/api/ai/generations/${prepared.generation_uuid}/complete`,
       {
         method: 'POST',
-        credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           completion_token: prepared.completion_token,
@@ -260,7 +273,6 @@ export function TaskRunPage({ task, userId }: { task: TaskDefinition; userId?: s
     setStatus('done');
     setRequestId('');
     setActiveGenerationUuid('');
-    setSensitiveConfirmation(null);
     if (userId) await deleteDraft(userId, task.uuid).catch(() => undefined);
   };
 
@@ -284,9 +296,8 @@ export function TaskRunPage({ task, userId }: { task: TaskDefinition; userId?: s
     try {
       setSyncMessage('');
       setStatus('preparing');
-      const prepareResponse = await fetch('/api/ai/generations/prepare', {
+      const prepareResponse = await apiFetch('/api/ai/generations/prepare', {
         method: 'POST',
-        credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           task_uuid: task.uuid,
@@ -302,7 +313,6 @@ export function TaskRunPage({ task, userId }: { task: TaskDefinition; userId?: s
           detail?: {
             code?: string;
             confirmation_digest?: string;
-            findings?: SensitiveFinding[];
           };
         } | null;
         if (
@@ -310,21 +320,10 @@ export function TaskRunPage({ task, userId }: { task: TaskDefinition; userId?: s
           && payload?.detail?.code === 'SENSITIVE_CONFIRMATION_REQUIRED'
           && payload.detail.confirmation_digest
         ) {
-          const findings = presentSensitiveFindings(
-            payload.detail.findings || [],
-            task.fields,
-            values,
-          );
-          if (!findings.length) {
+          if (!confirmationDigest) {
             await generate(payload.detail.confirmation_digest);
             return;
           }
-          setSensitiveConfirmation({
-            digest: payload.detail.confirmation_digest,
-            findings,
-          });
-          setStatus('idle');
-          return;
         }
         throw new Error(`PREPARE_${prepareResponse.status}`);
       }
@@ -353,9 +352,9 @@ export function TaskRunPage({ task, userId }: { task: TaskDefinition; userId?: s
     setSyncMessage('');
     try {
       setStatus('preparing');
-      const response = await fetch(
+      const response = await apiFetch(
         `/api/ai/generations/${encodeURIComponent(generationUuid)}/regenerate`,
-        { method: 'POST', credentials: 'include' },
+        { method: 'POST' },
       );
       if (!response.ok) throw new Error(`REGENERATE_${response.status}`);
       await runPrepared(await response.json() as PreparedGeneration);
@@ -381,6 +380,15 @@ export function TaskRunPage({ task, userId }: { task: TaskDefinition; userId?: s
     setExportMessage('');
     setExporting(true);
     try {
+      if (syncMessage !== '结果已同步') {
+        if (!userId) {
+          setError('结果尚未同步到服务端，暂时不能导出 Word');
+          return;
+        }
+        setExportMessage('正在同步结果后导出 Word…');
+        await syncPendingResults(userId, Date.now(), { force: true });
+        setSyncMessage('结果已同步');
+      }
       const result = await downloadGenerationWord(generationUuid);
       setExportMessage(
         result.kind === 'desktop'
@@ -481,6 +489,22 @@ export function TaskRunPage({ task, userId }: { task: TaskDefinition; userId?: s
           <span className="eyebrow">输出预览</span>
           {contextUsageText ? <p className="context-usage">{contextUsageText}</p> : null}
           <OutputReader emptyText="完成左侧信息后，结果会在这里流式呈现。" text={output} />
+          {knowledgeRefs.length ? (
+            <section className="result-sources" aria-label="引用来源">
+              <h3>引用来源</h3>
+              <ul>
+                {knowledgeRefs.map((item) => (
+                  <li key={item.uuid}>
+                    <strong>{item.title}</strong>
+                    {item.matched_keywords?.length ? (
+                      <span>命中：{item.matched_keywords.join('、')}</span>
+                    ) : null}
+                  </li>
+                ))}
+              </ul>
+            </section>
+          ) : null}
+          {generationWarning ? <p className="form-error" role="alert">{generationWarning}</p> : null}
           {syncMessage ? <p className="sync-status" role="status">{syncMessage}</p> : null}
           {exportMessage ? <p className="sync-status" role="status">{exportMessage}</p> : null}
           {output ? (
@@ -489,7 +513,7 @@ export function TaskRunPage({ task, userId }: { task: TaskDefinition; userId?: s
               <button className="secondary-action" disabled={status !== 'done'} onClick={regenerate} type="button">重新生成</button>
               <button
                 className="secondary-action"
-                disabled={status !== 'done' || exporting || syncMessage !== '结果已同步'}
+                disabled={status !== 'done' || exporting}
                 onClick={() => void exportWord()}
                 type="button"
               >
@@ -502,13 +526,6 @@ export function TaskRunPage({ task, userId }: { task: TaskDefinition; userId?: s
           ) : null}
         </article>
       </div>
-      {sensitiveConfirmation ? (
-        <SensitiveWarningDialog
-          findings={sensitiveConfirmation.findings}
-          onCancel={() => setSensitiveConfirmation(null)}
-          onConfirm={() => generate(sensitiveConfirmation.digest)}
-        />
-      ) : null}
     </section>
   );
 }

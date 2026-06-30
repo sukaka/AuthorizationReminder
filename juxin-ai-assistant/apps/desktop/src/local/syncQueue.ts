@@ -1,5 +1,7 @@
 import { invoke } from '@tauri-apps/api/core';
 
+import { apiFetch } from '../api/client';
+
 export type PendingResult = {
   generationUuid: string;
   completionToken: string;
@@ -7,7 +9,7 @@ export type PendingResult = {
   modelDisplayName: string;
   modelId: string;
   latencyMs: number;
-  usage: Record<string, number>;
+  usage: Record<string, unknown>;
   retryCount: number;
   nextRetryAt: number;
 };
@@ -76,16 +78,16 @@ export async function reschedulePendingResult(
 export async function syncPendingResults(
   userId: string,
   now = Date.now(),
+  options: { force?: boolean } = {},
 ): Promise<void> {
   const current = await loadPendingResults(userId);
   for (const item of current) {
-    if (item.nextRetryAt > now) continue;
+    if (!options.force && item.nextRetryAt > now) continue;
     try {
-      const response = await fetch(
+      const response = await apiFetch(
         `/api/ai/generations/${encodeURIComponent(item.generationUuid)}/complete`,
         {
           method: 'POST',
-          credentials: 'include',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             completion_token: item.completionToken,

@@ -14,6 +14,7 @@ import {
 type HomePageProps = {
   session: SessionPayload;
   onOpenTask: (task: TaskPayload) => void;
+  onOpenChat: () => void;
   onShowAssistants: () => void;
 };
 
@@ -24,7 +25,7 @@ const emptyHome: HomePayload = {
   safety_reminders: [],
 };
 
-export function HomePage({ session, onOpenTask, onShowAssistants }: HomePageProps) {
+export function HomePage({ session, onOpenTask, onOpenChat, onShowAssistants }: HomePageProps) {
   const [home, setHome] = useState<HomePayload>(emptyHome);
   const [error, setError] = useState('');
   const [intentQuery, setIntentQuery] = useState('');
@@ -77,7 +78,7 @@ export function HomePage({ session, onOpenTask, onShowAssistants }: HomePageProp
       const payload = await routeIntent(query);
       setIntentCandidates(payload.candidates);
       if (!payload.candidates.length) {
-        setError('暂时没有匹配到合适任务，可以浏览全部助手。');
+        setError('暂时没有匹配到合适任务，可以浏览助手模式。');
       }
     } catch {
       setError('任务匹配暂时不可用，请稍后重试');
@@ -93,19 +94,20 @@ export function HomePage({ session, onOpenTask, onShowAssistants }: HomePageProp
           <span className="eyebrow">企业智能工作台</span>
           <h1>上午好，{session.user.username}</h1>
         </div>
-        <button className="secondary-action" onClick={onShowAssistants} type="button">查找助手</button>
+        <button className="secondary-action" onClick={onShowAssistants} type="button">查看助手模式</button>
       </header>
 
       <section className="hero-panel">
         <div>
-          <span className="hero-kicker">从任务开始，不必自己写提示词</span>
-          <h2>今天想完成什么？</h2>
-          <p>十类助手已经准备好结构、提示词与输出要求。</p>
+          <span className="hero-kicker">聚信 AI 助手 · 私人工作助理</span>
+          <h2>每个人的私人工作助理</h2>
+          <p>写材料、查资料、整理文档、生成报告，一句话交给聚信 AI 助手。</p>
+          <p>我可以结合正式知识库、你的个人资料和当前工作场景，帮你快速生成可直接使用的内容。</p>
           <div className="intent-search">
             <label>
-              <span>告诉聚信你想做什么</span>
+              <span>告诉我你想完成什么工作</span>
               <input
-                aria-label="告诉聚信你想做什么"
+                aria-label="告诉我你想完成什么工作"
                 onChange={(event) => setIntentQuery(event.target.value)}
                 onKeyDown={(event) => {
                   if (event.key === 'Enter') {
@@ -113,7 +115,7 @@ export function HomePage({ session, onOpenTask, onShowAssistants }: HomePageProp
                     void findIntentCandidates();
                   }
                 }}
-                placeholder="例如：帮我整理这周工作总结"
+                placeholder="告诉我你想完成什么工作..."
                 value={intentQuery}
               />
             </label>
@@ -122,11 +124,14 @@ export function HomePage({ session, onOpenTask, onShowAssistants }: HomePageProp
               onClick={() => void findIntentCandidates()}
               type="button"
             >
-              {intentLoading ? '正在匹配…' : '查找合适任务'}
+              {intentLoading ? '正在查找…' : '查找合适任务'}
             </button>
           </div>
         </div>
-        <button onClick={onShowAssistants} type="button">浏览全部助手 <span>→</span></button>
+        <div className="hero-actions">
+          <button onClick={onOpenChat} type="button">开启新任务</button>
+          <button onClick={onShowAssistants} type="button">查看助手模式 <span>→</span></button>
+        </div>
       </section>
 
       {intentCandidates.length ? (

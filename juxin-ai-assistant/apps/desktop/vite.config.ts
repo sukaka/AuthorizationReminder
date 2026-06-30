@@ -1,13 +1,20 @@
 import react from '@vitejs/plugin-react';
 import { defineConfig } from 'vitest/config';
 
+const apiProxyTarget = 'http://127.0.0.1:5193';
+const apiProxyPrefixes = [
+  '/api/ai',
+  '/api/export',
+  '/api/knowledge',
+  '/api/personal-reference',
+  '/api/conversations',
+];
+
 export default defineConfig({
   plugins: [react()],
   server: {
     port: 18093,
-    proxy: {
-      '/api/ai': 'http://localhost:5193',
-    },
+    proxy: Object.fromEntries(apiProxyPrefixes.map((prefix) => [prefix, apiProxyTarget])),
   },
   test: {
     environment: 'jsdom',

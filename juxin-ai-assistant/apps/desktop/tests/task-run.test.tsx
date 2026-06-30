@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { HttpResponse, http } from 'msw';
 import { beforeEach, expect, it, vi } from 'vitest';
@@ -44,6 +44,8 @@ beforeEach(() => {
   invokeMock.mockResolvedValue([]);
   listenMock.mockReset();
   listenMock.mockResolvedValue(() => undefined);
+  window.sessionStorage.clear();
+  window.history.replaceState({}, '', '/');
   Object.defineProperty(window, '__TAURI_INTERNALS__', {
     configurable: true,
     value: {},
@@ -105,11 +107,51 @@ it('renders model delta events before the local request completes', async () => 
   expect(await screen.findByText('本次生成约 36 tokens')).toBeInTheDocument();
 });
 
+it('warns when the local model reports that output was truncated', async () => {
+  server.use(
+    http.post('/api/ai/generations/prepare', () => HttpResponse.json({
+      generation_uuid: 'gen-truncated',
+      completion_token: 'complete-truncated',
+      messages: [{ role: 'user', content: '生成长文档' }],
+      temperature: 0.3,
+      safety_notice: '需人工复核',
+    }, { status: 201 })),
+    http.post('/api/ai/generations/gen-truncated/complete', () =>
+      HttpResponse.json({ generation_uuid: 'gen-truncated', status: 'COMPLETED' })),
+  );
+  invokeMock
+    .mockResolvedValueOnce([{
+      id: 'profile-1',
+      displayName: '公司模型',
+      baseUrl: 'https://model.example/v1/',
+      modelId: 'example-model',
+      temperature: 0.3,
+      timeoutSeconds: 60,
+      isDefault: true,
+      hasApiKey: true,
+    }])
+    .mockResolvedValueOnce({
+      output: '十、测试注意事项\\n1. 授权与',
+      latencyMs: 120,
+      usage: { output_tokens: 1024 },
+      finishReason: 'length',
+    });
+
+  render(<TaskRunPage task={workSummaryTask} />);
+  await userEvent.type(screen.getByLabelText('工作内容'), '生成完整测试文档');
+  await userEvent.click(screen.getByRole('button', { name: '开始生成' }));
+
+  expect(await screen.findByText(/模型达到输出长度上限/)).toBeInTheDocument();
+});
+
 it('prepares provider-neutral messages, invokes Tauri and completes history', async () => {
   const completeRequest = vi.fn();
+  const seenAuthorization: string[] = [];
+  window.history.replaceState({}, '', '/?sso_token=desktop-sso-token');
   server.use(
-    http.post('/api/ai/generations/prepare', () =>
-      HttpResponse.json(
+    http.post('/api/ai/generations/prepare', ({ request }) => {
+      seenAuthorization.push(request.headers.get('authorization') ?? '');
+      return HttpResponse.json(
         {
           generation_uuid: 'gen-1',
           completion_token: 'complete-1',
@@ -121,11 +163,22 @@ it('prepares provider-neutral messages, invokes Tauri and completes history', as
             estimated_tokens: 309,
             estimator: 'rough_chars_div_4',
           },
+          knowledge_refs: [
+            {
+              uuid: 'knowledge-risk',
+              title: '接口梳理白皮书',
+              matched_keywords: ['接口', '风险'],
+              score: 2,
+              priority: 5,
+              clipped: false,
+            },
+          ],
         },
         { status: 201 },
-      ),
-    ),
+      );
+    }),
     http.post('/api/ai/generations/gen-1/complete', async ({ request }) => {
+      seenAuthorization.push(request.headers.get('authorization') ?? '');
       completeRequest(await request.json());
       return HttpResponse.json({ generation_uuid: 'gen-1', status: 'COMPLETED' });
     }),
@@ -157,6 +210,8 @@ it('prepares provider-neutral messages, invokes Tauri and completes history', as
   expect(await screen.findByText('本周总结')).toBeInTheDocument();
   expect(screen.queryByText('上下文约 309 tokens')).not.toBeInTheDocument();
   expect(screen.getByText('本次生成约 36 tokens')).toBeInTheDocument();
+  expect(screen.getByText('引用来源')).toBeInTheDocument();
+  expect(screen.getByText('接口梳理白皮书')).toBeInTheDocument();
   expect(screen.queryByText('# 本周总结')).not.toBeInTheDocument();
   expect(invokeMock).toHaveBeenCalledWith(
     'model_generate',
@@ -177,6 +232,97 @@ it('prepares provider-neutral messages, invokes Tauri and completes history', as
       }),
     ),
   );
+  expect(seenAuthorization).toEqual([
+    'Bearer desktop-sso-token',
+    'Bearer desktop-sso-token',
+  ]);
+});
+
+it('runs quality check and revises weak generation output before saving', async () => {
+  const completeRequest = vi.fn();
+  server.use(
+    http.post('/api/ai/generations/prepare', () => HttpResponse.json(
+      {
+        generation_uuid: 'gen-revise',
+        completion_token: 'complete-revise',
+        messages: [{ role: 'user', content: '生成投标材料' }],
+        temperature: 0.3,
+        safety_notice: '需人工复核',
+        context_usage: {
+          characters: 100,
+          estimated_tokens: 25,
+          estimator: 'rough_chars_div_4',
+        },
+        knowledge_refs: [],
+        loop_trace: [{ state: 'QUALITY_CHECK', action: 'revise_answer' }],
+      },
+      { status: 201 },
+    )),
+    http.post('/api/ai/agent-loop/quality-check', async ({ request }) => {
+      const body = await request.json() as { answer: string };
+      if (body.answer === '通用材料') {
+        return HttpResponse.json({
+          passed: false,
+          issues: ['聚信得仁业务场景', '网络安全公司内部员工'],
+          retry_allowed: true,
+          revision_messages: [
+            { role: 'user', content: '生成投标材料' },
+            { role: 'assistant', content: '通用材料' },
+            { role: 'user', content: '请修正输出' },
+          ],
+        });
+      }
+      return HttpResponse.json({
+        passed: true,
+        issues: [],
+        retry_allowed: false,
+        revision_messages: [],
+      });
+    }),
+    http.post('/api/ai/audit/local-model-events', () => new HttpResponse(null, { status: 204 })),
+    http.post('/api/ai/generations/gen-revise/complete', async ({ request }) => {
+      completeRequest(await request.json());
+      return HttpResponse.json({ generation_uuid: 'gen-revise', status: 'COMPLETED' });
+    }),
+  );
+  invokeMock
+    .mockResolvedValueOnce([{
+      id: 'profile-1',
+      displayName: '公司模型',
+      baseUrl: 'https://model.example/v1/',
+      modelId: 'example-model',
+      temperature: 0.3,
+      timeoutSeconds: 60,
+      isDefault: true,
+      hasApiKey: true,
+    }])
+    .mockResolvedValueOnce({ output: '通用材料', latencyMs: 10, usage: { output_tokens: 3 } })
+    .mockResolvedValueOnce({
+      output: '聚信得仁投标材料：围绕标书、响应文件和风险提示组织。',
+      latencyMs: 12,
+      usage: { output_tokens: 20 },
+    });
+
+  render(<TaskRunPage task={workSummaryTask} />);
+
+  await userEvent.type(screen.getByLabelText('工作内容'), '生成投标材料');
+  await userEvent.click(screen.getByRole('button', { name: '开始生成' }));
+
+  expect(await screen.findByText(/聚信得仁投标材料/)).toBeInTheDocument();
+  await waitFor(() => expect(invokeMock).toHaveBeenCalledWith(
+    'model_generate',
+    expect.objectContaining({
+      messages: expect.arrayContaining([
+        expect.objectContaining({ role: 'assistant', content: '通用材料' }),
+        expect.objectContaining({ role: 'user', content: '请修正输出' }),
+      ]),
+    }),
+  ));
+  await waitFor(() => expect(completeRequest).toHaveBeenCalledWith(
+    expect.objectContaining({
+      output: '聚信得仁投标材料：围绕标书、响应文件和风险提示组织。',
+    }),
+  ));
 });
 
 it('uploads reference material and includes attachment ids in prepare request', async () => {
@@ -507,7 +653,8 @@ it('keeps API keys out of the browser-only experience', () => {
   expect(screen.queryByLabelText(/API Key/i)).not.toBeInTheDocument();
 });
 
-it('shows sensitive findings with task field labels and hides empty fields', async () => {
+it('auto-confirms sensitive findings and continues generation without a dialog', async () => {
+  const prepareBodies: unknown[] = [];
   const sensitiveTask: TaskDefinition = {
     ...workSummaryTask,
     fields: [
@@ -528,17 +675,34 @@ it('shows sensitive findings with task field labels and hides empty fields', asy
     ],
   };
   server.use(
-    http.post('/api/ai/generations/prepare', () =>
+    http.post('/api/ai/generations/prepare', async ({ request }) => {
+      const body = await request.json();
+      prepareBodies.push(body);
+      if (!(body as { sensitive_confirmation_digest?: string }).sensitive_confirmation_digest) {
+        return HttpResponse.json({
+          detail: {
+            code: 'SENSITIVE_CONFIRMATION_REQUIRED',
+            confirmation_digest: 'digest-sensitive',
+            findings: [
+              { code: 'ACCOUNT_PASSWORD', field: 'blank_slot_05', preview: '***' },
+              { code: 'ACCOUNT_PASSWORD', field: 'blank_slot_06', preview: '***' },
+            ],
+          },
+        }, { status: 409 });
+      }
+      return HttpResponse.json({
+        generation_uuid: 'gen-sensitive-auto',
+        completion_token: 'complete-sensitive-auto',
+        messages: [{ role: 'user', content: '已自动确认' }],
+        temperature: 0.3,
+        safety_notice: '需人工复核',
+      }, { status: 201 });
+    }),
+    http.post('/api/ai/generations/gen-sensitive-auto/complete', () =>
       HttpResponse.json({
-        detail: {
-          code: 'SENSITIVE_CONFIRMATION_REQUIRED',
-          confirmation_digest: 'digest-sensitive',
-          findings: [
-            { code: 'ACCOUNT_PASSWORD', field: 'blank_slot_05', preview: '***' },
-            { code: 'ACCOUNT_PASSWORD', field: 'blank_slot_06', preview: '***' },
-          ],
-        },
-      }, { status: 409 }),
+        generation_uuid: 'gen-sensitive-auto',
+        status: 'COMPLETED',
+      }),
     ),
   );
   invokeMock.mockImplementation((command: string) => {
@@ -554,6 +718,13 @@ it('shows sensitive findings with task field labels and hides empty fields', asy
         hasApiKey: true,
       }]);
     }
+    if (command === 'model_generate') {
+      return Promise.resolve({
+        output: '生成结果',
+        latencyMs: 10,
+        usage: {},
+      });
+    }
     return Promise.resolve();
   });
 
@@ -561,12 +732,14 @@ it('shows sensitive findings with task field labels and hides empty fields', asy
   await userEvent.type(screen.getByLabelText('登录账号密码'), 'admin/password: secret');
   await userEvent.click(screen.getByRole('button', { name: '开始生成' }));
 
-  const dialog = await screen.findByRole('dialog', { name: '检测到敏感信息' });
-  expect(dialog).toBeInTheDocument();
-  expect(within(dialog).getByText('登录账号密码')).toBeInTheDocument();
-  expect(within(dialog).queryByText('blank_slot_05')).not.toBeInTheDocument();
-  expect(within(dialog).queryByText('blank_slot_06')).not.toBeInTheDocument();
-  expect(within(dialog).queryByText('备用账号密码')).not.toBeInTheDocument();
+  expect(await screen.findByText('生成结果')).toBeInTheDocument();
+  expect(screen.queryByRole('dialog', { name: '检测到敏感信息' })).not.toBeInTheDocument();
+  expect(prepareBodies).toHaveLength(2);
+  expect(prepareBodies[1]).toEqual(
+    expect.objectContaining({
+      sensitive_confirmation_digest: 'digest-sensitive',
+    }),
+  );
 });
 
 it('cancels the active local request with its request id', async () => {
@@ -645,7 +818,9 @@ it('restores and saves a user-scoped encrypted device draft', async () => {
   ));
 });
 
-it('keeps a completed local result in the encrypted pending queue when sync fails', async () => {
+it('forces pending-result sync before exporting Word', async () => {
+  let completeAttempts = 0;
+  let queuedPayload = '';
   server.use(
     http.post('/api/ai/generations/prepare', () =>
       HttpResponse.json({
@@ -656,11 +831,22 @@ it('keeps a completed local result in the encrypted pending queue when sync fail
         safety_notice: '需人工复核',
       }, { status: 201 }),
     ),
-    http.post('/api/ai/generations/gen-offline/complete', () =>
-      HttpResponse.json({ detail: 'offline' }, { status: 503 }),
+    http.post('/api/ai/generations/gen-offline/complete', () => {
+      completeAttempts += 1;
+      return completeAttempts === 1
+        ? HttpResponse.json({ detail: 'offline' }, { status: 503 })
+        : HttpResponse.json({ generation_uuid: 'gen-offline', status: 'COMPLETED' });
+    }),
+    http.get('/api/ai/generations/gen-offline/export.docx', () =>
+      new HttpResponse(new Uint8Array([100, 111, 99, 120]), {
+        headers: {
+          'Content-Type': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+          'Content-Disposition': "attachment; filename*=UTF-8''offline.docx",
+        },
+      }),
     ),
   );
-  invokeMock.mockImplementation((command: string) => {
+  invokeMock.mockImplementation((command: string, payload?: Record<string, unknown>) => {
     if (command === 'model_profile_list') {
       return Promise.resolve([{
         id: 'profile-1',
@@ -677,8 +863,21 @@ it('keeps a completed local result in the encrypted pending queue when sync fail
       return Promise.resolve({ output: '离线结果', latencyMs: 20, usage: {} });
     }
     if (command === 'local_draft_load') return Promise.resolve(null);
-    if (command === 'local_queue_push') return Promise.resolve();
+    if (command === 'local_queue_push') {
+      queuedPayload = String(payload?.payload || '');
+      return Promise.resolve();
+    }
+    if (command === 'local_queue_list') {
+      return Promise.resolve([{
+        id: 'gen-offline',
+        payload: queuedPayload,
+        status: 'pending',
+        created_at: 1,
+      }]);
+    }
+    if (command === 'local_queue_remove') return Promise.resolve();
     if (command === 'local_draft_delete') return Promise.resolve();
+    if (command === 'generation_word_save') return Promise.resolve('/Users/test/Downloads/offline.docx');
     return Promise.resolve();
   });
 
@@ -687,11 +886,19 @@ it('keeps a completed local result in the encrypted pending queue when sync fail
   await userEvent.click(screen.getByRole('button', { name: '开始生成' }));
 
   expect(await screen.findByText('结果已保存在本机，恢复连接后自动同步')).toBeInTheDocument();
-  expect(screen.getByRole('button', { name: '导出 Word' })).toBeDisabled();
+  const exportButton = screen.getByRole('button', { name: '导出 Word' });
+  expect(exportButton).toBeEnabled();
+  await userEvent.click(exportButton);
+  expect(await screen.findByText('Word 已保存到：/Users/test/Downloads/offline.docx')).toBeInTheDocument();
+  expect(completeAttempts).toBe(2);
   expect(invokeMock).toHaveBeenCalledWith(
     'local_queue_push',
     expect.objectContaining({ userId: 'u-1', resultId: 'gen-offline' }),
   );
+  expect(invokeMock).toHaveBeenCalledWith('local_queue_remove', {
+    userId: 'u-1',
+    resultId: 'gen-offline',
+  });
 });
 
 it('submits result feedback and regenerates through the local model boundary', async () => {

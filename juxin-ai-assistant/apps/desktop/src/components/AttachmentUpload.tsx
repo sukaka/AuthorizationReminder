@@ -51,16 +51,20 @@ export function AttachmentUpload({
       <label>
         <span>参考材料（可选）</span>
         <small>支持 txt、md。文件内容会作为参考材料参与生成。</small>
-        <input
-          accept=".txt,.md,text/plain,text/markdown"
-          aria-label="上传参考材料"
-          onChange={(event) => {
-            const file = event.target.files?.[0];
-            if (file) void upload(file);
-            event.currentTarget.value = '';
-          }}
-          type="file"
-        />
+        <span className="file-picker">
+          <span className="file-picker-button">选择文件</span>
+          <span className="file-picker-name">未选择文件</span>
+          <input
+            accept=".txt,.md,text/plain,text/markdown"
+            aria-label="上传参考材料"
+            onChange={(event) => {
+              const file = event.target.files?.[0];
+              if (file) void upload(file);
+              event.currentTarget.value = '';
+            }}
+            type="file"
+          />
+        </span>
       </label>
       {uploadingItems.map((item) => (
         <p className="attachment-status" key={item.id}>{item.fileName} 上传中…</p>

@@ -24,3 +24,27 @@ test('portal integration does not add a standalone AI assistant login route', ()
   assert.doesNotMatch(source, /app\.(?:get|post)\('\/api\/ai-assistant\/(?:auth\/)?login'/);
   assert.doesNotMatch(compose, /APP_AI_ASSISTANT_LOGIN_URL/);
 });
+
+test('AI assistant can force a true unified logout through the portal', () => {
+  assert.match(source, /const isPortalLogoutRequest = portalLogoutValues\.has\(/);
+  assert.match(source, /if \(isPortalLogoutRequest\) \{\s+clearAuthCookie\(res\);\s+clearCsrfCookie\(res\);/);
+  assert.match(source, /function clearPortalSessionMarker\(\) \{/);
+  assert.match(source, /sessionStorage\.removeItem\(portalSessionStorageKey\);/);
+  assert.match(source, /if \(isPortalLogoutRequest\) \{\s+clearPortalSessionMarker\(\);/);
+});
+
+test('portal login prevents duplicate submissions from reusing an already consumed captcha', () => {
+  assert.match(source, /let loginSubmitting = false;/);
+  assert.match(source, /if \(loginSubmitting\) return;/);
+  assert.match(source, /loginSubmitting = true;/);
+  assert.match(source, /loginBtn\.textContent = '登录中…';/);
+  assert.match(source, /loginSubmitting = false;/);
+});
+
+test('portal login surfaces unreachable AI assistant workspace after successful authentication', () => {
+  assert.match(source, /function showPortalRedirecting\(appName, appUrl\) \{/);
+  assert.match(source, /loginBtn\.textContent = '正在进入…';/);
+  assert.match(source, /目标系统暂时不可用或未启动/);
+  assert.match(source, /showPortalRedirecting\(preferred\.name, preferred\.url\);/);
+  assert.match(source, /showPortalRedirecting\(target\.name, target\.url\);/);
+});

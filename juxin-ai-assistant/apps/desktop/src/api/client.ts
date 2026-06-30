@@ -77,7 +77,7 @@ export type HistoryItemPayload = {
   model_id: string;
   prompt_version: number;
   latency_ms?: number | null;
-  usage: Record<string, number>;
+  usage: Record<string, unknown>;
   created_at: string;
   finished_at?: string | null;
 };
@@ -124,6 +124,61 @@ export class ApiError extends Error {
   }
 }
 
+const DESKTOP_SSO_TOKEN_KEY = 'juxin_ai_assistant_sso_token';
+const DESKTOP_SSO_CALLBACK_PARAMS = ['sso_token', 'portal_session'];
+
+export function clearSsoCallbackParams(): void {
+  try {
+    const url = new URL(window.location.href);
+    let changed = false;
+    DESKTOP_SSO_CALLBACK_PARAMS.forEach((param) => {
+      if (url.searchParams.has(param)) {
+        url.searchParams.delete(param);
+        changed = true;
+      }
+    });
+    if (changed) {
+      window.history.replaceState({}, '', `${url.pathname}${url.search}${url.hash}`);
+    }
+  } catch {
+    // Ignore malformed runtime URLs.
+  }
+}
+
+function readDesktopSsoToken(): string {
+  if (!window.__TAURI_INTERNALS__) return '';
+  try {
+    const url = new URL(window.location.href);
+    const handoffToken = String(url.searchParams.get('sso_token') || '').trim();
+    if (handoffToken) {
+      sessionStorage.setItem(DESKTOP_SSO_TOKEN_KEY, handoffToken);
+      clearSsoCallbackParams();
+      return handoffToken;
+    }
+    return String(sessionStorage.getItem(DESKTOP_SSO_TOKEN_KEY) || '').trim();
+  } catch {
+    return '';
+  }
+}
+
+function apiHeaders(headers?: HeadersInit): HeadersInit | undefined {
+  const token = readDesktopSsoToken();
+  if (!token) return headers;
+  const next = new Headers(headers);
+  if (token && !next.has('Authorization')) {
+    next.set('Authorization', `Bearer ${token}`);
+  }
+  return next;
+}
+
+export async function apiFetch(input: RequestInfo | URL, init: RequestInit = {}): Promise<Response> {
+  return fetch(input, {
+    ...init,
+    credentials: init.credentials ?? 'include',
+    headers: apiHeaders(init.headers),
+  });
+}
+
 async function readJson<T>(response: Response, code: string): Promise<T> {
   const payload = await response.json().catch(() => null);
   if (response.status === 401) {
@@ -136,7 +191,18 @@ async function readJson<T>(response: Response, code: string): Promise<T> {
   return payload as T;
 }
 
-export function getAuthPortalUrl(): string {
+type AuthPortalUrlOptions = {
+  logout?: boolean;
+};
+
+function formatAuthPortalUrl(url: URL, options: AuthPortalUrlOptions): string {
+  if (options.logout) {
+    url.searchParams.set('logout', '1');
+  }
+  return url.toString();
+}
+
+export function getAuthPortalUrl(options: AuthPortalUrlOptions = {}): string {
   if (
     window.__TAURI_INTERNALS__ &&
     typeof window.__JUXIN_DESKTOP_AUTH_PORTAL__ === 'string'
@@ -156,18 +222,20 @@ export function getAuthPortalUrl(): string {
         !portal.password &&
         !portal.hash
       ) {
-        return portal.toString();
+        return formatAuthPortalUrl(portal, options);
       }
     } catch {
       // Fall back to the build-time portal below.
     }
   }
   const authUrl = import.meta.env.VITE_AUTH_PUBLIC_URL || 'http://localhost:5180';
-  return `${authUrl.replace(/\/$/, '')}/portal?system=ai-assistant`;
+  const portal = new URL(`${authUrl.replace(/\/$/, '')}/portal`);
+  portal.searchParams.set('system', 'ai-assistant');
+  return formatAuthPortalUrl(portal, options);
 }
 
 export async function getSession(): Promise<SessionPayload> {
-  const response = await fetch('/api/ai/session', { credentials: 'include' });
+  const response = await apiFetch('/api/ai/session');
   if (response.status === 401) {
     window.location.assign(getAuthPortalUrl());
     throw new ApiError(401, 'AUTH_REDIRECT');
@@ -178,23 +246,21 @@ export async function getSession(): Promise<SessionPayload> {
 export async function getCatalog(query = ''): Promise<CatalogPayload> {
   const search = query ? `?query=${encodeURIComponent(query)}` : '';
   return readJson<CatalogPayload>(
-    await fetch(`/api/ai/catalog${search}`, { credentials: 'include' }),
+    await apiFetch(`/api/ai/catalog${search}`),
     'CATALOG_FAILED',
   );
 }
 
 export async function getHome(): Promise<HomePayload> {
   return readJson<HomePayload>(
-    await fetch('/api/ai/home', { credentials: 'include' }),
+    await apiFetch('/api/ai/home'),
     'HOME_FAILED',
   );
 }
 
 export async function getTask(taskCode: string): Promise<TaskPayload> {
   return readJson<TaskPayload>(
-    await fetch(`/api/ai/tasks/${encodeURIComponent(taskCode)}`, {
-      credentials: 'include',
-    }),
+    await apiFetch(`/api/ai/tasks/${encodeURIComponent(taskCode)}`),
     'TASK_FAILED',
   );
 }
@@ -203,9 +269,8 @@ export async function routeIntent(query: string): Promise<{
   candidates: IntentCandidatePayload[];
 }> {
   return readJson(
-    await fetch('/api/ai/intent/route', {
+    await apiFetch('/api/ai/intent/route', {
       method: 'POST',
-      credentials: 'include',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ query }),
     }),
@@ -238,9 +303,8 @@ export async function uploadTaskAttachment(
   form.append('task_uuid', taskUuid);
   form.append('file', file);
   return normalizeAttachmentPayload(await readJson(
-    await fetch('/api/ai/attachments', {
+    await apiFetch('/api/ai/attachments', {
       method: 'POST',
-      credentials: 'include',
       body: form,
     }),
     'ATTACHMENT_UPLOAD_FAILED',
@@ -256,9 +320,8 @@ export async function reportGenerationFailure(
   },
 ): Promise<void> {
   await readJson(
-    await fetch(`/api/ai/generations/${encodeURIComponent(generationUuid)}/fail`, {
+    await apiFetch(`/api/ai/generations/${encodeURIComponent(generationUuid)}/fail`, {
       method: 'POST',
-      credentials: 'include',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         completion_token: payload.completionToken,
@@ -269,7 +332,6 @@ export async function reportGenerationFailure(
     'GENERATION_FAIL_WRITEBACK_FAILED',
   );
 }
-
 
 export type LocalModelAuditEvent =
   | 'MODEL_STARTED'
@@ -286,9 +348,8 @@ export async function reportLocalModelAuditEvent(payload: {
   latencyMs?: number;
   errorCode?: string;
 }): Promise<void> {
-  const response = await fetch('/api/ai/audit/local-model-events', {
+  const response = await apiFetch('/api/ai/audit/local-model-events', {
     method: 'POST',
-    credentials: 'include',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       generation_uuid: payload.generationUuid,
@@ -309,17 +370,17 @@ export async function reportLocalModelAuditEvent(payload: {
 }
 
 export async function putFavorite(taskUuid: string): Promise<void> {
-  const response = await fetch(
+  const response = await apiFetch(
     `/api/ai/favorites/${encodeURIComponent(taskUuid)}`,
-    { method: 'PUT', credentials: 'include' },
+    { method: 'PUT' },
   );
   if (!response.ok) throw new ApiError(response.status, 'FAVORITE_FAILED');
 }
 
 export async function deleteFavorite(taskUuid: string): Promise<void> {
-  const response = await fetch(
+  const response = await apiFetch(
     `/api/ai/favorites/${encodeURIComponent(taskUuid)}`,
-    { method: 'DELETE', credentials: 'include' },
+    { method: 'DELETE' },
   );
   if (!response.ok) throw new ApiError(response.status, 'FAVORITE_DELETE_FAILED');
 }
@@ -339,17 +400,15 @@ export async function getHistory(filters: HistoryFilters = {}): Promise<{
   if (filters.createdFrom) search.set('created_from', filters.createdFrom);
   if (filters.createdTo) search.set('created_to', filters.createdTo);
   return readJson(
-    await fetch(`/api/ai/generations?${search.toString()}`, {
-      credentials: 'include',
-    }),
+    await apiFetch(`/api/ai/generations?${search.toString()}`),
     'HISTORY_FAILED',
   );
 }
 
 export async function deleteHistory(generationUuid: string): Promise<void> {
-  const response = await fetch(
+  const response = await apiFetch(
     `/api/ai/generations/${encodeURIComponent(generationUuid)}`,
-    { method: 'DELETE', credentials: 'include' },
+    { method: 'DELETE' },
   );
   if (!response.ok) throw new ApiError(response.status, 'HISTORY_DELETE_FAILED');
 }
@@ -389,9 +448,8 @@ export type WordDownloadResult =
   | { kind: 'browser' };
 
 export async function downloadGenerationWord(generationUuid: string): Promise<WordDownloadResult> {
-  const response = await fetch(
+  const response = await apiFetch(
     `/api/ai/generations/${encodeURIComponent(generationUuid)}/export.docx`,
-    { credentials: 'include' },
   );
   if (!response.ok) throw new ApiError(response.status, 'WORD_EXPORT_FAILED');
   const bytes = new Uint8Array(await response.arrayBuffer());
@@ -430,11 +488,10 @@ export async function submitFeedback(
   content?: string,
 ): Promise<void> {
   await readJson(
-    await fetch(
+    await apiFetch(
       `/api/ai/generations/${encodeURIComponent(generationUuid)}/feedback`,
       {
         method: 'POST',
-        credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           feedback_type: feedbackType,
@@ -450,9 +507,7 @@ export async function getHistoryDetail(
   generationUuid: string,
 ): Promise<HistoryDetailPayload> {
   return readJson(
-    await fetch(`/api/ai/generations/${encodeURIComponent(generationUuid)}`, {
-      credentials: 'include',
-    }),
+    await apiFetch(`/api/ai/generations/${encodeURIComponent(generationUuid)}`),
     'HISTORY_DETAIL_FAILED',
   );
 }

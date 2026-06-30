@@ -159,6 +159,15 @@ class ContextUsageOut(BaseModel):
     estimator: str
 
 
+class KnowledgeRefOut(BaseModel):
+    uuid: str
+    title: str
+    matched_keywords: list[str] = Field(default_factory=list)
+    score: int = 0
+    priority: int = 0
+    clipped: bool = False
+
+
 class PrepareGenerationOut(BaseModel):
     generation_uuid: str
     completion_token: str
@@ -166,6 +175,8 @@ class PrepareGenerationOut(BaseModel):
     temperature: float = 0.3
     safety_notice: str
     context_usage: ContextUsageOut
+    knowledge_refs: list[KnowledgeRefOut] = Field(default_factory=list)
+    loop_trace: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class AttachmentOut(BaseModel):
@@ -182,6 +193,484 @@ class AttachmentOut(BaseModel):
     extracted_characters: int
 
 
+class KnowledgeFileOut(BaseModel):
+    file_uuid: str
+    knowledge_base_id: str = ""
+    file_name: str
+    file_type: str
+    file_size: int
+    visibility: str
+    status: str
+    chunk_count: int
+    created_at: datetime
+    source_type: str = "user_upload"
+    usage_type: str = "personal_reference"
+    review_status: str = "draft"
+    rag_enabled: bool = False
+    reference_enabled: bool = True
+    rag_scope: str = "personal"
+    permission_scope: str = "private"
+    category: str = "个人素材"
+    document_type: str = "其他"
+    tags: list[str] = Field(default_factory=list)
+    parse_status: str = "parsed"
+    index_status: str = "indexed"
+
+
+class KnowledgeFileListOut(BaseModel):
+    items: list[KnowledgeFileOut]
+    total: int
+
+
+class KnowledgeBaseCreateIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1, max_length=128)
+    description: str = Field(default="", max_length=2_000)
+    scope: Literal["personal", "company", "department", "project", "customer"] = "personal"
+    department_id: str = Field(default="", max_length=64)
+    project_id: str = Field(default="", max_length=64)
+
+
+class KnowledgeBasePatchIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str | None = Field(default=None, min_length=1, max_length=128)
+    description: str | None = Field(default=None, max_length=2_000)
+    scope: Literal["personal", "company", "department", "project", "customer"] | None = None
+    department_id: str | None = Field(default=None, max_length=64)
+    project_id: str | None = Field(default=None, max_length=64)
+
+
+class KnowledgeBaseOut(BaseModel):
+    base_id: str
+    name: str
+    description: str
+    scope: str
+    owner_user_id: str
+    department_id: str
+    project_id: str
+    created_by: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class KnowledgeBaseListOut(BaseModel):
+    items: list[KnowledgeBaseOut]
+    total: int
+
+
+class KnowledgeReviewSubmitIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    comment: str = Field(default="", max_length=2_000)
+
+
+class KnowledgeReviewDecisionIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    knowledge_base_id: str = Field(default="", max_length=64)
+    comment: str = Field(default="", max_length=2_000)
+    permission_scope: Literal["company", "department", "project", "admin"] = "company"
+    rag_scope: Literal["company", "department", "project"] = "company"
+    category: str = Field(default="", max_length=64)
+    document_type: str = Field(default="", max_length=64)
+    tags: list[str] = Field(default_factory=list, max_length=20)
+
+
+class KnowledgeReviewLogOut(BaseModel):
+    file_uuid: str
+    file_name: str
+    user_id: str
+    reviewer_id: str
+    action: str
+    old_status: str
+    new_status: str
+    comment: str
+    created_at: datetime
+
+
+class KnowledgeReviewHistoryOut(BaseModel):
+    items: list[KnowledgeReviewLogOut]
+    total: int
+
+
+class KnowledgeFilePatchIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    category: str | None = Field(default=None, max_length=64)
+    document_type: str | None = Field(default=None, max_length=64)
+    tags: list[str] | None = Field(default=None, max_length=20)
+    reference_enabled: bool | None = None
+
+
+class KnowledgeFileClassifyIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    apply: bool = True
+
+
+class KnowledgeFileClassifyOut(BaseModel):
+    file_uuid: str
+    category: str
+    document_type: str
+    tags: list[str] = Field(default_factory=list)
+    applied: bool
+
+
+class KnowledgeFilePreviewChunkOut(BaseModel):
+    chunk_id: str
+    chunk_index: int
+    page_number: int | None = None
+    section_title: str = ""
+    text: str
+
+
+class KnowledgeFilePreviewOut(BaseModel):
+    file_uuid: str
+    file_name: str
+    source_kind: str
+    chunks: list[KnowledgeFilePreviewChunkOut] = Field(default_factory=list)
+    total_chunks: int
+    notice: str
+
+
+class ChatCitationOut(BaseModel):
+    source_type: str
+    file_uuid: str = ""
+    file_name: str = ""
+    chunk_id: str = ""
+    page_number: int | None = None
+    section_title: str = ""
+    chunk_index: int | None = None
+    score: int = 0
+
+
+class ChatPrepareIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    session_uuid: str | None = Field(default=None, max_length=64)
+    question: str = Field(min_length=1, max_length=20_000)
+    mode: Literal[
+        "normal",
+        "sales",
+        "business",
+        "hr_admin",
+        "presales",
+        "delivery",
+        "software_test",
+        "pentest",
+        "security_ops",
+        "risk_assessment",
+        "incident_response",
+        "knowledge",
+    ] = "normal"
+    top_k: int | None = Field(default=8, ge=1, le=100)
+    attachment_file_ids: list[str] = Field(default_factory=list, max_length=20)
+    include_personal_references: bool = False
+    include_session_attachments: bool = False
+
+
+class ChatMessageOut(BaseModel):
+    message_uuid: str
+    role: Literal["user", "assistant"]
+    content: str
+    status: str
+    citations: list[ChatCitationOut] = Field(default_factory=list)
+    created_at: datetime
+
+
+class ChatPrepareOut(BaseModel):
+    session_uuid: str
+    user_message_uuid: str
+    assistant_message_uuid: str
+    completion_token: str
+    completed: bool
+    answer: str = ""
+    messages: list[MessageOut]
+    citations: list[ChatCitationOut] = Field(default_factory=list)
+    loop_trace: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class PersonalReferenceGenerateIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    conversation_id: str | None = Field(default=None, max_length=64)
+    question: str = Field(min_length=1, max_length=20_000)
+    file_ids: list[str] = Field(default_factory=list, max_length=20)
+    mode: Literal[
+        "normal",
+        "sales",
+        "business",
+        "hr_admin",
+        "presales",
+        "delivery",
+        "software_test",
+        "pentest",
+        "security_ops",
+        "risk_assessment",
+        "incident_response",
+        "knowledge",
+    ] = "normal"
+    top_k: int | None = Field(default=8, ge=1, le=100)
+
+
+class PersonalReferenceSourceOut(BaseModel):
+    source_kind: str
+    file_id: str
+    file_name: str
+    chunk_id: str
+    page_number: int | None = None
+    section_title: str = ""
+    chunk_index: int | None = None
+    score: int = 0
+    snippet: str = ""
+
+
+class PersonalReferenceGenerateOut(BaseModel):
+    answer: str = ""
+    messages: list[MessageOut]
+    sources: list[PersonalReferenceSourceOut] = Field(default_factory=list)
+    notice: str
+
+
+class PersonalReferenceSearchIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    conversation_id: str | None = Field(default=None, max_length=64)
+    question: str = Field(min_length=1, max_length=20_000)
+    file_ids: list[str] = Field(default_factory=list, max_length=20)
+    top_k: int | None = Field(default=8, ge=1, le=100)
+
+
+class PersonalReferenceSearchOut(BaseModel):
+    sources: list[PersonalReferenceSourceOut] = Field(default_factory=list)
+    total: int
+    notice: str
+
+
+class KnowledgeQueryIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    question: str = Field(min_length=1, max_length=20_000)
+    mode: Literal[
+        "normal",
+        "sales",
+        "business",
+        "hr_admin",
+        "presales",
+        "delivery",
+        "software_test",
+        "pentest",
+        "security_ops",
+        "risk_assessment",
+        "incident_response",
+        "knowledge",
+    ] = "knowledge"
+    knowledge_base_ids: list[str] = Field(default_factory=list, max_length=20)
+    filters: dict[str, list[str]] = Field(default_factory=dict)
+    top_k: int | None = Field(default=8, ge=1, le=100)
+    include_sources: bool = True
+
+
+class KnowledgeSourceOut(BaseModel):
+    source_kind: str
+    file_id: str
+    file_name: str
+    page_number: int | None = None
+    section_title: str = ""
+    chunk_id: str = ""
+    score: int = 0
+    snippet: str = ""
+
+
+class KnowledgeSearchOut(BaseModel):
+    sources: list[KnowledgeSourceOut] = Field(default_factory=list)
+    total: int
+
+
+class KnowledgeAskOut(BaseModel):
+    answer: str = ""
+    messages: list[MessageOut] = Field(default_factory=list)
+    sources: list[KnowledgeSourceOut] = Field(default_factory=list)
+    notice: str = ""
+
+
+class KnowledgeFileAskIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    question: str = Field(default="", max_length=20_000)
+    mode: Literal[
+        "normal",
+        "sales",
+        "business",
+        "hr_admin",
+        "presales",
+        "delivery",
+        "software_test",
+        "pentest",
+        "security_ops",
+        "risk_assessment",
+        "incident_response",
+        "knowledge",
+    ] = "normal"
+    top_k: int | None = Field(default=8, ge=1, le=100)
+    include_sources: bool = True
+
+
+class LoopQualityCheckIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    mode: str = Field(default="normal", max_length=64)
+    answer: str = Field(min_length=1, max_length=2_000_000)
+    used_knowledge: bool = False
+    retry_count: int = Field(default=0, ge=0, le=10)
+    messages: list[MessageOut] = Field(default_factory=list, max_length=64)
+
+
+class LoopQualityCheckOut(BaseModel):
+    passed: bool
+    issues: list[str] = Field(default_factory=list)
+    retry_allowed: bool
+    revision_messages: list[MessageOut] = Field(default_factory=list)
+
+
+class ChatCompleteIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    completion_token: str = Field(min_length=1, max_length=256)
+    answer: str = Field(min_length=1, max_length=2_000_000)
+    model_display_name: str = Field(default="", max_length=128)
+    model_id: str = Field(default="", max_length=128)
+    usage: dict = Field(default_factory=dict)
+    latency_ms: int | None = Field(default=None, ge=0)
+
+
+class ChatFailIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    completion_token: str = Field(min_length=1, max_length=256)
+    error_code: str = Field(min_length=1, max_length=64)
+    error_message: str | None = Field(default=None, max_length=500)
+
+
+class ChatMessageStatusOut(BaseModel):
+    message_uuid: str
+    status: str
+
+
+class ExportWordSourceIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    source_kind: str = Field(max_length=64)
+    file_id: str = Field(max_length=64)
+    file_name: str = Field(max_length=255)
+    page_number: int | None = None
+    section_title: str = Field(default="", max_length=255)
+    chunk_id: str = Field(default="", max_length=64)
+    score: int | None = None
+    snippet: str = Field(default="", max_length=10_000)
+
+
+class ChatKnowledgeResultIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    conversation_id: str | None = Field(default=None, max_length=64)
+    question: str = Field(min_length=1, max_length=20_000)
+    answer: str = Field(min_length=1, max_length=2_000_000)
+    mode: Literal[
+        "normal",
+        "sales",
+        "business",
+        "hr_admin",
+        "presales",
+        "delivery",
+        "software_test",
+        "pentest",
+        "security_ops",
+        "risk_assessment",
+        "incident_response",
+        "knowledge",
+    ] = "normal"
+    sources: list[ExportWordSourceIn] = Field(default_factory=list, max_length=100)
+
+
+class ChatKnowledgeResultOut(BaseModel):
+    session_uuid: str
+    user_message_uuid: str
+    assistant_message_uuid: str
+
+
+class ChatSessionItemOut(BaseModel):
+    session_uuid: str
+    title: str
+    mode: str
+    status: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class ChatSessionListOut(BaseModel):
+    items: list[ChatSessionItemOut]
+    total: int
+
+
+class ChatSessionDetailOut(ChatSessionItemOut):
+    messages: list[ChatMessageOut]
+
+
+class ConversationBulkIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    conversation_ids: list[str] = Field(min_length=1, max_length=100)
+
+
+class ConversationRenameIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    title: str = Field(min_length=1, max_length=80)
+
+
+class ConversationMutationOut(BaseModel):
+    session_uuid: str
+    status: Literal["active", "archived", "deleted"]
+
+
+class ConversationBulkOut(BaseModel):
+    affected: int
+
+
+class ExportWordIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    conversation_id: str = Field(min_length=1, max_length=64)
+    message_id: str | None = Field(default=None, max_length=64)
+    selected_message_ids: list[str] = Field(default_factory=list, max_length=100)
+    export_type: Literal[
+        "single_answer",
+        "selected_messages",
+        "full_conversation",
+        "formal_document",
+    ]
+    template: str = Field(default="juxin_standard", max_length=64)
+    format_before_export: bool = False
+    formatted_content: str | None = Field(default=None, max_length=2_000_000)
+
+
+class ExportWordOut(BaseModel):
+    file_name: str
+    download_url: str
+
+
+class ExportContentWordIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    title: str = Field(min_length=1, max_length=120)
+    content: str = Field(min_length=1, max_length=2_000_000)
+    template: str = Field(default="juxin_standard", max_length=64)
+    sources: list[ExportWordSourceIn] = Field(default_factory=list, max_length=100)
+
+
 class CompleteGenerationIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -190,7 +679,7 @@ class CompleteGenerationIn(BaseModel):
     model_display_name: str = Field(max_length=128)
     model_id: str = Field(max_length=128)
     latency_ms: int = Field(ge=0, le=3_600_000)
-    usage: dict[str, int] = Field(default_factory=dict)
+    usage: dict[str, Any] = Field(default_factory=dict)
 
 
 class CompleteGenerationOut(BaseModel):
@@ -204,7 +693,6 @@ class GenerationFailureIn(BaseModel):
     completion_token: str = Field(min_length=1, max_length=256)
     error_code: str = Field(min_length=1, max_length=64)
     error_message: str | None = Field(default=None, max_length=500)
-
 
 
 class LocalModelAuditEventIn(BaseModel):

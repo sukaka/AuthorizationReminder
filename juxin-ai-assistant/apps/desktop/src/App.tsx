@@ -1,8 +1,10 @@
 import { useEffect, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 
+import juxinAiLogo from './assets/juxin-ai-logo.png';
 import {
   ApiError,
+  clearSsoCallbackParams,
   getAuthPortalUrl,
   getSession,
   type SessionPayload,
@@ -10,8 +12,10 @@ import {
 } from './api/client';
 import { ModelProfilesPage } from './pages/ModelProfilesPage';
 import { AssistantsPage } from './pages/AssistantsPage';
+import { ChatPage } from './pages/ChatPage';
 import { HistoryPage } from './pages/HistoryPage';
 import { HomePage } from './pages/HomePage';
+import { KnowledgePage } from './pages/KnowledgePage';
 import { TaskRunPage, type TaskDefinition } from './pages/TaskRunPage';
 import { logoutLocalUser, syncPendingResults } from './local/syncQueue';
 import { GovernanceCenter } from './pages/admin/GovernanceCenter';
@@ -27,12 +31,16 @@ import {
 type WorkspacePage =
   | 'home'
   | 'assistants'
+  | 'chat'
   | 'history'
+  | 'knowledge'
   | 'task'
   | 'models'
   | 'governance'
   | 'department-stats'
   | 'suggestions';
+
+type SidebarMode = 'expanded' | 'collapsed' | 'immersive';
 
 type ViewState =
   | { kind: 'checking' }
@@ -44,13 +52,40 @@ function Workspace({ session }: { session: SessionPayload }) {
   const [page, setPage] = useState<WorkspacePage>('home');
   const [task, setTask] = useState<TaskDefinition | null>(null);
   const [taskError, setTaskError] = useState('');
+  const [sidebarMode, setSidebarMode] = useState<SidebarMode>('expanded');
+  const [sidebarTouched, setSidebarTouched] = useState(false);
   const role = session.user.role.trim().toLowerCase();
   const isAdmin = role === 'admin';
+  const immersive = sidebarMode === 'immersive';
+  const pageTitle = page === 'home'
+    ? '工作台'
+    : page === 'assistants'
+      ? '助手模式'
+      : page === 'chat'
+        ? '私人工作助理'
+        : page === 'history'
+          ? '工作成果'
+          : page === 'knowledge'
+            ? '我的资料'
+            : page === 'models'
+              ? '设置'
+              : page === 'department-stats'
+                ? '部门数据'
+                : page === 'suggestions'
+                  ? '提交建议'
+                  : page === 'governance'
+                    ? '治理中心'
+                    : '任务处理';
+
+  useEffect(() => {
+    if (sidebarTouched) return;
+    setSidebarMode(page === 'chat' || page === 'task' ? 'collapsed' : 'expanded');
+  }, [page, sidebarTouched]);
 
   useEffect(() => {
     if (!window.__TAURI_INTERNALS__) return;
     const sync = () => {
-      syncPendingResults(String(session.user.id)).catch(() => undefined);
+      syncPendingResults(String(session.user.id), Date.now(), { force: true }).catch(() => undefined);
     };
     sync();
     window.addEventListener('online', sync);
@@ -73,7 +108,13 @@ function Workspace({ session }: { session: SessionPayload }) {
     setPage('task');
   };
 
+  const chooseSidebarMode = (mode: SidebarMode) => {
+    setSidebarTouched(true);
+    setSidebarMode(mode);
+  };
+
   const logout = async () => {
+    const authLogoutUrl = getAuthPortalUrl({ logout: true });
     try {
       await fetch('/api/ai/logout', {
         method: 'POST',
@@ -86,30 +127,30 @@ function Workspace({ session }: { session: SessionPayload }) {
       try {
         await logoutLocalUser(String(session.user.id));
       } catch {
-        window.location.assign(getAuthPortalUrl());
+        // Continue to the unified logout even if local cleanup has already been cleared.
       }
-    } else {
-      window.location.assign(getAuthPortalUrl());
     }
+    window.location.assign(authLogoutUrl);
   };
 
   return (
-    <div className="app-frame">
+    <div className={`app-frame sidebar-${sidebarMode}`}>
       <aside className="sidebar">
-        <div className="brand-mark" aria-label="聚信 AI 助手">
-          <span>聚</span>
-          <strong>聚信 AI 助手</strong>
+        <div className="brand-mark" aria-label="聚信 AI 助手 · 私人工作助理">
+          <img alt="" aria-hidden="true" src={juxinAiLogo} />
+          <strong className="brand-label">聚信 AI 助手 · 私人工作助理</strong>
         </div>
         <nav aria-label="主导航">
-          <button aria-current={page === 'home' ? 'page' : undefined} className={page === 'home' ? 'is-current' : ''} onClick={() => setPage('home')} type="button">工作台</button>
-          <button aria-current={page === 'assistants' ? 'page' : undefined} className={page === 'assistants' ? 'is-current' : ''} onClick={() => setPage('assistants')} type="button">全部助手</button>
-          <button aria-current={page === 'history' ? 'page' : undefined} className={page === 'history' ? 'is-current' : ''} onClick={() => setPage('history')} type="button">历史记录</button>
-          <button aria-current={page === 'models' ? 'page' : undefined} className={page === 'models' ? 'is-current' : ''} onClick={() => setPage('models')} type="button">个人模型</button>
+          <button aria-current={page === 'home' ? 'page' : undefined} className={page === 'home' ? 'is-current' : ''} onClick={() => setPage('home')} type="button"><span className="nav-icon" aria-hidden="true">⌂</span><span className="nav-label">工作台</span></button>
+          <button aria-current={page === 'assistants' ? 'page' : undefined} className={page === 'assistants' ? 'is-current' : ''} onClick={() => setPage('assistants')} type="button"><span className="nav-icon" aria-hidden="true">✦</span><span className="nav-label">助手模式</span></button>
+          <button aria-current={page === 'history' ? 'page' : undefined} className={page === 'history' ? 'is-current' : ''} onClick={() => setPage('history')} type="button"><span className="nav-icon" aria-hidden="true">↺</span><span className="nav-label">工作成果</span></button>
+          <button aria-current={page === 'knowledge' ? 'page' : undefined} className={page === 'knowledge' ? 'is-current' : ''} onClick={() => setPage('knowledge')} type="button"><span className="nav-icon" aria-hidden="true">⌘</span><span className="nav-label">我的资料</span></button>
+          <button aria-current={page === 'models' ? 'page' : undefined} className={page === 'models' ? 'is-current' : ''} onClick={() => setPage('models')} type="button"><span className="nav-icon" aria-hidden="true">◇</span><span className="nav-label">设置</span></button>
           {isAdmin ? (
             <>
-              <button aria-current={page === 'department-stats' ? 'page' : undefined} className={page === 'department-stats' ? 'is-current' : ''} onClick={() => setPage('department-stats')} type="button">部门数据</button>
-              <button aria-current={page === 'suggestions' ? 'page' : undefined} className={page === 'suggestions' ? 'is-current' : ''} onClick={() => setPage('suggestions')} type="button">提交建议</button>
-              <button aria-current={page === 'governance' ? 'page' : undefined} className={page === 'governance' ? 'is-current' : ''} onClick={() => setPage('governance')} type="button">治理中心</button>
+              <button aria-current={page === 'department-stats' ? 'page' : undefined} className={page === 'department-stats' ? 'is-current' : ''} onClick={() => setPage('department-stats')} type="button"><span className="nav-icon" aria-hidden="true">▦</span><span className="nav-label">部门数据</span></button>
+              <button aria-current={page === 'suggestions' ? 'page' : undefined} className={page === 'suggestions' ? 'is-current' : ''} onClick={() => setPage('suggestions')} type="button"><span className="nav-icon" aria-hidden="true">✎</span><span className="nav-label">提交建议</span></button>
+              <button aria-current={page === 'governance' ? 'page' : undefined} className={page === 'governance' ? 'is-current' : ''} onClick={() => setPage('governance')} type="button"><span className="nav-icon" aria-hidden="true">⚙</span><span className="nav-label">治理中心</span></button>
             </>
           ) : null}
         </nav>
@@ -124,7 +165,21 @@ function Workspace({ session }: { session: SessionPayload }) {
         </div>
       </aside>
 
-      <main className="workspace" id="workspace">
+      <main className="workspace-shell" id="workspace">
+        <header className="workspace-topbar">
+          <div className="workspace-titlebar">
+            {page !== 'home' ? (
+              <button className="workspace-back-button" onClick={() => setPage('home')} type="button">‹ 返回工作台</button>
+            ) : null}
+            <strong>{pageTitle}</strong>
+          </div>
+          <div className="workspace-sidebar-state" aria-label="侧边栏显示方式">
+            <button className={sidebarMode === 'expanded' ? 'is-active' : ''} onClick={() => chooseSidebarMode('expanded')} type="button">展开</button>
+            <button className={sidebarMode === 'collapsed' ? 'is-active' : ''} onClick={() => chooseSidebarMode('collapsed')} type="button">收起</button>
+            <button className={immersive ? 'is-active' : ''} onClick={() => chooseSidebarMode('immersive')} type="button">沉浸</button>
+          </div>
+        </header>
+        <div className="workspace">
         {page === 'models' ? (
           <ModelProfilesPage />
         ) : page === 'governance' && isAdmin ? (
@@ -135,11 +190,14 @@ function Workspace({ session }: { session: SessionPayload }) {
           <SuggestionsPage departments={session.scope.managedDepartments} />
         ) : page === 'assistants' ? (
           <AssistantsPage onOpenTask={openTask} />
+        ) : page === 'chat' ? (
+          <ChatPage />
+        ) : page === 'knowledge' ? (
+          <KnowledgePage session={session} />
         ) : page === 'history' ? (
           <HistoryPage />
         ) : page === 'task' ? (
           <>
-            <button className="back-button" onClick={() => setPage('home')} type="button">‹ 返回工作台</button>
             {task
               ? <TaskRunPage task={task} userId={String(session.user.id)} />
               : <section className="desktop-required"><p>{taskError || '正在加载任务…'}</p></section>}
@@ -147,10 +205,12 @@ function Workspace({ session }: { session: SessionPayload }) {
         ) : (
           <HomePage
             onOpenTask={openTask}
+            onOpenChat={() => setPage('chat')}
             onShowAssistants={() => setPage('assistants')}
             session={session}
           />
         )}
+        </div>
       </main>
     </div>
   );
@@ -220,6 +280,7 @@ function RemoteWorkspace() {
           });
           await invoke('workspace_ready');
         }
+        clearSsoCallbackParams();
         if (active) setState({ kind: 'ready', session });
       })
       .catch((error: unknown) => {

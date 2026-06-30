@@ -47,7 +47,7 @@ export function AssistantsPage({ onOpenTask }: AssistantsPageProps) {
           if (active) setAssistants(payload.assistants);
         })
         .catch(() => {
-          if (active) setError('助手目录暂时不可用，请稍后重试');
+          if (active) setError('助手模式暂时不可用，请稍后重试');
         })
         .finally(() => {
           if (active) setLoading(false);
@@ -86,16 +86,16 @@ export function AssistantsPage({ onOpenTask }: AssistantsPageProps) {
     <section className="catalog-page">
       <header className="catalog-heading">
         <div>
-          <span className="eyebrow">八类业务能力</span>
-          <h1>全部助手</h1>
-          <p>按任务找到合适的助手，不需要自己编写 Prompt。</p>
+          <span className="eyebrow">按工作选择</span>
+          <h1>助手模式</h1>
+          <p>选择适合当前工作的模式，帮你写材料、查资料、整理文档和生成报告。</p>
         </div>
         <label className="search-field catalog-search">
           <span>⌕</span>
           <input
-            aria-label="搜索助手或任务"
+            aria-label="搜索助手模式或任务"
             onChange={(event) => setQuery(event.target.value)}
-            placeholder="搜索助手或任务"
+            placeholder="搜索助手模式或任务"
             value={query}
           />
         </label>

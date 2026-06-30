@@ -1,37 +1,52 @@
 import hashlib
 import io
+import base64
 
 import pytest
 from fastapi.testclient import TestClient
 
 
 @pytest.fixture
-def test_app_with_storage(tmp_path):
+def test_app_with_storage(tmp_path, monkeypatch):
     """Create a test app with temporary storage."""
     storage = tmp_path / "desktop-updates"
     storage.mkdir()
 
-    import os
-    os.environ["AUTH_DEV_BYPASS"] = "true"
-    os.environ["DESKTOP_UPDATE_STORAGE_DIR"] = str(storage)
-    os.environ["DESKTOP_UPDATE_MAX_BYTES"] = str(10 * 1024 * 1024)
-    os.environ["DESKTOP_UPDATE_PUBLIC_BASE_URL"] = "http://testserver/api/ai/desktop/updates"
-    os.environ["DATABASE_URL"] = f"sqlite+pysqlite:///{tmp_path}/test.db"
-    os.environ["AI_LOCAL_BINDING_SECRET"] = "a" * 32
-    os.environ["CONTENT_ENCRYPTION_KEY"] = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"  # URL-safe base64
-    os.environ["AUDIT_HASH_SALT"] = "b" * 32
-    os.environ["PROMPT_CENTER_RUNTIME_TOKEN"] = "c" * 32
+    monkeypatch.setenv("AUTH_DEV_BYPASS", "true")
+    monkeypatch.setenv("DESKTOP_UPDATE_STORAGE_DIR", str(storage))
+    monkeypatch.setenv("DESKTOP_UPDATE_MAX_BYTES", str(10 * 1024 * 1024))
+    monkeypatch.setenv("DESKTOP_UPDATE_PUBLIC_BASE_URL", "http://testserver/api/ai/desktop/updates")
+    monkeypatch.setenv("DATABASE_URL", f"sqlite+pysqlite:///{tmp_path}/test.db")
+    monkeypatch.setenv("AI_LOCAL_BINDING_SECRET", "desktop-update-local-binding-key")
+    monkeypatch.setenv(
+        "CONTENT_ENCRYPTION_KEY",
+        base64.urlsafe_b64encode(b"k" * 32).decode("ascii"),
+    )
+    monkeypatch.setenv("AUDIT_HASH_SALT", "b" * 32)
+    monkeypatch.setenv("PROMPT_CENTER_RUNTIME_TOKEN", "c" * 32)
 
+    from app.config import get_settings
     from app.main import app
-    from app.database import Base, create_engine_for_url
+    from app.database import Base, create_engine_for_url, get_db
+    from sqlalchemy.orm import Session
 
+    get_settings.cache_clear()
     engine = create_engine_for_url(f"sqlite+pysqlite:///{tmp_path}/test.db")
     Base.metadata.create_all(engine)
 
-    with TestClient(app) as client:
-        yield client
+    def override_get_db():
+        with Session(engine, expire_on_commit=False) as session:
+            yield session
 
-    engine.dispose()
+    app.dependency_overrides[get_db] = override_get_db
+
+    try:
+        with TestClient(app) as client:
+            yield client
+    finally:
+        app.dependency_overrides.pop(get_db, None)
+        get_settings.cache_clear()
+        engine.dispose()
 
 
 def _admin_auth_headers():

@@ -1,6 +1,7 @@
 import base64
 import hashlib
 import os
+import tempfile
 from types import SimpleNamespace
 
 import pytest
@@ -18,6 +19,10 @@ os.environ.setdefault("PROMPT_CENTER_RUNTIME_TOKEN", "r" * 32)
 os.environ.setdefault("PROMPT_CENTER_URL", "http://prompt.test:5189")
 os.environ.setdefault("AUDIT_HASH_SALT", "a" * 32)
 os.environ.setdefault("AI_LOCAL_BINDING_SECRET", "local-binding-test-secret-32-bytes!!")
+os.environ.setdefault(
+    "KNOWLEDGE_STORAGE_DIR",
+    tempfile.mkdtemp(prefix="juxin-ai-knowledge-tests-"),
+)
 
 
 @pytest.fixture
@@ -118,11 +123,12 @@ def client_for_user(generation_db):
 
     async def session_override(request: Request) -> SessionPayload:
         user_id = request.headers["x-test-user-id"]
+        role = request.headers.get("x-test-role", "employee")
         return SessionPayload(
             user=UserPayload(
                 id=user_id,
                 username=f"user-{user_id}",
-                role="employee",
+                role=role,
             ),
             scope=AuthScope(department="测试部", managed_departments=[]),
             apps=["ai-assistant"],
@@ -131,10 +137,10 @@ def client_for_user(generation_db):
     app.dependency_overrides[get_db] = lambda: generation_db
     app.dependency_overrides[get_session] = session_override
 
-    def factory(user_id: str) -> TestClient:
+    def factory(user_id: str, role: str = "employee") -> TestClient:
         client = TestClient(
             app,
-            headers={"X-Test-User-ID": user_id},
+            headers={"X-Test-User-ID": user_id, "X-Test-Role": role},
         )
         client.__enter__()
         clients.append(client)

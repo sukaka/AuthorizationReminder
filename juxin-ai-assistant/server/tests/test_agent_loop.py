@@ -1,0 +1,85 @@
+def test_loop_limits_are_bounded_by_default() -> None:
+    from app.agent_loop import LoopLimits, LoopState
+
+    limits = LoopLimits()
+
+    assert limits.max_loop_steps == 5
+    assert limits.max_tool_calls == 8
+    assert limits.max_rag_search == 3
+    assert limits.max_retry == 2
+    assert LoopState.START.value == "START"
+    assert LoopState.FINISH.value == "FINISH"
+
+
+def test_task_analyzer_maps_modes_to_loop_strategies() -> None:
+    from app.agent_loop import TaskAnalyzer
+
+    analyzer = TaskAnalyzer()
+
+    assert analyzer.analyze("普通问题", "normal").strategy == "single_turn"
+    assert analyzer.analyze("请根据知识库回答", "knowledge").strategy == "rag_loop"
+    assert analyzer.analyze("帮我写投标响应材料", "business").strategy == "bid_material_loop"
+    assert analyzer.analyze("整理员工入职材料", "hr_admin").strategy == "hr_admin_loop"
+    assert analyzer.analyze("排查部署失败", "delivery").strategy == "delivery_troubleshooting_loop"
+    assert analyzer.analyze("分析漏洞和日志", "security_ops").strategy == "security_analysis_loop"
+    assert analyzer.analyze("生成风险评估", "risk_assessment").strategy == "risk_assessment_loop"
+    assert analyzer.analyze("生成应急响应报告", "incident_response").strategy == "incident_response_loop"
+
+
+def test_planner_declares_required_action_types() -> None:
+    from app.agent_loop.planner import Planner
+
+    assert set(Planner.SUPPORTED_ACTIONS) == {
+        "answer_directly",
+        "search_knowledge",
+        "read_file",
+        "generate_draft",
+        "revise_answer",
+        "ask_clarification",
+        "finish",
+    }
+
+
+def test_quality_checker_flags_missing_juxin_context_and_sources() -> None:
+    from app.agent_loop import QualityChecker
+
+    checker = QualityChecker()
+
+    result = checker.check(
+        answer="这是一个通用回答，没有公司语境。",
+        mode="knowledge",
+        used_knowledge=True,
+    )
+
+    assert result.passed is False
+    assert "聚信得仁业务场景" in result.issues
+    assert "引用来源" in result.issues
+    assert "网络安全公司内部员工" in result.issues
+
+
+def test_quality_check_route_returns_revision_messages(client_for_user) -> None:
+    client = client_for_user("user-1")
+
+    response = client.post(
+        "/api/ai/agent-loop/quality-check",
+        json={
+            "mode": "business",
+            "answer": "这是一个通用回答。",
+            "used_knowledge": False,
+            "retry_count": 0,
+            "messages": [
+                {"role": "system", "content": "商务助手：投标、标书、响应文件"},
+                {"role": "user", "content": "帮我写投标响应"},
+            ],
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["passed"] is False
+    assert body["retry_allowed"] is True
+    assert "聚信得仁业务场景" in body["issues"]
+    assert body["revision_messages"][-2]["role"] == "assistant"
+    assert body["revision_messages"][-2]["content"] == "这是一个通用回答。"
+    assert body["revision_messages"][-1]["role"] == "user"
+    assert "请修正输出" in body["revision_messages"][-1]["content"]

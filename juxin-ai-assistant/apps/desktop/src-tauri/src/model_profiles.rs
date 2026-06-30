@@ -5,6 +5,14 @@ use uuid::Uuid;
 
 use crate::model_client::validate_base_url;
 
+fn default_max_output_tokens() -> u32 {
+    8192
+}
+
+fn default_max_auto_continues() -> u8 {
+    3
+}
+
 pub fn model_secret_account(profile_id: &str) -> String {
     format!("model-profile:{profile_id}")
 }
@@ -38,6 +46,10 @@ pub struct ModelProfileInput {
     pub base_url: String,
     pub model_id: String,
     pub temperature: f32,
+    #[serde(default = "default_max_output_tokens")]
+    pub max_output_tokens: u32,
+    #[serde(default = "default_max_auto_continues")]
+    pub max_auto_continues: u8,
     pub timeout_seconds: u64,
     pub is_default: bool,
     api_key: Option<String>,
@@ -57,6 +69,10 @@ pub struct ModelProfilePublic {
     pub base_url: String,
     pub model_id: String,
     pub temperature: f32,
+    #[serde(default = "default_max_output_tokens")]
+    pub max_output_tokens: u32,
+    #[serde(default = "default_max_auto_continues")]
+    pub max_auto_continues: u8,
     pub timeout_seconds: u64,
     pub is_default: bool,
     pub has_api_key: bool,
@@ -73,6 +89,8 @@ pub fn upsert_profile(
         base_url,
         model_id,
         temperature,
+        max_output_tokens,
+        max_auto_continues,
         timeout_seconds,
         is_default,
         api_key: _,
@@ -88,6 +106,12 @@ pub fn upsert_profile(
     }
     if !(0.0..=2.0).contains(&temperature) {
         return Err("temperature 必须在 0 到 2 之间".to_string());
+    }
+    if !(1..=200_000).contains(&max_output_tokens) {
+        return Err("max_output_tokens 必须在 1 到 200000 之间".to_string());
+    }
+    if max_auto_continues > 10 {
+        return Err("自动续写次数不能超过 10 次".to_string());
     }
     if !(5..=600).contains(&timeout_seconds) {
         return Err("超时时间必须在 5 到 600 秒之间".to_string());
@@ -108,6 +132,8 @@ pub fn upsert_profile(
         base_url,
         model_id: model_id.to_string(),
         temperature,
+        max_output_tokens,
+        max_auto_continues,
         timeout_seconds,
         is_default: make_default,
         has_api_key,
@@ -165,6 +191,8 @@ mod tests {
             base_url: "https://api.example.com/v1".to_string(),
             model_id: "example-model".to_string(),
             temperature: 0.3,
+            max_output_tokens: 8192,
+            max_auto_continues: 3,
             timeout_seconds: 60,
             is_default,
             api_key: Some("should-never-be-serialized".to_string()),

@@ -4413,7 +4413,28 @@ const registerDedicatedCenterPage = (systemKey) => {
 registerDedicatedCenterPage(ADMIN_CENTER_KEY);
 registerDedicatedCenterPage(AUDIT_CENTER_KEY);
 
-app.get('/portal', (req, res) => {
+const portalLogoutValues = new Set(['1', 'true', 'yes']);
+
+app.get('/portal', async (req, res) => {
+  const isPortalLogoutRequest = portalLogoutValues.has(
+    String(req.query?.logout || '').trim().toLowerCase()
+  );
+  if (isPortalLogoutRequest) {
+    clearAuthCookie(res);
+    clearCsrfCookie(res);
+    const token = parseCookieToken(req);
+    if (token) {
+      try {
+        const payload = jwt.verify(token, JWT_SECRET);
+        const sessionId = String(payload?.sid || '').trim();
+        if (sessionId) {
+          await revokeAuthSession({ sessionId, reason: 'portal_logout' });
+        }
+      } catch (_err) {
+        // Expired or malformed tokens are still cleared below.
+      }
+    }
+  }
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
   const nonce = res.locals.cspNonce || '';
   const reminderUrl = process.env.APP_REMINDER_URL || 'http://localhost:18080';
@@ -4578,8 +4599,10 @@ app.get('/portal', (req, res) => {
   <script nonce="${nonce}">
     let csrfToken = '';
     let captchaToken = '';
+    let loginSubmitting = false;
     const portalParams = new URLSearchParams(window.location.search);
     const portalMode = String(portalParams.get('mode') || '').toLowerCase();
+    const isPortalLogoutRequest = ${isPortalLogoutRequest ? 'true' : 'false'};
     const autoRedirectWindowMs = 8000;
     const privilegedDefaultSystemKeyByRole = {
       sysadmin: '${ADMIN_CENTER_KEY}',
@@ -4627,6 +4650,13 @@ app.get('/portal', (req, res) => {
         return '';
       }
     }
+    function clearPortalSessionMarker() {
+      try {
+        sessionStorage.removeItem(portalSessionStorageKey);
+      } catch (_err) {
+        // ignore storage restrictions
+      }
+    }
     function createPortalSessionMarker() {
       try {
         const bytes = new Uint8Array(12);
@@ -4647,17 +4677,39 @@ app.get('/portal', (req, res) => {
       }
       return marker;
     }
-    function appendPortalSession(rawUrl) {
+    function appendPortalSession(rawUrl, ssoToken = '') {
       const appUrl = normalizeAppUrl(rawUrl);
       const marker = getPortalSessionMarker();
-      if (!marker) return appUrl;
+      const handoffToken = String(ssoToken || '').trim();
+      if (!marker && !handoffToken) return appUrl;
       try {
         const url = new URL(appUrl, window.location.origin);
-        url.searchParams.set(portalSessionQueryKey, marker);
+        if (marker) url.searchParams.set(portalSessionQueryKey, marker);
+        if (handoffToken) url.searchParams.set('sso_token', handoffToken);
         return url.toString();
       } catch (_err) {
         return appUrl;
       }
+    }
+    function appSsoToken(app, ssoToken) {
+      return app && app.key === 'ai-assistant' ? String(ssoToken || '') : '';
+    }
+    function showPortalRedirecting(appName, appUrl) {
+      const name = String(appName || '目标系统').trim() || '目标系统';
+      const loginBtn = document.getElementById('loginBtn');
+      if (loginBtn) {
+        loginBtn.disabled = true;
+        loginBtn.textContent = '正在进入…';
+      }
+      setError('登录成功，正在进入' + name + '…');
+      window.setTimeout(() => {
+        setError('登录成功，但' + name + '目标系统暂时不可用或未启动。请确认服务已启动后重试：' + appUrl);
+        if (loginBtn) {
+          loginBtn.disabled = false;
+          loginBtn.textContent = '登录';
+        }
+        loginSubmitting = false;
+      }, 8000);
     }
     function normalizeAppUrl(rawUrl) {
       try {
@@ -4700,6 +4752,10 @@ app.get('/portal', (req, res) => {
       }
       if (params.has('mode')) {
         params.delete('mode');
+        changed = true;
+      }
+      if (params.has('logout')) {
+        params.delete('logout');
         changed = true;
       }
       if (!changed) return;
@@ -4940,7 +4996,7 @@ app.get('/portal', (req, res) => {
           showForcePasswordCard();
           return;
         }
-        await loadApps();
+        await loadApps(data.token || '');
       } catch (err) {
         setMfaError(err.message || '验证失败');
       }
@@ -5125,46 +5181,72 @@ app.get('/portal', (req, res) => {
 
     async function login(evt){
       evt.preventDefault();
-      setError('');
-      await loadCsrf();
-      const body = {
-        username: document.getElementById('username').value,
-        password: document.getElementById('password').value,
-        captchaToken,
-        captcha: document.getElementById('captchaInput').value,
+      if (loginSubmitting) return;
+      loginSubmitting = true;
+      const loginBtn = document.getElementById('loginBtn');
+      if (loginBtn) {
+        loginBtn.disabled = true;
+        loginBtn.textContent = '登录中…';
+      }
+      const resetLoginSubmitState = () => {
+        loginSubmitting = false;
+        if (loginBtn) {
+          loginBtn.disabled = false;
+          loginBtn.textContent = '登录';
+        }
       };
-      const r = await fetch('/api/auth/login', {
-        method:'POST',
-        credentials:'include',
-        headers:{'Content-Type':'application/json','X-CSRF-Token':csrfToken},
-        body:JSON.stringify(body),
-      });
-      const text = await r.text();
-      const data = parseJsonSafe(text);
-      if(!r.ok){
-        const msg = getErrorText({ response: text, data, fallback: '登录失败' });
-        setError(msg.includes('账号') && msg.includes('密码') ? '账号密码错误' : msg);
+      setError('');
+      try {
         await loadCsrf();
-        await loadCaptcha();
-        return;
+        const body = {
+          username: document.getElementById('username').value,
+          password: document.getElementById('password').value,
+          captchaToken,
+          captcha: document.getElementById('captchaInput').value,
+        };
+        const r = await fetch('/api/auth/login', {
+          method:'POST',
+          credentials:'include',
+          headers:{'Content-Type':'application/json','X-CSRF-Token':csrfToken},
+          body:JSON.stringify(body),
+        });
+        const text = await r.text();
+        const data = parseJsonSafe(text);
+        if(!r.ok){
+          const msg = getErrorText({ response: text, data, fallback: '登录失败' });
+          setError(msg.includes('账号') && msg.includes('密码') ? '账号密码错误' : msg);
+          await loadCsrf();
+          await loadCaptcha();
+          resetLoginSubmitState();
+          return;
+        }
+        ensurePortalSessionMarker();
+        if (data.mfaRequired) {
+          showMfaLogin(data);
+          return;
+        }
+        if (data.mfaSetupRequired) {
+          await showMfaSetup();
+          return;
+        }
+        if (data.mustChangePassword) {
+          showForcePasswordCard();
+          return;
+        }
+        await loadApps(data.token || '');
+      } catch (err) {
+        setError(err.message === 'CSRF_INIT_FAILED' || err.message === 'CSRF_EMPTY' ? '安全校验初始化失败，请刷新后重试' : '登录失败，请稍后重试');
+        try {
+          await loadCsrf();
+          await loadCaptcha();
+        } catch (_refreshErr) {
+          // keep the visible error above
+        }
+        resetLoginSubmitState();
       }
-      ensurePortalSessionMarker();
-      if (data.mfaRequired) {
-        showMfaLogin(data);
-        return;
-      }
-      if (data.mfaSetupRequired) {
-        await showMfaSetup();
-        return;
-      }
-      if (data.mustChangePassword) {
-        showForcePasswordCard();
-        return;
-      }
-      await loadApps();
     }
 
-    async function loadApps(){
+    async function loadApps(ssoToken = ''){
       const r = await fetch('/api/auth/apps',{credentials:'include'});
       const text = await r.text();
       const data = parseJsonSafe(text);
@@ -5198,7 +5280,9 @@ app.get('/portal', (req, res) => {
           if (shouldThrottleRequestedRedirect(preferred.key)) {
             hideAllCards();
           } else {
-            window.location.href = appendPortalSession(preferred.url);
+            const preferredUrl = appendPortalSession(preferred.url, appSsoToken(preferred, ssoToken));
+            showPortalRedirecting(preferred.name, preferred.url);
+            window.location.href = preferredUrl;
             return;
           }
         }
@@ -5209,13 +5293,15 @@ app.get('/portal', (req, res) => {
           if (shouldThrottleRequestedRedirect(requestedSystem)) {
             hideAllCards();
           } else {
-            window.location.href = appendPortalSession(target.url);
+            const targetUrl = appendPortalSession(target.url, appSsoToken(target, ssoToken));
+            showPortalRedirecting(target.name, target.url);
+            window.location.href = targetUrl;
             return;
           }
         }
       }
       list.forEach(app=>{
-        const appUrl = appendPortalSession(app.url);
+        const appUrl = appendPortalSession(app.url, appSsoToken(app, ssoToken));
         const div = document.createElement('div');
         div.className = 'app-item';
         const btn = document.createElement('button');
@@ -5234,6 +5320,9 @@ app.get('/portal', (req, res) => {
     async function bootstrap(){
       const loginCard = document.getElementById('loginCard');
       stripPortalTokenQuery();
+      if (isPortalLogoutRequest) {
+        clearPortalSessionMarker();
+      }
       if (!getPortalSessionMarker()) {
         hideAllCards();
         if (loginCard) loginCard.style.display = 'block';

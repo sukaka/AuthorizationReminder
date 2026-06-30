@@ -8,7 +8,13 @@ from sqlalchemy import select
 
 from app.crypto import ContentCipher, EncryptedPayload
 from app.governance_models import AuditLog
-from app.models import GenerationAttachment, GenerationRecord, TaskPromptBinding
+from app.models import (
+    GenerationAttachment,
+    GenerationRecord,
+    KnowledgeItem,
+    KnowledgeTaskLink,
+    TaskPromptBinding,
+)
 
 
 TEST_KEY = base64.urlsafe_b64encode(b"k" * 32).decode("ascii")
@@ -52,6 +58,17 @@ def test_prepare_returns_provider_neutral_messages_and_stores_ciphertext(
     assert response.status_code == 201
     payload = response.json()
     assert payload["messages"][0]["role"] == "system"
+    system_content = payload["messages"][0]["content"]
+    assert "聚信 AI 助手" in system_content
+    assert "北京聚信得仁科技有限公司" in system_content
+    assert "## company_profile" in system_content
+    assert "所有回答优先结合聚信得仁" in system_content
+    assert "document_generation_loop" in system_content
+    assert "生成初稿" in system_content
+    assert "自检" in system_content
+    assert "修正输出" in system_content
+    assert payload["loop_trace"]
+    assert len(payload["loop_trace"]) <= 5
     assert "完成统一登录接入" in payload["messages"][1]["content"]
     serialized = json.dumps(payload).lower()
     for forbidden in ("api_key", "base_url", "authorization", '"model"'):
@@ -152,6 +169,61 @@ def test_prepare_appends_owned_attachment_as_untrusted_material(
     assert record is not None
     assert attachment is not None
     assert attachment.generation_id == record.id
+
+
+def test_prepare_returns_task_knowledge_refs_without_leaking_full_content(
+    generation_client,
+    generation_db,
+    seeded_task,
+    respx_mock,
+) -> None:
+    cipher = ContentCipher(TEST_KEY)
+    encrypted = cipher.encrypt_json(
+        {"content": "客户白皮书要求：接口梳理必须列出认证、文件上传和批量操作风险。"},
+        b"knowledge-risk",
+    )
+    item = KnowledgeItem(
+        uuid="knowledge-risk",
+        title="接口梳理白皮书",
+        category="whitepaper",
+        tags_json=["业务参考"],
+        keywords_json=["接口", "风险"],
+        content_ciphertext=encrypted.ciphertext,
+        content_nonce=encrypted.nonce,
+        key_version="test",
+        priority=5,
+        status="ACTIVE",
+        created_by="admin",
+        updated_by="admin",
+    )
+    generation_db.add(item)
+    generation_db.flush()
+    generation_db.add(KnowledgeTaskLink(knowledge_id=item.id, task_id=seeded_task.id))
+    generation_db.commit()
+    mock_published_prompt(respx_mock)
+
+    response = generation_client.post(
+        "/api/ai/generations/prepare",
+        json={
+            "task_uuid": seeded_task.uuid,
+            "inputs": {"work_content": "整理接口风险清单"},
+        },
+    )
+
+    assert response.status_code == 201
+    payload = response.json()
+    assert payload["knowledge_refs"] == [
+        {
+            "uuid": "knowledge-risk",
+            "title": "接口梳理白皮书",
+            "matched_keywords": ["接口", "风险"],
+            "score": 2,
+            "priority": 5,
+            "clipped": False,
+        }
+    ]
+    assert "客户白皮书要求" in payload["messages"][1]["content"]
+    assert "客户白皮书要求" not in json.dumps(payload["knowledge_refs"], ensure_ascii=False)
 
 
 def test_prepare_rejects_unknown_attachment_uuid(
@@ -343,6 +415,21 @@ def test_formal_report_system_message_includes_document_governance_once(
     assert "工作概述、执行过程、结果统计" in system_content
 
 
+def test_prepare_system_message_requires_plain_business_text(
+    generation_client,
+    seeded_task,
+    respx_mock,
+) -> None:
+    response = prepare_generation(generation_client, seeded_task, respx_mock)
+
+    assert response.status_code == 201
+    system_content = response.json()["messages"][0]["content"]
+    assert "请使用正式业务文档风格输出" in system_content
+    assert "不要使用 Markdown 标记" in system_content
+    assert "#、**、---、```、>" in system_content
+    assert "标题请直接写成中文标题" in system_content
+
+
 @pytest.mark.parametrize("document_type", ["COMMUNICATION", "PLAIN_TEXT"])
 def test_non_formal_messages_do_not_include_document_template_rules(
     generation_client,
@@ -451,6 +538,42 @@ def test_complete_encrypts_output_and_records_non_secret_model_metadata(
         "status": "COMPLETED",
     }
     assert "这是生成结果" not in repr(audit.metadata_json)
+
+
+def test_complete_accepts_provider_usage_details(
+    generation_client,
+    generation_db,
+    seeded_task,
+    respx_mock,
+) -> None:
+    prepared = prepare_generation(generation_client, seeded_task, respx_mock).json()
+    usage = {
+        "prompt_tokens": 20,
+        "completion_tokens": 30,
+        "total_tokens": 50,
+        "completion_tokens_details": {"reasoning_tokens": 4},
+    }
+
+    response = generation_client.post(
+        f"/api/ai/generations/{prepared['generation_uuid']}/complete",
+        json={
+            "completion_token": prepared["completion_token"],
+            "output": "这是生成结果",
+            "model_display_name": "DeepSeek",
+            "model_id": "deepseek-v4-flash",
+            "latency_ms": 820,
+            "usage": usage,
+        },
+    )
+
+    assert response.status_code == 200
+    record = generation_db.scalar(
+        select(GenerationRecord).where(
+            GenerationRecord.uuid == prepared["generation_uuid"]
+        )
+    )
+    assert record.status == "COMPLETED"
+    assert record.usage_json == usage
 
 
 def test_generation_failure_writeback_marks_pending_failed(

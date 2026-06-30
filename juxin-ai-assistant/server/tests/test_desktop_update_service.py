@@ -1,6 +1,7 @@
 import io
 import pytest
 from pydantic import ValidationError
+from sqlalchemy.orm import Session
 
 from app.admin.desktop_update_service import (
     create_release,
@@ -15,6 +16,8 @@ from app.admin.desktop_update_service import (
 from app.admin.errors import GovernanceError
 from app.admin.schemas import DesktopUpdateCreateIn
 from app.config import Settings
+from app.database import Base, create_engine_for_url
+from app.desktop_update_models import DesktopUpdateRelease
 
 
 class FakeUploadFile:
@@ -25,6 +28,16 @@ class FakeUploadFile:
 
     async def read(self, size: int = -1):
         return self.file.read(size)
+
+
+@pytest.fixture
+def db(tmp_path):
+    engine = create_engine_for_url(f"sqlite+pysqlite:///{tmp_path}/desktop-update-service.db")
+    Base.metadata.create_all(engine)
+    with Session(engine, expire_on_commit=False) as session:
+        yield session
+    Base.metadata.drop_all(engine)
+    engine.dispose()
 
 
 @pytest.fixture
@@ -52,7 +65,7 @@ def test_semver_key():
 
 def test_create_release_rejects_same_or_lower_published_version(db):
     create_release(db, "1.0.0", "lan-test", "first", "admin")
-    r = db.query(db._model_by_name("DesktopUpdateRelease")).first()
+    r = db.query(DesktopUpdateRelease).first()
     # Manually set to published
     r.status = "PUBLISHED"
     db.flush()
@@ -66,7 +79,7 @@ def test_create_release_rejects_same_or_lower_published_version(db):
 
 def test_create_release_allows_higher_version(db):
     create_release(db, "1.0.0", "lan-test", "first", "admin")
-    r = db.query(db._model_by_name("DesktopUpdateRelease")).first()
+    r = db.query(DesktopUpdateRelease).first()
     r.status = "PUBLISHED"
     db.flush()
 

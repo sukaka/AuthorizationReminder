@@ -2,7 +2,7 @@ from sqlalchemy import create_engine, inspect
 
 from app.database import Base
 from app import models  # noqa: F401
-from app.models import Assistant, Task
+from app.models import Assistant, KnowledgeFile, Task
 
 
 FOUNDATION_TABLES = {
@@ -121,3 +121,46 @@ def test_task_document_metadata_defaults(generation_db) -> None:
     assert task.source_ref == ""
     assert task.document_type == "PLAIN_TEXT"
     assert task.formal_document is False
+
+
+def test_knowledge_document_model_has_usage_review_and_lifecycle_fields() -> None:
+    engine = create_engine("sqlite+pysqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    inspector = inspect(engine)
+
+    assert "ai_knowledge_bases" in inspector.get_table_names()
+    file_columns = {
+        column["name"]
+        for column in inspector.get_columns("ai_knowledge_files")
+    }
+    assert {
+        "usage_type",
+        "review_status",
+        "rag_enabled",
+        "reference_enabled",
+        "rag_scope",
+        "permission_scope",
+        "owner_user_id",
+        "archived_at",
+        "deleted_at",
+        "hard_deleted_at",
+    }.issubset(file_columns)
+
+
+def test_ordinary_user_knowledge_file_defaults_to_private_reference() -> None:
+    record = KnowledgeFile(
+        sso_user_id="user-1",
+        file_name="个人资料.txt",
+        file_type="text/plain",
+        file_size=12,
+        content_sha256="0" * 64,
+        key_version="v1",
+    )
+
+    assert record.usage_type == "personal_reference"
+    assert record.source_type == "user_upload"
+    assert record.review_status == "draft"
+    assert record.rag_enabled is False
+    assert record.reference_enabled is True
+    assert record.rag_scope == "personal"
+    assert record.permission_scope == "private"

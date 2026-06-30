@@ -29,16 +29,10 @@ def create_desktop_update_public_router() -> APIRouter:
         db: Annotated[Session, Depends(get_db)],
         settings: Annotated[Settings, Depends(get_settings)],
     ):
-        if db is None:
-            raise HTTPException(500, "Database not available")
-        if settings is None:
-            settings = get_settings()
-
         internal_target = TARGETS.get((target, arch))
         if not internal_target:
             return Response(status_code=204)
 
-        # Find the latest PUBLISHED release for this channel
         releases = (
             db.query(DesktopUpdateRelease)
             .filter(
@@ -51,10 +45,8 @@ def create_desktop_update_public_router() -> APIRouter:
         if not releases:
             return Response(status_code=204)
 
-        # Pick highest SemVer
         latest = max(releases, key=lambda r: semver_key(r.agent_version))
 
-        # Find matching artifact
         artifact = (
             db.query(DesktopUpdateArtifact)
             .filter(
@@ -94,26 +86,21 @@ def create_desktop_update_public_router() -> APIRouter:
         request: Request,
         settings: Annotated[Settings, Depends(get_settings)],
     ):
-        if settings is None:
-            settings = get_settings()
-
         storage_root = Path(settings.desktop_update_storage_dir).resolve()
         file_path = (storage_root / storage_key).resolve()
 
-        # Path traversal protection
         if file_path.parent != storage_root:
             raise HTTPException(404)
 
         if not file_path.is_file():
             raise HTTPException(404)
 
-        # Handle Range requests for Tauri updater
         range_header = request.headers.get("range")
         if range_header:
             file_size = file_path.stat().st_size
             ranges = range_header.replace("bytes=", "").split(",")
             if len(ranges) > 1:
-                return Response(status_code=416)  # Multi-range not supported
+                return Response(status_code=416)
 
             try:
                 start, end = ranges[0].split("-")

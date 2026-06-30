@@ -13,6 +13,8 @@ COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY app ./app
+COPY company_profile ./company_profile
+COPY prompts ./prompts
 COPY alembic.ini ./alembic.ini
 COPY alembic ./alembic
 COPY catalog ./catalog

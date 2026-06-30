@@ -29,7 +29,7 @@ export function HistoryPage() {
         if (active) setItems(payload.items);
       })
       .catch(() => {
-        if (active) setError('历史记录加载失败');
+        if (active) setError('工作成果加载失败');
       });
     return () => {
       active = false;
@@ -41,7 +41,7 @@ export function HistoryPage() {
     try {
       setDetail(await getHistoryDetail(item.uuid));
     } catch {
-      setError('历史详情读取失败');
+      setError('工作成果读取失败');
     }
   };
 
@@ -64,7 +64,7 @@ export function HistoryPage() {
   return (
     <section className="history-page">
       <header className="catalog-heading">
-        <div><span className="eyebrow">仅你可见</span><h1>历史记录</h1><p>列表只显示元数据，选择后才读取加密内容。</p></div>
+        <div><span className="eyebrow">仅你可见</span><h1>工作成果</h1><p>这里保存你生成过的材料、纪要、报告和文档成果。</p></div>
         <div className="history-filters">
           <select aria-label="状态筛选" onChange={(event) => setStatusFilter(event.target.value)} value={statusFilter}>
             <option value="">全部状态</option>
@@ -84,7 +84,7 @@ export function HistoryPage() {
               <span><small>{new Date(item.created_at).toLocaleString()}</small><em>{item.status}</em></span>
             </button>
           ))}
-          {!items.length ? <p className="empty-hint">还没有生成记录。</p> : null}
+          {!items.length ? <p className="empty-hint">还没有工作成果。</p> : null}
         </div>
         <article className="history-detail">
           {detail ? (
@@ -93,11 +93,11 @@ export function HistoryPage() {
               <OutputReader emptyText="本次生成没有可显示的输出" text={detail.output} />
               <div className="history-actions">
                 <button className="secondary-action" onClick={copy} type="button">复制全文</button>
-                <button className="danger-action" onClick={remove} type="button">删除记录</button>
+                <button className="danger-action" onClick={remove} type="button">删除成果</button>
               </div>
               <FeedbackPanel generationUuid={detail.uuid} />
             </>
-          ) : <div className="history-placeholder"><strong>选择一条记录</strong><span>内容将在选择后安全解密。</span></div>}
+          ) : <div className="history-placeholder"><strong>选择一条工作成果</strong><span>内容将在选择后安全打开。</span></div>}
         </article>
       </div>
     </section>

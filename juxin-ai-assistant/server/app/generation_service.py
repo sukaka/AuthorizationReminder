@@ -11,6 +11,7 @@ from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from .agent_loop import LoopRunner
 from .attachments import load_owned_attachment_texts
 from .context_builder import (
     ContextSection,
@@ -18,6 +19,7 @@ from .context_builder import (
     build_untrusted_content_block,
     estimate_context_usage,
 )
+from .context.prompt_loader import PromptLoader
 from .crypto import ContentCipher
 from .document_governance import render_document_governance
 from .field_validation import FieldValidationError, validate_task_inputs
@@ -40,6 +42,14 @@ QUALITY_RULE_MAX_COUNT = 20
 QUALITY_RULE_MAX_CHARS = 32_000
 QUALITY_RULE_SOURCE_NOTICE = "来源：公司治理知识库，作为强约束执行。"
 REFERENCE_KNOWLEDGE_LIMIT = 8
+PLAIN_BUSINESS_OUTPUT_RULES = "\n".join([
+    "请使用正式业务文档风格输出。",
+    "不要使用 Markdown 标记。",
+    "不要使用 #、**、---、```、> 等符号做标题、加粗或分隔。",
+    "标题请直接写成中文标题，例如：8. 评分依据。",
+    "列表请使用 1. 2. 3. 或 一、二、三、。",
+    "段落之间只用空行分隔，不要使用装饰性分隔线。",
+])
 
 
 @dataclass(frozen=True)
@@ -50,6 +60,8 @@ class PreparedGeneration:
     temperature: float
     safety_notice: str
     context_usage: dict[str, int | str]
+    knowledge_refs: list[dict[str, object]]
+    loop_trace: list[dict[str, object]]
 
 
 def _is_trusted_quality_rule(
@@ -246,7 +258,24 @@ async def prepare_generation(
         request.attachment_uuids,
         cipher,
     )
+    prompt_loader = PromptLoader()
+    loop_runner = LoopRunner()
+    loop_instructions, loop_trace = loop_runner.document_generation_instructions()
     sections = [
+        ContextSection(
+            kind="system",
+            title="聚信化基础上下文",
+            content="\n\n".join([
+                prompt_loader.base_system_prompt(),
+                "## company_profile\n\n" + prompt_loader.company_profile(),
+                "## role_prompt\n\n" + prompt_loader.role_prompt("normal"),
+            ]),
+        ),
+        ContextSection(
+            kind="system",
+            title="Agent LoopRunner",
+            content=loop_instructions,
+        ),
         ContextSection(
             kind="system",
             title="公司安全规则",
@@ -261,6 +290,11 @@ async def prepare_generation(
             kind="system",
             title="输出格式",
             content=f"{task.output_format}。{task.safety_notice}",
+        ),
+        ContextSection(
+            kind="system",
+            title="通用业务输出规则",
+            content=PLAIN_BUSINESS_OUTPUT_RULES,
         ),
         ContextSection(kind="user", title="员工输入", content=user_input_block),
     ]
@@ -361,6 +395,8 @@ async def prepare_generation(
             temperature=0.3,
             safety_notice=task.safety_notice,
             context_usage=context_usage,
+            knowledge_refs=record.knowledge_refs_json,
+            loop_trace=loop_trace,
         ),
         record,
     )

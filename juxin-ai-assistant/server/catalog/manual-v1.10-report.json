@@ -83,8 +83,8 @@
     }
   ],
   "artifact_sha256": {
-    "manifest": "e55c58d1af42ca8cbf64bb8ba1001f4754d8dca83137aa657e1747bd551a0465",
-    "report_payload": "936fd9daf95fd584fa03bb5ffc2ef4b5589031a0b4c4917cdc338f0627d96dc3"
+    "manifest": "4ecf1b99c0547fd2a221fef8545b8643b2231fb04183a59c57fb80fdd24039e3",
+    "report_payload": "ef1a97c1e480c4a0451a12e9e6b6213a63083a8f23bc943da89c0b579bc21ed2"
   },
   "blank_slot_decisions": [
     {
@@ -10063,7 +10063,7 @@
     "initial_unresolved_items": 525,
     "input_slot_candidates": 1474,
     "input_slot_candidates_excluded": 259,
-    "input_slot_candidates_fieldized": 1215,
+    "input_slot_candidates_fieldized": 1218,
     "knowledge": 10,
     "merged": 22,
     "new": 170,
@@ -14210,10 +14210,21 @@
     {
       "detection": "VARIABLE",
       "field_key": "blank_slot_01",
-      "label": "客户情况如下",
-      "line": "客户情况如下：{{blank_slot_01}}",
+      "label": "本次沟通目标与补充说明",
+      "line": "本次沟通目标与补充说明：{{blank_slot_01}}",
       "line_number": 4,
-      "reason": "该行已绑定字段“客户情况如下”，模板变量与 fields 定义一致。",
+      "reason": "该行已绑定字段“本次沟通目标与补充说明”，模板变量与 fields 定义一致。",
+      "resolution": "FIELD",
+      "source_ref": "V1.10｜第四部分·销售｜销售快速使用版｜1. 销售人员最常用的简化版提示词",
+      "task_code": "v110-sales-022"
+    },
+    {
+      "detection": "VARIABLE",
+      "field_key": "manual_input_01",
+      "label": "客户信息与沟通记录",
+      "line": "客户信息与沟通记录：{{manual_input_01}}",
+      "line_number": 6,
+      "reason": "该行已绑定字段“客户信息与沟通记录”，模板变量与 fields 定义一致。",
       "resolution": "FIELD",
       "source_ref": "V1.10｜第四部分·销售｜销售快速使用版｜1. 销售人员最常用的简化版提示词",
       "task_code": "v110-sales-022"
@@ -14803,11 +14814,22 @@
     },
     {
       "detection": "VARIABLE",
-      "field_key": "blank_slot_01",
-      "label": "已知客户信息",
-      "line": "已知客户信息：{{blank_slot_01}}",
+      "field_key": "manual_input_01",
+      "label": "客户背景与现状",
+      "line": "客户背景与现状：{{manual_input_01}}",
       "line_number": 3,
-      "reason": "该行已绑定字段“已知客户信息”，模板变量与 fields 定义一致。",
+      "reason": "该行已绑定字段“客户背景与现状”，模板变量与 fields 定义一致。",
+      "resolution": "FIELD",
+      "source_ref": "V1.10｜第四部分·销售｜代码审计销售｜2. 代码审计范围与报价信息收集",
+      "task_code": "v110-sales-028"
+    },
+    {
+      "detection": "VARIABLE",
+      "field_key": "blank_slot_01",
+      "label": "本次审计/报价需求",
+      "line": "本次审计/报价需求：{{blank_slot_01}}",
+      "line_number": 5,
+      "reason": "该行已绑定字段“本次审计/报价需求”，模板变量与 fields 定义一致。",
       "resolution": "FIELD",
       "source_ref": "V1.10｜第四部分·销售｜代码审计销售｜2. 代码审计范围与报价信息收集",
       "task_code": "v110-sales-028"
@@ -15265,11 +15287,22 @@
     },
     {
       "detection": "VARIABLE",
-      "field_key": "blank_slot_01",
-      "label": "已知客户信息",
-      "line": "已知客户信息：{{blank_slot_01}}",
+      "field_key": "manual_input_01",
+      "label": "客户背景与项目现状",
+      "line": "客户背景与项目现状：{{manual_input_01}}",
       "line_number": 4,
-      "reason": "该行已绑定字段“已知客户信息”，模板变量与 fields 定义一致。",
+      "reason": "该行已绑定字段“客户背景与项目现状”，模板变量与 fields 定义一致。",
+      "resolution": "FIELD",
+      "source_ref": "V1.10｜第四部分·销售｜软件测试销售｜3. 软件测试范围与报价信息收集",
+      "task_code": "v110-sales-032"
+    },
+    {
+      "detection": "VARIABLE",
+      "field_key": "blank_slot_01",
+      "label": "本次测试/报价需求",
+      "line": "本次测试/报价需求：{{blank_slot_01}}",
+      "line_number": 5,
+      "reason": "该行已绑定字段“本次测试/报价需求”，模板变量与 fields 定义一致。",
       "resolution": "FIELD",
       "source_ref": "V1.10｜第四部分·销售｜软件测试销售｜3. 软件测试范围与报价信息收集",
       "task_code": "v110-sales-032"
@@ -15279,7 +15312,7 @@
       "field_key": null,
       "label": "信息收集表至少包括",
       "line": "信息收集表至少包括：",
-      "line_number": 8,
+      "line_number": 7,
       "reason": "该空冒号行是要求、规则或输出结构标题，不是用户输入。",
       "resolution": "EXCLUDED",
       "source_ref": "V1.10｜第四部分·销售｜软件测试销售｜3. 软件测试范围与报价信息收集",
@@ -15290,7 +15323,7 @@
       "field_key": null,
       "label": "然后补充覆盖以下业务要点",
       "line": "然后补充覆盖以下业务要点：",
-      "line_number": 31,
+      "line_number": 30,
       "reason": "该空冒号行是要求、规则或输出结构标题，不是用户输入。",
       "resolution": "EXCLUDED",
       "source_ref": "V1.10｜第四部分·销售｜软件测试销售｜3. 软件测试范围与报价信息收集",

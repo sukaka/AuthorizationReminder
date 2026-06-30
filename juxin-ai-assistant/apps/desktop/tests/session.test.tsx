@@ -4,18 +4,26 @@ import { HttpResponse, http } from 'msw';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import App from '../src/App';
-import { getAuthPortalUrl } from '../src/api/client';
+import { getAuthPortalUrl, getSession } from '../src/api/client';
 import { server } from './setup';
 
 afterEach(() => {
   Reflect.deleteProperty(window, '__JUXIN_DESKTOP_AUTH_PORTAL__');
   Reflect.deleteProperty(window, '__TAURI_INTERNALS__');
+  window.sessionStorage.clear();
+  window.history.replaceState({}, '', '/');
 });
 
 describe('unified session shell', () => {
   it('uses the existing unified portal instead of inventing a child login route', () => {
     expect(getAuthPortalUrl()).toBe('http://localhost:5180/portal?system=ai-assistant');
     expect(getAuthPortalUrl()).not.toContain('/login');
+  });
+
+  it('can request a real unified logout instead of returning to system selection', () => {
+    expect(getAuthPortalUrl({ logout: true })).toBe(
+      'http://localhost:5180/portal?system=ai-assistant&logout=1',
+    );
   });
 
   it('uses the native-verified portal for a dynamically configured desktop server', () => {
@@ -28,6 +36,9 @@ describe('unified session shell', () => {
     expect(getAuthPortalUrl()).toBe(
       'https://auth.dynamic.example/portal?system=ai-assistant',
     );
+    expect(getAuthPortalUrl({ logout: true })).toBe(
+      'https://auth.dynamic.example/portal?system=ai-assistant&logout=1',
+    );
   });
 
   it('ignores an unsafe desktop portal override', () => {
@@ -38,6 +49,30 @@ describe('unified session shell', () => {
     expect(getAuthPortalUrl()).toBe(
       'http://localhost:5180/portal?system=ai-assistant',
     );
+  });
+
+  it('uses a desktop SSO handoff token for API calls and removes all SSO callback params from the URL', async () => {
+    window.__TAURI_INTERNALS__ = {};
+    window.history.replaceState({}, '', '/?sso_token=desktop-sso-token&portal_session=abc');
+    const seenAuthorization: string[] = [];
+    server.use(
+      http.get('/api/ai/session', ({ request }) => {
+        seenAuthorization.push(request.headers.get('authorization') ?? '');
+        return HttpResponse.json({
+          user: { id: 'u-1', username: '张磊', role: 'employee' },
+          scope: { department: '技术部', managedDepartments: [] },
+          apps: ['ai-assistant'],
+          local_binding_token: 'signed-binding-token',
+        });
+      }),
+    );
+
+    await expect(getSession()).resolves.toMatchObject({
+      user: { username: '张磊' },
+    });
+
+    expect(seenAuthorization).toEqual(['Bearer desktop-sso-token']);
+    expect(window.location.search).toBe('');
   });
 
   it('renders the authenticated workspace without a password form', async () => {
@@ -56,6 +91,25 @@ describe('unified session shell', () => {
 
     expect(await screen.findByText('上午好，张磊')).toBeInTheDocument();
     expect(screen.queryByLabelText('密码')).not.toBeInTheDocument();
+  });
+
+  it('removes SSO callback params from the web URL after the session is accepted', async () => {
+    window.history.replaceState({}, '', '/?portal_session=browser-session&sso_token=browser-token');
+    server.use(
+      http.get('/api/ai/session', () =>
+        HttpResponse.json({
+          user: { id: 'u-1', username: '张磊', role: 'employee' },
+          scope: { department: '技术部', managedDepartments: [] },
+          apps: ['ai-assistant'],
+          local_binding_token: 'signed-binding-token',
+        }),
+      ),
+    );
+
+    render(<App />);
+
+    expect(await screen.findByText('上午好，张磊')).toBeInTheDocument();
+    expect(window.location.search).toBe('');
   });
 
   it('shows a permission state returned by the unified platform', async () => {

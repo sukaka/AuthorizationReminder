@@ -50,7 +50,7 @@ def create_desktop_update_admin_router() -> APIRouter:
             settings,
             action="desktop_update.create",
             entity_type="desktop_update_release",
-            entity_id=release.uuid,
+            entity_uuid=release.uuid,
         )
         db.commit()
         return DesktopUpdateReleaseOut.model_validate(release).model_dump()
@@ -120,7 +120,7 @@ def create_desktop_update_admin_router() -> APIRouter:
             settings,
             action="desktop_update.upload",
             entity_type="desktop_update_release",
-            entity_id=release_uuid,
+            entity_uuid=release_uuid,
         )
         db.commit()
         return {
@@ -147,7 +147,7 @@ def create_desktop_update_admin_router() -> APIRouter:
             settings,
             action="desktop_update.publish",
             entity_type="desktop_update_release",
-            entity_id=release_uuid,
+            entity_uuid=release_uuid,
         )
         db.commit()
         return DesktopUpdateReleaseOut.model_validate(release).model_dump()
@@ -169,7 +169,7 @@ def create_desktop_update_admin_router() -> APIRouter:
             settings,
             action="desktop_update.withdraw",
             entity_type="desktop_update_release",
-            entity_id=release_uuid,
+            entity_uuid=release_uuid,
         )
         db.commit()
         return DesktopUpdateReleaseOut.model_validate(release).model_dump()

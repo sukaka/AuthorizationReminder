@@ -7,6 +7,8 @@ from app.database import Base, create_engine_for_url, get_session_for_url
 
 @pytest.fixture
 def generation_db(tmp_path):
+    import app.desktop_update_models  # noqa: F401
+
     db_path = tmp_path / "test.db"
     engine = create_engine_for_url(f"sqlite+pysqlite:///{db_path}")
     Base.metadata.create_all(engine)

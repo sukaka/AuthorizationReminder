@@ -1,0 +1,429 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+from fastapi import HTTPException
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from .crypto import ContentCipher, EncryptedPayload
+from .document_templates.base import DocumentRenderPayload
+from .document_templates.registry import get_document_template
+from .export_file_manager import ExportFileManager
+from .models import ChatMessage, ChatMessageSource, ChatSession, ExportRecord
+from .schemas import ExportContentWordIn, ExportWordIn, ExportWordOut
+
+
+FORMAL_DOCUMENT_PROMPT = """你是聚信得仁内部文档助手。
+请将以下聊天内容整理为正式 Word 文档内容。
+要求：
+1. 使用正式书面语。
+2. 保留原始核心内容。
+3. 删除聊天口吻。
+4. 不要编造原文没有的信息。
+5. 按正式文档结构组织，包括标题、背景、内容、实施步骤、交付成果、注意事项等。
+6. 适合导出为 Word。
+7. 如果内容涉及网络安全、等保、交付、安全运维、风险评估、应急响应，要使用聚信得仁公司内部文档风格。
+"""
+
+
+@dataclass(frozen=True)
+class ChatExportContent:
+    title: str
+    task_name: str
+    output: str
+    message_id: str
+
+
+class TemplateRenderer:
+    def render(
+        self,
+        *,
+        title: str,
+        task_name: str,
+        department: str,
+        author: str,
+        output: str,
+        version: str,
+        template_name: str,
+    ) -> bytes:
+        template_code = "" if template_name == "juxin_standard" else template_name
+        template = get_document_template(template_code)
+        return template.render_docx(
+            DocumentRenderPayload(
+                title=title,
+                task_name=task_name,
+                department=department,
+                author=author,
+                output=output,
+                version=version,
+            )
+        )
+
+
+class MarkdownToDocxConverter:
+    def __init__(self, template_renderer: TemplateRenderer | None = None) -> None:
+        self.template_renderer = template_renderer or TemplateRenderer()
+
+    def convert(
+        self,
+        content: ChatExportContent,
+        *,
+        department: str,
+        author: str,
+        template_name: str,
+    ) -> bytes:
+        return self.template_renderer.render(
+            title=content.title,
+            task_name=content.task_name,
+            department=department,
+            author=author,
+            output=content.output,
+            version="V1.0",
+            template_name=template_name,
+        )
+
+
+class DocxExportService:
+    def __init__(
+        self,
+        *,
+        file_manager: ExportFileManager,
+        converter: MarkdownToDocxConverter | None = None,
+    ) -> None:
+        self.file_manager = file_manager
+        self.converter = converter or MarkdownToDocxConverter()
+
+    def export_word(
+        self,
+        db: Session,
+        *,
+        body: ExportWordIn,
+        sso_user_id: str,
+        username: str,
+        department: str,
+        cipher: ContentCipher,
+    ) -> ExportWordOut:
+        session = _get_session(db, body.conversation_id, sso_user_id)
+        messages = _select_messages(db, session=session, body=body, sso_user_id=sso_user_id)
+        content = _build_export_content(db, session, messages, body, cipher)
+        document = self.converter.convert(
+            content,
+            department=department or "待确认",
+            author=username or sso_user_id,
+            template_name=body.template,
+        )
+        saved = self.file_manager.save_docx(
+            file_name=_export_file_name(session.title, body.export_type),
+            content=document,
+        )
+        record = ExportRecord(
+            uuid=saved.file_id,
+            conversation_id=session.uuid,
+            message_id=content.message_id,
+            file_name=saved.file_name,
+            file_path=saved.file_path,
+            export_type=body.export_type,
+            template_name=body.template,
+            created_by=sso_user_id,
+        )
+        db.add(record)
+        db.flush()
+        return ExportWordOut(
+            file_name=saved.file_name,
+            download_url=f"/api/export/download/{saved.file_id}",
+        )
+
+    def export_content_word(
+        self,
+        db: Session,
+        *,
+        body: ExportContentWordIn,
+        sso_user_id: str,
+        username: str,
+        department: str,
+    ) -> ExportWordOut:
+        output = _append_transient_reference_sources(body.content, body.sources)
+        content = ChatExportContent(
+            title=body.title[:80] or "知识库文档结果",
+            task_name=body.title[:80] or "知识库文档结果",
+            output=output,
+            message_id="",
+        )
+        document = self.converter.convert(
+            content,
+            department=department or "待确认",
+            author=username or sso_user_id,
+            template_name=body.template,
+        )
+        saved = self.file_manager.save_docx(
+            file_name=f"{body.title}-文档结果.docx",
+            content=document,
+        )
+        record = ExportRecord(
+            uuid=saved.file_id,
+            conversation_id="",
+            message_id="",
+            file_name=saved.file_name,
+            file_path=saved.file_path,
+            export_type="knowledge_result",
+            template_name=body.template,
+            created_by=sso_user_id,
+        )
+        db.add(record)
+        db.flush()
+        return ExportWordOut(
+            file_name=saved.file_name,
+            download_url=f"/api/export/download/{saved.file_id}",
+        )
+
+
+def decrypt_chat_content(cipher: ContentCipher, message: ChatMessage) -> str:
+    if message.content_ciphertext is None or message.content_nonce is None:
+        return ""
+    payload = cipher.decrypt_json(
+        EncryptedPayload(
+            ciphertext=message.content_ciphertext,
+            nonce=message.content_nonce,
+        ),
+        message.uuid.encode(),
+    )
+    return str(payload.get("content", ""))
+
+
+def _get_session(db: Session, conversation_id: str, sso_user_id: str) -> ChatSession:
+    session = db.scalar(
+        select(ChatSession).where(
+            ChatSession.uuid == conversation_id,
+            ChatSession.sso_user_id == sso_user_id,
+            ChatSession.status.in_(["active", "archived"]),
+        )
+    )
+    if session is None:
+        raise HTTPException(status_code=404, detail="聊天会话不存在或无权访问")
+    return session
+
+
+def _select_messages(
+    db: Session,
+    *,
+    session: ChatSession,
+    body: ExportWordIn,
+    sso_user_id: str,
+) -> list[ChatMessage]:
+    base = [
+        ChatMessage.session_id == session.id,
+        ChatMessage.sso_user_id == sso_user_id,
+        ChatMessage.status == "COMPLETED",
+    ]
+    if body.export_type == "single_answer" or (
+        body.export_type == "formal_document" and body.message_id
+    ):
+        if not body.message_id:
+            raise HTTPException(status_code=422, detail="message_id 不能为空")
+        messages = list(db.scalars(
+            select(ChatMessage)
+            .where(*base, ChatMessage.uuid == body.message_id, ChatMessage.role == "assistant")
+            .order_by(ChatMessage.id.asc())
+        ))
+    elif body.export_type == "selected_messages" or (
+        body.export_type == "formal_document" and body.selected_message_ids
+    ):
+        message_ids = body.selected_message_ids or ([body.message_id] if body.message_id else [])
+        if not message_ids:
+            raise HTTPException(status_code=422, detail="selected_message_ids 不能为空")
+        messages = list(db.scalars(
+            select(ChatMessage)
+            .where(*base, ChatMessage.uuid.in_(message_ids))
+            .order_by(ChatMessage.id.asc())
+        ))
+    else:
+        messages = list(db.scalars(
+            select(ChatMessage)
+            .where(*base)
+            .order_by(ChatMessage.id.asc())
+        ))
+    if not messages:
+        raise HTTPException(status_code=404, detail="可导出的聊天内容不存在")
+    return messages
+
+
+def _build_export_content(
+    db: Session,
+    session: ChatSession,
+    messages: list[ChatMessage],
+    body: ExportWordIn,
+    cipher: ContentCipher,
+) -> ChatExportContent:
+    message_id = ""
+    if body.export_type == "single_answer" or (
+        body.export_type == "formal_document" and body.message_id
+    ):
+        message_id = messages[0].uuid
+    elif body.export_type == "selected_messages" or (
+        body.export_type == "formal_document" and body.selected_message_ids
+    ):
+        message_id = ",".join(message.uuid for message in messages)
+    if body.format_before_export and body.formatted_content:
+        output = body.formatted_content
+    else:
+        output = _compose_messages_markdown(messages, cipher)
+        if body.export_type == "formal_document" or body.format_before_export:
+            output = _deterministic_formal_document(output)
+    output = _append_reference_sources(db, output, messages)
+    title = "聊天正式文档" if body.export_type == "formal_document" else f"AI 对话导出-{session.title}"
+    return ChatExportContent(
+        title=title[:80] or "AI 对话导出",
+        task_name="AI 对话导出",
+        output=output,
+        message_id=message_id,
+    )
+
+
+def _compose_messages_markdown(messages: list[ChatMessage], cipher: ContentCipher) -> str:
+    parts: list[str] = []
+    for index, message in enumerate(messages, start=1):
+        role_name = "用户" if message.role == "user" else "聚信 AI 助手"
+        content = decrypt_chat_content(cipher, message)
+        parts.append(f"## {index}. {role_name}\n\n{content}".strip())
+    return "\n\n".join(parts).strip() or "暂无"
+
+
+def _append_reference_sources(db: Session, output: str, messages: list[ChatMessage]) -> str:
+    source_markdown = _reference_sources_markdown(db, messages)
+    if not source_markdown:
+        return output
+    return f"{output.rstrip()}\n\n{source_markdown}".strip()
+
+
+def _reference_sources_markdown(db: Session, messages: list[ChatMessage]) -> str:
+    message_ids = [message.id for message in messages if message.role == "assistant"]
+    if not message_ids:
+        return ""
+    sources = list(db.scalars(
+        select(ChatMessageSource)
+        .where(ChatMessageSource.message_id.in_(message_ids))
+        .order_by(ChatMessageSource.id.asc())
+    ))
+    if not sources:
+        return ""
+    lines: list[str] = ["# 参考来源"]
+    seen: set[tuple[str, str, int | None, str]] = set()
+    has_personal_reference = False
+    has_session_attachment = False
+    source_number = 1
+    for source in sources:
+        key = (
+            source.source_type,
+            source.file_name,
+            source.page_number,
+            source.section_title,
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        label = _source_label(source.source_type)
+        has_personal_reference = has_personal_reference or source.source_type == "personal_reference"
+        has_session_attachment = has_session_attachment or source.source_type == "session_attachment"
+        lines.append(f"{source_number}. {source.file_name or source.title or '未命名资料'}——{label}{_source_location(source)}")
+        source_number += 1
+    if has_personal_reference:
+        lines.append("\n本文参考用户个人上传资料生成，仅供用户本人使用。")
+    if has_session_attachment:
+        lines.append("\n本文参考当前会话附件生成，仅供本次会话使用。")
+    return "\n".join(lines)
+
+
+def _append_transient_reference_sources(output: str, sources: list) -> str:
+    source_markdown = _transient_reference_sources_markdown(sources)
+    if not source_markdown:
+        return output
+    return f"{output.rstrip()}\n\n{source_markdown}".strip()
+
+
+def _transient_reference_sources_markdown(sources: list) -> str:
+    if not sources:
+        return ""
+    lines: list[str] = ["# 参考来源"]
+    seen: set[tuple[str, str, int | None, str]] = set()
+    has_personal_reference = False
+    has_session_attachment = False
+    source_number = 1
+    for source in sources:
+        source_kind = str(source.source_kind)
+        key = (
+            source_kind,
+            source.file_name,
+            source.page_number,
+            source.section_title,
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        has_personal_reference = has_personal_reference or source_kind == "personal_reference"
+        has_session_attachment = has_session_attachment or source_kind == "session_attachment"
+        lines.append(
+            f"{source_number}. {source.file_name or '未命名资料'}"
+            f"——{_source_label(source_kind)}{_transient_source_location(source)}"
+        )
+        source_number += 1
+    if has_personal_reference:
+        lines.append("\n本文参考用户个人上传资料生成，仅供用户本人使用。")
+    if has_session_attachment:
+        lines.append("\n本文参考当前会话附件生成，仅供本次会话使用。")
+    return "\n".join(lines)
+
+
+def _source_label(source_type: str) -> str:
+    if source_type in {"official_knowledge", "knowledge_file"}:
+        return "公司知识库 / 正式知识来源"
+    if source_type == "session_attachment":
+        return "当前会话附件"
+    if source_type == "personal_reference":
+        return "我的上传文件，仅用于本次内容生成"
+    return "参考资料"
+
+
+def _source_location(source: ChatMessageSource) -> str:
+    parts: list[str] = []
+    if source.page_number is not None:
+        parts.append(f"第 {source.page_number} 页")
+    if source.section_title:
+        parts.append(source.section_title)
+    if not parts:
+        return ""
+    return "，" + "，".join(parts)
+
+
+def _transient_source_location(source) -> str:
+    parts: list[str] = []
+    if source.page_number is not None:
+        parts.append(f"第 {source.page_number} 页")
+    if source.section_title:
+        parts.append(source.section_title)
+    if not parts:
+        return ""
+    return "，" + "，".join(parts)
+
+
+def _deterministic_formal_document(markdown: str) -> str:
+    return (
+        "# 基本信息\n\n"
+        "文档来源：AI 对话内容整理。\n\n"
+        "# 背景说明\n\n"
+        "根据当前聊天内容整理形成本文档。\n\n"
+        "# 主要内容\n\n"
+        f"{markdown}\n\n"
+        "# 风险与注意事项\n\n"
+        "根据当前信息，涉及对外承诺、交付周期、验收结论、报价和法律责任的内容需人工复核。"
+    )
+
+
+def _export_file_name(title: str, export_type: str) -> str:
+    suffix = {
+        "single_answer": "当前回答",
+        "selected_messages": "选中消息",
+        "full_conversation": "完整会话",
+        "formal_document": "正式文档",
+    }.get(export_type, "聊天导出")
+    return f"{title or 'AI 对话'}-{suffix}.docx"

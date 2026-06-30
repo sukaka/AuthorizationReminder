@@ -1,5 +1,6 @@
 from collections.abc import Awaitable, Callable
 from datetime import datetime
+import re
 from typing import Annotated
 from urllib.parse import quote
 
@@ -18,9 +19,12 @@ from sqlalchemy.orm import Session
 from .attachments import create_attachment
 from .auth import get_session, require_action
 from .admin.errors import GovernanceError
+from .agent_loop import QualityChecker
 from .admin.route_common import write_request_audit
 from .admin.router import create_governance_router
+from .chat_routes import conversations_router, router as chat_router
 from .desktop_update_public import create_desktop_update_public_router
+from .export_routes import router as export_router
 from .config import Settings, get_settings
 from .crypto import ContentCipher
 from .database import get_db
@@ -39,13 +43,18 @@ from .history_service import (
 )
 from .intent_router import route_intent
 from .knowledge import KnowledgeRetriever
+from .knowledge_files import create_knowledge_file_from_bytes
+from .knowledge_routes import router as knowledge_router
 from .local_binding import (
     LocalBindingTokenError,
     issue_local_binding_token,
     verify_local_binding_token,
 )
 from .models import Assistant, GenerationRecord, Task, TaskField, UserFavorite
+from .models import KnowledgeBase
+from .models import KnowledgeChunk, KnowledgeFile
 from .models import KnowledgeTaskLink, TaskPromptBinding
+from .personal_reference_routes import router as personal_reference_router
 from .prompt_client import PromptCenterClient
 from .schemas import (
     AttachmentOut,
@@ -65,6 +74,10 @@ from .schemas import (
     IntentCandidateOut,
     IntentRouteIn,
     IntentRouteOut,
+    KnowledgeFileListOut,
+    KnowledgeFileOut,
+    LoopQualityCheckIn,
+    LoopQualityCheckOut,
     LocalModelAuditEventIn,
     PrepareGenerationIn,
     PrepareGenerationOut,
@@ -76,6 +89,7 @@ from .schemas import (
     TaskCardOut,
     TaskFieldOut,
     TaskOut,
+    MessageOut,
 )
 from .sensitive import SensitiveDetector, derive_confirmation_key
 
@@ -823,6 +837,297 @@ async def upload_attachment(
     )
 
 
+def _knowledge_file_out(
+    db: Session,
+    file_record: KnowledgeFile,
+) -> KnowledgeFileOut:
+    knowledge_base_uuid = ""
+    if file_record.knowledge_base_id is not None:
+        knowledge_base_uuid = db.scalar(
+            select(KnowledgeBase.uuid).where(KnowledgeBase.id == file_record.knowledge_base_id)
+        ) or ""
+    chunk_count = db.scalar(
+        select(func.count(KnowledgeChunk.id)).where(
+            KnowledgeChunk.file_id == file_record.id,
+            KnowledgeChunk.status == "READY",
+        )
+    ) or 0
+    return KnowledgeFileOut(
+        file_uuid=file_record.uuid,
+        knowledge_base_id=knowledge_base_uuid,
+        file_name=file_record.file_name,
+        file_type=file_record.file_type,
+        file_size=file_record.file_size,
+        visibility=file_record.visibility,
+        status=file_record.status,
+        chunk_count=int(chunk_count),
+        created_at=file_record.created_at,
+        source_type=file_record.source_type,
+        usage_type=file_record.usage_type,
+        review_status=file_record.review_status,
+        rag_enabled=file_record.rag_enabled,
+        reference_enabled=file_record.reference_enabled,
+        rag_scope=file_record.rag_scope,
+        permission_scope=file_record.permission_scope,
+        category=file_record.category,
+        document_type=file_record.document_type,
+        tags=list(file_record.tags_json or []),
+        parse_status=file_record.parse_status,
+        index_status=file_record.index_status,
+    )
+
+
+_KNOWLEDGE_USAGE_TYPES = {
+    "session_attachment",
+    "personal_reference",
+    "official_knowledge",
+}
+_KNOWLEDGE_REVIEW_STATUSES = {
+    "draft",
+    "pending",
+    "approved",
+    "rejected",
+    "official",
+    "deprecated",
+}
+_KNOWLEDGE_RAG_SCOPES = {
+    "none",
+    "session",
+    "personal",
+    "company",
+    "department",
+    "project",
+}
+_KNOWLEDGE_PERMISSION_SCOPES = {
+    "private",
+    "company",
+    "department",
+    "project",
+    "admin",
+}
+
+
+def _is_admin_session(session_payload: SessionPayload) -> bool:
+    return session_payload.user.role.strip().lower() == "admin"
+
+
+def _split_tags(raw_tags: str) -> list[str]:
+    tags: list[str] = []
+    for tag in re.split(r"[,，\n]", raw_tags or ""):
+        normalized = tag.strip()
+        if normalized:
+            tags.append(normalized[:64])
+    return tags[:20]
+
+
+@app.post(
+    "/api/ai/knowledge/files",
+    response_model=KnowledgeFileOut,
+    status_code=201,
+)
+async def upload_knowledge_file(
+    file: Annotated[UploadFile, File()],
+    request: Request,
+    session_payload: Annotated[SessionPayload, Depends(get_session)],
+    current_settings: Annotated[Settings, Depends(get_settings)],
+    db: Annotated[Session, Depends(get_db)],
+    cipher: Annotated[ContentCipher, Depends(get_content_cipher)],
+    visibility: Annotated[str, Form()] = "PRIVATE",
+    usage_type: Annotated[str, Form()] = "personal_reference",
+    review_status: Annotated[str, Form()] = "draft",
+    rag_enabled: Annotated[bool, Form()] = False,
+    reference_enabled: Annotated[bool, Form()] = True,
+    rag_scope: Annotated[str, Form()] = "personal",
+    permission_scope: Annotated[str, Form()] = "private",
+    conversation_id: Annotated[str, Form()] = "",
+    category: Annotated[str, Form()] = "个人素材",
+    document_type: Annotated[str, Form()] = "其他",
+    tags: Annotated[str, Form()] = "",
+) -> KnowledgeFileOut:
+    await require_action(
+        "ai_assistant:use",
+        request,
+        session_payload,
+        current_settings,
+    )
+    normalized_visibility = visibility.strip().upper() or "PRIVATE"
+    if normalized_visibility not in {"PRIVATE", "PUBLIC"}:
+        raise HTTPException(status_code=422, detail="知识文件可见性无效")
+    normalized_usage_type = usage_type.strip().lower() or "personal_reference"
+    normalized_review_status = review_status.strip().lower() or "draft"
+    normalized_rag_scope = rag_scope.strip().lower() or "personal"
+    normalized_permission_scope = permission_scope.strip().lower() or "private"
+    if normalized_usage_type not in _KNOWLEDGE_USAGE_TYPES:
+        raise HTTPException(status_code=422, detail="知识文件用途无效")
+    if normalized_review_status not in _KNOWLEDGE_REVIEW_STATUSES:
+        raise HTTPException(status_code=422, detail="知识文件审核状态无效")
+    if normalized_rag_scope not in _KNOWLEDGE_RAG_SCOPES:
+        raise HTTPException(status_code=422, detail="知识文件 RAG 作用域无效")
+    if normalized_permission_scope not in _KNOWLEDGE_PERMISSION_SCOPES:
+        raise HTTPException(status_code=422, detail="知识文件权限范围无效")
+
+    is_admin = _is_admin_session(session_payload)
+    source_type = "admin_upload" if is_admin and normalized_usage_type == "official_knowledge" else "user_upload"
+    owner_user_id = str(session_payload.user.id)
+    if not is_admin:
+        unsafe_official_flags = (
+            normalized_usage_type == "official_knowledge"
+            or normalized_visibility == "PUBLIC"
+            or rag_enabled
+            or normalized_review_status in {"approved", "official", "deprecated"}
+            or normalized_rag_scope not in {"session", "personal", "none"}
+            or normalized_permission_scope != "private"
+        )
+        if unsafe_official_flags:
+            raise HTTPException(
+                status_code=403,
+                detail="普通用户不能直接上传正式知识库文档或启用公司级 RAG",
+            )
+        if normalized_usage_type == "session_attachment":
+            if not conversation_id.strip():
+                raise HTTPException(status_code=422, detail="当前会话附件必须提供会话 ID")
+            normalized_rag_scope = "session"
+            category = category if category.strip() else "当前附件"
+        else:
+            normalized_usage_type = "personal_reference"
+            normalized_rag_scope = "personal"
+            category = category if category.strip() else "个人素材"
+        normalized_visibility = "PRIVATE"
+        rag_enabled = False
+        reference_enabled = True
+        normalized_permission_scope = "private"
+        if normalized_review_status not in {"draft", "pending"}:
+            normalized_review_status = "draft"
+    elif normalized_usage_type == "official_knowledge":
+        normalized_visibility = "PUBLIC"
+        normalized_review_status = "official"
+        normalized_rag_scope = normalized_rag_scope if normalized_rag_scope != "personal" else "company"
+        normalized_permission_scope = (
+            normalized_permission_scope
+            if normalized_permission_scope != "private"
+            else "company"
+        )
+        rag_enabled = True
+        reference_enabled = True
+
+    try:
+        content = await file.read()
+        file_record, _chunks = create_knowledge_file_from_bytes(
+            db,
+            sso_user_id=str(session_payload.user.id),
+            file_name=file.filename or "",
+            content=content,
+            content_type=file.content_type or "application/octet-stream",
+            cipher=cipher,
+            key_version=current_settings.content_encryption_key_version,
+            visibility=normalized_visibility,
+            source_type=source_type,
+            usage_type=normalized_usage_type,
+            review_status=normalized_review_status,
+            rag_enabled=rag_enabled,
+            reference_enabled=reference_enabled,
+            rag_scope=normalized_rag_scope,
+            permission_scope=normalized_permission_scope,
+            owner_user_id=owner_user_id,
+            conversation_id=conversation_id.strip(),
+            category=(category.strip() or "其他")[:64],
+            document_type=(document_type.strip() or "其他")[:64],
+            tags=_split_tags(tags),
+            uploaded_by=str(session_payload.user.id),
+            storage_root=current_settings.knowledge_storage_dir,
+        )
+        write_request_audit(
+            db,
+            session_payload,
+            request,
+            current_settings,
+            action="knowledge_file.upload",
+            entity_type="knowledge_file",
+            entity_uuid=file_record.uuid,
+            metadata={
+                "file_uuid": file_record.uuid,
+                "file_name": file_record.file_name,
+                "visibility": file_record.visibility,
+                "usage_type": file_record.usage_type,
+                "review_status": file_record.review_status,
+                "rag_enabled": file_record.rag_enabled,
+            },
+        )
+        db.commit()
+        db.refresh(file_record)
+    except Exception:
+        db.rollback()
+        raise
+    return _knowledge_file_out(db, file_record)
+
+
+@app.get("/api/ai/knowledge/files", response_model=KnowledgeFileListOut)
+async def list_knowledge_files(
+    request: Request,
+    session_payload: Annotated[SessionPayload, Depends(get_session)],
+    current_settings: Annotated[Settings, Depends(get_settings)],
+    db: Annotated[Session, Depends(get_db)],
+) -> KnowledgeFileListOut:
+    await require_action(
+        "ai_assistant:use",
+        request,
+        session_payload,
+        current_settings,
+    )
+    rows = list(db.scalars(
+        select(KnowledgeFile)
+        .where(
+            KnowledgeFile.sso_user_id == str(session_payload.user.id),
+            KnowledgeFile.status != "DELETED",
+        )
+        .order_by(KnowledgeFile.created_at.desc(), KnowledgeFile.id.desc())
+    ))
+    items = [_knowledge_file_out(db, row) for row in rows]
+    return KnowledgeFileListOut(items=items, total=len(items))
+
+
+@app.delete("/api/ai/knowledge/files/{file_uuid}", status_code=204)
+async def delete_knowledge_file(
+    file_uuid: str,
+    request: Request,
+    session_payload: Annotated[SessionPayload, Depends(get_session)],
+    current_settings: Annotated[Settings, Depends(get_settings)],
+    db: Annotated[Session, Depends(get_db)],
+) -> Response:
+    await require_action(
+        "ai_assistant:use",
+        request,
+        session_payload,
+        current_settings,
+    )
+    file_record = db.scalar(
+        select(KnowledgeFile).where(
+            KnowledgeFile.uuid == file_uuid,
+            KnowledgeFile.sso_user_id == str(session_payload.user.id),
+            KnowledgeFile.status != "DELETED",
+        )
+    )
+    if file_record is None:
+        raise HTTPException(status_code=404, detail="知识文件不存在或无权访问")
+    file_record.status = "DELETED"
+    for chunk in db.scalars(
+        select(KnowledgeChunk).where(KnowledgeChunk.file_id == file_record.id)
+    ):
+        chunk.status = "DELETED"
+    write_request_audit(
+        db,
+        session_payload,
+        request,
+        current_settings,
+        action="knowledge_file.delete",
+        entity_type="knowledge_file",
+        entity_uuid=file_record.uuid,
+        metadata={"file_uuid": file_record.uuid},
+    )
+    db.commit()
+    return Response(status_code=204)
+
+
 @app.post(
     "/api/ai/generations/prepare",
     response_model=PrepareGenerationOut,
@@ -879,6 +1184,46 @@ async def prepare_generation_route(
     )
     db.commit()
     return PrepareGenerationOut(**prepared.__dict__)
+
+
+@app.post(
+    "/api/ai/agent-loop/quality-check",
+    response_model=LoopQualityCheckOut,
+)
+async def agent_loop_quality_check(
+    body: LoopQualityCheckIn,
+    request: Request,
+    session_payload: Annotated[SessionPayload, Depends(get_session)],
+    current_settings: Annotated[Settings, Depends(get_settings)],
+) -> LoopQualityCheckOut:
+    await require_action(
+        "ai_assistant:use",
+        request,
+        session_payload,
+        current_settings,
+    )
+    checker = QualityChecker()
+    result = checker.check(
+        answer=body.answer,
+        mode=body.mode,
+        used_knowledge=body.used_knowledge,
+    )
+    retry_allowed = (not result.passed) and body.retry_count < checker.max_retry
+    return LoopQualityCheckOut(
+        passed=result.passed,
+        issues=result.issues,
+        retry_allowed=retry_allowed,
+        revision_messages=(
+            checker.revision_messages(
+                messages=body.messages,
+                answer=body.answer,
+                issues=result.issues,
+                retry_count=body.retry_count,
+            )
+            if retry_allowed
+            else []
+        ),
+    )
 
 
 @app.get("/api/ai/generations", response_model=HistoryListOut)
@@ -1221,7 +1566,6 @@ async def fail_generation_route(
     )
 
 
-
 @app.post("/api/ai/audit/local-model-events", status_code=204)
 async def record_local_model_audit_event(
     body: LocalModelAuditEventIn,
@@ -1297,3 +1641,36 @@ app.include_router(
     create_desktop_update_public_router(),
     prefix="/api/ai",
 )
+
+app.include_router(chat_router)
+app.include_router(conversations_router)
+app.include_router(export_router)
+app.include_router(knowledge_router)
+app.include_router(personal_reference_router)
+
+
+@app.get("/{full_path:path}")
+async def proxy_spa(
+    full_path: str,
+    request: Request,
+    current_settings: Annotated[Settings, Depends(get_settings)],
+):
+    """Dev mode: proxy SPA requests to Vite dev server."""
+    if not current_settings.auth_dev_bypass:
+        raise HTTPException(404)
+
+    vite_url = f"http://localhost:18093/{full_path}"
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            upstream = await client.get(
+                vite_url,
+                headers={k: v for k, v in request.headers.items()
+                         if k.lower() not in ('host',)},
+            )
+        return Response(
+            content=upstream.content,
+            status_code=upstream.status_code,
+            headers=dict(upstream.headers),
+        )
+    except httpx.HTTPError:
+        return Response(content="Dev proxy unavailable", status_code=502)

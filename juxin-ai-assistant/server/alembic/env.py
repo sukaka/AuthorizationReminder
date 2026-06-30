@@ -2,7 +2,7 @@ import os
 from logging.config import fileConfig
 
 from alembic import context
-from sqlalchemy import engine_from_config, pool
+from sqlalchemy import engine_from_config, pool, text
 
 from app import models, desktop_update_models  # noqa: F401
 from app.database import Base
@@ -17,6 +17,21 @@ if not database_url:
     raise RuntimeError("DATABASE_URL 未配置")
 config.set_main_option("sqlalchemy.url", database_url.replace("%", "%%"))
 target_metadata = Base.metadata
+
+
+def _ensure_mysql_version_table_width(connection) -> None:
+    if connection.dialect.name != "mysql":
+        return
+    connection.execute(
+        text(
+            "CREATE TABLE IF NOT EXISTS alembic_version "
+            "(version_num VARCHAR(64) NOT NULL PRIMARY KEY)"
+        )
+    )
+    connection.execute(
+        text("ALTER TABLE alembic_version MODIFY version_num VARCHAR(64) NOT NULL")
+    )
+    connection.commit()
 
 
 def run_migrations_offline() -> None:
@@ -38,6 +53,7 @@ def run_migrations_online() -> None:
         poolclass=pool.NullPool,
     )
     with connectable.connect() as connection:
+        _ensure_mysql_version_table_width(connection)
         context.configure(
             connection=connection,
             target_metadata=target_metadata,

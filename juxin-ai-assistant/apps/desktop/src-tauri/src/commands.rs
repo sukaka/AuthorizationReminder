@@ -6,7 +6,7 @@ use tauri::{Manager, WebviewWindow};
 
 use crate::keychain::SecretStore;
 use crate::model_client::{generate, ChatMessage, ModelGenerateRequest, ModelGenerateResult};
-use crate::model_profile_store::commit_model_profile_upsert;
+use crate::model_profile_store::{commit_model_profile_upsert, load_model_profile_secret};
 use crate::model_profiles::{
     model_secret_account, save_profiles, set_default_profile, ModelProfileInput, ModelProfilePublic,
 };
@@ -138,13 +138,28 @@ pub async fn model_profile_test(
     };
     let base_url = crate::model_client::validate_base_url(&profile.base_url)
         .map_err(|_| "MODEL_URL_INVALID".to_string())?;
-    crate::model_client::test_connection(
-        &base_url,
-        state.secrets.get(&model_secret_account(&profile.id))?,
-        profile.timeout_seconds,
-    )
-    .await
-    .map_err(|error| error.to_string())?;
+    let api_key = load_model_profile_secret(&profile.id, state.secrets.as_ref())?;
+    match &api_key {
+        Some(key) if key.is_empty() => {
+            return Err("MODEL_API_KEY_EMPTY — 密钥为空，请重新输入".to_string());
+        }
+        Some(key) => {
+            let prefix = &key[..key.len().min(10)];
+            eprintln!("[model_test] key prefix: {}... len: {}", prefix, key.len());
+        }
+        None => {
+            eprintln!(
+                "[model_test] API key NOT FOUND in local encrypted store for profile: {}",
+                profile.id
+            );
+            return Err(
+                "MODEL_API_KEY_MISSING — 密钥未保存，请重新输入 API Key 并保存".to_string(),
+            );
+        }
+    }
+    crate::model_client::test_connection(&base_url, api_key, profile.timeout_seconds)
+        .await
+        .map_err(|error| error.to_string())?;
     Ok(ModelConnectionStatus {
         ok: true,
         message: format!("{} 连接成功", profile.display_name),
@@ -191,7 +206,7 @@ pub async fn model_generate(
     };
     let base_url = crate::model_client::validate_base_url(&profile.base_url)
         .map_err(|_| "MODEL_URL_INVALID".to_string())?;
-    let api_key = state.secrets.get(&model_secret_account(&profile.id))?;
+    let api_key = load_model_profile_secret(&profile.id, state.secrets.as_ref())?;
     let cancellation = state
         .cancellations
         .lock()
@@ -207,6 +222,8 @@ pub async fn model_generate(
             api_key,
             messages,
             temperature: temperature.clamp(0.0, 2.0),
+            max_output_tokens: profile.max_output_tokens,
+            max_auto_continues: profile.max_auto_continues,
             timeout_seconds: profile.timeout_seconds,
             request_id: &request_id,
             cancel: cancel_receiver,

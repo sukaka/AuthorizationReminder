@@ -78,6 +78,34 @@ def test_session_forwards_only_unified_cookie(
     assert outbound.content == b""
 
 
+def test_session_accepts_desktop_sso_bearer_token(
+    sso_client: TestClient,
+    respx_mock,
+) -> None:
+    introspect = respx_mock.get("http://auth.test:5180/api/auth/introspect").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "user": {"id": 7, "username": "zhanglei", "role": "admin"},
+                "scope": {"department": "研发部", "managedDepartments": ["研发部"]},
+                "apps": ["ai-assistant"],
+            },
+        )
+    )
+
+    response = sso_client.get(
+        "/api/ai/session",
+        headers={"Authorization": "Bearer desktop-sso-token"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["user"]["username"] == "zhanglei"
+    outbound = introspect.calls[0].request
+    assert outbound.headers["authorization"] == "Bearer desktop-sso-token"
+    assert outbound.headers["cookie"] == "juxin_auth_token=desktop-sso-token"
+    assert outbound.content == b""
+
+
 def test_session_normalizes_structured_department_scope(
     sso_client: TestClient,
     respx_mock,

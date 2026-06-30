@@ -51,11 +51,11 @@ it('renders user-scoped home metadata and removes a favorite optimistically', as
     scope: { department: '技术部', managedDepartments: [] },
     apps: ['ai-assistant'],
     local_binding_token: 'signed-binding-token',
-  }} onOpenTask={vi.fn()} onShowAssistants={vi.fn()} />);
+  }} onOpenChat={vi.fn()} onOpenTask={vi.fn()} onShowAssistants={vi.fn()} />);
 
   expect(await screen.findByText('上午好，张磊')).toBeInTheDocument();
-  expect(screen.getByText('十类助手已经准备好结构、提示词与输出要求。')).toBeInTheDocument();
-  expect(screen.queryByText('八类助手已经准备好结构、提示词与输出要求。')).not.toBeInTheDocument();
+  expect(screen.getByRole('heading', { name: '每个人的私人工作助理' })).toBeInTheDocument();
+  expect(screen.getByText('写材料、查资料、整理文档、生成报告，一句话交给聚信 AI 助手。')).toBeInTheDocument();
   expect(screen.getByText('工作总结')).toBeInTheDocument();
   await userEvent.click(screen.getByRole('button', { name: '取消收藏 工作总结' }));
   await waitFor(() => expect(removeFavorite).toHaveBeenCalled());
@@ -97,9 +97,9 @@ it('routes natural language intent to task candidates on the home page', async (
     scope: { department: '技术部', managedDepartments: [] },
     apps: ['ai-assistant'],
     local_binding_token: 'signed-binding-token',
-  }} onOpenTask={openTask} onShowAssistants={vi.fn()} />);
+  }} onOpenChat={vi.fn()} onOpenTask={openTask} onShowAssistants={vi.fn()} />);
 
-  await userEvent.type(await screen.findByLabelText('告诉聚信你想做什么'), '帮我整理这周工作总结');
+  await userEvent.type(await screen.findByLabelText('告诉我你想完成什么工作'), '帮我整理这周工作总结');
   await userEvent.click(screen.getByRole('button', { name: '查找合适任务' }));
 
   expect(await screen.findByText('任务名称匹配：工作总结')).toBeInTheDocument();

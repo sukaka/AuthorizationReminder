@@ -37,7 +37,11 @@ def validate_target_file_name(target: str, file_name: str) -> None:
             f"{target} 产物必须以 {expected_ext} 结尾",
         )
     if "/" in file_name or "\\" in file_name or "\x00" in file_name or ".." in file_name:
-        raise GovernanceError(422, "INVALID_FILE_NAME", "文件名不得包含路径分隔符、NUL 或 ..")
+        raise GovernanceError(
+            422,
+            "INVALID_FILE_NAME",
+            "文件名不得包含路径分隔符（/ 或 \\）、NUL 或 ..",
+        )
 
 
 def create_release(

@@ -8,6 +8,14 @@ from .config import Settings, get_settings
 from .schemas import AuthScope, SessionPayload, UserPayload
 
 
+def get_request_auth_token(request: Request, settings: Settings) -> tuple[str, bool]:
+    authorization = str(request.headers.get("authorization") or "").strip()
+    scheme, _, value = authorization.partition(" ")
+    if scheme.lower() == "bearer" and value.strip():
+        return value.strip(), True
+    return str(request.cookies.get(settings.auth_cookie_name) or "").strip(), False
+
+
 async def get_session(
     request: Request,
     settings: Annotated[Settings, Depends(get_settings)],
@@ -19,7 +27,7 @@ async def get_session(
             apps=[settings.auth_system_key],
         )
 
-    token = request.cookies.get(settings.auth_cookie_name)
+    token, uses_bearer = get_request_auth_token(request, settings)
     if not token:
         raise HTTPException(status_code=401, detail="未登录")
 
@@ -28,6 +36,7 @@ async def get_session(
             base_url=settings.auth_service_url,
             timeout=settings.auth_fetch_timeout_ms / 1000,
             cookies={settings.auth_cookie_name: token},
+            headers={"Authorization": f"Bearer {token}"} if uses_bearer else None,
         ) as client:
             response = await client.get("/api/auth/introspect")
     except httpx.HTTPError as exc:
@@ -67,7 +76,7 @@ async def require_action(
     if settings.auth_dev_bypass:
         return session
 
-    token = request.cookies.get(settings.auth_cookie_name)
+    token, uses_bearer = get_request_auth_token(request, settings)
     if not token:
         raise HTTPException(status_code=401, detail="未登录")
     try:
@@ -75,6 +84,7 @@ async def require_action(
             base_url=settings.auth_service_url,
             timeout=settings.auth_fetch_timeout_ms / 1000,
             cookies={settings.auth_cookie_name: token},
+            headers={"Authorization": f"Bearer {token}"} if uses_bearer else None,
         ) as client:
             body: dict[str, Any] = {
                 "system": settings.auth_system_key,

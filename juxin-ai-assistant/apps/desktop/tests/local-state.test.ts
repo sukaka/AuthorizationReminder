@@ -87,6 +87,27 @@ it('retries due pending results and removes a successfully synchronized item', a
   });
 });
 
+it('can force retry pending results before their backoff expires', async () => {
+  const item: PendingResult = {
+    generationUuid: 'gen-delayed', completionToken: 'token-delayed', output: '延迟结果',
+    modelDisplayName: '公司模型', modelId: 'model-1', latencyMs: 20, usage: {},
+    retryCount: 4, nextRetryAt: 60_000,
+  };
+  invokeMock.mockResolvedValueOnce([{
+    id: item.generationUuid, payload: JSON.stringify(item), status: 'pending', created_at: 1,
+  }]).mockResolvedValueOnce(undefined);
+  const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 200 }));
+  vi.stubGlobal('fetch', fetchMock);
+
+  await syncPendingResults('u-1', 5_000, { force: true });
+
+  expect(fetchMock).toHaveBeenCalledOnce();
+  expect(invokeMock).toHaveBeenLastCalledWith('local_queue_remove', {
+    userId: 'u-1',
+    resultId: 'gen-delayed',
+  });
+});
+
 it('logs out only the current local user without deleting unsynced results', async () => {
   invokeMock.mockResolvedValueOnce({ drafts_deleted: 2, completed_deleted: 0, pending_deleted: 0 });
   await logoutLocalUser('u-1');

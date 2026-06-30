@@ -31,10 +31,14 @@ def test_migration_revision_graph_is_single_linear_head() -> None:
         migration_config("sqlite+pysqlite:///:memory:")
     )
 
-    assert script.get_heads() == ["0007_task_templates_and_attachments"]
+    assert script.get_heads() == ["0011_knowledge_document_management"]
     assert [
         revision.revision for revision in script.walk_revisions()
     ] == [
+        "0011_knowledge_document_management",
+        "0010_chat_session_lifecycle",
+        "0009_chat_word_exports",
+        "0008_chat_rag_sources",
         "0007_task_templates_and_attachments",
         "0006_prompt_catalog_rollouts",
         "0005_task_document_metadata",
@@ -43,6 +47,31 @@ def test_migration_revision_graph_is_single_linear_head() -> None:
         "0002_employee_features",
         "0001_foundation",
     ]
+
+
+def test_knowledge_migration_does_not_set_defaults_on_mysql_text_or_json_columns() -> None:
+    migration_path = SERVER_ROOT / "alembic" / "versions" / "0011_knowledge_document_management.py"
+    tree = ast.parse(migration_path.read_text(encoding="utf-8"))
+    offenders: list[str] = []
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        if not isinstance(node.func, ast.Attribute) or node.func.attr != "Column":
+            continue
+        if len(node.args) < 2 or not isinstance(node.args[0], ast.Constant):
+            continue
+        column_name = str(node.args[0].value)
+        type_call = node.args[1]
+        if (
+            isinstance(type_call, ast.Call)
+            and isinstance(type_call.func, ast.Attribute)
+            and type_call.func.attr in {"Text", "JSON"}
+            and any(keyword.arg == "server_default" for keyword in node.keywords)
+        ):
+            offenders.append(column_name)
+
+    assert offenders == []
 
 
 def test_foundation_migration_round_trip(tmp_path: Path) -> None:
@@ -54,11 +83,126 @@ def test_foundation_migration_round_trip(tmp_path: Path) -> None:
     command.upgrade(config, "head")
     assert FOUNDATION_TABLES.issubset(set(inspect(engine).get_table_names()))
 
+
+def test_chat_word_export_migration_creates_export_records(tmp_path: Path) -> None:
+    database_path = tmp_path / "chat-word-export.db"
+    database_url = f"sqlite+pysqlite:///{database_path}"
+    config = migration_config(database_url)
+    engine = create_engine(database_url)
+
+    command.upgrade(config, "0009_chat_word_exports")
+    inspector = inspect(engine)
+
+    columns = {column["name"] for column in inspector.get_columns("export_records")}
+    assert {
+        "id",
+        "uuid",
+        "conversation_id",
+        "message_id",
+        "file_name",
+        "file_path",
+        "export_type",
+        "template_name",
+        "created_by",
+        "created_at",
+        "updated_at",
+    }.issubset(columns)
+
     command.downgrade(config, "base")
     assert FOUNDATION_TABLES.isdisjoint(set(inspect(engine).get_table_names()))
 
     command.upgrade(config, "head")
     assert FOUNDATION_TABLES.issubset(set(inspect(engine).get_table_names()))
+
+
+def test_chat_session_lifecycle_migration_adds_status_timestamps(tmp_path: Path) -> None:
+    database_path = tmp_path / "chat-session-lifecycle.db"
+    database_url = f"sqlite+pysqlite:///{database_path}"
+    config = migration_config(database_url)
+    engine = create_engine(database_url)
+
+    command.upgrade(config, "0010_chat_session_lifecycle")
+    inspector = inspect(engine)
+
+    session_columns = {
+        column["name"]
+        for column in inspector.get_columns("ai_chat_sessions")
+    }
+    assert {
+        "status",
+        "archived_at",
+        "deleted_at",
+        "hard_deleted_at",
+        "updated_at",
+    }.issubset(session_columns)
+
+
+def test_knowledge_document_management_migration_adds_core_tables_and_fields(tmp_path: Path) -> None:
+    database_path = tmp_path / "knowledge-document-management.db"
+    database_url = f"sqlite+pysqlite:///{database_path}"
+    config = migration_config(database_url)
+    engine = create_engine(database_url)
+
+    command.upgrade(config, "0011_knowledge_document_management")
+    inspector = inspect(engine)
+    table_names = set(inspector.get_table_names())
+
+    assert {
+        "ai_knowledge_bases",
+        "ai_knowledge_search_logs",
+        "ai_knowledge_review_logs",
+    }.issubset(table_names)
+
+    file_columns = {
+        column["name"]
+        for column in inspector.get_columns("ai_knowledge_files")
+    }
+    assert {
+        "knowledge_base_id",
+        "original_file_name",
+        "stored_file_name",
+        "file_path",
+        "category",
+        "document_type",
+        "tags_json",
+        "summary",
+        "parse_status",
+        "index_status",
+        "source_type",
+        "usage_type",
+        "review_status",
+        "rag_enabled",
+        "reference_enabled",
+        "rag_scope",
+        "permission_scope",
+        "owner_user_id",
+        "conversation_id",
+        "version",
+        "parent_file_id",
+        "is_current_version",
+        "replaced_by_file_id",
+        "uploaded_by",
+        "reviewed_by",
+        "reviewed_at",
+        "review_comment",
+        "archived_at",
+        "deleted_at",
+        "hard_deleted_at",
+        "last_used_at",
+        "usage_count",
+    }.issubset(file_columns)
+
+    chunk_columns = {
+        column["name"]
+        for column in inspector.get_columns("ai_knowledge_chunks")
+    }
+    assert {
+        "knowledge_base_id",
+        "token_count",
+        "metadata_json",
+        "embedding_id",
+        "deleted_at",
+    }.issubset(chunk_columns)
 
 
 def test_desktop_update_migration_matches_models(tmp_path: Path) -> None:
@@ -438,3 +582,72 @@ def test_0007_adds_task_template_metadata(tmp_path: Path) -> None:
         "output_schema_json",
         "attachment_policy_json",
     }.isdisjoint(task_columns)
+
+
+def test_0008_adds_knowledge_file_and_chat_tables(tmp_path: Path) -> None:
+    database_path = tmp_path / "chat-rag-sources.db"
+    database_url = f"sqlite+pysqlite:///{database_path}"
+    config = migration_config(database_url)
+    engine = create_engine(database_url)
+
+    command.upgrade(config, "0008_chat_rag_sources")
+    inspector = inspect(engine)
+    table_names = set(inspector.get_table_names())
+
+    assert {
+        "ai_knowledge_files",
+        "ai_knowledge_chunks",
+        "ai_chat_sessions",
+        "ai_chat_messages",
+        "ai_chat_message_sources",
+    }.issubset(table_names)
+
+    file_columns = {
+        column["name"]
+        for column in inspector.get_columns("ai_knowledge_files")
+    }
+    assert {
+        "id",
+        "uuid",
+        "sso_user_id",
+        "file_name",
+        "file_type",
+        "file_size",
+        "content_sha256",
+        "visibility",
+        "status",
+        "error_code",
+        "key_version",
+        "created_at",
+        "updated_at",
+    } == file_columns
+
+    chunk_columns = {
+        column["name"]
+        for column in inspector.get_columns("ai_knowledge_chunks")
+    }
+    assert {
+        "id",
+        "chunk_id",
+        "file_id",
+        "file_name",
+        "chunk_text_ciphertext",
+        "chunk_text_nonce",
+        "page_number",
+        "section_title",
+        "chunk_index",
+        "token_estimate",
+        "status",
+        "created_at",
+        "updated_at",
+    } == chunk_columns
+
+    command.downgrade(config, "0007_task_templates_and_attachments")
+    downgraded_tables = set(inspect(engine).get_table_names())
+    assert {
+        "ai_knowledge_files",
+        "ai_knowledge_chunks",
+        "ai_chat_sessions",
+        "ai_chat_messages",
+        "ai_chat_message_sources",
+    }.isdisjoint(downgraded_tables)
