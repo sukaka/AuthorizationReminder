@@ -148,6 +148,7 @@ async def chat_prepare(
             body=body,
             cipher=cipher,
             key_version=current_settings.content_encryption_key_version,
+            web_search_provider=current_settings.web_search_provider,
         )
         db.commit()
     except Exception:

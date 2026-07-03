@@ -3,23 +3,23 @@ import juxinAiWordmark from '../assets/juxin-ai-wordmark.png';
 const VALUE_POINTS = [
   {
     icon: 'grid',
-    title: '十类助手，258项常用任务',
-    detail: '描述你要完成的工作，助手会自动采用已发布的专业提示词。',
+    title: '十类私人助理，258项工作技能',
+    detail: '你只要说想做什么，我会按岗位场景匹配合适流程。',
   },
   {
     icon: 'shield',
-    title: '统一 SSO安全登录',
-    detail: '登录由企业统一身份系统完成，桌面端不保存账号密码。',
+    title: '统一登录，安全接入',
+    detail: '用企业身份进入工作台，我不会在本机保存账号密码。',
   },
   {
     icon: 'lock',
-    title: '模型密钥加密保存在本机',
-    detail: '个人模型配置留在设备上，业务服务不托管你的模型密钥。',
+    title: '你的设置只在本机',
+    detail: '个人模型和偏好加密保存，使用时由你自己掌控。',
   },
   {
     icon: 'document',
-    title: '草稿与待同步内容保留在本机',
-    detail: '网络不可用时仍可进入本地入口，待恢复后再安全同步。',
+    title: '草稿我会先替你收好',
+    detail: '断网也能保留草稿和待同步内容，恢复后再安全同步。',
   },
 ] as const;
 
@@ -77,12 +77,12 @@ export function LauncherIntro() {
         <div className="launcher-hero-copy">
           <span className="launcher-hero-badge">
             <span aria-hidden="true">✦</span>
-            无需自己编写提示词
+            你的私人助理
           </span>
-          <h1 id="launcher-title">让日常工作更高效</h1>
+          <h1 id="launcher-title">你的私人助理</h1>
           <span className="launcher-title-rule" aria-hidden="true" />
           <p>
-            告诉智能体你要做什么，聚信 AI 助手会从经过治理的任务中匹配流程，帮你生成、整理和复核工作成果。
+            写材料、查资料、整理文档、生成报告，一句话交给聚信 AI 助手。
           </p>
         </div>
         <div className="launcher-ai-visual" aria-hidden="true">

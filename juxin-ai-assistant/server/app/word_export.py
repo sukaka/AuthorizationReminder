@@ -77,6 +77,24 @@ def render_generation_docx(
     return buffer.getvalue()
 
 
+def render_chat_answer_docx(
+    *,
+    title: str,
+    output: str,
+    version: str,
+) -> bytes:
+    document = Document()
+    _configure_document(document, title=title, version=version)
+    heading_numbers = [0, 0, 0]
+
+    _add_heading(document, f"《{title}》", 0)
+    _render_markdown_blocks(document, output, heading_numbers)
+
+    buffer = BytesIO()
+    document.save(buffer)
+    return buffer.getvalue()
+
+
 def _configure_document(document: Document, *, title: str, version: str) -> None:
     page_style = COMPANY_WORD_STYLE["page"]
     font_style = COMPANY_WORD_STYLE["font"]

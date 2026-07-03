@@ -50,12 +50,12 @@ export function AttachmentUpload({
     <section className="attachment-upload">
       <label>
         <span>参考材料（可选）</span>
-        <small>支持 txt、md。文件内容会作为参考材料参与生成。</small>
+        <small>支持 docx、xlsx、pptx、txt、md。文件内容会作为参考材料参与生成。</small>
         <span className="file-picker">
           <span className="file-picker-button">选择文件</span>
           <span className="file-picker-name">未选择文件</span>
           <input
-            accept=".txt,.md,text/plain,text/markdown"
+            accept=".docx,.xlsx,.pptx,.txt,.md,text/plain,text/markdown,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.openxmlformats-officedocument.presentationml.presentation"
             aria-label="上传参考材料"
             onChange={(event) => {
               const file = event.target.files?.[0];

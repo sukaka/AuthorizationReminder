@@ -31,10 +31,14 @@ def test_migration_revision_graph_is_single_linear_head() -> None:
         migration_config("sqlite+pysqlite:///:memory:")
     )
 
-    assert script.get_heads() == ["0011_knowledge_document_management"]
+    assert script.get_heads() == ["0015_agent_tool_calls"]
     assert [
         revision.revision for revision in script.walk_revisions()
     ] == [
+        "0015_agent_tool_calls",
+        "0014_web_sources",
+        "0013_knowledge_document_types",
+        "0012_knowledge_categories",
         "0011_knowledge_document_management",
         "0010_chat_session_lifecycle",
         "0009_chat_word_exports",
@@ -203,6 +207,165 @@ def test_knowledge_document_management_migration_adds_core_tables_and_fields(tmp
         "embedding_id",
         "deleted_at",
     }.issubset(chunk_columns)
+
+
+def test_knowledge_categories_migration_adds_category_table(tmp_path: Path) -> None:
+    database_path = tmp_path / "knowledge-categories.db"
+    database_url = f"sqlite+pysqlite:///{database_path}"
+    config = migration_config(database_url)
+    engine = create_engine(database_url)
+
+    command.upgrade(config, "0012_knowledge_categories")
+    inspector = inspect(engine)
+
+    assert "ai_knowledge_categories" in set(inspector.get_table_names())
+    category_columns = {
+        column["name"]
+        for column in inspector.get_columns("ai_knowledge_categories")
+    }
+    assert {
+        "uuid",
+        "name",
+        "parent_id",
+        "scope",
+        "sort_order",
+        "status",
+        "created_by",
+        "deleted_at",
+        "created_at",
+        "updated_at",
+    }.issubset(category_columns)
+
+
+def test_knowledge_document_types_migration_adds_document_type_table(tmp_path: Path) -> None:
+    database_path = tmp_path / "knowledge-document-types.db"
+    database_url = f"sqlite+pysqlite:///{database_path}"
+    config = migration_config(database_url)
+    engine = create_engine(database_url)
+
+    command.upgrade(config, "0013_knowledge_document_types")
+    inspector = inspect(engine)
+
+    assert "ai_knowledge_document_types" in set(inspector.get_table_names())
+    document_type_columns = {
+        column["name"]
+        for column in inspector.get_columns("ai_knowledge_document_types")
+    }
+    assert {
+        "uuid",
+        "name",
+        "sort_order",
+        "status",
+        "created_by",
+        "deleted_at",
+        "created_at",
+        "updated_at",
+    }.issubset(document_type_columns)
+
+
+def test_web_sources_migration_adds_capture_search_tables(tmp_path: Path) -> None:
+    database_path = tmp_path / "web-sources.db"
+    database_url = f"sqlite+pysqlite:///{database_path}"
+    config = migration_config(database_url)
+    engine = create_engine(database_url)
+
+    command.upgrade(config, "0014_web_sources")
+    inspector = inspect(engine)
+    table_names = set(inspector.get_table_names())
+
+    assert {
+        "ai_web_captures",
+        "ai_web_search_logs",
+        "ai_search_cache",
+    }.issubset(table_names)
+
+    capture_columns = {
+        column["name"]
+        for column in inspector.get_columns("ai_web_captures")
+    }
+    assert {
+        "uuid",
+        "user_id",
+        "conversation_id",
+        "url",
+        "final_url",
+        "title",
+        "summary",
+        "extracted_text",
+        "suggested_category",
+        "suggested_document_type",
+        "status",
+        "save_target",
+        "review_status",
+        "content_hash",
+        "knowledge_file_id",
+        "created_at",
+        "updated_at",
+    }.issubset(capture_columns)
+    file_columns = {
+        column["name"]
+        for column in inspector.get_columns("ai_knowledge_files")
+    }
+    assert {
+        "source_origin",
+        "web_capture_id",
+        "source_url",
+    }.issubset(file_columns)
+    search_log_columns = {
+        column["name"]
+        for column in inspector.get_columns("ai_web_search_logs")
+    }
+    assert {
+        "user_id",
+        "conversation_id",
+        "query",
+        "provider",
+        "status",
+        "result_count",
+        "result_urls_json",
+        "used_urls_json",
+        "answer_message_id",
+    }.issubset(search_log_columns)
+
+
+def test_agent_tool_calls_migration_adds_runtime_log_table(tmp_path: Path) -> None:
+    database_path = tmp_path / "agent-tool-calls.db"
+    database_url = f"sqlite+pysqlite:///{database_path}"
+    config = migration_config(database_url)
+    engine = create_engine(database_url)
+
+    command.upgrade(config, "0015_agent_tool_calls")
+    inspector = inspect(engine)
+    table_names = set(inspector.get_table_names())
+
+    assert "ai_agent_tool_calls" in table_names
+    columns = {
+        column["name"]
+        for column in inspector.get_columns("ai_agent_tool_calls")
+    }
+    assert {
+        "id",
+        "uuid",
+        "run_id",
+        "message_id",
+        "user_id",
+        "conversation_id",
+        "mode",
+        "tool_name",
+        "tool_version",
+        "status",
+        "permission",
+        "latency_ms",
+        "source_count",
+        "input_summary_json",
+        "output_summary_json",
+        "error_code",
+        "error_message_safe",
+        "started_at",
+        "finished_at",
+        "created_at",
+        "updated_at",
+    }.issubset(columns)
 
 
 def test_desktop_update_migration_matches_models(tmp_path: Path) -> None:

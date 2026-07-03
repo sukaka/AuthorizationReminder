@@ -28,7 +28,11 @@ def _seed_chat(generation_db, *, user_id: str = "u-1"):
     answer_ciphertext, answer_nonce = _encrypt(
         cipher,
         "chat-assistant-message",
-        "# 项目交付方案\n\n- 部署准备\n- 用户培训\n\n| 阶段 | 内容 |\n|---|---|\n| 验收 | 待确认 |",
+        "# 项目交付方案\n\n"
+        "根据《聚信产品白皮书.pdf》的部署方式、"
+        "《我的会议记录.docx》的会议讨论内容和"
+        "《客户访谈记录.pdf》的客户诉求整理。\n\n"
+        "- 部署准备\n- 用户培训\n\n| 阶段 | 内容 |\n|---|---|\n| 验收 | 待确认 |",
     )
     user_message = ChatMessage(
             uuid="chat-user-message",
@@ -169,6 +173,62 @@ def test_chat_single_answer_word_export_creates_downloadable_docx(
         app.dependency_overrides.pop(get_settings, None)
 
 
+def test_single_answer_and_formal_word_exports_use_distinct_layouts(
+    client_for_user,
+    generation_db,
+    tmp_path,
+):
+    from app.config import get_settings
+    from app.main import app
+
+    session = _seed_chat(generation_db)
+    settings = get_settings().model_copy(update={"export_storage_dir": str(tmp_path)})
+    app.dependency_overrides[get_settings] = lambda: settings
+    try:
+        client = client_for_user("u-1")
+
+        single_response = client.post(
+            "/api/export/word",
+            json={
+                "conversation_id": session.uuid,
+                "message_id": "chat-assistant-message",
+                "export_type": "single_answer",
+                "template": "juxin_standard",
+                "format_before_export": False,
+            },
+        )
+        formal_response = client.post(
+            "/api/export/word",
+            json={
+                "conversation_id": session.uuid,
+                "message_id": "chat-assistant-message",
+                "export_type": "formal_document",
+                "template": "juxin_standard",
+                "format_before_export": True,
+            },
+        )
+
+        assert single_response.status_code == 201
+        assert formal_response.status_code == 201
+
+        single_docx = client.get(single_response.json()["download_url"])
+        formal_docx = client.get(formal_response.json()["download_url"])
+        single_text = "\n".join(
+            paragraph.text for paragraph in Document(BytesIO(single_docx.content)).paragraphs
+        )
+        formal_text = "\n".join(
+            paragraph.text for paragraph in Document(BytesIO(formal_docx.content)).paragraphs
+        )
+
+        assert "修订记录" not in single_text
+        assert "聚信得仁公司级 AI 生成文档" not in single_text
+        assert "修订记录" in formal_text
+        assert "聚信得仁公司级 AI 生成文档" in formal_text
+        assert single_text != formal_text
+    finally:
+        app.dependency_overrides.pop(get_settings, None)
+
+
 def test_reference_sources_markdown_deduplicates_and_keeps_source_notices(
     generation_db,
 ):
@@ -189,6 +249,30 @@ def test_reference_sources_markdown_deduplicates_and_keeps_source_notices(
     assert "official-chunk-duplicate" not in markdown
     assert "本文参考用户个人上传资料生成，仅供用户本人使用。" in markdown
     assert "本文参考当前会话附件生成，仅供本次会话使用。" in markdown
+
+
+def test_reference_sources_markdown_only_keeps_sources_mentioned_in_output(
+    generation_db,
+):
+    from app.chat_word_export import _reference_sources_markdown
+    from app.models import ChatMessage
+
+    _seed_chat(generation_db)
+    assistant_message = generation_db.query(ChatMessage).filter_by(
+        uuid="chat-assistant-message",
+    ).one()
+
+    markdown = _reference_sources_markdown(
+        generation_db,
+        [assistant_message],
+        "根据个人附件《我的会议记录》中的会议讨论内容整理如下。",
+    )
+
+    assert "我的会议记录.docx——我的上传文件，仅用于本次内容生成，会议讨论内容" in markdown
+    assert "聚信产品白皮书.pdf" not in markdown
+    assert "客户访谈记录.pdf" not in markdown
+    assert "本文参考用户个人上传资料生成，仅供用户本人使用。" in markdown
+    assert "本文参考当前会话附件生成，仅供本次会话使用。" not in markdown
 
 
 def test_formal_document_word_export_respects_message_id_scope(

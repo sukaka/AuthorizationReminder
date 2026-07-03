@@ -27,6 +27,7 @@ class Settings(BaseSettings):
     cors_origins: str = "http://localhost:18093,http://127.0.0.1:18093"
     export_storage_dir: str = "./exports"
     knowledge_storage_dir: str = "./storage"
+    web_search_provider: str = "duckduckgo-html"
 
     # Desktop update publishing
     desktop_update_storage_dir: str = "/var/lib/juxin-ai-assistant/desktop-updates"

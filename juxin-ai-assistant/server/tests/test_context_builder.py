@@ -136,3 +136,38 @@ def test_chat_context_builder_keeps_long_term_memory_as_preferences_not_evidence
         "## official_knowledge_context"
     )
     assert "正式知识库说明：验收前必须完成部署检查。" in system_prompt
+
+
+def test_chat_context_builder_uses_structured_source_location_without_unrecognized_label():
+    from app.context.context_builder import ContextBuilder
+    from app.knowledge_search import RetrievedKnowledgeChunk
+
+    chunk = RetrievedKnowledgeChunk(
+        chunk_id="chunk-with-location",
+        file_uuid="file-with-location",
+        file_name="产品参数.xlsx",
+        chunk_text="型号 WDSP-200 使用管理端口 8443。",
+        page_number=None,
+        section_title="",
+        section_path="产品参数",
+        page_or_sheet="参数Sheet",
+        chunk_type="sheet_rows",
+        chunk_index=0,
+        score=5,
+        source_kind="official_knowledge",
+    )
+
+    messages = ContextBuilder().build_messages(
+        mode="knowledge",
+        current_user_message="WDSP-200 的端口是什么",
+        knowledge_chunks=[chunk],
+        personal_reference_chunks=[],
+        recent_messages=[],
+        require_knowledge_evidence=True,
+    )
+
+    system_prompt = messages[0].content
+    assert "章节：产品参数" in system_prompt
+    assert "位置：参数Sheet" in system_prompt
+    assert "类型：sheet_rows" in system_prompt
+    assert "未识别章节" not in system_prompt

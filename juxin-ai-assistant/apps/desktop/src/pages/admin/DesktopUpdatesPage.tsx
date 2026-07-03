@@ -106,7 +106,7 @@ export function DesktopUpdatesPage() {
       <div className="create-release">
         <h3>创建更新草稿</h3>
         <label>
-          Agent 版本
+          助手版本
           <input
             onChange={(e) => setVersion(e.target.value)}
             placeholder="1.0.1"

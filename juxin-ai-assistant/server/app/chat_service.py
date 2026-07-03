@@ -12,8 +12,8 @@ from .agent_loop import LoopRunner
 from .context.context_builder import RecentChatMessage
 from .crypto import ContentCipher, EncryptedPayload
 from .knowledge_search import RetrievedKnowledgeChunk
-from .models import ChatMessage, ChatMessageSource, ChatSession, ExportRecord
-from .models import KnowledgeSearchLog
+from .models import ChatMessage, ChatMessageSource, ChatSession, ExportRecord, KnowledgeChunk
+from .models import KnowledgeSearchLog, WebSearchLog
 from .schemas import (
     ChatCitationOut,
     ChatCompleteIn,
@@ -26,6 +26,14 @@ from .schemas import (
     ChatSessionDetailOut,
     ChatSessionItemOut,
     MessageOut,
+)
+from .web_sources import (
+    SearchIntentDetector,
+    UrlExtractor,
+    WebContextBuilder,
+    WebSearchResult,
+    WebSearchService,
+    create_search_provider,
 )
 
 
@@ -69,7 +77,9 @@ def _citation_from_chunk(chunk: RetrievedKnowledgeChunk) -> ChatCitationOut:
         file_name=chunk.file_name,
         chunk_id=chunk.chunk_id,
         page_number=chunk.page_number,
-        section_title=chunk.section_title,
+        section_title=chunk.section_path or chunk.section_title,
+        page_or_sheet=chunk.page_or_sheet,
+        chunk_type=chunk.chunk_type,
         chunk_index=chunk.chunk_index,
         score=chunk.score,
     )
@@ -87,6 +97,21 @@ def _source_from_citation(message_id: int, citation: ChatCitationOut) -> ChatMes
         section_title=citation.section_title,
         chunk_index=citation.chunk_index,
         score=citation.score,
+    )
+
+
+def _citation_from_web_result(result: WebSearchResult, index: int) -> ChatCitationOut:
+    return ChatCitationOut(
+        source_type="web_search_context",
+        file_uuid="",
+        file_name=result.title or result.site_name or result.url,
+        chunk_id=result.url,
+        page_number=None,
+        section_title=f"{result.site_name or '联网来源'} · {result.url}",
+        page_or_sheet=result.fetched_at.isoformat() if result.fetched_at else "",
+        chunk_type="web_search_result",
+        chunk_index=index,
+        score=max(1, 100 - index),
     )
 
 
@@ -131,6 +156,22 @@ def _message_out(
     cipher: ContentCipher,
     message: ChatMessage,
 ) -> ChatMessageOut:
+    sources = list(db.scalars(
+        select(ChatMessageSource)
+        .where(ChatMessageSource.message_id == message.id)
+        .order_by(ChatMessageSource.id.asc())
+    ))
+    content = _decrypt_content(cipher, message)
+    if message.role == "assistant" and message.status == "COMPLETED":
+        sources = [source for source in sources if _source_is_mentioned(source, content)]
+    chunk_ids = [source.chunk_id for source in sources if source.chunk_id]
+    chunk_metadata_by_id: dict[str, dict] = {}
+    if chunk_ids:
+        chunks = db.scalars(select(KnowledgeChunk).where(KnowledgeChunk.chunk_id.in_(chunk_ids)))
+        chunk_metadata_by_id = {
+            chunk.chunk_id: chunk.metadata_json or {}
+            for chunk in chunks
+        }
     citations = [
         ChatCitationOut(
             source_type=source.source_type,
@@ -139,23 +180,75 @@ def _message_out(
             chunk_id=source.chunk_id,
             page_number=source.page_number,
             section_title=source.section_title,
+            page_or_sheet=str(chunk_metadata_by_id.get(source.chunk_id, {}).get("page_or_sheet") or ""),
+            chunk_type=str(chunk_metadata_by_id.get(source.chunk_id, {}).get("chunk_type") or ""),
             chunk_index=source.chunk_index,
             score=source.score,
         )
-        for source in db.scalars(
-            select(ChatMessageSource)
-            .where(ChatMessageSource.message_id == message.id)
-            .order_by(ChatMessageSource.id.asc())
-        )
+        for source in sources
     ]
     return ChatMessageOut(
         message_uuid=message.uuid,
         role=message.role,  # type: ignore[arg-type]
-        content=_decrypt_content(cipher, message),
+        content=content,
         status=message.status,
         citations=citations,
         created_at=message.created_at,
     )
+
+
+def _source_is_mentioned(source: ChatMessageSource, answer: str | None) -> bool:
+    normalized_answer = _normalize_reference_text(answer)
+    if not normalized_answer:
+        return False
+    return any(
+        candidate in normalized_answer
+        for candidate in _reference_match_candidates(source.file_name, source.title)
+    )
+
+
+def _normalize_reference_text(value: str | None) -> str:
+    if not value:
+        return ""
+    return "".join(str(value).lower().split())
+
+
+def _reference_match_candidates(*values: str | None) -> list[str]:
+    candidates: list[str] = []
+    for value in values:
+        normalized = _normalize_reference_text(value)
+        if not normalized:
+            continue
+        candidates.append(normalized)
+        stem = _strip_known_file_extension(normalized)
+        if stem != normalized:
+            candidates.append(stem)
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        if len(candidate) < 4 or candidate in seen:
+            continue
+        seen.add(candidate)
+        deduped.append(candidate)
+    return deduped
+
+
+def _strip_known_file_extension(value: str) -> str:
+    for suffix in (".docx", ".xlsx", ".pptx", ".pdf", ".txt", ".md", ".doc", ".xls", ".ppt"):
+        if value.endswith(suffix):
+            return value[: -len(suffix)]
+    return value
+
+
+def _delete_unmentioned_sources(db: Session, message: ChatMessage, answer: str) -> None:
+    sources = list(db.scalars(
+        select(ChatMessageSource)
+        .where(ChatMessageSource.message_id == message.id)
+        .order_by(ChatMessageSource.id.asc())
+    ))
+    for source in sources:
+        if not _source_is_mentioned(source, answer):
+            db.delete(source)
 
 
 def _get_or_create_session(
@@ -256,11 +349,36 @@ def _link_search_logs_to_answer(
     db.flush()
 
 
+def _link_web_search_log_to_answer(
+    db: Session,
+    *,
+    log_id: int | None,
+    answer_message_uuid: str,
+) -> None:
+    if not log_id:
+        return
+    log = db.get(WebSearchLog, log_id)
+    if log is None:
+        return
+    log.answer_message_id = answer_message_uuid
+    db.flush()
+
+
 def _rag_messages(question: str, chunks: list[RetrievedKnowledgeChunk]) -> list[MessageOut]:
+    def source_location(chunk: RetrievedKnowledgeChunk) -> tuple[str, str]:
+        section = chunk.section_path or chunk.section_title or "引用片段"
+        location = chunk.page_or_sheet
+        if not location and chunk.page_number is not None:
+            location = f"第 {chunk.page_number} 页"
+        return section, location or "引用片段"
+
     references = "\n\n".join(
-        f"[{index}] 文件：{chunk.file_name}\n"
-        f"章节：{chunk.section_title or '未识别章节'}\n"
-        f"内容：{chunk.chunk_text}"
+        (
+            f"[{index}] 文件：{chunk.file_name}\n"
+            f"章节：{source_location(chunk)[0]}\n"
+            f"位置：{source_location(chunk)[1]}\n"
+            f"内容：{chunk.chunk_text}"
+        )
         for index, chunk in enumerate(chunks, start=1)
     )
     return [
@@ -287,6 +405,7 @@ def prepare_chat(
     body: ChatPrepareIn,
     cipher: ContentCipher,
     key_version: str,
+    web_search_provider: str = "duckduckgo-html",
 ) -> ChatPrepareOut:
     loop_runner = LoopRunner()
     analysis = loop_runner.task_analyzer.analyze(body.question, body.mode)
@@ -325,6 +444,55 @@ def prepare_chat(
         include_personal_references=body.include_personal_references,
         include_session_attachments=body.include_session_attachments,
     )
+    prepared_messages = loop_result.messages
+    web_results: list[WebSearchResult] = []
+    web_log_id: int | None = None
+    should_search_web = (
+        SearchIntentDetector().should_search(body.question)
+        and not UrlExtractor().extract_first(body.question)
+    )
+    if should_search_web:
+        try:
+            web_results = WebSearchService(
+                provider=create_search_provider(web_search_provider),
+            ).search(
+                body.question,
+                limit=5,
+                db=db,
+                user_id=sso_user_id,
+            )
+            log = WebSearchLog(
+                user_id=sso_user_id,
+                conversation_id=session.uuid,
+                query=body.question,
+                provider="duckduckgo-html",
+                status="ok" if web_results else "no_results",
+                result_count=len(web_results),
+                result_urls_json=[result.url for result in web_results],
+                used_urls_json=[result.url for result in web_results],
+            )
+            db.add(log)
+            db.flush()
+            web_log_id = log.id
+            prepared_messages = [
+                MessageOut(role="system", content=WebContextBuilder().build(web_results)),
+                *prepared_messages,
+            ]
+        except Exception as exc:
+            log = WebSearchLog(
+                user_id=sso_user_id,
+                conversation_id=session.uuid,
+                query=body.question,
+                provider="duckduckgo-html",
+                status="failed",
+                result_count=0,
+                result_urls_json=[],
+                used_urls_json=[],
+                error_message=str(exc)[:500],
+            )
+            db.add(log)
+            db.flush()
+            web_log_id = log.id
     if loop_result.completed_answer:
         assistant = _create_message(
             db,
@@ -339,6 +507,11 @@ def prepare_chat(
         _link_search_logs_to_answer(
             db,
             search_log_ids=loop_result.search_log_ids,
+            answer_message_uuid=assistant.uuid,
+        )
+        _link_web_search_log_to_answer(
+            db,
+            log_id=web_log_id,
             answer_message_uuid=assistant.uuid,
         )
         return ChatPrepareOut(
@@ -369,7 +542,16 @@ def prepare_chat(
         search_log_ids=loop_result.search_log_ids,
         answer_message_uuid=assistant.uuid,
     )
+    _link_web_search_log_to_answer(
+        db,
+        log_id=web_log_id,
+        answer_message_uuid=assistant.uuid,
+    )
     citations = [_citation_from_chunk(chunk) for chunk in loop_result.chunks]
+    citations.extend(
+        _citation_from_web_result(result, index)
+        for index, result in enumerate(web_results)
+    )
     for citation in citations:
         db.add(_source_from_citation(assistant.id, citation))
     return ChatPrepareOut(
@@ -379,7 +561,7 @@ def prepare_chat(
         completion_token=completion_token,
         completed=False,
         answer="",
-        messages=loop_result.messages,
+        messages=prepared_messages,
         citations=citations,
         loop_trace=loop_result.loop_trace,
     )
@@ -419,6 +601,7 @@ def complete_chat_message(
     message.error_code = ""
     message.error_message_safe = ""
     message.finished_at = datetime.now(UTC)
+    _delete_unmentioned_sources(db, message, body.answer)
     db.flush()
     return message
 
@@ -461,6 +644,8 @@ def save_knowledge_result_to_chat_history(
     db.flush()
     for source in body.sources:
         db.add(_source_from_knowledge_result(assistant_message.id, source))
+    db.flush()
+    _delete_unmentioned_sources(db, assistant_message, body.answer)
     db.flush()
     return ChatKnowledgeResultOut(
         session_uuid=session.uuid,

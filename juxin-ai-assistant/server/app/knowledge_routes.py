@@ -6,7 +6,7 @@ from urllib.parse import quote
 
 from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import Response
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.orm import Session
 
 from .auth import get_session, require_action
@@ -16,6 +16,7 @@ from .context.context_builder import ContextBuilder
 from .context.mode_knowledge_filters import merge_mode_knowledge_filters
 from .database import get_db
 from .knowledge_files import (
+    _safe_file_name,
     create_knowledge_file_from_bytes,
     reparse_knowledge_file_from_existing_chunks,
 )
@@ -23,16 +24,27 @@ from .knowledge_search import RetrievedKnowledgeChunk, search_knowledge_chunks
 from .agent_loop.task_analyzer import TaskAnalyzer
 from .models import (
     KnowledgeBase,
+    KnowledgeCategory,
     KnowledgeChunk,
+    KnowledgeDocumentType,
     KnowledgeFile,
     KnowledgeReviewLog,
     KnowledgeSearchLog,
+    WebCapture,
 )
 from .schemas import (
     KnowledgeBaseCreateIn,
     KnowledgeBaseListOut,
     KnowledgeBaseOut,
     KnowledgeBasePatchIn,
+    KnowledgeCategoryCreateIn,
+    KnowledgeCategoryListOut,
+    KnowledgeCategoryOut,
+    KnowledgeCategoryPatchIn,
+    KnowledgeDocumentTypeCreateIn,
+    KnowledgeDocumentTypeListOut,
+    KnowledgeDocumentTypeOut,
+    KnowledgeDocumentTypePatchIn,
     KnowledgeAskOut,
     KnowledgeFileAskIn,
     KnowledgeFileClassifyIn,
@@ -56,6 +68,40 @@ from .schemas import (
 router = APIRouter(prefix="/api/knowledge", tags=["knowledge"])
 
 
+DEFAULT_KNOWLEDGE_CATEGORIES = [
+    "公司制度",
+    "产品资料",
+    "项目交付",
+    "销售商务",
+    "行政人力",
+    "安全运维",
+    "模板范本",
+    "会议纪要",
+    "个人素材",
+    "其他",
+]
+
+DEFAULT_KNOWLEDGE_DOCUMENT_TYPES = [
+    "产品白皮书",
+    "解决方案",
+    "投标模板",
+    "交付说明",
+    "测试报告",
+    "安全服务报告",
+    "会议记录",
+    "提示词手册",
+    "其他",
+]
+
+KNOWLEDGE_DOWNLOAD_MEDIA_TYPES = {
+    "txt": "text/plain; charset=utf-8",
+    "md": "text/markdown; charset=utf-8",
+    "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+}
+
+
 def _is_admin(session_payload: SessionPayload) -> bool:
     return session_payload.user.role.strip().lower() == "admin"
 
@@ -73,6 +119,153 @@ def _base_out(base: KnowledgeBase) -> KnowledgeBaseOut:
         created_at=base.created_at,
         updated_at=base.updated_at,
     )
+
+
+def _category_out(db: Session, category: KnowledgeCategory) -> KnowledgeCategoryOut:
+    parent_uuid = ""
+    parent_name = ""
+    if category.parent_id is not None:
+        parent = db.scalar(
+            select(KnowledgeCategory).where(KnowledgeCategory.id == category.parent_id)
+        )
+        if parent is not None:
+            parent_uuid = parent.uuid
+            parent_name = parent.name
+    file_count = db.scalar(
+        select(func.count(KnowledgeFile.id)).where(
+            KnowledgeFile.category == category.name,
+            KnowledgeFile.hard_deleted_at.is_(None),
+        )
+    ) or 0
+    return KnowledgeCategoryOut(
+        category_id=category.uuid,
+        name=category.name,
+        parent_category_id=parent_uuid,
+        parent_name=parent_name,
+        scope=category.scope,
+        sort_order=category.sort_order,
+        status=category.status,
+        file_count=int(file_count),
+        created_at=category.created_at,
+        updated_at=category.updated_at,
+    )
+
+
+def _document_type_out(db: Session, document_type: KnowledgeDocumentType) -> KnowledgeDocumentTypeOut:
+    file_count = db.scalar(
+        select(func.count(KnowledgeFile.id)).where(
+            KnowledgeFile.document_type == document_type.name,
+            KnowledgeFile.hard_deleted_at.is_(None),
+        )
+    ) or 0
+    return KnowledgeDocumentTypeOut(
+        document_type_id=document_type.uuid,
+        name=document_type.name,
+        sort_order=document_type.sort_order,
+        status=document_type.status,
+        file_count=int(file_count),
+        created_at=document_type.created_at,
+        updated_at=document_type.updated_at,
+    )
+
+
+def _normalize_category_name(name: str) -> str:
+    return " ".join(name.strip().split())[:64]
+
+
+def _normalize_document_type_name(name: str) -> str:
+    return " ".join(name.strip().split())[:64]
+
+
+def _ensure_default_categories(db: Session) -> None:
+    existing_names = set(
+        db.scalars(
+            select(KnowledgeCategory.name).where(KnowledgeCategory.deleted_at.is_(None))
+        )
+    )
+    missing_categories = [
+        KnowledgeCategory(
+            name=name,
+            scope="company",
+            sort_order=index * 10,
+            status="ACTIVE",
+            created_by="system",
+        )
+        for index, name in enumerate(DEFAULT_KNOWLEDGE_CATEGORIES, start=1)
+        if name not in existing_names
+    ]
+    if missing_categories:
+        db.add_all(missing_categories)
+        db.commit()
+
+
+def _ensure_default_document_types(db: Session) -> None:
+    existing_names = set(
+        db.scalars(
+            select(KnowledgeDocumentType.name).where(KnowledgeDocumentType.deleted_at.is_(None))
+        )
+    )
+    missing_document_types = [
+        KnowledgeDocumentType(
+            name=name,
+            sort_order=index * 10,
+            status="ACTIVE",
+            created_by="system",
+        )
+        for index, name in enumerate(DEFAULT_KNOWLEDGE_DOCUMENT_TYPES, start=1)
+        if name not in existing_names
+    ]
+    if missing_document_types:
+        db.add_all(missing_document_types)
+        db.commit()
+
+
+def _category_by_uuid(db: Session, category_id: str) -> KnowledgeCategory | None:
+    return db.scalar(
+        select(KnowledgeCategory).where(
+            KnowledgeCategory.uuid == category_id.strip(),
+            KnowledgeCategory.deleted_at.is_(None),
+        )
+    )
+
+
+def _document_type_by_uuid(db: Session, document_type_id: str) -> KnowledgeDocumentType | None:
+    return db.scalar(
+        select(KnowledgeDocumentType).where(
+            KnowledgeDocumentType.uuid == document_type_id.strip(),
+            KnowledgeDocumentType.deleted_at.is_(None),
+        )
+    )
+
+
+def _category_name_exists(
+    db: Session,
+    name: str,
+    *,
+    exclude_id: int | None = None,
+) -> bool:
+    filters = [
+        KnowledgeCategory.name == name,
+        KnowledgeCategory.deleted_at.is_(None),
+    ]
+    if exclude_id is not None:
+        filters.append(KnowledgeCategory.id != exclude_id)
+    return db.scalar(select(KnowledgeCategory.id).where(*filters)) is not None
+
+
+def _document_type_name_exists(
+    db: Session,
+    name: str,
+    *,
+    exclude_id: int | None = None,
+) -> bool:
+    filters = [
+        KnowledgeDocumentType.name == name,
+        KnowledgeDocumentType.deleted_at.is_(None),
+    ]
+    if exclude_id is not None:
+        filters.append(KnowledgeDocumentType.id != exclude_id)
+    return db.scalar(select(KnowledgeDocumentType.id).where(*filters)) is not None
 
 
 def _file_out(db: Session, file_record: KnowledgeFile) -> KnowledgeFileOut:
@@ -98,6 +291,9 @@ def _file_out(db: Session, file_record: KnowledgeFile) -> KnowledgeFileOut:
         chunk_count=int(chunk_count),
         created_at=file_record.created_at,
         source_type=file_record.source_type,
+        source_origin=file_record.source_origin,
+        web_capture_id=file_record.web_capture_id,
+        source_url=file_record.source_url,
         usage_type=file_record.usage_type,
         review_status=file_record.review_status,
         rag_enabled=file_record.rag_enabled,
@@ -206,6 +402,11 @@ def _content_disposition_for_download(file_name: str) -> str:
     ascii_name = safe_name.encode("ascii", "ignore").decode("ascii").strip()
     ascii_name = ascii_name or "knowledge-file"
     return f"attachment; filename=\"{ascii_name}\"; filename*=UTF-8''{quote(safe_name)}"
+
+
+def _download_media_type(file_type: str | None) -> str:
+    normalized = (file_type or "").strip().lower().lstrip(".")
+    return KNOWLEDGE_DOWNLOAD_MEDIA_TYPES.get(normalized, "application/octet-stream")
 
 
 def _stored_original_path(file_record: KnowledgeFile, *, storage_root: str) -> Path:
@@ -665,6 +866,286 @@ async def list_knowledge_bases(
     return KnowledgeBaseListOut(items=items, total=len(items))
 
 
+@router.get("/categories", response_model=KnowledgeCategoryListOut)
+async def list_knowledge_categories(
+    request: Request,
+    session_payload: Annotated[SessionPayload, Depends(get_session)],
+    current_settings: Annotated[Settings, Depends(get_settings)],
+    db: Annotated[Session, Depends(get_db)],
+    include_disabled: bool = False,
+) -> KnowledgeCategoryListOut:
+    await _require_use(request, session_payload, current_settings)
+    is_admin = _is_admin(session_payload)
+    _ensure_default_categories(db)
+    filters = [KnowledgeCategory.deleted_at.is_(None)]
+    if not is_admin or not include_disabled:
+        filters.append(KnowledgeCategory.status == "ACTIVE")
+    rows = list(
+        db.scalars(
+            select(KnowledgeCategory)
+            .where(*filters)
+            .order_by(
+                KnowledgeCategory.sort_order.asc(),
+                KnowledgeCategory.created_at.asc(),
+                KnowledgeCategory.id.asc(),
+            )
+        )
+    )
+    return KnowledgeCategoryListOut(
+        items=[_category_out(db, row) for row in rows],
+        total=len(rows),
+    )
+
+
+@router.post("/categories", response_model=KnowledgeCategoryOut, status_code=201)
+async def create_knowledge_category(
+    body: KnowledgeCategoryCreateIn,
+    request: Request,
+    session_payload: Annotated[SessionPayload, Depends(get_session)],
+    current_settings: Annotated[Settings, Depends(get_settings)],
+    db: Annotated[Session, Depends(get_db)],
+) -> KnowledgeCategoryOut:
+    await _require_use(request, session_payload, current_settings)
+    if not _is_admin(session_payload):
+        raise HTTPException(status_code=403, detail="只有管理员可以管理资料分类")
+    name = _normalize_category_name(body.name)
+    if not name:
+        raise HTTPException(status_code=422, detail="分类名称不能为空")
+    if _category_name_exists(db, name):
+        raise HTTPException(status_code=409, detail="资料分类已存在")
+    parent: KnowledgeCategory | None = None
+    if body.parent_category_id.strip():
+        parent = _category_by_uuid(db, body.parent_category_id)
+        if parent is None:
+            raise HTTPException(status_code=404, detail="上级分类不存在")
+    category = KnowledgeCategory(
+        name=name,
+        parent_id=parent.id if parent is not None else None,
+        scope=body.scope,
+        sort_order=body.sort_order,
+        status=body.status,
+        created_by=str(session_payload.user.id),
+    )
+    db.add(category)
+    db.commit()
+    db.refresh(category)
+    return _category_out(db, category)
+
+
+@router.patch("/categories/{category_id}", response_model=KnowledgeCategoryOut)
+async def update_knowledge_category(
+    category_id: str,
+    body: KnowledgeCategoryPatchIn,
+    request: Request,
+    session_payload: Annotated[SessionPayload, Depends(get_session)],
+    current_settings: Annotated[Settings, Depends(get_settings)],
+    db: Annotated[Session, Depends(get_db)],
+) -> KnowledgeCategoryOut:
+    await _require_use(request, session_payload, current_settings)
+    if not _is_admin(session_payload):
+        raise HTTPException(status_code=403, detail="只有管理员可以管理资料分类")
+    category = _category_by_uuid(db, category_id)
+    if category is None:
+        raise HTTPException(status_code=404, detail="资料分类不存在")
+
+    old_name = category.name
+    if body.name is not None:
+        name = _normalize_category_name(body.name)
+        if not name:
+            raise HTTPException(status_code=422, detail="分类名称不能为空")
+        if _category_name_exists(db, name, exclude_id=category.id):
+            raise HTTPException(status_code=409, detail="资料分类已存在")
+        category.name = name
+    if body.parent_category_id is not None:
+        parent_id = body.parent_category_id.strip()
+        if not parent_id:
+            category.parent_id = None
+        else:
+            parent = _category_by_uuid(db, parent_id)
+            if parent is None:
+                raise HTTPException(status_code=404, detail="上级分类不存在")
+            if parent.id == category.id:
+                raise HTTPException(status_code=422, detail="上级分类不能选择自己")
+            category.parent_id = parent.id
+    if body.scope is not None:
+        category.scope = body.scope
+    if body.sort_order is not None:
+        category.sort_order = body.sort_order
+    if body.status is not None:
+        category.status = body.status
+
+    if category.name != old_name:
+        db.execute(
+            update(KnowledgeFile)
+            .where(KnowledgeFile.category == old_name)
+            .values(category=category.name)
+        )
+    db.commit()
+    db.refresh(category)
+    return _category_out(db, category)
+
+
+@router.delete("/categories/{category_id}", status_code=204)
+async def delete_knowledge_category(
+    category_id: str,
+    request: Request,
+    session_payload: Annotated[SessionPayload, Depends(get_session)],
+    current_settings: Annotated[Settings, Depends(get_settings)],
+    db: Annotated[Session, Depends(get_db)],
+) -> Response:
+    await _require_use(request, session_payload, current_settings)
+    if not _is_admin(session_payload):
+        raise HTTPException(status_code=403, detail="只有管理员可以管理资料分类")
+    category = _category_by_uuid(db, category_id)
+    if category is None:
+        raise HTTPException(status_code=404, detail="资料分类不存在")
+    child_count = db.scalar(
+        select(func.count(KnowledgeCategory.id)).where(
+            KnowledgeCategory.parent_id == category.id,
+            KnowledgeCategory.deleted_at.is_(None),
+        )
+    ) or 0
+    if child_count:
+        raise HTTPException(status_code=409, detail="该分类下还有子分类，请先调整子分类")
+    file_count = db.scalar(
+        select(func.count(KnowledgeFile.id)).where(
+            KnowledgeFile.category == category.name,
+            KnowledgeFile.hard_deleted_at.is_(None),
+        )
+    ) or 0
+    if file_count:
+        raise HTTPException(status_code=409, detail="该分类下还有资料，请先移动资料或停用分类")
+    category.deleted_at = datetime.now()
+    db.commit()
+    return Response(status_code=204)
+
+
+@router.get("/document-types", response_model=KnowledgeDocumentTypeListOut)
+async def list_knowledge_document_types(
+    request: Request,
+    session_payload: Annotated[SessionPayload, Depends(get_session)],
+    current_settings: Annotated[Settings, Depends(get_settings)],
+    db: Annotated[Session, Depends(get_db)],
+    include_disabled: bool = False,
+) -> KnowledgeDocumentTypeListOut:
+    await _require_use(request, session_payload, current_settings)
+    is_admin = _is_admin(session_payload)
+    _ensure_default_document_types(db)
+    filters = [KnowledgeDocumentType.deleted_at.is_(None)]
+    if not is_admin or not include_disabled:
+        filters.append(KnowledgeDocumentType.status == "ACTIVE")
+    rows = list(
+        db.scalars(
+            select(KnowledgeDocumentType)
+            .where(*filters)
+            .order_by(
+                KnowledgeDocumentType.sort_order.asc(),
+                KnowledgeDocumentType.created_at.asc(),
+                KnowledgeDocumentType.id.asc(),
+            )
+        )
+    )
+    return KnowledgeDocumentTypeListOut(
+        items=[_document_type_out(db, row) for row in rows],
+        total=len(rows),
+    )
+
+
+@router.post("/document-types", response_model=KnowledgeDocumentTypeOut, status_code=201)
+async def create_knowledge_document_type(
+    body: KnowledgeDocumentTypeCreateIn,
+    request: Request,
+    session_payload: Annotated[SessionPayload, Depends(get_session)],
+    current_settings: Annotated[Settings, Depends(get_settings)],
+    db: Annotated[Session, Depends(get_db)],
+) -> KnowledgeDocumentTypeOut:
+    await _require_use(request, session_payload, current_settings)
+    if not _is_admin(session_payload):
+        raise HTTPException(status_code=403, detail="只有管理员可以管理文档类型")
+    name = _normalize_document_type_name(body.name)
+    if not name:
+        raise HTTPException(status_code=422, detail="文档类型名称不能为空")
+    if _document_type_name_exists(db, name):
+        raise HTTPException(status_code=409, detail="文档类型已存在")
+    document_type = KnowledgeDocumentType(
+        name=name,
+        sort_order=body.sort_order,
+        status=body.status,
+        created_by=str(session_payload.user.id),
+    )
+    db.add(document_type)
+    db.commit()
+    db.refresh(document_type)
+    return _document_type_out(db, document_type)
+
+
+@router.patch("/document-types/{document_type_id}", response_model=KnowledgeDocumentTypeOut)
+async def update_knowledge_document_type(
+    document_type_id: str,
+    body: KnowledgeDocumentTypePatchIn,
+    request: Request,
+    session_payload: Annotated[SessionPayload, Depends(get_session)],
+    current_settings: Annotated[Settings, Depends(get_settings)],
+    db: Annotated[Session, Depends(get_db)],
+) -> KnowledgeDocumentTypeOut:
+    await _require_use(request, session_payload, current_settings)
+    if not _is_admin(session_payload):
+        raise HTTPException(status_code=403, detail="只有管理员可以管理文档类型")
+    document_type = _document_type_by_uuid(db, document_type_id)
+    if document_type is None:
+        raise HTTPException(status_code=404, detail="文档类型不存在")
+
+    old_name = document_type.name
+    if body.name is not None:
+        name = _normalize_document_type_name(body.name)
+        if not name:
+            raise HTTPException(status_code=422, detail="文档类型名称不能为空")
+        if _document_type_name_exists(db, name, exclude_id=document_type.id):
+            raise HTTPException(status_code=409, detail="文档类型已存在")
+        document_type.name = name
+    if body.sort_order is not None:
+        document_type.sort_order = body.sort_order
+    if body.status is not None:
+        document_type.status = body.status
+
+    if document_type.name != old_name:
+        db.execute(
+            update(KnowledgeFile)
+            .where(KnowledgeFile.document_type == old_name)
+            .values(document_type=document_type.name)
+        )
+    db.commit()
+    db.refresh(document_type)
+    return _document_type_out(db, document_type)
+
+
+@router.delete("/document-types/{document_type_id}", status_code=204)
+async def delete_knowledge_document_type(
+    document_type_id: str,
+    request: Request,
+    session_payload: Annotated[SessionPayload, Depends(get_session)],
+    current_settings: Annotated[Settings, Depends(get_settings)],
+    db: Annotated[Session, Depends(get_db)],
+) -> Response:
+    await _require_use(request, session_payload, current_settings)
+    if not _is_admin(session_payload):
+        raise HTTPException(status_code=403, detail="只有管理员可以管理文档类型")
+    document_type = _document_type_by_uuid(db, document_type_id)
+    if document_type is None:
+        raise HTTPException(status_code=404, detail="文档类型不存在")
+    file_count = db.scalar(
+        select(func.count(KnowledgeFile.id)).where(
+            KnowledgeFile.document_type == document_type.name,
+            KnowledgeFile.hard_deleted_at.is_(None),
+        )
+    ) or 0
+    if file_count:
+        raise HTTPException(status_code=409, detail="该类型下还有资料，请先移动资料或停用类型")
+    document_type.deleted_at = datetime.now()
+    db.commit()
+    return Response(status_code=204)
+
+
 @router.get("/reviews/pending", response_model=KnowledgeFileListOut)
 async def list_pending_reviews(
     request: Request,
@@ -829,6 +1310,8 @@ async def preview_knowledge_file(
                 chunk_index=chunk.chunk_index,
                 page_number=chunk.page_number,
                 section_title=chunk.section_title,
+                page_or_sheet=chunk.page_or_sheet,
+                chunk_type=chunk.chunk_type,
                 text=chunk.chunk_text,
             )
             for chunk in chunks
@@ -865,7 +1348,7 @@ async def download_knowledge_file(
     )
     return Response(
         content=stored_path.read_bytes(),
-        media_type=file_record.file_type or "application/octet-stream",
+        media_type=_download_media_type(file_record.file_type),
         headers={
             "Content-Disposition": _content_disposition_for_download(
                 file_record.original_file_name or file_record.file_name
@@ -962,6 +1445,14 @@ async def update_knowledge_file(
         raise HTTPException(status_code=404, detail="知识文件不存在")
     if not _can_manage_file(file_record, user_id=user_id, is_admin=is_admin):
         raise HTTPException(status_code=403, detail="无权修改该知识文件")
+    if body.file_name is not None:
+        safe_file_name = _safe_file_name(body.file_name)
+        file_record.file_name = safe_file_name
+        db.execute(
+            update(KnowledgeChunk)
+            .where(KnowledgeChunk.file_id == file_record.id)
+            .values(file_name=safe_file_name)
+        )
     if body.category is not None:
         file_record.category = body.category.strip() or file_record.category
     if body.document_type is not None:
@@ -1543,6 +2034,26 @@ async def approve_file_review(
     file_record.reviewed_by = reviewer_id
     file_record.reviewed_at = datetime.now()
     file_record.review_comment = body.comment.strip()
+    if file_record.source_origin == "web_capture" and file_record.web_capture_id:
+        capture = db.scalar(
+            select(WebCapture).where(WebCapture.uuid == file_record.web_capture_id)
+        )
+        if capture is not None:
+            capture.status = "approved"
+            capture.review_status = "approved"
+            capture.save_target = "official_knowledge_candidate"
+    chunks = db.scalars(select(KnowledgeChunk).where(KnowledgeChunk.file_id == file_record.id))
+    for chunk in chunks:
+        chunk.knowledge_base_id = base.id
+        metadata = dict(chunk.metadata_json or {})
+        metadata["source_type"] = "official_knowledge"
+        metadata["usage_type"] = "official_knowledge"
+        metadata["review_status"] = "official"
+        metadata["rag_scope"] = body.rag_scope
+        metadata["permission_scope"] = body.permission_scope
+        metadata["category_id"] = file_record.category
+        metadata["document_type_id"] = file_record.document_type
+        chunk.metadata_json = metadata
     _add_review_log(
         db,
         file_record=file_record,
@@ -1592,6 +2103,13 @@ async def reject_file_review(
     file_record.reviewed_by = reviewer_id
     file_record.reviewed_at = datetime.now()
     file_record.review_comment = body.comment.strip()
+    if file_record.source_origin == "web_capture" and file_record.web_capture_id:
+        capture = db.scalar(
+            select(WebCapture).where(WebCapture.uuid == file_record.web_capture_id)
+        )
+        if capture is not None:
+            capture.status = "rejected"
+            capture.review_status = "rejected"
     _add_review_log(
         db,
         file_record=file_record,

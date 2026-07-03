@@ -14,7 +14,7 @@ def _cipher() -> ContentCipher:
     return ContentCipher(os.environ["CONTENT_ENCRYPTION_KEY"])
 
 
-def _xlsx_bytes(rows: list[list[str]]) -> bytes:
+def _xlsx_bytes(rows: list[list[str]], *, sheet_name: str = "Sheet1") -> bytes:
     def cell_ref(row_index: int, column_index: int) -> str:
         return f"{chr(ord('A') + column_index)}{row_index}"
 
@@ -47,10 +47,10 @@ def _xlsx_bytes(rows: list[list[str]]) -> bytes:
         )
         archive.writestr(
             "xl/workbook.xml",
-            """<?xml version="1.0" encoding="UTF-8"?>
-<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"
-          xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
-  <sheets><sheet name="Sheet1" sheetId="1" r:id="rId1"/></sheets>
+            f"""<?xml version="1.0" encoding="UTF-8"?>
+	<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+	          xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+	  <sheets><sheet name="{sheet_name}" sheetId="1" r:id="rId1"/></sheets>
 </workbook>""",
         )
         archive.writestr(
@@ -70,18 +70,40 @@ def _xlsx_bytes(rows: list[list[str]]) -> bytes:
     return buffer.getvalue()
 
 
-def _simple_pdf_bytes(text: str) -> bytes:
-    escaped = text.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
-    return f"""%PDF-1.4
-1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
-2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
-3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 144] /Contents 4 0 R >> endobj
-4 0 obj << /Length 64 >> stream
-BT /F1 12 Tf 72 100 Td ({escaped}) Tj ET
-endstream endobj
-trailer << /Root 1 0 R >>
-%%EOF
-""".encode("utf-8")
+def _pptx_bytes(slides: list[tuple[str, str]], notes: list[str] | None = None) -> bytes:
+    buffer = BytesIO()
+    notes = notes or []
+    with ZipFile(buffer, "w", ZIP_DEFLATED) as archive:
+        archive.writestr(
+            "[Content_Types].xml",
+            """<?xml version="1.0" encoding="UTF-8"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+</Types>""",
+        )
+        for index, (title, body) in enumerate(slides, start=1):
+            archive.writestr(
+                f"ppt/slides/slide{index}.xml",
+                f"""<?xml version="1.0" encoding="UTF-8"?>
+<p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"
+       xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+  <p:cSld><p:spTree>
+    <p:sp><p:txBody><a:p><a:r><a:t>{title}</a:t></a:r></a:p></p:txBody></p:sp>
+    <p:sp><p:txBody><a:p><a:r><a:t>{body}</a:t></a:r></a:p></p:txBody></p:sp>
+  </p:spTree></p:cSld>
+</p:sld>""",
+            )
+        for index, note in enumerate(notes, start=1):
+            archive.writestr(
+                f"ppt/notesSlides/notesSlide{index}.xml",
+                f"""<?xml version="1.0" encoding="UTF-8"?>
+<p:notes xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"
+         xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+  <p:cSld><p:spTree><p:sp><p:txBody><a:p><a:r><a:t>{note}</a:t></a:r></a:p></p:txBody></p:sp></p:spTree></p:cSld>
+</p:notes>""",
+            )
+    return buffer.getvalue()
 
 
 def test_chunk_text_preserves_order_and_section_titles() -> None:
@@ -109,30 +131,22 @@ def test_chunk_text_preserves_order_and_section_titles() -> None:
     assert all(1 <= len(chunk.text) <= 70 for chunk in chunks)
 
 
-def test_create_knowledge_file_extracts_csv_table_rows(generation_db) -> None:
+def test_create_knowledge_file_rejects_csv_with_first_version_message(generation_db) -> None:
     from app.knowledge_files import create_knowledge_file_from_bytes
 
-    file_record, chunks = create_knowledge_file_from_bytes(
-        generation_db,
-        sso_user_id="user-1",
-        file_name="客户清单.csv",
-        content="客户名称,产品\n聚信得仁,Web动态安全管理平台\n".encode("utf-8"),
-        content_type="text/csv",
-        cipher=_cipher(),
-        key_version="v1",
-    )
+    with pytest.raises(HTTPException) as exc_info:
+        create_knowledge_file_from_bytes(
+            generation_db,
+            sso_user_id="user-1",
+            file_name="客户清单.csv",
+            content="客户名称,产品\n聚信得仁,Web动态安全管理平台\n".encode("utf-8"),
+            content_type="text/csv",
+            cipher=_cipher(),
+            key_version="v1",
+        )
 
-    assert file_record.file_name == "客户清单.csv"
-    assert chunks
-    payload = _cipher().decrypt_json(
-        EncryptedPayload(
-            ciphertext=chunks[0].chunk_text_ciphertext,
-            nonce=chunks[0].chunk_text_nonce,
-        ),
-        chunks[0].chunk_id.encode(),
-    )
-    assert "客户名称 | 产品" in payload["text"]
-    assert "聚信得仁 | Web动态安全管理平台" in payload["text"]
+    assert exc_info.value.status_code == 415
+    assert exc_info.value.detail == "当前版本暂不支持该文件类型，请上传 docx、xlsx、pptx、txt 或 md 文件。"
 
 
 def test_create_knowledge_file_extracts_xlsx_table_rows(generation_db) -> None:
@@ -145,7 +159,7 @@ def test_create_knowledge_file_extracts_xlsx_table_rows(generation_db) -> None:
         content=_xlsx_bytes([
             ["资料名称", "业务场景"],
             ["白皮书", "正式知识库"],
-        ]),
+        ], sheet_name="产品参数"),
         content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         cipher=_cipher(),
         key_version="v1",
@@ -153,6 +167,11 @@ def test_create_knowledge_file_extracts_xlsx_table_rows(generation_db) -> None:
 
     assert file_record.file_name == "产品资料.xlsx"
     assert chunks
+    assert chunks[0].section_title == "产品参数"
+    assert chunks[0].metadata_json["page_or_sheet"] == "产品参数"
+    assert chunks[0].metadata_json["chunk_type"] == "sheet_rows"
+    assert chunks[0].metadata_json["headers"] == ["资料名称", "业务场景"]
+    assert chunks[0].metadata_json["sheet_name"] == "产品参数"
     payload = _cipher().decrypt_json(
         EncryptedPayload(
             ciphertext=chunks[0].chunk_text_ciphertext,
@@ -161,24 +180,57 @@ def test_create_knowledge_file_extracts_xlsx_table_rows(generation_db) -> None:
         chunks[0].chunk_id.encode(),
     )
     assert "资料名称 | 业务场景" in payload["text"]
-    assert "白皮书 | 正式知识库" in payload["text"]
+    assert "资料名称=白皮书" in payload["text"]
+    assert "业务场景=正式知识库" in payload["text"]
 
 
-def test_create_knowledge_file_extracts_pdf_text(generation_db) -> None:
+def test_create_knowledge_file_generates_real_embedding_metadata(generation_db) -> None:
+    from app.knowledge_files import create_knowledge_file_from_bytes
+
+    _file_record, chunks = create_knowledge_file_from_bytes(
+        generation_db,
+        sso_user_id="user-1",
+        file_name="安全服务资料.txt",
+        content="一、安全服务\n聚信安全服务包含应急响应和风险评估。".encode("utf-8"),
+        content_type="text/plain",
+        cipher=_cipher(),
+        key_version="v1",
+    )
+
+    assert chunks
+    embedding = chunks[0].metadata_json["embedding"]
+    assert embedding["provider"] == "local-hash"
+    assert embedding["version"] == "v1"
+    assert embedding["dimensions"] >= 64
+    assert isinstance(embedding["vector"], list)
+    assert len(embedding["vector"]) == embedding["dimensions"]
+    assert any(abs(value) > 0 for value in embedding["vector"])
+    assert chunks[0].embedding_id.startswith("local-hash-v1:")
+    assert not chunks[0].embedding_id.startswith("local-sparse:")
+
+
+def test_create_knowledge_file_extracts_pptx_slides_and_notes(generation_db) -> None:
     from app.knowledge_files import create_knowledge_file_from_bytes
 
     file_record, chunks = create_knowledge_file_from_bytes(
         generation_db,
         sso_user_id="user-1",
-        file_name="产品白皮书.pdf",
-        content=_simple_pdf_bytes("Juxin official PDF whitepaper"),
-        content_type="application/pdf",
+        file_name="产品介绍.pptx",
+        content=_pptx_bytes(
+            [("WEB动态安全管理平台", "支持 SQL 注入识别、Webshell 动态检测")],
+            notes=["备注：用于售前介绍"],
+        ),
+        content_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
         cipher=_cipher(),
         key_version="v1",
     )
 
-    assert file_record.file_name == "产品白皮书.pdf"
+    assert file_record.file_name == "产品介绍.pptx"
     assert chunks
+    assert chunks[0].section_title == "WEB动态安全管理平台"
+    assert chunks[0].metadata_json["page_or_sheet"] == "幻灯片 1"
+    assert chunks[0].metadata_json["chunk_type"] == "slide"
+    assert chunks[0].metadata_json["slide_index"] == 1
     payload = _cipher().decrypt_json(
         EncryptedPayload(
             ciphertext=chunks[0].chunk_text_ciphertext,
@@ -186,7 +238,26 @@ def test_create_knowledge_file_extracts_pdf_text(generation_db) -> None:
         ),
         chunks[0].chunk_id.encode(),
     )
-    assert "Juxin official PDF whitepaper" in payload["text"]
+    assert "SQL 注入识别" in payload["text"]
+    assert "备注：用于售前介绍" in payload["text"]
+
+
+def test_create_knowledge_file_rejects_pdf_without_ocr_flow(generation_db) -> None:
+    from app.knowledge_files import create_knowledge_file_from_bytes
+
+    with pytest.raises(HTTPException) as exc_info:
+        create_knowledge_file_from_bytes(
+            generation_db,
+            sso_user_id="user-1",
+            file_name="产品白皮书.pdf",
+            content=b"%PDF-1.4",
+            content_type="application/pdf",
+            cipher=_cipher(),
+            key_version="v1",
+        )
+
+    assert exc_info.value.status_code == 415
+    assert exc_info.value.detail == "当前版本暂不支持该文件类型，请上传 docx、xlsx、pptx、txt 或 md 文件。"
 
 
 def test_create_knowledge_file_persists_encrypted_chunks(
@@ -245,6 +316,41 @@ def test_create_knowledge_file_persists_encrypted_chunks(
     assert "聚信得仁" in decrypted["text"]
 
 
+def test_create_knowledge_file_limits_long_section_titles(
+    generation_db,
+) -> None:
+    from app.knowledge_files import create_knowledge_file_from_bytes
+    from app.models import KnowledgeChunk, KnowledgeFile
+
+    long_title = "一、" + "投标人参加本项目招标活动前三年内无重大违法违规行为" * 12
+    file_record, _chunks = create_knowledge_file_from_bytes(
+        generation_db,
+        sso_user_id="user-1",
+        file_name="超长标题资料.md",
+        content=f"{long_title}\n正文内容用于生成知识片段。".encode("utf-8"),
+        content_type="text/markdown",
+        cipher=_cipher(),
+        key_version="v1",
+    )
+    generation_db.commit()
+
+    stored_file = generation_db.scalar(
+        select(KnowledgeFile).where(KnowledgeFile.uuid == file_record.uuid)
+    )
+    assert stored_file is not None
+
+    stored_chunks = list(
+        generation_db.scalars(
+            select(KnowledgeChunk)
+            .where(KnowledgeChunk.file_id == stored_file.id)
+            .order_by(KnowledgeChunk.chunk_index.asc())
+        )
+    )
+    assert stored_chunks
+    assert all(len(chunk.section_title) <= 255 for chunk in stored_chunks)
+    assert stored_chunks[0].section_title.startswith("一、投标人参加本项目")
+
+
 def test_create_knowledge_file_persists_original_file_safely(
     generation_db,
     tmp_path,
@@ -294,7 +400,7 @@ def test_create_knowledge_file_rejects_unsupported_type(
         )
 
     assert exc_info.value.status_code == 415
-    assert "当前仅支持" in str(exc_info.value.detail)
+    assert str(exc_info.value.detail) == "当前版本暂不支持该文件类型，请上传 docx、xlsx、pptx、txt 或 md 文件。"
 
 
 def test_upload_knowledge_file_api_creates_chunks_and_lists_only_owner(

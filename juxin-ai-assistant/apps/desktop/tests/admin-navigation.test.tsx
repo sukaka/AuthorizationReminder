@@ -8,6 +8,48 @@ import { AdminLinksPage } from '../src/pages/admin/AdminLinksPage';
 import { server } from './setup';
 
 function session(role: string, managedDepartments: string[] = []) {
+  const knowledgeCategories = [
+    '公司制度',
+    '产品资料',
+    '项目交付',
+    '销售商务',
+    '行政人力',
+    '安全运维',
+    '模板范本',
+    '会议纪要',
+    '个人素材',
+    '其他',
+  ].map((name, index) => ({
+    category_id: `category-${index}`,
+    name,
+    parent_category_id: '',
+    parent_name: '',
+    scope: 'company',
+    sort_order: index * 10,
+    status: 'ACTIVE',
+    file_count: 0,
+    created_at: '2026-06-20T08:00:00Z',
+    updated_at: '2026-06-20T08:00:00Z',
+  }));
+  const knowledgeDocumentTypes = [
+    '产品白皮书',
+    '解决方案',
+    '投标模板',
+    '交付说明',
+    '测试报告',
+    '安全服务报告',
+    '会议记录',
+    '提示词手册',
+    '其他',
+  ].map((name, index) => ({
+    document_type_id: `document-type-${index}`,
+    name,
+    sort_order: index * 10,
+    status: 'ACTIVE',
+    file_count: 0,
+    created_at: '2026-06-20T08:00:00Z',
+    updated_at: '2026-06-20T08:00:00Z',
+  }));
   server.use(
     http.get('/api/ai/session', () => HttpResponse.json({
       user: { id: `u-${role}`, username: `${role}用户`, role },
@@ -18,6 +60,16 @@ function session(role: string, managedDepartments: string[] = []) {
     http.get('/api/ai/home', () => HttpResponse.json({
       favorites: [], recent_tasks: [], recent_generations: [], safety_reminders: [],
     })),
+    http.get('/api/knowledge/categories', () => HttpResponse.json({
+      items: knowledgeCategories,
+      total: knowledgeCategories.length,
+    })),
+    http.get('/api/knowledge/document-types', () => HttpResponse.json({
+      items: knowledgeDocumentTypes,
+      total: knowledgeDocumentTypes.length,
+    })),
+    http.get('/api/knowledge/bases', () => HttpResponse.json({ items: [], total: 0 })),
+    http.get('/api/knowledge/files', () => HttpResponse.json({ items: [], total: 0 })),
   );
 }
 
@@ -82,12 +134,11 @@ it('opens a role-scoped knowledge workspace for ordinary employees', async () =>
   await userEvent.click(await screen.findByRole('button', { name: '我的资料' }));
 
   expect(screen.getByRole('heading', { name: '我的资料' })).toBeInTheDocument();
-  expect(screen.getByText('我的资料')).toBeInTheDocument();
-  expect(screen.getByText('当前附件')).toBeInTheDocument();
-  expect(screen.getByText('提交审核记录')).toBeInTheDocument();
-  expect(screen.getByText('公司知识库')).toBeInTheDocument();
-  expect(screen.getByText('查资料')).toBeInTheDocument();
-  expect(screen.getByText('上传资料')).toBeInTheDocument();
+  expect(screen.getAllByText('我的资料').length).toBeGreaterThan(0);
+  expect(screen.getByRole('tab', { name: '资料库' })).toHaveAttribute('aria-selected', 'true');
+  expect(screen.getByText('分类目录')).toBeInTheDocument();
+  expect(screen.getByText('资料概览')).toBeInTheDocument();
+  expect(screen.getAllByText('上传资料').length).toBeGreaterThan(0);
   expect(screen.queryByText('知识库审核')).not.toBeInTheDocument();
   expect(screen.queryByText('待审核文档')).not.toBeInTheDocument();
 });
@@ -124,7 +175,7 @@ it('searches accessible official knowledge from the knowledge page', async () =>
         file_uuid: 'file-official-1',
         file_name: 'Web动态安全管理平台白皮书.txt',
         source_kind: 'official_knowledge',
-        notice: '正式知识来源。',
+        notice: '正式资料。',
         total_chunks: 1,
         chunks: [{
           chunk_id: 'chunk-search-secret',
@@ -138,9 +189,9 @@ it('searches accessible official knowledge from the knowledge page', async () =>
   );
   render(<App />);
 
-  await userEvent.click(await screen.findByRole('button', { name: '知识库' }));
-  await userEvent.type(await screen.findByLabelText('搜索知识库内容'), '部署方式');
-  await userEvent.click(screen.getByRole('button', { name: '搜索知识库' }));
+  await userEvent.click(await screen.findByRole('button', { name: '我的资料' }));
+  await userEvent.type(await screen.findByLabelText('关键词或问题'), '部署方式');
+  await userEvent.click(screen.getByRole('button', { name: '查找资料' }));
 
   await waitFor(() => expect(searchRequest).toHaveBeenCalledWith({
     question: '部署方式',
@@ -148,8 +199,8 @@ it('searches accessible official knowledge from the knowledge page', async () =>
     top_k: 8,
     include_sources: true,
   }));
-  const results = await screen.findByRole('region', { name: '知识库搜索结果' });
-  expect(results).toHaveTextContent('正式知识来源');
+  const results = await screen.findByRole('region', { name: '资料查找结果' });
+  expect(results).toHaveTextContent('正式资料');
   expect(results).toHaveTextContent('Web动态安全管理平台白皮书.txt');
   expect(results).toHaveTextContent('第 3 页');
   expect(results).toHaveTextContent('部署方式');
@@ -213,17 +264,17 @@ it('searches personal reference material separately from official knowledge', as
   );
   render(<App />);
 
-  await userEvent.click(await screen.findByRole('button', { name: '知识库' }));
+  await userEvent.click(await screen.findByRole('button', { name: '我的资料' }));
   await userEvent.click(await screen.findByRole('radio', { name: '我的资料' }));
-  await userEvent.type(screen.getByLabelText('搜索知识库内容'), '会议培训');
-  await userEvent.click(screen.getByRole('button', { name: '搜索知识库' }));
+  await userEvent.type(screen.getByLabelText('关键词或问题'), '会议培训');
+  await userEvent.click(screen.getByRole('button', { name: '查找资料' }));
 
   await waitFor(() => expect(personalSearchRequest).toHaveBeenCalledWith({
     question: '会议培训',
     top_k: 8,
   }));
-  const results = await screen.findByRole('region', { name: '知识库搜索结果' });
-  expect(results).toHaveTextContent('我的上传文件，仅用于本次内容生成');
+  const results = await screen.findByRole('region', { name: '资料查找结果' });
+  expect(results).toHaveTextContent('我的资料');
   expect(results).toHaveTextContent('我的会议记录.txt');
   expect(results).toHaveTextContent('会议安排');
   expect(results).toHaveTextContent('客户培训和验收材料确认');
@@ -288,18 +339,15 @@ it('lets ordinary employees upload personal reference files from the knowledge p
   );
   render(<App />);
 
-  await userEvent.click(await screen.findByRole('button', { name: '知识库' }));
+  await userEvent.click(await screen.findByRole('button', { name: '我的资料' }));
+  await userEvent.click(screen.getByRole('tab', { name: '上传资料' }));
   await userEvent.upload(
     await screen.findByLabelText('上传知识文件'),
     new File(['个人模板内容'], '个人模板.txt', { type: 'text/plain' }),
   );
   await userEvent.click(screen.getByRole('radio', { name: '保存到我的资料' }));
-  await userEvent.clear(screen.getByLabelText('分类'));
-  await userEvent.type(screen.getByLabelText('分类'), '个人素材');
-  await userEvent.clear(screen.getByLabelText('文档类型'));
-  await userEvent.type(screen.getByLabelText('文档类型'), '个人模板');
-  await userEvent.clear(screen.getByLabelText('标签'));
-  await userEvent.type(screen.getByLabelText('标签'), '模板');
+  await userEvent.selectOptions(screen.getByLabelText('资料分类'), '个人素材');
+  await userEvent.selectOptions(screen.getByLabelText('文档类型'), '其他');
   await userEvent.click(screen.getByRole('button', { name: '开始上传' }));
 
   expect(uploadRequest).toHaveBeenCalledTimes(1);
@@ -312,44 +360,61 @@ it('lets ordinary employees upload personal reference files from the knowledge p
     rag_scope: 'personal',
     permission_scope: 'private',
     category: '个人素材',
-    document_type: '个人模板',
-    tags: '模板',
+    document_type: '其他',
+    tags: '',
   }));
   const personalCard = await screen.findByRole('listitem', { name: /个人模板\.txt/ });
-  expect(personalCard).toHaveTextContent('我的上传文件，仅用于本次内容生成');
+  expect(personalCard).toHaveTextContent('我的资料');
   expect(personalCard).toHaveTextContent('用户上传');
   expect(personalCard).not.toHaveTextContent('personal_reference');
   expect(await screen.findByText('资料已上传：个人模板.txt')).toBeInTheDocument();
   appendSpy.mockRestore();
 });
 
-it('explains parsing quality when selecting pdf and table files on the knowledge page', async () => {
+it('explains first-version upload support and rejects unsupported document types on the knowledge page', async () => {
   session('employee');
   server.use(
     http.get('/api/knowledge/files', () => HttpResponse.json({ items: [], total: 0 })),
   );
   render(<App />);
 
-  await userEvent.click(await screen.findByRole('button', { name: '知识库' }));
+  await userEvent.click(await screen.findByRole('button', { name: '我的资料' }));
+  await userEvent.click(screen.getByRole('tab', { name: '上传资料' }));
   const uploadInput = await screen.findByLabelText('上传知识文件');
 
   await userEvent.upload(
     uploadInput,
     new File(['%PDF-1.4'], '扫描白皮书.pdf', { type: 'application/pdf' }),
+    { applyAccept: false },
   );
 
   expect(await screen.findByText('已选择：扫描白皮书.pdf')).toBeInTheDocument();
-  expect(screen.getByText(/PDF 会尝试提取可复制文本/)).toBeInTheDocument();
-  expect(screen.getByText(/扫描件或图片型 PDF 需要先 OCR/)).toBeInTheDocument();
+  expect(screen.getByText('当前版本暂不支持 PDF，请上传 Word、Excel、PPT、TXT 或 Markdown 文件。')).toBeInTheDocument();
 
   await userEvent.upload(
     uploadInput,
     new File(['a,b\n1,2'], '客户清单.csv', { type: 'text/csv' }),
+    { applyAccept: false },
   );
 
   expect(await screen.findByText('已选择：客户清单.csv')).toBeInTheDocument();
-  expect(screen.getByText(/表格文件会按行解析/)).toBeInTheDocument();
-  expect(screen.getByText(/尽量保留单元格关系/)).toBeInTheDocument();
+  expect(screen.getByText('当前版本暂不支持该文件类型，请上传 docx、xlsx、pptx、txt 或 md 文件。')).toBeInTheDocument();
+
+  await userEvent.upload(
+    uploadInput,
+    new File(['xlsx'], '产品参数.xlsx', { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }),
+  );
+
+  expect(await screen.findByText('已选择：产品参数.xlsx')).toBeInTheDocument();
+  expect(screen.getByText(/Excel 会按 Sheet、表头和行记录解析/)).toBeInTheDocument();
+
+  await userEvent.upload(
+    uploadInput,
+    new File(['pptx'], '售前介绍.pptx', { type: 'application/vnd.openxmlformats-officedocument.presentationml.presentation' }),
+  );
+
+  expect(await screen.findByText('已选择：售前介绍.pptx')).toBeInTheDocument();
+  expect(screen.getByText(/PPT 会按幻灯片标题、正文和备注解析/)).toBeInTheDocument();
 });
 
 it('loads knowledge file metadata with lifecycle states for ordinary employees', async () => {
@@ -388,22 +453,20 @@ it('loads knowledge file metadata with lifecycle states for ordinary employees',
   );
   render(<App />);
 
-  await userEvent.click(await screen.findByRole('button', { name: '知识库' }));
+  await userEvent.click(await screen.findByRole('button', { name: '我的资料' }));
 
   expect(await screen.findByText('会议纪要模板.docx')).toBeInTheDocument();
   expect(listFiles).toHaveBeenCalledTimes(1);
   const fileCard = screen.getByRole('listitem', { name: /会议纪要模板\.docx/ });
-  expect(fileCard).toHaveTextContent('我的上传文件，仅用于本次内容生成');
+  expect(fileCard).toHaveTextContent('我的资料');
   expect(fileCard).toHaveTextContent('用户上传');
   expect(fileCard).not.toHaveTextContent('personal_reference');
   expect(fileCard).not.toHaveTextContent('user_upload');
   expect(fileCard).toHaveTextContent('会议纪要');
   expect(fileCard).toHaveTextContent('个人模板');
-  expect(fileCard).toHaveTextContent('parsed');
-  expect(fileCard).toHaveTextContent('indexed');
-  expect(fileCard).toHaveTextContent('RAG：关闭');
-  expect(fileCard).toHaveTextContent('参考：开启');
-  expect(fileCard).toHaveTextContent('审核：draft');
+      expect(fileCard).toHaveTextContent('已整理 3 个段落');
+  expect(fileCard).toHaveTextContent('可作为参考资料');
+  expect(fileCard).toHaveTextContent('已就绪');
   expect(screen.queryByText('file-personal-1')).not.toBeInTheDocument();
 });
 
@@ -427,6 +490,35 @@ it('lets administrators upload official knowledge files from the knowledge page'
   session('admin');
   server.use(
     http.get('/api/knowledge/files', () => HttpResponse.json({ items: [], total: 0 })),
+    http.get('/api/knowledge/bases', () => HttpResponse.json({
+      items: [
+        {
+          base_id: 'kb-company',
+          name: '公司知识库',
+          description: '公司级正式资料',
+          scope: 'company',
+          owner_user_id: '',
+          department_id: '',
+          project_id: '',
+          created_by: 'u-admin',
+          created_at: '2026-06-28T09:00:00Z',
+          updated_at: '2026-06-28T09:00:00Z',
+        },
+        {
+          base_id: 'kb-delivery',
+          name: '交付知识库',
+          description: '交付资料',
+          scope: 'department',
+          owner_user_id: '',
+          department_id: 'delivery',
+          project_id: '',
+          created_by: 'u-admin',
+          created_at: '2026-06-28T09:00:00Z',
+          updated_at: '2026-06-28T09:00:00Z',
+        },
+      ],
+      total: 2,
+    })),
     http.post('/api/knowledge/files/upload', () => {
       uploadRequest();
       return HttpResponse.json({
@@ -457,22 +549,18 @@ it('lets administrators upload official knowledge files from the knowledge page'
   render(<App />);
 
   const mainNav = await screen.findByRole('navigation', { name: '主导航' });
-  await userEvent.click(within(mainNav).getByRole('button', { name: '知识库' }));
+  await userEvent.click(within(mainNav).getByRole('button', { name: '我的资料' }));
+  await userEvent.click(screen.getByRole('tab', { name: '上传资料' }));
   await userEvent.upload(
     await screen.findByLabelText('上传知识文件'),
     new File(['正式产品白皮书'], '产品白皮书.txt', { type: 'text/plain' }),
   );
-  expect(screen.getByRole('radio', { name: '加入公司知识库' })).toBeInTheDocument();
+  expect(screen.getByRole('radio', { name: '保存为正式资料' })).toBeInTheDocument();
   expect(screen.queryByRole('radio', { name: '保存到我的资料' })).not.toBeInTheDocument();
-  await userEvent.clear(screen.getByLabelText('所属知识库 ID'));
-  await userEvent.type(screen.getByLabelText('所属知识库 ID'), 'kb-company');
-  await userEvent.clear(screen.getByLabelText('分类'));
-  await userEvent.type(screen.getByLabelText('分类'), '产品资料');
-  await userEvent.clear(screen.getByLabelText('文档类型'));
-  await userEvent.type(screen.getByLabelText('文档类型'), '产品白皮书');
-  await userEvent.clear(screen.getByLabelText('标签'));
-  await userEvent.type(screen.getByLabelText('标签'), '白皮书');
-  await userEvent.click(screen.getByRole('button', { name: '开始上传' }));
+  await userEvent.selectOptions(screen.getByLabelText('所属资料库'), 'kb-company');
+  await userEvent.selectOptions(screen.getByLabelText('资料分类'), '产品资料');
+  await userEvent.selectOptions(screen.getByLabelText('文档类型'), '产品白皮书');
+    await userEvent.click(screen.getByRole('button', { name: '开始上传' }));
 
   expect(uploadRequest).toHaveBeenCalledTimes(1);
   expect(Object.fromEntries(appendedFields)).toEqual(expect.objectContaining({
@@ -486,15 +574,99 @@ it('lets administrators upload official knowledge files from the knowledge page'
     permission_scope: 'company',
     category: '产品资料',
     document_type: '产品白皮书',
-    tags: '白皮书',
+    tags: '',
   }));
   const uploadedCard = await screen.findByRole('listitem', { name: /产品白皮书\.txt/ });
-  expect(uploadedCard).toHaveTextContent('公司知识库 / 正式知识来源');
+  expect(uploadedCard).toHaveTextContent('正式资料');
   expect(uploadedCard).toHaveTextContent('管理员上传');
   expect(uploadedCard).not.toHaveTextContent('official_knowledge');
-  expect(uploadedCard).toHaveTextContent('RAG：开启');
-  expect(await screen.findByText('正式知识已上传：产品白皮书.txt')).toBeInTheDocument();
+  expect(uploadedCard).toHaveTextContent('可查找');
+  expect(await screen.findByText('正式资料已上传：产品白皮书.txt')).toBeInTheDocument();
   appendSpy.mockRestore();
+});
+
+it('lets administrators create a knowledge base before uploading official files', async () => {
+  const createBaseRequest = vi.fn();
+  session('admin');
+  server.use(
+    http.get('/api/knowledge/files', () => HttpResponse.json({ items: [], total: 0 })),
+    http.get('/api/knowledge/bases', () => HttpResponse.json({ items: [], total: 0 })),
+    http.post('/api/knowledge/bases', async ({ request }) => {
+      createBaseRequest(await request.json());
+      return HttpResponse.json({
+        base_id: 'kb-new-company',
+        name: '公司默认资料库',
+        description: '公司正式资料',
+        scope: 'company',
+        owner_user_id: '',
+        department_id: '',
+        project_id: '',
+        created_by: 'u-admin',
+        created_at: '2026-07-01T09:00:00Z',
+        updated_at: '2026-07-01T09:00:00Z',
+      }, { status: 201 });
+    }),
+  );
+  render(<App />);
+
+  const mainNav = await screen.findByRole('navigation', { name: '主导航' });
+  await userEvent.click(within(mainNav).getByRole('button', { name: '我的资料' }));
+  await userEvent.click(screen.getByRole('tab', { name: '上传资料' }));
+  expect(await screen.findByText('暂无可选资料库，请先创建资料库。')).toBeInTheDocument();
+
+  await userEvent.click(screen.getByRole('button', { name: '新建资料库' }));
+  await userEvent.clear(screen.getByLabelText('资料库名称'));
+  await userEvent.type(screen.getByLabelText('资料库名称'), '公司默认资料库');
+  await userEvent.clear(screen.getByLabelText('资料库说明'));
+  await userEvent.type(screen.getByLabelText('资料库说明'), '公司正式资料');
+  await userEvent.click(screen.getByRole('button', { name: '创建资料库' }));
+
+  await waitFor(() => expect(createBaseRequest).toHaveBeenCalledWith({
+    name: '公司默认资料库',
+    description: '公司正式资料',
+    scope: 'company',
+    department_id: '',
+    project_id: '',
+  }));
+  expect(await screen.findByRole('option', { name: '公司默认资料库（公司）' })).toBeInTheDocument();
+  expect(screen.getByLabelText('所属资料库')).toHaveValue('kb-new-company');
+  expect(screen.getByText('已创建资料库：公司默认资料库')).toBeInTheDocument();
+});
+
+it('explains when knowledge upload is rejected by the proxy body size limit', async () => {
+  session('admin');
+  server.use(
+    http.get('/api/knowledge/files', () => HttpResponse.json({ items: [], total: 0 })),
+    http.get('/api/knowledge/bases', () => HttpResponse.json({
+      items: [{
+        base_id: 'kb-company',
+        name: '公司知识库',
+        description: '公司级正式资料',
+        scope: 'company',
+        owner_user_id: '',
+        department_id: '',
+        project_id: '',
+        created_by: 'u-admin',
+        created_at: '2026-06-28T09:00:00Z',
+        updated_at: '2026-06-28T09:00:00Z',
+      }],
+      total: 1,
+    })),
+    http.post('/api/knowledge/files/upload', () => HttpResponse.text('Request Entity Too Large', { status: 413 })),
+  );
+  render(<App />);
+
+  const mainNav = await screen.findByRole('navigation', { name: '主导航' });
+  await userEvent.click(within(mainNav).getByRole('button', { name: '我的资料' }));
+  await userEvent.click(screen.getByRole('tab', { name: '上传资料' }));
+  await userEvent.upload(
+    await screen.findByLabelText('上传知识文件'),
+    new File(['large file'], '大文件.docx', { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' }),
+    { applyAccept: false },
+  );
+  await userEvent.click(screen.getByRole('button', { name: '开始上传' }));
+
+  expect(await screen.findByText('资料上传失败：文件超过 100MB 上传限制，请压缩或拆分后再上传。')).toBeInTheDocument();
 });
 
 it('supports preview download and delete actions for visible knowledge files', async () => {
@@ -553,7 +725,7 @@ it('supports preview download and delete actions for visible knowledge files', a
   );
   render(<App />);
 
-  await userEvent.click(await screen.findByRole('button', { name: '知识库' }));
+  await userEvent.click(await screen.findByRole('button', { name: '我的资料' }));
   const fileCard = await screen.findByRole('listitem', { name: /会议纪要模板\.docx/ });
 
   await userEvent.click(within(fileCard).getByRole('button', { name: '预览 会议纪要模板.docx' }));
@@ -562,10 +734,14 @@ it('supports preview download and delete actions for visible knowledge files', a
   expect(screen.getByRole('region', { name: '文档预览' })).toHaveTextContent('个人参考资料，仅你本人可见。');
   expect(screen.queryByText('/storage/knowledge/original')).not.toBeInTheDocument();
 
-  await userEvent.click(within(fileCard).getByRole('button', { name: '下载 会议纪要模板.docx' }));
+  await userEvent.click(within(fileCard).getByRole('button', { name: '更多操作 会议纪要模板.docx' }));
+  const moreMenu = within(fileCard).getByRole('menu', { name: '会议纪要模板.docx 更多操作' });
+  await userEvent.click(within(moreMenu).getByRole('menuitem', { name: '下载 会议纪要模板.docx' }));
   expect(openDownload).toHaveBeenCalledWith('/api/knowledge/files/file-personal-1/download', '_blank', 'noopener,noreferrer');
 
-  await userEvent.click(within(fileCard).getByRole('button', { name: '删除 会议纪要模板.docx' }));
+  await userEvent.click(within(fileCard).getByRole('button', { name: '更多操作 会议纪要模板.docx' }));
+  const deleteMenu = within(fileCard).getByRole('menu', { name: '会议纪要模板.docx 更多操作' });
+  await userEvent.click(within(deleteMenu).getByRole('menuitem', { name: '删除 会议纪要模板.docx' }));
   expect(deleteRequest).toHaveBeenCalledTimes(1);
   expect(screen.queryByText('会议纪要模板.docx')).not.toBeInTheDocument();
 
@@ -645,7 +821,7 @@ it('summarizes a visible knowledge file with source labels', async () => {
   );
   render(<App />);
 
-  await userEvent.click(await screen.findByRole('button', { name: '知识库' }));
+  await userEvent.click(await screen.findByRole('button', { name: '我的资料' }));
   const fileCard = await screen.findByRole('listitem', { name: /会议纪要模板\.docx/ });
 
   await userEvent.click(within(fileCard).getByRole('button', { name: '总结 会议纪要模板.docx' }));
@@ -658,7 +834,7 @@ it('summarizes a visible knowledge file with source labels', async () => {
   const summary = await screen.findByRole('region', { name: '文档总结' });
   expect(summary).toHaveTextContent('会议核心结论：客户希望下周完成培训');
   expect(summary).toHaveTextContent('该内容参考用户个人上传资料生成，仅供当前用户使用。');
-  expect(summary).toHaveTextContent('我的上传文件，仅用于本次内容生成');
+  expect(summary).toHaveTextContent('我的资料');
   expect(summary).toHaveTextContent('会议纪要模板.docx');
   expect(summary).toHaveTextContent('第 2 页');
   expect(summary).toHaveTextContent('会议结论');
@@ -725,7 +901,7 @@ it('generates editable content from a visible knowledge file with personal sourc
   );
   render(<App />);
 
-  await userEvent.click(await screen.findByRole('button', { name: '知识库' }));
+  await userEvent.click(await screen.findByRole('button', { name: '我的资料' }));
   const fileCard = await screen.findByRole('listitem', { name: /会议纪要模板\.docx/ });
 
   await userEvent.click(within(fileCard).getByRole('button', { name: '根据此资料生成 会议纪要模板.docx' }));
@@ -739,7 +915,7 @@ it('generates editable content from a visible knowledge file with personal sourc
   const result = await screen.findByRole('region', { name: '文档生成结果' });
   expect(result).toHaveTextContent('根据会议纪要模板生成的工作草稿');
   expect(result).toHaveTextContent('该内容参考用户个人上传资料生成，仅供当前用户使用。');
-  expect(result).toHaveTextContent('我的上传文件，仅用于本次内容生成');
+  expect(result).toHaveTextContent('我的资料');
   expect(result).toHaveTextContent('模板结构');
   expect(result).not.toHaveTextContent('chunk-generate-secret');
 });
@@ -806,7 +982,7 @@ it('asks a custom question about a visible knowledge file', async () => {
     http.post('/api/export/word/content', async ({ request }) => {
       exportRequest(await request.json());
       return HttpResponse.json({
-        file_name: '文档问答结果.docx',
+        file_name: '资料提问结果.docx',
         download_url: '/api/export/download/knowledge-export',
       }, { status: 201 });
     }),
@@ -830,7 +1006,7 @@ it('asks a custom question about a visible knowledge file', async () => {
   );
   render(<App />);
 
-  await userEvent.click(await screen.findByRole('button', { name: '知识库' }));
+  await userEvent.click(await screen.findByRole('button', { name: '我的资料' }));
   const fileCard = await screen.findByRole('listitem', { name: /会议纪要模板\.docx/ });
 
   await userEvent.type(
@@ -845,16 +1021,16 @@ it('asks a custom question about a visible knowledge file', async () => {
     top_k: 6,
     include_sources: true,
   });
-  const result = await screen.findByRole('region', { name: '文档问答结果' });
+  const result = await screen.findByRole('region', { name: '资料提问结果' });
   expect(result).toHaveTextContent('文档回答：验收材料需要包含会议结论');
-  expect(result).toHaveTextContent('我的上传文件，仅用于本次内容生成');
+  expect(result).toHaveTextContent('我的资料');
   expect(result).toHaveTextContent('验收材料');
   expect(result).not.toHaveTextContent('chunk-ask-secret');
 
   await userEvent.click(within(result).getByRole('button', { name: '导出 Word' }));
 
   await waitFor(() => expect(exportRequest).toHaveBeenCalledWith({
-    title: '会议纪要模板.docx-文档问答结果',
+    title: '会议纪要模板.docx-资料提问结果',
     content: '文档回答：验收材料需要包含会议结论、责任人和下一步计划。',
     template: 'juxin_standard',
     sources: [{
@@ -870,7 +1046,7 @@ it('asks a custom question about a visible knowledge file', async () => {
   }));
   expect(await screen.findByText('Word 已开始下载。')).toBeInTheDocument();
 
-  await userEvent.click(within(result).getByRole('button', { name: '保存到聊天记录' }));
+  await userEvent.click(within(result).getByRole('button', { name: '保存到历史任务' }));
 
   await waitFor(() => expect(saveChatRequest).toHaveBeenCalledWith({
     question: '验收材料需要包含什么？',
@@ -887,7 +1063,7 @@ it('asks a custom question about a visible knowledge file', async () => {
       snippet: '验收材料包含会议结论、责任人和下一步计划。',
     }],
   }));
-  expect(await screen.findByText('已保存到聊天记录。')).toBeInTheDocument();
+  expect(await screen.findByText('已保存到历史任务。')).toBeInTheDocument();
   anchorClick.mockRestore();
 });
 
@@ -950,15 +1126,15 @@ it('submits a personal knowledge file for administrator review', async () => {
   );
   render(<App />);
 
-  await userEvent.click(await screen.findByRole('button', { name: '知识库' }));
+  await userEvent.click(await screen.findByRole('button', { name: '我的资料' }));
   const fileCard = await screen.findByRole('listitem', { name: /会议纪要模板\.docx/ });
 
-  await userEvent.click(within(fileCard).getByRole('button', { name: '提交审核 会议纪要模板.docx' }));
+  await userEvent.click(within(fileCard).getByRole('button', { name: '更多操作 会议纪要模板.docx' }));
+  await userEvent.click(within(fileCard).getByRole('menuitem', { name: '提交审核 会议纪要模板.docx' }));
 
   expect(submitReview).toHaveBeenCalledWith({ comment: '用户从桌面端提交管理员审核' });
-  expect(fileCard).toHaveTextContent('审核：pending');
-  expect(fileCard).toHaveTextContent('已提交管理员审核');
-  expect(within(fileCard).queryByRole('button', { name: '提交审核 会议纪要模板.docx' })).not.toBeInTheDocument();
+  expect(fileCard).toHaveTextContent('待审核');
+  expect(within(fileCard).queryByRole('menuitem', { name: '提交审核 会议纪要模板.docx' })).not.toBeInTheDocument();
 });
 
 it('lets administrators enable and disable RAG for official knowledge files', async () => {
@@ -1048,18 +1224,155 @@ it('lets administrators enable and disable RAG for official knowledge files', as
   render(<App />);
 
   const mainNav = await screen.findByRole('navigation', { name: '主导航' });
-  await userEvent.click(within(mainNav).getByRole('button', { name: '知识库' }));
+  await userEvent.click(within(mainNav).getByRole('button', { name: '我的资料' }));
   const fileCard = await screen.findByRole('listitem', { name: /产品白皮书\.pdf/ });
 
-  expect(fileCard).toHaveTextContent('RAG：关闭');
-  await userEvent.click(within(fileCard).getByRole('button', { name: '启用 RAG 产品白皮书.pdf' }));
+  expect(fileCard).toHaveTextContent('已整理 8 个段落');
+  await userEvent.click(within(fileCard).getByRole('button', { name: '更多操作 产品白皮书.pdf' }));
+  await userEvent.click(within(fileCard).getByRole('menuitem', { name: '启用资料查找 产品白皮书.pdf' }));
   expect(enableRag).toHaveBeenCalledTimes(1);
-  expect(fileCard).toHaveTextContent('RAG：开启');
-  expect(within(fileCard).queryByRole('button', { name: '启用 RAG 产品白皮书.pdf' })).not.toBeInTheDocument();
+  expect(fileCard).toHaveTextContent('可查找');
+  expect(within(fileCard).queryByRole('menuitem', { name: '启用资料查找 产品白皮书.pdf' })).not.toBeInTheDocument();
 
-  await userEvent.click(within(fileCard).getByRole('button', { name: '禁用 RAG 产品白皮书.pdf' }));
+  await userEvent.click(within(fileCard).getByRole('button', { name: '更多操作 产品白皮书.pdf' }));
+  await userEvent.click(within(fileCard).getByRole('menuitem', { name: '停用资料查找 产品白皮书.pdf' }));
   expect(disableRag).toHaveBeenCalledTimes(1);
-  expect(fileCard).toHaveTextContent('RAG：关闭');
+  expect(fileCard).toHaveTextContent('已整理 8 个段落');
+});
+
+it('keeps secondary knowledge categories out of the left rail and filters them from right-side chips', async () => {
+  session('admin');
+  server.use(
+    http.get('/api/knowledge/categories', () => HttpResponse.json({
+      items: [
+        {
+          category_id: 'category-product',
+          name: '产品资料',
+          parent_category_id: '',
+          parent_name: '',
+          scope: 'company',
+          sort_order: 10,
+          status: 'ACTIVE',
+          file_count: 0,
+          created_at: '2026-06-20T08:00:00Z',
+          updated_at: '2026-06-20T08:00:00Z',
+        },
+        {
+          category_id: 'category-wdsp',
+          name: 'wdsp',
+          parent_category_id: 'category-product',
+          parent_name: '产品资料',
+          scope: 'company',
+          sort_order: 20,
+          status: 'ACTIVE',
+          file_count: 1,
+          created_at: '2026-06-20T08:00:00Z',
+          updated_at: '2026-06-20T08:00:00Z',
+        },
+      ],
+      total: 2,
+    })),
+    http.get('/api/knowledge/files', () => HttpResponse.json({
+      items: [{
+        file_uuid: 'file-wdsp',
+        knowledge_base_id: 'kb-company',
+        file_name: 'WEB动态安全管理平台白皮书v3.1.docx',
+        file_type: 'docx',
+        file_size: 8192,
+        visibility: 'company',
+        status: 'READY',
+        chunk_count: 6,
+        created_at: '2026-06-28T09:00:00Z',
+        source_type: 'admin_upload',
+        usage_type: 'official_knowledge',
+        review_status: 'official',
+        rag_enabled: true,
+        reference_enabled: true,
+        rag_scope: 'company',
+        permission_scope: 'company',
+        category: 'wdsp',
+        document_type: '产品白皮书',
+        tags: ['产品', '白皮书'],
+        parse_status: 'parsed',
+        index_status: 'indexed',
+      }],
+      total: 1,
+    })),
+  );
+  render(<App />);
+
+  const mainNav = await screen.findByRole('navigation', { name: '主导航' });
+  await userEvent.click(within(mainNav).getByRole('button', { name: '我的资料' }));
+  const categoryRail = await screen.findByLabelText('分类目录');
+  const parentCategory = within(categoryRail).getByRole('button', { name: '产品资料1' });
+  expect(within(categoryRail).queryByRole('button', { name: 'wdsp1' })).not.toBeInTheDocument();
+
+  expect(parentCategory).not.toHaveClass('is-child');
+
+  await userEvent.click(parentCategory);
+  const secondaryFilters = await screen.findByLabelText('产品资料 二级分类筛选');
+  expect(within(secondaryFilters).getByRole('button', { name: '全部' })).toHaveAttribute('aria-current', 'true');
+  expect(within(secondaryFilters).queryByRole('button', { name: 'wdsp' })).not.toBeInTheDocument();
+  expect(await screen.findByRole('listitem', { name: /WEB动态安全管理平台白皮书v3\.1\.docx/ })).toBeInTheDocument();
+
+  await userEvent.click(within(secondaryFilters).getByRole('button', { name: '更多分类' }));
+  const morePanel = await screen.findByRole('dialog', { name: '更多二级分类' });
+  const childCategory = within(morePanel).getByRole('button', { name: 'wdsp' });
+  await userEvent.click(childCategory);
+  expect(within(secondaryFilters).getByRole('button', { name: 'wdsp' })).toHaveAttribute('aria-current', 'true');
+  expect(await screen.findByRole('listitem', { name: /WEB动态安全管理平台白皮书v3\.1\.docx/ })).toBeInTheDocument();
+});
+
+it('opens a searchable secondary category panel when one parent has many children', async () => {
+  session('admin');
+  const childCategories = Array.from({ length: 9 }, (_, index) => ({
+    category_id: `category-product-child-${index}`,
+    name: `产品子类${index + 1}`,
+    parent_category_id: 'category-product',
+    parent_name: '产品资料',
+    scope: 'company',
+    sort_order: 20 + index,
+    status: 'ACTIVE',
+    file_count: 0,
+    created_at: '2026-06-20T08:00:00Z',
+    updated_at: '2026-06-20T08:00:00Z',
+  }));
+  server.use(
+    http.get('/api/knowledge/categories', () => HttpResponse.json({
+      items: [
+        {
+          category_id: 'category-product',
+          name: '产品资料',
+          parent_category_id: '',
+          parent_name: '',
+          scope: 'company',
+          sort_order: 10,
+          status: 'ACTIVE',
+          file_count: 0,
+          created_at: '2026-06-20T08:00:00Z',
+          updated_at: '2026-06-20T08:00:00Z',
+        },
+        ...childCategories,
+      ],
+      total: childCategories.length + 1,
+    })),
+  );
+  render(<App />);
+
+  const mainNav = await screen.findByRole('navigation', { name: '主导航' });
+  await userEvent.click(within(mainNav).getByRole('button', { name: '我的资料' }));
+  const categoryRail = await screen.findByLabelText('分类目录');
+  await userEvent.click(within(categoryRail).getByRole('button', { name: '产品资料' }));
+
+  const secondaryFilters = await screen.findByLabelText('产品资料 二级分类筛选');
+  expect(within(secondaryFilters).queryByRole('button', { name: '产品子类1' })).not.toBeInTheDocument();
+  expect(within(secondaryFilters).queryByRole('button', { name: '产品子类9' })).not.toBeInTheDocument();
+
+  await userEvent.click(within(secondaryFilters).getByRole('button', { name: '更多分类' }));
+  const morePanel = await screen.findByRole('dialog', { name: '更多二级分类' });
+  await userEvent.type(within(morePanel).getByLabelText('搜索二级分类'), '9');
+  await userEvent.click(within(morePanel).getByRole('button', { name: '产品子类9' }));
+  expect(within(secondaryFilters).getByRole('button', { name: '产品子类9' })).toHaveAttribute('aria-current', 'true');
 });
 
 it('lets administrators reparse official knowledge files', async () => {
@@ -1122,16 +1435,17 @@ it('lets administrators reparse official knowledge files', async () => {
   render(<App />);
 
   const mainNav = await screen.findByRole('navigation', { name: '主导航' });
-  await userEvent.click(within(mainNav).getByRole('button', { name: '知识库' }));
+  await userEvent.click(within(mainNav).getByRole('button', { name: '我的资料' }));
   const fileCard = await screen.findByRole('listitem', { name: /交付手册\.docx/ });
 
-  expect(fileCard).toHaveTextContent('Chunks：6');
-  await userEvent.click(within(fileCard).getByRole('button', { name: '重新解析 交付手册.docx' }));
+  expect(fileCard).toHaveTextContent('已整理 6 个段落');
+  await userEvent.click(within(fileCard).getByRole('button', { name: '更多操作 交付手册.docx' }));
+  await userEvent.click(within(fileCard).getByRole('menuitem', { name: '重新处理 交付手册.docx' }));
   expect(reparseFile).toHaveBeenCalledTimes(1);
-  expect(fileCard).toHaveTextContent('Chunks：9');
+  expect(fileCard).toHaveTextContent('已整理 9 个段落');
 });
 
-it('lets administrators edit official knowledge category document type and tags', async () => {
+it('lets administrators edit official knowledge category and document type', async () => {
   const updateMetadata = vi.fn();
   session('admin');
   server.use(
@@ -1166,7 +1480,7 @@ it('lets administrators edit official knowledge category document type and tags'
       return HttpResponse.json({
         file_uuid: 'file-official-metadata',
         knowledge_base_id: 'kb-company',
-        file_name: '产品白皮书.pdf',
+        file_name: 'WDSP 产品白皮书.pdf',
         file_type: 'pdf',
         file_size: 8192,
         visibility: 'company',
@@ -1180,9 +1494,9 @@ it('lets administrators edit official knowledge category document type and tags'
         reference_enabled: true,
         rag_scope: 'company',
         permission_scope: 'company',
-        category: '售前资料',
-        document_type: '服务方案',
-        tags: ['方案', '售前'],
+        category: '安全运维',
+        document_type: '解决方案',
+        tags: [],
         parse_status: 'parsed',
         index_status: 'indexed',
       });
@@ -1191,25 +1505,25 @@ it('lets administrators edit official knowledge category document type and tags'
   render(<App />);
 
   const mainNav = await screen.findByRole('navigation', { name: '主导航' });
-  await userEvent.click(within(mainNav).getByRole('button', { name: '知识库' }));
+  await userEvent.click(within(mainNav).getByRole('button', { name: '我的资料' }));
   const fileCard = await screen.findByRole('listitem', { name: /产品白皮书\.pdf/ });
 
-  await userEvent.click(within(fileCard).getByRole('button', { name: '编辑分类标签 产品白皮书.pdf' }));
-  await userEvent.clear(within(fileCard).getByLabelText('分类'));
-  await userEvent.type(within(fileCard).getByLabelText('分类'), '售前资料');
-  await userEvent.clear(within(fileCard).getByLabelText('文档类型'));
-  await userEvent.type(within(fileCard).getByLabelText('文档类型'), '服务方案');
-  await userEvent.clear(within(fileCard).getByLabelText('标签'));
-  await userEvent.type(within(fileCard).getByLabelText('标签'), '方案, 售前');
+  await userEvent.click(within(fileCard).getByRole('button', { name: '更多操作 产品白皮书.pdf' }));
+  await userEvent.click(within(fileCard).getByRole('menuitem', { name: '编辑资料分类 产品白皮书.pdf' }));
+  await userEvent.clear(within(fileCard).getByLabelText('文件名称'));
+  await userEvent.type(within(fileCard).getByLabelText('文件名称'), 'WDSP 产品白皮书.pdf');
+  await userEvent.selectOptions(within(fileCard).getByLabelText('资料分类'), '安全运维');
+  await userEvent.selectOptions(within(fileCard).getByLabelText('文档类型'), '解决方案');
   await userEvent.click(within(fileCard).getByRole('button', { name: '保存元数据 产品白皮书.pdf' }));
 
   expect(updateMetadata).toHaveBeenCalledWith({
-    category: '售前资料',
-    document_type: '服务方案',
-    tags: ['方案', '售前'],
+    file_name: 'WDSP 产品白皮书.pdf',
+    category: '安全运维',
+    document_type: '解决方案',
+    tags: [],
   });
-  expect(fileCard).toHaveTextContent('售前资料 · 服务方案 · pdf');
-  expect(fileCard).toHaveTextContent('标签：方案、售前');
+  expect(fileCard).toHaveTextContent('WDSP 产品白皮书.pdf');
+  expect(fileCard).toHaveTextContent('安全运维 · 解决方案 · 正式资料');
 });
 
 it('lets administrators archive files and manage the knowledge trash', async () => {
@@ -1292,8 +1606,8 @@ it('lets administrators archive files and manage the knowledge trash', async () 
             reference_enabled: true,
             rag_scope: 'company',
             permission_scope: 'company',
-            category: '售前资料',
-            document_type: '服务方案',
+            category: '安全运维',
+            document_type: '解决方案',
             tags: ['方案'],
             parse_status: 'parsed',
             index_status: 'indexed',
@@ -1344,8 +1658,8 @@ it('lets administrators archive files and manage the knowledge trash', async () 
         reference_enabled: true,
         rag_scope: 'company',
         permission_scope: 'company',
-        category: '售前资料',
-        document_type: '服务方案',
+        category: '安全运维',
+        document_type: '解决方案',
         tags: ['方案'],
         parse_status: 'parsed',
         index_status: 'indexed',
@@ -1359,19 +1673,20 @@ it('lets administrators archive files and manage the knowledge trash', async () 
   render(<App />);
 
   const mainNav = await screen.findByRole('navigation', { name: '主导航' });
-  await userEvent.click(within(mainNav).getByRole('button', { name: '知识库' }));
+  await userEvent.click(within(mainNav).getByRole('button', { name: '我的资料' }));
   const activeCard = await screen.findByRole('listitem', { name: /产品白皮书\.pdf/ });
 
-  await userEvent.click(within(activeCard).getByRole('button', { name: '归档 产品白皮书.pdf' }));
+  await userEvent.click(within(activeCard).getByRole('button', { name: '更多操作 产品白皮书.pdf' }));
+  await userEvent.click(within(activeCard).getByRole('menuitem', { name: '归档 产品白皮书.pdf' }));
   expect(archiveFile).toHaveBeenCalledTimes(1);
-  expect(activeCard).toHaveTextContent('状态：ARCHIVED');
-  expect(activeCard).toHaveTextContent('RAG：关闭');
+  expect(activeCard).toHaveTextContent('已保存');
+  expect(activeCard).toHaveTextContent('已整理 8 个段落');
 
   await userEvent.click(screen.getByRole('button', { name: '查看回收站' }));
   expect(listTrash).toHaveBeenCalledTimes(1);
   const restoreCard = await screen.findByRole('listitem', { name: /已删除资料\.docx/ });
   const hardDeleteCard = await screen.findByRole('listitem', { name: /待彻底删除\.pdf/ });
-  expect(restoreCard).toHaveTextContent('状态：DELETED');
+  expect(restoreCard).toHaveTextContent('已保存');
 
   await userEvent.click(within(restoreCard).getByRole('button', { name: '恢复 已删除资料.docx' }));
   expect(restoreFile).toHaveBeenCalledTimes(1);
@@ -1387,6 +1702,23 @@ it('lets administrators approve and reject pending knowledge review files', asyn
   const rejectReview = vi.fn();
   session('admin');
   server.use(
+    http.get('/api/knowledge/bases', () => HttpResponse.json({
+      items: [
+        {
+          base_id: 'kb-company',
+          name: '公司正式知识库',
+          description: '正式知识来源',
+          scope: 'company',
+          owner_user_id: '',
+          department_id: '',
+          project_id: '',
+          created_by: 'admin',
+          created_at: '2026-06-20T08:00:00Z',
+          updated_at: '2026-06-20T08:00:00Z',
+        },
+      ],
+      total: 1,
+    })),
     http.get('/api/knowledge/files', () => HttpResponse.json({
       items: [
         {
@@ -1406,9 +1738,9 @@ it('lets administrators approve and reject pending knowledge review files', asyn
           reference_enabled: true,
           rag_scope: 'personal',
           permission_scope: 'private',
-          category: '售前资料',
-          document_type: '服务方案',
-          tags: ['方案', '售前'],
+          category: '安全运维',
+          document_type: '解决方案',
+          tags: [],
           parse_status: 'parsed',
           index_status: 'indexed',
         },
@@ -1457,9 +1789,9 @@ it('lets administrators approve and reject pending knowledge review files', asyn
         reference_enabled: true,
         rag_scope: 'company',
         permission_scope: 'company',
-        category: '售前资料',
-        document_type: '服务方案',
-        tags: ['方案', '售前'],
+        category: '安全运维',
+        document_type: '解决方案',
+        tags: [],
         parse_status: 'parsed',
         index_status: 'indexed',
       });
@@ -1494,30 +1826,38 @@ it('lets administrators approve and reject pending knowledge review files', asyn
   render(<App />);
 
   const mainNav = await screen.findByRole('navigation', { name: '主导航' });
-  await userEvent.click(within(mainNav).getByRole('button', { name: '知识库' }));
+  await userEvent.click(within(mainNav).getByRole('button', { name: '我的资料' }));
   const approveCard = await screen.findByRole('listitem', { name: /待审核方案\.docx/ });
   const rejectCard = await screen.findByRole('listitem', { name: /待审核记录\.docx/ });
 
   await userEvent.click(within(approveCard).getByRole('button', { name: '审核通过 待审核方案.docx' }));
+  expect(approveReview).not.toHaveBeenCalled();
+  const approveDialog = await screen.findByRole('dialog', { name: '审核通过 待审核方案.docx' });
+  await userEvent.selectOptions(within(approveDialog).getByLabelText('所属知识库'), 'kb-company');
+  await userEvent.selectOptions(within(approveDialog).getByLabelText('资料分类'), '产品资料');
+  await userEvent.selectOptions(within(approveDialog).getByLabelText('文档类型'), '产品白皮书');
+  await userEvent.clear(within(approveDialog).getByLabelText('审核备注'));
+  await userEvent.type(within(approveDialog).getByLabelText('审核备注'), '分类后通过');
+  await userEvent.click(within(approveDialog).getByRole('button', { name: '确认通过' }));
   expect(approveReview).toHaveBeenCalledWith({
     knowledge_base_id: 'kb-company',
-    comment: '管理员从桌面端审核通过',
+    comment: '分类后通过',
     permission_scope: 'company',
     rag_scope: 'company',
-    category: '售前资料',
-    document_type: '服务方案',
-    tags: ['方案', '售前'],
+    category: '产品资料',
+    document_type: '产品白皮书',
+    tags: [],
   });
-  expect(approveCard).toHaveTextContent('公司知识库 / 正式知识来源');
+  expect(approveCard).toHaveTextContent('正式资料');
   expect(approveCard).not.toHaveTextContent('official_knowledge');
-  expect(approveCard).toHaveTextContent('审核：official');
-  expect(approveCard).toHaveTextContent('RAG：开启');
+  expect(approveCard).toHaveTextContent('可查找');
+  expect(approveCard).toHaveTextContent('可查找');
   expect(within(approveCard).queryByRole('button', { name: '审核通过 待审核方案.docx' })).not.toBeInTheDocument();
 
   await userEvent.click(within(rejectCard).getByRole('button', { name: '审核驳回 待审核记录.docx' }));
   expect(rejectReview).toHaveBeenCalledWith({ comment: '管理员从桌面端审核驳回' });
-  expect(rejectCard).toHaveTextContent('审核：rejected');
-  expect(rejectCard).toHaveTextContent('RAG：关闭');
+  expect(rejectCard).toHaveTextContent('已驳回');
+  expect(rejectCard).toHaveTextContent('已整理 2 个段落');
   expect(within(rejectCard).queryByRole('button', { name: '审核驳回 待审核记录.docx' })).not.toBeInTheDocument();
 });
 
@@ -1526,15 +1866,140 @@ it('opens the administrator knowledge workspace from the sidebar', async () => {
   render(<App />);
 
   const mainNav = await screen.findByRole('navigation', { name: '主导航' });
-  await userEvent.click(within(mainNav).getByRole('button', { name: '知识库' }));
+  await userEvent.click(within(mainNav).getByRole('button', { name: '我的资料' }));
 
-  expect(screen.getByRole('heading', { name: '知识库' })).toBeInTheDocument();
-  expect(screen.getByText('知识库审核')).toBeInTheDocument();
-  expect(screen.getByText('公司知识库')).toBeInTheDocument();
-  expect(screen.getByText('部门知识库')).toBeInTheDocument();
-  expect(screen.getByText('项目知识库')).toBeInTheDocument();
-  expect(screen.getByText('待审核文档')).toBeInTheDocument();
-  expect(screen.getByText('分类和标签管理')).toBeInTheDocument();
+  expect(screen.getByRole('heading', { name: '我的资料' })).toBeInTheDocument();
+  expect(screen.getByRole('tab', { name: '资料库' })).toBeInTheDocument();
+  expect(screen.getByRole('tab', { name: '上传资料' })).toBeInTheDocument();
+  expect(screen.getByRole('tab', { name: '字典管理' })).toBeInTheDocument();
+  expect(screen.getByRole('tab', { name: '审核与回收站' })).toBeInTheDocument();
+  await userEvent.click(screen.getByRole('tab', { name: '字典管理' }));
+  expect(screen.getByRole('tab', { name: '资料分类' })).toHaveAttribute('aria-selected', 'true');
+  expect(screen.getByRole('tab', { name: '文档类型' })).toBeInTheDocument();
+  expect(screen.getByRole('table', { name: '资料分类字典表' })).toBeInTheDocument();
+  expect(screen.queryByRole('table', { name: '文档类型字典表' })).not.toBeInTheDocument();
+  await userEvent.click(screen.getByRole('tab', { name: '文档类型' }));
+  expect(screen.getByRole('table', { name: '文档类型字典表' })).toBeInTheDocument();
+  expect(screen.queryByRole('table', { name: '资料分类字典表' })).not.toBeInTheDocument();
+});
+
+it('lets administrators manage knowledge document types in a drawer and use them in upload forms', async () => {
+  const createDocumentType = vi.fn();
+  const updateDocumentType = vi.fn();
+  const deleteDocumentType = vi.fn();
+  const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+  session('admin');
+  server.use(
+    http.get('/api/knowledge/document-types', () => HttpResponse.json({
+      items: [{
+        document_type_id: 'document-type-whitepaper',
+        name: '产品白皮书',
+        sort_order: 10,
+        status: 'ACTIVE',
+        file_count: 0,
+        created_at: '2026-06-20T08:00:00Z',
+        updated_at: '2026-06-20T08:00:00Z',
+      }, {
+        document_type_id: 'document-type-solution',
+        name: '解决方案',
+        sort_order: 20,
+        status: 'ACTIVE',
+        file_count: 0,
+        created_at: '2026-06-20T08:00:00Z',
+        updated_at: '2026-06-20T08:00:00Z',
+      }],
+      total: 2,
+    })),
+    http.post('/api/knowledge/document-types', async ({ request }) => {
+      createDocumentType(await request.json());
+      return HttpResponse.json({
+        document_type_id: 'document-type-acceptance',
+        name: '验收报告',
+        sort_order: 30,
+        status: 'ACTIVE',
+        file_count: 0,
+        created_at: '2026-06-20T08:00:00Z',
+        updated_at: '2026-06-20T08:00:00Z',
+      }, { status: 201 });
+    }),
+    http.patch('/api/knowledge/document-types/document-type-acceptance', async ({ request }) => {
+      updateDocumentType(await request.json());
+      return HttpResponse.json({
+        document_type_id: 'document-type-acceptance',
+        name: '验收材料',
+        sort_order: 35,
+        status: 'ACTIVE',
+        file_count: 0,
+        created_at: '2026-06-20T08:00:00Z',
+        updated_at: '2026-06-20T08:00:00Z',
+      });
+    }),
+    http.delete('/api/knowledge/document-types/document-type-acceptance', () => {
+      deleteDocumentType();
+      return new HttpResponse(null, { status: 204 });
+    }),
+  );
+  render(<App />);
+
+  const mainNav = await screen.findByRole('navigation', { name: '主导航' });
+  await userEvent.click(within(mainNav).getByRole('button', { name: '我的资料' }));
+  await userEvent.click(screen.getByRole('tab', { name: '字典管理' }));
+  await userEvent.click(screen.getByRole('tab', { name: '文档类型' }));
+
+  await userEvent.click(await screen.findByRole('button', { name: '新建文档类型' }));
+  const createDrawer = await screen.findByRole('dialog', { name: '新建文档类型' });
+  await userEvent.type(within(createDrawer).getByLabelText('文档类型名称'), '验收报告');
+  await userEvent.click(within(createDrawer).getByRole('button', { name: '保存' }));
+  await waitFor(() => expect(createDocumentType).toHaveBeenCalledWith(expect.objectContaining({
+    name: '验收报告',
+    status: 'ACTIVE',
+  })));
+  await waitFor(() => expect(screen.queryByRole('dialog', { name: '新建文档类型' })).not.toBeInTheDocument());
+  const createdRow = within(await screen.findByRole('table', { name: '文档类型字典表' })).getByRole('row', { name: /验收报告/ });
+
+  await userEvent.click(within(createdRow).getByRole('button', { name: '编辑 验收报告' }));
+  const editDrawer = await screen.findByRole('dialog', { name: '编辑文档类型' });
+  await userEvent.clear(within(editDrawer).getByLabelText('文档类型名称'));
+  await userEvent.type(within(editDrawer).getByLabelText('文档类型名称'), '验收材料');
+  await userEvent.click(within(editDrawer).getByRole('button', { name: '保存' }));
+  await waitFor(() => expect(updateDocumentType).toHaveBeenCalledWith(expect.objectContaining({
+    name: '验收材料',
+  })));
+
+  const updatedRow = within(await screen.findByRole('table', { name: '文档类型字典表' })).getByRole('row', { name: /验收材料/ });
+  await userEvent.click(within(updatedRow).getByRole('button', { name: '更多 验收材料' }));
+  await userEvent.click(within(updatedRow).getByRole('menuitem', { name: '删除 验收材料' }));
+  await waitFor(() => expect(deleteDocumentType).toHaveBeenCalledTimes(1));
+  expect(confirmSpy).toHaveBeenCalledWith(expect.stringContaining('验收材料'));
+  expect(within(screen.getByRole('table', { name: '文档类型字典表' })).queryByRole('row', { name: /验收材料/ })).not.toBeInTheDocument();
+
+  await userEvent.click(screen.getByRole('tab', { name: '上传资料' }));
+  await userEvent.upload(
+    await screen.findByLabelText('上传知识文件'),
+    new File(['正式材料'], '验收报告.txt', { type: 'text/plain' }),
+  );
+  expect(screen.getByLabelText('文档类型')).toHaveTextContent('产品白皮书');
+  expect(screen.getByLabelText('文档类型')).toHaveTextContent('解决方案');
+  confirmSpy.mockRestore();
+});
+
+it('shows administrator knowledge areas as tabs', async () => {
+  session('admin');
+  server.use(
+    http.get('/api/knowledge/bases', () => HttpResponse.json({ items: [], total: 0 })),
+    http.get('/api/knowledge/files', () => HttpResponse.json({ items: [], total: 0 })),
+  );
+  render(<App />);
+
+  const mainNav = await screen.findByRole('navigation', { name: '主导航' });
+  await userEvent.click(within(mainNav).getByRole('button', { name: '我的资料' }));
+
+  const uploadTab = await screen.findByRole('tab', { name: '上传资料' });
+  expect(screen.getByRole('tab', { name: '资料库' })).toHaveAttribute('aria-selected', 'true');
+  expect(screen.getByRole('tab', { name: '审核与回收站' })).toBeInTheDocument();
+
+  await userEvent.click(uploadTab);
+  expect(screen.getByRole('heading', { name: '资料上传入口' })).toBeInTheDocument();
 });
 
 it('links user and prompt management to existing centers', () => {
@@ -1545,6 +2010,6 @@ it('links user and prompt management to existing centers', () => {
 
   expect(screen.getByRole('link', { name: '打开统一用户管理' }))
     .toHaveAttribute('href', 'http://localhost:5180/admin-center');
-  expect(screen.getByRole('link', { name: '打开提示词管理中心' }))
+  expect(screen.getByRole('link', { name: '打开内容模板管理中心' }))
     .toHaveAttribute('href', 'http://localhost:18088');
 });

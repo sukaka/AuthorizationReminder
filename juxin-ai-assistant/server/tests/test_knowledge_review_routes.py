@@ -199,6 +199,71 @@ def test_admin_approves_pending_file_as_official_knowledge(
     assert logs[-1].new_status == "official"
 
 
+def test_admin_approves_web_capture_candidate_and_marks_capture_approved(
+    client_for_user,
+    monkeypatch,
+    generation_db,
+) -> None:
+    from app import web_routes
+    from app.models import KnowledgeFile, WebCapture
+    from app.web_sources import WebFetchResult
+
+    def fetch_result() -> WebFetchResult:
+        return WebFetchResult(
+            url="https://example.com/wdsp",
+            final_url="https://example.com/wdsp",
+            status_code=200,
+            content_type="text/html",
+            content="""
+            <html>
+              <head><title>WDSP 白皮书</title></head>
+              <body><p>WDSP 支持 SQL 识别和 Webshell 动态检测。</p></body>
+            </html>
+            """.encode("utf-8"),
+            fetched_at=__import__("datetime").datetime(2026, 7, 3),
+        )
+
+    monkeypatch.setattr(web_routes.WebFetcher, "fetch", lambda self, url: fetch_result())
+    owner = client_for_user("user-web")
+    admin = client_for_user("admin-1", role="admin")
+    company_base = admin.post(
+        "/api/knowledge/bases",
+        json={"name": "网页正式知识库", "scope": "company"},
+    ).json()
+    preview = owner.post("/api/web/captures/preview", json={"url": "https://example.com/wdsp"}).json()
+    candidate = owner.post(
+        f"/api/web/captures/{preview['capture_id']}/confirm",
+        json={"save_target": "official_knowledge_candidate"},
+    ).json()
+
+    response = admin.post(
+        f"/api/knowledge/files/{candidate['knowledge_file_uuid']}/approve",
+        json={
+            "knowledge_base_id": company_base["base_id"],
+            "comment": "网页资料审核通过",
+            "permission_scope": "company",
+            "rag_scope": "company",
+            "category": "产品资料",
+            "document_type": "产品白皮书",
+            "tags": ["WDSP"],
+        },
+    )
+
+    assert response.status_code == 200
+    file_record = generation_db.scalar(
+        select(KnowledgeFile).where(KnowledgeFile.uuid == candidate["knowledge_file_uuid"])
+    )
+    capture = generation_db.scalar(select(WebCapture).where(WebCapture.uuid == preview["capture_id"]))
+    assert file_record is not None
+    assert file_record.usage_type == "official_knowledge"
+    assert file_record.review_status == "official"
+    assert file_record.source_origin == "web_capture"
+    assert file_record.file_type == "webpage"
+    assert capture is not None
+    assert capture.review_status == "approved"
+    assert capture.status == "approved"
+
+
 def test_admin_rejects_pending_file_and_keeps_it_personal(
     client_for_user,
     generation_db,

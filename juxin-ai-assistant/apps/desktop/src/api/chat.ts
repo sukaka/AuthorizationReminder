@@ -24,6 +24,8 @@ export type ChatCitation = {
   chunk_id?: string;
   page_number?: number | null;
   section_title?: string;
+  page_or_sheet?: string;
+  chunk_type?: string;
   chunk_index?: number | null;
   score?: number;
 };
@@ -76,11 +78,90 @@ export type KnowledgeFilePayload = {
   index_status?: string;
 };
 
+export type KnowledgeBasePayload = {
+  base_id: string;
+  name: string;
+  description: string;
+  scope: string;
+  owner_user_id: string;
+  department_id: string;
+  project_id: string;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type KnowledgeCategoryPayload = {
+  category_id: string;
+  name: string;
+  parent_category_id: string;
+  parent_name: string;
+  scope: 'company' | 'department' | 'project' | 'personal';
+  sort_order: number;
+  status: 'ACTIVE' | 'DISABLED';
+  file_count: number;
+  created_at: string;
+  updated_at: string;
+};
+
+export type KnowledgeCategoryListPayload = {
+  items: KnowledgeCategoryPayload[];
+  total: number;
+};
+
+export type KnowledgeCategoryCreatePayload = {
+  name: string;
+  parent_category_id?: string;
+  scope?: 'company' | 'department' | 'project' | 'personal';
+  sort_order?: number;
+  status?: 'ACTIVE' | 'DISABLED';
+};
+
+export type KnowledgeCategoryUpdatePayload = Partial<KnowledgeCategoryCreatePayload>;
+
+export type KnowledgeDocumentTypePayload = {
+  document_type_id: string;
+  name: string;
+  sort_order: number;
+  status: 'ACTIVE' | 'DISABLED';
+  file_count: number;
+  created_at: string;
+  updated_at: string;
+};
+
+export type KnowledgeDocumentTypeListPayload = {
+  items: KnowledgeDocumentTypePayload[];
+  total: number;
+};
+
+export type KnowledgeDocumentTypeCreatePayload = {
+  name: string;
+  sort_order?: number;
+  status?: 'ACTIVE' | 'DISABLED';
+};
+
+export type KnowledgeDocumentTypeUpdatePayload = Partial<KnowledgeDocumentTypeCreatePayload>;
+
+export type KnowledgeBaseCreatePayload = {
+  name: string;
+  description?: string;
+  scope: 'personal' | 'company' | 'department' | 'project' | 'customer';
+  department_id?: string;
+  project_id?: string;
+};
+
+export type KnowledgeBaseListPayload = {
+  items: KnowledgeBasePayload[];
+  total: number;
+};
+
 export type KnowledgeFilePreviewChunkPayload = {
   chunk_id: string;
   chunk_index: number;
   page_number?: number | null;
   section_title: string;
+  page_or_sheet?: string;
+  chunk_type?: string;
   text: string;
 };
 
@@ -151,6 +232,30 @@ export type ChatKnowledgeResultPayload = {
   session_uuid: string;
   user_message_uuid: string;
   assistant_message_uuid: string;
+};
+
+export type WebCapturePreviewPayload = {
+  capture_id: string;
+  title: string;
+  site_name: string;
+  url: string;
+  final_url: string;
+  fetched_at: string;
+  published_at?: string;
+  word_count: number;
+  summary: string;
+  suggested_category: string;
+  suggested_document_type: string;
+  validity: string;
+  scope: string;
+};
+
+export type WebCaptureConfirmPayload = {
+  capture_id: string;
+  status: string;
+  save_target: string;
+  knowledge_file_uuid?: string;
+  message: string;
 };
 
 async function readJson<T>(response: Response, code: string): Promise<T> {
@@ -290,6 +395,49 @@ export async function prepareChat(payload: {
   );
 }
 
+export async function previewWebCapture(payload: {
+  url: string;
+  conversationId?: string;
+}): Promise<WebCapturePreviewPayload> {
+  return readJson(
+    await apiFetch('/api/web/captures/preview', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        url: payload.url,
+        conversation_id: payload.conversationId ?? '',
+      }),
+    }),
+    'WEB_CAPTURE_PREVIEW_FAILED',
+  );
+}
+
+export async function confirmWebCapture(
+  captureId: string,
+  payload: {
+    saveTarget: 'temporary' | 'personal_reference' | 'official_knowledge_candidate' | 'cancel';
+    category?: string;
+    documentType?: string;
+    tags?: string[];
+    conversationId?: string;
+  },
+): Promise<WebCaptureConfirmPayload> {
+  return readJson(
+    await apiFetch(`/api/web/captures/${encodeURIComponent(captureId)}/confirm`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        save_target: payload.saveTarget,
+        category: payload.category ?? '',
+        document_type: payload.documentType ?? '',
+        tags: payload.tags ?? [],
+        conversation_id: payload.conversationId ?? '',
+      }),
+    }),
+    'WEB_CAPTURE_CONFIRM_FAILED',
+  );
+}
+
 export async function completeChatMessage(
   messageUuid: string,
   payload: {
@@ -364,6 +512,118 @@ export async function listKnowledgeFiles(): Promise<KnowledgeFileListPayload> {
   return readJson(
     await apiFetch('/api/knowledge/files', { cache: 'no-store' }),
     'KNOWLEDGE_FILES_FAILED',
+  );
+}
+
+export async function listKnowledgeBases(): Promise<KnowledgeBaseListPayload> {
+  return readJson(
+    await apiFetch('/api/knowledge/bases', { cache: 'no-store' }),
+    'KNOWLEDGE_BASES_FAILED',
+  );
+}
+
+export async function createKnowledgeBase(
+  payload: KnowledgeBaseCreatePayload,
+): Promise<KnowledgeBasePayload> {
+  return readJson(
+    await apiFetch('/api/knowledge/bases', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }),
+    'KNOWLEDGE_BASE_CREATE_FAILED',
+  );
+}
+
+export async function listKnowledgeCategories(
+  includeDisabled = false,
+): Promise<KnowledgeCategoryListPayload> {
+  const query = includeDisabled ? '?include_disabled=true' : '';
+  return readJson(
+    await apiFetch(`/api/knowledge/categories${query}`, { cache: 'no-store' }),
+    'KNOWLEDGE_CATEGORIES_FAILED',
+  );
+}
+
+export async function createKnowledgeCategory(
+  payload: KnowledgeCategoryCreatePayload,
+): Promise<KnowledgeCategoryPayload> {
+  return readJson(
+    await apiFetch('/api/knowledge/categories', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }),
+    'KNOWLEDGE_CATEGORY_CREATE_FAILED',
+  );
+}
+
+export async function updateKnowledgeCategory(
+  categoryId: string,
+  payload: KnowledgeCategoryUpdatePayload,
+): Promise<KnowledgeCategoryPayload> {
+  return readJson(
+    await apiFetch(`/api/knowledge/categories/${encodeURIComponent(categoryId)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }),
+    'KNOWLEDGE_CATEGORY_UPDATE_FAILED',
+  );
+}
+
+export async function deleteKnowledgeCategory(categoryId: string): Promise<void> {
+  await readJson(
+    await apiFetch(`/api/knowledge/categories/${encodeURIComponent(categoryId)}`, {
+      method: 'DELETE',
+    }),
+    'KNOWLEDGE_CATEGORY_DELETE_FAILED',
+  );
+}
+
+export async function listKnowledgeDocumentTypes(
+  includeDisabled = false,
+): Promise<KnowledgeDocumentTypeListPayload> {
+  const query = includeDisabled ? '?include_disabled=true' : '';
+  return readJson(
+    await apiFetch(`/api/knowledge/document-types${query}`, { cache: 'no-store' }),
+    'KNOWLEDGE_DOCUMENT_TYPES_FAILED',
+  );
+}
+
+export async function createKnowledgeDocumentType(
+  payload: KnowledgeDocumentTypeCreatePayload,
+): Promise<KnowledgeDocumentTypePayload> {
+  return readJson(
+    await apiFetch('/api/knowledge/document-types', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }),
+    'KNOWLEDGE_DOCUMENT_TYPE_CREATE_FAILED',
+  );
+}
+
+export async function updateKnowledgeDocumentType(
+  documentTypeId: string,
+  payload: KnowledgeDocumentTypeUpdatePayload,
+): Promise<KnowledgeDocumentTypePayload> {
+  return readJson(
+    await apiFetch(`/api/knowledge/document-types/${encodeURIComponent(documentTypeId)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }),
+    'KNOWLEDGE_DOCUMENT_TYPE_UPDATE_FAILED',
+  );
+}
+
+export async function deleteKnowledgeDocumentType(documentTypeId: string): Promise<void> {
+  await readJson(
+    await apiFetch(`/api/knowledge/document-types/${encodeURIComponent(documentTypeId)}`, {
+      method: 'DELETE',
+    }),
+    'KNOWLEDGE_DOCUMENT_TYPE_DELETE_FAILED',
   );
 }
 
@@ -501,6 +761,7 @@ export async function archiveKnowledgeFile(fileUuid: string): Promise<KnowledgeF
 }
 
 export type KnowledgeFileMetadataUpdatePayload = {
+  fileName?: string;
   category?: string;
   documentType?: string;
   tags?: string[];
@@ -510,15 +771,19 @@ export async function updateKnowledgeFileMetadata(
   fileUuid: string,
   payload: KnowledgeFileMetadataUpdatePayload,
 ): Promise<KnowledgeFilePayload> {
+  const body: Record<string, unknown> = {
+    category: payload.category ?? '',
+    document_type: payload.documentType ?? '',
+    tags: payload.tags ?? [],
+  };
+  if (payload.fileName !== undefined) {
+    body.file_name = payload.fileName;
+  }
   return readJson(
     await apiFetch(`/api/knowledge/files/${encodeURIComponent(fileUuid)}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        category: payload.category ?? '',
-        document_type: payload.documentType ?? '',
-        tags: payload.tags ?? [],
-      }),
+      body: JSON.stringify(body),
     }),
     'KNOWLEDGE_FILE_UPDATE_METADATA_FAILED',
   );

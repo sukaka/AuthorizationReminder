@@ -7,12 +7,16 @@ import {
   bulkArchiveChatSessions,
   bulkDeleteChatSessions,
   completeChatMessage,
+  confirmWebCapture,
   deleteChatSession,
   exportChatWord,
   getChatSession,
   getChatSessionsByKind,
   hardDeleteChatSession,
+  listKnowledgeCategories,
+  listKnowledgeDocumentTypes,
   prepareChat,
+  previewWebCapture,
   previewKnowledgeFile,
   renameChatSession,
   restoreChatSession,
@@ -21,7 +25,10 @@ import {
   type ChatMode,
   type ChatSessionListKind,
   type ChatSessionPayload,
+  type KnowledgeCategoryPayload,
+  type KnowledgeDocumentTypePayload,
   type KnowledgeFilePreviewPayload,
+  type WebCapturePreviewPayload,
   uploadKnowledgeFile,
 } from '../api/chat';
 import {
@@ -38,6 +45,7 @@ type UiMessage = {
   role: 'user' | 'assistant';
   content: string;
   citations: ChatCitation[];
+  isComplete?: boolean;
 };
 
 type GeneratedModelResult = Awaited<ReturnType<typeof generateLocalModel>>;
@@ -47,6 +55,17 @@ type SourcePreviewState =
   | { status: 'loading'; citation: ChatCitation }
   | { status: 'ready'; citation: ChatCitation; preview: KnowledgeFilePreviewPayload }
   | { status: 'error'; citation: ChatCitation; message: string };
+
+type WordExportNotice =
+  | { kind: 'success'; path?: string; fileName?: string; copyStatus?: string; openStatus?: string }
+  | { kind: 'error' };
+
+type WebCaptureState =
+  | { status: 'idle' }
+  | { status: 'previewing'; url: string }
+  | { status: 'ready'; preview: WebCapturePreviewPayload; actionStatus?: string }
+  | { status: 'saving'; preview: WebCapturePreviewPayload; action: 'temporary' | 'personal_reference' | 'official_knowledge_candidate' | 'cancel' }
+  | { status: 'error'; url: string; message: string };
 
 type UploadPurpose = 'session_attachment' | 'personal_reference' | 'submit_review';
 type ReferenceScope = 'official_only' | 'with_personal' | 'with_session' | 'personal_and_session';
@@ -72,11 +91,45 @@ const modeLabels: Record<ChatMode, string> = {
 };
 
 const wordExportTypes = ['single_answer', 'formal_document'] as const satisfies readonly ChatExportType[];
+const supportedKnowledgeAccept = '.txt,.md,.docx,.xlsx,.pptx,text/plain,text/markdown,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.openxmlformats-officedocument.presentationml.presentation';
+const unsupportedKnowledgeTypeMessage = '当前版本暂不支持该文件类型，请上传 docx、xlsx、pptx、txt 或 md 文件。';
+const unsupportedPdfMessage = '当前版本暂不支持 PDF，请上传 Word、Excel、PPT、TXT 或 Markdown 文件。';
+const fallbackUploadCategories = ['个人素材', '会议纪要', '项目交付', '销售商务', '安全运维', '模板范本', '其他'];
+const fallbackUploadDocumentTypes = ['会议纪要', '解决方案', '投标模板', '管理员手册', '培训材料', '验收报告', '检查记录', '其他'];
 
 const exportTypeLabels: Record<(typeof wordExportTypes)[number], string> = {
   single_answer: '仅导出本次生成内容',
   formal_document: '导出聚信格式 Word',
 };
+
+const webUrlPattern = /https?:\/\/[^\s<>'"，。；;、）)】]+/i;
+
+function extractFirstWebUrl(value: string): string {
+  return webUrlPattern.exec(value)?.[0] || '';
+}
+
+function uploadFileHint(file: File | null): string {
+  if (!file) return '';
+  const dotIndex = file.name.lastIndexOf('.');
+  const extension = dotIndex >= 0 ? file.name.slice(dotIndex + 1).trim().toLowerCase() : '';
+  if (extension === 'pdf') return unsupportedPdfMessage;
+  if (extension === 'csv' || extension === 'doc' || extension === 'xls' || ['png', 'jpg', 'jpeg', 'webp'].includes(extension)) {
+    return unsupportedKnowledgeTypeMessage;
+  }
+  if (extension === 'xlsx') return 'Excel 会按 Sheet、表头和行记录解析。';
+  if (extension === 'pptx') return 'PPT 会按幻灯片标题、正文和备注解析。';
+  return '当前支持 docx、xlsx、pptx、txt、md；第一版暂不支持 PDF 和扫描件。';
+}
+
+function uploadFailureMessage(error: unknown): string {
+  if (error instanceof ApiError) {
+    const detail = typeof error.payload === 'object' && error.payload !== null && 'detail' in error.payload
+      ? String((error.payload as { detail?: unknown }).detail || '').trim()
+      : '';
+    if (detail) return detail;
+  }
+  return '资料上传失败，请稍后重试';
+}
 
 const sessionListLabels: Record<ChatSessionListKind, string> = {
   active: '正常历史',
@@ -89,11 +142,6 @@ const referenceScopeLabels: Record<ReferenceScope, string> = {
   with_personal: '公司知识库 + 我的资料',
   with_session: '公司知识库 + 当前附件',
   personal_and_session: '公司知识库 + 我的资料和当前附件',
-};
-
-const enabledReferenceLabels: Record<EnabledReferenceFile['sourceKind'], string> = {
-  personal_reference: '我的资料',
-  session_attachment: '当前附件',
 };
 
 const formalDocumentPrompt = `你是聚信得仁内部文档助手。
@@ -118,20 +166,137 @@ function normalizeSessionStatus(value: string): 'active' | 'archived' | 'deleted
   return 'active';
 }
 
-function citationLabel(citation: ChatCitation): string {
-  const locationParts = [
-    citation.page_number ? `第 ${citation.page_number} 页` : '',
-    citation.section_title || '',
+type CitationFileReference = {
+  key: string;
+  label: string;
+  citation: ChatCitation;
+  locations: string[];
+  sourceLabel: string;
+  sourceClassName: string;
+};
+
+function citationFileName(citation: ChatCitation): string {
+  return citation.file_name?.trim() || '知识来源';
+}
+
+function citationFileKey(citation: ChatCitation): string {
+  return citation.file_uuid || citation.file_name || citation.chunk_id || citationFileName(citation);
+}
+
+function citationSourceLabel(sourceType?: string): string {
+  switch (sourceType) {
+    case 'official_knowledge':
+      return '公司知识库';
+    case 'official_knowledge_candidate':
+      return '待审核资料';
+    case 'personal_reference':
+      return '我的资料';
+    case 'session_attachment':
+    case 'current_attachment':
+      return '当前附件';
+    case 'current_web_capture':
+      return '网页采集';
+    case 'web_search_context':
+      return '联网搜索';
+    default:
+      return '知识来源';
+  }
+}
+
+function citationSourceClassName(sourceType?: string): string {
+  switch (sourceType) {
+    case 'official_knowledge':
+      return 'official';
+    case 'official_knowledge_candidate':
+      return 'candidate';
+    case 'personal_reference':
+      return 'personal';
+    case 'session_attachment':
+    case 'current_attachment':
+      return 'attachment';
+    case 'current_web_capture':
+      return 'web-capture';
+    case 'web_search_context':
+      return 'web-search';
+    default:
+      return 'generic';
+  }
+}
+
+function citationLocationLabel(citation: ChatCitation): string {
+  const pageLabel = citation.page_number ? `第 ${citation.page_number} 页` : '';
+  const pageOrSheet = citation.page_or_sheet?.trim() || '';
+  return [
+    pageOrSheet,
+    citation.section_title?.trim() || '',
+    pageOrSheet === pageLabel ? '' : pageLabel,
+  ].filter(Boolean).join(' · ');
+}
+
+function citationFileReferences(citations: ChatCitation[]): CitationFileReference[] {
+  const referenceByKey = new Map<string, CitationFileReference>();
+  const references: CitationFileReference[] = [];
+  citations.forEach((citation, index) => {
+    const key = citationFileKey(citation);
+    const location = citationLocationLabel(citation);
+    const reference = referenceByKey.get(key);
+    if (reference) {
+      if (location && !reference.locations.includes(location)) {
+        reference.locations.push(location);
+      }
+      return;
+    }
+    const nextReference = {
+      key: `${key}-${index}`,
+      label: citationFileName(citation),
+      citation,
+      locations: location ? [location] : [],
+      sourceLabel: citationSourceLabel(citation.source_type),
+      sourceClassName: citationSourceClassName(citation.source_type),
+    };
+    referenceByKey.set(key, nextReference);
+    references.push(nextReference);
+  });
+  return references;
+}
+
+function normalizeCitationMatchText(value?: string | null): string {
+  return (value || '').toLowerCase().replace(/\s+/g, '');
+}
+
+function stripKnownFileExtension(value: string): string {
+  const extensions = ['.docx', '.xlsx', '.pptx', '.pdf', '.txt', '.md', '.doc', '.xls', '.ppt'];
+  const extension = extensions.find((item) => value.endsWith(item));
+  return extension ? value.slice(0, -extension.length) : value;
+}
+
+function citationMatchCandidates(value?: string | null): string[] {
+  const normalized = normalizeCitationMatchText(value);
+  if (!normalized) return [];
+  const candidates = [normalized];
+  const stem = stripKnownFileExtension(normalized);
+  if (stem !== normalized) candidates.push(stem);
+  return Array.from(new Set(candidates)).filter((candidate) => candidate.length >= 4);
+}
+
+function filterCitationsByAnswer(citations: ChatCitation[], answer: string): ChatCitation[] {
+  const normalizedAnswer = normalizeCitationMatchText(answer);
+  if (!normalizedAnswer) return [];
+  return citations.filter((citation) => {
+    if (citation.source_type === 'web_search_context') return true;
+    return citationMatchCandidates(citation.file_name).some((candidate) => normalizedAnswer.includes(candidate));
+  });
+}
+
+function chunkReferenceTitle(chunk: KnowledgeFilePreviewPayload['chunks'][number]): string {
+  const pageLabel = chunk.page_number ? `第 ${chunk.page_number} 页` : '';
+  const pageOrSheet = chunk.page_or_sheet?.trim() || '';
+  const location = [
+    pageOrSheet,
+    chunk.section_title?.trim() || '',
+    pageOrSheet === pageLabel ? '' : pageLabel,
   ].filter(Boolean);
-  const location = locationParts.length ? locationParts.join('，') : '未识别章节';
-  const sourceKind = citation.source_type === 'official_knowledge' || citation.source_type === 'knowledge_file'
-    ? '来源：公司知识库 / 正式知识来源'
-    : citation.source_type === 'personal_reference'
-      ? '参考资料：我的上传文件，仅用于本次内容生成'
-      : citation.source_type === 'session_attachment'
-        ? '参考资料：当前附件'
-        : '知识来源';
-  return `${citation.file_name || '知识来源'} / ${sourceKind} / ${location}`;
+  return location.length ? location.join(' · ') : '引用片段';
 }
 
 function apiErrorDetail(error: unknown): string {
@@ -145,6 +310,29 @@ function referenceScopeIncludes(scope: ReferenceScope, sourceKind: EnabledRefere
     return scope === 'with_personal' || scope === 'personal_and_session';
   }
   return scope === 'with_session' || scope === 'personal_and_session';
+}
+
+function attachmentFileTypeLabel(fileName: string): string {
+  const extension = fileName.split('.').pop()?.trim().toUpperCase() || 'FILE';
+  if (['DOCX', 'PDF', 'XLSX', 'PPTX', 'TXT', 'MD'].includes(extension)) return extension;
+  return extension.slice(0, 5);
+}
+
+function fileNameFromPath(path: string): string {
+  return path.split(/[\\/]/).pop()?.trim() || 'Word 文档';
+}
+
+function safeSessionDisplayTitle(title: string): string {
+  const trimmed = title.trim();
+  if (!trimmed) return '未命名任务';
+  if (
+    /^Word\s*(已保存到|已导出|导出失败)/i.test(trimmed) ||
+    /^\/Users\//.test(trimmed) ||
+    /^[A-Za-z]:\\/.test(trimmed)
+  ) {
+    return '未命名任务';
+  }
+  return trimmed;
 }
 
 function disableReferenceKind(
@@ -254,12 +442,20 @@ export function ChatPage() {
   const [selectedSessionIds, setSelectedSessionIds] = useState<string[]>([]);
   const [status, setStatus] = useState('');
   const [uploadStatus, setUploadStatus] = useState('');
+  const [uploading, setUploading] = useState(false);
   const [pendingUploadFile, setPendingUploadFile] = useState<File | null>(null);
   const [uploadPurpose, setUploadPurpose] = useState<UploadPurpose>('personal_reference');
+  const [uploadCategory, setUploadCategory] = useState('个人素材');
+  const [uploadDocumentType, setUploadDocumentType] = useState('其他');
+  const [knowledgeCategories, setKnowledgeCategories] = useState<KnowledgeCategoryPayload[]>([]);
+  const [knowledgeDocumentTypes, setKnowledgeDocumentTypes] = useState<KnowledgeDocumentTypePayload[]>([]);
   const [referenceScope, setReferenceScope] = useState<ReferenceScope>('official_only');
   const [enabledReferenceFiles, setEnabledReferenceFiles] = useState<EnabledReferenceFile[]>([]);
   const [exportType, setExportType] = useState<ChatExportType>('single_answer');
+  const [exportNotice, setExportNotice] = useState<WordExportNotice | null>(null);
+  const [exportingWord, setExportingWord] = useState(false);
   const [sourcePreview, setSourcePreview] = useState<SourcePreviewState>({ status: 'idle' });
+  const [webCapture, setWebCapture] = useState<WebCaptureState>({ status: 'idle' });
   const messageListRef = useRef<HTMLDivElement | null>(null);
   const shouldStickToBottomRef = useRef(true);
 
@@ -279,15 +475,60 @@ export function ChatPage() {
       .catch(() => setProfiles([]));
   }, [sessionListKind]);
 
+  useEffect(() => {
+    let active = true;
+    listKnowledgeCategories(false)
+      .then((payload) => {
+        if (!active) return;
+        const activeCategories = payload.items.filter((category) => category.status === 'ACTIVE');
+        setKnowledgeCategories(activeCategories);
+        setUploadCategory((current) => (
+          current && activeCategories.some((category) => category.name === current)
+            ? current
+            : activeCategories[0]?.name || '个人素材'
+        ));
+      })
+      .catch(() => {
+        if (!active) return;
+        setKnowledgeCategories([]);
+      });
+    listKnowledgeDocumentTypes(false)
+      .then((payload) => {
+        if (!active) return;
+        const activeDocumentTypes = payload.items.filter((documentType) => documentType.status === 'ACTIVE');
+        setKnowledgeDocumentTypes(activeDocumentTypes);
+        setUploadDocumentType((current) => (
+          current && activeDocumentTypes.some((documentType) => documentType.name === current)
+            ? current
+            : activeDocumentTypes[0]?.name || '其他'
+        ));
+      })
+      .catch(() => {
+        if (!active) return;
+        setKnowledgeDocumentTypes([]);
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
   const activeProfile = useMemo(
     () => profiles.find((profile) => profile.isDefault && profile.hasApiKey)
       ?? profiles.find((profile) => profile.hasApiKey),
     [profiles],
   );
-  const visibleReferenceFiles = useMemo(
-    () => enabledReferenceFiles.filter((file) => referenceScopeIncludes(referenceScope, file.sourceKind)),
-    [enabledReferenceFiles, referenceScope],
+  const sessionAttachmentFiles = useMemo(
+    () => enabledReferenceFiles.filter((file) => file.sourceKind === 'session_attachment'),
+    [enabledReferenceFiles],
   );
+  const uploadCategoryOptions = useMemo(() => {
+    const names = knowledgeCategories.map((category) => category.name);
+    return Array.from(new Set([uploadCategory, ...names, ...fallbackUploadCategories].filter(Boolean)));
+  }, [knowledgeCategories, uploadCategory]);
+  const uploadDocumentTypeOptions = useMemo(() => {
+    const names = knowledgeDocumentTypes.map((documentType) => documentType.name);
+    return Array.from(new Set([uploadDocumentType, ...names, ...fallbackUploadDocumentTypes].filter(Boolean)));
+  }, [knowledgeDocumentTypes, uploadDocumentType]);
 
   useEffect(() => {
     if (!shouldStickToBottomRef.current) return;
@@ -315,6 +556,7 @@ export function ChatPage() {
       setActiveSessionStatus(normalizeSessionStatus(detail.status));
       setMode(normalizeMode(detail.mode));
       setSourcePreview({ status: 'idle' });
+      setWebCapture({ status: 'idle' });
       setEnabledReferenceFiles([]);
       shouldStickToBottomRef.current = true;
       setMessages(detail.messages.map((message) => ({
@@ -322,6 +564,7 @@ export function ChatPage() {
         role: message.role,
         content: message.content,
         citations: message.citations,
+        isComplete: true,
       })));
       setStatus('');
     } catch {
@@ -330,17 +573,21 @@ export function ChatPage() {
   };
 
   const uploadKnowledge = async () => {
-    if (!pendingUploadFile) return;
+    if (!pendingUploadFile || uploading) return;
     if (uploadPurpose === 'session_attachment' && !activeSessionUuid) {
       setUploadStatus('请先开启一个任务，再上传当前附件');
       return;
     }
+    setUploading(true);
     setUploadStatus('正在上传资料…');
     try {
       const uploaded = await uploadKnowledgeFile(pendingUploadFile, {
         usageType: uploadPurpose === 'session_attachment' ? 'session_attachment' : 'personal_reference',
         reviewStatus: uploadPurpose === 'submit_review' ? 'pending' : 'draft',
         conversationId: uploadPurpose === 'session_attachment' ? activeSessionUuid : undefined,
+        category: uploadPurpose === 'session_attachment' ? '当前附件' : uploadCategory,
+        documentType: uploadDocumentType,
+        tags: [],
       });
       setPendingUploadFile(null);
       if (uploadPurpose === 'submit_review') {
@@ -359,25 +606,14 @@ export function ChatPage() {
             ? 'personal_and_session'
             : 'with_session'
         ));
-        setUploadStatus(`当前附件已上传：${uploaded.file_name}；本次任务已启用“当前附件”参考。`);
+        setUploadStatus('');
       } else {
-        setEnabledReferenceFiles((current) => current
-          .filter((file) => file.fileUuid !== uploaded.file_uuid)
-          .concat({
-            fileUuid: uploaded.file_uuid,
-            fileName: uploaded.file_name,
-            sourceKind: 'personal_reference',
-          }));
-        setMode('knowledge');
-        setReferenceScope((current) => (
-          current === 'with_session' || current === 'personal_and_session'
-            ? 'personal_and_session'
-            : 'with_personal'
-        ));
-        setUploadStatus(`资料已保存到我的资料：${uploaded.file_name}；本次任务已启用“我的资料”参考。`);
+        setUploadStatus(`资料已保存到我的资料：${uploaded.file_name}；需要参考时可在“参考资料”中选择“我的资料”。`);
       }
-    } catch {
-      setUploadStatus('资料上传失败，请稍后重试');
+    } catch (error) {
+      setUploadStatus(uploadFailureMessage(error));
+    } finally {
+      setUploading(false);
     }
   };
 
@@ -402,6 +638,10 @@ export function ChatPage() {
   };
 
   const toggleSessionAttachmentScope = () => {
+    if (!sessionAttachmentFiles.length) {
+      setUploadStatus('请先上传附件后再使用当前附件作为参考。');
+      return;
+    }
     setMode('knowledge');
     setReferenceScope((current) => {
       if (current === 'with_session') return 'official_only';
@@ -409,6 +649,99 @@ export function ChatPage() {
       if (current === 'personal_and_session') return 'with_personal';
       return 'with_session';
     });
+  };
+
+  const previewUrlCapture = async (trimmed: string, url: string) => {
+    shouldStickToBottomRef.current = true;
+    setStatus('正在抓取网页内容...');
+    setQuestion('');
+    setMessages((current) => current.concat({
+      id: `local-user-${Date.now()}`,
+      role: 'user',
+      content: trimmed,
+      citations: [],
+      isComplete: true,
+    }));
+    setWebCapture({ status: 'previewing', url });
+    try {
+      const preview = await previewWebCapture({
+        url,
+        conversationId: activeSessionUuid || undefined,
+      });
+      setWebCapture({ status: 'ready', preview });
+      setStatus('');
+    } catch (error) {
+      const detail = apiErrorDetail(error);
+      setWebCapture({
+        status: 'error',
+        url,
+        message: detail || '网页抓取失败，请检查链接或稍后重试。',
+      });
+      setStatus('');
+    }
+  };
+
+  const confirmCurrentWebCapture = async (
+    saveTarget: 'temporary' | 'personal_reference' | 'official_knowledge_candidate' | 'cancel',
+  ) => {
+    if (webCapture.status !== 'ready') return;
+    if (saveTarget === 'temporary' && !activeSessionUuid) {
+      setWebCapture({
+        ...webCapture,
+        actionStatus: '仅本次使用需要先开启一个任务。可以先保存到我的资料，或在已有任务中使用。',
+      });
+      return;
+    }
+    setWebCapture({ status: 'saving', preview: webCapture.preview, action: saveTarget });
+    try {
+      const result = await confirmWebCapture(webCapture.preview.capture_id, {
+        saveTarget,
+        category: webCapture.preview.suggested_category,
+        documentType: webCapture.preview.suggested_document_type,
+        conversationId: activeSessionUuid || undefined,
+      });
+      if (saveTarget === 'cancel') {
+        setWebCapture({ status: 'idle' });
+        setStatus('已取消网页采集');
+        return;
+      }
+      if (saveTarget === 'temporary' && result.knowledge_file_uuid) {
+        setEnabledReferenceFiles((current) => current
+          .filter((file) => file.fileUuid !== result.knowledge_file_uuid)
+          .concat({
+            fileUuid: result.knowledge_file_uuid || '',
+            fileName: webCapture.preview.title || '网页采集资料',
+            sourceKind: 'session_attachment',
+          }));
+        setMode('knowledge');
+        setReferenceScope((current) => (
+          current === 'with_personal' || current === 'personal_and_session'
+            ? 'personal_and_session'
+            : 'with_session'
+        ));
+      }
+      if (saveTarget === 'personal_reference') {
+        setReferenceScope((current) => (
+          current === 'with_session' || current === 'personal_and_session'
+            ? 'personal_and_session'
+            : 'with_personal'
+        ));
+      }
+      setWebCapture({
+        status: 'ready',
+        preview: webCapture.preview,
+        actionStatus: result.message,
+      });
+      setStatus('');
+    } catch (error) {
+      const detail = apiErrorDetail(error);
+      setWebCapture({
+        status: 'ready',
+        preview: webCapture.preview,
+        actionStatus: detail || '网页采集保存失败，请稍后重试。',
+      });
+      setStatus('');
+    }
   };
 
   const send = async (questionOverride?: string) => {
@@ -422,19 +755,25 @@ export function ChatPage() {
       setStatus('当前任务已删除，请从回收站恢复后继续');
       return;
     }
+    const firstUrl = extractFirstWebUrl(trimmed);
+    if (firstUrl) {
+      await previewUrlCapture(trimmed, firstUrl);
+      return;
+    }
     if (!activeProfile && mode !== 'knowledge') {
-      setStatus('请先配置个人模型');
+      setStatus('请先完成模型设置');
       return;
     }
     shouldStickToBottomRef.current = true;
     setStatus(mode === 'knowledge' ? '检索中…' : '生成中…');
     setQuestion('');
-    setMessages((current) => current.concat({
-      id: `local-user-${Date.now()}`,
-      role: 'user',
-      content: trimmed,
-      citations: [],
-    }));
+      setMessages((current) => current.concat({
+        id: `local-user-${Date.now()}`,
+        role: 'user',
+        content: trimmed,
+        citations: [],
+        isComplete: true,
+      }));
     try {
       const prepared = await prepareChat({
         sessionUuid: activeSessionUuid || undefined,
@@ -450,13 +789,14 @@ export function ChatPage() {
           id: prepared.assistant_message_uuid,
           role: 'assistant',
           content: prepared.answer,
-          citations: prepared.citations,
+          citations: filterCitationsByAnswer(prepared.citations, prepared.answer),
+          isComplete: true,
         }));
         setStatus('');
         return;
       }
       if (!activeProfile) {
-        setStatus('请先配置个人模型');
+        setStatus('请先完成模型设置');
         return;
       }
       const assistantId = prepared.assistant_message_uuid;
@@ -464,7 +804,8 @@ export function ChatPage() {
         id: assistantId,
         role: 'assistant',
         content: '',
-        citations: prepared.citations,
+        citations: [],
+        isComplete: false,
       }));
       let result: GeneratedModelResult = await generateLocalModel({
         profileId: activeProfile.id,
@@ -480,8 +821,13 @@ export function ChatPage() {
       });
       setMessages((current) => current.map((message) =>
           message.id === assistantId
-            ? { ...message, content: result.output }
-            : message,
+              ? {
+                  ...message,
+                  content: result.output,
+                  citations: [],
+                  isComplete: false,
+                }
+              : message,
       ));
       if (shouldRunLoopQualityCheck(prepared.loop_trace)) {
         for (let retryCount = 0; retryCount < 2; retryCount += 1) {
@@ -510,7 +856,12 @@ export function ChatPage() {
           });
           setMessages((current) => current.map((message) =>
             message.id === assistantId
-              ? { ...message, content: result.output }
+              ? {
+                  ...message,
+                  content: result.output,
+                  citations: [],
+                  isComplete: false,
+                }
               : message,
           ));
         }
@@ -523,6 +874,16 @@ export function ChatPage() {
         usage: result.usage,
         latencyMs: result.latencyMs,
       });
+      setMessages((current) => current.map((message) =>
+        message.id === assistantId
+          ? {
+              ...message,
+              content: result.output,
+              citations: filterCitationsByAnswer(prepared.citations, result.output),
+              isComplete: true,
+            }
+          : message,
+      ));
       refreshSessions(sessionListKind).catch(() => undefined);
       setStatus('');
     } catch (error) {
@@ -535,7 +896,7 @@ export function ChatPage() {
 
   const formatForFormalDocument = async (source: string) => {
     if (!activeProfile) {
-      setStatus('请先配置个人模型');
+      setStatus('请先完成模型设置');
       return '';
     }
     setStatus('正在整理为正式文档…');
@@ -551,13 +912,47 @@ export function ChatPage() {
     return result.output;
   };
 
+  const showWordExportSuccess = (path?: string) => {
+    setStatus('');
+    setExportNotice({
+      kind: 'success',
+      path,
+      fileName: path ? fileNameFromPath(path) : undefined,
+    });
+  };
+
+  const showWordExportFailure = () => {
+    setStatus('');
+    setExportNotice({ kind: 'error' });
+  };
+
+  const copyExportPath = async () => {
+    if (!exportNotice || exportNotice.kind !== 'success' || !exportNotice.path) return;
+    try {
+      await navigator.clipboard.writeText(exportNotice.path);
+      setExportNotice({ ...exportNotice, copyStatus: '路径已复制', openStatus: '' });
+    } catch {
+      setExportNotice({ ...exportNotice, copyStatus: '路径复制失败，请手动复制', openStatus: '' });
+    }
+  };
+
+  const openExportFile = async () => {
+    if (!exportNotice || exportNotice.kind !== 'success' || !exportNotice.path) return;
+    try {
+      await invoke('generation_word_open', { path: exportNotice.path });
+      setExportNotice({ ...exportNotice, openStatus: '正在打开文件…', copyStatus: '' });
+    } catch {
+      setExportNotice({ ...exportNotice, openStatus: '当前环境不支持直接打开文件', copyStatus: '' });
+    }
+  };
+
   const exportMessageWord = async (message: UiMessage) => {
     if (!activeSessionUuid) {
       setStatus('请先完成一次任务后再导出 Word');
       return;
     }
     try {
-      setStatus('正在导出 Word…');
+      setExportingWord(true);
       const formattedContent = exportType === 'formal_document'
         ? await formatForFormalDocument(message.content)
         : undefined;
@@ -568,9 +963,11 @@ export function ChatPage() {
         exportType,
         formattedContent,
       });
-      setStatus(result.kind === 'desktop' ? `Word 已保存到：${result.path}` : 'Word 已开始下载');
+      showWordExportSuccess(result.kind === 'desktop' ? result.path : undefined);
     } catch {
-      setStatus('Word 导出失败，请稍后重试');
+      showWordExportFailure();
+    } finally {
+      setExportingWord(false);
     }
   };
 
@@ -586,7 +983,7 @@ export function ChatPage() {
       return;
     }
     try {
-      setStatus('正在导出 Word…');
+      setExportingWord(true);
       const formattedContent = exportType === 'formal_document'
         ? await formatForFormalDocument(latestAssistantMessage.content)
         : undefined;
@@ -597,9 +994,11 @@ export function ChatPage() {
         exportType,
         formattedContent,
       });
-      setStatus(result.kind === 'desktop' ? `Word 已保存到：${result.path}` : 'Word 已开始下载');
+      showWordExportSuccess(result.kind === 'desktop' ? result.path : undefined);
     } catch {
-      setStatus('Word 导出失败，请稍后重试');
+      showWordExportFailure();
+    } finally {
+      setExportingWord(false);
     }
   };
 
@@ -649,6 +1048,7 @@ export function ChatPage() {
     setSelectedSessionIds([]);
     setMessages([]);
     setSourcePreview({ status: 'idle' });
+    setWebCapture({ status: 'idle' });
     setPendingUploadFile(null);
     setEnabledReferenceFiles([]);
     setStatus('');
@@ -708,32 +1108,36 @@ export function ChatPage() {
   );
 
   const hardDeleteSession = async (session: ChatSessionPayload) => {
-    if (!window.confirm(`彻底删除“${session.title}”？此操作不可恢复。`)) return;
-    await runSessionAction(
-      () => hardDeleteChatSession(session.session_uuid),
-      '任务已彻底删除',
-      sessionListKind,
-      session.session_uuid,
-      'deleted',
-    );
-    if (session.session_uuid === activeSessionUuid) {
-      setActiveSessionUuid('');
-      setActiveSessionStatus('');
-      setMessages([]);
-      setEnabledReferenceFiles([]);
+    try {
+      setStatus('正在彻底删除任务…');
+      await hardDeleteChatSession(session.session_uuid);
+      setSessions((current) => current.filter((item) => item.session_uuid !== session.session_uuid));
+      setSelectedSessionIds((current) => current.filter((sessionUuid) => sessionUuid !== session.session_uuid));
+      setStatus('任务已彻底删除');
+      if (session.session_uuid === activeSessionUuid) {
+        setActiveSessionUuid('');
+        setActiveSessionStatus('');
+        setMessages([]);
+        setEnabledReferenceFiles([]);
+      }
+      await refreshSessions('trash');
+    } catch {
+      setStatus('历史任务操作失败，请稍后重试');
     }
   };
 
   const exportSessionWord = async (session: ChatSessionPayload) => {
     try {
-      setStatus('正在导出 Word…');
+      setExportingWord(true);
       const result = await exportChatWord({
         conversationId: session.session_uuid,
         exportType: 'full_conversation',
       });
-      setStatus(result.kind === 'desktop' ? `Word 已保存到：${result.path}` : 'Word 已开始下载');
+      showWordExportSuccess(result.kind === 'desktop' ? result.path : undefined);
     } catch {
-      setStatus('Word 导出失败，请稍后重试');
+      showWordExportFailure();
+    } finally {
+      setExportingWord(false);
     }
   };
 
@@ -783,6 +1187,7 @@ export function ChatPage() {
     : activeSessionStatus === 'deleted'
       ? '当前任务已删除，请从回收站恢复后继续。'
       : '';
+  const sidebarStatus = composerDisabledReason || status;
   const selectedSessionSet = useMemo(() => new Set(selectedSessionIds), [selectedSessionIds]);
 
   const handleComposerSubmit = (event: FormEvent<HTMLFormElement>) => {
@@ -791,6 +1196,7 @@ export function ChatPage() {
   };
 
   const handleComposerKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (event.nativeEvent.isComposing || event.key === 'Process' || event.keyCode === 229) return;
     if (event.key !== 'Enter' || event.shiftKey) return;
     event.preventDefault();
     void send();
@@ -843,116 +1249,124 @@ export function ChatPage() {
               </button>
             </div>
           ) : null}
-          {sessions.map((session) => (
-            <div
-              className={activeSessionUuid === session.session_uuid ? 'is-active' : ''}
-              key={session.session_uuid}
-              data-session-status={normalizeSessionStatus(session.status)}
-            >
-              {normalizeSessionStatus(session.status) !== 'deleted' ? (
-                <label className="chat-session-select">
-                  <input
-                    aria-label={`选择任务：${session.title}`}
-                    checked={selectedSessionSet.has(session.session_uuid)}
-                    onChange={(event) => toggleSessionSelection(session.session_uuid, event.target.checked)}
-                    type="checkbox"
-                  />
-                  <span>选择</span>
-                </label>
-              ) : null}
-              <button
-                aria-label={session.title}
-                type="button"
-                onClick={() => {
-                  if (normalizeSessionStatus(session.status) === 'deleted') {
-                    setStatus('已删除任务需要先恢复后查看');
-                    return;
-                  }
-                  void loadSession(session.session_uuid);
-                }}
+          {sessions.map((session) => {
+            const sessionTitle = safeSessionDisplayTitle(session.title);
+            return (
+              <div
+                className={activeSessionUuid === session.session_uuid ? 'is-active' : ''}
+                key={session.session_uuid}
+                data-session-status={normalizeSessionStatus(session.status)}
               >
-                {session.title}
-                <small>{modeLabels[normalizeMode(session.mode)]}</small>
-              </button>
-              <div className="chat-session-actions">
-                {normalizeSessionStatus(session.status) === 'active' ? (
-                  <>
-                    <button
-                      aria-label={`重命名：${session.title}`}
-                      onClick={() => void renameSession(session)}
-                      type="button"
-                    >
-                      重命名
-                    </button>
-                    <button
-                      aria-label={`归档：${session.title}`}
-                      onClick={() => void archiveSession(session)}
-                      type="button"
-                    >
-                      归档
-                    </button>
-                    <button
-                      aria-label={`删除：${session.title}`}
-                      onClick={() => void softDeleteSession(session)}
-                      type="button"
-                    >
-                      删除
-                    </button>
-                    <button
-                      aria-label={`导出 Word：${session.title}`}
-                      onClick={() => void exportSessionWord(session)}
-                      type="button"
-                    >
-                      导出 Word
-                    </button>
-                  </>
+                {normalizeSessionStatus(session.status) !== 'deleted' ? (
+                  <label className="chat-session-select">
+                    <input
+                      aria-label={`选择任务：${sessionTitle}`}
+                      checked={selectedSessionSet.has(session.session_uuid)}
+                      onChange={(event) => toggleSessionSelection(session.session_uuid, event.target.checked)}
+                      type="checkbox"
+                    />
+                    <span>选择</span>
+                  </label>
                 ) : null}
-                {normalizeSessionStatus(session.status) === 'archived' ? (
-                  <>
-                    <button
-                      aria-label={`恢复：${session.title}`}
-                      onClick={() => void restoreSession(session)}
-                      type="button"
-                    >
-                      恢复
-                    </button>
-                    <button
-                      aria-label={`删除：${session.title}`}
-                      onClick={() => void softDeleteSession(session)}
-                      type="button"
-                    >
-                      删除
-                    </button>
-                    <button
-                      aria-label={`导出 Word：${session.title}`}
-                      onClick={() => void exportSessionWord(session)}
-                      type="button"
-                    >
-                      导出 Word
-                    </button>
-                  </>
-                ) : null}
-                {normalizeSessionStatus(session.status) === 'deleted' ? (
-                  <>
-                    <button
-                      aria-label={`恢复：${session.title}`}
-                      onClick={() => void restoreSession(session)}
-                      type="button"
-                    >
-                      恢复
-                    </button>
-                    <button
-                      aria-label={`彻底删除：${session.title}`}
-                      onClick={() => void hardDeleteSession(session)}
-                      type="button"
-                    >
-                      彻底删除
-                    </button>
-                  </>
-                ) : null}
+                <button
+                  aria-label={sessionTitle}
+                  type="button"
+                  onClick={() => {
+                    if (normalizeSessionStatus(session.status) === 'deleted') {
+                      setStatus('已删除任务需要先恢复后查看');
+                      return;
+                    }
+                    void loadSession(session.session_uuid);
+                  }}
+                >
+                  <span className="chat-session-title">{sessionTitle}</span>
+                  <small>{modeLabels[normalizeMode(session.mode)]}</small>
+                </button>
+                <div className="chat-session-actions">
+                  {normalizeSessionStatus(session.status) === 'active' ? (
+                    <>
+                      <button
+                        aria-label={`重命名：${sessionTitle}`}
+                        onClick={() => void renameSession(session)}
+                        type="button"
+                      >
+                        重命名
+                      </button>
+                      <button
+                        aria-label={`归档：${sessionTitle}`}
+                        onClick={() => void archiveSession(session)}
+                        type="button"
+                      >
+                        归档
+                      </button>
+                      <button
+                        aria-label={`删除：${sessionTitle}`}
+                        onClick={() => void softDeleteSession(session)}
+                        type="button"
+                      >
+                        删除
+                      </button>
+                      <button
+                        aria-label={`导出 Word：${sessionTitle}`}
+                        disabled={exportingWord}
+                        onClick={() => void exportSessionWord(session)}
+                        type="button"
+                      >
+                        导出 Word
+                      </button>
+                    </>
+                  ) : null}
+                  {normalizeSessionStatus(session.status) === 'archived' ? (
+                    <>
+                      <button
+                        aria-label={`恢复：${sessionTitle}`}
+                        onClick={() => void restoreSession(session)}
+                        type="button"
+                      >
+                        恢复
+                      </button>
+                      <button
+                        aria-label={`删除：${sessionTitle}`}
+                        onClick={() => void softDeleteSession(session)}
+                        type="button"
+                      >
+                        删除
+                      </button>
+                      <button
+                        aria-label={`导出 Word：${sessionTitle}`}
+                        disabled={exportingWord}
+                        onClick={() => void exportSessionWord(session)}
+                        type="button"
+                      >
+                        导出 Word
+                      </button>
+                    </>
+                  ) : null}
+                  {normalizeSessionStatus(session.status) === 'deleted' ? (
+                    <>
+                      <button
+                        aria-label={`恢复：${sessionTitle}`}
+                        onClick={() => void restoreSession(session)}
+                        type="button"
+                      >
+                        恢复
+                      </button>
+                      <button
+                        aria-label={`彻底删除：${sessionTitle}`}
+                        onClick={() => void hardDeleteSession(session)}
+                        type="button"
+                      >
+                        彻底删除
+                      </button>
+                    </>
+                  ) : null}
+                </div>
               </div>
-            </div>
-          ))}
+            );
+          })}
+          {sidebarStatus ? (
+            <p className="chat-sidebar-status" role="status">{sidebarStatus}</p>
+          ) : null}
         </aside>
 
         <div className="chat-stage">
@@ -1000,11 +1414,11 @@ export function ChatPage() {
               </label>
               <button
                 className="chat-export-button"
-                disabled={!activeSessionUuid || !messages.length}
+                disabled={!activeSessionUuid || !messages.length || exportingWord}
                 onClick={() => void exportLatestAnswerWord()}
                 type="button"
               >
-                导出工作成果
+                {exportingWord ? '导出中…' : '导出工作成果'}
               </button>
               <button className="chat-new-button" onClick={startNewSession} type="button">
                 开启新任务
@@ -1031,7 +1445,6 @@ export function ChatPage() {
                     {[
                       '写一份项目方案',
                       '整理会议纪要',
-                      '整理项目复盘成果',
                       '查询公司知识库',
                       '参考我的资料生成内容',
                       '导出 Word 文档',
@@ -1043,56 +1456,180 @@ export function ChatPage() {
                   </div>
                 </div>
               ) : null}
-              {messages.map((message) => (
-                <article className={`chat-message ${message.role}`} key={message.id}>
-                  <div className="chat-avatar" aria-hidden="true">
-                    {message.role === 'user' ? '我' : '聚'}
-                  </div>
-                  <div className="chat-bubble">
-                    <strong>{message.role === 'user' ? '我' : '聚信 AI 助手'}</strong>
-                    <div className="chat-message-content">
-                      {message.role === 'assistant'
-                        ? renderChatContent(message.content)
-                        : <p>{message.content || '正在生成…'}</p>}
+              {messages.map((message) => {
+                const messageCitations = message.role === 'assistant' && message.isComplete !== false
+                  ? filterCitationsByAnswer(message.citations, message.content)
+                  : [];
+                const citationReferences = citationFileReferences(messageCitations);
+                return (
+                  <article className={`chat-message ${message.role}`} key={message.id}>
+                    <div className="chat-avatar" aria-hidden="true">
+                      {message.role === 'user' ? '我' : '聚'}
                     </div>
-                    {message.citations.length ? (
-                      <details className="chat-citations" open>
-                        <summary>参考来源 {message.citations.length} 条</summary>
-                        <ul aria-label="参考来源">
-                          {message.citations.map((citation, citationIndex) => (
-                            <li key={`${citation.chunk_id}-${citation.file_name}-${citationIndex}`}>
-                              {citation.file_uuid ? (
-                                <button
-                                  className="chat-citation-button"
-                                  onClick={() => void openSourcePreview(citation)}
-                                  type="button"
-                                >
-                                  {citationLabel(citation)}
-                                </button>
-                              ) : (
-                                <span>{citationLabel(citation)}</span>
-                              )}
-                            </li>
-                          ))}
-                        </ul>
-                      </details>
-                    ) : null}
-                    {message.role === 'assistant' && message.content ? (
-                      <div className="chat-message-actions">
-                        <button onClick={() => void copyMessage(message.content)} type="button">
-                          复制
-                        </button>
-                        <button onClick={() => regenerateMessage(message.id)} type="button">
-                          重新生成
-                        </button>
-                        <button onClick={() => void exportMessageWord(message)} type="button">
-                          导出 Word
-                        </button>
+                    <div className="chat-bubble">
+                      <strong>{message.role === 'user' ? '我' : '聚信 AI 助手'}</strong>
+                      <div className="chat-message-content">
+                        {message.role === 'assistant'
+                          ? renderChatContent(message.content)
+                          : <p>{message.content || '正在生成…'}</p>}
                       </div>
-                    ) : null}
+                      {citationReferences.length ? (
+                        <details className="chat-citations">
+                          <summary>引用文件 {citationReferences.length} 个</summary>
+                          <ul aria-label="引用文件">
+                            {citationReferences.map((reference) => (
+                              <li key={reference.key}>
+                                <span className={`chat-citation-source ${reference.sourceClassName}`}>
+                                  {reference.sourceLabel}
+                                </span>
+                                {reference.citation.file_uuid ? (
+                                  <button
+                                    className="chat-citation-button"
+                                    onClick={() => void openSourcePreview(reference.citation)}
+                                    type="button"
+                                  >
+                                    {reference.label}
+                                  </button>
+                                ) : (
+                                  <span>{reference.label}</span>
+                                )}
+                                {reference.locations.length ? (
+                                  <ul aria-label={`${reference.label} 引用位置`} className="chat-citation-locations">
+                                    {reference.locations.map((location) => (
+                                      <li key={location}>{location}</li>
+                                    ))}
+                                  </ul>
+                                ) : null}
+                              </li>
+                            ))}
+                          </ul>
+                        </details>
+                      ) : null}
+                      {message.role === 'assistant' && message.content ? (
+                        <div className="chat-message-actions">
+                          <button onClick={() => void copyMessage(message.content)} type="button">
+                            复制
+                          </button>
+                          <button onClick={() => regenerateMessage(message.id)} type="button">
+                            重新生成
+                          </button>
+                          <button disabled={exportingWord} onClick={() => void exportMessageWord(message)} type="button">
+                            {exportingWord ? '导出中…' : '导出 Word'}
+                          </button>
+                        </div>
+                      ) : null}
+                    </div>
+                  </article>
+                );
+              })}
+              {webCapture.status === 'previewing' ? (
+                <article className="chat-message assistant">
+                  <div className="chat-avatar" aria-hidden="true">聚</div>
+                  <div className="chat-bubble">
+                    <strong>聚信 AI 助手</strong>
+                    <p>正在抓取网页内容...</p>
+                    <p className="chat-web-capture-url">{webCapture.url}</p>
                   </div>
                 </article>
-              ))}
+              ) : null}
+              {webCapture.status === 'error' ? (
+                <article className="chat-message assistant">
+                  <div className="chat-avatar" aria-hidden="true">聚</div>
+                  <div className="chat-bubble">
+                    <strong>聚信 AI 助手</strong>
+                    <p role="status">{webCapture.message}</p>
+                    <p className="chat-web-capture-url">{webCapture.url}</p>
+                  </div>
+                </article>
+              ) : null}
+              {(webCapture.status === 'ready' || webCapture.status === 'saving') ? (
+                <article className="chat-message assistant">
+                  <div className="chat-avatar" aria-hidden="true">聚</div>
+                  <div className="chat-bubble chat-web-capture-card">
+                    <strong>已抓取网页内容，请确认是否保存</strong>
+                    <dl>
+                      <div>
+                        <dt>网页标题</dt>
+                        <dd>{webCapture.preview.title}</dd>
+                      </div>
+                      <div>
+                        <dt>来源网站</dt>
+                        <dd>{webCapture.preview.site_name || '待确认'}</dd>
+                      </div>
+                      <div>
+                        <dt>URL</dt>
+                        <dd className="chat-web-capture-url">{webCapture.preview.final_url || webCapture.preview.url}</dd>
+                      </div>
+                      <div>
+                        <dt>抓取时间</dt>
+                        <dd>{new Date(webCapture.preview.fetched_at).toLocaleString()}</dd>
+                      </div>
+                      <div>
+                        <dt>发布时间</dt>
+                        <dd>{webCapture.preview.published_at || '待确认'}</dd>
+                      </div>
+                      <div>
+                        <dt>字数</dt>
+                        <dd>{webCapture.preview.word_count}</dd>
+                      </div>
+                      <div>
+                        <dt>建议资料分类</dt>
+                        <dd>{webCapture.preview.suggested_category}</dd>
+                      </div>
+                      <div>
+                        <dt>建议文档类型</dt>
+                        <dd>{webCapture.preview.suggested_document_type}</dd>
+                      </div>
+                      <div>
+                        <dt>有效期建议</dt>
+                        <dd>{webCapture.preview.validity}</dd>
+                      </div>
+                      <div>
+                        <dt>入库范围</dt>
+                        <dd>{webCapture.preview.scope}</dd>
+                      </div>
+                    </dl>
+                    <section className="chat-web-capture-summary" aria-label="网页摘要">
+                      <span>内容摘要</span>
+                      <p>{webCapture.preview.summary || '暂无'}</p>
+                    </section>
+                    {'actionStatus' in webCapture && webCapture.actionStatus ? (
+                      <p className="chat-web-capture-status" role="status">{webCapture.actionStatus}</p>
+                    ) : null}
+                    <div className="chat-message-actions">
+                      <button
+                        disabled={webCapture.status === 'saving' || !activeSessionUuid}
+                        onClick={() => void confirmCurrentWebCapture('temporary')}
+                        title={!activeSessionUuid ? '仅本次使用需要先开启一个任务' : undefined}
+                        type="button"
+                      >
+                        仅本次使用
+                      </button>
+                      <button
+                        disabled={webCapture.status === 'saving'}
+                        onClick={() => void confirmCurrentWebCapture('personal_reference')}
+                        type="button"
+                      >
+                        保存到我的资料
+                      </button>
+                      <button
+                        disabled={webCapture.status === 'saving'}
+                        onClick={() => void confirmCurrentWebCapture('official_knowledge_candidate')}
+                        type="button"
+                      >
+                        提交公司知识库审核
+                      </button>
+                      <button
+                        disabled={webCapture.status === 'saving'}
+                        onClick={() => void confirmCurrentWebCapture('cancel')}
+                        type="button"
+                      >
+                        取消
+                      </button>
+                    </div>
+                  </div>
+                </article>
+              ) : null}
             </div>
 
             {sourcePreview.status !== 'idle' ? (
@@ -1116,8 +1653,7 @@ export function ChatPage() {
                     {sourcePreview.preview.chunks.map((chunk) => (
                       <article key={chunk.chunk_id} className="chat-source-preview-chunk">
                         <strong>
-                          {chunk.section_title || '未识别章节'}
-                          {chunk.page_number ? ` · 第 ${chunk.page_number} 页` : ''}
+                          {chunkReferenceTitle(chunk)}
                         </strong>
                         <p>{chunk.text}</p>
                       </article>
@@ -1129,26 +1665,83 @@ export function ChatPage() {
           </div>
 
           <div className="chat-composer-wrap">
-            <form aria-label="对话输入区" className="chat-composer" onSubmit={handleComposerSubmit}>
+            <form aria-label="工作输入区" className="chat-composer" onSubmit={handleComposerSubmit}>
               <textarea
-                aria-label="告诉小聚你要完成什么"
+                aria-label="告诉我你想完成什么工作"
                 disabled={Boolean(composerDisabledReason)}
+                id="chat-composer-input"
                 onChange={(event) => setQuestion(event.target.value)}
                 onKeyDown={handleComposerKeyDown}
-                placeholder="告诉小聚你要完成什么…"
+                placeholder="告诉我你想完成什么工作..."
                 value={question}
               />
+              {sessionAttachmentFiles.length ? (
+                <section aria-label="当前附件" className="chat-attachment-bar">
+                  {sessionAttachmentFiles.length === 1 ? (
+                    <div className="chat-attachment-row">
+                      <span className="chat-attachment-type">
+                        {attachmentFileTypeLabel(sessionAttachmentFiles[0].fileName)}
+                      </span>
+                      <span className="chat-attachment-name" title={sessionAttachmentFiles[0].fileName}>
+                        {sessionAttachmentFiles[0].fileName}
+                      </span>
+                      <span className="chat-attachment-status">当前附件</span>
+                      <button
+                        aria-label={`移除附件：${sessionAttachmentFiles[0].fileName}`}
+                        className="chat-attachment-remove"
+                        onClick={() => removeEnabledReferenceFile(sessionAttachmentFiles[0])}
+                        type="button"
+                      >
+                        ×
+                      </button>
+                    </div>
+                  ) : (
+                    <details className="chat-attachment-stack">
+                      <summary className="chat-attachment-row">
+                        <span className="chat-attachment-type">
+                          {attachmentFileTypeLabel(sessionAttachmentFiles[0].fileName)}
+                        </span>
+                        <span className="chat-attachment-name" title={sessionAttachmentFiles[0].fileName}>
+                          {sessionAttachmentFiles[0].fileName}
+                        </span>
+                        <span className="chat-attachment-status">共 {sessionAttachmentFiles.length} 个附件</span>
+                      </summary>
+                      <div className="chat-attachment-list">
+                        {sessionAttachmentFiles.slice(0, 3).map((file) => (
+                          <div className="chat-attachment-row" key={file.fileUuid}>
+                            <span className="chat-attachment-type">{attachmentFileTypeLabel(file.fileName)}</span>
+                            <span className="chat-attachment-name" title={file.fileName}>{file.fileName}</span>
+                            <span className="chat-attachment-status">当前附件</span>
+                            <button
+                              aria-label={`移除附件：${file.fileName}`}
+                              className="chat-attachment-remove"
+                              onClick={() => removeEnabledReferenceFile(file)}
+                              type="button"
+                            >
+                              ×
+                            </button>
+                          </div>
+                        ))}
+                        {sessionAttachmentFiles.length > 3 ? (
+                          <span className="chat-attachment-more">查看更多</span>
+                        ) : null}
+                      </div>
+                    </details>
+                  )}
+                </section>
+              ) : null}
               <div className="chat-composer-toolbar">
                 <label className="chat-file-trigger">
-                  <span>＋ 上传附件</span>
+                  <span>＋ 上传资料</span>
                   <input
-                    aria-label="上传知识文件"
-                    accept=".txt,.md,.docx,.pdf,.xlsx,.csv,text/plain,text/markdown,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/pdf,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv"
+                    aria-label="上传资料"
+                    accept={supportedKnowledgeAccept}
                     onChange={(event) => {
                       const file = event.target.files?.[0];
                       if (!file) return;
                       setPendingUploadFile(file);
                       setUploadPurpose('personal_reference');
+                      setUploadStatus('');
                       event.target.value = '';
                     }}
                     type="file"
@@ -1160,7 +1753,7 @@ export function ChatPage() {
                   onClick={enableOfficialKnowledgeScope}
                   type="button"
                 >
-                  知识库
+                  查公司知识
                 </button>
                 <button
                   aria-pressed={referenceScope === 'with_personal' || referenceScope === 'personal_and_session'}
@@ -1173,13 +1766,14 @@ export function ChatPage() {
                 <button
                   aria-pressed={referenceScope === 'with_session' || referenceScope === 'personal_and_session'}
                   className="chat-reference-chip"
+                  disabled={!sessionAttachmentFiles.length}
                   onClick={toggleSessionAttachmentScope}
                   type="button"
                 >
                   当前附件
                 </button>
                 <span className="chat-mode-pill">{modeLabels[mode]}</span>
-                <span className="chat-model-pill">模型：{activeProfile?.displayName || '未配置'}</span>
+                <span className="chat-model-pill">当前设置：{activeProfile?.displayName || '未配置'}</span>
                 <button
                   aria-label="发送"
                   className="chat-send-button"
@@ -1189,59 +1783,79 @@ export function ChatPage() {
                   ↑
                 </button>
               </div>
-              {mode === 'knowledge' ? (
-                <p className="chat-composer-hint">
-                  知识库问答默认只检索正式知识库；选择“我的资料”或“当前附件”后，会作为非正式参考资料加入本次上下文。
-                </p>
-              ) : null}
-              {visibleReferenceFiles.length ? (
-                <section aria-label="当前可引用资料" className="chat-reference-files">
-                  <strong>当前可引用资料</strong>
-                  <ul>
-                    {visibleReferenceFiles.map((file) => (
-                      <li key={file.fileUuid}>
-                        <span>{file.fileName}</span>
-                        <span>{enabledReferenceLabels[file.sourceKind]}</span>
-                        <button
-                          aria-label={`关闭引用：${file.fileName}`}
-                          onClick={() => removeEnabledReferenceFile(file)}
-                          type="button"
-                        >
-                          关闭引用
-                        </button>
-                      </li>
-                    ))}
-                  </ul>
-                  <p>这些资料只作为本次对话的非正式参考，不会进入公司正式知识库。</p>
-                </section>
-              ) : null}
-              {composerDisabledReason ? <p className="chat-status" role="status">{composerDisabledReason}</p> : null}
               {uploadStatus ? <p className="chat-composer-hint" role="status">{uploadStatus}</p> : null}
-              {status ? <p className="chat-status" role="status">{status}</p> : null}
             </form>
           </div>
+          {exportNotice ? (
+            <div className="chat-export-dialog-backdrop">
+              <section
+                aria-label={exportNotice.kind === 'success' ? 'Word 已导出成功' : 'Word 导出失败'}
+                aria-modal="true"
+                className="chat-export-dialog"
+                role="dialog"
+              >
+                <div aria-hidden="true" className={exportNotice.kind === 'success' ? 'chat-export-icon success' : 'chat-export-icon error'}>
+                  {exportNotice.kind === 'success' ? '✓' : '!'}
+                </div>
+                <h2>{exportNotice.kind === 'success' ? 'Word 已导出成功' : 'Word 导出失败'}</h2>
+                <p>{exportNotice.kind === 'success' ? '文件已保存到下载目录。' : '请稍后重试。'}</p>
+                {exportNotice.kind === 'success' && exportNotice.fileName ? (
+                  <p className="chat-export-file-name" title={exportNotice.fileName}>
+                    {exportNotice.fileName}
+                  </p>
+                ) : null}
+                {exportNotice.kind === 'success' && (exportNotice.copyStatus || exportNotice.openStatus) ? (
+                  <p className="chat-export-feedback" role="status">
+                    {exportNotice.copyStatus || exportNotice.openStatus}
+                  </p>
+                ) : null}
+                <div className="chat-export-dialog-actions">
+                  {exportNotice.kind === 'success' && exportNotice.path ? (
+                    <>
+                      <button onClick={() => void openExportFile()} type="button">
+                        打开文件
+                      </button>
+                      <button onClick={() => void copyExportPath()} type="button">
+                        复制路径
+                      </button>
+                    </>
+                  ) : null}
+                  <button
+                    className={exportNotice.kind === 'success' ? 'primary' : ''}
+                    onClick={() => setExportNotice(null)}
+                    type="button"
+                  >
+                    关闭
+                  </button>
+                </div>
+              </section>
+            </div>
+          ) : null}
           {pendingUploadFile ? (
             <div aria-label="上传资料" className="chat-upload-dialog" role="dialog">
               <div className="chat-upload-dialog-card">
                 <strong>上传资料</strong>
                 <p>文件：{pendingUploadFile.name}</p>
+                <p role="note">{uploadFileHint(pendingUploadFile)}</p>
                 <p>
-                  你上传的个人资料仅供你本人使用，不会进入公司正式知识库。
-                  提交管理员审核通过后，才可能成为正式知识库资料。
+                  你上传的个人资料仅供你本人使用，不会进入公司知识库。
+                  提交管理员审核通过后，才可能成为正式知识来源。
                 </p>
                 <fieldset>
                   <legend>上传用途</legend>
                   <label>
                     <input
+                      disabled={uploading}
                       checked={uploadPurpose === 'session_attachment'}
                       name="upload-purpose"
                       onChange={() => setUploadPurpose('session_attachment')}
                       type="radio"
                     />
-                    仅用于当前会话
+                    仅用于当前任务
                   </label>
                   <label>
                     <input
+                      disabled={uploading}
                       checked={uploadPurpose === 'personal_reference'}
                       name="upload-purpose"
                       onChange={() => setUploadPurpose('personal_reference')}
@@ -1251,6 +1865,7 @@ export function ChatPage() {
                   </label>
                   <label>
                     <input
+                      disabled={uploading}
                       checked={uploadPurpose === 'submit_review'}
                       name="upload-purpose"
                       onChange={() => setUploadPurpose('submit_review')}
@@ -1259,12 +1874,45 @@ export function ChatPage() {
                     提交管理员审核
                   </label>
                 </fieldset>
+                <div className="chat-upload-meta-grid">
+                  <label>
+                    资料分类
+                    <select
+                      aria-label="资料分类"
+                      disabled={uploading || uploadPurpose === 'session_attachment'}
+                      onChange={(event) => setUploadCategory(event.target.value)}
+                      value={uploadPurpose === 'session_attachment' ? '当前附件' : uploadCategory}
+                    >
+                      {uploadPurpose === 'session_attachment' ? (
+                        <option value="当前附件">当前附件</option>
+                      ) : uploadCategoryOptions.map((item) => (
+                        <option key={item} value={item}>{item}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label>
+                    文档类型
+                    <select
+                      aria-label="文档类型"
+                      disabled={uploading}
+                      onChange={(event) => setUploadDocumentType(event.target.value)}
+                      value={uploadDocumentType}
+                    >
+                      {uploadDocumentTypeOptions.map((item) => (
+                        <option key={item} value={item}>{item}</option>
+                      ))}
+                    </select>
+                  </label>
+                </div>
+                {uploadStatus ? (
+                  <p className="chat-upload-dialog-status" role="status">{uploadStatus}</p>
+                ) : null}
                 <div className="chat-message-actions">
-                  <button onClick={() => setPendingUploadFile(null)} type="button">
+                  <button disabled={uploading} onClick={() => setPendingUploadFile(null)} type="button">
                     取消
                   </button>
-                  <button onClick={() => void uploadKnowledge()} type="button">
-                    开始上传
+                  <button disabled={uploading} onClick={() => void uploadKnowledge()} type="button">
+                    {uploading ? '上传中…' : '开始上传'}
                   </button>
                 </div>
               </div>

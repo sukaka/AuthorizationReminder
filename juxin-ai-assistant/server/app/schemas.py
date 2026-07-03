@@ -204,6 +204,9 @@ class KnowledgeFileOut(BaseModel):
     chunk_count: int
     created_at: datetime
     source_type: str = "user_upload"
+    source_origin: str = "upload"
+    web_capture_id: str = ""
+    source_url: str = ""
     usage_type: str = "personal_reference"
     review_status: str = "draft"
     rag_enabled: bool = False
@@ -260,6 +263,75 @@ class KnowledgeBaseListOut(BaseModel):
     total: int
 
 
+class KnowledgeCategoryCreateIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1, max_length=64)
+    parent_category_id: str = Field(default="", max_length=64)
+    scope: Literal["company", "department", "project", "personal"] = "company"
+    sort_order: int = Field(default=0, ge=0, le=9999)
+    status: Literal["ACTIVE", "DISABLED"] = "ACTIVE"
+
+
+class KnowledgeCategoryPatchIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str | None = Field(default=None, min_length=1, max_length=64)
+    parent_category_id: str | None = Field(default=None, max_length=64)
+    scope: Literal["company", "department", "project", "personal"] | None = None
+    sort_order: int | None = Field(default=None, ge=0, le=9999)
+    status: Literal["ACTIVE", "DISABLED"] | None = None
+
+
+class KnowledgeCategoryOut(BaseModel):
+    category_id: str
+    name: str
+    parent_category_id: str
+    parent_name: str
+    scope: str
+    sort_order: int
+    status: str
+    file_count: int
+    created_at: datetime
+    updated_at: datetime
+
+
+class KnowledgeCategoryListOut(BaseModel):
+    items: list[KnowledgeCategoryOut]
+    total: int
+
+
+class KnowledgeDocumentTypeCreateIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1, max_length=64)
+    sort_order: int = Field(default=0, ge=0, le=9999)
+    status: Literal["ACTIVE", "DISABLED"] = "ACTIVE"
+
+
+class KnowledgeDocumentTypePatchIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str | None = Field(default=None, min_length=1, max_length=64)
+    sort_order: int | None = Field(default=None, ge=0, le=9999)
+    status: Literal["ACTIVE", "DISABLED"] | None = None
+
+
+class KnowledgeDocumentTypeOut(BaseModel):
+    document_type_id: str
+    name: str
+    sort_order: int
+    status: str
+    file_count: int
+    created_at: datetime
+    updated_at: datetime
+
+
+class KnowledgeDocumentTypeListOut(BaseModel):
+    items: list[KnowledgeDocumentTypeOut]
+    total: int
+
+
 class KnowledgeReviewSubmitIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -298,6 +370,7 @@ class KnowledgeReviewHistoryOut(BaseModel):
 class KnowledgeFilePatchIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    file_name: str | None = Field(default=None, max_length=255)
     category: str | None = Field(default=None, max_length=64)
     document_type: str | None = Field(default=None, max_length=64)
     tags: list[str] | None = Field(default=None, max_length=20)
@@ -323,6 +396,8 @@ class KnowledgeFilePreviewChunkOut(BaseModel):
     chunk_index: int
     page_number: int | None = None
     section_title: str = ""
+    page_or_sheet: str = ""
+    chunk_type: str = ""
     text: str
 
 
@@ -342,6 +417,8 @@ class ChatCitationOut(BaseModel):
     chunk_id: str = ""
     page_number: int | None = None
     section_title: str = ""
+    page_or_sheet: str = ""
+    chunk_type: str = ""
     chunk_index: int | None = None
     score: int = 0
 
@@ -390,6 +467,52 @@ class ChatPrepareOut(BaseModel):
     messages: list[MessageOut]
     citations: list[ChatCitationOut] = Field(default_factory=list)
     loop_trace: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class WebCapturePreviewIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    url: str = Field(min_length=1, max_length=2048)
+    conversation_id: str = Field(default="", max_length=64)
+
+
+class WebCapturePreviewOut(BaseModel):
+    capture_id: str
+    title: str
+    site_name: str = ""
+    url: str
+    final_url: str
+    fetched_at: datetime
+    published_at: str = ""
+    word_count: int
+    summary: str
+    suggested_category: str
+    suggested_document_type: str
+    validity: str
+    scope: str
+
+
+class WebCaptureConfirmIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    save_target: Literal[
+        "temporary",
+        "personal_reference",
+        "official_knowledge_candidate",
+        "cancel",
+    ]
+    category: str = Field(default="", max_length=64)
+    document_type: str = Field(default="", max_length=64)
+    tags: list[str] = Field(default_factory=list, max_length=20)
+    conversation_id: str = Field(default="", max_length=64)
+
+
+class WebCaptureConfirmOut(BaseModel):
+    capture_id: str
+    status: str
+    save_target: str
+    knowledge_file_uuid: str = ""
+    message: str
 
 
 class PersonalReferenceGenerateIn(BaseModel):

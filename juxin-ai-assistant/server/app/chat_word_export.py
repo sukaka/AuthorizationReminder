@@ -33,6 +33,7 @@ class ChatExportContent:
     task_name: str
     output: str
     message_id: str
+    use_formal_template: bool = True
 
 
 class TemplateRenderer:
@@ -73,6 +74,15 @@ class MarkdownToDocxConverter:
         author: str,
         template_name: str,
     ) -> bytes:
+        if not content.use_formal_template:
+            from app.word_export import render_chat_answer_docx
+
+            return render_chat_answer_docx(
+                title=content.title,
+                output=content.output,
+                version="V1.0",
+            )
+
         return self.template_renderer.render(
             title=content.title,
             task_name=content.task_name,
@@ -264,11 +274,14 @@ def _build_export_content(
         body.export_type == "formal_document" and body.selected_message_ids
     ):
         message_id = ",".join(message.uuid for message in messages)
+    use_formal_template = body.export_type == "formal_document"
     if body.format_before_export and body.formatted_content:
         output = body.formatted_content
+        if use_formal_template:
+            output = _ensure_formal_document_structure(output)
     else:
         output = _compose_messages_markdown(messages, cipher)
-        if body.export_type == "formal_document" or body.format_before_export:
+        if use_formal_template or body.format_before_export:
             output = _deterministic_formal_document(output)
     output = _append_reference_sources(db, output, messages)
     title = "聊天正式文档" if body.export_type == "formal_document" else f"AI 对话导出-{session.title}"
@@ -277,6 +290,7 @@ def _build_export_content(
         task_name="AI 对话导出",
         output=output,
         message_id=message_id,
+        use_formal_template=use_formal_template,
     )
 
 
@@ -290,13 +304,17 @@ def _compose_messages_markdown(messages: list[ChatMessage], cipher: ContentCiphe
 
 
 def _append_reference_sources(db: Session, output: str, messages: list[ChatMessage]) -> str:
-    source_markdown = _reference_sources_markdown(db, messages)
+    source_markdown = _reference_sources_markdown(db, messages, output)
     if not source_markdown:
         return output
     return f"{output.rstrip()}\n\n{source_markdown}".strip()
 
 
-def _reference_sources_markdown(db: Session, messages: list[ChatMessage]) -> str:
+def _reference_sources_markdown(
+    db: Session,
+    messages: list[ChatMessage],
+    output: str | None = None,
+) -> str:
     message_ids = [message.id for message in messages if message.role == "assistant"]
     if not message_ids:
         return ""
@@ -313,6 +331,8 @@ def _reference_sources_markdown(db: Session, messages: list[ChatMessage]) -> str
     has_session_attachment = False
     source_number = 1
     for source in sources:
+        if not _source_is_mentioned(source, output):
+            continue
         key = (
             source.source_type,
             source.file_name,
@@ -331,7 +351,52 @@ def _reference_sources_markdown(db: Session, messages: list[ChatMessage]) -> str
         lines.append("\n本文参考用户个人上传资料生成，仅供用户本人使用。")
     if has_session_attachment:
         lines.append("\n本文参考当前会话附件生成，仅供本次会话使用。")
+    if source_number == 1:
+        return ""
     return "\n".join(lines)
+
+
+def _source_is_mentioned(source: ChatMessageSource, output: str | None) -> bool:
+    if output is None:
+        return True
+    normalized_output = _normalize_reference_text(output)
+    return any(
+        candidate in normalized_output
+        for candidate in _reference_match_candidates(source.file_name, source.title)
+    )
+
+
+def _normalize_reference_text(value: str | None) -> str:
+    if not value:
+        return ""
+    return "".join(str(value).lower().split())
+
+
+def _reference_match_candidates(*values: str | None) -> list[str]:
+    candidates: list[str] = []
+    for value in values:
+        normalized = _normalize_reference_text(value)
+        if not normalized:
+            continue
+        candidates.append(normalized)
+        stem = _strip_known_file_extension(normalized)
+        if stem != normalized:
+            candidates.append(stem)
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        if len(candidate) < 4 or candidate in seen:
+            continue
+        seen.add(candidate)
+        deduped.append(candidate)
+    return deduped
+
+
+def _strip_known_file_extension(value: str) -> str:
+    for suffix in (".docx", ".xlsx", ".pptx", ".pdf", ".txt", ".md", ".doc", ".xls", ".ppt"):
+        if value.endswith(suffix):
+            return value[: -len(suffix)]
+    return value
 
 
 def _append_transient_reference_sources(output: str, sources: list) -> str:
@@ -417,6 +482,13 @@ def _deterministic_formal_document(markdown: str) -> str:
         "# 风险与注意事项\n\n"
         "根据当前信息，涉及对外承诺、交付周期、验收结论、报价和法律责任的内容需人工复核。"
     )
+
+
+def _ensure_formal_document_structure(markdown: str) -> str:
+    required_markers = ("基本信息", "背景说明", "主要内容", "风险与注意事项")
+    if all(marker in markdown for marker in required_markers):
+        return markdown
+    return _deterministic_formal_document(markdown)
 
 
 def _export_file_name(title: str, export_type: str) -> str:

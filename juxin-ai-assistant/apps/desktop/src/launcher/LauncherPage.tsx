@@ -60,7 +60,7 @@ export function LauncherPage({
             <h2>连接企业服务</h2>
           </div>
           <span className="launcher-version">
-            Agent {server.currentVersion}{' '}
+            版本 {server.currentVersion}{' '}
             {buildMode !== 'production' ? `· ${buildChannelLabel}` : ''}
           </span>
         </header>

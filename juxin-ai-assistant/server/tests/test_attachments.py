@@ -43,6 +43,56 @@ def _build_docx_table_bytes() -> bytes:
     return buffer.getvalue()
 
 
+def _build_xlsx_bytes() -> bytes:
+    return _build_zip_bytes({
+        "[Content_Types].xml": b"""<?xml version="1.0" encoding="UTF-8"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
+  <Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
+</Types>""",
+        "_rels/.rels": b"""<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>
+</Relationships>""",
+        "xl/workbook.xml": """<?xml version="1.0" encoding="UTF-8"?>
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+          xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <sheets><sheet name="项目清单" sheetId="1" r:id="rId1"/></sheets>
+</workbook>""".encode("utf-8"),
+        "xl/_rels/workbook.xml.rels": b"""<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
+</Relationships>""",
+        "xl/worksheets/sheet1.xml": """<?xml version="1.0" encoding="UTF-8"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <sheetData>
+    <row r="1"><c r="A1" t="inlineStr"><is><t>客户</t></is></c><c r="B1" t="inlineStr"><is><t>需求</t></is></c></row>
+    <row r="2"><c r="A2" t="inlineStr"><is><t>客户A</t></is></c><c r="B2" t="inlineStr"><is><t>等保整改</t></is></c></row>
+  </sheetData>
+</worksheet>""".encode("utf-8"),
+    })
+
+
+def _build_pptx_bytes() -> bytes:
+    return _build_zip_bytes({
+        "[Content_Types].xml": b"""<?xml version="1.0" encoding="UTF-8"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+</Types>""",
+        "ppt/slides/slide1.xml": """<?xml version="1.0" encoding="UTF-8"?>
+<p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"
+       xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+  <p:cSld><p:spTree>
+    <p:sp><p:txBody><a:p><a:r><a:t>项目汇报</a:t></a:r></a:p></p:txBody></p:sp>
+    <p:sp><p:txBody><a:p><a:r><a:t>风险提示</a:t></a:r></a:p></p:txBody></p:sp>
+  </p:spTree></p:cSld>
+</p:sld>""".encode("utf-8"),
+    })
+
+
 def _build_zip_bytes(entries: dict[str, bytes]) -> bytes:
     buffer = BytesIO()
     with ZipFile(buffer, "w") as archive:
@@ -180,6 +230,49 @@ def test_upload_docx_attachment_extracts_table_text(
     assert "负责人" in extracted_text
     assert "项目甲" in extracted_text
     assert "待确认" in extracted_text
+
+
+def test_upload_xlsx_attachment_extracts_sheet_rows(
+    generation_client,
+    generation_db,
+    seeded_task,
+):
+    response = _upload(
+        generation_client,
+        task_uuid=seeded_task.uuid,
+        file_name="项目清单.xlsx",
+        content=_build_xlsx_bytes(),
+        content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["name"] == "项目清单.xlsx"
+    extracted_text = _load_attachment_text(generation_db, seeded_task, body["uuid"])
+    assert "Sheet：项目清单" in extracted_text
+    assert "客户A" in extracted_text
+    assert "等保整改" in extracted_text
+
+
+def test_upload_pptx_attachment_extracts_slide_text(
+    generation_client,
+    generation_db,
+    seeded_task,
+):
+    response = _upload(
+        generation_client,
+        task_uuid=seeded_task.uuid,
+        file_name="项目汇报.pptx",
+        content=_build_pptx_bytes(),
+        content_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    )
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["name"] == "项目汇报.pptx"
+    extracted_text = _load_attachment_text(generation_db, seeded_task, body["uuid"])
+    assert "项目汇报" in extracted_text
+    assert "风险提示" in extracted_text
 
 
 def test_upload_bad_docx_attachment_returns_clear_parse_error(
@@ -342,7 +435,7 @@ def test_upload_unsupported_attachment_type_returns_clear_error(
     )
 
     assert response.status_code == 415
-    assert response.json()["detail"] == "当前仅支持 txt、md、docx"
+    assert response.json()["detail"] == "当前仅支持 docx、xlsx、pptx、txt、md"
 
 
 def test_upload_pdf_attachment_returns_clear_not_yet_supported_error(
@@ -375,18 +468,18 @@ def test_upload_attachment_rejects_non_utf8_text(
     assert response.json()["detail"] == "文本附件必须使用 UTF-8 编码"
 
 
-def test_upload_attachment_rejects_files_larger_than_20mb(
+def test_upload_attachment_rejects_files_larger_than_100mb(
     generation_client,
     seeded_task,
 ):
     response = _upload(
         generation_client,
         task_uuid=seeded_task.uuid,
-        content=b"x" * (20 * 1024 * 1024 + 1),
+        content=b"x" * (100 * 1024 * 1024 + 1),
     )
 
     assert response.status_code == 413
-    assert response.json()["detail"] == "附件大小不能超过 20 MB"
+    assert response.json()["detail"] == "附件大小不能超过 100 MB"
 
 
 def test_upload_attachment_rejects_file_name_longer_than_255(

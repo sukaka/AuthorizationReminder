@@ -56,6 +56,7 @@ from .models import KnowledgeChunk, KnowledgeFile
 from .models import KnowledgeTaskLink, TaskPromptBinding
 from .personal_reference_routes import router as personal_reference_router
 from .prompt_client import PromptCenterClient
+from .web_routes import router as web_router
 from .schemas import (
     AttachmentOut,
     CatalogAssistantOut,
@@ -1647,6 +1648,7 @@ app.include_router(conversations_router)
 app.include_router(export_router)
 app.include_router(knowledge_router)
 app.include_router(personal_reference_router)
+app.include_router(web_router)
 
 
 @app.get("/{full_path:path}")

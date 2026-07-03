@@ -70,17 +70,29 @@ class ContextBuilder:
         )
 
     @staticmethod
-    def _format_chunks(chunks: list[RetrievedKnowledgeChunk]) -> str:
+    def _source_location(chunk: RetrievedKnowledgeChunk) -> tuple[str, str]:
+        section = chunk.section_path or chunk.section_title
+        location = chunk.page_or_sheet
+        if not location and chunk.page_number is not None:
+            location = f"第 {chunk.page_number} 页"
+        return section or "引用片段", location or "引用片段"
+
+    @classmethod
+    def _format_chunks(cls, chunks: list[RetrievedKnowledgeChunk]) -> str:
         if not chunks:
             return ""
-        return "\n\n".join(
-            f"[{index}] 文件名：{chunk.file_name}\n"
-            f"来源类型：{chunk.source_kind}\n"
-            f"章节：{chunk.section_title or '未识别章节'}\n"
-            f"页码：{chunk.page_number if chunk.page_number is not None else '暂无'}\n"
-            f"内容：{chunk.chunk_text}"
-            for index, chunk in enumerate(chunks, start=1)
-        )
+        parts = []
+        for index, chunk in enumerate(chunks, start=1):
+            section, location = cls._source_location(chunk)
+            parts.append(
+                f"[{index}] 文件名：{chunk.file_name}\n"
+                f"来源类型：{chunk.source_kind}\n"
+                f"章节：{section}\n"
+                f"位置：{location}\n"
+                f"类型：{chunk.chunk_type or 'text'}\n"
+                f"内容：{chunk.chunk_text}"
+            )
+        return "\n\n".join(parts)
 
     @classmethod
     def _official_knowledge_context(cls, chunks: list[RetrievedKnowledgeChunk]) -> str:

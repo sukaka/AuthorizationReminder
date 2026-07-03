@@ -1,27 +1,31 @@
 import hashlib
 import re
 import uuid as uuid_lib
-import csv
 from dataclasses import dataclass
-from io import BytesIO, StringIO
+from io import BytesIO
 from pathlib import Path
 from zipfile import BadZipFile, ZipFile
 import xml.etree.ElementTree as ET
 
+from docx import Document
 from fastapi import HTTPException
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
-from .attachments import _parse_docx_text
 from .crypto import ContentCipher, EncryptedPayload
+from .knowledge_search import EmbeddingService
 from .models import KnowledgeChunk, KnowledgeFile
 
 
-MAX_KNOWLEDGE_FILE_BYTES = 20 * 1024 * 1024
-SUPPORTED_KNOWLEDGE_SUFFIXES = {".txt", ".md", ".docx", ".pdf", ".xlsx", ".csv"}
-UNSUPPORTED_KNOWLEDGE_TYPE_MESSAGE = "当前仅支持 txt、md、docx、pdf、xlsx、csv"
-HEADING_PATTERN = re.compile(r"^([一二三四五六七八九十]+、|\d+[.．、])\S+")
-PDF_LITERAL_PATTERN = re.compile(r"\(((?:\\.|[^\\)])*)\)\s*Tj")
+MAX_KNOWLEDGE_FILE_MB = 100
+MAX_KNOWLEDGE_FILE_BYTES = MAX_KNOWLEDGE_FILE_MB * 1024 * 1024
+MAX_KNOWLEDGE_METADATA_TEXT_LENGTH = 255
+SUPPORTED_KNOWLEDGE_SUFFIXES = {".txt", ".md", ".docx", ".xlsx", ".pptx"}
+UNSUPPORTED_KNOWLEDGE_TYPE_MESSAGE = "当前版本暂不支持该文件类型，请上传 docx、xlsx、pptx、txt 或 md 文件。"
+HEADING_PATTERN = re.compile(r"^(#{1,6}\s+|[一二三四五六七八九十]+、|\d+[.．、]|\（\d+\）)\S+")
+SPECIAL_TERM_PATTERN = re.compile(
+    r"(?i)\b(?:CVE-\d{4}-\d{4,}|[A-Z]{2,}[-_]?[A-Z0-9]{2,}[-_]?\d*|GB/T\s*\d+|ISO\s*\d+|[0-9]{1,3}(?:\.[0-9]{1,3}){3}|[0-9]{2,5})\b"
+)
 
 
 @dataclass(frozen=True)
@@ -30,6 +34,19 @@ class ChunkDraft:
     chunk_index: int
     section_title: str
     page_number: int | None = None
+    section_path: str = ""
+    page_or_sheet: str = ""
+    chunk_type: str = "text"
+    metadata: dict | None = None
+
+
+@dataclass(frozen=True)
+class ParsedBlock:
+    text: str
+    section_path: str = ""
+    page_or_sheet: str = ""
+    chunk_type: str = "paragraph"
+    metadata: dict | None = None
 
 
 def _safe_file_name(raw_name: str | None) -> str:
@@ -39,6 +56,10 @@ def _safe_file_name(raw_name: str | None) -> str:
     if len(file_name) > 255:
         raise HTTPException(status_code=422, detail="文件名不能超过 255 个字符")
     return file_name
+
+
+def _limit_metadata_text(value: str | None) -> str:
+    return (value or "").strip()[:MAX_KNOWLEDGE_METADATA_TEXT_LENGTH]
 
 
 def _file_suffix(file_name: str) -> str:
@@ -91,24 +112,96 @@ def _decode_utf8_text(data: bytes, *, message: str) -> str:
         raise HTTPException(status_code=422, detail=message) from exc
 
 
-def _rows_to_text(rows: list[list[str]]) -> str:
-    lines: list[str] = []
-    for row in rows:
-        cleaned_cells = [cell.strip() for cell in row]
-        while cleaned_cells and not cleaned_cells[-1]:
-            cleaned_cells.pop()
-        if cleaned_cells:
-            lines.append(" | ".join(cell or "待确认" for cell in cleaned_cells))
-    return "\n".join(lines).strip()
+def _clean_row(row: list[str]) -> list[str]:
+    cleaned_cells = [cell.strip() for cell in row]
+    while cleaned_cells and not cleaned_cells[-1]:
+        cleaned_cells.pop()
+    return cleaned_cells
 
 
-def _parse_csv_text(data: bytes) -> str:
-    text = _decode_utf8_text(data, message="CSV 知识文件必须使用 UTF-8 编码")
+def _markdown_table(rows: list[list[str]]) -> str:
+    cleaned_rows = [_clean_row(row) for row in rows]
+    cleaned_rows = [row for row in cleaned_rows if row]
+    if not cleaned_rows:
+        return ""
+    column_count = max(len(row) for row in cleaned_rows)
+    normalized = [
+        row + ["待确认"] * (column_count - len(row))
+        for row in cleaned_rows
+    ]
+    header = normalized[0]
+    separator = ["---"] * column_count
+    body = normalized[1:]
+    table_rows = [header, separator, *body]
+    return "\n".join("| " + " | ".join(cell or "待确认" for cell in row) + " |" for row in table_rows)
+
+
+def _row_record_text(headers: list[str], row: list[str]) -> str:
+    if not headers:
+        return " | ".join(cell or "待确认" for cell in row)
+    padded = row + ["待确认"] * max(0, len(headers) - len(row))
+    pairs = [
+        f"{header or f'字段{index + 1}'}={padded[index] or '待确认'}"
+        for index, header in enumerate(headers)
+    ]
+    return "；".join(pairs)
+
+
+def _xml_texts(root: ET.Element) -> list[str]:
+    return [
+        (node.text or "").strip()
+        for node in root.findall(".//{*}t")
+        if (node.text or "").strip()
+    ]
+
+
+def _keywords(text: str) -> list[str]:
+    keywords = []
+    for match in SPECIAL_TERM_PATTERN.findall(text):
+        normalized = re.sub(r"\s+", " ", match.strip())
+        if normalized and normalized not in keywords:
+            keywords.append(normalized)
+    return keywords[:50]
+
+
+def _parse_docx_blocks(data: bytes) -> list[ParsedBlock]:
     try:
-        rows = [list(row) for row in csv.reader(StringIO(text))]
-    except csv.Error as exc:
-        raise HTTPException(status_code=422, detail="CSV 文件无法解析") from exc
-    return _rows_to_text(rows)
+        document = Document(BytesIO(data))
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail="DOCX 文件无法解析") from exc
+
+    blocks: list[ParsedBlock] = []
+    section_stack: list[str] = []
+    current_section = ""
+    for paragraph in document.paragraphs:
+        text = paragraph.text.strip()
+        if not text:
+            continue
+        style_name = (paragraph.style.name if paragraph.style else "").lower()
+        heading_level = 0
+        if style_name.startswith("heading"):
+            match = re.search(r"(\d+)", style_name)
+            heading_level = int(match.group(1)) if match else 1
+        elif HEADING_PATTERN.match(text):
+            heading_level = 1
+        if heading_level:
+            section_stack = section_stack[: max(heading_level - 1, 0)]
+            section_stack.append(text.lstrip("#").strip())
+            current_section = " / ".join(section_stack)
+            blocks.append(ParsedBlock(text=text, section_path=current_section, chunk_type="heading"))
+            continue
+        blocks.append(ParsedBlock(text=text, section_path=current_section, chunk_type="paragraph"))
+
+    for table_index, table in enumerate(document.tables, start=1):
+        rows = [
+            [cell.text.strip() for cell in row.cells]
+            for row in table.rows
+        ]
+        table_text = _markdown_table(rows)
+        if table_text:
+            section = current_section or f"表格 {table_index}"
+            blocks.append(ParsedBlock(text=table_text, section_path=section, chunk_type="table"))
+    return blocks
 
 
 def _xlsx_shared_strings(archive: ZipFile) -> list[str]:
@@ -148,125 +241,186 @@ def _xlsx_cell_text(cell: ET.Element, shared_strings: list[str]) -> str:
     return raw_value
 
 
-def _parse_xlsx_text(data: bytes) -> str:
+def _xlsx_sheet_names(archive: ZipFile) -> dict[str, str]:
+    try:
+        workbook_root = ET.fromstring(archive.read("xl/workbook.xml"))
+        rels_root = ET.fromstring(archive.read("xl/_rels/workbook.xml.rels"))
+    except (KeyError, ET.ParseError):
+        return {}
+    relationships = {
+        rel.attrib.get("Id", ""): rel.attrib.get("Target", "")
+        for rel in rels_root.findall(".//{*}Relationship")
+    }
+    names: dict[str, str] = {}
+    for sheet in workbook_root.findall(".//{*}sheet"):
+        rel_id = sheet.attrib.get("{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id", "")
+        target = relationships.get(rel_id, "")
+        if not target:
+            continue
+        if not target.startswith("xl/"):
+            target = "xl/" + target.lstrip("/")
+        names[target] = sheet.attrib.get("name", "") or target.rsplit("/", 1)[-1].removesuffix(".xml")
+    return names
+
+
+def _parse_xlsx_blocks(data: bytes) -> list[ParsedBlock]:
     try:
         with ZipFile(BytesIO(data)) as archive:
             shared_strings = _xlsx_shared_strings(archive)
+            sheet_names = _xlsx_sheet_names(archive)
             worksheet_names = sorted(
                 name
                 for name in archive.namelist()
                 if name.startswith("xl/worksheets/") and name.endswith(".xml")
             )
-            rows: list[list[str]] = []
+            blocks: list[ParsedBlock] = []
             for worksheet_name in worksheet_names:
                 try:
                     root = ET.fromstring(archive.read(worksheet_name))
                 except ET.ParseError as exc:
                     raise HTTPException(status_code=422, detail="XLSX 工作表无法解析") from exc
+                sheet_name = sheet_names.get(
+                    worksheet_name,
+                    worksheet_name.rsplit("/", 1)[-1].removesuffix(".xml"),
+                )
+                rows: list[list[str]] = []
                 for row in root.findall(".//{*}row"):
-                    rows.append([
+                    cleaned = _clean_row([
                         _xlsx_cell_text(cell, shared_strings)
                         for cell in row.findall("{*}c")
                     ])
+                    if cleaned:
+                        rows.append(cleaned)
+                if not rows:
+                    continue
+                headers = rows[0]
+                lines = [f"Sheet：{sheet_name}", f"表头：{' | '.join(headers)}", _markdown_table(rows)]
+                for row in rows[1:]:
+                    lines.append("记录：" + _row_record_text(headers, row))
+                blocks.append(
+                    ParsedBlock(
+                        text="\n".join(line for line in lines if line).strip(),
+                        section_path=sheet_name,
+                        page_or_sheet=sheet_name,
+                        chunk_type="sheet_rows",
+                        metadata={
+                            "sheet_name": sheet_name,
+                            "headers": headers,
+                        },
+                    )
+                )
     except BadZipFile as exc:
         raise HTTPException(status_code=422, detail="XLSX 文件无法解析") from exc
     except KeyError as exc:
         raise HTTPException(status_code=422, detail="XLSX 文件结构不完整") from exc
-    return _rows_to_text(rows)
+    return blocks
 
 
-def _decode_pdf_literal(raw_value: str) -> str:
-    chars: list[str] = []
-    index = 0
-    while index < len(raw_value):
-        char = raw_value[index]
-        if char != "\\":
-            chars.append(char)
-            index += 1
+def _slide_index(path: str) -> int:
+    match = re.search(r"slide(\d+)\.xml$", path, re.IGNORECASE)
+    return int(match.group(1)) if match else 0
+
+
+def _parse_pptx_blocks(data: bytes) -> list[ParsedBlock]:
+    try:
+        with ZipFile(BytesIO(data)) as archive:
+            slide_names = sorted(
+                (
+                    name
+                    for name in archive.namelist()
+                    if name.startswith("ppt/slides/slide") and name.endswith(".xml")
+                ),
+                key=_slide_index,
+            )
+            note_text_by_index: dict[int, str] = {}
+            for note_name in archive.namelist():
+                if not note_name.startswith("ppt/notesSlides/notesSlide") or not note_name.endswith(".xml"):
+                    continue
+                try:
+                    note_root = ET.fromstring(archive.read(note_name))
+                except ET.ParseError:
+                    continue
+                note_text_by_index[_slide_index(note_name)] = "\n".join(_xml_texts(note_root))
+
+            blocks: list[ParsedBlock] = []
+            for slide_name in slide_names:
+                slide_number = _slide_index(slide_name)
+                try:
+                    root = ET.fromstring(archive.read(slide_name))
+                except ET.ParseError as exc:
+                    raise HTTPException(status_code=422, detail="PPTX 幻灯片无法解析") from exc
+                texts = _xml_texts(root)
+                if not texts:
+                    continue
+                title = texts[0]
+                body = "\n".join(texts[1:]).strip()
+                note_text = note_text_by_index.get(slide_number, "").strip()
+                parts = [
+                    f"幻灯片 {slide_number}：{title}",
+                    body,
+                    f"备注：{note_text}" if note_text else "",
+                ]
+                blocks.append(
+                    ParsedBlock(
+                        text="\n".join(part for part in parts if part).strip(),
+                        section_path=title,
+                        page_or_sheet=f"幻灯片 {slide_number}",
+                        chunk_type="slide",
+                        metadata={"slide_index": slide_number},
+                    )
+                )
+    except BadZipFile as exc:
+        raise HTTPException(status_code=422, detail="PPTX 文件无法解析") from exc
+    except KeyError as exc:
+        raise HTTPException(status_code=422, detail="PPTX 文件结构不完整") from exc
+    return blocks
+
+
+def _parse_text_blocks(file_name: str, data: bytes) -> list[ParsedBlock]:
+    text = _decode_utf8_text(data, message="文本知识文件必须使用 UTF-8 编码")
+    is_markdown = _file_suffix(file_name) == ".md"
+    blocks: list[ParsedBlock] = []
+    current_section = ""
+    current_lines: list[str] = []
+
+    def flush() -> None:
+        nonlocal current_lines
+        if current_lines:
+            blocks.append(
+                ParsedBlock(
+                    text="\n".join(current_lines).strip(),
+                    section_path=current_section,
+                    chunk_type="markdown" if is_markdown else "paragraph",
+                )
+            )
+            current_lines = []
+
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line:
+            flush()
             continue
-        index += 1
-        if index >= len(raw_value):
-            break
-        escaped = raw_value[index]
-        if escaped in {"\\", "(", ")"}:
-            chars.append(escaped)
-        elif escaped == "n":
-            chars.append("\n")
-        elif escaped == "r":
-            chars.append("\r")
-        elif escaped == "t":
-            chars.append("\t")
-        elif escaped in {"b", "f"}:
-            chars.append(" ")
-        elif escaped.isdigit():
-            octal = escaped
-            lookahead = index + 1
-            while lookahead < len(raw_value) and len(octal) < 3 and raw_value[lookahead].isdigit():
-                octal += raw_value[lookahead]
-                lookahead += 1
-            try:
-                chars.append(chr(int(octal, 8)))
-            except ValueError:
-                chars.append(octal)
-            index = lookahead - 1
-        else:
-            chars.append(escaped)
-        index += 1
-    return "".join(chars)
+        if HEADING_PATTERN.match(line):
+            flush()
+            current_section = line.lstrip("#").strip()
+            current_lines = [line]
+            continue
+        current_lines.append(line)
+    flush()
+    return blocks
 
 
-def _parse_pdf_text_with_library(data: bytes) -> str:
-    try:
-        from pypdf import PdfReader  # type: ignore
-    except Exception:
-        return ""
-
-    try:
-        reader = PdfReader(BytesIO(data))
-        page_texts = [
-            f"[第 {page_index} 页]\n{page.extract_text() or ''}".strip()
-            for page_index, page in enumerate(reader.pages, start=1)
-        ]
-    except Exception as exc:
-        raise HTTPException(status_code=422, detail="PDF 文件无法解析") from exc
-    return "\n\n".join(text for text in page_texts if text).strip()
-
-
-def _parse_pdf_text_fallback(data: bytes) -> str:
-    decoded = data.decode("utf-8", errors="ignore")
-    literal_values = [
-        _decode_pdf_literal(match.group(1)).strip()
-        for match in PDF_LITERAL_PATTERN.finditer(decoded)
-    ]
-    text = "\n".join(value for value in literal_values if value).strip()
-    if text:
-        return text
-    return ""
-
-
-def _parse_pdf_text(data: bytes) -> str:
-    text = _parse_pdf_text_with_library(data) or _parse_pdf_text_fallback(data)
-    if not text:
-        raise HTTPException(
-            status_code=422,
-            detail="PDF 未提取到可用文本，扫描件或图片型 PDF 需要 OCR 后再上传",
-        )
-    return text
-
-
-def _extract_text(file_name: str, data: bytes) -> str:
+def _extract_blocks(file_name: str, data: bytes) -> list[ParsedBlock]:
     suffix = _file_suffix(file_name)
     if suffix not in SUPPORTED_KNOWLEDGE_SUFFIXES:
         raise HTTPException(status_code=415, detail=UNSUPPORTED_KNOWLEDGE_TYPE_MESSAGE)
     if suffix in {".txt", ".md"}:
-        return _decode_utf8_text(data, message="文本知识文件必须使用 UTF-8 编码")
-    if suffix == ".csv":
-        return _parse_csv_text(data)
+        return _parse_text_blocks(file_name, data)
     if suffix == ".xlsx":
-        return _parse_xlsx_text(data)
-    if suffix == ".pdf":
-        return _parse_pdf_text(data)
-    return _parse_docx_text(data)
+        return _parse_xlsx_blocks(data)
+    if suffix == ".pptx":
+        return _parse_pptx_blocks(data)
+    return _parse_docx_blocks(data)
 
 
 def _section_blocks(text: str) -> list[tuple[str, str]]:
@@ -315,6 +469,9 @@ def chunk_text(
                         text=chunk_body,
                         chunk_index=len(chunks),
                         section_title=section_title,
+                        section_path=section_title,
+                        chunk_type="text",
+                        metadata={"keywords": _keywords(chunk_body)},
                     )
                 )
             if end >= len(content):
@@ -326,8 +483,112 @@ def chunk_text(
     return chunks
 
 
+def chunk_blocks(
+    blocks: list[ParsedBlock],
+    *,
+    target_chars: int = 1000,
+    max_chars: int = 1500,
+    overlap_chars: int = 150,
+) -> list[ChunkDraft]:
+    chunks: list[ChunkDraft] = []
+    for block in blocks:
+        block_text = block.text.strip()
+        if not block_text:
+            continue
+        if block.chunk_type in {"table", "sheet_rows", "slide"} and len(block_text) <= max_chars:
+            metadata = dict(block.metadata or {})
+            metadata["keywords"] = _keywords(block_text)
+            chunks.append(
+                ChunkDraft(
+                    text=block_text,
+                    chunk_index=len(chunks),
+                    section_title=block.section_path,
+                    section_path=block.section_path,
+                    page_or_sheet=block.page_or_sheet,
+                    chunk_type=block.chunk_type,
+                    metadata=metadata,
+                )
+            )
+            continue
+        for draft in chunk_text(
+            block_text,
+            target_chars=target_chars,
+            max_chars=max_chars,
+            overlap_chars=overlap_chars,
+        ):
+            section_path = block.section_path or draft.section_path or draft.section_title
+            metadata = dict(block.metadata or {})
+            metadata["keywords"] = _keywords(draft.text)
+            chunks.append(
+                ChunkDraft(
+                    text=draft.text,
+                    chunk_index=len(chunks),
+                    section_title=section_path,
+                    page_number=draft.page_number,
+                    section_path=section_path,
+                    page_or_sheet=block.page_or_sheet,
+                    chunk_type=block.chunk_type,
+                    metadata=metadata,
+                )
+            )
+    return chunks
+
+
 def _token_estimate(text: str) -> int:
     return max(1, len(text) // 2)
+
+
+def _file_type_for_name(file_name: str) -> str:
+    return _file_suffix(file_name).lstrip(".") or "unknown"
+
+
+def _chunk_metadata(
+    *,
+    draft: ChunkDraft,
+    file_uuid: str,
+    file_name: str,
+    file_type: str,
+    sso_user_id: str,
+    source_type: str,
+    usage_type: str,
+    review_status: str,
+    rag_scope: str,
+    permission_scope: str,
+) -> dict:
+    base = {
+        "document_id": file_uuid,
+        "file_name": file_name,
+        "file_type": file_type,
+        "source_type": usage_type,
+        "storage_source_type": source_type,
+        "user_id": sso_user_id,
+        "section_path": _limit_metadata_text(draft.section_path or draft.section_title),
+        "page_or_sheet": _limit_metadata_text(draft.page_or_sheet),
+        "chunk_type": draft.chunk_type,
+        "chunk_index": draft.chunk_index,
+        "usage_type": usage_type,
+        "review_status": review_status,
+        "rag_scope": rag_scope,
+        "permission_scope": permission_scope,
+    }
+    if draft.metadata:
+        base.update(draft.metadata)
+    return base
+
+
+def _metadata_with_embedding(
+    *,
+    chunk_id: str,
+    text: str,
+    metadata: dict,
+) -> tuple[dict, str]:
+    embedding_service = EmbeddingService()
+    vector = embedding_service.embed_chunk(text, metadata)
+    enriched = {
+        **metadata,
+        "embedding": embedding_service.to_metadata(vector),
+    }
+    return enriched, embedding_service.embedding_id(chunk_id, vector)
 
 
 def create_knowledge_file_from_bytes(
@@ -341,6 +602,9 @@ def create_knowledge_file_from_bytes(
     key_version: str,
     visibility: str = "PRIVATE",
     source_type: str = "user_upload",
+    source_origin: str = "upload",
+    web_capture_id: str = "",
+    source_url: str = "",
     usage_type: str = "personal_reference",
     review_status: str = "draft",
     rag_enabled: bool = False,
@@ -358,13 +622,16 @@ def create_knowledge_file_from_bytes(
     max_chars: int = 1500,
     overlap_chars: int = 150,
     storage_root: str | None = None,
+    extra_metadata: dict | None = None,
+    file_type_override: str | None = None,
 ) -> tuple[KnowledgeFile, list[KnowledgeChunk]]:
     safe_name = _safe_file_name(file_name)
     if len(content) > MAX_KNOWLEDGE_FILE_BYTES:
-        raise HTTPException(status_code=413, detail="知识文件大小不能超过 20 MB")
+        raise HTTPException(status_code=413, detail=f"知识文件大小不能超过 {MAX_KNOWLEDGE_FILE_MB} MB")
 
-    extracted_text = _extract_text(safe_name, content)
+    parsed_blocks = _extract_blocks(safe_name, content)
     file_uuid = str(uuid_lib.uuid4())
+    file_type = file_type_override or _file_type_for_name(safe_name)
     stored_file_name, file_path = _persist_original_file(
         storage_root=storage_root,
         usage_type=usage_type,
@@ -380,7 +647,7 @@ def create_knowledge_file_from_bytes(
         original_file_name=safe_name,
         stored_file_name=stored_file_name,
         file_path=file_path,
-        file_type=(content_type or "application/octet-stream")[:128],
+        file_type=file_type,
         file_size=len(content),
         content_sha256=hashlib.sha256(content).hexdigest(),
         visibility=visibility,
@@ -393,6 +660,9 @@ def create_knowledge_file_from_bytes(
         parse_status="parsed",
         index_status="indexed",
         source_type=source_type,
+        source_origin=source_origin,
+        web_capture_id=web_capture_id,
+        source_url=source_url,
         usage_type=usage_type,
         review_status=review_status,
         rag_enabled=rag_enabled,
@@ -407,14 +677,30 @@ def create_knowledge_file_from_bytes(
     db.flush()
 
     chunk_records: list[KnowledgeChunk] = []
-    for draft in chunk_text(
-        extracted_text,
+    for draft in chunk_blocks(
+        parsed_blocks,
         target_chars=target_chars,
         max_chars=max_chars,
         overlap_chars=overlap_chars,
     ):
         chunk_id = str(uuid_lib.uuid4())
         encrypted = cipher.encrypt_json({"text": draft.text}, chunk_id.encode())
+        metadata, embedding_id = _metadata_with_embedding(
+            chunk_id=chunk_id,
+            text=draft.text,
+            metadata=_chunk_metadata(
+                draft=draft,
+                file_uuid=file_uuid,
+                file_name=safe_name,
+                file_type=file_type,
+                sso_user_id=sso_user_id,
+                source_type=source_type,
+                usage_type=usage_type,
+                review_status=review_status,
+                rag_scope=rag_scope,
+                permission_scope=permission_scope,
+            ) | (extra_metadata or {}),
+        )
         chunk = KnowledgeChunk(
             chunk_id=chunk_id,
             file_id=file_record.id,
@@ -423,17 +709,12 @@ def create_knowledge_file_from_bytes(
             chunk_text_ciphertext=encrypted.ciphertext,
             chunk_text_nonce=encrypted.nonce,
             page_number=draft.page_number,
-            section_title=draft.section_title,
+            section_title=_limit_metadata_text(draft.section_title),
             chunk_index=draft.chunk_index,
             token_estimate=_token_estimate(draft.text),
             token_count=_token_estimate(draft.text),
-            metadata_json={
-                "source_type": source_type,
-                "usage_type": usage_type,
-                "review_status": review_status,
-                "rag_scope": rag_scope,
-                "permission_scope": permission_scope,
-            },
+            embedding_id=embedding_id,
+            metadata_json=metadata,
             status="READY",
         )
         db.add(chunk)
@@ -453,12 +734,14 @@ def reparse_knowledge_file_from_existing_chunks(
     storage_root: str | None = None,
 ) -> list[KnowledgeChunk]:
     source_text = ""
+    source_blocks: list[ParsedBlock] = []
     if storage_root and file_record.file_path:
         root = Path(storage_root).expanduser().resolve()
         original_path = Path(file_record.file_path).expanduser().resolve()
         if _is_relative_to(original_path, root) and original_path.is_file():
             source_name = file_record.original_file_name or file_record.file_name
-            source_text = _extract_text(source_name, original_path.read_bytes()).strip()
+            source_blocks = _extract_blocks(source_name, original_path.read_bytes())
+            source_text = "\n\n".join(block.text for block in source_blocks).strip()
 
     existing_chunks = list(
         db.scalars(
@@ -495,8 +778,9 @@ def reparse_knowledge_file_from_existing_chunks(
     db.flush()
 
     rebuilt_chunks: list[KnowledgeChunk] = []
-    for draft in chunk_text(
-        source_text,
+    rebuilt_blocks = source_blocks or _parse_text_blocks(file_record.file_name, source_text.encode("utf-8"))
+    for draft in chunk_blocks(
+        rebuilt_blocks,
         target_chars=target_chars,
         max_chars=max_chars,
         overlap_chars=overlap_chars,
@@ -504,6 +788,22 @@ def reparse_knowledge_file_from_existing_chunks(
         chunk_id = str(uuid_lib.uuid4())
         encrypted = cipher.encrypt_json({"text": draft.text}, chunk_id.encode())
         token_count = _token_estimate(draft.text)
+        metadata, embedding_id = _metadata_with_embedding(
+            chunk_id=chunk_id,
+            text=draft.text,
+            metadata=_chunk_metadata(
+                draft=draft,
+                file_uuid=file_record.uuid,
+                file_name=file_record.file_name,
+                file_type=_file_type_for_name(file_record.file_name),
+                sso_user_id=file_record.sso_user_id,
+                source_type=file_record.source_type,
+                usage_type=file_record.usage_type,
+                review_status=file_record.review_status,
+                rag_scope=file_record.rag_scope,
+                permission_scope=file_record.permission_scope,
+            ),
+        )
         chunk = KnowledgeChunk(
             chunk_id=chunk_id,
             file_id=file_record.id,
@@ -512,17 +812,12 @@ def reparse_knowledge_file_from_existing_chunks(
             chunk_text_ciphertext=encrypted.ciphertext,
             chunk_text_nonce=encrypted.nonce,
             page_number=draft.page_number,
-            section_title=draft.section_title,
+            section_title=_limit_metadata_text(draft.section_title),
             chunk_index=draft.chunk_index,
             token_estimate=token_count,
             token_count=token_count,
-            metadata_json={
-                "source_type": file_record.source_type,
-                "usage_type": file_record.usage_type,
-                "review_status": file_record.review_status,
-                "rag_scope": file_record.rag_scope,
-                "permission_scope": file_record.permission_scope,
-            },
+            embedding_id=embedding_id,
+            metadata_json=metadata,
             status="READY",
         )
         db.add(chunk)

@@ -441,7 +441,7 @@ export function TaskRunPage({ task, userId }: { task: TaskDefinition; userId?: s
           <div className="task-panel-heading">
             <div>
               <span className="eyebrow">填写信息</span>
-              <h3>告诉聚信这次要处理的内容</h3>
+              <h3>告诉我这次要处理的内容</h3>
             </div>
             <select
               aria-label="本地模型"

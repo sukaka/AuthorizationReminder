@@ -100,7 +100,7 @@ export function HomePage({ session, onOpenTask, onOpenChat, onShowAssistants }: 
       <section className="hero-panel">
         <div>
           <span className="hero-kicker">聚信 AI 助手 · 私人工作助理</span>
-          <h2>每个人的私人工作助理</h2>
+          <h2>你的私人助理</h2>
           <p>写材料、查资料、整理文档、生成报告，一句话交给聚信 AI 助手。</p>
           <p>我可以结合正式知识库、你的个人资料和当前工作场景，帮你快速生成可直接使用的内容。</p>
           <div className="intent-search">

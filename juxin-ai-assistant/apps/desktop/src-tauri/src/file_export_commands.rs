@@ -1,5 +1,6 @@
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use tauri::{AppHandle, Manager, WebviewWindow};
 
@@ -23,6 +24,55 @@ pub fn generation_word_save(
     let path = next_available_path(&download_dir, &safe_docx_file_name(&file_name));
     fs::write(&path, bytes).map_err(|_| "无法保存 Word 文件".to_string())?;
     Ok(path.to_string_lossy().into_owned())
+}
+
+#[tauri::command]
+pub fn generation_word_open(
+    window: WebviewWindow,
+    windows: tauri::State<'_, crate::window_manager::WindowManagerState>,
+    path: String,
+) -> Result<(), String> {
+    crate::window_manager::guard_business(&window, &windows)?;
+    let path = PathBuf::from(path);
+    if !path.exists() {
+        return Err("WORD_EXPORT_NOT_FOUND".to_string());
+    }
+    if !path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("docx"))
+    {
+        return Err("WORD_EXPORT_OPEN_UNSUPPORTED".to_string());
+    }
+    open_file(&path)
+}
+
+fn open_file(path: &Path) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    let mut command = {
+        let mut command = Command::new("open");
+        command.arg(path);
+        command
+    };
+
+    #[cfg(target_os = "windows")]
+    let mut command = {
+        let mut command = Command::new("cmd");
+        command.args(["/C", "start", ""]).arg(path);
+        command
+    };
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let mut command = {
+        let mut command = Command::new("xdg-open");
+        command.arg(path);
+        command
+    };
+
+    command
+        .spawn()
+        .map(|_| ())
+        .map_err(|_| "当前环境不支持直接打开文件".to_string())
 }
 
 fn safe_docx_file_name(file_name: &str) -> String {

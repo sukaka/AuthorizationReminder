@@ -349,3 +349,159 @@ def test_search_returns_empty_when_no_chunk_matches(generation_db) -> None:
     )
 
     assert results == []
+
+
+def test_personal_reference_search_ignores_unrelated_uploads(generation_db) -> None:
+    from app.knowledge_search import search_personal_reference_chunks
+
+    _add_file(
+        generation_db,
+        user_id="user-1",
+        name="山东枣庄烟草招标文件.txt",
+        text="三、获取招标文件\n投标人应在截止时间前提交澄清问题，并按照招标代理机构要求领取招标文件。",
+    )
+
+    results = search_personal_reference_chunks(
+        generation_db,
+        sso_user_id="user-1",
+        query="你是谁",
+        cipher=_cipher(),
+        include_personal_references=True,
+    )
+
+    assert results == []
+
+
+def test_hybrid_search_returns_structured_sheet_metadata_for_product_terms(generation_db) -> None:
+    from app.knowledge_search import search_knowledge_chunks
+
+    product_file, chunks = _add_file(
+        generation_db,
+        user_id="admin",
+        name="产品参数.txt",
+        text="产品参数\n型号：WDSP-200\n管理端口：8443\n标准号：GB/T 22239",
+        visibility="PUBLIC",
+        usage_type="official_knowledge",
+        review_status="official",
+        rag_enabled=True,
+        rag_scope="company",
+        permission_scope="company",
+    )
+    chunks[0].section_title = "产品参数"
+    chunks[0].metadata_json = {
+        **(chunks[0].metadata_json or {}),
+        "section_path": "产品参数",
+        "page_or_sheet": "参数Sheet",
+        "chunk_type": "sheet_rows",
+        "keywords": ["WDSP-200", "8443", "GB/T 22239"],
+    }
+    _add_file(
+        generation_db,
+        user_id="admin",
+        name="通用安全服务.txt",
+        text="安全服务 安全服务 安全服务 安全服务 安全服务，不包含产品型号。",
+        visibility="PUBLIC",
+        usage_type="official_knowledge",
+        review_status="official",
+        rag_enabled=True,
+        rag_scope="company",
+        permission_scope="company",
+    )
+    generation_db.commit()
+
+    results = search_knowledge_chunks(
+        generation_db,
+        sso_user_id="user-1",
+        query="WDSP-200 8443",
+        cipher=_cipher(),
+        top_k=8,
+    )
+
+    assert results
+    assert results[0].file_uuid == product_file.uuid
+    assert results[0].section_path == "产品参数"
+    assert results[0].page_or_sheet == "参数Sheet"
+    assert results[0].chunk_type == "sheet_rows"
+    assert results[0].score > 0
+
+
+def test_hybrid_search_limits_final_context_to_top_eight(generation_db) -> None:
+    from app.knowledge_search import search_knowledge_chunks
+
+    for index in range(12):
+        _add_file(
+            generation_db,
+            user_id="admin",
+            name=f"候选资料-{index}.txt",
+            text=f"一、安全服务\n候选 {index} 包含安全服务、产品型号 WDSP 和端口 8443。",
+            visibility="PUBLIC",
+            usage_type="official_knowledge",
+            review_status="official",
+            rag_enabled=True,
+            rag_scope="company",
+            permission_scope="company",
+        )
+
+    results = search_knowledge_chunks(
+        generation_db,
+        sso_user_id="user-1",
+        query="安全服务 WDSP 8443",
+        cipher=_cipher(),
+        top_k=30,
+    )
+
+    assert len(results) == 8
+    assert len({result.chunk_id for result in results}) == len(results)
+
+
+def test_hybrid_retriever_merges_vector_only_and_bm25_candidates(generation_db) -> None:
+    from app.knowledge_search import EmbeddingService, search_knowledge_chunks
+
+    embedding_service = EmbeddingService()
+    vector_file, vector_chunks = _add_file(
+        generation_db,
+        user_id="admin",
+        name="语义召回资料.txt",
+        text="一、售后流程\n客户售后巡检按月执行，未直接写入查询关键词。",
+        visibility="PUBLIC",
+        usage_type="official_knowledge",
+        review_status="official",
+        rag_enabled=True,
+        rag_scope="company",
+        permission_scope="company",
+    )
+    vector_embedding = embedding_service.embed("零信任网关")
+    vector_chunks[0].metadata_json = {
+        **(vector_chunks[0].metadata_json or {}),
+        "embedding": embedding_service.to_metadata(vector_embedding),
+    }
+    vector_chunks[0].embedding_id = embedding_service.embedding_id(
+        vector_chunks[0].chunk_id,
+        vector_embedding,
+    )
+    bm25_file, _bm25_chunks = _add_file(
+        generation_db,
+        user_id="admin",
+        name="关键词资料.txt",
+        text="一、安全服务\n安全服务包含巡检、加固和应急响应。",
+        visibility="PUBLIC",
+        usage_type="official_knowledge",
+        review_status="official",
+        rag_enabled=True,
+        rag_scope="company",
+        permission_scope="company",
+    )
+    generation_db.commit()
+
+    results = search_knowledge_chunks(
+        generation_db,
+        sso_user_id="user-1",
+        query="零信任网关 安全服务",
+        cipher=_cipher(),
+        top_k=8,
+    )
+
+    file_ids = {result.file_uuid for result in results}
+    assert vector_file.uuid in file_ids
+    assert bm25_file.uuid in file_ids
+    assert len({result.chunk_id for result in results}) == len(results)

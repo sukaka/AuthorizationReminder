@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { HttpResponse, http } from 'msw';
 import { beforeEach, expect, it, vi } from 'vitest';
@@ -17,6 +17,35 @@ vi.mock('../src/local/modelStream', () => ({
 }));
 
 beforeEach(() => {
+  server.use(
+    http.get('/api/knowledge/categories', () => HttpResponse.json({
+      items: [{
+        category_id: 'category-personal',
+        name: '个人素材',
+        parent_category_id: '',
+        parent_name: '',
+        scope: 'personal',
+        sort_order: 10,
+        status: 'ACTIVE',
+        file_count: 0,
+        created_at: '2026-06-20T08:00:00Z',
+        updated_at: '2026-06-20T08:00:00Z',
+      }],
+      total: 1,
+    })),
+    http.get('/api/knowledge/document-types', () => HttpResponse.json({
+      items: [{
+        document_type_id: 'document-type-other',
+        name: '其他',
+        sort_order: 10,
+        status: 'ACTIVE',
+        file_count: 0,
+        created_at: '2026-06-20T08:00:00Z',
+        updated_at: '2026-06-20T08:00:00Z',
+      }],
+      total: 1,
+    })),
+  );
   invokeMock.mockReset();
   invokeMock.mockImplementation((command: string) => {
     if (command === 'model_profile_list') {
@@ -94,6 +123,215 @@ it('sends a normal chat message, streams output, and completes it', async () => 
   ));
 });
 
+it('shows only cited files mentioned in the final answer', async () => {
+  server.use(
+    http.get('/api/conversations', () => HttpResponse.json({ items: [], total: 0 })),
+    http.post('/api/ai/chat/prepare', () => HttpResponse.json({
+      session_uuid: 'session-citation-filter',
+      user_message_uuid: 'user-message-citation-filter',
+      assistant_message_uuid: 'assistant-message-citation-filter',
+      completion_token: 'complete-citation-filter',
+      completed: false,
+      answer: '',
+      messages: [
+        { role: 'system', content: '你是聚信 AI 助手' },
+        { role: 'user', content: '安全服务包含什么' },
+      ],
+      citations: [
+        {
+          source_type: 'official_knowledge',
+          file_uuid: 'file-used',
+          file_name: '安全白皮书.txt',
+          chunk_id: 'chunk-used',
+          section_title: '安全服务',
+          chunk_index: 0,
+          score: 9,
+        },
+        {
+          source_type: 'official_knowledge',
+          file_uuid: 'file-unused',
+          file_name: '销售手册.txt',
+          chunk_id: 'chunk-unused',
+          section_title: '安全服务',
+          chunk_index: 0,
+          score: 8,
+        },
+      ],
+    }, { status: 201 })),
+    http.post('/api/ai/chat/messages/assistant-message-citation-filter/complete', () => HttpResponse.json({
+      message_uuid: 'assistant-message-citation-filter',
+      status: 'COMPLETED',
+    })),
+  );
+  generateLocalModelMock.mockResolvedValue({
+    output: '根据《安全白皮书》，安全服务包含应急响应和运维巡检。',
+    latencyMs: 12,
+    usage: { output_tokens: 8 },
+  });
+
+  render(<ChatPage />);
+  await userEvent.type(await screen.findByLabelText('告诉我你想完成什么工作'), '安全服务包含什么');
+  await userEvent.click(screen.getByRole('button', { name: '发送' }));
+
+  expect(await screen.findByText('根据《安全白皮书》，安全服务包含应急响应和运维巡检。')).toBeInTheDocument();
+  const citationSummary = screen.getByText('引用文件 1 个');
+  const citationDetails = citationSummary.closest('details');
+  expect(citationDetails).not.toHaveAttribute('open');
+  expect(screen.getByText('安全白皮书.txt')).not.toBeVisible();
+  await userEvent.click(citationSummary);
+  expect(screen.getByText('安全白皮书.txt')).toBeVisible();
+  expect(screen.queryByText('销售手册.txt')).not.toBeInTheDocument();
+});
+
+it('does not show citations until the assistant answer is fully completed', async () => {
+  let resolveModel: ((value: { output: string; latencyMs: number; usage: { output_tokens: number } }) => void) | undefined;
+  server.use(
+    http.get('/api/conversations', () => HttpResponse.json({ items: [], total: 0 })),
+    http.post('/api/ai/chat/prepare', () => HttpResponse.json({
+      session_uuid: 'session-citation-stream',
+      user_message_uuid: 'user-message-citation-stream',
+      assistant_message_uuid: 'assistant-message-citation-stream',
+      completion_token: 'complete-citation-stream',
+      completed: false,
+      answer: '',
+      messages: [
+        { role: 'system', content: '你是聚信 AI 助手' },
+        { role: 'user', content: '安全服务包含什么' },
+      ],
+      citations: [{
+        source_type: 'official_knowledge',
+        file_uuid: 'file-stream',
+        file_name: '安全白皮书.txt',
+        chunk_id: 'chunk-stream',
+        section_title: '安全服务',
+        chunk_index: 0,
+        score: 9,
+      }],
+    }, { status: 201 })),
+    http.post('/api/ai/chat/messages/assistant-message-citation-stream/complete', () => HttpResponse.json({
+      message_uuid: 'assistant-message-citation-stream',
+      status: 'COMPLETED',
+    })),
+  );
+  generateLocalModelMock.mockImplementation(async (_input, onDelta) => {
+    onDelta('根据《安全白皮书.txt》');
+    return new Promise((resolve) => {
+      resolveModel = resolve;
+    });
+  });
+
+  render(<ChatPage />);
+  await userEvent.type(await screen.findByLabelText('告诉我你想完成什么工作'), '安全服务包含什么');
+  await userEvent.click(screen.getByRole('button', { name: '发送' }));
+
+  expect(await screen.findByText('根据《安全白皮书.txt》')).toBeInTheDocument();
+  expect(screen.queryByText('引用文件 1 个')).not.toBeInTheDocument();
+
+  resolveModel?.({
+    output: '根据《安全白皮书.txt》，安全服务包含应急响应和运维巡检。',
+    latencyMs: 12,
+    usage: { output_tokens: 8 },
+  });
+
+  expect(await screen.findByText('引用文件 1 个')).toBeInTheDocument();
+});
+
+it('captures a web URL and shows a confirmation card before saving', async () => {
+  const prepareRequest = vi.fn();
+  const confirmRequest = vi.fn();
+  server.use(
+    http.get('/api/conversations', () => HttpResponse.json({ items: [], total: 0 })),
+    http.post('/api/ai/chat/prepare', async ({ request }) => {
+      prepareRequest(await request.json());
+      return HttpResponse.json({}, { status: 500 });
+    }),
+    http.post('/api/web/captures/preview', () => HttpResponse.json({
+      capture_id: 'capture-1',
+      title: 'WDSP 白皮书',
+      site_name: '聚信官网',
+      url: 'https://example.com/wdsp',
+      final_url: 'https://example.com/wdsp',
+      fetched_at: '2026-07-03T06:00:00Z',
+      published_at: '2026-07-01',
+      word_count: 1280,
+      summary: '介绍 WEB 动态安全管理平台能力。',
+      suggested_category: '产品资料',
+      suggested_document_type: '产品白皮书',
+      validity: '已完成安全校验，仅提取正文文本',
+      scope: '确认前仅本次预览，不会写入正式知识库',
+    }, { status: 201 })),
+    http.post('/api/web/captures/capture-1/confirm', async ({ request }) => {
+      confirmRequest(await request.json());
+      return HttpResponse.json({
+        capture_id: 'capture-1',
+        status: 'saved',
+        save_target: 'personal_reference',
+        knowledge_file_uuid: 'file-web-1',
+        message: '网页内容已保存到我的资料',
+      });
+    }),
+  );
+
+  render(<ChatPage />);
+  await userEvent.type(
+    await screen.findByLabelText('告诉我你想完成什么工作'),
+    '抓取这个网页内容 https://example.com/wdsp',
+  );
+  await userEvent.click(screen.getByRole('button', { name: '发送' }));
+
+  expect(await screen.findByText('已抓取网页内容，请确认是否保存')).toBeInTheDocument();
+  expect(screen.getByText('WDSP 白皮书')).toBeInTheDocument();
+  expect(screen.getByText('聚信官网')).toBeInTheDocument();
+  expect(screen.getByText('产品资料')).toBeInTheDocument();
+  expect(screen.getByText('产品白皮书')).toBeInTheDocument();
+  expect(prepareRequest).not.toHaveBeenCalled();
+
+  await userEvent.click(screen.getByRole('button', { name: '保存到我的资料' }));
+  await waitFor(() => expect(confirmRequest).toHaveBeenCalledWith(expect.objectContaining({
+    save_target: 'personal_reference',
+    category: '产品资料',
+    document_type: '产品白皮书',
+  })));
+  expect(await screen.findByText('网页内容已保存到我的资料')).toBeInTheDocument();
+});
+
+it('shows web capture failure without blocking later normal chat', async () => {
+  const prepareRequest = vi.fn();
+  server.use(
+    http.get('/api/conversations', () => HttpResponse.json({ items: [], total: 0 })),
+    http.post('/api/web/captures/preview', () => HttpResponse.json({
+      detail: '不允许采集本机或内网地址',
+    }, { status: 422 })),
+    http.post('/api/ai/chat/prepare', async ({ request }) => {
+      prepareRequest(await request.json());
+      return HttpResponse.json({
+        session_uuid: 'session-after-web-fail',
+        user_message_uuid: 'user-after-web-fail',
+        assistant_message_uuid: 'assistant-after-web-fail',
+        completion_token: 'complete-after-web-fail',
+        completed: true,
+        answer: '可以继续普通聊天。',
+        messages: [],
+        citations: [],
+      }, { status: 201 });
+    }),
+  );
+
+  render(<ChatPage />);
+  const input = await screen.findByLabelText('告诉我你想完成什么工作');
+  await userEvent.type(input, '抓取 http://127.0.0.1:8000');
+  await userEvent.click(screen.getByRole('button', { name: '发送' }));
+
+  expect(await screen.findByText('不允许采集本机或内网地址')).toBeInTheDocument();
+  await userEvent.type(input, '你好');
+  await userEvent.click(screen.getByRole('button', { name: '发送' }));
+
+  expect(await screen.findByText('可以继续普通聊天。')).toBeInTheDocument();
+  await waitFor(() => expect(prepareRequest).toHaveBeenCalledWith(expect.objectContaining({
+    question: '你好',
+  })));
+});
+
 it('renders a Codex-like composer and sends with Enter', async () => {
   const completeRequest = vi.fn();
   server.use(
@@ -128,12 +366,52 @@ it('renders a Codex-like composer and sends with Enter', async () => {
   render(<ChatPage />);
 
   expect(await screen.findByRole('region', { name: '私人工作助理工作区' })).toBeInTheDocument();
-  expect(screen.getByRole('form', { name: '工作输入区' })).toBeInTheDocument();
+  const composer = screen.getByRole('form', { name: '工作输入区' });
+  expect(composer).toBeInTheDocument();
+  expect(within(composer).queryByText('告诉我你想完成什么工作', { selector: 'label' })).not.toBeInTheDocument();
+  expect(screen.getByPlaceholderText('告诉我你想完成什么工作...')).toBeInTheDocument();
   expect(screen.getByRole('combobox', { name: '助手模式' })).toHaveValue('normal');
   await userEvent.type(screen.getByLabelText('告诉我你想完成什么工作'), '写一份会议纪要{enter}');
 
   expect(await screen.findByText('会议纪要已生成')).toBeInTheDocument();
   await waitFor(() => expect(completeRequest).toHaveBeenCalled());
+});
+
+it('does not send with Enter while an IME composition is active', async () => {
+  const prepareRequest = vi.fn();
+  server.use(
+    http.get('/api/conversations', () => HttpResponse.json({ items: [], total: 0 })),
+    http.post('/api/ai/chat/prepare', async ({ request }) => {
+      prepareRequest(await request.json());
+      return HttpResponse.json({
+        session_uuid: 'session-ime',
+        user_message_uuid: 'user-message-ime',
+        assistant_message_uuid: 'assistant-message-ime',
+        completion_token: 'complete-ime',
+        completed: false,
+        answer: '',
+        messages: [
+          { role: 'system', content: '你是聚信 AI 助手' },
+          { role: 'user', content: 'ni' },
+        ],
+        citations: [],
+      }, { status: 201 });
+    }),
+  );
+
+  render(<ChatPage />);
+  const input = await screen.findByLabelText('告诉我你想完成什么工作');
+  await userEvent.type(input, 'ni');
+  fireEvent.keyDown(input, {
+    key: 'Enter',
+    code: 'Enter',
+    isComposing: true,
+    keyCode: 229,
+  });
+
+  expect(prepareRequest).not.toHaveBeenCalled();
+  expect(input).toHaveValue('ni');
+  expect(screen.queryByText('正在生成…')).not.toBeInTheDocument();
 });
 
 it('shows static prompt examples and keeps new chat out of the history pane', async () => {
@@ -147,8 +425,8 @@ it('shows static prompt examples and keeps new chat out of the history pane', as
   expect(screen.getByText('我是你的私人工作助理，可以帮你写、查、整理、生成和导出工作成果。')).toBeInTheDocument();
   const historyPane = screen.getByLabelText('历史任务');
   expect(within(historyPane).queryByRole('button', { name: '开启新任务' })).not.toBeInTheDocument();
-  expect(screen.getByLabelText('示例提示')).toHaveTextContent('写一份安全运维服务方案');
-  expect(screen.queryByRole('button', { name: '写一份安全运维服务方案' })).not.toBeInTheDocument();
+  expect(screen.getByLabelText('示例提示')).toHaveTextContent('写一份项目方案');
+  expect(screen.queryByRole('button', { name: '写一份项目方案' })).not.toBeInTheDocument();
 });
 
 it('requests chat history without browser cache so 304 responses do not break loading', async () => {
@@ -256,7 +534,7 @@ it('lets users choose whether chat should reference personal materials and sessi
         completed: false,
         answer: '',
         messages: [
-          { role: 'system', content: '你是聚信 AI 助手，已带入个人参考资料和当前会话附件。' },
+          { role: 'system', content: '你是聚信 AI 助手，已带入个人参考资料和当前附件。' },
           { role: 'user', content: '根据我的资料生成会议纪要' },
         ],
         citations: [],
@@ -278,10 +556,10 @@ it('lets users choose whether chat should reference personal materials and sessi
   render(<ChatPage />);
 
   await userEvent.selectOptions(
-    await screen.findByRole('combobox', { name: '引用资料' }),
+    await screen.findByRole('combobox', { name: '参考资料' }),
     'personal_and_session',
   );
-  await userEvent.type(screen.getByLabelText('告诉小聚你要完成什么'), '根据我的资料生成会议纪要');
+  await userEvent.type(screen.getByLabelText('告诉我你想完成什么工作'), '根据我的资料生成会议纪要');
   await userEvent.click(screen.getByRole('button', { name: '发送' }));
 
   expect(await screen.findByText('已结合我的资料生成会议纪要。')).toBeInTheDocument();
@@ -328,21 +606,21 @@ it('offers composer shortcuts for knowledge base personal materials and session 
 
   render(<ChatPage />);
 
-  const composer = await screen.findByRole('form', { name: '对话输入区' });
-  const modeSelect = screen.getByRole('combobox', { name: '聊天模式' });
-  const referenceSelect = screen.getByRole('combobox', { name: '引用资料' });
-  expect(within(composer).getByRole('button', { name: '知识库' })).toBeInTheDocument();
+  const composer = await screen.findByRole('form', { name: '工作输入区' });
+  const modeSelect = screen.getByRole('combobox', { name: '助手模式' });
+  const referenceSelect = screen.getByRole('combobox', { name: '参考资料' });
+  expect(within(composer).getByRole('button', { name: '查公司知识' })).toBeInTheDocument();
   expect(within(composer).getByRole('button', { name: '我的资料' })).toBeInTheDocument();
   expect(within(composer).getByRole('button', { name: '当前附件' })).toBeInTheDocument();
 
-  await userEvent.click(within(composer).getByRole('button', { name: '知识库' }));
+  await userEvent.click(within(composer).getByRole('button', { name: '查公司知识' }));
   expect(modeSelect).toHaveValue('knowledge');
   expect(referenceSelect).toHaveValue('official_only');
 
   await userEvent.click(within(composer).getByRole('button', { name: '我的资料' }));
   expect(referenceSelect).toHaveValue('with_personal');
 
-  await userEvent.type(screen.getByLabelText('告诉小聚你要完成什么'), '参考我的资料写纪要');
+  await userEvent.type(screen.getByLabelText('告诉我你想完成什么工作'), '参考我的资料写纪要');
   await userEvent.click(screen.getByRole('button', { name: '发送' }));
 
   expect(await screen.findByText('已参考我的资料生成纪要。')).toBeInTheDocument();
@@ -355,8 +633,98 @@ it('offers composer shortcuts for knowledge base personal materials and session 
   ));
 });
 
+it('shows uploaded session attachments as a compact attachment bar', async () => {
+  let prepareCount = 0;
+  server.use(
+    http.get('/api/conversations', () => HttpResponse.json({ items: [], total: 0 })),
+    http.post('/api/ai/chat/prepare', () => {
+      prepareCount += 1;
+      return HttpResponse.json({
+        session_uuid: 'session-attachment-bar',
+        user_message_uuid: `user-message-attachment-bar-${prepareCount}`,
+        assistant_message_uuid: `assistant-message-attachment-bar-${prepareCount}`,
+        completion_token: `complete-attachment-bar-${prepareCount}`,
+        completed: false,
+        answer: '',
+        messages: [
+          { role: 'system', content: '你是聚信 AI 助手。' },
+          { role: 'user', content: prepareCount === 1 ? '开启任务' : '参考附件整理' },
+        ],
+        citations: [],
+      }, { status: 201 });
+    }),
+    http.post('/api/ai/chat/messages/:messageId/complete', () => {
+      return HttpResponse.json({
+        message_uuid: 'assistant-message-attachment-bar',
+        status: 'COMPLETED',
+      });
+    }),
+    http.post('/api/knowledge/files/upload', () => {
+      return HttpResponse.json({
+        file_uuid: 'file-current-attachment',
+        file_name: 'WEB动态安全管理平台白皮书v3.1.docx',
+        file_type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        file_size: 128,
+        visibility: 'PRIVATE',
+        status: 'READY',
+        chunk_count: 3,
+        source_type: 'session_attachment',
+        usage_type: 'session_attachment',
+        review_status: 'draft',
+        rag_enabled: false,
+        reference_enabled: true,
+        rag_scope: 'session',
+        permission_scope: 'private',
+        category: '当前附件',
+        document_type: '临时附件',
+        tags: [],
+        parse_status: 'parsed',
+        index_status: 'indexed',
+        created_at: '2026-06-26T01:00:00Z',
+      }, { status: 201 });
+    }),
+  );
+  generateLocalModelMock.mockResolvedValue({
+    output: '任务已开启。',
+    latencyMs: 10,
+    usage: { output_tokens: 4 },
+  });
+
+  render(<ChatPage />);
+
+  await userEvent.type(await screen.findByLabelText('告诉我你想完成什么工作'), '开启任务');
+  await userEvent.click(screen.getByRole('button', { name: '发送' }));
+  expect(await screen.findByText('任务已开启。')).toBeInTheDocument();
+
+  await userEvent.upload(
+    screen.getByLabelText('上传资料'),
+    new File(['白皮书内容'], 'WEB动态安全管理平台白皮书v3.1.docx', {
+      type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    }),
+  );
+  const dialog = await screen.findByRole('dialog', { name: '上传资料' });
+  await userEvent.click(within(dialog).getByRole('radio', { name: '仅用于当前任务' }));
+  await userEvent.click(within(dialog).getByRole('button', { name: '开始上传' }));
+
+  const attachmentBar = await screen.findByRole('region', { name: '当前附件' });
+  expect(attachmentBar).toHaveClass('chat-attachment-bar');
+  expect(within(attachmentBar).getByText('DOCX')).toBeInTheDocument();
+  expect(within(attachmentBar).getByText('WEB动态安全管理平台白皮书v3.1.docx')).toBeInTheDocument();
+  expect(within(attachmentBar).getByText('当前附件')).toBeInTheDocument();
+  expect(within(attachmentBar).getByRole('button', {
+    name: '移除附件：WEB动态安全管理平台白皮书v3.1.docx',
+  })).toBeInTheDocument();
+  expect(screen.queryByRole('region', { name: '当前参考资料' })).not.toBeInTheDocument();
+  expect(screen.queryByText('这些资料只作为本次任务的参考资料，不会进入公司知识库。')).not.toBeInTheDocument();
+});
+
 it('exports an assistant reply to Word from the chat message actions', async () => {
   const exportRequest = vi.fn();
+  const writeText = vi.fn().mockResolvedValue(undefined);
+  Object.defineProperty(navigator, 'clipboard', {
+    configurable: true,
+    value: { writeText },
+  });
   server.use(
     http.get('/api/conversations', () => HttpResponse.json({ items: [], total: 0 })),
     http.post('/api/ai/chat/prepare', () => HttpResponse.json({
@@ -426,7 +794,7 @@ it('exports an assistant reply to Word from the chat message actions', async () 
   });
 
   render(<ChatPage />);
-  await userEvent.type(await screen.findByLabelText('告诉小聚你要完成什么'), '输出交付方案');
+  await userEvent.type(await screen.findByLabelText('告诉我你想完成什么工作'), '输出交付方案');
   await userEvent.click(screen.getByRole('button', { name: '发送' }));
   expect(await screen.findByText('聚信交付方案内容')).toBeInTheDocument();
 
@@ -440,7 +808,17 @@ it('exports an assistant reply to Word from the chat message actions', async () 
       template: 'juxin_standard',
     }),
   ));
-  expect(await screen.findByText('Word 已保存到：/Users/test/Downloads/chat.docx')).toBeInTheDocument();
+  const exportDialog = await screen.findByRole('dialog', { name: 'Word 已导出成功' });
+  expect(within(exportDialog).getByText('文件已保存到下载目录。')).toBeInTheDocument();
+  expect(within(exportDialog).getByRole('button', { name: '打开文件' })).toBeInTheDocument();
+  await userEvent.click(within(exportDialog).getByRole('button', { name: '复制路径' }));
+  expect(writeText).toHaveBeenCalledWith('/Users/test/Downloads/chat.docx');
+  expect(await within(exportDialog).findByText('路径已复制')).toBeInTheDocument();
+  const historyPane = screen.getByLabelText('历史任务');
+  expect(within(historyPane).queryByText(/Word 已保存到/)).not.toBeInTheDocument();
+  expect(within(historyPane).queryByText('/Users/test/Downloads/chat.docx')).not.toBeInTheDocument();
+  await userEvent.click(within(exportDialog).getByRole('button', { name: '关闭' }));
+  await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Word 已导出成功' })).not.toBeInTheDocument());
 });
 
 it('runs quality check and revises a weak loop answer before completing chat', async () => {
@@ -500,8 +878,8 @@ it('runs quality check and revises a weak loop answer before completing chat', a
     });
 
   render(<ChatPage />);
-  await userEvent.selectOptions(await screen.findByRole('combobox', { name: '聊天模式' }), 'business');
-  await userEvent.type(screen.getByLabelText('告诉小聚你要完成什么'), '帮我写投标响应');
+  await userEvent.selectOptions(await screen.findByRole('combobox', { name: '助手模式' }), 'business');
+  await userEvent.type(screen.getByLabelText('告诉我你想完成什么工作'), '帮我写投标响应');
   await userEvent.click(screen.getByRole('button', { name: '发送' }));
 
   expect(await screen.findByText(/聚信得仁商务投标响应建议/)).toBeInTheDocument();
@@ -529,8 +907,8 @@ it('shows fixed no-evidence answer in knowledge mode without calling model', asy
   );
 
   render(<ChatPage />);
-  await userEvent.selectOptions(await screen.findByRole('combobox', { name: '聊天模式' }), 'knowledge');
-  await userEvent.type(screen.getByLabelText('告诉小聚你要完成什么'), '不存在的客户报价');
+  await userEvent.selectOptions(await screen.findByRole('combobox', { name: '助手模式' }), 'knowledge');
+  await userEvent.type(screen.getByLabelText('告诉我你想完成什么工作'), '不存在的客户报价');
   await userEvent.click(screen.getByRole('button', { name: '发送' }));
 
   expect(await screen.findByText('当前知识库未找到明确依据')).toBeInTheDocument();
@@ -561,8 +939,8 @@ it('allows knowledge no-evidence answer before model configuration is completed'
   );
 
   render(<ChatPage />);
-  await userEvent.selectOptions(await screen.findByRole('combobox', { name: '聊天模式' }), 'knowledge');
-  await userEvent.type(screen.getByLabelText('告诉小聚你要完成什么'), '不存在的资料编号');
+  await userEvent.selectOptions(await screen.findByRole('combobox', { name: '助手模式' }), 'knowledge');
+  await userEvent.type(screen.getByLabelText('告诉我你想完成什么工作'), '不存在的资料编号');
   await userEvent.click(screen.getByRole('button', { name: '发送' }));
 
   expect(await screen.findByText('当前正式知识库中未找到明确依据')).toBeInTheDocument();
@@ -605,7 +983,7 @@ it('loads messages when selecting a historical chat session', async () => {
         {
           message_uuid: 'm-assistant',
           role: 'assistant',
-          content: '会议决定下周验收。',
+          content: '根据《会议记录》，会议决定下周验收。',
           status: 'COMPLETED',
           citations: [{
             source_type: 'knowledge_file',
@@ -626,11 +1004,11 @@ it('loads messages when selecting a historical chat session', async () => {
   await userEvent.click(await screen.findByRole('button', { name: '会议纪要' }));
 
   expect(await screen.findByText('总结会议')).toBeInTheDocument();
-  expect(screen.getByText('会议决定下周验收。')).toBeInTheDocument();
-  expect(screen.getByText(/会议记录\.txt/)).toBeInTheDocument();
+  expect(screen.getByText('根据《会议记录》，会议决定下周验收。')).toBeInTheDocument();
+  expect(within(screen.getByRole('list', { name: '引用文件' })).getByText('会议记录.txt')).toBeInTheDocument();
 });
 
-it('labels official, personal, and session attachment citations with user-facing source boundaries', async () => {
+it('shows cited file names once without exposing chunk details', async () => {
   server.use(
     http.get('/api/conversations', () => HttpResponse.json({
       items: [{
@@ -653,7 +1031,7 @@ it('labels official, personal, and session attachment citations with user-facing
       messages: [{
         message_uuid: 'm-assistant-source-labels',
         role: 'assistant',
-        content: '根据资料整理完成。',
+        content: '根据《聚信产品白皮书.pdf》《我的会议记录.docx》《客户访谈记录.pdf》整理完成。',
         status: 'COMPLETED',
         citations: [
           {
@@ -662,16 +1040,31 @@ it('labels official, personal, and session attachment citations with user-facing
             file_name: '聚信产品白皮书.pdf',
             chunk_id: 'official-secret-chunk',
             page_number: 12,
+            page_or_sheet: '产品参数',
             section_title: '部署方式',
+            chunk_type: 'sheet_rows',
             chunk_index: 0,
             score: 9,
+          },
+          {
+            source_type: 'official_knowledge',
+            file_uuid: 'official-file',
+            file_name: '聚信产品白皮书.pdf',
+            chunk_id: 'official-another-secret-chunk',
+            page_or_sheet: '产品参数',
+            section_title: '',
+            chunk_type: 'sheet_rows',
+            chunk_index: 1,
+            score: 8,
           },
           {
             source_type: 'personal_reference',
             file_uuid: 'personal-file',
             file_name: '我的会议记录.docx',
             chunk_id: 'personal-secret-chunk',
+            page_or_sheet: '会议纪要',
             section_title: '会议讨论内容',
+            chunk_type: 'text',
             chunk_index: 0,
             score: 8,
           },
@@ -681,7 +1074,9 @@ it('labels official, personal, and session attachment citations with user-facing
             file_name: '客户访谈记录.pdf',
             chunk_id: 'session-secret-chunk',
             page_number: 3,
+            page_or_sheet: '访谈记录',
             section_title: '客户诉求',
+            chunk_type: 'text',
             chunk_index: 0,
             score: 7,
           },
@@ -694,10 +1089,19 @@ it('labels official, personal, and session attachment citations with user-facing
   render(<ChatPage />);
   await userEvent.click(await screen.findByRole('button', { name: '来源标签' }));
 
-  expect(await screen.findByText('聚信产品白皮书.pdf / 公司知识库 / 正式知识来源 / 第 12 页，部署方式')).toBeInTheDocument();
-  expect(screen.getByText('我的会议记录.docx / 我的上传文件，仅用于本次内容生成 / 会议讨论内容')).toBeInTheDocument();
-  expect(screen.getByText('客户访谈记录.pdf / 当前会话附件 / 第 3 页，客户诉求')).toBeInTheDocument();
-  expect(screen.queryByText(/secret-chunk/)).not.toBeInTheDocument();
+  expect(await screen.findByText('引用文件 3 个')).toBeInTheDocument();
+  const citationList = screen.getByRole('list', { name: '引用文件' });
+  expect(within(citationList).getAllByText('聚信产品白皮书.pdf')).toHaveLength(1);
+  expect(within(citationList).getByText('我的会议记录.docx')).toBeInTheDocument();
+  expect(within(citationList).getByText('客户访谈记录.pdf')).toBeInTheDocument();
+  expect(within(citationList).getByText('产品参数 · 部署方式 · 第 12 页')).toBeInTheDocument();
+  expect(within(citationList).getByText('会议纪要 · 会议讨论内容')).toBeInTheDocument();
+  expect(within(citationList).getByText('访谈记录 · 客户诉求 · 第 3 页')).toBeInTheDocument();
+  expect(within(citationList).getByText('公司知识库')).toBeInTheDocument();
+  expect(within(citationList).getByText('我的资料')).toBeInTheDocument();
+  expect(within(citationList).getByText('当前附件')).toBeInTheDocument();
+  expect(within(citationList).queryByText(/未识别章节|正式知识来源/)).not.toBeInTheDocument();
+  expect(within(citationList).queryByText(/secret-chunk/)).not.toBeInTheDocument();
 });
 
 it('opens a source preview focused on the cited chunk', async () => {
@@ -725,7 +1129,7 @@ it('opens a source preview focused on the cited chunk', async () => {
         {
           message_uuid: 'm-assistant-preview',
           role: 'assistant',
-          content: '根据正式知识库资料，验收时需要提交测试报告。',
+          content: '根据《交付手册.docx》，验收时需要提交测试报告。',
           status: 'COMPLETED',
           citations: [{
             source_type: 'official_knowledge',
@@ -757,7 +1161,9 @@ it('opens a source preview focused on the cited chunk', async () => {
           chunk_id: 'chunk-target',
           chunk_index: 2,
           page_number: 6,
-          section_title: '验收交付物',
+          page_or_sheet: '第 6 页',
+          section_title: '',
+          chunk_type: 'text',
           text: '验收交付物包括测试报告、部署记录和培训签到表。',
         }],
       });
@@ -773,7 +1179,9 @@ it('opens a source preview focused on the cited chunk', async () => {
     topK: '1',
   }));
   expect(await screen.findByRole('region', { name: '来源预览' })).toBeInTheDocument();
+  expect(screen.getByText('第 6 页')).toBeInTheDocument();
   expect(screen.getByText('验收交付物包括测试报告、部署记录和培训签到表。')).toBeInTheDocument();
+  expect(screen.queryByText('未识别章节')).not.toBeInTheDocument();
   expect(screen.queryByText(/file_path|stored_file_name|storage/)).not.toBeInTheDocument();
 });
 
@@ -824,17 +1232,17 @@ it('shows upload purpose choices and submits a personal file for admin review', 
   );
 
   render(<ChatPage />);
-  await userEvent.selectOptions(await screen.findByRole('combobox', { name: '聊天模式' }), 'knowledge');
+  await userEvent.selectOptions(await screen.findByRole('combobox', { name: '助手模式' }), 'knowledge');
   await userEvent.upload(
-    await screen.findByLabelText('上传知识文件'),
+    await screen.findByLabelText('上传资料'),
     new File(['会议文字内容'], 'meeting.txt', { type: 'text/plain' }),
   );
 
   expect(await screen.findByRole('dialog', { name: '上传资料' })).toBeInTheDocument();
-  expect(screen.getByRole('radio', { name: '仅用于当前会话' })).toBeInTheDocument();
+  expect(screen.getByRole('radio', { name: '仅用于当前任务' })).toBeInTheDocument();
   expect(screen.getByRole('radio', { name: '保存到我的资料' })).toBeInTheDocument();
   expect(screen.getByRole('radio', { name: '提交管理员审核' })).toBeInTheDocument();
-  expect(screen.queryByText('加入公司知识库')).not.toBeInTheDocument();
+  expect(screen.queryByText('加入公司查公司知识')).not.toBeInTheDocument();
   expect(screen.queryByText('启用公司级 RAG')).not.toBeInTheDocument();
 
   await userEvent.click(screen.getByRole('radio', { name: '提交管理员审核' }));
@@ -854,7 +1262,7 @@ it('shows upload purpose choices and submits a personal file for admin review', 
   appendSpy.mockRestore();
 });
 
-it('enables personal reference scope after saving an uploaded material', async () => {
+it('does not enable personal references automatically after saving uploaded material', async () => {
   const uploadRequest = vi.fn();
   const prepareRequest = vi.fn();
   server.use(
@@ -894,8 +1302,8 @@ it('enables personal reference scope after saving an uploaded material', async (
         completed: false,
         answer: '',
         messages: [
-          { role: 'system', content: '你是聚信 AI 助手，已带入个人参考资料。' },
-          { role: 'user', content: '参考刚上传的会议记录生成纪要' },
+          { role: 'system', content: '你是聚信 AI 助手。' },
+          { role: 'user', content: '写一份会议纪要' },
         ],
         citations: [],
       }, { status: 201 });
@@ -908,14 +1316,14 @@ it('enables personal reference scope after saving an uploaded material', async (
     }),
   );
   generateLocalModelMock.mockResolvedValue({
-    output: '已参考个人资料生成会议纪要。',
+    output: '已生成会议纪要。',
     latencyMs: 10,
     usage: { output_tokens: 8 },
   });
 
   render(<ChatPage />);
   await userEvent.upload(
-    await screen.findByLabelText('上传知识文件'),
+    await screen.findByLabelText('上传资料'),
     new File(['会议文字内容'], '会议记录.txt', { type: 'text/plain' }),
   );
 
@@ -923,22 +1331,45 @@ it('enables personal reference scope after saving an uploaded material', async (
   await userEvent.click(screen.getByRole('button', { name: '开始上传' }));
 
   await waitFor(() => expect(uploadRequest).toHaveBeenCalled());
-  expect(await screen.findByText('资料已保存到我的资料：会议记录.txt；当前对话已启用“我的资料”引用。')).toBeInTheDocument();
-  expect(screen.getByRole('combobox', { name: '聊天模式' })).toHaveValue('knowledge');
-  expect(screen.getByRole('combobox', { name: '引用资料' })).toHaveValue('with_personal');
+  expect(await screen.findByText('资料已保存到我的资料：会议记录.txt；需要参考时可在“参考资料”中选择“我的资料”。')).toBeInTheDocument();
+  expect(screen.getByRole('combobox', { name: '助手模式' })).toHaveValue('normal');
+  expect(screen.getByRole('combobox', { name: '参考资料' })).toHaveValue('official_only');
 
-  await userEvent.type(screen.getByLabelText('告诉小聚你要完成什么'), '参考刚上传的会议记录生成纪要');
+  await userEvent.type(screen.getByLabelText('告诉我你想完成什么工作'), '写一份会议纪要');
   await userEvent.click(screen.getByRole('button', { name: '发送' }));
 
-  expect(await screen.findByText('已参考个人资料生成会议纪要。')).toBeInTheDocument();
+  expect(await screen.findByText('已生成会议纪要。')).toBeInTheDocument();
   await waitFor(() => expect(prepareRequest).toHaveBeenCalledWith(expect.objectContaining({
-    mode: 'knowledge',
-    include_personal_references: true,
+    mode: 'normal',
+    include_personal_references: false,
     include_session_attachments: false,
   })));
 });
 
-it('lets users see and turn off uploaded personal materials before sending', async () => {
+it('shows upload failures inside the upload dialog', async () => {
+  server.use(
+    http.get('/api/conversations', () => HttpResponse.json({ items: [], total: 0 })),
+    http.post('/api/knowledge/files/upload', () => HttpResponse.json({
+      detail: '资料上传失败：文件超过 100MB 上传限制，请压缩或拆分后再上传。',
+    }, { status: 413 })),
+  );
+
+  render(<ChatPage />);
+  await userEvent.upload(
+    await screen.findByLabelText('上传资料'),
+    new File(['large content'], '大文件.docx', {
+      type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    }),
+  );
+
+  const dialog = await screen.findByRole('dialog', { name: '上传资料' });
+  await userEvent.click(within(dialog).getByRole('button', { name: '开始上传' }));
+
+  expect(await within(dialog).findByText('资料上传失败：文件超过 100MB 上传限制，请压缩或拆分后再上传。')).toBeInTheDocument();
+  expect(within(dialog).getByRole('button', { name: '开始上传' })).toBeEnabled();
+});
+
+it('does not show saved personal materials as current references before sending', async () => {
   const prepareRequest = vi.fn();
   server.use(
     http.get('/api/conversations', () => HttpResponse.json({ items: [], total: 0 })),
@@ -997,20 +1428,15 @@ it('lets users see and turn off uploaded personal materials before sending', asy
 
   render(<ChatPage />);
   await userEvent.upload(
-    await screen.findByLabelText('上传知识文件'),
+    await screen.findByLabelText('上传资料'),
     new File(['项目背景内容'], '项目背景.txt', { type: 'text/plain' }),
   );
   await userEvent.click(await screen.findByRole('button', { name: '开始上传' }));
 
-  const referenceRegion = await screen.findByRole('region', { name: '当前可引用资料' });
-  expect(within(referenceRegion).getByText('项目背景.txt')).toBeInTheDocument();
-  expect(within(referenceRegion).getByText('我的资料')).toBeInTheDocument();
+  expect(screen.getByRole('combobox', { name: '参考资料' })).toHaveValue('official_only');
+  expect(screen.queryByRole('region', { name: '当前参考资料' })).not.toBeInTheDocument();
 
-  await userEvent.click(within(referenceRegion).getByRole('button', { name: '关闭引用：项目背景.txt' }));
-  expect(screen.getByRole('combobox', { name: '引用资料' })).toHaveValue('official_only');
-  expect(screen.queryByRole('region', { name: '当前可引用资料' })).not.toBeInTheDocument();
-
-  await userEvent.type(screen.getByLabelText('告诉小聚你要完成什么'), '写一段说明');
+  await userEvent.type(screen.getByLabelText('告诉我你想完成什么工作'), '写一段说明');
   await userEvent.click(screen.getByRole('button', { name: '发送' }));
 
   expect(await screen.findByText('说明已生成。')).toBeInTheDocument();
@@ -1024,7 +1450,10 @@ it('manages chat sessions across active, archive, and trash lists', async () => 
   const archiveRequest = vi.fn();
   const restoreRequest = vi.fn();
   const hardDeleteRequest = vi.fn();
-  const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+  const confirmSpy = vi.spyOn(window, 'confirm').mockImplementation(() => {
+    throw new Error('trash hard delete should not depend on browser confirm');
+  });
+  let resolveHardDelete: (() => void) | undefined;
   let activeItems = [{
     session_uuid: 'session-active',
     title: '主动会话',
@@ -1035,7 +1464,7 @@ it('manages chat sessions across active, archive, and trash lists', async () => 
   }];
   let archivedItems = [{
     session_uuid: 'session-archived',
-    title: '归档会话',
+    title: '归档任务',
     mode: 'business',
     status: 'archived',
     created_at: '2026-06-26T01:00:00Z',
@@ -1066,11 +1495,13 @@ it('manages chat sessions across active, archive, and trash lists', async () => 
       archivedItems = [];
       return HttpResponse.json({ session_uuid: 'session-archived', status: 'active' });
     }),
-    http.delete('/api/conversations/session-trash/hard-delete', () => {
+    http.delete('/api/conversations/session-trash/hard-delete', () => new Promise<Response>((resolve) => {
       hardDeleteRequest();
-      trashItems = [];
-      return new HttpResponse(null, { status: 204 });
-    }),
+      resolveHardDelete = () => {
+        trashItems = [];
+        resolve(new HttpResponse(null, { status: 204 }));
+      };
+    })),
   );
 
   render(<ChatPage />);
@@ -1080,15 +1511,23 @@ it('manages chat sessions across active, archive, and trash lists', async () => 
   await waitFor(() => expect(archiveRequest).toHaveBeenCalled());
   await waitFor(() => expect(screen.queryByRole('button', { name: '主动会话' })).not.toBeInTheDocument());
 
-  await userEvent.click(screen.getByRole('button', { name: '归档会话' }));
-  await userEvent.click(await screen.findByRole('button', { name: '恢复：归档会话' }));
+  await userEvent.click(screen.getByRole('button', { name: '归档任务' }));
+  await userEvent.click(await screen.findByRole('button', { name: '恢复：归档任务' }));
   await waitFor(() => expect(restoreRequest).toHaveBeenCalled());
 
   await userEvent.click(screen.getByRole('button', { name: '回收站' }));
   expect(await screen.findByRole('button', { name: '删除会话' })).toBeInTheDocument();
   await userEvent.click(screen.getByRole('button', { name: '彻底删除：删除会话' }));
+  const historyPane = screen.getByLabelText('历史任务');
+  const composer = screen.getByRole('form', { name: '工作输入区' });
+  expect(await within(historyPane).findByText('正在彻底删除任务…')).toBeInTheDocument();
+  expect(within(composer).queryByText('正在彻底删除任务…')).not.toBeInTheDocument();
   await waitFor(() => expect(hardDeleteRequest).toHaveBeenCalled());
-  expect(confirmSpy).toHaveBeenCalled();
+  resolveHardDelete?.();
+  await waitFor(() => expect(screen.queryByRole('button', { name: '删除会话' })).not.toBeInTheDocument());
+  expect(within(historyPane).getByText('任务已彻底删除')).toBeInTheDocument();
+  expect(within(composer).queryByText('任务已彻底删除')).not.toBeInTheDocument();
+  expect(confirmSpy).not.toHaveBeenCalled();
   confirmSpy.mockRestore();
 });
 
@@ -1130,8 +1569,8 @@ it('confirms bulk archive and bulk delete operations', async () => {
   );
 
   render(<ChatPage />);
-  await userEvent.click(await screen.findByLabelText('选择会话：批量会话 A'));
-  await userEvent.click(await screen.findByLabelText('选择会话：批量会话 B'));
+  await userEvent.click(await screen.findByLabelText('选择任务：批量会话 A'));
+  await userEvent.click(await screen.findByLabelText('选择任务：批量会话 B'));
   await userEvent.click(screen.getByRole('button', { name: '批量归档' }));
 
   await waitFor(() => expect(bulkArchiveRequest).toHaveBeenCalledWith({
@@ -1158,8 +1597,8 @@ it('confirms bulk archive and bulk delete operations', async () => {
     },
   ];
   await userEvent.click(screen.getByRole('button', { name: '正常历史' }));
-  await userEvent.click(await screen.findByLabelText('选择会话：批量会话 A'));
-  await userEvent.click(await screen.findByLabelText('选择会话：批量会话 B'));
+  await userEvent.click(await screen.findByLabelText('选择任务：批量会话 A'));
+  await userEvent.click(await screen.findByLabelText('选择任务：批量会话 B'));
   await userEvent.click(screen.getByRole('button', { name: '批量删除' }));
 
   await waitFor(() => expect(bulkDeleteRequest).toHaveBeenCalledWith({

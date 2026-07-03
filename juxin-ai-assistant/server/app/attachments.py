@@ -8,12 +8,14 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .crypto import ContentCipher, EncryptedPayload
+from .knowledge_files import _extract_blocks
 from .models import GenerationAttachment, Task
 
 
-MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024
-SUPPORTED_TEXT_SUFFIXES = {".txt", ".md", ".docx", ".pdf"}
-UNSUPPORTED_TYPE_MESSAGE = "当前仅支持 txt、md、docx"
+MAX_ATTACHMENT_MB = 100
+MAX_ATTACHMENT_BYTES = MAX_ATTACHMENT_MB * 1024 * 1024
+SUPPORTED_TEXT_SUFFIXES = {".txt", ".md", ".docx", ".xlsx", ".pptx", ".pdf"}
+UNSUPPORTED_TYPE_MESSAGE = "当前仅支持 docx、xlsx、pptx、txt、md"
 PDF_UNSUPPORTED_MESSAGE = "PDF 文本提取将在下一步启用；扫描件暂不支持 OCR"
 
 
@@ -67,6 +69,8 @@ def _extract_text(file_name: str, data: bytes) -> str:
                 status_code=422,
                 detail="文本附件必须使用 UTF-8 编码",
             ) from exc
+    if suffix in {".xlsx", ".pptx"}:
+        return "\n\n".join(block.text for block in _extract_blocks(file_name, data) if block.text.strip())
 
     return _parse_docx_text(data)
 
@@ -88,7 +92,7 @@ async def create_attachment(
     file_name = _safe_file_name(file.filename)
     content = await file.read(MAX_ATTACHMENT_BYTES + 1)
     if len(content) > MAX_ATTACHMENT_BYTES:
-        raise HTTPException(status_code=413, detail="附件大小不能超过 20 MB")
+        raise HTTPException(status_code=413, detail=f"附件大小不能超过 {MAX_ATTACHMENT_MB} MB")
 
     extracted_text = _extract_text(file_name, content)
 

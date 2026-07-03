@@ -120,7 +120,7 @@ it('shows task capability health without exposing prompt or knowledge bodies', a
 
   expect(await screen.findByText('能力健康')).toBeInTheDocument();
   expect(screen.getByText('工作总结')).toBeInTheDocument();
-  expect(screen.getByText('Prompt 已配置')).toBeInTheDocument();
+  expect(screen.getByText('内容模板已配置')).toBeInTheDocument();
   expect(screen.getByText('字段 1 个 · 知识 2 条 · ACTIVE')).toBeInTheDocument();
   expect(screen.queryByText(/prompt body|knowledge body/i)).not.toBeInTheDocument();
 });

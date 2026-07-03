@@ -113,6 +113,10 @@ function Workspace({ session }: { session: SessionPayload }) {
     setSidebarMode(mode);
   };
 
+  const toggleSidebarMode = () => {
+    chooseSidebarMode(sidebarMode === 'expanded' ? 'collapsed' : 'expanded');
+  };
+
   const logout = async () => {
     const authLogoutUrl = getAuthPortalUrl({ logout: true });
     try {
@@ -172,6 +176,15 @@ function Workspace({ session }: { session: SessionPayload }) {
               <button className="workspace-back-button" onClick={() => setPage('home')} type="button">‹ 返回工作台</button>
             ) : null}
             <strong>{pageTitle}</strong>
+            <button
+              aria-label={sidebarMode === 'expanded' ? '收起侧边栏' : '展开侧边栏'}
+              className="workspace-title-toggle"
+              onClick={toggleSidebarMode}
+              title={sidebarMode === 'expanded' ? '收起侧边栏' : '展开侧边栏'}
+              type="button"
+            >
+              {sidebarMode === 'expanded' ? '‹' : '›'}
+            </button>
           </div>
           <div className="workspace-sidebar-state" aria-label="侧边栏显示方式">
             <button className={sidebarMode === 'expanded' ? 'is-active' : ''} onClick={() => chooseSidebarMode('expanded')} type="button">展开</button>

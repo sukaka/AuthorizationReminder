@@ -289,6 +289,45 @@ class KnowledgeBase(TimestampMixin, Base):
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
+class KnowledgeCategory(TimestampMixin, Base):
+    __tablename__ = "ai_knowledge_categories"
+
+    id: Mapped[int] = mapped_column(primary_key_type, primary_key=True, autoincrement=True)
+    uuid: Mapped[str] = mapped_column(
+        String(36),
+        unique=True,
+        default=lambda: str(uuid_lib.uuid4()),
+    )
+    name: Mapped[str] = mapped_column(String(64), index=True)
+    parent_id: Mapped[int | None] = mapped_column(
+        foreign_key_type,
+        ForeignKey("ai_knowledge_categories.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    scope: Mapped[str] = mapped_column(String(24), default="company", index=True)
+    sort_order: Mapped[int] = mapped_column(Integer, default=0, index=True)
+    status: Mapped[str] = mapped_column(String(16), default="ACTIVE", index=True)
+    created_by: Mapped[str] = mapped_column(String(64), default="", index=True)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class KnowledgeDocumentType(TimestampMixin, Base):
+    __tablename__ = "ai_knowledge_document_types"
+
+    id: Mapped[int] = mapped_column(primary_key_type, primary_key=True, autoincrement=True)
+    uuid: Mapped[str] = mapped_column(
+        String(36),
+        unique=True,
+        default=lambda: str(uuid_lib.uuid4()),
+    )
+    name: Mapped[str] = mapped_column(String(64), index=True)
+    sort_order: Mapped[int] = mapped_column(Integer, default=0, index=True)
+    status: Mapped[str] = mapped_column(String(16), default="ACTIVE", index=True)
+    created_by: Mapped[str] = mapped_column(String(64), default="", index=True)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
 class KnowledgeFile(TimestampMixin, Base):
     __tablename__ = "ai_knowledge_files"
 
@@ -309,6 +348,9 @@ class KnowledgeFile(TimestampMixin, Base):
             "parse_status": "parsed",
             "index_status": "indexed",
             "source_type": "user_upload",
+            "source_origin": "upload",
+            "web_capture_id": "",
+            "source_url": "",
             "usage_type": "personal_reference",
             "review_status": "draft",
             "rag_enabled": False,
@@ -354,6 +396,9 @@ class KnowledgeFile(TimestampMixin, Base):
     parse_status: Mapped[str] = mapped_column(String(24), default="parsed", index=True)
     index_status: Mapped[str] = mapped_column(String(24), default="indexed", index=True)
     source_type: Mapped[str] = mapped_column(String(24), default="user_upload", index=True)
+    source_origin: Mapped[str] = mapped_column(String(32), default="upload", index=True)
+    web_capture_id: Mapped[str] = mapped_column(String(36), default="", index=True)
+    source_url: Mapped[str] = mapped_column(String(2048), default="")
     usage_type: Mapped[str] = mapped_column(String(32), default="personal_reference", index=True)
     review_status: Mapped[str] = mapped_column(String(24), default="draft", index=True)
     rag_enabled: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
@@ -442,6 +487,96 @@ class KnowledgeReviewLog(TimestampMixin, Base):
     old_status: Mapped[str] = mapped_column(String(24), default="")
     new_status: Mapped[str] = mapped_column(String(24), default="")
     comment: Mapped[str] = mapped_column(Text, default="")
+
+
+class WebCapture(TimestampMixin, Base):
+    __tablename__ = "ai_web_captures"
+
+    id: Mapped[int] = mapped_column(primary_key_type, primary_key=True, autoincrement=True)
+    uuid: Mapped[str] = mapped_column(
+        String(36),
+        unique=True,
+        default=lambda: str(uuid_lib.uuid4()),
+    )
+    user_id: Mapped[str] = mapped_column(String(64), index=True)
+    conversation_id: Mapped[str] = mapped_column(String(64), default="", index=True)
+    url: Mapped[str] = mapped_column(String(2048))
+    final_url: Mapped[str] = mapped_column(String(2048), default="")
+    site_name: Mapped[str] = mapped_column(String(128), default="")
+    title: Mapped[str] = mapped_column(String(255), default="")
+    summary: Mapped[str] = mapped_column(Text, default="")
+    extracted_text: Mapped[str] = mapped_column(Text, default="")
+    published_at_text: Mapped[str] = mapped_column(String(64), default="")
+    fetched_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    word_count: Mapped[int] = mapped_column(Integer, default=0)
+    suggested_category: Mapped[str] = mapped_column(String(64), default="个人素材")
+    suggested_document_type: Mapped[str] = mapped_column(String(64), default="其他")
+    status: Mapped[str] = mapped_column(String(24), default="previewed", index=True)
+    save_target: Mapped[str] = mapped_column(String(32), default="", index=True)
+    review_status: Mapped[str] = mapped_column(String(24), default="none", index=True)
+    content_hash: Mapped[str] = mapped_column(String(64), default="", index=True)
+    knowledge_file_id: Mapped[int | None] = mapped_column(
+        foreign_key_type,
+        ForeignKey("ai_knowledge_files.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    error_message: Mapped[str] = mapped_column(Text, default="")
+
+
+class WebSearchLog(TimestampMixin, Base):
+    __tablename__ = "ai_web_search_logs"
+
+    id: Mapped[int] = mapped_column(primary_key_type, primary_key=True, autoincrement=True)
+    user_id: Mapped[str] = mapped_column(String(64), index=True)
+    conversation_id: Mapped[str] = mapped_column(String(64), default="", index=True)
+    query: Mapped[str] = mapped_column(Text)
+    provider: Mapped[str] = mapped_column(String(64), default="")
+    status: Mapped[str] = mapped_column(String(24), default="pending", index=True)
+    result_count: Mapped[int] = mapped_column(Integer, default=0)
+    result_urls_json: Mapped[list] = mapped_column(JSON, default=list)
+    used_urls_json: Mapped[list] = mapped_column(JSON, default=list)
+    answer_message_id: Mapped[str] = mapped_column(String(64), default="", index=True)
+    error_message: Mapped[str] = mapped_column(Text, default="")
+
+
+class AgentToolCallLog(TimestampMixin, Base):
+    __tablename__ = "ai_agent_tool_calls"
+
+    id: Mapped[int] = mapped_column(primary_key_type, primary_key=True, autoincrement=True)
+    uuid: Mapped[str] = mapped_column(
+        String(36),
+        unique=True,
+        default=lambda: str(uuid_lib.uuid4()),
+    )
+    run_id: Mapped[str] = mapped_column(String(64), default="", index=True)
+    message_id: Mapped[str] = mapped_column(String(64), default="", index=True)
+    user_id: Mapped[str] = mapped_column(String(64), index=True)
+    conversation_id: Mapped[str] = mapped_column(String(64), default="", index=True)
+    mode: Mapped[str] = mapped_column(String(64), default="", index=True)
+    tool_name: Mapped[str] = mapped_column(String(96), index=True)
+    tool_version: Mapped[str] = mapped_column(String(32), default="")
+    status: Mapped[str] = mapped_column(String(24), default="success", index=True)
+    permission: Mapped[str] = mapped_column(String(128), default="")
+    latency_ms: Mapped[int] = mapped_column(Integer, default=0)
+    source_count: Mapped[int] = mapped_column(Integer, default=0)
+    input_summary_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    output_summary_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    error_code: Mapped[str] = mapped_column(String(64), default="", index=True)
+    error_message_safe: Mapped[str] = mapped_column(Text, default="")
+    started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class SearchCache(TimestampMixin, Base):
+    __tablename__ = "ai_search_cache"
+
+    id: Mapped[int] = mapped_column(primary_key_type, primary_key=True, autoincrement=True)
+    cache_key: Mapped[str] = mapped_column(String(128), unique=True)
+    provider: Mapped[str] = mapped_column(String(64), default="", index=True)
+    query: Mapped[str] = mapped_column(Text)
+    payload_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
 
 
 class ChatSession(TimestampMixin, Base):

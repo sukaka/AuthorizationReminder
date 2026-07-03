@@ -108,13 +108,13 @@ it('shows all assistants regardless of the signed-in department and supports tas
       token: 'signed-binding-token',
     });
   });
-  await userEvent.click(await screen.findByRole('button', { name: '全部助手' }));
+  await userEvent.click(await screen.findByRole('button', { name: '助手模式' }));
 
   for (const name of assistantNames) {
     expect(await screen.findByText(name)).toBeInTheDocument();
   }
 
-  await userEvent.type(screen.getByLabelText('搜索助手或任务'), '报价');
+  await userEvent.type(screen.getByLabelText('搜索助手模式或任务'), '报价');
   expect(await screen.findByText('报价说明生成')).toBeInTheDocument();
   expect(screen.queryByText('培训考试助手')).not.toBeInTheDocument();
   await userEvent.click(screen.getByRole('button', { name: '收藏 报价说明生成' }));
@@ -144,14 +144,14 @@ it('opens chat from the workbench without adding an extra sidebar menu', async (
   );
 
   render(<App />);
-  await userEvent.click(await screen.findByRole('button', { name: '打开 AI 对话' }));
+  await userEvent.click(await screen.findByRole('button', { name: '开启新任务' }));
 
-  expect(await screen.findByRole('region', { name: 'AI 对话工作区' })).toBeInTheDocument();
-  expect(screen.getByRole('heading', { name: '告诉小聚你想处理什么' })).toBeInTheDocument();
+  expect(await screen.findByRole('region', { name: '私人工作助理工作区' })).toBeInTheDocument();
+  expect(screen.getByRole('heading', { name: '告诉我你想完成什么工作' })).toBeInTheDocument();
   expect(screen.getByRole('button', { name: '工作台' })).toBeInTheDocument();
-  expect(screen.getByRole('button', { name: '全部助手' })).toBeInTheDocument();
-  expect(screen.getByRole('button', { name: '历史记录' })).toBeInTheDocument();
-  expect(screen.getByRole('button', { name: '个人模型' })).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: '助手模式' })).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: '工作成果' })).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: '设置' })).toBeInTheDocument();
   expect(screen.queryByRole('button', { name: '聊天' })).not.toBeInTheDocument();
 });
 

@@ -35,7 +35,7 @@ it('tests and deletes a profile without exposing its secret', async () => {
   render(<ModelProfilesPage />);
 
   expect(await screen.findByText((content) =>
-    content.includes('API Key 使用本机加密文件保存，页面无法读取明文。'),
+    content.includes('密钥会加密保存在本机，页面无法读取明文。'),
   )).toBeInTheDocument();
   expect(screen.queryByText('为什么会访问钥匙串？')).not.toBeInTheDocument();
   expect(await screen.findByText('密钥已配置')).toBeInTheDocument();

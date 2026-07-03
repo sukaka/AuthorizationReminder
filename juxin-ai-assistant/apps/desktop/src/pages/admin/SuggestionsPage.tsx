@@ -31,7 +31,7 @@ export function SuggestionsPage({ departments, admin = false }: { departments: s
     } catch { setNotice('建议提交失败，请检查部门范围。'); }
   };
   return (
-    <AdminPageState title={admin ? '建议审核' : '提交建议'} description="建议只进入审核队列，不会直接修改任务或 Prompt。">
+    <AdminPageState title={admin ? '建议审核' : '提交建议'} description="建议只进入审核队列，不会直接修改任务或内容模板。">
       {admin ? (
         <>
           <button className="secondary-action" onClick={() => void refresh()} type="button">刷新待审核建议</button>

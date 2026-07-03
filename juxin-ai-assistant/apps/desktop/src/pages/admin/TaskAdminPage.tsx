@@ -63,8 +63,8 @@ export function TaskAdminPage() {
           status: 'ACTIVE',
         },
       });
-      setNotice('任务、字段和 Prompt 绑定已保存。');
-    } catch { setNotice('保存失败；激活任务必须绑定已发布 Prompt，且字段键必须唯一有效。'); }
+      setNotice('任务、字段和内容模板绑定已保存。');
+    } catch { setNotice('保存失败；激活任务必须绑定已发布内容模板，且字段键必须唯一有效。'); }
   };
 
   const create = async (event: React.FormEvent) => {
@@ -88,16 +88,16 @@ export function TaskAdminPage() {
   };
 
   const promptBindingLabel = (status: TaskCapability['prompt_binding_status']) => {
-    if (status === 'configured') return 'Prompt 已配置';
-    if (status === 'missing') return 'Prompt 缺失';
-    return 'Prompt 需检查';
+    if (status === 'configured') return '内容模板已配置';
+    if (status === 'missing') return '内容模板缺失';
+    return '内容模板需检查';
   };
 
   return (
-    <AdminPageState title="任务管理" description="维护任务状态、字段结构与已发布 Prompt 的绑定关系。">
+    <AdminPageState title="任务管理" description="维护任务状态、字段结构与已发布内容模板的绑定关系。">
       <div className="admin-toolbar">
         <button className="primary-action" onClick={() => void refresh()} type="button">刷新任务</button>
-        <span>激活前会由服务端验证 Prompt 已发布版本。</span>
+        <span>激活前会由服务端验证内容模板已发布版本。</span>
       </div>
       <form className="inline-create" onSubmit={(event) => void create(event)}>
         <label>助手 UUID<input required value={newTask.assistant_uuid} onChange={(event) => setNewTask({ ...newTask, assistant_uuid: event.target.value })} /></label>
@@ -134,7 +134,7 @@ export function TaskAdminPage() {
         <form className="governance-editor" onSubmit={(event) => void save(event)}>
           <h2>{selected?.name || '选择任务进行编辑'}</h2>
           <label>状态<select disabled={!selected} value={status} onChange={(event) => setStatus(event.target.value as AdminTask['status'])}><option>DRAFT</option><option>ACTIVE</option><option>DISABLED</option></select></label>
-          <label>Prompt ID<input disabled={!selected} min="1" type="number" value={promptId || ''} onChange={(event) => setPromptId(Number(event.target.value))} /></label>
+          <label>内容模板 ID<input disabled={!selected} min="1" type="number" value={promptId || ''} onChange={(event) => setPromptId(Number(event.target.value))} /></label>
           <label>版本策略<select disabled={!selected} value={versionPolicy} onChange={(event) => setVersionPolicy(event.target.value as 'PUBLISHED' | 'PINNED')}><option value="PUBLISHED">跟随已发布版本</option><option value="PINNED">固定版本</option></select></label>
           {versionPolicy === 'PINNED' ? <label>固定版本<input disabled={!selected} min="1" type="number" value={promptVersion} onChange={(event) => setPromptVersion(Number(event.target.value))} /></label> : null}
           <div className="field-editor">

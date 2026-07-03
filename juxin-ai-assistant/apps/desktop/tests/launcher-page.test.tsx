@@ -106,20 +106,20 @@ describe('local launcher', () => {
     render(<LauncherPage bridge={fakeBridge()} />);
 
     expect(
-      screen.getByRole('heading', { name: '让日常工作更高效' }),
+      screen.getByRole('heading', { name: '你的私人助理' }),
     ).toBeVisible();
-    expect(screen.getByText(/十类助手，258\s*项常用任务/)).toBeVisible();
+    expect(screen.getByText(/十类私人助理，258项工作技能/)).toBeVisible();
     expect(screen.queryByText('八类助手，88 项常用任务')).not.toBeInTheDocument();
-    expect(screen.getByText(/统一 SSO\s*安全登录/)).toBeVisible();
-    expect(screen.getByText('模型密钥加密保存在本机')).toBeVisible();
+    expect(screen.getByText(/统一登录，安全接入/)).toBeVisible();
+    expect(screen.getByText('你的设置只在本机')).toBeVisible();
     expect(screen.queryByText('模型密钥保存在系统钥匙串')).not.toBeInTheDocument();
-    expect(screen.getByText('草稿与待同步内容保留在本机')).toBeVisible();
+    expect(screen.getByText('草稿我会先替你收好')).toBeVisible();
     expect(screen.getByLabelText('远程服务地址')).toBeVisible();
     expect(
       screen.getByRole('button', { name: '使用统一登录' }),
     ).toBeDisabled();
     expect(screen.getByRole('button', { name: '查看本机草稿' })).toBeEnabled();
-    expect(await screen.findByText((content) => content.includes('Agent 1.0.0'))).toBeVisible();
+    expect(await screen.findByText((content) => content.includes('版本 1.0.0'))).toBeVisible();
     expect(screen.getByRole('button', { name: '检查更新' })).toBeEnabled();
     expect(fetchSpy).not.toHaveBeenCalled();
   });
@@ -463,7 +463,7 @@ describe('local launcher', () => {
       lastSuccessfulCheckAt: null,
       currentVersion: '1.0.0',
     });
-    expect(await screen.findByText((content) => content.includes('Agent 1.0.0'))).toBeVisible();
+    expect(await screen.findByText((content) => content.includes('版本 1.0.0'))).toBeVisible();
     expect(screen.getByLabelText('远程服务地址')).toBeEnabled();
   });
 
@@ -585,7 +585,7 @@ describe('local launcher', () => {
     render(<App bridge={fakeBridge({ localLauncher: true })} />);
 
     expect(
-      await screen.findByRole('heading', { name: '让日常工作更高效' }),
+      await screen.findByRole('heading', { name: '你的私人助理' }),
     ).toBeVisible();
     await waitFor(() => expect(fetchSpy).not.toHaveBeenCalled());
   });

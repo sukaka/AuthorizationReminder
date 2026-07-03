@@ -1,8 +1,11 @@
 import os
+from datetime import UTC, datetime
 
 from sqlalchemy import select
 
 from app.knowledge_files import create_knowledge_file_from_bytes
+from app.models import WebSearchLog
+from app.web_sources import WebSearchResult
 
 
 def test_normal_chat_prepare_complete_and_detail(client_for_user) -> None:
@@ -46,16 +49,75 @@ def test_normal_chat_prepare_complete_and_detail(client_for_user) -> None:
     assert messages[1]["content"] == "今天完成了需求整理。"
 
 
+def test_latest_question_injects_web_search_context(client_for_user, monkeypatch, generation_db) -> None:
+    from app import chat_service
+
+    def fake_search(_self, query: str, *, limit: int = 5, **_kwargs) -> list[WebSearchResult]:
+        assert "最新 CVE" in query
+        return [
+            WebSearchResult(
+                title="NVD CVE-2026-12345",
+                url="https://nvd.nist.gov/vuln/detail/CVE-2026-12345",
+                site_name="nvd.nist.gov",
+                snippet="NVD 漏洞条目摘要。",
+                fetched_at=datetime(2026, 7, 3, tzinfo=UTC),
+            )
+        ]
+
+    monkeypatch.setattr(chat_service.WebSearchService, "search", fake_search)
+    client = client_for_user("user-web-search")
+
+    prepared = client.post(
+        "/api/ai/chat/prepare",
+        json={"question": "查一下最新 CVE-2026-12345 信息", "mode": "normal"},
+    )
+
+    assert prepared.status_code == 201
+    body = prepared.json()
+    assert body["completed"] is False
+    assert "【联网搜索结果】" in body["messages"][0]["content"]
+    assert "https://nvd.nist.gov/vuln/detail/CVE-2026-12345" in body["messages"][0]["content"]
+    assert body["citations"][0]["source_type"] == "web_search_context"
+    assert body["citations"][0]["file_name"] == "NVD CVE-2026-12345"
+    log = generation_db.scalar(select(WebSearchLog).where(WebSearchLog.user_id == "user-web-search"))
+    assert log is not None
+    assert log.status == "ok"
+    assert log.answer_message_id == body["assistant_message_uuid"]
+
+
+def test_plain_writing_question_does_not_trigger_web_search(client_for_user, monkeypatch) -> None:
+    from app import chat_service
+
+    search_called = False
+
+    def fake_search(_self, _query: str, *, limit: int = 5, **_kwargs) -> list[WebSearchResult]:
+        nonlocal search_called
+        search_called = True
+        return []
+
+    monkeypatch.setattr(chat_service.WebSearchService, "search", fake_search)
+    client = client_for_user("user-no-web-search")
+
+    prepared = client.post(
+        "/api/ai/chat/prepare",
+        json={"question": "帮我写一份安全运维服务方案", "mode": "normal"},
+    )
+
+    assert prepared.status_code == 201
+    assert search_called is False
+    assert "【联网搜索结果】" not in str(prepared.json())
+
+
 def test_save_knowledge_result_to_chat_history(client_for_user) -> None:
     client = client_for_user("user-1")
 
     saved = client.post(
         "/api/ai/chat/knowledge-result",
-        json={
-            "question": "验收材料需要包含什么？",
-            "answer": "文档回答：验收材料需要包含会议结论、责任人和下一步计划。",
-            "mode": "normal",
-            "sources": [
+            json={
+                "question": "验收材料需要包含什么？",
+                "answer": "根据《会议纪要模板.docx》，验收材料需要包含会议结论、责任人和下一步计划。",
+                "mode": "normal",
+                "sources": [
                 {
                     "source_kind": "personal_reference",
                     "file_id": "file-personal-1",
@@ -81,7 +143,7 @@ def test_save_knowledge_result_to_chat_history(client_for_user) -> None:
     messages = detail.json()["messages"]
     assert [message["role"] for message in messages] == ["user", "assistant"]
     assert messages[0]["content"] == "验收材料需要包含什么？"
-    assert messages[1]["content"] == "文档回答：验收材料需要包含会议结论、责任人和下一步计划。"
+    assert messages[1]["content"] == "根据《会议纪要模板.docx》，验收材料需要包含会议结论、责任人和下一步计划。"
     assert messages[1]["citations"] == [
         {
             "source_type": "personal_reference",
@@ -90,6 +152,8 @@ def test_save_knowledge_result_to_chat_history(client_for_user) -> None:
             "chunk_id": "chunk-ask-secret",
             "page_number": 2,
             "section_title": "验收材料",
+            "page_or_sheet": "",
+            "chunk_type": "",
             "chunk_index": None,
             "score": 90,
         }
@@ -108,6 +172,12 @@ def test_business_mode_adds_juxin_profile_and_role_context(client_for_user) -> N
     body = prepared.json()
     system_prompt = body["messages"][0]["content"]
     assert "北京聚信得仁科技有限公司" in system_prompt
+    assert "聚信 AI 助手" in system_prompt
+    assert "私人工作助理" in system_prompt
+    assert "等保合规云管平台 CCMP" in system_prompt
+    assert "WEB动态安全管理平台 WDSP" in system_prompt
+    assert "Web 应用防护系统 WAF" in system_prompt
+    assert "不得把本文件完整写入聊天历史" in system_prompt
     assert "商务助手" in system_prompt
     assert "投标" in system_prompt
     assert "标书" in system_prompt
@@ -115,6 +185,40 @@ def test_business_mode_adds_juxin_profile_and_role_context(client_for_user) -> N
     assert "不要把合同、报价、回款归入商务职责" in system_prompt
     assert "bid_material_loop" in system_prompt
     assert body["messages"][-1]["content"] == "帮我整理一个投标响应思路"
+
+
+def test_juxin_profile_stays_out_of_chat_history(client_for_user) -> None:
+    client = client_for_user("user-1")
+
+    prepared = client.post(
+        "/api/ai/chat/prepare",
+        json={"question": "请介绍一下 CCMP 的客户价值", "mode": "normal"},
+    )
+
+    assert prepared.status_code == 201
+    body = prepared.json()
+    assert "等保合规云管平台 CCMP" in body["messages"][0]["content"]
+
+    completed = client.post(
+        f"/api/ai/chat/messages/{body['assistant_message_uuid']}/complete",
+        json={
+            "completion_token": body["completion_token"],
+            "answer": "CCMP 可用于支撑等保合规建设、统一管控和持续运营。",
+            "model_display_name": "DeepSeek",
+            "model_id": "deepseek-chat",
+            "usage": {"output_tokens": 22},
+            "latency_ms": 280,
+        },
+    )
+
+    assert completed.status_code == 200
+    detail = client.get(f"/api/ai/chat/sessions/{body['session_uuid']}")
+    assert detail.status_code == 200
+    history_messages = detail.json()["messages"]
+    assert [message["role"] for message in history_messages] == ["user", "assistant"]
+    history_text = "\n".join(message["content"] for message in history_messages)
+    assert "等保合规云管平台 CCMP 是聚信得仁的一站式等保合规解决方案" not in history_text
+    assert "不得把本文件完整写入聊天历史" not in history_text
 
 
 def test_delivery_and_security_modes_have_distinct_juxin_focus(client_for_user) -> None:
@@ -414,6 +518,11 @@ def test_knowledge_chat_prepare_returns_citations_and_persists_sources(
         permission_scope="company",
         owner_user_id="admin",
     )
+    _chunks[0].metadata_json = {
+        **(_chunks[0].metadata_json or {}),
+        "page_or_sheet": "安全服务章节",
+        "chunk_type": "text",
+    }
     generation_db.commit()
     client = client_for_user("user-1")
 
@@ -428,6 +537,8 @@ def test_knowledge_chat_prepare_returns_citations_and_persists_sources(
     assert body["citations"][0]["file_uuid"] == file_record.uuid
     assert body["citations"][0]["file_name"] == "安全白皮书.txt"
     assert body["citations"][0]["chunk_id"]
+    assert body["citations"][0]["page_or_sheet"] == "安全服务章节"
+    assert body["citations"][0]["chunk_type"] == "text"
     assert "## official_knowledge_context" in body["messages"][0]["content"]
     assert "## personal_reference_context" in body["messages"][0]["content"]
     assert "知识库问答" in body["messages"][0]["content"]
@@ -439,7 +550,7 @@ def test_knowledge_chat_prepare_returns_citations_and_persists_sources(
         f"/api/ai/chat/messages/{body['assistant_message_uuid']}/complete",
         json={
             "completion_token": body["completion_token"],
-            "answer": "安全服务包含应急响应。",
+            "answer": "根据《安全白皮书.txt》，安全服务包含应急响应。",
             "model_display_name": "DeepSeek",
             "model_id": "deepseek-chat",
         },
@@ -451,6 +562,80 @@ def test_knowledge_chat_prepare_returns_citations_and_persists_sources(
     assert assistant["citations"][0]["source_type"] == "official_knowledge"
     assert assistant["citations"][0]["file_name"] == "安全白皮书.txt"
     assert assistant["citations"][0]["chunk_id"] == body["citations"][0]["chunk_id"]
+    assert assistant["citations"][0]["page_or_sheet"] == "安全服务章节"
+    assert assistant["citations"][0]["chunk_type"] == "text"
+
+
+def test_completed_chat_detail_only_returns_sources_mentioned_in_answer(
+    client_for_user,
+    generation_db,
+) -> None:
+    from app.crypto import ContentCipher
+
+    cipher = ContentCipher(os.environ["CONTENT_ENCRYPTION_KEY"])
+    first_file, _first_chunks = create_knowledge_file_from_bytes(
+        generation_db,
+        sso_user_id="admin",
+        file_name="安全白皮书.txt",
+        content="一、安全服务\n安全服务包含应急响应和运维巡检。".encode("utf-8"),
+        content_type="text/plain",
+        cipher=cipher,
+        key_version="v1",
+        visibility="PUBLIC",
+        source_type="admin_upload",
+        usage_type="official_knowledge",
+        review_status="official",
+        rag_enabled=True,
+        rag_scope="company",
+        permission_scope="company",
+        owner_user_id="admin",
+    )
+    second_file, _second_chunks = create_knowledge_file_from_bytes(
+        generation_db,
+        sso_user_id="admin",
+        file_name="销售手册.txt",
+        content="一、安全服务\n安全服务可用于售前客户沟通。".encode("utf-8"),
+        content_type="text/plain",
+        cipher=cipher,
+        key_version="v1",
+        visibility="PUBLIC",
+        source_type="admin_upload",
+        usage_type="official_knowledge",
+        review_status="official",
+        rag_enabled=True,
+        rag_scope="company",
+        permission_scope="company",
+        owner_user_id="admin",
+    )
+    generation_db.commit()
+    client = client_for_user("user-1")
+
+    prepared = client.post(
+        "/api/ai/chat/prepare",
+        json={"question": "安全服务包含什么", "mode": "knowledge", "top_k": 8},
+    )
+
+    assert prepared.status_code == 201
+    body = prepared.json()
+    prepared_file_names = {citation["file_name"] for citation in body["citations"]}
+    assert {first_file.file_name, second_file.file_name}.issubset(prepared_file_names)
+
+    completed = client.post(
+        f"/api/ai/chat/messages/{body['assistant_message_uuid']}/complete",
+        json={
+            "completion_token": body["completion_token"],
+            "answer": "根据《安全白皮书》，安全服务包含应急响应和运维巡检。",
+            "model_display_name": "DeepSeek",
+            "model_id": "deepseek-chat",
+        },
+    )
+
+    assert completed.status_code == 200
+    detail = client.get(f"/api/ai/chat/sessions/{body['session_uuid']}")
+    assert detail.status_code == 200
+    assistant = detail.json()["messages"][1]
+    citation_file_names = [citation["file_name"] for citation in assistant["citations"]]
+    assert citation_file_names == ["安全白皮书.txt"]
 
 
 def test_chat_prepare_applies_mode_default_official_knowledge_filters(

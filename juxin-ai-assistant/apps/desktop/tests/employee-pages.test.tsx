@@ -54,7 +54,7 @@ it('renders user-scoped home metadata and removes a favorite optimistically', as
   }} onOpenChat={vi.fn()} onOpenTask={vi.fn()} onShowAssistants={vi.fn()} />);
 
   expect(await screen.findByText('上午好，张磊')).toBeInTheDocument();
-  expect(screen.getByRole('heading', { name: '每个人的私人工作助理' })).toBeInTheDocument();
+  expect(screen.getByRole('heading', { name: '你的私人助理' })).toBeInTheDocument();
   expect(screen.getByText('写材料、查资料、整理文档、生成报告，一句话交给聚信 AI 助手。')).toBeInTheDocument();
   expect(screen.getByText('工作总结')).toBeInTheDocument();
   await userEvent.click(screen.getByRole('button', { name: '取消收藏 工作总结' }));
@@ -139,7 +139,7 @@ it('loads encrypted history detail only after selection and supports delete', as
   await userEvent.click(screen.getByRole('button', { name: /工作总结/ }));
   expect(await screen.findByRole('heading', { name: '完成情况' })).toBeInTheDocument();
   expect(detailRequest).toHaveBeenCalledTimes(1);
-  await userEvent.click(screen.getByRole('button', { name: '删除记录' }));
+  await userEvent.click(screen.getByRole('button', { name: '删除成果' }));
   await waitFor(() => expect(deleteRequest).toHaveBeenCalled());
   expect(screen.queryByRole('heading', { name: '完成情况' })).not.toBeInTheDocument();
 });

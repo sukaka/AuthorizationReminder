@@ -176,6 +176,36 @@ def test_owner_can_update_personal_file_metadata(client_for_user) -> None:
     assert body["tags"] == ["会议", "模板"]
 
 
+def test_owner_can_rename_personal_file_and_chunks(
+    client_for_user,
+    generation_db,
+) -> None:
+    from app.models import KnowledgeChunk, KnowledgeFile
+
+    owner = client_for_user("user-1")
+    created = _upload_personal(owner, name="old-name.md")
+
+    response = owner.patch(
+        f"/api/knowledge/files/{created['file_uuid']}",
+        json={"file_name": "../交付会议纪要.md"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["file_name"] == "交付会议纪要.md"
+    stored_file = generation_db.scalar(
+        select(KnowledgeFile).where(KnowledgeFile.uuid == created["file_uuid"])
+    )
+    assert stored_file is not None
+    assert stored_file.file_name == "交付会议纪要.md"
+    chunk_file_names = set(
+        generation_db.scalars(
+            select(KnowledgeChunk.file_name).where(KnowledgeChunk.file_id == stored_file.id)
+        )
+    )
+    assert chunk_file_names == {"交付会议纪要.md"}
+
+
 def test_classify_file_updates_metadata_with_rule_based_suggestion(client_for_user) -> None:
     owner = client_for_user("user-1")
     created = owner.post(

@@ -331,8 +331,8 @@ it('uploads reference material and includes attachment ids in prepare request', 
   server.use(
     http.post('/api/ai/attachments', () => HttpResponse.json({
       attachment_uuid: 'att-1',
-      file_name: 'meeting.txt',
-      file_type: 'text/plain',
+      file_name: '项目清单.xlsx',
+      file_type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
       file_size: 12,
       status: 'READY',
       extracted_characters: 6,
@@ -366,15 +366,18 @@ it('uploads reference material and includes attachment ids in prepare request', 
 
   render(<TaskRunPage task={workSummaryTask} />);
   await userEvent.type(screen.getByLabelText('工作内容'), '生成会议纪要');
-  const file = new File(['会议内容'], 'meeting.txt', { type: 'text/plain' });
+  expect(screen.getByText('支持 docx、xlsx、pptx、txt、md。文件内容会作为参考材料参与生成。')).toBeInTheDocument();
+  const file = new File(['xlsx'], '项目清单.xlsx', {
+    type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  });
   await userEvent.upload(screen.getByLabelText('上传参考材料'), file);
   expect(formDataAppend).toHaveBeenCalledWith('task_uuid', 'task-1');
   expect(formDataAppend).toHaveBeenCalledWith(
     'file',
-    expect.objectContaining({ name: 'meeting.txt' }),
+    expect.objectContaining({ name: '项目清单.xlsx' }),
   );
   formDataAppend.mockRestore();
-  expect(await screen.findByText('meeting.txt')).toBeInTheDocument();
+  expect(await screen.findByText('项目清单.xlsx')).toBeInTheDocument();
   await userEvent.click(screen.getByRole('button', { name: '开始生成' }));
 
   await waitFor(() => expect(prepareRequest).toHaveBeenCalled());
