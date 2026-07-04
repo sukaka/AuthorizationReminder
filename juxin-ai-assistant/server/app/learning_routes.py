@@ -24,6 +24,7 @@ from .schemas import (
     FailureCaseOut,
     FailureCasePatchIn,
     LearningFeedbackIn,
+    LearningFeedbackListOut,
     LearningFeedbackOut,
     MemoryCreateIn,
     MemoryListOut,
@@ -544,6 +545,26 @@ async def delete_failure_case(
     db.commit()
     db.refresh(row)
     return _failure_case_out(row)
+
+
+@router.get("/feedback", response_model=LearningFeedbackListOut)
+async def list_learning_feedback(
+    request: Request,
+    session_payload: Annotated[SessionPayload, Depends(get_session)],
+    current_settings: Annotated[Settings, Depends(get_settings)],
+    db: Annotated[Session, Depends(get_db)],
+    limit: int = Query(default=50, ge=1, le=200),
+) -> LearningFeedbackListOut:
+    await _require_use(request, session_payload, current_settings)
+    rows = list(
+        db.scalars(
+            select(FeedbackLog)
+            .where(FeedbackLog.user_id == str(session_payload.user.id))
+            .order_by(FeedbackLog.created_at.desc(), FeedbackLog.id.desc())
+            .limit(limit)
+        )
+    )
+    return LearningFeedbackListOut(items=[_feedback_out(row) for row in rows], total=len(rows))
 
 
 @router.post("/feedback", response_model=LearningFeedbackOut, status_code=201)

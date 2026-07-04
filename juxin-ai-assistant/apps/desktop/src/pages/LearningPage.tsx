@@ -8,6 +8,7 @@ import {
   deleteLearningTemplate,
   listLearningExperiences,
   listLearningFailureCases,
+  listLearningFeedback,
   listLearningMemories,
   listLearningTemplates,
   submitLearningTemplateReview,
@@ -17,11 +18,12 @@ import {
   updateLearningTemplate,
   type LearningExperiencePayload,
   type LearningFailureCasePayload,
+  type LearningFeedbackPayload,
   type LearningMemoryPayload,
   type LearningTemplatePayload,
 } from '../api/client';
 
-type LearningTab = 'memories' | 'experiences' | 'templates' | 'failures';
+type LearningTab = 'memories' | 'experiences' | 'templates' | 'failures' | 'feedback';
 
 const MEMORY_TYPE_OPTIONS = [
   ['user_preference', '用户偏好'],
@@ -40,6 +42,22 @@ const PRIORITY_LABEL: Record<string, string> = {
   low: '低',
 };
 
+const FEEDBACK_LABEL: Record<string, string> = {
+  useful: '有用',
+  not_useful: '没用',
+  needs_revision: '需要修改',
+  save_experience: '保存为经验',
+  save_template: '保存为模板',
+  record_error: '记录为错误',
+};
+
+const SAVED_AS_LABEL: Record<string, string> = {
+  experience: '经验',
+  template: '模板',
+  failure_case: '错误修正',
+  memory: '记忆',
+};
+
 function tagText(tags: string[]): string {
   return tags.length ? tags.join('、') : '未设置标签';
 }
@@ -54,6 +72,7 @@ export function LearningPage() {
   const [experiences, setExperiences] = useState<LearningExperiencePayload[]>([]);
   const [templates, setTemplates] = useState<LearningTemplatePayload[]>([]);
   const [failures, setFailures] = useState<LearningFailureCasePayload[]>([]);
+  const [feedbackLogs, setFeedbackLogs] = useState<LearningFeedbackPayload[]>([]);
   const [notice, setNotice] = useState('');
   const [loading, setLoading] = useState(false);
   const [draft, setDraft] = useState({
@@ -73,16 +92,18 @@ export function LearningPage() {
     setLoading(true);
     setNotice('');
     try {
-      const [memoryPayload, experiencePayload, templatePayload, failurePayload] = await Promise.all([
+      const [memoryPayload, experiencePayload, templatePayload, failurePayload, feedbackPayload] = await Promise.all([
         listLearningMemories('all'),
         listLearningExperiences(),
         listLearningTemplates(),
         listLearningFailureCases(),
+        listLearningFeedback(),
       ]);
       setMemories(memoryPayload.items);
       setExperiences(experiencePayload.items);
       setTemplates(templatePayload.items);
       setFailures(failurePayload.items);
+      setFeedbackLogs(feedbackPayload.items);
     } catch {
       setNotice('学习中心加载失败，请稍后重试。');
     } finally {
@@ -242,6 +263,7 @@ export function LearningPage() {
         <article><strong>{experiences.length}</strong><span>经验</span></article>
         <article><strong>{templates.length}</strong><span>模板</span></article>
         <article><strong>{failures.length}</strong><span>错误修正</span></article>
+        <article><strong>{feedbackLogs.length}</strong><span>反馈记录</span></article>
       </div>
 
       <div className="learning-tabs" role="tablist" aria-label="学习中心分类">
@@ -249,6 +271,7 @@ export function LearningPage() {
         <button className={tab === 'experiences' ? 'is-active' : ''} onClick={() => setTab('experiences')} type="button">我的经验</button>
         <button className={tab === 'templates' ? 'is-active' : ''} onClick={() => setTab('templates')} type="button">我的模板</button>
         <button className={tab === 'failures' ? 'is-active' : ''} onClick={() => setTab('failures')} type="button">错误修正记录</button>
+        <button className={tab === 'feedback' ? 'is-active' : ''} onClick={() => setTab('feedback')} type="button">反馈记录</button>
       </div>
 
       {notice ? <p className="learning-notice">{notice}</p> : null}
@@ -363,6 +386,23 @@ export function LearningPage() {
             </article>
           ))}
           {!failures.length ? <p className="learning-empty">暂无错误修正记录。记录过的错误会在类似问题中优先提醒小聚避免复发。</p> : null}
+        </div>
+      ) : null}
+
+      {tab === 'feedback' ? (
+        <div className="learning-list">
+          {feedbackLogs.map((item) => (
+            <article className="learning-card" key={item.uuid}>
+              <div>
+                <span className="learning-badge">{FEEDBACK_LABEL[item.feedback_type] || item.feedback_type}</span>
+                {item.saved_as ? <span className="learning-badge">已沉淀为{SAVED_AS_LABEL[item.saved_as] || item.saved_as}</span> : null}
+              </div>
+              <h2>{item.comment || FEEDBACK_LABEL[item.feedback_type] || '反馈'}</h2>
+              <p>会话：{item.conversation_id || '未绑定'} · 消息：{item.message_id || '未绑定'}</p>
+              <small>{new Date(item.created_at).toLocaleString()}</small>
+            </article>
+          ))}
+          {!feedbackLogs.length ? <p className="learning-empty">暂无反馈记录。回答下方点击“有用”“没用”“需要修改”后会出现在这里。</p> : null}
         </div>
       ) : null}
     </section>

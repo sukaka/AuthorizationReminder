@@ -524,6 +524,13 @@ export async function createLearningFeedback(payload: {
   );
 }
 
+export async function listLearningFeedback(limit = 50): Promise<{ items: LearningFeedbackPayload[]; total: number }> {
+  return readJson(
+    await apiFetch(`/api/learning/feedback?limit=${encodeURIComponent(String(limit))}`, { cache: 'no-store' }),
+    'LEARNING_FEEDBACK_FAILED',
+  );
+}
+
 export async function getTask(taskCode: string): Promise<TaskPayload> {
   return readJson<TaskPayload>(
     await apiFetch(`/api/ai/tasks/${encodeURIComponent(taskCode)}`),

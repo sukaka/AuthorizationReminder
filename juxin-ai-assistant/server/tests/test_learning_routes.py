@@ -106,6 +106,10 @@ def test_learning_libraries_and_feedback_are_user_scoped(client_for_user):
     )
     assert feedback.status_code == 201
     assert feedback.json()["saved_as"] == "experience"
+    listed_feedback = owner.get("/api/learning/feedback").json()
+    assert listed_feedback["total"] == 1
+    assert listed_feedback["items"][0]["feedback_type"] == "save_experience"
+    assert other.get("/api/learning/feedback").json()["total"] == 0
 
 
 def test_learning_libraries_can_be_edited_deleted_and_template_submitted(client_for_user):

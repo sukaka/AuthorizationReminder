@@ -1197,3 +1197,8 @@ class LearningFeedbackOut(BaseModel):
     comment: str
     saved_as: str
     created_at: datetime
+
+
+class LearningFeedbackListOut(BaseModel):
+    items: list[LearningFeedbackOut]
+    total: int
