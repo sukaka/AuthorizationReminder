@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from app.context.mode_router import ModeRouter
+from app.web_sources import SearchIntentDetector, UrlExtractor
 
 
 MODE_STRATEGIES = {
@@ -24,14 +25,28 @@ def analyze_task_mode(question: str, mode: str) -> dict[str, object]:
     decision = ModeRouter.decide(mode=normalized, question=question)
     strategy = MODE_STRATEGIES.get(normalized, "single_turn")
     task_type = "chat"
-    if normalized == "knowledge":
+    if UrlExtractor().extract_first(question):
+        task_type = "web_capture"
+    elif "导出" in question and "Word" in question:
+        task_type = "word_export"
+    elif SearchIntentDetector().should_search(question):
+        task_type = "web_search"
+    elif normalized == "knowledge":
         task_type = "knowledge_qa"
+    elif normalized == "sales":
+        task_type = "sales_followup"
+    elif normalized == "presales":
+        task_type = "presales_solution"
     elif normalized == "business":
         task_type = "bid_material"
     elif normalized == "hr_admin":
         task_type = "hr_admin"
     elif normalized == "delivery":
         task_type = "delivery_troubleshooting"
+    elif normalized == "software_test":
+        task_type = "software_test"
+    elif normalized == "pentest":
+        task_type = "pentest"
     elif normalized == "security_ops":
         task_type = "security_analysis"
     elif normalized == "risk_assessment":

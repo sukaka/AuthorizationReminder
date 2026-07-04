@@ -1,6 +1,8 @@
 import json
 from pathlib import Path
 
+from app.learning_eval import run_learning_eval
+
 
 def test_eval_questions_cover_learning_loop_regressions() -> None:
     path = Path(__file__).resolve().parents[1] / "eval_questions.json"
@@ -21,3 +23,14 @@ def test_eval_questions_cover_learning_loop_regressions() -> None:
     for item in questions:
         assert item["question"].strip()
         assert item["expected_focus"]
+
+
+def test_learning_eval_runner_checks_context_readiness() -> None:
+    report = run_learning_eval()
+
+    assert report["total"] >= 8
+    assert report["failed"] == 0
+    ids = {item["id"] for item in report["results"]}
+    assert "latest-cve" in ids
+    latest = next(item for item in report["results"] if item["id"] == "latest-cve")
+    assert latest["requires_web_search"] is True
