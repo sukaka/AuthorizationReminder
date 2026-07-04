@@ -151,6 +151,20 @@ export function LearningPage() {
     }
   };
 
+  const editMemory = async (item: LearningMemoryPayload) => {
+    const title = window.prompt('记忆标题', item.title || item.memory_type)?.trim();
+    if (!title) return;
+    const content = window.prompt('记忆内容', item.content)?.trim();
+    if (!content) return;
+    try {
+      await updateLearningMemory(item.uuid, { title, content });
+      setNotice('记忆已更新。');
+      await refresh();
+    } catch {
+      setNotice('记忆更新失败。');
+    }
+  };
+
   const removeMemory = async (item: LearningMemoryPayload) => {
     if (!window.confirm('确认删除这条记忆？删除后不会再参与回答。')) return;
     try {
@@ -320,6 +334,7 @@ export function LearningPage() {
                 <p>{item.content}</p>
                 <small>{tagText(item.tags)}</small>
                 <div className="learning-actions">
+                  <button onClick={() => void editMemory(item)} type="button">编辑</button>
                   <button onClick={() => void toggleMemory(item)} type="button">{item.status === 'active' ? '停用' : '启用'}</button>
                   <button className="danger-action" onClick={() => void removeMemory(item)} type="button">删除</button>
                 </div>

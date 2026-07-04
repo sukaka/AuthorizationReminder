@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from sqlalchemy import select
+from sqlalchemy import case, select
 
 from app.agent_runtime import BaseTool, ToolContext, ToolResult
 from app.models import UserMemory
@@ -86,8 +86,13 @@ class PersonalMemoryTool(BaseTool):
         )
         if memory_type:
             statement = statement.where(UserMemory.memory_type == memory_type)
+        priority_order = case(
+            (UserMemory.priority == "high", 0),
+            (UserMemory.priority == "medium", 1),
+            else_=2,
+        )
         rows = list(context.db.scalars(statement.order_by(
-            UserMemory.priority.asc(),
+            priority_order,
             UserMemory.updated_at.desc(),
             UserMemory.id.desc(),
         ).limit(limit)))

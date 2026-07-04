@@ -1103,7 +1103,17 @@ def test_personal_memory_tool_saves_and_lists_user_preferences(
 
     saved = registry.execute(
         "personal_memory",
-        {"action": "save", "content": "输出方案时先给结论，再给分阶段计划。", "memory_type": "preference"},
+        {"action": "save", "content": "输出方案时先给结论，再给分阶段计划。", "memory_type": "preference", "priority": "medium"},
+        ToolContext(user_id="user-1", db=generation_db),
+    )
+    high = registry.execute(
+        "personal_memory",
+        {"action": "save", "content": "不要把导出路径写入历史列表。", "priority": "high"},
+        ToolContext(user_id="user-1", db=generation_db),
+    )
+    low = registry.execute(
+        "personal_memory",
+        {"action": "save", "content": "临时偏好：少用项目符号。", "priority": "low"},
         ToolContext(user_id="user-1", db=generation_db),
     )
     other = registry.execute(
@@ -1118,12 +1128,18 @@ def test_personal_memory_tool_saves_and_lists_user_preferences(
     )
 
     assert saved.status == "success"
+    assert high.status == "success"
+    assert low.status == "success"
     assert other.status == "success"
     assert [item["content"] for item in listed.payload["memories"]] == [
-        "输出方案时先给结论，再给分阶段计划。"
+        "不要把导出路径写入历史列表。",
+        "输出方案时先给结论，再给分阶段计划。",
+        "临时偏好：少用项目符号。",
     ]
-    assert generation_db.query(UserMemory).count() == 2
+    assert generation_db.query(UserMemory).count() == 4
     assert [log.tool_name for log in generation_db.query(AgentToolCallLog).order_by(AgentToolCallLog.id)] == [
+        "personal_memory",
+        "personal_memory",
         "personal_memory",
         "personal_memory",
         "personal_memory",
