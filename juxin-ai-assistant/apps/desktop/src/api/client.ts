@@ -361,6 +361,24 @@ export async function listLearningExperiences(): Promise<{ items: LearningExperi
   );
 }
 
+export async function createLearningExperience(payload: {
+  task_type: string;
+  title: string;
+  question: string;
+  answer: string;
+  summary: string;
+  tags: string[];
+}): Promise<LearningExperiencePayload> {
+  return readJson(
+    await apiFetch('/api/learning/experiences', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }),
+    'LEARNING_EXPERIENCE_CREATE_FAILED',
+  );
+}
+
 export async function listLearningTemplates(): Promise<{ items: LearningTemplatePayload[]; total: number }> {
   return readJson(
     await apiFetch('/api/learning/templates', { cache: 'no-store' }),
@@ -368,10 +386,44 @@ export async function listLearningTemplates(): Promise<{ items: LearningTemplate
   );
 }
 
+export async function createLearningTemplate(payload: {
+  template_name: string;
+  task_type: string;
+  template_content: string;
+  variables: Record<string, unknown>;
+  scope: 'personal' | 'company';
+}): Promise<LearningTemplatePayload> {
+  return readJson(
+    await apiFetch('/api/learning/templates', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }),
+    'LEARNING_TEMPLATE_CREATE_FAILED',
+  );
+}
+
 export async function listLearningFailureCases(): Promise<{ items: LearningFailureCasePayload[]; total: number }> {
   return readJson(
     await apiFetch('/api/learning/failure-cases', { cache: 'no-store' }),
     'LEARNING_FAILURE_CASES_FAILED',
+  );
+}
+
+export async function createLearningFailureCase(payload: {
+  task_type: string;
+  wrong_answer: string;
+  correction: string;
+  prevention_rule: string;
+  tags: string[];
+}): Promise<LearningFailureCasePayload> {
+  return readJson(
+    await apiFetch('/api/learning/failure-cases', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }),
+    'LEARNING_FAILURE_CASE_CREATE_FAILED',
   );
 }
 

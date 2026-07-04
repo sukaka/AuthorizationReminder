@@ -36,7 +36,12 @@ import {
   shouldRunLoopQualityCheck,
   type AgentLoopMessage,
 } from '../api/agentLoop';
-import { ApiError } from '../api/client';
+import {
+  ApiError,
+  createLearningExperience,
+  createLearningFailureCase,
+  createLearningTemplate,
+} from '../api/client';
 import { generateLocalModel } from '../local/modelStream';
 import type { ModelProfile } from '../types/tauri';
 
@@ -1022,6 +1027,71 @@ export function ChatPage() {
     }
   };
 
+  const previousUserQuestion = (messageId: string): string => {
+    const index = messages.findIndex((item) => item.id === messageId);
+    if (index <= 0) return '';
+    for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
+      if (messages[cursor].role === 'user' && messages[cursor].content.trim()) {
+        return messages[cursor].content.trim();
+      }
+    }
+    return '';
+  };
+
+  const saveMessageAsExperience = async (message: UiMessage) => {
+    const question = previousUserQuestion(message.id);
+    const taskType = window.prompt('适用场景是什么？例如：商务投标、交付验收、会议纪要', modeLabels[mode])?.trim();
+    if (!taskType) return;
+    try {
+      await createLearningExperience({
+        task_type: taskType,
+        title: question ? question.slice(0, 80) : '优秀回答经验',
+        question: question || '未记录原始问题',
+        answer: message.content,
+        summary: message.content.replace(/\s+/g, ' ').slice(0, 300),
+        tags: [taskType],
+      });
+      setStatus('已保存为经验，后续类似问题会自动参考');
+    } catch {
+      setStatus('保存经验失败，请稍后重试');
+    }
+  };
+
+  const saveMessageAsTemplate = async (message: UiMessage) => {
+    const templateName = window.prompt('模板名称是什么？', `${modeLabels[mode]}模板`)?.trim();
+    if (!templateName) return;
+    try {
+      await createLearningTemplate({
+        template_name: templateName,
+        task_type: modeLabels[mode],
+        template_content: message.content,
+        variables: {},
+        scope: 'personal',
+      });
+      setStatus('已保存为个人模板');
+    } catch {
+      setStatus('保存模板失败，请稍后重试');
+    }
+  };
+
+  const recordMessageAsFailure = async (message: UiMessage) => {
+    const correction = window.prompt('正确做法是什么？请写下修正方式。')?.trim();
+    if (!correction) return;
+    const preventionRule = window.prompt('以后如何避免再犯？', '遇到类似问题时先检查这条修正规则。')?.trim() || correction;
+    try {
+      await createLearningFailureCase({
+        task_type: modeLabels[mode],
+        wrong_answer: message.content,
+        correction,
+        prevention_rule: preventionRule,
+        tags: [modeLabels[mode], '用户纠错'],
+      });
+      setStatus('已记录为错误修正，后续类似问题会优先避坑');
+    } catch {
+      setStatus('记录错误失败，请稍后重试');
+    }
+  };
+
   const openSourcePreview = async (citation: ChatCitation) => {
     if (!citation.file_uuid) {
       setStatus('该来源缺少文件标识，暂时无法预览');
@@ -1526,6 +1596,15 @@ export function ChatPage() {
                           </button>
                           <button disabled={exportingWord} onClick={() => void exportMessageWord(message)} type="button">
                             {exportingWord ? '导出中…' : '导出 Word'}
+                          </button>
+                          <button onClick={() => void saveMessageAsExperience(message)} type="button">
+                            保存为经验
+                          </button>
+                          <button onClick={() => void saveMessageAsTemplate(message)} type="button">
+                            保存为模板
+                          </button>
+                          <button onClick={() => void recordMessageAsFailure(message)} type="button">
+                            记录为错误
                           </button>
                         </div>
                       ) : null}
