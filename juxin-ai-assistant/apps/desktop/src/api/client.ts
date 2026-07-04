@@ -147,6 +147,16 @@ export type LearningFailureCasePayload = {
   updated_at: string;
 };
 
+export type LearningFeedbackPayload = {
+  uuid: string;
+  conversation_id: string;
+  message_id: string;
+  feedback_type: 'useful' | 'not_useful' | 'needs_revision' | 'save_experience' | 'save_template' | 'record_error' | string;
+  comment: string;
+  saved_as: string;
+  created_at: string;
+};
+
 export type AttachmentPayload = {
   attachment_uuid: string;
   file_name: string;
@@ -494,6 +504,23 @@ export async function deleteLearningFailureCase(failureCaseId: string): Promise<
   return readJson(
     await apiFetch(`/api/learning/failure-cases/${encodeURIComponent(failureCaseId)}`, { method: 'DELETE' }),
     'LEARNING_FAILURE_CASE_DELETE_FAILED',
+  );
+}
+
+export async function createLearningFeedback(payload: {
+  conversation_id: string;
+  message_id: string;
+  feedback_type: 'useful' | 'not_useful' | 'needs_revision' | 'save_experience' | 'save_template' | 'record_error';
+  comment?: string;
+  saved_as?: '' | 'experience' | 'template' | 'failure_case' | 'memory';
+}): Promise<LearningFeedbackPayload> {
+  return readJson(
+    await apiFetch('/api/learning/feedback', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }),
+    'LEARNING_FEEDBACK_CREATE_FAILED',
   );
 }
 

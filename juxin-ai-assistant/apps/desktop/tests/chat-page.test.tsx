@@ -173,6 +173,48 @@ it('asks before saving explicit user memory and then stores it', async () => {
   expect(await screen.findByText('已保存为长期记忆，后续回答会优先参考')).toBeInTheDocument();
 });
 
+it('submits useful chat answer feedback to the learning loop', async () => {
+  const feedbackRequest = vi.fn();
+  server.use(
+    http.get('/api/conversations', () => HttpResponse.json({ items: [], total: 0 })),
+    http.post('/api/ai/chat/prepare', () => HttpResponse.json({
+      session_uuid: 'session-feedback',
+      user_message_uuid: 'user-message-feedback',
+      assistant_message_uuid: 'assistant-message-feedback',
+      completion_token: 'complete-feedback',
+      completed: true,
+      answer: '这是一条有用回答。',
+      messages: [],
+      citations: [],
+    }, { status: 201 })),
+    http.post('/api/learning/feedback', async ({ request }) => {
+      feedbackRequest(await request.json());
+      return HttpResponse.json({
+        uuid: 'feedback-1',
+        conversation_id: 'session-feedback',
+        message_id: 'assistant-message-feedback',
+        feedback_type: 'useful',
+        comment: '',
+        saved_as: '',
+        created_at: '2026-07-04T08:00:00Z',
+      }, { status: 201 });
+    }),
+  );
+
+  render(<ChatPage />);
+  await userEvent.type(await screen.findByLabelText('告诉我你想完成什么工作'), '你能做什么');
+  await userEvent.click(screen.getByRole('button', { name: '发送' }));
+
+  expect(await screen.findByText('这是一条有用回答。')).toBeInTheDocument();
+  await userEvent.click(screen.getByRole('button', { name: '有用' }));
+  await waitFor(() => expect(feedbackRequest).toHaveBeenCalledWith(expect.objectContaining({
+    conversation_id: 'session-feedback',
+    message_id: 'assistant-message-feedback',
+    feedback_type: 'useful',
+  })));
+  expect(await screen.findByText('已记录：这条回答有用')).toBeInTheDocument();
+});
+
 it('shows only cited files mentioned in the final answer', async () => {
   server.use(
     http.get('/api/conversations', () => HttpResponse.json({ items: [], total: 0 })),

@@ -40,6 +40,7 @@ import {
   ApiError,
   createLearningExperience,
   createLearningFailureCase,
+  createLearningFeedback,
   createLearningMemory,
   createLearningTemplate,
 } from '../api/client';
@@ -1173,6 +1174,31 @@ export function ChatPage() {
     }
   };
 
+  const submitMessageFeedback = async (
+    message: UiMessage,
+    feedbackType: 'useful' | 'not_useful' | 'needs_revision',
+  ) => {
+    const comment = feedbackType === 'needs_revision'
+      ? window.prompt('哪里需要修改？')?.trim()
+      : '';
+    if (feedbackType === 'needs_revision' && !comment) return;
+    try {
+      await createLearningFeedback({
+        conversation_id: activeSessionUuid,
+        message_id: message.id,
+        feedback_type: feedbackType,
+        comment,
+      });
+      setStatus(feedbackType === 'useful'
+        ? '已记录：这条回答有用'
+        : feedbackType === 'not_useful'
+          ? '已记录：这条回答没用'
+          : '已记录修改意见');
+    } catch {
+      setStatus('反馈提交失败，请稍后重试');
+    }
+  };
+
   const openSourcePreview = async (citation: ChatCitation) => {
     if (!citation.file_uuid) {
       setStatus('该来源缺少文件标识，暂时无法预览');
@@ -1669,6 +1695,15 @@ export function ChatPage() {
                       ) : null}
                       {message.role === 'assistant' && message.content ? (
                         <div className="chat-message-actions">
+                          <button onClick={() => void submitMessageFeedback(message, 'useful')} type="button">
+                            有用
+                          </button>
+                          <button onClick={() => void submitMessageFeedback(message, 'not_useful')} type="button">
+                            没用
+                          </button>
+                          <button onClick={() => void submitMessageFeedback(message, 'needs_revision')} type="button">
+                            需要修改
+                          </button>
                           <button onClick={() => void copyMessage(message.content)} type="button">
                             复制
                           </button>
