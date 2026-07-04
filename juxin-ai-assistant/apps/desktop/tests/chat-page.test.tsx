@@ -215,6 +215,71 @@ it('submits useful chat answer feedback to the learning loop', async () => {
   expect(await screen.findByText('已记录：这条回答有用')).toBeInTheDocument();
 });
 
+it('logs saved_as feedback when an answer is saved as experience', async () => {
+  const experienceRequest = vi.fn();
+  const feedbackRequest = vi.fn();
+  const promptSpy = vi.spyOn(window, 'prompt').mockReturnValue('商务投标');
+  server.use(
+    http.get('/api/conversations', () => HttpResponse.json({ items: [], total: 0 })),
+    http.post('/api/ai/chat/prepare', () => HttpResponse.json({
+      session_uuid: 'session-save-experience',
+      user_message_uuid: 'user-message-save-experience',
+      assistant_message_uuid: 'assistant-message-save-experience',
+      completion_token: 'complete-save-experience',
+      completed: true,
+      answer: '投标响应先列评分点。',
+      messages: [],
+      citations: [],
+    }, { status: 201 })),
+    http.post('/api/learning/experiences', async ({ request }) => {
+      experienceRequest(await request.json());
+      return HttpResponse.json({
+        uuid: 'experience-1',
+        task_type: '商务投标',
+        title: '怎么写投标响应',
+        question: '怎么写投标响应',
+        answer: '投标响应先列评分点。',
+        summary: '投标响应先列评分点。',
+        tags: ['商务投标'],
+        status: 'active',
+        created_at: '2026-07-04T08:00:00Z',
+        updated_at: '2026-07-04T08:00:00Z',
+      }, { status: 201 });
+    }),
+    http.post('/api/learning/feedback', async ({ request }) => {
+      feedbackRequest(await request.json());
+      return HttpResponse.json({
+        uuid: 'feedback-save-experience',
+        conversation_id: 'session-save-experience',
+        message_id: 'assistant-message-save-experience',
+        feedback_type: 'save_experience',
+        comment: '',
+        saved_as: 'experience',
+        created_at: '2026-07-04T08:00:00Z',
+      }, { status: 201 });
+    }),
+  );
+
+  try {
+    render(<ChatPage />);
+    await userEvent.type(await screen.findByLabelText('告诉我你想完成什么工作'), '怎么写投标响应');
+    await userEvent.click(screen.getByRole('button', { name: '发送' }));
+
+    expect(await screen.findByText('投标响应先列评分点。')).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: '保存为经验' }));
+    await waitFor(() => expect(experienceRequest).toHaveBeenCalled());
+    await waitFor(() => expect(feedbackRequest).toHaveBeenCalledWith(expect.objectContaining({
+      conversation_id: 'session-save-experience',
+      message_id: 'assistant-message-save-experience',
+      feedback_type: 'save_experience',
+      saved_as: 'experience',
+    })));
+    expect(await screen.findByText('已保存为经验，后续类似问题会自动参考')).toBeInTheDocument();
+  } finally {
+    promptSpy.mockRestore();
+  }
+});
+
 it('shows only cited files mentioned in the final answer', async () => {
   server.use(
     http.get('/api/conversations', () => HttpResponse.json({ items: [], total: 0 })),

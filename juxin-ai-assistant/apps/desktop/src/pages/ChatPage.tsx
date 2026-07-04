@@ -1120,6 +1120,15 @@ export function ChatPage() {
     return '';
   };
 
+  const logLearningFeedback = async (payload: Parameters<typeof createLearningFeedback>[0]) => {
+    try {
+      await createLearningFeedback(payload);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
   const saveMessageAsExperience = async (message: UiMessage) => {
     const question = previousUserQuestion(message.id);
     const taskType = window.prompt('适用场景是什么？例如：商务投标、交付验收、会议纪要', modeLabels[mode])?.trim();
@@ -1133,7 +1142,15 @@ export function ChatPage() {
         summary: message.content.replace(/\s+/g, ' ').slice(0, 300),
         tags: [taskType],
       });
-      setStatus('已保存为经验，后续类似问题会自动参考');
+      const feedbackLogged = await logLearningFeedback({
+        conversation_id: activeSessionUuid,
+        message_id: message.id,
+        feedback_type: 'save_experience',
+        saved_as: 'experience',
+      });
+      setStatus(feedbackLogged
+        ? '已保存为经验，后续类似问题会自动参考'
+        : '已保存为经验，但反馈记录暂未写入');
     } catch {
       setStatus('保存经验失败，请稍后重试');
     }
@@ -1150,7 +1167,13 @@ export function ChatPage() {
         variables: {},
         scope: 'personal',
       });
-      setStatus('已保存为个人模板');
+      const feedbackLogged = await logLearningFeedback({
+        conversation_id: activeSessionUuid,
+        message_id: message.id,
+        feedback_type: 'save_template',
+        saved_as: 'template',
+      });
+      setStatus(feedbackLogged ? '已保存为个人模板' : '已保存为个人模板，但反馈记录暂未写入');
     } catch {
       setStatus('保存模板失败，请稍后重试');
     }
@@ -1168,7 +1191,16 @@ export function ChatPage() {
         prevention_rule: preventionRule,
         tags: [modeLabels[mode], '用户纠错'],
       });
-      setStatus('已记录为错误修正，后续类似问题会优先避坑');
+      const feedbackLogged = await logLearningFeedback({
+        conversation_id: activeSessionUuid,
+        message_id: message.id,
+        feedback_type: 'record_error',
+        comment: correction,
+        saved_as: 'failure_case',
+      });
+      setStatus(feedbackLogged
+        ? '已记录为错误修正，后续类似问题会优先避坑'
+        : '已记录为错误修正，但反馈记录暂未写入');
     } catch {
       setStatus('记录错误失败，请稍后重试');
     }
