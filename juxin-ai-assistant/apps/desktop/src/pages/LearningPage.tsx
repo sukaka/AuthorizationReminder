@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 
 import {
+  approveLearningTemplateReview,
   createLearningMemory,
   deleteLearningExperience,
   deleteLearningFailureCase,
@@ -10,7 +11,9 @@ import {
   listLearningFailureCases,
   listLearningFeedback,
   listLearningMemories,
+  listLearningTemplateReviews,
   listLearningTemplates,
+  rejectLearningTemplateReview,
   submitLearningTemplateReview,
   updateLearningExperience,
   updateLearningFailureCase,
@@ -23,7 +26,7 @@ import {
   type LearningTemplatePayload,
 } from '../api/client';
 
-type LearningTab = 'memories' | 'experiences' | 'templates' | 'failures' | 'feedback';
+type LearningTab = 'memories' | 'experiences' | 'templates' | 'template-reviews' | 'failures' | 'feedback';
 
 const MEMORY_TYPE_OPTIONS = [
   ['user_preference', '用户偏好'],
@@ -66,11 +69,12 @@ function splitTags(value: string): string[] {
   return value.split(/[,，、\s]+/).map((tag) => tag.trim()).filter(Boolean);
 }
 
-export function LearningPage() {
+export function LearningPage({ isAdmin = false }: { isAdmin?: boolean }) {
   const [tab, setTab] = useState<LearningTab>('memories');
   const [memories, setMemories] = useState<LearningMemoryPayload[]>([]);
   const [experiences, setExperiences] = useState<LearningExperiencePayload[]>([]);
   const [templates, setTemplates] = useState<LearningTemplatePayload[]>([]);
+  const [templateReviews, setTemplateReviews] = useState<LearningTemplatePayload[]>([]);
   const [failures, setFailures] = useState<LearningFailureCasePayload[]>([]);
   const [feedbackLogs, setFeedbackLogs] = useState<LearningFeedbackPayload[]>([]);
   const [notice, setNotice] = useState('');
@@ -92,18 +96,27 @@ export function LearningPage() {
     setLoading(true);
     setNotice('');
     try {
-      const [memoryPayload, experiencePayload, templatePayload, failurePayload, feedbackPayload] = await Promise.all([
+      const [
+        memoryPayload,
+        experiencePayload,
+        templatePayload,
+        failurePayload,
+        feedbackPayload,
+        templateReviewPayload,
+      ] = await Promise.all([
         listLearningMemories('all'),
         listLearningExperiences(),
         listLearningTemplates(),
         listLearningFailureCases(),
         listLearningFeedback(),
+        isAdmin ? listLearningTemplateReviews() : Promise.resolve({ items: [], total: 0 }),
       ]);
       setMemories(memoryPayload.items);
       setExperiences(experiencePayload.items);
       setTemplates(templatePayload.items);
       setFailures(failurePayload.items);
       setFeedbackLogs(feedbackPayload.items);
+      setTemplateReviews(templateReviewPayload.items);
     } catch {
       setNotice('学习中心加载失败，请稍后重试。');
     } finally {
@@ -236,6 +249,27 @@ export function LearningPage() {
     }
   };
 
+  const approveTemplate = async (item: LearningTemplatePayload) => {
+    try {
+      await approveLearningTemplateReview(item.uuid);
+      setNotice('公司模板已通过。');
+      await refresh();
+    } catch {
+      setNotice('模板审核通过失败。');
+    }
+  };
+
+  const rejectTemplate = async (item: LearningTemplatePayload) => {
+    if (!window.confirm('确认驳回这个公司模板申请？驳回后仍保留为用户个人模板。')) return;
+    try {
+      await rejectLearningTemplateReview(item.uuid);
+      setNotice('公司模板申请已驳回。');
+      await refresh();
+    } catch {
+      setNotice('模板驳回失败。');
+    }
+  };
+
   const editFailure = async (item: LearningFailureCasePayload) => {
     const preventionRule = window.prompt('防复发规则', item.prevention_rule)?.trim();
     if (!preventionRule) return;
@@ -276,6 +310,7 @@ export function LearningPage() {
         <article><strong>{memoryCount}</strong><span>启用记忆</span></article>
         <article><strong>{experiences.length}</strong><span>经验</span></article>
         <article><strong>{templates.length}</strong><span>模板</span></article>
+        {isAdmin ? <article><strong>{templateReviews.length}</strong><span>待审模板</span></article> : null}
         <article><strong>{failures.length}</strong><span>错误修正</span></article>
         <article><strong>{feedbackLogs.length}</strong><span>反馈记录</span></article>
       </div>
@@ -284,6 +319,7 @@ export function LearningPage() {
         <button className={tab === 'memories' ? 'is-active' : ''} onClick={() => setTab('memories')} type="button">我的记忆</button>
         <button className={tab === 'experiences' ? 'is-active' : ''} onClick={() => setTab('experiences')} type="button">我的经验</button>
         <button className={tab === 'templates' ? 'is-active' : ''} onClick={() => setTab('templates')} type="button">我的模板</button>
+        {isAdmin ? <button className={tab === 'template-reviews' ? 'is-active' : ''} onClick={() => setTab('template-reviews')} type="button">模板审核</button> : null}
         <button className={tab === 'failures' ? 'is-active' : ''} onClick={() => setTab('failures')} type="button">错误修正记录</button>
         <button className={tab === 'feedback' ? 'is-active' : ''} onClick={() => setTab('feedback')} type="button">反馈记录</button>
       </div>
@@ -381,6 +417,24 @@ export function LearningPage() {
             </article>
           ))}
           {!templates.length ? <p className="learning-empty">暂无模板。高频报告结构、提示词结构和文档格式可以保存到这里。</p> : null}
+        </div>
+      ) : null}
+
+      {isAdmin && tab === 'template-reviews' ? (
+        <div className="learning-list">
+          {templateReviews.map((item) => (
+            <article className="learning-card" key={item.uuid}>
+              <span className="learning-badge">公司模板待审核</span>
+              <h2>{item.template_name}</h2>
+              <p>{item.template_content}</p>
+              <small>{item.task_type || '通用任务'}</small>
+              <div className="learning-actions">
+                <button onClick={() => void approveTemplate(item)} type="button">通过</button>
+                <button className="danger-action" onClick={() => void rejectTemplate(item)} type="button">驳回</button>
+              </div>
+            </article>
+          ))}
+          {!templateReviews.length ? <p className="learning-empty">暂无待审核公司模板。</p> : null}
         </div>
       ) : null}
 

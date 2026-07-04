@@ -417,6 +417,13 @@ export async function listLearningTemplates(): Promise<{ items: LearningTemplate
   );
 }
 
+export async function listLearningTemplateReviews(status = 'pending'): Promise<{ items: LearningTemplatePayload[]; total: number }> {
+  return readJson(
+    await apiFetch(`/api/learning/templates/review?status=${encodeURIComponent(status)}`, { cache: 'no-store' }),
+    'LEARNING_TEMPLATE_REVIEWS_FAILED',
+  );
+}
+
 export async function createLearningTemplate(payload: {
   template_name: string;
   task_type: string;
@@ -452,6 +459,20 @@ export async function submitLearningTemplateReview(templateId: string): Promise<
   return readJson(
     await apiFetch(`/api/learning/templates/${encodeURIComponent(templateId)}/submit-review`, { method: 'POST' }),
     'LEARNING_TEMPLATE_SUBMIT_FAILED',
+  );
+}
+
+export async function approveLearningTemplateReview(templateId: string): Promise<LearningTemplatePayload> {
+  return readJson(
+    await apiFetch(`/api/learning/templates/${encodeURIComponent(templateId)}/approve`, { method: 'POST' }),
+    'LEARNING_TEMPLATE_APPROVE_FAILED',
+  );
+}
+
+export async function rejectLearningTemplateReview(templateId: string): Promise<LearningTemplatePayload> {
+  return readJson(
+    await apiFetch(`/api/learning/templates/${encodeURIComponent(templateId)}/reject`, { method: 'POST' }),
+    'LEARNING_TEMPLATE_REJECT_FAILED',
   );
 }
 

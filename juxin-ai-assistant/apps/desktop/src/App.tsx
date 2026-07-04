@@ -213,7 +213,7 @@ function Workspace({ session }: { session: SessionPayload }) {
         ) : page === 'knowledge' ? (
           <KnowledgePage session={session} />
         ) : page === 'learning' ? (
-          <LearningPage />
+          <LearningPage isAdmin={isAdmin} />
         ) : page === 'history' ? (
           <HistoryPage />
         ) : page === 'task' ? (

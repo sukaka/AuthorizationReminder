@@ -115,6 +115,7 @@ def test_learning_libraries_and_feedback_are_user_scoped(client_for_user):
 def test_learning_libraries_can_be_edited_deleted_and_template_submitted(client_for_user):
     owner = client_for_user("u1")
     other = client_for_user("u2")
+    admin = client_for_user("admin", role="admin")
 
     exp = owner.post(
         "/api/learning/experiences",
@@ -157,6 +158,16 @@ def test_learning_libraries_can_be_edited_deleted_and_template_submitted(client_
     assert submitted.status_code == 200
     assert submitted.json()["scope"] == "company"
     assert submitted.json()["review_status"] == "pending"
+    assert other.get("/api/learning/templates/review").status_code == 403
+    pending_reviews = admin.get("/api/learning/templates/review").json()
+    assert pending_reviews["total"] == 1
+    assert pending_reviews["items"][0]["uuid"] == template["uuid"]
+    approved = admin.post(f"/api/learning/templates/{template['uuid']}/approve")
+    assert approved.status_code == 200
+    assert approved.json()["scope"] == "company"
+    assert approved.json()["review_status"] == "official"
+    assert admin.get("/api/learning/templates/review").json()["total"] == 0
+
     patched_template = owner.patch(
         f"/api/learning/templates/{template['uuid']}",
         json={"template_name": "会议纪要模板", "scope": "personal"},
@@ -165,6 +176,22 @@ def test_learning_libraries_can_be_edited_deleted_and_template_submitted(client_
     assert patched_template.json()["review_status"] == "draft"
     assert owner.delete(f"/api/learning/templates/{template['uuid']}").status_code == 200
     assert owner.get("/api/learning/templates").json()["total"] == 0
+
+    rejected_template = owner.post(
+        "/api/learning/templates",
+        json={
+            "template_name": "待驳回模板",
+            "task_type": "投标",
+            "template_content": "一、评分点",
+            "variables": {},
+            "scope": "personal",
+        },
+    ).json()
+    assert owner.post(f"/api/learning/templates/{rejected_template['uuid']}/submit-review").status_code == 200
+    rejected = admin.post(f"/api/learning/templates/{rejected_template['uuid']}/reject")
+    assert rejected.status_code == 200
+    assert rejected.json()["scope"] == "personal"
+    assert rejected.json()["review_status"] == "rejected"
 
     failure = owner.post(
         "/api/learning/failure-cases",

@@ -84,3 +84,45 @@ it('lets users edit saved long-term memories', async () => {
   expect(screen.getByText('新的记忆内容')).toBeInTheDocument();
   promptSpy.mockRestore();
 });
+
+it('lets admins approve submitted company templates', async () => {
+  const approveTemplate = vi.fn();
+  let pendingTemplates = [{
+    uuid: 'tpl-1',
+    template_name: '投标响应模板',
+    task_type: '商务投标',
+    template_content: '一、评分点\n二、响应说明',
+    variables: {},
+    scope: 'company',
+    review_status: 'pending',
+    status: 'active',
+    created_at: '2026-07-05T08:00:00Z',
+    updated_at: '2026-07-05T08:00:00Z',
+  }];
+  server.use(
+    http.get('/api/learning/memories', () => HttpResponse.json({ items: [], total: 0 })),
+    http.get('/api/learning/experiences', () => HttpResponse.json({ items: [], total: 0 })),
+    http.get('/api/learning/templates', () => HttpResponse.json({ items: [], total: 0 })),
+    http.get('/api/learning/failure-cases', () => HttpResponse.json({ items: [], total: 0 })),
+    http.get('/api/learning/feedback', () => HttpResponse.json({ items: [], total: 0 })),
+    http.get('/api/learning/templates/review', () => HttpResponse.json({
+      items: pendingTemplates,
+      total: pendingTemplates.length,
+    })),
+    http.post('/api/learning/templates/tpl-1/approve', () => {
+      approveTemplate();
+      const approved = { ...pendingTemplates[0], review_status: 'official' };
+      pendingTemplates = [];
+      return HttpResponse.json(approved);
+    }),
+  );
+
+  render(<LearningPage isAdmin />);
+
+  await userEvent.click(await screen.findByRole('button', { name: '模板审核' }));
+  expect(await screen.findByText('投标响应模板')).toBeInTheDocument();
+  await userEvent.click(screen.getByRole('button', { name: '通过' }));
+
+  expect(approveTemplate).toHaveBeenCalled();
+  expect(await screen.findByText('暂无待审核公司模板。')).toBeInTheDocument();
+});

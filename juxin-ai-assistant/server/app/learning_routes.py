@@ -54,6 +54,21 @@ async def _require_use(
     )
 
 
+async def _require_admin(
+    request: Request,
+    session_payload: SessionPayload,
+    current_settings: Settings,
+) -> None:
+    if session_payload.user.role.strip().lower() != "admin":
+        raise HTTPException(status_code=403, detail="仅管理员可审核公司模板")
+    await require_action(
+        "ai_assistant:admin",
+        request,
+        session_payload,
+        current_settings,
+    )
+
+
 def _memory_out(row: UserMemory) -> MemoryOut:
     return MemoryOut(
         uuid=row.uuid,
@@ -405,6 +420,80 @@ async def list_templates(
         )
     )
     return TemplateListOut(items=[_template_out(row) for row in rows], total=len(rows))
+
+
+@router.get("/templates/review", response_model=TemplateListOut)
+async def list_template_reviews(
+    request: Request,
+    session_payload: Annotated[SessionPayload, Depends(get_session)],
+    current_settings: Annotated[Settings, Depends(get_settings)],
+    db: Annotated[Session, Depends(get_db)],
+    status: str = Query(default="pending", pattern="^(pending|official|rejected|all)$"),
+) -> TemplateListOut:
+    await _require_admin(request, session_payload, current_settings)
+    stmt = select(TemplateLibrary).where(
+        TemplateLibrary.scope == "company",
+        TemplateLibrary.status == "active",
+    )
+    if status != "all":
+        stmt = stmt.where(TemplateLibrary.review_status == status)
+    rows = list(
+        db.scalars(
+            stmt.order_by(TemplateLibrary.updated_at.desc(), TemplateLibrary.id.desc())
+        )
+    )
+    return TemplateListOut(items=[_template_out(row) for row in rows], total=len(rows))
+
+
+@router.post("/templates/{template_id}/approve", response_model=TemplateOut)
+async def approve_template_review(
+    template_id: str,
+    request: Request,
+    session_payload: Annotated[SessionPayload, Depends(get_session)],
+    current_settings: Annotated[Settings, Depends(get_settings)],
+    db: Annotated[Session, Depends(get_db)],
+) -> TemplateOut:
+    await _require_admin(request, session_payload, current_settings)
+    row = db.scalar(
+        select(TemplateLibrary).where(
+            TemplateLibrary.uuid == template_id,
+            TemplateLibrary.scope == "company",
+            TemplateLibrary.review_status == "pending",
+            TemplateLibrary.status == "active",
+        )
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="TEMPLATE_REVIEW_NOT_FOUND")
+    row.review_status = "official"
+    db.commit()
+    db.refresh(row)
+    return _template_out(row)
+
+
+@router.post("/templates/{template_id}/reject", response_model=TemplateOut)
+async def reject_template_review(
+    template_id: str,
+    request: Request,
+    session_payload: Annotated[SessionPayload, Depends(get_session)],
+    current_settings: Annotated[Settings, Depends(get_settings)],
+    db: Annotated[Session, Depends(get_db)],
+) -> TemplateOut:
+    await _require_admin(request, session_payload, current_settings)
+    row = db.scalar(
+        select(TemplateLibrary).where(
+            TemplateLibrary.uuid == template_id,
+            TemplateLibrary.scope == "company",
+            TemplateLibrary.review_status == "pending",
+            TemplateLibrary.status == "active",
+        )
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="TEMPLATE_REVIEW_NOT_FOUND")
+    row.scope = "personal"
+    row.review_status = "rejected"
+    db.commit()
+    db.refresh(row)
+    return _template_out(row)
 
 
 @router.patch("/templates/{template_id}", response_model=TemplateOut)
