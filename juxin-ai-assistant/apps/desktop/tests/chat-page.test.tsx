@@ -3,7 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { HttpResponse, http } from 'msw';
 import { beforeEach, expect, it, vi } from 'vitest';
 
-import { ChatPage } from '../src/pages/ChatPage';
+import { ChatPage, detectMemorySuggestion } from '../src/pages/ChatPage';
 import { server } from './setup';
 
 const { invokeMock, generateLocalModelMock } = vi.hoisted(() => ({
@@ -71,6 +71,12 @@ beforeEach(() => {
   });
 });
 
+it('detects explicit memory trigger phrases without saving sensitive content', () => {
+  expect(detectMemorySuggestion('以后都这样，导出 Word 成功只显示 Toast')?.memoryType).toBe('user_preference');
+  expect(detectMemorySuggestion('不对，应该只显示引用文件名')?.priority).toBe('high');
+  expect(detectMemorySuggestion('记住我的 API Key 是 sk-test')).toBeNull();
+});
+
 it('sends a normal chat message, streams output, and completes it', async () => {
   const completeRequest = vi.fn();
   const streamedDeltas: string[] = [];
@@ -121,6 +127,50 @@ it('sends a normal chat message, streams output, and completes it', async () => 
       model_id: 'deepseek-chat',
     }),
   ));
+});
+
+it('asks before saving explicit user memory and then stores it', async () => {
+  const memoryRequest = vi.fn();
+  server.use(
+    http.get('/api/conversations', () => HttpResponse.json({ items: [], total: 0 })),
+    http.post('/api/ai/chat/prepare', () => HttpResponse.json({
+      session_uuid: 'session-memory',
+      user_message_uuid: 'user-message-memory',
+      assistant_message_uuid: 'assistant-message-memory',
+      completion_token: 'complete-memory',
+      completed: true,
+      answer: '已了解。',
+      messages: [],
+      citations: [],
+    }, { status: 201 })),
+    http.post('/api/learning/memories', async ({ request }) => {
+      memoryRequest(await request.json());
+      return HttpResponse.json({
+        uuid: 'memory-1',
+        memory_type: 'user_preference',
+        title: '用户偏好',
+        content: '以后都这样，Word 导出成功只显示 Toast',
+        source: 'manual',
+        priority: 'medium',
+        tags: ['偏好'],
+        status: 'active',
+        created_at: '2026-07-04T08:00:00Z',
+        updated_at: '2026-07-04T08:00:00Z',
+      }, { status: 201 });
+    }),
+  );
+
+  render(<ChatPage />);
+  await userEvent.type(await screen.findByLabelText('告诉我你想完成什么工作'), '以后都这样，Word 导出成功只显示 Toast');
+  await userEvent.click(screen.getByRole('button', { name: '发送' }));
+
+  expect(await screen.findByText('是否保存为长期记忆？')).toBeInTheDocument();
+  await userEvent.click(screen.getByRole('button', { name: '保存' }));
+  await waitFor(() => expect(memoryRequest).toHaveBeenCalledWith(expect.objectContaining({
+    memory_type: 'user_preference',
+    content: '以后都这样，Word 导出成功只显示 Toast',
+  })));
+  expect(await screen.findByText('已保存为长期记忆，后续回答会优先参考')).toBeInTheDocument();
 });
 
 it('shows only cited files mentioned in the final answer', async () => {

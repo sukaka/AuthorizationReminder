@@ -3972,6 +3972,48 @@ textarea:focus-visible {
   color: var(--accent-text);
 }
 
+.chat-memory-suggestion {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border: 1px solid rgba(220, 38, 38, .16);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, .86);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.chat-memory-suggestion div {
+  min-width: 0;
+  flex: 1;
+}
+
+.chat-memory-suggestion strong {
+  display: block;
+  color: var(--text-primary);
+  font-size: 13px;
+}
+
+.chat-memory-suggestion p {
+  margin: 2px 0 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-memory-suggestion button {
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+  background: #ffffff;
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 700;
+  padding: 7px 12px;
+  cursor: pointer;
+}
+
 @media (max-width: 1280px) {
   .chat-page.has-chat-content .chat-content-grid {
     grid-template-columns: minmax(0, 1fr);

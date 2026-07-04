@@ -40,6 +40,7 @@ import {
   ApiError,
   createLearningExperience,
   createLearningFailureCase,
+  createLearningMemory,
   createLearningTemplate,
 } from '../api/client';
 import { generateLocalModel } from '../local/modelStream';
@@ -80,6 +81,14 @@ type EnabledReferenceFile = {
   sourceKind: 'personal_reference' | 'session_attachment';
 };
 
+type MemorySuggestion = {
+  memoryType: string;
+  title: string;
+  content: string;
+  priority: 'high' | 'medium' | 'low';
+  tags: string[];
+};
+
 const modeLabels: Record<ChatMode, string> = {
   normal: '普通助手',
   sales: '销售助手',
@@ -111,6 +120,59 @@ const webUrlPattern = /https?:\/\/[^\s<>'"，。；;、）)】]+/i;
 
 function extractFirstWebUrl(value: string): string {
   return webUrlPattern.exec(value)?.[0] || '';
+}
+
+const sensitiveMemoryPattern = /(密码|口令|验证码|api\s*key|apikey|token|secret|密钥|身份证|银行卡)/i;
+
+export function detectMemorySuggestion(value: string): MemorySuggestion | null {
+  const content = value.trim();
+  if (!content || sensitiveMemoryPattern.test(content)) return null;
+  if (/不要再这样|不要再这么|禁用表达|以后不要/.test(content)) {
+    return {
+      memoryType: 'forbidden_style',
+      title: '禁用表达或错误做法',
+      content,
+      priority: 'high',
+      tags: ['禁用表达', '用户纠正'],
+    };
+  }
+  if (/不对[，,。；;\s]*应该|应该是|正确的是/.test(content)) {
+    return {
+      memoryType: 'correction',
+      title: '用户纠错',
+      content,
+      priority: 'high',
+      tags: ['纠错', '高优先级'],
+    };
+  }
+  if (/保存为模板/.test(content)) {
+    return {
+      memoryType: 'template',
+      title: '模板沉淀规则',
+      content,
+      priority: 'medium',
+      tags: ['模板'],
+    };
+  }
+  if (/保存为经验/.test(content)) {
+    return {
+      memoryType: 'experience',
+      title: '经验沉淀规则',
+      content,
+      priority: 'medium',
+      tags: ['经验'],
+    };
+  }
+  if (/以后都这样|记住|下次按照这个|这个是对的/.test(content)) {
+    return {
+      memoryType: 'user_preference',
+      title: '用户偏好',
+      content,
+      priority: 'medium',
+      tags: ['偏好'],
+    };
+  }
+  return null;
 }
 
 function uploadFileHint(file: File | null): string {
@@ -471,6 +533,7 @@ export function ChatPage() {
   const [exportingWord, setExportingWord] = useState(false);
   const [sourcePreview, setSourcePreview] = useState<SourcePreviewState>({ status: 'idle' });
   const [webCapture, setWebCapture] = useState<WebCaptureState>({ status: 'idle' });
+  const [memorySuggestion, setMemorySuggestion] = useState<MemorySuggestion | null>(null);
   const messageListRef = useRef<HTMLDivElement | null>(null);
   const shouldStickToBottomRef = useRef(true);
 
@@ -782,6 +845,7 @@ export function ChatPage() {
     shouldStickToBottomRef.current = true;
     setStatus(mode === 'knowledge' ? '检索中…' : '生成中…');
     setQuestion('');
+    setMemorySuggestion(detectMemorySuggestion(trimmed));
       setMessages((current) => current.concat({
         id: `local-user-${Date.now()}`,
         role: 'user',
@@ -907,6 +971,23 @@ export function ChatPage() {
       if (detail.includes('已归档')) setActiveSessionStatus('archived');
       if (detail.includes('已删除')) setActiveSessionStatus('deleted');
       setStatus(detail || '内容生成失败，请稍后重试');
+    }
+  };
+
+  const saveSuggestedMemory = async () => {
+    if (!memorySuggestion) return;
+    try {
+      await createLearningMemory({
+        memory_type: memorySuggestion.memoryType,
+        title: memorySuggestion.title,
+        content: memorySuggestion.content,
+        priority: memorySuggestion.priority,
+        tags: memorySuggestion.tags,
+      });
+      setMemorySuggestion(null);
+      setStatus('已保存为长期记忆，后续回答会优先参考');
+    } catch {
+      setStatus('记忆保存失败，请稍后重试');
     }
   };
 
@@ -1873,6 +1954,16 @@ export function ChatPage() {
                   ↑
                 </button>
               </div>
+              {memorySuggestion ? (
+                <section className="chat-memory-suggestion" aria-label="长期记忆建议">
+                  <div>
+                    <strong>是否保存为长期记忆？</strong>
+                    <p>{memorySuggestion.content}</p>
+                  </div>
+                  <button onClick={() => void saveSuggestedMemory()} type="button">保存</button>
+                  <button onClick={() => setMemorySuggestion(null)} type="button">不保存</button>
+                </section>
+              ) : null}
               {uploadStatus ? <p className="chat-composer-hint" role="status">{uploadStatus}</p> : null}
             </form>
           </div>
