@@ -35,6 +35,9 @@ class AnswerGenerator:
         knowledge_chunks: list[RetrievedKnowledgeChunk],
         personal_reference_chunks: list[RetrievedKnowledgeChunk] | None = None,
         recent_messages: list[RecentChatMessage],
+        long_term_memories: list[str] | None = None,
+        related_experiences: list[str] | None = None,
+        related_failure_cases: list[str] | None = None,
     ) -> list[MessageOut]:
         messages = self.context_builder.build_messages(
             mode=analysis.mode,
@@ -42,6 +45,9 @@ class AnswerGenerator:
             knowledge_chunks=knowledge_chunks,
             personal_reference_chunks=personal_reference_chunks,
             recent_messages=recent_messages,
+            long_term_memories=long_term_memories,
+            related_experiences=related_experiences,
+            related_failure_cases=related_failure_cases,
             require_knowledge_evidence=analysis.require_knowledge_evidence,
         )
         loop_context = "\n\n".join([

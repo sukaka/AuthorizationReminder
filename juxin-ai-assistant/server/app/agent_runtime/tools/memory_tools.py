@@ -8,7 +8,7 @@ from app.models import UserMemory
 
 class PersonalMemoryTool(BaseTool):
     name = "personal_memory"
-    description = "保存、读取或停用当前用户的我的偏好"
+    description = "保存、读取或停用当前用户长期记忆"
     version = "1"
 
     def run(self, tool_input: dict, context: ToolContext) -> ToolResult:
@@ -42,11 +42,21 @@ class PersonalMemoryTool(BaseTool):
                 error_code="PERSONAL_MEMORY_CONTENT_REQUIRED",
                 error_message_safe="偏好内容不能为空",
             )
-        memory_type = str(tool_input.get("memory_type") or "preference").strip()[:32] or "preference"
+        memory_type = str(tool_input.get("memory_type") or "user_preference").strip()[:32] or "user_preference"
+        priority = str(tool_input.get("priority") or "medium").strip().lower()
+        if priority not in {"high", "medium", "low"}:
+            priority = "medium"
         record = UserMemory(
             sso_user_id=context.user_id,
             memory_type=memory_type,
+            title=str(tool_input.get("title") or "")[:128],
             content=content[:1000],
+            priority=priority,
+            tags_json=[
+                str(tag).strip()[:64]
+                for tag in (tool_input.get("tags") or [])
+                if str(tag).strip()
+            ][:20],
             status="active",
             source=str(tool_input.get("source") or "assistant")[:64],
             metadata_json=dict(tool_input.get("metadata") or {}),
@@ -55,8 +65,15 @@ class PersonalMemoryTool(BaseTool):
         context.db.flush()
         return ToolResult(
             tool_name=self.name,
-            payload={"memory_id": record.uuid, "memory_type": record.memory_type, "content": record.content},
-            output_summary={"action": "save", "memory_type": record.memory_type},
+            payload={
+                "memory_id": record.uuid,
+                "memory_type": record.memory_type,
+                "title": record.title,
+                "content": record.content,
+                "priority": record.priority,
+                "tags": record.tags_json,
+            },
+            output_summary={"action": "save", "memory_type": record.memory_type, "priority": record.priority},
             source_count=1,
         )
 
@@ -69,12 +86,19 @@ class PersonalMemoryTool(BaseTool):
         )
         if memory_type:
             statement = statement.where(UserMemory.memory_type == memory_type)
-        rows = list(context.db.scalars(statement.order_by(UserMemory.updated_at.desc(), UserMemory.id.desc()).limit(limit)))
+        rows = list(context.db.scalars(statement.order_by(
+            UserMemory.priority.asc(),
+            UserMemory.updated_at.desc(),
+            UserMemory.id.desc(),
+        ).limit(limit)))
         memories = [
             {
                 "memory_id": row.uuid,
                 "memory_type": row.memory_type,
+                "title": row.title,
                 "content": row.content,
+                "priority": row.priority,
+                "tags": row.tags_json or [],
                 "source": row.source,
                 "created_at": row.created_at.isoformat() if row.created_at else "",
                 "updated_at": row.updated_at.isoformat() if row.updated_at else "",

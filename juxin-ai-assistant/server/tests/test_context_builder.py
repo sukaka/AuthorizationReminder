@@ -138,6 +138,32 @@ def test_chat_context_builder_keeps_long_term_memory_as_preferences_not_evidence
     assert "正式知识库说明：验收前必须完成部署检查。" in system_prompt
 
 
+def test_chat_context_builder_injects_experiences_and_failure_cases_before_recent_chat():
+    from app.context.context_builder import ContextBuilder, RecentChatMessage
+
+    messages = ContextBuilder().build_messages(
+        mode="business",
+        current_user_message="写投标响应",
+        knowledge_chunks=[],
+        personal_reference_chunks=[],
+        recent_messages=[RecentChatMessage(role="user", content="上一轮问题")],
+        long_term_memories=["高优先级纠错：不要把导出路径写入历史任务。"],
+        related_experiences=["经验：商务投标先列评分点，再列响应表。"],
+        related_failure_cases=["失败案例：导出成功提示曾写入历史标题；防复发：只用 Toast。"],
+        require_knowledge_evidence=False,
+    )
+
+    system_prompt = messages[0].content
+    assert "## experience_library_context" in system_prompt
+    assert "商务投标先列评分点" in system_prompt
+    assert "## failure_case_context" in system_prompt
+    assert "防复发：只用 Toast" in system_prompt
+    assert system_prompt.index("## experience_library_context") < system_prompt.index(
+        "## failure_case_context"
+    )
+    assert messages[1].content == "上一轮问题"
+
+
 def test_chat_context_builder_uses_structured_source_location_without_unrecognized_label():
     from app.context.context_builder import ContextBuilder
     from app.knowledge_search import RetrievedKnowledgeChunk

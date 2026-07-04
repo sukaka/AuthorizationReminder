@@ -917,3 +917,219 @@ class FeedbackOut(BaseModel):
     uuid: str
     generation_uuid: str
     feedback_type: FeedbackType
+
+
+class MemoryCreateIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    memory_type: Literal[
+        "user_preference",
+        "company_fact",
+        "role_rule",
+        "document_format",
+        "correction",
+        "template",
+        "experience",
+        "failure_case",
+        "forbidden_style",
+    ] = "user_preference"
+    title: str = Field(default="", max_length=128)
+    content: str = Field(min_length=1, max_length=8_000)
+    source: str = Field(default="user_confirmed", max_length=64)
+    priority: Literal["high", "medium", "low"] = "medium"
+    tags: list[str] = Field(default_factory=list, max_length=20)
+
+    @field_validator("title", "content", "source")
+    @classmethod
+    def strip_text(cls, value: str) -> str:
+        return value.strip()
+
+    @field_validator("tags")
+    @classmethod
+    def clean_tags(cls, value: list[str]) -> list[str]:
+        return [tag.strip()[:64] for tag in value if tag.strip()][:20]
+
+
+class MemoryPatchIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    memory_type: Literal[
+        "user_preference",
+        "company_fact",
+        "role_rule",
+        "document_format",
+        "correction",
+        "template",
+        "experience",
+        "failure_case",
+        "forbidden_style",
+    ] | None = None
+    title: str | None = Field(default=None, max_length=128)
+    content: str | None = Field(default=None, min_length=1, max_length=8_000)
+    priority: Literal["high", "medium", "low"] | None = None
+    tags: list[str] | None = Field(default=None, max_length=20)
+    status: Literal["active", "disabled"] | None = None
+
+    @field_validator("title", "content")
+    @classmethod
+    def strip_optional_text(cls, value: str | None) -> str | None:
+        return value.strip() if value is not None else None
+
+    @field_validator("tags")
+    @classmethod
+    def clean_optional_tags(cls, value: list[str] | None) -> list[str] | None:
+        if value is None:
+            return None
+        return [tag.strip()[:64] for tag in value if tag.strip()][:20]
+
+
+class MemoryOut(BaseModel):
+    uuid: str
+    memory_type: str
+    title: str
+    content: str
+    source: str
+    priority: str
+    tags: list[str] = Field(default_factory=list)
+    status: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class MemoryListOut(BaseModel):
+    items: list[MemoryOut]
+    total: int
+
+
+class ExperienceCreateIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    task_type: str = Field(default="", max_length=64)
+    title: str = Field(default="", max_length=128)
+    question: str = Field(min_length=1, max_length=12_000)
+    answer: str = Field(min_length=1, max_length=30_000)
+    summary: str = Field(default="", max_length=4_000)
+    tags: list[str] = Field(default_factory=list, max_length=20)
+
+    @field_validator("task_type", "title", "question", "answer", "summary")
+    @classmethod
+    def strip_experience_text(cls, value: str) -> str:
+        return value.strip()
+
+    @field_validator("tags")
+    @classmethod
+    def clean_experience_tags(cls, value: list[str]) -> list[str]:
+        return [tag.strip()[:64] for tag in value if tag.strip()][:20]
+
+
+class ExperienceOut(BaseModel):
+    uuid: str
+    task_type: str
+    title: str
+    question: str
+    answer: str
+    summary: str
+    tags: list[str] = Field(default_factory=list)
+    status: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class ExperienceListOut(BaseModel):
+    items: list[ExperienceOut]
+    total: int
+
+
+class TemplateCreateIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    template_name: str = Field(min_length=1, max_length=128)
+    task_type: str = Field(default="", max_length=64)
+    template_content: str = Field(min_length=1, max_length=30_000)
+    variables: dict = Field(default_factory=dict)
+    scope: Literal["personal", "company"] = "personal"
+
+    @field_validator("template_name", "task_type", "template_content")
+    @classmethod
+    def strip_template_text(cls, value: str) -> str:
+        return value.strip()
+
+
+class TemplateOut(BaseModel):
+    uuid: str
+    template_name: str
+    task_type: str
+    template_content: str
+    variables: dict = Field(default_factory=dict)
+    scope: str
+    review_status: str
+    status: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class TemplateListOut(BaseModel):
+    items: list[TemplateOut]
+    total: int
+
+
+class FailureCaseCreateIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    task_type: str = Field(default="", max_length=64)
+    wrong_answer: str = Field(min_length=1, max_length=30_000)
+    correction: str = Field(min_length=1, max_length=30_000)
+    prevention_rule: str = Field(default="", max_length=8_000)
+    tags: list[str] = Field(default_factory=list, max_length=20)
+
+    @field_validator("task_type", "wrong_answer", "correction", "prevention_rule")
+    @classmethod
+    def strip_failure_text(cls, value: str) -> str:
+        return value.strip()
+
+    @field_validator("tags")
+    @classmethod
+    def clean_failure_tags(cls, value: list[str]) -> list[str]:
+        return [tag.strip()[:64] for tag in value if tag.strip()][:20]
+
+
+class FailureCaseOut(BaseModel):
+    uuid: str
+    task_type: str
+    wrong_answer: str
+    correction: str
+    prevention_rule: str
+    tags: list[str] = Field(default_factory=list)
+    status: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class FailureCaseListOut(BaseModel):
+    items: list[FailureCaseOut]
+    total: int
+
+
+class LearningFeedbackIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    conversation_id: str = Field(default="", max_length=64)
+    message_id: str = Field(default="", max_length=64)
+    feedback_type: Literal["useful", "not_useful", "needs_revision", "save_experience", "save_template", "record_error"]
+    comment: str = Field(default="", max_length=4_000)
+    saved_as: Literal["", "experience", "template", "failure_case", "memory"] = ""
+
+    @field_validator("conversation_id", "message_id", "comment")
+    @classmethod
+    def strip_feedback_text(cls, value: str) -> str:
+        return value.strip()
+
+
+class LearningFeedbackOut(BaseModel):
+    uuid: str
+    conversation_id: str
+    message_id: str
+    feedback_type: str
+    comment: str
+    saved_as: str
+    created_at: datetime

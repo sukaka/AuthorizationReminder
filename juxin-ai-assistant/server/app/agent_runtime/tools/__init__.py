@@ -9,6 +9,7 @@ from .knowledge_tools import (
     CurrentAttachmentSearchTool,
     PersonalReferenceSearchTool,
 )
+from .learning_tools import LearningLibraryTool
 from .memory_tools import PersonalMemoryTool
 from .presentation_tools import PptxExportTool
 from .protocol_tools import ProtocolAdapterStatusTool
@@ -37,6 +38,7 @@ __all__ = [
     "KnowledgeReviewApproveTool",
     "KnowledgeReviewRejectTool",
     "KnowledgeReviewSubmitTool",
+    "LearningLibraryTool",
     "PersonalMemoryTool",
     "PersonalReferenceSearchTool",
     "PptxExportTool",

@@ -16,6 +16,7 @@ import { ChatPage } from './pages/ChatPage';
 import { HistoryPage } from './pages/HistoryPage';
 import { HomePage } from './pages/HomePage';
 import { KnowledgePage } from './pages/KnowledgePage';
+import { LearningPage } from './pages/LearningPage';
 import { TaskRunPage, type TaskDefinition } from './pages/TaskRunPage';
 import { logoutLocalUser, syncPendingResults } from './local/syncQueue';
 import { GovernanceCenter } from './pages/admin/GovernanceCenter';
@@ -34,6 +35,7 @@ type WorkspacePage =
   | 'chat'
   | 'history'
   | 'knowledge'
+  | 'learning'
   | 'task'
   | 'models'
   | 'governance'
@@ -67,15 +69,17 @@ function Workspace({ session }: { session: SessionPayload }) {
           ? '工作成果'
           : page === 'knowledge'
             ? '我的资料'
-            : page === 'models'
-              ? '设置'
-              : page === 'department-stats'
-                ? '部门数据'
-                : page === 'suggestions'
-                  ? '提交建议'
-                  : page === 'governance'
-                    ? '治理中心'
-                    : '任务处理';
+            : page === 'learning'
+              ? '学习中心'
+              : page === 'models'
+                ? '设置'
+                : page === 'department-stats'
+                  ? '部门数据'
+                  : page === 'suggestions'
+                    ? '提交建议'
+                    : page === 'governance'
+                      ? '治理中心'
+                      : '任务处理';
 
   useEffect(() => {
     if (sidebarTouched) return;
@@ -149,6 +153,7 @@ function Workspace({ session }: { session: SessionPayload }) {
           <button aria-current={page === 'assistants' ? 'page' : undefined} className={page === 'assistants' ? 'is-current' : ''} onClick={() => setPage('assistants')} type="button"><span className="nav-icon" aria-hidden="true">✦</span><span className="nav-label">助手模式</span></button>
           <button aria-current={page === 'history' ? 'page' : undefined} className={page === 'history' ? 'is-current' : ''} onClick={() => setPage('history')} type="button"><span className="nav-icon" aria-hidden="true">↺</span><span className="nav-label">工作成果</span></button>
           <button aria-current={page === 'knowledge' ? 'page' : undefined} className={page === 'knowledge' ? 'is-current' : ''} onClick={() => setPage('knowledge')} type="button"><span className="nav-icon" aria-hidden="true">⌘</span><span className="nav-label">我的资料</span></button>
+          <button aria-current={page === 'learning' ? 'page' : undefined} className={page === 'learning' ? 'is-current' : ''} onClick={() => setPage('learning')} type="button"><span className="nav-icon" aria-hidden="true">✧</span><span className="nav-label">学习中心</span></button>
           <button aria-current={page === 'models' ? 'page' : undefined} className={page === 'models' ? 'is-current' : ''} onClick={() => setPage('models')} type="button"><span className="nav-icon" aria-hidden="true">◇</span><span className="nav-label">设置</span></button>
           {isAdmin ? (
             <>
@@ -207,6 +212,8 @@ function Workspace({ session }: { session: SessionPayload }) {
           <ChatPage />
         ) : page === 'knowledge' ? (
           <KnowledgePage session={session} />
+        ) : page === 'learning' ? (
+          <LearningPage />
         ) : page === 'history' ? (
           <HistoryPage />
         ) : page === 'task' ? (

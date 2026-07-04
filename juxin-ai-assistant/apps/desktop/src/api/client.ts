@@ -96,6 +96,57 @@ export type HomePayload = {
   safety_reminders: string[];
 };
 
+export type LearningMemoryPayload = {
+  uuid: string;
+  memory_type: string;
+  title: string;
+  content: string;
+  source: string;
+  priority: 'high' | 'medium' | 'low' | string;
+  tags: string[];
+  status: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type LearningExperiencePayload = {
+  uuid: string;
+  task_type: string;
+  title: string;
+  question: string;
+  answer: string;
+  summary: string;
+  tags: string[];
+  status: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type LearningTemplatePayload = {
+  uuid: string;
+  template_name: string;
+  task_type: string;
+  template_content: string;
+  variables: Record<string, unknown>;
+  scope: string;
+  review_status: string;
+  status: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type LearningFailureCasePayload = {
+  uuid: string;
+  task_type: string;
+  wrong_answer: string;
+  correction: string;
+  prevention_rule: string;
+  tags: string[];
+  status: string;
+  created_at: string;
+  updated_at: string;
+};
+
 export type AttachmentPayload = {
   attachment_uuid: string;
   file_name: string;
@@ -255,6 +306,72 @@ export async function getHome(): Promise<HomePayload> {
   return readJson<HomePayload>(
     await apiFetch('/api/ai/home'),
     'HOME_FAILED',
+  );
+}
+
+export async function listLearningMemories(status = 'active'): Promise<{ items: LearningMemoryPayload[]; total: number }> {
+  return readJson(
+    await apiFetch(`/api/learning/memories?status=${encodeURIComponent(status)}`, { cache: 'no-store' }),
+    'LEARNING_MEMORIES_FAILED',
+  );
+}
+
+export async function createLearningMemory(payload: {
+  memory_type: string;
+  title: string;
+  content: string;
+  priority: 'high' | 'medium' | 'low';
+  tags: string[];
+}): Promise<LearningMemoryPayload> {
+  return readJson(
+    await apiFetch('/api/learning/memories', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }),
+    'LEARNING_MEMORY_CREATE_FAILED',
+  );
+}
+
+export async function updateLearningMemory(
+  memoryId: string,
+  payload: Partial<Pick<LearningMemoryPayload, 'memory_type' | 'title' | 'content' | 'priority' | 'status'>> & { tags?: string[] },
+): Promise<LearningMemoryPayload> {
+  return readJson(
+    await apiFetch(`/api/learning/memories/${encodeURIComponent(memoryId)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }),
+    'LEARNING_MEMORY_UPDATE_FAILED',
+  );
+}
+
+export async function deleteLearningMemory(memoryId: string): Promise<LearningMemoryPayload> {
+  return readJson(
+    await apiFetch(`/api/learning/memories/${encodeURIComponent(memoryId)}`, { method: 'DELETE' }),
+    'LEARNING_MEMORY_DELETE_FAILED',
+  );
+}
+
+export async function listLearningExperiences(): Promise<{ items: LearningExperiencePayload[]; total: number }> {
+  return readJson(
+    await apiFetch('/api/learning/experiences', { cache: 'no-store' }),
+    'LEARNING_EXPERIENCES_FAILED',
+  );
+}
+
+export async function listLearningTemplates(): Promise<{ items: LearningTemplatePayload[]; total: number }> {
+  return readJson(
+    await apiFetch('/api/learning/templates', { cache: 'no-store' }),
+    'LEARNING_TEMPLATES_FAILED',
+  );
+}
+
+export async function listLearningFailureCases(): Promise<{ items: LearningFailureCasePayload[]; total: number }> {
+  return readJson(
+    await apiFetch('/api/learning/failure-cases', { cache: 'no-store' }),
+    'LEARNING_FAILURE_CASES_FAILED',
   );
 }
 

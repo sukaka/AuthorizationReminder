@@ -20,6 +20,8 @@ class GatheredContext:
     personal_reference_chunks: list[RetrievedKnowledgeChunk]
     recent_messages: list[RecentChatMessage]
     long_term_memories: list[str]
+    related_experiences: list[str]
+    related_failure_cases: list[str]
     require_knowledge_evidence: bool
 
 
@@ -32,6 +34,8 @@ class SelectedContext:
     recent_messages: list[RecentChatMessage]
     older_messages: list[RecentChatMessage]
     long_term_memories: list[str]
+    related_experiences: list[str]
+    related_failure_cases: list[str]
     require_knowledge_evidence: bool
 
 
@@ -44,6 +48,8 @@ class CompressedContext:
     recent_messages: list[RecentChatMessage]
     conversation_summary: str
     long_term_memories: list[str]
+    related_experiences: list[str]
+    related_failure_cases: list[str]
     require_knowledge_evidence: bool
 
 
@@ -75,6 +81,8 @@ class ContextBuilder:
         personal_reference_chunks: list[RetrievedKnowledgeChunk] | None = None,
         recent_messages: list[RecentChatMessage],
         long_term_memories: list[str] | None = None,
+        related_experiences: list[str] | None = None,
+        related_failure_cases: list[str] | None = None,
         require_knowledge_evidence: bool,
     ) -> list[MessageOut]:
         gathered = self.gather_context(
@@ -84,6 +92,8 @@ class ContextBuilder:
             personal_reference_chunks=personal_reference_chunks or [],
             recent_messages=recent_messages,
             long_term_memories=long_term_memories or [],
+            related_experiences=related_experiences or [],
+            related_failure_cases=related_failure_cases or [],
             require_knowledge_evidence=require_knowledge_evidence,
         )
         structured = self.structure_context(self.compress_context(self.select_context(gathered)))
@@ -104,6 +114,8 @@ class ContextBuilder:
         personal_reference_chunks: list[RetrievedKnowledgeChunk],
         recent_messages: list[RecentChatMessage],
         long_term_memories: list[str],
+        related_experiences: list[str] | None = None,
+        related_failure_cases: list[str] | None = None,
         require_knowledge_evidence: bool,
     ) -> GatheredContext:
         return GatheredContext(
@@ -113,6 +125,8 @@ class ContextBuilder:
             personal_reference_chunks=personal_reference_chunks,
             recent_messages=recent_messages,
             long_term_memories=long_term_memories,
+            related_experiences=related_experiences or [],
+            related_failure_cases=related_failure_cases or [],
             require_knowledge_evidence=require_knowledge_evidence,
         )
 
@@ -140,6 +154,16 @@ class ContextBuilder:
                 for memory in context.long_term_memories
                 if memory.strip()
             ][:8],
+            related_experiences=[
+                item.strip()
+                for item in context.related_experiences
+                if item.strip()
+            ][:5],
+            related_failure_cases=[
+                item.strip()
+                for item in context.related_failure_cases
+                if item.strip()
+            ][:5],
             require_knowledge_evidence=context.require_knowledge_evidence,
         )
 
@@ -152,6 +176,8 @@ class ContextBuilder:
             recent_messages=context.recent_messages,
             conversation_summary=self._conversation_summary(context.older_messages),
             long_term_memories=context.long_term_memories,
+            related_experiences=context.related_experiences,
+            related_failure_cases=context.related_failure_cases,
             require_knowledge_evidence=context.require_knowledge_evidence,
         )
 
@@ -169,6 +195,10 @@ class ContextBuilder:
             + self._official_knowledge_context(context.knowledge_chunks),
             "## personal_reference_context\n\n"
             + self._personal_reference_context(context.personal_reference_chunks),
+            "## experience_library_context\n\n"
+            + self._experience_library_context(context.related_experiences),
+            "## failure_case_context\n\n"
+            + self._failure_case_context(context.related_failure_cases),
             "## knowledge_policy\n\n" + self._knowledge_policy(
                 knowledge_chunks=context.knowledge_chunks,
                 personal_reference_chunks=context.personal_reference_chunks,
@@ -219,6 +249,24 @@ class ContextBuilder:
         return policy + "\n" + "\n".join(
             f"- {memory[:500]}"
             for memory in normalized[:8]
+        )
+
+    @staticmethod
+    def _experience_library_context(related_experiences: list[str]) -> str:
+        if not related_experiences:
+            return "暂无相关经验。"
+        return "用户认可过的写法、结构和处理方式。可复用，但不得替代正式知识库证据。\n" + "\n".join(
+            f"- {item[:600]}"
+            for item in related_experiences[:5]
+        )
+
+    @staticmethod
+    def _failure_case_context(related_failure_cases: list[str]) -> str:
+        if not related_failure_cases:
+            return "暂无相关失败案例。"
+        return "历史错误和防复发规则。回答前必须检查是否会重复犯错。\n" + "\n".join(
+            f"- {item[:600]}"
+            for item in related_failure_cases[:5]
         )
 
     @staticmethod

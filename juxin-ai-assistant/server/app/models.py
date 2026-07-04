@@ -705,6 +705,16 @@ class UserFavorite(TimestampMixin, Base):
 class UserMemory(TimestampMixin, Base):
     __tablename__ = "ai_user_memories"
 
+    def __init__(self, **kwargs):
+        for key, value in kwargs.items():
+            setattr(self, key, value)
+        if getattr(self, "title", None) is None:
+            self.title = ""
+        if getattr(self, "priority", None) is None:
+            self.priority = "medium"
+        if getattr(self, "tags_json", None) is None:
+            self.tags_json = []
+
     id: Mapped[int] = mapped_column(primary_key_type, primary_key=True, autoincrement=True)
     uuid: Mapped[str] = mapped_column(
         String(36),
@@ -713,7 +723,67 @@ class UserMemory(TimestampMixin, Base):
     )
     sso_user_id: Mapped[str] = mapped_column(String(64), index=True)
     memory_type: Mapped[str] = mapped_column(String(32), default="preference", index=True)
+    title: Mapped[str] = mapped_column(String(128), default="")
     content: Mapped[str] = mapped_column(Text)
+    priority: Mapped[str] = mapped_column(String(16), default="medium", index=True)
+    tags_json: Mapped[list] = mapped_column(JSON, default=list)
     status: Mapped[str] = mapped_column(String(24), default="active", index=True)
     source: Mapped[str] = mapped_column(String(64), default="assistant")
     metadata_json: Mapped[dict] = mapped_column(JSON, default=dict)
+
+
+class ExperienceLibrary(TimestampMixin, Base):
+    __tablename__ = "ai_experience_library"
+
+    id: Mapped[int] = mapped_column(primary_key_type, primary_key=True, autoincrement=True)
+    uuid: Mapped[str] = mapped_column(String(36), unique=True, default=lambda: str(uuid_lib.uuid4()))
+    user_id: Mapped[str] = mapped_column(String(64), index=True)
+    task_type: Mapped[str] = mapped_column(String(64), default="", index=True)
+    title: Mapped[str] = mapped_column(String(128), default="")
+    question: Mapped[str] = mapped_column(Text)
+    answer: Mapped[str] = mapped_column(Text)
+    summary: Mapped[str] = mapped_column(Text)
+    tags_json: Mapped[list] = mapped_column(JSON, default=list)
+    status: Mapped[str] = mapped_column(String(24), default="active", index=True)
+
+
+class TemplateLibrary(TimestampMixin, Base):
+    __tablename__ = "ai_template_library"
+
+    id: Mapped[int] = mapped_column(primary_key_type, primary_key=True, autoincrement=True)
+    uuid: Mapped[str] = mapped_column(String(36), unique=True, default=lambda: str(uuid_lib.uuid4()))
+    user_id: Mapped[str] = mapped_column(String(64), index=True)
+    template_name: Mapped[str] = mapped_column(String(128))
+    task_type: Mapped[str] = mapped_column(String(64), default="", index=True)
+    template_content: Mapped[str] = mapped_column(Text)
+    variables_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    scope: Mapped[str] = mapped_column(String(24), default="personal", index=True)
+    review_status: Mapped[str] = mapped_column(String(24), default="draft", index=True)
+    status: Mapped[str] = mapped_column(String(24), default="active", index=True)
+
+
+class FailureCaseLibrary(TimestampMixin, Base):
+    __tablename__ = "ai_failure_case_library"
+
+    id: Mapped[int] = mapped_column(primary_key_type, primary_key=True, autoincrement=True)
+    uuid: Mapped[str] = mapped_column(String(36), unique=True, default=lambda: str(uuid_lib.uuid4()))
+    user_id: Mapped[str] = mapped_column(String(64), index=True)
+    task_type: Mapped[str] = mapped_column(String(64), default="", index=True)
+    wrong_answer: Mapped[str] = mapped_column(Text)
+    correction: Mapped[str] = mapped_column(Text)
+    prevention_rule: Mapped[str] = mapped_column(Text)
+    tags_json: Mapped[list] = mapped_column(JSON, default=list)
+    status: Mapped[str] = mapped_column(String(24), default="active", index=True)
+
+
+class FeedbackLog(TimestampMixin, Base):
+    __tablename__ = "ai_feedback_logs"
+
+    id: Mapped[int] = mapped_column(primary_key_type, primary_key=True, autoincrement=True)
+    uuid: Mapped[str] = mapped_column(String(36), unique=True, default=lambda: str(uuid_lib.uuid4()))
+    user_id: Mapped[str] = mapped_column(String(64), index=True)
+    conversation_id: Mapped[str] = mapped_column(String(64), default="", index=True)
+    message_id: Mapped[str] = mapped_column(String(64), default="", index=True)
+    feedback_type: Mapped[str] = mapped_column(String(32))
+    comment: Mapped[str] = mapped_column(Text, default="")
+    saved_as: Mapped[str] = mapped_column(String(32), default="")

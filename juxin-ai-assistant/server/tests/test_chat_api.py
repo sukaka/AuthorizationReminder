@@ -59,6 +59,51 @@ def test_normal_chat_prepare_complete_and_detail(client_for_user) -> None:
     assert messages[1]["content"] == "今天完成了需求整理。"
 
 
+def test_chat_prepare_injects_learning_loop_context(client_for_user, generation_db) -> None:
+    from app.models import ExperienceLibrary, FailureCaseLibrary, UserMemory
+
+    generation_db.add_all([
+        UserMemory(
+            sso_user_id="user-learning",
+            memory_type="correction",
+            title="投标输出偏好",
+            content="投标类回答必须先列评分点，再列响应表。",
+            priority="high",
+            tags_json=["投标"],
+        ),
+        ExperienceLibrary(
+            user_id="user-learning",
+            task_type="商务投标",
+            title="投标响应结构",
+            question="如何写投标响应",
+            answer="评分点、响应情况、证明材料三列表。",
+            summary="投标响应优先对齐评分点。",
+            tags_json=["投标"],
+        ),
+        FailureCaseLibrary(
+            user_id="user-learning",
+            task_type="商务投标",
+            wrong_answer="直接写大段方案，没对应评分点。",
+            correction="先抽取评分点，再逐项响应。",
+            prevention_rule="投标类输出必须有评分点对照。",
+            tags_json=["投标"],
+        ),
+    ])
+    generation_db.commit()
+    client = client_for_user("user-learning")
+
+    prepared = client.post(
+        "/api/ai/chat/prepare",
+        json={"question": "帮我写一份投标响应说明", "mode": "business"},
+    )
+
+    assert prepared.status_code == 201
+    system_prompt = prepared.json()["messages"][0]["content"]
+    assert "投标类回答必须先列评分点" in system_prompt
+    assert "投标响应优先对齐评分点" in system_prompt
+    assert "投标类输出必须有评分点对照" in system_prompt
+
+
 def test_latest_question_injects_web_search_context(client_for_user, monkeypatch, generation_db) -> None:
     from app import chat_service
 

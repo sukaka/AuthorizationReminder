@@ -1130,6 +1130,73 @@ def test_personal_memory_tool_saves_and_lists_user_preferences(
     ]
 
 
+def test_learning_library_tool_saves_experience_template_and_failure_case(
+    generation_db,
+) -> None:
+    from app.agent_runtime.tools import LearningLibraryTool
+    from app.models import AgentToolCallLog, ExperienceLibrary, FailureCaseLibrary, TemplateLibrary
+
+    registry = ToolRegistry()
+    registry.register(LearningLibraryTool())
+
+    experience = registry.execute(
+        "learning_library",
+        {
+            "action": "save_experience",
+            "task_type": "商务投标",
+            "title": "投标响应结构",
+            "question": "如何写投标响应？",
+            "answer": "先列评分点，再列响应表。",
+            "summary": "商务投标优先按评分点组织。",
+            "tags": ["投标", "商务"],
+        },
+        ToolContext(user_id="user-1", db=generation_db),
+    )
+    template = registry.execute(
+        "learning_library",
+        {
+            "action": "save_template",
+            "template_name": "整改回复模板",
+            "task_type": "风险评估审查",
+            "template_content": "问题：{{issue}}\n整改：{{action}}",
+            "variables": {"issue": "问题", "action": "整改动作"},
+            "scope": "personal",
+        },
+        ToolContext(user_id="user-1", db=generation_db),
+    )
+    failure = registry.execute(
+        "learning_library",
+        {
+            "action": "save_failure_case",
+            "task_type": "Word导出",
+            "wrong_answer": "把保存路径写入历史会话标题。",
+            "correction": "导出成功只用 Toast。",
+            "prevention_rule": "导出结果不得写入历史任务标题。",
+            "tags": ["导出", "历史"],
+        },
+        ToolContext(user_id="user-1", db=generation_db),
+    )
+    listed = registry.execute(
+        "learning_library",
+        {"action": "list", "library": "failure_case", "query": "导出"},
+        ToolContext(user_id="user-1", db=generation_db),
+    )
+
+    assert experience.status == "success"
+    assert template.status == "success"
+    assert failure.status == "success"
+    assert listed.payload["items"][0]["prevention_rule"] == "导出结果不得写入历史任务标题。"
+    assert generation_db.query(ExperienceLibrary).count() == 1
+    assert generation_db.query(TemplateLibrary).count() == 1
+    assert generation_db.query(FailureCaseLibrary).count() == 1
+    assert [log.tool_name for log in generation_db.query(AgentToolCallLog).order_by(AgentToolCallLog.id)] == [
+        "learning_library",
+        "learning_library",
+        "learning_library",
+        "learning_library",
+    ]
+
+
 def test_history_task_tool_lists_and_reads_owned_conversations(
     generation_db,
 ) -> None:

@@ -45,6 +45,7 @@ from .intent_router import route_intent
 from .knowledge import KnowledgeRetriever
 from .knowledge_files import create_knowledge_file_from_bytes
 from .knowledge_routes import router as knowledge_router
+from .learning_routes import router as learning_router
 from .local_binding import (
     LocalBindingTokenError,
     issue_local_binding_token,
@@ -1647,6 +1648,7 @@ app.include_router(chat_router)
 app.include_router(conversations_router)
 app.include_router(export_router)
 app.include_router(knowledge_router)
+app.include_router(learning_router)
 app.include_router(personal_reference_router)
 app.include_router(web_router)
 

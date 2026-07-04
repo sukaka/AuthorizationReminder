@@ -31,10 +31,11 @@ def test_migration_revision_graph_is_single_linear_head() -> None:
         migration_config("sqlite+pysqlite:///:memory:")
     )
 
-    assert script.get_heads() == ["0016_user_memories"]
+    assert script.get_heads() == ["0017_learning_loop"]
     assert [
         revision.revision for revision in script.walk_revisions()
     ] == [
+        "0017_learning_loop",
         "0016_user_memories",
         "0015_agent_tool_calls",
         "0014_web_sources",
@@ -111,6 +112,31 @@ def test_user_memories_migration_creates_personal_memory_table(tmp_path: Path) -
         "created_at",
         "updated_at",
     }.issubset(columns)
+
+
+def test_learning_loop_migration_creates_libraries_and_extends_memories(tmp_path: Path) -> None:
+    database_path = tmp_path / "learning-loop.db"
+    database_url = f"sqlite+pysqlite:///{database_path}"
+    config = migration_config(database_url)
+    engine = create_engine(database_url)
+
+    command.upgrade(config, "0017_learning_loop")
+    inspector = inspect(engine)
+
+    memory_columns = {column["name"] for column in inspector.get_columns("ai_user_memories")}
+    assert {"title", "priority", "tags_json"}.issubset(memory_columns)
+    assert {
+        "ai_experience_library",
+        "ai_template_library",
+        "ai_failure_case_library",
+        "ai_feedback_logs",
+    }.issubset(set(inspector.get_table_names()))
+    experience_columns = {column["name"] for column in inspector.get_columns("ai_experience_library")}
+    assert {"user_id", "task_type", "question", "answer", "summary", "tags_json", "status"}.issubset(experience_columns)
+    template_columns = {column["name"] for column in inspector.get_columns("ai_template_library")}
+    assert {"user_id", "template_name", "task_type", "template_content", "variables_json", "scope", "review_status", "status"}.issubset(template_columns)
+    failure_columns = {column["name"] for column in inspector.get_columns("ai_failure_case_library")}
+    assert {"user_id", "task_type", "wrong_answer", "correction", "prevention_rule", "tags_json", "status"}.issubset(failure_columns)
 
 
 def test_chat_word_export_migration_creates_export_records(tmp_path: Path) -> None:
