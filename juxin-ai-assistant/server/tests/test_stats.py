@@ -171,6 +171,18 @@ def test_admin_stats_include_agent_quality_metrics(
                 source_count=0,
                 error_code="EXPORT_FAILED",
             ),
+            AgentToolCallLog(
+                user_id="user-quality",
+                tool_name="document_structure_validate",
+                status="success",
+                output_summary_json={"passed": True},
+            ),
+            AgentToolCallLog(
+                user_id="user-quality",
+                tool_name="document_structure_validate",
+                status="success",
+                output_summary_json={"passed": False},
+            ),
             KnowledgeSearchLog(
                 user_id="user-quality",
                 question="查资料",
@@ -209,9 +221,9 @@ def test_admin_stats_include_agent_quality_metrics(
 
     assert response.status_code == 200
     payload = response.json()
-    assert payload["tool_call_total"] == 2
-    assert payload["tool_call_success"] == 1
-    assert payload["tool_call_success_rate"] == 0.5
+    assert payload["tool_call_total"] == 4
+    assert payload["tool_call_success"] == 3
+    assert payload["tool_call_success_rate"] == 0.75
     assert payload["knowledge_search_total"] == 2
     assert payload["knowledge_search_hit"] == 1
     assert payload["knowledge_search_hit_rate"] == 0.5
@@ -220,6 +232,9 @@ def test_admin_stats_include_agent_quality_metrics(
     assert payload["citation_coverage_rate"] == 0.5
     assert payload["answer_without_source_rate"] == 0.5
     assert payload["word_export_total"] == 1
+    assert payload["document_format_check_total"] == 2
+    assert payload["document_format_check_passed"] == 1
+    assert payload["document_format_pass_rate"] == 0.5
     assert payload["tool_error_distribution"] == {"EXPORT_FAILED": 1}
 
 

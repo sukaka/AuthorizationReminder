@@ -271,6 +271,9 @@ class StatsOut(BaseModel):
     citation_coverage_rate: float = 0.0
     answer_without_source_rate: float = 0.0
     word_export_total: int = 0
+    document_format_check_total: int = 0
+    document_format_check_passed: int = 0
+    document_format_pass_rate: float = 0.0
     tool_error_distribution: dict[str, int] = {}
 
 

@@ -618,6 +618,144 @@ def test_document_structure_validate_tool_reports_missing_sections(
     assert tool_log.output_summary_json["passed"] is False
 
 
+def test_advanced_quality_score_tool_scores_juxin_context_structure_and_sources(
+    generation_db,
+) -> None:
+    from app.agent_runtime.tools import AdvancedQualityScoreTool
+    from app.models import AgentToolCallLog
+
+    registry = ToolRegistry()
+    registry.register(AdvancedQualityScoreTool())
+
+    weak = registry.execute(
+        "advanced_quality_score",
+        {"answer": "这是一个通用回答。", "mode": "business", "used_knowledge": True},
+        ToolContext(user_id="user-1", db=generation_db),
+    )
+    strong = registry.execute(
+        "advanced_quality_score",
+        {
+            "answer": (
+                "一、聚信得仁投标响应思路\n"
+                "1. 围绕客户等保和安全运维场景整理响应文件。\n"
+                "2. 根据《安全白皮书.docx》章节：服务范围，列出交付步骤和风险提醒。\n"
+                "3. 涉及报价、合同和验收结论需人工复核。"
+            ),
+            "mode": "business",
+            "used_knowledge": True,
+        },
+        ToolContext(user_id="user-1", db=generation_db),
+    )
+
+    assert weak.status == "success"
+    assert weak.payload["passed"] is False
+    assert weak.payload["score"] < 60
+    assert "聚信语境不足" in weak.payload["issues"]
+    assert "缺少引用来源" in weak.payload["issues"]
+    assert strong.status == "success"
+    assert strong.payload["passed"] is True
+    assert strong.payload["score"] >= 80
+    assert strong.payload["grade"] == "A"
+    logs = generation_db.query(AgentToolCallLog).order_by(AgentToolCallLog.id).all()
+    assert [log.tool_name for log in logs] == ["advanced_quality_score", "advanced_quality_score"]
+    assert logs[-1].output_summary_json["score"] == strong.payload["score"]
+
+
+def test_bulk_knowledge_governance_tool_suggests_cleanup_without_mutation(
+    generation_db,
+) -> None:
+    from app.agent_runtime.tools import BulkKnowledgeGovernanceTool
+    from app.models import AgentToolCallLog, KnowledgeFile
+
+    generation_db.add_all([
+        KnowledgeFile(
+            sso_user_id="user-1",
+            owner_user_id="user-1",
+            file_name="WDSP产品白皮书.docx",
+            file_type="docx",
+            file_size=1024,
+            category="其他",
+            document_type="其他",
+            tags_json=[],
+            summary="",
+            status="READY",
+            parse_status="parsed",
+            index_status="indexed",
+            content_sha256="sha-1",
+            key_version="v1",
+        ),
+        KnowledgeFile(
+            sso_user_id="user-1",
+            owner_user_id="user-1",
+            file_name="项目验收报告.docx",
+            file_type="docx",
+            file_size=2048,
+            category="项目交付",
+            document_type="验收报告",
+            tags_json=["验收"],
+            summary="项目最终验收资料",
+            status="READY",
+            parse_status="parsed",
+            index_status="indexed",
+            content_sha256="sha-2",
+            key_version="v1",
+        ),
+    ])
+    generation_db.flush()
+
+    registry = ToolRegistry()
+    registry.register(BulkKnowledgeGovernanceTool())
+
+    result = registry.execute(
+        "bulk_knowledge_governance",
+        {"limit": 20},
+        ToolContext(user_id="user-1", db=generation_db),
+    )
+
+    assert result.status == "success"
+    assert result.payload["scanned_count"] == 2
+    assert result.payload["needs_action_count"] == 1
+    suggestion = result.payload["suggestions"][0]
+    assert suggestion["file_name"] == "WDSP产品白皮书.docx"
+    assert suggestion["suggested_category"] == "产品资料"
+    assert suggestion["suggested_document_type"] == "产品白皮书"
+    assert "缺少摘要" in suggestion["issues"]
+    assert generation_db.query(KnowledgeFile).filter_by(file_name="WDSP产品白皮书.docx").one().category == "其他"
+    log = generation_db.query(AgentToolCallLog).order_by(AgentToolCallLog.id.desc()).first()
+    assert log.tool_name == "bulk_knowledge_governance"
+    assert log.output_summary_json["needs_action_count"] == 1
+
+
+def test_external_vector_store_tool_reports_disabled_when_not_configured(
+    generation_db,
+    monkeypatch,
+) -> None:
+    from app.agent_runtime.tools import ExternalVectorStoreHealthTool
+    from app.models import AgentToolCallLog
+
+    monkeypatch.delenv("JUXIN_VECTOR_PROVIDER", raising=False)
+    monkeypatch.delenv("JUXIN_VECTOR_URL", raising=False)
+    registry = ToolRegistry()
+    registry.register(ExternalVectorStoreHealthTool())
+
+    result = registry.execute(
+        "external_vector_store_health",
+        {},
+        ToolContext(user_id="user-1", db=generation_db),
+    )
+
+    assert result.status == "success"
+    assert result.payload == {
+        "configured": False,
+        "provider": "local-json",
+        "status": "disabled",
+        "message": "未配置外部向量库，当前使用本地 JSON 向量检索",
+    }
+    log = generation_db.query(AgentToolCallLog).one()
+    assert log.tool_name == "external_vector_store_health"
+    assert log.output_summary_json["status"] == "disabled"
+
+
 def test_document_template_select_tool_uses_existing_template_registry(
     generation_db,
 ) -> None:

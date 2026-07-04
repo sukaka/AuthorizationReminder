@@ -167,6 +167,9 @@ def _empty_quality_metrics() -> dict[str, int | float | dict[str, int]]:
         "citation_coverage_rate": 0.0,
         "answer_without_source_rate": 0.0,
         "word_export_total": 0,
+        "document_format_check_total": 0,
+        "document_format_check_passed": 0,
+        "document_format_pass_rate": 0.0,
         "tool_error_distribution": {},
     }
 
@@ -242,6 +245,18 @@ def _build_quality_metrics(
             ExportRecord.created_at <= end_at,
         )
     ) or 0)
+    document_format_logs = list(db.scalars(
+        select(AgentToolCallLog).where(
+            *tool_filters,
+            AgentToolCallLog.tool_name == "document_structure_validate",
+            AgentToolCallLog.status == "success",
+        )
+    ))
+    document_format_check_total = len(document_format_logs)
+    document_format_check_passed = sum(
+        1 for log in document_format_logs
+        if (log.output_summary_json or {}).get("passed") is True
+    )
 
     return {
         "tool_call_total": tool_call_total,
@@ -258,6 +273,12 @@ def _build_quality_metrics(
             assistant_answer_total,
         ),
         "word_export_total": word_export_total,
+        "document_format_check_total": document_format_check_total,
+        "document_format_check_passed": document_format_check_passed,
+        "document_format_pass_rate": _rate(
+            document_format_check_passed,
+            document_format_check_total,
+        ),
         "tool_error_distribution": {
             error_code: int(count)
             for error_code, count in tool_error_rows
