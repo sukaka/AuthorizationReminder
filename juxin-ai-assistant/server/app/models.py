@@ -579,6 +579,29 @@ class SearchCache(TimestampMixin, Base):
     expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
 
 
+class AgentTaskState(TimestampMixin, Base):
+    __tablename__ = "ai_agent_task_states"
+
+    id: Mapped[int] = mapped_column(primary_key_type, primary_key=True, autoincrement=True)
+    uuid: Mapped[str] = mapped_column(
+        String(36),
+        unique=True,
+        default=lambda: str(uuid_lib.uuid4()),
+    )
+    user_id: Mapped[str] = mapped_column(String(64), index=True)
+    conversation_id: Mapped[str] = mapped_column(String(64), default="", index=True)
+    stage: Mapped[str] = mapped_column(String(64), default="analyzing", index=True)
+    goal: Mapped[str] = mapped_column(Text, default="")
+    selected_sources_json: Mapped[list] = mapped_column(JSON, default=list)
+    tool_calls_json: Mapped[list] = mapped_column(JSON, default=list)
+    verification_status: Mapped[str] = mapped_column(String(32), default="pending", index=True)
+    verification_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    next_action: Mapped[str] = mapped_column(String(256), default="")
+    stage_history_json: Mapped[list] = mapped_column(JSON, default=list)
+    status: Mapped[str] = mapped_column(String(24), default="active", index=True)
+    metadata_json: Mapped[dict] = mapped_column(JSON, default=dict)
+
+
 class ChatSession(TimestampMixin, Base):
     __tablename__ = "ai_chat_sessions"
 

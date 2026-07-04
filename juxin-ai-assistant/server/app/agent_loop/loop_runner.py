@@ -11,6 +11,7 @@ from .answer_generator import AnswerGenerator
 from .observer import Observer
 from .planner import Planner
 from .reflector import Reflector
+from .task_state import TaskStateStore
 from .task_analyzer import TaskAnalyzer
 from .tool_executor import ToolExecutor
 from .types import (
@@ -212,6 +213,18 @@ class LoopRunner:
         include_session_attachments: bool = False,
     ) -> LoopRunResult:
         trace: list[LoopTraceStep] = []
+        task_state_store = TaskStateStore(db) if conversation_id else None
+        task_state_id = ""
+        if task_state_store is not None:
+            task_state = task_state_store.create(
+                user_id=sso_user_id,
+                conversation_id=conversation_id or "",
+                goal=question,
+                stage="analyzing",
+                next_action="正在识别任务",
+                selected_sources=[],
+            )
+            task_state_id = task_state.uuid
         analysis = self.task_analyzer.analyze(question, mode)
         long_term_memories = self._related_memories(
             db,
@@ -249,6 +262,13 @@ class LoopRunner:
             cipher=cipher,
             top_k=top_k,
         )
+        if task_state_store is not None:
+            task_state_store.update_stage(
+                task_state_id,
+                stage="building_context",
+                next_action="正在整理依据",
+                selected_sources=[],
+            )
         chunks = []
         personal_chunks = []
         search_log_ids: list[int] = []
@@ -275,6 +295,16 @@ class LoopRunner:
                     error=current_attachment_result.error,
                 )
             )
+            if task_state_store is not None:
+                task_state_store.append_tool_call(
+                    task_state_id,
+                    tool_name="search_current_attachments",
+                    status="failed" if current_attachment_result.error else "success",
+                    summary=f"chunks={len(current_attachment_result.chunks)}",
+                    error_code="search_current_attachments_failed"
+                    if current_attachment_result.error
+                    else "",
+                )
 
         if include_personal_references and tool_calls < self.limits.max_tool_calls:
             personal_result = executor.search_personal_references(
@@ -298,6 +328,16 @@ class LoopRunner:
                     error=personal_result.error,
                 )
             )
+            if task_state_store is not None:
+                task_state_store.append_tool_call(
+                    task_state_id,
+                    tool_name="search_personal_references",
+                    status="failed" if personal_result.error else "success",
+                    summary=f"chunks={len(personal_result.chunks)}",
+                    error_code="search_personal_references_failed"
+                    if personal_result.error
+                    else "",
+                )
 
         while len(trace) < self.limits.max_loop_steps and tool_calls < self.limits.max_tool_calls:
             action = self.planner.next_action(
@@ -323,6 +363,14 @@ class LoopRunner:
                     error=result.error,
                 )
             )
+            if task_state_store is not None:
+                task_state_store.append_tool_call(
+                    task_state_id,
+                    tool_name="search_knowledge_base",
+                    status="failed" if result.error else "success",
+                    summary=f"chunks={len(result.chunks)}",
+                    error_code="search_knowledge_base_failed" if result.error else "",
+                )
             observation = self.observer.observe(result)
             if not self.reflector.should_continue(
                 analysis=analysis,
@@ -333,6 +381,19 @@ class LoopRunner:
                 break
 
         if analysis.require_knowledge_evidence and not chunks and not personal_chunks:
+            if task_state_store is not None:
+                task_state_store.record_verification(
+                    task_state_id,
+                    status="failed",
+                    summary="未找到可用知识依据",
+                    issues=["no_knowledge_evidence"],
+                )
+                task_state_store.update_stage(
+                    task_state_id,
+                    stage="failed",
+                    next_action="请补充资料或切换为普通聊天",
+                    selected_sources=[],
+                )
             trace.append(
                 LoopTraceStep(
                     state=LoopState.FINISH,
@@ -350,6 +411,16 @@ class LoopRunner:
                 search_log_ids=search_log_ids,
             )
 
+        if task_state_store is not None:
+            task_state_store.update_stage(
+                task_state_id,
+                stage="generating",
+                next_action="正在生成回答",
+                selected_sources=[
+                    {"type": "official_knowledge", "count": len(chunks)},
+                    {"type": "personal_reference", "count": len(personal_chunks)},
+                ],
+            )
         messages = self.answer_generator.build_messages(
             analysis=analysis,
             current_user_message=question,
@@ -378,6 +449,22 @@ class LoopRunner:
                 strategy=analysis.strategy,
             )
         )
+        if task_state_store is not None:
+            task_state_store.record_verification(
+                task_state_id,
+                status="prepared",
+                summary="上下文已准备，等待本地模型生成回答",
+                issues=[],
+            )
+            task_state_store.update_stage(
+                task_state_id,
+                stage="completed",
+                next_action="等待模型生成回答",
+                selected_sources=[
+                    {"type": "official_knowledge", "count": len(chunks)},
+                    {"type": "personal_reference", "count": len(personal_chunks)},
+                ],
+            )
         return LoopRunResult(
             messages=messages,
             chunks=chunks + personal_chunks,
