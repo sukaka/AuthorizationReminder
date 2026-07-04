@@ -106,3 +106,78 @@ def test_learning_libraries_and_feedback_are_user_scoped(client_for_user):
     )
     assert feedback.status_code == 201
     assert feedback.json()["saved_as"] == "experience"
+
+
+def test_learning_libraries_can_be_edited_deleted_and_template_submitted(client_for_user):
+    owner = client_for_user("u1")
+    other = client_for_user("u2")
+
+    exp = owner.post(
+        "/api/learning/experiences",
+        json={
+            "task_type": "商务投标",
+            "title": "旧标题",
+            "question": "怎么写？",
+            "answer": "旧答案",
+            "summary": "旧摘要",
+            "tags": ["旧"],
+        },
+    ).json()
+    denied = other.patch(
+        f"/api/learning/experiences/{exp['uuid']}",
+        json={"title": "越权"},
+    )
+    assert denied.status_code == 404
+    patched = owner.patch(
+        f"/api/learning/experiences/{exp['uuid']}",
+        json={"title": "新标题", "tags": ["新"]},
+    )
+    assert patched.status_code == 200
+    assert patched.json()["title"] == "新标题"
+    assert patched.json()["tags"] == ["新"]
+    deleted = owner.delete(f"/api/learning/experiences/{exp['uuid']}")
+    assert deleted.status_code == 200
+    assert owner.get("/api/learning/experiences").json()["total"] == 0
+
+    template = owner.post(
+        "/api/learning/templates",
+        json={
+            "template_name": "个人模板",
+            "task_type": "会议纪要",
+            "template_content": "一、背景",
+            "variables": {},
+            "scope": "personal",
+        },
+    ).json()
+    submitted = owner.post(f"/api/learning/templates/{template['uuid']}/submit-review")
+    assert submitted.status_code == 200
+    assert submitted.json()["scope"] == "company"
+    assert submitted.json()["review_status"] == "pending"
+    patched_template = owner.patch(
+        f"/api/learning/templates/{template['uuid']}",
+        json={"template_name": "会议纪要模板", "scope": "personal"},
+    )
+    assert patched_template.status_code == 200
+    assert patched_template.json()["review_status"] == "draft"
+    assert owner.delete(f"/api/learning/templates/{template['uuid']}").status_code == 200
+    assert owner.get("/api/learning/templates").json()["total"] == 0
+
+    failure = owner.post(
+        "/api/learning/failure-cases",
+        json={
+            "task_type": "导出",
+            "wrong_answer": "把路径写入历史",
+            "correction": "只显示 Toast",
+            "prevention_rule": "路径不进标题",
+            "tags": ["导出"],
+        },
+    ).json()
+    patched_failure = owner.patch(
+        f"/api/learning/failure-cases/{failure['uuid']}",
+        json={"prevention_rule": "工具结果不得改历史标题"},
+    )
+    assert patched_failure.status_code == 200
+    assert patched_failure.json()["prevention_rule"] == "工具结果不得改历史标题"
+    assert other.delete(f"/api/learning/failure-cases/{failure['uuid']}").status_code == 404
+    assert owner.delete(f"/api/learning/failure-cases/{failure['uuid']}").status_code == 200
+    assert owner.get("/api/learning/failure-cases").json()["total"] == 0

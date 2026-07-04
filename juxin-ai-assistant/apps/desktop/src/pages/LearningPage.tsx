@@ -2,12 +2,19 @@ import { useEffect, useMemo, useState } from 'react';
 
 import {
   createLearningMemory,
+  deleteLearningExperience,
+  deleteLearningFailureCase,
   deleteLearningMemory,
+  deleteLearningTemplate,
   listLearningExperiences,
   listLearningFailureCases,
   listLearningMemories,
   listLearningTemplates,
+  submitLearningTemplateReview,
+  updateLearningExperience,
+  updateLearningFailureCase,
   updateLearningMemory,
+  updateLearningTemplate,
   type LearningExperiencePayload,
   type LearningFailureCasePayload,
   type LearningMemoryPayload,
@@ -35,6 +42,10 @@ const PRIORITY_LABEL: Record<string, string> = {
 
 function tagText(tags: string[]): string {
   return tags.length ? tags.join('、') : '未设置标签';
+}
+
+function splitTags(value: string): string[] {
+  return value.split(/[,，、\s]+/).map((tag) => tag.trim()).filter(Boolean);
 }
 
 export function LearningPage() {
@@ -94,7 +105,7 @@ export function LearningPage() {
         title: draft.title.trim(),
         content: draft.content.trim(),
         priority: draft.priority,
-        tags: draft.tags.split(/[,，、\s]+/).map((tag) => tag.trim()).filter(Boolean),
+        tags: splitTags(draft.tags),
       });
       setDraft({
         memory_type: 'user_preference',
@@ -126,6 +137,90 @@ export function LearningPage() {
       await refresh();
     } catch {
       setNotice('删除失败，请稍后重试。');
+    }
+  };
+
+  const editExperience = async (item: LearningExperiencePayload) => {
+    const title = window.prompt('经验标题', item.title)?.trim();
+    if (!title) return;
+    const summary = window.prompt('经验摘要', item.summary || item.answer.slice(0, 300))?.trim();
+    if (summary === undefined) return;
+    try {
+      await updateLearningExperience(item.uuid, { title, summary });
+      setNotice('经验已更新。');
+      await refresh();
+    } catch {
+      setNotice('经验更新失败。');
+    }
+  };
+
+  const removeExperience = async (item: LearningExperiencePayload) => {
+    if (!window.confirm('确认删除这条经验？删除后不会再参与类似问题参考。')) return;
+    try {
+      await deleteLearningExperience(item.uuid);
+      setNotice('经验已删除。');
+      await refresh();
+    } catch {
+      setNotice('经验删除失败。');
+    }
+  };
+
+  const editTemplate = async (item: LearningTemplatePayload) => {
+    const templateName = window.prompt('模板名称', item.template_name)?.trim();
+    if (!templateName) return;
+    const templateContent = window.prompt('模板内容', item.template_content)?.trim();
+    if (!templateContent) return;
+    try {
+      await updateLearningTemplate(item.uuid, { template_name: templateName, template_content: templateContent });
+      setNotice('模板已更新。');
+      await refresh();
+    } catch {
+      setNotice('模板更新失败。');
+    }
+  };
+
+  const submitTemplate = async (item: LearningTemplatePayload) => {
+    if (!window.confirm('提交后将作为公司模板候选，等待管理员审核。继续？')) return;
+    try {
+      await submitLearningTemplateReview(item.uuid);
+      setNotice('已提交公司模板审核。');
+      await refresh();
+    } catch {
+      setNotice('提交审核失败。');
+    }
+  };
+
+  const removeTemplate = async (item: LearningTemplatePayload) => {
+    if (!window.confirm('确认删除这个模板？')) return;
+    try {
+      await deleteLearningTemplate(item.uuid);
+      setNotice('模板已删除。');
+      await refresh();
+    } catch {
+      setNotice('模板删除失败。');
+    }
+  };
+
+  const editFailure = async (item: LearningFailureCasePayload) => {
+    const preventionRule = window.prompt('防复发规则', item.prevention_rule)?.trim();
+    if (!preventionRule) return;
+    try {
+      await updateLearningFailureCase(item.uuid, { prevention_rule: preventionRule });
+      setNotice('错误修正记录已更新。');
+      await refresh();
+    } catch {
+      setNotice('错误修正记录更新失败。');
+    }
+  };
+
+  const removeFailure = async (item: LearningFailureCasePayload) => {
+    if (!window.confirm('确认删除这条错误修正记录？删除后不会再参与防复发提醒。')) return;
+    try {
+      await deleteLearningFailureCase(item.uuid);
+      setNotice('错误修正记录已删除。');
+      await refresh();
+    } catch {
+      setNotice('错误修正记录删除失败。');
     }
   };
 
@@ -220,6 +315,10 @@ export function LearningPage() {
               <h2>{item.title || item.summary || '经验'}</h2>
               <p>{item.summary || item.answer}</p>
               <small>{tagText(item.tags)}</small>
+              <div className="learning-actions">
+                <button onClick={() => void editExperience(item)} type="button">编辑</button>
+                <button className="danger-action" onClick={() => void removeExperience(item)} type="button">删除</button>
+              </div>
             </article>
           ))}
           {!experiences.length ? <p className="learning-empty">暂无经验。回答下方点击“保存为经验”后会沉淀到这里。</p> : null}
@@ -234,6 +333,13 @@ export function LearningPage() {
               <h2>{item.template_name}</h2>
               <p>{item.template_content}</p>
               <small>{item.task_type || '通用任务'}</small>
+              <div className="learning-actions">
+                <button onClick={() => void editTemplate(item)} type="button">编辑</button>
+                {item.scope === 'personal' ? (
+                  <button onClick={() => void submitTemplate(item)} type="button">提交公司模板审核</button>
+                ) : null}
+                <button className="danger-action" onClick={() => void removeTemplate(item)} type="button">删除</button>
+              </div>
             </article>
           ))}
           {!templates.length ? <p className="learning-empty">暂无模板。高频报告结构、提示词结构和文档格式可以保存到这里。</p> : null}
@@ -250,6 +356,10 @@ export function LearningPage() {
               <p><strong>修正：</strong>{item.correction}</p>
               <p><strong>以后避免：</strong>{item.prevention_rule}</p>
               <small>{tagText(item.tags)}</small>
+              <div className="learning-actions">
+                <button onClick={() => void editFailure(item)} type="button">编辑</button>
+                <button className="danger-action" onClick={() => void removeFailure(item)} type="button">删除</button>
+              </div>
             </article>
           ))}
           {!failures.length ? <p className="learning-empty">暂无错误修正记录。记录过的错误会在类似问题中优先提醒小聚避免复发。</p> : null}

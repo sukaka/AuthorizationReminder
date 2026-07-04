@@ -18,9 +18,11 @@ from .schemas import (
     ExperienceCreateIn,
     ExperienceListOut,
     ExperienceOut,
+    ExperiencePatchIn,
     FailureCaseCreateIn,
     FailureCaseListOut,
     FailureCaseOut,
+    FailureCasePatchIn,
     LearningFeedbackIn,
     LearningFeedbackOut,
     MemoryCreateIn,
@@ -31,6 +33,7 @@ from .schemas import (
     TemplateCreateIn,
     TemplateListOut,
     TemplateOut,
+    TemplatePatchIn,
 )
 
 
@@ -119,6 +122,45 @@ def _feedback_out(row: FeedbackLog) -> LearningFeedbackOut:
         saved_as=row.saved_as,
         created_at=row.created_at,
     )
+
+
+def _owned_experience(db: Session, *, user_id: str, item_id: str) -> ExperienceLibrary:
+    row = db.scalar(
+        select(ExperienceLibrary).where(
+            ExperienceLibrary.uuid == item_id,
+            ExperienceLibrary.user_id == user_id,
+            ExperienceLibrary.status != "deleted",
+        )
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="EXPERIENCE_NOT_FOUND")
+    return row
+
+
+def _owned_template(db: Session, *, user_id: str, item_id: str) -> TemplateLibrary:
+    row = db.scalar(
+        select(TemplateLibrary).where(
+            TemplateLibrary.uuid == item_id,
+            TemplateLibrary.user_id == user_id,
+            TemplateLibrary.status != "deleted",
+        )
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="TEMPLATE_NOT_FOUND")
+    return row
+
+
+def _owned_failure_case(db: Session, *, user_id: str, item_id: str) -> FailureCaseLibrary:
+    row = db.scalar(
+        select(FailureCaseLibrary).where(
+            FailureCaseLibrary.uuid == item_id,
+            FailureCaseLibrary.user_id == user_id,
+            FailureCaseLibrary.status != "deleted",
+        )
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="FAILURE_CASE_NOT_FOUND")
+    return row
 
 
 def _memory_priority_order():
@@ -282,6 +324,43 @@ async def list_experiences(
     return ExperienceListOut(items=[_experience_out(row) for row in rows], total=len(rows))
 
 
+@router.patch("/experiences/{experience_id}", response_model=ExperienceOut)
+async def patch_experience(
+    experience_id: str,
+    body: ExperiencePatchIn,
+    request: Request,
+    session_payload: Annotated[SessionPayload, Depends(get_session)],
+    current_settings: Annotated[Settings, Depends(get_settings)],
+    db: Annotated[Session, Depends(get_db)],
+) -> ExperienceOut:
+    await _require_use(request, session_payload, current_settings)
+    row = _owned_experience(db, user_id=str(session_payload.user.id), item_id=experience_id)
+    patch = body.model_dump(exclude_unset=True)
+    if "tags" in patch:
+        row.tags_json = patch.pop("tags")
+    for key, value in patch.items():
+        setattr(row, key, value)
+    db.commit()
+    db.refresh(row)
+    return _experience_out(row)
+
+
+@router.delete("/experiences/{experience_id}", response_model=ExperienceOut)
+async def delete_experience(
+    experience_id: str,
+    request: Request,
+    session_payload: Annotated[SessionPayload, Depends(get_session)],
+    current_settings: Annotated[Settings, Depends(get_settings)],
+    db: Annotated[Session, Depends(get_db)],
+) -> ExperienceOut:
+    await _require_use(request, session_payload, current_settings)
+    row = _owned_experience(db, user_id=str(session_payload.user.id), item_id=experience_id)
+    row.status = "deleted"
+    db.commit()
+    db.refresh(row)
+    return _experience_out(row)
+
+
 @router.post("/templates", response_model=TemplateOut, status_code=201)
 async def create_template(
     body: TemplateCreateIn,
@@ -325,6 +404,62 @@ async def list_templates(
         )
     )
     return TemplateListOut(items=[_template_out(row) for row in rows], total=len(rows))
+
+
+@router.patch("/templates/{template_id}", response_model=TemplateOut)
+async def patch_template(
+    template_id: str,
+    body: TemplatePatchIn,
+    request: Request,
+    session_payload: Annotated[SessionPayload, Depends(get_session)],
+    current_settings: Annotated[Settings, Depends(get_settings)],
+    db: Annotated[Session, Depends(get_db)],
+) -> TemplateOut:
+    await _require_use(request, session_payload, current_settings)
+    row = _owned_template(db, user_id=str(session_payload.user.id), item_id=template_id)
+    patch = body.model_dump(exclude_unset=True)
+    if "variables" in patch:
+        row.variables_json = patch.pop("variables")
+    for key, value in patch.items():
+        setattr(row, key, value)
+    if row.scope == "personal":
+        row.review_status = "draft"
+    db.commit()
+    db.refresh(row)
+    return _template_out(row)
+
+
+@router.post("/templates/{template_id}/submit-review", response_model=TemplateOut)
+async def submit_template_review(
+    template_id: str,
+    request: Request,
+    session_payload: Annotated[SessionPayload, Depends(get_session)],
+    current_settings: Annotated[Settings, Depends(get_settings)],
+    db: Annotated[Session, Depends(get_db)],
+) -> TemplateOut:
+    await _require_use(request, session_payload, current_settings)
+    row = _owned_template(db, user_id=str(session_payload.user.id), item_id=template_id)
+    row.scope = "company"
+    row.review_status = "pending"
+    db.commit()
+    db.refresh(row)
+    return _template_out(row)
+
+
+@router.delete("/templates/{template_id}", response_model=TemplateOut)
+async def delete_template(
+    template_id: str,
+    request: Request,
+    session_payload: Annotated[SessionPayload, Depends(get_session)],
+    current_settings: Annotated[Settings, Depends(get_settings)],
+    db: Annotated[Session, Depends(get_db)],
+) -> TemplateOut:
+    await _require_use(request, session_payload, current_settings)
+    row = _owned_template(db, user_id=str(session_payload.user.id), item_id=template_id)
+    row.status = "deleted"
+    db.commit()
+    db.refresh(row)
+    return _template_out(row)
 
 
 @router.post("/failure-cases", response_model=FailureCaseOut, status_code=201)
@@ -372,6 +507,43 @@ async def list_failure_cases(
         items=[_failure_case_out(row) for row in rows],
         total=len(rows),
     )
+
+
+@router.patch("/failure-cases/{failure_case_id}", response_model=FailureCaseOut)
+async def patch_failure_case(
+    failure_case_id: str,
+    body: FailureCasePatchIn,
+    request: Request,
+    session_payload: Annotated[SessionPayload, Depends(get_session)],
+    current_settings: Annotated[Settings, Depends(get_settings)],
+    db: Annotated[Session, Depends(get_db)],
+) -> FailureCaseOut:
+    await _require_use(request, session_payload, current_settings)
+    row = _owned_failure_case(db, user_id=str(session_payload.user.id), item_id=failure_case_id)
+    patch = body.model_dump(exclude_unset=True)
+    if "tags" in patch:
+        row.tags_json = patch.pop("tags")
+    for key, value in patch.items():
+        setattr(row, key, value)
+    db.commit()
+    db.refresh(row)
+    return _failure_case_out(row)
+
+
+@router.delete("/failure-cases/{failure_case_id}", response_model=FailureCaseOut)
+async def delete_failure_case(
+    failure_case_id: str,
+    request: Request,
+    session_payload: Annotated[SessionPayload, Depends(get_session)],
+    current_settings: Annotated[Settings, Depends(get_settings)],
+    db: Annotated[Session, Depends(get_db)],
+) -> FailureCaseOut:
+    await _require_use(request, session_payload, current_settings)
+    row = _owned_failure_case(db, user_id=str(session_payload.user.id), item_id=failure_case_id)
+    row.status = "deleted"
+    db.commit()
+    db.refresh(row)
+    return _failure_case_out(row)
 
 
 @router.post("/feedback", response_model=LearningFeedbackOut, status_code=201)

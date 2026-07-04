@@ -379,6 +379,27 @@ export async function createLearningExperience(payload: {
   );
 }
 
+export async function updateLearningExperience(
+  experienceId: string,
+  payload: Partial<Pick<LearningExperiencePayload, 'task_type' | 'title' | 'question' | 'answer' | 'summary' | 'status'>> & { tags?: string[] },
+): Promise<LearningExperiencePayload> {
+  return readJson(
+    await apiFetch(`/api/learning/experiences/${encodeURIComponent(experienceId)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }),
+    'LEARNING_EXPERIENCE_UPDATE_FAILED',
+  );
+}
+
+export async function deleteLearningExperience(experienceId: string): Promise<LearningExperiencePayload> {
+  return readJson(
+    await apiFetch(`/api/learning/experiences/${encodeURIComponent(experienceId)}`, { method: 'DELETE' }),
+    'LEARNING_EXPERIENCE_DELETE_FAILED',
+  );
+}
+
 export async function listLearningTemplates(): Promise<{ items: LearningTemplatePayload[]; total: number }> {
   return readJson(
     await apiFetch('/api/learning/templates', { cache: 'no-store' }),
@@ -403,6 +424,34 @@ export async function createLearningTemplate(payload: {
   );
 }
 
+export async function updateLearningTemplate(
+  templateId: string,
+  payload: Partial<Pick<LearningTemplatePayload, 'template_name' | 'task_type' | 'template_content' | 'scope' | 'review_status' | 'status'>> & { variables?: Record<string, unknown> },
+): Promise<LearningTemplatePayload> {
+  return readJson(
+    await apiFetch(`/api/learning/templates/${encodeURIComponent(templateId)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }),
+    'LEARNING_TEMPLATE_UPDATE_FAILED',
+  );
+}
+
+export async function submitLearningTemplateReview(templateId: string): Promise<LearningTemplatePayload> {
+  return readJson(
+    await apiFetch(`/api/learning/templates/${encodeURIComponent(templateId)}/submit-review`, { method: 'POST' }),
+    'LEARNING_TEMPLATE_SUBMIT_FAILED',
+  );
+}
+
+export async function deleteLearningTemplate(templateId: string): Promise<LearningTemplatePayload> {
+  return readJson(
+    await apiFetch(`/api/learning/templates/${encodeURIComponent(templateId)}`, { method: 'DELETE' }),
+    'LEARNING_TEMPLATE_DELETE_FAILED',
+  );
+}
+
 export async function listLearningFailureCases(): Promise<{ items: LearningFailureCasePayload[]; total: number }> {
   return readJson(
     await apiFetch('/api/learning/failure-cases', { cache: 'no-store' }),
@@ -424,6 +473,27 @@ export async function createLearningFailureCase(payload: {
       body: JSON.stringify(payload),
     }),
     'LEARNING_FAILURE_CASE_CREATE_FAILED',
+  );
+}
+
+export async function updateLearningFailureCase(
+  failureCaseId: string,
+  payload: Partial<Pick<LearningFailureCasePayload, 'task_type' | 'wrong_answer' | 'correction' | 'prevention_rule' | 'status'>> & { tags?: string[] },
+): Promise<LearningFailureCasePayload> {
+  return readJson(
+    await apiFetch(`/api/learning/failure-cases/${encodeURIComponent(failureCaseId)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }),
+    'LEARNING_FAILURE_CASE_UPDATE_FAILED',
+  );
+}
+
+export async function deleteLearningFailureCase(failureCaseId: string): Promise<LearningFailureCasePayload> {
+  return readJson(
+    await apiFetch(`/api/learning/failure-cases/${encodeURIComponent(failureCaseId)}`, { method: 'DELETE' }),
+    'LEARNING_FAILURE_CASE_DELETE_FAILED',
   );
 }
 

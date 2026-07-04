@@ -1022,6 +1022,30 @@ class ExperienceCreateIn(BaseModel):
         return [tag.strip()[:64] for tag in value if tag.strip()][:20]
 
 
+class ExperiencePatchIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    task_type: str | None = Field(default=None, max_length=64)
+    title: str | None = Field(default=None, max_length=128)
+    question: str | None = Field(default=None, min_length=1, max_length=12_000)
+    answer: str | None = Field(default=None, min_length=1, max_length=30_000)
+    summary: str | None = Field(default=None, max_length=4_000)
+    tags: list[str] | None = Field(default=None, max_length=20)
+    status: Literal["active", "disabled"] | None = None
+
+    @field_validator("task_type", "title", "question", "answer", "summary")
+    @classmethod
+    def strip_optional_experience_text(cls, value: str | None) -> str | None:
+        return value.strip() if value is not None else None
+
+    @field_validator("tags")
+    @classmethod
+    def clean_optional_experience_tags(cls, value: list[str] | None) -> list[str] | None:
+        if value is None:
+            return None
+        return [tag.strip()[:64] for tag in value if tag.strip()][:20]
+
+
 class ExperienceOut(BaseModel):
     uuid: str
     task_type: str
@@ -1053,6 +1077,23 @@ class TemplateCreateIn(BaseModel):
     @classmethod
     def strip_template_text(cls, value: str) -> str:
         return value.strip()
+
+
+class TemplatePatchIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    template_name: str | None = Field(default=None, min_length=1, max_length=128)
+    task_type: str | None = Field(default=None, max_length=64)
+    template_content: str | None = Field(default=None, min_length=1, max_length=30_000)
+    variables: dict | None = None
+    scope: Literal["personal", "company"] | None = None
+    review_status: Literal["draft", "pending"] | None = None
+    status: Literal["active", "disabled"] | None = None
+
+    @field_validator("template_name", "task_type", "template_content")
+    @classmethod
+    def strip_optional_template_text(cls, value: str | None) -> str | None:
+        return value.strip() if value is not None else None
 
 
 class TemplateOut(BaseModel):
@@ -1090,6 +1131,29 @@ class FailureCaseCreateIn(BaseModel):
     @field_validator("tags")
     @classmethod
     def clean_failure_tags(cls, value: list[str]) -> list[str]:
+        return [tag.strip()[:64] for tag in value if tag.strip()][:20]
+
+
+class FailureCasePatchIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    task_type: str | None = Field(default=None, max_length=64)
+    wrong_answer: str | None = Field(default=None, min_length=1, max_length=30_000)
+    correction: str | None = Field(default=None, min_length=1, max_length=30_000)
+    prevention_rule: str | None = Field(default=None, max_length=8_000)
+    tags: list[str] | None = Field(default=None, max_length=20)
+    status: Literal["active", "disabled"] | None = None
+
+    @field_validator("task_type", "wrong_answer", "correction", "prevention_rule")
+    @classmethod
+    def strip_optional_failure_text(cls, value: str | None) -> str | None:
+        return value.strip() if value is not None else None
+
+    @field_validator("tags")
+    @classmethod
+    def clean_optional_failure_tags(cls, value: list[str] | None) -> list[str] | None:
+        if value is None:
+            return None
         return [tag.strip()[:64] for tag in value if tag.strip()][:20]
 
 
