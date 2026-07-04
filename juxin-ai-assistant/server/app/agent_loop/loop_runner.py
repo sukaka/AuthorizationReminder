@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 
 from app.context.context_builder import RecentChatMessage
 from app.crypto import ContentCipher
-from app.models import ExperienceLibrary, FailureCaseLibrary, UserMemory
+from app.models import ExperienceLibrary, FailureCaseLibrary, TemplateLibrary, UserMemory
 
 from .answer_generator import AnswerGenerator
 from .observer import Observer
@@ -157,6 +157,45 @@ class LoopRunner:
             for row in rows
         ]
 
+    def _related_templates(
+        self,
+        db: Session,
+        *,
+        sso_user_id: str,
+        question: str,
+        task_type: str,
+    ) -> list[str]:
+        terms = self._query_terms(question) + ([task_type] if task_type else [])
+        stmt = select(TemplateLibrary).where(
+            TemplateLibrary.status == "active",
+            or_(
+                TemplateLibrary.user_id == sso_user_id,
+                (
+                    (TemplateLibrary.scope == "company")
+                    & (TemplateLibrary.review_status == "official")
+                ),
+            ),
+        )
+        if terms:
+            stmt = stmt.where(
+                or_(
+                    *[TemplateLibrary.task_type.contains(term) for term in terms],
+                    *[TemplateLibrary.template_name.contains(term) for term in terms],
+                    *[TemplateLibrary.template_content.contains(term) for term in terms],
+                )
+            )
+        rows = db.scalars(
+            stmt.order_by(
+                case((TemplateLibrary.user_id == sso_user_id, 0), else_=1),
+                TemplateLibrary.updated_at.desc(),
+                TemplateLibrary.id.desc(),
+            ).limit(5)
+        )
+        return [
+            f"{row.scope}｜{row.task_type}｜{row.template_name}｜{row.template_content[:500]}"
+            for row in rows
+        ]
+
     def run_chat(
         self,
         *,
@@ -180,6 +219,12 @@ class LoopRunner:
             question=question,
         )
         related_experiences = self._related_experiences(
+            db,
+            sso_user_id=sso_user_id,
+            question=question,
+            task_type=analysis.task_type,
+        )
+        related_templates = self._related_templates(
             db,
             sso_user_id=sso_user_id,
             question=question,
@@ -313,6 +358,7 @@ class LoopRunner:
             recent_messages=recent_messages,
             long_term_memories=long_term_memories,
             related_experiences=related_experiences,
+            related_templates=related_templates,
             related_failure_cases=related_failure_cases,
         )
         if analysis.strategy != "single_turn" and len(trace) < self.limits.max_loop_steps - 1:

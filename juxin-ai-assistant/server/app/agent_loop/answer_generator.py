@@ -37,6 +37,7 @@ class AnswerGenerator:
         recent_messages: list[RecentChatMessage],
         long_term_memories: list[str] | None = None,
         related_experiences: list[str] | None = None,
+        related_templates: list[str] | None = None,
         related_failure_cases: list[str] | None = None,
     ) -> list[MessageOut]:
         messages = self.context_builder.build_messages(
@@ -47,6 +48,7 @@ class AnswerGenerator:
             recent_messages=recent_messages,
             long_term_memories=long_term_memories,
             related_experiences=related_experiences,
+            related_templates=related_templates,
             related_failure_cases=related_failure_cases,
             require_knowledge_evidence=analysis.require_knowledge_evidence,
         )

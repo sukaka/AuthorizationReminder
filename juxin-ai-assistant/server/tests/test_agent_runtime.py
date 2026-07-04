@@ -1213,6 +1213,59 @@ def test_learning_library_tool_saves_experience_template_and_failure_case(
     ]
 
 
+def test_loop_runner_related_templates_use_personal_and_official_company_only(
+    generation_db,
+) -> None:
+    from app.agent_loop.loop_runner import LoopRunner
+    from app.models import TemplateLibrary
+
+    generation_db.add_all(
+        [
+            TemplateLibrary(
+                user_id="user-1",
+                template_name="个人投标模板",
+                task_type="bid_material",
+                template_content="个人模板内容：先列评分点。",
+                scope="personal",
+                review_status="draft",
+                status="active",
+            ),
+            TemplateLibrary(
+                user_id="admin-1",
+                template_name="公司投标模板",
+                task_type="bid_material",
+                template_content="公司模板内容：响应表必须包含偏离说明。",
+                scope="company",
+                review_status="official",
+                status="active",
+            ),
+            TemplateLibrary(
+                user_id="admin-1",
+                template_name="待审投标模板",
+                task_type="bid_material",
+                template_content="待审模板内容。",
+                scope="company",
+                review_status="pending",
+                status="active",
+            ),
+        ]
+    )
+    generation_db.commit()
+
+    templates = LoopRunner()._related_templates(
+        generation_db,
+        sso_user_id="user-1",
+        question="帮我写投标响应",
+        task_type="bid_material",
+    )
+
+    joined = "\n".join(templates)
+    assert "个人投标模板" in joined
+    assert "公司投标模板" in joined
+    assert "待审投标模板" not in joined
+    assert templates[0].startswith("personal｜")
+
+
 def test_history_task_tool_lists_and_reads_owned_conversations(
     generation_db,
 ) -> None:

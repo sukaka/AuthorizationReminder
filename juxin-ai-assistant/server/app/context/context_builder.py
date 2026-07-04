@@ -21,6 +21,7 @@ class GatheredContext:
     recent_messages: list[RecentChatMessage]
     long_term_memories: list[str]
     related_experiences: list[str]
+    related_templates: list[str]
     related_failure_cases: list[str]
     require_knowledge_evidence: bool
 
@@ -35,6 +36,7 @@ class SelectedContext:
     older_messages: list[RecentChatMessage]
     long_term_memories: list[str]
     related_experiences: list[str]
+    related_templates: list[str]
     related_failure_cases: list[str]
     require_knowledge_evidence: bool
 
@@ -49,6 +51,7 @@ class CompressedContext:
     conversation_summary: str
     long_term_memories: list[str]
     related_experiences: list[str]
+    related_templates: list[str]
     related_failure_cases: list[str]
     require_knowledge_evidence: bool
 
@@ -82,6 +85,7 @@ class ContextBuilder:
         recent_messages: list[RecentChatMessage],
         long_term_memories: list[str] | None = None,
         related_experiences: list[str] | None = None,
+        related_templates: list[str] | None = None,
         related_failure_cases: list[str] | None = None,
         require_knowledge_evidence: bool,
     ) -> list[MessageOut]:
@@ -93,6 +97,7 @@ class ContextBuilder:
             recent_messages=recent_messages,
             long_term_memories=long_term_memories or [],
             related_experiences=related_experiences or [],
+            related_templates=related_templates or [],
             related_failure_cases=related_failure_cases or [],
             require_knowledge_evidence=require_knowledge_evidence,
         )
@@ -115,6 +120,7 @@ class ContextBuilder:
         recent_messages: list[RecentChatMessage],
         long_term_memories: list[str],
         related_experiences: list[str] | None = None,
+        related_templates: list[str] | None = None,
         related_failure_cases: list[str] | None = None,
         require_knowledge_evidence: bool,
     ) -> GatheredContext:
@@ -126,6 +132,7 @@ class ContextBuilder:
             recent_messages=recent_messages,
             long_term_memories=long_term_memories,
             related_experiences=related_experiences or [],
+            related_templates=related_templates or [],
             related_failure_cases=related_failure_cases or [],
             require_knowledge_evidence=require_knowledge_evidence,
         )
@@ -159,6 +166,11 @@ class ContextBuilder:
                 for item in context.related_experiences
                 if item.strip()
             ][:5],
+            related_templates=[
+                item.strip()
+                for item in context.related_templates
+                if item.strip()
+            ][:5],
             related_failure_cases=[
                 item.strip()
                 for item in context.related_failure_cases
@@ -177,6 +189,7 @@ class ContextBuilder:
             conversation_summary=self._conversation_summary(context.older_messages),
             long_term_memories=context.long_term_memories,
             related_experiences=context.related_experiences,
+            related_templates=context.related_templates,
             related_failure_cases=context.related_failure_cases,
             require_knowledge_evidence=context.require_knowledge_evidence,
         )
@@ -197,6 +210,8 @@ class ContextBuilder:
             + self._personal_reference_context(context.personal_reference_chunks),
             "## experience_library_context\n\n"
             + self._experience_library_context(context.related_experiences),
+            "## template_library_context\n\n"
+            + self._template_library_context(context.related_templates),
             "## failure_case_context\n\n"
             + self._failure_case_context(context.related_failure_cases),
             "## knowledge_policy\n\n" + self._knowledge_policy(
@@ -258,6 +273,15 @@ class ContextBuilder:
         return "用户认可过的写法、结构和处理方式。可复用，但不得替代正式知识库证据。\n" + "\n".join(
             f"- {item[:600]}"
             for item in related_experiences[:5]
+        )
+
+    @staticmethod
+    def _template_library_context(related_templates: list[str]) -> str:
+        if not related_templates:
+            return "暂无相关模板。"
+        return "可复用的文档/提示词模板。优先用于结构和措辞，不得替代正式知识库事实依据。\n" + "\n".join(
+            f"- {item[:800]}"
+            for item in related_templates[:5]
         )
 
     @staticmethod

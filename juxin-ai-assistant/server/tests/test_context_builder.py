@@ -149,6 +149,7 @@ def test_chat_context_builder_injects_experiences_and_failure_cases_before_recen
         recent_messages=[RecentChatMessage(role="user", content="上一轮问题")],
         long_term_memories=["高优先级纠错：不要把导出路径写入历史任务。"],
         related_experiences=["经验：商务投标先列评分点，再列响应表。"],
+        related_templates=["模板：投标响应结构：评分点、响应内容、偏离说明。"],
         related_failure_cases=["失败案例：导出成功提示曾写入历史标题；防复发：只用 Toast。"],
         require_knowledge_evidence=False,
     )
@@ -156,9 +157,14 @@ def test_chat_context_builder_injects_experiences_and_failure_cases_before_recen
     system_prompt = messages[0].content
     assert "## experience_library_context" in system_prompt
     assert "商务投标先列评分点" in system_prompt
+    assert "## template_library_context" in system_prompt
+    assert "投标响应结构" in system_prompt
     assert "## failure_case_context" in system_prompt
     assert "防复发：只用 Toast" in system_prompt
     assert system_prompt.index("## experience_library_context") < system_prompt.index(
+        "## template_library_context"
+    )
+    assert system_prompt.index("## template_library_context") < system_prompt.index(
         "## failure_case_context"
     )
     assert messages[1].content == "上一轮问题"
