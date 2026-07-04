@@ -1,6 +1,6 @@
 # 聚信 AI 助手 Agent Runtime 剩余工作清单
 
-更新时间：2026-07-04
+更新时间：2026-07-05
 
 ## 一、当前状态
 
@@ -36,6 +36,16 @@
    - 知识库审核
    - Web 搜索与网页采集
    - 数据库迁移
+6. P2 工具层已完成最小闭环：
+   - PPT 生成工具 `pptx_export`
+   - 深度联网调研工具 `deep_web_research`
+   - 高级质量评分工具 `advanced_quality_score`
+   - 批量资料治理工具 `bulk_knowledge_governance`
+   - 外部向量库健康检查工具 `external_vector_store_health`
+   - MCP / A2A 本地适配清单工具 `protocol_adapter_status`
+7. 学习闭环已补齐可见入口：
+   - 回答反馈可写入 `feedback_logs`
+   - 学习中心可查看长期记忆、经验、模板、错误修正和反馈记录
 
 当前仍处于未提交状态，且本地 SQLite 数据库 `server/juxin-ai-assistant-dev.db` 不应提交。
 
@@ -273,16 +283,27 @@
 - 每次失败有错误码和排查线索。
 - 可以抽样回放一次任务的工具调用和引用来源。
 
-### 3. 延后能力
+### 3. P2 工具层
 
-以下能力暂不作为当前主线：
+状态：已完成工具层最小闭环；暂不作为普通用户主界面主线能力。
 
-1. PPT 生成工具。
-2. 深度联网调研增强版。
-3. 高级质量评分工具。
-4. 批量资料治理工具。
-5. 外部向量库接入工具。
-6. MCP / A2A 适配工具。
+已完成：
+
+1. PPT 生成工具：`pptx_export` 可根据结构化页面大纲生成 `.pptx` 文件，并通过导出文件管理器保存。
+2. 深度联网调研增强版：`deep_web_research` 可按主题聚合公开来源、去重，并输出带风险与落地建议的报告。
+3. 高级质量评分工具：`advanced_quality_score` 可按聚信语境、角色重点、结构、引用和风险提示评分。
+4. 批量资料治理工具：`bulk_knowledge_governance` 可扫描资料元数据并给出分类、文档类型、摘要、标签等治理建议，默认不直接改数据。
+5. 外部向量库接入工具：`external_vector_store_health` 可检查可选 Qdrant 配置；未配置时明确报告继续使用本地 JSON 向量检索。
+6. MCP / A2A 适配工具：`protocol_adapter_status` 可返回本地 MCP / A2A 工具暴露清单，默认禁止透传密钥和外部写入。
+
+验收证据：
+
+- `server/tests/test_agent_runtime.py::test_pptx_export_tool_generates_valid_presentation_file`
+- `server/tests/test_agent_runtime.py::test_deep_web_research_tool_deduplicates_sources_and_returns_risk_sections`
+- `server/tests/test_agent_runtime.py::test_advanced_quality_score_tool_scores_juxin_context_structure_and_sources`
+- `server/tests/test_agent_runtime.py::test_bulk_knowledge_governance_tool_suggests_cleanup_without_mutation`
+- `server/tests/test_agent_runtime.py::test_external_vector_store_tool_reports_disabled_when_not_configured`
+- `server/tests/test_agent_runtime.py::test_protocol_adapter_status_tool_returns_mcp_and_a2a_manifest`
 
 ## 五、建议执行顺序
 
