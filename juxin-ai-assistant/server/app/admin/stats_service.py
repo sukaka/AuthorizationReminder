@@ -8,6 +8,7 @@ from ..models import (
     ChatMessage,
     ChatMessageSource,
     ExportRecord,
+    FeedbackLog,
     FeedbackRecord,
     GenerationRecord,
     KnowledgeSearchLog,
@@ -106,19 +107,13 @@ def build_stats(
         .order_by(func.date(GenerationRecord.created_at))
     ).all()
 
-    feedback_rows = db.execute(
-        select(
-            FeedbackRecord.feedback_type,
-            func.count(FeedbackRecord.id),
-        )
-        .join(
-            GenerationRecord,
-            GenerationRecord.id == FeedbackRecord.generation_id,
-        )
-        .where(*filters)
-        .group_by(FeedbackRecord.feedback_type)
-        .order_by(FeedbackRecord.feedback_type)
-    ).all()
+    feedback_distribution = _build_feedback_distribution(
+        db,
+        filters=filters,
+        include_chat_feedback=departments is None,
+        start_at=start_at,
+        end_at=end_at,
+    )
 
     quality_metrics = (
         _build_quality_metrics(db, start_at=start_at, end_at=end_at)
@@ -146,12 +141,50 @@ def build_stats(
             DailyCount(date=str(day), count=int(count))
             for day, count in daily_rows
         ],
-        feedback_distribution={
-            feedback_type: int(count)
-            for feedback_type, count in feedback_rows
-        },
+        feedback_distribution=feedback_distribution,
         **quality_metrics,
     )
+
+
+def _build_feedback_distribution(
+    db: Session,
+    *,
+    filters: list,
+    include_chat_feedback: bool,
+    start_at: datetime,
+    end_at: datetime,
+) -> dict[str, int]:
+    distribution: dict[str, int] = {}
+    generation_feedback_rows = db.execute(
+        select(
+            FeedbackRecord.feedback_type,
+            func.count(FeedbackRecord.id),
+        )
+        .join(
+            GenerationRecord,
+            GenerationRecord.id == FeedbackRecord.generation_id,
+        )
+        .where(*filters)
+        .group_by(FeedbackRecord.feedback_type)
+    ).all()
+    for feedback_type, count in generation_feedback_rows:
+        distribution[str(feedback_type)] = distribution.get(str(feedback_type), 0) + int(count)
+
+    if include_chat_feedback:
+        chat_feedback_rows = db.execute(
+            select(
+                FeedbackLog.feedback_type,
+                func.count(FeedbackLog.id),
+            )
+            .where(
+                FeedbackLog.created_at >= start_at,
+                FeedbackLog.created_at <= end_at,
+            )
+            .group_by(FeedbackLog.feedback_type)
+        ).all()
+        for feedback_type, count in chat_feedback_rows:
+            distribution[str(feedback_type)] = distribution.get(str(feedback_type), 0) + int(count)
+    return dict(sorted(distribution.items()))
 
 
 def _empty_quality_metrics() -> dict[str, int | float | dict[str, int]]:

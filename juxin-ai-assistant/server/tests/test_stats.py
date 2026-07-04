@@ -1,4 +1,5 @@
 import hashlib
+from datetime import datetime
 
 from fastapi import Request
 from fastapi.testclient import TestClient
@@ -12,6 +13,7 @@ from app.models import (
     ChatMessageSource,
     ChatSession,
     ExportRecord,
+    FeedbackLog,
     GenerationRecord,
     KnowledgeSearchLog,
 )
@@ -208,6 +210,21 @@ def test_admin_stats_include_agent_quality_metrics(
                 template_name="juxin_standard",
                 created_by="user-quality",
             ),
+            FeedbackLog(
+                user_id="user-quality",
+                conversation_id=session.uuid,
+                message_id=with_source.uuid,
+                feedback_type="useful",
+                created_at=datetime.now(),
+            ),
+            FeedbackLog(
+                user_id="user-quality",
+                conversation_id=session.uuid,
+                message_id=without_source.uuid,
+                feedback_type="save_experience",
+                saved_as="experience",
+                created_at=datetime.now(),
+            ),
         ]
     )
     generation_db.commit()
@@ -236,6 +253,8 @@ def test_admin_stats_include_agent_quality_metrics(
     assert payload["document_format_check_passed"] == 1
     assert payload["document_format_pass_rate"] == 0.5
     assert payload["tool_error_distribution"] == {"EXPORT_FAILED": 1}
+    assert payload["feedback_distribution"]["useful"] == 1
+    assert payload["feedback_distribution"]["save_experience"] == 1
 
 
 def test_stats_reject_ranges_over_366_days(generation_db) -> None:
