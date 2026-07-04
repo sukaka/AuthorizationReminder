@@ -366,7 +366,7 @@ it('uploads reference material and includes attachment ids in prepare request', 
 
   render(<TaskRunPage task={workSummaryTask} />);
   await userEvent.type(screen.getByLabelText('工作内容'), '生成会议纪要');
-  expect(screen.getByText('支持 docx、xlsx、pptx、txt、md。文件内容会作为参考材料参与生成。')).toBeInTheDocument();
+  expect(screen.getByText('支持 pdf、docx、xlsx、pptx、txt、md。文件内容会作为参考材料参与生成。')).toBeInTheDocument();
   const file = new File(['xlsx'], '项目清单.xlsx', {
     type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
   });

@@ -371,7 +371,7 @@ it('lets ordinary employees upload personal reference files from the knowledge p
   appendSpy.mockRestore();
 });
 
-it('explains first-version upload support and rejects unsupported document types on the knowledge page', async () => {
+it('explains upload support and rejects unsupported document types on the knowledge page', async () => {
   session('employee');
   server.use(
     http.get('/api/knowledge/files', () => HttpResponse.json({ items: [], total: 0 })),
@@ -389,7 +389,7 @@ it('explains first-version upload support and rejects unsupported document types
   );
 
   expect(await screen.findByText('已选择：扫描白皮书.pdf')).toBeInTheDocument();
-  expect(screen.getByText('当前版本暂不支持 PDF，请上传 Word、Excel、PPT、TXT 或 Markdown 文件。')).toBeInTheDocument();
+  expect(screen.getByText('PDF 会按页面提取可复制文本，扫描件需要先转成可复制文本。')).toBeInTheDocument();
 
   await userEvent.upload(
     uploadInput,
@@ -398,7 +398,7 @@ it('explains first-version upload support and rejects unsupported document types
   );
 
   expect(await screen.findByText('已选择：客户清单.csv')).toBeInTheDocument();
-  expect(screen.getByText('当前版本暂不支持该文件类型，请上传 docx、xlsx、pptx、txt 或 md 文件。')).toBeInTheDocument();
+  expect(screen.getByText('当前版本暂不支持该文件类型，请上传 pdf、docx、xlsx、pptx、txt 或 md 文件。')).toBeInTheDocument();
 
   await userEvent.upload(
     uploadInput,

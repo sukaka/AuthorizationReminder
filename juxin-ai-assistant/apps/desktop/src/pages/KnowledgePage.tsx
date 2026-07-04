@@ -77,9 +77,9 @@ const generateFromFilePrompt = '请根据这个文档生成一份可直接编辑
 
 const fallbackKnowledgeCategoryOptions = ['公司制度', '产品资料', '项目交付', '销售商务', '行政人力', '安全运维', '模板范本', '会议纪要', '个人素材', '其他'];
 const fallbackKnowledgeDocumentTypeOptions = ['产品白皮书', '解决方案', '投标模板', '交付说明', '测试报告', '安全服务报告', '会议记录', '提示词手册', '其他'];
-const supportedKnowledgeAccept = '.txt,.md,.docx,.xlsx,.pptx,text/plain,text/markdown,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.openxmlformats-officedocument.presentationml.presentation';
-const unsupportedKnowledgeTypeMessage = '当前版本暂不支持该文件类型，请上传 docx、xlsx、pptx、txt 或 md 文件。';
-const unsupportedPdfMessage = '当前版本暂不支持 PDF，请上传 Word、Excel、PPT、TXT 或 Markdown 文件。';
+const supportedKnowledgeAccept = '.pdf,.txt,.md,.docx,.xlsx,.pptx,application/pdf,text/plain,text/markdown,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.openxmlformats-officedocument.presentationml.presentation';
+const unsupportedKnowledgeTypeMessage = '当前版本暂不支持该文件类型，请上传 pdf、docx、xlsx、pptx、txt 或 md 文件。';
+const pdfUploadHint = 'PDF 会按页面提取可复制文本，扫描件需要先转成可复制文本。';
 
 function canSubmitKnowledgeFileForReview(file: KnowledgeFilePayload, isAdmin: boolean): boolean {
   return !isAdmin
@@ -162,9 +162,7 @@ function fileExtension(fileName: string): string {
 function parseQualityHint(file: File | null): string {
   if (!file) return '';
   const extension = fileExtension(file.name);
-  if (extension === 'pdf') {
-    return unsupportedPdfMessage;
-  }
+  if (extension === 'pdf') return pdfUploadHint;
   if (extension === 'csv' || extension === 'doc' || extension === 'xls' || ['png', 'jpg', 'jpeg', 'webp'].includes(extension)) {
     return unsupportedKnowledgeTypeMessage;
   }
@@ -180,7 +178,7 @@ function parseQualityHint(file: File | null): string {
   if (extension === 'txt' || extension === 'md') {
     return '文本和 Markdown 会按标题、段落、列表切分，适合作为稳定资料来源。';
   }
-  return '当前支持 docx、xlsx、pptx、txt、md；第一版暂不支持 PDF、图片、扫描件和旧 Office 格式。';
+  return '当前支持 pdf、docx、xlsx、pptx、txt、md；暂不支持图片、扫描件和旧 Office 格式。';
 }
 
 function uploadFailureMessage(error: unknown): string {

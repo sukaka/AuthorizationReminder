@@ -303,6 +303,7 @@ def _file_out(db: Session, file_record: KnowledgeFile) -> KnowledgeFileOut:
         category=file_record.category,
         document_type=file_record.document_type,
         tags=list(file_record.tags_json or []),
+        summary=file_record.summary,
         parse_status=file_record.parse_status,
         index_status=file_record.index_status,
     )
@@ -1751,6 +1752,14 @@ async def upload_knowledge_file(
             knowledge_base_id=base.id if base is not None else None,
             storage_root=current_settings.knowledge_storage_dir,
         )
+        if normalized_usage_type == "personal_reference" and (
+            (category.strip() or "个人素材") in {"个人素材", "其他"}
+            and (document_type.strip() or "其他") == "其他"
+        ):
+            suggested_category, suggested_document_type, suggested_tags = _classify_file(file_record)
+            file_record.category = suggested_category
+            file_record.document_type = suggested_document_type
+            file_record.tags_json = suggested_tags
         db.commit()
         db.refresh(file_record)
         return _file_out(db, file_record)

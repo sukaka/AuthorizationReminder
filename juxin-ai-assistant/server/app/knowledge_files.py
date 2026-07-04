@@ -9,6 +9,8 @@ import xml.etree.ElementTree as ET
 
 from docx import Document
 from fastapi import HTTPException
+from pypdf import PdfReader
+from pypdf.errors import PdfReadError
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
@@ -20,8 +22,8 @@ from .models import KnowledgeChunk, KnowledgeFile
 MAX_KNOWLEDGE_FILE_MB = 100
 MAX_KNOWLEDGE_FILE_BYTES = MAX_KNOWLEDGE_FILE_MB * 1024 * 1024
 MAX_KNOWLEDGE_METADATA_TEXT_LENGTH = 255
-SUPPORTED_KNOWLEDGE_SUFFIXES = {".txt", ".md", ".docx", ".xlsx", ".pptx"}
-UNSUPPORTED_KNOWLEDGE_TYPE_MESSAGE = "当前版本暂不支持该文件类型，请上传 docx、xlsx、pptx、txt 或 md 文件。"
+SUPPORTED_KNOWLEDGE_SUFFIXES = {".txt", ".md", ".docx", ".xlsx", ".pptx", ".pdf"}
+UNSUPPORTED_KNOWLEDGE_TYPE_MESSAGE = "当前版本暂不支持该文件类型，请上传 pdf、docx、xlsx、pptx、txt 或 md 文件。"
 HEADING_PATTERN = re.compile(r"^(#{1,6}\s+|[一二三四五六七八九十]+、|\d+[.．、]|\（\d+\）)\S+")
 SPECIAL_TERM_PATTERN = re.compile(
     r"(?i)\b(?:CVE-\d{4}-\d{4,}|[A-Z]{2,}[-_]?[A-Z0-9]{2,}[-_]?\d*|GB/T\s*\d+|ISO\s*\d+|[0-9]{1,3}(?:\.[0-9]{1,3}){3}|[0-9]{2,5})\b"
@@ -376,6 +378,36 @@ def _parse_pptx_blocks(data: bytes) -> list[ParsedBlock]:
     return blocks
 
 
+def _parse_pdf_blocks(data: bytes) -> list[ParsedBlock]:
+    try:
+        reader = PdfReader(BytesIO(data))
+    except (PdfReadError, ValueError, OSError) as exc:
+        raise HTTPException(status_code=400, detail="PDF 文件解析失败，请确认文件未损坏。") from exc
+
+    blocks: list[ParsedBlock] = []
+    for page_index, page in enumerate(reader.pages, start=1):
+        try:
+            text = (page.extract_text() or "").strip()
+        except (PdfReadError, ValueError, OSError):
+            text = ""
+        if not text:
+            continue
+        page_title = f"第 {page_index} 页"
+        blocks.append(
+            ParsedBlock(
+                text=text,
+                section_path=page_title,
+                page_or_sheet=page_title,
+                chunk_type="pdf_page",
+                metadata={"page_number": page_index, "page_index": page_index},
+            )
+        )
+
+    if not blocks:
+        raise HTTPException(status_code=400, detail="PDF 未提取到可用文本，请上传可复制文本的 PDF。")
+    return blocks
+
+
 def _parse_text_blocks(file_name: str, data: bytes) -> list[ParsedBlock]:
     text = _decode_utf8_text(data, message="文本知识文件必须使用 UTF-8 编码")
     is_markdown = _file_suffix(file_name) == ".md"
@@ -420,6 +452,8 @@ def _extract_blocks(file_name: str, data: bytes) -> list[ParsedBlock]:
         return _parse_xlsx_blocks(data)
     if suffix == ".pptx":
         return _parse_pptx_blocks(data)
+    if suffix == ".pdf":
+        return _parse_pdf_blocks(data)
     return _parse_docx_blocks(data)
 
 
@@ -495,14 +529,19 @@ def chunk_blocks(
         block_text = block.text.strip()
         if not block_text:
             continue
+        block_metadata = dict(block.metadata or {})
+        block_page_number = block_metadata.get("page_number")
+        if not isinstance(block_page_number, int):
+            block_page_number = None
         if block.chunk_type in {"table", "sheet_rows", "slide"} and len(block_text) <= max_chars:
-            metadata = dict(block.metadata or {})
+            metadata = dict(block_metadata)
             metadata["keywords"] = _keywords(block_text)
             chunks.append(
                 ChunkDraft(
                     text=block_text,
                     chunk_index=len(chunks),
                     section_title=block.section_path,
+                    page_number=block_page_number,
                     section_path=block.section_path,
                     page_or_sheet=block.page_or_sheet,
                     chunk_type=block.chunk_type,
@@ -517,14 +556,14 @@ def chunk_blocks(
             overlap_chars=overlap_chars,
         ):
             section_path = block.section_path or draft.section_path or draft.section_title
-            metadata = dict(block.metadata or {})
+            metadata = dict(block_metadata)
             metadata["keywords"] = _keywords(draft.text)
             chunks.append(
                 ChunkDraft(
                     text=draft.text,
                     chunk_index=len(chunks),
                     section_title=section_path,
-                    page_number=draft.page_number,
+                    page_number=draft.page_number or block_page_number,
                     section_path=section_path,
                     page_or_sheet=block.page_or_sheet,
                     chunk_type=block.chunk_type,
@@ -591,6 +630,17 @@ def _metadata_with_embedding(
     return enriched, embedding_service.embedding_id(chunk_id, vector)
 
 
+def _summary_from_drafts(drafts: list[ChunkDraft]) -> str:
+    parts: list[str] = []
+    for draft in drafts:
+        text = " ".join(draft.text.split())
+        if text:
+            parts.append(text)
+        if sum(len(part) for part in parts) >= 300:
+            break
+    return " ".join(parts)[:500]
+
+
 def create_knowledge_file_from_bytes(
     db: Session,
     *,
@@ -639,6 +689,12 @@ def create_knowledge_file_from_bytes(
         file_name=safe_name,
         content=content,
     )
+    chunk_drafts = chunk_blocks(
+        parsed_blocks,
+        target_chars=target_chars,
+        max_chars=max_chars,
+        overlap_chars=overlap_chars,
+    )
     file_record = KnowledgeFile(
         uuid=file_uuid,
         knowledge_base_id=knowledge_base_id,
@@ -657,6 +713,7 @@ def create_knowledge_file_from_bytes(
         category=category,
         document_type=document_type,
         tags_json=tags or [],
+        summary=_summary_from_drafts(chunk_drafts),
         parse_status="parsed",
         index_status="indexed",
         source_type=source_type,
@@ -677,12 +734,7 @@ def create_knowledge_file_from_bytes(
     db.flush()
 
     chunk_records: list[KnowledgeChunk] = []
-    for draft in chunk_blocks(
-        parsed_blocks,
-        target_chars=target_chars,
-        max_chars=max_chars,
-        overlap_chars=overlap_chars,
-    ):
+    for draft in chunk_drafts:
         chunk_id = str(uuid_lib.uuid4())
         encrypted = cipher.encrypt_json({"text": draft.text}, chunk_id.encode())
         metadata, embedding_id = _metadata_with_embedding(

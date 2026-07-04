@@ -31,10 +31,11 @@ def test_migration_revision_graph_is_single_linear_head() -> None:
         migration_config("sqlite+pysqlite:///:memory:")
     )
 
-    assert script.get_heads() == ["0015_agent_tool_calls"]
+    assert script.get_heads() == ["0016_user_memories"]
     assert [
         revision.revision for revision in script.walk_revisions()
     ] == [
+        "0016_user_memories",
         "0015_agent_tool_calls",
         "0014_web_sources",
         "0013_knowledge_document_types",
@@ -86,6 +87,30 @@ def test_foundation_migration_round_trip(tmp_path: Path) -> None:
 
     command.upgrade(config, "head")
     assert FOUNDATION_TABLES.issubset(set(inspect(engine).get_table_names()))
+
+
+def test_user_memories_migration_creates_personal_memory_table(tmp_path: Path) -> None:
+    database_path = tmp_path / "user-memories.db"
+    database_url = f"sqlite+pysqlite:///{database_path}"
+    config = migration_config(database_url)
+    engine = create_engine(database_url)
+
+    command.upgrade(config, "0016_user_memories")
+    inspector = inspect(engine)
+
+    columns = {column["name"] for column in inspector.get_columns("ai_user_memories")}
+    assert {
+        "id",
+        "uuid",
+        "sso_user_id",
+        "memory_type",
+        "content",
+        "status",
+        "source",
+        "metadata_json",
+        "created_at",
+        "updated_at",
+    }.issubset(columns)
 
 
 def test_chat_word_export_migration_creates_export_records(tmp_path: Path) -> None:

@@ -1,7 +1,25 @@
 from sqlalchemy.orm import Session
 
 from app.agent_runtime import ToolContext, ToolRegistry
-from app.agent_runtime.tools import CompanyKnowledgeSearchTool, PersonalReferenceSearchTool
+from app.agent_runtime.tools import (
+    CompanyKnowledgeSearchTool,
+    CurrentAttachmentSearchTool,
+    DocumentStructureValidateTool,
+    DocumentTemplateSelectTool,
+    UserFeedbackTool,
+    FileParseTool,
+    HistoryTaskTool,
+    KnowledgeReviewApproveTool,
+    KnowledgeReviewRejectTool,
+    KnowledgeReviewSubmitTool,
+    PersonalMemoryTool,
+    PersonalReferenceSearchTool,
+    ReferenceSourceValidateTool,
+    TaskModeDetectTool,
+    WebCaptureTool,
+    WebSearchTool,
+    WordExportTool,
+)
 from app.context.prompt_loader import PromptLoader
 from app.crypto import ContentCipher
 
@@ -25,7 +43,22 @@ class ToolExecutor:
         self.prompt_loader = prompt_loader or PromptLoader()
         self.registry = ToolRegistry()
         self.registry.register(CompanyKnowledgeSearchTool())
+        self.registry.register(CurrentAttachmentSearchTool())
+        self.registry.register(DocumentStructureValidateTool())
+        self.registry.register(DocumentTemplateSelectTool())
+        self.registry.register(UserFeedbackTool())
+        self.registry.register(FileParseTool())
+        self.registry.register(HistoryTaskTool())
+        self.registry.register(KnowledgeReviewApproveTool())
+        self.registry.register(KnowledgeReviewRejectTool())
+        self.registry.register(KnowledgeReviewSubmitTool())
+        self.registry.register(PersonalMemoryTool())
         self.registry.register(PersonalReferenceSearchTool())
+        self.registry.register(ReferenceSourceValidateTool())
+        self.registry.register(TaskModeDetectTool())
+        self.registry.register(WebCaptureTool())
+        self.registry.register(WebSearchTool())
+        self.registry.register(WordExportTool())
 
     def _context(self, *, mode: str = "", conversation_id: str = "") -> ToolContext:
         return ToolContext(
@@ -75,6 +108,36 @@ class ToolExecutor:
         error = result.error_message_safe if result.status != "success" else ""
         return ToolResult(
             name="search_personal_references",
+            query=query,
+            chunks=chunks,
+            search_log_ids=search_log_ids,
+            error=error,
+        )
+
+    def search_current_attachments(
+        self,
+        query: str,
+        *,
+        mode: str = "normal",
+        conversation_id: str | None = None,
+        file_ids: list[str] | None = None,
+    ) -> ToolResult:
+        result = self.registry.execute(
+            "current_attachment_search",
+            {
+                "query": query,
+                "mode": mode,
+                "conversation_id": conversation_id or "",
+                "file_ids": list(file_ids or []),
+                "top_k": self.top_k,
+            },
+            self._context(mode=mode, conversation_id=conversation_id or ""),
+        )
+        chunks = list(result.payload.get("chunks", []))
+        search_log_ids = list(result.payload.get("search_log_ids", []))
+        error = result.error_message_safe if result.status != "success" else ""
+        return ToolResult(
+            name="search_current_attachments",
             query=query,
             chunks=chunks,
             search_log_ids=search_log_ids,

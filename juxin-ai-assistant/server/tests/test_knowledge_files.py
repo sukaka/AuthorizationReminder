@@ -106,6 +106,42 @@ def _pptx_bytes(slides: list[tuple[str, str]], notes: list[str] | None = None) -
     return buffer.getvalue()
 
 
+
+def _pdf_bytes(text: str) -> bytes:
+    safe_text = (
+        text.replace('\\', '\\\\')
+        .replace('(', '\\(')
+        .replace(')', '\\)')
+    )
+    objects: list[bytes] = [
+        b"1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n",
+        b"2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n",
+        b"3 0 obj << /Type /Page /Parent 2 0 R /Resources << /Font << /F1 4 0 R >> >> /MediaBox [0 0 612 792] /Contents 5 0 R >> endobj\n",
+        b"4 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> endobj\n",
+    ]
+    stream = f"BT /F1 18 Tf 72 720 Td ({safe_text}) Tj ET".encode("utf-8")
+    objects.append(
+        b"5 0 obj << /Length "
+        + str(len(stream)).encode("ascii")
+        + b" >> stream\n"
+        + stream
+        + b"\nendstream endobj\n"
+    )
+    output = bytearray(b"%PDF-1.4\n")
+    offsets = [0]
+    for obj in objects:
+        offsets.append(len(output))
+        output.extend(obj)
+    xref_offset = len(output)
+    output.extend(f"xref\n0 {len(objects) + 1}\n".encode("ascii"))
+    output.extend(b"0000000000 65535 f \n")
+    for offset in offsets[1:]:
+        output.extend(f"{offset:010d} 00000 n \n".encode("ascii"))
+    output.extend(
+        f"trailer << /Size {len(objects) + 1} /Root 1 0 R >>\nstartxref\n{xref_offset}\n%%EOF\n".encode("ascii")
+    )
+    return bytes(output)
+
 def test_chunk_text_preserves_order_and_section_titles() -> None:
     from app.knowledge_files import chunk_text
 
@@ -146,7 +182,7 @@ def test_create_knowledge_file_rejects_csv_with_first_version_message(generation
         )
 
     assert exc_info.value.status_code == 415
-    assert exc_info.value.detail == "当前版本暂不支持该文件类型，请上传 docx、xlsx、pptx、txt 或 md 文件。"
+    assert exc_info.value.detail == "当前版本暂不支持该文件类型，请上传 pdf、docx、xlsx、pptx、txt 或 md 文件。"
 
 
 def test_create_knowledge_file_extracts_xlsx_table_rows(generation_db) -> None:
@@ -242,22 +278,33 @@ def test_create_knowledge_file_extracts_pptx_slides_and_notes(generation_db) -> 
     assert "备注：用于售前介绍" in payload["text"]
 
 
-def test_create_knowledge_file_rejects_pdf_without_ocr_flow(generation_db) -> None:
+def test_create_knowledge_file_extracts_pdf_pages(generation_db) -> None:
     from app.knowledge_files import create_knowledge_file_from_bytes
 
-    with pytest.raises(HTTPException) as exc_info:
-        create_knowledge_file_from_bytes(
-            generation_db,
-            sso_user_id="user-1",
-            file_name="产品白皮书.pdf",
-            content=b"%PDF-1.4",
-            content_type="application/pdf",
-            cipher=_cipher(),
-            key_version="v1",
-        )
+    file_record, chunks = create_knowledge_file_from_bytes(
+        generation_db,
+        sso_user_id="user-1",
+        file_name="product-whitepaper.pdf",
+        content=_pdf_bytes("WDSP web application security platform"),
+        content_type="application/pdf",
+        cipher=_cipher(),
+        key_version="v1",
+    )
 
-    assert exc_info.value.status_code == 415
-    assert exc_info.value.detail == "当前版本暂不支持该文件类型，请上传 docx、xlsx、pptx、txt 或 md 文件。"
+    assert file_record.file_name == "product-whitepaper.pdf"
+    assert chunks
+    assert chunks[0].page_number == 1
+    assert chunks[0].section_title == "第 1 页"
+    assert chunks[0].metadata_json["page_or_sheet"] == "第 1 页"
+    assert chunks[0].metadata_json["chunk_type"] == "pdf_page"
+    payload = _cipher().decrypt_json(
+        EncryptedPayload(
+            ciphertext=chunks[0].chunk_text_ciphertext,
+            nonce=chunks[0].chunk_text_nonce,
+        ),
+        chunks[0].chunk_id.encode(),
+    )
+    assert "WDSP web application security platform" in payload["text"]
 
 
 def test_create_knowledge_file_persists_encrypted_chunks(
@@ -400,7 +447,7 @@ def test_create_knowledge_file_rejects_unsupported_type(
         )
 
     assert exc_info.value.status_code == 415
-    assert str(exc_info.value.detail) == "当前版本暂不支持该文件类型，请上传 docx、xlsx、pptx、txt 或 md 文件。"
+    assert str(exc_info.value.detail) == "当前版本暂不支持该文件类型，请上传 pdf、docx、xlsx、pptx、txt 或 md 文件。"
 
 
 def test_upload_knowledge_file_api_creates_chunks_and_lists_only_owner(
@@ -463,6 +510,35 @@ def test_employee_upload_defaults_to_private_personal_reference(
     assert body["usage_type"] == "personal_reference"
     assert body["source_type"] == "user_upload"
     assert body["review_status"] == "draft"
+
+
+def test_upload_personal_file_auto_summarizes_and_suggests_metadata(
+    client_for_user,
+    generation_db,
+) -> None:
+    from app.models import KnowledgeFile
+
+    owner = client_for_user("user-1")
+
+    response = owner.post(
+        "/api/knowledge/files/upload",
+        data={"usage_type": "personal_reference"},
+        files={
+            "file": (
+                "客户会议纪要.md",
+                "一、会议纪要\n客户确认培训安排、验收材料和下一步计划。".encode("utf-8"),
+                "text/markdown",
+            )
+        },
+    )
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["summary"].startswith("一、会议纪要")
+    assert body["category"] == "会议纪要"
+    assert body["document_type"] == "会议纪要"
+    assert "会议纪要" in body["tags"]
+    assert "个人资料" in body["tags"]
     assert body["rag_enabled"] is False
     assert body["reference_enabled"] is True
     assert body["rag_scope"] == "personal"

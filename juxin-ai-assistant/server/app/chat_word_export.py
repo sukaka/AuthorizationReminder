@@ -11,6 +11,7 @@ from .document_templates.base import DocumentRenderPayload
 from .document_templates.registry import get_document_template
 from .export_file_manager import ExportFileManager
 from .models import ChatMessage, ChatMessageSource, ChatSession, ExportRecord
+from .reference_matching import source_is_mentioned
 from .schemas import ExportContentWordIn, ExportWordIn, ExportWordOut
 
 
@@ -357,46 +358,7 @@ def _reference_sources_markdown(
 
 
 def _source_is_mentioned(source: ChatMessageSource, output: str | None) -> bool:
-    if output is None:
-        return True
-    normalized_output = _normalize_reference_text(output)
-    return any(
-        candidate in normalized_output
-        for candidate in _reference_match_candidates(source.file_name, source.title)
-    )
-
-
-def _normalize_reference_text(value: str | None) -> str:
-    if not value:
-        return ""
-    return "".join(str(value).lower().split())
-
-
-def _reference_match_candidates(*values: str | None) -> list[str]:
-    candidates: list[str] = []
-    for value in values:
-        normalized = _normalize_reference_text(value)
-        if not normalized:
-            continue
-        candidates.append(normalized)
-        stem = _strip_known_file_extension(normalized)
-        if stem != normalized:
-            candidates.append(stem)
-    deduped: list[str] = []
-    seen: set[str] = set()
-    for candidate in candidates:
-        if len(candidate) < 4 or candidate in seen:
-            continue
-        seen.add(candidate)
-        deduped.append(candidate)
-    return deduped
-
-
-def _strip_known_file_extension(value: str) -> str:
-    for suffix in (".docx", ".xlsx", ".pptx", ".pdf", ".txt", ".md", ".doc", ".xls", ".ppt"):
-        if value.endswith(suffix):
-            return value[: -len(suffix)]
-    return value
+    return source_is_mentioned(source, output, none_matches=True)
 
 
 def _append_transient_reference_sources(output: str, sources: list) -> str:

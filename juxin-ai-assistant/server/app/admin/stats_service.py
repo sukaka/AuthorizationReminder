@@ -1,9 +1,18 @@
 from datetime import date, datetime, time, timedelta
 
-from sqlalchemy import func, select
+from sqlalchemy import distinct, func, select
 from sqlalchemy.orm import Session
 
-from ..models import FeedbackRecord, GenerationRecord, Task
+from ..models import (
+    AgentToolCallLog,
+    ChatMessage,
+    ChatMessageSource,
+    ExportRecord,
+    FeedbackRecord,
+    GenerationRecord,
+    KnowledgeSearchLog,
+    Task,
+)
 from .errors import GovernanceError
 from .schemas import CountByName, DailyCount, StatsOut
 
@@ -111,6 +120,11 @@ def build_stats(
         .order_by(FeedbackRecord.feedback_type)
     ).all()
 
+    quality_metrics = (
+        _build_quality_metrics(db, start_at=start_at, end_at=end_at)
+        if departments is None
+        else _empty_quality_metrics()
+    )
     visible_departments = (
         sorted(departments)
         if departments is not None
@@ -136,4 +150,116 @@ def build_stats(
             feedback_type: int(count)
             for feedback_type, count in feedback_rows
         },
+        **quality_metrics,
     )
+
+
+def _empty_quality_metrics() -> dict[str, int | float | dict[str, int]]:
+    return {
+        "tool_call_total": 0,
+        "tool_call_success": 0,
+        "tool_call_success_rate": 0.0,
+        "knowledge_search_total": 0,
+        "knowledge_search_hit": 0,
+        "knowledge_search_hit_rate": 0.0,
+        "assistant_answer_total": 0,
+        "assistant_answer_with_sources": 0,
+        "citation_coverage_rate": 0.0,
+        "answer_without_source_rate": 0.0,
+        "word_export_total": 0,
+        "tool_error_distribution": {},
+    }
+
+
+def _rate(numerator: int, denominator: int) -> float:
+    return round(numerator / denominator, 4) if denominator else 0.0
+
+
+def _build_quality_metrics(
+    db: Session,
+    *,
+    start_at: datetime,
+    end_at: datetime,
+) -> dict[str, int | float | dict[str, int]]:
+    tool_filters = [
+        AgentToolCallLog.created_at >= start_at,
+        AgentToolCallLog.created_at <= end_at,
+    ]
+    tool_call_total = int(db.scalar(
+        select(func.count(AgentToolCallLog.id)).where(*tool_filters)
+    ) or 0)
+    tool_call_success = int(db.scalar(
+        select(func.count(AgentToolCallLog.id)).where(
+            *tool_filters,
+            AgentToolCallLog.status == "success",
+        )
+    ) or 0)
+    tool_error_rows = db.execute(
+        select(
+            AgentToolCallLog.error_code,
+            func.count(AgentToolCallLog.id),
+        )
+        .where(
+            *tool_filters,
+            AgentToolCallLog.status != "success",
+            AgentToolCallLog.error_code != "",
+        )
+        .group_by(AgentToolCallLog.error_code)
+        .order_by(func.count(AgentToolCallLog.id).desc(), AgentToolCallLog.error_code)
+    ).all()
+
+    search_filters = [
+        KnowledgeSearchLog.created_at >= start_at,
+        KnowledgeSearchLog.created_at <= end_at,
+    ]
+    knowledge_search_total = int(db.scalar(
+        select(func.count(KnowledgeSearchLog.id)).where(*search_filters)
+    ) or 0)
+    search_logs = db.scalars(select(KnowledgeSearchLog).where(*search_filters))
+    knowledge_search_hit = sum(
+        1 for log in search_logs
+        if bool(log.retrieved_chunk_ids_json)
+    )
+
+    answer_filters = [
+        ChatMessage.created_at >= start_at,
+        ChatMessage.created_at <= end_at,
+        ChatMessage.role == "assistant",
+        ChatMessage.status == "COMPLETED",
+    ]
+    assistant_answer_total = int(db.scalar(
+        select(func.count(ChatMessage.id)).where(*answer_filters)
+    ) or 0)
+    assistant_answer_with_sources = int(db.scalar(
+        select(func.count(distinct(ChatMessageSource.message_id)))
+        .join(ChatMessage, ChatMessage.id == ChatMessageSource.message_id)
+        .where(*answer_filters)
+    ) or 0)
+
+    word_export_total = int(db.scalar(
+        select(func.count(ExportRecord.id)).where(
+            ExportRecord.created_at >= start_at,
+            ExportRecord.created_at <= end_at,
+        )
+    ) or 0)
+
+    return {
+        "tool_call_total": tool_call_total,
+        "tool_call_success": tool_call_success,
+        "tool_call_success_rate": _rate(tool_call_success, tool_call_total),
+        "knowledge_search_total": knowledge_search_total,
+        "knowledge_search_hit": knowledge_search_hit,
+        "knowledge_search_hit_rate": _rate(knowledge_search_hit, knowledge_search_total),
+        "assistant_answer_total": assistant_answer_total,
+        "assistant_answer_with_sources": assistant_answer_with_sources,
+        "citation_coverage_rate": _rate(assistant_answer_with_sources, assistant_answer_total),
+        "answer_without_source_rate": _rate(
+            assistant_answer_total - assistant_answer_with_sources,
+            assistant_answer_total,
+        ),
+        "word_export_total": word_export_total,
+        "tool_error_distribution": {
+            error_code: int(count)
+            for error_code, count in tool_error_rows
+        },
+    }

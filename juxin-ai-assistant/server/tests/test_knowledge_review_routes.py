@@ -145,6 +145,13 @@ def test_admin_approves_pending_file_as_official_knowledge(
         f"/api/knowledge/files/{created['file_uuid']}/submit-review",
         json={"comment": "请转正式"},
     )
+    pending_results = search_knowledge_chunks(
+        generation_db,
+        sso_user_id="user-2",
+        query="方案 资料",
+        cipher=ContentCipher(os.environ["CONTENT_ENCRYPTION_KEY"]),
+    )
+    assert pending_results == []
 
     response = admin.post(
         f"/api/knowledge/files/{created['file_uuid']}/approve",

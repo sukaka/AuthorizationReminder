@@ -91,9 +91,9 @@ const modeLabels: Record<ChatMode, string> = {
 };
 
 const wordExportTypes = ['single_answer', 'formal_document'] as const satisfies readonly ChatExportType[];
-const supportedKnowledgeAccept = '.txt,.md,.docx,.xlsx,.pptx,text/plain,text/markdown,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.openxmlformats-officedocument.presentationml.presentation';
-const unsupportedKnowledgeTypeMessage = '当前版本暂不支持该文件类型，请上传 docx、xlsx、pptx、txt 或 md 文件。';
-const unsupportedPdfMessage = '当前版本暂不支持 PDF，请上传 Word、Excel、PPT、TXT 或 Markdown 文件。';
+const supportedKnowledgeAccept = '.pdf,.txt,.md,.docx,.xlsx,.pptx,application/pdf,text/plain,text/markdown,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.openxmlformats-officedocument.presentationml.presentation';
+const unsupportedKnowledgeTypeMessage = '当前版本暂不支持该文件类型，请上传 pdf、docx、xlsx、pptx、txt 或 md 文件。';
+const pdfUploadHint = 'PDF 会按页面提取可复制文本，扫描件需要先转成可复制文本。';
 const fallbackUploadCategories = ['个人素材', '会议纪要', '项目交付', '销售商务', '安全运维', '模板范本', '其他'];
 const fallbackUploadDocumentTypes = ['会议纪要', '解决方案', '投标模板', '管理员手册', '培训材料', '验收报告', '检查记录', '其他'];
 
@@ -112,13 +112,13 @@ function uploadFileHint(file: File | null): string {
   if (!file) return '';
   const dotIndex = file.name.lastIndexOf('.');
   const extension = dotIndex >= 0 ? file.name.slice(dotIndex + 1).trim().toLowerCase() : '';
-  if (extension === 'pdf') return unsupportedPdfMessage;
+  if (extension === 'pdf') return pdfUploadHint;
   if (extension === 'csv' || extension === 'doc' || extension === 'xls' || ['png', 'jpg', 'jpeg', 'webp'].includes(extension)) {
     return unsupportedKnowledgeTypeMessage;
   }
   if (extension === 'xlsx') return 'Excel 会按 Sheet、表头和行记录解析。';
   if (extension === 'pptx') return 'PPT 会按幻灯片标题、正文和备注解析。';
-  return '当前支持 docx、xlsx、pptx、txt、md；第一版暂不支持 PDF 和扫描件。';
+  return '当前支持 pdf、docx、xlsx、pptx、txt、md；扫描件需要先转成可复制文本。';
 }
 
 function uploadFailureMessage(error: unknown): string {
@@ -276,7 +276,17 @@ function citationMatchCandidates(value?: string | null): string[] {
   const candidates = [normalized];
   const stem = stripKnownFileExtension(normalized);
   if (stem !== normalized) candidates.push(stem);
+  const withoutSequence = stripLeadingFileSequence(normalized);
+  if (withoutSequence !== normalized) {
+    candidates.push(withoutSequence);
+    const withoutSequenceStem = stripKnownFileExtension(withoutSequence);
+    if (withoutSequenceStem !== withoutSequence) candidates.push(withoutSequenceStem);
+  }
   return Array.from(new Set(candidates)).filter((candidate) => candidate.length >= 4);
+}
+
+function stripLeadingFileSequence(value: string): string {
+  return value.replace(/^\d+[-_、.．]+/, '');
 }
 
 function filterCitationsByAnswer(citations: ChatCitation[], answer: string): ChatCitation[] {
@@ -779,6 +789,7 @@ export function ChatPage() {
         sessionUuid: activeSessionUuid || undefined,
         question: trimmed,
         mode,
+        attachmentFileIds: sessionAttachmentFiles.map((file) => file.fileUuid),
         includePersonalReferences: referenceScope === 'with_personal' || referenceScope === 'personal_and_session',
         includeSessionAttachments: referenceScope === 'with_session' || referenceScope === 'personal_and_session',
       });

@@ -14,6 +14,7 @@ from .crypto import ContentCipher, EncryptedPayload
 from .knowledge_search import RetrievedKnowledgeChunk
 from .models import ChatMessage, ChatMessageSource, ChatSession, ExportRecord, KnowledgeChunk
 from .models import KnowledgeSearchLog, WebSearchLog
+from .reference_matching import source_is_mentioned as _source_is_mentioned
 from .schemas import (
     ChatCitationOut,
     ChatCompleteIn,
@@ -195,49 +196,6 @@ def _message_out(
         citations=citations,
         created_at=message.created_at,
     )
-
-
-def _source_is_mentioned(source: ChatMessageSource, answer: str | None) -> bool:
-    normalized_answer = _normalize_reference_text(answer)
-    if not normalized_answer:
-        return False
-    return any(
-        candidate in normalized_answer
-        for candidate in _reference_match_candidates(source.file_name, source.title)
-    )
-
-
-def _normalize_reference_text(value: str | None) -> str:
-    if not value:
-        return ""
-    return "".join(str(value).lower().split())
-
-
-def _reference_match_candidates(*values: str | None) -> list[str]:
-    candidates: list[str] = []
-    for value in values:
-        normalized = _normalize_reference_text(value)
-        if not normalized:
-            continue
-        candidates.append(normalized)
-        stem = _strip_known_file_extension(normalized)
-        if stem != normalized:
-            candidates.append(stem)
-    deduped: list[str] = []
-    seen: set[str] = set()
-    for candidate in candidates:
-        if len(candidate) < 4 or candidate in seen:
-            continue
-        seen.add(candidate)
-        deduped.append(candidate)
-    return deduped
-
-
-def _strip_known_file_extension(value: str) -> str:
-    for suffix in (".docx", ".xlsx", ".pptx", ".pdf", ".txt", ".md", ".doc", ".xls", ".ppt"):
-        if value.endswith(suffix):
-            return value[: -len(suffix)]
-    return value
 
 
 def _delete_unmentioned_sources(db: Session, message: ChatMessage, answer: str) -> None:

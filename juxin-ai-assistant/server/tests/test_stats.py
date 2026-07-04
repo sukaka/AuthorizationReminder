@@ -6,7 +6,15 @@ from fastapi.testclient import TestClient
 from app.auth import get_session
 from app.database import get_db
 from app.main import app
-from app.models import GenerationRecord
+from app.models import (
+    AgentToolCallLog,
+    ChatMessage,
+    ChatMessageSource,
+    ChatSession,
+    ExportRecord,
+    GenerationRecord,
+    KnowledgeSearchLog,
+)
 from app.schemas import AuthScope, SessionPayload, UserPayload
 
 
@@ -105,6 +113,114 @@ def test_admin_stats_cover_all_departments(
     payload = response.json()
     assert payload["total"] == 2
     assert payload["by_department"] == {"商务投标": 1, "销售": 1}
+
+
+def test_admin_stats_include_agent_quality_metrics(
+    generation_db,
+    seeded_task,
+) -> None:
+    generation_db.add_all(
+        [
+            _generation(seeded_task.id, "quality-ok", "交付", "COMPLETED"),
+            _generation(seeded_task.id, "quality-fail", "交付", "FAILED"),
+        ]
+    )
+    session = ChatSession(
+        uuid="quality-session",
+        sso_user_id="user-quality",
+        title="质量统计",
+        mode="NORMAL",
+        status="active",
+    )
+    generation_db.add(session)
+    generation_db.flush()
+    with_source = ChatMessage(
+        uuid="assistant-with-source",
+        session_id=session.id,
+        sso_user_id="user-quality",
+        role="assistant",
+        status="COMPLETED",
+    )
+    without_source = ChatMessage(
+        uuid="assistant-without-source",
+        session_id=session.id,
+        sso_user_id="user-quality",
+        role="assistant",
+        status="COMPLETED",
+    )
+    generation_db.add_all([with_source, without_source])
+    generation_db.flush()
+    generation_db.add_all(
+        [
+            ChatMessageSource(
+                message_id=with_source.id,
+                source_type="official_knowledge",
+                source_uuid="file-1",
+                file_name="白皮书.docx",
+            ),
+            AgentToolCallLog(
+                user_id="user-quality",
+                tool_name="company_knowledge_search",
+                status="success",
+                source_count=1,
+            ),
+            AgentToolCallLog(
+                user_id="user-quality",
+                tool_name="word_export",
+                status="error",
+                source_count=0,
+                error_code="EXPORT_FAILED",
+            ),
+            KnowledgeSearchLog(
+                user_id="user-quality",
+                question="查资料",
+                mode="knowledge",
+                search_type="official_rag",
+                retrieved_chunk_ids_json=["chunk-1"],
+                answer_message_id=with_source.uuid,
+            ),
+            KnowledgeSearchLog(
+                user_id="user-quality",
+                question="没命中",
+                mode="knowledge",
+                search_type="official_rag",
+                retrieved_chunk_ids_json=[],
+                answer_message_id=without_source.uuid,
+            ),
+            ExportRecord(
+                conversation_id=session.uuid,
+                message_id=with_source.uuid,
+                file_name="导出.docx",
+                file_path="/tmp/export.docx",
+                export_type="single_answer",
+                template_name="juxin_standard",
+                created_by="user-quality",
+            ),
+        ]
+    )
+    generation_db.commit()
+    app.dependency_overrides[get_db] = lambda: generation_db
+
+    try:
+        with TestClient(app) as client:
+            response = client.get("/api/ai/admin/stats")
+    finally:
+        app.dependency_overrides.pop(get_db, None)
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["tool_call_total"] == 2
+    assert payload["tool_call_success"] == 1
+    assert payload["tool_call_success_rate"] == 0.5
+    assert payload["knowledge_search_total"] == 2
+    assert payload["knowledge_search_hit"] == 1
+    assert payload["knowledge_search_hit_rate"] == 0.5
+    assert payload["assistant_answer_total"] == 2
+    assert payload["assistant_answer_with_sources"] == 1
+    assert payload["citation_coverage_rate"] == 0.5
+    assert payload["answer_without_source_rate"] == 0.5
+    assert payload["word_export_total"] == 1
+    assert payload["tool_error_distribution"] == {"EXPORT_FAILED": 1}
 
 
 def test_stats_reject_ranges_over_366_days(generation_db) -> None:

@@ -260,6 +260,18 @@ class StatsOut(BaseModel):
     task_ranking: list[CountByName]
     daily_trend: list[DailyCount]
     feedback_distribution: dict[str, int]
+    tool_call_total: int = 0
+    tool_call_success: int = 0
+    tool_call_success_rate: float = 0.0
+    knowledge_search_total: int = 0
+    knowledge_search_hit: int = 0
+    knowledge_search_hit_rate: float = 0.0
+    assistant_answer_total: int = 0
+    assistant_answer_with_sources: int = 0
+    citation_coverage_rate: float = 0.0
+    answer_without_source_rate: float = 0.0
+    word_export_total: int = 0
+    tool_error_distribution: dict[str, int] = {}
 
 
 class AuditLogOut(BaseModel):

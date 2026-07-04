@@ -118,3 +118,67 @@ class PersonalReferenceSearchTool(BaseTool):
             },
             source_count=len(chunks),
         )
+
+
+class CurrentAttachmentSearchTool(BaseTool):
+    name = "current_attachment_search"
+    description = "Search current conversation attachments only"
+
+    def run(self, tool_input: dict, context: ToolContext) -> ToolResult:
+        if context.db is None:
+            return ToolResult(
+                tool_name=self.name,
+                status="error",
+                error_code="TOOL_DB_MISSING",
+                error_message_safe="工具缺少数据库连接",
+            )
+        cipher = context.resources.get("cipher")
+        if cipher is None:
+            return ToolResult(
+                tool_name=self.name,
+                status="error",
+                error_code="TOOL_CIPHER_MISSING",
+                error_message_safe="工具缺少内容解密组件",
+            )
+        query = str(tool_input.get("query") or "")
+        mode = str(tool_input.get("mode") or context.mode or "normal")
+        conversation_id = str(tool_input.get("conversation_id") or context.conversation_id or "")
+        file_ids = list(tool_input.get("file_ids") or [])
+        chunks = search_personal_reference_chunks(
+            context.db,
+            sso_user_id=context.user_id,
+            query=query,
+            cipher=cipher,
+            conversation_id=conversation_id,
+            file_ids=file_ids,
+            include_personal_references=False,
+            include_session_attachments=True,
+            top_k=tool_input.get("top_k"),
+        )
+        search_log = KnowledgeSearchLog(
+            user_id=context.user_id,
+            question=query[:20_000],
+            mode=mode,
+            search_type="session_attachment",
+            knowledge_base_ids_json=[],
+            filters_json={
+                "conversation_id": conversation_id,
+                "file_ids": file_ids,
+                "include_personal_references": False,
+                "include_session_attachments": True,
+            },
+            retrieved_chunk_ids_json=[chunk.chunk_id for chunk in chunks],
+            answer_message_id="",
+        )
+        context.db.add(search_log)
+        context.db.flush()
+        search_log_ids = [search_log.id]
+        return ToolResult(
+            tool_name=self.name,
+            payload={"chunks": chunks, "search_log_ids": search_log_ids},
+            output_summary={
+                "chunk_count": len(chunks),
+                "search_log_ids": search_log_ids,
+            },
+            source_count=len(chunks),
+        )

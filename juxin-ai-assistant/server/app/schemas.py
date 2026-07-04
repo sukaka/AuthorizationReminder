@@ -216,6 +216,7 @@ class KnowledgeFileOut(BaseModel):
     category: str = "个人素材"
     document_type: str = "其他"
     tags: list[str] = Field(default_factory=list)
+    summary: str = ""
     parse_status: str = "parsed"
     index_status: str = "indexed"
 

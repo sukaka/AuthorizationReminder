@@ -375,6 +375,7 @@ export async function prepareChat(payload: {
   question: string;
   mode: ChatMode;
   topK?: number;
+  attachmentFileIds?: string[];
   includePersonalReferences?: boolean;
   includeSessionAttachments?: boolean;
 }): Promise<ChatPreparePayload> {
@@ -387,6 +388,7 @@ export async function prepareChat(payload: {
         question: payload.question,
         mode: payload.mode,
         top_k: payload.topK ?? 8,
+        attachment_file_ids: payload.attachmentFileIds ?? [],
         include_personal_references: payload.includePersonalReferences ?? false,
         include_session_attachments: payload.includeSessionAttachments ?? false,
       }),

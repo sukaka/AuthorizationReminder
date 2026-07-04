@@ -69,18 +69,37 @@ class LoopRunner:
         observation: Observation | None = None
         rag_search_count = 0
         tool_calls = 0
-        should_search_personal = include_personal_references or include_session_attachments or bool(attachment_file_ids)
-        if should_search_personal and tool_calls < self.limits.max_tool_calls:
-            include_explicit_files = bool(attachment_file_ids)
-            personal_result = executor.search_personal_references(
+        if (include_session_attachments or attachment_file_ids) and tool_calls < self.limits.max_tool_calls:
+            current_attachment_result = executor.search_current_attachments(
                 question,
                 mode=analysis.mode,
                 conversation_id=conversation_id,
                 file_ids=attachment_file_ids,
-                include_personal_references=include_personal_references or include_explicit_files,
-                include_session_attachments=include_session_attachments or include_explicit_files,
             )
-            personal_chunks = personal_result.chunks
+            personal_chunks.extend(current_attachment_result.chunks)
+            search_log_ids.extend(current_attachment_result.search_log_ids)
+            tool_calls += 1
+            trace.append(
+                LoopTraceStep(
+                    state=LoopState.EXECUTE_TOOL,
+                    action="search_current_attachments",
+                    query=question,
+                    observation=f"chunks={len(current_attachment_result.chunks)}",
+                    strategy=analysis.strategy,
+                    error=current_attachment_result.error,
+                )
+            )
+
+        if include_personal_references and tool_calls < self.limits.max_tool_calls:
+            personal_result = executor.search_personal_references(
+                question,
+                mode=analysis.mode,
+                conversation_id=conversation_id,
+                file_ids=[],
+                include_personal_references=True,
+                include_session_attachments=False,
+            )
+            personal_chunks.extend(personal_result.chunks)
             search_log_ids.extend(personal_result.search_log_ids)
             tool_calls += 1
             trace.append(
@@ -88,7 +107,7 @@ class LoopRunner:
                     state=LoopState.EXECUTE_TOOL,
                     action="search_personal_references",
                     query=question,
-                    observation=f"chunks={len(personal_chunks)}",
+                    observation=f"chunks={len(personal_result.chunks)}",
                     strategy=analysis.strategy,
                     error=personal_result.error,
                 )

@@ -183,6 +183,63 @@ it('shows only cited files mentioned in the final answer', async () => {
   expect(screen.queryByText('销售手册.txt')).not.toBeInTheDocument();
 });
 
+it('keeps citations when the answer omits a leading file sequence number', async () => {
+  server.use(
+    http.get('/api/conversations', () => HttpResponse.json({ items: [], total: 0 })),
+    http.post('/api/ai/chat/prepare', () => HttpResponse.json({
+      session_uuid: 'session-numbered-source',
+      user_message_uuid: 'user-message-numbered-source',
+      assistant_message_uuid: 'assistant-message-numbered-source',
+      completion_token: 'complete-numbered-source',
+      completed: false,
+      answer: '',
+      messages: [
+        { role: 'system', content: '你是聚信 AI 助手' },
+        { role: 'user', content: '列出招标参数里的标题' },
+      ],
+      citations: [
+        {
+          source_type: 'session_attachment',
+          file_uuid: 'file-numbered',
+          file_name: '3-聚信等保合规云管平台-招标参数V1.1.docx',
+          chunk_id: 'chunk-numbered',
+          section_title: '硬件参数',
+          chunk_index: 0,
+          score: 9,
+        },
+        {
+          source_type: 'official_knowledge',
+          file_uuid: 'file-unused',
+          file_name: '等保合规云平台 管理员手册v3.1.docx',
+          chunk_id: 'chunk-unused',
+          section_title: '系统登录',
+          chunk_index: 0,
+          score: 8,
+        },
+      ],
+    }, { status: 201 })),
+    http.post('/api/ai/chat/messages/assistant-message-numbered-source/complete', () => HttpResponse.json({
+      message_uuid: 'assistant-message-numbered-source',
+      status: 'COMPLETED',
+    })),
+  );
+  generateLocalModelMock.mockResolvedValue({
+    output: '根据《聚信等保合规云管平台-招标参数V1.1.docx》，当前资料能确认“硬件参数”。',
+    latencyMs: 12,
+    usage: { output_tokens: 8 },
+  });
+
+  render(<ChatPage />);
+  await userEvent.type(await screen.findByLabelText('告诉我你想完成什么工作'), '列出招标参数里的标题');
+  await userEvent.click(screen.getByRole('button', { name: '发送' }));
+
+  expect(await screen.findByText(/当前资料能确认/)).toBeInTheDocument();
+  const citationSummary = screen.getByText('引用文件 1 个');
+  await userEvent.click(citationSummary);
+  expect(screen.getByText('3-聚信等保合规云管平台-招标参数V1.1.docx')).toBeVisible();
+  expect(screen.queryByText('等保合规云平台 管理员手册v3.1.docx')).not.toBeInTheDocument();
+});
+
 it('does not show citations until the assistant answer is fully completed', async () => {
   let resolveModel: ((value: { output: string; latencyMs: number; usage: { output_tokens: number } }) => void) | undefined;
   server.use(
@@ -635,9 +692,11 @@ it('offers composer shortcuts for knowledge base personal materials and session 
 
 it('shows uploaded session attachments as a compact attachment bar', async () => {
   let prepareCount = 0;
+  const prepareRequest = vi.fn();
   server.use(
     http.get('/api/conversations', () => HttpResponse.json({ items: [], total: 0 })),
-    http.post('/api/ai/chat/prepare', () => {
+    http.post('/api/ai/chat/prepare', async ({ request }) => {
+      prepareRequest(await request.json());
       prepareCount += 1;
       return HttpResponse.json({
         session_uuid: 'session-attachment-bar',
@@ -716,6 +775,34 @@ it('shows uploaded session attachments as a compact attachment bar', async () =>
   })).toBeInTheDocument();
   expect(screen.queryByRole('region', { name: '当前参考资料' })).not.toBeInTheDocument();
   expect(screen.queryByText('这些资料只作为本次任务的参考资料，不会进入公司知识库。')).not.toBeInTheDocument();
+
+  await userEvent.type(screen.getByLabelText('告诉我你想完成什么工作'), '参考附件整理');
+  await userEvent.click(screen.getByRole('button', { name: '发送' }));
+
+  await waitFor(() => expect(prepareRequest).toHaveBeenLastCalledWith(
+    expect.objectContaining({
+      question: '参考附件整理',
+      include_session_attachments: true,
+      attachment_file_ids: ['file-current-attachment'],
+    }),
+  ));
+});
+
+it('allows uploading PDF files and explains text extraction limits', async () => {
+  server.use(
+    http.get('/api/conversations', () => HttpResponse.json({ items: [], total: 0 })),
+  );
+
+  render(<ChatPage />);
+  await userEvent.upload(
+    await screen.findByLabelText('上传资料'),
+    new File(['%PDF-1.4'], '产品白皮书.pdf', { type: 'application/pdf' }),
+    { applyAccept: false },
+  );
+
+  const dialog = await screen.findByRole('dialog', { name: '上传资料' });
+  expect(within(dialog).getByText('PDF 会按页面提取可复制文本，扫描件需要先转成可复制文本。')).toBeInTheDocument();
+  expect(within(dialog).queryByText(/暂不支持 PDF/)).not.toBeInTheDocument();
 });
 
 it('exports an assistant reply to Word from the chat message actions', async () => {

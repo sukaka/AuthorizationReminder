@@ -1,11 +1,21 @@
 import os
+from io import BytesIO
 from datetime import UTC, datetime
 
+from docx import Document
 from sqlalchemy import select
 
 from app.knowledge_files import create_knowledge_file_from_bytes
 from app.models import WebSearchLog
 from app.web_sources import WebSearchResult
+
+
+def _build_docx_bytes(text: str) -> bytes:
+    buffer = BytesIO()
+    document = Document()
+    document.add_paragraph(text)
+    document.save(buffer)
+    return buffer.getvalue()
 
 
 def test_normal_chat_prepare_complete_and_detail(client_for_user) -> None:
@@ -487,7 +497,7 @@ def test_chat_prepare_uses_explicit_attachment_file_ids_without_extra_flags(
     assert logs[0].filters_json == {
         "conversation_id": created["session_uuid"],
         "file_ids": [file_record.uuid],
-        "include_personal_references": True,
+        "include_personal_references": False,
         "include_session_attachments": True,
     }
     assert logs[0].retrieved_chunk_ids_json == [body["citations"][0]["chunk_id"]]
@@ -636,6 +646,130 @@ def test_completed_chat_detail_only_returns_sources_mentioned_in_answer(
     assistant = detail.json()["messages"][1]
     citation_file_names = [citation["file_name"] for citation in assistant["citations"]]
     assert citation_file_names == ["安全白皮书.txt"]
+
+
+def test_completed_chat_detail_drops_source_when_answer_says_evidence_missing(
+    client_for_user,
+    generation_db,
+) -> None:
+    from app.crypto import ContentCipher
+
+    cipher = ContentCipher(os.environ["CONTENT_ENCRYPTION_KEY"])
+    file_record, _chunks = create_knowledge_file_from_bytes(
+        generation_db,
+        sso_user_id="admin",
+        file_name="3-聚信等保合规云管平台-招标参数V1.1.docx",
+        content=_build_docx_bytes("一、硬件参数\n章节标题存在，但未给出具体 CPU 和内存参数。"),
+        content_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        cipher=cipher,
+        key_version="v1",
+        visibility="PUBLIC",
+        source_type="admin_upload",
+        usage_type="official_knowledge",
+        review_status="official",
+        rag_enabled=True,
+        rag_scope="company",
+        permission_scope="company",
+        owner_user_id="admin",
+    )
+    generation_db.commit()
+    client = client_for_user("user-1")
+
+    prepared = client.post(
+        "/api/ai/chat/prepare",
+        json={"question": "提取硬件参数", "mode": "knowledge", "top_k": 8},
+    )
+
+    assert prepared.status_code == 201
+    body = prepared.json()
+    assert body["citations"][0]["file_uuid"] == file_record.uuid
+
+    completed = client.post(
+        f"/api/ai/chat/messages/{body['assistant_message_uuid']}/complete",
+        json={
+            "completion_token": body["completion_token"],
+            "answer": "《聚信等保合规云管平台-招标参数V1.1.docx》中虽然提到硬件参数，但当前引用片段没有包含明确依据，无法确认。",
+            "model_display_name": "DeepSeek",
+            "model_id": "deepseek-chat",
+        },
+    )
+
+    assert completed.status_code == 200
+    detail = client.get(f"/api/ai/chat/sessions/{body['session_uuid']}")
+    assert detail.status_code == 200
+    assistant = detail.json()["messages"][1]
+    assert assistant["citations"] == []
+
+
+def test_completed_chat_detail_keeps_numbered_file_when_answer_omits_sequence(
+    client_for_user,
+    generation_db,
+) -> None:
+    from app.crypto import ContentCipher
+
+    cipher = ContentCipher(os.environ["CONTENT_ENCRYPTION_KEY"])
+    numbered_file, _chunks = create_knowledge_file_from_bytes(
+        generation_db,
+        sso_user_id="admin",
+        file_name="3-聚信等保合规云管平台-招标参数V1.1.docx",
+        content=_build_docx_bytes("一、硬件参数\nCPU 和内存配置要求。"),
+        content_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        cipher=cipher,
+        key_version="v1",
+        visibility="PUBLIC",
+        source_type="admin_upload",
+        usage_type="official_knowledge",
+        review_status="official",
+        rag_enabled=True,
+        rag_scope="company",
+        permission_scope="company",
+        owner_user_id="admin",
+    )
+    create_knowledge_file_from_bytes(
+        generation_db,
+        sso_user_id="admin",
+        file_name="等保合规云平台 管理员手册v3.1.docx",
+        content=_build_docx_bytes("一、系统登录\n管理员登录后台。"),
+        content_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        cipher=cipher,
+        key_version="v1",
+        visibility="PUBLIC",
+        source_type="admin_upload",
+        usage_type="official_knowledge",
+        review_status="official",
+        rag_enabled=True,
+        rag_scope="company",
+        permission_scope="company",
+        owner_user_id="admin",
+    )
+    generation_db.commit()
+    client = client_for_user("user-1")
+
+    prepared = client.post(
+        "/api/ai/chat/prepare",
+        json={"question": "列出招标参数里的标题", "mode": "knowledge", "top_k": 8},
+    )
+
+    assert prepared.status_code == 201
+    body = prepared.json()
+    assert numbered_file.file_name in {citation["file_name"] for citation in body["citations"]}
+
+    completed = client.post(
+        f"/api/ai/chat/messages/{body['assistant_message_uuid']}/complete",
+        json={
+            "completion_token": body["completion_token"],
+            "answer": "根据《聚信等保合规云管平台-招标参数V1.1.docx》，当前资料能确认“硬件参数”。",
+            "model_display_name": "DeepSeek",
+            "model_id": "deepseek-chat",
+        },
+    )
+
+    assert completed.status_code == 200
+    detail = client.get(f"/api/ai/chat/sessions/{body['session_uuid']}")
+    assert detail.status_code == 200
+    assistant = detail.json()["messages"][1]
+    citation_file_names = [citation["file_name"] for citation in assistant["citations"]]
+    assert citation_file_names == ["3-聚信等保合规云管平台-招标参数V1.1.docx"]
 
 
 def test_chat_prepare_applies_mode_default_official_knowledge_filters(

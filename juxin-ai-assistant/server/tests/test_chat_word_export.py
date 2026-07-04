@@ -275,6 +275,54 @@ def test_reference_sources_markdown_only_keeps_sources_mentioned_in_output(
     assert "本文参考当前会话附件生成，仅供本次会话使用。" not in markdown
 
 
+def test_reference_sources_markdown_keeps_numbered_file_when_output_omits_sequence(
+    generation_db,
+):
+    from app.chat_word_export import _reference_sources_markdown
+    from app.models import ChatMessage, ChatMessageSource
+
+    _seed_chat(generation_db)
+    assistant_message = generation_db.query(ChatMessage).filter_by(
+        uuid="chat-assistant-message",
+    ).one()
+    source = generation_db.query(ChatMessageSource).filter_by(
+        source_uuid="official-file",
+    ).one()
+    source.file_name = "3-聚信等保合规云管平台-招标参数V1.1.docx"
+    source.title = "3-聚信等保合规云管平台-招标参数V1.1.docx"
+    generation_db.commit()
+
+    markdown = _reference_sources_markdown(
+        generation_db,
+        [assistant_message],
+        "根据《聚信等保合规云管平台-招标参数V1.1.docx》，当前资料能确认“硬件参数”。",
+    )
+
+    assert "3-聚信等保合规云管平台-招标参数V1.1.docx——公司知识库 / 正式知识来源" in markdown
+    assert "我的会议记录.docx" not in markdown
+    assert "客户访谈记录.pdf" not in markdown
+
+
+def test_reference_sources_markdown_drops_sources_only_mentioned_as_missing_evidence(
+    generation_db,
+):
+    from app.chat_word_export import _reference_sources_markdown
+    from app.models import ChatMessage
+
+    _seed_chat(generation_db)
+    assistant_message = generation_db.query(ChatMessage).filter_by(
+        uuid="chat-assistant-message",
+    ).one()
+
+    markdown = _reference_sources_markdown(
+        generation_db,
+        [assistant_message],
+        "《聚信产品白皮书.pdf》中虽然提到了部署方式，但当前引用片段没有包含明确依据，无法确认。",
+    )
+
+    assert markdown == ""
+
+
 def test_formal_document_word_export_respects_message_id_scope(
     client_for_user,
     generation_db,

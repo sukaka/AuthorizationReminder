@@ -12,9 +12,59 @@ class RecentChatMessage:
     content: str
 
 
+@dataclass(frozen=True)
+class GatheredContext:
+    mode: str
+    current_user_message: str
+    knowledge_chunks: list[RetrievedKnowledgeChunk]
+    personal_reference_chunks: list[RetrievedKnowledgeChunk]
+    recent_messages: list[RecentChatMessage]
+    long_term_memories: list[str]
+    require_knowledge_evidence: bool
+
+
+@dataclass(frozen=True)
+class SelectedContext:
+    mode: str
+    current_user_message: str
+    knowledge_chunks: list[RetrievedKnowledgeChunk]
+    personal_reference_chunks: list[RetrievedKnowledgeChunk]
+    recent_messages: list[RecentChatMessage]
+    older_messages: list[RecentChatMessage]
+    long_term_memories: list[str]
+    require_knowledge_evidence: bool
+
+
+@dataclass(frozen=True)
+class CompressedContext:
+    mode: str
+    current_user_message: str
+    knowledge_chunks: list[RetrievedKnowledgeChunk]
+    personal_reference_chunks: list[RetrievedKnowledgeChunk]
+    recent_messages: list[RecentChatMessage]
+    conversation_summary: str
+    long_term_memories: list[str]
+    require_knowledge_evidence: bool
+
+
+@dataclass(frozen=True)
+class StructuredContext:
+    system_prompt: str
+    recent_messages: list[RecentChatMessage]
+    current_user_message: str
+
+
 class ContextBuilder:
-    def __init__(self, prompt_loader: PromptLoader | None = None) -> None:
+    def __init__(
+        self,
+        prompt_loader: PromptLoader | None = None,
+        *,
+        max_recent_messages: int = 8,
+        max_evidence_chunks: int = 8,
+    ) -> None:
         self.prompt_loader = prompt_loader or PromptLoader()
+        self.max_recent_messages = max(0, int(max_recent_messages))
+        self.max_evidence_chunks = max(1, int(max_evidence_chunks))
 
     def build_messages(
         self,
@@ -27,36 +77,138 @@ class ContextBuilder:
         long_term_memories: list[str] | None = None,
         require_knowledge_evidence: bool,
     ) -> list[MessageOut]:
-        personal_chunks = personal_reference_chunks or []
-        memories = long_term_memories or []
+        gathered = self.gather_context(
+            mode=mode,
+            current_user_message=current_user_message,
+            knowledge_chunks=knowledge_chunks,
+            personal_reference_chunks=personal_reference_chunks or [],
+            recent_messages=recent_messages,
+            long_term_memories=long_term_memories or [],
+            require_knowledge_evidence=require_knowledge_evidence,
+        )
+        structured = self.structure_context(self.compress_context(self.select_context(gathered)))
+        messages = [MessageOut(role="system", content=structured.system_prompt)]
+        messages.extend(
+            MessageOut(role=message.role, content=message.content)
+            for message in structured.recent_messages
+        )
+        messages.append(MessageOut(role="user", content=structured.current_user_message))
+        return messages
+
+    def gather_context(
+        self,
+        *,
+        mode: str,
+        current_user_message: str,
+        knowledge_chunks: list[RetrievedKnowledgeChunk],
+        personal_reference_chunks: list[RetrievedKnowledgeChunk],
+        recent_messages: list[RecentChatMessage],
+        long_term_memories: list[str],
+        require_knowledge_evidence: bool,
+    ) -> GatheredContext:
+        return GatheredContext(
+            mode=mode,
+            current_user_message=current_user_message,
+            knowledge_chunks=knowledge_chunks,
+            personal_reference_chunks=personal_reference_chunks,
+            recent_messages=recent_messages,
+            long_term_memories=long_term_memories,
+            require_knowledge_evidence=require_knowledge_evidence,
+        )
+
+    def select_context(self, context: GatheredContext) -> SelectedContext:
+        normalized_messages = [
+            RecentChatMessage(role=message.role, content=message.content.strip())
+            for message in context.recent_messages
+            if message.role in {"user", "assistant"} and message.content.strip()
+        ]
+        if self.max_recent_messages:
+            recent_messages = normalized_messages[-self.max_recent_messages:]
+            older_messages = normalized_messages[:-self.max_recent_messages]
+        else:
+            recent_messages = []
+            older_messages = normalized_messages
+        return SelectedContext(
+            mode=context.mode,
+            current_user_message=context.current_user_message,
+            knowledge_chunks=self._select_chunks(context.knowledge_chunks),
+            personal_reference_chunks=self._select_chunks(context.personal_reference_chunks),
+            recent_messages=recent_messages,
+            older_messages=older_messages,
+            long_term_memories=[
+                memory.strip()
+                for memory in context.long_term_memories
+                if memory.strip()
+            ][:8],
+            require_knowledge_evidence=context.require_knowledge_evidence,
+        )
+
+    def compress_context(self, context: SelectedContext) -> CompressedContext:
+        return CompressedContext(
+            mode=context.mode,
+            current_user_message=context.current_user_message,
+            knowledge_chunks=context.knowledge_chunks,
+            personal_reference_chunks=context.personal_reference_chunks,
+            recent_messages=context.recent_messages,
+            conversation_summary=self._conversation_summary(context.older_messages),
+            long_term_memories=context.long_term_memories,
+            require_knowledge_evidence=context.require_knowledge_evidence,
+        )
+
+    def structure_context(self, context: CompressedContext) -> StructuredContext:
         system_prompt = "\n\n".join([
             self.prompt_loader.base_system_prompt(),
             "## company_profile\n\n" + self.prompt_loader.company_profile(),
-            "## role_prompt\n\n" + self.prompt_loader.role_prompt(mode),
-            "## conversation_summary\n\n" + self._conversation_summary(recent_messages),
-            "## long_term_memory\n\n" + self._long_term_memory_context(memories),
-            "## official_knowledge_context\n\n" + self._official_knowledge_context(knowledge_chunks),
-            "## personal_reference_context\n\n" + self._personal_reference_context(personal_chunks),
+            "## role_prompt\n\n" + self.prompt_loader.role_prompt(context.mode),
+            "## context_structure\n\n"
+            "Role / Task / Evidence / Context / Output。"
+            "按角色约束、当前任务、资料证据、短期上下文、输出要求组织回答。",
+            "## conversation_summary\n\n" + context.conversation_summary,
+            "## long_term_memory\n\n" + self._long_term_memory_context(context.long_term_memories),
+            "## official_knowledge_context\n\n"
+            + self._official_knowledge_context(context.knowledge_chunks),
+            "## personal_reference_context\n\n"
+            + self._personal_reference_context(context.personal_reference_chunks),
             "## knowledge_policy\n\n" + self._knowledge_policy(
-                knowledge_chunks=knowledge_chunks,
-                personal_reference_chunks=personal_chunks,
-                require_knowledge_evidence=require_knowledge_evidence,
+                knowledge_chunks=context.knowledge_chunks,
+                personal_reference_chunks=context.personal_reference_chunks,
+                require_knowledge_evidence=context.require_knowledge_evidence,
             ),
         ])
-        messages = [MessageOut(role="system", content=system_prompt)]
-        messages.extend(
-            MessageOut(role=message.role, content=message.content)
-            for message in recent_messages
-            if message.role in {"user", "assistant"} and message.content.strip()
+        return StructuredContext(
+            system_prompt=system_prompt,
+            recent_messages=context.recent_messages,
+            current_user_message=context.current_user_message,
         )
-        messages.append(MessageOut(role="user", content=current_user_message))
-        return messages
+
+    def _select_chunks(
+        self,
+        chunks: list[RetrievedKnowledgeChunk],
+    ) -> list[RetrievedKnowledgeChunk]:
+        selected: list[RetrievedKnowledgeChunk] = []
+        seen: set[str] = set()
+        for chunk in sorted(chunks, key=lambda item: item.score, reverse=True):
+            identity = chunk.chunk_id or f"{chunk.file_uuid}:{chunk.chunk_index}"
+            if identity in seen:
+                continue
+            seen.add(identity)
+            selected.append(chunk)
+            if len(selected) >= self.max_evidence_chunks:
+                break
+        return selected
 
     @staticmethod
-    def _conversation_summary(recent_messages: list[RecentChatMessage]) -> str:
-        if not recent_messages:
+    def _conversation_summary(older_messages: list[RecentChatMessage]) -> str:
+        if not older_messages:
             return "暂无长期摘要；本次仅使用当前问题。聊天历史上下文与知识库上下文分开管理。"
-        return "暂无长期摘要；以下 recent_messages 仅用于保持短期对话连续性。"
+        lines = [
+            "以下为压缩后的较早对话，只用于保持任务连续性，不作为知识库证据。",
+        ]
+        for message in older_messages[-12:]:
+            role = "用户" if message.role == "user" else "助手"
+            content = " ".join(message.content.split())
+            lines.append(f"- {role}: {content[:160]}")
+        return "\n".join(lines)
 
     @staticmethod
     def _long_term_memory_context(long_term_memories: list[str]) -> str:

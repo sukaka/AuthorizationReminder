@@ -700,3 +700,20 @@ class UserFavorite(TimestampMixin, Base):
         ForeignKey("ai_tasks.id", ondelete="CASCADE"),
         index=True,
     )
+
+
+class UserMemory(TimestampMixin, Base):
+    __tablename__ = "ai_user_memories"
+
+    id: Mapped[int] = mapped_column(primary_key_type, primary_key=True, autoincrement=True)
+    uuid: Mapped[str] = mapped_column(
+        String(36),
+        unique=True,
+        default=lambda: str(uuid_lib.uuid4()),
+    )
+    sso_user_id: Mapped[str] = mapped_column(String(64), index=True)
+    memory_type: Mapped[str] = mapped_column(String(32), default="preference", index=True)
+    content: Mapped[str] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(24), default="active", index=True)
+    source: Mapped[str] = mapped_column(String(64), default="assistant")
+    metadata_json: Mapped[dict] = mapped_column(JSON, default=dict)
