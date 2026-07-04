@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from zipfile import ZipFile
 from types import SimpleNamespace
 
 from app.agent_runtime import BaseTool, ToolContext, ToolRegistry, ToolResult
@@ -286,6 +287,48 @@ def test_word_export_tool_wraps_existing_docx_export_service(
         "file_name": "AI 对话导出.docx",
         "download_url": "/api/export/download/export-1",
     }
+
+
+def test_pptx_export_tool_generates_valid_presentation_file(generation_db, tmp_path) -> None:
+    from app.agent_runtime.tools import PptxExportTool
+    from app.export_file_manager import ExportFileManager
+    from app.models import AgentToolCallLog
+
+    registry = ToolRegistry()
+    registry.register(PptxExportTool())
+    file_manager = ExportFileManager(str(tmp_path))
+
+    result = registry.execute(
+        "pptx_export",
+        {
+            "title": "聚信安全运维方案",
+            "slides": [
+                {"title": "方案目标", "bullets": ["巡检", "加固", "应急响应"]},
+                {"title": "交付成果", "bullets": ["巡检报告", "整改清单"]},
+            ],
+        },
+        ToolContext(
+            user_id="user-1",
+            db=generation_db,
+            resources={"file_manager": file_manager},
+        ),
+    )
+
+    assert result.status == "success"
+    assert result.payload["file_name"].endswith(".pptx")
+    pptx_path = tmp_path / f"{result.payload['file_id']}.pptx"
+    assert pptx_path.exists()
+    with ZipFile(pptx_path) as archive:
+        names = set(archive.namelist())
+        assert "ppt/presentation.xml" in names
+        assert "ppt/slides/slide1.xml" in names
+        assert "ppt/slides/slide2.xml" in names
+        slide_text = archive.read("ppt/slides/slide1.xml").decode("utf-8")
+        assert "方案目标" in slide_text
+        assert "应急响应" in slide_text
+    log = generation_db.query(AgentToolCallLog).one()
+    assert log.tool_name == "pptx_export"
+    assert log.output_summary_json["slide_count"] == 2
 
 
 def _create_review_file(generation_db, *, owner_user_id: str = "user-1"):
@@ -756,6 +799,32 @@ def test_external_vector_store_tool_reports_disabled_when_not_configured(
     assert log.output_summary_json["status"] == "disabled"
 
 
+def test_protocol_adapter_status_tool_returns_mcp_and_a2a_manifest(generation_db) -> None:
+    from app.agent_runtime.tools import ProtocolAdapterStatusTool
+    from app.models import AgentToolCallLog
+
+    registry = ToolRegistry()
+    registry.register(ProtocolAdapterStatusTool())
+
+    result = registry.execute(
+        "protocol_adapter_status",
+        {"protocols": ["mcp", "a2a"]},
+        ToolContext(user_id="user-1", db=generation_db),
+    )
+
+    assert result.status == "success"
+    assert result.payload["protocols"] == ["mcp", "a2a"]
+    assert result.payload["status"] == "local_manifest_ready"
+    assert "company_knowledge_search" in result.payload["tools"]
+    assert "deep_web_research" in result.payload["tools"]
+    assert result.payload["manifest"]["name"] == "juxin-ai-assistant"
+    assert result.payload["manifest"]["capabilities"]["mcp"] is True
+    assert result.payload["manifest"]["capabilities"]["a2a"] is True
+    log = generation_db.query(AgentToolCallLog).one()
+    assert log.tool_name == "protocol_adapter_status"
+    assert log.output_summary_json["tool_count"] == len(result.payload["tools"])
+
+
 def test_document_template_select_tool_uses_existing_template_registry(
     generation_db,
 ) -> None:
@@ -965,6 +1034,62 @@ def test_web_research_tool_plans_searches_and_returns_report_without_saving(
     log = generation_db.query(AgentToolCallLog).one()
     assert log.tool_name == "web_research"
     assert log.source_count == len(result.payload["sources"])
+
+
+def test_deep_web_research_tool_deduplicates_sources_and_returns_risk_sections(
+    generation_db,
+    monkeypatch,
+) -> None:
+    from datetime import UTC, datetime
+
+    from app.agent_runtime.tools import DeepWebResearchTool
+    from app.models import AgentToolCallLog, KnowledgeFile, WebSearchLog
+    from app.web_sources import WebSearchResult
+
+    queries: list[str] = []
+
+    def fake_search(self, query: str, *, limit: int = 5, **kwargs):
+        queries.append(query)
+        assert limit == 2
+        return [
+            WebSearchResult(
+                title="等保公开资料",
+                url="https://example.com/shared",
+                site_name="example.com",
+                snippet=f"{query} 摘要 A",
+                fetched_at=datetime(2026, 7, 4, tzinfo=UTC),
+            ),
+            WebSearchResult(
+                title=f"{query} 行业资料",
+                url=f"https://example.com/{len(queries)}",
+                site_name="example.com",
+                snippet=f"{query} 摘要 B",
+                fetched_at=datetime(2026, 7, 4, tzinfo=UTC),
+            ),
+        ]
+
+    monkeypatch.setattr("app.agent_runtime.tools.web_tools.WebSearchService.search", fake_search)
+    registry = ToolRegistry()
+    registry.register(DeepWebResearchTool())
+
+    result = registry.execute(
+        "deep_web_research",
+        {"topic": "等保合规云平台采购", "limit_per_question": 2},
+        ToolContext(user_id="user-1", db=generation_db, conversation_id="conv-1"),
+    )
+
+    assert result.status == "success"
+    assert len(result.payload["questions"]) >= 6
+    assert len(result.payload["sources"]) == len({source["url"] for source in result.payload["sources"]})
+    assert "深度联网调研报告" in result.payload["report"]
+    assert "聚信落地建议" in result.payload["report"]
+    assert "风险与待确认" in result.payload["report"]
+    assert result.payload["scope"] == "深度联网资料仅作为公开来源参考，保存或入库前必须人工确认。"
+    assert generation_db.query(KnowledgeFile).count() == 0
+    assert generation_db.query(WebSearchLog).count() == len(result.payload["questions"])
+    log = generation_db.query(AgentToolCallLog).one()
+    assert log.tool_name == "deep_web_research"
+    assert log.output_summary_json["unique_source_count"] == len(result.payload["sources"])
 
 
 def test_personal_memory_tool_saves_and_lists_user_preferences(

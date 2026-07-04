@@ -10,6 +10,8 @@ from .knowledge_tools import (
     PersonalReferenceSearchTool,
 )
 from .memory_tools import PersonalMemoryTool
+from .presentation_tools import PptxExportTool
+from .protocol_tools import ProtocolAdapterStatusTool
 from .quality_tools import AdvancedQualityScoreTool
 from .review_tools import (
     KnowledgeReviewApproveTool,
@@ -19,13 +21,14 @@ from .review_tools import (
 from .reference_tools import ReferenceSourceValidateTool
 from .task_tools import TaskModeDetectTool
 from .vector_tools import ExternalVectorStoreHealthTool
-from .web_tools import WebCaptureTool, WebResearchTool, WebSearchTool
+from .web_tools import DeepWebResearchTool, WebCaptureTool, WebResearchTool, WebSearchTool
 
 __all__ = [
     "AdvancedQualityScoreTool",
     "BulkKnowledgeGovernanceTool",
     "CompanyKnowledgeSearchTool",
     "CurrentAttachmentSearchTool",
+    "DeepWebResearchTool",
     "DocumentStructureValidateTool",
     "DocumentTemplateSelectTool",
     "ExternalVectorStoreHealthTool",
@@ -36,6 +39,8 @@ __all__ = [
     "KnowledgeReviewSubmitTool",
     "PersonalMemoryTool",
     "PersonalReferenceSearchTool",
+    "PptxExportTool",
+    "ProtocolAdapterStatusTool",
     "ReferenceSourceValidateTool",
     "TaskModeDetectTool",
     "UserFeedbackTool",

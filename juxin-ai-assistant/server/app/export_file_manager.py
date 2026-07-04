@@ -12,6 +12,9 @@ from fastapi import HTTPException
 DOCX_MEDIA_TYPE = (
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 )
+PPTX_MEDIA_TYPE = (
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+)
 
 
 @dataclass(frozen=True)
@@ -41,6 +44,22 @@ class ExportFileManager:
             file_path=str(path),
         )
 
+    def save_pptx(self, *, file_name: str, content: bytes) -> SavedExportFile:
+        if not content:
+            raise HTTPException(status_code=500, detail="PPT 生成失败，请稍后重试")
+        self.storage_dir.mkdir(parents=True, exist_ok=True)
+        file_id = str(uuid_lib.uuid4())
+        safe_name = safe_pptx_file_name(file_name)
+        path = self.storage_dir.joinpath(f"{file_id}.pptx").resolve()
+        if not _is_relative_to(path, self.storage_dir):
+            raise HTTPException(status_code=400, detail="导出路径非法")
+        path.write_bytes(content)
+        return SavedExportFile(
+            file_id=file_id,
+            file_name=safe_name,
+            file_path=str(path),
+        )
+
     def read_docx(self, file_path: str) -> bytes:
         path = Path(file_path).expanduser().resolve()
         if not _is_relative_to(path, self.storage_dir) or path.suffix.lower() != ".docx":
@@ -51,10 +70,18 @@ class ExportFileManager:
 
 
 def safe_docx_file_name(file_name: str) -> str:
+    return _safe_export_file_name(file_name, suffix=".docx", fallback="聚信得仁文档")
+
+
+def safe_pptx_file_name(file_name: str) -> str:
+    return _safe_export_file_name(file_name, suffix=".pptx", fallback="聚信得仁演示文稿")
+
+
+def _safe_export_file_name(file_name: str, *, suffix: str, fallback: str) -> str:
     without_path = re.split(r"[/\\]+", file_name)[-1].strip()
     cleaned = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", without_path)[:120]
-    stem = cleaned.strip(" .") or "聚信得仁文档"
-    return stem if stem.lower().endswith(".docx") else f"{stem}.docx"
+    stem = cleaned.strip(" .") or fallback
+    return stem if stem.lower().endswith(suffix) else f"{stem}{suffix}"
 
 
 def content_disposition_for_download(file_name: str) -> str:

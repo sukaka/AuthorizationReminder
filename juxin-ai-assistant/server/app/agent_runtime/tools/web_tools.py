@@ -221,6 +221,91 @@ class WebResearchTool(BaseTool):
         )
 
 
+class DeepWebResearchTool(BaseTool):
+    name = "deep_web_research"
+    description = "深度联网调研公开资料，按多维问题聚合、去重、生成风险和落地建议"
+    version = "1"
+
+    def run(self, tool_input: dict, context: ToolContext) -> ToolResult:
+        topic = str(tool_input.get("topic") or tool_input.get("query") or "").strip()
+        if not topic:
+            return ToolResult(
+                tool_name=self.name,
+                status="error",
+                error_code="DEEP_WEB_RESEARCH_TOPIC_REQUIRED",
+                error_message_safe="调研主题不能为空",
+            )
+        limit_per_question = max(1, min(int(tool_input.get("limit_per_question") or 3), 5))
+        questions = _deep_research_questions(topic)
+        search_service = WebSearchService()
+        sections: list[str] = []
+        unique_sources: dict[str, dict[str, str]] = {}
+        for index, question in enumerate(questions, start=1):
+            try:
+                results = search_service.search(
+                    question,
+                    limit=limit_per_question,
+                    db=context.db,
+                    user_id=context.user_id,
+                    bypass_cache=bool(tool_input.get("bypass_cache") or False),
+                )
+            except HTTPException as exc:
+                sections.append(f"{index}. {question}\n   - 搜索失败：{exc.detail}")
+                continue
+            payload_results = [_web_result_payload(result) for result in results]
+            if context.db is not None:
+                context.db.add(WebSearchLog(
+                    user_id=context.user_id,
+                    conversation_id=context.conversation_id,
+                    query=question,
+                    provider="agent-deep-web-research",
+                    status="ok" if payload_results else "no_results",
+                    result_count=len(payload_results),
+                    result_urls_json=[item["url"] for item in payload_results],
+                    used_urls_json=[item["url"] for item in payload_results],
+                ))
+            for item in payload_results:
+                unique_sources.setdefault(item["url"], item)
+            lines = [
+                f"   - {item['title']}：{item['snippet']}（{item['url']}）"
+                for item in payload_results
+            ] or ["   - 暂无公开搜索结果。"]
+            sections.append(f"{index}. {question}\n" + "\n".join(lines))
+
+        sources = list(unique_sources.values())
+        report = (
+            "# 深度联网调研报告\n\n"
+            f"## 调研主题\n{topic}\n\n"
+            "## 调研维度\n"
+            + "\n\n".join(sections)
+            + "\n\n## 来源汇总\n"
+            + "\n".join([f"- {item['title']}：{item['url']}" for item in sources] or ["- 暂无可用公开来源"])
+            + "\n\n## 聚信落地建议\n"
+            "1. 将公开资料作为方案背景和竞品参考，不直接作为正式承诺。\n"
+            "2. 涉及产品能力、报价、交付周期、验收结论时，必须回到公司正式知识库和人工复核。\n"
+            "3. 可结合售前、交付、安全运维场景整理为内部方案草稿。\n\n"
+            "## 风险与待确认\n"
+            "1. 公开资料可能过期或不完整，需确认发布时间和来源可信度。\n"
+            "2. 不得把联网资料自动写入公司正式知识库。\n"
+            "3. 对外材料需人工复核。"
+        )
+        return ToolResult(
+            tool_name=self.name,
+            payload={
+                "topic": topic,
+                "questions": questions,
+                "sources": sources,
+                "report": report,
+                "scope": "深度联网资料仅作为公开来源参考，保存或入库前必须人工确认。",
+            },
+            output_summary={
+                "question_count": len(questions),
+                "unique_source_count": len(sources),
+            },
+            source_count=len(sources),
+        )
+
+
 def _research_questions(topic: str) -> list[str]:
     normalized = " ".join(topic.split())
     base_questions = [
@@ -231,3 +316,16 @@ def _research_questions(topic: str) -> list[str]:
         f"{normalized} 采购或落地建议",
     ]
     return base_questions[:5]
+
+
+def _deep_research_questions(topic: str) -> list[str]:
+    normalized = " ".join(topic.split())
+    return [
+        f"{normalized} 背景 现状 趋势",
+        f"{normalized} 政策 标准 合规要求",
+        f"{normalized} 产品能力 技术架构",
+        f"{normalized} 典型方案 交付路径",
+        f"{normalized} 采购 招投标 评分要点",
+        f"{normalized} 风险 问题 注意事项",
+        f"{normalized} 竞品 对比 替代方案",
+    ]
