@@ -174,10 +174,42 @@ def test_latest_question_injects_web_search_context(client_for_user, monkeypatch
     assert "https://nvd.nist.gov/vuln/detail/CVE-2026-12345" in body["messages"][0]["content"]
     assert body["citations"][0]["source_type"] == "web_search_context"
     assert body["citations"][0]["file_name"] == "NVD CVE-2026-12345"
+    assert body["task_state"]["tool_calls"][-1]["tool_name"] == "web_search"
+    assert body["task_state"]["tool_calls"][-1]["status"] == "success"
     log = generation_db.scalar(select(WebSearchLog).where(WebSearchLog.user_id == "user-web-search"))
     assert log is not None
     assert log.status == "ok"
     assert log.answer_message_id == body["assistant_message_uuid"]
+
+
+def test_latest_question_web_search_failure_records_task_state_and_continues(
+    client_for_user,
+    monkeypatch,
+    generation_db,
+) -> None:
+    from app import chat_service
+
+    def fake_search(_self, _query: str, *, limit: int = 5, **_kwargs) -> list[WebSearchResult]:
+        raise RuntimeError("provider timeout")
+
+    monkeypatch.setattr(chat_service.WebSearchService, "search", fake_search)
+    client = client_for_user("user-web-search-fail")
+
+    prepared = client.post(
+        "/api/ai/chat/prepare",
+        json={"question": "查一下最新 CVE-2026-99999 信息", "mode": "normal"},
+    )
+
+    assert prepared.status_code == 201
+    body = prepared.json()
+    assert body["completed"] is False
+    assert body["messages"]
+    assert body["task_state"]["tool_calls"][-1]["tool_name"] == "web_search"
+    assert body["task_state"]["tool_calls"][-1]["status"] == "failed"
+    assert body["task_state"]["tool_calls"][-1]["error_code"] == "WEB_SEARCH_FAILED"
+    log = generation_db.scalar(select(WebSearchLog).where(WebSearchLog.user_id == "user-web-search-fail"))
+    assert log is not None
+    assert log.status == "failed"
 
 
 def test_plain_writing_question_does_not_trigger_web_search(client_for_user, monkeypatch) -> None:

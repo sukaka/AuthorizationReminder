@@ -173,7 +173,7 @@ def _task_replay_out(row: AgentTaskState) -> TaskReplayOut:
         conversation_id=row.conversation_id,
         user_id=row.user_id,
         stage=row.stage,
-        goal=row.goal[:200],
+        goal=_safe_task_title(row),
         source_summary=[
             _safe_metadata_item(item)
             for item in (row.selected_sources_json or [])[:8]
@@ -206,6 +206,7 @@ def _safe_metadata_item(item: object) -> dict[str, object]:
     allowed = {
         "at",
         "chunk_count",
+        "count",
         "file_name",
         "kept_count",
         "next_action",
@@ -217,6 +218,7 @@ def _safe_metadata_item(item: object) -> dict[str, object]:
         "status",
         "summary",
         "tool_name",
+        "type",
         "warnings",
     }
     return {
@@ -234,6 +236,10 @@ def _is_safe_metadata_value(value: object) -> bool:
     if isinstance(value, list):
         return all(isinstance(item, str) and len(item) <= 300 for item in value[:20])
     return False
+
+
+def _safe_task_title(row: AgentTaskState) -> str:
+    return f"任务 {row.uuid[:8]}"
 
 
 def _build_feedback_distribution(

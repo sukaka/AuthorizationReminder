@@ -206,8 +206,8 @@
 - [x] 在现有统计服务聚合质量指标，只返回元数据，不返回完整敏感内容。
 - [x] 复用现有管理员统计 API，普通用户不可访问。
 - [x] 跑测试：`python -m pytest tests/test_stats.py::test_admin_stats_include_agent_quality_metrics -q`，结果 `1 passed`。
-- [ ] 需求审查：确认指标覆盖内测评估核心问题。
-- [ ] 代码审查：确认权限和脱敏正确。
+- [x] 需求审查：确认指标覆盖内测评估核心问题。
+- [x] 代码审查：初审发现回放暴露原始问题、来源字段不兼容；已改为安全任务标题、元数据白名单和本地 DB 忽略规则。
 
 **子代理任务 D2：前端质量看板最小页**
 
@@ -215,8 +215,8 @@
 - [x] 增加治理中心质量卡片：工具成功率、平均耗时、引用质量、资料命中、用户负反馈。
 - [x] 增加“查看任务回放”入口，只展示元数据和摘要。
 - [x] 跑测试：`npm test -- --run tests/governance-pages.test.tsx -t "shows global agent quality metrics"` 与 `-t "loads task replay metadata"`，结果均 `1 passed`。
-- [ ] 需求审查：确认普通员工不可见治理数据。
-- [ ] 代码审查：确认页面不展示完整用户隐私内容。
+- [x] 需求审查：确认普通员工不可见治理数据。
+- [x] 代码审查：初审发现 UI 暴露技术字段；已映射为“查公司知识 / 成功 / 已完成 / 当前附件”等中文办公文案。
 
 **验收标准：**
 
@@ -239,10 +239,10 @@
 
 **子代理任务 E1：长任务进度事件**
 
-- [ ] 写后端测试：深度联网调研返回 Planner / Searcher / Summarizer / Reporter 四类阶段摘要。
-- [ ] 将阶段摘要写入 TaskState。
-- [ ] 搜索失败时保留可读失败原因，并降级普通回答。
-- [ ] 跑测试：`python -m pytest server/tests/test_web_routes.py server/tests/test_agent_loop.py -q`
+- [x] 写后端测试：深度联网调研返回 Planner / Searcher / Summarizer / Reporter 四类阶段摘要。
+- [x] 将阶段摘要写入 TaskState。
+- [x] 搜索失败时保留可读失败原因，并降级普通回答。
+- [x] 跑测试：`python -m pytest tests/test_web_routes.py tests/test_agent_loop.py tests/test_agent_runtime.py::test_deep_web_research_tool_returns_user_facing_stage_summaries tests/test_chat_api.py::test_latest_question_web_search_failure_records_task_state_and_continues -q`，结果 `11 passed, 1 warning`。
 - [ ] 需求审查：确认联网资料不会自动进入公司知识库。
 - [ ] 代码审查：确认网络失败和超时可恢复。
 

@@ -16,7 +16,61 @@ function numberValue(value: unknown): number {
 }
 
 function replayVerificationStatus(item: TaskReplayItem): string {
-  return textValue(item.verification_summary.status, 'pending');
+  return labelForStatus(textValue(item.verification_summary.status, 'pending'));
+}
+
+function labelForStage(value: unknown): string {
+  const labels: Record<string, string> = {
+    analyzing: '识别任务',
+    retrieving: '查找资料',
+    composing: '生成内容',
+    quality_check: '复核结果',
+    completed: '已完成',
+    failed: '已失败',
+  };
+  const key = textValue(value, '');
+  return labels[key] || key || '未知阶段';
+}
+
+function labelForStatus(value: unknown): string {
+  const labels: Record<string, string> = {
+    success: '成功',
+    warning: '需复核',
+    passed: '通过',
+    risk: '有风险',
+    failed: '失败',
+    pending: '待检查',
+  };
+  const key = textValue(value, '');
+  return labels[key] || key || '未知';
+}
+
+function labelForTool(value: unknown): string {
+  const labels: Record<string, string> = {
+    company_knowledge_search: '查公司知识',
+    personal_knowledge_search: '查我的资料',
+    web_search: '联网查找',
+    web_fetch: '读取网页',
+    word_export: '导出 Word',
+    document_parser: '解析文件',
+  };
+  const key = textValue(value, '');
+  return labels[key] || '处理资料';
+}
+
+function replaySourceLabel(source: Record<string, unknown>): string {
+  const sourceLabels: Record<string, string> = {
+    official_knowledge: '公司知识',
+    personal_knowledge: '我的资料',
+    current_attachment: '当前附件',
+    web_search: '联网资料',
+  };
+  const sourceType = textValue(source.source_type, textValue(source.type, ''));
+  return textValue(source.file_name, sourceLabels[sourceType] || sourceType || '来源');
+}
+
+function replaySourceCount(tool: Record<string, unknown>): number {
+  return numberValue(tool.source_count) || numberValue(tool.count);
 }
 
 export function StatsPage({ manager = false }: { manager?: boolean }) {
@@ -85,17 +139,17 @@ export function StatsPage({ manager = false }: { manager?: boolean }) {
                   <article key={item.task_state_id}>
                     <div>
                       <strong>{item.goal || '未命名任务'}</strong>
-                      <span>{item.stage} · 自检 {replayVerificationStatus(item)}</span>
+                      <span>{labelForStage(item.stage)} · 自检 {replayVerificationStatus(item)}</span>
                     </div>
                     <ul>
                       {(item.tool_summary || []).slice(0, 4).map((tool, index) => (
                         <li key={`${item.task_state_id}-tool-${index}`}>
-                          {textValue(tool.tool_name, '未知工具')} · {textValue(tool.status, 'unknown')} · 来源 {numberValue(tool.source_count)}
+                          {labelForTool(tool.tool_name)} · {labelForStatus(tool.status)} · 来源 {replaySourceCount(tool)}
                         </li>
                       ))}
                     </ul>
                     <p>
-                      {(item.source_summary || []).slice(0, 3).map((source) => textValue(source.file_name, textValue(source.source_type, '来源'))).join('、') || '暂无来源'}
+                      {(item.source_summary || []).slice(0, 3).map(replaySourceLabel).join('、') || '暂无来源'}
                     </p>
                   </article>
                 ))}

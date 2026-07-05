@@ -424,6 +424,30 @@ def _link_web_search_log_to_answer(
     db.flush()
 
 
+def _append_chat_web_search_task_state(
+    db: Session,
+    task_state: dict[str, object],
+    *,
+    status: str,
+    summary: str,
+    error_code: str = "",
+    source_count: int | None = None,
+) -> dict[str, object]:
+    task_state_id = str(task_state.get("task_state_id") or "")
+    if not task_state_id:
+        return task_state
+    store = TaskStateStore(db)
+    store.append_tool_call(
+        task_state_id,
+        tool_name="web_search",
+        status=status,
+        summary=summary,
+        error_code=error_code,
+        source_count=source_count,
+    )
+    return store.public_payload_by_id(task_state_id)
+
+
 def _rag_messages(question: str, chunks: list[RetrievedKnowledgeChunk]) -> list[MessageOut]:
     def source_location(chunk: RetrievedKnowledgeChunk) -> tuple[str, str]:
         section = chunk.section_path or chunk.section_title or "引用片段"
@@ -505,6 +529,7 @@ def prepare_chat(
         include_session_attachments=body.include_session_attachments,
     )
     prepared_messages = loop_result.messages
+    task_state_payload = dict(loop_result.task_state or {})
     web_results: list[WebSearchResult] = []
     web_log_id: int | None = None
     should_search_web = (
@@ -534,11 +559,19 @@ def prepare_chat(
             db.add(log)
             db.flush()
             web_log_id = log.id
+            task_state_payload = _append_chat_web_search_task_state(
+                db,
+                task_state_payload,
+                status="success",
+                summary=f"公开来源 {len(web_results)} 条",
+                source_count=len(web_results),
+            )
             prepared_messages = [
                 MessageOut(role="system", content=WebContextBuilder().build(web_results)),
                 *prepared_messages,
             ]
         except Exception as exc:
+            error_message = str(exc)[:500]
             log = WebSearchLog(
                 user_id=sso_user_id,
                 conversation_id=session.uuid,
@@ -548,11 +581,19 @@ def prepare_chat(
                 result_count=0,
                 result_urls_json=[],
                 used_urls_json=[],
-                error_message=str(exc)[:500],
+                error_message=error_message,
             )
             db.add(log)
             db.flush()
             web_log_id = log.id
+            task_state_payload = _append_chat_web_search_task_state(
+                db,
+                task_state_payload,
+                status="failed",
+                summary="联网搜索暂时不可用，已降级为普通回答",
+                error_code="WEB_SEARCH_FAILED",
+                source_count=0,
+            )
     if loop_result.completed_answer:
         assistant = _create_message(
             db,
@@ -584,7 +625,7 @@ def prepare_chat(
             messages=[],
             citations=[],
             loop_trace=loop_result.loop_trace,
-            task_state=loop_result.task_state,
+            task_state=task_state_payload,
         )
     completion_token = secrets.token_urlsafe(32)
     assistant = _create_message(
@@ -625,7 +666,7 @@ def prepare_chat(
         messages=prepared_messages,
         citations=citations,
         loop_trace=loop_result.loop_trace,
-        task_state=loop_result.task_state,
+        task_state=task_state_payload,
     )
 
 

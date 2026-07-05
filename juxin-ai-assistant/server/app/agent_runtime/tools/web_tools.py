@@ -237,9 +237,17 @@ class DeepWebResearchTool(BaseTool):
             )
         limit_per_question = max(1, min(int(tool_input.get("limit_per_question") or 3), 5))
         questions = _deep_research_questions(topic)
+        stages: list[dict[str, str]] = [
+            {
+                "role": "Planner",
+                "status": "done",
+                "summary": f"已拆解 {len(questions)} 个调研维度。",
+            }
+        ]
         search_service = WebSearchService()
         sections: list[str] = []
         unique_sources: dict[str, dict[str, str]] = {}
+        failed_questions: list[str] = []
         for index, question in enumerate(questions, start=1):
             try:
                 results = search_service.search(
@@ -250,6 +258,19 @@ class DeepWebResearchTool(BaseTool):
                     bypass_cache=bool(tool_input.get("bypass_cache") or False),
                 )
             except HTTPException as exc:
+                failed_questions.append(f"{question}：{exc.detail}")
+                if context.db is not None:
+                    context.db.add(WebSearchLog(
+                        user_id=context.user_id,
+                        conversation_id=context.conversation_id,
+                        query=question,
+                        provider="agent-deep-web-research",
+                        status="error",
+                        result_count=0,
+                        result_urls_json=[],
+                        used_urls_json=[],
+                        error_message=str(exc.detail),
+                    ))
                 sections.append(f"{index}. {question}\n   - 搜索失败：{exc.detail}")
                 continue
             payload_results = [_web_result_payload(result) for result in results]
@@ -273,6 +294,28 @@ class DeepWebResearchTool(BaseTool):
             sections.append(f"{index}. {question}\n" + "\n".join(lines))
 
         sources = list(unique_sources.values())
+        search_status = "partial" if failed_questions else "done"
+        stages.extend([
+            {
+                "role": "Searcher",
+                "status": search_status,
+                "summary": (
+                    f"完成 {len(questions) - len(failed_questions)}/{len(questions)} 个维度搜索，"
+                    f"去重后 {len(sources)} 个公开来源。"
+                    + (f" 失败：{'; '.join(failed_questions[:2])}" if failed_questions else "")
+                ),
+            },
+            {
+                "role": "Summarizer",
+                "status": "done",
+                "summary": "已按调研维度整理公开来源摘要。",
+            },
+            {
+                "role": "Reporter",
+                "status": "done",
+                "summary": "已生成聚信落地建议、风险与待确认事项。",
+            },
+        ])
         report = (
             "# 深度联网调研报告\n\n"
             f"## 调研主题\n{topic}\n\n"
@@ -291,16 +334,20 @@ class DeepWebResearchTool(BaseTool):
         )
         return ToolResult(
             tool_name=self.name,
+            status="partial" if failed_questions else "success",
             payload={
                 "topic": topic,
                 "questions": questions,
                 "sources": sources,
+                "stages": stages,
                 "report": report,
                 "scope": "深度联网资料仅作为公开来源参考，保存或入库前必须人工确认。",
             },
             output_summary={
                 "question_count": len(questions),
                 "unique_source_count": len(sources),
+                "stage_count": len(stages),
+                "failed_question_count": len(failed_questions),
             },
             source_count=len(sources),
         )

@@ -110,8 +110,11 @@ it('loads task replay metadata from the governance stats page', async () => {
         conversation_id: 'conversation-1',
         user_id: 'user-replay',
         stage: 'completed',
-        goal: '写一份安全运维服务方案',
-        source_summary: [{ source_type: 'official_knowledge', file_name: '运维白皮书.docx' }],
+        goal: '任务 state-1',
+        source_summary: [
+          { source_type: 'official_knowledge', file_name: '运维白皮书.docx' },
+          { type: 'current_attachment', count: 2 },
+        ],
         tool_summary: [{ tool_name: 'company_knowledge_search', status: 'success', source_count: 2 }],
         verification_summary: { status: 'warning', reference: { kept_count: 1 }, document: { warnings: ['需人工复核'] } },
         next_action: '可查看摘要或重新生成',
@@ -127,10 +130,10 @@ it('loads task replay metadata from the governance stats page', async () => {
   await userEvent.click(await screen.findByRole('button', { name: '查看任务回放' }));
 
   expect(await screen.findByText('任务回放')).toBeInTheDocument();
-  expect(screen.getByText('写一份安全运维服务方案')).toBeInTheDocument();
-  expect(screen.getByText('company_knowledge_search · success · 来源 2')).toBeInTheDocument();
-  expect(screen.getByText('运维白皮书.docx')).toBeInTheDocument();
-  expect(screen.queryByText(/private-input|private-output|完整回答/i)).not.toBeInTheDocument();
+  expect(screen.getByText('任务 state-1')).toBeInTheDocument();
+  expect(screen.getByText('查公司知识 · 成功 · 来源 2')).toBeInTheDocument();
+  expect(screen.getByText(/运维白皮书\.docx/)).toBeInTheDocument();
+  expect(screen.queryByText(/company_knowledge_search|current_attachment|private-input|private-output|完整回答/i)).not.toBeInTheDocument();
 });
 
 it('saves task, fields, and published Prompt binding in one atomic request', async () => {

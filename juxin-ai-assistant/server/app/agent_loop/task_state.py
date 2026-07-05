@@ -78,16 +78,20 @@ class TaskStateStore:
         status: str,
         summary: str,
         error_code: str = "",
+        source_count: int | None = None,
     ) -> AgentTaskState:
         row = self._get(task_state_id)
+        item: dict[str, object] = {
+            "tool_name": tool_name,
+            "status": status,
+            "summary": summary[:500],
+            "error_code": error_code[:64],
+        }
+        if source_count is not None:
+            item["source_count"] = max(0, int(source_count))
         row.tool_calls_json = [
             *list(row.tool_calls_json or []),
-            {
-                "tool_name": tool_name,
-                "status": status,
-                "summary": summary[:500],
-                "error_code": error_code[:64],
-            },
+            item,
         ]
         self.db.flush()
         return row

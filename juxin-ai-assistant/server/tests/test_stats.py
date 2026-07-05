@@ -273,9 +273,10 @@ def test_admin_task_replays_return_metadata_without_chat_content(
                 user_id="user-replay",
                 conversation_id="conversation-1",
                 stage="completed",
-                goal="写一份安全运维服务方案",
+                goal="private-input: 给客户A写一份包含预算的安全运维服务方案",
                 selected_sources_json=[
                     {"source_type": "official_knowledge", "file_name": "运维白皮书.docx"},
+                    {"type": "current_attachment", "count": 2},
                 ],
                 tool_calls_json=[
                     {"tool_name": "company_knowledge_search", "status": "success", "source_count": 2},
@@ -307,9 +308,12 @@ def test_admin_task_replays_return_metadata_without_chat_content(
     assert payload["total"] == 1
     item = payload["items"][0]
     assert item["task_state_id"] == "state-1"
-    assert item["goal"] == "写一份安全运维服务方案"
+    assert item["goal"] == "任务 state-1"
     assert item["tool_summary"] == [{"tool_name": "company_knowledge_search", "status": "success", "source_count": 2}]
-    assert item["source_summary"] == [{"source_type": "official_knowledge", "file_name": "运维白皮书.docx"}]
+    assert item["source_summary"] == [
+        {"source_type": "official_knowledge", "file_name": "运维白皮书.docx"},
+        {"type": "current_attachment", "count": 2},
+    ]
     assert item["verification_summary"]["status"] == "warning"
     assert "private-input" not in response.text
     assert "answer" not in response.text.lower()

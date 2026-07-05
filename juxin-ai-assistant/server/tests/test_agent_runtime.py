@@ -1092,6 +1092,48 @@ def test_deep_web_research_tool_deduplicates_sources_and_returns_risk_sections(
     assert log.output_summary_json["unique_source_count"] == len(result.payload["sources"])
 
 
+def test_deep_web_research_tool_returns_user_facing_stage_summaries(
+    generation_db,
+    monkeypatch,
+) -> None:
+    from fastapi import HTTPException
+
+    from app.agent_runtime.tools import DeepWebResearchTool
+    from app.models import WebSearchLog
+
+    calls = 0
+
+    def fake_search(self, query: str, *, limit: int = 5, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise HTTPException(status_code=502, detail="搜索服务暂时不可用")
+        return []
+
+    monkeypatch.setattr("app.agent_runtime.tools.web_tools.WebSearchService.search", fake_search)
+    registry = ToolRegistry()
+    registry.register(DeepWebResearchTool())
+
+    result = registry.execute(
+        "deep_web_research",
+        {"topic": "最新安全运维趋势", "limit_per_question": 1},
+        ToolContext(user_id="user-1", db=generation_db, conversation_id="conv-1"),
+    )
+
+    assert result.status == "partial"
+    assert [stage["role"] for stage in result.payload["stages"]] == [
+        "Planner",
+        "Searcher",
+        "Summarizer",
+        "Reporter",
+    ]
+    assert result.payload["stages"][1]["status"] == "partial"
+    assert "搜索服务暂时不可用" in result.payload["stages"][1]["summary"]
+    assert "深度联网调研报告" in result.payload["report"]
+    assert result.error_code == ""
+    assert generation_db.query(WebSearchLog).count() == len(result.payload["questions"])
+
+
 def test_personal_memory_tool_saves_and_lists_user_preferences(
     generation_db,
 ) -> None:
