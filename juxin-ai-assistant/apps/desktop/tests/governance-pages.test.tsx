@@ -51,6 +51,47 @@ it('loads department stats from the metadata-only endpoint', async () => {
   expect(requestSpy).toHaveBeenCalledWith(expect.not.stringMatching(/input|output|content/i));
 });
 
+it('shows global agent quality metrics for administrators', async () => {
+  server.use(http.get('/api/ai/admin/stats', () => HttpResponse.json({
+    total: 18,
+    completion_rate: 0.8,
+    failure_rate: 0.2,
+    by_department: {},
+    task_ranking: [],
+    daily_trend: [],
+    feedback_distribution: {},
+    tool_call_total: 20,
+    tool_call_success_rate: 0.9,
+    tool_call_average_latency_ms: 250,
+    knowledge_search_total: 12,
+    knowledge_search_hit_rate: 0.75,
+    citation_coverage_rate: 0.6,
+    word_export_total: 5,
+    document_format_pass_rate: 0.5,
+    answer_without_source_rate: 0.4,
+    user_negative_feedback_total: 3,
+    tool_error_distribution: { EXPORT_FAILED: 2 },
+  })));
+
+  render(<StatsPage />);
+  await userEvent.click(screen.getByRole('button', { name: '刷新统计' }));
+
+  expect(await screen.findByText('Agent 质量指标')).toBeInTheDocument();
+  expect(screen.getByText('工具调用成功率')).toBeInTheDocument();
+  expect(screen.getByText('90%')).toBeInTheDocument();
+  expect(screen.getByText('平均工具耗时')).toBeInTheDocument();
+  expect(screen.getByText('250ms')).toBeInTheDocument();
+  expect(screen.getByText('知识检索命中率')).toBeInTheDocument();
+  expect(screen.getByText('75%')).toBeInTheDocument();
+  expect(screen.getByText('引用覆盖率')).toBeInTheDocument();
+  expect(screen.getByText('60%')).toBeInTheDocument();
+  expect(screen.getByText('Word 导出次数')).toBeInTheDocument();
+  expect(screen.getByText('5')).toBeInTheDocument();
+  expect(screen.getByText('用户负反馈数')).toBeInTheDocument();
+  expect(screen.getByText('3')).toBeInTheDocument();
+  expect(screen.getByText('EXPORT_FAILED')).toBeInTheDocument();
+});
+
 it('saves task, fields, and published Prompt binding in one atomic request', async () => {
   const configurationSpy = vi.fn();
   const legacyRequestSpy = vi.fn();

@@ -99,6 +99,7 @@ class TaskStateStore:
         status: str,
         summary: str,
         issues: list[str] | None = None,
+        details: dict[str, object] | None = None,
     ) -> AgentTaskState:
         row = self._get(task_state_id)
         row.verification_status = status
@@ -106,6 +107,7 @@ class TaskStateStore:
             "status": status,
             "summary": summary[:500],
             "issues": issues or [],
+            **(details or {}),
         }
         self.db.flush()
         return row

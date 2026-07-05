@@ -83,6 +83,23 @@ export type StatsPayload = {
   task_ranking?: Array<{ name: string; count: number }>;
   daily_trend?: Array<{ date: string; count: number }>;
   feedback_distribution?: Record<string, number>;
+  tool_call_total?: number;
+  tool_call_success?: number;
+  tool_call_success_rate?: number;
+  tool_call_average_latency_ms?: number;
+  knowledge_search_total?: number;
+  knowledge_search_hit?: number;
+  knowledge_search_hit_rate?: number;
+  assistant_answer_total?: number;
+  assistant_answer_with_sources?: number;
+  citation_coverage_rate?: number;
+  answer_without_source_rate?: number;
+  word_export_total?: number;
+  document_format_check_total?: number;
+  document_format_check_passed?: number;
+  document_format_pass_rate?: number;
+  tool_error_distribution?: Record<string, number>;
+  user_negative_feedback_total?: number;
 };
 
 export type AuditItem = {

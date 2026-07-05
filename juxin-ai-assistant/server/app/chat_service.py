@@ -9,10 +9,12 @@ from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from .agent_loop import LoopRunner
+from .agent_loop.task_state import TaskStateStore
+from .agent_loop.verifier import Verifier
 from .context.context_builder import RecentChatMessage
 from .crypto import ContentCipher, EncryptedPayload
 from .knowledge_search import RetrievedKnowledgeChunk
-from .models import ChatMessage, ChatMessageSource, ChatSession, ExportRecord, KnowledgeChunk
+from .models import AgentTaskState, ChatMessage, ChatMessageSource, ChatSession, ExportRecord, KnowledgeChunk
 from .models import KnowledgeSearchLog, WebSearchLog
 from .reference_matching import source_is_mentioned as _source_is_mentioned
 from .schemas import (
@@ -198,15 +200,115 @@ def _message_out(
     )
 
 
-def _delete_unmentioned_sources(db: Session, message: ChatMessage, answer: str) -> None:
+def _source_payloads_for_verifier(
+    db: Session,
+    cipher: ContentCipher,
+    sources: list[ChatMessageSource],
+) -> list[dict[str, object]]:
+    chunk_ids = [source.chunk_id for source in sources if source.chunk_id]
+    chunk_text_by_id: dict[str, str] = {}
+    if chunk_ids:
+        chunks = db.scalars(select(KnowledgeChunk).where(KnowledgeChunk.chunk_id.in_(chunk_ids)))
+        for chunk in chunks:
+            try:
+                payload = cipher.decrypt_json(
+                    EncryptedPayload(
+                        ciphertext=chunk.chunk_text_ciphertext,
+                        nonce=chunk.chunk_text_nonce,
+                    ),
+                    chunk.chunk_id.encode(),
+                )
+            except Exception:
+                continue
+            chunk_text_by_id[chunk.chunk_id] = str(payload.get("text", ""))
+    return [
+        {
+            "source_type": source.source_type,
+            "source_uuid": source.source_uuid,
+            "file_name": source.file_name,
+            "title": source.title,
+            "chunk_id": source.chunk_id,
+            "page_number": source.page_number,
+            "section_title": source.section_title,
+            "chunk_index": source.chunk_index,
+            "score": source.score,
+            "chunk_text": chunk_text_by_id.get(source.chunk_id, ""),
+        }
+        for source in sources
+    ]
+
+
+def _delete_unmentioned_sources(
+    db: Session,
+    cipher: ContentCipher,
+    message: ChatMessage,
+    answer: str,
+) -> dict[str, object]:
     sources = list(db.scalars(
         select(ChatMessageSource)
         .where(ChatMessageSource.message_id == message.id)
         .order_by(ChatMessageSource.id.asc())
     ))
+    verification = Verifier().verify_references(
+        answer,
+        _source_payloads_for_verifier(db, cipher, sources),
+    )
+    kept_keys = {
+        (
+            str(source.get("source_uuid") or ""),
+            str(source.get("chunk_id") or ""),
+            str(source.get("file_name") or ""),
+        )
+        for source in verification.get("sources", [])
+        if isinstance(source, dict)
+    }
     for source in sources:
-        if not _source_is_mentioned(source, answer):
+        key = (source.source_uuid, source.chunk_id, source.file_name)
+        if key not in kept_keys:
             db.delete(source)
+    return verification
+
+
+def _record_completed_answer_verification(
+    db: Session,
+    *,
+    message: ChatMessage,
+    session: ChatSession,
+    answer: str,
+    reference_result: dict[str, object],
+) -> None:
+    task_state = db.scalar(
+        select(AgentTaskState)
+        .where(
+            AgentTaskState.user_id == message.sso_user_id,
+            AgentTaskState.conversation_id == session.uuid,
+            AgentTaskState.status == "active",
+        )
+        .order_by(AgentTaskState.id.desc())
+    )
+    if task_state is None:
+        return
+    document_result = Verifier().verify_document_structure(answer, task_type=session.mode)
+    issues = [
+        *[str(item) for item in reference_result.get("suggestions", [])],
+        *[str(item) for item in document_result.get("warnings", [])],
+        *[str(item) for item in document_result.get("risks", [])],
+    ]
+    status = "passed"
+    if document_result.get("status") == "risk":
+        status = "risk"
+    elif issues or reference_result.get("status") == "warning":
+        status = "warning"
+    TaskStateStore(db).record_verification(
+        task_state.uuid,
+        status=status,
+        summary="回答已完成自检" if status == "passed" else "回答存在建议复核项",
+        issues=issues,
+        details={
+            "reference": reference_result,
+            "document": document_result,
+        },
+    )
 
 
 def _get_or_create_session(
@@ -561,7 +663,14 @@ def complete_chat_message(
     message.error_code = ""
     message.error_message_safe = ""
     message.finished_at = datetime.now(UTC)
-    _delete_unmentioned_sources(db, message, body.answer)
+    reference_result = _delete_unmentioned_sources(db, cipher, message, body.answer)
+    _record_completed_answer_verification(
+        db,
+        message=message,
+        session=session,
+        answer=body.answer,
+        reference_result=reference_result,
+    )
     db.flush()
     return message
 

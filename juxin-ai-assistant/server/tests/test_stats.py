@@ -165,6 +165,7 @@ def test_admin_stats_include_agent_quality_metrics(
                 tool_name="company_knowledge_search",
                 status="success",
                 source_count=1,
+                latency_ms=100,
             ),
             AgentToolCallLog(
                 user_id="user-quality",
@@ -172,18 +173,21 @@ def test_admin_stats_include_agent_quality_metrics(
                 status="error",
                 source_count=0,
                 error_code="EXPORT_FAILED",
+                latency_ms=300,
             ),
             AgentToolCallLog(
                 user_id="user-quality",
                 tool_name="document_structure_validate",
                 status="success",
                 output_summary_json={"passed": True},
+                latency_ms=200,
             ),
             AgentToolCallLog(
                 user_id="user-quality",
                 tool_name="document_structure_validate",
                 status="success",
                 output_summary_json={"passed": False},
+                latency_ms=400,
             ),
             KnowledgeSearchLog(
                 user_id="user-quality",
@@ -221,8 +225,7 @@ def test_admin_stats_include_agent_quality_metrics(
                 user_id="user-quality",
                 conversation_id=session.uuid,
                 message_id=without_source.uuid,
-                feedback_type="save_experience",
-                saved_as="experience",
+                feedback_type="needs_revision",
                 created_at=datetime.now(),
             ),
         ]
@@ -241,6 +244,7 @@ def test_admin_stats_include_agent_quality_metrics(
     assert payload["tool_call_total"] == 4
     assert payload["tool_call_success"] == 3
     assert payload["tool_call_success_rate"] == 0.75
+    assert payload["tool_call_average_latency_ms"] == 250
     assert payload["knowledge_search_total"] == 2
     assert payload["knowledge_search_hit"] == 1
     assert payload["knowledge_search_hit_rate"] == 0.5
@@ -254,7 +258,8 @@ def test_admin_stats_include_agent_quality_metrics(
     assert payload["document_format_pass_rate"] == 0.5
     assert payload["tool_error_distribution"] == {"EXPORT_FAILED": 1}
     assert payload["feedback_distribution"]["useful"] == 1
-    assert payload["feedback_distribution"]["save_experience"] == 1
+    assert payload["feedback_distribution"]["needs_revision"] == 1
+    assert payload["user_negative_feedback_total"] == 1
 
 
 def test_stats_reject_ranges_over_366_days(generation_db) -> None:

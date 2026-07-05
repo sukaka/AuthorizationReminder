@@ -15,9 +15,12 @@ _MANUAL_REVIEW_SECTION_MARKERS = (
 
 _OPS_PLAN_TASK_MARKERS = (
     "安全运维",
+    "安全服务",
     "运维服务",
-    "服务方案",
-    "实施方案",
+    "应急响应",
+    "漏洞扫描",
+    "风险评估",
+    "等保",
 )
 
 _ABSOLUTE_PROMISES = (
@@ -33,7 +36,11 @@ _ABSOLUTE_PROMISES = (
 class Verifier:
     def verify_references(self, answer: str, candidate_sources: list[Any]) -> dict[str, Any]:
         sources = [_source_to_namespace(source) for source in candidate_sources]
-        kept_sources = [source for source in sources if source_is_mentioned(source, answer)]
+        kept_sources = [
+            source
+            for source in sources
+            if _verified_source_is_used(source, answer)
+        ]
         removed_count = max(0, len(sources) - len(kept_sources))
         suggestions: list[str] = []
         if removed_count:
@@ -71,7 +78,8 @@ def _source_to_namespace(source: Any) -> SimpleNamespace:
             page_number=source.get("page_number"),
             section_title=str(source.get("section_title") or ""),
             chunk_index=source.get("chunk_index"),
-            score=int(source.get("score") or 0),
+            score=_safe_int(source.get("score")),
+            chunk_text=str(source.get("chunk_text") or ""),
         )
     return SimpleNamespace(
         source_type=str(getattr(source, "source_type", "")),
@@ -82,7 +90,8 @@ def _source_to_namespace(source: Any) -> SimpleNamespace:
         page_number=getattr(source, "page_number", None),
         section_title=str(getattr(source, "section_title", "")),
         chunk_index=getattr(source, "chunk_index", None),
-        score=int(getattr(source, "score", 0) or 0),
+        score=_safe_int(getattr(source, "score", 0)),
+        chunk_text=str(getattr(source, "chunk_text", "") or ""),
     )
 
 
@@ -98,6 +107,47 @@ def _source_to_payload(source: SimpleNamespace) -> dict[str, Any]:
         "chunk_index": source.chunk_index,
         "score": source.score,
     }
+
+
+def _safe_int(value: Any) -> int:
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _verified_source_is_used(source: SimpleNamespace, answer: str) -> bool:
+    if source.chunk_text:
+        return _source_evidence_is_used(source, answer)
+    return source_is_mentioned(source, answer)
+
+
+def _source_evidence_is_used(source: SimpleNamespace, answer: str) -> bool:
+    if not source.chunk_text:
+        return True
+    normalized_answer = _normalize_evidence_text(answer)
+    section_title = _normalize_evidence_text(source.section_title)
+    if section_title and section_title in normalized_answer:
+        return True
+    chunk_text = _normalize_evidence_text(source.chunk_text)
+    return any(phrase in normalized_answer for phrase in _evidence_phrases(chunk_text))
+
+
+def _normalize_evidence_text(value: str | None) -> str:
+    if not value:
+        return ""
+    return "".join(char for char in value if char.isalnum() or "\u4e00" <= char <= "\u9fff")
+
+
+def _evidence_phrases(value: str) -> list[str]:
+    if len(value) < 4:
+        return [value] if value else []
+    step = 4
+    return [
+        value[index : index + step]
+        for index in range(0, max(0, len(value) - step + 1), step)
+        if len(value[index : index + step]) == step
+    ][:80]
 
 
 def _is_ops_plan(answer: str, task_type: str | None) -> bool:

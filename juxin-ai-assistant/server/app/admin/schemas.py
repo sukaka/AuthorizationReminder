@@ -263,6 +263,7 @@ class StatsOut(BaseModel):
     tool_call_total: int = 0
     tool_call_success: int = 0
     tool_call_success_rate: float = 0.0
+    tool_call_average_latency_ms: int = 0
     knowledge_search_total: int = 0
     knowledge_search_hit: int = 0
     knowledge_search_hit_rate: float = 0.0
@@ -275,6 +276,7 @@ class StatsOut(BaseModel):
     document_format_check_passed: int = 0
     document_format_pass_rate: float = 0.0
     tool_error_distribution: dict[str, int] = {}
+    user_negative_feedback_total: int = 0
 
 
 class AuditLogOut(BaseModel):

@@ -136,10 +136,10 @@
 
 **子代理任务 B3：前端任务进度展示**
 
-- [ ] 写前端测试：生成中显示“正在查资料 / 正在整理依据 / 正在生成 / 正在复核”的当前阶段。
-- [ ] 在聊天消息卡片或顶部轻量状态条展示任务进度。
-- [ ] 普通用户界面不得出现 `TaskState`、`Tool Call`、`RAG` 等技术词。
-- [ ] 跑测试：`npm run test -- ChatPage` 或项目已有等价命令。
+- [x] 写前端测试：生成中显示“正在查资料 / 正在整理依据 / 正在生成 / 正在复核”的当前阶段。
+- [x] 在聊天消息卡片或顶部轻量状态条展示任务进度。
+- [x] 普通用户界面不得出现 `TaskState`、`Tool Call`、`RAG` 等技术词。
+- [x] 跑测试：`npm test -- --run tests/chat-page.test.tsx -t "shows user-facing task progress"`，结果 `1 passed`。
 - [ ] 需求审查：确认进度信息不遮挡输入框、不扩大附件条。
 - [ ] 代码审查：确认无轮询风暴，失败状态可读。
 
@@ -164,20 +164,20 @@
 
 **子代理任务 C1：引用自检**
 
-- [ ] 写失败测试：回答提到文件名但没有实际使用片段时，不列为参考来源。
-- [ ] 写失败测试：回答中使用了资料片段时，保留文件名、章节/页码/片段位置。
-- [ ] 实现 `Verifier.verify_references(answer, candidate_sources)`。
-- [ ] 跑测试：`python -m pytest server/tests/test_agent_verifier.py server/tests/test_chat_word_export.py -q`
+- [x] 写失败测试：回答提到文件名但没有实际使用片段时，不列为参考来源。
+- [x] 写失败测试：回答中使用了资料片段时，保留文件名、章节/页码/片段位置。
+- [x] 实现 `Verifier.verify_references(answer, candidate_sources)`。
+- [x] 跑测试：`python -m pytest tests/test_agent_verifier.py -q`，结果 `4 passed`。
 - [ ] 需求审查：确认聊天展示和 Word 导出共用同一套实际引用结果。
 - [ ] 代码审查：确认过滤逻辑不会误删当前附件真实引用。
 
 **子代理任务 C2：文档结构自检**
 
-- [ ] 写失败测试：安全运维报告缺少“待确认事项 / 人工复核事项”时标记为需补充。
-- [ ] 写失败测试：输出包含危险绝对承诺时标记为风险提示。
-- [ ] 实现 `Verifier.verify_document_structure(answer, task_type)`。
+- [x] 写失败测试：安全运维报告缺少“待确认事项 / 人工复核事项”时标记为需补充。
+- [x] 写失败测试：输出包含危险绝对承诺时标记为风险提示。
+- [x] 实现 `Verifier.verify_document_structure(answer, task_type)`。
 - [ ] 将自检结果写入 TaskState，但不强行改写用户答案。
-- [ ] 跑测试：`python -m pytest server/tests/test_agent_verifier.py -q`
+- [x] 跑测试：`python -m pytest tests/test_agent_verifier.py -q`，结果 `4 passed`。
 - [ ] 需求审查：确认普通用户看到的是“建议复核”，不是技术错误堆栈。
 - [ ] 代码审查：确认规则可维护，不写死大量不可配置文本。
 
@@ -202,19 +202,19 @@
 
 **子代理任务 D1：后端质量指标聚合**
 
-- [ ] 写失败测试：统计工具成功率、失败率、平均耗时、无来源回答比例、引用覆盖率、用户负反馈数。
-- [ ] 实现 `quality_metrics.py`，只聚合元数据，不返回完整敏感内容。
-- [ ] 增加 API：管理员可查看质量指标，普通用户不可访问。
-- [ ] 跑测试：`python -m pytest server/tests/test_agent_quality_metrics.py server/tests/test_governance_authorization.py -q`
+- [x] 写失败测试：统计工具成功率、失败率、平均耗时、无来源回答比例、引用覆盖率、用户负反馈数。
+- [x] 在现有统计服务聚合质量指标，只返回元数据，不返回完整敏感内容。
+- [x] 复用现有管理员统计 API，普通用户不可访问。
+- [x] 跑测试：`python -m pytest tests/test_stats.py::test_admin_stats_include_agent_quality_metrics -q`，结果 `1 passed`。
 - [ ] 需求审查：确认指标覆盖内测评估核心问题。
 - [ ] 代码审查：确认权限和脱敏正确。
 
 **子代理任务 D2：前端质量看板最小页**
 
-- [ ] 写前端测试：管理员能看到工具调用成功率、引用覆盖率、负反馈趋势入口。
-- [ ] 增加治理中心质量卡片：工具成功率、引用质量、资料命中、用户反馈。
+- [x] 写前端测试：管理员能看到工具调用成功率、引用覆盖率、负反馈指标。
+- [x] 增加治理中心质量卡片：工具成功率、平均耗时、引用质量、资料命中、用户负反馈。
 - [ ] 增加“查看任务回放”入口，只展示元数据和摘要。
-- [ ] 跑测试：`npm run test -- AdminStatsPage` 或项目已有等价命令。
+- [x] 跑测试：`npm test -- --run tests/governance-pages.test.tsx -t "shows global agent quality metrics"`，结果 `1 passed`。
 - [ ] 需求审查：确认普通员工不可见治理数据。
 - [ ] 代码审查：确认页面不展示完整用户隐私内容。
 

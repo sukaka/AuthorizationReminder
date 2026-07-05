@@ -4370,6 +4370,72 @@ textarea:focus-visible {
 .stats-details ul, .stats-details ol { margin: 0; padding: 0; list-style: none; }
 .stats-details li { padding: 5px 0; display: flex; justify-content: space-between; gap: 12px; color: var(--text-secondary); font-size: 12px; }
 
+.stats-quality-card {
+  margin-top: 22px;
+  padding: 18px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--surface) 88%, var(--accent-soft));
+}
+.stats-quality-card > div:first-child {
+  display: flex;
+  justify-content: space-between;
+  gap: 18px;
+  align-items: flex-start;
+}
+.stats-quality-card span {
+  font-size: 14px;
+  font-weight: 800;
+}
+.stats-quality-card p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+.stats-quality-card dl {
+  margin: 16px 0 0;
+  display: grid;
+  grid-template-columns: repeat(5, minmax(120px, 1fr));
+  gap: 10px;
+}
+.stats-quality-card dl div {
+  padding: 12px;
+  border-radius: 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+}
+.stats-quality-card dt {
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+.stats-quality-card dd {
+  margin: 6px 0 2px;
+  font-size: 22px;
+  font-weight: 800;
+}
+.stats-quality-card small {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+.stats-quality-card ul {
+  margin: 14px 0 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.stats-quality-card li {
+  padding: 6px 10px;
+  border: 1px solid color-mix(in srgb, var(--danger) 35%, var(--border));
+  border-radius: 999px;
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 8%, transparent);
+  display: inline-flex;
+  gap: 8px;
+  font-size: 12px;
+}
+
 .governance-links {
   margin-top: 24px;
   display: grid;

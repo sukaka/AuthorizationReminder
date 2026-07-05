@@ -3,6 +3,10 @@ import { useState } from 'react';
 import { governanceApi, type StatsPayload } from '../../api/governance';
 import { AdminPageState, RequestNotice } from './AdminPageState';
 
+function percent(value?: number): string {
+  return value == null ? '—' : `${Math.round(value * 100)}%`;
+}
+
 export function StatsPage({ manager = false }: { manager?: boolean }) {
   const [stats, setStats] = useState<StatsPayload | null>(null);
   const [notice, setNotice] = useState('');
@@ -16,28 +20,54 @@ export function StatsPage({ manager = false }: { manager?: boolean }) {
       <RequestNotice message={notice} />
       <div className="metric-strip">
         <div><span>生成总数</span><strong>{stats?.total ?? '—'}</strong></div>
-        <div><span>完成率</span><strong>{stats?.completion_rate == null ? '—' : `${Math.round(stats.completion_rate * 100)}%`}</strong></div>
-        <div><span>失败率</span><strong>{stats?.failure_rate == null ? '—' : `${Math.round(stats.failure_rate * 100)}%`}</strong></div>
+        <div><span>完成率</span><strong>{percent(stats?.completion_rate)}</strong></div>
+        <div><span>失败率</span><strong>{percent(stats?.failure_rate)}</strong></div>
       </div>
       {stats ? (
-        <div className="stats-details">
-          <section>
-            <h2>部门分布</h2>
-            <ul>{Object.entries(stats.by_department || {}).map(([name, count]) => <li key={name}><span>{name}</span><strong>{count}</strong></li>)}</ul>
-          </section>
-          <section>
-            <h2>任务排行</h2>
-            <ol>{(stats.task_ranking || []).map((item) => <li key={item.name}><span>{item.name}</span><strong>{item.count}</strong></li>)}</ol>
-          </section>
-          <section>
-            <h2>每日趋势</h2>
-            <ul>{(stats.daily_trend || []).map((item) => <li key={item.date}><span>{item.date}</span><strong>{item.count}</strong></li>)}</ul>
-          </section>
-          <section>
-            <h2>反馈分布</h2>
-            <ul>{Object.entries(stats.feedback_distribution || {}).map(([name, count]) => <li key={name}><span>{name}</span><strong>{count}</strong></li>)}</ul>
-          </section>
-        </div>
+        <>
+          {!manager ? (
+            <section className="stats-quality-card" aria-label="Agent 质量指标">
+              <div>
+                <span>Agent 质量指标</span>
+                <p>聚合工具、检索、引用和导出质量，不展示用户正文。</p>
+              </div>
+              <dl>
+                <div><dt>工具调用成功率</dt><dd>{percent(stats.tool_call_success_rate)}</dd><small>{stats.tool_call_success ?? 0}/{stats.tool_call_total ?? 0}</small></div>
+                <div><dt>平均工具耗时</dt><dd>{stats.tool_call_average_latency_ms ?? 0}ms</dd><small>仅聚合耗时</small></div>
+                <div><dt>知识检索命中率</dt><dd>{percent(stats.knowledge_search_hit_rate)}</dd><small>{stats.knowledge_search_hit ?? 0}/{stats.knowledge_search_total ?? 0}</small></div>
+                <div><dt>引用覆盖率</dt><dd>{percent(stats.citation_coverage_rate)}</dd><small>无来源回答 {percent(stats.answer_without_source_rate)}</small></div>
+                <div><dt>Word 导出次数</dt><dd>{stats.word_export_total ?? 0}</dd><small>正式文档导出</small></div>
+                <div><dt>格式自检通过率</dt><dd>{percent(stats.document_format_pass_rate)}</dd><small>{stats.document_format_check_passed ?? 0}/{stats.document_format_check_total ?? 0}</small></div>
+                <div><dt>用户负反馈数</dt><dd>{stats.user_negative_feedback_total ?? 0}</dd><small>没用/需修改/记录错误</small></div>
+              </dl>
+              {Object.keys(stats.tool_error_distribution || {}).length ? (
+                <ul aria-label="工具错误分布">
+                  {Object.entries(stats.tool_error_distribution || {}).map(([name, count]) => (
+                    <li key={name}><span>{name}</span><strong>{count}</strong></li>
+                  ))}
+                </ul>
+              ) : null}
+            </section>
+          ) : null}
+          <div className="stats-details">
+            <section>
+              <h2>部门分布</h2>
+              <ul>{Object.entries(stats.by_department || {}).map(([name, count]) => <li key={name}><span>{name}</span><strong>{count}</strong></li>)}</ul>
+            </section>
+            <section>
+              <h2>任务排行</h2>
+              <ol>{(stats.task_ranking || []).map((item) => <li key={item.name}><span>{item.name}</span><strong>{item.count}</strong></li>)}</ol>
+            </section>
+            <section>
+              <h2>每日趋势</h2>
+              <ul>{(stats.daily_trend || []).map((item) => <li key={item.date}><span>{item.date}</span><strong>{item.count}</strong></li>)}</ul>
+            </section>
+            <section>
+              <h2>反馈分布</h2>
+              <ul>{Object.entries(stats.feedback_distribution || {}).map(([name, count]) => <li key={name}><span>{name}</span><strong>{count}</strong></li>)}</ul>
+            </section>
+          </div>
+        </>
       ) : null}
     </AdminPageState>
   );

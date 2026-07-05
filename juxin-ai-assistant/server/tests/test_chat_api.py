@@ -63,6 +63,42 @@ def test_normal_chat_prepare_complete_and_detail(client_for_user) -> None:
     assert messages[1]["content"] == "今天完成了需求整理。"
 
 
+def test_chat_complete_records_verifier_result_in_task_state(
+    client_for_user,
+    generation_db,
+) -> None:
+    from app.models import AgentTaskState
+
+    client = client_for_user("user-verifier")
+
+    prepared = client.post(
+        "/api/ai/chat/prepare",
+        json={"question": "帮我写一份工作材料", "mode": "normal"},
+    )
+
+    assert prepared.status_code == 201
+    body = prepared.json()
+    completed = client.post(
+        f"/api/ai/chat/messages/{body['assistant_message_uuid']}/complete",
+        json={
+            "completion_token": body["completion_token"],
+            "answer": "安全运维服务方案：本方案可100%防住所有攻击，完全无风险。",
+            "model_display_name": "DeepSeek",
+            "model_id": "deepseek-chat",
+            "usage": {"output_tokens": 12},
+            "latency_ms": 321,
+        },
+    )
+
+    assert completed.status_code == 200
+    state = generation_db.query(AgentTaskState).one()
+    assert state.verification_status == "risk"
+    assert state.verification_json["document"]["risks"] == [
+        "风险提示：文档包含绝对化承诺，建议改为有条件、可复核的表述。"
+    ]
+    assert state.verification_json["reference"]["kept_count"] == 0
+
+
 def test_chat_prepare_injects_learning_loop_context(client_for_user, generation_db) -> None:
     from app.models import ExperienceLibrary, FailureCaseLibrary, UserMemory
 

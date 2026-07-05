@@ -192,6 +192,7 @@ def _empty_quality_metrics() -> dict[str, int | float | dict[str, int]]:
         "tool_call_total": 0,
         "tool_call_success": 0,
         "tool_call_success_rate": 0.0,
+        "tool_call_average_latency_ms": 0,
         "knowledge_search_total": 0,
         "knowledge_search_hit": 0,
         "knowledge_search_hit_rate": 0.0,
@@ -204,6 +205,7 @@ def _empty_quality_metrics() -> dict[str, int | float | dict[str, int]]:
         "document_format_check_passed": 0,
         "document_format_pass_rate": 0.0,
         "tool_error_distribution": {},
+        "user_negative_feedback_total": 0,
     }
 
 
@@ -229,6 +231,9 @@ def _build_quality_metrics(
             *tool_filters,
             AgentToolCallLog.status == "success",
         )
+    ) or 0)
+    tool_call_average_latency_ms = int(db.scalar(
+        select(func.avg(AgentToolCallLog.latency_ms)).where(*tool_filters)
     ) or 0)
     tool_error_rows = db.execute(
         select(
@@ -290,11 +295,19 @@ def _build_quality_metrics(
         1 for log in document_format_logs
         if (log.output_summary_json or {}).get("passed") is True
     )
+    user_negative_feedback_total = int(db.scalar(
+        select(func.count(FeedbackLog.id)).where(
+            FeedbackLog.created_at >= start_at,
+            FeedbackLog.created_at <= end_at,
+            FeedbackLog.feedback_type.in_(("not_useful", "needs_revision", "record_error")),
+        )
+    ) or 0)
 
     return {
         "tool_call_total": tool_call_total,
         "tool_call_success": tool_call_success,
         "tool_call_success_rate": _rate(tool_call_success, tool_call_total),
+        "tool_call_average_latency_ms": tool_call_average_latency_ms,
         "knowledge_search_total": knowledge_search_total,
         "knowledge_search_hit": knowledge_search_hit,
         "knowledge_search_hit_rate": _rate(knowledge_search_hit, knowledge_search_total),
@@ -316,4 +329,5 @@ def _build_quality_metrics(
             error_code: int(count)
             for error_code, count in tool_error_rows
         },
+        "user_negative_feedback_total": user_negative_feedback_total,
     }
