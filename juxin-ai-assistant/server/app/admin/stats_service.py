@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 
 from ..models import (
     AgentToolCallLog,
+    AgentTaskState,
     ChatMessage,
     ChatMessageSource,
     ExportRecord,
@@ -15,7 +16,7 @@ from ..models import (
     Task,
 )
 from .errors import GovernanceError
-from .schemas import CountByName, DailyCount, StatsOut
+from .schemas import CountByName, DailyCount, StatsOut, TaskReplayListOut, TaskReplayOut
 
 
 def _date_bounds(
@@ -144,6 +145,95 @@ def build_stats(
         feedback_distribution=feedback_distribution,
         **quality_metrics,
     )
+
+
+def list_task_replays(
+    db: Session,
+    *,
+    offset: int,
+    limit: int,
+) -> TaskReplayListOut:
+    total = int(db.scalar(select(func.count(AgentTaskState.id))) or 0)
+    rows = list(db.scalars(
+        select(AgentTaskState)
+        .order_by(AgentTaskState.updated_at.desc(), AgentTaskState.id.desc())
+        .offset(offset)
+        .limit(limit)
+    ))
+    return TaskReplayListOut(
+        items=[_task_replay_out(row) for row in rows],
+        total=total,
+    )
+
+
+def _task_replay_out(row: AgentTaskState) -> TaskReplayOut:
+    verification = row.verification_json or {}
+    return TaskReplayOut(
+        task_state_id=row.uuid,
+        conversation_id=row.conversation_id,
+        user_id=row.user_id,
+        stage=row.stage,
+        goal=row.goal[:200],
+        source_summary=[
+            _safe_metadata_item(item)
+            for item in (row.selected_sources_json or [])[:8]
+            if isinstance(item, dict)
+        ],
+        tool_summary=[
+            _safe_metadata_item(item)
+            for item in (row.tool_calls_json or [])[:12]
+            if isinstance(item, dict)
+        ],
+        verification_summary={
+            "status": row.verification_status,
+            "reference": _safe_metadata_item(verification.get("reference", {})),
+            "document": _safe_metadata_item(verification.get("document", {})),
+        },
+        next_action=row.next_action,
+        stage_history=[
+            _safe_metadata_item(item)
+            for item in (row.stage_history_json or [])[-8:]
+            if isinstance(item, dict)
+        ],
+        created_at=row.created_at,
+        updated_at=row.updated_at,
+    )
+
+
+def _safe_metadata_item(item: object) -> dict[str, object]:
+    if not isinstance(item, dict):
+        return {}
+    allowed = {
+        "at",
+        "chunk_count",
+        "file_name",
+        "kept_count",
+        "next_action",
+        "removed_count",
+        "risks",
+        "source_count",
+        "source_type",
+        "stage",
+        "status",
+        "summary",
+        "tool_name",
+        "warnings",
+    }
+    return {
+        str(key): value
+        for key, value in item.items()
+        if str(key) in allowed and _is_safe_metadata_value(value)
+    }
+
+
+def _is_safe_metadata_value(value: object) -> bool:
+    if isinstance(value, str):
+        return len(value) <= 500
+    if isinstance(value, int | float | bool) or value is None:
+        return True
+    if isinstance(value, list):
+        return all(isinstance(item, str) and len(item) <= 300 for item in value[:20])
+    return False
 
 
 def _build_feedback_distribution(

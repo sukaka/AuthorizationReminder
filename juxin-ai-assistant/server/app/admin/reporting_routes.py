@@ -9,8 +9,8 @@ from ..config import Settings, get_settings
 from ..database import get_db
 from ..schemas import SessionPayload
 from .audit_query import AuditFilters, query_audit_logs
-from .schemas import AuditLogListOut, StatsOut
-from .stats_service import build_stats
+from .schemas import AuditLogListOut, StatsOut, TaskReplayListOut
+from .stats_service import build_stats, list_task_replays
 
 
 def create_reporting_router() -> APIRouter:
@@ -54,6 +54,18 @@ def create_reporting_router() -> APIRouter:
             date_from=date_from,
             date_to=date_to,
         )
+
+    @router.get("/admin/task-replays", response_model=TaskReplayListOut)
+    async def admin_task_replays(
+        request: Request,
+        session: Annotated[SessionPayload, Depends(get_session)],
+        settings: Annotated[Settings, Depends(get_settings)],
+        db: Annotated[Session, Depends(get_db)],
+        offset: Annotated[int, Query(ge=0)] = 0,
+        limit: Annotated[int, Query(ge=1, le=100)] = 20,
+    ) -> TaskReplayListOut:
+        await require_action("ai_assistant:admin", request, session, settings)
+        return list_task_replays(db, offset=offset, limit=limit)
 
     @router.get("/admin/audit-logs", response_model=AuditLogListOut)
     async def admin_audit_logs(

@@ -213,8 +213,8 @@
 
 - [x] 写前端测试：管理员能看到工具调用成功率、引用覆盖率、负反馈指标。
 - [x] 增加治理中心质量卡片：工具成功率、平均耗时、引用质量、资料命中、用户负反馈。
-- [ ] 增加“查看任务回放”入口，只展示元数据和摘要。
-- [x] 跑测试：`npm test -- --run tests/governance-pages.test.tsx -t "shows global agent quality metrics"`，结果 `1 passed`。
+- [x] 增加“查看任务回放”入口，只展示元数据和摘要。
+- [x] 跑测试：`npm test -- --run tests/governance-pages.test.tsx -t "shows global agent quality metrics"` 与 `-t "loads task replay metadata"`，结果均 `1 passed`。
 - [ ] 需求审查：确认普通员工不可见治理数据。
 - [ ] 代码审查：确认页面不展示完整用户隐私内容。
 

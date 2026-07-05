@@ -102,6 +102,21 @@ export type StatsPayload = {
   user_negative_feedback_total?: number;
 };
 
+export type TaskReplayItem = {
+  task_state_id: string;
+  conversation_id: string;
+  user_id: string;
+  stage: string;
+  goal: string;
+  source_summary: Array<Record<string, unknown>>;
+  tool_summary: Array<Record<string, unknown>>;
+  verification_summary: Record<string, unknown>;
+  next_action: string;
+  stage_history: Array<Record<string, unknown>>;
+  created_at: string;
+  updated_at: string;
+};
+
 export type AuditItem = {
   id: string | number;
   sso_user_id: string;
@@ -184,6 +199,7 @@ export const governanceApi = {
   stats: (manager: boolean) => request<StatsPayload>(
     manager ? '/api/ai/department-stats' : '/api/ai/admin/stats',
   ),
+  taskReplays: () => request<GovernanceList<TaskReplayItem>>('/api/ai/admin/task-replays'),
   audit: (query = '') => request<GovernanceList<AuditItem>>(
     `/api/ai/admin/audit-logs${query ? `?${query}` : ''}`,
   ),

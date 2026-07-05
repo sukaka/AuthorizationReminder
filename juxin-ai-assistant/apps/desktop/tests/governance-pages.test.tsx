@@ -92,6 +92,47 @@ it('shows global agent quality metrics for administrators', async () => {
   expect(screen.getByText('EXPORT_FAILED')).toBeInTheDocument();
 });
 
+it('loads task replay metadata from the governance stats page', async () => {
+  server.use(
+    http.get('/api/ai/admin/stats', () => HttpResponse.json({
+      total: 1,
+      completion_rate: 1,
+      failure_rate: 0,
+      by_department: {},
+      task_ranking: [],
+      daily_trend: [],
+      feedback_distribution: {},
+    })),
+    http.get('/api/ai/admin/task-replays', () => HttpResponse.json({
+      total: 1,
+      items: [{
+        task_state_id: 'state-1',
+        conversation_id: 'conversation-1',
+        user_id: 'user-replay',
+        stage: 'completed',
+        goal: '写一份安全运维服务方案',
+        source_summary: [{ source_type: 'official_knowledge', file_name: '运维白皮书.docx' }],
+        tool_summary: [{ tool_name: 'company_knowledge_search', status: 'success', source_count: 2 }],
+        verification_summary: { status: 'warning', reference: { kept_count: 1 }, document: { warnings: ['需人工复核'] } },
+        next_action: '可查看摘要或重新生成',
+        stage_history: [{ stage: 'completed', next_action: '完成', at: '2026-07-05T01:00:05Z' }],
+        created_at: '2026-07-05T01:00:00Z',
+        updated_at: '2026-07-05T01:00:05Z',
+      }],
+    })),
+  );
+
+  render(<StatsPage />);
+  await userEvent.click(screen.getByRole('button', { name: '刷新统计' }));
+  await userEvent.click(await screen.findByRole('button', { name: '查看任务回放' }));
+
+  expect(await screen.findByText('任务回放')).toBeInTheDocument();
+  expect(screen.getByText('写一份安全运维服务方案')).toBeInTheDocument();
+  expect(screen.getByText('company_knowledge_search · success · 来源 2')).toBeInTheDocument();
+  expect(screen.getByText('运维白皮书.docx')).toBeInTheDocument();
+  expect(screen.queryByText(/private-input|private-output|完整回答/i)).not.toBeInTheDocument();
+});
+
 it('saves task, fields, and published Prompt binding in one atomic request', async () => {
   const configurationSpy = vi.fn();
   const legacyRequestSpy = vi.fn();

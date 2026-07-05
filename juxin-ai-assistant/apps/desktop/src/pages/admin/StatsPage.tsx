@@ -1,18 +1,41 @@
 import { useState } from 'react';
 
-import { governanceApi, type StatsPayload } from '../../api/governance';
+import { governanceApi, type StatsPayload, type TaskReplayItem } from '../../api/governance';
 import { AdminPageState, RequestNotice } from './AdminPageState';
 
 function percent(value?: number): string {
   return value == null ? '—' : `${Math.round(value * 100)}%`;
 }
 
+function textValue(value: unknown, fallback = '—'): string {
+  return typeof value === 'string' && value.trim() ? value.trim() : fallback;
+}
+
+function numberValue(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : 0;
+}
+
+function replayVerificationStatus(item: TaskReplayItem): string {
+  return textValue(item.verification_summary.status, 'pending');
+}
+
 export function StatsPage({ manager = false }: { manager?: boolean }) {
   const [stats, setStats] = useState<StatsPayload | null>(null);
+  const [taskReplays, setTaskReplays] = useState<TaskReplayItem[]>([]);
   const [notice, setNotice] = useState('');
+  const [replayNotice, setReplayNotice] = useState('');
   const refresh = async () => {
     try { setStats(await governanceApi.stats(manager)); setNotice(''); }
     catch { setNotice('统计读取失败，请确认数据范围。'); }
+  };
+  const loadTaskReplays = async () => {
+    try {
+      const payload = await governanceApi.taskReplays();
+      setTaskReplays(payload.items);
+      setReplayNotice(payload.items.length ? '' : '暂无可回放任务。');
+    } catch {
+      setReplayNotice('任务回放读取失败，请确认治理权限。');
+    }
   };
   return (
     <AdminPageState title={manager ? '部门数据' : '全局统计'} description="统计仅聚合状态、任务、部门、时间和反馈元数据。">
@@ -31,6 +54,7 @@ export function StatsPage({ manager = false }: { manager?: boolean }) {
                 <span>Agent 质量指标</span>
                 <p>聚合工具、检索、引用和导出质量，不展示用户正文。</p>
               </div>
+              <button className="secondary-action" onClick={() => void loadTaskReplays()} type="button">查看任务回放</button>
               <dl>
                 <div><dt>工具调用成功率</dt><dd>{percent(stats.tool_call_success_rate)}</dd><small>{stats.tool_call_success ?? 0}/{stats.tool_call_total ?? 0}</small></div>
                 <div><dt>平均工具耗时</dt><dd>{stats.tool_call_average_latency_ms ?? 0}ms</dd><small>仅聚合耗时</small></div>
@@ -47,6 +71,35 @@ export function StatsPage({ manager = false }: { manager?: boolean }) {
                   ))}
                 </ul>
               ) : null}
+            </section>
+          ) : null}
+          {!manager && (taskReplays.length || replayNotice) ? (
+            <section className="stats-replay-panel" aria-label="任务回放">
+              <header>
+                <h2>任务回放</h2>
+                <p>只展示阶段、工具、来源和自检摘要，不展示用户正文。</p>
+              </header>
+              <RequestNotice message={replayNotice} />
+              <div className="stats-replay-list">
+                {taskReplays.map((item) => (
+                  <article key={item.task_state_id}>
+                    <div>
+                      <strong>{item.goal || '未命名任务'}</strong>
+                      <span>{item.stage} · 自检 {replayVerificationStatus(item)}</span>
+                    </div>
+                    <ul>
+                      {(item.tool_summary || []).slice(0, 4).map((tool, index) => (
+                        <li key={`${item.task_state_id}-tool-${index}`}>
+                          {textValue(tool.tool_name, '未知工具')} · {textValue(tool.status, 'unknown')} · 来源 {numberValue(tool.source_count)}
+                        </li>
+                      ))}
+                    </ul>
+                    <p>
+                      {(item.source_summary || []).slice(0, 3).map((source) => textValue(source.file_name, textValue(source.source_type, '来源'))).join('、') || '暂无来源'}
+                    </p>
+                  </article>
+                ))}
+              </div>
             </section>
           ) : null}
           <div className="stats-details">

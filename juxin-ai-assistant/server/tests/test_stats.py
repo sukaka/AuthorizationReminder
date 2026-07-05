@@ -9,6 +9,7 @@ from app.database import get_db
 from app.main import app
 from app.models import (
     AgentToolCallLog,
+    AgentTaskState,
     ChatMessage,
     ChatMessageSource,
     ChatSession,
@@ -260,6 +261,58 @@ def test_admin_stats_include_agent_quality_metrics(
     assert payload["feedback_distribution"]["useful"] == 1
     assert payload["feedback_distribution"]["needs_revision"] == 1
     assert payload["user_negative_feedback_total"] == 1
+
+
+def test_admin_task_replays_return_metadata_without_chat_content(
+    generation_db,
+) -> None:
+    generation_db.add_all(
+        [
+            AgentTaskState(
+                uuid="state-1",
+                user_id="user-replay",
+                conversation_id="conversation-1",
+                stage="completed",
+                goal="写一份安全运维服务方案",
+                selected_sources_json=[
+                    {"source_type": "official_knowledge", "file_name": "运维白皮书.docx"},
+                ],
+                tool_calls_json=[
+                    {"tool_name": "company_knowledge_search", "status": "success", "source_count": 2},
+                ],
+                verification_status="warning",
+                verification_json={
+                    "reference": {"kept_count": 1, "removed_count": 0},
+                    "document": {"warnings": ["需人工复核"], "risks": []},
+                },
+                next_action="可查看摘要或重新生成",
+                stage_history_json=[
+                    {"stage": "analyzing", "next_action": "识别任务", "at": "2026-07-05T01:00:00Z"},
+                    {"stage": "completed", "next_action": "完成", "at": "2026-07-05T01:00:05Z"},
+                ],
+            ),
+        ]
+    )
+    generation_db.commit()
+    app.dependency_overrides[get_db] = lambda: generation_db
+
+    try:
+        with TestClient(app) as client:
+            response = client.get("/api/ai/admin/task-replays")
+    finally:
+        app.dependency_overrides.pop(get_db, None)
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["total"] == 1
+    item = payload["items"][0]
+    assert item["task_state_id"] == "state-1"
+    assert item["goal"] == "写一份安全运维服务方案"
+    assert item["tool_summary"] == [{"tool_name": "company_knowledge_search", "status": "success", "source_count": 2}]
+    assert item["source_summary"] == [{"source_type": "official_knowledge", "file_name": "运维白皮书.docx"}]
+    assert item["verification_summary"]["status"] == "warning"
+    assert "private-input" not in response.text
+    assert "answer" not in response.text.lower()
 
 
 def test_stats_reject_ranges_over_366_days(generation_db) -> None:

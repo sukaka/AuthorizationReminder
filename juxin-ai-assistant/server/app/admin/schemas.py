@@ -279,6 +279,26 @@ class StatsOut(BaseModel):
     user_negative_feedback_total: int = 0
 
 
+class TaskReplayOut(BaseModel):
+    task_state_id: str
+    conversation_id: str
+    user_id: str
+    stage: str
+    goal: str
+    source_summary: list[dict[str, object]]
+    tool_summary: list[dict[str, object]]
+    verification_summary: dict[str, object]
+    next_action: str
+    stage_history: list[dict[str, object]]
+    created_at: datetime
+    updated_at: datetime
+
+
+class TaskReplayListOut(BaseModel):
+    items: list[TaskReplayOut]
+    total: int
+
+
 class AuditLogOut(BaseModel):
     id: int
     sso_user_id: str

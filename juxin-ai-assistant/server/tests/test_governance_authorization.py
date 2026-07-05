@@ -24,6 +24,7 @@ from app.schemas import AuthScope, SessionPayload, UserPayload
         ("PUT", "/api/ai/admin/settings", {"history_retention_days": 30}),
         ("POST", "/api/ai/admin/suggestions/suggestion-1/review", {"decision": "APPROVE"}),
         ("GET", "/api/ai/admin/stats", None),
+        ("GET", "/api/ai/admin/task-replays", None),
         ("GET", "/api/ai/admin/audit-logs", None),
     ],
 )
