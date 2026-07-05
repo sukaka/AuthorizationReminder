@@ -129,6 +129,32 @@ export type AuditItem = {
   created_at: string;
 };
 
+export type AdminSkill = {
+  id: string;
+  name: string;
+  description: string;
+  category: string;
+  version: string;
+  status: string;
+  scope: string;
+  owner: string;
+  requires_attachment: boolean;
+  allowed_tools: string[];
+  input_types: string[];
+  output_types: string[];
+  permissions: {
+    allow_web: boolean;
+    allow_company_knowledge: boolean;
+    allow_personal_memory: boolean;
+    allow_write_company_kb: boolean;
+  };
+  review: {
+    required_for_publish: boolean;
+    reviewer_role: string;
+  };
+  tags: string[];
+};
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, {
     credentials: 'include',
@@ -202,6 +228,19 @@ export const governanceApi = {
   taskReplays: () => request<GovernanceList<TaskReplayItem>>('/api/ai/admin/task-replays'),
   audit: (query = '') => request<GovernanceList<AuditItem>>(
     `/api/ai/admin/audit-logs${query ? `?${query}` : ''}`,
+  ),
+  skills: () => request<GovernanceList<AdminSkill>>('/api/admin/skills'),
+  publishSkill: (skillId: string) => request<AdminSkill>(
+    `/api/admin/skills/${encodeURIComponent(skillId)}/publish`,
+    { method: 'POST' },
+  ),
+  disableSkill: (skillId: string) => request<AdminSkill>(
+    `/api/admin/skills/${encodeURIComponent(skillId)}/disable`,
+    { method: 'POST' },
+  ),
+  reviewSkill: (skillId: string, status: 'approved' | 'rejected' | 'changes_requested', comment: string) => request<Record<string, unknown>>(
+    `/api/admin/skills/${encodeURIComponent(skillId)}/review`,
+    { method: 'POST', body: JSON.stringify({ status, comment }) },
   ),
 };
 

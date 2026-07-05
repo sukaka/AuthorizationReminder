@@ -6,14 +6,16 @@ import { AuditPage } from './AuditPage';
 import { DesktopUpdatesPage } from './DesktopUpdatesPage';
 import { KnowledgeAdminPage } from './KnowledgeAdminPage';
 import { SettingsPage } from './SettingsPage';
+import { SkillsAdminPage } from './SkillsAdminPage';
 import { StatsPage } from './StatsPage';
 import { SuggestionsPage } from './SuggestionsPage';
 import { TaskAdminPage } from './TaskAdminPage';
 
-type GovernancePage = 'tasks' | 'knowledge' | 'suggestions' | 'stats' | 'audit' | 'settings' | 'links' | 'desktop-updates';
+type GovernancePage = 'tasks' | 'skills' | 'knowledge' | 'suggestions' | 'stats' | 'audit' | 'settings' | 'links' | 'desktop-updates';
 
 const ITEMS: Array<{ page: GovernancePage; label: string }> = [
   { page: 'tasks', label: '任务管理' },
+  { page: 'skills', label: '能力治理' },
   { page: 'knowledge', label: '知识库' },
   { page: 'suggestions', label: '建议审核' },
   { page: 'stats', label: '全局统计' },
@@ -38,6 +40,7 @@ export function GovernanceCenter({ session }: { session: SessionPayload }) {
         ))}
       </nav>
       {page === 'tasks' ? <TaskAdminPage />
+        : page === 'skills' ? <SkillsAdminPage />
         : page === 'knowledge' ? <KnowledgeAdminPage />
           : page === 'suggestions' ? <SuggestionsPage admin departments={session.scope.managedDepartments} />
             : page === 'stats' ? <StatsPage />

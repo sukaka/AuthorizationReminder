@@ -31,10 +31,11 @@ def test_migration_revision_graph_is_single_linear_head() -> None:
         migration_config("sqlite+pysqlite:///:memory:")
     )
 
-    assert script.get_heads() == ["0018_agent_task_states"]
+    assert script.get_heads() == ["0019_skill_productization"]
     assert [
         revision.revision for revision in script.walk_revisions()
     ] == [
+        "0019_skill_productization",
         "0018_agent_task_states",
         "0017_learning_loop",
         "0016_user_memories",
@@ -89,6 +90,43 @@ def test_foundation_migration_round_trip(tmp_path: Path) -> None:
 
     command.upgrade(config, "head")
     assert FOUNDATION_TABLES.issubset(set(inspect(engine).get_table_names()))
+
+
+def test_skill_productization_migration_creates_skill_log_tables(tmp_path: Path) -> None:
+    database_path = tmp_path / "skill-productization.db"
+    database_url = f"sqlite+pysqlite:///{database_path}"
+    config = migration_config(database_url)
+    engine = create_engine(database_url)
+
+    command.upgrade(config, "0019_skill_productization")
+    inspector = inspect(engine)
+    table_names = set(inspector.get_table_names())
+
+    assert {"ai_skill_run_logs", "ai_skill_reviews"}.issubset(table_names)
+    run_columns = {column["name"] for column in inspector.get_columns("ai_skill_run_logs")}
+    assert {
+        "skill_id",
+        "skill_version",
+        "task_id",
+        "user_id",
+        "status",
+        "tools_used_json",
+        "input_summary_json",
+        "output_summary_json",
+        "error_message",
+        "started_at",
+        "finished_at",
+    }.issubset(run_columns)
+    review_columns = {column["name"] for column in inspector.get_columns("ai_skill_reviews")}
+    assert {
+        "skill_id",
+        "version",
+        "submitter_id",
+        "reviewer_id",
+        "status",
+        "comment",
+        "reviewed_at",
+    }.issubset(review_columns)
 
 
 def test_user_memories_migration_creates_personal_memory_table(tmp_path: Path) -> None:

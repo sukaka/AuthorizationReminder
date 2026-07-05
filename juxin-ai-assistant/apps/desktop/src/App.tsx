@@ -17,6 +17,7 @@ import { HistoryPage } from './pages/HistoryPage';
 import { HomePage } from './pages/HomePage';
 import { KnowledgePage } from './pages/KnowledgePage';
 import { LearningPage } from './pages/LearningPage';
+import { SkillsPage } from './pages/SkillsPage';
 import { TaskRunPage, type TaskDefinition } from './pages/TaskRunPage';
 import { logoutLocalUser, syncPendingResults } from './local/syncQueue';
 import { GovernanceCenter } from './pages/admin/GovernanceCenter';
@@ -35,6 +36,7 @@ type WorkspacePage =
   | 'chat'
   | 'history'
   | 'knowledge'
+  | 'skills'
   | 'learning'
   | 'task'
   | 'models'
@@ -65,21 +67,23 @@ function Workspace({ session }: { session: SessionPayload }) {
       ? '助手模式'
       : page === 'chat'
         ? '私人工作助理'
-        : page === 'history'
-          ? '工作成果'
-          : page === 'knowledge'
-            ? '我的资料'
-            : page === 'learning'
-              ? '学习中心'
-              : page === 'models'
-                ? '设置'
-                : page === 'department-stats'
-                  ? '部门数据'
-                  : page === 'suggestions'
-                    ? '提交建议'
-                    : page === 'governance'
-                      ? '治理中心'
-                      : '任务处理';
+          : page === 'history'
+            ? '工作成果'
+            : page === 'knowledge'
+              ? '我的资料'
+              : page === 'skills'
+                ? '能力中心'
+                : page === 'learning'
+                  ? '学习中心'
+                  : page === 'models'
+                    ? '设置'
+                    : page === 'department-stats'
+                      ? '部门数据'
+                      : page === 'suggestions'
+                        ? '提交建议'
+                        : page === 'governance'
+                          ? '治理中心'
+                          : '任务处理';
 
   useEffect(() => {
     if (sidebarTouched) return;
@@ -152,6 +156,7 @@ function Workspace({ session }: { session: SessionPayload }) {
           <button aria-current={page === 'home' ? 'page' : undefined} className={page === 'home' ? 'is-current' : ''} onClick={() => setPage('home')} type="button"><span className="nav-icon" aria-hidden="true">⌂</span><span className="nav-label">工作台</span></button>
           <button aria-current={page === 'assistants' ? 'page' : undefined} className={page === 'assistants' ? 'is-current' : ''} onClick={() => setPage('assistants')} type="button"><span className="nav-icon" aria-hidden="true">✦</span><span className="nav-label">助手模式</span></button>
           <button aria-current={page === 'history' ? 'page' : undefined} className={page === 'history' ? 'is-current' : ''} onClick={() => setPage('history')} type="button"><span className="nav-icon" aria-hidden="true">↺</span><span className="nav-label">工作成果</span></button>
+          <button aria-current={page === 'skills' ? 'page' : undefined} className={page === 'skills' ? 'is-current' : ''} onClick={() => setPage('skills')} type="button"><span className="nav-icon" aria-hidden="true">◈</span><span className="nav-label">能力中心</span></button>
           <button aria-current={page === 'knowledge' ? 'page' : undefined} className={page === 'knowledge' ? 'is-current' : ''} onClick={() => setPage('knowledge')} type="button"><span className="nav-icon" aria-hidden="true">⌘</span><span className="nav-label">我的资料</span></button>
           <button aria-current={page === 'learning' ? 'page' : undefined} className={page === 'learning' ? 'is-current' : ''} onClick={() => setPage('learning')} type="button"><span className="nav-icon" aria-hidden="true">✧</span><span className="nav-label">学习中心</span></button>
           <button aria-current={page === 'models' ? 'page' : undefined} className={page === 'models' ? 'is-current' : ''} onClick={() => setPage('models')} type="button"><span className="nav-icon" aria-hidden="true">◇</span><span className="nav-label">设置</span></button>
@@ -212,6 +217,8 @@ function Workspace({ session }: { session: SessionPayload }) {
           <ChatPage />
         ) : page === 'knowledge' ? (
           <KnowledgePage session={session} />
+        ) : page === 'skills' ? (
+          <SkillsPage />
         ) : page === 'learning' ? (
           <LearningPage isAdmin={isAdmin} />
         ) : page === 'history' ? (

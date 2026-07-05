@@ -131,8 +131,18 @@ class IntentCandidateOut(BaseModel):
     reasons: list[str]
 
 
+class IntentSkillCandidateOut(BaseModel):
+    skill_id: str
+    skill_name: str
+    description: str
+    score: int
+    reasons: list[str]
+
+
 class IntentRouteOut(BaseModel):
     candidates: list[IntentCandidateOut]
+    skill_candidates: list[IntentSkillCandidateOut] = Field(default_factory=list)
+
 
 
 class PrepareGenerationIn(BaseModel):

@@ -57,6 +57,8 @@ from .models import KnowledgeChunk, KnowledgeFile
 from .models import KnowledgeTaskLink, TaskPromptBinding
 from .personal_reference_routes import router as personal_reference_router
 from .prompt_client import PromptCenterClient
+from .skill_routes import router as skill_router
+from .skill_registry import SkillRegistry
 from .web_routes import router as web_router
 from .schemas import (
     AttachmentOut,
@@ -74,6 +76,7 @@ from .schemas import (
     HistoryListOut,
     HomeOut,
     IntentCandidateOut,
+    IntentSkillCandidateOut,
     IntentRouteIn,
     IntentRouteOut,
     KnowledgeFileListOut,
@@ -505,6 +508,7 @@ def route_task_intent(
             for task, assistant in rows
         ],
     )
+    skill_matches = SkillRegistry.default().match(body.query)
     return IntentRouteOut(
         candidates=[
             IntentCandidateOut(
@@ -516,7 +520,17 @@ def route_task_intent(
                 reasons=item["reasons"],
             )
             for item in candidates
-        ]
+        ],
+        skill_candidates=[
+            IntentSkillCandidateOut(
+                skill_id=skill.id,
+                skill_name=skill.name,
+                description=skill.manifest.description,
+                score=8,
+                reasons=[f"匹配能力：{tag}" for tag in skill.manifest.tags[:2]] or ["匹配业务能力"],
+            )
+            for skill in skill_matches[:5]
+        ],
     )
 
 
@@ -1650,6 +1664,7 @@ app.include_router(export_router)
 app.include_router(knowledge_router)
 app.include_router(learning_router)
 app.include_router(personal_reference_router)
+app.include_router(skill_router)
 app.include_router(web_router)
 
 

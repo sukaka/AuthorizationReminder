@@ -602,6 +602,46 @@ class AgentTaskState(TimestampMixin, Base):
     metadata_json: Mapped[dict] = mapped_column(JSON, default=dict)
 
 
+class SkillRunLog(TimestampMixin, Base):
+    __tablename__ = "ai_skill_run_logs"
+
+    id: Mapped[int] = mapped_column(primary_key_type, primary_key=True, autoincrement=True)
+    uuid: Mapped[str] = mapped_column(
+        String(36),
+        unique=True,
+        default=lambda: str(uuid_lib.uuid4()),
+    )
+    skill_id: Mapped[str] = mapped_column(String(96), index=True)
+    skill_version: Mapped[str] = mapped_column(String(32), default="")
+    task_id: Mapped[str] = mapped_column(String(96), default="", index=True)
+    user_id: Mapped[str] = mapped_column(String(64), index=True)
+    status: Mapped[str] = mapped_column(String(24), default="running", index=True)
+    tools_used_json: Mapped[list] = mapped_column(JSON, default=list)
+    input_summary_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    output_summary_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    error_message: Mapped[str] = mapped_column(Text, default="")
+    started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class SkillReview(TimestampMixin, Base):
+    __tablename__ = "ai_skill_reviews"
+
+    id: Mapped[int] = mapped_column(primary_key_type, primary_key=True, autoincrement=True)
+    uuid: Mapped[str] = mapped_column(
+        String(36),
+        unique=True,
+        default=lambda: str(uuid_lib.uuid4()),
+    )
+    skill_id: Mapped[str] = mapped_column(String(96), index=True)
+    version: Mapped[str] = mapped_column(String(32), default="")
+    submitter_id: Mapped[str] = mapped_column(String(64), default="", index=True)
+    reviewer_id: Mapped[str] = mapped_column(String(64), default="", index=True)
+    status: Mapped[str] = mapped_column(String(24), default="pending", index=True)
+    comment: Mapped[str] = mapped_column(Text, default="")
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
 class ChatSession(TimestampMixin, Base):
     __tablename__ = "ai_chat_sessions"
 

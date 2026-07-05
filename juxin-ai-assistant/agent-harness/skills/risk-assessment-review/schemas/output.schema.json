@@ -1,0 +1,9 @@
+{
+  "type": "object",
+  "properties": {
+    "nonconformities": { "type": "array" },
+    "evidence_gaps": { "type": "array" },
+    "suggestions": { "type": "array" },
+    "artifacts": { "type": "array" }
+  }
+}

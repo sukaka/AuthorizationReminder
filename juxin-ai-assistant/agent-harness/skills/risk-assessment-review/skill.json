@@ -1,0 +1,25 @@
+{
+  "id": "risk-assessment-review",
+  "name": "风险评估过程文档审查",
+  "description": "基于风险评估标准和公司审查规则，对用户上传的风险评估过程文档进行不符合项审查。",
+  "category": "risk_assessment",
+  "version": "1.0.0",
+  "status": "published",
+  "scope": "company",
+  "owner": "security-team",
+  "requires_attachment": true,
+  "allowed_tools": ["file_parser", "knowledge_retrieval", "document_generator", "personal_memory"],
+  "input_types": ["docx", "pdf", "xlsx"],
+  "output_types": ["markdown", "docx"],
+  "permissions": {
+    "allow_web": false,
+    "allow_company_knowledge": true,
+    "allow_personal_memory": true,
+    "allow_write_company_kb": false
+  },
+  "review": {
+    "required_for_publish": true,
+    "reviewer_role": "admin"
+  },
+  "tags": ["风险评估", "CCRC", "文档审查"]
+}

@@ -1,0 +1,8 @@
+{
+  "type": "object",
+  "properties": {
+    "description": { "type": "string" },
+    "attachments": { "type": "array" }
+  },
+  "required": ["description"]
+}

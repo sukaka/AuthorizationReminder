@@ -5,8 +5,11 @@ import {
   getHome,
   getTask,
   routeIntent,
+  runSkill,
   type HomePayload,
   type IntentCandidatePayload,
+  type IntentSkillCandidatePayload,
+  type SkillRunPayload,
   type SessionPayload,
   type TaskPayload,
 } from '../api/client';
@@ -30,6 +33,8 @@ export function HomePage({ session, onOpenTask, onOpenChat, onShowAssistants }: 
   const [error, setError] = useState('');
   const [intentQuery, setIntentQuery] = useState('');
   const [intentCandidates, setIntentCandidates] = useState<IntentCandidatePayload[]>([]);
+  const [skillCandidates, setSkillCandidates] = useState<IntentSkillCandidatePayload[]>([]);
+  const [skillResult, setSkillResult] = useState<SkillRunPayload | null>(null);
   const [intentLoading, setIntentLoading] = useState(false);
 
   useEffect(() => {
@@ -77,13 +82,32 @@ export function HomePage({ session, onOpenTask, onOpenChat, onShowAssistants }: 
     try {
       const payload = await routeIntent(query);
       setIntentCandidates(payload.candidates);
-      if (!payload.candidates.length) {
+      setSkillCandidates(payload.skill_candidates || []);
+      if (!payload.candidates.length && !(payload.skill_candidates || []).length) {
         setError('暂时没有匹配到合适任务，可以浏览助手模式。');
       }
     } catch {
       setError('任务匹配暂时不可用，请稍后重试');
     } finally {
       setIntentLoading(false);
+    }
+  };
+
+  const startSkill = async (candidate: IntentSkillCandidatePayload) => {
+    const question = intentQuery.trim() || candidate.skill_name;
+    setError('');
+    setSkillResult(null);
+    try {
+      const payload = await runSkill(candidate.skill_id, {
+        task_id: `skill-${candidate.skill_id}`,
+        input: {
+          question,
+          attachments: [],
+        },
+      });
+      setSkillResult(payload);
+    } catch {
+      setError('能力运行失败，请稍后重试');
     }
   };
 
@@ -150,6 +174,39 @@ export function HomePage({ session, onOpenTask, onOpenChat, onShowAssistants }: 
               </article>
             ))}
           </div>
+        </section>
+      ) : null}
+
+      {skillCandidates.length ? (
+        <section className="section-block">
+          <div className="section-heading">
+            <div><span className="eyebrow">能力匹配</span><h2>可能适合的能力</h2></div>
+          </div>
+          <div className="task-card-list compact">
+            {skillCandidates.map((candidate) => (
+              <article key={candidate.skill_id}>
+                <button
+                  aria-label={`使用能力 ${candidate.skill_name}`}
+                  className="task-card-main"
+                  onClick={() => void startSkill(candidate)}
+                  type="button"
+                >
+                  <small>匹配分 {candidate.score}</small>
+                  <strong>{candidate.skill_name}</strong>
+                  <span>{candidate.reasons.join('、') || candidate.description}</span>
+                </button>
+              </article>
+            ))}
+          </div>
+        </section>
+      ) : null}
+
+      {skillResult ? (
+        <section className="section-block" aria-label="能力生成结果">
+          <div className="section-heading">
+            <div><span className="eyebrow">生成成果</span><h2>能力已完成</h2></div>
+          </div>
+          <p>{String(skillResult.result.summary || '')}</p>
         </section>
       ) : null}
 

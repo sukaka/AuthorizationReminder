@@ -26,6 +26,8 @@ from app.schemas import AuthScope, SessionPayload, UserPayload
         ("GET", "/api/ai/admin/stats", None),
         ("GET", "/api/ai/admin/task-replays", None),
         ("GET", "/api/ai/admin/audit-logs", None),
+        ("GET", "/api/admin/skills", None),
+        ("POST", "/api/admin/skills/risk-assessment-review/publish", None),
     ],
 )
 def test_employee_direct_governance_requests_are_denied(

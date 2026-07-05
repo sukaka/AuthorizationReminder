@@ -96,6 +96,42 @@ export type HomePayload = {
   safety_reminders: string[];
 };
 
+export type SkillPayload = {
+  id: string;
+  name: string;
+  description: string;
+  category: string;
+  version: string;
+  status: string;
+  scope: string;
+  owner: string;
+  requires_attachment: boolean;
+  allowed_tools: string[];
+  input_types: string[];
+  output_types: string[];
+  permissions: {
+    allow_web: boolean;
+    allow_company_knowledge: boolean;
+    allow_personal_memory: boolean;
+    allow_write_company_kb: boolean;
+  };
+  review: {
+    required_for_publish: boolean;
+    reviewer_role: string;
+  };
+  tags: string[];
+};
+
+export type SkillRunPayload = {
+  run_id: string;
+  skill_id: string;
+  skill_version: string;
+  status: string;
+  tools_used: string[];
+  result: Record<string, unknown>;
+  artifacts: Array<{ kind: string; title: string; content: string }>;
+};
+
 export type LearningMemoryPayload = {
   uuid: string;
   memory_type: string;
@@ -171,6 +207,14 @@ export type IntentCandidatePayload = {
   task_code: string;
   task_name: string;
   assistant_name: string;
+  score: number;
+  reasons: string[];
+};
+
+export type IntentSkillCandidatePayload = {
+  skill_id: string;
+  skill_name: string;
+  description: string;
   score: number;
   reasons: string[];
 };
@@ -316,6 +360,34 @@ export async function getHome(): Promise<HomePayload> {
   return readJson<HomePayload>(
     await apiFetch('/api/ai/home'),
     'HOME_FAILED',
+  );
+}
+
+export async function listSkills(): Promise<{ items: SkillPayload[]; total: number }> {
+  return readJson(
+    await apiFetch('/api/skills', { cache: 'no-store' }),
+    'SKILLS_FAILED',
+  );
+}
+
+export async function listSkillRuns(): Promise<{ items: Array<Record<string, unknown>>; total: number }> {
+  return readJson(
+    await apiFetch('/api/skills/runs', { cache: 'no-store' }),
+    'SKILL_RUNS_FAILED',
+  );
+}
+
+export async function runSkill(
+  skillId: string,
+  payload: { task_id?: string; input: Record<string, unknown> },
+): Promise<SkillRunPayload> {
+  return readJson(
+    await apiFetch(`/api/skills/${encodeURIComponent(skillId)}/run`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }),
+    'SKILL_RUN_FAILED',
   );
 }
 
@@ -561,6 +633,7 @@ export async function getTask(taskCode: string): Promise<TaskPayload> {
 
 export async function routeIntent(query: string): Promise<{
   candidates: IntentCandidatePayload[];
+  skill_candidates?: IntentSkillCandidatePayload[];
 }> {
   return readJson(
     await apiFetch('/api/ai/intent/route', {
