@@ -3,6 +3,7 @@ from __future__ import annotations
 from sqlalchemy import case, select
 
 from app.agent_runtime import BaseTool, ToolContext, ToolResult
+from app.learning_safety import contains_sensitive_memory, is_company_fact_memory
 from app.models import UserMemory
 
 
@@ -43,13 +44,28 @@ class PersonalMemoryTool(BaseTool):
                 error_message_safe="偏好内容不能为空",
             )
         memory_type = str(tool_input.get("memory_type") or "user_preference").strip()[:32] or "user_preference"
+        title = str(tool_input.get("title") or "")[:128]
+        if contains_sensitive_memory(f"{title}\n{content}"):
+            return ToolResult(
+                tool_name=self.name,
+                status="error",
+                error_code="PERSONAL_MEMORY_SENSITIVE_CONTENT",
+                error_message_safe="敏感信息不能保存为长期记忆",
+            )
+        if is_company_fact_memory(memory_type) and "ai_assistant:admin" not in context.permissions:
+            return ToolResult(
+                tool_name=self.name,
+                status="error",
+                error_code="PERSONAL_MEMORY_COMPANY_FACT_ADMIN_REQUIRED",
+                error_message_safe="公司事实记忆需要管理员确认",
+            )
         priority = str(tool_input.get("priority") or "medium").strip().lower()
         if priority not in {"high", "medium", "low"}:
             priority = "medium"
         record = UserMemory(
             sso_user_id=context.user_id,
             memory_type=memory_type,
-            title=str(tool_input.get("title") or "")[:128],
+            title=title,
             content=content[:1000],
             priority=priority,
             tags_json=[

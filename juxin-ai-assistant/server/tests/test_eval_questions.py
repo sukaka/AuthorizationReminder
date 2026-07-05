@@ -19,6 +19,8 @@ def test_eval_questions_cover_learning_loop_regressions() -> None:
         "word-export-history",
         "latest-cve",
         "web-capture-official",
+        "codex-prompt-generation",
+        "ui-design-suggestion",
     }.issubset(ids)
     for item in questions:
         assert item["question"].strip()
@@ -34,3 +36,7 @@ def test_learning_eval_runner_checks_context_readiness() -> None:
     assert "latest-cve" in ids
     latest = next(item for item in report["results"] if item["id"] == "latest-cve")
     assert latest["requires_web_search"] is True
+    codex = next(item for item in report["results"] if item["id"] == "codex-prompt-generation")
+    assert codex["task_type"] == "codex_prompt"
+    ui = next(item for item in report["results"] if item["id"] == "ui-design-suggestion")
+    assert ui["task_type"] == "ui_design"

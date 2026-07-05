@@ -113,6 +113,16 @@ def scenario_for_question(question_id: str) -> LearningEvalScenario:
             experiences=("网页采集资料不能直接进入公司知识库；必须用户确认，再提交管理员审核后才可转为 official_knowledge。",),
             required_snippets=("不能直接", "用户确认", "管理员审核", "official_knowledge"),
         ),
+        "codex-prompt-generation": LearningEvalScenario(
+            mode="normal",
+            memories=("Codex 提示词生成要写清角色、目标、步骤、验收标准和禁止事项。",),
+            required_snippets=("codex_prompt", "Codex 提示词", "步骤", "验收标准"),
+        ),
+        "ui-design-suggestion": LearningEvalScenario(
+            mode="normal",
+            memories=("UI 设计建议要先说明交互问题，再给私人助理化的可用性改进。",),
+            required_snippets=("ui_design", "交互", "私人助理", "可用性"),
+        ),
     }
     return scenarios.get(question_id, LearningEvalScenario(mode="normal"))
 
@@ -146,6 +156,7 @@ def run_learning_eval(path: Path = DEFAULT_EVAL_PATH) -> dict[str, Any]:
             require_knowledge_evidence=bool(task["require_knowledge_evidence"]),
         )
         context_text = "\n".join(message.content for message in messages)
+        context_text += f"\ntask_type={task['task_type']}\nmode={task['mode']}"
         if scenario.require_web_search and web_detector.should_search(question):
             context_text += "\n联网检索\n日期\n来源\n不得编造"
         missing = [

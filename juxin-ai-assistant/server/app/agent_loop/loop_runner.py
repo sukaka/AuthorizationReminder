@@ -170,7 +170,10 @@ class LoopRunner:
         stmt = select(TemplateLibrary).where(
             TemplateLibrary.status == "active",
             or_(
-                TemplateLibrary.user_id == sso_user_id,
+                (
+                    (TemplateLibrary.user_id == sso_user_id)
+                    & (TemplateLibrary.scope == "personal")
+                ),
                 (
                     (TemplateLibrary.scope == "company")
                     & (TemplateLibrary.review_status == "official")

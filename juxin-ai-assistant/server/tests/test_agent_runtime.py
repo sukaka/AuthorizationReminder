@@ -1146,6 +1146,40 @@ def test_personal_memory_tool_saves_and_lists_user_preferences(
     ]
 
 
+def test_personal_memory_tool_blocks_sensitive_and_non_admin_company_fact(
+    generation_db,
+) -> None:
+    from app.agent_runtime.tools import PersonalMemoryTool
+    from app.models import UserMemory
+
+    registry = ToolRegistry()
+    registry.register(PersonalMemoryTool())
+
+    sensitive = registry.execute(
+        "personal_memory",
+        {"action": "save", "content": "记住 API Key 是 sk-test-secret", "priority": "high"},
+        ToolContext(user_id="user-1", db=generation_db),
+    )
+    denied_fact = registry.execute(
+        "personal_memory",
+        {"action": "save", "content": "WDSP 是公司正式事实。", "memory_type": "company_fact", "priority": "high"},
+        ToolContext(user_id="user-1", db=generation_db),
+    )
+    admin_fact = registry.execute(
+        "personal_memory",
+        {"action": "save", "content": "公司事实应以正式知识库为准。", "memory_type": "company_fact", "priority": "high"},
+        ToolContext(user_id="admin-1", db=generation_db, permissions={"ai_assistant:admin"}),
+    )
+
+    assert sensitive.status == "error"
+    assert sensitive.error_code == "PERSONAL_MEMORY_SENSITIVE_CONTENT"
+    assert denied_fact.status == "error"
+    assert denied_fact.error_code == "PERSONAL_MEMORY_COMPANY_FACT_ADMIN_REQUIRED"
+    assert admin_fact.status == "success"
+    assert admin_fact.payload["memory_type"] == "company_fact"
+    assert generation_db.query(UserMemory).count() == 1
+
+
 def test_learning_library_tool_saves_experience_template_and_failure_case(
     generation_db,
 ) -> None:
@@ -1253,6 +1287,15 @@ def test_loop_runner_related_templates_use_personal_and_official_company_only(
                 status="active",
             ),
             TemplateLibrary(
+                user_id="user-1",
+                template_name="本人待审公司投标模板",
+                task_type="bid_material",
+                template_content="本人待审公司模板内容。",
+                scope="company",
+                review_status="pending",
+                status="active",
+            ),
+            TemplateLibrary(
                 user_id="user-2",
                 template_name="他人个人投标模板",
                 task_type="bid_material",
@@ -1288,6 +1331,7 @@ def test_loop_runner_related_templates_use_personal_and_official_company_only(
     assert "个人投标模板" in system_prompt
     assert "公司投标模板" in system_prompt
     assert "待审投标模板" not in system_prompt
+    assert "本人待审公司投标模板" not in system_prompt
     assert "他人个人投标模板" not in system_prompt
     assert "停用公司投标模板" not in system_prompt
     assert "模板仅作结构/措辞参考，不得作为正式知识事实依据。" in system_prompt

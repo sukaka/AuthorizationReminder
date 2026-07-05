@@ -31,6 +31,14 @@ def analyze_task_mode(question: str, mode: str) -> dict[str, object]:
         task_type = "word_export"
     elif SearchIntentDetector().should_search(question):
         task_type = "web_search"
+    elif any(keyword in question.lower() for keyword in ("codex", "提示词", "prompt")) and any(
+        keyword in question for keyword in ("代码", "审查", "开发", "任务", "步骤", "Agent", "智能体")
+    ):
+        task_type = "codex_prompt"
+    elif any(keyword in question.upper() for keyword in ("UI", "UX")) or any(
+        keyword in question for keyword in ("界面", "页面", "交互", "视觉", "布局", "窗口", "按钮")
+    ):
+        task_type = "ui_design"
     elif normalized == "knowledge":
         task_type = "knowledge_qa"
     elif normalized == "sales":

@@ -14,6 +14,7 @@ from .models import (
     TemplateLibrary,
     UserMemory,
 )
+from .learning_safety import contains_sensitive_memory, is_company_fact_memory
 from .schemas import (
     ExperienceCreateIn,
     ExperienceListOut,
@@ -187,6 +188,23 @@ def _memory_priority_order():
     )
 
 
+def _is_admin(session_payload: SessionPayload) -> bool:
+    return session_payload.user.role.strip().lower() == "admin"
+
+
+def _ensure_memory_can_be_saved(
+    *,
+    session_payload: SessionPayload,
+    memory_type: str,
+    title: str = "",
+    content: str = "",
+) -> None:
+    if contains_sensitive_memory(f"{title}\n{content}"):
+        raise HTTPException(status_code=400, detail="MEMORY_SENSITIVE_CONTENT_NOT_ALLOWED")
+    if is_company_fact_memory(memory_type) and not _is_admin(session_payload):
+        raise HTTPException(status_code=403, detail="COMPANY_FACT_MEMORY_REQUIRES_ADMIN")
+
+
 @router.get("/memories", response_model=MemoryListOut)
 async def list_memories(
     request: Request,
@@ -225,6 +243,12 @@ async def create_memory(
     db: Annotated[Session, Depends(get_db)],
 ) -> MemoryOut:
     await _require_use(request, session_payload, current_settings)
+    _ensure_memory_can_be_saved(
+        session_payload=session_payload,
+        memory_type=body.memory_type,
+        title=body.title,
+        content=body.content,
+    )
     row = UserMemory(
         sso_user_id=str(session_payload.user.id),
         memory_type=body.memory_type,
@@ -262,6 +286,15 @@ async def patch_memory(
     if row is None:
         raise HTTPException(status_code=404, detail="MEMORY_NOT_FOUND")
     patch = body.model_dump(exclude_unset=True)
+    next_memory_type = str(patch.get("memory_type", row.memory_type))
+    next_title = str(patch.get("title", row.title))
+    next_content = str(patch.get("content", row.content))
+    _ensure_memory_can_be_saved(
+        session_payload=session_payload,
+        memory_type=next_memory_type,
+        title=next_title,
+        content=next_content,
+    )
     if "tags" in patch:
         row.tags_json = patch.pop("tags")
     for key, value in patch.items():

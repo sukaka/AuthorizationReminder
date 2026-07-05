@@ -48,6 +48,47 @@ def test_user_memory_center_crud_and_owner_isolation(client_for_user, generation
     assert generation_db.scalar(select(UserMemory).where(UserMemory.uuid == body["uuid"])).status == "deleted"
 
 
+def test_memory_rejects_sensitive_content_and_company_fact_requires_admin(client_for_user):
+    owner = client_for_user("u1")
+    admin = client_for_user("admin", role="admin")
+
+    sensitive = owner.post(
+        "/api/learning/memories",
+        json={
+            "memory_type": "user_preference",
+            "title": "模型密钥",
+            "content": "记住我的 API Key 是 sk-test-secret",
+            "priority": "high",
+        },
+    )
+    assert sensitive.status_code == 400
+    assert sensitive.json()["detail"] == "MEMORY_SENSITIVE_CONTENT_NOT_ALLOWED"
+
+    denied = owner.post(
+        "/api/learning/memories",
+        json={
+            "memory_type": "company_fact",
+            "title": "公司产品事实",
+            "content": "WDSP 是正式产品资料。",
+            "priority": "high",
+        },
+    )
+    assert denied.status_code == 403
+    assert denied.json()["detail"] == "COMPANY_FACT_MEMORY_REQUIRES_ADMIN"
+
+    allowed = admin.post(
+        "/api/learning/memories",
+        json={
+            "memory_type": "company_fact",
+            "title": "公司产品事实",
+            "content": "正式产品事实应优先来自公司知识库。",
+            "priority": "high",
+        },
+    )
+    assert allowed.status_code == 201
+    assert allowed.json()["memory_type"] == "company_fact"
+
+
 def test_learning_libraries_and_feedback_are_user_scoped(client_for_user):
     owner = client_for_user("u1")
     other = client_for_user("u2")

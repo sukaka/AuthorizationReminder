@@ -41,6 +41,16 @@
       "id": "web-capture-official",
       "question": "用户抓取网页后能否直接进入公司知识库？",
       "expected_focus": ["不能直接进入", "用户确认", "管理员审核", "official_knowledge"]
+    },
+    {
+      "id": "codex-prompt-generation",
+      "question": "怎么写一个给 Codex 用的代码审查提示词？",
+      "expected_focus": ["codex_prompt", "步骤", "代码审查", "验收标准"]
+    },
+    {
+      "id": "ui-design-suggestion",
+      "question": "这个聊天窗口交互怎么改得更像私人助理？",
+      "expected_focus": ["ui_design", "交互", "私人助理", "可用性"]
     }
   ]
 }
