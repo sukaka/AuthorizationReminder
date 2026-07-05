@@ -7,10 +7,11 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .crypto import ContentCipher, EncryptedPayload
+from .config import get_settings
 from .document_templates.base import DocumentRenderPayload
 from .document_templates.registry import get_document_template
 from .export_file_manager import ExportFileManager
-from .models import ChatMessage, ChatMessageSource, ChatSession, ExportRecord
+from .models import ChatMessage, ChatMessageSource, ChatSession, ExportRecord, KnowledgeChunk
 from .reference_matching import source_is_mentioned
 from .schemas import ExportContentWordIn, ExportWordIn, ExportWordOut
 
@@ -284,7 +285,7 @@ def _build_export_content(
         output = _compose_messages_markdown(messages, cipher)
         if use_formal_template or body.format_before_export:
             output = _deterministic_formal_document(output)
-    output = _append_reference_sources(db, output, messages)
+    output = _append_reference_sources(db, output, messages, cipher)
     title = "聊天正式文档" if body.export_type == "formal_document" else f"AI 对话导出-{session.title}"
     return ChatExportContent(
         title=title[:80] or "AI 对话导出",
@@ -304,8 +305,8 @@ def _compose_messages_markdown(messages: list[ChatMessage], cipher: ContentCiphe
     return "\n\n".join(parts).strip() or "暂无"
 
 
-def _append_reference_sources(db: Session, output: str, messages: list[ChatMessage]) -> str:
-    source_markdown = _reference_sources_markdown(db, messages, output)
+def _append_reference_sources(db: Session, output: str, messages: list[ChatMessage], cipher: ContentCipher) -> str:
+    source_markdown = _reference_sources_markdown(db, messages, output, cipher=cipher)
     if not source_markdown:
         return output
     return f"{output.rstrip()}\n\n{source_markdown}".strip()
@@ -315,6 +316,8 @@ def _reference_sources_markdown(
     db: Session,
     messages: list[ChatMessage],
     output: str | None = None,
+    *,
+    cipher: ContentCipher | None = None,
 ) -> str:
     message_ids = [message.id for message in messages if message.role == "assistant"]
     if not message_ids:
@@ -326,13 +329,16 @@ def _reference_sources_markdown(
     ))
     if not sources:
         return ""
+    kept_source_keys = _verified_reference_keys(db, sources, output, cipher=cipher)
     lines: list[str] = ["# 参考来源"]
     seen: set[tuple[str, str, int | None, str]] = set()
     has_personal_reference = False
     has_session_attachment = False
     source_number = 1
     for source in sources:
-        if not _source_is_mentioned(source, output):
+        if kept_source_keys is not None and _source_key(source) not in kept_source_keys:
+            continue
+        if kept_source_keys is None and not _source_is_mentioned(source, output):
             continue
         key = (
             source.source_type,
@@ -355,6 +361,125 @@ def _reference_sources_markdown(
     if source_number == 1:
         return ""
     return "\n".join(lines)
+
+
+def _verified_reference_keys(
+    db: Session,
+    sources: list[ChatMessageSource],
+    output: str | None,
+    *,
+    cipher: ContentCipher | None,
+) -> set[tuple[str, str, str]] | None:
+    if output is None:
+        return None
+    source_payloads = _source_payloads_for_verifier(db, sources, cipher=cipher)
+    files_with_evidence = {
+        str(source.get("file_name") or "")
+        for source in source_payloads
+        if source.get("chunk_text")
+    }
+    verified_sources = [
+        source
+        for source in source_payloads
+        if _word_export_source_is_used(
+            source,
+            output,
+            require_evidence=str(source.get("file_name") or "") in files_with_evidence,
+        )
+    ]
+    return {
+        (
+            str(source.get("source_uuid") or ""),
+            str(source.get("chunk_id") or ""),
+            str(source.get("file_name") or ""),
+        )
+        for source in verified_sources
+    }
+
+
+def _source_payloads_for_verifier(
+    db: Session,
+    sources: list[ChatMessageSource],
+    *,
+    cipher: ContentCipher | None,
+) -> list[dict[str, object]]:
+    chunk_ids = [source.chunk_id for source in sources if source.chunk_id]
+    chunk_text_by_id: dict[str, str] = {}
+    if chunk_ids:
+        content_cipher = cipher or ContentCipher(get_settings().content_encryption_key)
+        chunks = db.scalars(select(KnowledgeChunk).where(KnowledgeChunk.chunk_id.in_(chunk_ids)))
+        for chunk in chunks:
+            try:
+                payload = content_cipher.decrypt_json(
+                    EncryptedPayload(
+                        ciphertext=chunk.chunk_text_ciphertext,
+                        nonce=chunk.chunk_text_nonce,
+                    ),
+                    chunk.chunk_id.encode(),
+                )
+            except Exception:
+                continue
+            chunk_text_by_id[chunk.chunk_id] = str(payload.get("text", ""))
+    return [
+        {
+            "source_type": source.source_type,
+            "source_uuid": source.source_uuid,
+            "file_name": source.file_name,
+            "title": source.title,
+            "chunk_id": source.chunk_id,
+            "page_number": source.page_number,
+            "section_title": source.section_title,
+            "chunk_index": source.chunk_index,
+            "score": source.score,
+            "chunk_text": chunk_text_by_id.get(source.chunk_id, ""),
+        }
+        for source in sources
+    ]
+
+
+def _source_key(source: ChatMessageSource) -> tuple[str, str, str]:
+    return source.source_uuid, source.chunk_id, source.file_name
+
+
+def _word_export_source_is_used(source: dict[str, object], output: str, *, require_evidence: bool = False) -> bool:
+    chunk_text = str(source.get("chunk_text") or "")
+    if chunk_text:
+        return _source_evidence_is_used(source, output)
+    if require_evidence:
+        return False
+    return source_is_mentioned(_DictSource(source), output)
+
+
+def _source_evidence_is_used(source: dict[str, object], output: str) -> bool:
+    normalized_output = _normalize_evidence_text(output)
+    section_title = _normalize_evidence_text(str(source.get("section_title") or ""))
+    if section_title and section_title in normalized_output:
+        return True
+    chunk_text = _normalize_evidence_text(str(source.get("chunk_text") or ""))
+    return any(phrase in normalized_output for phrase in _evidence_phrases(chunk_text))
+
+
+def _normalize_evidence_text(value: str | None) -> str:
+    if not value:
+        return ""
+    return "".join(char for char in value if char.isalnum() or "\u4e00" <= char <= "\u9fff")
+
+
+def _evidence_phrases(value: str) -> list[str]:
+    if len(value) < 4:
+        return [value] if value else []
+    step = 4
+    return [
+        value[index : index + step]
+        for index in range(0, max(0, len(value) - step + 1))
+        if len(value[index : index + step]) == step
+    ][:80]
+
+
+class _DictSource:
+    def __init__(self, source: dict[str, object]) -> None:
+        self.file_name = str(source.get("file_name") or "")
+        self.title = str(source.get("title") or "")
 
 
 def _source_is_mentioned(source: ChatMessageSource, output: str | None) -> bool:

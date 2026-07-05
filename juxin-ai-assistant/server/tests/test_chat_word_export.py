@@ -323,6 +323,44 @@ def test_reference_sources_markdown_drops_sources_only_mentioned_as_missing_evid
     assert markdown == ""
 
 
+def test_reference_sources_markdown_drops_file_mention_without_chunk_evidence(
+    generation_db,
+):
+    from app.config import get_settings
+    from app.chat_word_export import _reference_sources_markdown
+    from app.crypto import ContentCipher
+    from app.models import ChatMessage, KnowledgeChunk
+
+    _seed_chat(generation_db)
+    assistant_message = generation_db.query(ChatMessage).filter_by(
+        uuid="chat-assistant-message",
+    ).one()
+    cipher = ContentCipher(get_settings().content_encryption_key)
+    payload = cipher.encrypt_json(
+        {"text": "部署方式要求先完成资产梳理、网络连通性确认和安全策略初始化。"},
+        b"official-chunk-001",
+    )
+    generation_db.add(KnowledgeChunk(
+        file_id=1,
+        file_name="聚信产品白皮书.pdf",
+        chunk_id="official-chunk-001",
+        chunk_text_ciphertext=payload.ciphertext,
+        chunk_text_nonce=payload.nonce,
+        chunk_index=0,
+        section_title="部署方式",
+        status="READY",
+    ))
+    generation_db.commit()
+
+    markdown = _reference_sources_markdown(
+        generation_db,
+        [assistant_message],
+        "我参考《聚信产品白皮书.pdf》生成如下建议：请先组织项目启动会。",
+    )
+
+    assert markdown == ""
+
+
 def test_formal_document_word_export_respects_message_id_scope(
     client_for_user,
     generation_db,

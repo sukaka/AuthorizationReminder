@@ -168,18 +168,18 @@
 - [x] 写失败测试：回答中使用了资料片段时，保留文件名、章节/页码/片段位置。
 - [x] 实现 `Verifier.verify_references(answer, candidate_sources)`。
 - [x] 跑测试：`python -m pytest tests/test_agent_verifier.py -q`，结果 `4 passed`。
-- [ ] 需求审查：确认聊天展示和 Word 导出共用同一套实际引用结果。
-- [ ] 代码审查：确认过滤逻辑不会误删当前附件真实引用。
+- [x] 需求审查：确认聊天展示和 Word 导出均按“实际使用片段/章节”过滤参考来源；只提文件名但没有使用片段时不列入参考来源。
+- [x] 代码审查：补充当前附件/编号文件/缺少依据/Word 导出引用回归，确认不会误删真实章节引用。
 
 **子代理任务 C2：文档结构自检**
 
 - [x] 写失败测试：安全运维报告缺少“待确认事项 / 人工复核事项”时标记为需补充。
 - [x] 写失败测试：输出包含危险绝对承诺时标记为风险提示。
 - [x] 实现 `Verifier.verify_document_structure(answer, task_type)`。
-- [ ] 将自检结果写入 TaskState，但不强行改写用户答案。
+- [x] 将自检结果写入 TaskState，但不强行改写用户答案；`complete_chat_message()` 完成后记录 reference/document 自检摘要。
 - [x] 跑测试：`python -m pytest tests/test_agent_verifier.py -q`，结果 `4 passed`。
-- [ ] 需求审查：确认普通用户看到的是“建议复核”，不是技术错误堆栈。
-- [ ] 代码审查：确认规则可维护，不写死大量不可配置文本。
+- [x] 需求审查：确认普通用户看到的是“建议复核”，不是技术错误堆栈。
+- [x] 代码审查：确认规则集中在 `Verifier` 与引用过滤辅助函数，测试覆盖绝对承诺、缺少人工复核项和假引用过滤。
 
 **验收标准：**
 
@@ -248,10 +248,10 @@
 
 **子代理任务 E2：前端时间线**
 
-- [x] 写组件测试：任务阶段按顺序展示，失败阶段显示“可重试/继续普通回答”。
-- [x] 实现轻量时间线，不遮挡聊天内容和输入框。
-- [x] 用户确认后才提供“保存到我的资料 / 申请加入公司知识库”。
-- [x] 跑测试：`npm test -- --run tests/chat-page.test.tsx -t "shows user-facing task progress"`，结果 `1 passed`；`npm run typecheck` 通过。
+- [x] 写组件测试：`tests/task-progress-timeline.test.tsx` 覆盖任务阶段顺序、失败阶段“可重试/继续普通回答”、保存/入库按钮必须用户点击才触发。
+- [x] 实现轻量时间线：新增 `src/components/TaskProgressTimeline.tsx`，`ChatPage` 只接入组件，不新增遮挡输入框的浮层。
+- [x] 用户确认后才提供“保存到我的资料 / 申请加入公司知识库”：组件仅在传入回调时展示按钮，默认不会自动保存或申请入库。
+- [x] 跑测试：`npm test -- --run tests/task-progress-timeline.test.tsx tests/chat-page.test.tsx -t "TaskProgressTimeline|shows user-facing task progress"`，结果 `4 passed, 33 skipped`；`npm run typecheck` 通过。
 - [x] 需求审查：确认用户只看到办公语言，未在聊天进度中展示 TaskState / Tool Call 等技术词。
 - [x] 代码审查：通过 `npm run typecheck` 和聊天进度测试；任务进度使用现有轻量状态条，不新增遮挡输入框的浮层。
 

@@ -45,6 +45,7 @@ import {
   createLearningMemory,
   createLearningTemplate,
 } from '../api/client';
+import { TaskProgressTimeline } from '../components/TaskProgressTimeline';
 import { generateLocalModel } from '../local/modelStream';
 import type { ModelProfile } from '../types/tauri';
 
@@ -1710,25 +1711,14 @@ export function ChatPage() {
           </header>
 
           {taskProgress ? (
-            <section className="chat-task-progress" aria-label="任务进度" role="status">
-              <div>
-                <span>任务进度</span>
-                <strong>{taskProgress.label || '正在处理'}</strong>
-                {taskProgress.next_action ? <p>{taskProgress.next_action}</p> : null}
-              </div>
-              {taskProgress.stage_history.length ? (
-                <ol>
-                  {taskProgress.stage_history.map((item, index) => (
-                    <li
-                      className={item.stage === taskProgress.stage ? 'is-active' : ''}
-                      key={`${item.stage || item.label || 'stage'}-${index}`}
-                    >
-                      {item.label || item.next_action || '正在处理'}
-                    </li>
-                  ))}
-                </ol>
-              ) : null}
-            </section>
+            <TaskProgressTimeline
+              stage={taskProgress.stage}
+              label={taskProgress.label}
+              nextAction={taskProgress.next_action}
+              stageHistory={taskProgress.stage_history}
+              selectedSources={taskProgress.selected_sources}
+              toolCalls={taskProgress.tool_calls}
+            />
           ) : null}
 
           <div className="chat-content-grid">
