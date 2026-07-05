@@ -419,10 +419,25 @@ function chunkReferenceTitle(chunk: KnowledgeFilePreviewPayload['chunks'][number
   return location.length ? location.join(' · ') : '引用片段';
 }
 
+function modelErrorMessage(raw: string): string {
+  if (raw.includes('MODEL_TIMEOUT')) {
+    return '长文档生成时间较长，当前模型连接已超时；已保留已生成内容。可以重新发送“从这里继续”，或在设置里把生成超时时间调高后重试。';
+  }
+  if (raw.includes('MODEL_OUTPUT_TRUNCATED')) {
+    return '模型连续达到输出长度上限，已保留已生成内容；请提高最大输出长度或缩短输入后重试。';
+  }
+  return '';
+}
+
 function apiErrorDetail(error: unknown): string {
-  if (!(error instanceof ApiError)) return '';
-  const payload = error.payload as { detail?: unknown } | undefined;
-  return typeof payload?.detail === 'string' ? payload.detail : '';
+  if (error instanceof ApiError) {
+    const payload = error.payload as { detail?: unknown } | undefined;
+    if (typeof payload?.detail === 'string') return modelErrorMessage(payload.detail) || payload.detail;
+    return modelErrorMessage(error.message);
+  }
+  if (error instanceof Error) return modelErrorMessage(error.message);
+  if (typeof error === 'string') return modelErrorMessage(error);
+  return '';
 }
 
 function referenceScopeIncludes(scope: ReferenceScope, sourceKind: EnabledReferenceFile['sourceKind']): boolean {
@@ -1028,7 +1043,7 @@ export function ChatPage() {
       if (detail.includes('已删除')) setActiveSessionStatus('deleted');
       setStatus(detail || '内容生成失败，请稍后重试');
       setTaskProgress((current) => current
-        ? taskProgressWithStage(current, 'failed', '生成遇到问题', '请稍后重试或调整问题')
+        ? taskProgressWithStage(current, 'failed', '生成遇到问题', detail || '请稍后重试或调整问题')
         : current);
     }
   };

@@ -14,6 +14,7 @@ const END_OF_OUTPUT_INSTRUCTION: &str =
     "完整回答结束时必须在最后输出 <END_OF_OUTPUT>，不要解释这个标记。";
 const CONTINUE_AFTER_TRUNCATION_PROMPT: &str =
     "上一次输出因为长度限制被截断，请从被截断处继续，不要重复前文。";
+const MIN_STREAMING_IDLE_TIMEOUT_SECONDS: u64 = 300;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -294,9 +295,11 @@ pub async fn generate(
     } = request;
     let max_output_tokens = max_output_tokens.clamp(1, 200_000);
     let max_auto_continues = max_auto_continues.min(10);
+    let idle_timeout_seconds = streaming_idle_timeout_seconds(timeout_seconds);
     let client = reqwest::Client::builder()
         .redirect(Policy::none())
-        .timeout(Duration::from_secs(timeout_seconds))
+        .connect_timeout(Duration::from_secs(timeout_seconds.clamp(5, 30)))
+        .read_timeout(Duration::from_secs(idle_timeout_seconds))
         .build()
         .map_err(|_| ModelClientError::Connection)?;
 
@@ -358,6 +361,10 @@ pub async fn generate(
             }
         }
     }
+}
+
+fn streaming_idle_timeout_seconds(timeout_seconds: u64) -> u64 {
+    timeout_seconds.max(MIN_STREAMING_IDLE_TIMEOUT_SECONDS)
 }
 
 async fn generate_stream_attempt(
@@ -538,9 +545,9 @@ mod tests {
     use super::{
         append_continuation_messages, chat_completion_body, continuation_decision, endpoint_url,
         is_truncation_finish_reason, parse_sse_finish_reason, parse_sse_line, strip_end_marker,
-        validate_base_url, with_end_marker_instruction, ChatMessage, ContinuationDecision,
-        ModelClientError, CONTINUE_AFTER_TRUNCATION_PROMPT, END_OF_OUTPUT_INSTRUCTION,
-        END_OF_OUTPUT_MARKER,
+        streaming_idle_timeout_seconds, validate_base_url, with_end_marker_instruction,
+        ChatMessage, ContinuationDecision, ModelClientError, CONTINUE_AFTER_TRUNCATION_PROMPT,
+        END_OF_OUTPUT_INSTRUCTION, END_OF_OUTPUT_MARKER,
     };
 
     #[test]
@@ -636,6 +643,13 @@ mod tests {
 
         assert_eq!(body["max_tokens"], 12_345);
         assert_eq!(body["stream"], true);
+    }
+
+    #[test]
+    fn streaming_generation_uses_idle_timeout_instead_of_short_total_timeout() {
+        assert_eq!(streaming_idle_timeout_seconds(60), 300);
+        assert_eq!(streaming_idle_timeout_seconds(5), 300);
+        assert_eq!(streaming_idle_timeout_seconds(600), 600);
     }
 
     #[test]

@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, expect, it, vi } from 'vitest';
 
@@ -47,4 +47,27 @@ it('tests and deletes a profile without exposing its secret', async () => {
 
   await userEvent.click(screen.getByRole('button', { name: '删除' }));
   expect(invokeMock).toHaveBeenCalledWith('model_profile_delete', { profileId: 'profile-1' });
+});
+
+it('saves new profiles with a long-document friendly timeout by default', async () => {
+  render(<ModelProfilesPage />);
+
+  await screen.findByText('密钥已配置');
+  expect(screen.getByLabelText('生成超时时间（秒）')).toHaveValue(300);
+
+  await userEvent.type(screen.getByLabelText('名称'), '长文档模型');
+  await userEvent.type(screen.getByLabelText('服务地址'), 'https://model.example/v1');
+  await userEvent.type(screen.getByLabelText('模型名称'), 'long-doc-model');
+  await userEvent.type(screen.getByLabelText('API Key'), 'sk-test');
+  await userEvent.click(screen.getByRole('button', { name: '保存设置' }));
+
+  await waitFor(() => expect(invokeMock).toHaveBeenCalledWith(
+    'model_profile_upsert',
+    {
+      input: expect.objectContaining({
+        displayName: '长文档模型',
+        timeoutSeconds: 300,
+      }),
+    },
+  ));
 });

@@ -10,7 +10,7 @@ const emptyProfile = {
   temperature: 0.3,
   maxOutputTokens: 8192,
   maxAutoContinues: 3,
-  timeoutSeconds: 60,
+  timeoutSeconds: 300,
   isDefault: false,
   apiKey: '',
 };
@@ -95,6 +95,7 @@ export function ModelProfilesPage() {
           <label>模型名称<input value={draft.modelId} onChange={(event) => setDraft({ ...draft, modelId: event.target.value })} /></label>
           <label>最大输出长度<input min={1} max={200000} type="number" value={draft.maxOutputTokens} onChange={(event) => setDraft({ ...draft, maxOutputTokens: Number(event.target.value) })} /></label>
           <label>自动续写次数<input min={0} max={10} type="number" value={draft.maxAutoContinues} onChange={(event) => setDraft({ ...draft, maxAutoContinues: Number(event.target.value) })} /></label>
+          <label>生成超时时间（秒）<input min={5} max={600} type="number" value={draft.timeoutSeconds} onChange={(event) => setDraft({ ...draft, timeoutSeconds: Number(event.target.value) })} /></label>
           <label>API Key<input autoComplete="new-password" type="password" value={draft.apiKey} onChange={(event) => setDraft({ ...draft, apiKey: event.target.value })} /></label>
           <button className="primary-action" onClick={save} type="button">保存设置</button>
           {message && <p>{message}</p>}

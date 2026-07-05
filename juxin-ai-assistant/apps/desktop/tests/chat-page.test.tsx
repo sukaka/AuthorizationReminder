@@ -129,6 +129,37 @@ it('sends a normal chat message, streams output, and completes it', async () => 
   ));
 });
 
+it('keeps streamed draft visible and explains model timeouts during long document generation', async () => {
+  server.use(
+    http.get('/api/conversations', () => HttpResponse.json({ items: [], total: 0 })),
+    http.post('/api/ai/chat/prepare', () => HttpResponse.json({
+      session_uuid: 'session-long-doc',
+      user_message_uuid: 'user-message-long-doc',
+      assistant_message_uuid: 'assistant-message-long-doc',
+      completion_token: 'complete-long-doc',
+      completed: false,
+      answer: '',
+      messages: [
+        { role: 'system', content: '你是聚信 AI 助手' },
+        { role: 'user', content: '生成一份很长的实施方案' },
+      ],
+      citations: [],
+    }, { status: 201 })),
+  );
+  generateLocalModelMock.mockImplementation(async (_input, onDelta) => {
+    onDelta('已生成的前半部分内容');
+    throw new Error('MODEL_TIMEOUT');
+  });
+
+  render(<ChatPage />);
+  await userEvent.type(await screen.findByLabelText('告诉我你想完成什么工作'), '生成一份很长的实施方案');
+  await userEvent.click(screen.getByRole('button', { name: '发送' }));
+
+  expect(await screen.findByText('已生成的前半部分内容')).toBeInTheDocument();
+  expect(await screen.findByText(/长文档生成时间较长/)).toBeInTheDocument();
+  expect(screen.queryByText('内容生成失败，请稍后重试')).not.toBeInTheDocument();
+});
+
 it('shows user-facing task progress while chat is generating', async () => {
   const modelResolver: {
     current?: (value: { output: string; latencyMs: number; usage: { output_tokens: number } }) => void;
