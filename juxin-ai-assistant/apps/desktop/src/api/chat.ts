@@ -206,6 +206,23 @@ export type PersonalReferenceSearchPayload = KnowledgeSearchPayload & {
   notice: string;
 };
 
+export type KnowledgeReviewLogPayload = {
+  file_uuid: string;
+  file_name: string;
+  user_id: string;
+  reviewer_id: string;
+  action: string;
+  old_status: string;
+  new_status: string;
+  comment: string;
+  created_at: string;
+};
+
+export type KnowledgeReviewHistoryPayload = {
+  items: KnowledgeReviewLogPayload[];
+  total: number;
+};
+
 export type ChatTaskStatePayload = {
   task_state_id: string;
   conversation_id: string;
@@ -721,6 +738,25 @@ export async function searchKnowledge(
   );
 }
 
+export async function askKnowledge(
+  question: string,
+  options: { mode?: ChatMode; topK?: number; includeSources?: boolean } = {},
+): Promise<KnowledgeFileActionPayload> {
+  return readJson(
+    await apiFetch('/api/knowledge/ask', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        question,
+        mode: options.mode ?? 'knowledge',
+        top_k: options.topK ?? 8,
+        include_sources: options.includeSources ?? true,
+      }),
+    }),
+    'KNOWLEDGE_ASK_FAILED',
+  );
+}
+
 export async function searchPersonalReference(
   question: string,
   options: { conversationId?: string; fileIds?: string[]; topK?: number } = {},
@@ -737,6 +773,40 @@ export async function searchPersonalReference(
       }),
     }),
     'PERSONAL_REFERENCE_SEARCH_FAILED',
+  );
+}
+
+export async function generatePersonalReference(
+  question: string,
+  options: { conversationId?: string; fileIds?: string[]; mode?: ChatMode; topK?: number } = {},
+): Promise<KnowledgeFileActionPayload> {
+  return readJson(
+    await apiFetch('/api/personal-reference/generate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        question,
+        mode: options.mode ?? 'normal',
+        top_k: options.topK ?? 8,
+        ...(options.conversationId ? { conversation_id: options.conversationId } : {}),
+        ...(options.fileIds?.length ? { file_ids: options.fileIds } : {}),
+      }),
+    }),
+    'PERSONAL_REFERENCE_GENERATE_FAILED',
+  );
+}
+
+export async function listPendingKnowledgeReviews(): Promise<KnowledgeFileListPayload> {
+  return readJson(
+    await apiFetch('/api/knowledge/reviews/pending', { cache: 'no-store' }),
+    'KNOWLEDGE_REVIEW_PENDING_FAILED',
+  );
+}
+
+export async function listKnowledgeReviewHistory(): Promise<KnowledgeReviewHistoryPayload> {
+  return readJson(
+    await apiFetch('/api/knowledge/reviews/history', { cache: 'no-store' }),
+    'KNOWLEDGE_REVIEW_HISTORY_FAILED',
   );
 }
 

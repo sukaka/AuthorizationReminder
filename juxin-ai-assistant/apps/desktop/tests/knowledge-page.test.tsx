@@ -1,0 +1,240 @@
+import { render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { HttpResponse, http } from 'msw';
+import { expect, it, vi } from 'vitest';
+
+import { KnowledgePage } from '../src/pages/KnowledgePage';
+import { server } from './setup';
+
+const adminSession = {
+  user: { id: 'admin-1', username: '管理员', role: 'admin' },
+  scope: { department: '管理部', managedDepartments: ['管理部'] },
+  apps: ['ai-assistant'],
+  local_binding_token: 'binding-token',
+};
+
+const baseFile = {
+  file_type: 'application/pdf',
+  file_size: 1024,
+  visibility: 'private',
+  created_at: '2026-07-05T01:00:00Z',
+  source_type: 'admin_upload',
+  usage_type: 'official_knowledge',
+  review_status: 'official',
+  reference_enabled: true,
+  rag_scope: 'company',
+  permission_scope: 'company',
+  category: '产品资料',
+  document_type: '产品白皮书',
+  tags: [],
+};
+
+it('shows a knowledge governance board and filters risky files without duplicate review labels', async () => {
+  server.use(
+    http.get('/api/knowledge/categories', () => HttpResponse.json({
+      items: [{
+        category_id: 'cat-1',
+        name: '产品资料',
+        parent_category_id: '',
+        parent_name: '',
+        scope: 'company',
+        sort_order: 10,
+        status: 'ACTIVE',
+        file_count: 4,
+        created_at: '2026-07-05T01:00:00Z',
+        updated_at: '2026-07-05T01:00:00Z',
+      }],
+      total: 1,
+    })),
+    http.get('/api/knowledge/document-types', () => HttpResponse.json({
+      items: [{
+        document_type_id: 'doc-1',
+        name: '产品白皮书',
+        sort_order: 10,
+        status: 'ACTIVE',
+        file_count: 4,
+        created_at: '2026-07-05T01:00:00Z',
+        updated_at: '2026-07-05T01:00:00Z',
+      }],
+      total: 1,
+    })),
+    http.get('/api/knowledge/bases', () => HttpResponse.json({
+      items: [{
+        base_id: 'base-1',
+        name: '公司资料库',
+        description: '',
+        scope: 'company',
+        owner_user_id: '',
+        department_id: '',
+        project_id: '',
+        created_by: 'admin-1',
+        created_at: '2026-07-05T01:00:00Z',
+        updated_at: '2026-07-05T01:00:00Z',
+      }],
+      total: 1,
+    })),
+    http.get('/api/knowledge/files', () => HttpResponse.json({
+      items: [
+        { ...baseFile, file_uuid: 'file-ready', file_name: '产品白皮书.pdf', status: 'READY', parse_status: 'ready', index_status: 'ready', chunk_count: 8, rag_enabled: true },
+        { ...baseFile, file_uuid: 'file-failed', file_name: '解析失败.pdf', status: 'FAILED', parse_status: 'failed', index_status: 'failed', chunk_count: 0, rag_enabled: false },
+        { ...baseFile, file_uuid: 'file-pending', file_name: '待审核方案.pdf', status: 'READY', review_status: 'pending', parse_status: 'ready', index_status: 'ready', chunk_count: 3, rag_enabled: false },
+        { ...baseFile, file_uuid: 'file-rag-off', file_name: '未启用检索.pdf', status: 'READY', parse_status: 'ready', index_status: 'ready', chunk_count: 5, rag_enabled: false },
+      ],
+      total: 4,
+    })),
+    http.get('/api/knowledge/reviews/pending', () => HttpResponse.json({ items: [], total: 0 })),
+    http.get('/api/knowledge/reviews/history', () => HttpResponse.json({
+      items: [{
+        file_uuid: 'file-pending',
+        file_name: '待审核方案.pdf',
+        user_id: 'u-1',
+        reviewer_id: 'admin-1',
+        action: 'APPROVE',
+        old_status: 'pending',
+        new_status: 'official',
+        comment: '资料有效',
+        created_at: '2026-07-05T01:10:00Z',
+      }],
+      total: 1,
+    })),
+  );
+
+  render(<KnowledgePage session={adminSession} />);
+
+  expect(await screen.findByText('资料治理看板')).toBeInTheDocument();
+  expect(screen.getByText('解析失败')).toBeInTheDocument();
+  expect(screen.getByText('未入检索')).toBeInTheDocument();
+  expect(screen.getAllByText('待审核').length).toBeGreaterThan(0);
+
+  await userEvent.click(screen.getByRole('button', { name: '只看解析失败 1' }));
+  expect(screen.getByText('解析失败.pdf')).toBeInTheDocument();
+  expect(screen.queryByText('产品白皮书.pdf')).not.toBeInTheDocument();
+
+  await userEvent.click(screen.getByRole('button', { name: '只看待审核 1' }));
+  await userEvent.click(screen.getByRole('button', { name: /审核通过 待审核方案\.pdf/ }));
+  const permissionLabels = screen.getAllByText('权限范围');
+  expect(permissionLabels).toHaveLength(1);
+
+  await userEvent.click(screen.getByRole('tab', { name: '审核与回收站' }));
+  expect(await screen.findByText('审核历史')).toBeInTheDocument();
+  expect(screen.getAllByText('待审核方案.pdf').length).toBeGreaterThan(0);
+  expect(screen.getByText('APPROVE · pending → official')).toBeInTheDocument();
+});
+
+it('generates an editable draft from personal reference search results', async () => {
+  const generateRequest = vi.fn();
+  server.use(
+    http.get('/api/knowledge/categories', () => HttpResponse.json({ items: [], total: 0 })),
+    http.get('/api/knowledge/document-types', () => HttpResponse.json({ items: [], total: 0 })),
+    http.get('/api/knowledge/files', () => HttpResponse.json({ items: [], total: 0 })),
+    http.post('/api/personal-reference/search', () => HttpResponse.json({
+      total: 1,
+      notice: '找到 1 条我的资料。',
+      sources: [{
+        source_kind: 'personal_reference',
+        file_id: 'file-personal',
+        file_name: '客户会议记录.md',
+        chunk_id: 'chunk-1',
+        page_number: null,
+        section_title: '需求',
+        chunk_index: 0,
+        score: 80,
+        snippet: '客户需要下周提交实施计划。',
+      }],
+    })),
+    http.post('/api/personal-reference/generate', async ({ request }) => {
+      generateRequest(await request.json());
+      return HttpResponse.json({
+        answer: '',
+        messages: [{ role: 'user', content: '根据我的会议记录生成实施计划' }],
+        notice: '已根据我的资料准备生成上下文。',
+        sources: [{
+          source_kind: 'personal_reference',
+          file_id: 'file-personal',
+          file_name: '客户会议记录.md',
+          chunk_id: 'chunk-1',
+          page_number: null,
+          section_title: '需求',
+          chunk_index: 0,
+          score: 80,
+          snippet: '客户需要下周提交实施计划。',
+        }],
+      }, { status: 201 });
+    }),
+  );
+
+  render(<KnowledgePage session={{ ...adminSession, user: { ...adminSession.user, role: 'employee' } }} />);
+
+  await userEvent.click(await screen.findByRole('radio', { name: '我的资料' }));
+  await userEvent.type(screen.getByRole('textbox', { name: '关键词或问题' }), '根据我的会议记录生成实施计划');
+  await userEvent.click(screen.getByRole('button', { name: '查找资料' }));
+  await userEvent.click(await screen.findByRole('button', { name: '用我的资料生成 客户会议记录.md' }));
+
+  expect(generateRequest).toHaveBeenCalledWith({
+    question: '根据我的会议记录生成实施计划',
+    mode: 'normal',
+    top_k: 8,
+    file_ids: ['file-personal'],
+  });
+  expect(await screen.findByText('我的资料生成草稿')).toBeInTheDocument();
+  expect(screen.getAllByText('已根据我的资料准备生成上下文。').length).toBeGreaterThan(0);
+});
+
+it('answers from official knowledge after search without exposing raw knowledge bodies', async () => {
+  const askRequest = vi.fn();
+  server.use(
+    http.get('/api/knowledge/categories', () => HttpResponse.json({ items: [], total: 0 })),
+    http.get('/api/knowledge/document-types', () => HttpResponse.json({ items: [], total: 0 })),
+    http.get('/api/knowledge/bases', () => HttpResponse.json({ items: [], total: 0 })),
+    http.get('/api/knowledge/files', () => HttpResponse.json({ items: [], total: 0 })),
+    http.post('/api/knowledge/search', () => HttpResponse.json({
+      total: 1,
+      sources: [{
+        source_kind: 'official_knowledge',
+        file_id: 'file-official',
+        file_name: '实施规范.docx',
+        chunk_id: 'chunk-1',
+        page_number: 2,
+        section_title: '验收',
+        chunk_index: 0,
+        score: 82,
+        snippet: '验收材料需要包含部署记录。',
+      }],
+    })),
+    http.post('/api/knowledge/ask', async ({ request }) => {
+      askRequest(await request.json());
+      return HttpResponse.json({
+        answer: '验收材料应包含部署记录、配置清单和双方确认记录。',
+        messages: [],
+        notice: '已基于正式知识库回答。',
+        sources: [{
+          source_kind: 'official_knowledge',
+          file_id: 'file-official',
+          file_name: '实施规范.docx',
+          chunk_id: 'chunk-1',
+          page_number: 2,
+          section_title: '验收',
+          chunk_index: 0,
+          score: 82,
+          snippet: '验收材料需要包含部署记录。',
+        }],
+      });
+    }),
+  );
+
+  render(<KnowledgePage session={adminSession} />);
+
+  await userEvent.type(await screen.findByRole('textbox', { name: '关键词或问题' }), '验收材料需要什么');
+  await userEvent.click(screen.getByRole('button', { name: '查找资料' }));
+  await userEvent.click(await screen.findByRole('button', { name: '用正式资料回答' }));
+
+  expect(askRequest).toHaveBeenCalledWith({
+    question: '验收材料需要什么',
+    mode: 'knowledge',
+    top_k: 8,
+    include_sources: true,
+  });
+  expect(await screen.findByText('正式资料回答')).toBeInTheDocument();
+  expect(screen.getByText('验收材料应包含部署记录、配置清单和双方确认记录。')).toBeInTheDocument();
+  expect(screen.queryByText(/raw knowledge body|private-output/i)).not.toBeInTheDocument();
+});

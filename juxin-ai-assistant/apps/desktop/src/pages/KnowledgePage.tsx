@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react';
 import { ApiError, type SessionPayload } from '../api/client';
 import {
   archiveKnowledgeFile,
+  askKnowledge,
   askKnowledgeFile,
   approveKnowledgeFileReview,
   createKnowledgeDocumentType,
@@ -14,6 +15,7 @@ import {
   disableKnowledgeFileRag,
   enableKnowledgeFileRag,
   exportKnowledgeContentWord,
+  generatePersonalReference,
   hardDeleteKnowledgeFile,
   knowledgeFileDownloadUrl,
   listKnowledgeCategories,
@@ -21,6 +23,8 @@ import {
   listKnowledgeBases,
   listKnowledgeFileTrash,
   listKnowledgeFiles,
+  listKnowledgeReviewHistory,
+  listPendingKnowledgeReviews,
   previewKnowledgeFile,
   rejectKnowledgeFileReview,
   reparseKnowledgeFile,
@@ -37,6 +41,7 @@ import {
   type KnowledgeFilePayload,
   type KnowledgeFilePreviewPayload,
   type KnowledgeFileSourcePayload,
+  type KnowledgeReviewLogPayload,
   updateKnowledgeCategory,
   updateKnowledgeDocumentType,
   updateKnowledgeFileMetadata,
@@ -55,6 +60,7 @@ type KnowledgeDictionaryDrawerMode =
   | 'editCategory'
   | 'createDocumentType'
   | 'editDocumentType';
+type KnowledgeRiskFilter = 'all' | 'parseFailed' | 'notIndexed' | 'pendingReview' | 'ragDisabled';
 type KnowledgeSearchScope = 'official' | 'personal';
 type KnowledgeBaseScope = 'company' | 'department' | 'project';
 type KnowledgeUploadPurpose =
@@ -146,6 +152,30 @@ function fileStatusLabel(file: KnowledgeFilePayload): string {
   if (file.status === 'PARSING' || file.parse_status === 'parsing') return '处理中';
   if (file.status === 'FAILED' || file.parse_status === 'failed') return '处理失败';
   return '已保存';
+}
+
+function knowledgeFileParseFailed(file: KnowledgeFilePayload): boolean {
+  return file.status === 'FAILED' || file.parse_status === 'failed';
+}
+
+function knowledgeFileNotIndexed(file: KnowledgeFilePayload): boolean {
+  return file.usage_type === 'official_knowledge'
+    && !knowledgeFileParseFailed(file)
+    && file.index_status !== 'ready';
+}
+
+function knowledgeFileRagDisabled(file: KnowledgeFilePayload): boolean {
+  return file.usage_type === 'official_knowledge'
+    && file.status === 'READY'
+    && file.rag_enabled !== true;
+}
+
+function knowledgeFileMatchesRiskFilter(file: KnowledgeFilePayload, filter: KnowledgeRiskFilter): boolean {
+  if (filter === 'parseFailed') return knowledgeFileParseFailed(file);
+  if (filter === 'notIndexed') return knowledgeFileNotIndexed(file);
+  if (filter === 'pendingReview') return file.review_status === 'pending';
+  if (filter === 'ragDisabled') return knowledgeFileRagDisabled(file);
+  return true;
 }
 
 function fileUsageLabel(file: KnowledgeFilePayload): string {
@@ -311,6 +341,7 @@ export function KnowledgePage({ session }: KnowledgePageProps) {
   } | null>(null);
   const [actionNotice, setActionNotice] = useState('');
   const [listMode, setListMode] = useState<KnowledgeListMode>('active');
+  const [riskFilter, setRiskFilter] = useState<KnowledgeRiskFilter>('all');
   const [activeKnowledgeTab, setActiveKnowledgeTab] = useState<KnowledgeTab>('library');
   const [activeDictionaryTab, setActiveDictionaryTab] = useState<KnowledgeDictionaryTab>('categories');
   const [dictionaryDrawerMode, setDictionaryDrawerMode] = useState<KnowledgeDictionaryDrawerMode | null>(null);
@@ -366,6 +397,8 @@ export function KnowledgePage({ session }: KnowledgePageProps) {
   const [searching, setSearching] = useState(false);
   const [searchNotice, setSearchNotice] = useState('');
   const [searchResults, setSearchResults] = useState<KnowledgeFileSourcePayload[]>([]);
+  const [reviewHistory, setReviewHistory] = useState<KnowledgeReviewLogPayload[]>([]);
+  const [reviewNotice, setReviewNotice] = useState('');
   const [metadataEdit, setMetadataEdit] = useState<{
     fileUuid: string;
     fileName: string;
@@ -439,14 +472,18 @@ export function KnowledgePage({ session }: KnowledgePageProps) {
   const selectedCategoryNames = selectedSecondaryCategoryName !== '全部'
     ? [selectedSecondaryCategoryName]
     : categorySelectionNames(selectedCategoryName, knowledgeCategories);
-  const displayedFiles = selectedCategoryName === '全部资料'
+  const categoryFilteredFiles = selectedCategoryName === '全部资料'
     ? files
     : files.filter((file) => selectedCategoryNames.includes(file.category || '未分类'));
+  const displayedFiles = categoryFilteredFiles.filter((file) => knowledgeFileMatchesRiskFilter(file, riskFilter));
   const categoryDirectory = primaryCategoryDirectory;
   const filesAvailableForQuestion = files.filter((file) => (
     file.rag_enabled || file.reference_enabled !== false
   )).length;
   const pendingReviewFiles = files.filter((file) => file.review_status === 'pending').length;
+  const parseFailedFiles = files.filter(knowledgeFileParseFailed).length;
+  const notIndexedFiles = files.filter(knowledgeFileNotIndexed).length;
+  const ragDisabledFiles = files.filter(knowledgeFileRagDisabled).length;
   const dictionaryDrawerTitle = dictionaryDrawerMode === 'createCategory'
     ? '新建分类'
     : dictionaryDrawerMode === 'editCategory'
@@ -459,6 +496,7 @@ export function KnowledgePage({ session }: KnowledgePageProps) {
   const openKnowledgeTab = (tab: KnowledgeTab) => {
     setActiveKnowledgeTab(tab);
     setOpenDictionaryMenuKey('');
+    setRiskFilter('all');
     if (tab !== 'review' && listMode === 'trash') {
       setListMode('active');
     }
@@ -646,6 +684,7 @@ export function KnowledgePage({ session }: KnowledgePageProps) {
       .then((payload) => {
         if (!active) return;
         setFiles(payload.items);
+        setRiskFilter('all');
       })
       .catch(() => {
         if (!active) return;
@@ -659,6 +698,29 @@ export function KnowledgePage({ session }: KnowledgePageProps) {
       active = false;
     };
   }, [listMode]);
+
+  useEffect(() => {
+    if (!isAdmin || activeKnowledgeTab !== 'review') return;
+    let active = true;
+    setReviewNotice('');
+    Promise.all([
+      listPendingKnowledgeReviews(),
+      listKnowledgeReviewHistory(),
+    ])
+      .then(([pending, history]) => {
+        if (!active) return;
+        setReviewNotice(pending.total ? `当前有 ${pending.total} 条资料待审核。` : '暂无待审核资料。');
+        setReviewHistory(history.items);
+      })
+      .catch(() => {
+        if (!active) return;
+        setReviewNotice('审核记录暂时不可用，请稍后重试。');
+        setReviewHistory([]);
+      });
+    return () => {
+      active = false;
+    };
+  }, [activeKnowledgeTab, isAdmin]);
 
   const openPreview = async (file: KnowledgeFilePayload) => {
     setActionNotice('');
@@ -906,6 +968,58 @@ export function KnowledgePage({ session }: KnowledgePageProps) {
         : '个人资料搜索暂时不可用，请稍后重试。');
     } finally {
       setSearching(false);
+    }
+  };
+
+  const answerFromOfficialKnowledge = async () => {
+    const question = searchQuery.trim();
+    if (!question) {
+      setSearchNotice('请先输入要回答的问题。');
+      return;
+    }
+    setActionNotice('');
+    setFileAction(null);
+    try {
+      const payload = await askKnowledge(question, {
+        mode: 'knowledge',
+        topK: 8,
+        includeSources: true,
+      });
+      setFileAction({
+        fileName: '正式知识库',
+        question,
+        title: '正式资料回答',
+        payload,
+      });
+      setSearchNotice(payload.notice);
+    } catch {
+      setSearchNotice('暂时无法根据正式资料回答，请稍后重试。');
+    }
+  };
+
+  const generateFromPersonalReference = async (source: KnowledgeFileSourcePayload) => {
+    const question = searchQuery.trim();
+    if (!question) {
+      setSearchNotice('请先输入要生成的内容。');
+      return;
+    }
+    setActionNotice('');
+    setFileAction(null);
+    try {
+      const payload = await generatePersonalReference(question, {
+        fileIds: source.file_id ? [source.file_id] : [],
+        mode: 'normal',
+        topK: 8,
+      });
+      setFileAction({
+        fileName: source.file_name,
+        question,
+        title: '我的资料生成草稿',
+        payload,
+      });
+      setSearchNotice(payload.notice);
+    } catch {
+      setSearchNotice('暂时无法根据我的资料生成，请稍后重试。');
     }
   };
 
@@ -1799,6 +1913,17 @@ export function KnowledgePage({ session }: KnowledgePageProps) {
         </article>
         {searchResults.length ? (
           <section className="section-block knowledge-search-results" role="region" aria-label="资料查找结果">
+            {searchScope === 'official' ? (
+              <div className="history-actions">
+                <button
+                  className="knowledge-button knowledge-button-primary"
+                  onClick={() => void answerFromOfficialKnowledge()}
+                  type="button"
+                >
+                  用正式资料回答
+                </button>
+              </div>
+            ) : null}
             <div className="history-list" role="list" aria-label="资料查找结果列表">
               {searchResults.map((source) => (
                 <article
@@ -1819,6 +1944,18 @@ export function KnowledgePage({ session }: KnowledgePageProps) {
                   </h3>
                   {sourceLocation(source) ? <p>{sourceLocation(source)}</p> : null}
                   {source.snippet ? <p>{source.snippet}</p> : null}
+                  {searchScope === 'personal' ? (
+                    <div className="history-actions">
+                      <button
+                        aria-label={`用我的资料生成 ${source.file_name}`}
+                        className="knowledge-button knowledge-button-primary"
+                        onClick={() => void generateFromPersonalReference(source)}
+                        type="button"
+                      >
+                        用我的资料生成
+                      </button>
+                    </div>
+                  ) : null}
                 </article>
               ))}
             </div>
@@ -2094,6 +2231,63 @@ export function KnowledgePage({ session }: KnowledgePageProps) {
             </div>
           </aside>
           <div className="knowledge-document-area">
+            {isAdmin ? (
+              <section className="knowledge-governance-board" aria-label="资料治理看板">
+                <div>
+                  <span className="eyebrow">治理状态</span>
+                  <h3>资料治理看板</h3>
+                  <p>优先处理解析失败、未入检索、待审核和正式资料未启用检索的问题。</p>
+                </div>
+                <div className="knowledge-governance-actions">
+                  <button
+                    aria-pressed={riskFilter === 'all'}
+                    className={riskFilter === 'all' ? 'is-active' : ''}
+                    onClick={() => setRiskFilter('all')}
+                    type="button"
+                  >
+                    全部资料 {files.length}
+                  </button>
+                  <button
+                    aria-pressed={riskFilter === 'parseFailed'}
+                    className={riskFilter === 'parseFailed' ? 'is-active' : ''}
+                    onClick={() => setRiskFilter('parseFailed')}
+                    type="button"
+                  >
+                    只看解析失败 {parseFailedFiles}
+                  </button>
+                  <button
+                    aria-pressed={riskFilter === 'notIndexed'}
+                    className={riskFilter === 'notIndexed' ? 'is-active' : ''}
+                    onClick={() => setRiskFilter('notIndexed')}
+                    type="button"
+                  >
+                    只看未入检索 {notIndexedFiles}
+                  </button>
+                  <button
+                    aria-pressed={riskFilter === 'pendingReview'}
+                    className={riskFilter === 'pendingReview' ? 'is-active' : ''}
+                    onClick={() => setRiskFilter('pendingReview')}
+                    type="button"
+                  >
+                    只看待审核 {pendingReviewFiles}
+                  </button>
+                  <button
+                    aria-pressed={riskFilter === 'ragDisabled'}
+                    className={riskFilter === 'ragDisabled' ? 'is-active' : ''}
+                    onClick={() => setRiskFilter('ragDisabled')}
+                    type="button"
+                  >
+                    只看未启用检索 {ragDisabledFiles}
+                  </button>
+                </div>
+                <dl>
+                  <div><dt>解析失败</dt><dd>{parseFailedFiles}</dd></div>
+                  <div><dt>未入检索</dt><dd>{notIndexedFiles}</dd></div>
+                  <div><dt>待审核</dt><dd>{pendingReviewFiles}</dd></div>
+                  <div><dt>检索未启用</dt><dd>{ragDisabledFiles}</dd></div>
+                </dl>
+              </section>
+            ) : null}
             {selectedCategoryName !== '全部资料' ? (
               <section className="knowledge-secondary-filter" aria-label={`${selectedCategoryName} 二级分类筛选`}>
                 <div className="knowledge-secondary-filter-heading">
@@ -2530,6 +2724,28 @@ export function KnowledgePage({ session }: KnowledgePageProps) {
                     )}
                     {sourceLocation(source) ? <p>{sourceLocation(source)}</p> : null}
                     {source.snippet ? <p>{source.snippet}</p> : null}
+                  </article>
+                ))}
+              </div>
+            ) : null}
+          </section>
+        ) : null}
+        {activeKnowledgeTab === 'review' && isAdmin ? (
+          <section className="section-block knowledge-review-history" aria-label="审核历史">
+            <div className="section-heading">
+              <div>
+                <span className="eyebrow">审核留痕</span>
+                <h3>审核历史</h3>
+                <p>{reviewNotice || '展示管理员审核动作、状态变化和备注。'}</p>
+              </div>
+            </div>
+            {reviewHistory.length ? (
+              <div className="history-list" role="list" aria-label="审核历史列表">
+                {reviewHistory.map((item) => (
+                  <article className="history-card" key={`${item.file_uuid}-${item.created_at}`} role="listitem">
+                    <h4>{item.file_name}</h4>
+                    <p>{item.action} · {item.old_status} → {item.new_status}</p>
+                    {item.comment ? <p>{item.comment}</p> : null}
                   </article>
                 ))}
               </div>

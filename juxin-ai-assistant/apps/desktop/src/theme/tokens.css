@@ -1106,6 +1106,81 @@ textarea:focus-visible {
   box-shadow: 0 8px 24px rgb(15 23 42 / 4%);
 }
 
+.knowledge-governance-board {
+  margin-bottom: 14px;
+  padding: 16px;
+  display: grid;
+  gap: 12px;
+  border: 1px solid color-mix(in srgb, var(--accent) 18%, var(--border));
+  border-radius: 18px;
+  background:
+    radial-gradient(circle at 100% 0, color-mix(in srgb, var(--accent) 10%, transparent), transparent 34%),
+    var(--surface);
+  box-shadow: 0 12px 32px rgb(15 23 42 / 5%);
+}
+
+.knowledge-governance-board h3 {
+  margin: 4px 0 6px;
+  font-size: 18px;
+  letter-spacing: -.035em;
+}
+
+.knowledge-governance-board p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.knowledge-governance-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.knowledge-governance-actions button {
+  min-height: 32px;
+  padding: 0 11px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface-elevated);
+  color: var(--text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.knowledge-governance-actions button.is-active {
+  border-color: color-mix(in srgb, var(--accent) 46%, var(--border));
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 800;
+}
+
+.knowledge-governance-board dl {
+  margin: 0;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(96px, 1fr));
+  gap: 8px;
+}
+
+.knowledge-governance-board dl div {
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--surface-elevated) 72%, transparent);
+}
+
+.knowledge-governance-board dt {
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.knowledge-governance-board dd {
+  margin: 4px 0 0;
+  font-size: 20px;
+  font-weight: 850;
+}
+
 .knowledge-secondary-filter-heading {
   margin-bottom: 10px;
   display: flex;
@@ -4532,6 +4607,39 @@ textarea:focus-visible {
   background: var(--surface-muted);
   color: var(--text-secondary);
   font-size: 12px;
+}
+
+.stats-replay-detail {
+  margin-top: 12px;
+  padding: 12px;
+  display: grid;
+  gap: 10px;
+  border: 1px solid color-mix(in srgb, var(--accent) 16%, var(--border));
+  border-radius: 12px;
+  background: var(--surface);
+}
+
+.stats-replay-detail h3 {
+  margin: 0;
+  font-size: 13px;
+}
+
+.stats-replay-detail ol {
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 7px;
+  list-style: none;
+}
+
+.stats-replay-detail ol li {
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--accent-soft) 45%, transparent);
+}
+
+.stats-replay-detail small {
+  color: var(--text-muted);
+  font-size: 11px;
 }
 
 .governance-links {

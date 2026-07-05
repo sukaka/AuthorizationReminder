@@ -136,6 +136,63 @@ it('loads task replay metadata from the governance stats page', async () => {
   expect(screen.queryByText(/company_knowledge_search|current_attachment|private-input|private-output|完整回答/i)).not.toBeInTheDocument();
 });
 
+it('expands task replay into an agent observability detail without exposing prompt bodies', async () => {
+  server.use(
+    http.get('/api/ai/admin/stats', () => HttpResponse.json({
+      total: 1,
+      completion_rate: 1,
+      failure_rate: 0,
+      by_department: {},
+      task_ranking: [],
+      daily_trend: [],
+      feedback_distribution: {},
+      tool_error_distribution: { reference_missing: 1 },
+    })),
+    http.get('/api/ai/admin/task-replays', () => HttpResponse.json({
+      total: 1,
+      items: [{
+        task_state_id: 'state-detail',
+        conversation_id: 'conversation-detail',
+        user_id: 'user-detail',
+        stage: 'completed',
+        goal: '生成实施方案',
+        source_summary: [{ source_type: 'official_knowledge', file_name: '实施规范.docx' }],
+        tool_summary: [{ tool_name: 'company_knowledge_search', status: 'success', source_count: 1 }],
+        verification_summary: {
+          status: 'warning',
+          reference: { kept_count: 1, missing_count: 1 },
+          document: { warnings: ['需人工复核交付周期'] },
+        },
+        next_action: '建议补充客户现场窗口后重新生成',
+        stage_history: [
+          { stage: 'analyzing', next_action: '识别用户目标', at: '2026-07-05T01:00:00Z' },
+          { stage: 'retrieving', next_action: '查找公司知识', at: '2026-07-05T01:00:02Z' },
+          { stage: 'quality_check', next_action: '检查引用与格式', at: '2026-07-05T01:00:04Z' },
+          { stage: 'completed', next_action: '完成', at: '2026-07-05T01:00:05Z' },
+        ],
+        created_at: '2026-07-05T01:00:00Z',
+        updated_at: '2026-07-05T01:00:05Z',
+      }],
+    })),
+  );
+
+  render(<StatsPage />);
+  await userEvent.click(screen.getByRole('button', { name: '刷新统计' }));
+  await userEvent.click(await screen.findByRole('button', { name: '查看任务回放' }));
+
+  expect(await screen.findByText('Agent 运行观测台')).toBeInTheDocument();
+  expect(screen.getByText('生成实施方案')).toBeInTheDocument();
+  expect(screen.getByText('运行时间线')).toBeInTheDocument();
+  expect(screen.getByText('识别任务')).toBeInTheDocument();
+  expect(screen.getByText('查找资料')).toBeInTheDocument();
+  expect(screen.getByText('复核结果')).toBeInTheDocument();
+  expect(screen.getByText('引用保留 1 条 · 缺失 1 条')).toBeInTheDocument();
+  expect(screen.getByText('需人工复核交付周期')).toBeInTheDocument();
+  expect(screen.getByText('下一步：建议补充客户现场窗口后重新生成')).toBeInTheDocument();
+  expect(screen.getByText('reference_missing')).toBeInTheDocument();
+  expect(screen.queryByText(/prompt|用户原文|private-input|private-output/i)).not.toBeInTheDocument();
+});
+
 it('saves task, fields, and published Prompt binding in one atomic request', async () => {
   const configurationSpy = vi.fn();
   const legacyRequestSpy = vi.fn();

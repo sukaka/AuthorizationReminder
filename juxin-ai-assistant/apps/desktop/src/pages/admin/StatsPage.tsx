@@ -76,6 +76,34 @@ function replaySourceCount(tool: Record<string, unknown>): number {
   return numberValue(tool.source_count) || numberValue(tool.count);
 }
 
+function replayStageTime(value: unknown): string {
+  if (typeof value !== 'string' || !value.trim()) return '时间未知';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+}
+
+function replayReferenceSummary(item: TaskReplayItem): string {
+  const reference = typeof item.verification_summary.reference === 'object'
+    && item.verification_summary.reference !== null
+    ? item.verification_summary.reference as Record<string, unknown>
+    : {};
+  const kept = numberValue(reference.kept_count);
+  const missing = numberValue(reference.missing_count);
+  if (!kept && !missing) return '引用检查暂无明细';
+  return `引用保留 ${kept} 条 · 缺失 ${missing} 条`;
+}
+
+function replayDocumentWarnings(item: TaskReplayItem): string[] {
+  const document = typeof item.verification_summary.document === 'object'
+    && item.verification_summary.document !== null
+    ? item.verification_summary.document as Record<string, unknown>
+    : {};
+  return Array.isArray(document.warnings)
+    ? document.warnings.map((warning) => String(warning)).filter(Boolean)
+    : [];
+}
+
 export function StatsPage({ manager = false }: { manager?: boolean }) {
   const [stats, setStats] = useState<StatsPayload | null>(null);
   const [taskReplays, setTaskReplays] = useState<TaskReplayItem[]>([]);
@@ -131,10 +159,11 @@ export function StatsPage({ manager = false }: { manager?: boolean }) {
             </section>
           ) : null}
           {!manager && (taskReplays.length || replayNotice) ? (
-            <section className="stats-replay-panel" aria-label="任务回放">
+            <section className="stats-replay-panel" aria-label="Agent 运行观测台">
               <header>
-                <h2>任务回放</h2>
-                <p>只展示阶段、工具、来源和自检摘要，不展示用户正文。</p>
+                <span className="eyebrow">任务回放</span>
+                <h2>Agent 运行观测台</h2>
+                <p>只展示 Planner 阶段、工具、来源和 Verifier 摘要，不展示用户正文。</p>
               </header>
               <RequestNotice message={replayNotice} />
               <div className="stats-replay-list">
@@ -154,6 +183,28 @@ export function StatsPage({ manager = false }: { manager?: boolean }) {
                     <p>
                       {(item.source_summary || []).slice(0, 3).map(replaySourceLabel).join('、') || '暂无来源'}
                     </p>
+                    <section className="stats-replay-detail" aria-label={`${item.task_state_id} 运行详情`}>
+                      <h3>运行时间线</h3>
+                      <ol>
+                        {(item.stage_history || []).map((stage, index) => (
+                          <li key={`${item.task_state_id}-stage-${index}`}>
+                            <strong>{labelForStage(stage.stage)}</strong>
+                            <span>{textValue(stage.next_action, '暂无动作')}</span>
+                            <small>{replayStageTime(stage.at)}</small>
+                          </li>
+                        ))}
+                      </ol>
+                      <h3>Verifier 摘要</h3>
+                      <p>{replayReferenceSummary(item)}</p>
+                      {replayDocumentWarnings(item).length ? (
+                        <ul>
+                          {replayDocumentWarnings(item).map((warning) => (
+                            <li key={warning}>{warning}</li>
+                          ))}
+                        </ul>
+                      ) : null}
+                      {item.next_action ? <p>下一步：{item.next_action}</p> : null}
+                    </section>
                   </article>
                 ))}
               </div>
