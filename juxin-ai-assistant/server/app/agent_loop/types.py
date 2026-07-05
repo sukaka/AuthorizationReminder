@@ -84,3 +84,4 @@ class LoopRunResult:
     completed_answer: str = ""
     loop_trace: list[dict[str, object]] = field(default_factory=list)
     search_log_ids: list[int] = field(default_factory=list)
+    task_state: dict[str, object] = field(default_factory=dict)

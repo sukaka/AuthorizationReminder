@@ -25,6 +25,7 @@ import {
   type ChatMode,
   type ChatSessionListKind,
   type ChatSessionPayload,
+  type ChatTaskStatePayload,
   type KnowledgeCategoryPayload,
   type KnowledgeDocumentTypePayload,
   type KnowledgeFilePreviewPayload,
@@ -82,6 +83,11 @@ type EnabledReferenceFile = {
   sourceKind: 'personal_reference' | 'session_attachment';
 };
 
+type TaskProgressView = ChatTaskStatePayload & {
+  label: string;
+  next_action: string;
+};
+
 type MemorySuggestion = {
   memoryType: string;
   title: string;
@@ -119,8 +125,43 @@ const exportTypeLabels: Record<(typeof wordExportTypes)[number], string> = {
 
 const webUrlPattern = /https?:\/\/[^\s<>'"，。；;、）)】]+/i;
 
+const fallbackTaskProgress: TaskProgressView = {
+  task_state_id: '',
+  conversation_id: '',
+  stage: '',
+  label: '',
+  goal: '',
+  selected_sources: [],
+  tool_calls: [],
+  verification_status: '',
+  next_action: '',
+  stage_history: [],
+};
+
 function extractFirstWebUrl(value: string): string {
   return webUrlPattern.exec(value)?.[0] || '';
+}
+
+function taskProgressWithStage(
+  progress: ChatTaskStatePayload | undefined,
+  stage: string,
+  label: string,
+  nextAction: string,
+): TaskProgressView {
+  const base = progress || fallbackTaskProgress;
+  const stageHistory = base.stage_history?.length
+    ? base.stage_history
+    : [];
+  const hasStage = stageHistory.some((item) => item.stage === stage);
+  return {
+    ...base,
+    stage,
+    label,
+    next_action: nextAction,
+    stage_history: hasStage
+      ? stageHistory
+      : stageHistory.concat({ stage, label, next_action: nextAction }),
+  };
 }
 
 const sensitiveMemoryPattern = /(密码|口令|验证码|api\s*key|apikey|token|secret|密钥|身份证|银行卡)/i;
@@ -535,6 +576,7 @@ export function ChatPage() {
   const [sourcePreview, setSourcePreview] = useState<SourcePreviewState>({ status: 'idle' });
   const [webCapture, setWebCapture] = useState<WebCaptureState>({ status: 'idle' });
   const [memorySuggestion, setMemorySuggestion] = useState<MemorySuggestion | null>(null);
+  const [taskProgress, setTaskProgress] = useState<TaskProgressView | null>(null);
   const messageListRef = useRef<HTMLDivElement | null>(null);
   const shouldStickToBottomRef = useRef(true);
 
@@ -863,6 +905,12 @@ export function ChatPage() {
         includePersonalReferences: referenceScope === 'with_personal' || referenceScope === 'personal_and_session',
         includeSessionAttachments: referenceScope === 'with_session' || referenceScope === 'personal_and_session',
       });
+      setTaskProgress(prepared.task_state ? taskProgressWithStage(
+        prepared.task_state,
+        prepared.completed ? 'completed' : 'generating',
+        prepared.completed ? '生成完成' : '正在生成回答',
+        prepared.completed ? '生成已完成' : '正在调用本地模型生成回答',
+      ) : null);
       setActiveSessionUuid(prepared.session_uuid);
       setActiveSessionStatus('active');
       if (prepared.completed) {
@@ -923,6 +971,9 @@ export function ChatPage() {
             break;
           }
           setStatus('正在自检并修正…');
+          setTaskProgress((current) => current
+            ? taskProgressWithStage(current, 'quality_check', '正在复核结果', '正在自检并修正')
+            : current);
           result = await generateLocalModel({
             profileId: activeProfile.id,
             messages: check.revision_messages,
@@ -955,6 +1006,9 @@ export function ChatPage() {
         usage: result.usage,
         latencyMs: result.latencyMs,
       });
+      setTaskProgress((current) => current
+        ? taskProgressWithStage(current, 'completed', '生成完成', '可以复制、保存、导出或继续追问')
+        : current);
       setMessages((current) => current.map((message) =>
         message.id === assistantId
           ? {
@@ -972,6 +1026,9 @@ export function ChatPage() {
       if (detail.includes('已归档')) setActiveSessionStatus('archived');
       if (detail.includes('已删除')) setActiveSessionStatus('deleted');
       setStatus(detail || '内容生成失败，请稍后重试');
+      setTaskProgress((current) => current
+        ? taskProgressWithStage(current, 'failed', '生成遇到问题', '请稍后重试或调整问题')
+        : current);
     }
   };
 
@@ -1271,6 +1328,7 @@ export function ChatPage() {
     setWebCapture({ status: 'idle' });
     setPendingUploadFile(null);
     setEnabledReferenceFiles([]);
+    setTaskProgress(null);
     setStatus('');
   };
 
@@ -1650,6 +1708,28 @@ export function ChatPage() {
             <h2>告诉我你想完成什么工作</h2>
             <p>我是你的私人工作助理，可以帮你写、查、整理、生成和导出工作成果。</p>
           </header>
+
+          {taskProgress ? (
+            <section className="chat-task-progress" aria-label="任务进度" role="status">
+              <div>
+                <span>任务进度</span>
+                <strong>{taskProgress.label || '正在处理'}</strong>
+                {taskProgress.next_action ? <p>{taskProgress.next_action}</p> : null}
+              </div>
+              {taskProgress.stage_history.length ? (
+                <ol>
+                  {taskProgress.stage_history.map((item, index) => (
+                    <li
+                      className={item.stage === taskProgress.stage ? 'is-active' : ''}
+                      key={`${item.stage || item.label || 'stage'}-${index}`}
+                    >
+                      {item.label || item.next_action || '正在处理'}
+                    </li>
+                  ))}
+                </ol>
+              ) : null}
+            </section>
+          ) : null}
 
           <div className="chat-content-grid">
             <div

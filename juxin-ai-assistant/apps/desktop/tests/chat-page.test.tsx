@@ -129,6 +129,59 @@ it('sends a normal chat message, streams output, and completes it', async () => 
   ));
 });
 
+it('shows user-facing task progress while chat is generating', async () => {
+  let resolveModel: ((value: { output: string; latencyMs: number; usage: { output_tokens: number } }) => void) | null = null;
+  server.use(
+    http.get('/api/conversations', () => HttpResponse.json({ items: [], total: 0 })),
+    http.post('/api/ai/chat/prepare', () => HttpResponse.json({
+      session_uuid: 'session-progress',
+      user_message_uuid: 'user-message-progress',
+      assistant_message_uuid: 'assistant-message-progress',
+      completion_token: 'complete-progress',
+      completed: false,
+      answer: '',
+      messages: [
+        { role: 'system', content: '你是聚信 AI 助手' },
+        { role: 'user', content: '写一份方案' },
+      ],
+      citations: [],
+      task_state: {
+        task_state_id: 'task-state-progress',
+        conversation_id: 'session-progress',
+        stage: 'completed',
+        label: '生成完成',
+        goal: '写一份方案',
+        selected_sources: [],
+        tool_calls: [],
+        verification_status: 'prepared',
+        next_action: '等待模型生成回答',
+        stage_history: [
+          { stage: 'analyzing', label: '正在识别任务', next_action: '正在识别任务' },
+          { stage: 'building_context', label: '正在整理依据', next_action: '正在整理依据' },
+          { stage: 'completed', label: '生成完成', next_action: '等待模型生成回答' },
+        ],
+      },
+    }, { status: 201 })),
+    http.post('/api/ai/chat/messages/assistant-message-progress/complete', () => HttpResponse.json({
+      message_uuid: 'assistant-message-progress',
+      status: 'COMPLETED',
+    })),
+  );
+  generateLocalModelMock.mockImplementation(() => new Promise((resolve) => {
+    resolveModel = resolve;
+  }));
+
+  render(<ChatPage />);
+  await userEvent.type(await screen.findByLabelText('告诉我你想完成什么工作'), '写一份方案');
+  await userEvent.click(screen.getByRole('button', { name: '发送' }));
+
+  expect((await screen.findAllByText('正在生成回答')).length).toBeGreaterThan(0);
+  expect(screen.getByText('正在识别任务')).toBeInTheDocument();
+  expect(screen.queryByText('TaskState')).not.toBeInTheDocument();
+  resolveModel?.({ output: '方案内容', latencyMs: 12, usage: { output_tokens: 8 } });
+  expect(await screen.findByText('生成完成')).toBeInTheDocument();
+});
+
 it('asks before saving explicit user memory and then stores it', async () => {
   const memoryRequest = vi.fn();
   server.use(

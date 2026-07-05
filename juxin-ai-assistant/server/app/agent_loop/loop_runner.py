@@ -215,6 +215,7 @@ class LoopRunner:
         trace: list[LoopTraceStep] = []
         task_state_store = TaskStateStore(db) if conversation_id else None
         task_state_id = ""
+        task_state_payload: dict[str, object] = {}
         if task_state_store is not None:
             task_state = task_state_store.create(
                 user_id=sso_user_id,
@@ -225,6 +226,7 @@ class LoopRunner:
                 selected_sources=[],
             )
             task_state_id = task_state.uuid
+            task_state_payload = task_state_store.public_payload(task_state)
         analysis = self.task_analyzer.analyze(question, mode)
         long_term_memories = self._related_memories(
             db,
@@ -394,6 +396,7 @@ class LoopRunner:
                     next_action="请补充资料或切换为普通聊天",
                     selected_sources=[],
                 )
+                task_state_payload = task_state_store.public_payload_by_id(task_state_id)
             trace.append(
                 LoopTraceStep(
                     state=LoopState.FINISH,
@@ -409,6 +412,7 @@ class LoopRunner:
                 completed_answer=NO_EVIDENCE_ANSWER,
                 loop_trace=self._trim_trace(trace),
                 search_log_ids=search_log_ids,
+                task_state=task_state_payload,
             )
 
         if task_state_store is not None:
@@ -465,12 +469,14 @@ class LoopRunner:
                     {"type": "personal_reference", "count": len(personal_chunks)},
                 ],
             )
+            task_state_payload = task_state_store.public_payload_by_id(task_state_id)
         return LoopRunResult(
             messages=messages,
             chunks=chunks + personal_chunks,
             personal_reference_chunks=personal_chunks,
             loop_trace=self._trim_trace(trace),
             search_log_ids=search_log_ids,
+            task_state=task_state_payload,
         )
 
     def document_generation_instructions(self) -> tuple[str, list[dict[str, object]]]:

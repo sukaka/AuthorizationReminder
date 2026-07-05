@@ -159,6 +159,7 @@ def test_chat_context_builder_injects_experiences_and_failure_cases_before_recen
     assert "商务投标先列评分点" in system_prompt
     assert "## template_library_context" in system_prompt
     assert "投标响应结构" in system_prompt
+    assert "模板仅作结构/措辞参考，不得作为正式知识事实依据。" in system_prompt
     assert "## failure_case_context" in system_prompt
     assert "防复发：只用 Toast" in system_prompt
     assert system_prompt.index("## experience_library_context") < system_prompt.index(

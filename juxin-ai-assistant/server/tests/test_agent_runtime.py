@@ -1216,6 +1216,86 @@ def test_learning_library_tool_saves_experience_template_and_failure_case(
 def test_loop_runner_related_templates_use_personal_and_official_company_only(
     generation_db,
 ) -> None:
+    import os
+
+    from app.agent_loop.loop_runner import LoopRunner
+    from app.context.context_builder import RecentChatMessage
+    from app.crypto import ContentCipher
+    from app.models import TemplateLibrary
+
+    generation_db.add_all(
+        [
+            TemplateLibrary(
+                user_id="user-1",
+                template_name="个人投标模板",
+                task_type="bid_material",
+                template_content="个人模板内容：先列评分点。",
+                scope="personal",
+                review_status="draft",
+                status="active",
+            ),
+            TemplateLibrary(
+                user_id="admin-1",
+                template_name="公司投标模板",
+                task_type="bid_material",
+                template_content="公司模板内容：响应表必须包含偏离说明。",
+                scope="company",
+                review_status="official",
+                status="active",
+            ),
+            TemplateLibrary(
+                user_id="admin-1",
+                template_name="待审投标模板",
+                task_type="bid_material",
+                template_content="待审模板内容。",
+                scope="company",
+                review_status="pending",
+                status="active",
+            ),
+            TemplateLibrary(
+                user_id="user-2",
+                template_name="他人个人投标模板",
+                task_type="bid_material",
+                template_content="他人个人模板内容。",
+                scope="personal",
+                review_status="draft",
+                status="active",
+            ),
+            TemplateLibrary(
+                user_id="admin-1",
+                template_name="停用公司投标模板",
+                task_type="bid_material",
+                template_content="停用模板内容。",
+                scope="company",
+                review_status="official",
+                status="disabled",
+            ),
+        ]
+    )
+    generation_db.commit()
+
+    result = LoopRunner().run_chat(
+        db=generation_db,
+        sso_user_id="user-1",
+        question="帮我写投标响应",
+        mode="business",
+        cipher=ContentCipher(os.environ["CONTENT_ENCRYPTION_KEY"]),
+        recent_messages=[RecentChatMessage(role="user", content="上一轮：需要偏离表")],
+        top_k=3,
+    )
+
+    system_prompt = result.messages[0].content
+    assert "个人投标模板" in system_prompt
+    assert "公司投标模板" in system_prompt
+    assert "待审投标模板" not in system_prompt
+    assert "他人个人投标模板" not in system_prompt
+    assert "停用公司投标模板" not in system_prompt
+    assert "模板仅作结构/措辞参考，不得作为正式知识事实依据。" in system_prompt
+
+
+def test_loop_runner_related_template_query_orders_personal_before_official_company(
+    generation_db,
+) -> None:
     from app.agent_loop.loop_runner import LoopRunner
     from app.models import TemplateLibrary
 

@@ -279,7 +279,7 @@ class ContextBuilder:
     def _template_library_context(related_templates: list[str]) -> str:
         if not related_templates:
             return "暂无相关模板。"
-        return "可复用的文档/提示词模板。优先用于结构和措辞，不得替代正式知识库事实依据。\n" + "\n".join(
+        return "可复用的文档/提示词模板。模板仅作结构/措辞参考，不得作为正式知识事实依据。\n" + "\n".join(
             f"- {item[:800]}"
             for item in related_templates[:5]
         )

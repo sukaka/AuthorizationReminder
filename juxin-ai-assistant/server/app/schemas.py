@@ -458,6 +458,19 @@ class ChatMessageOut(BaseModel):
     created_at: datetime
 
 
+class ChatTaskStateOut(BaseModel):
+    task_state_id: str = ""
+    conversation_id: str = ""
+    stage: str = ""
+    label: str = ""
+    goal: str = ""
+    selected_sources: list[dict[str, Any]] = Field(default_factory=list)
+    tool_calls: list[dict[str, Any]] = Field(default_factory=list)
+    verification_status: str = ""
+    next_action: str = ""
+    stage_history: list[dict[str, Any]] = Field(default_factory=list)
+
+
 class ChatPrepareOut(BaseModel):
     session_uuid: str
     user_message_uuid: str
@@ -468,6 +481,7 @@ class ChatPrepareOut(BaseModel):
     messages: list[MessageOut]
     citations: list[ChatCitationOut] = Field(default_factory=list)
     loop_trace: list[dict[str, Any]] = Field(default_factory=list)
+    task_state: ChatTaskStateOut = Field(default_factory=ChatTaskStateOut)
 
 
 class WebCapturePreviewIn(BaseModel):

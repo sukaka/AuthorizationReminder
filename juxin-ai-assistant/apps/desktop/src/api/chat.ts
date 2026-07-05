@@ -206,6 +206,19 @@ export type PersonalReferenceSearchPayload = KnowledgeSearchPayload & {
   notice: string;
 };
 
+export type ChatTaskStatePayload = {
+  task_state_id: string;
+  conversation_id: string;
+  stage: string;
+  label: string;
+  goal: string;
+  selected_sources: Array<Record<string, unknown>>;
+  tool_calls: Array<Record<string, unknown>>;
+  verification_status: string;
+  next_action: string;
+  stage_history: Array<Record<string, unknown> & { stage?: string; label?: string; next_action?: string }>;
+};
+
 export type ChatPreparePayload = {
   session_uuid: string;
   user_message_uuid: string;
@@ -216,6 +229,7 @@ export type ChatPreparePayload = {
   messages: Array<{ role: string; content: string }>;
   citations: ChatCitation[];
   loop_trace?: LoopTraceStep[];
+  task_state?: ChatTaskStatePayload;
 };
 
 export type ChatExportType =

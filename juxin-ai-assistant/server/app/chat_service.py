@@ -482,6 +482,7 @@ def prepare_chat(
             messages=[],
             citations=[],
             loop_trace=loop_result.loop_trace,
+            task_state=loop_result.task_state,
         )
     completion_token = secrets.token_urlsafe(32)
     assistant = _create_message(
@@ -522,6 +523,7 @@ def prepare_chat(
         messages=prepared_messages,
         citations=citations,
         loop_trace=loop_result.loop_trace,
+        task_state=loop_result.task_state,
     )
 
 

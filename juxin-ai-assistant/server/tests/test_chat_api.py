@@ -33,6 +33,10 @@ def test_normal_chat_prepare_complete_and_detail(client_for_user) -> None:
     assert body["completion_token"]
     assert body["completed"] is False
     assert body["citations"] == []
+    assert body["task_state"]["stage"] == "completed"
+    assert body["task_state"]["label"] == "生成完成"
+    assert body["task_state"]["next_action"] == "等待模型生成回答"
+    assert "TaskState" not in body["task_state"]["label"]
     assert body["messages"][-1]["role"] == "user"
     assert "帮我总结今天工作" in body["messages"][-1]["content"]
 

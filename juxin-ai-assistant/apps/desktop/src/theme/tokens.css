@@ -3315,6 +3315,70 @@ textarea:focus-visible {
   gap: 14px;
 }
 
+.chat-task-progress {
+  width: min(1120px, 100%);
+  margin: 0 auto 14px;
+  padding: 12px 14px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  border: 1px solid color-mix(in srgb, var(--chat-brand) 18%, var(--border));
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--surface-elevated) 92%, var(--chat-brand) 8%);
+  box-shadow: 0 12px 34px rgb(20 42 89 / 6%);
+}
+
+.chat-task-progress div {
+  min-width: 180px;
+}
+
+.chat-task-progress span {
+  display: block;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 850;
+}
+
+.chat-task-progress strong {
+  display: block;
+  margin-top: 2px;
+  color: var(--chat-brand);
+  font-size: 16px;
+  font-weight: 900;
+}
+
+.chat-task-progress p {
+  margin: 4px 0 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.chat-task-progress ol {
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  list-style: none;
+}
+
+.chat-task-progress li {
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.chat-task-progress li.is-active {
+  border-color: color-mix(in srgb, var(--chat-brand) 42%, var(--border));
+  background: color-mix(in srgb, var(--chat-brand) 12%, var(--surface));
+  color: var(--chat-brand);
+}
+
 .chat-empty-state {
   max-width: 1120px;
   margin: 18px auto 4px;
