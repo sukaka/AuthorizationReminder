@@ -36,6 +36,62 @@ class LoopRunner:
     def _trim_trace(self, trace: list[LoopTraceStep]) -> list[dict[str, object]]:
         return [step.to_dict() for step in trace[: self.limits.max_loop_steps]]
 
+    def _related_memories(self, db: Session, *, sso_user_id: str, question: str) -> list[str]:
+        terms = self.learning_retriever.query_terms(question)
+        return self.learning_retriever.related_memories(
+            db,
+            sso_user_id=sso_user_id,
+            terms=terms,
+        )
+
+    def _related_experiences(
+        self,
+        db: Session,
+        *,
+        sso_user_id: str,
+        question: str,
+        task_type: str,
+    ) -> list[str]:
+        terms = self.learning_retriever.query_terms(question, task_type=task_type)
+        return self.learning_retriever.related_experiences(
+            db,
+            sso_user_id=sso_user_id,
+            task_type=task_type,
+            terms=terms,
+        )
+
+    def _related_templates(
+        self,
+        db: Session,
+        *,
+        sso_user_id: str,
+        question: str,
+        task_type: str,
+    ) -> list[str]:
+        terms = self.learning_retriever.query_terms(question, task_type=task_type)
+        return self.learning_retriever.related_templates(
+            db,
+            sso_user_id=sso_user_id,
+            task_type=task_type,
+            terms=terms,
+        )
+
+    def _related_failure_cases(
+        self,
+        db: Session,
+        *,
+        sso_user_id: str,
+        question: str,
+        task_type: str,
+    ) -> list[str]:
+        terms = self.learning_retriever.query_terms(question, task_type=task_type)
+        return self.learning_retriever.related_failure_cases(
+            db,
+            sso_user_id=sso_user_id,
+            task_type=task_type,
+            terms=terms,
+        )
+
     def run_chat(
         self,
         *,

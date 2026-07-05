@@ -89,8 +89,8 @@
 - [x] 写或补齐测试：模板只能作为结构/措辞参考，不能作为正式知识事实依据。
 - [x] 实现最小代码：确保 `LoopRunner` → `ContextBuilder` → 最终消息链路都传递 `related_templates`。
 - [x] 跑测试：`python -m pytest tests/test_agent_runtime.py tests/test_learning_routes.py tests/test_context_builder.py tests/test_eval_questions.py -q`，结果 `45 passed, 1 warning`。
-- [ ] 需求审查：确认未改变公司知识 / 我的资料 / 当前附件引用规则。（待独立审查）
-- [ ] 代码审查：确认查询有权限边界，未引入 N+1 放大风险或真实数据泄漏。（待独立审查）
+- [x] 工程验收：用户要求暂不做独立审查；已通过相关回归确认未改变公司知识 / 我的资料 / 当前附件引用规则。
+- [x] 工程验收：用户要求暂不做独立审查；已通过权限隔离测试和回归确认未提交敏感数据。
 
 **验收标准：**
 
@@ -122,8 +122,8 @@
 - [x] 增加表：`ai_agent_task_states`，不要存完整 API Key、原始大文件或完整长上下文。
 - [x] 实现 `TaskStateStore`：创建、更新阶段、追加工具摘要、记录校验结果。
 - [x] 跑测试：`python -m pytest tests/test_agent_task_state.py -q`，结果 `2 passed`。
-- [ ] 需求审查：确认状态字段可支持前端展示“查资料 / 整理依据 / 生成 / 复核 / 完成”。（待独立审查）
-- [ ] 代码审查：确认不记录敏感密钥，不保存完整文件内容。（待独立审查）
+- [x] 工程验收：用户要求暂不做独立审查；前端测试已覆盖“查资料 / 整理依据 / 生成 / 复核 / 完成”等用户可见阶段。
+- [x] 工程验收：用户要求暂不做独立审查；TaskState 测试覆盖只保存阶段、来源摘要、工具摘要和自检摘要。
 
 **子代理任务 B2：LoopRunner 接入 TaskState**
 
@@ -131,8 +131,8 @@
 - [x] 在 `LoopRunner` 的分析、工具执行、回答生成、质量检查后更新 TaskState。
 - [x] 工具失败时记录 `failed` 状态和可读错误码，但不让整轮不可恢复。
 - [x] 跑测试：`python -m pytest tests/test_agent_task_state.py tests/test_agent_runtime.py tests/test_context_builder.py tests/test_migrations.py::test_migration_revision_graph_is_single_linear_head -q`，结果 `43 passed`。
-- [ ] 需求审查：确认状态只面向任务追踪，不改变最终回答语义。（待独立审查）
-- [ ] 代码审查：确认失败路径可恢复，无无限循环。（待独立审查）
+- [x] 工程验收：用户要求暂不做独立审查；聊天准备和完成回归通过，状态链路不改写最终回答。
+- [x] 工程验收：用户要求暂不做独立审查；工具失败降级和联网失败回归通过。
 
 **子代理任务 B3：前端任务进度展示**
 
@@ -140,8 +140,8 @@
 - [x] 在聊天消息卡片或顶部轻量状态条展示任务进度。
 - [x] 普通用户界面不得出现 `TaskState`、`Tool Call`、`RAG` 等技术词。
 - [x] 跑测试：`npm test -- --run tests/chat-page.test.tsx -t "shows user-facing task progress"`，结果 `1 passed`。
-- [ ] 需求审查：确认进度信息不遮挡输入框、不扩大附件条。
-- [ ] 代码审查：确认无轮询风暴，失败状态可读。
+- [x] 工程验收：用户要求暂不做独立审查；任务进度组件为轻量状态展示，不改附件条和输入框结构。
+- [x] 工程验收：用户要求暂不做独立审查；前端测试和 typecheck 通过，失败阶段使用办公语言。
 
 **验收标准：**
 
@@ -243,8 +243,8 @@
 - [x] 将阶段摘要写入 TaskState。
 - [x] 搜索失败时保留可读失败原因，并降级普通回答。
 - [x] 跑测试：`python -m pytest tests/test_web_routes.py tests/test_agent_loop.py tests/test_agent_runtime.py::test_deep_web_research_tool_returns_user_facing_stage_summaries tests/test_chat_api.py::test_latest_question_web_search_failure_records_task_state_and_continues -q`，结果 `11 passed, 1 warning`。
-- [ ] 需求审查：确认联网资料不会自动进入公司知识库。
-- [ ] 代码审查：确认网络失败和超时可恢复。
+- [x] 工程验收：用户要求暂不做独立审查；联网调研仅写任务状态和搜索日志，不自动进入公司知识库。
+- [x] 工程验收：用户要求暂不做独立审查；联网失败记录可读错误并降级继续普通回答。
 
 **子代理任务 E2：前端时间线**
 
@@ -294,5 +294,13 @@
 3. 后端有任务状态、自检结果、工具摘要和引用摘要。
 4. 回答和 Word 导出只展示实际使用的来源。
 5. 管理员能查看质量指标和任务回放摘要。
-6. 子代理每个任务均经过需求审查和代码质量审查。
+6. 用户要求本批先完成工程，独立子代理审查暂不作为阻塞项。
 7. 所有改动有最小测试覆盖，相关回归通过。
+
+## 七、工程完成核验（2026-07-05）
+
+- 用户要求：不要做审查，先把工程完成。
+- 后端关键回归：`PYTHONPATH=. .venv/bin/python -m pytest tests/test_agent_task_state.py tests/test_agent_runtime.py tests/test_agent_loop.py tests/test_agent_verifier.py tests/test_chat_api.py tests/test_chat_word_export.py tests/test_context_builder.py tests/test_learning_routes.py tests/test_learning_retriever.py tests/test_stats.py tests/test_governance_authorization.py tests/test_web_routes.py tests/test_eval_questions.py -q`，结果 `115 passed, 1 warning`。
+- 前端关键回归：`npm test -- --run tests/task-progress-timeline.test.tsx tests/chat-page.test.tsx tests/governance-pages.test.tsx tests/learning-page.test.tsx`，结果 `48 passed`。
+- 前端类型检查：`npm run typecheck` 通过。
+- 剩余外部阻塞：远端 push 需要 GitHub HTTPS 凭据。
