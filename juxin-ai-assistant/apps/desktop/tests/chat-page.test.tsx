@@ -130,7 +130,9 @@ it('sends a normal chat message, streams output, and completes it', async () => 
 });
 
 it('shows user-facing task progress while chat is generating', async () => {
-  let resolveModel: ((value: { output: string; latencyMs: number; usage: { output_tokens: number } }) => void) | null = null;
+  const modelResolver: {
+    current?: (value: { output: string; latencyMs: number; usage: { output_tokens: number } }) => void;
+  } = {};
   server.use(
     http.get('/api/conversations', () => HttpResponse.json({ items: [], total: 0 })),
     http.post('/api/ai/chat/prepare', () => HttpResponse.json({
@@ -168,7 +170,7 @@ it('shows user-facing task progress while chat is generating', async () => {
     })),
   );
   generateLocalModelMock.mockImplementation(() => new Promise((resolve) => {
-    resolveModel = resolve;
+    modelResolver.current = resolve;
   }));
 
   render(<ChatPage />);
@@ -178,7 +180,12 @@ it('shows user-facing task progress while chat is generating', async () => {
   expect((await screen.findAllByText('正在生成回答')).length).toBeGreaterThan(0);
   expect(screen.getByText('正在识别任务')).toBeInTheDocument();
   expect(screen.queryByText('TaskState')).not.toBeInTheDocument();
-  resolveModel?.({ output: '方案内容', latencyMs: 12, usage: { output_tokens: 8 } });
+  expect(modelResolver.current).toBeDefined();
+  modelResolver.current?.({
+    output: '方案内容',
+    latencyMs: 12,
+    usage: { output_tokens: 8 },
+  });
   expect(await screen.findByText('生成完成')).toBeInTheDocument();
 });
 

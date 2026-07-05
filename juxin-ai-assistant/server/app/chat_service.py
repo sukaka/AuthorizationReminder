@@ -755,7 +755,7 @@ def save_knowledge_result_to_chat_history(
     for source in body.sources:
         db.add(_source_from_knowledge_result(assistant_message.id, source))
     db.flush()
-    _delete_unmentioned_sources(db, assistant_message, body.answer)
+    _delete_unmentioned_sources(db, cipher, assistant_message, body.answer)
     db.flush()
     return ChatKnowledgeResultOut(
         session_uuid=session.uuid,

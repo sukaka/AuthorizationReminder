@@ -22,6 +22,9 @@ function replayVerificationStatus(item: TaskReplayItem): string {
 function labelForStage(value: unknown): string {
   const labels: Record<string, string> = {
     analyzing: '识别任务',
+    building_context: '整理依据',
+    checking_sources: '整理来源',
+    generating: '生成回答',
     retrieving: '查找资料',
     composing: '生成内容',
     quality_check: '复核结果',

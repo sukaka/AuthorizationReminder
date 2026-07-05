@@ -145,7 +145,7 @@ def _evidence_phrases(value: str) -> list[str]:
     step = 4
     return [
         value[index : index + step]
-        for index in range(0, max(0, len(value) - step + 1), step)
+        for index in range(0, max(0, len(value) - step + 1))
         if len(value[index : index + step]) == step
     ][:80]
 

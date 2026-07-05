@@ -100,7 +100,7 @@ def test_chat_complete_records_verifier_result_in_task_state(
 
 
 def test_chat_prepare_injects_learning_loop_context(client_for_user, generation_db) -> None:
-    from app.models import ExperienceLibrary, FailureCaseLibrary, UserMemory
+    from app.models import ExperienceLibrary, FailureCaseLibrary, TemplateLibrary, UserMemory
 
     generation_db.add_all([
         UserMemory(
@@ -128,6 +128,15 @@ def test_chat_prepare_injects_learning_loop_context(client_for_user, generation_
             prevention_rule="投标类输出必须有评分点对照。",
             tags_json=["投标"],
         ),
+        TemplateLibrary(
+            user_id="user-learning",
+            task_type="bid_material",
+            template_name="投标响应模板",
+            template_content="模板要求：评分点、响应内容、证明材料。",
+            scope="personal",
+            review_status="draft",
+            status="active",
+        ),
     ])
     generation_db.commit()
     client = client_for_user("user-learning")
@@ -141,6 +150,7 @@ def test_chat_prepare_injects_learning_loop_context(client_for_user, generation_
     system_prompt = prepared.json()["messages"][0]["content"]
     assert "投标类回答必须先列评分点" in system_prompt
     assert "投标响应优先对齐评分点" in system_prompt
+    assert "模板要求：评分点、响应内容、证明材料" in system_prompt
     assert "投标类输出必须有评分点对照" in system_prompt
 
 

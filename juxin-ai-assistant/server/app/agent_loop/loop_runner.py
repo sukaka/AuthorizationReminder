@@ -1,11 +1,8 @@
-import re
-
-from sqlalchemy import case, or_, select
 from sqlalchemy.orm import Session
 
 from app.context.context_builder import RecentChatMessage
 from app.crypto import ContentCipher
-from app.models import ExperienceLibrary, FailureCaseLibrary, TemplateLibrary, UserMemory
+from app.learning_retriever import LearningRetriever
 
 from .answer_generator import AnswerGenerator
 from .observer import Observer
@@ -34,171 +31,10 @@ class LoopRunner:
         self.observer = Observer()
         self.reflector = Reflector()
         self.answer_generator = AnswerGenerator()
+        self.learning_retriever = LearningRetriever()
 
     def _trim_trace(self, trace: list[LoopTraceStep]) -> list[dict[str, object]]:
         return [step.to_dict() for step in trace[: self.limits.max_loop_steps]]
-
-    @staticmethod
-    def _query_terms(question: str) -> list[str]:
-        terms = re.findall(r"[A-Za-z0-9_.:-]{2,}|[\u4e00-\u9fff]{2,}", question)
-        expanded: list[str] = []
-        for term in terms:
-            expanded.append(term)
-            if re.fullmatch(r"[\u4e00-\u9fff]{4,}", term):
-                expanded.extend(term[index : index + 2] for index in range(0, len(term) - 1))
-                expanded.extend(term[index : index + 3] for index in range(0, len(term) - 2))
-        if not terms and question.strip():
-            expanded = [question.strip()[:20]]
-        seen: set[str] = set()
-        unique_terms = []
-        for term in expanded:
-            if term in seen:
-                continue
-            seen.add(term)
-            unique_terms.append(term[:80])
-        return unique_terms[:12]
-
-    def _related_memories(self, db: Session, *, sso_user_id: str, question: str) -> list[str]:
-        terms = self._query_terms(question)
-        stmt = select(UserMemory).where(
-            UserMemory.sso_user_id == sso_user_id,
-            UserMemory.status == "active",
-        )
-        if terms:
-            stmt = stmt.where(
-                or_(
-                    UserMemory.priority == "high",
-                    *[UserMemory.title.contains(term) for term in terms],
-                    *[UserMemory.content.contains(term) for term in terms],
-                    *[UserMemory.memory_type.contains(term) for term in terms],
-                )
-            )
-        rows = db.scalars(
-            stmt.order_by(
-                case(
-                    (UserMemory.priority == "high", 0),
-                    (UserMemory.priority == "medium", 1),
-                    else_=2,
-                ),
-                UserMemory.updated_at.desc(),
-                UserMemory.id.desc(),
-            ).limit(8)
-        )
-        return [
-            "｜".join(
-                part
-                for part in [
-                    row.priority,
-                    row.memory_type,
-                    row.title,
-                    row.content[:500],
-                ]
-                if part
-            )
-            for row in rows
-        ]
-
-    def _related_experiences(
-        self,
-        db: Session,
-        *,
-        sso_user_id: str,
-        question: str,
-        task_type: str,
-    ) -> list[str]:
-        terms = self._query_terms(question) + ([task_type] if task_type else [])
-        stmt = select(ExperienceLibrary).where(
-            ExperienceLibrary.user_id == sso_user_id,
-            ExperienceLibrary.status == "active",
-        )
-        if terms:
-            stmt = stmt.where(
-                or_(
-                    *[ExperienceLibrary.task_type.contains(term) for term in terms],
-                    *[ExperienceLibrary.title.contains(term) for term in terms],
-                    *[ExperienceLibrary.question.contains(term) for term in terms],
-                    *[ExperienceLibrary.summary.contains(term) for term in terms],
-                )
-            )
-        rows = db.scalars(
-            stmt.order_by(ExperienceLibrary.updated_at.desc(), ExperienceLibrary.id.desc()).limit(5)
-        )
-        return [
-            f"{row.task_type}｜{row.title}｜{row.summary or row.answer[:300]}"
-            for row in rows
-        ]
-
-    def _related_failure_cases(
-        self,
-        db: Session,
-        *,
-        sso_user_id: str,
-        question: str,
-        task_type: str,
-    ) -> list[str]:
-        terms = self._query_terms(question) + ([task_type] if task_type else [])
-        stmt = select(FailureCaseLibrary).where(
-            FailureCaseLibrary.user_id == sso_user_id,
-            FailureCaseLibrary.status == "active",
-        )
-        if terms:
-            stmt = stmt.where(
-                or_(
-                    *[FailureCaseLibrary.task_type.contains(term) for term in terms],
-                    *[FailureCaseLibrary.wrong_answer.contains(term) for term in terms],
-                    *[FailureCaseLibrary.correction.contains(term) for term in terms],
-                    *[FailureCaseLibrary.prevention_rule.contains(term) for term in terms],
-                )
-            )
-        rows = db.scalars(
-            stmt.order_by(FailureCaseLibrary.updated_at.desc(), FailureCaseLibrary.id.desc()).limit(5)
-        )
-        return [
-            f"{row.task_type}｜错误：{row.wrong_answer[:180]}｜修正：{row.correction[:180]}｜防复发：{row.prevention_rule[:220]}"
-            for row in rows
-        ]
-
-    def _related_templates(
-        self,
-        db: Session,
-        *,
-        sso_user_id: str,
-        question: str,
-        task_type: str,
-    ) -> list[str]:
-        terms = self._query_terms(question) + ([task_type] if task_type else [])
-        stmt = select(TemplateLibrary).where(
-            TemplateLibrary.status == "active",
-            or_(
-                (
-                    (TemplateLibrary.user_id == sso_user_id)
-                    & (TemplateLibrary.scope == "personal")
-                ),
-                (
-                    (TemplateLibrary.scope == "company")
-                    & (TemplateLibrary.review_status == "official")
-                ),
-            ),
-        )
-        if terms:
-            stmt = stmt.where(
-                or_(
-                    *[TemplateLibrary.task_type.contains(term) for term in terms],
-                    *[TemplateLibrary.template_name.contains(term) for term in terms],
-                    *[TemplateLibrary.template_content.contains(term) for term in terms],
-                )
-            )
-        rows = db.scalars(
-            stmt.order_by(
-                case((TemplateLibrary.user_id == sso_user_id, 0), else_=1),
-                TemplateLibrary.updated_at.desc(),
-                TemplateLibrary.id.desc(),
-            ).limit(5)
-        )
-        return [
-            f"{row.scope}｜{row.task_type}｜{row.template_name}｜{row.template_content[:500]}"
-            for row in rows
-        ]
 
     def run_chat(
         self,
@@ -231,28 +67,12 @@ class LoopRunner:
             task_state_id = task_state.uuid
             task_state_payload = task_state_store.public_payload(task_state)
         analysis = self.task_analyzer.analyze(question, mode)
-        long_term_memories = self._related_memories(
-            db,
-            sso_user_id=sso_user_id,
-            question=question,
-        )
-        related_experiences = self._related_experiences(
+        learning_context = self.learning_retriever.collect(
             db,
             sso_user_id=sso_user_id,
             question=question,
             task_type=analysis.task_type,
-        )
-        related_templates = self._related_templates(
-            db,
-            sso_user_id=sso_user_id,
-            question=question,
-            task_type=analysis.task_type,
-        )
-        related_failure_cases = self._related_failure_cases(
-            db,
-            sso_user_id=sso_user_id,
-            question=question,
-            task_type=analysis.task_type,
+            mode=analysis.mode,
         )
         trace.append(
             LoopTraceStep(
@@ -434,10 +254,10 @@ class LoopRunner:
             knowledge_chunks=chunks,
             personal_reference_chunks=personal_chunks,
             recent_messages=recent_messages,
-            long_term_memories=long_term_memories,
-            related_experiences=related_experiences,
-            related_templates=related_templates,
-            related_failure_cases=related_failure_cases,
+            long_term_memories=learning_context.long_term_memories,
+            related_experiences=learning_context.related_experiences,
+            related_templates=learning_context.related_templates,
+            related_failure_cases=learning_context.related_failure_cases,
         )
         if analysis.strategy != "single_turn" and len(trace) < self.limits.max_loop_steps - 1:
             trace.append(
