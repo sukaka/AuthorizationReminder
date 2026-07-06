@@ -117,12 +117,13 @@ async def enforce_write_origin(
     call_next: Callable[[Request], Awaitable[Response]],
 ) -> Response:
     verify_path = "/api/ai/local-binding/verify"
+    current_settings = get_settings()
     if (
         request.method not in {"GET", "HEAD", "OPTIONS"}
         and request.url.path != verify_path
-        and not settings.auth_dev_bypass
+        and not current_settings.auth_dev_bypass
     ):
-        if request.headers.get("origin", "") not in settings.allowed_origins:
+        if request.headers.get("origin", "") not in current_settings.allowed_origins:
             return JSONResponse(
                 status_code=403,
                 content={
