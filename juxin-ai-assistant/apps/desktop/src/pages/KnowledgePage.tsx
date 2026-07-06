@@ -86,6 +86,7 @@ const fallbackKnowledgeDocumentTypeOptions = ['产品白皮书', '解决方案',
 const supportedKnowledgeAccept = '.pdf,.txt,.md,.docx,.xlsx,.pptx,application/pdf,text/plain,text/markdown,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.openxmlformats-officedocument.presentationml.presentation';
 const unsupportedKnowledgeTypeMessage = '当前版本暂不支持该文件类型，请上传 pdf、docx、xlsx、pptx、txt 或 md 文件。';
 const pdfUploadHint = 'PDF 会按页面提取可复制文本，扫描件需要先转成可复制文本。';
+const previewPageSize = 20;
 
 function canSubmitKnowledgeFileForReview(file: KnowledgeFilePayload, isAdmin: boolean): boolean {
   return !isAdmin
@@ -333,6 +334,7 @@ export function KnowledgePage({ session }: KnowledgePageProps) {
   const [loading, setLoading] = useState(true);
   const [notice, setNotice] = useState('');
   const [preview, setPreview] = useState<KnowledgeFilePreviewPayload | null>(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
   const [fileAction, setFileAction] = useState<{
     fileName: string;
     question: string;
@@ -722,19 +724,26 @@ export function KnowledgePage({ session }: KnowledgePageProps) {
     };
   }, [activeKnowledgeTab, isAdmin]);
 
-  const openPreview = async (file: KnowledgeFilePayload) => {
+  const openPreview = async (file: KnowledgeFilePayload, page = 1) => {
     setActionNotice('');
     setFileAction(null);
+    setPreviewLoading(true);
     try {
-      setPreview(await previewKnowledgeFile(file.file_uuid, { topK: 3 }));
+      setPreview(await previewKnowledgeFile(file.file_uuid, {
+        page,
+        pageSize: previewPageSize,
+      }));
     } catch {
       setActionNotice('暂时无法预览该文档，请稍后重试。');
+    } finally {
+      setPreviewLoading(false);
     }
   };
 
   const openSourcePreview = async (source: KnowledgeFileSourcePayload) => {
     if (!source.file_id) return;
     setActionNotice('');
+    setPreviewLoading(true);
     try {
       setPreview(await previewKnowledgeFile(source.file_id, {
         chunkId: source.chunk_id,
@@ -742,6 +751,25 @@ export function KnowledgePage({ session }: KnowledgePageProps) {
       }));
     } catch {
       setActionNotice('暂时无法打开该来源段落，请稍后重试。');
+    } finally {
+      setPreviewLoading(false);
+    }
+  };
+
+  const changePreviewPage = async (nextPage: number) => {
+    if (!preview) return;
+    const totalPages = preview.total_pages || 1;
+    const normalizedPage = Math.max(1, Math.min(nextPage, totalPages));
+    setPreviewLoading(true);
+    try {
+      setPreview(await previewKnowledgeFile(preview.file_uuid, {
+        page: normalizedPage,
+        pageSize: preview.page_size || previewPageSize,
+      }));
+    } catch {
+      setActionNotice('暂时无法切换预览页，请稍后重试。');
+    } finally {
+      setPreviewLoading(false);
     }
   };
 
@@ -2476,7 +2504,7 @@ export function KnowledgePage({ session }: KnowledgePageProps) {
                           onClick={() => void openPreview(file)}
                           type="button"
                         >
-                          预览
+                          查看内容
                         </button>
                         <button
                           aria-label={`总结 ${file.file_name}`}
@@ -2862,25 +2890,80 @@ export function KnowledgePage({ session }: KnowledgePageProps) {
           </div>
         ) : null}
         {preview ? (
-          <section className="section-block" role="region" aria-label="文档预览">
-            <div className="section-heading">
-              <div>
-                <span className="eyebrow">{preview.source_kind}</span>
-                <h3>{preview.file_name}</h3>
-                <p>{preview.notice}</p>
+          <div className="knowledge-preview-backdrop">
+            <section
+              aria-label="资料内容"
+              aria-modal="true"
+              className="knowledge-preview-window"
+              role="dialog"
+            >
+              <header className="knowledge-preview-titlebar">
+                <div>
+                  <span className="eyebrow">{preview.source_kind}</span>
+                  <h2>{preview.file_name}</h2>
+                  <p>{preview.notice}</p>
+                </div>
+                <button
+                  aria-label="关闭资料内容"
+                  className="knowledge-preview-close"
+                  onClick={() => setPreview(null)}
+                  type="button"
+                >
+                  ×
+                </button>
+              </header>
+              <div className="knowledge-preview-meta">
+                <span>当前第 {preview.page || 1} / {preview.total_pages || 1} 页 · 共 {preview.total_chunks} 个段落</span>
+                <span>每页 {preview.page_size || previewPageSize} 段</span>
               </div>
-            </div>
-            {preview.chunks.map((chunk) => (
-              <article className="history-card" key={`${preview.file_uuid}-${chunk.chunk_id}`}>
-                <h4>{chunk.section_title || `段落 ${chunk.chunk_index + 1}`}</h4>
-                <p>
-                  {chunk.page_number ? `第 ${chunk.page_number} 页 · ` : ''}
-                  段落 {chunk.chunk_index + 1}
-                </p>
-                <p>{chunk.text}</p>
-              </article>
-            ))}
-          </section>
+              <div className="knowledge-preview-body">
+                <aside aria-label="当前页段落" className="knowledge-preview-outline">
+                  {preview.chunks.map((chunk) => (
+                    <a href={`#preview-chunk-${chunk.chunk_id}`} key={`outline-${chunk.chunk_id}`}>
+                      段落 {chunk.chunk_index + 1}
+                    </a>
+                  ))}
+                </aside>
+                <div aria-label="文档预览" className="knowledge-preview-reader" role="region">
+                  <p className="knowledge-preview-notice">{preview.notice}</p>
+                  {previewLoading ? (
+                    <p className="knowledge-preview-loading" role="status">正在切换预览页…</p>
+                  ) : null}
+                  {preview.chunks.map((chunk) => (
+                    <article
+                      className="knowledge-preview-chunk"
+                      id={`preview-chunk-${chunk.chunk_id}`}
+                      key={`${preview.file_uuid}-${chunk.chunk_id}`}
+                    >
+                      <h3>{chunk.section_title || `段落 ${chunk.chunk_index + 1}`}</h3>
+                      <p className="knowledge-preview-location">
+                        {chunk.page_number ? `第 ${chunk.page_number} 页 · ` : ''}
+                        段落 {chunk.chunk_index + 1}
+                      </p>
+                      <p>{chunk.text}</p>
+                    </article>
+                  ))}
+                </div>
+              </div>
+              <footer className="knowledge-preview-pagination">
+                <button
+                  disabled={(preview.page || 1) <= 1 || previewLoading}
+                  onClick={() => void changePreviewPage((preview.page || 1) - 1)}
+                  type="button"
+                >
+                  上一页
+                </button>
+                <span>第 {preview.page || 1} 页 / 共 {preview.total_pages || 1} 页</span>
+                <button
+                  disabled={(preview.page || 1) >= (preview.total_pages || 1) || previewLoading}
+                  onClick={() => void changePreviewPage((preview.page || 1) + 1)}
+                  type="button"
+                >
+                  下一页
+                </button>
+              </footer>
+            </section>
+          </div>
         ) : null}
       </section>
       ) : null}

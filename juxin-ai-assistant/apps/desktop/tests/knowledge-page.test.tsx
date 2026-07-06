@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { HttpResponse, http } from 'msw';
 import { expect, it, vi } from 'vitest';
@@ -28,6 +28,77 @@ const baseFile = {
   document_type: '产品白皮书',
   tags: [],
 };
+
+it('opens file preview in a paginated document window', async () => {
+  const previewRequest = vi.fn();
+  server.use(
+    http.get('/api/knowledge/categories', () => HttpResponse.json({ items: [], total: 0 })),
+    http.get('/api/knowledge/document-types', () => HttpResponse.json({ items: [], total: 0 })),
+    http.get('/api/knowledge/bases', () => HttpResponse.json({ items: [], total: 0 })),
+    http.get('/api/knowledge/reviews/pending', () => HttpResponse.json({ items: [], total: 0 })),
+    http.get('/api/knowledge/reviews/history', () => HttpResponse.json({ items: [], total: 0 })),
+    http.get('/api/knowledge/files', () => HttpResponse.json({
+      items: [{
+        ...baseFile,
+        file_uuid: 'file-long-preview',
+        file_name: '长文档.docx',
+        file_type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        status: 'READY',
+        parse_status: 'parsed',
+        index_status: 'indexed',
+        chunk_count: 1015,
+        rag_enabled: true,
+      }],
+      total: 1,
+    })),
+    http.get('/api/knowledge/files/file-long-preview/preview', ({ request }) => {
+      const url = new URL(request.url);
+      const page = Number(url.searchParams.get('page') || '1');
+      const pageSize = Number(url.searchParams.get('page_size') || '20');
+      previewRequest({
+        page: url.searchParams.get('page'),
+        pageSize: url.searchParams.get('page_size'),
+      });
+      const start = (page - 1) * pageSize;
+      return HttpResponse.json({
+        file_uuid: 'file-long-preview',
+        file_name: '长文档.docx',
+        source_kind: 'official_knowledge',
+        chunks: Array.from({ length: pageSize }, (_, index) => ({
+          chunk_id: `chunk-${start + index}`,
+          chunk_index: start + index,
+          page_number: null,
+          section_title: `段落 ${start + index + 1}`,
+          page_or_sheet: '',
+          chunk_type: 'text',
+          text: `第 ${start + index + 1} 段内容`,
+        })),
+        total_chunks: 1015,
+        page,
+        page_size: pageSize,
+        total_pages: Math.ceil(1015 / pageSize),
+        notice: '本次内容仅依据所选正式知识库文档生成；来源需显示文件名、章节或页码。',
+      });
+    }),
+  );
+
+  render(<KnowledgePage session={adminSession} />);
+
+  await userEvent.click(await screen.findByRole('button', { name: '预览 长文档.docx' }));
+  const dialog = await screen.findByRole('dialog', { name: '资料内容' });
+  expect(within(dialog).getByText('长文档.docx')).toBeInTheDocument();
+  expect(within(dialog).getByText('当前第 1 / 51 页 · 共 1015 个段落')).toBeInTheDocument();
+  expect(within(dialog).getByText('第 1 段内容')).toBeInTheDocument();
+
+  await userEvent.click(within(dialog).getByRole('button', { name: '下一页' }));
+
+  await waitFor(() => expect(previewRequest).toHaveBeenLastCalledWith({
+    page: '2',
+    pageSize: '20',
+  }));
+  expect(await within(dialog).findByText('当前第 2 / 51 页 · 共 1015 个段落')).toBeInTheDocument();
+  expect(within(dialog).getByText('第 21 段内容')).toBeInTheDocument();
+});
 
 it('shows a knowledge governance board and filters risky files without duplicate review labels', async () => {
   server.use(

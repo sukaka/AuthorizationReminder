@@ -171,6 +171,9 @@ export type KnowledgeFilePreviewPayload = {
   source_kind: string;
   chunks: KnowledgeFilePreviewChunkPayload[];
   total_chunks: number;
+  page?: number;
+  page_size?: number;
+  total_pages?: number;
   notice: string;
 };
 
@@ -671,11 +674,13 @@ export async function listKnowledgeFileTrash(): Promise<KnowledgeFileListPayload
 
 export async function previewKnowledgeFile(
   fileUuid: string,
-  options: { chunkId?: string; topK?: number } = {},
+  options: { chunkId?: string; topK?: number; page?: number; pageSize?: number } = {},
 ): Promise<KnowledgeFilePreviewPayload> {
   const query = new URLSearchParams();
   if (options.chunkId) query.set('chunk_id', options.chunkId);
   if (options.topK) query.set('top_k', String(options.topK));
+  if (options.page) query.set('page', String(options.page));
+  if (options.pageSize) query.set('page_size', String(options.pageSize));
   const suffix = query.toString() ? `?${query.toString()}` : '';
   return readJson(
     await apiFetch(`/api/knowledge/files/${encodeURIComponent(fileUuid)}/preview${suffix}`),

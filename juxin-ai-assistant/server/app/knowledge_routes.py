@@ -472,8 +472,11 @@ def _chunks_for_file(
     cipher: ContentCipher,
     top_k: int | None = 8,
     chunk_id: str = "",
+    page: int = 1,
+    page_size: int = 20,
 ) -> list[RetrievedKnowledgeChunk]:
-    limit = max(1, min(int(top_k or 8), 20))
+    limit = max(1, min(int(page_size or top_k or 20), 50))
+    offset = max(0, (max(1, int(page or 1)) - 1) * limit)
     filters = [
         KnowledgeChunk.file_id == file_record.id,
         KnowledgeChunk.status == "READY",
@@ -481,11 +484,14 @@ def _chunks_for_file(
     ]
     if chunk_id:
         filters.append(KnowledgeChunk.chunk_id == chunk_id)
+        offset = 0
+        limit = max(1, min(int(top_k or 1), 20))
     rows = list(
         db.scalars(
             select(KnowledgeChunk)
             .where(*filters)
             .order_by(KnowledgeChunk.chunk_index.asc(), KnowledgeChunk.id.asc())
+            .offset(offset)
             .limit(limit)
         )
     )
@@ -1280,6 +1286,8 @@ async def preview_knowledge_file(
     db: Annotated[Session, Depends(get_db)],
     top_k: int = 20,
     chunk_id: str = "",
+    page: int = 1,
+    page_size: int = 20,
 ) -> KnowledgeFilePreviewOut:
     await _require_use(request, session_payload, current_settings)
     user_id = str(session_payload.user.id)
@@ -1294,12 +1302,26 @@ async def preview_knowledge_file(
     )
     if file_record is None or not _can_view_file(file_record, user_id=user_id, is_admin=is_admin):
         raise HTTPException(status_code=404, detail="知识文件不存在或无权访问")
+    chunk_filters = [
+        KnowledgeChunk.file_id == file_record.id,
+        KnowledgeChunk.status == "READY",
+        KnowledgeChunk.deleted_at.is_(None),
+    ]
+    if chunk_id.strip():
+        chunk_filters.append(KnowledgeChunk.chunk_id == chunk_id.strip())
+    total_chunks = int(db.scalar(select(func.count()).select_from(KnowledgeChunk).where(*chunk_filters)) or 0)
+    effective_page_size = max(1, min(int(page_size or top_k or 20), 50))
+    requested_page = max(1, int(page or 1))
+    total_pages = max(1, (total_chunks + effective_page_size - 1) // effective_page_size)
+    effective_page = min(requested_page, total_pages)
     chunks = _chunks_for_file(
         db,
         file_record=file_record,
         cipher=_content_cipher(current_settings),
         top_k=top_k,
         chunk_id=chunk_id.strip(),
+        page=effective_page,
+        page_size=effective_page_size,
     )
     return KnowledgeFilePreviewOut(
         file_uuid=file_record.uuid,
@@ -1317,7 +1339,10 @@ async def preview_knowledge_file(
             )
             for chunk in chunks
         ],
-        total_chunks=len(chunks),
+        total_chunks=total_chunks,
+        page=min(effective_page, total_pages),
+        page_size=effective_page_size,
+        total_pages=total_pages,
         notice=_file_action_notice(file_record),
     )
 

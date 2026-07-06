@@ -1,3 +1,5 @@
+import { invoke } from '@tauri-apps/api/core';
+
 import { isDesktopRuntime } from '../runtime/capabilities';
 
 export type SessionPayload = {

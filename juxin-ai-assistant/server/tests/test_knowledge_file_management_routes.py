@@ -156,6 +156,59 @@ def test_preview_can_focus_source_chunk_by_chunk_id(
     assert "目标片段内容" in body["chunks"][0]["text"]
 
 
+def test_preview_paginates_large_file_chunks(
+    client_for_user,
+    generation_db,
+) -> None:
+    import os
+
+    from app.crypto import ContentCipher
+    from app.models import KnowledgeChunk, KnowledgeFile
+
+    owner = client_for_user("user-1")
+    created = _upload_personal(owner, name="large-bid.md")
+    stored = generation_db.scalar(
+        select(KnowledgeFile).where(KnowledgeFile.uuid == created["file_uuid"])
+    )
+    assert stored is not None
+    cipher = ContentCipher(os.environ["CONTENT_ENCRYPTION_KEY"])
+    for index in range(1, 45):
+        chunk_id = f"{stored.uuid}-manual-{index}"
+        encrypted = cipher.encrypt_json({"text": f"分页片段 {index + 1}"}, chunk_id.encode())
+        generation_db.add(KnowledgeChunk(
+            chunk_id=chunk_id,
+            file_id=stored.id,
+            knowledge_base_id=stored.knowledge_base_id,
+            file_name=stored.file_name,
+            chunk_text_ciphertext=encrypted.ciphertext,
+            chunk_text_nonce=encrypted.nonce,
+            page_number=None,
+            section_title=f"段落 {index + 1}",
+            chunk_index=index,
+            token_estimate=10,
+            token_count=10,
+            metadata_json={},
+            embedding_id="",
+            status="READY",
+        ))
+    generation_db.commit()
+
+    preview = owner.get(
+        f"/api/knowledge/files/{created['file_uuid']}/preview",
+        params={"page": 2, "page_size": 20},
+    )
+
+    assert preview.status_code == 200
+    body = preview.json()
+    assert body["total_chunks"] == 45
+    assert body["page"] == 2
+    assert body["page_size"] == 20
+    assert body["total_pages"] == 3
+    assert len(body["chunks"]) == 20
+    assert body["chunks"][0]["chunk_index"] == 20
+    assert "分页片段 21" in body["chunks"][0]["text"]
+
+
 def test_owner_can_update_personal_file_metadata(client_for_user) -> None:
     owner = client_for_user("user-1")
     created = _upload_personal(owner)

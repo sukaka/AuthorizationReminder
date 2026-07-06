@@ -6,7 +6,6 @@ import App from '../src/App';
 import { server } from './setup';
 
 beforeEach(() => {
-  // @ts-expect-error test runtime flag
   delete window.__TAURI_INTERNALS__;
 
   server.use(

@@ -418,6 +418,9 @@ class KnowledgeFilePreviewOut(BaseModel):
     source_kind: str
     chunks: list[KnowledgeFilePreviewChunkOut] = Field(default_factory=list)
     total_chunks: int
+    page: int = 1
+    page_size: int = 20
+    total_pages: int = 1
     notice: str
 
 
