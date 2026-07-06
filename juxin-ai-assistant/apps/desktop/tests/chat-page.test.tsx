@@ -938,6 +938,113 @@ it('offers composer shortcuts for knowledge base personal materials and session 
   ));
 });
 
+it('lets users select uploaded personal files directly from the chat composer', async () => {
+  const prepareRequest = vi.fn();
+  server.use(
+    http.get('/api/conversations', () => HttpResponse.json({ items: [], total: 0 })),
+    http.get('/api/knowledge/files', () => HttpResponse.json({
+      items: [
+        {
+          file_uuid: 'file-selected-requirement',
+          file_name: '广东能源需求书.pdf',
+          file_type: 'application/pdf',
+          file_size: 2048,
+          visibility: 'PRIVATE',
+          status: 'READY',
+          chunk_count: 8,
+          source_type: 'user_upload',
+          usage_type: 'personal_reference',
+          review_status: 'draft',
+          rag_enabled: false,
+          reference_enabled: true,
+          rag_scope: 'personal',
+          permission_scope: 'private',
+          category: '个人素材',
+          document_type: '需求书',
+          tags: [],
+          parse_status: 'parsed',
+          index_status: 'indexed',
+          created_at: '2026-06-26T01:00:00Z',
+        },
+        {
+          file_uuid: 'file-unready-draft',
+          file_name: '未解析资料.docx',
+          file_type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+          file_size: 1024,
+          visibility: 'PRIVATE',
+          status: 'PROCESSING',
+          chunk_count: 0,
+          source_type: 'user_upload',
+          usage_type: 'personal_reference',
+          review_status: 'draft',
+          rag_enabled: false,
+          reference_enabled: true,
+          rag_scope: 'personal',
+          permission_scope: 'private',
+          category: '个人素材',
+          document_type: '其他',
+          tags: [],
+          parse_status: 'pending',
+          index_status: 'pending',
+          created_at: '2026-06-26T01:00:00Z',
+        },
+      ],
+      total: 2,
+    })),
+    http.post('/api/ai/chat/prepare', async ({ request }) => {
+      prepareRequest(await request.json());
+      return HttpResponse.json({
+        session_uuid: 'session-selected-reference',
+        user_message_uuid: 'user-message-selected-reference',
+        assistant_message_uuid: 'assistant-message-selected-reference',
+        completion_token: 'complete-selected-reference',
+        completed: false,
+        answer: '',
+        messages: [
+          { role: 'system', content: '你是聚信 AI 助手，已带入指定个人资料。' },
+          { role: 'user', content: '根据我选择的需求书写响应文件' },
+        ],
+        citations: [],
+      }, { status: 201 });
+    }),
+    http.post('/api/ai/chat/messages/assistant-message-selected-reference/complete', () => {
+      return HttpResponse.json({
+        message_uuid: 'assistant-message-selected-reference',
+        status: 'COMPLETED',
+      });
+    }),
+  );
+  generateLocalModelMock.mockResolvedValue({
+    output: '已根据所选需求书生成响应文件。',
+    latencyMs: 10,
+    usage: { output_tokens: 8 },
+  });
+
+  render(<ChatPage />);
+
+  const composer = await screen.findByRole('form', { name: '工作输入区' });
+  await userEvent.click(within(composer).getByRole('button', { name: '引用资料' }));
+  const picker = await screen.findByRole('region', { name: '选择引用资料' });
+  expect(within(picker).getByText('广东能源需求书.pdf')).toBeInTheDocument();
+  expect(within(picker).queryByText('未解析资料.docx')).not.toBeInTheDocument();
+
+  await userEvent.click(within(picker).getByRole('checkbox', { name: '广东能源需求书.pdf' }));
+  expect(within(composer).getByText('引用：广东能源需求书.pdf')).toBeInTheDocument();
+
+  await userEvent.type(screen.getByLabelText('告诉我你想完成什么工作'), '根据我选择的需求书写响应文件');
+  await userEvent.click(screen.getByRole('button', { name: '发送' }));
+
+  expect(await screen.findByText('已根据所选需求书生成响应文件。')).toBeInTheDocument();
+  await waitFor(() => expect(prepareRequest).toHaveBeenCalledWith(
+    expect.objectContaining({
+      mode: 'knowledge',
+      personal_reference_file_ids: ['file-selected-requirement'],
+      include_personal_references: true,
+      include_session_attachments: false,
+    }),
+  ));
+});
+
 it('shows uploaded session attachments as a compact attachment bar', async () => {
   let prepareCount = 0;
   const prepareRequest = vi.fn();

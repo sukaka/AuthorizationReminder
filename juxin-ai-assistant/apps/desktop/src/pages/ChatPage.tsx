@@ -13,6 +13,7 @@ import {
   getChatSession,
   getChatSessionsByKind,
   hardDeleteChatSession,
+  listKnowledgeFiles,
   listKnowledgeCategories,
   listKnowledgeDocumentTypes,
   prepareChat,
@@ -28,6 +29,7 @@ import {
   type ChatTaskStatePayload,
   type KnowledgeCategoryPayload,
   type KnowledgeDocumentTypePayload,
+  type KnowledgeFilePayload,
   type KnowledgeFilePreviewPayload,
   type WebCapturePreviewPayload,
   uploadKnowledgeFile,
@@ -83,6 +85,7 @@ type EnabledReferenceFile = {
   fileName: string;
   sourceKind: 'personal_reference' | 'session_attachment';
 };
+type ReferenceFilePickerStatus = 'idle' | 'loading' | 'ready' | 'error';
 
 type TaskProgressView = ChatTaskStatePayload & {
   label: string;
@@ -453,6 +456,14 @@ function attachmentFileTypeLabel(fileName: string): string {
   return extension.slice(0, 5);
 }
 
+function isReadyPersonalReference(file: KnowledgeFilePayload): boolean {
+  return file.usage_type === 'personal_reference'
+    && file.reference_enabled !== false
+    && file.status === 'READY'
+    && (file.parse_status ?? 'parsed') === 'parsed'
+    && (file.index_status ?? 'indexed') === 'indexed';
+}
+
 function fileNameFromPath(path: string): string {
   return path.split(/[\\/]/).pop()?.trim() || 'Word 文档';
 }
@@ -586,6 +597,10 @@ export function ChatPage() {
   const [knowledgeDocumentTypes, setKnowledgeDocumentTypes] = useState<KnowledgeDocumentTypePayload[]>([]);
   const [referenceScope, setReferenceScope] = useState<ReferenceScope>('official_only');
   const [enabledReferenceFiles, setEnabledReferenceFiles] = useState<EnabledReferenceFile[]>([]);
+  const [referencePickerOpen, setReferencePickerOpen] = useState(false);
+  const [referencePickerStatus, setReferencePickerStatus] = useState<ReferenceFilePickerStatus>('idle');
+  const [personalReferenceFiles, setPersonalReferenceFiles] = useState<KnowledgeFilePayload[]>([]);
+  const [selectedPersonalReferenceIds, setSelectedPersonalReferenceIds] = useState<string[]>([]);
   const [exportType, setExportType] = useState<ChatExportType>('single_answer');
   const [exportNotice, setExportNotice] = useState<WordExportNotice | null>(null);
   const [exportingWord, setExportingWord] = useState(false);
@@ -658,6 +673,12 @@ export function ChatPage() {
     () => enabledReferenceFiles.filter((file) => file.sourceKind === 'session_attachment'),
     [enabledReferenceFiles],
   );
+  const selectedPersonalReferenceFiles = useMemo(
+    () => selectedPersonalReferenceIds
+      .map((fileId) => personalReferenceFiles.find((file) => file.file_uuid === fileId))
+      .filter((file): file is KnowledgeFilePayload => Boolean(file)),
+    [personalReferenceFiles, selectedPersonalReferenceIds],
+  );
   const uploadCategoryOptions = useMemo(() => {
     const names = knowledgeCategories.map((category) => category.name);
     return Array.from(new Set([uploadCategory, ...names, ...fallbackUploadCategories].filter(Boolean)));
@@ -695,6 +716,7 @@ export function ChatPage() {
       setSourcePreview({ status: 'idle' });
       setWebCapture({ status: 'idle' });
       setEnabledReferenceFiles([]);
+      setSelectedPersonalReferenceIds([]);
       shouldStickToBottomRef.current = true;
       setMessages(detail.messages.map((message) => ({
         id: message.message_uuid,
@@ -745,6 +767,11 @@ export function ChatPage() {
         ));
         setUploadStatus('');
       } else {
+        setPersonalReferenceFiles((current) => (
+          isReadyPersonalReference(uploaded)
+            ? current.filter((file) => file.file_uuid !== uploaded.file_uuid).concat(uploaded)
+            : current
+        ));
         setUploadStatus(`资料已保存到我的资料：${uploaded.file_name}；需要参考时可在“参考资料”中选择“我的资料”。`);
       }
     } catch (error) {
@@ -757,15 +784,74 @@ export function ChatPage() {
   const enableOfficialKnowledgeScope = () => {
     setMode('knowledge');
     setReferenceScope('official_only');
+    setSelectedPersonalReferenceIds([]);
+  };
+
+  const loadPersonalReferenceFiles = async () => {
+    setReferencePickerStatus('loading');
+    try {
+      const payload = await listKnowledgeFiles();
+      const usableFiles = payload.items.filter(isReadyPersonalReference);
+      setPersonalReferenceFiles(usableFiles);
+      setSelectedPersonalReferenceIds((current) => {
+        const usableIds = new Set(usableFiles.map((file) => file.file_uuid));
+        return current.filter((fileId) => usableIds.has(fileId));
+      });
+      setReferencePickerStatus('ready');
+    } catch {
+      setReferencePickerStatus('error');
+    }
+  };
+
+  const toggleReferencePicker = () => {
+    const nextOpen = !referencePickerOpen;
+    setReferencePickerOpen(nextOpen);
+    if (nextOpen && referencePickerStatus === 'idle') {
+      void loadPersonalReferenceFiles();
+    }
   };
 
   const togglePersonalReferenceScope = () => {
     setMode('knowledge');
+    if (selectedPersonalReferenceIds.length) {
+      setSelectedPersonalReferenceIds([]);
+    }
     setReferenceScope((current) => {
       if (current === 'with_personal') return 'official_only';
       if (current === 'with_session') return 'personal_and_session';
       if (current === 'personal_and_session') return 'with_session';
       return 'with_personal';
+    });
+  };
+
+  const togglePersonalReferenceFile = (fileId: string) => {
+    setMode('knowledge');
+    setSelectedPersonalReferenceIds((current) => (
+      current.includes(fileId)
+        ? current.filter((item) => item !== fileId)
+        : current.concat(fileId)
+    ));
+    setReferenceScope((current) => (
+      current === 'with_session' || current === 'personal_and_session'
+        ? 'personal_and_session'
+        : 'with_personal'
+    ));
+  };
+
+  const changeReferenceScope = (nextScope: ReferenceScope) => {
+    setReferenceScope(nextScope);
+    if (nextScope === 'official_only' || nextScope === 'with_session') {
+      setSelectedPersonalReferenceIds([]);
+    }
+  };
+
+  const removeSelectedPersonalReferenceFile = (fileId: string) => {
+    setSelectedPersonalReferenceIds((current) => {
+      const next = current.filter((item) => item !== fileId);
+      if (!next.length) {
+        setReferenceScope((scope) => disableReferenceKind(scope, 'personal_reference'));
+      }
+      return next;
     });
   };
 
@@ -918,7 +1004,10 @@ export function ChatPage() {
         question: trimmed,
         mode,
         attachmentFileIds: sessionAttachmentFiles.map((file) => file.fileUuid),
-        includePersonalReferences: referenceScope === 'with_personal' || referenceScope === 'personal_and_session',
+        personalReferenceFileIds: selectedPersonalReferenceIds,
+        includePersonalReferences: selectedPersonalReferenceIds.length > 0
+          || referenceScope === 'with_personal'
+          || referenceScope === 'personal_and_session',
         includeSessionAttachments: referenceScope === 'with_session' || referenceScope === 'personal_and_session',
       });
       setTaskProgress(prepared.task_state ? taskProgressWithStage(
@@ -1698,7 +1787,7 @@ export function ChatPage() {
                 <span>参考资料</span>
                 <select
                   aria-label="参考资料"
-                  onChange={(event) => setReferenceScope(event.target.value as ReferenceScope)}
+                  onChange={(event) => changeReferenceScope(event.target.value as ReferenceScope)}
                   value={referenceScope}
                 >
                   {Object.entries(referenceScopeLabels).map(([value, label]) => (
@@ -2053,6 +2142,63 @@ export function ChatPage() {
                   )}
                 </section>
               ) : null}
+              {selectedPersonalReferenceFiles.length ? (
+                <section aria-label="已引用资料" className="chat-selected-references">
+                  {selectedPersonalReferenceFiles.map((file) => (
+                    <span className="chat-selected-reference" key={file.file_uuid}>
+                      <span title={file.file_name}>引用：{file.file_name}</span>
+                      <button
+                        aria-label={`取消引用：${file.file_name}`}
+                        onClick={() => removeSelectedPersonalReferenceFile(file.file_uuid)}
+                        type="button"
+                      >
+                        ×
+                      </button>
+                    </span>
+                  ))}
+                </section>
+              ) : null}
+              {referencePickerOpen ? (
+                <section aria-label="选择引用资料" className="chat-reference-picker">
+                  <div className="chat-reference-picker-head">
+                    <strong>选择要引用的资料</strong>
+                    <button onClick={() => setReferencePickerOpen(false)} type="button">关闭</button>
+                  </div>
+                  {referencePickerStatus === 'loading' ? (
+                    <p role="status">正在加载我的资料…</p>
+                  ) : null}
+                  {referencePickerStatus === 'error' ? (
+                    <div className="chat-reference-picker-empty">
+                      <p role="status">资料列表暂时加载失败，请稍后重试。</p>
+                      <button onClick={() => void loadPersonalReferenceFiles()} type="button">重新加载</button>
+                    </div>
+                  ) : null}
+                  {referencePickerStatus === 'ready' && !personalReferenceFiles.length ? (
+                    <p className="chat-reference-picker-empty">还没有可引用的资料。可以先上传并保存到“我的资料”。</p>
+                  ) : null}
+                  {referencePickerStatus === 'ready' && personalReferenceFiles.length ? (
+                    <div className="chat-reference-picker-list">
+                      {personalReferenceFiles.map((file) => (
+                        <label className="chat-reference-picker-item" key={file.file_uuid}>
+                          <input
+                            aria-label={file.file_name}
+                            checked={selectedPersonalReferenceIds.includes(file.file_uuid)}
+                            onChange={() => togglePersonalReferenceFile(file.file_uuid)}
+                            type="checkbox"
+                          />
+                          <span className="chat-attachment-type">{attachmentFileTypeLabel(file.file_name)}</span>
+                          <span className="chat-reference-picker-name" title={file.file_name}>
+                            {file.file_name}
+                          </span>
+                          <span className="chat-attachment-status">
+                            {file.category || '我的资料'}
+                          </span>
+                        </label>
+                      ))}
+                    </div>
+                  ) : null}
+                </section>
+              ) : null}
               <div className="chat-composer-toolbar">
                 <label className="chat-file-trigger">
                   <span>＋ 上传资料</span>
@@ -2070,6 +2216,14 @@ export function ChatPage() {
                     type="file"
                   />
                 </label>
+                <button
+                  aria-pressed={referencePickerOpen || selectedPersonalReferenceIds.length > 0}
+                  className="chat-reference-chip"
+                  onClick={toggleReferencePicker}
+                  type="button"
+                >
+                  引用资料
+                </button>
                 <button
                   aria-pressed={mode === 'knowledge' && referenceScope === 'official_only'}
                   className="chat-reference-chip"

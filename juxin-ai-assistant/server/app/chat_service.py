@@ -525,6 +525,7 @@ def prepare_chat(
         top_k=body.top_k,
         conversation_id=session.uuid,
         attachment_file_ids=body.attachment_file_ids,
+        personal_reference_file_ids=body.personal_reference_file_ids,
         include_personal_references=body.include_personal_references,
         include_session_attachments=body.include_session_attachments,
     )

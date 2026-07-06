@@ -562,6 +562,84 @@ def test_chat_prepare_uses_personal_references_only_when_explicitly_requested(
     assert logs[0].answer_message_id == body["assistant_message_uuid"]
 
 
+def test_chat_prepare_filters_personal_references_by_selected_file_ids(
+    client_for_user,
+    generation_db,
+) -> None:
+    from app.crypto import ContentCipher
+    from app.models import KnowledgeSearchLog
+
+    cipher = ContentCipher(os.environ["CONTENT_ENCRYPTION_KEY"])
+    selected_file, _selected_chunks = create_knowledge_file_from_bytes(
+        generation_db,
+        sso_user_id="user-1",
+        file_name="已选择需求书.txt",
+        content="需求书说明测试范围、服务边界和验收口径。".encode("utf-8"),
+        content_type="text/plain",
+        cipher=cipher,
+        key_version="v1",
+        visibility="PRIVATE",
+        source_type="user_upload",
+        usage_type="personal_reference",
+        review_status="draft",
+        rag_enabled=False,
+        reference_enabled=True,
+        rag_scope="personal",
+        permission_scope="private",
+        owner_user_id="user-1",
+    )
+    ignored_file, _ignored_chunks = create_knowledge_file_from_bytes(
+        generation_db,
+        sso_user_id="user-1",
+        file_name="未选择会议记录.txt",
+        content="会议记录包含另一个项目的服务边界和验收口径。".encode("utf-8"),
+        content_type="text/plain",
+        cipher=cipher,
+        key_version="v1",
+        visibility="PRIVATE",
+        source_type="user_upload",
+        usage_type="personal_reference",
+        review_status="draft",
+        rag_enabled=False,
+        reference_enabled=True,
+        rag_scope="personal",
+        permission_scope="private",
+        owner_user_id="user-1",
+    )
+    generation_db.commit()
+    client = client_for_user("user-1")
+
+    prepared = client.post(
+        "/api/ai/chat/prepare",
+        json={
+            "question": "根据服务边界和验收口径生成响应说明",
+            "mode": "normal",
+            "personal_reference_file_ids": [selected_file.uuid],
+        },
+    )
+
+    assert prepared.status_code == 201
+    body = prepared.json()
+    assert body["completed"] is False
+    assert body["citations"]
+    assert {citation["file_uuid"] for citation in body["citations"]} == {selected_file.uuid}
+    assert ignored_file.uuid not in {citation["file_uuid"] for citation in body["citations"]}
+    assert "需求书说明测试范围、服务边界和验收口径" in body["messages"][0]["content"]
+    assert "会议记录包含另一个项目" not in body["messages"][0]["content"]
+    logs = list(
+        generation_db.scalars(
+            select(KnowledgeSearchLog).order_by(KnowledgeSearchLog.id.desc())
+        )
+    )
+    assert logs[0].search_type == "personal_reference"
+    assert logs[0].filters_json == {
+        "conversation_id": body["session_uuid"],
+        "file_ids": [selected_file.uuid],
+        "include_personal_references": True,
+        "include_session_attachments": False,
+    }
+
+
 def test_chat_prepare_uses_explicit_attachment_file_ids_without_extra_flags(
     client_for_user,
     generation_db,

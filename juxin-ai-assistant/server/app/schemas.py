@@ -455,6 +455,7 @@ class ChatPrepareIn(BaseModel):
     ] = "normal"
     top_k: int | None = Field(default=8, ge=1, le=100)
     attachment_file_ids: list[str] = Field(default_factory=list, max_length=20)
+    personal_reference_file_ids: list[str] = Field(default_factory=list, max_length=20)
     include_personal_references: bool = False
     include_session_attachments: bool = False
 

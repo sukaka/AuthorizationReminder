@@ -104,6 +104,7 @@ class LoopRunner:
         top_k: int | None,
         conversation_id: str | None = None,
         attachment_file_ids: list[str] | None = None,
+        personal_reference_file_ids: list[str] | None = None,
         include_personal_references: bool = False,
         include_session_attachments: bool = False,
     ) -> LoopRunResult:
@@ -187,12 +188,12 @@ class LoopRunner:
                     else "",
                 )
 
-        if include_personal_references and tool_calls < self.limits.max_tool_calls:
+        if (include_personal_references or personal_reference_file_ids) and tool_calls < self.limits.max_tool_calls:
             personal_result = executor.search_personal_references(
                 question,
                 mode=analysis.mode,
                 conversation_id=conversation_id,
-                file_ids=[],
+                file_ids=personal_reference_file_ids or [],
                 include_personal_references=True,
                 include_session_attachments=False,
             )
