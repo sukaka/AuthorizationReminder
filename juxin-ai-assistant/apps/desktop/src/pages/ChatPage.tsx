@@ -49,6 +49,7 @@ import {
 } from '../api/client';
 import { TaskProgressTimeline } from '../components/TaskProgressTimeline';
 import { generateLocalModel } from '../local/modelStream';
+import { openLocalWordFile } from '../runtime/downloads';
 import type { ModelProfile } from '../types/tauri';
 
 type UiMessage = {
@@ -1199,8 +1200,12 @@ export function ChatPage() {
   const openExportFile = async () => {
     if (!exportNotice || exportNotice.kind !== 'success' || !exportNotice.path) return;
     try {
-      await invoke('generation_word_open', { path: exportNotice.path });
-      setExportNotice({ ...exportNotice, openStatus: '正在打开文件…', copyStatus: '' });
+      const result = await openLocalWordFile(exportNotice.path);
+      setExportNotice({
+        ...exportNotice,
+        openStatus: result === 'opened' ? '正在打开文件…' : '当前环境不支持直接打开文件',
+        copyStatus: '',
+      });
     } catch {
       setExportNotice({ ...exportNotice, openStatus: '当前环境不支持直接打开文件', copyStatus: '' });
     }

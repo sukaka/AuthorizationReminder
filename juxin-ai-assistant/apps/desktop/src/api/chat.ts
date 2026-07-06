@@ -1,7 +1,6 @@
-import { invoke } from '@tauri-apps/api/core';
-
 import { ApiError, apiFetch, getAuthPortalUrl } from './client';
 import type { LoopTraceStep } from './agentLoop';
+import { downloadBlobFromResponse } from '../runtime/downloads';
 
 export type ChatMode =
   | 'normal'
@@ -1050,24 +1049,17 @@ async function downloadWordExport(meta: {
 }): Promise<ChatWordDownloadResult> {
   const response = await apiFetch(meta.download_url);
   if (!response.ok) throw new ApiError(response.status, 'CHAT_WORD_DOWNLOAD_FAILED');
-  const bytes = new Uint8Array(await response.arrayBuffer());
-  const fileName = readAttachmentFileName(response.headers) || meta.file_name || '聚信得仁文档.docx';
   if (window.__TAURI_INTERNALS__) {
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    const fileName = readAttachmentFileName(response.headers) || meta.file_name || '聚信得仁文档.docx';
+    const { invoke } = await import('@tauri-apps/api/core');
     const path = await invoke<string>('generation_word_save', {
       fileName,
       bytes: Array.from(bytes),
     });
     return { kind: 'desktop', path };
   }
-  const blob = new Blob([bytes], {
-    type: response.headers.get('Content-Type') || 'application/octet-stream',
-  });
-  const url = URL.createObjectURL(blob);
-  const anchor = document.createElement('a');
-  anchor.href = url;
-  anchor.download = fileName;
-  anchor.click();
-  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+  await downloadBlobFromResponse(response, meta.file_name || '聚信得仁文档.docx');
   return { kind: 'browser' };
 }
 
