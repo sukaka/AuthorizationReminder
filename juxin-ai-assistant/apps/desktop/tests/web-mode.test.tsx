@@ -8,10 +8,6 @@ import { server } from './setup';
 beforeEach(() => {
   // @ts-expect-error test runtime flag
   delete window.__TAURI_INTERNALS__;
-  Object.defineProperty(window, '__FORCE_WEB_RUNTIME__', {
-    configurable: true,
-    value: true,
-  });
 
   server.use(
     http.get('/api/ai/session', () =>

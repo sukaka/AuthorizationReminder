@@ -11,22 +11,11 @@ type WorkspaceUpdateControlProps = {
   readonly currentVersion?: string;
 };
 
-function canRenderUpdateControl() {
-  if (
-    import.meta.env.MODE === 'test'
-    && !window.__TAURI_INTERNALS__
-    && !(window as typeof window & { __FORCE_WEB_RUNTIME__?: boolean }).__FORCE_WEB_RUNTIME__
-  ) {
-    return getRuntimeCapabilities('desktop').canUseAutoUpdater;
-  }
-  return getRuntimeCapabilities().canUseAutoUpdater;
-}
-
 export function WorkspaceUpdateControl({
   bridge = desktopBridge,
   currentVersion,
 }: WorkspaceUpdateControlProps) {
-  if (!canRenderUpdateControl()) return null;
+  if (!getRuntimeCapabilities().canUseAutoUpdater) return null;
 
   const update = useUpdateFlow(bridge);
   const [version, setVersion] = useState(currentVersion ?? '—');

@@ -53,19 +53,8 @@ type ViewState =
   | { kind: 'forbidden' }
   | { kind: 'error' };
 
-function getWorkspaceCapabilities() {
-  if (
-    import.meta.env.MODE === 'test'
-    && !window.__TAURI_INTERNALS__
-    && !(window as typeof window & { __FORCE_WEB_RUNTIME__?: boolean }).__FORCE_WEB_RUNTIME__
-  ) {
-    return getRuntimeCapabilities('desktop');
-  }
-  return getRuntimeCapabilities();
-}
-
 function Workspace({ session }: { session: SessionPayload }) {
-  const capabilities = getWorkspaceCapabilities();
+  const capabilities = getRuntimeCapabilities();
   const [page, setPage] = useState<WorkspacePage>('home');
   const [task, setTask] = useState<TaskDefinition | null>(null);
   const [taskError, setTaskError] = useState('');

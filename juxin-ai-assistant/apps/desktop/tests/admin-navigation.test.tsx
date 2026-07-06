@@ -1,11 +1,34 @@
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { HttpResponse, http } from 'msw';
-import { expect, it, vi } from 'vitest';
+import { beforeEach, expect, it, vi } from 'vitest';
 
 import App from '../src/App';
 import { AdminLinksPage } from '../src/pages/admin/AdminLinksPage';
 import { server } from './setup';
+
+const { invokeMock } = vi.hoisted(() => ({ invokeMock: vi.fn() }));
+vi.mock('@tauri-apps/api/core', () => ({ invoke: invokeMock }));
+vi.mock('@tauri-apps/api/event', () => ({
+  listen: vi.fn().mockResolvedValue(() => undefined),
+}));
+
+beforeEach(() => {
+  invokeMock.mockReset();
+  invokeMock.mockImplementation((command: string) => {
+    if (command === 'update_status') {
+      return Promise.resolve({ kind: 'idle', enabled: true });
+    }
+    if (command === 'generation_word_save') {
+      return Promise.resolve('/tmp/knowledge-export.docx');
+    }
+    return Promise.resolve(undefined);
+  });
+  Object.defineProperty(window, '__TAURI_INTERNALS__', {
+    configurable: true,
+    value: {},
+  });
+});
 
 function session(role: string, managedDepartments: string[] = []) {
   const knowledgeCategories = [
@@ -1044,7 +1067,7 @@ it('asks a custom question about a visible knowledge file', async () => {
       snippet: '验收材料包含会议结论、责任人和下一步计划。',
     }],
   }));
-  expect(await screen.findByText('Word 已开始下载。')).toBeInTheDocument();
+  expect(await screen.findByText('Word 已保存到：/tmp/knowledge-export.docx')).toBeInTheDocument();
 
   await userEvent.click(within(result).getByRole('button', { name: '保存到历史任务' }));
 
