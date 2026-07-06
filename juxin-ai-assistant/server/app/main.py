@@ -59,6 +59,7 @@ from .personal_reference_routes import router as personal_reference_router
 from .prompt_client import PromptCenterClient
 from .skill_routes import router as skill_router
 from .skill_registry import SkillRegistry
+from .static_web import mount_static_web
 from .web_routes import router as web_router
 from .schemas import (
     AttachmentOut,
@@ -1667,29 +1668,35 @@ app.include_router(personal_reference_router)
 app.include_router(skill_router)
 app.include_router(web_router)
 
+if settings.web_spa_enabled:
+    mount_static_web(app, static_dir=settings.web_static_dir, enabled=True)
+else:
 
-@app.get("/{full_path:path}")
-async def proxy_spa(
-    full_path: str,
-    request: Request,
-    current_settings: Annotated[Settings, Depends(get_settings)],
-):
-    """Dev mode: proxy SPA requests to Vite dev server."""
-    if not current_settings.auth_dev_bypass:
-        raise HTTPException(404)
+    @app.get("/{full_path:path}")
+    async def proxy_spa(
+        full_path: str,
+        request: Request,
+        current_settings: Annotated[Settings, Depends(get_settings)],
+    ):
+        """Dev mode: proxy SPA requests to Vite dev server."""
+        if not current_settings.auth_dev_bypass:
+            raise HTTPException(404)
 
-    vite_url = f"http://localhost:18093/{full_path}"
-    try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            upstream = await client.get(
-                vite_url,
-                headers={k: v for k, v in request.headers.items()
-                         if k.lower() not in ('host',)},
+        vite_url = f"http://localhost:18093/{full_path}"
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                upstream = await client.get(
+                    vite_url,
+                    headers={
+                        k: v
+                        for k, v in request.headers.items()
+                        if k.lower() not in ("host",)
+                    },
+                )
+            return Response(
+                content=upstream.content,
+                status_code=upstream.status_code,
+                headers=dict(upstream.headers),
             )
-        return Response(
-            content=upstream.content,
-            status_code=upstream.status_code,
-            headers=dict(upstream.headers),
-        )
-    except httpx.HTTPError:
-        return Response(content="Dev proxy unavailable", status_code=502)
+        except httpx.HTTPError:
+            return Response(content="Dev proxy unavailable", status_code=502)

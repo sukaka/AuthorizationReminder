@@ -17,6 +17,8 @@ class Settings(BaseSettings):
     auth_cookie_name: str = "juxin_auth_token"
     auth_fetch_timeout_ms: int = Field(default=5000, ge=1000, le=30000)
     auth_dev_bypass: bool = False
+    web_spa_enabled: bool = False
+    web_static_dir: str = "../apps/desktop/dist"
     prompt_center_url: str = "http://prompt-center-api:5189"
     prompt_center_runtime_token: str = ""
     content_encryption_key: str = ""
