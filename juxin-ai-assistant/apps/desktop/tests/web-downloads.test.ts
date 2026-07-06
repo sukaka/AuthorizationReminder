@@ -57,4 +57,39 @@ describe('web downloads', () => {
   it('does not try to open local files in web mode', async () => {
     await expect(openLocalWordFile('/Users/example/result.docx')).resolves.toBe('unsupported');
   });
+
+  it('uses browser download for generation export in web mode', async () => {
+    vi.resetModules();
+    vi.doMock('../src/runtime/capabilities', () => ({
+      isDesktopRuntime: () => false,
+    }));
+    const invokeMock = vi.fn();
+    vi.doMock('@tauri-apps/api/core', () => ({
+      invoke: invokeMock,
+    }));
+    const createObjectURL = vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:generation-download');
+    vi.spyOn(document, 'createElement').mockImplementation((tagName: string) => {
+      const element = document.createElementNS('http://www.w3.org/1999/xhtml', tagName) as HTMLAnchorElement;
+      if (tagName === 'a') element.click = vi.fn();
+      return element as HTMLElement;
+    });
+    window.__TAURI_INTERNALS__ = { metadata: { currentWebview: { label: 'workspace' } } };
+    const fetchMock = vi.spyOn(window, 'fetch').mockResolvedValue(
+      new Response(new Blob(['docx']), {
+        headers: {
+          'Content-Disposition': 'attachment; filename="generation.docx"',
+        },
+      }),
+    );
+    const { downloadGenerationWord } = await import('../src/api/client');
+
+    await expect(downloadGenerationWord('generation-1')).resolves.toEqual({ kind: 'browser' });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/ai/generations/generation-1/export.docx',
+      expect.objectContaining({ credentials: 'include' }),
+    );
+    expect(invokeMock).not.toHaveBeenCalledWith('generation_word_save', expect.anything());
+    expect(createObjectURL).toHaveBeenCalledTimes(1);
+  });
 });

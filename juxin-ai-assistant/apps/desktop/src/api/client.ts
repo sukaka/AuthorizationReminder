@@ -822,7 +822,7 @@ export async function downloadGenerationWord(generationUuid: string): Promise<Wo
     `/api/ai/generations/${encodeURIComponent(generationUuid)}/export.docx`,
   );
   if (!response.ok) throw new ApiError(response.status, 'WORD_EXPORT_FAILED');
-  if (window.__TAURI_INTERNALS__) {
+  if (isDesktopRuntime()) {
     const bytes = new Uint8Array(await response.arrayBuffer());
     const fileName = readAttachmentFileName(response.headers) || '聚信得仁文档.docx';
     const path = await invoke<string>('generation_word_save', {
