@@ -23,6 +23,7 @@ export type ModelGenerateResult = {
 declare global {
   interface Window {
     __JUXIN_DESKTOP_AUTH_PORTAL__?: string;
+    __JUXIN_RUNTIME_PLATFORM__?: 'web' | 'desktop';
     __TAURI_INTERNALS__?: {
       invoke?: (
         command: string,

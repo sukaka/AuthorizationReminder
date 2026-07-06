@@ -7,11 +7,15 @@ describe('web downloads', () => {
     vi.restoreAllMocks();
     // @ts-expect-error test cleanup
     delete window.__TAURI_INTERNALS__;
+    // @ts-expect-error test cleanup
+    delete window.__JUXIN_RUNTIME_PLATFORM__;
     vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:download-url');
     vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => undefined);
   });
 
   afterEach(() => {
+    // @ts-expect-error test cleanup
+    delete window.__JUXIN_RUNTIME_PLATFORM__;
     vi.useRealTimers();
   });
 
@@ -60,9 +64,6 @@ describe('web downloads', () => {
 
   it('uses browser download for generation export in web mode', async () => {
     vi.resetModules();
-    vi.doMock('../src/runtime/capabilities', () => ({
-      isDesktopRuntime: () => false,
-    }));
     const invokeMock = vi.fn();
     vi.doMock('@tauri-apps/api/core', () => ({
       invoke: invokeMock,
@@ -73,6 +74,7 @@ describe('web downloads', () => {
       if (tagName === 'a') element.click = vi.fn();
       return element as HTMLElement;
     });
+    window.__JUXIN_RUNTIME_PLATFORM__ = 'web';
     window.__TAURI_INTERNALS__ = { metadata: { currentWebview: { label: 'workspace' } } };
     const fetchMock = vi.spyOn(window, 'fetch').mockResolvedValue(
       new Response(new Blob(['docx']), {

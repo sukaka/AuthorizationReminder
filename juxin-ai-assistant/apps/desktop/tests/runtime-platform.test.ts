@@ -22,6 +22,17 @@ describe('runtime platform detection', () => {
     expect(isWebRuntime(runtime)).toBe(false);
   });
 
+  it('prefers explicit web override over Tauri internals', () => {
+    const runtime = {
+      __JUXIN_RUNTIME_PLATFORM__: 'web',
+      __TAURI_INTERNALS__: { metadata: { currentWebview: { label: 'workspace' } } },
+    };
+
+    expect(detectRuntimePlatform(runtime)).toBe('web');
+    expect(isWebRuntime(runtime)).toBe(true);
+    expect(isDesktopRuntime(runtime)).toBe(false);
+  });
+
   it('disables desktop-only capabilities in web mode', () => {
     expect(getRuntimeCapabilities('web')).toEqual({
       platform: 'web',
