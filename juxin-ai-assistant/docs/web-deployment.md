@@ -115,7 +115,7 @@ pytest tests/test_static_web.py tests/test_web_public_security.py tests/test_aut
 
 ```bash
 cd apps/desktop
-npm test -- employee-flow.test.tsx chat-page.test.tsx task*run.test.tsx knowledge-page.test.tsx
+npm test -- employee-flow.test.tsx chat-page.test.tsx task\-run.test.tsx knowledge-page.test.tsx
 ```
 
 ## 回滚
