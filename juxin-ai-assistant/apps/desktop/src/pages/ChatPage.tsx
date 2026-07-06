@@ -1,4 +1,3 @@
-import { invoke } from '@tauri-apps/api/core';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { FormEvent, KeyboardEvent, ReactNode } from 'react';
 
@@ -48,7 +47,7 @@ import {
   createLearningTemplate,
 } from '../api/client';
 import { TaskProgressTimeline } from '../components/TaskProgressTimeline';
-import { generateLocalModel } from '../local/modelStream';
+import { generateLocalModel, listModelProfiles } from '../local/modelStream';
 import { openLocalWordFile } from '../runtime/downloads';
 import type { ModelProfile } from '../types/tauri';
 
@@ -623,7 +622,7 @@ export function ChatPage() {
     setSelectedSessionIds([]);
     refreshSessions(sessionListKind)
       .catch(() => setStatus('聊天历史加载失败'));
-    invoke<ModelProfile[]>('model_profile_list')
+    listModelProfiles()
       .then((payload) => setProfiles(Array.isArray(payload) ? payload : []))
       .catch(() => setProfiles([]));
   }, [sessionListKind]);

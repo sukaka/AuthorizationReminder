@@ -1,5 +1,4 @@
 import { useEffect, useState } from 'react';
-import { invoke } from '@tauri-apps/api/core';
 
 import juxinAiLogo from './assets/juxin-ai-logo.png';
 import {
@@ -253,7 +252,13 @@ function Workspace({ session }: { session: SessionPayload }) {
   );
 }
 
-function StatusView({ kind }: { kind: 'checking' | 'forbidden' | 'error' }) {
+function StatusView({
+  kind,
+  bridge,
+}: {
+  kind: 'checking' | 'forbidden' | 'error';
+  bridge: DesktopBridge;
+}) {
   if (kind === 'checking') {
     return (
       <main className="status-view">
@@ -280,7 +285,7 @@ function StatusView({ kind }: { kind: 'checking' | 'forbidden' | 'error' }) {
         <button
           type="button"
           onClick={() => {
-            void invoke('workspace_close').catch(() => {
+            void bridge.closeWorkspace().catch(() => {
               window.location.assign(getAuthPortalUrl());
             });
           }}
@@ -301,10 +306,10 @@ export default function App({ bridge = desktopBridge }: AppProps) {
     return <LauncherPage bridge={bridge} />;
   }
 
-  return <RemoteWorkspace />;
+  return <RemoteWorkspace bridge={bridge} />;
 }
 
-function RemoteWorkspace() {
+function RemoteWorkspace({ bridge }: { bridge: DesktopBridge }) {
   const [state, setState] = useState<ViewState>({ kind: 'checking' });
 
   useEffect(() => {
@@ -312,10 +317,8 @@ function RemoteWorkspace() {
     getSession()
       .then(async (session) => {
         if (window.__TAURI_INTERNALS__) {
-          await invoke('local_session_bind', {
-            token: session.local_binding_token,
-          });
-          await invoke('workspace_ready');
+          await bridge.bindLocalSession(session.local_binding_token);
+          await bridge.markWorkspaceReady();
         }
         clearSsoCallbackParams();
         if (active) setState({ kind: 'ready', session });
@@ -327,9 +330,9 @@ function RemoteWorkspace() {
             ? 'forbidden'
             : 'error';
         if (window.__TAURI_INTERNALS__) {
-          void invoke('workspace_status', {
-            status: kind === 'forbidden' ? 'forbidden' : 'network-error',
-          }).catch(() => {
+          void bridge.reportWorkspaceStatus(
+            kind === 'forbidden' ? 'forbidden' : 'network-error',
+          ).catch(() => {
             window.location.assign(getAuthPortalUrl());
           });
         }
@@ -338,9 +341,9 @@ function RemoteWorkspace() {
     return () => {
       active = false;
     };
-  }, []);
+  }, [bridge]);
 
   return state.kind === 'ready'
     ? <Workspace session={state.session} />
-    : <StatusView kind={state.kind} />;
+    : <StatusView bridge={bridge} kind={state.kind} />;
 }

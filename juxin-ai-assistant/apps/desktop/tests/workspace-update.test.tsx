@@ -8,6 +8,10 @@ import type { DesktopBridge } from '../src/remote/desktopBridge';
 function updateBridge(): DesktopBridge {
   return {
     isLocalLauncherContext: () => false,
+    closeWorkspace: vi.fn().mockResolvedValue(undefined),
+    bindLocalSession: vi.fn().mockResolvedValue(undefined),
+    markWorkspaceReady: vi.fn().mockResolvedValue(undefined),
+    reportWorkspaceStatus: vi.fn().mockResolvedValue(undefined),
     getServerConfig: vi.fn(),
     probeServer: vi.fn(),
     saveServerConfig: vi.fn(),
@@ -23,6 +27,7 @@ function updateBridge(): DesktopBridge {
 }
 
 it('checks for signed updates from the workspace settings control', async () => {
+  window.__JUXIN_RUNTIME_PLATFORM__ = 'desktop';
   const bridge = updateBridge();
   const user = userEvent.setup();
 

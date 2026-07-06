@@ -1,7 +1,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 
-import type { ModelGenerateResult } from '../types/tauri';
+import type { ModelGenerateResult, ModelProfile } from '../types/tauri';
 
 type GenerateInput = {
   profileId: string;
@@ -31,4 +31,12 @@ export async function generateLocalModel(
   } finally {
     unlisten();
   }
+}
+
+export async function listModelProfiles(): Promise<ModelProfile[]> {
+  return invoke<ModelProfile[]>('model_profile_list');
+}
+
+export async function cancelModelGeneration(requestId: string): Promise<void> {
+  await invoke('model_cancel', { requestId });
 }

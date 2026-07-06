@@ -53,6 +53,10 @@ export type UpdateStatus =
 
 export interface DesktopBridge {
   readonly isLocalLauncherContext: () => boolean;
+  readonly closeWorkspace: () => Promise<void>;
+  readonly bindLocalSession: (token: string) => Promise<void>;
+  readonly markWorkspaceReady: () => Promise<void>;
+  readonly reportWorkspaceStatus: (status: 'forbidden' | 'network-error') => Promise<void>;
   readonly getServerConfig: () => Promise<ServerConfigSnapshot>;
   readonly probeServer: (origin: string) => Promise<ProbeSuccess>;
   readonly saveServerConfig: (origin: string) => Promise<void>;
@@ -159,6 +163,18 @@ export const desktopBridge: DesktopBridge = {
       window.location.protocol === 'tauri:' ||
       window.location.hostname === 'tauri.localhost'
     );
+  },
+  closeWorkspace: async () => {
+    await invoke('workspace_close');
+  },
+  bindLocalSession: async (token) => {
+    await invoke('local_session_bind', { token });
+  },
+  markWorkspaceReady: async () => {
+    await invoke('workspace_ready');
+  },
+  reportWorkspaceStatus: async (status) => {
+    await invoke('workspace_status', { status });
   },
   getServerConfig,
   probeServer: async (origin) => {

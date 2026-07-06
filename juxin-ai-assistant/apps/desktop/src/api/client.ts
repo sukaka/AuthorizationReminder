@@ -1,7 +1,5 @@
-import { invoke } from '@tauri-apps/api/core';
-
 import { isDesktopRuntime } from '../runtime/capabilities';
-import { downloadBlobFromResponse } from '../runtime/downloads';
+import { downloadBlobFromResponse, saveWordBytesToDesktop } from '../runtime/downloads';
 
 export type SessionPayload = {
   user: {
@@ -825,10 +823,7 @@ export async function downloadGenerationWord(generationUuid: string): Promise<Wo
   if (isDesktopRuntime()) {
     const bytes = new Uint8Array(await response.arrayBuffer());
     const fileName = readAttachmentFileName(response.headers) || '聚信得仁文档.docx';
-    const path = await invoke<string>('generation_word_save', {
-      fileName,
-      bytes: Array.from(bytes),
-    });
+    const path = await saveWordBytesToDesktop(fileName, bytes);
     return { kind: 'desktop', path };
   }
   await downloadBlobFromResponse(response, '聚信得仁文档.docx');

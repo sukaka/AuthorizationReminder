@@ -14,6 +14,7 @@ const { invokeMock, generateLocalModelMock } = vi.hoisted(() => ({
 vi.mock('@tauri-apps/api/core', () => ({ invoke: invokeMock }));
 vi.mock('../src/local/modelStream', () => ({
   generateLocalModel: generateLocalModelMock,
+  listModelProfiles: () => invokeMock('model_profile_list'),
 }));
 
 beforeEach(() => {

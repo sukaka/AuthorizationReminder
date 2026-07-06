@@ -1,6 +1,6 @@
 import { ApiError, apiFetch, getAuthPortalUrl } from './client';
 import type { LoopTraceStep } from './agentLoop';
-import { downloadBlobFromResponse } from '../runtime/downloads';
+import { downloadBlobFromResponse, saveWordBytesToDesktop } from '../runtime/downloads';
 import { isDesktopRuntime } from '../runtime/capabilities';
 
 export type ChatMode =
@@ -1053,11 +1053,7 @@ async function downloadWordExport(meta: {
   if (isDesktopRuntime()) {
     const bytes = new Uint8Array(await response.arrayBuffer());
     const fileName = readAttachmentFileName(response.headers) || meta.file_name || '聚信得仁文档.docx';
-    const { invoke } = await import('@tauri-apps/api/core');
-    const path = await invoke<string>('generation_word_save', {
-      fileName,
-      bytes: Array.from(bytes),
-    });
+    const path = await saveWordBytesToDesktop(fileName, bytes);
     return { kind: 'desktop', path };
   }
   await downloadBlobFromResponse(response, meta.file_name || '聚信得仁文档.docx');

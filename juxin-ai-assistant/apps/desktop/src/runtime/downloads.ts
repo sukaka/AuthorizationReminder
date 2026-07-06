@@ -41,3 +41,13 @@ export async function openLocalWordFile(path: string): Promise<'opened' | 'unsup
   await invoke('generation_word_open', { path });
   return 'opened';
 }
+
+export async function saveWordBytesToDesktop(
+  fileName: string,
+  bytes: Uint8Array,
+): Promise<string> {
+  return invoke<string>('generation_word_save', {
+    fileName,
+    bytes: Array.from(bytes),
+  });
+}

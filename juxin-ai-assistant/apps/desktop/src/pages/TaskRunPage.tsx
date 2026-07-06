@@ -1,4 +1,3 @@
-import { invoke } from '@tauri-apps/api/core';
 import { useEffect, useMemo, useState } from 'react';
 
 import {
@@ -9,7 +8,7 @@ import { AttachmentUpload } from '../components/AttachmentUpload';
 import { FeedbackPanel } from '../components/FeedbackPanel';
 import { OutputReader } from '../components/OutputReader';
 import { deleteDraft, loadDraft, saveDraft } from '../local/drafts';
-import { generateLocalModel } from '../local/modelStream';
+import { cancelModelGeneration, generateLocalModel, listModelProfiles } from '../local/modelStream';
 import { enqueuePendingResult, syncPendingResults } from '../local/syncQueue';
 import type { ModelProfile } from '../types/tauri';
 import {
@@ -119,7 +118,7 @@ export function TaskRunPage({ task, userId }: { task: TaskDefinition; userId?: s
 
   useEffect(() => {
     if (!desktopAvailable) return;
-    invoke<ModelProfile[]>('model_profile_list')
+    listModelProfiles()
       .then((items) => {
         setProfiles(items);
         setProfileId(items.find((profile) => profile.isDefault)?.id || items[0]?.id || '');
@@ -412,7 +411,7 @@ export function TaskRunPage({ task, userId }: { task: TaskDefinition; userId?: s
         provider: 'local-desktop',
       }).catch(() => undefined);
     }
-    await invoke('model_cancel', { requestId });
+    await cancelModelGeneration(requestId);
   };
 
   if (!desktopAvailable) {

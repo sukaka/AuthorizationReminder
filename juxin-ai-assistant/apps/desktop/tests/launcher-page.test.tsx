@@ -33,6 +33,10 @@ type FakeBridgeOptions = {
 function fakeBridge(options: FakeBridgeOptions = {}): DesktopBridge {
   return {
     isLocalLauncherContext: () => options.localLauncher ?? true,
+    closeWorkspace: vi.fn().mockResolvedValue(undefined),
+    bindLocalSession: vi.fn().mockResolvedValue(undefined),
+    markWorkspaceReady: vi.fn().mockResolvedValue(undefined),
+    reportWorkspaceStatus: vi.fn().mockResolvedValue(undefined),
     getServerConfig: vi.fn().mockResolvedValue({
       serverOrigin: options.savedOrigin ?? null,
       lastSuccessfulCheckAt: options.lastSuccessfulCheckAt ?? null,
