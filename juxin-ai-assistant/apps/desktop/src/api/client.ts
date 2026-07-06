@@ -1,4 +1,4 @@
-import { invoke } from '@tauri-apps/api/core';
+import { isDesktopRuntime } from '../runtime/capabilities';
 
 export type SessionPayload = {
   user: {
@@ -251,7 +251,7 @@ export function clearSsoCallbackParams(): void {
 }
 
 function readDesktopSsoToken(): string {
-  if (!window.__TAURI_INTERNALS__) return '';
+  if (!isDesktopRuntime()) return '';
   try {
     const url = new URL(window.location.href);
     const handoffToken = String(url.searchParams.get('sso_token') || '').trim();
@@ -309,7 +309,7 @@ function formatAuthPortalUrl(url: URL, options: AuthPortalUrlOptions): string {
 
 export function getAuthPortalUrl(options: AuthPortalUrlOptions = {}): string {
   if (
-    window.__TAURI_INTERNALS__ &&
+    isDesktopRuntime() &&
     typeof window.__JUXIN_DESKTOP_AUTH_PORTAL__ === 'string'
   ) {
     try {

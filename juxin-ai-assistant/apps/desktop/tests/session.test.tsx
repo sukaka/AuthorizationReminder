@@ -1,17 +1,63 @@
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { HttpResponse, http } from 'msw';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import App from '../src/App';
 import { getAuthPortalUrl, getSession } from '../src/api/client';
 import { server } from './setup';
 
 afterEach(() => {
+  vi.restoreAllMocks();
   Reflect.deleteProperty(window, '__JUXIN_DESKTOP_AUTH_PORTAL__');
   Reflect.deleteProperty(window, '__TAURI_INTERNALS__');
   window.sessionStorage.clear();
   window.history.replaceState({}, '', '/');
+});
+
+describe('apiFetch runtime token behavior', () => {
+  beforeEach(() => {
+    window.sessionStorage.clear();
+    vi.restoreAllMocks();
+    vi.resetModules();
+    Reflect.deleteProperty(window, '__TAURI_INTERNALS__');
+  });
+
+  it('does not attach desktop bearer token in web mode', async () => {
+    vi.doMock('../src/runtime/capabilities', () => ({
+      isDesktopRuntime: () => false,
+    }));
+    const { apiFetch } = await import('../src/api/client');
+
+    window.__TAURI_INTERNALS__ = { metadata: { currentWebview: { label: 'workspace' } } };
+    window.sessionStorage.setItem('juxin_ai_assistant_sso_token', 'desktop-token');
+    const fetchMock = vi.spyOn(window, 'fetch').mockResolvedValue(new Response('{}'));
+
+    await apiFetch('/api/ai/session');
+
+    const [, init] = fetchMock.mock.calls[0];
+    const headers = new Headers(init?.headers);
+    expect(headers.get('Authorization')).toBeNull();
+    expect(init?.credentials).toBe('include');
+  });
+
+  it('attaches desktop bearer token only in desktop mode', async () => {
+    vi.doMock('../src/runtime/capabilities', () => ({
+      isDesktopRuntime: () => true,
+    }));
+    const { apiFetch } = await import('../src/api/client');
+
+    window.__TAURI_INTERNALS__ = { metadata: { currentWebview: { label: 'workspace' } } };
+    window.sessionStorage.setItem('juxin_ai_assistant_sso_token', 'desktop-token');
+    const fetchMock = vi.spyOn(window, 'fetch').mockResolvedValue(new Response('{}'));
+
+    await apiFetch('/api/ai/session');
+
+    const [, init] = fetchMock.mock.calls[0];
+    const headers = new Headers(init?.headers);
+    expect(headers.get('Authorization')).toBe('Bearer desktop-token');
+    expect(init?.credentials).toBe('include');
+  });
 });
 
 describe('unified session shell', () => {
