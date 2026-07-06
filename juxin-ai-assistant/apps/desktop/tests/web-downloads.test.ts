@@ -94,4 +94,59 @@ describe('web downloads', () => {
     expect(invokeMock).not.toHaveBeenCalledWith('generation_word_save', expect.anything());
     expect(createObjectURL).toHaveBeenCalledTimes(1);
   });
+
+  it('uses browser download for chat word export in web mode even with stale tauri internals', async () => {
+    vi.resetModules();
+    const invokeMock = vi.fn();
+    vi.doMock('@tauri-apps/api/core', () => ({
+      invoke: invokeMock,
+    }));
+    const createObjectURL = vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:chat-export-download');
+    vi.spyOn(document, 'createElement').mockImplementation((tagName: string) => {
+      const element = document.createElementNS('http://www.w3.org/1999/xhtml', tagName) as HTMLAnchorElement;
+      if (tagName === 'a') element.click = vi.fn();
+      return element as HTMLElement;
+    });
+    window.__JUXIN_RUNTIME_PLATFORM__ = 'web';
+    window.__TAURI_INTERNALS__ = { metadata: { currentWebview: { label: 'workspace' } } };
+    const fetchMock = vi.spyOn(window, 'fetch').mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/export/word') {
+        return Response.json(
+          {
+            file_name: '聊天回答.docx',
+            download_url: '/api/export/download/chat-export',
+          },
+          { status: 201 },
+        );
+      }
+      if (url === '/api/export/download/chat-export') {
+        return new Response(new Blob(['docx']), {
+          headers: {
+            'Content-Disposition': 'attachment; filename="chat-export.docx"',
+          },
+        });
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    const { exportChatWord } = await import('../src/api/chat');
+
+    await expect(
+      exportChatWord({
+        conversationId: 'conversation-1',
+        exportType: 'single_answer',
+      }),
+    ).resolves.toEqual({ kind: 'browser' });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/export/word',
+      expect.objectContaining({ credentials: 'include' }),
+    );
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/export/download/chat-export',
+      expect.objectContaining({ credentials: 'include' }),
+    );
+    expect(invokeMock).not.toHaveBeenCalledWith('generation_word_save', expect.anything());
+    expect(createObjectURL).toHaveBeenCalledTimes(1);
+  });
 });

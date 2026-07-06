@@ -1,6 +1,7 @@
 import { ApiError, apiFetch, getAuthPortalUrl } from './client';
 import type { LoopTraceStep } from './agentLoop';
 import { downloadBlobFromResponse } from '../runtime/downloads';
+import { isDesktopRuntime } from '../runtime/capabilities';
 
 export type ChatMode =
   | 'normal'
@@ -1049,7 +1050,7 @@ async function downloadWordExport(meta: {
 }): Promise<ChatWordDownloadResult> {
   const response = await apiFetch(meta.download_url);
   if (!response.ok) throw new ApiError(response.status, 'CHAT_WORD_DOWNLOAD_FAILED');
-  if (window.__TAURI_INTERNALS__) {
+  if (isDesktopRuntime()) {
     const bytes = new Uint8Array(await response.arrayBuffer());
     const fileName = readAttachmentFileName(response.headers) || meta.file_name || '聚信得仁文档.docx';
     const { invoke } = await import('@tauri-apps/api/core');
