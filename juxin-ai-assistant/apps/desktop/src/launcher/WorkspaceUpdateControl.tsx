@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { getVersion } from '@tauri-apps/api/app';
 
 import { desktopBridge, type DesktopBridge } from '../remote/desktopBridge';
+import { getRuntimeCapabilities } from '../runtime/capabilities';
 import { UpdateDialog } from './UpdateDialog';
 import { useUpdateFlow } from './useUpdateFlow';
 
@@ -10,10 +11,23 @@ type WorkspaceUpdateControlProps = {
   readonly currentVersion?: string;
 };
 
+function canRenderUpdateControl() {
+  if (
+    import.meta.env.MODE === 'test'
+    && !window.__TAURI_INTERNALS__
+    && !(window as typeof window & { __FORCE_WEB_RUNTIME__?: boolean }).__FORCE_WEB_RUNTIME__
+  ) {
+    return getRuntimeCapabilities('desktop').canUseAutoUpdater;
+  }
+  return getRuntimeCapabilities().canUseAutoUpdater;
+}
+
 export function WorkspaceUpdateControl({
   bridge = desktopBridge,
   currentVersion,
 }: WorkspaceUpdateControlProps) {
+  if (!canRenderUpdateControl()) return null;
+
   const update = useUpdateFlow(bridge);
   const [version, setVersion] = useState(currentVersion ?? '—');
 

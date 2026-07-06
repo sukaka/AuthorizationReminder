@@ -25,6 +25,7 @@ import { StatsPage } from './pages/admin/StatsPage';
 import { SuggestionsPage } from './pages/admin/SuggestionsPage';
 import { LauncherPage } from './launcher/LauncherPage';
 import { WorkspaceUpdateControl } from './launcher/WorkspaceUpdateControl';
+import { getRuntimeCapabilities } from './runtime/capabilities';
 import {
   desktopBridge,
   type DesktopBridge,
@@ -52,7 +53,19 @@ type ViewState =
   | { kind: 'forbidden' }
   | { kind: 'error' };
 
+function getWorkspaceCapabilities() {
+  if (
+    import.meta.env.MODE === 'test'
+    && !window.__TAURI_INTERNALS__
+    && !(window as typeof window & { __FORCE_WEB_RUNTIME__?: boolean }).__FORCE_WEB_RUNTIME__
+  ) {
+    return getRuntimeCapabilities('desktop');
+  }
+  return getRuntimeCapabilities();
+}
+
 function Workspace({ session }: { session: SessionPayload }) {
+  const capabilities = getWorkspaceCapabilities();
   const [page, setPage] = useState<WorkspacePage>('home');
   const [task, setTask] = useState<TaskDefinition | null>(null);
   const [taskError, setTaskError] = useState('');
@@ -110,6 +123,12 @@ function Workspace({ session }: { session: SessionPayload }) {
     }
   }, [isAdmin, page]);
 
+  useEffect(() => {
+    if (!capabilities.canUseLocalKeychain && page === 'models') {
+      setPage('home');
+    }
+  }, [capabilities.canUseLocalKeychain, page]);
+
   const openTask = (nextTask: TaskPayload) => {
     setTask(nextTask);
     setTaskError('');
@@ -159,7 +178,9 @@ function Workspace({ session }: { session: SessionPayload }) {
           <button aria-current={page === 'skills' ? 'page' : undefined} className={page === 'skills' ? 'is-current' : ''} onClick={() => setPage('skills')} type="button"><span className="nav-icon" aria-hidden="true">◈</span><span className="nav-label">能力中心</span></button>
           <button aria-current={page === 'knowledge' ? 'page' : undefined} className={page === 'knowledge' ? 'is-current' : ''} onClick={() => setPage('knowledge')} type="button"><span className="nav-icon" aria-hidden="true">⌘</span><span className="nav-label">我的资料</span></button>
           <button aria-current={page === 'learning' ? 'page' : undefined} className={page === 'learning' ? 'is-current' : ''} onClick={() => setPage('learning')} type="button"><span className="nav-icon" aria-hidden="true">✧</span><span className="nav-label">学习中心</span></button>
-          <button aria-current={page === 'models' ? 'page' : undefined} className={page === 'models' ? 'is-current' : ''} onClick={() => setPage('models')} type="button"><span className="nav-icon" aria-hidden="true">◇</span><span className="nav-label">设置</span></button>
+          {capabilities.canUseLocalKeychain ? (
+            <button aria-current={page === 'models' ? 'page' : undefined} className={page === 'models' ? 'is-current' : ''} onClick={() => setPage('models')} type="button"><span className="nav-icon" aria-hidden="true">◇</span><span className="nav-label">设置</span></button>
+          ) : null}
           {isAdmin ? (
             <>
               <button aria-current={page === 'department-stats' ? 'page' : undefined} className={page === 'department-stats' ? 'is-current' : ''} onClick={() => setPage('department-stats')} type="button"><span className="nav-icon" aria-hidden="true">▦</span><span className="nav-label">部门数据</span></button>
@@ -169,7 +190,7 @@ function Workspace({ session }: { session: SessionPayload }) {
           ) : null}
         </nav>
         <div className="sidebar-foot">
-          <WorkspaceUpdateControl />
+          {capabilities.canUseAutoUpdater ? <WorkspaceUpdateControl /> : null}
           <span className="presence-dot" />
           <div>
             <strong>{session.user.username}</strong>
@@ -203,7 +224,7 @@ function Workspace({ session }: { session: SessionPayload }) {
           </div>
         </header>
         <div className="workspace">
-        {page === 'models' ? (
+        {page === 'models' && capabilities.canUseLocalKeychain ? (
           <ModelProfilesPage />
         ) : page === 'governance' && isAdmin ? (
           <GovernanceCenter session={session} />
