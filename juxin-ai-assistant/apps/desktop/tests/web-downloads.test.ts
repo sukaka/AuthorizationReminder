@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { downloadBlobFromResponse, openLocalWordFile } from '../src/runtime/downloads';
 
@@ -11,7 +11,12 @@ describe('web downloads', () => {
     vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => undefined);
   });
 
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it('downloads response blob through a browser anchor', async () => {
+    vi.useFakeTimers();
     const click = vi.fn();
     const appendChild = vi.spyOn(document.body, 'appendChild');
     const removeChild = vi.spyOn(document.body, 'removeChild');
@@ -32,6 +37,21 @@ describe('web downloads', () => {
     expect(click).toHaveBeenCalledTimes(1);
     expect(appendChild).toHaveBeenCalledTimes(1);
     expect(removeChild).toHaveBeenCalledTimes(1);
+    expect(URL.revokeObjectURL).not.toHaveBeenCalled();
+
+    vi.runAllTimers();
+
+    expect(URL.revokeObjectURL).toHaveBeenCalledTimes(1);
+  });
+
+  it('falls back to plain filename disposition', async () => {
+    const response = new Response(new Blob(['docx']), {
+      headers: {
+        'Content-Disposition': 'attachment; filename="plain.docx"',
+      },
+    });
+
+    await expect(downloadBlobFromResponse(response, 'fallback.docx')).resolves.toBe('plain.docx');
   });
 
   it('does not try to open local files in web mode', async () => {
