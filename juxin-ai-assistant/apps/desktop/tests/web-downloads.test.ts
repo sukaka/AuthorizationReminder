@@ -5,16 +5,13 @@ import { downloadBlobFromResponse, openLocalWordFile } from '../src/runtime/down
 describe('web downloads', () => {
   beforeEach(() => {
     vi.restoreAllMocks();
-    // @ts-expect-error test cleanup
     delete window.__TAURI_INTERNALS__;
-    // @ts-expect-error test cleanup
     delete window.__JUXIN_RUNTIME_PLATFORM__;
     vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:download-url');
     vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => undefined);
   });
 
   afterEach(() => {
-    // @ts-expect-error test cleanup
     delete window.__JUXIN_RUNTIME_PLATFORM__;
     vi.useRealTimers();
   });
