@@ -1,11 +1,39 @@
-FROM python:3.12-slim
+ARG PYTHON_BASE_IMAGE=ccr.ccs.tencentyun.com/library/python:3.12-slim
+FROM ${PYTHON_BASE_IMAGE}
+
+ARG DEBIAN_APT_MIRROR=http://mirrors.aliyun.com/debian
+ARG DEBIAN_SECURITY_MIRROR=http://mirrors.aliyun.com/debian-security
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 
 WORKDIR /app
 
-RUN apt-get update \
+RUN set -eux; \
+    . /etc/os-release; \
+    debian_codename="${VERSION_CODENAME:-bookworm}"; \
+    if [ -f /etc/apt/sources.list.d/debian.sources ]; then \
+      printf '%s\n' \
+        'Types: deb' \
+        "URIs: ${DEBIAN_APT_MIRROR}" \
+        "Suites: ${debian_codename} ${debian_codename}-updates" \
+        'Components: main' \
+        'Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg' \
+        '' \
+        'Types: deb' \
+        "URIs: ${DEBIAN_SECURITY_MIRROR}" \
+        "Suites: ${debian_codename}-security" \
+        'Components: main' \
+        'Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg' \
+        > /etc/apt/sources.list.d/debian.sources; \
+    else \
+      printf 'deb %s %s main\ndeb %s %s-updates main\ndeb %s %s-security main\n' \
+        "${DEBIAN_APT_MIRROR}" "${debian_codename}" \
+        "${DEBIAN_APT_MIRROR}" "${debian_codename}" \
+        "${DEBIAN_SECURITY_MIRROR}" "${debian_codename}" \
+        > /etc/apt/sources.list; \
+    fi; \
+    apt-get update \
     && apt-get install -y --no-install-recommends curl \
     && rm -rf /var/lib/apt/lists/*
 
