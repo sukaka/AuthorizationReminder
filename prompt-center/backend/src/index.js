@@ -15,6 +15,7 @@ const {
   requirePermission,
 } = require('./auth');
 const service = require('./prompt-service');
+const { createRuntimeTokenGuard } = require('./runtime-auth');
 
 const app = express();
 const PORT = Number(process.env.PORT || 5189);
@@ -25,6 +26,9 @@ const CORS_ORIGINS = String(process.env.CORS_ORIGINS || '')
   .split(',')
   .map((item) => item.trim())
   .filter(Boolean);
+const requireRuntimeToken = createRuntimeTokenGuard(
+  process.env.PROMPT_CENTER_RUNTIME_TOKEN
+);
 
 app.disable('x-powered-by');
 app.use(helmet({ contentSecurityPolicy: false }));
@@ -72,6 +76,30 @@ const validateCsrfToken = (req, _res, next) => {
 app.get('/health', (_req, res) => {
   res.json({ ok: true, service: 'prompt-center' });
 });
+
+app.get(
+  '/api/prompt-center/runtime/prompts/:id/published',
+  requireRuntimeToken,
+  asyncHandler(async (req, res) => {
+    res.json(await service.getPublishedPrompt(
+      db,
+      req.params.id,
+      req.query.version || null
+    ));
+  })
+);
+
+app.get(
+  '/api/prompt-center/runtime/prompts/:id/staged',
+  requireRuntimeToken,
+  asyncHandler(async (req, res) => {
+    res.json(await service.getStagedPromptVersion(
+      db,
+      req.params.id,
+      req.query.version
+    ));
+  })
+);
 
 const router = express.Router();
 router.use(authRequired);

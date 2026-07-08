@@ -39,6 +39,23 @@ const AUDIT_ACTION_OPTIONS = Object.freeze([
   { value: 'prompt.use', label: '复制使用提示词', tone: 'session' },
   { value: 'prompt.favorite', label: '收藏提示词', tone: 'session' },
   { value: 'prompt.unfavorite', label: '取消收藏提示词', tone: 'session' },
+  { value: 'generation.prepare', label: '准备生成', tone: 'session' },
+  { value: 'generation.complete', label: '完成生成', tone: 'session' },
+  { value: 'generation.regenerate', label: '重新生成', tone: 'session' },
+  { value: 'generation.feedback', label: '提交生成反馈', tone: 'change' },
+  { value: 'generation.delete', label: '删除生成记录', tone: 'change' },
+  { value: 'task.create', label: '创建任务', tone: 'change' },
+  { value: 'task.update', label: '更新任务', tone: 'change' },
+  { value: 'task.delete', label: '删除任务', tone: 'change' },
+  { value: 'task.fields.replace', label: '替换任务字段', tone: 'change' },
+  { value: 'task.prompt_binding.update', label: '更新任务提示词绑定', tone: 'change' },
+  { value: 'knowledge.create', label: '新增知识', tone: 'change' },
+  { value: 'knowledge.update', label: '更新知识', tone: 'change' },
+  { value: 'knowledge.disable', label: '停用知识', tone: 'change' },
+  { value: 'setting.update', label: '更新助手设置', tone: 'change' },
+  { value: 'suggestion.create', label: '提交建议', tone: 'change' },
+  { value: 'suggestion.review', label: '审核建议', tone: 'change' },
+  { value: 'authorization.denied', label: '拒绝未授权操作', tone: 'security' },
 ]);
 
 const AUDIT_ENTITY_OPTIONS = Object.freeze([
@@ -59,6 +76,12 @@ const AUDIT_ENTITY_OPTIONS = Object.freeze([
   { value: 'prompt', label: '提示词' },
   { value: 'department', label: '部门' },
   { value: 'category', label: '分类' },
+  { value: 'generation', label: '生成记录' },
+  { value: 'task', label: '任务' },
+  { value: 'knowledge', label: '知识' },
+  { value: 'setting', label: '助手设置' },
+  { value: 'suggestion', label: '建议' },
+  { value: 'action', label: '权限动作' },
 ]);
 
 const AUDIT_PRESET_OPTIONS = Object.freeze([
@@ -117,6 +140,7 @@ const getAuditSystemLabel = (value) => {
   const normalized = String(value || '').trim();
   if (!normalized) return '-';
   if (normalized === 'sso') return '统一登录';
+  if (normalized === 'ai-assistant') return '聚信 AI 助手';
   return getSystemDisplayShortLabel(normalized) || normalized;
 };
 

@@ -5,54 +5,137 @@ const API_BASE = import.meta.env.VITE_API_BASE || ''
 
 const stageLabelMap = {
   CREATED: '已创建',
-  RECEIVED: '已收货',
-  HARDWARE_CHECKED: '硬件已检查',
-  OS_INSTALLED: '系统已安装',
-  TESTED: '已测试',
-  APPROVED: '已审核',
-  PACKED: '已装箱',
-  SHIPPED: '已发货',
+  RECEIVED: '收货',
+  HARDWARE_CHECKED: '硬件检查',
+  WAREHOUSED_AFTER_HARDWARE: '入库',
+  OUTBOUNDED_FOR_INSTALL: '出库',
+  OS_INSTALLED: '系统安装',
+  TESTED: '测试',
+  APPROVED: '审核',
+  PACKED: '装箱',
+  WAREHOUSED_AFTER_PACK: '入库',
+  OUTBOUNDED_FOR_SHIP: '出库',
+  SHIPPED: '发货',
 }
 
 const timelineActionLabelMap = {
   CREATE: '创建流转单',
   RECEIVE: '执行收货',
   'HARDWARE-CHECK': '执行硬件检查',
+  'WAREHOUSE-AFTER-HARDWARE': '执行入库',
+  'OUTBOUND-FOR-INSTALL': '执行出库',
   'OS-INSTALL': '执行系统安装',
   TEST: '执行测试',
   APPROVE: '执行审核',
   PACK: '执行装箱',
+  'WAREHOUSE-AFTER-PACK': '执行入库',
+  'OUTBOUND-FOR-SHIP': '执行出库',
   SHIP: '执行发货',
   REWORK: '退回重做',
+}
+
+const auditActionLabelMap = {
+  CREATE: '创建记录',
+  CREATE_JOB: '创建流转单',
+  UPDATE_ATTACHMENT_UPLOAD_SETTING: '更新附件上传配置',
+  SLA_REMINDER: '生成SLA催办',
+  RETENTION_RUN: '执行留存清理',
+  SCAN_APPLY: '扫码应用',
+  UPDATE_SLA_RULES: '更新SLA规则',
+  DELETE_SLA_REMINDER: '删除催办记录',
+  PURGE_SLA_REMINDERS: '清空催办记录',
+  UPSERT_HW_TEMPLATES: '更新硬件模板',
+  UPSERT_PERMISSION_POLICIES: '更新权限策略',
+  UPDATE_DUAL_SIGN_POLICY: '更新双签策略',
+  LOCK_JOB: '锁定流转单',
+  UNLOCK_JOB: '解锁流转单',
+  DELETE_ATTACHMENT: '删除附件',
+  UPLOAD_ATTACHMENT: '上传附件',
+  DUAL_SIGN_TEST_INIT: '发起双人复核测试',
+  REWORK: '退回重做',
+  CANCEL: '取消流转单',
+  CHANGE_REQUEST_WITHDRAW: '撤回变更申请',
+  CHANGE_REQUEST_REJECT: '驳回变更申请',
+  CHANGE_REQUEST_APPROVE: '通过变更申请',
+  WITHDRAW_APPROVED: '批准撤回',
+  UPDATE_RETENTION_POLICIES: '更新留存策略',
+  CREATE_CALLBACK_SUBSCRIPTION: '创建回调订阅',
+  UPDATE_CALLBACK_SUBSCRIPTION: '更新回调订阅',
+  CREATE_API_CLIENT: '创建API客户端',
 }
 
 const nextActionByStage = {
   CREATED: 'receive',
   RECEIVED: 'hardware-check',
-  HARDWARE_CHECKED: 'os-install',
+  HARDWARE_CHECKED: 'warehouse-after-hardware',
+  WAREHOUSED_AFTER_HARDWARE: 'outbound-for-install',
+  OUTBOUNDED_FOR_INSTALL: 'os-install',
   OS_INSTALLED: 'test',
   TESTED: 'approve',
   APPROVED: 'pack',
-  PACKED: 'ship',
+  PACKED: 'warehouse-after-pack',
+  WAREHOUSED_AFTER_PACK: 'outbound-for-ship',
+  OUTBOUNDED_FOR_SHIP: 'ship',
+}
+
+const optionalNextActionsByStage = {
+  HARDWARE_CHECKED: ['warehouse-after-hardware', 'os-install'],
+  PACKED: ['warehouse-after-pack', 'ship'],
 }
 
 const actionLabelMap = {
   receive: '执行收货',
   'hardware-check': '执行硬件检查',
+  'warehouse-after-hardware': '执行入库',
+  'outbound-for-install': '执行出库',
   'os-install': '执行系统安装',
   test: '执行测试',
   approve: '执行审核',
   pack: '执行装箱',
+  'warehouse-after-pack': '执行入库',
+  'outbound-for-ship': '执行出库',
   ship: '执行发货',
+}
+
+const stageContextMap = {
+  RECEIVED: '确认设备已到场',
+  HARDWARE_CHECKED: '硬件核对与留证',
+  WAREHOUSED_AFTER_HARDWARE: '检查后暂存',
+  OUTBOUNDED_FOR_INSTALL: '安装前领出',
+  OS_INSTALLED: '按需安装系统',
+  TESTED: '测试结果需复核',
+  APPROVED: '审核结论',
+  PACKED: '包装与配件确认',
+  WAREHOUSED_AFTER_PACK: '装箱后暂存',
+  OUTBOUNDED_FOR_SHIP: '发货前领出',
+  SHIPPED: '客户发货完成',
+}
+
+const actionGuidanceMap = {
+  receive: { title: '确认收货', hint: '登记来件信息，开始设备流转。' },
+  'hardware-check': { title: '完成硬件检查', hint: '核对 CPU、内存、磁盘、网卡、序列号，并补充检查留证。' },
+  'warehouse-after-hardware': { title: '执行入库', hint: '设备检查后需要暂存时，记录库位后入库。' },
+  'outbound-for-install': { title: '执行出库', hint: '设备准备安装系统时，从库存领出。' },
+  'os-install': { title: '跳过入库，直接系统安装', hint: '设备检查后不暂存，立即进入系统安装。' },
+  test: { title: '完成测试', hint: '记录开机、网络、压力测试结果，并指定复签人。' },
+  approve: { title: '完成审核', hint: '审核测试结论，必要时进行双人复核。' },
+  pack: { title: '完成装箱', hint: '确认包装、配件和箱号。' },
+  'warehouse-after-pack': { title: '执行入库', hint: '装箱后暂无客户订单时，先入库等待发货。' },
+  'outbound-for-ship': { title: '执行出库', hint: '客户采购后，从库存领出准备发货。' },
+  ship: { title: '跳过入库，直接发货', hint: '装箱后已有客户订单，直接登记物流并发货。' },
 }
 
 const actionAllowedRoles = {
   receive: ['admin', 'sysadmin'],
   'hardware-check': ['admin', 'sysadmin'],
+  'warehouse-after-hardware': ['admin', 'sysadmin'],
+  'outbound-for-install': ['admin', 'sysadmin'],
   'os-install': ['admin', 'sysadmin'],
   test: ['admin', 'sysadmin'],
   approve: ['admin', 'sysadmin'],
   pack: ['admin', 'sysadmin'],
+  'warehouse-after-pack': ['admin', 'sysadmin'],
+  'outbound-for-ship': ['admin', 'sysadmin'],
   ship: ['admin', 'sysadmin'],
 }
 
@@ -65,6 +148,10 @@ const payloadLabelMap = {
   nic_match: '网卡匹配',
   serial_match: '序列号匹配',
   hardware_note: '硬件检查备注',
+  warehouse_location: '库位',
+  warehouse_note: '入库备注',
+  outbound_target: '出库去向',
+  outbound_note: '出库备注',
   os_name: '系统名称',
   os_version: '系统版本',
   install_mode: '安装方式',
@@ -127,6 +214,11 @@ const initialAdvanceForm = {
   nic_match: 'PASS',
   serial_match: 'PASS',
   hardware_note: '',
+  warehouse_location: '',
+  warehouse_note: '',
+  outbound_target: '',
+  outbound_note: '',
+  device_sn: '',
   os_name: '',
   os_version: '',
   install_mode: '',
@@ -149,6 +241,7 @@ const initialAdvanceForm = {
   shipped_note: '',
   signature: '',
   dual_sign_token: '',
+  expected_second_signer_sub: '',
 }
 
 const parseApiDate = (value) => {
@@ -166,6 +259,49 @@ const stageText = (value) => {
 const timelineActionText = (value) => {
   const key = String(value || '').toUpperCase()
   return timelineActionLabelMap[key] || value || '-'
+}
+
+const auditActionText = (value) => {
+  const key = String(value || '').toUpperCase()
+  if (key.startsWith('STAGE_')) {
+    const stageAction = key.slice(6)
+    return timelineActionLabelMap[stageAction] || value || '-'
+  }
+  return auditActionLabelMap[key] || timelineActionLabelMap[key] || value || '-'
+}
+
+const auditMessageText = (value) => {
+  const text = String(value || '').trim()
+  if (!text) return '-'
+  const stageAdvanceMatch = text.match(/^阶段推进\s+([A-Z_]+)\s*->\s*([A-Z_]+)$/i)
+  if (stageAdvanceMatch) {
+    return `阶段推进 ${stageText(stageAdvanceMatch[1])} → ${stageText(stageAdvanceMatch[2])}`
+  }
+  return Object.entries(stageLabelMap).reduce(
+    (result, [code, label]) => result.replace(new RegExp(`\\b${code}\\b`, 'g'), label),
+    text,
+  )
+}
+
+const auditActionOptions = [
+  { value: '', label: '全部动作' },
+  ...Object.entries(auditActionLabelMap).map(([value, label]) => ({ value, label })),
+  ...Object.entries(timelineActionLabelMap)
+    .filter(([value]) => !['CREATE', 'REWORK'].includes(value))
+    .map(([value, label]) => ({ value: `STAGE_${value}`, label })),
+]
+
+const roleText = (value) => {
+  const key = normalizeRole(value)
+  const map = {
+    sysadmin: '系统管理员',
+    admin: '管理员',
+    auditor: '审计员',
+    reviewer: '审核员',
+    editor: '编辑员',
+    user: '普通用户',
+  }
+  return map[key] || value || '-'
 }
 
 const getPortalBaseUrl = () => {
@@ -281,8 +417,21 @@ const buildStagePayloadByAction = (action, form) => {
       hardware_note: form.hardware_note,
     }
   }
+  if (action === 'warehouse-after-hardware' || action === 'warehouse-after-pack') {
+    return {
+      warehouse_location: form.warehouse_location,
+      warehouse_note: form.warehouse_note,
+    }
+  }
+  if (action === 'outbound-for-install' || action === 'outbound-for-ship') {
+    return {
+      outbound_target: form.outbound_target,
+      outbound_note: form.outbound_note,
+    }
+  }
   if (action === 'os-install') {
     return {
+      device_sn: form.device_sn,
       os_name: form.os_name,
       os_version: form.os_version,
       install_mode: form.install_mode,
@@ -327,6 +476,8 @@ const buildStagePayloadByAction = (action, form) => {
 
 const trimText = (value) => String(value || '').trim()
 
+const deviceSnText = (value) => trimText(value) || '待安装后补录'
+
 const ensureFailNote = (result, note, remark, label) => {
   if (result === 'FAIL' && !trimText(note) && !trimText(remark)) {
     return `${label}为不通过时，必须填写说明（备注或说明字段）`
@@ -334,7 +485,7 @@ const ensureFailNote = (result, note, remark, label) => {
   return ''
 }
 
-const validateAdvanceForm = (action, form) => {
+const validateAdvanceForm = (action, form, currentUserId = '') => {
   const remark = trimText(form.remark)
   if (!action) return ''
 
@@ -352,6 +503,8 @@ const validateAdvanceForm = (action, form) => {
 
   if (action === 'test') {
     if (!trimText(form.signature)) return '测试阶段双人复核要求填写电子签名'
+    if (!trimText(form.dual_sign_token) && !trimText(form.expected_second_signer_sub)) return '请选择第二复签人'
+    if (!trimText(form.dual_sign_token) && String(form.expected_second_signer_sub) === String(currentUserId || '')) return '第二复签人不能选择当前用户'
     if (trimText(form.burnin_hours)) {
       const burnin = Number(form.burnin_hours)
       if (!Number.isFinite(burnin) || burnin < 0 || burnin > 9999) return '老化时长必须是 0-9999 的数字'
@@ -361,6 +514,8 @@ const validateAdvanceForm = (action, form) => {
 
   if (action === 'approve') {
     if (!trimText(form.signature)) return '审核阶段双人复核要求填写电子签名'
+    if (!trimText(form.dual_sign_token) && !trimText(form.expected_second_signer_sub)) return '请选择第二复签人'
+    if (!trimText(form.dual_sign_token) && String(form.expected_second_signer_sub) === String(currentUserId || '')) return '第二复签人不能选择当前用户'
     return ensureFailNote(form.approve_result, `${trimText(form.approve_note)}${trimText(form.reviewer_comment)}`, remark, '审核结论')
   }
 
@@ -551,10 +706,14 @@ const batchPayloadTemplateMap = {
     serial_match: 'PASS',
     hardware_note: '',
   },
-  'os-install': { os_name: 'JXOS', os_version: '1.0.0', install_result: 'PASS', install_note: '' },
+  'warehouse-after-hardware': { warehouse_location: '', warehouse_note: '硬件检查后入库' },
+  'outbound-for-install': { outbound_target: '系统安装', outbound_note: '系统安装前出库' },
+  'os-install': { device_sn: '', os_name: 'JXOS', os_version: '1.0.0', install_result: 'PASS', install_note: '' },
   test: { boot_test: 'PASS', network_test: 'PASS', stress_test: 'PASS', test_result: 'PASS', test_note: '' },
   approve: { approve_result: 'PASS', approve_note: '批量审核通过' },
   pack: { package_check: 'PASS', accessory_check: 'PASS', box_no: 'BOX-BATCH-001', pack_note: '' },
+  'warehouse-after-pack': { warehouse_location: '', warehouse_note: '装箱后入库' },
+  'outbound-for-ship': { outbound_target: '客户发货', outbound_note: '发货前出库' },
   ship: { carrier: 'SF', shipped_note: '批量发货' },
 }
 
@@ -570,6 +729,151 @@ const parseBatchJobIdsText = (value) => {
         .map((item) => Number(item))
         .filter((item) => Number.isInteger(item) && item > 0),
     ),
+  )
+}
+
+const defaultAttachmentUploadSetting = {
+  max_file_size_mb: 10,
+  max_file_size_bytes: 10 * 1024 * 1024,
+  min_file_size_mb: 1,
+  max_allowed_file_size_mb: 200,
+}
+
+const defaultPermissionEffective = {
+  loaded: false,
+  menus: {},
+  buttons: {},
+  stageActions: {},
+}
+
+const detailTabs = [
+  { key: 'advance', label: '执行推进' },
+  { key: 'attachments', label: '附件留证' },
+  { key: 'responsibility', label: '责任节点' },
+  { key: 'rework', label: '退回处理' },
+  { key: 'history', label: '流转记录' },
+]
+
+const formatFileSize = (bytes) => {
+  const size = Number(bytes || 0)
+  if (!Number.isFinite(size) || size < 0) return '-'
+  if (size >= 1024 * 1024) return `${(size / 1024 / 1024).toFixed(size >= 10 * 1024 * 1024 ? 1 : 2)} MB`
+  if (size >= 1024) return `${Math.round(size / 1024)} KB`
+  return `${Math.round(size)} B`
+}
+
+const SearchableUserSelect = ({ options, value, onChange, disabled = false, loading = false }) => {
+  const rootRef = useRef(null)
+  const [open, setOpen] = useState(false)
+  const [query, setQuery] = useState('')
+  const [highlightedIndex, setHighlightedIndex] = useState(0)
+  const selected = options.find((option) => option.value === String(value || ''))
+  const normalizedQuery = query.trim().toLocaleLowerCase('zh-CN')
+  const filteredOptions = useMemo(
+    () => options.filter((option) => option.username.toLocaleLowerCase('zh-CN').includes(normalizedQuery)),
+    [normalizedQuery, options],
+  )
+
+  useEffect(() => {
+    setHighlightedIndex(0)
+  }, [normalizedQuery])
+
+  useEffect(() => {
+    const onPointerDown = (event) => {
+      if (!rootRef.current?.contains(event.target)) {
+        setOpen(false)
+        setQuery('')
+      }
+    }
+    document.addEventListener('mousedown', onPointerDown)
+    return () => document.removeEventListener('mousedown', onPointerDown)
+  }, [])
+
+  const chooseOption = (option) => {
+    onChange(option.value)
+    setOpen(false)
+    setQuery('')
+  }
+
+  const onKeyDown = (event) => {
+    if (event.key === 'ArrowDown') {
+      event.preventDefault()
+      setOpen(true)
+      setHighlightedIndex((index) => Math.min(index + 1, Math.max(filteredOptions.length - 1, 0)))
+    } else if (event.key === 'ArrowUp') {
+      event.preventDefault()
+      setOpen(true)
+      setHighlightedIndex((index) => Math.max(index - 1, 0))
+    } else if (event.key === 'Enter' && open && filteredOptions[highlightedIndex]) {
+      event.preventDefault()
+      chooseOption(filteredOptions[highlightedIndex])
+    } else if (event.key === 'Escape') {
+      setOpen(false)
+      setQuery('')
+    }
+  }
+
+  return (
+    <div className="searchable-user-select" ref={rootRef}>
+      <div className="searchable-user-select-control">
+        <input
+          role="combobox"
+          aria-autocomplete="list"
+          aria-controls="second-signer-options"
+          aria-expanded={open}
+          autoComplete="off"
+          value={open ? query : selected?.label || ''}
+          placeholder={loading ? '用户加载中...' : '输入用户名搜索'}
+          disabled={disabled || loading}
+          onFocus={() => {
+            setQuery('')
+            setOpen(true)
+          }}
+          onChange={(event) => {
+            setQuery(event.target.value)
+            setOpen(true)
+            if (value) onChange('')
+          }}
+          onKeyDown={onKeyDown}
+        />
+        {value && !disabled && !loading ? (
+          <button
+            type="button"
+            className="searchable-user-select-clear"
+            aria-label="清除复签人"
+            title="清除复签人"
+            onClick={() => {
+              onChange('')
+              setQuery('')
+            }}
+          >
+            ×
+          </button>
+        ) : null}
+      </div>
+      {open && !disabled && !loading ? (
+        <div className="searchable-user-select-options" id="second-signer-options" role="listbox">
+          {filteredOptions.length > 0 ? (
+            filteredOptions.map((option, index) => (
+              <button
+                type="button"
+                role="option"
+                aria-selected={option.value === String(value || '')}
+                className={`searchable-user-select-option ${index === highlightedIndex ? 'highlighted' : ''}`}
+                key={option.value}
+                onMouseDown={(event) => event.preventDefault()}
+                onMouseEnter={() => setHighlightedIndex(index)}
+                onClick={() => chooseOption(option)}
+              >
+                {option.label}
+              </button>
+            ))
+          ) : (
+            <div className="searchable-user-select-empty">未找到用户</div>
+          )}
+        </div>
+      ) : null}
+    </div>
   )
 }
 
@@ -594,6 +898,7 @@ function App() {
   const [detailModalOpen, setDetailModalOpen] = useState(false)
   const [detailModalPosition, setDetailModalPosition] = useState({ x: 0, y: 0 })
   const [detailModalDragging, setDetailModalDragging] = useState(false)
+  const [activeDetailTab, setActiveDetailTab] = useState('advance')
   const detailModalRef = useRef(null)
   const detailModalDragRef = useRef(null)
 
@@ -606,6 +911,7 @@ function App() {
   })
 
   const [advanceForm, setAdvanceForm] = useState({ ...initialAdvanceForm })
+  const [selectedAdvanceAction, setSelectedAdvanceAction] = useState('')
 
   const [reworkForm, setReworkForm] = useState({
     target_stage: 'RECEIVED',
@@ -618,6 +924,16 @@ function App() {
     remark: '',
     file: null,
   })
+  const [attachmentUploadSetting, setAttachmentUploadSetting] = useState(defaultAttachmentUploadSetting)
+  const [attachmentUploadSettingForm, setAttachmentUploadSettingForm] = useState(String(defaultAttachmentUploadSetting.max_file_size_mb))
+  const [attachmentUploadSettingLoading, setAttachmentUploadSettingLoading] = useState(false)
+  const [systemUsers, setSystemUsers] = useState([])
+  const [systemUsersLoading, setSystemUsersLoading] = useState(false)
+  const [permissionEffective, setPermissionEffective] = useState(defaultPermissionEffective)
+  const [permissionMeta, setPermissionMeta] = useState(null)
+  const [permissionPolicies, setPermissionPolicies] = useState([])
+  const [permissionPolicyDrafts, setPermissionPolicyDrafts] = useState([])
+  const [permissionLoading, setPermissionLoading] = useState(false)
 
   const [dashboard, setDashboard] = useState(null)
   const [dashboardLoading, setDashboardLoading] = useState(false)
@@ -665,27 +981,54 @@ function App() {
     onConfirm: null,
   })
 
-  const canWrite = user?.role === 'admin' || user?.role === 'sysadmin'
-  const canUpload = ['admin', 'sysadmin'].includes(normalizeRole(user?.role))
-  const canRework = ['admin', 'sysadmin'].includes(normalizeRole(user?.role))
-  const canDeleteAttachment = ['admin', 'sysadmin'].includes(normalizeRole(user?.role))
+  const isBaseWriter = user?.role === 'admin' || user?.role === 'sysadmin'
   const isAuditOnlyUser = normalizeRole(user?.role) === 'auditor'
-  const canReadAuditLogs = isAuditOnlyUser
+  const permissionMenuFallback = (key) => {
+    if (isAuditOnlyUser) return ['audit', 'audit-verify'].includes(key)
+    if (isBaseWriter) return ['dashboard', 'sla', 'batch', 'jobs', 'create', 'permissions'].includes(key)
+    return ['dashboard', 'jobs'].includes(key)
+  }
+  const permissionButtonFallback = (key) => {
+    if (['auditExport', 'auditVerify'].includes(key)) return isAuditOnlyUser
+    return isBaseWriter
+  }
+  const permissionMenuAllowed = (key) => {
+    if (permissionEffective.loaded) return permissionEffective.menus?.[key] === true
+    return permissionMenuFallback(key)
+  }
+  const permissionButtonAllowed = (key) => {
+    if (permissionEffective.loaded) return permissionEffective.buttons?.[key] === true
+    return permissionButtonFallback(key)
+  }
+  const permissionStageActionAllowed = (action) => {
+    if (permissionEffective.loaded) return permissionEffective.stageActions?.[action] === true
+    return roleCanDoAction(user?.role, action)
+  }
+  const canCreateJob = permissionButtonAllowed('createJob')
+  const canBatchImport = permissionButtonAllowed('batchImport')
+  const canBatchStage = permissionButtonAllowed('batchStage')
+  const canUpload = permissionButtonAllowed('attachmentUpload')
+  const canRework = permissionButtonAllowed('rework')
+  const canDeleteAttachment = permissionButtonAllowed('attachmentDelete')
+  const canEditSla = permissionButtonAllowed('slaWrite')
+  const canRunSla = permissionButtonAllowed('slaRun')
+  const canDeleteSlaReminder = permissionButtonAllowed('slaReminderDelete')
+  const canManagePermissions = permissionButtonAllowed('permissionManage')
+  const canEditAttachmentUploadSetting = permissionButtonAllowed('attachmentSettings')
+  const canReadAuditLogs = isAuditOnlyUser && permissionMenuAllowed('audit')
   const sidebarMenuItems = useMemo(() => {
-    if (isAuditOnlyUser) {
-      return [
-        { key: 'audit', label: '审计日志' },
-        { key: 'audit-verify', label: '审计验签' },
-      ]
-    }
-    return [
+    const items = [
       { key: 'dashboard', label: '看板总览' },
       { key: 'sla', label: 'SLA催办' },
       { key: 'batch', label: '批量处理' },
       { key: 'jobs', label: '流转单列表' },
       { key: 'create', label: '新建流转单' },
+      { key: 'permissions', label: '权限设置' },
+      { key: 'audit', label: '审计日志' },
+      { key: 'audit-verify', label: '审计验签' },
     ]
-  }, [isAuditOnlyUser])
+    return items.filter((item) => permissionMenuAllowed(item.key))
+  }, [permissionEffective, isAuditOnlyUser, isBaseWriter])
   const detailMatchesSelection = Number(detail?.id || 0) === Number(selectedJobId || 0)
 
   const stageOptions = useMemo(
@@ -701,28 +1044,154 @@ function App() {
     [],
   )
 
-  const nextAction = detail ? nextActionByStage[String(detail.current_stage || '').toUpperCase()] : ''
+  const permissionActionOptions = useMemo(() => {
+    const meta = permissionMeta || {}
+    const menuOptions = (Array.isArray(meta.menus) ? meta.menus : []).map((item) => ({
+      value: item.code,
+      label: `菜单：${item.label || item.key}`,
+    }))
+    const buttonOptions = (Array.isArray(meta.buttons) ? meta.buttons : []).map((item) => ({
+      value: item.code,
+      label: `按钮：${item.label || item.key}`,
+    }))
+    const stageOptions = (Array.isArray(meta.stage_actions) ? meta.stage_actions : []).map((item) => ({
+      value: item.action_code,
+      label: `流程动作：${item.label || item.action}`,
+      stage_code: item.stage_code,
+    }))
+    return [...menuOptions, ...buttonOptions, ...stageOptions]
+  }, [permissionMeta])
+
+  const permissionUserOptions = useMemo(
+    () =>
+      (Array.isArray(systemUsers) ? systemUsers : []).map((item) => ({
+        value: String(item.id),
+        label: `${item.username} · ${roleText(item.role)}${item.department_code ? ` · ${item.department_code}` : ''}`,
+        name: item.username,
+        role: item.role,
+        department_code: item.department_code || '*',
+      })),
+    [systemUsers],
+  )
+
+  const permissionOverviewGroups = useMemo(() => {
+    const meta = permissionMeta || {}
+    const menus = Array.isArray(meta.menus) ? meta.menus : []
+    const buttons = Array.isArray(meta.buttons) ? meta.buttons : []
+    const stageActions = Array.isArray(meta.stage_actions) ? meta.stage_actions : []
+    return [
+      {
+        title: '菜单权限',
+        description: '决定用户登录后能看到哪些业务页面。',
+        rows: menus.map((item) => ({
+          key: item.key || item.code,
+          label: item.label || item.key || item.code,
+          allowed: permissionMenuAllowed(item.key),
+        })),
+      },
+      {
+        title: '操作权限',
+        description: '控制上传、删除、批量、SLA、权限管理等按钮。',
+        rows: buttons.map((item) => ({
+          key: item.key || item.code,
+          label: item.label || item.key || item.code,
+          allowed: permissionButtonAllowed(item.key),
+        })),
+      },
+      {
+        title: '阶段权限',
+        description: '控制用户能否推进收货、检查、安装、审核、发货等节点。',
+        rows: stageActions.map((item) => ({
+          key: item.action || item.action_code,
+          label: item.label || actionLabelMap[item.action] || item.action,
+          allowed: permissionStageActionAllowed(item.action),
+        })),
+      },
+    ]
+  }, [permissionMeta, permissionEffective, user?.role])
+
+  const currentStage = detail ? String(detail.current_stage || '').toUpperCase() : ''
+  const availableNextActions = detail
+    ? optionalNextActionsByStage[currentStage] || (nextActionByStage[currentStage] ? [nextActionByStage[currentStage]] : [])
+    : []
+  const nextAction = availableNextActions.includes(selectedAdvanceAction)
+    ? selectedAdvanceAction
+    : (availableNextActions[0] || '')
   const nextStageCode = nextAction ? String(({
     receive: 'RECEIVED',
     'hardware-check': 'HARDWARE_CHECKED',
+    'warehouse-after-hardware': 'WAREHOUSED_AFTER_HARDWARE',
+    'outbound-for-install': 'OUTBOUNDED_FOR_INSTALL',
     'os-install': 'OS_INSTALLED',
     test: 'TESTED',
     approve: 'APPROVED',
     pack: 'PACKED',
+    'warehouse-after-pack': 'WAREHOUSED_AFTER_PACK',
+    'outbound-for-ship': 'OUTBOUNDED_FOR_SHIP',
     ship: 'SHIPPED',
   }[nextAction] || '')).toUpperCase() : ''
-  const canRunNextAction = roleCanDoAction(user?.role, nextAction)
+  const canRunNextAction = permissionStageActionAllowed(nextAction)
+  const workflowSteps = useMemo(() => {
+    if (!detail) return []
+    const currentIndex = stageSequence.indexOf(currentStage)
+    return stageSequence
+      .filter((stage) => stage !== 'CREATED')
+      .map((stage) => {
+        const index = stageSequence.indexOf(stage)
+        const state = stage === currentStage ? 'current' : (currentIndex >= 0 && index < currentIndex ? 'done' : 'todo')
+        return {
+          stage,
+          state,
+          label: stageText(stage),
+          context: stageContextMap[stage] || '',
+        }
+      })
+  }, [detail, currentStage])
+  const attachmentCountByStage = useMemo(() => {
+    const map = {}
+    const attachments = Array.isArray(detail?.attachments) ? detail.attachments : []
+    attachments.forEach((item) => {
+      const stage = String(item.stage_code || '').toUpperCase()
+      if (!stage) return
+      map[stage] = (map[stage] || 0) + 1
+    })
+    return map
+  }, [detail])
+  const evidenceStageCode = nextStageCode || currentStage
+  const evidenceStageCount = Number(attachmentCountByStage[evidenceStageCode] || 0)
+  const evidenceRequired = evidenceStageCode === 'HARDWARE_CHECKED' || evidenceStageCode === 'TESTED'
+  const evidenceStatusText = evidenceRequired ? (evidenceStageCount > 0 ? '已满足' : '待补充') : '按需上传'
   const responsibilityRows = useMemo(() => {
     if (!detail) return []
-    return [
-      { stage: 'RECEIVED', by: detail.received_by_name, role: detail.received_by_role, at: detail.received_at },
-      { stage: 'HARDWARE_CHECKED', by: detail.hardware_checked_by_name, role: detail.hardware_checked_by_role, at: detail.hardware_checked_at },
-      { stage: 'OS_INSTALLED', by: detail.os_installed_by_name, role: detail.os_installed_by_role, at: detail.os_installed_at },
-      { stage: 'TESTED', by: detail.tested_by_name, role: detail.tested_by_role, at: detail.tested_at },
-      { stage: 'APPROVED', by: detail.approved_by_name, role: detail.approved_by_role, at: detail.approved_at },
-      { stage: 'PACKED', by: detail.packed_by_name, role: detail.packed_by_role, at: detail.packed_at },
-      { stage: 'SHIPPED', by: detail.shipped_by_name, role: detail.shipped_by_role, at: detail.shipped_at },
-    ]
+    const records = Array.isArray(detail.stage_records) ? detail.stage_records : []
+    const latestByStage = new Map()
+    records.forEach((item) => {
+      const stage = String(item.to_stage || '').toUpperCase()
+      if (stage && !latestByStage.has(stage)) latestByStage.set(stage, item)
+    })
+    const fallbackByStage = {
+      RECEIVED: { by: detail.received_by_name, role: detail.received_by_role, at: detail.received_at },
+      HARDWARE_CHECKED: { by: detail.hardware_checked_by_name, role: detail.hardware_checked_by_role, at: detail.hardware_checked_at },
+      OS_INSTALLED: { by: detail.os_installed_by_name, role: detail.os_installed_by_role, at: detail.os_installed_at },
+      TESTED: { by: detail.tested_by_name, role: detail.tested_by_role, at: detail.tested_at },
+      APPROVED: { by: detail.approved_by_name, role: detail.approved_by_role, at: detail.approved_at },
+      PACKED: { by: detail.packed_by_name, role: detail.packed_by_role, at: detail.packed_at },
+      SHIPPED: { by: detail.shipped_by_name, role: detail.shipped_by_role, at: detail.shipped_at },
+    }
+    return stageSequence
+      .filter((stage) => stage !== 'CREATED')
+      .map((stage) => {
+        const record = latestByStage.get(stage)
+        if (record) {
+          return {
+            stage,
+            by: record.operator_name,
+            role: record.operator_role,
+            at: record.operated_at,
+          }
+        }
+        return { stage, ...(fallbackByStage[stage] || {}) }
+      })
   }, [detail])
 
   const reworkTargetOptions = useMemo(() => {
@@ -732,6 +1201,18 @@ function App() {
     if (currentIndex <= 0) return []
     return stageSequence.slice(0, currentIndex).map((stage) => ({ value: stage, label: stageLabelMap[stage] || stage }))
   }, [detail])
+
+  const dualSignUserOptions = useMemo(
+    () =>
+      (Array.isArray(systemUsers) ? systemUsers : [])
+        .filter((item) => String(item?.id) !== String(currentUserId || ''))
+        .map((item) => ({
+          value: String(item.id),
+          username: String(item.username || ''),
+          label: `${item.username} · ${roleText(item.role)}${item.department_code ? ` · ${item.department_code}` : ''}`,
+        })),
+    [currentUserId, systemUsers],
+  )
 
   const summary = useMemo(() => {
     const byStage = jobs.reduce((acc, item) => {
@@ -1017,10 +1498,175 @@ function App() {
     }
   }
 
+  const refreshAttachmentUploadSetting = async () => {
+    setAttachmentUploadSettingLoading(true)
+    try {
+      const data = await apiRequest('/api/device-flow/settings/attachment-upload')
+      const next = {
+        ...defaultAttachmentUploadSetting,
+        ...(data || {}),
+      }
+      setAttachmentUploadSetting(next)
+      setAttachmentUploadSettingForm(String(Number(next.max_file_size_mb || defaultAttachmentUploadSetting.max_file_size_mb)))
+      return next
+    } finally {
+      setAttachmentUploadSettingLoading(false)
+    }
+  }
+
+  const normalizePermissionPolicyDraft = (item = {}) => {
+    const actionCodes = Array.isArray(item.selected_action_codes)
+      ? item.selected_action_codes
+      : [item.action_code || 'menu.jobs']
+    return {
+      user_sub: trimText(item.user_sub || ''),
+      user_name: trimText(item.user_name || ''),
+      role_code: trimText(item.role_code || '*').toLowerCase() || '*',
+      department_code: trimText(item.department_code || '*').toUpperCase() || '*',
+      action_code: trimText(item.action_code || actionCodes[0] || 'menu.jobs').toLowerCase() || 'menu.jobs',
+      selected_action_codes: Array.from(new Set(actionCodes.map((code) => trimText(code).toLowerCase()).filter(Boolean))),
+      stage_code: trimText(item.stage_code || '*').toUpperCase() || '*',
+      effect: trimText(item.effect || 'ALLOW').toUpperCase() === 'DENY' ? 'DENY' : 'ALLOW',
+      enabled: item.enabled === undefined ? true : Boolean(item.enabled),
+      note: trimText(item.note || ''),
+    }
+  }
+
+  const refreshPermissionEffective = async () => {
+    const data = await apiRequest('/api/device-flow/permissions/effective')
+    setPermissionEffective({
+      loaded: true,
+      menus: data?.menus || {},
+      buttons: data?.buttons || {},
+      stageActions: data?.stageActions || {},
+    })
+    return data
+  }
+
+  const refreshPermissionSettings = async () => {
+    setPermissionLoading(true)
+    try {
+      const [meta, policies] = await Promise.all([
+        apiRequest('/api/device-flow/permissions/meta'),
+        apiRequest('/api/device-flow/permissions/policies'),
+      ])
+      const rows = Array.isArray(policies) ? policies : []
+      setPermissionMeta(meta || null)
+      setPermissionPolicies(rows)
+      setPermissionPolicyDrafts(rows.map(normalizePermissionPolicyDraft))
+    } finally {
+      setPermissionLoading(false)
+    }
+  }
+
+  const onAddPermissionPolicy = () => {
+    setPermissionPolicyDrafts((prev) => [
+      ...prev,
+      normalizePermissionPolicyDraft({
+        user_sub: '',
+        user_name: '',
+        role_code: '*',
+        department_code: '*',
+        action_code: 'menu.jobs',
+        selected_action_codes: ['menu.jobs'],
+        stage_code: '*',
+        effect: 'ALLOW',
+        enabled: true,
+        note: '',
+      }),
+    ])
+  }
+
+  const updatePermissionPolicyDraft = (index, patch) => {
+    setPermissionPolicyDrafts((prev) =>
+      prev.map((item, idx) => (idx === index ? normalizePermissionPolicyDraft({ ...item, ...patch }) : item)),
+    )
+  }
+
+  const removePermissionPolicyDraft = (index) => {
+    setPermissionPolicyDrafts((prev) => prev.filter((_item, idx) => idx !== index))
+  }
+
+  const onSavePermissionPolicies = async () => {
+    if (!canManagePermissions) return showError('当前角色无权限保存权限策略')
+    if (permissionPolicyDrafts.length === 0) return showError('请至少保留一条权限策略')
+    try {
+      setPermissionLoading(true)
+      const rows = permissionPolicyDrafts.flatMap((item) => {
+        const normalized = normalizePermissionPolicyDraft(item)
+        const codes = normalized.selected_action_codes.length ? normalized.selected_action_codes : [normalized.action_code]
+        const userOption = permissionUserOptions.find((entry) => entry.value === normalized.user_sub)
+        return codes.map((code) => {
+          const option = permissionActionOptions.find((entry) => entry.value === code)
+          return {
+            ...normalized,
+            user_name: userOption?.name || normalized.user_name,
+            role_code: userOption?.role || normalized.role_code,
+            department_code: userOption?.department_code || normalized.department_code,
+            action_code: code,
+            stage_code: option?.stage_code || normalized.stage_code || '*',
+          }
+        })
+      })
+      if (rows.some((item) => !item.user_sub)) return showError('请选择用户')
+      const saved = await apiRequest('/api/device-flow/permissions/policies', {
+        method: 'PUT',
+        body: { policies: rows },
+      })
+      const nextRows = Array.isArray(saved) ? saved : []
+      setPermissionPolicies(nextRows)
+      setPermissionPolicyDrafts(nextRows.map(normalizePermissionPolicyDraft))
+      await refreshPermissionEffective()
+      showSuccess(`权限策略已保存，共 ${nextRows.length} 条`)
+    } catch (err) {
+      showError(err.message)
+    } finally {
+      setPermissionLoading(false)
+    }
+  }
+
+  const refreshSystemUsers = async () => {
+    setSystemUsersLoading(true)
+    try {
+      const rows = await apiRequest('/api/auth/system-users?system=device-flow')
+      setSystemUsers(Array.isArray(rows) ? rows : [])
+    } finally {
+      setSystemUsersLoading(false)
+    }
+  }
+
+  const onSaveAttachmentUploadSetting = async () => {
+    if (!canEditAttachmentUploadSetting) return showError('当前角色无权限修改附件上传配置')
+    const maxFileSizeMb = Number(attachmentUploadSettingForm)
+    const minFileSizeMb = Number(attachmentUploadSetting?.min_file_size_mb || 1)
+    const maxAllowedFileSizeMb = Number(attachmentUploadSetting?.max_allowed_file_size_mb || 200)
+    if (!Number.isInteger(maxFileSizeMb) || maxFileSizeMb < minFileSizeMb || maxFileSizeMb > maxAllowedFileSizeMb) {
+      return showError(`附件上传上限必须是 ${minFileSizeMb}-${maxAllowedFileSizeMb} 的整数 MB`)
+    }
+    try {
+      setAttachmentUploadSettingLoading(true)
+      const data = await apiRequest('/api/device-flow/settings/attachment-upload', {
+        method: 'PUT',
+        body: { max_file_size_mb: maxFileSizeMb },
+      })
+      const next = {
+        ...defaultAttachmentUploadSetting,
+        ...(data || {}),
+      }
+      setAttachmentUploadSetting(next)
+      setAttachmentUploadSettingForm(String(Number(next.max_file_size_mb || maxFileSizeMb)))
+      showSuccess(`附件上传上限已保存为 ${Number(next.max_file_size_mb || maxFileSizeMb)}MB`)
+    } catch (err) {
+      showError(err.message)
+    } finally {
+      setAttachmentUploadSettingLoading(false)
+    }
+  }
+
   const onDeleteSlaReminder = async (item) => {
     const reminderId = Number(item?.id || 0)
     if (!reminderId) return showError('催办记录ID无效')
-    if (!canWrite) return showError('当前角色无权限删除催办记录')
+    if (!canDeleteSlaReminder) return showError('当前角色无权限删除催办记录')
     openConfirmDialog({
       title: '删除催办记录',
       message: `确认删除催办记录 #${reminderId}？删除后不可恢复。`,
@@ -1041,7 +1687,7 @@ function App() {
   }
 
   const onClearSlaReminders = async () => {
-    if (!canWrite) return showError('当前角色无权限删除催办记录')
+    if (!canDeleteSlaReminder) return showError('当前角色无权限删除催办记录')
     openConfirmDialog({
       title: '一键清空催办记录',
       message: '确认清空全部催办记录？该操作不可恢复。',
@@ -1063,7 +1709,7 @@ function App() {
   }
 
   const onSaveSlaRules = async () => {
-    if (!canWrite) return showError('当前角色无权限修改 SLA 规则')
+    if (!canEditSla) return showError('当前角色无权限修改 SLA 规则')
     try {
       setBusy(true)
       const rules = slaRuleForm.map((item) => ({
@@ -1086,7 +1732,7 @@ function App() {
   }
 
   const onRunSlaNow = async () => {
-    if (!canWrite) return showError('当前角色无权限执行催办')
+    if (!canRunSla) return showError('当前角色无权限执行催办')
     try {
       setBusy(true)
       const result = await apiRequest('/api/device-flow/sla/run', {
@@ -1162,7 +1808,7 @@ function App() {
   }
 
   const onBatchImportJobs = async () => {
-    if (!canWrite) return showError('当前角色无权限导入')
+    if (!canBatchImport) return showError('当前角色无权限导入')
     if (!batchImportFile) return showError('请先选择导入文件')
     try {
       setBusy(true)
@@ -1184,6 +1830,7 @@ function App() {
   }
 
   const onBatchAdvanceStage = async () => {
+    if (!canBatchStage) return showError('当前角色无权限执行批量推进')
     const jobIds = parseBatchJobIdsText(batchStageForm.job_ids_text)
     if (jobIds.length === 0) return showError('请填写至少1个流转单 ID')
 
@@ -1262,6 +1909,7 @@ function App() {
   const refreshAll = async () => {
     setLoading(true)
     try {
+      await refreshPermissionEffective()
       if (isAuditOnlyUser) {
         await refreshAuditLogs()
         clearTips()
@@ -1280,6 +1928,7 @@ function App() {
 
   const onCreateJob = async (e) => {
     e.preventDefault()
+    if (!canCreateJob) return showError('当前角色无权限创建流转单')
     try {
       setBusy(true)
       const created = await apiRequest('/api/device-flow/jobs', {
@@ -1302,7 +1951,7 @@ function App() {
   const onAdvanceStage = async () => {
     if (!detail || !nextAction) return
     if (!canRunNextAction) return showError('当前角色无权执行该阶段动作')
-    const validationError = validateAdvanceForm(nextAction, advanceForm)
+    const validationError = validateAdvanceForm(nextAction, advanceForm, user?.id)
     if (validationError) return showError(validationError)
 
     try {
@@ -1317,6 +1966,8 @@ function App() {
         payload.signature = trimText(advanceForm.signature)
         if (trimText(advanceForm.dual_sign_token)) {
           payload.dual_sign_token = trimText(advanceForm.dual_sign_token)
+        } else {
+          payload.expected_second_signer_sub = trimText(advanceForm.expected_second_signer_sub)
         }
       }
 
@@ -1329,8 +1980,9 @@ function App() {
           ...prev,
           dual_sign_token: String(resp.dual_sign_token || ''),
           signature: '',
+          expected_second_signer_sub: String(resp.expected_second_signer_sub || prev.expected_second_signer_sub || ''),
         }))
-        showSuccess(`首签已提交，待第二人复签。会签令牌：${resp.dual_sign_token}`)
+        showSuccess(`首签已提交，待 ${resp.expected_second_signer_name || '指定人员'} 复签。会签令牌：${resp.dual_sign_token}`)
         await refreshDetail()
         return
       }
@@ -1344,6 +1996,7 @@ function App() {
         outbound_tracking_no: '',
         signature: '',
         dual_sign_token: '',
+        expected_second_signer_sub: '',
       }))
       await Promise.all([refreshJobs(), refreshDashboard()])
       await refreshDetail()
@@ -1379,6 +2032,10 @@ function App() {
     if (!detail) return
     if (!canUpload) return showError('当前角色无权上传附件')
     if (!attachmentForm.file) return showError('请选择要上传的文件')
+    const maxFileSizeBytes = Number(attachmentUploadSetting?.max_file_size_bytes || 0)
+    if (maxFileSizeBytes > 0 && Number(attachmentForm.file.size || 0) > maxFileSizeBytes) {
+      return showError(`文件大小 ${formatFileSize(attachmentForm.file.size)} 超过当前上限 ${attachmentUploadSetting.max_file_size_mb}MB`)
+    }
 
     try {
       setBusy(true)
@@ -1552,6 +2209,41 @@ function App() {
       </div>
     )
 
+    const selectedSecondSigner = dualSignUserOptions.find((item) => item.value === String(advanceForm.expected_second_signer_sub || ''))
+    const renderDualSignFields = () => (
+      <>
+        <div className="field">
+          <label>电子签名（必填）</label>
+          <input
+            value={advanceForm.signature}
+            onChange={(e) => setAdvanceForm((prev) => ({ ...prev, signature: e.target.value }))}
+            placeholder="输入签名口令或签名串"
+          />
+        </div>
+        <div className="field">
+          <label>指定复签人</label>
+          <SearchableUserSelect
+            options={dualSignUserOptions}
+            value={advanceForm.expected_second_signer_sub}
+            onChange={(nextValue) => setAdvanceForm((prev) => ({ ...prev, expected_second_signer_sub: nextValue }))}
+            disabled={Boolean(trimText(advanceForm.dual_sign_token)) || systemUsersLoading}
+            loading={systemUsersLoading}
+          />
+          {trimText(advanceForm.dual_sign_token) && selectedSecondSigner ? (
+            <span className="muted">本次会签指定由 {selectedSecondSigner.label} 复签</span>
+          ) : null}
+        </div>
+        <div className="field">
+          <label>双签令牌（第二人复签时填写）</label>
+          <input
+            value={advanceForm.dual_sign_token}
+            onChange={(e) => setAdvanceForm((prev) => ({ ...prev, dual_sign_token: e.target.value }))}
+            placeholder="首签后自动回填"
+          />
+        </div>
+      </>
+    )
+
     if (nextAction === 'receive') {
       return (
         <>
@@ -1587,9 +2279,55 @@ function App() {
       )
     }
 
+    if (nextAction === 'warehouse-after-hardware' || nextAction === 'warehouse-after-pack') {
+      return (
+        <>
+          <div className="field">
+            <label>库位</label>
+            <input
+              value={advanceForm.warehouse_location}
+              onChange={(e) => setAdvanceForm((prev) => ({ ...prev, warehouse_location: e.target.value }))}
+              placeholder="可填写库位/货架/区域"
+            />
+          </div>
+          <div className="field" style={{ gridColumn: '1 / -1' }}>
+            <label>入库备注</label>
+            <textarea value={advanceForm.warehouse_note} onChange={(e) => setAdvanceForm((prev) => ({ ...prev, warehouse_note: e.target.value }))} />
+          </div>
+        </>
+      )
+    }
+
+    if (nextAction === 'outbound-for-install' || nextAction === 'outbound-for-ship') {
+      return (
+        <>
+          <div className="field">
+            <label>出库去向</label>
+            <input
+              value={advanceForm.outbound_target}
+              onChange={(e) => setAdvanceForm((prev) => ({ ...prev, outbound_target: e.target.value }))}
+              placeholder={nextAction === 'outbound-for-install' ? '系统安装' : '客户发货'}
+            />
+          </div>
+          <div className="field" style={{ gridColumn: '1 / -1' }}>
+            <label>出库备注</label>
+            <textarea value={advanceForm.outbound_note} onChange={(e) => setAdvanceForm((prev) => ({ ...prev, outbound_note: e.target.value }))} />
+          </div>
+        </>
+      )
+    }
+
     if (nextAction === 'os-install') {
       return (
         <>
+          <div className="field">
+            <label>设备SN（系统安装后补录）</label>
+            <input
+              value={advanceForm.device_sn}
+              onChange={(e) => setAdvanceForm((prev) => ({ ...prev, device_sn: e.target.value }))}
+              placeholder="系统安装完成后填写"
+            />
+          </div>
           <div className="field">
             <label>系统名称</label>
             <input value={advanceForm.os_name} onChange={(e) => setAdvanceForm((prev) => ({ ...prev, os_name: e.target.value }))} />
@@ -1626,22 +2364,7 @@ function App() {
             <label>测试备注</label>
             <textarea value={advanceForm.test_note} onChange={(e) => setAdvanceForm((prev) => ({ ...prev, test_note: e.target.value }))} />
           </div>
-          <div className="field">
-            <label>电子签名（必填）</label>
-            <input
-              value={advanceForm.signature}
-              onChange={(e) => setAdvanceForm((prev) => ({ ...prev, signature: e.target.value }))}
-              placeholder="输入签名口令或签名串"
-            />
-          </div>
-          <div className="field">
-            <label>双签令牌（第二人复签时填写）</label>
-            <input
-              value={advanceForm.dual_sign_token}
-              onChange={(e) => setAdvanceForm((prev) => ({ ...prev, dual_sign_token: e.target.value }))}
-              placeholder="首签后自动回填"
-            />
-          </div>
+          {renderDualSignFields()}
         </>
       )
     }
@@ -1658,22 +2381,7 @@ function App() {
             <label>审核意见</label>
             <textarea value={advanceForm.reviewer_comment} onChange={(e) => setAdvanceForm((prev) => ({ ...prev, reviewer_comment: e.target.value }))} />
           </div>
-          <div className="field">
-            <label>电子签名（必填）</label>
-            <input
-              value={advanceForm.signature}
-              onChange={(e) => setAdvanceForm((prev) => ({ ...prev, signature: e.target.value }))}
-              placeholder="输入签名口令或签名串"
-            />
-          </div>
-          <div className="field">
-            <label>双签令牌（第二人复签时填写）</label>
-            <input
-              value={advanceForm.dual_sign_token}
-              onChange={(e) => setAdvanceForm((prev) => ({ ...prev, dual_sign_token: e.target.value }))}
-              placeholder="首签后自动回填"
-            />
-          </div>
+          {renderDualSignFields()}
         </>
       )
     }
@@ -1767,6 +2475,11 @@ function App() {
   }, [selectedJobId, token, isAuditOnlyUser])
 
   useEffect(() => {
+    setSelectedAdvanceAction('')
+    setActiveDetailTab('advance')
+  }, [detail?.id, detail?.current_stage])
+
+  useEffect(() => {
     if (!detailModalOpen) return
     const onKeyDown = (event) => {
       if (event.key !== 'Escape') return
@@ -1854,6 +2567,31 @@ function App() {
     refreshSlaSummary({ page: slaReminderPage }).catch((err) => showError(err.message))
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token, activeMenu, slaReminderPage])
+
+  useEffect(() => {
+    if (!token) return
+    if (activeMenu !== 'permissions') return
+    refreshPermissionSettings().catch((err) => showError(err.message))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token, activeMenu])
+
+  useEffect(() => {
+    if (!token || sidebarMenuItems.length === 0) return
+    if (sidebarMenuItems.some((item) => item.key === activeMenu)) return
+    setActiveMenu(sidebarMenuItems[0].key)
+  }, [token, activeMenu, sidebarMenuItems])
+
+  useEffect(() => {
+    if (!token || isAuditOnlyUser) return
+    refreshAttachmentUploadSetting().catch((err) => showError(err.message))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token, isAuditOnlyUser])
+
+  useEffect(() => {
+    if (!token || isAuditOnlyUser) return
+    refreshSystemUsers().catch((err) => showError(err.message))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token, isAuditOnlyUser])
 
   useEffect(() => {
     const action = batchStageForm.action
@@ -1948,7 +2686,7 @@ function App() {
           <div>
             <div className="muted">DEVICE FLOW V1</div>
             <h1>设备收货到发货全链路追踪</h1>
-            <div className="sub">流程：收货 → 硬件检查 → 系统安装 → 测试 → 审核 → 装箱 → 发货</div>
+            <div className="sub">流程：收货 → 硬件检查 → 入库 → 出库 → 系统安装 → 测试 → 审核 → 装箱 → 入库 → 出库 → 发货</div>
           </div>
           <div className="toolbar">
             <div className="status-card">
@@ -2077,7 +2815,7 @@ function App() {
                                   {item.job_no || `#${item.id}`}
                                 </button>
                               </td>
-                              <td>{item.device_sn}</td>
+                              <td>{deviceSnText(item.device_sn)}</td>
                               <td>{item.customer_name || '-'}</td>
                               <td>{stageText(item.current_stage)}</td>
                               <td>{Number(item.overdue_days || 0)}</td>
@@ -2092,49 +2830,51 @@ function App() {
                     </div>
                   </div>
 
-                  <div className="panel-subsection" style={{ marginTop: 14 }}>
-                    <strong>最近操作日志</strong>
-                    <div className="table-wrap" style={{ marginTop: 8 }}>
-                      <table className="table">
-                        <thead>
-                          <tr>
-                            <th>时间</th>
-                            <th>操作人</th>
-                            <th>动作</th>
-                            <th>流转单号</th>
-                            <th>说明</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {(Array.isArray(dashboard?.recent_logs) ? dashboard.recent_logs : []).map((item) => (
-                            <tr key={`recent-log-${item.id}`}>
-                              <td>{parseApiDate(item.created_at)}</td>
-                              <td>{item.username || '-'}</td>
-                              <td>{item.action || '-'}</td>
-                              <td>
-                                {item.job_id ? (
-                                  <button
-                                    type="button"
-                                    className="text-link"
-                                    onClick={() => onOpenJobDetail(item.job_id)}
-                                    disabled={busy}
-                                  >
-                                    {item.job_no || `#${item.job_id}`}
-                                  </button>
-                                ) : (
-                                  item.job_no || '-'
-                                )}
-                              </td>
-                              <td>{item.message || '-'}</td>
+                  {canReadAuditLogs ? (
+                    <div className="panel-subsection" style={{ marginTop: 14 }}>
+                      <strong>最近审计日志</strong>
+                      <div className="table-wrap" style={{ marginTop: 8 }}>
+                        <table className="table">
+                          <thead>
+                            <tr>
+                              <th>时间</th>
+                              <th>操作人</th>
+                              <th>动作</th>
+                              <th>流转单号</th>
+                              <th>说明</th>
                             </tr>
-                          ))}
-                          {(Array.isArray(dashboard?.recent_logs) ? dashboard.recent_logs : []).length === 0 ? (
-                            <tr><td colSpan={5} className="muted">暂无日志</td></tr>
-                          ) : null}
-                        </tbody>
-                      </table>
+                          </thead>
+                          <tbody>
+                            {(Array.isArray(dashboard?.recent_logs) ? dashboard.recent_logs : []).map((item) => (
+                              <tr key={`recent-log-${item.id}`}>
+                                <td>{parseApiDate(item.created_at)}</td>
+                                <td>{item.username || '-'}</td>
+                                <td>{auditActionText(item.action)}</td>
+                                <td>
+                                  {item.job_id ? (
+                                    <button
+                                      type="button"
+                                      className="text-link"
+                                      onClick={() => onOpenJobDetail(item.job_id)}
+                                      disabled={busy}
+                                    >
+                                      {item.job_no || `#${item.job_id}`}
+                                    </button>
+                                  ) : (
+                                    item.job_no || '-'
+                                  )}
+                                </td>
+                                <td>{auditMessageText(item.message)}</td>
+                              </tr>
+                            ))}
+                            {(Array.isArray(dashboard?.recent_logs) ? dashboard.recent_logs : []).length === 0 ? (
+                              <tr><td colSpan={5} className="muted">暂无日志</td></tr>
+                            ) : null}
+                          </tbody>
+                        </table>
+                      </div>
                     </div>
-                  </div>
+                  ) : null}
                 </>
               )}
             </div>
@@ -2149,8 +2889,8 @@ function App() {
                 <button className="btn" onClick={() => refreshSlaSummary()} disabled={slaLoading}>
                   {slaLoading ? '加载中...' : '刷新'}
                 </button>
-                <button className="btn" onClick={onRunSlaNow} disabled={busy || !canWrite}>立即执行催办</button>
-                <button className="btn btn-primary" onClick={onSaveSlaRules} disabled={busy || !canWrite}>保存规则</button>
+                <button className="btn" onClick={onRunSlaNow} disabled={busy || !canRunSla}>立即执行催办</button>
+                <button className="btn btn-primary" onClick={onSaveSlaRules} disabled={busy || !canEditSla}>保存规则</button>
               </div>
             </div>
             <div className="panel-body">
@@ -2261,7 +3001,7 @@ function App() {
                                   {item.job_no || `#${item.id}`}
                                 </button>
                               </td>
-                              <td>{item.device_sn || '-'}</td>
+                              <td>{deviceSnText(item.device_sn)}</td>
                               <td>{item.customer_name || '-'}</td>
                               <td>{stageText(item.current_stage)}</td>
                               <td>{Number(item.overdue_hours || 0)}</td>
@@ -2280,7 +3020,7 @@ function App() {
                   <div className="panel-subsection" style={{ marginTop: 12 }}>
                     <div className="toolbar" style={{ justifyContent: 'space-between' }}>
                       <strong>最近催办记录</strong>
-                      {canWrite ? (
+                      {canDeleteSlaReminder ? (
                         <button className="btn btn-danger" onClick={onClearSlaReminders} disabled={busy || slaLoading || slaReminderTotal <= 0}>
                           一键删除
                         </button>
@@ -2295,7 +3035,7 @@ function App() {
                             <th>阶段</th>
                             <th>超时/阈值(小时)</th>
                             <th>说明</th>
-                            {canWrite ? <th>操作</th> : null}
+                            {canDeleteSlaReminder ? <th>操作</th> : null}
                           </tr>
                         </thead>
                         <tbody>
@@ -2310,7 +3050,7 @@ function App() {
                               <td>{stageText(item.stage_code)}</td>
                               <td>{Number(item.overdue_hours || 0)} / {Number(item.threshold_hours || 0)}</td>
                               <td>{item.message || '-'}</td>
-                              {canWrite ? (
+                              {canDeleteSlaReminder ? (
                                 <td>
                                   <button className="btn btn-danger" onClick={() => onDeleteSlaReminder(item)} disabled={busy || slaLoading}>
                                     删除
@@ -2320,7 +3060,7 @@ function App() {
                             </tr>
                           ))}
                           {(Array.isArray(slaData?.recent_reminders) ? slaData.recent_reminders : []).length === 0 ? (
-                            <tr><td colSpan={canWrite ? 6 : 5} className="muted">暂无催办记录</td></tr>
+                            <tr><td colSpan={canDeleteSlaReminder ? 6 : 5} className="muted">暂无催办记录</td></tr>
                           ) : null}
                         </tbody>
                       </table>
@@ -2356,9 +3096,9 @@ function App() {
                     }}
                   />
                   <button className="btn" onClick={onBatchDownloadTemplate} disabled={busy}>下载导入模板</button>
-                  <button className="btn btn-primary" onClick={onBatchImportJobs} disabled={busy || !canWrite}>执行导入</button>
+                  <button className="btn btn-primary" onClick={onBatchImportJobs} disabled={busy || !canBatchImport}>执行导入</button>
                 </div>
-                {!canWrite ? <div className="muted" style={{ marginTop: 6 }}>当前角色无导入权限</div> : null}
+                {!canBatchImport ? <div className="muted" style={{ marginTop: 6 }}>当前角色无导入权限</div> : null}
                 {batchImportResult ? (
                   <div className="muted" style={{ marginTop: 8 }}>
                     导入结果：总计 {Number(batchImportResult.total_rows || 0)}，成功 {Number(batchImportResult.success_count || 0)}，失败 {Number(batchImportResult.failure_count || 0)}
@@ -2374,7 +3114,7 @@ function App() {
                     <input
                       value={batchExportFilter.keyword}
                       onChange={(e) => setBatchExportFilter((prev) => ({ ...prev, keyword: e.target.value }))}
-                      placeholder="单号/SN/客户"
+                      placeholder="单号/客户/来件/SN"
                     />
                   </div>
                   <div className="field">
@@ -2492,7 +3232,7 @@ function App() {
                   </div>
                 </div>
                 <div className="toolbar" style={{ marginTop: 10 }}>
-                  <button className="btn btn-primary" onClick={onBatchAdvanceStage} disabled={busy}>执行批量推进</button>
+                  <button className="btn btn-primary" onClick={onBatchAdvanceStage} disabled={busy || !canBatchStage}>执行批量推进</button>
                 </div>
                 {batchStageResult ? (
                   <div className="muted" style={{ marginTop: 8 }}>
@@ -2512,12 +3252,11 @@ function App() {
             <div className="panel-body">
               <form className="grid" onSubmit={onCreateJob}>
                 <div className="field">
-                  <label>设备SN *</label>
+                  <label>设备SN（系统安装后补录）</label>
                   <input
                     value={createForm.device_sn}
                     onChange={(e) => setCreateForm((prev) => ({ ...prev, device_sn: e.target.value }))}
-                    placeholder="如：SN-001"
-                    required
+                    placeholder="可留空，系统安装完成后填写"
                   />
                 </div>
                 <div className="field">
@@ -2550,12 +3289,185 @@ function App() {
                   <textarea value={createForm.remark} onChange={(e) => setCreateForm((prev) => ({ ...prev, remark: e.target.value }))} />
                 </div>
                 <div className="toolbar" style={{ gridColumn: '1 / -1' }}>
-                  <button className="btn btn-primary" type="submit" disabled={!canWrite || busy}>
+                  <button className="btn btn-primary" type="submit" disabled={!canCreateJob || busy}>
                     {busy ? '提交中...' : '创建流转单'}
                   </button>
-                  {!canWrite ? <span className="muted">当前角色无写权限</span> : null}
+                  {!canCreateJob ? <span className="muted">当前角色无创建权限</span> : null}
                 </div>
               </form>
+            </div>
+          </section>
+        ) : null}
+
+        {activeMenu === 'permissions' ? (
+          <section className="panel">
+            <div className="panel-header">
+              <strong>权限设置</strong>
+              <div className="toolbar">
+                <button className="btn" onClick={refreshPermissionSettings} disabled={permissionLoading}>
+                  {permissionLoading ? '加载中...' : '刷新'}
+                </button>
+                <button className="btn" onClick={onAddPermissionPolicy} disabled={!canManagePermissions || permissionLoading}>
+                  新增策略
+                </button>
+                <button className="btn btn-primary" onClick={onSavePermissionPolicies} disabled={!canManagePermissions || permissionLoading}>
+                  保存策略
+                </button>
+              </div>
+            </div>
+            <div className="panel-body">
+              <div className="permission-overview-grid">
+                {permissionOverviewGroups.map((group) => (
+                  <div className="permission-overview-card" key={group.title}>
+                    <div className="section-title-row">
+                      <div>
+                        <strong>{group.title}</strong>
+                        <div className="muted">{group.description}</div>
+                      </div>
+                      <span className="stage-chip">{group.rows.filter((item) => item.allowed).length}/{group.rows.length}</span>
+                    </div>
+                    <div className="permission-pill-list">
+                      {group.rows.slice(0, 10).map((item) => (
+                        <span className={item.allowed ? 'allowed' : 'denied'} key={`${group.title}-${item.key}`}>
+                          {item.label}
+                        </span>
+                      ))}
+                      {group.rows.length > 10 ? <span>还有 {group.rows.length - 10} 项</span> : null}
+                      {group.rows.length === 0 ? <span>暂无元数据</span> : null}
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <div className="section-title-row" style={{ marginTop: 16, marginBottom: 10 }}>
+                <div>
+                  <strong>策略明细</strong>
+                  <div className="muted">
+                    在这里选择用户并配置权限项；用户角色仍在系统管理中维护。命中策略后，DENY 优先于 ALLOW。
+                  </div>
+                </div>
+                <span className="muted">已加载 {Number(permissionPolicies.length || 0)} 条</span>
+              </div>
+              <div className="table-wrap">
+                <table className="table">
+                  <thead>
+                    <tr>
+                      <th>用户</th>
+                      <th>部门</th>
+                      <th>权限项</th>
+                      <th>适用阶段</th>
+                      <th>结果</th>
+                      <th>启用</th>
+                      <th>备注</th>
+                      <th>操作</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {permissionPolicyDrafts.map((item, idx) => (
+                      <tr key={`permission-policy-${idx}`}>
+                        <td>
+                          <select
+                            value={item.user_sub}
+                            onChange={(e) => {
+                              const selected = permissionUserOptions.find((entry) => entry.value === e.target.value)
+                              updatePermissionPolicyDraft(idx, {
+                                user_sub: e.target.value,
+                                user_name: selected?.name || '',
+                                role_code: selected?.role || '*',
+                                department_code: selected?.department_code || '*',
+                              })
+                            }}
+                            disabled={!canManagePermissions || systemUsersLoading}
+                          >
+                            <option value="">{systemUsersLoading ? '用户加载中...' : '选择用户'}</option>
+                            {permissionUserOptions.map((option) => (
+                              <option key={option.value} value={option.value}>{option.label}</option>
+                            ))}
+                          </select>
+                        </td>
+                        <td>
+                          <input
+                            value={item.department_code}
+                            onChange={(e) => updatePermissionPolicyDraft(idx, { department_code: e.target.value })}
+                            disabled={!canManagePermissions}
+                            placeholder="*"
+                          />
+                        </td>
+                        <td>
+                          <select
+                            multiple
+                            value={item.selected_action_codes}
+                            onChange={(e) => {
+                              const values = Array.from(e.target.selectedOptions).map((option) => option.value)
+                              const first = values[0] || 'menu.jobs'
+                              const option = permissionActionOptions.find((entry) => entry.value === first)
+                              updatePermissionPolicyDraft(idx, {
+                                action_code: first,
+                                selected_action_codes: values,
+                                stage_code: option?.stage_code || '*',
+                              })
+                            }}
+                            disabled={!canManagePermissions}
+                            size={4}
+                          >
+                            {(permissionActionOptions.length ? permissionActionOptions : [{ value: 'menu.jobs', label: '菜单：流转单列表' }]).map((option) => (
+                              <option key={option.value} value={option.value}>{option.label}</option>
+                            ))}
+                          </select>
+                        </td>
+                        <td>
+                          <select
+                            value={item.stage_code}
+                            onChange={(e) => updatePermissionPolicyDraft(idx, { stage_code: e.target.value })}
+                            disabled={!canManagePermissions}
+                          >
+                            <option value="*">全部阶段</option>
+                            {Object.entries(stageLabelMap).map(([stage, label]) => (
+                              <option key={stage} value={stage}>{label}</option>
+                            ))}
+                          </select>
+                        </td>
+                        <td>
+                          <select
+                            value={item.effect}
+                            onChange={(e) => updatePermissionPolicyDraft(idx, { effect: e.target.value })}
+                            disabled={!canManagePermissions}
+                          >
+                            <option value="ALLOW">允许</option>
+                            <option value="DENY">拒绝</option>
+                          </select>
+                        </td>
+                        <td>
+                          <input
+                            type="checkbox"
+                            checked={Boolean(item.enabled)}
+                            onChange={(e) => updatePermissionPolicyDraft(idx, { enabled: e.target.checked })}
+                            disabled={!canManagePermissions}
+                          />
+                        </td>
+                        <td>
+                          <input
+                            value={item.note}
+                            onChange={(e) => updatePermissionPolicyDraft(idx, { note: e.target.value })}
+                            disabled={!canManagePermissions}
+                            placeholder="可选"
+                          />
+                        </td>
+                        <td>
+                          <button className="btn btn-danger" onClick={() => removePermissionPolicyDraft(idx)} disabled={!canManagePermissions || permissionPolicyDrafts.length <= 1}>
+                            移除
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                    {permissionPolicyDrafts.length === 0 ? (
+                      <tr><td colSpan={8} className="muted">暂无权限策略</td></tr>
+                    ) : null}
+                  </tbody>
+                </table>
+              </div>
+              <div className="muted" style={{ marginTop: 10 }}>
+                当前已加载策略：{Number(permissionPolicies.length || 0)} 条
+              </div>
             </div>
           </section>
         ) : null}
@@ -2569,7 +3481,7 @@ function App() {
                   <input
                     value={filters.keyword}
                     onChange={(e) => setFilters((prev) => ({ ...prev, keyword: e.target.value }))}
-                    placeholder="搜索单号/SN/客户"
+                    placeholder="搜索单号/客户/来件/SN"
                   />
                   <select value={filters.stage} onChange={(e) => setFilters((prev) => ({ ...prev, stage: e.target.value }))}>
                     {stageOptions.map((item) => (
@@ -2600,7 +3512,7 @@ function App() {
                       {jobs.map((row) => (
                         <tr key={row.id}>
                           <td>{row.job_no}</td>
-                          <td>{row.device_sn}</td>
+                          <td>{deviceSnText(row.device_sn)}</td>
                           <td>{row.customer_name || '-'}</td>
                           <td>{row.inbound_tracking_no || '-'}</td>
                           <td>{row.outbound_tracking_no || '-'}</td>
@@ -2652,7 +3564,7 @@ function App() {
                 >
                   <header className="floating-modal-header" onPointerDown={onStartDetailModalDrag}>
                     <div>
-                      <h3>流转详情</h3>
+                      <h3>详情工作台</h3>
                       <div className="muted">流转单号：{detailMatchesSelection ? detail?.job_no || '-' : '-'} | 拖动标题栏可移动</div>
                     </div>
                     <button type="button" className="btn" onClick={closeDetailModal}>关闭</button>
@@ -2667,9 +3579,9 @@ function App() {
                       <div className="muted">未找到流转详情</div>
                     ) : (
                       <>
-                        <div className="grid">
+                        <div className="grid detail-summary-grid">
                           <div className="field"><label>流转单号</label><input value={detail.job_no || '-'} readOnly /></div>
-                          <div className="field"><label>设备SN</label><input value={detail.device_sn || '-'} readOnly /></div>
+                          <div className="field"><label>设备SN</label><input value={deviceSnText(detail.device_sn)} readOnly /></div>
                           <div className="field"><label>客户</label><input value={detail.customer_name || '-'} readOnly /></div>
                           <div className="field"><label>当前阶段</label><input value={stageText(detail.current_stage)} readOnly /></div>
                           <div className="field"><label>来件单号</label><input value={detail.inbound_tracking_no || '-'} readOnly /></div>
@@ -2678,6 +3590,32 @@ function App() {
                           <div className="field"><label>发货时间</label><input value={parseApiDate(detail.shipped_at)} readOnly /></div>
                         </div>
 
+                        <div className="workflow-stepper">
+                          {workflowSteps.map((item) => (
+                            <div className={`workflow-step ${item.state}`} key={`workflow-${item.stage}`}>
+                              <div className="workflow-dot" />
+                              <div>
+                                <strong>{item.label}</strong>
+                                <span>{item.context}</span>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+
+                        <div className="detail-tabbar">
+                          {detailTabs.map((item) => (
+                            <button
+                              type="button"
+                              className={activeDetailTab === item.key ? 'active' : ''}
+                              key={item.key}
+                              onClick={() => setActiveDetailTab(item.key)}
+                            >
+                              {item.label}
+                            </button>
+                          ))}
+                        </div>
+
+                        {activeDetailTab === 'responsibility' ? (
                         <div style={{ marginTop: 16 }} className="panel-subsection">
                           <strong>关键节点责任人</strong>
                           <div className="table-wrap" style={{ marginTop: 8 }}>
@@ -2703,10 +3641,42 @@ function App() {
                             </table>
                           </div>
                         </div>
+                        ) : null}
 
-                        <div style={{ marginTop: 16 }} className="panel-subsection">
-                          <strong>阶段执行表单</strong>
+                        {activeDetailTab === 'advance' ? (
+                        <div style={{ marginTop: 16 }} className="panel-subsection detail-workbench">
+                          <div className="section-title-row">
+                            <div>
+                              <strong>推荐动作</strong>
+                              <div className="muted">先判断业务路径，再填写当前动作需要的信息。</div>
+                            </div>
+                            {nextAction ? <span className="stage-chip">{stageText(nextStageCode)}</span> : null}
+                          </div>
                           <div className="grid" style={{ marginTop: 8 }}>
+                            {availableNextActions.length > 0 ? (
+                              <div className="action-choice-grid" style={{ gridColumn: '1 / -1' }}>
+                                {availableNextActions.map((action, idx) => {
+                                  const guidance = actionGuidanceMap[action] || { title: actionLabelMap[action] || action, hint: '' }
+                                  const allowed = permissionStageActionAllowed(action)
+                                  const selected = action === nextAction
+                                  return (
+                                    <button
+                                      type="button"
+                                      className={`action-choice ${selected ? 'selected' : ''}`}
+                                      key={action}
+                                      onClick={() => setSelectedAdvanceAction(action)}
+                                      disabled={!allowed}
+                                    >
+                                      <span>{idx === 0 ? '推荐动作' : '可选路径'}</span>
+                                      <strong>{guidance.title}</strong>
+                                      <em>{guidance.hint}</em>
+                                    </button>
+                                  )
+                                })}
+                              </div>
+                            ) : (
+                              <div className="empty-state" style={{ gridColumn: '1 / -1' }}>流程已完成，当前无需继续推进。</div>
+                            )}
                             <div className="field" style={{ gridColumn: '1 / -1' }}>
                               <label>阶段备注</label>
                               <textarea
@@ -2724,7 +3694,9 @@ function App() {
                             {nextAction && !canRunNextAction ? <span className="muted">当前角色无权限执行该阶段</span> : null}
                           </div>
                         </div>
+                        ) : null}
 
+                        {activeDetailTab === 'rework' ? (
                         <div style={{ marginTop: 16 }} className="panel-subsection">
                           <strong>退回重做</strong>
                           <div className="toolbar" style={{ marginTop: 8 }}>
@@ -2748,9 +3720,19 @@ function App() {
                             </button>
                           </div>
                         </div>
+                        ) : null}
 
+                        {activeDetailTab === 'attachments' ? (
                         <div style={{ marginTop: 16 }} className="panel-subsection">
-                          <strong>附件上传与留证</strong>
+                          <div className="section-title-row">
+                            <div>
+                              <strong>附件上传与留证</strong>
+                              <div className="muted">留证要求：当前关注“{stageText(evidenceStageCode)}”，已上传 {evidenceStageCount} 个附件。</div>
+                            </div>
+                            <span className={`evidence-badge ${evidenceRequired && evidenceStageCount === 0 ? 'warning' : ''}`}>
+                              {evidenceStatusText}
+                            </span>
+                          </div>
                           <div className="grid" style={{ marginTop: 8 }}>
                             <div className="field">
                               <label>所属阶段</label>
@@ -2769,9 +3751,41 @@ function App() {
                                 type="file"
                                 onChange={(e) => {
                                   const file = e.target.files && e.target.files[0] ? e.target.files[0] : null
+                                  const maxFileSizeBytes = Number(attachmentUploadSetting?.max_file_size_bytes || 0)
+                                  if (file && maxFileSizeBytes > 0 && Number(file.size || 0) > maxFileSizeBytes) {
+                                    showError(`文件大小 ${formatFileSize(file.size)} 超过当前上限 ${attachmentUploadSetting.max_file_size_mb}MB`)
+                                    e.target.value = ''
+                                    setAttachmentForm((prev) => ({ ...prev, file: null }))
+                                    return
+                                  }
                                   setAttachmentForm((prev) => ({ ...prev, file }))
                                 }}
                               />
+                              {attachmentForm.file ? <span className="muted">当前文件：{formatFileSize(attachmentForm.file.size)}</span> : null}
+                            </div>
+                            <div className="field">
+                              <label>上传上限（MB）</label>
+                              <div className="toolbar">
+                                <input
+                                  type="number"
+                                  min={Number(attachmentUploadSetting?.min_file_size_mb || 1)}
+                                  max={Number(attachmentUploadSetting?.max_allowed_file_size_mb || 200)}
+                                  step="1"
+                                  value={attachmentUploadSettingForm}
+                                  onChange={(e) => setAttachmentUploadSettingForm(e.target.value)}
+                                  disabled={!canEditAttachmentUploadSetting || attachmentUploadSettingLoading}
+                                />
+                                <button
+                                  className="btn"
+                                  onClick={onSaveAttachmentUploadSetting}
+                                  disabled={!canEditAttachmentUploadSetting || attachmentUploadSettingLoading}
+                                >
+                                  {attachmentUploadSettingLoading ? '保存中...' : '保存'}
+                                </button>
+                              </div>
+                              <span className="muted">
+                                当前上限：{Number(attachmentUploadSetting?.max_file_size_mb || attachmentUploadSettingForm || 10)}MB
+                              </span>
                             </div>
                             <div className="field" style={{ gridColumn: '1 / -1' }}>
                               <label>附件备注</label>
@@ -2781,8 +3795,8 @@ function App() {
                           <div className="toolbar" style={{ marginTop: 8 }}>
                             <button className="btn btn-primary" onClick={onUploadAttachment} disabled={busy || !canUpload}>上传附件</button>
                             {!canUpload ? <span className="muted">当前角色无上传权限</span> : null}
-                            {(nextStageCode === 'HARDWARE_CHECKED' || nextStageCode === 'TESTED') ? (
-                              <span className="muted">提示：推进到“{stageText(nextStageCode)}”前，需先上传该阶段至少1个附件。</span>
+                            {evidenceRequired ? (
+                              <span className="muted">提示：推进到“{stageText(evidenceStageCode)}”前，需先上传该阶段至少1个附件。</span>
                             ) : null}
                           </div>
 
@@ -2804,7 +3818,7 @@ function App() {
                                   <tr key={item.id}>
                                     <td>{item.file_name}</td>
                                     <td>{stageText(item.stage_code)}</td>
-                                    <td>{Math.round(Number(item.file_size || 0) / 1024)} KB</td>
+                                    <td>{formatFileSize(item.file_size)}</td>
                                     <td>{item.uploaded_by_name || '-'}</td>
                                     <td>{parseApiDate(item.uploaded_at)}</td>
                                     <td>{item.remark || '-'}</td>
@@ -2825,7 +3839,9 @@ function App() {
                             </table>
                           </div>
                         </div>
+                        ) : null}
 
+                        {activeDetailTab === 'history' ? (
                         <div style={{ marginTop: 14 }}>
                           <strong>阶段时间轴</strong>
                           <div className="timeline" style={{ marginTop: 8 }}>
@@ -2849,6 +3865,7 @@ function App() {
                             ) : null}
                           </div>
                         </div>
+                        ) : null}
                       </>
                     )}
                   </div>
@@ -2889,14 +3906,17 @@ function App() {
                 </div>
                 <div className="field">
                   <label>动作</label>
-                  <input
+                  <select
                     value={auditFilter.action}
                     onChange={(e) => {
                       setAuditPage(1)
-                      setAuditFilter((prev) => ({ ...prev, action: e.target.value.toUpperCase() }))
+                      setAuditFilter((prev) => ({ ...prev, action: e.target.value }))
                     }}
-                    placeholder="如 STAGE_TEST"
-                  />
+                  >
+                    {auditActionOptions.map((item) => (
+                      <option key={item.value || 'all'} value={item.value}>{item.label}</option>
+                    ))}
+                  </select>
                 </div>
                 <div className="field">
                   <label>操作人</label>
@@ -2917,7 +3937,7 @@ function App() {
                       setAuditPage(1)
                       setAuditFilter((prev) => ({ ...prev, keyword: e.target.value }))
                     }}
-                    placeholder="支持流转单号/SN/客户/动作/说明"
+                    placeholder="支持流转单号/客户/SN/动作/说明"
                   />
                 </div>
               </div>
@@ -2949,8 +3969,8 @@ function App() {
                       <tr key={`audit-${row.id}`}>
                         <td>{parseApiDate(row.created_at)}</td>
                         <td>{row.username || '-'}</td>
-                        <td>{row.user_role || '-'}</td>
-                        <td>{row.action || '-'}</td>
+                        <td>{roleText(row.user_role)}</td>
+                        <td>{auditActionText(row.action)}</td>
                         <td>
                           {row.job_id ? (
                             <button
@@ -2965,8 +3985,8 @@ function App() {
                             row.job_no || '-'
                           )}
                         </td>
-                        <td>{row.device_sn || '-'}</td>
-                        <td>{row.message || '-'}</td>
+                        <td>{deviceSnText(row.device_sn)}</td>
+                        <td>{auditMessageText(row.message)}</td>
                         <td>{row.request_ip || '-'}</td>
                         <td>{buildAuditChangeSummary(row.before_data, row.after_data)}</td>
                       </tr>

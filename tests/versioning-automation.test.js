@@ -12,7 +12,10 @@ const {
   applyVersioningToHeadCommit,
   pushCurrentBranch,
   switchToVersionBranch,
+  validateCommitMessage,
+  normalizeCommitMessage,
 } = require('../scripts/versioning/automation');
+const { runPostCommit } = require('../scripts/versioning/post-commit');
 
 const writeJson = (filePath, value) => {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
@@ -35,6 +38,16 @@ const makePackageLock = (version) => ({
       version,
     },
   },
+});
+
+test('post-commit exposes a guarded runner for side-effect-free testing', () => {
+  const source = fs.readFileSync(
+    path.join(__dirname, '../scripts/versioning/post-commit.js'),
+    'utf8'
+  );
+
+  assert.match(source, /if\s*\(require\.main\s*===\s*module\)/);
+  assert.match(source, /module\.exports\s*=\s*\{[^}]*runPostCommit/s);
 });
 
 test('parseCommitBumpType maps supported prefixes to version levels', () => {
@@ -143,6 +156,28 @@ test('syncRepositoryVersion aligns web package even when it lagged behind root v
   assert.equal(JSON.parse(fs.readFileSync(path.join(rootDir, 'web/package-lock.json'), 'utf8')).packages[''].version, '5.24.2');
 });
 
+test('syncRepositoryVersion explicitly excludes the independently versioned desktop agent', () => {
+  const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-version-agent-ignore-'));
+  const desktopDir = path.join(rootDir, 'juxin-ai-assistant/apps/desktop');
+
+  writeJson(path.join(rootDir, 'package.json'), { name: 'root', version: '5.89.0' });
+  writeJson(path.join(rootDir, 'package-lock.json'), makePackageLock('5.89.0'));
+  writeJson(path.join(desktopDir, 'package.json'), { name: 'agent', version: '1.0.0' });
+  writeJson(path.join(desktopDir, 'package-lock.json'), makePackageLock('1.0.0'));
+
+  const changedFiles = syncRepositoryVersion({
+    rootDir,
+    currentVersion: '5.89.0',
+    nextVersion: '5.90.0',
+  });
+
+  assert.ok(changedFiles.includes('package.json'));
+  assert.ok(!changedFiles.includes('juxin-ai-assistant/apps/desktop/package.json'));
+  assert.ok(!changedFiles.includes('juxin-ai-assistant/apps/desktop/package-lock.json'));
+  assert.equal(JSON.parse(fs.readFileSync(path.join(desktopDir, 'package.json'), 'utf8')).version, '1.0.0');
+  assert.equal(JSON.parse(fs.readFileSync(path.join(desktopDir, 'package-lock.json'), 'utf8')).version, '1.0.0');
+});
+
 test('syncRepositoryVersion ignores nested worktree directories', () => {
   const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-version-worktree-ignore-'));
 
@@ -235,6 +270,43 @@ test('applyVersioningToHeadCommit skips commits that already carry a version pre
   assert.equal(result.reason, 'already-versioned');
   assert.equal(beforeHead, afterHead);
   assert.equal(version, '4.2.0');
+});
+
+test('agent version commits are valid and skip all platform post-commit actions', () => {
+  const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-version-agent-commit-'));
+  const git = (...args) => execFileSync('git', args, { cwd: rootDir, encoding: 'utf8' });
+
+  git('init');
+  git('config', 'user.name', 'Codex Test');
+  git('config', 'user.email', 'codex@example.com');
+  writeJson(path.join(rootDir, 'package.json'), { name: 'root', version: '5.89.0' });
+  git('add', 'package.json');
+  git('commit', '-m', '[agent-v1.0.1] fix(ai-assistant): repair launcher');
+
+  const agentMessage = '[agent-v1.0.1] fix(ai-assistant): repair launcher';
+  assert.equal(normalizeCommitMessage(agentMessage), agentMessage);
+  assert.equal(validateCommitMessage(agentMessage), 'patch');
+  const beforeHead = git('rev-parse', 'HEAD').trim();
+  const result = applyVersioningToHeadCommit({ rootDir });
+  const afterHead = git('rev-parse', 'HEAD').trim();
+
+  assert.equal(result.skipped, true);
+  assert.equal(result.reason, 'agent-version');
+  assert.equal(afterHead, beforeHead);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(rootDir, 'package.json'), 'utf8')).version, '5.89.0');
+
+  const calls = [];
+  const postCommitResult = runPostCommit({
+    repositoryRoot: rootDir,
+    readHeadCommitSummary: () => '[agent-v1.0.1] fix(ai-assistant): repair launcher',
+    applyVersioning: () => calls.push('apply'),
+    switchBranch: () => calls.push('switch'),
+    pushBranch: () => calls.push('push'),
+    log: () => {},
+  });
+  assert.deepEqual(calls, []);
+  assert.equal(postCommitResult.skipped, true);
+  assert.equal(postCommitResult.reason, 'agent-version');
 });
 
 test('pushCurrentBranch sets upstream for a new local branch', () => {

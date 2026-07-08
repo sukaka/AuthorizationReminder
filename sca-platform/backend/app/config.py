@@ -7,7 +7,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     app_name: str = "聚信软件成分分析平台"
     app_env: str = "dev"
-    app_version: str = "5.66.1"
+    app_version: str = "5.69.0"
     database_url: str = "sqlite:///./sca-dev.db"
     redis_url: str = "redis://localhost:6379/0"
     celery_broker_url: str = "redis://localhost:6379/1"
@@ -19,6 +19,11 @@ class Settings(BaseSettings):
     auth_dev_bypass: bool = False
     cors_origins: str = Field(default="http://localhost:18089,http://127.0.0.1:18089")
     upload_root: str = "/data/sca/uploads"
+    upload_chunk_max_bytes: int = 16 * 1024 * 1024
+    archive_max_files: int = 20000
+    archive_max_total_bytes: int = 4 * 1024 * 1024 * 1024
+    archive_max_file_bytes: int = 512 * 1024 * 1024
+    archive_max_compression_ratio: float = 200.0
     celery_task_always_eager: bool = False
     osv_api_url: str = "https://api.osv.dev"
     nvd_api_url: str = "https://services.nvd.nist.gov/rest/json/cves/2.0"
@@ -48,6 +53,20 @@ class Settings(BaseSettings):
     trivy_skip_db_update_on_cache: bool = True
     trivy_cache_dir: str = "/data/trivy-cache"
     trivy_output_dir: str = "/data/scanner-results/trivy"
+    dependency_check_enabled: bool = True
+    dependency_check_path: str = "/opt/dependency-check/bin/dependency-check.sh"
+    dependency_check_version: str = "12.1.9"
+    dependency_check_timeout: int = 1800
+    dependency_check_data_dir: str = "/data/dependency-check"
+    dependency_check_output_dir: str = "/data/scanner-results/dependency-check"
+    dependency_check_suppression_file: str = "/etc/dependency-check/suppression.xml"
+    dependency_check_lock_timeout: int = 120
+    dependency_check_update_interval_seconds: int = 24 * 60 * 60
+    dependency_check_cache_stale_seconds: int = 72 * 60 * 60
+    dependency_check_detection_max_files: int = 20000
+    dependency_check_detection_max_depth: int = 20
+    dependency_check_detection_max_matches: int = 50
+    dependency_check_max_report_bytes: int = 200 * 1024 * 1024
     dependency_track_enabled: bool = True
     dependency_track_url: str = "http://dependency-track-apiserver:8080"
     dependency_track_api_key: str = ""
@@ -75,6 +94,10 @@ class Settings(BaseSettings):
     openai_model: str = "gpt-4o-mini"
     openai_timeout_ms: int = 120000
     devops_block_severities: str = "critical,high"
+    sca_webhook_secret: str = ""
+    github_webhook_secret: str = ""
+    gitlab_webhook_secret: str = ""
+    jenkins_webhook_secret: str = ""
     remediation_overdue_check_seconds: int = 60 * 60
     production_https_enabled: bool = True
     production_jwt_secure: bool = True

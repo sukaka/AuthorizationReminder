@@ -221,7 +221,8 @@ def test_project_vulnerability_query_task_persists_results(monkeypatch, tmp_path
             )
         ]
 
-    monkeypatch.setattr(main.celery_app, "query_component_vulnerabilities", fake_query)
+    celery_tasks = importlib.import_module("app.celery_app")
+    monkeypatch.setattr(celery_tasks, "query_component_vulnerabilities", fake_query)
 
     with client as test_client:
         with database.SessionLocal() as db:
@@ -253,7 +254,7 @@ def test_project_vulnerability_query_task_persists_results(monkeypatch, tmp_path
             task_id = task.id
             project_id = project.id
 
-        result = main.celery_app.query_project_vulnerabilities_task(task_id)
+        result = celery_tasks.query_project_vulnerabilities_task(task_id)
         vulnerability_response = test_client.get(f"/api/sca/projects/{project_id}/vulnerabilities")
 
     assert result["status"] == "success"
@@ -287,7 +288,8 @@ def test_project_vulnerability_query_uses_inferred_snapshot_version_and_logs_sou
             )
         ]
 
-    monkeypatch.setattr(main.celery_app, "query_component_vulnerabilities", fake_query)
+    celery_tasks = importlib.import_module("app.celery_app")
+    monkeypatch.setattr(celery_tasks, "query_component_vulnerabilities", fake_query)
 
     with client as test_client:
         with database.SessionLocal() as db:
@@ -342,7 +344,7 @@ def test_project_vulnerability_query_uses_inferred_snapshot_version_and_logs_sou
             task_id = task.id
             project_id = project.id
 
-        result = main.celery_app.query_project_vulnerabilities_task(task_id)
+        result = celery_tasks.query_project_vulnerabilities_task(task_id)
         vulnerabilities = test_client.get(f"/api/sca/projects/{project_id}/vulnerabilities").json()
         logs = test_client.get(f"/api/sca/projects/{project_id}/scan-logs").json()
 
@@ -465,7 +467,7 @@ def test_github_advisory_query_runs_without_token(monkeypatch):
 
     assert captured["url"].endswith("/advisories")
     assert "Authorization" not in captured["headers"]
-    assert "requests 1.0.0" in captured["params"]["query"]
+    assert captured["params"]["affects"] == "requests"
     assert findings[0].source == "github"
     assert findings[0].advisory_id == "GHSA-demo-1234"
     assert findings[0].cve_id == "CVE-2026-1234"

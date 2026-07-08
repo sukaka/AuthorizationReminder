@@ -1,0 +1,41 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "remote-main",
+  "description": "生产远程业务工作台权限模板，仅允许构建脚本替换后的精确 HTTPS 来源",
+  "windows": ["workspace"],
+  "remote": {
+    "urls": ["https://ai-assistant.invalid/*"]
+  },
+  "permissions": [
+    "core:app:allow-version",
+    "core:event:allow-listen",
+    "core:event:allow-unlisten",
+    "allow-workspace-ready",
+    "allow-workspace-status",
+    "allow-workspace-close",
+    "allow-local-session-bind",
+    "allow-local-draft-save",
+    "allow-local-draft-load",
+    "allow-local-draft-delete",
+    "allow-local-queue-push",
+    "allow-local-queue-list",
+    "allow-local-queue-remove",
+    "allow-local-cache-clear",
+    "allow-local-legacy-export",
+    "allow-local-legacy-delete",
+    "allow-local-logout",
+    "allow-generation-word-save",
+    "allow-model-profile-list",
+    "allow-model-profile-upsert",
+    "allow-model-profile-delete",
+    "allow-model-profile-set-default",
+    "allow-model-profile-test",
+    "allow-model-generate",
+    "allow-model-cancel",
+    "allow-update-status",
+    "allow-update-check",
+    "allow-update-download-and-install",
+    "allow-update-cancel",
+    "allow-update-defer"
+  ]
+}

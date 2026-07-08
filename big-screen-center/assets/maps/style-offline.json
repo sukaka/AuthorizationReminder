@@ -1,0 +1,41 @@
+{
+  "version": 8,
+  "name": "JX Offline Operations",
+  "sources": {
+    "customers": {
+      "type": "geojson",
+      "data": "/assets/maps/customers.geojson"
+    }
+  },
+  "layers": [
+    {
+      "id": "background",
+      "type": "background",
+      "paint": {
+        "background-color": "#12100c"
+      }
+    },
+    {
+      "id": "customer-halo",
+      "type": "circle",
+      "source": "customers",
+      "paint": {
+        "circle-radius": 18,
+        "circle-color": "#ff775d",
+        "circle-opacity": 0.12,
+        "circle-blur": 0.5
+      }
+    },
+    {
+      "id": "customer-points",
+      "type": "circle",
+      "source": "customers",
+      "paint": {
+        "circle-radius": 5,
+        "circle-color": "#f2b84b",
+        "circle-stroke-color": "#fff0d1",
+        "circle-stroke-width": 1.5
+      }
+    }
+  ]
+}

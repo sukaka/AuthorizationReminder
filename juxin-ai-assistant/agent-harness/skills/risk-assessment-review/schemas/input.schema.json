@@ -1,0 +1,18 @@
+{
+  "type": "object",
+  "properties": {
+    "question": { "type": "string" },
+    "attachments": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": { "type": "string" },
+          "file_type": { "type": "string", "enum": ["docx", "pdf", "xlsx"] }
+        },
+        "required": ["name", "file_type"]
+      }
+    }
+  },
+  "required": ["attachments"]
+}

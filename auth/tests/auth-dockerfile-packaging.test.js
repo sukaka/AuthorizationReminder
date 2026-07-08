@@ -13,10 +13,18 @@ test('auth Dockerfile packages department admin helper', () => {
   assert.match(source, /COPY auth\/admin-center-departments\.js \.\/auth\/admin-center-departments\.js/);
 });
 
+test('auth Dockerfile packages AI assistant authorization helper', () => {
+  assert.match(source, /COPY auth\/ai-assistant-authorization\.js \.\/auth\/ai-assistant-authorization\.js/);
+});
+
 test('auth Dockerfile packages user import email helper', () => {
   assert.match(source, /COPY auth\/admin-center-user-import-email\.js \.\/auth\/admin-center-user-import-email\.js/);
 });
 
 test('auth Dockerfile packages audit log display helper', () => {
   assert.match(source, /COPY auth\/audit-log-display\.js \.\/auth\/audit-log-display\.js/);
+});
+
+test('auth Dockerfile packages unified big-screen authorization helper', () => {
+  assert.match(source, /COPY auth\/big-screen-authorization\.js \.\/auth\/big-screen-authorization\.js/);
 });

@@ -1,0 +1,56 @@
+{
+  "version": "1.0",
+  "description": "聚信 AI 助手学习闭环基础评测集。修改 prompt、知识库、记忆系统后运行，用于检查 Agent 是否更懂用户和聚信业务。",
+  "questions": [
+    {
+      "id": "business-role",
+      "question": "商务主要负责什么？",
+      "expected_focus": ["商务投标", "合同", "报价", "响应文件", "需人工复核"]
+    },
+    {
+      "id": "wdsp-deployment",
+      "question": "WDSP支持哪些部署模式？",
+      "expected_focus": ["优先检索知识库", "当前知识库未找到明确依据时不得编造", "来源"]
+    },
+    {
+      "id": "compliance-platform-customer",
+      "question": "等保合规云管平台适合什么客户？",
+      "expected_focus": ["等保", "安全运营", "客户场景", "来源"]
+    },
+    {
+      "id": "risk-asset-value-correction",
+      "question": "风险评估报告缺少资产赋值方式怎么写整改？",
+      "expected_focus": ["风险评估", "整改建议", "待确认", "需人工复核"]
+    },
+    {
+      "id": "attachment-chat-ui",
+      "question": "上传附件后聊天框怎么显示更合理？",
+      "expected_focus": ["当前附件", "资料来源区分", "不自动进入公司知识库"]
+    },
+    {
+      "id": "word-export-history",
+      "question": "导出 Word 后为什么不能把保存路径写入历史任务？",
+      "expected_focus": ["隐私", "历史标题保护", "Toast", "失败案例"]
+    },
+    {
+      "id": "latest-cve",
+      "question": "用户问最新 CVE 时应该怎么办？",
+      "expected_focus": ["联网检索", "日期", "来源", "不编造"]
+    },
+    {
+      "id": "web-capture-official",
+      "question": "用户抓取网页后能否直接进入公司知识库？",
+      "expected_focus": ["不能直接进入", "用户确认", "管理员审核", "official_knowledge"]
+    },
+    {
+      "id": "codex-prompt-generation",
+      "question": "怎么写一个给 Codex 用的代码审查提示词？",
+      "expected_focus": ["codex_prompt", "步骤", "代码审查", "验收标准"]
+    },
+    {
+      "id": "ui-design-suggestion",
+      "question": "这个聊天窗口交互怎么改得更像私人助理？",
+      "expected_focus": ["ui_design", "交互", "私人助理", "可用性"]
+    }
+  ]
+}

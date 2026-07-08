@@ -1085,7 +1085,7 @@ app.post('/api/auth/mfa/send', authRateLimiter, async (req, res) => {
   if (!mfaToken || !method) return res.status(400).json({ error: '参数缺失' });
   const row = await db.get('SELECT * FROM auth_mfa_sessions WHERE token = ?', [mfaToken]);
   if (!row) return res.status(400).json({ error: '验证会话不存在或已过期' });
-  if (new Date(row.expires_at).getTime() <= Date.now()) {
+  if (mysqlDatetimeToUtcMs(row.expires_at) <= Date.now()) {
     await db.run('DELETE FROM auth_mfa_sessions WHERE token = ?', [mfaToken]);
     return res.status(400).json({ error: '验证会话已过期，请重新登录' });
   }
@@ -1196,7 +1196,7 @@ app.post('/api/auth/mfa/verify', authRateLimiter, async (req, res) => {
   if (!mfaToken || !method || !code) return res.status(400).json({ error: '参数缺失' });
   const row = await db.get('SELECT * FROM auth_mfa_sessions WHERE token = ?', [mfaToken]);
   if (!row) return res.status(400).json({ error: '验证会话不存在或已过期' });
-  if (new Date(row.expires_at).getTime() <= Date.now()) {
+  if (mysqlDatetimeToUtcMs(row.expires_at) <= Date.now()) {
     await db.run('DELETE FROM auth_mfa_sessions WHERE token = ?', [mfaToken]);
     return res.status(400).json({ error: '验证会话已过期，请重新登录' });
   }
@@ -1239,7 +1239,7 @@ app.post('/api/auth/mfa/verify', authRateLimiter, async (req, res) => {
   } else {
     if (row.method !== method) return res.status(400).json({ error: '请先发送验证码' });
     if (!row.code_hash || !row.code_expires_at) return res.status(400).json({ error: '请先发送验证码' });
-    const exp = new Date(row.code_expires_at).getTime();
+    const exp = mysqlDatetimeToUtcMs(row.code_expires_at);
     if (!Number.isFinite(exp) || exp <= Date.now()) return res.status(400).json({ error: '验证码已过期' });
     ok = bcrypt.compareSync(String(code).trim(), row.code_hash);
   }
@@ -2221,6 +2221,16 @@ const randomCaptcha = () => {
 const toMysqlDatetime = (date) =>
   date instanceof Date ? date.toISOString().slice(0, 19).replace('T', ' ') : null;
 
+const mysqlDatetimeToUtcMs = (value) => {
+  if (value instanceof Date) return value.getTime();
+  const raw = String(value || '').trim();
+  if (!raw) return NaN;
+  if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(raw)) {
+    return Date.parse(`${raw.replace(' ', 'T')}Z`);
+  }
+  return Date.parse(raw);
+};
+
 const captchaSvg = (text) => {
   const fill = '#0f172a';
   const bg = '#ffffff';
@@ -2252,7 +2262,7 @@ const deleteCaptchaSession = async (token) => {
 const verifyCaptcha = async ({ token, code }) => {
   const row = await getCaptchaSession(token);
   if (!row) return { ok: false, error: '验证码已过期，请刷新' };
-  const exp = new Date(row.expires_at).getTime();
+  const exp = mysqlDatetimeToUtcMs(row.expires_at);
   if (!Number.isFinite(exp) || exp <= Date.now()) {
     await deleteCaptchaSession(token);
     return { ok: false, error: '验证码已过期，请刷新' };

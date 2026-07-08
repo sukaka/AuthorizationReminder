@@ -1,0 +1,41 @@
+{
+  "name": "juxin-ai-assistant-desktop",
+  "version": "1.18.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 0.0.0.0 --port 18093",
+    "typecheck": "tsc --noEmit",
+    "build": "tsc --noEmit && vite build",
+    "build:web": "tsc --noEmit && vite build --mode web",
+    "test": "vitest run",
+    "test:e2e": "playwright test",
+    "agent:version": "node scripts/agent-version.mjs",
+    "config:render": "node scripts/render-tauri-config.mjs",
+    "tauri:build:lan-test": "node scripts/tauri-build.mjs lan-test",
+    "tauri:build:production": "node scripts/tauri-build.mjs production",
+    "tauri": "tauri"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2.0.0",
+    "antd": "^5.0.0",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.60.0",
+    "@tauri-apps/cli": "^2.0.0",
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.0",
+    "@testing-library/user-event": "^14.6.1",
+    "@types/node": "^20.19.42",
+    "@types/react": "^19.2.5",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^5.1.1",
+    "jsdom": "29.1.1",
+    "msw": "^2.0.0",
+    "typescript": "6.0.3",
+    "vite": "8.0.16",
+    "vitest": "4.1.8"
+  }
+}

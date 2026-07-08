@@ -513,6 +513,61 @@ const getPromptById = async (db, id, req) => {
   return prompt;
 };
 
+const getPublishedPrompt = async (db, id, requestedVersion = null) => {
+  const promptId = Number(id);
+  const versionNumber = requestedVersion === null || requestedVersion === undefined || requestedVersion === ''
+    ? null
+    : Number(requestedVersion);
+  const params = [promptId];
+  const versionClause = versionNumber === null
+    ? 'AND v.id = p.current_version_id'
+    : 'AND v.version_no = ?';
+  if (versionNumber !== null) params.push(versionNumber);
+  const row = await db.get(
+    `SELECT p.id AS prompt_id, p.status, v.id AS version_id, v.version_no,
+            v.title, v.summary, v.content, v.tags_json
+       FROM pc_prompts p
+       INNER JOIN pc_prompt_versions v ON v.prompt_id = p.id
+      WHERE p.id = ? AND p.status = 'published' ${versionClause}
+      LIMIT 1`,
+    params
+  );
+  if (!row || row.status !== 'published') throw appError('已发布提示词不存在', 404);
+  return {
+    prompt_id: Number(row.prompt_id),
+    version_id: Number(row.version_id),
+    version_no: Number(row.version_no),
+    title: row.title,
+    summary: row.summary || '',
+    content: row.content,
+    tags: parseTags(row.tags_json),
+    variables: extractPromptVariables(row.content),
+  };
+};
+
+const getStagedPromptVersion = async (db, id, requestedVersion) => {
+  const promptId = Number(id);
+  const versionNumber = Number(requestedVersion);
+  if (!Number.isInteger(promptId) || !Number.isInteger(versionNumber)
+      || promptId <= 0 || versionNumber <= 0) {
+    throw appError('暂存 Prompt 版本不存在', 404);
+  }
+  const row = await db.get(
+    `SELECT p.id AS prompt_id, v.version_no, v.content
+       FROM pc_prompts p
+       INNER JOIN pc_prompt_versions v ON v.prompt_id = p.id
+      WHERE p.id = ? AND v.version_no = ?
+      LIMIT 1`,
+    [promptId, versionNumber]
+  );
+  if (!row) throw appError('暂存 Prompt 版本不存在', 404);
+  return {
+    prompt_id: Number(row.prompt_id),
+    version_no: Number(row.version_no),
+    content: row.content,
+  };
+};
+
 const createPrompt = async (db, payload, user, requestIp) => {
   const data = normalizePromptPayload(payload);
   const department = await ensureDepartment(db, data.department_id);
@@ -859,6 +914,8 @@ module.exports = {
   saveCategory,
   listPrompts,
   getPromptById,
+  getPublishedPrompt,
+  getStagedPromptVersion,
   createPrompt,
   updatePrompt,
   setPromptStatus,

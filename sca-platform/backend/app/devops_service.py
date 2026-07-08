@@ -33,6 +33,7 @@ def evaluate_release_gate(db: Session, project: Project | None, settings: Settin
                 VulnerabilityRecord.project_id == project.id,
                 VulnerabilityRecord.match_status == "affected",
                 VulnerabilityRecord.needs_human_review.is_(False),
+                VulnerabilityRecord.gate_eligible.is_(True),
             )
         )
     )

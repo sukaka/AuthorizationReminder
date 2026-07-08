@@ -27,6 +27,7 @@ const {
   buildSessionTokenPayload,
   createSessionId,
   isSessionRecordValid,
+  mysqlDatetimeToUtcMs,
 } = require('./session-security');
 const {
   isOriginAllowedForRequest,
@@ -76,6 +77,9 @@ const {
   summarizeSystemAccess,
 } = require('./system-access-display');
 const {
+  buildSystemUserDirectory,
+} = require('./system-user-directory');
+const {
   buildDownloadHeaderMeta,
   buildAdminCenterUsersExportWorkbook,
   buildUserImportFilename,
@@ -94,6 +98,8 @@ const {
   defaultAppAccessByRole,
   getDedicatedCenterConfig,
 } = require('./portal-routing');
+const { authorizeBigScreen } = require('./big-screen-authorization');
+const { authorizeAiAssistant } = require('./ai-assistant-authorization');
 const { version: AUTH_PACKAGE_VERSION } = require('./package.json');
 
 const app = express();
@@ -1380,6 +1386,21 @@ app.post('/api/auth/authorize', async (req, res) => {
     result = authorizePromptCenter(user, action);
   } else if (system === 'sca') {
     result = authorizeSca(user, action);
+  } else if (system === 'big-screen') {
+    result = authorizeBigScreen(user, action);
+  } else if (system === 'ai-assistant') {
+    result = authorizeAiAssistant(user, action, scope, resource);
+  }
+  if (system === 'ai-assistant' && !result.allow) {
+    await logOperation({
+      user,
+      system: 'ai-assistant',
+      action: 'authorization.denied',
+      entity: 'action',
+      entityId: String(action || ''),
+      afterData: { reason: String(result.reason || '无权限') },
+      requestIp: req.ip,
+    });
   }
   return res.json({ ...result, user: buildAuthUserPayload(user), scope, apps });
 });
@@ -1413,6 +1434,8 @@ app.get('/api/auth/apps', async (req, res) => {
   const trainExamURL = process.env.APP_TRAIN_EXAM_URL || 'http://localhost:18087';
   const promptCenterURL = process.env.APP_PROMPT_CENTER_URL || 'http://localhost:18088';
   const scaURL = process.env.APP_SCA_URL || 'http://localhost:18089';
+  const bigScreenURL = process.env.APP_BIG_SCREEN_URL || 'http://localhost:18092';
+  const aiAssistantURL = process.env.APP_AI_ASSISTANT_URL || 'http://localhost:18093';
   const adminCenterURL = process.env.APP_ADMIN_CENTER_URL || 'http://localhost:5180/admin-center';
   const auditCenterURL = process.env.APP_AUDIT_CENTER_URL || 'http://localhost:5180/audit-center';
   const appAccess = getUserAppAccess(user);
@@ -1471,10 +1494,35 @@ app.get('/api/auth/apps', async (req, res) => {
     const scaAuth = await authorizeSca(user, 'app:enter');
     apps.push({ key: 'sca', name: '软件成分分析平台', url: scaURL, allow: !!scaAuth.allow });
   }
+  if (appAccess.includes('big-screen')) {
+    const bigScreenAuth = authorizeBigScreen(user, 'app:enter');
+    apps.push({ key: 'big-screen', name: '统一大屏展示中心', url: bigScreenURL, allow: !!bigScreenAuth.allow });
+  }
+  if (appAccess.includes('ai-assistant')) {
+    const aiAssistantAuth = authorizeAiAssistant(user, 'app:enter');
+    apps.push({ key: 'ai-assistant', name: '聚信 AI 助手', url: aiAssistantURL, allow: !!aiAssistantAuth.allow });
+  }
   return res.json({
     user: buildAuthUserPayload(user),
     apps: apps.filter((item) => item.allow),
   });
+});
+
+app.get('/api/auth/system-users', async (req, res) => {
+  const system = String(req.query?.system || '').trim();
+  if (!system) return res.status(400).json({ error: 'system 不能为空' });
+  const user = await db.get(
+    'SELECT id, username, role, app_access, mfa_enabled, mfa_methods, totp_enabled, totp_secret, email, phone, wecom_id, must_change_password FROM users WHERE id = ?',
+    [req.user.id]
+  );
+  if (!user) return res.status(401).json({ error: '登录已过期' });
+  if (!canAccessSystem(user, system) && String(user.role || '').toLowerCase() !== 'sysadmin') {
+    return res.status(403).json({ error: '无权限查看该系统用户' });
+  }
+  const rows = await db.query(
+    'SELECT id, username, role, is_active, app_access, department_code FROM users ORDER BY username ASC'
+  );
+  return res.json(buildSystemUserDirectory(rows, system));
 });
 
 const RELEASE_VERSION = AUTH_PACKAGE_VERSION;
@@ -4365,7 +4413,28 @@ const registerDedicatedCenterPage = (systemKey) => {
 registerDedicatedCenterPage(ADMIN_CENTER_KEY);
 registerDedicatedCenterPage(AUDIT_CENTER_KEY);
 
-app.get('/portal', (req, res) => {
+const portalLogoutValues = new Set(['1', 'true', 'yes']);
+
+app.get('/portal', async (req, res) => {
+  const isPortalLogoutRequest = portalLogoutValues.has(
+    String(req.query?.logout || '').trim().toLowerCase()
+  );
+  if (isPortalLogoutRequest) {
+    clearAuthCookie(res);
+    clearCsrfCookie(res);
+    const token = parseCookieToken(req);
+    if (token) {
+      try {
+        const payload = jwt.verify(token, JWT_SECRET);
+        const sessionId = String(payload?.sid || '').trim();
+        if (sessionId) {
+          await revokeAuthSession({ sessionId, reason: 'portal_logout' });
+        }
+      } catch (_err) {
+        // Expired or malformed tokens are still cleared below.
+      }
+    }
+  }
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
   const nonce = res.locals.cspNonce || '';
   const reminderUrl = process.env.APP_REMINDER_URL || 'http://localhost:18080';
@@ -4530,8 +4599,10 @@ app.get('/portal', (req, res) => {
   <script nonce="${nonce}">
     let csrfToken = '';
     let captchaToken = '';
+    let loginSubmitting = false;
     const portalParams = new URLSearchParams(window.location.search);
     const portalMode = String(portalParams.get('mode') || '').toLowerCase();
+    const isPortalLogoutRequest = ${isPortalLogoutRequest ? 'true' : 'false'};
     const autoRedirectWindowMs = 8000;
     const privilegedDefaultSystemKeyByRole = {
       sysadmin: '${ADMIN_CENTER_KEY}',
@@ -4579,6 +4650,13 @@ app.get('/portal', (req, res) => {
         return '';
       }
     }
+    function clearPortalSessionMarker() {
+      try {
+        sessionStorage.removeItem(portalSessionStorageKey);
+      } catch (_err) {
+        // ignore storage restrictions
+      }
+    }
     function createPortalSessionMarker() {
       try {
         const bytes = new Uint8Array(12);
@@ -4599,17 +4677,39 @@ app.get('/portal', (req, res) => {
       }
       return marker;
     }
-    function appendPortalSession(rawUrl) {
+    function appendPortalSession(rawUrl, ssoToken = '') {
       const appUrl = normalizeAppUrl(rawUrl);
       const marker = getPortalSessionMarker();
-      if (!marker) return appUrl;
+      const handoffToken = String(ssoToken || '').trim();
+      if (!marker && !handoffToken) return appUrl;
       try {
         const url = new URL(appUrl, window.location.origin);
-        url.searchParams.set(portalSessionQueryKey, marker);
+        if (marker) url.searchParams.set(portalSessionQueryKey, marker);
+        if (handoffToken) url.searchParams.set('sso_token', handoffToken);
         return url.toString();
       } catch (_err) {
         return appUrl;
       }
+    }
+    function appSsoToken(app, ssoToken) {
+      return app && app.key === 'ai-assistant' ? String(ssoToken || '') : '';
+    }
+    function showPortalRedirecting(appName, appUrl) {
+      const name = String(appName || '目标系统').trim() || '目标系统';
+      const loginBtn = document.getElementById('loginBtn');
+      if (loginBtn) {
+        loginBtn.disabled = true;
+        loginBtn.textContent = '正在进入…';
+      }
+      setError('登录成功，正在进入' + name + '…');
+      window.setTimeout(() => {
+        setError('登录成功，但' + name + '目标系统暂时不可用或未启动。请确认服务已启动后重试：' + appUrl);
+        if (loginBtn) {
+          loginBtn.disabled = false;
+          loginBtn.textContent = '登录';
+        }
+        loginSubmitting = false;
+      }, 8000);
     }
     function normalizeAppUrl(rawUrl) {
       try {
@@ -4652,6 +4752,10 @@ app.get('/portal', (req, res) => {
       }
       if (params.has('mode')) {
         params.delete('mode');
+        changed = true;
+      }
+      if (params.has('logout')) {
+        params.delete('logout');
         changed = true;
       }
       if (!changed) return;
@@ -4892,7 +4996,7 @@ app.get('/portal', (req, res) => {
           showForcePasswordCard();
           return;
         }
-        await loadApps();
+        await loadApps(data.token || '');
       } catch (err) {
         setMfaError(err.message || '验证失败');
       }
@@ -5077,46 +5181,72 @@ app.get('/portal', (req, res) => {
 
     async function login(evt){
       evt.preventDefault();
-      setError('');
-      await loadCsrf();
-      const body = {
-        username: document.getElementById('username').value,
-        password: document.getElementById('password').value,
-        captchaToken,
-        captcha: document.getElementById('captchaInput').value,
+      if (loginSubmitting) return;
+      loginSubmitting = true;
+      const loginBtn = document.getElementById('loginBtn');
+      if (loginBtn) {
+        loginBtn.disabled = true;
+        loginBtn.textContent = '登录中…';
+      }
+      const resetLoginSubmitState = () => {
+        loginSubmitting = false;
+        if (loginBtn) {
+          loginBtn.disabled = false;
+          loginBtn.textContent = '登录';
+        }
       };
-      const r = await fetch('/api/auth/login', {
-        method:'POST',
-        credentials:'include',
-        headers:{'Content-Type':'application/json','X-CSRF-Token':csrfToken},
-        body:JSON.stringify(body),
-      });
-      const text = await r.text();
-      const data = parseJsonSafe(text);
-      if(!r.ok){
-        const msg = getErrorText({ response: text, data, fallback: '登录失败' });
-        setError(msg.includes('账号') && msg.includes('密码') ? '账号密码错误' : msg);
+      setError('');
+      try {
         await loadCsrf();
-        await loadCaptcha();
-        return;
+        const body = {
+          username: document.getElementById('username').value,
+          password: document.getElementById('password').value,
+          captchaToken,
+          captcha: document.getElementById('captchaInput').value,
+        };
+        const r = await fetch('/api/auth/login', {
+          method:'POST',
+          credentials:'include',
+          headers:{'Content-Type':'application/json','X-CSRF-Token':csrfToken},
+          body:JSON.stringify(body),
+        });
+        const text = await r.text();
+        const data = parseJsonSafe(text);
+        if(!r.ok){
+          const msg = getErrorText({ response: text, data, fallback: '登录失败' });
+          setError(msg.includes('账号') && msg.includes('密码') ? '账号密码错误' : msg);
+          await loadCsrf();
+          await loadCaptcha();
+          resetLoginSubmitState();
+          return;
+        }
+        ensurePortalSessionMarker();
+        if (data.mfaRequired) {
+          showMfaLogin(data);
+          return;
+        }
+        if (data.mfaSetupRequired) {
+          await showMfaSetup();
+          return;
+        }
+        if (data.mustChangePassword) {
+          showForcePasswordCard();
+          return;
+        }
+        await loadApps(data.token || '');
+      } catch (err) {
+        setError(err.message === 'CSRF_INIT_FAILED' || err.message === 'CSRF_EMPTY' ? '安全校验初始化失败，请刷新后重试' : '登录失败，请稍后重试');
+        try {
+          await loadCsrf();
+          await loadCaptcha();
+        } catch (_refreshErr) {
+          // keep the visible error above
+        }
+        resetLoginSubmitState();
       }
-      ensurePortalSessionMarker();
-      if (data.mfaRequired) {
-        showMfaLogin(data);
-        return;
-      }
-      if (data.mfaSetupRequired) {
-        await showMfaSetup();
-        return;
-      }
-      if (data.mustChangePassword) {
-        showForcePasswordCard();
-        return;
-      }
-      await loadApps();
     }
 
-    async function loadApps(){
+    async function loadApps(ssoToken = ''){
       const r = await fetch('/api/auth/apps',{credentials:'include'});
       const text = await r.text();
       const data = parseJsonSafe(text);
@@ -5150,7 +5280,9 @@ app.get('/portal', (req, res) => {
           if (shouldThrottleRequestedRedirect(preferred.key)) {
             hideAllCards();
           } else {
-            window.location.href = appendPortalSession(preferred.url);
+            const preferredUrl = appendPortalSession(preferred.url, appSsoToken(preferred, ssoToken));
+            showPortalRedirecting(preferred.name, preferred.url);
+            window.location.href = preferredUrl;
             return;
           }
         }
@@ -5161,13 +5293,15 @@ app.get('/portal', (req, res) => {
           if (shouldThrottleRequestedRedirect(requestedSystem)) {
             hideAllCards();
           } else {
-            window.location.href = appendPortalSession(target.url);
+            const targetUrl = appendPortalSession(target.url, appSsoToken(target, ssoToken));
+            showPortalRedirecting(target.name, target.url);
+            window.location.href = targetUrl;
             return;
           }
         }
       }
       list.forEach(app=>{
-        const appUrl = appendPortalSession(app.url);
+        const appUrl = appendPortalSession(app.url, appSsoToken(app, ssoToken));
         const div = document.createElement('div');
         div.className = 'app-item';
         const btn = document.createElement('button');
@@ -5186,6 +5320,9 @@ app.get('/portal', (req, res) => {
     async function bootstrap(){
       const loginCard = document.getElementById('loginCard');
       stripPortalTokenQuery();
+      if (isPortalLogoutRequest) {
+        clearPortalSessionMarker();
+      }
       if (!getPortalSessionMarker()) {
         hideAllCards();
         if (loginCard) loginCard.style.display = 'block';
@@ -5411,6 +5548,7 @@ const auditCenterRemoteBaseUrls = Object.freeze({
   tender: process.env.AUDIT_SOURCE_TENDER_URL || 'http://localhost:5187',
   'train-exam': process.env.AUDIT_SOURCE_TRAIN_EXAM_URL || 'http://localhost:5188',
   'prompt-center': process.env.AUDIT_SOURCE_PROMPT_CENTER_URL || 'http://localhost:5189',
+  'ai-assistant': process.env.AUDIT_SOURCE_AI_ASSISTANT_URL || 'http://localhost:5193',
   cmdb: process.env.AUDIT_SOURCE_CMDB_URL || 'http://localhost:8088',
 });
 const auditCenterLogsService = createAuditCenterLogsService({
@@ -5928,7 +6066,7 @@ const deleteCaptchaSession = async (token) => {
 const verifyCaptcha = async ({ token, code }) => {
   const row = await getCaptchaSession(token);
   if (!row) return { ok: false, error: '验证码已过期，请刷新' };
-  const exp = new Date(row.expires_at).getTime();
+  const exp = mysqlDatetimeToUtcMs(row.expires_at);
   if (!Number.isFinite(exp) || exp <= Date.now()) {
     await deleteCaptchaSession(token);
     return { ok: false, error: '验证码已过期，请刷新' };
@@ -6362,7 +6500,7 @@ app.post('/api/auth/mfa/send', async (req, res) => {
   if (!mfaToken || !method) return res.status(400).json({ error: '参数缺失' });
   const row = await db.get('SELECT * FROM auth_mfa_sessions WHERE token = ?', [mfaToken]);
   if (!row) return res.status(400).json({ error: '验证会话不存在或已过期' });
-  if (new Date(row.expires_at).getTime() <= Date.now()) {
+  if (mysqlDatetimeToUtcMs(row.expires_at) <= Date.now()) {
     await db.run('DELETE FROM auth_mfa_sessions WHERE token = ?', [mfaToken]);
     return res.status(400).json({ error: '验证会话已过期，请重新登录' });
   }
@@ -6457,7 +6595,7 @@ app.post('/api/auth/mfa/verify', async (req, res) => {
   if (!mfaToken || !method || !code) return res.status(400).json({ error: '参数缺失' });
   const row = await db.get('SELECT * FROM auth_mfa_sessions WHERE token = ?', [mfaToken]);
   if (!row) return res.status(400).json({ error: '验证会话不存在或已过期' });
-  if (new Date(row.expires_at).getTime() <= Date.now()) {
+  if (mysqlDatetimeToUtcMs(row.expires_at) <= Date.now()) {
     await db.run('DELETE FROM auth_mfa_sessions WHERE token = ?', [mfaToken]);
     return res.status(400).json({ error: '验证会话已过期，请重新登录' });
   }
@@ -6499,7 +6637,7 @@ app.post('/api/auth/mfa/verify', async (req, res) => {
   } else {
     if (row.method !== method) return res.status(400).json({ error: '请先发送验证码' });
     if (!row.code_hash || !row.code_expires_at) return res.status(400).json({ error: '请先发送验证码' });
-    const exp = new Date(row.code_expires_at).getTime();
+    const exp = mysqlDatetimeToUtcMs(row.code_expires_at);
     if (!Number.isFinite(exp) || exp <= Date.now()) return res.status(400).json({ error: '验证码已过期' });
     ok = bcrypt.compareSync(String(code).trim(), row.code_hash);
   }

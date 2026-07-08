@@ -67,27 +67,35 @@ def test_system_config_masks_key_and_enforces_upload_limit(monkeypatch, tmp_path
     with client as test_client:
         defaults = test_client.get("/api/sca/system-config").json()
         assert defaults["upload_max_file_size_mb"] > 0
-        assert defaults["openai_api_key_configured"] is False
+        assert defaults["ai_models"] == []
         assert defaults["dependency_track_api_key_configured"] is False
 
+        model = test_client.post(
+            "/api/sca/ai-models",
+            json={
+                "label": "DeepSeek",
+                "api_key": "example-openai-api-key",
+                "api_base_url": "https://llm.example.com/v1",
+                "model_name": "deepseek-chat",
+                "timeout_ms": 45000,
+                "is_default": True,
+            },
+        )
         saved = test_client.put(
             "/api/sca/system-config",
             json={
                 "upload_max_file_size_mb": 1,
-                "openai_api_key": "example-openai-api-key",
-                "openai_base_url": "https://llm.example.com/v1",
-                "openai_model": "deepseek-chat",
-                "openai_timeout_ms": 45000,
                 "dependency_track_url": "http://dependency-track.local",
                 "dependency_track_api_key": "example-dtrack-api-key",
             },
         )
+        assert model.status_code == 201
+        assert model.json()["has_api_key"] is True
         assert saved.status_code == 200
-        assert saved.json()["openai_api_key_configured"] is True
+        assert saved.json()["ai_models"][0]["has_api_key"] is True
         assert saved.json()["dependency_track_api_key_configured"] is True
         assert "example-openai-api-key" not in str(saved.json())
         assert "example-dtrack-api-key" not in str(saved.json())
-        assert saved.json()["openai_api_key_masked"].startswith("exam")
         assert saved.json()["dependency_track_api_key_masked"].startswith("exam")
 
         too_large = test_client.post(
@@ -132,16 +140,18 @@ def test_ai_triage_uses_runtime_system_config(monkeypatch, tmp_path):
     monkeypatch.setattr(main, "analyze_vulnerabilities_with_ai", fake_analyze)
     with client as test_client:
         project_id, vulnerability_id = seed_vulnerability(database, models)
-        test_client.put(
-            "/api/sca/system-config",
+        created = test_client.post(
+            "/api/sca/ai-models",
             json={
-                "upload_max_file_size_mb": 50,
-                "openai_api_key": "example-runtime-openai-key",
-                "openai_base_url": "https://llm.example.com/v1",
-                "openai_model": "qwen-plus",
-                "openai_timeout_ms": 65000,
+                "label": "Qwen",
+                "api_key": "example-runtime-openai-key",
+                "api_base_url": "https://llm.example.com/v1",
+                "model_name": "qwen-plus",
+                "timeout_ms": 65000,
+                "is_default": True,
             },
         )
+        assert created.status_code == 201
         response = test_client.post(
             f"/api/sca/projects/{project_id}/ai-triage/analyze",
             json={
@@ -160,7 +170,7 @@ def test_ai_triage_uses_runtime_system_config(monkeypatch, tmp_path):
     assert response.status_code == 200
     assert captured == {
         "api_key": "example-runtime-openai-key",
-        "api_url": "https://llm.example.com/v1/chat/completions",
+        "api_url": "https://llm.example.com/v1",
         "model": "qwen-plus",
         "timeout": 65000,
     }
@@ -177,16 +187,18 @@ def test_ai_triage_reports_provider_auth_failure_without_500(monkeypatch, tmp_pa
     monkeypatch.setattr(main, "analyze_vulnerabilities_with_ai", fake_analyze)
     with client as test_client:
         project_id, vulnerability_id = seed_vulnerability(database, models)
-        test_client.put(
-            "/api/sca/system-config",
+        created = test_client.post(
+            "/api/sca/ai-models",
             json={
-                "upload_max_file_size_mb": 50,
-                "openai_api_key": "example-runtime-openai-key",
-                "openai_base_url": "https://api.deepseek.com",
-                "openai_model": "deepseek-chat",
-                "openai_timeout_ms": 30000,
+                "label": "DeepSeek",
+                "api_key": "example-runtime-openai-key",
+                "api_base_url": "https://api.deepseek.com",
+                "model_name": "deepseek-chat",
+                "timeout_ms": 30000,
+                "is_default": True,
             },
         )
+        assert created.status_code == 201
         response = test_client.post(
             f"/api/sca/projects/{project_id}/ai-triage/analyze",
             json={
@@ -208,7 +220,7 @@ def test_ai_triage_reports_provider_auth_failure_without_500(monkeypatch, tmp_pa
     assert "invalid api key" in response.json()["message"]
 
 
-def test_system_config_can_test_openai_model_without_saving(monkeypatch, tmp_path):
+def test_system_config_can_test_saved_openai_model(monkeypatch, tmp_path):
     client, _main, _models, _database = build_client(monkeypatch, tmp_path)
     captured = {}
 
@@ -241,29 +253,35 @@ def test_system_config_can_test_openai_model_without_saving(monkeypatch, tmp_pat
 
     monkeypatch.setattr("app.main.httpx.Client", FakeClient)
     with client as test_client:
-        response = test_client.post(
-            "/api/sca/system-config/test-openai",
+        created = test_client.post(
+            "/api/sca/ai-models",
             json={
-                "upload_max_file_size_mb": 50,
-                "openai_api_key": "example-unsaved-openai-key",
-                "openai_base_url": "https://llm.example.com/v1/chat/completions",
-                "openai_model": "model-test",
-                "openai_timeout_ms": 12000,
+                "label": "连接测试",
+                "api_key": "example-openai-key",
+                "api_base_url": "https://llm.example.com/v1/chat/completions",
+                "model_name": "model-test",
+                "timeout_ms": 12000,
+                "is_default": False,
             },
+        )
+        model_id = created.json()["id"]
+        response = test_client.post(
+            f"/api/sca/system-config/test-openai?model_id={model_id}",
         )
         config_after = test_client.get("/api/sca/system-config").json()
 
+    assert created.status_code == 201
     assert response.status_code == 200
     assert response.json()["success"] is True
     assert response.json()["model"] == "model-test"
     assert captured == {
         "timeout": 12,
         "url": "https://llm.example.com/v1/chat/completions",
-        "auth": "Bearer example-unsaved-openai-key",
+        "auth": "Bearer example-openai-key",
         "model": "model-test",
         "response_format": "json_schema",
     }
-    assert config_after["openai_api_key_configured"] is False
+    assert config_after["ai_models"][0]["has_api_key"] is True
 
 
 def test_dependency_track_license_catalog_sync_uses_runtime_config(monkeypatch, tmp_path):
@@ -327,4 +345,4 @@ def test_dependency_track_license_sync_reports_missing_api_key(monkeypatch, tmp_
         response = test_client.post("/api/sca/licenses/sync")
 
     assert response.status_code == 400
-    assert "Dependency-Track API Key" in response.json()["detail"]
+    assert "未配置 API Key" in response.json()["detail"]

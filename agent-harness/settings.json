@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "project": "juxin-ai-assistant",
+  "vendorLocked": false,
+  "defaultLanguage": "zh-CN",
+  "agentFlow": [
+    "planner",
+    "runner",
+    "verifier",
+    "replayer",
+    "governance"
+  ],
+  "contextPolicy": {
+    "separateCompanyKnowledge": true,
+    "separatePersonalReference": true,
+    "separateCurrentAttachment": true,
+    "hideFullPromptInRunRecords": true,
+    "hideSecretsInLogs": true
+  },
+  "toolPolicy": {
+    "externalWriteDefault": false,
+    "auditRequired": true,
+    "secretsInRegistry": false
+  },
+  "qualityPolicy": {
+    "requireCitationForKnowledgeAnswer": true,
+    "requireHumanReviewForHighRiskOutput": true,
+    "requireReplayForFailure": true
+  }
+}

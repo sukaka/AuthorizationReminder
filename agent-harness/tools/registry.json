@@ -1,0 +1,68 @@
+{
+  "version": 1,
+  "policy": {
+    "externalWriteDefault": false,
+    "secretsInRegistry": false,
+    "providerLocked": false
+  },
+  "tools": [
+    {
+      "name": "knowledge_search",
+      "type": "retrieval",
+      "description": "检索公司知识、个人资料和当前附件。",
+      "enabled": true,
+      "allowedRoles": [
+        "普通助手",
+        "销售助手",
+        "商务助手",
+        "售前助手",
+        "交付助手",
+        "软测助手",
+        "渗透测试助手",
+        "安全运维助手",
+        "风险评估助手",
+        "应急响应助手",
+        "知识库问答"
+      ],
+      "externalWrite": false,
+      "auditRequired": true
+    },
+    {
+      "name": "word_export",
+      "type": "document_export",
+      "description": "将回答、选中消息或会话导出为聚信格式 Word。",
+      "enabled": true,
+      "allowedRoles": [
+        "普通助手",
+        "商务助手",
+        "售前助手",
+        "交付助手",
+        "知识库问答"
+      ],
+      "externalWrite": false,
+      "auditRequired": true
+    },
+    {
+      "name": "quality_check",
+      "type": "verifier",
+      "description": "检查完整度、引用可靠性、格式合规和安全风险。",
+      "enabled": true,
+      "allowedRoles": [
+        "verifier"
+      ],
+      "externalWrite": false,
+      "auditRequired": true
+    },
+    {
+      "name": "replay_summary",
+      "type": "replay",
+      "description": "生成 Agent 运行复盘摘要，说明成功、失败和下一步。",
+      "enabled": true,
+      "allowedRoles": [
+        "replayer"
+      ],
+      "externalWrite": false,
+      "auditRequired": true
+    }
+  ]
+}

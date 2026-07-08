@@ -1,0 +1,25 @@
+{
+  "id": "tool-update-record",
+  "name": "工具更新记录整理",
+  "description": "根据工具清单、更新时间范围和附件表格整理工具更新记录和说明文档。",
+  "category": "operations",
+  "version": "1.0.0",
+  "status": "published",
+  "scope": "company",
+  "owner": "ops-team",
+  "requires_attachment": false,
+  "allowed_tools": ["file_parser", "document_generator", "personal_memory"],
+  "input_types": ["text", "xlsx", "csv", "docx"],
+  "output_types": ["markdown", "xlsx", "docx"],
+  "permissions": {
+    "allow_web": false,
+    "allow_company_knowledge": false,
+    "allow_personal_memory": true,
+    "allow_write_company_kb": false
+  },
+  "review": {
+    "required_for_publish": true,
+    "reviewer_role": "admin"
+  },
+  "tags": ["工具更新", "运维", "记录整理"]
+}

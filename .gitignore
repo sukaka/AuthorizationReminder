@@ -10,6 +10,12 @@ ticketing/web/dist
 device-flow/frontend/dist
 sec-impl/frontend/dist
 prompt-center/frontend/dist
+big-screen-center/**/dist
+juxin-ai-assistant/apps/desktop/dist
+juxin-ai-assistant/apps/desktop/src-tauri/gen
+juxin-ai-assistant/apps/desktop/src-tauri/target
+juxin-ai-assistant/apps/desktop/output/playwright/results/
+*.tsbuildinfo
 .DS_Store
 npm-debug.log
 yarn.lock
@@ -20,4 +26,12 @@ server/data.db-*
 .env.*
 !.env.example
 .worktrees/
+juxin-ai-assistant/server/.venv/
+juxin-ai-assistant/server/.pytest_cache/
+juxin-ai-assistant/server/juxin-ai-assistant-dev.db
+juxin-ai-assistant/server/juxin-ai-assistant-dev.db-*
+juxin-ai-assistant/server/**/__pycache__/
+juxin-ai-assistant/server/**/*.py[cod]
+juxin-ai-assistant/.superpowers/
+juxin-ai-assistant/server/catalog/prompt-stage-v1.10.json
 .tmp_*

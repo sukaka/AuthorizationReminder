@@ -14,7 +14,7 @@ const DEFAULT_POLICY = {
   requireSpecial: true,
 };
 
-test('normalizeAppAccess strips dedicated centers for admin and locks sysadmin/auditor to their own center', () => {
+test('normalizeAppAccess strips dedicated centers for admin and adds AI assistant to privileged roles', () => {
   const adminAccess = normalizeAppAccess(['reminder', 'ticketing', 'sec-impl', 'admin-center', 'audit-center'], 'admin');
   const sysadminAccess = normalizeAppAccess(['reminder', 'admin-center'], 'sysadmin');
   const auditorAccess = normalizeAppAccess(['faq', 'audit-center'], 'auditor');
@@ -25,8 +25,8 @@ test('normalizeAppAccess strips dedicated centers for admin and locks sysadmin/a
   assert.equal(adminAccess.includes('sec-impl'), false);
   assert.equal(adminAccess.includes('admin-center'), false);
   assert.equal(adminAccess.includes('audit-center'), false);
-  assert.deepEqual(sysadminAccess, ['admin-center']);
-  assert.deepEqual(auditorAccess, ['audit-center', 'delivery']);
+  assert.deepEqual(sysadminAccess, ['admin-center', 'ai-assistant']);
+  assert.deepEqual(auditorAccess, ['audit-center', 'delivery', 'ai-assistant']);
 });
 
 test('listUsers merges lock state into formatted payload', async () => {
@@ -115,11 +115,11 @@ test('createUser applies normalized role and dedicated center defaults', async (
   });
 
   assert.equal(row.id, 42);
-  assert.deepEqual(row.app_access, ['admin-center']);
+  assert.deepEqual(row.app_access, ['admin-center', 'ai-assistant']);
   assert.equal(row.department_code, 'TECH');
   assert.equal(runs.length, 1);
   assert.equal(runs[0].params[1], 'hashed:Strong#1234');
-  assert.deepEqual(JSON.parse(runs[0].params[7]), ['admin-center']);
+  assert.deepEqual(JSON.parse(runs[0].params[7]), ['admin-center', 'ai-assistant']);
   assert.equal(runs[0].params[8], 'TECH');
   assert.equal(runs[0].params[9], 0);
   assert.equal(operations[0].action, 'CREATE');
@@ -309,7 +309,7 @@ test('updateUser allows builtin account role changes while keeping access normal
   });
 
   assert.equal(row.role, 'auditor');
-  assert.deepEqual(row.app_access, ['audit-center', 'delivery']);
+  assert.deepEqual(row.app_access, ['audit-center', 'delivery', 'ai-assistant']);
   assert.ok(runs.some((item) => item.sql.includes('SET role = ?') && item.params[0] === 'auditor'));
   assert.ok(runs.some((item) => item.sql.includes('SET app_access = ?') && JSON.parse(item.params[0])[0] === 'audit-center'));
 });

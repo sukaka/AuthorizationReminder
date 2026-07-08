@@ -1,6 +1,8 @@
 import shutil
+import stat
 import tarfile
 import zipfile
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -12,6 +14,11 @@ from .database import SessionLocal, init_db
 from .dependency_parser import parse_source_dependencies
 from .license_enrichment_service import enrich_missing_component_licenses
 from .reachability_service import analyze_component_reachability
+from .scanner_result_service import (
+    latest_completed_project_scan,
+    persist_scan_results,
+    promote_dependency_check_findings,
+)
 from .models import (
     Component,
     ComponentDependency,
@@ -30,8 +37,11 @@ from .models import (
 )
 from .risk_monitor_service import monitor_component_update, raw_json, snapshot_risk_level
 from .scanners import opensca_client, syft_client, trivy_client
-from .scanners.base import ScannerCommandResult, command_to_log_line, file_sha256
+from .scanners.base import ScannerCommandResult, command_to_log_line, file_sha256, write_json
+from .scanners.dependency_check_cache import DependencyCheckLockTimeout
+from .scanners.dependency_check_client import DependencyCheckAdapter
 from .scanners.dependency_track_client import DependencyTrackClient
+from .scanners.java_detector import detect_java_project
 from .vulnerability_service import query_component_vulnerabilities, vulnerability_source_status
 
 settings = get_settings()
@@ -51,6 +61,7 @@ celery_app.conf.task_routes = {
     "sca.scan_uploaded_file": {"queue": "scanner"},
     "sca.query_project_vulnerabilities": {"queue": "scanner"},
     "sca.enrich_project_licenses": {"queue": "scanner"},
+    "sca.update_dependency_check_data": {"queue": "scanner"},
 }
 celery_app.conf.beat_schedule = {
     "sca-risk-monitor": {
@@ -60,7 +71,11 @@ celery_app.conf.beat_schedule = {
     "sca-remediation-overdue": {
         "task": "sca.check_remediation_overdue",
         "schedule": settings.remediation_overdue_check_seconds,
-    }
+    },
+    "sca-dependency-check-data-update": {
+        "task": "sca.update_dependency_check_data",
+        "schedule": settings.dependency_check_update_interval_seconds,
+    },
 }
 
 
@@ -73,24 +88,140 @@ def _safe_target(root: Path, member_name: str) -> Path:
     return target
 
 
-def _extract_archive(archive: Path, destination: Path) -> None:
+@dataclass(frozen=True)
+class ArchiveExtractionLimits:
+    max_files: int = 20000
+    max_total_bytes: int = 4 * 1024 * 1024 * 1024
+    max_file_bytes: int = 512 * 1024 * 1024
+    max_compression_ratio: float = 200.0
+
+
+def _archive_limits() -> ArchiveExtractionLimits:
+    return ArchiveExtractionLimits(
+        max_files=settings.archive_max_files,
+        max_total_bytes=settings.archive_max_total_bytes,
+        max_file_bytes=settings.archive_max_file_bytes,
+        max_compression_ratio=settings.archive_max_compression_ratio,
+    )
+
+
+def _check_archive_totals(file_count: int, total_bytes: int, file_bytes: int, limits: ArchiveExtractionLimits) -> None:
+    if limits.max_files > 0 and file_count > limits.max_files:
+        raise ValueError(f"压缩包文件数超过限制: {limits.max_files}")
+    if limits.max_file_bytes > 0 and file_bytes > limits.max_file_bytes:
+        raise ValueError(f"压缩包单文件大小超过限制: {limits.max_file_bytes}")
+    if limits.max_total_bytes > 0 and total_bytes > limits.max_total_bytes:
+        raise ValueError(f"压缩包解压总大小超过限制: {limits.max_total_bytes}")
+
+
+def _copy_archive_member(source, target: Path, limits: ArchiveExtractionLimits, total_bytes: int) -> int:
+    written = 0
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with target.open("wb") as output:
+        while True:
+            chunk = source.read(1024 * 1024)
+            if not chunk:
+                break
+            written += len(chunk)
+            _check_archive_totals(0, total_bytes + written, written, limits)
+            output.write(chunk)
+    return written
+
+
+def _zip_member_is_special(member: zipfile.ZipInfo) -> bool:
+    mode = member.external_attr >> 16
+    file_type = stat.S_IFMT(mode)
+    return file_type not in {0, stat.S_IFREG, stat.S_IFDIR}
+
+
+def _extract_zip(archive: Path, destination: Path, limits: ArchiveExtractionLimits) -> None:
+    total_bytes = 0
+    file_count = 0
+    with zipfile.ZipFile(archive) as zipped:
+        for member in zipped.infolist():
+            target = _safe_target(destination, member.filename)
+            file_count += 1
+            _check_archive_totals(file_count, total_bytes, 0, limits)
+            if member.flag_bits & 0x1:
+                raise ValueError(f"压缩包包含加密文件: {member.filename}")
+            if _zip_member_is_special(member):
+                raise ValueError(f"压缩包包含链接或特殊文件: {member.filename}")
+            if member.is_dir():
+                target.mkdir(parents=True, exist_ok=True)
+                continue
+            total_bytes += member.file_size
+            _check_archive_totals(file_count, total_bytes, member.file_size, limits)
+            if member.file_size > 0:
+                if member.compress_size <= 0:
+                    raise ValueError(f"压缩包文件压缩比异常: {member.filename}")
+                ratio = member.file_size / member.compress_size
+                if limits.max_compression_ratio > 0 and ratio > limits.max_compression_ratio:
+                    raise ValueError(f"压缩包文件压缩比超过限制: {member.filename}")
+
+        actual_total = 0
+        for member in zipped.infolist():
+            if member.is_dir():
+                continue
+            target = _safe_target(destination, member.filename)
+            with zipped.open(member, "r") as source:
+                actual_total += _copy_archive_member(source, target, limits, actual_total)
+
+
+def _extract_tar(archive: Path, destination: Path, limits: ArchiveExtractionLimits) -> None:
+    total_bytes = 0
+    file_count = 0
+    with tarfile.open(archive, "r:gz") as tar:
+        members = tar.getmembers()
+        for member in members:
+            target = _safe_target(destination, member.name)
+            file_count += 1
+            _check_archive_totals(file_count, total_bytes, 0, limits)
+            if member.isdir():
+                target.mkdir(parents=True, exist_ok=True)
+                continue
+            if not member.isfile():
+                raise ValueError(f"压缩包包含链接或特殊文件: {member.name}")
+            total_bytes += member.size
+            _check_archive_totals(file_count, total_bytes, member.size, limits)
+        compressed_size = archive.stat().st_size
+        if total_bytes > 0 and compressed_size > 0:
+            ratio = total_bytes / compressed_size
+            if limits.max_compression_ratio > 0 and ratio > limits.max_compression_ratio:
+                raise ValueError("压缩包整体压缩比超过限制")
+
+        actual_total = 0
+        for member in members:
+            if not member.isfile():
+                continue
+            source = tar.extractfile(member)
+            if source is None:
+                raise ValueError(f"无法读取压缩包成员: {member.name}")
+            with source:
+                target = _safe_target(destination, member.name)
+                actual_total += _copy_archive_member(source, target, limits, actual_total)
+
+
+def _extract_archive(
+    archive: Path,
+    destination: Path,
+    limits: ArchiveExtractionLimits | None = None,
+) -> None:
     if destination.exists():
         shutil.rmtree(destination)
     destination.mkdir(parents=True, exist_ok=True)
-    lower = archive.name.lower()
-    if lower.endswith(".zip"):
-        with zipfile.ZipFile(archive) as zipped:
-            for member in zipped.infolist():
-                _safe_target(destination, member.filename)
-            zipped.extractall(destination)
-        return
-    if lower.endswith(".tar.gz") or lower.endswith(".tgz"):
-        with tarfile.open(archive, "r:gz") as tar:
-            for member in tar.getmembers():
-                _safe_target(destination, member.name)
-            tar.extractall(destination)
-        return
-    raise ValueError("仅支持 zip、tar.gz、tgz 源码包")
+    extraction_limits = limits or _archive_limits()
+    try:
+        lower = archive.name.lower()
+        if lower.endswith(".zip"):
+            _extract_zip(archive, destination, extraction_limits)
+            return
+        if lower.endswith(".tar.gz") or lower.endswith(".tgz"):
+            _extract_tar(archive, destination, extraction_limits)
+            return
+        raise ValueError("仅支持 zip、tar.gz、tgz 源码包")
+    except Exception:
+        shutil.rmtree(destination, ignore_errors=True)
+        raise
 
 
 PROJECT_SCAN_STEPS = [
@@ -98,6 +229,7 @@ PROJECT_SCAN_STEPS = [
     ("opensca_scan_task", "opensca", settings.opensca_timeout),
     ("syft_sbom_task", "syft", settings.syft_timeout),
     ("trivy_scan_task", "trivy", settings.trivy_timeout),
+    ("dependency_check_scan_task", "dependency-check", settings.dependency_check_timeout),
     ("dependency_track_upload_task", "dependency-track", settings.dependency_track_timeout),
     ("dependency_track_fetch_task", "dependency-track", settings.dependency_track_timeout),
     ("normalize_results_task", "juxin-normalizer", 600),
@@ -224,6 +356,7 @@ def _record_scanner_result(
             stdout_log_path=result.stdout_log_path,
             stderr_log_path=result.stderr_log_path,
             error_message=stored_error_message,
+            duration_seconds=result.duration_seconds,
             started_at=child.started_at,
             finished_at=child.finished_at,
         )
@@ -254,12 +387,75 @@ def _effective_dependency_track_settings(db):
     return settings.model_copy(update={"dependency_track_url": url, "dependency_track_api_key": api_key.strip()})
 
 
-def _run_scanner_children(db, task: ScanTask, extract_dir: Path) -> None:
+def _run_dependency_check_child(
+    db,
+    task: ScanTask,
+    extract_dir: Path,
+) -> ScannerCommandResult:
+    detection = detect_java_project(
+        extract_dir,
+        max_files=settings.dependency_check_detection_max_files,
+        max_depth=settings.dependency_check_detection_max_depth,
+        max_matches=settings.dependency_check_detection_max_matches,
+    )
+    if not detection.enabled:
+        result = ScannerCommandResult(
+            "dependency-check",
+            "skipped",
+            [],
+            error_message="未发现 Java 构建文件或 JAR/WAR/EAR",
+        )
+        _record_scanner_result(db, task, "dependency_check_scan_task", result)
+        return result
+
+    reason = (
+        f"自动触发：{', '.join(detection.reasons)}；"
+        f"样例：{', '.join(detection.matched_paths[:5])}"
+    )
+    _mark_child(
+        db,
+        task.id,
+        "dependency_check_scan_task",
+        "running",
+        reason,
+        20,
+    )
+    try:
+        result = DependencyCheckAdapter(settings).scan_source(
+            extract_dir,
+            Path(settings.dependency_check_output_dir) / str(task.id),
+            task.project.name if task.project else f"project-{task.project_id}",
+        )
+    except DependencyCheckLockTimeout as exc:
+        result = ScannerCommandResult(
+            "dependency-check",
+            "skipped",
+            [],
+            error_type="CACHE_LOCK_TIMEOUT",
+            error_message=str(exc),
+            warnings=[str(exc)],
+        )
+    except Exception as exc:
+        result = ScannerCommandResult(
+            "dependency-check",
+            "failed",
+            [],
+            error_type="EXECUTION_FAILED",
+            error_message=str(exc),
+        )
+    _record_scanner_result(db, task, "dependency_check_scan_task", result)
+    return result
+
+
+def _run_scanner_children(db, task: ScanTask, extract_dir: Path) -> dict[str, Path]:
+    report_paths: dict[str, Path] = {}
     _mark_child(db, task.id, "opensca_scan_task", "running", "正在执行 OpenSCA 扫描", 20)
     _mark_parent(db, task, "running", 20, "正在执行 OpenSCA 扫描")
     db.commit()
     opensca_result = opensca_client.scan_source(extract_dir, Path(settings.opensca_output_dir) / str(task.id), settings)
     _record_scanner_result(db, task, "opensca_scan_task", opensca_result)
+    if opensca_result.raw_result_path:
+        report_paths["opensca"] = Path(opensca_result.raw_result_path)
     db.add(ScanLog(scan_task_id=task.id, level="info", message=f"OpenSCA: {opensca_result.status} {opensca_result.error_message}".strip()))
     _mark_parent(db, task, "running", 40, "OpenSCA 扫描完成，正在生成 SBOM")
     db.commit()
@@ -271,6 +467,8 @@ def _run_scanner_children(db, task: ScanTask, extract_dir: Path) -> None:
     syft_statuses = [item.status for item in syft_results]
     syft_result = next((item for item in syft_results if item.raw_result_path.endswith("cyclonedx.json")), syft_results[0])
     _record_scanner_result(db, task, "syft_sbom_task", syft_result)
+    if syft_result.raw_result_path:
+        report_paths["syft"] = Path(syft_result.raw_result_path)
     for item in syft_results[1:]:
         _record_artifact(db, task, item.engine_name, "spdx_bom" if "spdx" in item.raw_result_path else "raw_json", item.raw_result_path)
     db.add(ScanLog(scan_task_id=task.id, level="info", message=f"Syft: {','.join(syft_statuses)} {syft_result.error_message}".strip()))
@@ -282,8 +480,28 @@ def _run_scanner_children(db, task: ScanTask, extract_dir: Path) -> None:
     db.commit()
     trivy_result = trivy_client.scan_fs(extract_dir, Path(settings.trivy_output_dir) / str(task.id), settings)
     _record_scanner_result(db, task, "trivy_scan_task", trivy_result)
+    if trivy_result.raw_result_path:
+        report_paths["trivy"] = Path(trivy_result.raw_result_path)
     db.add(ScanLog(scan_task_id=task.id, level="info", message=f"Trivy: {trivy_result.status} {trivy_result.error_message}".strip()))
-    _mark_parent(db, task, "running", 75, "Trivy 扫描完成，正在处理 Dependency-Track")
+    _mark_parent(db, task, "running", 75, "Trivy 扫描完成，正在执行 Dependency-Check")
+    db.commit()
+
+    dependency_check_result = _run_dependency_check_child(db, task, extract_dir)
+    if dependency_check_result.raw_result_path:
+        report_paths["dependency-check"] = Path(dependency_check_result.raw_result_path)
+    db.add(
+        ScanLog(
+            scan_task_id=task.id,
+            level="info"
+            if dependency_check_result.status in {"completed", "skipped"}
+            else "warning",
+            message=(
+                f"Dependency-Check: {dependency_check_result.status} "
+                f"{dependency_check_result.error_message}"
+            ).strip(),
+        )
+    )
+    _mark_parent(db, task, "running", 78, "Dependency-Check 处理完成，正在处理 Dependency-Track")
     db.commit()
 
     dtrack_settings = _effective_dependency_track_settings(db)
@@ -293,14 +511,14 @@ def _run_scanner_children(db, task: ScanTask, extract_dir: Path) -> None:
         _mark_child(db, task.id, "dependency_track_fetch_task", "skipped", "Dependency-Track 未配置 API Key", 100)
         _mark_parent(db, task, "running", 82, "Dependency-Track 未配置，正在标准化本地结果")
         db.commit()
-        return
+        return report_paths
     bom_path = Path(syft_result.raw_result_path) if syft_result.raw_result_path else Path()
     if not bom_path.exists():
         _mark_child(db, task.id, "dependency_track_upload_task", "failed", "缺少 CycloneDX BOM，无法上传 Dependency-Track", 100, "缺少 CycloneDX BOM")
         _mark_child(db, task.id, "dependency_track_fetch_task", "skipped", "等待 BOM 上传成功后拉取", 100)
         _mark_parent(db, task, "running", 82, "缺少 BOM，跳过 Dependency-Track，正在标准化本地结果")
         db.commit()
-        return
+        return report_paths
     try:
         _mark_child(db, task.id, "dependency_track_upload_task", "running", "正在上传 CycloneDX BOM", 40)
         _mark_parent(db, task, "running", 78, "正在上传 CycloneDX BOM")
@@ -324,6 +542,25 @@ def _run_scanner_children(db, task: ScanTask, extract_dir: Path) -> None:
         _mark_parent(db, task, "running", 82, "正在拉取 Dependency-Track 指标")
         db.commit()
         metrics = dtrack.fetch_metrics(project_uuid)
+        components = dtrack.fetch_components(project_uuid)
+        findings = (
+            dtrack.fetch_findings(project_uuid)
+            if dtrack_settings.dependency_track_fetch_findings
+            else []
+        )
+        dtrack_dir = Path(settings.dependency_check_output_dir).parent / "dependency-track" / str(task.id)
+        dtrack_components_path = write_json(
+            dtrack_dir / "dependency-track-components.json",
+            components,
+        )
+        dtrack_findings_path = write_json(
+            dtrack_dir / "dependency-track-findings.json",
+            findings,
+        )
+        report_paths["dependency-track-components"] = dtrack_components_path
+        report_paths["dependency-track-findings"] = dtrack_findings_path
+        _record_artifact(db, task, "dependency-track", "raw_json", str(dtrack_components_path))
+        _record_artifact(db, task, "dependency-track", "raw_json", str(dtrack_findings_path))
         row.last_metrics_json = raw_json(metrics)
         row.last_fetch_at = datetime.now(timezone.utc)
         row.last_status = "fetched"
@@ -337,6 +574,106 @@ def _run_scanner_children(db, task: ScanTask, extract_dir: Path) -> None:
         db.add(ScanLog(scan_task_id=task.id, level="error", message=f"Dependency-Track: {message}"))
         _mark_parent(db, task, "running", 85, "Dependency-Track 失败，正在标准化本地结果")
         db.commit()
+    return report_paths
+
+
+def _set_system_setting(db, key: str, value: object, updated_by: str) -> None:
+    row = db.query(SystemSetting).filter(SystemSetting.key == key).first()
+    if row is None:
+        row = SystemSetting(key=key)
+        db.add(row)
+    row.value = str(value or "")
+    row.updated_by = updated_by
+
+
+def _record_dependency_check_cache_result(
+    db,
+    result: ScannerCommandResult,
+    *,
+    started: datetime,
+    version: str,
+) -> None:
+    _set_system_setting(db, "dependency_check_cache_status", result.status, "system")
+    _set_system_setting(
+        db,
+        "dependency_check_cache_last_started_at",
+        started.isoformat(),
+        "system",
+    )
+    _set_system_setting(db, "dependency_check_cache_version", version, "system")
+    _set_system_setting(
+        db,
+        "dependency_check_cache_message",
+        result.error_message or result.message,
+        "system",
+    )
+    if result.status == "completed":
+        _set_system_setting(
+            db,
+            "dependency_check_cache_last_success_at",
+            datetime.now(timezone.utc).isoformat(),
+            "system",
+        )
+
+
+@celery_app.task(name="sca.update_dependency_check_data")
+def update_dependency_check_data() -> dict[str, str]:
+    init_db()
+    started = datetime.now(timezone.utc)
+    output_dir = (
+        Path(settings.dependency_check_output_dir)
+        / "data-update"
+        / started.strftime("%Y%m%dT%H%M%SZ")
+    )
+    with SessionLocal() as db:
+        _set_system_setting(db, "dependency_check_cache_status", "running", "system")
+        _set_system_setting(
+            db,
+            "dependency_check_cache_last_started_at",
+            started.isoformat(),
+            "system",
+        )
+        db.commit()
+        if not settings.dependency_check_enabled:
+            result = ScannerCommandResult(
+                "dependency-check-update",
+                "skipped",
+                [],
+                error_message="Dependency-Check 未启用",
+            )
+        else:
+            try:
+                result = DependencyCheckAdapter(settings).update_data(
+                    output_dir,
+                    settings.nvd_api_key,
+                )
+            except DependencyCheckLockTimeout as exc:
+                result = ScannerCommandResult(
+                    "dependency-check-update",
+                    "failed",
+                    [],
+                    error_type="CACHE_LOCK_TIMEOUT",
+                    error_message=str(exc),
+                )
+            except Exception as exc:
+                result = ScannerCommandResult(
+                    "dependency-check-update",
+                    "failed",
+                    [],
+                    error_type="UPDATE_FAILED",
+                    error_message=str(exc),
+                )
+        _record_dependency_check_cache_result(
+            db,
+            result,
+            started=started,
+            version=settings.dependency_check_version,
+        )
+        db.commit()
+        return {
+            "status": result.status,
+            "message": result.error_message or result.message,
+        }
 
 
 def _latest_source_root(db, project_id: int) -> Path | None:
@@ -578,6 +915,13 @@ def query_project_vulnerabilities_task(scan_task_id: int) -> dict[str, int | str
                 if index == 1 or index == total_components or index % 5 == 0:
                     db.commit()
 
+            latest_scan = latest_completed_project_scan(db, task.project_id)
+            if latest_scan:
+                total_findings += promote_dependency_check_findings(
+                    db,
+                    task.project_id,
+                    latest_scan.id,
+                )
             _mark_parent(db, task, "success", 100, f"漏洞查询完成：组件 {total_components} 个，漏洞 {total_findings} 条")
             db.add(ScanLog(scan_task_id=task.id, level="info", message=task.summary))
             db.commit()
@@ -619,7 +963,7 @@ def scan_uploaded_file(scan_task_id: int) -> dict[str, int | str]:
             _mark_child(db, task.id, "prepare_source_task", "completed", "源码准备完成", 100)
             _mark_parent(db, task, "running", 15, "源码准备完成")
             db.commit()
-            _run_scanner_children(db, task, extract_dir)
+            scanner_report_paths = _run_scanner_children(db, task, extract_dir)
             result = parse_source_dependencies(extract_dir)
             _mark_child(db, task.id, "normalize_results_task", "running", "正在标准化依赖识别结果", 50)
             _mark_parent(db, task, "running", 88, "正在标准化依赖识别结果")
@@ -701,7 +1045,16 @@ def scan_uploaded_file(scan_task_id: int) -> dict[str, int | str]:
 
             for message in result.logs:
                 db.add(ScanLog(scan_task_id=task.id, level="info", message=message))
-            _mark_child(db, task.id, "normalize_results_task", "completed", "标准化完成", 100)
+            counts = persist_scan_results(db, task, scanner_report_paths)
+            promoted = promote_dependency_check_findings(db, task.project_id, task.id)
+            _mark_child(
+                db,
+                task.id,
+                "normalize_results_task",
+                "completed",
+                f"标准化完成：组件 {counts['components']}，漏洞 {counts['vulnerabilities']}",
+                100,
+            )
             _mark_parent(db, task, "running", 93, "标准化完成，正在合并组件")
             _mark_child(db, task.id, "merge_components_task", "completed", "组件合并完成", 100)
             _mark_parent(db, task, "running", 96, "组件合并完成")
@@ -709,7 +1062,14 @@ def scan_uploaded_file(scan_task_id: int) -> dict[str, int | str]:
                 _mark_child(db, task.id, "license_enrichment_task", "skipped", "同步测试模式下跳过异步许可证补全", 100)
             else:
                 _mark_child(db, task.id, "license_enrichment_task", "pending", "等待自动匹配许可协议", 0)
-            _mark_child(db, task.id, "merge_vulnerabilities_task", "skipped", "等待漏洞查询后合并", 100)
+            _mark_child(
+                db,
+                task.id,
+                "merge_vulnerabilities_task",
+                "completed",
+                f"漏洞合并完成：归一化 {counts['vulnerabilities']}，晋升 {promoted}",
+                100,
+            )
             for task_type in [
                 "ai_noise_reduction_task",
                 "report_generate_task",

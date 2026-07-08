@@ -1,0 +1,25 @@
+{
+  "id": "incident-report",
+  "name": "安全事件分析报告生成",
+  "description": "根据事件描述、日志、截图和附件生成安全事件分析报告、处置过程、原因分析和整改建议。",
+  "category": "security_operations",
+  "version": "1.0.0",
+  "status": "published",
+  "scope": "company",
+  "owner": "security-team",
+  "requires_attachment": false,
+  "allowed_tools": ["file_parser", "knowledge_retrieval", "document_generator", "personal_memory"],
+  "input_types": ["text", "docx", "pdf", "xlsx", "png", "jpg", "jpeg", "log"],
+  "output_types": ["markdown", "docx"],
+  "permissions": {
+    "allow_web": false,
+    "allow_company_knowledge": true,
+    "allow_personal_memory": true,
+    "allow_write_company_kb": false
+  },
+  "review": {
+    "required_for_publish": true,
+    "reviewer_role": "admin"
+  },
+  "tags": ["安全事件", "事件分析", "整改建议"]
+}

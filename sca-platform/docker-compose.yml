@@ -1,10 +1,31 @@
+x-sca-environment: &sca-environment
+  APP_VERSION: ${SCA_APP_VERSION:-5.69.0}
+  DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-sca_user}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}@sca-postgres:5432/${POSTGRES_DB:-juxin_sca}
+  DEPENDENCY_TRACK_URL: ${SCA_DEPENDENCY_TRACK_URL:-${DEPENDENCY_TRACK_URL:-http://dependency-track-apiserver:8080}}
+  DEPENDENCY_TRACK_API_KEY: ${SCA_DEPENDENCY_TRACK_API_KEY:-${DEPENDENCY_TRACK_API_KEY:-}}
+  DEPENDENCY_TRACK_TIMEOUT: ${SCA_DEPENDENCY_TRACK_TIMEOUT:-${DEPENDENCY_TRACK_TIMEOUT:-1800}}
+  DEPENDENCY_TRACK_AUTO_CREATE_PROJECT: ${SCA_DEPENDENCY_TRACK_AUTO_CREATE_PROJECT:-${DEPENDENCY_TRACK_AUTO_CREATE_PROJECT:-true}}
+  DEPENDENCY_TRACK_UPLOAD_BOM: ${SCA_DEPENDENCY_TRACK_UPLOAD_BOM:-${DEPENDENCY_TRACK_UPLOAD_BOM:-true}}
+  DEPENDENCY_TRACK_FETCH_FINDINGS: ${SCA_DEPENDENCY_TRACK_FETCH_FINDINGS:-${DEPENDENCY_TRACK_FETCH_FINDINGS:-true}}
+  DEPENDENCY_CHECK_ENABLED: ${DEPENDENCY_CHECK_ENABLED:-true}
+  DEPENDENCY_CHECK_PATH: ${DEPENDENCY_CHECK_PATH:-/opt/dependency-check/bin/dependency-check.sh}
+  DEPENDENCY_CHECK_VERSION: ${DEPENDENCY_CHECK_VERSION:-12.1.9}
+  DEPENDENCY_CHECK_TIMEOUT: ${DEPENDENCY_CHECK_TIMEOUT:-1800}
+  DEPENDENCY_CHECK_DATA_DIR: ${DEPENDENCY_CHECK_DATA_DIR:-/data/dependency-check}
+  DEPENDENCY_CHECK_OUTPUT_DIR: ${DEPENDENCY_CHECK_OUTPUT_DIR:-/data/scanner-results/dependency-check}
+  DEPENDENCY_CHECK_SUPPRESSION_FILE: ${DEPENDENCY_CHECK_SUPPRESSION_FILE:-/etc/dependency-check/suppression.xml}
+  DEPENDENCY_CHECK_LOCK_TIMEOUT: ${DEPENDENCY_CHECK_LOCK_TIMEOUT:-120}
+  DEPENDENCY_CHECK_UPDATE_INTERVAL_SECONDS: ${DEPENDENCY_CHECK_UPDATE_INTERVAL_SECONDS:-86400}
+  DEPENDENCY_CHECK_CACHE_STALE_SECONDS: ${DEPENDENCY_CHECK_CACHE_STALE_SECONDS:-259200}
+  DEPENDENCY_CHECK_MAX_REPORT_BYTES: ${DEPENDENCY_CHECK_MAX_REPORT_BYTES:-209715200}
+
 services:
   sca-postgres:
     image: postgres:16-alpine
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-juxin_sca}
       POSTGRES_USER: ${POSTGRES_USER:-sca_user}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change_me_sca_postgres_password}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set to a strong value}
     volumes:
       - sca-postgres-data:/var/lib/postgresql/data
       - ./database/init:/docker-entrypoint-initdb.d:ro
@@ -34,8 +55,7 @@ services:
       context: ./backend
     env_file:
       - .env
-    environment:
-      APP_VERSION: ${SCA_APP_VERSION:-5.66.0}
+    environment: *sca-environment
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
@@ -45,6 +65,8 @@ services:
       - sca-backup-data:/data/sca/backups
       - sca-scanner-results:/data/scanner-results
       - sca-trivy-cache:/data/trivy-cache
+      - sca-dependency-check-data:/data/dependency-check
+      - ./backend/dependency-check-suppression.xml:/etc/dependency-check/suppression.xml:ro
     depends_on:
       sca-postgres:
         condition: service_healthy
@@ -58,8 +80,7 @@ services:
       context: ./backend
     env_file:
       - .env
-    environment:
-      APP_VERSION: ${SCA_APP_VERSION:-5.66.0}
+    environment: *sca-environment
     volumes:
       - sca-upload-data:/data/sca/uploads
       - sca-report-data:/data/sca/reports
@@ -67,6 +88,8 @@ services:
       - sca-backup-data:/data/sca/backups
       - sca-scanner-results:/data/scanner-results
       - sca-trivy-cache:/data/trivy-cache
+      - sca-dependency-check-data:/data/dependency-check
+      - ./backend/dependency-check-suppression.xml:/etc/dependency-check/suppression.xml:ro
     command: ["celery", "-A", "app.celery_app.celery_app", "worker", "--loglevel=INFO"]
     depends_on:
       sca-postgres:
@@ -79,8 +102,7 @@ services:
       context: ./backend
     env_file:
       - .env
-    environment:
-      APP_VERSION: ${SCA_APP_VERSION:-5.66.0}
+    environment: *sca-environment
     volumes:
       - sca-upload-data:/data/sca/uploads
       - sca-report-data:/data/sca/reports
@@ -88,6 +110,8 @@ services:
       - sca-backup-data:/data/sca/backups
       - sca-scanner-results:/data/scanner-results
       - sca-trivy-cache:/data/trivy-cache
+      - sca-dependency-check-data:/data/dependency-check
+      - ./backend/dependency-check-suppression.xml:/etc/dependency-check/suppression.xml:ro
     command: ["celery", "-A", "app.celery_app.celery_app", "beat", "--loglevel=INFO", "--schedule=/tmp/celerybeat-schedule"]
     depends_on:
       sca-postgres:
@@ -101,14 +125,15 @@ services:
       dockerfile: Dockerfile.scanner
     env_file:
       - .env
-    environment:
-      APP_VERSION: ${SCA_APP_VERSION:-5.66.0}
+    environment: *sca-environment
     volumes:
       - sca-upload-data:/data/sca/uploads
       - sca-report-data:/data/sca/reports
       - sca-sbom-data:/data/sca/sbom
       - sca-scanner-results:/data/scanner-results
       - sca-trivy-cache:/data/trivy-cache
+      - sca-dependency-check-data:/data/dependency-check
+      - ./backend/dependency-check-suppression.xml:/etc/dependency-check/suppression.xml:ro
     command: ["celery", "-A", "app.celery_app.celery_app", "worker", "--loglevel=INFO", "--queues=scanner,celery"]
     depends_on:
       sca-postgres:
@@ -123,7 +148,7 @@ services:
       ALPINE_DATABASE_URL: jdbc:postgresql://sca-postgres:5432/${POSTGRES_DB:-juxin_sca}
       ALPINE_DATABASE_DRIVER: org.postgresql.Driver
       ALPINE_DATABASE_USERNAME: ${POSTGRES_USER:-sca_user}
-      ALPINE_DATABASE_PASSWORD: ${POSTGRES_PASSWORD:-change_me_sca_postgres_password}
+      ALPINE_DATABASE_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
       ALPINE_DATABASE_POOL_ENABLED: "true"
     volumes:
       - dependency-track-data:/data
@@ -162,4 +187,5 @@ volumes:
   sca-backup-data:
   sca-scanner-results:
   sca-trivy-cache:
+  sca-dependency-check-data:
   dependency-track-data:

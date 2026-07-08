@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 import test from 'node:test'
 
 test('requestJson turns 504 html gateway response into structured timeout error', async (t) => {
@@ -27,4 +28,17 @@ test('requestJson turns 504 html gateway response into structured timeout error'
   assert.equal(errors[0][0], '[SCA API] request failed')
   assert.equal(errors[0][1].status, 504)
   assert.equal(errors[0][1].url, '/api/sca/projects/7/vulnerabilities/query')
+})
+
+test('resumable uploads support configurable chunks, bounded concurrency, retries, and resume state', () => {
+  const source = readFileSync(new URL('../src/api.js', import.meta.url), 'utf8')
+
+  assert.match(source, /VITE_UPLOAD_CHUNK_SIZE_MB/)
+  assert.match(source, /VITE_UPLOAD_CONCURRENCY/)
+  assert.match(source, /VITE_UPLOAD_MAX_RETRIES/)
+  assert.match(source, /uploaded_chunks/)
+  assert.match(source, /localStorage/)
+  assert.match(source, /Promise\.all/)
+  assert.match(source, /shouldRetryUpload/)
+  assert.match(source, /error\.status === 429/)
 })

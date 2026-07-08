@@ -53,3 +53,31 @@ def vulnerability_confidence(engine_count: int, purl_match: bool, cpe_match: boo
         "manual_review_reason": "；".join(reasons) if level in {"Low", "Review"} or severity_conflict or version_unknown else "",
     }
 
+
+def dependency_check_confirmation(
+    engines: list[str],
+    *,
+    stable_identity: bool,
+    suppressed: bool,
+) -> dict[str, object]:
+    has_dependency_check = "dependency-check" in engines
+    cross_confirmed = has_dependency_check and len(engines) >= 2 and stable_identity
+    if suppressed:
+        confirmation_status = "rejected"
+        review_reason = "已由 suppression 排除"
+    elif cross_confirmed:
+        confirmation_status = "cross_confirmed"
+        review_reason = ""
+    else:
+        confirmation_status = "single_source"
+        review_reason = (
+            "Dependency-Check 单引擎发现，等待其他引擎确认"
+            if has_dependency_check
+            else ""
+        )
+    return {
+        "confirmation_status": confirmation_status,
+        "confirmation_engines": engines,
+        "gate_eligible": not suppressed and (not has_dependency_check or cross_confirmed),
+        "review_reason": review_reason,
+    }

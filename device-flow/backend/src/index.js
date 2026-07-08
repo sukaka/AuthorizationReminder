@@ -14,6 +14,17 @@ const {
   normalizeOrigin,
 } = require('./cors-origin');
 const { get, initDb, query, transaction } = require('./db');
+const {
+  attachmentUploadMbToBytes,
+  getDefaultAttachmentUploadMaxMb,
+  normalizeAttachmentUploadMaxMb,
+  toAttachmentUploadSettingResponse,
+} = require('./upload-settings');
+const {
+  assertExpectedSecondSigner,
+  normalizeExpectedSecondSigner,
+} = require('./dual-sign');
+const { buildJobVisibilityScope } = require('./job-visibility');
 
 const app = express();
 const PORT = Number(process.env.PORT || 5184);
@@ -25,7 +36,7 @@ const SECURITY_STRICT_MODE = process.env.SECURITY_STRICT_MODE === 'true' || proc
 const DASHBOARD_OVERDUE_DAYS = Math.max(1, Number(process.env.DASHBOARD_OVERDUE_DAYS || 3));
 const SLA_AUTO_RUN_INTERVAL_MS = Math.max(60000, Number(process.env.SLA_AUTO_RUN_INTERVAL_MS || 5 * 60 * 1000));
 const UPLOAD_ROOT = path.resolve(process.env.UPLOAD_ROOT || './uploads/device-flow');
-const UPLOAD_MAX_FILE_SIZE = Math.max(1024 * 100, Number(process.env.UPLOAD_MAX_FILE_SIZE_MB || 10) * 1024 * 1024);
+const ATTACHMENT_UPLOAD_SETTING_KEY = 'attachment_upload_max_file_size_mb';
 const ARCHIVE_ROOT = path.resolve(process.env.ARCHIVE_ROOT || './uploads/device-flow-archive');
 const AUDIT_SIGNING_KEY = String(process.env.AUDIT_SIGNING_KEY || process.env.JWT_SECRET || 'device-flow-audit-signing-key');
 const weakSecrets = new Set(['dev-secret-change-me', 'change-me', '123456', 'password', '']);
@@ -47,7 +58,24 @@ const UPLOAD_ALLOWED_MIME = new Set(
     .filter(Boolean)
 );
 
-const STAGES = ['CREATED', 'RECEIVED', 'HARDWARE_CHECKED', 'OS_INSTALLED', 'TESTED', 'APPROVED', 'PACKED', 'SHIPPED'];
+const STAGES = [
+  'CREATED',
+  'RECEIVED',
+  'HARDWARE_CHECKED',
+  'WAREHOUSED_AFTER_HARDWARE',
+  'OUTBOUNDED_FOR_INSTALL',
+  'OS_INSTALLED',
+  'TESTED',
+  'APPROVED',
+  'PACKED',
+  'WAREHOUSED_AFTER_PACK',
+  'OUTBOUNDED_FOR_SHIP',
+  'SHIPPED',
+];
+const OPTIONAL_STAGE_SKIPS = {
+  HARDWARE_CHECKED: 'OS_INSTALLED',
+  PACKED: 'SHIPPED',
+};
 const CHANGE_REQUEST_TYPES = new Set(['WITHDRAW', 'CANCEL', 'CORRECT']);
 const CHANGE_REQUEST_STATUS = {
   PENDING: 'PENDING',
@@ -64,41 +92,82 @@ const AUDIT_READER_ROLES = new Set(['auditor']);
 const ACTION_TO_STAGE = {
   receive: 'RECEIVED',
   'hardware-check': 'HARDWARE_CHECKED',
+  'warehouse-after-hardware': 'WAREHOUSED_AFTER_HARDWARE',
+  'outbound-for-install': 'OUTBOUNDED_FOR_INSTALL',
   'os-install': 'OS_INSTALLED',
   test: 'TESTED',
   approve: 'APPROVED',
   pack: 'PACKED',
+  'warehouse-after-pack': 'WAREHOUSED_AFTER_PACK',
+  'outbound-for-ship': 'OUTBOUNDED_FOR_SHIP',
   ship: 'SHIPPED',
 };
 const ACTION_ALLOWED_ROLES = {
   receive: new Set(['admin', 'sysadmin']),
   'hardware-check': new Set(['admin', 'sysadmin']),
+  'warehouse-after-hardware': new Set(['admin', 'sysadmin']),
+  'outbound-for-install': new Set(['admin', 'sysadmin']),
   'os-install': new Set(['admin', 'sysadmin']),
   test: new Set(['admin', 'sysadmin']),
   approve: new Set(['admin', 'sysadmin']),
   pack: new Set(['admin', 'sysadmin']),
+  'warehouse-after-pack': new Set(['admin', 'sysadmin']),
+  'outbound-for-ship': new Set(['admin', 'sysadmin']),
   ship: new Set(['admin', 'sysadmin']),
 };
 const ACTION_PERMISSION_CODE = {
   receive: 'stage.receive',
   'hardware-check': 'stage.hardware-check',
+  'warehouse-after-hardware': 'stage.warehouse-after-hardware',
+  'outbound-for-install': 'stage.outbound-for-install',
   'os-install': 'stage.os-install',
   test: 'stage.test',
   approve: 'stage.approve',
   pack: 'stage.pack',
+  'warehouse-after-pack': 'stage.warehouse-after-pack',
+  'outbound-for-ship': 'stage.outbound-for-ship',
   ship: 'stage.ship',
 };
 const SLA_TRACKED_STAGES = STAGES.filter((stage) => stage !== 'SHIPPED');
 const SLA_STAGE_LABEL = {
   CREATED: '已创建',
-  RECEIVED: '已收货',
-  HARDWARE_CHECKED: '硬件已检查',
-  OS_INSTALLED: '系统已安装',
-  TESTED: '已测试',
-  APPROVED: '已审核',
-  PACKED: '已装箱',
-  SHIPPED: '已发货',
+  RECEIVED: '收货',
+  HARDWARE_CHECKED: '硬件检查',
+  WAREHOUSED_AFTER_HARDWARE: '入库',
+  OUTBOUNDED_FOR_INSTALL: '出库',
+  OS_INSTALLED: '系统安装',
+  TESTED: '测试',
+  APPROVED: '审核',
+  PACKED: '装箱',
+  WAREHOUSED_AFTER_PACK: '入库',
+  OUTBOUNDED_FOR_SHIP: '出库',
+  SHIPPED: '发货',
 };
+const MENU_PERMISSION_DEFINITIONS = [
+  { code: 'menu.dashboard', key: 'dashboard', label: '看板总览', defaultRoles: ['admin', 'sysadmin', 'user', 'editor', 'reviewer'] },
+  { code: 'menu.sla', key: 'sla', label: 'SLA催办', defaultRoles: ['admin', 'sysadmin'] },
+  { code: 'menu.batch', key: 'batch', label: '批量处理', defaultRoles: ['admin', 'sysadmin'] },
+  { code: 'menu.jobs', key: 'jobs', label: '流转单列表', defaultRoles: ['admin', 'sysadmin', 'user', 'editor', 'reviewer'] },
+  { code: 'menu.create', key: 'create', label: '新建流转单', defaultRoles: ['admin', 'sysadmin'] },
+  { code: 'menu.permissions', key: 'permissions', label: '权限设置', defaultRoles: ['admin', 'sysadmin'] },
+  { code: 'menu.audit', key: 'audit', label: '审计日志', defaultRoles: ['auditor'] },
+  { code: 'menu.audit-verify', key: 'audit-verify', label: '审计验签', defaultRoles: ['auditor'] },
+];
+const BUTTON_PERMISSION_DEFINITIONS = [
+  { code: 'button.create-job', key: 'createJob', label: '创建流转单', defaultRoles: ['admin', 'sysadmin'] },
+  { code: 'button.batch-import', key: 'batchImport', label: '批量导入', defaultRoles: ['admin', 'sysadmin'] },
+  { code: 'button.batch-stage', key: 'batchStage', label: '批量推进', defaultRoles: ['admin', 'sysadmin'] },
+  { code: 'button.sla-write', key: 'slaWrite', label: '保存SLA规则', defaultRoles: ['admin', 'sysadmin'] },
+  { code: 'button.sla-run', key: 'slaRun', label: '执行SLA催办', defaultRoles: ['admin', 'sysadmin'] },
+  { code: 'button.sla-reminder-delete', key: 'slaReminderDelete', label: '删除催办记录', defaultRoles: ['admin', 'sysadmin'] },
+  { code: 'button.attachment-upload', key: 'attachmentUpload', label: '上传附件', defaultRoles: ['admin', 'sysadmin'] },
+  { code: 'button.attachment-delete', key: 'attachmentDelete', label: '删除附件', defaultRoles: ['admin', 'sysadmin'] },
+  { code: 'button.attachment-settings', key: 'attachmentSettings', label: '附件上传配置', defaultRoles: ['admin', 'sysadmin'] },
+  { code: 'button.rework', key: 'rework', label: '退回重做', defaultRoles: ['admin', 'sysadmin'] },
+  { code: 'button.permission-manage', key: 'permissionManage', label: '保存权限策略', defaultRoles: ['admin', 'sysadmin'] },
+  { code: 'button.audit-export', key: 'auditExport', label: '导出审计日志', defaultRoles: ['auditor'] },
+  { code: 'button.audit-verify', key: 'auditVerify', label: '审计验签', defaultRoles: ['auditor'] },
+];
 
 const defaultOrigins = ['http://localhost:18083', 'http://127.0.0.1:18083'].map(normalizeOrigin);
 const allowedOrigins = (process.env.CORS_ORIGINS || '')
@@ -183,18 +252,22 @@ if (!fs.existsSync(ARCHIVE_ROOT)) {
   fs.mkdirSync(ARCHIVE_ROOT, { recursive: true });
 }
 
-const upload = multer({
-  storage: multer.diskStorage({
-    destination: (_req, _file, cb) => cb(null, UPLOAD_ROOT),
-    filename: (_req, file, cb) => {
-      const ext = path.extname(file.originalname || '').toLowerCase();
-      const safeExt = /^[a-z0-9.]+$/.test(ext.replace('.', '')) ? ext : '';
-      const unique = `${Date.now()}-${crypto.randomUUID()}`;
-      cb(null, `${unique}${safeExt}`);
-    },
-  }),
+let attachmentUploadMaxFileSizeMb = getDefaultAttachmentUploadMaxMb();
+
+const attachmentStorage = multer.diskStorage({
+  destination: (_req, _file, cb) => cb(null, UPLOAD_ROOT),
+  filename: (_req, file, cb) => {
+    const ext = path.extname(file.originalname || '').toLowerCase();
+    const safeExt = /^[a-z0-9.]+$/.test(ext.replace('.', '')) ? ext : '';
+    const unique = `${Date.now()}-${crypto.randomUUID()}`;
+    cb(null, `${unique}${safeExt}`);
+  },
+});
+
+const createAttachmentUpload = () => multer({
+  storage: attachmentStorage,
   limits: {
-    fileSize: UPLOAD_MAX_FILE_SIZE,
+    fileSize: attachmentUploadMbToBytes(attachmentUploadMaxFileSizeMb),
   },
   fileFilter: (_req, file, cb) => {
     const mime = String(file.mimetype || '').trim().toLowerCase();
@@ -206,6 +279,8 @@ const upload = multer({
     return cb(null, true);
   },
 });
+
+const uploadAttachmentFile = (req, res, next) => createAttachmentUpload().single('file')(req, res, next);
 
 const importUpload = multer({
   storage: multer.memoryStorage(),
@@ -372,12 +447,14 @@ const authRequired = asyncHandler(async (req, _res, next) => {
   const auth = await introspectToken(token);
   req.user = auth.user;
   req.authApps = auth.apps;
+  req.authToken = token;
   next();
 });
 
 const auditorAuditPathAllowList = new Set([
   '/api/health',
   '/api/auth/me',
+  '/api/device-flow/permissions/effective',
   '/api/device-flow/logs',
   '/api/device-flow/audit/verify',
   '/api/device-flow/reports/audit.csv',
@@ -416,6 +493,67 @@ const getActor = (req) => ({
   department: String(req.user?.department || ''),
 });
 
+const appendJobVisibilityScope = ({ where, params, actor, jobAlias = 'j' }) => {
+  const scope = buildJobVisibilityScope({ actor, jobAlias });
+  if (!scope.sql) return;
+  where.push(scope.sql);
+  params.push(...scope.params);
+};
+
+const getVisibleJobById = async ({ jobId, actor, db = { get } }) => {
+  const where = ['j.id = ?'];
+  const params = [jobId];
+  appendJobVisibilityScope({ where, params, actor, jobAlias: 'j' });
+  return db.get(`SELECT j.* FROM device_jobs j WHERE ${where.join(' AND ')} LIMIT 1`, params);
+};
+
+const requireVisibleJob = asyncHandler(async (req, _res, next) => {
+  const jobId = Number(req.params.id || 0);
+  if (!Number.isInteger(jobId) || jobId <= 0) throw appError('ID非法');
+  const job = await getVisibleJobById({ jobId, actor: getActor(req) });
+  if (!job) throw appError('流转单不存在或无权访问', 404);
+  req.visibleJob = job;
+  next();
+});
+
+const requireVisibleAttachment = asyncHandler(async (req, _res, next) => {
+  const attachmentId = Number(req.params.id || 0);
+  if (!Number.isInteger(attachmentId) || attachmentId <= 0) throw appError('ID非法');
+  const where = ['a.id = ?', 'a.deleted_at IS NULL'];
+  const params = [attachmentId];
+  appendJobVisibilityScope({ where, params, actor: getActor(req), jobAlias: 'j' });
+  const row = await get(
+    `SELECT a.*
+     FROM device_attachments a
+     JOIN device_jobs j ON j.id = a.job_id
+     WHERE ${where.join(' AND ')}
+     LIMIT 1`,
+    params
+  );
+  if (!row) throw appError('附件不存在或无权访问', 404);
+  req.visibleAttachment = row;
+  next();
+});
+
+const requireVisibleChangeRequest = asyncHandler(async (req, _res, next) => {
+  const requestId = Number(req.params.id || 0);
+  if (!Number.isInteger(requestId) || requestId <= 0) throw appError('ID非法');
+  const where = ['cr.id = ?'];
+  const params = [requestId];
+  appendJobVisibilityScope({ where, params, actor: getActor(req), jobAlias: 'j' });
+  const row = await get(
+    `SELECT cr.*
+     FROM device_change_requests cr
+     JOIN device_jobs j ON j.id = cr.job_id
+     WHERE ${where.join(' AND ')}
+     LIMIT 1`,
+    params
+  );
+  if (!row) throw appError('审批单不存在或无权访问', 404);
+  req.visibleChangeRequest = row;
+  next();
+});
+
 const parsePaging = (rawPage, rawLimit) => {
   const page = Number(rawPage || 1);
   const limit = Number(rawLimit || 20);
@@ -444,9 +582,11 @@ const parseStageFilter = (rawValue, fieldName = 'stage') => {
   return stage;
 };
 
-const buildDashboardJobWhere = ({ stage, customer }) => {
+const buildDashboardJobWhere = ({ stage, customer, actor }) => {
   const where = [];
   const params = [];
+
+  appendJobVisibilityScope({ where, params, actor, jobAlias: 'j' });
 
   if (stage) {
     where.push('j.current_stage = ?');
@@ -573,9 +713,12 @@ const parseBatchJobIds = (rawIds) => {
 const stageIndex = (stage) => STAGES.indexOf(String(stage || '').toUpperCase());
 
 const ensureForwardTransition = (fromStage, toStage) => {
-  const fromIndex = stageIndex(fromStage);
-  const toIndex = stageIndex(toStage);
+  const from = String(fromStage || '').toUpperCase();
+  const to = String(toStage || '').toUpperCase();
+  const fromIndex = stageIndex(from);
+  const toIndex = stageIndex(to);
   if (fromIndex < 0 || toIndex < 0) throw appError('状态非法');
+  if (OPTIONAL_STAGE_SKIPS[from] === to) return;
   if (toIndex !== fromIndex + 1) throw appError(`流程必须按顺序推进：${fromStage} -> ${toStage}`);
 };
 
@@ -588,7 +731,8 @@ const ensureReworkTransition = (fromStage, toStage) => {
 
 const normalizeDepartment = (department) => trimText(department).toUpperCase();
 
-const findMatchedPermissionPolicy = async ({ role, department, actionCode, stageCode }) => {
+const findMatchedPermissionPolicy = async ({ userSub, role, department, actionCode, stageCode }) => {
+  const user = trimText(userSub);
   const roleCode = trimText(role).toLowerCase();
   const deptCode = normalizeDepartment(department) || '*';
   const action = trimText(actionCode).toLowerCase();
@@ -596,14 +740,18 @@ const findMatchedPermissionPolicy = async ({ role, department, actionCode, stage
   if (!roleCode || !action) return null;
 
   const rows = await query(
-    `SELECT role_code, department_code, action_code, stage_code, effect
+    `SELECT user_sub, user_name, role_code, department_code, action_code, stage_code, effect
      FROM device_permission_policies
      WHERE enabled = 1
-       AND role_code IN (?, '*')
+       AND (
+         (user_sub <> '' AND user_sub = ?)
+         OR (user_sub = '' AND role_code IN (?, '*'))
+       )
        AND department_code IN (?, '*')
        AND action_code IN (?, '*')
        AND stage_code IN (?, '*')
      ORDER BY
+       (user_sub <> '') DESC,
        (role_code <> '*') DESC,
        (department_code <> '*') DESC,
        (action_code <> '*') DESC,
@@ -611,32 +759,83 @@ const findMatchedPermissionPolicy = async ({ role, department, actionCode, stage
        (effect = 'DENY') DESC,
        id DESC
      LIMIT 1`,
-    [roleCode, deptCode, action, stage]
+    [user, roleCode, deptCode, action, stage]
   );
   return rows[0] || null;
 };
+
+const roleInDefaults = (role, defaultRoles) => {
+  const roleCode = normalizeRole(role);
+  const roles = Array.isArray(defaultRoles) ? defaultRoles.map((item) => trimText(item).toLowerCase()) : [];
+  return roles.includes('*') || roles.includes(roleCode);
+};
+
+const resolvePermissionAllowed = async ({ actor, actionCode, stageCode = '*', defaultRoles = [] }) => {
+  const policy = await findMatchedPermissionPolicy({
+    userSub: actor?.sub,
+    role: actor?.role,
+    department: actor?.department,
+    actionCode,
+    stageCode,
+  });
+  if (policy) return trimText(policy.effect).toUpperCase() !== 'DENY';
+  return roleInDefaults(actor?.role, defaultRoles);
+};
+
+const requireOperationPermission = (actionCode, defaultRoles = ['admin', 'sysadmin'], stageCode = '*') =>
+  asyncHandler(async (req, _res, next) => {
+    const actor = getActor(req);
+    const allowed = await resolvePermissionAllowed({ actor, actionCode, stageCode, defaultRoles });
+    if (!allowed) throw appError(`无权限执行动作: ${actionCode}`, 403);
+    next();
+  });
 
 const ensureActionPermission = async ({ action, actor, stageCode }) => {
   const allowedRoles = ACTION_ALLOWED_ROLES[action];
   if (!allowedRoles) throw appError('不支持的阶段动作');
 
   const actionCode = ACTION_PERMISSION_CODE[action] || '';
-  const policy = await findMatchedPermissionPolicy({
-    role: actor?.role,
-    department: actor?.department,
+  const allowed = await resolvePermissionAllowed({
+    actor,
     actionCode,
     stageCode,
+    defaultRoles: Array.from(allowedRoles),
   });
-  if (policy) {
-    if (trimText(policy.effect).toUpperCase() === 'DENY') {
-      throw appError(`权限策略拒绝该动作: ${action}`, 403);
-    }
-    return;
-  }
-
-  if (!allowedRoles.has(normalizeRole(actor?.role))) {
+  if (!allowed) {
     throw appError(`当前角色无权限执行动作: ${action}`, 403);
   }
+};
+
+const buildEffectivePermissions = async (actor) => {
+  const menus = {};
+  for (const item of MENU_PERMISSION_DEFINITIONS) {
+    menus[item.key] = await resolvePermissionAllowed({
+      actor,
+      actionCode: item.code,
+      defaultRoles: item.defaultRoles,
+    });
+  }
+
+  const buttons = {};
+  for (const item of BUTTON_PERMISSION_DEFINITIONS) {
+    buttons[item.key] = await resolvePermissionAllowed({
+      actor,
+      actionCode: item.code,
+      defaultRoles: item.defaultRoles,
+    });
+  }
+
+  const stageActions = {};
+  for (const [action, stage] of Object.entries(ACTION_TO_STAGE)) {
+    stageActions[action] = await resolvePermissionAllowed({
+      actor,
+      actionCode: ACTION_PERMISSION_CODE[action],
+      stageCode: stage,
+      defaultRoles: Array.from(ACTION_ALLOWED_ROLES[action] || []),
+    });
+  }
+
+  return { menus, buttons, stageActions };
 };
 
 const buildJobNo = () => {
@@ -703,11 +902,26 @@ const buildStagePayload = (action, rawPayload) => {
 
   if (action === 'os-install') {
     return compactObject({
+      device_sn: trimText(payload.device_sn).toUpperCase(),
       os_name: trimText(payload.os_name),
       os_version: trimText(payload.os_version),
       install_mode: trimText(payload.install_mode),
       install_result: normalizeFlag(payload.install_result),
       install_note: trimText(payload.install_note),
+    });
+  }
+
+  if (action === 'warehouse-after-hardware') {
+    return compactObject({
+      warehouse_location: trimText(payload.warehouse_location),
+      warehouse_note: trimText(payload.warehouse_note),
+    });
+  }
+
+  if (action === 'outbound-for-install') {
+    return compactObject({
+      outbound_target: trimText(payload.outbound_target),
+      outbound_note: trimText(payload.outbound_note),
     });
   }
 
@@ -736,6 +950,20 @@ const buildStagePayload = (action, rawPayload) => {
       accessory_check: normalizeFlag(payload.accessory_check),
       box_no: trimText(payload.box_no),
       pack_note: trimText(payload.pack_note),
+    });
+  }
+
+  if (action === 'warehouse-after-pack') {
+    return compactObject({
+      warehouse_location: trimText(payload.warehouse_location),
+      warehouse_note: trimText(payload.warehouse_note),
+    });
+  }
+
+  if (action === 'outbound-for-ship') {
+    return compactObject({
+      outbound_target: trimText(payload.outbound_target),
+      outbound_note: trimText(payload.outbound_note),
     });
   }
 
@@ -904,6 +1132,49 @@ const getDualSignPolicyForStage = async (stageCode) => {
   return {
     enabled: Number(row.enabled || 0) === 1,
     requiredSigners: Math.max(1, Number(row.required_signers || 1)),
+  };
+};
+
+const fetchDeviceFlowUserDirectory = async (token) => {
+  if (!token) throw appError('登录凭证缺失，无法加载复签人', 401);
+  const resp = await fetchWithTimeout(
+    `${AUTH_SERVICE_URL}/api/auth/system-users?system=device-flow`,
+    {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    },
+    AUTH_FETCH_TIMEOUT_MS
+  );
+  let payload = null;
+  try {
+    const rawText = await resp.text();
+    payload = rawText ? JSON.parse(rawText) : null;
+  } catch (_err) {
+    payload = null;
+  }
+  if (!resp.ok) {
+    throw appError(payload?.error || '复签人列表加载失败', resp.status || 502);
+  }
+  return Array.isArray(payload) ? payload : [];
+};
+
+const resolveExpectedSecondSigner = async ({ req, expectedSub, firstSignerSub }) => {
+  let normalizedSub;
+  try {
+    normalizedSub = normalizeExpectedSecondSigner(expectedSub);
+  } catch (err) {
+    throw appError(err.message);
+  }
+  if (normalizedSub === trimText(firstSignerSub)) throw appError('第二复签人不能选择首签人本人', 409);
+  const users = await fetchDeviceFlowUserDirectory(req.authToken);
+  const user = users.find((item) => trimText(item?.id) === normalizedSub);
+  if (!user) throw appError('指定复签人不存在或已停用', 400);
+  return {
+    sub: normalizedSub,
+    name: trimText(user.username),
+    role: normalizeRole(user.role),
   };
 };
 
@@ -1114,6 +1385,55 @@ const writeOperationLogTx = async (tx, payload) => {
   }
 };
 
+const loadAttachmentUploadSetting = async () => {
+  const fallback = getDefaultAttachmentUploadMaxMb();
+  const row = await get('SELECT setting_value FROM device_system_settings WHERE setting_key = ?', [
+    ATTACHMENT_UPLOAD_SETTING_KEY,
+  ]);
+  try {
+    attachmentUploadMaxFileSizeMb = normalizeAttachmentUploadMaxMb(row?.setting_value || fallback);
+  } catch (err) {
+    attachmentUploadMaxFileSizeMb = fallback;
+    console.warn('[device-flow] invalid attachment upload setting, fallback to default:', err?.message || err);
+  }
+  return toAttachmentUploadSettingResponse(attachmentUploadMaxFileSizeMb);
+};
+
+const saveAttachmentUploadSetting = async ({ valueMb, actor, requestIp }) => {
+  const normalizedValue = normalizeAttachmentUploadMaxMb(valueMb);
+  await transaction(async (tx) => {
+    const beforeRow = await tx.get('SELECT setting_value FROM device_system_settings WHERE setting_key = ? FOR UPDATE', [
+      ATTACHMENT_UPLOAD_SETTING_KEY,
+    ]);
+    await tx.run(
+      `INSERT INTO device_system_settings
+       (setting_key, setting_value, note, updated_by_sub, updated_by_name, updated_by_role)
+       VALUES (?, ?, '附件上传大小上限（MB）', ?, ?, ?)
+       ON DUPLICATE KEY UPDATE
+         setting_value = VALUES(setting_value),
+         updated_by_sub = VALUES(updated_by_sub),
+         updated_by_name = VALUES(updated_by_name),
+         updated_by_role = VALUES(updated_by_role)`,
+      [ATTACHMENT_UPLOAD_SETTING_KEY, String(normalizedValue), actor.sub, actor.name, actor.role]
+    );
+    await writeOperationLogTx(tx, {
+      jobId: null,
+      userSub: actor.sub,
+      username: actor.name,
+      userRole: actor.role,
+      action: 'UPDATE_ATTACHMENT_UPLOAD_SETTING',
+      entity: 'device_system_settings',
+      entityId: null,
+      message: `更新附件上传大小上限为 ${normalizedValue}MB`,
+      beforeData: { max_file_size_mb: Number(beforeRow?.setting_value || 0) || null },
+      afterData: { max_file_size_mb: normalizedValue },
+      requestIp,
+    });
+  });
+  attachmentUploadMaxFileSizeMb = normalizedValue;
+  return toAttachmentUploadSettingResponse(normalizedValue);
+};
+
 const appendStageRecordTx = async (tx, payload) => {
   const result = await tx.run(
     `INSERT INTO device_stage_records
@@ -1203,6 +1523,9 @@ const advanceStageJob = async ({
       updateFields.hardware_checked_by_role = actor.role;
       updateFields.hardware_checked_at = 'NOW()';
     } else if (toStage === 'OS_INSTALLED') {
+      if (trimText(stagePayload.device_sn)) {
+        updateFields.device_sn = trimText(stagePayload.device_sn).toUpperCase();
+      }
       updateFields.os_installed_by_sub = actor.sub;
       updateFields.os_installed_by_name = actor.name;
       updateFields.os_installed_by_role = actor.role;
@@ -1370,7 +1693,6 @@ const parseImportWorkbookRowsWithErrors = (fileBuffer) => {
     if (!mapped.device_sn && !mapped.customer_name && !mapped.sales_order_no && !mapped.inbound_tracking_no && !mapped.remark) {
       return;
     }
-    if (!mapped.device_sn) errors.push(`第 ${lineNo} 行：device_sn/设备SN 不能为空`);
     if (!mapped.customer_name) errors.push(`第 ${lineNo} 行：customer_name/客户名称 不能为空`);
     mappedRows.push({
       ...mapped,
@@ -1479,20 +1801,20 @@ const buildJobsWorkbookBuffer = (rows) => {
 const buildImportTemplateBuffer = () => {
   const templateRows = [
     {
-      设备SN: 'SN-EXAMPLE-001',
+      设备SN: '',
       设备型号: 'NSG-2000',
       客户名称: '示例客户A',
       销售订单号: 'SO-20260219-001',
       来件快递单号: 'IN-TRACK-001',
-      备注: '首批导入示例',
+      备注: '设备SN可在系统安装完成后补录',
     },
     {
-      设备SN: 'SN-EXAMPLE-002',
+      设备SN: '',
       设备型号: 'NSG-3000',
       客户名称: '示例客户B',
       销售订单号: '',
       来件快递单号: '',
-      备注: '',
+      备注: '设备SN可留空',
     },
   ];
   const sheet = XLSX.utils.json_to_sheet(templateRows);
@@ -1509,7 +1831,6 @@ const createJobWithActor = async ({ actor, jobData, requestIp, source = 'manual'
   const inboundTrackingNo = trimText(jobData?.inbound_tracking_no);
   const remark = trimText(jobData?.remark);
 
-  if (!deviceSn) throw appError('设备SN不能为空');
   if (!customerName) throw appError('客户名称不能为空');
 
   let createdId = 0;
@@ -1718,7 +2039,7 @@ const runSlaReminderCheck = async ({ actor, requestIp, maxScan = 300 }) => {
   return summary;
 };
 
-const getSlaSummary = async (minOverdueHours, reminderPaging = { page: 1, limit: 10, offset: 0 }) => {
+const getSlaSummary = async (minOverdueHours, reminderPaging = { page: 1, limit: 10, offset: 0 }, actor) => {
   const minHours = Number.isInteger(minOverdueHours) && minOverdueHours >= 0 ? minOverdueHours : 0;
   const safeReminderPaging = {
     page: Number.isInteger(reminderPaging.page) && reminderPaging.page > 0 ? reminderPaging.page : 1,
@@ -1729,6 +2050,9 @@ const getSlaSummary = async (minOverdueHours, reminderPaging = { page: 1, limit:
     offset:
       Number.isInteger(reminderPaging.offset) && reminderPaging.offset >= 0 ? reminderPaging.offset : 0,
   };
+  const visibility = buildJobVisibilityScope({ actor, jobAlias: 'j' });
+  const overdueVisibilitySql = visibility.sql ? ` AND ${visibility.sql}` : '';
+  const reminderVisibilitySql = visibility.sql ? `WHERE ${visibility.sql}` : '';
 
   const [rules, overdueRows, reminderTotalRow, reminderRows] = await Promise.all([
     listSlaRules(),
@@ -1747,11 +2071,18 @@ const getSlaSummary = async (minOverdueHours, reminderPaging = { page: 1, limit:
        WHERE j.status <> 'COMPLETED'
          AND TIMESTAMPDIFF(HOUR, j.updated_at, NOW()) >= r.threshold_hours
          AND TIMESTAMPDIFF(HOUR, j.updated_at, NOW()) >= ?
+         ${overdueVisibilitySql}
        ORDER BY overdue_hours DESC, j.updated_at ASC
       LIMIT 200`,
-      [minHours]
+      [minHours, ...visibility.params]
     ),
-    get('SELECT COUNT(*) AS total FROM device_sla_reminders'),
+    get(
+      `SELECT COUNT(*) AS total
+       FROM device_sla_reminders r
+       JOIN device_jobs j ON j.id = r.job_id
+       ${reminderVisibilitySql}`,
+      visibility.params
+    ),
     query(
       `SELECT r.id,
               r.job_id,
@@ -1764,10 +2095,11 @@ const getSlaSummary = async (minOverdueHours, reminderPaging = { page: 1, limit:
               j.device_sn,
               j.customer_name
        FROM device_sla_reminders r
-       LEFT JOIN device_jobs j ON j.id = r.job_id
+       JOIN device_jobs j ON j.id = r.job_id
+       ${reminderVisibilitySql}
        ORDER BY r.id DESC
        LIMIT ? OFFSET ?`,
-      [safeReminderPaging.limit, safeReminderPaging.offset]
+      [...visibility.params, safeReminderPaging.limit, safeReminderPaging.offset]
     ),
   ]);
 
@@ -2295,9 +2627,10 @@ const runRetentionForAttachments = async ({ actor, requestIp, dryRun = false } =
   };
 };
 
-const buildCycleReport = async ({ fromDate = '', toDate = '' } = {}) => {
+const buildCycleReport = async ({ fromDate = '', toDate = '', actor } = {}) => {
   const where = [];
   const params = [];
+  appendJobVisibilityScope({ where, params, actor, jobAlias: 'j' });
   if (fromDate) {
     where.push('s.operated_at >= CONCAT(?, " 00:00:00")');
     params.push(fromDate);
@@ -2454,6 +2787,7 @@ app.post(
 app.post(
   '/api/device-flow/jobs/:id/scan/apply',
   requireWriter,
+  requireVisibleJob,
   asyncHandler(async (req, res) => {
     const id = Number(req.params.id || 0);
     if (!Number.isInteger(id) || id <= 0) throw appError('ID非法');
@@ -2532,7 +2866,12 @@ app.get(
       Number.isInteger(overdueDaysRaw) && overdueDaysRaw > 0 ? Math.min(overdueDaysRaw, 30) : DASHBOARD_OVERDUE_DAYS;
     const stage = parseStageFilter(req.query.stage, 'stage');
     const customer = trimText(req.query.customer);
-    const { whereSql: jobWhereSql, params: jobParams } = buildDashboardJobWhere({ stage, customer });
+    const { whereSql: jobWhereSql, params: jobParams } = buildDashboardJobWhere({
+      stage,
+      customer,
+      actor: getActor(req),
+    });
+    const canReadOperationLogs = AUDIT_READER_ROLES.has(normalizeRole(req.user?.role));
 
     const [stageRows, totalRow, openRow, completedRow, createdTodayRow, shippedTodayRow, overdueRows, recentRows] =
       await Promise.all([
@@ -2573,19 +2912,21 @@ app.get(
            LIMIT 100`,
           [...jobParams, overdueDays]
         ),
-        query(
-          `SELECT l.*,
-                  j.job_no,
-                  j.device_sn,
-                  j.customer_name,
-                  j.current_stage
-           FROM device_operation_logs l
-           LEFT JOIN device_jobs j ON j.id = l.job_id
-           ${jobWhereSql}
-           ORDER BY l.id DESC
-           LIMIT 20`,
-          jobParams
-        ),
+        canReadOperationLogs
+          ? query(
+              `SELECT l.*,
+                      j.job_no,
+                      j.device_sn,
+                      j.customer_name,
+                      j.current_stage
+               FROM device_operation_logs l
+               LEFT JOIN device_jobs j ON j.id = l.job_id
+               ${jobWhereSql}
+               ORDER BY l.id DESC
+               LIMIT 20`,
+              jobParams
+            )
+          : Promise.resolve([]),
       ]);
 
     const stageCountMap = {};
@@ -2620,7 +2961,7 @@ app.get(
         ...item,
         overdue_days: Number(item.overdue_days || 0),
       })),
-      recent_logs: recentRows.map(toPublicOperationLog),
+      recent_logs: canReadOperationLogs ? recentRows.map(toPublicOperationLog) : [],
     });
   })
 );
@@ -2632,14 +2973,14 @@ app.get(
     const minOverdueHours =
       Number.isInteger(minOverdueHoursRaw) && minOverdueHoursRaw >= 0 ? Math.min(minOverdueHoursRaw, 720) : 0;
     const reminderPaging = parsePaging(req.query.page, req.query.limit || 10);
-    const summary = await getSlaSummary(minOverdueHours, reminderPaging);
+    const summary = await getSlaSummary(minOverdueHours, reminderPaging, getActor(req));
     res.json(summary);
   })
 );
 
 app.put(
   '/api/device-flow/sla/rules',
-  requireWriter,
+  requireOperationPermission('button.sla-write'),
   asyncHandler(async (req, res) => {
     const actor = getActor(req);
     const parsedRules = normalizeSlaRuleInput(req.body?.rules);
@@ -2681,7 +3022,7 @@ app.put(
 
 app.post(
   '/api/device-flow/sla/run',
-  requireWriter,
+  requireOperationPermission('button.sla-run'),
   asyncHandler(async (req, res) => {
     const actor = getActor(req);
     const maxScanRaw = Number(req.body?.max_scan || 300);
@@ -2697,7 +3038,7 @@ app.post(
 
 app.delete(
   '/api/device-flow/sla/reminders/:id',
-  requireWriter,
+  requireOperationPermission('button.sla-reminder-delete'),
   asyncHandler(async (req, res) => {
     const reminderId = Number(req.params.id || 0);
     if (!Number.isInteger(reminderId) || reminderId <= 0) throw appError('id 参数非法');
@@ -2737,7 +3078,7 @@ app.delete(
 
 app.delete(
   '/api/device-flow/sla/reminders',
-  requireWriter,
+  requireOperationPermission('button.sla-reminder-delete'),
   asyncHandler(async (req, res) => {
     const actor = getActor(req);
     const totalRow = await get('SELECT COUNT(*) AS total FROM device_sla_reminders');
@@ -2870,7 +3211,7 @@ app.get(
 
 app.post(
   '/api/device-flow/jobs',
-  requireWriter,
+  requireOperationPermission('button.create-job'),
   asyncHandler(async (req, res) => {
     const actor = getActor(req);
     const createdRow = await createJobWithActor({
@@ -2892,22 +3233,23 @@ app.get(
 
     const where = [];
     const params = [];
+    appendJobVisibilityScope({ where, params, actor: getActor(req), jobAlias: 'j' });
     if (keyword) {
       where.push(
-        '(job_no LIKE ? OR device_sn LIKE ? OR customer_name LIKE ? OR sales_order_no LIKE ? OR inbound_tracking_no LIKE ? OR outbound_tracking_no LIKE ?)'
+        '(j.job_no LIKE ? OR j.device_sn LIKE ? OR j.customer_name LIKE ? OR j.sales_order_no LIKE ? OR j.inbound_tracking_no LIKE ? OR j.outbound_tracking_no LIKE ?)'
       );
       params.push(`%${keyword}%`, `%${keyword}%`, `%${keyword}%`, `%${keyword}%`, `%${keyword}%`, `%${keyword}%`);
     }
     if (stage) {
       if (!STAGES.includes(stage)) throw appError('stage 参数非法');
-      where.push('current_stage = ?');
+      where.push('j.current_stage = ?');
       params.push(stage);
     }
 
     const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
-    const totalRow = await get(`SELECT COUNT(*) AS total FROM device_jobs ${whereSql}`, params);
+    const totalRow = await get(`SELECT COUNT(*) AS total FROM device_jobs j ${whereSql}`, params);
     const rows = await query(
-      `SELECT * FROM device_jobs ${whereSql} ORDER BY id DESC LIMIT ? OFFSET ?`,
+      `SELECT j.* FROM device_jobs j ${whereSql} ORDER BY j.id DESC LIMIT ? OFFSET ?`,
       [...params, paging.limit, paging.offset]
     );
 
@@ -3014,6 +3356,7 @@ app.put(
 
 app.get(
   '/api/device-flow/jobs/:id/hardware-baseline',
+  requireVisibleJob,
   asyncHandler(async (req, res) => {
     const id = Number(req.params.id || 0);
     if (!Number.isInteger(id) || id <= 0) throw appError('ID非法');
@@ -3042,11 +3385,45 @@ app.get(
 );
 
 app.get(
+  '/api/device-flow/permissions/meta',
+  requireOperationPermission('button.permission-manage'),
+  asyncHandler(async (_req, res) => {
+    res.json({
+      roles: ['admin', 'sysadmin', 'user', 'editor', 'reviewer', 'auditor', '*'],
+      effects: ['ALLOW', 'DENY'],
+      menus: MENU_PERMISSION_DEFINITIONS,
+      buttons: BUTTON_PERMISSION_DEFINITIONS,
+      stage_actions: Object.entries(ACTION_TO_STAGE).map(([action, stage]) => ({
+        action,
+        action_code: ACTION_PERMISSION_CODE[action],
+        label: SLA_STAGE_LABEL[stage] ? `执行${SLA_STAGE_LABEL[stage]}` : action,
+        stage_code: stage,
+        stage_label: SLA_STAGE_LABEL[stage] || stage,
+        default_roles: Array.from(ACTION_ALLOWED_ROLES[action] || []),
+      })),
+      stages: STAGES.map((stage) => ({ stage_code: stage, stage_label: SLA_STAGE_LABEL[stage] || stage })),
+    });
+  })
+);
+
+app.get(
+  '/api/device-flow/permissions/effective',
+  asyncHandler(async (req, res) => {
+    const actor = getActor(req);
+    const permissions = await buildEffectivePermissions(actor);
+    res.json({
+      user: actor,
+      ...permissions,
+    });
+  })
+);
+
+app.get(
   '/api/device-flow/permissions/policies',
-  requireWriter,
+  requireOperationPermission('button.permission-manage'),
   asyncHandler(async (_req, res) => {
     const rows = await query(
-      `SELECT id, role_code, department_code, action_code, stage_code, effect, enabled, note, updated_at
+      `SELECT id, user_sub, user_name, role_code, department_code, action_code, stage_code, effect, enabled, note, updated_at
        FROM device_permission_policies
        ORDER BY id ASC
        LIMIT 5000`
@@ -3054,6 +3431,8 @@ app.get(
     res.json(
       rows.map((item) => ({
         id: Number(item.id),
+        user_sub: item.user_sub || '',
+        user_name: item.user_name || '',
         role_code: item.role_code,
         department_code: item.department_code,
         action_code: item.action_code,
@@ -3069,7 +3448,7 @@ app.get(
 
 app.put(
   '/api/device-flow/permissions/policies',
-  requireWriter,
+  requireOperationPermission('button.permission-manage'),
   asyncHandler(async (req, res) => {
     const actor = getActor(req);
     if (!CHANGE_REVIEW_ROLES.has(normalizeRole(actor.role))) throw appError('仅管理员可修改权限策略', 403);
@@ -3079,22 +3458,26 @@ app.put(
 
     await transaction(async (tx) => {
       for (const item of policies) {
-        const roleCode = trimText(item?.role_code).toLowerCase() || '*';
+        const userSub = trimText(item?.user_sub);
+        const userName = trimText(item?.user_name);
+        const roleCode = userSub ? userSub.slice(0, 32) : (trimText(item?.role_code).toLowerCase() || '*');
         const deptCode = normalizeDepartment(item?.department_code) || '*';
         const actionCode = trimText(item?.action_code).toLowerCase() || '*';
         const stageCode = trimText(item?.stage_code).toUpperCase() || '*';
         const effect = trimText(item?.effect).toUpperCase() || 'ALLOW';
+        if (!userSub && roleCode === '*') throw appError('请选择用户');
         if (!['ALLOW', 'DENY'].includes(effect)) throw appError('effect 仅支持 ALLOW / DENY');
         const enabled = item?.enabled === undefined ? 1 : item?.enabled ? 1 : 0;
         const note = trimText(item?.note);
         await tx.run(
           `INSERT INTO device_permission_policies
-           (role_code, department_code, action_code, stage_code, effect, enabled, note)
-           VALUES (?, ?, ?, ?, ?, ?, ?)
+           (user_sub, user_name, role_code, department_code, action_code, stage_code, effect, enabled, note)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
            ON DUPLICATE KEY UPDATE
+             user_name = VALUES(user_name),
              enabled = VALUES(enabled),
              note = VALUES(note)`,
-          [roleCode, deptCode, actionCode, stageCode, effect, enabled, note || null]
+          [userSub, userName, roleCode, deptCode, actionCode, stageCode, effect, enabled, note || null]
         );
       }
 
@@ -3114,7 +3497,7 @@ app.put(
     });
 
     const rows = await query(
-      `SELECT id, role_code, department_code, action_code, stage_code, effect, enabled, note, updated_at
+      `SELECT id, user_sub, user_name, role_code, department_code, action_code, stage_code, effect, enabled, note, updated_at
        FROM device_permission_policies
        ORDER BY id ASC
        LIMIT 5000`
@@ -3122,6 +3505,8 @@ app.put(
     res.json(
       rows.map((item) => ({
         id: Number(item.id),
+        user_sub: item.user_sub || '',
+        user_name: item.user_name || '',
         role_code: item.role_code,
         department_code: item.department_code,
         action_code: item.action_code,
@@ -3224,22 +3609,25 @@ app.get(
     const status = trimText(req.query.status).toUpperCase();
     const where = [];
     const params = [];
+    appendJobVisibilityScope({ where, params, actor: getActor(req), jobAlias: 'j' });
     if (status) {
-      where.push('status = ?');
+      where.push('ds.status = ?');
       params.push(status);
     }
     if (!status) {
-      where.push("status IN ('PENDING_SECOND', 'PROCESSING', 'EXPIRED', 'COMPLETED')");
+      where.push("ds.status IN ('PENDING_SECOND', 'PROCESSING', 'EXPIRED', 'COMPLETED')");
     }
     const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
     const rows = await query(
-      `SELECT id, token, job_id, action, from_stage, to_stage,
-              first_signer_name, first_signer_role,
-              second_signer_name, second_signer_role,
-              status, expires_at, completed_at, created_at
-       FROM device_dual_sign_sessions
+      `SELECT ds.id, ds.token, ds.job_id, ds.action, ds.from_stage, ds.to_stage,
+              ds.first_signer_name, ds.first_signer_role,
+              ds.expected_second_signer_sub, ds.expected_second_signer_name, ds.expected_second_signer_role,
+              ds.second_signer_name, ds.second_signer_role,
+              ds.status, ds.expires_at, ds.completed_at, ds.created_at
+       FROM device_dual_sign_sessions ds
+       JOIN device_jobs j ON j.id = ds.job_id
        ${whereSql}
-       ORDER BY id DESC
+       ORDER BY ds.id DESC
        LIMIT 500`,
       params
     );
@@ -3278,6 +3666,8 @@ app.post(
     const failures = [];
     for (const jobId of jobIds) {
       try {
+        const visibleJob = await getVisibleJobById({ jobId, actor });
+        if (!visibleJob) throw appError('流转单不存在或无权访问', 404);
         const updated = await advanceStageJob({
           jobId,
           action,
@@ -3315,7 +3705,7 @@ app.post(
 
 app.post(
   '/api/device-flow/import/jobs.xlsx',
-  requireWriter,
+  requireOperationPermission('button.batch-import'),
   importUpload.single('file'),
   asyncHandler(async (req, res) => {
     const actor = getActor(req);
@@ -3386,12 +3776,12 @@ app.post(
 
 app.get(
   '/api/device-flow/jobs/:id',
+  requireVisibleJob,
   asyncHandler(async (req, res) => {
     const id = Number(req.params.id || 0);
     if (!Number.isInteger(id) || id <= 0) throw appError('ID非法');
 
-    const job = await get('SELECT * FROM device_jobs WHERE id = ?', [id]);
-    if (!job) throw appError('流转单不存在', 404);
+    const job = req.visibleJob;
 
     const [stageRecords, operationLogs, attachments] = await Promise.all([
       query('SELECT * FROM device_stage_records WHERE job_id = ? ORDER BY id DESC', [id]),
@@ -3413,6 +3803,7 @@ app.get(
 
 app.get(
   '/api/device-flow/jobs/:id/lock',
+  requireVisibleJob,
   asyncHandler(async (req, res) => {
     const id = Number(req.params.id || 0);
     if (!Number.isInteger(id) || id <= 0) throw appError('ID非法');
@@ -3440,6 +3831,7 @@ app.get(
 app.post(
   '/api/device-flow/jobs/:id/lock',
   requireWriter,
+  requireVisibleJob,
   asyncHandler(async (req, res) => {
     const id = Number(req.params.id || 0);
     if (!Number.isInteger(id) || id <= 0) throw appError('ID非法');
@@ -3515,6 +3907,7 @@ app.post(
 app.delete(
   '/api/device-flow/jobs/:id/lock',
   requireWriter,
+  requireVisibleJob,
   asyncHandler(async (req, res) => {
     const id = Number(req.params.id || 0);
     if (!Number.isInteger(id) || id <= 0) throw appError('ID非法');
@@ -3557,6 +3950,7 @@ app.delete(
 
 app.get(
   '/api/device-flow/jobs/:id/attachments',
+  requireVisibleJob,
   asyncHandler(async (req, res) => {
     const id = Number(req.params.id || 0);
     if (!Number.isInteger(id) || id <= 0) throw appError('ID非法');
@@ -3571,12 +3965,12 @@ app.get(
 
 app.get(
   '/api/device-flow/attachments/:id/download',
+  requireVisibleAttachment,
   asyncHandler(async (req, res) => {
     const id = Number(req.params.id || 0);
     if (!Number.isInteger(id) || id <= 0) throw appError('ID非法');
 
-    const row = await get('SELECT * FROM device_attachments WHERE id = ? AND deleted_at IS NULL', [id]);
-    if (!row) throw appError('附件不存在', 404);
+    const row = req.visibleAttachment;
 
     const resolved = path.resolve(row.file_path);
     if (!resolved.startsWith(UPLOAD_ROOT)) throw appError('附件路径非法', 400);
@@ -3588,7 +3982,8 @@ app.get(
 
 app.delete(
   '/api/device-flow/attachments/:id',
-  requireAttachmentDeleter,
+  requireOperationPermission('button.attachment-delete'),
+  requireVisibleAttachment,
   asyncHandler(async (req, res) => {
     const id = Number(req.params.id || 0);
     if (!Number.isInteger(id) || id <= 0) throw appError('ID非法');
@@ -3648,8 +4043,9 @@ app.delete(
 
 app.post(
   '/api/device-flow/jobs/:id/attachments',
-  requireAttachmentUploader,
-  upload.single('file'),
+  requireOperationPermission('button.attachment-upload'),
+  requireVisibleJob,
+  uploadAttachmentFile,
   asyncHandler(async (req, res) => {
     const jobId = Number(req.params.id || 0);
     if (!Number.isInteger(jobId) || jobId <= 0) throw appError('ID非法');
@@ -3727,6 +4123,7 @@ app.post(
 
 app.post(
   '/api/device-flow/jobs/:id/stages/:action',
+  requireVisibleJob,
   asyncHandler(async (req, res) => {
     const id = Number(req.params.id || 0);
     if (!Number.isInteger(id) || id <= 0) throw appError('ID非法');
@@ -3756,6 +4153,11 @@ app.post(
       if (!signatureInput) throw appError('双人复核阶段必须提供电子签名', 400);
 
       if (!dualSignToken) {
+        const expectedSecondSigner = await resolveExpectedSecondSigner({
+          req,
+          expectedSub: req.body?.expected_second_signer_sub,
+          firstSignerSub: actor.sub,
+        });
         const created = await transaction(async (tx) => {
           const current = await tx.get('SELECT id, current_stage, status, row_version FROM device_jobs WHERE id = ? FOR UPDATE', [id]);
           if (!current) throw appError('流转单不存在', 404);
@@ -3788,8 +4190,9 @@ app.post(
           const insertRes = await tx.run(
             `INSERT INTO device_dual_sign_sessions
              (token, job_id, action, from_stage, to_stage, stage_payload, remark, request_ip, expected_version,
-              first_signer_sub, first_signer_name, first_signer_role, first_signature, status, expires_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'PENDING_SECOND', DATE_ADD(NOW(), INTERVAL ? MINUTE))`,
+              first_signer_sub, first_signer_name, first_signer_role, first_signature,
+              expected_second_signer_sub, expected_second_signer_name, expected_second_signer_role, status, expires_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'PENDING_SECOND', DATE_ADD(NOW(), INTERVAL ? MINUTE))`,
             [
               token,
               id,
@@ -3804,6 +4207,9 @@ app.post(
               actor.name,
               actor.role,
               signHash,
+              expectedSecondSigner.sub,
+              expectedSecondSigner.name,
+              expectedSecondSigner.role,
               DUAL_SIGN_TOKEN_TTL_MINUTES,
             ]
           );
@@ -3822,6 +4228,8 @@ app.post(
               dual_sign_token: token,
               action,
               to_stage: toStage,
+              expected_second_signer_sub: expectedSecondSigner.sub,
+              expected_second_signer_name: expectedSecondSigner.name,
               expires_in_minutes: DUAL_SIGN_TOKEN_TTL_MINUTES,
             },
             requestIp: req.ip,
@@ -3830,6 +4238,9 @@ app.post(
           return {
             dual_sign_token: token,
             expected_version: Number(current.row_version || 0),
+            expected_second_signer_sub: expectedSecondSigner.sub,
+            expected_second_signer_name: expectedSecondSigner.name,
+            expected_second_signer_role: expectedSecondSigner.role,
             expires_in_minutes: DUAL_SIGN_TOKEN_TTL_MINUTES,
           };
         });
@@ -3858,6 +4269,17 @@ app.post(
         }
         if (trimText(sessionRow.first_signer_sub) === trimText(actor.sub)) {
           throw appError('双人复核必须由不同人员完成', 409);
+        }
+        if (trimText(sessionRow.expected_second_signer_sub)) {
+          try {
+            assertExpectedSecondSigner({
+              expectedSub: sessionRow.expected_second_signer_sub,
+              actorSub: actor.sub,
+              expectedName: sessionRow.expected_second_signer_name,
+            });
+          } catch (err) {
+            throw appError(err.message, 409);
+          }
         }
 
         await tx.run(
@@ -3955,8 +4377,15 @@ app.post(
 
 app.post(
   '/api/device-flow/jobs/:id/rework',
+  requireVisibleJob,
   asyncHandler(async (req, res) => {
-    if (!REWORK_ALLOWED_ROLES.has(normalizeRole(req.user?.role))) {
+    const actor = getActor(req);
+    const canRework = await resolvePermissionAllowed({
+      actor,
+      actionCode: 'button.rework',
+      defaultRoles: Array.from(REWORK_ALLOWED_ROLES),
+    });
+    if (!canRework) {
       throw appError('当前角色无权限执行退回', 403);
     }
 
@@ -3969,8 +4398,6 @@ app.post(
     const expectedVersion = parseExpectedVersion(req);
     if (!targetStage || !STAGES.includes(targetStage)) throw appError('退回目标阶段非法');
     if (!reason) throw appError('退回原因不能为空');
-
-    const actor = getActor(req);
 
     const updated = await transaction(async (tx) => {
       const current = await tx.get('SELECT * FROM device_jobs WHERE id = ? FOR UPDATE', [id]);
@@ -4042,6 +4469,7 @@ app.post(
 
 app.get(
   '/api/device-flow/jobs/:id/change-requests',
+  requireVisibleJob,
   asyncHandler(async (req, res) => {
     const id = Number(req.params.id || 0);
     if (!Number.isInteger(id) || id <= 0) throw appError('ID非法');
@@ -4065,6 +4493,7 @@ app.get(
 app.post(
   '/api/device-flow/jobs/:id/change-requests',
   requireWriter,
+  requireVisibleJob,
   asyncHandler(async (req, res) => {
     const id = Number(req.params.id || 0);
     if (!Number.isInteger(id) || id <= 0) throw appError('ID非法');
@@ -4163,6 +4592,7 @@ app.post(
 app.post(
   '/api/device-flow/change-requests/:id/withdraw',
   requireWriter,
+  requireVisibleChangeRequest,
   asyncHandler(async (req, res) => {
     const id = Number(req.params.id || 0);
     if (!Number.isInteger(id) || id <= 0) throw appError('ID非法');
@@ -4215,6 +4645,7 @@ app.post(
 app.post(
   '/api/device-flow/change-requests/:id/reject',
   requireWriter,
+  requireVisibleChangeRequest,
   asyncHandler(async (req, res) => {
     const id = Number(req.params.id || 0);
     if (!Number.isInteger(id) || id <= 0) throw appError('ID非法');
@@ -4267,6 +4698,7 @@ app.post(
 app.post(
   '/api/device-flow/change-requests/:id/approve',
   requireWriter,
+  requireVisibleChangeRequest,
   asyncHandler(async (req, res) => {
     const id = Number(req.params.id || 0);
     if (!Number.isInteger(id) || id <= 0) throw appError('ID非法');
@@ -4440,6 +4872,7 @@ app.get(
     const stage = parseStageFilter(req.query.stage, 'stage');
     const where = [];
     const params = [];
+    appendJobVisibilityScope({ where, params, actor: getActor(req), jobAlias: 'j' });
 
     if (keyword) {
       where.push(
@@ -4493,7 +4926,7 @@ app.get(
       Number.isInteger(overdueDaysRaw) && overdueDaysRaw > 0 ? Math.min(overdueDaysRaw, 30) : DASHBOARD_OVERDUE_DAYS;
     const stage = parseStageFilter(req.query.stage, 'stage');
     const customer = trimText(req.query.customer);
-    const { whereSql, params } = buildDashboardJobWhere({ stage, customer });
+    const { whereSql, params } = buildDashboardJobWhere({ stage, customer, actor: getActor(req) });
 
     const rows = await query(
       `SELECT j.id,
@@ -4658,6 +5091,7 @@ app.get(
     const report = await buildCycleReport({
       fromDate: from,
       toDate: to,
+      actor: getActor(req),
     });
     res.json(report);
   })
@@ -4669,6 +5103,35 @@ app.get(
   asyncHandler(async (_req, res) => {
     const data = await getOpsDashboard();
     res.json(data);
+  })
+);
+
+app.get(
+  '/api/device-flow/settings/attachment-upload',
+  asyncHandler(async (_req, res) => {
+    const setting = await loadAttachmentUploadSetting();
+    res.json(setting);
+  })
+);
+
+app.put(
+  '/api/device-flow/settings/attachment-upload',
+  requireWriter,
+  asyncHandler(async (req, res) => {
+    const actor = getActor(req);
+    if (!CHANGE_REVIEW_ROLES.has(normalizeRole(actor.role))) throw appError('仅管理员可修改附件上传配置', 403);
+    let maxFileSizeMb;
+    try {
+      maxFileSizeMb = normalizeAttachmentUploadMaxMb(req.body?.max_file_size_mb);
+    } catch (err) {
+      throw appError(err.message);
+    }
+    const setting = await saveAttachmentUploadSetting({
+      valueMb: maxFileSizeMb,
+      actor,
+      requestIp: req.ip,
+    });
+    res.json(setting);
   })
 );
 
@@ -5043,6 +5506,7 @@ app.get(
 
 app.get(
   '/api/device-flow/jobs/:id/labels/:type',
+  requireVisibleJob,
   asyncHandler(async (req, res) => {
     const id = Number(req.params.id || 0);
     if (!Number.isInteger(id) || id <= 0) throw appError('ID非法');
@@ -5207,7 +5671,10 @@ const startMaintenanceRunner = () => {
 app.use((err, _req, res, _next) => {
   if (err instanceof multer.MulterError) {
     if (err.code === 'LIMIT_FILE_SIZE') {
-      return res.status(400).json({ error: `文件过大，最大支持 ${Math.floor(UPLOAD_MAX_FILE_SIZE / 1024 / 1024)}MB` });
+      return res.status(413).json({
+        error: `文件过大，最大支持 ${attachmentUploadMaxFileSizeMb}MB`,
+        max_file_size_mb: attachmentUploadMaxFileSizeMb,
+      });
     }
     return res.status(400).json({ error: err.message || '文件上传失败' });
   }
@@ -5224,6 +5691,7 @@ const start = async () => {
   try {
     validateSecurityBootstrap();
     await initDb();
+    await loadAttachmentUploadSetting();
     const auditRebuild = await rebuildAuditChainHashes();
     if (auditRebuild.updated > 0) {
       console.log(`[device-flow][audit] rebuilt ${auditRebuild.updated}/${auditRebuild.total} chain hashes`);

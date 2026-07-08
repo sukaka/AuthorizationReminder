@@ -1,0 +1,115 @@
+name: AI assistant desktop
+
+on:
+  pull_request:
+    paths:
+      - "juxin-ai-assistant/apps/desktop/**"
+      - "juxin-ai-assistant/scripts/**"
+      - ".github/workflows/ai-assistant-desktop.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  unsigned-bundle:
+    name: unsigned ${{ matrix.platform }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos
+            runner: macos-14
+            target: aarch64-apple-darwin
+          - platform: windows
+            runner: windows-latest
+            target: x86_64-pc-windows-msvc
+    runs-on: ${{ matrix.runner }}
+    env:
+      AI_ASSISTANT_DEFAULT_SERVER_ORIGIN: https://ai.internal.example.com
+      AI_UPDATER_ENABLED: "false"
+    steps:
+      # Official actions are pinned to immutable release commits. Runner labels and Rust
+      # `stable` remain moving inputs and are intentionally re-verified by the build matrix.
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: juxin-ai-assistant/apps/desktop/package-lock.json
+      - name: Select stable Rust target
+        run: rustup target add ${{ matrix.target }}
+      - name: Read authoritative desktop version
+        id: metadata
+        shell: bash
+        run: >-
+          node --input-type=module -e
+          "import('./scripts/release-metadata.mjs').then(async ({readDesktopReleaseMetadata}) =>
+          console.log('version=' + (await readDesktopReleaseMetadata()).version))"
+          >> "$GITHUB_OUTPUT"
+        working-directory: juxin-ai-assistant/apps/desktop
+      - run: npm ci
+        working-directory: juxin-ai-assistant/apps/desktop
+      - name: Install pinned Playwright Chromium
+        if: matrix.platform == 'macos'
+        run: npm exec playwright install chromium
+        working-directory: juxin-ai-assistant/apps/desktop
+      - run: node --test scripts/tests/*.test.mjs
+        working-directory: juxin-ai-assistant/apps/desktop
+      - run: npm test
+        working-directory: juxin-ai-assistant/apps/desktop
+      - name: Verify local launcher flows
+        if: matrix.platform == 'macos'
+        run: npm run test:e2e -- e2e/launcher-flow.spec.ts
+        working-directory: juxin-ai-assistant/apps/desktop
+      - run: npm run build
+        working-directory: juxin-ai-assistant/apps/desktop
+      - run: npm run config:render
+        working-directory: juxin-ai-assistant/apps/desktop
+      - run: cargo test --locked
+        working-directory: juxin-ai-assistant/apps/desktop/src-tauri
+      - name: Build macOS arm64 bundle
+        if: matrix.platform == 'macos'
+        run: npm run tauri build -- --target ${{ matrix.target }} --config src-tauri/tauri.generated.conf.json -- --locked
+        working-directory: juxin-ai-assistant/apps/desktop
+      - name: Build Windows x64 bundle
+        if: matrix.platform == 'windows'
+        run: npm run tauri build -- --target ${{ matrix.target }} --config src-tauri/tauri.generated.conf.json -- --locked
+        working-directory: juxin-ai-assistant/apps/desktop
+      - name: Collect macOS release files
+        if: matrix.platform == 'macos'
+        shell: bash
+        run: |
+          binary="$(find juxin-ai-assistant/apps/desktop/src-tauri/target/${{ matrix.target }}/release/bundle/macos -path '*/Contents/MacOS/*' -type f -perm -111 | head -1)"
+          test -n "$binary"
+          test "$(lipo -archs "$binary")" = arm64
+          mkdir release
+          cp "$binary" release/juxin-ai-assistant-arm64.macho
+          find juxin-ai-assistant/apps/desktop/src-tauri/target/${{ matrix.target }}/release/bundle -name '*.dmg' -exec cp '{}' release/ \;
+      - name: Collect Windows release files
+        if: matrix.platform == 'windows'
+        shell: pwsh
+        run: |
+          $bundle = "juxin-ai-assistant/apps/desktop/src-tauri/target/${{ matrix.target }}/release/bundle"
+          $installer = Get-ChildItem $bundle -Recurse -Filter *.exe | Select-Object -First 1
+          if (-not $installer) { throw '未找到 Windows x64 NSIS 安装器' }
+          $headers = & dumpbin /headers $installer.FullName
+          if ($headers -notmatch 'machine \(x64\)') { throw 'Windows 安装器不是 x64 PE' }
+          New-Item -ItemType Directory release | Out-Null
+          Get-ChildItem $bundle -Recurse -Include *.msi,*.exe | Copy-Item -Destination release
+      - name: Create macOS artifact manifest from Mach-O evidence
+        if: matrix.platform == 'macos'
+        run: node juxin-ai-assistant/scripts/create-artifact-manifest.mjs release macos juxin-ai-assistant-arm64.macho
+      - name: Create Windows artifact manifest from PE evidence
+        if: matrix.platform == 'windows'
+        shell: pwsh
+        run: |
+          $evidence = (Get-ChildItem release -Filter *.exe | Select-Object -First 1).Name
+          if (-not $evidence) { throw '未找到用于架构校验的 PE 安装器' }
+          node juxin-ai-assistant/scripts/create-artifact-manifest.mjs release windows $evidence
+      - run: node juxin-ai-assistant/scripts/verify-artifacts.mjs release/manifest.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: juxin-ai-assistant-${{ steps.metadata.outputs.version }}-${{ matrix.platform }}-${{ matrix.target }}-unsigned
+          path: release/
+          if-no-files-found: error

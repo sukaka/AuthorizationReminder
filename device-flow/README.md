@@ -9,12 +9,13 @@
 - 同 MySQL 实例，独立数据库：`juxin_device_flow`
 
 ## 核心流程
-`创建 -> 收货 -> 硬件检查 -> 系统安装 -> 测试 -> 审核 -> 装箱 -> 发货`
+`创建 -> 收货 -> 硬件检查 -> 入库(可选) -> 出库(可选) -> 系统安装 -> 测试 -> 审核 -> 装箱 -> 入库(可选) -> 出库(可选) -> 发货`
 
 ## V1 功能点
 - 阶段严格串行，禁止跳步。
+- 硬件检查后、装箱后的入库/出库节点可按实际业务选择跳过。
 - 支持退回重做，退回必须填写原因。
-- 阶段记录支持结构化字段（硬件检查项、安装信息、测试项、审核结论、装箱与发货信息）。
+- 阶段记录支持结构化字段（硬件检查项、入库/出库记录、安装信息、测试项、审核结论、装箱与发货信息）。
 - 阶段推进前端/后端双重校验（必填字段、失败项说明、数值范围）。
 - 附件留证：支持按阶段上传/下载附件。
 - 硬件检查、测试阶段推进前必须有对应阶段附件留证。
@@ -49,7 +50,7 @@
   - 审批过程全量审计留痕
 - 双人复核 + 电子签名：
   - `TESTED/APPROVED` 默认开启双签
-  - 首签返回 `dual_sign_token`，二签完成后才真正推进阶段
+  - 首签需指定第二复签人并返回 `dual_sign_token`，仅被指定账号可二签完成阶段推进
 - 扫码能力：
   - 支持 `SN/IN/OUT` 条码解析
   - 支持扫码字段写回流转单
@@ -68,6 +69,8 @@
   - 阶段耗时、人效、逾期趋势、瓶颈阶段
 - 细粒度权限策略：
   - 支持按 `role/department/action/stage` 配置 `ALLOW/DENY`
+  - 前台“权限设置”可维护菜单、按钮和阶段动作权限
+  - 菜单与按钮会按当前用户有效权限自动显示/隐藏
 - 数据保留策略：
   - 附件冷热分层（HOT->COLD）
   - 自动归档与清理（支持 dry-run）
@@ -103,6 +106,7 @@
 - `GET /api/device-flow/jobs/{id}/labels/{type}`：标签打印（`type=device|box`）
 - `GET /api/device-flow/reports/cycle`：交付周期报表
 - `GET /api/device-flow/ops/dashboard`：系统操作看板
+- `GET|PUT /api/device-flow/settings/attachment-upload`：附件上传大小配置（管理员）
 - `GET|PUT /api/device-flow/retention/policies`：保留策略
 - `POST /api/device-flow/retention/run`：执行保留策略
 - `GET|POST|PUT /api/device-flow/callback/subscriptions`：回调订阅管理
@@ -116,7 +120,7 @@
 - SLA 自动扫描周期：`SLA_AUTO_RUN_INTERVAL_MS=300000`
 - 批量推进上限：`MAX_BATCH_STAGE_JOB_IDS=200`
 - 单次导入上限：`MAX_IMPORT_ROWS=500`
-- 附件大小上限：`UPLOAD_MAX_FILE_SIZE_MB=10`
+- 附件大小上限默认值：`UPLOAD_MAX_FILE_SIZE_MB=10`（首次启动写入，可在前台附件上传区调整）
 - 审计签名密钥：`AUDIT_SIGNING_KEY=<strong-random-key>`
 - 双签 token 有效期：`DUAL_SIGN_TOKEN_TTL_MINUTES=60`
 - 并发锁默认时长：`JOB_LOCK_TTL_SECONDS=300`

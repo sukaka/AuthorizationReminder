@@ -4,7 +4,8 @@ import subprocess
 from pathlib import Path
 
 from app.config import Settings
-from app.scanners.base import ScannerCommandResult
+from app.scanners import base as scanner_base
+from app.scanners.base import ScannerCommandResult, redact_command, run_scanner_command
 from app.scanners.dependency_track_client import DependencyTrackClient
 from app.scanners.opensca_client import OpenSCAAdapter
 from app.scanners.trivy_client import TrivyAdapter
@@ -133,3 +134,66 @@ def test_dependency_track_bom_upload_accepts_empty_success_response(monkeypatch,
     ).upload_bom("project-uuid", bom_path)
 
     assert result == {}
+
+
+def test_scanner_command_streams_to_files_and_returns_bounded_summaries(monkeypatch, tmp_path):
+    captured = {}
+
+    def fake_run(command, **kwargs):
+        captured.update(kwargs)
+        kwargs["stdout"].write("A" * 256)
+        kwargs["stderr"].write("B" * 256)
+        return subprocess.CompletedProcess(command, 1)
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    tool = _fake_tool(tmp_path, "scanner")
+    stdout_path = tmp_path / "stdout.log"
+    stderr_path = tmp_path / "stderr.log"
+
+    result = run_scanner_command(
+        "demo",
+        [tool],
+        tmp_path / "result.json",
+        stdout_path,
+        stderr_path,
+        timeout=30,
+        max_log_bytes=128,
+        summary_bytes=32,
+    )
+
+    assert captured["stdout"].name == str(stdout_path)
+    assert captured["stderr"].name == str(stderr_path)
+    assert "capture_output" not in captured
+    assert stdout_path.stat().st_size <= 128
+    assert stderr_path.stat().st_size <= 128
+    assert len(result.stdout.encode()) <= 32
+    assert len(result.stderr.encode()) <= 32
+
+
+def test_scanner_command_records_elapsed_seconds(monkeypatch, tmp_path):
+    monkeypatch.setattr(subprocess, "run", lambda command, **_kwargs: subprocess.CompletedProcess(command, 0))
+    monkeypatch.setattr(scanner_base.time, "monotonic", iter([10.0, 12.6]).__next__)
+    tool = _fake_tool(tmp_path, "scanner")
+
+    result = run_scanner_command(
+        "demo",
+        [tool],
+        tmp_path / "result.json",
+        tmp_path / "stdout.log",
+        tmp_path / "stderr.log",
+        timeout=30,
+    )
+
+    assert result.duration_seconds == 3
+
+
+def test_dependency_check_nvd_api_key_is_redacted():
+    assert redact_command(["dependency-check", "--nvdApiKey", "secret-value"]) == [
+        "dependency-check",
+        "--nvdApiKey",
+        "***",
+    ]
+    assert redact_command(["dependency-check", "--nvdApiKey=secret-value"]) == [
+        "dependency-check",
+        "--nvdApiKey=***",
+    ]

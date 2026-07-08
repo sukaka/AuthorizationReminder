@@ -2,6 +2,15 @@
 
 当前版本已完成第一到第十二阶段：基础项目初始化、源码上传、依赖识别、漏洞查询、报告导出、SBOM 与容器镜像扫描、持续风险监测、AI 漏洞降噪、软件资产中心、漏洞整改闭环、DevSecOps 集成、最终部署与生产优化。技术栈保持 FastAPI + Vue3 + Element Plus + PostgreSQL + Redis + Celery + Docker Compose，并复用聚信统一登录平台。
 
+## 生产部署安全清单
+
+- 将 `.env` 中 `POSTGRES_PASSWORD` 替换为至少 16 位随机强密码；Compose 对缺失密码直接拒绝启动。
+- 配置 `SCA_WEBHOOK_SECRET`，或分别配置 GitHub、GitLab、Jenkins 密钥，并在网关限制 CI 来源网段。
+- 按容量设置上传、分片和解压限制，监控 `/data/sca`、扫描结果和 Trivy 缓存磁盘占用。
+- 通过反向代理启用 HTTPS，保留 300 秒以上扫描接口超时，并设置磁盘、数据库、Redis 和 worker 告警。
+- 定期执行 `scripts/test-linux.sh`，覆盖前后端测试、构建、`npm audit` 和 `pip-audit`。
+- 定期演练 PostgreSQL、上传文件、报告和 SBOM 的备份恢复，并按计划升级已固定版本的扫描器镜像。
+
 ## 1. 项目总体架构
 
 ```text
@@ -547,7 +556,7 @@ CI 系统扫描完成后调用平台 webhook，平台根据项目当前漏洞等
 
 ### Webhook 逻辑
 
-1. CI 传入项目 ID 或项目名称、流水线号、分支、提交号。
+1. 平台先校验 CI 请求签名或共享密钥，再接收项目 ID 或项目名称、流水线号、分支、提交号。
 2. 平台定位项目并统计当前漏洞。
 3. 自动生成 PDF 安全报告并关联到流水线事件。
 4. 如果存在 P0/P1、KEV、在野利用或阻断等级漏洞，事件决策为 `blocked`。
@@ -564,6 +573,8 @@ CI 系统扫描完成后调用平台 webhook，平台根据项目当前漏洞等
 
 ### GitHub Actions 示例
 
+GitHub 使用请求体 HMAC SHA-256 签名，密钥通过 `GITHUB_WEBHOOK_SECRET` 配置；未单独配置时回退到 `SCA_WEBHOOK_SECRET`。
+
 ```yaml
 name: sca-gate
 on: [push]
@@ -574,9 +585,12 @@ jobs:
       - uses: actions/checkout@v4
       - name: Notify SCA gate
         run: |
+          body="{\"project_name\":\"$GITHUB_REPOSITORY\",\"pipeline_id\":\"$GITHUB_RUN_ID\",\"ref\":\"$GITHUB_REF_NAME\",\"commit_sha\":\"$GITHUB_SHA\"}"
+          signature="$(printf '%s' "$body" | openssl dgst -sha256 -hmac "$SCA_WEBHOOK_SECRET" -hex | sed 's/^.* /sha256=/')"
           curl -fsS -X POST "$SCA_URL/api/sca/devops/webhooks/github" \
             -H "Content-Type: application/json" \
-            -d "{\"project_name\":\"$GITHUB_REPOSITORY\",\"pipeline_id\":\"$GITHUB_RUN_ID\",\"ref\":\"$GITHUB_REF_NAME\",\"commit_sha\":\"$GITHUB_SHA\"}"
+            -H "X-Hub-Signature-256: $signature" \
+            -d "$body"
 ```
 
 ### Jenkins Pipeline 示例
@@ -590,6 +604,7 @@ pipeline {
         sh '''
           curl -fsS -X POST "$SCA_URL/api/sca/devops/webhooks/jenkins" \
             -H "Content-Type: application/json" \
+            -H "X-SCA-Webhook-Token: ${SCA_WEBHOOK_SECRET}" \
             -d "{\"project_name\":\"${JOB_NAME}\",\"pipeline_id\":\"${BUILD_NUMBER}\",\"ref\":\"${BRANCH_NAME}\",\"commit_sha\":\"${GIT_COMMIT}\"}"
         '''
       }
@@ -600,7 +615,7 @@ pipeline {
 
 ### 部署方案
 
-生产环境建议只允许 CI 网段访问 webhook 路径，并通过 Nginx、WAF 或 API 网关补充签名校验。平台内的人工查看接口继续走聚信统一登录授权。
+GitLab 使用 `X-Gitlab-Token`，Jenkins 使用 `X-SCA-Webhook-Token` 或 `Authorization: Bearer ...`。生产环境必须配置平台专用密钥，并建议额外通过 Nginx、WAF 或 API 网关限制 CI 网段。平台内的人工查看接口继续走聚信统一登录授权。
 
 ## 17. 第十二阶段：最终部署与生产优化
 
@@ -943,11 +958,12 @@ docker compose logs sca-worker
 
 本阶段在现有模块上做兼容增强，不重复开发上传、依赖识别、漏洞查询和报告模块。
 
-### 四引擎联动架构
+### 多引擎联动架构
 
 - OpenSCA：本地源码 SCA 识别与国产漏洞/License 补充来源
 - Syft：SBOM 生成引擎，输出 CycloneDX JSON 与 SPDX JSON
 - Trivy：文件系统、镜像、SBOM 漏洞扫描引擎
+- OWASP Dependency-Check：Java 专项漏洞扫描引擎，复用持久化 NVD 缓存
 - OWASP Dependency-Track：SBOM 风险管理平台，通过 API 创建项目、上传 CycloneDX BOM、拉取组件/漏洞/License/指标
 
 Dependency-Track 不作为本地命令扫描器使用。聚信 SCA 作为统一入口，负责任务编排、原始报告保存、标准化、去重合并、可信度评分、AI 降噪和统一报告。
@@ -958,13 +974,14 @@ Dependency-Track 不作为本地命令扫描器使用。聚信 SCA 作为统一�
 - `backend/app/scanners/opensca_client.py`：OpenSCA 命令封装
 - `backend/app/scanners/syft_client.py`：Syft CycloneDX/SPDX SBOM 生成封装
 - `backend/app/scanners/trivy_client.py`：Trivy fs/image 扫描封装
+- `backend/app/scanners/dependency_check_client.py`：Dependency-Check 扫描和漏洞库更新封装
 - `backend/app/scanners/dependency_track_client.py`：Dependency-Track API 客户端
-- `backend/app/scanners/normalizers/*`：OpenSCA、Syft、Trivy、Dependency-Track 结果标准化
+- `backend/app/scanners/normalizers/*`：OpenSCA、Syft、Trivy、Dependency-Check、Dependency-Track 结果标准化
 - `backend/app/scanners/merger/*`：组件去重、漏洞去重、多引擎可信度评分
 
 ### 扫描任务状态
 
-每个主扫描任务会创建子任务节点：源码准备、OpenSCA、Syft、Trivy、Dependency-Track 上传/拉取、标准化、组件合并、漏洞合并、AI 降噪和报告生成。某个工具失败不会导致系统崩溃；工具未安装或 DTrack 不可用时显示 failed/skipped，主流程仍可展示本地依赖识别结果。
+每个主扫描任务会创建子任务节点：源码准备、OpenSCA、Syft、Trivy、Dependency-Check、Dependency-Track 上传/拉取、标准化、组件合并、漏洞合并、AI 降噪和报告生成。某个工具失败不会导致系统崩溃；工具未安装、缓存不可用或 DTrack 不可用时显示 failed/skipped，主流程仍可展示本地依赖识别结果。
 
 ### 无清单兜底识别
 
@@ -1006,7 +1023,49 @@ Dependency-Track 不作为本地命令扫描器使用。聚信 SCA 作为统一�
 - `dependency-track-frontend`：Dependency-Track 前端
 - `sca-scanner-results`：原始扫描报告持久化
 - `sca-trivy-cache`：Trivy 缓存持久化
+- `sca-dependency-check-data`：Dependency-Check 漏洞库持久化
 - `dependency-track-data`：Dependency-Track 数据持久化
+
+### Dependency-Check Java 扫描与运维
+
+Dependency-Check 固定为 `12.1.9`。项目扫描自动识别 Maven、Gradle、JAR、WAR 和 EAR，扫描命令固定使用 `--noupdate`，不会在项目任务中临时下载漏洞库。首次初始化完成前，Java 子任务会降级为 skipped，主扫描流程继续执行。
+
+首次部署后手动初始化漏洞库：
+
+```bash
+docker compose exec scanner-worker \
+  celery -A app.celery_app.celery_app call sca.update_dependency_check_data
+```
+
+查看缓存任务日志和工具版本：
+
+```bash
+docker compose logs -f scanner-worker
+
+docker compose exec scanner-worker \
+  /opt/dependency-check/bin/dependency-check.sh --version
+```
+
+查看持久卷占用：
+
+```bash
+docker system df -v
+docker volume inspect sca-platform_sca-dependency-check-data
+```
+
+生产环境建议为 `sca-dependency-check-data` 预留至少 5 GB 可增长空间，并根据灰度项目的实际缓存占用调整容量和告警阈值。定时更新失败时保留旧缓存继续扫描；状态接口和前端会显示最后成功时间、缓存是否过期、扫描耗时以及失败/跳过数量。
+
+全局 suppression 文件为 `backend/dependency-check-suppression.xml`，以只读方式挂载到 `/etc/dependency-check/suppression.xml`。新增误报排除项时，应先确认漏洞与组件证据，修改 XML，并在后端开发环境校验：
+
+```bash
+cd backend
+PYTHONPATH=. pytest -q tests/test_dependency_check_pipeline.py
+cd ..
+```
+
+校验通过后再经代码评审、重建 `scanner-worker` 发布。不要在运行中的容器内直接修改 suppression。
+
+Dependency-Check 单源发现默认标记为“待人工复核”，不参与 DevSecOps 门禁；只有与其他引擎稳定交叉确认后才进入现有门禁策略。`NVD_API_KEY` 只能通过环境变量提供，禁止写入仓库、Compose 文件或命令日志。
 
 ### 运行方法
 
@@ -1038,11 +1097,12 @@ docker compose run --rm sca-api pytest -q
 
 建议测试样例：
 
-- Maven 项目：验证 `pom.xml`、dependencyManagement、jar pom.properties、OpenSCA/Syft/Trivy 子任务状态
+- Maven 项目：验证 `pom.xml`、dependencyManagement、jar pom.properties、OpenSCA/Syft/Trivy/Dependency-Check 子任务状态
 - npm 项目：验证 `package.json` 的 `^/~ latest` 风险、`package-lock.json` 实际版本
 - Python 项目：验证 `requirements.txt` 精确/未声明/范围版本、import 兜底识别
 - Docker 镜像：验证 Syft image 和 Trivy image 扫描输出目录
 - Dependency-Track 不可用：验证本地扫描仍完成，子任务展示 failed/skipped
+- Dependency-Check 缓存未初始化或锁等待超时：验证 Java 子任务降级 skipped/failed，主扫描仍完成
 - 重复漏洞：验证多来源合并为一条并保留来源证据
 
 ### 常见报错
@@ -1050,5 +1110,7 @@ docker compose run --rm sca-api pytest -q
 - 413 Request Entity Too Large：平台应用层不限制上传大小。检查外层 Nginx/网关是否设置 `client_max_body_size 0`，优先使用断点续传。
 - OpenSCA/Syft/Trivy 命令不存在：scanner-worker 镜像中未安装对应工具；任务会显示 failed，不影响本地依赖识别。
 - Dependency-Track API Key 错误：配置 `DEPENDENCY_TRACK_API_KEY` 后重启容器，再重新上传 BOM 或重跑子任务。
+- Dependency-Check 未初始化：执行漏洞库初始化命令，等待状态接口的 `last_success_at` 更新后重试 Java 项目。
+- Dependency-Check 更新失败：检查 `scanner-worker` 网络、NVD 限流、数据卷权限和剩余空间；旧缓存仍保留时项目扫描可继续使用。
 - Trivy 数据库下载失败：检查容器网络和 `sca-trivy-cache` 卷权限；可预热缓存后重试。
 - 无清单文件组件少：报告会提示补充 lock 文件、SBOM、运行目录、jar/war、Docker 镜像 tar 或依赖树输出以提高准确率。

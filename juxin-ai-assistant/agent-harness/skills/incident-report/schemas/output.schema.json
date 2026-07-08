@@ -1,0 +1,9 @@
+{
+  "type": "object",
+  "properties": {
+    "summary": { "type": "string" },
+    "timeline": { "type": "array" },
+    "root_cause": { "type": "string" },
+    "actions": { "type": "array" }
+  }
+}

@@ -4,6 +4,7 @@ import json
 import shlex
 import shutil
 import subprocess
+import time
 from dataclasses import asdict, dataclass, field
 from hashlib import sha256
 from pathlib import Path
@@ -48,6 +49,8 @@ class NormalizedComponentData:
     evidence_file: str = ""
     evidence_text: str = ""
     confidence_score: float = 0.7
+    sha1: str = ""
+    gav: str = ""
 
 
 @dataclass
@@ -72,6 +75,11 @@ class NormalizedVulnerabilityData:
     kev: bool = False
     match_confidence: float = 0.5
     raw_source: str = ""
+    affected_purl: str = ""
+    affected_cpe: str = ""
+    affected_sha1: str = ""
+    affected_gav: str = ""
+    suppressed: bool = False
 
 
 def write_json(path: Path, payload: object) -> Path:
@@ -93,6 +101,7 @@ SENSITIVE_ARGUMENT_FLAGS = {
     "--token",
     "--api-key",
     "--apikey",
+    "--nvdapikey",
     "--password",
     "--secret",
 }
@@ -130,6 +139,21 @@ def append_command_log(path: Path, command: list[str]) -> str:
     return str(path)
 
 
+def _bounded_log_text(path: Path, max_bytes: int) -> str:
+    if not path.exists() or max_bytes <= 0:
+        return ""
+    with path.open("rb") as handle:
+        handle.seek(max(0, path.stat().st_size - max_bytes))
+        return handle.read(max_bytes).decode("utf-8", errors="replace")
+
+
+def _truncate_log(path: Path, max_bytes: int) -> None:
+    if max_bytes <= 0 or not path.exists() or path.stat().st_size <= max_bytes:
+        return
+    tail = _bounded_log_text(path, max_bytes).encode("utf-8")[-max_bytes:]
+    path.write_bytes(tail)
+
+
 def run_scanner_command(
     engine_name: str,
     command: list[str],
@@ -138,7 +162,10 @@ def run_scanner_command(
     stderr_path: Path,
     timeout: int,
     command_log_path: Path | None = None,
+    max_log_bytes: int = 10 * 1024 * 1024,
+    summary_bytes: int = 16 * 1024,
 ) -> ScannerCommandResult:
+    started = time.monotonic()
     executable = command[0]
     sanitized_command = redact_command(command)
     command_log_text = append_command_log(command_log_path, command) if command_log_path else ""
@@ -159,44 +186,64 @@ def run_scanner_command(
             raw_error=message,
             stderr_log_path=str(stderr_path),
             command_log_path=command_log_text,
+            duration_seconds=max(0, round(time.monotonic() - started)),
         )
     try:
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        completed = subprocess.run(command, capture_output=True, text=True, timeout=timeout, check=False)
-        stdout_path.write_text(completed.stdout or "", encoding="utf-8")
-        stderr_path.write_text(completed.stderr or "", encoding="utf-8")
+        stdout_path.parent.mkdir(parents=True, exist_ok=True)
+        stderr_path.parent.mkdir(parents=True, exist_ok=True)
+        with stdout_path.open("w", encoding="utf-8") as stdout_handle, stderr_path.open("w", encoding="utf-8") as stderr_handle:
+            completed = subprocess.run(
+                command,
+                stdout=stdout_handle,
+                stderr=stderr_handle,
+                text=True,
+                timeout=timeout,
+                check=False,
+            )
+            if completed.stdout:
+                stdout_handle.write(completed.stdout)
+            if completed.stderr:
+                stderr_handle.write(completed.stderr)
+        if stdout_path.exists() and not output_path.exists() and stdout_path.stat().st_size > 0:
+            shutil.copyfile(stdout_path, output_path)
+        _truncate_log(stdout_path, max_log_bytes)
+        _truncate_log(stderr_path, max_log_bytes)
+        stdout_summary = _bounded_log_text(stdout_path, summary_bytes)
+        stderr_summary = _bounded_log_text(stderr_path, summary_bytes)
         if completed.returncode != 0:
+            error_message = stderr_summary or f"{engine_name} 返回码 {completed.returncode}"
             return ScannerCommandResult(
                 engine_name=engine_name,
                 status="failed",
                 command=sanitized_command,
-                stdout=completed.stdout or "",
-                stderr=completed.stderr or "",
-                error_message=completed.stderr or f"{engine_name} 返回码 {completed.returncode}",
+                stdout=stdout_summary,
+                stderr=stderr_summary,
+                error_message=error_message,
                 stdout_log_path=str(stdout_path),
                 stderr_log_path=str(stderr_path),
                 raw_result_path=str(output_path) if output_path.exists() else "",
                 exit_code=completed.returncode,
-                message=completed.stderr or f"{engine_name} 返回码 {completed.returncode}",
-                raw_error=completed.stderr or "",
+                message=error_message,
+                raw_error=stderr_summary,
                 command_log_path=command_log_text,
                 report_files=[str(output_path)] if output_path.exists() else [],
+                duration_seconds=max(0, round(time.monotonic() - started)),
             )
-        if completed.stdout and not output_path.exists():
-            output_path.write_text(completed.stdout, encoding="utf-8")
         report_files = [str(output_path)] if output_path.exists() else []
         return ScannerCommandResult(
             engine_name=engine_name,
             status="completed",
             command=sanitized_command,
-            stdout=completed.stdout or "",
-            stderr=completed.stderr or "",
+            stdout=stdout_summary,
+            stderr=stderr_summary,
             stdout_log_path=str(stdout_path),
             stderr_log_path=str(stderr_path),
             raw_result_path=str(output_path),
             exit_code=completed.returncode,
             report_files=report_files,
             command_log_path=command_log_text,
+            duration_seconds=max(0, round(time.monotonic() - started)),
         )
     except subprocess.TimeoutExpired as exc:
         message = f"{engine_name} 执行超时: {timeout}s"
@@ -214,6 +261,7 @@ def run_scanner_command(
             message=message,
             raw_error=str(exc),
             command_log_path=command_log_text,
+            duration_seconds=max(0, round(time.monotonic() - started)),
         )
     except OSError as exc:
         message = f"{engine_name} 执行失败: {exc}"
@@ -231,4 +279,5 @@ def run_scanner_command(
             message=message,
             raw_error=str(exc),
             command_log_path=command_log_text,
+            duration_seconds=max(0, round(time.monotonic() - started)),
         )

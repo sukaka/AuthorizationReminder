@@ -14,6 +14,7 @@ const {
 test('audit display helpers localize system, action and entity to chinese', () => {
   assert.equal(getAuditSystemLabel('sso'), '统一登录');
   assert.equal(getAuditSystemLabel('audit-center'), '审计中心');
+  assert.equal(getAuditSystemLabel('ai-assistant'), '聚信 AI 助手');
   assert.equal(getAuditActionLabel('LOGIN'), '登录尝试');
   assert.equal(getAuditActionLabel('LOGIN_SUCCESS'), '登录成功');
   assert.equal(getAuditActionLabel('ENABLE_USER'), '启用用户');
@@ -23,11 +24,34 @@ test('audit display helpers localize system, action and entity to chinese', () =
   assert.equal(getAuditActionLabel('prompt.archived'), '删除/归档提示词');
   assert.equal(getAuditActionLabel('prompt.favorite'), '收藏提示词');
   assert.equal(getAuditActionLabel('prompt.unfavorite'), '取消收藏提示词');
+  assert.equal(getAuditActionLabel('generation.prepare'), '准备生成');
+  assert.equal(getAuditActionLabel('generation.complete'), '完成生成');
+  assert.equal(getAuditActionLabel('generation.regenerate'), '重新生成');
+  assert.equal(getAuditActionLabel('generation.feedback'), '提交生成反馈');
+  assert.equal(getAuditActionLabel('generation.delete'), '删除生成记录');
+  assert.equal(getAuditActionLabel('task.create'), '创建任务');
+  assert.equal(getAuditActionLabel('task.update'), '更新任务');
+  assert.equal(getAuditActionLabel('task.delete'), '删除任务');
+  assert.equal(getAuditActionLabel('task.fields.replace'), '替换任务字段');
+  assert.equal(getAuditActionLabel('task.prompt_binding.update'), '更新任务提示词绑定');
+  assert.equal(getAuditActionLabel('knowledge.create'), '新增知识');
+  assert.equal(getAuditActionLabel('knowledge.update'), '更新知识');
+  assert.equal(getAuditActionLabel('knowledge.disable'), '停用知识');
+  assert.equal(getAuditActionLabel('setting.update'), '更新助手设置');
+  assert.equal(getAuditActionLabel('suggestion.create'), '提交建议');
+  assert.equal(getAuditActionLabel('suggestion.review'), '审核建议');
+  assert.equal(getAuditActionLabel('authorization.denied'), '拒绝未授权操作');
   assert.equal(getAuditEntityLabel('auth'), '认证/登录');
   assert.equal(getAuditEntityLabel('send_configs'), '发送配置');
   assert.equal(getAuditEntityLabel('prompt'), '提示词');
   assert.equal(getAuditEntityLabel('department'), '部门');
   assert.equal(getAuditEntityLabel('category'), '分类');
+  assert.equal(getAuditEntityLabel('generation'), '生成记录');
+  assert.equal(getAuditEntityLabel('task'), '任务');
+  assert.equal(getAuditEntityLabel('knowledge'), '知识');
+  assert.equal(getAuditEntityLabel('setting'), '助手设置');
+  assert.equal(getAuditEntityLabel('suggestion'), '建议');
+  assert.equal(getAuditEntityLabel('action'), '权限动作');
 });
 
 test('formatAuditLogForDisplay returns localized labels for audit rows', () => {

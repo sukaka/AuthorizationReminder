@@ -1,0 +1,10 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    { "type": "Feature", "properties": { "name": "北京" }, "geometry": { "type": "Point", "coordinates": [116.4, 39.9] } },
+    { "type": "Feature", "properties": { "name": "上海" }, "geometry": { "type": "Point", "coordinates": [121.47, 31.23] } },
+    { "type": "Feature", "properties": { "name": "深圳" }, "geometry": { "type": "Point", "coordinates": [114.06, 22.54] } },
+    { "type": "Feature", "properties": { "name": "成都" }, "geometry": { "type": "Point", "coordinates": [104.07, 30.67] } },
+    { "type": "Feature", "properties": { "name": "西安" }, "geometry": { "type": "Point", "coordinates": [108.94, 34.34] } }
+  ]
+}

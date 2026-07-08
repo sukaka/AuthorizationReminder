@@ -2,7 +2,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SYSTEMS=(auth reminder ticketing inventory device-flow sec-impl faq tender train-exam prompt-center cmdb)
+SYSTEMS=(auth reminder ticketing inventory device-flow sec-impl faq tender train-exam prompt-center ai-assistant cmdb)
 
 if (( $# > 0 )); then
   SYSTEMS=("$@")

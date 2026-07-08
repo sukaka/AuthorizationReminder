@@ -236,6 +236,61 @@
             <div><span>未知版本</span><strong>{{ scanCompleteness.unknown_version_count || 0 }}</strong></div>
             <div><span>待确认</span><strong>{{ scanCompleteness.manual_confirm_count || 0 }}</strong></div>
           </section>
+          <section class="dependency-check-summary">
+            <div>
+              <span>Dependency-Check</span>
+              <strong>{{ dependencyCheckTask?.status || '未运行' }}</strong>
+            </div>
+            <div>
+              <span>工具版本</span>
+              <strong>{{ dependencyCheckStatus.version || '-' }}</strong>
+            </div>
+            <div>
+              <span>漏洞库更新</span>
+              <strong :class="{ 'status-warning': dependencyCheckStatus.stale }">
+                {{ dependencyCheckStatus.last_success_at || '未初始化' }}
+              </strong>
+            </div>
+            <div>
+              <span>独立发现</span>
+              <strong>{{ dependencyCheckIndependentCount }}</strong>
+            </div>
+            <div>
+              <span>交叉确认</span>
+              <strong>{{ dependencyCheckConfirmedCount }}</strong>
+            </div>
+            <div>
+              <span>P95 耗时</span>
+              <strong>{{ dependencyCheckStatus.p95_duration_seconds || 0 }}s</strong>
+            </div>
+            <div>
+              <span>失败/跳过</span>
+              <strong>{{ dependencyCheckStatus.failed_scans || 0 }}/{{ dependencyCheckStatus.skipped_scans || 0 }}</strong>
+            </div>
+          </section>
+          <el-alert
+            v-if="dependencyCheckTask?.summary"
+            class="dependency-check-alert"
+            :title="dependencyCheckTask.summary"
+            :type="dependencyCheckTask.status === 'failed' ? 'warning' : 'info'"
+            :closable="false"
+            show-icon
+          />
+          <div class="dependency-check-artifacts">
+            <span>原始扫描证据</span>
+            <div v-if="dependencyCheckArtifacts.length">
+              <el-button
+                v-for="artifact in dependencyCheckArtifacts"
+                :key="artifact.id"
+                text
+                type="primary"
+                @click="downloadScanArtifact(artifact)"
+              >
+                {{ artifact.file_name }}
+              </el-button>
+            </div>
+            <small v-else>本项目暂无 Dependency-Check 报告</small>
+          </div>
           <el-table :data="pagedComponents" empty-text="暂无依赖，请等待扫描完成">
             <el-table-column type="expand">
               <template #default="{ row }">
@@ -479,6 +534,17 @@
             <el-table-column prop="match_status" label="匹配" width="110">
               <template #default="{ row }">
                 <el-tag :type="row.match_status === 'affected' ? 'success' : 'warning'" effect="plain">{{ row.match_status }}</el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column label="确认状态" width="170">
+              <template #default="{ row }">
+                <el-tag
+                  :type="row.confirmation_status === 'cross_confirmed' ? 'success' : 'warning'"
+                  effect="plain"
+                >
+                  {{ row.confirmation_status === 'cross_confirmed' ? '多引擎确认' : '待人工复核' }}
+                </el-tag>
+                <small v-if="!row.gate_eligible" class="gate-note">不参与门禁</small>
               </template>
             </el-table-column>
             <el-table-column prop="reachability_status" label="可达性" width="130">
@@ -1431,6 +1497,22 @@ const dependencyTrackStatus = reactive({
   last_metrics_json: '{}',
   last_status: 'not_linked',
 })
+const dependencyCheckStatus = reactive({
+  enabled: true,
+  version: '',
+  status: 'unknown',
+  last_started_at: '',
+  last_success_at: '',
+  message: '',
+  stale: true,
+  data_dir: '',
+  total_scans: 0,
+  failed_scans: 0,
+  skipped_scans: 0,
+  p50_duration_seconds: 0,
+  p95_duration_seconds: 0,
+})
+const scanArtifacts = ref([])
 const vulnerabilities = ref([])
 const vulnerabilityFilter = ref('all')
 const vulnerabilityDrawerVisible = ref(false)
@@ -1694,6 +1776,27 @@ const p01Count = computed(() => vulnerabilities.value.filter((item) => ['P0', 'P
 
 const reviewCount = computed(() => vulnerabilities.value.filter(isReviewVulnerability).length)
 
+const dependencyCheckArtifacts = computed(() => (
+  scanArtifacts.value.filter((item) => item.engine_name === 'dependency-check')
+))
+
+const dependencyCheckTask = computed(() => (
+  scanTasks.value.find((item) => item.task_type === 'dependency_check_scan_task') || null
+))
+
+const dependencyCheckIndependentCount = computed(() => (
+  vulnerabilities.value.filter((item) => (
+    item.source === 'dependency-check' && item.confirmation_status === 'single_source'
+  )).length
+))
+
+const dependencyCheckConfirmedCount = computed(() => (
+  vulnerabilities.value.filter((item) => (
+    (item.confirmation_engines || '').includes('dependency-check')
+    && item.confirmation_status === 'cross_confirmed'
+  )).length
+))
+
 const remediationProgress = computed(() => {
   if (!remediationTickets.value.length) return 0
   const closed = remediationTickets.value.filter((item) => ['已修复', '已忽略'].includes(item.status)).length
@@ -1912,6 +2015,7 @@ const clearProjectDetails = () => {
   aiResults.value = []
   remediationTickets.value = []
   whitelistItems.value = []
+  scanArtifacts.value = []
   selectedVulnerability.value = null
   vulnerabilityDrawerVisible.value = false
   vulnerabilityHistory.value = []
@@ -1946,6 +2050,21 @@ const clearProjectDetails = () => {
     last_metrics_json: '{}',
     last_status: 'not_linked',
   })
+  Object.assign(dependencyCheckStatus, {
+    enabled: true,
+    version: '',
+    status: 'unknown',
+    last_started_at: '',
+    last_success_at: '',
+    message: '',
+    stale: true,
+    data_dir: '',
+    total_scans: 0,
+    failed_scans: 0,
+    skipped_scans: 0,
+    p50_duration_seconds: 0,
+    p95_duration_seconds: 0,
+  })
 }
 
 const handleMenuSelect = async (menu) => {
@@ -1971,36 +2090,81 @@ const loadUploads = async () => {
   uploads.value = data?.items || []
 }
 
+const settledValue = (result, fallback) => result.status === 'fulfilled' ? result.value : fallback
+
+const loadProjectActivity = async () => {
+  if (!selectedProjectId.value) return false
+  const wasActive = hasActiveProjectTasks.value
+  const [tasksResult, logsResult, uploadsResult] = await Promise.allSettled([
+    requestJson(`/api/sca/projects/${selectedProjectId.value}/scan-tasks`),
+    requestJson(`/api/sca/projects/${selectedProjectId.value}/scan-logs`),
+    requestJson('/api/sca/uploads'),
+  ])
+  scanTasks.value = settledValue(tasksResult, scanTasks.value) || []
+  scanLogs.value = settledValue(logsResult, scanLogs.value) || []
+  const uploadData = settledValue(uploadsResult, null)
+  if (uploadData) uploads.value = uploadData.items || []
+  return wasActive && !hasActiveProjectTasks.value
+}
+
 const loadProjectDetails = async () => {
   if (!selectedProjectId.value) return
   if (projectDetailsLoading) return
   projectDetailsLoading = true
   try {
-    components.value = (await requestJson(`/api/sca/projects/${selectedProjectId.value}/components`)) || []
-    dependencyTree.value = (await requestJson(`/api/sca/projects/${selectedProjectId.value}/dependency-tree`)) || []
-    const completeness = await requestJson(`/api/sca/projects/${selectedProjectId.value}/scan-completeness`)
+    const projectId = selectedProjectId.value
+    const { loadProjectDetailRequests } = await import('./composables/projectDataLoader.js')
+    const [
+      componentsResult,
+      dependencyTreeResult,
+      completenessResult,
+      dtrackResult,
+      tasksResult,
+      logsResult,
+      vulnerabilityResult,
+      statsResult,
+      trendResult,
+      reportsResult,
+      sbomsResult,
+      snapshotsResult,
+      alertsResult,
+      changesResult,
+      monitorTrendResult,
+      aiResult,
+      ticketsResult,
+      whitelistResult,
+      dependencyCheckResult,
+      scanArtifactsResult,
+    ] = await loadProjectDetailRequests(projectId)
+    if (projectId !== selectedProjectId.value) return
+    components.value = settledValue(componentsResult, components.value) || []
+    dependencyTree.value = settledValue(dependencyTreeResult, dependencyTree.value) || []
+    const completeness = settledValue(completenessResult, null)
     if (completeness) Object.assign(scanCompleteness, completeness)
-    const dtrack = await requestJson(`/api/sca/projects/${selectedProjectId.value}/dependency-track`)
+    const dtrack = settledValue(dtrackResult, null)
     if (dtrack) Object.assign(dependencyTrackStatus, dtrack)
-    scanTasks.value = (await requestJson(`/api/sca/projects/${selectedProjectId.value}/scan-tasks`)) || []
-    scanLogs.value = (await requestJson(`/api/sca/projects/${selectedProjectId.value}/scan-logs`)) || []
-    const vulnerabilityData = await requestJson(`/api/sca/projects/${selectedProjectId.value}/vulnerabilities`)
+    scanTasks.value = settledValue(tasksResult, scanTasks.value) || []
+    scanLogs.value = settledValue(logsResult, scanLogs.value) || []
+    const vulnerabilityData = settledValue(vulnerabilityResult, null)
     vulnerabilities.value = vulnerabilityData?.items || []
-    const stats = await requestJson(`/api/sca/projects/${selectedProjectId.value}/vulnerabilities/stats`)
+    const stats = settledValue(statsResult, null)
     if (stats) Object.assign(vulnerabilityStats, stats)
-    const trend = await requestJson(`/api/sca/projects/${selectedProjectId.value}/vulnerabilities/trend`)
+    const trend = settledValue(trendResult, null)
     vulnerabilityTrend.value = trend?.items || []
-    reports.value = (await requestJson(`/api/sca/projects/${selectedProjectId.value}/reports`)) || []
-    sboms.value = (await requestJson(`/api/sca/projects/${selectedProjectId.value}/sbom`)) || []
-    riskSnapshots.value = (await requestJson(`/api/sca/projects/${selectedProjectId.value}/risk-monitor/snapshots`)) || []
-    riskAlerts.value = (await requestJson(`/api/sca/projects/${selectedProjectId.value}/risk-monitor/alerts`)) || []
-    riskChanges.value = (await requestJson(`/api/sca/projects/${selectedProjectId.value}/risk-monitor/changes`)) || []
-    const monitorTrend = await requestJson(`/api/sca/projects/${selectedProjectId.value}/risk-monitor/trend`)
+    reports.value = settledValue(reportsResult, reports.value) || []
+    sboms.value = settledValue(sbomsResult, sboms.value) || []
+    riskSnapshots.value = settledValue(snapshotsResult, riskSnapshots.value) || []
+    riskAlerts.value = settledValue(alertsResult, riskAlerts.value) || []
+    riskChanges.value = settledValue(changesResult, riskChanges.value) || []
+    const monitorTrend = settledValue(monitorTrendResult, null)
     riskTrend.value = monitorTrend?.items || []
-    aiResults.value = (await requestJson(`/api/sca/projects/${selectedProjectId.value}/ai-triage/results`)) || []
-    const tickets = await requestJson(`/api/sca/projects/${selectedProjectId.value}/remediation/tickets`)
+    aiResults.value = settledValue(aiResult, aiResults.value) || []
+    const tickets = settledValue(ticketsResult, null)
     remediationTickets.value = tickets?.items || []
-    whitelistItems.value = (await requestJson(`/api/sca/projects/${selectedProjectId.value}/remediation/whitelist`)) || []
+    whitelistItems.value = settledValue(whitelistResult, whitelistItems.value) || []
+    const dependencyCheck = settledValue(dependencyCheckResult, null)
+    if (dependencyCheck) Object.assign(dependencyCheckStatus, dependencyCheck)
+    scanArtifacts.value = settledValue(scanArtifactsResult, scanArtifacts.value) || []
     taskPollingPaused.value = false
     taskPollingGatewayWarningShown = false
   } finally {
@@ -2203,6 +2367,10 @@ const submitReport = async () => {
 
 const downloadReport = (row) => {
   window.open(apiUrl(`/api/sca/reports/${row.id}/download`), '_blank')
+}
+
+const downloadScanArtifact = (artifact) => {
+  window.open(apiUrl(`/api/sca/raw-artifacts/${artifact.id}/download`), '_blank')
 }
 
 const deleteReport = async (row) => {
@@ -2583,8 +2751,8 @@ onMounted(() => {
   taskRefreshTimer = window.setInterval(async () => {
     if (!selectedProjectId.value || taskPollingPaused.value || !hasActiveProjectTasks.value) return
     try {
-      await loadProjectDetails()
-      await loadUploads()
+      const completed = await loadProjectActivity()
+      if (completed) await loadProjectDetails()
     } catch (err) {
       if (err?.isGatewayError) {
         taskPollingPaused.value = true

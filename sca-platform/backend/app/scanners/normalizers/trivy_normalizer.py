@@ -15,6 +15,9 @@ def normalize_trivy(path: Path) -> tuple[list[NormalizedComponentData], list[Nor
         for vuln in result.get("Vulnerabilities", []) or []:
             pkg = str(vuln.get("PkgName") or "")
             version = str(vuln.get("InstalledVersion") or "")
+            package_identifier = vuln.get("PkgIdentifier")
+            package_identifier_data = package_identifier if isinstance(package_identifier, dict) else {}
+            purl = str(package_identifier_data.get("PURL") or "")
             key = (pkg, version)
             components.setdefault(
                 key,
@@ -26,8 +29,8 @@ def normalize_trivy(path: Path) -> tuple[list[NormalizedComponentData], list[Nor
                     version_normalized=version,
                     source_file=target,
                     evidence_file=target,
-                    evidence_text=str(vuln.get("PkgIdentifier", {}).get("PURL") or ""),
-                    purl=str(vuln.get("PkgIdentifier", {}).get("PURL") or ""),
+                    evidence_text=purl,
+                    purl=purl,
                     confidence_score=0.86,
                 ),
             )
@@ -47,7 +50,7 @@ def normalize_trivy(path: Path) -> tuple[list[NormalizedComponentData], list[Nor
                     references=[str(item) for item in vuln.get("References", []) or []],
                     match_confidence=0.82 if version else 0.45,
                     raw_source=json.dumps(vuln, ensure_ascii=False),
+                    affected_purl=purl,
                 )
             )
     return list(components.values()), vulnerabilities
-

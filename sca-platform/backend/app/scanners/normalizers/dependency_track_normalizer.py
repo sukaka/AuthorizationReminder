@@ -43,6 +43,8 @@ def normalize_dependency_track_findings(rows: list[dict[str, object]]) -> list[N
                 references=[str(item) for item in vuln.get("references", []) or []] if isinstance(vuln.get("references"), list) else [],
                 match_confidence=0.8,
                 raw_source=json.dumps(row, ensure_ascii=False),
+                affected_purl=str(component.get("purl") or ""),
+                affected_cpe=str(component.get("cpe") or ""),
             )
         )
     return normalized

@@ -1,0 +1,4 @@
+[[permission]]
+identifier = "allow-generation-word-save"
+description = "允许受信任业务工作台将已生成的 Word 文件保存到系统下载目录"
+commands.allow = ["generation_word_save", "generation_word_open"]

@@ -19,7 +19,13 @@ from sqlalchemy.orm import Session
 
 from .auth import get_current_user, require_action
 from . import celery_app as celery_app
-from .celery_app import celery_app, demo_scan, query_project_vulnerabilities_task, scan_uploaded_file
+from .celery_app import (
+    celery_app,
+    demo_scan,
+    query_project_vulnerabilities_task,
+    scan_uploaded_file,
+    update_dependency_check_data,
+)
 from .config import Settings, get_settings
 from .database import SessionLocal, check_database, get_db, init_db
 from .models import (
@@ -30,6 +36,7 @@ from .models import (
     ComponentDependency,
     DependencyTrackLicense,
     DependencyTrackProject,
+    DevopsScanEvent,
     ImageScan,
     ImageScanFinding,
     MergedComponent,
@@ -38,7 +45,6 @@ from .models import (
     NormalizedVulnerability,
     Project,
     BackupJob,
-    DevopsScanEvent,
     RawScanArtifact,
     RemediationEvent,
     RemediationTicket,
@@ -73,13 +79,10 @@ from .schemas import (
     CveQueryIn,
     ComponentOut,
     ComponentManualVersionIn,
+    DependencyCheckStatusOut,
     DependencyTrackStatusOut,
     DependencyTreeNode,
     DependencyTrackLicenseOut,
-    DevopsDashboardOut,
-    DevopsEventListOut,
-    DevopsEventOut,
-    DevopsWebhookIn,
     ImageScanCreateIn,
     ImageScanFindingOut,
     ImageScanOut,
@@ -87,6 +90,7 @@ from .schemas import (
     OpsConfigOut,
     OverviewOut,
     ProjectListItem,
+    RawScanArtifactOut,
     RemediationEventOut,
     RemediationTicketCreateIn,
     RemediationTicketListOut,
@@ -130,7 +134,6 @@ from .ai_triage_service import (
     cached_ai_result,
 )
 from .asset_service import asset_components, asset_dashboard, asset_graph
-from .devops_service import devops_dashboard, record_devops_event
 from .ops_service import plan_backup_path, production_config
 from .remediation_service import create_ticket_no, ignore_vulnerability, mark_overdue_tickets, transition_ticket, verify_ticket
 from .report_service import generate_report
@@ -143,11 +146,14 @@ from .upload_service import (
     ensure_project,
     ensure_upload_dirs,
     remove_upload_artifacts,
+    save_request_chunk,
     save_upload_file,
     to_upload_out,
+    uploaded_chunk_indexes,
     validate_archive_filename,
 )
 from .vulnerability_service import query_cve
+from .routers.devops import router as devops_router
 
 
 @asynccontextmanager
@@ -165,6 +171,7 @@ app = FastAPI(
     description="聚信软件成分分析平台 API，覆盖源码上传、依赖识别、漏洞查询、报告导出、SBOM、镜像扫描、持续监测、AI 降噪与资产中心。",
     lifespan=lifespan,
 )
+app.include_router(devops_router)
 
 
 UNKNOWN_VERSION_VALUES = {"", "unknown", "none", "null", "n/a", "na", "未声明", "未知"}
@@ -966,22 +973,50 @@ async def upload_chunk(
         raise HTTPException(status_code=404, detail="上传会话不存在")
     if chunk_index < 0 or chunk_index >= record.total_chunks:
         raise HTTPException(status_code=400, detail="分片序号不合法")
-    chunk = await request.body()
-    if not chunk:
-        raise HTTPException(status_code=400, detail="分片内容不能为空")
-    _ensure_upload_size_allowed(db, len(chunk))
     chunk_dir = Path(settings.upload_root) / "chunks" / upload_id
     chunk_dir.mkdir(parents=True, exist_ok=True)
     chunk_path = chunk_dir / f"{chunk_index:08d}.part"
-    chunk_path.write_bytes(chunk)
+    existing_size = chunk_size(chunk_path)
+    await save_request_chunk(
+        request,
+        chunk_path,
+        settings.upload_chunk_max_bytes,
+        record.file_size - record.received_bytes + existing_size,
+    )
     received = sum(chunk_size(chunk_dir / f"{index:08d}.part") for index in range(record.total_chunks))
     if received > record.file_size:
+        chunk_path.unlink(missing_ok=True)
         raise HTTPException(status_code=400, detail="已上传分片大小超过声明大小")
     record.received_bytes = received
     record.status = "uploading"
     add_upload_log(db, record.id, "chunk_uploaded", f"已上传分片 {chunk_index + 1}/{record.total_chunks}")
     db.commit()
     return {"upload_id": upload_id, "received_bytes": received, "status": record.status}
+
+
+@app.get("/api/sca/uploads/sessions/{upload_id}", tags=["uploads"])
+async def resumable_upload_state(
+    request: Request,
+    upload_id: str,
+    user: Annotated[UserPayload, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> dict[str, object]:
+    await require_action("sca:write", request, user, settings)
+    record = db.scalar(select(UploadFileRecord).where(UploadFileRecord.upload_id == upload_id))
+    if not record:
+        raise HTTPException(status_code=404, detail="上传会话不存在")
+    chunk_dir = Path(settings.upload_root) / "chunks" / upload_id
+    uploaded_chunks = uploaded_chunk_indexes(chunk_dir, record.total_chunks)
+    received = sum(chunk_size(chunk_dir / f"{index:08d}.part") for index in uploaded_chunks)
+    return {
+        "upload_id": record.upload_id,
+        "filename": record.original_filename,
+        "file_size": record.file_size,
+        "total_chunks": record.total_chunks,
+        "received_bytes": received,
+        "uploaded_chunks": uploaded_chunks,
+        "status": record.status,
+    }
 
 
 @app.post("/api/sca/uploads/{upload_id}/complete", response_model=UploadFileOut, tags=["uploads"])
@@ -1004,7 +1039,8 @@ async def complete_resumable_upload(
     destination = upload_root / "archives" / record.stored_filename
     with destination.open("wb") as output:
         for index in range(record.total_chunks):
-            output.write((chunk_dir / f"{index:08d}.part").read_bytes())
+            with (chunk_dir / f"{index:08d}.part").open("rb") as source:
+                shutil.copyfileobj(source, output, length=1024 * 1024)
     actual_size = destination.stat().st_size
     if actual_size != record.file_size:
         destination.unlink(missing_ok=True)
@@ -1374,6 +1410,137 @@ async def dependency_track_status(
     if not row:
         return DependencyTrackStatusOut(local_project_id=project_id, last_status="not_linked")
     return row
+
+
+def _percentile(values: list[int], ratio: float) -> int:
+    if not values:
+        return 0
+    ordered = sorted(values)
+    index = min(
+        len(ordered) - 1,
+        max(0, round((len(ordered) - 1) * ratio)),
+    )
+    return ordered[index]
+
+
+def _dependency_check_cache_stale(last_success_at: str) -> bool:
+    if not last_success_at:
+        return True
+    try:
+        parsed = datetime.fromisoformat(last_success_at.replace("Z", "+00:00"))
+    except ValueError:
+        return True
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    age_seconds = (datetime.now(timezone.utc) - parsed.astimezone(timezone.utc)).total_seconds()
+    return age_seconds > settings.dependency_check_cache_stale_seconds
+
+
+@app.get(
+    "/api/sca/dependency-check/status",
+    response_model=DependencyCheckStatusOut,
+    tags=["sca"],
+)
+async def dependency_check_status(
+    request: Request,
+    user: Annotated[UserPayload, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> DependencyCheckStatusOut:
+    await require_action("sca:read", request, user, settings)
+    values = _setting_map(db)
+    rows = list(
+        db.scalars(
+            select(ScannerTaskResult)
+            .where(ScannerTaskResult.engine_name == "dependency-check")
+            .order_by(
+                ScannerTaskResult.finished_at.desc(),
+                ScannerTaskResult.id.desc(),
+            )
+            .limit(500)
+        )
+    )
+    durations = [row.duration_seconds for row in rows if row.duration_seconds >= 0]
+    last_success_at = values.get("dependency_check_cache_last_success_at", "")
+    return DependencyCheckStatusOut(
+        enabled=settings.dependency_check_enabled,
+        version=values.get(
+            "dependency_check_cache_version",
+            settings.dependency_check_version,
+        ),
+        status=values.get("dependency_check_cache_status", "not_initialized"),
+        last_started_at=values.get("dependency_check_cache_last_started_at", ""),
+        last_success_at=last_success_at,
+        message=values.get("dependency_check_cache_message", ""),
+        stale=_dependency_check_cache_stale(last_success_at),
+        data_dir=settings.dependency_check_data_dir,
+        total_scans=len(rows),
+        failed_scans=sum(row.status in {"failed", "timeout"} for row in rows),
+        skipped_scans=sum(row.status == "skipped" for row in rows),
+        p50_duration_seconds=_percentile(durations, 0.50),
+        p95_duration_seconds=_percentile(durations, 0.95),
+    )
+
+
+@app.post("/api/sca/dependency-check/cache/update", tags=["sca"])
+async def trigger_dependency_check_cache_update(
+    request: Request,
+    user: Annotated[UserPayload, Depends(get_current_user)],
+) -> dict[str, str]:
+    await require_action("sca:write", request, user, settings)
+    task_id = str(uuid.uuid4())
+    update_dependency_check_data.apply_async(task_id=task_id)
+    return {
+        "task_id": task_id,
+        "status": "queued",
+        "message": "Dependency-Check 漏洞库更新任务已入队",
+    }
+
+
+@app.get(
+    "/api/sca/projects/{project_id}/scan-artifacts",
+    response_model=list[RawScanArtifactOut],
+    tags=["sca"],
+)
+async def list_scan_artifacts(
+    request: Request,
+    project_id: int,
+    user: Annotated[UserPayload, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> list[RawScanArtifactOut]:
+    await require_action("sca:read", request, user, settings)
+    _ensure_project_exists(db, project_id)
+    return list(
+        db.scalars(
+            select(RawScanArtifact)
+            .where(RawScanArtifact.project_id == project_id)
+            .order_by(RawScanArtifact.created_at.desc(), RawScanArtifact.id.desc())
+        )
+    )
+
+
+@app.get("/api/sca/raw-artifacts/{artifact_id}/download", tags=["sca"])
+async def download_raw_scan_artifact(
+    request: Request,
+    artifact_id: int,
+    user: Annotated[UserPayload, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> FileResponse:
+    await require_action("sca:read", request, user, settings)
+    artifact = db.get(RawScanArtifact, artifact_id)
+    if not artifact:
+        raise HTTPException(status_code=404, detail="扫描制品不存在")
+    path = Path(artifact.file_path).resolve()
+    allowed_root = Path(settings.dependency_check_output_dir).resolve().parent
+    if allowed_root != path and allowed_root not in path.parents:
+        raise HTTPException(status_code=403, detail="扫描制品路径不安全")
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="扫描制品文件不存在")
+    return FileResponse(
+        path,
+        filename=artifact.file_name,
+        media_type="application/octet-stream",
+        content_disposition_type="attachment",
+    )
 
 
 @app.get("/api/sca/projects/{project_id}/scan-logs", response_model=list[ScanLogOut], tags=["sca"])
@@ -2310,63 +2477,6 @@ async def list_vulnerability_whitelist(
 ) -> list[WhitelistOut]:
     await require_action("sca:read", request, user, settings)
     return list(db.scalars(select(VulnerabilityWhitelist).where(VulnerabilityWhitelist.project_id == project_id).order_by(VulnerabilityWhitelist.created_at.desc())))
-
-
-@app.post("/api/sca/devops/webhooks/gitlab", response_model=DevopsEventOut, tags=["devsecops"])
-async def gitlab_webhook(
-    request: Request,
-    payload: DevopsWebhookIn,
-    db: Annotated[Session, Depends(get_db)],
-) -> DevopsEventOut:
-    event = record_devops_event(db, {**payload.model_dump(), "source": "gitlab"}, settings)
-    db.commit()
-    db.refresh(event)
-    return event
-
-
-@app.post("/api/sca/devops/webhooks/github", response_model=DevopsEventOut, tags=["devsecops"])
-async def github_actions_webhook(
-    request: Request,
-    payload: DevopsWebhookIn,
-    db: Annotated[Session, Depends(get_db)],
-) -> DevopsEventOut:
-    event = record_devops_event(db, {**payload.model_dump(), "source": "github-actions"}, settings)
-    db.commit()
-    db.refresh(event)
-    return event
-
-
-@app.post("/api/sca/devops/webhooks/jenkins", response_model=DevopsEventOut, tags=["devsecops"])
-async def jenkins_webhook(
-    request: Request,
-    payload: DevopsWebhookIn,
-    db: Annotated[Session, Depends(get_db)],
-) -> DevopsEventOut:
-    event = record_devops_event(db, {**payload.model_dump(), "source": "jenkins"}, settings)
-    db.commit()
-    db.refresh(event)
-    return event
-
-
-@app.get("/api/sca/devops/events", response_model=DevopsEventListOut, tags=["devsecops"])
-async def list_devops_events(
-    request: Request,
-    user: Annotated[UserPayload, Depends(get_current_user)],
-    db: Annotated[Session, Depends(get_db)],
-) -> DevopsEventListOut:
-    await require_action("sca:read", request, user, settings)
-    items = list(db.scalars(select(DevopsScanEvent).order_by(DevopsScanEvent.created_at.desc()).limit(100)))
-    return DevopsEventListOut(total=len(items), items=items)
-
-
-@app.get("/api/sca/devops/dashboard", response_model=DevopsDashboardOut, tags=["devsecops"])
-async def devops_dashboard_api(
-    request: Request,
-    user: Annotated[UserPayload, Depends(get_current_user)],
-    db: Annotated[Session, Depends(get_db)],
-) -> DevopsDashboardOut:
-    await require_action("sca:read", request, user, settings)
-    return DevopsDashboardOut(**devops_dashboard(list(db.scalars(select(DevopsScanEvent)))))
 
 
 @app.get("/api/sca/ops/config", response_model=OpsConfigOut, tags=["ops"])

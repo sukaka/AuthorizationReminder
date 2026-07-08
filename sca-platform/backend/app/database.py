@@ -113,6 +113,33 @@ def run_compat_migrations() -> None:
         "entry_points": "TEXT NOT NULL DEFAULT ''",
         "related_files": "TEXT NOT NULL DEFAULT ''",
         "call_path_summary": "TEXT NOT NULL DEFAULT ''",
+        "confirmation_status": "VARCHAR(32) NOT NULL DEFAULT 'single_source'",
+        "confirmation_engines": "TEXT NOT NULL DEFAULT '[]'",
+        "gate_eligible": "BOOLEAN NOT NULL DEFAULT TRUE",
+        "review_reason": "TEXT NOT NULL DEFAULT ''",
+    }
+    scanner_result_additions = {
+        "normalized_components": {
+            "sha1": "VARCHAR(64) NOT NULL DEFAULT ''",
+            "gav": "VARCHAR(512) NOT NULL DEFAULT ''",
+        },
+        "merged_components": {
+            "sha1": "VARCHAR(64) NOT NULL DEFAULT ''",
+            "gav": "VARCHAR(512) NOT NULL DEFAULT ''",
+        },
+        "normalized_vulnerabilities": {
+            "affected_purl": "VARCHAR(512) NOT NULL DEFAULT ''",
+            "affected_cpe": "VARCHAR(512) NOT NULL DEFAULT ''",
+            "affected_sha1": "VARCHAR(64) NOT NULL DEFAULT ''",
+            "affected_gav": "VARCHAR(512) NOT NULL DEFAULT ''",
+            "suppressed": "BOOLEAN NOT NULL DEFAULT FALSE",
+        },
+        "merged_vulnerabilities": {
+            "confirmation_status": "VARCHAR(32) NOT NULL DEFAULT 'single_source'",
+            "confirmation_engines": "TEXT NOT NULL DEFAULT '[]'",
+            "gate_eligible": "BOOLEAN NOT NULL DEFAULT TRUE",
+            "review_reason": "TEXT NOT NULL DEFAULT ''",
+        },
     }
     ai_triage_additions = {
         "ai_schema_version": "VARCHAR(32) NOT NULL DEFAULT 'ai-triage-v2'",
@@ -151,6 +178,13 @@ def run_compat_migrations() -> None:
             for column, definition in vulnerability_additions.items():
                 if column not in vulnerability_existing:
                     conn.execute(text(f"ALTER TABLE vulnerabilities ADD COLUMN {column} {definition}"))
+        for table, table_additions in scanner_result_additions.items():
+            if not inspector.has_table(table):
+                continue
+            table_existing = {column["name"] for column in inspector.get_columns(table)}
+            for column, definition in table_additions.items():
+                if column not in table_existing:
+                    conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {definition}"))
         if inspector.has_table("ai_triage_results"):
             ai_existing = {column["name"] for column in inspector.get_columns("ai_triage_results")}
             for column, definition in ai_triage_additions.items():
@@ -161,6 +195,18 @@ def run_compat_migrations() -> None:
             for column, definition in risk_monitor_snapshot_additions.items():
                 if column not in snapshot_existing:
                     conn.execute(text(f"ALTER TABLE risk_monitor_snapshots ADD COLUMN {column} {definition}"))
+        index_statements = [
+            "CREATE INDEX IF NOT EXISTS idx_scan_tasks_project_type_status_created ON scan_tasks(project_id, task_type, status, created_at DESC)",
+            "CREATE INDEX IF NOT EXISTS idx_vulnerabilities_project_risk_cvss ON vulnerabilities(project_id, risk_score DESC, cvss_score DESC)",
+            "CREATE INDEX IF NOT EXISTS idx_upload_files_project_created ON upload_files(project_id, created_at DESC)",
+            "CREATE INDEX IF NOT EXISTS idx_scan_logs_task_created ON scan_logs(scan_task_id, created_at)",
+            "CREATE INDEX IF NOT EXISTS idx_risk_snapshots_project_component_checked ON risk_monitor_snapshots(project_id, component_id, checked_at DESC)",
+        ]
+        existing_tables = set(inspector.get_table_names())
+        index_tables = ["scan_tasks", "vulnerabilities", "upload_files", "scan_logs", "risk_monitor_snapshots"]
+        for table, statement in zip(index_tables, index_statements, strict=True):
+            if table in existing_tables:
+                conn.execute(text(statement))
 
 
 def check_database() -> bool:
