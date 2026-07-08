@@ -130,6 +130,175 @@ it('sends a normal chat message, streams output, and completes it', async () => 
   ));
 });
 
+it('uses server-side model generation in web runtime without local model profiles', async () => {
+  Object.defineProperty(window, '__TAURI_INTERNALS__', {
+    configurable: true,
+    value: undefined,
+  });
+  invokeMock.mockImplementation((command: string) => {
+    if (command === 'model_profile_list') {
+      return Promise.reject(new Error('Tauri unavailable'));
+    }
+    return Promise.resolve(undefined);
+  });
+  const generateRequest = vi.fn();
+  const encoder = new TextEncoder();
+  server.use(
+    http.get('/api/conversations', () => HttpResponse.json({ items: [], total: 0 })),
+    http.get('/api/ai/model-profiles', () => HttpResponse.json({ items: [], total: 0 })),
+    http.post('/api/ai/chat/prepare', () => HttpResponse.json({
+      session_uuid: 'session-web-model',
+      user_message_uuid: 'user-message-web-model',
+      assistant_message_uuid: 'assistant-message-web-model',
+      completion_token: 'complete-web-model',
+      completed: false,
+      answer: '',
+      messages: [
+        { role: 'system', content: '你是聚信 AI 助手' },
+        { role: 'user', content: '帮我总结 Web 端模型配置' },
+      ],
+      citations: [],
+    }, { status: 201 })),
+    http.post('/api/ai/chat/messages/assistant-message-web-model/generate/stream', async ({ request }) => {
+      generateRequest(await request.json());
+      return new HttpResponse(new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(encoder.encode(`${JSON.stringify({ type: 'delta', delta: 'Web 端已使用服务端模型生成。' })}\n`));
+          controller.enqueue(encoder.encode(`${JSON.stringify({
+            type: 'complete',
+            message_uuid: 'assistant-message-web-model',
+            status: 'COMPLETED',
+            answer: 'Web 端已使用服务端模型生成。',
+            model_display_name: '服务端模型',
+            model_id: 'deepseek-chat',
+            usage: { total_tokens: 18 },
+            latency_ms: 23,
+          })}\n`));
+          controller.close();
+        },
+      }), {
+        headers: { 'Content-Type': 'application/x-ndjson' },
+      });
+    }),
+  );
+
+  render(<ChatPage />);
+  expect(await screen.findByText('当前设置：服务端模型')).toBeInTheDocument();
+  await userEvent.type(await screen.findByLabelText('告诉我你想完成什么工作'), '帮我总结 Web 端模型配置');
+  await userEvent.click(screen.getByRole('button', { name: '发送' }));
+
+  expect(await screen.findByText('Web 端已使用服务端模型生成。')).toBeInTheDocument();
+  expect(generateLocalModelMock).not.toHaveBeenCalled();
+  expect(generateRequest).toHaveBeenCalledWith(expect.objectContaining({
+    completion_token: 'complete-web-model',
+    messages: expect.arrayContaining([
+      expect.objectContaining({ role: 'user', content: '帮我总结 Web 端模型配置' }),
+    ]),
+    temperature: 0.3,
+  }));
+});
+
+it('streams server-side model output in web runtime before the request completes', async () => {
+  Object.defineProperty(window, '__TAURI_INTERNALS__', {
+    configurable: true,
+    value: undefined,
+  });
+  invokeMock.mockImplementation((command: string) => {
+    if (command === 'model_profile_list') {
+      return Promise.reject(new Error('Tauri unavailable'));
+    }
+    return Promise.resolve(undefined);
+  });
+  const encoder = new TextEncoder();
+  let streamController: ReadableStreamDefaultController<Uint8Array> | undefined;
+  const streamRequest = vi.fn();
+  server.use(
+    http.get('/api/conversations', () => HttpResponse.json({ items: [], total: 0 })),
+    http.get('/api/ai/model-profiles', () => HttpResponse.json({ items: [], total: 0 })),
+    http.post('/api/ai/chat/prepare', () => HttpResponse.json({
+      session_uuid: 'session-web-stream',
+      user_message_uuid: 'user-message-web-stream',
+      assistant_message_uuid: 'assistant-message-web-stream',
+      completion_token: 'complete-web-stream',
+      completed: false,
+      answer: '',
+      messages: [
+        { role: 'system', content: '你是聚信 AI 助手' },
+        { role: 'user', content: '流式说两段' },
+      ],
+      citations: [],
+    }, { status: 201 })),
+    http.post('/api/ai/chat/messages/assistant-message-web-stream/generate/stream', async ({ request }) => {
+      streamRequest(await request.json());
+      const stream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          streamController = controller;
+          controller.enqueue(encoder.encode(`${JSON.stringify({ type: 'delta', delta: '第一段' })}\n`));
+        },
+      });
+      return new HttpResponse(stream, {
+        headers: { 'Content-Type': 'application/x-ndjson' },
+      });
+    }),
+  );
+
+  render(<ChatPage />);
+  await userEvent.type(await screen.findByLabelText('告诉我你想完成什么工作'), '流式说两段');
+  await userEvent.click(screen.getByRole('button', { name: '发送' }));
+
+  expect(await screen.findByText('第一段')).toBeInTheDocument();
+  expect(streamRequest).toHaveBeenCalledWith(expect.objectContaining({
+    completion_token: 'complete-web-stream',
+  }));
+  expect(screen.queryByText('第一段第二段')).not.toBeInTheDocument();
+
+  streamController?.enqueue(encoder.encode(`${JSON.stringify({ type: 'delta', delta: '第二段' })}\n`));
+  streamController?.enqueue(encoder.encode(`${JSON.stringify({
+    type: 'complete',
+    message_uuid: 'assistant-message-web-stream',
+    status: 'COMPLETED',
+    answer: '第一段第二段',
+    model_display_name: '服务端模型',
+    model_id: 'deepseek-chat',
+    usage: { total_tokens: 9 },
+    latency_ms: 18,
+  })}\n`));
+  streamController?.close();
+
+  expect(await screen.findByText('第一段第二段')).toBeInTheDocument();
+});
+
+it('shows the default personal model label in web runtime', async () => {
+  Object.defineProperty(window, '__TAURI_INTERNALS__', {
+    configurable: true,
+    value: undefined,
+  });
+  server.use(
+    http.get('/api/conversations', () => HttpResponse.json({ items: [], total: 0 })),
+    http.get('/api/ai/model-profiles', () => HttpResponse.json({
+      items: [{
+        uuid: 'web-profile-1',
+        display_name: '我的 DeepSeek',
+        base_url: 'https://api.deepseek.com',
+        model_id: 'deepseek-chat',
+        temperature: 0.3,
+        max_output_tokens: 8192,
+        timeout_seconds: 300,
+        is_default: true,
+        has_api_key: true,
+        status: 'ACTIVE',
+        created_at: '2026-07-07T10:00:00',
+        updated_at: '2026-07-07T10:00:00',
+      }],
+      total: 1,
+    })),
+  );
+
+  render(<ChatPage />);
+
+  expect(await screen.findByText('当前设置：我的 DeepSeek')).toBeInTheDocument();
+});
+
 it('keeps streamed draft visible and explains model timeouts during long document generation', async () => {
   server.use(
     http.get('/api/conversations', () => HttpResponse.json({ items: [], total: 0 })),
@@ -422,14 +591,19 @@ it('shows only cited files mentioned in the final answer', async () => {
   await userEvent.type(await screen.findByLabelText('告诉我你想完成什么工作'), '安全服务包含什么');
   await userEvent.click(screen.getByRole('button', { name: '发送' }));
 
-  expect(await screen.findByText('根据《安全白皮书》，安全服务包含应急响应和运维巡检。')).toBeInTheDocument();
-  const citationSummary = screen.getByText('引用文件 1 个');
+  expect(await screen.findByText(/安全服务包含应急响应和运维巡检/)).toBeInTheDocument();
+  const inlineSource = screen.getByLabelText('来源：安全白皮书.txt');
+  expect(inlineSource).toHaveClass('chat-inline-source');
+  expect(inlineSource).toHaveTextContent('公司知识库');
+  const citationSummary = screen.getByText('来源');
   const citationDetails = citationSummary.closest('details');
   expect(citationDetails).not.toHaveAttribute('open');
-  expect(screen.getByText('安全白皮书.txt')).not.toBeVisible();
+  expect(screen.queryByText('安全白皮书.txt')).not.toBeInTheDocument();
   await userEvent.click(citationSummary);
-  expect(screen.getByText('安全白皮书.txt')).toBeVisible();
-  expect(screen.queryByText('销售手册.txt')).not.toBeInTheDocument();
+  const citationList = screen.getByRole('list', { name: '引用来源' });
+  expect(within(citationList).getByRole('button', { name: '打开来源：安全白皮书.txt' })).toHaveTextContent('公司知识库');
+  expect(within(citationList).queryByText('安全白皮书.txt')).not.toBeInTheDocument();
+  expect(within(citationList).queryByRole('button', { name: '打开来源：销售手册.txt' })).not.toBeInTheDocument();
 });
 
 it('keeps citations when the answer omits a leading file sequence number', async () => {
@@ -483,10 +657,12 @@ it('keeps citations when the answer omits a leading file sequence number', async
   await userEvent.click(screen.getByRole('button', { name: '发送' }));
 
   expect(await screen.findByText(/当前资料能确认/)).toBeInTheDocument();
-  const citationSummary = screen.getByText('引用文件 1 个');
+  const citationSummary = screen.getByText('来源');
   await userEvent.click(citationSummary);
-  expect(screen.getByText('3-聚信等保合规云管平台-招标参数V1.1.docx')).toBeVisible();
-  expect(screen.queryByText('等保合规云平台 管理员手册v3.1.docx')).not.toBeInTheDocument();
+  const citationList = screen.getByRole('list', { name: '引用来源' });
+  expect(within(citationList).getByRole('button', { name: '打开来源：3-聚信等保合规云管平台-招标参数V1.1.docx' })).toHaveTextContent('当前附件');
+  expect(within(citationList).queryByText('3-聚信等保合规云管平台-招标参数V1.1.docx')).not.toBeInTheDocument();
+  expect(within(citationList).queryByRole('button', { name: '打开来源：等保合规云平台 管理员手册v3.1.docx' })).not.toBeInTheDocument();
 });
 
 it('does not show citations until the assistant answer is fully completed', async () => {
@@ -530,8 +706,11 @@ it('does not show citations until the assistant answer is fully completed', asyn
   await userEvent.type(await screen.findByLabelText('告诉我你想完成什么工作'), '安全服务包含什么');
   await userEvent.click(screen.getByRole('button', { name: '发送' }));
 
-  expect(await screen.findByText('根据《安全白皮书.txt》')).toBeInTheDocument();
-  expect(screen.queryByText('引用文件 1 个')).not.toBeInTheDocument();
+  expect(await screen.findByText('根据')).toBeInTheDocument();
+  const streamingInlineSource = screen.getByLabelText('来源：安全白皮书.txt');
+  expect(streamingInlineSource).toHaveClass('chat-inline-source');
+  expect(streamingInlineSource).toHaveTextContent('来源');
+  expect(screen.queryByRole('list', { name: '引用来源' })).not.toBeInTheDocument();
 
   resolveModel?.({
     output: '根据《安全白皮书.txt》，安全服务包含应急响应和运维巡检。',
@@ -539,7 +718,7 @@ it('does not show citations until the assistant answer is fully completed', asyn
     usage: { output_tokens: 8 },
   });
 
-  expect(await screen.findByText('引用文件 1 个')).toBeInTheDocument();
+  expect(await screen.findByLabelText('查看 1 个引用来源')).toBeInTheDocument();
 });
 
 it('captures a web URL and shows a confirmation card before saving', async () => {
@@ -1447,8 +1626,11 @@ it('loads messages when selecting a historical chat session', async () => {
   await userEvent.click(await screen.findByRole('button', { name: '会议纪要' }));
 
   expect(await screen.findByText('总结会议')).toBeInTheDocument();
-  expect(screen.getByText('根据《会议记录》，会议决定下周验收。')).toBeInTheDocument();
-  expect(within(screen.getByRole('list', { name: '引用文件' })).getByText('会议记录.txt')).toBeInTheDocument();
+  expect(screen.getByText(/会议决定下周验收/)).toBeInTheDocument();
+  const inlineSource = screen.getByLabelText('来源：会议记录.txt');
+  expect(inlineSource).toHaveClass('chat-inline-source');
+  expect(inlineSource).toHaveTextContent('知识来源');
+  expect(within(screen.getByRole('list', { name: '引用来源' })).getByRole('button', { name: '打开来源：会议记录.txt' })).toHaveTextContent('知识来源');
 });
 
 it('shows cited file names once without exposing chunk details', async () => {
@@ -1532,11 +1714,14 @@ it('shows cited file names once without exposing chunk details', async () => {
   render(<ChatPage />);
   await userEvent.click(await screen.findByRole('button', { name: '来源标签' }));
 
-  expect(await screen.findByText('引用文件 3 个')).toBeInTheDocument();
-  const citationList = screen.getByRole('list', { name: '引用文件' });
-  expect(within(citationList).getAllByText('聚信产品白皮书.pdf')).toHaveLength(1);
-  expect(within(citationList).getByText('我的会议记录.docx')).toBeInTheDocument();
-  expect(within(citationList).getByText('客户访谈记录.pdf')).toBeInTheDocument();
+  expect(await screen.findByText('来源')).toBeInTheDocument();
+  const citationList = screen.getByRole('list', { name: '引用来源' });
+  expect(within(citationList).getByRole('button', { name: '打开来源：聚信产品白皮书.pdf' })).toHaveTextContent('公司知识库');
+  expect(within(citationList).getByRole('button', { name: '打开来源：我的会议记录.docx' })).toHaveTextContent('我的资料');
+  expect(within(citationList).getByRole('button', { name: '打开来源：客户访谈记录.pdf' })).toHaveTextContent('当前附件');
+  expect(within(citationList).queryByText('聚信产品白皮书.pdf')).not.toBeInTheDocument();
+  expect(within(citationList).queryByText('我的会议记录.docx')).not.toBeInTheDocument();
+  expect(within(citationList).queryByText('客户访谈记录.pdf')).not.toBeInTheDocument();
   expect(within(citationList).getByText('产品参数 · 部署方式 · 第 12 页')).toBeInTheDocument();
   expect(within(citationList).getByText('会议纪要 · 会议讨论内容')).toBeInTheDocument();
   expect(within(citationList).getByText('访谈记录 · 客户诉求 · 第 3 页')).toBeInTheDocument();
@@ -1545,6 +1730,129 @@ it('shows cited file names once without exposing chunk details', async () => {
   expect(within(citationList).getByText('当前附件')).toBeInTheDocument();
   expect(within(citationList).queryByText(/未识别章节|正式知识来源/)).not.toBeInTheDocument();
   expect(within(citationList).queryByText(/secret-chunk/)).not.toBeInTheDocument();
+});
+
+it('renders cited files as compact source pills instead of long filenames', async () => {
+  const longFileName = '2026-07-等保合规云管平台-Web应用防火墙-API安全网关-客户演示与投标参数确认版-v8.12.31-final-final.docx';
+  server.use(
+    http.get('/api/conversations', () => HttpResponse.json({
+      items: [{
+        session_uuid: 'session-compact-sources',
+        title: '紧凑来源',
+        mode: 'knowledge',
+        status: 'active',
+        created_at: '2026-06-26T01:00:00Z',
+        updated_at: '2026-06-26T01:01:00Z',
+      }],
+      total: 1,
+    })),
+    http.get('/api/ai/chat/sessions/session-compact-sources', () => HttpResponse.json({
+      session_uuid: 'session-compact-sources',
+      title: '紧凑来源',
+      mode: 'knowledge',
+      status: 'active',
+      created_at: '2026-06-26T01:00:00Z',
+      updated_at: '2026-06-26T01:01:00Z',
+      messages: [{
+        message_uuid: 'm-assistant-compact-sources',
+        role: 'assistant',
+        content: `根据《${longFileName}》整理完成。`,
+        status: 'COMPLETED',
+        citations: [{
+          source_type: 'session_attachment',
+          file_uuid: 'long-session-file',
+          file_name: longFileName,
+          chunk_id: 'long-file-chunk',
+          page_number: 8,
+          page_or_sheet: '产品参数',
+          section_title: '安全能力',
+          chunk_type: 'text',
+          chunk_index: 0,
+          score: 8,
+        }],
+        created_at: '2026-06-26T01:00:01Z',
+      }],
+    })),
+  );
+
+  render(<ChatPage />);
+  await userEvent.click(await screen.findByRole('button', { name: '紧凑来源' }));
+
+  expect(await screen.findByText('来源')).toBeInTheDocument();
+  const inlineSources = document.querySelectorAll('.chat-inline-source');
+  expect(inlineSources).toHaveLength(1);
+  expect(inlineSources[0]).toHaveTextContent('当前附件');
+  expect(inlineSources[0]).toHaveAttribute('aria-label', `来源：${longFileName}`);
+  expect(inlineSources[0]).toHaveAttribute('title', longFileName);
+  expect(screen.queryAllByText((_content, element) => (
+    element?.textContent?.includes(longFileName) ?? false
+  ))).toHaveLength(0);
+  expect(screen.queryByText('引用文件 1 个')).not.toBeInTheDocument();
+  const citationDetails = screen.getByText('来源').closest('details');
+  expect(citationDetails).not.toHaveAttribute('open');
+  await userEvent.click(screen.getByText('来源'));
+  const citationList = screen.getByRole('list', { name: '引用来源' });
+  expect(within(citationList).queryByText(longFileName)).not.toBeInTheDocument();
+  expect(within(citationList).getByRole('button', { name: `打开来源：${longFileName}` })).toHaveTextContent('当前附件');
+  expect(within(citationList).getByText('产品参数 · 安全能力 · 第 8 页')).toBeInTheDocument();
+});
+
+it('renders markdown source attribution lines as source capsules without document names', async () => {
+  const sourceFileName = '等保合规云管平台 技术白皮书v3.1(1).docx';
+  server.use(
+    http.get('/api/conversations', () => HttpResponse.json({
+      items: [{
+        session_uuid: 'session-source-attribution-lines',
+        title: '来源行',
+        mode: 'knowledge',
+        status: 'active',
+        created_at: '2026-06-26T01:00:00Z',
+        updated_at: '2026-06-26T01:01:00Z',
+      }],
+      total: 1,
+    })),
+    http.get('/api/ai/chat/sessions/session-source-attribution-lines', () => HttpResponse.json({
+      session_uuid: 'session-source-attribution-lines',
+      title: '来源行',
+      mode: 'knowledge',
+      status: 'active',
+      created_at: '2026-06-26T01:00:00Z',
+      updated_at: '2026-06-26T01:01:00Z',
+      messages: [{
+        message_uuid: 'm-assistant-source-attribution-lines',
+        role: 'assistant',
+        content: [
+          '一、部署方式',
+          '平台通过在云平台上创建云服务器。',
+          '>',
+          `> —— 《${sourceFileName}》 “产品架构及部署 / 部署方式”`,
+          '二、部署速度',
+          '部署过程非常快。',
+          '>',
+          `> —— 《${sourceFileName}》 “产品架构及部署 / 部署方式”`,
+        ].join('\n'),
+        status: 'COMPLETED',
+        citations: [],
+        created_at: '2026-06-26T01:00:01Z',
+      }],
+    })),
+  );
+
+  render(<ChatPage />);
+  await userEvent.click(await screen.findByRole('button', { name: '来源行' }));
+
+  expect(await screen.findByText('一、部署方式')).toBeInTheDocument();
+  expect(screen.getByText('二、部署速度')).toBeInTheDocument();
+  const sourceAttributions = document.querySelectorAll('.chat-source-attribution');
+  expect(sourceAttributions).toHaveLength(2);
+  const sourcePills = document.querySelectorAll('.chat-source-attribution .chat-inline-source');
+  expect(sourcePills).toHaveLength(2);
+  expect(sourcePills[0]).toHaveTextContent('来源');
+  expect(sourcePills[0]).toHaveAttribute('aria-label', `来源：${sourceFileName}`);
+  expect(sourcePills[0]).toHaveAttribute('title', sourceFileName);
+  expect(screen.getAllByText('产品架构及部署 / 部署方式')).toHaveLength(2);
+  expect(screen.queryByText(sourceFileName)).not.toBeInTheDocument();
+  expect(screen.queryByText(/——/)).not.toBeInTheDocument();
 });
 
 it('opens a source preview focused on the cited chunk', async () => {

@@ -8,6 +8,10 @@ const { invokeMock } = vi.hoisted(() => ({ invokeMock: vi.fn() }));
 vi.mock('@tauri-apps/api/core', () => ({ invoke: invokeMock }));
 
 beforeEach(() => {
+  Object.defineProperty(window, '__TAURI_INTERNALS__', {
+    configurable: true,
+    value: {},
+  });
   invokeMock.mockReset();
   invokeMock.mockImplementation((command: string) => {
     if (command === 'model_profile_list') {

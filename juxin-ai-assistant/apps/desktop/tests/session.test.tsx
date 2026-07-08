@@ -72,6 +72,12 @@ describe('unified session shell', () => {
     );
   });
 
+  it('can build portal URLs for switching to another authorized system', () => {
+    expect(getAuthPortalUrl({ system: 'prompt-center' })).toBe(
+      'http://localhost:5180/portal?system=prompt-center',
+    );
+  });
+
   it('uses the native-verified portal for a dynamically configured desktop server', () => {
     window.__TAURI_INTERNALS__ = {
       invoke: vi.fn().mockResolvedValue(undefined),
@@ -137,6 +143,71 @@ describe('unified session shell', () => {
 
     expect(await screen.findByText('上午好，张磊')).toBeInTheDocument();
     expect(screen.queryByLabelText('密码')).not.toBeInTheDocument();
+  });
+
+  it('shows a web-only system switcher for authorized apps', async () => {
+    const user = userEvent.setup();
+    server.use(
+      http.get('/api/ai/session', () =>
+        HttpResponse.json({
+          user: { id: 'u-1', username: '张磊', role: 'employee' },
+          scope: { department: '技术部', managedDepartments: [] },
+          apps: ['ai-assistant', 'prompt-center', 'data-platform'],
+          local_binding_token: 'signed-binding-token',
+        }),
+      ),
+      http.get('/api/ai/home', () =>
+        HttpResponse.json({
+          favorites: [],
+          recent_tasks: [],
+          recent_generations: [],
+          safety_reminders: [],
+        }),
+      ),
+    );
+
+    render(<App />);
+    await user.click(await screen.findByRole('button', { name: '切换系统' }));
+
+    expect(screen.getByRole('menu', { name: '可访问系统' })).toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: '聚信 AI 助手（当前）' })).toHaveAttribute('aria-disabled', 'true');
+    expect(screen.getByRole('menuitem', { name: '提示词中心' })).toHaveAttribute(
+      'href',
+      'http://localhost:5180/portal?system=prompt-center',
+    );
+    expect(screen.getByRole('menuitem', { name: '数据平台' })).toHaveAttribute(
+      'href',
+      'http://localhost:5180/portal?system=data-platform',
+    );
+  });
+
+  it('does not show the system switcher in desktop runtime', async () => {
+    window.__TAURI_INTERNALS__ = {
+      invoke: vi.fn().mockResolvedValue(undefined),
+    };
+    server.use(
+      http.get('/api/ai/session', () =>
+        HttpResponse.json({
+          user: { id: 'u-1', username: '张磊', role: 'employee' },
+          scope: { department: '技术部', managedDepartments: [] },
+          apps: ['ai-assistant', 'prompt-center'],
+          local_binding_token: 'signed-binding-token',
+        }),
+      ),
+      http.get('/api/ai/home', () =>
+        HttpResponse.json({
+          favorites: [],
+          recent_tasks: [],
+          recent_generations: [],
+          safety_reminders: [],
+        }),
+      ),
+    );
+
+    render(<App />);
+
+    expect(await screen.findByText('上午好，张磊')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '切换系统' })).not.toBeInTheDocument();
   });
 
   it('removes SSO callback params from the web URL after the session is accepted', async () => {

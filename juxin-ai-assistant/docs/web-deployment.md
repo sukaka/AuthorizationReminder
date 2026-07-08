@@ -37,6 +37,11 @@ rsync -av --delete apps/desktop/dist/ /opt/juxin-ai-assistant/web/
 - `CORS_ORIGINS` 只能配置正式 Web 域名。
 - `AUTH_DEV_BYPASS=false`。
 - `PROMPT_CENTER_RUNTIME_TOKEN`、`CONTENT_ENCRYPTION_KEY`、`AUDIT_HASH_SALT`、`AI_LOCAL_BINDING_SECRET` 必须通过环境变量配置。
+- Web 版大模型由服务端统一配置，不在浏览器保存 API Key：
+  - `SERVER_MODEL_BASE_URL`
+  - `SERVER_MODEL_API_KEY`
+  - `SERVER_MODEL_ID`
+  - `SERVER_MODEL_DISPLAY_NAME`
 - 不允许把真实密钥写入 `.env.example`、文档、日志或前端构建产物。
 - 生产环境不要启用开发代理，不要暴露本地 Vite 服务端口。
 - 日志中不要输出完整 API Key、Cookie、Bearer Token 或本地绑定令牌。

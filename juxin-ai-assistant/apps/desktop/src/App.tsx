@@ -52,6 +52,19 @@ type ViewState =
   | { kind: 'forbidden' }
   | { kind: 'error' };
 
+const currentSystemKey = 'ai-assistant';
+const systemLabels: Record<string, string> = {
+  'ai-assistant': '聚信 AI 助手',
+  'prompt-center': '提示词中心',
+  'data-platform': '数据平台',
+  'learning-center': '学习中心',
+  'admin-center': '管理后台',
+};
+
+function systemLabel(systemKey: string): string {
+  return systemLabels[systemKey] || systemKey;
+}
+
 function Workspace({ session }: { session: SessionPayload }) {
   const capabilities = getRuntimeCapabilities();
   const [page, setPage] = useState<WorkspacePage>('home');
@@ -59,8 +72,10 @@ function Workspace({ session }: { session: SessionPayload }) {
   const [taskError, setTaskError] = useState('');
   const [sidebarMode, setSidebarMode] = useState<SidebarMode>('expanded');
   const [sidebarTouched, setSidebarTouched] = useState(false);
+  const [systemMenuOpen, setSystemMenuOpen] = useState(false);
   const role = session.user.role.trim().toLowerCase();
   const isAdmin = role === 'admin';
+  const isWebRuntime = !window.__TAURI_INTERNALS__;
   const immersive = sidebarMode === 'immersive';
   const pageTitle = page === 'home'
     ? '工作台'
@@ -111,12 +126,6 @@ function Workspace({ session }: { session: SessionPayload }) {
     }
   }, [isAdmin, page]);
 
-  useEffect(() => {
-    if (!capabilities.canUseLocalKeychain && page === 'models') {
-      setPage('home');
-    }
-  }, [capabilities.canUseLocalKeychain, page]);
-
   const openTask = (nextTask: TaskPayload) => {
     setTask(nextTask);
     setTaskError('');
@@ -152,6 +161,11 @@ function Workspace({ session }: { session: SessionPayload }) {
     window.location.assign(authLogoutUrl);
   };
 
+  const availableSystems = Array.from(new Set([
+    currentSystemKey,
+    ...session.apps.map((app) => app.trim()).filter(Boolean),
+  ]));
+
   return (
     <div className={`app-frame sidebar-${sidebarMode}`}>
       <aside className="sidebar">
@@ -166,9 +180,7 @@ function Workspace({ session }: { session: SessionPayload }) {
           <button aria-current={page === 'skills' ? 'page' : undefined} className={page === 'skills' ? 'is-current' : ''} onClick={() => setPage('skills')} type="button"><span className="nav-icon" aria-hidden="true">◈</span><span className="nav-label">能力中心</span></button>
           <button aria-current={page === 'knowledge' ? 'page' : undefined} className={page === 'knowledge' ? 'is-current' : ''} onClick={() => setPage('knowledge')} type="button"><span className="nav-icon" aria-hidden="true">⌘</span><span className="nav-label">我的资料</span></button>
           <button aria-current={page === 'learning' ? 'page' : undefined} className={page === 'learning' ? 'is-current' : ''} onClick={() => setPage('learning')} type="button"><span className="nav-icon" aria-hidden="true">✧</span><span className="nav-label">学习中心</span></button>
-          {capabilities.canUseLocalKeychain ? (
-            <button aria-current={page === 'models' ? 'page' : undefined} className={page === 'models' ? 'is-current' : ''} onClick={() => setPage('models')} type="button"><span className="nav-icon" aria-hidden="true">◇</span><span className="nav-label">设置</span></button>
-          ) : null}
+          <button aria-current={page === 'models' ? 'page' : undefined} className={page === 'models' ? 'is-current' : ''} onClick={() => setPage('models')} type="button"><span className="nav-icon" aria-hidden="true">◇</span><span className="nav-label">设置</span></button>
           {isAdmin ? (
             <>
               <button aria-current={page === 'department-stats' ? 'page' : undefined} className={page === 'department-stats' ? 'is-current' : ''} onClick={() => setPage('department-stats')} type="button"><span className="nav-icon" aria-hidden="true">▦</span><span className="nav-label">部门数据</span></button>
@@ -184,6 +196,39 @@ function Workspace({ session }: { session: SessionPayload }) {
             <strong>{session.user.username}</strong>
             <small>{session.scope.department || '聚信员工'}</small>
           </div>
+          {isWebRuntime ? (
+            <div className="system-switcher">
+              <button
+                aria-expanded={systemMenuOpen}
+                aria-haspopup="menu"
+                aria-label="切换系统"
+                className="system-switch-button"
+                onClick={() => setSystemMenuOpen((open) => !open)}
+                type="button"
+              >
+                切换
+              </button>
+              {systemMenuOpen ? (
+                <div aria-label="可访问系统" className="system-switch-menu" role="menu">
+                  {availableSystems.length ? availableSystems.map((systemKey) => {
+                    const current = systemKey === currentSystemKey;
+                    const label = `${systemLabel(systemKey)}${current ? '（当前）' : ''}`;
+                    return current ? (
+                      <span aria-disabled="true" className="is-current" key={systemKey} role="menuitem">
+                        {label}
+                      </span>
+                    ) : (
+                      <a href={getAuthPortalUrl({ system: systemKey })} key={systemKey} role="menuitem">
+                        {label}
+                      </a>
+                    );
+                  }) : (
+                    <span aria-disabled="true" role="menuitem">暂无其他可访问系统</span>
+                  )}
+                </div>
+              ) : null}
+            </div>
+          ) : null}
           <button aria-label="退出登录" className="logout-button" onClick={() => void logout()} type="button">退出</button>
         </div>
       </aside>
@@ -212,7 +257,7 @@ function Workspace({ session }: { session: SessionPayload }) {
           </div>
         </header>
         <div className="workspace">
-        {page === 'models' && capabilities.canUseLocalKeychain ? (
+        {page === 'models' ? (
           <ModelProfilesPage />
         ) : page === 'governance' && isAdmin ? (
           <GovernanceCenter session={session} />

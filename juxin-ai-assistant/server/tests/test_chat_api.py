@@ -1,12 +1,17 @@
 import os
+import json
 from io import BytesIO
 from datetime import UTC, datetime
 
+import httpx
+import respx
 from docx import Document
 from sqlalchemy import select
 
+from app.config import get_settings
 from app.knowledge_files import create_knowledge_file_from_bytes
-from app.models import WebSearchLog
+from app.main import app
+from app.models import UserModelProfile, WebSearchLog
 from app.web_sources import WebSearchResult
 
 
@@ -61,6 +66,214 @@ def test_normal_chat_prepare_complete_and_detail(client_for_user) -> None:
     assert [message["role"] for message in messages] == ["user", "assistant"]
     assert messages[0]["content"] == "帮我总结今天工作"
     assert messages[1]["content"] == "今天完成了需求整理。"
+
+
+def test_server_model_generates_and_completes_chat_message(client_for_user) -> None:
+    settings = get_settings().model_copy(update={
+        "server_model_base_url": "https://model.example/v1",
+        "server_model_api_key": "sk-test-server-model",
+        "server_model_id": "deepseek-chat",
+        "server_model_display_name": "DeepSeek 服务端模型",
+    })
+    app.dependency_overrides[get_settings] = lambda: settings
+    client = client_for_user("user-web-model")
+    try:
+        prepared = client.post(
+            "/api/ai/chat/prepare",
+            json={"question": "帮我总结今天工作", "mode": "normal"},
+        )
+        assert prepared.status_code == 201
+        body = prepared.json()
+        with respx.mock(assert_all_called=True) as router:
+            request_call = router.post("https://model.example/v1/chat/completions").mock(
+                return_value=httpx.Response(
+                    200,
+                    json={
+                        "choices": [{
+                            "message": {"content": "今天完成了 Web 端模型生成。"},
+                            "finish_reason": "stop",
+                        }],
+                        "usage": {"total_tokens": 18},
+                    },
+                )
+            )
+            generated = client.post(
+                f"/api/ai/chat/messages/{body['assistant_message_uuid']}/generate",
+                json={
+                    "completion_token": body["completion_token"],
+                    "messages": body["messages"],
+                    "temperature": 0.3,
+                },
+        )
+        assert generated.status_code == 200
+        assert generated.json()["answer"] == "今天完成了 Web 端模型生成。"
+        assert generated.json()["model_display_name"] == "DeepSeek 服务端模型"
+        outbound = request_call.calls[0].request
+        assert outbound.headers["Authorization"] == "Bearer sk-test-server-model"
+        assert json.loads(outbound.content)["model"] == "deepseek-chat"
+
+        detail = client.get(f"/api/ai/chat/sessions/{body['session_uuid']}")
+        assert detail.status_code == 200
+        messages = detail.json()["messages"]
+        assert messages[-1]["content"] == "今天完成了 Web 端模型生成。"
+    finally:
+        app.dependency_overrides.pop(get_settings, None)
+
+
+def test_chat_generate_prefers_user_default_model_profile(
+    client_for_user,
+    generation_db,
+) -> None:
+    from app.crypto import ContentCipher
+
+    settings = get_settings().model_copy(update={
+        "server_model_base_url": "https://fallback.example/v1",
+        "server_model_api_key": "sk-fallback-server-model",
+        "server_model_id": "fallback-chat",
+        "server_model_display_name": "服务端统一模型",
+    })
+    app.dependency_overrides[get_settings] = lambda: settings
+    client = client_for_user("user-personal-model")
+    try:
+        cipher = ContentCipher(settings.content_encryption_key)
+        record_uuid = "11111111-1111-1111-1111-111111111111"
+        encrypted = cipher.encrypt_json(
+            {"api_key": "sk-personal-model"},
+            record_uuid.encode(),
+        )
+        generation_db.add(UserModelProfile(
+            uuid=record_uuid,
+            sso_user_id="user-personal-model",
+            display_name="我的模型",
+            base_url="https://personal.example/v1",
+            model_id="personal-chat",
+            temperature=0.4,
+            max_output_tokens=2048,
+            timeout_seconds=60,
+            is_default=True,
+            api_key_ciphertext=encrypted.ciphertext,
+            api_key_nonce=encrypted.nonce,
+            key_version=settings.content_encryption_key_version,
+            status="ACTIVE",
+        ))
+        generation_db.commit()
+
+        prepared = client.post(
+            "/api/ai/chat/prepare",
+            json={"question": "用我的模型生成", "mode": "normal"},
+        )
+        assert prepared.status_code == 201
+        body = prepared.json()
+        with respx.mock(assert_all_called=True) as router:
+            personal_call = router.post("https://personal.example/v1/chat/completions").mock(
+                return_value=httpx.Response(
+                    200,
+                    json={
+                        "choices": [{"message": {"content": "个人模型回答"}}],
+                        "usage": {"total_tokens": 9},
+                    },
+                )
+            )
+            generated = client.post(
+                f"/api/ai/chat/messages/{body['assistant_message_uuid']}/generate",
+                json={
+                    "completion_token": body["completion_token"],
+                    "messages": body["messages"],
+                    "temperature": 0.3,
+                },
+            )
+
+        assert generated.status_code == 200
+        assert generated.json()["answer"] == "个人模型回答"
+        assert generated.json()["model_display_name"] == "我的模型"
+        assert generated.json()["model_id"] == "personal-chat"
+        outbound = personal_call.calls[0].request
+        assert outbound.headers["Authorization"] == "Bearer sk-personal-model"
+        assert json.loads(outbound.content)["model"] == "personal-chat"
+    finally:
+        app.dependency_overrides.pop(get_settings, None)
+
+
+def test_server_model_streams_and_completes_chat_message(client_for_user) -> None:
+    settings = get_settings().model_copy(update={
+        "server_model_base_url": "https://model.example/v1",
+        "server_model_api_key": "sk-test-server-model",
+        "server_model_id": "deepseek-chat",
+        "server_model_display_name": "DeepSeek 服务端模型",
+    })
+    app.dependency_overrides[get_settings] = lambda: settings
+    client = client_for_user("user-web-model-stream")
+    try:
+        prepared = client.post(
+            "/api/ai/chat/prepare",
+            json={"question": "流式生成", "mode": "normal"},
+        )
+        assert prepared.status_code == 201
+        body = prepared.json()
+        stream_body = (
+            b'data: {"choices":[{"delta":{"content":"\xe7\xac\xac\xe4\xb8\x80\xe6\xae\xb5"}}]}\n\n'
+            b'data: {"choices":[{"delta":{"content":"\xe7\xac\xac\xe4\xba\x8c\xe6\xae\xb5"}}]}\n\n'
+            b"data: [DONE]\n\n"
+        )
+        with respx.mock(assert_all_called=False) as router:
+            request_call = router.post("https://model.example/v1/chat/completions").mock(
+                return_value=httpx.Response(200, content=stream_body)
+            )
+            with client.stream(
+                "POST",
+                f"/api/ai/chat/messages/{body['assistant_message_uuid']}/generate/stream",
+                json={
+                    "completion_token": body["completion_token"],
+                    "messages": body["messages"],
+                    "temperature": 0.3,
+                },
+            ) as streamed:
+                assert streamed.status_code == 200
+                assert streamed.headers["content-type"].startswith("application/x-ndjson")
+                chunks = "".join(streamed.iter_text())
+
+        assert request_call.called
+        outbound = request_call.calls[0].request
+        outbound_json = json.loads(outbound.content)
+        assert outbound.headers["Authorization"] == "Bearer sk-test-server-model"
+        assert outbound_json["model"] == "deepseek-chat"
+        assert outbound_json["stream"] is True
+        events = [json.loads(line) for line in chunks.splitlines() if line]
+        assert events[0] == {"type": "delta", "delta": "第一段"}
+        assert events[1] == {"type": "delta", "delta": "第二段"}
+        assert events[-1]["type"] == "complete"
+        assert events[-1]["answer"] == "第一段第二段"
+
+        detail = client.get(f"/api/ai/chat/sessions/{body['session_uuid']}")
+        assert detail.status_code == 200
+        assert detail.json()["messages"][-1]["content"] == "第一段第二段"
+    finally:
+        app.dependency_overrides.pop(get_settings, None)
+
+
+def test_server_model_status_does_not_expose_api_key(client_for_user) -> None:
+    settings = get_settings().model_copy(update={
+        "server_model_base_url": "https://model.example/v1",
+        "server_model_api_key": "sk-test-server-model",
+        "server_model_id": "deepseek-chat",
+        "server_model_display_name": "DeepSeek 服务端模型",
+    })
+    app.dependency_overrides[get_settings] = lambda: settings
+    client = client_for_user("user-web-model-status")
+    try:
+        response = client.get("/api/ai/chat/model/status")
+    finally:
+        app.dependency_overrides.pop(get_settings, None)
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload == {
+        "configured": True,
+        "model_display_name": "DeepSeek 服务端模型",
+        "model_id": "deepseek-chat",
+        "message": "服务端模型已配置",
+    }
+    assert "sk-test-server-model" not in response.text
 
 
 def test_chat_complete_records_verifier_result_in_task_state(

@@ -698,6 +698,88 @@ class ChatCompleteIn(BaseModel):
     latency_ms: int | None = Field(default=None, ge=0)
 
 
+class ChatGenerateIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    completion_token: str = Field(min_length=1, max_length=256)
+    messages: list[MessageOut] = Field(min_length=1, max_length=64)
+    temperature: float = Field(default=0.3, ge=0, le=2)
+
+
+class ChatGenerateOut(BaseModel):
+    message_uuid: str
+    status: str
+    answer: str
+    model_display_name: str
+    model_id: str
+    usage: dict = Field(default_factory=dict)
+    latency_ms: int | None = Field(default=None, ge=0)
+
+
+class ServerModelStatusOut(BaseModel):
+    configured: bool
+    model_display_name: str = ""
+    model_id: str = ""
+    message: str = ""
+
+
+class UserModelProfileUpsertIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    display_name: str = Field(min_length=1, max_length=128)
+    base_url: str = Field(min_length=1, max_length=512)
+    model_id: str = Field(min_length=1, max_length=128)
+    api_key: str | None = Field(default=None, max_length=4096)
+    temperature: float = Field(default=0.3, ge=0, le=2)
+    max_output_tokens: int = Field(default=8192, ge=1, le=200000)
+    timeout_seconds: int = Field(default=300, ge=5, le=600)
+    is_default: bool = False
+
+    @field_validator("base_url")
+    @classmethod
+    def validate_base_url(cls, value: str) -> str:
+        normalized = value.strip().rstrip("/")
+        if not normalized.startswith(("https://", "http://")):
+            raise ValueError("模型服务地址必须以 http:// 或 https:// 开头")
+        return normalized
+
+    @field_validator("display_name", "model_id")
+    @classmethod
+    def strip_required_text(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("不能为空")
+        return normalized
+
+    @field_validator("api_key")
+    @classmethod
+    def strip_api_key(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        return normalized or None
+
+
+class UserModelProfileOut(BaseModel):
+    uuid: str
+    display_name: str
+    base_url: str
+    model_id: str
+    temperature: float
+    max_output_tokens: int
+    timeout_seconds: int
+    is_default: bool
+    has_api_key: bool
+    status: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class UserModelProfileListOut(BaseModel):
+    items: list[UserModelProfileOut]
+    total: int
+
+
 class ChatFailIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

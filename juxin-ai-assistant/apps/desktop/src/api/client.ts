@@ -299,9 +299,13 @@ async function readJson<T>(response: Response, code: string): Promise<T> {
 
 type AuthPortalUrlOptions = {
   logout?: boolean;
+  system?: string;
 };
 
 function formatAuthPortalUrl(url: URL, options: AuthPortalUrlOptions): string {
+  if (options.system) {
+    url.searchParams.set('system', options.system);
+  }
   if (options.logout) {
     url.searchParams.set('logout', '1');
   }
@@ -336,7 +340,7 @@ export function getAuthPortalUrl(options: AuthPortalUrlOptions = {}): string {
   }
   const authUrl = import.meta.env.VITE_AUTH_PUBLIC_URL || 'http://localhost:5180';
   const portal = new URL(`${authUrl.replace(/\/$/, '')}/portal`);
-  portal.searchParams.set('system', 'ai-assistant');
+  portal.searchParams.set('system', options.system || 'ai-assistant');
   return formatAuthPortalUrl(portal, options);
 }
 

@@ -15,11 +15,13 @@ import {
   listKnowledgeFiles,
   listKnowledgeCategories,
   listKnowledgeDocumentTypes,
+  listUserModelProfiles,
   prepareChat,
   previewWebCapture,
   previewKnowledgeFile,
   renameChatSession,
   restoreChatSession,
+  streamChatMessage,
   type ChatCitation,
   type ChatExportType,
   type ChatMode,
@@ -48,6 +50,7 @@ import {
 } from '../api/client';
 import { TaskProgressTimeline } from '../components/TaskProgressTimeline';
 import { generateLocalModel, listModelProfiles } from '../local/modelStream';
+import { isDesktopRuntime } from '../runtime/capabilities';
 import { openLocalWordFile } from '../runtime/downloads';
 import type { ModelProfile } from '../types/tauri';
 
@@ -288,6 +291,13 @@ type CitationFileReference = {
   sourceClassName: string;
 };
 
+type RenderableSourceReference = Pick<CitationFileReference, 'label' | 'locations' | 'sourceLabel' | 'sourceClassName'>;
+
+type SourceAttributionLine = {
+  fileName: string;
+  location: string;
+};
+
 function citationFileName(citation: ChatCitation): string {
   return citation.file_name?.trim() || '知识来源';
 }
@@ -383,6 +393,12 @@ function stripKnownFileExtension(value: string): string {
   return extension ? value.slice(0, -extension.length) : value;
 }
 
+function hasKnownFileExtension(value: string): boolean {
+  const normalized = value.trim().toLowerCase();
+  return ['.docx', '.xlsx', '.pptx', '.pdf', '.txt', '.md', '.doc', '.xls', '.ppt']
+    .some((extension) => normalized.endsWith(extension));
+}
+
 function citationMatchCandidates(value?: string | null): string[] {
   const normalized = normalizeCitationMatchText(value);
   if (!normalized) return [];
@@ -409,6 +425,110 @@ function filterCitationsByAnswer(citations: ChatCitation[], answer: string): Cha
     if (citation.source_type === 'web_search_context') return true;
     return citationMatchCandidates(citation.file_name).some((candidate) => normalizedAnswer.includes(candidate));
   });
+}
+
+function inlineCitationReference(
+  label: string,
+  citationReferences: CitationFileReference[],
+): CitationFileReference | null {
+  const labelCandidates = citationMatchCandidates(label);
+  if (!labelCandidates.length) return null;
+  return citationReferences.find((reference) => {
+    const referenceCandidates = citationMatchCandidates(reference.label);
+    return referenceCandidates.some((referenceCandidate) => (
+      labelCandidates.some((labelCandidate) => (
+        labelCandidate === referenceCandidate
+        || labelCandidate.includes(referenceCandidate)
+        || referenceCandidate.includes(labelCandidate)
+      ))
+    ));
+  }) || null;
+}
+
+function fallbackSourceReference(label: string, location = ''): RenderableSourceReference | null {
+  if (!hasKnownFileExtension(label)) return null;
+  return {
+    label,
+    locations: location ? [location] : [],
+    sourceLabel: '来源',
+    sourceClassName: 'generic',
+  };
+}
+
+function parseSourceAttributionLine(line: string): SourceAttributionLine | null {
+  const withoutQuoteMarker = line.trim().replace(/^>\s*/, '').trim();
+  const match = /^[—\-–－]+\s*《([^《》]+)》\s*(?:[“"]([^”"]+)[”"])?\s*$/.exec(withoutQuoteMarker);
+  if (!match) return null;
+  return {
+    fileName: match[1].trim(),
+    location: match[2]?.trim() || '',
+  };
+}
+
+function renderInlineSourceReference(reference: RenderableSourceReference, key: string): ReactNode {
+  return (
+    <span
+      aria-label={`来源：${reference.label}`}
+      className="chat-inline-source"
+      key={key}
+      title={reference.label}
+    >
+      <span className={`chat-citation-source ${reference.sourceClassName}`} aria-hidden="true">
+        {reference.sourceLabel.slice(0, 1)}
+      </span>
+      <span>{reference.sourceLabel}</span>
+      {reference.locations.length > 1 ? (
+        <span className="chat-citation-count">+{reference.locations.length}</span>
+      ) : null}
+    </span>
+  );
+}
+
+function renderSourceAttributionLine(
+  attribution: SourceAttributionLine,
+  citationReferences: CitationFileReference[],
+  key: string,
+): ReactNode {
+  const reference = inlineCitationReference(attribution.fileName, citationReferences)
+    || fallbackSourceReference(attribution.fileName, attribution.location);
+  if (!reference) {
+    return <p key={key}>{renderInlineMarkdown(`—— 《${attribution.fileName}》 ${attribution.location}`, citationReferences, key)}</p>;
+  }
+  return (
+    <p className="chat-source-attribution" key={key}>
+      {renderInlineSourceReference(reference, `${key}-source`)}
+      {attribution.location ? (
+        <span className="chat-source-attribution-location">{attribution.location}</span>
+      ) : null}
+    </p>
+  );
+}
+
+function renderInlineSourceReferences(
+  text: string,
+  citationReferences: CitationFileReference[],
+  keyPrefix: string,
+): ReactNode[] {
+  const nodes: ReactNode[] = [];
+  const pattern = /《([^《》]+)》/g;
+  let lastIndex = 0;
+  let match = pattern.exec(text);
+  while (match) {
+    if (match.index > lastIndex) {
+      nodes.push(text.slice(lastIndex, match.index));
+    }
+    const reference = inlineCitationReference(match[1], citationReferences)
+      || fallbackSourceReference(match[1]);
+    nodes.push(reference
+      ? renderInlineSourceReference(reference, `${keyPrefix}-source-${match.index}`)
+      : match[0]);
+    lastIndex = match.index + match[0].length;
+    match = pattern.exec(text);
+  }
+  if (lastIndex < text.length) {
+    nodes.push(text.slice(lastIndex));
+  }
+  return nodes.length ? nodes : [text];
 }
 
 function chunkReferenceTitle(chunk: KnowledgeFilePreviewPayload['chunks'][number]): string {
@@ -499,26 +619,45 @@ function disableReferenceKind(
       : scope;
 }
 
-function renderInlineMarkdown(text: string): ReactNode[] {
+function renderInlineMarkdown(
+  text: string,
+  citationReferences: CitationFileReference[] = [],
+  keyPrefix = 'inline',
+): ReactNode[] {
   const nodes: ReactNode[] = [];
   const pattern = /\*\*([^*]+)\*\*/g;
   let lastIndex = 0;
   let match = pattern.exec(text);
   while (match) {
     if (match.index > lastIndex) {
-      nodes.push(text.slice(lastIndex, match.index));
+      nodes.push(...renderInlineSourceReferences(
+        text.slice(lastIndex, match.index),
+        citationReferences,
+        `${keyPrefix}-text-${lastIndex}`,
+      ));
     }
-    nodes.push(<strong key={`bold-${match.index}`}>{match[1]}</strong>);
+    nodes.push(
+      <strong key={`${keyPrefix}-bold-${match.index}`}>
+        {renderInlineSourceReferences(match[1], citationReferences, `${keyPrefix}-bold-${match.index}`)}
+      </strong>,
+    );
     lastIndex = match.index + match[0].length;
     match = pattern.exec(text);
   }
   if (lastIndex < text.length) {
-    nodes.push(text.slice(lastIndex));
+    nodes.push(...renderInlineSourceReferences(
+      text.slice(lastIndex),
+      citationReferences,
+      `${keyPrefix}-text-${lastIndex}`,
+    ));
   }
   return nodes.length ? nodes : [text];
 }
 
-function renderChatContent(content: string): ReactNode[] {
+function renderChatContent(
+  content: string,
+  citationReferences: CitationFileReference[] = [],
+): ReactNode[] {
   const blocks: ReactNode[] = [];
   let listType: 'ul' | 'ol' | null = null;
   let listItems: string[] = [];
@@ -526,7 +665,9 @@ function renderChatContent(content: string): ReactNode[] {
   const flushList = () => {
     if (!listType || !listItems.length) return;
     const renderedItems = listItems.map((item, itemIndex) => (
-      <li key={`${listType}-${blocks.length}-${itemIndex}`}>{renderInlineMarkdown(item)}</li>
+      <li key={`${listType}-${blocks.length}-${itemIndex}`}>
+        {renderInlineMarkdown(item, citationReferences, `${listType}-${blocks.length}-${itemIndex}`)}
+      </li>
     ));
     blocks.push(listType === 'ol'
       ? <ol key={`ol-${blocks.length}`}>{renderedItems}</ol>
@@ -537,15 +678,26 @@ function renderChatContent(content: string): ReactNode[] {
 
   content.split(/\r?\n/).forEach((line) => {
     const trimmed = line.trim();
-    if (!trimmed) {
+    if (!trimmed || trimmed === '>') {
       flushList();
+      return;
+    }
+
+    const sourceAttribution = parseSourceAttributionLine(trimmed);
+    if (sourceAttribution) {
+      flushList();
+      blocks.push(renderSourceAttributionLine(
+        sourceAttribution,
+        citationReferences,
+        `source-attribution-${blocks.length}`,
+      ));
       return;
     }
 
     const heading = /^(#{1,6})\s+(.+)$/.exec(trimmed);
     if (heading) {
       flushList();
-      const headingContent = renderInlineMarkdown(heading[2]);
+      const headingContent = renderInlineMarkdown(heading[2], citationReferences, `h-${blocks.length}`);
       if (heading[1].length === 1) blocks.push(<h1 key={`h1-${blocks.length}`}>{headingContent}</h1>);
       else if (heading[1].length === 2) blocks.push(<h2 key={`h2-${blocks.length}`}>{headingContent}</h2>);
       else blocks.push(<h3 key={`h3-${blocks.length}`}>{headingContent}</h3>);
@@ -569,7 +721,11 @@ function renderChatContent(content: string): ReactNode[] {
     }
 
     flushList();
-    blocks.push(<p key={`p-${blocks.length}`}>{renderInlineMarkdown(trimmed)}</p>);
+    blocks.push(
+      <p key={`p-${blocks.length}`}>
+        {renderInlineMarkdown(trimmed, citationReferences, `p-${blocks.length}`)}
+      </p>,
+    );
   });
 
   flushList();
@@ -608,6 +764,7 @@ export function ChatPage() {
   const [webCapture, setWebCapture] = useState<WebCaptureState>({ status: 'idle' });
   const [memorySuggestion, setMemorySuggestion] = useState<MemorySuggestion | null>(null);
   const [taskProgress, setTaskProgress] = useState<TaskProgressView | null>(null);
+  const [webModelLabel, setWebModelLabel] = useState('服务端模型');
   const messageListRef = useRef<HTMLDivElement | null>(null);
   const shouldStickToBottomRef = useRef(true);
 
@@ -618,14 +775,26 @@ export function ChatPage() {
     setSelectedSessionIds((current) => current.filter((id) => visibleIds.has(id)));
   };
 
+  const shouldUseServerModel = !isDesktopRuntime();
+
   useEffect(() => {
     setSelectedSessionIds([]);
     refreshSessions(sessionListKind)
       .catch(() => setStatus('聊天历史加载失败'));
-    listModelProfiles()
-      .then((payload) => setProfiles(Array.isArray(payload) ? payload : []))
-      .catch(() => setProfiles([]));
-  }, [sessionListKind]);
+    if (shouldUseServerModel) {
+      listUserModelProfiles()
+        .then((payload) => {
+          const activeWebProfile = payload.items.find((profile) => profile.is_default && profile.has_api_key)
+            ?? payload.items.find((profile) => profile.has_api_key);
+          setWebModelLabel(activeWebProfile?.display_name || '服务端模型');
+        })
+        .catch(() => setWebModelLabel('服务端模型'));
+    } else {
+      listModelProfiles()
+        .then((payload) => setProfiles(Array.isArray(payload) ? payload : []))
+        .catch(() => setProfiles([]));
+    }
+  }, [sessionListKind, shouldUseServerModel]);
 
   useEffect(() => {
     let active = true;
@@ -669,6 +838,7 @@ export function ChatPage() {
       ?? profiles.find((profile) => profile.hasApiKey),
     [profiles],
   );
+  const currentModelLabel = shouldUseServerModel ? webModelLabel : (activeProfile?.displayName || '未配置');
   const sessionAttachmentFiles = useMemo(
     () => enabledReferenceFiles.filter((file) => file.sourceKind === 'session_attachment'),
     [enabledReferenceFiles],
@@ -983,7 +1153,7 @@ export function ChatPage() {
       await previewUrlCapture(trimmed, firstUrl);
       return;
     }
-    if (!activeProfile && mode !== 'knowledge') {
+    if (!shouldUseServerModel && !activeProfile && mode !== 'knowledge') {
       setStatus('请先完成模型设置');
       return;
     }
@@ -1014,7 +1184,7 @@ export function ChatPage() {
         prepared.task_state,
         prepared.completed ? 'completed' : 'generating',
         prepared.completed ? '生成完成' : '正在生成回答',
-        prepared.completed ? '生成已完成' : '正在调用本地模型生成回答',
+        prepared.completed ? '生成已完成' : '正在调用模型生成回答',
       ) : null);
       setActiveSessionUuid(prepared.session_uuid);
       setActiveSessionStatus('active');
@@ -1029,7 +1199,7 @@ export function ChatPage() {
         setStatus('');
         return;
       }
-      if (!activeProfile) {
+      if (!shouldUseServerModel && !activeProfile) {
         setStatus('请先完成模型设置');
         return;
       }
@@ -1041,6 +1211,39 @@ export function ChatPage() {
         citations: [],
         isComplete: false,
       }));
+      if (shouldUseServerModel) {
+        const generated = await streamChatMessage(assistantId, {
+          completionToken: prepared.completion_token,
+          messages: prepared.messages,
+          temperature: activeProfile?.temperature ?? 0.3,
+        }, (delta) => {
+          setMessages((current) => current.map((message) =>
+            message.id === assistantId
+              ? { ...message, content: message.content + delta }
+              : message,
+          ));
+        });
+        setTaskProgress((current) => current
+          ? taskProgressWithStage(current, 'completed', '生成完成', '可以复制、保存、导出或继续追问')
+          : current);
+        setMessages((current) => current.map((message) =>
+          message.id === assistantId
+            ? {
+                ...message,
+                content: generated.answer,
+                citations: filterCitationsByAnswer(prepared.citations, generated.answer),
+                isComplete: true,
+              }
+            : message,
+        ));
+        refreshSessions(sessionListKind).catch(() => undefined);
+        setStatus('');
+        return;
+      }
+      if (!activeProfile) {
+        setStatus('请先完成模型设置');
+        return;
+      }
       let result: GeneratedModelResult = await generateLocalModel({
         profileId: activeProfile.id,
         messages: prepared.messages,
@@ -1868,31 +2071,48 @@ export function ChatPage() {
                       <strong>{message.role === 'user' ? '我' : '聚信 AI 助手'}</strong>
                       <div className="chat-message-content">
                         {message.role === 'assistant'
-                          ? renderChatContent(message.content)
+                          ? renderChatContent(message.content, citationReferences)
                           : <p>{message.content || '正在生成…'}</p>}
                       </div>
                       {citationReferences.length ? (
                         <details className="chat-citations">
-                          <summary>引用文件 {citationReferences.length} 个</summary>
-                          <ul aria-label="引用文件">
+                          <summary aria-label={`查看 ${citationReferences.length} 个引用来源`}>
+                            <span className="chat-source-summary-icon" aria-hidden="true">↗</span>
+                            <span>来源</span>
+                            <span className="chat-source-summary-count">{citationReferences.length}</span>
+                          </summary>
+                          <ul aria-label="引用来源">
                             {citationReferences.map((reference) => (
                               <li key={reference.key}>
-                                <span className={`chat-citation-source ${reference.sourceClassName}`}>
-                                  {reference.sourceLabel}
-                                </span>
                                 {reference.citation.file_uuid ? (
                                   <button
                                     className="chat-citation-button"
+                                    aria-label={`打开来源：${reference.label}`}
                                     onClick={() => void openSourcePreview(reference.citation)}
+                                    title={reference.label}
                                     type="button"
                                   >
-                                    {reference.label}
+                                    <span className={`chat-citation-source ${reference.sourceClassName}`} aria-hidden="true">
+                                      {reference.sourceLabel.slice(0, 1)}
+                                    </span>
+                                    <span>{reference.sourceLabel}</span>
+                                    {reference.locations.length > 1 ? (
+                                      <span className="chat-citation-count">+{reference.locations.length}</span>
+                                    ) : null}
                                   </button>
                                 ) : (
-                                  <span>{reference.label}</span>
+                                  <span className="chat-citation-static-source" aria-label={`来源：${reference.label}`} title={reference.label}>
+                                    <span className={`chat-citation-source ${reference.sourceClassName}`} aria-hidden="true">
+                                      {reference.sourceLabel.slice(0, 1)}
+                                    </span>
+                                    <span>{reference.sourceLabel}</span>
+                                    {reference.locations.length > 1 ? (
+                                      <span className="chat-citation-count">+{reference.locations.length}</span>
+                                    ) : null}
+                                  </span>
                                 )}
                                 {reference.locations.length ? (
-                                  <ul aria-label={`${reference.label} 引用位置`} className="chat-citation-locations">
+                                  <ul aria-label={`${reference.sourceLabel} 引用位置`} className="chat-citation-locations">
                                     {reference.locations.map((location) => (
                                       <li key={location}>{location}</li>
                                     ))}
@@ -2254,7 +2474,7 @@ export function ChatPage() {
                   当前附件
                 </button>
                 <span className="chat-mode-pill">{modeLabels[mode]}</span>
-                <span className="chat-model-pill">当前设置：{activeProfile?.displayName || '未配置'}</span>
+                <span className="chat-model-pill">当前设置：{currentModelLabel}</span>
                 <button
                   aria-label="发送"
                   className="chat-send-button"

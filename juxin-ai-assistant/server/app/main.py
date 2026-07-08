@@ -51,6 +51,7 @@ from .local_binding import (
     issue_local_binding_token,
     verify_local_binding_token,
 )
+from .model_profile_routes import router as model_profile_router
 from .models import Assistant, GenerationRecord, Task, TaskField, UserFavorite
 from .models import KnowledgeBase
 from .models import KnowledgeChunk, KnowledgeFile
@@ -1666,6 +1667,7 @@ app.include_router(export_router)
 app.include_router(knowledge_router)
 app.include_router(learning_router)
 app.include_router(personal_reference_router)
+app.include_router(model_profile_router)
 app.include_router(skill_router)
 app.include_router(web_router)
 

@@ -206,6 +206,7 @@ textarea:focus-visible {
 .sidebar-collapsed .nav-label,
 .sidebar-collapsed .workspace-update-control,
 .sidebar-collapsed .sidebar-foot > div,
+.sidebar-collapsed .system-switcher,
 .sidebar-collapsed .logout-button {
   display: none;
 }
@@ -282,7 +283,8 @@ textarea:focus-visible {
   font-size: 11px;
 }
 
-.logout-button {
+.logout-button,
+.system-switch-button {
   margin-left: auto;
   padding: 5px 7px;
   border: 0;
@@ -293,7 +295,60 @@ textarea:focus-visible {
   cursor: pointer;
 }
 
-.logout-button:hover { background: var(--surface); color: var(--text-primary); }
+.system-switcher {
+  position: relative;
+  margin-left: auto;
+}
+
+.system-switch-button {
+  margin-left: 0;
+}
+
+.logout-button {
+  margin-left: 0;
+}
+
+.logout-button:hover,
+.system-switch-button:hover,
+.system-switch-button[aria-expanded="true"] {
+  background: var(--surface);
+  color: var(--text-primary);
+}
+
+.system-switch-menu {
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + 8px);
+  z-index: 30;
+  width: 168px;
+  padding: 6px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+  display: grid;
+  gap: 4px;
+}
+
+.system-switch-menu a,
+.system-switch-menu span {
+  padding: 8px 9px;
+  border-radius: 9px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.system-switch-menu a:hover,
+.system-switch-menu span.is-current {
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  color: var(--text-primary);
+}
+
+.system-switch-menu span[aria-disabled="true"] {
+  cursor: default;
+}
 
 .presence-dot {
   width: 9px;
@@ -3864,13 +3919,43 @@ textarea:focus-visible {
 
 .chat-citations summary {
   width: max-content;
-  padding: 6px 10px;
-  border: 1px solid var(--border);
+  min-height: 32px;
+  padding: 5px 8px 5px 6px;
+  border: 0;
   border-radius: 999px;
-  background: var(--surface);
+  background: color-mix(in srgb, var(--text-secondary) 10%, transparent);
   color: var(--text-secondary);
-  font-size: 12px;
+  font-size: 13px;
+  font-weight: 700;
   cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  transition: background 0.18s ease, color 0.18s ease, transform 0.18s ease;
+}
+
+.chat-citations summary:hover {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--accent);
+}
+
+.chat-source-summary-icon {
+  width: 22px;
+  height: 22px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--accent);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+}
+
+.chat-source-summary-count,
+.chat-citation-count {
+  color: color-mix(in srgb, var(--text-secondary) 72%, transparent);
+  font-size: 12px;
+  font-weight: 800;
 }
 
 .chat-citations ul {
@@ -3883,10 +3968,10 @@ textarea:focus-visible {
 }
 
 .chat-citations li {
-  padding: 6px 9px;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  background: var(--surface);
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
   color: var(--text-secondary);
   font-size: 12px;
   display: flex;
@@ -3895,13 +3980,101 @@ textarea:focus-visible {
 }
 
 .chat-citation-source {
-  padding: 2px 6px;
+  width: 22px;
+  height: 22px;
   border-radius: 999px;
   background: color-mix(in srgb, var(--text-secondary) 10%, transparent);
   color: var(--text-secondary);
   font-size: 11px;
   font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   white-space: nowrap;
+}
+
+.chat-inline-source {
+  min-height: 28px;
+  margin: 0 2px;
+  padding: 4px 8px 4px 4px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--text-secondary) 9%, transparent);
+  color: var(--text-secondary);
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  vertical-align: middle;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.chat-inline-source .chat-citation-source {
+  width: 18px;
+  height: 18px;
+  font-size: 10px;
+  flex: 0 0 auto;
+}
+
+.chat-source-attribution {
+  margin: 8px 0 !important;
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  color: var(--text-secondary);
+}
+
+.chat-source-attribution-location {
+  color: color-mix(in srgb, var(--text-secondary) 82%, transparent);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.chat-citation-button,
+.chat-citation-static-source {
+  min-height: 32px;
+  max-width: min(260px, 100%);
+  padding: 5px 9px 5px 5px;
+  border: 0;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--text-secondary) 9%, transparent);
+  color: var(--text-secondary);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font: inherit;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.chat-citation-button {
+  cursor: pointer;
+  transition: background 0.18s ease, color 0.18s ease, transform 0.18s ease;
+}
+
+.chat-citation-button:hover {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--accent);
+  transform: translateY(-1px);
+}
+
+.chat-citation-button:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 45%, transparent);
+  outline-offset: 2px;
+}
+
+.chat-citation-locations {
+  flex-basis: 100%;
+  margin: -2px 0 0 32px !important;
+  gap: 4px !important;
+}
+
+.chat-citation-locations li {
+  padding: 0;
+  color: color-mix(in srgb, var(--text-secondary) 76%, transparent);
+  font-size: 11px;
 }
 
 .chat-citation-source.official {

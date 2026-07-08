@@ -30,6 +30,12 @@ class Settings(BaseSettings):
     export_storage_dir: str = "./exports"
     knowledge_storage_dir: str = "./storage"
     web_search_provider: str = "duckduckgo-html"
+    server_model_base_url: str = ""
+    server_model_api_key: str = ""
+    server_model_id: str = ""
+    server_model_display_name: str = "服务端模型"
+    server_model_timeout_seconds: int = Field(default=300, ge=5, le=600)
+    server_model_max_output_tokens: int = Field(default=8192, ge=1, le=200000)
 
     # Desktop update publishing
     desktop_update_storage_dir: str = "/var/lib/juxin-ai-assistant/desktop-updates"

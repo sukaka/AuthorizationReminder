@@ -5,6 +5,7 @@ from sqlalchemy import (
     BigInteger,
     Boolean,
     DateTime,
+    Float,
     ForeignKey,
     Integer,
     JSON,
@@ -708,6 +709,30 @@ class ChatMessageSource(TimestampMixin, Base):
     section_title: Mapped[str] = mapped_column(String(255), default="")
     chunk_index: Mapped[int | None] = mapped_column(Integer, nullable=True)
     score: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class UserModelProfile(TimestampMixin, Base):
+    __tablename__ = "ai_user_model_profiles"
+    __table_args__ = (UniqueConstraint("sso_user_id", "display_name"),)
+
+    id: Mapped[int] = mapped_column(primary_key_type, primary_key=True, autoincrement=True)
+    uuid: Mapped[str] = mapped_column(
+        String(36),
+        unique=True,
+        default=lambda: str(uuid_lib.uuid4()),
+    )
+    sso_user_id: Mapped[str] = mapped_column(String(64), index=True)
+    display_name: Mapped[str] = mapped_column(String(128))
+    base_url: Mapped[str] = mapped_column(String(512))
+    model_id: Mapped[str] = mapped_column(String(128))
+    temperature: Mapped[float] = mapped_column(Float, default=0.3)
+    max_output_tokens: Mapped[int] = mapped_column(Integer, default=8192)
+    timeout_seconds: Mapped[int] = mapped_column(Integer, default=300)
+    is_default: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    api_key_ciphertext: Mapped[bytes] = mapped_column(LargeBinary)
+    api_key_nonce: Mapped[bytes] = mapped_column(LargeBinary)
+    key_version: Mapped[str] = mapped_column(String(32), default="")
+    status: Mapped[str] = mapped_column(String(24), default="ACTIVE", index=True)
 
 
 class ExportRecord(TimestampMixin, Base):

@@ -9,16 +9,17 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends curl \
     && rm -rf /var/lib/apt/lists/*
 
-COPY requirements.txt ./
+COPY server/requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY app ./app
-COPY company_profile ./company_profile
-COPY prompts ./prompts
-COPY alembic.ini ./alembic.ini
-COPY alembic ./alembic
-COPY catalog ./catalog
-COPY scripts ./scripts
+COPY server/app ./app
+COPY server/company_profile ./company_profile
+COPY server/prompts ./prompts
+COPY server/alembic.ini ./alembic.ini
+COPY server/alembic ./alembic
+COPY server/catalog ./catalog
+COPY server/scripts ./scripts
+COPY agent-harness ./agent-harness
 
 RUN adduser --disabled-password --gecos "" appuser \
     && chown -R appuser:appuser /app

@@ -1,6 +1,8 @@
+import json
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from .auth import get_session, require_action
@@ -25,6 +27,8 @@ from .database import get_db
 from .schemas import (
     ChatCompleteIn,
     ChatFailIn,
+    ChatGenerateIn,
+    ChatGenerateOut,
     ChatKnowledgeResultIn,
     ChatKnowledgeResultOut,
     ChatMessageStatusOut,
@@ -38,7 +42,16 @@ from .schemas import (
     ConversationMutationOut,
     ConversationRenameIn,
     SessionPayload,
+    ServerModelStatusOut,
 )
+from .server_model_client import (
+    ModelRequestConfig,
+    generate_with_model_config,
+    generate_with_server_model,
+    is_server_model_configured,
+    stream_with_model_config,
+)
+from .user_model_profiles import decrypt_user_model_api_key, get_default_user_model_profile
 
 
 router = APIRouter(prefix="/api/ai/chat", tags=["chat"])
@@ -49,6 +62,38 @@ def get_chat_content_cipher(
     current_settings: Annotated[Settings, Depends(get_settings)],
 ) -> ContentCipher:
     return ContentCipher(current_settings.content_encryption_key)
+
+
+def _ndjson_line(payload: dict) -> str:
+    return f"{json.dumps(payload, ensure_ascii=False, separators=(',', ':'))}\n"
+
+
+def _chat_model_config_for_user(
+    db: Session,
+    user_id: str,
+    current_settings: Settings,
+    cipher: ContentCipher,
+) -> ModelRequestConfig:
+    user_model_profile = get_default_user_model_profile(db, user_id)
+    if user_model_profile is not None:
+        return ModelRequestConfig(
+            base_url=user_model_profile.base_url,
+            api_key=decrypt_user_model_api_key(cipher, user_model_profile),
+            model_id=user_model_profile.model_id,
+            display_name=user_model_profile.display_name,
+            timeout_seconds=user_model_profile.timeout_seconds,
+            max_output_tokens=user_model_profile.max_output_tokens,
+        )
+    if not is_server_model_configured(current_settings):
+        raise HTTPException(status_code=409, detail="SERVER_MODEL_NOT_CONFIGURED")
+    return ModelRequestConfig(
+        base_url=current_settings.server_model_base_url,
+        api_key=current_settings.server_model_api_key,
+        model_id=current_settings.server_model_id,
+        display_name=current_settings.server_model_display_name or current_settings.server_model_id,
+        timeout_seconds=current_settings.server_model_timeout_seconds,
+        max_output_tokens=current_settings.server_model_max_output_tokens,
+    )
 
 
 @router.get("/sessions", response_model=ChatSessionListOut)
@@ -157,6 +202,27 @@ async def chat_prepare(
     return prepared
 
 
+@router.get("/model/status", response_model=ServerModelStatusOut)
+async def chat_model_status(
+    request: Request,
+    session_payload: Annotated[SessionPayload, Depends(get_session)],
+    current_settings: Annotated[Settings, Depends(get_settings)],
+) -> ServerModelStatusOut:
+    await require_action(
+        "ai_assistant:use",
+        request,
+        session_payload,
+        current_settings,
+    )
+    configured = is_server_model_configured(current_settings)
+    return ServerModelStatusOut(
+        configured=configured,
+        model_display_name=current_settings.server_model_display_name if configured else "",
+        model_id=current_settings.server_model_id if configured else "",
+        message="服务端模型已配置" if configured else "服务端模型未配置，请联系管理员在服务器环境变量中配置。",
+    )
+
+
 @router.post(
     "/messages/{message_uuid}/complete",
     response_model=ChatMessageStatusOut,
@@ -189,6 +255,155 @@ async def chat_message_complete(
         db.rollback()
         raise
     return ChatMessageStatusOut(message_uuid=message.uuid, status=message.status)
+
+
+@router.post(
+    "/messages/{message_uuid}/generate",
+    response_model=ChatGenerateOut,
+)
+async def chat_message_generate(
+    message_uuid: str,
+    body: ChatGenerateIn,
+    request: Request,
+    session_payload: Annotated[SessionPayload, Depends(get_session)],
+    current_settings: Annotated[Settings, Depends(get_settings)],
+    db: Annotated[Session, Depends(get_db)],
+    cipher: Annotated[ContentCipher, Depends(get_chat_content_cipher)],
+) -> ChatGenerateOut:
+    await require_action(
+        "ai_assistant:use",
+        request,
+        session_payload,
+        current_settings,
+    )
+    user_model_profile = get_default_user_model_profile(db, str(session_payload.user.id))
+    if user_model_profile is not None:
+        result = await generate_with_model_config(
+            ModelRequestConfig(
+                base_url=user_model_profile.base_url,
+                api_key=decrypt_user_model_api_key(cipher, user_model_profile),
+                model_id=user_model_profile.model_id,
+                display_name=user_model_profile.display_name,
+                timeout_seconds=user_model_profile.timeout_seconds,
+                max_output_tokens=user_model_profile.max_output_tokens,
+            ),
+            [message.model_dump() for message in body.messages],
+            body.temperature,
+        )
+    else:
+        result = await generate_with_server_model(
+            current_settings,
+            [message.model_dump() for message in body.messages],
+            body.temperature,
+        )
+    complete_body = ChatCompleteIn(
+        completion_token=body.completion_token,
+        answer=result.output,
+        model_display_name=result.model_display_name,
+        model_id=result.model_id,
+        usage=result.usage,
+        latency_ms=result.latency_ms,
+    )
+    try:
+        message = complete_chat_message(
+            db,
+            sso_user_id=str(session_payload.user.id),
+            message_uuid=message_uuid,
+            body=complete_body,
+            cipher=cipher,
+        )
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    return ChatGenerateOut(
+        message_uuid=message.uuid,
+        status=message.status,
+        answer=result.output,
+        model_display_name=complete_body.model_display_name,
+        model_id=complete_body.model_id,
+        usage=result.usage,
+        latency_ms=result.latency_ms,
+    )
+
+
+@router.post("/messages/{message_uuid}/generate/stream")
+async def chat_message_generate_stream(
+    message_uuid: str,
+    body: ChatGenerateIn,
+    request: Request,
+    session_payload: Annotated[SessionPayload, Depends(get_session)],
+    current_settings: Annotated[Settings, Depends(get_settings)],
+    db: Annotated[Session, Depends(get_db)],
+    cipher: Annotated[ContentCipher, Depends(get_chat_content_cipher)],
+) -> StreamingResponse:
+    await require_action(
+        "ai_assistant:use",
+        request,
+        session_payload,
+        current_settings,
+    )
+    user_id = str(session_payload.user.id)
+    config = _chat_model_config_for_user(db, user_id, current_settings, cipher)
+
+    async def stream_events():
+        answer_parts: list[str] = []
+        usage: dict = {}
+        latency_ms: int | None = None
+        try:
+            async for event in stream_with_model_config(
+                config,
+                [message.model_dump() for message in body.messages],
+                body.temperature,
+            ):
+                if event.delta:
+                    answer_parts.append(event.delta)
+                    yield _ndjson_line({"type": "delta", "delta": event.delta})
+                if event.usage is not None:
+                    usage = event.usage
+                if event.latency_ms is not None:
+                    latency_ms = event.latency_ms
+            answer = "".join(answer_parts)
+            if not answer.strip():
+                raise HTTPException(status_code=502, detail="SERVER_MODEL_EMPTY_OUTPUT")
+            complete_body = ChatCompleteIn(
+                completion_token=body.completion_token,
+                answer=answer,
+                model_display_name=config.display_name,
+                model_id=config.model_id,
+                usage=usage,
+                latency_ms=latency_ms,
+            )
+            message = complete_chat_message(
+                db,
+                sso_user_id=user_id,
+                message_uuid=message_uuid,
+                body=complete_body,
+                cipher=cipher,
+            )
+            db.commit()
+            yield _ndjson_line({
+                "type": "complete",
+                "message_uuid": message.uuid,
+                "status": message.status,
+                "answer": answer,
+                "model_display_name": complete_body.model_display_name,
+                "model_id": complete_body.model_id,
+                "usage": usage,
+                "latency_ms": latency_ms,
+            })
+        except HTTPException as exc:
+            db.rollback()
+            yield _ndjson_line({"type": "error", "detail": exc.detail})
+        except Exception:
+            db.rollback()
+            yield _ndjson_line({"type": "error", "detail": "SERVER_MODEL_FAILED"})
+
+    return StreamingResponse(
+        stream_events(),
+        media_type="application/x-ndjson",
+        headers={"X-Accel-Buffering": "no"},
+    )
 
 
 @router.post("/knowledge-result", response_model=ChatKnowledgeResultOut, status_code=201)

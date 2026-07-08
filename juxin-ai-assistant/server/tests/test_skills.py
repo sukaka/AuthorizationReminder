@@ -19,6 +19,19 @@ def test_skill_registry_loads_builtin_published_skills() -> None:
     assert risk.permissions.allow_web is False
 
 
+def test_default_skill_root_supports_container_layout(tmp_path, monkeypatch) -> None:
+    from app import skill_registry
+
+    app_root = tmp_path / "app"
+    module_dir = app_root / "app"
+    skill_root = app_root / "agent-harness" / "skills"
+    module_dir.mkdir(parents=True)
+    skill_root.mkdir(parents=True)
+    monkeypatch.setattr(skill_registry, "__file__", str(module_dir / "skill_registry.py"))
+
+    assert skill_registry.default_skill_root() == skill_root
+
+
 def test_employee_lists_only_published_skills_and_runs_with_restricted_tools(
     client_for_user,
     generation_db,

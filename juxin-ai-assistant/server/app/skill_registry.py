@@ -23,7 +23,15 @@ REQUIRED_SKILL_FILES = (
 
 
 def default_skill_root() -> Path:
-    return Path(__file__).resolve().parents[2] / "agent-harness" / "skills"
+    module_path = Path(__file__).resolve()
+    candidates = [
+        module_path.parents[1] / "agent-harness" / "skills",
+        module_path.parents[2] / "agent-harness" / "skills",
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return candidates[-1]
 
 
 def _read_text(path: Path) -> str:

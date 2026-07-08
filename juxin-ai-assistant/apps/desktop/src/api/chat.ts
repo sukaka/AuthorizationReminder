@@ -252,6 +252,60 @@ export type ChatPreparePayload = {
   task_state?: ChatTaskStatePayload;
 };
 
+export type ChatGeneratePayload = {
+  message_uuid: string;
+  status: string;
+  answer: string;
+  model_display_name: string;
+  model_id: string;
+  usage: Record<string, unknown>;
+  latency_ms?: number | null;
+};
+
+type ChatGenerateStreamEvent =
+  | { type: 'delta'; delta: string }
+  | ({ type: 'complete' } & ChatGeneratePayload)
+  | { type: 'error'; detail?: string };
+
+export type ServerModelStatusPayload = {
+  configured: boolean;
+  model_display_name: string;
+  model_id: string;
+  message: string;
+};
+
+export type UserModelProfilePayload = {
+  uuid: string;
+  display_name: string;
+  base_url: string;
+  model_id: string;
+  temperature: number;
+  max_output_tokens: number;
+  timeout_seconds: number;
+  is_default: boolean;
+  has_api_key: boolean;
+  status: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type UserModelProfileListPayload = {
+  items: UserModelProfilePayload[];
+  total: number;
+};
+
+export type UserModelProfileSavePayload = {
+  profileUuid?: string;
+  displayName: string;
+  baseUrl: string;
+  modelId: string;
+  apiKey?: string;
+  temperature?: number;
+  maxOutputTokens?: number;
+  timeoutSeconds?: number;
+  isDefault?: boolean;
+};
+
 export type ChatExportType =
   | 'single_answer'
   | 'selected_messages'
@@ -502,6 +556,173 @@ export async function completeChatMessage(
     }),
     'CHAT_COMPLETE_FAILED',
   );
+}
+
+export async function generateChatMessage(
+  messageUuid: string,
+  payload: {
+    completionToken: string;
+    messages: Array<{ role: string; content: string }>;
+    temperature?: number;
+  },
+): Promise<ChatGeneratePayload> {
+  return readJson(
+    await apiFetch(`/api/ai/chat/messages/${encodeURIComponent(messageUuid)}/generate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        completion_token: payload.completionToken,
+        messages: payload.messages,
+        temperature: payload.temperature ?? 0.3,
+      }),
+    }),
+    'CHAT_GENERATE_FAILED',
+  );
+}
+
+function parseChatGenerateStreamLine(line: string): ChatGenerateStreamEvent | null {
+  const trimmed = line.trim();
+  if (!trimmed) return null;
+  const payload = JSON.parse(trimmed) as ChatGenerateStreamEvent;
+  if (payload.type === 'delta' || payload.type === 'complete' || payload.type === 'error') {
+    return payload;
+  }
+  return null;
+}
+
+export async function streamChatMessage(
+  messageUuid: string,
+  payload: {
+    completionToken: string;
+    messages: Array<{ role: string; content: string }>;
+    temperature?: number;
+  },
+  onDelta: (delta: string) => void,
+): Promise<ChatGeneratePayload> {
+  const response = await apiFetch(`/api/ai/chat/messages/${encodeURIComponent(messageUuid)}/generate/stream`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      completion_token: payload.completionToken,
+      messages: payload.messages,
+      temperature: payload.temperature ?? 0.3,
+    }),
+  });
+  if (response.status === 401) {
+    const errorPayload = await response.json().catch(() => null);
+    window.location.assign(getAuthPortalUrl());
+    throw new ApiError(401, 'AUTH_REDIRECT', errorPayload);
+  }
+  if (!response.ok) {
+    const errorPayload = await response.json().catch(() => null);
+    throw new ApiError(response.status, 'CHAT_GENERATE_FAILED', errorPayload);
+  }
+  if (!response.body) {
+    throw new ApiError(502, 'CHAT_GENERATE_STREAM_UNAVAILABLE', null);
+  }
+
+  const decoder = new TextDecoder();
+  const reader = response.body.getReader();
+  let buffer = '';
+  let completePayload: ChatGeneratePayload | null = null;
+
+  const handleLine = (line: string) => {
+    const event = parseChatGenerateStreamLine(line);
+    if (!event) return;
+    if (event.type === 'delta') {
+      onDelta(event.delta);
+      return;
+    }
+    if (event.type === 'error') {
+      throw new ApiError(502, 'CHAT_GENERATE_FAILED', event);
+    }
+    completePayload = {
+      message_uuid: event.message_uuid,
+      status: event.status,
+      answer: event.answer,
+      model_display_name: event.model_display_name,
+      model_id: event.model_id,
+      usage: event.usage,
+      latency_ms: event.latency_ms,
+    };
+  };
+
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split('\n');
+    buffer = lines.pop() ?? '';
+    for (const line of lines) {
+      handleLine(line);
+    }
+  }
+  buffer += decoder.decode();
+  handleLine(buffer);
+
+  if (!completePayload) {
+    throw new ApiError(502, 'CHAT_GENERATE_STREAM_INCOMPLETE', null);
+  }
+  return completePayload;
+}
+
+export async function getServerModelStatus(): Promise<ServerModelStatusPayload> {
+  return readJson(
+    await apiFetch('/api/ai/chat/model/status', { cache: 'no-store' }),
+    'SERVER_MODEL_STATUS_FAILED',
+  );
+}
+
+export async function listUserModelProfiles(): Promise<UserModelProfileListPayload> {
+  return readJson(
+    await apiFetch('/api/ai/model-profiles', { cache: 'no-store' }),
+    'USER_MODEL_PROFILES_FAILED',
+  );
+}
+
+export async function saveUserModelProfile(
+  payload: UserModelProfileSavePayload,
+): Promise<UserModelProfilePayload> {
+  const path = payload.profileUuid
+    ? `/api/ai/model-profiles/${encodeURIComponent(payload.profileUuid)}`
+    : '/api/ai/model-profiles';
+  return readJson(
+    await apiFetch(path, {
+      method: payload.profileUuid ? 'PUT' : 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        display_name: payload.displayName,
+        base_url: payload.baseUrl,
+        model_id: payload.modelId,
+        api_key: payload.apiKey || undefined,
+        temperature: payload.temperature ?? 0.3,
+        max_output_tokens: payload.maxOutputTokens ?? 8192,
+        timeout_seconds: payload.timeoutSeconds ?? 300,
+        is_default: payload.isDefault ?? false,
+      }),
+    }),
+    'USER_MODEL_PROFILE_SAVE_FAILED',
+  );
+}
+
+export async function setDefaultUserModelProfile(profileUuid: string): Promise<UserModelProfilePayload> {
+  return readJson(
+    await apiFetch(`/api/ai/model-profiles/${encodeURIComponent(profileUuid)}/default`, {
+      method: 'POST',
+    }),
+    'USER_MODEL_PROFILE_DEFAULT_FAILED',
+  );
+}
+
+export async function deleteUserModelProfile(profileUuid: string): Promise<void> {
+  const response = await apiFetch(`/api/ai/model-profiles/${encodeURIComponent(profileUuid)}`, {
+    method: 'DELETE',
+  });
+  if (response.status === 401) {
+    window.location.assign(getAuthPortalUrl());
+    throw new ApiError(401, 'AUTH_REDIRECT', null);
+  }
+  if (!response.ok) throw new ApiError(response.status, 'USER_MODEL_PROFILE_DELETE_FAILED', null);
 }
 
 export type UploadKnowledgeFileOptions = {

@@ -59,7 +59,8 @@ test('AI assistant migration and runtime receive all required independent secret
 });
 
 test('desktop keeps local dev separate from the generated exact HTTPS capability', () => {
-  assert.match(tauriConfig, /"url": "http:\/\/localhost:18093"/);
+  assert.match(tauriConfig, /"devUrl": "http:\/\/localhost:18093"/);
+  assert.match(tauriConfig, /"url": "index\.html"/);
   assert.match(tauriCapability, /"urls": \["https:\/\/ai-assistant\.invalid\/\*"\]/);
   assert.doesNotMatch(tauriCapability, /http:\/\/localhost/);
   assert.doesNotMatch(tauriCapability, /https:\/\/\*/);
@@ -71,5 +72,5 @@ test('phase one operations document the strict idempotent seed command', () => {
 });
 
 test('AI assistant image packages the complete employee catalog', () => {
-  assert.match(serverDockerfile, /COPY catalog \.\/catalog/);
+  assert.match(serverDockerfile, /COPY server\/catalog \.\/catalog/);
 });
