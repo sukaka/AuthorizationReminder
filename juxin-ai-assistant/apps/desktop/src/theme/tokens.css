@@ -11,6 +11,10 @@
   --accent: #007aff;
   --accent-soft: #e8f2ff;
   --danger: #ff3b30;
+  --control-fill: #ffffff;
+  --control-fill-muted: #f7f8fb;
+  --control-border: rgb(60 60 67 / 18%);
+  --control-shadow: 0 4px 14px rgb(24 31 46 / 7%);
   --shadow: 0 18px 50px rgb(24 31 46 / 8%);
   --sidebar: rgb(236 238 242 / 82%);
 }
@@ -27,6 +31,10 @@
   --accent: #0a84ff;
   --accent-soft: #173652;
   --danger: #ff453a;
+  --control-fill: #323338;
+  --control-fill-muted: #2b2c30;
+  --control-border: rgb(235 235 245 / 16%);
+  --control-shadow: 0 5px 18px rgb(0 0 0 / 20%);
   --shadow: 0 20px 60px rgb(0 0 0 / 24%);
   --sidebar: rgb(30 31 34 / 88%);
 }
@@ -116,9 +124,9 @@ input:focus-visible {
 .sidebar nav button {
   width: 100%;
   padding: 10px 12px;
-  border: 0;
+  border: 1px solid transparent;
   border-radius: 9px;
-  background: transparent;
+  background: var(--control-fill-muted);
   color: var(--text-secondary);
   font-size: 14px;
   text-align: left;
@@ -129,12 +137,13 @@ input:focus-visible {
 
 .sidebar nav button:hover,
 .sidebar nav button.is-current {
-  background: var(--surface);
+  border-color: var(--control-border);
+  background: var(--control-fill);
+  box-shadow: var(--control-shadow);
   color: var(--text-primary);
 }
 
 .sidebar nav button.is-current {
-  box-shadow: inset 0 0 0 1px var(--border);
   font-weight: 600;
 }
 
@@ -289,8 +298,11 @@ input:focus-visible {
 
 .section-heading a,
 .link-button {
-  border: 0;
-  background: transparent;
+  padding: 8px 11px;
+  border: 1px solid var(--control-border);
+  border-radius: 9px;
+  background: var(--control-fill);
+  box-shadow: var(--control-shadow);
   color: var(--accent);
   font-size: 13px;
   text-decoration: none;
@@ -318,7 +330,7 @@ input:focus-visible {
   border: 0;
   border-right: 1px solid var(--border);
   border-bottom: 1px solid var(--border);
-  background: transparent;
+  background: var(--control-fill);
   color: var(--text-primary);
   text-align: left;
   cursor: pointer;
@@ -395,9 +407,9 @@ input:focus-visible {
 
 .theme-switcher button {
   padding: 6px 9px;
-  border: 0;
+  border: 1px solid transparent;
   border-radius: 7px;
-  background: transparent;
+  background: var(--control-fill-muted);
   color: var(--text-secondary);
   font-size: 11px;
   cursor: pointer;
@@ -458,9 +470,11 @@ input:focus-visible {
 
 .back-button {
   margin-bottom: 24px;
-  padding: 0;
-  border: 0;
-  background: transparent;
+  padding: 8px 12px;
+  border: 1px solid var(--control-border);
+  border-radius: 10px;
+  background: var(--control-fill);
+  box-shadow: var(--control-shadow);
   color: var(--accent);
   cursor: pointer;
 }
@@ -565,9 +579,10 @@ input:focus-visible {
 .primary-action {
   margin-top: 22px;
   padding: 11px 17px;
-  border: 0;
+  border: 1px solid color-mix(in srgb, var(--accent) 84%, black);
   border-radius: 10px;
   background: var(--accent);
+  box-shadow: 0 8px 18px color-mix(in srgb, var(--accent) 22%, transparent);
   color: white;
   font-weight: 650;
   cursor: pointer;
@@ -581,11 +596,53 @@ input:focus-visible {
 .secondary-action {
   margin-left: 10px;
   padding: 10px 15px;
-  border: 1px solid var(--border);
+  border: 1px solid var(--control-border);
   border-radius: 10px;
-  background: var(--surface-elevated);
+  background: var(--control-fill);
+  box-shadow: var(--control-shadow);
   color: var(--text-primary);
   cursor: pointer;
+}
+
+.generation-actions {
+  min-height: 42px;
+  margin-top: 22px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.generation-actions .primary-action {
+  margin-top: 0;
+}
+
+.generation-hint {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.stop-action {
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  border: 1px solid color-mix(in srgb, var(--danger) 86%, black);
+  border-radius: 9px;
+  background: var(--danger);
+  box-shadow: 0 8px 18px color-mix(in srgb, var(--danger) 22%, transparent);
+  cursor: pointer;
+}
+
+.stop-action span {
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  background: #fff;
+}
+
+.stop-action:disabled {
+  cursor: wait;
+  opacity: .72;
 }
 
 .form-error {
@@ -594,12 +651,84 @@ input:focus-visible {
 }
 
 .result-panel pre {
+  margin: 0;
   max-width: 100%;
   overflow: auto;
   white-space: pre-wrap;
   font-family: "SF Pro Text", "PingFang SC", sans-serif;
   font-size: 14px;
   line-height: 1.75;
+}
+
+.result-panel-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.generation-metrics {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.generation-metrics span {
+  padding: 5px 8px;
+  border: 1px solid var(--control-border);
+  border-radius: 999px;
+  background: var(--control-fill);
+  box-shadow: var(--control-shadow);
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.generation-steps {
+  margin: 14px 0 16px;
+  padding: 12px;
+  display: grid;
+  gap: 9px;
+  border: 1px solid var(--control-border);
+  border-radius: 14px;
+  background: var(--control-fill-muted);
+}
+
+.generation-steps span {
+  position: relative;
+  padding-left: 19px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.3;
+}
+
+.generation-steps span::before {
+  content: "";
+  position: absolute;
+  top: .34em;
+  left: 2px;
+  width: 8px;
+  height: 8px;
+  border: 2px solid var(--border);
+  border-radius: 50%;
+  background: var(--control-fill);
+}
+
+.generation-steps span.is-active {
+  color: var(--text-primary);
+  font-weight: 650;
+}
+
+.generation-steps span.is-active::before {
+  border-color: var(--danger);
+  background: var(--danger);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--danger) 13%, transparent);
+}
+
+.generation-steps span.is-done::before {
+  border-color: #30d158;
+  background: #30d158;
 }
 
 .desktop-required {
@@ -663,8 +792,11 @@ input:focus-visible {
 }
 
 .models-list button {
-  border: 0;
-  background: transparent;
+  padding: 7px 10px;
+  border: 1px solid var(--control-border);
+  border-radius: 9px;
+  background: var(--control-fill);
+  box-shadow: var(--control-shadow);
   color: var(--accent);
   cursor: pointer;
 }

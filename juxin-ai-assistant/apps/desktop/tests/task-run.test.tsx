@@ -85,6 +85,9 @@ it('prepares provider-neutral messages, invokes Tauri and completes history', as
   await userEvent.click(screen.getByRole('button', { name: '开始生成' }));
 
   expect(await screen.findByText('# 本周总结')).toBeInTheDocument();
+  expect(screen.getByText('耗时 0.12 秒')).toBeInTheDocument();
+  expect(screen.getByText('Token 36')).toBeInTheDocument();
+  expect(screen.getByText('输出 24')).toBeInTheDocument();
   expect(invokeMock).toHaveBeenCalledWith(
     'model_generate',
     expect.objectContaining({
@@ -164,6 +167,53 @@ it('cancels the active local request with its request id', async () => {
   await userEvent.type(screen.getByLabelText('工作内容'), '需要中止的生成');
   await userEvent.click(screen.getByRole('button', { name: '开始生成' }));
   await userEvent.click(await screen.findByRole('button', { name: '停止生成' }));
+
+  const generateCall = invokeMock.mock.calls.find(([command]) => command === 'model_generate');
+  const cancelCall = invokeMock.mock.calls.find(([command]) => command === 'model_cancel');
+  expect(cancelCall?.[1].requestId).toBe(generateCall?.[1].requestId);
+});
+
+it('cancels the active local request when Escape is pressed', async () => {
+  const pendingGeneration = new Promise(() => {});
+  server.use(
+    http.post('/api/ai/generations/prepare', () =>
+      HttpResponse.json(
+        {
+          generation_uuid: 'gen-escape',
+          completion_token: 'complete-escape',
+          messages: [{ role: 'user', content: '按 Esc 取消' }],
+          temperature: 0.3,
+          safety_notice: '需人工复核',
+        },
+        { status: 201 },
+      ),
+    ),
+  );
+  invokeMock.mockImplementation((command: string) => {
+    if (command === 'model_profile_list') {
+      return Promise.resolve([
+        {
+          id: 'profile-1',
+          displayName: '公司模型',
+          baseUrl: 'https://model.example/v1/',
+          modelId: 'example-model',
+          temperature: 0.3,
+          timeoutSeconds: 60,
+          isDefault: true,
+          hasApiKey: true,
+        },
+      ]);
+    }
+    if (command === 'model_generate') return pendingGeneration;
+    if (command === 'model_cancel') return Promise.resolve();
+    return Promise.reject(new Error(`unexpected command: ${command}`));
+  });
+
+  render(<TaskRunPage task={workSummaryTask} />);
+  await userEvent.type(screen.getByLabelText('工作内容'), '需要用键盘中止');
+  await userEvent.click(screen.getByRole('button', { name: '开始生成' }));
+  await screen.findByRole('button', { name: '停止生成' });
+  await userEvent.keyboard('{Escape}');
 
   const generateCall = invokeMock.mock.calls.find(([command]) => command === 'model_generate');
   const cancelCall = invokeMock.mock.calls.find(([command]) => command === 'model_cancel');
