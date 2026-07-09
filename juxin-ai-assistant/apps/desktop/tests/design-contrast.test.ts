@@ -82,15 +82,15 @@ describe('task run layout', () => {
 });
 
 describe('chat workspace layout polish', () => {
-  it('keeps controls compact without wrapping or nested card boxes', () => {
-    expect(css).toMatch(/\.chat-topbar\s*{[^}]*position:\s*absolute;[^}]*top:\s*8px;/s);
+  it('keeps controls in the workspace titlebar without wrapping or nested card boxes', () => {
+    expect(css).toMatch(/\.chat-topbar\s*{[^}]*position:\s*fixed;[^}]*top:\s*7px;[^}]*left:\s*clamp\(360px,\s*26vw,\s*520px\);[^}]*right:\s*210px;/s);
+    expect(css).toMatch(/\.chat-page\.has-chat-content \.chat-content-grid\s*{[^}]*padding-top:\s*16px;/s);
     expect(css).toMatch(/\.chat-composer-toolbar\s*{[^}]*flex-wrap:\s*nowrap;[^}]*overflow-x:\s*auto;/s);
     expect(css).toMatch(/\.chat-file-trigger span,\s*\.chat-reference-chip,\s*\.chat-mode-pill,\s*\.chat-model-pill\s*{[^}]*white-space:\s*nowrap;[^}]*flex:\s*0 0 auto;/s);
     expect(css).toMatch(/\.chat-sessions > div\[data-session-status\] > button\s*{[^}]*background:\s*transparent;[^}]*box-shadow:\s*none;/s);
   });
 
   it('polishes the empty chat state instead of only the generated-content state', () => {
-    expect(css).toMatch(/\.chat-page:not\(\.has-chat-content\) \.chat-topbar\s*{[^}]*top:\s*-12px;/s);
     expect(css).toMatch(/\.chat-sessions > div\[data-session-status\]\s*{[^}]*border-radius:\s*18px;[^}]*background:\s*color-mix\(in srgb,\s*var\(--surface-solid\) 52%,\s*var\(--background\) 48%\);/s);
     expect(css).toMatch(/\.chat-sessions > div\[data-session-status\] > button:hover,\s*\.chat-sessions > div\[data-session-status\] > button:focus-visible\s*{[^}]*background:\s*transparent;[^}]*box-shadow:\s*none;/s);
     expect(css).toMatch(/\.chat-page:not\(\.has-chat-content\) \.chat-composer\s*{[^}]*width:\s*min\(720px,\s*52vw\);/s);

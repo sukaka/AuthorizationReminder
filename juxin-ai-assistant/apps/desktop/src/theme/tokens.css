@@ -3195,25 +3195,22 @@ textarea:focus-visible {
 
 .chat-topbar {
   flex: 0 0 auto;
-  min-height: 46px;
-  position: absolute;
-  top: 8px;
-  right: 24px;
-  z-index: 6;
+  min-height: 42px;
+  position: fixed;
+  top: 7px;
+  left: clamp(360px, 26vw, 520px);
+  right: 210px;
+  z-index: 12;
   display: flex;
   align-items: center;
   justify-content: flex-end;
   gap: 12px;
-  width: min(1280px, calc(100% - 48px));
+  width: auto;
   margin: 0;
 }
 
 .chat-page.has-chat-content .chat-topbar {
-  min-height: 46px;
-}
-
-.chat-page:not(.has-chat-content) .chat-topbar {
-  top: -12px;
+  min-height: 42px;
 }
 
 .chat-back-link {
@@ -3231,6 +3228,7 @@ textarea:focus-visible {
   align-items: center;
   flex-wrap: nowrap;
   gap: 8px;
+  width: 100%;
   max-width: 100%;
   overflow-x: auto;
   scrollbar-width: none;
@@ -3670,7 +3668,7 @@ textarea:focus-visible {
   width: min(1320px, calc(100% - 284px));
   margin-left: 24px;
   margin-right: 236px;
-  padding-top: 58px;
+  padding-top: 16px;
 }
 
 .chat-page:not(.has-chat-content) .chat-content-grid {

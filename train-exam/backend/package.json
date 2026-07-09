@@ -1,6 +1,6 @@
 {
   "name": "juxin-train-exam-backend",
-  "version": "5.147.3",
+  "version": "5.147.4",
   "private": true,
   "main": "src/index.js",
   "scripts": {
