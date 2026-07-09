@@ -88,4 +88,11 @@ describe('chat workspace layout polish', () => {
     expect(css).toMatch(/\.chat-file-trigger span,\s*\.chat-reference-chip,\s*\.chat-mode-pill,\s*\.chat-model-pill\s*{[^}]*white-space:\s*nowrap;[^}]*flex:\s*0 0 auto;/s);
     expect(css).toMatch(/\.chat-sessions > div\[data-session-status\] > button\s*{[^}]*background:\s*transparent;[^}]*box-shadow:\s*none;/s);
   });
+
+  it('polishes the empty chat state instead of only the generated-content state', () => {
+    expect(css).toMatch(/\.chat-page:not\(\.has-chat-content\) \.chat-topbar\s*{[^}]*top:\s*-12px;/s);
+    expect(css).toMatch(/\.chat-sessions > div\[data-session-status\]\s*{[^}]*border-radius:\s*18px;[^}]*background:\s*color-mix\(in srgb,\s*var\(--surface-solid\) 52%,\s*var\(--background\) 48%\);/s);
+    expect(css).toMatch(/\.chat-sessions > div\[data-session-status\] > button:hover,\s*\.chat-sessions > div\[data-session-status\] > button:focus-visible\s*{[^}]*background:\s*transparent;[^}]*box-shadow:\s*none;/s);
+    expect(css).toMatch(/\.chat-page:not\(\.has-chat-content\) \.chat-composer\s*{[^}]*width:\s*min\(720px,\s*52vw\);/s);
+  });
 });

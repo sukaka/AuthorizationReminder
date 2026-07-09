@@ -3212,6 +3212,10 @@ textarea:focus-visible {
   min-height: 46px;
 }
 
+.chat-page:not(.has-chat-content) .chat-topbar {
+  top: -12px;
+}
+
 .chat-back-link {
   color: var(--accent-text);
   font-size: 14px;
@@ -3422,16 +3426,16 @@ textarea:focus-visible {
 }
 
 .chat-sessions > div[data-session-status] {
-  margin: 0 16px;
-  padding: 8px 10px 10px;
+  margin: 0 12px;
+  padding: 8px 10px 9px;
   border: 1px solid transparent;
-  border-radius: 16px;
-  background: transparent;
+  border-radius: 18px;
+  background: color-mix(in srgb, var(--surface-solid) 52%, var(--background) 48%);
 }
 
 .chat-sessions > div[data-session-status].is-active {
   border-color: color-mix(in srgb, var(--chat-brand) 10%, var(--border));
-  background: color-mix(in srgb, var(--chat-brand) 7%, var(--surface-solid));
+  background: color-mix(in srgb, var(--chat-brand) 8%, var(--surface-solid) 92%);
 }
 
 .chat-sessions > div[data-session-status] > button {
@@ -3446,7 +3450,7 @@ textarea:focus-visible {
 }
 
 .chat-sessions > div[data-session-status] > button:hover,
-.chat-sessions > div[data-session-status] > button.is-active {
+.chat-sessions > div[data-session-status] > button:focus-visible {
   background: transparent;
   box-shadow: none;
 }
@@ -4534,7 +4538,7 @@ textarea:focus-visible {
 }
 
 .chat-page:not(.has-chat-content) .chat-composer {
-  width: min(620px, 46vw);
+  width: min(720px, 52vw);
   min-width: 500px;
   padding: 10px 12px 8px;
   border-radius: 18px;
