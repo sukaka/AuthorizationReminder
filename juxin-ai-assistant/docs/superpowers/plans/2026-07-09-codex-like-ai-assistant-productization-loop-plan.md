@@ -393,21 +393,31 @@ Agent Runtime
 - 来源与最终回答没有内容交集。
 
 **开发检查项：**
-- [ ] 泛泛问题不展示知识库引用。
-- [ ] 当前附件问题只展示当前附件。
-- [ ] 联网资料和公司知识来源清晰区分。
-- [ ] Word 导出和聊天回答引用一致。
+- [x] 泛泛问题不展示知识库引用。
+- [x] 当前附件问题只展示当前附件。
+- [x] 联网资料和公司知识来源清晰区分。
+- [x] Word 导出和聊天回答引用一致。
 
 **验收标准：**
-- [ ] 用户问“你是谁”时不出现知识库文件。
-- [ ] 用户问附件标题时只显示该附件来源。
-- [ ] 用户问公司正式资料时显示公司知识来源。
-- [ ] 导出的 Word 参考来源与聊天卡片一致。
+- [x] 用户问“你是谁”时不出现知识库文件。
+- [x] 用户问附件标题时只显示该附件来源。
+- [x] 用户问公司正式资料时显示公司知识来源。
+- [x] 导出的 Word 参考来源与聊天卡片一致。
 
 **建议测试：**
 - `server/tests/test_agent_verifier.py`
 - `server/tests/test_chat_word_export.py`
 - `apps/desktop/tests/chat-page.test.tsx`
+
+**实施证据（2026-07-09）：**
+- 后端 `Verifier.verify_references()` 基于实际答案过滤候选来源，剔除仅作为“未找到依据”提及的资料。
+- 聊天完成记录会删除未被 Verifier 保留的来源，会话详情只返回实际引用来源。
+- Word 导出通过 `_reference_sources_markdown()` 对导出正文再次过滤来源，和聊天卡片保持同一引用口径。
+- 前端完成态引用区通过 `filterCitationsByAnswer()` 展示实际来源，并区分公司知识库、我的资料、当前附件、联网搜索；来源支持点击预览。
+
+**验证（2026-07-09）：**
+- `python3 -m pytest tests/test_agent_verifier.py tests/test_chat_word_export.py tests/test_chat_api.py -q`：48 passed。
+- `npm test -- chat-page.test.tsx`：44 passed。
 
 ---
 
