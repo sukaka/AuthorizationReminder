@@ -8,6 +8,12 @@ import { HistoryPage } from '../src/pages/HistoryPage';
 import { HomePage } from '../src/pages/HomePage';
 import { server } from './setup';
 
+const invokeMock = vi.hoisted(() => vi.fn());
+
+vi.mock('@tauri-apps/api/core', () => ({
+  invoke: invokeMock,
+}));
+
 const historyItem = {
   uuid: 'gen-1',
   task_uuid: 'task-1',
@@ -112,36 +118,127 @@ it('routes natural language intent to task candidates on the home page', async (
   );
 });
 
-it('loads encrypted history detail only after selection and supports delete', async () => {
+it('loads work artifact detail only after selection and requires delete confirmation', async () => {
   const detailRequest = vi.fn();
   const deleteRequest = vi.fn();
+  const exportRequest = vi.fn();
+  vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => undefined);
   server.use(
-    http.get('/api/ai/generations', () => HttpResponse.json({ items: [historyItem], total: 1 })),
-    http.get('/api/ai/generations/gen-1', () => {
+    http.get('/api/ai/work-artifacts', () => HttpResponse.json({
+      items: [{
+        artifact_uuid: 'artifact-word-1',
+        conversation_id: 'chat-1',
+        message_id: 'assistant-1',
+        title: '交付方案',
+        artifact_type: 'word_document',
+        source_scope: 'chat',
+        source_summary: [{
+          source_type: 'official_knowledge',
+          file_name: '交付手册.pdf',
+          page_number: 6,
+          section_title: '验收交付物',
+        }],
+        content_summary: 'Word 文档已生成，可下载或基于原会话继续整理。',
+        file_name: '交付方案.docx',
+        version: 1,
+        status: 'active',
+        created_at: '2026-06-20T08:00:00Z',
+        updated_at: '2026-06-20T08:00:01Z',
+      }],
+      total: 1,
+      page: 1,
+      page_size: 100,
+    })),
+    http.get('/api/ai/work-artifacts/artifact-word-1', () => {
       detailRequest();
       return HttpResponse.json({
-        ...historyItem,
-        input: { work: '本周工作' },
-        output: '# 完成情况',
-        knowledge_refs: [],
+        artifact_uuid: 'artifact-word-1',
+        conversation_id: 'chat-1',
+        message_id: 'assistant-1',
+        title: '交付方案',
+        artifact_type: 'word_document',
+        source_scope: 'chat',
+        source_summary: [{
+          source_type: 'official_knowledge',
+          file_name: '交付手册.pdf',
+          page_number: 6,
+          section_title: '验收交付物',
+        }],
+        content_summary: 'Word 文档已生成，可下载或基于原会话继续整理。',
+        file_name: '交付方案.docx',
+        version: 1,
+        status: 'active',
+        content: null,
+        download_url: '/api/export/download/artifact-word-1',
+        versions: [{
+          version_uuid: 'version-1',
+          version: 1,
+          source: 'word_export',
+          source_ref: 'artifact-word-1',
+          file_name: '交付方案.docx',
+          source_summary: [],
+          content_summary: 'Word 文档已生成，可下载或基于原会话继续整理。',
+          created_at: '2026-06-20T08:00:01Z',
+        }],
+        created_at: '2026-06-20T08:00:00Z',
+        updated_at: '2026-06-20T08:00:01Z',
       });
     }),
-    http.delete('/api/ai/generations/gen-1', () => {
+    http.delete('/api/ai/work-artifacts/artifact-word-1', () => {
       deleteRequest();
       return new HttpResponse(null, { status: 204 });
     }),
+    http.post('/api/export/word', async ({ request }) => {
+      exportRequest(await request.json());
+      return HttpResponse.json({
+        file_name: '交付方案-v2.docx',
+        download_url: '/api/export/download/artifact-word-v2',
+      }, { status: 201 });
+    }),
+    http.get('/api/export/download/artifact-word-v2', () => new HttpResponse(
+      new Uint8Array([100, 111, 99, 120]).buffer,
+      {
+        headers: {
+          'Content-Type': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+          'Content-Disposition': "attachment; filename*=UTF-8''artifact-v2.docx",
+        },
+      },
+    )),
   );
+  invokeMock.mockImplementation((command: string, payload?: unknown) => {
+    if (command === 'generation_word_save') {
+      expect(payload).toEqual({
+        fileName: 'artifact-v2.docx',
+        bytes: [100, 111, 99, 120],
+      });
+      return Promise.resolve('/Users/test/Downloads/artifact-v2.docx');
+    }
+    return Promise.resolve(undefined);
+  });
 
   render(<HistoryPage />);
 
-  expect(await screen.findByText('工作总结')).toBeInTheDocument();
+  expect(await screen.findByText('交付方案')).toBeInTheDocument();
   expect(detailRequest).not.toHaveBeenCalled();
-  await userEvent.click(screen.getByRole('button', { name: /工作总结/ }));
-  expect(await screen.findByRole('heading', { name: '完成情况' })).toBeInTheDocument();
+  await userEvent.click(screen.getByRole('button', { name: /交付方案/ }));
+  expect(await screen.findByRole('heading', { name: '交付方案' })).toBeInTheDocument();
+  expect(screen.getByText('交付方案.docx')).toBeInTheDocument();
+  expect(screen.getByText('交付手册.pdf')).toBeInTheDocument();
+  expect(screen.getByText('第 6 页 · 验收交付物')).toBeInTheDocument();
   expect(detailRequest).toHaveBeenCalledTimes(1);
+  await userEvent.click(screen.getByRole('button', { name: '生成新版本' }));
+  await waitFor(() => expect(exportRequest).toHaveBeenCalledWith(expect.objectContaining({
+    conversation_id: 'chat-1',
+    message_id: 'assistant-1',
+    export_type: 'single_answer',
+    template: 'juxin_standard',
+  })));
+  expect(await screen.findByText('Word 已开始下载')).toBeInTheDocument();
   await userEvent.click(screen.getByRole('button', { name: '删除成果' }));
+  expect(deleteRequest).not.toHaveBeenCalled();
+  await userEvent.click(screen.getByRole('button', { name: '确认删除' }));
   await waitFor(() => expect(deleteRequest).toHaveBeenCalled());
-  expect(screen.queryByRole('heading', { name: '完成情况' })).not.toBeInTheDocument();
+  expect(screen.queryByRole('heading', { name: '交付方案' })).not.toBeInTheDocument();
 });
 
 it('offers seven feedback types and requires text only for other feedback', async () => {

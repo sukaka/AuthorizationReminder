@@ -753,6 +753,55 @@ class ExportRecord(TimestampMixin, Base):
     created_by: Mapped[str] = mapped_column(String(64), index=True)
 
 
+class WorkArtifact(TimestampMixin, Base):
+    __tablename__ = "ai_work_artifacts"
+
+    id: Mapped[int] = mapped_column(primary_key_type, primary_key=True, autoincrement=True)
+    uuid: Mapped[str] = mapped_column(
+        String(36),
+        unique=True,
+        default=lambda: str(uuid_lib.uuid4()),
+    )
+    owner_user_id: Mapped[str] = mapped_column(String(64), index=True)
+    conversation_id: Mapped[str] = mapped_column(String(64), default="", index=True)
+    message_id: Mapped[str] = mapped_column(String(64), default="", index=True)
+    task_state_id: Mapped[str] = mapped_column(String(64), default="", index=True)
+    export_record_uuid: Mapped[str] = mapped_column(String(64), default="", index=True)
+    title: Mapped[str] = mapped_column(String(255))
+    artifact_type: Mapped[str] = mapped_column(String(48), index=True)
+    source_scope: Mapped[str] = mapped_column(String(64), default="")
+    source_summary_json: Mapped[list] = mapped_column(JSON, default=list)
+    content_summary: Mapped[str] = mapped_column(Text, default="")
+    file_name: Mapped[str] = mapped_column(String(255), default="")
+    file_path_or_blob_ref: Mapped[str] = mapped_column(String(1024), default="")
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    status: Mapped[str] = mapped_column(String(24), default="active", index=True)
+
+
+class WorkArtifactVersion(TimestampMixin, Base):
+    __tablename__ = "ai_work_artifact_versions"
+
+    id: Mapped[int] = mapped_column(primary_key_type, primary_key=True, autoincrement=True)
+    uuid: Mapped[str] = mapped_column(
+        String(36),
+        unique=True,
+        default=lambda: str(uuid_lib.uuid4()),
+    )
+    artifact_id: Mapped[int] = mapped_column(
+        foreign_key_type,
+        ForeignKey("ai_work_artifacts.id", ondelete="CASCADE"),
+        index=True,
+    )
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    source: Mapped[str] = mapped_column(String(64), default="")
+    source_ref: Mapped[str] = mapped_column(String(128), default="")
+    file_name: Mapped[str] = mapped_column(String(255), default="")
+    file_path_or_blob_ref: Mapped[str] = mapped_column(String(1024), default="")
+    source_summary_json: Mapped[list] = mapped_column(JSON, default=list)
+    content_summary: Mapped[str] = mapped_column(Text, default="")
+    status: Mapped[str] = mapped_column(String(24), default="active", index=True)
+
+
 class FeedbackRecord(TimestampMixin, Base):
     __tablename__ = "ai_feedback_records"
     __table_args__ = (

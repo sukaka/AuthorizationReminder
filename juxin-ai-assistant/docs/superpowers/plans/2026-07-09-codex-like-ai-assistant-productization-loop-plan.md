@@ -482,21 +482,33 @@ Agent Runtime
 - 删除
 
 **开发检查项：**
-- [ ] 导出 Word 自动生成成果记录。
-- [ ] 普通回答可手动保存为成果。
-- [ ] 成果列表不暴露私有资料正文。
-- [ ] 删除成果需要二次确认。
+- [x] 导出 Word 自动生成成果记录。
+- [x] 普通回答可手动保存为成果。
+- [x] 成果列表不暴露私有资料正文。
+- [x] 删除成果需要二次确认。
 
 **验收标准：**
-- [ ] 用户能找到最近导出的 Word。
-- [ ] 用户能从成果重新生成新版本。
-- [ ] 用户能查看成果使用过哪些资料。
-- [ ] 管理员不能随意查看普通用户私有成果正文，除非具备明确权限。
+- [x] 用户能找到最近导出的 Word。
+- [x] 用户能从成果重新生成新版本。
+- [x] 用户能查看成果使用过哪些资料。
+- [x] 管理员不能随意查看普通用户私有成果正文，除非具备明确权限。
 
 **建议测试：**
 - `server/tests/test_work_artifacts.py`
 - `server/tests/test_chat_word_export.py`
-- `apps/desktop/tests/work-results-page.test.tsx`
+- `apps/desktop/tests/employee-pages.test.tsx`
+
+**实施证据（2026-07-09）：**
+- 新增 `WorkArtifact`、`WorkArtifactVersion` 数据对象和 `0021_work_artifacts` 迁移。
+- Word 导出自动写入 `word_document` 成果；同一聊天回答再次导出会追加版本并更新最新下载地址。
+- 聊天回答新增“保存成果”，写入 `ordinary_answer` 成果；成果详情按 owner 现取聊天正文，列表只展示摘要和来源。
+- 工作成果页改读 `/api/ai/work-artifacts`，支持类型筛选、来源查看、下载 Word、生成新版本和二次确认删除。
+- 成果 API 按 `owner_user_id` 隔离；管理员默认也不能读取其他用户私有成果正文。
+
+**验证（2026-07-09）：**
+- `python3 -m pytest tests/test_work_artifacts.py tests/test_chat_word_export.py tests/test_migrations.py -q`：32 passed。
+- `npm test -- chat-page.test.tsx employee-pages.test.tsx`：49 passed。
+- `npm run typecheck`：passed。
 
 ---
 

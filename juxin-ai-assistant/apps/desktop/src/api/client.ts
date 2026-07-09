@@ -90,6 +90,46 @@ export type HistoryDetailPayload = HistoryItemPayload & {
   knowledge_refs: Array<Record<string, unknown>>;
 };
 
+export type WorkArtifactSourcePayload = {
+  source_type: string;
+  file_name: string;
+  page_number?: number | null;
+  section_title?: string;
+};
+
+export type WorkArtifactItemPayload = {
+  artifact_uuid: string;
+  conversation_id: string;
+  message_id: string;
+  title: string;
+  artifact_type: string;
+  source_scope: string;
+  source_summary: WorkArtifactSourcePayload[];
+  content_summary: string;
+  file_name: string;
+  version: number;
+  status: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type WorkArtifactVersionPayload = {
+  version_uuid: string;
+  version: number;
+  source: string;
+  source_ref: string;
+  file_name: string;
+  source_summary: WorkArtifactSourcePayload[];
+  content_summary: string;
+  created_at: string;
+};
+
+export type WorkArtifactDetailPayload = WorkArtifactItemPayload & {
+  content?: string | null;
+  download_url?: string | null;
+  versions: WorkArtifactVersionPayload[];
+};
+
 export type HomePayload = {
   favorites: TaskCardPayload[];
   recent_tasks: TaskCardPayload[];
@@ -783,6 +823,67 @@ export async function deleteHistory(generationUuid: string): Promise<void> {
     { method: 'DELETE' },
   );
   if (!response.ok) throw new ApiError(response.status, 'HISTORY_DELETE_FAILED');
+}
+
+export async function getWorkArtifacts(): Promise<{
+  items: WorkArtifactItemPayload[];
+  total: number;
+  page: number;
+  page_size: number;
+}> {
+  return readJson(
+    await apiFetch('/api/ai/work-artifacts?page_size=100'),
+    'WORK_ARTIFACTS_FAILED',
+  );
+}
+
+export async function getWorkArtifactDetail(
+  artifactUuid: string,
+): Promise<WorkArtifactDetailPayload> {
+  return readJson(
+    await apiFetch(`/api/ai/work-artifacts/${encodeURIComponent(artifactUuid)}`),
+    'WORK_ARTIFACT_DETAIL_FAILED',
+  );
+}
+
+export async function deleteWorkArtifact(artifactUuid: string): Promise<void> {
+  const response = await apiFetch(
+    `/api/ai/work-artifacts/${encodeURIComponent(artifactUuid)}`,
+    { method: 'DELETE' },
+  );
+  if (!response.ok) throw new ApiError(response.status, 'WORK_ARTIFACT_DELETE_FAILED');
+}
+
+export async function saveChatMessageWorkArtifact(payload: {
+  conversationId: string;
+  messageId: string;
+  title: string;
+}): Promise<WorkArtifactItemPayload> {
+  return readJson(
+    await apiFetch('/api/ai/work-artifacts/chat-message', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        conversation_id: payload.conversationId,
+        message_id: payload.messageId,
+        title: payload.title,
+      }),
+    }),
+    'WORK_ARTIFACT_SAVE_FAILED',
+  );
+}
+
+export async function downloadWorkArtifactWord(downloadUrl: string): Promise<WordDownloadResult> {
+  const response = await apiFetch(downloadUrl);
+  if (!response.ok) throw new ApiError(response.status, 'WORD_EXPORT_FAILED');
+  if (isDesktopRuntime()) {
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    const fileName = readAttachmentFileName(response.headers) || '聚信得仁文档.docx';
+    const path = await saveWordBytesToDesktop(fileName, bytes);
+    return { kind: 'desktop', path };
+  }
+  await downloadBlobFromResponse(response, '聚信得仁文档.docx');
+  return { kind: 'browser' };
 }
 
 function trimHeaderValue(value: string): string {

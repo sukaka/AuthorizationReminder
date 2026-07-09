@@ -1594,6 +1594,69 @@ it('exports an assistant reply to Word from the chat message actions', async () 
   await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Word 已导出成功' })).not.toBeInTheDocument());
 });
 
+it('saves an assistant reply as a work artifact', async () => {
+  const saveArtifactRequest = vi.fn();
+  server.use(
+    http.get('/api/conversations', () => HttpResponse.json({ items: [], total: 0 })),
+    http.post('/api/ai/chat/prepare', () => HttpResponse.json({
+      session_uuid: 'session-save-artifact',
+      user_message_uuid: 'user-message-save-artifact',
+      assistant_message_uuid: 'assistant-message-save-artifact',
+      completion_token: 'complete-save-artifact',
+      completed: false,
+      answer: '',
+      messages: [
+        { role: 'system', content: '你是聚信 AI 助手' },
+        { role: 'user', content: '输出交付方案' },
+      ],
+      citations: [],
+    }, { status: 201 })),
+    http.post('/api/ai/chat/messages/assistant-message-save-artifact/complete', () => {
+      return HttpResponse.json({
+        message_uuid: 'assistant-message-save-artifact',
+        status: 'COMPLETED',
+      });
+    }),
+    http.post('/api/ai/work-artifacts/chat-message', async ({ request }) => {
+      saveArtifactRequest(await request.json());
+      return HttpResponse.json({
+        artifact_uuid: 'artifact-save-1',
+        conversation_id: 'session-save-artifact',
+        message_id: 'assistant-message-save-artifact',
+        title: '聚信交付方案内容',
+        artifact_type: 'ordinary_answer',
+        source_scope: 'chat',
+        source_summary: [],
+        content_summary: '聊天回答已保存，包含 0 个引用来源。',
+        file_name: '',
+        version: 1,
+        status: 'active',
+        created_at: '2026-07-09T08:00:00Z',
+        updated_at: '2026-07-09T08:00:00Z',
+      }, { status: 201 });
+    }),
+  );
+  generateLocalModelMock.mockResolvedValue({
+    output: '聚信交付方案内容',
+    latencyMs: 10,
+    usage: { output_tokens: 6 },
+  });
+
+  render(<ChatPage />);
+  await userEvent.type(await screen.findByLabelText('告诉我你想完成什么工作'), '输出交付方案');
+  await userEvent.click(screen.getByRole('button', { name: '发送' }));
+  expect(await screen.findByText('聚信交付方案内容')).toBeInTheDocument();
+
+  await userEvent.click(screen.getByRole('button', { name: '保存成果' }));
+
+  await waitFor(() => expect(saveArtifactRequest).toHaveBeenCalledWith({
+    conversation_id: 'session-save-artifact',
+    message_id: 'assistant-message-save-artifact',
+    title: '聚信交付方案内容',
+  }));
+  expect(await screen.findByText('已保存到工作成果')).toBeInTheDocument();
+});
+
 it('runs quality check and revises a weak loop answer before completing chat', async () => {
   const completeRequest = vi.fn();
   server.use(

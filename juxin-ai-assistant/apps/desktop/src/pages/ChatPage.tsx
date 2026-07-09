@@ -47,6 +47,7 @@ import {
   createLearningFeedback,
   createLearningMemory,
   createLearningTemplate,
+  saveChatMessageWorkArtifact,
 } from '../api/client';
 import { TaskProgressTimeline } from '../components/TaskProgressTimeline';
 import { cancelModelGeneration, generateLocalModel, listModelProfiles } from '../local/modelStream';
@@ -632,6 +633,15 @@ function isReadyPersonalReference(file: KnowledgeFilePayload): boolean {
 
 function fileNameFromPath(path: string): string {
   return path.split(/[\\/]/).pop()?.trim() || 'Word 文档';
+}
+
+function artifactTitleFromMessage(content: string): string {
+  return content
+    .replace(/[#*_>`~-]/g, '')
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .find(Boolean)
+    ?.slice(0, 80) || '聊天回答';
 }
 
 function safeSessionDisplayTitle(title: string): string {
@@ -1641,6 +1651,23 @@ export function ChatPage() {
     }
   };
 
+  const saveMessageAsWorkArtifact = async (message: UiMessage) => {
+    if (!activeSessionUuid) {
+      setStatus('请先完成一次任务后再保存成果');
+      return;
+    }
+    try {
+      await saveChatMessageWorkArtifact({
+        conversationId: activeSessionUuid,
+        messageId: message.id,
+        title: artifactTitleFromMessage(message.content),
+      });
+      setStatus('已保存到工作成果');
+    } catch {
+      setStatus('工作成果保存失败，请稍后重试');
+    }
+  };
+
   const previousUserQuestion = (messageId: string): string => {
     const index = messages.findIndex((item) => item.id === messageId);
     if (index <= 0) return '';
@@ -2330,6 +2357,9 @@ export function ChatPage() {
                           </button>
                           <button disabled={exportingWord} onClick={() => void exportMessageWord(message)} type="button">
                             {exportingWord ? '导出中…' : '导出 Word'}
+                          </button>
+                          <button onClick={() => void saveMessageAsWorkArtifact(message)} type="button">
+                            保存成果
                           </button>
                           <button onClick={() => void saveMessageAsExperience(message)} type="button">
                             保存为经验

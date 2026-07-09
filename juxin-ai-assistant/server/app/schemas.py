@@ -980,6 +980,61 @@ class HistoryDetailOut(HistoryItemOut):
     knowledge_refs: list[dict] = Field(default_factory=list)
 
 
+class WorkArtifactSourceOut(BaseModel):
+    source_type: str
+    file_name: str
+    page_number: int | None = None
+    section_title: str = ""
+
+
+class WorkArtifactVersionOut(BaseModel):
+    version_uuid: str
+    version: int
+    source: str
+    source_ref: str = ""
+    file_name: str = ""
+    source_summary: list[WorkArtifactSourceOut] = Field(default_factory=list)
+    content_summary: str = ""
+    created_at: datetime
+
+
+class WorkArtifactItemOut(BaseModel):
+    artifact_uuid: str
+    conversation_id: str = ""
+    message_id: str = ""
+    title: str
+    artifact_type: str
+    source_scope: str = ""
+    source_summary: list[WorkArtifactSourceOut] = Field(default_factory=list)
+    content_summary: str = ""
+    file_name: str = ""
+    version: int
+    status: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class WorkArtifactListOut(BaseModel):
+    items: list[WorkArtifactItemOut]
+    total: int
+    page: int
+    page_size: int
+
+
+class WorkArtifactDetailOut(WorkArtifactItemOut):
+    content: str | None = None
+    download_url: str | None = None
+    versions: list[WorkArtifactVersionOut] = Field(default_factory=list)
+
+
+class SaveChatMessageArtifactIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    conversation_id: str = Field(min_length=1, max_length=64)
+    message_id: str = Field(min_length=1, max_length=64)
+    title: str = Field(default="聊天回答", max_length=80)
+
+
 class RegenerateOut(PrepareGenerationOut):
     parent_generation_uuid: str
 

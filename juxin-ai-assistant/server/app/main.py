@@ -63,6 +63,7 @@ from .skill_routes import router as skill_router
 from .skill_registry import SkillRegistry
 from .static_web import mount_static_web
 from .web_routes import router as web_router
+from .work_artifact_routes import router as work_artifact_router
 from .schemas import (
     AttachmentOut,
     CatalogAssistantOut,
@@ -1672,6 +1673,7 @@ app.include_router(personal_reference_router)
 app.include_router(model_profile_router)
 app.include_router(skill_router)
 app.include_router(web_router)
+app.include_router(work_artifact_router)
 
 if settings.web_spa_enabled:
     mount_static_web(app, static_dir=settings.web_static_dir, enabled=True)

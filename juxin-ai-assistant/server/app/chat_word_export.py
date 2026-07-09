@@ -14,6 +14,7 @@ from .export_file_manager import ExportFileManager
 from .models import ChatMessage, ChatMessageSource, ChatSession, ExportRecord, KnowledgeChunk
 from .reference_matching import source_is_mentioned
 from .schemas import ExportContentWordIn, ExportWordIn, ExportWordOut
+from .work_artifacts import create_word_export_artifact, source_summary_for_messages
 
 
 FORMAL_DOCUMENT_PROMPT = """你是聚信得仁内部文档助手。
@@ -141,6 +142,18 @@ class DocxExportService:
         )
         db.add(record)
         db.flush()
+        create_word_export_artifact(
+            db,
+            owner_user_id=sso_user_id,
+            conversation_id=session.uuid,
+            message_id=content.message_id,
+            title=session.title,
+            export_record=record,
+            source_summary=source_summary_for_messages(
+                db,
+                [message.id for message in messages if message.role == "assistant"],
+            ),
+        )
         return ExportWordOut(
             file_name=saved.file_name,
             download_url=f"/api/export/download/{saved.file_id}",
@@ -184,6 +197,15 @@ class DocxExportService:
         )
         db.add(record)
         db.flush()
+        create_word_export_artifact(
+            db,
+            owner_user_id=sso_user_id,
+            conversation_id="",
+            message_id="",
+            title=body.title[:80] or "知识库文档结果",
+            export_record=record,
+            source_summary=_transient_source_summary(body.sources),
+        )
         return ExportWordOut(
             file_name=saved.file_name,
             download_url=f"/api/export/download/{saved.file_id}",
@@ -524,6 +546,28 @@ def _transient_reference_sources_markdown(sources: list) -> str:
     if has_session_attachment:
         lines.append("\n本文参考当前会话附件生成，仅供本次会话使用。")
     return "\n".join(lines)
+
+
+def _transient_source_summary(sources: list) -> list[dict[str, object]]:
+    summary: list[dict[str, object]] = []
+    seen: set[tuple[str, str, int | None, str]] = set()
+    for source in sources:
+        key = (
+            str(source.source_kind),
+            source.file_name,
+            source.page_number,
+            source.section_title,
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        summary.append({
+            "source_type": str(source.source_kind),
+            "file_name": source.file_name,
+            "page_number": source.page_number,
+            "section_title": source.section_title,
+        })
+    return summary
 
 
 def _source_label(source_type: str) -> str:
