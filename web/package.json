@@ -1,7 +1,7 @@
 {
   "name": "web",
   "private": true,
-  "version": "5.146.1",
+  "version": "5.147.0",
   "type": "module",
   "scripts": {
     "dev": "vite",

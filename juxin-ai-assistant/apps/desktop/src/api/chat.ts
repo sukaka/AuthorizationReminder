@@ -596,6 +596,7 @@ export async function streamChatMessage(
     completionToken: string;
     messages: Array<{ role: string; content: string }>;
     temperature?: number;
+    signal?: AbortSignal;
   },
   onDelta: (delta: string) => void,
 ): Promise<ChatGeneratePayload> {
@@ -607,6 +608,7 @@ export async function streamChatMessage(
       messages: payload.messages,
       temperature: payload.temperature ?? 0.3,
     }),
+    signal: payload.signal,
   });
   if (response.status === 401) {
     const errorPayload = await response.json().catch(() => null);

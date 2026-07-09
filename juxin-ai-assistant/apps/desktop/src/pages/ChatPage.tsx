@@ -49,7 +49,7 @@ import {
   createLearningTemplate,
 } from '../api/client';
 import { TaskProgressTimeline } from '../components/TaskProgressTimeline';
-import { generateLocalModel, listModelProfiles } from '../local/modelStream';
+import { cancelModelGeneration, generateLocalModel, listModelProfiles } from '../local/modelStream';
 import { isDesktopRuntime } from '../runtime/capabilities';
 import { openLocalWordFile } from '../runtime/downloads';
 import type { ModelProfile } from '../types/tauri';
@@ -93,6 +93,19 @@ type ReferenceFilePickerStatus = 'idle' | 'loading' | 'ready' | 'error';
 type TaskProgressView = ChatTaskStatePayload & {
   label: string;
   next_action: string;
+};
+
+type GenerationStatus = 'idle' | 'running' | 'stopping';
+
+type ActiveGeneration = {
+  abortController?: AbortController;
+  localRequestId?: string;
+  stopped: boolean;
+};
+
+type GenerationMetrics = {
+  latencyMs?: number | null;
+  usage?: Record<string, unknown> | null;
 };
 
 type MemorySuggestion = {
@@ -563,6 +576,36 @@ function apiErrorDetail(error: unknown): string {
   return '';
 }
 
+function isAbortLikeError(error: unknown): boolean {
+  return error instanceof DOMException && error.name === 'AbortError'
+    || error instanceof Error && error.name === 'AbortError';
+}
+
+function usageNumber(usage: Record<string, unknown> | null | undefined, keys: string[]): number | null {
+  if (!usage) return null;
+  for (const key of keys) {
+    const value = usage[key];
+    if (typeof value === 'number' && Number.isFinite(value)) return value;
+    if (typeof value === 'string') {
+      const parsed = Number(value);
+      if (Number.isFinite(parsed)) return parsed;
+    }
+  }
+  return null;
+}
+
+function formatLatency(value: number | null | undefined): string {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) return '—';
+  if (value < 1000) return `${Math.round(value)} ms`;
+  return `${(value / 1000).toFixed(value < 10000 ? 1 : 0)} s`;
+}
+
+function formatTokenCount(value: number | null | undefined): string {
+  return typeof value === 'number' && Number.isFinite(value)
+    ? value.toLocaleString()
+    : '—';
+}
+
 function referenceScopeIncludes(scope: ReferenceScope, sourceKind: EnabledReferenceFile['sourceKind']): boolean {
   if (sourceKind === 'personal_reference') {
     return scope === 'with_personal' || scope === 'personal_and_session';
@@ -764,9 +807,12 @@ export function ChatPage() {
   const [webCapture, setWebCapture] = useState<WebCaptureState>({ status: 'idle' });
   const [memorySuggestion, setMemorySuggestion] = useState<MemorySuggestion | null>(null);
   const [taskProgress, setTaskProgress] = useState<TaskProgressView | null>(null);
+  const [generationStatus, setGenerationStatus] = useState<GenerationStatus>('idle');
+  const [generationMetrics, setGenerationMetrics] = useState<GenerationMetrics | null>(null);
   const [webModelLabel, setWebModelLabel] = useState('服务端模型');
   const messageListRef = useRef<HTMLDivElement | null>(null);
   const shouldStickToBottomRef = useRef(true);
+  const activeGenerationRef = useRef<ActiveGeneration | null>(null);
 
   const refreshSessions = async (kind: ChatSessionListKind = sessionListKind) => {
     const payload = await getChatSessionsByKind(kind);
@@ -776,6 +822,22 @@ export function ChatPage() {
   };
 
   const shouldUseServerModel = !isDesktopRuntime();
+
+  const stopActiveGeneration = async () => {
+    const activeGeneration = activeGenerationRef.current;
+    if (!activeGeneration || generationStatus !== 'running') return;
+    activeGeneration.stopped = true;
+    setGenerationStatus('stopping');
+    setStatus('正在停止生成…');
+    activeGeneration.abortController?.abort();
+    if (activeGeneration.localRequestId) {
+      try {
+        await cancelModelGeneration(activeGeneration.localRequestId);
+      } catch {
+        // 停止是用户主动操作，底层模型已结束时无需再打扰用户。
+      }
+    }
+  };
 
   useEffect(() => {
     setSelectedSessionIds([]);
@@ -833,12 +895,38 @@ export function ChatPage() {
     };
   }, []);
 
+  useEffect(() => {
+    if (generationStatus !== 'running') return undefined;
+    const handleEscapeStop = (event: globalThis.KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      void stopActiveGeneration();
+    };
+    window.addEventListener('keydown', handleEscapeStop);
+    return () => window.removeEventListener('keydown', handleEscapeStop);
+  }, [generationStatus]);
+
   const activeProfile = useMemo(
     () => profiles.find((profile) => profile.isDefault && profile.hasApiKey)
       ?? profiles.find((profile) => profile.hasApiKey),
     [profiles],
   );
   const currentModelLabel = shouldUseServerModel ? webModelLabel : (activeProfile?.displayName || '未配置');
+  const generationActive = generationStatus === 'running' || generationStatus === 'stopping';
+  const generationMetricRows = useMemo(() => {
+    if (!generationMetrics) return [];
+    const inputTokens = usageNumber(generationMetrics.usage, ['prompt_tokens', 'input_tokens']);
+    const outputTokens = usageNumber(generationMetrics.usage, ['completion_tokens', 'output_tokens']);
+    const totalTokens = usageNumber(generationMetrics.usage, ['total_tokens']);
+    return [
+      { label: '完成耗时', value: formatLatency(generationMetrics.latencyMs) },
+      { label: '输入 token', value: formatTokenCount(inputTokens) },
+      { label: '输出 token', value: formatTokenCount(outputTokens) },
+      { label: '总 token', value: formatTokenCount(totalTokens ?? (
+        inputTokens !== null && outputTokens !== null ? inputTokens + outputTokens : null
+      )) },
+    ];
+  }, [generationMetrics]);
   const sessionAttachmentFiles = useMemo(
     () => enabledReferenceFiles.filter((file) => file.sourceKind === 'session_attachment'),
     [enabledReferenceFiles],
@@ -1137,7 +1225,29 @@ export function ChatPage() {
     }
   };
 
+  const markGenerationStopped = (assistantMessageId: string) => {
+    setStatus('已停止生成');
+    setTaskProgress((current) => current
+      ? taskProgressWithStage(current, 'stopped', '已停止生成', '可以修改问题后重新发送')
+      : current);
+    if (!assistantMessageId) return;
+    setMessages((current) => current.map((message) =>
+      message.id === assistantMessageId
+        ? {
+            ...message,
+            content: message.content || '已停止生成',
+            isComplete: true,
+          }
+        : message,
+    ));
+  };
+
   const send = async (questionOverride?: string) => {
+    if (generationStatus === 'running') {
+      await stopActiveGeneration();
+      return;
+    }
+    if (generationStatus === 'stopping') return;
     const trimmed = (questionOverride ?? question).trim();
     if (!trimmed) return;
     if (activeSessionStatus === 'archived') {
@@ -1159,15 +1269,19 @@ export function ChatPage() {
     }
     shouldStickToBottomRef.current = true;
     setStatus(mode === 'knowledge' ? '检索中…' : '生成中…');
+    setGenerationStatus('running');
+    setGenerationMetrics(null);
+    activeGenerationRef.current = { stopped: false };
     setQuestion('');
     setMemorySuggestion(detectMemorySuggestion(trimmed));
-      setMessages((current) => current.concat({
-        id: `local-user-${Date.now()}`,
-        role: 'user',
-        content: trimmed,
-        citations: [],
-        isComplete: true,
-      }));
+    setMessages((current) => current.concat({
+      id: `local-user-${Date.now()}`,
+      role: 'user',
+      content: trimmed,
+      citations: [],
+      isComplete: true,
+    }));
+    let assistantId = '';
     try {
       const prepared = await prepareChat({
         sessionUuid: activeSessionUuid || undefined,
@@ -1203,7 +1317,7 @@ export function ChatPage() {
         setStatus('请先完成模型设置');
         return;
       }
-      const assistantId = prepared.assistant_message_uuid;
+      assistantId = prepared.assistant_message_uuid;
       setMessages((current) => current.concat({
         id: assistantId,
         role: 'assistant',
@@ -1212,16 +1326,30 @@ export function ChatPage() {
         isComplete: false,
       }));
       if (shouldUseServerModel) {
+        const abortController = new AbortController();
+        activeGenerationRef.current = {
+          ...(activeGenerationRef.current ?? { stopped: false }),
+          abortController,
+        };
         const generated = await streamChatMessage(assistantId, {
           completionToken: prepared.completion_token,
           messages: prepared.messages,
           temperature: activeProfile?.temperature ?? 0.3,
+          signal: abortController.signal,
         }, (delta) => {
           setMessages((current) => current.map((message) =>
             message.id === assistantId
               ? { ...message, content: message.content + delta }
               : message,
           ));
+        });
+        if (activeGenerationRef.current?.stopped) {
+          markGenerationStopped(assistantId);
+          return;
+        }
+        setGenerationMetrics({
+          latencyMs: generated.latency_ms,
+          usage: generated.usage,
         });
         setTaskProgress((current) => current
           ? taskProgressWithStage(current, 'completed', '生成完成', '可以复制、保存、导出或继续追问')
@@ -1244,11 +1372,16 @@ export function ChatPage() {
         setStatus('请先完成模型设置');
         return;
       }
+      const initialRequestId = `chat-${assistantId}`;
+      activeGenerationRef.current = {
+        ...(activeGenerationRef.current ?? { stopped: false }),
+        localRequestId: initialRequestId,
+      };
       let result: GeneratedModelResult = await generateLocalModel({
         profileId: activeProfile.id,
         messages: prepared.messages,
         temperature: activeProfile.temperature,
-        requestId: `chat-${assistantId}`,
+        requestId: initialRequestId,
       }, (delta) => {
         setMessages((current) => current.map((message) =>
           message.id === assistantId
@@ -1256,6 +1389,10 @@ export function ChatPage() {
             : message,
         ));
       });
+      if (activeGenerationRef.current?.stopped) {
+        markGenerationStopped(assistantId);
+        return;
+      }
       setMessages((current) => current.map((message) =>
           message.id === assistantId
               ? {
@@ -1278,15 +1415,24 @@ export function ChatPage() {
           if (!check || check.passed || !check.retry_allowed || !check.revision_messages.length) {
             break;
           }
+          if (activeGenerationRef.current?.stopped) {
+            markGenerationStopped(assistantId);
+            return;
+          }
           setStatus('正在自检并修正…');
           setTaskProgress((current) => current
             ? taskProgressWithStage(current, 'quality_check', '正在复核结果', '正在自检并修正')
             : current);
+          const revisionRequestId = `chat-${assistantId}-revise-${retryCount + 1}`;
+          activeGenerationRef.current = {
+            ...(activeGenerationRef.current ?? { stopped: false }),
+            localRequestId: revisionRequestId,
+          };
           result = await generateLocalModel({
             profileId: activeProfile.id,
             messages: check.revision_messages,
             temperature: activeProfile.temperature,
-            requestId: `chat-${assistantId}-revise-${retryCount + 1}`,
+            requestId: revisionRequestId,
           }, (delta) => {
             setMessages((current) => current.map((message) =>
               message.id === assistantId
@@ -1294,6 +1440,10 @@ export function ChatPage() {
                 : message,
             ));
           });
+          if (activeGenerationRef.current?.stopped) {
+            markGenerationStopped(assistantId);
+            return;
+          }
           setMessages((current) => current.map((message) =>
             message.id === assistantId
               ? {
@@ -1306,6 +1456,10 @@ export function ChatPage() {
           ));
         }
       }
+      setGenerationMetrics({
+        latencyMs: result.latencyMs,
+        usage: result.usage,
+      });
       await completeChatMessage(assistantId, {
         completionToken: prepared.completion_token,
         answer: result.output,
@@ -1330,6 +1484,10 @@ export function ChatPage() {
       refreshSessions(sessionListKind).catch(() => undefined);
       setStatus('');
     } catch (error) {
+      if (activeGenerationRef.current?.stopped || isAbortLikeError(error)) {
+        markGenerationStopped(assistantId);
+        return;
+      }
       const detail = apiErrorDetail(error);
       if (detail.includes('已归档')) setActiveSessionStatus('archived');
       if (detail.includes('已删除')) setActiveSessionStatus('deleted');
@@ -1337,6 +1495,9 @@ export function ChatPage() {
       setTaskProgress((current) => current
         ? taskProgressWithStage(current, 'failed', '生成遇到问题', detail || '请稍后重试或调整问题')
         : current);
+    } finally {
+      activeGenerationRef.current = null;
+      setGenerationStatus('idle');
     }
   };
 
@@ -2021,15 +2182,30 @@ export function ChatPage() {
             <p>我是你的私人工作助理，可以帮你写、查、整理、生成和导出工作成果。</p>
           </header>
 
-          {taskProgress ? (
-            <TaskProgressTimeline
-              stage={taskProgress.stage}
-              label={taskProgress.label}
-              nextAction={taskProgress.next_action}
-              stageHistory={taskProgress.stage_history}
-              selectedSources={taskProgress.selected_sources}
-              toolCalls={taskProgress.tool_calls}
-            />
+          {taskProgress || generationMetricRows.length ? (
+            <aside className="chat-progress-rail" aria-label="任务进度">
+              {taskProgress ? (
+                <TaskProgressTimeline
+                  stage={taskProgress.stage}
+                  label={taskProgress.label}
+                  nextAction={taskProgress.next_action}
+                  stageHistory={taskProgress.stage_history}
+                  selectedSources={taskProgress.selected_sources}
+                  toolCalls={taskProgress.tool_calls}
+                />
+              ) : null}
+              {generationMetricRows.length ? (
+                <section className="chat-generation-metrics" aria-label="生成指标">
+                  <strong>生成指标</strong>
+                  {generationMetricRows.map((item) => (
+                    <span key={item.label}>
+                      <em>{item.label}</em>
+                      <b>{item.value}</b>
+                    </span>
+                  ))}
+                </section>
+              ) : null}
+            </aside>
           ) : null}
 
           <div className="chat-content-grid">
@@ -2476,12 +2652,13 @@ export function ChatPage() {
                 <span className="chat-mode-pill">{modeLabels[mode]}</span>
                 <span className="chat-model-pill">当前设置：{currentModelLabel}</span>
                 <button
-                  aria-label="发送"
-                  className="chat-send-button"
-                  disabled={!question.trim() || Boolean(composerDisabledReason)}
-                  type="submit"
+                  aria-label={generationActive ? '停止生成' : '发送'}
+                  className={`chat-send-button${generationActive ? ' is-stop-button is-stopping-ready' : ''}`}
+                  disabled={generationStatus === 'stopping' || (!generationActive && (!question.trim() || Boolean(composerDisabledReason)))}
+                  onClick={generationActive ? () => void stopActiveGeneration() : undefined}
+                  type={generationActive ? 'button' : 'submit'}
                 >
-                  ↑
+                  <span aria-hidden="true">{generationActive ? '' : '↑'}</span>
                 </button>
               </div>
               {memorySuggestion ? (

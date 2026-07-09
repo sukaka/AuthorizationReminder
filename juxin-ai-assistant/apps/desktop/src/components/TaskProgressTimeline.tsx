@@ -25,6 +25,7 @@ const stageLabels: Record<string, string> = {
   quality_check: '正在复核结果',
   completed: '生成完成',
   failed: '生成遇到问题',
+  stopped: '已停止生成',
 };
 
 const toolLabels: Record<string, string> = {

@@ -6,13 +6,15 @@ import { beforeEach, expect, it, vi } from 'vitest';
 import { ChatPage, detectMemorySuggestion } from '../src/pages/ChatPage';
 import { server } from './setup';
 
-const { invokeMock, generateLocalModelMock } = vi.hoisted(() => ({
+const { invokeMock, generateLocalModelMock, cancelModelGenerationMock } = vi.hoisted(() => ({
   invokeMock: vi.fn(),
   generateLocalModelMock: vi.fn(),
+  cancelModelGenerationMock: vi.fn(),
 }));
 
 vi.mock('@tauri-apps/api/core', () => ({ invoke: invokeMock }));
 vi.mock('../src/local/modelStream', () => ({
+  cancelModelGeneration: cancelModelGenerationMock,
   generateLocalModel: generateLocalModelMock,
   listModelProfiles: () => invokeMock('model_profile_list'),
 }));
@@ -66,6 +68,8 @@ beforeEach(() => {
     return Promise.resolve(undefined);
   });
   generateLocalModelMock.mockReset();
+  cancelModelGenerationMock.mockReset();
+  cancelModelGenerationMock.mockResolvedValue(undefined);
   Object.defineProperty(window, '__TAURI_INTERNALS__', {
     configurable: true,
     value: {},
@@ -897,6 +901,80 @@ it('does not send with Enter while an IME composition is active', async () => {
   expect(prepareRequest).not.toHaveBeenCalled();
   expect(input).toHaveValue('ni');
   expect(screen.queryByText('正在生成…')).not.toBeInTheDocument();
+});
+
+it('turns the send button into a compact stop button while generating and cancels by click', async () => {
+  const completeRequest = vi.fn();
+  let resolveGeneration: ((value: { output: string; latencyMs: number; usage: { output_tokens: number } }) => void) | undefined;
+  const pendingGeneration = new Promise<{ output: string; latencyMs: number; usage: { output_tokens: number } }>((resolve) => {
+    resolveGeneration = resolve;
+  });
+  server.use(
+    http.get('/api/conversations', () => HttpResponse.json({ items: [], total: 0 })),
+    http.post('/api/ai/chat/prepare', () => HttpResponse.json({
+      session_uuid: 'session-stop-click',
+      user_message_uuid: 'user-message-stop-click',
+      assistant_message_uuid: 'assistant-message-stop-click',
+      completion_token: 'complete-stop-click',
+      completed: false,
+      answer: '',
+      messages: [
+        { role: 'system', content: '你是聚信 AI 助手' },
+        { role: 'user', content: '写一份长报告' },
+      ],
+      citations: [],
+    }, { status: 201 })),
+    http.post('/api/ai/chat/messages/assistant-message-stop-click/complete', async ({ request }) => {
+      completeRequest(await request.json());
+      return HttpResponse.json({ message_uuid: 'assistant-message-stop-click', status: 'COMPLETED' });
+    }),
+  );
+  generateLocalModelMock.mockReturnValue(pendingGeneration);
+
+  render(<ChatPage />);
+  await userEvent.type(await screen.findByLabelText('告诉我你想完成什么工作'), '写一份长报告');
+  await userEvent.click(screen.getByRole('button', { name: '发送' }));
+
+  const stopButton = await screen.findByRole('button', { name: '停止生成' });
+  expect(stopButton).toHaveClass('is-stopping-ready');
+  await waitFor(() => expect(generateLocalModelMock).toHaveBeenCalled());
+  await userEvent.click(stopButton);
+
+  const requestId = generateLocalModelMock.mock.calls[0][0].requestId;
+  expect(cancelModelGenerationMock).toHaveBeenCalledWith(requestId);
+  resolveGeneration?.({ output: '不应保存的内容', latencyMs: 100, usage: { output_tokens: 3 } });
+  await waitFor(() => expect(completeRequest).not.toHaveBeenCalled());
+});
+
+it('cancels the active generation when Escape is pressed', async () => {
+  const pendingGeneration = new Promise<{ output: string; latencyMs: number; usage: { output_tokens: number } }>(() => {});
+  server.use(
+    http.get('/api/conversations', () => HttpResponse.json({ items: [], total: 0 })),
+    http.post('/api/ai/chat/prepare', () => HttpResponse.json({
+      session_uuid: 'session-stop-escape',
+      user_message_uuid: 'user-message-stop-escape',
+      assistant_message_uuid: 'assistant-message-stop-escape',
+      completion_token: 'complete-stop-escape',
+      completed: false,
+      answer: '',
+      messages: [
+        { role: 'system', content: '你是聚信 AI 助手' },
+        { role: 'user', content: '继续生成' },
+      ],
+      citations: [],
+    }, { status: 201 })),
+  );
+  generateLocalModelMock.mockReturnValue(pendingGeneration);
+
+  render(<ChatPage />);
+  await userEvent.type(await screen.findByLabelText('告诉我你想完成什么工作'), '继续生成');
+  await userEvent.click(screen.getByRole('button', { name: '发送' }));
+  await screen.findByRole('button', { name: '停止生成' });
+  await waitFor(() => expect(generateLocalModelMock).toHaveBeenCalled());
+  await userEvent.keyboard('{Escape}');
+
+  const requestId = generateLocalModelMock.mock.calls[0][0].requestId;
+  expect(cancelModelGenerationMock).toHaveBeenCalledWith(requestId);
 });
 
 it('shows static prompt examples and keeps new chat out of the history pane', async () => {
