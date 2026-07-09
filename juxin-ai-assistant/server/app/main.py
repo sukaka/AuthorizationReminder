@@ -43,6 +43,7 @@ from .history_service import (
 )
 from .intent_router import route_intent
 from .knowledge import KnowledgeRetriever
+from .knowledge_embedding import build_embedding_service
 from .knowledge_files import create_knowledge_file_from_bytes
 from .knowledge_routes import router as knowledge_router
 from .learning_routes import router as learning_router
@@ -1054,6 +1055,7 @@ async def upload_knowledge_file(
             tags=_split_tags(tags),
             uploaded_by=str(session_payload.user.id),
             storage_root=current_settings.knowledge_storage_dir,
+            embedding_service=build_embedding_service(db, current_settings),
         )
         write_request_audit(
             db,

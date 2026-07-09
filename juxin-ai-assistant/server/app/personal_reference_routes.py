@@ -7,6 +7,7 @@ from .auth import get_session, require_action
 from .config import Settings, get_settings
 from .crypto import ContentCipher
 from .database import get_db
+from .knowledge_embedding import build_embedding_service
 from .personal_reference_service import (
     prepare_personal_reference_generation,
     search_personal_reference_sources,
@@ -50,6 +51,7 @@ async def search_personal_reference(
             sso_user_id=str(session_payload.user.id),
             body=body,
             cipher=cipher,
+            embedding_service=build_embedding_service(db, current_settings),
         )
         db.commit()
     except Exception:
@@ -79,6 +81,7 @@ async def generate_from_personal_reference(
             sso_user_id=str(session_payload.user.id),
             body=body,
             cipher=cipher,
+            embedding_service=build_embedding_service(db, current_settings),
         )
         db.commit()
     except Exception:

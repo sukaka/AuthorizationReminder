@@ -119,7 +119,12 @@ it('shows AI governance pages to admin without user or server model forms', asyn
   expect(screen.getByRole('button', { name: '任务管理' })).toBeInTheDocument();
   const governanceNav = screen.getByRole('navigation', { name: '治理导航' });
   expect(within(governanceNav).getByRole('button', { name: '知识库' })).toBeInTheDocument();
-  expect(within(governanceNav).getByRole('button', { name: '系统设置' })).toBeInTheDocument();
+  const settingsButton = within(governanceNav).getByRole('button', { name: '系统设置' });
+  expect(settingsButton).toBeInTheDocument();
+  await userEvent.click(settingsButton);
+  expect(screen.getByText('向量模型')).toBeInTheDocument();
+  expect(screen.getByLabelText('向量模型名称')).toBeInTheDocument();
+  expect(screen.getByText('API Key 请通过服务器环境变量配置，不在页面保存密钥。')).toBeInTheDocument();
   expect(screen.queryByText('服务端模型配置')).not.toBeInTheDocument();
   expect(screen.queryByRole('button', { name: '新增用户' })).not.toBeInTheDocument();
 });

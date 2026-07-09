@@ -15,6 +15,7 @@ from .crypto import ContentCipher, EncryptedPayload
 from .context.context_builder import ContextBuilder
 from .context.mode_knowledge_filters import merge_mode_knowledge_filters
 from .database import get_db
+from .knowledge_embedding import build_embedding_service
 from .knowledge_files import (
     _safe_file_name,
     create_knowledge_file_from_bytes,
@@ -562,6 +563,7 @@ def _official_chunks(
     user_id: str,
     body: KnowledgeQueryIn,
     cipher: ContentCipher,
+    current_settings: Settings,
 ) -> list[RetrievedKnowledgeChunk]:
     categories, document_types = merge_mode_knowledge_filters(
         mode=body.mode,
@@ -577,6 +579,7 @@ def _official_chunks(
         knowledge_base_ids=body.knowledge_base_ids,
         categories=categories,
         document_types=document_types,
+        embedding_service=build_embedding_service(db, current_settings),
     )
 
 
@@ -654,6 +657,7 @@ async def search_knowledge(
         user_id=user_id,
         body=body,
         cipher=_content_cipher(current_settings),
+        current_settings=current_settings,
     )
     _add_search_log(db, user_id=user_id, body=body, chunks=chunks)
     db.commit()
@@ -676,6 +680,7 @@ async def ask_knowledge(
         user_id=user_id,
         body=body,
         cipher=_content_cipher(current_settings),
+        current_settings=current_settings,
     )
     _add_search_log(db, user_id=user_id, body=body, chunks=chunks)
     db.commit()
@@ -1776,6 +1781,7 @@ async def upload_knowledge_file(
             uploaded_by=user_id,
             knowledge_base_id=base.id if base is not None else None,
             storage_root=current_settings.knowledge_storage_dir,
+            embedding_service=build_embedding_service(db, current_settings),
         )
         if normalized_usage_type == "personal_reference" and (
             (category.strip() or "个人素材") in {"个人素材", "其他"}
@@ -1910,6 +1916,7 @@ async def reparse_knowledge_file(
             file_record=file_record,
             cipher=_content_cipher(current_settings),
             storage_root=current_settings.knowledge_storage_dir,
+            embedding_service=build_embedding_service(db, current_settings),
         )
         db.commit()
         db.refresh(file_record)

@@ -620,14 +620,15 @@ def _metadata_with_embedding(
     chunk_id: str,
     text: str,
     metadata: dict,
+    embedding_service: EmbeddingService | None = None,
 ) -> tuple[dict, str]:
-    embedding_service = EmbeddingService()
-    vector = embedding_service.embed_chunk(text, metadata)
+    service = embedding_service or EmbeddingService()
+    vector = service.embed_chunk(text, metadata)
     enriched = {
         **metadata,
-        "embedding": embedding_service.to_metadata(vector),
+        "embedding": service.to_metadata(vector),
     }
-    return enriched, embedding_service.embedding_id(chunk_id, vector)
+    return enriched, service.embedding_id(chunk_id, vector)
 
 
 def _summary_from_drafts(drafts: list[ChunkDraft]) -> str:
@@ -674,6 +675,7 @@ def create_knowledge_file_from_bytes(
     storage_root: str | None = None,
     extra_metadata: dict | None = None,
     file_type_override: str | None = None,
+    embedding_service: EmbeddingService | None = None,
 ) -> tuple[KnowledgeFile, list[KnowledgeChunk]]:
     safe_name = _safe_file_name(file_name)
     if len(content) > MAX_KNOWLEDGE_FILE_BYTES:
@@ -752,6 +754,7 @@ def create_knowledge_file_from_bytes(
                 rag_scope=rag_scope,
                 permission_scope=permission_scope,
             ) | (extra_metadata or {}),
+            embedding_service=embedding_service,
         )
         chunk = KnowledgeChunk(
             chunk_id=chunk_id,
@@ -784,6 +787,7 @@ def reparse_knowledge_file_from_existing_chunks(
     max_chars: int = 1500,
     overlap_chars: int = 150,
     storage_root: str | None = None,
+    embedding_service: EmbeddingService | None = None,
 ) -> list[KnowledgeChunk]:
     source_text = ""
     source_blocks: list[ParsedBlock] = []
@@ -855,6 +859,7 @@ def reparse_knowledge_file_from_existing_chunks(
                 rag_scope=file_record.rag_scope,
                 permission_scope=file_record.permission_scope,
             ),
+            embedding_service=embedding_service,
         )
         chunk = KnowledgeChunk(
             chunk_id=chunk_id,

@@ -75,6 +75,35 @@ def test_settings_upsert_only_allowed_non_secret_values(generation_db) -> None:
     }
 
 
+def test_settings_allow_admin_vector_model_configuration(generation_db) -> None:
+    # Given: an administrator settings request.
+    app.dependency_overrides[get_db] = lambda: generation_db
+
+    # When: non-secret embedding model routing fields are updated.
+    try:
+        with TestClient(app) as client:
+            response = client.put(
+                "/api/ai/admin/settings",
+                json={
+                    "embedding_provider": "openai-compatible",
+                    "embedding_base_url": "https://model.example/v1",
+                    "embedding_model_id": "text-embedding-3-large",
+                    "embedding_dimensions": 3072,
+                },
+            )
+    finally:
+        app.dependency_overrides.pop(get_db, None)
+
+    # Then: the approved vector model fields are persisted and returned.
+    assert response.status_code == 200
+    assert response.json() == {
+        "embedding_base_url": "https://model.example/v1",
+        "embedding_dimensions": 3072,
+        "embedding_model_id": "text-embedding-3-large",
+        "embedding_provider": "openai-compatible",
+    }
+
+
 def test_manager_can_only_suggest_for_managed_department(
     generation_db,
 ) -> None:

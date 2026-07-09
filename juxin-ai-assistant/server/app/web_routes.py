@@ -11,6 +11,7 @@ from .auth import get_session, require_action
 from .config import Settings, get_settings
 from .crypto import ContentCipher
 from .database import get_db
+from .knowledge_embedding import build_embedding_service
 from .knowledge_files import create_knowledge_file_from_bytes
 from .models import KnowledgeFile, WebCapture
 from .schemas import (
@@ -223,6 +224,7 @@ async def confirm_web_capture(
             uploaded_by=user_id,
             storage_root=current_settings.knowledge_storage_dir,
             file_type_override="webpage",
+            embedding_service=build_embedding_service(db, current_settings),
             extra_metadata={
                 "source_origin": "web_capture",
                 "web_capture_id": capture.uuid,

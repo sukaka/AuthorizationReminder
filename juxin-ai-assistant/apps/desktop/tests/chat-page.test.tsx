@@ -175,7 +175,7 @@ it('uses server-side model generation in web runtime without local model profile
             answer: 'Web 端已使用服务端模型生成。',
             model_display_name: '服务端模型',
             model_id: 'deepseek-chat',
-            usage: { total_tokens: 18 },
+            usage: { prompt_tokens: 2971, completion_tokens: 202, total_tokens: 3173 },
             latency_ms: 23,
           })}\n`));
           controller.close();
@@ -192,6 +192,11 @@ it('uses server-side model generation in web runtime without local model profile
   await userEvent.click(screen.getByRole('button', { name: '发送' }));
 
   expect(await screen.findByText('Web 端已使用服务端模型生成。')).toBeInTheDocument();
+  const metrics = screen.getByRole('region', { name: '生成指标' });
+  expect(within(metrics).getByText('总 token')).toBeInTheDocument();
+  expect(within(metrics).getByText('3,173')).toBeInTheDocument();
+  expect(within(metrics).queryByText('输入 token')).not.toBeInTheDocument();
+  expect(within(metrics).queryByText('输出 token')).not.toBeInTheDocument();
   expect(generateLocalModelMock).not.toHaveBeenCalled();
   expect(generateRequest).toHaveBeenCalledWith(expect.objectContaining({
     completion_token: 'complete-web-model',

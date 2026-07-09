@@ -17,6 +17,10 @@ ALLOWED_SETTING_KEYS: Final[frozenset[str]] = frozenset(
         "knowledge_limit",
         "default_temperature",
         "support_contact",
+        "embedding_provider",
+        "embedding_base_url",
+        "embedding_model_id",
+        "embedding_dimensions",
     }
 )
 SECRET_LIKE_KEY: Final[re.Pattern[str]] = re.compile(

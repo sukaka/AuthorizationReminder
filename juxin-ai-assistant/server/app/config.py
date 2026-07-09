@@ -36,6 +36,8 @@ class Settings(BaseSettings):
     server_model_display_name: str = "服务端模型"
     server_model_timeout_seconds: int = Field(default=300, ge=5, le=600)
     server_model_max_output_tokens: int = Field(default=8192, ge=1, le=200000)
+    embedding_model_api_key: str = ""
+    embedding_model_timeout_seconds: int = Field(default=30, ge=3, le=300)
 
     # Desktop update publishing
     desktop_update_storage_dir: str = "/var/lib/juxin-ai-assistant/desktop-updates"

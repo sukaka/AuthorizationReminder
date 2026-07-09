@@ -11,6 +11,13 @@ const SETTING_FIELDS = [
   ['support_contact', '支持联系人'],
 ] as const;
 
+const VECTOR_MODEL_FIELDS = [
+  ['embedding_provider', '向量模型供应商'],
+  ['embedding_base_url', '向量模型服务地址'],
+  ['embedding_model_id', '向量模型名称'],
+  ['embedding_dimensions', '向量维度'],
+] as const;
+
 export function SettingsPage() {
   const [values, setValues] = useState<Record<string, string>>({});
   const [notice, setNotice] = useState('');
@@ -29,6 +36,7 @@ export function SettingsPage() {
         ...(values.history_retention_days ? { history_retention_days: Number(values.history_retention_days) } : {}),
         ...(values.knowledge_limit ? { knowledge_limit: Number(values.knowledge_limit) } : {}),
         ...(values.default_temperature ? { default_temperature: Number(values.default_temperature) } : {}),
+        ...(values.embedding_dimensions ? { embedding_dimensions: Number(values.embedding_dimensions) } : {}),
         ...(values.sensitive_detection_enabled ? { sensitive_detection_enabled: values.sensitive_detection_enabled === 'true' } : {}),
       });
       setNotice('设置已保存。');
@@ -41,6 +49,14 @@ export function SettingsPage() {
         {SETTING_FIELDS.map(([key, label]) => (
           <label key={key}>{label}<input value={values[key] || ''} onChange={(event) => setValues({ ...values, [key]: event.target.value })} /></label>
         ))}
+        <fieldset>
+          <legend>向量模型</legend>
+          <p>用于公司知识库语义检索。</p>
+          <p>API Key 请通过服务器环境变量配置，不在页面保存密钥。</p>
+          {VECTOR_MODEL_FIELDS.map(([key, label]) => (
+            <label key={key}>{label}<input value={values[key] || ''} onChange={(event) => setValues({ ...values, [key]: event.target.value })} /></label>
+          ))}
+        </fieldset>
         <label className="toggle-setting"><input checked={values.sensitive_detection_enabled !== 'false'} onChange={(event) => setValues({ ...values, sensitive_detection_enabled: String(event.target.checked) })} type="checkbox" />启用敏感信息检测</label>
         <button className="primary-action" type="submit">保存设置</button>
       </form>

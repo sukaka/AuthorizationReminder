@@ -920,8 +920,6 @@ export function ChatPage() {
     const totalTokens = usageNumber(generationMetrics.usage, ['total_tokens']);
     return [
       { label: '完成耗时', value: formatLatency(generationMetrics.latencyMs) },
-      { label: '输入 token', value: formatTokenCount(inputTokens) },
-      { label: '输出 token', value: formatTokenCount(outputTokens) },
       { label: '总 token', value: formatTokenCount(totalTokens ?? (
         inputTokens !== null && outputTokens !== null ? inputTokens + outputTokens : null
       )) },

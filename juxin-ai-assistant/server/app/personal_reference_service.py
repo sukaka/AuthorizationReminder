@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session
 from .agent_loop.task_analyzer import TaskAnalyzer
 from .context.context_builder import ContextBuilder
 from .crypto import ContentCipher
-from .knowledge_search import RetrievedKnowledgeChunk, search_personal_reference_chunks
+from .knowledge_search import EmbeddingService, RetrievedKnowledgeChunk, search_personal_reference_chunks
 from .models import KnowledgeSearchLog
 from .schemas import (
     PersonalReferenceGenerateIn,
@@ -58,6 +58,7 @@ def search_personal_reference_sources(
     sso_user_id: str,
     body: PersonalReferenceSearchIn,
     cipher: ContentCipher,
+    embedding_service: EmbeddingService | None = None,
 ) -> PersonalReferenceSearchOut:
     chunks = search_personal_reference_chunks(
         db,
@@ -67,6 +68,7 @@ def search_personal_reference_sources(
         conversation_id=body.conversation_id,
         file_ids=body.file_ids,
         top_k=body.top_k,
+        embedding_service=embedding_service,
     )
     db.add(
         KnowledgeSearchLog(
@@ -96,6 +98,7 @@ def prepare_personal_reference_generation(
     sso_user_id: str,
     body: PersonalReferenceGenerateIn,
     cipher: ContentCipher,
+    embedding_service: EmbeddingService | None = None,
 ) -> PersonalReferenceGenerateOut:
     analysis = TaskAnalyzer().analyze(body.question, body.mode)
     chunks = search_personal_reference_chunks(
@@ -106,6 +109,7 @@ def prepare_personal_reference_generation(
         conversation_id=body.conversation_id,
         file_ids=body.file_ids,
         top_k=body.top_k,
+        embedding_service=embedding_service,
     )
     messages = ContextBuilder().build_messages(
         mode=analysis.mode,

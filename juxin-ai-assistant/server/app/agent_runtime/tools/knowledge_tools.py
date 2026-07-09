@@ -37,6 +37,7 @@ class CompanyKnowledgeSearchTool(BaseTool):
         query = str(tool_input.get("query") or "")
         mode = str(tool_input.get("mode") or context.mode or "normal")
         categories, document_types = merge_mode_knowledge_filters(mode=mode)
+        embedding_service = context.resources.get("embedding_service")
         chunks = search_knowledge_chunks(
             context.db,
             sso_user_id=context.user_id,
@@ -45,6 +46,7 @@ class CompanyKnowledgeSearchTool(BaseTool):
             top_k=tool_input.get("top_k"),
             categories=categories,
             document_types=document_types,
+            embedding_service=embedding_service,
         )
         return ToolResult(
             tool_name=self.name,
@@ -80,6 +82,7 @@ class PersonalReferenceSearchTool(BaseTool):
         file_ids = list(tool_input.get("file_ids") or [])
         include_personal_references = bool(tool_input.get("include_personal_references"))
         include_session_attachments = bool(tool_input.get("include_session_attachments"))
+        embedding_service = context.resources.get("embedding_service")
         chunks = search_personal_reference_chunks(
             context.db,
             sso_user_id=context.user_id,
@@ -90,6 +93,7 @@ class PersonalReferenceSearchTool(BaseTool):
             include_personal_references=include_personal_references,
             include_session_attachments=include_session_attachments,
             top_k=tool_input.get("top_k"),
+            embedding_service=embedding_service,
         )
         search_log = KnowledgeSearchLog(
             user_id=context.user_id,
@@ -144,6 +148,7 @@ class CurrentAttachmentSearchTool(BaseTool):
         mode = str(tool_input.get("mode") or context.mode or "normal")
         conversation_id = str(tool_input.get("conversation_id") or context.conversation_id or "")
         file_ids = list(tool_input.get("file_ids") or [])
+        embedding_service = context.resources.get("embedding_service")
         chunks = search_personal_reference_chunks(
             context.db,
             sso_user_id=context.user_id,
@@ -154,6 +159,7 @@ class CurrentAttachmentSearchTool(BaseTool):
             include_personal_references=False,
             include_session_attachments=True,
             top_k=tool_input.get("top_k"),
+            embedding_service=embedding_service,
         )
         search_log = KnowledgeSearchLog(
             user_id=context.user_id,

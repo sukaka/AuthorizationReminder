@@ -356,8 +356,9 @@ def _hybrid_rank_rows(
     cipher: ContentCipher,
     source_kind_for_file,
     top_k: int | None,
+    embedding_service: EmbeddingService | None = None,
 ) -> list[RetrievedKnowledgeChunk]:
-    return HybridRetriever(cipher=cipher).retrieve(
+    return HybridRetriever(cipher=cipher, embedding_service=embedding_service).retrieve(
         rows,
         query=query,
         terms=terms,
@@ -514,6 +515,7 @@ def search_knowledge_chunks(
     knowledge_base_ids: list[str] | None = None,
     categories: list[str] | None = None,
     document_types: list[str] | None = None,
+    embedding_service: EmbeddingService | None = None,
 ) -> list[RetrievedKnowledgeChunk]:
     terms = _query_terms(query)
     if not terms:
@@ -563,6 +565,7 @@ def search_knowledge_chunks(
         cipher=cipher,
         source_kind_for_file=lambda _file: "official_knowledge",
         top_k=top_k,
+        embedding_service=embedding_service,
     )
     _mark_files_used(db, results)
     return results
@@ -579,6 +582,7 @@ def search_personal_reference_chunks(
     include_personal_references: bool = True,
     include_session_attachments: bool = True,
     top_k: int | None = 8,
+    embedding_service: EmbeddingService | None = None,
 ) -> list[RetrievedKnowledgeChunk]:
     terms = _query_terms(query)
     if not terms:
@@ -624,6 +628,7 @@ def search_personal_reference_chunks(
         cipher=cipher,
         source_kind_for_file=lambda file_record: file_record.usage_type,
         top_k=top_k,
+        embedding_service=embedding_service,
     )
     _mark_files_used(db, results)
     return results
