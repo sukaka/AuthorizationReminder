@@ -67,7 +67,7 @@ function systemLabel(systemKey: string): string {
 
 function Workspace({ session }: { session: SessionPayload }) {
   const capabilities = getRuntimeCapabilities();
-  const [page, setPage] = useState<WorkspacePage>('home');
+  const [page, setPage] = useState<WorkspacePage>('chat');
   const [task, setTask] = useState<TaskDefinition | null>(null);
   const [taskError, setTaskError] = useState('');
   const [sidebarMode, setSidebarMode] = useState<SidebarMode>('expanded');

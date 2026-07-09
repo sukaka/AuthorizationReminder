@@ -122,7 +122,7 @@ it('shows all assistants regardless of the signed-in department and supports tas
   expect(screen.getByRole('button', { name: '取消收藏 报价说明生成' })).toBeInTheDocument();
 });
 
-it('opens chat from the workbench without adding an extra sidebar menu', async () => {
+it('opens chat after login without adding an extra sidebar menu', async () => {
   server.use(
     http.get('/api/ai/session', () =>
       HttpResponse.json({
@@ -140,11 +140,10 @@ it('opens chat from the workbench without adding an extra sidebar menu', async (
         safety_reminders: [],
       }),
     ),
-    http.get('/api/ai/chat/sessions', () => HttpResponse.json({ items: [], total: 0 })),
+    http.get('/api/conversations', () => HttpResponse.json({ items: [], total: 0 })),
   );
 
   render(<App />);
-  await userEvent.click(await screen.findByRole('button', { name: '开启新任务' }));
 
   expect(await screen.findByRole('region', { name: '私人工作助理工作区' })).toBeInTheDocument();
   expect(screen.getByRole('heading', { name: '告诉我你想完成什么工作' })).toBeInTheDocument();

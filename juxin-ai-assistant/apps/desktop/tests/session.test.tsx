@@ -127,7 +127,7 @@ describe('unified session shell', () => {
     expect(window.location.search).toBe('');
   });
 
-  it('renders the authenticated workspace without a password form', async () => {
+  it('opens the chat workspace after authentication without a password form', async () => {
     server.use(
       http.get('/api/ai/session', () =>
         HttpResponse.json({
@@ -141,7 +141,8 @@ describe('unified session shell', () => {
 
     render(<App />);
 
-    expect(await screen.findByText('上午好，张磊')).toBeInTheDocument();
+    expect(await screen.findByRole('region', { name: '私人工作助理工作区' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: '告诉我你想完成什么工作' })).toBeInTheDocument();
     expect(screen.queryByLabelText('密码')).not.toBeInTheDocument();
   });
 
@@ -206,7 +207,7 @@ describe('unified session shell', () => {
 
     render(<App />);
 
-    expect(await screen.findByText('上午好，张磊')).toBeInTheDocument();
+    expect(await screen.findByRole('region', { name: '私人工作助理工作区' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: '切换系统' })).not.toBeInTheDocument();
   });
 
@@ -225,7 +226,7 @@ describe('unified session shell', () => {
 
     render(<App />);
 
-    expect(await screen.findByText('上午好，张磊')).toBeInTheDocument();
+    expect(await screen.findByRole('region', { name: '私人工作助理工作区' })).toBeInTheDocument();
     expect(window.location.search).toBe('');
   });
 

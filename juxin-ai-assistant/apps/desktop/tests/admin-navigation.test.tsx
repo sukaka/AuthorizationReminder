@@ -30,6 +30,15 @@ beforeEach(() => {
   });
 });
 
+async function findMainNavButton(name: string) {
+  const mainNav = await screen.findByRole('navigation', { name: '主导航' });
+  return within(mainNav).getByRole('button', { name });
+}
+
+function getMainNavButton(name: string) {
+  return within(screen.getByRole('navigation', { name: '主导航' })).getByRole('button', { name });
+}
+
 function session(role: string, managedDepartments: string[] = []) {
   const knowledgeCategories = [
     '公司制度',
@@ -83,6 +92,10 @@ function session(role: string, managedDepartments: string[] = []) {
     http.get('/api/ai/home', () => HttpResponse.json({
       favorites: [], recent_tasks: [], recent_generations: [], safety_reminders: [],
     })),
+    http.get('/api/conversations', () => HttpResponse.json({ items: [], total: 0 })),
+    http.get('/api/conversations/archived', () => HttpResponse.json({ items: [], total: 0 })),
+    http.get('/api/conversations/trash', () => HttpResponse.json({ items: [], total: 0 })),
+    http.get('/api/ai/model-profiles', () => HttpResponse.json({ items: [] })),
     http.get('/api/knowledge/categories', () => HttpResponse.json({
       items: knowledgeCategories,
       total: knowledgeCategories.length,
@@ -118,7 +131,7 @@ it('hides admin-only entries from sysadmin users', async () => {
   expect(await screen.findByRole('button', { name: '工作台' })).toBeInTheDocument();
   expect(screen.getByRole('button', { name: '助手模式' })).toBeInTheDocument();
   expect(screen.getByRole('button', { name: '工作成果' })).toBeInTheDocument();
-  expect(screen.getByRole('button', { name: '我的资料' })).toBeInTheDocument();
+  expect(getMainNavButton('我的资料')).toBeInTheDocument();
   expect(screen.getByRole('button', { name: '设置' })).toBeInTheDocument();
   expect(screen.queryByRole('button', { name: '治理中心' })).not.toBeInTheDocument();
   expect(screen.queryByRole('button', { name: '部门数据' })).not.toBeInTheDocument();
@@ -133,7 +146,7 @@ it('hides department data and suggestions from non-admin department managers', a
   expect(await screen.findByRole('button', { name: '工作台' })).toBeInTheDocument();
   expect(screen.getByRole('button', { name: '助手模式' })).toBeInTheDocument();
   expect(screen.getByRole('button', { name: '工作成果' })).toBeInTheDocument();
-  expect(screen.getByRole('button', { name: '我的资料' })).toBeInTheDocument();
+  expect(getMainNavButton('我的资料')).toBeInTheDocument();
   expect(screen.getByRole('button', { name: '设置' })).toBeInTheDocument();
   expect(screen.queryByRole('button', { name: '部门数据' })).not.toBeInTheDocument();
   expect(screen.queryByRole('button', { name: '提交建议' })).not.toBeInTheDocument();
@@ -144,7 +157,7 @@ it('keeps governance and manager entries hidden from ordinary employees', async 
   session('employee');
   render(<App />);
 
-  expect(await screen.findByText('上午好，employee用户')).toBeInTheDocument();
+  expect(await screen.findByRole('region', { name: '私人工作助理工作区' })).toBeInTheDocument();
   expect(screen.queryByRole('button', { name: '治理中心' })).not.toBeInTheDocument();
   expect(screen.queryByRole('button', { name: '部门数据' })).not.toBeInTheDocument();
   expect(screen.queryByRole('button', { name: '提交建议' })).not.toBeInTheDocument();
@@ -154,7 +167,7 @@ it('opens a role-scoped knowledge workspace for ordinary employees', async () =>
   session('employee');
   render(<App />);
 
-  await userEvent.click(await screen.findByRole('button', { name: '我的资料' }));
+  await userEvent.click(await findMainNavButton('我的资料'));
 
   expect(screen.getByRole('heading', { name: '我的资料' })).toBeInTheDocument();
   expect(screen.getAllByText('我的资料').length).toBeGreaterThan(0);
@@ -212,7 +225,7 @@ it('searches accessible official knowledge from the knowledge page', async () =>
   );
   render(<App />);
 
-  await userEvent.click(await screen.findByRole('button', { name: '我的资料' }));
+  await userEvent.click(await findMainNavButton('我的资料'));
   await userEvent.type(await screen.findByLabelText('关键词或问题'), '部署方式');
   await userEvent.click(screen.getByRole('button', { name: '查找资料' }));
 
@@ -287,7 +300,7 @@ it('searches personal reference material separately from official knowledge', as
   );
   render(<App />);
 
-  await userEvent.click(await screen.findByRole('button', { name: '我的资料' }));
+  await userEvent.click(await findMainNavButton('我的资料'));
   await userEvent.click(await screen.findByRole('radio', { name: '我的资料' }));
   await userEvent.type(screen.getByLabelText('关键词或问题'), '会议培训');
   await userEvent.click(screen.getByRole('button', { name: '查找资料' }));
@@ -362,7 +375,7 @@ it('lets ordinary employees upload personal reference files from the knowledge p
   );
   render(<App />);
 
-  await userEvent.click(await screen.findByRole('button', { name: '我的资料' }));
+  await userEvent.click(await findMainNavButton('我的资料'));
   await userEvent.click(screen.getByRole('tab', { name: '上传资料' }));
   await userEvent.upload(
     await screen.findByLabelText('上传知识文件'),
@@ -401,7 +414,7 @@ it('explains upload support and rejects unsupported document types on the knowle
   );
   render(<App />);
 
-  await userEvent.click(await screen.findByRole('button', { name: '我的资料' }));
+  await userEvent.click(await findMainNavButton('我的资料'));
   await userEvent.click(screen.getByRole('tab', { name: '上传资料' }));
   const uploadInput = await screen.findByLabelText('上传知识文件');
 
@@ -476,7 +489,7 @@ it('loads knowledge file metadata with lifecycle states for ordinary employees',
   );
   render(<App />);
 
-  await userEvent.click(await screen.findByRole('button', { name: '我的资料' }));
+  await userEvent.click(await findMainNavButton('我的资料'));
 
   expect(await screen.findByText('会议纪要模板.docx')).toBeInTheDocument();
   expect(listFiles).toHaveBeenCalledTimes(1);
@@ -748,7 +761,7 @@ it('supports preview download and delete actions for visible knowledge files', a
   );
   render(<App />);
 
-  await userEvent.click(await screen.findByRole('button', { name: '我的资料' }));
+  await userEvent.click(await findMainNavButton('我的资料'));
   const fileCard = await screen.findByRole('listitem', { name: /会议纪要模板\.docx/ });
 
   await userEvent.click(within(fileCard).getByRole('button', { name: '预览 会议纪要模板.docx' }));
@@ -844,7 +857,7 @@ it('summarizes a visible knowledge file with source labels', async () => {
   );
   render(<App />);
 
-  await userEvent.click(await screen.findByRole('button', { name: '我的资料' }));
+  await userEvent.click(await findMainNavButton('我的资料'));
   const fileCard = await screen.findByRole('listitem', { name: /会议纪要模板\.docx/ });
 
   await userEvent.click(within(fileCard).getByRole('button', { name: '总结 会议纪要模板.docx' }));
@@ -924,7 +937,7 @@ it('generates editable content from a visible knowledge file with personal sourc
   );
   render(<App />);
 
-  await userEvent.click(await screen.findByRole('button', { name: '我的资料' }));
+  await userEvent.click(await findMainNavButton('我的资料'));
   const fileCard = await screen.findByRole('listitem', { name: /会议纪要模板\.docx/ });
 
   await userEvent.click(within(fileCard).getByRole('button', { name: '根据此资料生成 会议纪要模板.docx' }));
@@ -1029,7 +1042,7 @@ it('asks a custom question about a visible knowledge file', async () => {
   );
   render(<App />);
 
-  await userEvent.click(await screen.findByRole('button', { name: '我的资料' }));
+  await userEvent.click(await findMainNavButton('我的资料'));
   const fileCard = await screen.findByRole('listitem', { name: /会议纪要模板\.docx/ });
 
   await userEvent.type(
@@ -1149,7 +1162,7 @@ it('submits a personal knowledge file for administrator review', async () => {
   );
   render(<App />);
 
-  await userEvent.click(await screen.findByRole('button', { name: '我的资料' }));
+  await userEvent.click(await findMainNavButton('我的资料'));
   const fileCard = await screen.findByRole('listitem', { name: /会议纪要模板\.docx/ });
 
   await userEvent.click(within(fileCard).getByRole('button', { name: '更多操作 会议纪要模板.docx' }));
