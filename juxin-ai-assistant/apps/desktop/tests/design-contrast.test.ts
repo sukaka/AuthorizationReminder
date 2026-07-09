@@ -80,3 +80,12 @@ describe('task run layout', () => {
     expect(css).toMatch(/@media\s*\(max-width:\s*760px\)[\s\S]*?\.task-summary,[\s\S]*?\.task-workspace[\s\S]*?grid-template-columns:\s*1fr;/);
   });
 });
+
+describe('chat workspace layout polish', () => {
+  it('keeps controls compact without wrapping or nested card boxes', () => {
+    expect(css).toMatch(/\.chat-topbar\s*{[^}]*position:\s*absolute;[^}]*top:\s*8px;/s);
+    expect(css).toMatch(/\.chat-composer-toolbar\s*{[^}]*flex-wrap:\s*nowrap;[^}]*overflow-x:\s*auto;/s);
+    expect(css).toMatch(/\.chat-file-trigger span,\s*\.chat-reference-chip,\s*\.chat-mode-pill,\s*\.chat-model-pill\s*{[^}]*white-space:\s*nowrap;[^}]*flex:\s*0 0 auto;/s);
+    expect(css).toMatch(/\.chat-sessions > div\[data-session-status\] > button\s*{[^}]*background:\s*transparent;[^}]*box-shadow:\s*none;/s);
+  });
+});
