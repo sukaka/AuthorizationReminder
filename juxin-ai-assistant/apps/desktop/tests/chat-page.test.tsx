@@ -134,6 +134,74 @@ it('sends a normal chat message, streams output, and completes it', async () => 
   ));
 });
 
+it('retries a failed task from the progress recovery action', async () => {
+  const prepareRequest = vi.fn();
+  server.use(
+    http.get('/api/conversations', () => HttpResponse.json({ items: [], total: 0 })),
+    http.post('/api/ai/chat/prepare', async ({ request }) => {
+      prepareRequest(await request.json());
+      const attempt = prepareRequest.mock.calls.length;
+      return HttpResponse.json({
+        session_uuid: 'session-retry',
+        user_message_uuid: `user-message-retry-${attempt}`,
+        assistant_message_uuid: `assistant-message-retry-${attempt}`,
+        completion_token: `complete-retry-${attempt}`,
+        completed: false,
+        answer: '',
+        messages: [
+          { role: 'system', content: '你是聚信 AI 助手' },
+          { role: 'user', content: '帮我整理失败恢复测试' },
+        ],
+        citations: [],
+        task_state: {
+          task_state_id: 'task-state-retry',
+          conversation_id: 'session-retry',
+          stage: 'generating',
+          status: 'active',
+          label: '正在生成内容',
+          goal: '帮我整理失败恢复测试',
+          selected_sources: [],
+          tool_calls: [],
+          verification_status: 'prepared',
+          next_action: '正在调用模型生成内容',
+          retry_allowed: false,
+          failure_reason: '',
+          stage_history: [
+            { stage: 'analyzing', label: '正在理解你的需求' },
+            { stage: 'generating', label: '正在生成内容' },
+          ],
+        },
+      }, { status: 201 });
+    }),
+    http.post('/api/ai/chat/messages/assistant-message-retry-2/complete', () => HttpResponse.json({
+      message_uuid: 'assistant-message-retry-2',
+      status: 'COMPLETED',
+    })),
+  );
+  generateLocalModelMock
+    .mockRejectedValueOnce(new Error('模型响应超时'))
+    .mockResolvedValueOnce({
+      output: '失败后已重新生成。',
+      latencyMs: 18,
+      usage: { output_tokens: 8 },
+    });
+
+  render(<ChatPage />);
+  await userEvent.type(await screen.findByLabelText('告诉我你想完成什么工作'), '帮我整理失败恢复测试');
+  await userEvent.click(screen.getByRole('button', { name: '发送' }));
+
+  const progress = await screen.findByRole('status', { name: '任务进度' });
+  expect(progress).toHaveTextContent('生成遇到问题');
+  await userEvent.click(screen.getByRole('button', { name: '可重试' }));
+
+  expect(await screen.findByText('失败后已重新生成。')).toBeInTheDocument();
+  expect(prepareRequest).toHaveBeenCalledTimes(2);
+  expect(prepareRequest.mock.calls[1][0]).toEqual(expect.objectContaining({
+    question: '帮我整理失败恢复测试',
+    session_uuid: 'session-retry',
+  }));
+});
+
 it('uses server-side model generation in web runtime without local model profiles', async () => {
   Object.defineProperty(window, '__TAURI_INTERNALS__', {
     configurable: true,
@@ -1676,6 +1744,25 @@ it('loads messages when selecting a historical chat session', async () => {
       status: 'ACTIVE',
       created_at: '2026-06-26T01:00:00Z',
       updated_at: '2026-06-26T01:01:00Z',
+      task_state: {
+        task_state_id: 'task-state-history',
+        conversation_id: 'session-history',
+        stage: 'completed',
+        status: 'completed',
+        label: '已完成',
+        goal: '总结会议',
+        selected_sources: [{ type: 'official_knowledge', count: 1 }],
+        tool_calls: [{ tool_name: 'search_knowledge_base', status: 'success', summary: 'chunks=1' }],
+        verification_status: 'passed',
+        next_action: '可以复制、导出或继续追问',
+        retry_allowed: false,
+        stage_history: [
+          { stage: 'analyzing', label: '正在理解你的需求', next_action: '正在理解你的需求' },
+          { stage: 'retrieving', label: '正在查找资料', next_action: '正在查找资料' },
+          { stage: 'quality_check', label: '正在复核结果', next_action: '正在复核结果' },
+          { stage: 'completed', label: '已完成', next_action: '可以复制、导出或继续追问' },
+        ],
+      },
       messages: [
         {
           message_uuid: 'm-user',
@@ -1710,6 +1797,8 @@ it('loads messages when selecting a historical chat session', async () => {
 
   expect(await screen.findByText('总结会议')).toBeInTheDocument();
   expect(screen.getByText(/会议决定下周验收/)).toBeInTheDocument();
+  expect(screen.getByRole('status', { name: '任务进度' })).toHaveTextContent('已完成');
+  expect(screen.getByRole('list', { name: '任务阶段' })).toHaveTextContent('正在复核结果');
   const inlineSource = screen.getByLabelText('来源：会议记录.txt');
   expect(inlineSource).toHaveClass('chat-inline-source');
   expect(inlineSource).toHaveTextContent('知识来源');

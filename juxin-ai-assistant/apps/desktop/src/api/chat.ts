@@ -50,10 +50,6 @@ export type ChatSessionPayload = {
 
 export type ChatSessionListKind = 'active' | 'archived' | 'trash';
 
-export type ChatSessionDetailPayload = ChatSessionPayload & {
-  messages: ChatMessagePayload[];
-};
-
 export type KnowledgeFilePayload = {
   file_uuid: string;
   knowledge_base_id?: string;
@@ -230,13 +226,21 @@ export type ChatTaskStatePayload = {
   task_state_id: string;
   conversation_id: string;
   stage: string;
+  status: string;
   label: string;
   goal: string;
   selected_sources: Array<Record<string, unknown>>;
   tool_calls: Array<Record<string, unknown>>;
   verification_status: string;
   next_action: string;
+  retry_allowed: boolean;
+  failure_reason: string;
   stage_history: Array<Record<string, unknown> & { stage?: string; label?: string; next_action?: string }>;
+};
+
+export type ChatSessionDetailPayload = ChatSessionPayload & {
+  messages: ChatMessagePayload[];
+  task_state?: ChatTaskStatePayload;
 };
 
 export type ChatPreparePayload = {

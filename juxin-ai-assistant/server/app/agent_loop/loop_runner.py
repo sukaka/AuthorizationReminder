@@ -118,7 +118,7 @@ class LoopRunner:
                 conversation_id=conversation_id or "",
                 goal=question,
                 stage="analyzing",
-                next_action="正在识别任务",
+                next_action="正在理解你的需求",
                 selected_sources=[],
             )
             task_state_id = task_state.uuid
@@ -158,6 +158,13 @@ class LoopRunner:
         rag_search_count = 0
         tool_calls = 0
         if (include_session_attachments or attachment_file_ids) and tool_calls < self.limits.max_tool_calls:
+            if task_state_store is not None:
+                task_state_store.update_stage(
+                    task_state_id,
+                    stage="retrieving",
+                    next_action="正在查找资料",
+                    selected_sources=[],
+                )
             current_attachment_result = executor.search_current_attachments(
                 question,
                 mode=analysis.mode,
@@ -189,6 +196,13 @@ class LoopRunner:
                 )
 
         if (include_personal_references or personal_reference_file_ids) and tool_calls < self.limits.max_tool_calls:
+            if task_state_store is not None:
+                task_state_store.update_stage(
+                    task_state_id,
+                    stage="retrieving",
+                    next_action="正在查找资料",
+                    selected_sources=[],
+                )
             personal_result = executor.search_personal_references(
                 question,
                 mode=analysis.mode,
@@ -232,6 +246,13 @@ class LoopRunner:
                 break
             rag_search_count += 1
             tool_calls += 1
+            if task_state_store is not None:
+                task_state_store.update_stage(
+                    task_state_id,
+                    stage="retrieving",
+                    next_action="正在查找资料",
+                    selected_sources=[],
+                )
             query = self.reflector.rewrite_query(question, rag_search_count)
             result = executor.search_knowledge_base(query, mode=analysis.mode)
             chunks = result.chunks
@@ -270,11 +291,10 @@ class LoopRunner:
                     summary="未找到可用知识依据",
                     issues=["no_knowledge_evidence"],
                 )
-                task_state_store.update_stage(
+                task_state_store.mark_failed(
                     task_state_id,
-                    stage="failed",
-                    next_action="请补充资料或切换为普通聊天",
-                    selected_sources=[],
+                    reason="当前资料中未找到明确依据",
+                    retry_suggestion="请补充资料或切换为普通聊天",
                 )
                 task_state_payload = task_state_store.public_payload_by_id(task_state_id)
             trace.append(
@@ -299,7 +319,7 @@ class LoopRunner:
             task_state_store.update_stage(
                 task_state_id,
                 stage="generating",
-                next_action="正在生成回答",
+                next_action="正在调用模型生成内容",
                 selected_sources=[
                     {"type": "official_knowledge", "count": len(chunks)},
                     {"type": "personal_reference", "count": len(personal_chunks)},
@@ -339,15 +359,6 @@ class LoopRunner:
                 status="prepared",
                 summary="上下文已准备，等待本地模型生成回答",
                 issues=[],
-            )
-            task_state_store.update_stage(
-                task_state_id,
-                stage="completed",
-                next_action="等待模型生成回答",
-                selected_sources=[
-                    {"type": "official_knowledge", "count": len(chunks)},
-                    {"type": "personal_reference", "count": len(personal_chunks)},
-                ],
             )
             task_state_payload = task_state_store.public_payload_by_id(task_state_id)
         return LoopRunResult(

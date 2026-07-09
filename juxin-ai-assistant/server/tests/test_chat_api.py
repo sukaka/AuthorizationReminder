@@ -38,9 +38,10 @@ def test_normal_chat_prepare_complete_and_detail(client_for_user) -> None:
     assert body["completion_token"]
     assert body["completed"] is False
     assert body["citations"] == []
-    assert body["task_state"]["stage"] == "completed"
-    assert body["task_state"]["label"] == "生成完成"
-    assert body["task_state"]["next_action"] == "等待模型生成回答"
+    assert body["task_state"]["stage"] == "generating"
+    assert body["task_state"]["status"] == "active"
+    assert body["task_state"]["label"] == "正在生成内容"
+    assert body["task_state"]["next_action"] == "正在调用模型生成内容"
     assert "TaskState" not in body["task_state"]["label"]
     assert body["messages"][-1]["role"] == "user"
     assert "帮我总结今天工作" in body["messages"][-1]["content"]
@@ -66,6 +67,11 @@ def test_normal_chat_prepare_complete_and_detail(client_for_user) -> None:
     assert [message["role"] for message in messages] == ["user", "assistant"]
     assert messages[0]["content"] == "帮我总结今天工作"
     assert messages[1]["content"] == "今天完成了需求整理。"
+    assert detail.json()["task_state"]["stage"] == "completed"
+    assert detail.json()["task_state"]["status"] == "completed"
+    assert detail.json()["task_state"]["label"] == "已完成"
+    assert detail.json()["task_state"]["stage_history"][-2]["label"] == "正在复核结果"
+    assert detail.json()["task_state"]["stage_history"][-1]["label"] == "已完成"
 
 
 def test_server_model_generates_and_completes_chat_message(client_for_user) -> None:
@@ -306,10 +312,52 @@ def test_chat_complete_records_verifier_result_in_task_state(
     assert completed.status_code == 200
     state = generation_db.query(AgentTaskState).one()
     assert state.verification_status == "risk"
+    assert state.stage == "completed"
+    assert state.status == "completed"
     assert state.verification_json["document"]["risks"] == [
         "风险提示：文档包含绝对化承诺，建议改为有条件、可复核的表述。"
     ]
     assert state.verification_json["reference"]["kept_count"] == 0
+
+
+def test_chat_fail_marks_latest_task_state_retryable(
+    client_for_user,
+    generation_db,
+) -> None:
+    from app.models import AgentTaskState
+
+    client = client_for_user("user-chat-fail")
+
+    prepared = client.post(
+        "/api/ai/chat/prepare",
+        json={"question": "帮我写一份工作材料", "mode": "normal"},
+    )
+
+    assert prepared.status_code == 201
+    body = prepared.json()
+    failed = client.post(
+        f"/api/ai/chat/messages/{body['assistant_message_uuid']}/fail",
+        json={
+            "completion_token": body["completion_token"],
+            "error_code": "MODEL_TIMEOUT",
+            "error_message": "模型响应超时",
+        },
+    )
+
+    assert failed.status_code == 200
+    assert failed.json()["status"] == "FAILED"
+    state = generation_db.query(AgentTaskState).one()
+    assert state.stage == "failed"
+    assert state.status == "failed"
+    assert state.next_action == "请稍后重试或切换模型"
+    assert state.metadata_json["failure_reason"] == "模型响应超时"
+
+    detail = client.get(f"/api/ai/chat/sessions/{body['session_uuid']}")
+    assert detail.status_code == 200
+    task_state = detail.json()["task_state"]
+    assert task_state["label"] == "生成失败，可重试"
+    assert task_state["retry_allowed"] is True
+    assert task_state["failure_reason"] == "模型响应超时"
 
 
 def test_chat_prepare_injects_learning_loop_context(client_for_user, generation_db) -> None:

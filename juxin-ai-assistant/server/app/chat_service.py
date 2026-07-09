@@ -288,6 +288,12 @@ def _record_completed_answer_verification(
     )
     if task_state is None:
         return
+    store = TaskStateStore(db)
+    store.update_stage(
+        task_state.uuid,
+        stage="quality_check",
+        next_action="正在复核结果",
+    )
     document_result = Verifier().verify_document_structure(answer, task_type=session.mode)
     issues = [
         *[str(item) for item in reference_result.get("suggestions", [])],
@@ -299,7 +305,7 @@ def _record_completed_answer_verification(
         status = "risk"
     elif issues or reference_result.get("status") == "warning":
         status = "warning"
-    TaskStateStore(db).record_verification(
+    store.record_verification(
         task_state.uuid,
         status=status,
         summary="回答已完成自检" if status == "passed" else "回答存在建议复核项",
@@ -309,6 +315,29 @@ def _record_completed_answer_verification(
             "document": document_result,
         },
     )
+    store.mark_completed(
+        task_state.uuid,
+        next_action="可以复制、导出或继续追问",
+    )
+
+
+def _latest_task_state_payload(
+    db: Session,
+    *,
+    user_id: str,
+    conversation_id: str,
+) -> dict[str, object]:
+    task_state = db.scalar(
+        select(AgentTaskState)
+        .where(
+            AgentTaskState.user_id == user_id,
+            AgentTaskState.conversation_id == conversation_id,
+        )
+        .order_by(AgentTaskState.id.desc())
+    )
+    if task_state is None:
+        return {}
+    return TaskStateStore.public_payload(task_state)
 
 
 def _get_or_create_session(
@@ -791,6 +820,22 @@ def fail_chat_message(
     message.error_code = body.error_code[:64]
     message.error_message_safe = (body.error_message or body.error_code)[:500]
     message.finished_at = datetime.now(UTC)
+    if session is not None:
+        task_state = db.scalar(
+            select(AgentTaskState)
+            .where(
+                AgentTaskState.user_id == sso_user_id,
+                AgentTaskState.conversation_id == session.uuid,
+                AgentTaskState.status == "active",
+            )
+            .order_by(AgentTaskState.id.desc())
+        )
+        if task_state is not None:
+            TaskStateStore(db).mark_failed(
+                task_state.uuid,
+                reason=message.error_message_safe or body.error_code,
+                retry_suggestion="请稍后重试或切换模型",
+            )
     db.flush()
     return message
 
@@ -849,6 +894,11 @@ def get_chat_session_detail(
         created_at=session.created_at,
         updated_at=session.updated_at,
         messages=[_message_out(db, cipher, message) for message in messages],
+        task_state=_latest_task_state_payload(
+            db,
+            user_id=sso_user_id,
+            conversation_id=session.uuid,
+        ),
     )
 
 

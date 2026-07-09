@@ -7,13 +7,15 @@ from app.models import AgentTaskState
 
 
 STAGE_LABELS = {
-    "analyzing": "正在识别任务",
+    "analyzing": "正在理解你的需求",
+    "retrieving": "正在查找资料",
     "building_context": "正在整理依据",
     "checking_sources": "正在整理依据",
-    "generating": "正在生成回答",
+    "generating": "正在生成内容",
     "quality_check": "正在复核结果",
-    "completed": "生成完成",
-    "failed": "任务需要处理",
+    "completed": "已完成",
+    "failed": "生成失败，可重试",
+    "cancelled": "已取消",
 }
 
 
@@ -67,6 +69,42 @@ class TaskStateStore:
             *list(row.stage_history_json or []),
             self._stage_item(stage, next_action),
         ]
+        self.db.flush()
+        return row
+
+    def mark_completed(
+        self,
+        task_state_id: str,
+        *,
+        next_action: str,
+    ) -> AgentTaskState:
+        row = self.update_stage(
+            task_state_id,
+            stage="completed",
+            next_action=next_action,
+        )
+        row.status = "completed"
+        self.db.flush()
+        return row
+
+    def mark_failed(
+        self,
+        task_state_id: str,
+        *,
+        reason: str,
+        retry_suggestion: str,
+    ) -> AgentTaskState:
+        row = self.update_stage(
+            task_state_id,
+            stage="failed",
+            next_action=retry_suggestion,
+        )
+        row.status = "failed"
+        row.metadata_json = {
+            **(row.metadata_json or {}),
+            "failure_reason": reason[:500],
+            "retry_suggestion": retry_suggestion[:256],
+        }
         self.db.flush()
         return row
 
@@ -129,16 +167,20 @@ class TaskStateStore:
 
     @staticmethod
     def public_payload(row: AgentTaskState) -> dict[str, object]:
+        metadata = row.metadata_json or {}
         return {
             "task_state_id": row.uuid,
             "conversation_id": row.conversation_id,
             "stage": row.stage,
+            "status": row.status,
             "label": STAGE_LABELS.get(row.stage, "正在处理"),
             "goal": row.goal,
             "selected_sources": row.selected_sources_json or [],
             "tool_calls": row.tool_calls_json or [],
             "verification_status": row.verification_status,
             "next_action": row.next_action,
+            "retry_allowed": row.status == "failed" or row.stage == "failed",
+            "failure_reason": str(metadata.get("failure_reason") or ""),
             "stage_history": [
                 {
                     **item,

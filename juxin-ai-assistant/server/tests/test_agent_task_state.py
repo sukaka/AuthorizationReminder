@@ -33,10 +33,15 @@ def test_task_state_store_records_stage_sources_tools_and_verification(
         summary="引用和格式检查通过",
         issues=[],
     )
+    store.mark_completed(
+        state.uuid,
+        next_action="可以复制、导出或继续追问",
+    )
 
     saved = generation_db.query(AgentTaskState).one()
     assert saved.conversation_id == "conv-1"
-    assert saved.stage == "checking_sources"
+    assert saved.stage == "completed"
+    assert saved.status == "completed"
     assert saved.goal == "写一份安全运维方案"
     assert saved.selected_sources_json == [{"type": "official_knowledge", "count": 3}]
     assert saved.tool_calls_json == [
@@ -53,7 +58,37 @@ def test_task_state_store_records_stage_sources_tools_and_verification(
         "summary": "引用和格式检查通过",
         "issues": [],
     }
-    assert saved.next_action == "正在整理依据"
+    assert saved.next_action == "可以复制、导出或继续追问"
+
+
+def test_task_state_store_marks_failure_with_retry_safe_public_payload(
+    generation_db,
+) -> None:
+    from app.agent_loop.task_state import TaskStateStore
+
+    store = TaskStateStore(generation_db)
+    state = store.create(
+        user_id="user-1",
+        conversation_id="conv-1",
+        goal="联网查资料",
+        stage="analyzing",
+        next_action="正在理解你的需求",
+    )
+
+    store.mark_failed(
+        state.uuid,
+        reason="模型服务暂时不可用",
+        retry_suggestion="请稍后重试或切换模型",
+    )
+
+    payload = store.public_payload_by_id(state.uuid)
+    assert payload["stage"] == "failed"
+    assert payload["status"] == "failed"
+    assert payload["label"] == "生成失败，可重试"
+    assert payload["retry_allowed"] is True
+    assert payload["failure_reason"] == "模型服务暂时不可用"
+    assert payload["next_action"] == "请稍后重试或切换模型"
+    assert "TaskState" not in str(payload)
 
 
 def test_loop_runner_persists_task_state_stages_for_chat_run(
@@ -81,13 +116,13 @@ def test_loop_runner_persists_task_state_stages_for_chat_run(
     assert result.messages
     assert len(states) == 1
     assert states[0].conversation_id == "conv-1"
-    assert states[0].stage == "completed"
+    assert states[0].stage == "generating"
+    assert states[0].status == "active"
     assert states[0].goal == "帮我写一份项目沟通纪要"
     assert states[0].verification_status == "prepared"
-    assert states[0].next_action == "等待模型生成回答"
+    assert states[0].next_action == "正在调用模型生成内容"
     assert [item["stage"] for item in states[0].stage_history_json] == [
         "analyzing",
         "building_context",
         "generating",
-        "completed",
     ]

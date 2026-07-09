@@ -149,12 +149,15 @@ const fallbackTaskProgress: TaskProgressView = {
   task_state_id: '',
   conversation_id: '',
   stage: '',
+  status: '',
   label: '',
   goal: '',
   selected_sources: [],
   tool_calls: [],
   verification_status: '',
   next_action: '',
+  retry_allowed: false,
+  failure_reason: '',
   stage_history: [],
 };
 
@@ -973,6 +976,7 @@ export function ChatPage() {
       setWebCapture({ status: 'idle' });
       setEnabledReferenceFiles([]);
       setSelectedPersonalReferenceIds([]);
+      setTaskProgress(detail.task_state?.task_state_id ? detail.task_state : null);
       shouldStickToBottomRef.current = true;
       setMessages(detail.messages.map((message) => ({
         id: message.message_uuid,
@@ -1789,6 +1793,15 @@ export function ChatPage() {
     void send(source.content);
   };
 
+  const retryLatestTask = () => {
+    const source = [...messages].reverse().find((message) => message.role === 'user');
+    if (!source) {
+      setStatus('未找到可重试的原始问题');
+      return;
+    }
+    void send(source.content);
+  };
+
   const startNewSession = () => {
     setActiveSessionUuid('');
     setActiveSessionStatus('');
@@ -2190,6 +2203,7 @@ export function ChatPage() {
                   stageHistory={taskProgress.stage_history}
                   selectedSources={taskProgress.selected_sources}
                   toolCalls={taskProgress.tool_calls}
+                  onRetry={retryLatestTask}
                 />
               ) : null}
               {generationMetricRows.length ? (

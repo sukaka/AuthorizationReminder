@@ -476,12 +476,15 @@ class ChatTaskStateOut(BaseModel):
     task_state_id: str = ""
     conversation_id: str = ""
     stage: str = ""
+    status: str = ""
     label: str = ""
     goal: str = ""
     selected_sources: list[dict[str, Any]] = Field(default_factory=list)
     tool_calls: list[dict[str, Any]] = Field(default_factory=list)
     verification_status: str = ""
     next_action: str = ""
+    retry_allowed: bool = False
+    failure_reason: str = ""
     stage_history: list[dict[str, Any]] = Field(default_factory=list)
 
 
@@ -851,6 +854,7 @@ class ChatSessionListOut(BaseModel):
 
 class ChatSessionDetailOut(ChatSessionItemOut):
     messages: list[ChatMessageOut]
+    task_state: ChatTaskStateOut = Field(default_factory=ChatTaskStateOut)
 
 
 class ConversationBulkIn(BaseModel):
