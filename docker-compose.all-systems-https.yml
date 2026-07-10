@@ -1,0 +1,180 @@
+x-https-origins: &https_origins "https://${HTTPS_PUBLIC_HOST:-localhost}:5180,https://${HTTPS_PUBLIC_HOST:-localhost}:8090,https://${HTTPS_PUBLIC_HOST:-localhost}:18080,https://${HTTPS_PUBLIC_HOST:-localhost}:18081,https://${HTTPS_PUBLIC_HOST:-localhost}:18082,https://${HTTPS_PUBLIC_HOST:-localhost}:18083,https://${HTTPS_PUBLIC_HOST:-localhost}:18084,https://${HTTPS_PUBLIC_HOST:-localhost}:18085,https://${HTTPS_PUBLIC_HOST:-localhost}:18086,https://${HTTPS_PUBLIC_HOST:-localhost}:18087,https://${HTTPS_PUBLIC_HOST:-localhost}:18088,https://${HTTPS_PUBLIC_HOST:-localhost}:18089,https://${HTTPS_PUBLIC_HOST:-localhost}:18090,https://${HTTPS_PUBLIC_HOST:-localhost}:18091,https://${HTTPS_PUBLIC_HOST:-localhost}:18092,https://${HTTPS_PUBLIC_HOST:-localhost}:18093"
+
+services:
+  api:
+    ports: !override []
+    environment:
+      CORS_ORIGINS: *https_origins
+      CSRF_SECURE: "true"
+
+  auth:
+    ports: !override []
+    environment:
+      CORS_ORIGINS: *https_origins
+      AUTH_PUBLIC_URL: "https://${HTTPS_PUBLIC_HOST:-localhost}:5180"
+      APP_REMINDER_URL: "https://${HTTPS_PUBLIC_HOST:-localhost}:18080"
+      APP_CMDB_URL: "https://${HTTPS_PUBLIC_HOST:-localhost}:8090"
+      APP_INVENTORY_URL: "https://${HTTPS_PUBLIC_HOST:-localhost}:18082"
+      APP_DEVICE_FLOW_URL: "https://${HTTPS_PUBLIC_HOST:-localhost}:18083"
+      APP_DELIVERY_URL: "https://${HTTPS_PUBLIC_HOST:-localhost}:18084"
+      APP_FAQ_URL: "https://${HTTPS_PUBLIC_HOST:-localhost}:18085"
+      APP_TENDER_URL: "https://${HTTPS_PUBLIC_HOST:-localhost}:18086"
+      APP_TRAIN_EXAM_URL: "https://${HTTPS_PUBLIC_HOST:-localhost}:18087"
+      APP_PROMPT_CENTER_URL: "https://${HTTPS_PUBLIC_HOST:-localhost}:18088"
+      APP_SCA_URL: "https://${HTTPS_PUBLIC_HOST:-localhost}:18089"
+      APP_BIG_SCREEN_URL: "https://${HTTPS_PUBLIC_HOST:-localhost}:18092"
+      APP_AI_ASSISTANT_URL: "https://${HTTPS_PUBLIC_HOST:-localhost}:18093"
+      APP_ADMIN_CENTER_URL: "https://${HTTPS_PUBLIC_HOST:-localhost}:5180/admin-center"
+      APP_AUDIT_CENTER_URL: "https://${HTTPS_PUBLIC_HOST:-localhost}:5180/audit-center"
+      AUTH_COOKIE_SECURE: "true"
+      AUTH_SECURITY_STRICT_MODE: "true"
+      SECURITY_STRICT_MODE: "true"
+
+  ticketing:
+    ports: !override []
+    environment:
+      CORS_ORIGINS: *https_origins
+
+  inventory-api:
+    ports: !override []
+    environment:
+      CORS_ORIGINS: *https_origins
+
+  device-flow-api:
+    ports: !override []
+    environment:
+      CORS_ORIGINS: *https_origins
+
+  delivery-api:
+    ports: !override []
+    environment:
+      CORS_ORIGINS: *https_origins
+
+  faq-api:
+    ports: !override []
+    environment:
+      CORS_ORIGINS: *https_origins
+
+  tender-api:
+    ports: !override []
+    environment:
+      CORS_ORIGINS: *https_origins
+
+  train-exam-api:
+    ports: !override []
+    environment:
+      CORS_ORIGINS: *https_origins
+      CSRF_SECURE: "true"
+
+  prompt-center-api:
+    ports: !override []
+    environment:
+      CORS_ORIGINS: *https_origins
+
+  shipping-gateway:
+    ports: !override []
+    environment:
+      CORS_ORIGINS: *https_origins
+
+  sca-api:
+    ports: !override []
+    environment:
+      CORS_ORIGINS: *https_origins
+
+  big-screen-api:
+    ports: !override []
+    environment:
+      CORS_ORIGINS: *https_origins
+
+  ai-assistant-api:
+    ports: !override []
+    environment:
+      AUTH_PUBLIC_URL: "https://${HTTPS_PUBLIC_HOST:-localhost}:5180"
+      PUBLIC_URL: "https://${HTTPS_PUBLIC_HOST:-localhost}:18093"
+      CORS_ORIGINS: *https_origins
+
+  web-cmdb:
+    ports: !override []
+  web:
+    ports: !override []
+    build:
+      args:
+        VITE_SSO_PORTAL_URL: "https://${HTTPS_PUBLIC_HOST:-localhost}:5180"
+  web-ticketing:
+    ports: !override []
+  web-inventory:
+    ports: !override []
+  web-device-flow:
+    ports: !override []
+  web-delivery:
+    ports: !override []
+  web-faq:
+    ports: !override []
+  web-tender:
+    ports: !override []
+  web-train-exam:
+    ports: !override []
+  web-prompt-center:
+    ports: !override []
+  web-sca:
+    ports: !override []
+    build:
+      args:
+        VITE_SSO_LOGIN_URL: "https://${HTTPS_PUBLIC_HOST:-localhost}:5180/portal?system=sca"
+  dependency-track-apiserver:
+    ports: !override []
+  dependency-track-frontend:
+    ports: !override []
+  web-big-screen:
+    ports: !override []
+    build:
+      args:
+        VITE_SCA_APP_URL: "https://${HTTPS_PUBLIC_HOST:-localhost}:18089"
+        VITE_TRAIN_EXAM_APP_URL: "https://${HTTPS_PUBLIC_HOST:-localhost}:18087"
+        VITE_REMINDER_APP_URL: "https://${HTTPS_PUBLIC_HOST:-localhost}:18080"
+  web-ai-assistant:
+    ports: !override []
+    build:
+      args:
+        VITE_AUTH_PUBLIC_URL: "https://${HTTPS_PUBLIC_HOST:-localhost}:5180"
+        VITE_ADMIN_CENTER_URL: "https://${HTTPS_PUBLIC_HOST:-localhost}:5180/admin-center"
+        VITE_PROMPT_CENTER_URL: "https://${HTTPS_PUBLIC_HOST:-localhost}:18088"
+
+  https-gateway:
+    image: ${NGINX_ALPINE_IMAGE:-nginx:alpine}
+    ports:
+      - "443:443"
+      - "5179:5179"
+      - "5180:5180"
+      - "5182:5182"
+      - "5183:5183"
+      - "5184:5184"
+      - "5185:5185"
+      - "5186:5186"
+      - "5187:5187"
+      - "5188:5188"
+      - "5189:5189"
+      - "5190:5190"
+      - "5191:5191"
+      - "5192:5192"
+      - "5193:5193"
+      - "8090:8090"
+      - "18080:18080"
+      - "18081:18081"
+      - "18082:18082"
+      - "18083:18083"
+      - "18084:18084"
+      - "18085:18085"
+      - "18086:18086"
+      - "18087:18087"
+      - "18088:18088"
+      - "18089:18089"
+      - "18090:18090"
+      - "18091:18091"
+      - "18092:18092"
+      - "18093:18093"
+    volumes:
+      - ./deploy/https/all-systems-nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - ${ALL_SYSTEMS_TLS_CERT:?set ALL_SYSTEMS_TLS_CERT}:/etc/nginx/tls/server.pem:ro
+      - ${ALL_SYSTEMS_TLS_KEY:?set ALL_SYSTEMS_TLS_KEY}:/etc/nginx/tls/server-key.pem:ro
+    restart: unless-stopped

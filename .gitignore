@@ -26,6 +26,7 @@ server/data.db-*
 .env.*
 !.env.example
 .worktrees/
+.local/
 juxin-ai-assistant/server/.venv/
 juxin-ai-assistant/server/.pytest_cache/
 juxin-ai-assistant/server/juxin-ai-assistant-dev.db
