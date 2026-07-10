@@ -44,7 +44,8 @@ it('shows server-side model settings guidance and hides updater in web mode', as
   );
   render(<App />);
 
-  expect(await screen.findByRole('button', { name: '工作台' })).toBeInTheDocument();
+  expect(await screen.findByRole('region', { name: '私人工作助理工作区' })).toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: '工作台' })).not.toBeInTheDocument();
   await userEvent.click(screen.getByRole('button', { name: '设置' }));
   expect(await screen.findByText('Web 端个人模型')).toBeInTheDocument();
   expect(screen.getByText('未配置个人模型时，会自动使用服务端统一模型。')).toBeInTheDocument();

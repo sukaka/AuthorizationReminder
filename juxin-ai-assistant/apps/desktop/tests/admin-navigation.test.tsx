@@ -135,7 +135,8 @@ it('hides admin-only entries from sysadmin users', async () => {
   session('sysadmin');
   render(<App />);
 
-  expect(await screen.findByRole('button', { name: '工作台' })).toBeInTheDocument();
+  expect(await screen.findByRole('region', { name: '私人工作助理工作区' })).toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: '工作台' })).not.toBeInTheDocument();
   expect(screen.getByRole('button', { name: '助手模式' })).toBeInTheDocument();
   expect(screen.getByRole('button', { name: '工作成果' })).toBeInTheDocument();
   expect(getMainNavButton('我的资料')).toBeInTheDocument();
@@ -150,7 +151,8 @@ it('hides department data and suggestions from non-admin department managers', a
   session('employee', ['销售部']);
   render(<App />);
 
-  expect(await screen.findByRole('button', { name: '工作台' })).toBeInTheDocument();
+  expect(await screen.findByRole('region', { name: '私人工作助理工作区' })).toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: '工作台' })).not.toBeInTheDocument();
   expect(screen.getByRole('button', { name: '助手模式' })).toBeInTheDocument();
   expect(screen.getByRole('button', { name: '工作成果' })).toBeInTheDocument();
   expect(getMainNavButton('我的资料')).toBeInTheDocument();
