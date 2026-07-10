@@ -345,6 +345,7 @@ def _empty_quality_metrics() -> dict[str, int | float | dict[str, int]]:
         "assistant_answer_total": 0,
         "assistant_answer_with_sources": 0,
         "citation_coverage_rate": 0.0,
+        "citation_accuracy_rate": 0.0,
         "answer_without_source_rate": 0.0,
         "word_export_total": 0,
         "document_format_check_total": 0,
@@ -352,6 +353,7 @@ def _empty_quality_metrics() -> dict[str, int | float | dict[str, int]]:
         "document_format_pass_rate": 0.0,
         "tool_error_distribution": {},
         "user_negative_feedback_total": 0,
+        "user_negative_feedback_rate": 0.0,
     }
 
 
@@ -439,6 +441,23 @@ def _build_quality_metrics(
         .join(ChatMessage, ChatMessage.id == ChatMessageSource.message_id)
         .where(*answer_filters)
     ) or 0)
+    verification_states = list(db.scalars(
+        select(AgentTaskState).where(
+            AgentTaskState.updated_at >= start_at,
+            AgentTaskState.updated_at <= end_at,
+            AgentTaskState.verification_status != "pending",
+        )
+    ))
+    citation_kept = 0
+    citation_candidates = 0
+    for state in verification_states:
+        reference = (state.verification_json or {}).get("reference", {})
+        if not isinstance(reference, dict):
+            continue
+        kept_count = int(reference.get("kept_count") or 0)
+        removed_count = int(reference.get("removed_count") or 0)
+        citation_kept += kept_count
+        citation_candidates += kept_count + removed_count
 
     word_export_total = int(db.scalar(
         select(func.count(ExportRecord.id)).where(
@@ -465,6 +484,12 @@ def _build_quality_metrics(
             FeedbackLog.feedback_type.in_(("not_useful", "needs_revision", "record_error")),
         )
     ) or 0)
+    user_feedback_total = int(db.scalar(
+        select(func.count(FeedbackLog.id)).where(
+            FeedbackLog.created_at >= start_at,
+            FeedbackLog.created_at <= end_at,
+        )
+    ) or 0)
 
     return {
         "today_task_total": today_task_total,
@@ -480,6 +505,7 @@ def _build_quality_metrics(
         "assistant_answer_total": assistant_answer_total,
         "assistant_answer_with_sources": assistant_answer_with_sources,
         "citation_coverage_rate": _rate(assistant_answer_with_sources, assistant_answer_total),
+        "citation_accuracy_rate": _rate(citation_kept, citation_candidates),
         "answer_without_source_rate": _rate(
             assistant_answer_total - assistant_answer_with_sources,
             assistant_answer_total,
@@ -496,4 +522,8 @@ def _build_quality_metrics(
             for error_code, count in tool_error_rows
         },
         "user_negative_feedback_total": user_negative_feedback_total,
+        "user_negative_feedback_rate": _rate(
+            user_negative_feedback_total,
+            user_feedback_total,
+        ),
     }

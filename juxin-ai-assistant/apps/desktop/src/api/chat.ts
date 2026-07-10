@@ -490,6 +490,7 @@ export async function prepareChat(payload: {
   personalReferenceFileIds?: string[];
   includePersonalReferences?: boolean;
   includeSessionAttachments?: boolean;
+  sensitiveConfirmationDigest?: string;
 }): Promise<ChatPreparePayload> {
   return readJson(
     await apiFetch('/api/ai/chat/prepare', {
@@ -504,6 +505,9 @@ export async function prepareChat(payload: {
         personal_reference_file_ids: payload.personalReferenceFileIds ?? [],
         include_personal_references: payload.includePersonalReferences ?? false,
         include_session_attachments: payload.includeSessionAttachments ?? false,
+        ...(payload.sensitiveConfirmationDigest
+          ? { sensitive_confirmation_digest: payload.sensitiveConfirmationDigest }
+          : {}),
       }),
     }),
     'CHAT_PREPARE_FAILED',

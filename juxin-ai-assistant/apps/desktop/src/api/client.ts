@@ -827,14 +827,22 @@ export async function deleteHistory(generationUuid: string): Promise<void> {
   if (!response.ok) throw new ApiError(response.status, 'HISTORY_DELETE_FAILED');
 }
 
-export async function getWorkArtifacts(): Promise<{
+export async function getWorkArtifacts(filters: {
+  artifactType?: string;
+  createdFrom?: string;
+  createdTo?: string;
+} = {}): Promise<{
   items: WorkArtifactItemPayload[];
   total: number;
   page: number;
   page_size: number;
 }> {
+  const query = new URLSearchParams({ page_size: '100' });
+  if (filters.artifactType) query.set('artifact_type', filters.artifactType);
+  if (filters.createdFrom) query.set('created_from', filters.createdFrom);
+  if (filters.createdTo) query.set('created_to', filters.createdTo);
   return readJson(
-    await apiFetch('/api/ai/work-artifacts?page_size=100'),
+    await apiFetch(`/api/ai/work-artifacts?${query.toString()}`),
     'WORK_ARTIFACTS_FAILED',
   );
 }

@@ -96,6 +96,7 @@ export type StatsPayload = {
   assistant_answer_total?: number;
   assistant_answer_with_sources?: number;
   citation_coverage_rate?: number;
+  citation_accuracy_rate?: number;
   answer_without_source_rate?: number;
   word_export_total?: number;
   document_format_check_total?: number;
@@ -103,6 +104,7 @@ export type StatsPayload = {
   document_format_pass_rate?: number;
   tool_error_distribution?: Record<string, number>;
   user_negative_feedback_total?: number;
+  user_negative_feedback_rate?: number;
 };
 
 export type TaskReplayItem = {

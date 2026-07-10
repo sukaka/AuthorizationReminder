@@ -180,3 +180,45 @@ def test_assistant_message_can_be_saved_as_work_artifact(client_for_user, genera
     assert detail["content"] == "根据《交付手册.pdf》的验收交付物章节，交付时需要提交测试报告。"
     assert detail["source_summary"][0]["file_name"] == "交付手册.pdf"
     assert detail["versions"][0]["source"] == "chat_message"
+
+
+def test_work_artifacts_filter_by_type_and_created_date(
+    client_for_user,
+    generation_db,
+) -> None:
+    from datetime import datetime
+
+    from app.models import WorkArtifact
+
+    session = _seed_completed_chat(generation_db)
+    client = client_for_user("u-1")
+    created = client.post(
+        "/api/ai/work-artifacts/chat-message",
+        json={
+            "conversation_id": session.uuid,
+            "message_id": "artifact-assistant-message",
+            "title": "交付方案",
+        },
+    )
+    artifact = generation_db.query(WorkArtifact).one()
+    artifact.created_at = datetime(2026, 6, 20, 8, 0, 0)
+    generation_db.commit()
+
+    matched = client.get(
+        "/api/ai/work-artifacts",
+        params={
+            "artifact_type": "ordinary_answer",
+            "created_from": "2026-06-01T00:00:00",
+            "created_to": "2026-06-30T23:59:59",
+        },
+    )
+    excluded = client.get(
+        "/api/ai/work-artifacts",
+        params={"created_from": "2026-07-01T00:00:00"},
+    )
+
+    assert created.status_code == 201
+    assert matched.status_code == 200
+    assert matched.json()["total"] == 1
+    assert excluded.status_code == 200
+    assert excluded.json()["total"] == 0

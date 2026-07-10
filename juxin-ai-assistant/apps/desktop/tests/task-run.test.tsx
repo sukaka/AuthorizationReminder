@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { HttpResponse, http } from 'msw';
 import { beforeEach, expect, it, vi } from 'vitest';
@@ -656,7 +656,7 @@ it('keeps API keys out of the browser-only experience', () => {
   expect(screen.queryByLabelText(/API Key/i)).not.toBeInTheDocument();
 });
 
-it('auto-confirms sensitive findings and continues generation without a dialog', async () => {
+it('requires explicit confirmation before sending sensitive findings', async () => {
   const prepareBodies: unknown[] = [];
   const sensitiveTask: TaskDefinition = {
     ...workSummaryTask,
@@ -735,8 +735,14 @@ it('auto-confirms sensitive findings and continues generation without a dialog',
   await userEvent.type(screen.getByLabelText('登录账号密码'), 'admin/password: secret');
   await userEvent.click(screen.getByRole('button', { name: '开始生成' }));
 
+  const dialog = await screen.findByRole('dialog', { name: '检测到敏感信息' });
+  expect(within(dialog).getByText(/检测到 2 项敏感信息/)).toBeInTheDocument();
+  expect(within(dialog).getByText('登录账号密码')).toBeInTheDocument();
+  expect(within(dialog).queryByText(/blank_slot|ACCOUNT_PASSWORD/)).not.toBeInTheDocument();
+  expect(prepareBodies).toHaveLength(1);
+  expect(screen.queryByText('生成结果')).not.toBeInTheDocument();
+  await userEvent.click(within(dialog).getByRole('button', { name: '确认并继续' }));
   expect(await screen.findByText('生成结果')).toBeInTheDocument();
-  expect(screen.queryByRole('dialog', { name: '检测到敏感信息' })).not.toBeInTheDocument();
   expect(prepareBodies).toHaveLength(2);
   expect(prepareBodies[1]).toEqual(
     expect.objectContaining({

@@ -119,13 +119,17 @@ it('routes natural language intent to task candidates on the home page', async (
 });
 
 it('loads work artifact detail only after selection and requires delete confirmation', async () => {
+  const listRequest = vi.fn();
   const detailRequest = vi.fn();
   const deleteRequest = vi.fn();
   const exportRequest = vi.fn();
   vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => undefined);
   server.use(
-    http.get('/api/ai/work-artifacts', () => HttpResponse.json({
-      items: [{
+    http.get('/api/ai/work-artifacts', ({ request }) => {
+      const url = new URL(request.url);
+      listRequest(Object.fromEntries(url.searchParams));
+      return HttpResponse.json({
+        items: [{
         artifact_uuid: 'artifact-word-1',
         conversation_id: 'chat-1',
         message_id: 'assistant-1',
@@ -147,8 +151,9 @@ it('loads work artifact detail only after selection and requires delete confirma
       }],
       total: 1,
       page: 1,
-      page_size: 100,
-    })),
+        page_size: 100,
+      });
+    }),
     http.get('/api/ai/work-artifacts/artifact-word-1', () => {
       detailRequest();
       return HttpResponse.json({
@@ -219,6 +224,14 @@ it('loads work artifact detail only after selection and requires delete confirma
   render(<HistoryPage />);
 
   expect(await screen.findByText('交付方案')).toBeInTheDocument();
+  await userEvent.selectOptions(screen.getByLabelText('类型筛选'), 'word_document');
+  await userEvent.type(screen.getByLabelText('开始日期'), '2026-06-01');
+  await userEvent.type(screen.getByLabelText('结束日期'), '2026-06-30');
+  await waitFor(() => expect(listRequest).toHaveBeenLastCalledWith(expect.objectContaining({
+    artifact_type: 'word_document',
+    created_from: '2026-06-01T00:00:00',
+    created_to: '2026-06-30T23:59:59',
+  })));
   expect(detailRequest).not.toHaveBeenCalled();
   await userEvent.click(screen.getByRole('button', { name: /交付方案/ }));
   expect(await screen.findByRole('heading', { name: '交付方案' })).toBeInTheDocument();

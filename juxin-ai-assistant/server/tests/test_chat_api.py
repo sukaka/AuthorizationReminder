@@ -74,6 +74,42 @@ def test_normal_chat_prepare_complete_and_detail(client_for_user) -> None:
     assert detail.json()["task_state"]["stage_history"][-1]["label"] == "已完成"
 
 
+def test_chat_prepare_requires_explicit_sensitive_confirmation(
+    client_for_user,
+    generation_db,
+) -> None:
+    from app.governance_models import AuditLog
+    from app.models import ChatMessage
+
+    client = client_for_user("user-sensitive-chat")
+    body = {"question": "请联系 13800138000 跟进项目", "mode": "normal"}
+
+    warning = client.post("/api/ai/chat/prepare", json=body)
+
+    assert warning.status_code == 409
+    detail = warning.json()["detail"]
+    assert detail["code"] == "SENSITIVE_CONFIRMATION_REQUIRED"
+    assert detail["findings"] == [{
+        "code": "PHONE",
+        "field": "question",
+        "preview": "***",
+    }]
+    assert generation_db.query(ChatMessage).count() == 0
+
+    confirmed = client.post(
+        "/api/ai/chat/prepare",
+        json={**body, "sensitive_confirmation_digest": detail["confirmation_digest"]},
+    )
+
+    assert confirmed.status_code == 201
+    audit = generation_db.query(AuditLog).filter_by(action="chat.prepare").one()
+    assert audit.metadata_json == {
+        "status": "PREPARED",
+        "risk_confirmation": True,
+    }
+    assert "13800138000" not in repr(audit.metadata_json)
+
+
 def test_server_model_generates_and_completes_chat_message(client_for_user) -> None:
     settings = get_settings().model_copy(update={
         "server_model_base_url": "https://model.example/v1",

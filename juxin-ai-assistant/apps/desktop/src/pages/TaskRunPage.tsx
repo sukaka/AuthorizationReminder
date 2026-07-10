@@ -7,6 +7,10 @@ import {
 import { AttachmentUpload } from '../components/AttachmentUpload';
 import { FeedbackPanel } from '../components/FeedbackPanel';
 import { OutputReader } from '../components/OutputReader';
+import {
+  SensitiveWarningDialog,
+  type SensitiveFinding,
+} from '../components/SensitiveWarningDialog';
 import { deleteDraft, loadDraft, saveDraft } from '../local/drafts';
 import { cancelModelGeneration, generateLocalModel, listModelProfiles } from '../local/modelStream';
 import { enqueuePendingResult, syncPendingResults } from '../local/syncQueue';
@@ -115,6 +119,10 @@ export function TaskRunPage({ task, userId }: { task: TaskDefinition; userId?: s
   const [attachments, setAttachments] = useState<AttachmentPayload[]>([]);
   const [attachmentsUploading, setAttachmentsUploading] = useState(false);
   const [knowledgeRefs, setKnowledgeRefs] = useState<KnowledgeRef[]>([]);
+  const [sensitiveConfirmation, setSensitiveConfirmation] = useState<{
+    digest: string;
+    findings: SensitiveFinding[];
+  } | null>(null);
 
   useEffect(() => {
     if (!desktopAvailable) return;
@@ -312,6 +320,7 @@ export function TaskRunPage({ task, userId }: { task: TaskDefinition; userId?: s
           detail?: {
             code?: string;
             confirmation_digest?: string;
+            findings?: SensitiveFinding[];
           };
         } | null;
         if (
@@ -320,7 +329,16 @@ export function TaskRunPage({ task, userId }: { task: TaskDefinition; userId?: s
           && payload.detail.confirmation_digest
         ) {
           if (!confirmationDigest) {
-            await generate(payload.detail.confirmation_digest);
+            setSensitiveConfirmation({
+              digest: payload.detail.confirmation_digest,
+              findings: (payload.detail.findings || []).map((finding) => ({
+                ...finding,
+                field: task.fields.find(
+                  (field) => field.field_key === finding.field,
+                )?.label || '输入内容',
+              })),
+            });
+            setStatus('idle');
             return;
           }
         }
@@ -525,6 +543,17 @@ export function TaskRunPage({ task, userId }: { task: TaskDefinition; userId?: s
           ) : null}
         </article>
       </div>
+      {sensitiveConfirmation ? (
+        <SensitiveWarningDialog
+          findings={sensitiveConfirmation.findings}
+          onCancel={() => setSensitiveConfirmation(null)}
+          onConfirm={() => {
+            const digest = sensitiveConfirmation.digest;
+            setSensitiveConfirmation(null);
+            void generate(digest);
+          }}
+        />
+      ) : null}
     </section>
   );
 }

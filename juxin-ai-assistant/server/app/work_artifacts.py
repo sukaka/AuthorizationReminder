@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import datetime
+
 from fastapi import HTTPException
 from sqlalchemy import Select, func, select
 from sqlalchemy.orm import Session
@@ -137,6 +139,8 @@ def list_work_artifacts(
     page: int,
     page_size: int,
     artifact_type: str | None = None,
+    created_from: datetime | None = None,
+    created_to: datetime | None = None,
 ) -> tuple[list[WorkArtifact], int]:
     statement = select(WorkArtifact).where(
         WorkArtifact.owner_user_id == owner_user_id,
@@ -149,6 +153,12 @@ def list_work_artifacts(
     if artifact_type:
         statement = statement.where(WorkArtifact.artifact_type == artifact_type)
         count_statement = count_statement.where(WorkArtifact.artifact_type == artifact_type)
+    if created_from:
+        statement = statement.where(WorkArtifact.created_at >= created_from)
+        count_statement = count_statement.where(WorkArtifact.created_at >= created_from)
+    if created_to:
+        statement = statement.where(WorkArtifact.created_at <= created_to)
+        count_statement = count_statement.where(WorkArtifact.created_at <= created_to)
     total = db.scalar(count_statement) or 0
     items = list(db.scalars(
         statement

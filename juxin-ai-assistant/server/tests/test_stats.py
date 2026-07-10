@@ -210,6 +210,17 @@ def test_admin_stats_include_agent_quality_metrics(
                 retrieved_chunk_ids_json=[],
                 answer_message_id=without_source.uuid,
             ),
+            AgentTaskState(
+                uuid="quality-verification-state",
+                user_id="user-quality",
+                conversation_id=session.uuid,
+                stage="completed",
+                status="completed",
+                verification_status="warning",
+                verification_json={
+                    "reference": {"kept_count": 1, "removed_count": 1},
+                },
+            ),
             ExportRecord(
                 conversation_id=session.uuid,
                 message_id=with_source.uuid,
@@ -259,6 +270,7 @@ def test_admin_stats_include_agent_quality_metrics(
     assert payload["assistant_answer_total"] == 2
     assert payload["assistant_answer_with_sources"] == 1
     assert payload["citation_coverage_rate"] == 0.5
+    assert payload["citation_accuracy_rate"] == 0.5
     assert payload["answer_without_source_rate"] == 0.5
     assert payload["word_export_total"] == 1
     assert payload["document_format_check_total"] == 2
@@ -268,6 +280,7 @@ def test_admin_stats_include_agent_quality_metrics(
     assert payload["feedback_distribution"]["useful"] == 1
     assert payload["feedback_distribution"]["needs_revision"] == 1
     assert payload["user_negative_feedback_total"] == 1
+    assert payload["user_negative_feedback_rate"] == 0.5
 
 
 def test_admin_task_replays_return_metadata_without_chat_content(

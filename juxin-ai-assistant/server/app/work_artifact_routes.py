@@ -1,3 +1,4 @@
+from datetime import datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query, Request
@@ -39,6 +40,8 @@ async def work_artifacts(
     current_settings: Annotated[Settings, Depends(get_settings)],
     db: Annotated[Session, Depends(get_db)],
     artifact_type: str | None = None,
+    created_from: datetime | None = None,
+    created_to: datetime | None = None,
     page: Annotated[int, Query(ge=1)] = 1,
     page_size: Annotated[int, Query(ge=1, le=100)] = 100,
 ) -> WorkArtifactListOut:
@@ -52,6 +55,8 @@ async def work_artifacts(
         db,
         owner_user_id=str(session_payload.user.id),
         artifact_type=artifact_type,
+        created_from=created_from,
+        created_to=created_to,
         page=page,
         page_size=page_size,
     )

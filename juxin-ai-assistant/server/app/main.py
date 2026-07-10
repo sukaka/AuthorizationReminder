@@ -1213,6 +1213,7 @@ async def prepare_generation_route(
             "prompt_external_id": record.prompt_external_id,
             "prompt_version": record.prompt_version,
             "status": record.status,
+            "risk_confirmation": bool(body.sensitive_confirmation_digest),
         },
     )
     db.commit()

@@ -55,6 +55,10 @@ import {
   saveChatMessageWorkArtifact,
 } from '../api/client';
 import { TaskProgressTimeline } from '../components/TaskProgressTimeline';
+import {
+  SensitiveWarningDialog,
+  type SensitiveFinding,
+} from '../components/SensitiveWarningDialog';
 import { cancelModelGeneration, generateLocalModel, listModelProfiles } from '../local/modelStream';
 import { isDesktopRuntime } from '../runtime/capabilities';
 import { openLocalWordFile } from '../runtime/downloads';
@@ -840,6 +844,11 @@ export function ChatPage() {
   const [webModelLabel, setWebModelLabel] = useState('服务端模型');
   const [backgroundMode, setBackgroundMode] = useState(false);
   const [longTasks, setLongTasks] = useState<LongTaskPayload[]>([]);
+  const [sensitiveConfirmation, setSensitiveConfirmation] = useState<{
+    question: string;
+    digest: string;
+    findings: SensitiveFinding[];
+  } | null>(null);
   const messageListRef = useRef<HTMLDivElement | null>(null);
   const shouldStickToBottomRef = useRef(true);
   const activeGenerationRef = useRef<ActiveGeneration | null>(null);
@@ -1320,7 +1329,7 @@ export function ChatPage() {
     ));
   };
 
-  const send = async (questionOverride?: string) => {
+  const send = async (questionOverride?: string, confirmationDigest?: string) => {
     if (generationStatus === 'running') {
       await stopActiveGeneration();
       return;
@@ -1352,8 +1361,9 @@ export function ChatPage() {
     activeGenerationRef.current = { stopped: false };
     setQuestion('');
     setMemorySuggestion(detectMemorySuggestion(trimmed));
+    const localUserMessageId = `local-user-${Date.now()}`;
     setMessages((current) => current.concat({
-      id: `local-user-${Date.now()}`,
+      id: localUserMessageId,
       role: 'user',
       content: trimmed,
       citations: [],
@@ -1371,6 +1381,7 @@ export function ChatPage() {
           || referenceScope === 'with_personal'
           || referenceScope === 'personal_and_session',
         includeSessionAttachments: referenceScope === 'with_session' || referenceScope === 'personal_and_session',
+        sensitiveConfirmationDigest: confirmationDigest,
       });
       setTaskProgress(prepared.task_state ? taskProgressWithStage(
         prepared.task_state,
@@ -1580,6 +1591,35 @@ export function ChatPage() {
       refreshSessions(sessionListKind).catch(() => undefined);
       setStatus('');
     } catch (error) {
+      if (error instanceof ApiError && error.status === 409) {
+        const payload = error.payload as {
+          detail?: {
+            code?: string;
+            confirmation_digest?: string;
+            findings?: SensitiveFinding[];
+          };
+        } | null;
+        if (
+          payload?.detail?.code === 'SENSITIVE_CONFIRMATION_REQUIRED'
+          && payload.detail.confirmation_digest
+        ) {
+          setMessages((current) => current.filter(
+            (message) => message.id !== localUserMessageId,
+          ));
+          setQuestion(trimmed);
+          setSensitiveConfirmation({
+            question: trimmed,
+            digest: payload.detail.confirmation_digest,
+            findings: (payload.detail.findings || []).map((finding) => ({
+              ...finding,
+              field: '工作内容',
+            })),
+          });
+          setStatus('');
+          setTaskProgress(null);
+          return;
+        }
+      }
       if (activeGenerationRef.current?.stopped || isAbortLikeError(error)) {
         markGenerationStopped(assistantId);
         return;
@@ -2942,6 +2982,17 @@ export function ChatPage() {
                 </div>
               </div>
             </div>
+          ) : null}
+          {sensitiveConfirmation ? (
+            <SensitiveWarningDialog
+              findings={sensitiveConfirmation.findings}
+              onCancel={() => setSensitiveConfirmation(null)}
+              onConfirm={() => {
+                const pending = sensitiveConfirmation;
+                setSensitiveConfirmation(null);
+                void send(pending.question, pending.digest);
+              }}
+            />
           ) : null}
           {longTasks.length ? (
             <aside aria-label="后台任务" className="chat-long-task-tray" role="region">

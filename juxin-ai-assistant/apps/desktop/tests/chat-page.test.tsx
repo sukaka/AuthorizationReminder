@@ -77,6 +77,59 @@ beforeEach(() => {
   });
 });
 
+it('requires confirmation before a sensitive chat reaches the model', async () => {
+  const prepareBodies: unknown[] = [];
+  server.use(
+    http.get('/api/conversations', () => HttpResponse.json({ items: [], total: 0 })),
+    http.post('/api/ai/chat/prepare', async ({ request }) => {
+      const body = await request.json() as { sensitive_confirmation_digest?: string };
+      prepareBodies.push(body);
+      if (!body.sensitive_confirmation_digest) {
+        return HttpResponse.json({
+          detail: {
+            code: 'SENSITIVE_CONFIRMATION_REQUIRED',
+            confirmation_digest: 'c'.repeat(64),
+            findings: [{ code: 'PHONE', field: 'question', preview: '***' }],
+          },
+        }, { status: 409 });
+      }
+      return HttpResponse.json({
+        session_uuid: 'session-sensitive-chat',
+        user_message_uuid: 'user-sensitive-chat',
+        assistant_message_uuid: 'assistant-sensitive-chat',
+        completion_token: 'complete-sensitive-chat',
+        completed: false,
+        answer: '',
+        messages: [{ role: 'user', content: '联系信息已确认' }],
+        citations: [],
+      }, { status: 201 });
+    }),
+    http.post('/api/ai/chat/messages/assistant-sensitive-chat/complete', () => HttpResponse.json({
+      message_uuid: 'assistant-sensitive-chat',
+      status: 'COMPLETED',
+    })),
+  );
+  generateLocalModelMock.mockResolvedValue({
+    output: '已生成跟进计划。',
+    latencyMs: 10,
+    usage: {},
+  });
+
+  render(<ChatPage />);
+  await userEvent.type(await screen.findByLabelText('告诉我你想完成什么工作'), '联系 13800138000 跟进项目');
+  await userEvent.click(screen.getByRole('button', { name: '发送' }));
+
+  const dialog = await screen.findByRole('dialog', { name: '检测到敏感信息' });
+  expect(prepareBodies).toHaveLength(1);
+  expect(generateLocalModelMock).not.toHaveBeenCalled();
+  await userEvent.click(within(dialog).getByRole('button', { name: '确认并继续' }));
+  expect(await screen.findByText('已生成跟进计划。')).toBeInTheDocument();
+  expect(prepareBodies).toHaveLength(2);
+  expect(prepareBodies[1]).toEqual(expect.objectContaining({
+    sensitive_confirmation_digest: 'c'.repeat(64),
+  }));
+});
+
 it('queues a server-model chat for background processing', async () => {
   Object.defineProperty(window, '__TAURI_INTERNALS__', {
     configurable: true,

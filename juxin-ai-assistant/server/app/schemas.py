@@ -461,6 +461,11 @@ class ChatPrepareIn(BaseModel):
     personal_reference_file_ids: list[str] = Field(default_factory=list, max_length=20)
     include_personal_references: bool = False
     include_session_attachments: bool = False
+    sensitive_confirmation_digest: str | None = Field(
+        default=None,
+        min_length=64,
+        max_length=64,
+    )
 
 
 class ChatMessageOut(BaseModel):

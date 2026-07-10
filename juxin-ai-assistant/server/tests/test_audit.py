@@ -18,6 +18,7 @@ def test_sanitize_metadata_keeps_only_whitelisted_non_content_fields() -> None:
     # Given: metadata containing unknown, secret, and nested content fields.
     metadata = {
         "task_uuid": "task-1",
+        "risk_confirmation": True,
         "api_key": "secret",
         "authorization": "Bearer secret",
         "input": "private input",
@@ -44,6 +45,7 @@ def test_sanitize_metadata_keeps_only_whitelisted_non_content_fields() -> None:
     # Then: only approved structure remains and sensitive keys are removed recursively.
     assert cleaned == {
         "task_uuid": "task-1",
+        "risk_confirmation": True,
         "status": {"name": "COMPLETE", "nested": {"safe": "kept"}},
     }
 

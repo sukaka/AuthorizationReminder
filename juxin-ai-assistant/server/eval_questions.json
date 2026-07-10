@@ -51,6 +51,56 @@
       "id": "ui-design-suggestion",
       "question": "这个聊天窗口交互怎么改得更像私人助理？",
       "expected_focus": ["ui_design", "交互", "私人助理", "可用性"]
+    },
+    {
+      "id": "no-source-guard",
+      "question": "知识库没有资料时能不能按经验直接回答产品参数？",
+      "expected_focus": ["不能编造", "说明缺少依据", "建议补充资料"]
+    },
+    {
+      "id": "upload-isolation",
+      "question": "我上传的客户材料会自动给全公司使用吗？",
+      "expected_focus": ["不会自动进入公司知识库", "仅当前会话", "权限隔离"]
+    },
+    {
+      "id": "knowledge-review",
+      "question": "一份个人资料如何转成公司正式知识？",
+      "expected_focus": ["提交审核", "管理员批准", "审计记录"]
+    },
+    {
+      "id": "long-task-recovery",
+      "question": "长报告生成中断后怎么办？",
+      "expected_focus": ["保留草稿", "重试", "从检查点恢复"]
+    },
+    {
+      "id": "citation-preview",
+      "question": "回答里的资料依据应该怎么查看？",
+      "expected_focus": ["来源", "章节页码", "点击预览"]
+    },
+    {
+      "id": "artifact-date-filter",
+      "question": "怎样找到上个月生成的 Word 成果？",
+      "expected_focus": ["工作成果", "类型筛选", "日期筛选"]
+    },
+    {
+      "id": "assistant-mode-disable",
+      "question": "助手模式停用后以前的任务还能看吗？",
+      "expected_focus": ["新任务不可用", "历史仍可查看", "管理员审计"]
+    },
+    {
+      "id": "sensitive-confirmation",
+      "question": "材料里有手机号和账号密码时如何处理？",
+      "expected_focus": ["敏感信息提示", "用户确认", "不写入日志"]
+    },
+    {
+      "id": "web-https-deployment",
+      "question": "公司通过浏览器部署助手要注意什么？",
+      "expected_focus": ["HTTPS", "安全 Cookie", "同源配置"]
+    },
+    {
+      "id": "cross-platform-access",
+      "question": "Windows 和 Mac 员工如何使用同一套助手？",
+      "expected_focus": ["浏览器访问", "桌面客户端", "统一版本"]
     }
   ]
 }

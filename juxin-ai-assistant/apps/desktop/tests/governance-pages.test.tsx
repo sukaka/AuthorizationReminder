@@ -69,10 +69,12 @@ it('shows global agent quality metrics for administrators', async () => {
     knowledge_search_total: 12,
     knowledge_search_hit_rate: 0.75,
     citation_coverage_rate: 0.6,
+    citation_accuracy_rate: 0.8,
     word_export_total: 5,
     document_format_pass_rate: 0.5,
     answer_without_source_rate: 0.4,
     user_negative_feedback_total: 3,
+    user_negative_feedback_rate: 0.25,
     tool_error_distribution: { EXPORT_FAILED: 2 },
   })));
 
@@ -88,6 +90,8 @@ it('shows global agent quality metrics for administrators', async () => {
   expect(screen.getByText('7')).toBeInTheDocument();
   expect(screen.getByText('平均任务耗时')).toBeInTheDocument();
   expect(screen.getByText('1800ms')).toBeInTheDocument();
+  expect(screen.getByText('引用准确率')).toBeInTheDocument();
+  expect(screen.getByText('负反馈率')).toBeInTheDocument();
   expect(screen.getByText('平均工具耗时')).toBeInTheDocument();
   expect(screen.getByText('250ms')).toBeInTheDocument();
   expect(screen.getByText('知识检索命中率')).toBeInTheDocument();

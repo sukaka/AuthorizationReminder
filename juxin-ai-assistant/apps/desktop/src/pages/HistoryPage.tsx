@@ -15,6 +15,8 @@ export function HistoryPage() {
   const [items, setItems] = useState<WorkArtifactItemPayload[]>([]);
   const [detail, setDetail] = useState<WorkArtifactDetailPayload | null>(null);
   const [typeFilter, setTypeFilter] = useState('');
+  const [dateFrom, setDateFrom] = useState('');
+  const [dateTo, setDateTo] = useState('');
   const [error, setError] = useState('');
   const [pendingDeleteUuid, setPendingDeleteUuid] = useState('');
   const [downloadStatus, setDownloadStatus] = useState('');
@@ -22,7 +24,11 @@ export function HistoryPage() {
   useEffect(() => {
     let active = true;
     setError('');
-    getWorkArtifacts()
+    getWorkArtifacts({
+      artifactType: typeFilter,
+      createdFrom: dateFrom ? `${dateFrom}T00:00:00` : '',
+      createdTo: dateTo ? `${dateTo}T23:59:59` : '',
+    })
       .then((payload) => {
         if (active) {
           setItems(payload.items);
@@ -34,11 +40,7 @@ export function HistoryPage() {
     return () => {
       active = false;
     };
-  }, []);
-
-  const visibleItems = typeFilter
-    ? items.filter((item) => item.artifact_type === typeFilter)
-    : items;
+  }, [typeFilter, dateFrom, dateTo]);
 
   const selectItem = async (item: WorkArtifactItemPayload) => {
     setError('');
@@ -111,18 +113,20 @@ export function HistoryPage() {
             <option value="word_document">Word 文档</option>
             <option value="ordinary_answer">普通回答</option>
           </select>
+          <input aria-label="开始日期" onChange={(event) => setDateFrom(event.target.value)} type="date" value={dateFrom} />
+          <input aria-label="结束日期" onChange={(event) => setDateTo(event.target.value)} type="date" value={dateTo} />
         </div>
       </header>
       {error ? <p className="form-error" role="alert">{error}</p> : null}
       <div className="history-layout">
         <div className="history-list">
-          {visibleItems.map((item) => (
+          {items.map((item) => (
             <button className={detail?.artifact_uuid === item.artifact_uuid ? 'is-current' : ''} key={item.artifact_uuid} onClick={() => selectItem(item)} type="button">
               <span><strong>{item.title}</strong><small>{artifactTypeLabel(item.artifact_type)}</small></span>
               <span><small>{new Date(item.updated_at).toLocaleString()}</small><em>V{item.version}</em></span>
             </button>
           ))}
-          {!visibleItems.length ? <p className="empty-hint">还没有工作成果。</p> : null}
+          {!items.length ? <p className="empty-hint">还没有工作成果。</p> : null}
         </div>
         <article className="history-detail">
           {detail ? (

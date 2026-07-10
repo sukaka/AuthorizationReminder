@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { HttpResponse, http } from 'msw';
 import { beforeEach, expect, it, vi } from 'vitest';
@@ -154,7 +154,7 @@ it('opens chat after login without adding an extra sidebar menu', async () => {
   expect(screen.queryByRole('button', { name: '聊天' })).not.toBeInTheDocument();
 });
 
-it('auto-confirms the current sensitive digest without showing a dialog', async () => {
+it('requires explicit confirmation for the current sensitive digest', async () => {
   const prepareBodies: unknown[] = [];
   const task: TaskDefinition = {
     uuid: 'task-sensitive',
@@ -242,8 +242,10 @@ it('auto-confirms the current sensitive digest without showing a dialog', async 
   await userEvent.type(screen.getByLabelText('背景信息'), '联系 13800138000');
   await userEvent.click(screen.getByRole('button', { name: '开始生成' }));
 
+  const dialog = await screen.findByRole('dialog', { name: '检测到敏感信息' });
+  expect(prepareBodies).toHaveLength(1);
+  await userEvent.click(within(dialog).getByRole('button', { name: '确认并继续' }));
   expect(await screen.findByText('生成结果')).toBeInTheDocument();
-  expect(screen.queryByRole('dialog', { name: '检测到敏感信息' })).not.toBeInTheDocument();
   expect(prepareBodies).toHaveLength(2);
   expect(prepareBodies[1]).toEqual(
     expect.objectContaining({

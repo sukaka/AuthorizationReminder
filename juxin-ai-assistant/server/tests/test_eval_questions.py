@@ -10,7 +10,7 @@ def test_eval_questions_cover_learning_loop_regressions() -> None:
 
     assert payload["version"] == "1.0"
     questions = payload["questions"]
-    assert len(questions) >= 8
+    assert 20 <= len(questions) <= 50
     ids = {item["id"] for item in questions}
     assert {
         "business-role",
@@ -30,7 +30,7 @@ def test_eval_questions_cover_learning_loop_regressions() -> None:
 def test_learning_eval_runner_checks_context_readiness() -> None:
     report = run_learning_eval()
 
-    assert report["total"] >= 8
+    assert report["total"] >= 20
     assert report["failed"] == 0
     ids = {item["id"] for item in report["results"]}
     assert "latest-cve" in ids

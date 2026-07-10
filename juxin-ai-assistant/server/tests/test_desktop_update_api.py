@@ -92,7 +92,7 @@ def test_admin_create_and_list_releases(test_app_with_storage):
     releases = resp.json()
     assert len(releases) >= 1
 
-    return release_uuid
+    assert any(item["uuid"] == release_uuid for item in releases)
 
 
 def test_admin_upload_and_publish(test_app_with_storage):

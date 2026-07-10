@@ -337,6 +337,7 @@ class StatsOut(BaseModel):
     assistant_answer_total: int = 0
     assistant_answer_with_sources: int = 0
     citation_coverage_rate: float = 0.0
+    citation_accuracy_rate: float = 0.0
     answer_without_source_rate: float = 0.0
     word_export_total: int = 0
     document_format_check_total: int = 0
@@ -344,6 +345,7 @@ class StatsOut(BaseModel):
     document_format_pass_rate: float = 0.0
     tool_error_distribution: dict[str, int] = {}
     user_negative_feedback_total: int = 0
+    user_negative_feedback_rate: float = 0.0
 
 
 class TaskReplayOut(BaseModel):

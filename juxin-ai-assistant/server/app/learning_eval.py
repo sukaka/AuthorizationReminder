@@ -123,6 +123,56 @@ def scenario_for_question(question_id: str) -> LearningEvalScenario:
             memories=("UI 设计建议要先说明交互问题，再给私人助理化的可用性改进。",),
             required_snippets=("ui_design", "交互", "私人助理", "可用性"),
         ),
+        "no-source-guard": LearningEvalScenario(
+            mode="knowledge",
+            failure_cases=("知识库无依据时不能编造产品参数，必须说明缺少依据并建议补充资料。",),
+            required_snippets=("不能编造", "缺少依据", "补充资料"),
+        ),
+        "upload-isolation": LearningEvalScenario(
+            mode="normal",
+            experiences=("用户上传内容不会自动进入公司知识库，仅当前会话可用并保持权限隔离。",),
+            required_snippets=("不会自动进入公司知识库", "当前会话", "权限隔离"),
+        ),
+        "knowledge-review": LearningEvalScenario(
+            mode="knowledge",
+            experiences=("个人资料转公司正式知识必须提交审核，由管理员批准并留下审计记录。",),
+            required_snippets=("提交审核", "管理员批准", "审计记录"),
+        ),
+        "long-task-recovery": LearningEvalScenario(
+            mode="normal",
+            failure_cases=("长任务中断时保留草稿，允许重试并从最近检查点恢复。",),
+            required_snippets=("保留草稿", "重试", "检查点恢复"),
+        ),
+        "citation-preview": LearningEvalScenario(
+            mode="knowledge",
+            memories=("引用来源要显示章节页码，并支持点击预览原资料。",),
+            required_snippets=("引用来源", "章节页码", "点击预览"),
+        ),
+        "artifact-date-filter": LearningEvalScenario(
+            mode="normal",
+            memories=("工作成果支持按 Word 等类型筛选，也支持开始和结束日期筛选。",),
+            required_snippets=("工作成果", "类型筛选", "日期筛选"),
+        ),
+        "assistant-mode-disable": LearningEvalScenario(
+            mode="normal",
+            experiences=("助手模式停用后新任务不可用，但历史仍可查看，变更由管理员审计。",),
+            required_snippets=("新任务不可用", "历史仍可查看", "管理员审计"),
+        ),
+        "sensitive-confirmation": LearningEvalScenario(
+            mode="normal",
+            failure_cases=("发现敏感信息要提示用户确认，账号密码不得写入日志。",),
+            required_snippets=("敏感信息", "用户确认", "不得写入日志"),
+        ),
+        "web-https-deployment": LearningEvalScenario(
+            mode="normal",
+            memories=("浏览器部署使用 HTTPS、安全 Cookie 和前后端同源配置。",),
+            required_snippets=("HTTPS", "安全 Cookie", "同源配置"),
+        ),
+        "cross-platform-access": LearningEvalScenario(
+            mode="normal",
+            memories=("Windows 和 Mac 可使用统一版本的桌面客户端，也可直接通过浏览器访问。",),
+            required_snippets=("Windows", "Mac", "桌面客户端", "浏览器访问", "统一版本"),
+        ),
     }
     return scenarios.get(question_id, LearningEvalScenario(mode="normal"))
 

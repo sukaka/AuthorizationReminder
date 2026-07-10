@@ -528,6 +528,7 @@ def test_prepare_writes_body_free_audit_in_the_generation_transaction(
         "prompt_external_id": 7,
         "prompt_version": 3,
         "status": "PENDING",
+        "risk_confirmation": False,
     }
     assert "private employee input" not in repr(audit.metadata_json)
 
@@ -788,6 +789,12 @@ def test_prepare_requires_current_sensitive_confirmation_digest(
         },
     )
     assert confirmed.status_code == 201
+    audit = generation_db.scalar(
+        select(AuditLog).where(AuditLog.action == "generation.prepare")
+    )
+    assert audit is not None
+    assert audit.metadata_json["risk_confirmation"] is True
+    assert "13800138000" not in repr(audit.metadata_json)
 
     changed = generation_client.post(
         "/api/ai/generations/prepare",

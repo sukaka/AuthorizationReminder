@@ -169,9 +169,11 @@ export function StatsPage({ manager = false }: { manager?: boolean }) {
                 <div><dt>平均工具耗时</dt><dd>{stats.tool_call_average_latency_ms ?? 0}ms</dd><small>仅聚合耗时</small></div>
                 <div><dt>知识检索命中率</dt><dd>{percent(stats.knowledge_search_hit_rate)}</dd><small>{stats.knowledge_search_hit ?? 0}/{stats.knowledge_search_total ?? 0}</small></div>
                 <div><dt>引用覆盖率</dt><dd>{percent(stats.citation_coverage_rate)}</dd><small>无来源回答 {percent(stats.answer_without_source_rate)}</small></div>
+                <div><dt>引用准确率</dt><dd>{percent(stats.citation_accuracy_rate)}</dd><small>自检后保留引用占比</small></div>
                 <div><dt>Word 导出次数</dt><dd>{stats.word_export_total ?? 0}</dd><small>正式文档导出</small></div>
                 <div><dt>格式自检通过率</dt><dd>{percent(stats.document_format_pass_rate)}</dd><small>{stats.document_format_check_passed ?? 0}/{stats.document_format_check_total ?? 0}</small></div>
                 <div><dt>用户负反馈数</dt><dd>{stats.user_negative_feedback_total ?? 0}</dd><small>没用/需修改/记录错误</small></div>
+                <div><dt>负反馈率</dt><dd>{percent(stats.user_negative_feedback_rate)}</dd><small>负反馈占全部反馈</small></div>
               </dl>
               {Object.keys(stats.tool_error_distribution || {}).length ? (
                 <ul aria-label="工具错误分布">
