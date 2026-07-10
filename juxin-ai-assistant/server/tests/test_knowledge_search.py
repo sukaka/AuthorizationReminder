@@ -325,6 +325,59 @@ def test_search_clamps_top_k_between_five_and_ten(generation_db) -> None:
     assert len(high_top_k_results) == 7
 
 
+def test_search_balances_top_chunks_across_relevant_files(generation_db) -> None:
+    from collections import Counter
+
+    from app.knowledge_search import search_knowledge_chunks
+
+    dominant_text = "\n\n".join(
+        f"{index}、责任归属\n未知云安全设施责任归属需要结合客户、云服务商和交付方的边界确认。"
+        + "设施清单和责任矩阵应在项目交付阶段逐项核对。" * 4
+        for index in range(10)
+    )
+    _add_file(
+        generation_db,
+        user_id="admin",
+        name="大型建设方案.txt",
+        text=dominant_text,
+        visibility="PUBLIC",
+        usage_type="official_knowledge",
+        review_status="official",
+        rag_enabled=True,
+        rag_scope="company",
+        permission_scope="company",
+    )
+    for index in range(3):
+        _add_file(
+            generation_db,
+            user_id="admin",
+            name=f"责任说明-{index}.txt",
+            text=(
+                "一、责任说明\n未知云安全设施责任归属由责任矩阵确认。"
+                + f"第 {index} 份资料补充客户与服务商边界。" * 20
+            ),
+            visibility="PUBLIC",
+            usage_type="official_knowledge",
+            review_status="official",
+            rag_enabled=True,
+            rag_scope="company",
+            permission_scope="company",
+        )
+
+    results = search_knowledge_chunks(
+        generation_db,
+        sso_user_id="user-1",
+        query="未知云安全设施责任归属",
+        cipher=_cipher(),
+        top_k=8,
+    )
+
+    counts = Counter(result.file_uuid for result in results)
+    assert len(results) == 8
+    assert len(counts) >= 3
+    assert max(counts.values()) <= 3
+
+
 def test_search_returns_empty_when_no_chunk_matches(generation_db) -> None:
     from app.knowledge_search import search_knowledge_chunks
 

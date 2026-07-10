@@ -31,6 +31,11 @@ KNOWLEDGE_REQUIRED_KEYWORDS = (
     "安全服务模板",
     "prompt 手册",
     "提示词手册",
+    "上传资料",
+    "资料中",
+    "文档中",
+    "其他文件",
+    "全部资料",
 )
 
 KNOWLEDGE_HELPFUL_KEYWORDS = KNOWLEDGE_REQUIRED_KEYWORDS + (

@@ -16,6 +16,8 @@ EMBEDDING_VERSION = "v1"
 DEFAULT_EMBEDDING_DIMENSIONS = 128
 VECTOR_CANDIDATE_THRESHOLD = 0.35
 HYBRID_CANDIDATE_LIMIT = 30
+MAX_CHUNKS_PER_FILE = 3
+MIN_FILE_COVERAGE = 3
 
 
 @dataclass(frozen=True)
@@ -286,7 +288,7 @@ class RerankService:
         )
 
     def rank(self, candidates: list[_HybridCandidate], *, top_k: int | None) -> list[_HybridCandidate]:
-        return sorted(
+        ranked = sorted(
             candidates,
             key=lambda item: (
                 item.final_score,
@@ -297,7 +299,46 @@ class RerankService:
                 -item.document.chunk.chunk_index,
             ),
             reverse=True,
-        )[: _clamp_top_k(top_k)]
+        )
+        limit = _clamp_top_k(top_k)
+        if not ranked:
+            return []
+
+        selected: list[_HybridCandidate] = []
+        selected_ids: set[int] = set()
+        file_counts: dict[str, int] = {}
+        distinct_files = list(dict.fromkeys(
+            item.document.file_record.uuid
+            for item in ranked
+        ))
+        coverage_target = min(MIN_FILE_COVERAGE, len(distinct_files), limit)
+
+        # Reserve the first slots for the strongest chunk from different files.
+        for candidate in ranked:
+            file_uuid = candidate.document.file_record.uuid
+            if file_uuid in file_counts:
+                continue
+            selected.append(candidate)
+            selected_ids.add(id(candidate))
+            file_counts[file_uuid] = 1
+            if len(file_counts) >= coverage_target:
+                break
+
+        # Fill remaining slots by score while preventing one large document
+        # from occupying the entire context window.
+        for candidate in ranked:
+            if len(selected) >= limit:
+                break
+            if id(candidate) in selected_ids:
+                continue
+            file_uuid = candidate.document.file_record.uuid
+            if file_counts.get(file_uuid, 0) >= MAX_CHUNKS_PER_FILE:
+                continue
+            selected.append(candidate)
+            selected_ids.add(id(candidate))
+            file_counts[file_uuid] = file_counts.get(file_uuid, 0) + 1
+
+        return selected
 
 
 def _metadata_text(metadata: dict | None) -> str:

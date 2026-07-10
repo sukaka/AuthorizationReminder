@@ -24,6 +24,22 @@ def test_task_analyzer_maps_modes_to_loop_strategies() -> None:
     assert analyzer.analyze("分析漏洞和日志", "security_ops").strategy == "security_analysis_loop"
     assert analyzer.analyze("生成风险评估", "risk_assessment").strategy == "risk_assessment_loop"
     assert analyzer.analyze("生成应急响应报告", "incident_response").strategy == "incident_response_loop"
+    assert analyzer.analyze("上传资料中是否有说明", "normal").needs_knowledge is True
+
+
+def test_knowledge_follow_up_query_carries_previous_user_subject() -> None:
+    from app.agent_loop.loop_runner import knowledge_search_query
+    from app.context.context_builder import RecentChatMessage
+
+    recent_messages = [
+        RecentChatMessage(role="user", content="未知云安全设施由谁负责"),
+        RecentChatMessage(role="assistant", content="需要查看正式资料。"),
+    ]
+
+    assert knowledge_search_query("上传资料中是否有说明", recent_messages) == (
+        "未知云安全设施由谁负责 上传资料中是否有说明"
+    )
+    assert knowledge_search_query("云管平台有哪些功能", recent_messages) == "云管平台有哪些功能"
 
 
 def test_planner_declares_required_action_types() -> None:

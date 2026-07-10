@@ -22,6 +22,37 @@ from .types import (
 
 NO_EVIDENCE_ANSWER = "当前知识库未找到明确依据"
 
+_KNOWLEDGE_FOLLOW_UP_MARKERS = (
+    "上传资料",
+    "资料中",
+    "文档中",
+    "其他文件",
+    "全部资料",
+    "这些资料",
+    "是否有说明",
+    "有没有说明",
+)
+
+
+def knowledge_search_query(
+    question: str,
+    recent_messages: list[RecentChatMessage],
+) -> str:
+    """Carry the previous user subject into short document follow-up queries."""
+    if not any(marker in question for marker in _KNOWLEDGE_FOLLOW_UP_MARKERS):
+        return question
+    previous_question = next(
+        (
+            message.content.strip()
+            for message in reversed(recent_messages)
+            if message.role == "user" and message.content.strip()
+        ),
+        "",
+    )
+    if not previous_question or previous_question == question.strip():
+        return question
+    return f"{previous_question} {question}".strip()
+
 
 class LoopRunner:
     def __init__(self, limits: LoopLimits | None = None) -> None:
@@ -157,6 +188,7 @@ class LoopRunner:
         observation: Observation | None = None
         rag_search_count = 0
         tool_calls = 0
+        base_knowledge_query = knowledge_search_query(question, recent_messages)
         if (include_session_attachments or attachment_file_ids) and tool_calls < self.limits.max_tool_calls:
             if task_state_store is not None:
                 task_state_store.update_stage(
@@ -253,7 +285,7 @@ class LoopRunner:
                     next_action="正在查找资料",
                     selected_sources=[],
                 )
-            query = self.reflector.rewrite_query(question, rag_search_count)
+            query = self.reflector.rewrite_query(base_knowledge_query, rag_search_count)
             result = executor.search_knowledge_base(query, mode=analysis.mode)
             chunks = result.chunks
             trace.append(
