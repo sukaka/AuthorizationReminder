@@ -9,12 +9,18 @@ const apiProxyPrefixes = [
   '/api/personal-reference',
   '/api/conversations',
 ];
+const authProxyPrefixes = ['/portal', '/api/auth'];
 
 export default defineConfig({
   plugins: [react()],
   server: {
     port: 18093,
-    proxy: Object.fromEntries(apiProxyPrefixes.map((prefix) => [prefix, apiProxyTarget])),
+    proxy: {
+      ...Object.fromEntries(apiProxyPrefixes.map((prefix) => [prefix, apiProxyTarget])),
+      ...Object.fromEntries(
+        authProxyPrefixes.map((prefix) => [prefix, 'http://127.0.0.1:5180']),
+      ),
+    },
   },
   test: {
     environment: 'jsdom',

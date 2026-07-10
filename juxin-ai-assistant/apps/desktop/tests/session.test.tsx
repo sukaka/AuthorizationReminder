@@ -61,20 +61,23 @@ describe('apiFetch runtime token behavior', () => {
 });
 
 describe('unified session shell', () => {
-  it('uses the existing unified portal instead of inventing a child login route', () => {
-    expect(getAuthPortalUrl()).toBe('http://localhost:5180/portal?system=ai-assistant');
+  it('uses the same HTTPS origin for the web portal instead of localhost', () => {
+    const portalUrl = getAuthPortalUrl();
+
+    expect(portalUrl).toBe(`${window.location.origin}/portal?system=ai-assistant`);
+    expect(portalUrl).not.toContain('localhost:5180');
     expect(getAuthPortalUrl()).not.toContain('/login');
   });
 
   it('can request a real unified logout instead of returning to system selection', () => {
     expect(getAuthPortalUrl({ logout: true })).toBe(
-      'http://localhost:5180/portal?system=ai-assistant&logout=1',
+      `${window.location.origin}/portal?system=ai-assistant&logout=1`,
     );
   });
 
   it('can build portal URLs for switching to another authorized system', () => {
     expect(getAuthPortalUrl({ system: 'prompt-center' })).toBe(
-      'http://localhost:5180/portal?system=prompt-center',
+      `${window.location.origin}/portal?system=prompt-center`,
     );
   });
 
@@ -174,11 +177,11 @@ describe('unified session shell', () => {
     expect(screen.getByRole('menuitem', { name: '聚信 AI 助手（当前）' })).toHaveAttribute('aria-disabled', 'true');
     expect(screen.getByRole('menuitem', { name: '提示词中心' })).toHaveAttribute(
       'href',
-      'http://localhost:5180/portal?system=prompt-center',
+      `${window.location.origin}/portal?system=prompt-center`,
     );
     expect(screen.getByRole('menuitem', { name: '数据平台' })).toHaveAttribute(
       'href',
-      'http://localhost:5180/portal?system=data-platform',
+      `${window.location.origin}/portal?system=data-platform`,
     );
   });
 

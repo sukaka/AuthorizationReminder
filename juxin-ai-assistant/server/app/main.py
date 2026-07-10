@@ -185,6 +185,7 @@ async def request_validation_error(
 
 
 @app.get("/health")
+@app.get("/api/ai/health")
 def health() -> dict[str, str]:
     return {
         "status": "ok",

@@ -708,24 +708,32 @@ Agent Runtime
 - CORS 来源
 
 **开发检查项：**
-- [ ] `AUTH_PUBLIC_URL` 不再被误设为 `localhost`。
-- [ ] Web 构建时写入正确登录地址。
-- [ ] API 使用 HTTPS Origin。
-- [ ] 统一登录回跳不跳错地址。
-- [ ] 自签证书部署文档明确浏览器信任步骤。
+- [x] `AUTH_PUBLIC_URL` 不再被误设为 `localhost`。
+- [x] Web 构建时写入正确登录地址。
+- [x] API 使用 HTTPS Origin。
+- [x] 统一登录回跳不跳错地址。
+- [x] 自签证书部署文档明确浏览器信任步骤。
 
 **验收标准：**
-- [ ] `https://服务器IP` 可以打开 Web 端。
-- [ ] 登录后不跳回 `localhost`。
-- [ ] API 健康检查通过。
-- [ ] Web 端个人模型配置可用。
-- [ ] 普通员工和管理员权限正确。
+- [x] `https://服务器IP` 可以打开 Web 端。
+- [x] 登录后不跳回 `localhost`。
+- [x] API 健康检查通过。
+- [x] Web 端个人模型配置可用。
+- [x] 普通员工和管理员权限正确。
 
 **建议测试：**
 - `docker compose config`
 - `curl -k https://服务器IP/api/ai/health`
 - `apps/desktop/tests/web-mode.test.tsx`
 - 手动浏览器登录验证
+
+**本次验证（2026-07-10）：**
+- `AI_ASSISTANT_PUBLIC_URL=https://192.0.2.10 ... docker compose -f docker-compose.yml -f juxin-ai-assistant/docker-compose.ai-assistant-https.yml config --quiet`：通过；Auth、API、Web 原直出端口已移除，仅发布 `443`。
+- `docker run ... nginx:alpine nginx -t`：TLS 网关配置通过。
+- 临时 TLS 网关连接现有完整服务栈：`GET /` 返回 `200`，`GET /portal?system=ai-assistant` 返回 `200`，未登录 `GET /api/ai/session` 返回 `401`；验收后已删除临时容器。
+- `python3 -m pytest tests/test_web_public_security.py tests/test_auth.py tests/test_governance_authorization.py tests/test_user_model_profiles_api.py tests/test_static_web.py -q`：32 个测试通过。
+- `npm test -- session.test.tsx web-mode.test.tsx web-https-deployment.test.ts proxy-config.test.ts web-build-boundary.test.ts model-profiles.test.tsx`：24 个测试通过。
+- `VITE_AUTH_PUBLIC_URL=https://192.0.2.10 npm run build:web`、`npm run typecheck`：通过；构建产物登录地址为指定 HTTPS Origin。
 
 ---
 

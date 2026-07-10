@@ -19,6 +19,16 @@ def test_public_web_requires_auth_for_session(monkeypatch):
     assert response.status_code == 401
 
 
+def test_public_web_exposes_health_below_the_https_api_prefix(monkeypatch):
+    _use_public_web_settings(monkeypatch)
+
+    with TestClient(app) as client:
+        response = client.get("/api/ai/health")
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "ok"
+
+
 def test_public_web_blocks_untrusted_write_origin(monkeypatch):
     _use_public_web_settings(monkeypatch)
 

@@ -378,7 +378,9 @@ export function getAuthPortalUrl(options: AuthPortalUrlOptions = {}): string {
       // Fall back to the build-time portal below.
     }
   }
-  const authUrl = import.meta.env.VITE_AUTH_PUBLIC_URL || 'http://localhost:5180';
+  const authUrl = import.meta.env.VITE_AUTH_PUBLIC_URL || (
+    isDesktopRuntime() ? 'http://localhost:5180' : window.location.origin
+  );
   const portal = new URL(`${authUrl.replace(/\/$/, '')}/portal`);
   portal.searchParams.set('system', options.system || 'ai-assistant');
   return formatAuthPortalUrl(portal, options);
