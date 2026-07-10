@@ -5546,6 +5546,18 @@ textarea:focus-visible {
 .governance-links em { margin-top: auto; color: var(--accent); font-size: 12px; font-style: normal; }
 
 .audit-filters { margin-top: 20px; display: grid; grid-template-columns: repeat(3, minmax(120px, 1fr)); gap: 10px; align-items: end; }
+.stats-date-filters { margin: 18px 0; display: flex; flex-wrap: wrap; gap: 10px; align-items: end; }
+.stats-date-filters label { display: grid; gap: 5px; color: var(--text-secondary); font-size: 11px; }
+.stats-date-filters input { min-width: 150px; padding: 8px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-solid); color: var(--text-primary); }
+.stats-failure-panel { margin-top: 18px; padding-top: 18px; border-top: 1px solid var(--border); }
+.stats-failure-panel header h2 { margin: 0; font-size: 16px; }
+.stats-failure-panel header p { margin: 4px 0 0; color: var(--text-secondary); font-size: 12px; }
+.stats-failure-panel ul { margin: 12px 0 0; padding: 0; list-style: none; }
+.stats-failure-panel li { min-height: 52px; padding: 10px 0; display: flex; align-items: center; justify-content: space-between; gap: 16px; border-top: 1px solid var(--border); }
+.stats-failure-panel li > div { min-width: 0; display: grid; gap: 4px; }
+.stats-failure-panel li strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.stats-failure-panel li span { color: var(--danger); font-size: 12px; }
+.stats-failure-panel li button { flex: 0 0 auto; padding: 7px 10px; border: 1px solid var(--border); border-radius: 7px; background: transparent; color: var(--text-primary); cursor: pointer; }
 .audit-filters label { display: grid; gap: 5px; color: var(--text-secondary); font-size: 11px; }
 .audit-filters input { min-width: 0; padding: 8px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-solid); color: var(--text-primary); }
 .audit-table-wrap { margin-top: 20px; overflow-x: auto; }

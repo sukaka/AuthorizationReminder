@@ -107,15 +107,26 @@ function replayDocumentWarnings(item: TaskReplayItem): string[] {
 export function StatsPage({ manager = false }: { manager?: boolean }) {
   const [stats, setStats] = useState<StatsPayload | null>(null);
   const [taskReplays, setTaskReplays] = useState<TaskReplayItem[]>([]);
+  const [failedReplays, setFailedReplays] = useState<TaskReplayItem[]>([]);
+  const [dateFrom, setDateFrom] = useState('');
+  const [dateTo, setDateTo] = useState('');
   const [notice, setNotice] = useState('');
   const [replayNotice, setReplayNotice] = useState('');
   const refresh = async () => {
-    try { setStats(await governanceApi.stats(manager)); setNotice(''); }
+    try {
+      setStats(await governanceApi.stats(manager, { dateFrom, dateTo }));
+      setNotice('');
+      if (!manager) {
+        governanceApi.taskReplays({ status: 'failed', dateFrom, dateTo })
+          .then((payload) => setFailedReplays(payload.items))
+          .catch(() => setFailedReplays([]));
+      }
+    }
     catch { setNotice('统计读取失败，请确认数据范围。'); }
   };
   const loadTaskReplays = async () => {
     try {
-      const payload = await governanceApi.taskReplays();
+      const payload = await governanceApi.taskReplays({ dateFrom, dateTo });
       setTaskReplays(payload.items);
       setReplayNotice(payload.items.length ? '' : '暂无可回放任务。');
     } catch {
@@ -124,7 +135,17 @@ export function StatsPage({ manager = false }: { manager?: boolean }) {
   };
   return (
     <AdminPageState title={manager ? '部门数据' : '全局统计'} description="统计仅聚合状态、任务、部门、时间和反馈元数据。">
-      <button className="primary-action" onClick={() => void refresh()} type="button">刷新统计</button>
+      <div className="stats-date-filters" aria-label="统计时间范围">
+        <label>
+          <span>开始日期</span>
+          <input aria-label="开始日期" onChange={(event) => setDateFrom(event.target.value)} type="date" value={dateFrom} />
+        </label>
+        <label>
+          <span>结束日期</span>
+          <input aria-label="结束日期" onChange={(event) => setDateTo(event.target.value)} type="date" value={dateTo} />
+        </label>
+        <button className="primary-action" onClick={() => void refresh()} type="button">刷新统计</button>
+      </div>
       <RequestNotice message={notice} />
       <div className="metric-strip">
         <div><span>生成总数</span><strong>{stats?.total ?? '—'}</strong></div>
@@ -141,7 +162,10 @@ export function StatsPage({ manager = false }: { manager?: boolean }) {
               </div>
               <button className="secondary-action" onClick={() => void loadTaskReplays()} type="button">查看任务回放</button>
               <dl>
+                <div><dt>今日任务数</dt><dd>{stats.today_task_total ?? 0}</dd><small>当天创建任务</small></div>
+                <div><dt>平均任务耗时</dt><dd>{stats.average_task_latency_ms ?? 0}ms</dd><small>所选时间范围</small></div>
                 <div><dt>工具调用成功率</dt><dd>{percent(stats.tool_call_success_rate)}</dd><small>{stats.tool_call_success ?? 0}/{stats.tool_call_total ?? 0}</small></div>
+                <div><dt>工具失败率</dt><dd>{percent(stats.tool_call_failure_rate)}</dd><small>失败或中断调用</small></div>
                 <div><dt>平均工具耗时</dt><dd>{stats.tool_call_average_latency_ms ?? 0}ms</dd><small>仅聚合耗时</small></div>
                 <div><dt>知识检索命中率</dt><dd>{percent(stats.knowledge_search_hit_rate)}</dd><small>{stats.knowledge_search_hit ?? 0}/{stats.knowledge_search_total ?? 0}</small></div>
                 <div><dt>引用覆盖率</dt><dd>{percent(stats.citation_coverage_rate)}</dd><small>无来源回答 {percent(stats.answer_without_source_rate)}</small></div>
@@ -156,6 +180,30 @@ export function StatsPage({ manager = false }: { manager?: boolean }) {
                   ))}
                 </ul>
               ) : null}
+            </section>
+          ) : null}
+          {!manager && failedReplays.length ? (
+            <section className="stats-failure-panel" aria-label="最近失败任务">
+              <header>
+                <h2>最近失败任务</h2>
+                <p>仅展示失败类型、安全摘要和下一步。</p>
+              </header>
+              <ul>
+                {failedReplays.slice(0, 8).map((item) => (
+                  <li key={item.task_state_id}>
+                    <div>
+                      <strong>{item.goal}</strong>
+                      <span>{item.failure_reason || '失败原因待确认'}</span>
+                    </div>
+                    <button onClick={() => {
+                      setTaskReplays([item]);
+                      setReplayNotice('');
+                    }} type="button">
+                      查看回放
+                    </button>
+                  </li>
+                ))}
+              </ul>
             </section>
           ) : null}
           {!manager && (taskReplays.length || replayNotice) ? (
@@ -195,6 +243,7 @@ export function StatsPage({ manager = false }: { manager?: boolean }) {
                         ))}
                       </ol>
                       <h3>Verifier 摘要</h3>
+                      {item.failure_reason ? <p>失败原因：{item.failure_reason}</p> : null}
                       <p>{replayReferenceSummary(item)}</p>
                       {replayDocumentWarnings(item).length ? (
                         <ul>

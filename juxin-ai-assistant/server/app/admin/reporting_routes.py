@@ -1,5 +1,5 @@
 from datetime import date, datetime, time
-from typing import Annotated
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy.orm import Session
@@ -61,11 +61,21 @@ def create_reporting_router() -> APIRouter:
         session: Annotated[SessionPayload, Depends(get_session)],
         settings: Annotated[Settings, Depends(get_settings)],
         db: Annotated[Session, Depends(get_db)],
+        status: Literal["active", "completed", "failed", "cancelled"] | None = None,
+        date_from: date | None = None,
+        date_to: date | None = None,
         offset: Annotated[int, Query(ge=0)] = 0,
         limit: Annotated[int, Query(ge=1, le=100)] = 20,
     ) -> TaskReplayListOut:
         await require_action("ai_assistant:admin", request, session, settings)
-        return list_task_replays(db, offset=offset, limit=limit)
+        return list_task_replays(
+            db,
+            status=status,
+            date_from=date_from,
+            date_to=date_to,
+            offset=offset,
+            limit=limit,
+        )
 
     @router.get("/admin/audit-logs", response_model=AuditLogListOut)
     async def admin_audit_logs(

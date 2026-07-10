@@ -1,4 +1,5 @@
 from datetime import date, datetime, time, timedelta
+import re
 
 from sqlalchemy import distinct, func, select
 from sqlalchemy.orm import Session
@@ -150,12 +151,27 @@ def build_stats(
 def list_task_replays(
     db: Session,
     *,
+    status: str | None = None,
+    date_from: date | None = None,
+    date_to: date | None = None,
     offset: int,
     limit: int,
 ) -> TaskReplayListOut:
-    total = int(db.scalar(select(func.count(AgentTaskState.id))) or 0)
+    filters = []
+    if status:
+        filters.append(AgentTaskState.status == status)
+    if date_from is not None or date_to is not None:
+        start_at, end_at = _date_bounds(date_from, date_to)
+        filters.extend([
+            AgentTaskState.updated_at >= start_at,
+            AgentTaskState.updated_at <= end_at,
+        ])
+    total = int(db.scalar(
+        select(func.count(AgentTaskState.id)).where(*filters)
+    ) or 0)
     rows = list(db.scalars(
         select(AgentTaskState)
+        .where(*filters)
         .order_by(AgentTaskState.updated_at.desc(), AgentTaskState.id.desc())
         .offset(offset)
         .limit(limit)
@@ -168,12 +184,15 @@ def list_task_replays(
 
 def _task_replay_out(row: AgentTaskState) -> TaskReplayOut:
     verification = row.verification_json or {}
+    metadata = row.metadata_json or {}
     return TaskReplayOut(
         task_state_id=row.uuid,
         conversation_id=row.conversation_id,
         user_id=row.user_id,
         stage=row.stage,
+        status=row.status,
         goal=_safe_task_title(row),
+        failure_reason=_sanitize_safe_text(str(metadata.get("failure_reason") or "")),
         source_summary=[
             _safe_metadata_item(item)
             for item in (row.selected_sources_json or [])[:8]
@@ -222,10 +241,38 @@ def _safe_metadata_item(item: object) -> dict[str, object]:
         "warnings",
     }
     return {
-        str(key): value
+        str(key): _safe_metadata_value(value)
         for key, value in item.items()
         if str(key) in allowed and _is_safe_metadata_value(value)
     }
+
+
+def _safe_metadata_value(value: object) -> object:
+    if isinstance(value, str):
+        return _sanitize_safe_text(value)
+    if isinstance(value, list):
+        return [_sanitize_safe_text(str(item)) for item in value[:20]]
+    return value
+
+
+def _sanitize_safe_text(value: str) -> str:
+    sanitized = value[:500]
+    sanitized = re.sub(
+        r"(?i)(?:authorization\s*:\s*)?bearer\s+[^\s,;]+",
+        "[敏感信息已隐藏]",
+        sanitized,
+    )
+    sanitized = re.sub(
+        r"(?i)\bsk-[a-z0-9._-]+",
+        "[敏感信息已隐藏]",
+        sanitized,
+    )
+    sanitized = re.sub(
+        r"(?i)\b(api[ _-]?key|token|secret|password)\s*[:=]\s*[^\s,;]+",
+        "[敏感信息已隐藏]",
+        sanitized,
+    )
+    return sanitized
 
 
 def _is_safe_metadata_value(value: object) -> bool:
@@ -285,9 +332,12 @@ def _build_feedback_distribution(
 
 def _empty_quality_metrics() -> dict[str, int | float | dict[str, int]]:
     return {
+        "today_task_total": 0,
+        "average_task_latency_ms": 0,
         "tool_call_total": 0,
         "tool_call_success": 0,
         "tool_call_success_rate": 0.0,
+        "tool_call_failure_rate": 0.0,
         "tool_call_average_latency_ms": 0,
         "knowledge_search_total": 0,
         "knowledge_search_hit": 0,
@@ -315,6 +365,23 @@ def _build_quality_metrics(
     start_at: datetime,
     end_at: datetime,
 ) -> dict[str, int | float | dict[str, int]]:
+    today_start = datetime.combine(date.today(), time.min)
+    today_end = datetime.combine(date.today(), time.max)
+    today_task_total = int(db.scalar(
+        select(func.count(GenerationRecord.id)).where(
+            GenerationRecord.created_at >= today_start,
+            GenerationRecord.created_at <= today_end,
+            GenerationRecord.status != "DELETED",
+        )
+    ) or 0)
+    average_task_latency_ms = int(db.scalar(
+        select(func.avg(GenerationRecord.latency_ms)).where(
+            GenerationRecord.created_at >= start_at,
+            GenerationRecord.created_at <= end_at,
+            GenerationRecord.status != "DELETED",
+            GenerationRecord.latency_ms.is_not(None),
+        )
+    ) or 0)
     tool_filters = [
         AgentToolCallLog.created_at >= start_at,
         AgentToolCallLog.created_at <= end_at,
@@ -400,9 +467,12 @@ def _build_quality_metrics(
     ) or 0)
 
     return {
+        "today_task_total": today_task_total,
+        "average_task_latency_ms": average_task_latency_ms,
         "tool_call_total": tool_call_total,
         "tool_call_success": tool_call_success,
         "tool_call_success_rate": _rate(tool_call_success, tool_call_total),
+        "tool_call_failure_rate": _rate(tool_call_total - tool_call_success, tool_call_total),
         "tool_call_average_latency_ms": tool_call_average_latency_ms,
         "knowledge_search_total": knowledge_search_total,
         "knowledge_search_hit": knowledge_search_hit,

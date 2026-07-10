@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { HttpResponse, http } from 'msw';
 import { expect, it, vi } from 'vitest';
@@ -62,7 +62,10 @@ it('shows global agent quality metrics for administrators', async () => {
     feedback_distribution: {},
     tool_call_total: 20,
     tool_call_success_rate: 0.9,
+    tool_call_failure_rate: 0.1,
     tool_call_average_latency_ms: 250,
+    today_task_total: 7,
+    average_task_latency_ms: 1800,
     knowledge_search_total: 12,
     knowledge_search_hit_rate: 0.75,
     citation_coverage_rate: 0.6,
@@ -79,6 +82,12 @@ it('shows global agent quality metrics for administrators', async () => {
   expect(await screen.findByText('Agent 质量指标')).toBeInTheDocument();
   expect(screen.getByText('工具调用成功率')).toBeInTheDocument();
   expect(screen.getByText('90%')).toBeInTheDocument();
+  expect(screen.getByText('工具失败率')).toBeInTheDocument();
+  expect(screen.getByText('10%')).toBeInTheDocument();
+  expect(screen.getByText('今日任务数')).toBeInTheDocument();
+  expect(screen.getByText('7')).toBeInTheDocument();
+  expect(screen.getByText('平均任务耗时')).toBeInTheDocument();
+  expect(screen.getByText('1800ms')).toBeInTheDocument();
   expect(screen.getByText('平均工具耗时')).toBeInTheDocument();
   expect(screen.getByText('250ms')).toBeInTheDocument();
   expect(screen.getByText('知识检索命中率')).toBeInTheDocument();
@@ -92,6 +101,65 @@ it('shows global agent quality metrics for administrators', async () => {
   expect(screen.getByText('EXPORT_FAILED')).toBeInTheDocument();
 });
 
+it('filters quality metrics by date and opens a recent failed replay', async () => {
+  const statsRequest = vi.fn();
+  const replayRequest = vi.fn();
+  server.use(
+    http.get('/api/ai/admin/stats', ({ request }) => {
+      statsRequest(request.url);
+      return HttpResponse.json({
+        total: 3,
+        completion_rate: 0.66,
+        failure_rate: 0.34,
+        by_department: {},
+        task_ranking: [],
+        daily_trend: [],
+        feedback_distribution: {},
+        tool_error_distribution: {},
+      });
+    }),
+    http.get('/api/ai/admin/task-replays', ({ request }) => {
+      replayRequest(request.url);
+      return HttpResponse.json({
+        total: 1,
+        items: [{
+          task_state_id: 'state-failed-filtered',
+          conversation_id: 'conversation-failed',
+          user_id: 'user-failed',
+          stage: 'failed',
+          status: 'failed',
+          goal: '任务 state-fa',
+          failure_reason: '联网失败，请稍后重试',
+          source_summary: [],
+          tool_summary: [{ tool_name: 'web_search', status: 'failed', source_count: 0 }],
+          verification_summary: { status: 'failed' },
+          next_action: '稍后重试',
+          stage_history: [{ stage: 'failed', next_action: '稍后重试', at: '2026-07-10T03:00:00Z' }],
+          created_at: '2026-07-10T03:00:00Z',
+          updated_at: '2026-07-10T03:01:00Z',
+        }],
+      });
+    }),
+  );
+
+  render(<StatsPage />);
+  await userEvent.type(screen.getByLabelText('开始日期'), '2026-07-01');
+  await userEvent.type(screen.getByLabelText('结束日期'), '2026-07-10');
+  await userEvent.click(screen.getByRole('button', { name: '刷新统计' }));
+
+  const failures = await screen.findByRole('region', { name: '最近失败任务' });
+  expect(failures).toHaveTextContent('联网失败，请稍后重试');
+  expect(statsRequest).toHaveBeenCalledWith(expect.stringContaining('date_from=2026-07-01'));
+  expect(statsRequest).toHaveBeenCalledWith(expect.stringContaining('date_to=2026-07-10'));
+  expect(replayRequest).toHaveBeenCalledWith(expect.stringContaining('status=failed'));
+  expect(replayRequest).toHaveBeenCalledWith(expect.stringContaining('date_from=2026-07-01'));
+
+  await userEvent.click(within(failures).getByRole('button', { name: '查看回放' }));
+  expect(await screen.findByRole('region', { name: 'Agent 运行观测台' })).toBeInTheDocument();
+  expect(screen.getByText('失败原因：联网失败，请稍后重试')).toBeInTheDocument();
+  expect(screen.getByText('下一步：稍后重试')).toBeInTheDocument();
+});
+
 it('loads task replay metadata from the governance stats page', async () => {
   server.use(
     http.get('/api/ai/admin/stats', () => HttpResponse.json({
@@ -103,7 +171,10 @@ it('loads task replay metadata from the governance stats page', async () => {
       daily_trend: [],
       feedback_distribution: {},
     })),
-    http.get('/api/ai/admin/task-replays', () => HttpResponse.json({
+    http.get('/api/ai/admin/task-replays', ({ request }) => HttpResponse.json(
+      new URL(request.url).searchParams.get('status') === 'failed'
+        ? { total: 0, items: [] }
+        : {
       total: 1,
       items: [{
         task_state_id: 'state-1',
@@ -148,7 +219,10 @@ it('expands task replay into an agent observability detail without exposing prom
       feedback_distribution: {},
       tool_error_distribution: { reference_missing: 1 },
     })),
-    http.get('/api/ai/admin/task-replays', () => HttpResponse.json({
+    http.get('/api/ai/admin/task-replays', ({ request }) => HttpResponse.json(
+      new URL(request.url).searchParams.get('status') === 'failed'
+        ? { total: 0, items: [] }
+        : {
       total: 1,
       items: [{
         task_state_id: 'state-detail',

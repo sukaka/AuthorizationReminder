@@ -122,10 +122,14 @@ def test_admin_stats_include_agent_quality_metrics(
     generation_db,
     seeded_task,
 ) -> None:
+    quality_ok = _generation(seeded_task.id, "quality-ok", "交付", "COMPLETED")
+    quality_ok.latency_ms = 100
+    quality_fail = _generation(seeded_task.id, "quality-fail", "交付", "FAILED")
+    quality_fail.latency_ms = 300
     generation_db.add_all(
         [
-            _generation(seeded_task.id, "quality-ok", "交付", "COMPLETED"),
-            _generation(seeded_task.id, "quality-fail", "交付", "FAILED"),
+            quality_ok,
+            quality_fail,
         ]
     )
     session = ChatSession(
@@ -245,7 +249,10 @@ def test_admin_stats_include_agent_quality_metrics(
     assert payload["tool_call_total"] == 4
     assert payload["tool_call_success"] == 3
     assert payload["tool_call_success_rate"] == 0.75
+    assert payload["tool_call_failure_rate"] == 0.25
     assert payload["tool_call_average_latency_ms"] == 250
+    assert payload["today_task_total"] == 2
+    assert payload["average_task_latency_ms"] == 200
     assert payload["knowledge_search_total"] == 2
     assert payload["knowledge_search_hit"] == 1
     assert payload["knowledge_search_hit_rate"] == 0.5
@@ -317,6 +324,74 @@ def test_admin_task_replays_return_metadata_without_chat_content(
     assert item["verification_summary"]["status"] == "warning"
     assert "private-input" not in response.text
     assert "answer" not in response.text.lower()
+
+
+def test_admin_can_filter_failed_replays_by_date_without_exposing_secrets(
+    generation_db,
+) -> None:
+    generation_db.add_all([
+        AgentTaskState(
+            uuid="state-failed-safe",
+            user_id="user-failed",
+            conversation_id="conversation-failed",
+            stage="failed",
+            status="failed",
+            goal="private-input: 客户预算和内部口径",
+            tool_calls_json=[{
+                "tool_name": "web_search",
+                "status": "failed",
+                "summary": "请求失败 Authorization: Bearer sk-live-secret",
+                "error_code": "NETWORK_FAILED",
+            }],
+            metadata_json={
+                "failure_reason": "模型认证失败 sk-live-secret",
+                "retry_suggestion": "检查设置后重试",
+            },
+            next_action="检查设置后重试",
+            stage_history_json=[{
+                "stage": "failed",
+                "next_action": "检查设置后重试",
+                "at": "2026-07-10T03:00:00Z",
+            }],
+            created_at=datetime(2026, 7, 10, 3, 0, 0),
+            updated_at=datetime(2026, 7, 10, 3, 1, 0),
+        ),
+        AgentTaskState(
+            uuid="state-completed-hidden",
+            user_id="user-completed",
+            conversation_id="conversation-completed",
+            stage="completed",
+            status="completed",
+            goal="不应出现在失败列表",
+            created_at=datetime(2026, 7, 10, 4, 0, 0),
+            updated_at=datetime(2026, 7, 10, 4, 1, 0),
+        ),
+    ])
+    generation_db.commit()
+    app.dependency_overrides[get_db] = lambda: generation_db
+
+    try:
+        with TestClient(app) as client:
+            response = client.get(
+                "/api/ai/admin/task-replays",
+                params={
+                    "status": "failed",
+                    "date_from": "2026-07-10",
+                    "date_to": "2026-07-10",
+                },
+            )
+    finally:
+        app.dependency_overrides.pop(get_db, None)
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["total"] == 1
+    assert payload["items"][0]["status"] == "failed"
+    assert payload["items"][0]["failure_reason"] == "模型认证失败 [敏感信息已隐藏]"
+    assert "state-completed-hidden" not in response.text
+    assert "sk-live-secret" not in response.text
+    assert "Bearer" not in response.text
+    assert "private-input" not in response.text
 
 
 def test_stats_reject_ranges_over_366_days(generation_db) -> None:

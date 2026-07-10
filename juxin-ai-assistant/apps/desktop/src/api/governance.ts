@@ -83,9 +83,12 @@ export type StatsPayload = {
   task_ranking?: Array<{ name: string; count: number }>;
   daily_trend?: Array<{ date: string; count: number }>;
   feedback_distribution?: Record<string, number>;
+  today_task_total?: number;
+  average_task_latency_ms?: number;
   tool_call_total?: number;
   tool_call_success?: number;
   tool_call_success_rate?: number;
+  tool_call_failure_rate?: number;
   tool_call_average_latency_ms?: number;
   knowledge_search_total?: number;
   knowledge_search_hit?: number;
@@ -107,7 +110,9 @@ export type TaskReplayItem = {
   conversation_id: string;
   user_id: string;
   stage: string;
+  status?: string;
   goal: string;
+  failure_reason?: string;
   source_summary: Array<Record<string, unknown>>;
   tool_summary: Array<Record<string, unknown>>;
   verification_summary: Record<string, unknown>;
@@ -116,6 +121,24 @@ export type TaskReplayItem = {
   created_at: string;
   updated_at: string;
 };
+
+export type GovernanceDateFilters = {
+  dateFrom?: string;
+  dateTo?: string;
+};
+
+export type TaskReplayFilters = GovernanceDateFilters & {
+  status?: 'active' | 'completed' | 'failed' | 'cancelled';
+};
+
+function queryString(filters: Record<string, string | undefined>): string {
+  const query = new URLSearchParams();
+  Object.entries(filters).forEach(([key, value]) => {
+    if (value) query.set(key, value);
+  });
+  const serialized = query.toString();
+  return serialized ? `?${serialized}` : '';
+}
 
 export type AuditItem = {
   id: string | number;
@@ -222,10 +245,19 @@ export const governanceApi = {
     '/api/ai/admin/settings',
     { method: 'PUT', body: JSON.stringify(payload) },
   ),
-  stats: (manager: boolean) => request<StatsPayload>(
-    manager ? '/api/ai/department-stats' : '/api/ai/admin/stats',
+  stats: (manager: boolean, filters: GovernanceDateFilters = {}) => request<StatsPayload>(
+    `${manager ? '/api/ai/department-stats' : '/api/ai/admin/stats'}${queryString({
+      date_from: filters.dateFrom,
+      date_to: filters.dateTo,
+    })}`,
   ),
-  taskReplays: () => request<GovernanceList<TaskReplayItem>>('/api/ai/admin/task-replays'),
+  taskReplays: (filters: TaskReplayFilters = {}) => request<GovernanceList<TaskReplayItem>>(
+    `/api/ai/admin/task-replays${queryString({
+      status: filters.status,
+      date_from: filters.dateFrom,
+      date_to: filters.dateTo,
+    })}`,
+  ),
   audit: (query = '') => request<GovernanceList<AuditItem>>(
     `/api/ai/admin/audit-logs${query ? `?${query}` : ''}`,
   ),

@@ -260,9 +260,12 @@ class StatsOut(BaseModel):
     task_ranking: list[CountByName]
     daily_trend: list[DailyCount]
     feedback_distribution: dict[str, int]
+    today_task_total: int = 0
+    average_task_latency_ms: int = 0
     tool_call_total: int = 0
     tool_call_success: int = 0
     tool_call_success_rate: float = 0.0
+    tool_call_failure_rate: float = 0.0
     tool_call_average_latency_ms: int = 0
     knowledge_search_total: int = 0
     knowledge_search_hit: int = 0
@@ -284,7 +287,9 @@ class TaskReplayOut(BaseModel):
     conversation_id: str
     user_id: str
     stage: str
+    status: str
     goal: str
+    failure_reason: str = ""
     source_summary: list[dict[str, object]]
     tool_summary: list[dict[str, object]]
     verification_summary: dict[str, object]

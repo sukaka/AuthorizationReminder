@@ -620,21 +620,29 @@ Agent Runtime
 - 默认展示摘要和元数据。
 
 **开发检查项：**
-- [ ] 管理员可访问，普通用户不可访问。
-- [ ] 指标可按时间筛选。
-- [ ] 回放只展示安全摘要。
-- [ ] 失败原因可读。
+- [x] 管理员可访问，普通用户不可访问。
+- [x] 指标可按时间筛选。
+- [x] 回放只展示安全摘要。
+- [x] 失败原因可读。
 
 **验收标准：**
-- [ ] 管理员能看到工具成功率。
-- [ ] 管理员能看到无来源回答比例。
-- [ ] 管理员能打开失败任务回放。
-- [ ] 回放不泄露密钥和私有资料正文。
+- [x] 管理员能看到工具成功率。
+- [x] 管理员能看到无来源回答比例。
+- [x] 管理员能打开失败任务回放。
+- [x] 回放不泄露密钥和私有资料正文。
 
 **建议测试：**
 - `server/tests/test_stats.py`
 - `server/tests/test_agent_runtime.py`
 - `apps/desktop/tests/governance-pages.test.tsx`
+
+**本次验证（2026-07-10）：**
+- 质量看板支持开始/结束日期筛选，展示今日任务数、成功率、平均任务耗时、工具成功/失败率、引用覆盖率、无来源回答比例、负反馈和 Word 导出。
+- 新增最近失败任务列表；可按失败状态和日期查询并打开运行回放，展示安全失败原因和下一步。
+- 回放继续只返回任务编号、阶段、工具、来源、自检和安全摘要；Bearer、API Key 和 `sk-*` 值统一隐藏。
+- `python3 -m pytest tests/test_stats.py tests/test_governance_authorization.py tests/test_agent_runtime.py -q`
+- `npm test -- governance-pages.test.tsx`
+- `npm run typecheck`、`npm run build:web`
 
 ---
 
