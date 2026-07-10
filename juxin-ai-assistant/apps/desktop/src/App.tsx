@@ -13,7 +13,6 @@ import { ModelProfilesPage } from './pages/ModelProfilesPage';
 import { AssistantsPage } from './pages/AssistantsPage';
 import { ChatPage } from './pages/ChatPage';
 import { HistoryPage } from './pages/HistoryPage';
-import { HomePage } from './pages/HomePage';
 import { KnowledgePage } from './pages/KnowledgePage';
 import { LearningPage } from './pages/LearningPage';
 import { SkillsPage } from './pages/SkillsPage';
@@ -31,7 +30,6 @@ import {
 } from './remote/desktopBridge';
 
 type WorkspacePage =
-  | 'home'
   | 'assistants'
   | 'chat'
   | 'history'
@@ -77,9 +75,7 @@ function Workspace({ session }: { session: SessionPayload }) {
   const isAdmin = role === 'admin';
   const isWebRuntime = !window.__TAURI_INTERNALS__;
   const immersive = sidebarMode === 'immersive';
-  const pageTitle = page === 'home'
-    ? '工作台'
-    : page === 'assistants'
+  const pageTitle = page === 'assistants'
       ? '助手模式'
       : page === 'chat'
         ? '私人工作助理'
@@ -122,7 +118,7 @@ function Workspace({ session }: { session: SessionPayload }) {
       || page === 'suggestions'
       || page === 'governance'
     )) {
-      setPage('home');
+      setPage('chat');
     }
   }, [isAdmin, page]);
 
@@ -174,7 +170,6 @@ function Workspace({ session }: { session: SessionPayload }) {
           <strong className="brand-label">聚信 AI 助手 · 私人工作助理</strong>
         </div>
         <nav aria-label="主导航">
-          <button aria-current={page === 'home' ? 'page' : undefined} className={page === 'home' ? 'is-current' : ''} onClick={() => setPage('home')} type="button"><span className="nav-icon" aria-hidden="true">⌂</span><span className="nav-label">工作台</span></button>
           <button aria-current={page === 'assistants' ? 'page' : undefined} className={page === 'assistants' ? 'is-current' : ''} onClick={() => setPage('assistants')} type="button"><span className="nav-icon" aria-hidden="true">✦</span><span className="nav-label">助手模式</span></button>
           <button aria-current={page === 'history' ? 'page' : undefined} className={page === 'history' ? 'is-current' : ''} onClick={() => setPage('history')} type="button"><span className="nav-icon" aria-hidden="true">↺</span><span className="nav-label">工作成果</span></button>
           <button aria-current={page === 'skills' ? 'page' : undefined} className={page === 'skills' ? 'is-current' : ''} onClick={() => setPage('skills')} type="button"><span className="nav-icon" aria-hidden="true">◈</span><span className="nav-label">能力中心</span></button>
@@ -236,8 +231,8 @@ function Workspace({ session }: { session: SessionPayload }) {
       <main className="workspace-shell" id="workspace">
         <header className="workspace-topbar">
           <div className="workspace-titlebar">
-            {page !== 'home' ? (
-              <button className="workspace-back-button" onClick={() => setPage('home')} type="button">‹ 返回工作台</button>
+            {page !== 'chat' ? (
+              <button aria-label="返回聊天" className="workspace-back-button" onClick={() => setPage('chat')} type="button">‹ 返回聊天</button>
             ) : null}
             <strong>{pageTitle}</strong>
             <button
@@ -267,8 +262,6 @@ function Workspace({ session }: { session: SessionPayload }) {
           <SuggestionsPage departments={session.scope.managedDepartments} />
         ) : page === 'assistants' ? (
           <AssistantsPage onOpenTask={openTask} />
-        ) : page === 'chat' ? (
-          <ChatPage />
         ) : page === 'knowledge' ? (
           <KnowledgePage session={session} />
         ) : page === 'skills' ? (
@@ -283,14 +276,7 @@ function Workspace({ session }: { session: SessionPayload }) {
               ? <TaskRunPage task={task} userId={String(session.user.id)} />
               : <section className="desktop-required"><p>{taskError || '正在加载任务…'}</p></section>}
           </>
-        ) : (
-          <HomePage
-            onOpenTask={openTask}
-            onOpenChat={() => setPage('chat')}
-            onShowAssistants={() => setPage('assistants')}
-            session={session}
-          />
-        )}
+        ) : <ChatPage />}
         </div>
       </main>
     </div>
@@ -317,7 +303,7 @@ function StatusView({
   return (
     <main className="status-view">
       <span className="status-symbol">{forbidden ? '!' : '↻'}</span>
-      <h1>{forbidden ? '暂时无法进入工作台' : '服务暂时不可用'}</h1>
+      <h1>{forbidden ? '暂时无法进入 AI 助手' : '服务暂时不可用'}</h1>
       <p>
         {forbidden
           ? '你的统一账号尚未获得聚信 AI 助手访问权限。'

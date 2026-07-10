@@ -140,6 +140,7 @@ it('opens chat after login without adding an extra sidebar menu', async () => {
         safety_reminders: [],
       }),
     ),
+    http.get('/api/ai/catalog', () => HttpResponse.json({ assistants: [] })),
     http.get('/api/conversations', () => HttpResponse.json({ items: [], total: 0 })),
   );
 
@@ -147,11 +148,15 @@ it('opens chat after login without adding an extra sidebar menu', async () => {
 
   expect(await screen.findByRole('region', { name: '私人工作助理工作区' })).toBeInTheDocument();
   expect(screen.getByRole('heading', { name: '告诉我你想完成什么工作' })).toBeInTheDocument();
-  expect(screen.getByRole('button', { name: '工作台' })).toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: '工作台' })).not.toBeInTheDocument();
   expect(screen.getByRole('button', { name: '助手模式' })).toBeInTheDocument();
   expect(screen.getByRole('button', { name: '工作成果' })).toBeInTheDocument();
   expect(screen.getByRole('button', { name: '设置' })).toBeInTheDocument();
   expect(screen.queryByRole('button', { name: '聊天' })).not.toBeInTheDocument();
+
+  await userEvent.click(screen.getByRole('button', { name: '助手模式' }));
+  await userEvent.click(await screen.findByRole('button', { name: '返回聊天' }));
+  expect(await screen.findByRole('region', { name: '私人工作助理工作区' })).toBeInTheDocument();
 });
 
 it('requires explicit confirmation for the current sensitive digest', async () => {

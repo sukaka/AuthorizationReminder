@@ -146,6 +146,7 @@ describe('unified session shell', () => {
 
     expect(await screen.findByRole('region', { name: '私人工作助理工作区' })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: '告诉我你想完成什么工作' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '工作台' })).not.toBeInTheDocument();
     expect(screen.queryByLabelText('密码')).not.toBeInTheDocument();
   });
 
@@ -248,7 +249,7 @@ describe('unified session shell', () => {
 
     render(<App />);
 
-    expect(await screen.findByText('暂时无法进入工作台')).toBeInTheDocument();
+    expect(await screen.findByText('暂时无法进入 AI 助手')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: '返回统一门户' })).toBeInTheDocument();
     expect(
       screen.getByRole('button', { name: '返回启动页' }),
