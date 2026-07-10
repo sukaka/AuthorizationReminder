@@ -118,6 +118,7 @@ it('shows AI governance pages to admin without user or server model forms', asyn
   await userEvent.click(await screen.findByRole('button', { name: '治理中心' }));
   expect(screen.getByRole('button', { name: '任务管理' })).toBeInTheDocument();
   const governanceNav = screen.getByRole('navigation', { name: '治理导航' });
+  expect(within(governanceNav).getByRole('button', { name: '助手模式' })).toBeInTheDocument();
   expect(within(governanceNav).getByRole('button', { name: '知识库' })).toBeInTheDocument();
   const settingsButton = within(governanceNav).getByRole('button', { name: '系统设置' });
   expect(settingsButton).toBeInTheDocument();

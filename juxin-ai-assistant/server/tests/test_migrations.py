@@ -31,10 +31,11 @@ def test_migration_revision_graph_is_single_linear_head() -> None:
         migration_config("sqlite+pysqlite:///:memory:")
     )
 
-    assert script.get_heads() == ["0022_long_tasks"]
+    assert script.get_heads() == ["0023_assistant_mode_governance"]
     assert [
         revision.revision for revision in script.walk_revisions()
     ] == [
+        "0023_assistant_mode_governance",
         "0022_long_tasks",
         "0021_work_artifacts",
         "0020_user_model_profiles",
@@ -907,3 +908,63 @@ def test_0008_adds_knowledge_file_and_chat_tables(tmp_path: Path) -> None:
         "ai_chat_messages",
         "ai_chat_message_sources",
     }.isdisjoint(downgraded_tables)
+
+
+def test_0023_adds_assistant_mode_governance_round_trip(tmp_path: Path) -> None:
+    database_path = tmp_path / "assistant-mode-governance.db"
+    database_url = f"sqlite+pysqlite:///{database_path}"
+    config = migration_config(database_url)
+    engine = create_engine(database_url)
+
+    command.upgrade(config, "0022_long_tasks")
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO ai_assistants "
+                "(uuid, code, name, description, icon, sort_order, status, "
+                "created_by, updated_by) "
+                "VALUES (:uuid, 'legacy-mode', '旧助手', '', 'sparkles', 0, "
+                "'ACTIVE', 'system', 'system')"
+            ),
+            {"uuid": "00000000-0000-0000-0000-000000000023"},
+        )
+
+    command.upgrade(config, "0023_assistant_mode_governance")
+    inspector = inspect(engine)
+    assistant_columns = {
+        column["name"] for column in inspector.get_columns("ai_assistants")
+    }
+    assert {
+        "allowed_tools_json",
+        "default_source_scope",
+        "default_output_structure",
+        "word_template",
+        "version",
+        "test_cases_json",
+        "review_status",
+    }.issubset(assistant_columns)
+    assert "ai_assistant_mode_versions" in inspector.get_table_names()
+    with engine.connect() as connection:
+        row = connection.execute(
+            text(
+                "SELECT default_source_scope, word_template, version, review_status "
+                "FROM ai_assistants WHERE code = 'legacy-mode'"
+            )
+        ).one()
+    assert tuple(row) == ("company", "juxin_standard", 1, "approved")
+
+    command.downgrade(config, "0022_long_tasks")
+    inspector = inspect(engine)
+    assert "ai_assistant_mode_versions" not in inspector.get_table_names()
+    remaining_columns = {
+        column["name"] for column in inspector.get_columns("ai_assistants")
+    }
+    assert {
+        "allowed_tools_json",
+        "default_source_scope",
+        "default_output_structure",
+        "word_template",
+        "version",
+        "test_cases_json",
+        "review_status",
+    }.isdisjoint(remaining_columns)

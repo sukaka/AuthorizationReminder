@@ -178,6 +178,40 @@ export type AdminSkill = {
   tags: string[];
 };
 
+export type AssistantMode = {
+  uuid: string;
+  code: string;
+  name: string;
+  description: string;
+  icon: string;
+  allowed_tools: string[];
+  default_source_scope: 'none' | 'company' | 'personal' | 'session' | 'company_and_personal';
+  default_output_structure: string;
+  word_template: string;
+  status: 'DRAFT' | 'ACTIVE' | 'DISABLED';
+  version: number;
+  test_cases: Array<{ name: string; input: string }>;
+  review_status: 'draft' | 'pending' | 'approved' | 'rejected';
+  failure_rate: number;
+  available_versions: number[];
+  created_at: string;
+  updated_at: string;
+};
+
+export type AssistantModeInput = Pick<
+  AssistantMode,
+  | 'code'
+  | 'name'
+  | 'description'
+  | 'icon'
+  | 'allowed_tools'
+  | 'default_source_scope'
+  | 'default_output_structure'
+  | 'word_template'
+  | 'test_cases'
+  | 'review_status'
+>;
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, {
     credentials: 'include',
@@ -192,6 +226,26 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const governanceApi = {
+  assistantModes: () => request<GovernanceList<AssistantMode>>('/api/ai/admin/assistant-modes'),
+  createAssistantMode: (payload: AssistantModeInput) => request<AssistantMode>(
+    '/api/ai/admin/assistant-modes', { method: 'POST', body: JSON.stringify(payload) },
+  ),
+  saveAssistantMode: (uuid: string, payload: AssistantModeInput) => request<AssistantMode>(
+    `/api/ai/admin/assistant-modes/${encodeURIComponent(uuid)}`,
+    { method: 'PUT', body: JSON.stringify(payload) },
+  ),
+  testAssistantMode: (uuid: string, input: string) => request<{ status: 'passed' | 'failed'; issues: string[]; persisted: false }>(
+    `/api/ai/admin/assistant-modes/${encodeURIComponent(uuid)}/test`,
+    { method: 'POST', body: JSON.stringify({ input }) },
+  ),
+  setAssistantModeEnabled: (uuid: string, enabled: boolean) => request<AssistantMode>(
+    `/api/ai/admin/assistant-modes/${encodeURIComponent(uuid)}/${enabled ? 'enable' : 'disable'}`,
+    { method: 'POST' },
+  ),
+  rollbackAssistantMode: (uuid: string, version: number) => request<AssistantMode>(
+    `/api/ai/admin/assistant-modes/${encodeURIComponent(uuid)}/rollback`,
+    { method: 'POST', body: JSON.stringify({ version }) },
+  ),
   tasks: () => request<GovernanceList<AdminTask>>('/api/ai/admin/tasks'),
   capabilities: () => request<{ items: TaskCapability[] }>('/api/ai/capabilities'),
   createTask: (payload: Record<string, unknown>) => request<AdminTask>(

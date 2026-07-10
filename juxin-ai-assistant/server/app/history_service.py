@@ -172,7 +172,7 @@ def load_generation_export_payload(
         raise HTTPException(status_code=409, detail="生成记录尚未完成")
     if record.output_ciphertext is None or record.output_nonce is None:
         raise HTTPException(status_code=409, detail="生成结果不可导出")
-    task, _assistant = db.execute(
+    task, assistant = db.execute(
         select(Task, Assistant)
         .join(Assistant, Assistant.id == Task.assistant_id)
         .where(Task.id == record.task_id)
@@ -187,7 +187,9 @@ def load_generation_export_payload(
     return {
         "task_name": task.name,
         "task_uuid": task.uuid,
-        "document_template_code": task.document_template_code,
+        "document_template_code": (
+            task.document_template_code or assistant.word_template
+        ),
         "department": record.department_snapshot,
         "author": record.username_snapshot,
         "output": str(output),

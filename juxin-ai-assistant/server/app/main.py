@@ -359,7 +359,9 @@ def catalog(
             or normalized_query
             in f"{task.name} {task.description}".casefold()
         ]
-        if not matching_tasks:
+        if not matching_tasks and (
+            tasks or (normalized_query and not assistant_matches)
+        ):
             continue
         task_ids = [task.id for task in matching_tasks]
         fields_by_task: dict[int, list[TaskField]] = {

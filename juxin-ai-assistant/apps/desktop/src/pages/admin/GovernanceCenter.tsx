@@ -2,6 +2,7 @@ import { useState } from 'react';
 
 import type { SessionPayload } from '../../api/client';
 import { AdminLinksPage } from './AdminLinksPage';
+import { AssistantModesAdminPage } from './AssistantModesAdminPage';
 import { AuditPage } from './AuditPage';
 import { DesktopUpdatesPage } from './DesktopUpdatesPage';
 import { KnowledgeAdminPage } from './KnowledgeAdminPage';
@@ -11,10 +12,11 @@ import { StatsPage } from './StatsPage';
 import { SuggestionsPage } from './SuggestionsPage';
 import { TaskAdminPage } from './TaskAdminPage';
 
-type GovernancePage = 'tasks' | 'skills' | 'knowledge' | 'suggestions' | 'stats' | 'audit' | 'settings' | 'links' | 'desktop-updates';
+type GovernancePage = 'tasks' | 'assistant-modes' | 'skills' | 'knowledge' | 'suggestions' | 'stats' | 'audit' | 'settings' | 'links' | 'desktop-updates';
 
 const ITEMS: Array<{ page: GovernancePage; label: string }> = [
   { page: 'tasks', label: '任务管理' },
+  { page: 'assistant-modes', label: '助手模式' },
   { page: 'skills', label: '能力治理' },
   { page: 'knowledge', label: '知识库' },
   { page: 'suggestions', label: '建议审核' },
@@ -40,7 +42,8 @@ export function GovernanceCenter({ session }: { session: SessionPayload }) {
         ))}
       </nav>
       {page === 'tasks' ? <TaskAdminPage />
-        : page === 'skills' ? <SkillsAdminPage />
+        : page === 'assistant-modes' ? <AssistantModesAdminPage />
+          : page === 'skills' ? <SkillsAdminPage />
         : page === 'knowledge' ? <KnowledgeAdminPage />
           : page === 'suggestions' ? <SuggestionsPage admin departments={session.scope.managedDepartments} />
             : page === 'stats' ? <StatsPage />

@@ -54,8 +54,36 @@ class Assistant(TimestampMixin, Base):
     icon: Mapped[str] = mapped_column(String(64), default="sparkles")
     sort_order: Mapped[int] = mapped_column(Integer, default=0)
     status: Mapped[str] = mapped_column(String(16), default="ACTIVE", index=True)
+    allowed_tools_json: Mapped[list] = mapped_column(JSON, default=list)
+    default_source_scope: Mapped[str] = mapped_column(String(32), default="company")
+    default_output_structure: Mapped[str] = mapped_column(Text, default="")
+    word_template: Mapped[str] = mapped_column(String(64), default="juxin_standard")
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    test_cases_json: Mapped[list] = mapped_column(JSON, default=list)
+    review_status: Mapped[str] = mapped_column(String(24), default="approved", index=True)
     created_by: Mapped[str] = mapped_column(String(64), default="system")
     updated_by: Mapped[str] = mapped_column(String(64), default="system")
+
+
+class AssistantModeVersion(TimestampMixin, Base):
+    __tablename__ = "ai_assistant_mode_versions"
+    __table_args__ = (UniqueConstraint("assistant_id", "version"),)
+
+    id: Mapped[int] = mapped_column(primary_key_type, primary_key=True, autoincrement=True)
+    uuid: Mapped[str] = mapped_column(
+        String(36),
+        unique=True,
+        default=lambda: str(uuid_lib.uuid4()),
+    )
+    assistant_id: Mapped[int] = mapped_column(
+        foreign_key_type,
+        ForeignKey("ai_assistants.id", ondelete="CASCADE"),
+        index=True,
+    )
+    version: Mapped[int] = mapped_column(Integer)
+    snapshot_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    action: Mapped[str] = mapped_column(String(32), default="update", index=True)
+    created_by: Mapped[str] = mapped_column(String(64), default="system", index=True)
 
 
 class Task(TimestampMixin, Base):

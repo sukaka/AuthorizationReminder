@@ -249,6 +249,70 @@ class DailyCount(BaseModel):
     count: int
 
 
+class AssistantModeUpsertIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    code: str = Field(min_length=1, max_length=64, pattern=r"^[a-z0-9][a-z0-9-]*$")
+    name: str = Field(min_length=1, max_length=128)
+    description: str = Field(default="", max_length=2000)
+    icon: str = Field(default="sparkles", max_length=64)
+    allowed_tools: list[str] = Field(default_factory=list, max_length=32)
+    default_source_scope: str = Field(
+        default="company",
+        pattern="^(none|company|personal|session|company_and_personal)$",
+    )
+    default_output_structure: str = Field(default="", max_length=4000)
+    word_template: str = Field(default="juxin_standard", max_length=64)
+    test_cases: list[dict[str, str]] = Field(default_factory=list, max_length=20)
+    review_status: str = Field(
+        default="draft",
+        pattern="^(draft|pending|approved|rejected)$",
+    )
+
+
+class AssistantModeOut(BaseModel):
+    uuid: str
+    code: str
+    name: str
+    description: str
+    icon: str
+    allowed_tools: list[str]
+    default_source_scope: str
+    default_output_structure: str
+    word_template: str
+    status: str
+    version: int
+    test_cases: list[dict[str, str]]
+    review_status: str
+    failure_rate: float = 0.0
+    available_versions: list[int] = Field(default_factory=list)
+    created_at: datetime
+    updated_at: datetime
+
+
+class AssistantModeListOut(BaseModel):
+    items: list[AssistantModeOut]
+    total: int
+
+
+class AssistantModeTestIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    input: str = Field(default="", max_length=20_000)
+
+
+class AssistantModeTestOut(BaseModel):
+    status: str
+    issues: list[str] = Field(default_factory=list)
+    persisted: bool = False
+
+
+class AssistantModeRollbackIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    version: int = Field(ge=1)
+
+
 class StatsOut(BaseModel):
     departments: list[str]
     total: int

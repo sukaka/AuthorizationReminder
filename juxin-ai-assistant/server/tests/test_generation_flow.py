@@ -9,6 +9,7 @@ from sqlalchemy import select
 from app.crypto import ContentCipher, EncryptedPayload
 from app.governance_models import AuditLog
 from app.models import (
+    Assistant,
     GenerationAttachment,
     GenerationRecord,
     KnowledgeItem,
@@ -224,6 +225,48 @@ def test_prepare_returns_task_knowledge_refs_without_leaking_full_content(
     ]
     assert "客户白皮书要求" in payload["messages"][1]["content"]
     assert "客户白皮书要求" not in json.dumps(payload["knowledge_refs"], ensure_ascii=False)
+
+
+def test_prepare_applies_assistant_mode_runtime_constraints(
+    generation_client,
+    generation_db,
+    seeded_task,
+    respx_mock,
+) -> None:
+    assistant = generation_db.get(Assistant, seeded_task.assistant_id)
+    assistant.allowed_tools_json = ["company_knowledge_search", "word_export"]
+    assistant.default_source_scope = "none"
+    assistant.default_output_structure = "摘要、关键结论、下一步"
+    generation_db.commit()
+    mock_published_prompt(respx_mock)
+
+    response = generation_client.post(
+        "/api/ai/generations/prepare",
+        json={
+            "task_uuid": seeded_task.uuid,
+            "inputs": {"work_content": "整理项目进展"},
+        },
+    )
+
+    assert response.status_code == 201
+    payload = response.json()
+    system_content = payload["messages"][0]["content"]
+    assert "company_knowledge_search、word_export" in system_content
+    assert "默认资料范围：none" in system_content
+    assert "摘要、关键结论、下一步" in system_content
+    assert payload["knowledge_refs"] == []
+
+    assistant.status = "DISABLED"
+    generation_db.commit()
+    disabled = generation_client.post(
+        "/api/ai/generations/prepare",
+        json={
+            "task_uuid": seeded_task.uuid,
+            "inputs": {"work_content": "再次整理项目进展"},
+        },
+    )
+    assert disabled.status_code == 404
+    assert disabled.json()["detail"] == "任务或助手模式不存在或未启用"
 
 
 def test_prepare_rejects_unknown_attachment_uuid(

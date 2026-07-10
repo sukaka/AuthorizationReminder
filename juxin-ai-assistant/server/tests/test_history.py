@@ -84,6 +84,43 @@ def test_export_uses_task_document_template(
     assert captured["title"] == seeded_task.name
 
 
+def test_export_falls_back_to_assistant_mode_word_template(
+    client_for_user,
+    generation_db,
+    records,
+    seeded_task,
+    monkeypatch,
+) -> None:
+    seeded_task.document_template_code = ""
+    seeded_task.assistant.word_template = "security_report"
+    generation_db.commit()
+    captured = {}
+
+    class FakeTemplate:
+        def render_docx(self, payload):
+            return b"docx"
+
+    import app.main as main_module
+
+    def fake_get_template(template_code):
+        captured["template_code"] = template_code
+        return FakeTemplate()
+
+    monkeypatch.setattr(
+        main_module,
+        "get_document_template",
+        fake_get_template,
+        raising=False,
+    )
+
+    response = client_for_user("u-1").get(
+        f"/api/ai/generations/{records.u1.uuid}/export.docx"
+    )
+
+    assert response.status_code == 200
+    assert captured["template_code"] == "security_report"
+
+
 def test_other_user_cannot_export_generation(client_for_user, records) -> None:
     response = client_for_user("u-2").get(
         f"/api/ai/generations/{records.u1.uuid}/export.docx"

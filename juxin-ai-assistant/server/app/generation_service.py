@@ -24,7 +24,7 @@ from .crypto import ContentCipher
 from .document_governance import render_document_governance
 from .field_validation import FieldValidationError, validate_task_inputs
 from .knowledge import KnowledgeRetriever, RetrievedKnowledge
-from .models import GenerationRecord, Task, TaskField, TaskPromptBinding
+from .models import Assistant, GenerationRecord, Task, TaskField, TaskPromptBinding
 from .prompt_client import PromptCenterClient, render_prompt
 from .quality_rules import (
     is_trusted_quality_rule,
@@ -129,11 +129,21 @@ async def prepare_generation(
     sensitive_detector: SensitiveDetector,
     knowledge_retriever: KnowledgeRetriever,
 ) -> tuple[PreparedGeneration, GenerationRecord]:
-    task = db.scalar(
-        select(Task).where(Task.uuid == request.task_uuid, Task.status == "ACTIVE")
-    )
-    if task is None:
-        raise HTTPException(status_code=404, detail="任务不存在或未启用")
+    task_row = db.execute(
+        select(Task, Assistant)
+        .join(Assistant, Assistant.id == Task.assistant_id)
+        .where(
+            Task.uuid == request.task_uuid,
+            Task.status == "ACTIVE",
+            Assistant.status == "ACTIVE",
+        )
+    ).one_or_none()
+    if task_row is None:
+        raise HTTPException(
+            status_code=404,
+            detail="任务或助手模式不存在或未启用",
+        )
+    task, assistant = task_row
     fields = list(db.scalars(
         select(TaskField)
         .where(TaskField.task_id == task.id)
@@ -214,13 +224,17 @@ async def prepare_generation(
         prompt_version = int(prompt["version_no"])
     except (KeyError, TypeError, ValueError) as exc:
         raise HTTPException(status_code=422, detail=str(exc) or "Prompt 配置无效") from exc
-    knowledge_items = knowledge_retriever.retrieve(
-        db,
-        task.id,
-        normalized_inputs,
-        limit=None,
+    knowledge_items = (
+        knowledge_retriever.retrieve(
+            db,
+            task.id,
+            normalized_inputs,
+            limit=None,
+        )
+        if assistant.default_source_scope in {"company", "company_and_personal"}
+        else []
     )
-    assistant_code = task.assistant.code
+    assistant_code = assistant.code
     quality_rules = [
         item
         for item in knowledge_items
@@ -280,6 +294,15 @@ async def prepare_generation(
             kind="system",
             title="公司安全规则",
             content="不得编造事实，不得泄露秘密，输出必须由员工复核。",
+        ),
+        ContextSection(
+            kind="system",
+            title="助手模式约束",
+            content="\n".join([
+                f"允许工具：{'、'.join(assistant.allowed_tools_json or []) or '无'}",
+                f"默认资料范围：{assistant.default_source_scope}",
+                f"默认输出结构：{assistant.default_output_structure or '按任务模板输出'}",
+            ]),
         ),
         ContextSection(
             kind="system",
