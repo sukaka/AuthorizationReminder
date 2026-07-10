@@ -722,6 +722,7 @@ class ChatGenerateOut(BaseModel):
     model_id: str
     usage: dict = Field(default_factory=dict)
     latency_ms: int | None = Field(default=None, ge=0)
+    citations: list[ChatCitationOut] = Field(default_factory=list)
 
 
 class LongTaskChatCreateIn(BaseModel):
@@ -842,6 +843,7 @@ class ChatFailIn(BaseModel):
 class ChatMessageStatusOut(BaseModel):
     message_uuid: str
     status: str
+    citations: list[ChatCitationOut] = Field(default_factory=list)
 
 
 class ExportWordSourceIn(BaseModel):

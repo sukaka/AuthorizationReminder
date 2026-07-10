@@ -795,7 +795,7 @@ it('logs saved_as feedback when an answer is saved as experience', async () => {
   }
 });
 
-it('shows only cited files mentioned in the final answer', async () => {
+it('shows verifier-approved citations when the final answer omits the file name', async () => {
   server.use(
     http.get('/api/conversations', () => HttpResponse.json({ items: [], total: 0 })),
     http.post('/api/ai/chat/prepare', () => HttpResponse.json({
@@ -833,10 +833,19 @@ it('shows only cited files mentioned in the final answer', async () => {
     http.post('/api/ai/chat/messages/assistant-message-citation-filter/complete', () => HttpResponse.json({
       message_uuid: 'assistant-message-citation-filter',
       status: 'COMPLETED',
+      citations: [{
+        source_type: 'official_knowledge',
+        file_uuid: 'file-used',
+        file_name: '安全白皮书.txt',
+        chunk_id: 'chunk-used',
+        section_title: '安全服务',
+        chunk_index: 0,
+        score: 9,
+      }],
     })),
   );
   generateLocalModelMock.mockResolvedValue({
-    output: '根据《安全白皮书》，安全服务包含应急响应和运维巡检。',
+    output: '安全服务包含应急响应和运维巡检。',
     latencyMs: 12,
     usage: { output_tokens: 8 },
   });
@@ -846,9 +855,7 @@ it('shows only cited files mentioned in the final answer', async () => {
   await userEvent.click(screen.getByRole('button', { name: '发送' }));
 
   expect(await screen.findByText(/安全服务包含应急响应和运维巡检/)).toBeInTheDocument();
-  const inlineSource = screen.getByLabelText('来源：安全白皮书.txt');
-  expect(inlineSource).toHaveClass('chat-inline-source');
-  expect(inlineSource).toHaveTextContent('公司知识库');
+  expect(screen.queryByLabelText('来源：安全白皮书.txt')).not.toBeInTheDocument();
   const citationSummary = screen.getByText('来源');
   const citationDetails = citationSummary.closest('details');
   expect(citationDetails).not.toHaveAttribute('open');

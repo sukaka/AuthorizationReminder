@@ -459,7 +459,10 @@ function filterCitationsByAnswer(citations: ChatCitation[], answer: string): Cha
   if (!normalizedAnswer) return [];
   return citations.filter((citation) => {
     if (citation.source_type === 'web_search_context') return true;
-    return citationMatchCandidates(citation.file_name).some((candidate) => normalizedAnswer.includes(candidate));
+    return [
+      ...citationMatchCandidates(citation.file_name),
+      ...citationMatchCandidates(citation.section_title),
+    ].some((candidate) => normalizedAnswer.includes(candidate));
   });
 }
 
@@ -1447,7 +1450,7 @@ export function ChatPage() {
             ? {
                 ...message,
                 content: generated.answer,
-                citations: filterCitationsByAnswer(prepared.citations, generated.answer),
+                citations: generated.citations ?? filterCitationsByAnswer(prepared.citations, generated.answer),
                 isComplete: true,
               }
             : message,
@@ -1548,7 +1551,7 @@ export function ChatPage() {
         latencyMs: result.latencyMs,
         usage: result.usage,
       });
-      await completeChatMessage(assistantId, {
+      const completed = await completeChatMessage(assistantId, {
         completionToken: prepared.completion_token,
         answer: result.output,
         modelDisplayName: activeProfile.displayName,
@@ -1564,7 +1567,7 @@ export function ChatPage() {
           ? {
               ...message,
               content: result.output,
-              citations: filterCitationsByAnswer(prepared.citations, result.output),
+              citations: completed.citations ?? filterCitationsByAnswer(prepared.citations, result.output),
               isComplete: true,
             }
           : message,
@@ -2379,7 +2382,7 @@ export function ChatPage() {
               ) : null}
               {messages.map((message) => {
                 const messageCitations = message.role === 'assistant' && message.isComplete !== false
-                  ? filterCitationsByAnswer(message.citations, message.content)
+                  ? message.citations
                   : [];
                 const citationReferences = citationFileReferences(messageCitations);
                 return (

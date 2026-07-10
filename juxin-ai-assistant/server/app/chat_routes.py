@@ -16,6 +16,7 @@ from .chat_service import (
     get_chat_session_detail,
     hard_delete_chat_session,
     list_chat_sessions,
+    message_citations,
     prepare_chat,
     rename_chat_session,
     restore_chat_session,
@@ -293,7 +294,11 @@ async def chat_message_complete(
     except Exception:
         db.rollback()
         raise
-    return ChatMessageStatusOut(message_uuid=message.uuid, status=message.status)
+    return ChatMessageStatusOut(
+        message_uuid=message.uuid,
+        status=message.status,
+        citations=message_citations(db, cipher, message),
+    )
 
 
 @router.post(
@@ -363,6 +368,7 @@ async def chat_message_generate(
         model_id=complete_body.model_id,
         usage=result.usage,
         latency_ms=result.latency_ms,
+        citations=message_citations(db, cipher, message),
     )
 
 
@@ -430,6 +436,10 @@ async def chat_message_generate_stream(
                 "model_id": complete_body.model_id,
                 "usage": usage,
                 "latency_ms": latency_ms,
+                "citations": [
+                    citation.model_dump()
+                    for citation in message_citations(db, cipher, message)
+                ],
             })
         except HTTPException as exc:
             db.rollback()

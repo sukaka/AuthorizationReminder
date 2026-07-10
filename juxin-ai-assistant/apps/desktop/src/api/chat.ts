@@ -264,6 +264,13 @@ export type ChatGeneratePayload = {
   model_id: string;
   usage: Record<string, unknown>;
   latency_ms?: number | null;
+  citations?: ChatCitation[];
+};
+
+export type ChatMessageStatusPayload = {
+  message_uuid: string;
+  status: string;
+  citations?: ChatCitation[];
 };
 
 export type LongTaskPayload = {
@@ -613,8 +620,8 @@ export async function completeChatMessage(
     usage?: Record<string, unknown>;
     latencyMs?: number;
   },
-): Promise<void> {
-  await readJson(
+): Promise<ChatMessageStatusPayload> {
+  return readJson(
     await apiFetch(`/api/ai/chat/messages/${encodeURIComponent(messageUuid)}/complete`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -719,6 +726,7 @@ export async function streamChatMessage(
       model_id: event.model_id,
       usage: event.usage,
       latency_ms: event.latency_ms,
+      citations: event.citations,
     };
   };
 

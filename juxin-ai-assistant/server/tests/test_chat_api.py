@@ -1062,13 +1062,14 @@ def test_knowledge_chat_prepare_returns_citations_and_persists_sources(
         f"/api/ai/chat/messages/{body['assistant_message_uuid']}/complete",
         json={
             "completion_token": body["completion_token"],
-            "answer": "根据《安全白皮书.txt》，安全服务包含应急响应。",
+            "answer": "安全服务包含应急响应。",
             "model_display_name": "DeepSeek",
             "model_id": "deepseek-chat",
         },
     )
 
     assert completed.status_code == 200
+    assert completed.json()["citations"][0]["file_name"] == "安全白皮书.txt"
     detail = client.get(f"/api/ai/chat/sessions/{body['session_uuid']}")
     assistant = detail.json()["messages"][1]
     assert assistant["citations"][0]["source_type"] == "official_knowledge"

@@ -126,11 +126,28 @@ def _source_evidence_is_used(source: SimpleNamespace, answer: str) -> bool:
     if not source.chunk_text:
         return True
     normalized_answer = _normalize_evidence_text(answer)
-    section_title = _normalize_evidence_text(source.section_title)
-    if section_title and section_title in normalized_answer:
-        return True
     chunk_text = _normalize_evidence_text(source.chunk_text)
-    return any(phrase in normalized_answer for phrase in _evidence_phrases(chunk_text))
+    matched_phrases = {
+        phrase
+        for phrase in _evidence_phrases(chunk_text)
+        if phrase in normalized_answer
+    }
+    if len(matched_phrases) >= (1 if len(chunk_text) < 8 else 2):
+        return True
+    if matched_phrases and source_is_mentioned(source, answer):
+        return True
+    section_title = _normalize_evidence_text(source.section_title)
+    section_candidates = {
+        section_title,
+        section_title.lstrip("一二三四五六七八九十0123456789"),
+    }
+    return bool(
+        any(
+            len(candidate) >= 4 and candidate in normalized_answer
+            for candidate in section_candidates
+        )
+        and source_is_mentioned(source, answer)
+    )
 
 
 def _normalize_evidence_text(value: str | None) -> str:
@@ -142,6 +159,10 @@ def _normalize_evidence_text(value: str | None) -> str:
 def _evidence_phrases(value: str) -> list[str]:
     if len(value) < 4:
         return [value] if value else []
+    # Require multiple distinct four-character matches at the call site. A
+    # single match is too weak because unrelated chunks commonly share headings
+    # such as “技术背景” or “安全服务”, while multiple matches still tolerate
+    # concise paraphrasing.
     step = 4
     return [
         value[index : index + step]

@@ -16,7 +16,6 @@ from .crypto import ContentCipher, EncryptedPayload
 from .knowledge_search import RetrievedKnowledgeChunk
 from .models import AgentTaskState, ChatMessage, ChatMessageSource, ChatSession, ExportRecord, KnowledgeChunk
 from .models import KnowledgeSearchLog, WebSearchLog
-from .reference_matching import source_is_mentioned as _source_is_mentioned
 from .schemas import (
     ChatCitationOut,
     ChatCompleteIn,
@@ -165,8 +164,6 @@ def _message_out(
         .order_by(ChatMessageSource.id.asc())
     ))
     content = _decrypt_content(cipher, message)
-    if message.role == "assistant" and message.status == "COMPLETED":
-        sources = [source for source in sources if _source_is_mentioned(source, content)]
     chunk_ids = [source.chunk_id for source in sources if source.chunk_id]
     chunk_metadata_by_id: dict[str, dict] = {}
     if chunk_ids:
@@ -198,6 +195,15 @@ def _message_out(
         citations=citations,
         created_at=message.created_at,
     )
+
+
+def message_citations(
+    db: Session,
+    cipher: ContentCipher,
+    message: ChatMessage,
+) -> list[ChatCitationOut]:
+    """Return the verifier-approved sources persisted for a completed message."""
+    return _message_out(db, cipher, message).citations
 
 
 def _source_payloads_for_verifier(
