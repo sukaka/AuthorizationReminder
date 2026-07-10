@@ -4,6 +4,7 @@ from typing import Final
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from ..embedding_config import FIXED_EMBEDDING_SETTINGS
 from ..governance_models import SystemSetting
 from .errors import GovernanceError
 from .schemas import JsonScalar, SettingsUpdateIn
@@ -49,10 +50,12 @@ def list_settings(db: Session) -> dict[str, JsonScalar]:
         .where(SystemSetting.status == "ACTIVE")
         .order_by(SystemSetting.setting_key)
     ).all()
-    return {
+    values: dict[str, JsonScalar] = {
         row.setting_key: row.value_json.get("value")
         for row in rows
     }
+    values.update(FIXED_EMBEDDING_SETTINGS)
+    return values
 
 
 def update_settings(
@@ -60,7 +63,7 @@ def update_settings(
     body: SettingsUpdateIn,
     actor_id: str,
 ) -> dict[str, JsonScalar]:
-    values = body.root
+    values = {**body.root, **FIXED_EMBEDDING_SETTINGS}
     _validate_keys(set(values))
     existing = {
         row.setting_key: row

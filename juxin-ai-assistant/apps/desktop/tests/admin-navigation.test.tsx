@@ -125,7 +125,8 @@ it('shows AI governance pages to admin without user or server model forms', asyn
   await userEvent.click(settingsButton);
   expect(screen.getByText('向量模型')).toBeInTheDocument();
   expect(screen.getByLabelText('向量模型名称')).toBeInTheDocument();
-  expect(screen.getByText('API Key 请通过服务器环境变量配置，不在页面保存密钥。')).toBeInTheDocument();
+  expect(screen.getByText('已固定为本机 Qwen3-Embedding-4B 服务，不允许在页面修改。')).toBeInTheDocument();
+  expect(screen.getByLabelText('向量模型名称')).toHaveAttribute('readonly');
   expect(screen.queryByText('服务端模型配置')).not.toBeInTheDocument();
   expect(screen.queryByRole('button', { name: '新增用户' })).not.toBeInTheDocument();
 });

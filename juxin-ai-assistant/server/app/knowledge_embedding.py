@@ -1,12 +1,15 @@
 from dataclasses import dataclass
-from typing import Any
 
 import httpx
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .config import Settings
-from .governance_models import SystemSetting
+from .embedding_config import (
+    FIXED_EMBEDDING_BASE_URL,
+    FIXED_EMBEDDING_DIMENSIONS,
+    FIXED_EMBEDDING_MODEL_ID,
+    FIXED_EMBEDDING_PROVIDER,
+)
 from .knowledge_search import EmbeddingService
 
 
@@ -20,46 +23,27 @@ class EmbeddingModelConfig:
     timeout_seconds: int
 
 
-def _setting_values(db: Session) -> dict[str, Any]:
-    rows = db.scalars(
-        select(SystemSetting).where(
-            SystemSetting.status == "ACTIVE",
-            SystemSetting.setting_key.in_([
-                "embedding_provider",
-                "embedding_base_url",
-                "embedding_model_id",
-                "embedding_dimensions",
-            ]),
-        )
-    ).all()
-    return {
-        row.setting_key: (row.value_json or {}).get("value")
-        for row in rows
-    }
-
-
-def load_embedding_model_config(db: Session, settings: Settings) -> EmbeddingModelConfig | None:
-    values = _setting_values(db)
-    provider = str(values.get("embedding_provider") or "").strip().lower()
-    base_url = str(values.get("embedding_base_url") or "").strip()
-    model_id = str(values.get("embedding_model_id") or "").strip()
-    api_key = settings.embedding_model_api_key.strip()
-    if provider != "openai-compatible" or not base_url or not model_id or not api_key:
-        return None
-    dimensions = int(values.get("embedding_dimensions") or 0)
+def load_embedding_model_config(
+    _db: Session,
+    settings: Settings,
+) -> EmbeddingModelConfig:
     return EmbeddingModelConfig(
-        provider=provider,
-        base_url=base_url,
-        model_id=model_id,
-        api_key=api_key,
-        dimensions=max(dimensions, 0),
+        provider=FIXED_EMBEDDING_PROVIDER,
+        base_url=FIXED_EMBEDDING_BASE_URL,
+        model_id=FIXED_EMBEDDING_MODEL_ID,
+        api_key=settings.embedding_model_api_key.strip(),
+        dimensions=FIXED_EMBEDDING_DIMENSIONS,
         timeout_seconds=settings.embedding_model_timeout_seconds,
     )
 
 
 def _embeddings_url(base_url: str) -> str:
     normalized = base_url.rstrip("/")
-    return normalized if normalized.endswith("/embeddings") else f"{normalized}/embeddings"
+    if normalized.endswith("/embeddings"):
+        return normalized
+    if normalized.endswith("/v1"):
+        return f"{normalized}/embeddings"
+    return f"{normalized}/v1/embeddings"
 
 
 class OpenAICompatibleEmbeddingService(EmbeddingService):
@@ -71,13 +55,13 @@ class OpenAICompatibleEmbeddingService(EmbeddingService):
 
     def embed(self, text: str) -> list[float]:
         try:
+            headers = {"Content-Type": "application/json"}
+            if self.config.api_key:
+                headers["Authorization"] = f"Bearer {self.config.api_key}"
             with httpx.Client(timeout=self.config.timeout_seconds) as client:
                 response = client.post(
                     _embeddings_url(self.config.base_url),
-                    headers={
-                        "Authorization": f"Bearer {self.config.api_key}",
-                        "Content-Type": "application/json",
-                    },
+                    headers=headers,
                     json={
                         "model": self.config.model_id,
                         "input": text,

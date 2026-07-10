@@ -12,6 +12,7 @@ from app.admin.suggestion_service import review_suggestion
 from app.auth import get_session
 from app.crypto import ContentCipher
 from app.database import get_db
+from app.embedding_config import FIXED_EMBEDDING_SETTINGS
 from app.governance_models import SystemSetting, TaskSuggestion
 from app.main import app
 from app.schemas import AuthScope, SessionPayload, UserPayload
@@ -70,6 +71,7 @@ def test_settings_upsert_only_allowed_non_secret_values(generation_db) -> None:
     # Then: each approved key is versionable and queryable.
     assert response.status_code == 200
     assert response.json() == {
+        **FIXED_EMBEDDING_SETTINGS,
         "history_retention_days": 90,
         "sensitive_detection_enabled": True,
     }
@@ -94,14 +96,9 @@ def test_settings_allow_admin_vector_model_configuration(generation_db) -> None:
     finally:
         app.dependency_overrides.pop(get_db, None)
 
-    # Then: the approved vector model fields are persisted and returned.
+    # Then: submitted vector routing values are replaced by the fixed local model.
     assert response.status_code == 200
-    assert response.json() == {
-        "embedding_base_url": "https://model.example/v1",
-        "embedding_dimensions": 3072,
-        "embedding_model_id": "text-embedding-3-large",
-        "embedding_provider": "openai-compatible",
-    }
+    assert response.json() == FIXED_EMBEDDING_SETTINGS
 
 
 def test_manager_can_only_suggest_for_managed_department(

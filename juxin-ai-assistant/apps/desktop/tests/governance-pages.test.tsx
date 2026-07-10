@@ -27,6 +27,8 @@ it('clears controlled knowledge plaintext after encrypted save', async () => {
 it('renders settings from a fixed whitelist without arbitrary secret fields', () => {
   render(<SettingsPage />);
   expect(screen.getByRole('textbox', { name: '全局安全提示' })).toBeInTheDocument();
+  expect(screen.getByRole('textbox', { name: '向量模型名称' })).toHaveValue('qwen3-Embedding-4B');
+  expect(screen.getByRole('textbox', { name: '向量模型名称' })).toHaveAttribute('readonly');
   expect(screen.queryByLabelText(/api key|token|secret|password/i)).not.toBeInTheDocument();
   expect(screen.queryByRole('button', { name: /新增设置/ })).not.toBeInTheDocument();
 });

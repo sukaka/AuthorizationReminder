@@ -18,13 +18,23 @@ const VECTOR_MODEL_FIELDS = [
   ['embedding_dimensions', '向量维度'],
 ] as const;
 
+const FIXED_VECTOR_MODEL_VALUES: Record<string, string> = {
+  embedding_provider: 'openai-compatible',
+  embedding_base_url: 'http://host.docker.internal:8091',
+  embedding_model_id: 'qwen3-Embedding-4B',
+  embedding_dimensions: '2560',
+};
+
 export function SettingsPage() {
-  const [values, setValues] = useState<Record<string, string>>({});
+  const [values, setValues] = useState<Record<string, string>>(FIXED_VECTOR_MODEL_VALUES);
   const [notice, setNotice] = useState('');
   const load = async () => {
     try {
       const payload = await governanceApi.settings();
-      setValues(Object.fromEntries(Object.entries(payload).map(([key, value]) => [key, String(value)])));
+      setValues({
+        ...Object.fromEntries(Object.entries(payload).map(([key, value]) => [key, String(value)])),
+        ...FIXED_VECTOR_MODEL_VALUES,
+      });
       setNotice('已加载当前设置。');
     } catch { setNotice('设置读取失败，请确认治理权限。'); }
   };
@@ -52,9 +62,9 @@ export function SettingsPage() {
         <fieldset>
           <legend>向量模型</legend>
           <p>用于公司知识库语义检索。</p>
-          <p>API Key 请通过服务器环境变量配置，不在页面保存密钥。</p>
+          <p>已固定为本机 Qwen3-Embedding-4B 服务，不允许在页面修改。</p>
           {VECTOR_MODEL_FIELDS.map(([key, label]) => (
-            <label key={key}>{label}<input value={values[key] || ''} onChange={(event) => setValues({ ...values, [key]: event.target.value })} /></label>
+            <label key={key}>{label}<input readOnly value={values[key] || ''} /></label>
           ))}
         </fieldset>
         <label className="toggle-setting"><input checked={values.sensitive_detection_enabled !== 'false'} onChange={(event) => setValues({ ...values, sensitive_detection_enabled: String(event.target.checked) })} type="checkbox" />启用敏感信息检测</label>
