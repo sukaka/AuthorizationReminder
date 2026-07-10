@@ -48,6 +48,21 @@ class CompanyKnowledgeSearchTool(BaseTool):
             document_types=document_types,
             embedding_service=embedding_service,
         )
+        # Mode defaults are a relevance preference, not an access boundary.  A
+        # document can be valid for a mode even when its catalog metadata uses
+        # a product category (for example, "云管平台") instead of the mode's
+        # default category (for example, "产品交付").  Avoid reporting that the
+        # knowledge base has no evidence merely because the preferred slice is
+        # empty.
+        if not chunks and (categories or document_types):
+            chunks = search_knowledge_chunks(
+                context.db,
+                sso_user_id=context.user_id,
+                query=query,
+                cipher=cipher,
+                top_k=tool_input.get("top_k"),
+                embedding_service=embedding_service,
+            )
         return ToolResult(
             tool_name=self.name,
             payload={"chunks": chunks, "search_log_ids": []},

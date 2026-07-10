@@ -163,6 +163,44 @@ def test_agent_loop_tool_executor_logs_company_knowledge_tool_call(
     assert log.output_summary_json == {"chunk_count": 0, "search_log_ids": []}
 
 
+def test_company_knowledge_tool_falls_back_when_mode_filters_have_no_results(
+    generation_db,
+    monkeypatch,
+) -> None:
+    from app.agent_loop.tool_executor import ToolExecutor
+    from app.crypto import ContentCipher
+
+    calls = []
+    fallback_chunk = object()
+
+    def fake_search_knowledge_chunks(*args, **kwargs):
+        calls.append(kwargs)
+        if kwargs.get("categories") or kwargs.get("document_types"):
+            return []
+        return [fallback_chunk]
+
+    monkeypatch.setattr(
+        "app.agent_runtime.tools.knowledge_tools.search_knowledge_chunks",
+        fake_search_knowledge_chunks,
+    )
+
+    executor = ToolExecutor(
+        db=generation_db,
+        sso_user_id="user-1",
+        cipher=ContentCipher("a2tra2tra2tra2tra2tra2tra2tra2tra2tra2tra2s="),
+        top_k=8,
+    )
+
+    result = executor.search_knowledge_base("云管平台技术背景", mode="delivery")
+
+    assert result.chunks == [fallback_chunk]
+    assert len(calls) == 2
+    assert calls[0]["categories"] == ["产品交付"]
+    assert calls[0]["document_types"] == ["安装部署手册", "管理员手册", "操作手册"]
+    assert "categories" not in calls[1]
+    assert "document_types" not in calls[1]
+
+
 def test_agent_loop_tool_executor_searches_current_attachments_only(
     generation_db,
     monkeypatch,
