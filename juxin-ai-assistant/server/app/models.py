@@ -603,6 +603,39 @@ class AgentTaskState(TimestampMixin, Base):
     metadata_json: Mapped[dict] = mapped_column(JSON, default=dict)
 
 
+class LongTask(TimestampMixin, Base):
+    __tablename__ = "ai_long_tasks"
+    __table_args__ = (UniqueConstraint("message_id"),)
+
+    id: Mapped[int] = mapped_column(primary_key_type, primary_key=True, autoincrement=True)
+    uuid: Mapped[str] = mapped_column(
+        String(36),
+        unique=True,
+        default=lambda: str(uuid_lib.uuid4()),
+    )
+    owner_user_id: Mapped[str] = mapped_column(String(64), index=True)
+    conversation_id: Mapped[str] = mapped_column(String(64), default="", index=True)
+    message_id: Mapped[str] = mapped_column(String(64), default="", index=True)
+    task_type: Mapped[str] = mapped_column(String(48), default="chat_generation", index=True)
+    title: Mapped[str] = mapped_column(String(255), default="后台任务")
+    status: Mapped[str] = mapped_column(String(24), default="queued", index=True)
+    stage: Mapped[str] = mapped_column(String(64), default="queued", index=True)
+    progress: Mapped[int] = mapped_column(Integer, default=0)
+    attempt: Mapped[int] = mapped_column(Integer, default=1)
+    cancel_requested: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    request_ciphertext: Mapped[bytes] = mapped_column(LargeBinary)
+    request_nonce: Mapped[bytes] = mapped_column(LargeBinary)
+    draft_ciphertext: Mapped[bytes] = mapped_column(LargeBinary, default=b"")
+    draft_nonce: Mapped[bytes] = mapped_column(LargeBinary, default=b"")
+    key_version: Mapped[str] = mapped_column(String(32), default="v1")
+    checkpoint_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    result_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    error_code: Mapped[str] = mapped_column(String(64), default="", index=True)
+    error_message_safe: Mapped[str] = mapped_column(Text, default="")
+    started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
 class SkillRunLog(TimestampMixin, Base):
     __tablename__ = "ai_skill_run_logs"
 

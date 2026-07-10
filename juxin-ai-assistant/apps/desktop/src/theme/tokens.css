@@ -3193,6 +3193,106 @@ textarea:focus-visible {
   overflow: hidden;
 }
 
+.chat-background-toggle {
+  align-items: center;
+  color: var(--text-secondary);
+  display: inline-flex;
+  font-size: 12px;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.chat-background-toggle input {
+  accent-color: var(--accent-primary);
+  margin: 0;
+}
+
+.chat-long-task-tray {
+  background: var(--surface-elevated);
+  border: 1px solid var(--border-subtle);
+  bottom: 88px;
+  box-shadow: var(--shadow-lg);
+  max-height: min(56vh, 420px);
+  overflow: auto;
+  padding: 12px;
+  position: fixed;
+  right: 20px;
+  width: min(340px, calc(100vw - 32px));
+  z-index: 40;
+}
+
+.chat-long-task-head,
+.chat-long-task-title,
+.chat-long-task-actions {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+  justify-content: space-between;
+}
+
+.chat-long-task-head span,
+.chat-long-task-title span {
+  color: var(--text-tertiary);
+  font-size: 12px;
+}
+
+.chat-long-task-list {
+  display: grid;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.chat-long-task-item {
+  border-top: 1px solid var(--border-subtle);
+  padding-top: 10px;
+}
+
+.chat-long-task-title strong {
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-long-task-item progress {
+  height: 4px;
+  margin-top: 8px;
+  width: 100%;
+}
+
+.chat-long-task-error,
+.chat-long-task-draft {
+  font-size: 12px;
+  line-height: 1.55;
+  margin: 8px 0 0;
+}
+
+.chat-long-task-error {
+  color: var(--status-danger);
+}
+
+.chat-long-task-draft {
+  color: var(--text-secondary);
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}
+
+.chat-long-task-actions {
+  justify-content: flex-end;
+  margin-top: 8px;
+}
+
+.chat-long-task-actions button {
+  background: transparent;
+  border: 0;
+  color: var(--accent-primary);
+  cursor: pointer;
+  font-size: 12px;
+  padding: 4px;
+}
+
 .chat-topbar {
   flex: 0 0 auto;
   min-height: 42px;

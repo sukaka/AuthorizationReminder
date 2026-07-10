@@ -550,21 +550,30 @@ Agent Runtime
 - 继续 / 重试 / 取消
 
 **开发检查项：**
-- [ ] 任务可中断。
-- [ ] 任务失败不丢正文草稿。
-- [ ] 页面刷新后能恢复状态。
-- [ ] 后台任务不泄露其他用户资料。
+- [x] 任务可中断。
+- [x] 任务失败不丢正文草稿。
+- [x] 页面刷新后能恢复状态。
+- [x] 后台任务不泄露其他用户资料。
 
 **验收标准：**
-- [ ] 联网失败后可以重试。
-- [ ] Word 导出失败时正文仍可复制。
-- [ ] 长任务刷新页面后能继续查看。
-- [ ] 取消任务后不会继续调用外部模型。
+- [x] 联网失败后可以重试。
+- [x] Word 导出失败时正文仍可复制。
+- [x] 长任务刷新页面后能继续查看。
+- [x] 取消任务后不会继续调用外部模型。
 
 **建议测试：**
 - `server/tests/test_long_tasks.py`
 - `server/tests/test_agent_task_state.py`
 - `apps/desktop/tests/chat-page.test.tsx`
+
+**本次验证（2026-07-10）：**
+- 新增 `ai_long_tasks` 持久化队列；请求和正文草稿使用内容密钥加密，列表与详情按用户隔离。
+- 服务端流式生成逐段保存恢复点；失败保留草稿，重试从草稿继续；进程重启恢复排队和执行中任务。
+- 取消同时保存状态并取消运行协程；阻塞中的外部模型流收到取消，未写入后续内容。
+- Web 聊天页支持“后台处理”、刷新恢复、进度浮层、复制草稿、取消、重试和查看结果。
+- `python3 -m pytest tests/test_long_tasks.py tests/test_agent_task_state.py tests/test_chat_api.py tests/test_chat_word_export.py tests/test_migrations.py -q`
+- `npm test -- chat-page.test.tsx`（48 个测试通过）
+- `npm run typecheck`、`npm run build:web`
 
 ---
 

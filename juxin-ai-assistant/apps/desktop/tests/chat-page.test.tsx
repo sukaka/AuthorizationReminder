@@ -21,6 +21,7 @@ vi.mock('../src/local/modelStream', () => ({
 
 beforeEach(() => {
   server.use(
+    http.get('/api/ai/long-tasks', () => HttpResponse.json({ items: [], total: 0 })),
     http.get('/api/knowledge/categories', () => HttpResponse.json({
       items: [{
         category_id: 'category-personal',
@@ -74,6 +75,129 @@ beforeEach(() => {
     configurable: true,
     value: {},
   });
+});
+
+it('queues a server-model chat for background processing', async () => {
+  Object.defineProperty(window, '__TAURI_INTERNALS__', {
+    configurable: true,
+    value: undefined,
+  });
+  const queuedRequest = vi.fn();
+  server.use(
+    http.get('/api/conversations', () => HttpResponse.json({ items: [], total: 0 })),
+    http.get('/api/ai/model-profiles', () => HttpResponse.json({ items: [], total: 0 })),
+    http.post('/api/ai/chat/prepare', () => HttpResponse.json({
+      session_uuid: 'session-background',
+      user_message_uuid: 'user-background',
+      assistant_message_uuid: 'assistant-background',
+      completion_token: 'complete-background',
+      completed: false,
+      answer: '',
+      messages: [
+        { role: 'system', content: '你是聚信 AI 助手' },
+        { role: 'user', content: '生成季度调研报告' },
+      ],
+      citations: [],
+    }, { status: 201 })),
+    http.post('/api/ai/long-tasks/chat-generation', async ({ request }) => {
+      queuedRequest(await request.json());
+      return HttpResponse.json({
+        task_id: 'long-background',
+        task_type: 'chat_generation',
+        title: '生成季度调研报告',
+        conversation_id: 'session-background',
+        message_uuid: 'assistant-background',
+        status: 'queued',
+        stage: 'queued',
+        progress: 0,
+        attempt: 1,
+        draft: '',
+        error_code: '',
+        error_message: '',
+        retry_allowed: false,
+        cancel_allowed: true,
+        created_at: '2026-07-10T04:00:00Z',
+        updated_at: '2026-07-10T04:00:00Z',
+      }, { status: 202 });
+    }),
+  );
+
+  render(<ChatPage />);
+  await userEvent.click(await screen.findByRole('checkbox', { name: '后台处理' }));
+  await userEvent.type(screen.getByLabelText('告诉我你想完成什么工作'), '生成季度调研报告');
+  await userEvent.click(screen.getByRole('button', { name: '发送' }));
+
+  const tray = await screen.findByRole('region', { name: '后台任务' });
+  expect(tray).toHaveTextContent('等待处理');
+  expect(queuedRequest).toHaveBeenCalledWith(expect.objectContaining({
+    conversation_id: 'session-background',
+    message_uuid: 'assistant-background',
+    completion_token: 'complete-background',
+  }));
+  expect(generateLocalModelMock).not.toHaveBeenCalled();
+});
+
+it('restores a failed background task with its draft and retries it', async () => {
+  Object.defineProperty(window, '__TAURI_INTERNALS__', {
+    configurable: true,
+    value: undefined,
+  });
+  const retry = vi.fn();
+  const cancel = vi.fn();
+  const failedTask = {
+    task_id: 'long-failed',
+    task_type: 'chat_generation',
+    title: '联网调研报告',
+    conversation_id: 'session-failed',
+    message_uuid: 'assistant-failed',
+    status: 'failed',
+    stage: 'generating',
+    progress: 48,
+    attempt: 1,
+    draft: '已经完成的报告正文，可直接复制。',
+    error_code: 'NETWORK_FAILED',
+    error_message: '联网失败，请重试',
+    retry_allowed: true,
+    cancel_allowed: false,
+    created_at: '2026-07-10T04:00:00Z',
+    updated_at: '2026-07-10T04:01:00Z',
+  };
+  server.use(
+    http.get('/api/conversations', () => HttpResponse.json({ items: [], total: 0 })),
+    http.get('/api/ai/model-profiles', () => HttpResponse.json({ items: [], total: 0 })),
+    http.get('/api/ai/long-tasks', () => HttpResponse.json({ items: [failedTask], total: 1 })),
+    http.post('/api/ai/long-tasks/long-failed/retry', () => {
+      retry();
+      return HttpResponse.json({
+        ...failedTask,
+        status: 'retrying',
+        attempt: 2,
+        retry_allowed: false,
+        cancel_allowed: true,
+      });
+    }),
+    http.post('/api/ai/long-tasks/long-failed/cancel', () => {
+      cancel();
+      return HttpResponse.json({
+        ...failedTask,
+        status: 'cancelled',
+        retry_allowed: false,
+        cancel_allowed: false,
+      });
+    }),
+  );
+
+  render(<ChatPage />);
+
+  const tray = await screen.findByRole('region', { name: '后台任务' });
+  expect(tray).toHaveTextContent('已经完成的报告正文，可直接复制。');
+  expect(tray).toHaveTextContent('联网失败，请重试');
+  await userEvent.click(within(tray).getByRole('button', { name: '重试' }));
+  expect(retry).toHaveBeenCalledOnce();
+  expect(tray).toHaveTextContent('正在重新处理');
+  await userEvent.click(within(tray).getByRole('button', { name: '取消' }));
+  expect(cancel).toHaveBeenCalledOnce();
+  expect(tray).toHaveTextContent('已取消');
 });
 
 it('detects explicit memory trigger phrases without saving sensitive content', () => {
@@ -1592,6 +1716,45 @@ it('exports an assistant reply to Word from the chat message actions', async () 
   expect(within(historyPane).queryByText('/Users/test/Downloads/chat.docx')).not.toBeInTheDocument();
   await userEvent.click(within(exportDialog).getByRole('button', { name: '关闭' }));
   await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Word 已导出成功' })).not.toBeInTheDocument());
+});
+
+it('keeps the generated answer copyable when Word export fails', async () => {
+  server.use(
+    http.get('/api/conversations', () => HttpResponse.json({ items: [], total: 0 })),
+    http.post('/api/ai/chat/prepare', () => HttpResponse.json({
+      session_uuid: 'session-export-failed',
+      user_message_uuid: 'user-export-failed',
+      assistant_message_uuid: 'assistant-export-failed',
+      completion_token: 'complete-export-failed',
+      completed: false,
+      answer: '',
+      messages: [{ role: 'user', content: '生成可复制正文' }],
+      citations: [],
+    }, { status: 201 })),
+    http.post('/api/ai/chat/messages/assistant-export-failed/complete', () => HttpResponse.json({
+      message_uuid: 'assistant-export-failed',
+      status: 'COMPLETED',
+    })),
+    http.post('/api/export/word', () => HttpResponse.json(
+      { detail: 'EXPORT_FAILED' },
+      { status: 500 },
+    )),
+  );
+  generateLocalModelMock.mockResolvedValue({
+    output: '导出失败后仍保留的正文',
+    latencyMs: 10,
+    usage: {},
+  });
+
+  render(<ChatPage />);
+  await userEvent.type(await screen.findByLabelText('告诉我你想完成什么工作'), '生成可复制正文');
+  await userEvent.click(screen.getByRole('button', { name: '发送' }));
+  expect(await screen.findByText('导出失败后仍保留的正文')).toBeInTheDocument();
+  await userEvent.click(screen.getByRole('button', { name: '导出 Word' }));
+
+  expect(await screen.findByRole('dialog', { name: 'Word 导出失败' })).toBeInTheDocument();
+  expect(screen.getByText('导出失败后仍保留的正文')).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: '复制' })).toBeInTheDocument();
 });
 
 it('saves an assistant reply as a work artifact', async () => {

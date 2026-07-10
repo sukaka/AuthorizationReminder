@@ -5,8 +5,10 @@ import {
   archiveChatSession,
   bulkArchiveChatSessions,
   bulkDeleteChatSessions,
+  cancelLongTask,
   completeChatMessage,
   confirmWebCapture,
+  createLongChatTask,
   deleteChatSession,
   exportChatWord,
   getChatSession,
@@ -15,11 +17,13 @@ import {
   listKnowledgeFiles,
   listKnowledgeCategories,
   listKnowledgeDocumentTypes,
+  listLongTasks,
   listUserModelProfiles,
   prepareChat,
   previewWebCapture,
   previewKnowledgeFile,
   renameChatSession,
+  retryLongTask,
   restoreChatSession,
   streamChatMessage,
   type ChatCitation,
@@ -32,6 +36,7 @@ import {
   type KnowledgeDocumentTypePayload,
   type KnowledgeFilePayload,
   type KnowledgeFilePreviewPayload,
+  type LongTaskPayload,
   type WebCapturePreviewPayload,
   uploadKnowledgeFile,
 } from '../api/chat';
@@ -64,6 +69,16 @@ type UiMessage = {
 };
 
 type GeneratedModelResult = Awaited<ReturnType<typeof generateLocalModel>>;
+
+const longTaskStatusLabels: Record<LongTaskPayload['status'], string> = {
+  queued: '等待处理',
+  running: '正在处理',
+  waiting_user: '等待补充资料',
+  completed: '已完成',
+  failed: '处理失败',
+  cancelled: '已取消',
+  retrying: '正在重新处理',
+};
 
 type SourcePreviewState =
   | { status: 'idle' }
@@ -823,6 +838,8 @@ export function ChatPage() {
   const [generationStatus, setGenerationStatus] = useState<GenerationStatus>('idle');
   const [generationMetrics, setGenerationMetrics] = useState<GenerationMetrics | null>(null);
   const [webModelLabel, setWebModelLabel] = useState('服务端模型');
+  const [backgroundMode, setBackgroundMode] = useState(false);
+  const [longTasks, setLongTasks] = useState<LongTaskPayload[]>([]);
   const messageListRef = useRef<HTMLDivElement | null>(null);
   const shouldStickToBottomRef = useRef(true);
   const activeGenerationRef = useRef<ActiveGeneration | null>(null);
@@ -835,6 +852,34 @@ export function ChatPage() {
   };
 
   const shouldUseServerModel = !isDesktopRuntime();
+
+  const refreshLongTasks = async () => {
+    const payload = await listLongTasks();
+    setLongTasks(payload.items);
+  };
+
+  const replaceLongTask = (task: LongTaskPayload) => {
+    setLongTasks((current) => [
+      task,
+      ...current.filter((item) => item.task_id !== task.task_id),
+    ]);
+  };
+
+  const cancelBackgroundTask = async (taskId: string) => {
+    try {
+      replaceLongTask(await cancelLongTask(taskId));
+    } catch {
+      setStatus('取消任务失败，请稍后重试');
+    }
+  };
+
+  const retryBackgroundTask = async (taskId: string) => {
+    try {
+      replaceLongTask(await retryLongTask(taskId));
+    } catch {
+      setStatus('重新处理失败，请稍后重试');
+    }
+  };
 
   const stopActiveGeneration = async () => {
     const activeGeneration = activeGenerationRef.current;
@@ -870,6 +915,27 @@ export function ChatPage() {
         .catch(() => setProfiles([]));
     }
   }, [sessionListKind, shouldUseServerModel]);
+
+  useEffect(() => {
+    if (!shouldUseServerModel) return undefined;
+    let active = true;
+    listLongTasks()
+      .then((payload) => {
+        if (active) setLongTasks(payload.items);
+      })
+      .catch(() => undefined);
+    return () => {
+      active = false;
+    };
+  }, [shouldUseServerModel]);
+
+  useEffect(() => {
+    if (!shouldUseServerModel || !longTasks.some((task) => task.cancel_allowed)) return undefined;
+    const timer = window.setInterval(() => {
+      refreshLongTasks().catch(() => undefined);
+    }, 1500);
+    return () => window.clearInterval(timer);
+  }, [longTasks, shouldUseServerModel]);
 
   useEffect(() => {
     let active = true;
@@ -1337,6 +1403,24 @@ export function ChatPage() {
         citations: [],
         isComplete: false,
       }));
+      if (shouldUseServerModel && backgroundMode) {
+        const queued = await createLongChatTask({
+          conversationId: prepared.session_uuid,
+          messageUuid: assistantId,
+          completionToken: prepared.completion_token,
+          messages: prepared.messages,
+          temperature: activeProfile?.temperature ?? 0.3,
+          title: trimmed.slice(0, 80),
+        });
+        replaceLongTask(queued);
+        setMessages((current) => current.map((message) =>
+          message.id === assistantId
+            ? { ...message, content: '任务已在后台处理，可继续其他工作。', isComplete: true }
+            : message,
+        ));
+        setStatus('已加入后台处理');
+        return;
+      }
       if (shouldUseServerModel) {
         const abortController = new AbortController();
         activeGenerationRef.current = {
@@ -2693,6 +2777,17 @@ export function ChatPage() {
                 </button>
                 <span className="chat-mode-pill">{modeLabels[mode]}</span>
                 <span className="chat-model-pill">当前设置：{currentModelLabel}</span>
+                {shouldUseServerModel ? (
+                  <label className="chat-background-toggle">
+                    <input
+                      aria-label="后台处理"
+                      checked={backgroundMode}
+                      onChange={(event) => setBackgroundMode(event.target.checked)}
+                      type="checkbox"
+                    />
+                    <span>后台处理</span>
+                  </label>
+                ) : null}
                 <button
                   aria-label={generationActive ? '停止生成' : '发送'}
                   className={`chat-send-button${generationActive ? ' is-stop-button is-stopping-ready' : ''}`}
@@ -2847,6 +2942,46 @@ export function ChatPage() {
                 </div>
               </div>
             </div>
+          ) : null}
+          {longTasks.length ? (
+            <aside aria-label="后台任务" className="chat-long-task-tray" role="region">
+              <div className="chat-long-task-head">
+                <strong>后台任务</strong>
+                <span>{longTasks.filter((task) => task.cancel_allowed).length} 个处理中</span>
+              </div>
+              <div className="chat-long-task-list">
+                {longTasks.slice(0, 3).map((task) => (
+                  <article className="chat-long-task-item" key={task.task_id}>
+                    <div className="chat-long-task-title">
+                      <strong title={task.title}>{task.title}</strong>
+                      <span>{longTaskStatusLabels[task.status]}</span>
+                    </div>
+                    <progress aria-label={`${task.title}进度`} max={100} value={task.progress} />
+                    {task.error_message ? <p className="chat-long-task-error">{task.error_message}</p> : null}
+                    {task.draft ? <p className="chat-long-task-draft">{task.draft}</p> : null}
+                    <div className="chat-long-task-actions">
+                      {task.draft ? (
+                        <button
+                          onClick={() => void navigator.clipboard?.writeText(task.draft)}
+                          type="button"
+                        >
+                          复制草稿
+                        </button>
+                      ) : null}
+                      {task.retry_allowed ? (
+                        <button onClick={() => void retryBackgroundTask(task.task_id)} type="button">重试</button>
+                      ) : null}
+                      {task.cancel_allowed ? (
+                        <button onClick={() => void cancelBackgroundTask(task.task_id)} type="button">取消</button>
+                      ) : null}
+                      {task.status === 'completed' ? (
+                        <button onClick={() => void loadSession(task.conversation_id)} type="button">查看结果</button>
+                      ) : null}
+                    </div>
+                  </article>
+                ))}
+              </div>
+            </aside>
           ) : null}
         </div>
       </div>

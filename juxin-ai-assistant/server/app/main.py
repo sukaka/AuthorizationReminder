@@ -1,4 +1,5 @@
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import asynccontextmanager
 from datetime import datetime
 import re
 from typing import Annotated
@@ -52,6 +53,7 @@ from .local_binding import (
     issue_local_binding_token,
     verify_local_binding_token,
 )
+from .long_task_routes import dispatcher as long_task_dispatcher, router as long_task_router
 from .model_profile_routes import router as model_profile_router
 from .models import Assistant, GenerationRecord, Task, TaskField, UserFavorite
 from .models import KnowledgeBase
@@ -103,8 +105,14 @@ from .schemas import (
 from .sensitive import SensitiveDetector, derive_confirmation_key
 
 
+@asynccontextmanager
+async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+    long_task_dispatcher.recover()
+    yield
+
+
 settings = get_settings()
-app = FastAPI(title=settings.app_name, version=settings.app_version)
+app = FastAPI(title=settings.app_name, version=settings.app_version, lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.allowed_origins,
@@ -1675,6 +1683,7 @@ app.include_router(model_profile_router)
 app.include_router(skill_router)
 app.include_router(web_router)
 app.include_router(work_artifact_router)
+app.include_router(long_task_router)
 
 if settings.web_spa_enabled:
     mount_static_web(app, static_dir=settings.web_static_dir, enabled=True)

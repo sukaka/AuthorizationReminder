@@ -719,6 +719,49 @@ class ChatGenerateOut(BaseModel):
     latency_ms: int | None = Field(default=None, ge=0)
 
 
+class LongTaskChatCreateIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    conversation_id: str = Field(min_length=1, max_length=64)
+    message_uuid: str = Field(min_length=1, max_length=64)
+    completion_token: str = Field(min_length=1, max_length=256)
+    messages: list[MessageOut] = Field(min_length=1, max_length=64)
+    temperature: float = Field(default=0.3, ge=0, le=2)
+    title: str = Field(default="后台生成任务", min_length=1, max_length=255)
+
+
+class LongTaskOut(BaseModel):
+    task_id: str
+    task_type: str
+    title: str
+    conversation_id: str
+    message_uuid: str
+    status: Literal[
+        "queued",
+        "running",
+        "waiting_user",
+        "completed",
+        "failed",
+        "cancelled",
+        "retrying",
+    ]
+    stage: str
+    progress: int
+    attempt: int
+    draft: str = ""
+    error_code: str = ""
+    error_message: str = ""
+    retry_allowed: bool = False
+    cancel_allowed: bool = False
+    created_at: datetime
+    updated_at: datetime
+
+
+class LongTaskListOut(BaseModel):
+    items: list[LongTaskOut]
+    total: int
+
+
 class ServerModelStatusOut(BaseModel):
     configured: bool
     model_display_name: str = ""

@@ -266,6 +266,25 @@ export type ChatGeneratePayload = {
   latency_ms?: number | null;
 };
 
+export type LongTaskPayload = {
+  task_id: string;
+  task_type: string;
+  title: string;
+  conversation_id: string;
+  message_uuid: string;
+  status: 'queued' | 'running' | 'waiting_user' | 'completed' | 'failed' | 'cancelled' | 'retrying';
+  stage: string;
+  progress: number;
+  attempt: number;
+  draft: string;
+  error_code: string;
+  error_message: string;
+  retry_allowed: boolean;
+  cancel_allowed: boolean;
+  created_at: string;
+  updated_at: string;
+};
+
 type ChatGenerateStreamEvent =
   | { type: 'delta'; delta: string }
   | ({ type: 'complete' } & ChatGeneratePayload)
@@ -488,6 +507,52 @@ export async function prepareChat(payload: {
       }),
     }),
     'CHAT_PREPARE_FAILED',
+  );
+}
+
+export async function listLongTasks(): Promise<{ items: LongTaskPayload[]; total: number }> {
+  return readJson(
+    await apiFetch('/api/ai/long-tasks', { cache: 'no-store' }),
+    'LONG_TASKS_FAILED',
+  );
+}
+
+export async function createLongChatTask(payload: {
+  conversationId: string;
+  messageUuid: string;
+  completionToken: string;
+  messages: Array<{ role: string; content: string }>;
+  temperature: number;
+  title: string;
+}): Promise<LongTaskPayload> {
+  return readJson(
+    await apiFetch('/api/ai/long-tasks/chat-generation', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        conversation_id: payload.conversationId,
+        message_uuid: payload.messageUuid,
+        completion_token: payload.completionToken,
+        messages: payload.messages,
+        temperature: payload.temperature,
+        title: payload.title,
+      }),
+    }),
+    'LONG_TASK_CREATE_FAILED',
+  );
+}
+
+export async function cancelLongTask(taskId: string): Promise<LongTaskPayload> {
+  return readJson(
+    await apiFetch(`/api/ai/long-tasks/${encodeURIComponent(taskId)}/cancel`, { method: 'POST' }),
+    'LONG_TASK_CANCEL_FAILED',
+  );
+}
+
+export async function retryLongTask(taskId: string): Promise<LongTaskPayload> {
+  return readJson(
+    await apiFetch(`/api/ai/long-tasks/${encodeURIComponent(taskId)}/retry`, { method: 'POST' }),
+    'LONG_TASK_RETRY_FAILED',
   );
 }
 
