@@ -1112,24 +1112,32 @@ export function ChatPage() {
         ));
         setUploadStatus('');
       } else {
+        const readyForReference = isReadyPersonalReference(uploaded);
         setPersonalReferenceFiles((current) => (
-          isReadyPersonalReference(uploaded)
+          readyForReference
             ? current.filter((file) => file.file_uuid !== uploaded.file_uuid).concat(uploaded)
             : current
         ));
-        setUploadStatus(`资料已保存到我的资料：${uploaded.file_name}；需要参考时可在“参考资料”中选择“我的资料”。`);
+        if (readyForReference) {
+          setSelectedPersonalReferenceIds((current) => (
+            current.includes(uploaded.file_uuid) ? current : current.concat(uploaded.file_uuid)
+          ));
+          setMode('knowledge');
+          setReferenceScope((current) => (
+            current === 'with_session' || current === 'personal_and_session'
+              ? 'personal_and_session'
+              : 'with_personal'
+          ));
+          setUploadStatus(`资料已保存并选中：${uploaded.file_name}`);
+        } else {
+          setUploadStatus(`资料已保存到我的资料：${uploaded.file_name}；处理完成后可在“引用资料”中选择。`);
+        }
       }
     } catch (error) {
       setUploadStatus(uploadFailureMessage(error));
     } finally {
       setUploading(false);
     }
-  };
-
-  const enableOfficialKnowledgeScope = () => {
-    setMode('knowledge');
-    setReferenceScope('official_only');
-    setSelectedPersonalReferenceIds([]);
   };
 
   const loadPersonalReferenceFiles = async () => {
@@ -1154,19 +1162,6 @@ export function ChatPage() {
     if (nextOpen && referencePickerStatus === 'idle') {
       void loadPersonalReferenceFiles();
     }
-  };
-
-  const togglePersonalReferenceScope = () => {
-    setMode('knowledge');
-    if (selectedPersonalReferenceIds.length) {
-      setSelectedPersonalReferenceIds([]);
-    }
-    setReferenceScope((current) => {
-      if (current === 'with_personal') return 'official_only';
-      if (current === 'with_session') return 'personal_and_session';
-      if (current === 'personal_and_session') return 'with_session';
-      return 'with_personal';
-    });
   };
 
   const togglePersonalReferenceFile = (fileId: string) => {
@@ -1203,20 +1198,6 @@ export function ChatPage() {
   const removeEnabledReferenceFile = (file: EnabledReferenceFile) => {
     setEnabledReferenceFiles((current) => current.filter((item) => item.fileUuid !== file.fileUuid));
     setReferenceScope((current) => disableReferenceKind(current, file.sourceKind));
-  };
-
-  const toggleSessionAttachmentScope = () => {
-    if (!sessionAttachmentFiles.length) {
-      setUploadStatus('请先上传附件后再使用当前附件作为参考。');
-      return;
-    }
-    setMode('knowledge');
-    setReferenceScope((current) => {
-      if (current === 'with_session') return 'official_only';
-      if (current === 'with_personal') return 'personal_and_session';
-      if (current === 'personal_and_session') return 'with_personal';
-      return 'with_session';
-    });
   };
 
   const previewUrlCapture = async (trimmed: string, url: string) => {
@@ -2790,32 +2771,6 @@ export function ChatPage() {
                 >
                   引用资料
                 </button>
-                <button
-                  aria-pressed={mode === 'knowledge' && referenceScope === 'official_only'}
-                  className="chat-reference-chip"
-                  onClick={enableOfficialKnowledgeScope}
-                  type="button"
-                >
-                  查公司知识
-                </button>
-                <button
-                  aria-pressed={referenceScope === 'with_personal' || referenceScope === 'personal_and_session'}
-                  className="chat-reference-chip"
-                  onClick={togglePersonalReferenceScope}
-                  type="button"
-                >
-                  我的资料
-                </button>
-                <button
-                  aria-pressed={referenceScope === 'with_session' || referenceScope === 'personal_and_session'}
-                  className="chat-reference-chip"
-                  disabled={!sessionAttachmentFiles.length}
-                  onClick={toggleSessionAttachmentScope}
-                  type="button"
-                >
-                  当前附件
-                </button>
-                <span className="chat-mode-pill">{modeLabels[mode]}</span>
                 <span className="chat-model-pill">当前设置：{currentModelLabel}</span>
                 {shouldUseServerModel ? (
                   <label className="chat-background-toggle">

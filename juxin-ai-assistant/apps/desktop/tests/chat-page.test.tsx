@@ -1384,7 +1384,7 @@ it('lets users choose whether chat should reference personal materials and sessi
   ));
 });
 
-it('offers composer shortcuts for knowledge base personal materials and session attachments', async () => {
+it('keeps reference scope controls in the top bar instead of duplicating them in the composer', async () => {
   const prepareRequest = vi.fn();
   server.use(
     http.get('/api/conversations', () => HttpResponse.json({ items: [], total: 0 })),
@@ -1420,17 +1420,13 @@ it('offers composer shortcuts for knowledge base personal materials and session 
   render(<ChatPage />);
 
   const composer = await screen.findByRole('form', { name: '工作输入区' });
-  const modeSelect = screen.getByRole('combobox', { name: '助手模式' });
   const referenceSelect = screen.getByRole('combobox', { name: '参考资料' });
-  expect(within(composer).getByRole('button', { name: '查公司知识' })).toBeInTheDocument();
-  expect(within(composer).getByRole('button', { name: '我的资料' })).toBeInTheDocument();
-  expect(within(composer).getByRole('button', { name: '当前附件' })).toBeInTheDocument();
+  expect(within(composer).queryByRole('button', { name: '查公司知识' })).not.toBeInTheDocument();
+  expect(within(composer).queryByRole('button', { name: '我的资料' })).not.toBeInTheDocument();
+  expect(within(composer).queryByRole('button', { name: '当前附件' })).not.toBeInTheDocument();
+  expect(within(composer).queryByText('普通助手')).not.toBeInTheDocument();
 
-  await userEvent.click(within(composer).getByRole('button', { name: '查公司知识' }));
-  expect(modeSelect).toHaveValue('knowledge');
-  expect(referenceSelect).toHaveValue('official_only');
-
-  await userEvent.click(within(composer).getByRole('button', { name: '我的资料' }));
+  await userEvent.selectOptions(referenceSelect, 'with_personal');
   expect(referenceSelect).toHaveValue('with_personal');
 
   await userEvent.type(screen.getByLabelText('告诉我你想完成什么工作'), '参考我的资料写纪要');
@@ -1439,7 +1435,7 @@ it('offers composer shortcuts for knowledge base personal materials and session 
   expect(await screen.findByText('已参考我的资料生成纪要。')).toBeInTheDocument();
   await waitFor(() => expect(prepareRequest).toHaveBeenCalledWith(
     expect.objectContaining({
-      mode: 'knowledge',
+      mode: 'normal',
       include_personal_references: true,
       include_session_attachments: false,
     }),
@@ -2464,7 +2460,7 @@ it('shows upload purpose choices and submits a personal file for admin review', 
   appendSpy.mockRestore();
 });
 
-it('does not enable personal references automatically after saving uploaded material', async () => {
+it('selects a ready personal reference automatically after upload', async () => {
   const uploadRequest = vi.fn();
   const prepareRequest = vi.fn();
   server.use(
@@ -2533,17 +2529,18 @@ it('does not enable personal references automatically after saving uploaded mate
   await userEvent.click(screen.getByRole('button', { name: '开始上传' }));
 
   await waitFor(() => expect(uploadRequest).toHaveBeenCalled());
-  expect(await screen.findByText('资料已保存到我的资料：会议记录.txt；需要参考时可在“参考资料”中选择“我的资料”。')).toBeInTheDocument();
-  expect(screen.getByRole('combobox', { name: '助手模式' })).toHaveValue('normal');
-  expect(screen.getByRole('combobox', { name: '参考资料' })).toHaveValue('official_only');
+  expect(await screen.findByText('资料已保存并选中：会议记录.txt')).toBeInTheDocument();
+  expect(screen.getByRole('combobox', { name: '助手模式' })).toHaveValue('knowledge');
+  expect(screen.getByRole('combobox', { name: '参考资料' })).toHaveValue('with_personal');
+  expect(screen.getByRole('region', { name: '已引用资料' })).toHaveTextContent('引用：会议记录.txt');
 
   await userEvent.type(screen.getByLabelText('告诉我你想完成什么工作'), '写一份会议纪要');
   await userEvent.click(screen.getByRole('button', { name: '发送' }));
 
   expect(await screen.findByText('已生成会议纪要。')).toBeInTheDocument();
   await waitFor(() => expect(prepareRequest).toHaveBeenCalledWith(expect.objectContaining({
-    mode: 'normal',
-    include_personal_references: false,
+    mode: 'knowledge',
+    include_personal_references: true,
     include_session_attachments: false,
   })));
 });
@@ -2569,83 +2566,6 @@ it('shows upload failures inside the upload dialog', async () => {
 
   expect(await within(dialog).findByText('资料上传失败：文件超过 100MB 上传限制，请压缩或拆分后再上传。')).toBeInTheDocument();
   expect(within(dialog).getByRole('button', { name: '开始上传' })).toBeEnabled();
-});
-
-it('does not show saved personal materials as current references before sending', async () => {
-  const prepareRequest = vi.fn();
-  server.use(
-    http.get('/api/conversations', () => HttpResponse.json({ items: [], total: 0 })),
-    http.post('/api/knowledge/files/upload', async () => {
-      return HttpResponse.json({
-        file_uuid: 'file-personal-toggle',
-        file_name: '项目背景.txt',
-        file_type: 'text/plain',
-        file_size: 10,
-        visibility: 'PRIVATE',
-        status: 'READY',
-        chunk_count: 1,
-        source_type: 'user_upload',
-        usage_type: 'personal_reference',
-        review_status: 'draft',
-        rag_enabled: false,
-        reference_enabled: true,
-        rag_scope: 'personal',
-        permission_scope: 'private',
-        category: '个人素材',
-        document_type: '临时附件',
-        tags: [],
-        parse_status: 'parsed',
-        index_status: 'indexed',
-        created_at: '2026-06-26T01:00:00Z',
-      }, { status: 201 });
-    }),
-    http.post('/api/ai/chat/prepare', async ({ request }) => {
-      prepareRequest(await request.json());
-      return HttpResponse.json({
-        session_uuid: 'session-personal-toggle',
-        user_message_uuid: 'user-message-personal-toggle',
-        assistant_message_uuid: 'assistant-message-personal-toggle',
-        completion_token: 'complete-personal-toggle',
-        completed: false,
-        answer: '',
-        messages: [
-          { role: 'system', content: '你是聚信 AI 助手。' },
-          { role: 'user', content: '写一段说明' },
-        ],
-        citations: [],
-      }, { status: 201 });
-    }),
-    http.post('/api/ai/chat/messages/assistant-message-personal-toggle/complete', () => {
-      return HttpResponse.json({
-        message_uuid: 'assistant-message-personal-toggle',
-        status: 'COMPLETED',
-      });
-    }),
-  );
-  generateLocalModelMock.mockResolvedValue({
-    output: '说明已生成。',
-    latencyMs: 10,
-    usage: { output_tokens: 6 },
-  });
-
-  render(<ChatPage />);
-  await userEvent.upload(
-    await screen.findByLabelText('上传资料'),
-    new File(['项目背景内容'], '项目背景.txt', { type: 'text/plain' }),
-  );
-  await userEvent.click(await screen.findByRole('button', { name: '开始上传' }));
-
-  expect(screen.getByRole('combobox', { name: '参考资料' })).toHaveValue('official_only');
-  expect(screen.queryByRole('region', { name: '当前参考资料' })).not.toBeInTheDocument();
-
-  await userEvent.type(screen.getByLabelText('告诉我你想完成什么工作'), '写一段说明');
-  await userEvent.click(screen.getByRole('button', { name: '发送' }));
-
-  expect(await screen.findByText('说明已生成。')).toBeInTheDocument();
-  await waitFor(() => expect(prepareRequest).toHaveBeenCalledWith(expect.objectContaining({
-    include_personal_references: false,
-    include_session_attachments: false,
-  })));
 });
 
 it('manages chat sessions across active, archive, and trash lists', async () => {

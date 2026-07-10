@@ -4902,6 +4902,7 @@ textarea:focus-visible {
   position: relative;
   overflow: hidden;
   display: inline-flex;
+  flex: 0 0 auto;
   cursor: pointer;
 }
 
@@ -4914,7 +4915,6 @@ textarea:focus-visible {
 
 .chat-file-trigger span,
 .chat-reference-chip,
-.chat-mode-pill,
 .chat-model-pill {
   min-height: 32px;
   padding: 0 11px;
@@ -4946,13 +4946,6 @@ textarea:focus-visible {
   opacity: .48;
 }
 
-.chat-mode-pill {
-  max-width: 96px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  color: var(--chat-brand);
-}
-
 .chat-model-pill {
   max-width: 172px;
   overflow: hidden;
@@ -4976,6 +4969,13 @@ textarea:focus-visible {
   line-height: 1;
   cursor: pointer;
   transition: transform 140ms ease, opacity 140ms ease;
+}
+
+@media (max-width: 900px) {
+  .chat-model-pill,
+  .chat-background-toggle {
+    display: none;
+  }
 }
 
 .chat-send-button span {
@@ -5077,6 +5077,11 @@ textarea:focus-visible {
   }
 
   .chat-composer {
+    width: min(680px, 100%);
+    min-width: 0;
+  }
+
+  .chat-page:not(.has-chat-content) .chat-composer {
     width: min(680px, 100%);
     min-width: 0;
   }
