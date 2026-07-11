@@ -1,5 +1,6 @@
 import os
 import json
+from types import SimpleNamespace
 from io import BytesIO
 from datetime import UTC, datetime
 
@@ -280,9 +281,16 @@ def test_server_model_streams_and_completes_chat_message(client_for_user) -> Non
         assert outbound.headers["Authorization"] == "Bearer sk-test-server-model"
         assert outbound_json["model"] == "deepseek-chat"
         assert outbound_json["stream"] is True
+        assert outbound_json["thinking"] == {"type": "disabled"}
+        assert outbound_json["max_tokens"] == 1536
         events = [json.loads(line) for line in chunks.splitlines() if line]
-        assert events[0] == {"type": "delta", "delta": "第一段"}
-        assert events[1] == {"type": "delta", "delta": "第二段"}
+        assert events[0]["type"] == "delta"
+        assert events[0]["delta"] == "第一段"
+        assert events[1]["type"] == "delta"
+        assert events[1]["delta"] == "第二段"
+        assert all(event["conversation_id"] == body["session_uuid"] for event in events)
+        assert all(event["message_id"] == body["assistant_message_uuid"] for event in events)
+        assert all(event["request_id"] == body["assistant_message_uuid"] for event in events)
         assert events[-1]["type"] == "complete"
         assert events[-1]["answer"] == "第一段第二段"
 
@@ -1459,3 +1467,29 @@ def test_deleted_conversation_rejects_pending_message_completion(client_for_user
 
     assert completed.status_code == 409
     assert completed.json()["detail"] == "聊天会话已删除，请从回收站恢复后继续"
+def test_model_route_uses_fast_mode_for_precise_questions_and_reasoning_for_reports() -> None:
+    from app.chat_routes import _route_model_config
+    from app.server_model_client import ModelRequestConfig
+
+    config = ModelRequestConfig(
+        base_url="https://model.example/v1",
+        api_key="test",
+        model_id="deepseek",
+        display_name="DeepSeek",
+        timeout_seconds=60,
+        max_output_tokens=8192,
+        disable_thinking=True,
+    )
+    precise = _route_model_config(
+        config,
+        [SimpleNamespace(role="user", content="show cmi 是什么？")],
+    )
+    report = _route_model_config(
+        config,
+        [SimpleNamespace(role="user", content="请生成完整分析报告")],
+    )
+
+    assert precise.max_output_tokens == 1536
+    assert precise.disable_thinking is True
+    assert report.max_output_tokens == 4096
+    assert report.disable_thinking is False

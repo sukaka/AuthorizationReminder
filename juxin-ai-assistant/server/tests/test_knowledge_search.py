@@ -396,6 +396,56 @@ def test_search_balances_top_chunks_across_relevant_files(generation_db) -> None
     assert max(counts.values()) <= 4
 
 
+def test_search_uses_external_vector_candidates_without_loading_unselected_files(generation_db) -> None:
+    from app.knowledge_search import search_knowledge_chunks
+    from app.knowledge_vector_index import VectorSearchHit, VectorSearchResult
+
+    selected_file, selected_chunks = _add_file(
+        generation_db,
+        user_id="admin",
+        name="管理员手册.txt",
+        text="一、命令行操作\nshow cmi 用于查看管理口地址。",
+        visibility="PUBLIC",
+        usage_type="official_knowledge",
+        review_status="official",
+        rag_enabled=True,
+        rag_scope="company",
+        permission_scope="company",
+    )
+    _add_file(
+        generation_db,
+        user_id="admin",
+        name="无关资料.txt",
+        text="一、命令行操作\n这里也出现命令行操作字样，但不应被数据库候选加载。",
+        visibility="PUBLIC",
+        usage_type="official_knowledge",
+        review_status="official",
+        rag_enabled=True,
+        rag_scope="company",
+        permission_scope="company",
+    )
+
+    class FakeVectorIndex:
+        enabled = True
+
+        def search(self, *_args, **_kwargs):
+            return VectorSearchResult(
+                available=True,
+                hits=(VectorSearchHit(selected_chunks[0].chunk_id, 0.92),),
+            )
+
+    results = search_knowledge_chunks(
+        generation_db,
+        sso_user_id="user-1",
+        query="show cmi 命令行操作",
+        cipher=_cipher(),
+        vector_index=FakeVectorIndex(),
+    )
+
+    assert results
+    assert {result.file_uuid for result in results} == {selected_file.uuid}
+
+
 def test_search_returns_empty_when_no_chunk_matches(generation_db) -> None:
     from app.knowledge_search import search_knowledge_chunks
 
@@ -523,6 +573,53 @@ def test_hybrid_search_limits_final_context_to_available_relevant_chunks(generat
 
     assert len(results) == 12
     assert len({result.chunk_id for result in results}) == len(results)
+
+
+def test_search_uses_keyword_candidates_when_vector_search_has_no_hits(generation_db) -> None:
+    from app.knowledge_keyword_index import KeywordSearchHit, KeywordSearchResult
+    from app.knowledge_search import search_knowledge_chunks
+    from app.knowledge_vector_index import VectorSearchResult
+
+    selected_file, selected_chunks = _add_file(
+        generation_db,
+        user_id="admin",
+        name="管理员手册.txt",
+        text="命令行操作 show cmi 用于查看管理口地址。",
+        visibility="PUBLIC",
+        usage_type="official_knowledge",
+        review_status="official",
+        rag_enabled=True,
+        rag_scope="company",
+        permission_scope="company",
+    )
+
+    class EmptyVectorIndex:
+        enabled = True
+        dimensions = 128
+
+        def search(self, *_args, **_kwargs):
+            return VectorSearchResult(available=True)
+
+    class FakeKeywordIndex:
+        enabled = True
+
+        def search(self, *_args, **_kwargs):
+            return KeywordSearchResult(
+                available=True,
+                hits=(KeywordSearchHit(selected_chunks[0].chunk_id, 2.0),),
+            )
+
+    results = search_knowledge_chunks(
+        generation_db,
+        sso_user_id="user-1",
+        query="show cmi",
+        cipher=_cipher(),
+        vector_index=EmptyVectorIndex(),
+        keyword_index=FakeKeywordIndex(),
+    )
+
+    assert results
+    assert results[0].file_uuid == selected_file.uuid
 
 
 def test_hybrid_retriever_merges_vector_only_and_bm25_candidates(generation_db) -> None:

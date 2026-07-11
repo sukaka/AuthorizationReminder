@@ -36,3 +36,5 @@ juxin-ai-assistant/server/**/*.py[cod]
 juxin-ai-assistant/.superpowers/
 juxin-ai-assistant/server/catalog/prompt-stage-v1.10.json
 .tmp_*
+Qwen3-Embedding-4B-GGUF/
+https-nginx/certs/

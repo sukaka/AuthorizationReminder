@@ -1,8 +1,12 @@
 import json
+import logging
+from dataclasses import replace
+from time import perf_counter
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import StreamingResponse
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .auth import get_session, require_action
@@ -26,6 +30,7 @@ from .chat_service import (
 from .config import Settings, get_settings
 from .crypto import ContentCipher
 from .database import get_db
+from .models import ChatMessage, ChatSession
 from .schemas import (
     ChatCompleteIn,
     ChatFailIn,
@@ -96,6 +101,30 @@ def _chat_model_config_for_user(
         display_name=current_settings.server_model_display_name or current_settings.server_model_id,
         timeout_seconds=current_settings.server_model_timeout_seconds,
         max_output_tokens=current_settings.server_model_max_output_tokens,
+        disable_thinking=True,
+    )
+
+
+def _route_model_config(
+    config: ModelRequestConfig,
+    messages,
+) -> ModelRequestConfig:
+    user_text = ""
+    for message in reversed(messages):
+        if message.role == "user":
+            user_text = message.content.strip().lower()
+            break
+    long_markers = ("完整", "全部", "所有", "详细方案", "报告", "总结", "汇总", "分析")
+    if any(marker in user_text for marker in long_markers) or len(user_text) > 300:
+        routed_limit = min(config.max_output_tokens, 4096)
+        disable_thinking = False
+    else:
+        routed_limit = min(config.max_output_tokens, 1536)
+        disable_thinking = config.disable_thinking
+    return replace(
+        config,
+        max_output_tokens=routed_limit,
+        disable_thinking=disable_thinking,
     )
 
 
@@ -389,9 +418,25 @@ async def chat_message_generate_stream(
         current_settings,
     )
     user_id = str(session_payload.user.id)
-    config = _chat_model_config_for_user(db, user_id, current_settings, cipher)
+    config = _route_model_config(
+        _chat_model_config_for_user(db, user_id, current_settings, cipher),
+        body.messages,
+    )
+    conversation_id = db.scalar(
+        select(ChatSession.uuid)
+        .join(ChatMessage, ChatMessage.session_id == ChatSession.id)
+        .where(
+            ChatMessage.uuid == message_uuid,
+            ChatMessage.sso_user_id == user_id,
+            ChatSession.sso_user_id == user_id,
+        )
+    )
+    if not conversation_id:
+        raise HTTPException(status_code=404, detail="聊天消息不存在或无权访问")
 
     async def stream_events():
+        stream_started = perf_counter()
+        first_token_ms: float | None = None
         answer_parts: list[str] = []
         usage: dict = {}
         latency_ms: int | None = None
@@ -402,8 +447,16 @@ async def chat_message_generate_stream(
                 body.temperature,
             ):
                 if event.delta:
+                    if first_token_ms is None:
+                        first_token_ms = (perf_counter() - stream_started) * 1000
                     answer_parts.append(event.delta)
-                    yield _ndjson_line({"type": "delta", "delta": event.delta})
+                    yield _ndjson_line({
+                        "conversation_id": conversation_id,
+                        "message_id": message_uuid,
+                        "request_id": message_uuid,
+                        "type": "delta",
+                        "delta": event.delta,
+                    })
                 if event.usage is not None:
                     usage = event.usage
                 if event.latency_ms is not None:
@@ -428,6 +481,9 @@ async def chat_message_generate_stream(
             )
             db.commit()
             yield _ndjson_line({
+                "conversation_id": conversation_id,
+                "message_id": message.uuid,
+                "request_id": message_uuid,
                 "type": "complete",
                 "message_uuid": message.uuid,
                 "status": message.status,
@@ -441,12 +497,33 @@ async def chat_message_generate_stream(
                     for citation in message_citations(db, cipher, message)
                 ],
             })
+            logging.getLogger(__name__).info(
+                "model_generation_metrics %s",
+                json.dumps({
+                    "conversation_id": conversation_id,
+                    "message_id": message.uuid,
+                    "model_first_token_ms": round(first_token_ms or 0.0, 2),
+                    "model_total_ms": round((perf_counter() - stream_started) * 1000, 2),
+                }, separators=(",", ":")),
+            )
         except HTTPException as exc:
             db.rollback()
-            yield _ndjson_line({"type": "error", "detail": exc.detail})
+            yield _ndjson_line({
+                "conversation_id": conversation_id,
+                "message_id": message_uuid,
+                "request_id": message_uuid,
+                "type": "error",
+                "detail": exc.detail,
+            })
         except Exception:
             db.rollback()
-            yield _ndjson_line({"type": "error", "detail": "SERVER_MODEL_FAILED"})
+            yield _ndjson_line({
+                "conversation_id": conversation_id,
+                "message_id": message_uuid,
+                "request_id": message_uuid,
+                "type": "error",
+                "detail": "SERVER_MODEL_FAILED",
+            })
 
     return StreamingResponse(
         stream_events(),

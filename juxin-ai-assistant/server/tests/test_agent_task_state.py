@@ -124,5 +124,6 @@ def test_loop_runner_persists_task_state_stages_for_chat_run(
     assert [item["stage"] for item in states[0].stage_history_json] == [
         "analyzing",
         "building_context",
+        "retrieving",
         "generating",
     ]

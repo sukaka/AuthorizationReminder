@@ -445,6 +445,18 @@ export function KnowledgePage({ session }: KnowledgePageProps) {
   const selectableCategoryOptions = categoryOptions.includes(uploadCategory)
     ? categoryOptions
     : [uploadCategory, ...categoryOptions].filter(Boolean);
+  const activeUploadCategories = categoryDirectoryItems.filter((category) => category.status === 'ACTIVE');
+  const uploadCategoryItem = activeUploadCategories.find((category) => category.name === uploadCategory) || null;
+  const uploadPrimaryCategory = uploadCategoryItem?.parent_category_id
+    ? activeUploadCategories.find((category) => category.category_id === uploadCategoryItem.parent_category_id) || uploadCategoryItem
+    : uploadCategoryItem;
+  const uploadPrimaryCategoryOptions = activeUploadCategories.length
+    ? activeUploadCategories.filter((category) => category.level === 0)
+    : primaryCategoryDirectory;
+  const uploadSecondaryCategoryOptions = uploadPrimaryCategory
+    ? activeUploadCategories.filter((category) => category.parent_category_id === uploadPrimaryCategory.category_id)
+    : [];
+  const uploadSecondaryCategory = uploadCategoryItem?.parent_category_id ? uploadCategoryItem.name : '';
   const activeDocumentTypeNames = knowledgeDocumentTypes
     .filter((documentType) => documentType.status === 'ACTIVE')
     .map((documentType) => documentType.name);
@@ -2031,9 +2043,15 @@ export function KnowledgePage({ session }: KnowledgePageProps) {
             </p>
           </div>
         </div>
-        <article className="history-card">
-          <label>
-            上传资料
+        <article className="knowledge-upload-workspace">
+          <div className="knowledge-upload-step knowledge-upload-step--file">
+            <div className="knowledge-upload-step-index">1</div>
+            <div>
+              <strong>选择资料文件</strong>
+              <span>支持 PDF、Word、Excel、PPT、TXT 和 Markdown，单个文件不超过 100MB</span>
+            </div>
+          </div>
+          <label className={`knowledge-upload-dropzone${pendingUploadFile ? ' has-file' : ''}`}>
             <input
               aria-label="上传知识文件"
               accept={supportedKnowledgeAccept}
@@ -2047,6 +2065,9 @@ export function KnowledgePage({ session }: KnowledgePageProps) {
               }}
               type="file"
             />
+            <span className="knowledge-upload-dropzone-icon" aria-hidden="true">↑</span>
+            <strong>{pendingUploadFile ? '重新选择文件' : '点击选择文件'}</strong>
+            <span>{pendingUploadFile ? '也可以替换为其他资料文件' : '选择需要入库的资料，上传后系统会自动解析和建立索引'}</span>
           </label>
           {isAdmin ? (
             <div className="knowledge-base-manager">
@@ -2124,102 +2145,141 @@ export function KnowledgePage({ session }: KnowledgePageProps) {
             </div>
           ) : null}
           {pendingUploadFile ? (
-            <div className="history-list">
-              <p>已选择：{pendingUploadFile.name}</p>
-              <p role="note">{parseQualityHint(pendingUploadFile)}</p>
-              <fieldset>
+            <div className="knowledge-upload-configuration">
+              <div className="knowledge-upload-file-summary">
+                <span className="knowledge-upload-file-type">{fileExtension(pendingUploadFile.name).toUpperCase() || '文件'}</span>
+                <div>
+                  <strong>已选择：{pendingUploadFile.name}</strong>
+                  <span role="note">{parseQualityHint(pendingUploadFile)}</span>
+                </div>
+                <button aria-label={`移除 ${pendingUploadFile.name}`} onClick={() => setPendingUploadFile(null)} type="button">移除</button>
+              </div>
+              <div className="knowledge-upload-step knowledge-upload-step--metadata">
+                <div className="knowledge-upload-step-index">2</div>
+                <div>
+                  <strong>设置资料属性</strong>
+                  <span>资料库、分类和文档类型会直接影响后续检索与权限范围</span>
+                </div>
+              </div>
+              <fieldset className="knowledge-purpose-options">
                 <legend>上传用途</legend>
                 {isAdmin ? (
                   <>
-                    <label>
+                    <label className="knowledge-purpose-option">
                       <input
+                        aria-label="保存为正式资料"
                         checked={uploadPurpose === 'official_knowledge'}
                         name="knowledge-upload-purpose"
                         onChange={() => setUploadPurpose('official_knowledge')}
                         type="radio"
                       />
-                      保存为正式资料
+                      <span><strong>正式资料</strong><small>进入公司知识库，可用于正式问答和引用</small></span>
                     </label>
-                    <label>
+                    <label className="knowledge-purpose-option is-disabled">
                       <input
+                        aria-label="保存为部门资料（预留）"
                         checked={false}
+                        disabled
                         name="knowledge-upload-purpose-disabled"
-                        readOnly
                         type="radio"
                       />
-                      保存为部门资料（预留）
+                      <span><strong>部门资料</strong><small>即将支持按部门范围使用</small></span>
                     </label>
-                    <label>
+                    <label className="knowledge-purpose-option is-disabled">
                       <input
+                        aria-label="保存为项目资料（预留）"
                         checked={false}
+                        disabled
                         name="knowledge-upload-purpose-disabled"
-                        readOnly
                         type="radio"
                       />
-                      保存为项目资料（预留）
+                      <span><strong>项目资料</strong><small>即将支持按项目范围使用</small></span>
                     </label>
                   </>
                 ) : (
                   <>
-                    <label>
+                    <label className="knowledge-purpose-option">
                       <input
+                        aria-label="仅用于当前任务"
                         checked={uploadPurpose === 'session_attachment'}
                         name="knowledge-upload-purpose"
                         onChange={() => setUploadPurpose('session_attachment')}
                         type="radio"
                       />
-                      仅用于当前任务
+                      <span><strong>当前任务</strong><small>仅在本次任务中使用</small></span>
                     </label>
-                    <label>
+                    <label className="knowledge-purpose-option">
                       <input
+                        aria-label="保存到我的资料"
                         checked={uploadPurpose === 'personal_reference'}
                         name="knowledge-upload-purpose"
                         onChange={() => setUploadPurpose('personal_reference')}
                         type="radio"
                       />
-                      保存到我的资料
+                      <span><strong>我的资料</strong><small>保存为个人长期参考资料</small></span>
                     </label>
-                    <label>
+                    <label className="knowledge-purpose-option">
                       <input
+                        aria-label="提交管理员审核"
                         checked={uploadPurpose === 'submit_review'}
                         name="knowledge-upload-purpose"
                         onChange={() => setUploadPurpose('submit_review')}
                         type="radio"
                       />
-                      提交管理员审核
+                      <span><strong>提交审核</strong><small>申请转为公司正式资料</small></span>
                     </label>
                   </>
                 )}
               </fieldset>
-              <label>
-                资料分类
-                <select
-                  aria-label="资料分类"
-                  onChange={(event) => setUploadCategory(event.target.value)}
-                  value={uploadCategory}
-                >
-                  {selectableCategoryOptions.map((item) => (
-                    <option key={item} value={item}>{item}</option>
-                  ))}
-                </select>
-              </label>
-              <label>
-                文档类型
-                <select
-                  aria-label="文档类型"
-                  onChange={(event) => setUploadDocumentType(event.target.value)}
-                  value={uploadDocumentType}
-                >
-                  {uploadDocumentTypeOptions.map((item) => (
-                    <option key={item} value={item}>{item}</option>
-                  ))}
-                </select>
-              </label>
-              <div className="history-actions">
-                <button onClick={() => setPendingUploadFile(null)} type="button">
+              <div className="knowledge-upload-fields">
+                <label>
+                  <span>一级分类</span>
+                  <select
+                    aria-label="资料分类"
+                    onChange={(event) => setUploadCategory(event.target.value)}
+                    value={uploadPrimaryCategory?.name || uploadCategory}
+                  >
+                    {uploadPrimaryCategoryOptions.map((item) => (
+                      <option key={item.category_id} value={item.name}>{item.name}</option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  <span>二级分类</span>
+                  <select
+                    aria-label="二级分类"
+                    disabled={!uploadSecondaryCategoryOptions.length}
+                    onChange={(event) => setUploadCategory(event.target.value || uploadPrimaryCategory?.name || '')}
+                    value={uploadSecondaryCategory}
+                  >
+                    <option value="">{uploadSecondaryCategoryOptions.length ? '不指定二级分类' : '当前一级分类暂无子分类'}</option>
+                    {uploadSecondaryCategoryOptions.map((item) => (
+                      <option key={item.category_id} value={item.name}>{item.name}</option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  <span>文档类型</span>
+                  <select
+                    aria-label="文档类型"
+                    onChange={(event) => setUploadDocumentType(event.target.value)}
+                    value={uploadDocumentType}
+                  >
+                    {uploadDocumentTypeOptions.map((item) => (
+                      <option key={item} value={item}>{item}</option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+              <div aria-label="资料归档位置" className="knowledge-upload-category-path" role="status">
+                <span>归档位置</span>
+                <strong>{uploadPrimaryCategory?.name || uploadCategory}{uploadSecondaryCategory ? ` / ${uploadSecondaryCategory}` : ''}</strong>
+              </div>
+              <div className="knowledge-upload-actions">
+                <button className="knowledge-button" onClick={() => setPendingUploadFile(null)} type="button">
                   取消
                 </button>
-                <button onClick={() => void uploadFile()} type="button">
+                <button className="knowledge-button knowledge-button-primary" onClick={() => void uploadFile()} type="button">
                   开始上传
                 </button>
               </div>

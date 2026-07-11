@@ -522,6 +522,119 @@ it('streams server-side model output in web runtime before the request completes
   expect(await screen.findByText('第一段第二段')).toBeInTheDocument();
 });
 
+it('keeps an in-flight reply in its originating task after switching tasks', async () => {
+  Object.defineProperty(window, '__TAURI_INTERNALS__', {
+    configurable: true,
+    value: undefined,
+  });
+  const encoder = new TextEncoder();
+  let streamController: ReadableStreamDefaultController<Uint8Array> | undefined;
+  const sessions = [
+    {
+      session_uuid: 'session-a', title: '任务 A', mode: 'normal', status: 'active',
+      created_at: '2026-07-11T01:00:00Z', updated_at: '2026-07-11T01:00:00Z',
+    },
+    {
+      session_uuid: 'session-b', title: '任务 B', mode: 'normal', status: 'active',
+      created_at: '2026-07-11T01:00:00Z', updated_at: '2026-07-11T01:00:00Z',
+    },
+  ];
+  const sessionDetail = (sessionUuid: string, content: string) => ({
+    session_uuid: sessionUuid,
+    title: sessionUuid === 'session-a' ? '任务 A' : '任务 B',
+    mode: 'normal',
+    status: 'active',
+    created_at: '2026-07-11T01:00:00Z',
+    updated_at: '2026-07-11T01:00:00Z',
+    task_state: null,
+    messages: [{
+      message_uuid: `${sessionUuid}-existing`,
+      role: 'assistant',
+      content,
+      status: 'COMPLETED',
+      citations: [],
+      created_at: '2026-07-11T01:00:00Z',
+    }],
+  });
+  server.use(
+    http.get('/api/conversations', () => HttpResponse.json({ items: sessions, total: 2 })),
+    http.get('/api/ai/model-profiles', () => HttpResponse.json({ items: [], total: 0 })),
+    http.get('/api/ai/chat/sessions/session-a', () => HttpResponse.json(sessionDetail('session-a', 'A 原有内容'))),
+    http.get('/api/ai/chat/sessions/session-b', () => HttpResponse.json(sessionDetail('session-b', 'B 独立内容'))),
+    http.post('/api/ai/chat/prepare', async ({ request }) => {
+      const body = await request.json() as { question: string };
+      const isTaskB = body.question === 'B 的新问题';
+      return HttpResponse.json({
+        session_uuid: isTaskB ? 'session-b' : 'session-a',
+        user_message_uuid: isTaskB ? 'user-b-new' : 'user-a-new',
+        assistant_message_uuid: isTaskB ? 'assistant-b-new' : 'assistant-a-new',
+        completion_token: isTaskB ? 'complete-b-new' : 'complete-a-new',
+        completed: false,
+        answer: '',
+        messages: [{ role: 'user', content: body.question }],
+        citations: [],
+      }, { status: 201 });
+    }),
+    http.post('/api/ai/chat/messages/assistant-a-new/generate/stream', () => new HttpResponse(
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          streamController = controller;
+          controller.enqueue(encoder.encode(`${JSON.stringify({ type: 'delta', delta: 'A 第一段' })}\n`));
+        },
+      }),
+      { headers: { 'Content-Type': 'application/x-ndjson' } },
+    )),
+    http.post('/api/ai/chat/messages/assistant-b-new/generate/stream', () => new HttpResponse(
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(encoder.encode(`${JSON.stringify({ type: 'delta', delta: 'B 的回答' })}\n`));
+          controller.enqueue(encoder.encode(`${JSON.stringify({
+            type: 'complete',
+            message_uuid: 'assistant-b-new',
+            status: 'COMPLETED',
+            answer: 'B 的回答',
+            model_display_name: '服务端模型',
+            model_id: 'deepseek-chat',
+            usage: {},
+            latency_ms: 12,
+          })}\n`));
+          controller.close();
+        },
+      }),
+      { headers: { 'Content-Type': 'application/x-ndjson' } },
+    )),
+  );
+
+  render(<ChatPage />);
+  await userEvent.click(await screen.findByRole('button', { name: '任务 A' }));
+  expect(await screen.findByText('A 原有内容')).toBeInTheDocument();
+  await userEvent.type(screen.getByLabelText('告诉我你想完成什么工作'), 'A 的新问题');
+  await userEvent.click(screen.getByRole('button', { name: '发送' }));
+  expect(await screen.findByText('A 第一段')).toBeInTheDocument();
+
+  await userEvent.click(screen.getByRole('button', { name: '任务 B' }));
+  expect(await screen.findByText('B 独立内容')).toBeInTheDocument();
+  await userEvent.type(screen.getByLabelText('告诉我你想完成什么工作'), 'B 的新问题');
+  await userEvent.click(screen.getByRole('button', { name: '发送' }));
+  expect(await screen.findByText('B 的回答')).toBeInTheDocument();
+  streamController?.enqueue(encoder.encode(`${JSON.stringify({ type: 'delta', delta: 'A 第二段' })}\n`));
+  await new Promise((resolve) => setTimeout(resolve, 20));
+
+  expect(screen.getByText('B 独立内容')).toBeInTheDocument();
+  expect(screen.queryByText(/A 第一段|A 第二段/)).not.toBeInTheDocument();
+  streamController?.enqueue(encoder.encode(`${JSON.stringify({
+    type: 'complete',
+    message_uuid: 'assistant-a-new',
+    status: 'COMPLETED',
+    answer: 'A 第一段A 第二段',
+    model_display_name: '服务端模型',
+    model_id: 'deepseek-chat',
+    usage: {},
+    latency_ms: 20,
+  })}\n`));
+  streamController?.close();
+});
+
 it('shows the default personal model label in web runtime', async () => {
   Object.defineProperty(window, '__TAURI_INTERNALS__', {
     configurable: true,

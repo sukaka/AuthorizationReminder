@@ -1,6 +1,8 @@
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from datetime import datetime
+import asyncio
+import logging
 import re
 from typing import Annotated
 from urllib.parse import quote
@@ -28,7 +30,7 @@ from .desktop_update_public import create_desktop_update_public_router
 from .export_routes import router as export_router
 from .config import Settings, get_settings
 from .crypto import ContentCipher
-from .database import get_db
+from .database import SessionLocal, get_db
 from .desktop_bootstrap import DesktopBootstrap, build_desktop_bootstrap
 from .document_templates.base import DocumentRenderPayload
 from .document_templates.registry import get_document_template
@@ -45,7 +47,8 @@ from .history_service import (
 from .intent_router import route_intent
 from .knowledge import KnowledgeRetriever
 from .knowledge_embedding import build_embedding_service
-from .knowledge_files import create_knowledge_file_from_bytes
+from .knowledge_search import search_knowledge_chunks
+from .knowledge_files import create_knowledge_file_from_bytes, invalidate_knowledge_search
 from .knowledge_routes import router as knowledge_router
 from .learning_routes import router as learning_router
 from .local_binding import (
@@ -107,7 +110,28 @@ from .sensitive import SensitiveDetector, derive_confirmation_key
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     long_task_dispatcher.recover()
+    await asyncio.to_thread(_prewarm_knowledge_search)
     yield
+
+
+def _prewarm_knowledge_search() -> None:
+    if settings.database_url.startswith("sqlite"):
+        return
+    try:
+        with SessionLocal() as db:
+            cipher = ContentCipher(settings.content_encryption_key)
+            search_knowledge_chunks(
+                db,
+                sso_user_id="system-prewarm",
+                query="知识库检索预热",
+                cipher=cipher,
+                top_k=12,
+                embedding_service=build_embedding_service(db, settings),
+                track_usage=False,
+            )
+            db.commit()
+    except Exception:
+        logging.getLogger(__name__).exception("knowledge search prewarm failed")
 
 
 settings = get_settings()
@@ -1084,6 +1108,7 @@ async def delete_knowledge_file(
         metadata={"file_uuid": file_record.uuid},
     )
     db.commit()
+    invalidate_knowledge_search(file_uuid=file_record.uuid, remove_vector_points=True)
     return Response(status_code=204)
 
 

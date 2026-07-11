@@ -642,6 +642,96 @@ def _summary_from_drafts(drafts: list[ChunkDraft]) -> str:
     return " ".join(parts)[:500]
 
 
+def _refresh_official_knowledge_index(
+    db: Session,
+    *,
+    file_record: KnowledgeFile,
+    chunks: list[KnowledgeChunk],
+    embedding_service: EmbeddingService | None,
+    replace_existing: bool = False,
+) -> None:
+    from .config import get_settings
+    from .knowledge_cache import RedisKnowledgeCache
+    from .knowledge_keyword_index import TantivyKnowledgeIndex
+    from .knowledge_search import _query_terms, clear_knowledge_search_caches
+    from .knowledge_vector_index import QdrantKnowledgeIndex
+
+    clear_knowledge_search_caches()
+    settings = get_settings()
+    RedisKnowledgeCache.from_settings(settings).bump_knowledge_version()
+    is_official = (
+        file_record.usage_type == "official_knowledge"
+        and file_record.rag_enabled
+        and file_record.review_status in {"approved", "official"}
+        and file_record.rag_scope == "company"
+        and file_record.permission_scope == "company"
+    )
+    keyword_index = TantivyKnowledgeIndex.from_settings(settings)
+    if not is_official:
+        keyword_index.delete_file(file_record.uuid)
+        return
+    keyword_rows: list[tuple[str, str]] = []
+    cipher = ContentCipher(settings.content_encryption_key)
+    for chunk in chunks:
+        payload = cipher.decrypt_json(
+            EncryptedPayload(
+                ciphertext=chunk.chunk_text_ciphertext,
+                nonce=chunk.chunk_text_nonce,
+            ),
+            chunk.chunk_id.encode(),
+        )
+        haystack = "\n".join([
+            file_record.file_name,
+            chunk.section_title,
+            str(payload.get("text", "")),
+        ])
+        keyword_rows.append((chunk.chunk_id, " ".join(_query_terms(haystack))))
+    keyword_index.replace_file(file_record.uuid, keyword_rows)
+    service = embedding_service or EmbeddingService()
+    index = QdrantKnowledgeIndex.from_settings(
+        settings,
+        dimensions=getattr(service, "dimensions", 0),
+    )
+    if not index.enabled:
+        return
+    try:
+        if replace_existing:
+            index.delete_file(file_record.uuid)
+        index.upsert_rows(
+            [(chunk, file_record) for chunk in chunks],
+            embedding_service=service,
+        )
+    except Exception:
+        # The persisted MySQL vectors remain the authoritative fallback.
+        return
+
+
+def invalidate_knowledge_search(
+    *,
+    file_uuid: str = "",
+    remove_vector_points: bool = False,
+) -> None:
+    """Invalidate cross-worker retrieval caches after knowledge visibility changes."""
+    from .config import get_settings
+    from .knowledge_cache import RedisKnowledgeCache
+    from .knowledge_keyword_index import TantivyKnowledgeIndex
+    from .knowledge_search import clear_knowledge_search_caches
+    from .knowledge_vector_index import QdrantKnowledgeIndex
+
+    clear_knowledge_search_caches()
+    settings = get_settings()
+    RedisKnowledgeCache.from_settings(settings).bump_knowledge_version()
+    if not remove_vector_points or not file_uuid:
+        return
+    TantivyKnowledgeIndex.from_settings(settings).delete_file(file_uuid)
+    index = QdrantKnowledgeIndex.from_settings(settings, dimensions=0)
+    if not index.enabled:
+        return
+    try:
+        index.delete_file(file_uuid)
+    except Exception:
+        # MySQL status and permission checks still prevent stale points from leaking.
+        return
 def create_knowledge_file_from_bytes(
     db: Session,
     *,
@@ -775,6 +865,12 @@ def create_knowledge_file_from_bytes(
         db.add(chunk)
         chunk_records.append(chunk)
     db.flush()
+    _refresh_official_knowledge_index(
+        db,
+        file_record=file_record,
+        chunks=chunk_records,
+        embedding_service=embedding_service,
+    )
     return file_record, chunk_records
 
 
@@ -883,4 +979,11 @@ def reparse_knowledge_file_from_existing_chunks(
     file_record.index_status = "indexed"
     file_record.error_code = ""
     db.flush()
+    _refresh_official_knowledge_index(
+        db,
+        file_record=file_record,
+        chunks=rebuilt_chunks,
+        embedding_service=embedding_service,
+        replace_existing=True,
+    )
     return rebuilt_chunks

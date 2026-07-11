@@ -11,6 +11,7 @@ from .embedding_config import (
     FIXED_EMBEDDING_PROVIDER,
 )
 from .knowledge_search import EmbeddingService
+from .knowledge_cache import RedisKnowledgeCache
 
 
 @dataclass(frozen=True)
@@ -47,9 +48,15 @@ def _embeddings_url(base_url: str) -> str:
 
 
 class OpenAICompatibleEmbeddingService(EmbeddingService):
-    def __init__(self, config: EmbeddingModelConfig):
+    def __init__(
+        self,
+        config: EmbeddingModelConfig,
+        *,
+        knowledge_cache: RedisKnowledgeCache | None = None,
+    ):
         super().__init__(dimensions=config.dimensions or 1024)
         self.config = config
+        self.knowledge_cache = knowledge_cache
         self._local_fallback = EmbeddingService()
         self._local_fallback_vectors: set[tuple[float, ...]] = set()
 
@@ -78,6 +85,26 @@ class OpenAICompatibleEmbeddingService(EmbeddingService):
             vector = self._local_fallback.embed(text)
             self._local_fallback_vectors.add(tuple(vector))
             return vector
+
+    def embed_query(self, text: str) -> list[float]:
+        if self.knowledge_cache is not None:
+            cached = self.knowledge_cache.get_query_embedding(
+                text,
+                model_id=self.config.model_id,
+                dimensions=self.config.dimensions,
+            )
+            if cached is not None:
+                return cached
+        vector = self.embed(text)
+        if self.knowledge_cache is not None:
+            is_fallback = len(vector) != self.config.dimensions
+            self.knowledge_cache.set_query_embedding(
+                text,
+                vector,
+                model_id=(f"{self.config.model_id}:fallback" if is_fallback else self.config.model_id),
+                dimensions=len(vector),
+            )
+        return vector
 
     def to_metadata(self, vector: list[float]) -> dict:
         if tuple(vector) in self._local_fallback_vectors:
@@ -116,4 +143,7 @@ def build_embedding_service(db: Session, settings: Settings) -> EmbeddingService
     config = load_embedding_model_config(db, settings)
     if config is None:
         return EmbeddingService()
-    return OpenAICompatibleEmbeddingService(config)
+    return OpenAICompatibleEmbeddingService(
+        config,
+        knowledge_cache=RedisKnowledgeCache.from_settings(settings),
+    )

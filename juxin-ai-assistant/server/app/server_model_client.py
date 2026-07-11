@@ -33,6 +33,7 @@ class ModelRequestConfig:
     display_name: str
     timeout_seconds: int
     max_output_tokens: int
+    disable_thinking: bool = False
 
 
 def is_server_model_configured(settings: Settings) -> bool:
@@ -62,6 +63,7 @@ async def generate_with_server_model(
             display_name=settings.server_model_display_name or settings.server_model_id,
             timeout_seconds=settings.server_model_timeout_seconds,
             max_output_tokens=settings.server_model_max_output_tokens,
+            disable_thinking=True,
         ),
         messages,
         temperature,
@@ -87,6 +89,7 @@ async def generate_with_model_config(
                     "messages": messages,
                     "temperature": temperature,
                     "max_tokens": config.max_output_tokens,
+                    **({"thinking": {"type": "disabled"}} if config.disable_thinking else {}),
                 },
             )
             response.raise_for_status()
@@ -137,6 +140,7 @@ async def stream_with_model_config(
                     "temperature": temperature,
                     "max_tokens": config.max_output_tokens,
                     "stream": True,
+                    **({"thinking": {"type": "disabled"}} if config.disable_thinking else {}),
                 },
             ) as response:
                 response.raise_for_status()

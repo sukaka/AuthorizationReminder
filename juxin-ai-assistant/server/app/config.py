@@ -38,6 +38,18 @@ class Settings(BaseSettings):
     server_model_max_output_tokens: int = Field(default=8192, ge=1, le=200000)
     embedding_model_api_key: str = ""
     embedding_model_timeout_seconds: int = Field(default=30, ge=3, le=300)
+    qdrant_enabled: bool = False
+    qdrant_url: str = "http://qdrant:6333"
+    qdrant_api_key: str = ""
+    qdrant_collection: str = "juxin_official_knowledge"
+    qdrant_timeout_seconds: float = Field(default=3.0, ge=0.2, le=30.0)
+    knowledge_redis_enabled: bool = False
+    knowledge_redis_url: str = "redis://ai-assistant-redis:6379/0"
+    knowledge_cache_prefix: str = "juxin:ai:knowledge"
+    query_embedding_cache_ttl_seconds: int = Field(default=86400, ge=60, le=604800)
+    vector_result_cache_ttl_seconds: int = Field(default=1800, ge=30, le=86400)
+    knowledge_keyword_index_enabled: bool = False
+    knowledge_keyword_index_dir: str = "/data/ai-assistant/keyword-index/current"
 
     # Desktop update publishing
     desktop_update_storage_dir: str = "/var/lib/juxin-ai-assistant/desktop-updates"

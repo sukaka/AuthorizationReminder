@@ -2047,6 +2047,64 @@ it('shows administrator knowledge areas as tabs', async () => {
   expect(screen.getByRole('heading', { name: '资料上传入口' })).toBeInTheDocument();
 });
 
+it('shows primary and secondary categories separately in the upload form', async () => {
+  session('admin');
+  server.use(
+    http.get('/api/knowledge/categories', () => HttpResponse.json({
+      items: [{
+        category_id: 'category-product',
+        name: '产品资料',
+        parent_category_id: '',
+        parent_name: '',
+        scope: 'company',
+        sort_order: 10,
+        status: 'ACTIVE',
+        file_count: 0,
+        created_at: '2026-07-11T08:00:00Z',
+        updated_at: '2026-07-11T08:00:00Z',
+      }, {
+        category_id: 'category-cloud',
+        name: '云管平台',
+        parent_category_id: 'category-product',
+        parent_name: '产品资料',
+        scope: 'company',
+        sort_order: 20,
+        status: 'ACTIVE',
+        file_count: 0,
+        created_at: '2026-07-11T08:00:00Z',
+        updated_at: '2026-07-11T08:00:00Z',
+      }, {
+        category_id: 'category-wdsp',
+        name: 'WDSP',
+        parent_category_id: 'category-product',
+        parent_name: '产品资料',
+        scope: 'company',
+        sort_order: 30,
+        status: 'ACTIVE',
+        file_count: 0,
+        created_at: '2026-07-11T08:00:00Z',
+        updated_at: '2026-07-11T08:00:00Z',
+      }],
+      total: 3,
+    })),
+  );
+  render(<App />);
+
+  const mainNav = await screen.findByRole('navigation', { name: '主导航' });
+  await userEvent.click(within(mainNav).getByRole('button', { name: '我的资料' }));
+  await userEvent.click(screen.getByRole('tab', { name: '上传资料' }));
+  await userEvent.upload(
+    await screen.findByLabelText('上传知识文件'),
+    new File(['产品资料'], '产品说明.txt', { type: 'text/plain' }),
+  );
+
+  expect(screen.getByLabelText('资料分类')).toHaveValue('产品资料');
+  expect(screen.getByLabelText('二级分类')).toHaveTextContent('云管平台');
+  expect(screen.getByLabelText('二级分类')).toHaveTextContent('WDSP');
+  await userEvent.selectOptions(screen.getByLabelText('二级分类'), '云管平台');
+  expect(screen.getByRole('status', { name: '资料归档位置' })).toHaveTextContent('产品资料 / 云管平台');
+});
+
 it('links user and prompt management to existing centers', () => {
   render(<AdminLinksPage urls={{
     adminCenter: 'http://localhost:5180/admin-center',
