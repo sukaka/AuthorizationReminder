@@ -17,10 +17,14 @@ const {
   parseCommitScope,
   classifyChangedPaths,
   resolveAffectedSystems,
+  readSystemVersion,
+  syncSystemVersion,
+  planSystemBumps,
 } = require('../scripts/versioning/automation');
 const { runPostCommit } = require('../scripts/versioning/post-commit');
 const {
   SYSTEMS,
+  SYSTEM_BY_ID,
   validateRegistryEntries,
   validateSystemRegistry,
 } = require('../scripts/versioning/systems');
@@ -60,6 +64,38 @@ const makeSystemRegistryFixture = ({ missingVersionFile = '' } = {}) => {
   }
   return rootDir;
 };
+
+const makeIndependentVersionFixture = () => {
+  const rootDir = makeSystemRegistryFixture();
+
+  for (const system of SYSTEMS) {
+    for (const packageDir of system.packageDirs) {
+      writeJson(path.join(rootDir, packageDir, 'package-lock.json'), makePackageLock('1.0.0'));
+    }
+    for (const textFile of system.textFiles) {
+      writeText(path.join(rootDir, textFile), 'const RELEASE_VERSION = "1.0.0";\n');
+    }
+    for (const jsonFile of system.jsonFiles || []) {
+      writeJson(path.join(rootDir, jsonFile), { name: system.id, version: '1.0.0' });
+    }
+    for (const tomlFile of system.tomlFiles || []) {
+      writeText(
+        path.join(rootDir, tomlFile),
+        '[package]\nname = "fixture"\nversion = "1.0.0"\n[dependencies]\nexample = { version = "1.0.0" }\n'
+      );
+    }
+  }
+
+  return rootDir;
+};
+
+const readPackageVersion = (rootDir, packageDir) => JSON.parse(
+  fs.readFileSync(path.join(rootDir, packageDir, 'package.json'), 'utf8')
+).version;
+
+const readPackageLockVersion = (rootDir, packageDir) => JSON.parse(
+  fs.readFileSync(path.join(rootDir, packageDir, 'package-lock.json'), 'utf8')
+).packages[''].version;
 
 test('system registry defines every approved independent system', () => {
   assert.deepEqual(
@@ -328,6 +364,69 @@ test('bumpVersion increments the expected semver segment', () => {
   assert.equal(bumpVersion('4.1.4', 'patch'), '4.1.5');
   assert.equal(bumpVersion('4.1.4', 'minor'), '4.2.0');
   assert.equal(bumpVersion('4.1.4', 'major'), '5.0.0');
+});
+
+test('syncSystemVersion updates every package in one system only', () => {
+  const rootDir = makeIndependentVersionFixture();
+  const changed = syncSystemVersion({
+    rootDir,
+    system: SYSTEM_BY_ID.get('inventory'),
+    currentVersion: '1.0.0',
+    nextVersion: '1.1.0',
+  });
+
+  assert.equal(readSystemVersion(rootDir, SYSTEM_BY_ID.get('inventory')), '1.1.0');
+  assert.equal(readPackageVersion(rootDir, 'inventory-system/frontend'), '1.1.0');
+  assert.equal(readPackageVersion(rootDir, 'inventory-system/backend'), '1.1.0');
+  assert.equal(readPackageVersion(rootDir, 'inventory-system/shipping-gateway'), '1.1.0');
+  assert.equal(readPackageLockVersion(rootDir, 'inventory-system/frontend'), '1.1.0');
+  assert.equal(readPackageLockVersion(rootDir, 'inventory-system/backend'), '1.1.0');
+  assert.equal(readPackageLockVersion(rootDir, 'inventory-system/shipping-gateway'), '1.1.0');
+  assert.equal(readPackageVersion(rootDir, 'auth'), '1.0.0');
+  assert.ok(changed.includes('inventory-system/VERSION'));
+  assert.ok(changed.includes('inventory-system/frontend/package-lock.json'));
+});
+
+test('syncSystemVersion structurally updates AI assistant Tauri JSON and TOML', () => {
+  const rootDir = makeIndependentVersionFixture();
+  const changed = syncSystemVersion({
+    rootDir,
+    system: SYSTEM_BY_ID.get('ai-assistant'),
+    currentVersion: '1.0.0',
+    nextVersion: '1.0.1',
+  });
+  const tauriPath = 'juxin-ai-assistant/apps/desktop/src-tauri/tauri.conf.json';
+  const cargoPath = 'juxin-ai-assistant/apps/desktop/src-tauri/Cargo.toml';
+
+  assert.equal(readPackageVersion(rootDir, 'juxin-ai-assistant/apps/desktop'), '1.0.1');
+  assert.equal(readPackageLockVersion(rootDir, 'juxin-ai-assistant/apps/desktop'), '1.0.1');
+  assert.equal(JSON.parse(fs.readFileSync(path.join(rootDir, tauriPath), 'utf8')).version, '1.0.1');
+  assert.match(
+    fs.readFileSync(path.join(rootDir, cargoPath), 'utf8'),
+    /^version = "1\.0\.1"\n\[dependencies\]\nexample = \{ version = "1\.0\.0" \}/m
+  );
+  assert.ok(changed.includes(tauriPath));
+  assert.ok(changed.includes(cargoPath));
+});
+
+test('planSystemBumps reads declared system versions in stable order', () => {
+  const rootDir = makeIndependentVersionFixture();
+  writeText(path.join(rootDir, 'auth/VERSION'), '2.4.9\n');
+  writeText(path.join(rootDir, 'inventory-system/VERSION'), '3.0.0\n');
+
+  const plan = planSystemBumps({
+    rootDir,
+    systemIds: ['inventory', 'auth'],
+    bumpType: 'minor',
+  });
+
+  assert.deepEqual(
+    plan.map(({ system, currentVersion, nextVersion }) => ({ id: system.id, currentVersion, nextVersion })),
+    [
+      { id: 'auth', currentVersion: '2.4.9', nextVersion: '2.5.0' },
+      { id: 'inventory', currentVersion: '3.0.0', nextVersion: '3.1.0' },
+    ]
+  );
 });
 
 test('syncRepositoryVersion updates live version files and bootstrap references', () => {

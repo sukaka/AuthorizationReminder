@@ -219,6 +219,102 @@ const updateTextVersionFile = ({ filePath, currentVersion, nextVersion }) => {
   return true;
 };
 
+const updateTomlPackageVersionFile = ({ filePath, nextVersion }) => {
+  if (!fs.existsSync(filePath)) return false;
+  const original = readText(filePath);
+  const updated = original.replace(
+    /^(version\s*=\s*)"\d+\.\d+\.\d+"/m,
+    `$1"${nextVersion}"`
+  );
+  if (updated === original) return false;
+  writeText(filePath, updated);
+  return true;
+};
+
+const readSystemVersion = (rootDir, system) => {
+  const value = readText(path.join(rootDir, system.versionFile)).trim();
+  if (!VERSION_RE.test(value)) {
+    throw new Error(`${system.id} 版本号非法：${value || '<empty>'}`);
+  }
+  return value;
+};
+
+const syncSystemVersion = ({ rootDir, system, currentVersion, nextVersion }) => {
+  const resolvedRoot = path.resolve(rootDir);
+  if (!system || !system.id) {
+    throw new Error('系统声明非法');
+  }
+  if (!VERSION_RE.test(String(currentVersion || '').trim())) {
+    throw new Error(`当前版本号非法：${currentVersion}`);
+  }
+  if (!VERSION_RE.test(String(nextVersion || '').trim())) {
+    throw new Error(`目标版本号非法：${nextVersion}`);
+  }
+
+  const changedFiles = new Set();
+  const updateDeclaredFile = (relativePath, update) => {
+    if (update({ filePath: path.join(resolvedRoot, relativePath) })) {
+      changedFiles.add(relativePath);
+    }
+  };
+
+  updateDeclaredFile(system.versionFile, (options) => updateTextVersionFile({
+    ...options,
+    currentVersion,
+    nextVersion,
+  }));
+
+  for (const packageDir of system.packageDirs) {
+    updateDeclaredFile(path.posix.join(packageDir, 'package.json'), (options) => updateJsonVersionFile({
+      ...options,
+      currentVersion,
+      nextVersion,
+      force: true,
+    }));
+    updateDeclaredFile(path.posix.join(packageDir, 'package-lock.json'), (options) => updateJsonVersionFile({
+      ...options,
+      currentVersion,
+      nextVersion,
+      force: true,
+    }));
+  }
+
+  for (const relativePath of system.jsonFiles || []) {
+    updateDeclaredFile(relativePath, (options) => updateJsonVersionFile({
+      ...options,
+      currentVersion,
+      nextVersion,
+      force: true,
+    }));
+  }
+  for (const relativePath of system.tomlFiles || []) {
+    updateDeclaredFile(relativePath, (options) => updateTomlPackageVersionFile({
+      ...options,
+      nextVersion,
+    }));
+  }
+  for (const relativePath of system.textFiles || []) {
+    updateDeclaredFile(relativePath, (options) => updateTextVersionFile({
+      ...options,
+      currentVersion,
+      nextVersion,
+    }));
+  }
+
+  return Array.from(changedFiles).sort();
+};
+
+const planSystemBumps = ({ rootDir, systemIds, bumpType }) => [...systemIds]
+  .sort()
+  .map((systemId) => {
+    const system = SYSTEM_BY_ID.get(systemId);
+    if (!system) {
+      throw new Error(`未知系统：${systemId}`);
+    }
+    const currentVersion = readSystemVersion(rootDir, system);
+    return { system, currentVersion, nextVersion: bumpVersion(currentVersion, bumpType) };
+  });
+
 const readRootVersion = (rootDir) => {
   const rootPackagePath = path.join(rootDir, 'package.json');
   const rootPackage = JSON.parse(readText(rootPackagePath));
@@ -490,11 +586,14 @@ module.exports = {
   normalizeCommitMessage,
   parseCommitScope,
   parseCommitBumpType,
+  planSystemBumps,
   pushCurrentBranch,
   classifyChangedPaths,
+  readSystemVersion,
   resolveAffectedSystems,
   stripVersionPrefix,
   switchToVersionBranch,
+  syncSystemVersion,
   syncRepositoryVersion,
   validateCommitMessage,
 };
