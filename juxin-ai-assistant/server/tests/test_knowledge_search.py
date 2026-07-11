@@ -289,7 +289,25 @@ def test_personal_reference_search_updates_document_usage_stats(generation_db) -
     assert session_file.last_used_at is not None
 
 
-def test_search_clamps_top_k_between_five_and_ten(generation_db) -> None:
+def test_retrieval_limit_follows_query_intent() -> None:
+    from app.knowledge_search import resolve_retrieval_limit
+
+    assert resolve_retrieval_limit("show cmi 是做什么的", 8) == 12
+    assert resolve_retrieval_limit("汇总管理员手册中的命令", 8) == 18
+    assert resolve_retrieval_limit("完整列出所有命令", 8) == 24
+    assert resolve_retrieval_limit("show cmi 是做什么的", 20) == 20
+    assert resolve_retrieval_limit("show cmi 是做什么的", 99) == 24
+
+
+def test_retrieval_file_cap_scales_with_context_limit() -> None:
+    from app.knowledge_search import max_chunks_per_file
+
+    assert max_chunks_per_file(12) == 4
+    assert max_chunks_per_file(18) == 6
+    assert max_chunks_per_file(24) == 8
+
+
+def test_search_uses_dynamic_limit_without_filling_irrelevant_chunks(generation_db) -> None:
     from app.knowledge_search import search_knowledge_chunks
 
     for index in range(7):
@@ -321,7 +339,7 @@ def test_search_clamps_top_k_between_five_and_ten(generation_db) -> None:
         top_k=99,
     )
 
-    assert len(low_top_k_results) == 5
+    assert len(low_top_k_results) == 7
     assert len(high_top_k_results) == 7
 
 
@@ -373,9 +391,9 @@ def test_search_balances_top_chunks_across_relevant_files(generation_db) -> None
     )
 
     counts = Counter(result.file_uuid for result in results)
-    assert 4 <= len(results) <= 8
+    assert 4 <= len(results) <= 12
     assert len(counts) >= 3
-    assert max(counts.values()) <= 3
+    assert max(counts.values()) <= 4
 
 
 def test_search_returns_empty_when_no_chunk_matches(generation_db) -> None:
@@ -478,7 +496,7 @@ def test_hybrid_search_returns_structured_sheet_metadata_for_product_terms(gener
     assert results[0].score > 0
 
 
-def test_hybrid_search_limits_final_context_to_top_eight(generation_db) -> None:
+def test_hybrid_search_limits_final_context_to_available_relevant_chunks(generation_db) -> None:
     from app.knowledge_search import search_knowledge_chunks
 
     for index in range(12):
@@ -503,7 +521,7 @@ def test_hybrid_search_limits_final_context_to_top_eight(generation_db) -> None:
         top_k=30,
     )
 
-    assert len(results) == 8
+    assert len(results) == 12
     assert len({result.chunk_id for result in results}) == len(results)
 
 

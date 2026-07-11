@@ -15,10 +15,20 @@ EMBEDDING_PROVIDER = "local-hash"
 EMBEDDING_VERSION = "v1"
 DEFAULT_EMBEDDING_DIMENSIONS = 128
 VECTOR_CANDIDATE_THRESHOLD = 0.60
-HYBRID_CANDIDATE_LIMIT = 30
-MAX_CHUNKS_PER_FILE = 3
+MIN_HYBRID_CANDIDATE_LIMIT = 30
+PRECISE_RETRIEVAL_LIMIT = 12
+SUMMARY_RETRIEVAL_LIMIT = 18
+EXHAUSTIVE_RETRIEVAL_LIMIT = 24
 MIN_FILE_COVERAGE = 3
 MIN_LEXICAL_MATCH_TERMS = 2
+
+EXHAUSTIVE_QUERY_MARKERS = (
+    "全部", "完整", "所有", "全量", "逐项", "逐条", "一览", "不遗漏",
+)
+SUMMARY_QUERY_MARKERS = (
+    "汇总", "总结", "概览", "综述", "主要内容", "包含什么", "有哪些",
+    "列出", "整理", "清单", "归纳",
+)
 
 
 @dataclass(frozen=True)
@@ -37,10 +47,26 @@ class RetrievedKnowledgeChunk:
     chunk_type: str = "text"
 
 
-def _clamp_top_k(top_k: int | None) -> int:
-    if top_k is None:
-        return 8
-    return max(5, min(int(top_k), 8))
+def resolve_retrieval_limit(query: str, top_k: int | None = None) -> int:
+    """Resolve the final context size from query intent and caller preference."""
+    normalized = "".join(query.lower().split())
+    if any(marker in normalized for marker in EXHAUSTIVE_QUERY_MARKERS):
+        intent_limit = EXHAUSTIVE_RETRIEVAL_LIMIT
+    elif any(marker in normalized for marker in SUMMARY_QUERY_MARKERS):
+        intent_limit = SUMMARY_RETRIEVAL_LIMIT
+    else:
+        intent_limit = PRECISE_RETRIEVAL_LIMIT
+
+    requested_limit = max(1, int(top_k)) if top_k is not None else 0
+    return min(max(intent_limit, requested_limit), EXHAUSTIVE_RETRIEVAL_LIMIT)
+
+
+def max_chunks_per_file(limit: int) -> int:
+    if limit <= PRECISE_RETRIEVAL_LIMIT:
+        return 4
+    if limit <= 20:
+        return 6
+    return 8
 
 
 def _query_terms(query: str) -> list[str]:
@@ -203,7 +229,7 @@ class VectorStoreService:
         query_vector: list[float],
         documents: list[_SearchDocument],
         *,
-        top_k: int = HYBRID_CANDIDATE_LIMIT,
+        top_k: int = MIN_HYBRID_CANDIDATE_LIMIT,
     ) -> list[tuple[int, float]]:
         scored = [
             (index, self.score(query_vector, document.metadata))
@@ -254,7 +280,7 @@ class BM25Retriever:
         query: str,
         documents: list[str],
         *,
-        top_k: int = HYBRID_CANDIDATE_LIMIT,
+        top_k: int = MIN_HYBRID_CANDIDATE_LIMIT,
     ) -> list[tuple[int, float]]:
         scored = [
             (index, score)
@@ -288,7 +314,7 @@ class RerankService:
             + hybrid_bonus
         )
 
-    def rank(self, candidates: list[_HybridCandidate], *, top_k: int | None) -> list[_HybridCandidate]:
+    def rank(self, candidates: list[_HybridCandidate], *, limit: int) -> list[_HybridCandidate]:
         ranked = sorted(
             candidates,
             key=lambda item: (
@@ -301,9 +327,10 @@ class RerankService:
             ),
             reverse=True,
         )
-        limit = _clamp_top_k(top_k)
         if not ranked:
             return []
+
+        per_file_limit = max_chunks_per_file(limit)
 
         selected: list[_HybridCandidate] = []
         selected_ids: set[int] = set()
@@ -333,7 +360,7 @@ class RerankService:
             if id(candidate) in selected_ids:
                 continue
             file_uuid = candidate.document.file_record.uuid
-            if file_counts.get(file_uuid, 0) >= MAX_CHUNKS_PER_FILE:
+            if file_counts.get(file_uuid, 0) >= per_file_limit:
                 continue
             selected.append(candidate)
             selected_ids.add(id(candidate))
@@ -474,8 +501,10 @@ class HybridRetriever:
         if not documents:
             return []
 
+        result_limit = resolve_retrieval_limit(query, top_k)
+        candidate_limit = max(MIN_HYBRID_CANDIDATE_LIMIT, result_limit * 3)
         query_vector = self.embedding_service.embed(query)
-        vector_scores = dict(self.vector_store.rank(query_vector, documents, top_k=HYBRID_CANDIDATE_LIMIT))
+        vector_scores = dict(self.vector_store.rank(query_vector, documents, top_k=candidate_limit))
         bm25_scores_all = self.bm25_retriever.score_documents(query, [document.haystack for document in documents])
         bm25_scores = dict(
             sorted(
@@ -486,7 +515,7 @@ class HybridRetriever:
                 ],
                 key=lambda item: item[1],
                 reverse=True,
-            )[:HYBRID_CANDIDATE_LIMIT]
+            )[:candidate_limit]
         )
         keyword_scores = {
             index: self.keyword_service.score(document.haystack, terms)
@@ -501,7 +530,7 @@ class HybridRetriever:
                 ],
                 key=lambda item: item[1],
                 reverse=True,
-            )[:HYBRID_CANDIDATE_LIMIT]
+            )[:candidate_limit]
         )
 
         candidate_indices = set(vector_scores) | set(bm25_scores) | set(keyword_top)
@@ -533,7 +562,7 @@ class HybridRetriever:
                 )
             )
 
-        ranked = self.rerank_service.rank(candidates, top_k=top_k)
+        ranked = self.rerank_service.rank(candidates, limit=result_limit)
         return [
             _retrieved_from_row(
                 chunk=candidate.document.chunk,
