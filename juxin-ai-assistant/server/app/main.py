@@ -80,7 +80,6 @@ from .schemas import (
     HistoryDetailOut,
     HistoryItemOut,
     HistoryListOut,
-    HomeOut,
     IntentCandidateOut,
     IntentSkillCandidateOut,
     IntentRouteIn,
@@ -680,79 +679,6 @@ async def remove_favorite(
         )
         db.commit()
     return Response(status_code=204)
-
-
-@app.get("/api/ai/home", response_model=HomeOut)
-def home(
-    session_payload: Annotated[SessionPayload, Depends(get_session)],
-    db: Annotated[Session, Depends(get_db)],
-) -> HomeOut:
-    user_id = str(session_payload.user.id)
-    favorite_rows = db.execute(
-        select(Task, Assistant)
-        .join(UserFavorite, UserFavorite.task_id == Task.id)
-        .join(Assistant, Assistant.id == Task.assistant_id)
-        .where(
-            UserFavorite.sso_user_id == user_id,
-            Task.status == "ACTIVE",
-            Assistant.status == "ACTIVE",
-        )
-        .order_by(UserFavorite.created_at.desc())
-        .limit(50)
-    ).all()
-    latest_by_task = (
-        select(
-            GenerationRecord.task_id.label("task_id"),
-            func.max(GenerationRecord.created_at).label("last_used_at"),
-        )
-        .where(
-            GenerationRecord.sso_user_id == user_id,
-            GenerationRecord.status != "DELETED",
-        )
-        .group_by(GenerationRecord.task_id)
-        .subquery()
-    )
-    recent_task_rows = db.execute(
-        select(Task, Assistant, latest_by_task.c.last_used_at)
-        .join(latest_by_task, latest_by_task.c.task_id == Task.id)
-        .join(Assistant, Assistant.id == Task.assistant_id)
-        .where(Task.status == "ACTIVE", Assistant.status == "ACTIVE")
-        .order_by(latest_by_task.c.last_used_at.desc())
-        .limit(8)
-    ).all()
-    recent_generation_rows = db.execute(
-        select(GenerationRecord, Task, Assistant)
-        .join(Task, Task.id == GenerationRecord.task_id)
-        .join(Assistant, Assistant.id == Task.assistant_id)
-        .where(
-            GenerationRecord.sso_user_id == user_id,
-            GenerationRecord.status != "DELETED",
-        )
-        .order_by(
-            GenerationRecord.created_at.desc(),
-            GenerationRecord.id.desc(),
-        )
-        .limit(8)
-    ).all()
-    return HomeOut(
-        favorites=[
-            _task_card(task, assistant)
-            for task, assistant in favorite_rows
-        ],
-        recent_tasks=[
-            _task_card(task, assistant, last_used_at)
-            for task, assistant, last_used_at in recent_task_rows
-        ],
-        recent_generations=[
-            _history_item(record, task, assistant)
-            for record, task, assistant in recent_generation_rows
-        ],
-        safety_reminders=[
-            "生成内容必须由员工复核后再使用。",
-            "提交敏感信息前请确认处理范围和必要性。",
-            "模型配置与 API Key 仅保存在当前设备。",
-        ],
-    )
 
 
 @app.post(

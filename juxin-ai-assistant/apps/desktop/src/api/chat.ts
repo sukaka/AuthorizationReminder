@@ -386,16 +386,6 @@ async function readJson<T>(response: Response, code: string): Promise<T> {
   return payload as T;
 }
 
-export async function getChatSessions(): Promise<{
-  items: ChatSessionPayload[];
-  total: number;
-}> {
-  return readJson(
-    await apiFetch('/api/conversations', { cache: 'no-store' }),
-    'CHAT_SESSIONS_FAILED',
-  );
-}
-
 export async function getChatSessionsByKind(kind: ChatSessionListKind): Promise<{
   items: ChatSessionPayload[];
   total: number;
@@ -638,28 +628,6 @@ export async function completeChatMessage(
   );
 }
 
-export async function generateChatMessage(
-  messageUuid: string,
-  payload: {
-    completionToken: string;
-    messages: Array<{ role: string; content: string }>;
-    temperature?: number;
-  },
-): Promise<ChatGeneratePayload> {
-  return readJson(
-    await apiFetch(`/api/ai/chat/messages/${encodeURIComponent(messageUuid)}/generate`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        completion_token: payload.completionToken,
-        messages: payload.messages,
-        temperature: payload.temperature ?? 0.3,
-      }),
-    }),
-    'CHAT_GENERATE_FAILED',
-  );
-}
-
 function parseChatGenerateStreamLine(line: string): ChatGenerateStreamEvent | null {
   const trimmed = line.trim();
   if (!trimmed) return null;
@@ -854,6 +822,28 @@ export async function listKnowledgeFiles(): Promise<KnowledgeFileListPayload> {
   return readJson(
     await apiFetch('/api/knowledge/files', { cache: 'no-store' }),
     'KNOWLEDGE_FILES_FAILED',
+  );
+}
+
+export type KnowledgeFileClassificationPayload = {
+  file_uuid: string;
+  category: string;
+  document_type: string;
+  tags: string[];
+  applied: boolean;
+};
+
+export async function classifyKnowledgeFile(
+  fileUuid: string,
+  apply = true,
+): Promise<KnowledgeFileClassificationPayload> {
+  return readJson(
+    await apiFetch(`/api/knowledge/files/${encodeURIComponent(fileUuid)}/classify`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ apply }),
+    }),
+    'KNOWLEDGE_FILE_CLASSIFY_FAILED',
   );
 }
 

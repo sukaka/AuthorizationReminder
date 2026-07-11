@@ -6,6 +6,7 @@ import {
   askKnowledge,
   askKnowledgeFile,
   approveKnowledgeFileReview,
+  classifyKnowledgeFile,
   createKnowledgeDocumentType,
   createKnowledgeCategory,
   createKnowledgeBase,
@@ -342,6 +343,7 @@ export function KnowledgePage({ session }: KnowledgePageProps) {
     payload: KnowledgeFileActionPayload;
   } | null>(null);
   const [actionNotice, setActionNotice] = useState('');
+  const [classifyingFileUuid, setClassifyingFileUuid] = useState('');
   const [listMode, setListMode] = useState<KnowledgeListMode>('active');
   const [riskFilter, setRiskFilter] = useState<KnowledgeRiskFilter>('all');
   const [activeKnowledgeTab, setActiveKnowledgeTab] = useState<KnowledgeTab>('library');
@@ -1064,6 +1066,31 @@ export function KnowledgePage({ session }: KnowledgePageProps) {
       setActionNotice('已提交管理员审核。');
     } catch {
       setActionNotice('暂时无法提交审核，请稍后重试。');
+    }
+  };
+
+  const autoClassifyFile = async (file: KnowledgeFilePayload) => {
+    setActionNotice('');
+    setClassifyingFileUuid(file.file_uuid);
+    try {
+      const classification = await classifyKnowledgeFile(file.file_uuid);
+      setFiles((current) => current.map((item) => (
+        item.file_uuid === file.file_uuid
+          ? {
+              ...item,
+              category: classification.category,
+              document_type: classification.document_type,
+              tags: classification.tags,
+            }
+          : item
+      )));
+      setActionNotice(
+        `已自动分类“${file.file_name}”：${classification.category} · ${classification.document_type}`,
+      );
+    } catch {
+      setActionNotice('自动分类失败，请稍后重试或手动编辑资料分类。');
+    } finally {
+      setClassifyingFileUuid('');
     }
   };
 
@@ -2560,6 +2587,19 @@ export function KnowledgePage({ session }: KnowledgePageProps) {
                                   编辑资料分类
                                 </button>
                               ) : null}
+                              <button
+                                aria-label={`自动分类 ${file.file_name}`}
+                                className="knowledge-menu-item"
+                                disabled={classifyingFileUuid === file.file_uuid}
+                                onClick={() => {
+                                  closeFileMenu();
+                                  void autoClassifyFile(file);
+                                }}
+                                role="menuitem"
+                                type="button"
+                              >
+                                {classifyingFileUuid === file.file_uuid ? '正在自动分类…' : 'AI 自动分类'}
+                              </button>
                               {canReparse ? (
                                 <button
                                   aria-label={`重新处理 ${file.file_name}`}

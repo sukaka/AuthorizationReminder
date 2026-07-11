@@ -1099,13 +1099,6 @@ class TaskCardOut(BaseModel):
     last_used_at: datetime | None = None
 
 
-class HomeOut(BaseModel):
-    favorites: list[TaskCardOut]
-    recent_tasks: list[TaskCardOut]
-    recent_generations: list[HistoryItemOut]
-    safety_reminders: list[str]
-
-
 class FeedbackType(str, Enum):
     USEFUL = "USEFUL"
     INACCURATE = "INACCURATE"
