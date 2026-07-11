@@ -108,6 +108,18 @@ test('validateSystemRegistry rejects missing version sources', () => {
   assert.throws(() => validateSystemRegistry(rootDir), /缺少版本源：server\/VERSION/);
 });
 
+test('validateSystemRegistry rejects VERSION files with whitespace or extra blank lines', () => {
+  for (const invalidContent of ['1.0.0 \n', '1.0.0\n\n']) {
+    const rootDir = makeSystemRegistryFixture();
+    writeText(path.join(rootDir, 'server/VERSION'), invalidContent);
+
+    assert.throws(
+      () => validateSystemRegistry(rootDir),
+      /版本源非法：server\/VERSION/
+    );
+  }
+});
+
 test('post-commit exposes a guarded runner for side-effect-free testing', () => {
   const source = fs.readFileSync(
     path.join(__dirname, '../scripts/versioning/post-commit.js'),

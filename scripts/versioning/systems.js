@@ -1,7 +1,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 
-const VERSION_RE = /^\d+\.\d+\.\d+$/;
+const VERSION_RE = /^\d+\.\d+\.\d+\n$/;
 
 const freezeSystem = (system) => Object.freeze({
   ...system,
@@ -236,7 +236,7 @@ const validateSystemRegistry = (rootDir) => {
     if (!fs.existsSync(versionFilePath)) {
       throw new Error(`缺少版本源：${versionFile}`);
     }
-    const version = fs.readFileSync(versionFilePath, 'utf8').trim();
+    const version = fs.readFileSync(versionFilePath, 'utf8');
     if (!VERSION_RE.test(version)) {
       throw new Error(`版本源非法：${versionFile}`);
     }
