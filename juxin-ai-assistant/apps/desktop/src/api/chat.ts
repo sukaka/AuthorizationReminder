@@ -638,6 +638,28 @@ export async function completeChatMessage(
   );
 }
 
+export async function failChatMessage(
+  messageUuid: string,
+  payload: {
+    completionToken: string;
+    errorCode: string;
+    errorMessage?: string;
+  },
+): Promise<ChatMessageStatusPayload> {
+  return readJson(
+    await apiFetch(`/api/ai/chat/messages/${encodeURIComponent(messageUuid)}/fail`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        completion_token: payload.completionToken,
+        error_code: payload.errorCode,
+        error_message: payload.errorMessage ?? null,
+      }),
+    }),
+    'CHAT_FAIL_FAILED',
+  );
+}
+
 export async function generateChatMessage(
   messageUuid: string,
   payload: {

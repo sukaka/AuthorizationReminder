@@ -456,7 +456,7 @@ class ChatPrepareIn(BaseModel):
         "incident_response",
         "knowledge",
     ] = "normal"
-    top_k: int | None = Field(default=8, ge=1, le=100)
+    top_k: int | None = Field(default=8, ge=1, le=8)
     attachment_file_ids: list[str] = Field(default_factory=list, max_length=20)
     personal_reference_file_ids: list[str] = Field(default_factory=list, max_length=20)
     include_personal_references: bool = False
@@ -572,7 +572,7 @@ class PersonalReferenceGenerateIn(BaseModel):
         "incident_response",
         "knowledge",
     ] = "normal"
-    top_k: int | None = Field(default=8, ge=1, le=100)
+    top_k: int | None = Field(default=8, ge=1, le=8)
 
 
 class PersonalReferenceSourceOut(BaseModel):
@@ -600,7 +600,7 @@ class PersonalReferenceSearchIn(BaseModel):
     conversation_id: str | None = Field(default=None, max_length=64)
     question: str = Field(min_length=1, max_length=20_000)
     file_ids: list[str] = Field(default_factory=list, max_length=20)
-    top_k: int | None = Field(default=8, ge=1, le=100)
+    top_k: int | None = Field(default=8, ge=1, le=8)
 
 
 class PersonalReferenceSearchOut(BaseModel):
@@ -629,7 +629,7 @@ class KnowledgeQueryIn(BaseModel):
     ] = "knowledge"
     knowledge_base_ids: list[str] = Field(default_factory=list, max_length=20)
     filters: dict[str, list[str]] = Field(default_factory=dict)
-    top_k: int | None = Field(default=8, ge=1, le=100)
+    top_k: int | None = Field(default=8, ge=1, le=8)
     include_sources: bool = True
 
 
@@ -674,7 +674,7 @@ class KnowledgeFileAskIn(BaseModel):
         "incident_response",
         "knowledge",
     ] = "normal"
-    top_k: int | None = Field(default=8, ge=1, le=100)
+    top_k: int | None = Field(default=8, ge=1, le=8)
     include_sources: bool = True
 
 

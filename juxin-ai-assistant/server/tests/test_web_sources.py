@@ -1,5 +1,6 @@
 from datetime import UTC, datetime
 
+import httpx
 import pytest
 from fastapi import HTTPException
 
@@ -9,6 +10,7 @@ from app.web_sources import (
     SearchIntentDetector,
     UrlExtractor,
     WebContextBuilder,
+    WebFetcher,
     WebFetchResult,
     WebSearchService,
     WebSearchResult,
@@ -46,6 +48,39 @@ def test_web_safety_validator_blocks_private_dns_resolution() -> None:
 
     with pytest.raises(HTTPException):
         WebSafetyValidator(resolver=resolver).validate_url("https://internal.example")
+
+
+def test_web_fetcher_validates_redirect_before_requesting_private_target(monkeypatch) -> None:
+    requested_urls: list[str] = []
+
+    class FakeClient:
+        def __init__(self, **kwargs) -> None:
+            assert kwargs["follow_redirects"] is False
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args) -> None:
+            return None
+
+        def get(self, url: str):
+            requested_urls.append(url)
+            return httpx.Response(
+                302,
+                headers={"location": "http://127.0.0.1:8000/private"},
+                request=httpx.Request("GET", url),
+            )
+
+    def public_resolver(_host: str, _port: object) -> list[tuple]:
+        return [(None, None, None, "", ("93.184.216.34", 0))]
+
+    monkeypatch.setattr("app.web_sources.httpx.Client", FakeClient)
+    fetcher = WebFetcher(validator=WebSafetyValidator(resolver=public_resolver))
+
+    with pytest.raises(HTTPException, match="不允许采集本机或内网地址"):
+        fetcher.fetch("https://example.com/start")
+
+    assert requested_urls == ["https://example.com/start"]
 
 
 def test_search_intent_detector_only_triggers_current_or_official_queries() -> None:

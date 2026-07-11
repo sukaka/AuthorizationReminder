@@ -1,11 +1,26 @@
 import os
 
+import pytest
+
 from app.crypto import ContentCipher
 from app.knowledge_files import create_knowledge_file_from_bytes
 
 
 def _cipher() -> ContentCipher:
     return ContentCipher(os.environ["CONTENT_ENCRYPTION_KEY"])
+
+
+def test_top_k_limit_respects_supported_request_size() -> None:
+    from app.knowledge_search import _clamp_top_k
+    from app.schemas import ChatPrepareIn, KnowledgeQueryIn
+
+    assert _clamp_top_k(1) == 1
+    assert _clamp_top_k(3) == 3
+    assert _clamp_top_k(8) == 8
+    with pytest.raises(ValueError):
+        ChatPrepareIn(question="查询资料", top_k=9)
+    with pytest.raises(ValueError):
+        KnowledgeQueryIn(question="查询资料", top_k=9)
 
 
 def _add_file(
@@ -289,10 +304,10 @@ def test_personal_reference_search_updates_document_usage_stats(generation_db) -
     assert session_file.last_used_at is not None
 
 
-def test_search_clamps_top_k_between_five_and_ten(generation_db) -> None:
+def test_search_respects_low_top_k_and_caps_internal_limit_at_eight(generation_db) -> None:
     from app.knowledge_search import search_knowledge_chunks
 
-    for index in range(7):
+    for index in range(10):
         _add_file(
             generation_db,
             user_id="user-1",
@@ -321,8 +336,8 @@ def test_search_clamps_top_k_between_five_and_ten(generation_db) -> None:
         top_k=99,
     )
 
-    assert len(low_top_k_results) == 5
-    assert len(high_top_k_results) == 7
+    assert len(low_top_k_results) == 2
+    assert len(high_top_k_results) == 8
 
 
 def test_search_balances_top_chunks_across_relevant_files(generation_db) -> None:

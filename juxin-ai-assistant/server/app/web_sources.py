@@ -9,7 +9,7 @@ import ipaddress
 import re
 import socket
 from typing import Any
-from urllib.parse import parse_qs, unquote, urlparse
+from urllib.parse import parse_qs, unquote, urljoin, urlparse
 
 import httpx
 from fastapi import HTTPException
@@ -18,6 +18,7 @@ from fastapi import HTTPException
 MAX_WEB_FETCH_BYTES = 5 * 1024 * 1024
 WEB_FETCH_TIMEOUT_SECONDS = 8.0
 MAX_EXTRACTED_TEXT_CHARS = 60_000
+MAX_WEB_REDIRECTS = 5
 
 URL_PATTERN = re.compile(r"https?://[^\s<>'\"，。；;、）)】]+", re.IGNORECASE)
 LATEST_PATTERNS = re.compile(
@@ -147,11 +148,24 @@ class WebFetcher:
         safe_url = self.validator.validate_url(url)
         try:
             with httpx.Client(
-                follow_redirects=True,
+                follow_redirects=False,
+                trust_env=False,
                 timeout=WEB_FETCH_TIMEOUT_SECONDS,
                 headers={"User-Agent": "JuxinAI-Assistant-WebCapture/1.0"},
             ) as client:
-                response = client.get(safe_url)
+                current_url = safe_url
+                for redirect_count in range(MAX_WEB_REDIRECTS + 1):
+                    response = client.get(current_url)
+                    if not response.is_redirect:
+                        break
+                    location = response.headers.get("location", "").strip()
+                    if not location:
+                        raise HTTPException(status_code=502, detail="网页重定向地址无效")
+                    if redirect_count >= MAX_WEB_REDIRECTS:
+                        raise HTTPException(status_code=502, detail="网页重定向次数过多")
+                    current_url = self.validator.validate_url(
+                        urljoin(str(response.url), location)
+                    )
         except httpx.HTTPError as exc:
             raise HTTPException(status_code=502, detail="网页暂时无法访问") from exc
 

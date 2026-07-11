@@ -40,6 +40,7 @@ def test_knowledge_follow_up_query_carries_previous_user_subject() -> None:
         "未知云安全设施由谁负责 上传资料中是否有说明"
     )
     assert knowledge_search_query("云管平台有哪些功能", recent_messages) == "云管平台有哪些功能"
+    assert knowledge_search_query("新产品文档中如何部署？", recent_messages) == "新产品文档中如何部署？"
 
 
 def test_planner_declares_required_action_types() -> None:

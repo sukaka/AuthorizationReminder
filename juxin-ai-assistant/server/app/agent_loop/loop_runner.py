@@ -24,8 +24,6 @@ NO_EVIDENCE_ANSWER = "当前知识库未找到明确依据"
 
 _KNOWLEDGE_FOLLOW_UP_MARKERS = (
     "上传资料",
-    "资料中",
-    "文档中",
     "其他文件",
     "全部资料",
     "这些资料",

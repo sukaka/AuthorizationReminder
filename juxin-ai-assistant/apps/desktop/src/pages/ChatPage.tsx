@@ -11,6 +11,7 @@ import {
   createLongChatTask,
   deleteChatSession,
   exportChatWord,
+  failChatMessage,
   getChatSession,
   getChatSessionsByKind,
   hardDeleteChatSession,
@@ -1313,6 +1314,16 @@ export function ChatPage() {
     ));
   };
 
+  const stopPreparedMessage = async (assistantMessageId: string, completionToken: string) => {
+    markGenerationStopped(assistantMessageId);
+    if (!assistantMessageId || !completionToken) return;
+    await failChatMessage(assistantMessageId, {
+      completionToken,
+      errorCode: 'USER_CANCELLED',
+      errorMessage: '用户停止生成',
+    }).catch(() => undefined);
+  };
+
   const send = async (questionOverride?: string, confirmationDigest?: string) => {
     if (generationStatus === 'running') {
       await stopActiveGeneration();
@@ -1354,6 +1365,7 @@ export function ChatPage() {
       isComplete: true,
     }));
     let assistantId = '';
+    let completionToken = '';
     try {
       const prepared = await prepareChat({
         sessionUuid: activeSessionUuid || undefined,
@@ -1367,6 +1379,7 @@ export function ChatPage() {
         includeSessionAttachments: referenceScope === 'with_session' || referenceScope === 'personal_and_session',
         sensitiveConfirmationDigest: confirmationDigest,
       });
+      completionToken = prepared.completion_token;
       setTaskProgress(prepared.task_state ? taskProgressWithStage(
         prepared.task_state,
         prepared.completed ? 'completed' : 'generating',
@@ -1435,7 +1448,7 @@ export function ChatPage() {
           ));
         });
         if (activeGenerationRef.current?.stopped) {
-          markGenerationStopped(assistantId);
+          await stopPreparedMessage(assistantId, prepared.completion_token);
           return;
         }
         setGenerationMetrics({
@@ -1481,7 +1494,7 @@ export function ChatPage() {
         ));
       });
       if (activeGenerationRef.current?.stopped) {
-        markGenerationStopped(assistantId);
+        await stopPreparedMessage(assistantId, prepared.completion_token);
         return;
       }
       setMessages((current) => current.map((message) =>
@@ -1507,7 +1520,7 @@ export function ChatPage() {
             break;
           }
           if (activeGenerationRef.current?.stopped) {
-            markGenerationStopped(assistantId);
+            await stopPreparedMessage(assistantId, prepared.completion_token);
             return;
           }
           setStatus('正在自检并修正…');
@@ -1532,7 +1545,7 @@ export function ChatPage() {
             ));
           });
           if (activeGenerationRef.current?.stopped) {
-            markGenerationStopped(assistantId);
+            await stopPreparedMessage(assistantId, prepared.completion_token);
             return;
           }
           setMessages((current) => current.map((message) =>
@@ -1605,7 +1618,7 @@ export function ChatPage() {
         }
       }
       if (activeGenerationRef.current?.stopped || isAbortLikeError(error)) {
-        markGenerationStopped(assistantId);
+        await stopPreparedMessage(assistantId, completionToken);
         return;
       }
       const detail = apiErrorDetail(error);

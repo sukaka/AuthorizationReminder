@@ -39,7 +39,7 @@ class RetrievedKnowledgeChunk:
 def _clamp_top_k(top_k: int | None) -> int:
     if top_k is None:
         return 8
-    return max(5, min(int(top_k), 8))
+    return max(1, min(int(top_k), 8))
 
 
 def _query_terms(query: str) -> list[str]:

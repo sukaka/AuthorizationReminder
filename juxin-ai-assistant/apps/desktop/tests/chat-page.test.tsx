@@ -1162,6 +1162,7 @@ it('does not send with Enter while an IME composition is active', async () => {
 
 it('turns the send button into a compact stop button while generating and cancels by click', async () => {
   const completeRequest = vi.fn();
+  const failRequest = vi.fn();
   let resolveGeneration: ((value: { output: string; latencyMs: number; usage: { output_tokens: number } }) => void) | undefined;
   const pendingGeneration = new Promise<{ output: string; latencyMs: number; usage: { output_tokens: number } }>((resolve) => {
     resolveGeneration = resolve;
@@ -1185,6 +1186,10 @@ it('turns the send button into a compact stop button while generating and cancel
       completeRequest(await request.json());
       return HttpResponse.json({ message_uuid: 'assistant-message-stop-click', status: 'COMPLETED' });
     }),
+    http.post('/api/ai/chat/messages/assistant-message-stop-click/fail', async ({ request }) => {
+      failRequest(await request.json());
+      return HttpResponse.json({ message_uuid: 'assistant-message-stop-click', status: 'FAILED' });
+    }),
   );
   generateLocalModelMock.mockReturnValue(pendingGeneration);
 
@@ -1201,6 +1206,11 @@ it('turns the send button into a compact stop button while generating and cancel
   expect(cancelModelGenerationMock).toHaveBeenCalledWith(requestId);
   resolveGeneration?.({ output: '不应保存的内容', latencyMs: 100, usage: { output_tokens: 3 } });
   await waitFor(() => expect(completeRequest).not.toHaveBeenCalled());
+  await waitFor(() => expect(failRequest).toHaveBeenCalledWith({
+    completion_token: 'complete-stop-click',
+    error_code: 'USER_CANCELLED',
+    error_message: '用户停止生成',
+  }));
 });
 
 it('cancels the active generation when Escape is pressed', async () => {
