@@ -14,6 +14,9 @@ const {
   switchToVersionBranch,
   validateCommitMessage,
   normalizeCommitMessage,
+  parseCommitScope,
+  classifyChangedPaths,
+  resolveAffectedSystems,
 } = require('../scripts/versioning/automation');
 const { runPostCommit } = require('../scripts/versioning/post-commit');
 const {
@@ -161,6 +164,116 @@ test('parseCommitBumpType maps supported prefixes to version levels', () => {
   assert.equal(parseCommitBumpType('fix(auth): localize audit labels'), 'patch');
   assert.equal(parseCommitBumpType('docs: explain version rule'), 'patch');
   assert.equal(parseCommitBumpType('unknown: unsupported prefix'), null);
+});
+
+test('parseCommitScope extracts normalized scopes after version prefixes', () => {
+  assert.equal(parseCommitScope('[v5.1.0] fix(Auth): repair session'), 'auth');
+  assert.equal(parseCommitScope('feat: add system registry'), '');
+});
+
+test('classifyChangedPaths separates owned, shared, and repo paths', () => {
+  assert.deepEqual(
+    classifyChangedPaths([
+      'auth/index.js',
+      'docker-compose.yml',
+      'docs/versioning.md',
+      'inventory-system/backend/src/index.js',
+    ]),
+    {
+      systemIds: ['auth', 'inventory'],
+      sharedPaths: ['docker-compose.yml'],
+      repoPaths: ['docs/versioning.md'],
+    }
+  );
+});
+
+test('resolveAffectedSystems detects a single business system from paths', () => {
+  assert.deepEqual(
+    resolveAffectedSystems({
+      summary: 'fix: repair session handling',
+      changedPaths: ['auth/index.js'],
+    }),
+    ['auth']
+  );
+});
+
+test('resolveAffectedSystems detects multiple business systems', () => {
+  assert.deepEqual(
+    resolveAffectedSystems({
+      summary: 'feat: improve login and stock',
+      changedPaths: ['auth/index.js', 'inventory-system/backend/src/index.js'],
+    }),
+    ['auth', 'inventory']
+  );
+});
+
+test('shared paths require an explicit scope', () => {
+  assert.throws(
+    () => resolveAffectedSystems({
+      summary: 'fix: adjust compose routing',
+      changedPaths: ['docker-compose.yml'],
+    }),
+    /共享文件.*scope/
+  );
+});
+
+test('resolveAffectedSystems expands all scope and accepts repo scope', () => {
+  assert.deepEqual(
+    resolveAffectedSystems({
+      summary: 'feat(all): coordinate release behavior',
+      changedPaths: ['docker-compose.yml'],
+    }),
+    SYSTEMS.map((system) => system.id)
+  );
+  assert.deepEqual(
+    resolveAffectedSystems({
+      summary: 'chore(repo): update release documentation',
+      changedPaths: ['docs/versioning.md'],
+    }),
+    []
+  );
+});
+
+test('resolveAffectedSystems rejects repo scope for shared paths', () => {
+  assert.throws(
+    () => resolveAffectedSystems({
+      summary: 'chore(repo): adjust compose routing',
+      changedPaths: ['docker-compose.yml'],
+    }),
+    /scope repo.*共享文件/
+  );
+});
+
+test('resolveAffectedSystems rejects unknown and mismatched system scopes', () => {
+  assert.throws(
+    () => resolveAffectedSystems({
+      summary: 'fix(unknown): adjust system routing',
+      changedPaths: ['docker-compose.yml'],
+    }),
+    /未知系统 scope：unknown/
+  );
+  assert.throws(
+    () => resolveAffectedSystems({
+      summary: 'fix(auth): adjust inventory API',
+      changedPaths: ['inventory-system/backend/src/index.js'],
+    }),
+    /scope auth.*inventory/
+  );
+});
+
+test('commit-msg rejects unknown system scopes before post-commit', () => {
+  const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-commit-msg-scope-'));
+  const messageFile = path.join(rootDir, 'message.txt');
+  writeText(messageFile, 'fix(unknown): reject invalid scope\n');
+
+  assert.throws(
+    () => execFileSync('node', ['scripts/versioning/commit-msg.js', messageFile], {
+      cwd: path.join(__dirname, '..'),
+      encoding: 'utf8',
+      stdio: 'pipe',
+    }),
+    /未知系统 scope：unknown/
+  );
 });
 
 test('bumpVersion increments the expected semver segment', () => {

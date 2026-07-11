@@ -2,6 +2,11 @@ const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
 const { execFileSync } = require('node:child_process');
+const {
+  SYSTEMS,
+  SHARED_PATHS,
+  SYSTEM_BY_ID,
+} = require('./systems');
 
 const VERSION_PREFIX_RE = /^\[v\d+\.\d+\.\d+\]\s+/i;
 const AGENT_VERSION_PREFIX_RE = /^\[agent-v\d+\.\d+\.\d+\]\s+/i;
@@ -56,6 +61,71 @@ const toPosixRelative = (rootDir, filePath) => path.relative(rootDir, filePath).
 const getCommitSummary = (message) => String(message || '').replace(/\r\n/g, '\n').split('\n')[0].trim();
 
 const stripVersionPrefix = (summary) => String(summary || '').replace(ANY_VERSION_PREFIX_RE, '').trim();
+
+const parseCommitScope = (summary) => {
+  const match = stripVersionPrefix(summary).match(/^[a-z][\w-]*(?:\(([^)]+)\))?!?:/i);
+  return match ? String(match[1] || '').trim().toLowerCase() : '';
+};
+
+const pathMatches = (filePath, ownedPath) => filePath === ownedPath || filePath.startsWith(`${ownedPath}/`);
+
+const classifyChangedPaths = (paths) => {
+  const systemIds = new Set();
+  const sharedPaths = new Set();
+  const repoPaths = new Set();
+
+  for (const changedPath of paths || []) {
+    const filePath = String(changedPath || '').trim().replace(/^\.\//, '');
+    if (!filePath) continue;
+
+    const system = SYSTEMS.find((entry) => entry.paths.some((ownedPath) => pathMatches(filePath, ownedPath)));
+    if (system) {
+      systemIds.add(system.id);
+    } else if (SHARED_PATHS.some((sharedPath) => pathMatches(filePath, sharedPath))) {
+      sharedPaths.add(filePath);
+    } else {
+      repoPaths.add(filePath);
+    }
+  }
+
+  return {
+    systemIds: Array.from(systemIds).sort(),
+    sharedPaths: Array.from(sharedPaths).sort(),
+    repoPaths: Array.from(repoPaths).sort(),
+  };
+};
+
+const resolveAffectedSystems = ({ summary, changedPaths }) => {
+  const scope = parseCommitScope(summary);
+  const { systemIds, sharedPaths } = classifyChangedPaths(changedPaths);
+
+  if (scope && scope !== 'all' && scope !== 'repo' && !SYSTEM_BY_ID.has(scope)) {
+    throw new Error(`未知系统 scope：${scope}`);
+  }
+  if (scope === 'all') {
+    return SYSTEMS.map((system) => system.id).sort();
+  }
+  if (scope === 'repo') {
+    if (sharedPaths.length) {
+      throw new Error('scope repo 不能用于共享文件变更');
+    }
+    if (systemIds.length) {
+      throw new Error(`scope repo 与业务系统 ${systemIds.join(', ')} 不一致`);
+    }
+    return [];
+  }
+  if (scope) {
+    const excludedSystemId = systemIds.find((systemId) => systemId !== scope);
+    if (excludedSystemId) {
+      throw new Error(`scope ${scope} 与业务系统 ${excludedSystemId} 不一致`);
+    }
+    return [scope];
+  }
+  if (sharedPaths.length && !systemIds.length) {
+    throw new Error('共享文件变更必须声明系统 scope');
+  }
+  return systemIds;
+};
 
 const isAgentVersionCommit = (message) => AGENT_VERSION_PREFIX_RE.test(getCommitSummary(message));
 
@@ -418,8 +488,11 @@ module.exports = {
   buildVersionedCommitMessage,
   isAgentVersionCommit,
   normalizeCommitMessage,
+  parseCommitScope,
   parseCommitBumpType,
   pushCurrentBranch,
+  classifyChangedPaths,
+  resolveAffectedSystems,
   stripVersionPrefix,
   switchToVersionBranch,
   syncRepositoryVersion,
