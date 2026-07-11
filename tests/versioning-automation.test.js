@@ -120,6 +120,27 @@ test('validateSystemRegistry rejects VERSION files with whitespace or extra blan
   }
 });
 
+test('validateSystemRegistry rejects VERSION segments with leading zeros', () => {
+  for (const invalidContent of ['01.0.0\n', '1.02.0\n', '1.0.03\n']) {
+    const rootDir = makeSystemRegistryFixture();
+    writeText(path.join(rootDir, 'server/VERSION'), invalidContent);
+
+    assert.throws(
+      () => validateSystemRegistry(rootDir),
+      /版本源非法：server\/VERSION/
+    );
+  }
+});
+
+test('validateSystemRegistry accepts zero and multi-digit VERSION segments', () => {
+  for (const validContent of ['0.0.0\n', '10.20.30\n']) {
+    const rootDir = makeSystemRegistryFixture();
+    writeText(path.join(rootDir, 'server/VERSION'), validContent);
+
+    assert.doesNotThrow(() => validateSystemRegistry(rootDir));
+  }
+});
+
 test('post-commit exposes a guarded runner for side-effect-free testing', () => {
   const source = fs.readFileSync(
     path.join(__dirname, '../scripts/versioning/post-commit.js'),

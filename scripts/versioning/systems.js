@@ -1,7 +1,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 
-const VERSION_RE = /^\d+\.\d+\.\d+\n$/;
+const VERSION_RE = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)\n$/;
 
 const freezeSystem = (system) => Object.freeze({
   ...system,
