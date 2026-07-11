@@ -121,7 +121,7 @@ const resolveAffectedSystems = ({ summary, changedPaths }) => {
     }
     return [scope];
   }
-  if (sharedPaths.length && !systemIds.length) {
+  if (sharedPaths.length && !scope) {
     throw new Error('共享文件变更必须声明系统 scope');
   }
   return systemIds;

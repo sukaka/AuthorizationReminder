@@ -217,6 +217,36 @@ test('shared paths require an explicit scope', () => {
   );
 });
 
+test('shared paths require an explicit scope alongside owned business paths', () => {
+  assert.throws(
+    () => resolveAffectedSystems({
+      summary: 'fix: adjust auth compose routing',
+      changedPaths: ['docker-compose.yml', 'auth/index.js'],
+    }),
+    /共享文件.*scope/
+  );
+});
+
+test('recognized scope covers shared paths alongside matching owned business paths', () => {
+  assert.deepEqual(
+    resolveAffectedSystems({
+      summary: 'fix(auth): adjust auth compose routing',
+      changedPaths: ['docker-compose.yml', 'auth/index.js'],
+    }),
+    ['auth']
+  );
+});
+
+test('mismatched scope is rejected for shared paths alongside owned business paths', () => {
+  assert.throws(
+    () => resolveAffectedSystems({
+      summary: 'fix(inventory): adjust auth compose routing',
+      changedPaths: ['docker-compose.yml', 'auth/index.js'],
+    }),
+    /scope inventory.*auth/
+  );
+});
+
 test('resolveAffectedSystems expands all scope and accepts repo scope', () => {
   assert.deepEqual(
     resolveAffectedSystems({
