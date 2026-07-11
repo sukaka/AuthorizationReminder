@@ -244,11 +244,23 @@ const syncSystemVersion = ({ rootDir, system, currentVersion, nextVersion }) => 
   if (!system || !system.id) {
     throw new Error('系统声明非法');
   }
-  if (!VERSION_RE.test(String(currentVersion || '').trim())) {
+  const canonicalSystem = SYSTEM_BY_ID.get(system.id);
+  if (!canonicalSystem) {
+    throw new Error(`未知系统：${system.id}`);
+  }
+  const normalizedCurrentVersion = String(currentVersion || '').trim();
+  const normalizedNextVersion = String(nextVersion || '').trim();
+  if (!VERSION_RE.test(normalizedCurrentVersion)) {
     throw new Error(`当前版本号非法：${currentVersion}`);
   }
-  if (!VERSION_RE.test(String(nextVersion || '').trim())) {
+  if (!VERSION_RE.test(normalizedNextVersion)) {
     throw new Error(`目标版本号非法：${nextVersion}`);
+  }
+  const sourceVersion = readSystemVersion(resolvedRoot, canonicalSystem);
+  if (sourceVersion !== normalizedCurrentVersion) {
+    throw new Error(
+      `系统 ${canonicalSystem.id}（${canonicalSystem.name}）版本源与当前版本不一致：期望 ${normalizedCurrentVersion}，实际 ${sourceVersion}`
+    );
   }
 
   const changedFiles = new Set();
@@ -258,46 +270,46 @@ const syncSystemVersion = ({ rootDir, system, currentVersion, nextVersion }) => 
     }
   };
 
-  updateDeclaredFile(system.versionFile, (options) => updateTextVersionFile({
+  updateDeclaredFile(canonicalSystem.versionFile, (options) => updateTextVersionFile({
     ...options,
-    currentVersion,
-    nextVersion,
+    currentVersion: normalizedCurrentVersion,
+    nextVersion: normalizedNextVersion,
   }));
 
-  for (const packageDir of system.packageDirs) {
+  for (const packageDir of canonicalSystem.packageDirs) {
     updateDeclaredFile(path.posix.join(packageDir, 'package.json'), (options) => updateJsonVersionFile({
       ...options,
-      currentVersion,
-      nextVersion,
+      currentVersion: normalizedCurrentVersion,
+      nextVersion: normalizedNextVersion,
       force: true,
     }));
     updateDeclaredFile(path.posix.join(packageDir, 'package-lock.json'), (options) => updateJsonVersionFile({
       ...options,
-      currentVersion,
-      nextVersion,
+      currentVersion: normalizedCurrentVersion,
+      nextVersion: normalizedNextVersion,
       force: true,
     }));
   }
 
-  for (const relativePath of system.jsonFiles || []) {
+  for (const relativePath of canonicalSystem.jsonFiles || []) {
     updateDeclaredFile(relativePath, (options) => updateJsonVersionFile({
       ...options,
-      currentVersion,
-      nextVersion,
+      currentVersion: normalizedCurrentVersion,
+      nextVersion: normalizedNextVersion,
       force: true,
     }));
   }
-  for (const relativePath of system.tomlFiles || []) {
+  for (const relativePath of canonicalSystem.tomlFiles || []) {
     updateDeclaredFile(relativePath, (options) => updateTomlPackageVersionFile({
       ...options,
-      nextVersion,
+      nextVersion: normalizedNextVersion,
     }));
   }
-  for (const relativePath of system.textFiles || []) {
+  for (const relativePath of canonicalSystem.textFiles || []) {
     updateDeclaredFile(relativePath, (options) => updateTextVersionFile({
       ...options,
-      currentVersion,
-      nextVersion,
+      currentVersion: normalizedCurrentVersion,
+      nextVersion: normalizedNextVersion,
     }));
   }
 

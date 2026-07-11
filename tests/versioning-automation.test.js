@@ -97,6 +97,10 @@ const readPackageLockVersion = (rootDir, packageDir) => JSON.parse(
   fs.readFileSync(path.join(rootDir, packageDir, 'package-lock.json'), 'utf8')
 ).packages[''].version;
 
+const readPackageLock = (rootDir, packageDir) => JSON.parse(
+  fs.readFileSync(path.join(rootDir, packageDir, 'package-lock.json'), 'utf8')
+);
+
 test('system registry defines every approved independent system', () => {
   assert.deepEqual(
     SYSTEMS.map((system) => system.id),
@@ -382,9 +386,90 @@ test('syncSystemVersion updates every package in one system only', () => {
   assert.equal(readPackageLockVersion(rootDir, 'inventory-system/frontend'), '1.1.0');
   assert.equal(readPackageLockVersion(rootDir, 'inventory-system/backend'), '1.1.0');
   assert.equal(readPackageLockVersion(rootDir, 'inventory-system/shipping-gateway'), '1.1.0');
+  const frontendLock = readPackageLock(rootDir, 'inventory-system/frontend');
+  assert.equal(frontendLock.version, '1.1.0');
+  assert.equal(frontendLock.packages[''].version, '1.1.0');
   assert.equal(readPackageVersion(rootDir, 'auth'), '1.0.0');
   assert.ok(changed.includes('inventory-system/VERSION'));
   assert.ok(changed.includes('inventory-system/frontend/package-lock.json'));
+});
+
+test('syncSystemVersion uses canonical fields and ignores forged cross-system and parent paths', (t) => {
+  const rootDir = makeIndependentVersionFixture();
+  const outsideDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-versioning-outside-'));
+  const outsideRelativePath = `../${path.basename(outsideDir)}`;
+  t.after(() => fs.rmSync(outsideDir, { recursive: true, force: true }));
+
+  writeText(path.join(outsideDir, 'VERSION'), '1.0.0\n');
+  writeJson(path.join(outsideDir, 'package.json'), { name: 'outside', version: '1.0.0' });
+  writeJson(path.join(outsideDir, 'package-lock.json'), makePackageLock('1.0.0'));
+
+  const changed = syncSystemVersion({
+    rootDir,
+    system: {
+      ...SYSTEM_BY_ID.get('inventory'),
+      versionFile: `${outsideRelativePath}/VERSION`,
+      packageDirs: ['auth', outsideRelativePath],
+    },
+    currentVersion: '1.0.0',
+    nextVersion: '1.1.0',
+  });
+
+  assert.equal(readSystemVersion(rootDir, SYSTEM_BY_ID.get('inventory')), '1.1.0');
+  assert.equal(readSystemVersion(rootDir, SYSTEM_BY_ID.get('auth')), '1.0.0');
+  assert.equal(readPackageVersion(rootDir, 'auth'), '1.0.0');
+  assert.equal(fs.readFileSync(path.join(outsideDir, 'VERSION'), 'utf8'), '1.0.0\n');
+  assert.equal(readPackageVersion(outsideDir, '.'), '1.0.0');
+  assert.deepEqual(changed, [
+    'inventory-system/VERSION',
+    'inventory-system/backend/package-lock.json',
+    'inventory-system/backend/package.json',
+    'inventory-system/frontend/package-lock.json',
+    'inventory-system/frontend/package.json',
+    'inventory-system/shipping-gateway/package-lock.json',
+    'inventory-system/shipping-gateway/package.json',
+  ]);
+});
+
+test('syncSystemVersion rejects source and current version mismatches before making changes', () => {
+  const rootDir = makeIndependentVersionFixture();
+  writeText(path.join(rootDir, 'inventory-system/VERSION'), '1.0.1\n');
+
+  assert.throws(
+    () => syncSystemVersion({
+      rootDir,
+      system: SYSTEM_BY_ID.get('inventory'),
+      currentVersion: '1.0.0',
+      nextVersion: '1.1.0',
+    }),
+    /inventory.*版本源.*当前版本/
+  );
+
+  assert.equal(readSystemVersion(rootDir, SYSTEM_BY_ID.get('inventory')), '1.0.1');
+  assert.equal(readPackageVersion(rootDir, 'inventory-system/frontend'), '1.0.0');
+  assert.equal(readPackageLockVersion(rootDir, 'inventory-system/frontend'), '1.0.0');
+});
+
+test('syncSystemVersion rejects unknown system IDs before making changes', () => {
+  const rootDir = makeIndependentVersionFixture();
+
+  assert.throws(
+    () => syncSystemVersion({
+      rootDir,
+      system: {
+        id: 'unknown',
+        versionFile: 'inventory-system/VERSION',
+        packageDirs: ['inventory-system/frontend'],
+      },
+      currentVersion: '1.0.0',
+      nextVersion: '1.1.0',
+    }),
+    /未知系统：unknown/
+  );
+
+  assert.equal(readSystemVersion(rootDir, SYSTEM_BY_ID.get('inventory')), '1.0.0');
+  assert.equal(readPackageVersion(rootDir, 'inventory-system/frontend'), '1.0.0');
+  assert.equal(readPackageLockVersion(rootDir, 'inventory-system/frontend'), '1.0.0');
 });
 
 test('syncSystemVersion structurally updates AI assistant Tauri JSON and TOML', () => {
