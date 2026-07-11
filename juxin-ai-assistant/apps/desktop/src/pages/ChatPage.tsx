@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { FormEvent, KeyboardEvent, ReactNode } from 'react';
+import type { ClipboardEvent as ReactClipboardEvent, FormEvent, KeyboardEvent, ReactNode } from 'react';
 
 import {
   archiveChatSession,
@@ -153,7 +153,7 @@ const modeLabels: Record<ChatMode, string> = {
 };
 
 const wordExportTypes = ['single_answer', 'formal_document'] as const satisfies readonly ChatExportType[];
-const supportedKnowledgeAccept = '.pdf,.txt,.md,.docx,.xlsx,.pptx,application/pdf,text/plain,text/markdown,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.openxmlformats-officedocument.presentationml.presentation';
+const supportedKnowledgeAccept = '.pdf,.txt,.md,.docx,.xlsx,.pptx,.png,.jpg,.jpeg,.webp,application/pdf,text/plain,text/markdown,image/png,image/jpeg,image/webp,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.openxmlformats-officedocument.presentationml.presentation';
 const unsupportedKnowledgeTypeMessage = '当前版本暂不支持该文件类型，请上传 pdf、docx、xlsx、pptx、txt 或 md 文件。';
 const pdfUploadHint = 'PDF 会按页面提取可复制文本，扫描件需要先转成可复制文本。';
 const fallbackUploadCategories = ['个人素材', '会议纪要', '项目交付', '销售商务', '安全运维', '模板范本', '其他'];
@@ -266,12 +266,13 @@ function uploadFileHint(file: File | null): string {
   const dotIndex = file.name.lastIndexOf('.');
   const extension = dotIndex >= 0 ? file.name.slice(dotIndex + 1).trim().toLowerCase() : '';
   if (extension === 'pdf') return pdfUploadHint;
-  if (extension === 'csv' || extension === 'doc' || extension === 'xls' || ['png', 'jpg', 'jpeg', 'webp'].includes(extension)) {
+  if (extension === 'csv' || extension === 'doc' || extension === 'xls') {
     return unsupportedKnowledgeTypeMessage;
   }
+  if (['png', 'jpg', 'jpeg', 'webp'].includes(extension)) return '图片会保存到资料库，并自动参与后续检索和图片引用。';
   if (extension === 'xlsx') return 'Excel 会按 Sheet、表头和行记录解析。';
   if (extension === 'pptx') return 'PPT 会按幻灯片标题、正文和备注解析。';
-  return '当前支持 pdf、docx、xlsx、pptx、txt、md；扫描件需要先转成可复制文本。';
+  return '当前支持 pdf、docx、xlsx、pptx、txt、md、png、jpg、jpeg、webp。';
 }
 
 function uploadFailureMessage(error: unknown): string {
@@ -459,6 +460,7 @@ function filterCitationsByAnswer(citations: ChatCitation[], answer: string): Cha
   const normalizedAnswer = normalizeCitationMatchText(answer);
   if (!normalizedAnswer) return [];
   return citations.filter((citation) => {
+    if (citation.media_type?.startsWith('image/') && citation.asset_url) return true;
     if (citation.source_type === 'web_search_context') return true;
     return [
       ...citationMatchCandidates(citation.file_name),
@@ -830,7 +832,7 @@ export function ChatPage() {
   const [uploadDocumentType, setUploadDocumentType] = useState('其他');
   const [knowledgeCategories, setKnowledgeCategories] = useState<KnowledgeCategoryPayload[]>([]);
   const [knowledgeDocumentTypes, setKnowledgeDocumentTypes] = useState<KnowledgeDocumentTypePayload[]>([]);
-  const [referenceScope, setReferenceScope] = useState<ReferenceScope>('official_only');
+  const [referenceScope, setReferenceScope] = useState<ReferenceScope>('personal_and_session');
   const [enabledReferenceFiles, setEnabledReferenceFiles] = useState<EnabledReferenceFile[]>([]);
   const [referencePickerOpen, setReferencePickerOpen] = useState(false);
   const [referencePickerStatus, setReferencePickerStatus] = useState<ReferenceFilePickerStatus>('idle');
@@ -1145,9 +1147,9 @@ export function ChatPage() {
               ? 'personal_and_session'
               : 'with_personal'
           ));
-          setUploadStatus(`资料已保存并选中：${uploaded.file_name}`);
+          setUploadStatus(`资料已保存，将自动参与后续检索：${uploaded.file_name}`);
         } else {
-          setUploadStatus(`资料已保存到我的资料：${uploaded.file_name}；处理完成后可在“引用资料”中选择。`);
+          setUploadStatus(`资料已保存到我的资料：${uploaded.file_name}；处理完成后会自动参与检索。`);
         }
       }
     } catch (error) {
@@ -1155,6 +1157,19 @@ export function ChatPage() {
     } finally {
       setUploading(false);
     }
+  };
+
+  const handleComposerPaste = (event: ReactClipboardEvent<HTMLTextAreaElement>) => {
+    const pastedFiles = Array.from(event.clipboardData.files || []);
+    const file = pastedFiles[0];
+    if (!file) return;
+
+    event.preventDefault();
+    setPendingUploadFile(file);
+    setUploadPurpose('personal_reference');
+    setUploadStatus(pastedFiles.length > 1
+      ? `已识别 ${pastedFiles.length} 个文件，请先上传 ${file.name}，其余文件可继续粘贴。`
+      : '已从剪贴板识别文件，确认后即可上传。');
   };
 
   const loadPersonalReferenceFiles = async () => {
@@ -1386,11 +1401,9 @@ export function ChatPage() {
         question: trimmed,
         mode,
         attachmentFileIds: sessionAttachmentFiles.map((file) => file.fileUuid),
-        personalReferenceFileIds: selectedPersonalReferenceIds,
-        includePersonalReferences: selectedPersonalReferenceIds.length > 0
-          || referenceScope === 'with_personal'
-          || referenceScope === 'personal_and_session',
-        includeSessionAttachments: referenceScope === 'with_session' || referenceScope === 'personal_and_session',
+        personalReferenceFileIds: [],
+        includePersonalReferences: true,
+        includeSessionAttachments: true,
         sensitiveConfirmationDigest: confirmationDigest,
       });
       requestSessionUuid = prepared.session_uuid;
@@ -2157,7 +2170,10 @@ export function ChatPage() {
     >
       <div className="chat-shell">
         <aside className="chat-sessions" aria-label="历史任务">
-          <strong>历史任务</strong>
+          <div className="chat-sessions-heading">
+            <strong>历史任务</strong>
+            <button className="chat-new-button" onClick={startNewSession} type="button">开启新任务</button>
+          </div>
           <div className="chat-session-tabs" aria-label="任务分类">
             {(Object.keys(sessionListLabels) as ChatSessionListKind[]).map((kind) => (
               <button
@@ -2348,18 +2364,6 @@ export function ChatPage() {
                   ))}
                 </select>
               </label>
-              <label className="chat-mode-select">
-                <span>参考资料</span>
-                <select
-                  aria-label="参考资料"
-                  onChange={(event) => changeReferenceScope(event.target.value as ReferenceScope)}
-                  value={referenceScope}
-                >
-                  {Object.entries(referenceScopeLabels).map(([value, label]) => (
-                    <option key={value} value={value}>{label}</option>
-                  ))}
-                </select>
-              </label>
               <button
                 className="chat-export-button"
                 disabled={!activeSessionUuid || !messages.length || exportingWord}
@@ -2367,9 +2371,6 @@ export function ChatPage() {
                 type="button"
               >
                 {exportingWord ? '导出中…' : '导出工作成果'}
-              </button>
-              <button className="chat-new-button" onClick={startNewSession} type="button">
-                开启新任务
               </button>
             </div>
           </div>
@@ -2448,6 +2449,35 @@ export function ChatPage() {
                           ? renderChatContent(message.content, citationReferences)
                           : <p>{message.content || '正在生成…'}</p>}
                       </div>
+                      {citationReferences.some((reference) => reference.citation.media_type?.startsWith('image/') && reference.citation.asset_url) ? (
+                        <div className="chat-image-attachments" aria-label="回答图片">
+                          {citationReferences
+                            .filter((reference) => reference.citation.media_type?.startsWith('image/') && reference.citation.asset_url)
+                            .map((reference) => (
+                              <a href={reference.citation.asset_url} key={reference.key} target="_blank" rel="noreferrer">
+                                <img alt={reference.label || '资料库图片'} src={reference.citation.asset_url} />
+                                <span>{reference.label || '资料库图片'}</span>
+                              </a>
+                            ))}
+                        </div>
+                      ) : null}
+                      {message.content.startsWith('已找到文件') && citationReferences.some((reference) => (
+                        reference.citation.asset_url && !reference.citation.media_type?.startsWith('image/')
+                      )) ? (
+                        <div className="chat-file-deliveries" aria-label="可下载文件">
+                          {citationReferences
+                            .filter((reference) => reference.citation.asset_url && !reference.citation.media_type?.startsWith('image/'))
+                            .map((reference) => (
+                              <a download href={reference.citation.asset_url} key={reference.key}>
+                                <span className="chat-file-delivery-icon" aria-hidden="true">↓</span>
+                                <span>
+                                  <strong>{reference.label}</strong>
+                                  <small>点击下载</small>
+                                </span>
+                              </a>
+                            ))}
+                        </div>
+                      ) : null}
                       {citationReferences.length ? (
                         <details className="chat-citations">
                           <summary aria-label={`查看 ${citationReferences.length} 个引用来源`}>
@@ -2685,6 +2715,7 @@ export function ChatPage() {
                 id="chat-composer-input"
                 onChange={(event) => setQuestion(event.target.value)}
                 onKeyDown={handleComposerKeyDown}
+                onPaste={handleComposerPaste}
                 placeholder="告诉我你想完成什么工作..."
                 value={question}
               />
@@ -2743,63 +2774,6 @@ export function ChatPage() {
                   )}
                 </section>
               ) : null}
-              {selectedPersonalReferenceFiles.length ? (
-                <section aria-label="已引用资料" className="chat-selected-references">
-                  {selectedPersonalReferenceFiles.map((file) => (
-                    <span className="chat-selected-reference" key={file.file_uuid}>
-                      <span title={file.file_name}>引用：{file.file_name}</span>
-                      <button
-                        aria-label={`取消引用：${file.file_name}`}
-                        onClick={() => removeSelectedPersonalReferenceFile(file.file_uuid)}
-                        type="button"
-                      >
-                        ×
-                      </button>
-                    </span>
-                  ))}
-                </section>
-              ) : null}
-              {referencePickerOpen ? (
-                <section aria-label="选择引用资料" className="chat-reference-picker">
-                  <div className="chat-reference-picker-head">
-                    <strong>选择要引用的资料</strong>
-                    <button onClick={() => setReferencePickerOpen(false)} type="button">关闭</button>
-                  </div>
-                  {referencePickerStatus === 'loading' ? (
-                    <p role="status">正在加载我的资料…</p>
-                  ) : null}
-                  {referencePickerStatus === 'error' ? (
-                    <div className="chat-reference-picker-empty">
-                      <p role="status">资料列表暂时加载失败，请稍后重试。</p>
-                      <button onClick={() => void loadPersonalReferenceFiles()} type="button">重新加载</button>
-                    </div>
-                  ) : null}
-                  {referencePickerStatus === 'ready' && !personalReferenceFiles.length ? (
-                    <p className="chat-reference-picker-empty">还没有可引用的资料。可以先上传并保存到“我的资料”。</p>
-                  ) : null}
-                  {referencePickerStatus === 'ready' && personalReferenceFiles.length ? (
-                    <div className="chat-reference-picker-list">
-                      {personalReferenceFiles.map((file) => (
-                        <label className="chat-reference-picker-item" key={file.file_uuid}>
-                          <input
-                            aria-label={file.file_name}
-                            checked={selectedPersonalReferenceIds.includes(file.file_uuid)}
-                            onChange={() => togglePersonalReferenceFile(file.file_uuid)}
-                            type="checkbox"
-                          />
-                          <span className="chat-attachment-type">{attachmentFileTypeLabel(file.file_name)}</span>
-                          <span className="chat-reference-picker-name" title={file.file_name}>
-                            {file.file_name}
-                          </span>
-                          <span className="chat-attachment-status">
-                            {file.category || '我的资料'}
-                          </span>
-                        </label>
-                      ))}
-                    </div>
-                  ) : null}
-                </section>
-              ) : null}
               <div className="chat-composer-toolbar">
                 <label className="chat-file-trigger">
                   <span>＋ 上传资料</span>
@@ -2817,14 +2791,6 @@ export function ChatPage() {
                     type="file"
                   />
                 </label>
-                <button
-                  aria-pressed={referencePickerOpen || selectedPersonalReferenceIds.length > 0}
-                  className="chat-reference-chip"
-                  onClick={toggleReferencePicker}
-                  type="button"
-                >
-                  引用资料
-                </button>
                 <span className="chat-model-pill">当前设置：{currentModelLabel}</span>
                 {shouldUseServerModel ? (
                   <label className="chat-background-toggle">

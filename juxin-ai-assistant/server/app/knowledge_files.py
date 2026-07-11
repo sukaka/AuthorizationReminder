@@ -22,8 +22,9 @@ from .models import KnowledgeChunk, KnowledgeFile
 MAX_KNOWLEDGE_FILE_MB = 100
 MAX_KNOWLEDGE_FILE_BYTES = MAX_KNOWLEDGE_FILE_MB * 1024 * 1024
 MAX_KNOWLEDGE_METADATA_TEXT_LENGTH = 255
-SUPPORTED_KNOWLEDGE_SUFFIXES = {".txt", ".md", ".docx", ".xlsx", ".pptx", ".pdf"}
-UNSUPPORTED_KNOWLEDGE_TYPE_MESSAGE = "当前版本暂不支持该文件类型，请上传 pdf、docx、xlsx、pptx、txt 或 md 文件。"
+SUPPORTED_IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp"}
+SUPPORTED_KNOWLEDGE_SUFFIXES = {".txt", ".md", ".docx", ".xlsx", ".pptx", ".pdf", *SUPPORTED_IMAGE_SUFFIXES}
+UNSUPPORTED_KNOWLEDGE_TYPE_MESSAGE = "当前版本暂不支持该文件类型，请上传 pdf、docx、xlsx、pptx、txt、md、png、jpg、jpeg 或 webp 文件。"
 HEADING_PATTERN = re.compile(r"^(#{1,6}\s+|[一二三四五六七八九十]+、|\d+[.．、]|\（\d+\）)\S+")
 SPECIAL_TERM_PATTERN = re.compile(
     r"(?i)\b(?:CVE-\d{4}-\d{4,}|[A-Z]{2,}[-_]?[A-Z0-9]{2,}[-_]?\d*|GB/T\s*\d+|ISO\s*\d+|[0-9]{1,3}(?:\.[0-9]{1,3}){3}|[0-9]{2,5})\b"
@@ -446,6 +447,21 @@ def _extract_blocks(file_name: str, data: bytes) -> list[ParsedBlock]:
     suffix = _file_suffix(file_name)
     if suffix not in SUPPORTED_KNOWLEDGE_SUFFIXES:
         raise HTTPException(status_code=415, detail=UNSUPPORTED_KNOWLEDGE_TYPE_MESSAGE)
+    if suffix in SUPPORTED_IMAGE_SUFFIXES:
+        valid_signature = (
+            (suffix == ".png" and data.startswith(b"\x89PNG\r\n\x1a\n"))
+            or (suffix in {".jpg", ".jpeg"} and data.startswith(b"\xff\xd8\xff"))
+            or (suffix == ".webp" and len(data) >= 12 and data[:4] == b"RIFF" and data[8:12] == b"WEBP")
+        )
+        if not valid_signature:
+            raise HTTPException(status_code=422, detail="图片内容与文件扩展名不匹配")
+        display_name = file_name.rsplit(".", 1)[0].replace("_", " ").replace("-", " ").strip()
+        return [ParsedBlock(
+            text=f"图片资料：{display_name or file_name}\n文件名：{file_name}",
+            section_path="图片资料",
+            chunk_type="image",
+            metadata={"media_type": suffix.lstrip("."), "image_asset": True},
+        )]
     if suffix in {".txt", ".md"}:
         return _parse_text_blocks(file_name, data)
     if suffix == ".xlsx":

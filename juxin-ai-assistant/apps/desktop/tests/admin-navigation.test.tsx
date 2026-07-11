@@ -443,7 +443,7 @@ it('explains upload support and rejects unsupported document types on the knowle
   );
 
   expect(await screen.findByText('已选择：客户清单.csv')).toBeInTheDocument();
-  expect(screen.getByText('当前版本暂不支持该文件类型，请上传 pdf、docx、xlsx、pptx、txt 或 md 文件。')).toBeInTheDocument();
+  expect(screen.getByText('当前版本暂不支持该文件类型，请上传 pdf、docx、xlsx、pptx、txt、md、png、jpg、jpeg 或 webp 文件。')).toBeInTheDocument();
 
   await userEvent.upload(
     uploadInput,

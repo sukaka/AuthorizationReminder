@@ -596,10 +596,12 @@ def test_save_knowledge_result_to_chat_history(client_for_user) -> None:
             "section_title": "验收材料",
             "page_or_sheet": "",
             "chunk_type": "",
-            "chunk_index": None,
-            "score": 90,
-        }
-    ]
+                "chunk_index": None,
+                "score": 90,
+                "asset_url": "",
+                "media_type": "",
+            }
+        ]
 
 
 def test_business_mode_adds_juxin_profile_and_role_context(client_for_user) -> None:
@@ -1085,6 +1087,65 @@ def test_knowledge_chat_prepare_returns_citations_and_persists_sources(
     assert assistant["citations"][0]["chunk_id"] == body["citations"][0]["chunk_id"]
     assert assistant["citations"][0]["page_or_sheet"] == "安全服务章节"
     assert assistant["citations"][0]["chunk_type"] == "text"
+
+
+def test_file_delivery_uses_product_alias_and_returns_downloadable_asset(
+    client_for_user,
+    generation_db,
+) -> None:
+    from app.crypto import ContentCipher
+
+    cipher = ContentCipher(os.environ["CONTENT_ENCRYPTION_KEY"])
+    file_record, _chunks = create_knowledge_file_from_bytes(
+        generation_db,
+        sso_user_id="admin",
+        file_name="聚信得仁_WEB动态安全管理平台用户操作与维护手册_V3.0.txt",
+        content="WEB 动态安全管理平台产品使用与维护说明。".encode("utf-8"),
+        content_type="text/plain",
+        cipher=cipher,
+        key_version="v1",
+        visibility="PUBLIC",
+        source_type="admin_upload",
+        usage_type="official_knowledge",
+        review_status="official",
+        rag_enabled=True,
+        rag_scope="company",
+        permission_scope="company",
+        owner_user_id="admin",
+        category="产品资料",
+        document_type="产品手册",
+        tags=["WDSP", "动态安全管理平台", "使用手册"],
+    )
+    generation_db.commit()
+
+    response = client_for_user("delivery-user").post(
+        "/api/ai/chat/prepare",
+        json={"question": "把 WDSP 手册发给我", "mode": "normal", "top_k": 8},
+    )
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["completed"] is True
+    assert body["completion_token"] == ""
+    assert body["messages"] == []
+    assert body["answer"].startswith("已找到文件：")
+    assert file_record.file_name in body["answer"]
+    assert body["citations"] == [
+        {
+            "source_type": "official_knowledge",
+            "file_uuid": file_record.uuid,
+            "file_name": file_record.file_name,
+            "chunk_id": _chunks[0].chunk_id,
+            "page_number": None,
+            "section_title": "",
+            "page_or_sheet": "",
+            "chunk_type": "paragraph",
+            "chunk_index": 0,
+            "score": body["citations"][0]["score"],
+            "asset_url": f"/api/knowledge/files/{file_record.uuid}/download",
+            "media_type": "text/plain",
+        }
+    ]
 
 
 def test_completed_chat_detail_only_returns_sources_mentioned_in_answer(

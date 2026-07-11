@@ -1,5 +1,5 @@
 from collections.abc import AsyncIterator, Awaitable, Callable
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from datetime import datetime
 import asyncio
 import logging
@@ -44,6 +44,7 @@ from .history_service import (
     load_regeneration_source,
     tombstone_history,
 )
+from .hot_questions import hot_question_scheduler
 from .intent_router import route_intent
 from .knowledge import KnowledgeRetriever
 from .knowledge_embedding import build_embedding_service
@@ -111,7 +112,13 @@ from .sensitive import SensitiveDetector, derive_confirmation_key
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     long_task_dispatcher.recover()
     await asyncio.to_thread(_prewarm_knowledge_search)
-    yield
+    hot_question_task = asyncio.create_task(hot_question_scheduler(settings))
+    try:
+        yield
+    finally:
+        hot_question_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await hot_question_task
 
 
 def _prewarm_knowledge_search() -> None:

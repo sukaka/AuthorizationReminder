@@ -101,6 +101,10 @@ KNOWLEDGE_DOWNLOAD_MEDIA_TYPES = {
     "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     "pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    "png": "image/png",
+    "jpg": "image/jpeg",
+    "jpeg": "image/jpeg",
+    "webp": "image/webp",
 }
 
 
@@ -1335,6 +1339,8 @@ async def preview_knowledge_file(
         file_uuid=file_record.uuid,
         file_name=file_record.file_name,
         source_kind=_source_kind_for_file(file_record),
+        asset_url=f"/api/knowledge/files/{file_record.uuid}/download",
+        media_type=_download_media_type(file_record.file_type),
         chunks=[
             KnowledgeFilePreviewChunkOut(
                 chunk_id=chunk.chunk_id,

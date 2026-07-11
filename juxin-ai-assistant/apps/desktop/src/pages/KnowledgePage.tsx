@@ -84,8 +84,8 @@ const generateFromFilePrompt = '请根据这个文档生成一份可直接编辑
 
 const fallbackKnowledgeCategoryOptions = ['公司制度', '产品资料', '项目交付', '销售商务', '行政人力', '安全运维', '模板范本', '会议纪要', '个人素材', '其他'];
 const fallbackKnowledgeDocumentTypeOptions = ['产品白皮书', '解决方案', '投标模板', '交付说明', '测试报告', '安全服务报告', '会议记录', '提示词手册', '其他'];
-const supportedKnowledgeAccept = '.pdf,.txt,.md,.docx,.xlsx,.pptx,application/pdf,text/plain,text/markdown,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.openxmlformats-officedocument.presentationml.presentation';
-const unsupportedKnowledgeTypeMessage = '当前版本暂不支持该文件类型，请上传 pdf、docx、xlsx、pptx、txt 或 md 文件。';
+const supportedKnowledgeAccept = '.pdf,.txt,.md,.docx,.xlsx,.pptx,.png,.jpg,.jpeg,.webp,application/pdf,text/plain,text/markdown,image/png,image/jpeg,image/webp,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.openxmlformats-officedocument.presentationml.presentation';
+const unsupportedKnowledgeTypeMessage = '当前版本暂不支持该文件类型，请上传 pdf、docx、xlsx、pptx、txt、md、png、jpg、jpeg 或 webp 文件。';
 const pdfUploadHint = 'PDF 会按页面提取可复制文本，扫描件需要先转成可复制文本。';
 const previewPageSize = 20;
 
@@ -195,8 +195,11 @@ function parseQualityHint(file: File | null): string {
   if (!file) return '';
   const extension = fileExtension(file.name);
   if (extension === 'pdf') return pdfUploadHint;
-  if (extension === 'csv' || extension === 'doc' || extension === 'xls' || ['png', 'jpg', 'jpeg', 'webp'].includes(extension)) {
+  if (extension === 'csv' || extension === 'doc' || extension === 'xls') {
     return unsupportedKnowledgeTypeMessage;
+  }
+  if (['png', 'jpg', 'jpeg', 'webp'].includes(extension)) {
+    return '图片会作为可检索资料保存；请使用清晰的文件名、分类和标签，例如“WDSP 网专证书”。';
   }
   if (extension === 'xlsx') {
     return 'Excel 会按 Sheet、表头和行记录解析，适合上传产品参数、清单和客户资料。';
@@ -3017,6 +3020,12 @@ export function KnowledgePage({ session }: KnowledgePageProps) {
                 <span>每页 {preview.page_size || previewPageSize} 段</span>
               </div>
               <div className="knowledge-preview-body">
+                {preview.media_type?.startsWith('image/') && preview.asset_url ? (
+                  <figure className="knowledge-image-preview">
+                    <img alt={preview.file_name} src={preview.asset_url} />
+                    <figcaption>{preview.file_name}</figcaption>
+                  </figure>
+                ) : null}
                 <aside aria-label="当前页段落" className="knowledge-preview-outline">
                   {preview.chunks.map((chunk) => (
                     <a href={`#preview-chunk-${chunk.chunk_id}`} key={`outline-${chunk.chunk_id}`}>

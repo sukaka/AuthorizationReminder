@@ -124,6 +124,22 @@ export type TaskReplayItem = {
   updated_at: string;
 };
 
+export type HotQuestionItem = {
+  uuid: string;
+  period_type: 'daily' | 'weekly' | 'monthly';
+  period_start: string;
+  period_end: string;
+  rank: number;
+  question_count: number;
+  representative_question: string;
+  sample_questions: string[];
+  suggested_reply: string;
+  analysis_summary: string;
+  status: 'pending' | 'approved' | 'rejected';
+  reviewed_by: string;
+  reviewed_at: string | null;
+};
+
 export type GovernanceDateFilters = {
   dateFrom?: string;
   dateTo?: string;
@@ -316,6 +332,13 @@ export const governanceApi = {
   ),
   audit: (query = '') => request<GovernanceList<AuditItem>>(
     `/api/ai/admin/audit-logs${query ? `?${query}` : ''}`,
+  ),
+  hotQuestions: (periodType: 'daily' | 'weekly' | 'monthly') => request<GovernanceList<HotQuestionItem>>(
+    `/api/ai/admin/hot-questions?period_type=${encodeURIComponent(periodType)}`,
+  ),
+  reviewHotQuestion: (uuid: string, status: HotQuestionItem['status'], suggestedReply: string) => request<HotQuestionItem>(
+    `/api/ai/admin/hot-questions/${encodeURIComponent(uuid)}`,
+    { method: 'PUT', body: JSON.stringify({ status, suggested_reply: suggestedReply }) },
   ),
   skills: () => request<GovernanceList<AdminSkill>>('/api/admin/skills'),
   publishSkill: (skillId: string) => request<AdminSkill>(

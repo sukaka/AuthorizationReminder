@@ -28,6 +28,8 @@ export type ChatCitation = {
   chunk_type?: string;
   chunk_index?: number | null;
   score?: number;
+  asset_url?: string;
+  media_type?: string;
 };
 
 export type ChatMessagePayload = {
@@ -165,6 +167,8 @@ export type KnowledgeFilePreviewPayload = {
   file_uuid: string;
   file_name: string;
   source_kind: string;
+  asset_url?: string;
+  media_type?: string;
   chunks: KnowledgeFilePreviewChunkPayload[];
   total_chunks: number;
   page?: number;

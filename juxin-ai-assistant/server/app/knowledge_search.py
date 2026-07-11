@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session, object_session
 from .crypto import ContentCipher, EncryptedPayload
 from .knowledge_vector_index import VectorSearchResult
 from .models import KnowledgeBase, KnowledgeChunk, KnowledgeFile
+from .product_aliases import expand_product_aliases
 
 if TYPE_CHECKING:
     from .knowledge_vector_index import QdrantKnowledgeIndex
@@ -721,6 +722,7 @@ def search_knowledge_chunks(
     vector_search_ms = 0.0
     keyword_search_ms = 0.0
     cache_hit = False
+    query = expand_product_aliases(query)
     terms = _query_terms(query)
     if not terms:
         return []

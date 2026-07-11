@@ -182,7 +182,7 @@ def test_create_knowledge_file_rejects_csv_with_first_version_message(generation
         )
 
     assert exc_info.value.status_code == 415
-    assert exc_info.value.detail == "当前版本暂不支持该文件类型，请上传 pdf、docx、xlsx、pptx、txt 或 md 文件。"
+    assert exc_info.value.detail == "当前版本暂不支持该文件类型，请上传 pdf、docx、xlsx、pptx、txt、md、png、jpg、jpeg 或 webp 文件。"
 
 
 def test_create_knowledge_file_extracts_xlsx_table_rows(generation_db) -> None:
@@ -447,7 +447,7 @@ def test_create_knowledge_file_rejects_unsupported_type(
         )
 
     assert exc_info.value.status_code == 415
-    assert str(exc_info.value.detail) == "当前版本暂不支持该文件类型，请上传 pdf、docx、xlsx、pptx、txt 或 md 文件。"
+    assert str(exc_info.value.detail) == "当前版本暂不支持该文件类型，请上传 pdf、docx、xlsx、pptx、txt、md、png、jpg、jpeg 或 webp 文件。"
 
 
 def test_upload_knowledge_file_api_creates_chunks_and_lists_only_owner(

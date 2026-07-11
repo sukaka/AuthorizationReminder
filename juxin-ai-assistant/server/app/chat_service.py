@@ -14,7 +14,7 @@ from .agent_loop.verifier import Verifier
 from .context.context_builder import RecentChatMessage
 from .crypto import ContentCipher, EncryptedPayload
 from .knowledge_search import RetrievedKnowledgeChunk
-from .models import AgentTaskState, ChatMessage, ChatMessageSource, ChatSession, ExportRecord, KnowledgeChunk
+from .models import AgentTaskState, ChatMessage, ChatMessageSource, ChatSession, ExportRecord, KnowledgeChunk, KnowledgeFile
 from .models import KnowledgeSearchLog, WebSearchLog
 from .schemas import (
     ChatCitationOut,
@@ -43,6 +43,25 @@ NO_EVIDENCE_ANSWER = "当前知识库未找到明确依据"
 CHAT_SESSION_ACTIVE = "active"
 CHAT_SESSION_ARCHIVED = "archived"
 CHAT_SESSION_DELETED = "deleted"
+FILE_MEDIA_TYPES = {
+    "png": "image/png",
+    "jpg": "image/jpeg",
+    "jpeg": "image/jpeg",
+    "webp": "image/webp",
+    "pdf": "application/pdf",
+    "txt": "text/plain",
+    "md": "text/markdown",
+    "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+}
+IMAGE_FILE_TYPES = {key for key, value in FILE_MEDIA_TYPES.items() if value.startswith("image/")}
+
+
+def _is_file_delivery_request(question: str) -> bool:
+    normalized = "".join(question.lower().split())
+    delivery_markers = ("发给我", "发送给我", "给我发", "传给我", "下载", "给我文件", "把文件给我")
+    return any(marker in normalized for marker in delivery_markers)
 
 
 def _encrypt_content(
@@ -85,6 +104,23 @@ def _citation_from_chunk(chunk: RetrievedKnowledgeChunk) -> ChatCitationOut:
         chunk_index=chunk.chunk_index,
         score=chunk.score,
     )
+
+
+def _enrich_media_citations(db: Session, citations: list[ChatCitationOut]) -> list[ChatCitationOut]:
+    file_uuids = {citation.file_uuid for citation in citations if citation.file_uuid}
+    if not file_uuids:
+        return citations
+    files = db.scalars(select(KnowledgeFile).where(KnowledgeFile.uuid.in_(file_uuids)))
+    file_type_by_uuid = {
+        file.uuid: (file.file_type or "").strip().lower().lstrip(".")
+        for file in files
+    }
+    for citation in citations:
+        media_type = FILE_MEDIA_TYPES.get(file_type_by_uuid.get(citation.file_uuid, ""), "")
+        if media_type:
+            citation.media_type = media_type
+            citation.asset_url = f"/api/knowledge/files/{citation.file_uuid}/download"
+    return citations
 
 
 def _source_from_citation(message_id: int, citation: ChatCitationOut) -> ChatMessageSource:
@@ -172,7 +208,7 @@ def _message_out(
             chunk.chunk_id: chunk.metadata_json or {}
             for chunk in chunks
         }
-    citations = [
+    citations = _enrich_media_citations(db, [
         ChatCitationOut(
             source_type=source.source_type,
             file_uuid=source.source_uuid,
@@ -186,7 +222,7 @@ def _message_out(
             score=source.score,
         )
         for source in sources
-    ]
+    ])
     return ChatMessageOut(
         message_uuid=message.uuid,
         role=message.role,  # type: ignore[arg-type]
@@ -268,9 +304,15 @@ def _delete_unmentioned_sources(
         for source in verification.get("sources", [])
         if isinstance(source, dict)
     }
+    source_file_uuids = {source.source_uuid for source in sources if source.source_uuid}
+    image_file_uuids = {
+        file.uuid
+        for file in db.scalars(select(KnowledgeFile).where(KnowledgeFile.uuid.in_(source_file_uuids)))
+        if (file.file_type or "").strip().lower().lstrip(".") in IMAGE_FILE_TYPES
+    }
     for source in sources:
         key = (source.source_uuid, source.chunk_id, source.file_name)
-        if key not in kept_keys:
+        if key not in kept_keys and source.source_uuid not in image_file_uuids:
             db.delete(source)
     return verification
 
@@ -566,6 +608,48 @@ def prepare_chat(
     )
     prepared_messages = loop_result.messages
     task_state_payload = dict(loop_result.task_state or {})
+    if _is_file_delivery_request(body.question) and loop_result.chunks:
+        strongest_by_file: dict[str, RetrievedKnowledgeChunk] = {}
+        for chunk in loop_result.chunks:
+            current = strongest_by_file.get(chunk.file_uuid)
+            if current is None or chunk.score > current.score:
+                strongest_by_file[chunk.file_uuid] = chunk
+        delivery_chunks = sorted(
+            strongest_by_file.values(),
+            key=lambda chunk: (chunk.score, chunk.file_name),
+            reverse=True,
+        )[:5]
+        citations = _enrich_media_citations(
+            db,
+            [_citation_from_chunk(chunk) for chunk in delivery_chunks],
+        )
+        answer = "已找到文件：\n" + "\n".join(
+            f"- 《{citation.file_name}》" for citation in citations
+        )
+        assistant = _create_message(
+            db,
+            cipher,
+            session=session,
+            sso_user_id=sso_user_id,
+            role="assistant",
+            content=answer,
+            status="COMPLETED",
+            key_version=key_version,
+        )
+        for citation in citations:
+            db.add(_source_from_citation(assistant.id, citation))
+        return ChatPrepareOut(
+            session_uuid=session.uuid,
+            user_message_uuid=user_message.uuid,
+            assistant_message_uuid=assistant.uuid,
+            completion_token="",
+            completed=True,
+            answer=answer,
+            messages=[],
+            citations=citations,
+            loop_trace=loop_result.loop_trace,
+            task_state=task_state_payload,
+        )
     web_results: list[WebSearchResult] = []
     web_log_id: int | None = None
     should_search_web = (
@@ -690,6 +774,7 @@ def prepare_chat(
         _citation_from_web_result(result, index)
         for index, result in enumerate(web_results)
     )
+    _enrich_media_citations(db, citations)
     for citation in citations:
         db.add(_source_from_citation(assistant.id, citation))
     return ChatPrepareOut(
