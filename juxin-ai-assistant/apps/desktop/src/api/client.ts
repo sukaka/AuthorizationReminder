@@ -67,29 +67,6 @@ export type TaskCardPayload = {
   last_used_at?: string | null;
 };
 
-export type HistoryItemPayload = {
-  uuid: string;
-  task_uuid: string;
-  task_name: string;
-  assistant_code: string;
-  assistant_name: string;
-  status: string;
-  model_display_name: string;
-  model_id: string;
-  prompt_version: number;
-  latency_ms?: number | null;
-  usage: Record<string, unknown>;
-  created_at: string;
-  finished_at?: string | null;
-};
-
-export type HistoryDetailPayload = HistoryItemPayload & {
-  parent_generation_uuid?: string | null;
-  input: Record<string, unknown>;
-  output?: string | null;
-  knowledge_refs: Array<Record<string, unknown>>;
-};
-
 export type WorkArtifactSourcePayload = {
   source_type: string;
   file_name: string;
@@ -128,13 +105,6 @@ export type WorkArtifactDetailPayload = WorkArtifactItemPayload & {
   content?: string | null;
   download_url?: string | null;
   versions: WorkArtifactVersionPayload[];
-};
-
-export type HomePayload = {
-  favorites: TaskCardPayload[];
-  recent_tasks: TaskCardPayload[];
-  recent_generations: HistoryItemPayload[];
-  safety_reminders: string[];
 };
 
 export type SkillPayload = {
@@ -400,13 +370,6 @@ export async function getCatalog(query = ''): Promise<CatalogPayload> {
   return readJson<CatalogPayload>(
     await apiFetch(`/api/ai/catalog${search}`),
     'CATALOG_FAILED',
-  );
-}
-
-export async function getHome(): Promise<HomePayload> {
-  return readJson<HomePayload>(
-    await apiFetch('/api/ai/home'),
-    'HOME_FAILED',
   );
 }
 
@@ -799,34 +762,6 @@ export async function deleteFavorite(taskUuid: string): Promise<void> {
   if (!response.ok) throw new ApiError(response.status, 'FAVORITE_DELETE_FAILED');
 }
 
-export type HistoryFilters = {
-  status?: string;
-  createdFrom?: string;
-  createdTo?: string;
-};
-
-export async function getHistory(filters: HistoryFilters = {}): Promise<{
-  items: HistoryItemPayload[];
-  total: number;
-}> {
-  const search = new URLSearchParams({ page_size: '100' });
-  if (filters.status) search.set('status', filters.status);
-  if (filters.createdFrom) search.set('created_from', filters.createdFrom);
-  if (filters.createdTo) search.set('created_to', filters.createdTo);
-  return readJson(
-    await apiFetch(`/api/ai/generations?${search.toString()}`),
-    'HISTORY_FAILED',
-  );
-}
-
-export async function deleteHistory(generationUuid: string): Promise<void> {
-  const response = await apiFetch(
-    `/api/ai/generations/${encodeURIComponent(generationUuid)}`,
-    { method: 'DELETE' },
-  );
-  if (!response.ok) throw new ApiError(response.status, 'HISTORY_DELETE_FAILED');
-}
-
 export async function getWorkArtifacts(filters: {
   artifactType?: string;
   createdFrom?: string;
@@ -972,14 +907,5 @@ export async function submitFeedback(
       },
     ),
     'FEEDBACK_FAILED',
-  );
-}
-
-export async function getHistoryDetail(
-  generationUuid: string,
-): Promise<HistoryDetailPayload> {
-  return readJson(
-    await apiFetch(`/api/ai/generations/${encodeURIComponent(generationUuid)}`),
-    'HISTORY_DETAIL_FAILED',
   );
 }

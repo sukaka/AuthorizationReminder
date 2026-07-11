@@ -1,23 +1,67 @@
 import hashlib
+import json
+import logging
 import re
+from collections import OrderedDict
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from functools import lru_cache
 from math import log, sqrt
+from threading import Lock
+from time import monotonic, perf_counter
+from typing import TYPE_CHECKING
 
+import numpy as np
 from sqlalchemy import or_, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, object_session
 
 from .crypto import ContentCipher, EncryptedPayload
+from .knowledge_vector_index import VectorSearchResult
 from .models import KnowledgeBase, KnowledgeChunk, KnowledgeFile
+from .product_aliases import expand_product_aliases
+
+if TYPE_CHECKING:
+    from .knowledge_vector_index import QdrantKnowledgeIndex
 
 
 EMBEDDING_PROVIDER = "local-hash"
 EMBEDDING_VERSION = "v1"
 DEFAULT_EMBEDDING_DIMENSIONS = 128
-VECTOR_CANDIDATE_THRESHOLD = 0.35
-HYBRID_CANDIDATE_LIMIT = 30
-MAX_CHUNKS_PER_FILE = 3
+# Qwen3-Embedding GGUF cosine scores are typically lower than hosted dense
+# embedding services; lexical reranking and relevance gates remove weak hits.
+VECTOR_CANDIDATE_THRESHOLD = 0.30
+MIN_HYBRID_CANDIDATE_LIMIT = 30
+PRECISE_RETRIEVAL_LIMIT = 12
+SUMMARY_RETRIEVAL_LIMIT = 18
+EXHAUSTIVE_RETRIEVAL_LIMIT = 24
 MIN_FILE_COVERAGE = 3
+MIN_LEXICAL_MATCH_TERMS = 2
+OFFICIAL_INDEX_CACHE_TTL_SECONDS = 60.0
+
+EXHAUSTIVE_QUERY_MARKERS = (
+    "全部", "完整", "所有", "全量", "逐项", "逐条", "一览", "不遗漏",
+)
+SUMMARY_QUERY_MARKERS = (
+    "汇总", "总结", "概览", "综述", "主要内容", "包含什么", "有哪些",
+    "列出", "整理", "清单", "归纳",
+)
+
+_official_rows_cache: OrderedDict[
+    tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...]],
+    tuple[float, tuple[tuple[KnowledgeChunk, KnowledgeFile], ...]],
+] = OrderedDict()
+_official_rows_cache_lock = Lock()
+_official_rows_cache_size = 8
+
+
+def clear_knowledge_search_caches() -> None:
+    with _official_rows_cache_lock:
+        _official_rows_cache.clear()
+    with HybridRetriever._document_cache_lock:
+        HybridRetriever._document_cache.clear()
+    with VectorStoreService._matrix_cache_lock:
+        VectorStoreService._matrix_cache.clear()
+    _cached_query_terms.cache_clear()
 
 
 @dataclass(frozen=True)
@@ -36,13 +80,30 @@ class RetrievedKnowledgeChunk:
     chunk_type: str = "text"
 
 
-def _clamp_top_k(top_k: int | None) -> int:
-    if top_k is None:
-        return 8
-    return max(1, min(int(top_k), 8))
+def resolve_retrieval_limit(query: str, top_k: int | None = None) -> int:
+    """Resolve the final context size from query intent and caller preference."""
+    normalized = "".join(query.lower().split())
+    if any(marker in normalized for marker in EXHAUSTIVE_QUERY_MARKERS):
+        intent_limit = EXHAUSTIVE_RETRIEVAL_LIMIT
+    elif any(marker in normalized for marker in SUMMARY_QUERY_MARKERS):
+        intent_limit = SUMMARY_RETRIEVAL_LIMIT
+    else:
+        intent_limit = PRECISE_RETRIEVAL_LIMIT
+
+    requested_limit = max(1, int(top_k)) if top_k is not None else 0
+    return min(max(intent_limit, requested_limit), EXHAUSTIVE_RETRIEVAL_LIMIT)
 
 
-def _query_terms(query: str) -> list[str]:
+def max_chunks_per_file(limit: int) -> int:
+    if limit <= PRECISE_RETRIEVAL_LIMIT:
+        return 4
+    if limit <= 20:
+        return 6
+    return 8
+
+
+@lru_cache(maxsize=20_000)
+def _cached_query_terms(query: str) -> tuple[str, ...]:
     normalized = query.strip().lower()
     terms = [
         term.lower()
@@ -58,7 +119,11 @@ def _query_terms(query: str) -> list[str]:
     for term in terms or ([normalized] if normalized else []):
         if term and term not in deduped:
             deduped.append(term)
-    return deduped
+    return tuple(deduped)
+
+
+def _query_terms(query: str) -> list[str]:
+    return list(_cached_query_terms(query))
 
 
 def _score(text: str, terms: list[str]) -> int:
@@ -122,6 +187,9 @@ class EmbeddingService:
         if not norm:
             return vector
         return [round(value / norm, 6) for value in vector]
+
+    def embed_query(self, text: str) -> list[float]:
+        return self.embed(text)
 
     def embed_chunk(self, chunk_text: str, metadata: dict | None = None) -> list[float]:
         return self.embed("\n".join([_metadata_text(metadata), chunk_text]).strip())
@@ -188,6 +256,10 @@ class VectorStoreService:
     time. This keeps the service usable without adding an external vector DB.
     """
 
+    _matrix_cache: OrderedDict[tuple[str, ...], np.ndarray] = OrderedDict()
+    _matrix_cache_lock = Lock()
+    _matrix_cache_size = 6
+
     def __init__(self, embedding_service: EmbeddingService | None = None):
         self.embedding_service = embedding_service or EmbeddingService()
 
@@ -202,12 +274,42 @@ class VectorStoreService:
         query_vector: list[float],
         documents: list[_SearchDocument],
         *,
-        top_k: int = HYBRID_CANDIDATE_LIMIT,
+        top_k: int = MIN_HYBRID_CANDIDATE_LIMIT,
     ) -> list[tuple[int, float]]:
-        scored = [
-            (index, self.score(query_vector, document.metadata))
-            for index, document in enumerate(documents)
-        ]
+        if not query_vector or not documents:
+            return []
+        cache_key = (
+            f"dimensions:{len(query_vector)}",
+            *(
+                f"{document.chunk.chunk_id}:{document.chunk.embedding_id or ''}"
+                for document in documents
+            ),
+        )
+        with self._matrix_cache_lock:
+            matrix = self._matrix_cache.get(cache_key)
+            if matrix is not None:
+                self._matrix_cache.move_to_end(cache_key)
+        if matrix is None:
+            vectors = [self.embedding_service.from_metadata(document.metadata) for document in documents]
+            dimensions = len(query_vector)
+            matrix = np.zeros((len(documents), dimensions), dtype=np.float32)
+            for index, vector in enumerate(vectors):
+                if len(vector) == dimensions:
+                    matrix[index] = vector
+            norms = np.linalg.norm(matrix, axis=1, keepdims=True)
+            np.divide(matrix, norms, out=matrix, where=norms > 0)
+            matrix.setflags(write=False)
+            with self._matrix_cache_lock:
+                self._matrix_cache[cache_key] = matrix
+                self._matrix_cache.move_to_end(cache_key)
+                while len(self._matrix_cache) > self._matrix_cache_size:
+                    self._matrix_cache.popitem(last=False)
+        query_array = np.asarray(query_vector, dtype=np.float32)
+        query_norm = float(np.linalg.norm(query_array))
+        if query_norm <= 0:
+            return []
+        similarities = matrix @ (query_array / query_norm)
+        scored = list(enumerate(float(value) for value in similarities))
         return [
             item for item in sorted(scored, key=lambda value: value[1], reverse=True)
             if item[1] >= VECTOR_CANDIDATE_THRESHOLD
@@ -253,7 +355,7 @@ class BM25Retriever:
         query: str,
         documents: list[str],
         *,
-        top_k: int = HYBRID_CANDIDATE_LIMIT,
+        top_k: int = MIN_HYBRID_CANDIDATE_LIMIT,
     ) -> list[tuple[int, float]]:
         scored = [
             (index, score)
@@ -287,7 +389,7 @@ class RerankService:
             + hybrid_bonus
         )
 
-    def rank(self, candidates: list[_HybridCandidate], *, top_k: int | None) -> list[_HybridCandidate]:
+    def rank(self, candidates: list[_HybridCandidate], *, limit: int) -> list[_HybridCandidate]:
         ranked = sorted(
             candidates,
             key=lambda item: (
@@ -300,9 +402,10 @@ class RerankService:
             ),
             reverse=True,
         )
-        limit = _clamp_top_k(top_k)
         if not ranked:
             return []
+
+        per_file_limit = max_chunks_per_file(limit)
 
         selected: list[_HybridCandidate] = []
         selected_ids: set[int] = set()
@@ -332,7 +435,7 @@ class RerankService:
             if id(candidate) in selected_ids:
                 continue
             file_uuid = candidate.document.file_record.uuid
-            if file_counts.get(file_uuid, 0) >= MAX_CHUNKS_PER_FILE:
+            if file_counts.get(file_uuid, 0) >= per_file_limit:
                 continue
             selected.append(candidate)
             selected_ids.add(id(candidate))
@@ -358,6 +461,15 @@ def _metadata_text(metadata: dict | None) -> str:
 def _metadata_bonus(metadata: dict | None, terms: list[str]) -> int:
     text = _metadata_text(metadata).lower()
     return sum(5 for term in terms if term and term in text)
+
+
+def _has_lexical_relevance(text: str, terms: list[str]) -> bool:
+    lowered = text.lower()
+    matched = {term for term in terms if term and term in lowered}
+    return (
+        len(matched) >= MIN_LEXICAL_MATCH_TERMS
+        or any(len(term) >= 6 for term in matched)
+    )
 
 
 def _retrieved_from_row(
@@ -398,6 +510,8 @@ def _hybrid_rank_rows(
     source_kind_for_file,
     top_k: int | None,
     embedding_service: EmbeddingService | None = None,
+    query_vector: list[float] | None = None,
+    external_vector_scores: dict[str, float] | None = None,
 ) -> list[RetrievedKnowledgeChunk]:
     return HybridRetriever(cipher=cipher, embedding_service=embedding_service).retrieve(
         rows,
@@ -405,10 +519,16 @@ def _hybrid_rank_rows(
         terms=terms,
         source_kind_for_file=source_kind_for_file,
         top_k=top_k,
+        query_vector=query_vector,
+        external_vector_scores=external_vector_scores,
     )
 
 
 class HybridRetriever:
+    _document_cache: OrderedDict[tuple[str, ...], tuple[_SearchDocument, ...]] = OrderedDict()
+    _document_cache_lock = Lock()
+    _document_cache_size = 8
+
     def __init__(
         self,
         *,
@@ -433,39 +553,72 @@ class HybridRetriever:
         terms: list[str],
         source_kind_for_file,
         top_k: int | None,
+        query_vector: list[float] | None = None,
+        external_vector_scores: dict[str, float] | None = None,
     ) -> list[RetrievedKnowledgeChunk]:
-        documents: list[_SearchDocument] = []
-        for chunk, file_record in rows:
-            payload = self.cipher.decrypt_json(
-                EncryptedPayload(
-                    ciphertext=chunk.chunk_text_ciphertext,
-                    nonce=chunk.chunk_text_nonce,
-                ),
-                chunk.chunk_id.encode(),
+        source_kinds = [source_kind_for_file(file_record) for _, file_record in rows]
+        cache_key = tuple(
+            (
+                f"{chunk.chunk_id}:{chunk.updated_at}:{file_record.uuid}:{file_record.updated_at}:"
+                f"{hashlib.sha256(chunk.chunk_text_ciphertext).hexdigest()[:16]}:{source_kind}"
             )
-            chunk_text = str(payload.get("text", ""))
-            metadata = chunk.metadata_json or {}
-            haystack = "\n".join([
-                file_record.file_name,
-                chunk.section_title,
-                _metadata_text(metadata),
-                chunk_text,
-            ])
-            documents.append(
-                _SearchDocument(
-                    chunk=chunk,
-                    file_record=file_record,
-                    chunk_text=chunk_text,
-                    haystack=haystack,
-                    metadata=metadata,
-                    source_kind=source_kind_for_file(file_record),
+            for (chunk, file_record), source_kind in zip(rows, source_kinds, strict=True)
+        )
+        with self._document_cache_lock:
+            cached_documents = self._document_cache.get(cache_key)
+            if cached_documents is not None:
+                self._document_cache.move_to_end(cache_key)
+        if cached_documents is not None:
+            documents = list(cached_documents)
+        else:
+            documents = []
+            for (chunk, file_record), source_kind in zip(rows, source_kinds, strict=True):
+                payload = self.cipher.decrypt_json(
+                    EncryptedPayload(
+                        ciphertext=chunk.chunk_text_ciphertext,
+                        nonce=chunk.chunk_text_nonce,
+                    ),
+                    chunk.chunk_id.encode(),
                 )
-            )
+                chunk_text = str(payload.get("text", ""))
+                metadata = chunk.metadata_json or {}
+                haystack = "\n".join([
+                    file_record.file_name,
+                    chunk.section_title,
+                    _metadata_text(metadata),
+                    chunk_text,
+                ])
+                documents.append(
+                    _SearchDocument(
+                        chunk=chunk,
+                        file_record=file_record,
+                        chunk_text=chunk_text,
+                        haystack=haystack,
+                        metadata=metadata,
+                        source_kind=source_kind,
+                    )
+                )
+            with self._document_cache_lock:
+                self._document_cache[cache_key] = tuple(documents)
+                self._document_cache.move_to_end(cache_key)
+                while len(self._document_cache) > self._document_cache_size:
+                    self._document_cache.popitem(last=False)
         if not documents:
             return []
 
-        query_vector = self.embedding_service.embed(query)
-        vector_scores = dict(self.vector_store.rank(query_vector, documents, top_k=HYBRID_CANDIDATE_LIMIT))
+        result_limit = resolve_retrieval_limit(query, top_k)
+        candidate_limit = max(MIN_HYBRID_CANDIDATE_LIMIT, result_limit * 3)
+        if external_vector_scores is not None:
+            vector_scores = {
+                index: external_vector_scores[document.chunk.chunk_id]
+                for index, document in enumerate(documents)
+                if document.chunk.chunk_id in external_vector_scores
+            }
+        else:
+            resolved_query_vector = query_vector or self.embedding_service.embed_query(query)
+            vector_scores = dict(
+                self.vector_store.rank(resolved_query_vector, documents, top_k=candidate_limit)
+            )
         bm25_scores_all = self.bm25_retriever.score_documents(query, [document.haystack for document in documents])
         bm25_scores = dict(
             sorted(
@@ -476,7 +629,7 @@ class HybridRetriever:
                 ],
                 key=lambda item: item[1],
                 reverse=True,
-            )[:HYBRID_CANDIDATE_LIMIT]
+            )[:candidate_limit]
         )
         keyword_scores = {
             index: self.keyword_service.score(document.haystack, terms)
@@ -491,7 +644,7 @@ class HybridRetriever:
                 ],
                 key=lambda item: item[1],
                 reverse=True,
-            )[:HYBRID_CANDIDATE_LIMIT]
+            )[:candidate_limit]
         )
 
         candidate_indices = set(vector_scores) | set(bm25_scores) | set(keyword_top)
@@ -502,7 +655,9 @@ class HybridRetriever:
             bm25_score = bm25_scores_all[index] if index < len(bm25_scores_all) else 0.0
             vector_score = vector_scores.get(index, 0.0)
             bonus = _metadata_bonus(document.metadata, terms)
-            if keyword_score <= 0 and bm25_score <= 0 and vector_score <= 0 and bonus <= 0:
+            semantic_relevant = vector_score >= VECTOR_CANDIDATE_THRESHOLD
+            lexical_relevant = _has_lexical_relevance(document.haystack, terms)
+            if not semantic_relevant and not lexical_relevant:
                 continue
             final_score = self.rerank_service.score(
                 keyword_score=keyword_score,
@@ -521,7 +676,7 @@ class HybridRetriever:
                 )
             )
 
-        ranked = self.rerank_service.rank(candidates, top_k=top_k)
+        ranked = self.rerank_service.rank(candidates, limit=result_limit)
         return [
             _retrieved_from_row(
                 chunk=candidate.document.chunk,
@@ -557,7 +712,17 @@ def search_knowledge_chunks(
     categories: list[str] | None = None,
     document_types: list[str] | None = None,
     embedding_service: EmbeddingService | None = None,
+    track_usage: bool = True,
+    vector_index: "QdrantKnowledgeIndex | None" = None,
+    keyword_index=None,
+    knowledge_cache=None,
 ) -> list[RetrievedKnowledgeChunk]:
+    request_started = perf_counter()
+    embedding_ms = 0.0
+    vector_search_ms = 0.0
+    keyword_search_ms = 0.0
+    cache_hit = False
+    query = expand_product_aliases(query)
     terms = _query_terms(query)
     if not terms:
         return []
@@ -577,14 +742,16 @@ def search_knowledge_chunks(
         KnowledgeFile.permission_scope == "company",
     ]
     normalized_base_ids = [base_id.strip() for base_id in (knowledge_base_ids or []) if base_id.strip()]
+    numeric_base_ids: list[int] = []
     if normalized_base_ids:
-        conditions.append(
-            KnowledgeFile.knowledge_base_id.in_(
-                select(KnowledgeBase.id).where(
-                    KnowledgeBase.uuid.in_(normalized_base_ids),
-                    KnowledgeBase.deleted_at.is_(None),
-                )
+        numeric_base_ids = list(db.scalars(
+            select(KnowledgeBase.id).where(
+                KnowledgeBase.uuid.in_(normalized_base_ids),
+                KnowledgeBase.deleted_at.is_(None),
             )
+        ))
+        conditions.append(
+            KnowledgeFile.knowledge_base_id.in_(numeric_base_ids)
         )
     normalized_categories = [item.strip() for item in (categories or []) if item.strip()]
     if normalized_categories:
@@ -593,12 +760,119 @@ def search_knowledge_chunks(
     if normalized_document_types:
         conditions.append(KnowledgeFile.document_type.in_(normalized_document_types))
 
-    rows = db.execute(
-        select(KnowledgeChunk, KnowledgeFile)
-        .join(KnowledgeFile, KnowledgeFile.id == KnowledgeChunk.file_id)
-        .where(*conditions)
-    ).all()
+    result_limit = resolve_retrieval_limit(query, top_k)
+    candidate_limit = max(MIN_HYBRID_CANDIDATE_LIMIT, result_limit * 3)
+    resolved_embedding_service = embedding_service or EmbeddingService()
+    query_vector: list[float] | None = None
+    external_vector_scores: dict[str, float] | None = None
+    external_chunk_ids: list[str] = []
+    if vector_index is None:
+        from .config import get_settings
+        from .knowledge_cache import RedisKnowledgeCache
+        from .knowledge_keyword_index import TantivyKnowledgeIndex
+        from .knowledge_vector_index import QdrantKnowledgeIndex
 
+        current_settings = get_settings()
+        vector_index = QdrantKnowledgeIndex.from_settings(
+            current_settings,
+            dimensions=getattr(resolved_embedding_service, "dimensions", 0),
+        )
+        if knowledge_cache is None:
+            knowledge_cache = RedisKnowledgeCache.from_settings(current_settings)
+        if keyword_index is None:
+            keyword_index = TantivyKnowledgeIndex.from_settings(current_settings)
+    if vector_index.enabled:
+        scope = "|".join([
+            ",".join(str(item) for item in numeric_base_ids),
+            ",".join(normalized_categories),
+            ",".join(normalized_document_types),
+        ])
+        cached_hits = (
+            knowledge_cache.get_vector_hits(query, scope=scope, limit=candidate_limit)
+            if knowledge_cache is not None
+            else None
+        )
+        if cached_hits is not None and cached_hits.found:
+            external_hits = cached_hits.hits
+            cache_hit = True
+        else:
+            embedding_started = perf_counter()
+            query_vector = resolved_embedding_service.embed_query(query)
+            embedding_ms = (perf_counter() - embedding_started) * 1000
+            expected_dimensions = getattr(vector_index, "dimensions", len(query_vector))
+            if len(query_vector) != expected_dimensions:
+                external_result = VectorSearchResult(available=False)
+            else:
+                vector_started = perf_counter()
+                external_result = vector_index.search(
+                    query_vector,
+                    limit=candidate_limit,
+                    knowledge_base_ids=numeric_base_ids,
+                    categories=normalized_categories,
+                    document_types=normalized_document_types,
+                    score_threshold=VECTOR_CANDIDATE_THRESHOLD,
+                )
+                vector_search_ms = (perf_counter() - vector_started) * 1000
+            external_hits = external_result.hits if external_result.available else ()
+            if external_result.available and knowledge_cache is not None:
+                knowledge_cache.set_vector_hits(
+                    query,
+                    scope=scope,
+                    limit=candidate_limit,
+                    hits=external_hits,
+                )
+        if external_hits:
+            external_chunk_ids = [hit.chunk_id for hit in external_hits]
+            external_vector_scores = {hit.chunk_id: hit.score for hit in external_hits}
+
+    if keyword_index is not None and keyword_index.enabled:
+        keyword_started = perf_counter()
+        keyword_result = keyword_index.search(terms, limit=candidate_limit)
+        keyword_search_ms = (perf_counter() - keyword_started) * 1000
+        if keyword_result.available:
+            seen_chunk_ids = set(external_chunk_ids)
+            for hit in keyword_result.hits:
+                if hit.chunk_id not in seen_chunk_ids:
+                    external_chunk_ids.append(hit.chunk_id)
+                    seen_chunk_ids.add(hit.chunk_id)
+
+    cache_key = (
+        tuple(normalized_base_ids),
+        tuple(normalized_categories),
+        tuple(normalized_document_types),
+    )
+    rows: list[tuple[KnowledgeChunk, KnowledgeFile]] | tuple[tuple[KnowledgeChunk, KnowledgeFile], ...]
+    use_cache = db.get_bind().dialect.name != "sqlite" and not external_chunk_ids
+    cached_rows: tuple[tuple[KnowledgeChunk, KnowledgeFile], ...] | None = None
+    if use_cache:
+        with _official_rows_cache_lock:
+            cached = _official_rows_cache.get(cache_key)
+            if cached and monotonic() - cached[0] < OFFICIAL_INDEX_CACHE_TTL_SECONDS:
+                cached_rows = cached[1]
+                _official_rows_cache.move_to_end(cache_key)
+            elif cached:
+                _official_rows_cache.pop(cache_key, None)
+    if cached_rows is not None:
+        rows = cached_rows
+    else:
+        row_query = (
+            select(KnowledgeChunk, KnowledgeFile)
+            .join(KnowledgeFile, KnowledgeFile.id == KnowledgeChunk.file_id)
+            .where(*conditions)
+        )
+        if external_chunk_ids:
+            row_query = row_query.where(KnowledgeChunk.chunk_id.in_(external_chunk_ids))
+        rows = db.execute(row_query).all()
+        if use_cache:
+            cached_rows = tuple(rows)
+            with _official_rows_cache_lock:
+                _official_rows_cache[cache_key] = (monotonic(), cached_rows)
+                _official_rows_cache.move_to_end(cache_key)
+                while len(_official_rows_cache) > _official_rows_cache_size:
+                    _official_rows_cache.popitem(last=False)
+            rows = cached_rows
+
+    rerank_started = perf_counter()
     results = _hybrid_rank_rows(
         rows,
         query=query,
@@ -606,9 +880,35 @@ def search_knowledge_chunks(
         cipher=cipher,
         source_kind_for_file=lambda _file: "official_knowledge",
         top_k=top_k,
-        embedding_service=embedding_service,
+        embedding_service=resolved_embedding_service,
+        query_vector=query_vector,
+        external_vector_scores=external_vector_scores,
     )
-    _mark_files_used(db, results)
+    rerank_ms = (perf_counter() - rerank_started) * 1000
+    if use_cache:
+        cached_entities = {
+            id(entity): entity
+            for chunk, file_record in rows
+            for entity in (chunk, file_record)
+        }
+        for entity in cached_entities.values():
+            if object_session(entity) is db:
+                db.expunge(entity)
+    if track_usage:
+        _mark_files_used(db, results)
+    logging.getLogger(__name__).info(
+        "knowledge_retrieval_metrics %s",
+        json.dumps({
+            "request_total_ms": round((perf_counter() - request_started) * 1000, 2),
+            "embedding_ms": round(embedding_ms, 2),
+            "vector_search_ms": round(vector_search_ms, 2),
+            "keyword_search_ms": round(keyword_search_ms, 2),
+            "rerank_ms": round(rerank_ms, 2),
+            "cache_hit": cache_hit,
+            "candidate_count": len(external_chunk_ids),
+            "result_count": len(results),
+        }, separators=(",", ":")),
+    )
     return results
 
 

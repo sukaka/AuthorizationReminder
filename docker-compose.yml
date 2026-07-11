@@ -639,6 +639,99 @@ services:
         condition: service_completed_successfully
     restart: "no"
 
+  qdrant:
+    image: qdrant/qdrant:v1.12.6
+    volumes:
+      - qdrant-data:/qdrant/storage
+    ports:
+      - "6333:6333"
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c '</dev/tcp/127.0.0.1/6333'"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  ai-assistant-redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory", "512mb", "--maxmemory-policy", "allkeys-lru"]
+    volumes:
+      - ai-assistant-redis-data:/data
+    ports:
+      - "6380:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  qwen-embedding:
+    profiles: ["docker-embedding"]
+    image: ghcr.io/ggml-org/llama.cpp:server
+    command:
+      - "-m"
+      - "/models/Qwen3-Embedding-4B-Q4_K_M.gguf"
+      - "--host"
+      - "0.0.0.0"
+      - "--port"
+      - "8091"
+      - "--embedding"
+      - "--pooling"
+      - "last"
+      - "--ctx-size"
+      - "2048"
+      - "--batch-size"
+      - "256"
+      - "--ubatch-size"
+      - "256"
+      - "--parallel"
+      - "1"
+    volumes:
+      - ./Qwen3-Embedding-4B-GGUF:/models:ro
+    ports:
+      - "8091:8091"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8091/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 60
+      start_period: 120s
+    restart: unless-stopped
+
+  ai-assistant-vector-init:
+    image: codex-new-ai-assistant-api:latest
+    user: "0:0"
+    command:
+      - "/bin/sh"
+      - "-c"
+      - "python scripts/sync_qdrant_knowledge_index.py --recreate && chown -R 1000:1000 /data/ai-assistant/keyword-index"
+    environment:
+      DATABASE_URL: "mysql+pymysql://ai_assistant_user:${AI_ASSISTANT_MYSQL_PASSWORD}@mysql:3306/juxin_ai_assistant"
+      CONTENT_ENCRYPTION_KEY: ${AI_CONTENT_ENCRYPTION_KEY}
+      AUDIT_HASH_SALT: ${AI_ASSISTANT_AUDIT_HASH_SALT}
+      AI_LOCAL_BINDING_SECRET: ${AI_LOCAL_BINDING_SECRET}
+      PROMPT_CENTER_RUNTIME_TOKEN: ${PROMPT_CENTER_RUNTIME_TOKEN}
+      EMBEDDING_MODEL_API_KEY: ${AI_ASSISTANT_EMBEDDING_MODEL_API_KEY:-}
+      EMBEDDING_MODEL_TIMEOUT_SECONDS: ${AI_ASSISTANT_EMBEDDING_MODEL_TIMEOUT_SECONDS:-30}
+      QDRANT_ENABLED: "true"
+      QDRANT_URL: "http://qdrant:6333"
+      QDRANT_COLLECTION: "juxin_official_knowledge"
+      KNOWLEDGE_REDIS_ENABLED: "true"
+      KNOWLEDGE_REDIS_URL: "redis://ai-assistant-redis:6379/0"
+      KNOWLEDGE_KEYWORD_INDEX_ENABLED: "true"
+      KNOWLEDGE_KEYWORD_INDEX_DIR: "/data/ai-assistant/keyword-index/current"
+    volumes:
+      - ai-assistant-keyword-index:/data/ai-assistant/keyword-index
+    depends_on:
+      ai-assistant-db-init:
+        condition: service_completed_successfully
+      qdrant:
+        condition: service_healthy
+      ai-assistant-redis:
+        condition: service_healthy
+    restart: "no"
+
   ai-assistant-api:
     build:
       context: ./juxin-ai-assistant
@@ -665,14 +758,26 @@ services:
       SERVER_MODEL_DISPLAY_NAME: ${AI_ASSISTANT_SERVER_MODEL_DISPLAY_NAME:-服务端模型}
       EMBEDDING_MODEL_API_KEY: ${AI_ASSISTANT_EMBEDDING_MODEL_API_KEY:-}
       EMBEDDING_MODEL_TIMEOUT_SECONDS: ${AI_ASSISTANT_EMBEDDING_MODEL_TIMEOUT_SECONDS:-30}
+      QDRANT_ENABLED: "true"
+      QDRANT_URL: "http://qdrant:6333"
+      QDRANT_COLLECTION: "juxin_official_knowledge"
+      KNOWLEDGE_REDIS_ENABLED: "true"
+      KNOWLEDGE_REDIS_URL: "redis://ai-assistant-redis:6379/0"
+      KNOWLEDGE_KEYWORD_INDEX_ENABLED: "true"
+      KNOWLEDGE_KEYWORD_INDEX_DIR: "/data/ai-assistant/keyword-index/current"
       DESKTOP_UPDATE_STORAGE_DIR: /data/ai-assistant/desktop-updates
       DESKTOP_UPDATE_MAX_BYTES: ${AI_DESKTOP_UPDATE_MAX_BYTES:-1073741824}
       DESKTOP_UPDATE_PUBLIC_BASE_URL: ${AI_DESKTOP_UPDATE_PUBLIC_BASE_URL:-}
     volumes:
       - ai-assistant-updates:/data/ai-assistant/desktop-updates
+      - ai-assistant-keyword-index:/data/ai-assistant/keyword-index
     depends_on:
       ai-assistant-db-init:
         condition: service_completed_successfully
+      ai-assistant-vector-init:
+        condition: service_completed_successfully
+      ai-assistant-redis:
+        condition: service_healthy
       auth:
         condition: service_started
       prompt-center-api:
@@ -700,6 +805,24 @@ services:
         condition: service_started
     ports:
       - "18093:80"
+
+  ai-assistant-https:
+    image: nginx:alpine
+    depends_on:
+      ai-assistant-api:
+        condition: service_healthy
+      web-ai-assistant:
+        condition: service_started
+      auth:
+        condition: service_started
+    volumes:
+      - ./https-nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./https-nginx/proxy_params:/etc/nginx/proxy_params:ro
+      - ./https-nginx/certs:/etc/nginx/certs:ro
+    ports:
+      - "80:80"
+      - "443:443"
+    restart: unless-stopped
 
   sca-postgres:
     image: postgres:16-alpine
@@ -1170,6 +1293,9 @@ services:
 
 volumes:
   ai-assistant-updates:
+  qdrant-data:
+  ai-assistant-redis-data:
+  ai-assistant-keyword-index:
   mysql-data:
   faq-data:
   tender-data:

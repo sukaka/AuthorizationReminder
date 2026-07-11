@@ -38,7 +38,7 @@ RUN set -eux; \
     && rm -rf /var/lib/apt/lists/*
 
 COPY server/requirements.txt ./
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir --timeout 120 --retries 10 -r requirements.txt
 
 COPY server/app ./app
 COPY server/company_profile ./company_profile

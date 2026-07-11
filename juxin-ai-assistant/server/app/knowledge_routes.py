@@ -19,6 +19,7 @@ from .knowledge_embedding import build_embedding_service
 from .knowledge_files import (
     _safe_file_name,
     create_knowledge_file_from_bytes,
+    invalidate_knowledge_search,
     reparse_knowledge_file_from_existing_chunks,
 )
 from .knowledge_search import RetrievedKnowledgeChunk, search_knowledge_chunks
@@ -100,6 +101,10 @@ KNOWLEDGE_DOWNLOAD_MEDIA_TYPES = {
     "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     "pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    "png": "image/png",
+    "jpg": "image/jpeg",
+    "jpeg": "image/jpeg",
+    "webp": "image/webp",
 }
 
 
@@ -1029,6 +1034,7 @@ async def delete_knowledge_category(
         raise HTTPException(status_code=409, detail="该分类下还有资料，请先移动资料或停用分类")
     category.deleted_at = datetime.now()
     db.commit()
+    invalidate_knowledge_search()
     return Response(status_code=204)
 
 
@@ -1155,6 +1161,7 @@ async def delete_knowledge_document_type(
         raise HTTPException(status_code=409, detail="该类型下还有资料，请先移动资料或停用类型")
     document_type.deleted_at = datetime.now()
     db.commit()
+    invalidate_knowledge_search()
     return Response(status_code=204)
 
 
@@ -1332,6 +1339,8 @@ async def preview_knowledge_file(
         file_uuid=file_record.uuid,
         file_name=file_record.file_name,
         source_kind=_source_kind_for_file(file_record),
+        asset_url=f"/api/knowledge/files/{file_record.uuid}/download",
+        media_type=_download_media_type(file_record.file_type),
         chunks=[
             KnowledgeFilePreviewChunkOut(
                 chunk_id=chunk.chunk_id,
@@ -1494,6 +1503,7 @@ async def update_knowledge_file(
         file_record.reference_enabled = body.reference_enabled
     db.commit()
     db.refresh(file_record)
+    invalidate_knowledge_search()
     return _file_out(db, file_record)
 
 
@@ -1535,6 +1545,7 @@ async def delete_knowledge_file(
         new_status="DELETED",
     )
     db.commit()
+    invalidate_knowledge_search(file_uuid=file_record.uuid, remove_vector_points=True)
     return Response(status_code=204)
 
 
@@ -1580,6 +1591,7 @@ async def hard_delete_knowledge_file(
     file_record.file_path = ""
     file_record.stored_file_name = ""
     db.commit()
+    invalidate_knowledge_search(file_uuid=file_record.uuid, remove_vector_points=True)
     return Response(status_code=204)
 
 
@@ -1839,6 +1851,7 @@ async def submit_file_review(
     )
     db.commit()
     db.refresh(file_record)
+    invalidate_knowledge_search(file_uuid=file_record.uuid, remove_vector_points=True)
     return _file_out(db, file_record)
 
 
@@ -1882,6 +1895,17 @@ async def restore_knowledge_file(
     )
     db.commit()
     db.refresh(file_record)
+    if file_record.rag_enabled:
+        reparse_knowledge_file_from_existing_chunks(
+            db,
+            file_record=file_record,
+            cipher=_content_cipher(current_settings),
+            storage_root=current_settings.knowledge_storage_dir,
+            embedding_service=build_embedding_service(db, current_settings),
+        )
+        db.commit()
+    else:
+        invalidate_knowledge_search()
     return _file_out(db, file_record)
 
 
@@ -1963,6 +1987,7 @@ async def archive_knowledge_file(
     )
     db.commit()
     db.refresh(file_record)
+    invalidate_knowledge_search(file_uuid=file_record.uuid, remove_vector_points=True)
     return _file_out(db, file_record)
 
 
@@ -1992,6 +2017,14 @@ async def enable_file_rag(
     file_record.rag_enabled = True
     db.commit()
     db.refresh(file_record)
+    reparse_knowledge_file_from_existing_chunks(
+        db,
+        file_record=file_record,
+        cipher=_content_cipher(current_settings),
+        storage_root=current_settings.knowledge_storage_dir,
+        embedding_service=build_embedding_service(db, current_settings),
+    )
+    db.commit()
     return _file_out(db, file_record)
 
 
@@ -2021,6 +2054,7 @@ async def disable_file_rag(
     file_record.rag_enabled = False
     db.commit()
     db.refresh(file_record)
+    invalidate_knowledge_search(file_uuid=file_record.uuid, remove_vector_points=True)
     return _file_out(db, file_record)
 
 
@@ -2107,6 +2141,14 @@ async def approve_file_review(
     )
     db.commit()
     db.refresh(file_record)
+    reparse_knowledge_file_from_existing_chunks(
+        db,
+        file_record=file_record,
+        cipher=_content_cipher(current_settings),
+        storage_root=current_settings.knowledge_storage_dir,
+        embedding_service=build_embedding_service(db, current_settings),
+    )
+    db.commit()
     return _file_out(db, file_record)
 
 

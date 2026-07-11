@@ -105,6 +105,37 @@ def test_owner_can_preview_and_download_personal_file_without_path_leak(
     assert other_download.status_code == 404
 
 
+def test_image_can_be_uploaded_previewed_and_downloaded(client_for_user) -> None:
+    owner = client_for_user("image-owner")
+    png = b"\x89PNG\r\n\x1a\n" + b"certificate-image"
+    response = owner.post(
+        "/api/knowledge/files/upload",
+        data={
+            "usage_type": "personal_reference",
+            "category": "产品资料",
+            "document_type": "证书",
+            "tags": "WDSP,网专证书",
+        },
+        files={"file": ("WDSP 网专证书.png", png, "image/png")},
+    )
+
+    assert response.status_code == 201
+    created = response.json()
+    assert created["file_type"] == "png"
+    assert created["chunk_count"] == 1
+
+    preview = owner.get(f"/api/knowledge/files/{created['file_uuid']}/preview")
+    assert preview.status_code == 200
+    assert preview.json()["media_type"] == "image/png"
+    assert preview.json()["asset_url"].endswith(f"/{created['file_uuid']}/download")
+    assert "WDSP 网专证书" in preview.json()["chunks"][0]["text"]
+
+    download = owner.get(f"/api/knowledge/files/{created['file_uuid']}/download")
+    assert download.status_code == 200
+    assert download.headers["content-type"].startswith("image/png")
+    assert download.content == png
+
+
 def test_preview_can_focus_source_chunk_by_chunk_id(
     client_for_user,
     generation_db,

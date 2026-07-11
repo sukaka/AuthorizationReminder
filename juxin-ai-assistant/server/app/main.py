@@ -1,6 +1,8 @@
 from collections.abc import AsyncIterator, Awaitable, Callable
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from datetime import datetime
+import asyncio
+import logging
 import re
 from typing import Annotated
 from urllib.parse import quote
@@ -28,7 +30,7 @@ from .desktop_update_public import create_desktop_update_public_router
 from .export_routes import router as export_router
 from .config import Settings, get_settings
 from .crypto import ContentCipher
-from .database import get_db
+from .database import SessionLocal, get_db
 from .desktop_bootstrap import DesktopBootstrap, build_desktop_bootstrap
 from .document_templates.base import DocumentRenderPayload
 from .document_templates.registry import get_document_template
@@ -42,10 +44,12 @@ from .history_service import (
     load_regeneration_source,
     tombstone_history,
 )
+from .hot_questions import hot_question_scheduler
 from .intent_router import route_intent
 from .knowledge import KnowledgeRetriever
 from .knowledge_embedding import build_embedding_service
-from .knowledge_files import create_knowledge_file_from_bytes
+from .knowledge_search import search_knowledge_chunks
+from .knowledge_files import create_knowledge_file_from_bytes, invalidate_knowledge_search
 from .knowledge_routes import router as knowledge_router
 from .learning_routes import router as learning_router
 from .local_binding import (
@@ -80,7 +84,6 @@ from .schemas import (
     HistoryDetailOut,
     HistoryItemOut,
     HistoryListOut,
-    HomeOut,
     IntentCandidateOut,
     IntentSkillCandidateOut,
     IntentRouteIn,
@@ -108,7 +111,34 @@ from .sensitive import SensitiveDetector, derive_confirmation_key
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     long_task_dispatcher.recover()
-    yield
+    await asyncio.to_thread(_prewarm_knowledge_search)
+    hot_question_task = asyncio.create_task(hot_question_scheduler(settings))
+    try:
+        yield
+    finally:
+        hot_question_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await hot_question_task
+
+
+def _prewarm_knowledge_search() -> None:
+    if settings.database_url.startswith("sqlite"):
+        return
+    try:
+        with SessionLocal() as db:
+            cipher = ContentCipher(settings.content_encryption_key)
+            search_knowledge_chunks(
+                db,
+                sso_user_id="system-prewarm",
+                query="知识库检索预热",
+                cipher=cipher,
+                top_k=12,
+                embedding_service=build_embedding_service(db, settings),
+                track_usage=False,
+            )
+            db.commit()
+    except Exception:
+        logging.getLogger(__name__).exception("knowledge search prewarm failed")
 
 
 settings = get_settings()
@@ -682,79 +712,6 @@ async def remove_favorite(
     return Response(status_code=204)
 
 
-@app.get("/api/ai/home", response_model=HomeOut)
-def home(
-    session_payload: Annotated[SessionPayload, Depends(get_session)],
-    db: Annotated[Session, Depends(get_db)],
-) -> HomeOut:
-    user_id = str(session_payload.user.id)
-    favorite_rows = db.execute(
-        select(Task, Assistant)
-        .join(UserFavorite, UserFavorite.task_id == Task.id)
-        .join(Assistant, Assistant.id == Task.assistant_id)
-        .where(
-            UserFavorite.sso_user_id == user_id,
-            Task.status == "ACTIVE",
-            Assistant.status == "ACTIVE",
-        )
-        .order_by(UserFavorite.created_at.desc())
-        .limit(50)
-    ).all()
-    latest_by_task = (
-        select(
-            GenerationRecord.task_id.label("task_id"),
-            func.max(GenerationRecord.created_at).label("last_used_at"),
-        )
-        .where(
-            GenerationRecord.sso_user_id == user_id,
-            GenerationRecord.status != "DELETED",
-        )
-        .group_by(GenerationRecord.task_id)
-        .subquery()
-    )
-    recent_task_rows = db.execute(
-        select(Task, Assistant, latest_by_task.c.last_used_at)
-        .join(latest_by_task, latest_by_task.c.task_id == Task.id)
-        .join(Assistant, Assistant.id == Task.assistant_id)
-        .where(Task.status == "ACTIVE", Assistant.status == "ACTIVE")
-        .order_by(latest_by_task.c.last_used_at.desc())
-        .limit(8)
-    ).all()
-    recent_generation_rows = db.execute(
-        select(GenerationRecord, Task, Assistant)
-        .join(Task, Task.id == GenerationRecord.task_id)
-        .join(Assistant, Assistant.id == Task.assistant_id)
-        .where(
-            GenerationRecord.sso_user_id == user_id,
-            GenerationRecord.status != "DELETED",
-        )
-        .order_by(
-            GenerationRecord.created_at.desc(),
-            GenerationRecord.id.desc(),
-        )
-        .limit(8)
-    ).all()
-    return HomeOut(
-        favorites=[
-            _task_card(task, assistant)
-            for task, assistant in favorite_rows
-        ],
-        recent_tasks=[
-            _task_card(task, assistant, last_used_at)
-            for task, assistant, last_used_at in recent_task_rows
-        ],
-        recent_generations=[
-            _history_item(record, task, assistant)
-            for record, task, assistant in recent_generation_rows
-        ],
-        safety_reminders=[
-            "生成内容必须由员工复核后再使用。",
-            "提交敏感信息前请确认处理范围和必要性。",
-            "模型配置与 API Key 仅保存在当前设备。",
-        ],
-    )
-
-
 @app.post(
     "/api/ai/generations/{generation_uuid}/feedback",
     response_model=FeedbackOut,
@@ -1158,6 +1115,7 @@ async def delete_knowledge_file(
         metadata={"file_uuid": file_record.uuid},
     )
     db.commit()
+    invalidate_knowledge_search(file_uuid=file_record.uuid, remove_vector_points=True)
     return Response(status_code=204)
 
 

@@ -36,22 +36,11 @@ KNOWLEDGE_REQUIRED_KEYWORDS = (
     "文档中",
     "其他文件",
     "全部资料",
+    "命令行",
+    "控制台命令",
+    "cli",
+    "console",
 )
-
-KNOWLEDGE_HELPFUL_KEYWORDS = KNOWLEDGE_REQUIRED_KEYWORDS + (
-    "等保",
-    "测评",
-    "运维",
-    "应急响应",
-    "风险评估",
-    "渗透测试",
-    "代码审计",
-    "漏洞验证",
-    "报价",
-    "合同",
-    "招投标",
-)
-
 
 @dataclass(frozen=True)
 class ModeDecision:
@@ -74,12 +63,11 @@ class ModeRouter:
             keyword.lower() in lowered
             for keyword in KNOWLEDGE_REQUIRED_KEYWORDS
         )
-        helpful = required or any(
-            keyword.lower() in lowered
-            for keyword in KNOWLEDGE_HELPFUL_KEYWORDS
-        )
         return ModeDecision(
             mode=normalized,
-            should_search_knowledge=helpful,
+            # Retrieval is cheap and relevance-gated downstream. Keywords only
+            # determine whether an answer must have formal evidence; they no
+            # longer decide whether the knowledge base is searched at all.
+            should_search_knowledge=bool(lowered.strip()),
             require_knowledge_evidence=required,
         )

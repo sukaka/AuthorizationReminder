@@ -136,6 +136,7 @@ def test_agent_loop_tool_executor_logs_company_knowledge_tool_call(
 
     def fake_search_knowledge_chunks(*args, **kwargs):
         assert kwargs["query"] == "等保要求"
+        assert kwargs["embedding_service"] is not None
         return []
 
     monkeypatch.setattr(

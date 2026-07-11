@@ -77,6 +77,39 @@ beforeEach(() => {
   });
 });
 
+it('renders a downloadable file card for direct file delivery', async () => {
+  server.use(
+    http.get('/api/conversations', () => HttpResponse.json({ items: [], total: 0 })),
+    http.post('/api/ai/chat/prepare', () => HttpResponse.json({
+      session_uuid: 'session-file-delivery',
+      user_message_uuid: 'user-file-delivery',
+      assistant_message_uuid: 'assistant-file-delivery',
+      completion_token: '',
+      completed: true,
+      answer: '已找到文件：\n- 《WEB动态安全管理平台用户手册.pdf》',
+      messages: [],
+      citations: [{
+        source_type: 'official_knowledge',
+        file_uuid: 'file-wdsp-manual',
+        file_name: 'WEB动态安全管理平台用户手册.pdf',
+        chunk_id: 'chunk-wdsp-manual',
+        score: 100,
+        asset_url: '/api/knowledge/files/file-wdsp-manual/download',
+        media_type: 'application/pdf',
+      }],
+    }, { status: 201 })),
+  );
+
+  render(<ChatPage />);
+  await userEvent.type(await screen.findByLabelText('告诉我你想完成什么工作'), '把 WDSP 手册发给我');
+  await userEvent.click(screen.getByRole('button', { name: '发送' }));
+
+  const download = await screen.findByRole('link', { name: /WEB动态安全管理平台用户手册\.pdf/ });
+  expect(download).toHaveAttribute('href', '/api/knowledge/files/file-wdsp-manual/download');
+  expect(within(download).getByText('点击下载')).toBeInTheDocument();
+  expect(generateLocalModelMock).not.toHaveBeenCalled();
+});
+
 it('requires confirmation before a sensitive chat reaches the model', async () => {
   const prepareBodies: unknown[] = [];
   server.use(
@@ -520,6 +553,119 @@ it('streams server-side model output in web runtime before the request completes
   streamController?.close();
 
   expect(await screen.findByText('第一段第二段')).toBeInTheDocument();
+});
+
+it('keeps an in-flight reply in its originating task after switching tasks', async () => {
+  Object.defineProperty(window, '__TAURI_INTERNALS__', {
+    configurable: true,
+    value: undefined,
+  });
+  const encoder = new TextEncoder();
+  let streamController: ReadableStreamDefaultController<Uint8Array> | undefined;
+  const sessions = [
+    {
+      session_uuid: 'session-a', title: '任务 A', mode: 'normal', status: 'active',
+      created_at: '2026-07-11T01:00:00Z', updated_at: '2026-07-11T01:00:00Z',
+    },
+    {
+      session_uuid: 'session-b', title: '任务 B', mode: 'normal', status: 'active',
+      created_at: '2026-07-11T01:00:00Z', updated_at: '2026-07-11T01:00:00Z',
+    },
+  ];
+  const sessionDetail = (sessionUuid: string, content: string) => ({
+    session_uuid: sessionUuid,
+    title: sessionUuid === 'session-a' ? '任务 A' : '任务 B',
+    mode: 'normal',
+    status: 'active',
+    created_at: '2026-07-11T01:00:00Z',
+    updated_at: '2026-07-11T01:00:00Z',
+    task_state: null,
+    messages: [{
+      message_uuid: `${sessionUuid}-existing`,
+      role: 'assistant',
+      content,
+      status: 'COMPLETED',
+      citations: [],
+      created_at: '2026-07-11T01:00:00Z',
+    }],
+  });
+  server.use(
+    http.get('/api/conversations', () => HttpResponse.json({ items: sessions, total: 2 })),
+    http.get('/api/ai/model-profiles', () => HttpResponse.json({ items: [], total: 0 })),
+    http.get('/api/ai/chat/sessions/session-a', () => HttpResponse.json(sessionDetail('session-a', 'A 原有内容'))),
+    http.get('/api/ai/chat/sessions/session-b', () => HttpResponse.json(sessionDetail('session-b', 'B 独立内容'))),
+    http.post('/api/ai/chat/prepare', async ({ request }) => {
+      const body = await request.json() as { question: string };
+      const isTaskB = body.question === 'B 的新问题';
+      return HttpResponse.json({
+        session_uuid: isTaskB ? 'session-b' : 'session-a',
+        user_message_uuid: isTaskB ? 'user-b-new' : 'user-a-new',
+        assistant_message_uuid: isTaskB ? 'assistant-b-new' : 'assistant-a-new',
+        completion_token: isTaskB ? 'complete-b-new' : 'complete-a-new',
+        completed: false,
+        answer: '',
+        messages: [{ role: 'user', content: body.question }],
+        citations: [],
+      }, { status: 201 });
+    }),
+    http.post('/api/ai/chat/messages/assistant-a-new/generate/stream', () => new HttpResponse(
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          streamController = controller;
+          controller.enqueue(encoder.encode(`${JSON.stringify({ type: 'delta', delta: 'A 第一段' })}\n`));
+        },
+      }),
+      { headers: { 'Content-Type': 'application/x-ndjson' } },
+    )),
+    http.post('/api/ai/chat/messages/assistant-b-new/generate/stream', () => new HttpResponse(
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(encoder.encode(`${JSON.stringify({ type: 'delta', delta: 'B 的回答' })}\n`));
+          controller.enqueue(encoder.encode(`${JSON.stringify({
+            type: 'complete',
+            message_uuid: 'assistant-b-new',
+            status: 'COMPLETED',
+            answer: 'B 的回答',
+            model_display_name: '服务端模型',
+            model_id: 'deepseek-chat',
+            usage: {},
+            latency_ms: 12,
+          })}\n`));
+          controller.close();
+        },
+      }),
+      { headers: { 'Content-Type': 'application/x-ndjson' } },
+    )),
+  );
+
+  render(<ChatPage />);
+  await userEvent.click(await screen.findByRole('button', { name: '任务 A' }));
+  expect(await screen.findByText('A 原有内容')).toBeInTheDocument();
+  await userEvent.type(screen.getByLabelText('告诉我你想完成什么工作'), 'A 的新问题');
+  await userEvent.click(screen.getByRole('button', { name: '发送' }));
+  expect(await screen.findByText('A 第一段')).toBeInTheDocument();
+
+  await userEvent.click(screen.getByRole('button', { name: '任务 B' }));
+  expect(await screen.findByText('B 独立内容')).toBeInTheDocument();
+  await userEvent.type(screen.getByLabelText('告诉我你想完成什么工作'), 'B 的新问题');
+  await userEvent.click(screen.getByRole('button', { name: '发送' }));
+  expect(await screen.findByText('B 的回答')).toBeInTheDocument();
+  streamController?.enqueue(encoder.encode(`${JSON.stringify({ type: 'delta', delta: 'A 第二段' })}\n`));
+  await new Promise((resolve) => setTimeout(resolve, 20));
+
+  expect(screen.getByText('B 独立内容')).toBeInTheDocument();
+  expect(screen.queryByText(/A 第一段|A 第二段/)).not.toBeInTheDocument();
+  streamController?.enqueue(encoder.encode(`${JSON.stringify({
+    type: 'complete',
+    message_uuid: 'assistant-a-new',
+    status: 'COMPLETED',
+    answer: 'A 第一段A 第二段',
+    model_display_name: '服务端模型',
+    model_id: 'deepseek-chat',
+    usage: {},
+    latency_ms: 20,
+  })}\n`));
+  streamController?.close();
 });
 
 it('shows the default personal model label in web runtime', async () => {
@@ -1244,7 +1390,7 @@ it('cancels the active generation when Escape is pressed', async () => {
   expect(cancelModelGenerationMock).toHaveBeenCalledWith(requestId);
 });
 
-it('shows static prompt examples and keeps new chat out of the history pane', async () => {
+it('shows static prompt examples and places new task beside the history heading', async () => {
   server.use(
     http.get('/api/conversations', () => HttpResponse.json({ items: [], total: 0 })),
   );
@@ -1254,7 +1400,7 @@ it('shows static prompt examples and keeps new chat out of the history pane', as
   expect(await screen.findByRole('heading', { name: '告诉我你想完成什么工作' })).toBeInTheDocument();
   expect(screen.getByText('我是你的私人工作助理，可以帮你写、查、整理、生成和导出工作成果。')).toBeInTheDocument();
   const historyPane = screen.getByLabelText('历史任务');
-  expect(within(historyPane).queryByRole('button', { name: '开启新任务' })).not.toBeInTheDocument();
+  expect(within(historyPane).getByRole('button', { name: '开启新任务' })).toBeInTheDocument();
   expect(screen.getByLabelText('示例提示')).toHaveTextContent('写一份项目方案');
   expect(screen.queryByRole('button', { name: '写一份项目方案' })).not.toBeInTheDocument();
 });
@@ -1350,7 +1496,7 @@ it('offers Juxin role modes and sends the selected mode to prepare API', async (
   ));
 });
 
-it('lets users choose whether chat should reference personal materials and session attachments', async () => {
+it('always searches personal materials and session attachments', async () => {
   const prepareRequest = vi.fn();
   server.use(
     http.get('/api/conversations', () => HttpResponse.json({ items: [], total: 0 })),
@@ -1385,23 +1531,21 @@ it('lets users choose whether chat should reference personal materials and sessi
 
   render(<ChatPage />);
 
-  await userEvent.selectOptions(
-    await screen.findByRole('combobox', { name: '参考资料' }),
-    'personal_and_session',
-  );
+  expect(screen.queryByRole('combobox', { name: '参考资料' })).not.toBeInTheDocument();
   await userEvent.type(screen.getByLabelText('告诉我你想完成什么工作'), '根据我的资料生成会议纪要');
   await userEvent.click(screen.getByRole('button', { name: '发送' }));
 
   expect(await screen.findByText('已结合我的资料生成会议纪要。')).toBeInTheDocument();
   await waitFor(() => expect(prepareRequest).toHaveBeenCalledWith(
     expect.objectContaining({
+      personal_reference_file_ids: [],
       include_personal_references: true,
       include_session_attachments: true,
     }),
   ));
 });
 
-it('keeps reference scope controls in the top bar instead of duplicating them in the composer', async () => {
+it('removes reference scope controls and always uses the full scope', async () => {
   const prepareRequest = vi.fn();
   server.use(
     http.get('/api/conversations', () => HttpResponse.json({ items: [], total: 0 })),
@@ -1437,14 +1581,12 @@ it('keeps reference scope controls in the top bar instead of duplicating them in
   render(<ChatPage />);
 
   const composer = await screen.findByRole('form', { name: '工作输入区' });
-  const referenceSelect = screen.getByRole('combobox', { name: '参考资料' });
+  expect(screen.queryByRole('combobox', { name: '参考资料' })).not.toBeInTheDocument();
+  expect(within(composer).queryByRole('button', { name: '引用资料' })).not.toBeInTheDocument();
   expect(within(composer).queryByRole('button', { name: '查公司知识' })).not.toBeInTheDocument();
   expect(within(composer).queryByRole('button', { name: '我的资料' })).not.toBeInTheDocument();
   expect(within(composer).queryByRole('button', { name: '当前附件' })).not.toBeInTheDocument();
   expect(within(composer).queryByText('普通助手')).not.toBeInTheDocument();
-
-  await userEvent.selectOptions(referenceSelect, 'with_personal');
-  expect(referenceSelect).toHaveValue('with_personal');
 
   await userEvent.type(screen.getByLabelText('告诉我你想完成什么工作'), '参考我的资料写纪要');
   await userEvent.click(screen.getByRole('button', { name: '发送' }));
@@ -1453,115 +1595,9 @@ it('keeps reference scope controls in the top bar instead of duplicating them in
   await waitFor(() => expect(prepareRequest).toHaveBeenCalledWith(
     expect.objectContaining({
       mode: 'normal',
+      personal_reference_file_ids: [],
       include_personal_references: true,
-      include_session_attachments: false,
-    }),
-  ));
-});
-
-it('lets users select uploaded personal files directly from the chat composer', async () => {
-  const prepareRequest = vi.fn();
-  server.use(
-    http.get('/api/conversations', () => HttpResponse.json({ items: [], total: 0 })),
-    http.get('/api/knowledge/files', () => HttpResponse.json({
-      items: [
-        {
-          file_uuid: 'file-selected-requirement',
-          file_name: '广东能源需求书.pdf',
-          file_type: 'application/pdf',
-          file_size: 2048,
-          visibility: 'PRIVATE',
-          status: 'READY',
-          chunk_count: 8,
-          source_type: 'user_upload',
-          usage_type: 'personal_reference',
-          review_status: 'draft',
-          rag_enabled: false,
-          reference_enabled: true,
-          rag_scope: 'personal',
-          permission_scope: 'private',
-          category: '个人素材',
-          document_type: '需求书',
-          tags: [],
-          parse_status: 'parsed',
-          index_status: 'indexed',
-          created_at: '2026-06-26T01:00:00Z',
-        },
-        {
-          file_uuid: 'file-unready-draft',
-          file_name: '未解析资料.docx',
-          file_type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-          file_size: 1024,
-          visibility: 'PRIVATE',
-          status: 'PROCESSING',
-          chunk_count: 0,
-          source_type: 'user_upload',
-          usage_type: 'personal_reference',
-          review_status: 'draft',
-          rag_enabled: false,
-          reference_enabled: true,
-          rag_scope: 'personal',
-          permission_scope: 'private',
-          category: '个人素材',
-          document_type: '其他',
-          tags: [],
-          parse_status: 'pending',
-          index_status: 'pending',
-          created_at: '2026-06-26T01:00:00Z',
-        },
-      ],
-      total: 2,
-    })),
-    http.post('/api/ai/chat/prepare', async ({ request }) => {
-      prepareRequest(await request.json());
-      return HttpResponse.json({
-        session_uuid: 'session-selected-reference',
-        user_message_uuid: 'user-message-selected-reference',
-        assistant_message_uuid: 'assistant-message-selected-reference',
-        completion_token: 'complete-selected-reference',
-        completed: false,
-        answer: '',
-        messages: [
-          { role: 'system', content: '你是聚信 AI 助手，已带入指定个人资料。' },
-          { role: 'user', content: '根据我选择的需求书写响应文件' },
-        ],
-        citations: [],
-      }, { status: 201 });
-    }),
-    http.post('/api/ai/chat/messages/assistant-message-selected-reference/complete', () => {
-      return HttpResponse.json({
-        message_uuid: 'assistant-message-selected-reference',
-        status: 'COMPLETED',
-      });
-    }),
-  );
-  generateLocalModelMock.mockResolvedValue({
-    output: '已根据所选需求书生成响应文件。',
-    latencyMs: 10,
-    usage: { output_tokens: 8 },
-  });
-
-  render(<ChatPage />);
-
-  const composer = await screen.findByRole('form', { name: '工作输入区' });
-  await userEvent.click(within(composer).getByRole('button', { name: '引用资料' }));
-  const picker = await screen.findByRole('region', { name: '选择引用资料' });
-  expect(within(picker).getByText('广东能源需求书.pdf')).toBeInTheDocument();
-  expect(within(picker).queryByText('未解析资料.docx')).not.toBeInTheDocument();
-
-  await userEvent.click(within(picker).getByRole('checkbox', { name: '广东能源需求书.pdf' }));
-  expect(within(composer).getByText('引用：广东能源需求书.pdf')).toBeInTheDocument();
-
-  await userEvent.type(screen.getByLabelText('告诉我你想完成什么工作'), '根据我选择的需求书写响应文件');
-  await userEvent.click(screen.getByRole('button', { name: '发送' }));
-
-  expect(await screen.findByText('已根据所选需求书生成响应文件。')).toBeInTheDocument();
-  await waitFor(() => expect(prepareRequest).toHaveBeenCalledWith(
-    expect.objectContaining({
-      mode: 'knowledge',
-      personal_reference_file_ids: ['file-selected-requirement'],
-      include_personal_references: true,
-      include_session_attachments: false,
+      include_session_attachments: true,
     }),
   ));
 });
@@ -1679,6 +1715,32 @@ it('allows uploading PDF files and explains text extraction limits', async () =>
   const dialog = await screen.findByRole('dialog', { name: '上传资料' });
   expect(within(dialog).getByText('PDF 会按页面提取可复制文本，扫描件需要先转成可复制文本。')).toBeInTheDocument();
   expect(within(dialog).queryByText(/暂不支持 PDF/)).not.toBeInTheDocument();
+});
+
+it('accepts document and image files pasted directly into the chat input', async () => {
+  server.use(
+    http.get('/api/conversations', () => HttpResponse.json({ items: [], total: 0 })),
+  );
+
+  render(<ChatPage />);
+  const input = await screen.findByLabelText('告诉我你想完成什么工作');
+  const pastedFile = new File(['slide data'], '产品介绍.pptx', {
+    type: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  });
+
+  fireEvent.paste(input, {
+    clipboardData: {
+      files: [pastedFile],
+      getData: () => '',
+      items: [],
+      types: ['Files'],
+    },
+  });
+
+  const dialog = await screen.findByRole('dialog', { name: '上传资料' });
+  expect(within(dialog).getByText('文件：产品介绍.pptx')).toBeInTheDocument();
+  expect(within(dialog).getByText('已从剪贴板识别文件，确认后即可上传。')).toBeInTheDocument();
+  expect(within(dialog).getByRole('radio', { name: '保存到我的资料' })).toBeChecked();
 });
 
 it('exports an assistant reply to Word from the chat message actions', async () => {
@@ -2477,7 +2539,7 @@ it('shows upload purpose choices and submits a personal file for admin review', 
   appendSpy.mockRestore();
 });
 
-it('selects a ready personal reference automatically after upload', async () => {
+it('automatically includes personal references after upload', async () => {
   const uploadRequest = vi.fn();
   const prepareRequest = vi.fn();
   server.use(
@@ -2546,10 +2608,9 @@ it('selects a ready personal reference automatically after upload', async () => 
   await userEvent.click(screen.getByRole('button', { name: '开始上传' }));
 
   await waitFor(() => expect(uploadRequest).toHaveBeenCalled());
-  expect(await screen.findByText('资料已保存并选中：会议记录.txt')).toBeInTheDocument();
+  expect(await screen.findByText('资料已保存，将自动参与后续检索：会议记录.txt')).toBeInTheDocument();
   expect(screen.getByRole('combobox', { name: '助手模式' })).toHaveValue('knowledge');
-  expect(screen.getByRole('combobox', { name: '参考资料' })).toHaveValue('with_personal');
-  expect(screen.getByRole('region', { name: '已引用资料' })).toHaveTextContent('引用：会议记录.txt');
+  expect(screen.queryByRole('combobox', { name: '参考资料' })).not.toBeInTheDocument();
 
   await userEvent.type(screen.getByLabelText('告诉我你想完成什么工作'), '写一份会议纪要');
   await userEvent.click(screen.getByRole('button', { name: '发送' }));
@@ -2557,8 +2618,9 @@ it('selects a ready personal reference automatically after upload', async () => 
   expect(await screen.findByText('已生成会议纪要。')).toBeInTheDocument();
   await waitFor(() => expect(prepareRequest).toHaveBeenCalledWith(expect.objectContaining({
     mode: 'knowledge',
+    personal_reference_file_ids: [],
     include_personal_references: true,
-    include_session_attachments: false,
+    include_session_attachments: true,
   })));
 });
 

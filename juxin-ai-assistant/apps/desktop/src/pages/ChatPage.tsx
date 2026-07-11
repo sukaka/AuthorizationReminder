@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { FormEvent, KeyboardEvent, ReactNode } from 'react';
+import type { ClipboardEvent as ReactClipboardEvent, FormEvent, KeyboardEvent, ReactNode } from 'react';
 
 import {
   archiveChatSession,
@@ -11,7 +11,6 @@ import {
   createLongChatTask,
   deleteChatSession,
   exportChatWord,
-  failChatMessage,
   getChatSession,
   getChatSessionsByKind,
   hardDeleteChatSession,
@@ -121,6 +120,7 @@ type GenerationStatus = 'idle' | 'running' | 'stopping';
 type ActiveGeneration = {
   abortController?: AbortController;
   localRequestId?: string;
+  sessionUuid: string;
   stopped: boolean;
 };
 
@@ -153,7 +153,7 @@ const modeLabels: Record<ChatMode, string> = {
 };
 
 const wordExportTypes = ['single_answer', 'formal_document'] as const satisfies readonly ChatExportType[];
-const supportedKnowledgeAccept = '.pdf,.txt,.md,.docx,.xlsx,.pptx,application/pdf,text/plain,text/markdown,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.openxmlformats-officedocument.presentationml.presentation';
+const supportedKnowledgeAccept = '.pdf,.txt,.md,.docx,.xlsx,.pptx,.png,.jpg,.jpeg,.webp,application/pdf,text/plain,text/markdown,image/png,image/jpeg,image/webp,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.openxmlformats-officedocument.presentationml.presentation';
 const unsupportedKnowledgeTypeMessage = '当前版本暂不支持该文件类型，请上传 pdf、docx、xlsx、pptx、txt 或 md 文件。';
 const pdfUploadHint = 'PDF 会按页面提取可复制文本，扫描件需要先转成可复制文本。';
 const fallbackUploadCategories = ['个人素材', '会议纪要', '项目交付', '销售商务', '安全运维', '模板范本', '其他'];
@@ -266,12 +266,13 @@ function uploadFileHint(file: File | null): string {
   const dotIndex = file.name.lastIndexOf('.');
   const extension = dotIndex >= 0 ? file.name.slice(dotIndex + 1).trim().toLowerCase() : '';
   if (extension === 'pdf') return pdfUploadHint;
-  if (extension === 'csv' || extension === 'doc' || extension === 'xls' || ['png', 'jpg', 'jpeg', 'webp'].includes(extension)) {
+  if (extension === 'csv' || extension === 'doc' || extension === 'xls') {
     return unsupportedKnowledgeTypeMessage;
   }
+  if (['png', 'jpg', 'jpeg', 'webp'].includes(extension)) return '图片会保存到资料库，并自动参与后续检索和图片引用。';
   if (extension === 'xlsx') return 'Excel 会按 Sheet、表头和行记录解析。';
   if (extension === 'pptx') return 'PPT 会按幻灯片标题、正文和备注解析。';
-  return '当前支持 pdf、docx、xlsx、pptx、txt、md；扫描件需要先转成可复制文本。';
+  return '当前支持 pdf、docx、xlsx、pptx、txt、md、png、jpg、jpeg、webp。';
 }
 
 function uploadFailureMessage(error: unknown): string {
@@ -459,6 +460,7 @@ function filterCitationsByAnswer(citations: ChatCitation[], answer: string): Cha
   const normalizedAnswer = normalizeCitationMatchText(answer);
   if (!normalizedAnswer) return [];
   return citations.filter((citation) => {
+    if (citation.media_type?.startsWith('image/') && citation.asset_url) return true;
     if (citation.source_type === 'web_search_context') return true;
     return [
       ...citationMatchCandidates(citation.file_name),
@@ -830,7 +832,7 @@ export function ChatPage() {
   const [uploadDocumentType, setUploadDocumentType] = useState('其他');
   const [knowledgeCategories, setKnowledgeCategories] = useState<KnowledgeCategoryPayload[]>([]);
   const [knowledgeDocumentTypes, setKnowledgeDocumentTypes] = useState<KnowledgeDocumentTypePayload[]>([]);
-  const [referenceScope, setReferenceScope] = useState<ReferenceScope>('official_only');
+  const [referenceScope, setReferenceScope] = useState<ReferenceScope>('personal_and_session');
   const [enabledReferenceFiles, setEnabledReferenceFiles] = useState<EnabledReferenceFile[]>([]);
   const [referencePickerOpen, setReferencePickerOpen] = useState(false);
   const [referencePickerStatus, setReferencePickerStatus] = useState<ReferenceFilePickerStatus>('idle');
@@ -855,7 +857,13 @@ export function ChatPage() {
   } | null>(null);
   const messageListRef = useRef<HTMLDivElement | null>(null);
   const shouldStickToBottomRef = useRef(true);
-  const activeGenerationRef = useRef<ActiveGeneration | null>(null);
+  const activeGenerationsRef = useRef<Map<string, ActiveGeneration>>(new Map());
+  const activeGenerationKeyRef = useRef('');
+  const activeSessionUuidRef = useRef('');
+
+  useEffect(() => {
+    activeSessionUuidRef.current = activeSessionUuid;
+  }, [activeSessionUuid]);
 
   const refreshSessions = async (kind: ChatSessionListKind = sessionListKind) => {
     const payload = await getChatSessionsByKind(kind);
@@ -895,7 +903,7 @@ export function ChatPage() {
   };
 
   const stopActiveGeneration = async () => {
-    const activeGeneration = activeGenerationRef.current;
+    const activeGeneration = activeGenerationsRef.current.get(activeGenerationKeyRef.current);
     if (!activeGeneration || generationStatus !== 'running') return;
     activeGeneration.stopped = true;
     setGenerationStatus('stopping');
@@ -1055,9 +1063,14 @@ export function ChatPage() {
   };
 
   const loadSession = async (sessionUuid: string) => {
+    activeSessionUuidRef.current = sessionUuid;
+    activeGenerationKeyRef.current = sessionUuid;
+    const activeGeneration = activeGenerationsRef.current.get(sessionUuid);
+    setGenerationStatus(activeGeneration ? (activeGeneration.stopped ? 'stopping' : 'running') : 'idle');
     setStatus('正在加载历史任务…');
     try {
       const detail = await getChatSession(sessionUuid);
+      if (activeSessionUuidRef.current !== sessionUuid) return;
       setActiveSessionUuid(detail.session_uuid);
       setActiveSessionStatus(normalizeSessionStatus(detail.status));
       setMode(normalizeMode(detail.mode));
@@ -1076,7 +1089,9 @@ export function ChatPage() {
       })));
       setStatus('');
     } catch {
-      setStatus('历史任务加载失败');
+      if (activeSessionUuidRef.current === sessionUuid) {
+        setStatus('历史任务加载失败');
+      }
     }
   };
 
@@ -1132,9 +1147,9 @@ export function ChatPage() {
               ? 'personal_and_session'
               : 'with_personal'
           ));
-          setUploadStatus(`资料已保存并选中：${uploaded.file_name}`);
+          setUploadStatus(`资料已保存，将自动参与后续检索：${uploaded.file_name}`);
         } else {
-          setUploadStatus(`资料已保存到我的资料：${uploaded.file_name}；处理完成后可在“引用资料”中选择。`);
+          setUploadStatus(`资料已保存到我的资料：${uploaded.file_name}；处理完成后会自动参与检索。`);
         }
       }
     } catch (error) {
@@ -1142,6 +1157,19 @@ export function ChatPage() {
     } finally {
       setUploading(false);
     }
+  };
+
+  const handleComposerPaste = (event: ReactClipboardEvent<HTMLTextAreaElement>) => {
+    const pastedFiles = Array.from(event.clipboardData.files || []);
+    const file = pastedFiles[0];
+    if (!file) return;
+
+    event.preventDefault();
+    setPendingUploadFile(file);
+    setUploadPurpose('personal_reference');
+    setUploadStatus(pastedFiles.length > 1
+      ? `已识别 ${pastedFiles.length} 个文件，请先上传 ${file.name}，其余文件可继续粘贴。`
+      : '已从剪贴板识别文件，确认后即可上传。');
   };
 
   const loadPersonalReferenceFiles = async () => {
@@ -1314,16 +1342,6 @@ export function ChatPage() {
     ));
   };
 
-  const stopPreparedMessage = async (assistantMessageId: string, completionToken: string) => {
-    markGenerationStopped(assistantMessageId);
-    if (!assistantMessageId || !completionToken) return;
-    await failChatMessage(assistantMessageId, {
-      completionToken,
-      errorCode: 'USER_CANCELLED',
-      errorMessage: '用户停止生成',
-    }).catch(() => undefined);
-  };
-
   const send = async (questionOverride?: string, confirmationDigest?: string) => {
     if (generationStatus === 'running') {
       await stopActiveGeneration();
@@ -1353,11 +1371,23 @@ export function ChatPage() {
     setStatus(mode === 'knowledge' ? '检索中…' : '生成中…');
     setGenerationStatus('running');
     setGenerationMetrics(null);
-    activeGenerationRef.current = { stopped: false };
     setQuestion('');
     setMemorySuggestion(detectMemorySuggestion(trimmed));
+    const originSessionUuid = activeSessionUuidRef.current;
+    let requestSessionUuid = originSessionUuid;
+    const requestIsVisible = () => activeSessionUuidRef.current === requestSessionUuid;
+    const updateRequestMessages = (updater: (current: UiMessage[]) => UiMessage[]) => {
+      if (requestIsVisible()) setMessages(updater);
+    };
     const localUserMessageId = `local-user-${Date.now()}`;
-    setMessages((current) => current.concat({
+    let generationKey = originSessionUuid || `pending:${localUserMessageId}`;
+    const generation: ActiveGeneration = {
+      sessionUuid: originSessionUuid,
+      stopped: false,
+    };
+    activeGenerationsRef.current.set(generationKey, generation);
+    activeGenerationKeyRef.current = generationKey;
+    updateRequestMessages((current) => current.concat({
       id: localUserMessageId,
       role: 'user',
       content: trimmed,
@@ -1365,38 +1395,50 @@ export function ChatPage() {
       isComplete: true,
     }));
     let assistantId = '';
-    let completionToken = '';
     try {
       const prepared = await prepareChat({
-        sessionUuid: activeSessionUuid || undefined,
+        sessionUuid: originSessionUuid || undefined,
         question: trimmed,
         mode,
         attachmentFileIds: sessionAttachmentFiles.map((file) => file.fileUuid),
-        personalReferenceFileIds: selectedPersonalReferenceIds,
-        includePersonalReferences: selectedPersonalReferenceIds.length > 0
-          || referenceScope === 'with_personal'
-          || referenceScope === 'personal_and_session',
-        includeSessionAttachments: referenceScope === 'with_session' || referenceScope === 'personal_and_session',
+        personalReferenceFileIds: [],
+        includePersonalReferences: true,
+        includeSessionAttachments: true,
         sensitiveConfirmationDigest: confirmationDigest,
       });
-      completionToken = prepared.completion_token;
-      setTaskProgress(prepared.task_state ? taskProgressWithStage(
-        prepared.task_state,
-        prepared.completed ? 'completed' : 'generating',
-        prepared.completed ? '生成完成' : '正在生成回答',
-        prepared.completed ? '生成已完成' : '正在调用模型生成回答',
-      ) : null);
-      setActiveSessionUuid(prepared.session_uuid);
-      setActiveSessionStatus('active');
+      requestSessionUuid = prepared.session_uuid;
+      if (generationKey !== prepared.session_uuid) {
+        const generationWasActive = activeGenerationKeyRef.current === generationKey;
+        if (activeGenerationsRef.current.get(generationKey) === generation) {
+          activeGenerationsRef.current.delete(generationKey);
+        }
+        generationKey = prepared.session_uuid;
+        generation.sessionUuid = prepared.session_uuid;
+        activeGenerationsRef.current.set(generationKey, generation);
+        if (generationWasActive) activeGenerationKeyRef.current = generationKey;
+      }
+      if (!originSessionUuid && activeSessionUuidRef.current === '') {
+        activeSessionUuidRef.current = prepared.session_uuid;
+        setActiveSessionUuid(prepared.session_uuid);
+      }
+      if (requestIsVisible()) {
+        setTaskProgress(prepared.task_state ? taskProgressWithStage(
+          prepared.task_state,
+          prepared.completed ? 'completed' : 'generating',
+          prepared.completed ? '生成完成' : '正在生成回答',
+          prepared.completed ? '生成已完成' : '正在调用模型生成回答',
+        ) : null);
+        setActiveSessionStatus('active');
+      }
       if (prepared.completed) {
-        setMessages((current) => current.concat({
+        updateRequestMessages((current) => current.concat({
           id: prepared.assistant_message_uuid,
           role: 'assistant',
           content: prepared.answer,
           citations: filterCitationsByAnswer(prepared.citations, prepared.answer),
           isComplete: true,
         }));
-        setStatus('');
+        if (requestIsVisible()) setStatus('');
         return;
       }
       if (!shouldUseServerModel && !activeProfile) {
@@ -1404,7 +1446,7 @@ export function ChatPage() {
         return;
       }
       assistantId = prepared.assistant_message_uuid;
-      setMessages((current) => current.concat({
+      updateRequestMessages((current) => current.concat({
         id: assistantId,
         role: 'assistant',
         content: '',
@@ -1421,7 +1463,7 @@ export function ChatPage() {
           title: trimmed.slice(0, 80),
         });
         replaceLongTask(queued);
-        setMessages((current) => current.map((message) =>
+        updateRequestMessages((current) => current.map((message) =>
           message.id === assistantId
             ? { ...message, content: '任务已在后台处理，可继续其他工作。', isComplete: true }
             : message,
@@ -1431,34 +1473,33 @@ export function ChatPage() {
       }
       if (shouldUseServerModel) {
         const abortController = new AbortController();
-        activeGenerationRef.current = {
-          ...(activeGenerationRef.current ?? { stopped: false }),
-          abortController,
-        };
+        generation.abortController = abortController;
         const generated = await streamChatMessage(assistantId, {
           completionToken: prepared.completion_token,
           messages: prepared.messages,
           temperature: activeProfile?.temperature ?? 0.3,
           signal: abortController.signal,
         }, (delta) => {
-          setMessages((current) => current.map((message) =>
+          updateRequestMessages((current) => current.map((message) =>
             message.id === assistantId
               ? { ...message, content: message.content + delta }
               : message,
           ));
         });
-        if (activeGenerationRef.current?.stopped) {
-          await stopPreparedMessage(assistantId, prepared.completion_token);
+        if (generation.stopped) {
+          if (requestIsVisible()) markGenerationStopped(assistantId);
           return;
         }
-        setGenerationMetrics({
-          latencyMs: generated.latency_ms,
-          usage: generated.usage,
-        });
-        setTaskProgress((current) => current
-          ? taskProgressWithStage(current, 'completed', '生成完成', '可以复制、保存、导出或继续追问')
-          : current);
-        setMessages((current) => current.map((message) =>
+        if (requestIsVisible()) {
+          setGenerationMetrics({
+            latencyMs: generated.latency_ms,
+            usage: generated.usage,
+          });
+          setTaskProgress((current) => current
+            ? taskProgressWithStage(current, 'completed', '生成完成', '可以复制、保存、导出或继续追问')
+            : current);
+        }
+        updateRequestMessages((current) => current.map((message) =>
           message.id === assistantId
             ? {
                 ...message,
@@ -1469,7 +1510,7 @@ export function ChatPage() {
             : message,
         ));
         refreshSessions(sessionListKind).catch(() => undefined);
-        setStatus('');
+        if (requestIsVisible()) setStatus('');
         return;
       }
       if (!activeProfile) {
@@ -1477,27 +1518,24 @@ export function ChatPage() {
         return;
       }
       const initialRequestId = `chat-${assistantId}`;
-      activeGenerationRef.current = {
-        ...(activeGenerationRef.current ?? { stopped: false }),
-        localRequestId: initialRequestId,
-      };
+      generation.localRequestId = initialRequestId;
       let result: GeneratedModelResult = await generateLocalModel({
         profileId: activeProfile.id,
         messages: prepared.messages,
         temperature: activeProfile.temperature,
         requestId: initialRequestId,
       }, (delta) => {
-        setMessages((current) => current.map((message) =>
+        updateRequestMessages((current) => current.map((message) =>
           message.id === assistantId
             ? { ...message, content: message.content + delta }
             : message,
         ));
       });
-      if (activeGenerationRef.current?.stopped) {
-        await stopPreparedMessage(assistantId, prepared.completion_token);
+      if (generation.stopped) {
+        if (requestIsVisible()) markGenerationStopped(assistantId);
         return;
       }
-      setMessages((current) => current.map((message) =>
+      updateRequestMessages((current) => current.map((message) =>
           message.id === assistantId
               ? {
                   ...message,
@@ -1519,36 +1557,35 @@ export function ChatPage() {
           if (!check || check.passed || !check.retry_allowed || !check.revision_messages.length) {
             break;
           }
-          if (activeGenerationRef.current?.stopped) {
-            await stopPreparedMessage(assistantId, prepared.completion_token);
+          if (generation.stopped) {
+            if (requestIsVisible()) markGenerationStopped(assistantId);
             return;
           }
-          setStatus('正在自检并修正…');
-          setTaskProgress((current) => current
-            ? taskProgressWithStage(current, 'quality_check', '正在复核结果', '正在自检并修正')
-            : current);
+          if (requestIsVisible()) {
+            setStatus('正在自检并修正…');
+            setTaskProgress((current) => current
+              ? taskProgressWithStage(current, 'quality_check', '正在复核结果', '正在自检并修正')
+              : current);
+          }
           const revisionRequestId = `chat-${assistantId}-revise-${retryCount + 1}`;
-          activeGenerationRef.current = {
-            ...(activeGenerationRef.current ?? { stopped: false }),
-            localRequestId: revisionRequestId,
-          };
+          generation.localRequestId = revisionRequestId;
           result = await generateLocalModel({
             profileId: activeProfile.id,
             messages: check.revision_messages,
             temperature: activeProfile.temperature,
             requestId: revisionRequestId,
           }, (delta) => {
-            setMessages((current) => current.map((message) =>
+            updateRequestMessages((current) => current.map((message) =>
               message.id === assistantId
                 ? { ...message, content: message.content + delta }
                 : message,
             ));
           });
-          if (activeGenerationRef.current?.stopped) {
-            await stopPreparedMessage(assistantId, prepared.completion_token);
+          if (generation.stopped) {
+            if (requestIsVisible()) markGenerationStopped(assistantId);
             return;
           }
-          setMessages((current) => current.map((message) =>
+          updateRequestMessages((current) => current.map((message) =>
             message.id === assistantId
               ? {
                   ...message,
@@ -1560,10 +1597,12 @@ export function ChatPage() {
           ));
         }
       }
-      setGenerationMetrics({
-        latencyMs: result.latencyMs,
-        usage: result.usage,
-      });
+      if (requestIsVisible()) {
+        setGenerationMetrics({
+          latencyMs: result.latencyMs,
+          usage: result.usage,
+        });
+      }
       const completed = await completeChatMessage(assistantId, {
         completionToken: prepared.completion_token,
         answer: result.output,
@@ -1572,10 +1611,12 @@ export function ChatPage() {
         usage: result.usage,
         latencyMs: result.latencyMs,
       });
-      setTaskProgress((current) => current
-        ? taskProgressWithStage(current, 'completed', '生成完成', '可以复制、保存、导出或继续追问')
-        : current);
-      setMessages((current) => current.map((message) =>
+      if (requestIsVisible()) {
+        setTaskProgress((current) => current
+          ? taskProgressWithStage(current, 'completed', '生成完成', '可以复制、保存、导出或继续追问')
+          : current);
+      }
+      updateRequestMessages((current) => current.map((message) =>
         message.id === assistantId
           ? {
               ...message,
@@ -1586,7 +1627,7 @@ export function ChatPage() {
           : message,
       ));
       refreshSessions(sessionListKind).catch(() => undefined);
-      setStatus('');
+      if (requestIsVisible()) setStatus('');
     } catch (error) {
       if (error instanceof ApiError && error.status === 409) {
         const payload = error.payload as {
@@ -1617,20 +1658,27 @@ export function ChatPage() {
           return;
         }
       }
-      if (activeGenerationRef.current?.stopped || isAbortLikeError(error)) {
-        await stopPreparedMessage(assistantId, completionToken);
+      if (generation.stopped || isAbortLikeError(error)) {
+        if (requestIsVisible()) markGenerationStopped(assistantId);
         return;
       }
-      const detail = apiErrorDetail(error);
-      if (detail.includes('已归档')) setActiveSessionStatus('archived');
-      if (detail.includes('已删除')) setActiveSessionStatus('deleted');
-      setStatus(detail || '内容生成失败，请稍后重试');
-      setTaskProgress((current) => current
-        ? taskProgressWithStage(current, 'failed', '生成遇到问题', detail || '请稍后重试或调整问题')
-        : current);
+      if (requestIsVisible()) {
+        const detail = apiErrorDetail(error);
+        if (detail.includes('已归档')) setActiveSessionStatus('archived');
+        if (detail.includes('已删除')) setActiveSessionStatus('deleted');
+        setStatus(detail || '内容生成失败，请稍后重试');
+        setTaskProgress((current) => current
+          ? taskProgressWithStage(current, 'failed', '生成遇到问题', detail || '请稍后重试或调整问题')
+          : current);
+      }
     } finally {
-      activeGenerationRef.current = null;
-      setGenerationStatus('idle');
+      if (activeGenerationsRef.current.get(generationKey) === generation) {
+        activeGenerationsRef.current.delete(generationKey);
+      }
+      if (requestIsVisible()) {
+        activeGenerationKeyRef.current = requestSessionUuid;
+        setGenerationStatus('idle');
+      }
     }
   };
 
@@ -1951,6 +1999,9 @@ export function ChatPage() {
   };
 
   const startNewSession = () => {
+    activeSessionUuidRef.current = '';
+    activeGenerationKeyRef.current = '';
+    setGenerationStatus('idle');
     setActiveSessionUuid('');
     setActiveSessionStatus('');
     setSessionListKind('active');
@@ -2119,7 +2170,10 @@ export function ChatPage() {
     >
       <div className="chat-shell">
         <aside className="chat-sessions" aria-label="历史任务">
-          <strong>历史任务</strong>
+          <div className="chat-sessions-heading">
+            <strong>历史任务</strong>
+            <button className="chat-new-button" onClick={startNewSession} type="button">开启新任务</button>
+          </div>
           <div className="chat-session-tabs" aria-label="任务分类">
             {(Object.keys(sessionListLabels) as ChatSessionListKind[]).map((kind) => (
               <button
@@ -2310,18 +2364,6 @@ export function ChatPage() {
                   ))}
                 </select>
               </label>
-              <label className="chat-mode-select">
-                <span>参考资料</span>
-                <select
-                  aria-label="参考资料"
-                  onChange={(event) => changeReferenceScope(event.target.value as ReferenceScope)}
-                  value={referenceScope}
-                >
-                  {Object.entries(referenceScopeLabels).map(([value, label]) => (
-                    <option key={value} value={value}>{label}</option>
-                  ))}
-                </select>
-              </label>
               <button
                 className="chat-export-button"
                 disabled={!activeSessionUuid || !messages.length || exportingWord}
@@ -2329,9 +2371,6 @@ export function ChatPage() {
                 type="button"
               >
                 {exportingWord ? '导出中…' : '导出工作成果'}
-              </button>
-              <button className="chat-new-button" onClick={startNewSession} type="button">
-                开启新任务
               </button>
             </div>
           </div>
@@ -2410,6 +2449,35 @@ export function ChatPage() {
                           ? renderChatContent(message.content, citationReferences)
                           : <p>{message.content || '正在生成…'}</p>}
                       </div>
+                      {citationReferences.some((reference) => reference.citation.media_type?.startsWith('image/') && reference.citation.asset_url) ? (
+                        <div className="chat-image-attachments" aria-label="回答图片">
+                          {citationReferences
+                            .filter((reference) => reference.citation.media_type?.startsWith('image/') && reference.citation.asset_url)
+                            .map((reference) => (
+                              <a href={reference.citation.asset_url} key={reference.key} target="_blank" rel="noreferrer">
+                                <img alt={reference.label || '资料库图片'} src={reference.citation.asset_url} />
+                                <span>{reference.label || '资料库图片'}</span>
+                              </a>
+                            ))}
+                        </div>
+                      ) : null}
+                      {message.content.startsWith('已找到文件') && citationReferences.some((reference) => (
+                        reference.citation.asset_url && !reference.citation.media_type?.startsWith('image/')
+                      )) ? (
+                        <div className="chat-file-deliveries" aria-label="可下载文件">
+                          {citationReferences
+                            .filter((reference) => reference.citation.asset_url && !reference.citation.media_type?.startsWith('image/'))
+                            .map((reference) => (
+                              <a download href={reference.citation.asset_url} key={reference.key}>
+                                <span className="chat-file-delivery-icon" aria-hidden="true">↓</span>
+                                <span>
+                                  <strong>{reference.label}</strong>
+                                  <small>点击下载</small>
+                                </span>
+                              </a>
+                            ))}
+                        </div>
+                      ) : null}
                       {citationReferences.length ? (
                         <details className="chat-citations">
                           <summary aria-label={`查看 ${citationReferences.length} 个引用来源`}>
@@ -2647,6 +2715,7 @@ export function ChatPage() {
                 id="chat-composer-input"
                 onChange={(event) => setQuestion(event.target.value)}
                 onKeyDown={handleComposerKeyDown}
+                onPaste={handleComposerPaste}
                 placeholder="告诉我你想完成什么工作..."
                 value={question}
               />
@@ -2705,63 +2774,6 @@ export function ChatPage() {
                   )}
                 </section>
               ) : null}
-              {selectedPersonalReferenceFiles.length ? (
-                <section aria-label="已引用资料" className="chat-selected-references">
-                  {selectedPersonalReferenceFiles.map((file) => (
-                    <span className="chat-selected-reference" key={file.file_uuid}>
-                      <span title={file.file_name}>引用：{file.file_name}</span>
-                      <button
-                        aria-label={`取消引用：${file.file_name}`}
-                        onClick={() => removeSelectedPersonalReferenceFile(file.file_uuid)}
-                        type="button"
-                      >
-                        ×
-                      </button>
-                    </span>
-                  ))}
-                </section>
-              ) : null}
-              {referencePickerOpen ? (
-                <section aria-label="选择引用资料" className="chat-reference-picker">
-                  <div className="chat-reference-picker-head">
-                    <strong>选择要引用的资料</strong>
-                    <button onClick={() => setReferencePickerOpen(false)} type="button">关闭</button>
-                  </div>
-                  {referencePickerStatus === 'loading' ? (
-                    <p role="status">正在加载我的资料…</p>
-                  ) : null}
-                  {referencePickerStatus === 'error' ? (
-                    <div className="chat-reference-picker-empty">
-                      <p role="status">资料列表暂时加载失败，请稍后重试。</p>
-                      <button onClick={() => void loadPersonalReferenceFiles()} type="button">重新加载</button>
-                    </div>
-                  ) : null}
-                  {referencePickerStatus === 'ready' && !personalReferenceFiles.length ? (
-                    <p className="chat-reference-picker-empty">还没有可引用的资料。可以先上传并保存到“我的资料”。</p>
-                  ) : null}
-                  {referencePickerStatus === 'ready' && personalReferenceFiles.length ? (
-                    <div className="chat-reference-picker-list">
-                      {personalReferenceFiles.map((file) => (
-                        <label className="chat-reference-picker-item" key={file.file_uuid}>
-                          <input
-                            aria-label={file.file_name}
-                            checked={selectedPersonalReferenceIds.includes(file.file_uuid)}
-                            onChange={() => togglePersonalReferenceFile(file.file_uuid)}
-                            type="checkbox"
-                          />
-                          <span className="chat-attachment-type">{attachmentFileTypeLabel(file.file_name)}</span>
-                          <span className="chat-reference-picker-name" title={file.file_name}>
-                            {file.file_name}
-                          </span>
-                          <span className="chat-attachment-status">
-                            {file.category || '我的资料'}
-                          </span>
-                        </label>
-                      ))}
-                    </div>
-                  ) : null}
-                </section>
-              ) : null}
               <div className="chat-composer-toolbar">
                 <label className="chat-file-trigger">
                   <span>＋ 上传资料</span>
@@ -2779,14 +2791,6 @@ export function ChatPage() {
                     type="file"
                   />
                 </label>
-                <button
-                  aria-pressed={referencePickerOpen || selectedPersonalReferenceIds.length > 0}
-                  className="chat-reference-chip"
-                  onClick={toggleReferencePicker}
-                  type="button"
-                >
-                  引用资料
-                </button>
                 <span className="chat-model-pill">当前设置：{currentModelLabel}</span>
                 {shouldUseServerModel ? (
                   <label className="chat-background-toggle">

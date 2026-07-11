@@ -28,6 +28,8 @@ export type ChatCitation = {
   chunk_type?: string;
   chunk_index?: number | null;
   score?: number;
+  asset_url?: string;
+  media_type?: string;
 };
 
 export type ChatMessagePayload = {
@@ -165,6 +167,8 @@ export type KnowledgeFilePreviewPayload = {
   file_uuid: string;
   file_name: string;
   source_kind: string;
+  asset_url?: string;
+  media_type?: string;
   chunks: KnowledgeFilePreviewChunkPayload[];
   total_chunks: number;
   page?: number;
@@ -384,16 +388,6 @@ async function readJson<T>(response: Response, code: string): Promise<T> {
   }
   if (!response.ok) throw new ApiError(response.status, code, payload);
   return payload as T;
-}
-
-export async function getChatSessions(): Promise<{
-  items: ChatSessionPayload[];
-  total: number;
-}> {
-  return readJson(
-    await apiFetch('/api/conversations', { cache: 'no-store' }),
-    'CHAT_SESSIONS_FAILED',
-  );
 }
 
 export async function getChatSessionsByKind(kind: ChatSessionListKind): Promise<{
@@ -876,6 +870,28 @@ export async function listKnowledgeFiles(): Promise<KnowledgeFileListPayload> {
   return readJson(
     await apiFetch('/api/knowledge/files', { cache: 'no-store' }),
     'KNOWLEDGE_FILES_FAILED',
+  );
+}
+
+export type KnowledgeFileClassificationPayload = {
+  file_uuid: string;
+  category: string;
+  document_type: string;
+  tags: string[];
+  applied: boolean;
+};
+
+export async function classifyKnowledgeFile(
+  fileUuid: string,
+  apply = true,
+): Promise<KnowledgeFileClassificationPayload> {
+  return readJson(
+    await apiFetch(`/api/knowledge/files/${encodeURIComponent(fileUuid)}/classify`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ apply }),
+    }),
+    'KNOWLEDGE_FILE_CLASSIFY_FAILED',
   );
 }
 

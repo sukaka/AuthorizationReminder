@@ -4,7 +4,6 @@ import { HttpResponse, http } from 'msw';
 import { expect, it, vi } from 'vitest';
 
 import App from '../src/App';
-import { HomePage } from '../src/pages/HomePage';
 import { SkillsPage } from '../src/pages/SkillsPage';
 import { SkillsAdminPage } from '../src/pages/admin/SkillsAdminPage';
 import { server } from './setup';
@@ -132,56 +131,4 @@ it('adds the capability center to the main navigation for ordinary users', async
 
   await userEvent.click(await screen.findByRole('button', { name: '能力中心' }));
   expect(await screen.findByRole('heading', { name: '能力中心' })).toBeInTheDocument();
-});
-
-it('matches skill capabilities from the workbench intent box and runs the selected capability', async () => {
-  const runRequest = vi.fn();
-  server.use(
-    http.get('/api/ai/home', () => HttpResponse.json({
-      favorites: [], recent_tasks: [], recent_generations: [], safety_reminders: [],
-    })),
-    http.post('/api/ai/intent/route', () => HttpResponse.json({
-      candidates: [],
-      skill_candidates: [{
-        skill_id: 'incident-report',
-        skill_name: '安全事件分析报告生成',
-        description: '生成安全事件分析报告。',
-        score: 9,
-        reasons: ['命中安全事件场景'],
-      }],
-    })),
-    http.post('/api/skills/incident-report/run', async ({ request }) => {
-      runRequest(await request.json());
-      return HttpResponse.json({
-        run_id: 'run-incident',
-        skill_id: 'incident-report',
-        skill_version: '1.0.0',
-        status: 'completed',
-        tools_used: ['personal_memory'],
-        result: { summary: '已生成安全事件分析报告。' },
-        artifacts: [{ kind: 'markdown', title: '安全事件分析报告生成', content: '报告' }],
-      });
-    }),
-  );
-
-  render(<HomePage session={{
-    user: { id: 'u-1', username: '张磊', role: 'employee' },
-    scope: { department: '技术部', managedDepartments: [] },
-    apps: ['ai-assistant'],
-    local_binding_token: 'signed-binding-token',
-  }} onOpenChat={vi.fn()} onOpenTask={vi.fn()} onShowAssistants={vi.fn()} />);
-
-  await userEvent.type(await screen.findByLabelText('告诉我你想完成什么工作'), '生成安全事件分析报告');
-  await userEvent.click(screen.getByRole('button', { name: '查找合适任务' }));
-  expect(await screen.findByText('安全事件分析报告生成')).toBeInTheDocument();
-  await userEvent.click(screen.getByRole('button', { name: '使用能力 安全事件分析报告生成' }));
-
-  await waitFor(() => expect(runRequest).toHaveBeenCalledWith({
-    task_id: 'skill-incident-report',
-    input: {
-      question: '生成安全事件分析报告',
-      attachments: [],
-    },
-  }));
-  expect(await screen.findByText('已生成安全事件分析报告。')).toBeInTheDocument();
 });

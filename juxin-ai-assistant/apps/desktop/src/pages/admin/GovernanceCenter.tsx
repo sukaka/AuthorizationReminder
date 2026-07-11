@@ -6,19 +6,21 @@ import { AssistantModesAdminPage } from './AssistantModesAdminPage';
 import { AuditPage } from './AuditPage';
 import { DesktopUpdatesPage } from './DesktopUpdatesPage';
 import { KnowledgeAdminPage } from './KnowledgeAdminPage';
+import { HotQuestionsPage } from './HotQuestionsPage';
 import { SettingsPage } from './SettingsPage';
 import { SkillsAdminPage } from './SkillsAdminPage';
 import { StatsPage } from './StatsPage';
 import { SuggestionsPage } from './SuggestionsPage';
 import { TaskAdminPage } from './TaskAdminPage';
 
-type GovernancePage = 'tasks' | 'assistant-modes' | 'skills' | 'knowledge' | 'suggestions' | 'stats' | 'audit' | 'settings' | 'links' | 'desktop-updates';
+type GovernancePage = 'tasks' | 'assistant-modes' | 'skills' | 'knowledge' | 'hot-questions' | 'suggestions' | 'stats' | 'audit' | 'settings' | 'links' | 'desktop-updates';
 
 const ITEMS: Array<{ page: GovernancePage; label: string }> = [
   { page: 'tasks', label: '任务管理' },
   { page: 'assistant-modes', label: '助手模式' },
   { page: 'skills', label: '能力治理' },
   { page: 'knowledge', label: '知识库' },
+  { page: 'hot-questions', label: '热点问题' },
   { page: 'suggestions', label: '建议审核' },
   { page: 'stats', label: '全局统计' },
   { page: 'audit', label: '审计日志' },
@@ -45,6 +47,7 @@ export function GovernanceCenter({ session }: { session: SessionPayload }) {
         : page === 'assistant-modes' ? <AssistantModesAdminPage />
           : page === 'skills' ? <SkillsAdminPage />
         : page === 'knowledge' ? <KnowledgeAdminPage />
+          : page === 'hot-questions' ? <HotQuestionsPage />
           : page === 'suggestions' ? <SuggestionsPage admin departments={session.scope.managedDepartments} />
             : page === 'stats' ? <StatsPage />
               : page === 'audit' ? <AuditPage />

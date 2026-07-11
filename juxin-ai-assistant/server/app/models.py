@@ -985,3 +985,26 @@ class FeedbackLog(TimestampMixin, Base):
     feedback_type: Mapped[str] = mapped_column(String(32))
     comment: Mapped[str] = mapped_column(Text, default="")
     saved_as: Mapped[str] = mapped_column(String(32), default="")
+
+
+class HotQuestionReportItem(TimestampMixin, Base):
+    __tablename__ = "ai_hot_question_report_items"
+    __table_args__ = (UniqueConstraint("period_type", "period_start", "period_end", "rank"),)
+
+    id: Mapped[int] = mapped_column(primary_key_type, primary_key=True, autoincrement=True)
+    uuid: Mapped[str] = mapped_column(String(36), unique=True, default=lambda: str(uuid_lib.uuid4()))
+    period_type: Mapped[str] = mapped_column(String(16), index=True)
+    period_start: Mapped[datetime] = mapped_column(DateTime, index=True)
+    period_end: Mapped[datetime] = mapped_column(DateTime, index=True)
+    rank: Mapped[int] = mapped_column(Integer)
+    question_count: Mapped[int] = mapped_column(Integer, default=0)
+    question_ciphertext: Mapped[bytes] = mapped_column(LargeBinary)
+    question_nonce: Mapped[bytes] = mapped_column(LargeBinary)
+    samples_ciphertext: Mapped[bytes] = mapped_column(LargeBinary)
+    samples_nonce: Mapped[bytes] = mapped_column(LargeBinary)
+    reply_ciphertext: Mapped[bytes] = mapped_column(LargeBinary)
+    reply_nonce: Mapped[bytes] = mapped_column(LargeBinary)
+    analysis_summary: Mapped[str] = mapped_column(Text, default="")
+    status: Mapped[str] = mapped_column(String(24), default="pending", index=True)
+    reviewed_by: Mapped[str] = mapped_column(String(64), default="")
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)

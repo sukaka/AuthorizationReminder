@@ -29,6 +29,52 @@ const baseFile = {
   tags: [],
 };
 
+it('applies AI classification from the file actions menu', async () => {
+  const classifyRequest = vi.fn();
+  server.use(
+    http.get('/api/knowledge/categories', () => HttpResponse.json({ items: [], total: 0 })),
+    http.get('/api/knowledge/document-types', () => HttpResponse.json({ items: [], total: 0 })),
+    http.get('/api/knowledge/bases', () => HttpResponse.json({ items: [], total: 0 })),
+    http.get('/api/knowledge/reviews/pending', () => HttpResponse.json({ items: [], total: 0 })),
+    http.get('/api/knowledge/reviews/history', () => HttpResponse.json({ items: [], total: 0 })),
+    http.get('/api/knowledge/files', () => HttpResponse.json({
+      items: [{
+        ...baseFile,
+        file_uuid: 'file-classify',
+        file_name: '零信任交付方案.pdf',
+        category: '其他',
+        document_type: '其他',
+        status: 'READY',
+        parse_status: 'parsed',
+        index_status: 'indexed',
+        chunk_count: 6,
+        rag_enabled: true,
+      }],
+      total: 1,
+    })),
+    http.post('/api/knowledge/files/file-classify/classify', async ({ request }) => {
+      classifyRequest(await request.json());
+      return HttpResponse.json({
+        file_uuid: 'file-classify',
+        category: '项目交付',
+        document_type: '解决方案',
+        tags: ['零信任', '交付'],
+        applied: true,
+      });
+    }),
+  );
+
+  render(<KnowledgePage session={adminSession} />);
+
+  const card = await screen.findByRole('listitem', { name: '零信任交付方案.pdf' });
+  await userEvent.click(within(card).getByRole('button', { name: '更多操作 零信任交付方案.pdf' }));
+  await userEvent.click(within(card).getByRole('menuitem', { name: '自动分类 零信任交付方案.pdf' }));
+
+  await waitFor(() => expect(classifyRequest).toHaveBeenCalledWith({ apply: true }));
+  expect(await within(card).findByText('项目交付 · 解决方案 · 正式资料')).toBeInTheDocument();
+  expect(screen.getByText('已自动分类“零信任交付方案.pdf”：项目交付 · 解决方案')).toBeInTheDocument();
+});
+
 it('opens file preview in a paginated document window', async () => {
   const previewRequest = vi.fn();
   server.use(

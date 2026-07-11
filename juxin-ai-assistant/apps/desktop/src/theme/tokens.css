@@ -32,6 +32,96 @@
   --space-16: 64px;
 }
 
+.chat-image-attachments {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 280px));
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.chat-image-attachments a,
+.knowledge-image-preview {
+  overflow: hidden;
+  margin: 0;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--surface-elevated);
+  color: inherit;
+  text-decoration: none;
+}
+
+.chat-file-deliveries {
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.chat-file-deliveries a {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface-elevated);
+  color: inherit;
+  text-decoration: none;
+}
+
+.chat-file-deliveries a:hover {
+  border-color: var(--accent);
+}
+
+.chat-file-deliveries a > span:last-child {
+  display: grid;
+  min-width: 0;
+}
+
+.chat-file-deliveries strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-file-deliveries small {
+  color: var(--text-secondary);
+}
+
+.chat-file-delivery-icon {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: 9px;
+  background: var(--accent-soft);
+  color: var(--accent-text);
+  font-weight: 700;
+}
+
+.chat-image-attachments img,
+.knowledge-image-preview img {
+  display: block;
+  width: 100%;
+  max-height: 420px;
+  object-fit: contain;
+  background: #fff;
+}
+
+.chat-image-attachments span,
+.knowledge-image-preview figcaption {
+  display: block;
+  padding: 8px 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.knowledge-image-preview {
+  grid-column: 1 / -1;
+  margin-bottom: 16px;
+}
+
 [data-theme='dark'] {
   color-scheme: dark;
   --background: #17181a;
@@ -936,50 +1026,314 @@ textarea:focus-visible {
   margin-top: 22px;
 }
 
-.knowledge-upload-panel > .history-card {
-  padding: 20px;
+.knowledge-upload-workspace {
+  margin-top: 4px;
+  padding: 26px;
   display: grid;
-  gap: 16px;
-  border-radius: 22px;
+  gap: 20px;
+  border: 1px solid rgb(47 111 237 / 10%);
+  border-radius: 24px;
+  background: linear-gradient(180deg, #fff 0%, #fbfdff 100%);
+  box-shadow: 0 18px 52px rgb(15 23 42 / 6%);
 }
 
-.knowledge-upload-panel fieldset {
-  margin: 0;
-  padding: 14px;
+.knowledge-upload-step {
+  padding: 12px 14px;
   display: flex;
-  flex-wrap: wrap;
-  gap: 10px 14px;
+  align-items: center;
+  gap: 12px;
+  border: 1px solid transparent;
+  border-radius: 15px;
+}
+
+.knowledge-upload-step--file {
+  border-color: rgb(47 111 237 / 16%);
+  background: linear-gradient(90deg, rgb(47 111 237 / 9%), rgb(47 111 237 / 2%) 72%, transparent);
+}
+
+.knowledge-upload-step--metadata {
+  border-color: rgb(124 58 237 / 18%);
+  background: linear-gradient(90deg, rgb(124 58 237 / 10%), rgb(124 58 237 / 2%) 72%, transparent);
+}
+
+.knowledge-upload-step > div:last-child {
+  display: grid;
+  gap: 3px;
+}
+
+.knowledge-upload-step strong {
+  color: var(--text-primary);
+  font-size: 15px;
+}
+
+.knowledge-upload-step span {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.knowledge-upload-step-index {
+  width: 30px;
+  height: 30px;
+  flex: 0 0 30px;
+  display: grid;
+  place-items: center;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--accent) 12%, white);
+  color: var(--accent);
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.knowledge-upload-step--metadata .knowledge-upload-step-index {
+  background: rgb(124 58 237 / 13%);
+  color: #7c3aed;
+  box-shadow: inset 0 0 0 1px rgb(124 58 237 / 8%);
+}
+
+.knowledge-upload-step--metadata strong {
+  color: #5b21b6;
+}
+
+.knowledge-upload-dropzone {
+  min-height: 150px;
+  padding: 26px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 7px;
+  border: 1.5px dashed rgb(47 111 237 / 32%);
+  border-radius: 20px;
+  background:
+    radial-gradient(circle at 50% 0%, rgb(47 111 237 / 8%), transparent 52%),
+    #f8fbff;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: border-color .18s ease, box-shadow .18s ease, transform .18s ease;
+}
+
+.knowledge-upload-dropzone:hover,
+.knowledge-upload-dropzone:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 12px 34px rgb(47 111 237 / 10%);
+  transform: translateY(-1px);
+}
+
+.knowledge-upload-dropzone.has-file {
+  min-height: 110px;
+  border-style: solid;
+  background: color-mix(in srgb, var(--accent) 5%, white);
+}
+
+.knowledge-upload-dropzone input[type="file"] {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.knowledge-upload-dropzone-icon {
+  width: 42px;
+  height: 42px;
+  display: grid;
+  place-items: center;
+  border-radius: 14px;
+  background: var(--accent);
+  color: white;
+  font-size: 23px;
+  font-weight: 500;
+  box-shadow: 0 10px 24px rgb(47 111 237 / 20%);
+}
+
+.knowledge-upload-dropzone strong {
+  margin-top: 4px;
+  color: var(--text-primary);
+  font-size: 15px;
+}
+
+.knowledge-upload-dropzone > span:last-child {
+  font-size: 12px;
+}
+
+.knowledge-upload-configuration {
+  margin-top: 4px;
+  padding-top: 20px;
+  display: grid;
+  gap: 20px;
+  border-top: 1px solid rgb(124 58 237 / 14%);
+}
+
+.knowledge-upload-file-summary {
+  padding: 14px 16px;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 13px;
   border: 1px solid var(--border);
   border-radius: 16px;
-  background: var(--background);
+  background: var(--surface);
 }
 
-.knowledge-upload-panel legend {
-  padding: 0 6px;
+.knowledge-upload-file-summary > div {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.knowledge-upload-file-summary strong {
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: 14px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.knowledge-upload-file-summary div span {
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.knowledge-upload-file-summary button {
+  border: 0;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.knowledge-upload-file-type {
+  min-width: 46px;
+  height: 38px;
+  padding: 0 8px;
+  display: grid;
+  place-items: center;
+  border-radius: 11px;
+  background: color-mix(in srgb, var(--accent) 10%, white);
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 900;
+}
+
+.knowledge-upload-panel .knowledge-purpose-options {
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  border: 0;
+  background: transparent;
+}
+
+.knowledge-upload-panel .knowledge-purpose-options legend {
+  margin-bottom: 8px;
+  padding: 0;
   color: var(--text-secondary);
   font-size: 12px;
   font-weight: 800;
 }
 
-.knowledge-upload-panel input[type="file"] {
-  width: 100%;
-  margin-top: 8px;
-  padding: 10px;
-  border: 1px dashed rgb(47 111 237 / 30%);
-  border-radius: 16px;
-  background: var(--background);
-  color: var(--text-secondary);
+.knowledge-purpose-option {
+  min-height: 82px;
+  padding: 13px;
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  border: 1px solid var(--border);
+  border-radius: 15px;
+  background: var(--surface);
+  cursor: pointer;
 }
 
-.knowledge-upload-panel input[type="file"]::file-selector-button {
-  margin-right: 12px;
-  padding: 8px 13px;
-  border: 0;
-  border-radius: 999px;
-  background: var(--accent);
-  color: white;
+.knowledge-purpose-option:has(input:checked) {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+  background: color-mix(in srgb, var(--accent) 5%, white);
+  box-shadow: 0 8px 20px rgb(47 111 237 / 8%);
+}
+
+.knowledge-purpose-option.is-disabled {
+  opacity: .48;
+  cursor: not-allowed;
+}
+
+.knowledge-purpose-option > span {
+  display: grid;
+  gap: 4px;
+}
+
+.knowledge-purpose-option strong {
+  color: var(--text-primary);
+  font-size: 13px;
+}
+
+.knowledge-purpose-option small {
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.knowledge-upload-fields {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.knowledge-upload-fields label {
+  display: grid;
+  gap: 7px;
+}
+
+.knowledge-upload-fields label > span {
+  color: var(--text-secondary);
+  font-size: 12px;
   font-weight: 800;
-  cursor: pointer;
+}
+
+.knowledge-upload-fields select,
+.knowledge-base-picker select {
+  width: 100%;
+  min-height: 42px;
+  padding: 0 38px 0 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background-color: var(--surface);
+  color: var(--text-primary);
+  font-size: 13px;
+}
+
+.knowledge-upload-fields select:focus,
+.knowledge-base-picker select:focus {
+  outline: 3px solid rgb(47 111 237 / 12%);
+  border-color: var(--accent);
+}
+
+.knowledge-upload-fields select:disabled {
+  background: var(--background);
+  color: var(--text-tertiary);
+}
+
+.knowledge-upload-category-path {
+  padding: 11px 13px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--accent) 6%, white);
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.knowledge-upload-category-path strong {
+  color: var(--accent);
+}
+
+.knowledge-upload-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
 }
 
 .knowledge-search-form {
@@ -2074,6 +2428,15 @@ textarea:focus-visible {
     grid-template-columns: 1fr;
   }
 
+  .knowledge-upload-workspace {
+    padding: 18px;
+  }
+
+  .knowledge-upload-fields,
+  .knowledge-upload-panel .knowledge-purpose-options {
+    grid-template-columns: 1fr;
+  }
+
   .knowledge-category-rail,
   .knowledge-summary-card,
   .knowledge-tabs {
@@ -2790,8 +3153,12 @@ textarea:focus-visible {
 }
 
 .knowledge-base-manager {
+  padding: 15px;
   display: grid;
   gap: 10px;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: var(--background);
 }
 
 .knowledge-base-picker {
@@ -2813,6 +3180,18 @@ textarea:focus-visible {
 .knowledge-base-create input,
 .knowledge-base-create select {
   min-height: 36px;
+}
+
+.knowledge-base-picker > button {
+  min-height: 42px;
+  padding: 0 14px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 800;
+  cursor: pointer;
 }
 
 .knowledge-base-create {
@@ -3439,6 +3818,32 @@ textarea:focus-visible {
   letter-spacing: .08em;
 }
 
+.chat-sessions-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 0 16px 4px 18px;
+}
+
+.chat-sessions-heading strong {
+  padding: 0;
+}
+
+.chat-sessions .chat-sessions-heading .chat-new-button {
+  width: auto;
+  margin: 0;
+  padding: 7px 11px;
+  display: inline-flex;
+  border: 1px solid color-mix(in srgb, var(--chat-brand) 24%, var(--border));
+  border-radius: 999px;
+  background: var(--chat-brand);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
 .chat-sessions button {
   width: calc(100% - 32px);
   margin: 0 16px;
@@ -3526,14 +3931,16 @@ textarea:focus-visible {
 .chat-sessions > div[data-session-status] {
   margin: 0 12px;
   padding: 8px 10px 9px;
-  border: 1px solid transparent;
+  border: 1px solid color-mix(in srgb, var(--text-secondary) 24%, var(--border));
   border-radius: 18px;
-  background: color-mix(in srgb, var(--surface-solid) 52%, var(--background) 48%);
+  background: var(--surface-solid);
+  box-shadow: 0 4px 14px rgb(16 24 40 / 7%);
 }
 
 .chat-sessions > div[data-session-status].is-active {
-  border-color: color-mix(in srgb, var(--chat-brand) 10%, var(--border));
-  background: color-mix(in srgb, var(--chat-brand) 8%, var(--surface-solid) 92%);
+  border-color: color-mix(in srgb, var(--chat-brand) 28%, var(--border));
+  background: var(--surface-solid);
+  box-shadow: 0 5px 16px rgb(16 24 40 / 9%);
 }
 
 .chat-sessions > div[data-session-status] > button {
@@ -3559,6 +3966,9 @@ textarea:focus-visible {
   overflow-wrap: anywhere;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.45;
 }
 
 .chat-session-select {

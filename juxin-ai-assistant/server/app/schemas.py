@@ -416,6 +416,8 @@ class KnowledgeFilePreviewOut(BaseModel):
     file_uuid: str
     file_name: str
     source_kind: str
+    asset_url: str = ""
+    media_type: str = ""
     chunks: list[KnowledgeFilePreviewChunkOut] = Field(default_factory=list)
     total_chunks: int
     page: int = 1
@@ -435,6 +437,8 @@ class ChatCitationOut(BaseModel):
     chunk_type: str = ""
     chunk_index: int | None = None
     score: int = 0
+    asset_url: str = ""
+    media_type: str = ""
 
 
 class ChatPrepareIn(BaseModel):
@@ -1097,13 +1101,6 @@ class TaskCardOut(BaseModel):
     assistant_code: str
     assistant_name: str
     last_used_at: datetime | None = None
-
-
-class HomeOut(BaseModel):
-    favorites: list[TaskCardOut]
-    recent_tasks: list[TaskCardOut]
-    recent_generations: list[HistoryItemOut]
-    safety_reminders: list[str]
 
 
 class FeedbackType(str, Enum):
