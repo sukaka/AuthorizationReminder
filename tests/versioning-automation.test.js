@@ -207,6 +207,24 @@ test('resolveAffectedSystems detects multiple business systems', () => {
   );
 });
 
+test('classifies and resolves unordered paths with deterministic system ordering', () => {
+  const changedPaths = [
+    'inventory-system/backend/src/index.js',
+    'juxin-ai-assistant/apps/desktop/src-tauri/src/main.rs',
+    'auth/index.js',
+  ];
+
+  assert.deepEqual(classifyChangedPaths(changedPaths).systemIds, [
+    'ai-assistant',
+    'auth',
+    'inventory',
+  ]);
+  assert.deepEqual(
+    resolveAffectedSystems({ summary: 'feat: coordinate systems', changedPaths }),
+    ['ai-assistant', 'auth', 'inventory']
+  );
+});
+
 test('shared paths require an explicit scope', () => {
   assert.throws(
     () => resolveAffectedSystems({
