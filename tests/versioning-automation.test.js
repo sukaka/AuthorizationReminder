@@ -16,6 +16,11 @@ const {
   normalizeCommitMessage,
 } = require('../scripts/versioning/automation');
 const { runPostCommit } = require('../scripts/versioning/post-commit');
+const {
+  SYSTEMS,
+  validateRegistryEntries,
+  validateSystemRegistry,
+} = require('../scripts/versioning/systems');
 
 const writeJson = (filePath, value) => {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
@@ -38,6 +43,69 @@ const makePackageLock = (version) => ({
       version,
     },
   },
+});
+
+const makeSystemRegistryFixture = ({ missingVersionFile = '' } = {}) => {
+  const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-system-registry-'));
+  for (const system of SYSTEMS) {
+    if (system.versionFile !== missingVersionFile) {
+      writeText(path.join(rootDir, system.versionFile), '1.0.0\n');
+    }
+    for (const packageDir of system.packageDirs) {
+      writeJson(path.join(rootDir, packageDir, 'package.json'), { name: packageDir, version: '1.0.0' });
+    }
+  }
+  return rootDir;
+};
+
+test('system registry defines every approved independent system', () => {
+  assert.deepEqual(
+    SYSTEMS.map((system) => system.id),
+    [
+      'ai-assistant',
+      'auth',
+      'big-screen',
+      'cmdb',
+      'delivery',
+      'device-flow',
+      'faq',
+      'inventory',
+      'prompt-center',
+      'reminder',
+      'sca',
+      'sec-impl',
+      'tender',
+      'ticketing',
+      'train-exam',
+    ]
+  );
+});
+
+test('validateRegistryEntries rejects overlapping owned paths', () => {
+  assert.throws(
+    () => validateRegistryEntries([
+      { id: 'a', paths: ['foo'] },
+      { id: 'b', paths: ['foo/bar'] },
+    ]),
+    /路径归属重叠/
+  );
+});
+
+test('validateRegistryEntries rejects package directories outside system ownership', () => {
+  assert.throws(
+    () => validateRegistryEntries([{ id: 'a', paths: ['foo'], packageDirs: ['bar'] }]),
+    /未知包目录/
+  );
+});
+
+test('validateSystemRegistry validates every declared version source', () => {
+  assert.doesNotThrow(() => validateSystemRegistry(path.join(__dirname, '..')));
+});
+
+test('validateSystemRegistry rejects missing version sources', () => {
+  const rootDir = makeSystemRegistryFixture({ missingVersionFile: 'server/VERSION' });
+
+  assert.throws(() => validateSystemRegistry(rootDir), /缺少版本源：server\/VERSION/);
 });
 
 test('post-commit exposes a guarded runner for side-effect-free testing', () => {
