@@ -13,6 +13,7 @@ class Reflector:
         return (
             analysis.needs_knowledge
             and not observation.sufficient
+            and analysis.require_knowledge_evidence
             and rag_search_count < limits.max_rag_search
         )
 
@@ -28,4 +29,3 @@ class Reflector:
         if any(keyword in question for keyword in ("漏洞", "日志", "巡检", "加固")):
             return "安全运维 漏洞 日志 加固 应急"
         return " ".join(question.split()[:6]) or question
-

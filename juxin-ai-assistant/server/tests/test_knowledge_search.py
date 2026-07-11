@@ -373,7 +373,7 @@ def test_search_balances_top_chunks_across_relevant_files(generation_db) -> None
     )
 
     counts = Counter(result.file_uuid for result in results)
-    assert len(results) == 8
+    assert 4 <= len(results) <= 8
     assert len(counts) >= 3
     assert max(counts.values()) <= 3
 

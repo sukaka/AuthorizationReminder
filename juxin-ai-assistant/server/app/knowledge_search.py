@@ -14,10 +14,11 @@ from .models import KnowledgeBase, KnowledgeChunk, KnowledgeFile
 EMBEDDING_PROVIDER = "local-hash"
 EMBEDDING_VERSION = "v1"
 DEFAULT_EMBEDDING_DIMENSIONS = 128
-VECTOR_CANDIDATE_THRESHOLD = 0.35
+VECTOR_CANDIDATE_THRESHOLD = 0.60
 HYBRID_CANDIDATE_LIMIT = 30
 MAX_CHUNKS_PER_FILE = 3
 MIN_FILE_COVERAGE = 3
+MIN_LEXICAL_MATCH_TERMS = 2
 
 
 @dataclass(frozen=True)
@@ -360,6 +361,15 @@ def _metadata_bonus(metadata: dict | None, terms: list[str]) -> int:
     return sum(5 for term in terms if term and term in text)
 
 
+def _has_lexical_relevance(text: str, terms: list[str]) -> bool:
+    lowered = text.lower()
+    matched = {term for term in terms if term and term in lowered}
+    return (
+        len(matched) >= MIN_LEXICAL_MATCH_TERMS
+        or any(len(term) >= 6 for term in matched)
+    )
+
+
 def _retrieved_from_row(
     *,
     chunk: KnowledgeChunk,
@@ -502,7 +512,9 @@ class HybridRetriever:
             bm25_score = bm25_scores_all[index] if index < len(bm25_scores_all) else 0.0
             vector_score = vector_scores.get(index, 0.0)
             bonus = _metadata_bonus(document.metadata, terms)
-            if keyword_score <= 0 and bm25_score <= 0 and vector_score <= 0 and bonus <= 0:
+            semantic_relevant = vector_score >= VECTOR_CANDIDATE_THRESHOLD
+            lexical_relevant = _has_lexical_relevance(document.haystack, terms)
+            if not semantic_relevant and not lexical_relevant:
                 continue
             final_score = self.rerank_service.score(
                 keyword_score=keyword_score,

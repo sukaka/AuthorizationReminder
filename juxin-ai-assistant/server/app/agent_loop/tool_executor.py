@@ -21,7 +21,9 @@ from app.agent_runtime.tools import (
     WordExportTool,
 )
 from app.context.prompt_loader import PromptLoader
+from app.config import get_settings
 from app.crypto import ContentCipher
+from app.knowledge_embedding import build_embedding_service
 
 from .types import ToolResult
 
@@ -41,6 +43,7 @@ class ToolExecutor:
         self.cipher = cipher
         self.top_k = top_k
         self.prompt_loader = prompt_loader or PromptLoader()
+        self.embedding_service = build_embedding_service(db, get_settings())
         self.registry = ToolRegistry()
         self.registry.register(CompanyKnowledgeSearchTool())
         self.registry.register(CurrentAttachmentSearchTool())
@@ -65,7 +68,10 @@ class ToolExecutor:
             user_id=self.sso_user_id,
             db=self.db,
             permissions=set(),
-            resources={"cipher": self.cipher},
+            resources={
+                "cipher": self.cipher,
+                "embedding_service": self.embedding_service,
+            },
             mode=mode,
             conversation_id=conversation_id,
         )

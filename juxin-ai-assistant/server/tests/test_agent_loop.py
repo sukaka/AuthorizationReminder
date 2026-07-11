@@ -16,7 +16,10 @@ def test_task_analyzer_maps_modes_to_loop_strategies() -> None:
 
     analyzer = TaskAnalyzer()
 
-    assert analyzer.analyze("普通问题", "normal").strategy == "single_turn"
+    ordinary = analyzer.analyze("普通问题", "normal")
+    assert ordinary.strategy == "single_turn"
+    assert ordinary.needs_knowledge is True
+    assert ordinary.require_knowledge_evidence is False
     assert analyzer.analyze("请根据知识库回答", "knowledge").strategy == "rag_loop"
     assert analyzer.analyze("帮我写投标响应材料", "business").strategy == "bid_material_loop"
     assert analyzer.analyze("整理员工入职材料", "hr_admin").strategy == "hr_admin_loop"
@@ -25,6 +28,9 @@ def test_task_analyzer_maps_modes_to_loop_strategies() -> None:
     assert analyzer.analyze("生成风险评估", "risk_assessment").strategy == "risk_assessment_loop"
     assert analyzer.analyze("生成应急响应报告", "incident_response").strategy == "incident_response_loop"
     assert analyzer.analyze("上传资料中是否有说明", "normal").needs_knowledge is True
+    command_query = analyzer.analyze("CCMP 有哪些命令行命令", "normal")
+    assert command_query.needs_knowledge is True
+    assert command_query.require_knowledge_evidence is True
 
 
 def test_knowledge_follow_up_query_carries_previous_user_subject() -> None:
@@ -54,6 +60,31 @@ def test_planner_declares_required_action_types() -> None:
         "ask_clarification",
         "finish",
     }
+
+
+def test_reflector_does_not_repeat_optional_semantic_search() -> None:
+    from app.agent_loop.reflector import Reflector
+    from app.agent_loop.types import LoopLimits, Observation, TaskAnalysis
+
+    should_continue = Reflector().should_continue(
+        analysis=TaskAnalysis(
+            mode="normal",
+            task_type="chat",
+            strategy="single_turn",
+            needs_knowledge=True,
+            require_knowledge_evidence=False,
+        ),
+        observation=Observation(
+            is_empty=True,
+            sufficient=False,
+            has_sources=False,
+            summary="未检索到资料",
+        ),
+        rag_search_count=1,
+        limits=LoopLimits(),
+    )
+
+    assert should_continue is False
 
 
 def test_quality_checker_flags_missing_juxin_context_and_sources() -> None:
