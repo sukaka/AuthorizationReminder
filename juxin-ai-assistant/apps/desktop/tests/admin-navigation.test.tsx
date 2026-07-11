@@ -2036,3 +2036,83 @@ it('links user and prompt management to existing centers', () => {
   expect(screen.getByRole('link', { name: '打开内容模板管理中心' }))
     .toHaveAttribute('href', 'http://localhost:18088');
 });
+
+it('shows parent and child category hierarchy in the knowledge upload form', async () => {
+  session('employee');
+  server.use(
+    http.get('/api/knowledge/categories', () => HttpResponse.json({
+      items: [{
+        category_id: 'category-product',
+        name: '产品资料',
+        parent_category_id: '',
+        parent_name: '',
+        scope: 'company',
+        sort_order: 10,
+        status: 'ACTIVE',
+        file_count: 0,
+        created_at: '2026-06-20T08:00:00Z',
+        updated_at: '2026-06-20T08:00:00Z',
+      }, {
+        category_id: 'category-wdsp',
+        name: 'WDSP',
+        parent_category_id: 'category-product',
+        parent_name: '产品资料',
+        scope: 'company',
+        sort_order: 20,
+        status: 'ACTIVE',
+        file_count: 0,
+        created_at: '2026-06-20T08:00:00Z',
+        updated_at: '2026-06-20T08:00:00Z',
+      }],
+      total: 2,
+    })),
+    http.get('/api/knowledge/files', () => HttpResponse.json({ items: [], total: 0 })),
+  );
+  render(<App />);
+
+  await userEvent.click(await screen.findByRole('button', { name: '我的资料' }));
+  await userEvent.click(screen.getByRole('tab', { name: '上传资料' }));
+  await userEvent.upload(
+    await screen.findByLabelText('上传知识文件'),
+    new File(['产品资料'], '产品资料.txt', { type: 'text/plain' }),
+  );
+
+  const categorySelect = screen.getByLabelText('资料分类');
+  expect(within(categorySelect).getByRole('option', { name: '产品资料' })).toBeInTheDocument();
+  expect(within(categorySelect).getByRole('option', { name: '└ WDSP' })).toHaveValue('WDSP');
+  await userEvent.selectOptions(categorySelect, 'WDSP');
+  expect(screen.getByText('当前分类：产品资料 / WDSP')).toBeInTheDocument();
+});
+
+it('explains and blocks upload when no active knowledge category exists', async () => {
+  session('employee');
+  server.use(
+    http.get('/api/knowledge/categories', () => HttpResponse.json({
+      items: [{
+        category_id: 'category-disabled',
+        name: '停用资料',
+        parent_category_id: '',
+        parent_name: '',
+        scope: 'company',
+        sort_order: 10,
+        status: 'DISABLED',
+        file_count: 0,
+        created_at: '2026-06-20T08:00:00Z',
+        updated_at: '2026-06-20T08:00:00Z',
+      }],
+      total: 1,
+    })),
+    http.get('/api/knowledge/files', () => HttpResponse.json({ items: [], total: 0 })),
+  );
+  render(<App />);
+
+  await userEvent.click(await screen.findByRole('button', { name: '我的资料' }));
+  await userEvent.click(screen.getByRole('tab', { name: '上传资料' }));
+  await userEvent.upload(
+    await screen.findByLabelText('上传知识文件'),
+    new File(['内容'], '资料.txt', { type: 'text/plain' }),
+  );
+
+  expect(screen.getByText('暂无可用资料分类，请联系管理员在字典管理中创建或启用分类。')).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: '开始上传' })).toBeDisabled();
+});

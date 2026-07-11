@@ -24,6 +24,7 @@ import { StatsPage } from './pages/admin/StatsPage';
 import { SuggestionsPage } from './pages/admin/SuggestionsPage';
 import { LauncherPage } from './launcher/LauncherPage';
 import { WorkspaceUpdateControl } from './launcher/WorkspaceUpdateControl';
+import { WorkspaceErrorBoundary } from './components/WorkspaceErrorBoundary';
 import { getRuntimeCapabilities } from './runtime/capabilities';
 import {
   desktopBridge,
@@ -49,6 +50,7 @@ type SidebarMode = 'expanded' | 'collapsed' | 'immersive';
 type ViewState =
   | { kind: 'checking' }
   | { kind: 'ready'; session: SessionPayload }
+  | { kind: 'unauthenticated' }
   | { kind: 'forbidden' }
   | { kind: 'error' };
 
@@ -256,42 +258,52 @@ function Workspace({ session }: { session: SessionPayload }) {
             <button className={immersive ? 'is-active' : ''} onClick={() => chooseSidebarMode('immersive')} type="button">沉浸</button>
           </div>
         </header>
-        <div className="workspace">
-        {page === 'models' ? (
-          <ModelProfilesPage />
-        ) : page === 'governance' && isAdmin ? (
-          <GovernanceCenter session={session} />
-        ) : page === 'department-stats' && isAdmin ? (
-          <StatsPage manager />
-        ) : page === 'suggestions' && isAdmin ? (
-          <SuggestionsPage departments={session.scope.managedDepartments} />
-        ) : page === 'assistants' ? (
-          <AssistantsPage onOpenTask={openTask} />
-        ) : page === 'chat' ? (
-          <ChatPage />
-        ) : page === 'knowledge' ? (
-          <KnowledgePage session={session} />
-        ) : page === 'skills' ? (
-          <SkillsPage />
-        ) : page === 'learning' ? (
-          <LearningPage isAdmin={isAdmin} />
-        ) : page === 'history' ? (
-          <HistoryPage />
-        ) : page === 'task' ? (
-          <>
-            {task
-              ? <TaskRunPage task={task} userId={String(session.user.id)} />
-              : <section className="desktop-required"><p>{taskError || '正在加载任务…'}</p></section>}
-          </>
-        ) : (
-          <HomePage
-            onOpenTask={openTask}
-            onOpenChat={() => setPage('chat')}
-            onShowAssistants={() => setPage('assistants')}
-            session={session}
-          />
-        )}
-        </div>
+        <WorkspaceErrorBoundary
+          key={page}
+          onReload={() => window.location.reload()}
+          onReturnHome={() => {
+            setTask(null);
+            setTaskError('');
+            setPage('home');
+          }}
+        >
+          <div className="workspace">
+            {page === 'models' ? (
+              <ModelProfilesPage />
+            ) : page === 'governance' && isAdmin ? (
+              <GovernanceCenter session={session} />
+            ) : page === 'department-stats' && isAdmin ? (
+              <StatsPage manager />
+            ) : page === 'suggestions' && isAdmin ? (
+              <SuggestionsPage departments={session.scope.managedDepartments} />
+            ) : page === 'assistants' ? (
+              <AssistantsPage onOpenTask={openTask} />
+            ) : page === 'chat' ? (
+              <ChatPage />
+            ) : page === 'knowledge' ? (
+              <KnowledgePage session={session} />
+            ) : page === 'skills' ? (
+              <SkillsPage />
+            ) : page === 'learning' ? (
+              <LearningPage isAdmin={isAdmin} />
+            ) : page === 'history' ? (
+              <HistoryPage />
+            ) : page === 'task' ? (
+              <>
+                {task
+                  ? <TaskRunPage task={task} userId={String(session.user.id)} />
+                  : <section className="desktop-required"><p>{taskError || '正在加载任务…'}</p></section>}
+              </>
+            ) : (
+              <HomePage
+                onOpenTask={openTask}
+                onOpenChat={() => setPage('chat')}
+                onShowAssistants={() => setPage('assistants')}
+                session={session}
+              />
+            )}
+          </div>
+        </WorkspaceErrorBoundary>
       </main>
     </div>
   );
@@ -301,7 +313,7 @@ function StatusView({
   kind,
   bridge,
 }: {
-  kind: 'checking' | 'forbidden' | 'error';
+  kind: 'checking' | 'unauthenticated' | 'forbidden' | 'error';
   bridge: DesktopBridge;
 }) {
   if (kind === 'checking') {
@@ -313,18 +325,21 @@ function StatusView({
     );
   }
 
+  const unauthenticated = kind === 'unauthenticated';
   const forbidden = kind === 'forbidden';
   return (
     <main className="status-view">
-      <span className="status-symbol">{forbidden ? '!' : '↻'}</span>
-      <h1>{forbidden ? '暂时无法进入工作台' : '服务暂时不可用'}</h1>
+      <span className="status-symbol">{forbidden || unauthenticated ? '!' : '↻'}</span>
+      <h1>{unauthenticated ? '需要统一登录' : forbidden ? '暂时无法进入工作台' : '服务暂时不可用'}</h1>
       <p>
-        {forbidden
+        {unauthenticated
+          ? '当前登录状态已失效，请通过聚信统一登录继续使用。'
+          : forbidden
           ? '你的统一账号尚未获得聚信 AI 助手访问权限。'
           : '无法连接聚信 AI 助手服务，请稍后再试。'}
       </p>
       <a href={getAuthPortalUrl()}>
-        返回统一门户
+        {unauthenticated ? '打开统一登录' : '返回统一门户'}
       </a>
       {window.__TAURI_INTERNALS__ ? (
         <button
@@ -369,12 +384,14 @@ function RemoteWorkspace({ bridge }: { bridge: DesktopBridge }) {
         if (active) setState({ kind: 'ready', session });
       })
       .catch((error: unknown) => {
-        if (!active || (error instanceof ApiError && error.status === 401)) return;
+        if (!active) return;
         const kind =
-          error instanceof ApiError && error.status === 403
+          error instanceof ApiError && error.status === 401
+            ? 'unauthenticated'
+            : error instanceof ApiError && error.status === 403
             ? 'forbidden'
             : 'error';
-        if (window.__TAURI_INTERNALS__) {
+        if (window.__TAURI_INTERNALS__ && kind !== 'unauthenticated') {
           void bridge.reportWorkspaceStatus(
             kind === 'forbidden' ? 'forbidden' : 'network-error',
           ).catch(() => {

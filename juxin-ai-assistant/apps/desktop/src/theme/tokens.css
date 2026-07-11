@@ -982,6 +982,15 @@ textarea:focus-visible {
   cursor: pointer;
 }
 
+.knowledge-category-path {
+  display: block;
+  margin-top: 6px;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.45;
+}
+
 .knowledge-search-form {
   padding: 18px;
   display: grid;
@@ -2231,6 +2240,34 @@ textarea:focus-visible {
   margin-top: 12px;
   color: var(--accent);
   text-decoration: none;
+}
+
+.workspace-error-fallback {
+  min-height: calc(100vh - 56px);
+}
+
+.workspace-error-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 18px;
+}
+
+.workspace-error-actions button {
+  min-height: 40px;
+  padding: 0 16px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-elevated);
+  color: var(--text-primary);
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.workspace-error-actions button:first-child {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: #fff;
 }
 
 .status-orb {

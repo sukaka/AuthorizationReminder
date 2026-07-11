@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 
 import { ApiError, type SessionPayload } from '../api/client';
+import { buildKnowledgeCategoryOptions } from '../components/knowledgeCategoryOptions';
 import {
   archiveKnowledgeFile,
   askKnowledge,
@@ -362,6 +363,7 @@ export function KnowledgePage({ session }: KnowledgePageProps) {
   const [uploadCategory, setUploadCategory] = useState(isAdmin ? '产品资料' : '个人素材');
   const [uploadDocumentType, setUploadDocumentType] = useState(isAdmin ? '产品白皮书' : '个人模板');
   const [knowledgeCategories, setKnowledgeCategories] = useState<KnowledgeCategoryPayload[]>([]);
+  const [categoryLoadState, setCategoryLoadState] = useState<'loading' | 'ready' | 'error'>('loading');
   const [categoryNotice, setCategoryNotice] = useState('');
   const [newCategoryName, setNewCategoryName] = useState('');
   const [newCategoryParentId, setNewCategoryParentId] = useState('');
@@ -435,14 +437,17 @@ export function KnowledgePage({ session }: KnowledgePageProps) {
   const searchedSecondaryCategoryOptions = secondaryCategoryOptions.filter((category) => (
     category.name.toLowerCase().includes(secondaryCategorySearch.trim().toLowerCase())
   ));
-  const categoryOptions = (
-    categoryDirectoryItems.length
-      ? categoryDirectoryItems.map((category) => category.name)
-      : fallbackKnowledgeCategoryOptions
+  const categoryOptions = categoryDirectoryItems.length
+    ? categoryDirectoryItems.map((category) => category.name)
+    : fallbackKnowledgeCategoryOptions;
+  const hasActiveUploadCategory = knowledgeCategories.some((category) => category.status === 'ACTIVE');
+  const uploadCategorySelectOptions = buildKnowledgeCategoryOptions(
+    knowledgeCategories,
+    hasActiveUploadCategory || categoryLoadState === 'error' ? uploadCategory : '',
+    categoryLoadState === 'error' ? fallbackKnowledgeCategoryOptions : [],
   );
-  const selectableCategoryOptions = categoryOptions.includes(uploadCategory)
-    ? categoryOptions
-    : [uploadCategory, ...categoryOptions].filter(Boolean);
+  const uploadCategoryPath = uploadCategorySelectOptions.find((option) => option.value === uploadCategory)?.path
+    || (categoryLoadState === 'error' ? uploadCategory : '');
   const activeDocumentTypeNames = knowledgeDocumentTypes
     .filter((documentType) => documentType.status === 'ACTIVE')
     .map((documentType) => documentType.name);
@@ -603,23 +608,27 @@ export function KnowledgePage({ session }: KnowledgePageProps) {
 
   useEffect(() => {
     let active = true;
+    setCategoryLoadState('loading');
     setCategoryNotice('');
     listKnowledgeCategories(isAdmin)
       .then((payload) => {
         if (!active) return;
         setKnowledgeCategories(payload.items);
+        setCategoryLoadState('ready');
         const activeNames = payload.items
           .filter((category) => category.status === 'ACTIVE')
           .map((category) => category.name);
         setUploadCategory((current) => (
           current && activeNames.includes(current)
             ? current
-            : activeNames[0] || (isAdmin ? '产品资料' : '个人素材')
+            : activeNames[0] || ''
         ));
       })
       .catch(() => {
         if (!active) return;
         setKnowledgeCategories([]);
+        setCategoryLoadState('error');
+        setUploadCategory((current) => current || (isAdmin ? '产品资料' : '个人素材'));
         setCategoryNotice('资料分类暂时不可用，已使用默认分类。');
       });
     return () => {
@@ -2168,13 +2177,22 @@ export function KnowledgePage({ session }: KnowledgePageProps) {
                 资料分类
                 <select
                   aria-label="资料分类"
+                  disabled={!uploadCategorySelectOptions.length}
                   onChange={(event) => setUploadCategory(event.target.value)}
                   value={uploadCategory}
                 >
-                  {selectableCategoryOptions.map((item) => (
-                    <option key={item} value={item}>{item}</option>
+                  {uploadCategorySelectOptions.map((item) => (
+                    <option key={`${item.value}-${item.level}`} value={item.value}>{item.label}</option>
                   ))}
                 </select>
+                {uploadCategoryPath ? (
+                  <small className="knowledge-category-path">当前分类：{uploadCategoryPath}</small>
+                ) : null}
+                {categoryLoadState === 'ready' && !uploadCategorySelectOptions.length ? (
+                  <small className="knowledge-category-path" role="status">
+                    暂无可用资料分类，请联系管理员在字典管理中创建或启用分类。
+                  </small>
+                ) : null}
               </label>
               <label>
                 文档类型
@@ -2192,7 +2210,7 @@ export function KnowledgePage({ session }: KnowledgePageProps) {
                 <button onClick={() => setPendingUploadFile(null)} type="button">
                   取消
                 </button>
-                <button onClick={() => void uploadFile()} type="button">
+                <button disabled={!uploadCategorySelectOptions.length} onClick={() => void uploadFile()} type="button">
                   开始上传
                 </button>
               </div>
@@ -2436,7 +2454,7 @@ export function KnowledgePage({ session }: KnowledgePageProps) {
                             : current)}
                           value={metadataEdit.category}
                         >
-                          {selectableCategoryOptions.map((item) => (
+                          {categorySelectOptions(metadataEdit.category).map((item) => (
                             <option key={item} value={item}>{item}</option>
                           ))}
                         </select>

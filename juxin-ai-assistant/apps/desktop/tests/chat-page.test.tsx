@@ -2282,6 +2282,49 @@ it('manages chat sessions across active, archive, and trash lists', async () => 
   confirmSpy.mockRestore();
 });
 
+it('shows parent and child category hierarchy in the chat upload dialog', async () => {
+  server.use(
+    http.get('/api/knowledge/categories', () => HttpResponse.json({
+      items: [{
+        category_id: 'category-product',
+        name: '产品资料',
+        parent_category_id: '',
+        parent_name: '',
+        scope: 'company',
+        sort_order: 10,
+        status: 'ACTIVE',
+        file_count: 0,
+        created_at: '2026-06-20T08:00:00Z',
+        updated_at: '2026-06-20T08:00:00Z',
+      }, {
+        category_id: 'category-wdsp',
+        name: 'WDSP',
+        parent_category_id: 'category-product',
+        parent_name: '产品资料',
+        scope: 'company',
+        sort_order: 20,
+        status: 'ACTIVE',
+        file_count: 0,
+        created_at: '2026-06-20T08:00:00Z',
+        updated_at: '2026-06-20T08:00:00Z',
+      }],
+      total: 2,
+    })),
+  );
+  render(<ChatPage />);
+
+  await userEvent.upload(
+    await screen.findByLabelText('上传资料'),
+    new File(['产品资料'], '产品资料.txt', { type: 'text/plain' }),
+  );
+  const dialog = await screen.findByRole('dialog', { name: '上传资料' });
+  const categorySelect = within(dialog).getByLabelText('资料分类');
+  expect(within(categorySelect).getByRole('option', { name: '产品资料' })).toBeInTheDocument();
+  expect(within(categorySelect).getByRole('option', { name: '└ WDSP' })).toHaveValue('WDSP');
+  await userEvent.selectOptions(categorySelect, 'WDSP');
+  expect(within(dialog).getByText('当前分类：产品资料 / WDSP')).toBeInTheDocument();
+});
+
 it('confirms bulk archive and bulk delete operations', async () => {
   const bulkArchiveRequest = vi.fn();
   const bulkDeleteRequest = vi.fn();

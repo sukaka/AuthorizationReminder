@@ -145,6 +145,24 @@ describe('unified session shell', () => {
     expect(screen.queryByLabelText('密码')).not.toBeInTheDocument();
   });
 
+  it('shows a login recovery screen instead of waiting forever after a 401', async () => {
+    server.use(
+      http.get('/api/ai/session', () => HttpResponse.json(
+        { detail: '未登录' },
+        { status: 401 },
+      )),
+    );
+
+    render(<App />);
+
+    expect(await screen.findByRole('heading', { name: '需要统一登录' })).toBeInTheDocument();
+    expect(screen.queryByText('正在检查统一登录…')).not.toBeInTheDocument();
+    expect(screen.getByRole('link', { name: '打开统一登录' })).toHaveAttribute(
+      'href',
+      'http://localhost:5180/portal?system=ai-assistant',
+    );
+  });
+
   it('shows a web-only system switcher for authorized apps', async () => {
     const user = userEvent.setup();
     server.use(

@@ -49,6 +49,7 @@ import {
   createLearningTemplate,
 } from '../api/client';
 import { TaskProgressTimeline } from '../components/TaskProgressTimeline';
+import { buildKnowledgeCategoryOptions } from '../components/knowledgeCategoryOptions';
 import { generateLocalModel, listModelProfiles } from '../local/modelStream';
 import { isDesktopRuntime } from '../runtime/capabilities';
 import { openLocalWordFile } from '../runtime/downloads';
@@ -750,6 +751,7 @@ export function ChatPage() {
   const [uploadCategory, setUploadCategory] = useState('个人素材');
   const [uploadDocumentType, setUploadDocumentType] = useState('其他');
   const [knowledgeCategories, setKnowledgeCategories] = useState<KnowledgeCategoryPayload[]>([]);
+  const [categoryLoadState, setCategoryLoadState] = useState<'loading' | 'ready' | 'error'>('loading');
   const [knowledgeDocumentTypes, setKnowledgeDocumentTypes] = useState<KnowledgeDocumentTypePayload[]>([]);
   const [referenceScope, setReferenceScope] = useState<ReferenceScope>('official_only');
   const [enabledReferenceFiles, setEnabledReferenceFiles] = useState<EnabledReferenceFile[]>([]);
@@ -798,20 +800,24 @@ export function ChatPage() {
 
   useEffect(() => {
     let active = true;
+    setCategoryLoadState('loading');
     listKnowledgeCategories(false)
       .then((payload) => {
         if (!active) return;
         const activeCategories = payload.items.filter((category) => category.status === 'ACTIVE');
         setKnowledgeCategories(activeCategories);
+        setCategoryLoadState('ready');
         setUploadCategory((current) => (
           current && activeCategories.some((category) => category.name === current)
             ? current
-            : activeCategories[0]?.name || '个人素材'
+            : activeCategories[0]?.name || ''
         ));
       })
       .catch(() => {
         if (!active) return;
         setKnowledgeCategories([]);
+        setCategoryLoadState('error');
+        setUploadCategory((current) => current || '个人素材');
       });
     listKnowledgeDocumentTypes(false)
       .then((payload) => {
@@ -850,9 +856,17 @@ export function ChatPage() {
     [personalReferenceFiles, selectedPersonalReferenceIds],
   );
   const uploadCategoryOptions = useMemo(() => {
-    const names = knowledgeCategories.map((category) => category.name);
-    return Array.from(new Set([uploadCategory, ...names, ...fallbackUploadCategories].filter(Boolean)));
-  }, [knowledgeCategories, uploadCategory]);
+    return buildKnowledgeCategoryOptions(
+      knowledgeCategories,
+      knowledgeCategories.length || categoryLoadState === 'error' ? uploadCategory : '',
+      categoryLoadState === 'error' ? fallbackUploadCategories : [],
+    );
+  }, [categoryLoadState, knowledgeCategories, uploadCategory]);
+  const uploadCategoryPath = useMemo(
+    () => uploadCategoryOptions.find((option) => option.value === uploadCategory)?.path
+      || (categoryLoadState === 'error' ? uploadCategory : ''),
+    [categoryLoadState, uploadCategory, uploadCategoryOptions],
+  );
   const uploadDocumentTypeOptions = useMemo(() => {
     const names = knowledgeDocumentTypes.map((documentType) => documentType.name);
     return Array.from(new Set([uploadDocumentType, ...names, ...fallbackUploadDocumentTypes].filter(Boolean)));
@@ -2590,16 +2604,26 @@ export function ChatPage() {
                     资料分类
                     <select
                       aria-label="资料分类"
-                      disabled={uploading || uploadPurpose === 'session_attachment'}
+                      disabled={uploading || uploadPurpose === 'session_attachment' || !uploadCategoryOptions.length}
                       onChange={(event) => setUploadCategory(event.target.value)}
                       value={uploadPurpose === 'session_attachment' ? '当前附件' : uploadCategory}
                     >
                       {uploadPurpose === 'session_attachment' ? (
                         <option value="当前附件">当前附件</option>
                       ) : uploadCategoryOptions.map((item) => (
-                        <option key={item} value={item}>{item}</option>
+                        <option key={`${item.value}-${item.level}`} value={item.value}>{item.label}</option>
                       ))}
                     </select>
+                    {uploadPurpose !== 'session_attachment' && uploadCategoryPath ? (
+                      <small className="knowledge-category-path">当前分类：{uploadCategoryPath}</small>
+                    ) : null}
+                    {uploadPurpose !== 'session_attachment'
+                    && categoryLoadState === 'ready'
+                    && !uploadCategoryOptions.length ? (
+                      <small className="knowledge-category-path" role="status">
+                        暂无可用资料分类，请联系管理员在字典管理中创建或启用分类。
+                      </small>
+                      ) : null}
                   </label>
                   <label>
                     文档类型
@@ -2622,7 +2646,11 @@ export function ChatPage() {
                   <button disabled={uploading} onClick={() => setPendingUploadFile(null)} type="button">
                     取消
                   </button>
-                  <button disabled={uploading} onClick={() => void uploadKnowledge()} type="button">
+                  <button
+                    disabled={uploading || (uploadPurpose !== 'session_attachment' && !uploadCategoryOptions.length)}
+                    onClick={() => void uploadKnowledge()}
+                    type="button"
+                  >
                     {uploading ? '上传中…' : '开始上传'}
                   </button>
                 </div>
