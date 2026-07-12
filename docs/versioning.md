@@ -26,7 +26,9 @@
 | `big-screen` | 统一大屏展示中心 | `big-screen-center/` | `big-screen-center/VERSION` |
 | `ai-assistant` | 聚信 AI 助手 | `juxin-ai-assistant/` | `juxin-ai-assistant/VERSION` |
 
-新增系统时，必须同时注册系统 ID、归属路径、`VERSION` 文件和需要同步的 package/lock、JSON、TOML 结构化版本文件。
+新增系统时，必须同时注册系统 ID、归属路径、`VERSION` 文件和需要同步的 package/lock、JSON、TOML、Cargo.lock 目标 package 或声明式 `versionTargets`。`versionTargets` 只允许指向该系统归属路径或共享路径，每个 selector 必须唯一匹配命名为 `version` 的版本字段，并在 registry 校验时与 `VERSION` 一致。
+
+AI 助手后端 `Settings.app_version` 与根 Compose 的 `ai-assistant-api` 部署版本，以及 SCA 后端、系统 Compose、`.env.example` 和根 Compose 四个 SCA 服务的应用版本，均作为声明式运行时/部署目标同步。根 Compose 虽由多个系统共享，但每个目标按服务字段独立定位；具体系统 scope 只更新该系统目标，`all` 会合并全部系统在共享文件中的非重叠编辑。
 
 ## 2. 语义版本规则
 
@@ -74,9 +76,11 @@ npm run hooks:install
 
 1. `commit-msg` 只校验提交 type/scope 语法，并清理手写的版本前缀；它不读取提交变更路径。
 2. `post-commit` 校验注册表，根据本次提交的变更路径验证系统 scope，并计算受影响系统及升级级别。
-3. 自动同步注册表声明的 `VERSION`、package/lock、JSON、TOML 和 Cargo.lock 目标 package 结构化版本字段；Cargo.lock 中依赖包版本保持不变。
+3. 自动同步注册表声明的 `VERSION`、package/lock、JSON、TOML、Cargo.lock 目标 package 和声明式运行时/部署版本字段；只更新已声明且唯一匹配的目标，Cargo.lock 依赖包及 Compose 中的依赖工具版本保持不变。
 4. 使用 `git commit --amend` 把版本文件和系统版本前缀并入原提交。
 5. 推送当前分支；没有 upstream 时为当前分支建立 upstream。
+
+amend 过程会临时 stash 用户的 staged、unstaged 和 untracked 改动。只有 amend 与 stash 恢复都成功才算事务完成；若最终 stash 恢复冲突，自动化会恢复原 HEAD、清理冲突状态，再在原 HEAD 上按原索引状态恢复用户改动并删除自动 stash，随后抛出最初的恢复错误。
 
 系统升版不会创建或切换分支，也不会把分支重命名为版本号。部署应使用稳定分支或显式配置的业务分支，不能依赖 `codex/<版本号>`。
 
@@ -110,4 +114,4 @@ node -e "JSON.parse(require('fs').readFileSync('package.json')); JSON.parse(requ
 git diff --check
 ```
 
-仓库一致性测试会检查全部 15 个 `VERSION` 源、注册表声明的运行时版本（包括 AI 助手 Cargo.lock 目标 package），以及根版本工具包是否保持一致。
+仓库一致性测试会检查全部 15 个 `VERSION` 源、注册表声明的运行时版本（包括 AI 助手 Cargo.lock 目标 package、AI/SCA 后端与 Compose 部署字段），以及根版本工具包是否保持一致。

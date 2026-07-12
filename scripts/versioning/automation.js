@@ -6,6 +6,7 @@ const {
   SYSTEMS,
   SYSTEM_BY_ID,
   isSharedPath,
+  matchVersionTarget,
   validateSystemRegistry,
 } = require('./systems');
 const { assertStrictSemVer } = require('./semver');
@@ -312,6 +313,48 @@ const prepareCargoLockPackageUpdate = ({ rootDir, target, currentVersion, nextVe
   return { relativePath, filePath, original, content: packageVersion.sections.join('') };
 };
 
+const applyEdits = (source, edits, relativePath) => {
+  const ordered = [...edits].sort((left, right) => right.start - left.start);
+  for (let index = 1; index < ordered.length; index += 1) {
+    if (ordered[index - 1].start < ordered[index].end) {
+      throw new Error(`${relativePath} 运行时版本目标重叠`);
+    }
+  }
+  return ordered.reduce(
+    (content, edit) => `${content.slice(0, edit.start)}${edit.value}${content.slice(edit.end)}`,
+    source
+  );
+};
+
+const prepareVersionTargetUpdates = ({ rootDir, targets, currentVersion, nextVersion }) => {
+  const targetsByFile = new Map();
+  for (const target of targets || []) {
+    const entries = targetsByFile.get(target.file) || [];
+    entries.push(target);
+    targetsByFile.set(target.file, entries);
+  }
+
+  return Array.from(targetsByFile, ([relativePath, fileTargets]) => {
+    const { filePath, original } = readRequiredText(rootDir, relativePath);
+    const edits = fileTargets.map((target) => {
+      const match = matchVersionTarget(original, target);
+      assertCurrentTargetVersion({
+        value: match.value,
+        currentVersion,
+        label: `${relativePath} ${target.field}`,
+      });
+      return { start: match.start, end: match.end, value: nextVersion };
+    });
+    return {
+      relativePath,
+      filePath,
+      original,
+      content: applyEdits(original, edits, relativePath),
+      edits,
+    };
+  });
+};
+
 const readSystemVersion = (rootDir, system) => {
   const { original } = readRequiredText(rootDir, system.versionFile);
   if (!original.endsWith('\n') || original.slice(0, -1).includes('\n')) {
@@ -377,6 +420,15 @@ const findSystemVersionDrift = (rootDir, system) => {
       record(target.file, `package.${target.packageName}.version`, findCargoLockPackageVersion(source, target.file, target.packageName).value);
     } catch (_error) {
       record(target.file, `package.${target.packageName}.version`, '<missing>');
+    }
+  }
+  for (const target of canonicalSystem.versionTargets || []) {
+    const filePath = path.join(resolvedRoot, target.file);
+    const source = fs.existsSync(filePath) ? readText(filePath) : '';
+    try {
+      record(target.file, target.field, matchVersionTarget(source, target).value);
+    } catch (_error) {
+      record(target.file, target.field, '<missing>');
     }
   }
   return drift;
@@ -446,7 +498,34 @@ const prepareSystemVersionSync = ({ rootDir, system, currentVersion, nextVersion
       nextVersion: normalizedNextVersion,
     }));
   }
+  updates.push(...prepareVersionTargetUpdates({
+    rootDir: resolvedRoot,
+    targets: canonicalSystem.versionTargets,
+    currentVersion: normalizedCurrentVersion,
+    nextVersion: normalizedNextVersion,
+  }));
   return updates;
+};
+
+const mergePreparedUpdates = (updates) => {
+  const updatesByFile = new Map();
+  for (const update of updates) {
+    const entries = updatesByFile.get(update.filePath) || [];
+    entries.push(update);
+    updatesByFile.set(update.filePath, entries);
+  }
+  return Array.from(updatesByFile.values(), (entries) => {
+    if (entries.length === 1) return entries[0];
+    if (entries.some((entry) => !entry.edits || entry.original !== entries[0].original)) {
+      throw new Error(`${entries[0].relativePath} 存在无法合并的重复版本更新`);
+    }
+    const edits = entries.flatMap((entry) => entry.edits);
+    return {
+      ...entries[0],
+      content: applyEdits(entries[0].original, edits, entries[0].relativePath),
+      edits,
+    };
+  });
 };
 
 const restorePreparedUpdates = (updates) => {
@@ -556,36 +635,29 @@ const stashLocalChanges = (rootDir) => {
   return marker;
 };
 
-const popStash = (rootDir, marker) => {
-  if (!marker) return;
+const findStashRef = (rootDir, marker) => {
+  if (!marker) return '';
   const lines = git({ rootDir, args: ['stash', 'list', '--format=%gd %gs'] })
     .trim()
     .split('\n')
     .filter(Boolean);
   const matched = lines.find((line) => line.endsWith(marker));
-  if (!matched) return;
-  const stashRef = matched.split(' ')[0];
-  git({ rootDir, args: ['stash', 'pop', '--index', stashRef] });
+  return matched ? matched.split(' ')[0] : '';
 };
 
-const hasStagedVersionTargets = (rootDir, relativePaths) => {
-  if (!relativePaths.length) return false;
-  try {
-    git({ rootDir, args: ['diff', '--cached', '--quiet', '--', ...relativePaths] });
-    return false;
-  } catch (error) {
-    if (error.status === 1) return true;
-    throw error;
-  }
+const popStash = (rootDir, marker) => {
+  const stashRef = findStashRef(rootDir, marker);
+  if (stashRef) git({ rootDir, args: ['stash', 'pop', '--index', stashRef] });
 };
 
-const rollbackVersionTargets = (rootDir, updates) => {
-  if (!updates.length) return;
-  const relativePaths = Array.from(new Set(updates.map((update) => update.relativePath))).sort();
+const restoreVersioningTransaction = ({ rootDir, originalHead, stashMarker, updates }) => {
+  const stashRef = findStashRef(rootDir, stashMarker);
   restorePreparedUpdates(updates);
-  if (hasStagedVersionTargets(rootDir, relativePaths)) {
-    git({ rootDir, args: ['reset', '--quiet', 'HEAD', '--', ...relativePaths] });
-  }
+  git({ rootDir, args: ['reset', '--hard', originalHead] });
+  if (!stashRef) return;
+  git({ rootDir, args: ['clean', '-fd'] });
+  git({ rootDir, args: ['stash', 'apply', '--index', stashRef] });
+  git({ rootDir, args: ['stash', 'drop', stashRef] });
 };
 
 const buildSystemVersionedCommitMessage = ({ message, bumps }) => {
@@ -642,6 +714,7 @@ const applyVersioningToHeadCommit = ({ rootDir, writeTarget = writeText }) => {
     };
   }
 
+  const originalHead = git({ rootDir: resolvedRoot, args: ['rev-parse', 'HEAD'] }).trim();
   const stashMarker = stashLocalChanges(resolvedRoot);
   let updates = [];
   let bumps = [];
@@ -649,10 +722,10 @@ const applyVersioningToHeadCommit = ({ rootDir, writeTarget = writeText }) => {
 
   try {
     bumps = planSystemBumps({ rootDir: resolvedRoot, systemIds, bumpType });
-    updates = bumps.flatMap((bump) => prepareSystemVersionSync({
+    updates = mergePreparedUpdates(bumps.flatMap((bump) => prepareSystemVersionSync({
       rootDir: resolvedRoot,
       ...bump,
-    }));
+    })));
     changedFiles = Array.from(new Set(
       updates
         .filter((update) => update.content !== update.original)
@@ -681,18 +754,20 @@ const applyVersioningToHeadCommit = ({ rootDir, writeTarget = writeText }) => {
     } finally {
       fs.rmSync(messageFile, { force: true });
     }
-
+    popStash(resolvedRoot, stashMarker);
   } catch (error) {
     try {
-      rollbackVersionTargets(resolvedRoot, updates);
-      popStash(resolvedRoot, stashMarker);
+      restoreVersioningTransaction({
+        rootDir: resolvedRoot,
+        originalHead,
+        stashMarker,
+        updates,
+      });
     } catch (restoreError) {
       throw new Error(`${error.message}；回滚版本事务失败：${restoreError.message}`);
     }
     throw error;
   }
-
-  popStash(resolvedRoot, stashMarker);
 
   return {
     skipped: false,

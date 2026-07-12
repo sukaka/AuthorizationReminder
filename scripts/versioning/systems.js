@@ -9,6 +9,7 @@ const freezeSystem = (system) => Object.freeze({
   jsonFiles: Object.freeze(system.jsonFiles || []),
   tomlFiles: Object.freeze(system.tomlFiles || []),
   cargoLockPackages: Object.freeze((system.cargoLockPackages || []).map(Object.freeze)),
+  versionTargets: Object.freeze((system.versionTargets || []).map(Object.freeze)),
 });
 
 const SYSTEMS = Object.freeze([
@@ -24,6 +25,18 @@ const SYSTEMS = Object.freeze([
       file: 'juxin-ai-assistant/apps/desktop/src-tauri/Cargo.lock',
       packageName: 'juxin-ai-assistant',
     }],
+    versionTargets: [
+      {
+        file: 'juxin-ai-assistant/server/app/config.py',
+        field: 'Settings.app_version',
+        pattern: /^[ \t]*app_version: str = "(?<version>\d+\.\d+\.\d+)"[ \t]*$/m,
+      },
+      {
+        file: 'docker-compose.yml',
+        field: 'services.ai-assistant-api.environment.APP_VERSION',
+        pattern: /^  ai-assistant-api:\n(?: {4,}.*\n)*?      APP_VERSION: "(?<version>\d+\.\d+\.\d+)"[ \t]*$/m,
+      },
+    ],
   }),
   freezeSystem({
     id: 'auth',
@@ -98,6 +111,33 @@ const SYSTEMS = Object.freeze([
     versionFile: 'sca-platform/VERSION',
     paths: ['sca-platform'],
     packageDirs: ['sca-platform/frontend'],
+    versionTargets: [
+      {
+        file: 'sca-platform/backend/app/config.py',
+        field: 'Settings.app_version',
+        pattern: /^[ \t]*app_version: str = "(?<version>\d+\.\d+\.\d+)"[ \t]*$/m,
+      },
+      {
+        file: 'sca-platform/docker-compose.yml',
+        field: 'x-sca-environment.APP_VERSION',
+        pattern: /^  APP_VERSION: \$\{SCA_APP_VERSION:-(?<version>\d+\.\d+\.\d+)\}[ \t]*$/m,
+      },
+      {
+        file: 'sca-platform/.env.example',
+        field: 'APP_VERSION',
+        pattern: /^APP_VERSION=(?<version>\d+\.\d+\.\d+)[ \t]*$/m,
+      },
+      {
+        file: 'sca-platform/.env.example',
+        field: 'SCA_APP_VERSION',
+        pattern: /^SCA_APP_VERSION=(?<version>\d+\.\d+\.\d+)[ \t]*$/m,
+      },
+      ...['sca-api', 'sca-worker', 'sca-scanner-worker', 'sca-beat'].map((service) => ({
+        file: 'docker-compose.yml',
+        field: `services.${service}.environment.APP_VERSION`,
+        pattern: new RegExp(`^  ${service}:\\n(?: {4,}.*\\n)*?      APP_VERSION: \\$\\{SCA_APP_VERSION:-(?<version>\\d+\\.\\d+\\.\\d+)\\}[ \\t]*$`, 'm'),
+      })),
+    ],
   }),
   freezeSystem({
     id: 'sec-impl',
@@ -226,9 +266,50 @@ const validateCargoLockPackages = (system) => {
   }
 };
 
+const matchVersionTarget = (source, target) => {
+  const flags = Array.from(new Set(`${target.pattern.flags.replace(/[dgy]/g, '')}dg`)).join('');
+  const matches = Array.from(String(source).matchAll(new RegExp(target.pattern.source, flags)));
+  if (matches.length !== 1 || !matches[0].groups?.version || !matches[0].indices?.groups?.version) {
+    throw new Error(`${target.file} ${target.field} 版本目标缺失或重复`);
+  }
+  const [start, end] = matches[0].indices.groups.version;
+  return { value: matches[0].groups.version, start, end };
+};
+
+const validateVersionTargets = (rootDir, system, currentVersion, declaredTargets) => {
+  if (!Array.isArray(system.versionTargets)) {
+    throw new Error(`运行时版本目标声明非法：${system.id}`);
+  }
+  const ownedPaths = system.paths.map(normalizeRelativePath);
+  for (const target of system.versionTargets) {
+    if (!target || typeof target.file !== 'string' || typeof target.field !== 'string' || !(target.pattern instanceof RegExp)) {
+      throw new Error(`运行时版本目标声明非法：${system.id}`);
+    }
+    const relativePath = normalizeRelativePath(target.file);
+    if (!isOwnedPath(relativePath, ownedPaths) && !isSharedPath(relativePath)) {
+      throw new Error(`运行时版本文件不属于系统或共享路径：${system.id}:${relativePath}`);
+    }
+    const targetKey = `${relativePath}:${target.field}`;
+    if (declaredTargets.has(targetKey)) {
+      throw new Error(`运行时版本目标重复：${targetKey}`);
+    }
+    declaredTargets.add(targetKey);
+    const filePath = path.join(rootDir, relativePath);
+    if (!fs.existsSync(filePath)) {
+      throw new Error(`缺少运行时版本文件：${relativePath}`);
+    }
+    const match = matchVersionTarget(fs.readFileSync(filePath, 'utf8'), target);
+    assertStrictSemVer(match.value, `${relativePath} ${target.field}`);
+    if (match.value !== currentVersion) {
+      throw new Error(`${relativePath} ${target.field} 与 VERSION 不一致：期望 ${currentVersion}，实际 ${match.value}`);
+    }
+  }
+};
+
 const validateSystemRegistry = (rootDir) => {
   validateRegistryEntries(SYSTEMS);
   const resolvedRoot = path.resolve(rootDir);
+  const declaredTargets = new Set();
 
   for (const system of SYSTEMS) {
     if (typeof system.name !== 'string' || !system.name.trim()) {
@@ -266,6 +347,7 @@ const validateSystemRegistry = (rootDir) => {
     validateDeclaredFiles(system, 'jsonFiles', 'JSON 版本文件');
     validateDeclaredFiles(system, 'tomlFiles', 'TOML 版本文件');
     validateCargoLockPackages(system);
+    validateVersionTargets(resolvedRoot, system, versionSource.slice(0, -1), declaredTargets);
   }
 };
 
@@ -274,6 +356,7 @@ module.exports = {
   SHARED_PATHS,
   SYSTEM_BY_ID,
   isSharedPath,
+  matchVersionTarget,
   validateRegistryEntries,
   validateSystemRegistry,
 };

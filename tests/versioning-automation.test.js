@@ -65,6 +65,47 @@ const makeSystemRegistryFixture = ({ missingVersionFile = '' } = {}) => {
       writeJson(path.join(rootDir, packageDir, 'package.json'), { name: packageDir, version: '1.0.0' });
     }
   }
+  writeText(
+    path.join(rootDir, 'juxin-ai-assistant/server/app/config.py'),
+    'class Settings:\n    app_version: str = "1.0.0"\n'
+  );
+  writeText(
+    path.join(rootDir, 'sca-platform/backend/app/config.py'),
+    'class Settings:\n    app_version: str = "1.0.0"\n'
+  );
+  writeText(
+    path.join(rootDir, 'sca-platform/docker-compose.yml'),
+    'x-sca-environment: &sca-environment\n  APP_VERSION: ${SCA_APP_VERSION:-1.0.0}\n  DEPENDENCY_CHECK_VERSION: ${DEPENDENCY_CHECK_VERSION:-12.1.9}\n'
+  );
+  writeText(
+    path.join(rootDir, 'sca-platform/.env.example'),
+    'APP_VERSION=1.0.0\nSCA_APP_VERSION=1.0.0\n'
+  );
+  writeText(
+    path.join(rootDir, 'docker-compose.yml'),
+    [
+      'services:',
+      '  unrelated-api:',
+      '    environment:',
+      '      APP_VERSION: "9.9.9"',
+      '  ai-assistant-api:',
+      '    environment:',
+      '      APP_VERSION: "1.0.0"',
+      '  sca-api:',
+      '    environment:',
+      '      APP_VERSION: ${SCA_APP_VERSION:-1.0.0}',
+      '  sca-worker:',
+      '    environment:',
+      '      APP_VERSION: ${SCA_APP_VERSION:-1.0.0}',
+      '  sca-scanner-worker:',
+      '    environment:',
+      '      APP_VERSION: ${SCA_APP_VERSION:-1.0.0}',
+      '  sca-beat:',
+      '    environment:',
+      '      APP_VERSION: ${SCA_APP_VERSION:-1.0.0}',
+      '',
+    ].join('\n')
+  );
   return rootDir;
 };
 
@@ -147,6 +188,14 @@ test('system registry defines every approved independent system', () => {
     file: 'juxin-ai-assistant/apps/desktop/src-tauri/Cargo.lock',
     packageName: 'juxin-ai-assistant',
   }]);
+  assert.deepEqual(
+    SYSTEM_BY_ID.get('ai-assistant').versionTargets.map(({ file, field }) => ({ file, field })),
+    [
+      { file: 'juxin-ai-assistant/server/app/config.py', field: 'Settings.app_version' },
+      { file: 'docker-compose.yml', field: 'services.ai-assistant-api.environment.APP_VERSION' },
+    ]
+  );
+  assert.equal(SYSTEM_BY_ID.get('sca').versionTargets.length, 8);
   assert.deepEqual(SYSTEM_BY_ID.get('reminder').paths, ['server', 'web']);
   assert.deepEqual(SYSTEM_BY_ID.get('reminder').packageDirs, ['web']);
 });
@@ -209,6 +258,38 @@ test('validateSystemRegistry accepts zero and multi-digit VERSION segments', () 
 
     assert.doesNotThrow(() => validateSystemRegistry(rootDir));
   }
+});
+
+test('validateSystemRegistry requires each runtime target once and aligned with VERSION', () => {
+  const missingRoot = makeSystemRegistryFixture();
+  writeText(
+    path.join(missingRoot, 'juxin-ai-assistant/server/app/config.py'),
+    'class Settings:\n    app_name: str = "fixture"\n'
+  );
+  assert.throws(
+    () => validateSystemRegistry(missingRoot),
+    /Settings\.app_version.*缺失或重复/
+  );
+
+  const duplicateRoot = makeSystemRegistryFixture();
+  writeText(
+    path.join(duplicateRoot, 'juxin-ai-assistant/server/app/config.py'),
+    'class Settings:\n    app_version: str = "1.0.0"\n    app_version: str = "1.0.0"\n'
+  );
+  assert.throws(
+    () => validateSystemRegistry(duplicateRoot),
+    /Settings\.app_version.*缺失或重复/
+  );
+
+  const driftRoot = makeSystemRegistryFixture();
+  writeText(
+    path.join(driftRoot, 'sca-platform/backend/app/config.py'),
+    'class Settings:\n    app_version: str = "1.0.1"\n'
+  );
+  assert.throws(
+    () => validateSystemRegistry(driftRoot),
+    /Settings\.app_version.*VERSION 不一致/
+  );
 });
 
 test('post-commit exposes a guarded runner for side-effect-free testing', () => {
@@ -529,6 +610,54 @@ test('repository runtime versions match every system VERSION source', () => {
   assert.equal(rootLock.packages[''].version, '1.0.0');
 });
 
+test('AI and SCA runtime targets report drift and sync only declared version fields', () => {
+  const rootDir = makeIndependentVersionFixture();
+  const aiSystem = SYSTEM_BY_ID.get('ai-assistant');
+  const scaSystem = SYSTEM_BY_ID.get('sca');
+
+  writeText(
+    path.join(rootDir, 'juxin-ai-assistant/server/app/config.py'),
+    'class Settings:\n    app_version: str = "2.0.0"\n'
+  );
+  assert.deepEqual(findSystemVersionDrift(rootDir, aiSystem), [{
+    file: 'juxin-ai-assistant/server/app/config.py',
+    field: 'Settings.app_version',
+    expected: '1.0.0',
+    actual: '2.0.0',
+  }]);
+  writeText(
+    path.join(rootDir, 'juxin-ai-assistant/server/app/config.py'),
+    'class Settings:\n    app_version: str = "1.0.0"\n'
+  );
+
+  const aiChanged = syncSystemVersion({
+    rootDir,
+    system: aiSystem,
+    currentVersion: '1.0.0',
+    nextVersion: '1.0.1',
+  });
+  assert.ok(aiChanged.includes('juxin-ai-assistant/server/app/config.py'));
+  assert.ok(aiChanged.includes('docker-compose.yml'));
+  assert.match(fs.readFileSync(path.join(rootDir, 'docker-compose.yml'), 'utf8'), /unrelated-api:[\s\S]*APP_VERSION: "9\.9\.9"/);
+  assert.match(fs.readFileSync(path.join(rootDir, 'docker-compose.yml'), 'utf8'), /ai-assistant-api:[\s\S]*APP_VERSION: "1\.0\.1"/);
+  assert.match(fs.readFileSync(path.join(rootDir, 'docker-compose.yml'), 'utf8'), /sca-api:[\s\S]*SCA_APP_VERSION:-1\.0\.0/);
+
+  const scaChanged = syncSystemVersion({
+    rootDir,
+    system: scaSystem,
+    currentVersion: '1.0.0',
+    nextVersion: '1.1.0',
+  });
+  assert.ok(scaChanged.includes('sca-platform/backend/app/config.py'));
+  assert.ok(scaChanged.includes('sca-platform/docker-compose.yml'));
+  assert.ok(scaChanged.includes('sca-platform/.env.example'));
+  assert.ok(scaChanged.includes('docker-compose.yml'));
+  const scaCompose = fs.readFileSync(path.join(rootDir, 'sca-platform/docker-compose.yml'), 'utf8');
+  assert.match(scaCompose, /SCA_APP_VERSION:-1\.1\.0/);
+  assert.match(scaCompose, /DEPENDENCY_CHECK_VERSION:-12\.1\.9/);
+  assert.deepEqual(findSystemVersionDrift(rootDir, scaSystem), []);
+});
+
 test('syncSystemVersion uses canonical fields and ignores forged cross-system and parent paths', (t) => {
   const rootDir = makeIndependentVersionFixture();
   const outsideDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-versioning-outside-'));
@@ -846,6 +975,44 @@ test('applyVersioningToHeadCommit preserves staged, unstaged, and untracked user
   assert.equal(fs.readFileSync(path.join(rootDir, 'user-untracked.txt'), 'utf8'), 'untracked user change\n');
 });
 
+test('applyVersioningToHeadCommit restores original HEAD and conflicting user version target changes', () => {
+  const { rootDir, git } = initializeIndependentVersionGitRepo();
+  writeText(path.join(rootDir, 'auth/feature.js'), 'auth change\n');
+  git('add', 'auth/feature.js');
+  git('commit', '-m', 'fix(auth): preserve conflicting local target');
+
+  const beforeHead = git('rev-parse', 'HEAD').trim();
+  const packagePath = path.join(rootDir, 'auth/package.json');
+  writeJson(packagePath, { name: 'auth', version: '9.9.9' });
+  const beforeStatus = git('status', '--porcelain=v1', '--untracked-files=all');
+  const beforeStashes = git('stash', 'list');
+
+  assert.throws(
+    () => applyVersioningToHeadCommit({ rootDir }),
+    /stash|CONFLICT|Command failed/i
+  );
+
+  assert.equal(git('rev-parse', 'HEAD').trim(), beforeHead);
+  assert.equal(git('status', '--porcelain=v1', '--untracked-files=all'), beforeStatus);
+  assert.deepEqual(JSON.parse(fs.readFileSync(packagePath, 'utf8')), { name: 'auth', version: '9.9.9' });
+  assert.equal(git('stash', 'list'), beforeStashes);
+});
+
+test('applyVersioningToHeadCommit merges shared runtime targets for all scope', () => {
+  const { rootDir, git } = initializeIndependentVersionGitRepo();
+  writeText(path.join(rootDir, 'docker-compose.yml'), `${fs.readFileSync(path.join(rootDir, 'docker-compose.yml'), 'utf8')}# shared change\n`);
+  git('add', 'docker-compose.yml');
+  git('commit', '-m', 'feat(all): update shared deployment');
+
+  applyVersioningToHeadCommit({ rootDir });
+
+  const compose = fs.readFileSync(path.join(rootDir, 'docker-compose.yml'), 'utf8');
+  assert.match(compose, /ai-assistant-api:[\s\S]*APP_VERSION: "1\.1\.0"/);
+  for (const service of ['sca-api', 'sca-worker', 'sca-scanner-worker', 'sca-beat']) {
+    assert.match(compose, new RegExp(`${service}:[\\s\\S]*?SCA_APP_VERSION:-1\\.1\\.0`));
+  }
+});
+
 test('applyVersioningToHeadCommit rolls back every target after a mid-sync write failure', () => {
   const { rootDir, git } = initializeIndependentVersionGitRepo();
   writeText(path.join(rootDir, 'auth/feature.js'), 'auth change\n');
@@ -1080,6 +1247,7 @@ test('post-commit amends repo-only title and pushes the current branch', () => {
   writeText(path.join(rootDir, 'repo-note.txt'), 'repo tooling change\n');
   git('add', 'repo-note.txt');
   git('commit', '-m', 'fix(repo): repair repository tooling');
+  const beforeBranch = git('branch', '--show-current').trim();
 
   const result = runPostCommit({ repositoryRoot: rootDir, log: () => {} });
   const localHead = git('rev-parse', 'HEAD').trim();
@@ -1092,34 +1260,8 @@ test('post-commit amends repo-only title and pushes the current branch', () => {
   assert.equal(git('log', '-1', '--pretty=%s').trim(), '[repo] fix(repo): repair repository tooling');
   assert.equal(result.result.repoOnly, true);
   assert.equal(result.pushResult.branch, 'feature/independent-versions');
+  assert.equal(git('branch', '--show-current').trim(), beforeBranch);
   assert.equal(remoteHead, localHead);
-});
-
-test('post-commit pushes current branch without switching version branches', () => {
-  const switchBranch = () => assert.fail('must not switch branches');
-  const result = runPostCommit({
-    readHeadCommitSummary: () => 'feat(auth): improve login',
-    applyVersioning: () => ({
-      skipped: false,
-      bumpType: 'minor',
-      bumps: [{
-        system: { id: 'auth' },
-        currentVersion: '1.0.0',
-        nextVersion: '1.1.0',
-      }],
-    }),
-    pushBranch: () => ({
-      skipped: false,
-      branch: 'feature/independent-versions',
-      remote: 'origin',
-      upstreamSet: false,
-    }),
-    switchBranch,
-    log: () => {},
-  });
-
-  assert.equal(result.pushResult.branch, 'feature/independent-versions');
-  assert.deepEqual(Object.keys(result).sort(), ['pushResult', 'result']);
 });
 
 test('automation exposes no global repository version or version branch switching APIs', () => {
