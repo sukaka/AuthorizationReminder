@@ -48,3 +48,11 @@ test('portal login surfaces unreachable AI assistant workspace after successful 
   assert.match(source, /showPortalRedirecting\(preferred\.name, preferred\.url\);/);
   assert.match(source, /showPortalRedirecting\(target\.name, target\.url\);/);
 });
+
+test('privileged users enter their dedicated center even when a business system was requested', () => {
+  assert.match(source, /if \(portalMode !== 'switch' && privilegedDefaultSystemKey\)/);
+  assert.doesNotMatch(
+    source,
+    /if \(!requestedSystem && portalMode !== 'switch' && privilegedDefaultSystemKey\)/,
+  );
+});

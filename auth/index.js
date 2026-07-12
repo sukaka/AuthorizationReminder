@@ -5274,7 +5274,7 @@ app.get('/portal', async (req, res) => {
         throw new Error('当前账号没有可进入的系统');
       }
       const privilegedDefaultSystemKey = privilegedDefaultSystemKeyByRole[userRole] || '';
-      if (!requestedSystem && portalMode !== 'switch' && privilegedDefaultSystemKey) {
+      if (portalMode !== 'switch' && privilegedDefaultSystemKey) {
         const preferred = list.find((item) => item.key === privilegedDefaultSystemKey) || list[0];
         if (preferred) {
           if (shouldThrottleRequestedRedirect(preferred.key)) {
