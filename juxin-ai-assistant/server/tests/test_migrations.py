@@ -31,10 +31,13 @@ def test_migration_revision_graph_is_single_linear_head() -> None:
         migration_config("sqlite+pysqlite:///:memory:")
     )
 
-    assert script.get_heads() == ["0023_assistant_mode_governance"]
+    assert script.get_heads() == ["0026_agent_run_contracts"]
     assert [
         revision.revision for revision in script.walk_revisions()
     ] == [
+        "0026_agent_run_contracts",
+        "0025_hot_question_reports",
+        "0024_shared_faqs",
         "0023_assistant_mode_governance",
         "0022_long_tasks",
         "0021_work_artifacts",
@@ -94,6 +97,46 @@ def test_foundation_migration_round_trip(tmp_path: Path) -> None:
 
     command.upgrade(config, "head")
     assert FOUNDATION_TABLES.issubset(set(inspect(engine).get_table_names()))
+
+
+def test_agent_run_contracts_migration_creates_and_drops_run_tables(tmp_path: Path) -> None:
+    database_path = tmp_path / "agent-run-contracts.db"
+    database_url = f"sqlite+pysqlite:///{database_path}"
+    config = migration_config(database_url)
+    engine = create_engine(database_url)
+
+    command.upgrade(config, "0026_agent_run_contracts")
+    inspector = inspect(engine)
+    table_names = set(inspector.get_table_names())
+
+    assert {
+        "ai_agent_runs",
+        "ai_agent_run_steps",
+        "ai_run_events",
+    }.issubset(table_names)
+    run_columns = {column["name"] for column in inspector.get_columns("ai_agent_runs")}
+    assert {
+        "uuid",
+        "owner_user_id",
+        "status",
+        "stage",
+        "progress",
+        "max_steps",
+        "max_model_calls",
+        "max_cost_micros",
+        "request_ciphertext",
+        "request_nonce",
+        "checkpoint_json",
+        "result_json",
+    }.issubset(run_columns)
+    step_columns = {column["name"] for column in inspector.get_columns("ai_agent_run_steps")}
+    assert {"run_id", "sequence", "step_type", "status", "checkpoint_json"}.issubset(step_columns)
+    event_columns = {column["name"] for column in inspector.get_columns("ai_run_events")}
+    assert {"run_id", "sequence", "event_type", "stage", "progress", "source_json"}.issubset(event_columns)
+
+    command.downgrade(config, "0025_hot_question_reports")
+    remaining_tables = set(inspect(engine).get_table_names())
+    assert {"ai_agent_runs", "ai_agent_run_steps", "ai_run_events"}.isdisjoint(remaining_tables)
 
 
 def test_skill_productization_migration_creates_skill_log_tables(tmp_path: Path) -> None:

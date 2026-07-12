@@ -664,6 +664,103 @@ class LongTask(TimestampMixin, Base):
     finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
+class AgentRun(TimestampMixin, Base):
+    __tablename__ = "ai_agent_runs"
+
+    id: Mapped[int] = mapped_column(primary_key_type, primary_key=True, autoincrement=True)
+    uuid: Mapped[str] = mapped_column(
+        String(36),
+        unique=True,
+        default=lambda: str(uuid_lib.uuid4()),
+    )
+    owner_user_id: Mapped[str] = mapped_column(String(64), index=True)
+    conversation_id: Mapped[str] = mapped_column(String(64), default="", index=True)
+    message_id: Mapped[str] = mapped_column(String(64), default="", index=True)
+    run_type: Mapped[str] = mapped_column(String(48), default="chat", index=True)
+    title: Mapped[str] = mapped_column(String(255), default="AI 任务")
+    status: Mapped[str] = mapped_column(String(24), default="queued", index=True)
+    stage: Mapped[str] = mapped_column(String(64), default="accepted", index=True)
+    progress: Mapped[int] = mapped_column(Integer, default=0)
+    attempt: Mapped[int] = mapped_column(Integer, default=1)
+    cancel_requested: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    max_steps: Mapped[int] = mapped_column(Integer, default=32)
+    max_model_calls: Mapped[int] = mapped_column(Integer, default=20)
+    max_cost_micros: Mapped[int] = mapped_column(BigInteger, default=0)
+    model_calls: Mapped[int] = mapped_column(Integer, default=0)
+    cost_micros: Mapped[int] = mapped_column(BigInteger, default=0)
+    request_ciphertext: Mapped[bytes] = mapped_column(LargeBinary)
+    request_nonce: Mapped[bytes] = mapped_column(LargeBinary)
+    key_version: Mapped[str] = mapped_column(String(32), default="v1")
+    checkpoint_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    result_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    metadata_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    error_code: Mapped[str] = mapped_column(String(64), default="", index=True)
+    error_message_safe: Mapped[str] = mapped_column(Text, default="")
+    started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class AgentRunStep(TimestampMixin, Base):
+    __tablename__ = "ai_agent_run_steps"
+    __table_args__ = (UniqueConstraint("run_id", "sequence"),)
+
+    id: Mapped[int] = mapped_column(primary_key_type, primary_key=True, autoincrement=True)
+    uuid: Mapped[str] = mapped_column(
+        String(36),
+        unique=True,
+        default=lambda: str(uuid_lib.uuid4()),
+    )
+    run_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("ai_agent_runs.uuid", ondelete="CASCADE"),
+        index=True,
+    )
+    sequence: Mapped[int] = mapped_column(Integer)
+    step_type: Mapped[str] = mapped_column(String(64), index=True)
+    role: Mapped[str] = mapped_column(String(48), default="")
+    status: Mapped[str] = mapped_column(String(24), default="queued", index=True)
+    attempt: Mapped[int] = mapped_column(Integer, default=1)
+    input_summary_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    output_summary_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    checkpoint_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    usage_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    latency_ms: Mapped[int] = mapped_column(Integer, default=0)
+    error_code: Mapped[str] = mapped_column(String(64), default="", index=True)
+    error_message_safe: Mapped[str] = mapped_column(Text, default="")
+    started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class AgentRunEvent(TimestampMixin, Base):
+    __tablename__ = "ai_run_events"
+    __table_args__ = (
+        UniqueConstraint("run_id", "sequence"),
+        UniqueConstraint("run_id", "event_key"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key_type, primary_key=True, autoincrement=True)
+    uuid: Mapped[str] = mapped_column(
+        String(36),
+        unique=True,
+        default=lambda: str(uuid_lib.uuid4()),
+    )
+    run_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("ai_agent_runs.uuid", ondelete="CASCADE"),
+        index=True,
+    )
+    sequence: Mapped[int] = mapped_column(Integer)
+    event_key: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
+    event_type: Mapped[str] = mapped_column(String(24), index=True)
+    stage: Mapped[str] = mapped_column(String(64), default="")
+    label: Mapped[str] = mapped_column(String(255), default="")
+    progress: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    content: Mapped[str] = mapped_column(Text, default="")
+    source_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    artifact_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    quality_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+
+
 class SkillRunLog(TimestampMixin, Base):
     __tablename__ = "ai_skill_run_logs"
 
