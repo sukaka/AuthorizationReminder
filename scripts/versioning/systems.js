@@ -95,8 +95,8 @@ const SYSTEMS = Object.freeze([
     id: 'reminder',
     name: '授权提醒',
     versionFile: 'server/VERSION',
-    paths: ['server'],
-    packageDirs: [],
+    paths: ['server', 'web'],
+    packageDirs: ['web'],
     textFiles: [],
   }),
   freezeSystem({

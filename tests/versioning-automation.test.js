@@ -8,17 +8,16 @@ const { execFileSync } = require('node:child_process');
 const {
   parseCommitBumpType,
   bumpVersion,
-  syncRepositoryVersion,
   applyVersioningToHeadCommit,
   buildSystemVersionedCommitMessage,
   pushCurrentBranch,
-  switchToVersionBranch,
   validateCommitMessage,
   normalizeCommitMessage,
   parseCommitScope,
   classifyChangedPaths,
   resolveAffectedSystems,
   readSystemVersion,
+  findSystemVersionDrift,
   syncSystemVersion,
   planSystemBumps,
 } = require('../scripts/versioning/automation');
@@ -29,6 +28,8 @@ const {
   validateRegistryEntries,
   validateSystemRegistry,
 } = require('../scripts/versioning/systems');
+
+const repositoryRoot = path.join(__dirname, '..');
 
 const writeJson = (filePath, value) => {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
@@ -138,6 +139,8 @@ test('system registry defines every approved independent system', () => {
     ]
   );
   assert.deepEqual(SYSTEM_BY_ID.get('auth').textFiles, []);
+  assert.deepEqual(SYSTEM_BY_ID.get('reminder').paths, ['server', 'web']);
+  assert.deepEqual(SYSTEM_BY_ID.get('reminder').packageDirs, ['web']);
 });
 
 test('validateRegistryEntries rejects overlapping owned paths', () => {
@@ -410,6 +413,72 @@ test('syncSystemVersion updates every package in one system only', () => {
   assert.ok(changed.includes('inventory-system/frontend/package-lock.json'));
 });
 
+test('findSystemVersionDrift reports declared package, lock, JSON, and TOML mismatches', () => {
+  const rootDir = makeIndependentVersionFixture();
+  const system = SYSTEM_BY_ID.get('ai-assistant');
+  const packageDir = 'juxin-ai-assistant/apps/desktop';
+  const packageLock = readPackageLock(rootDir, packageDir);
+
+  writeJson(path.join(rootDir, packageDir, 'package.json'), { name: 'fixture', version: '9.0.0' });
+  packageLock.version = '8.0.0';
+  packageLock.packages[''].version = '7.0.0';
+  writeJson(path.join(rootDir, packageDir, 'package-lock.json'), packageLock);
+  writeJson(
+    path.join(rootDir, 'juxin-ai-assistant/apps/desktop/src-tauri/tauri.conf.json'),
+    { name: 'ai-assistant', version: '6.0.0' }
+  );
+  writeText(
+    path.join(rootDir, 'juxin-ai-assistant/apps/desktop/src-tauri/Cargo.toml'),
+    '[package]\nname = "fixture"\nversion = "5.0.0"\n[dependencies]\nexample = { version = "1.0.0" }\n'
+  );
+
+  assert.deepEqual(findSystemVersionDrift(rootDir, system), [
+    {
+      file: 'juxin-ai-assistant/apps/desktop/package.json',
+      field: 'version',
+      expected: '1.0.0',
+      actual: '9.0.0',
+    },
+    {
+      file: 'juxin-ai-assistant/apps/desktop/package-lock.json',
+      field: 'version',
+      expected: '1.0.0',
+      actual: '8.0.0',
+    },
+    {
+      file: 'juxin-ai-assistant/apps/desktop/package-lock.json',
+      field: "packages[''].version",
+      expected: '1.0.0',
+      actual: '7.0.0',
+    },
+    {
+      file: 'juxin-ai-assistant/apps/desktop/src-tauri/tauri.conf.json',
+      field: 'version',
+      expected: '1.0.0',
+      actual: '6.0.0',
+    },
+    {
+      file: 'juxin-ai-assistant/apps/desktop/src-tauri/Cargo.toml',
+      field: 'package.version',
+      expected: '1.0.0',
+      actual: '5.0.0',
+    },
+  ]);
+});
+
+test('repository runtime versions match every system VERSION source', () => {
+  for (const system of SYSTEMS) {
+    assert.equal(readSystemVersion(repositoryRoot, system), '1.0.0');
+    assert.deepEqual(findSystemVersionDrift(repositoryRoot, system), []);
+  }
+
+  const rootPackage = JSON.parse(fs.readFileSync(path.join(repositoryRoot, 'package.json'), 'utf8'));
+  const rootLock = JSON.parse(fs.readFileSync(path.join(repositoryRoot, 'package-lock.json'), 'utf8'));
+  assert.equal(rootPackage.version, '1.0.0');
+  assert.equal(rootLock.version, '1.0.0');
+  assert.equal(rootLock.packages[''].version, '1.0.0');
+});
+
 test('syncSystemVersion uses canonical fields and ignores forged cross-system and parent paths', (t) => {
   const rootDir = makeIndependentVersionFixture();
   const outsideDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-versioning-outside-'));
@@ -528,143 +597,6 @@ test('planSystemBumps reads declared system versions in stable order', () => {
       { id: 'inventory', currentVersion: '3.0.0', nextVersion: '3.1.0' },
     ]
   );
-});
-
-test('syncRepositoryVersion updates live version files and bootstrap references', () => {
-  const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-version-sync-'));
-
-  writeJson(path.join(rootDir, 'package.json'), { name: 'root', version: '4.1.4' });
-  writeJson(path.join(rootDir, 'package-lock.json'), makePackageLock('4.1.4'));
-  writeJson(path.join(rootDir, 'auth/package.json'), { name: 'auth', version: '4.1.4' });
-  writeJson(path.join(rootDir, 'auth/package-lock.json'), makePackageLock('4.1.4'));
-  writeJson(path.join(rootDir, 'web/package.json'), { name: 'web', version: '4.1.4' });
-  writeJson(path.join(rootDir, 'web/package-lock.json'), makePackageLock('4.1.4'));
-  writeText(path.join(rootDir, 'auth/index.js'), "const RELEASE_VERSION = '4.1.4';\n");
-  writeText(
-    path.join(rootDir, 'docs/versioning.md'),
-    [
-      '# 系统版本规范',
-      '',
-      '- 当前整套系统口径版本：`4.1.4`',
-      '- 示例：`codex/4.1.4`',
-      '- 示例：`v4.1.4`',
-      '- 示例：`docs/releases/4.1.4.md`',
-      '',
-    ].join('\n')
-  );
-  writeText(
-    path.join(rootDir, 'README.md'),
-    [
-      'git clone -b codex/4.1.4 https://github.com/sukaka/AuthorizationReminder.git /root/AuthorizationReminder-codex-4.1.4',
-      '> 说明：`bootstrap-full-server.sh` 默认把仓库同步到 `/root/AuthorizationReminder-codex-4.1.4`，并使用分支 `codex/4.1.4`。',
-      '',
-    ].join('\n')
-  );
-  writeText(
-    path.join(rootDir, 'scripts/deploy/bootstrap-full-server.sh'),
-    [
-      'BOOTSTRAP_REPO_DIR="${BOOTSTRAP_REPO_DIR:-/root/AuthorizationReminder-codex-4.1.4}"',
-      'BOOTSTRAP_BRANCH="${BOOTSTRAP_BRANCH:-codex/4.1.4}"',
-      '',
-    ].join('\n')
-  );
-  writeText(
-    path.join(rootDir, 'scripts/tests/bootstrap-full-server.sh'),
-    [
-      "BOOTSTRAP_BRANCH='codex/4.1.4' \\",
-      "if ! grep -q '^git clone -b codex/4.1.4 https://example.invalid/repo.git ' \"${LOG_FILE}\"; then",
-      '',
-    ].join('\n')
-  );
-
-  const changedFiles = syncRepositoryVersion({
-    rootDir,
-    currentVersion: '4.1.4',
-    nextVersion: '4.2.0',
-  });
-
-  assert.ok(changedFiles.includes('package.json'));
-  assert.ok(changedFiles.includes('auth/index.js'));
-  assert.equal(JSON.parse(fs.readFileSync(path.join(rootDir, 'package.json'), 'utf8')).version, '4.2.0');
-  assert.equal(JSON.parse(fs.readFileSync(path.join(rootDir, 'package-lock.json'), 'utf8')).version, '4.2.0');
-  assert.equal(JSON.parse(fs.readFileSync(path.join(rootDir, 'package-lock.json'), 'utf8')).packages[''].version, '4.2.0');
-  assert.equal(JSON.parse(fs.readFileSync(path.join(rootDir, 'auth/package.json'), 'utf8')).version, '4.2.0');
-  assert.match(fs.readFileSync(path.join(rootDir, 'auth/index.js'), 'utf8'), /RELEASE_VERSION = '4\.2\.0'/);
-  assert.match(fs.readFileSync(path.join(rootDir, 'docs/versioning.md'), 'utf8'), /当前整套系统口径版本：`4\.2\.0`/);
-  assert.match(fs.readFileSync(path.join(rootDir, 'README.md'), 'utf8'), /codex\/4\.2\.0/);
-  assert.match(fs.readFileSync(path.join(rootDir, 'README.md'), 'utf8'), /AuthorizationReminder-codex-4\.2\.0/);
-  assert.match(fs.readFileSync(path.join(rootDir, 'scripts/deploy/bootstrap-full-server.sh'), 'utf8'), /codex\/4\.2\.0/);
-  assert.match(fs.readFileSync(path.join(rootDir, 'scripts/tests/bootstrap-full-server.sh'), 'utf8'), /codex\/4\.2\.0/);
-});
-
-test('syncRepositoryVersion aligns web package even when it lagged behind root version', () => {
-  const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-version-web-align-'));
-
-  writeJson(path.join(rootDir, 'package.json'), { name: 'root', version: '5.24.1' });
-  writeJson(path.join(rootDir, 'package-lock.json'), makePackageLock('5.24.1'));
-  writeJson(path.join(rootDir, 'web/package.json'), { name: 'web', version: '5.10.12' });
-  writeJson(path.join(rootDir, 'web/package-lock.json'), makePackageLock('5.10.12'));
-
-  const changedFiles = syncRepositoryVersion({
-    rootDir,
-    currentVersion: '5.24.1',
-    nextVersion: '5.24.2',
-  });
-
-  assert.ok(changedFiles.includes('web/package.json'));
-  assert.ok(changedFiles.includes('web/package-lock.json'));
-  assert.equal(JSON.parse(fs.readFileSync(path.join(rootDir, 'web/package.json'), 'utf8')).version, '5.24.2');
-  assert.equal(JSON.parse(fs.readFileSync(path.join(rootDir, 'web/package-lock.json'), 'utf8')).version, '5.24.2');
-  assert.equal(JSON.parse(fs.readFileSync(path.join(rootDir, 'web/package-lock.json'), 'utf8')).packages[''].version, '5.24.2');
-});
-
-test('syncRepositoryVersion explicitly excludes the independently versioned desktop agent', () => {
-  const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-version-agent-ignore-'));
-  const desktopDir = path.join(rootDir, 'juxin-ai-assistant/apps/desktop');
-
-  writeJson(path.join(rootDir, 'package.json'), { name: 'root', version: '5.89.0' });
-  writeJson(path.join(rootDir, 'package-lock.json'), makePackageLock('5.89.0'));
-  writeJson(path.join(desktopDir, 'package.json'), { name: 'agent', version: '1.0.0' });
-  writeJson(path.join(desktopDir, 'package-lock.json'), makePackageLock('1.0.0'));
-
-  const changedFiles = syncRepositoryVersion({
-    rootDir,
-    currentVersion: '5.89.0',
-    nextVersion: '5.90.0',
-  });
-
-  assert.ok(changedFiles.includes('package.json'));
-  assert.ok(!changedFiles.includes('juxin-ai-assistant/apps/desktop/package.json'));
-  assert.ok(!changedFiles.includes('juxin-ai-assistant/apps/desktop/package-lock.json'));
-  assert.equal(JSON.parse(fs.readFileSync(path.join(desktopDir, 'package.json'), 'utf8')).version, '1.0.0');
-  assert.equal(JSON.parse(fs.readFileSync(path.join(desktopDir, 'package-lock.json'), 'utf8')).version, '1.0.0');
-});
-
-test('syncRepositoryVersion ignores nested worktree directories', () => {
-  const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-version-worktree-ignore-'));
-
-  writeJson(path.join(rootDir, 'package.json'), { name: 'root', version: '5.0.1' });
-  writeJson(path.join(rootDir, 'package-lock.json'), makePackageLock('5.0.1'));
-  writeJson(path.join(rootDir, 'auth/package.json'), { name: 'auth', version: '5.0.1' });
-  writeJson(path.join(rootDir, 'auth/package-lock.json'), makePackageLock('5.0.1'));
-  writeText(path.join(rootDir, 'auth/index.js'), "const RELEASE_VERSION = '5.0.1';\n");
-  writeText(path.join(rootDir, 'docs/versioning.md'), '- 当前整套系统口径版本：`5.0.1`\n');
-  writeText(path.join(rootDir, 'README.md'), 'git clone -b codex/5.0.1 /root/AuthorizationReminder-codex-5.0.1\n');
-  writeText(path.join(rootDir, 'scripts/deploy/bootstrap-full-server.sh'), 'BOOTSTRAP_BRANCH="${BOOTSTRAP_BRANCH:-codex/5.0.1}"\n');
-  writeText(path.join(rootDir, 'scripts/tests/bootstrap-full-server.sh'), "BOOTSTRAP_BRANCH='codex/5.0.1' \\\n");
-
-  writeJson(path.join(rootDir, '.worktrees/delivery-system/package.json'), { name: 'nested', version: '5.0.1' });
-  writeJson(path.join(rootDir, '.worktrees/delivery-system/package-lock.json'), makePackageLock('5.0.1'));
-
-  const changedFiles = syncRepositoryVersion({
-    rootDir,
-    currentVersion: '5.0.1',
-    nextVersion: '5.0.2',
-  });
-
-  assert.ok(changedFiles.includes('package.json'));
-  assert.equal(JSON.parse(fs.readFileSync(path.join(rootDir, 'package.json'), 'utf8')).version, '5.0.2');
-  assert.equal(JSON.parse(fs.readFileSync(path.join(rootDir, '.worktrees/delivery-system/package.json'), 'utf8')).version, '5.0.1');
 });
 
 test('buildSystemVersionedCommitMessage sorts multi-system prefixes', () => {
@@ -883,37 +815,14 @@ test('post-commit pushes current branch without switching version branches', () 
   assert.deepEqual(Object.keys(result).sort(), ['pushResult', 'result']);
 });
 
-test('switchToVersionBranch moves the release commit onto the next version branch and preserves the old branch', () => {
-  const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-version-branch-shift-'));
-  const git = (...args) => execFileSync('git', args, { cwd: rootDir, encoding: 'utf8' });
+test('automation exposes no global repository version or version branch switching APIs', () => {
+  const automation = require('../scripts/versioning/automation');
+  const source = fs.readFileSync(path.join(repositoryRoot, 'scripts/versioning/automation.js'), 'utf8');
 
-  git('init');
-  git('config', 'user.name', 'Codex Test');
-  git('config', 'user.email', 'codex@example.com');
-  git('checkout', '-b', 'codex/4.2.0');
-
-  writeJson(path.join(rootDir, 'package.json'), { name: 'root', version: '4.2.0' });
-  git('add', 'package.json');
-  git('commit', '-m', 'chore: init');
-
-  writeText(path.join(rootDir, 'note.txt'), 'release\n');
-  git('add', 'note.txt');
-  git('commit', '-m', '[v4.3.0] feat: release next version');
-
-  const previousHead = git('rev-parse', 'HEAD^').trim();
-  const releaseHead = git('rev-parse', 'HEAD').trim();
-
-  const result = switchToVersionBranch({
-    rootDir,
-    currentVersion: '4.2.0',
-    nextVersion: '4.3.0',
-  });
-
-  assert.equal(result.switched, true);
-  assert.equal(result.previousBranch, 'codex/4.2.0');
-  assert.equal(result.currentBranch, 'codex/4.3.0');
-  assert.equal(result.previousCommit, previousHead);
-  assert.equal(git('branch', '--show-current').trim(), 'codex/4.3.0');
-  assert.equal(git('rev-parse', 'codex/4.2.0').trim(), previousHead);
-  assert.equal(git('rev-parse', 'codex/4.3.0').trim(), releaseHead);
+  assert.equal(automation.syncRepositoryVersion, undefined);
+  assert.equal(automation.switchToVersionBranch, undefined);
+  assert.equal(automation.buildVersionBranchName, undefined);
+  assert.doesNotMatch(source, /const walkForPackageJson\b/);
+  assert.doesNotMatch(source, /const readRootVersion\b/);
+  assert.doesNotMatch(source, /const switchToVersionBranch\b/);
 });

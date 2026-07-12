@@ -17,36 +17,6 @@ const MAJOR_PREFIX_RE = /^(?:(?:breaking|major)(?:\([^)]+\))?:|[a-z][\w-]*(?:\([
 const MINOR_PREFIX_RE = /^(?:(?:feat|minor|perf)(?:\([^)]+\))?:)/i;
 const PATCH_PREFIX_RE = /^(?:(?:fix|patch|docs|chore|style|refactor|test|build|ci|revert)(?:\([^)]+\))?:|revert\b)/i;
 
-const TEXT_VERSION_FILES = [
-  'auth/index.js',
-  'docs/versioning.md',
-  'README.md',
-  'scripts/deploy/bootstrap-full-server.sh',
-  'scripts/tests/bootstrap-full-server.sh',
-];
-
-const FORCE_VERSION_PACKAGE_DIRS = new Set([
-  '.',
-  'auth',
-  'train-exam/backend',
-  'train-exam/frontend',
-  'web',
-]);
-
-const INDEPENDENT_PACKAGE_DIRS = new Set([
-  'juxin-ai-assistant/apps/desktop',
-]);
-
-const WALK_IGNORE_DIRS = new Set([
-  '.git',
-  '.worktrees',
-  'node_modules',
-  'dist',
-  'coverage',
-  'test-results',
-  'memory',
-]);
-
 const readText = (filePath) => fs.readFileSync(filePath, 'utf8');
 
 const writeText = (filePath, value) => {
@@ -55,8 +25,6 @@ const writeText = (filePath, value) => {
 };
 
 const escapeRegExp = (value) => String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-
-const toPosixRelative = (rootDir, filePath) => path.relative(rootDir, filePath).split(path.sep).join('/');
 
 const getCommitSummary = (message) => String(message || '').replace(/\r\n/g, '\n').split('\n')[0].trim();
 
@@ -169,25 +137,6 @@ const bumpVersion = (version, bumpType) => {
   throw new Error(`不支持的版本升级级别：${bumpType}`);
 };
 
-const walkForPackageJson = (rootDir, startDir = rootDir, result = []) => {
-  const entries = fs.readdirSync(startDir, { withFileTypes: true });
-  for (const entry of entries) {
-    if (entry.name === '.DS_Store') continue;
-    const fullPath = path.join(startDir, entry.name);
-    if (entry.isDirectory()) {
-      if (WALK_IGNORE_DIRS.has(entry.name)) continue;
-      const relativeDir = toPosixRelative(rootDir, fullPath);
-      if (INDEPENDENT_PACKAGE_DIRS.has(relativeDir)) continue;
-      walkForPackageJson(rootDir, fullPath, result);
-      continue;
-    }
-    if (entry.name === 'package.json') {
-      result.push(fullPath);
-    }
-  }
-  return result;
-};
-
 const updateJsonVersionFile = ({ filePath, currentVersion, nextVersion, force = false }) => {
   if (!fs.existsSync(filePath)) return false;
   const original = readText(filePath);
@@ -237,6 +186,65 @@ const readSystemVersion = (rootDir, system) => {
     throw new Error(`${system.id} 版本号非法：${value || '<empty>'}`);
   }
   return value;
+};
+
+const findSystemVersionDrift = (rootDir, system) => {
+  const resolvedRoot = path.resolve(rootDir);
+  if (!system || !system.id) {
+    throw new Error('系统声明非法');
+  }
+  const canonicalSystem = SYSTEM_BY_ID.get(system.id);
+  if (!canonicalSystem) {
+    throw new Error(`未知系统：${system.id}`);
+  }
+  const expected = readSystemVersion(resolvedRoot, canonicalSystem);
+  const drift = [];
+  const record = (file, field, actual) => {
+    if (actual !== expected) {
+      drift.push({ file, field, expected, actual });
+    }
+  };
+  const readDeclaredJson = (relativePath) => {
+    const filePath = path.join(resolvedRoot, relativePath);
+    if (!fs.existsSync(filePath)) return null;
+    return JSON.parse(readText(filePath));
+  };
+
+  for (const packageDir of canonicalSystem.packageDirs) {
+    const packagePath = path.posix.join(packageDir, 'package.json');
+    const packageJson = readDeclaredJson(packagePath);
+    record(packagePath, 'version', packageJson ? packageJson.version : '<missing file>');
+
+    const lockPath = path.posix.join(packageDir, 'package-lock.json');
+    const packageLock = readDeclaredJson(lockPath);
+    if (!packageLock) {
+      record(lockPath, 'version', '<missing file>');
+    } else {
+      record(lockPath, 'version', packageLock.version);
+      record(lockPath, "packages[''].version", packageLock.packages?.['']?.version);
+    }
+  }
+
+  for (const relativePath of canonicalSystem.jsonFiles || []) {
+    const json = readDeclaredJson(relativePath);
+    record(relativePath, 'version', json ? json.version : '<missing file>');
+  }
+  for (const relativePath of canonicalSystem.tomlFiles || []) {
+    const filePath = path.join(resolvedRoot, relativePath);
+    const source = fs.existsSync(filePath) ? readText(filePath) : '';
+    const match = source.match(/^version\s*=\s*"(\d+\.\d+\.\d+)"/m);
+    record(relativePath, 'package.version', match ? match[1] : '<missing>');
+  }
+  for (const relativePath of canonicalSystem.textFiles || []) {
+    const filePath = path.join(resolvedRoot, relativePath);
+    const source = fs.existsSync(filePath) ? readText(filePath) : '';
+    const versions = Array.from(new Set(source.match(/\b\d+\.\d+\.\d+\b/g) || []));
+    if (!versions.includes(expected)) {
+      record(relativePath, 'text version', versions.join(', ') || '<missing>');
+    }
+  }
+
+  return drift;
 };
 
 const syncSystemVersion = ({ rootDir, system, currentVersion, nextVersion }) => {
@@ -327,47 +335,6 @@ const planSystemBumps = ({ rootDir, systemIds, bumpType }) => [...systemIds]
     return { system, currentVersion, nextVersion: bumpVersion(currentVersion, bumpType) };
   });
 
-const readRootVersion = (rootDir) => {
-  const rootPackagePath = path.join(rootDir, 'package.json');
-  const rootPackage = JSON.parse(readText(rootPackagePath));
-  const version = String(rootPackage.version || '').trim();
-  if (!VERSION_RE.test(version)) {
-    throw new Error(`根 package.json 版本号非法：${version || '<empty>'}`);
-  }
-  return version;
-};
-
-const syncRepositoryVersion = ({ rootDir, currentVersion = '', nextVersion = '' }) => {
-  const resolvedRoot = path.resolve(rootDir);
-  const sourceVersion = currentVersion || readRootVersion(resolvedRoot);
-  if (!VERSION_RE.test(String(nextVersion || '').trim())) {
-    throw new Error(`目标版本号非法：${nextVersion}`);
-  }
-
-  const changedFiles = new Set();
-  const packageJsonFiles = walkForPackageJson(resolvedRoot);
-  for (const packageJsonPath of packageJsonFiles) {
-    const packageDir = toPosixRelative(resolvedRoot, path.dirname(packageJsonPath)) || '.';
-    const forceVersion = FORCE_VERSION_PACKAGE_DIRS.has(packageDir);
-    if (updateJsonVersionFile({ filePath: packageJsonPath, currentVersion: sourceVersion, nextVersion, force: forceVersion })) {
-      changedFiles.add(toPosixRelative(resolvedRoot, packageJsonPath));
-    }
-    const lockPath = path.join(path.dirname(packageJsonPath), 'package-lock.json');
-    if (updateJsonVersionFile({ filePath: lockPath, currentVersion: sourceVersion, nextVersion, force: forceVersion })) {
-      changedFiles.add(toPosixRelative(resolvedRoot, lockPath));
-    }
-  }
-
-  for (const relativePath of TEXT_VERSION_FILES) {
-    const filePath = path.join(resolvedRoot, relativePath);
-    if (updateTextVersionFile({ filePath, currentVersion: sourceVersion, nextVersion })) {
-      changedFiles.add(relativePath);
-    }
-  }
-
-  return Array.from(changedFiles).sort();
-};
-
 const git = ({ rootDir, args, env = {} }) => execFileSync('git', args, {
   cwd: rootDir,
   encoding: 'utf8',
@@ -382,69 +349,6 @@ const getCurrentBranchName = (rootDir) => git({
   rootDir,
   args: ['rev-parse', '--abbrev-ref', 'HEAD'],
 }).trim();
-
-const getBranchHead = (rootDir, branchName) => git({
-  rootDir,
-  args: ['rev-parse', '--verify', `refs/heads/${branchName}`],
-}).trim();
-
-const branchExists = (rootDir, branchName) => {
-  try {
-    getBranchHead(rootDir, branchName);
-    return true;
-  } catch (_error) {
-    return false;
-  }
-};
-
-const buildVersionBranchName = (version) => `codex/${version}`;
-
-const switchToVersionBranch = ({ rootDir, currentVersion, nextVersion }) => {
-  const resolvedRoot = path.resolve(rootDir);
-  const currentBranch = getCurrentBranchName(resolvedRoot);
-  const previousBranch = buildVersionBranchName(currentVersion);
-  const nextBranch = buildVersionBranchName(nextVersion);
-
-  if (
-    !VERSION_RE.test(String(currentVersion || '').trim())
-    || !VERSION_RE.test(String(nextVersion || '').trim())
-    || currentBranch !== previousBranch
-    || previousBranch === nextBranch
-  ) {
-    return {
-      switched: false,
-      previousBranch,
-      currentBranch,
-      previousCommit: '',
-    };
-  }
-
-  const releaseHead = git({ rootDir: resolvedRoot, args: ['rev-parse', 'HEAD'] }).trim();
-  const previousCommit = git({ rootDir: resolvedRoot, args: ['rev-parse', 'HEAD^'] }).trim();
-
-  if (branchExists(resolvedRoot, nextBranch)) {
-    const existingHead = getBranchHead(resolvedRoot, nextBranch);
-    if (existingHead !== releaseHead) {
-      throw new Error(`版本分支 ${nextBranch} 已存在且不指向当前提交`);
-    }
-    git({ rootDir: resolvedRoot, args: ['switch', nextBranch] });
-  } else {
-    git({ rootDir: resolvedRoot, args: ['switch', '-c', nextBranch] });
-  }
-
-  git({
-    rootDir: resolvedRoot,
-    args: ['branch', '-f', previousBranch, previousCommit],
-  });
-
-  return {
-    switched: true,
-    previousBranch,
-    currentBranch: nextBranch,
-    previousCommit,
-    currentCommit: releaseHead,
-  };
-};
 
 const hasUpstreamBranch = (rootDir) => {
   try {
@@ -505,15 +409,6 @@ const popStash = (rootDir, marker) => {
   if (!matched) return;
   const stashRef = matched.split(' ')[0];
   git({ rootDir, args: ['stash', 'pop', '--index', stashRef] });
-};
-
-const buildVersionedCommitMessage = ({ message, nextVersion }) => {
-  const text = normalizeCommitMessage(message).replace(/\n$/, '');
-  const lines = text.split('\n');
-  const summary = stripVersionPrefix(lines[0] || '');
-  const body = lines.slice(1).join('\n');
-  const nextSummary = `[v${nextVersion}] ${summary}`;
-  return body ? `${nextSummary}\n${body}\n` : `${nextSummary}\n`;
 };
 
 const buildSystemVersionedCommitMessage = ({ message, bumps }) => {
@@ -621,9 +516,7 @@ const applyVersioningToHeadCommit = ({ rootDir }) => {
 module.exports = {
   applyVersioningToHeadCommit,
   bumpVersion,
-  buildVersionBranchName,
   buildSystemVersionedCommitMessage,
-  buildVersionedCommitMessage,
   isAgentVersionCommit,
   normalizeCommitMessage,
   parseCommitScope,
@@ -631,11 +524,10 @@ module.exports = {
   planSystemBumps,
   pushCurrentBranch,
   classifyChangedPaths,
+  findSystemVersionDrift,
   readSystemVersion,
   resolveAffectedSystems,
   stripVersionPrefix,
-  switchToVersionBranch,
   syncSystemVersion,
-  syncRepositoryVersion,
   validateCommitMessage,
 };
