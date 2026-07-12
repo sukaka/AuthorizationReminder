@@ -6,7 +6,6 @@ const {
   applyVersioningToHeadCommit,
   isAgentVersionCommit,
   pushCurrentBranch,
-  switchToVersionBranch,
 } = require('./automation');
 
 const rootDir = path.resolve(__dirname, '..', '..');
@@ -19,7 +18,6 @@ const runPostCommit = ({
     { cwd, encoding: 'utf8' }
   ).trim(),
   applyVersioning = applyVersioningToHeadCommit,
-  switchBranch = switchToVersionBranch,
   pushBranch = pushCurrentBranch,
   log = console.log,
 } = {}) => {
@@ -32,25 +30,13 @@ const runPostCommit = ({
   }
 
   const result = applyVersioning({ rootDir: repositoryRoot });
-  const branchResult = result && !result.skipped
-    ? switchBranch({
-      rootDir: repositoryRoot,
-      currentVersion: result.currentVersion,
-      nextVersion: result.nextVersion,
-    })
-    : { switched: false };
   const pushResult = pushBranch({ rootDir: repositoryRoot });
 
   if (result && !result.skipped) {
-    log(
-      `[versioning] ${result.currentVersion} -> ${result.nextVersion} (${result.bumpType})`
-    );
-  }
-
-  if (branchResult && branchResult.switched) {
-    log(
-      `[versioning] moved ${branchResult.previousBranch} -> ${branchResult.currentBranch}`
-    );
+    const transitions = result.bumps
+      .map(({ system, currentVersion, nextVersion }) => `${system.id} ${currentVersion} -> ${nextVersion}`)
+      .join(', ');
+    log(`[versioning] ${transitions} (${result.bumpType})`);
   }
 
   if (pushResult && !pushResult.skipped) {
@@ -58,7 +44,7 @@ const runPostCommit = ({
     log(`[versioning] pushed ${pushResult.remote}/${pushResult.branch}${suffix}`);
   }
 
-  return { result, branchResult, pushResult };
+  return { result, pushResult };
 };
 
 module.exports = { runPostCommit };

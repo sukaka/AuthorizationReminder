@@ -10,6 +10,7 @@ const {
   bumpVersion,
   syncRepositoryVersion,
   applyVersioningToHeadCommit,
+  buildSystemVersionedCommitMessage,
   pushCurrentBranch,
   switchToVersionBranch,
   validateCommitMessage,
@@ -100,6 +101,20 @@ const readPackageLockVersion = (rootDir, packageDir) => JSON.parse(
 const readPackageLock = (rootDir, packageDir) => JSON.parse(
   fs.readFileSync(path.join(rootDir, packageDir, 'package-lock.json'), 'utf8')
 );
+
+const initializeIndependentVersionGitRepo = ({ branch = 'feature/independent-versions' } = {}) => {
+  const rootDir = makeIndependentVersionFixture();
+  const git = (...args) => execFileSync('git', args, { cwd: rootDir, encoding: 'utf8' });
+
+  git('init');
+  git('config', 'user.name', 'Codex Test');
+  git('config', 'user.email', 'codex@example.com');
+  git('checkout', '-b', branch);
+  git('add', '.');
+  git('commit', '-m', 'chore(repo): initialize version fixtures');
+
+  return { rootDir, git };
+};
 
 test('system registry defines every approved independent system', () => {
   assert.deepEqual(
@@ -652,40 +667,62 @@ test('syncRepositoryVersion ignores nested worktree directories', () => {
   assert.equal(JSON.parse(fs.readFileSync(path.join(rootDir, '.worktrees/delivery-system/package.json'), 'utf8')).version, '5.0.1');
 });
 
-test('applyVersioningToHeadCommit amends the latest commit with bumped version files', () => {
-  const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-version-hook-'));
-  const git = (...args) => execFileSync('git', args, { cwd: rootDir, encoding: 'utf8' });
+test('buildSystemVersionedCommitMessage sorts multi-system prefixes', () => {
+  assert.equal(
+    buildSystemVersionedCommitMessage({
+      message: 'feat: improve stock login\n',
+      bumps: [
+        { system: { id: 'inventory' }, nextVersion: '1.1.0' },
+        { system: { id: 'auth' }, nextVersion: '1.1.0' },
+      ],
+    }),
+    '[auth-v1.1.0][inventory-v1.1.0] feat: improve stock login\n'
+  );
+});
 
-  git('init');
-  git('config', 'user.name', 'Codex Test');
-  git('config', 'user.email', 'codex@example.com');
+test('applyVersioningToHeadCommit amends once for two systems and restores untracked files', () => {
+  const { rootDir, git } = initializeIndependentVersionGitRepo();
 
-  writeJson(path.join(rootDir, 'package.json'), { name: 'root', version: '4.1.4' });
-  writeJson(path.join(rootDir, 'package-lock.json'), makePackageLock('4.1.4'));
-  writeText(path.join(rootDir, 'auth/index.js'), "const RELEASE_VERSION = '4.1.4';\n");
-  writeText(path.join(rootDir, 'docs/versioning.md'), '- 当前整套系统口径版本：`4.1.4`\n');
-  writeText(path.join(rootDir, 'README.md'), 'git clone -b codex/4.1.4 /root/AuthorizationReminder-codex-4.1.4\n');
-  writeText(path.join(rootDir, 'scripts/deploy/bootstrap-full-server.sh'), 'BOOTSTRAP_BRANCH="${BOOTSTRAP_BRANCH:-codex/4.1.4}"\n');
-  writeText(path.join(rootDir, 'scripts/tests/bootstrap-full-server.sh'), "BOOTSTRAP_BRANCH='codex/4.1.4' \\\n");
-  writeText(path.join(rootDir, 'note.txt'), 'init\n');
+  writeText(path.join(rootDir, 'auth/feature.js'), 'auth change\n');
+  writeText(path.join(rootDir, 'inventory-system/feature.js'), 'inventory change\n');
+  git('add', 'auth/feature.js', 'inventory-system/feature.js');
+  git('commit', '-m', 'feat: improve stock login');
+  const beforeHead = git('rev-parse', 'HEAD').trim();
+  writeText(path.join(rootDir, 'unrelated.txt'), 'preserve me\n');
 
-  git('add', '.');
-  git('commit', '-m', 'chore: init');
-
-  fs.writeFileSync(path.join(rootDir, 'note.txt'), 'changed\n');
-  git('add', 'note.txt');
-  git('commit', '-m', 'feat: redesign audit center');
-
-  applyVersioningToHeadCommit({ rootDir });
+  const result = applyVersioningToHeadCommit({ rootDir });
 
   const summary = git('log', '-1', '--pretty=%s').trim();
   const trackedFiles = git('show', '--name-only', '--pretty=', 'HEAD');
+  const amendEntries = git('reflog', '--format=%gs').split('\n').filter((line) => line.includes('(amend)'));
 
-  assert.equal(summary, '[v4.2.0] feat: redesign audit center');
-  assert.equal(JSON.parse(fs.readFileSync(path.join(rootDir, 'package.json'), 'utf8')).version, '4.2.0');
-  assert.match(trackedFiles, /package\.json/);
-  assert.match(trackedFiles, /auth\/index\.js/);
-  assert.match(trackedFiles, /note\.txt/);
+  assert.equal(summary, '[auth-v1.1.0][inventory-v1.1.0] feat: improve stock login');
+  assert.notEqual(git('rev-parse', 'HEAD').trim(), beforeHead);
+  assert.equal(git('rev-list', '--count', 'HEAD').trim(), '2');
+  assert.equal(amendEntries.length, 1);
+  assert.equal(git('branch', '--show-current').trim(), 'feature/independent-versions');
+  assert.equal(fs.readFileSync(path.join(rootDir, 'auth/VERSION'), 'utf8'), '1.1.0\n');
+  assert.equal(fs.readFileSync(path.join(rootDir, 'inventory-system/VERSION'), 'utf8'), '1.1.0\n');
+  assert.equal(fs.readFileSync(path.join(rootDir, 'server/VERSION'), 'utf8'), '1.0.0\n');
+  assert.equal(fs.readFileSync(path.join(rootDir, 'unrelated.txt'), 'utf8'), 'preserve me\n');
+  assert.match(trackedFiles, /auth\/VERSION/);
+  assert.match(trackedFiles, /inventory-system\/VERSION/);
+  assert.deepEqual(result.bumps.map((bump) => bump.system.id), ['auth', 'inventory']);
+});
+
+test('applyVersioningToHeadCommit skips valid repo-only commits', () => {
+  const { rootDir, git } = initializeIndependentVersionGitRepo();
+
+  writeText(path.join(rootDir, 'note.txt'), 'repo tooling change\n');
+  git('add', 'note.txt');
+  git('commit', '-m', 'fix(repo): repair tooling');
+  const beforeHead = git('rev-parse', 'HEAD').trim();
+
+  const result = applyVersioningToHeadCommit({ rootDir });
+
+  assert.deepEqual(result, { skipped: true, reason: 'repo-only' });
+  assert.equal(git('rev-parse', 'HEAD').trim(), beforeHead);
+  assert.equal(fs.readFileSync(path.join(rootDir, 'auth/VERSION'), 'utf8'), '1.0.0\n');
 });
 
 test('applyVersioningToHeadCommit skips commits that already carry a version prefix', () => {
@@ -788,7 +825,7 @@ test('pushCurrentBranch sets upstream for a new local branch', () => {
 
 test('applyVersioningToHeadCommit can be followed by pushCurrentBranch to publish the amended commit', () => {
   const remoteDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-version-amend-remote-'));
-  const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-version-amend-push-'));
+  const rootDir = makeIndependentVersionFixture();
   const git = (cwd, ...args) => execFileSync('git', args, { cwd, encoding: 'utf8' });
 
   git(remoteDir, 'init', '--bare');
@@ -796,36 +833,54 @@ test('applyVersioningToHeadCommit can be followed by pushCurrentBranch to publis
   git(rootDir, 'init');
   git(rootDir, 'config', 'user.name', 'Codex Test');
   git(rootDir, 'config', 'user.email', 'codex@example.com');
-  git(rootDir, 'checkout', '-b', 'codex/4.2.0');
+  git(rootDir, 'checkout', '-b', 'feature/independent-versions');
   git(rootDir, 'remote', 'add', 'origin', remoteDir);
 
-  writeJson(path.join(rootDir, 'package.json'), { name: 'root', version: '4.1.4' });
-  writeJson(path.join(rootDir, 'package-lock.json'), makePackageLock('4.1.4'));
-  writeText(path.join(rootDir, 'auth/index.js'), "const RELEASE_VERSION = '4.1.4';\n");
-  writeText(path.join(rootDir, 'docs/versioning.md'), '- 当前整套系统口径版本：`4.1.4`\n');
-  writeText(path.join(rootDir, 'README.md'), 'git clone -b codex/4.1.4 /root/AuthorizationReminder-codex-4.1.4\n');
-  writeText(path.join(rootDir, 'scripts/deploy/bootstrap-full-server.sh'), 'BOOTSTRAP_BRANCH="${BOOTSTRAP_BRANCH:-codex/4.1.4}"\n');
-  writeText(path.join(rootDir, 'scripts/tests/bootstrap-full-server.sh'), "BOOTSTRAP_BRANCH='codex/4.1.4' \\\n");
-  writeText(path.join(rootDir, 'note.txt'), 'init\n');
-
   git(rootDir, 'add', '.');
-  git(rootDir, 'commit', '-m', 'chore: init');
+  git(rootDir, 'commit', '-m', 'chore(repo): init');
 
-  fs.writeFileSync(path.join(rootDir, 'note.txt'), 'changed\n');
-  git(rootDir, 'add', 'note.txt');
-  git(rootDir, 'commit', '-m', 'feat: auto push after bump');
+  writeText(path.join(rootDir, 'auth/push.js'), 'changed\n');
+  git(rootDir, 'add', 'auth/push.js');
+  git(rootDir, 'commit', '-m', 'feat(auth): auto push after bump');
 
   applyVersioningToHeadCommit({ rootDir });
   const pushResult = pushCurrentBranch({ rootDir });
 
   const summary = git(rootDir, 'log', '-1', '--pretty=%s').trim();
   const localHead = git(rootDir, 'rev-parse', 'HEAD').trim();
-  const remoteHead = git(remoteDir, 'rev-parse', 'refs/heads/codex/4.2.0').trim();
+  const remoteHead = git(remoteDir, 'rev-parse', 'refs/heads/feature/independent-versions').trim();
 
-  assert.equal(summary, '[v4.2.0] feat: auto push after bump');
+  assert.equal(summary, '[auth-v1.1.0] feat(auth): auto push after bump');
   assert.equal(pushResult.skipped, false);
-  assert.equal(pushResult.branch, 'codex/4.2.0');
+  assert.equal(pushResult.branch, 'feature/independent-versions');
   assert.equal(remoteHead, localHead);
+});
+
+test('post-commit pushes current branch without switching version branches', () => {
+  const switchBranch = () => assert.fail('must not switch branches');
+  const result = runPostCommit({
+    readHeadCommitSummary: () => 'feat(auth): improve login',
+    applyVersioning: () => ({
+      skipped: false,
+      bumpType: 'minor',
+      bumps: [{
+        system: { id: 'auth' },
+        currentVersion: '1.0.0',
+        nextVersion: '1.1.0',
+      }],
+    }),
+    pushBranch: () => ({
+      skipped: false,
+      branch: 'feature/independent-versions',
+      remote: 'origin',
+      upstreamSet: false,
+    }),
+    switchBranch,
+    log: () => {},
+  });
+
+  assert.equal(result.pushResult.branch, 'feature/independent-versions');
+  assert.deepEqual(Object.keys(result).sort(), ['pushResult', 'result']);
 });
 
 test('switchToVersionBranch moves the release commit onto the next version branch and preserves the old branch', () => {

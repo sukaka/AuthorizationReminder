@@ -8,9 +8,9 @@ const {
   SYSTEM_BY_ID,
 } = require('./systems');
 
-const VERSION_PREFIX_RE = /^\[v\d+\.\d+\.\d+\]\s+/i;
 const AGENT_VERSION_PREFIX_RE = /^\[agent-v\d+\.\d+\.\d+\]\s+/i;
-const ANY_VERSION_PREFIX_RE = /^(?:\[v\d+\.\d+\.\d+\]|\[agent-v\d+\.\d+\.\d+\])\s+/i;
+const PLATFORM_VERSION_PREFIX_RE = /^(?:\[v\d+\.\d+\.\d+\]\s+|(?:(?!\[agent-v)\[[a-z0-9-]+-v\d+\.\d+\.\d+\])+\s+)/i;
+const ANY_VERSION_PREFIX_RE = /^(?:\[agent-v\d+\.\d+\.\d+\]\s+|\[v\d+\.\d+\.\d+\]\s+|(?:(?!\[agent-v)\[[a-z0-9-]+-v\d+\.\d+\.\d+\])+\s+)/i;
 const VERSION_RE = /^\d+\.\d+\.\d+$/;
 const SKIP_PREFIX_RE = /^(?:fixup!|squash!|merge\b)/i;
 const MAJOR_PREFIX_RE = /^(?:(?:breaking|major)(?:\([^)]+\))?:|[a-z][\w-]*(?:\([^)]+\))?!:)/i;
@@ -133,7 +133,7 @@ const normalizeCommitMessage = (message) => {
   const text = String(message || '').replace(/\r\n/g, '\n');
   const lines = text.split('\n');
   if (!lines.length) return '';
-  lines[0] = String(lines[0] || '').replace(VERSION_PREFIX_RE, '').trim();
+  lines[0] = String(lines[0] || '').replace(PLATFORM_VERSION_PREFIX_RE, '').trim();
   return lines.join('\n').replace(/\n+$/, '\n');
 };
 
@@ -516,6 +516,23 @@ const buildVersionedCommitMessage = ({ message, nextVersion }) => {
   return body ? `${nextSummary}\n${body}\n` : `${nextSummary}\n`;
 };
 
+const buildSystemVersionedCommitMessage = ({ message, bumps }) => {
+  const text = normalizeCommitMessage(message).replace(/\n$/, '');
+  const lines = text.split('\n');
+  const summary = stripVersionPrefix(lines[0] || '');
+  const body = lines.slice(1).join('\n');
+  const prefixes = [...bumps]
+    .sort((left, right) => {
+      if (left.system.id < right.system.id) return -1;
+      if (left.system.id > right.system.id) return 1;
+      return 0;
+    })
+    .map(({ system, nextVersion }) => `[${system.id}-v${nextVersion}]`)
+    .join('');
+  const nextSummary = `${prefixes} ${summary}`;
+  return body ? `${nextSummary}\n${body}\n` : `${nextSummary}\n`;
+};
+
 const applyVersioningToHeadCommit = ({ rootDir }) => {
   const resolvedRoot = path.resolve(rootDir);
   const bypass = String(process.env.CODEX_VERSIONING_BYPASS || '').trim();
@@ -528,7 +545,7 @@ const applyVersioningToHeadCommit = ({ rootDir }) => {
   if (isAgentVersionCommit(rawSummary)) {
     return { skipped: true, reason: 'agent-version' };
   }
-  if (VERSION_PREFIX_RE.test(rawSummary)) {
+  if (PLATFORM_VERSION_PREFIX_RE.test(rawSummary)) {
     return { skipped: true, reason: 'already-versioned' };
   }
   const summary = stripVersionPrefix(rawSummary);
@@ -537,16 +554,29 @@ const applyVersioningToHeadCommit = ({ rootDir }) => {
     return { skipped: true, reason: bumpType || 'unsupported' };
   }
 
-  const currentVersion = readRootVersion(resolvedRoot);
-  const nextVersion = bumpVersion(currentVersion, bumpType);
+  const changedPaths = git({
+    rootDir: resolvedRoot,
+    args: ['diff-tree', '--root', '--no-commit-id', '--name-only', '-r', 'HEAD'],
+  })
+    .trim()
+    .split('\n')
+    .filter(Boolean);
+  const systemIds = resolveAffectedSystems({ summary, changedPaths });
+  if (!systemIds.length) {
+    return {
+      skipped: true,
+      reason: parseCommitScope(summary) === 'repo' ? 'repo-only' : 'no-systems',
+    };
+  }
+
   const stashMarker = stashLocalChanges(resolvedRoot);
 
   try {
-    const changedFiles = syncRepositoryVersion({
+    const bumps = planSystemBumps({ rootDir: resolvedRoot, systemIds, bumpType });
+    const changedFiles = Array.from(new Set(bumps.flatMap((bump) => syncSystemVersion({
       rootDir: resolvedRoot,
-      currentVersion,
-      nextVersion,
-    });
+      ...bump,
+    })))).sort();
 
     if (changedFiles.length) {
       git({
@@ -555,7 +585,7 @@ const applyVersioningToHeadCommit = ({ rootDir }) => {
       });
     }
 
-    const commitMessage = buildVersionedCommitMessage({ message: fullMessage, nextVersion });
+    const commitMessage = buildSystemVersionedCommitMessage({ message: fullMessage, bumps });
     const messageFile = path.join(os.tmpdir(), `codex-version-commit-${Date.now()}.txt`);
     writeText(messageFile, commitMessage);
     try {
@@ -575,8 +605,7 @@ const applyVersioningToHeadCommit = ({ rootDir }) => {
     return {
       skipped: false,
       bumpType,
-      currentVersion,
-      nextVersion,
+      bumps,
       changedFiles,
     };
   } catch (error) {
@@ -593,6 +622,7 @@ module.exports = {
   applyVersioningToHeadCommit,
   bumpVersion,
   buildVersionBranchName,
+  buildSystemVersionedCommitMessage,
   buildVersionedCommitMessage,
   isAgentVersionCommit,
   normalizeCommitMessage,
