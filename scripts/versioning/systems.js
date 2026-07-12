@@ -1,7 +1,6 @@
 const fs = require('node:fs');
 const path = require('node:path');
-
-const VERSION_RE = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)\n$/;
+const { assertStrictSemVer } = require('./semver');
 
 const freezeSystem = (system) => Object.freeze({
   ...system,
@@ -126,8 +125,6 @@ const SYSTEMS = Object.freeze([
 ]);
 
 const SHARED_PATHS = Object.freeze([
-  'docker-compose.yml',
-  'docker-compose.all-systems-https.yml',
   'README.md',
   'deploy',
   'https-nginx',
@@ -137,6 +134,14 @@ const SHARED_PATHS = Object.freeze([
 ]);
 
 const SYSTEM_BY_ID = new Map(SYSTEMS.map((system) => [system.id, system]));
+const ROOT_DOCKER_COMPOSE_RE = /^docker-compose[^/]*\.yml$/;
+
+const pathMatches = (candidate, ownedPath) => candidate === ownedPath || candidate.startsWith(`${ownedPath}/`);
+
+const isSharedPath = (candidate) => (
+  ROOT_DOCKER_COMPOSE_RE.test(candidate)
+  || SHARED_PATHS.some((sharedPath) => pathMatches(candidate, sharedPath))
+);
 
 const normalizeRelativePath = (value) => {
   const normalized = path.posix.normalize(String(value || '').replace(/\\/g, '/'));
@@ -220,8 +225,13 @@ const validateSystemRegistry = (rootDir) => {
     if (!fs.existsSync(versionFilePath)) {
       throw new Error(`缺少版本源：${versionFile}`);
     }
-    const version = fs.readFileSync(versionFilePath, 'utf8');
-    if (!VERSION_RE.test(version)) {
+    const versionSource = fs.readFileSync(versionFilePath, 'utf8');
+    if (!versionSource.endsWith('\n') || versionSource.slice(0, -1).includes('\n')) {
+      throw new Error(`版本源非法：${versionFile}`);
+    }
+    try {
+      assertStrictSemVer(versionSource.slice(0, -1), `版本源 ${versionFile}`);
+    } catch (_error) {
       throw new Error(`版本源非法：${versionFile}`);
     }
 
@@ -241,6 +251,7 @@ module.exports = {
   SYSTEMS,
   SHARED_PATHS,
   SYSTEM_BY_ID,
+  isSharedPath,
   validateRegistryEntries,
   validateSystemRegistry,
 };

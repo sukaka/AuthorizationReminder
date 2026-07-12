@@ -32,7 +32,7 @@ const runPostCommit = ({
   const result = applyVersioning({ rootDir: repositoryRoot });
   const pushResult = pushBranch({ rootDir: repositoryRoot });
 
-  if (result && !result.skipped) {
+  if (result && !result.skipped && result.bumps.length) {
     const transitions = result.bumps
       .map(({ system, currentVersion, nextVersion }) => `${system.id} ${currentVersion} -> ${nextVersion}`)
       .join(', ');

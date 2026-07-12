@@ -4,14 +4,14 @@ const os = require('node:os');
 const { execFileSync } = require('node:child_process');
 const {
   SYSTEMS,
-  SHARED_PATHS,
   SYSTEM_BY_ID,
+  isSharedPath,
 } = require('./systems');
+const { assertStrictSemVer } = require('./semver');
 
 const AGENT_VERSION_PREFIX_RE = /^\[agent-v\d+\.\d+\.\d+\]\s+/i;
-const PLATFORM_VERSION_PREFIX_RE = /^(?:\[v\d+\.\d+\.\d+\]\s+|(?:(?!\[agent-v)\[[a-z0-9-]+-v\d+\.\d+\.\d+\])+\s+)/i;
-const ANY_VERSION_PREFIX_RE = /^(?:\[agent-v\d+\.\d+\.\d+\]\s+|\[v\d+\.\d+\.\d+\]\s+|(?:(?!\[agent-v)\[[a-z0-9-]+-v\d+\.\d+\.\d+\])+\s+)/i;
-const VERSION_RE = /^\d+\.\d+\.\d+$/;
+const PLATFORM_VERSION_PREFIX_RE = /^(?:\[repo\]\s+|\[v\d+\.\d+\.\d+\]\s+|(?:(?!\[agent-v)\[[a-z0-9-]+-v\d+\.\d+\.\d+\])+\s+)/i;
+const ANY_VERSION_PREFIX_RE = /^(?:\[agent-v\d+\.\d+\.\d+\]\s+|\[repo\]\s+|\[v\d+\.\d+\.\d+\]\s+|(?:(?!\[agent-v)\[[a-z0-9-]+-v\d+\.\d+\.\d+\])+\s+)/i;
 const SKIP_PREFIX_RE = /^(?:fixup!|squash!|merge\b)/i;
 const MAJOR_PREFIX_RE = /^(?:(?:breaking|major)(?:\([^)]+\))?:|[a-z][\w-]*(?:\([^)]+\))?!:)/i;
 const MINOR_PREFIX_RE = /^(?:(?:feat|minor|perf)(?:\([^)]+\))?:)/i;
@@ -47,7 +47,7 @@ const classifyChangedPaths = (paths) => {
     const system = SYSTEMS.find((entry) => entry.paths.some((ownedPath) => pathMatches(filePath, ownedPath)));
     if (system) {
       systemIds.add(system.id);
-    } else if (SHARED_PATHS.some((sharedPath) => pathMatches(filePath, sharedPath))) {
+    } else if (isSharedPath(filePath)) {
       sharedPaths.add(filePath);
     } else {
       repoPaths.add(filePath);
@@ -125,66 +125,158 @@ const validateCommitMessage = (message) => {
 };
 
 const bumpVersion = (version, bumpType) => {
-  if (!VERSION_RE.test(String(version || '').trim())) {
-    throw new Error(`非法版本号：${version}`);
-  }
-  const [major, minor, patch] = String(version).split('.').map((item) => Number(item));
-  if (bumpType === 'major') return `${major + 1}.0.0`;
-  if (bumpType === 'minor') return `${major}.${minor + 1}.0`;
-  if (bumpType === 'patch') return `${major}.${minor}.${patch + 1}`;
+  const [major, minor, patch] = assertStrictSemVer(version).split('.').map(BigInt);
+  if (bumpType === 'major') return `${major + 1n}.0.0`;
+  if (bumpType === 'minor') return `${major}.${minor + 1n}.0`;
+  if (bumpType === 'patch') return `${major}.${minor}.${patch + 1n}`;
   throw new Error(`不支持的版本升级级别：${bumpType}`);
 };
 
-const updateJsonVersionFile = ({ filePath, currentVersion, nextVersion, force = false }) => {
-  if (!fs.existsSync(filePath)) return false;
-  const original = readText(filePath);
-  const json = JSON.parse(original);
-  let changed = false;
-  if (json.version === currentVersion || (force && json.version !== nextVersion)) {
-    json.version = nextVersion;
-    changed = true;
+const readRequiredText = (rootDir, relativePath) => {
+  const filePath = path.join(rootDir, relativePath);
+  if (!fs.existsSync(filePath)) {
+    throw new Error(`${relativePath} 缺失`);
   }
-  if (
-    json.packages
-    && json.packages['']
-    && (json.packages[''].version === currentVersion || (force && json.packages[''].version !== nextVersion))
-  ) {
-    json.packages[''].version = nextVersion;
-    changed = true;
-  }
-  if (!changed) return false;
-  writeText(filePath, `${JSON.stringify(json, null, 2)}\n`);
-  return true;
+  return { filePath, original: readText(filePath) };
 };
 
-const updateVersionSourceFile = ({ filePath, currentVersion, nextVersion }) => {
-  const original = readText(filePath);
-  if (original !== `${currentVersion}\n`) {
-    throw new Error(`版本源内容与当前版本不一致：${filePath}`);
+const parseJsonObject = (original, relativePath) => {
+  let value;
+  try {
+    value = JSON.parse(original);
+  } catch (error) {
+    throw new Error(`${relativePath} 不是有效 JSON：${error.message}`);
   }
-  if (currentVersion === nextVersion) return false;
-  writeText(filePath, `${nextVersion}\n`);
-  return true;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error(`${relativePath} JSON 根结构必须是对象`);
+  }
+  return value;
 };
 
-const updateTomlPackageVersionFile = ({ filePath, nextVersion }) => {
-  if (!fs.existsSync(filePath)) return false;
-  const original = readText(filePath);
-  const updated = original.replace(
-    /^(version\s*=\s*)"\d+\.\d+\.\d+"/m,
-    `$1"${nextVersion}"`
+const assertCurrentTargetVersion = ({ value, currentVersion, label }) => {
+  assertStrictSemVer(value, label);
+  if (value !== currentVersion) {
+    throw new Error(`${label} 与 VERSION 不一致：期望 ${currentVersion}，实际 ${value}`);
+  }
+};
+
+const findTomlPackageVersion = (source, relativePath) => {
+  const packageHeaders = Array.from(source.matchAll(/^[ \t]*\[package\][ \t]*(?:#.*)?$/gm));
+  if (packageHeaders.length !== 1) {
+    throw new Error(`${relativePath} TOML [package] 结构非法`);
+  }
+  const packageStart = packageHeaders[0].index + packageHeaders[0][0].length;
+  const remaining = source.slice(packageStart);
+  const nextSection = remaining.match(/^[ \t]*\[[^\]\r\n]+\][ \t]*(?:#.*)?$/m);
+  const packageEnd = nextSection ? packageStart + nextSection.index : source.length;
+  const packageBody = source.slice(packageStart, packageEnd);
+  const versionMatches = Array.from(
+    packageBody.matchAll(/^([ \t]*version[ \t]*=[ \t]*")([^"]+)("[ \t]*(?:#.*)?)$/gm)
   );
-  if (updated === original) return false;
-  writeText(filePath, updated);
-  return true;
+  if (versionMatches.length !== 1) {
+    throw new Error(`${relativePath} TOML package version 缺失或重复`);
+  }
+  const versionMatch = versionMatches[0];
+  const versionStart = packageStart + versionMatch.index + versionMatch[1].length;
+  return {
+    value: versionMatch[2],
+    start: versionStart,
+    end: versionStart + versionMatch[2].length,
+  };
+};
+
+const prepareVersionSourceUpdate = ({ rootDir, relativePath, currentVersion, nextVersion }) => {
+  const { filePath, original } = readRequiredText(rootDir, relativePath);
+  if (!original.endsWith('\n') || original.slice(0, -1).includes('\n')) {
+    throw new Error(`${relativePath} VERSION 结构非法`);
+  }
+  const sourceVersion = original.slice(0, -1);
+  assertCurrentTargetVersion({
+    value: sourceVersion,
+    currentVersion,
+    label: `${relativePath} VERSION`,
+  });
+  return { relativePath, filePath, original, content: `${nextVersion}\n` };
+};
+
+const preparePackageJsonUpdate = ({ rootDir, relativePath, currentVersion, nextVersion }) => {
+  const { filePath, original } = readRequiredText(rootDir, relativePath);
+  const json = parseJsonObject(original, relativePath);
+  if (!Object.hasOwn(json, 'version')) {
+    throw new Error(`${relativePath} version 缺失`);
+  }
+  assertCurrentTargetVersion({
+    value: json.version,
+    currentVersion,
+    label: `${relativePath} version`,
+  });
+  json.version = nextVersion;
+  return { relativePath, filePath, original, content: `${JSON.stringify(json, null, 2)}\n` };
+};
+
+const preparePackageLockUpdate = ({ rootDir, relativePath, currentVersion, nextVersion }) => {
+  const { filePath, original } = readRequiredText(rootDir, relativePath);
+  const json = parseJsonObject(original, relativePath);
+  if (!Object.hasOwn(json, 'version')) {
+    throw new Error(`${relativePath} top-level version 缺失`);
+  }
+  assertCurrentTargetVersion({
+    value: json.version,
+    currentVersion,
+    label: `${relativePath} top-level version`,
+  });
+  if (!json.packages || typeof json.packages !== 'object' || Array.isArray(json.packages)) {
+    throw new Error(`${relativePath} packages 结构非法`);
+  }
+  if (!json.packages[''] || typeof json.packages[''] !== 'object' || Array.isArray(json.packages[''])) {
+    throw new Error(`${relativePath} packages[''] 结构非法`);
+  }
+  if (!Object.hasOwn(json.packages[''], 'version')) {
+    throw new Error(`${relativePath} packages[''].version 缺失`);
+  }
+  assertCurrentTargetVersion({
+    value: json.packages[''].version,
+    currentVersion,
+    label: `${relativePath} packages[''].version`,
+  });
+  json.version = nextVersion;
+  json.packages[''].version = nextVersion;
+  return { relativePath, filePath, original, content: `${JSON.stringify(json, null, 2)}\n` };
+};
+
+const prepareDeclaredJsonUpdate = ({ rootDir, relativePath, currentVersion, nextVersion }) => {
+  const { filePath, original } = readRequiredText(rootDir, relativePath);
+  const json = parseJsonObject(original, relativePath);
+  if (!Object.hasOwn(json, 'version')) {
+    throw new Error(`${relativePath} declared JSON version 缺失`);
+  }
+  assertCurrentTargetVersion({
+    value: json.version,
+    currentVersion,
+    label: `${relativePath} declared JSON version`,
+  });
+  json.version = nextVersion;
+  return { relativePath, filePath, original, content: `${JSON.stringify(json, null, 2)}\n` };
+};
+
+const prepareTomlUpdate = ({ rootDir, relativePath, currentVersion, nextVersion }) => {
+  const { filePath, original } = readRequiredText(rootDir, relativePath);
+  const packageVersion = findTomlPackageVersion(original, relativePath);
+  assertCurrentTargetVersion({
+    value: packageVersion.value,
+    currentVersion,
+    label: `${relativePath} TOML package version`,
+  });
+  const content = `${original.slice(0, packageVersion.start)}${nextVersion}${original.slice(packageVersion.end)}`;
+  return { relativePath, filePath, original, content };
 };
 
 const readSystemVersion = (rootDir, system) => {
-  const value = readText(path.join(rootDir, system.versionFile)).trim();
-  if (!VERSION_RE.test(value)) {
-    throw new Error(`${system.id} 版本号非法：${value || '<empty>'}`);
+  const { original } = readRequiredText(rootDir, system.versionFile);
+  if (!original.endsWith('\n') || original.slice(0, -1).includes('\n')) {
+    throw new Error(`${system.id} 版本号非法：${original || '<empty>'}`);
   }
-  return value;
+  return assertStrictSemVer(original.slice(0, -1), `${system.id} 版本号`);
 };
 
 const findSystemVersionDrift = (rootDir, system) => {
@@ -231,13 +323,16 @@ const findSystemVersionDrift = (rootDir, system) => {
   for (const relativePath of canonicalSystem.tomlFiles || []) {
     const filePath = path.join(resolvedRoot, relativePath);
     const source = fs.existsSync(filePath) ? readText(filePath) : '';
-    const match = source.match(/^version\s*=\s*"(\d+\.\d+\.\d+)"/m);
-    record(relativePath, 'package.version', match ? match[1] : '<missing>');
+    try {
+      record(relativePath, 'package.version', findTomlPackageVersion(source, relativePath).value);
+    } catch (_error) {
+      record(relativePath, 'package.version', '<missing>');
+    }
   }
   return drift;
 };
 
-const syncSystemVersion = ({ rootDir, system, currentVersion, nextVersion }) => {
+const prepareSystemVersionSync = ({ rootDir, system, currentVersion, nextVersion }) => {
   const resolvedRoot = path.resolve(rootDir);
   if (!system || !system.id) {
     throw new Error('系统声明非法');
@@ -246,14 +341,8 @@ const syncSystemVersion = ({ rootDir, system, currentVersion, nextVersion }) => 
   if (!canonicalSystem) {
     throw new Error(`未知系统：${system.id}`);
   }
-  const normalizedCurrentVersion = String(currentVersion || '').trim();
-  const normalizedNextVersion = String(nextVersion || '').trim();
-  if (!VERSION_RE.test(normalizedCurrentVersion)) {
-    throw new Error(`当前版本号非法：${currentVersion}`);
-  }
-  if (!VERSION_RE.test(normalizedNextVersion)) {
-    throw new Error(`目标版本号非法：${nextVersion}`);
-  }
+  const normalizedCurrentVersion = assertStrictSemVer(currentVersion, '当前版本号');
+  const normalizedNextVersion = assertStrictSemVer(nextVersion, '目标版本号');
   const sourceVersion = readSystemVersion(resolvedRoot, canonicalSystem);
   if (sourceVersion !== normalizedCurrentVersion) {
     throw new Error(
@@ -261,49 +350,77 @@ const syncSystemVersion = ({ rootDir, system, currentVersion, nextVersion }) => 
     );
   }
 
-  const changedFiles = new Set();
-  const updateDeclaredFile = (relativePath, update) => {
-    if (update({ filePath: path.join(resolvedRoot, relativePath) })) {
-      changedFiles.add(relativePath);
-    }
-  };
-
-  updateDeclaredFile(canonicalSystem.versionFile, (options) => updateVersionSourceFile({
-    ...options,
+  const updates = [prepareVersionSourceUpdate({
+    rootDir: resolvedRoot,
+    relativePath: canonicalSystem.versionFile,
     currentVersion: normalizedCurrentVersion,
     nextVersion: normalizedNextVersion,
-  }));
+  })];
 
   for (const packageDir of canonicalSystem.packageDirs) {
-    updateDeclaredFile(path.posix.join(packageDir, 'package.json'), (options) => updateJsonVersionFile({
-      ...options,
+    updates.push(preparePackageJsonUpdate({
+      rootDir: resolvedRoot,
+      relativePath: path.posix.join(packageDir, 'package.json'),
       currentVersion: normalizedCurrentVersion,
       nextVersion: normalizedNextVersion,
-      force: true,
     }));
-    updateDeclaredFile(path.posix.join(packageDir, 'package-lock.json'), (options) => updateJsonVersionFile({
-      ...options,
+    updates.push(preparePackageLockUpdate({
+      rootDir: resolvedRoot,
+      relativePath: path.posix.join(packageDir, 'package-lock.json'),
       currentVersion: normalizedCurrentVersion,
       nextVersion: normalizedNextVersion,
-      force: true,
     }));
   }
 
   for (const relativePath of canonicalSystem.jsonFiles || []) {
-    updateDeclaredFile(relativePath, (options) => updateJsonVersionFile({
-      ...options,
+    updates.push(prepareDeclaredJsonUpdate({
+      rootDir: resolvedRoot,
+      relativePath,
       currentVersion: normalizedCurrentVersion,
       nextVersion: normalizedNextVersion,
-      force: true,
     }));
   }
   for (const relativePath of canonicalSystem.tomlFiles || []) {
-    updateDeclaredFile(relativePath, (options) => updateTomlPackageVersionFile({
-      ...options,
+    updates.push(prepareTomlUpdate({
+      rootDir: resolvedRoot,
+      relativePath,
+      currentVersion: normalizedCurrentVersion,
       nextVersion: normalizedNextVersion,
     }));
   }
-  return Array.from(changedFiles).sort();
+  return updates;
+};
+
+const restorePreparedUpdates = (updates) => {
+  for (const update of updates) {
+    writeText(update.filePath, update.original);
+  }
+};
+
+const writePreparedUpdates = (updates, writeTarget = writeText) => {
+  for (const update of updates) {
+    if (update.content !== update.original) {
+      writeTarget(update.filePath, update.content);
+    }
+  }
+};
+
+const syncSystemVersion = ({ rootDir, system, currentVersion, nextVersion, writeTarget = writeText }) => {
+  const updates = prepareSystemVersionSync({ rootDir, system, currentVersion, nextVersion });
+  try {
+    writePreparedUpdates(updates, writeTarget);
+  } catch (error) {
+    try {
+      restorePreparedUpdates(updates);
+    } catch (restoreError) {
+      throw new Error(`${error.message}；恢复版本目标失败：${restoreError.message}`);
+    }
+    throw error;
+  }
+  return updates
+    .filter((update) => update.content !== update.original)
+    .map((update) => update.relativePath)
+    .sort();
 };
 
 const planSystemBumps = ({ rootDir, systemIds, bumpType }) => [...systemIds]
@@ -393,24 +510,46 @@ const popStash = (rootDir, marker) => {
   git({ rootDir, args: ['stash', 'pop', '--index', stashRef] });
 };
 
+const hasStagedVersionTargets = (rootDir, relativePaths) => {
+  if (!relativePaths.length) return false;
+  try {
+    git({ rootDir, args: ['diff', '--cached', '--quiet', '--', ...relativePaths] });
+    return false;
+  } catch (error) {
+    if (error.status === 1) return true;
+    throw error;
+  }
+};
+
+const rollbackVersionTargets = (rootDir, updates) => {
+  if (!updates.length) return;
+  const relativePaths = Array.from(new Set(updates.map((update) => update.relativePath))).sort();
+  restorePreparedUpdates(updates);
+  if (hasStagedVersionTargets(rootDir, relativePaths)) {
+    git({ rootDir, args: ['reset', '--quiet', 'HEAD', '--', ...relativePaths] });
+  }
+};
+
 const buildSystemVersionedCommitMessage = ({ message, bumps }) => {
   const text = normalizeCommitMessage(message).replace(/\n$/, '');
   const lines = text.split('\n');
   const summary = stripVersionPrefix(lines[0] || '');
   const body = lines.slice(1).join('\n');
-  const prefixes = [...bumps]
-    .sort((left, right) => {
-      if (left.system.id < right.system.id) return -1;
-      if (left.system.id > right.system.id) return 1;
-      return 0;
-    })
-    .map(({ system, nextVersion }) => `[${system.id}-v${nextVersion}]`)
-    .join('');
+  const prefixes = bumps.length
+    ? [...bumps]
+      .sort((left, right) => {
+        if (left.system.id < right.system.id) return -1;
+        if (left.system.id > right.system.id) return 1;
+        return 0;
+      })
+      .map(({ system, nextVersion }) => `[${system.id}-v${nextVersion}]`)
+      .join('')
+    : '[repo]';
   const nextSummary = `${prefixes} ${summary}`;
   return body ? `${nextSummary}\n${body}\n` : `${nextSummary}\n`;
 };
 
-const applyVersioningToHeadCommit = ({ rootDir }) => {
+const applyVersioningToHeadCommit = ({ rootDir, writeTarget = writeText }) => {
   const resolvedRoot = path.resolve(rootDir);
   const bypass = String(process.env.CODEX_VERSIONING_BYPASS || '').trim();
   if (bypass === '1' || bypass.toLowerCase() === 'true') {
@@ -439,21 +578,31 @@ const applyVersioningToHeadCommit = ({ rootDir }) => {
     .split('\n')
     .filter(Boolean);
   const systemIds = resolveAffectedSystems({ summary, changedPaths });
-  if (!systemIds.length) {
+  const repoOnly = !systemIds.length && parseCommitScope(summary) === 'repo';
+  if (!systemIds.length && !repoOnly) {
     return {
       skipped: true,
-      reason: parseCommitScope(summary) === 'repo' ? 'repo-only' : 'no-systems',
+      reason: 'no-systems',
     };
   }
 
   const stashMarker = stashLocalChanges(resolvedRoot);
+  let updates = [];
+  let bumps = [];
+  let changedFiles = [];
 
   try {
-    const bumps = planSystemBumps({ rootDir: resolvedRoot, systemIds, bumpType });
-    const changedFiles = Array.from(new Set(bumps.flatMap((bump) => syncSystemVersion({
+    bumps = planSystemBumps({ rootDir: resolvedRoot, systemIds, bumpType });
+    updates = bumps.flatMap((bump) => prepareSystemVersionSync({
       rootDir: resolvedRoot,
       ...bump,
-    })))).sort();
+    }));
+    changedFiles = Array.from(new Set(
+      updates
+        .filter((update) => update.content !== update.original)
+        .map((update) => update.relativePath)
+    )).sort();
+    writePreparedUpdates(updates, writeTarget);
 
     if (changedFiles.length) {
       git({
@@ -477,22 +626,25 @@ const applyVersioningToHeadCommit = ({ rootDir }) => {
       fs.rmSync(messageFile, { force: true });
     }
 
-    popStash(resolvedRoot, stashMarker);
-
-    return {
-      skipped: false,
-      bumpType,
-      bumps,
-      changedFiles,
-    };
   } catch (error) {
     try {
+      rollbackVersionTargets(resolvedRoot, updates);
       popStash(resolvedRoot, stashMarker);
     } catch (restoreError) {
-      throw new Error(`${error.message}；恢复本地改动失败：${restoreError.message}`);
+      throw new Error(`${error.message}；回滚版本事务失败：${restoreError.message}`);
     }
     throw error;
   }
+
+  popStash(resolvedRoot, stashMarker);
+
+  return {
+    skipped: false,
+    repoOnly,
+    bumpType,
+    bumps,
+    changedFiles,
+  };
 };
 
 module.exports = {
@@ -504,6 +656,7 @@ module.exports = {
   parseCommitScope,
   parseCommitBumpType,
   planSystemBumps,
+  prepareSystemVersionSync,
   pushCurrentBranch,
   classifyChangedPaths,
   findSystemVersionDrift,

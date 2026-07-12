@@ -244,6 +244,24 @@ test('classifyChangedPaths separates owned, shared, and repo paths', () => {
   );
 });
 
+test('classifyChangedPaths treats every future root docker-compose yml as shared', () => {
+  assert.deepEqual(
+    classifyChangedPaths([
+      'docker-compose.future-overlay.yml',
+      'docker-composeexperimental.yml',
+      'docs/docker-compose.future-overlay.yml',
+    ]),
+    {
+      systemIds: [],
+      sharedPaths: [
+        'docker-compose.future-overlay.yml',
+        'docker-composeexperimental.yml',
+      ],
+      repoPaths: ['docs/docker-compose.future-overlay.yml'],
+    }
+  );
+});
+
 test('resolveAffectedSystems detects a single business system from paths', () => {
   assert.deepEqual(
     resolveAffectedSystems({
@@ -391,6 +409,17 @@ test('bumpVersion increments the expected semver segment', () => {
   assert.equal(bumpVersion('4.1.4', 'patch'), '4.1.5');
   assert.equal(bumpVersion('4.1.4', 'minor'), '4.2.0');
   assert.equal(bumpVersion('4.1.4', 'major'), '5.0.0');
+});
+
+test('registry and automation share strict SemVer validation without leading zeros', () => {
+  const systemsSource = fs.readFileSync(path.join(repositoryRoot, 'scripts/versioning/systems.js'), 'utf8');
+  const automationSource = fs.readFileSync(path.join(repositoryRoot, 'scripts/versioning/automation.js'), 'utf8');
+
+  assert.match(systemsSource, /require\(['"]\.\/semver['"]\)/);
+  assert.match(automationSource, /require\(['"]\.\/semver['"]\)/);
+  for (const version of ['01.0.0', '1.02.0', '1.0.03']) {
+    assert.throws(() => bumpVersion(version, 'patch'), /SemVer|版本号/);
+  }
 });
 
 test('syncSystemVersion updates every package in one system only', () => {
@@ -583,6 +612,120 @@ test('syncSystemVersion structurally updates AI assistant Tauri JSON and TOML', 
   assert.ok(changed.includes(cargoPath));
 });
 
+test('syncSystemVersion preflights every declared structure before writing', () => {
+  const cases = [
+    {
+      name: 'package.json version',
+      mutate(rootDir) {
+        writeJson(path.join(rootDir, 'auth/package.json'), { name: 'auth' });
+      },
+    },
+    {
+      name: 'package.json version',
+      mutate(rootDir) {
+        writeJson(path.join(rootDir, 'auth/package.json'), { name: 'auth', version: '01.0.0' });
+      },
+    },
+    {
+      name: 'auth/package-lock.json',
+      mutate(rootDir) {
+        fs.rmSync(path.join(rootDir, 'auth/package-lock.json'));
+      },
+    },
+    {
+      name: 'package-lock.json top-level version',
+      mutate(rootDir) {
+        const packageLock = makePackageLock('1.0.0');
+        delete packageLock.version;
+        writeJson(path.join(rootDir, 'auth/package-lock.json'), packageLock);
+      },
+    },
+    {
+      name: "package-lock.json packages[''].version",
+      mutate(rootDir) {
+        const packageLock = makePackageLock('1.0.0');
+        delete packageLock.packages[''].version;
+        writeJson(path.join(rootDir, 'auth/package-lock.json'), packageLock);
+      },
+    },
+    {
+      name: 'declared JSON version',
+      system: 'ai-assistant',
+      mutate(rootDir) {
+        writeJson(
+          path.join(rootDir, 'juxin-ai-assistant/apps/desktop/src-tauri/tauri.conf.json'),
+          { name: 'ai-assistant' }
+        );
+      },
+    },
+    {
+      name: 'tauri.conf.json',
+      system: 'ai-assistant',
+      mutate(rootDir) {
+        fs.rmSync(path.join(rootDir, 'juxin-ai-assistant/apps/desktop/src-tauri/tauri.conf.json'));
+      },
+    },
+    {
+      name: 'TOML package version',
+      system: 'ai-assistant',
+      mutate(rootDir) {
+        writeText(
+          path.join(rootDir, 'juxin-ai-assistant/apps/desktop/src-tauri/Cargo.toml'),
+          '[package]\nname = "fixture"\n[dependencies]\nexample = { version = "1.0.0" }\n'
+        );
+      },
+    },
+    {
+      name: 'Cargo.toml',
+      system: 'ai-assistant',
+      mutate(rootDir) {
+        fs.rmSync(path.join(rootDir, 'juxin-ai-assistant/apps/desktop/src-tauri/Cargo.toml'));
+      },
+    },
+  ];
+
+  for (const testCase of cases) {
+    const rootDir = makeIndependentVersionFixture();
+    const system = SYSTEM_BY_ID.get(testCase.system || 'auth');
+    testCase.mutate(rootDir);
+    const beforeVersionSource = fs.readFileSync(path.join(rootDir, system.versionFile), 'utf8');
+
+    assert.throws(
+      () => syncSystemVersion({
+        rootDir,
+        system,
+        currentVersion: '1.0.0',
+        nextVersion: '1.0.1',
+      }),
+      new RegExp(testCase.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+    );
+    assert.equal(fs.readFileSync(path.join(rootDir, system.versionFile), 'utf8'), beforeVersionSource);
+  }
+});
+
+test('sync and drift only use version inside the TOML package section', () => {
+  const rootDir = makeIndependentVersionFixture();
+  const system = SYSTEM_BY_ID.get('ai-assistant');
+  const relativePath = 'juxin-ai-assistant/apps/desktop/src-tauri/Cargo.toml';
+  writeText(
+    path.join(rootDir, relativePath),
+    'version = "9.9.9"\n[workspace]\nmembers = []\n[package]\nname = "fixture"\nversion = "1.0.0"\n[dependencies]\nexample = { version = "8.8.8" }\n'
+  );
+
+  assert.deepEqual(findSystemVersionDrift(rootDir, system), []);
+  syncSystemVersion({
+    rootDir,
+    system,
+    currentVersion: '1.0.0',
+    nextVersion: '1.0.1',
+  });
+
+  const updated = fs.readFileSync(path.join(rootDir, relativePath), 'utf8');
+  assert.match(updated, /^version = "9\.9\.9"/);
+  assert.match(updated, /\[package\]\nname = "fixture"\nversion = "1\.0\.1"/);
+  assert.match(updated, /example = \{ version = "8\.8\.8" \}/);
+});
+
 test('planSystemBumps reads declared system versions in stable order', () => {
   const rootDir = makeIndependentVersionFixture();
   writeText(path.join(rootDir, 'auth/VERSION'), '2.4.9\n');
@@ -646,7 +789,130 @@ test('applyVersioningToHeadCommit amends once for two systems and restores untra
   assert.deepEqual(result.bumps.map((bump) => bump.system.id), ['auth', 'inventory']);
 });
 
-test('applyVersioningToHeadCommit skips valid repo-only commits', () => {
+test('applyVersioningToHeadCommit preserves staged, unstaged, and untracked user changes exactly', () => {
+  const { rootDir, git } = initializeIndependentVersionGitRepo();
+  writeText(path.join(rootDir, 'user-staged.txt'), 'base staged\n');
+  writeText(path.join(rootDir, 'user-unstaged.txt'), 'base unstaged\n');
+  git('add', 'user-staged.txt', 'user-unstaged.txt');
+  git('commit', '-m', 'chore(repo): add user change fixtures');
+
+  writeText(path.join(rootDir, 'auth/feature.js'), 'auth change\n');
+  git('add', 'auth/feature.js');
+  git('commit', '-m', 'fix(auth): preserve local changes');
+
+  writeText(path.join(rootDir, 'user-staged.txt'), 'staged user change\n');
+  git('add', 'user-staged.txt');
+  writeText(path.join(rootDir, 'user-unstaged.txt'), 'unstaged user change\n');
+  writeText(path.join(rootDir, 'user-untracked.txt'), 'untracked user change\n');
+  const beforeStatus = git('status', '--porcelain=v1', '--untracked-files=all');
+
+  applyVersioningToHeadCommit({ rootDir });
+
+  assert.equal(git('status', '--porcelain=v1', '--untracked-files=all'), beforeStatus);
+  assert.equal(fs.readFileSync(path.join(rootDir, 'user-staged.txt'), 'utf8'), 'staged user change\n');
+  assert.equal(fs.readFileSync(path.join(rootDir, 'user-unstaged.txt'), 'utf8'), 'unstaged user change\n');
+  assert.equal(fs.readFileSync(path.join(rootDir, 'user-untracked.txt'), 'utf8'), 'untracked user change\n');
+});
+
+test('applyVersioningToHeadCommit rolls back every target after a mid-sync write failure', () => {
+  const { rootDir, git } = initializeIndependentVersionGitRepo();
+  writeText(path.join(rootDir, 'auth/feature.js'), 'auth change\n');
+  writeText(path.join(rootDir, 'inventory-system/feature.js'), 'inventory change\n');
+  git('add', 'auth/feature.js', 'inventory-system/feature.js');
+  git('commit', '-m', 'fix: trigger transactional sync');
+  const beforeHead = git('rev-parse', 'HEAD').trim();
+  const beforeStatus = git('status', '--porcelain=v1', '--untracked-files=all');
+  let writes = 0;
+
+  assert.throws(
+    () => applyVersioningToHeadCommit({
+      rootDir,
+      writeTarget(filePath, content) {
+        writes += 1;
+        if (writes === 3) throw new Error('injected mid-sync failure');
+        fs.writeFileSync(filePath, content);
+      },
+    }),
+    /injected mid-sync failure/
+  );
+
+  assert.equal(git('rev-parse', 'HEAD').trim(), beforeHead);
+  assert.equal(git('status', '--porcelain=v1', '--untracked-files=all'), beforeStatus);
+  assert.equal(fs.readFileSync(path.join(rootDir, 'auth/VERSION'), 'utf8'), '1.0.0\n');
+  assert.equal(fs.readFileSync(path.join(rootDir, 'inventory-system/VERSION'), 'utf8'), '1.0.0\n');
+});
+
+test('applyVersioningToHeadCommit rolls back generated files after staging failure', () => {
+  const { rootDir, git } = initializeIndependentVersionGitRepo();
+  writeText(path.join(rootDir, 'auth/feature.js'), 'auth change\n');
+  git('add', 'auth/feature.js');
+  git('commit', '-m', 'fix(auth): trigger staging failure');
+  const beforeHead = git('rev-parse', 'HEAD').trim();
+  const indexLock = path.join(rootDir, '.git/index.lock');
+  writeText(indexLock, 'locked\n');
+
+  try {
+    assert.throws(() => applyVersioningToHeadCommit({ rootDir }), /index\.lock|Unable to create/);
+  } finally {
+    fs.rmSync(indexLock, { force: true });
+  }
+
+  assert.equal(git('rev-parse', 'HEAD').trim(), beforeHead);
+  assert.equal(git('status', '--porcelain=v1', '--untracked-files=all'), '');
+  assert.equal(fs.readFileSync(path.join(rootDir, 'auth/VERSION'), 'utf8'), '1.0.0\n');
+});
+
+test('applyVersioningToHeadCommit rolls back generated files and restores users after amend failure', () => {
+  const { rootDir, git } = initializeIndependentVersionGitRepo();
+  writeText(path.join(rootDir, 'tracked-staged.txt'), 'base staged\n');
+  writeText(path.join(rootDir, 'tracked-unstaged.txt'), 'base unstaged\n');
+  git('add', 'tracked-staged.txt', 'tracked-unstaged.txt');
+  git('commit', '-m', 'chore(repo): add rollback fixtures');
+  writeText(path.join(rootDir, 'auth/feature.js'), 'auth change\n');
+  git('add', 'auth/feature.js');
+  git('commit', '-m', 'fix(auth): trigger amend failure');
+  const beforeHead = git('rev-parse', 'HEAD').trim();
+
+  writeText(path.join(rootDir, 'tracked-staged.txt'), 'staged survives\n');
+  git('add', 'tracked-staged.txt');
+  writeText(path.join(rootDir, 'tracked-unstaged.txt'), 'unstaged survives\n');
+  writeText(path.join(rootDir, 'untracked-survives.txt'), 'untracked survives\n');
+  const beforeStatus = git('status', '--porcelain=v1', '--untracked-files=all');
+  git('config', 'commit.gpgsign', 'true');
+  git('config', 'gpg.program', '/usr/bin/false');
+
+  assert.throws(() => applyVersioningToHeadCommit({ rootDir }), /failed to sign|gpg failed|false/);
+
+  assert.equal(git('rev-parse', 'HEAD').trim(), beforeHead);
+  assert.equal(git('status', '--porcelain=v1', '--untracked-files=all'), beforeStatus);
+  assert.equal(fs.readFileSync(path.join(rootDir, 'auth/VERSION'), 'utf8'), '1.0.0\n');
+  assert.equal(fs.readFileSync(path.join(rootDir, 'tracked-staged.txt'), 'utf8'), 'staged survives\n');
+  assert.equal(fs.readFileSync(path.join(rootDir, 'tracked-unstaged.txt'), 'utf8'), 'unstaged survives\n');
+  assert.equal(fs.readFileSync(path.join(rootDir, 'untracked-survives.txt'), 'utf8'), 'untracked survives\n');
+});
+
+test('multi-system preflight rejects malformed targets before any system write', () => {
+  const { rootDir, git } = initializeIndependentVersionGitRepo();
+  const malformedLock = makePackageLock('1.0.0');
+  delete malformedLock.packages[''].version;
+  writeJson(path.join(rootDir, 'inventory-system/backend/package-lock.json'), malformedLock);
+  writeText(path.join(rootDir, 'auth/feature.js'), 'auth change\n');
+  writeText(path.join(rootDir, 'inventory-system/feature.js'), 'inventory change\n');
+  git('add', 'auth/feature.js', 'inventory-system/feature.js', 'inventory-system/backend/package-lock.json');
+  git('commit', '-m', 'fix: reject malformed target');
+  const beforeHead = git('rev-parse', 'HEAD').trim();
+
+  assert.throws(
+    () => applyVersioningToHeadCommit({ rootDir }),
+    /package-lock\.json packages\[''\]\.version/
+  );
+
+  assert.equal(git('rev-parse', 'HEAD').trim(), beforeHead);
+  assert.equal(fs.readFileSync(path.join(rootDir, 'auth/VERSION'), 'utf8'), '1.0.0\n');
+  assert.equal(fs.readFileSync(path.join(rootDir, 'inventory-system/VERSION'), 'utf8'), '1.0.0\n');
+});
+
+test('applyVersioningToHeadCommit amends valid repo-only commit titles without business bumps', () => {
   const { rootDir, git } = initializeIndependentVersionGitRepo();
 
   writeText(path.join(rootDir, 'note.txt'), 'repo tooling change\n');
@@ -656,8 +922,11 @@ test('applyVersioningToHeadCommit skips valid repo-only commits', () => {
 
   const result = applyVersioningToHeadCommit({ rootDir });
 
-  assert.deepEqual(result, { skipped: true, reason: 'repo-only' });
-  assert.equal(git('rev-parse', 'HEAD').trim(), beforeHead);
+  assert.equal(result.skipped, false);
+  assert.equal(result.repoOnly, true);
+  assert.deepEqual(result.bumps, []);
+  assert.notEqual(git('rev-parse', 'HEAD').trim(), beforeHead);
+  assert.equal(git('log', '-1', '--pretty=%s').trim(), '[repo] fix(repo): repair tooling');
   assert.equal(fs.readFileSync(path.join(rootDir, 'auth/VERSION'), 'utf8'), '1.0.0\n');
 });
 
@@ -789,6 +1058,30 @@ test('applyVersioningToHeadCommit can be followed by pushCurrentBranch to publis
   assert.equal(summary, '[auth-v1.1.0] feat(auth): auto push after bump');
   assert.equal(pushResult.skipped, false);
   assert.equal(pushResult.branch, 'feature/independent-versions');
+  assert.equal(remoteHead, localHead);
+});
+
+test('post-commit amends repo-only title and pushes the current branch', () => {
+  const remoteDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-version-repo-remote-'));
+  const { rootDir, git } = initializeIndependentVersionGitRepo();
+  execFileSync('git', ['init', '--bare'], { cwd: remoteDir, encoding: 'utf8' });
+  git('remote', 'add', 'origin', remoteDir);
+
+  writeText(path.join(rootDir, 'repo-note.txt'), 'repo tooling change\n');
+  git('add', 'repo-note.txt');
+  git('commit', '-m', 'fix(repo): repair repository tooling');
+
+  const result = runPostCommit({ repositoryRoot: rootDir, log: () => {} });
+  const localHead = git('rev-parse', 'HEAD').trim();
+  const remoteHead = execFileSync(
+    'git',
+    ['rev-parse', 'refs/heads/feature/independent-versions'],
+    { cwd: remoteDir, encoding: 'utf8' }
+  ).trim();
+
+  assert.equal(git('log', '-1', '--pretty=%s').trim(), '[repo] fix(repo): repair repository tooling');
+  assert.equal(result.result.repoOnly, true);
+  assert.equal(result.pushResult.branch, 'feature/independent-versions');
   assert.equal(remoteHead, localHead);
 });
 
