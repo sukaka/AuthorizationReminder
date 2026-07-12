@@ -8,6 +8,7 @@ const freezeSystem = (system) => Object.freeze({
   packageDirs: Object.freeze(system.packageDirs),
   jsonFiles: Object.freeze(system.jsonFiles || []),
   tomlFiles: Object.freeze(system.tomlFiles || []),
+  cargoLockPackages: Object.freeze((system.cargoLockPackages || []).map(Object.freeze)),
 });
 
 const SYSTEMS = Object.freeze([
@@ -19,6 +20,10 @@ const SYSTEMS = Object.freeze([
     packageDirs: ['juxin-ai-assistant/apps/desktop'],
     jsonFiles: ['juxin-ai-assistant/apps/desktop/src-tauri/tauri.conf.json'],
     tomlFiles: ['juxin-ai-assistant/apps/desktop/src-tauri/Cargo.toml'],
+    cargoLockPackages: [{
+      file: 'juxin-ai-assistant/apps/desktop/src-tauri/Cargo.lock',
+      packageName: 'juxin-ai-assistant',
+    }],
   }),
   freezeSystem({
     id: 'auth',
@@ -205,6 +210,22 @@ const validateDeclaredFiles = (system, field, description) => {
   }
 };
 
+const validateCargoLockPackages = (system) => {
+  if (!Array.isArray(system.cargoLockPackages)) {
+    throw new Error(`Cargo.lock 版本目标声明非法：${system.id}`);
+  }
+  const ownedPaths = system.paths.map(normalizeRelativePath);
+  for (const target of system.cargoLockPackages) {
+    if (!target || typeof target.file !== 'string' || typeof target.packageName !== 'string' || !target.packageName.trim()) {
+      throw new Error(`Cargo.lock 版本目标声明非法：${system.id}`);
+    }
+    const normalizedFilePath = normalizeRelativePath(target.file);
+    if (!isOwnedPath(normalizedFilePath, ownedPaths)) {
+      throw new Error(`Cargo.lock 版本文件不属于系统：${system.id}:${normalizedFilePath}`);
+    }
+  }
+};
+
 const validateSystemRegistry = (rootDir) => {
   validateRegistryEntries(SYSTEMS);
   const resolvedRoot = path.resolve(rootDir);
@@ -244,6 +265,7 @@ const validateSystemRegistry = (rootDir) => {
 
     validateDeclaredFiles(system, 'jsonFiles', 'JSON 版本文件');
     validateDeclaredFiles(system, 'tomlFiles', 'TOML 版本文件');
+    validateCargoLockPackages(system);
   }
 };
 

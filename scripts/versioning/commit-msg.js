@@ -4,10 +4,8 @@ const path = require('node:path');
 
 const {
   normalizeCommitMessage,
-  parseCommitScope,
   validateCommitMessage,
 } = require('./automation');
-const { SYSTEM_BY_ID } = require('./systems');
 
 const commitMessageFile = process.argv[2];
 
@@ -24,10 +22,6 @@ try {
     fs.writeFileSync(resolvedPath, normalized);
   }
   validateCommitMessage(normalized);
-  const scope = parseCommitScope(normalized);
-  if (scope && scope !== 'all' && scope !== 'repo' && !SYSTEM_BY_ID.has(scope)) {
-    throw new Error(`未知系统 scope：${scope}`);
-  }
 } catch (error) {
   console.error(`[versioning] ${error.message}`);
   process.exit(1);

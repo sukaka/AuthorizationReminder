@@ -72,9 +72,9 @@ npm run hooks:install
 
 自动化流程：
 
-1. `commit-msg` 校验提交类型、scope 和路径归属，并清理手写的旧版本前缀。
-2. `post-commit` 根据本次提交路径计算受影响系统及升级级别。
-3. 自动同步注册表声明的 `VERSION`、package/lock、JSON 和 TOML 结构化版本字段。
+1. `commit-msg` 只校验提交 type/scope 语法，并清理手写的版本前缀；它不读取提交变更路径。
+2. `post-commit` 校验注册表，根据本次提交的变更路径验证系统 scope，并计算受影响系统及升级级别。
+3. 自动同步注册表声明的 `VERSION`、package/lock、JSON、TOML 和 Cargo.lock 目标 package 结构化版本字段；Cargo.lock 中依赖包版本保持不变。
 4. 使用 `git commit --amend` 把版本文件和系统版本前缀并入原提交。
 5. 推送当前分支；没有 upstream 时为当前分支建立 upstream。
 
@@ -110,4 +110,4 @@ node -e "JSON.parse(require('fs').readFileSync('package.json')); JSON.parse(requ
 git diff --check
 ```
 
-仓库一致性测试会检查全部 15 个 `VERSION` 源、注册表声明的运行时版本，以及根版本工具包是否保持一致。
+仓库一致性测试会检查全部 15 个 `VERSION` 源、注册表声明的运行时版本（包括 AI 助手 Cargo.lock 目标 package），以及根版本工具包是否保持一致。

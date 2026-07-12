@@ -84,6 +84,12 @@ const makeIndependentVersionFixture = () => {
         '[package]\nname = "fixture"\nversion = "1.0.0"\n[dependencies]\nexample = { version = "1.0.0" }\n'
       );
     }
+    for (const target of system.cargoLockPackages || []) {
+      writeText(
+        path.join(rootDir, target.file),
+        `version = 4\n\n[[package]]\nname = "dependency"\nversion = "9.9.9"\n\n[[package]]\nname = "${target.packageName}"\nversion = "1.0.0"\ndependencies = []\n`
+      );
+    }
   }
 
   return rootDir;
@@ -137,6 +143,10 @@ test('system registry defines every approved independent system', () => {
     ]
   );
   assert.equal(SYSTEMS.every((system) => !Object.hasOwn(system, 'textFiles')), true);
+  assert.deepEqual(SYSTEM_BY_ID.get('ai-assistant').cargoLockPackages, [{
+    file: 'juxin-ai-assistant/apps/desktop/src-tauri/Cargo.lock',
+    packageName: 'juxin-ai-assistant',
+  }]);
   assert.deepEqual(SYSTEM_BY_ID.get('reminder').paths, ['server', 'web']);
   assert.deepEqual(SYSTEM_BY_ID.get('reminder').packageDirs, ['web']);
 });
@@ -390,19 +400,16 @@ test('resolveAffectedSystems rejects unknown and mismatched system scopes', () =
   );
 });
 
-test('commit-msg rejects unknown system scopes before post-commit', () => {
+test('commit-msg validates scope syntax without resolving registry membership', () => {
   const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-commit-msg-scope-'));
   const messageFile = path.join(rootDir, 'message.txt');
   writeText(messageFile, 'fix(unknown): reject invalid scope\n');
 
-  assert.throws(
-    () => execFileSync('node', ['scripts/versioning/commit-msg.js', messageFile], {
-      cwd: path.join(__dirname, '..'),
-      encoding: 'utf8',
-      stdio: 'pipe',
-    }),
-    /未知系统 scope：unknown/
-  );
+  assert.doesNotThrow(() => execFileSync('node', ['scripts/versioning/commit-msg.js', messageFile], {
+    cwd: path.join(__dirname, '..'),
+    encoding: 'utf8',
+    stdio: 'pipe',
+  }));
 });
 
 test('bumpVersion increments the expected semver segment', () => {
@@ -446,7 +453,7 @@ test('syncSystemVersion updates every package in one system only', () => {
   assert.ok(changed.includes('inventory-system/frontend/package-lock.json'));
 });
 
-test('findSystemVersionDrift reports declared package, lock, JSON, and TOML mismatches', () => {
+test('findSystemVersionDrift reports every declared structured target mismatch', () => {
   const rootDir = makeIndependentVersionFixture();
   const system = SYSTEM_BY_ID.get('ai-assistant');
   const packageDir = 'juxin-ai-assistant/apps/desktop';
@@ -463,6 +470,10 @@ test('findSystemVersionDrift reports declared package, lock, JSON, and TOML mism
   writeText(
     path.join(rootDir, 'juxin-ai-assistant/apps/desktop/src-tauri/Cargo.toml'),
     '[package]\nname = "fixture"\nversion = "5.0.0"\n[dependencies]\nexample = { version = "1.0.0" }\n'
+  );
+  writeText(
+    path.join(rootDir, 'juxin-ai-assistant/apps/desktop/src-tauri/Cargo.lock'),
+    'version = 4\n\n[[package]]\nname = "dependency"\nversion = "9.9.9"\n\n[[package]]\nname = "juxin-ai-assistant"\nversion = "4.0.0"\n'
   );
 
   assert.deepEqual(findSystemVersionDrift(rootDir, system), [
@@ -495,6 +506,12 @@ test('findSystemVersionDrift reports declared package, lock, JSON, and TOML mism
       field: 'package.version',
       expected: '1.0.0',
       actual: '5.0.0',
+    },
+    {
+      file: 'juxin-ai-assistant/apps/desktop/src-tauri/Cargo.lock',
+      field: 'package.juxin-ai-assistant.version',
+      expected: '1.0.0',
+      actual: '4.0.0',
     },
   ]);
 });
@@ -600,6 +617,7 @@ test('syncSystemVersion structurally updates AI assistant Tauri JSON and TOML', 
   });
   const tauriPath = 'juxin-ai-assistant/apps/desktop/src-tauri/tauri.conf.json';
   const cargoPath = 'juxin-ai-assistant/apps/desktop/src-tauri/Cargo.toml';
+  const cargoLockPath = 'juxin-ai-assistant/apps/desktop/src-tauri/Cargo.lock';
 
   assert.equal(readPackageVersion(rootDir, 'juxin-ai-assistant/apps/desktop'), '1.0.1');
   assert.equal(readPackageLockVersion(rootDir, 'juxin-ai-assistant/apps/desktop'), '1.0.1');
@@ -608,8 +626,12 @@ test('syncSystemVersion structurally updates AI assistant Tauri JSON and TOML', 
     fs.readFileSync(path.join(rootDir, cargoPath), 'utf8'),
     /^version = "1\.0\.1"\n\[dependencies\]\nexample = \{ version = "1\.0\.0" \}/m
   );
+  const cargoLock = fs.readFileSync(path.join(rootDir, cargoLockPath), 'utf8');
+  assert.match(cargoLock, /name = "juxin-ai-assistant"\nversion = "1\.0\.1"/);
+  assert.match(cargoLock, /name = "dependency"\nversion = "9\.9\.9"/);
   assert.ok(changed.includes(tauriPath));
   assert.ok(changed.includes(cargoPath));
+  assert.ok(changed.includes(cargoLockPath));
 });
 
 test('syncSystemVersion preflights every declared structure before writing', () => {
@@ -680,6 +702,16 @@ test('syncSystemVersion preflights every declared structure before writing', () 
       system: 'ai-assistant',
       mutate(rootDir) {
         fs.rmSync(path.join(rootDir, 'juxin-ai-assistant/apps/desktop/src-tauri/Cargo.toml'));
+      },
+    },
+    {
+      name: 'Cargo.lock 缺少 juxin-ai-assistant package',
+      system: 'ai-assistant',
+      mutate(rootDir) {
+        writeText(
+          path.join(rootDir, 'juxin-ai-assistant/apps/desktop/src-tauri/Cargo.lock'),
+          'version = 4\n\n[[package]]\nname = "dependency"\nversion = "1.0.0"\n'
+        );
       },
     },
   ];
@@ -930,72 +962,50 @@ test('applyVersioningToHeadCommit amends valid repo-only commit titles without b
   assert.equal(fs.readFileSync(path.join(rootDir, 'auth/VERSION'), 'utf8'), '1.0.0\n');
 });
 
+test('applyVersioningToHeadCommit validates the registry on its production path', () => {
+  const { rootDir, git } = initializeIndependentVersionGitRepo();
+
+  writeText(path.join(rootDir, 'repo-note.txt'), 'repo tooling change\n');
+  git('add', 'repo-note.txt');
+  git('commit', '-m', 'fix(repo): repair tooling');
+  fs.rmSync(path.join(rootDir, 'server/VERSION'));
+
+  assert.throws(
+    () => applyVersioningToHeadCommit({ rootDir }),
+    /缺少版本源：server\/VERSION/
+  );
+});
+
 test('applyVersioningToHeadCommit skips commits that already carry a version prefix', () => {
-  const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-version-skip-'));
-  const git = (...args) => execFileSync('git', args, { cwd: rootDir, encoding: 'utf8' });
-
-  git('init');
-  git('config', 'user.name', 'Codex Test');
-  git('config', 'user.email', 'codex@example.com');
-
-  writeJson(path.join(rootDir, 'package.json'), { name: 'root', version: '4.2.0' });
-  writeJson(path.join(rootDir, 'package-lock.json'), makePackageLock('4.2.0'));
-  writeText(path.join(rootDir, 'auth/index.js'), "const RELEASE_VERSION = '4.2.0';\n");
-  writeText(path.join(rootDir, 'docs/versioning.md'), '- 当前整套系统口径版本：`4.2.0`\n');
-  writeText(path.join(rootDir, 'README.md'), 'git clone -b codex/4.2.0 /root/AuthorizationReminder-codex-4.2.0\n');
-  writeText(path.join(rootDir, 'scripts/deploy/bootstrap-full-server.sh'), 'BOOTSTRAP_BRANCH="${BOOTSTRAP_BRANCH:-codex/4.2.0}"\n');
-  writeText(path.join(rootDir, 'scripts/tests/bootstrap-full-server.sh'), "BOOTSTRAP_BRANCH='codex/4.2.0' \\\n");
+  const { rootDir, git } = initializeIndependentVersionGitRepo();
   writeText(path.join(rootDir, 'note.txt'), 'versioned\n');
 
-  git('add', '.');
+  git('add', 'note.txt');
   git('commit', '-m', '[v4.2.0] feat: already versioned');
 
   const beforeHead = git('rev-parse', 'HEAD').trim();
   const result = applyVersioningToHeadCommit({ rootDir });
   const afterHead = git('rev-parse', 'HEAD').trim();
-  const version = JSON.parse(fs.readFileSync(path.join(rootDir, 'package.json'), 'utf8')).version;
 
   assert.equal(result.skipped, true);
   assert.equal(result.reason, 'already-versioned');
   assert.equal(beforeHead, afterHead);
-  assert.equal(version, '4.2.0');
+  assert.equal(fs.readFileSync(path.join(rootDir, 'auth/VERSION'), 'utf8'), '1.0.0\n');
 });
 
-test('agent version commits are valid and skip all platform post-commit actions', () => {
-  const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-version-agent-commit-'));
-  const git = (...args) => execFileSync('git', args, { cwd: rootDir, encoding: 'utf8' });
+test('legacy assistant prefixes are replaced by the registered system prefix', () => {
+  const { rootDir, git } = initializeIndependentVersionGitRepo();
+  const legacyPrefix = `[${['agent', 'v1.0.1'].join('-')}]`;
 
-  git('init');
-  git('config', 'user.name', 'Codex Test');
-  git('config', 'user.email', 'codex@example.com');
-  writeJson(path.join(rootDir, 'package.json'), { name: 'root', version: '5.89.0' });
-  git('add', 'package.json');
-  git('commit', '-m', '[agent-v1.0.1] fix(ai-assistant): repair launcher');
+  writeText(path.join(rootDir, 'juxin-ai-assistant/feature.js'), 'assistant change\n');
+  git('add', 'juxin-ai-assistant/feature.js');
+  git('commit', '-m', `${legacyPrefix} fix(ai-assistant): repair launcher`);
 
-  const agentMessage = '[agent-v1.0.1] fix(ai-assistant): repair launcher';
-  assert.equal(normalizeCommitMessage(agentMessage), agentMessage);
-  assert.equal(validateCommitMessage(agentMessage), 'patch');
-  const beforeHead = git('rev-parse', 'HEAD').trim();
   const result = applyVersioningToHeadCommit({ rootDir });
-  const afterHead = git('rev-parse', 'HEAD').trim();
 
-  assert.equal(result.skipped, true);
-  assert.equal(result.reason, 'agent-version');
-  assert.equal(afterHead, beforeHead);
-  assert.equal(JSON.parse(fs.readFileSync(path.join(rootDir, 'package.json'), 'utf8')).version, '5.89.0');
-
-  const calls = [];
-  const postCommitResult = runPostCommit({
-    repositoryRoot: rootDir,
-    readHeadCommitSummary: () => '[agent-v1.0.1] fix(ai-assistant): repair launcher',
-    applyVersioning: () => calls.push('apply'),
-    switchBranch: () => calls.push('switch'),
-    pushBranch: () => calls.push('push'),
-    log: () => {},
-  });
-  assert.deepEqual(calls, []);
-  assert.equal(postCommitResult.skipped, true);
-  assert.equal(postCommitResult.reason, 'agent-version');
+  assert.equal(result.skipped, false);
+  assert.equal(git('log', '-1', '--pretty=%s').trim(), '[ai-assistant-v1.0.1] fix(ai-assistant): repair launcher');
+  assert.equal(fs.readFileSync(path.join(rootDir, 'juxin-ai-assistant/VERSION'), 'utf8'), '1.0.1\n');
 });
 
 test('pushCurrentBranch sets upstream for a new local branch', () => {

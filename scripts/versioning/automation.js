@@ -6,12 +6,16 @@ const {
   SYSTEMS,
   SYSTEM_BY_ID,
   isSharedPath,
+  validateSystemRegistry,
 } = require('./systems');
 const { assertStrictSemVer } = require('./semver');
 
-const AGENT_VERSION_PREFIX_RE = /^\[agent-v\d+\.\d+\.\d+\]\s+/i;
-const PLATFORM_VERSION_PREFIX_RE = /^(?:\[repo\]\s+|\[v\d+\.\d+\.\d+\]\s+|(?:(?!\[agent-v)\[[a-z0-9-]+-v\d+\.\d+\.\d+\])+\s+)/i;
-const ANY_VERSION_PREFIX_RE = /^(?:\[agent-v\d+\.\d+\.\d+\]\s+|\[repo\]\s+|\[v\d+\.\d+\.\d+\]\s+|(?:(?!\[agent-v)\[[a-z0-9-]+-v\d+\.\d+\.\d+\])+\s+)/i;
+const SYSTEM_ID_PATTERN = SYSTEMS.map(({ id }) => id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
+const PLATFORM_VERSION_PREFIX_RE = new RegExp(
+  `^(?:\\[repo\\]\\s+|\\[v\\d+\\.\\d+\\.\\d+\\]\\s+|(?:\\[(?:${SYSTEM_ID_PATTERN})-v\\d+\\.\\d+\\.\\d+\\])+\\s+)`,
+  'i'
+);
+const ANY_VERSION_PREFIX_RE = /^(?:\[repo\]\s+|\[v\d+\.\d+\.\d+\]\s+|(?:\[[a-z0-9-]+-v\d+\.\d+\.\d+\])+\s+)/i;
 const SKIP_PREFIX_RE = /^(?:fixup!|squash!|merge\b)/i;
 const MAJOR_PREFIX_RE = /^(?:(?:breaking|major)(?:\([^)]+\))?:|[a-z][\w-]*(?:\([^)]+\))?!:)/i;
 const MINOR_PREFIX_RE = /^(?:(?:feat|minor|perf)(?:\([^)]+\))?:)/i;
@@ -93,13 +97,11 @@ const resolveAffectedSystems = ({ summary, changedPaths }) => {
   return systemIds;
 };
 
-const isAgentVersionCommit = (message) => AGENT_VERSION_PREFIX_RE.test(getCommitSummary(message));
-
 const normalizeCommitMessage = (message) => {
   const text = String(message || '').replace(/\r\n/g, '\n');
   const lines = text.split('\n');
   if (!lines.length) return '';
-  lines[0] = String(lines[0] || '').replace(PLATFORM_VERSION_PREFIX_RE, '').trim();
+  lines[0] = String(lines[0] || '').replace(ANY_VERSION_PREFIX_RE, '').trim();
   return lines.join('\n').replace(/\n+$/, '\n');
 };
 
@@ -115,6 +117,10 @@ const parseCommitBumpType = (message) => {
 
 const validateCommitMessage = (message) => {
   const summary = stripVersionPrefix(getCommitSummary(message));
+  const scopedType = summary.match(/^[a-z][\w-]*\(([^)]*)\)!?:/i);
+  if (scopedType && !/^[a-z0-9]+(?:-[a-z0-9]+)*$/i.test(scopedType[1])) {
+    throw new Error(`提交 scope 语法非法：${scopedType[1] || '<empty>'}`);
+  }
   const bumpType = parseCommitBumpType(summary);
   if (!bumpType) {
     throw new Error(
@@ -271,6 +277,41 @@ const prepareTomlUpdate = ({ rootDir, relativePath, currentVersion, nextVersion 
   return { relativePath, filePath, original, content };
 };
 
+const findCargoLockPackageVersion = (source, relativePath, packageName) => {
+  const sections = source.split(/(?=^\[\[package\]\][ \t]*(?:#.*)?$)/m);
+  const matches = sections
+    .map((section, index) => ({ section, index }))
+    .filter(({ section }) => new RegExp(`^name[ \\t]*=[ \\t]*"${packageName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}"[ \\t]*$`, 'm').test(section));
+  if (matches.length !== 1) {
+    throw new Error(`${relativePath} Cargo.lock 缺少 ${packageName} package 或存在重复`);
+  }
+  const versionMatches = Array.from(matches[0].section.matchAll(/^([ \t]*version[ \t]*=[ \t]*")([^"]+)("[ \t]*)$/gm));
+  if (versionMatches.length !== 1) {
+    throw new Error(`${relativePath} Cargo.lock 的 ${packageName} package version 缺失或重复`);
+  }
+  return {
+    sections,
+    sectionIndex: matches[0].index,
+    value: versionMatches[0][2],
+    versionMatch: versionMatches[0],
+  };
+};
+
+const prepareCargoLockPackageUpdate = ({ rootDir, target, currentVersion, nextVersion }) => {
+  const relativePath = target.file;
+  const { filePath, original } = readRequiredText(rootDir, relativePath);
+  const packageVersion = findCargoLockPackageVersion(original, relativePath, target.packageName);
+  assertCurrentTargetVersion({
+    value: packageVersion.value,
+    currentVersion,
+    label: `${relativePath} Cargo.lock ${target.packageName} package version`,
+  });
+  const section = packageVersion.sections[packageVersion.sectionIndex];
+  const match = packageVersion.versionMatch;
+  packageVersion.sections[packageVersion.sectionIndex] = `${section.slice(0, match.index)}${match[1]}${nextVersion}${match[3]}${section.slice(match.index + match[0].length)}`;
+  return { relativePath, filePath, original, content: packageVersion.sections.join('') };
+};
+
 const readSystemVersion = (rootDir, system) => {
   const { original } = readRequiredText(rootDir, system.versionFile);
   if (!original.endsWith('\n') || original.slice(0, -1).includes('\n')) {
@@ -329,6 +370,15 @@ const findSystemVersionDrift = (rootDir, system) => {
       record(relativePath, 'package.version', '<missing>');
     }
   }
+  for (const target of canonicalSystem.cargoLockPackages || []) {
+    const filePath = path.join(resolvedRoot, target.file);
+    const source = fs.existsSync(filePath) ? readText(filePath) : '';
+    try {
+      record(target.file, `package.${target.packageName}.version`, findCargoLockPackageVersion(source, target.file, target.packageName).value);
+    } catch (_error) {
+      record(target.file, `package.${target.packageName}.version`, '<missing>');
+    }
+  }
   return drift;
 };
 
@@ -384,6 +434,14 @@ const prepareSystemVersionSync = ({ rootDir, system, currentVersion, nextVersion
     updates.push(prepareTomlUpdate({
       rootDir: resolvedRoot,
       relativePath,
+      currentVersion: normalizedCurrentVersion,
+      nextVersion: normalizedNextVersion,
+    }));
+  }
+  for (const target of canonicalSystem.cargoLockPackages || []) {
+    updates.push(prepareCargoLockPackageUpdate({
+      rootDir: resolvedRoot,
+      target,
       currentVersion: normalizedCurrentVersion,
       nextVersion: normalizedNextVersion,
     }));
@@ -555,12 +613,10 @@ const applyVersioningToHeadCommit = ({ rootDir, writeTarget = writeText }) => {
   if (bypass === '1' || bypass.toLowerCase() === 'true') {
     return { skipped: true, reason: 'bypass' };
   }
+  validateSystemRegistry(resolvedRoot);
 
   const fullMessage = git({ rootDir: resolvedRoot, args: ['log', '-1', '--pretty=%B'] });
   const rawSummary = getCommitSummary(fullMessage);
-  if (isAgentVersionCommit(rawSummary)) {
-    return { skipped: true, reason: 'agent-version' };
-  }
   if (PLATFORM_VERSION_PREFIX_RE.test(rawSummary)) {
     return { skipped: true, reason: 'already-versioned' };
   }
@@ -651,7 +707,6 @@ module.exports = {
   applyVersioningToHeadCommit,
   bumpVersion,
   buildSystemVersionedCommitMessage,
-  isAgentVersionCommit,
   normalizeCommitMessage,
   parseCommitScope,
   parseCommitBumpType,
