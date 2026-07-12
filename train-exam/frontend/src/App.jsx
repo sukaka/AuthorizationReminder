@@ -304,9 +304,25 @@ const buildApi = () => ({
 
 const getPortalBaseUrl = () => {
   const configured = String(import.meta.env.VITE_SSO_PORTAL_URL || '').trim()
-  if (configured) return configured.replace(/\/+$/, '')
+  if (configured) {
+    try {
+      const portalUrl = new URL(configured, window.location.origin)
+      // 5180 is the auth service's internal/plain-HTTP port. Never carry it
+      // into an HTTPS browser URL; the public auth portal is served on 443.
+      if (window.location.protocol === 'https:' && portalUrl.port === '5180') {
+        portalUrl.protocol = 'https:'
+        portalUrl.hostname = window.location.hostname
+        portalUrl.port = ''
+      }
+      return portalUrl.origin
+    } catch {
+      return configured.replace(/\/+$/, '')
+    }
+  }
   const { protocol, hostname } = window.location
-  return `${protocol}//${hostname}:5180`
+  return protocol === 'https:'
+    ? `${protocol}//${hostname}`
+    : `${protocol}//${hostname}:5180`
 }
 
 const buildPortalEntryUrl = (system) => {

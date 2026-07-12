@@ -28,7 +28,7 @@ it('shows persisted answer feedback in the learning center', async () => {
 
   render(<LearningPage />);
 
-  await userEvent.click(await screen.findByRole('button', { name: '反馈记录' }));
+  await userEvent.click(await screen.findByRole('button', { name: '改进记录' }));
 
   expect(screen.getByText('这个回答后续复用')).toBeInTheDocument();
   expect(screen.getByText('保存为经验')).toBeInTheDocument();

@@ -103,7 +103,7 @@ services:
       MYSQL_ADMIN_USER: root
       MYSQL_ADMIN_PASSWORD: ${MYSQL_ROOT_PASSWORD}
       CORS_ORIGINS: "http://localhost:5180,http://127.0.0.1:5180,http://${PUBLIC_HOST:-localhost}:5180,http://localhost:18080,http://127.0.0.1:18080,http://${PUBLIC_HOST:-localhost}:18080,http://localhost:18081,http://127.0.0.1:18081,http://${PUBLIC_HOST:-localhost}:18081,http://localhost:18082,http://127.0.0.1:18082,http://${PUBLIC_HOST:-localhost}:18082,http://localhost:18083,http://127.0.0.1:18083,http://${PUBLIC_HOST:-localhost}:18083,http://localhost:18084,http://127.0.0.1:18084,http://${PUBLIC_HOST:-localhost}:18084,http://localhost:18085,http://127.0.0.1:18085,http://${PUBLIC_HOST:-localhost}:18085,http://localhost:18086,http://127.0.0.1:18086,http://${PUBLIC_HOST:-localhost}:18086,http://localhost:18087,http://127.0.0.1:18087,http://${PUBLIC_HOST:-localhost}:18087,http://localhost:18088,http://127.0.0.1:18088,http://${PUBLIC_HOST:-localhost}:18088,http://localhost:18089,http://127.0.0.1:18089,http://${PUBLIC_HOST:-localhost}:18089,http://localhost:18092,http://127.0.0.1:18092,http://${PUBLIC_HOST:-localhost}:18092,http://localhost:8090,http://127.0.0.1:8090,http://${PUBLIC_HOST:-localhost}:8090"
-      APP_CMDB_URL: "http://localhost:8090"
+      APP_CMDB_URL: "http://localhost:18094"
       APP_INVENTORY_URL: "http://localhost:18082"
       APP_DEVICE_FLOW_URL: "http://localhost:18083"
       APP_DELIVERY_URL: "http://localhost:18084"
@@ -141,8 +141,10 @@ services:
     depends_on:
       - api
       - auth
+    volumes:
+      - ./https-nginx/certs:/etc/nginx/certs:ro
     ports:
-      - "18080:80"
+      - "18080:443"
 
   ticketing:
     build:
@@ -186,8 +188,10 @@ services:
     depends_on:
       - ticketing
       - auth
+    volumes:
+      - ./https-nginx/certs:/etc/nginx/certs:ro
     ports:
-      - "18081:80"
+      - "18081:443"
     develop:
       watch:
         - action: rebuild
@@ -272,8 +276,10 @@ services:
       args: *build_args_node_alpine_nginx
     depends_on:
       - inventory-api
+    volumes:
+      - ./https-nginx/certs:/etc/nginx/certs:ro
     ports:
-      - "18082:80"
+      - "18082:443"
 
   device-flow-api:
     build:
@@ -313,8 +319,10 @@ services:
       args: *build_args_node_alpine_nginx
     depends_on:
       - device-flow-api
+    volumes:
+      - ./https-nginx/certs:/etc/nginx/certs:ro
     ports:
-      - "18083:80"
+      - "18083:443"
 
   delivery-api:
     build:
@@ -355,8 +363,10 @@ services:
     depends_on:
       - delivery-api
       - auth
+    volumes:
+      - ./https-nginx/certs:/etc/nginx/certs:ro
     ports:
-      - "18084:80"
+      - "18084:443"
 
   faq-api:
     build:
@@ -406,8 +416,10 @@ services:
       - faq-api
       - auth
       - onlyoffice
+    volumes:
+      - ./https-nginx/certs:/etc/nginx/certs:ro
     ports:
-      - "18085:80"
+      - "18085:443"
 
   tender-api:
     build:
@@ -473,8 +485,10 @@ services:
       - tender-api
       - auth
       - onlyoffice
+    volumes:
+      - ./https-nginx/certs:/etc/nginx/certs:ro
     ports:
-      - "18086:80"
+      - "18086:443"
 
   train-exam-api:
     build:
@@ -499,7 +513,7 @@ services:
       FAQ_MYSQL_USER: faq_user
       FAQ_MYSQL_PASSWORD: ${FAQ_MYSQL_PASSWORD}
       FAQ_MYSQL_DATABASE: juxin_faq
-      CORS_ORIGINS: "http://localhost:18087,http://127.0.0.1:18087,http://${PUBLIC_HOST:-localhost}:18087"
+      CORS_ORIGINS: "https://localhost:18087,https://127.0.0.1:18087,https://${PUBLIC_HOST:-localhost}:18087,http://localhost:18087,http://127.0.0.1:18087"
       RESOURCE_ROOT: "/data/train-exam/resources"
       IMPORT_ROOT: "/data/train-exam/imports"
       CERT_ROOT: "/data/train-exam/certificates"
@@ -524,7 +538,7 @@ services:
       DOC_EDITOR_JWT_SECRET: ${TRAIN_EXAM_DOC_EDITOR_JWT_SECRET}
       DOC_PREVIEW_MIN_SECONDS: 45
       SECURITY_STRICT_MODE: "true"
-      CSRF_SECURE: "false"
+      CSRF_SECURE: "true"
     volumes:
       - train-exam-data:/data/train-exam
     depends_on:
@@ -542,8 +556,10 @@ services:
       - train-exam-api
       - auth
       - train-exam-onlyoffice
+    volumes:
+      - ./https-nginx/certs:/etc/nginx/certs:ro
     ports:
-      - "18087:80"
+      - "18087:443"
 
   prompt-center-api:
     image: codex-new-prompt-center-api:latest
@@ -603,8 +619,10 @@ services:
     depends_on:
       - prompt-center-api
       - auth
+    volumes:
+      - ./https-nginx/certs:/etc/nginx/certs:ro
     ports:
-      - "18088:80"
+      - "18088:443"
 
   ai-assistant-db-init:
     build:
@@ -707,7 +725,7 @@ services:
     command:
       - "/bin/sh"
       - "-c"
-      - "python scripts/sync_qdrant_knowledge_index.py --recreate && chown -R 1000:1000 /data/ai-assistant/keyword-index"
+      - "python scripts/sync_qdrant_knowledge_index.py --recreate && mkdir -p /data/ai-assistant/knowledge && chown -R 1000:1000 /data/ai-assistant/keyword-index /data/ai-assistant/knowledge"
     environment:
       DATABASE_URL: "mysql+pymysql://ai_assistant_user:${AI_ASSISTANT_MYSQL_PASSWORD}@mysql:3306/juxin_ai_assistant"
       CONTENT_ENCRYPTION_KEY: ${AI_CONTENT_ENCRYPTION_KEY}
@@ -725,6 +743,7 @@ services:
       KNOWLEDGE_KEYWORD_INDEX_DIR: "/data/ai-assistant/keyword-index/current"
     volumes:
       - ai-assistant-keyword-index:/data/ai-assistant/keyword-index
+      - ai-assistant-knowledge:/data/ai-assistant/knowledge
     depends_on:
       ai-assistant-db-init:
         condition: service_completed_successfully
@@ -767,12 +786,14 @@ services:
       KNOWLEDGE_REDIS_URL: "redis://ai-assistant-redis:6379/0"
       KNOWLEDGE_KEYWORD_INDEX_ENABLED: "true"
       KNOWLEDGE_KEYWORD_INDEX_DIR: "/data/ai-assistant/keyword-index/current"
+      KNOWLEDGE_STORAGE_DIR: "/data/ai-assistant/knowledge"
       DESKTOP_UPDATE_STORAGE_DIR: /data/ai-assistant/desktop-updates
       DESKTOP_UPDATE_MAX_BYTES: ${AI_DESKTOP_UPDATE_MAX_BYTES:-1073741824}
       DESKTOP_UPDATE_PUBLIC_BASE_URL: ${AI_DESKTOP_UPDATE_PUBLIC_BASE_URL:-}
     volumes:
       - ai-assistant-updates:/data/ai-assistant/desktop-updates
       - ai-assistant-keyword-index:/data/ai-assistant/keyword-index
+      - ai-assistant-knowledge:/data/ai-assistant/knowledge
     depends_on:
       ai-assistant-db-init:
         condition: service_completed_successfully
@@ -805,8 +826,10 @@ services:
         condition: service_healthy
       auth:
         condition: service_started
+    volumes:
+      - ./https-nginx/certs:/etc/nginx/certs:ro
     ports:
-      - "18093:80"
+      - "18093:443"
 
   ai-assistant-https:
     image: nginx:alpine
@@ -1126,8 +1149,10 @@ services:
     depends_on:
       - sca-api
       - auth
+    volumes:
+      - ./https-nginx/certs:/etc/nginx/certs:ro
     ports:
-      - "18089:80"
+      - "18089:443"
 
   big-screen-api:
     image: codex-new-big-screen-api:latest
@@ -1180,8 +1205,10 @@ services:
         condition: service_started
       auth:
         condition: service_started
+    volumes:
+      - ./https-nginx/certs:/etc/nginx/certs:ro
     ports:
-      - "18092:80"
+      - "18092:443"
 
   dependency-track-apiserver:
     image: dependencytrack/apiserver:4.12.2
@@ -1290,11 +1317,14 @@ services:
     depends_on:
       - cmdb
       - auth
+    volumes:
+      - ./https-nginx/certs:/etc/nginx/certs:ro
     ports:
-      - "8090:80"
+      - "18094:443"
 
 volumes:
   ai-assistant-updates:
+  ai-assistant-knowledge:
   qdrant-data:
   ai-assistant-redis-data:
   ai-assistant-keyword-index:

@@ -411,6 +411,11 @@ def _content_disposition_for_download(file_name: str) -> str:
     return f"attachment; filename=\"{ascii_name}\"; filename*=UTF-8''{quote(safe_name)}"
 
 
+def _content_disposition_for_asset(file_name: str, media_type: str) -> str:
+    disposition = _content_disposition_for_download(file_name)
+    return disposition.replace("attachment;", "inline;", 1) if media_type.startswith("image/") else disposition
+
+
 def _download_media_type(file_type: str | None) -> str:
     normalized = (file_type or "").strip().lower().lstrip(".")
     return KNOWLEDGE_DOWNLOAD_MEDIA_TYPES.get(normalized, "application/octet-stream")
@@ -1386,12 +1391,14 @@ async def download_knowledge_file(
         file_record,
         storage_root=current_settings.knowledge_storage_dir,
     )
+    media_type = _download_media_type(file_record.file_type)
     return Response(
         content=stored_path.read_bytes(),
-        media_type=_download_media_type(file_record.file_type),
+        media_type=media_type,
         headers={
-            "Content-Disposition": _content_disposition_for_download(
-                file_record.original_file_name or file_record.file_name
+            "Content-Disposition": _content_disposition_for_asset(
+                file_record.original_file_name or file_record.file_name,
+                media_type,
             )
         },
     )

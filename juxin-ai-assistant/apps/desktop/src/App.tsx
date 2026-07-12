@@ -53,10 +53,21 @@ type ViewState =
 const currentSystemKey = 'ai-assistant';
 const systemLabels: Record<string, string> = {
   'ai-assistant': '聚信 AI 助手',
-  'prompt-center': '提示词中心',
+  'reminder': '授权到期提醒系统',
+  'delivery': '交付系统',
+  'cmdb': 'CMDB 系统',
+  'inventory': '库存管理系统',
+  'device-flow': '设备流转系统',
+  'faq': '文档管理系统',
+  'tender': '标书协同制作系统',
+  'train-exam': '培训考试系统',
+  'prompt-center': '提示词管理中心',
+  'sca': '软件成分分析平台',
+  'big-screen': '统一大屏展示中心',
   'data-platform': '数据平台',
   'learning-center': '学习中心',
   'admin-center': '管理后台',
+  'audit-center': '审计中心',
 };
 
 function systemLabel(systemKey: string): string {

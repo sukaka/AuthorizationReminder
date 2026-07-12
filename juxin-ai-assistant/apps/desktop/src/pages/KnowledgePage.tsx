@@ -115,6 +115,10 @@ function canEditKnowledgeFileMetadata(file: KnowledgeFilePayload, isAdmin: boole
   return isAdmin && file.usage_type === 'official_knowledge';
 }
 
+function canRenameKnowledgeFile(file: KnowledgeFilePayload, isAdmin: boolean): boolean {
+  return isAdmin || file.usage_type === 'personal_reference' || file.usage_type === 'session_attachment';
+}
+
 function sourceKindLabel(sourceKind: string): string {
   if (sourceKind === 'official_knowledge') return '来源：正式资料';
   if (sourceKind === 'session_attachment') return '参考资料：当前附件';
@@ -189,6 +193,10 @@ function fileUsageLabel(file: KnowledgeFilePayload): string {
 function fileExtension(fileName: string): string {
   const dotIndex = fileName.lastIndexOf('.');
   return dotIndex >= 0 ? fileName.slice(dotIndex + 1).trim().toLowerCase() : '';
+}
+
+function normalizedKnowledgeFileName(fileName: string): string {
+  return fileName.normalize('NFKC').trim().toLocaleLowerCase('zh-CN');
 }
 
 function parseQualityHint(file: File | null): string {
@@ -358,7 +366,8 @@ export function KnowledgePage({ session }: KnowledgePageProps) {
   const [isSecondaryCategoryPanelOpen, setIsSecondaryCategoryPanelOpen] = useState(false);
   const [secondaryCategorySearch, setSecondaryCategorySearch] = useState('');
   const [openFileMenuUuid, setOpenFileMenuUuid] = useState('');
-  const [pendingUploadFile, setPendingUploadFile] = useState<File | null>(null);
+  const [pendingUploadFiles, setPendingUploadFiles] = useState<File[]>([]);
+  const [uploadingFiles, setUploadingFiles] = useState(false);
   const [knowledgeBases, setKnowledgeBases] = useState<KnowledgeBasePayload[]>([]);
   const [knowledgeBaseNotice, setKnowledgeBaseNotice] = useState('');
   const [uploadPurpose, setUploadPurpose] = useState<KnowledgeUploadPurpose>(
@@ -495,6 +504,12 @@ export function KnowledgePage({ session }: KnowledgePageProps) {
     ? files
     : files.filter((file) => selectedCategoryNames.includes(file.category || '未分类'));
   const displayedFiles = categoryFilteredFiles.filter((file) => knowledgeFileMatchesRiskFilter(file, riskFilter));
+  const existingKnowledgeFileNames = new Set(files.map((file) => normalizedKnowledgeFileName(file.file_name)));
+  const duplicateUploadFileNames = Array.from(new Set(
+    pendingUploadFiles
+      .filter((file) => existingKnowledgeFileNames.has(normalizedKnowledgeFileName(file.name)))
+      .map((file) => file.name),
+  ));
   const categoryDirectory = primaryCategoryDirectory;
   const filesAvailableForQuestion = files.filter((file) => (
     file.rag_enabled || file.reference_enabled !== false
@@ -528,6 +543,12 @@ export function KnowledgePage({ session }: KnowledgePageProps) {
   };
   const selectSecondaryCategory = (categoryName: string) => {
     setSelectedSecondaryCategoryName(categoryName);
+    setIsSecondaryCategoryPanelOpen(false);
+    setSecondaryCategorySearch('');
+  };
+  const selectNestedCategory = (primaryCategoryName: string, secondaryCategoryName: string) => {
+    setSelectedCategoryName(primaryCategoryName);
+    setSelectedSecondaryCategoryName(secondaryCategoryName);
     setIsSecondaryCategoryPanelOpen(false);
     setSecondaryCategorySearch('');
   };
@@ -938,39 +959,68 @@ export function KnowledgePage({ session }: KnowledgePageProps) {
   };
 
   const uploadFile = async () => {
-    if (!pendingUploadFile) return;
+    if (!pendingUploadFiles.length || uploadingFiles) return;
     if (uploadPurpose === 'session_attachment') {
       setUploadStatus('当前附件请在任务输入框上传。');
       return;
     }
-    setUploadStatus('正在上传资料…');
+    if (duplicateUploadFileNames.length && !window.confirm(
+      `资料库已存在以下同名文件：\n${duplicateUploadFileNames.map((name) => `• ${name}`).join('\n')}\n\n继续上传会保留两个版本，是否继续？`,
+    )) {
+      setUploadStatus('已取消上传，请修改文件名或移除同名文件后再试。');
+      return;
+    }
+    setUploadStatus(`正在上传 ${pendingUploadFiles.length} 个资料，最多同时处理 3 个…`);
+    setUploadingFiles(true);
     try {
       const isOfficial = uploadPurpose === 'official_knowledge';
       if (isOfficial && !uploadKnowledgeBaseId.trim()) {
         setUploadStatus('请先选择所属资料库。');
         return;
       }
-      const uploaded = await uploadKnowledgeFile(pendingUploadFile, {
+      const options = {
         knowledgeBaseId: isOfficial ? uploadKnowledgeBaseId.trim() : undefined,
-        usageType: isOfficial ? 'official_knowledge' : 'personal_reference',
-        reviewStatus: isOfficial ? 'official' : uploadPurpose === 'submit_review' ? 'pending' : 'draft',
+        usageType: isOfficial ? 'official_knowledge' as const : 'personal_reference' as const,
+        reviewStatus: isOfficial ? 'official' as const : uploadPurpose === 'submit_review' ? 'pending' as const : 'draft' as const,
         ragEnabled: isOfficial,
         referenceEnabled: true,
-        ragScope: isOfficial ? 'company' : 'personal',
-        permissionScope: isOfficial ? 'company' : 'private',
+        ragScope: isOfficial ? 'company' as const : 'personal' as const,
+        permissionScope: isOfficial ? 'company' as const : 'private' as const,
         category: uploadCategory,
         documentType: uploadDocumentType,
         tags: [],
+      };
+      const queue = [...pendingUploadFiles];
+      const uploaded: KnowledgeFilePayload[] = [];
+      const failed: Array<{ file: File; error: unknown }> = [];
+      const workers = Array.from({ length: Math.min(3, queue.length) }, async () => {
+        while (queue.length) {
+          const nextFile = queue.shift();
+          if (!nextFile) return;
+          try {
+            uploaded.push(await uploadKnowledgeFile(nextFile, options));
+          } catch (error) {
+            failed.push({ file: nextFile, error });
+          }
+        }
       });
-      setFiles((current) => [uploaded].concat(current));
-      setPendingUploadFile(null);
+      await Promise.all(workers);
+      if (uploaded.length) setFiles((current) => uploaded.concat(current));
+      setPendingUploadFiles(failed.map((item) => item.file));
       setSelectedCategoryName('全部资料');
-      setActiveKnowledgeTab('library');
-      setUploadStatus(isOfficial
-        ? `正式资料已上传：${uploaded.file_name}`
-        : `资料已上传：${uploaded.file_name}`);
+      if (!failed.length) setActiveKnowledgeTab('library');
+      if (failed.length) {
+        const firstError = uploadFailureMessage(failed[0].error);
+        setUploadStatus(`已上传 ${uploaded.length} 个，失败 ${failed.length} 个。${firstError}`);
+      } else {
+        setUploadStatus(isOfficial
+          ? `已上传 ${uploaded.length} 个正式资料。`
+          : `已上传 ${uploaded.length} 个资料。`);
+      }
     } catch (error) {
       setUploadStatus(uploadFailureMessage(error));
+    } finally {
+      setUploadingFiles(false);
     }
   };
 
@@ -1199,6 +1249,26 @@ export function KnowledgePage({ session }: KnowledgePageProps) {
       setActionNotice('已更新资料信息。');
     } catch {
       setActionNotice('暂时无法更新该文档元数据，请稍后重试。');
+    }
+  };
+
+  const renameFile = async (file: KnowledgeFilePayload) => {
+    const nextName = window.prompt('重命名资料', file.file_name)?.trim();
+    if (!nextName || nextName === file.file_name) return;
+    const hasDuplicate = files.some((item) => (
+      item.file_uuid !== file.file_uuid
+      && normalizedKnowledgeFileName(item.file_name) === normalizedKnowledgeFileName(nextName)
+    ));
+    if (hasDuplicate && !window.confirm(`资料库已存在同名文件“${nextName}”，是否仍要使用这个名称？`)) return;
+    setActionNotice('');
+    try {
+      const updated = await updateKnowledgeFileMetadata(file.file_uuid, { fileName: nextName });
+      setFiles((current) => current.map((item) => (
+        item.file_uuid === file.file_uuid ? updated : item
+      )));
+      setActionNotice(`已重命名为：${updated.file_name}`);
+    } catch {
+      setActionNotice('重命名失败，请检查文件名后重试。');
     }
   };
 
@@ -2054,23 +2124,38 @@ export function KnowledgePage({ session }: KnowledgePageProps) {
               <span>支持 PDF、Word、Excel、PPT、TXT 和 Markdown，单个文件不超过 100MB</span>
             </div>
           </div>
-          <label className={`knowledge-upload-dropzone${pendingUploadFile ? ' has-file' : ''}`}>
+          <label className={`knowledge-upload-dropzone${pendingUploadFiles.length ? ' has-file' : ''}`}>
             <input
               aria-label="上传知识文件"
               accept={supportedKnowledgeAccept}
+              multiple
               onChange={(event) => {
-                const file = event.target.files?.[0];
-                if (!file) return;
-                setPendingUploadFile(file);
+                const selectedFiles = Array.from(event.target.files || []);
+                if (!selectedFiles.length) return;
+                const duplicateNames = selectedFiles
+                  .filter((file) => existingKnowledgeFileNames.has(normalizedKnowledgeFileName(file.name)))
+                  .map((file) => file.name);
+                setPendingUploadFiles((current) => {
+                  const combined = current.concat(selectedFiles);
+                  return combined.filter((file, index) => (
+                    combined.findIndex((candidate) => (
+                      candidate.name === file.name
+                      && candidate.size === file.size
+                      && candidate.lastModified === file.lastModified
+                    )) === index
+                  ));
+                });
                 setUploadPurpose(isAdmin ? 'official_knowledge' : 'personal_reference');
-                setUploadStatus('');
+                setUploadStatus(duplicateNames.length
+                  ? `检测到同名资料：${Array.from(new Set(duplicateNames)).join('、')}。上传前需要再次确认。`
+                  : '');
                 event.target.value = '';
               }}
               type="file"
             />
             <span className="knowledge-upload-dropzone-icon" aria-hidden="true">↑</span>
-            <strong>{pendingUploadFile ? '重新选择文件' : '点击选择文件'}</strong>
-            <span>{pendingUploadFile ? '也可以替换为其他资料文件' : '选择需要入库的资料，上传后系统会自动解析和建立索引'}</span>
+            <strong>{pendingUploadFiles.length ? `已选择 ${pendingUploadFiles.length} 个文件，可继续添加` : '点击选择一个或多个文件'}</strong>
+            <span>{pendingUploadFiles.length ? '新选择的文件会继续加入上传列表' : '可一次选择多个资料，上传时最多并行处理 3 个'}</span>
           </label>
           {isAdmin ? (
             <div className="knowledge-base-manager">
@@ -2147,16 +2232,18 @@ export function KnowledgePage({ session }: KnowledgePageProps) {
               {knowledgeBaseNotice ? <p role="status">{knowledgeBaseNotice}</p> : null}
             </div>
           ) : null}
-          {pendingUploadFile ? (
+          {pendingUploadFiles.length ? (
             <div className="knowledge-upload-configuration">
-              <div className="knowledge-upload-file-summary">
-                <span className="knowledge-upload-file-type">{fileExtension(pendingUploadFile.name).toUpperCase() || '文件'}</span>
-                <div>
-                  <strong>已选择：{pendingUploadFile.name}</strong>
-                  <span role="note">{parseQualityHint(pendingUploadFile)}</span>
+              {pendingUploadFiles.map((file) => (
+                <div className={`knowledge-upload-file-summary${existingKnowledgeFileNames.has(normalizedKnowledgeFileName(file.name)) ? ' is-duplicate' : ''}`} key={`${file.name}-${file.size}-${file.lastModified}`}>
+                  <span className="knowledge-upload-file-type">{fileExtension(file.name).toUpperCase() || '文件'}</span>
+                  <div>
+                    <strong>已选择：{file.name}</strong>
+                    <span role="note">{existingKnowledgeFileNames.has(normalizedKnowledgeFileName(file.name)) ? '资料库已存在同名文件，上传时将再次确认' : parseQualityHint(file)}</span>
+                  </div>
+                  <button aria-label={`移除 ${file.name}`} disabled={uploadingFiles} onClick={() => setPendingUploadFiles((current) => current.filter((item) => item !== file))} type="button">移除</button>
                 </div>
-                <button aria-label={`移除 ${pendingUploadFile.name}`} onClick={() => setPendingUploadFile(null)} type="button">移除</button>
-              </div>
+              ))}
               <div className="knowledge-upload-step knowledge-upload-step--metadata">
                 <div className="knowledge-upload-step-index">2</div>
                 <div>
@@ -2279,11 +2366,13 @@ export function KnowledgePage({ session }: KnowledgePageProps) {
                 <strong>{uploadPrimaryCategory?.name || uploadCategory}{uploadSecondaryCategory ? ` / ${uploadSecondaryCategory}` : ''}</strong>
               </div>
               <div className="knowledge-upload-actions">
-                <button className="knowledge-button" onClick={() => setPendingUploadFile(null)} type="button">
+                <button className="knowledge-button" disabled={uploadingFiles} onClick={() => setPendingUploadFiles([])} type="button">
                   取消
                 </button>
-                <button className="knowledge-button knowledge-button-primary" onClick={() => void uploadFile()} type="button">
-                  开始上传
+                <button aria-label="开始上传" className="knowledge-button knowledge-button-primary" disabled={uploadingFiles} onClick={() => void uploadFile()} type="button">
+                  {uploadingFiles ? (
+                    <><span aria-hidden="true" className="upload-parsing-spinner" />正在解析中</>
+                  ) : `开始上传（${pendingUploadFiles.length}）`}
                 </button>
               </div>
             </div>
@@ -2333,17 +2422,39 @@ export function KnowledgePage({ session }: KnowledgePageProps) {
               {categoryDirectory.map((category) => {
                 const categoryNames = categorySelectionNames(category.name, knowledgeCategories);
                 const categoryCount = files.filter((file) => categoryNames.includes(file.category || '未分类')).length;
+                const childCategories = categoryDirectoryItems.filter((item) => item.parent_category_id === category.category_id);
                 return (
-                  <button
-                    aria-current={selectedCategoryName === category.name ? 'true' : undefined}
-                    className={selectedCategoryName === category.name ? 'is-active' : ''}
-                    key={category.category_id}
-                    onClick={() => selectPrimaryCategory(category.name)}
-                    type="button"
-                  >
-                    <span>{category.name}</span>
-                    {categoryCount > 0 ? <strong>{categoryCount}</strong> : null}
-                  </button>
+                  <div className="knowledge-category-group" key={category.category_id} role="listitem">
+                    <button
+                      aria-current={selectedCategoryName === category.name && selectedSecondaryCategoryName === '全部' ? 'true' : undefined}
+                      className={selectedCategoryName === category.name ? 'is-active is-primary-active' : ''}
+                      onClick={() => selectPrimaryCategory(category.name)}
+                      type="button"
+                    >
+                      <span>{category.name}</span>
+                      {categoryCount > 0 ? <strong>{categoryCount}</strong> : null}
+                    </button>
+                    {childCategories.length ? (
+                      <div className="knowledge-category-children" role="list" aria-label={`${category.name} 二级目录`}>
+                        {childCategories.map((child) => {
+                          const childCount = files.filter((file) => (file.category || '未分类') === child.name).length;
+                          const childActive = selectedCategoryName === category.name && selectedSecondaryCategoryName === child.name;
+                          return (
+                            <button
+                              aria-current={childActive ? 'true' : undefined}
+                              className={childActive ? 'is-active is-secondary-active' : ''}
+                              key={child.category_id}
+                              onClick={() => selectNestedCategory(category.name, child.name)}
+                              type="button"
+                            >
+                              <span>{child.name}</span>
+                              {childCount > 0 ? <strong>{childCount}</strong> : null}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    ) : null}
+                  </div>
                 );
               })}
             </div>
@@ -2486,6 +2597,7 @@ export function KnowledgePage({ session }: KnowledgePageProps) {
               const canArchive = canArchiveKnowledgeFile(file, isAdmin);
               const canReview = canReviewKnowledgeFile(file, isAdmin);
               const canEditMetadata = canEditKnowledgeFileMetadata(file, isAdmin);
+              const canRename = canRenameKnowledgeFile(file, isAdmin);
               const isEditingMetadata = metadataEdit?.fileUuid === file.file_uuid;
               return (
                 <article
@@ -2636,6 +2748,20 @@ export function KnowledgePage({ session }: KnowledgePageProps) {
                               >
                                 下载
                               </button>
+                              {canRename ? (
+                                <button
+                                  aria-label={`重命名 ${file.file_name}`}
+                                  className="knowledge-menu-item"
+                                  onClick={() => {
+                                    closeFileMenu();
+                                    void renameFile(file);
+                                  }}
+                                  role="menuitem"
+                                  type="button"
+                                >
+                                  重命名
+                                </button>
+                              ) : null}
                               {canEditMetadata ? (
                                 <button
                                   aria-label={`编辑资料分类 ${file.file_name}`}

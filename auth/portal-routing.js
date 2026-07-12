@@ -107,6 +107,7 @@ const getDedicatedCenterConfig = (systemKey) => {
         usersList: '/api/admin-center/users',
         usersCreate: '/api/admin-center/users',
         usersBatchDelete: '/api/admin-center/users/batch-delete',
+        usersBatchUpdate: '/api/admin-center/users/batch-update',
         usersExport: '/api/admin-center/users/export.xlsx',
         usersItemBase: '/api/admin-center/users',
         usersImport: '/api/admin-center/users/import',

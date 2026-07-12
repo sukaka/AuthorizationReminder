@@ -826,7 +826,7 @@ export function ChatPage() {
   const [status, setStatus] = useState('');
   const [uploadStatus, setUploadStatus] = useState('');
   const [uploading, setUploading] = useState(false);
-  const [pendingUploadFile, setPendingUploadFile] = useState<File | null>(null);
+  const [pendingUploadFiles, setPendingUploadFiles] = useState<File[]>([]);
   const [uploadPurpose, setUploadPurpose] = useState<UploadPurpose>('personal_reference');
   const [uploadCategory, setUploadCategory] = useState('个人素材');
   const [uploadDocumentType, setUploadDocumentType] = useState('其他');
@@ -1096,50 +1096,64 @@ export function ChatPage() {
   };
 
   const uploadKnowledge = async () => {
-    if (!pendingUploadFile || uploading) return;
+    if (!pendingUploadFiles.length || uploading) return;
     if (uploadPurpose === 'session_attachment' && !activeSessionUuid) {
       setUploadStatus('请先开启一个任务，再上传当前附件');
       return;
     }
     setUploading(true);
-    setUploadStatus('正在上传资料…');
+    setUploadStatus(`正在上传 ${pendingUploadFiles.length} 个资料，最多同时处理 3 个…`);
     try {
-      const uploaded = await uploadKnowledgeFile(pendingUploadFile, {
+      const options = {
         usageType: uploadPurpose === 'session_attachment' ? 'session_attachment' : 'personal_reference',
         reviewStatus: uploadPurpose === 'submit_review' ? 'pending' : 'draft',
         conversationId: uploadPurpose === 'session_attachment' ? activeSessionUuid : undefined,
         category: uploadPurpose === 'session_attachment' ? '当前附件' : uploadCategory,
         documentType: uploadDocumentType,
-        tags: [],
-      });
-      setPendingUploadFile(null);
+        tags: [] as string[],
+      } as const;
+      const queue = [...pendingUploadFiles];
+      const uploaded: KnowledgeFilePayload[] = [];
+      const failed: Array<{ file: File; error: unknown }> = [];
+      await Promise.all(Array.from({ length: Math.min(3, queue.length) }, async () => {
+        while (queue.length) {
+          const nextFile = queue.shift();
+          if (!nextFile) return;
+          try {
+            uploaded.push(await uploadKnowledgeFile(nextFile, options));
+          } catch (error) {
+            failed.push({ file: nextFile, error });
+          }
+        }
+      }));
+      setPendingUploadFiles(failed.map((item) => item.file));
       if (uploadPurpose === 'submit_review') {
-        setUploadStatus(`资料已提交管理员审核：${uploaded.file_name}`);
+        setUploadStatus(`已提交管理员审核 ${uploaded.length} 个${failed.length ? `，失败 ${failed.length} 个` : ''}。`);
       } else if (uploadPurpose === 'session_attachment') {
         setEnabledReferenceFiles((current) => current
-          .filter((file) => file.fileUuid !== uploaded.file_uuid)
-          .concat({
-            fileUuid: uploaded.file_uuid,
-            fileName: uploaded.file_name,
-            sourceKind: 'session_attachment',
-          }));
+          .filter((file) => !uploaded.some((item) => item.file_uuid === file.fileUuid))
+          .concat(uploaded.map((item) => ({
+            fileUuid: item.file_uuid,
+            fileName: item.file_name,
+            sourceKind: 'session_attachment' as const,
+          }))));
         setMode('knowledge');
         setReferenceScope((current) => (
           current === 'with_personal' || current === 'personal_and_session'
             ? 'personal_and_session'
             : 'with_session'
         ));
-        setUploadStatus('');
+        setUploadStatus(failed.length ? `已上传 ${uploaded.length} 个，失败 ${failed.length} 个。${uploadFailureMessage(failed[0].error)}` : '');
       } else {
-        const readyForReference = isReadyPersonalReference(uploaded);
+        const readyUploads = uploaded.filter(isReadyPersonalReference);
         setPersonalReferenceFiles((current) => (
-          readyForReference
-            ? current.filter((file) => file.file_uuid !== uploaded.file_uuid).concat(uploaded)
+          readyUploads.length
+            ? current.filter((file) => !readyUploads.some((item) => item.file_uuid === file.file_uuid)).concat(readyUploads)
             : current
         ));
-        if (readyForReference) {
+        if (readyUploads.length) {
           setSelectedPersonalReferenceIds((current) => (
-            current.includes(uploaded.file_uuid) ? current : current.concat(uploaded.file_uuid)
+            current.concat(readyUploads.map((item) => item.file_uuid).filter((id) => !current.includes(id)))
           ));
           setMode('knowledge');
           setReferenceScope((current) => (
@@ -1147,9 +1161,9 @@ export function ChatPage() {
               ? 'personal_and_session'
               : 'with_personal'
           ));
-          setUploadStatus(`资料已保存，将自动参与后续检索：${uploaded.file_name}`);
+          setUploadStatus(`已保存 ${uploaded.length} 个资料，将自动参与后续检索${failed.length ? `；失败 ${failed.length} 个` : ''}。`);
         } else {
-          setUploadStatus(`资料已保存到我的资料：${uploaded.file_name}；处理完成后会自动参与检索。`);
+          setUploadStatus(`已保存 ${uploaded.length} 个资料；处理完成后会自动参与检索${failed.length ? `，失败 ${failed.length} 个` : ''}。`);
         }
       }
     } catch (error) {
@@ -1161,15 +1175,12 @@ export function ChatPage() {
 
   const handleComposerPaste = (event: ReactClipboardEvent<HTMLTextAreaElement>) => {
     const pastedFiles = Array.from(event.clipboardData.files || []);
-    const file = pastedFiles[0];
-    if (!file) return;
+    if (!pastedFiles.length) return;
 
     event.preventDefault();
-    setPendingUploadFile(file);
+    setPendingUploadFiles(pastedFiles);
     setUploadPurpose('personal_reference');
-    setUploadStatus(pastedFiles.length > 1
-      ? `已识别 ${pastedFiles.length} 个文件，请先上传 ${file.name}，其余文件可继续粘贴。`
-      : '已从剪贴板识别文件，确认后即可上传。');
+    setUploadStatus(`已从剪贴板识别 ${pastedFiles.length} 个文件，确认后可同时上传。`);
   };
 
   const loadPersonalReferenceFiles = async () => {
@@ -2009,7 +2020,7 @@ export function ChatPage() {
     setMessages([]);
     setSourcePreview({ status: 'idle' });
     setWebCapture({ status: 'idle' });
-    setPendingUploadFile(null);
+    setPendingUploadFiles([]);
     setEnabledReferenceFiles([]);
     setTaskProgress(null);
     setStatus('');
@@ -2678,9 +2689,12 @@ export function ChatPage() {
             {sourcePreview.status !== 'idle' ? (
               <aside aria-label="来源预览" className="chat-source-preview" role="region">
                 <div className="chat-source-preview-header">
-                  <strong>来源预览</strong>
-                  <button onClick={() => setSourcePreview({ status: 'idle' })} type="button">
-                    关闭
+                  <div>
+                    <span className="chat-source-preview-icon" aria-hidden="true">⌘</span>
+                    <div><strong>来源预览</strong><small>查看本次回答引用的原始资料片段</small></div>
+                  </div>
+                  <button aria-label="关闭来源预览" onClick={() => setSourcePreview({ status: 'idle' })} type="button">
+                    ×
                   </button>
                 </div>
                 {sourcePreview.status === 'loading' ? (
@@ -2691,8 +2705,11 @@ export function ChatPage() {
                 ) : null}
                 {sourcePreview.status === 'ready' ? (
                   <div className="chat-source-preview-body">
-                    <h3>{sourcePreview.preview.file_name}</h3>
-                    <p>{sourcePreview.preview.notice}</p>
+                    <div className="chat-source-preview-document">
+                      <span>来源文件</span>
+                      <h3>{sourcePreview.preview.file_name}</h3>
+                      <p>{sourcePreview.preview.notice}</p>
+                    </div>
                     {sourcePreview.preview.chunks.map((chunk) => (
                       <article key={chunk.chunk_id} className="chat-source-preview-chunk">
                         <strong>
@@ -2780,10 +2797,11 @@ export function ChatPage() {
                   <input
                     aria-label="上传资料"
                     accept={supportedKnowledgeAccept}
+                    multiple
                     onChange={(event) => {
-                      const file = event.target.files?.[0];
-                      if (!file) return;
-                      setPendingUploadFile(file);
+                      const selectedFiles = Array.from(event.target.files || []);
+                      if (!selectedFiles.length) return;
+                      setPendingUploadFiles(selectedFiles);
                       setUploadPurpose('personal_reference');
                       setUploadStatus('');
                       event.target.value = '';
@@ -2871,12 +2889,14 @@ export function ChatPage() {
               </section>
             </div>
           ) : null}
-          {pendingUploadFile ? (
+          {pendingUploadFiles.length ? (
             <div aria-label="上传资料" className="chat-upload-dialog" role="dialog">
               <div className="chat-upload-dialog-card">
                 <strong>上传资料</strong>
-                <p>文件：{pendingUploadFile.name}</p>
-                <p role="note">{uploadFileHint(pendingUploadFile)}</p>
+                <p>已选择 {pendingUploadFiles.length} 个文件：</p>
+                {pendingUploadFiles.map((file) => (
+                  <p key={`${file.name}-${file.size}-${file.lastModified}`} role="note">{file.name}：{uploadFileHint(file)}</p>
+                ))}
                 <p>
                   你上传的个人资料仅供你本人使用，不会进入公司知识库。
                   提交管理员审核通过后，才可能成为正式知识来源。
@@ -2948,11 +2968,13 @@ export function ChatPage() {
                   <p className="chat-upload-dialog-status" role="status">{uploadStatus}</p>
                 ) : null}
                 <div className="chat-message-actions">
-                  <button disabled={uploading} onClick={() => setPendingUploadFile(null)} type="button">
+                  <button disabled={uploading} onClick={() => setPendingUploadFiles([])} type="button">
                     取消
                   </button>
                   <button disabled={uploading} onClick={() => void uploadKnowledge()} type="button">
-                    {uploading ? '上传中…' : '开始上传'}
+                    {uploading ? (
+                      <><span aria-hidden="true" className="upload-parsing-spinner" />正在解析中</>
+                    ) : `开始上传（${pendingUploadFiles.length}）`}
                   </button>
                 </div>
               </div>

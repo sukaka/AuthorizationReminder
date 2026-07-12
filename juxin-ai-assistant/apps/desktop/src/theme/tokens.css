@@ -834,6 +834,38 @@ textarea:focus-visible {
   gap: 12px;
 }
 
+.learning-section-stack {
+  display: grid;
+  gap: 18px;
+}
+
+.learning-section-heading {
+  padding: 14px 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  border-left: 4px solid var(--accent);
+  border-radius: 0 14px 14px 0;
+  background: color-mix(in srgb, var(--accent) 7%, var(--surface));
+}
+
+.learning-section-heading > div {
+  display: grid;
+  gap: 2px;
+}
+
+.learning-section-heading span,
+.learning-section-heading small {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.learning-section-heading h2 {
+  margin: 0;
+  font-size: 17px;
+}
+
 .learning-card {
   padding: 18px;
   display: grid;
@@ -1177,6 +1209,16 @@ textarea:focus-visible {
   background: var(--surface);
 }
 
+.knowledge-upload-file-summary.is-duplicate {
+  border-color: rgb(217 119 6 / 34%);
+  background: color-mix(in srgb, #f59e0b 7%, var(--surface));
+}
+
+.knowledge-upload-file-summary.is-duplicate div span {
+  color: #b45309;
+  font-weight: 700;
+}
+
 .knowledge-upload-file-summary > div {
   min-width: 0;
   display: grid;
@@ -1336,6 +1378,26 @@ textarea:focus-visible {
   gap: 10px;
 }
 
+.upload-parsing-spinner {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  margin-right: 7px;
+  vertical-align: -2px;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: upload-parsing-spin 0.75s linear infinite;
+}
+
+@keyframes upload-parsing-spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .upload-parsing-spinner { animation-duration: 1.5s; }
+}
+
 .knowledge-search-form {
   padding: 18px;
   display: grid;
@@ -1464,6 +1526,43 @@ textarea:focus-visible {
 .knowledge-category-list {
   display: grid;
   gap: 6px;
+}
+
+.knowledge-category-group {
+  display: grid;
+  gap: 3px;
+}
+
+.knowledge-category-children {
+  margin: 0 0 3px 14px;
+  padding-left: 9px;
+  display: grid;
+  gap: 2px;
+  border-left: 1px solid rgb(47 111 237 / 18%);
+}
+
+.knowledge-category-list .knowledge-category-children button {
+  min-height: 32px;
+  padding-left: 10px;
+  border-radius: 9px;
+  font-size: 12px;
+}
+
+.knowledge-category-list .knowledge-category-children button::before {
+  width: 5px;
+  height: 5px;
+  flex: 0 0 5px;
+  border-radius: 999px;
+  background: rgb(100 116 139 / 38%);
+  content: '';
+}
+
+.knowledge-category-list .knowledge-category-children button > span {
+  margin-right: auto;
+}
+
+.knowledge-category-list .knowledge-category-children button.is-secondary-active::before {
+  background: var(--accent);
 }
 
 .knowledge-category-list button {
@@ -3021,6 +3120,373 @@ textarea:focus-visible {
   font-weight: 600;
 }
 
+/* Focused UI refresh: capability cards, knowledge search, model settings and source preview. */
+.skills-center {
+  padding: 6px 2px 28px;
+}
+
+.skills-center > .section-heading {
+  max-width: 760px;
+}
+
+.skills-center > [role="status"] {
+  margin: 14px 0 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.skills-center .task-card-list {
+  gap: 18px;
+}
+
+.skill-card {
+  min-height: 390px;
+  padding: 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  border-radius: 18px !important;
+  background: linear-gradient(155deg, var(--surface-elevated) 0%, var(--surface) 100%) !important;
+  box-shadow: 0 12px 34px rgb(15 23 42 / 6%);
+  overflow: hidden;
+}
+
+.skill-card::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto;
+  height: 3px;
+  background: linear-gradient(90deg, var(--accent), color-mix(in srgb, var(--accent) 22%, transparent));
+}
+
+.skill-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.skill-card-icon {
+  width: 44px;
+  height: 44px;
+  display: grid;
+  place-items: center;
+  border-radius: 13px;
+  color: var(--accent);
+  background: var(--accent-soft);
+  font-size: 21px;
+  font-weight: 900;
+}
+
+.skill-card-copy {
+  min-height: 116px;
+}
+
+.skill-card h2 {
+  margin: 0 0 12px;
+  font-size: clamp(20px, 1.8vw, 27px);
+  line-height: 1.25;
+  letter-spacing: -.025em;
+}
+
+.skill-card-copy p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 14px;
+  line-height: 1.75;
+}
+
+.skill-card-meta {
+  margin: 0;
+  display: grid;
+  gap: 10px;
+}
+
+.skill-card-meta > div {
+  padding: 11px 12px;
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr);
+  gap: 10px;
+  border: 1px solid var(--border);
+  border-radius: 11px;
+  background: color-mix(in srgb, var(--background) 65%, transparent);
+}
+
+.skill-card-meta dt {
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.skill-card-meta dd {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.skill-card .history-actions {
+  margin-top: auto;
+}
+
+.skill-card .primary-action {
+  min-height: 42px;
+  padding-inline: 18px;
+  display: inline-flex;
+  align-items: center;
+  gap: 14px;
+  border-radius: 11px;
+}
+
+.knowledge-search-card {
+  padding: 24px;
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  background: var(--surface-elevated);
+  box-shadow: 0 14px 40px rgb(15 23 42 / 5%);
+}
+
+.knowledge-search-card .section-heading {
+  margin-bottom: 20px;
+}
+
+.knowledge-search-form {
+  padding: 14px;
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--background) 78%, transparent);
+  box-shadow: none;
+}
+
+.knowledge-segmented-control {
+  border-radius: 13px;
+}
+
+.knowledge-segmented-control label {
+  flex: 1;
+  border-radius: 9px;
+}
+
+.knowledge-segmented-control label.is-selected {
+  box-shadow: 0 4px 14px rgb(15 23 42 / 8%);
+}
+
+.knowledge-search-input input {
+  min-height: 48px;
+  padding-inline: 15px;
+}
+
+.knowledge-search-form .history-actions button {
+  min-width: 126px;
+  min-height: 48px;
+  border-radius: 12px;
+}
+
+.models-page > header {
+  max-width: 760px;
+}
+
+.models-grid {
+  gap: 22px;
+  align-items: start;
+}
+
+.model-status-panel,
+.model-config-form {
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  background: var(--surface-elevated);
+  box-shadow: 0 14px 40px rgb(15 23 42 / 6%);
+}
+
+.model-status-panel {
+  padding: 10px 22px;
+}
+
+.model-status-card {
+  padding: 22px 4px !important;
+}
+
+.model-status-card > div:first-child strong {
+  font-size: 17px;
+}
+
+.model-status-list {
+  grid-column: 1 / -1;
+  margin: 8px 0 0;
+  padding: 16px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  border-radius: 13px;
+  background: var(--background);
+}
+
+.model-status-list div {
+  display: grid;
+  gap: 4px;
+}
+
+.model-status-list dt {
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.model-status-list dd {
+  margin: 0;
+  font-weight: 750;
+}
+
+.model-config-form {
+  padding: 24px !important;
+  gap: 16px !important;
+}
+
+.model-config-form label {
+  gap: 8px !important;
+  font-size: 13px !important;
+}
+
+.model-config-form input {
+  min-height: 46px;
+  padding: 0 13px;
+  border-radius: 11px;
+  background: var(--surface);
+}
+
+.model-config-form .primary-action {
+  min-height: 48px;
+  margin-top: 6px;
+  border-radius: 11px;
+}
+
+.chat-source-preview {
+  margin: 20px 0 4px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  background: var(--surface-elevated);
+  box-shadow: 0 18px 50px rgb(15 23 42 / 10%);
+}
+
+.chat-source-preview-header {
+  min-height: 68px;
+  padding: 12px 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in srgb, var(--background) 76%, transparent);
+}
+
+.chat-source-preview-header > div {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.chat-source-preview-header > div > div {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.chat-source-preview-header small {
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.chat-source-preview-icon {
+  width: 38px;
+  height: 38px;
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  border-radius: 11px;
+  color: var(--accent);
+  background: var(--accent-soft);
+  font-weight: 900;
+}
+
+.chat-source-preview-header button {
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  color: var(--text-secondary);
+  background: var(--surface);
+  font-size: 20px;
+  cursor: pointer;
+}
+
+.chat-source-preview-body {
+  max-height: min(56vh, 620px);
+  padding: 18px;
+  overflow: auto;
+}
+
+.chat-source-preview-document {
+  margin-bottom: 14px;
+  padding: 15px 16px;
+  border: 1px solid var(--border);
+  border-radius: 13px;
+  background: var(--background);
+}
+
+.chat-source-preview-document > span {
+  color: var(--accent);
+  font-size: 10px;
+  font-weight: 850;
+  letter-spacing: .08em;
+}
+
+.chat-source-preview-document h3 {
+  margin: 5px 0 4px;
+  font-size: 16px;
+  overflow-wrap: anywhere;
+}
+
+.chat-source-preview-document p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.chat-source-preview-chunk {
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 13px;
+  background: var(--surface);
+}
+
+.chat-source-preview-chunk + .chat-source-preview-chunk {
+  margin-top: 12px;
+}
+
+.chat-source-preview-chunk strong {
+  color: var(--accent);
+  font-size: 12px;
+}
+
+.chat-source-preview-chunk p {
+  margin: 8px 0 0;
+  color: var(--text-primary);
+  font-size: 13px;
+  line-height: 1.8;
+  white-space: pre-wrap;
+}
+
+@media (max-width: 900px) {
+  .skills-center .task-card-list,
+  .models-grid { grid-template-columns: 1fr; }
+  .skill-card { min-height: auto; }
+  .knowledge-search-form { grid-template-columns: 1fr; }
+  .knowledge-search-form .history-actions button { width: 100%; }
+}
+
 .task-card-list {
   margin-top: 16px;
   display: grid;
@@ -3706,12 +4172,12 @@ textarea:focus-visible {
   display: flex;
   align-items: center;
   flex-wrap: nowrap;
-  gap: 8px;
-  width: 100%;
+  gap: 6px;
+  width: fit-content;
   max-width: 100%;
   overflow-x: auto;
   scrollbar-width: none;
-  padding: 4px 5px 4px 12px;
+  padding: 4px 6px;
   border: 1px solid var(--border);
   border-radius: 999px;
   background: var(--surface-solid);

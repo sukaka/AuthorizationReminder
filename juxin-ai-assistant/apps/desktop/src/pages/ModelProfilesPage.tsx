@@ -99,8 +99,8 @@ export function ModelProfilesPage() {
           <p>Web 版可以配置你自己的大模型；API Key 会加密保存在服务器，不会保存在浏览器。</p>
         </header>
         <div className="models-grid">
-          <div className="models-list">
-            <article>
+          <div className="models-list model-status-panel">
+            <article className="model-status-card">
               <div>
                 <strong>服务端统一模型</strong>
                 <small>{serverStatus?.message || '正在读取服务端模型状态…'}</small>
@@ -123,7 +123,7 @@ export function ModelProfilesPage() {
                 <p>请管理员在服务器环境变量中配置服务地址、模型名称和 API Key。</p>
               )}
             </article>
-            <article>
+            <article className="model-status-card">
               <div>
                 <strong>个人模型</strong>
                 <small>未配置个人模型时，会自动使用服务端统一模型。</small>
@@ -133,7 +133,7 @@ export function ModelProfilesPage() {
               </span>
             </article>
             {webProfiles.map((profile) => (
-              <article key={profile.uuid}>
+              <article className="model-status-card" key={profile.uuid}>
                 <div>
                   <strong>{profile.display_name}</strong>
                   <small>{profile.model_id}</small>
@@ -168,7 +168,7 @@ export function ModelProfilesPage() {
               </article>
             ))}
           </div>
-          <form onSubmit={(event) => event.preventDefault()}>
+          <form className="model-config-form" onSubmit={(event) => event.preventDefault()}>
             <label>名称<input value={webDraft.displayName} onChange={(event) => setWebDraft({ ...webDraft, displayName: event.target.value })} /></label>
             <label>服务地址<input value={webDraft.baseUrl} onChange={(event) => setWebDraft({ ...webDraft, baseUrl: event.target.value })} /></label>
             <label>模型名称<input value={webDraft.modelId} onChange={(event) => setWebDraft({ ...webDraft, modelId: event.target.value })} /></label>
