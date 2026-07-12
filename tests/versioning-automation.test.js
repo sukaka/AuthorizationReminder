@@ -30,6 +30,7 @@ const {
 } = require('../scripts/versioning/systems');
 
 const repositoryRoot = path.join(__dirname, '..');
+const versioningDocs = fs.readFileSync(path.join(repositoryRoot, 'docs/versioning.md'), 'utf8');
 
 const writeJson = (filePath, value) => {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
@@ -73,9 +74,6 @@ const makeIndependentVersionFixture = () => {
   for (const system of SYSTEMS) {
     for (const packageDir of system.packageDirs) {
       writeJson(path.join(rootDir, packageDir, 'package-lock.json'), makePackageLock('1.0.0'));
-    }
-    for (const textFile of system.textFiles) {
-      writeText(path.join(rootDir, textFile), 'const RELEASE_VERSION = "1.0.0";\n');
     }
     for (const jsonFile of system.jsonFiles || []) {
       writeJson(path.join(rootDir, jsonFile), { name: system.id, version: '1.0.0' });
@@ -138,7 +136,7 @@ test('system registry defines every approved independent system', () => {
       'train-exam',
     ]
   );
-  assert.deepEqual(SYSTEM_BY_ID.get('auth').textFiles, []);
+  assert.equal(SYSTEMS.every((system) => !Object.hasOwn(system, 'textFiles')), true);
   assert.deepEqual(SYSTEM_BY_ID.get('reminder').paths, ['server', 'web']);
   assert.deepEqual(SYSTEM_BY_ID.get('reminder').packageDirs, ['web']);
 });
@@ -349,6 +347,12 @@ test('resolveAffectedSystems rejects repo scope for shared paths', () => {
     }),
     /scope repo.*共享文件/
   );
+});
+
+test('versioning docs describe the same shared and repo scope behavior as the resolver', () => {
+  assert.match(versioningDocs, /共享文件必须使用具体系统 scope 或 `all`/);
+  assert.match(versioningDocs, /`repo` 仅用于仓库自身且不属于共享路径的变更/);
+  assert.doesNotMatch(versioningDocs, /共享文件[^\n]*scope、`all` 或 `repo`/);
 });
 
 test('resolveAffectedSystems rejects unknown and mismatched system scopes', () => {

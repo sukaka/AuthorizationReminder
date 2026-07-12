@@ -24,8 +24,6 @@ const writeText = (filePath, value) => {
   fs.writeFileSync(filePath, value);
 };
 
-const escapeRegExp = (value) => String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-
 const getCommitSummary = (message) => String(message || '').replace(/\r\n/g, '\n').split('\n')[0].trim();
 
 const stripVersionPrefix = (summary) => String(summary || '').replace(ANY_VERSION_PREFIX_RE, '').trim();
@@ -159,12 +157,13 @@ const updateJsonVersionFile = ({ filePath, currentVersion, nextVersion, force = 
   return true;
 };
 
-const updateTextVersionFile = ({ filePath, currentVersion, nextVersion }) => {
-  if (!fs.existsSync(filePath)) return false;
+const updateVersionSourceFile = ({ filePath, currentVersion, nextVersion }) => {
   const original = readText(filePath);
-  const updated = original.replace(new RegExp(escapeRegExp(currentVersion), 'g'), nextVersion);
-  if (updated === original) return false;
-  writeText(filePath, updated);
+  if (original !== `${currentVersion}\n`) {
+    throw new Error(`版本源内容与当前版本不一致：${filePath}`);
+  }
+  if (currentVersion === nextVersion) return false;
+  writeText(filePath, `${nextVersion}\n`);
   return true;
 };
 
@@ -235,15 +234,6 @@ const findSystemVersionDrift = (rootDir, system) => {
     const match = source.match(/^version\s*=\s*"(\d+\.\d+\.\d+)"/m);
     record(relativePath, 'package.version', match ? match[1] : '<missing>');
   }
-  for (const relativePath of canonicalSystem.textFiles || []) {
-    const filePath = path.join(resolvedRoot, relativePath);
-    const source = fs.existsSync(filePath) ? readText(filePath) : '';
-    const versions = Array.from(new Set(source.match(/\b\d+\.\d+\.\d+\b/g) || []));
-    if (!versions.includes(expected)) {
-      record(relativePath, 'text version', versions.join(', ') || '<missing>');
-    }
-  }
-
   return drift;
 };
 
@@ -278,7 +268,7 @@ const syncSystemVersion = ({ rootDir, system, currentVersion, nextVersion }) => 
     }
   };
 
-  updateDeclaredFile(canonicalSystem.versionFile, (options) => updateTextVersionFile({
+  updateDeclaredFile(canonicalSystem.versionFile, (options) => updateVersionSourceFile({
     ...options,
     currentVersion: normalizedCurrentVersion,
     nextVersion: normalizedNextVersion,
@@ -313,14 +303,6 @@ const syncSystemVersion = ({ rootDir, system, currentVersion, nextVersion }) => 
       nextVersion: normalizedNextVersion,
     }));
   }
-  for (const relativePath of canonicalSystem.textFiles || []) {
-    updateDeclaredFile(relativePath, (options) => updateTextVersionFile({
-      ...options,
-      currentVersion: normalizedCurrentVersion,
-      nextVersion: normalizedNextVersion,
-    }));
-  }
-
   return Array.from(changedFiles).sort();
 };
 

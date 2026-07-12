@@ -15,7 +15,7 @@
 - Different business systems never bump because an unrelated system changed.
 - `major` changes increment the first segment; `feat/minor/perf` increment the second; fixes and maintenance increment the third.
 - Multi-system commits bump every affected system using the same bump type.
-- Shared files require a system scope, `all`, or `repo`; scope/path mismatches fail.
+- Shared files require a concrete system scope or `all`; `repo` is only for repository-only non-shared changes, and scope/path mismatches fail.
 - Automatic amend and current-branch push remain enabled.
 - Version changes never switch the repository to `codex/<version>` branches.
 - Historical tags, branches, release documents, and unrelated untracked files remain untouched.
@@ -102,7 +102,8 @@ const SYSTEMS = Object.freeze([
     versionFile: 'auth/VERSION',
     paths: ['auth'],
     packageDirs: ['auth'],
-    textFiles: ['auth/index.js'],
+    jsonFiles: [],
+    tomlFiles: [],
   },
   {
     id: 'inventory',
@@ -114,7 +115,8 @@ const SYSTEMS = Object.freeze([
       'inventory-system/frontend',
       'inventory-system/shipping-gateway',
     ],
-    textFiles: [],
+    jsonFiles: [],
+    tomlFiles: [],
   },
 ]);
 
@@ -514,4 +516,3 @@ git log -5 --oneline --decorate
 ```
 
 Expected: current branch is pushed, no version-derived branch is created, and only pre-existing unrelated untracked files remain.
-

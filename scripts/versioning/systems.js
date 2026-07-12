@@ -7,7 +7,6 @@ const freezeSystem = (system) => Object.freeze({
   ...system,
   paths: Object.freeze(system.paths),
   packageDirs: Object.freeze(system.packageDirs),
-  textFiles: Object.freeze(system.textFiles),
   jsonFiles: Object.freeze(system.jsonFiles || []),
   tomlFiles: Object.freeze(system.tomlFiles || []),
 });
@@ -19,7 +18,6 @@ const SYSTEMS = Object.freeze([
     versionFile: 'juxin-ai-assistant/VERSION',
     paths: ['juxin-ai-assistant'],
     packageDirs: ['juxin-ai-assistant/apps/desktop'],
-    textFiles: [],
     jsonFiles: ['juxin-ai-assistant/apps/desktop/src-tauri/tauri.conf.json'],
     tomlFiles: ['juxin-ai-assistant/apps/desktop/src-tauri/Cargo.toml'],
   }),
@@ -29,7 +27,6 @@ const SYSTEMS = Object.freeze([
     versionFile: 'auth/VERSION',
     paths: ['auth'],
     packageDirs: ['auth'],
-    textFiles: [],
   }),
   freezeSystem({
     id: 'big-screen',
@@ -37,7 +34,6 @@ const SYSTEMS = Object.freeze([
     versionFile: 'big-screen-center/VERSION',
     paths: ['big-screen-center'],
     packageDirs: ['big-screen-center/backend', 'big-screen-center/frontend'],
-    textFiles: [],
   }),
   freezeSystem({
     id: 'cmdb',
@@ -45,7 +41,6 @@ const SYSTEMS = Object.freeze([
     versionFile: 'cmdb/VERSION',
     paths: ['cmdb'],
     packageDirs: ['cmdb/web'],
-    textFiles: [],
   }),
   freezeSystem({
     id: 'delivery',
@@ -53,7 +48,6 @@ const SYSTEMS = Object.freeze([
     versionFile: 'delivery/VERSION',
     paths: ['delivery'],
     packageDirs: ['delivery/backend', 'delivery/frontend'],
-    textFiles: [],
   }),
   freezeSystem({
     id: 'device-flow',
@@ -61,7 +55,6 @@ const SYSTEMS = Object.freeze([
     versionFile: 'device-flow/VERSION',
     paths: ['device-flow'],
     packageDirs: ['device-flow/backend', 'device-flow/frontend'],
-    textFiles: [],
   }),
   freezeSystem({
     id: 'faq',
@@ -69,7 +62,6 @@ const SYSTEMS = Object.freeze([
     versionFile: 'faq/VERSION',
     paths: ['faq'],
     packageDirs: ['faq/backend', 'faq/frontend'],
-    textFiles: [],
   }),
   freezeSystem({
     id: 'inventory',
@@ -81,7 +73,6 @@ const SYSTEMS = Object.freeze([
       'inventory-system/frontend',
       'inventory-system/shipping-gateway',
     ],
-    textFiles: [],
   }),
   freezeSystem({
     id: 'prompt-center',
@@ -89,7 +80,6 @@ const SYSTEMS = Object.freeze([
     versionFile: 'prompt-center/VERSION',
     paths: ['prompt-center'],
     packageDirs: ['prompt-center/backend', 'prompt-center/frontend'],
-    textFiles: [],
   }),
   freezeSystem({
     id: 'reminder',
@@ -97,7 +87,6 @@ const SYSTEMS = Object.freeze([
     versionFile: 'server/VERSION',
     paths: ['server', 'web'],
     packageDirs: ['web'],
-    textFiles: [],
   }),
   freezeSystem({
     id: 'sca',
@@ -105,7 +94,6 @@ const SYSTEMS = Object.freeze([
     versionFile: 'sca-platform/VERSION',
     paths: ['sca-platform'],
     packageDirs: ['sca-platform/frontend'],
-    textFiles: [],
   }),
   freezeSystem({
     id: 'sec-impl',
@@ -113,7 +101,6 @@ const SYSTEMS = Object.freeze([
     versionFile: 'sec-impl/VERSION',
     paths: ['sec-impl'],
     packageDirs: ['sec-impl/backend', 'sec-impl/frontend'],
-    textFiles: [],
   }),
   freezeSystem({
     id: 'tender',
@@ -121,7 +108,6 @@ const SYSTEMS = Object.freeze([
     versionFile: 'tender/VERSION',
     paths: ['tender'],
     packageDirs: ['tender/backend', 'tender/frontend'],
-    textFiles: [],
   }),
   freezeSystem({
     id: 'ticketing',
@@ -129,7 +115,6 @@ const SYSTEMS = Object.freeze([
     versionFile: 'ticketing/VERSION',
     paths: ['ticketing'],
     packageDirs: ['ticketing', 'ticketing/web'],
-    textFiles: [],
   }),
   freezeSystem({
     id: 'train-exam',
@@ -137,7 +122,6 @@ const SYSTEMS = Object.freeze([
     versionFile: 'train-exam/VERSION',
     paths: ['train-exam'],
     packageDirs: ['train-exam/backend', 'train-exam/frontend'],
-    textFiles: [],
   }),
 ]);
 
@@ -248,7 +232,6 @@ const validateSystemRegistry = (rootDir) => {
       }
     }
 
-    validateDeclaredFiles(system, 'textFiles', '文本版本文件');
     validateDeclaredFiles(system, 'jsonFiles', 'JSON 版本文件');
     validateDeclaredFiles(system, 'tomlFiles', 'TOML 版本文件');
   }

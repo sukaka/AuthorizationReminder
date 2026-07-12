@@ -26,7 +26,7 @@
 | `big-screen` | 统一大屏展示中心 | `big-screen-center/` | `big-screen-center/VERSION` |
 | `ai-assistant` | 聚信 AI 助手 | `juxin-ai-assistant/` | `juxin-ai-assistant/VERSION` |
 
-新增系统时，必须同时注册系统 ID、归属路径、`VERSION` 文件和需要同步的 package/lock/JSON/TOML/文本运行时文件。
+新增系统时，必须同时注册系统 ID、归属路径、`VERSION` 文件和需要同步的 package/lock、JSON、TOML 结构化版本文件。
 
 ## 2. 语义版本规则
 
@@ -50,8 +50,8 @@
 - 业务目录按注册表路径自动归属系统。
 - 单系统提交可使用对应 scope，例如 `fix(auth): 修复登录超时`。
 - 一次提交修改多个系统目录时，不写单系统 scope；自动化按路径识别全部系统。
-- 根 `docker-compose*.yml`、统一部署脚本、README 和跨系统基础设施属于共享文件，必须显式使用目标系统 scope、`all` 或 `repo`。
-- `all` 表示确实影响全部系统；`repo` 仅用于版本工具或不影响业务系统的独立仓库文档。
+- 根 `docker-compose*.yml`、统一部署脚本、README 和跨系统基础设施属于共享文件。共享文件必须使用具体系统 scope 或 `all`，不能使用 `repo`。
+- `all` 表示确实影响全部系统；`repo` 仅用于仓库自身且不属于共享路径的变更，例如版本工具或独立仓库文档。
 - scope 与实际业务路径冲突、未知 scope、缺失/非法 `VERSION` 或注册路径重叠都会阻止提交。
 
 示例：
@@ -74,7 +74,7 @@ npm run hooks:install
 
 1. `commit-msg` 校验提交类型、scope 和路径归属，并清理手写的旧版本前缀。
 2. `post-commit` 根据本次提交路径计算受影响系统及升级级别。
-3. 自动同步注册表声明的 `VERSION`、package、lock、JSON、TOML 和文本运行时版本。
+3. 自动同步注册表声明的 `VERSION`、package/lock、JSON 和 TOML 结构化版本字段。
 4. 使用 `git commit --amend` 把版本文件和系统版本前缀并入原提交。
 5. 推送当前分支；没有 upstream 时为当前分支建立 upstream。
 
