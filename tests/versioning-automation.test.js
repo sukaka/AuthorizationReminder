@@ -122,6 +122,7 @@ test('system registry defines every approved independent system', () => {
       'train-exam',
     ]
   );
+  assert.deepEqual(SYSTEM_BY_ID.get('auth').textFiles, []);
 });
 
 test('validateRegistryEntries rejects overlapping owned paths', () => {

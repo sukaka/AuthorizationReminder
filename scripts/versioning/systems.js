@@ -29,7 +29,7 @@ const SYSTEMS = Object.freeze([
     versionFile: 'auth/VERSION',
     paths: ['auth'],
     packageDirs: ['auth'],
-    textFiles: ['auth/index.js'],
+    textFiles: [],
   }),
   freezeSystem({
     id: 'big-screen',
