@@ -888,7 +888,7 @@ services:
     environment:
       APP_NAME: "聚信软件成分分析平台"
       APP_ENV: dev
-      APP_VERSION: ${SCA_APP_VERSION:-5.66.0}
+      APP_VERSION: ${SCA_APP_VERSION:-1.0.0}
       DATABASE_URL: "postgresql+psycopg://sca_user:${SCA_POSTGRES_PASSWORD:-change_me_sca_postgres_password}@sca-postgres:5432/juxin_sca"
       REDIS_URL: "redis://sca-redis:6379/0"
       CELERY_BROKER_URL: "redis://sca-redis:6379/1"
@@ -955,7 +955,7 @@ services:
     environment:
       APP_NAME: "聚信软件成分分析平台"
       APP_ENV: dev
-      APP_VERSION: ${SCA_APP_VERSION:-5.66.0}
+      APP_VERSION: ${SCA_APP_VERSION:-1.0.0}
       DATABASE_URL: "postgresql+psycopg://sca_user:${SCA_POSTGRES_PASSWORD:-change_me_sca_postgres_password}@sca-postgres:5432/juxin_sca"
       REDIS_URL: "redis://sca-redis:6379/0"
       CELERY_BROKER_URL: "redis://sca-redis:6379/1"
@@ -1016,7 +1016,7 @@ services:
     environment:
       APP_NAME: "聚信软件成分分析平台"
       APP_ENV: dev
-      APP_VERSION: ${SCA_APP_VERSION:-5.66.0}
+      APP_VERSION: ${SCA_APP_VERSION:-1.0.0}
       DATABASE_URL: "postgresql+psycopg://sca_user:${SCA_POSTGRES_PASSWORD:-change_me_sca_postgres_password}@sca-postgres:5432/juxin_sca"
       REDIS_URL: "redis://sca-redis:6379/0"
       CELERY_BROKER_URL: "redis://sca-redis:6379/1"
@@ -1086,7 +1086,7 @@ services:
     environment:
       APP_NAME: "聚信软件成分分析平台"
       APP_ENV: dev
-      APP_VERSION: ${SCA_APP_VERSION:-5.66.0}
+      APP_VERSION: ${SCA_APP_VERSION:-1.0.0}
       DATABASE_URL: "postgresql+psycopg://sca_user:${SCA_POSTGRES_PASSWORD:-change_me_sca_postgres_password}@sca-postgres:5432/juxin_sca"
       REDIS_URL: "redis://sca-redis:6379/0"
       CELERY_BROKER_URL: "redis://sca-redis:6379/1"

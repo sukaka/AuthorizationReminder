@@ -91,8 +91,9 @@ cp .env.example .env
 
 ### 2.2.1 新服务器首启（一键）
 ```bash
-git clone -b codex/5.8.3 https://github.com/sukaka/AuthorizationReminder.git /root/AuthorizationReminder-codex-5.8.3
-cd /root/AuthorizationReminder-codex-5.8.3
+export BOOTSTRAP_BRANCH="${BOOTSTRAP_BRANCH:-main}"
+git clone -b "$BOOTSTRAP_BRANCH" https://github.com/sukaka/AuthorizationReminder.git /root/AuthorizationReminder
+cd /root/AuthorizationReminder
 # 在阿里云容器镜像服务控制台复制真实的 https://...mirror.aliyuncs.com 地址
 export ALIYUN_MIRROR_URL='<阿里云镜像加速器真实 HTTPS 地址>'
 export AUTH_BUILTIN_ACCOUNT_DEFAULT_PASSWORD='改成你要登录的默认密码'
@@ -100,7 +101,7 @@ export PUBLIC_HOST='服务器公网IP或域名，不带协议和端口'
 ./scripts/deploy/bootstrap-full-server.sh
 ```
 
-> 说明：`bootstrap-full-server.sh` 默认把仓库同步到 `/root/AuthorizationReminder-codex-5.8.3`，并使用分支 `codex/5.8.3`。如需覆盖，可设置 `BOOTSTRAP_REPO_DIR`、`BOOTSTRAP_BRANCH`、`BOOTSTRAP_REPO_URL`。`ALIYUN_MIRROR_URL`、`AUTH_BUILTIN_ACCOUNT_DEFAULT_PASSWORD`、`PUBLIC_HOST` 为必填项。`ALIYUN_MIRROR_URL` 必须是阿里云控制台给出的真实 HTTP(S) 镜像加速地址，不能保留示例占位符。`PUBLIC_HOST` 只写主机名/IP，不要带 `http://` 或端口。
+> 说明：部署分支不再由产品版本号决定。示例使用稳定分支 `main`；需要部署其他已审核分支时，在克隆和执行脚本前设置同一个 `BOOTSTRAP_BRANCH`。也可通过 `BOOTSTRAP_REPO_DIR`、`BOOTSTRAP_REPO_URL` 覆盖目录和仓库地址。`ALIYUN_MIRROR_URL`、`AUTH_BUILTIN_ACCOUNT_DEFAULT_PASSWORD`、`PUBLIC_HOST` 为必填项。`ALIYUN_MIRROR_URL` 必须是阿里云控制台给出的真实 HTTP(S) 镜像加速地址，不能保留示例占位符。`PUBLIC_HOST` 只写主机名/IP，不要带 `http://` 或端口。
 >
 > 如果服务器当前只提供 `HTTP`，根 `.env` 里要保持 `AUTH_COOKIE_SECURE=false` 与 `AUTH_SECURITY_STRICT_MODE=false`，否则 `auth` 会因为安全启动校验直接退出。只有在你已经提供 `HTTPS` 入口时，才把这两个值一起改成 `true`。
 
@@ -418,7 +419,9 @@ npm run test:rbac
 
 ## 10. 发布与变更文档
 
-- `/Users/zhanglei/Documents/codex-new/docs/versioning.md`
+- 仓库中的 15 个业务系统独立维护版本，不再存在单一全局产品版本；根 `package.json` 的 `1.0.0` 仅代表版本工具包。
+- 系统版本、提交 scope、自动 amend/push 和系统标签规则见 `docs/versioning.md`。
+- 部署分支使用稳定分支或显式 `BOOTSTRAP_BRANCH`，不会因任一系统升版自动切换分支。
 - `/Users/zhanglei/Documents/codex-new/docs/releases/2.0.1.md`
 - `/Users/zhanglei/Documents/codex-new/docs/releases/2.0.1-rc1-regression-checklist.md`
 - `/Users/zhanglei/Documents/codex-new/docs/releases/2.1.0-rc1.md`

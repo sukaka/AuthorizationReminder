@@ -113,6 +113,7 @@ export const writeAtomically = async (
 
 export const syncAgentVersion = async ({ desktopDir, bumpType, setVersion }) => {
   const relativePaths = [
+    "../../VERSION",
     "package.json",
     "package-lock.json",
     "src-tauri/Cargo.toml",
@@ -122,16 +123,19 @@ export const syncAgentVersion = async ({ desktopDir, bumpType, setVersion }) => 
   const filePaths = relativePaths.map((relativePath) => path.join(desktopDir, relativePath));
   const originals = await Promise.all(filePaths.map((filePath) => readFile(filePath, "utf8")));
 
-  const packageJson = parseJson(originals[0], relativePaths[0]);
-  const packageLock = parseJson(originals[1], relativePaths[1]);
-  const tauriConfig = parseJson(originals[4], relativePaths[4]);
-  const cargoTomlVersion = originals[2].match(/^version\s*=\s*"([^"]+)"\s*$/m)?.[1];
+  if (!originals[0].endsWith("\n") || originals[0].slice(0, -1).includes("\n")) {
+    throw new Error("../../VERSION 结构非法");
+  }
+  const packageJson = parseJson(originals[1], relativePaths[1]);
+  const packageLock = parseJson(originals[2], relativePaths[2]);
+  const tauriConfig = parseJson(originals[5], relativePaths[5]);
+  const cargoTomlVersion = originals[3].match(/^version\s*=\s*"([^"]+)"\s*$/m)?.[1];
   if (!cargoTomlVersion) throw new Error("src-tauri/Cargo.toml 缺少 version");
-  const cargoLockPackage = findCargoLockPackage(originals[3]);
+  const cargoLockPackage = findCargoLockPackage(originals[4]);
 
-  const currentVersion = assertStableSemver(packageJson.version);
+  const currentVersion = assertStableSemver(originals[0].slice(0, -1));
   const versions = {
-    "package.json": currentVersion,
+    "package.json": packageJson.version,
     "package-lock.json": packageLock.version,
     "package-lock.json packages root": packageLock.packages?.[""]?.version,
     "src-tauri/Cargo.toml": cargoTomlVersion,
@@ -141,7 +145,7 @@ export const syncAgentVersion = async ({ desktopDir, bumpType, setVersion }) => 
   for (const [source, version] of Object.entries(versions)) {
     assertStableSemver(version);
     if (version !== currentVersion) {
-      throw new Error(`Agent 版本不一致：${source}=${version}，package.json=${currentVersion}`);
+      throw new Error(`Agent 版本不一致：${source}=${version}，VERSION=${currentVersion}`);
     }
   }
 
@@ -157,9 +161,10 @@ export const syncAgentVersion = async ({ desktopDir, bumpType, setVersion }) => 
   ].replace(/^version\s*=\s*"[^"]+"\s*$/m, `version = "${nextVersion}"`);
 
   const contents = [
+    `${nextVersion}\n`,
     `${JSON.stringify(packageJson, null, 2)}\n`,
     `${JSON.stringify(packageLock, null, 2)}\n`,
-    replaceManifestVersion(originals[2], nextVersion, relativePaths[2]),
+    replaceManifestVersion(originals[3], nextVersion, relativePaths[3]),
     cargoLockPackage.sections.join(""),
     `${JSON.stringify(tauriConfig, null, 2)}\n`,
   ];

@@ -19,8 +19,10 @@ const writeJson = async (filePath, value) => {
 const readJson = async (filePath) => JSON.parse(await readFile(filePath, "utf8"));
 
 const createDesktopFixture = async (version = "1.0.0") => {
-  const desktopDir = await mkdtemp(path.join(os.tmpdir(), "agent-version-"));
+  const systemDir = await mkdtemp(path.join(os.tmpdir(), "agent-version-"));
+  const desktopDir = path.join(systemDir, "apps/desktop");
   await mkdir(path.join(desktopDir, "src-tauri"), { recursive: true });
+  await writeFile(path.join(systemDir, "VERSION"), `${version}\n`);
   await writeJson(path.join(desktopDir, "package.json"), {
     name: "juxin-ai-assistant-desktop",
     version,
@@ -52,12 +54,14 @@ const createDesktopFixture = async (version = "1.0.0") => {
 };
 
 const readVersions = async (desktopDir) => {
+  const versionSource = await readFile(path.resolve(desktopDir, "../..", "VERSION"), "utf8");
   const packageJson = await readJson(path.join(desktopDir, "package.json"));
   const packageLock = await readJson(path.join(desktopDir, "package-lock.json"));
   const cargoToml = await readFile(path.join(desktopDir, "src-tauri/Cargo.toml"), "utf8");
   const cargoLock = await readFile(path.join(desktopDir, "src-tauri/Cargo.lock"), "utf8");
   const tauri = await readJson(path.join(desktopDir, "src-tauri/tauri.conf.json"));
   return {
+    versionSource: versionSource.trim(),
     packageJson: packageJson.version,
     packageLock: packageLock.version,
     packageLockRoot: packageLock.packages[""].version,
@@ -94,7 +98,7 @@ test("SemVer segments must stay within Number.MAX_SAFE_INTEGER", () => {
   );
 });
 
-test("package.json is the source used to atomically synchronize all five agent version files", async () => {
+test("VERSION is the source used to atomically synchronize all six agent version files", async () => {
   const desktopDir = await createDesktopFixture("1.2.3");
 
   const result = await syncAgentVersion({ desktopDir, bumpType: "minor" });
@@ -104,6 +108,7 @@ test("package.json is the source used to atomically synchronize all five agent v
   assert.equal(result.nextVersion, "1.3.0");
   assert.deepEqual(
     {
+      versionSource: versions.versionSource,
       packageJson: versions.packageJson,
       packageLock: versions.packageLock,
       packageLockRoot: versions.packageLockRoot,
@@ -112,6 +117,7 @@ test("package.json is the source used to atomically synchronize all five agent v
       tauri: versions.tauri,
     },
     {
+      versionSource: "1.3.0",
       packageJson: "1.3.0",
       packageLock: "1.3.0",
       packageLockRoot: "1.3.0",
@@ -121,6 +127,7 @@ test("package.json is the source used to atomically synchronize all five agent v
     },
   );
   assert.match(versions.cargoLockText, /name = "dependency"\nversion = "9\.9\.9"/);
+  assert.ok(result.changedFiles.includes("../../VERSION"));
 });
 
 test("inconsistent input aborts before any version file is changed", async () => {
@@ -130,6 +137,7 @@ test("inconsistent input aborts before any version file is changed", async () =>
   tauri.version = "1.2.2";
   await writeJson(tauriPath, tauri);
   const before = await Promise.all([
+    "../../VERSION",
     "package.json",
     "package-lock.json",
     "src-tauri/Cargo.toml",
@@ -143,6 +151,7 @@ test("inconsistent input aborts before any version file is changed", async () =>
   );
 
   const after = await Promise.all([
+    "../../VERSION",
     "package.json",
     "package-lock.json",
     "src-tauri/Cargo.toml",

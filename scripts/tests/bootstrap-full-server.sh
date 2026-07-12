@@ -8,6 +8,7 @@ trap 'rm -rf "${TMP_DIR}"' EXIT
 
 BIN_DIR="${TMP_DIR}/bin"
 REPO_DIR="${TMP_DIR}/repo"
+OVERRIDE_REPO_DIR="${TMP_DIR}/repo-override"
 DOCKER_DIR="${TMP_DIR}/docker"
 LOG_FILE="${TMP_DIR}/calls.log"
 mkdir -p "${BIN_DIR}" "${DOCKER_DIR}"
@@ -89,7 +90,6 @@ ALIYUN_MIRROR_URL='https://example.mirror.aliyuncs.com' \
 AUTH_BUILTIN_ACCOUNT_DEFAULT_PASSWORD='Password123!' \
 PUBLIC_HOST='8.141.81.201' \
 BOOTSTRAP_REPO_DIR="${REPO_DIR}" \
-BOOTSTRAP_BRANCH='codex/5.8.0' \
 BOOTSTRAP_REPO_URL='https://example.invalid/repo.git' \
 BOOTSTRAP_DOCKER_CONFIG_DIR="${DOCKER_DIR}" \
 bash "${SCRIPT_PATH}"
@@ -99,8 +99,29 @@ if ! grep -q 'https://example.mirror.aliyuncs.com' "${DOCKER_DIR}/daemon.json"; 
   exit 1
 fi
 
-if ! grep -q '^git clone -b codex/5.8.0 https://example.invalid/repo.git '"${REPO_DIR}"'$' "${LOG_FILE}"; then
-  echo 'expected branch clone command' >&2
+if ! grep -q '^git clone -b main https://example.invalid/repo.git '"${REPO_DIR}"'$' "${LOG_FILE}"; then
+  echo 'expected stable default branch clone command' >&2
+  exit 1
+fi
+
+if ! grep -q 'BOOTSTRAP_REPO_DIR="${BOOTSTRAP_REPO_DIR:-/root/AuthorizationReminder}"' "${SCRIPT_PATH}"; then
+  echo 'expected stable default repository directory' >&2
+  exit 1
+fi
+
+PATH="${BIN_DIR}:$PATH" \
+TEST_LOG_FILE="${LOG_FILE}" \
+ALIYUN_MIRROR_URL='https://example.mirror.aliyuncs.com' \
+AUTH_BUILTIN_ACCOUNT_DEFAULT_PASSWORD='Password123!' \
+PUBLIC_HOST='8.141.81.201' \
+BOOTSTRAP_REPO_DIR="${OVERRIDE_REPO_DIR}" \
+BOOTSTRAP_BRANCH='release/custom' \
+BOOTSTRAP_REPO_URL='https://example.invalid/repo.git' \
+BOOTSTRAP_DOCKER_CONFIG_DIR="${DOCKER_DIR}" \
+bash "${SCRIPT_PATH}"
+
+if ! grep -q '^git clone -b release/custom https://example.invalid/repo.git '"${OVERRIDE_REPO_DIR}"'$' "${LOG_FILE}"; then
+  echo 'expected explicit branch override clone command' >&2
   exit 1
 fi
 
