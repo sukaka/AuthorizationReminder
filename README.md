@@ -420,9 +420,8 @@ npm run test:rbac
 ## 10. 发布与变更文档
 
 - 仓库中的 15 个业务系统独立维护版本，不再存在单一全局产品版本；根 `package.json` 的 `1.0.0` 仅代表版本工具包。
-- 系统版本、提交 scope、自动 amend/push 和系统标签规则见 `/Users/zhanglei/Documents/codex-new/docs/versioning.md`。
+- 系统版本、提交 scope、自动 amend/push 和系统标签规则见 `docs/versioning.md`。
 - 部署分支使用稳定分支或显式 `BOOTSTRAP_BRANCH`，不会因任一系统升版自动切换分支。
-- `/Users/zhanglei/Documents/codex-new/docs/versioning.md`
 - `/Users/zhanglei/Documents/codex-new/docs/releases/2.0.1.md`
 - `/Users/zhanglei/Documents/codex-new/docs/releases/2.0.1-rc1-regression-checklist.md`
 - `/Users/zhanglei/Documents/codex-new/docs/releases/2.1.0-rc1.md`
