@@ -4716,6 +4716,13 @@ app.get('/portal', async (req, res) => {
         const url = new URL(rawUrl, window.location.origin);
         const currentHost = String(window.location.hostname || '').trim();
         const targetHost = String(url.hostname || '').trim();
+        const isInternalAuthPort = loopbackHostSet.has(targetHost) && url.port === '5180';
+        if (currentHost && isInternalAuthPort) {
+          url.protocol = window.location.protocol;
+          url.hostname = currentHost;
+          url.port = window.location.port;
+          return url.toString();
+        }
         if (
           currentHost &&
           targetHost &&
