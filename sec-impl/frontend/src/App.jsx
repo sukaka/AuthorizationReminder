@@ -170,9 +170,17 @@ const timelineActionText = (value) => {
 
 const getPortalBaseUrl = () => {
   const configured = String(import.meta.env.VITE_SSO_PORTAL_URL || '').trim()
-  if (configured) return configured.replace(/\/+$/, '')
+  if (configured) {
+    const portalUrl = new URL(configured, window.location.origin)
+    if (window.location.protocol === 'https:' && portalUrl.port === '5180') {
+      portalUrl.protocol = 'https:'
+      portalUrl.hostname = window.location.hostname
+      portalUrl.port = ''
+    }
+    return portalUrl.origin
+  }
   const { protocol, hostname } = window.location
-  return `${protocol}//${hostname}:5180`
+  return protocol === 'https:' ? `${protocol}//${hostname}` : `${protocol}//${hostname}:5180`
 }
 
 const buildPortalEntryUrl = (system) => {
@@ -1845,7 +1853,7 @@ function App() {
             <button className="btn btn-primary" onClick={() => (window.location.href = buildPortalEntryUrl('sec-impl'))}>
               前往统一登录
             </button>
-            <button className="btn" onClick={() => (window.location.href = buildPortalSwitchUrl('reminder'))}>
+            <button className="btn" onClick={() => (window.location.href = buildPortalSwitchUrl('sec-impl'))}>
               切换其他系统
             </button>
           </div>
@@ -1878,7 +1886,7 @@ function App() {
         </div>
 
         <div className="sidebar-actions">
-          <button className="ghost" onClick={() => (window.location.href = buildPortalSwitchUrl('reminder'))}>切换系统</button>
+          <button className="ghost" onClick={() => (window.location.href = buildPortalSwitchUrl('sec-impl'))}>切换系统</button>
           <button className="ghost logout" onClick={onLogout}>退出登录</button>
         </div>
       </aside>

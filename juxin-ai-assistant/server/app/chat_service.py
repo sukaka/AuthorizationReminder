@@ -1,5 +1,6 @@
 import hashlib
 import hmac
+import re
 import secrets
 import uuid as uuid_lib
 from datetime import UTC, datetime
@@ -60,8 +61,31 @@ IMAGE_FILE_TYPES = {key for key, value in FILE_MEDIA_TYPES.items() if value.star
 
 def _is_file_delivery_request(question: str) -> bool:
     normalized = "".join(question.lower().split())
-    delivery_markers = ("发给我", "发送给我", "给我发", "传给我", "下载", "给我文件", "把文件给我")
+    delivery_markers = ("发给我", "发我", "发送给我", "给我发", "传给我", "下载", "给我文件", "把文件给我")
     return any(marker in normalized for marker in delivery_markers)
+
+
+def _file_delivery_name_match_score(question: str, file_name: str) -> int:
+    """Prefer explicitly named files over merely related retrieval results."""
+    query = re.sub(r"[^a-z0-9\u4e00-\u9fff]+", "", question.lower())
+    stem = re.sub(r"[^a-z0-9\u4e00-\u9fff]+", "", file_name.rsplit(".", 1)[0].lower())
+    for marker in ("发送给我", "发给我", "给我发", "把文件给我", "给我文件", "下载", "发我", "传给我", "文件", "请", "一下"):
+        query = query.replace(marker, "")
+    if not query or not stem:
+        return 0
+    if query in stem:
+        return len(query) + 8
+
+    best = 0
+    for latin in re.findall(r"[a-z0-9]{2,}", query):
+        if latin in stem:
+            best = max(best, len(latin))
+    chinese = "".join(re.findall(r"[\u4e00-\u9fff]", query))
+    for size in range(min(8, len(chinese)), 1, -1):
+        if any(chinese[index:index + size] in stem for index in range(len(chinese) - size + 1)):
+            best = max(best, size)
+            break
+    return best
 
 
 def _encrypt_content(
@@ -618,7 +642,18 @@ def prepare_chat(
             strongest_by_file.values(),
             key=lambda chunk: (chunk.score, chunk.file_name),
             reverse=True,
-        )[:5]
+        )
+        name_scores = {
+            chunk.file_uuid: _file_delivery_name_match_score(body.question, chunk.file_name)
+            for chunk in delivery_chunks
+        }
+        best_name_score = max(name_scores.values(), default=0)
+        if best_name_score >= 2:
+            delivery_chunks = [
+                chunk for chunk in delivery_chunks
+                if name_scores.get(chunk.file_uuid, 0) == best_name_score
+            ]
+        delivery_chunks = delivery_chunks[:5]
         citations = _enrich_media_citations(
             db,
             [_citation_from_chunk(chunk) for chunk in delivery_chunks],

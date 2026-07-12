@@ -450,6 +450,49 @@ const createAdminCenterUsersService = ({
       };
     },
 
+    async updateUsers({ actor, targetIds, payload }) {
+      if (normalizeUserRole(actor?.role) !== 'sysadmin') {
+        throw createHttpError(403, '仅系统管理员可批量编辑用户');
+      }
+      const ids = Array.from(new Set(
+        (Array.isArray(targetIds) ? targetIds : [])
+          .map((item) => Number(item))
+          .filter((item) => Number.isInteger(item) && item > 0)
+      ));
+      if (!ids.length) throw createHttpError(400, '请选择要编辑的用户');
+
+      const allowedPayload = {};
+      ['role', 'is_active', 'app_access', 'app_access_add', 'department_code'].forEach((key) => {
+        if (payload?.[key] !== undefined) allowedPayload[key] = payload[key];
+      });
+      if (!Object.keys(allowedPayload).length) throw createHttpError(400, '没有可批量更新的字段');
+
+      const results = [];
+      let updated = 0;
+      let failed = 0;
+      for (const targetId of ids) {
+        try {
+          const targetPayload = { ...allowedPayload };
+          if (Array.isArray(targetPayload.app_access_add)) {
+            const current = await db.get('SELECT role, app_access FROM users WHERE id = ?', [targetId]);
+            if (!current) throw createHttpError(404, '用户不存在');
+            targetPayload.app_access = Array.from(new Set([
+              ...normalizeAppAccess(current.app_access, current.role),
+              ...targetPayload.app_access_add,
+            ]));
+            delete targetPayload.app_access_add;
+          }
+          const row = await this.updateUser({ actor, targetId, payload: targetPayload });
+          updated += 1;
+          results.push({ id: targetId, status: 'UPDATED', user: row });
+        } catch (err) {
+          failed += 1;
+          results.push({ id: targetId, status: 'FAILED', error: String(err?.message || '更新用户失败') });
+        }
+      }
+      return { ok: true, total: ids.length, updated, failed, results };
+    },
+
     async resetPassword({ actor, targetId }) {
       assertDbMethods(db, ['get', 'run']);
       const nextTargetId = Number(targetId);

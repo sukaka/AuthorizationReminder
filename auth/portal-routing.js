@@ -107,6 +107,7 @@ const getDedicatedCenterConfig = (systemKey) => {
         usersList: '/api/admin-center/users',
         usersCreate: '/api/admin-center/users',
         usersBatchDelete: '/api/admin-center/users/batch-delete',
+        usersBatchUpdate: '/api/admin-center/users/batch-update',
         usersExport: '/api/admin-center/users/export.xlsx',
         usersItemBase: '/api/admin-center/users',
         usersImport: '/api/admin-center/users/import',
@@ -134,13 +135,15 @@ const getDedicatedCenterConfig = (systemKey) => {
 const resolvePortalRedirectTarget = ({ apps, userRole, requestedSystem, portalMode }) => {
   const list = Array.isArray(apps) ? apps : [];
   const requestedKey = String(requestedSystem || '').trim();
+  if (portalMode === 'switch') return null;
+  const preferredKey = getDefaultPortalSystemKey(userRole);
+  if (preferredKey) {
+    return list.find((item) => item && item.key === preferredKey) || list[0] || null;
+  }
   if (requestedKey && portalMode !== 'switch') {
     return list.find((item) => item && item.key === requestedKey) || null;
   }
-  if (portalMode === 'switch') return null;
-  const preferredKey = getDefaultPortalSystemKey(userRole);
-  if (!preferredKey) return null;
-  return list.find((item) => item && item.key === preferredKey) || list[0] || null;
+  return null;
 };
 
 module.exports = {

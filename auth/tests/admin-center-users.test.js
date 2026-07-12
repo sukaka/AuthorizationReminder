@@ -29,6 +29,42 @@ test('normalizeAppAccess strips dedicated centers for admin and adds AI assistan
   assert.deepEqual(auditorAccess, ['audit-center', 'delivery', 'ai-assistant']);
 });
 
+test('sysadmin can batch add AI assistant access without replacing existing access', async () => {
+  let currentAccess = '["faq"]';
+  const service = createAdminCenterUsersService({
+    db: {
+      async get(sql) {
+        if (sql.startsWith('SELECT role, app_access')) return { role: 'user', app_access: currentAccess };
+        if (sql.includes('FROM users WHERE id = ?')) {
+          return { id: 8, username: 'alice', role: 'user', is_active: 1, app_access: currentAccess, created_at: '2026-07-12' };
+        }
+        throw new Error(`unexpected get: ${sql}`);
+      },
+      async run(sql, params = []) {
+        if (sql.includes('SET app_access = ?')) currentAccess = params[0];
+        return { changes: 1 };
+      },
+    },
+  });
+
+  const result = await service.updateUsers({
+    actor: { id: 2, role: 'sysadmin' },
+    targetIds: [8],
+    payload: { app_access_add: ['ai-assistant'] },
+  });
+
+  assert.equal(result.updated, 1);
+  assert.deepEqual(JSON.parse(currentAccess), ['faq', 'ai-assistant']);
+});
+
+test('non-sysadmin cannot batch edit users', async () => {
+  const service = createAdminCenterUsersService({ db: {} });
+  await assert.rejects(
+    service.updateUsers({ actor: { role: 'admin' }, targetIds: [8], payload: { is_active: 1 } }),
+    (error) => error.statusCode === 403
+  );
+});
+
 test('listUsers merges lock state into formatted payload', async () => {
   const queries = [];
   const service = createAdminCenterUsersService({

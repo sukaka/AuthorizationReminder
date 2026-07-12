@@ -73,13 +73,20 @@ export function SkillsPage() {
       </div>
       {notice ? <p role="status">{notice}</p> : null}
       <div className="task-card-list" aria-label="助手能力列表">
-        {skills.map((skill) => (
-          <article key={skill.id} className="history-card">
-            <span className="knowledge-source-badge">{skill.status === 'published' ? '已启用' : '未启用'}</span>
-            <h2>{skill.name}</h2>
-            <p>{skill.description}</p>
-            <p>{materialText(skill)}</p>
-            <p>可生成：{skill.output_types.join('、')}</p>
+        {skills.map((skill, index) => (
+          <article key={skill.id} className="history-card skill-card">
+            <div className="skill-card-head">
+              <span className="skill-card-icon" aria-hidden="true">{['✦', '✓', '⌁'][index % 3]}</span>
+              <span className="knowledge-source-badge">{skill.status === 'published' ? '已启用' : '未启用'}</span>
+            </div>
+            <div className="skill-card-copy">
+              <h2>{skill.name}</h2>
+              <p>{skill.description}</p>
+            </div>
+            <dl className="skill-card-meta">
+              <div><dt>输入材料</dt><dd>{materialText(skill)}</dd></div>
+              <div><dt>输出格式</dt><dd>{skill.output_types.join('、')}</dd></div>
+            </dl>
             <div className="history-actions">
               <button
                 aria-label={`开始使用 ${skill.name}`}
@@ -87,7 +94,7 @@ export function SkillsPage() {
                 onClick={() => void start(skill)}
                 type="button"
               >
-                开始使用
+                开始使用 <span aria-hidden="true">→</span>
               </button>
             </div>
           </article>

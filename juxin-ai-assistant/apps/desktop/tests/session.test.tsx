@@ -157,7 +157,7 @@ describe('unified session shell', () => {
         HttpResponse.json({
           user: { id: 'u-1', username: '张磊', role: 'employee' },
           scope: { department: '技术部', managedDepartments: [] },
-          apps: ['ai-assistant', 'prompt-center', 'data-platform'],
+          apps: ['ai-assistant', 'prompt-center', 'inventory', 'train-exam', 'big-screen'],
           local_binding_token: 'signed-binding-token',
         }),
       ),
@@ -176,14 +176,16 @@ describe('unified session shell', () => {
 
     expect(screen.getByRole('menu', { name: '可访问系统' })).toBeInTheDocument();
     expect(screen.getByRole('menuitem', { name: '聚信 AI 助手（当前）' })).toHaveAttribute('aria-disabled', 'true');
-    expect(screen.getByRole('menuitem', { name: '提示词中心' })).toHaveAttribute(
+    expect(screen.getByRole('menuitem', { name: '提示词管理中心' })).toHaveAttribute(
       'href',
       `${window.location.origin}/portal?system=prompt-center`,
     );
-    expect(screen.getByRole('menuitem', { name: '数据平台' })).toHaveAttribute(
+    expect(screen.getByRole('menuitem', { name: '库存管理系统' })).toHaveAttribute(
       'href',
-      `${window.location.origin}/portal?system=data-platform`,
+      `${window.location.origin}/portal?system=inventory`,
     );
+    expect(screen.getByRole('menuitem', { name: '培训考试系统' })).toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: '统一大屏展示中心' })).toBeInTheDocument();
   });
 
   it('does not show the system switcher in desktop runtime', async () => {

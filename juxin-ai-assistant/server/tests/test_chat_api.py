@@ -1120,7 +1120,7 @@ def test_file_delivery_uses_product_alias_and_returns_downloadable_asset(
 
     response = client_for_user("delivery-user").post(
         "/api/ai/chat/prepare",
-        json={"question": "把 WDSP 手册发给我", "mode": "normal", "top_k": 8},
+        json={"question": "发我 WDSP 手册", "mode": "normal", "top_k": 8},
     )
 
     assert response.status_code == 201
@@ -1146,6 +1146,62 @@ def test_file_delivery_uses_product_alias_and_returns_downloadable_asset(
             "media_type": "text/plain",
         }
     ]
+
+
+def test_file_delivery_filters_related_documents_when_certificate_is_named(
+    client_for_user,
+    generation_db,
+) -> None:
+    from app.crypto import ContentCipher
+
+    cipher = ContentCipher(os.environ["CONTENT_ENCRYPTION_KEY"])
+    certificate, _ = create_knowledge_file_from_bytes(
+        generation_db,
+        sso_user_id="admin",
+        file_name="WDSP网专.png.txt",
+        content="网络关键设备和网络安全专用产品安全认证证书".encode("utf-8"),
+        content_type="text/plain",
+        cipher=cipher,
+        key_version="v1",
+        visibility="PUBLIC",
+        source_type="admin_upload",
+        usage_type="official_knowledge",
+        review_status="official",
+        rag_enabled=True,
+        rag_scope="company",
+        permission_scope="company",
+        owner_user_id="admin",
+    )
+    for name in ("等保合规云管平台管理员手册v4.0.docx.txt", "聚信等保合规云管平台销售一指禅.docx.txt"):
+        create_knowledge_file_from_bytes(
+            generation_db,
+            sso_user_id="admin",
+            file_name=name,
+            content="文档中包含网专证书的相关产品说明。".encode("utf-8"),
+            content_type="text/plain",
+            cipher=cipher,
+            key_version="v1",
+            visibility="PUBLIC",
+            source_type="admin_upload",
+            usage_type="official_knowledge",
+            review_status="official",
+            rag_enabled=True,
+            rag_scope="company",
+            permission_scope="company",
+            owner_user_id="admin",
+        )
+    generation_db.commit()
+
+    response = client_for_user("certificate-user").post(
+        "/api/ai/chat/prepare",
+        json={"question": "发我网专证书", "mode": "normal", "top_k": 8},
+    )
+
+    assert response.status_code == 201
+    body = response.json()
+    assert [item["file_uuid"] for item in body["citations"]] == [certificate.uuid]
+    assert "WDSP网专.png.txt" in body["answer"]
+    assert "管理员手册" not in body["answer"]
 
 
 def test_completed_chat_detail_only_returns_sources_mentioned_in_answer(

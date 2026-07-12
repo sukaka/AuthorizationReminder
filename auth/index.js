@@ -1775,6 +1775,9 @@ const renderAdminCenterSections = () => ({
         </div>
         <div class="panel-actions">
           <button id="adminUsersBulkDeleteBtn" type="button" class="ghost-btn">批量删除</button>
+          <button id="adminUsersBulkGrantAiBtn" type="button" class="ghost-btn">授予 AI 助手</button>
+          <button id="adminUsersBulkEnableBtn" type="button" class="ghost-btn">批量启用</button>
+          <button id="adminUsersBulkDisableBtn" type="button" class="ghost-btn">批量禁用</button>
           <button id="adminUsersReloadBtn" type="button" class="ghost-btn">刷新列表</button>
         </div>
       </div>
@@ -2577,6 +2580,7 @@ const renderDedicatedCenterPage = ({ nonce, config }) => {
     let adminUserImportTemplateDownloading = false;
     let adminUserExporting = false;
     let adminUsersBulkDeleting = false;
+    let adminUsersBulkUpdating = false;
     let adminUserImportResult = null;
     let adminSecurityRawState = {};
     const fixedResetPassword = ${JSON.stringify(FIXED_RESET_PASSWORD)};
@@ -3163,26 +3167,34 @@ const renderDedicatedCenterPage = ({ nonce, config }) => {
       const partiallyChecked = selectedCount > 0 && selectedCount < selectableCount;
       const toggleAll = document.getElementById('adminUsersToggleAll');
       const bulkDeleteBtn = document.getElementById('adminUsersBulkDeleteBtn');
+      const bulkUpdateButtons = [
+        document.getElementById('adminUsersBulkGrantAiBtn'),
+        document.getElementById('adminUsersBulkEnableBtn'),
+        document.getElementById('adminUsersBulkDisableBtn'),
+      ].filter(Boolean);
       const summary = document.getElementById('adminUsersSelectionSummary');
 
       if (toggleAll) {
         toggleAll.checked = allChecked;
         toggleAll.indeterminate = partiallyChecked;
-        toggleAll.disabled = selectableCount === 0 || adminUsersBulkDeleting;
+        toggleAll.disabled = selectableCount === 0 || adminUsersBulkDeleting || adminUsersBulkUpdating;
       }
       if (bulkDeleteBtn) {
-        bulkDeleteBtn.disabled = selectedCount === 0 || adminUsersBulkDeleting;
+        bulkDeleteBtn.disabled = selectedCount === 0 || adminUsersBulkDeleting || adminUsersBulkUpdating;
         bulkDeleteBtn.textContent = adminUsersBulkDeleting ? '批量删除中...' : '批量删除';
       }
+      bulkUpdateButtons.forEach((button) => {
+        button.disabled = selectedCount === 0 || adminUsersBulkDeleting || adminUsersBulkUpdating;
+      });
       if (summary) {
         summary.textContent = selectedCount > 0
           ? ('已选择 ' + selectedCount + ' 个用户')
-          : '可勾选多名用户后执行批量删除。';
+          : '可勾选多名用户后批量授予权限、启用、禁用或删除。';
       }
       document.querySelectorAll('[data-user-select-id]').forEach((input) => {
         const checked = selected.has(String(input.dataset.userSelectId || '').trim());
         input.checked = checked;
-        input.disabled = adminUsersBulkDeleting;
+        input.disabled = adminUsersBulkDeleting || adminUsersBulkUpdating;
       });
     }
 
@@ -3850,6 +3862,33 @@ const renderDedicatedCenterPage = ({ nonce, config }) => {
       }
     }
 
+    async function onAdminUsersBulkUpdate(payload, actionLabel) {
+      const ids = normalizeAdminSelectedUserIds(adminSelectedUserIds);
+      if (!ids.length) {
+        setHint('adminUsersNotice', '请先选择要编辑的用户', true);
+        return;
+      }
+      if (!window.confirm('确认对已选中的 ' + ids.length + ' 个用户执行“' + actionLabel + '”吗？')) return;
+      adminUsersBulkUpdating = true;
+      syncAdminUserSelectionUi();
+      setHint('adminUsersNotice', '正在' + actionLabel + '...');
+      try {
+        const result = await requestJson(centerApi.usersBatchUpdate, {
+          method: 'POST',
+          body: JSON.stringify({ ids, ...payload }),
+        });
+        adminSelectedUserIds = [];
+        await loadAdminUsers();
+        setHint('adminUsersNotice', actionLabel + '完成：已更新 ' + Number(result?.updated || 0) + ' 个'
+          + (Number(result?.failed || 0) ? '，失败 ' + Number(result.failed) + ' 个' : ''));
+      } catch (error) {
+        setHint('adminUsersNotice', error.message || (actionLabel + '失败'), true);
+      } finally {
+        adminUsersBulkUpdating = false;
+        syncAdminUserSelectionUi();
+      }
+    }
+
     async function loadAdminSecurity() {
       setHint('adminSecurityNotice', '正在加载安全配置...');
       try {
@@ -4271,6 +4310,11 @@ const renderDedicatedCenterPage = ({ nonce, config }) => {
         });
         document.getElementById('adminUsersReloadBtn')?.addEventListener('click', loadAdminUsers);
         document.getElementById('adminUsersBulkDeleteBtn')?.addEventListener('click', onAdminUsersBulkDelete);
+        document.getElementById('adminUsersBulkGrantAiBtn')?.addEventListener('click', () => {
+          onAdminUsersBulkUpdate({ app_access_add: ['ai-assistant'] }, '授予 AI 助手权限');
+        });
+        document.getElementById('adminUsersBulkEnableBtn')?.addEventListener('click', () => onAdminUsersBulkUpdate({ is_active: 1 }, '批量启用'));
+        document.getElementById('adminUsersBulkDisableBtn')?.addEventListener('click', () => onAdminUsersBulkUpdate({ is_active: 0 }, '批量禁用'));
         document.getElementById('adminUsersToggleAll')?.addEventListener('change', onAdminUsersToggleAll);
         document.getElementById('adminUsersBody')?.addEventListener('click', onAdminUsersAction);
         document.getElementById('adminUsersBody')?.addEventListener('change', onAdminUsersSelectionChange);
@@ -4716,6 +4760,13 @@ app.get('/portal', async (req, res) => {
         const url = new URL(rawUrl, window.location.origin);
         const currentHost = String(window.location.hostname || '').trim();
         const targetHost = String(url.hostname || '').trim();
+        const isInternalAuthPort = loopbackHostSet.has(targetHost) && url.port === '5180';
+        if (currentHost && isInternalAuthPort) {
+          url.protocol = window.location.protocol;
+          url.hostname = currentHost;
+          url.port = window.location.port;
+          return url.toString();
+        }
         if (
           currentHost &&
           targetHost &&
@@ -5274,7 +5325,7 @@ app.get('/portal', async (req, res) => {
         throw new Error('当前账号没有可进入的系统');
       }
       const privilegedDefaultSystemKey = privilegedDefaultSystemKeyByRole[userRole] || '';
-      if (!requestedSystem && portalMode !== 'switch' && privilegedDefaultSystemKey) {
+      if (portalMode !== 'switch' && privilegedDefaultSystemKey) {
         const preferred = list.find((item) => item.key === privilegedDefaultSystemKey) || list[0];
         if (preferred) {
           if (shouldThrottleRequestedRedirect(preferred.key)) {
@@ -5825,6 +5876,23 @@ app.post('/api/admin-center/users/batch-delete', async (req, res) => {
     return res.json(result);
   } catch (err) {
     return sendApiError(res, err, '批量删除用户失败');
+  }
+});
+
+app.post('/api/admin-center/users/batch-update', async (req, res) => {
+  if (!canUseDedicatedCenter(req.user, ADMIN_CENTER_KEY)) {
+    return res.status(403).json({ error: '无权限访问管理后台' });
+  }
+  try {
+    const { ids, ...payload } = req.body || {};
+    const result = await adminCenterUsersService.updateUsers({
+      actor: req.user,
+      targetIds: ids,
+      payload,
+    });
+    return res.json(result);
+  } catch (err) {
+    return sendApiError(res, err, '批量编辑用户失败');
   }
 });
 

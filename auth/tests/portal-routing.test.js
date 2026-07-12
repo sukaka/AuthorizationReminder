@@ -73,7 +73,7 @@ test('auditor without requested system redirects to audit-center', () => {
   assert.deepEqual(target, { key: 'audit-center', url: 'http://localhost:5180/audit-center' });
 });
 
-test('requested system still wins over privileged default', () => {
+test('privileged default wins over a requested business system', () => {
   const target = resolvePortalRedirectTarget({
     apps: [
       { key: 'admin-center', url: 'http://localhost:5180/admin-center' },
@@ -84,7 +84,7 @@ test('requested system still wins over privileged default', () => {
     portalMode: '',
   });
 
-  assert.deepEqual(target, { key: 'reminder', url: 'http://localhost:18080' });
+  assert.deepEqual(target, { key: 'admin-center', url: 'http://localhost:5180/admin-center' });
 });
 
 test('sysadmin can access admin-center only', () => {
@@ -140,6 +140,7 @@ test('dedicated center config exposes admin and audit metadata', () => {
       usersList: '/api/admin-center/users',
       usersCreate: '/api/admin-center/users',
       usersBatchDelete: '/api/admin-center/users/batch-delete',
+      usersBatchUpdate: '/api/admin-center/users/batch-update',
       usersExport: '/api/admin-center/users/export.xlsx',
       usersItemBase: '/api/admin-center/users',
       usersImport: '/api/admin-center/users/import',

@@ -474,9 +474,17 @@ const builtInTemplates = [
 
 const getPortalBaseUrl = () => {
   const configured = String(import.meta.env.VITE_SSO_PORTAL_URL || '').trim()
-  if (configured) return configured.replace(/\/+$/, '')
+  if (configured) {
+    const portalUrl = new URL(configured, window.location.origin)
+    if (window.location.protocol === 'https:' && portalUrl.port === '5180') {
+      portalUrl.protocol = 'https:'
+      portalUrl.hostname = window.location.hostname
+      portalUrl.port = ''
+    }
+    return portalUrl.origin
+  }
   const { protocol, hostname } = window.location
-  return `${protocol}//${hostname}:5180`
+  return protocol === 'https:' ? `${protocol}//${hostname}` : `${protocol}//${hostname}:5180`
 }
 
 const buildPortalEntryUrl = (system) => {

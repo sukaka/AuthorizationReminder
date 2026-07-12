@@ -1206,13 +1206,18 @@ export async function updateKnowledgeFileMetadata(
   fileUuid: string,
   payload: KnowledgeFileMetadataUpdatePayload,
 ): Promise<KnowledgeFilePayload> {
-  const body: Record<string, unknown> = {
-    category: payload.category ?? '',
-    document_type: payload.documentType ?? '',
-    tags: payload.tags ?? [],
-  };
+  const body: Record<string, unknown> = {};
   if (payload.fileName !== undefined) {
     body.file_name = payload.fileName;
+  }
+  if (payload.category !== undefined) {
+    body.category = payload.category;
+  }
+  if (payload.documentType !== undefined) {
+    body.document_type = payload.documentType;
+  }
+  if (payload.tags !== undefined) {
+    body.tags = payload.tags;
   }
   return readJson(
     await apiFetch(`/api/knowledge/files/${encodeURIComponent(fileUuid)}`, {

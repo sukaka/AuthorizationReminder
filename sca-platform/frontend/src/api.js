@@ -1,6 +1,19 @@
 const viteEnv = import.meta.env || {}
 const API_BASE = viteEnv.VITE_API_BASE || ''
-const SSO_LOGIN_URL = viteEnv.VITE_SSO_LOGIN_URL || 'http://localhost:5180/portal?system=sca'
+const getSsoLoginUrl = () => {
+  const configured = viteEnv.VITE_SSO_LOGIN_URL || 'http://localhost:5180/portal?system=sca'
+  const target = new URL(configured, window.location.origin)
+  const configuredForLocalhost = target.hostname === 'localhost' || target.hostname === '127.0.0.1'
+  if (configuredForLocalhost && !['localhost', '127.0.0.1'].includes(window.location.hostname)) {
+    target.hostname = window.location.hostname
+  }
+  if (window.location.protocol === 'https:' && target.port === '5180') {
+    target.protocol = 'https:'
+    target.hostname = window.location.hostname
+    target.port = ''
+  }
+  return target.toString()
+}
 const GATEWAY_ERROR_STATUSES = new Set([502, 503, 504])
 const UPLOAD_CHUNK_SIZE = Math.max(1, Number(viteEnv.VITE_UPLOAD_CHUNK_SIZE_MB || 4)) * 1024 * 1024
 const UPLOAD_CONCURRENCY = Math.max(1, Math.min(6, Number(viteEnv.VITE_UPLOAD_CONCURRENCY || 3)))
@@ -9,7 +22,7 @@ const UPLOAD_MAX_RETRIES = Math.max(0, Math.min(5, Number(viteEnv.VITE_UPLOAD_MA
 export const apiUrl = (path) => `${API_BASE}${path}`
 
 const redirectToLogin = () => {
-  const target = new URL(SSO_LOGIN_URL, window.location.origin)
+  const target = new URL(getSsoLoginUrl(), window.location.origin)
   target.searchParams.set('redirect', window.location.href)
   window.location.href = target.toString()
 }

@@ -38,11 +38,11 @@ export const isLocalPreviewHost = (hostname: string) =>
 
 export const buildUnifiedLoginUrl = (currentHref: string) => {
   const currentUrl = new URL(currentHref)
+  const useDevelopmentAuthPort = currentUrl.protocol !== 'https:' && isLocalPreviewHost(currentUrl.hostname)
   const loginUrl = new URL(
-    isLocalPreviewHost(currentUrl.hostname)
+    useDevelopmentAuthPort
       ? `${currentUrl.protocol}//${currentUrl.hostname}:5180/portal`
-      : '/portal',
-    currentUrl.origin,
+      : `${currentUrl.protocol}//${currentUrl.hostname}/portal`,
   )
   loginUrl.searchParams.set('system', 'big-screen')
   return loginUrl.toString()

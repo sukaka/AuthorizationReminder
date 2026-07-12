@@ -133,6 +133,7 @@ def test_image_can_be_uploaded_previewed_and_downloaded(client_for_user) -> None
     download = owner.get(f"/api/knowledge/files/{created['file_uuid']}/download")
     assert download.status_code == 200
     assert download.headers["content-type"].startswith("image/png")
+    assert download.headers["content-disposition"].startswith("inline;")
     assert download.content == png
 
 

@@ -412,7 +412,7 @@ it('lets ordinary employees upload personal reference files from the knowledge p
   expect(personalCard).toHaveTextContent('我的资料');
   expect(personalCard).toHaveTextContent('用户上传');
   expect(personalCard).not.toHaveTextContent('personal_reference');
-  expect(await screen.findByText('资料已上传：个人模板.txt')).toBeInTheDocument();
+  expect(await screen.findByText('已上传 1 个资料。')).toBeInTheDocument();
   appendSpy.mockRestore();
 });
 
@@ -626,7 +626,7 @@ it('lets administrators upload official knowledge files from the knowledge page'
   expect(uploadedCard).toHaveTextContent('管理员上传');
   expect(uploadedCard).not.toHaveTextContent('official_knowledge');
   expect(uploadedCard).toHaveTextContent('可查找');
-  expect(await screen.findByText('正式资料已上传：产品白皮书.txt')).toBeInTheDocument();
+  expect(await screen.findByText('已上传 1 个正式资料。')).toBeInTheDocument();
   appendSpy.mockRestore();
 });
 
@@ -711,12 +711,14 @@ it('explains when knowledge upload is rejected by the proxy body size limit', as
   );
   await userEvent.click(screen.getByRole('button', { name: '开始上传' }));
 
-  expect(await screen.findByText('资料上传失败：文件超过 100MB 上传限制，请压缩或拆分后再上传。')).toBeInTheDocument();
+  expect(await screen.findByText(/资料上传失败：文件超过 100MB 上传限制，请压缩或拆分后再上传。/)).toBeInTheDocument();
 });
 
 it('supports preview download and delete actions for visible knowledge files', async () => {
   const previewRequest = vi.fn();
   const deleteRequest = vi.fn();
+  const renameRequest = vi.fn();
+  const renamePrompt = vi.spyOn(window, 'prompt').mockReturnValue('项目会议纪要.docx');
   const openDownload = vi.spyOn(window, 'open').mockReturnValue(null);
   session('employee');
   server.use(
@@ -763,6 +765,32 @@ it('supports preview download and delete actions for visible knowledge files', a
         }],
       });
     }),
+    http.patch('/api/knowledge/files/file-personal-1', async ({ request }) => {
+      renameRequest(await request.json());
+      return HttpResponse.json({
+        file_uuid: 'file-personal-1',
+        knowledge_base_id: '',
+        file_name: '项目会议纪要.docx',
+        file_type: 'docx',
+        file_size: 4096,
+        visibility: 'private',
+        status: 'READY',
+        chunk_count: 3,
+        created_at: '2026-06-28T09:00:00Z',
+        source_type: 'user_upload',
+        usage_type: 'personal_reference',
+        review_status: 'draft',
+        rag_enabled: false,
+        reference_enabled: true,
+        rag_scope: 'personal',
+        permission_scope: 'private',
+        category: '会议纪要',
+        document_type: '个人模板',
+        tags: ['会议', '模板'],
+        parse_status: 'parsed',
+        index_status: 'indexed',
+      });
+    }),
     http.delete('/api/knowledge/files/file-personal-1', () => {
       deleteRequest();
       return new HttpResponse(null, { status: 204 });
@@ -785,12 +813,20 @@ it('supports preview download and delete actions for visible knowledge files', a
   expect(openDownload).toHaveBeenCalledWith('/api/knowledge/files/file-personal-1/download', '_blank', 'noopener,noreferrer');
 
   await userEvent.click(within(fileCard).getByRole('button', { name: '更多操作 会议纪要模板.docx' }));
-  const deleteMenu = within(fileCard).getByRole('menu', { name: '会议纪要模板.docx 更多操作' });
-  await userEvent.click(within(deleteMenu).getByRole('menuitem', { name: '删除 会议纪要模板.docx' }));
+  const renameMenu = within(fileCard).getByRole('menu', { name: '会议纪要模板.docx 更多操作' });
+  await userEvent.click(within(renameMenu).getByRole('menuitem', { name: '重命名 会议纪要模板.docx' }));
+  expect(renameRequest).toHaveBeenCalledWith({ file_name: '项目会议纪要.docx' });
+  expect(await screen.findByText('已重命名为：项目会议纪要.docx')).toBeInTheDocument();
+
+  const renamedCard = await screen.findByRole('listitem', { name: /项目会议纪要\.docx/ });
+  await userEvent.click(within(renamedCard).getByRole('button', { name: '更多操作 项目会议纪要.docx' }));
+  const deleteMenu = within(renamedCard).getByRole('menu', { name: '项目会议纪要.docx 更多操作' });
+  await userEvent.click(within(deleteMenu).getByRole('menuitem', { name: '删除 项目会议纪要.docx' }));
   expect(deleteRequest).toHaveBeenCalledTimes(1);
   expect(screen.queryByText('会议纪要模板.docx')).not.toBeInTheDocument();
 
   openDownload.mockRestore();
+  renamePrompt.mockRestore();
 });
 
 it('summarizes a visible knowledge file with source labels', async () => {
@@ -1285,7 +1321,7 @@ it('lets administrators enable and disable RAG for official knowledge files', as
   expect(fileCard).toHaveTextContent('已整理 8 个段落');
 });
 
-it('keeps secondary knowledge categories out of the left rail and filters them from right-side chips', async () => {
+it('shows secondary knowledge categories in the left rail and filters by them', async () => {
   session('admin');
   server.use(
     http.get('/api/knowledge/categories', () => HttpResponse.json({
@@ -1350,7 +1386,7 @@ it('keeps secondary knowledge categories out of the left rail and filters them f
   await userEvent.click(within(mainNav).getByRole('button', { name: '我的资料' }));
   const categoryRail = await screen.findByLabelText('分类目录');
   const parentCategory = within(categoryRail).getByRole('button', { name: '产品资料1' });
-  expect(within(categoryRail).queryByRole('button', { name: 'wdsp1' })).not.toBeInTheDocument();
+  const nestedCategory = within(categoryRail).getByRole('button', { name: 'wdsp1' });
 
   expect(parentCategory).not.toHaveClass('is-child');
 
@@ -1359,6 +1395,10 @@ it('keeps secondary knowledge categories out of the left rail and filters them f
   expect(within(secondaryFilters).getByRole('button', { name: '全部' })).toHaveAttribute('aria-current', 'true');
   expect(within(secondaryFilters).queryByRole('button', { name: 'wdsp' })).not.toBeInTheDocument();
   expect(await screen.findByRole('listitem', { name: /WEB动态安全管理平台白皮书v3\.1\.docx/ })).toBeInTheDocument();
+
+  await userEvent.click(nestedCategory);
+  expect(nestedCategory).toHaveAttribute('aria-current', 'true');
+  expect(within(secondaryFilters).getByRole('button', { name: 'wdsp' })).toHaveAttribute('aria-current', 'true');
 
   await userEvent.click(within(secondaryFilters).getByRole('button', { name: '更多分类' }));
   const morePanel = await screen.findByRole('dialog', { name: '更多二级分类' });
@@ -2103,6 +2143,54 @@ it('shows primary and secondary categories separately in the upload form', async
   expect(screen.getByLabelText('二级分类')).toHaveTextContent('WDSP');
   await userEvent.selectOptions(screen.getByLabelText('二级分类'), '云管平台');
   expect(screen.getByRole('status', { name: '资料归档位置' })).toHaveTextContent('产品资料 / 云管平台');
+});
+
+it('warns and asks for confirmation before uploading a duplicate file name', async () => {
+  session('admin');
+  const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false);
+  server.use(
+    http.get('/api/knowledge/files', () => HttpResponse.json({
+      items: [{
+        file_uuid: 'existing-manual',
+        knowledge_base_id: 'kb-company',
+        file_name: '管理员手册.docx',
+        file_type: 'docx',
+        file_size: 1024,
+        visibility: 'company',
+        status: 'READY',
+        chunk_count: 10,
+        created_at: '2026-07-12T08:00:00Z',
+        source_type: 'admin_upload',
+        usage_type: 'official_knowledge',
+        review_status: 'official',
+        rag_enabled: true,
+        reference_enabled: true,
+        rag_scope: 'company',
+        permission_scope: 'company',
+        category: '产品资料',
+        document_type: '产品手册',
+        tags: [],
+        parse_status: 'parsed',
+        index_status: 'indexed',
+      }],
+      total: 1,
+    })),
+  );
+  render(<App />);
+
+  const mainNav = await screen.findByRole('navigation', { name: '主导航' });
+  await userEvent.click(within(mainNav).getByRole('button', { name: '我的资料' }));
+  await userEvent.click(await screen.findByRole('tab', { name: '上传资料' }));
+  await userEvent.upload(
+    await screen.findByLabelText('上传知识文件'),
+    new File(['manual'], '管理员手册.docx', { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' }),
+  );
+
+  expect(screen.getByText('检测到同名资料：管理员手册.docx。上传前需要再次确认。')).toBeInTheDocument();
+  expect(screen.getByText('资料库已存在同名文件，上传时将再次确认')).toBeInTheDocument();
+  await userEvent.click(screen.getByRole('button', { name: '开始上传' }));
+  expect(confirmSpy).toHaveBeenCalledWith(expect.stringContaining('资料库已存在以下同名文件'));
+  expect(screen.getByText('已取消上传，请修改文件名或移除同名文件后再试。')).toBeInTheDocument();
 });
 
 it('links user and prompt management to existing centers', () => {

@@ -6,6 +6,7 @@ const assert = require('node:assert/strict');
 const root = path.join(__dirname, '..', '..');
 const source = fs.readFileSync(path.join(root, 'auth', 'index.js'), 'utf8');
 const compose = fs.readFileSync(path.join(root, 'docker-compose.yml'), 'utf8');
+const httpsGateway = fs.readFileSync(path.join(root, 'https-nginx', 'default.conf'), 'utf8');
 
 test('unified auth authorize route supports the AI assistant system key', () => {
   assert.match(source, /require\('\.\/ai-assistant-authorization'\)/);
@@ -47,4 +48,23 @@ test('portal login surfaces unreachable AI assistant workspace after successful 
   assert.match(source, /目标系统暂时不可用或未启动/);
   assert.match(source, /showPortalRedirecting\(preferred\.name, preferred\.url\);/);
   assert.match(source, /showPortalRedirecting\(target\.name, target\.url\);/);
+});
+
+test('privileged users enter their dedicated center even when a business system was requested', () => {
+  assert.match(source, /if \(portalMode !== 'switch' && privilegedDefaultSystemKey\)/);
+  assert.doesNotMatch(
+    source,
+    /if \(!requestedSystem && portalMode !== 'switch' && privilegedDefaultSystemKey\)/,
+  );
+});
+
+test('dedicated centers use the public auth origin instead of HTTPS on the internal HTTP port', () => {
+  assert.match(compose, /APP_ADMIN_CENTER_URL: "\$\{AUTH_PUBLIC_URL[^\n]+\/admin-center"/);
+  assert.match(compose, /APP_AUDIT_CENTER_URL: "\$\{AUTH_PUBLIC_URL[^\n]+\/audit-center"/);
+  assert.match(source, /const isInternalAuthPort = loopbackHostSet\.has\(targetHost\) && url\.port === '5180';/);
+  assert.match(source, /url\.port = window\.location\.port;/);
+  assert.match(httpsGateway, /location \^~ \/admin-center \{/);
+  assert.match(httpsGateway, /location \^~ \/audit-center \{/);
+  assert.match(httpsGateway, /location \^~ \/api\/admin-center\/ \{/);
+  assert.match(httpsGateway, /location \^~ \/api\/audit-center\/ \{/);
 });

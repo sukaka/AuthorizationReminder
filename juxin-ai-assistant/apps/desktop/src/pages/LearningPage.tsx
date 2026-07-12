@@ -26,7 +26,7 @@ import {
   type LearningTemplatePayload,
 } from '../api/client';
 
-type LearningTab = 'memories' | 'experiences' | 'templates' | 'template-reviews' | 'failures' | 'feedback';
+type LearningTab = 'knowledge' | 'templates' | 'template-reviews' | 'improvements';
 
 const MEMORY_TYPE_OPTIONS = [
   ['user_preference', '用户偏好'],
@@ -70,7 +70,7 @@ function splitTags(value: string): string[] {
 }
 
 export function LearningPage({ isAdmin = false }: { isAdmin?: boolean }) {
-  const [tab, setTab] = useState<LearningTab>('memories');
+  const [tab, setTab] = useState<LearningTab>('knowledge');
   const [memories, setMemories] = useState<LearningMemoryPayload[]>([]);
   const [experiences, setExperiences] = useState<LearningExperiencePayload[]>([]);
   const [templates, setTemplates] = useState<LearningTemplatePayload[]>([]);
@@ -307,27 +307,28 @@ export function LearningPage({ isAdmin = false }: { isAdmin?: boolean }) {
       </div>
 
       <div className="learning-summary-grid" aria-label="学习闭环概览">
-        <article><strong>{memoryCount}</strong><span>启用记忆</span></article>
-        <article><strong>{experiences.length}</strong><span>经验</span></article>
-        <article><strong>{templates.length}</strong><span>模板</span></article>
+        <article><strong>{memoryCount + experiences.length}</strong><span>知识沉淀 · {memoryCount} 记忆 / {experiences.length} 经验</span></article>
+        <article><strong>{templates.length}</strong><span>我的模板</span></article>
         {isAdmin ? <article><strong>{templateReviews.length}</strong><span>待审模板</span></article> : null}
-        <article><strong>{failures.length}</strong><span>错误修正</span></article>
-        <article><strong>{feedbackLogs.length}</strong><span>反馈记录</span></article>
+        <article><strong>{failures.length + feedbackLogs.length}</strong><span>改进记录 · {failures.length} 修正 / {feedbackLogs.length} 反馈</span></article>
       </div>
 
       <div className="learning-tabs" role="tablist" aria-label="学习中心分类">
-        <button className={tab === 'memories' ? 'is-active' : ''} onClick={() => setTab('memories')} type="button">我的记忆</button>
-        <button className={tab === 'experiences' ? 'is-active' : ''} onClick={() => setTab('experiences')} type="button">我的经验</button>
+        <button className={tab === 'knowledge' ? 'is-active' : ''} onClick={() => setTab('knowledge')} type="button">我的知识</button>
         <button className={tab === 'templates' ? 'is-active' : ''} onClick={() => setTab('templates')} type="button">我的模板</button>
         {isAdmin ? <button className={tab === 'template-reviews' ? 'is-active' : ''} onClick={() => setTab('template-reviews')} type="button">模板审核</button> : null}
-        <button className={tab === 'failures' ? 'is-active' : ''} onClick={() => setTab('failures')} type="button">错误修正记录</button>
-        <button className={tab === 'feedback' ? 'is-active' : ''} onClick={() => setTab('feedback')} type="button">反馈记录</button>
+        <button className={tab === 'improvements' ? 'is-active' : ''} onClick={() => setTab('improvements')} type="button">改进记录</button>
       </div>
 
       {notice ? <p className="learning-notice">{notice}</p> : null}
 
-      {tab === 'memories' ? (
-        <div className="learning-grid">
+      {tab === 'knowledge' ? (
+        <div className="learning-section-stack">
+          <div className="learning-section-heading">
+            <div><span>长期规则</span><h2>记忆与偏好</h2></div>
+            <small>{memoryCount} 条启用</small>
+          </div>
+          <div className="learning-grid">
           <form className="learning-card learning-form" onSubmit={(event) => { event.preventDefault(); void saveMemory(); }}>
             <h2>新增长期记忆</h2>
             <label>
@@ -378,24 +379,26 @@ export function LearningPage({ isAdmin = false }: { isAdmin?: boolean }) {
             ))}
             {!memories.length ? <p className="learning-empty">还没有长期记忆。用户确认后保存的偏好、纠错和规则会出现在这里。</p> : null}
           </div>
-        </div>
-      ) : null}
-
-      {tab === 'experiences' ? (
-        <div className="learning-list">
-          {experiences.map((item) => (
-            <article className="learning-card" key={item.uuid}>
-              <span className="learning-badge">{item.task_type || '通用'}</span>
-              <h2>{item.title || item.summary || '经验'}</h2>
-              <p>{item.summary || item.answer}</p>
-              <small>{tagText(item.tags)}</small>
-              <div className="learning-actions">
-                <button onClick={() => void editExperience(item)} type="button">编辑</button>
-                <button className="danger-action" onClick={() => void removeExperience(item)} type="button">删除</button>
-              </div>
-            </article>
-          ))}
-          {!experiences.length ? <p className="learning-empty">暂无经验。回答下方点击“保存为经验”后会沉淀到这里。</p> : null}
+          </div>
+          <div className="learning-section-heading">
+            <div><span>复用成果</span><h2>经验沉淀</h2></div>
+            <small>{experiences.length} 条经验</small>
+          </div>
+          <div className="learning-list">
+            {experiences.map((item) => (
+              <article className="learning-card" key={item.uuid}>
+                <span className="learning-badge">{item.task_type || '通用'}</span>
+                <h2>{item.title || item.summary || '经验'}</h2>
+                <p>{item.summary || item.answer}</p>
+                <small>{tagText(item.tags)}</small>
+                <div className="learning-actions">
+                  <button onClick={() => void editExperience(item)} type="button">编辑</button>
+                  <button className="danger-action" onClick={() => void removeExperience(item)} type="button">删除</button>
+                </div>
+              </article>
+            ))}
+            {!experiences.length ? <p className="learning-empty">暂无经验。回答下方点击“保存为经验”后会沉淀到这里。</p> : null}
+          </div>
         </div>
       ) : null}
 
@@ -438,8 +441,13 @@ export function LearningPage({ isAdmin = false }: { isAdmin?: boolean }) {
         </div>
       ) : null}
 
-      {tab === 'failures' ? (
-        <div className="learning-list">
+      {tab === 'improvements' ? (
+        <div className="learning-section-stack">
+          <div className="learning-section-heading">
+            <div><span>防止复发</span><h2>错误修正</h2></div>
+            <small>{failures.length} 条规则</small>
+          </div>
+          <div className="learning-list">
           {failures.map((item) => (
             <article className="learning-card" key={item.uuid}>
               <span className="learning-badge">{item.task_type || '通用'}</span>
@@ -455,23 +463,25 @@ export function LearningPage({ isAdmin = false }: { isAdmin?: boolean }) {
             </article>
           ))}
           {!failures.length ? <p className="learning-empty">暂无错误修正记录。记录过的错误会在类似问题中优先提醒小聚避免复发。</p> : null}
-        </div>
-      ) : null}
-
-      {tab === 'feedback' ? (
-        <div className="learning-list">
-          {feedbackLogs.map((item) => (
-            <article className="learning-card" key={item.uuid}>
-              <div>
-                <span className="learning-badge">{FEEDBACK_LABEL[item.feedback_type] || item.feedback_type}</span>
-                {item.saved_as ? <span className="learning-badge">已沉淀为{SAVED_AS_LABEL[item.saved_as] || item.saved_as}</span> : null}
-              </div>
-              <h2>{item.comment || FEEDBACK_LABEL[item.feedback_type] || '反馈'}</h2>
-              <p>会话：{item.conversation_id || '未绑定'} · 消息：{item.message_id || '未绑定'}</p>
-              <small>{new Date(item.created_at).toLocaleString()}</small>
-            </article>
-          ))}
-          {!feedbackLogs.length ? <p className="learning-empty">暂无反馈记录。回答下方点击“有用”“没用”“需要修改”后会出现在这里。</p> : null}
+          </div>
+          <div className="learning-section-heading">
+            <div><span>使用轨迹</span><h2>反馈记录</h2></div>
+            <small>{feedbackLogs.length} 条反馈</small>
+          </div>
+          <div className="learning-list">
+            {feedbackLogs.map((item) => (
+              <article className="learning-card" key={item.uuid}>
+                <div>
+                  <span className="learning-badge">{FEEDBACK_LABEL[item.feedback_type] || item.feedback_type}</span>
+                  {item.saved_as ? <span className="learning-badge">已沉淀为{SAVED_AS_LABEL[item.saved_as] || item.saved_as}</span> : null}
+                </div>
+                <h2>{item.comment || FEEDBACK_LABEL[item.feedback_type] || '反馈'}</h2>
+                <p>会话：{item.conversation_id || '未绑定'} · 消息：{item.message_id || '未绑定'}</p>
+                <small>{new Date(item.created_at).toLocaleString()}</small>
+              </article>
+            ))}
+            {!feedbackLogs.length ? <p className="learning-empty">暂无反馈记录。回答下方点击“有用”“没用”“需要修改”后会出现在这里。</p> : null}
+          </div>
         </div>
       ) : null}
     </section>
