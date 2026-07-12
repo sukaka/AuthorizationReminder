@@ -90,6 +90,18 @@ type SourcePreviewState =
   | { status: 'ready'; citation: ChatCitation; preview: KnowledgeFilePreviewPayload }
   | { status: 'error'; citation: ChatCitation; message: string };
 
+function isReferencedPreviewChunk(
+  citation: ChatCitation,
+  chunk: KnowledgeFilePreviewPayload['chunks'][number],
+  index: number,
+): boolean {
+  if (citation.chunk_id) return citation.chunk_id === chunk.chunk_id;
+  if (citation.chunk_index !== null && citation.chunk_index !== undefined) return citation.chunk_index === chunk.chunk_index;
+  if (citation.page_number !== null && citation.page_number !== undefined) return citation.page_number === chunk.page_number;
+  if (citation.section_title) return citation.section_title === chunk.section_title;
+  return index === 0;
+}
+
 type WordExportNotice =
   | { kind: 'success'; path?: string; fileName?: string; copyStatus?: string; openStatus?: string }
   | { kind: 'error' };
@@ -856,6 +868,7 @@ export function ChatPage() {
     findings: SensitiveFinding[];
   } | null>(null);
   const messageListRef = useRef<HTMLDivElement | null>(null);
+  const sourceHighlightRef = useRef<HTMLElement | null>(null);
   const shouldStickToBottomRef = useRef(true);
   const activeGenerationsRef = useRef<Map<string, ActiveGeneration>>(new Map());
   const activeGenerationKeyRef = useRef('');
@@ -1005,6 +1018,27 @@ export function ChatPage() {
     window.addEventListener('keydown', handleEscapeStop);
     return () => window.removeEventListener('keydown', handleEscapeStop);
   }, [generationStatus]);
+
+  useEffect(() => {
+    if (sourcePreview.status === 'idle') return undefined;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    const closeOnEscape = (event: globalThis.KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      setSourcePreview({ status: 'idle' });
+    };
+    window.addEventListener('keydown', closeOnEscape);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener('keydown', closeOnEscape);
+    };
+  }, [sourcePreview.status]);
+
+  useEffect(() => {
+    if (sourcePreview.status !== 'ready') return;
+    window.requestAnimationFrame(() => sourceHighlightRef.current?.scrollIntoView({ block: 'center' }));
+  }, [sourcePreview]);
 
   const activeProfile = useMemo(
     () => profiles.find((profile) => profile.isDefault && profile.hasApiKey)
@@ -2687,21 +2721,27 @@ export function ChatPage() {
             </div>
 
             {sourcePreview.status !== 'idle' ? (
-              <aside aria-label="来源预览" className="chat-source-preview" role="region">
+              <div
+                className="chat-source-preview-backdrop"
+                onMouseDown={(event) => {
+                  if (event.target === event.currentTarget) setSourcePreview({ status: 'idle' });
+                }}
+              >
+              <aside aria-label="来源预览" aria-modal="true" className="chat-source-preview" role="dialog">
                 <div className="chat-source-preview-header">
                   <div>
                     <span className="chat-source-preview-icon" aria-hidden="true">⌘</span>
-                    <div><strong>来源预览</strong><small>查看本次回答引用的原始资料片段</small></div>
+                    <div><strong>来源预览</strong><small>引用位置已高亮，可滚动查看原始资料</small></div>
                   </div>
-                  <button aria-label="关闭来源预览" onClick={() => setSourcePreview({ status: 'idle' })} type="button">
+                  <button aria-label="关闭来源预览" autoFocus onClick={() => setSourcePreview({ status: 'idle' })} type="button">
                     ×
                   </button>
                 </div>
                 {sourcePreview.status === 'loading' ? (
-                  <p>正在打开来源片段…</p>
+                  <div className="chat-source-preview-state"><span className="button-spinner" />正在打开来源片段…</div>
                 ) : null}
                 {sourcePreview.status === 'error' ? (
-                  <p role="status">{sourcePreview.message}</p>
+                  <p className="chat-source-preview-state" role="status">{sourcePreview.message}</p>
                 ) : null}
                 {sourcePreview.status === 'ready' ? (
                   <div className="chat-source-preview-body">
@@ -2710,17 +2750,24 @@ export function ChatPage() {
                       <h3>{sourcePreview.preview.file_name}</h3>
                       <p>{sourcePreview.preview.notice}</p>
                     </div>
-                    {sourcePreview.preview.chunks.map((chunk) => (
-                      <article key={chunk.chunk_id} className="chat-source-preview-chunk">
-                        <strong>
-                          {chunkReferenceTitle(chunk)}
-                        </strong>
-                        <p>{chunk.text}</p>
-                      </article>
-                    ))}
+                    {sourcePreview.preview.chunks.map((chunk, index) => {
+                      const referenced = isReferencedPreviewChunk(sourcePreview.citation, chunk, index);
+                      return (
+                        <article
+                          key={chunk.chunk_id}
+                          className={`chat-source-preview-chunk${referenced ? ' is-referenced' : ''}`}
+                          ref={referenced ? sourceHighlightRef : undefined}
+                        >
+                          <strong>{chunkReferenceTitle(chunk)}</strong>
+                          {referenced ? <span className="chat-source-highlight-label">本次引用</span> : null}
+                          <p>{referenced ? <mark>{chunk.text}</mark> : chunk.text}</p>
+                        </article>
+                      );
+                    })}
                   </div>
                 ) : null}
               </aside>
+              </div>
             ) : null}
           </div>
 
