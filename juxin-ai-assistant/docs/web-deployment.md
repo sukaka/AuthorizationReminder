@@ -5,13 +5,13 @@
 生产 Web、API、统一登录共用一个 HTTPS Origin：
 
 ```text
-https://服务器IP/                 Web
-https://服务器IP/api/ai/*        AI API
-https://服务器IP/portal          统一登录
-https://服务器IP/api/auth/*      登录 API
+https://服务器IP:8443/                 Web
+https://服务器IP:8443/api/ai/*        AI API
+https://服务器IP:8443/portal          统一登录
+https://服务器IP:8443/api/auth/*      登录 API
 ```
 
-这样登录 Cookie、CORS、回跳地址没有跨域差异。生产 Overlay 会移除 AI API、Web、Auth 的宿主机直出端口，只开放 `443`。桌面端仍使用服务端下发的统一登录地址。
+这样登录 Cookie、CORS、回跳地址没有跨域差异。生产 Overlay 会移除 AI API、Web、Auth 的宿主机直出端口，只开放非标准 HTTPS 端口 `8443`。桌面端仍使用服务端下发的统一登录地址。
 
 ## 1. 准备证书
 
@@ -39,7 +39,8 @@ sudo chmod 600 "$CERT_DIR/server.key"
 
 ```bash
 PUBLIC_HOST=192.0.2.10
-AI_ASSISTANT_PUBLIC_URL=https://192.0.2.10
+AI_ASSISTANT_PUBLIC_URL=https://192.0.2.10:8443
+AI_ASSISTANT_HTTPS_PORT=8443
 AI_ASSISTANT_TLS_CERT=/opt/juxin-ai-assistant/tls/server.crt
 AI_ASSISTANT_TLS_KEY=/opt/juxin-ai-assistant/tls/server.key
 ```
@@ -77,7 +78,7 @@ docker compose \
   ps
 ```
 
-健康检查应返回 `{"status":"ok",...}`。防火墙只需向用户网络开放 TCP `443`；不要开放 `5193`、`18093`、`5180`。
+健康检查应返回 `{"status":"ok",...}`。防火墙只需向用户网络开放 TCP `8443`；不要开放 `443`、`5193`、`18093`、`5180`。
 
 ## 4. 信任自签证书
 
@@ -95,8 +96,8 @@ openssl x509 -in server.crt -noout -fingerprint -sha256
 
 ## 5. 验收
 
-1. 打开 `https://服务器IP`，未登录时进入同源 `/portal?system=ai-assistant`。
-2. 登录后回到 `https://服务器IP`，地址不含 `localhost`。
+1. 打开 `https://服务器IP:8443`，未登录时进入同源 `/portal?system=ai-assistant`。
+2. 登录后回到 `https://服务器IP:8443`，地址不含 `localhost`。
 3. `GET /api/ai/health` 返回 `200`。
 4. 员工能聊天、上传附件、导出 Word、维护个人模型。
 5. 普通员工访问管理接口返回 `403`；管理员可访问授权范围。

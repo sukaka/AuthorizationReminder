@@ -348,9 +348,12 @@ export function getAuthPortalUrl(options: AuthPortalUrlOptions = {}): string {
       // Fall back to the build-time portal below.
     }
   }
-  const authUrl = import.meta.env.VITE_AUTH_PUBLIC_URL || (
-    isDesktopRuntime() ? 'http://localhost:5180' : window.location.origin
-  );
+  // Browser sessions must stay on the origin the user actually opened. A
+  // build-time public URL can point at an internal LAN address in deployments
+  // reached through a public host, which would break logout and re-login.
+  const authUrl = isDesktopRuntime()
+    ? (import.meta.env.VITE_AUTH_PUBLIC_URL || 'http://localhost:5180')
+    : window.location.origin;
   const portal = new URL(`${authUrl.replace(/\/$/, '')}/portal`);
   portal.searchParams.set('system', options.system || 'ai-assistant');
   return formatAuthPortalUrl(portal, options);

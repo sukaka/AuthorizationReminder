@@ -32,6 +32,6 @@ describe('AI assistant HTTPS deployment contract', () => {
     expect(compose).toContain('AUTH_COOKIE_SECURE: "true"');
     expect(compose).toContain('AUTH_SECURITY_STRICT_MODE: "true"');
     expect(compose).toContain('target: 443');
-    expect(compose).toContain('published: "443"');
+    expect(compose).toContain('published: "${AI_ASSISTANT_HTTPS_PORT:-8443}"');
   });
 });
