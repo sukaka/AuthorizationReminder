@@ -28,6 +28,8 @@ test('portal integration does not add a standalone AI assistant login route', ()
 
 test('AI assistant can force a true unified logout through the portal', () => {
   assert.match(source, /const isPortalLogoutRequest = portalLogoutValues\.has\(/);
+  assert.match(source, /function buildPortalUrl\(options = \{\}\) \{/);
+  assert.match(source, /window\.location\.href = buildPortalUrl\(\);/);
   assert.match(source, /if \(isPortalLogoutRequest\) \{\s+clearAuthCookie\(res\);\s+clearCsrfCookie\(res\);/);
   assert.match(source, /function clearPortalSessionMarker\(\) \{/);
   assert.match(source, /sessionStorage\.removeItem\(portalSessionStorageKey\);/);
@@ -59,8 +61,8 @@ test('privileged users enter their dedicated center even when a business system 
 });
 
 test('dedicated centers use the public auth origin instead of HTTPS on the internal HTTP port', () => {
-  assert.match(compose, /APP_ADMIN_CENTER_URL: "\$\{AUTH_PUBLIC_URL[^\n]+\/admin-center"/);
-  assert.match(compose, /APP_AUDIT_CENTER_URL: "\$\{AUTH_PUBLIC_URL[^\n]+\/audit-center"/);
+  assert.match(compose, /APP_ADMIN_CENTER_URL: "\/admin-center"/);
+  assert.match(compose, /APP_AUDIT_CENTER_URL: "\/audit-center"/);
   assert.match(source, /const isInternalAuthPort = loopbackHostSet\.has\(targetHost\) && url\.port === '5180';/);
   assert.match(source, /url\.port = window\.location\.port;/);
   assert.match(httpsGateway, /location \^~ \/admin-center \{/);

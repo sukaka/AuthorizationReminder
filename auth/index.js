@@ -2518,6 +2518,20 @@ const renderDedicatedCenterPage = ({ nonce, config }) => {
   </div>
   <script nonce="${nonce}">
     const systemKey = '${config.key}';
+    const authPublicOrigin = ${JSON.stringify(String(process.env.AUTH_PUBLIC_URL || '').trim())};
+    function buildPortalUrl(options = {}) {
+      try {
+        const url = new URL(window.location.origin || authPublicOrigin);
+        url.pathname = '/portal';
+        url.search = '';
+        if (options.system) url.searchParams.set('system', String(options.system));
+        if (options.mode) url.searchParams.set('mode', String(options.mode));
+        if (options.logout) url.searchParams.set('logout', '1');
+        return url.toString();
+      } catch (_err) {
+        return '/portal';
+      }
+    }
     const allowedRoles = ${JSON.stringify(allowedRoles)};
     const defaultTab = ${JSON.stringify(centerDefinition.defaultTab)};
     const centerRoleGuideText = ${JSON.stringify(centerDefinition.roleGuideText)};
@@ -2915,7 +2929,7 @@ const renderDedicatedCenterPage = ({ nonce, config }) => {
       const text = await response.text();
       const data = parseJsonSafe(text);
       if (response.status === 401) {
-        window.location.href = '/portal?system=' + encodeURIComponent(systemKey);
+        window.location.href = buildPortalUrl({ system: systemKey });
         throw new Error('登录状态已失效');
       }
       if (!response.ok) {
@@ -2994,7 +3008,7 @@ const renderDedicatedCenterPage = ({ nonce, config }) => {
       });
       const blob = await response.blob();
       if (response.status === 401) {
-        window.location.href = '/portal?system=' + encodeURIComponent(systemKey);
+        window.location.href = buildPortalUrl({ system: systemKey });
         throw new Error('登录状态已失效');
       }
       if (!response.ok) {
@@ -3207,7 +3221,7 @@ const renderDedicatedCenterPage = ({ nonce, config }) => {
       } catch (_err) {
         // ignore logout failures and return to portal anyway
       }
-      window.location.href = '/portal';
+      window.location.href = buildPortalUrl();
     }
 
     function syncUserIdentity() {
@@ -3610,7 +3624,7 @@ const renderDedicatedCenterPage = ({ nonce, config }) => {
         setHint('accountNotice', '密码已修改，正在返回登录页重新登录...');
         if (result.reauthRequired) {
           window.setTimeout(() => {
-            window.location.href = '/portal';
+            window.location.href = buildPortalUrl();
           }, 1000);
         }
       } catch (error) {
@@ -4400,11 +4414,11 @@ const renderDedicatedCenterPage = ({ nonce, config }) => {
         });
         const data = await response.json().catch(() => ({}));
         if (response.status === 401) {
-          window.location.href = '/portal?system=' + encodeURIComponent(systemKey);
+          window.location.href = buildPortalUrl({ system: systemKey });
           return;
         }
         if (response.status === 403 && data?.mustChangePassword) {
-          window.location.href = '/portal';
+          window.location.href = buildPortalUrl();
           return;
         }
         if (!response.ok) {
@@ -4433,7 +4447,7 @@ const renderDedicatedCenterPage = ({ nonce, config }) => {
     }
 
     portalBtn.addEventListener('click', () => {
-      window.location.href = '/portal?mode=switch';
+      window.location.href = buildPortalUrl({ mode: 'switch' });
     });
     logoutBtn.addEventListener('click', logout);
     bootstrapCenter();
@@ -4647,6 +4661,20 @@ app.get('/portal', async (req, res) => {
     const portalParams = new URLSearchParams(window.location.search);
     const portalMode = String(portalParams.get('mode') || '').toLowerCase();
     const isPortalLogoutRequest = ${isPortalLogoutRequest ? 'true' : 'false'};
+    const authPublicOrigin = ${JSON.stringify(String(process.env.AUTH_PUBLIC_URL || '').trim())};
+    function buildPortalUrl(options = {}) {
+      try {
+        const url = new URL(window.location.origin || authPublicOrigin);
+        url.pathname = '/portal';
+        url.search = '';
+        if (options.system) url.searchParams.set('system', String(options.system));
+        if (options.mode) url.searchParams.set('mode', String(options.mode));
+        if (options.logout) url.searchParams.set('logout', '1');
+        return url.toString();
+      } catch (_err) {
+        return '/portal';
+      }
+    }
     const autoRedirectWindowMs = 8000;
     const privilegedDefaultSystemKeyByRole = {
       sysadmin: '${ADMIN_CENTER_KEY}',
@@ -4761,6 +4789,14 @@ app.get('/portal', async (req, res) => {
         const currentHost = String(window.location.hostname || '').trim();
         const targetHost = String(url.hostname || '').trim();
         const isInternalAuthPort = loopbackHostSet.has(targetHost) && url.port === '5180';
+        const isUnifiedCenterPath = url.pathname === '/admin-center' || url.pathname.startsWith('/admin-center/')
+          || url.pathname === '/audit-center' || url.pathname.startsWith('/audit-center/');
+        if (currentHost && isUnifiedCenterPath) {
+          url.protocol = window.location.protocol;
+          url.hostname = currentHost;
+          url.port = window.location.port;
+          return url.toString();
+        }
         if (currentHost && isInternalAuthPort) {
           url.protocol = window.location.protocol;
           url.hostname = currentHost;
@@ -4923,7 +4959,7 @@ app.get('/portal', async (req, res) => {
         if (!r.ok) throw new Error(getErrorText({ response: text, data, fallback: '修改密码失败' }));
         setForcePasswordHint('密码已修改，请重新登录。');
         window.setTimeout(() => {
-          window.location.href = '/portal';
+          window.location.href = buildPortalUrl();
         }, 800);
       } catch (err) {
         setForcePasswordError(err.message || '修改密码失败');
@@ -4942,7 +4978,7 @@ app.get('/portal', async (req, res) => {
       } catch (_err) {
         // ignore
       }
-      window.location.href = '/portal';
+      window.location.href = buildPortalUrl();
     }
 
     function renderMfaLoginMethods() {
@@ -5209,7 +5245,7 @@ app.get('/portal', async (req, res) => {
         } catch (_err) {
           // ignore
         }
-        window.location.href = '/portal';
+        window.location.href = buildPortalUrl();
       } catch (err) {
         setMfaSetupError(err.message || '保存二次验证设置失败');
       }
@@ -5227,7 +5263,7 @@ app.get('/portal', async (req, res) => {
       } catch (_err) {
         // ignore
       }
-      window.location.href = '/portal';
+      window.location.href = buildPortalUrl();
     }
 
     async function login(evt){
