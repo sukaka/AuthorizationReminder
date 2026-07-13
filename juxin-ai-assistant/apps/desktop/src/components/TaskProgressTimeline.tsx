@@ -57,6 +57,18 @@ function toolFailed(tool: Record<string, unknown>): boolean {
   return status === 'failed' || status === 'error';
 }
 
+function collapseConsecutiveStages(stageHistory: TaskStageItem[]): TaskStageItem[] {
+  return stageHistory.reduce<TaskStageItem[]>((items, item) => {
+    const previous = items[items.length - 1];
+    if (previous && previous.stage === item.stage) {
+      items[items.length - 1] = item;
+    } else {
+      items.push(item);
+    }
+    return items;
+  }, []);
+}
+
 export function TaskProgressTimeline({
   stage = '',
   label = '',
@@ -69,7 +81,7 @@ export function TaskProgressTimeline({
   onSubmitCompanyReview,
 }: TaskProgressTimelineProps) {
   const normalizedStages = stageHistory.length
-    ? stageHistory
+    ? collapseConsecutiveStages(stageHistory)
     : stage
       ? [{ stage, label, next_action: nextAction }]
       : [];

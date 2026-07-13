@@ -24,6 +24,31 @@ describe('TaskProgressTimeline', () => {
     expect(screen.queryByText(/TaskState|Tool Call|RAG/i)).not.toBeInTheDocument();
   });
 
+  it('collapses consecutive duplicate retrieval stages', () => {
+    render(
+      <TaskProgressTimeline
+        stage="completed"
+        label="生成完成"
+        stageHistory={[
+          { stage: 'analyzing', label: '正在理解你的需求' },
+          { stage: 'retrieving', label: '正在查找资料' },
+          { stage: 'retrieving', label: '正在查找资料' },
+          { stage: 'retrieving', label: '正在查找资料' },
+          { stage: 'generating', label: '正在生成内容' },
+          { stage: 'completed', label: '生成完成' },
+        ]}
+      />,
+    );
+
+    const stages = screen.getAllByRole('listitem').map((item) => item.textContent);
+    expect(stages).toEqual([
+      '正在理解你的需求',
+      '正在查找资料',
+      '正在生成内容',
+      '生成完成',
+    ]);
+  });
+
   it('shows retry and fallback actions for failed stage', () => {
     render(
       <TaskProgressTimeline

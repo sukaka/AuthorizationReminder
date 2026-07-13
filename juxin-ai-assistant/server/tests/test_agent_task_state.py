@@ -91,6 +91,39 @@ def test_task_state_store_marks_failure_with_retry_safe_public_payload(
     assert "TaskState" not in str(payload)
 
 
+def test_task_state_store_collapses_consecutive_duplicate_stages(
+    generation_db,
+) -> None:
+    from app.agent_loop.task_state import TaskStateStore
+
+    store = TaskStateStore(generation_db)
+    state = store.create(
+        user_id="user-1",
+        conversation_id="conv-1",
+        goal="查找项目资料",
+        stage="analyzing",
+        next_action="正在理解你的需求",
+    )
+
+    store.update_stage(
+        state.uuid,
+        stage="retrieving",
+        next_action="正在查找当前附件",
+    )
+    store.update_stage(
+        state.uuid,
+        stage="retrieving",
+        next_action="正在查找公司知识库",
+    )
+
+    payload = store.public_payload_by_id(state.uuid)
+    assert [item["stage"] for item in payload["stage_history"]] == [
+        "analyzing",
+        "retrieving",
+    ]
+    assert payload["stage_history"][-1]["next_action"] == "正在查找公司知识库"
+
+
 def test_loop_runner_persists_task_state_stages_for_chat_run(
     generation_db,
 ) -> None:

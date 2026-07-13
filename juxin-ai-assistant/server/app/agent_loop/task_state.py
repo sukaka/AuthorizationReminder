@@ -65,10 +65,13 @@ class TaskStateStore:
         row.next_action = next_action[:256]
         if selected_sources is not None:
             row.selected_sources_json = selected_sources
-        row.stage_history_json = [
-            *list(row.stage_history_json or []),
-            self._stage_item(stage, next_action),
-        ]
+        stage_history = list(row.stage_history_json or [])
+        stage_item = self._stage_item(stage, next_action)
+        if stage_history and stage_history[-1].get("stage") == stage:
+            stage_history[-1] = stage_item
+        else:
+            stage_history.append(stage_item)
+        row.stage_history_json = stage_history
         self.db.flush()
         return row
 
