@@ -304,15 +304,18 @@ const buildApi = () => ({
 
 const getPortalBaseUrl = () => {
   const configured = String(import.meta.env.VITE_SSO_PORTAL_URL || '').trim()
+  const currentHost = String(window.location.hostname || '').trim()
+  const publicHttpsPort = String(import.meta.env.VITE_SSO_PORTAL_PORT || '8443').trim() || '8443'
   if (configured) {
     try {
       const portalUrl = new URL(configured, window.location.origin)
-      // 5180 is the auth service's internal/plain-HTTP port. Never carry it
-      // into an HTTPS browser URL; the public auth portal is served on 443.
-      if (window.location.protocol === 'https:' && portalUrl.port === '5180') {
+      // The training UI may be opened on :18087 while the shared auth portal
+      // is exposed on a non-standard HTTPS port. Keep SSO on the current host
+      // and never fall back to implicit HTTPS :443.
+      if (window.location.protocol === 'https:') {
         portalUrl.protocol = 'https:'
-        portalUrl.hostname = window.location.hostname
-        portalUrl.port = ''
+        if (currentHost) portalUrl.hostname = currentHost
+        if (!portalUrl.port || portalUrl.port === '5180') portalUrl.port = publicHttpsPort
       }
       return portalUrl.origin
     } catch {
@@ -321,7 +324,7 @@ const getPortalBaseUrl = () => {
   }
   const { protocol, hostname } = window.location
   return protocol === 'https:'
-    ? `${protocol}//${hostname}`
+    ? `${protocol}//${hostname}:${publicHttpsPort}`
     : `${protocol}//${hostname}:5180`
 }
 
