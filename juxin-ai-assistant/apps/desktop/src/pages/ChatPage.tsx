@@ -73,6 +73,10 @@ type UiMessage = {
   isComplete?: boolean;
 };
 
+type ChatPageProps = {
+  initialProjectUuid?: string;
+};
+
 type GeneratedModelResult = Awaited<ReturnType<typeof generateLocalModel>>;
 
 const longTaskStatusLabels: Record<LongTaskPayload['status'], string> = {
@@ -826,11 +830,11 @@ function renderChatContent(
   return blocks.length ? blocks : [<p key="empty">正在生成…</p>];
 }
 
-export function ChatPage() {
+export function ChatPage({ initialProjectUuid }: ChatPageProps = {}) {
   const [sessions, setSessions] = useState<ChatSessionPayload[]>([]);
   const [projects, setProjects] = useState<ProjectPayload[]>([]);
-  const [workspaceType, setWorkspaceType] = useState<'personal' | 'project'>('personal');
-  const [selectedProjectUuid, setSelectedProjectUuid] = useState('');
+  const [workspaceType, setWorkspaceType] = useState<'personal' | 'project'>(initialProjectUuid ? 'project' : 'personal');
+  const [selectedProjectUuid, setSelectedProjectUuid] = useState(initialProjectUuid || '');
   const [profiles, setProfiles] = useState<ModelProfile[]>([]);
   const [mode, setMode] = useState<ChatMode>('normal');
   const [question, setQuestion] = useState('');

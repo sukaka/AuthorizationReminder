@@ -93,3 +93,42 @@ def test_project_member_role_and_duplicate_are_validated(client_for_user) -> Non
         json={"user_id": "u-2", "role": "read_only"},
     )
     assert duplicate.status_code == 409
+
+
+def test_project_managers_can_update_and_remove_members_without_touching_owner(
+    client_for_user,
+) -> None:
+    owner = client_for_user("u-1")
+    project_uuid = _create_project(owner)["project_uuid"]
+    added = owner.post(
+        f"/api/ai/projects/{project_uuid}/members",
+        json={"user_id": "u-2", "role": "member"},
+    )
+    assert added.status_code == 201
+
+    updated = owner.patch(
+        f"/api/ai/projects/{project_uuid}/members/{added.json()['member_uuid']}",
+        json={"role": "reviewer"},
+    )
+    assert updated.status_code == 200, updated.text
+    assert updated.json()["role"] == "reviewer"
+
+    removed = owner.delete(
+        f"/api/ai/projects/{project_uuid}/members/{added.json()['member_uuid']}"
+    )
+    assert removed.status_code == 204, removed.text
+    assert owner.get(f"/api/ai/projects/{project_uuid}/members").json() == [
+        {
+            **owner.get(f"/api/ai/projects/{project_uuid}/members").json()[0],
+            "role": "project_lead",
+        }
+    ]
+
+    owner_member_uuid = owner.get(
+        f"/api/ai/projects/{project_uuid}/members"
+    ).json()[0]["member_uuid"]
+    cannot_demote_owner = owner.patch(
+        f"/api/ai/projects/{project_uuid}/members/{owner_member_uuid}",
+        json={"role": "read_only"},
+    )
+    assert cannot_demote_owner.status_code == 409

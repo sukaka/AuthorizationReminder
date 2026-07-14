@@ -3,7 +3,7 @@ from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field, field_validator
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -51,6 +51,18 @@ class ProjectMemberCreateIn(BaseModel):
     @classmethod
     def strip_user_id(cls, value: object) -> object:
         return value.strip() if isinstance(value, str) else value
+
+
+class ProjectMemberUpdateIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    role: Literal[
+        "project_admin",
+        "member",
+        "reviewer",
+        "read_only",
+        "external_customer",
+    ]
 
 
 class ProjectMemberOut(BaseModel):
@@ -195,7 +207,10 @@ async def get_project(
     )
     members = db.scalars(
         select(ProjectMember)
-        .where(ProjectMember.project_id == project.id)
+        .where(
+            ProjectMember.project_id == project.id,
+            ProjectMember.status == "active",
+        )
         .order_by(ProjectMember.id)
     ).all()
     return ProjectDetailOut(
@@ -220,7 +235,10 @@ async def list_project_members(
     )
     members = db.scalars(
         select(ProjectMember)
-        .where(ProjectMember.project_id == project.id)
+        .where(
+            ProjectMember.project_id == project.id,
+            ProjectMember.status == "active",
+        )
         .order_by(ProjectMember.id)
     ).all()
     return [_member_out(member) for member in members]
@@ -281,3 +299,117 @@ async def add_project_member(
     db.commit()
     db.refresh(member)
     return _member_out(member)
+
+
+@router.patch(
+    "/{project_uuid}/members/{member_uuid}",
+    response_model=ProjectMemberOut,
+)
+async def update_project_member(
+    project_uuid: str,
+    member_uuid: str,
+    body: ProjectMemberUpdateIn,
+    request: Request,
+    session_payload: Annotated[SessionPayload, Depends(get_session)],
+    current_settings: Annotated[Settings, Depends(get_settings)],
+    db: Annotated[Session, Depends(get_db)],
+) -> ProjectMemberOut:
+    await _require_ai_use(request, session_payload, current_settings)
+    project, current_member = require_project_access(
+        db,
+        project_uuid,
+        str(session_payload.user.id),
+    )
+    require_project_manager(current_member)
+    member = db.scalar(
+        select(ProjectMember).where(
+            ProjectMember.uuid == member_uuid,
+            ProjectMember.project_id == project.id,
+            ProjectMember.status == "active",
+        )
+    )
+    if member is None:
+        raise HTTPException(status_code=404, detail="项目成员不存在")
+    if member.user_id == project.owner_user_id or member.role == "project_lead":
+        raise HTTPException(status_code=409, detail="不能修改项目负责人")
+    if member.role in {"project_lead", "project_admin"} and body.role not in {
+        "project_lead",
+        "project_admin",
+    }:
+        manager_count = db.scalar(
+            select(func.count()).select_from(ProjectMember).where(
+                ProjectMember.project_id == project.id,
+                ProjectMember.status == "active",
+                ProjectMember.role.in_(PROJECT_MANAGER_ROLES),
+            )
+        ) or 0
+        if manager_count <= 1:
+            raise HTTPException(status_code=409, detail="项目至少需要一名项目管理员")
+    previous_role = member.role
+    member.role = body.role
+    write_request_audit(
+        db,
+        session_payload,
+        request,
+        current_settings,
+        action="project.member.update",
+        entity_type="project",
+        entity_uuid=project.uuid,
+        metadata={
+            "event": "project_member_role_updated",
+            "member_uuid": member.uuid,
+            "previous_role": previous_role,
+            "role": member.role,
+        },
+    )
+    db.commit()
+    db.refresh(member)
+    return _member_out(member)
+
+
+@router.delete(
+    "/{project_uuid}/members/{member_uuid}",
+    status_code=204,
+)
+async def remove_project_member(
+    project_uuid: str,
+    member_uuid: str,
+    request: Request,
+    session_payload: Annotated[SessionPayload, Depends(get_session)],
+    current_settings: Annotated[Settings, Depends(get_settings)],
+    db: Annotated[Session, Depends(get_db)],
+) -> None:
+    await _require_ai_use(request, session_payload, current_settings)
+    project, current_member = require_project_access(
+        db,
+        project_uuid,
+        str(session_payload.user.id),
+    )
+    require_project_manager(current_member)
+    member = db.scalar(
+        select(ProjectMember).where(
+            ProjectMember.uuid == member_uuid,
+            ProjectMember.project_id == project.id,
+            ProjectMember.status == "active",
+        )
+    )
+    if member is None:
+        raise HTTPException(status_code=404, detail="项目成员不存在")
+    if member.user_id == project.owner_user_id or member.role == "project_lead":
+        raise HTTPException(status_code=409, detail="不能移除项目负责人")
+    member.status = "inactive"
+    write_request_audit(
+        db,
+        session_payload,
+        request,
+        current_settings,
+        action="project.member.remove",
+        entity_type="project",
+        entity_uuid=project.uuid,
+        metadata={
+            "event": "project_member_removed",
+            "member_uuid": member.uuid,
+            "user_id": member.user_id,
+        },
+    )
+    db.commit()

@@ -17,8 +17,15 @@ import {
   type ProjectTaskPayload,
   updateProjectTaskStatus,
 } from '../api/projects';
+import { ProjectWorkspaceExtendedPanel, type ProjectWorkspaceExtendedTab } from '../components/ProjectWorkspaceExtendedPanel';
 
-type ProjectTab = 'overview' | 'tasks' | 'deliverables' | 'issues' | 'activity';
+type ProjectTab = 'overview' | 'tasks' | 'deliverables' | 'issues' | 'activity' | ProjectWorkspaceExtendedTab;
+
+const extendedTabs: ProjectWorkspaceExtendedTab[] = ['chat', 'initialization', 'knowledge', 'memory', 'members'];
+
+function isExtendedTab(tab: ProjectTab): tab is ProjectWorkspaceExtendedTab {
+  return extendedTabs.includes(tab as ProjectWorkspaceExtendedTab);
+}
 
 const tabLabels: Array<{ id: ProjectTab; label: string }> = [
   { id: 'overview', label: '总览' },
@@ -26,6 +33,11 @@ const tabLabels: Array<{ id: ProjectTab; label: string }> = [
   { id: 'deliverables', label: '交付物' },
   { id: 'issues', label: '问题' },
   { id: 'activity', label: '动态' },
+  { id: 'chat', label: '项目对话' },
+  { id: 'initialization', label: '项目初始化' },
+  { id: 'knowledge', label: '资料与知识' },
+  { id: 'memory', label: '项目记忆' },
+  { id: 'members', label: '成员权限' },
 ];
 
 const statusLabels: Record<string, string> = {
@@ -372,6 +384,9 @@ export function ProjectWorkspacePage() {
                   {!resourceLoading && tab === 'deliverables' ? renderDeliverables() : null}
                   {!resourceLoading && tab === 'issues' ? renderIssues() : null}
                   {!resourceLoading && tab === 'activity' ? renderActivity() : null}
+                  {!resourceLoading && isExtendedTab(tab) ? (
+                    <ProjectWorkspaceExtendedPanel key={selectedProjectUuid} activeTab={tab} projectUuid={selectedProjectUuid} />
+                  ) : null}
                 </div>
 
                 <form aria-label="创建项目任务" className="project-create-task" onSubmit={(event) => void handleCreateTask(event)}>
