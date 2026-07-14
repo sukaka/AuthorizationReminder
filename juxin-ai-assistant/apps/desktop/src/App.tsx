@@ -12,6 +12,7 @@ import {
 import { ModelProfilesPage } from './pages/ModelProfilesPage';
 import { AssistantsPage } from './pages/AssistantsPage';
 import { ChatPage } from './pages/ChatPage';
+import { ProjectWorkspacePage } from './pages/ProjectWorkspacePage';
 import { HistoryPage } from './pages/HistoryPage';
 import { KnowledgePage } from './pages/KnowledgePage';
 import { LearningPage } from './pages/LearningPage';
@@ -32,6 +33,7 @@ import {
 type WorkspacePage =
   | 'assistants'
   | 'chat'
+  | 'project-workspace'
   | 'history'
   | 'knowledge'
   | 'skills'
@@ -90,6 +92,8 @@ function Workspace({ session }: { session: SessionPayload }) {
       ? '助手模式'
       : page === 'chat'
         ? '私人工作助理'
+          : page === 'project-workspace'
+            ? '项目工作空间'
           : page === 'history'
             ? '工作成果'
             : page === 'knowledge'
@@ -182,6 +186,7 @@ function Workspace({ session }: { session: SessionPayload }) {
         </div>
         <nav aria-label="主导航">
           <button aria-current={page === 'chat' ? 'page' : undefined} className={page === 'chat' ? 'is-current' : ''} onClick={() => setPage('chat')} type="button"><span className="nav-icon" aria-hidden="true">●</span><span className="nav-label">聊天</span></button>
+          <button aria-current={page === 'project-workspace' ? 'page' : undefined} className={page === 'project-workspace' ? 'is-current' : ''} onClick={() => setPage('project-workspace')} type="button"><span className="nav-icon" aria-hidden="true">⌂</span><span className="nav-label">项目工作空间</span></button>
           <button aria-current={page === 'assistants' ? 'page' : undefined} className={page === 'assistants' ? 'is-current' : ''} onClick={() => setPage('assistants')} type="button"><span className="nav-icon" aria-hidden="true">✦</span><span className="nav-label">助手模式</span></button>
           <button aria-current={page === 'history' ? 'page' : undefined} className={page === 'history' ? 'is-current' : ''} onClick={() => setPage('history')} type="button"><span className="nav-icon" aria-hidden="true">↺</span><span className="nav-label">工作成果</span></button>
           <button aria-current={page === 'skills' ? 'page' : undefined} className={page === 'skills' ? 'is-current' : ''} onClick={() => setPage('skills')} type="button"><span className="nav-icon" aria-hidden="true">◈</span><span className="nav-label">能力中心</span></button>
@@ -266,6 +271,8 @@ function Workspace({ session }: { session: SessionPayload }) {
         <div className="workspace">
         {page === 'models' ? (
           <ModelProfilesPage />
+        ) : page === 'project-workspace' ? (
+          <ProjectWorkspacePage />
         ) : page === 'governance' && isAdmin ? (
           <GovernanceCenter session={session} />
         ) : page === 'department-stats' && isAdmin ? (
