@@ -67,6 +67,8 @@ from .personal_reference_routes import router as personal_reference_router
 from .prompt_client import PromptCenterClient
 from .project_routes import router as project_router
 from .project_initialization_routes import router as project_initialization_router
+from .project_context_routes import router as project_context_router
+from .project_task_routes import router as project_task_router
 from .skill_routes import router as skill_router
 from .skill_registry import SkillRegistry
 from .static_web import mount_static_web
@@ -1649,6 +1651,8 @@ app.include_router(work_artifact_router)
 app.include_router(long_task_router)
 app.include_router(project_router)
 app.include_router(project_initialization_router)
+app.include_router(project_context_router)
+app.include_router(project_task_router)
 
 if settings.web_spa_enabled:
     mount_static_web(app, static_dir=settings.web_static_dir, enabled=True)

@@ -28,6 +28,17 @@ PROJECT_INITIALIZATION_TABLES = {
     "ai_project_service_targets",
     "ai_project_execution_rules",
 }
+PROJECT_CONTEXT_TABLES = {
+    "ai_project_memories",
+    "ai_project_files",
+    "ai_project_artifacts",
+}
+PROJECT_TASK_TABLES = {
+    "ai_project_tasks",
+    "ai_project_deliverables",
+    "ai_project_issues",
+    "ai_project_activities",
+}
 
 
 def migration_config(database_url: str) -> Config:
@@ -45,10 +56,12 @@ def test_migration_revision_graph_is_single_linear_head() -> None:
         migration_config("sqlite+pysqlite:///:memory:")
     )
 
-    assert script.get_heads() == ["0048_project_initialization_foundation"]
+    assert script.get_heads() == ["0050_project_task_delivery_activity"]
     assert [
         revision.revision for revision in script.walk_revisions()
     ] == [
+        "0050_project_task_delivery_activity",
+        "0049_project_context_resources",
         "0048_project_initialization_foundation",
         "0047_project_chat_workspace",
         "0046_project_workspace_foundation",
@@ -117,6 +130,8 @@ def test_foundation_migration_round_trip(tmp_path: Path) -> None:
     assert FOUNDATION_TABLES.issubset(tables)
     assert PROJECT_WORKSPACE_TABLES.issubset(tables)
     assert PROJECT_INITIALIZATION_TABLES.issubset(tables)
+    assert PROJECT_CONTEXT_TABLES.issubset(tables)
+    assert PROJECT_TASK_TABLES.issubset(tables)
 
     chat_session_columns = {
         column["name"] for column in inspect(engine).get_columns("ai_chat_sessions")

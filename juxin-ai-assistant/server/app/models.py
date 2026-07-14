@@ -1108,6 +1108,37 @@ class HotQuestionReportItem(TimestampMixin, Base):
     reviewed_by: Mapped[str] = mapped_column(String(64), default="")
     reviewed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
+
+class ExternalHotQuestionReportItem(TimestampMixin, Base):
+    """Daily external customer hot-question report, separated from internal chat reports."""
+
+    __tablename__ = "ai_external_hot_question_report_items"
+    __table_args__ = (
+        UniqueConstraint(
+            "period_type", "period_start", "period_end", "source_channel", "rank"
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key_type, primary_key=True, autoincrement=True)
+    uuid: Mapped[str] = mapped_column(String(36), unique=True, default=lambda: str(uuid_lib.uuid4()))
+    period_type: Mapped[str] = mapped_column(String(16), index=True)
+    period_start: Mapped[datetime] = mapped_column(DateTime, index=True)
+    period_end: Mapped[datetime] = mapped_column(DateTime, index=True)
+    source_channel: Mapped[str] = mapped_column(String(32), index=True)
+    rank: Mapped[int] = mapped_column(Integer)
+    question_count: Mapped[int] = mapped_column(Integer, default=0)
+    direct_answer_count: Mapped[int] = mapped_column(Integer, default=0)
+    handoff_count: Mapped[int] = mapped_column(Integer, default=0)
+    question_ciphertext: Mapped[bytes] = mapped_column(LargeBinary)
+    question_nonce: Mapped[bytes] = mapped_column(LargeBinary)
+    samples_ciphertext: Mapped[bytes] = mapped_column(LargeBinary)
+    samples_nonce: Mapped[bytes] = mapped_column(LargeBinary)
+    source_file_ids_json: Mapped[list] = mapped_column(JSON, default=list)
+    analysis_summary: Mapped[str] = mapped_column(Text, default="")
+
+
 # Import project workspace models into the shared metadata registry.
 from . import project_workspace_models as project_workspace_models  # noqa: E402,F401
 from . import project_initialization_models as project_initialization_models  # noqa: E402,F401
+from . import project_context_models as project_context_models  # noqa: E402,F401
+from . import project_task_models as project_task_models  # noqa: E402,F401
