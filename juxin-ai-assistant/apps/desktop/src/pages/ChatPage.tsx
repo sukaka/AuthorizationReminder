@@ -40,6 +40,7 @@ import {
   type WebCapturePreviewPayload,
   uploadKnowledgeFile,
 } from '../api/chat';
+import { listProjects, type ProjectPayload } from '../api/projects';
 import {
   checkLoopQuality,
   shouldRunLoopQualityCheck,
@@ -827,6 +828,9 @@ function renderChatContent(
 
 export function ChatPage() {
   const [sessions, setSessions] = useState<ChatSessionPayload[]>([]);
+  const [projects, setProjects] = useState<ProjectPayload[]>([]);
+  const [workspaceType, setWorkspaceType] = useState<'personal' | 'project'>('personal');
+  const [selectedProjectUuid, setSelectedProjectUuid] = useState('');
   const [profiles, setProfiles] = useState<ModelProfile[]>([]);
   const [mode, setMode] = useState<ChatMode>('normal');
   const [question, setQuestion] = useState('');
@@ -878,14 +882,30 @@ export function ChatPage() {
     activeSessionUuidRef.current = activeSessionUuid;
   }, [activeSessionUuid]);
 
+  const projectUuid = workspaceType === 'project' ? selectedProjectUuid : undefined;
+
   const refreshSessions = async (kind: ChatSessionListKind = sessionListKind) => {
-    const payload = await getChatSessionsByKind(kind);
+    const payload = await getChatSessionsByKind(kind, projectUuid);
     setSessions(payload.items);
     const visibleIds = new Set(payload.items.map((item) => item.session_uuid));
     setSelectedSessionIds((current) => current.filter((id) => visibleIds.has(id)));
   };
 
   const shouldUseServerModel = !isDesktopRuntime();
+
+  useEffect(() => {
+    let active = true;
+    listProjects()
+      .then((payload) => {
+        if (active) setProjects(payload);
+      })
+      .catch(() => {
+        if (active) setProjects([]);
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
 
   const refreshLongTasks = async () => {
     const payload = await listLongTasks();
@@ -948,7 +968,7 @@ export function ChatPage() {
         .then((payload) => setProfiles(Array.isArray(payload) ? payload : []))
         .catch(() => setProfiles([]));
     }
-  }, [sessionListKind, shouldUseServerModel]);
+  }, [projectUuid, sessionListKind, shouldUseServerModel]);
 
   useEffect(() => {
     if (!shouldUseServerModel) return undefined;
@@ -1103,7 +1123,7 @@ export function ChatPage() {
     setGenerationStatus(activeGeneration ? (activeGeneration.stopped ? 'stopping' : 'running') : 'idle');
     setStatus('正在加载历史任务…');
     try {
-      const detail = await getChatSession(sessionUuid);
+      const detail = await getChatSession(sessionUuid, projectUuid);
       if (activeSessionUuidRef.current !== sessionUuid) return;
       setActiveSessionUuid(detail.session_uuid);
       setActiveSessionStatus(normalizeSessionStatus(detail.status));
@@ -1443,6 +1463,7 @@ export function ChatPage() {
     try {
       const prepared = await prepareChat({
         sessionUuid: originSessionUuid || undefined,
+        projectUuid,
         question: trimmed,
         mode,
         attachmentFileIds: sessionAttachmentFiles.map((file) => file.fileUuid),
@@ -2043,6 +2064,31 @@ export function ChatPage() {
     void send(source.content);
   };
 
+  const switchWorkspace = (nextProjectUuid: string) => {
+    if (nextProjectUuid === projectUuid) return;
+    if (generationStatus === 'running') void stopActiveGeneration();
+    activeSessionUuidRef.current = '';
+    activeGenerationKeyRef.current = '';
+    setGenerationStatus('idle');
+    setWorkspaceType(nextProjectUuid ? 'project' : 'personal');
+    setSelectedProjectUuid(nextProjectUuid);
+    setActiveSessionUuid('');
+    setActiveSessionStatus('');
+    setSessionListKind('active');
+    setSelectedSessionIds([]);
+    setMessages([]);
+    setQuestion('');
+    setMemorySuggestion(null);
+    setGenerationMetrics(null);
+    setSourcePreview({ status: 'idle' });
+    setWebCapture({ status: 'idle' });
+    setPendingUploadFiles([]);
+    setEnabledReferenceFiles([]);
+    setSelectedPersonalReferenceIds([]);
+    setTaskProgress(null);
+    setStatus('');
+  };
+
   const startNewSession = () => {
     activeSessionUuidRef.current = '';
     activeGenerationKeyRef.current = '';
@@ -2080,7 +2126,7 @@ export function ChatPage() {
   };
 
   const archiveSession = (session: ChatSessionPayload) => runSessionAction(
-    () => archiveChatSession(session.session_uuid),
+    () => archiveChatSession(session.session_uuid, projectUuid),
     '任务已归档',
     sessionListKind,
     session.session_uuid,
@@ -2091,14 +2137,14 @@ export function ChatPage() {
     const nextTitle = window.prompt('重命名任务', session.title)?.trim();
     if (!nextTitle) return;
     await runSessionAction(
-      () => renameChatSession(session.session_uuid, nextTitle).then(() => undefined),
+      () => renameChatSession(session.session_uuid, nextTitle, projectUuid).then(() => undefined),
       '任务已重命名',
       sessionListKind,
     );
   };
 
   const restoreSession = (session: ChatSessionPayload) => runSessionAction(
-    () => restoreChatSession(session.session_uuid),
+    () => restoreChatSession(session.session_uuid, projectUuid),
     '任务已恢复',
     sessionListKind,
     session.session_uuid,
@@ -2106,7 +2152,7 @@ export function ChatPage() {
   );
 
   const softDeleteSession = (session: ChatSessionPayload) => runSessionAction(
-    () => deleteChatSession(session.session_uuid),
+    () => deleteChatSession(session.session_uuid, projectUuid),
     '任务已移入回收站',
     sessionListKind,
     session.session_uuid,
@@ -2116,7 +2162,7 @@ export function ChatPage() {
   const hardDeleteSession = async (session: ChatSessionPayload) => {
     try {
       setStatus('正在彻底删除任务…');
-      await hardDeleteChatSession(session.session_uuid);
+      await hardDeleteChatSession(session.session_uuid, projectUuid);
       setSessions((current) => current.filter((item) => item.session_uuid !== session.session_uuid));
       setSelectedSessionIds((current) => current.filter((sessionUuid) => sessionUuid !== session.session_uuid));
       setStatus('任务已彻底删除');
@@ -2159,7 +2205,7 @@ export function ChatPage() {
     if (!window.confirm(`确认归档选中的 ${selectedSessionIds.length} 个任务？`)) return;
     const ids = selectedSessionIds;
     try {
-      const affected = await bulkArchiveChatSessions(ids);
+      const affected = await bulkArchiveChatSessions(ids, projectUuid);
       if (activeSessionUuid && ids.includes(activeSessionUuid)) {
         setActiveSessionStatus('archived');
       }
@@ -2176,7 +2222,7 @@ export function ChatPage() {
     if (!window.confirm(`确认删除选中的 ${selectedSessionIds.length} 个任务？删除后可在回收站恢复。`)) return;
     const ids = selectedSessionIds;
     try {
-      const affected = await bulkDeleteChatSessions(ids);
+      const affected = await bulkDeleteChatSessions(ids, projectUuid);
       if (activeSessionUuid && ids.includes(activeSessionUuid)) {
         setActiveSessionStatus('deleted');
       }
@@ -2381,6 +2427,26 @@ export function ChatPage() {
         <div className="chat-stage">
           <div className="chat-topbar">
             <div className="chat-top-actions">
+              <label className="chat-mode-select chat-workspace-select">
+                <span>工作空间</span>
+                <select
+                  aria-label="工作空间"
+                  onChange={(event) => switchWorkspace(
+                    event.target.value === 'personal' ? '' : event.target.value,
+                  )}
+                  value={projectUuid || 'personal'}
+                >
+                  <option value="personal">个人工作助理</option>
+                  {projects.map((project) => (
+                    <option key={project.project_uuid} value={project.project_uuid}>
+                      项目 · {project.name}
+                    </option>
+                  ))}
+                  {!projects.length ? (
+                    <option disabled value="project-empty">暂无可访问项目</option>
+                  ) : null}
+                </select>
+              </label>
               <label className="chat-mode-select">
                 <span>助手模式</span>
                 <select

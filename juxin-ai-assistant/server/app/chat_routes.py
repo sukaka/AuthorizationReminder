@@ -4,7 +4,7 @@ from dataclasses import replace
 from time import perf_counter
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -31,6 +31,7 @@ from .config import Settings, get_settings
 from .crypto import ContentCipher
 from .database import get_db
 from .models import ChatMessage, ChatSession
+from .project_access import require_project_access
 from .schemas import (
     ChatCompleteIn,
     ChatFailIn,
@@ -134,6 +135,7 @@ async def chat_sessions(
     session_payload: Annotated[SessionPayload, Depends(get_session)],
     current_settings: Annotated[Settings, Depends(get_settings)],
     db: Annotated[Session, Depends(get_db)],
+    project_uuid: str | None = Query(default=None, max_length=64),
 ) -> ChatSessionListOut:
     await require_action(
         "ai_assistant:use",
@@ -141,7 +143,9 @@ async def chat_sessions(
         session_payload,
         current_settings,
     )
-    items = list_chat_sessions(db, sso_user_id=str(session_payload.user.id))
+    user_id = str(session_payload.user.id)
+    _require_project_scope(db, project_uuid=project_uuid, user_id=user_id)
+    items = list_chat_sessions(db, sso_user_id=user_id, project_uuid=project_uuid)
     return ChatSessionListOut(items=items, total=len(items))
 
 
@@ -166,6 +170,7 @@ async def chat_session_detail(
     current_settings: Annotated[Settings, Depends(get_settings)],
     db: Annotated[Session, Depends(get_db)],
     cipher: Annotated[ContentCipher, Depends(get_chat_content_cipher)],
+    project_uuid: str | None = Query(default=None, max_length=64),
 ) -> ChatSessionDetailOut:
     await require_action(
         "ai_assistant:use",
@@ -173,11 +178,14 @@ async def chat_session_detail(
         session_payload,
         current_settings,
     )
+    user_id = str(session_payload.user.id)
+    _require_project_scope(db, project_uuid=project_uuid, user_id=user_id)
     return get_chat_session_detail(
         db,
-        sso_user_id=str(session_payload.user.id),
+        sso_user_id=user_id,
         session_uuid=session_uuid,
         cipher=cipher,
+        project_uuid=project_uuid,
     )
 
 
@@ -188,13 +196,17 @@ async def delete_chat_session(
     session_payload: Annotated[SessionPayload, Depends(get_session)],
     current_settings: Annotated[Settings, Depends(get_settings)],
     db: Annotated[Session, Depends(get_db)],
+    project_uuid: str | None = Query(default=None, max_length=64),
 ) -> Response:
     await _require_ai_assistant_use(request, session_payload, current_settings)
+    user_id = str(session_payload.user.id)
+    _require_project_scope(db, project_uuid=project_uuid, user_id=user_id)
     try:
         soft_delete_chat_session(
             db,
-            sso_user_id=str(session_payload.user.id),
+            sso_user_id=user_id,
             session_uuid=session_uuid,
+            project_uuid=project_uuid,
         )
         db.commit()
     except Exception:
@@ -217,6 +229,11 @@ async def chat_prepare(
         request,
         session_payload,
         current_settings,
+    )
+    _require_project_scope(
+        db,
+        project_uuid=body.project_uuid,
+        user_id=str(session_payload.user.id),
     )
     sensitive_detector = SensitiveDetector(
         derive_confirmation_key(current_settings.content_encryption_key)
@@ -250,6 +267,7 @@ async def chat_prepare(
             cipher=cipher,
             key_version=current_settings.content_encryption_key_version,
             web_search_provider=current_settings.web_search_provider,
+            settings=current_settings,
         )
         write_request_audit(
             db,
@@ -349,6 +367,12 @@ async def chat_message_generate(
         session_payload,
         current_settings,
     )
+    _verify_prepared_message_context(
+        completion_token=body.completion_token,
+        messages=body.messages,
+        user_id=str(session_payload.user.id),
+        current_settings=current_settings,
+    )
     user_model_profile = get_default_user_model_profile(db, str(session_payload.user.id))
     if user_model_profile is not None:
         result = await generate_with_model_config(
@@ -418,6 +442,12 @@ async def chat_message_generate_stream(
         current_settings,
     )
     user_id = str(session_payload.user.id)
+    _verify_prepared_message_context(
+        completion_token=body.completion_token,
+        messages=body.messages,
+        user_id=user_id,
+        current_settings=current_settings,
+    )
     config = _route_model_config(
         _chat_model_config_for_user(db, user_id, current_settings, cipher),
         body.messages,
@@ -568,9 +598,17 @@ async def active_conversations(
     session_payload: Annotated[SessionPayload, Depends(get_session)],
     current_settings: Annotated[Settings, Depends(get_settings)],
     db: Annotated[Session, Depends(get_db)],
+    project_uuid: str | None = Query(default=None, max_length=64),
 ) -> ChatSessionListOut:
     await _require_ai_assistant_use(request, session_payload, current_settings)
-    items = list_chat_sessions(db, sso_user_id=str(session_payload.user.id), status="active")
+    user_id = str(session_payload.user.id)
+    _require_project_scope(db, project_uuid=project_uuid, user_id=user_id)
+    items = list_chat_sessions(
+        db,
+        sso_user_id=user_id,
+        status="active",
+        project_uuid=project_uuid,
+    )
     return ChatSessionListOut(items=items, total=len(items))
 
 
@@ -580,9 +618,17 @@ async def archived_conversations(
     session_payload: Annotated[SessionPayload, Depends(get_session)],
     current_settings: Annotated[Settings, Depends(get_settings)],
     db: Annotated[Session, Depends(get_db)],
+    project_uuid: str | None = Query(default=None, max_length=64),
 ) -> ChatSessionListOut:
     await _require_ai_assistant_use(request, session_payload, current_settings)
-    items = list_chat_sessions(db, sso_user_id=str(session_payload.user.id), status="archived")
+    user_id = str(session_payload.user.id)
+    _require_project_scope(db, project_uuid=project_uuid, user_id=user_id)
+    items = list_chat_sessions(
+        db,
+        sso_user_id=user_id,
+        status="archived",
+        project_uuid=project_uuid,
+    )
     return ChatSessionListOut(items=items, total=len(items))
 
 
@@ -592,9 +638,17 @@ async def trashed_conversations(
     session_payload: Annotated[SessionPayload, Depends(get_session)],
     current_settings: Annotated[Settings, Depends(get_settings)],
     db: Annotated[Session, Depends(get_db)],
+    project_uuid: str | None = Query(default=None, max_length=64),
 ) -> ChatSessionListOut:
     await _require_ai_assistant_use(request, session_payload, current_settings)
-    items = list_chat_sessions(db, sso_user_id=str(session_payload.user.id), status="deleted")
+    user_id = str(session_payload.user.id)
+    _require_project_scope(db, project_uuid=project_uuid, user_id=user_id)
+    items = list_chat_sessions(
+        db,
+        sso_user_id=user_id,
+        status="deleted",
+        project_uuid=project_uuid,
+    )
     return ChatSessionListOut(items=items, total=len(items))
 
 
@@ -605,13 +659,17 @@ async def archive_conversation(
     session_payload: Annotated[SessionPayload, Depends(get_session)],
     current_settings: Annotated[Settings, Depends(get_settings)],
     db: Annotated[Session, Depends(get_db)],
+    project_uuid: str | None = Query(default=None, max_length=64),
 ) -> ConversationMutationOut:
     await _require_ai_assistant_use(request, session_payload, current_settings)
+    user_id = str(session_payload.user.id)
+    _require_project_scope(db, project_uuid=project_uuid, user_id=user_id)
     try:
         item = archive_chat_session(
             db,
-            sso_user_id=str(session_payload.user.id),
+            sso_user_id=user_id,
             session_uuid=conversation_id,
+            project_uuid=project_uuid,
         )
         db.commit()
     except Exception:
@@ -627,13 +685,17 @@ async def restore_conversation(
     session_payload: Annotated[SessionPayload, Depends(get_session)],
     current_settings: Annotated[Settings, Depends(get_settings)],
     db: Annotated[Session, Depends(get_db)],
+    project_uuid: str | None = Query(default=None, max_length=64),
 ) -> ConversationMutationOut:
     await _require_ai_assistant_use(request, session_payload, current_settings)
+    user_id = str(session_payload.user.id)
+    _require_project_scope(db, project_uuid=project_uuid, user_id=user_id)
     try:
         item = restore_chat_session(
             db,
-            sso_user_id=str(session_payload.user.id),
+            sso_user_id=user_id,
             session_uuid=conversation_id,
+            project_uuid=project_uuid,
         )
         db.commit()
     except Exception:
@@ -650,14 +712,18 @@ async def rename_conversation(
     session_payload: Annotated[SessionPayload, Depends(get_session)],
     current_settings: Annotated[Settings, Depends(get_settings)],
     db: Annotated[Session, Depends(get_db)],
+    project_uuid: str | None = Query(default=None, max_length=64),
 ) -> ChatSessionItemOut:
     await _require_ai_assistant_use(request, session_payload, current_settings)
+    user_id = str(session_payload.user.id)
+    _require_project_scope(db, project_uuid=project_uuid, user_id=user_id)
     try:
         item = rename_chat_session(
             db,
-            sso_user_id=str(session_payload.user.id),
+            sso_user_id=user_id,
             session_uuid=conversation_id,
             title=body.title,
+            project_uuid=project_uuid,
         )
         db.commit()
     except Exception:
@@ -673,13 +739,17 @@ async def delete_conversation(
     session_payload: Annotated[SessionPayload, Depends(get_session)],
     current_settings: Annotated[Settings, Depends(get_settings)],
     db: Annotated[Session, Depends(get_db)],
+    project_uuid: str | None = Query(default=None, max_length=64),
 ) -> ConversationMutationOut:
     await _require_ai_assistant_use(request, session_payload, current_settings)
+    user_id = str(session_payload.user.id)
+    _require_project_scope(db, project_uuid=project_uuid, user_id=user_id)
     try:
         item = soft_delete_chat_session(
             db,
-            sso_user_id=str(session_payload.user.id),
+            sso_user_id=user_id,
             session_uuid=conversation_id,
+            project_uuid=project_uuid,
         )
         db.commit()
     except Exception:
@@ -695,13 +765,17 @@ async def hard_delete_conversation(
     session_payload: Annotated[SessionPayload, Depends(get_session)],
     current_settings: Annotated[Settings, Depends(get_settings)],
     db: Annotated[Session, Depends(get_db)],
+    project_uuid: str | None = Query(default=None, max_length=64),
 ) -> Response:
     await _require_ai_assistant_use(request, session_payload, current_settings)
+    user_id = str(session_payload.user.id)
+    _require_project_scope(db, project_uuid=project_uuid, user_id=user_id)
     try:
         hard_delete_chat_session(
             db,
-            sso_user_id=str(session_payload.user.id),
+            sso_user_id=user_id,
             session_uuid=conversation_id,
+            project_uuid=project_uuid,
         )
         db.commit()
     except Exception:
@@ -717,13 +791,17 @@ async def bulk_archive_conversations(
     session_payload: Annotated[SessionPayload, Depends(get_session)],
     current_settings: Annotated[Settings, Depends(get_settings)],
     db: Annotated[Session, Depends(get_db)],
+    project_uuid: str | None = Query(default=None, max_length=64),
 ) -> ConversationBulkOut:
     await _require_ai_assistant_use(request, session_payload, current_settings)
+    user_id = str(session_payload.user.id)
+    _require_project_scope(db, project_uuid=project_uuid, user_id=user_id)
     try:
         affected = bulk_archive_chat_sessions(
             db,
-            sso_user_id=str(session_payload.user.id),
+            sso_user_id=user_id,
             session_uuids=body.conversation_ids,
+            project_uuid=project_uuid,
         )
         db.commit()
     except Exception:
@@ -739,13 +817,17 @@ async def bulk_delete_conversations(
     session_payload: Annotated[SessionPayload, Depends(get_session)],
     current_settings: Annotated[Settings, Depends(get_settings)],
     db: Annotated[Session, Depends(get_db)],
+    project_uuid: str | None = Query(default=None, max_length=64),
 ) -> ConversationBulkOut:
     await _require_ai_assistant_use(request, session_payload, current_settings)
+    user_id = str(session_payload.user.id)
+    _require_project_scope(db, project_uuid=project_uuid, user_id=user_id)
     try:
         affected = bulk_soft_delete_chat_sessions(
             db,
-            sso_user_id=str(session_payload.user.id),
+            sso_user_id=user_id,
             session_uuids=body.conversation_ids,
+            project_uuid=project_uuid,
         )
         db.commit()
     except Exception:

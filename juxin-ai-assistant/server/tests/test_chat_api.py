@@ -72,6 +72,66 @@ def test_normal_chat_prepare_complete_and_detail(client_for_user) -> None:
     assert detail.json()["task_state"]["status"] == "completed"
     assert detail.json()["task_state"]["label"] == "已完成"
     assert detail.json()["task_state"]["stage_history"][-2]["label"] == "正在复核结果"
+def test_project_chat_sessions_are_isolated_from_personal_and_other_projects(
+    client_for_user,
+) -> None:
+    owner = client_for_user("project-chat-owner")
+    member = client_for_user("project-chat-member")
+    outsider = client_for_user("project-chat-outsider")
+
+    created_project = owner.post(
+        "/api/ai/projects",
+        json={"name": "项目会话隔离测试", "description": ""},
+    )
+    assert created_project.status_code == 201, created_project.text
+    project_uuid = created_project.json()["project_uuid"]
+    added_member = owner.post(
+        f"/api/ai/projects/{project_uuid}/members",
+        json={"user_id": "project-chat-member", "role": "member"},
+    )
+    assert added_member.status_code == 201, added_member.text
+
+    personal = owner.post(
+        "/api/ai/chat/prepare",
+        json={"question": "个人工作记录", "mode": "normal"},
+    )
+    assert personal.status_code == 201, personal.text
+
+    project = owner.post(
+        "/api/ai/chat/prepare",
+        json={
+            "question": "项目工作记录",
+            "mode": "normal",
+            "project_uuid": project_uuid,
+            "include_personal_references": True,
+        },
+    )
+    assert project.status_code == 201, project.text
+    project_session_uuid = project.json()["session_uuid"]
+
+    personal_sessions = owner.get("/api/conversations")
+    assert personal_sessions.status_code == 200
+    assert all(item["workspace_type"] == "personal" for item in personal_sessions.json()["items"])
+    assert project_session_uuid not in {
+        item["session_uuid"] for item in personal_sessions.json()["items"]
+    }
+
+    project_sessions = member.get(f"/api/conversations?project_uuid={project_uuid}")
+    assert project_sessions.status_code == 200, project_sessions.text
+    assert [item["session_uuid"] for item in project_sessions.json()["items"]] == [
+        project_session_uuid
+    ]
+    assert project_sessions.json()["items"][0]["project_uuid"] == project_uuid
+
+    project_detail = member.get(
+        f"/api/ai/chat/sessions/{project_session_uuid}?project_uuid={project_uuid}"
+    )
+    assert project_detail.status_code == 200, project_detail.text
+    assert project_detail.json()["project_uuid"] == project_uuid
+    assert member.get(f"/api/ai/chat/sessions/{project_session_uuid}").status_code == 404
+    assert outsider.get(f"/api/conversations?project_uuid={project_uuid}").status_code == 404
+
+
     assert detail.json()["task_state"]["stage_history"][-1]["label"] == "已完成"
 
 

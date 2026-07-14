@@ -21,6 +21,7 @@ vi.mock('../src/local/modelStream', () => ({
 
 beforeEach(() => {
   server.use(
+    http.get('/api/ai/projects', () => HttpResponse.json([])),
     http.get('/api/ai/long-tasks', () => HttpResponse.json({ items: [], total: 0 })),
     http.get('/api/knowledge/categories', () => HttpResponse.json({
       items: [{
@@ -75,6 +76,35 @@ beforeEach(() => {
     configurable: true,
     value: {},
   });
+});
+
+it('keeps personal and project chat history in separate workspace scopes', async () => {
+  const requestedProjectUuids: Array<string | null> = [];
+  server.use(
+    http.get('/api/ai/projects', () => HttpResponse.json([{
+      project_uuid: 'project-alpha',
+      name: '项目 Alpha',
+      description: '',
+      status: 'active',
+      owner_user_id: 'user-1',
+      created_at: '2026-07-14T00:00:00Z',
+      updated_at: '2026-07-14T00:00:00Z',
+    }])),
+    http.get('/api/conversations', ({ request }) => {
+      requestedProjectUuids.push(new URL(request.url).searchParams.get('project_uuid'));
+      return HttpResponse.json({ items: [], total: 0 });
+    }),
+  );
+
+  render(<ChatPage />);
+  const workspace = await screen.findByRole('combobox', { name: '工作空间' });
+  await waitFor(() => expect(requestedProjectUuids).toContain(null));
+
+  await userEvent.selectOptions(workspace, 'project-alpha');
+  await waitFor(() => expect(requestedProjectUuids).toContain('project-alpha'));
+
+  await userEvent.selectOptions(workspace, 'personal');
+  await waitFor(() => expect(requestedProjectUuids.at(-1)).toBeNull());
 });
 
 it('renders a downloadable file card for direct file delivery', async () => {

@@ -46,6 +46,8 @@ export type ChatSessionPayload = {
   title: string;
   mode: string;
   status: string;
+  workspace_type: 'personal' | 'project';
+  project_uuid?: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -390,7 +392,11 @@ async function readJson<T>(response: Response, code: string): Promise<T> {
   return payload as T;
 }
 
-export async function getChatSessionsByKind(kind: ChatSessionListKind): Promise<{
+function projectQuery(projectUuid?: string): string {
+  return projectUuid ? `?project_uuid=${encodeURIComponent(projectUuid)}` : '';
+}
+
+export async function getChatSessionsByKind(kind: ChatSessionListKind, projectUuid?: string): Promise<{
   items: ChatSessionPayload[];
   total: number;
 }> {
@@ -399,21 +405,21 @@ export async function getChatSessionsByKind(kind: ChatSessionListKind): Promise<
     : kind === 'archived'
       ? '/api/conversations/archived'
       : '/api/conversations/trash';
-  return readJson(await apiFetch(path, { cache: 'no-store' }), 'CHAT_SESSIONS_FAILED');
+  return readJson(await apiFetch(`${path}${projectQuery(projectUuid)}`, { cache: 'no-store' }), 'CHAT_SESSIONS_FAILED');
 }
 
-export async function archiveChatSession(sessionUuid: string): Promise<void> {
+export async function archiveChatSession(sessionUuid: string, projectUuid?: string): Promise<void> {
   await readJson(
-    await apiFetch(`/api/conversations/${encodeURIComponent(sessionUuid)}/archive`, {
+    await apiFetch(`/api/conversations/${encodeURIComponent(sessionUuid)}/archive${projectQuery(projectUuid)}`, {
       method: 'POST',
     }),
     'CHAT_SESSION_ARCHIVE_FAILED',
   );
 }
 
-export async function renameChatSession(sessionUuid: string, title: string): Promise<ChatSessionPayload> {
+export async function renameChatSession(sessionUuid: string, title: string, projectUuid?: string): Promise<ChatSessionPayload> {
   return readJson(
-    await apiFetch(`/api/conversations/${encodeURIComponent(sessionUuid)}/rename`, {
+    await apiFetch(`/api/conversations/${encodeURIComponent(sessionUuid)}/rename${projectQuery(projectUuid)}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ title }),
@@ -422,26 +428,26 @@ export async function renameChatSession(sessionUuid: string, title: string): Pro
   );
 }
 
-export async function restoreChatSession(sessionUuid: string): Promise<void> {
+export async function restoreChatSession(sessionUuid: string, projectUuid?: string): Promise<void> {
   await readJson(
-    await apiFetch(`/api/conversations/${encodeURIComponent(sessionUuid)}/restore`, {
+    await apiFetch(`/api/conversations/${encodeURIComponent(sessionUuid)}/restore${projectQuery(projectUuid)}`, {
       method: 'POST',
     }),
     'CHAT_SESSION_RESTORE_FAILED',
   );
 }
 
-export async function deleteChatSession(sessionUuid: string): Promise<void> {
+export async function deleteChatSession(sessionUuid: string, projectUuid?: string): Promise<void> {
   await readJson(
-    await apiFetch(`/api/conversations/${encodeURIComponent(sessionUuid)}/delete`, {
+    await apiFetch(`/api/conversations/${encodeURIComponent(sessionUuid)}/delete${projectQuery(projectUuid)}`, {
       method: 'POST',
     }),
     'CHAT_SESSION_DELETE_FAILED',
   );
 }
 
-export async function hardDeleteChatSession(sessionUuid: string): Promise<void> {
-  const response = await apiFetch(`/api/conversations/${encodeURIComponent(sessionUuid)}/hard-delete`, {
+export async function hardDeleteChatSession(sessionUuid: string, projectUuid?: string): Promise<void> {
+  const response = await apiFetch(`/api/conversations/${encodeURIComponent(sessionUuid)}/hard-delete${projectQuery(projectUuid)}`, {
     method: 'DELETE',
   });
   if (response.status === 401) {
@@ -451,9 +457,9 @@ export async function hardDeleteChatSession(sessionUuid: string): Promise<void> 
   if (!response.ok) throw new ApiError(response.status, 'CHAT_SESSION_HARD_DELETE_FAILED');
 }
 
-export async function bulkArchiveChatSessions(sessionUuids: string[]): Promise<number> {
+export async function bulkArchiveChatSessions(sessionUuids: string[], projectUuid?: string): Promise<number> {
   const payload = await readJson<{ affected: number }>(
-    await apiFetch('/api/conversations/bulk-archive', {
+    await apiFetch(`/api/conversations/bulk-archive${projectQuery(projectUuid)}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ conversation_ids: sessionUuids }),
@@ -463,9 +469,9 @@ export async function bulkArchiveChatSessions(sessionUuids: string[]): Promise<n
   return payload.affected;
 }
 
-export async function bulkDeleteChatSessions(sessionUuids: string[]): Promise<number> {
+export async function bulkDeleteChatSessions(sessionUuids: string[], projectUuid?: string): Promise<number> {
   const payload = await readJson<{ affected: number }>(
-    await apiFetch('/api/conversations/bulk-delete', {
+    await apiFetch(`/api/conversations/bulk-delete${projectQuery(projectUuid)}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ conversation_ids: sessionUuids }),
@@ -475,9 +481,9 @@ export async function bulkDeleteChatSessions(sessionUuids: string[]): Promise<nu
   return payload.affected;
 }
 
-export async function getChatSession(sessionUuid: string): Promise<ChatSessionDetailPayload> {
+export async function getChatSession(sessionUuid: string, projectUuid?: string): Promise<ChatSessionDetailPayload> {
   return readJson(
-    await apiFetch(`/api/ai/chat/sessions/${encodeURIComponent(sessionUuid)}`),
+    await apiFetch(`/api/ai/chat/sessions/${encodeURIComponent(sessionUuid)}${projectQuery(projectUuid)}`),
     'CHAT_SESSION_FAILED',
   );
 }
@@ -492,6 +498,7 @@ export async function prepareChat(payload: {
   includePersonalReferences?: boolean;
   includeSessionAttachments?: boolean;
   sensitiveConfirmationDigest?: string;
+  projectUuid?: string;
 }): Promise<ChatPreparePayload> {
   return readJson(
     await apiFetch('/api/ai/chat/prepare', {
@@ -509,6 +516,7 @@ export async function prepareChat(payload: {
         ...(payload.sensitiveConfirmationDigest
           ? { sensitive_confirmation_digest: payload.sensitiveConfirmationDigest }
           : {}),
+        ...(payload.projectUuid ? { project_uuid: payload.projectUuid } : {}),
       }),
     }),
     'CHAT_PREPARE_FAILED',

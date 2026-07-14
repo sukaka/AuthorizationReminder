@@ -14,6 +14,10 @@ FOUNDATION_TABLES = {
     "ai_task_prompt_bindings",
     "ai_generation_records",
 }
+PROJECT_WORKSPACE_TABLES = {
+    "ai_projects",
+    "ai_project_members",
+}
 
 
 def migration_config(database_url: str) -> Config:
@@ -31,10 +35,12 @@ def test_migration_revision_graph_is_single_linear_head() -> None:
         migration_config("sqlite+pysqlite:///:memory:")
     )
 
-    assert script.get_heads() == ["0026_agent_run_contracts"]
+    assert script.get_heads() == ["0047_project_chat_workspace"]
     assert [
         revision.revision for revision in script.walk_revisions()
     ] == [
+        "0047_project_chat_workspace",
+        "0046_project_workspace_foundation",
         "0026_agent_run_contracts",
         "0025_hot_question_reports",
         "0024_shared_faqs",
@@ -96,7 +102,14 @@ def test_foundation_migration_round_trip(tmp_path: Path) -> None:
     engine = create_engine(database_url)
 
     command.upgrade(config, "head")
-    assert FOUNDATION_TABLES.issubset(set(inspect(engine).get_table_names()))
+    tables = set(inspect(engine).get_table_names())
+    assert FOUNDATION_TABLES.issubset(tables)
+    assert PROJECT_WORKSPACE_TABLES.issubset(tables)
+
+    chat_session_columns = {
+        column["name"] for column in inspect(engine).get_columns("ai_chat_sessions")
+    }
+    assert {"workspace_type", "project_uuid"}.issubset(chat_session_columns)
 
 
 def test_agent_run_contracts_migration_creates_and_drops_run_tables(tmp_path: Path) -> None:

@@ -445,6 +445,7 @@ class ChatPrepareIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     session_uuid: str | None = Field(default=None, max_length=64)
+    project_uuid: str | None = Field(default=None, max_length=64)
     question: str = Field(min_length=1, max_length=20_000)
     mode: Literal[
         "normal",
@@ -897,6 +898,8 @@ class ChatSessionItemOut(BaseModel):
     title: str
     mode: str
     status: str
+    workspace_type: str
+    project_uuid: str | None = None
     created_at: datetime
     updated_at: datetime
 

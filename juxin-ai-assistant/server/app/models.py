@@ -811,6 +811,8 @@ class ChatSession(TimestampMixin, Base):
         default=lambda: str(uuid_lib.uuid4()),
     )
     sso_user_id: Mapped[str] = mapped_column(String(64), index=True)
+    workspace_type: Mapped[str] = mapped_column(String(24), default="personal", index=True)
+    project_uuid: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
     title: Mapped[str] = mapped_column(String(255), default="新会话")
     mode: Mapped[str] = mapped_column(String(24), default="NORMAL", index=True)
     status: Mapped[str] = mapped_column(String(24), default="active", index=True)
@@ -1105,3 +1107,6 @@ class HotQuestionReportItem(TimestampMixin, Base):
     status: Mapped[str] = mapped_column(String(24), default="pending", index=True)
     reviewed_by: Mapped[str] = mapped_column(String(64), default="")
     reviewed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+# Import project workspace models into the shared metadata registry.
+from . import project_workspace_models as project_workspace_models  # noqa: E402,F401

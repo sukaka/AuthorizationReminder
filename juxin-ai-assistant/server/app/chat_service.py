@@ -419,14 +419,21 @@ def _get_or_create_session(
     question: str,
     mode: str,
     session_uuid: str | None,
+    project_uuid: str | None = None,
 ) -> ChatSession:
     if session_uuid:
-        session = db.scalar(
-            select(ChatSession).where(
-                ChatSession.uuid == session_uuid,
+        filters = [
+            ChatSession.uuid == session_uuid,
+            ChatSession.workspace_type == ("project" if project_uuid else "personal"),
+        ]
+        if project_uuid:
+            filters.append(ChatSession.project_uuid == project_uuid)
+        else:
+            filters.extend([
                 ChatSession.sso_user_id == sso_user_id,
-            )
-        )
+                ChatSession.project_uuid.is_(None),
+            ])
+        session = db.scalar(select(ChatSession).where(*filters))
         if session is None:
             raise HTTPException(status_code=404, detail="聊天会话不存在或无权访问")
         if session.status == CHAT_SESSION_ARCHIVED:
@@ -439,6 +446,8 @@ def _get_or_create_session(
     session = ChatSession(
         uuid=str(uuid_lib.uuid4()),
         sso_user_id=sso_user_id,
+        workspace_type="project" if project_uuid else "personal",
+        project_uuid=project_uuid,
         title=_session_title(question),
         mode=mode.upper(),
         status=CHAT_SESSION_ACTIVE,
@@ -601,6 +610,7 @@ def prepare_chat(
         question=body.question,
         mode=mode,
         session_uuid=body.session_uuid,
+        project_uuid=body.project_uuid,
     )
     if session.mode != mode:
         session.mode = mode
@@ -626,8 +636,8 @@ def prepare_chat(
         top_k=body.top_k,
         conversation_id=session.uuid,
         attachment_file_ids=body.attachment_file_ids,
-        personal_reference_file_ids=body.personal_reference_file_ids,
-        include_personal_references=body.include_personal_references,
+        personal_reference_file_ids=[] if body.project_uuid else body.personal_reference_file_ids,
+        include_personal_references=False if body.project_uuid else body.include_personal_references,
         include_session_attachments=body.include_session_attachments,
     )
     prepared_messages = loop_result.messages
@@ -972,6 +982,8 @@ def _session_item(row: ChatSession) -> ChatSessionItemOut:
         title=row.title,
         mode=row.mode,
         status=row.status,
+        workspace_type=row.workspace_type,
+        project_uuid=row.project_uuid,
         created_at=row.created_at,
         updated_at=row.updated_at,
     )
@@ -982,12 +994,22 @@ def list_chat_sessions(
     *,
     sso_user_id: str,
     status: str = CHAT_SESSION_ACTIVE,
+    project_uuid: str | None = None,
 ) -> list[ChatSessionItemOut]:
-    rows = list(db.scalars(
-        select(ChatSession)
-        .where(ChatSession.sso_user_id == sso_user_id, ChatSession.status == status)
-        .order_by(ChatSession.updated_at.desc(), ChatSession.id.desc())
-    ))
+    filters = [
+        ChatSession.status == status,
+        ChatSession.workspace_type == ("project" if project_uuid else "personal"),
+    ]
+    if project_uuid:
+        filters.append(ChatSession.project_uuid == project_uuid)
+    else:
+        filters.extend([
+            ChatSession.sso_user_id == sso_user_id,
+            ChatSession.project_uuid.is_(None),
+        ])
+    rows = list(db.scalars(select(ChatSession).where(*filters).order_by(
+        ChatSession.updated_at.desc(), ChatSession.id.desc()
+    )))
     return [_session_item(row) for row in rows]
 
 
@@ -997,14 +1019,21 @@ def get_chat_session_detail(
     sso_user_id: str,
     session_uuid: str,
     cipher: ContentCipher,
+    project_uuid: str | None = None,
 ) -> ChatSessionDetailOut:
-    session = db.scalar(
-        select(ChatSession).where(
-            ChatSession.uuid == session_uuid,
+    filters = [
+        ChatSession.uuid == session_uuid,
+        ChatSession.status.in_([CHAT_SESSION_ACTIVE, CHAT_SESSION_ARCHIVED]),
+        ChatSession.workspace_type == ("project" if project_uuid else "personal"),
+    ]
+    if project_uuid:
+        filters.append(ChatSession.project_uuid == project_uuid)
+    else:
+        filters.extend([
             ChatSession.sso_user_id == sso_user_id,
-            ChatSession.status.in_([CHAT_SESSION_ACTIVE, CHAT_SESSION_ARCHIVED]),
-        )
-    )
+            ChatSession.project_uuid.is_(None),
+        ])
+    session = db.scalar(select(ChatSession).where(*filters))
     if session is None:
         raise HTTPException(status_code=404, detail="聊天会话不存在或无权访问")
     messages = list(db.scalars(
@@ -1017,6 +1046,8 @@ def get_chat_session_detail(
         title=session.title,
         mode=session.mode,
         status=session.status,
+        workspace_type=session.workspace_type,
+        project_uuid=session.project_uuid,
         created_at=session.created_at,
         updated_at=session.updated_at,
         messages=[_message_out(db, cipher, message) for message in messages],
@@ -1033,13 +1064,20 @@ def _get_owned_session(
     *,
     sso_user_id: str,
     session_uuid: str,
+    project_uuid: str | None = None,
 ) -> ChatSession:
-    session = db.scalar(
-        select(ChatSession).where(
-            ChatSession.uuid == session_uuid,
+    filters = [
+        ChatSession.uuid == session_uuid,
+        ChatSession.workspace_type == ("project" if project_uuid else "personal"),
+    ]
+    if project_uuid:
+        filters.append(ChatSession.project_uuid == project_uuid)
+    else:
+        filters.extend([
             ChatSession.sso_user_id == sso_user_id,
-        )
-    )
+            ChatSession.project_uuid.is_(None),
+        ])
+    session = db.scalar(select(ChatSession).where(*filters))
     if session is None:
         raise HTTPException(status_code=404, detail="聊天会话不存在或无权访问")
     return session
@@ -1050,8 +1088,14 @@ def archive_chat_session(
     *,
     sso_user_id: str,
     session_uuid: str,
+    project_uuid: str | None = None,
 ) -> ChatSessionItemOut:
-    session = _get_owned_session(db, sso_user_id=sso_user_id, session_uuid=session_uuid)
+    session = _get_owned_session(
+        db,
+        sso_user_id=sso_user_id,
+        session_uuid=session_uuid,
+        project_uuid=project_uuid,
+    )
     now = datetime.now(UTC)
     session.status = CHAT_SESSION_ARCHIVED
     session.archived_at = now
@@ -1066,8 +1110,14 @@ def restore_chat_session(
     *,
     sso_user_id: str,
     session_uuid: str,
+    project_uuid: str | None = None,
 ) -> ChatSessionItemOut:
-    session = _get_owned_session(db, sso_user_id=sso_user_id, session_uuid=session_uuid)
+    session = _get_owned_session(
+        db,
+        sso_user_id=sso_user_id,
+        session_uuid=session_uuid,
+        project_uuid=project_uuid,
+    )
     now = datetime.now(UTC)
     session.status = CHAT_SESSION_ACTIVE
     session.archived_at = None
@@ -1083,8 +1133,14 @@ def rename_chat_session(
     sso_user_id: str,
     session_uuid: str,
     title: str,
+    project_uuid: str | None = None,
 ) -> ChatSessionItemOut:
-    session = _get_owned_session(db, sso_user_id=sso_user_id, session_uuid=session_uuid)
+    session = _get_owned_session(
+        db,
+        sso_user_id=sso_user_id,
+        session_uuid=session_uuid,
+        project_uuid=project_uuid,
+    )
     normalized = " ".join(title.split())
     if not normalized:
         raise HTTPException(status_code=422, detail="会话标题不能为空")
@@ -1099,8 +1155,14 @@ def soft_delete_chat_session(
     *,
     sso_user_id: str,
     session_uuid: str,
+    project_uuid: str | None = None,
 ) -> ChatSessionItemOut:
-    session = _get_owned_session(db, sso_user_id=sso_user_id, session_uuid=session_uuid)
+    session = _get_owned_session(
+        db,
+        sso_user_id=sso_user_id,
+        session_uuid=session_uuid,
+        project_uuid=project_uuid,
+    )
     now = datetime.now(UTC)
     session.status = CHAT_SESSION_DELETED
     session.deleted_at = now
@@ -1114,8 +1176,14 @@ def hard_delete_chat_session(
     *,
     sso_user_id: str,
     session_uuid: str,
+    project_uuid: str | None = None,
 ) -> None:
-    session = _get_owned_session(db, sso_user_id=sso_user_id, session_uuid=session_uuid)
+    session = _get_owned_session(
+        db,
+        sso_user_id=sso_user_id,
+        session_uuid=session_uuid,
+        project_uuid=project_uuid,
+    )
     db.execute(
         delete(ChatMessageSource).where(
             ChatMessageSource.message_id.in_(
@@ -1134,15 +1202,22 @@ def bulk_archive_chat_sessions(
     *,
     sso_user_id: str,
     session_uuids: list[str],
+    project_uuid: str | None = None,
 ) -> int:
     affected = 0
     for session_uuid in dict.fromkeys(session_uuids):
-        session = db.scalar(
-            select(ChatSession).where(
-                ChatSession.uuid == session_uuid,
+        filters = [
+            ChatSession.uuid == session_uuid,
+            ChatSession.workspace_type == ("project" if project_uuid else "personal"),
+        ]
+        if project_uuid:
+            filters.append(ChatSession.project_uuid == project_uuid)
+        else:
+            filters.extend([
                 ChatSession.sso_user_id == sso_user_id,
-            )
-        )
+                ChatSession.project_uuid.is_(None),
+            ])
+        session = db.scalar(select(ChatSession).where(*filters))
         if session is None:
             continue
         now = datetime.now(UTC)
@@ -1160,15 +1235,22 @@ def bulk_soft_delete_chat_sessions(
     *,
     sso_user_id: str,
     session_uuids: list[str],
+    project_uuid: str | None = None,
 ) -> int:
     affected = 0
     for session_uuid in dict.fromkeys(session_uuids):
-        session = db.scalar(
-            select(ChatSession).where(
-                ChatSession.uuid == session_uuid,
+        filters = [
+            ChatSession.uuid == session_uuid,
+            ChatSession.workspace_type == ("project" if project_uuid else "personal"),
+        ]
+        if project_uuid:
+            filters.append(ChatSession.project_uuid == project_uuid)
+        else:
+            filters.extend([
                 ChatSession.sso_user_id == sso_user_id,
-            )
-        )
+                ChatSession.project_uuid.is_(None),
+            ])
+        session = db.scalar(select(ChatSession).where(*filters))
         if session is None:
             continue
         now = datetime.now(UTC)
