@@ -1110,3 +1110,4 @@ class HotQuestionReportItem(TimestampMixin, Base):
 
 # Import project workspace models into the shared metadata registry.
 from . import project_workspace_models as project_workspace_models  # noqa: E402,F401
+from . import project_initialization_models as project_initialization_models  # noqa: E402,F401

@@ -18,6 +18,16 @@ PROJECT_WORKSPACE_TABLES = {
     "ai_projects",
     "ai_project_members",
 }
+PROJECT_INITIALIZATION_TABLES = {
+    "ai_project_contracts",
+    "ai_project_service_scopes",
+    "ai_project_service_scope_versions",
+    "ai_project_business_systems",
+    "ai_project_assets",
+    "ai_project_target_groups",
+    "ai_project_service_targets",
+    "ai_project_execution_rules",
+}
 
 
 def migration_config(database_url: str) -> Config:
@@ -35,10 +45,11 @@ def test_migration_revision_graph_is_single_linear_head() -> None:
         migration_config("sqlite+pysqlite:///:memory:")
     )
 
-    assert script.get_heads() == ["0047_project_chat_workspace"]
+    assert script.get_heads() == ["0048_project_initialization_foundation"]
     assert [
         revision.revision for revision in script.walk_revisions()
     ] == [
+        "0048_project_initialization_foundation",
         "0047_project_chat_workspace",
         "0046_project_workspace_foundation",
         "0026_agent_run_contracts",
@@ -105,6 +116,7 @@ def test_foundation_migration_round_trip(tmp_path: Path) -> None:
     tables = set(inspect(engine).get_table_names())
     assert FOUNDATION_TABLES.issubset(tables)
     assert PROJECT_WORKSPACE_TABLES.issubset(tables)
+    assert PROJECT_INITIALIZATION_TABLES.issubset(tables)
 
     chat_session_columns = {
         column["name"] for column in inspect(engine).get_columns("ai_chat_sessions")
