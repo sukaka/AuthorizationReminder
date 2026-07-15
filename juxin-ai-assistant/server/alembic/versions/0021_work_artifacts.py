@@ -55,7 +55,7 @@ def upgrade() -> None:
             sa.Column("artifact_type", sa.String(length=48), nullable=False),
             sa.Column("source_scope", sa.String(length=64), nullable=False, server_default=""),
             sa.Column("source_summary_json", sa.JSON(), nullable=True),
-            sa.Column("content_summary", sa.Text(), nullable=False, server_default=""),
+            sa.Column("content_summary", sa.Text(), nullable=False),
             sa.Column("file_name", sa.String(length=255), nullable=False, server_default=""),
             sa.Column("file_path_or_blob_ref", sa.String(length=1024), nullable=False, server_default=""),
             sa.Column("version", sa.Integer(), nullable=False, server_default="1"),
@@ -77,7 +77,6 @@ def upgrade() -> None:
             batch_op.alter_column("task_state_id", existing_type=sa.String(length=64), server_default=None)
             batch_op.alter_column("export_record_uuid", existing_type=sa.String(length=64), server_default=None)
             batch_op.alter_column("source_scope", existing_type=sa.String(length=64), server_default=None)
-            batch_op.alter_column("content_summary", existing_type=sa.Text(), server_default=None)
             batch_op.alter_column("file_name", existing_type=sa.String(length=255), server_default=None)
             batch_op.alter_column("file_path_or_blob_ref", existing_type=sa.String(length=1024), server_default=None)
             batch_op.alter_column("version", existing_type=sa.Integer(), server_default=None)
@@ -95,7 +94,7 @@ def upgrade() -> None:
             sa.Column("file_name", sa.String(length=255), nullable=False, server_default=""),
             sa.Column("file_path_or_blob_ref", sa.String(length=1024), nullable=False, server_default=""),
             sa.Column("source_summary_json", sa.JSON(), nullable=True),
-            sa.Column("content_summary", sa.Text(), nullable=False, server_default=""),
+            sa.Column("content_summary", sa.Text(), nullable=False),
             sa.Column("status", sa.String(length=24), nullable=False, server_default="active"),
             *_timestamps(),
             sa.ForeignKeyConstraint(["artifact_id"], ["ai_work_artifacts.id"], ondelete="CASCADE"),
@@ -109,7 +108,6 @@ def upgrade() -> None:
             batch_op.alter_column("source_ref", existing_type=sa.String(length=128), server_default=None)
             batch_op.alter_column("file_name", existing_type=sa.String(length=255), server_default=None)
             batch_op.alter_column("file_path_or_blob_ref", existing_type=sa.String(length=1024), server_default=None)
-            batch_op.alter_column("content_summary", existing_type=sa.Text(), server_default=None)
             batch_op.alter_column("status", existing_type=sa.String(length=24), server_default=None)
 
 

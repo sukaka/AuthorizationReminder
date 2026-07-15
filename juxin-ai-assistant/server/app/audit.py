@@ -30,6 +30,8 @@ ALLOWED_METADATA_KEYS: Final[frozenset[str]] = frozenset(
         "suggestion_uuid",
         "record_count",
         "risk_confirmation",
+        "from_version",
+        "to_version",
     }
 )
 SENSITIVE_KEY_FRAGMENTS: Final[frozenset[str]] = frozenset(

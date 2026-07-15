@@ -22,12 +22,24 @@ def upgrade() -> None:
     with op.batch_alter_table("ai_assistants") as batch_op:
         batch_op.add_column(sa.Column("allowed_tools_json", sa.JSON(), nullable=True))
         batch_op.add_column(sa.Column("default_source_scope", sa.String(length=32), nullable=False, server_default="company"))
-        batch_op.add_column(sa.Column("default_output_structure", sa.Text(), nullable=False, server_default=""))
+        batch_op.add_column(sa.Column("default_output_structure", sa.Text(), nullable=True))
         batch_op.add_column(sa.Column("word_template", sa.String(length=64), nullable=False, server_default="juxin_standard"))
         batch_op.add_column(sa.Column("version", sa.Integer(), nullable=False, server_default="1"))
         batch_op.add_column(sa.Column("test_cases_json", sa.JSON(), nullable=True))
         batch_op.add_column(sa.Column("review_status", sa.String(length=24), nullable=False, server_default="approved"))
         batch_op.create_index(batch_op.f("ix_ai_assistants_review_status"), ["review_status"])
+    op.execute(
+        sa.text(
+            "UPDATE ai_assistants SET default_output_structure = '' "
+            "WHERE default_output_structure IS NULL"
+        )
+    )
+    with op.batch_alter_table("ai_assistants") as batch_op:
+        batch_op.alter_column(
+            "default_output_structure",
+            existing_type=sa.Text(),
+            nullable=False,
+        )
     op.create_table(
         "ai_assistant_mode_versions",
         sa.Column("id", id_type, autoincrement=True, nullable=False),

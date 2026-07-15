@@ -1,3 +1,5 @@
+import hashlib
+import hmac
 import json
 import logging
 from dataclasses import replace
@@ -67,6 +69,16 @@ router = APIRouter(prefix="/api/ai/chat", tags=["chat"])
 conversations_router = APIRouter(prefix="/api/conversations", tags=["conversations"])
 
 
+def _require_project_scope(
+    db: Session,
+    *,
+    project_uuid: str | None,
+    user_id: str,
+) -> None:
+    if project_uuid:
+        require_project_access(db, project_uuid, user_id)
+
+
 def get_chat_content_cipher(
     current_settings: Annotated[Settings, Depends(get_settings)],
 ) -> ContentCipher:
@@ -75,6 +87,33 @@ def get_chat_content_cipher(
 
 def _ndjson_line(payload: dict) -> str:
     return f"{json.dumps(payload, ensure_ascii=False, separators=(',', ':'))}\n"
+
+
+def _verify_prepared_message_context(
+    *,
+    completion_token: str,
+    messages: list,
+    user_id: str,
+    current_settings: Settings,
+) -> None:
+    """Reject any client mutation of the model context prepared by the server."""
+    nonce, separator, received_signature = completion_token.partition(".")
+    if not nonce or not separator or len(received_signature) != 64:
+        raise HTTPException(status_code=403, detail="CHAT_MESSAGE_CONTEXT_INVALID")
+    canonical_messages = json.dumps(
+        [message.model_dump() for message in messages],
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    payload = f"{user_id}\n{nonce}\n{canonical_messages}".encode("utf-8")
+    expected_signature = hmac.new(
+        derive_confirmation_key(current_settings.content_encryption_key),
+        payload,
+        hashlib.sha256,
+    ).hexdigest()
+    if not hmac.compare_digest(received_signature, expected_signature):
+        raise HTTPException(status_code=403, detail="CHAT_MESSAGE_CONTEXT_INVALID")
 
 
 def _chat_model_config_for_user(

@@ -41,7 +41,7 @@ def upgrade() -> None:
         sa.Column("checkpoint_json", sa.JSON(), nullable=True),
         sa.Column("result_json", sa.JSON(), nullable=True),
         sa.Column("error_code", sa.String(length=64), nullable=False, server_default=""),
-        sa.Column("error_message_safe", sa.Text(), nullable=False, server_default=""),
+        sa.Column("error_message_safe", sa.Text(), nullable=False),
         sa.Column("started_at", sa.DateTime(), nullable=True),
         sa.Column("finished_at", sa.DateTime(), nullable=True),
         sa.Column("created_at", sa.DateTime(), server_default=sa.text("(CURRENT_TIMESTAMP)"), nullable=False),

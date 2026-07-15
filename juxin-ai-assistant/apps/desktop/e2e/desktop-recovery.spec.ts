@@ -56,7 +56,7 @@ test('shows a usable forbidden state and reports 403 to native recovery', async 
 
   await page.goto('/');
 
-  await expect(page.getByRole('heading', { name: '暂时无法进入工作台' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '暂时无法进入 AI 助手' })).toBeVisible();
   await expect(page.getByRole('button', { name: '返回启动页' })).toBeVisible();
   await expect.poll(async () => commands(page)).toContainEqual({
     command: 'workspace_status',
@@ -93,7 +93,7 @@ test('redirects an expired session encountered after workspace entry', async ({ 
   await page.route('**/auth-portal**', (route) => route.fulfill({ body: '<h1>统一登录</h1>', contentType: 'text/html' }));
 
   await page.goto('/');
-  await page.getByRole('button', { name: '全部助手', exact: true }).click();
+  await page.getByRole('button', { name: '助手模式', exact: true }).click();
 
   await expect(page).toHaveURL(/\/auth-portal\?system=ai-assistant$/);
 });

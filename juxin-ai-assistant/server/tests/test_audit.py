@@ -19,6 +19,8 @@ def test_sanitize_metadata_keeps_only_whitelisted_non_content_fields() -> None:
     metadata = {
         "task_uuid": "task-1",
         "risk_confirmation": True,
+        "from_version": 1,
+        "to_version": 2,
         "api_key": "secret",
         "authorization": "Bearer secret",
         "input": "private input",
@@ -46,6 +48,8 @@ def test_sanitize_metadata_keeps_only_whitelisted_non_content_fields() -> None:
     assert cleaned == {
         "task_uuid": "task-1",
         "risk_confirmation": True,
+        "from_version": 1,
+        "to_version": 2,
         "status": {"name": "COMPLETE", "nested": {"safe": "kept"}},
     }
 

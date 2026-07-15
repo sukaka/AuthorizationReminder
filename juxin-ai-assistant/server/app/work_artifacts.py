@@ -35,8 +35,11 @@ def source_summary_for_messages(db: Session, message_ids: list[int]) -> list[dic
         summary.append({
             "source_type": source.source_type,
             "file_name": source.file_name,
+            "file_uuid": source.source_uuid or "",
+            "chunk_id": source.chunk_id or "",
             "page_number": source.page_number,
             "section_title": source.section_title,
+            "chunk_index": source.chunk_index,
         })
     return summary
 

@@ -929,6 +929,35 @@ class WorkArtifact(TimestampMixin, Base):
     export_record_uuid: Mapped[str] = mapped_column(String(64), default="", index=True)
     title: Mapped[str] = mapped_column(String(255))
     artifact_type: Mapped[str] = mapped_column(String(48), index=True)
+    deliverable_type: Mapped[str] = mapped_column(String(48), default="", index=True)
+    scope_type: Mapped[str] = mapped_column(String(16), default="personal", index=True)
+    formality: Mapped[str] = mapped_column(String(16), default="working", index=True)
+    project_id: Mapped[int | None] = mapped_column(
+        foreign_key_type,
+        ForeignKey("ai_projects.id", ondelete="RESTRICT"),
+        nullable=True,
+        index=True,
+    )
+    project_task_id: Mapped[int | None] = mapped_column(
+        foreign_key_type,
+        ForeignKey("ai_project_tasks.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    lifecycle_status: Mapped[str] = mapped_column(String(24), default="draft", index=True)
+    current_version_id: Mapped[int | None] = mapped_column(foreign_key_type, nullable=True)
+    approval_flow_version_id: Mapped[int | None] = mapped_column(
+        foreign_key_type,
+        nullable=True,
+    )
+    approved_version_id: Mapped[int | None] = mapped_column(foreign_key_type, nullable=True)
+    approved_content_hash: Mapped[str] = mapped_column(String(64), default="")
+    delivered_version_id: Mapped[int | None] = mapped_column(foreign_key_type, nullable=True)
+    row_version: Mapped[int] = mapped_column(Integer, default=1)
+    created_by: Mapped[str] = mapped_column(String(64), default="", index=True)
+    archived_by: Mapped[str] = mapped_column(String(64), default="")
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    record_status: Mapped[str] = mapped_column(String(24), default="active", index=True)
     source_scope: Mapped[str] = mapped_column(String(64), default="")
     source_summary_json: Mapped[list] = mapped_column(JSON, default=list)
     content_summary: Mapped[str] = mapped_column(Text, default="")
@@ -940,6 +969,13 @@ class WorkArtifact(TimestampMixin, Base):
 
 class WorkArtifactVersion(TimestampMixin, Base):
     __tablename__ = "ai_work_artifact_versions"
+    __table_args__ = (
+        UniqueConstraint(
+            "artifact_id",
+            "version",
+            name="uq_ai_work_artifact_versions_artifact_version",
+        ),
+    )
 
     id: Mapped[int] = mapped_column(primary_key_type, primary_key=True, autoincrement=True)
     uuid: Mapped[str] = mapped_column(
@@ -953,6 +989,39 @@ class WorkArtifactVersion(TimestampMixin, Base):
         index=True,
     )
     version: Mapped[int] = mapped_column(Integer, default=1)
+    parent_version_id: Mapped[int | None] = mapped_column(
+        foreign_key_type,
+        ForeignKey("ai_work_artifact_versions.id", ondelete="RESTRICT"),
+        nullable=True,
+        index=True,
+    )
+    skill_version_id: Mapped[int | None] = mapped_column(
+        foreign_key_type,
+        ForeignKey("ai_skill_versions.id", ondelete="RESTRICT"),
+        nullable=True,
+        index=True,
+    )
+    template_version_id: Mapped[int | None] = mapped_column(
+        foreign_key_type,
+        ForeignKey("ai_template_versions.id", ondelete="RESTRICT"),
+        nullable=True,
+        index=True,
+    )
+    content_format: Mapped[str] = mapped_column(String(32), default="structured_json")
+    content_schema_version: Mapped[str] = mapped_column(String(32), default="1")
+    content_ciphertext: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+    content_nonce: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+    key_version: Mapped[str] = mapped_column(String(32), default="")
+    content_hash: Mapped[str] = mapped_column(String(64), default="")
+    title_snapshot: Mapped[str] = mapped_column(String(255), default="")
+    summary_snapshot: Mapped[str] = mapped_column(Text, default="")
+    change_summary: Mapped[str] = mapped_column(Text, default="")
+    project_scope_snapshot_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    input_summary_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    source_policy_snapshot_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_by: Mapped[str] = mapped_column(String(64), default="", index=True)
+    creation_reason: Mapped[str] = mapped_column(String(32), default="legacy")
+    legacy_incomplete: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
     source: Mapped[str] = mapped_column(String(64), default="")
     source_ref: Mapped[str] = mapped_column(String(128), default="")
     file_name: Mapped[str] = mapped_column(String(255), default="")
@@ -1142,3 +1211,4 @@ from . import project_workspace_models as project_workspace_models  # noqa: E402
 from . import project_initialization_models as project_initialization_models  # noqa: E402,F401
 from . import project_context_models as project_context_models  # noqa: E402,F401
 from . import project_task_models as project_task_models  # noqa: E402,F401
+from .professional_delivery import models as professional_delivery_models  # noqa: E402,F401

@@ -56,10 +56,11 @@ def test_migration_revision_graph_is_single_linear_head() -> None:
         migration_config("sqlite+pysqlite:///:memory:")
     )
 
-    assert script.get_heads() == ["0050_project_task_delivery_activity"]
+    assert script.get_heads() == ["0051_professional_delivery"]
     assert [
         revision.revision for revision in script.walk_revisions()
     ] == [
+        "0051_professional_delivery",
         "0050_project_task_delivery_activity",
         "0049_project_context_resources",
         "0048_project_initialization_foundation",

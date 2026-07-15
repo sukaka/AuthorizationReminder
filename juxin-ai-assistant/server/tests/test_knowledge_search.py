@@ -11,12 +11,11 @@ def _cipher() -> ContentCipher:
 
 
 def test_top_k_limit_respects_supported_request_size() -> None:
-    from app.knowledge_search import _clamp_top_k
     from app.schemas import ChatPrepareIn, KnowledgeQueryIn
 
-    assert _clamp_top_k(1) == 1
-    assert _clamp_top_k(3) == 3
-    assert _clamp_top_k(8) == 8
+    assert ChatPrepareIn(question="查询资料", top_k=1).top_k == 1
+    assert ChatPrepareIn(question="查询资料", top_k=3).top_k == 3
+    assert KnowledgeQueryIn(question="查询资料", top_k=8).top_k == 8
     with pytest.raises(ValueError):
         ChatPrepareIn(question="查询资料", top_k=9)
     with pytest.raises(ValueError):
@@ -330,7 +329,11 @@ def test_search_uses_dynamic_limit_without_filling_irrelevant_chunks(generation_
             generation_db,
             user_id="user-1",
             name=f"资料-{index}.txt",
-            text=f"一、安全服务\n第 {index} 份资料说明安全服务流程。",
+            text=(
+                f"一、安全服务\n第 {index} 份资料说明安全服务流程。"
+                if index < 7
+                else f"一、绩效考核\n第 {index} 份资料说明绩效复盘流程。"
+            ),
             visibility="PUBLIC",
             usage_type="official_knowledge",
             review_status="official",

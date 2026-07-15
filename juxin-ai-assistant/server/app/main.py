@@ -74,6 +74,26 @@ from .skill_registry import SkillRegistry
 from .static_web import mount_static_web
 from .web_routes import router as web_router
 from .work_artifact_routes import router as work_artifact_router
+from .professional_delivery.routes import (
+    comment_router as professional_comment_router,
+    export_router as professional_export_router,
+    review_issue_router as professional_review_issue_router,
+    router as professional_delivery_router,
+)
+from .professional_delivery.fact_routes import (
+    deliverable_fact_router as professional_deliverable_fact_router,
+    evidence_router as professional_evidence_router,
+    fact_router as professional_fact_router,
+)
+from .professional_delivery.catalog_routes import (
+    approval_flow_catalog_router as professional_approval_flow_catalog_router,
+    skill_catalog_router as professional_skill_catalog_router,
+    template_catalog_router as professional_template_catalog_router,
+)
+from .professional_delivery.runner_routes import (
+    deliverable_run_router as professional_deliverable_run_router,
+    professional_run_router,
+)
 from .schemas import (
     AttachmentOut,
     CatalogAssistantOut,
@@ -1648,6 +1668,18 @@ app.include_router(model_profile_router)
 app.include_router(skill_router)
 app.include_router(web_router)
 app.include_router(work_artifact_router)
+app.include_router(professional_delivery_router)
+app.include_router(professional_comment_router)
+app.include_router(professional_review_issue_router)
+app.include_router(professional_export_router)
+app.include_router(professional_deliverable_fact_router)
+app.include_router(professional_fact_router)
+app.include_router(professional_evidence_router)
+app.include_router(professional_skill_catalog_router)
+app.include_router(professional_template_catalog_router)
+app.include_router(professional_approval_flow_catalog_router)
+app.include_router(professional_deliverable_run_router)
+app.include_router(professional_run_router)
 app.include_router(long_task_router)
 app.include_router(project_router)
 app.include_router(project_initialization_router)

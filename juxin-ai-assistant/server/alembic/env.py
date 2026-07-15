@@ -6,6 +6,7 @@ from sqlalchemy import engine_from_config, pool, text
 
 from app import models, desktop_update_models  # noqa: F401
 from app.database import Base
+from app.professional_delivery import models as professional_delivery_models  # noqa: F401
 
 
 config = context.config

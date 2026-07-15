@@ -13,6 +13,8 @@ import { ModelProfilesPage } from './pages/ModelProfilesPage';
 import { AssistantsPage } from './pages/AssistantsPage';
 import { ChatPage } from './pages/ChatPage';
 import { ProjectWorkspacePage } from './pages/ProjectWorkspacePage';
+import { ProfessionalDeliverablesPage } from './pages/ProfessionalDeliverablesPage';
+import { ProfessionalTasksPage } from './pages/ProfessionalTasksPage';
 import { HistoryPage } from './pages/HistoryPage';
 import { KnowledgePage } from './pages/KnowledgePage';
 import { LearningPage } from './pages/LearningPage';
@@ -34,6 +36,8 @@ type WorkspacePage =
   | 'assistants'
   | 'chat'
   | 'project-workspace'
+  | 'professional-tasks'
+  | 'professional-deliverables'
   | 'history'
   | 'knowledge'
   | 'skills'
@@ -81,6 +85,7 @@ function Workspace({ session }: { session: SessionPayload }) {
   const [page, setPage] = useState<WorkspacePage>('chat');
   const [task, setTask] = useState<TaskDefinition | null>(null);
   const [taskError, setTaskError] = useState('');
+  const [focusProfessionalDeliverableId, setFocusProfessionalDeliverableId] = useState('');
   const [sidebarMode, setSidebarMode] = useState<SidebarMode>('expanded');
   const [sidebarTouched, setSidebarTouched] = useState(false);
   const [systemMenuOpen, setSystemMenuOpen] = useState(false);
@@ -94,6 +99,10 @@ function Workspace({ session }: { session: SessionPayload }) {
         ? '私人工作助理'
           : page === 'project-workspace'
             ? '项目工作空间'
+          : page === 'professional-tasks'
+            ? '专业任务'
+          : page === 'professional-deliverables'
+            ? '成果中心'
           : page === 'history'
             ? '工作成果'
             : page === 'knowledge'
@@ -185,19 +194,21 @@ function Workspace({ session }: { session: SessionPayload }) {
           <strong className="brand-label">聚信 AI 助手 · 私人工作助理</strong>
         </div>
         <nav aria-label="主导航">
-          <button aria-current={page === 'chat' ? 'page' : undefined} className={page === 'chat' ? 'is-current' : ''} onClick={() => setPage('chat')} type="button"><span className="nav-icon" aria-hidden="true">●</span><span className="nav-label">聊天</span></button>
-          <button aria-current={page === 'project-workspace' ? 'page' : undefined} className={page === 'project-workspace' ? 'is-current' : ''} onClick={() => setPage('project-workspace')} type="button"><span className="nav-icon" aria-hidden="true">⌂</span><span className="nav-label">项目工作空间</span></button>
-          <button aria-current={page === 'assistants' ? 'page' : undefined} className={page === 'assistants' ? 'is-current' : ''} onClick={() => setPage('assistants')} type="button"><span className="nav-icon" aria-hidden="true">✦</span><span className="nav-label">助手模式</span></button>
-          <button aria-current={page === 'history' ? 'page' : undefined} className={page === 'history' ? 'is-current' : ''} onClick={() => setPage('history')} type="button"><span className="nav-icon" aria-hidden="true">↺</span><span className="nav-label">工作成果</span></button>
-          <button aria-current={page === 'skills' ? 'page' : undefined} className={page === 'skills' ? 'is-current' : ''} onClick={() => setPage('skills')} type="button"><span className="nav-icon" aria-hidden="true">◈</span><span className="nav-label">能力中心</span></button>
-          <button aria-current={page === 'knowledge' ? 'page' : undefined} className={page === 'knowledge' ? 'is-current' : ''} onClick={() => setPage('knowledge')} type="button"><span className="nav-icon" aria-hidden="true">⌘</span><span className="nav-label">我的资料</span></button>
-          <button aria-current={page === 'learning' ? 'page' : undefined} className={page === 'learning' ? 'is-current' : ''} onClick={() => setPage('learning')} type="button"><span className="nav-icon" aria-hidden="true">✧</span><span className="nav-label">学习中心</span></button>
-          <button aria-current={page === 'models' ? 'page' : undefined} className={page === 'models' ? 'is-current' : ''} onClick={() => setPage('models')} type="button"><span className="nav-icon" aria-hidden="true">◇</span><span className="nav-label">设置</span></button>
+          <button aria-current={page === 'chat' ? 'page' : undefined} aria-label="聊天" className={page === 'chat' ? 'is-current' : ''} onClick={() => setPage('chat')} type="button"><span className="nav-icon" aria-hidden="true">●</span><span className="nav-label">聊天</span></button>
+          <button aria-current={page === 'project-workspace' ? 'page' : undefined} aria-label="项目工作空间" className={page === 'project-workspace' ? 'is-current' : ''} onClick={() => setPage('project-workspace')} type="button"><span className="nav-icon" aria-hidden="true">⌂</span><span className="nav-label">项目工作空间</span></button>
+          <button aria-current={page === 'professional-tasks' ? 'page' : undefined} aria-label="专业任务" className={page === 'professional-tasks' ? 'is-current' : ''} onClick={() => setPage('professional-tasks')} type="button"><span className="nav-icon" aria-hidden="true">◆</span><span className="nav-label">专业任务</span></button>
+          <button aria-current={page === 'professional-deliverables' ? 'page' : undefined} aria-label="成果中心" className={page === 'professional-deliverables' ? 'is-current' : ''} onClick={() => setPage('professional-deliverables')} type="button"><span className="nav-icon" aria-hidden="true">▤</span><span className="nav-label">成果中心</span></button>
+          <button aria-current={page === 'assistants' ? 'page' : undefined} aria-label="助手模式" className={page === 'assistants' ? 'is-current' : ''} onClick={() => setPage('assistants')} type="button"><span className="nav-icon" aria-hidden="true">✦</span><span className="nav-label">助手模式</span></button>
+          <button aria-current={page === 'history' ? 'page' : undefined} aria-label="工作成果" className={page === 'history' ? 'is-current' : ''} onClick={() => setPage('history')} type="button"><span className="nav-icon" aria-hidden="true">↺</span><span className="nav-label">工作成果</span></button>
+          <button aria-current={page === 'skills' ? 'page' : undefined} aria-label="能力中心" className={page === 'skills' ? 'is-current' : ''} onClick={() => setPage('skills')} type="button"><span className="nav-icon" aria-hidden="true">◈</span><span className="nav-label">能力中心</span></button>
+          <button aria-current={page === 'knowledge' ? 'page' : undefined} aria-label="我的资料" className={page === 'knowledge' ? 'is-current' : ''} onClick={() => setPage('knowledge')} type="button"><span className="nav-icon" aria-hidden="true">⌘</span><span className="nav-label">我的资料</span></button>
+          <button aria-current={page === 'learning' ? 'page' : undefined} aria-label="学习中心" className={page === 'learning' ? 'is-current' : ''} onClick={() => setPage('learning')} type="button"><span className="nav-icon" aria-hidden="true">✧</span><span className="nav-label">学习中心</span></button>
+          <button aria-current={page === 'models' ? 'page' : undefined} aria-label="设置" className={page === 'models' ? 'is-current' : ''} onClick={() => setPage('models')} type="button"><span className="nav-icon" aria-hidden="true">◇</span><span className="nav-label">设置</span></button>
           {isAdmin ? (
             <>
-              <button aria-current={page === 'department-stats' ? 'page' : undefined} className={page === 'department-stats' ? 'is-current' : ''} onClick={() => setPage('department-stats')} type="button"><span className="nav-icon" aria-hidden="true">▦</span><span className="nav-label">部门数据</span></button>
-              <button aria-current={page === 'suggestions' ? 'page' : undefined} className={page === 'suggestions' ? 'is-current' : ''} onClick={() => setPage('suggestions')} type="button"><span className="nav-icon" aria-hidden="true">✎</span><span className="nav-label">提交建议</span></button>
-              <button aria-current={page === 'governance' ? 'page' : undefined} className={page === 'governance' ? 'is-current' : ''} onClick={() => setPage('governance')} type="button"><span className="nav-icon" aria-hidden="true">⚙</span><span className="nav-label">治理中心</span></button>
+              <button aria-current={page === 'department-stats' ? 'page' : undefined} aria-label="部门数据" className={page === 'department-stats' ? 'is-current' : ''} onClick={() => setPage('department-stats')} type="button"><span className="nav-icon" aria-hidden="true">▦</span><span className="nav-label">部门数据</span></button>
+              <button aria-current={page === 'suggestions' ? 'page' : undefined} aria-label="提交建议" className={page === 'suggestions' ? 'is-current' : ''} onClick={() => setPage('suggestions')} type="button"><span className="nav-icon" aria-hidden="true">✎</span><span className="nav-label">提交建议</span></button>
+              <button aria-current={page === 'governance' ? 'page' : undefined} aria-label="治理中心" className={page === 'governance' ? 'is-current' : ''} onClick={() => setPage('governance')} type="button"><span className="nav-icon" aria-hidden="true">⚙</span><span className="nav-label">治理中心</span></button>
             </>
           ) : null}
         </nav>
@@ -273,6 +284,15 @@ function Workspace({ session }: { session: SessionPayload }) {
           <ModelProfilesPage />
         ) : page === 'project-workspace' ? (
           <ProjectWorkspacePage />
+        ) : page === 'professional-tasks' ? (
+          <ProfessionalTasksPage
+            onOpenDeliverable={(deliverableId) => {
+              setFocusProfessionalDeliverableId(deliverableId);
+              setPage('professional-deliverables');
+            }}
+          />
+        ) : page === 'professional-deliverables' ? (
+          <ProfessionalDeliverablesPage initialDeliverableId={focusProfessionalDeliverableId} />
         ) : page === 'governance' && isAdmin ? (
           <GovernanceCenter session={session} />
         ) : page === 'department-stats' && isAdmin ? (

@@ -68,6 +68,17 @@ class ExportFileManager:
             raise HTTPException(status_code=404, detail="导出文件不存在")
         return path.read_bytes()
 
+    def delete_docx(self, file_path: str) -> bool:
+        path = Path(file_path).expanduser().resolve()
+        if not _is_relative_to(path, self.storage_dir) or path.suffix.lower() != ".docx":
+            return False
+        existed = path.is_file()
+        try:
+            path.unlink(missing_ok=True)
+        except OSError:
+            return False
+        return existed
+
 
 def safe_docx_file_name(file_name: str) -> str:
     return _safe_export_file_name(file_name, suffix=".docx", fallback="聚信得仁文档")

@@ -1,7 +1,7 @@
 """add project workspace foundation and membership ACL
 
 Revision ID: 0046_project_workspace_foundation
-Revises: 0045_agent_langgraph_checkpoints
+Revises: 0026_agent_run_contracts
 """
 
 from alembic import op
@@ -9,7 +9,7 @@ import sqlalchemy as sa
 
 
 revision = "0046_project_workspace_foundation"
-down_revision = "0045_agent_langgraph_checkpoints"
+down_revision = "0026_agent_run_contracts"
 branch_labels = None
 depends_on = None
 
@@ -21,7 +21,7 @@ def upgrade() -> None:
         sa.Column("id", id_type, primary_key=True, autoincrement=True),
         sa.Column("uuid", sa.String(36), nullable=False, unique=True),
         sa.Column("name", sa.String(128), nullable=False),
-        sa.Column("description", sa.Text(), nullable=False, server_default=""),
+        sa.Column("description", sa.Text(), nullable=False),
         sa.Column("status", sa.String(24), nullable=False, server_default="active"),
         sa.Column("owner_user_id", sa.String(64), nullable=False),
         sa.Column("created_by", sa.String(64), nullable=False),

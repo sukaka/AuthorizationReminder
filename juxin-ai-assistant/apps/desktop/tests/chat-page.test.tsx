@@ -1705,7 +1705,7 @@ it('shows uploaded session attachments as a compact attachment bar', async () =>
   );
   const dialog = await screen.findByRole('dialog', { name: '上传资料' });
   await userEvent.click(within(dialog).getByRole('radio', { name: '仅用于当前任务' }));
-  await userEvent.click(within(dialog).getByRole('button', { name: '开始上传' }));
+  await userEvent.click(within(dialog).getByRole('button', { name: /^开始上传/ }));
 
   const attachmentBar = await screen.findByRole('region', { name: '当前附件' });
   expect(attachmentBar).toHaveClass('chat-attachment-bar');
@@ -1743,7 +1743,7 @@ it('allows uploading PDF files and explains text extraction limits', async () =>
   );
 
   const dialog = await screen.findByRole('dialog', { name: '上传资料' });
-  expect(within(dialog).getByText('PDF 会按页面提取可复制文本，扫描件需要先转成可复制文本。')).toBeInTheDocument();
+  expect(within(dialog).getByRole('note')).toHaveTextContent('PDF 会按页面提取可复制文本，扫描件需要先转成可复制文本。');
   expect(within(dialog).queryByText(/暂不支持 PDF/)).not.toBeInTheDocument();
 });
 
@@ -1768,8 +1768,8 @@ it('accepts document and image files pasted directly into the chat input', async
   });
 
   const dialog = await screen.findByRole('dialog', { name: '上传资料' });
-  expect(within(dialog).getByText('文件：产品介绍.pptx')).toBeInTheDocument();
-  expect(within(dialog).getByText('已从剪贴板识别文件，确认后即可上传。')).toBeInTheDocument();
+  expect(within(dialog).getByRole('note')).toHaveTextContent('产品介绍.pptx：PPT 会按幻灯片标题、正文和备注解析。');
+  expect(within(dialog).getByRole('status')).toHaveTextContent('已从剪贴板识别 1 个文件，确认后可同时上传。');
   expect(within(dialog).getByRole('radio', { name: '保存到我的资料' })).toBeChecked();
 });
 
@@ -2485,7 +2485,7 @@ it('opens a source preview focused on the cited chunk', async () => {
     chunkId: 'chunk-target',
     topK: '1',
   }));
-  expect(await screen.findByRole('region', { name: '来源预览' })).toBeInTheDocument();
+  expect(await screen.findByRole('dialog', { name: '来源预览' })).toBeInTheDocument();
   expect(screen.getByText('第 6 页')).toBeInTheDocument();
   expect(screen.getByText('验收交付物包括测试报告、部署记录和培训签到表。')).toBeInTheDocument();
   expect(screen.queryByText('未识别章节')).not.toBeInTheDocument();
@@ -2553,7 +2553,7 @@ it('shows upload purpose choices and submits a personal file for admin review', 
   expect(screen.queryByText('启用公司级 RAG')).not.toBeInTheDocument();
 
   await userEvent.click(screen.getByRole('radio', { name: '提交管理员审核' }));
-  await userEvent.click(screen.getByRole('button', { name: '开始上传' }));
+  await userEvent.click(screen.getByRole('button', { name: /^开始上传/ }));
 
   await waitFor(() => expect(uploadRequest).toHaveBeenCalled());
   expect(Object.fromEntries(appendedFields)).toEqual(expect.objectContaining({
@@ -2565,7 +2565,7 @@ it('shows upload purpose choices and submits a personal file for admin review', 
     rag_scope: 'personal',
     permission_scope: 'private',
   }));
-  expect(await screen.findByText('资料已提交管理员审核：meeting.txt')).toBeInTheDocument();
+  expect(await screen.findByText('已提交管理员审核 1 个。')).toBeInTheDocument();
   appendSpy.mockRestore();
 });
 
@@ -2635,10 +2635,10 @@ it('automatically includes personal references after upload', async () => {
   );
 
   expect(await screen.findByRole('dialog', { name: '上传资料' })).toBeInTheDocument();
-  await userEvent.click(screen.getByRole('button', { name: '开始上传' }));
+  await userEvent.click(screen.getByRole('button', { name: /^开始上传/ }));
 
   await waitFor(() => expect(uploadRequest).toHaveBeenCalled());
-  expect(await screen.findByText('资料已保存，将自动参与后续检索：会议记录.txt')).toBeInTheDocument();
+  expect(await screen.findByText('已保存 1 个资料，将自动参与后续检索。')).toBeInTheDocument();
   expect(screen.getByRole('combobox', { name: '助手模式' })).toHaveValue('knowledge');
   expect(screen.queryByRole('combobox', { name: '参考资料' })).not.toBeInTheDocument();
 
@@ -2671,10 +2671,10 @@ it('shows upload failures inside the upload dialog', async () => {
   );
 
   const dialog = await screen.findByRole('dialog', { name: '上传资料' });
-  await userEvent.click(within(dialog).getByRole('button', { name: '开始上传' }));
+  await userEvent.click(within(dialog).getByRole('button', { name: /^开始上传/ }));
 
-  expect(await within(dialog).findByText('资料上传失败：文件超过 100MB 上传限制，请压缩或拆分后再上传。')).toBeInTheDocument();
-  expect(within(dialog).getByRole('button', { name: '开始上传' })).toBeEnabled();
+  expect(await within(dialog).findByText('已保存 0 个资料；处理完成后会自动参与检索，失败 1 个。')).toBeInTheDocument();
+  expect(within(dialog).getByRole('button', { name: /^开始上传/ })).toBeEnabled();
 });
 
 it('manages chat sessions across active, archive, and trash lists', async () => {

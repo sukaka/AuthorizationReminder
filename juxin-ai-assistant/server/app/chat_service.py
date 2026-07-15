@@ -1,5 +1,6 @@
 import hashlib
 import hmac
+import json
 import re
 import secrets
 import uuid as uuid_lib
@@ -12,6 +13,7 @@ from sqlalchemy.orm import Session
 from .agent_loop import LoopRunner
 from .agent_loop.task_state import TaskStateStore
 from .agent_loop.verifier import Verifier
+from .config import Settings, get_settings
 from .context.context_builder import RecentChatMessage
 from .crypto import ContentCipher, EncryptedPayload
 from .knowledge_search import RetrievedKnowledgeChunk
@@ -30,6 +32,7 @@ from .schemas import (
     ChatSessionItemOut,
     MessageOut,
 )
+from .sensitive import derive_confirmation_key
 from .web_sources import (
     SearchIntentDetector,
     UrlExtractor,
@@ -503,6 +506,29 @@ def _create_message(
     return message
 
 
+def _sealed_completion_token(
+    *,
+    settings: Settings,
+    sso_user_id: str,
+    messages: list[MessageOut],
+) -> str:
+    """Bind a client-returned model context to the server-prepared request."""
+    nonce = secrets.token_urlsafe(32)
+    canonical_messages = json.dumps(
+        [message.model_dump() for message in messages],
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    payload = f"{sso_user_id}\n{nonce}\n{canonical_messages}".encode("utf-8")
+    signature = hmac.new(
+        derive_confirmation_key(settings.content_encryption_key),
+        payload,
+        hashlib.sha256,
+    ).hexdigest()
+    return f"{nonce}.{signature}"
+
+
 def _link_search_logs_to_answer(
     db: Session,
     *,
@@ -600,6 +626,7 @@ def prepare_chat(
     cipher: ContentCipher,
     key_version: str,
     web_search_provider: str = "duckduckgo-html",
+    settings: Settings | None = None,
 ) -> ChatPrepareOut:
     loop_runner = LoopRunner()
     analysis = loop_runner.task_analyzer.analyze(body.question, body.mode)
@@ -792,7 +819,11 @@ def prepare_chat(
             loop_trace=loop_result.loop_trace,
             task_state=task_state_payload,
         )
-    completion_token = secrets.token_urlsafe(32)
+    completion_token = _sealed_completion_token(
+        settings=settings or get_settings(),
+        sso_user_id=sso_user_id,
+        messages=prepared_messages,
+    )
     assistant = _create_message(
         db,
         cipher,

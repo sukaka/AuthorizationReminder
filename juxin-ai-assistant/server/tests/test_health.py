@@ -7,8 +7,9 @@ def test_health_exposes_service_and_version() -> None:
     response = TestClient(app).get("/health")
 
     assert response.status_code == 200
-    assert response.json() == {
+    payload = response.json()
+    assert payload == {
         "status": "ok",
         "service": "juxin-ai-assistant",
-        "version": "1.2.0",
+        "version": app.version,
     }

@@ -11,6 +11,7 @@ import {
   createLongChatTask,
   deleteChatSession,
   exportChatWord,
+  failChatMessage,
   getChatSession,
   getChatSessionsByKind,
   hardDeleteChatSession,
@@ -1061,7 +1062,12 @@ export function ChatPage({ initialProjectUuid }: ChatPageProps = {}) {
 
   useEffect(() => {
     if (sourcePreview.status !== 'ready') return;
-    window.requestAnimationFrame(() => sourceHighlightRef.current?.scrollIntoView({ block: 'center' }));
+    window.requestAnimationFrame(() => {
+      const highlightedSource = sourceHighlightRef.current;
+      if (typeof highlightedSource?.scrollIntoView === 'function') {
+        highlightedSource.scrollIntoView({ block: 'center' });
+      }
+    });
   }, [sourcePreview]);
 
   const activeProfile = useMemo(
@@ -1464,6 +1470,17 @@ export function ChatPage({ initialProjectUuid }: ChatPageProps = {}) {
       isComplete: true,
     }));
     let assistantId = '';
+    let completionToken = '';
+    const failStoppedGeneration = async () => {
+      if (assistantId && completionToken) {
+        await failChatMessage(assistantId, {
+          completionToken,
+          errorCode: 'USER_CANCELLED',
+          errorMessage: '用户停止生成',
+        }).catch(() => undefined);
+      }
+      if (requestIsVisible()) markGenerationStopped(assistantId);
+    };
     try {
       const prepared = await prepareChat({
         sessionUuid: originSessionUuid || undefined,
@@ -1476,6 +1493,7 @@ export function ChatPage({ initialProjectUuid }: ChatPageProps = {}) {
         includeSessionAttachments: true,
         sensitiveConfirmationDigest: confirmationDigest,
       });
+      completionToken = prepared.completion_token;
       requestSessionUuid = prepared.session_uuid;
       if (generationKey !== prepared.session_uuid) {
         const generationWasActive = activeGenerationKeyRef.current === generationKey;
@@ -1557,7 +1575,7 @@ export function ChatPage({ initialProjectUuid }: ChatPageProps = {}) {
           ));
         });
         if (generation.stopped) {
-          if (requestIsVisible()) markGenerationStopped(assistantId);
+          await failStoppedGeneration();
           return;
         }
         if (requestIsVisible()) {
@@ -1602,7 +1620,7 @@ export function ChatPage({ initialProjectUuid }: ChatPageProps = {}) {
         ));
       });
       if (generation.stopped) {
-        if (requestIsVisible()) markGenerationStopped(assistantId);
+        await failStoppedGeneration();
         return;
       }
       updateRequestMessages((current) => current.map((message) =>
@@ -1628,7 +1646,7 @@ export function ChatPage({ initialProjectUuid }: ChatPageProps = {}) {
             break;
           }
           if (generation.stopped) {
-            if (requestIsVisible()) markGenerationStopped(assistantId);
+            await failStoppedGeneration();
             return;
           }
           if (requestIsVisible()) {
@@ -1652,7 +1670,7 @@ export function ChatPage({ initialProjectUuid }: ChatPageProps = {}) {
             ));
           });
           if (generation.stopped) {
-            if (requestIsVisible()) markGenerationStopped(assistantId);
+            await failStoppedGeneration();
             return;
           }
           updateRequestMessages((current) => current.map((message) =>
@@ -1729,7 +1747,7 @@ export function ChatPage({ initialProjectUuid }: ChatPageProps = {}) {
         }
       }
       if (generation.stopped || isAbortLikeError(error)) {
-        if (requestIsVisible()) markGenerationStopped(assistantId);
+        await failStoppedGeneration();
         return;
       }
       if (requestIsVisible()) {
