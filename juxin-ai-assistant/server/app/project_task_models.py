@@ -32,6 +32,24 @@ class ProjectTask(ProjectTimestampMixin, Base):
     priority: Mapped[str] = mapped_column(String(16), default="normal", index=True)
     assignee_user_id: Mapped[str] = mapped_column(String(64), default="", index=True)
     due_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    service_scope_id: Mapped[int | None] = mapped_column(
+        foreign_key_type,
+        ForeignKey("ai_project_service_scopes.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    execution_rule_id: Mapped[int | None] = mapped_column(
+        foreign_key_type,
+        ForeignKey("ai_project_execution_rules.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    workflow_run_id: Mapped[str | None] = mapped_column(
+        String(36),
+        ForeignKey("ai_agent_runs.uuid", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     created_by: Mapped[str] = mapped_column(String(64), index=True)
 
 
@@ -63,6 +81,20 @@ class ProjectDeliverable(ProjectTimestampMixin, Base):
     submitted_by: Mapped[str] = mapped_column(String(64), default="")
     approved_by: Mapped[str] = mapped_column(String(64), default="")
     approved_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    work_artifact_id: Mapped[int | None] = mapped_column(
+        foreign_key_type,
+        ForeignKey("ai_work_artifacts.id", ondelete="SET NULL"),
+        nullable=True,
+        unique=True,
+        index=True,
+    )
+    work_artifact_version_id: Mapped[int | None] = mapped_column(
+        foreign_key_type,
+        ForeignKey("ai_work_artifact_versions.id", ondelete="SET NULL"),
+        nullable=True,
+        unique=True,
+        index=True,
+    )
     created_by: Mapped[str] = mapped_column(String(64), index=True)
 
 

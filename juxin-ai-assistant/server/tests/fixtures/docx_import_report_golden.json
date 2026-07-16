@@ -1,0 +1,69 @@
+{
+  "basic": {
+    "status": "supported",
+    "supported_features": ["heading", "paragraph", "table"],
+    "degraded_features": [],
+    "rejected_features": []
+  },
+  "media_compat": {
+    "status": "degraded",
+    "supported_features": ["heading", "paragraph", "table"],
+    "degraded_features": [
+      {
+        "code": "media_not_imported",
+        "message": "DOCX 内容已降级处理"
+      }
+    ],
+    "rejected_features": []
+  },
+  "complex": {
+    "status": "degraded",
+    "supported_features": ["heading", "paragraph", "table"],
+    "degraded_features": [
+      {
+        "code": "headers_footers",
+        "message": "页眉或页脚未导入块编辑器，导出时使用聚信模板页眉页脚"
+      },
+      {
+        "code": "lists",
+        "message": "Word 列表编号和缩进未保留为可编辑列表属性"
+      }
+    ],
+    "rejected_features": [
+      {
+        "code": "macros",
+        "message": "宏和 VBA 工程不会导入或执行"
+      },
+      {
+        "code": "alt_chunk",
+        "message": "外部 HTML 内容未下载，已拒绝导入"
+      }
+    ]
+  },
+  "comments_fields": {
+    "status": "degraded",
+    "supported_features": ["heading", "paragraph", "table"],
+    "degraded_features": [
+      {
+        "code": "comments",
+        "message": "Word 批注未导入，需在聚信编辑器中重新添加评论"
+      },
+      {
+        "code": "fields",
+        "message": "Word 域或内容控件已按静态文本处理，不会动态更新"
+      }
+    ],
+    "rejected_features": []
+  },
+  "floating_image": {
+    "status": "degraded",
+    "supported_features": ["heading", "image", "paragraph", "table"],
+    "degraded_features": [
+      {
+        "code": "floating_layout",
+        "message": "浮动图片已按文档顺序转为图片块，位置和文字环绕不会保留"
+      }
+    ],
+    "rejected_features": []
+  }
+}

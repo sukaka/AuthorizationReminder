@@ -140,6 +140,29 @@ export type HotQuestionItem = {
   reviewed_at: string | null;
 };
 
+export type ExternalSupportTicketMessage = {
+  uuid: string;
+  sender_id: string;
+  message: string;
+  delivery_status: string;
+  created_at: string;
+};
+
+export type ExternalSupportTicket = {
+  uuid: string;
+  source_channel: 'wecom_kf' | 'wechat_official' | string;
+  conversation_key: string;
+  reason_code: string;
+  status: 'PENDING' | 'ASSIGNED' | 'REPLIED' | 'RESOLVED' | 'CLOSED';
+  priority: string;
+  assigned_to: string;
+  question: string;
+  created_at: string;
+  claimed_at: string | null;
+  replied_at: string | null;
+  messages: ExternalSupportTicketMessage[];
+};
+
 export type GovernanceDateFilters = {
   dateFrom?: string;
   dateTo?: string;
@@ -339,6 +362,20 @@ export const governanceApi = {
   reviewHotQuestion: (uuid: string, status: HotQuestionItem['status'], suggestedReply: string) => request<HotQuestionItem>(
     `/api/ai/admin/hot-questions/${encodeURIComponent(uuid)}`,
     { method: 'PUT', body: JSON.stringify({ status, suggested_reply: suggestedReply }) },
+  ),
+  externalSupportTickets: (status?: ExternalSupportTicket['status']) => request<GovernanceList<ExternalSupportTicket>>(
+    `/api/ai/admin/external-support-tickets${status ? `?status=${encodeURIComponent(status)}` : ''}`,
+  ),
+  claimExternalSupportTicket: (uuid: string) => request<ExternalSupportTicket>(
+    `/api/ai/admin/external-support-tickets/${encodeURIComponent(uuid)}/claim`, { method: 'POST' },
+  ),
+  replyExternalSupportTicket: (uuid: string, message: string, resolve: boolean) => request<ExternalSupportTicket>(
+    `/api/ai/admin/external-support-tickets/${encodeURIComponent(uuid)}/reply`,
+    {
+      method: 'POST',
+      body: JSON.stringify({ message, resolve }),
+      headers: { 'Idempotency-Key': crypto.randomUUID() },
+    },
   ),
   skills: () => request<GovernanceList<AdminSkill>>('/api/admin/skills'),
   publishSkill: (skillId: string) => request<AdminSkill>(

@@ -7,7 +7,7 @@ export function AdminPageState({
 }: {
   title: string;
   description: string;
-  children: ReactNode;
+  children?: ReactNode;
 }) {
   return (
     <section className="governance-page">

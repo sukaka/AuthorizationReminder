@@ -27,6 +27,39 @@ from .service import (
 RENDERER_VERSION = "professional-docx-v1"
 UNAPPROVED_MARKER = "> 文档状态：未批准，仅供内部审阅"
 
+# Keep this list aligned with the block editor and the deterministic Markdown
+# renderer below.  Anything outside it must be visible in the export report;
+# silently dropping a future block type would make a DOCX look complete when it
+# is not.
+_EXPORT_SUPPORTED_BLOCK_TYPES = frozenset(
+    {
+        "paragraph",
+        "heading",
+        "title",
+        "section",
+        "table",
+        "image",
+        "media",
+        "list",
+        "bullet_list",
+        "ordered_list",
+        "quote",
+        "notice",
+        "divider",
+    }
+)
+_EXPORT_FEATURE_MESSAGES = {
+    "invalid_content": "结构化正文缺少可导出的内容块列表",
+    "empty_content": "结构化正文没有内容块，已回退到版本摘要",
+    "invalid_block": "内容块不是结构化对象，无法确定其语义",
+    "missing_block_type": "内容块缺少类型，无法确定其渲染方式",
+    "unsupported_block_type": "内容块类型未被 DOCX 渲染器支持，已保留显式占位",
+    "empty_block": "内容块没有可导出的文本",
+    "empty_table": "表格没有可导出的行",
+    "invalid_list": "列表没有可导出的条目",
+    "media_asset_not_embedded": "当前 DOCX 渲染器只输出图片说明，素材未嵌入文件",
+}
+
 
 @dataclass(frozen=True, slots=True)
 class DeliverableExportCreateResult:
@@ -35,6 +68,7 @@ class DeliverableExportCreateResult:
     export: DeliverableExport
     replayed: bool
     created_file_path: str | None
+    export_report: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -100,6 +134,8 @@ def _table_markdown(block: dict[str, Any]) -> list[str]:
         rows.append([_cell_text(cell).replace("|", "\\|") for cell in cells])
     if not rows:
         return []
+    if not any(cell for row in rows for cell in row):
+        return []
     width = max(len(row) for row in rows)
     normalized = [row + [""] * (width - len(row)) for row in rows]
     lines = [
@@ -108,6 +144,107 @@ def _table_markdown(block: dict[str, Any]) -> list[str]:
     ]
     lines.extend("| " + " | ".join(row) + " |" for row in normalized[1:])
     return lines
+
+
+def _export_feature(
+    code: str,
+    *,
+    block_index: int | None = None,
+    block_type: str | None = None,
+) -> dict[str, Any]:
+    item: dict[str, Any] = {
+        "code": code,
+        "message": _EXPORT_FEATURE_MESSAGES.get(code, "内容块导出需要人工确认"),
+    }
+    if block_index is not None:
+        item["block_index"] = block_index
+    if block_type:
+        item["block_type"] = block_type
+    return item
+
+
+def structured_content_export_report(content: dict[str, Any]) -> dict[str, Any]:
+    """Assess how faithfully structured content can be rendered to DOCX.
+
+    The report is deliberately independent from the renderer so callers can
+    display a warning before creating a file.  Unknown blocks are classified as
+    rejected features, while the overall export remains ``degraded`` because
+    the renderer emits an explicit placeholder instead of silently dropping
+    user content.
+    """
+    if not isinstance(content, dict):
+        return {
+            "status": "rejected",
+            "supported_features": [],
+            "degraded_features": [],
+            "rejected_features": [_export_feature("invalid_content")],
+        }
+    blocks = content.get("blocks")
+    if not isinstance(blocks, list):
+        return {
+            "status": "rejected",
+            "supported_features": [],
+            "degraded_features": [],
+            "rejected_features": [_export_feature("invalid_content")],
+        }
+
+    supported: set[str] = set()
+    degraded: list[dict[str, Any]] = []
+    rejected: list[dict[str, Any]] = []
+    for index, raw_block in enumerate(blocks):
+        if not isinstance(raw_block, dict):
+            rejected.append(_export_feature("invalid_block", block_index=index))
+            continue
+        block_type = str(raw_block.get("type") or "").strip().lower()
+        if not block_type:
+            rejected.append(_export_feature("missing_block_type", block_index=index))
+            continue
+        if block_type not in _EXPORT_SUPPORTED_BLOCK_TYPES:
+            rejected.append(
+                _export_feature(
+                    "unsupported_block_type",
+                    block_index=index,
+                    block_type=block_type[:64],
+                )
+            )
+            continue
+        supported.add(block_type)
+        if block_type in {"image", "media"}:
+            degraded.append(
+                _export_feature(
+                    "media_asset_not_embedded",
+                    block_index=index,
+                    block_type=block_type,
+                )
+            )
+        elif block_type == "table":
+            if not _table_markdown(raw_block):
+                degraded.append(_export_feature("empty_table", block_index=index, block_type=block_type))
+        elif block_type in {"list", "bullet_list", "ordered_list"}:
+            items = raw_block.get("items")
+            if not isinstance(items, list) or not any(_cell_text(item) for item in items):
+                degraded.append(_export_feature("invalid_list", block_index=index, block_type=block_type))
+        elif block_type in {"paragraph", "heading", "title", "section", "quote", "notice"}:
+            text = _cell_text(raw_block.get("text", raw_block.get("content", raw_block.get("value"))))
+            if not text:
+                label = _cell_text(raw_block.get("label"))
+                value = _cell_text(raw_block.get("value"))
+                text = f"{label}：{value}" if label and value else ""
+            if not text:
+                degraded.append(_export_feature("empty_block", block_index=index, block_type=block_type))
+
+    if not blocks:
+        degraded.append(_export_feature("empty_content"))
+    if rejected or degraded:
+        status = "degraded" if blocks else "rejected"
+    else:
+        status = "supported"
+    return {
+        "status": status,
+        "supported_features": sorted(supported),
+        "degraded_features": degraded,
+        "rejected_features": rejected,
+    }
 
 
 def structured_content_to_markdown(
@@ -119,14 +256,37 @@ def structured_content_to_markdown(
     if not isinstance(blocks, list):
         return fallback.strip() or "（本版本无可渲染正文）"
     sections: list[str] = []
-    for raw_block in blocks:
+    for index, raw_block in enumerate(blocks):
         if not isinstance(raw_block, dict):
+            sections.append(f"【未支持内容块：第 {index + 1} 个块不是对象】")
             continue
         block_type = str(raw_block.get("type") or "").strip().lower()
+        if not block_type:
+            sections.append(f"【未支持内容块：第 {index + 1} 个块缺少类型】")
+            continue
+        if block_type not in _EXPORT_SUPPORTED_BLOCK_TYPES:
+            text = _cell_text(raw_block.get("text", raw_block.get("content", raw_block.get("value"))))
+            suffix = f"：{text}" if text else ""
+            sections.append(f"【未支持内容块：{block_type}】{suffix}")
+            continue
+        if block_type in {"image", "media"}:
+            caption = _cell_text(
+                raw_block.get(
+                    "caption",
+                    raw_block.get("alt", raw_block.get("text", "")),
+                )
+            )
+            if caption:
+                sections.append(f"图片：{caption}")
+            else:
+                sections.append(f"【图片未嵌入：第 {index + 1} 个块】")
+            continue
         if block_type == "table":
             table = _table_markdown(raw_block)
             if table:
                 sections.append("\n".join(table))
+            else:
+                sections.append(f"【表格无法导出：第 {index + 1} 个块】")
             continue
         if block_type in {"list", "bullet_list", "ordered_list"}:
             items = raw_block.get("items")
@@ -140,6 +300,13 @@ def structured_content_to_markdown(
                         lines.append(f"{prefix} {text}")
                 if lines:
                     sections.append("\n".join(lines))
+                else:
+                    sections.append(f"【列表无法导出：第 {index + 1} 个块】")
+            else:
+                sections.append(f"【列表无法导出：第 {index + 1} 个块】")
+            continue
+        if block_type == "divider":
+            sections.append("---")
             continue
         text = _cell_text(
             raw_block.get("text", raw_block.get("content", raw_block.get("value")))
@@ -149,6 +316,7 @@ def structured_content_to_markdown(
             value = _cell_text(raw_block.get("value"))
             text = f"{label}：{value}" if label and value else ""
         if not text:
+            sections.append(f"【空内容块：第 {index + 1} 个块】")
             continue
         if block_type in {"heading", "title", "section"}:
             try:
@@ -156,8 +324,12 @@ def structured_content_to_markdown(
             except (TypeError, ValueError):
                 level = 2
             sections.append(f"{'#' * min(max(level, 1), 6)} {text}")
+        elif block_type == "quote":
+            sections.append(f"> {text}" if text else f"【引用无法导出：第 {index + 1} 个块】")
+        elif block_type == "notice":
+            sections.append(f"> 提示：{text}" if text else f"【提示无法导出：第 {index + 1} 个块】")
         else:
-            sections.append(text)
+            sections.append(text or f"【空内容块：第 {index + 1} 个块】")
     return "\n\n".join(sections).strip() or fallback.strip() or "（本版本无可渲染正文）"
 
 
@@ -167,8 +339,9 @@ def _export_payload_content(
     version: WorkArtifactVersion,
     cipher: ContentCipher,
     watermarked: bool,
+    payload: dict[str, Any] | None = None,
 ) -> str:
-    payload = deliverable_version_payload(db, version=version, cipher=cipher)
+    payload = payload or deliverable_version_payload(db, version=version, cipher=cipher)
     output = structured_content_to_markdown(
         payload["content"],
         fallback=version.summary_snapshot,
@@ -221,12 +394,14 @@ def create_deliverable_export(
                 "导出记录绑定的成果版本不可用",
                 409,
             )
+        replay_payload = deliverable_version_payload(db, version=version, cipher=cipher)
         return DeliverableExportCreateResult(
             access=access,
             version=version,
             export=existing,
             replayed=True,
             created_file_path=None,
+            export_report=structured_content_export_report(replay_payload["content"]),
         )
 
     artifact = access.artifact
@@ -270,11 +445,14 @@ def create_deliverable_export(
         else {}
     )
     template_name = str(render_config.get("template_name") or "juxin_standard")
+    payload = deliverable_version_payload(db, version=version, cipher=cipher)
+    export_report = structured_content_export_report(payload["content"])
     output = _export_payload_content(
         db,
         version=version,
         cipher=cipher,
         watermarked=watermarked,
+        payload=payload,
     )
     document = (renderer or TemplateRenderer()).render(
         title=version.title_snapshot or artifact.title,
@@ -319,6 +497,7 @@ def create_deliverable_export(
         export=export,
         replayed=False,
         created_file_path=saved.file_path,
+        export_report=export_report,
     )
 
 
@@ -407,4 +586,5 @@ def deliverable_export_payload(
         "download_url": f"/api/ai/deliverable-exports/{export.uuid}/download",
         "created_by": export.created_by,
         "created_at": export.created_at,
+        "export_report": result.export_report,
     }

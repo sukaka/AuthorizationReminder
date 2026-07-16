@@ -127,6 +127,7 @@ def test_chat_single_answer_word_export_creates_downloadable_docx(
 
         response = client.post(
             "/api/export/word",
+            headers={"Idempotency-Key": "single-answer-export"},
             json={
                 "conversation_id": session.uuid,
                 "message_id": "chat-assistant-message",
@@ -173,6 +174,60 @@ def test_chat_single_answer_word_export_creates_downloadable_docx(
         app.dependency_overrides.pop(get_settings, None)
 
 
+def test_word_export_requires_idempotency_key(client_for_user, generation_db, tmp_path):
+    from app.config import get_settings
+    from app.main import app
+
+    session = _seed_chat(generation_db)
+    settings = get_settings().model_copy(update={"export_storage_dir": str(tmp_path)})
+    app.dependency_overrides[get_settings] = lambda: settings
+    try:
+        response = client_for_user("u-1").post(
+            "/api/export/word",
+            json={
+                "conversation_id": session.uuid,
+                "message_id": "chat-assistant-message",
+                "export_type": "single_answer",
+                "template": "juxin_standard",
+                "format_before_export": False,
+            },
+        )
+
+        assert response.status_code == 400
+        assert response.json()["detail"] == "缺少或无效的 Idempotency-Key"
+    finally:
+        app.dependency_overrides.pop(get_settings, None)
+
+
+def test_word_export_replays_same_idempotency_key(client_for_user, generation_db, tmp_path):
+    from app.config import get_settings
+    from app.main import app
+    from app.models import ExportRecord
+
+    session = _seed_chat(generation_db)
+    settings = get_settings().model_copy(update={"export_storage_dir": str(tmp_path)})
+    app.dependency_overrides[get_settings] = lambda: settings
+    try:
+        payload = {
+            "conversation_id": session.uuid,
+            "message_id": "chat-assistant-message",
+            "export_type": "single_answer",
+            "template": "juxin_standard",
+            "format_before_export": False,
+        }
+        client = client_for_user("u-1")
+
+        first = client.post("/api/export/word", headers={"Idempotency-Key": "replay-word-export"}, json=payload)
+        replay = client.post("/api/export/word", headers={"Idempotency-Key": "replay-word-export"}, json=payload)
+
+        assert first.status_code == 201
+        assert replay.status_code == 201
+        assert replay.json() == first.json()
+        assert generation_db.query(ExportRecord).count() == 1
+    finally:
+        app.dependency_overrides.pop(get_settings, None)
+
+
 def test_single_answer_and_formal_word_exports_use_distinct_layouts(
     client_for_user,
     generation_db,
@@ -189,6 +244,7 @@ def test_single_answer_and_formal_word_exports_use_distinct_layouts(
 
         single_response = client.post(
             "/api/export/word",
+            headers={"Idempotency-Key": "single-layout-export"},
             json={
                 "conversation_id": session.uuid,
                 "message_id": "chat-assistant-message",
@@ -199,6 +255,7 @@ def test_single_answer_and_formal_word_exports_use_distinct_layouts(
         )
         formal_response = client.post(
             "/api/export/word",
+            headers={"Idempotency-Key": "formal-layout-export"},
             json={
                 "conversation_id": session.uuid,
                 "message_id": "chat-assistant-message",
@@ -378,6 +435,7 @@ def test_formal_document_word_export_respects_message_id_scope(
 
         response = client.post(
             "/api/export/word",
+            headers={"Idempotency-Key": "formal-message-scope-export"},
             json={
                 "conversation_id": session.uuid,
                 "message_id": "chat-assistant-message",
@@ -419,6 +477,7 @@ def test_transient_knowledge_result_word_export_keeps_reference_sources(
 
         response = client.post(
             "/api/export/word/content",
+            headers={"Idempotency-Key": "knowledge-content-export"},
             json={
                 "title": "会议纪要模板-文档问答结果",
                 "content": "文档回答：验收材料需要包含会议结论、责任人和下一步计划。",
@@ -477,6 +536,7 @@ def test_chat_full_conversation_word_export_requires_session_owner(
 
         response = client.post(
             "/api/export/word",
+            headers={"Idempotency-Key": "owner-scope-export"},
             json={
                 "conversation_id": session.uuid,
                 "export_type": "full_conversation",

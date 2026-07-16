@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import re
 import uuid as uuid_lib
 from dataclasses import dataclass
@@ -44,14 +45,24 @@ class ExportFileManager:
             file_path=str(path),
         )
 
-    def save_pptx(self, *, file_name: str, content: bytes) -> SavedExportFile:
+    def save_pptx(
+        self,
+        *,
+        owner_user_id: str,
+        file_name: str,
+        content: bytes,
+    ) -> SavedExportFile:
         if not content:
             raise HTTPException(status_code=500, detail="PPT 生成失败，请稍后重试")
-        self.storage_dir.mkdir(parents=True, exist_ok=True)
+        owner_key = _owner_storage_key(owner_user_id)
+        owner_dir = self.storage_dir.joinpath("pptx", owner_key).resolve()
+        if not _is_relative_to(owner_dir, self.storage_dir):
+            raise HTTPException(status_code=400, detail="导出路径非法")
+        owner_dir.mkdir(parents=True, exist_ok=True)
         file_id = str(uuid_lib.uuid4())
         safe_name = safe_pptx_file_name(file_name)
-        path = self.storage_dir.joinpath(f"{file_id}.pptx").resolve()
-        if not _is_relative_to(path, self.storage_dir):
+        path = owner_dir.joinpath(f"{file_id}.pptx").resolve()
+        if not _is_relative_to(path, owner_dir):
             raise HTTPException(status_code=400, detail="导出路径非法")
         path.write_bytes(content)
         return SavedExportFile(
@@ -86,6 +97,13 @@ def safe_docx_file_name(file_name: str) -> str:
 
 def safe_pptx_file_name(file_name: str) -> str:
     return _safe_export_file_name(file_name, suffix=".pptx", fallback="聚信得仁演示文稿")
+
+
+def _owner_storage_key(owner_user_id: str) -> str:
+    normalized = str(owner_user_id or "").strip()
+    if not normalized:
+        raise HTTPException(status_code=400, detail="导出文件必须绑定用户")
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
 
 
 def _safe_export_file_name(file_name: str, *, suffix: str, fallback: str) -> str:

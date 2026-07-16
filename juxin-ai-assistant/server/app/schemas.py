@@ -1,6 +1,8 @@
 from datetime import datetime
 from enum import Enum
+import ipaddress
 from typing import Any, Literal
+from urllib.parse import urlparse
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -229,6 +231,8 @@ class KnowledgeFileOut(BaseModel):
     summary: str = ""
     parse_status: str = "parsed"
     index_status: str = "indexed"
+    external_public: bool = False
+    external_download_allowed: bool = False
 
 
 class KnowledgeFileListOut(BaseModel):
@@ -386,6 +390,8 @@ class KnowledgeFilePatchIn(BaseModel):
     document_type: str | None = Field(default=None, max_length=64)
     tags: list[str] | None = Field(default=None, max_length=20)
     reference_enabled: bool | None = None
+    external_public: bool | None = None
+    external_download_allowed: bool | None = None
 
 
 class KnowledgeFileClassifyIn(BaseModel):
@@ -509,6 +515,8 @@ class ChatPrepareOut(BaseModel):
     citations: list[ChatCitationOut] = Field(default_factory=list)
     loop_trace: list[dict[str, Any]] = Field(default_factory=list)
     task_state: ChatTaskStateOut = Field(default_factory=ChatTaskStateOut)
+    # Unified 6.0 Run id linked from chat prepare (optional for backward compat)
+    run_id: str = ""
 
 
 class WebCapturePreviewIn(BaseModel):
@@ -796,8 +804,27 @@ class UserModelProfileUpsertIn(BaseModel):
     @classmethod
     def validate_base_url(cls, value: str) -> str:
         normalized = value.strip().rstrip("/")
-        if not normalized.startswith(("https://", "http://")):
+        parsed = urlparse(normalized)
+        if parsed.scheme not in {"https", "http"} or not parsed.hostname:
             raise ValueError("模型服务地址必须以 http:// 或 https:// 开头")
+        if parsed.username or parsed.password or parsed.query or parsed.fragment:
+            raise ValueError("模型服务地址不能包含账号、查询参数或片段")
+        hostname = parsed.hostname.lower().rstrip(".")
+        if hostname == "localhost" or hostname.endswith((".localhost", ".local", ".internal")):
+            raise ValueError("模型服务地址不能指向本机或内部网络")
+        try:
+            address = ipaddress.ip_address(hostname)
+        except ValueError:
+            address = None
+        if address is not None and (
+            address.is_private
+            or address.is_loopback
+            or address.is_link_local
+            or address.is_reserved
+            or address.is_multicast
+            or address.is_unspecified
+        ):
+            raise ValueError("模型服务地址不能指向本机或内部网络")
         return normalized
 
     @field_validator("display_name", "model_id")
@@ -1040,8 +1067,11 @@ class HistoryDetailOut(HistoryItemOut):
 class WorkArtifactSourceOut(BaseModel):
     source_type: str
     file_name: str
+    file_uuid: str = ""
+    chunk_id: str = ""
     page_number: int | None = None
     section_title: str = ""
+    chunk_index: int | None = None
 
 
 class WorkArtifactVersionOut(BaseModel):

@@ -88,6 +88,85 @@ class DeliverableVersionCreateOut(BaseModel):
     version: DeliverableVersionOut
 
 
+class DeliverableDraftUpdateIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    row_version: int = Field(ge=1)
+    base_version_uuid: str = Field(min_length=1, max_length=36)
+    draft_revision: int = Field(ge=0)
+    content: dict[str, Any]
+    content_summary: str = Field(default="", max_length=4000)
+    fencing_token: int | None = Field(default=None, ge=1)
+
+
+class DeliverableDraftOut(BaseModel):
+    request_id: str
+    deliverable_uuid: str
+    draft_uuid: str
+    base_version_uuid: str
+    row_version: int
+    draft_revision: int
+    content: dict[str, Any]
+    content_hash: str
+    content_summary: str
+    updated_by: str
+    updated_at: datetime
+
+
+class DeliverableDocxImportOut(BaseModel):
+    request_id: str
+    deliverable_uuid: str
+    source_file_name: str
+    content: dict[str, Any]
+    warnings: list[str]
+    media_count: int
+    import_report: dict[str, Any] | None = None
+
+
+class DeliverableMediaAssetOut(BaseModel):
+    request_id: str
+    deliverable_uuid: str
+    asset_uuid: str
+    original_file_name: str
+    media_type: str
+    size_bytes: int
+    download_url: str
+    replayed: bool
+
+
+class DeliverableLeaseOut(BaseModel):
+    request_id: str
+    deliverable_uuid: str
+    lease_uuid: str
+    owner_user_id: str
+    fencing_token: int
+    expires_at: datetime
+
+
+class DeliverableLeaseAcquireIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    row_version: int = Field(ge=1)
+    base_version_uuid: str = Field(min_length=1, max_length=36)
+
+
+class DeliverableLeaseHeartbeatIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    fencing_token: int = Field(ge=1)
+
+
+class DeliverableCommitIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    row_version: int = Field(ge=1)
+    base_version_uuid: str = Field(min_length=1, max_length=36)
+    draft_revision: int = Field(ge=0)
+    change_summary: str = Field(min_length=1, max_length=4000)
+    creation_reason: str = Field(default="manual_edit", min_length=1, max_length=32)
+    fencing_token: int | None = Field(default=None, ge=1)
+
+
 class DeliverableVersionDetailOut(BaseModel):
     request_id: str
     deliverable_uuid: str
@@ -427,6 +506,7 @@ class DeliverableExportOut(BaseModel):
     download_url: str
     created_by: str
     created_at: datetime
+    export_report: dict[str, Any] | None = None
 
 
 class DeliverableArchiveIn(ExactDeliverableVersionIn):

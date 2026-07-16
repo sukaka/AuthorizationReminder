@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from sqlalchemy import case, select
 
-from app.agent_runtime import BaseTool, ToolContext, ToolResult
+from app.agent_runtime import BaseTool, ToolContext, ToolResult, ToolSpec
 from app.learning_safety import contains_sensitive_memory, is_company_fact_memory
 from app.models import UserMemory
 
@@ -11,6 +11,33 @@ class PersonalMemoryTool(BaseTool):
     name = "personal_memory"
     description = "保存、读取或停用当前用户长期记忆"
     version = "1"
+    data_scopes = frozenset({"user"})
+
+    def resolve_tool_spec(self, tool_input: dict) -> ToolSpec:
+        action = str(tool_input.get("action") or "list").strip().lower()
+        required = ["action"]
+        effect = "read_only"
+        if action == "save":
+            required.append("content")
+            effect = "idempotent_write"
+        elif action == "disable":
+            required.append("memory_id")
+            effect = "idempotent_write"
+        return ToolSpec(
+            name=self.name,
+            version=self.version,
+            data_scopes=self.data_scopes,
+            input_schema={
+                "type": "object",
+                "required": required,
+                "properties": {
+                    "action": {"type": "string"},
+                    "content": {"type": "string"},
+                    "memory_id": {"type": "string"},
+                },
+            },
+            effect=effect,
+        )
 
     def run(self, tool_input: dict, context: ToolContext) -> ToolResult:
         if context.db is None:

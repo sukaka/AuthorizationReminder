@@ -1,9 +1,10 @@
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 
 def _upload_personal(client, *, name: str = "personal.md") -> dict:
     response = client.post(
         "/api/knowledge/files/upload",
+        headers={"Idempotency-Key": f"upload-personal-{name}"},
         data={"usage_type": "personal_reference", "category": "个人素材"},
         files={
             "file": (
@@ -24,6 +25,7 @@ def _upload_official(admin) -> dict:
     ).json()
     response = admin.post(
         "/api/knowledge/files/upload",
+        headers={"Idempotency-Key": "upload-official"},
         data={
             "knowledge_base_id": base["base_id"],
             "usage_type": "official_knowledge",
@@ -110,6 +112,7 @@ def test_image_can_be_uploaded_previewed_and_downloaded(client_for_user) -> None
     png = b"\x89PNG\r\n\x1a\n" + b"certificate-image"
     response = owner.post(
         "/api/knowledge/files/upload",
+        headers={"Idempotency-Key": "upload-image"},
         data={
             "usage_type": "personal_reference",
             "category": "产品资料",
@@ -137,6 +140,24 @@ def test_image_can_be_uploaded_previewed_and_downloaded(client_for_user) -> None
     assert download.content == png
 
 
+def test_knowledge_upload_rejects_content_over_the_read_limit(
+    client_for_user,
+    monkeypatch,
+) -> None:
+    import app.knowledge_routes as knowledge_routes
+
+    monkeypatch.setattr(knowledge_routes, "MAX_KNOWLEDGE_FILE_BYTES", 8)
+    response = client_for_user("upload-limit-user").post(
+        "/api/knowledge/files/upload",
+        headers={"Idempotency-Key": "upload-over-read-limit"},
+        data={"usage_type": "personal_reference"},
+        files={"file": ("too-large.txt", b"123456789", "text/plain")},
+    )
+
+    assert response.status_code == 413
+    assert "不能超过" in response.text
+
+
 def test_preview_can_focus_source_chunk_by_chunk_id(
     client_for_user,
     generation_db,
@@ -146,6 +167,7 @@ def test_preview_can_focus_source_chunk_by_chunk_id(
     owner = client_for_user("user-1")
     response = owner.post(
         "/api/knowledge/files/upload",
+        headers={"Idempotency-Key": "upload-long-meeting"},
         data={"usage_type": "personal_reference", "category": "个人素材"},
         files={
             "file": (
@@ -295,6 +317,7 @@ def test_classify_file_updates_metadata_with_rule_based_suggestion(client_for_us
     owner = client_for_user("user-1")
     created = owner.post(
         "/api/knowledge/files/upload",
+        headers={"Idempotency-Key": "upload-classify"},
         data={"usage_type": "personal_reference"},
         files={
             "file": (
@@ -315,6 +338,37 @@ def test_classify_file_updates_metadata_with_rule_based_suggestion(client_for_us
     assert "会议纪要" in body["tags"]
     assert "客户资料" in body["tags"]
     assert body["applied"] is True
+
+
+def test_upload_requires_idempotency_key_and_replays_successfully(
+    client_for_user,
+    generation_db,
+) -> None:
+    from app.models import KnowledgeFile
+
+    owner = client_for_user("idempotency-user")
+    request = {
+        "data": {"usage_type": "personal_reference", "category": "个人素材"},
+        "files": {"file": ("retry.md", "幂等上传内容".encode("utf-8"), "text/markdown")},
+    }
+
+    missing = owner.post("/api/knowledge/files/upload", **request)
+    first = owner.post(
+        "/api/knowledge/files/upload",
+        headers={"Idempotency-Key": "knowledge-upload-replay-1"},
+        **request,
+    )
+    replay = owner.post(
+        "/api/knowledge/files/upload",
+        headers={"Idempotency-Key": "knowledge-upload-replay-1"},
+        **request,
+    )
+
+    assert missing.status_code == 400
+    assert first.status_code == 201
+    assert replay.status_code == 201
+    assert replay.json() == first.json()
+    assert generation_db.scalar(select(func.count(KnowledgeFile.id))) == 1
 
 
 def test_employee_cannot_classify_official_file_but_admin_can(client_for_user) -> None:

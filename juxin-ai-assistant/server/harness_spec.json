@@ -1,0 +1,60 @@
+{
+  "schema_version": "1.0",
+  "spec_version": "1.0.0",
+  "run_state": {
+    "schema_version": "1.0",
+    "terminal_statuses": ["succeeded", "completed", "failed", "cancelled"]
+  },
+  "lease": {
+    "required_for_runtime_execution": true,
+    "fencing_required_for_guarded_writes": true,
+    "default_ttl_seconds": 20
+  },
+  "tool_contract": {
+    "side_effect_effects": ["idempotent_write", "non_idempotent_write"],
+    "requires_confirmation": true,
+    "requires_idempotency_key": true,
+    "replay_only_json_result": true
+  },
+  "loop": {
+    "max_steps_default": 32,
+    "max_tool_calls_default": 8,
+    "max_retries_default": 2,
+    "high_risk_output": "fail"
+  },
+  "release_gate": {
+    "required_test_modules": [
+      "tests/test_staging_evidence_gate.py",
+      "tests/test_core_task_evidence.py",
+      "tests/test_harness_release_gate.py",
+      "tests/test_harness_spec_registry.py",
+      "tests/test_harness_spec_routes.py",
+      "tests/test_run_state_contract.py",
+      "tests/test_agent_state_machine.py",
+      "tests/test_agent_run_service.py",
+      "tests/test_ops_run_control.py",
+      "tests/test_checkpoint_resume_runtime.py",
+      "tests/test_agent_runtime.py",
+      "tests/test_loop_kernel.py",
+      "tests/test_tool_contract_policy.py",
+      "tests/test_lease_heartbeat.py",
+      "tests/test_staging_recovery_rehearsal.py",
+      "tests/test_langgraph_checkpoint_drill.py",
+      "tests/test_direct_action_inventory.py",
+      "tests/test_direct_action_reconciliation_drill.py",
+      "tests/test_ops_readiness.py",
+      "tests/test_ops_slo.py",
+      "tests/test_reconciliation_runbook.py",
+      "tests/test_run_reconciliation.py",
+    "tests/test_ga_observe_eval.py",
+    "tests/test_ga_smoke.py",
+      "tests/test_runtime_shadow.py",
+      "tests/test_staging_script_auth.py",
+      "tests/test_staging_preflight.py",
+      "tests/test_migration_candidate_rehearsal.py",
+      "tests/test_agent_chaos_suite.py",
+      "tests/test_server_model_client.py",
+      "tests/test_project_harness_instructions.py"
+  ]
+}
+}

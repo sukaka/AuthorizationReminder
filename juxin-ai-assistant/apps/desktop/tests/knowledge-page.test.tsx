@@ -355,3 +355,54 @@ it('answers from official knowledge after search without exposing raw knowledge 
   expect(screen.getByText('验收材料应包含部署记录、配置清单和双方确认记录。')).toBeInTheDocument();
   expect(screen.queryByText(/raw knowledge body|private-output/i)).not.toBeInTheDocument();
 });
+
+it('keeps external original-file delivery separate from external Q&A access', async () => {
+  const updateRequest = vi.fn();
+  const file = {
+    ...baseFile,
+    file_uuid: 'file-external-access',
+    file_name: '外部资料.pdf',
+    status: 'READY',
+    parse_status: 'ready',
+    index_status: 'ready',
+    chunk_count: 4,
+    rag_enabled: true,
+    external_public: false,
+    external_download_allowed: false,
+  };
+  server.use(
+    http.get('/api/knowledge/categories', () => HttpResponse.json({ items: [], total: 0 })),
+    http.get('/api/knowledge/document-types', () => HttpResponse.json({ items: [], total: 0 })),
+    http.get('/api/knowledge/bases', () => HttpResponse.json({ items: [], total: 0 })),
+    http.get('/api/knowledge/reviews/pending', () => HttpResponse.json({ items: [], total: 0 })),
+    http.get('/api/knowledge/reviews/history', () => HttpResponse.json({ items: [], total: 0 })),
+    http.get('/api/knowledge/files', () => HttpResponse.json({ items: [file], total: 1 })),
+    http.patch('/api/knowledge/files/file-external-access', async ({ request }) => {
+      updateRequest(await request.json());
+      return HttpResponse.json({ ...file, external_public: true, external_download_allowed: true });
+    }),
+  );
+
+  render(<KnowledgePage session={adminSession} />);
+
+  const card = await screen.findByRole('listitem', { name: '外部资料.pdf' });
+  await userEvent.click(within(card).getByRole('button', { name: '更多操作 外部资料.pdf' }));
+  await userEvent.click(within(card).getByRole('menuitem', { name: '编辑资料分类 外部资料.pdf' }));
+
+  const externalQa = within(card).getByRole('checkbox', { name: '允许外部问答' });
+  const externalDownload = within(card).getByRole('checkbox', { name: '允许发送原文件' });
+  expect(externalQa).not.toBeChecked();
+  expect(externalDownload).toBeDisabled();
+
+  await userEvent.click(externalQa);
+  expect(externalDownload).not.toBeDisabled();
+  await userEvent.click(externalDownload);
+  await userEvent.click(within(card).getByRole('button', { name: '保存元数据 外部资料.pdf' }));
+
+  await waitFor(() => expect(updateRequest).toHaveBeenCalledWith(expect.objectContaining({
+    external_public: true,
+    external_download_allowed: true,
+  })));
+  expect(within(card).getByText('允许外部问答')).toBeInTheDocument();
+  expect(within(card).getByText('允许外部发送原文件')).toBeInTheDocument();
+});

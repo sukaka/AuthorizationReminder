@@ -486,6 +486,22 @@ def test_upload_knowledge_file_api_creates_chunks_and_lists_only_owner(
     assert other_list.json()["total"] == 0
 
 
+def test_legacy_knowledge_upload_rejects_content_over_read_limit(
+    client_for_user,
+    monkeypatch,
+) -> None:
+    import app.main as main_module
+
+    monkeypatch.setattr(main_module, "MAX_KNOWLEDGE_FILE_BYTES", 8)
+    response = client_for_user("user-1").post(
+        "/api/ai/knowledge/files",
+        files={"file": ("too-large.txt", b"123456789", "text/plain")},
+    )
+
+    assert response.status_code == 413
+    assert "不能超过" in response.text
+
+
 def test_employee_upload_defaults_to_private_personal_reference(
     client_for_user,
     generation_db,
@@ -522,6 +538,7 @@ def test_upload_personal_file_auto_summarizes_and_suggests_metadata(
 
     response = owner.post(
         "/api/knowledge/files/upload",
+        headers={"Idempotency-Key": "knowledge-files-upload"},
         data={"usage_type": "personal_reference"},
         files={
             "file": (
@@ -666,3 +683,14 @@ def test_delete_knowledge_file_api_disables_owner_file(
     )
     assert chunk_statuses
     assert set(chunk_statuses) == {"DELETED"}
+
+
+def test_office_archive_with_abnormal_compression_ratio_is_rejected() -> None:
+    from app.knowledge_files import _extract_blocks
+
+    buffer = BytesIO()
+    with ZipFile(buffer, "w", ZIP_DEFLATED) as archive:
+        archive.writestr("xl/worksheets/sheet1.xml", b"0" * (1024 * 1024 + 1))
+
+    with pytest.raises(HTTPException, match="压缩比异常"):
+        _extract_blocks("compressed.xlsx", buffer.getvalue())

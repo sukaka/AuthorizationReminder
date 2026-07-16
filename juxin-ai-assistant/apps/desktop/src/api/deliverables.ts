@@ -59,6 +59,55 @@ export type DeliverableDetail = DeliverableSummary & {
   created_at: string;
 };
 
+export type DeliverableDraft = {
+  request_id: string;
+  deliverable_uuid: string;
+  draft_uuid: string;
+  base_version_uuid: string;
+  row_version: number;
+  draft_revision: number;
+  content: DeliverableContent;
+  content_hash: string;
+  content_summary: string;
+  updated_by: string;
+  updated_at: string;
+};
+
+export type DeliverableDocxImport = {
+  request_id: string;
+  deliverable_uuid: string;
+  source_file_name: string;
+  content: DeliverableContent;
+  warnings: string[];
+  media_count: number;
+  import_report?: {
+    status: "supported" | "degraded" | "rejected";
+    supported_features: string[];
+    degraded_features: Array<{ code: string; message: string }>;
+    rejected_features: Array<{ code: string; message: string }>;
+  };
+};
+
+export type DeliverableMediaAsset = {
+  request_id: string;
+  deliverable_uuid: string;
+  asset_uuid: string;
+  original_file_name: string;
+  media_type: string;
+  size_bytes: number;
+  download_url: string;
+  replayed: boolean;
+};
+
+export type DeliverableLease = {
+  request_id: string;
+  deliverable_uuid: string;
+  lease_uuid: string;
+  owner_user_id: string;
+  fencing_token: number;
+  expires_at: string;
+};
+
 export type DeliverableExperienceCandidate = {
   candidate_uuid: string;
   candidate_type: 'structure' | 'rule' | 'template';
@@ -586,6 +635,12 @@ export type DeliverableExport = {
   download_url: string;
   created_by: string;
   created_at: string;
+  export_report?: {
+    status: 'supported' | 'degraded' | 'rejected' | string;
+    supported_features: string[];
+    degraded_features: Array<Record<string, unknown>>;
+    rejected_features: Array<Record<string, unknown>>;
+  } | null;
 };
 
 async function readJson<T>(response: Response, errorCode: string): Promise<T> {
@@ -706,6 +761,159 @@ export async function createProfessionalDeliverableVersion(
       jsonRequest('POST', input, idempotencyKey),
     ),
     'PROFESSIONAL_DELIVERABLE_VERSION_CREATE_FAILED',
+  );
+}
+
+export async function getProfessionalDeliverableDraft(
+  deliverableUuid: string,
+): Promise<DeliverableDraft> {
+  return readJson(
+    await apiFetch(
+      `/api/ai/deliverables/${encodeURIComponent(deliverableUuid)}/draft`,
+      { cache: 'no-store' },
+    ),
+    'PROFESSIONAL_DELIVERABLE_DRAFT_FAILED',
+  );
+}
+
+export async function importProfessionalDeliverableDocx(
+  deliverableUuid: string,
+  file: File,
+  idempotencyKey = newIdempotencyKey('professional-deliverable-docx-import'),
+): Promise<DeliverableDocxImport> {
+  const body = new FormData();
+  body.append('file', file);
+  return readJson(
+    await apiFetch(
+      `/api/ai/deliverables/${encodeURIComponent(deliverableUuid)}/editor/import-docx`,
+      {
+        method: 'POST',
+        headers: { 'Idempotency-Key': idempotencyKey },
+        body,
+      },
+    ),
+    'PROFESSIONAL_DELIVERABLE_DOCX_IMPORT_FAILED',
+  );
+}
+
+export async function uploadProfessionalDeliverableMedia(
+  deliverableUuid: string,
+  file: File,
+  idempotencyKey = newIdempotencyKey('professional-deliverable-media'),
+): Promise<DeliverableMediaAsset> {
+  const body = new FormData();
+  body.append('file', file);
+  return readJson(
+    await apiFetch(
+      `/api/ai/deliverables/${encodeURIComponent(deliverableUuid)}/editor/media`,
+      {
+        method: 'POST',
+        headers: { 'Idempotency-Key': idempotencyKey },
+        body,
+      },
+    ),
+    'PROFESSIONAL_DELIVERABLE_MEDIA_UPLOAD_FAILED',
+  );
+}
+
+export async function previewProfessionalDeliverableMedia(
+  deliverableUuid: string,
+  assetUuid: string,
+): Promise<Response> {
+  return apiFetch(
+    `/api/ai/deliverables/${encodeURIComponent(deliverableUuid)}/editor/media/${encodeURIComponent(assetUuid)}/preview`,
+    { cache: 'no-store' },
+  );
+}
+
+export async function deleteProfessionalDeliverableMedia(
+  deliverableUuid: string,
+  assetUuid: string,
+): Promise<{ deliverable_uuid: string; asset_uuid: string; status: string }> {
+  return readJson(
+    await apiFetch(
+      `/api/ai/deliverables/${encodeURIComponent(deliverableUuid)}/editor/media/${encodeURIComponent(assetUuid)}`,
+      { method: 'DELETE' },
+    ),
+    'PROFESSIONAL_DELIVERABLE_MEDIA_DELETE_FAILED',
+  );
+}
+
+export async function saveProfessionalDeliverableDraft(
+  deliverableUuid: string,
+  input: {
+    row_version: number;
+    base_version_uuid: string;
+    draft_revision: number;
+    content: DeliverableContent;
+    content_summary?: string;
+    fencing_token?: number;
+  },
+  idempotencyKey = newIdempotencyKey('professional-deliverable-draft'),
+): Promise<DeliverableDraft> {
+  return readJson(
+    await apiFetch(
+      `/api/ai/deliverables/${encodeURIComponent(deliverableUuid)}/draft`,
+      jsonRequest('PUT', input, idempotencyKey),
+    ),
+    'PROFESSIONAL_DELIVERABLE_DRAFT_SAVE_FAILED',
+  );
+}
+
+export async function acquireProfessionalDeliverableLease(
+  deliverableUuid: string,
+  input: { row_version: number; base_version_uuid: string },
+): Promise<DeliverableLease> {
+  return readJson(
+    await apiFetch(
+      `/api/ai/deliverables/${encodeURIComponent(deliverableUuid)}/draft/lease`,
+      jsonRequest('POST', input),
+    ),
+    'PROFESSIONAL_DELIVERABLE_LEASE_FAILED',
+  );
+}
+
+export async function heartbeatProfessionalDeliverableLease(
+  deliverableUuid: string,
+  fencingToken: number,
+): Promise<DeliverableLease> {
+  return readJson(
+    await apiFetch(
+      `/api/ai/deliverables/${encodeURIComponent(deliverableUuid)}/draft/lease/heartbeat`,
+      jsonRequest('POST', { fencing_token: fencingToken }),
+    ),
+    'PROFESSIONAL_DELIVERABLE_LEASE_HEARTBEAT_FAILED',
+  );
+}
+
+export async function releaseProfessionalDeliverableLease(
+  deliverableUuid: string,
+  fencingToken: number,
+): Promise<void> {
+  await apiFetch(
+    `/api/ai/deliverables/${encodeURIComponent(deliverableUuid)}/draft/lease?fencing_token=${encodeURIComponent(fencingToken)}`,
+    { method: 'DELETE' },
+  );
+}
+
+export async function commitProfessionalDeliverableDraft(
+  deliverableUuid: string,
+  input: {
+    row_version: number;
+    base_version_uuid: string;
+    draft_revision: number;
+    change_summary: string;
+    creation_reason?: string;
+    fencing_token?: number;
+  },
+  idempotencyKey = newIdempotencyKey('professional-deliverable-draft-commit'),
+): Promise<{ request_id: string; deliverable_uuid: string; version: DeliverableVersion }> {
+  return readJson(
+    await apiFetch(
+      `/api/ai/deliverables/${encodeURIComponent(deliverableUuid)}/draft/commit`,
+      jsonRequest('POST', input, idempotencyKey),
+    ),
+    'PROFESSIONAL_DELIVERABLE_DRAFT_COMMIT_FAILED',
   );
 }
 

@@ -373,6 +373,12 @@ def _safe_failure_message(code: str) -> str:
         return "当前没有可用模型，请完成模型设置后重试"
     if code == "SERVER_MODEL_AUTH_FAILED":
         return "模型认证失败，请检查模型设置后重试"
+    if code == "SERVER_MODEL_TIMEOUT":
+        return "模型调用超时，已保留当前草稿，可稍后重试"
+    if code == "SERVER_MODEL_RATE_LIMITED":
+        return "模型服务当前繁忙，已保留当前草稿，请稍后重试"
+    if code == "SERVER_MODEL_UPSTREAM_UNAVAILABLE":
+        return "模型服务暂时不可用，已保留当前草稿，可稍后重试"
     if code == "SERVER_MODEL_EMPTY_OUTPUT":
         return "模型未返回内容，已保留当前草稿，可重试"
     return "联网或模型调用失败，已保留当前草稿，可稍后重试"

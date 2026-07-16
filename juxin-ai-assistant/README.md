@@ -67,12 +67,26 @@
 
 正式交付还要求 macOS Developer ID 签名与 Apple 公证、Windows Authenticode 签名，以及 Tauri 更新签名；平台代码签名不能替代 Tauri 更新签名。
 
+## 6.0 / 7.0 能力速览
+
+| 版本 | 能力 | 文档 |
+|---|---|---|
+| 6.0 | 任务中心、成果、引用、学习候选、运营 GA 门禁 | [用户手册](docs/user-guide-6.0-7.0.md) · [发布说明](docs/release-notes-6.0-7.0.md) |
+| 7.0 | Agent 市场、工作流、Kimi/即梦连接器、出域 L0–L3 | [Connector SDK](docs/connector-sdk.md) · [运维手册](docs/ops-runbook-6.0-7.0.md) |
+
+实施进度：`docs/plans/2026-07-12-implementation-status.md`。
+
 ## 开发与验证
+
+以下命令从工作区父目录 `/Users/zhanglei/Documents/codex-new` 执行；如果当前已进入本项目目录，请把后端、桌面端和一键验收命令中的 `juxin-ai-assistant/` 前缀分别去掉或按注释切换到对应目录。
 
 ```bash
 # 后端
 cd juxin-ai-assistant/server
 python3 -m pytest tests -q
+
+# 本地离线 GA 门禁（无需起服务）
+python3 scripts/run_ga_gate_local.py
 
 # 桌面前端
 cd ../apps/desktop

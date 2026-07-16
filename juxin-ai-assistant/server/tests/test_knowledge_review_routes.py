@@ -9,6 +9,7 @@ def _create_personal_file(client, *, base_id: str | None = None) -> dict:
         data["knowledge_base_id"] = base_id
     response = client.post(
         "/api/knowledge/files/upload",
+        headers={"Idempotency-Key": "review-upload-proposal"},
         data=data,
         files={
             "file": (
@@ -237,10 +238,15 @@ def test_admin_approves_web_capture_candidate_and_marks_capture_approved(
         "/api/knowledge/bases",
         json={"name": "网页正式知识库", "scope": "company"},
     ).json()
-    preview = owner.post("/api/web/captures/preview", json={"url": "https://example.com/wdsp"}).json()
+    preview = owner.post(
+        "/api/web/captures/preview",
+        json={"url": "https://example.com/wdsp"},
+        headers={"Idempotency-Key": "review-web-preview"},
+    ).json()
     candidate = owner.post(
         f"/api/web/captures/{preview['capture_id']}/confirm",
         json={"save_target": "official_knowledge_candidate"},
+        headers={"Idempotency-Key": "review-web-confirm"},
     ).json()
 
     response = admin.post(

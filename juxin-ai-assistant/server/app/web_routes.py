@@ -11,6 +11,7 @@ from .auth import get_session, require_action
 from .config import Settings, get_settings
 from .crypto import ContentCipher
 from .database import get_db
+from .direct_action_service import DirectActionReplay, DirectActionService
 from .knowledge_embedding import build_embedding_service
 from .knowledge_files import create_knowledge_file_from_bytes
 from .models import KnowledgeFile, WebCapture
@@ -73,6 +74,24 @@ def _preview_out(capture: WebCapture) -> WebCapturePreviewOut:
     )
 
 
+def _idempotency_key(request: Request) -> str:
+    key = request.headers.get("Idempotency-Key", "").strip()
+    if not key:
+        raise HTTPException(status_code=400, detail="Idempotency-Key 请求头不能为空")
+    if len(key) > 128:
+        raise HTTPException(status_code=400, detail="Idempotency-Key 不能超过 128 个字符")
+    return key
+
+
+def _replay_or_raise(replay: DirectActionReplay) -> dict:
+    if replay.payload is not None:
+        return replay.payload
+    raise HTTPException(status_code=replay.status_code, detail={
+        "code": replay.error_code,
+        "message": replay.error_message_safe,
+    })
+
+
 @router.post("/captures/preview", response_model=WebCapturePreviewOut, status_code=201)
 async def preview_web_capture(
     body: WebCapturePreviewIn,
@@ -83,33 +102,53 @@ async def preview_web_capture(
 ) -> WebCapturePreviewOut:
     await _require_use(request, session_payload, current_settings)
     user_id = str(session_payload.user.id)
-
-    fetch_result = WebFetcher().fetch(body.url)
-    extracted = ContentExtractor().extract(fetch_result)
-    suggester = CategorySuggester()
-    suggestion_text = "\n".join([extracted.title, extracted.summary, extracted.text[:2000]])
-    capture = WebCapture(
+    action_service = DirectActionService(db)
+    invocation, replay = action_service.begin(
         user_id=user_id,
-        conversation_id=body.conversation_id.strip(),
-        url=fetch_result.url,
-        final_url=fetch_result.final_url,
-        site_name=extracted.site_name,
-        title=extracted.title,
-        summary=extracted.summary,
-        extracted_text=extracted.text,
-        content_hash=hashlib.sha256(extracted.text.encode("utf-8")).hexdigest(),
-        published_at_text=extracted.published_at,
-        fetched_at=fetch_result.fetched_at.replace(tzinfo=None),
-        word_count=extracted.word_count,
-        suggested_category=suggester.suggest_category(suggestion_text),
-        suggested_document_type=suggester.suggest_document_type(suggestion_text),
-        status="previewed",
-        review_status="none",
+        action_name="web_capture_preview",
+        idempotency_key=_idempotency_key(request),
+        request_payload={"url": body.url, "conversation_id": body.conversation_id.strip()},
+        timeout_seconds=30,
     )
-    db.add(capture)
-    db.commit()
-    db.refresh(capture)
-    return _preview_out(capture)
+    if replay is not None:
+        return WebCapturePreviewOut.model_validate(_replay_or_raise(replay))
+    assert invocation is not None
+
+    try:
+        fetch_result = WebFetcher().fetch(body.url)
+        extracted = ContentExtractor().extract(fetch_result)
+        suggester = CategorySuggester()
+        suggestion_text = "\n".join([extracted.title, extracted.summary, extracted.text[:2000]])
+        capture = WebCapture(
+            user_id=user_id,
+            conversation_id=body.conversation_id.strip(),
+            url=fetch_result.url,
+            final_url=fetch_result.final_url,
+            site_name=extracted.site_name,
+            title=extracted.title,
+            summary=extracted.summary,
+            extracted_text=extracted.text,
+            content_hash=hashlib.sha256(extracted.text.encode("utf-8")).hexdigest(),
+            published_at_text=extracted.published_at,
+            fetched_at=fetch_result.fetched_at.replace(tzinfo=None),
+            word_count=extracted.word_count,
+            suggested_category=suggester.suggest_category(suggestion_text),
+            suggested_document_type=suggester.suggest_document_type(suggestion_text),
+            status="previewed",
+            review_status="none",
+        )
+        db.add(capture)
+        db.flush()
+        payload = _preview_out(capture).model_dump(mode="json")
+        action_service.succeed(invocation, status_code=201, payload=payload)
+        return WebCapturePreviewOut.model_validate(payload)
+    except Exception as exc:
+        action_service.fail(
+            invocation,
+            error_code="WEB_CAPTURE_PREVIEW_FAILED",
+            error_message_safe="网页采集预览失败，请使用新的幂等键重试",
+        )
+        raise exc
 
 
 @router.post("/captures/{capture_id}/confirm", response_model=WebCaptureConfirmOut)
@@ -123,6 +162,26 @@ async def confirm_web_capture(
 ) -> WebCaptureConfirmOut:
     await _require_use(request, session_payload, current_settings)
     user_id = str(session_payload.user.id)
+    idempotency_key = _idempotency_key(request)
+    request_payload = {
+        "capture_id": capture_id,
+        "save_target": body.save_target,
+        "category": body.category.strip(),
+        "document_type": body.document_type.strip(),
+        "tags": [tag.strip() for tag in body.tags],
+        "conversation_id": body.conversation_id.strip(),
+    }
+    action_service = DirectActionService(db)
+    invocation, replay = action_service.begin(
+        user_id=user_id,
+        action_name="web_capture_confirm",
+        idempotency_key=idempotency_key,
+        request_payload=request_payload,
+        timeout_seconds=120,
+    )
+    if replay is not None:
+        return WebCaptureConfirmOut.model_validate(_replay_or_raise(replay))
+    assert invocation is not None
     capture = db.scalar(
         select(WebCapture).where(
             WebCapture.uuid == capture_id,
@@ -130,24 +189,45 @@ async def confirm_web_capture(
         )
     )
     if capture is None:
+        action_service.fail(invocation, error_code="WEB_CAPTURE_NOT_FOUND", error_message_safe="网页采集记录不存在")
         raise HTTPException(status_code=404, detail="网页采集记录不存在")
-    if capture.status not in {"previewed", "saved"}:
+    if capture.status == "saved":
+        if capture.save_target != body.save_target or capture.knowledge_file_id is None:
+            action_service.fail(invocation, error_code="WEB_CAPTURE_ALREADY_SAVED", error_message_safe="网页采集记录已保存，不能更换保存目标")
+            raise HTTPException(status_code=409, detail="网页采集记录已保存，不能更换保存目标")
+        file_record = db.scalar(select(KnowledgeFile).where(KnowledgeFile.id == capture.knowledge_file_id))
+        if file_record is None:
+            action_service.fail(invocation, error_code="WEB_CAPTURE_RECONCILIATION_REQUIRED", error_message_safe="已保存记录缺少知识文件，必须先对账")
+            raise HTTPException(status_code=409, detail="已保存记录缺少知识文件，必须先对账")
+        payload = WebCaptureConfirmOut(
+            capture_id=capture.uuid,
+            status=capture.status,
+            save_target=capture.save_target,
+            knowledge_file_uuid=file_record.uuid,
+            message="网页内容已按原保存目标处理",
+        ).model_dump(mode="json")
+        action_service.succeed(invocation, status_code=200, payload=payload)
+        return WebCaptureConfirmOut.model_validate(payload)
+    if capture.status != "previewed":
+        action_service.fail(invocation, error_code="WEB_CAPTURE_STATE_CONFLICT", error_message_safe="网页采集记录状态不可操作")
         raise HTTPException(status_code=409, detail="网页采集记录状态不可操作")
 
     if body.save_target == "cancel":
         capture.status = "cancelled"
         capture.save_target = "cancel"
         capture.review_status = "none"
-        db.commit()
-        return WebCaptureConfirmOut(
+        payload = WebCaptureConfirmOut(
             capture_id=capture.uuid,
             status=capture.status,
             save_target=capture.save_target,
             message="已取消网页采集",
-        )
+        ).model_dump(mode="json")
+        action_service.succeed(invocation, status_code=200, payload=payload)
+        return WebCaptureConfirmOut.model_validate(payload)
 
     conversation_id = body.conversation_id.strip() or capture.conversation_id
     if body.save_target == "temporary" and not conversation_id:
+        action_service.fail(invocation, error_code="WEB_CAPTURE_CONVERSATION_REQUIRED", error_message_safe="仅本次使用必须关联当前会话")
         raise HTTPException(status_code=422, detail="仅本次使用必须关联当前会话")
 
     category = body.category.strip() or capture.suggested_category or "个人素材"
@@ -243,17 +323,22 @@ async def confirm_web_capture(
         capture.save_target = body.save_target
         capture.review_status = "pending" if body.save_target == "official_knowledge_candidate" else "none"
         capture.knowledge_file_id = file_record.id
-        db.commit()
         db.refresh(file_record)
-        return WebCaptureConfirmOut(
+        payload = WebCaptureConfirmOut(
             capture_id=capture.uuid,
             status=capture.status,
             save_target=capture.save_target,
             knowledge_file_uuid=file_record.uuid,
             message=message,
-        )
+        ).model_dump(mode="json")
+        action_service.succeed(invocation, status_code=200, payload=payload)
+        return WebCaptureConfirmOut.model_validate(payload)
     except Exception:
-        db.rollback()
+        action_service.fail(
+            invocation,
+            error_code="WEB_CAPTURE_CONFIRM_FAILED",
+            error_message_safe="网页采集保存失败，请使用新的幂等键重试",
+        )
         raise
 
 

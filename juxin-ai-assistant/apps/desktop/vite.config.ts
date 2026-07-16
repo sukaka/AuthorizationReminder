@@ -26,5 +26,8 @@ export default defineConfig({
     environment: 'jsdom',
     include: ['tests/**/*.test.ts', 'tests/**/*.test.tsx'],
     setupFiles: ['tests/setup.ts'],
+    // Keep the jsdom/MSW suite deterministic on constrained developer machines.
+    fileParallelism: false,
+    maxWorkers: 1,
   },
 });

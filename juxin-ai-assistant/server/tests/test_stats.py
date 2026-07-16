@@ -122,10 +122,13 @@ def test_admin_stats_include_agent_quality_metrics(
     generation_db,
     seeded_task,
 ) -> None:
+    now = datetime.now()
     quality_ok = _generation(seeded_task.id, "quality-ok", "交付", "COMPLETED")
     quality_ok.latency_ms = 100
+    quality_ok.created_at = now
     quality_fail = _generation(seeded_task.id, "quality-fail", "交付", "FAILED")
     quality_fail.latency_ms = 300
+    quality_fail.created_at = now
     generation_db.add_all(
         [
             quality_ok,

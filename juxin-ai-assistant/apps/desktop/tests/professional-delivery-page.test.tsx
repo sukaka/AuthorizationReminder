@@ -443,6 +443,131 @@ it('renders a three-column deliverable workbench and saves an immutable version'
   expect(await screen.findByText('已保存为版本 V3')).toBeInTheDocument();
 });
 
+it('exposes a recoverable autosave conflict instead of failing silently', async () => {
+  const draftContent = {
+    schema_version: '2',
+    blocks: [{ block_id: 'body', type: 'paragraph', text: '可编辑的草稿正文。' }],
+  };
+  const immutableContent = {
+    schema_version: '2',
+    blocks: [{ block_id: 'body', type: 'paragraph', text: '服务器上的最新正文。' }],
+  };
+  const detail = {
+    request_id: 'req-conflict-detail',
+    deliverable_uuid: 'deliverable-conflict',
+    title: '冲突恢复测试成果',
+    deliverable_type: 'security_ops_monthly_report',
+    scope_type: 'personal',
+    formality: 'formal',
+    project_uuid: null,
+    owner_user_id: 'user-1',
+    lifecycle_status: 'draft',
+    row_version: 4,
+    content_summary: '可编辑的草稿正文。',
+    allowed_actions: ['edit', 'review', 'export'],
+    current_version: {
+      version_uuid: 'version-conflict',
+      version_no: 1,
+      parent_version_uuid: null,
+      skill_version_uuid: 'skill-version-1',
+      template_version_uuid: 'template-version-1',
+      title_snapshot: '冲突恢复测试成果',
+      summary_snapshot: '可编辑的草稿正文。',
+      change_summary: '专业任务生成',
+      creation_reason: 'professional_run',
+      content: immutableContent,
+      content_hash: 'conflict-hash',
+      created_at: '2026-07-15T02:00:00Z',
+    },
+    created_at: '2026-07-15T02:00:00Z',
+    updated_at: '2026-07-15T02:00:00Z',
+  };
+  const saveDraft = vi.fn();
+  server.use(
+    http.get('/api/ai/deliverables', () => HttpResponse.json({
+      request_id: 'req-conflict-list',
+      items: [detail],
+      total: 1,
+      page: 1,
+      page_size: 50,
+    })),
+    http.post('/api/ai/deliverables/deliverable-conflict/evidence/refresh', () => HttpResponse.json({
+      request_id: 'req-conflict-refresh',
+      deliverable_uuid: 'deliverable-conflict',
+      lifecycle_status: 'draft',
+      row_version: 4,
+      invalidated_evidence_uuids: [],
+      source_change_notice: null,
+    })),
+    http.get('/api/ai/deliverables/deliverable-conflict', () => HttpResponse.json(detail)),
+    http.get('/api/ai/deliverables/deliverable-conflict/draft', () => HttpResponse.json({
+      request_id: 'req-conflict-draft',
+      deliverable_uuid: 'deliverable-conflict',
+      draft_uuid: 'draft-conflict',
+      base_version_uuid: 'version-conflict',
+      row_version: 4,
+      draft_revision: 2,
+      content: draftContent,
+      content_hash: 'draft-hash',
+      content_summary: '可编辑的草稿正文。',
+      updated_by: 'user-1',
+      updated_at: '2026-07-15T02:00:00Z',
+    })),
+    http.post('/api/ai/deliverables/deliverable-conflict/draft/lease', () => HttpResponse.json({
+      request_id: 'req-conflict-lease',
+      deliverable_uuid: 'deliverable-conflict',
+      lease_uuid: 'lease-conflict',
+      owner_user_id: 'user-1',
+      fencing_token: 9,
+      expires_at: '2026-07-15T03:00:00Z',
+    })),
+    http.put('/api/ai/deliverables/deliverable-conflict/draft', async ({ request }) => {
+      saveDraft(await request.json());
+      return HttpResponse.json({ code: 'DRAFT_ROW_VERSION_CONFLICT' }, { status: 409 });
+    }),
+    http.get('/api/ai/deliverables/deliverable-conflict/versions', () => HttpResponse.json({
+      request_id: 'req-conflict-versions',
+      deliverable_uuid: 'deliverable-conflict',
+      items: [],
+      total: 0,
+      page: 1,
+      page_size: 20,
+    })),
+    http.get('/api/ai/deliverables/deliverable-conflict/versions/version-conflict/facts', () => HttpResponse.json({
+      request_id: 'req-conflict-facts',
+      deliverable_uuid: 'deliverable-conflict',
+      version_uuid: 'version-conflict',
+      content_hash: 'conflict-hash',
+      items: [],
+      total: 0,
+    })),
+    http.get('/api/ai/deliverables/deliverable-conflict/reviews', () => HttpResponse.json({
+      request_id: 'req-conflict-reviews',
+      items: [],
+      total: 0,
+      page: 1,
+      page_size: 20,
+    })),
+    http.get('/api/ai/deliverables/deliverable-conflict/comments', () => HttpResponse.json({
+      request_id: 'req-conflict-comments',
+      items: [],
+      total: 0,
+    })),
+  );
+
+  render(<ProfessionalDeliverablesPage initialDeliverableId="deliverable-conflict" />);
+  expect(await screen.findByRole('heading', { name: detail.title })).toBeInTheDocument();
+
+  const editor = screen.getByLabelText('成果正文');
+  await userEvent.clear(editor);
+  await userEvent.type(editor, '这次修改会触发冲突。');
+
+  await waitFor(() => expect(saveDraft).toHaveBeenCalledTimes(1), { timeout: 2_000 });
+  expect(await screen.findByText('草稿冲突，需刷新')).toBeInTheDocument();
+  expect(await screen.findByRole('button', { name: '刷新恢复' })).toBeInTheDocument();
+  expect(await screen.findByText('草稿保存冲突，请刷新后恢复最新内容。')).toBeInTheDocument();
+});
+
 it('shows a source-change audit notice without changing the delivered snapshot', async () => {
   const refreshRequest = vi.fn();
   const deliveredDetail = {

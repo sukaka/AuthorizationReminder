@@ -82,6 +82,7 @@ def test_word_export_creates_user_scoped_work_artifact(
 
         response = client.post(
             "/api/export/word",
+            headers={"Idempotency-Key": "work-artifact-export"},
             json={
                 "conversation_id": session.uuid,
                 "message_id": "artifact-assistant-message",
@@ -101,8 +102,11 @@ def test_word_export_creates_user_scoped_work_artifact(
         assert item["source_summary"] == [{
             "source_type": "official_knowledge",
             "file_name": "交付手册.pdf",
+            "file_uuid": "source-file",
+            "chunk_id": "chunk-1",
             "page_number": 6,
             "section_title": "验收交付物",
+            "chunk_index": 0,
         }]
         assert "测试报告" not in str(item)
 
@@ -142,8 +146,8 @@ def test_reexporting_same_answer_creates_new_artifact_version(
             "format_before_export": False,
         }
 
-        first = client.post("/api/export/word", json=payload)
-        second = client.post("/api/export/word", json=payload)
+        first = client.post("/api/export/word", headers={"Idempotency-Key": "work-artifact-export-1"}, json=payload)
+        second = client.post("/api/export/word", headers={"Idempotency-Key": "work-artifact-export-2"}, json=payload)
 
         assert first.status_code == 201
         assert second.status_code == 201

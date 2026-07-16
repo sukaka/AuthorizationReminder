@@ -70,8 +70,11 @@ export type TaskCardPayload = {
 export type WorkArtifactSourcePayload = {
   source_type: string;
   file_name: string;
+  file_uuid?: string;
+  chunk_id?: string;
   page_number?: number | null;
   section_title?: string;
+  chunk_index?: number | null;
 };
 
 export type WorkArtifactItemPayload = {
@@ -233,10 +236,10 @@ export type IntentSkillCandidatePayload = {
 export class ApiError extends Error {
   constructor(
     public readonly status: number,
-    message: string,
+    public readonly code: string,
     public readonly payload?: unknown,
   ) {
-    super(message);
+    super(code);
   }
 }
 
@@ -832,6 +835,813 @@ export async function downloadWorkArtifactWord(downloadUrl: string): Promise<Wor
   }
   await downloadBlobFromResponse(response, '聚信得仁文档.docx');
   return { kind: 'browser' };
+}
+
+/** 6.0 任务中心（Run）。 */
+export type AgentRunPayload = {
+  run_id: string;
+  title?: string;
+  run_type?: string;
+  status: string;
+  stage: string;
+  progress: number;
+  citations?: Array<Record<string, unknown>>;
+  artifact?: Record<string, unknown> | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+};
+
+export type AgentRunDetailPayload = {
+  run: AgentRunPayload;
+  steps: Array<{
+    step_id: string;
+    run_id: string;
+    sequence: number;
+    step_type: string;
+    status: string;
+    role: string;
+    summary: string;
+  }>;
+  events: Array<{
+    event_id: string;
+    run_id: string;
+    sequence: number;
+    event_type: string;
+    stage?: string | null;
+    label: string;
+    progress?: number | null;
+    content: string;
+    source?: Record<string, unknown> | null;
+    artifact_id?: string;
+    quality?: Record<string, unknown> | null;
+  }>;
+  result: Record<string, unknown>;
+};
+
+export async function listAgentRuns(filters: {
+  status?: string;
+  limit?: number;
+} = {}): Promise<{ items: AgentRunPayload[]; total: number }> {
+  const query = new URLSearchParams();
+  if (filters.status) query.set('status', filters.status);
+  if (filters.limit) query.set('limit', String(filters.limit));
+  const suffix = query.toString() ? `?${query.toString()}` : '';
+  return readJson(await apiFetch(`/api/ai/runs${suffix}`, { cache: 'no-store' }), 'AGENT_RUNS_FAILED');
+}
+
+export async function getAgentRunDetail(runId: string): Promise<AgentRunDetailPayload> {
+  return readJson(
+    await apiFetch(`/api/ai/runs/${encodeURIComponent(runId)}`, { cache: 'no-store' }),
+    'AGENT_RUN_DETAIL_FAILED',
+  );
+}
+
+export async function createAgentRun(payload: {
+  input_text: string;
+  title?: string;
+  run_type?: string;
+}): Promise<{ run: AgentRunPayload; snapshot: Record<string, unknown> }> {
+  return readJson(
+    await apiFetch('/api/ai/runs', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        input_text: payload.input_text,
+        title: payload.title || 'AI 任务',
+        run_type: payload.run_type || 'chat',
+      }),
+    }),
+    'AGENT_RUN_CREATE_FAILED',
+  );
+}
+
+export async function cancelAgentRun(runId: string): Promise<AgentRunPayload> {
+  return readJson(
+    await apiFetch(`/api/ai/runs/${encodeURIComponent(runId)}/cancel`, { method: 'POST' }),
+    'AGENT_RUN_CANCEL_FAILED',
+  );
+}
+
+export async function postAgentRunFeedback(
+  runId: string,
+  payload: { feedback_type: string; comment?: string },
+): Promise<void> {
+  const response = await apiFetch(`/api/ai/runs/${encodeURIComponent(runId)}/feedback`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      feedback_type: payload.feedback_type,
+      comment: payload.comment || '',
+    }),
+  });
+  if (!response.ok) throw new ApiError(response.status, 'AGENT_RUN_FEEDBACK_FAILED');
+}
+
+/** 6.0 Agent artifact deliverable (Run 成果中心). */
+export type AgentArtifactPayload = {
+  artifact_id: string;
+  run_id: string;
+  artifact_type: string;
+  title: string;
+  status: string;
+  version: number;
+  content_markdown: string;
+  quality?: Record<string, unknown> | null;
+};
+
+export async function listAgentArtifacts(): Promise<{ items: AgentArtifactPayload[]; total: number }> {
+  return readJson(await apiFetch('/api/ai/artifacts', { cache: 'no-store' }), 'AGENT_ARTIFACTS_FAILED');
+}
+
+export async function getAgentArtifact(artifactId: string): Promise<AgentArtifactPayload> {
+  return readJson(
+    await apiFetch(`/api/ai/artifacts/${encodeURIComponent(artifactId)}`, { cache: 'no-store' }),
+    'AGENT_ARTIFACT_FAILED',
+  );
+}
+
+export type AgentArtifactVersionPayload = {
+  version: number;
+  change_summary: string;
+  created_by: string;
+  content_preview: string;
+  is_active: boolean;
+};
+
+export async function listAgentArtifactVersions(
+  artifactId: string,
+): Promise<{
+  artifact_id: string;
+  active_version: number;
+  items: AgentArtifactVersionPayload[];
+  total: number;
+}> {
+  return readJson(
+    await apiFetch(`/api/ai/artifacts/${encodeURIComponent(artifactId)}/versions`, {
+      cache: 'no-store',
+    }),
+    'AGENT_ARTIFACT_VERSIONS_FAILED',
+  );
+}
+
+export type AgentArtifactExportFormat = 'docx' | 'xlsx' | 'pptx' | 'pdf' | 'md';
+
+export async function downloadAgentArtifact(
+  artifactId: string,
+  fmt: AgentArtifactExportFormat = 'docx',
+): Promise<WordDownloadResult> {
+  const response = await apiFetch(
+    `/api/ai/artifacts/${encodeURIComponent(artifactId)}/export/${encodeURIComponent(fmt)}`,
+  );
+  if (!response.ok) throw new ApiError(response.status, 'ARTIFACT_EXPORT_FAILED');
+  const fallback = `成果.${fmt}`;
+  if (isDesktopRuntime()) {
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    const fileName = readAttachmentFileName(response.headers) || fallback;
+    const path = await saveWordBytesToDesktop(fileName, bytes);
+    return { kind: 'desktop', path };
+  }
+  await downloadBlobFromResponse(response, fallback);
+  return { kind: 'browser' };
+}
+
+export type OpsSloCheckPayload = {
+  id: string;
+  name: string;
+  status: 'pass' | 'fail' | 'not_observed' | string;
+  actual: number | string | null;
+  threshold: number | string | null;
+  detail?: string;
+};
+
+export type OpsSloAuditPayload = {
+  overall: 'pass' | 'fail' | 'pass_with_gaps' | 'unavailable' | string;
+  checks: OpsSloCheckPayload[];
+  metrics: Record<string, number | string | null>;
+  fail_count: number;
+  gap_count: number;
+  notes: string[];
+};
+
+export type OpsSnapshotPayload = {
+  runs_total: number;
+  runs_succeeded: number;
+  runs_failed: number;
+  runs_running: number;
+  artifacts_total: number;
+  faqs_published: number;
+  faqs_draft: number;
+  learning_candidates_draft: number;
+  learning_candidates_published: number;
+  success_rate: number;
+  tool_invocations_in_progress: number;
+  tool_invocations_reconciliation_required: number;
+  direct_actions_reconciliation_required: number;
+  slo_audit: OpsSloAuditPayload;
+  notes: string[];
+  run_reconciliation_overall: 'pass' | 'fail' | 'unavailable';
+  run_reconciliation_scanned_runs: number;
+  run_reconciliation_issue_count: number;
+  run_reconciliation_issue_counts: Record<string, number>;
+};
+
+export async function getOpsSnapshot(): Promise<OpsSnapshotPayload> {
+  return readJson(await apiFetch('/api/ai/ops/snapshot', { cache: 'no-store' }), 'OPS_SNAPSHOT_FAILED');
+}
+
+export type RunReconciliationIssuePayload = {
+  run_id: string;
+  code: string;
+  entity: 'run' | 'step' | 'event' | string;
+  detail: string;
+};
+
+export type RunReconciliationPayload = {
+  overall: 'pass' | 'fail' | string;
+  scanned_runs: number;
+  issue_count: number;
+  issue_counts: Record<string, number>;
+  issues: RunReconciliationIssuePayload[];
+  limit: number;
+};
+
+export type OpsRunPayload = {
+  run_id: string;
+  title: string;
+  run_type: string;
+  status: string;
+  stage: string;
+  progress: number;
+  artifact?: Record<string, unknown> | null;
+  citations?: Array<Record<string, unknown>>;
+  created_at?: string | null;
+  updated_at?: string | null;
+};
+
+export type OpsRunStepPayload = {
+  step_id: string;
+  run_id: string;
+  sequence: number;
+  step_type: string;
+  status: string;
+  role: string;
+  summary: string;
+};
+
+export type OpsRunEventPayload = {
+  event_id: string;
+  run_id: string;
+  sequence: number;
+  event_type: string;
+  stage?: string | null;
+  label: string;
+  progress?: number | null;
+};
+
+export type OpsRunDetailPayload = {
+  run: OpsRunPayload;
+  steps: OpsRunStepPayload[];
+  events: OpsRunEventPayload[];
+  result: Record<string, unknown>;
+  reconciliation: RunReconciliationPayload;
+};
+
+export type OpsRunAction = 'pause' | 'resume' | 'rollback';
+
+export type OpsRunActionPayload = {
+  run: OpsRunPayload;
+  snapshot: Record<string, unknown>;
+  checkpoint?: Record<string, unknown> | null;
+  side_effects_reversed: boolean;
+};
+
+export async function getOpsRunDetail(runId: string): Promise<OpsRunDetailPayload> {
+  return readJson(
+    await apiFetch(`/api/ai/ops/runs/${encodeURIComponent(runId)}`, { cache: 'no-store' }),
+    'OPS_RUN_DETAIL_FAILED',
+  );
+}
+
+export async function controlOpsRun(
+  runId: string,
+  action: OpsRunAction,
+): Promise<OpsRunActionPayload> {
+  return readJson(
+    await apiFetch(`/api/ai/ops/runs/${encodeURIComponent(runId)}/${action}`, {
+      method: 'POST',
+    }),
+    `OPS_RUN_${action.toUpperCase()}_FAILED`,
+  );
+}
+
+export async function getOpsRunReconciliation(
+  limit = 200,
+): Promise<RunReconciliationPayload> {
+  return readJson(
+    await apiFetch(`/api/ai/ops/run-reconciliation?limit=${encodeURIComponent(String(limit))}`, {
+      cache: 'no-store',
+    }),
+    'OPS_RUN_RECONCILIATION_FAILED',
+  );
+}
+
+export type GaMetricItem = {
+  key: string;
+  name: string;
+  target: string;
+  value: number | null;
+  unit: string;
+  status: 'pass' | 'fail' | 'unknown' | string;
+  detail: string;
+};
+
+export type GaReportPayload = {
+  overall: 'ready' | 'partial' | 'blocked' | 'not_ready' | string;
+  summary: {
+    passed: number;
+    failed: number;
+    unknown: number;
+    total: number;
+    sample_limit: number;
+  };
+  items: GaMetricItem[];
+  measured: Record<string, unknown>;
+  notes: string[];
+  thresholds_source?: string;
+};
+
+export async function getOpsGaReport(): Promise<GaReportPayload> {
+  return readJson(
+    await apiFetch('/api/ai/ops/ga-report', { cache: 'no-store' }),
+    'OPS_GA_REPORT_FAILED',
+  );
+}
+
+export async function runGaOfflineSuite(): Promise<Record<string, unknown>> {
+  return readJson(
+    await apiFetch('/api/ai/learning-eval/ga-suite', { method: 'POST' }),
+    'GA_OFFLINE_SUITE_FAILED',
+  );
+}
+
+export type CheckpointSuitePayload = {
+  total: number;
+  recovered: number;
+  failed: number;
+  recovery_rate: number;
+  target: number;
+  passed: boolean;
+  failures?: Array<Record<string, unknown>>;
+  owner_user_id?: string;
+};
+
+export async function runCheckpointSuite(cases = 12): Promise<CheckpointSuitePayload> {
+  return readJson(
+    await apiFetch(`/api/ai/ops/checkpoint-suite?cases=${Math.max(1, Math.min(cases, 100))}`, {
+      method: 'POST',
+    }),
+    'OPS_CHECKPOINT_SUITE_FAILED',
+  );
+}
+
+export type DataEgressDecision = {
+  allowed: boolean;
+  level: number;
+  level_label: string;
+  destination: string;
+  requires_confirmation: boolean;
+  redaction_applied: boolean;
+  reasons: string[];
+  findings: string[];
+  redacted_text: string;
+  policy: string;
+};
+
+export async function evaluateDataEgress(payload: {
+  text: string;
+  destination?: string;
+  confirmed?: boolean;
+  declared_level?: number | null;
+  agent_id?: string;
+  persist?: boolean;
+}): Promise<DataEgressDecision & { audit_id?: string }> {
+  return readJson(
+    await apiFetch('/api/ai/data-egress/evaluate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        text: payload.text,
+        destination: payload.destination || 'external_agent',
+        confirmed: payload.confirmed || false,
+        declared_level: payload.declared_level ?? null,
+        agent_id: payload.agent_id || '',
+        persist: payload.persist !== false,
+      }),
+    }),
+    'DATA_EGRESS_FAILED',
+  );
+}
+
+export type CostSummaryPayload = {
+  calls_total: number;
+  calls_succeeded: number;
+  calls_blocked: number;
+  success_rate: number | null;
+  total_cost_micros: number;
+  avg_latency_ms: number;
+  by_agent: Array<{
+    agent_id: string;
+    calls: number;
+    cost_micros: number;
+    avg_latency_ms: number;
+  }>;
+  egress_audits_total: number;
+  egress_denied: number;
+};
+
+export async function getOpsCostSummary(): Promise<CostSummaryPayload> {
+  return readJson(
+    await apiFetch('/api/ai/ops/cost-summary', { cache: 'no-store' }),
+    'OPS_COST_SUMMARY_FAILED',
+  );
+}
+
+export type ReadinessPayload = {
+  overall: string;
+  elapsed_ms: number;
+  fail_count: number;
+  warn_count: number;
+  pass_count: number;
+  recommendation: string;
+  checks: Array<{
+    id: string;
+    name: string;
+    status: string;
+    detail?: string;
+    latency_ms?: number;
+  }>;
+};
+
+export async function getOpsReadiness(): Promise<ReadinessPayload> {
+  return readJson(
+    await apiFetch('/api/ai/ops/readiness', { cache: 'no-store' }),
+    'OPS_READINESS_FAILED',
+  );
+}
+
+export type SecurityAuditPayload = {
+  overall: string;
+  fail_count: number;
+  warn_count: number;
+  pass_count: number;
+  recommendation: string;
+  checks: Array<{
+    id: string;
+    category: string;
+    name: string;
+    status: string;
+    detail?: string;
+  }>;
+};
+
+export async function getOpsSecurityAudit(): Promise<SecurityAuditPayload> {
+  return readJson(
+    await apiFetch('/api/ai/ops/security-audit', { cache: 'no-store' }),
+    'OPS_SECURITY_AUDIT_FAILED',
+  );
+}
+
+export async function getAgentHubHealth(agentId?: string): Promise<{
+  items: Array<Record<string, unknown>>;
+  total: number;
+  healthy: number;
+  overall: string;
+}> {
+  const q = agentId ? `?agent_id=${encodeURIComponent(agentId)}` : '';
+  return readJson(
+    await apiFetch(`/api/ai/agent-hub/health${q}`, { cache: 'no-store' }),
+    'AGENT_HUB_HEALTH_FAILED',
+  );
+}
+
+export async function listAgentMarket(): Promise<{
+  items: Array<Record<string, unknown>>;
+  total: number;
+}> {
+  return readJson(
+    await apiFetch('/api/ai/agent-hub/market', { cache: 'no-store' }),
+    'AGENT_MARKET_FAILED',
+  );
+}
+
+export type HubAgentPayload = {
+  agent_id: string;
+  name: string;
+  description: string;
+  version: string;
+  capabilities: string[];
+  endpoint: string;
+  status: string;
+};
+
+export async function listHubAgents(): Promise<HubAgentPayload[]> {
+  return readJson(
+    await apiFetch('/api/ai/agent-hub/agents', { cache: 'no-store' }),
+    'AGENT_HUB_LIST_FAILED',
+  );
+}
+
+export async function invokeHubAgent(
+  agentId: string,
+  payload: {
+    input_text: string;
+    context?: Record<string, unknown>;
+    egress_confirmed?: boolean;
+    run_id?: string;
+  },
+): Promise<Record<string, unknown>> {
+  return readJson(
+    await apiFetch(`/api/ai/agent-hub/agents/${encodeURIComponent(agentId)}/invoke`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        input_text: payload.input_text,
+        context: payload.context || {},
+        egress_confirmed: Boolean(payload.egress_confirmed),
+        run_id: payload.run_id || '',
+      }),
+    }),
+    'AGENT_HUB_INVOKE_FAILED',
+  );
+}
+
+export async function setAgentMarketStatus(
+  agentId: string,
+  status: 'installed' | 'authorized' | 'disabled',
+): Promise<Record<string, unknown>> {
+  return readJson(
+    await apiFetch(`/api/ai/agent-hub/market/${encodeURIComponent(agentId)}/status`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status }),
+    }),
+    'AGENT_MARKET_STATUS_FAILED',
+  );
+}
+
+export async function routeAgent(payload: {
+  input_text: string;
+  preferred_agent_id?: string;
+  required_capabilities?: string[];
+  allow_external?: boolean;
+}): Promise<Record<string, unknown>> {
+  return readJson(
+    await apiFetch('/api/ai/workflows/route', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        input_text: payload.input_text,
+        preferred_agent_id: payload.preferred_agent_id || '',
+        required_capabilities: payload.required_capabilities || [],
+        allow_external: payload.allow_external !== false,
+      }),
+    }),
+    'AGENT_ROUTE_FAILED',
+  );
+}
+
+export async function listWorkflows(): Promise<{
+  items: Array<{
+    id: string;
+    name: string;
+    description: string;
+    step_count: number;
+    custom?: boolean;
+  }>;
+  total: number;
+}> {
+  return readJson(await apiFetch('/api/ai/workflows', { cache: 'no-store' }), 'WORKFLOWS_LIST_FAILED');
+}
+
+export async function getWorkflowDefinition(workflowId: string): Promise<Record<string, unknown>> {
+  return readJson(
+    await apiFetch(`/api/ai/workflows/${encodeURIComponent(workflowId)}`, { cache: 'no-store' }),
+    'WORKFLOW_GET_FAILED',
+  );
+}
+
+export async function saveCustomWorkflow(payload: {
+  id: string;
+  name: string;
+  description?: string;
+  steps: Array<{ id: string; type: string; params?: Record<string, unknown> }>;
+}): Promise<Record<string, unknown>> {
+  return readJson(
+    await apiFetch('/api/ai/workflows/custom', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }),
+    'WORKFLOW_SAVE_FAILED',
+  );
+}
+
+export type WorkflowValidationIssue = {
+  code: string;
+  message: string;
+  path?: string;
+  severity?: 'error' | 'warning' | string;
+};
+
+export type WorkflowValidationResult = {
+  valid: boolean;
+  errors: WorkflowValidationIssue[];
+  warnings: WorkflowValidationIssue[];
+  preview?: {
+    node_count?: number;
+    max_depth?: number;
+    requires_approval?: boolean;
+    nodes?: Array<Record<string, unknown>>;
+    edges?: Array<Record<string, unknown>>;
+  };
+};
+
+export async function validateWorkflow(payload: {
+  id?: string;
+  name?: string;
+  description?: string;
+  steps: Array<{ id: string; type: string; params?: Record<string, unknown> }>;
+}): Promise<WorkflowValidationResult> {
+  return readJson(
+    await apiFetch('/api/ai/workflows/validate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }),
+    'WORKFLOW_VALIDATE_FAILED',
+  );
+}
+
+export async function validateSavedWorkflow(workflowId: string): Promise<WorkflowValidationResult> {
+  return readJson(
+    await apiFetch(`/api/ai/workflows/custom/${encodeURIComponent(workflowId)}/validate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    }),
+    'WORKFLOW_VALIDATE_FAILED',
+  );
+}
+
+export async function publishCustomWorkflow(workflowId: string): Promise<Record<string, unknown>> {
+  return readJson(
+    await apiFetch(`/api/ai/workflows/custom/${encodeURIComponent(workflowId)}/publish`, {
+      method: 'POST',
+    }),
+    'WORKFLOW_PUBLISH_FAILED',
+  );
+}
+
+export async function deleteCustomWorkflow(workflowId: string): Promise<void> {
+  const response = await apiFetch(`/api/ai/workflows/custom/${encodeURIComponent(workflowId)}`, {
+    method: 'DELETE',
+  });
+  if (!response.ok) throw new ApiError(response.status, 'WORKFLOW_DELETE_FAILED');
+}
+
+export async function runWorkflow(
+  workflowId: string,
+  payload: { input_text: string; preferred_agent_id?: string; egress_confirmed?: boolean },
+): Promise<Record<string, unknown>> {
+  return readJson(
+    await apiFetch(`/api/ai/workflows/${encodeURIComponent(workflowId)}/run`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        input_text: payload.input_text,
+        preferred_agent_id: payload.preferred_agent_id || '',
+        egress_confirmed: payload.egress_confirmed || false,
+      }),
+    }),
+    'WORKFLOW_RUN_FAILED',
+  );
+}
+
+export async function getOpsFeatureFlags(): Promise<Record<string, unknown>> {
+  return readJson(
+    await apiFetch('/api/ai/ops/feature-flags', { cache: 'no-store' }),
+    'OPS_FLAGS_FAILED',
+  );
+}
+
+export async function updateOpsFeatureFlags(
+  body: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  return readJson(
+    await apiFetch('/api/ai/ops/feature-flags', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }),
+    'FEATURE_FLAGS_UPDATE_FAILED',
+  );
+}
+
+export type LearningCandidatePayload = {
+  candidate_id: string;
+  owner_user_id: string;
+  source_run_id: string;
+  candidate_type: string;
+  title: string;
+  status: string;
+  payload?: Record<string, unknown> | null;
+};
+
+export async function listLearningCandidates(): Promise<{
+  items: LearningCandidatePayload[];
+  total: number;
+}> {
+  return readJson(
+    await apiFetch('/api/ai/learning-candidates', { cache: 'no-store' }),
+    'LEARNING_CANDIDATES_FAILED',
+  );
+}
+
+export async function transitionLearningCandidate(
+  candidateId: string,
+  status: string,
+): Promise<LearningCandidatePayload> {
+  return readJson(
+    await apiFetch(`/api/ai/learning-candidates/${encodeURIComponent(candidateId)}/transition`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status }),
+    }),
+    'LEARNING_CANDIDATE_TRANSITION_FAILED',
+  );
+}
+
+export async function listDocumentTemplates(): Promise<{ items: Array<{ code: string; name: string }> }> {
+  return readJson(
+    await apiFetch('/api/ai/document-templates', { cache: 'no-store' }),
+    'DOCUMENT_TEMPLATES_FAILED',
+  );
+}
+
+export type RoleAssistantPayload = {
+  code: string;
+  name: string;
+  description: string;
+  templates: string[];
+  modes: string[];
+};
+
+export async function listRoleAssistants(): Promise<{
+  items: RoleAssistantPayload[];
+  templates: Array<{ code: string; name: string }>;
+  catalog_assistants: number;
+}> {
+  return readJson(
+    await apiFetch('/api/ai/role-assistants', { cache: 'no-store' }),
+    'ROLE_ASSISTANTS_FAILED',
+  );
+}
+
+export type RoleGenerateResult = {
+  role_code: string;
+  template_code: string;
+  template_name: string;
+  title: string;
+  content_markdown: string;
+  artifact_id: string;
+};
+
+export async function generateRoleDocument(
+  roleCode: string,
+  payload: {
+    template_code?: string;
+    title?: string;
+    topic?: string;
+    notes?: string;
+    create_artifact?: boolean;
+    polish_with_model?: boolean;
+  },
+): Promise<RoleGenerateResult & { polished?: boolean; polish_mode?: string }> {
+  return readJson(
+    await apiFetch(`/api/ai/role-assistants/${encodeURIComponent(roleCode)}/generate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        template_code: payload.template_code || '',
+        title: payload.title || '',
+        topic: payload.topic || '',
+        notes: payload.notes || '',
+        create_artifact: payload.create_artifact !== false,
+        polish_with_model: payload.polish_with_model,
+      }),
+    }),
+    'ROLE_GENERATE_FAILED',
+  );
 }
 
 function trimHeaderValue(value: string): string {

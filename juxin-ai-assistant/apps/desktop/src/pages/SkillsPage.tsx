@@ -85,7 +85,13 @@ export function SkillsPage() {
             </div>
             <dl className="skill-card-meta">
               <div><dt>输入材料</dt><dd>{materialText(skill)}</dd></div>
-              <div><dt>输出格式</dt><dd>可生成：{skill.output_types.join('、')}</dd></div>
+              <div>
+                <dt>输出格式</dt>
+                <dd>
+                  <span>可生成：</span>
+                  <span>{skill.output_types.join('、')}</span>
+                </dd>
+              </div>
             </dl>
             <div className="history-actions">
               <button

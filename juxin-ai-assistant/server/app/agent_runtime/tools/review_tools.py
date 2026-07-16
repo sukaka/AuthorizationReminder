@@ -7,7 +7,7 @@ from sqlalchemy import select
 from app.models import KnowledgeBase, KnowledgeChunk, KnowledgeFile, KnowledgeReviewLog, WebCapture
 from app.schemas import KnowledgeReviewDecisionIn, KnowledgeReviewSubmitIn
 
-from ..tool_base import BaseTool, ToolContext, ToolResult
+from ..tool_base import BaseTool, ToolContext, ToolResult, ToolSpec
 
 
 def _db_missing(tool_name: str) -> ToolResult:
@@ -64,6 +64,24 @@ def _add_review_log(
 class KnowledgeReviewSubmitTool(BaseTool):
     name = "knowledge_review_submit"
     description = "Submit a personal reference file for administrator review"
+    data_scopes = frozenset({"user", "resource"})
+
+    @property
+    def tool_spec(self) -> ToolSpec:
+        return ToolSpec(
+            name=self.name,
+            version=self.version,
+            data_scopes=self.data_scopes,
+            input_schema={
+                "type": "object",
+                "required": ["file_id"],
+                "properties": {
+                    "file_id": {"type": "string"},
+                    "comment": {"type": "string"},
+                },
+            },
+            effect="idempotent_write",
+        )
 
     def run(self, tool_input: dict, context: ToolContext) -> ToolResult:
         if context.db is None:
@@ -118,6 +136,31 @@ class KnowledgeReviewApproveTool(BaseTool):
     name = "knowledge_review_approve"
     description = "Approve a pending knowledge file as official knowledge"
     required_permission = "knowledge.review.manage"
+    data_scopes = frozenset({"resource"})
+
+    @property
+    def tool_spec(self) -> ToolSpec:
+        return ToolSpec(
+            name=self.name,
+            version=self.version,
+            data_scopes=self.data_scopes,
+            input_schema={
+                "type": "object",
+                "required": ["file_id", "knowledge_base_id"],
+                "properties": {
+                    "file_id": {"type": "string"},
+                    "knowledge_base_id": {"type": "string"},
+                    "comment": {"type": "string"},
+                    "permission_scope": {"type": "string"},
+                    "rag_scope": {"type": "string"},
+                    "category": {"type": "string"},
+                    "document_type": {"type": "string"},
+                    "tags": {"type": "array"},
+                },
+            },
+            required_permission=self.required_permission,
+            effect="non_idempotent_write",
+        )
 
     def run(self, tool_input: dict, context: ToolContext) -> ToolResult:
         if context.db is None:
@@ -227,6 +270,25 @@ class KnowledgeReviewRejectTool(BaseTool):
     name = "knowledge_review_reject"
     description = "Reject a pending knowledge file and keep it personal"
     required_permission = "knowledge.review.manage"
+    data_scopes = frozenset({"resource"})
+
+    @property
+    def tool_spec(self) -> ToolSpec:
+        return ToolSpec(
+            name=self.name,
+            version=self.version,
+            data_scopes=self.data_scopes,
+            input_schema={
+                "type": "object",
+                "required": ["file_id"],
+                "properties": {
+                    "file_id": {"type": "string"},
+                    "comment": {"type": "string"},
+                },
+            },
+            required_permission=self.required_permission,
+            effect="non_idempotent_write",
+        )
 
     def run(self, tool_input: dict, context: ToolContext) -> ToolResult:
         if context.db is None:

@@ -5,7 +5,7 @@ import hashlib
 
 from fastapi import HTTPException
 
-from app.agent_runtime import BaseTool, ToolContext, ToolResult
+from app.agent_runtime import BaseTool, ToolContext, ToolResult, ToolSpec
 from app.models import WebCapture, WebSearchLog
 from app.web_sources import (
     CategorySuggester,
@@ -33,6 +33,7 @@ class WebSearchTool(BaseTool):
     name = "web_search"
     description = "联网查找公开资料"
     version = "1"
+    data_scopes = frozenset({"user", "external"})
 
     def run(self, tool_input: dict, context: ToolContext) -> ToolResult:
         query = str(tool_input.get("query") or "").strip()
@@ -76,6 +77,36 @@ class WebCaptureTool(BaseTool):
     name = "web_capture"
     description = "抓取网页内容并生成保存前预览"
     version = "1"
+    data_scopes = frozenset({"user", "external"})
+
+    @property
+    def tool_spec(self) -> ToolSpec:
+        return ToolSpec(
+            name=self.name,
+            version=self.version,
+            data_scopes=self.data_scopes,
+            effect="non_idempotent_write",
+            allowed_scopes=frozenset({"web:capture"}),
+            requires_confirmation=True,
+            timeout_seconds=20,
+            input_schema={
+                "type": "object",
+                "required": ["url"],
+                "properties": {
+                    "url": {"type": "string"},
+                    "conversation_id": {"type": "string"},
+                },
+            },
+            output_schema={
+                "type": "object",
+                "required": ["capture_id", "url", "title"],
+                "properties": {
+                    "capture_id": {"type": "string"},
+                    "url": {"type": "string"},
+                    "title": {"type": "string"},
+                },
+            },
+        )
 
     def run(self, tool_input: dict, context: ToolContext) -> ToolResult:
         if context.db is None:
@@ -152,6 +183,38 @@ class WebResearchTool(BaseTool):
     name = "web_research"
     description = "联网调研公开资料并生成来源报告"
     version = "1"
+    data_scopes = frozenset({"user", "external"})
+
+    @property
+    def tool_spec(self) -> ToolSpec:
+        return ToolSpec(
+            name=self.name,
+            version=self.version,
+            data_scopes=self.data_scopes,
+            effect="non_idempotent_write",
+            allowed_scopes=frozenset({"web:research"}),
+            requires_confirmation=True,
+            timeout_seconds=45,
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "topic": {"type": "string"},
+                    "query": {"type": "string"},
+                    "limit_per_question": {"type": "integer"},
+                    "bypass_cache": {"type": "boolean"},
+                },
+            },
+            output_schema={
+                "type": "object",
+                "required": ["topic", "questions", "sources", "report"],
+                "properties": {
+                    "topic": {"type": "string"},
+                    "questions": {"type": "array"},
+                    "sources": {"type": "array"},
+                    "report": {"type": "string"},
+                },
+            },
+        )
 
     def run(self, tool_input: dict, context: ToolContext) -> ToolResult:
         topic = str(tool_input.get("topic") or tool_input.get("query") or "").strip()
@@ -225,6 +288,39 @@ class DeepWebResearchTool(BaseTool):
     name = "deep_web_research"
     description = "深度联网调研公开资料，按多维问题聚合、去重、生成风险和落地建议"
     version = "1"
+    data_scopes = frozenset({"user", "external"})
+
+    @property
+    def tool_spec(self) -> ToolSpec:
+        return ToolSpec(
+            name=self.name,
+            version=self.version,
+            data_scopes=self.data_scopes,
+            effect="non_idempotent_write",
+            allowed_scopes=frozenset({"web:research"}),
+            requires_confirmation=True,
+            timeout_seconds=60,
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "topic": {"type": "string"},
+                    "query": {"type": "string"},
+                    "limit_per_question": {"type": "integer"},
+                    "bypass_cache": {"type": "boolean"},
+                },
+            },
+            output_schema={
+                "type": "object",
+                "required": ["topic", "questions", "sources", "stages", "report"],
+                "properties": {
+                    "topic": {"type": "string"},
+                    "questions": {"type": "array"},
+                    "sources": {"type": "array"},
+                    "stages": {"type": "array"},
+                    "report": {"type": "string"},
+                },
+            },
+        )
 
     def run(self, tool_input: dict, context: ToolContext) -> ToolResult:
         topic = str(tool_input.get("topic") or tool_input.get("query") or "").strip()

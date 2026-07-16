@@ -15,6 +15,7 @@ def test_admin_uploads_official_file_to_company_base(
 
     response = admin.post(
         "/api/knowledge/files/upload",
+        headers={"Idempotency-Key": "official-upload-success"},
         data={
             "knowledge_base_id": base["base_id"],
             "usage_type": "official_knowledge",
@@ -70,6 +71,7 @@ def test_employee_cannot_upload_official_file_to_company_base(
 
     response = employee.post(
         "/api/knowledge/files/upload",
+        headers={"Idempotency-Key": "official-upload-denied"},
         data={
             "knowledge_base_id": base["base_id"],
             "usage_type": "official_knowledge",
@@ -102,6 +104,7 @@ def test_company_base_rejects_personal_reference_upload(
 
     response = admin.post(
         "/api/knowledge/files/upload",
+        headers={"Idempotency-Key": "personal-company-denied"},
         data={
             "knowledge_base_id": base["base_id"],
             "usage_type": "personal_reference",
@@ -134,6 +137,7 @@ def test_employee_uploads_personal_reference_to_own_base_only(
 
     response = owner.post(
         "/api/knowledge/files/upload",
+        headers={"Idempotency-Key": "personal-base-success"},
         data={
             "knowledge_base_id": base["base_id"],
             "usage_type": "personal_reference",
@@ -150,6 +154,7 @@ def test_employee_uploads_personal_reference_to_own_base_only(
     )
     denied = other.post(
         "/api/knowledge/files/upload",
+        headers={"Idempotency-Key": "personal-base-denied"},
         data={
             "knowledge_base_id": base["base_id"],
             "usage_type": "personal_reference",

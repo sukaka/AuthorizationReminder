@@ -21,6 +21,13 @@ from .models import KnowledgeChunk, KnowledgeFile
 
 MAX_KNOWLEDGE_FILE_MB = 100
 MAX_KNOWLEDGE_FILE_BYTES = MAX_KNOWLEDGE_FILE_MB * 1024 * 1024
+MAX_ARCHIVE_ENTRIES = 2_000
+MAX_ARCHIVE_ENTRY_UNCOMPRESSED_BYTES = 32 * 1024 * 1024
+MAX_ARCHIVE_UNCOMPRESSED_BYTES = 128 * 1024 * 1024
+MAX_ARCHIVE_COMPRESSION_RATIO = 100
+MAX_PDF_PAGES = 500
+MAX_EXTRACTED_TEXT_CHARS = 5 * 1024 * 1024
+MAX_EXTRACTED_BLOCKS = 5_000
 MAX_KNOWLEDGE_METADATA_TEXT_LENGTH = 255
 SUPPORTED_IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp"}
 SUPPORTED_KNOWLEDGE_SUFFIXES = {".txt", ".md", ".docx", ".xlsx", ".pptx", ".pdf", *SUPPORTED_IMAGE_SUFFIXES}
@@ -115,6 +122,39 @@ def _decode_utf8_text(data: bytes, *, message: str) -> str:
         raise HTTPException(status_code=422, detail=message) from exc
 
 
+def _validated_document_archive(data: bytes, *, file_kind: str) -> ZipFile:
+    """Open an Office archive only after bounding its decompression cost."""
+    archive = ZipFile(BytesIO(data))
+    entries = archive.infolist()
+    if len(entries) > MAX_ARCHIVE_ENTRIES:
+        archive.close()
+        raise HTTPException(status_code=422, detail=f"{file_kind} 文件包含过多压缩条目")
+    total_size = 0
+    for entry in entries:
+        if entry.flag_bits & 0x1:
+            archive.close()
+            raise HTTPException(status_code=422, detail=f"{file_kind} 文件不支持加密压缩条目")
+        total_size += entry.file_size
+        if entry.file_size > MAX_ARCHIVE_ENTRY_UNCOMPRESSED_BYTES:
+            archive.close()
+            raise HTTPException(status_code=422, detail=f"{file_kind} 文件解压后的单个条目过大")
+        if entry.file_size > 1024 * 1024 and entry.compress_size > 0 and entry.file_size / entry.compress_size > MAX_ARCHIVE_COMPRESSION_RATIO:
+            archive.close()
+            raise HTTPException(status_code=422, detail=f"{file_kind} 文件压缩比异常")
+    if total_size > MAX_ARCHIVE_UNCOMPRESSED_BYTES:
+        archive.close()
+        raise HTTPException(status_code=422, detail=f"{file_kind} 文件解压后的内容过大")
+    return archive
+
+
+def _validate_extracted_blocks(blocks: list[ParsedBlock]) -> list[ParsedBlock]:
+    if len(blocks) > MAX_EXTRACTED_BLOCKS:
+        raise HTTPException(status_code=422, detail="文件可提取内容分段过多")
+    if sum(len(block.text) for block in blocks) > MAX_EXTRACTED_TEXT_CHARS:
+        raise HTTPException(status_code=422, detail="文件可提取文本过大")
+    return blocks
+
+
 def _clean_row(row: list[str]) -> list[str]:
     cleaned_cells = [cell.strip() for cell in row]
     while cleaned_cells and not cleaned_cells[-1]:
@@ -169,7 +209,13 @@ def _keywords(text: str) -> list[str]:
 
 def _parse_docx_blocks(data: bytes) -> list[ParsedBlock]:
     try:
+        with _validated_document_archive(data, file_kind="DOCX"):
+            pass
         document = Document(BytesIO(data))
+    except HTTPException:
+        raise
+    except BadZipFile as exc:
+        raise HTTPException(status_code=422, detail="DOCX 文件无法解析") from exc
     except Exception as exc:
         raise HTTPException(status_code=422, detail="DOCX 文件无法解析") from exc
 
@@ -268,7 +314,7 @@ def _xlsx_sheet_names(archive: ZipFile) -> dict[str, str]:
 
 def _parse_xlsx_blocks(data: bytes) -> list[ParsedBlock]:
     try:
-        with ZipFile(BytesIO(data)) as archive:
+        with _validated_document_archive(data, file_kind="XLSX") as archive:
             shared_strings = _xlsx_shared_strings(archive)
             sheet_names = _xlsx_sheet_names(archive)
             worksheet_names = sorted(
@@ -326,7 +372,7 @@ def _slide_index(path: str) -> int:
 
 def _parse_pptx_blocks(data: bytes) -> list[ParsedBlock]:
     try:
-        with ZipFile(BytesIO(data)) as archive:
+        with _validated_document_archive(data, file_kind="PPTX") as archive:
             slide_names = sorted(
                 (
                     name
@@ -386,6 +432,8 @@ def _parse_pdf_blocks(data: bytes) -> list[ParsedBlock]:
         raise HTTPException(status_code=400, detail="PDF 文件解析失败，请确认文件未损坏。") from exc
 
     blocks: list[ParsedBlock] = []
+    if len(reader.pages) > MAX_PDF_PAGES:
+        raise HTTPException(status_code=422, detail="PDF 页数超过处理上限")
     for page_index, page in enumerate(reader.pages, start=1):
         try:
             text = (page.extract_text() or "").strip()
@@ -456,21 +504,23 @@ def _extract_blocks(file_name: str, data: bytes) -> list[ParsedBlock]:
         if not valid_signature:
             raise HTTPException(status_code=422, detail="图片内容与文件扩展名不匹配")
         display_name = file_name.rsplit(".", 1)[0].replace("_", " ").replace("-", " ").strip()
-        return [ParsedBlock(
+        blocks = [ParsedBlock(
             text=f"图片资料：{display_name or file_name}\n文件名：{file_name}",
             section_path="图片资料",
             chunk_type="image",
             metadata={"media_type": suffix.lstrip("."), "image_asset": True},
         )]
-    if suffix in {".txt", ".md"}:
-        return _parse_text_blocks(file_name, data)
-    if suffix == ".xlsx":
-        return _parse_xlsx_blocks(data)
-    if suffix == ".pptx":
-        return _parse_pptx_blocks(data)
-    if suffix == ".pdf":
-        return _parse_pdf_blocks(data)
-    return _parse_docx_blocks(data)
+    elif suffix in {".txt", ".md"}:
+        blocks = _parse_text_blocks(file_name, data)
+    elif suffix == ".xlsx":
+        blocks = _parse_xlsx_blocks(data)
+    elif suffix == ".pptx":
+        blocks = _parse_pptx_blocks(data)
+    elif suffix == ".pdf":
+        blocks = _parse_pdf_blocks(data)
+    else:
+        blocks = _parse_docx_blocks(data)
+    return _validate_extracted_blocks(blocks)
 
 
 def _section_blocks(text: str) -> list[tuple[str, str]]:

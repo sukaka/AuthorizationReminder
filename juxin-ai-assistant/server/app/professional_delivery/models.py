@@ -354,6 +354,97 @@ class DeliverableIdempotencyRecord(TimestampMixin, Base):
     status: Mapped[str] = mapped_column(String(24), default="completed", index=True)
 
 
+class DeliverableDraft(TimestampMixin, Base):
+    """Mutable editor state; immutable versions remain the audit boundary."""
+
+    __tablename__ = "ai_deliverable_drafts"
+    __table_args__ = (
+        UniqueConstraint("deliverable_id", name="uq_ai_deliverable_drafts_deliverable"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key_type, primary_key=True, autoincrement=True)
+    uuid: Mapped[str] = mapped_column(
+        String(36), unique=True, default=lambda: str(uuid_lib.uuid4())
+    )
+    deliverable_id: Mapped[int] = mapped_column(
+        foreign_key_type,
+        ForeignKey("ai_work_artifacts.id", ondelete="CASCADE"),
+        index=True,
+    )
+    base_version_id: Mapped[int] = mapped_column(
+        foreign_key_type,
+        ForeignKey("ai_work_artifact_versions.id", ondelete="RESTRICT"),
+        index=True,
+    )
+    revision: Mapped[int] = mapped_column(Integer, default=0)
+    content_format: Mapped[str] = mapped_column(String(32), default="structured_json")
+    content_schema_version: Mapped[str] = mapped_column(String(32), default="2")
+    content_ciphertext: Mapped[bytes] = mapped_column(LargeBinary)
+    content_nonce: Mapped[bytes] = mapped_column(LargeBinary)
+    key_version: Mapped[str] = mapped_column(String(32), default="")
+    content_hash: Mapped[str] = mapped_column(String(64), default="")
+    content_summary: Mapped[str] = mapped_column(Text, default="")
+    updated_by: Mapped[str] = mapped_column(String(64), default="", index=True)
+    status: Mapped[str] = mapped_column(String(24), default="active", index=True)
+
+
+class DeliverableMediaAsset(TimestampMixin, Base):
+    """Encrypted, deliverable-scoped media bytes used by the structured editor."""
+
+    __tablename__ = "ai_deliverable_media_assets"
+    __table_args__ = (
+        UniqueConstraint(
+            "deliverable_id",
+            "owner_user_id",
+            "idempotency_key",
+            name="uq_ai_deliverable_media_assets_idempotency",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key_type, primary_key=True, autoincrement=True)
+    uuid: Mapped[str] = mapped_column(
+        String(36), unique=True, default=lambda: str(uuid_lib.uuid4())
+    )
+    deliverable_id: Mapped[int] = mapped_column(
+        foreign_key_type,
+        ForeignKey("ai_work_artifacts.id", ondelete="CASCADE"),
+        index=True,
+    )
+    owner_user_id: Mapped[str] = mapped_column(String(64), index=True)
+    idempotency_key: Mapped[str] = mapped_column(String(128))
+    original_file_name: Mapped[str] = mapped_column(String(255), default="")
+    media_type: Mapped[str] = mapped_column(String(64), index=True)
+    size_bytes: Mapped[int] = mapped_column(Integer)
+    content_hash: Mapped[str] = mapped_column(String(64), index=True)
+    content_ciphertext: Mapped[bytes] = mapped_column(LargeBinary)
+    content_nonce: Mapped[bytes] = mapped_column(LargeBinary)
+    key_version: Mapped[str] = mapped_column(String(32), default="")
+    status: Mapped[str] = mapped_column(String(24), default="active", index=True)
+
+
+class DeliverableEditLease(TimestampMixin, Base):
+    """Short-lived fencing lease for a single editable deliverable."""
+
+    __tablename__ = "ai_deliverable_edit_leases"
+    __table_args__ = (
+        UniqueConstraint("deliverable_id", name="uq_ai_deliverable_edit_leases_deliverable"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key_type, primary_key=True, autoincrement=True)
+    uuid: Mapped[str] = mapped_column(
+        String(36), unique=True, default=lambda: str(uuid_lib.uuid4())
+    )
+    deliverable_id: Mapped[int] = mapped_column(
+        foreign_key_type,
+        ForeignKey("ai_work_artifacts.id", ondelete="CASCADE"),
+        index=True,
+    )
+    owner_user_id: Mapped[str] = mapped_column(String(64), index=True)
+    fencing_token: Mapped[int] = mapped_column(Integer, default=1)
+    expires_at: Mapped[datetime] = mapped_column(DateTime, index=True)
+    status: Mapped[str] = mapped_column(String(24), default="active", index=True)
+
+
 class DeliverableFact(TimestampMixin, Base):
     __tablename__ = "ai_deliverable_facts"
     __table_args__ = (

@@ -4,11 +4,57 @@ import { HttpResponse, http } from 'msw';
 import { expect, it, vi } from 'vitest';
 
 import { KnowledgeAdminPage } from '../src/pages/admin/KnowledgeAdminPage';
+import { ExternalSupportTicketsPage } from '../src/pages/admin/ExternalSupportTicketsPage';
 import { SettingsPage } from '../src/pages/admin/SettingsPage';
 import { StatsPage } from '../src/pages/admin/StatsPage';
 import { SuggestionsPage } from '../src/pages/admin/SuggestionsPage';
 import { TaskAdminPage } from '../src/pages/admin/TaskAdminPage';
 import { server } from './setup';
+
+it('allows an admin to claim, reply to, and resolve an external support ticket', async () => {
+  const ticket = {
+    uuid: 'ticket-001',
+    source_channel: 'wecom_kf',
+    conversation_key: 'kf-001',
+    reason_code: 'NO_EVIDENCE',
+    status: 'PENDING',
+    priority: 'NORMAL',
+    assigned_to: '',
+    question: '请问产品支持哪些资料下载？',
+    created_at: '2026-07-13T01:00:00Z',
+    claimed_at: null,
+    replied_at: null,
+    messages: [],
+  };
+  const claimed = { ...ticket, status: 'ASSIGNED', assigned_to: 'admin-1', claimed_at: '2026-07-13T01:01:00Z' };
+  const replied = {
+    ...claimed,
+    status: 'RESOLVED',
+    replied_at: '2026-07-13T01:02:00Z',
+    messages: [{
+      uuid: 'message-001', sender_id: 'admin-1', message: '您可从资料库页面下载公开资料。',
+      delivery_status: 'SENT', created_at: '2026-07-13T01:02:00Z',
+    }],
+  };
+  server.use(
+    http.get('/api/ai/admin/external-support-tickets', () => HttpResponse.json({ items: [ticket], total: 1 })),
+    http.post('/api/ai/admin/external-support-tickets/ticket-001/claim', () => HttpResponse.json(claimed)),
+    http.post('/api/ai/admin/external-support-tickets/ticket-001/reply', async ({ request }) => {
+      expect(await request.json()).toEqual({ message: '您可从资料库页面下载公开资料。', resolve: true });
+      return HttpResponse.json(replied);
+    }),
+  );
+
+  render(<ExternalSupportTicketsPage />);
+  expect(await within(screen.getByRole('region', { name: '工单详情' })).findByText('请问产品支持哪些资料下载？')).toBeInTheDocument();
+  await userEvent.click(screen.getByRole('button', { name: '认领工单' }));
+  expect(await screen.findByText('已认领，回复后将发送给客户。')).toBeInTheDocument();
+  await userEvent.type(screen.getByRole('textbox', { name: '回复客户' }), '您可从资料库页面下载公开资料。');
+  await userEvent.click(screen.getByRole('checkbox', { name: '回复后关闭工单' }));
+  await userEvent.click(screen.getByRole('button', { name: '发送回复' }));
+  expect(await screen.findByText('您可从资料库页面下载公开资料。')).toBeInTheDocument();
+  expect(within(screen.getByRole('region', { name: '工单详情' })).getByText('已解决')).toBeInTheDocument();
+});
 
 it('clears controlled knowledge plaintext after encrypted save', async () => {
   server.use(

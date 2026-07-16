@@ -3,8 +3,11 @@ import { useEffect, useMemo, useState } from 'react';
 import {
   getCatalog,
   deleteFavorite,
+  generateRoleDocument,
+  listRoleAssistants,
   putFavorite,
   type AssistantPayload,
+  type RoleAssistantPayload,
   type TaskPayload,
 } from '../api/client';
 
@@ -14,9 +17,11 @@ type AssistantsPageProps = {
 
 export function AssistantsPage({ onOpenTask }: AssistantsPageProps) {
   const [assistants, setAssistants] = useState<AssistantPayload[]>([]);
+  const [roleAssistants, setRoleAssistants] = useState<RoleAssistantPayload[]>([]);
   const [query, setQuery] = useState('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [roleNotice, setRoleNotice] = useState('');
   const [favoriteTaskUuids, setFavoriteTaskUuids] = useState<Set<string>>(new Set());
 
   const visibleAssistants = useMemo(() => {
@@ -36,6 +41,20 @@ export function AssistantsPage({ onOpenTask }: AssistantsPageProps) {
       return tasks.length ? [{ ...assistant, tasks }] : [];
     });
   }, [assistants, query]);
+
+  useEffect(() => {
+    let active = true;
+    listRoleAssistants()
+      .then((payload) => {
+        if (active) setRoleAssistants(payload.items || []);
+      })
+      .catch(() => {
+        /* optional band */
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -102,6 +121,67 @@ export function AssistantsPage({ onOpenTask }: AssistantsPageProps) {
       </header>
 
       {error ? <p className="form-error" role="alert">{error}</p> : null}
+
+      {roleAssistants.length ? (
+        <section aria-label="岗位助手" style={{ marginBottom: 20 }}>
+          <h2 style={{ fontSize: 16, marginBottom: 8 }}>岗位助手</h2>
+          {roleNotice ? <p className="form-success">{roleNotice}</p> : null}
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))',
+              gap: 10,
+            }}
+          >
+            {roleAssistants.map((role) => (
+              <article
+                key={role.code}
+                style={{
+                  border: '1px solid var(--border, #e5e7eb)',
+                  borderRadius: 10,
+                  padding: 12,
+                }}
+              >
+                <strong>{role.name}</strong>
+                <p style={{ fontSize: 12, opacity: 0.8, margin: '6px 0' }}>{role.description}</p>
+                <small style={{ opacity: 0.7 }}>
+                  模板 {role.templates.length} · 模式 {role.modes.join(' / ')}
+                </small>
+                <div style={{ marginTop: 8 }}>
+                  <button
+                    type="button"
+                    className="secondary-action"
+                    onClick={() => {
+                      void (async () => {
+                        setRoleNotice('');
+                        try {
+                          const topic =
+                            window.prompt(`为「${role.name}」输入主题`, '')?.trim() || role.name;
+                          const result = await generateRoleDocument(role.code, {
+                            topic,
+                            template_code: role.templates[0] || '',
+                            create_artifact: true,
+                          });
+                          setRoleNotice(
+                            result.artifact_id
+                              ? `已生成草稿并写入任务成果：${result.title}`
+                              : `已生成草稿：${result.title}`,
+                          );
+                        } catch {
+                          setRoleNotice('生成失败，请稍后重试');
+                        }
+                      })();
+                    }}
+                  >
+                    一键套模板
+                  </button>
+                </div>
+              </article>
+            ))}
+          </div>
+        </section>
+      ) : null}
+
       {loading && assistants.length === 0 ? <p className="catalog-state">正在加载助手…</p> : null}
       {!loading && visibleAssistants.length === 0 && !error ? (
         <div className="catalog-empty">

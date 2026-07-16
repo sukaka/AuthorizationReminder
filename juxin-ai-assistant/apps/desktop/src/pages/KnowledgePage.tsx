@@ -420,6 +420,8 @@ export function KnowledgePage({ session }: KnowledgePageProps) {
     fileName: string;
     category: string;
     documentType: string;
+    externalPublic: boolean;
+    externalDownloadAllowed: boolean;
   } | null>(null);
   const [reviewApproval, setReviewApproval] = useState<KnowledgeReviewApprovalDraft | null>(null);
 
@@ -1228,6 +1230,8 @@ export function KnowledgePage({ session }: KnowledgePageProps) {
       fileName: file.file_name,
       category: file.category || '',
       documentType: file.document_type || '',
+      externalPublic: file.external_public === true,
+      externalDownloadAllowed: file.external_download_allowed === true,
     });
     setActionNotice('');
   };
@@ -1241,6 +1245,8 @@ export function KnowledgePage({ session }: KnowledgePageProps) {
         category: metadataEdit.category,
         documentType: metadataEdit.documentType,
         tags: [],
+        externalPublic: metadataEdit.externalPublic,
+        externalDownloadAllowed: metadataEdit.externalDownloadAllowed,
       });
       setFiles((current) => current.map((item) => (
         item.file_uuid === file.file_uuid ? updated : item
@@ -2657,6 +2663,41 @@ export function KnowledgePage({ session }: KnowledgePageProps) {
                           ))}
                         </select>
                       </label>
+                      {isAdmin ? (
+                        <fieldset className="knowledge-external-access-settings">
+                          <legend>公众号 / 小程序外部访问</legend>
+                          <label>
+                            <input
+                              aria-label="允许外部问答"
+                              checked={metadataEdit.externalPublic}
+                              onChange={(event) => setMetadataEdit((current) => current
+                                ? {
+                                  ...current,
+                                  externalPublic: event.target.checked,
+                                  externalDownloadAllowed: event.target.checked
+                                    ? current.externalDownloadAllowed
+                                    : false,
+                                }
+                                : current)}
+                              type="checkbox"
+                            />
+                            允许外部问答
+                          </label>
+                          <label>
+                            <input
+                              aria-label="允许发送原文件"
+                              checked={metadataEdit.externalDownloadAllowed}
+                              disabled={!metadataEdit.externalPublic}
+                              onChange={(event) => setMetadataEdit((current) => current
+                                ? { ...current, externalDownloadAllowed: event.target.checked }
+                                : current)}
+                              type="checkbox"
+                            />
+                            允许发送原文件
+                          </label>
+                          <p>外部问答和原文件下载分别控制；未明确开启的资料默认不外发。</p>
+                        </fieldset>
+                      ) : null}
                       <div className="history-actions">
                         <button
                           aria-label={`保存元数据 ${file.file_name}`}
@@ -2677,6 +2718,8 @@ export function KnowledgePage({ session }: KnowledgePageProps) {
                     <span>{file.reference_enabled === false ? '暂不参与生成' : '可作为参考资料'}</span>
                     <span>已整理 {file.chunk_count} 个段落</span>
                     {file.rag_enabled ? <span>可查找</span> : null}
+                    {file.external_public === true ? <span>允许外部问答</span> : <span>仅内部问答</span>}
+                    {file.external_download_allowed === true ? <span>允许外部发送原文件</span> : <span>禁止外发原文件</span>}
                   </div>
                   <div className="history-actions knowledge-file-actions" aria-label={`${file.file_name} 操作`}>
                     {isTrashMode ? (

@@ -26,6 +26,11 @@ beforeEach(() => {
         safety_reminders: [],
       }),
     ),
+    http.get('/api/ai/projects', () => HttpResponse.json([])),
+    http.get('/api/conversations', () => HttpResponse.json({ items: [], total: 0 })),
+    http.get('/api/ai/long-tasks', () => HttpResponse.json({ items: [], total: 0 })),
+    http.get('/api/knowledge/categories', () => HttpResponse.json({ items: [], total: 0 })),
+    http.get('/api/knowledge/document-types', () => HttpResponse.json({ items: [], total: 0 })),
   );
 });
 

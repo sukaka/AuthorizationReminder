@@ -716,6 +716,7 @@ def search_knowledge_chunks(
     vector_index: "QdrantKnowledgeIndex | None" = None,
     keyword_index=None,
     knowledge_cache=None,
+    external_public_only: bool = False,
 ) -> list[RetrievedKnowledgeChunk]:
     request_started = perf_counter()
     embedding_ms = 0.0
@@ -741,6 +742,8 @@ def search_knowledge_chunks(
         KnowledgeFile.rag_scope == "company",
         KnowledgeFile.permission_scope == "company",
     ]
+    if external_public_only:
+        conditions.append(KnowledgeFile.external_public.is_(True))
     normalized_base_ids = [base_id.strip() for base_id in (knowledge_base_ids or []) if base_id.strip()]
     numeric_base_ids: list[int] = []
     if normalized_base_ids:
@@ -783,6 +786,7 @@ def search_knowledge_chunks(
             keyword_index = TantivyKnowledgeIndex.from_settings(current_settings)
     if vector_index.enabled:
         scope = "|".join([
+            "external" if external_public_only else "internal",
             ",".join(str(item) for item in numeric_base_ids),
             ",".join(normalized_categories),
             ",".join(normalized_document_types),
@@ -837,6 +841,7 @@ def search_knowledge_chunks(
                     seen_chunk_ids.add(hit.chunk_id)
 
     cache_key = (
+        ("external",) if external_public_only else ("internal",),
         tuple(normalized_base_ids),
         tuple(normalized_categories),
         tuple(normalized_document_types),

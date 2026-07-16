@@ -28,6 +28,148 @@ class FailingTool(BaseTool):
         raise RuntimeError("upstream exploded with secret sk-hidden-value")
 
 
+class CountingWriteTool(BaseTool):
+    name = "counting_write"
+    description = "Mutation test double for the durable tool ledger"
+    effect = "write"
+    data_scopes = frozenset({"user"})
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def run(self, tool_input: dict, context: ToolContext) -> ToolResult:
+        self.calls += 1
+        return ToolResult(
+            tool_name=self.name,
+            payload={"value": tool_input["value"], "call": self.calls},
+            output_summary={"written": True},
+        )
+
+
+class FailingWriteTool(CountingWriteTool):
+    name = "failing_write"
+
+    def run(self, tool_input: dict, context: ToolContext) -> ToolResult:
+        self.calls += 1
+        raise RuntimeError("write target unavailable")
+
+
+def _confirmed_context(
+    generation_db,
+    *,
+    user_id: str,
+    key: str,
+    permissions: set[str] | None = None,
+) -> ToolContext:
+    return ToolContext(
+        user_id=user_id,
+        db=generation_db,
+        permissions=permissions or set(),
+        run_id="contract-write-run",
+        idempotency_key=key,
+        confirmed_idempotency_keys={key},
+    )
+
+
+def test_write_tool_requires_confirmation_and_idempotency_key(generation_db) -> None:
+    registry = ToolRegistry()
+    tool = CountingWriteTool()
+    registry.register(tool)
+
+    result = registry.execute(
+        tool.name,
+        {"value": "a"},
+        ToolContext(user_id="user-1", db=generation_db, run_id="run-1"),
+    )
+
+    assert result.status == "confirmation_required"
+    assert result.error_code == "TOOL_IDEMPOTENCY_KEY_REQUIRED"
+    assert tool.calls == 0
+
+
+def test_write_tool_replays_completed_idempotent_invocation(generation_db) -> None:
+    from app.models import AgentToolInvocation
+
+    registry = ToolRegistry()
+    tool = CountingWriteTool()
+    registry.register(tool)
+    context = ToolContext(
+        user_id="user-1",
+        db=generation_db,
+        run_id="run-1",
+        idempotency_key="write-1",
+        confirmed_idempotency_keys={"write-1"},
+    )
+
+    first = registry.execute(tool.name, {"value": "a"}, context)
+    second = registry.execute(tool.name, {"value": "a"}, context)
+
+    assert first.status == "success"
+    assert second.status == "success"
+    assert second.replayed is True
+    assert second.payload == first.payload
+    assert tool.calls == 1
+    assert generation_db.query(AgentToolInvocation).count() == 1
+
+
+def test_idempotency_key_cannot_be_reused_for_different_input(generation_db) -> None:
+    registry = ToolRegistry()
+    tool = CountingWriteTool()
+    registry.register(tool)
+    context = ToolContext(
+        user_id="user-1",
+        db=generation_db,
+        run_id="run-1",
+        idempotency_key="write-1",
+        confirmed_idempotency_keys={"write-1"},
+    )
+
+    registry.execute(tool.name, {"value": "a"}, context)
+    conflict = registry.execute(tool.name, {"value": "b"}, context)
+
+    assert conflict.status == "error"
+    assert conflict.error_code == "TOOL_IDEMPOTENCY_KEY_CONFLICT"
+    assert tool.calls == 1
+
+
+def test_failed_write_invocation_is_not_executed_again_on_replay(generation_db) -> None:
+    registry = ToolRegistry()
+    tool = FailingWriteTool()
+    registry.register(tool)
+    context = ToolContext(
+        user_id="user-1",
+        db=generation_db,
+        run_id="run-1",
+        idempotency_key="write-1",
+        confirmed_idempotency_keys={"write-1"},
+    )
+
+    first = registry.execute(tool.name, {"value": "a"}, context)
+    replay = registry.execute(tool.name, {"value": "a"}, context)
+
+    assert first.error_code == "TOOL_EXECUTION_FAILED"
+    assert replay.error_code == "TOOL_EXECUTION_FAILED"
+    assert tool.calls == 1
+
+
+def test_write_tool_rejects_non_durable_input_without_execution(generation_db) -> None:
+    registry = ToolRegistry()
+    tool = CountingWriteTool()
+    registry.register(tool)
+    context = ToolContext(
+        user_id="user-1",
+        db=generation_db,
+        run_id="run-1",
+        idempotency_key="write-1",
+        confirmed_idempotency_keys={"write-1"},
+    )
+
+    result = registry.execute(tool.name, {"value": object()}, context)
+
+    assert result.error_code == "TOOL_INPUT_NOT_DURABLE"
+    assert tool.calls == 0
+
+
 def test_tool_registry_executes_tool_and_writes_success_log(generation_db) -> None:
     from app.models import AgentToolCallLog
 
@@ -269,6 +411,7 @@ def test_word_export_tool_wraps_existing_docx_export_service(
     called = {}
 
     def fake_export_word(self, db, *, body, sso_user_id, username, department, cipher):
+        called["count"] = int(called.get("count", 0)) + 1
         called["conversation_id"] = body.conversation_id
         called["export_type"] = body.export_type
         called["sso_user_id"] = sso_user_id
@@ -288,29 +431,38 @@ def test_word_export_tool_wraps_existing_docx_export_service(
     registry.register(WordExportTool())
     cipher = ContentCipher("a2tra2tra2tra2tra2tra2tra2tra2tra2tra2tra2s=")
 
+    tool_input = {
+        "body": {
+            "conversation_id": "conversation-1",
+            "message_id": "message-1",
+            "export_type": "single_answer",
+        },
+        "username": "张雷",
+        "department": "产品部",
+    }
+    context = ToolContext(
+        user_id="user-1",
+        db=generation_db,
+        resources={"cipher": cipher, "file_manager": object()},
+        mode="normal",
+        conversation_id="conversation-1",
+        run_id="word-export-run",
+        idempotency_key="word-export-1",
+        confirmed_idempotency_keys={"word-export-1"},
+    )
     result = registry.execute(
         "word_export",
-        {
-            "body": {
-                "conversation_id": "conversation-1",
-                "message_id": "message-1",
-                "export_type": "single_answer",
-            },
-            "username": "张雷",
-            "department": "产品部",
-        },
-        ToolContext(
-            user_id="user-1",
-            db=generation_db,
-            resources={"cipher": cipher, "file_manager": object()},
-            mode="normal",
-            conversation_id="conversation-1",
-        ),
+        tool_input,
+        context,
     )
+    replayed = registry.execute("word_export", tool_input, context)
 
     assert result.status == "success"
-    assert result.payload["export"].file_name == "AI 对话导出.docx"
+    assert replayed.status == "success"
+    assert replayed.replayed is True
+    assert result.payload["export"]["file_name"] == "AI 对话导出.docx"
     assert called == {
+        "count": 1,
         "conversation_id": "conversation-1",
         "export_type": "single_answer",
         "sso_user_id": "user-1",
@@ -319,16 +471,19 @@ def test_word_export_tool_wraps_existing_docx_export_service(
         "cipher": cipher,
     }
 
-    log = generation_db.query(AgentToolCallLog).one()
-    assert log.tool_name == "word_export"
-    assert log.status == "success"
-    assert log.output_summary_json == {
+    logs = generation_db.query(AgentToolCallLog).all()
+    assert len(logs) == 2
+    assert {log.tool_name for log in logs} == {"word_export"}
+    assert {log.status for log in logs} == {"success"}
+    assert logs[0].output_summary_json == {
         "file_name": "AI 对话导出.docx",
         "download_url": "/api/export/download/export-1",
     }
 
 
 def test_pptx_export_tool_generates_valid_presentation_file(generation_db, tmp_path) -> None:
+    import hashlib
+
     from app.agent_runtime.tools import PptxExportTool
     from app.export_file_manager import ExportFileManager
     from app.models import AgentToolCallLog
@@ -350,12 +505,16 @@ def test_pptx_export_tool_generates_valid_presentation_file(generation_db, tmp_p
             user_id="user-1",
             db=generation_db,
             resources={"file_manager": file_manager},
+            run_id="pptx-export-run",
+            idempotency_key="pptx-export-1",
+            confirmed_idempotency_keys={"pptx-export-1"},
         ),
     )
 
     assert result.status == "success"
     assert result.payload["file_name"].endswith(".pptx")
-    pptx_path = tmp_path / f"{result.payload['file_id']}.pptx"
+    owner_key = hashlib.sha256(b"user-1").hexdigest()
+    pptx_path = tmp_path / "pptx" / owner_key / f"{result.payload['file_id']}.pptx"
     assert pptx_path.exists()
     with ZipFile(pptx_path) as archive:
         names = set(archive.namelist())
@@ -368,6 +527,30 @@ def test_pptx_export_tool_generates_valid_presentation_file(generation_db, tmp_p
     log = generation_db.query(AgentToolCallLog).one()
     assert log.tool_name == "pptx_export"
     assert log.output_summary_json["slide_count"] == 2
+
+
+def test_pptx_export_requires_user_binding_before_writing(generation_db, tmp_path) -> None:
+    from app.agent_runtime.tools import PptxExportTool
+    from app.export_file_manager import ExportFileManager
+
+    registry = ToolRegistry()
+    registry.register(PptxExportTool())
+    result = registry.execute(
+        "pptx_export",
+        {"slides": [{"title": "不可写入", "bullets": ["缺少用户"]}]},
+        ToolContext(
+            user_id="",
+            db=generation_db,
+            resources={"file_manager": ExportFileManager(str(tmp_path))},
+            run_id="pptx-owner-required-run",
+            idempotency_key="pptx-owner-required-1",
+            confirmed_idempotency_keys={"pptx-owner-required-1"},
+        ),
+    )
+
+    assert result.status == "error"
+    assert result.error_code == "TOOL_EXPORT_OWNER_REQUIRED"
+    assert not list(tmp_path.rglob("*.pptx"))
 
 
 def _create_review_file(generation_db, *, owner_user_id: str = "user-1"):
@@ -402,7 +585,13 @@ def test_knowledge_review_submit_tool_marks_personal_file_pending(
     result = registry.execute(
         "knowledge_review_submit",
         {"file_id": file_record.uuid, "comment": "建议加入正式资料"},
-        ToolContext(user_id="user-1", db=generation_db),
+        ToolContext(
+            user_id="user-1",
+            db=generation_db,
+            run_id="review-submit-run",
+            idempotency_key="review-submit-1",
+            confirmed_idempotency_keys={"review-submit-1"},
+        ),
     )
 
     assert result.status == "success"
@@ -469,6 +658,9 @@ def test_knowledge_review_approve_tool_promotes_pending_file_to_official(
             user_id="admin-1",
             db=generation_db,
             permissions={"knowledge.review.manage"},
+            run_id="review-approve-run",
+            idempotency_key="review-approve-1",
+            confirmed_idempotency_keys={"review-approve-1"},
         ),
     )
 
@@ -522,6 +714,9 @@ def test_knowledge_review_reject_tool_keeps_file_personal(
             user_id="admin-1",
             db=generation_db,
             permissions={"knowledge.review.manage"},
+            run_id="review-reject-run",
+            idempotency_key="review-reject-1",
+            confirmed_idempotency_keys={"review-reject-1"},
         ),
     )
 
@@ -635,6 +830,51 @@ def test_reference_source_validate_tool_keeps_only_used_sources(
     assert tool_log.tool_name == "reference_source_validate"
     assert tool_log.status == "success"
     assert tool_log.source_count == 1
+
+
+def test_reference_source_validate_message_scope_blocks_other_users(
+    generation_db,
+) -> None:
+    from app.agent_runtime.tools import ReferenceSourceValidateTool
+    from app.models import ChatMessage, ChatMessageSource, ChatSession
+
+    session = ChatSession(uuid="scope-session", sso_user_id="user-2", title="他人的会话")
+    generation_db.add(session)
+    generation_db.flush()
+    message = ChatMessage(
+        session_id=session.id,
+        sso_user_id="user-2",
+        role="assistant",
+        status="COMPLETED",
+    )
+    generation_db.add(message)
+    generation_db.flush()
+    generation_db.add(
+        ChatMessageSource(
+            message_id=message.id,
+            source_type="official_knowledge",
+            source_uuid="other-user-source",
+            file_name="他人的资料.docx",
+        )
+    )
+    generation_db.flush()
+
+    registry = ToolRegistry()
+    registry.register(ReferenceSourceValidateTool())
+    result = registry.execute(
+        "reference_source_validate",
+        {
+            "answer": "答案没有引用",
+            "message_id": message.id,
+            "delete_unmentioned": False,
+        },
+        ToolContext(user_id="user-1", db=generation_db),
+    )
+
+    assert result.status == "success"
+    assert result.payload["kept_count"] == 0
+    assert result.payload["removed_count"] == 0
+    assert generation_db.query(ChatMessageSource).one().source_uuid == "other-user-source"
 
 
 def test_task_mode_detect_tool_wraps_existing_task_analyzer(
@@ -915,6 +1155,9 @@ def test_user_feedback_tool_wraps_existing_feedback_service(
             user_id="dev",
             db=generation_db,
             resources={"cipher": cipher, "key_version": "v1"},
+            run_id="feedback-run",
+            idempotency_key="feedback-1",
+            confirmed_idempotency_keys={"feedback-1"},
         ),
     )
 
@@ -980,10 +1223,14 @@ def test_web_capture_tool_creates_preview_without_saving_to_knowledge(
     from datetime import UTC, datetime
 
     from app.agent_runtime.tools import WebCaptureTool
-    from app.models import AgentToolCallLog, KnowledgeFile, WebCapture
+    from app.models import AgentToolCallLog, AgentToolInvocation, KnowledgeFile, WebCapture
     from app.web_sources import ExtractedWebContent, WebFetchResult
 
+    fetch_calls = 0
+
     def fake_fetch(self, url: str) -> WebFetchResult:
+        nonlocal fetch_calls
+        fetch_calls += 1
         assert url == "https://example.com/wdsp"
         return WebFetchResult(
             url=url,
@@ -1009,10 +1256,42 @@ def test_web_capture_tool_creates_preview_without_saving_to_knowledge(
     registry = ToolRegistry()
     registry.register(WebCaptureTool())
 
+    denied = registry.execute(
+        "web_capture",
+        {"url": "https://example.com/wdsp", "conversation_id": "conv-1"},
+        ToolContext(
+            user_id="user-1",
+            db=generation_db,
+            conversation_id="conv-1",
+            run_id="web-capture-run",
+            idempotency_key="web-capture-1",
+            tool_scopes={"web:capture"},
+        ),
+    )
+
+    assert denied.status == "confirmation_required"
+    assert denied.error_code == "TOOL_CONFIRMATION_REQUIRED"
+    assert fetch_calls == 0
+    assert generation_db.query(WebCapture).count() == 0
+
+    context = ToolContext(
+        user_id="user-1",
+        db=generation_db,
+        conversation_id="conv-1",
+        run_id="web-capture-run",
+        idempotency_key="web-capture-1",
+        confirmed_idempotency_keys={"web-capture-1"},
+        tool_scopes={"web:capture"},
+    )
     result = registry.execute(
         "web_capture",
         {"url": "https://example.com/wdsp", "conversation_id": "conv-1"},
-        ToolContext(user_id="user-1", db=generation_db, conversation_id="conv-1"),
+        context,
+    )
+    replayed = registry.execute(
+        "web_capture",
+        {"url": "https://example.com/wdsp", "conversation_id": "conv-1"},
+        context,
     )
 
     assert result.status == "success"
@@ -1021,8 +1300,15 @@ def test_web_capture_tool_creates_preview_without_saving_to_knowledge(
     assert result.payload["scope"] == "确认前仅本次预览，不会写入正式知识库"
     assert generation_db.query(WebCapture).count() == 1
     assert generation_db.query(KnowledgeFile).count() == 0
-    log = generation_db.query(AgentToolCallLog).one()
-    assert log.tool_name == "web_capture"
+    assert fetch_calls == 1
+    assert replayed.status == "success"
+    assert replayed.replayed is True
+    assert generation_db.query(AgentToolInvocation).count() == 1
+    logs = generation_db.query(AgentToolCallLog).filter_by(
+        tool_name="web_capture",
+        status="success",
+    ).all()
+    assert len(logs) == 2
 
 
 def test_web_research_tool_plans_searches_and_returns_report_without_saving(
@@ -1059,7 +1345,15 @@ def test_web_research_tool_plans_searches_and_returns_report_without_saving(
     result = registry.execute(
         "web_research",
         {"topic": "调研等保合规云平台采购要点", "limit_per_question": 2},
-        ToolContext(user_id="user-1", db=generation_db, conversation_id="conv-1"),
+        ToolContext(
+            user_id="user-1",
+            db=generation_db,
+            conversation_id="conv-1",
+            run_id="web-research-run",
+            idempotency_key="web-research-1",
+            confirmed_idempotency_keys={"web-research-1"},
+            tool_scopes={"web:research"},
+        ),
     )
 
     assert result.status == "success"
@@ -1114,7 +1408,15 @@ def test_deep_web_research_tool_deduplicates_sources_and_returns_risk_sections(
     result = registry.execute(
         "deep_web_research",
         {"topic": "等保合规云平台采购", "limit_per_question": 2},
-        ToolContext(user_id="user-1", db=generation_db, conversation_id="conv-1"),
+        ToolContext(
+            user_id="user-1",
+            db=generation_db,
+            conversation_id="conv-1",
+            run_id="deep-web-research-run",
+            idempotency_key="deep-web-research-1",
+            confirmed_idempotency_keys={"deep-web-research-1"},
+            tool_scopes={"web:research"},
+        ),
     )
 
     assert result.status == "success"
@@ -1156,7 +1458,15 @@ def test_deep_web_research_tool_returns_user_facing_stage_summaries(
     result = registry.execute(
         "deep_web_research",
         {"topic": "最新安全运维趋势", "limit_per_question": 1},
-        ToolContext(user_id="user-1", db=generation_db, conversation_id="conv-1"),
+        ToolContext(
+            user_id="user-1",
+            db=generation_db,
+            conversation_id="conv-1",
+            run_id="deep-web-research-partial-run",
+            idempotency_key="deep-web-research-partial-1",
+            confirmed_idempotency_keys={"deep-web-research-partial-1"},
+            tool_scopes={"web:research"},
+        ),
     )
 
     assert result.status == "partial"
@@ -1185,22 +1495,22 @@ def test_personal_memory_tool_saves_and_lists_user_preferences(
     saved = registry.execute(
         "personal_memory",
         {"action": "save", "content": "输出方案时先给结论，再给分阶段计划。", "memory_type": "preference", "priority": "medium"},
-        ToolContext(user_id="user-1", db=generation_db),
+        _confirmed_context(generation_db, user_id="user-1", key="memory-save-1"),
     )
     high = registry.execute(
         "personal_memory",
         {"action": "save", "content": "不要把导出路径写入历史列表。", "priority": "high"},
-        ToolContext(user_id="user-1", db=generation_db),
+        _confirmed_context(generation_db, user_id="user-1", key="memory-save-2"),
     )
     low = registry.execute(
         "personal_memory",
         {"action": "save", "content": "临时偏好：少用项目符号。", "priority": "low"},
-        ToolContext(user_id="user-1", db=generation_db),
+        _confirmed_context(generation_db, user_id="user-1", key="memory-save-3"),
     )
     other = registry.execute(
         "personal_memory",
         {"action": "save", "content": "另一个用户的偏好"},
-        ToolContext(user_id="user-2", db=generation_db),
+        _confirmed_context(generation_db, user_id="user-2", key="memory-save-4"),
     )
     listed = registry.execute(
         "personal_memory",
@@ -1239,17 +1549,22 @@ def test_personal_memory_tool_blocks_sensitive_and_non_admin_company_fact(
     sensitive = registry.execute(
         "personal_memory",
         {"action": "save", "content": "记住 API Key 是 sk-test-secret", "priority": "high"},
-        ToolContext(user_id="user-1", db=generation_db),
+        _confirmed_context(generation_db, user_id="user-1", key="memory-sensitive"),
     )
     denied_fact = registry.execute(
         "personal_memory",
         {"action": "save", "content": "WDSP 是公司正式事实。", "memory_type": "company_fact", "priority": "high"},
-        ToolContext(user_id="user-1", db=generation_db),
+        _confirmed_context(generation_db, user_id="user-1", key="memory-company-denied"),
     )
     admin_fact = registry.execute(
         "personal_memory",
         {"action": "save", "content": "公司事实应以正式知识库为准。", "memory_type": "company_fact", "priority": "high"},
-        ToolContext(user_id="admin-1", db=generation_db, permissions={"ai_assistant:admin"}),
+        _confirmed_context(
+            generation_db,
+            user_id="admin-1",
+            key="memory-company-admin",
+            permissions={"ai_assistant:admin"},
+        ),
     )
 
     assert sensitive.status == "error"
@@ -1281,7 +1596,7 @@ def test_learning_library_tool_saves_experience_template_and_failure_case(
             "summary": "商务投标优先按评分点组织。",
             "tags": ["投标", "商务"],
         },
-        ToolContext(user_id="user-1", db=generation_db),
+        _confirmed_context(generation_db, user_id="user-1", key="learning-experience"),
     )
     template = registry.execute(
         "learning_library",
@@ -1293,7 +1608,7 @@ def test_learning_library_tool_saves_experience_template_and_failure_case(
             "variables": {"issue": "问题", "action": "整改动作"},
             "scope": "personal",
         },
-        ToolContext(user_id="user-1", db=generation_db),
+        _confirmed_context(generation_db, user_id="user-1", key="learning-template"),
     )
     failure = registry.execute(
         "learning_library",
@@ -1305,7 +1620,7 @@ def test_learning_library_tool_saves_experience_template_and_failure_case(
             "prevention_rule": "导出结果不得写入历史任务标题。",
             "tags": ["导出", "历史"],
         },
-        ToolContext(user_id="user-1", db=generation_db),
+        _confirmed_context(generation_db, user_id="user-1", key="learning-failure"),
     )
     listed = registry.execute(
         "learning_library",
@@ -1326,6 +1641,43 @@ def test_learning_library_tool_saves_experience_template_and_failure_case(
         "learning_library",
         "learning_library",
     ]
+
+
+def test_learning_library_template_scope_is_normalized_and_fail_closed(generation_db) -> None:
+    from app.agent_runtime.tools import LearningLibraryTool
+    from app.models import TemplateLibrary
+
+    registry = ToolRegistry()
+    registry.register(LearningLibraryTool())
+
+    company = registry.execute(
+        "learning_library",
+        {
+            "action": "save_template",
+            "template_name": "待审公司模板",
+            "template_content": "公司流程模板",
+            "scope": " COMPANY ",
+        },
+        _confirmed_context(generation_db, user_id="user-1", key="learning-company-template"),
+    )
+    invalid = registry.execute(
+        "learning_library",
+        {
+            "action": "save_template",
+            "template_name": "越界模板",
+            "template_content": "不应落库",
+            "scope": "department",
+        },
+        _confirmed_context(generation_db, user_id="user-1", key="learning-invalid-template"),
+    )
+
+    row = generation_db.query(TemplateLibrary).filter_by(template_name="待审公司模板").one()
+    assert company.status == "success"
+    assert row.scope == "company"
+    assert row.review_status == "pending"
+    assert invalid.status == "error"
+    assert invalid.error_code == "TEMPLATE_SCOPE_INVALID"
+    assert generation_db.query(TemplateLibrary).filter_by(template_name="越界模板").count() == 0
 
 
 def test_loop_runner_related_templates_use_personal_and_official_company_only(

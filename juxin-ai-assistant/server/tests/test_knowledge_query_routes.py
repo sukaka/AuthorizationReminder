@@ -1,3 +1,5 @@
+import hashlib
+
 from sqlalchemy import select
 
 from app.models import KnowledgeFile
@@ -26,6 +28,12 @@ def _upload_text(
         })
     return client.post(
         "/api/knowledge/files/upload",
+        headers={
+            "Idempotency-Key": (
+                "knowledge-query-"
+                + hashlib.sha256(file_name.encode("utf-8")).hexdigest()[:16]
+            )
+        },
         data=data,
         files={"file": (file_name, text.encode("utf-8"), "text/plain")},
     )

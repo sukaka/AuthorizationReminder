@@ -1,5 +1,7 @@
 import base64
 
+import pytest
+
 
 def test_user_model_profile_crud_hides_api_key(client_for_user) -> None:
     client = client_for_user("user-model-owner")
@@ -87,3 +89,28 @@ def test_user_model_profile_api_key_is_encrypted_at_rest(
         record.uuid.encode(),
     )
     assert decrypted == {"api_key": "sk-encrypted-secret"}
+
+
+@pytest.mark.parametrize(
+    "base_url",
+    [
+        "http://127.0.0.1:8080",
+        "http://10.0.0.8/v1",
+        "http://[::1]/v1",
+        "https://metadata.internal/v1",
+        "https://localhost:11434/v1",
+    ],
+)
+def test_user_model_profile_rejects_private_model_endpoint(client_for_user, base_url: str) -> None:
+    response = client_for_user("ssrf-model-user").post(
+        "/api/ai/model-profiles",
+        json={
+            "display_name": "不安全模型",
+            "base_url": base_url,
+            "model_id": "unsafe-chat",
+            "api_key": "sk-test",
+        },
+    )
+
+    assert response.status_code == 422
+    assert "内部网络" in response.text

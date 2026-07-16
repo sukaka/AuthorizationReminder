@@ -3,12 +3,35 @@ from __future__ import annotations
 from app.chat_word_export import DocxExportService
 from app.schemas import ExportWordIn
 
-from ..tool_base import BaseTool, ToolContext, ToolResult
+from ..tool_base import BaseTool, ToolContext, ToolResult, ToolSpec
 
 
 class WordExportTool(BaseTool):
     name = "word_export"
     description = "Export chat content to Word"
+
+    @property
+    def tool_spec(self) -> ToolSpec:
+        return ToolSpec(
+            name=self.name,
+            version=self.version,
+            data_scopes=frozenset({"user"}),
+            effect="non_idempotent_write",
+            input_schema={
+                "type": "object",
+                "required": ["body"],
+                "properties": {
+                    "body": {"type": "object"},
+                    "username": {"type": "string"},
+                    "department": {"type": "string"},
+                },
+            },
+            output_schema={
+                "type": "object",
+                "required": ["export"],
+                "properties": {"export": {"type": "object"}},
+            },
+        )
 
     def run(self, tool_input: dict, context: ToolContext) -> ToolResult:
         if context.db is None:
@@ -45,7 +68,7 @@ class WordExportTool(BaseTool):
         )
         return ToolResult(
             tool_name=self.name,
-            payload={"export": result},
+            payload={"export": result.model_dump()},
             output_summary={
                 "file_name": result.file_name,
                 "download_url": result.download_url,

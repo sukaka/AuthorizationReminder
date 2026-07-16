@@ -1,6 +1,7 @@
 import hashlib
 import hmac
 import json
+import logging
 import re
 import secrets
 import uuid as uuid_lib
@@ -13,6 +14,7 @@ from sqlalchemy.orm import Session
 from .agent_loop import LoopRunner
 from .agent_loop.task_state import TaskStateStore
 from .agent_loop.verifier import Verifier
+from .chat_run_bridge import attach_run_for_chat_question
 from .config import Settings, get_settings
 from .context.context_builder import RecentChatMessage
 from .crypto import ContentCipher, EncryptedPayload
@@ -41,6 +43,8 @@ from .web_sources import (
     WebSearchService,
     create_search_provider,
 )
+
+logger = logging.getLogger(__name__)
 
 
 NO_EVIDENCE_ANSWER = "当前知识库未找到明确依据"
@@ -618,6 +622,32 @@ def _rag_messages(question: str, chunks: list[RetrievedKnowledgeChunk]) -> list[
     ]
 
 
+def _attach_chat_run(
+    db: Session,
+    *,
+    sso_user_id: str,
+    question: str,
+    conversation_id: str,
+    message_id: str,
+    precomputed_answer: str | None,
+    settings: Settings | None = None,
+) -> str:
+    try:
+        return attach_run_for_chat_question(
+            db,
+            settings=settings or get_settings(),
+            owner_user_id=sso_user_id,
+            question=question,
+            conversation_id=conversation_id,
+            message_id=message_id,
+            title=_session_title(question),
+            precomputed_answer=precomputed_answer,
+        )
+    except Exception:
+        logger.exception("attach_run_for_chat_question failed")
+        return ""
+
+
 def prepare_chat(
     db: Session,
     *,
@@ -710,6 +740,15 @@ def prepare_chat(
         )
         for citation in citations:
             db.add(_source_from_citation(assistant.id, citation))
+        run_id = _attach_chat_run(
+            db,
+            sso_user_id=sso_user_id,
+            question=body.question,
+            conversation_id=session.uuid,
+            message_id=user_message.uuid,
+            precomputed_answer=answer,
+            settings=settings,
+        )
         return ChatPrepareOut(
             session_uuid=session.uuid,
             user_message_uuid=user_message.uuid,
@@ -721,6 +760,7 @@ def prepare_chat(
             citations=citations,
             loop_trace=loop_result.loop_trace,
             task_state=task_state_payload,
+            run_id=run_id,
         )
     web_results: list[WebSearchResult] = []
     web_log_id: int | None = None
@@ -807,6 +847,15 @@ def prepare_chat(
             log_id=web_log_id,
             answer_message_uuid=assistant.uuid,
         )
+        run_id = _attach_chat_run(
+            db,
+            sso_user_id=sso_user_id,
+            question=body.question,
+            conversation_id=session.uuid,
+            message_id=user_message.uuid,
+            precomputed_answer=loop_result.completed_answer,
+            settings=settings,
+        )
         return ChatPrepareOut(
             session_uuid=session.uuid,
             user_message_uuid=user_message.uuid,
@@ -818,9 +867,11 @@ def prepare_chat(
             citations=[],
             loop_trace=loop_result.loop_trace,
             task_state=task_state_payload,
+            run_id=run_id,
         )
+    token_settings = settings or get_settings()
     completion_token = _sealed_completion_token(
-        settings=settings or get_settings(),
+        settings=token_settings,
         sso_user_id=sso_user_id,
         messages=prepared_messages,
     )
@@ -853,6 +904,15 @@ def prepare_chat(
     _enrich_media_citations(db, citations)
     for citation in citations:
         db.add(_source_from_citation(assistant.id, citation))
+    run_id = _attach_chat_run(
+        db,
+        sso_user_id=sso_user_id,
+        question=body.question,
+        conversation_id=session.uuid,
+        message_id=user_message.uuid,
+        precomputed_answer=None,
+        settings=settings,
+    )
     return ChatPrepareOut(
         session_uuid=session.uuid,
         user_message_uuid=user_message.uuid,
@@ -864,6 +924,7 @@ def prepare_chat(
         citations=citations,
         loop_trace=loop_result.loop_trace,
         task_state=task_state_payload,
+        run_id=run_id,
     )
 
 

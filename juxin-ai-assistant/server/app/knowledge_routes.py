@@ -1,4 +1,5 @@
 from datetime import datetime
+import hashlib
 from pathlib import Path
 import re
 from typing import Annotated
@@ -15,8 +16,10 @@ from .crypto import ContentCipher, EncryptedPayload
 from .context.context_builder import ContextBuilder
 from .context.mode_knowledge_filters import merge_mode_knowledge_filters
 from .database import get_db
+from .direct_action_service import DirectActionReplay, DirectActionService
 from .knowledge_embedding import build_embedding_service
 from .knowledge_files import (
+    MAX_KNOWLEDGE_FILE_BYTES,
     _safe_file_name,
     create_knowledge_file_from_bytes,
     invalidate_knowledge_search,
@@ -312,6 +315,24 @@ def _file_out(db: Session, file_record: KnowledgeFile) -> KnowledgeFileOut:
         summary=file_record.summary,
         parse_status=file_record.parse_status,
         index_status=file_record.index_status,
+        external_public=file_record.external_public,
+        external_download_allowed=file_record.external_download_allowed,
+    )
+
+
+def _upload_idempotency_key(request: Request) -> str:
+    key = request.headers.get("Idempotency-Key", "").strip()
+    if not 1 <= len(key) <= 128:
+        raise HTTPException(status_code=400, detail="缺少或无效的 Idempotency-Key")
+    return key
+
+
+def _replay_upload_or_raise(replay: DirectActionReplay) -> KnowledgeFileOut:
+    if replay.payload is not None:
+        return KnowledgeFileOut.model_validate(replay.payload)
+    raise HTTPException(
+        status_code=replay.status_code,
+        detail={"code": replay.error_code, "message": replay.error_message_safe},
     )
 
 
@@ -1492,6 +1513,22 @@ async def update_knowledge_file(
         raise HTTPException(status_code=404, detail="知识文件不存在")
     if not _can_manage_file(file_record, user_id=user_id, is_admin=is_admin):
         raise HTTPException(status_code=403, detail="无权修改该知识文件")
+    if body.external_public is not None or body.external_download_allowed is not None:
+        if not is_admin:
+            raise HTTPException(status_code=403, detail="仅管理员可设置外部访问权限")
+        effective_external_public = (
+            file_record.external_public if body.external_public is None else body.external_public
+        )
+        external_access_ready = (
+            file_record.usage_type == "official_knowledge"
+            and file_record.review_status in {"approved", "official"}
+            and file_record.status == "READY"
+            and file_record.rag_enabled
+        )
+        if (effective_external_public or body.external_download_allowed) and not external_access_ready:
+            raise HTTPException(status_code=409, detail="仅已审核通过且已启用 RAG 的正式知识可外部访问")
+        if body.external_download_allowed and not effective_external_public:
+            raise HTTPException(status_code=409, detail="允许发送原文件前必须先允许外部问答")
     if body.file_name is not None:
         safe_file_name = _safe_file_name(body.file_name)
         file_record.file_name = safe_file_name
@@ -1508,6 +1545,12 @@ async def update_knowledge_file(
         file_record.tags_json = [tag.strip()[:64] for tag in body.tags if tag.strip()][:20]
     if body.reference_enabled is not None and file_record.usage_type != "official_knowledge":
         file_record.reference_enabled = body.reference_enabled
+    if body.external_public is not None:
+        file_record.external_public = body.external_public
+        if not body.external_public:
+            file_record.external_download_allowed = False
+    if body.external_download_allowed is not None:
+        file_record.external_download_allowed = body.external_download_allowed
     db.commit()
     db.refresh(file_record)
     invalidate_knowledge_search()
@@ -1540,6 +1583,8 @@ async def delete_knowledge_file(
     file_record.status = "DELETED"
     file_record.deleted_at = datetime.now()
     file_record.rag_enabled = False
+    file_record.external_public = False
+    file_record.external_download_allowed = False
     for chunk in db.scalars(select(KnowledgeChunk).where(KnowledgeChunk.file_id == file_record.id)):
         chunk.status = "DELETED"
         chunk.deleted_at = file_record.deleted_at
@@ -1593,6 +1638,8 @@ async def hard_delete_knowledge_file(
     file_record.status = "HARD_DELETED"
     file_record.hard_deleted_at = now
     file_record.rag_enabled = False
+    file_record.external_public = False
+    file_record.external_download_allowed = False
     file_record.reference_enabled = False
     file_record.archived_at = None
     file_record.file_path = ""
@@ -1774,8 +1821,39 @@ async def upload_knowledge_file(
         normalized_rag_enabled = False
         normalized_reference_enabled = reference_enabled
 
+    content = await file.read(MAX_KNOWLEDGE_FILE_BYTES + 1)
+    if len(content) > MAX_KNOWLEDGE_FILE_BYTES:
+        raise HTTPException(status_code=413, detail="知识文件不能超过 100MB")
+    action_service = DirectActionService(db)
+    invocation, replay = action_service.begin(
+        user_id=user_id,
+        action_name="knowledge_file_upload",
+        idempotency_key=_upload_idempotency_key(request),
+        request_payload={
+            "file_name": file.filename or "",
+            "content_type": file.content_type or "application/octet-stream",
+            "content_sha256": hashlib.sha256(content).hexdigest(),
+            "content_bytes": len(content),
+            "knowledge_base_id": normalized_base_id,
+            "usage_type": normalized_usage_type,
+            "review_status": normalized_review_status,
+            "rag_enabled": normalized_rag_enabled,
+            "reference_enabled": normalized_reference_enabled,
+            "rag_scope": normalized_rag_scope,
+            "permission_scope": normalized_permission_scope,
+            "conversation_id": conversation_id.strip(),
+            "category": (category.strip() or "其他")[:64],
+            "document_type": (document_type.strip() or "其他")[:64],
+            "tags": _split_tags(tags),
+        },
+        timeout_seconds=300,
+    )
+    if replay is not None:
+        return _replay_upload_or_raise(replay)
+    assert invocation is not None
+    side_effect_started = False
     try:
-        content = await file.read()
+        side_effect_started = True
         file_record, _chunks = create_knowledge_file_from_bytes(
             db,
             sso_user_id=user_id,
@@ -1810,11 +1888,27 @@ async def upload_knowledge_file(
             file_record.category = suggested_category
             file_record.document_type = suggested_document_type
             file_record.tags_json = suggested_tags
-        db.commit()
+        db.flush()
         db.refresh(file_record)
-        return _file_out(db, file_record)
+        result = _file_out(db, file_record)
+        action_service.succeed(
+            invocation,
+            status_code=201,
+            payload=result.model_dump(mode="json"),
+        )
+        return result
     except Exception:
-        db.rollback()
+        if side_effect_started:
+            action_service.require_reconciliation(
+                invocation,
+                error_message_safe="知识文件上传结果未知，必须先对账",
+            )
+        else:
+            action_service.fail(
+                invocation,
+                error_code="KNOWLEDGE_FILE_UPLOAD_FAILED",
+                error_message_safe="知识文件上传失败",
+            )
         raise
 
 
@@ -1844,6 +1938,8 @@ async def submit_file_review(
     old_status = file_record.review_status
     file_record.review_status = "pending"
     file_record.rag_enabled = False
+    file_record.external_public = False
+    file_record.external_download_allowed = False
     file_record.permission_scope = "private"
     file_record.rag_scope = "personal"
     file_record.review_comment = body.comment.strip()
@@ -1984,6 +2080,8 @@ async def archive_knowledge_file(
     file_record.status = "ARCHIVED"
     file_record.archived_at = datetime.now()
     file_record.rag_enabled = False
+    file_record.external_public = False
+    file_record.external_download_allowed = False
     _add_review_log(
         db,
         file_record=file_record,
@@ -2059,6 +2157,8 @@ async def disable_file_rag(
     if file_record.usage_type != "official_knowledge":
         raise HTTPException(status_code=422, detail="只有正式知识库文档可以调整 RAG")
     file_record.rag_enabled = False
+    file_record.external_public = False
+    file_record.external_download_allowed = False
     db.commit()
     db.refresh(file_record)
     invalidate_knowledge_search(file_uuid=file_record.uuid, remove_vector_points=True)
@@ -2187,6 +2287,8 @@ async def reject_file_review(
     file_record.usage_type = "personal_reference"
     file_record.review_status = "rejected"
     file_record.rag_enabled = False
+    file_record.external_public = False
+    file_record.external_download_allowed = False
     file_record.rag_scope = "personal"
     file_record.permission_scope = "private"
     file_record.visibility = "PRIVATE"

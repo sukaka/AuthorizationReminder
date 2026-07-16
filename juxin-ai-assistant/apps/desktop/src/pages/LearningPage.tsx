@@ -13,12 +13,15 @@ import {
   listLearningMemories,
   listLearningTemplateReviews,
   listLearningTemplates,
+  listLearningCandidates,
   rejectLearningTemplateReview,
   submitLearningTemplateReview,
+  transitionLearningCandidate,
   updateLearningExperience,
   updateLearningFailureCase,
   updateLearningMemory,
   updateLearningTemplate,
+  type LearningCandidatePayload,
   type LearningExperiencePayload,
   type LearningFailureCasePayload,
   type LearningFeedbackPayload,
@@ -26,7 +29,7 @@ import {
   type LearningTemplatePayload,
 } from '../api/client';
 
-type LearningTab = 'knowledge' | 'templates' | 'template-reviews' | 'improvements';
+type LearningTab = 'knowledge' | 'templates' | 'template-reviews' | 'improvements' | 'candidates';
 
 const MEMORY_TYPE_OPTIONS = [
   ['user_preference', '用户偏好'],
@@ -77,6 +80,7 @@ export function LearningPage({ isAdmin = false }: { isAdmin?: boolean }) {
   const [templateReviews, setTemplateReviews] = useState<LearningTemplatePayload[]>([]);
   const [failures, setFailures] = useState<LearningFailureCasePayload[]>([]);
   const [feedbackLogs, setFeedbackLogs] = useState<LearningFeedbackPayload[]>([]);
+  const [candidates, setCandidates] = useState<LearningCandidatePayload[]>([]);
   const [notice, setNotice] = useState('');
   const [loading, setLoading] = useState(false);
   const [draft, setDraft] = useState({
@@ -103,6 +107,7 @@ export function LearningPage({ isAdmin = false }: { isAdmin?: boolean }) {
         failurePayload,
         feedbackPayload,
         templateReviewPayload,
+        candidatePayload,
       ] = await Promise.all([
         listLearningMemories('all'),
         listLearningExperiences(),
@@ -110,6 +115,7 @@ export function LearningPage({ isAdmin = false }: { isAdmin?: boolean }) {
         listLearningFailureCases(),
         listLearningFeedback(),
         isAdmin ? listLearningTemplateReviews() : Promise.resolve({ items: [], total: 0 }),
+        listLearningCandidates().catch(() => ({ items: [], total: 0 })),
       ]);
       setMemories(memoryPayload.items);
       setExperiences(experiencePayload.items);
@@ -117,6 +123,7 @@ export function LearningPage({ isAdmin = false }: { isAdmin?: boolean }) {
       setFailures(failurePayload.items);
       setFeedbackLogs(feedbackPayload.items);
       setTemplateReviews(templateReviewPayload.items);
+      setCandidates(candidatePayload.items || []);
     } catch {
       setNotice('学习中心加载失败，请稍后重试。');
     } finally {
@@ -311,6 +318,7 @@ export function LearningPage({ isAdmin = false }: { isAdmin?: boolean }) {
         <article><strong>{templates.length}</strong><span>我的模板</span></article>
         {isAdmin ? <article><strong>{templateReviews.length}</strong><span>待审模板</span></article> : null}
         <article><strong>{failures.length + feedbackLogs.length}</strong><span>改进记录 · {failures.length} 修正 / {feedbackLogs.length} 反馈</span></article>
+        <article><strong>{candidates.length}</strong><span>学习候选</span></article>
       </div>
 
       <div className="learning-tabs" role="tablist" aria-label="学习中心分类">
@@ -318,6 +326,7 @@ export function LearningPage({ isAdmin = false }: { isAdmin?: boolean }) {
         <button className={tab === 'templates' ? 'is-active' : ''} onClick={() => setTab('templates')} type="button">我的模板</button>
         {isAdmin ? <button className={tab === 'template-reviews' ? 'is-active' : ''} onClick={() => setTab('template-reviews')} type="button">模板审核</button> : null}
         <button className={tab === 'improvements' ? 'is-active' : ''} onClick={() => setTab('improvements')} type="button">改进记录</button>
+        <button className={tab === 'candidates' ? 'is-active' : ''} onClick={() => setTab('candidates')} type="button">学习候选</button>
       </div>
 
       {notice ? <p className="learning-notice">{notice}</p> : null}
@@ -481,6 +490,97 @@ export function LearningPage({ isAdmin = false }: { isAdmin?: boolean }) {
               </article>
             ))}
             {!feedbackLogs.length ? <p className="learning-empty">暂无反馈记录。回答下方点击“有用”“没用”“需要修改”后会出现在这里。</p> : null}
+          </div>
+        </div>
+      ) : null}
+
+      {tab === 'candidates' ? (
+        <div className="learning-section-stack">
+          <div className="learning-section-heading">
+            <div><span>受控成长</span><h2>学习候选</h2></div>
+            <small>{candidates.length} 条 · 不会自动发布到生产</small>
+          </div>
+          <p style={{ fontSize: 13, opacity: 0.8 }}>
+            来自任务反馈的改进草案。管理员可评测后发布；普通用户仅可查看自己的候选。
+          </p>
+          <div className="learning-list">
+            {candidates.map((item) => (
+              <article className="learning-card" key={item.candidate_id}>
+                <span className="learning-badge">{item.status}</span>
+                <span className="learning-badge">{item.candidate_type}</span>
+                <h2>{item.title}</h2>
+                <p>来源任务：{item.source_run_id ? item.source_run_id.slice(0, 8) : '—'}</p>
+                {item.payload ? (
+                  <pre style={{ fontSize: 12, whiteSpace: 'pre-wrap' }}>
+                    {JSON.stringify(item.payload, null, 2).slice(0, 600)}
+                  </pre>
+                ) : null}
+                {isAdmin ? (
+                  <div className="learning-actions">
+                    {item.status === 'draft' ? (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          void (async () => {
+                            try {
+                              await transitionLearningCandidate(item.candidate_id, 'evaluated');
+                              setNotice('已标记为已评测');
+                              await refresh();
+                            } catch {
+                              setNotice('状态更新失败');
+                            }
+                          })();
+                        }}
+                      >
+                        标记已评测
+                      </button>
+                    ) : null}
+                    {item.status === 'evaluated' || item.status === 'staged' ? (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          void (async () => {
+                            try {
+                              await transitionLearningCandidate(item.candidate_id, 'published');
+                              setNotice('已发布候选（受控）');
+                              await refresh();
+                            } catch {
+                              setNotice('发布失败（需先评测）');
+                            }
+                          })();
+                        }}
+                      >
+                        发布
+                      </button>
+                    ) : null}
+                    {item.status === 'published' ? (
+                      <button
+                        type="button"
+                        className="danger-action"
+                        onClick={() => {
+                          void (async () => {
+                            try {
+                              await transitionLearningCandidate(item.candidate_id, 'rolled_back');
+                              setNotice('已回滚');
+                              await refresh();
+                            } catch {
+                              setNotice('回滚失败');
+                            }
+                          })();
+                        }}
+                      >
+                        回滚
+                      </button>
+                    ) : null}
+                  </div>
+                ) : null}
+              </article>
+            ))}
+            {!candidates.length ? (
+              <p className="learning-empty">
+                暂无学习候选。在任务中心对结果点「需要改进」后会出现在这里。
+              </p>
+            ) : null}
           </div>
         </div>
       ) : null}

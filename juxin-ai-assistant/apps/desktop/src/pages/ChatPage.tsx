@@ -72,9 +72,12 @@ type UiMessage = {
   content: string;
   citations: ChatCitation[];
   isComplete?: boolean;
+  runId?: string;
 };
 
 type ChatPageProps = {
+  onOpenTaskCenter?: (runId?: string) => void;
+  onOpenWorkArtifacts?: () => void;
   initialProjectUuid?: string;
 };
 
@@ -831,11 +834,12 @@ function renderChatContent(
   return blocks.length ? blocks : [<p key="empty">正在生成…</p>];
 }
 
-export function ChatPage({ initialProjectUuid }: ChatPageProps = {}) {
+export function ChatPage({ onOpenTaskCenter, onOpenWorkArtifacts, initialProjectUuid }: ChatPageProps = {}) {
   const [sessions, setSessions] = useState<ChatSessionPayload[]>([]);
   const [projects, setProjects] = useState<ProjectPayload[]>([]);
   const [workspaceType, setWorkspaceType] = useState<'personal' | 'project'>(initialProjectUuid ? 'project' : 'personal');
   const [selectedProjectUuid, setSelectedProjectUuid] = useState(initialProjectUuid || '');
+  const [lastRunId, setLastRunId] = useState('');
   const [profiles, setProfiles] = useState<ModelProfile[]>([]);
   const [mode, setMode] = useState<ChatMode>('normal');
   const [question, setQuestion] = useState('');
@@ -1518,6 +1522,9 @@ export function ChatPage({ initialProjectUuid }: ChatPageProps = {}) {
         ) : null);
         setActiveSessionStatus('active');
       }
+      if (prepared.run_id) {
+        setLastRunId(prepared.run_id);
+      }
       if (prepared.completed) {
         updateRequestMessages((current) => current.concat({
           id: prepared.assistant_message_uuid,
@@ -1525,8 +1532,11 @@ export function ChatPage({ initialProjectUuid }: ChatPageProps = {}) {
           content: prepared.answer,
           citations: filterCitationsByAnswer(prepared.citations, prepared.answer),
           isComplete: true,
+          runId: prepared.run_id || undefined,
         }));
-        if (requestIsVisible()) setStatus('');
+        if (requestIsVisible()) {
+          setStatus(prepared.run_id ? `回答完成 · 任务 ${prepared.run_id.slice(0, 8)}` : '');
+        }
         return;
       }
       if (!shouldUseServerModel && !activeProfile) {
@@ -1540,6 +1550,7 @@ export function ChatPage({ initialProjectUuid }: ChatPageProps = {}) {
         content: '',
         citations: [],
         isComplete: false,
+        runId: prepared.run_id || undefined,
       }));
       if (shouldUseServerModel && backgroundMode) {
         const queued = await createLongChatTask({
@@ -1908,7 +1919,7 @@ export function ChatPage({ initialProjectUuid }: ChatPageProps = {}) {
     }
   };
 
-  const saveMessageAsWorkArtifact = async (message: UiMessage) => {
+  const saveMessageAsWorkArtifact = async (message: UiMessage, openCenter = false) => {
     if (!activeSessionUuid) {
       setStatus('请先完成一次任务后再保存成果');
       return;
@@ -1920,6 +1931,7 @@ export function ChatPage({ initialProjectUuid }: ChatPageProps = {}) {
         title: artifactTitleFromMessage(message.content),
       });
       setStatus('已保存到工作成果');
+      if (openCenter) onOpenWorkArtifacts?.();
     } catch {
       setStatus('工作成果保存失败，请稍后重试');
     }
@@ -2680,9 +2692,20 @@ export function ChatPage({ initialProjectUuid }: ChatPageProps = {}) {
                           <button disabled={exportingWord} onClick={() => void exportMessageWord(message)} type="button">
                             {exportingWord ? '导出中…' : '导出 Word'}
                           </button>
-                          <button onClick={() => void saveMessageAsWorkArtifact(message)} type="button">
+                          <button
+                            onClick={() => void saveMessageAsWorkArtifact(message, true)}
+                            type="button"
+                          >
                             保存成果
                           </button>
+                          {(message.runId || lastRunId) && onOpenTaskCenter ? (
+                            <button
+                              onClick={() => onOpenTaskCenter(message.runId || lastRunId)}
+                              type="button"
+                            >
+                              查看任务
+                            </button>
+                          ) : null}
                           <button onClick={() => void saveMessageAsExperience(message)} type="button">
                             保存为经验
                           </button>

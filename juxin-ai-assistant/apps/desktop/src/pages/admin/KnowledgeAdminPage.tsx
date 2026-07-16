@@ -1,9 +1,19 @@
 import { useState } from 'react';
 
+import { apiFetch } from '../../api/client';
 import { governanceApi, type KnowledgeItem } from '../../api/governance';
 import { AdminPageState, RequestNotice } from './AdminPageState';
 
 const CATEGORIES = ['COMPANY', 'PRODUCT', 'SERVICE', 'SALES_SCRIPT', 'DELIVERY', 'TENDER', 'FAQ', 'CASE', 'TRAINING', 'COMPLIANCE', 'TECHNICAL'];
+
+type VersionItem = {
+  file_uuid: string;
+  file_name: string;
+  version: number;
+  is_current_version: boolean;
+  review_status: string;
+  summary: string;
+};
 
 export function KnowledgeAdminPage() {
   const [items, setItems] = useState<KnowledgeItem[]>([]);
@@ -14,6 +24,9 @@ export function KnowledgeAdminPage() {
   const [taskUuids, setTaskUuids] = useState('');
   const [selected, setSelected] = useState<KnowledgeItem | null>(null);
   const [notice, setNotice] = useState('');
+  const [versionFileUuid, setVersionFileUuid] = useState('');
+  const [versionItems, setVersionItems] = useState<VersionItem[]>([]);
+  const [effectiveUuid, setEffectiveUuid] = useState('');
 
   const refresh = async () => {
     try {
@@ -68,8 +81,51 @@ export function KnowledgeAdminPage() {
     } catch { setNotice('停用失败。'); }
   };
 
+  const loadVersions = async () => {
+    const uuid = versionFileUuid.trim();
+    if (!uuid) {
+      setNotice('请输入知识文件 UUID');
+      return;
+    }
+    try {
+      const response = await apiFetch(`/api/ai/knowledge/files/${encodeURIComponent(uuid)}/versions`, {
+        cache: 'no-store',
+      });
+      if (!response.ok) {
+        setNotice('版本时间线加载失败（文件不存在或无权限）');
+        setVersionItems([]);
+        return;
+      }
+      const body = await response.json();
+      setVersionItems(body.items || []);
+      setEffectiveUuid(body.effective_uuid || '');
+      setNotice(`已加载 ${body.total || 0} 个版本，生效：${(body.effective_uuid || '').slice(0, 8)}`);
+    } catch {
+      setNotice('版本时间线请求失败');
+    }
+  };
+
+  const activateVersion = async (fileUuid: string) => {
+    try {
+      const response = await apiFetch(
+        `/api/ai/knowledge/files/${encodeURIComponent(fileUuid)}/versions/activate`,
+        { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ note: 'admin activate' }) },
+      );
+      if (!response.ok) {
+        setNotice('切换生效版本失败（需要管理员权限）');
+        return;
+      }
+      const body = await response.json();
+      setVersionItems(body.items || []);
+      setEffectiveUuid(body.effective_uuid || '');
+      setNotice('已切换生效版本');
+    } catch {
+      setNotice('切换生效版本失败');
+    }
+  };
+
   return (
-    <AdminPageState title="知识库" description="正文仅在编辑时驻留页面；列表只展示元数据。">
+    <AdminPageState title="知识库" description="正文仅在编辑时驻留页面；列表只展示元数据。支持文档版本时间线。">
       <button className="secondary-action" onClick={() => void refresh()} type="button">刷新元数据</button>
       <RequestNotice message={notice} />
       <div className="governance-split">
@@ -85,6 +141,49 @@ export function KnowledgeAdminPage() {
           {selected ? <button className="danger-action" onClick={() => void disable()} type="button">停用知识</button> : null}
         </form>
       </div>
+      <section style={{ marginTop: 24, borderTop: '1px solid var(--border, #e5e7eb)', paddingTop: 16 }}>
+        <h2>知识文件版本时间线</h2>
+        <p style={{ fontSize: 13, opacity: 0.8 }}>输入 `KnowledgeFile` UUID，查看版本链并切换生效版本（RAG 以 is_current_version 为准）。</p>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 12 }}>
+          <input
+            style={{ minWidth: 280, flex: 1 }}
+            placeholder="file uuid"
+            value={versionFileUuid}
+            onChange={(e) => setVersionFileUuid(e.target.value)}
+          />
+          <button className="secondary-action" type="button" onClick={() => void loadVersions()}>加载版本</button>
+        </div>
+        {versionItems.length ? (
+          <ul style={{ listStyle: 'none', padding: 0 }}>
+            {versionItems.map((v) => (
+              <li
+                key={v.file_uuid}
+                style={{
+                  border: '1px solid var(--border, #e5e7eb)',
+                  borderRadius: 8,
+                  padding: 10,
+                  marginBottom: 8,
+                  background: v.file_uuid === effectiveUuid ? 'var(--panel-muted, #f0f7ff)' : undefined,
+                }}
+              >
+                <strong>V{v.version}</strong> · {v.file_name || v.file_uuid.slice(0, 8)}
+                {v.is_current_version || v.file_uuid === effectiveUuid ? ' · 生效中' : ''}
+                <div style={{ fontSize: 12, opacity: 0.75 }}>{v.summary || v.review_status}</div>
+                {!v.is_current_version && v.file_uuid !== effectiveUuid ? (
+                  <button
+                    type="button"
+                    className="secondary-action"
+                    style={{ marginTop: 6 }}
+                    onClick={() => void activateVersion(v.file_uuid)}
+                  >
+                    设为生效
+                  </button>
+                ) : null}
+              </li>
+            ))}
+          </ul>
+        ) : null}
+      </section>
     </AdminPageState>
   );
 }

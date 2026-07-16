@@ -58,7 +58,8 @@ it('shows published skills as a user-facing capability center and runs a skill',
   expect(await screen.findByRole('heading', { name: '能力中心' })).toBeInTheDocument();
   expect(screen.getByText('风险评估过程文档审查')).toBeInTheDocument();
   expect(screen.getByText('需要材料：docx、pdf、xlsx')).toBeInTheDocument();
-  expect(screen.getByText('可生成：markdown、docx')).toBeInTheDocument();
+  expect(screen.getByText('输出格式')).toBeInTheDocument();
+  expect(screen.getByText('markdown、docx')).toBeInTheDocument();
   expect(screen.queryByText(/ToolRegistry|embedding|namespace|RAG/)).not.toBeInTheDocument();
 
   await userEvent.click(screen.getByRole('button', { name: '开始使用 风险评估过程文档审查' }));

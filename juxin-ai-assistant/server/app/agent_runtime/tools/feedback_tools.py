@@ -6,12 +6,30 @@ from pydantic import ValidationError
 from app.feedback_service import create_feedback
 from app.schemas import FeedbackIn, FeedbackType
 
-from ..tool_base import BaseTool, ToolContext, ToolResult
+from ..tool_base import BaseTool, ToolContext, ToolResult, ToolSpec
 
 
 class UserFeedbackTool(BaseTool):
     name = "user_feedback"
     description = "Collect user feedback for a completed generation result"
+
+    @property
+    def tool_spec(self) -> ToolSpec:
+        return ToolSpec(
+            name=self.name,
+            version=self.version,
+            input_schema={
+                "type": "object",
+                "required": ["generation_uuid", "feedback_type"],
+                "properties": {
+                    "generation_uuid": {"type": "string"},
+                    "feedback_type": {"type": "string"},
+                    "content": {"type": "string"},
+                },
+            },
+            data_scopes=frozenset({"user"}),
+            effect="idempotent_write",
+        )
 
     def run(self, tool_input: dict, context: ToolContext) -> ToolResult:
         if context.db is None:

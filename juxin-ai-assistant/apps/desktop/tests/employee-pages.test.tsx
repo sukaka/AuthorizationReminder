@@ -148,7 +148,7 @@ it('loads work artifact detail only after selection and requires delete confirma
   expect(await screen.findByRole('heading', { name: '交付方案' })).toBeInTheDocument();
   expect(screen.getByText('交付方案.docx')).toBeInTheDocument();
   expect(screen.getByText('交付手册.pdf')).toBeInTheDocument();
-  expect(screen.getByText('第 6 页 · 验收交付物')).toBeInTheDocument();
+  expect(screen.getByText('验收交付物 · 第 6 页')).toBeInTheDocument();
   expect(detailRequest).toHaveBeenCalledTimes(1);
   await userEvent.click(screen.getByRole('button', { name: '生成新版本' }));
   await waitFor(() => expect(exportRequest).toHaveBeenCalledWith(expect.objectContaining({

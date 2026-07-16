@@ -372,6 +372,7 @@ class KnowledgeFile(TimestampMixin, Base):
         defaults = {
             "category": "个人素材",
             "document_type": "其他",
+            "key_version": "v1",
             "tags_json": [],
             "summary": "",
             "parse_status": "parsed",
@@ -394,6 +395,8 @@ class KnowledgeFile(TimestampMixin, Base):
             "reviewed_by": "",
             "review_comment": "",
             "usage_count": 0,
+            "external_public": False,
+            "external_download_allowed": False,
         }
         for key, value in defaults.items():
             if getattr(self, key, None) is None:
@@ -448,12 +451,120 @@ class KnowledgeFile(TimestampMixin, Base):
     visibility: Mapped[str] = mapped_column(String(24), default="PRIVATE", index=True)
     status: Mapped[str] = mapped_column(String(24), default="READY", index=True)
     error_code: Mapped[str] = mapped_column(String(64), default="")
-    key_version: Mapped[str] = mapped_column(String(32))
+    key_version: Mapped[str] = mapped_column(String(32), default="v1")
     archived_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     hard_deleted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     last_used_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     usage_count: Mapped[int] = mapped_column(Integer, default=0)
+    external_public: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    external_download_allowed: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+
+
+class WechatExternalVisitor(TimestampMixin, Base):
+    __tablename__ = "ai_wechat_external_visitors"
+
+    id: Mapped[int] = mapped_column(primary_key_type, primary_key=True, autoincrement=True)
+    uuid: Mapped[str] = mapped_column(String(36), unique=True, default=lambda: str(uuid_lib.uuid4()))
+    openid_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    status: Mapped[str] = mapped_column(String(16), default="ACTIVE", index=True)
+    first_seen_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, index=True)
+
+
+class WechatExternalQuestionAudit(TimestampMixin, Base):
+    __tablename__ = "ai_wechat_external_question_audits"
+
+    id: Mapped[int] = mapped_column(primary_key_type, primary_key=True, autoincrement=True)
+    uuid: Mapped[str] = mapped_column(String(36), unique=True, default=lambda: str(uuid_lib.uuid4()))
+    visitor_id: Mapped[int] = mapped_column(foreign_key_type, ForeignKey("ai_wechat_external_visitors.id", ondelete="CASCADE"), index=True)
+    quota_event_id: Mapped[str] = mapped_column(String(64), unique=True)
+    question_hash: Mapped[str] = mapped_column(String(64))
+    status: Mapped[str] = mapped_column(String(16), default="RESERVED", index=True)
+    failure_code: Mapped[str] = mapped_column(String(64), default="")
+    model_id: Mapped[str] = mapped_column(String(128), default="")
+    latency_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    source_file_ids_json: Mapped[list] = mapped_column(JSON, default=list)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class ExternalQuestionEvent(TimestampMixin, Base):
+    """Encrypted customer question event shared by external channels."""
+
+    __tablename__ = "ai_external_question_events"
+    __table_args__ = (UniqueConstraint("source_channel", "external_message_id"),)
+
+    id: Mapped[int] = mapped_column(primary_key_type, primary_key=True, autoincrement=True)
+    uuid: Mapped[str] = mapped_column(String(36), unique=True, default=lambda: str(uuid_lib.uuid4()))
+    source_channel: Mapped[str] = mapped_column(String(32), index=True)
+    external_identity_hash: Mapped[str] = mapped_column(String(64), index=True)
+    conversation_key: Mapped[str] = mapped_column(String(128), default="", index=True)
+    external_message_id: Mapped[str] = mapped_column(String(128), index=True)
+    question_ciphertext: Mapped[bytes] = mapped_column(LargeBinary)
+    question_nonce: Mapped[bytes] = mapped_column(LargeBinary)
+    status: Mapped[str] = mapped_column(String(24), default="RECEIVED", index=True)
+    source_file_ids_json: Mapped[list] = mapped_column(JSON, default=list)
+    handoff_ticket_id: Mapped[str] = mapped_column(String(36), default="", index=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class ExternalSupportTicket(TimestampMixin, Base):
+    """A human handoff for one external customer question."""
+
+    __tablename__ = "ai_external_support_tickets"
+
+    id: Mapped[int] = mapped_column(primary_key_type, primary_key=True, autoincrement=True)
+    uuid: Mapped[str] = mapped_column(String(36), unique=True, default=lambda: str(uuid_lib.uuid4()))
+    external_question_event_id: Mapped[int] = mapped_column(
+        foreign_key_type,
+        ForeignKey("ai_external_question_events.id", ondelete="CASCADE"),
+        unique=True,
+        index=True,
+    )
+    source_channel: Mapped[str] = mapped_column(String(32), index=True)
+    conversation_key: Mapped[str] = mapped_column(String(128), default="", index=True)
+    reason_code: Mapped[str] = mapped_column(String(32), default="NO_EVIDENCE", index=True)
+    status: Mapped[str] = mapped_column(String(24), default="PENDING", index=True)
+    priority: Mapped[str] = mapped_column(String(16), default="NORMAL", index=True)
+    assigned_to: Mapped[str] = mapped_column(String(64), default="", index=True)
+    claimed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    replied_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    recipient_ciphertext: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+    recipient_nonce: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+
+
+class ExternalSupportTicketMessage(TimestampMixin, Base):
+    """Encrypted reply audit trail for an external support ticket."""
+
+    __tablename__ = "ai_external_support_ticket_messages"
+
+    id: Mapped[int] = mapped_column(primary_key_type, primary_key=True, autoincrement=True)
+    uuid: Mapped[str] = mapped_column(String(36), unique=True, default=lambda: str(uuid_lib.uuid4()))
+    ticket_id: Mapped[int] = mapped_column(
+        foreign_key_type,
+        ForeignKey("ai_external_support_tickets.id", ondelete="CASCADE"),
+        index=True,
+    )
+    sender_type: Mapped[str] = mapped_column(String(16), default="ENGINEER", index=True)
+    sender_id: Mapped[str] = mapped_column(String(64), default="", index=True)
+    message_ciphertext: Mapped[bytes] = mapped_column(LargeBinary)
+    message_nonce: Mapped[bytes] = mapped_column(LargeBinary)
+    delivery_status: Mapped[str] = mapped_column(String(24), default="STORED", index=True)
+    delivered_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class WechatExternalDownloadAudit(TimestampMixin, Base):
+    __tablename__ = "ai_wechat_external_download_audits"
+
+    id: Mapped[int] = mapped_column(primary_key_type, primary_key=True, autoincrement=True)
+    uuid: Mapped[str] = mapped_column(String(36), unique=True, default=lambda: str(uuid_lib.uuid4()))
+    visitor_id: Mapped[int] = mapped_column(foreign_key_type, ForeignKey("ai_wechat_external_visitors.id", ondelete="CASCADE"), index=True)
+    file_id: Mapped[int] = mapped_column(foreign_key_type, ForeignKey("ai_knowledge_files.id", ondelete="CASCADE"), index=True)
+    download_token_hash: Mapped[str] = mapped_column(String(64), unique=True)
+    status: Mapped[str] = mapped_column(String(16), default="ISSUED", index=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime, index=True)
+    downloaded_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
 class KnowledgeChunk(TimestampMixin, Base):
@@ -595,6 +706,69 @@ class AgentToolCallLog(TimestampMixin, Base):
     error_message_safe: Mapped[str] = mapped_column(Text, default="")
     started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    reconciliation_resolution: Mapped[str] = mapped_column(String(48), default="", index=True)
+    reconciled_by_user_id: Mapped[str] = mapped_column(String(64), default="", index=True)
+    reconciled_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class AgentToolInvocation(TimestampMixin, Base):
+    """Durable, idempotent outcome record for side-effecting tool calls."""
+
+    __tablename__ = "ai_agent_tool_invocations"
+    __table_args__ = (UniqueConstraint("run_id", "tool_name", "idempotency_key"),)
+
+    id: Mapped[int] = mapped_column(primary_key_type, primary_key=True, autoincrement=True)
+    uuid: Mapped[str] = mapped_column(
+        String(36),
+        unique=True,
+        default=lambda: str(uuid_lib.uuid4()),
+    )
+    run_id: Mapped[str] = mapped_column(String(64), index=True)
+    user_id: Mapped[str] = mapped_column(String(64), index=True)
+    tool_name: Mapped[str] = mapped_column(String(96), index=True)
+    tool_version: Mapped[str] = mapped_column(String(32), default="")
+    idempotency_key: Mapped[str] = mapped_column(String(128))
+    request_hash: Mapped[str] = mapped_column(String(64), index=True)
+    effect: Mapped[str] = mapped_column(String(16), default="write", index=True)
+    status: Mapped[str] = mapped_column(String(32), default="in_progress", index=True)
+    result_payload_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    output_summary_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    source_count: Mapped[int] = mapped_column(Integer, default=0)
+    error_code: Mapped[str] = mapped_column(String(64), default="", index=True)
+    error_message_safe: Mapped[str] = mapped_column(Text, default="")
+    started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    reconciliation_resolution: Mapped[str] = mapped_column(String(48), default="", index=True)
+    reconciled_by_user_id: Mapped[str] = mapped_column(String(64), default="", index=True)
+    reconciled_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class DirectActionInvocation(TimestampMixin, Base):
+    """Durable idempotency ledger for user-initiated side effects outside AgentRun."""
+
+    __tablename__ = "ai_direct_action_invocations"
+    __table_args__ = (UniqueConstraint("user_id", "action_name", "idempotency_key"),)
+
+    id: Mapped[int] = mapped_column(primary_key_type, primary_key=True, autoincrement=True)
+    uuid: Mapped[str] = mapped_column(
+        String(36),
+        unique=True,
+        default=lambda: str(uuid_lib.uuid4()),
+    )
+    user_id: Mapped[str] = mapped_column(String(64), index=True)
+    action_name: Mapped[str] = mapped_column(String(96), index=True)
+    idempotency_key: Mapped[str] = mapped_column(String(128))
+    request_hash: Mapped[str] = mapped_column(String(64), index=True)
+    status: Mapped[str] = mapped_column(String(32), default="in_progress", index=True)
+    response_status: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    response_payload_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    error_code: Mapped[str] = mapped_column(String(64), default="", index=True)
+    error_message_safe: Mapped[str] = mapped_column(Text, default="")
+    started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    reconciliation_resolution: Mapped[str] = mapped_column(String(48), default="", index=True)
+    reconciled_by_user_id: Mapped[str] = mapped_column(String(64), default="", index=True)
+    reconciled_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
 class SearchCache(TimestampMixin, Base):
@@ -664,6 +838,37 @@ class LongTask(TimestampMixin, Base):
     finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
+class HarnessSpecVersion(TimestampMixin, Base):
+    __tablename__ = "ai_harness_spec_versions"
+
+    id: Mapped[int] = mapped_column(primary_key_type, primary_key=True, autoincrement=True)
+    uuid: Mapped[str] = mapped_column(String(36), unique=True, default=lambda: str(uuid_lib.uuid4()))
+    semantic_version: Mapped[str] = mapped_column(String(32), unique=True)
+    content_hash: Mapped[str] = mapped_column(String(64), unique=True)
+    content_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    status: Mapped[str] = mapped_column(String(24), default="draft", index=True)
+    created_by_user_id: Mapped[str] = mapped_column(String(64), default="system", index=True)
+    approved_by_user_id: Mapped[str] = mapped_column(String(64), default="")
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    activated_by_user_id: Mapped[str] = mapped_column(String(64), default="")
+    activated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class HarnessSpecAuditEvent(TimestampMixin, Base):
+    __tablename__ = "ai_harness_spec_audit_events"
+
+    id: Mapped[int] = mapped_column(primary_key_type, primary_key=True, autoincrement=True)
+    uuid: Mapped[str] = mapped_column(String(36), unique=True, default=lambda: str(uuid_lib.uuid4()))
+    spec_uuid: Mapped[str] = mapped_column(
+        String(36), ForeignKey("ai_harness_spec_versions.uuid", ondelete="CASCADE"), index=True
+    )
+    action: Mapped[str] = mapped_column(String(32), index=True)
+    actor_id: Mapped[str] = mapped_column(String(64), default="system", index=True)
+    from_status: Mapped[str] = mapped_column(String(24), default="")
+    to_status: Mapped[str] = mapped_column(String(24), default="")
+    detail_json: Mapped[dict] = mapped_column(JSON, default=dict)
+
+
 class AgentRun(TimestampMixin, Base):
     __tablename__ = "ai_agent_runs"
 
@@ -686,11 +891,22 @@ class AgentRun(TimestampMixin, Base):
     max_steps: Mapped[int] = mapped_column(Integer, default=32)
     max_model_calls: Mapped[int] = mapped_column(Integer, default=20)
     max_cost_micros: Mapped[int] = mapped_column(BigInteger, default=0)
+    max_step_tool_calls: Mapped[int] = mapped_column(Integer, default=0)
+    max_step_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    max_step_latency_ms: Mapped[int] = mapped_column(Integer, default=0)
     model_calls: Mapped[int] = mapped_column(Integer, default=0)
     cost_micros: Mapped[int] = mapped_column(BigInteger, default=0)
     request_ciphertext: Mapped[bytes] = mapped_column(LargeBinary)
     request_nonce: Mapped[bytes] = mapped_column(LargeBinary)
     key_version: Mapped[str] = mapped_column(String(32), default="v1")
+    state_schema_version: Mapped[str] = mapped_column(String(16), default="0", index=True)
+    harness_spec_uuid: Mapped[str] = mapped_column(String(36), default="", index=True)
+    harness_spec_version: Mapped[str] = mapped_column(String(32), default="legacy", index=True)
+    harness_spec_hash: Mapped[str] = mapped_column(String(64), default="")
+    state_revision: Mapped[int] = mapped_column(Integer, default=0)
+    lease_owner: Mapped[str] = mapped_column(String(128), default="", index=True)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
+    fencing_token: Mapped[int] = mapped_column(Integer, default=0)
     checkpoint_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     result_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     metadata_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
@@ -698,6 +914,39 @@ class AgentRun(TimestampMixin, Base):
     error_message_safe: Mapped[str] = mapped_column(Text, default="")
     started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+    __mapper_args__ = {"version_id_col": state_revision}
+
+
+class AgentRunLangGraphCheckpoint(TimestampMixin, Base):
+    """Versioned, independently committed LangGraph checkpoint records."""
+
+    __tablename__ = "ai_agent_langgraph_checkpoints"
+    __table_args__ = (
+        UniqueConstraint(
+            "run_id",
+            "thread_id",
+            "checkpoint_id",
+            name="uq_ai_agent_langgraph_checkpoint_identity",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key_type, primary_key=True, autoincrement=True)
+    run_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("ai_agent_runs.uuid", ondelete="CASCADE"),
+        index=True,
+    )
+    thread_id: Mapped[str] = mapped_column(String(64), index=True)
+    checkpoint_ns: Mapped[str] = mapped_column(String(255), default="")
+    checkpoint_id: Mapped[str] = mapped_column(String(255))
+    parent_checkpoint_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    checkpoint_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    metadata_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    pending_writes_json: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    new_versions_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    writer_id: Mapped[str] = mapped_column(String(128), default="")
+    fencing_token: Mapped[int] = mapped_column(Integer, default=0, index=True)
 
 
 class AgentRunStep(TimestampMixin, Base):
@@ -759,6 +1008,453 @@ class AgentRunEvent(TimestampMixin, Base):
     source_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     artifact_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     quality_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+
+
+class SharedFaq(TimestampMixin, Base):
+    """Company-wide FAQ for zero-model unified replies (6.0 P0)."""
+
+    __tablename__ = "ai_shared_faqs"
+
+    id: Mapped[int] = mapped_column(primary_key_type, primary_key=True, autoincrement=True)
+    uuid: Mapped[str] = mapped_column(
+        String(36),
+        unique=True,
+        default=lambda: str(uuid_lib.uuid4()),
+    )
+    question: Mapped[str] = mapped_column(String(500))
+    question_normalized: Mapped[str] = mapped_column(String(500), unique=True, index=True)
+    aliases_json: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    answer: Mapped[str] = mapped_column(Text)
+    previous_answer: Mapped[str] = mapped_column(Text, default="")
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    match_threshold: Mapped[float] = mapped_column(Float, default=0.88)
+    # draft | published | active | disabled
+    status: Mapped[str] = mapped_column(String(24), default="draft", index=True)
+    hit_count: Mapped[int] = mapped_column(Integer, default=0)
+    last_hit_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_by: Mapped[str] = mapped_column(String(64), default="system")
+    updated_by: Mapped[str] = mapped_column(String(64), default="system")
+
+
+
+class AgentArtifact(TimestampMixin, Base):
+    """Formal deliverable artifact (6.0)."""
+
+    __tablename__ = "ai_artifacts"
+
+    id: Mapped[int] = mapped_column(primary_key_type, primary_key=True, autoincrement=True)
+    uuid: Mapped[str] = mapped_column(
+        String(36),
+        unique=True,
+        default=lambda: str(uuid_lib.uuid4()),
+    )
+    owner_user_id: Mapped[str] = mapped_column(String(64), index=True)
+    run_id: Mapped[str] = mapped_column(String(64), default="", index=True)
+    artifact_type: Mapped[str] = mapped_column(String(48), default="markdown", index=True)
+    title: Mapped[str] = mapped_column(String(255), default="成果")
+    status: Mapped[str] = mapped_column(String(24), default="ready", index=True)
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    content_markdown: Mapped[str] = mapped_column(Text, default="")
+    download_ref: Mapped[str] = mapped_column(String(1024), default="")
+    quality_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    metadata_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+
+
+class AgentArtifactVersion(TimestampMixin, Base):
+    __tablename__ = "ai_artifact_versions"
+    __table_args__ = (UniqueConstraint("artifact_id", "version"),)
+
+    id: Mapped[int] = mapped_column(primary_key_type, primary_key=True, autoincrement=True)
+    uuid: Mapped[str] = mapped_column(
+        String(36),
+        unique=True,
+        default=lambda: str(uuid_lib.uuid4()),
+    )
+    artifact_id: Mapped[str] = mapped_column(String(64), index=True)
+    version: Mapped[int] = mapped_column(Integer)
+    content_markdown: Mapped[str] = mapped_column(Text, default="")
+    change_summary: Mapped[str] = mapped_column(String(500), default="")
+    created_by: Mapped[str] = mapped_column(String(64), default="")
+
+
+class AgentArtifactReview(TimestampMixin, Base):
+    """Separate AI and human review records for a deliverable."""
+
+    __tablename__ = "ai_artifact_reviews"
+
+    id: Mapped[int] = mapped_column(primary_key_type, primary_key=True, autoincrement=True)
+    uuid: Mapped[str] = mapped_column(
+        String(36), unique=True, default=lambda: str(uuid_lib.uuid4())
+    )
+    artifact_id: Mapped[str] = mapped_column(String(64), index=True)
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    reviewer_type: Mapped[str] = mapped_column(String(16), index=True)
+    reviewer_id: Mapped[str] = mapped_column(String(64), default="", index=True)
+    decision: Mapped[str] = mapped_column(String(24), index=True)
+    comment: Mapped[str] = mapped_column(Text, default="")
+    findings_json: Mapped[list | None] = mapped_column(JSON, nullable=True)
+
+
+class WorkflowDefinition(TimestampMixin, Base):
+    __tablename__ = "ai_workflow_definitions"
+
+    id: Mapped[int] = mapped_column(primary_key_type, primary_key=True, autoincrement=True)
+    uuid: Mapped[str] = mapped_column(
+        String(36), unique=True, default=lambda: str(uuid_lib.uuid4())
+    )
+    workflow_id: Mapped[str] = mapped_column(String(48), unique=True, index=True)
+    owner_user_id: Mapped[str] = mapped_column(String(64), index=True)
+    name: Mapped[str] = mapped_column(String(128), default="")
+    description: Mapped[str] = mapped_column(Text, default="")
+    status: Mapped[str] = mapped_column(String(16), default="draft", index=True)
+    current_version: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class WorkflowVersion(TimestampMixin, Base):
+    __tablename__ = "ai_workflow_versions"
+    __table_args__ = (UniqueConstraint("workflow_definition_id", "version"),)
+
+    id: Mapped[int] = mapped_column(primary_key_type, primary_key=True, autoincrement=True)
+    uuid: Mapped[str] = mapped_column(
+        String(36), unique=True, default=lambda: str(uuid_lib.uuid4())
+    )
+    workflow_definition_id: Mapped[int] = mapped_column(
+        foreign_key_type,
+        ForeignKey("ai_workflow_definitions.id", ondelete="CASCADE"),
+        index=True,
+    )
+    version: Mapped[int] = mapped_column(Integer)
+    definition_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    status: Mapped[str] = mapped_column(String(16), default="draft", index=True)
+    created_by: Mapped[str] = mapped_column(String(64), default="system", index=True)
+
+
+class WorkflowSchedule(TimestampMixin, Base):
+    """Durable schedule lease; a scheduler only creates an idempotent run."""
+
+    __tablename__ = "ai_workflow_schedules"
+    __table_args__ = (
+        UniqueConstraint(
+            "owner_user_id",
+            "workflow_id",
+            "name",
+            name="uq_ai_workflow_schedules_owner_workflow_name",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key_type, primary_key=True, autoincrement=True)
+    uuid: Mapped[str] = mapped_column(
+        String(36), unique=True, default=lambda: str(uuid_lib.uuid4())
+    )
+    owner_user_id: Mapped[str] = mapped_column(String(64), index=True)
+    workflow_id: Mapped[str] = mapped_column(String(48), index=True)
+    name: Mapped[str] = mapped_column(String(128), default="")
+    cron_expression: Mapped[str] = mapped_column(String(128), default="")
+    timezone: Mapped[str] = mapped_column(String(64), default="UTC")
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    misfire_policy: Mapped[str] = mapped_column(String(24), default="skip")
+    catch_up: Mapped[bool] = mapped_column(Boolean, default=False)
+    concurrency_policy: Mapped[str] = mapped_column(String(24), default="forbid")
+    next_fire_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
+    last_fire_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    lease_owner: Mapped[str] = mapped_column(String(128), default="", index=True)
+    lease_token: Mapped[int] = mapped_column(Integer, default=0)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
+    idempotency_prefix: Mapped[str] = mapped_column(String(128), default="")
+    metadata_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+
+
+class WorkflowTriggerInbox(TimestampMixin, Base):
+    """Deduplicated external/manual trigger envelope."""
+
+    __tablename__ = "ai_workflow_trigger_inbox"
+    __table_args__ = (
+        UniqueConstraint(
+            "owner_user_id",
+            "event_type",
+            "event_key",
+            name="uq_ai_workflow_trigger_inbox_owner_type_key",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key_type, primary_key=True, autoincrement=True)
+    uuid: Mapped[str] = mapped_column(
+        String(36), unique=True, default=lambda: str(uuid_lib.uuid4())
+    )
+    owner_user_id: Mapped[str] = mapped_column(String(64), index=True)
+    workflow_id: Mapped[str] = mapped_column(String(48), index=True)
+    event_type: Mapped[str] = mapped_column(String(96), index=True)
+    event_key: Mapped[str] = mapped_column(String(128))
+    payload_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    status: Mapped[str] = mapped_column(String(24), default="pending", index=True)
+    run_id: Mapped[str] = mapped_column(String(36), default="", index=True)
+    received_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    processed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    error_message: Mapped[str] = mapped_column(Text, default="")
+    # Dispatch workers fence one another with the same lease contract used by
+    # schedules and notifications.  The token is monotonic and survives a
+    # lease recovery so a stale worker cannot finalize a reclaimed event.
+    lease_owner: Mapped[str] = mapped_column(String(128), default="", index=True)
+    lease_token: Mapped[int] = mapped_column(Integer, default=0)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
+
+
+class WorkflowNotificationOutbox(TimestampMixin, Base):
+    """Durable notification intent; delivery is a separately controlled worker."""
+
+    __tablename__ = "ai_workflow_notification_outbox"
+    __table_args__ = (
+        UniqueConstraint(
+            "run_id",
+            "node_id",
+            "idempotency_key",
+            name="uq_ai_workflow_notification_outbox_run_node_key",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key_type, primary_key=True, autoincrement=True)
+    uuid: Mapped[str] = mapped_column(
+        String(36), unique=True, default=lambda: str(uuid_lib.uuid4())
+    )
+    owner_user_id: Mapped[str] = mapped_column(String(64), index=True)
+    run_id: Mapped[str] = mapped_column(String(36), index=True)
+    node_id: Mapped[str] = mapped_column(String(48), index=True)
+    idempotency_key: Mapped[str] = mapped_column(String(128))
+    channel: Mapped[str] = mapped_column(String(32), default="in_app")
+    recipient: Mapped[str] = mapped_column(String(255), default="")
+    payload_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    status: Mapped[str] = mapped_column(String(32), default="pending", index=True)
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    lease_owner: Mapped[str] = mapped_column(String(128), default="", index=True)
+    lease_token: Mapped[int] = mapped_column(Integer, default=0)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
+    next_attempt_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_error: Mapped[str] = mapped_column(Text, default="")
+    # Delivery status and user-facing read state are intentionally separate:
+    # a provider can deliver an item while the owner still has not seen it.
+    read_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
+    read_by_user_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+
+
+class WorkflowWait(TimestampMixin, Base):
+    """Durable pause boundary for a workflow waiting on a signal or time."""
+
+    __tablename__ = "ai_workflow_waits"
+    __table_args__ = (
+        UniqueConstraint(
+            "run_id",
+            "node_id",
+            "wait_key",
+            name="uq_ai_workflow_waits_run_node_key",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key_type, primary_key=True, autoincrement=True)
+    uuid: Mapped[str] = mapped_column(
+        String(36), unique=True, default=lambda: str(uuid_lib.uuid4())
+    )
+    owner_user_id: Mapped[str] = mapped_column(String(64), index=True)
+    run_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("ai_agent_runs.uuid", ondelete="CASCADE"), index=True
+    )
+    node_id: Mapped[str] = mapped_column(String(48), index=True)
+    wait_key: Mapped[str] = mapped_column(String(128))
+    signal_key: Mapped[str] = mapped_column(String(128), default="")
+    status: Mapped[str] = mapped_column(String(24), default="waiting", index=True)
+    resume_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
+    payload_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    resumed_by: Mapped[str] = mapped_column(String(64), default="")
+    resumed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # Only the hash is durable; the one-time token is returned once to the
+    # caller that created the wait and is never exposed by list endpoints.
+    resume_token_hash: Mapped[str] = mapped_column(String(64), default="")
+    resume_expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
+
+
+
+class LearningCandidate(TimestampMixin, Base):
+    """Controlled learning candidate (never auto-publish to production)."""
+
+    __tablename__ = "ai_learning_candidates"
+
+    id: Mapped[int] = mapped_column(primary_key_type, primary_key=True, autoincrement=True)
+    uuid: Mapped[str] = mapped_column(
+        String(36),
+        unique=True,
+        default=lambda: str(uuid_lib.uuid4()),
+    )
+    owner_user_id: Mapped[str] = mapped_column(String(64), index=True)
+    source_run_id: Mapped[str] = mapped_column(String(64), default="", index=True)
+    candidate_type: Mapped[str] = mapped_column(String(48), default="correction", index=True)
+    title: Mapped[str] = mapped_column(String(255), default="学习候选")
+    status: Mapped[str] = mapped_column(String(24), default="draft", index=True)
+    payload_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    created_by: Mapped[str] = mapped_column(String(64), default="")
+    updated_by: Mapped[str] = mapped_column(String(64), default="")
+
+
+class AgentProvider(TimestampMixin, Base):
+    """7.0 external/internal agent provider registry."""
+
+    __tablename__ = "ai_agent_providers"
+
+    id: Mapped[int] = mapped_column(primary_key_type, primary_key=True, autoincrement=True)
+    uuid: Mapped[str] = mapped_column(
+        String(36),
+        unique=True,
+        default=lambda: str(uuid_lib.uuid4()),
+    )
+    provider_key: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    name: Mapped[str] = mapped_column(String(128), default="")
+    kind: Mapped[str] = mapped_column(String(32), default="external", index=True)
+    # available | disabled | draft
+    status: Mapped[str] = mapped_column(String(24), default="available", index=True)
+    base_url: Mapped[str] = mapped_column(String(1024), default="")
+    metadata_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+
+
+class AgentConnection(TimestampMixin, Base):
+    """Installed agent connection (market install state)."""
+
+    __tablename__ = "ai_agent_connections"
+
+    id: Mapped[int] = mapped_column(primary_key_type, primary_key=True, autoincrement=True)
+    uuid: Mapped[str] = mapped_column(
+        String(36),
+        unique=True,
+        default=lambda: str(uuid_lib.uuid4()),
+    )
+    agent_id: Mapped[str] = mapped_column(String(96), unique=True, index=True)
+    provider_key: Mapped[str] = mapped_column(String(64), default="", index=True)
+    name: Mapped[str] = mapped_column(String(128), default="")
+    endpoint: Mapped[str] = mapped_column(String(1024), default="")
+    # installed | authorized | disabled
+    status: Mapped[str] = mapped_column(String(24), default="installed", index=True)
+    capabilities_json: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    policy_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    budget_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    cost_per_call_micros: Mapped[int] = mapped_column(Integer, default=0)
+    installed_by: Mapped[str] = mapped_column(String(64), default="")
+    metadata_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+
+
+class AgentCallLog(TimestampMixin, Base):
+    """Agent invoke audit + cost ledger (7.0 §11.11)."""
+
+    __tablename__ = "ai_agent_call_logs"
+
+    id: Mapped[int] = mapped_column(primary_key_type, primary_key=True, autoincrement=True)
+    uuid: Mapped[str] = mapped_column(
+        String(36),
+        unique=True,
+        default=lambda: str(uuid_lib.uuid4()),
+    )
+    user_id: Mapped[str] = mapped_column(String(64), index=True)
+    agent_id: Mapped[str] = mapped_column(String(96), index=True)
+    run_id: Mapped[str] = mapped_column(String(64), default="", index=True)
+    channel: Mapped[str] = mapped_column(String(32), default="", index=True)
+    destination: Mapped[str] = mapped_column(String(32), default="", index=True)
+    data_level: Mapped[int] = mapped_column(Integer, default=0, index=True)
+    status: Mapped[str] = mapped_column(String(24), default="succeeded", index=True)
+    latency_ms: Mapped[int] = mapped_column(Integer, default=0)
+    cost_micros: Mapped[int] = mapped_column(Integer, default=0)
+    egress_allowed: Mapped[bool] = mapped_column(Boolean, default=True)
+    request_summary: Mapped[str] = mapped_column(String(500), default="")
+    result_summary: Mapped[str] = mapped_column(String(500), default="")
+    detail_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+
+
+class EgressAuditLog(TimestampMixin, Base):
+    """Data egress decision audit trail."""
+
+    __tablename__ = "ai_egress_audit_logs"
+
+    id: Mapped[int] = mapped_column(primary_key_type, primary_key=True, autoincrement=True)
+    uuid: Mapped[str] = mapped_column(
+        String(36),
+        unique=True,
+        default=lambda: str(uuid_lib.uuid4()),
+    )
+    user_id: Mapped[str] = mapped_column(String(64), index=True)
+    destination: Mapped[str] = mapped_column(String(32), default="", index=True)
+    channel: Mapped[str] = mapped_column(String(32), default="", index=True)
+    agent_id: Mapped[str] = mapped_column(String(96), default="", index=True)
+    run_id: Mapped[str] = mapped_column(String(64), default="", index=True)
+    data_level: Mapped[int] = mapped_column(Integer, default=0, index=True)
+    allowed: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    requires_confirmation: Mapped[bool] = mapped_column(Boolean, default=False)
+    redaction_applied: Mapped[bool] = mapped_column(Boolean, default=False)
+    policy: Mapped[str] = mapped_column(String(255), default="")
+    findings_json: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    reasons_json: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    text_fingerprint: Mapped[str] = mapped_column(String(64), default="")
+
+
+class ChannelJob(TimestampMixin, Base):
+    """Persistent channel inbound job with retry / dead-letter support."""
+
+    __tablename__ = "ai_channel_jobs"
+
+    id: Mapped[int] = mapped_column(primary_key_type, primary_key=True, autoincrement=True)
+    uuid: Mapped[str] = mapped_column(
+        String(36),
+        unique=True,
+        default=lambda: str(uuid_lib.uuid4()),
+    )
+    channel: Mapped[str] = mapped_column(String(32), default="web", index=True)
+    job_key: Mapped[str] = mapped_column(String(128), default="", index=True)
+    external_user_id: Mapped[str] = mapped_column(String(128), default="", index=True)
+    thread_id: Mapped[str] = mapped_column(String(128), default="")
+    # queued | running | succeeded | failed | dead
+    status: Mapped[str] = mapped_column(String(24), default="queued", index=True)
+    attempt: Mapped[int] = mapped_column(Integer, default=0)
+    max_attempts: Mapped[int] = mapped_column(Integer, default=3)
+    run_id: Mapped[str] = mapped_column(String(64), default="", index=True)
+    payload_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    result_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    last_error: Mapped[str] = mapped_column(Text, default="")
+    next_retry_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class ChannelIdentityBinding(TimestampMixin, Base):
+    """Stable mapping between a channel identity and its run owner."""
+
+    __tablename__ = "ai_channel_identity_bindings"
+    __table_args__ = (UniqueConstraint("channel", "external_user_id"),)
+
+    id: Mapped[int] = mapped_column(primary_key_type, primary_key=True, autoincrement=True)
+    uuid: Mapped[str] = mapped_column(
+        String(36), unique=True, default=lambda: str(uuid_lib.uuid4())
+    )
+    channel: Mapped[str] = mapped_column(String(32), index=True)
+    external_user_id: Mapped[str] = mapped_column(String(128), index=True)
+    owner_user_id: Mapped[str] = mapped_column(String(64), index=True)
+    last_thread_id: Mapped[str] = mapped_column(String(128), default="")
+
+
+class ChannelMessageBinding(TimestampMixin, Base):
+    """Inbound/outbound channel message linkage for an Agent Run."""
+
+    __tablename__ = "ai_channel_message_bindings"
+    __table_args__ = (UniqueConstraint("channel", "external_message_id", "direction"),)
+
+    id: Mapped[int] = mapped_column(primary_key_type, primary_key=True, autoincrement=True)
+    uuid: Mapped[str] = mapped_column(
+        String(36), unique=True, default=lambda: str(uuid_lib.uuid4())
+    )
+    identity_binding_id: Mapped[int] = mapped_column(
+        foreign_key_type,
+        ForeignKey("ai_channel_identity_bindings.id", ondelete="CASCADE"),
+        index=True,
+    )
+    channel: Mapped[str] = mapped_column(String(32), index=True)
+    external_message_id: Mapped[str] = mapped_column(String(128), index=True)
+    direction: Mapped[str] = mapped_column(String(16), index=True)
+    thread_id: Mapped[str] = mapped_column(String(128), default="")
+    run_id: Mapped[str] = mapped_column(String(64), default="", index=True)
+    related_message_id: Mapped[str] = mapped_column(String(128), default="")
+    metadata_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
 
 class SkillRunLog(TimestampMixin, Base):
@@ -1212,3 +1908,9 @@ from . import project_initialization_models as project_initialization_models  # 
 from . import project_context_models as project_context_models  # noqa: E402,F401
 from . import project_task_models as project_task_models  # noqa: E402,F401
 from .professional_delivery import models as professional_delivery_models  # noqa: E402,F401
+from . import enterprise_intelligence_models as enterprise_intelligence_models  # noqa: E402,F401
+from . import enterprise_business_lineage_models as enterprise_business_lineage_models  # noqa: E402,F401
+from . import enterprise_metrics_models as enterprise_metrics_models  # noqa: E402,F401
+from . import enterprise_graph_memory_models as enterprise_graph_memory_models  # noqa: E402,F401
+from . import enterprise_insight_models as enterprise_insight_models  # noqa: E402,F401
+from . import enterprise_capability_models as enterprise_capability_models  # noqa: E402,F401

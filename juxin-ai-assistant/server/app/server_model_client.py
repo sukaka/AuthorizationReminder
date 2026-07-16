@@ -48,10 +48,31 @@ def _chat_completions_url(base_url: str) -> str:
     return f"{base_url.rstrip('/')}/chat/completions"
 
 
+def _model_http_failure(response: httpx.Response) -> HTTPException:
+    status_code = response.status_code
+    if status_code in {401, 403}:
+        return HTTPException(status_code=502, detail="SERVER_MODEL_AUTH_FAILED")
+    if status_code in {408, 504}:
+        return HTTPException(status_code=504, detail="SERVER_MODEL_TIMEOUT")
+    if status_code == 429:
+        return HTTPException(status_code=429, detail="SERVER_MODEL_RATE_LIMITED")
+    if 500 <= status_code <= 599:
+        return HTTPException(status_code=503, detail="SERVER_MODEL_UPSTREAM_UNAVAILABLE")
+    return HTTPException(status_code=502, detail="SERVER_MODEL_FAILED")
+
+
+def _model_transport_failure(exc: httpx.HTTPError) -> HTTPException:
+    if isinstance(exc, httpx.TimeoutException):
+        return HTTPException(status_code=504, detail="SERVER_MODEL_TIMEOUT")
+    return HTTPException(status_code=502, detail="SERVER_MODEL_FAILED")
+
+
 async def generate_with_server_model(
     settings: Settings,
     messages: list[dict[str, str]],
     temperature: float,
+    *,
+    max_output_tokens: int | None = None,
 ) -> ServerModelResult:
     if not is_server_model_configured(settings):
         raise HTTPException(status_code=409, detail="SERVER_MODEL_NOT_CONFIGURED")
@@ -62,7 +83,10 @@ async def generate_with_server_model(
             model_id=settings.server_model_id,
             display_name=settings.server_model_display_name or settings.server_model_id,
             timeout_seconds=settings.server_model_timeout_seconds,
-            max_output_tokens=settings.server_model_max_output_tokens,
+            max_output_tokens=min(
+                settings.server_model_max_output_tokens,
+                max(1, int(max_output_tokens or settings.server_model_max_output_tokens)),
+            ),
             disable_thinking=True,
         ),
         messages,
@@ -95,10 +119,10 @@ async def generate_with_model_config(
             response.raise_for_status()
             payload = response.json()
     except httpx.HTTPStatusError as exc:
-        if exc.response.status_code in {401, 403}:
-            raise HTTPException(status_code=502, detail="SERVER_MODEL_AUTH_FAILED") from exc
-        raise HTTPException(status_code=502, detail="SERVER_MODEL_FAILED") from exc
-    except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:
+        raise _model_http_failure(exc.response) from exc
+    except httpx.HTTPError as exc:
+        raise _model_transport_failure(exc) from exc
+    except (ValueError, KeyError, TypeError) as exc:
         raise HTTPException(status_code=502, detail="SERVER_MODEL_FAILED") from exc
 
     choices = payload.get("choices") if isinstance(payload, dict) else None
@@ -174,10 +198,10 @@ async def stream_with_model_config(
                     if content:
                         yield ServerModelStreamEvent(delta=content)
     except httpx.HTTPStatusError as exc:
-        if exc.response.status_code in {401, 403}:
-            raise HTTPException(status_code=502, detail="SERVER_MODEL_AUTH_FAILED") from exc
-        raise HTTPException(status_code=502, detail="SERVER_MODEL_FAILED") from exc
-    except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:
+        raise _model_http_failure(exc.response) from exc
+    except httpx.HTTPError as exc:
+        raise _model_transport_failure(exc) from exc
+    except (ValueError, KeyError, TypeError) as exc:
         raise HTTPException(status_code=502, detail="SERVER_MODEL_FAILED") from exc
 
     yield ServerModelStreamEvent(

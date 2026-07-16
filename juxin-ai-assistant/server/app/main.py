@@ -49,7 +49,11 @@ from .intent_router import route_intent
 from .knowledge import KnowledgeRetriever
 from .knowledge_embedding import build_embedding_service
 from .knowledge_search import search_knowledge_chunks
-from .knowledge_files import create_knowledge_file_from_bytes, invalidate_knowledge_search
+from .knowledge_files import (
+    MAX_KNOWLEDGE_FILE_BYTES,
+    create_knowledge_file_from_bytes,
+    invalidate_knowledge_search,
+)
 from .knowledge_routes import router as knowledge_router
 from .learning_routes import router as learning_router
 from .local_binding import (
@@ -58,6 +62,22 @@ from .local_binding import (
     verify_local_binding_token,
 )
 from .long_task_routes import dispatcher as long_task_dispatcher, router as long_task_router
+from .agent_run_routes import router as agent_run_router
+from .artifact_routes import router as artifact_router
+from .ops_routes import router as ops_router
+from .learning_candidate_routes import router as learning_candidate_router
+from .channel_routes import router as channel_router
+from .template_routes import router as template_router
+from .knowledge_version_routes import router as knowledge_version_router
+from .channel_webhook_routes import router as channel_webhook_router
+from .learning_eval_routes import router as learning_eval_router
+from .agent_hub_routes import router as agent_hub_router
+from .role_assistant_routes import router as role_assistant_router
+from .channel_job_routes import router as channel_job_router
+from .data_egress_routes import router as data_egress_router
+from .enterprise_intelligence.routes import router as enterprise_intelligence_router
+from .workflow_routes import router as workflow_router
+from .wechat_external_routes import router as wechat_external_router
 from .model_profile_routes import router as model_profile_router
 from .models import Assistant, GenerationRecord, Task, TaskField, UserFavorite
 from .models import KnowledgeBase
@@ -134,15 +154,28 @@ from .sensitive import SensitiveDetector, derive_confirmation_key
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+    from .channel_job_worker import channel_job_scheduler
+    from .harness_spec import load_harness_spec
+    from .workflow_control_worker import workflow_control_scheduler
+
+    load_harness_spec()
     long_task_dispatcher.recover()
     await asyncio.to_thread(_prewarm_knowledge_search)
     hot_question_task = asyncio.create_task(hot_question_scheduler(settings))
+    channel_job_task = asyncio.create_task(channel_job_scheduler(settings))
+    workflow_control_task = asyncio.create_task(workflow_control_scheduler(settings))
     try:
         yield
     finally:
         hot_question_task.cancel()
+        channel_job_task.cancel()
+        workflow_control_task.cancel()
         with suppress(asyncio.CancelledError):
             await hot_question_task
+        with suppress(asyncio.CancelledError):
+            await channel_job_task
+        with suppress(asyncio.CancelledError):
+            await workflow_control_task
 
 
 def _prewarm_knowledge_search() -> None:
@@ -176,6 +209,17 @@ app.add_middleware(
 )
 
 
+def _set_security_headers(response: Response) -> Response:
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+    response.headers.setdefault(
+        "Permissions-Policy",
+        "camera=(), microphone=(), geolocation=()",
+    )
+    return response
+
+
 @app.middleware("http")
 async def enforce_write_origin(
     request: Request,
@@ -189,7 +233,7 @@ async def enforce_write_origin(
         and not current_settings.auth_dev_bypass
     ):
         if request.headers.get("origin", "") not in current_settings.allowed_origins:
-            return JSONResponse(
+            return _set_security_headers(JSONResponse(
                 status_code=403,
                 content={
                     "success": False,
@@ -197,8 +241,8 @@ async def enforce_write_origin(
                     "message": "请求来源不受信任",
                     "data": None,
                 },
-            )
-    return await call_next(request)
+            ))
+    return _set_security_headers(await call_next(request))
 
 
 @app.exception_handler(Exception)
@@ -887,6 +931,8 @@ def _knowledge_file_out(
         tags=list(file_record.tags_json or []),
         parse_status=file_record.parse_status,
         index_status=file_record.index_status,
+        external_public=file_record.external_public,
+        external_download_allowed=file_record.external_download_allowed,
     )
 
 
@@ -1024,7 +1070,9 @@ async def upload_knowledge_file(
         reference_enabled = True
 
     try:
-        content = await file.read()
+        content = await file.read(MAX_KNOWLEDGE_FILE_BYTES + 1)
+        if len(content) > MAX_KNOWLEDGE_FILE_BYTES:
+            raise HTTPException(status_code=413, detail="知识文件不能超过 100MB")
         file_record, _chunks = create_knowledge_file_from_bytes(
             db,
             sso_user_id=str(session_payload.user.id),
@@ -1679,8 +1727,24 @@ app.include_router(professional_skill_catalog_router)
 app.include_router(professional_template_catalog_router)
 app.include_router(professional_approval_flow_catalog_router)
 app.include_router(professional_deliverable_run_router)
-app.include_router(professional_run_router)
 app.include_router(long_task_router)
+app.include_router(agent_run_router)
+app.include_router(professional_run_router)
+app.include_router(artifact_router)
+app.include_router(ops_router)
+app.include_router(learning_candidate_router)
+app.include_router(channel_router)
+app.include_router(channel_webhook_router)
+app.include_router(template_router)
+app.include_router(knowledge_version_router)
+app.include_router(learning_eval_router)
+app.include_router(agent_hub_router)
+app.include_router(role_assistant_router)
+app.include_router(channel_job_router)
+app.include_router(data_egress_router)
+app.include_router(enterprise_intelligence_router)
+app.include_router(workflow_router)
+app.include_router(wechat_external_router)
 app.include_router(project_router)
 app.include_router(project_initialization_router)
 app.include_router(project_context_router)

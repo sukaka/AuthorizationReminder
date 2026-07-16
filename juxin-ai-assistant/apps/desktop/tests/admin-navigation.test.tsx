@@ -1606,6 +1606,8 @@ it('lets administrators edit official knowledge category and document type', asy
     category: '安全运维',
     document_type: '解决方案',
     tags: [],
+    external_public: false,
+    external_download_allowed: false,
   });
   expect(fileCard).toHaveTextContent('WDSP 产品白皮书.pdf');
   expect(fileCard).toHaveTextContent('安全运维 · 解决方案 · 正式资料');

@@ -27,6 +27,18 @@ class ProjectContract(ProjectTimestampMixin, Base):
     name: Mapped[str] = mapped_column(String(160))
     contract_no: Mapped[str] = mapped_column(String(96), default="")
     customer_name: Mapped[str] = mapped_column(String(160), default="")
+    organization_id: Mapped[int | None] = mapped_column(
+        foreign_key_type,
+        ForeignKey("ai_organizations.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    customer_id: Mapped[int | None] = mapped_column(
+        foreign_key_type,
+        ForeignKey("ai_enterprise_customers.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     source_file_uuid: Mapped[str | None] = mapped_column(String(36), nullable=True)
     extraction_status: Mapped[str] = mapped_column(String(24), default="pending", index=True)
     extracted_payload: Mapped[dict] = mapped_column(JSON, default=dict)

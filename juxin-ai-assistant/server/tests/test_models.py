@@ -1,8 +1,10 @@
+from datetime import UTC, datetime, timedelta
+
 from sqlalchemy import create_engine, inspect
 
 from app.database import Base
 from app import models  # noqa: F401
-from app.models import Assistant, KnowledgeFile, Task
+from app.models import Assistant, KnowledgeFile, Task, WechatExternalDownloadAudit, WechatExternalQuestionAudit, WechatExternalVisitor
 
 
 FOUNDATION_TABLES = {
@@ -144,6 +146,7 @@ def test_knowledge_document_model_has_usage_review_and_lifecycle_fields() -> Non
         "archived_at",
         "deleted_at",
         "hard_deleted_at",
+        "external_public",
     }.issubset(file_columns)
 
 
@@ -164,3 +167,58 @@ def test_ordinary_user_knowledge_file_defaults_to_private_reference() -> None:
     assert record.reference_enabled is True
     assert record.rag_scope == "personal"
     assert record.permission_scope == "private"
+    engine = create_engine("sqlite+pysqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    from sqlalchemy.orm import Session
+    with Session(engine) as session:
+        session.add(record)
+        session.flush()
+        assert record.external_public is False
+
+
+def test_knowledge_file_defaults_encryption_key_version_for_legacy_callers() -> None:
+    record = KnowledgeFile(
+        sso_user_id="user-1",
+        file_name="未显式传版本.txt",
+        file_type="text/plain",
+        file_size=12,
+        content_sha256="2" * 64,
+    )
+
+    assert record.key_version == "v1"
+
+
+def test_wechat_external_audit_models_are_persisted_without_plaintext_identifiers(generation_db) -> None:
+    visitor = WechatExternalVisitor(openid_hash="a" * 64)
+    generation_db.add(visitor)
+    generation_db.flush()
+    record = KnowledgeFile(
+        sso_user_id="system",
+        file_name="公开资料.txt",
+        file_type="text/plain",
+        file_size=12,
+        content_sha256="1" * 64,
+        key_version="v1",
+    )
+    generation_db.add(record)
+    generation_db.flush()
+    generation_db.add_all([
+        WechatExternalQuestionAudit(
+            visitor_id=visitor.id,
+            quota_event_id="event-1",
+            question_hash="b" * 64,
+        ),
+        WechatExternalDownloadAudit(
+            visitor_id=visitor.id,
+            file_id=record.id,
+            download_token_hash="c" * 64,
+            expires_at=datetime.now(UTC) + timedelta(minutes=5),
+        ),
+    ])
+    generation_db.commit()
+
+    columns = {column.name for column in WechatExternalVisitor.__table__.columns}
+    assert "openid" not in columns
+    assert {"visitor_id", "quota_event_id", "question_hash"}.issubset(
+        {column.name for column in WechatExternalQuestionAudit.__table__.columns}
+    )

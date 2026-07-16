@@ -130,7 +130,21 @@ def ensure_due_reports(settings: Settings, now: datetime | None = None) -> None:
     cipher = ContentCipher(settings.content_encryption_key)
     with SessionLocal() as db:
         for period_type, start, end in periods:
-            generate_report(db, period_type=period_type, period_start=_utc_naive(start), period_end=_utc_naive(end), cipher=cipher)
+            period_start = _utc_naive(start)
+            period_end = _utc_naive(end)
+            generate_report(db, period_type=period_type, period_start=period_start, period_end=period_end, cipher=cipher)
+            if period_type == "daily":
+                from .external_question_events import generate_external_question_report
+
+                for source_channel in ("wechat_official", "wecom_kf", "all"):
+                    generate_external_question_report(
+                        db,
+                        period_type=period_type,
+                        period_start=period_start,
+                        period_end=period_end,
+                        source_channel=source_channel,
+                        cipher=cipher,
+                    )
 
 
 async def hot_question_scheduler(settings: Settings) -> None:

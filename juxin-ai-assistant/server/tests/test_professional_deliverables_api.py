@@ -1,7 +1,9 @@
 from datetime import datetime
+from io import BytesIO
 from types import SimpleNamespace
 
 import pytest
+from docx import Document
 from sqlalchemy import func, select
 
 
@@ -149,6 +151,32 @@ def _create_version(
     )
 
 
+def _docx_import_bytes() -> bytes:
+    document = Document()
+    document.add_heading("导入后的月报", level=1)
+    document.add_paragraph("导入正文")
+    output = BytesIO()
+    document.save(output)
+    return output.getvalue()
+
+
+def _docx_import_bytes_with_image(*, paragraph_text: str = "图表如下") -> tuple[bytes, bytes]:
+    image = (
+        b"\x89PNG\r\n\x1a\n"
+        b"\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01"
+        b"\x08\x06\x00\x00\x00\x1f\x15\xc4\x89"
+        b"\x00\x00\x00\x0dIDAT\x08\xd7c\xfc\xcf\xc0\xf0\x1f\x00\x05\x00\x01\xff\x89\x99=\x1d"
+        b"\x00\x00\x00\x00IEND\xaeB`\x82"
+    )
+    document = Document()
+    document.add_heading("导入后的月报", level=1)
+    document.add_paragraph(paragraph_text)
+    document.add_picture(BytesIO(image))
+    output = BytesIO()
+    document.save(output)
+    return output.getvalue(), image
+
+
 def test_create_personal_deliverable_pins_versions_encrypts_content_and_replays(
     client_for_user,
     generation_db,
@@ -220,6 +248,397 @@ def test_create_personal_deliverable_pins_versions_encrypts_content_and_replays(
         "event": "deliverable_created",
         "status": "draft",
     }
+
+
+def test_import_docx_returns_structured_content_and_audits_without_creating_version(
+    client_for_user,
+    generation_db,
+    professional_catalog,
+) -> None:
+    from app.governance_models import AuditLog
+    from app.models import WorkArtifactVersion
+
+    client = client_for_user("u-1")
+    created = _create(client, professional_catalog, key="docx-import-create").json()
+    response = client.post(
+        f"/api/ai/deliverables/{created['deliverable_uuid']}/editor/import-docx",
+        headers={"Idempotency-Key": "docx-import-1"},
+        files={
+            "file": (
+                "monthly-report.docx",
+                _docx_import_bytes(),
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            )
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["deliverable_uuid"] == created["deliverable_uuid"]
+    assert payload["source_file_name"] == "monthly-report.docx"
+    assert [block["type"] for block in payload["content"]["blocks"]] == ["heading", "paragraph"]
+    assert payload["warnings"] == []
+    assert payload["media_count"] == 0
+    assert generation_db.query(WorkArtifactVersion).count() == 1
+    audit = generation_db.scalar(
+        select(AuditLog).where(
+            AuditLog.action == "professional_deliverable.editor.import_docx"
+        )
+    )
+    assert audit is not None
+    assert audit.metadata_json["record_count"] == 2
+
+
+def test_import_docx_rejects_non_docx_filename(client_for_user, professional_catalog) -> None:
+    client = client_for_user("u-1")
+    created = _create(client, professional_catalog, key="docx-import-invalid-create").json()
+
+    response = client.post(
+        f"/api/ai/deliverables/{created['deliverable_uuid']}/editor/import-docx",
+        files={"file": ("report.txt", b"plain text", "text/plain")},
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"]["code"] == "INVALID_DOCX_IMPORT"
+
+
+def test_import_docx_persists_encrypted_media_blocks_and_replays_idempotently(
+    client_for_user,
+    generation_db,
+    professional_catalog,
+) -> None:
+    from app.config import get_settings
+    from app.crypto import ContentCipher, EncryptedPayload
+    from app.professional_delivery.models import DeliverableMediaAsset
+
+    client = client_for_user("docx-media-owner")
+    created = _create(client, professional_catalog, key="docx-media-create").json()
+    data, image = _docx_import_bytes_with_image()
+    path = f"/api/ai/deliverables/{created['deliverable_uuid']}/editor/import-docx"
+    first = client.post(
+        path,
+        headers={"Idempotency-Key": "docx-media-import-1"},
+        files={"file": ("monthly-report.docx", data, "application/vnd.openxmlformats-officedocument.wordprocessingml.document")},
+    )
+
+    assert first.status_code == 200, first.text
+    payload = first.json()
+    blocks = payload["content"]["blocks"]
+    assert [block["type"] for block in blocks] == ["heading", "paragraph", "image"]
+    image_block = blocks[-1]
+    assert image_block["asset_id"]
+    assert image_block["mime_type"] == "image/png"
+    assert image_block["size_bytes"] == len(image)
+    asset = generation_db.query(DeliverableMediaAsset).one()
+    assert asset.uuid == image_block["asset_id"]
+    assert asset.status == "active"
+    assert asset.content_ciphertext != image
+    decrypted = ContentCipher(get_settings().content_encryption_key).decrypt_bytes(
+        EncryptedPayload(asset.content_ciphertext, asset.content_nonce),
+        asset.uuid.encode("utf-8"),
+    )
+    assert decrypted == image
+
+    replay = client.post(
+        path,
+        headers={"Idempotency-Key": "docx-media-import-1"},
+        files={"file": ("monthly-report.docx", data, "application/vnd.openxmlformats-officedocument.wordprocessingml.document")},
+    )
+    assert replay.status_code == 200, replay.text
+    assert replay.json()["content"]["blocks"][-1]["asset_id"] == image_block["asset_id"]
+    assert generation_db.query(DeliverableMediaAsset).count() == 1
+
+    changed_data, _ = _docx_import_bytes_with_image(paragraph_text="图表已更新")
+    conflict = client.post(
+        path,
+        headers={"Idempotency-Key": "docx-media-import-1"},
+        files={"file": ("monthly-report.docx", changed_data, "application/vnd.openxmlformats-officedocument.wordprocessingml.document")},
+    )
+    assert conflict.status_code == 409, conflict.text
+    assert conflict.json()["detail"]["code"] == "IDEMPOTENCY_KEY_REUSED"
+
+
+def test_media_asset_upload_is_encrypted_idempotent_and_scoped(
+    client_for_user,
+    generation_db,
+    professional_catalog,
+) -> None:
+    from app.governance_models import AuditLog
+    from app.professional_delivery.models import DeliverableMediaAsset
+
+    owner = client_for_user("media-owner")
+    other = client_for_user("media-other")
+    created = _create(owner, professional_catalog, key="media-create").json()
+    deliverable_uuid = created["deliverable_uuid"]
+    png = b"\x89PNG\r\n\x1a\n" + b"editor-image"
+    request = {
+        "files": {"file": ("cover.png", png, "image/png")},
+        "headers": {"Idempotency-Key": "media-upload-1"},
+    }
+
+    uploaded = owner.post(
+        f"/api/ai/deliverables/{deliverable_uuid}/editor/media",
+        **request,
+    )
+
+    assert uploaded.status_code == 201, uploaded.text
+    payload = uploaded.json()
+    assert payload["deliverable_uuid"] == deliverable_uuid
+    assert payload["media_type"] == "image/png"
+    assert payload["size_bytes"] == len(png)
+    assert payload["asset_uuid"]
+    assert payload["download_url"].endswith(payload["asset_uuid"])
+    assert payload["replayed"] is False
+
+    replay = owner.post(
+        f"/api/ai/deliverables/{deliverable_uuid}/editor/media",
+        **request,
+    )
+    assert replay.status_code == 201, replay.text
+    assert replay.json()["asset_uuid"] == payload["asset_uuid"]
+    assert replay.json()["replayed"] is True
+    assert generation_db.query(DeliverableMediaAsset).count() == 1
+    asset = generation_db.query(DeliverableMediaAsset).one()
+    assert asset.content_ciphertext != png
+    assert asset.size_bytes == len(png)
+
+    downloaded = owner.get(
+        f"/api/ai/deliverables/{deliverable_uuid}/editor/media/{payload['asset_uuid']}"
+    )
+    assert downloaded.status_code == 200
+    assert downloaded.content == png
+    assert downloaded.headers["content-type"].startswith("image/png")
+
+    preview = owner.get(
+        f"/api/ai/deliverables/{deliverable_uuid}/editor/media/{payload['asset_uuid']}/preview"
+    )
+    assert preview.status_code == 200
+    assert preview.content == png
+    assert preview.headers["content-type"].startswith("image/png")
+
+    forbidden = other.get(
+        f"/api/ai/deliverables/{deliverable_uuid}/editor/media/{payload['asset_uuid']}"
+    )
+    assert forbidden.status_code == 404
+    forbidden_preview = other.get(
+        f"/api/ai/deliverables/{deliverable_uuid}/editor/media/{payload['asset_uuid']}/preview"
+    )
+    assert forbidden_preview.status_code == 404
+
+    deleted = owner.delete(
+        f"/api/ai/deliverables/{deliverable_uuid}/editor/media/{payload['asset_uuid']}"
+    )
+    assert deleted.status_code == 200, deleted.text
+    assert deleted.json()["status"] == "deleted"
+    assert owner.get(
+        f"/api/ai/deliverables/{deliverable_uuid}/editor/media/{payload['asset_uuid']}"
+    ).status_code == 404
+    assert owner.get(
+        f"/api/ai/deliverables/{deliverable_uuid}/editor/media/{payload['asset_uuid']}/preview"
+    ).status_code == 404
+    assert owner.delete(
+        f"/api/ai/deliverables/{deliverable_uuid}/editor/media/{payload['asset_uuid']}"
+    ).status_code == 404
+    audits = list(
+        generation_db.scalars(
+            select(AuditLog).where(
+                AuditLog.action.in_(
+                    [
+                        "professional_deliverable.editor.media.upload",
+                        "professional_deliverable.editor.media.preview",
+                        "professional_deliverable.editor.media.delete",
+                    ]
+                )
+            )
+        )
+    )
+    assert len(audits) == 3
+    upload_audit = next(
+        item for item in audits if item.action == "professional_deliverable.editor.media.upload"
+    )
+    assert upload_audit.metadata_json["size_bytes"] == len(png)
+
+
+def test_media_asset_rejects_mismatched_signature_and_oversized_payload(
+    client_for_user,
+    professional_catalog,
+    monkeypatch,
+) -> None:
+    import app.professional_delivery.media_service as media_service
+
+    owner = client_for_user("media-validation-owner")
+    created = _create(owner, professional_catalog, key="media-validation-create").json()
+    url = f"/api/ai/deliverables/{created['deliverable_uuid']}/editor/media"
+
+    mismatch = owner.post(
+        url,
+        headers={"Idempotency-Key": "media-mismatch"},
+        files={"file": ("not-a-png.png", b"plain text", "image/png")},
+    )
+    assert mismatch.status_code == 422
+    assert mismatch.json()["detail"]["code"] == "INVALID_MEDIA_ASSET"
+
+    monkeypatch.setattr(media_service, "MAX_MEDIA_ASSET_BYTES", 4)
+    oversized = owner.post(
+        url,
+        headers={"Idempotency-Key": "media-oversized"},
+        files={"file": ("large.png", b"\x89PNG\r\n\x1a\n", "image/png")},
+    )
+    assert oversized.status_code == 413
+    assert oversized.json()["detail"]["code"] == "MEDIA_ASSET_TOO_LARGE"
+
+
+def test_media_lifecycle_counts_references_and_only_cleans_orphans(
+    client_for_user,
+    generation_db,
+    professional_catalog,
+) -> None:
+    from app.config import get_settings
+    from app.crypto import ContentCipher
+    from app.models import WorkArtifact
+    from app.professional_delivery.media_service import (
+        cleanup_orphaned_media_assets,
+        count_media_asset_references,
+    )
+    from app.professional_delivery.models import DeliverableMediaAsset
+
+    client = client_for_user("media-lifecycle-owner")
+    created = _create(client, professional_catalog, key="media-lifecycle-create").json()
+    deliverable_uuid = created["deliverable_uuid"]
+    image = b"\x89PNG\r\n\x1a\n" + b"lifecycle-image"
+    first = client.post(
+        f"/api/ai/deliverables/{deliverable_uuid}/editor/media",
+        files={"file": ("referenced.png", image, "image/png")},
+        headers={"Idempotency-Key": "media-lifecycle-referenced"},
+    ).json()
+    second = client.post(
+        f"/api/ai/deliverables/{deliverable_uuid}/editor/media",
+        files={"file": ("orphan.png", image, "image/png")},
+        headers={"Idempotency-Key": "media-lifecycle-orphan"},
+    ).json()
+
+    version = _create_version(
+        client,
+        deliverable_uuid,
+        key="media-lifecycle-version",
+        content={
+            "schema_version": "1",
+            "blocks": [{
+                "block_id": "hero-image",
+                "type": "image",
+                "asset_id": first["asset_uuid"],
+                "mime_type": "image/png",
+                "size_bytes": len(image),
+            }],
+        },
+    )
+    assert version.status_code == 201, version.text
+
+    cipher = ContentCipher(get_settings().content_encryption_key)
+    artifact = generation_db.scalar(
+        select(WorkArtifact).where(WorkArtifact.uuid == deliverable_uuid)
+    )
+    assert artifact is not None
+    assert count_media_asset_references(
+        generation_db,
+        deliverable_id=artifact.id,
+        asset_uuid=first["asset_uuid"],
+        cipher=cipher,
+    ) == 1
+    first_row = generation_db.scalar(
+        select(DeliverableMediaAsset).where(DeliverableMediaAsset.uuid == first["asset_uuid"])
+    )
+    second_row = generation_db.scalar(
+        select(DeliverableMediaAsset).where(DeliverableMediaAsset.uuid == second["asset_uuid"])
+    )
+    assert first_row is not None and second_row is not None
+    first_row.created_at = second_row.created_at = datetime(2026, 1, 1)
+    deleted = cleanup_orphaned_media_assets(
+        generation_db,
+        deliverable_id=artifact.id,
+        cipher=cipher,
+        older_than=datetime(2026, 2, 1),
+    )
+    assert deleted == [second["asset_uuid"]]
+    assert first_row.status == "active"
+    assert second_row.status == "deleted"
+
+
+def test_media_scan_quarantines_tampered_ciphertext(
+    client_for_user,
+    generation_db,
+    professional_catalog,
+) -> None:
+    from app.config import get_settings
+    from app.crypto import ContentCipher
+    from app.professional_delivery.media_service import scan_media_asset
+    from app.professional_delivery.models import DeliverableMediaAsset
+
+    client = client_for_user("media-scan-owner")
+    created = _create(client, professional_catalog, key="media-scan-create").json()
+    payload = client.post(
+        f"/api/ai/deliverables/{created['deliverable_uuid']}/editor/media",
+        files={"file": ("scan.png", b"\x89PNG\r\n\x1a\n" + b"scan", "image/png")},
+        headers={"Idempotency-Key": "media-scan-upload"},
+    ).json()
+    asset = generation_db.scalar(
+        select(DeliverableMediaAsset).where(DeliverableMediaAsset.uuid == payload["asset_uuid"])
+    )
+    assert asset is not None
+    asset.content_ciphertext = b"tampered"
+    valid = scan_media_asset(
+        generation_db,
+        asset=asset,
+        cipher=ContentCipher(get_settings().content_encryption_key),
+    )
+    assert valid is False
+    assert asset.status == "quarantined"
+
+
+def test_editor_rejects_media_asset_from_another_deliverable(
+    client_for_user,
+    professional_catalog,
+) -> None:
+    owner = client_for_user("media-reference-owner")
+    source = _create(owner, professional_catalog, key="media-reference-source").json()
+    target = _create(owner, professional_catalog, key="media-reference-target").json()
+    png = b"\x89PNG\r\n\x1a\n" + b"editor-image"
+    uploaded = owner.post(
+        f"/api/ai/deliverables/{source['deliverable_uuid']}/editor/media",
+        headers={"Idempotency-Key": "media-reference-upload"},
+        files={"file": ("cover.png", png, "image/png")},
+    )
+    assert uploaded.status_code == 201, uploaded.text
+    asset = uploaded.json()
+
+    version_uuid = target["current_version"]["version_uuid"]
+    lease = owner.post(
+        f"/api/ai/deliverables/{target['deliverable_uuid']}/draft/lease",
+        json={"row_version": 1, "base_version_uuid": version_uuid},
+    )
+    assert lease.status_code == 200, lease.text
+    rejected = owner.put(
+        f"/api/ai/deliverables/{target['deliverable_uuid']}/draft",
+        headers={"Idempotency-Key": "media-reference-save"},
+        json={
+            "row_version": 1,
+            "base_version_uuid": version_uuid,
+            "draft_revision": 0,
+            "content": {
+                "schema_version": "2",
+                "blocks": [{
+                    "block_id": "cover",
+                    "type": "media",
+                    "asset_id": asset["asset_uuid"],
+                    "mime_type": "image/png",
+                    "size_bytes": len(png),
+                }],
+            },
+            "fencing_token": lease.json()["fencing_token"],
+        },
+    )
+    assert rejected.status_code == 422, rejected.text
+    assert rejected.json()["detail"]["code"] == "INVALID_DELIVERABLE_CONTENT"
 
 
 def test_update_metadata_uses_optimistic_lock_and_preserves_version_snapshot(
@@ -514,6 +933,58 @@ def test_create_rejects_missing_idempotency_key_and_invalid_catalog_or_content(
     assert generation_db.scalar(select(func.count(WorkArtifact.id))) == 0
 
 
+@pytest.mark.parametrize(
+    "media_block",
+    [
+        {"block_id": "hero", "type": "image", "url": "javascript:alert(1)"},
+        {"block_id": "hero", "type": "image", "url": "data:image/png;base64,AAAA"},
+        {"block_id": "hero", "type": "image", "url": "https://example.com/hero.png"},
+        {"block_id": "hero", "type": "image", "asset_id": "asset-1", "mime_type": "image/svg+xml"},
+        {"block_id": "hero", "type": "image", "asset_id": "asset-1", "mime_type": "image/png", "size_bytes": 11 * 1024 * 1024},
+    ],
+)
+def test_create_rejects_unsafe_or_unbounded_media_blocks(
+    client_for_user,
+    professional_catalog,
+    media_block,
+) -> None:
+    client = client_for_user("u-1")
+    response = _create(
+        client,
+        professional_catalog,
+        key=f"unsafe-media-{media_block.get('mime_type', 'url')}-{media_block.get('size_bytes', 0)}",
+        content={"schema_version": "2", "blocks": [media_block]},
+    )
+    assert response.status_code == 422
+    assert response.json()["detail"]["code"] == "INVALID_DELIVERABLE_CONTENT"
+
+
+def test_create_accepts_internal_media_asset_reference(
+    client_for_user,
+    professional_catalog,
+) -> None:
+    client = client_for_user("u-1")
+    response = _create(
+        client,
+        professional_catalog,
+        key="safe-media-asset",
+        content={
+            "schema_version": "2",
+            "blocks": [
+                {
+                    "block_id": "hero",
+                    "type": "image",
+                    "asset_id": "asset-1",
+                    "mime_type": "image/png",
+                    "size_bytes": 1024,
+                    "alt": "系统架构图",
+                }
+            ],
+        },
+    )
+    assert response.status_code == 201, response.text
+
+
 def test_skill_scope_policy_is_enforced(
     client_for_user,
     generation_db,
@@ -652,6 +1123,129 @@ def test_create_deliverable_version_is_immutable_encrypted_audited_and_idempoten
         "to_version": 2,
         "status": "draft",
     }
+
+
+def test_structured_draft_lease_save_and_commit_preserve_immutable_version_boundary(
+    client_for_user,
+    generation_db,
+    professional_catalog,
+) -> None:
+    from app.models import WorkArtifact, WorkArtifactVersion
+
+    client = client_for_user("u-1")
+    created = _create(client, professional_catalog, key="editor-create").json()
+    deliverable_uuid = created["deliverable_uuid"]
+    version_uuid = created["current_version"]["version_uuid"]
+
+    draft_response = client.get(f"/api/ai/deliverables/{deliverable_uuid}/draft")
+    assert draft_response.status_code == 200, draft_response.text
+    draft = draft_response.json()
+    assert draft["draft_revision"] == 0
+    assert draft["base_version_uuid"] == version_uuid
+
+    lease_response = client.post(
+        f"/api/ai/deliverables/{deliverable_uuid}/draft/lease",
+        json={"row_version": 1, "base_version_uuid": version_uuid},
+    )
+    assert lease_response.status_code == 200, lease_response.text
+    fencing_token = lease_response.json()["fencing_token"]
+
+    edited_content = {
+        "schema_version": "2",
+        "blocks": [
+            {"block_id": "monthly-overview", "type": "paragraph", "text": "已完成巡检。"},
+            {"block_id": "monthly-actions", "type": "paragraph", "text": "已关闭整改项。"},
+        ],
+    }
+    saved = client.put(
+        f"/api/ai/deliverables/{deliverable_uuid}/draft",
+        headers={"Idempotency-Key": "editor-draft-save"},
+        json={
+            "row_version": 1,
+            "base_version_uuid": version_uuid,
+            "draft_revision": 0,
+            "content": edited_content,
+            "content_summary": "已完成巡检并关闭整改项",
+            "fencing_token": fencing_token,
+        },
+    )
+    assert saved.status_code == 200, saved.text
+    assert saved.json()["draft_revision"] == 1
+    assert saved.json()["content"] == edited_content
+
+    replayed_save = client.put(
+        f"/api/ai/deliverables/{deliverable_uuid}/draft",
+        headers={"Idempotency-Key": "editor-draft-save"},
+        json={
+            "row_version": 1,
+            "base_version_uuid": version_uuid,
+            "draft_revision": 0,
+            "content": edited_content,
+            "content_summary": "已完成巡检并关闭整改项",
+            "fencing_token": fencing_token,
+        },
+    )
+    assert replayed_save.status_code == 200, replayed_save.text
+    assert replayed_save.json()["draft_revision"] == 1
+
+    reused_key = client.put(
+        f"/api/ai/deliverables/{deliverable_uuid}/draft",
+        headers={"Idempotency-Key": "editor-draft-save"},
+        json={
+            "row_version": 1,
+            "base_version_uuid": version_uuid,
+            "draft_revision": 0,
+            "content": {**edited_content, "blocks": edited_content["blocks"][:1]},
+            "fencing_token": fencing_token,
+        },
+    )
+    assert reused_key.status_code == 409, reused_key.text
+    assert reused_key.json()["detail"]["code"] == "IDEMPOTENCY_KEY_REUSED"
+
+    committed = client.post(
+        f"/api/ai/deliverables/{deliverable_uuid}/draft/commit",
+        headers={"Idempotency-Key": "editor-draft-commit"},
+        json={
+            "row_version": 1,
+            "base_version_uuid": version_uuid,
+            "draft_revision": 1,
+            "change_summary": "结构化编辑器保存",
+            "creation_reason": "manual_edit",
+            "fencing_token": fencing_token,
+        },
+    )
+    assert committed.status_code == 201, committed.text
+    committed_payload = committed.json()
+    assert committed_payload["version"]["version_no"] == 2
+    assert committed_payload["version"]["content"] == edited_content
+
+    artifact = generation_db.scalar(
+        select(WorkArtifact).where(WorkArtifact.uuid == deliverable_uuid)
+    )
+    assert artifact is not None
+    versions = list(
+        generation_db.scalars(
+            select(WorkArtifactVersion)
+            .where(WorkArtifactVersion.artifact_id == artifact.id)
+            .order_by(WorkArtifactVersion.version)
+        )
+    )
+    assert len(versions) == 2
+    assert versions[0].content_hash != versions[1].content_hash
+    assert artifact.row_version == 2
+
+    stale = client.put(
+        f"/api/ai/deliverables/{deliverable_uuid}/draft",
+        headers={"Idempotency-Key": "editor-draft-stale"},
+        json={
+            "row_version": 1,
+            "base_version_uuid": version_uuid,
+            "draft_revision": 0,
+            "content": edited_content,
+        },
+    )
+    assert stale.status_code == 409
+    assert stale.json()["detail"]["code"] == "DELIVERABLE_DRAFT_CONFLICT"
 
 
 def test_version_idempotency_replay_returns_original_version_after_later_write(

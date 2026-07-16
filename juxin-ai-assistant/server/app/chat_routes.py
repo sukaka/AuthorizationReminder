@@ -1,6 +1,6 @@
+import json
 import hashlib
 import hmac
-import json
 import logging
 from dataclasses import replace
 from time import perf_counter

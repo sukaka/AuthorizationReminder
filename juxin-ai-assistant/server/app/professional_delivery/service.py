@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from time import perf_counter
 from typing import Any
+from urllib.parse import urlsplit
 
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session
@@ -33,6 +34,7 @@ from .models import (
     DeliverableExperienceCandidate,
     DeliverableFact,
     DeliverableIdempotencyRecord,
+    DeliverableMediaAsset,
     FactEvidenceLink,
     QualityRuleDefinition,
     QualityRuleVersion,
@@ -69,6 +71,14 @@ REQUIRED_REVIEW_CATEGORIES = (
     "format_expression",
     "sensitive_security",
 )
+MAX_INLINE_MEDIA_BYTES = 10 * 1024 * 1024
+ALLOWED_MEDIA_MIME_TYPES = frozenset({
+    "image/gif",
+    "image/jpeg",
+    "image/png",
+    "image/webp",
+})
+ALLOWED_MEDIA_URL_PREFIX = "/api/ai/"
 
 
 class ProfessionalDeliveryError(ValueError):
@@ -179,7 +189,128 @@ def _validate_content(content: dict[str, Any]) -> str:
                 422,
             )
         block_ids.add(block_id)
+        if block_type in {"image", "media"}:
+            _validate_media_block(block)
     return schema_version
+
+
+def _validate_media_block(block: dict[str, Any]) -> None:
+    """Keep media references inside the trusted asset boundary.
+
+    The structured document is persisted and later rendered by several
+    consumers, so accepting arbitrary URLs or inline payloads here would
+    create an XSS/SSRF and unbounded-storage surface. Media bytes are owned by
+    the asset service; the document may only reference an asset id or an
+    internal media URL.
+    """
+    asset_id = block.get("asset_id")
+    url = block.get("url")
+    if not isinstance(asset_id, str) and not isinstance(url, str):
+        raise ProfessionalDeliveryError(
+            "INVALID_DELIVERABLE_CONTENT",
+            "图片内容必须引用已上传的素材资产",
+            422,
+        )
+    if isinstance(asset_id, str):
+        asset_id = asset_id.strip()
+        if not asset_id or len(asset_id) > 128 or not re.fullmatch(r"[A-Za-z0-9._:-]+", asset_id):
+            raise ProfessionalDeliveryError(
+                "INVALID_DELIVERABLE_CONTENT",
+                "图片素材资产标识无效",
+                422,
+            )
+    if isinstance(url, str):
+        normalized_url = url.strip()
+        parsed = urlsplit(normalized_url)
+        if (
+            not normalized_url
+            or parsed.scheme
+            or parsed.netloc
+            or not parsed.path.startswith(ALLOWED_MEDIA_URL_PREFIX)
+        ):
+            raise ProfessionalDeliveryError(
+                "INVALID_DELIVERABLE_CONTENT",
+                "图片地址必须来自内部素材服务",
+                422,
+            )
+    mime_type = block.get("mime_type")
+    if mime_type is not None and (
+        not isinstance(mime_type, str) or mime_type.strip().lower() not in ALLOWED_MEDIA_MIME_TYPES
+    ):
+        raise ProfessionalDeliveryError(
+            "INVALID_DELIVERABLE_CONTENT",
+            "图片素材类型不受支持",
+            422,
+        )
+    size_bytes = block.get("size_bytes")
+    if size_bytes is not None and (
+        isinstance(size_bytes, bool)
+        or not isinstance(size_bytes, int)
+        or size_bytes < 0
+        or size_bytes > MAX_INLINE_MEDIA_BYTES
+    ):
+        raise ProfessionalDeliveryError(
+            "INVALID_DELIVERABLE_CONTENT",
+            "图片素材大小超出限制",
+            422,
+        )
+
+
+def _validate_media_references(
+    db: Session,
+    *,
+    deliverable_id: int,
+    content: dict[str, Any],
+) -> None:
+    """Ensure persisted editor media references are owned by this deliverable."""
+    media_blocks = [
+        block
+        for block in content.get("blocks", [])
+        if isinstance(block, dict) and block.get("type") in {"image", "media"}
+    ]
+    asset_ids = {
+        str(block["asset_id"]).strip()
+        for block in media_blocks
+        if isinstance(block.get("asset_id"), str) and block["asset_id"].strip()
+    }
+    if not asset_ids:
+        return
+    assets = db.scalars(
+        select(DeliverableMediaAsset).where(
+            DeliverableMediaAsset.deliverable_id == deliverable_id,
+            DeliverableMediaAsset.uuid.in_(asset_ids),
+            DeliverableMediaAsset.status == "active",
+        )
+    ).all()
+    by_uuid = {asset.uuid: asset for asset in assets}
+    for block in media_blocks:
+        asset_id = block.get("asset_id")
+        if not isinstance(asset_id, str) or not asset_id.strip():
+            continue
+        asset = by_uuid.get(asset_id.strip())
+        if asset is None:
+            raise ProfessionalDeliveryError(
+                "INVALID_DELIVERABLE_CONTENT",
+                "图片素材资产不存在或不属于当前成果",
+                422,
+                {"asset_id": asset_id},
+            )
+        mime_type = block.get("mime_type")
+        if isinstance(mime_type, str) and mime_type.strip().lower() != asset.media_type:
+            raise ProfessionalDeliveryError(
+                "INVALID_DELIVERABLE_CONTENT",
+                "图片素材类型与已上传资产不一致",
+                422,
+                {"asset_id": asset_id},
+            )
+        size_bytes = block.get("size_bytes")
+        if isinstance(size_bytes, int) and size_bytes != asset.size_bytes:
+            raise ProfessionalDeliveryError(
+                "INVALID_DELIVERABLE_CONTENT",
+                "图片素材大小与已上传资产不一致",
+                422,
+                {"asset_id": asset_id},
+            )
 
 
 def _load_published_catalog(
@@ -1114,6 +1245,7 @@ def create_deliverable_version(
         parent_version_uuid=body.parent_version_uuid,
     )
     schema_version = _validate_content(body.content)
+    _validate_media_references(db, deliverable_id=artifact.id, content=body.content)
     summary_snapshot = (
         body.content_summary
         if body.content_summary is not None
@@ -2513,6 +2645,7 @@ def create_deliverable_review(
             "成果当前状态不允许发起质量审查",
             422,
         )
+
     if version.template_version_id is None or version.skill_version_id is None:
         raise ProfessionalDeliveryError(
             "DELIVERABLE_VERSION_NOT_AVAILABLE",

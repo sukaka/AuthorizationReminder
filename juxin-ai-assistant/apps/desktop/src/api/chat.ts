@@ -76,6 +76,8 @@ export type KnowledgeFilePayload = {
   tags?: string[];
   parse_status?: string;
   index_status?: string;
+  external_public?: boolean;
+  external_download_allowed?: boolean;
 };
 
 export type KnowledgeBasePayload = {
@@ -260,6 +262,8 @@ export type ChatPreparePayload = {
   citations: ChatCitation[];
   loop_trace?: LoopTraceStep[];
   task_state?: ChatTaskStatePayload;
+  /** 6.0 统一任务底座 Run ID，用于跳转任务中心 */
+  run_id?: string;
 };
 
 export type ChatGeneratePayload = {
@@ -421,7 +425,7 @@ export async function renameChatSession(sessionUuid: string, title: string, proj
   return readJson(
     await apiFetch(`/api/conversations/${encodeURIComponent(sessionUuid)}/rename${projectQuery(projectUuid)}`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'Idempotency-Key': crypto.randomUUID() },
       body: JSON.stringify({ title }),
     }),
     'CHAT_SESSION_RENAME_FAILED',
@@ -461,7 +465,7 @@ export async function bulkArchiveChatSessions(sessionUuids: string[], projectUui
   const payload = await readJson<{ affected: number }>(
     await apiFetch(`/api/conversations/bulk-archive${projectQuery(projectUuid)}`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'Idempotency-Key': crypto.randomUUID() },
       body: JSON.stringify({ conversation_ids: sessionUuids }),
     }),
     'CHAT_SESSION_BULK_ARCHIVE_FAILED',
@@ -572,11 +576,15 @@ export async function retryLongTask(taskId: string): Promise<LongTaskPayload> {
 export async function previewWebCapture(payload: {
   url: string;
   conversationId?: string;
+  idempotencyKey?: string;
 }): Promise<WebCapturePreviewPayload> {
   return readJson(
     await apiFetch('/api/web/captures/preview', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'Idempotency-Key': payload.idempotencyKey ?? crypto.randomUUID(),
+      },
       body: JSON.stringify({
         url: payload.url,
         conversation_id: payload.conversationId ?? '',
@@ -594,12 +602,16 @@ export async function confirmWebCapture(
     documentType?: string;
     tags?: string[];
     conversationId?: string;
+    idempotencyKey?: string;
   },
 ): Promise<WebCaptureConfirmPayload> {
   return readJson(
     await apiFetch(`/api/web/captures/${encodeURIComponent(captureId)}/confirm`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'Idempotency-Key': payload.idempotencyKey ?? crypto.randomUUID(),
+      },
       body: JSON.stringify({
         save_target: payload.saveTarget,
         category: payload.category ?? '',
@@ -869,6 +881,7 @@ export async function uploadKnowledgeFile(
     await apiFetch('/api/knowledge/files/upload', {
       method: 'POST',
       body: form,
+      headers: { 'Idempotency-Key': crypto.randomUUID() },
     }),
     'KNOWLEDGE_FILE_UPLOAD_FAILED',
   );
@@ -1208,6 +1221,8 @@ export type KnowledgeFileMetadataUpdatePayload = {
   category?: string;
   documentType?: string;
   tags?: string[];
+  externalPublic?: boolean;
+  externalDownloadAllowed?: boolean;
 };
 
 export async function updateKnowledgeFileMetadata(
@@ -1226,6 +1241,12 @@ export async function updateKnowledgeFileMetadata(
   }
   if (payload.tags !== undefined) {
     body.tags = payload.tags;
+  }
+  if (payload.externalPublic !== undefined) {
+    body.external_public = payload.externalPublic;
+  }
+  if (payload.externalDownloadAllowed !== undefined) {
+    body.external_download_allowed = payload.externalDownloadAllowed;
   }
   return readJson(
     await apiFetch(`/api/knowledge/files/${encodeURIComponent(fileUuid)}`, {

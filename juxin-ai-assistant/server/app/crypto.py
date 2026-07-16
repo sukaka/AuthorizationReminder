@@ -52,3 +52,28 @@ class ContentCipher:
             associated_data,
         )
         return json.loads(raw.decode("utf-8"))
+
+    def encrypt_bytes(
+        self,
+        value: bytes,
+        associated_data: bytes,
+    ) -> EncryptedPayload:
+        """Encrypt bounded binary assets with the same authenticated key boundary."""
+        if not isinstance(value, bytes):
+            raise TypeError("加密内容必须是 bytes")
+        nonce = os.urandom(12)
+        return EncryptedPayload(
+            ciphertext=self._cipher.encrypt(nonce, value, associated_data),
+            nonce=nonce,
+        )
+
+    def decrypt_bytes(
+        self,
+        payload: EncryptedPayload,
+        associated_data: bytes,
+    ) -> bytes:
+        return self._cipher.decrypt(
+            payload.nonce,
+            payload.ciphertext,
+            associated_data,
+        )

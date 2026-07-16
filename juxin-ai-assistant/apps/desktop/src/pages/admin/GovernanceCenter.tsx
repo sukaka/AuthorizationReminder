@@ -7,13 +7,15 @@ import { AuditPage } from './AuditPage';
 import { DesktopUpdatesPage } from './DesktopUpdatesPage';
 import { KnowledgeAdminPage } from './KnowledgeAdminPage';
 import { HotQuestionsPage } from './HotQuestionsPage';
+import { ExternalSupportTicketsPage } from './ExternalSupportTicketsPage';
 import { SettingsPage } from './SettingsPage';
 import { SkillsAdminPage } from './SkillsAdminPage';
 import { StatsPage } from './StatsPage';
 import { SuggestionsPage } from './SuggestionsPage';
 import { TaskAdminPage } from './TaskAdminPage';
+import { OpsDashboardPage } from './OpsDashboardPage';
 
-type GovernancePage = 'tasks' | 'assistant-modes' | 'skills' | 'knowledge' | 'hot-questions' | 'suggestions' | 'stats' | 'audit' | 'settings' | 'links' | 'desktop-updates';
+type GovernancePage = 'tasks' | 'assistant-modes' | 'skills' | 'knowledge' | 'hot-questions' | 'external-support-tickets' | 'suggestions' | 'stats' | 'ops' | 'audit' | 'settings' | 'links' | 'desktop-updates';
 
 const ITEMS: Array<{ page: GovernancePage; label: string }> = [
   { page: 'tasks', label: '任务管理' },
@@ -21,8 +23,10 @@ const ITEMS: Array<{ page: GovernancePage; label: string }> = [
   { page: 'skills', label: '能力治理' },
   { page: 'knowledge', label: '知识库' },
   { page: 'hot-questions', label: '热点问题' },
+  { page: 'external-support-tickets', label: '外部工单' },
   { page: 'suggestions', label: '建议审核' },
   { page: 'stats', label: '全局统计' },
+  { page: 'ops', label: '运营看板' },
   { page: 'audit', label: '审计日志' },
   { page: 'settings', label: '系统设置' },
   { page: 'desktop-updates', label: '桌面端更新' },
@@ -48,8 +52,10 @@ export function GovernanceCenter({ session }: { session: SessionPayload }) {
           : page === 'skills' ? <SkillsAdminPage />
         : page === 'knowledge' ? <KnowledgeAdminPage />
           : page === 'hot-questions' ? <HotQuestionsPage />
+          : page === 'external-support-tickets' ? <ExternalSupportTicketsPage />
           : page === 'suggestions' ? <SuggestionsPage admin departments={session.scope.managedDepartments} />
             : page === 'stats' ? <StatsPage />
+              : page === 'ops' ? <OpsDashboardPage />
               : page === 'audit' ? <AuditPage />
                 : page === 'settings' ? <SettingsPage />
                   : page === 'desktop-updates' ? <DesktopUpdatesPage />

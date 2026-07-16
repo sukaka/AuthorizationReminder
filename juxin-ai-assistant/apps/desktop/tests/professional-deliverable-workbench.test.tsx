@@ -219,6 +219,79 @@ it('confirms facts, previews exact source locations, localizes review issues, an
   expect(screen.getByText('text：10 起 → 12 起')).toBeInTheDocument();
 });
 
+it('imports DOCX through the editor entry point and replaces the editable structure', async () => {
+  installWorkbenchHandlers({
+    allowedActions: ['edit', 'create_version', 'export'],
+  });
+  server.use(
+    http.post('/api/ai/deliverables/deliverable-1/editor/import-docx', ({ request }) => {
+      expect(request.headers.get('content-type')).toContain('multipart/form-data');
+      return HttpResponse.json({
+        request_id: 'req-import',
+        deliverable_uuid: 'deliverable-1',
+        source_file_name: '运营月报.docx',
+        content: {
+          schema_version: '1',
+          blocks: [
+            { block_id: 'docx-0', type: 'heading', text: '导入后的月报' },
+            { block_id: 'docx-1', type: 'paragraph', text: 'DOCX 正文已回填。' },
+          ],
+        },
+        warnings: [],
+        media_count: 0,
+      });
+    }),
+  );
+
+  render(<ProfessionalDeliverablesPage initialDeliverableId="deliverable-1" />);
+
+  const input = await screen.findByLabelText('选择 DOCX 文件');
+  await userEvent.upload(input, new File(['docx'], '运营月报.docx', {
+    type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  }));
+
+  expect(await screen.findByText('导入后的月报')).toBeInTheDocument();
+  expect(screen.getByDisplayValue('DOCX 正文已回填。')).toBeInTheDocument();
+  expect(await screen.findByText('已导入 运营月报.docx，内容已回填编辑器。')).toBeInTheDocument();
+});
+
+it('uploads an image through the editor and inserts an auditable media block', async () => {
+  installWorkbenchHandlers({
+    allowedActions: ['edit', 'create_version', 'export'],
+  });
+  const upload = vi.fn();
+  server.use(
+    http.post('/api/ai/deliverables/deliverable-1/editor/media', ({ request }) => {
+      upload({
+        contentType: request.headers.get('content-type'),
+        idempotencyKey: request.headers.get('Idempotency-Key'),
+      });
+      return HttpResponse.json({
+        request_id: 'req-media',
+        deliverable_uuid: 'deliverable-1',
+        asset_uuid: 'asset-1',
+        original_file_name: '封面.png',
+        media_type: 'image/png',
+        size_bytes: 12,
+        download_url: '/api/ai/deliverables/deliverable-1/editor/media/asset-1',
+        replayed: false,
+      });
+    }),
+  );
+
+  render(<ProfessionalDeliverablesPage initialDeliverableId="deliverable-1" />);
+
+  const input = await screen.findByLabelText('选择图片');
+  await userEvent.upload(input, new File(['png-bytes'], '封面.png', { type: 'image/png' }));
+
+  await waitFor(() => expect(upload).toHaveBeenCalledWith(expect.objectContaining({
+    contentType: expect.stringContaining('multipart/form-data'),
+    idempotencyKey: expect.any(String),
+  })));
+  expect(await screen.findByText('封面.png')).toBeInTheDocument();
+  expect(await screen.findByText('已上传 封面.png，已插入正文。')).toBeInTheDocument();
+});
+
 it('renders only authoritative approval actions and requires a reason plus comment to request changes', async () => {
   const requestChanges = vi.fn();
   installWorkbenchHandlers({

@@ -4,7 +4,7 @@ from sqlalchemy import or_, select
 
 from app.models import ExperienceLibrary, FailureCaseLibrary, TemplateLibrary
 
-from ..tool_base import BaseTool, ToolContext, ToolResult
+from ..tool_base import BaseTool, ToolContext, ToolResult, ToolSpec
 
 
 def _tags(value) -> list[str]:
@@ -28,6 +28,37 @@ class LearningLibraryTool(BaseTool):
     name = "learning_library"
     description = "保存和检索经验库、模板库、失败案例库"
     version = "1"
+    data_scopes = frozenset({"user"})
+    _TEMPLATE_SCOPES = frozenset({"personal", "company"})
+
+    def resolve_tool_spec(self, tool_input: dict) -> ToolSpec:
+        action = str(tool_input.get("action") or "list").strip().lower()
+        required_by_action = {
+            "save_experience": ["action", "question", "answer"],
+            "save_template": ["action", "template_name", "template_content"],
+            "save_failure_case": ["action", "wrong_answer", "correction", "prevention_rule"],
+        }
+        return ToolSpec(
+            name=self.name,
+            version=self.version,
+            data_scopes=self.data_scopes,
+            input_schema={
+                "type": "object",
+                "required": required_by_action.get(action, ["action"]),
+                "properties": {
+                    "action": {"type": "string"},
+                    "question": {"type": "string"},
+                    "answer": {"type": "string"},
+                    "template_name": {"type": "string"},
+                    "template_content": {"type": "string"},
+                    "scope": {"type": "string"},
+                    "wrong_answer": {"type": "string"},
+                    "correction": {"type": "string"},
+                    "prevention_rule": {"type": "string"},
+                },
+            },
+            effect=("idempotent_write" if action in required_by_action else "read_only"),
+        )
 
     def run(self, tool_input: dict, context: ToolContext) -> ToolResult:
         if context.db is None:
@@ -76,14 +107,22 @@ class LearningLibraryTool(BaseTool):
         )
 
     def _save_template(self, tool_input: dict, context: ToolContext) -> ToolResult:
+        scope = str(tool_input.get("scope") or "personal").strip().lower()
+        if scope not in self._TEMPLATE_SCOPES:
+            return ToolResult(
+                tool_name=self.name,
+                status="error",
+                error_code="TEMPLATE_SCOPE_INVALID",
+                error_message_safe="模板范围只能是 personal 或 company",
+            )
         record = TemplateLibrary(
             user_id=context.user_id,
             template_name=_text(tool_input.get("template_name"), limit=128),
             task_type=_text(tool_input.get("task_type"), limit=64),
             template_content=_text(tool_input.get("template_content")),
             variables_json=dict(tool_input.get("variables") or {}),
-            scope=_text(tool_input.get("scope") or "personal", limit=24) or "personal",
-            review_status="draft",
+            scope=scope,
+            review_status="pending" if scope == "company" else "draft",
             status="active",
         )
         if not record.template_name or not record.template_content:
@@ -175,6 +214,7 @@ class LearningLibraryTool(BaseTool):
         statement = select(TemplateLibrary).where(
             TemplateLibrary.user_id == context.user_id,
             TemplateLibrary.status == "active",
+            TemplateLibrary.scope.in_(self._TEMPLATE_SCOPES),
         )
         if query:
             statement = statement.where(or_(

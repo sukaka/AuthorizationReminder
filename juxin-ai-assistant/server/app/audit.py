@@ -32,6 +32,8 @@ ALLOWED_METADATA_KEYS: Final[frozenset[str]] = frozenset(
         "risk_confirmation",
         "from_version",
         "to_version",
+        "media_type",
+        "size_bytes",
     }
 )
 SENSITIVE_KEY_FRAGMENTS: Final[frozenset[str]] = frozenset(

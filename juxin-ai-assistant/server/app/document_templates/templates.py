@@ -150,3 +150,117 @@ MEETING_MINUTES_TEMPLATE = MeetingMinutesTemplate(
         "下一步安排",
     ),
 )
+
+INCIDENT_REPORT_TEMPLATE = FixedStructureTemplate(
+    code="incident_report_v1",
+    name="安全事件报告模板",
+    fixed_headings=(
+        "基本信息",
+        "事件概述",
+        "发现与上报",
+        "影响范围",
+        "处置过程",
+        "根因分析",
+        "临时措施",
+        "长期整改",
+        "经验教训",
+        "需人工复核事项",
+    ),
+)
+
+RISK_ASSESSMENT_TEMPLATE = FixedStructureTemplate(
+    code="risk_assessment_v1",
+    name="风险评估模板",
+    fixed_headings=(
+        "评估对象与范围",
+        "资产识别",
+        "威胁与脆弱性",
+        "风险分析",
+        "风险等级",
+        "处置建议",
+        "残余风险",
+        "责任人与时限",
+        "需确认事项",
+        "需人工复核事项",
+    ),
+)
+
+ACCEPTANCE_REPORT_TEMPLATE = FixedStructureTemplate(
+    code="acceptance_report_v1",
+    name="项目验收报告模板",
+    fixed_headings=(
+        "项目基本信息",
+        "验收依据",
+        "建设内容与交付物",
+        "功能验收结果",
+        "性能与安全验收",
+        "遗留问题",
+        "验收结论",
+        "双方签字确认",
+        "附件清单",
+        "需人工复核事项",
+    ),
+)
+
+WEEKLY_REPORT_TEMPLATE = FixedStructureTemplate(
+    code="weekly_report_v1",
+    name="周报模板",
+    fixed_headings=(
+        "本周工作概述",
+        "重点进展",
+        "数据与指标",
+        "问题与风险",
+        "需协调事项",
+        "下周计划",
+        "需人工复核事项",
+    ),
+)
+
+SOP_TEMPLATE = FixedStructureTemplate(
+    code="sop_v1",
+    name="标准作业程序(SOP)模板",
+    fixed_headings=(
+        "目的",
+        "适用范围",
+        "职责",
+        "术语定义",
+        "操作步骤",
+        "输入输出与表单",
+        "异常处理",
+        "相关制度",
+        "版本与修订",
+        "需人工复核事项",
+    ),
+)
+
+TOOL_UPDATE_RECORD_TEMPLATE = FixedStructureTemplate(
+    code="tool_update_record_v1",
+    name="工具更新记录模板",
+    fixed_headings=(
+        "更新摘要",
+        "变更范围",
+        "兼容性说明",
+        "部署与回滚",
+        "验证清单",
+        "已知问题",
+        "影响用户",
+        "责任人",
+        "需人工复核事项",
+    ),
+)
+
+POLICY_INTERPRETATION_TEMPLATE = FixedStructureTemplate(
+    code="policy_interpretation_v1",
+    name="制度解读模板",
+    fixed_headings=(
+        "制度名称与版本",
+        "适用对象",
+        "核心条款摘要",
+        "执行要点",
+        "常见问题",
+        "违规后果",
+        "相关链接",
+        "需确认事项",
+        "需人工复核事项",
+    ),
+)

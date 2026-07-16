@@ -35,14 +35,6 @@ async function mockGovernanceApi(page: Page, session: RoleSession) {
         prompt_binding: { prompt_external_id: 88, version_policy: 'PINNED', pinned_version: 3, status: 'ACTIVE' },
       }], total: 1 } });
     }
-    if (path === '/api/ai/capabilities') {
-      return route.fulfill({ json: { items: [{
-        task_uuid: 'task-governance', task_code: 'sales-summary', task_name: '销售总结',
-        assistant_name: '销售助手', task_status: 'ACTIVE', input_fields: [],
-        output_format: 'Markdown', document_type: '工作总结',
-        prompt_binding_status: 'configured', knowledge_link_count: 0,
-      }] } });
-    }
     if (path === '/api/ai/admin/tasks/task-governance/configuration') {
       configurationSaveCount += 1;
       return route.fulfill({ json: {
@@ -73,9 +65,9 @@ test('admin navigates governance and saves task configuration atomically', async
   await expect(page.getByRole('heading', { name: '任务管理' })).toBeVisible();
   await page.getByRole('button', { name: '刷新任务' }).click();
   await page.getByRole('button', { name: /销售总结/ }).click();
-  await expect(page.getByLabel('内容模板 ID')).toHaveValue('88');
+  await expect(page.getByLabel('Prompt ID')).toHaveValue('88');
   await page.getByRole('button', { name: '保存并验证' }).click();
-  await expect(page.getByText('任务、字段和内容模板绑定已保存。')).toBeVisible();
+  await expect(page.getByText('任务、字段和 Prompt 绑定已保存。')).toBeVisible();
   expect(requests.configurationSaveCount()).toBe(1);
   await expect(page.getByText('服务端模型配置')).toHaveCount(0);
   await expect(page.getByRole('button', { name: '新增用户' })).toHaveCount(0);
@@ -91,29 +83,35 @@ test('admin navigates governance and saves task configuration atomically', async
   await page.setViewportSize({ width: 720, height: 960 });
   await expect(page.getByRole('navigation', { name: '治理导航' })).toBeVisible();
   await page.screenshot({ path: 'output/playwright/governance-admin-narrow.png', fullPage: true });
-  await page.getByRole('button', { name: '返回聊天' }).click();
-  await expect(page.getByRole('heading', { name: /告诉我你想完成什么工作/ })).toBeVisible();
+  await page.getByRole('button', { name: '工作台' }).click();
+  await expect(page.getByText('上午好，治理管理员')).toBeVisible();
 });
 
-test('managed employee does not inherit administrator navigation', async ({ page }) => {
+test('manager is scoped to department data and suggestion entry', async ({ page }) => {
   await mockGovernanceApi(page, { role: 'employee', username: '销售负责人', managedDepartments: ['销售部'] });
   await page.goto('/');
+  await expect(page.getByRole('button', { name: '部门数据' })).toBeVisible();
+  await expect(page.getByRole('button', { name: '提交建议' })).toBeVisible();
   await expect(page.getByRole('button', { name: '治理中心' })).toHaveCount(0);
-  await expect(page.getByRole('button', { name: '部门数据' })).toHaveCount(0);
-  await expect(page.getByRole('button', { name: '提交建议' })).toHaveCount(0);
+  await page.getByRole('button', { name: '部门数据' }).click();
+  await page.getByRole('button', { name: '刷新统计' }).click();
+  await expect(page.getByText('26')).toBeVisible();
 });
 
-test('auditor uses the separate audit system instead of AI governance', async ({ page }) => {
+test('auditor gets only the read-only audit entry', async ({ page }) => {
   await mockGovernanceApi(page, { role: 'auditor', username: '审计员' });
   await page.goto('/');
-  await expect(page.getByRole('button', { name: '审计日志' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '审计日志' })).toBeVisible();
   await expect(page.getByRole('button', { name: '治理中心' })).toHaveCount(0);
+  await page.getByRole('button', { name: '审计日志' }).click();
+  await page.getByRole('button', { name: '刷新日志' }).click();
+  await expect(page.getByText('task.update')).toBeVisible();
 });
 
 test('ordinary employee has no governance or department entry', async ({ page }) => {
   await mockGovernanceApi(page, { role: 'employee', username: '普通员工' });
   await page.goto('/');
-  await expect(page.getByRole('heading', { name: /告诉我你想完成什么工作/ })).toBeVisible();
+  await expect(page.getByText('上午好，普通员工')).toBeVisible();
   await expect(page.getByRole('button', { name: '治理中心' })).toHaveCount(0);
   await expect(page.getByRole('button', { name: '部门数据' })).toHaveCount(0);
   await expect(page.getByRole('button', { name: '审计日志' })).toHaveCount(0);

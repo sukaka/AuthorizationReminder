@@ -4,10 +4,10 @@ from types import SimpleNamespace
 
 from sqlalchemy import select
 
-from app.models import ChatMessageSource
+from app.models import ChatMessage, ChatMessageSource
 from app.reference_matching import source_is_mentioned
 
-from ..tool_base import BaseTool, ToolContext, ToolResult
+from ..tool_base import BaseTool, ToolContext, ToolResult, ToolSpec
 
 
 def _source_to_payload(source) -> dict:
@@ -41,6 +41,37 @@ def _source_from_dict(value: dict) -> SimpleNamespace:
 class ReferenceSourceValidateTool(BaseTool):
     name = "reference_source_validate"
     description = "Keep only reference sources that are actually mentioned in the answer"
+    data_scopes = frozenset({"user"})
+
+    def resolve_tool_spec(self, tool_input: dict) -> ToolSpec:
+        """Treat optional source deletion as a durable, confirmed mutation."""
+        delete_unmentioned = bool(tool_input.get("delete_unmentioned"))
+        return ToolSpec(
+            name=self.name,
+            version=self.version,
+            data_scopes=self.data_scopes,
+            effect="idempotent_write" if delete_unmentioned else "read_only",
+            requires_confirmation=True if delete_unmentioned else False,
+            timeout_seconds=15,
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "answer": {"type": "string"},
+                    "message_id": {"type": "integer"},
+                    "sources": {"type": "array"},
+                    "delete_unmentioned": {"type": "boolean"},
+                },
+            },
+            output_schema={
+                "type": "object",
+                "required": ["sources", "kept_count", "removed_count"],
+                "properties": {
+                    "sources": {"type": "array"},
+                    "kept_count": {"type": "integer"},
+                    "removed_count": {"type": "integer"},
+                },
+            },
+        )
 
     def run(self, tool_input: dict, context: ToolContext) -> ToolResult:
         answer = str(tool_input.get("answer") or "")
@@ -50,7 +81,11 @@ class ReferenceSourceValidateTool(BaseTool):
             sources = list(
                 context.db.scalars(
                     select(ChatMessageSource)
-                    .where(ChatMessageSource.message_id == int(message_id))
+                    .join(ChatMessage, ChatMessage.id == ChatMessageSource.message_id)
+                    .where(
+                        ChatMessageSource.message_id == int(message_id),
+                        ChatMessage.sso_user_id == context.user_id,
+                    )
                     .order_by(ChatMessageSource.id.asc())
                 )
             )

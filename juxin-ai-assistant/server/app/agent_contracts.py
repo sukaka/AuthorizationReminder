@@ -9,10 +9,20 @@ class _PublicContract(BaseModel):
 
 
 class AgentRunStatus(str, Enum):
+    """Public run lifecycle aligned with 6.0 master plan.
+
+    Product UI calls these "任务"; API/DB use run terminology.
+    """
+
+    CREATED = "created"
     QUEUED = "queued"
     RUNNING = "running"
     WAITING_CONFIRMATION = "waiting_confirmation"
+    PAUSED = "paused"
+    RETRYING = "retrying"
     SUCCEEDED = "succeeded"
+    # Plan synonym kept for API consumers that expect completed.
+    COMPLETED = "completed"
     FAILED = "failed"
     CANCELLED = "cancelled"
 
@@ -66,6 +76,8 @@ class AgentQualityContract(_PublicContract):
 
 class AgentRunContract(_PublicContract):
     run_id: str = Field(min_length=1, max_length=64)
+    title: str = Field(default="AI 任务", max_length=255)
+    run_type: str = Field(default="chat", max_length=48)
     status: AgentRunStatus
     stage: AgentRunStage
     progress: int = Field(default=0, ge=0, le=100)

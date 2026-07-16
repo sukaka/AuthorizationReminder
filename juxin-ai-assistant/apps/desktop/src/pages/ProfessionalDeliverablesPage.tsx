@@ -4,25 +4,32 @@ import { listProfessionalApprovalFlows, type ProfessionalApprovalFlow } from '..
 import { ApiError } from '../api/client';
 import {
   approveProfessionalDeliverable,
+  acquireProfessionalDeliverableLease,
   archiveProfessionalDeliverable,
   attachProfessionalDeliverableEvidence,
   createProfessionalDeliverableComment,
   createProfessionalDeliverableVersion,
+  commitProfessionalDeliverableDraft,
   createProfessionalExport,
   deliverProfessionalDeliverable,
   downloadProfessionalExport,
   extractProfessionalDeliverableFacts,
   getProfessionalDeliverable,
+  getProfessionalDeliverableDraft,
+  heartbeatProfessionalDeliverableLease,
+  importProfessionalDeliverableDocx,
   getProfessionalDeliverableDiff,
   getProfessionalDeliverableFacts,
   listProfessionalDeliverableComments,
   listProfessionalDeliverableReviews,
   listProfessionalDeliverables,
   listProfessionalDeliverableVersions,
+  previewProfessionalDeliverableMedia,
   replyProfessionalDeliverableComment,
   requestProfessionalDeliverableChanges,
   refreshProfessionalDeliverableEvidence,
   resolveProfessionalDeliverableComment,
+  saveProfessionalDeliverableDraft,
   searchProfessionalDeliverableEvidence,
   startProfessionalDeliverableReview,
   submitProfessionalDeliverable,
@@ -35,6 +42,8 @@ import {
   type DeliverableContent,
   type DeliverableDeliveryMutation,
   type DeliverableDetail,
+  type DeliverableDocxImport,
+  type DeliverableDraft,
   type DeliverableEvidenceSearchItem,
   type DeliverableExperienceCandidate,
   type DeliverableExport,
@@ -44,7 +53,17 @@ import {
   type DeliverableVersionDiff,
   type DeliverableVersionHistoryItem,
   type ReviewIssue,
+  uploadProfessionalDeliverableMedia,
 } from '../api/deliverables';
+import { DocumentBlockEditor } from '../components/DocumentBlockEditor';
+import {
+  blocksToPlainText,
+  appendMedia,
+  editableBlocks,
+  removeDocumentBlock,
+  replaceEditableText,
+  toEditorDocument,
+} from '../components/documentBlockAdapter';
 
 import './professional-delivery.css';
 
@@ -53,6 +72,60 @@ type ProfessionalDeliverablesPageProps = {
 };
 
 type RightPanel = 'facts' | 'review' | 'comments' | 'versions' | 'activity';
+type AutosaveState = 'idle' | 'pending' | 'saving' | 'saved' | 'conflict' | 'error';
+
+type MediaPreviewState = {
+  blockId: string;
+  alt: string;
+  sourceUrl: string;
+};
+
+type OfficeImportReport = NonNullable<DeliverableDocxImport['import_report']>;
+type OfficeExportReport = NonNullable<DeliverableExport['export_report']>;
+
+function officeReportStatusLabel(status: string): string {
+  if (status === 'supported') return '已完整识别';
+  if (status === 'degraded') return '存在降级内容';
+  if (status === 'rejected') return '包含拒绝内容';
+  return status;
+}
+
+function officeReportItemLabel(item: Record<string, unknown>): string {
+  const code = typeof item.code === 'string' ? item.code : 'unknown_feature';
+  const message = typeof item.message === 'string' ? item.message : '需要人工确认';
+  return `${code}：${message}`;
+}
+
+function OfficeReportPanel({
+  label,
+  report,
+}: {
+  label: string;
+  report: OfficeImportReport | OfficeExportReport;
+}) {
+  const degraded = report.degraded_features ?? [];
+  const rejected = report.rejected_features ?? [];
+  return (
+    <details className="professional-office-report">
+      <summary>{label}：{officeReportStatusLabel(report.status)}</summary>
+      <div className="professional-office-report-body">
+        <span>已支持 {report.supported_features.length} 项</span>
+        {degraded.length ? (
+          <div>
+            <strong>降级</strong>
+            <ul>{degraded.map((item, index) => <li key={`degraded-${index}`}>{officeReportItemLabel(item)}</li>)}</ul>
+          </div>
+        ) : null}
+        {rejected.length ? (
+          <div>
+            <strong>拒绝</strong>
+            <ul>{rejected.map((item, index) => <li key={`rejected-${index}`}>{officeReportItemLabel(item)}</li>)}</ul>
+          </div>
+        ) : null}
+      </div>
+    </details>
+  );
+}
 
 const statusLabels: Record<string, string> = {
   draft: '草稿',
@@ -90,37 +163,6 @@ function readableError(error: unknown, fallback: string): string {
     return payload.detail.message;
   }
   return fallback;
-}
-
-function editableBlocks(content: DeliverableContent) {
-  return content.blocks.filter((block) => block.type !== 'heading' && typeof block.text === 'string');
-}
-
-function contentToText(content: DeliverableContent): string {
-  return editableBlocks(content)
-    .map((block) => String(block.text ?? '').trim())
-    .filter(Boolean)
-    .join('\n\n');
-}
-
-function textToContent(text: string, current: DeliverableContent): DeliverableContent {
-  const parts = text.split(/\n{2,}/).map((part) => part.trim()).filter(Boolean);
-  let partIndex = 0;
-  const blocks = current.blocks.flatMap((block) => {
-    if (block.type === 'heading' || typeof block.text !== 'string') return [block];
-    const nextText = parts[partIndex];
-    partIndex += 1;
-    return nextText === undefined ? [] : [{ ...block, text: nextText }];
-  });
-  while (partIndex < parts.length) {
-    blocks.push({
-      block_id: `manual-block-${Date.now()}-${partIndex + 1}`,
-      type: 'paragraph',
-      text: parts[partIndex],
-    });
-    partIndex += 1;
-  }
-  return { ...current, schema_version: '1', blocks };
 }
 
 function updateVersionList(
@@ -170,10 +212,18 @@ function displayValue(value: unknown): string {
 
 export function ProfessionalDeliverablesPage({ initialDeliverableId }: ProfessionalDeliverablesPageProps) {
   const editorRef = useRef<HTMLTextAreaElement>(null);
+  const docxInputRef = useRef<HTMLInputElement>(null);
+  const mediaInputRef = useRef<HTMLInputElement>(null);
   const [deliverables, setDeliverables] = useState<DeliverableSummary[]>([]);
   const [selectedId, setSelectedId] = useState(initialDeliverableId ?? '');
   const [detail, setDetail] = useState<DeliverableDetail | null>(null);
+  const [editorContent, setEditorContent] = useState<DeliverableContent | null>(null);
   const [editorText, setEditorText] = useState('');
+  const [draftRevision, setDraftRevision] = useState<number | null>(null);
+  const [fencingToken, setFencingToken] = useState<number | null>(null);
+  const [autosaveState, setAutosaveState] = useState<AutosaveState>('idle');
+  const [autosaveRetry, setAutosaveRetry] = useState(0);
+  const autosaveSignatureRef = useRef('');
   const [versions, setVersions] = useState<DeliverableVersionHistoryItem[]>([]);
   const [facts, setFacts] = useState<DeliverableFact[]>([]);
   const [reviews, setReviews] = useState<DeliverableReview[]>([]);
@@ -198,9 +248,13 @@ export function ProfessionalDeliverablesPage({ initialDeliverableId }: Professio
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [exporting, setExporting] = useState(false);
+  const [importingDocx, setImportingDocx] = useState(false);
+  const [uploadingMedia, setUploadingMedia] = useState(false);
   const [busyAction, setBusyAction] = useState('');
   const [revisionMode, setRevisionMode] = useState(false);
   const [exportRecord, setExportRecord] = useState<DeliverableExport | null>(null);
+  const [importReport, setImportReport] = useState<OfficeImportReport | null>(null);
+  const [exportReport, setExportReport] = useState<OfficeExportReport | null>(null);
   const [deliveryRecord, setDeliveryRecord] = useState<DeliverableDeliveryMutation['delivery'] | null>(null);
   const [titleDraft, setTitleDraft] = useState('');
   const [experienceType, setExperienceType] = useState<'structure' | 'rule' | 'template'>('structure');
@@ -210,6 +264,11 @@ export function ProfessionalDeliverablesPage({ initialDeliverableId }: Professio
   const [deliveryNote, setDeliveryNote] = useState('');
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
+  const [mediaPreview, setMediaPreview] = useState<MediaPreviewState | null>(null);
+
+  useEffect(() => () => {
+    if (mediaPreview?.sourceUrl.startsWith('blob:')) URL.revokeObjectURL(mediaPreview.sourceUrl);
+  }, [mediaPreview]);
 
   useEffect(() => {
     let active = true;
@@ -234,6 +293,12 @@ export function ProfessionalDeliverablesPage({ initialDeliverableId }: Professio
   useEffect(() => {
     if (!selectedId) {
       setDetail(null);
+      setEditorContent(null);
+      setDraftRevision(null);
+      setFencingToken(null);
+      setAutosaveState('idle');
+      setAutosaveRetry(0);
+      autosaveSignatureRef.current = '';
       return;
     }
     let active = true;
@@ -245,14 +310,49 @@ export function ProfessionalDeliverablesPage({ initialDeliverableId }: Professio
     setExportRecord(null);
     setDeliveryRecord(null);
     setExperienceCandidate(null);
+    setMediaPreview(null);
+    setDraftRevision(null);
+    setFencingToken(null);
+    setAutosaveState('idle');
+    setAutosaveRetry(0);
+    autosaveSignatureRef.current = '';
     refreshProfessionalDeliverableEvidence(selectedId)
       .then(() => getProfessionalDeliverable(selectedId))
       .then(async (nextDetail) => {
         if (!active) return;
         setDetail(nextDetail);
         setTitleDraft(nextDetail.title);
-        setEditorText(contentToText(nextDetail.current_version.content));
-        setCommentBlockId(editableBlocks(nextDetail.current_version.content)[0]?.block_id ?? 'document');
+        let draft: DeliverableDraft | null = null;
+        try {
+          draft = await getProfessionalDeliverableDraft(selectedId);
+        } catch {
+          // Older deployments do not expose the draft endpoint yet; use the
+          // immutable version endpoint until the migration is complete.
+        }
+        if (!active) return;
+        const nextContent = toEditorDocument(draft?.content ?? nextDetail.current_version.content);
+        setEditorContent(nextContent);
+        setEditorText(blocksToPlainText(nextContent));
+        autosaveSignatureRef.current = JSON.stringify({
+          rowVersion: nextDetail.row_version,
+          baseVersion: nextDetail.current_version.version_uuid,
+          content: nextContent,
+        });
+        setDraftRevision(draft?.draft_revision ?? null);
+        setAutosaveState(draft && draft.draft_revision > 0 ? 'saved' : 'idle');
+        setCommentBlockId(editableBlocks(nextContent)[0]?.block_id ?? 'document');
+        if (draft && nextDetail.allowed_actions.includes('edit')) {
+          try {
+            const lease = await acquireProfessionalDeliverableLease(selectedId, {
+              row_version: draft.row_version,
+              base_version_uuid: draft.base_version_uuid,
+            });
+            if (active) setFencingToken(lease.fencing_token);
+          } catch {
+            // Editing remains available in read-compatible mode; a save will
+            // surface the stable lease conflict if another user owns it.
+          }
+        }
         const [versionResult, factResult, reviewResult, commentResult] = await Promise.allSettled([
           listProfessionalDeliverableVersions(selectedId),
           getProfessionalDeliverableFacts(selectedId, nextDetail.current_version.version_uuid),
@@ -318,12 +418,84 @@ export function ProfessionalDeliverablesPage({ initialDeliverableId }: Professio
     return matchesStatus && matchesScope && matchesType && (!pendingOnly || actionable) && matchesSearch;
   }), [deliverables, pendingOnly, scopeFilter, search, statusFilter, typeFilter]);
 
-  const dirty = detail ? editorText !== contentToText(detail.current_version.content) : false;
+  const dirty = detail && editorContent
+    ? JSON.stringify(editorContent) !== JSON.stringify(toEditorDocument(detail.current_version.content))
+    : false;
   const hasAction = (action: string) => detail?.allowed_actions.includes(action) ?? false;
   const canEdit = hasAction('edit') || revisionMode;
   const currentFlow = approvalFlows.find((flow) => (
     flow.current_version.version_uuid === selectedFlowVersionUuid
   )) ?? approvalFlows[0] ?? null;
+
+  const autosaveLabel = autosaveState === 'pending'
+    ? '等待自动保存'
+    : autosaveState === 'saving'
+      ? '正在保存草稿…'
+      : autosaveState === 'saved'
+        ? '草稿已自动保存'
+        : autosaveState === 'conflict'
+          ? '草稿冲突，需刷新'
+          : autosaveState === 'error'
+            ? '自动保存失败'
+            : dirty
+              ? '存在未保存修改'
+              : `内容哈希 ${detail?.current_version.content_hash.slice(0, 10) ?? ''}…`;
+
+  useEffect(() => {
+    if (!detail || fencingToken === null || !canEdit) return undefined;
+    let active = true;
+    const timer = window.setInterval(() => {
+      void heartbeatProfessionalDeliverableLease(detail.deliverable_uuid, fencingToken)
+        .catch((nextError: unknown) => {
+          if (!active) return;
+          setFencingToken(null);
+          if (nextError instanceof ApiError && nextError.status === 409) {
+            setError('编辑租约已过期，请重新进入编辑后再保存。');
+          }
+        });
+    }, 60_000);
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+    };
+  }, [canEdit, detail, fencingToken]);
+
+  useEffect(() => {
+    if (!detail || !editorContent || draftRevision === null || !dirty || !canEdit) return undefined;
+    const signature = JSON.stringify({
+      rowVersion: detail.row_version,
+      baseVersion: detail.current_version.version_uuid,
+      content: editorContent,
+    });
+    if (autosaveSignatureRef.current === signature) return undefined;
+    setAutosaveState('pending');
+    const timer = window.setTimeout(() => {
+      setAutosaveState('saving');
+      void saveProfessionalDeliverableDraft(detail.deliverable_uuid, {
+        row_version: detail.row_version,
+        base_version_uuid: detail.current_version.version_uuid,
+        draft_revision: draftRevision,
+        content: editorContent,
+        content_summary: blocksToPlainText(editorContent).slice(0, 4000),
+        fencing_token: fencingToken ?? undefined,
+      })
+        .then((savedDraft) => {
+          autosaveSignatureRef.current = signature;
+          setDraftRevision(savedDraft.draft_revision);
+          setAutosaveState('saved');
+        })
+        .catch((nextError: unknown) => {
+          if (nextError instanceof ApiError && nextError.status === 409) {
+            setAutosaveState('conflict');
+            setError('草稿保存冲突，请刷新后恢复最新内容。');
+            return;
+          }
+          setAutosaveState('error');
+          setError(readableError(nextError, '草稿自动保存失败，可重试。'));
+        });
+    }, 900);
+    return () => window.clearTimeout(timer);
+  }, [autosaveRetry, canEdit, detail, draftRevision, dirty, editorContent, fencingToken]);
 
   const exactTarget = () => {
     if (!detail) throw new Error('尚未选择成果');
@@ -332,6 +504,115 @@ export function ProfessionalDeliverablesPage({ initialDeliverableId }: Professio
       version_uuid: detail.current_version.version_uuid,
       content_hash: detail.current_version.content_hash,
     };
+  };
+
+  const importDocx = async (file: File) => {
+    if (!detail || !canEdit || importingDocx) return;
+    setImportingDocx(true);
+    setError('');
+    setMessage('');
+    try {
+      const payload = await importProfessionalDeliverableDocx(detail.deliverable_uuid, file);
+      const nextContent = toEditorDocument(payload.content);
+      setEditorContent(nextContent);
+      setEditorText(blocksToPlainText(nextContent));
+      setImportReport(payload.import_report ?? {
+        status: payload.warnings.length ? 'degraded' : 'supported',
+        supported_features: [],
+        degraded_features: payload.warnings.map((warning) => ({ code: warning, message: warning })),
+        rejected_features: [],
+      });
+      setExportReport(null);
+      autosaveSignatureRef.current = '';
+      setMessage(payload.warnings.length
+        ? `已导入 ${payload.source_file_name}，媒体处理有 ${payload.warnings.length} 项警告，请检查。`
+        : `已导入 ${payload.source_file_name}，内容已回填编辑器。`);
+    } catch (nextError: unknown) {
+      setError(readableError(nextError, 'DOCX 导入失败'));
+    } finally {
+      setImportingDocx(false);
+    }
+  };
+
+  const uploadMedia = async (file: File) => {
+    if (!detail || !canEdit || uploadingMedia) return;
+    setUploadingMedia(true);
+    setError('');
+    setMessage('');
+    try {
+      const asset = await uploadProfessionalDeliverableMedia(detail.deliverable_uuid, file);
+      const nextContent = appendMedia(editorContent ?? detail.current_version.content, {
+        asset_id: asset.asset_uuid,
+        url: asset.download_url,
+        alt: asset.original_file_name,
+        mime_type: asset.media_type,
+        size_bytes: asset.size_bytes,
+      });
+      setEditorContent(nextContent);
+      setEditorText(blocksToPlainText(nextContent));
+      autosaveSignatureRef.current = '';
+      setMessage(`${asset.replayed ? '已恢复' : '已上传'} ${asset.original_file_name}，已插入正文。`);
+    } catch (nextError: unknown) {
+      setError(readableError(nextError, '图片上传失败'));
+    } finally {
+      setUploadingMedia(false);
+    }
+  };
+
+  const mediaAssetId = (block: { [key: string]: unknown }): string => {
+    const value = block.asset_id ?? block.asset_uuid;
+    return typeof value === 'string' ? value : '';
+  };
+
+  const previewMedia = async (block: { [key: string]: unknown; block_id: string }) => {
+    if (!detail) return;
+    const assetUuid = mediaAssetId(block);
+    const fallbackUrl = typeof block.url === 'string' ? block.url : '';
+    setBusyAction(`preview-media:${block.block_id}`);
+    setError('');
+    try {
+      const response = assetUuid
+        ? await previewProfessionalDeliverableMedia(detail.deliverable_uuid, assetUuid)
+        : null;
+      const blob = response ? await response.blob() : null;
+      const objectUrl = blob && typeof URL.createObjectURL === 'function'
+        ? URL.createObjectURL(blob)
+        : fallbackUrl;
+      if (!objectUrl) throw new Error('图片暂无可预览内容');
+      setMediaPreview({
+        blockId: block.block_id,
+        alt: String(block.alt ?? block.url ?? '图片'),
+        sourceUrl: objectUrl,
+      });
+    } catch (nextError: unknown) {
+      setError(readableError(nextError, '图片预览失败'));
+    } finally {
+      setBusyAction('');
+    }
+  };
+
+  const deleteMedia = async (block: { [key: string]: unknown; block_id: string }) => {
+    if (!detail) return;
+    setBusyAction(`delete-media:${block.block_id}`);
+    setError('');
+    try {
+      const nextContent = removeDocumentBlock(
+        editorContent ?? detail.current_version.content,
+        block.block_id,
+      );
+      setEditorContent(nextContent);
+      setEditorText(blocksToPlainText(nextContent));
+      autosaveSignatureRef.current = '';
+      setMediaPreview((current) => current?.blockId === block.block_id ? null : current);
+      // Keep the asset while immutable versions may still reference it.  The
+      // server-side orphan cleanup job removes unreferenced assets after the
+      // retention window; deleting here would break historical exports.
+      setMessage(`${String(block.alt ?? '图片')} 已从当前草稿移除，保存后由素材清理任务回收。`);
+    } catch (nextError: unknown) {
+      setError(readableError(nextError, '图片删除失败'));
+    } finally {
+      setBusyAction('');
+    }
   };
 
   const updateListLifecycle = (lifecycleStatus: string, rowVersion: number) => {
@@ -359,9 +640,41 @@ export function ProfessionalDeliverablesPage({ initialDeliverableId }: Professio
     try {
       const refreshed = await getProfessionalDeliverable(detail.deliverable_uuid);
       if (refreshed.row_version < minimumRowVersion) return;
+      let refreshedDraft: DeliverableDraft | null = null;
+      try {
+        // Re-read the mutable draft as well: the server rebases it when the
+        // immutable base version changes, so clearing it locally would leave
+        // the editor in a non-autosaving mode after a conflict.
+        refreshedDraft = await getProfessionalDeliverableDraft(refreshed.deliverable_uuid);
+      } catch {
+        // Keep the immutable version as a safe fallback for older deployments.
+      }
       setDetail(refreshed);
       setTitleDraft(refreshed.title);
-      setEditorText(contentToText(refreshed.current_version.content));
+      const refreshedContent = toEditorDocument(refreshedDraft?.content ?? refreshed.current_version.content);
+      setEditorContent(refreshedContent);
+      setEditorText(blocksToPlainText(refreshedContent));
+      setDraftRevision(refreshedDraft?.draft_revision ?? null);
+      setFencingToken(null);
+      setAutosaveState(refreshedDraft && refreshedDraft.draft_revision > 0 ? 'saved' : 'idle');
+      setAutosaveRetry(0);
+      autosaveSignatureRef.current = JSON.stringify({
+        rowVersion: refreshed.row_version,
+        baseVersion: refreshed.current_version.version_uuid,
+        content: refreshedContent,
+      });
+      if (refreshedDraft && refreshed.allowed_actions.includes('edit')) {
+        try {
+          const lease = await acquireProfessionalDeliverableLease(refreshed.deliverable_uuid, {
+            row_version: refreshedDraft.row_version,
+            base_version_uuid: refreshedDraft.base_version_uuid,
+          });
+          setFencingToken(lease.fencing_token);
+        } catch {
+          // The next save surfaces a stable lease conflict if another user
+          // owns the editor; the content itself remains recoverable.
+        }
+      }
       setDeliverables((current) => current.map((item) => item.deliverable_uuid === refreshed.deliverable_uuid
         ? { ...item, ...refreshed }
         : item));
@@ -376,14 +689,36 @@ export function ProfessionalDeliverablesPage({ initialDeliverableId }: Professio
     setError('');
     setMessage('');
     try {
-      const payload = await createProfessionalDeliverableVersion(detail.deliverable_uuid, {
-        row_version: detail.row_version,
-        parent_version_uuid: detail.current_version.version_uuid,
-        content: textToContent(editorText, detail.current_version.content),
-        content_summary: editorText.slice(0, 4000),
-        change_summary: revisionMode ? '基于已定稿版本修订' : '人工修订',
-        creation_reason: revisionMode ? 'revision' : 'manual_edit',
-      });
+      const nextContent = editorContent ?? replaceEditableText(editorText, detail.current_version.content);
+      const changeSummary = revisionMode ? '基于已定稿版本修订' : '人工修订';
+      let payload;
+      if (draftRevision !== null) {
+        const savedDraft = await saveProfessionalDeliverableDraft(detail.deliverable_uuid, {
+          row_version: detail.row_version,
+          base_version_uuid: detail.current_version.version_uuid,
+          draft_revision: draftRevision,
+          content: nextContent,
+          content_summary: blocksToPlainText(nextContent).slice(0, 4000),
+          fencing_token: fencingToken ?? undefined,
+        });
+        payload = await commitProfessionalDeliverableDraft(detail.deliverable_uuid, {
+          row_version: detail.row_version,
+          base_version_uuid: detail.current_version.version_uuid,
+          draft_revision: savedDraft.draft_revision,
+          change_summary: changeSummary,
+          creation_reason: revisionMode ? 'revision' : 'manual_edit',
+          fencing_token: fencingToken ?? undefined,
+        });
+      } else {
+        payload = await createProfessionalDeliverableVersion(detail.deliverable_uuid, {
+          row_version: detail.row_version,
+          parent_version_uuid: detail.current_version.version_uuid,
+          content: nextContent,
+          content_summary: editorText.slice(0, 4000),
+          change_summary: changeSummary,
+          creation_reason: revisionMode ? 'revision' : 'manual_edit',
+        });
+      }
       const updatedDetail: DeliverableDetail = {
         ...detail,
         row_version: detail.row_version + 1,
@@ -393,7 +728,13 @@ export function ProfessionalDeliverablesPage({ initialDeliverableId }: Professio
         updated_at: payload.version.created_at,
       };
       setDetail(updatedDetail);
-      setEditorText(contentToText(payload.version.content));
+      const savedContent = toEditorDocument(payload.version.content);
+      setEditorContent(savedContent);
+      setEditorText(blocksToPlainText(savedContent));
+      setDraftRevision(draftRevision === null ? null : 0);
+      setFencingToken(null);
+      setAutosaveState('saved');
+      autosaveSignatureRef.current = '';
       setVersions((current) => updateVersionList(current, payload.version));
       setFacts([]);
       setReviews([]);
@@ -464,6 +805,7 @@ export function ProfessionalDeliverablesPage({ initialDeliverableId }: Professio
         },
       );
       setExportRecord(record);
+      setExportReport(record.export_report ?? null);
       await downloadProfessionalExport(record);
       setMessage(`已导出 ${record.file_name}`);
       return record;
@@ -903,6 +1245,8 @@ export function ProfessionalDeliverablesPage({ initialDeliverableId }: Professio
 
       {error ? <div className="professional-alert is-error" role="alert">{error}</div> : null}
       {message ? <div className="professional-alert is-success" role="status">{message}</div> : null}
+      {importReport ? <OfficeReportPanel label="DOCX 导入报告" report={importReport} /> : null}
+      {exportReport ? <OfficeReportPanel label="Word 导出报告" report={exportReport} /> : null}
 
       <div className="professional-delivery-layout">
         <aside className="professional-deliverable-list-panel">
@@ -955,8 +1299,67 @@ export function ProfessionalDeliverablesPage({ initialDeliverableId }: Professio
               <div className="professional-editor-toolbar">
                 <div>
                   <span>结构化正文</span>
-                  <strong>{dirty ? '存在未保存修改' : `内容哈希 ${detail.current_version.content_hash.slice(0, 10)}…`}</strong>
+                  <strong aria-live="polite" data-autosave-state={autosaveState}>{autosaveLabel}</strong>
+                  {autosaveState === 'error' ? (
+                    <button
+                      className="professional-quiet-button"
+                      onClick={() => {
+                        setError('');
+                        setAutosaveRetry((value) => value + 1);
+                      }}
+                      type="button"
+                    >立即重试</button>
+                  ) : null}
+                  {autosaveState === 'conflict' ? (
+                    <button
+                      className="professional-quiet-button"
+                      onClick={() => void refreshAuthoritativeDetail(detail.row_version)}
+                      type="button"
+                    >刷新恢复</button>
+                  ) : null}
                 </div>
+                {canEdit ? (
+                  <div className="professional-editor-import">
+                    <input
+                      ref={docxInputRef}
+                      accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                      aria-label="选择 DOCX 文件"
+                      hidden
+                      onChange={(event) => {
+                        const file = event.target.files?.[0];
+                        event.target.value = '';
+                        if (file) void importDocx(file);
+                      }}
+                      type="file"
+                    />
+                    <button
+                      disabled={importingDocx}
+                      onClick={() => docxInputRef.current?.click()}
+                      type="button"
+                    >
+                      {importingDocx ? '导入中…' : '导入 DOCX'}
+                    </button>
+                    <input
+                      ref={mediaInputRef}
+                      accept="image/png,image/jpeg,image/gif,image/webp"
+                      aria-label="选择图片"
+                      hidden
+                      onChange={(event) => {
+                        const file = event.target.files?.[0];
+                        event.target.value = '';
+                        if (file) void uploadMedia(file);
+                      }}
+                      type="file"
+                    />
+                    <button
+                      disabled={uploadingMedia}
+                      onClick={() => mediaInputRef.current?.click()}
+                      type="button"
+                    >
+                      {uploadingMedia ? '上传中…' : '上传图片'}
+                    </button>
+                  </div>
+                ) : null}
                 <span>{revisionMode ? '修订模式' : detail.current_version.change_summary}</span>
               </div>
               {detail.current_version.content.blocks.some((block) => block.type === 'heading') ? (
@@ -966,17 +1369,36 @@ export function ProfessionalDeliverablesPage({ initialDeliverableId }: Professio
                   ))}
                 </nav>
               ) : null}
-              <label className="professional-editor-field">
-                <span>成果正文</span>
-                <textarea
-                  aria-label="成果正文"
-                  disabled={!canEdit}
-                  onChange={(event) => setEditorText(event.target.value)}
-                  ref={editorRef}
-                  spellCheck={false}
-                  value={editorText}
-                />
-              </label>
+              <DocumentBlockEditor
+                content={editorContent ?? detail.current_version.content}
+                disabled={!canEdit}
+                onDeleteMedia={(block) => void deleteMedia(block)}
+                onChange={(nextContent) => {
+                  setEditorContent(nextContent);
+                  setEditorText(blocksToPlainText(nextContent));
+                  setAutosaveState('pending');
+                }}
+                onPreviewMedia={(block) => void previewMedia(block)}
+                textareaRef={editorRef}
+              />
+              {mediaPreview ? (
+                <div aria-label="图片预览" className="professional-media-preview" role="dialog">
+                  <div className="professional-media-preview-card">
+                    <div className="professional-media-preview-heading">
+                      <strong>{mediaPreview.alt}</strong>
+                      <button
+                        aria-label="关闭图片预览"
+                        className="professional-quiet-button"
+                        onClick={() => setMediaPreview(null)}
+                        type="button"
+                      >
+                        关闭
+                      </button>
+                    </div>
+                    <img alt={mediaPreview.alt} src={mediaPreview.sourceUrl} />
+                  </div>
+                </div>
+              ) : null}
               <footer className="professional-editor-footer">
                 <span>{editorText.length.toLocaleString('zh-CN')} 字符</span>
                 <span>每次保存都会创建不可变版本，不会覆盖历史内容。</span>

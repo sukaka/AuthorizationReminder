@@ -28,6 +28,11 @@ def _has_column(table_name: str, column_name: str) -> bool:
     return any(column["name"] == column_name for column in inspector.get_columns(table_name))
 
 
+def _has_index(table_name: str, index_name: str) -> bool:
+    inspector = sa.inspect(op.get_bind())
+    return any(index.get("name") == index_name for index in inspector.get_indexes(table_name))
+
+
 def _timestamps() -> list[sa.Column]:
     return [
         sa.Column(
@@ -174,6 +179,8 @@ def downgrade() -> None:
         if _has_table(table_name):
             op.drop_table(table_name)
     if _has_table("ai_user_memories"):
+        if _has_index("ai_user_memories", "ix_ai_user_memories_priority"):
+            op.drop_index("ix_ai_user_memories_priority", table_name="ai_user_memories")
         with op.batch_alter_table("ai_user_memories") as batch_op:
             for column_name in ["tags_json", "priority", "title"]:
                 if _has_column("ai_user_memories", column_name):

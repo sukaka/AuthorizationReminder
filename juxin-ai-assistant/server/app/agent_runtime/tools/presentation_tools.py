@@ -5,7 +5,7 @@ from html import escape
 from io import BytesIO
 from zipfile import ZIP_DEFLATED, ZipFile
 
-from ..tool_base import BaseTool, ToolContext, ToolResult
+from ..tool_base import BaseTool, ToolContext, ToolResult, ToolSpec
 
 
 @dataclass(frozen=True)
@@ -188,6 +188,33 @@ class PptxExportTool(BaseTool):
     description = "Generate a PowerPoint presentation from structured slide outline"
     version = "1"
 
+    @property
+    def tool_spec(self) -> ToolSpec:
+        return ToolSpec(
+            name=self.name,
+            version=self.version,
+            data_scopes=frozenset({"user"}),
+            effect="non_idempotent_write",
+            input_schema={
+                "type": "object",
+                "required": ["slides"],
+                "properties": {
+                    "title": {"type": "string"},
+                    "slides": {"type": "array"},
+                },
+            },
+            output_schema={
+                "type": "object",
+                "required": ["file_id", "file_name", "file_path", "slide_count"],
+                "properties": {
+                    "file_id": {"type": "string"},
+                    "file_name": {"type": "string"},
+                    "file_path": {"type": "string"},
+                    "slide_count": {"type": "integer"},
+                },
+            },
+        )
+
     def run(self, tool_input: dict, context: ToolContext) -> ToolResult:
         file_manager = context.resources.get("file_manager")
         if file_manager is None:
@@ -197,10 +224,18 @@ class PptxExportTool(BaseTool):
                 error_code="TOOL_EXPORT_STORAGE_MISSING",
                 error_message_safe="工具缺少导出文件管理组件",
             )
+        if not context.user_id:
+            return ToolResult(
+                tool_name=self.name,
+                status="error",
+                error_code="TOOL_EXPORT_OWNER_REQUIRED",
+                error_message_safe="导出文件必须绑定当前用户",
+            )
         title = str(tool_input.get("title") or "聚信得仁演示文稿").strip()[:80] or "聚信得仁演示文稿"
         slides = _normalize_slides(tool_input)
         document = render_pptx(slides, title=title)
         saved = file_manager.save_pptx(
+            owner_user_id=context.user_id,
             file_name=f"{title}.pptx",
             content=document,
         )

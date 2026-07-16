@@ -13,6 +13,11 @@ FOUNDATION_TABLES = {
     "ai_task_fields",
     "ai_task_prompt_bindings",
     "ai_generation_records",
+    "ai_external_question_events",
+    "ai_external_hot_question_report_items",
+    "ai_external_support_tickets",
+    "ai_external_support_ticket_messages",
+    "ai_direct_action_invocations",
 }
 PROJECT_WORKSPACE_TABLES = {
     "ai_projects",
@@ -39,6 +44,52 @@ PROJECT_TASK_TABLES = {
     "ai_project_issues",
     "ai_project_activities",
 }
+EDITOR_TABLES = {
+    "ai_deliverable_drafts",
+    "ai_deliverable_edit_leases",
+    "ai_deliverable_media_assets",
+}
+WORKFLOW_CONTROL_TABLES = {
+    "ai_workflow_schedules",
+    "ai_workflow_trigger_inbox",
+    "ai_workflow_notification_outbox",
+    "ai_workflow_waits",
+}
+ENTERPRISE_IDENTITY_TABLES = {
+    "ai_organizations",
+    "ai_organization_units",
+    "ai_enterprise_customers",
+    "ai_customer_identity_bindings",
+    "ai_enterprise_entity_refs",
+    "ai_enterprise_entity_aliases",
+}
+ENTERPRISE_BUSINESS_LINEAGE_TABLES = {
+    "ai_project_customer_links",
+    "ai_project_service_occurrences",
+    "ai_project_issue_asset_links",
+    "ai_project_remediations",
+    "ai_remediation_evidence_links",
+}
+ENTERPRISE_METRICS_TABLES = {
+    "ai_enterprise_metric_definitions",
+    "ai_enterprise_metric_snapshots",
+    "ai_enterprise_project_health_snapshots",
+    "ai_enterprise_data_quality_issues",
+}
+ENTERPRISE_INSIGHT_TABLES = {
+    "ai_enterprise_insight_rules",
+    "ai_enterprise_insight_rule_versions",
+    "ai_enterprise_insights",
+    "ai_enterprise_insight_evidence",
+    "ai_enterprise_recommendations",
+    "ai_enterprise_recommendation_actions",
+}
+ENTERPRISE_CAPABILITY_TABLES = {
+    "ai_enterprise_capability_evaluations",
+    "ai_enterprise_optimization_proposals",
+    "ai_enterprise_optimization_proposal_events",
+    "ai_enterprise_capability_observations",
+}
 
 
 def migration_config(database_url: str) -> Config:
@@ -56,16 +107,48 @@ def test_migration_revision_graph_is_single_linear_head() -> None:
         migration_config("sqlite+pysqlite:///:memory:")
     )
 
-    assert script.get_heads() == ["0051_professional_delivery"]
-    assert [
-        revision.revision for revision in script.walk_revisions()
-    ] == [
+    assert script.get_heads() == ["0064_knowledge_external_download_control"]
+    revision_ids = {revision.revision for revision in script.walk_revisions()}
+    assert {
+        "0060_enterprise_graph_memory",
+        "0061_enterprise_insights_recommendations",
+        "0062_enterprise_capability_evaluation",
+        "0063_enterprise_notification_read_state",
+        "0064_knowledge_external_download_control",
+        "0059_enterprise_metrics_health",
+        "0058_enterprise_business_lineage",
+        "0057_enterprise_identity_scope",
+        "0056_workflow_fencing_and_wait_tokens",
+        "0055_workflow_control_plane",
+        "0054_merge_langgraph_and_professional_delivery",
+        "0053_deliverable_media_assets",
+        "0052_deliverable_editor_draft",
         "0051_professional_delivery",
         "0050_project_task_delivery_activity",
         "0049_project_context_resources",
         "0048_project_initialization_foundation",
         "0047_project_chat_workspace",
         "0046_project_workspace_foundation",
+        "0045_agent_langgraph_checkpoints",
+        "0044_harness_spec_registry",
+        "0043_direct_action_reconciliation_audit",
+        "0042_direct_action_invocation_ledger",
+        "0041_merge_agent_reconciliation_and_external_support",
+        "0039_agent_tool_reconciliation_audit",
+        "0040_external_support_tickets",
+        "0039_external_customer_question_reports",
+        "0038_agent_tool_invocation_ledger",
+        "0037_agent_run_state_contract",
+        "0036_wechat_external_access",
+        "0035_agent_governance_bindings",
+        "0034_workflow_versions",
+        "0033_artifact_reviews",
+        "0032_run_step_budgets",
+        "0031_agent_egress_cost",
+        "0030_channel_jobs",
+        "0029_learning_candidates",
+        "0028_agent_artifacts",
+        "0027_shared_faq_lifecycle",
         "0026_agent_run_contracts",
         "0025_hot_question_reports",
         "0024_shared_faqs",
@@ -92,7 +175,21 @@ def test_migration_revision_graph_is_single_linear_head() -> None:
         "0003_governance",
         "0002_employee_features",
         "0001_foundation",
-    ]
+    } == revision_ids
+    assert script.get_revision("0055_workflow_control_plane").down_revision == "0054_merge_langgraph_and_professional_delivery"
+    assert script.get_revision("0056_workflow_fencing_and_wait_tokens").down_revision == "0055_workflow_control_plane"
+    assert script.get_revision("0057_enterprise_identity_scope").down_revision == "0056_workflow_fencing_and_wait_tokens"
+    assert script.get_revision("0058_enterprise_business_lineage").down_revision == "0057_enterprise_identity_scope"
+    assert script.get_revision("0059_enterprise_metrics_health").down_revision == "0058_enterprise_business_lineage"
+    assert script.get_revision("0060_enterprise_graph_memory").down_revision == "0059_enterprise_metrics_health"
+    assert script.get_revision("0061_enterprise_insights_recommendations").down_revision == "0060_enterprise_graph_memory"
+    assert script.get_revision("0062_enterprise_capability_evaluation").down_revision == "0061_enterprise_insights_recommendations"
+    assert script.get_revision("0063_enterprise_notification_read_state").down_revision == "0062_enterprise_capability_evaluation"
+    assert script.get_revision("0064_knowledge_external_download_control").down_revision == "0063_enterprise_notification_read_state"
+    assert script.get_revision("0054_merge_langgraph_and_professional_delivery").down_revision == (
+        "0045_agent_langgraph_checkpoints",
+        "0053_deliverable_media_assets",
+    )
 
 
 def test_knowledge_migration_does_not_set_defaults_on_mysql_text_or_json_columns() -> None:
@@ -133,11 +230,169 @@ def test_foundation_migration_round_trip(tmp_path: Path) -> None:
     assert PROJECT_INITIALIZATION_TABLES.issubset(tables)
     assert PROJECT_CONTEXT_TABLES.issubset(tables)
     assert PROJECT_TASK_TABLES.issubset(tables)
+    assert EDITOR_TABLES.issubset(tables)
+    assert WORKFLOW_CONTROL_TABLES.issubset(tables)
+    assert ENTERPRISE_IDENTITY_TABLES.issubset(tables)
+    assert ENTERPRISE_BUSINESS_LINEAGE_TABLES.issubset(tables)
+    assert ENTERPRISE_METRICS_TABLES.issubset(tables)
+    assert ENTERPRISE_INSIGHT_TABLES.issubset(tables)
+    assert ENTERPRISE_CAPABILITY_TABLES.issubset(tables)
+    notification_columns = {
+        column["name"]
+        for column in inspect(engine).get_columns("ai_workflow_notification_outbox")
+    }
+    assert {"read_at", "read_by_user_id"}.issubset(notification_columns)
+
+    knowledge_file_columns = {
+        column["name"]
+        for column in inspect(engine).get_columns("ai_knowledge_files")
+    }
+    assert "external_download_allowed" in knowledge_file_columns
 
     chat_session_columns = {
         column["name"] for column in inspect(engine).get_columns("ai_chat_sessions")
     }
     assert {"workspace_type", "project_uuid"}.issubset(chat_session_columns)
+
+
+def test_workflow_fencing_migration_upgrades_and_downgrades_from_0055(tmp_path: Path) -> None:
+    """The 4.0 lease/token fields are upgradeable from the shipped 0055 head."""
+
+    database_path = tmp_path / "workflow-fencing.db"
+    database_url = f"sqlite+pysqlite:///{database_path}"
+    config = migration_config(database_url)
+    engine = create_engine(database_url)
+
+    command.upgrade(config, "0055_workflow_control_plane")
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                """
+                INSERT INTO ai_workflow_trigger_inbox
+                    (uuid, owner_user_id, workflow_id, event_type, event_key, payload_json)
+                VALUES
+                    (:uuid, :owner_user_id, :workflow_id, :event_type, :event_key, :payload_json)
+                """
+            ),
+            {
+                "uuid": "legacy-trigger-0055",
+                "owner_user_id": "owner-1",
+                "workflow_id": "workflow-1",
+                "event_type": "manual",
+                "event_key": "legacy-event",
+                "payload_json": "{}",
+            },
+        )
+    before = inspect(engine)
+    trigger_before = {column["name"] for column in before.get_columns("ai_workflow_trigger_inbox")}
+    wait_before = {column["name"] for column in before.get_columns("ai_workflow_waits")}
+    assert {"lease_owner", "lease_token", "lease_expires_at"}.isdisjoint(trigger_before)
+    assert {"resume_token_hash", "resume_expires_at"}.isdisjoint(wait_before)
+
+    command.upgrade(config, "head")
+    after = inspect(engine)
+    trigger_after = {column["name"] for column in after.get_columns("ai_workflow_trigger_inbox")}
+    wait_after = {column["name"] for column in after.get_columns("ai_workflow_waits")}
+    assert {"lease_owner", "lease_token", "lease_expires_at"}.issubset(trigger_after)
+    assert {"resume_token_hash", "resume_expires_at"}.issubset(wait_after)
+    assert {
+        "ix_ai_workflow_trigger_inbox_lease_owner",
+        "ix_ai_workflow_trigger_inbox_lease_expires_at",
+    }.issubset({index["name"] for index in after.get_indexes("ai_workflow_trigger_inbox")})
+    assert "ix_ai_workflow_waits_resume_expires_at" in {
+        index["name"] for index in after.get_indexes("ai_workflow_waits")
+    }
+    with engine.connect() as connection:
+        legacy = connection.execute(
+            text(
+                """
+                SELECT lease_owner, lease_token, lease_expires_at
+                FROM ai_workflow_trigger_inbox
+                WHERE uuid = :uuid
+                """
+            ),
+            {"uuid": "legacy-trigger-0055"},
+        ).mappings().one()
+    assert legacy["lease_owner"] == ""
+    assert legacy["lease_token"] == 0
+    assert legacy["lease_expires_at"] is None
+
+    command.downgrade(config, "0055_workflow_control_plane")
+    reverted = inspect(engine)
+    trigger_reverted = {
+        column["name"] for column in reverted.get_columns("ai_workflow_trigger_inbox")
+    }
+    wait_reverted = {column["name"] for column in reverted.get_columns("ai_workflow_waits")}
+    assert {"lease_owner", "lease_token", "lease_expires_at"}.isdisjoint(trigger_reverted)
+    assert {"resume_token_hash", "resume_expires_at"}.isdisjoint(wait_reverted)
+
+
+def test_direct_action_reconciliation_migration_adds_audit_columns(tmp_path: Path) -> None:
+    database_path = tmp_path / "direct-action-reconciliation.db"
+    database_url = f"sqlite+pysqlite:///{database_path}"
+    config = migration_config(database_url)
+    engine = create_engine(database_url)
+
+    command.upgrade(config, "0042_direct_action_invocation_ledger")
+    before = {
+        column["name"]
+        for column in inspect(engine).get_columns("ai_direct_action_invocations")
+    }
+    assert "reconciliation_resolution" not in before
+
+    command.upgrade(config, "0043_direct_action_reconciliation_audit")
+    after = {
+        column["name"]
+        for column in inspect(engine).get_columns("ai_direct_action_invocations")
+    }
+    assert {
+        "reconciliation_resolution",
+        "reconciled_by_user_id",
+        "reconciled_at",
+    }.issubset(after)
+
+
+def test_langgraph_checkpoint_migration_adds_isolated_store_and_identity_constraint(tmp_path: Path) -> None:
+    database_path = tmp_path / "langgraph-checkpoint.db"
+    database_url = f"sqlite+pysqlite:///{database_path}"
+    config = migration_config(database_url)
+    engine = create_engine(database_url)
+
+    command.upgrade(config, "0044_harness_spec_registry")
+    assert "ai_agent_langgraph_checkpoints" not in inspect(engine).get_table_names()
+
+    command.upgrade(config, "0045_agent_langgraph_checkpoints")
+    inspector = inspect(engine)
+    assert "ai_agent_langgraph_checkpoints" in inspector.get_table_names()
+    columns = {column["name"] for column in inspector.get_columns("ai_agent_langgraph_checkpoints")}
+    assert {
+        "run_id",
+        "thread_id",
+        "checkpoint_ns",
+        "checkpoint_id",
+        "fencing_token",
+    }.issubset(columns)
+    constraints = inspector.get_unique_constraints("ai_agent_langgraph_checkpoints")
+    assert any(
+        constraint["name"] == "uq_ai_agent_langgraph_checkpoint_identity"
+        and constraint["column_names"] == ["run_id", "thread_id", "checkpoint_id"]
+        for constraint in constraints
+    )
+
+
+def test_harness_spec_registry_migration_creates_registry_and_run_binding_columns(tmp_path: Path) -> None:
+    database_path = tmp_path / "harness-spec-registry.db"
+    database_url = f"sqlite+pysqlite:///{database_path}"
+    config = migration_config(database_url)
+    engine = create_engine(database_url)
+
+    command.upgrade(config, "0043_direct_action_reconciliation_audit")
+    command.upgrade(config, "0044_harness_spec_registry")
+
+    tables = set(inspect(engine).get_table_names())
+    assert {"ai_harness_spec_versions", "ai_harness_spec_audit_events"}.issubset(tables)
+    run_columns = {column["name"] for column in inspect(engine).get_columns("ai_agent_runs")}
+    assert {"harness_spec_uuid", "harness_spec_version", "harness_spec_hash"}.issubset(run_columns)
 
 
 def test_agent_run_contracts_migration_creates_and_drops_run_tables(tmp_path: Path) -> None:
@@ -264,6 +519,29 @@ def test_learning_loop_migration_creates_libraries_and_extends_memories(tmp_path
     assert {"user_id", "template_name", "task_type", "template_content", "variables_json", "scope", "review_status", "status"}.issubset(template_columns)
     failure_columns = {column["name"] for column in inspector.get_columns("ai_failure_case_library")}
     assert {"user_id", "task_type", "wrong_answer", "correction", "prevention_rule", "tags_json", "status"}.issubset(failure_columns)
+
+
+def test_learning_loop_migration_downgrade_removes_memory_priority_index(tmp_path: Path) -> None:
+    database_path = tmp_path / "learning-loop-downgrade.db"
+    database_url = f"sqlite+pysqlite:///{database_path}"
+    config = migration_config(database_url)
+    engine = create_engine(database_url)
+
+    command.upgrade(config, "0017_learning_loop")
+    assert any(
+        index["name"] == "ix_ai_user_memories_priority"
+        for index in inspect(engine).get_indexes("ai_user_memories")
+    )
+
+    command.downgrade(config, "0016_user_memories")
+    memory_columns = {
+        column["name"] for column in inspect(engine).get_columns("ai_user_memories")
+    }
+    assert {"title", "priority", "tags_json"}.isdisjoint(memory_columns)
+    assert all(
+        index["name"] != "ix_ai_user_memories_priority"
+        for index in inspect(engine).get_indexes("ai_user_memories")
+    )
 
 
 def test_chat_word_export_migration_creates_export_records(tmp_path: Path) -> None:

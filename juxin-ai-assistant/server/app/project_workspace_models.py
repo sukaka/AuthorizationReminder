@@ -48,6 +48,24 @@ class Project(ProjectTimestampMixin, Base):
     status: Mapped[str] = mapped_column(String(24), default="active", index=True)
     owner_user_id: Mapped[str] = mapped_column(String(64), index=True)
     created_by: Mapped[str] = mapped_column(String(64), index=True)
+    organization_id: Mapped[int | None] = mapped_column(
+        foreign_key_type,
+        ForeignKey("ai_organizations.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    owner_department_id: Mapped[int | None] = mapped_column(
+        foreign_key_type,
+        ForeignKey("ai_organization_units.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    primary_customer_id: Mapped[int | None] = mapped_column(
+        foreign_key_type,
+        ForeignKey("ai_enterprise_customers.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
 
 
 class ProjectMember(ProjectTimestampMixin, Base):
