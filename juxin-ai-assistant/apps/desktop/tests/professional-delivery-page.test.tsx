@@ -3,7 +3,8 @@ import userEvent from '@testing-library/user-event';
 import { HttpResponse, http } from 'msw';
 import { beforeEach, expect, it, vi } from 'vitest';
 
-import { ProfessionalDeliverablesPage } from '../src/pages/ProfessionalDeliverablesPage';
+import { getBlockDeleteImpact, ProfessionalDeliverablesPage } from '../src/pages/ProfessionalDeliverablesPage';
+import type { DeliverableComment, DeliverableFact, DeliverableReview } from '../src/api/deliverables';
 import { ProfessionalTasksPage } from '../src/pages/ProfessionalTasksPage';
 import { server } from './setup';
 
@@ -11,6 +12,18 @@ const { invokeMock, listenMock } = vi.hoisted(() => ({
   invokeMock: vi.fn(),
   listenMock: vi.fn(),
 }));
+
+it('counts facts, review issues and comments before deleting a document block', () => {
+  const facts = [{ block_id: 'block-a' }] as DeliverableFact[];
+  const reviews = [{ issues: [{ block_id: 'block-a' }, { block_id: 'block-b' }] }] as DeliverableReview[];
+  const comments = [{ block_id: 'block-a' }] as DeliverableComment[];
+
+  expect(getBlockDeleteImpact('block-a', facts, reviews, comments)).toEqual({
+    facts: 1,
+    issues: 1,
+    comments: 1,
+  });
+});
 
 vi.mock('@tauri-apps/api/core', () => ({ invoke: invokeMock }));
 vi.mock('@tauri-apps/api/event', () => ({ listen: listenMock }));
@@ -376,6 +389,73 @@ it('renders a three-column deliverable workbench and saves an immutable version'
       page_size: 50,
     })),
     http.get('/api/ai/deliverables/deliverable-1', () => HttpResponse.json(detail)),
+    http.get('/api/ai/deliverables/deliverable-1/draft', () => HttpResponse.json({
+      request_id: 'req-draft',
+      deliverable_uuid: 'deliverable-1',
+      draft_uuid: 'draft-1',
+      base_version_uuid: detail.current_version.version_uuid,
+      row_version: detail.row_version,
+      draft_revision: 1,
+      content: detail.current_version.content,
+      content_hash: detail.current_version.content_hash,
+      content_summary: detail.content_summary,
+      updated_by: detail.owner_user_id,
+      updated_at: detail.updated_at,
+    })),
+    http.post('/api/ai/deliverables/deliverable-1/draft/lease', () => HttpResponse.json({
+      request_id: 'req-lease',
+      deliverable_uuid: 'deliverable-1',
+      lease_uuid: 'lease-1',
+      owner_user_id: detail.owner_user_id,
+      fencing_token: 1,
+      expires_at: '2099-01-01T00:00:00Z',
+    })),
+    http.put('/api/ai/deliverables/deliverable-1/draft', async ({ request }) => {
+      const body = await request.json() as {
+        content: unknown;
+        content_summary: string;
+        row_version: number;
+      };
+      return HttpResponse.json({
+        request_id: 'req-draft-save',
+        deliverable_uuid: 'deliverable-1',
+        draft_uuid: 'draft-1',
+        base_version_uuid: detail.current_version.version_uuid,
+        row_version: body.row_version,
+        draft_revision: 2,
+        content: body.content,
+        content_hash: 'draft-hash',
+        content_summary: body.content_summary,
+        updated_by: detail.owner_user_id,
+        updated_at: detail.updated_at,
+      });
+    }),
+    http.post('/api/ai/deliverables/deliverable-1/draft/commit', async ({ request }) => {
+      const body = await request.json() as {
+        row_version: number;
+        base_version_uuid: string;
+        change_summary: string;
+      };
+      createVersion({
+        row_version: body.row_version,
+        parent_version_uuid: body.base_version_uuid,
+        change_summary: body.change_summary,
+      });
+      return HttpResponse.json({
+        request_id: 'req-version-3',
+        deliverable_uuid: 'deliverable-1',
+        version: {
+          ...detail.current_version,
+          version_uuid: 'version-3',
+          version_no: 3,
+          parent_version_uuid: body.base_version_uuid,
+          change_summary: body.change_summary,
+          content_hash: 'hash-version-3',
+          summary_snapshot: '本月完成安全运营并闭环全部高风险事件。',
+        },
+      }, { status: 201 });
+    }),
+    http.delete('/api/ai/deliverables/deliverable-1/draft/lease', () => new HttpResponse(null, { status: 204 })),
     http.get('/api/ai/deliverables/deliverable-1/versions', () => HttpResponse.json({
       request_id: 'req-versions',
       deliverable_uuid: 'deliverable-1',
@@ -521,6 +601,7 @@ it('exposes a recoverable autosave conflict instead of failing silently', async 
       fencing_token: 9,
       expires_at: '2026-07-15T03:00:00Z',
     })),
+    http.delete('/api/ai/deliverables/deliverable-conflict/draft/lease', () => new HttpResponse(null, { status: 204 })),
     http.put('/api/ai/deliverables/deliverable-conflict/draft', async ({ request }) => {
       saveDraft(await request.json());
       return HttpResponse.json({ code: 'DRAFT_ROW_VERSION_CONFLICT' }, { status: 409 });

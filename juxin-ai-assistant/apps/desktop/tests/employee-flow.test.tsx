@@ -108,7 +108,7 @@ it('shows all assistants regardless of the signed-in department and supports tas
       token: 'signed-binding-token',
     });
   });
-  await userEvent.click(await screen.findByRole('button', { name: '助手模式' }));
+  await userEvent.click(await screen.findByRole('button', { name: 'AI 能力' }));
 
   for (const name of assistantNames) {
     expect(await screen.findByText(name)).toBeInTheDocument();
@@ -149,12 +149,13 @@ it('opens chat after login without adding an extra sidebar menu', async () => {
   expect(await screen.findByRole('region', { name: '私人工作助理工作区' })).toBeInTheDocument();
   expect(screen.getByRole('heading', { name: '告诉我你想完成什么工作' })).toBeInTheDocument();
   expect(screen.queryByRole('button', { name: '工作台' })).not.toBeInTheDocument();
-  expect(screen.getByRole('button', { name: '助手模式' })).toBeInTheDocument();
-  expect(screen.getByRole('button', { name: '聊天' })).toHaveAttribute('aria-current', 'page');
-  expect(screen.getByRole('button', { name: '工作成果' })).toBeInTheDocument();
+  const mainNav = screen.getByRole('navigation', { name: '主导航' });
+  expect(within(mainNav).getByRole('button', { name: 'AI 能力' })).toBeInTheDocument();
+  expect(within(mainNav).getByRole('button', { name: '对话' })).toHaveAttribute('aria-current', 'page');
+  expect(within(mainNav).getByRole('button', { name: '任务与交付' })).toBeInTheDocument();
   expect(screen.getByRole('button', { name: '设置' })).toBeInTheDocument();
-  await userEvent.click(screen.getByRole('button', { name: '助手模式' }));
-  await userEvent.click(screen.getByRole('button', { name: '聊天' }));
+  await userEvent.click(within(mainNav).getByRole('button', { name: 'AI 能力' }));
+  await userEvent.click(within(mainNav).getByRole('button', { name: '对话' }));
   expect(await screen.findByRole('region', { name: '私人工作助理工作区' })).toBeInTheDocument();
 });
 

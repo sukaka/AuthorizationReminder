@@ -15,7 +15,6 @@ import { ChatPage } from './pages/ChatPage';
 import { ProjectWorkspacePage } from './pages/ProjectWorkspacePage';
 import { EnterpriseOverviewPage } from './pages/EnterpriseOverviewPage';
 import { EnterpriseManagementPage } from './pages/EnterpriseManagementPage';
-import { ProfessionalEditorDemoPage } from './pages/ProfessionalEditorDemoPage';
 import { ProfessionalDeliverablesPage } from './pages/ProfessionalDeliverablesPage';
 import { ProfessionalTasksPage } from './pages/ProfessionalTasksPage';
 import { HistoryPage } from './pages/HistoryPage';
@@ -46,7 +45,6 @@ type WorkspacePage =
   | 'enterprise-management'
   | 'professional-tasks'
   | 'professional-deliverables'
-  | 'professional-editor-demo'
   | 'history'
   | 'tasks'
   | 'knowledge'
@@ -61,6 +59,22 @@ type WorkspacePage =
   | 'suggestions';
 
 type SidebarMode = 'expanded' | 'collapsed' | 'immersive';
+
+type WorkspaceTab = {
+  label: string;
+  page: WorkspacePage;
+};
+
+const taskDeliveryPages: WorkspacePage[] = [
+  'tasks',
+  'professional-tasks',
+  'professional-deliverables',
+  'history',
+];
+const aiCapabilityPages: WorkspacePage[] = ['assistants', 'workflows', 'skills', 'agent-hub'];
+const knowledgeLearningPages: WorkspacePage[] = ['knowledge', 'learning'];
+const enterpriseInsightPages: WorkspacePage[] = ['enterprise-overview', 'department-stats'];
+const managementPages: WorkspacePage[] = ['governance', 'enterprise-management'];
 
 type ViewState =
   | { kind: 'checking' }
@@ -111,6 +125,11 @@ function Workspace({ session }: { session: SessionPayload }) {
   const canViewEnterprise = !new Set(['external', 'external_customer', 'customer', 'visitor', 'guest']).has(role);
   const isWebRuntime = !window.__TAURI_INTERNALS__;
   const immersive = sidebarMode === 'immersive';
+  const isTaskDeliveryPage = taskDeliveryPages.includes(page);
+  const isAiCapabilityPage = aiCapabilityPages.includes(page);
+  const isKnowledgeLearningPage = knowledgeLearningPages.includes(page);
+  const isEnterpriseInsightPage = enterpriseInsightPages.includes(page);
+  const isManagementPage = managementPages.includes(page);
   const pageTitle = page === 'assistants'
       ? '助手模式'
       : page === 'chat'
@@ -125,12 +144,10 @@ function Workspace({ session }: { session: SessionPayload }) {
             ? '专业任务'
           : page === 'professional-deliverables'
             ? '成果中心'
-          : page === 'professional-editor-demo'
-            ? '4.0 编辑 Demo'
           : page === 'history'
             ? '工作成果'
             : page === 'tasks'
-              ? '任务中心'
+              ? '我的任务'
             : page === 'knowledge'
               ? '我的资料'
               : page === 'skills'
@@ -146,10 +163,46 @@ function Workspace({ session }: { session: SessionPayload }) {
                     : page === 'department-stats'
                       ? '部门数据'
                       : page === 'suggestions'
-                        ? '提交建议'
+                        ? '帮助与反馈'
                         : page === 'governance'
                           ? '治理中心'
                           : '任务处理';
+
+  const taskDeliveryTabs: WorkspaceTab[] = [
+    { page: 'tasks', label: '我的任务' },
+    { page: 'professional-tasks', label: '专业任务' },
+    { page: 'professional-deliverables', label: '成果中心' },
+    { page: 'history', label: '工作成果' },
+  ];
+  const aiCapabilityTabs: WorkspaceTab[] = [
+    { page: 'assistants', label: '助手模式' },
+    { page: 'workflows', label: '工作流' },
+    { page: 'skills', label: '能力中心' },
+    { page: 'agent-hub', label: 'Agent 市场' },
+  ];
+  const knowledgeLearningTabs: WorkspaceTab[] = [
+    { page: 'knowledge', label: '我的资料' },
+    { page: 'learning', label: '学习中心' },
+  ];
+  const enterpriseInsightTabs: WorkspaceTab[] = [
+    { page: 'enterprise-overview', label: '企业智能中枢' },
+    ...(isAdmin ? [{ page: 'department-stats' as const, label: '部门数据' }] : []),
+  ];
+  const managementTabs: WorkspaceTab[] = [
+    ...(isAdmin ? [{ page: 'governance' as const, label: '治理中心' }] : []),
+    ...(canManageEnterprise ? [{ page: 'enterprise-management' as const, label: '企业智能管理' }] : []),
+  ];
+  const sectionNavigation = isTaskDeliveryPage
+    ? { label: '任务与交付', tabs: taskDeliveryTabs }
+    : isAiCapabilityPage
+      ? { label: 'AI 能力', tabs: aiCapabilityTabs }
+      : isKnowledgeLearningPage
+        ? { label: '知识与学习', tabs: knowledgeLearningTabs }
+        : isEnterpriseInsightPage
+          ? { label: '企业洞察', tabs: enterpriseInsightTabs }
+          : isManagementPage
+            ? { label: '管理中心', tabs: managementTabs }
+            : null;
 
   useEffect(() => {
     if (sidebarTouched) return;
@@ -226,30 +279,18 @@ function Workspace({ session }: { session: SessionPayload }) {
           <img alt="" aria-hidden="true" src={juxinAiLogo} />
           <strong className="brand-label">聚信 AI 助手 · 私人工作助理</strong>
         </div>
-        <nav aria-label="主导航">
-          <button aria-current={page === 'chat' ? 'page' : undefined} className={page === 'chat' ? 'is-current' : ''} onClick={() => setPage('chat')} type="button"><span className="nav-icon" aria-hidden="true">●</span><span className="nav-label">聊天</span></button>
-          <button aria-current={page === 'project-workspace' ? 'page' : undefined} className={page === 'project-workspace' ? 'is-current' : ''} onClick={() => setPage('project-workspace')} type="button"><span className="nav-icon" aria-hidden="true">⌂</span><span className="nav-label">项目工作空间</span></button>
-          {canViewEnterprise ? <button aria-current={page === 'enterprise-overview' ? 'page' : undefined} className={page === 'enterprise-overview' ? 'is-current' : ''} onClick={() => setPage('enterprise-overview')} type="button"><span className="nav-icon" aria-hidden="true">◉</span><span className="nav-label">企业智能中枢</span></button> : null}
-          <button aria-current={page === 'professional-tasks' ? 'page' : undefined} className={page === 'professional-tasks' ? 'is-current' : ''} onClick={() => setPage('professional-tasks')} type="button"><span className="nav-icon" aria-hidden="true">◆</span><span className="nav-label">专业任务</span></button>
-          <button aria-current={page === 'professional-deliverables' ? 'page' : undefined} className={page === 'professional-deliverables' ? 'is-current' : ''} onClick={() => setPage('professional-deliverables')} type="button"><span className="nav-icon" aria-hidden="true">▤</span><span className="nav-label">成果中心</span></button>
-          <button aria-current={page === 'professional-editor-demo' ? 'page' : undefined} aria-label="4.0 编辑 Demo" className={page === 'professional-editor-demo' ? 'is-current' : ''} onClick={() => setPage('professional-editor-demo')} type="button"><span className="nav-icon" aria-hidden="true">✎</span><span className="nav-label">4.0 编辑 Demo</span></button>
-          <button aria-current={page === 'assistants' ? 'page' : undefined} className={page === 'assistants' ? 'is-current' : ''} onClick={() => setPage('assistants')} type="button"><span className="nav-icon" aria-hidden="true">✦</span><span className="nav-label">助手模式</span></button>
-          <button aria-current={page === 'history' ? 'page' : undefined} className={page === 'history' ? 'is-current' : ''} onClick={() => setPage('history')} type="button"><span className="nav-icon" aria-hidden="true">↺</span><span className="nav-label">工作成果</span></button>
-          <button aria-current={page === 'tasks' ? 'page' : undefined} className={page === 'tasks' ? 'is-current' : ''} onClick={() => setPage('tasks')} type="button"><span className="nav-icon" aria-hidden="true">▣</span><span className="nav-label">任务中心</span></button>
-          <button aria-current={page === 'skills' ? 'page' : undefined} className={page === 'skills' ? 'is-current' : ''} onClick={() => setPage('skills')} type="button"><span className="nav-icon" aria-hidden="true">◈</span><span className="nav-label">能力中心</span></button>
-          <button aria-current={page === 'workflows' ? 'page' : undefined} className={page === 'workflows' ? 'is-current' : ''} onClick={() => setPage('workflows')} type="button"><span className="nav-icon" aria-hidden="true">⇄</span><span className="nav-label">工作流</span></button>
-          <button aria-current={page === 'agent-hub' ? 'page' : undefined} className={page === 'agent-hub' ? 'is-current' : ''} onClick={() => setPage('agent-hub')} type="button"><span className="nav-icon" aria-hidden="true">⬡</span><span className="nav-label">Agent 市场</span></button>
-          <button aria-current={page === 'knowledge' ? 'page' : undefined} className={page === 'knowledge' ? 'is-current' : ''} onClick={() => setPage('knowledge')} type="button"><span className="nav-icon" aria-hidden="true">⌘</span><span className="nav-label">我的资料</span></button>
-          <button aria-current={page === 'learning' ? 'page' : undefined} className={page === 'learning' ? 'is-current' : ''} onClick={() => setPage('learning')} type="button"><span className="nav-icon" aria-hidden="true">✧</span><span className="nav-label">学习中心</span></button>
-          <button aria-current={page === 'models' ? 'page' : undefined} className={page === 'models' ? 'is-current' : ''} onClick={() => setPage('models')} type="button"><span className="nav-icon" aria-hidden="true">◇</span><span className="nav-label">设置</span></button>
-          {isAdmin ? (
-            <>
-              <button aria-current={page === 'department-stats' ? 'page' : undefined} className={page === 'department-stats' ? 'is-current' : ''} onClick={() => setPage('department-stats')} type="button"><span className="nav-icon" aria-hidden="true">▦</span><span className="nav-label">部门数据</span></button>
-              <button aria-current={page === 'suggestions' ? 'page' : undefined} className={page === 'suggestions' ? 'is-current' : ''} onClick={() => setPage('suggestions')} type="button"><span className="nav-icon" aria-hidden="true">✎</span><span className="nav-label">提交建议</span></button>
-              <button aria-current={page === 'governance' ? 'page' : undefined} className={page === 'governance' ? 'is-current' : ''} onClick={() => setPage('governance')} type="button"><span className="nav-icon" aria-hidden="true">⚙</span><span className="nav-label">治理中心</span></button>
-            </>
-          ) : null}
-          {canManageEnterprise ? <button aria-current={page === 'enterprise-management' ? 'page' : undefined} className={page === 'enterprise-management' ? 'is-current' : ''} onClick={() => setPage('enterprise-management')} type="button"><span className="nav-icon" aria-hidden="true">◌</span><span className="nav-label">企业智能管理</span></button> : null}
+        <nav aria-label="主导航" className="sidebar-main-nav">
+          <button aria-label="对话" title="对话" aria-current={page === 'chat' ? 'page' : undefined} className={page === 'chat' ? 'is-current' : ''} onClick={() => setPage('chat')} type="button"><span className="nav-icon" aria-hidden="true">●</span><span className="nav-label">对话</span></button>
+          <button aria-label="项目" title="项目" aria-current={page === 'project-workspace' ? 'page' : undefined} className={page === 'project-workspace' ? 'is-current' : ''} onClick={() => setPage('project-workspace')} type="button"><span className="nav-icon" aria-hidden="true">⌂</span><span className="nav-label">项目</span></button>
+          <button aria-label="任务与交付" title="任务与交付" aria-current={isTaskDeliveryPage ? 'page' : undefined} className={isTaskDeliveryPage ? 'is-current' : ''} onClick={() => setPage('tasks')} type="button"><span className="nav-icon" aria-hidden="true">◆</span><span className="nav-label">任务与交付</span></button>
+          <button aria-label="AI 能力" title="AI 能力" aria-current={isAiCapabilityPage ? 'page' : undefined} className={isAiCapabilityPage ? 'is-current' : ''} onClick={() => setPage('assistants')} type="button"><span className="nav-icon" aria-hidden="true">✦</span><span className="nav-label">AI 能力</span></button>
+          <button aria-label="知识与学习" title="知识与学习" aria-current={isKnowledgeLearningPage ? 'page' : undefined} className={isKnowledgeLearningPage ? 'is-current' : ''} onClick={() => setPage('knowledge')} type="button"><span className="nav-icon" aria-hidden="true">⌘</span><span className="nav-label">知识与学习</span></button>
+          {canViewEnterprise ? <button aria-label="企业洞察" title="企业洞察" aria-current={isEnterpriseInsightPage ? 'page' : undefined} className={isEnterpriseInsightPage ? 'is-current' : ''} onClick={() => setPage('enterprise-overview')} type="button"><span className="nav-icon" aria-hidden="true">◉</span><span className="nav-label">企业洞察</span></button> : null}
+        </nav>
+        <nav aria-label="管理与设置" className="sidebar-utility-nav">
+          {canManageEnterprise ? <button aria-label="管理中心" title="管理中心" aria-current={isManagementPage ? 'page' : undefined} className={isManagementPage ? 'is-current' : ''} onClick={() => setPage(isAdmin ? 'governance' : 'enterprise-management')} type="button"><span className="nav-icon" aria-hidden="true">⚙</span><span className="nav-label">管理中心</span></button> : null}
+          <button aria-label="设置" title="设置" aria-current={page === 'models' ? 'page' : undefined} className={page === 'models' ? 'is-current' : ''} onClick={() => setPage('models')} type="button"><span className="nav-icon" aria-hidden="true">◇</span><span className="nav-label">设置</span></button>
+          {isAdmin ? <button aria-label="帮助与反馈" title="帮助与反馈" aria-current={page === 'suggestions' ? 'page' : undefined} className={page === 'suggestions' ? 'is-current' : ''} onClick={() => setPage('suggestions')} type="button"><span className="nav-icon" aria-hidden="true">?</span><span className="nav-label">帮助与反馈</span></button> : null}
         </nav>
         <div className="sidebar-foot">
           {capabilities.canUseAutoUpdater ? <WorkspaceUpdateControl /> : null}
@@ -299,7 +340,7 @@ function Workspace({ session }: { session: SessionPayload }) {
         <header className="workspace-topbar">
           <div className="workspace-titlebar">
             {page !== 'chat' ? (
-              <button aria-label="返回聊天" className="workspace-back-button" onClick={() => setPage('chat')} type="button">‹ 返回聊天</button>
+              <button aria-label="返回对话" className="workspace-back-button" onClick={() => setPage('chat')} type="button">‹ 返回对话</button>
             ) : null}
             <strong>{pageTitle}</strong>
             <button
@@ -319,6 +360,21 @@ function Workspace({ session }: { session: SessionPayload }) {
           </div>
         </header>
         <div className="workspace">
+          {sectionNavigation && sectionNavigation.tabs.length > 1 ? (
+            <nav aria-label={`${sectionNavigation.label}导航`} className="workspace-section-tabs">
+              {sectionNavigation.tabs.map((tab) => (
+                <button
+                  aria-current={page === tab.page ? 'page' : undefined}
+                  className={page === tab.page ? 'is-current' : ''}
+                  key={tab.page}
+                  onClick={() => setPage(tab.page)}
+                  type="button"
+                >
+                  {tab.label}
+                </button>
+              ))}
+            </nav>
+          ) : null}
         {page === 'models' ? (
           <ModelProfilesPage />
         ) : page === 'project-workspace' ? (
@@ -336,8 +392,6 @@ function Workspace({ session }: { session: SessionPayload }) {
           />
         ) : page === 'professional-deliverables' ? (
           <ProfessionalDeliverablesPage initialDeliverableId={focusProfessionalDeliverableId} />
-        ) : page === 'professional-editor-demo' ? (
-          <ProfessionalEditorDemoPage />
         ) : page === 'governance' && isAdmin ? (
           <GovernanceCenter session={session} />
         ) : page === 'department-stats' && isAdmin ? (

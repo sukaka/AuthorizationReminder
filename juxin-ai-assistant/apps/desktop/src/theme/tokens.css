@@ -250,6 +250,16 @@ textarea:focus-visible {
   gap: 3px;
 }
 
+.sidebar-main-nav {
+  flex: 0 0 auto;
+}
+
+.sidebar-utility-nav {
+  margin-top: auto;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+
 .sidebar nav button {
   width: 100%;
   padding: 10px 12px;
@@ -323,7 +333,7 @@ textarea:focus-visible {
 }
 
 .sidebar-foot {
-  margin-top: auto;
+  margin-top: 14px;
   padding: 14px 8px 0;
   display: flex;
   flex-wrap: wrap;
@@ -548,6 +558,49 @@ textarea:focus-visible {
   min-height: 0;
   margin: 0 auto;
   padding: 34px 46px 64px;
+}
+
+.workspace-section-tabs {
+  margin: -10px 0 28px;
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  overflow-x: auto;
+  border-bottom: 1px solid var(--border);
+  scrollbar-width: thin;
+}
+
+.workspace-section-tabs button {
+  position: relative;
+  flex: 0 0 auto;
+  padding: 10px 2px 12px;
+  border: 0;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.workspace-section-tabs button::after {
+  content: '';
+  position: absolute;
+  right: 0;
+  bottom: -1px;
+  left: 0;
+  height: 2px;
+  border-radius: 999px 999px 0 0;
+  background: transparent;
+}
+
+.workspace-section-tabs button:hover,
+.workspace-section-tabs button.is-current {
+  color: var(--text-primary);
+}
+
+.workspace-section-tabs button.is-current::after {
+  background: var(--accent);
 }
 
 .project-workspace-page {
@@ -8368,6 +8421,7 @@ textarea:focus-visible {
     padding: 15px 18px;
     flex-direction: row;
     align-items: center;
+    flex-wrap: wrap;
   }
 
   .brand-mark {
@@ -8396,10 +8450,27 @@ textarea:focus-visible {
     padding-inline: 12px;
   }
 
+  .sidebar .sidebar-main-nav {
+    flex: 1 1 420px;
+  }
+
+  .sidebar .sidebar-utility-nav {
+    width: 100%;
+    margin: 0;
+    padding: 8px 0 0;
+    justify-content: flex-end;
+    border-top: 1px solid var(--border);
+  }
+
   .sidebar nav button { width: auto; flex: 0 0 auto; white-space: nowrap; }
 
   .workspace {
     padding: 26px 20px 80px;
+  }
+
+  .workspace-section-tabs {
+    margin-top: -6px;
+    gap: 18px;
   }
 
   .topbar {

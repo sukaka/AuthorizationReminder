@@ -192,7 +192,7 @@ it('shows the employee entry from the main navigation', async () => {
   );
 
   render(<App />);
-  await userEvent.click(await screen.findByRole('button', { name: '企业智能中枢' }));
+  await userEvent.click(await screen.findByRole('button', { name: '企业洞察' }));
   expect(await screen.findByText('实时查询')).toBeInTheDocument();
 });
 

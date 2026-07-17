@@ -865,6 +865,48 @@ def test_project_deliverable_uses_membership_instead_of_creator_ownership(
     assert outsider.get("/api/ai/deliverables").json()["items"] == []
 
 
+def test_project_deliverable_edit_lease_blocks_second_editor_with_recovery_details(
+    client_for_user,
+    professional_catalog,
+) -> None:
+    owner = client_for_user("u-1")
+    member = client_for_user("u-2")
+    project = owner.post(
+        "/api/ai/projects",
+        json={"name": "租约演练项目", "description": "验证单编辑保护"},
+    ).json()
+    assert owner.post(
+        f"/api/ai/projects/{project['project_uuid']}/members",
+        json={"user_id": "u-2", "role": "member"},
+    ).status_code == 201
+    created = _create(
+        owner,
+        professional_catalog,
+        key="lease-conflict-create",
+        scope_type="project",
+        project_uuid=project["project_uuid"],
+    ).json()
+    deliverable_uuid = created["deliverable_uuid"]
+    version_uuid = created["current_version"]["version_uuid"]
+
+    acquired = owner.post(
+        f"/api/ai/deliverables/{deliverable_uuid}/draft/lease",
+        json={"row_version": 1, "base_version_uuid": version_uuid},
+    )
+    assert acquired.status_code == 200, acquired.text
+
+    blocked = member.post(
+        f"/api/ai/deliverables/{deliverable_uuid}/draft/lease",
+        json={"row_version": 1, "base_version_uuid": version_uuid},
+    )
+    assert blocked.status_code == 409, blocked.text
+    detail = blocked.json()["detail"]
+    assert detail["code"] == "DELIVERABLE_EDIT_LEASE_CONFLICT"
+    assert detail["message"] == "成果正在被其他用户编辑"
+    assert detail["owner_user_id"] == "u-1"
+    assert detail["expires_at"]
+
+
 def test_read_only_project_member_cannot_create_deliverable(
     client_for_user,
     professional_catalog,

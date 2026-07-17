@@ -143,7 +143,7 @@ it('opens the project workspace from the main navigation', async () => {
 
   render(<App />);
 
-  await userEvent.click(await screen.findByRole('button', { name: '项目工作空间' }));
+  await userEvent.click(await screen.findByRole('button', { name: '项目' }));
   expect(await screen.findByRole('heading', { name: '项目工作空间' })).toBeInTheDocument();
   expect(await screen.findByRole('heading', { name: '星河交付项目' })).toBeInTheDocument();
 });

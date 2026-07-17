@@ -353,6 +353,7 @@ test('formal deliverable passes review, approval, exact-version export, delivery
   await page.setViewportSize({ width: 1512, height: 982 });
   await page.goto('/');
 
+  await page.getByRole('button', { name: '任务与交付' }).click();
   await page.getByRole('button', { name: '成果中心' }).click();
   await expect(page.getByRole('heading', { name: '安全运营月报（六月）' })).toBeVisible();
   await expect(page.locator('.professional-workbench-header [data-status="draft"]')).toHaveText('草稿');

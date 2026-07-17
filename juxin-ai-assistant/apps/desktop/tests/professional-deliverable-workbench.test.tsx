@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { HttpResponse, http } from 'msw';
 import { expect, it, vi } from 'vitest';
@@ -72,6 +72,28 @@ function installWorkbenchHandlers(input: {
       source_change_notice: null,
     })),
     http.get('/api/ai/deliverables/deliverable-1', () => HttpResponse.json(detail)),
+    http.get('/api/ai/deliverables/deliverable-1/draft', () => HttpResponse.json({
+      request_id: 'req-draft',
+      deliverable_uuid: 'deliverable-1',
+      draft_uuid: 'draft-1',
+      base_version_uuid: detail.current_version.version_uuid,
+      row_version: detail.row_version,
+      draft_revision: 1,
+      content: detail.current_version.content,
+      content_hash: detail.current_version.content_hash,
+      content_summary: detail.content_summary,
+      updated_by: detail.owner_user_id,
+      updated_at: detail.updated_at,
+    })),
+    http.post('/api/ai/deliverables/deliverable-1/draft/lease', () => HttpResponse.json({
+      request_id: 'req-lease',
+      deliverable_uuid: 'deliverable-1',
+      lease_uuid: 'lease-1',
+      owner_user_id: detail.owner_user_id,
+      fencing_token: 1,
+      expires_at: '2099-01-01T00:00:00Z',
+    })),
+    http.delete('/api/ai/deliverables/deliverable-1/draft/lease', () => new HttpResponse(null, { status: 204 })),
     http.get('/api/ai/deliverables/deliverable-1/versions', () => HttpResponse.json({
       request_id: 'req-versions',
       deliverable_uuid: 'deliverable-1',
@@ -210,7 +232,7 @@ it('confirms facts, previews exact source locations, localizes review issues, an
   expect(await screen.findByText('关键数字缺少可追溯来源')).toBeInTheDocument();
   expect(screen.getByText('区块 overview-body · 字符 3–16')).toBeInTheDocument();
   await userEvent.click(screen.getByRole('button', { name: '定位正文' }));
-  expect(screen.getByLabelText('成果正文')).toHaveFocus();
+  expect(screen.getByLabelText('结构化区块').querySelector('[data-block-id="overview-body"]')).toHaveFocus();
 
   await userEvent.click(screen.getByRole('tab', { name: '版本' }));
   await userEvent.click(screen.getByRole('button', { name: '比较 V1 与当前版本' }));
@@ -290,6 +312,97 @@ it('uploads an image through the editor and inserts an auditable media block', a
   })));
   expect(await screen.findByText('封面.png')).toBeInTheDocument();
   expect(await screen.findByText('已上传 封面.png，已插入正文。')).toBeInTheDocument();
+});
+
+it('accepts an image dropped into the editor upload zone', async () => {
+  installWorkbenchHandlers({
+    allowedActions: ['edit', 'create_version', 'export'],
+  });
+  const upload = vi.fn();
+  server.use(
+    http.post('/api/ai/deliverables/deliverable-1/editor/media', ({ request }) => {
+      upload(request.headers.get('content-type'));
+      return HttpResponse.json({
+        request_id: 'req-media-drop',
+        deliverable_uuid: 'deliverable-1',
+        asset_uuid: 'asset-drop',
+        original_file_name: '拖入图片.jpg',
+        media_type: 'image/jpeg',
+        size_bytes: 18,
+        download_url: '/api/ai/deliverables/deliverable-1/editor/media/asset-drop',
+        replayed: false,
+      });
+    }),
+  );
+
+  render(<ProfessionalDeliverablesPage initialDeliverableId="deliverable-1" />);
+
+  const dropZone = await screen.findByRole('group', { name: '导入与图片上传区' });
+  const file = new File(['jpg-bytes'], '拖入图片.jpg', { type: 'image/jpeg' });
+  fireEvent.drop(dropZone, {
+    dataTransfer: { files: [file], types: ['Files'] },
+  });
+
+  await waitFor(() => expect(upload).toHaveBeenCalled());
+  expect(await screen.findByText('拖入图片.jpg')).toBeInTheDocument();
+  expect(await screen.findByText('已上传 拖入图片.jpg，已插入正文。')).toBeInTheDocument();
+});
+
+it('shows the evidence and review impact before deleting a referenced block', async () => {
+  installWorkbenchHandlers({
+    allowedActions: ['edit', 'create_version', 'export'],
+    facts: [{ fact_uuid: 'fact-delete', block_id: 'overview-body', claim_text: '待确认数字', status: 'pending_confirmation' }],
+    reviews: [{ review_uuid: 'review-delete', issues: [{ issue_uuid: 'issue-delete', block_id: 'overview-body', message: '待处理问题', status: 'open' }] }],
+    comments: [{ comment_uuid: 'comment-delete', block_id: 'overview-body', content: '待处理评论', status: 'open', replies: [], allowed_actions: [] }],
+  });
+
+  render(<ProfessionalDeliverablesPage initialDeliverableId="deliverable-1" />);
+
+  const deleteButton = await screen.findByRole('button', { name: '删除区块 overview-body' });
+  await userEvent.click(deleteButton);
+
+  const warning = await screen.findByRole('alertdialog', { name: '删除区块影响确认' });
+  expect(warning).toHaveTextContent(/1\s*条事实/);
+  expect(warning).toHaveTextContent(/1\s*个审阅问题/);
+  expect(warning).toHaveTextContent(/1\s*条评论/);
+
+  await userEvent.click(within(warning).getByRole('button', { name: '取消' }));
+  expect(screen.queryByRole('alertdialog', { name: '删除区块影响确认' })).not.toBeInTheDocument();
+  expect(screen.getByDisplayValue('本月闭环 12 起高风险事件。')).toBeInTheDocument();
+});
+
+it('keeps a failed image upload retryable without duplicating a media block', async () => {
+  installWorkbenchHandlers({
+    allowedActions: ['edit', 'create_version', 'export'],
+  });
+  let attempts = 0;
+  server.use(
+    http.post('/api/ai/deliverables/deliverable-1/editor/media', () => {
+      attempts += 1;
+      if (attempts === 1) return HttpResponse.json({ detail: '素材服务暂时不可用' }, { status: 503 });
+      return HttpResponse.json({
+        request_id: 'req-media-retry',
+        deliverable_uuid: 'deliverable-1',
+        asset_uuid: 'asset-retry',
+        original_file_name: '重试图片.png',
+        media_type: 'image/png',
+        size_bytes: 16,
+        download_url: '/api/ai/deliverables/deliverable-1/editor/media/asset-retry',
+        replayed: false,
+      });
+    }),
+  );
+
+  render(<ProfessionalDeliverablesPage initialDeliverableId="deliverable-1" />);
+  const input = await screen.findByLabelText('选择图片');
+  await userEvent.upload(input, new File(['png-bytes'], '重试图片.png', { type: 'image/png' }));
+
+  expect(await screen.findByRole('button', { name: '重试图片上传' })).toBeInTheDocument();
+  expect(screen.getByText('重试图片.png 上传失败，可重试')).toBeInTheDocument();
+  await userEvent.click(screen.getByRole('button', { name: '重试图片上传' }));
+  await waitFor(() => expect(attempts).toBe(2));
+  expect(await screen.findByText('已上传 重试图片.png，已插入正文。')).toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: '重试图片上传' })).not.toBeInTheDocument();
 });
 
 it('renders only authoritative approval actions and requires a reason plus comment to request changes', async () => {

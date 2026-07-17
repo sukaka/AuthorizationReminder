@@ -61,7 +61,7 @@ test('admin navigates governance and saves task configuration atomically', async
   const requests = await mockGovernanceApi(page, { role: 'admin', username: '治理管理员' });
   await page.setViewportSize({ width: 1440, height: 960 });
   await page.goto('/');
-  await page.getByRole('button', { name: '治理中心' }).click();
+  await page.getByRole('button', { name: '管理中心' }).click();
   await expect(page.getByRole('heading', { name: '任务管理' })).toBeVisible();
   await page.getByRole('button', { name: '刷新任务' }).click();
   await page.getByRole('button', { name: /销售总结/ }).click();

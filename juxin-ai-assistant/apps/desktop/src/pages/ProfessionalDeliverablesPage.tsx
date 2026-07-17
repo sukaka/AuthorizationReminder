@@ -28,6 +28,7 @@ import {
   replyProfessionalDeliverableComment,
   requestProfessionalDeliverableChanges,
   refreshProfessionalDeliverableEvidence,
+  releaseProfessionalDeliverableLease,
   resolveProfessionalDeliverableComment,
   saveProfessionalDeliverableDraft,
   searchProfessionalDeliverableEvidence,
@@ -38,6 +39,7 @@ import {
   updateProfessionalDeliverableMetadata,
   updateProfessionalReviewIssue,
   type DeliverableApprovalMutation,
+  type DeliverableBlock,
   type DeliverableComment,
   type DeliverableContent,
   type DeliverableDeliveryMutation,
@@ -48,6 +50,7 @@ import {
   type DeliverableExperienceCandidate,
   type DeliverableExport,
   type DeliverableFact,
+  type DeliverableLease,
   type DeliverableReview,
   type DeliverableSummary,
   type DeliverableVersionDiff,
@@ -73,12 +76,44 @@ type ProfessionalDeliverablesPageProps = {
 
 type RightPanel = 'facts' | 'review' | 'comments' | 'versions' | 'activity';
 type AutosaveState = 'idle' | 'pending' | 'saving' | 'saved' | 'conflict' | 'error';
+type LeaseState = 'idle' | 'acquiring' | 'owned' | 'blocked' | 'expired';
 
 type MediaPreviewState = {
   blockId: string;
   alt: string;
   sourceUrl: string;
 };
+
+type MediaUploadState = {
+  status: 'idle' | 'uploading' | 'error';
+  fileName: string;
+  file: File | null;
+  error: string;
+};
+
+export type BlockDeleteImpact = {
+  facts: number;
+  issues: number;
+  comments: number;
+};
+
+type PendingBlockDeletion = {
+  block: DeliverableBlock;
+  impact: BlockDeleteImpact;
+};
+
+export function getBlockDeleteImpact(
+  blockId: string,
+  facts: DeliverableFact[],
+  reviews: DeliverableReview[],
+  comments: DeliverableComment[],
+): BlockDeleteImpact {
+  return {
+    facts: facts.filter((fact) => fact.block_id === blockId).length,
+    issues: reviews.reduce((total, review) => total + review.issues.filter((issue) => issue.block_id === blockId).length, 0),
+    comments: comments.filter((comment) => comment.block_id === blockId).length,
+  };
+}
 
 type OfficeImportReport = NonNullable<DeliverableDocxImport['import_report']>;
 type OfficeExportReport = NonNullable<DeliverableExport['export_report']>;
@@ -165,6 +200,24 @@ function readableError(error: unknown, fallback: string): string {
   return fallback;
 }
 
+function leaseConflictDetails(error: unknown): { ownerUserId: string | null; expiresAt: string | null } {
+  if (!(error instanceof ApiError)) return { ownerUserId: null, expiresAt: null };
+  const payload = error.payload as {
+    detail?: string | {
+      message?: string;
+      owner_user_id?: string;
+      expires_at?: string;
+      details?: { owner_user_id?: string; expires_at?: string };
+    };
+  } | undefined;
+  const detail = payload?.detail && typeof payload.detail === 'object' ? payload.detail : undefined;
+  const details = detail?.details ?? detail;
+  return {
+    ownerUserId: typeof details?.owner_user_id === 'string' ? details.owner_user_id : null,
+    expiresAt: typeof details?.expires_at === 'string' ? details.expires_at : null,
+  };
+}
+
 function updateVersionList(
   versions: DeliverableVersionHistoryItem[],
   version: DeliverableDetail['current_version'],
@@ -212,6 +265,7 @@ function displayValue(value: unknown): string {
 
 export function ProfessionalDeliverablesPage({ initialDeliverableId }: ProfessionalDeliverablesPageProps) {
   const editorRef = useRef<HTMLTextAreaElement>(null);
+  const editorSurfaceRef = useRef<HTMLDivElement>(null);
   const docxInputRef = useRef<HTMLInputElement>(null);
   const mediaInputRef = useRef<HTMLInputElement>(null);
   const [deliverables, setDeliverables] = useState<DeliverableSummary[]>([]);
@@ -221,6 +275,10 @@ export function ProfessionalDeliverablesPage({ initialDeliverableId }: Professio
   const [editorText, setEditorText] = useState('');
   const [draftRevision, setDraftRevision] = useState<number | null>(null);
   const [fencingToken, setFencingToken] = useState<number | null>(null);
+  const [leaseState, setLeaseState] = useState<LeaseState>('idle');
+  const [leaseExpiresAt, setLeaseExpiresAt] = useState<string | null>(null);
+  const [leaseOwnerUserId, setLeaseOwnerUserId] = useState<string | null>(null);
+  const leaseRef = useRef<{ deliverableUuid: string; fencingToken: number } | null>(null);
   const [autosaveState, setAutosaveState] = useState<AutosaveState>('idle');
   const [autosaveRetry, setAutosaveRetry] = useState(0);
   const autosaveSignatureRef = useRef('');
@@ -250,6 +308,13 @@ export function ProfessionalDeliverablesPage({ initialDeliverableId }: Professio
   const [exporting, setExporting] = useState(false);
   const [importingDocx, setImportingDocx] = useState(false);
   const [uploadingMedia, setUploadingMedia] = useState(false);
+  const [mediaUploadState, setMediaUploadState] = useState<MediaUploadState>({
+    status: 'idle',
+    fileName: '',
+    file: null,
+    error: '',
+  });
+  const [mediaDropActive, setMediaDropActive] = useState(false);
   const [busyAction, setBusyAction] = useState('');
   const [revisionMode, setRevisionMode] = useState(false);
   const [exportRecord, setExportRecord] = useState<DeliverableExport | null>(null);
@@ -265,10 +330,67 @@ export function ProfessionalDeliverablesPage({ initialDeliverableId }: Professio
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
   const [mediaPreview, setMediaPreview] = useState<MediaPreviewState | null>(null);
+  const [locatedBlockId, setLocatedBlockId] = useState<string | null>(null);
+  const [pendingBlockDeletion, setPendingBlockDeletion] = useState<PendingBlockDeletion | null>(null);
 
   useEffect(() => () => {
     if (mediaPreview?.sourceUrl.startsWith('blob:')) URL.revokeObjectURL(mediaPreview.sourceUrl);
   }, [mediaPreview]);
+
+  const applyLease = (lease: DeliverableLease) => {
+    setFencingToken(lease.fencing_token);
+    setLeaseState('owned');
+    setLeaseExpiresAt(lease.expires_at);
+    setLeaseOwnerUserId(lease.owner_user_id);
+    leaseRef.current = {
+      deliverableUuid: lease.deliverable_uuid,
+      fencingToken: lease.fencing_token,
+    };
+  };
+
+  const clearLease = (nextState: LeaseState = 'idle') => {
+    leaseRef.current = null;
+    setFencingToken(null);
+    setLeaseState(nextState);
+    setLeaseExpiresAt(null);
+    setLeaseOwnerUserId(null);
+  };
+
+  const acquireEditorLease = async (
+    targetDetail: DeliverableDetail,
+    targetDraft: DeliverableDraft | null = null,
+  ): Promise<boolean> => {
+    setLeaseState('acquiring');
+    setError('');
+    try {
+      const lease = await acquireProfessionalDeliverableLease(targetDetail.deliverable_uuid, {
+        row_version: targetDraft?.row_version ?? targetDetail.row_version,
+        base_version_uuid: targetDraft?.base_version_uuid ?? targetDetail.current_version.version_uuid,
+      });
+      applyLease(lease);
+      return true;
+    } catch (nextError: unknown) {
+      const conflict = leaseConflictDetails(nextError);
+      clearLease(nextError instanceof ApiError && nextError.status === 409 ? 'blocked' : 'expired');
+      if (conflict.ownerUserId) {
+        setLeaseOwnerUserId(conflict.ownerUserId);
+        setLeaseExpiresAt(conflict.expiresAt);
+        setError(`成果正在被 ${conflict.ownerUserId} 编辑，当前已切换为只读。${conflict.expiresAt ? `预计 ${new Date(conflict.expiresAt).toLocaleTimeString('zh-CN')} 后可重试。` : ''}`);
+      } else {
+        setError(readableError(nextError, '暂时无法获取编辑权，当前已切换为只读。'));
+      }
+      return false;
+    }
+  };
+
+  useEffect(() => {
+    return () => {
+      const previousLease = leaseRef.current;
+      if (!previousLease) return;
+      leaseRef.current = null;
+      void releaseProfessionalDeliverableLease(previousLease.deliverableUuid, previousLease.fencingToken).catch(() => undefined);
+    };
+  }, [selectedId]);
 
   useEffect(() => {
     let active = true;
@@ -295,7 +417,7 @@ export function ProfessionalDeliverablesPage({ initialDeliverableId }: Professio
       setDetail(null);
       setEditorContent(null);
       setDraftRevision(null);
-      setFencingToken(null);
+      clearLease();
       setAutosaveState('idle');
       setAutosaveRetry(0);
       autosaveSignatureRef.current = '';
@@ -312,7 +434,7 @@ export function ProfessionalDeliverablesPage({ initialDeliverableId }: Professio
     setExperienceCandidate(null);
     setMediaPreview(null);
     setDraftRevision(null);
-    setFencingToken(null);
+    clearLease();
     setAutosaveState('idle');
     setAutosaveRetry(0);
     autosaveSignatureRef.current = '';
@@ -341,17 +463,9 @@ export function ProfessionalDeliverablesPage({ initialDeliverableId }: Professio
         setDraftRevision(draft?.draft_revision ?? null);
         setAutosaveState(draft && draft.draft_revision > 0 ? 'saved' : 'idle');
         setCommentBlockId(editableBlocks(nextContent)[0]?.block_id ?? 'document');
-        if (draft && nextDetail.allowed_actions.includes('edit')) {
-          try {
-            const lease = await acquireProfessionalDeliverableLease(selectedId, {
-              row_version: draft.row_version,
-              base_version_uuid: draft.base_version_uuid,
-            });
-            if (active) setFencingToken(lease.fencing_token);
-          } catch {
-            // Editing remains available in read-compatible mode; a save will
-            // surface the stable lease conflict if another user owns it.
-          }
+        if (nextDetail.allowed_actions.includes('edit')) {
+          await acquireEditorLease(nextDetail, draft);
+          if (!active) return;
         }
         const [versionResult, factResult, reviewResult, commentResult] = await Promise.allSettled([
           listProfessionalDeliverableVersions(selectedId),
@@ -422,7 +536,8 @@ export function ProfessionalDeliverablesPage({ initialDeliverableId }: Professio
     ? JSON.stringify(editorContent) !== JSON.stringify(toEditorDocument(detail.current_version.content))
     : false;
   const hasAction = (action: string) => detail?.allowed_actions.includes(action) ?? false;
-  const canEdit = hasAction('edit') || revisionMode;
+  const canEdit = leaseState === 'owned' && (hasAction('edit') || revisionMode);
+  const canAcquireLease = hasAction('edit') || hasAction('create_revision') || revisionMode;
   const currentFlow = approvalFlows.find((flow) => (
     flow.current_version.version_uuid === selectedFlowVersionUuid
   )) ?? approvalFlows[0] ?? null;
@@ -437,28 +552,43 @@ export function ProfessionalDeliverablesPage({ initialDeliverableId }: Professio
           ? '草稿冲突，需刷新'
           : autosaveState === 'error'
             ? '自动保存失败'
-            : dirty
+              : dirty
               ? '存在未保存修改'
               : `内容哈希 ${detail?.current_version.content_hash.slice(0, 10) ?? ''}…`;
 
+  const leaseLabel = leaseState === 'owned'
+    ? '已获得编辑权'
+    : leaseState === 'acquiring'
+      ? '正在获取编辑权…'
+      : leaseState === 'blocked'
+        ? '他人编辑中，只读'
+        : leaseState === 'expired'
+          ? '编辑权已失效，只读'
+          : '只读模式';
+
   useEffect(() => {
-    if (!detail || fencingToken === null || !canEdit) return undefined;
+    if (!detail || fencingToken === null || leaseState !== 'owned' || !canEdit) return undefined;
     let active = true;
     const timer = window.setInterval(() => {
       void heartbeatProfessionalDeliverableLease(detail.deliverable_uuid, fencingToken)
+        .then((lease) => {
+          if (!active) return;
+          setLeaseExpiresAt(lease.expires_at);
+        })
         .catch((nextError: unknown) => {
           if (!active) return;
-          setFencingToken(null);
-          if (nextError instanceof ApiError && nextError.status === 409) {
-            setError('编辑租约已过期，请重新进入编辑后再保存。');
-          }
+          clearLease('expired');
+          setAutosaveState('conflict');
+          setError(nextError instanceof ApiError && nextError.status === 409
+            ? '编辑权已失效，当前已切换为只读。请重新获取编辑权后再保存。'
+            : readableError(nextError, '编辑权续期失败，当前已切换为只读。'));
         });
     }, 60_000);
     return () => {
       active = false;
       window.clearInterval(timer);
     };
-  }, [canEdit, detail, fencingToken]);
+  }, [canEdit, detail, fencingToken, leaseState]);
 
   useEffect(() => {
     if (!detail || !editorContent || draftRevision === null || !dirty || !canEdit) return undefined;
@@ -536,7 +666,12 @@ export function ProfessionalDeliverablesPage({ initialDeliverableId }: Professio
 
   const uploadMedia = async (file: File) => {
     if (!detail || !canEdit || uploadingMedia) return;
+    if (!file.type.startsWith('image/')) {
+      setError('只能上传图片文件。');
+      return;
+    }
     setUploadingMedia(true);
+    setMediaUploadState({ status: 'uploading', fileName: file.name, file, error: '' });
     setError('');
     setMessage('');
     try {
@@ -551,12 +686,19 @@ export function ProfessionalDeliverablesPage({ initialDeliverableId }: Professio
       setEditorContent(nextContent);
       setEditorText(blocksToPlainText(nextContent));
       autosaveSignatureRef.current = '';
+      setMediaUploadState({ status: 'idle', fileName: file.name, file: null, error: '' });
       setMessage(`${asset.replayed ? '已恢复' : '已上传'} ${asset.original_file_name}，已插入正文。`);
     } catch (nextError: unknown) {
-      setError(readableError(nextError, '图片上传失败'));
+      const nextMessage = readableError(nextError, '图片上传失败');
+      setMediaUploadState((current) => ({ ...current, status: 'error', error: nextMessage }));
+      setError(nextMessage);
     } finally {
       setUploadingMedia(false);
     }
+  };
+
+  const retryMediaUpload = () => {
+    if (mediaUploadState.file) void uploadMedia(mediaUploadState.file);
   };
 
   const mediaAssetId = (block: { [key: string]: unknown }): string => {
@@ -591,9 +733,9 @@ export function ProfessionalDeliverablesPage({ initialDeliverableId }: Professio
     }
   };
 
-  const deleteMedia = async (block: { [key: string]: unknown; block_id: string }) => {
-    if (!detail) return;
-    setBusyAction(`delete-media:${block.block_id}`);
+  const deleteBlock = async (block: DeliverableBlock) => {
+    if (!detail || (editorContent ?? detail.current_version.content).blocks.length <= 1) return;
+    setBusyAction(`delete-block:${block.block_id}`);
     setError('');
     try {
       const nextContent = removeDocumentBlock(
@@ -604,15 +746,26 @@ export function ProfessionalDeliverablesPage({ initialDeliverableId }: Professio
       setEditorText(blocksToPlainText(nextContent));
       autosaveSignatureRef.current = '';
       setMediaPreview((current) => current?.blockId === block.block_id ? null : current);
-      // Keep the asset while immutable versions may still reference it.  The
-      // server-side orphan cleanup job removes unreferenced assets after the
-      // retention window; deleting here would break historical exports.
-      setMessage(`${String(block.alt ?? '图片')} 已从当前草稿移除，保存后由素材清理任务回收。`);
+      setPendingBlockDeletion(null);
+      // Keep media assets while immutable versions may still reference them.
+      // The server-side orphan cleanup job removes unreferenced assets after
+      // the retention window; deleting here would break historical exports.
+      setMessage(`区块「${block.block_id}」已从当前草稿移除，影响将在保存后写入新版本。`);
     } catch (nextError: unknown) {
-      setError(readableError(nextError, '图片删除失败'));
+      setError(readableError(nextError, '区块删除失败'));
     } finally {
       setBusyAction('');
     }
+  };
+
+  const requestDeleteBlock = (block: DeliverableBlock) => {
+    if (!detail || !canEdit) return;
+    const impact = getBlockDeleteImpact(block.block_id, facts, reviews, comments);
+    if (impact.facts + impact.issues + impact.comments > 0) {
+      setPendingBlockDeletion({ block, impact });
+      return;
+    }
+    void deleteBlock(block);
   };
 
   const updateListLifecycle = (lifecycleStatus: string, rowVersion: number) => {
@@ -655,7 +808,7 @@ export function ProfessionalDeliverablesPage({ initialDeliverableId }: Professio
       setEditorContent(refreshedContent);
       setEditorText(blocksToPlainText(refreshedContent));
       setDraftRevision(refreshedDraft?.draft_revision ?? null);
-      setFencingToken(null);
+      clearLease();
       setAutosaveState(refreshedDraft && refreshedDraft.draft_revision > 0 ? 'saved' : 'idle');
       setAutosaveRetry(0);
       autosaveSignatureRef.current = JSON.stringify({
@@ -663,17 +816,8 @@ export function ProfessionalDeliverablesPage({ initialDeliverableId }: Professio
         baseVersion: refreshed.current_version.version_uuid,
         content: refreshedContent,
       });
-      if (refreshedDraft && refreshed.allowed_actions.includes('edit')) {
-        try {
-          const lease = await acquireProfessionalDeliverableLease(refreshed.deliverable_uuid, {
-            row_version: refreshedDraft.row_version,
-            base_version_uuid: refreshedDraft.base_version_uuid,
-          });
-          setFencingToken(lease.fencing_token);
-        } catch {
-          // The next save surfaces a stable lease conflict if another user
-          // owns the editor; the content itself remains recoverable.
-        }
+      if (refreshed.allowed_actions.includes('edit')) {
+        await acquireEditorLease(refreshed, refreshedDraft);
       }
       setDeliverables((current) => current.map((item) => item.deliverable_uuid === refreshed.deliverable_uuid
         ? { ...item, ...refreshed }
@@ -683,8 +827,18 @@ export function ProfessionalDeliverablesPage({ initialDeliverableId }: Professio
     }
   };
 
+  const enterRevisionMode = async () => {
+    if (!detail || !canAcquireLease || leaseState === 'acquiring') return;
+    const acquired = leaseState === 'owned' || await acquireEditorLease(detail);
+    if (acquired) setRevisionMode(true);
+  };
+
   const saveVersion = async () => {
     if (!detail || !dirty || saving) return;
+    if (!canEdit || fencingToken === null) {
+      setError('当前没有有效编辑权，内容已保持只读。请先重新获取编辑权。');
+      return;
+    }
     setSaving(true);
     setError('');
     setMessage('');
@@ -732,7 +886,11 @@ export function ProfessionalDeliverablesPage({ initialDeliverableId }: Professio
       setEditorContent(savedContent);
       setEditorText(blocksToPlainText(savedContent));
       setDraftRevision(draftRevision === null ? null : 0);
-      setFencingToken(null);
+      const savedLease = leaseRef.current;
+      clearLease();
+      if (savedLease) {
+        void releaseProfessionalDeliverableLease(savedLease.deliverableUuid, savedLease.fencingToken).catch(() => undefined);
+      }
       setAutosaveState('saved');
       autosaveSignatureRef.current = '';
       setVersions((current) => updateVersionList(current, payload.version));
@@ -818,21 +976,31 @@ export function ProfessionalDeliverablesPage({ initialDeliverableId }: Professio
   };
 
   const locateBlock = (blockId: string, charStart: number | null, charEnd: number | null) => {
-    if (!detail || !editorRef.current) return;
-    const blocks = editableBlocks(detail.current_version.content);
+    if (!detail) return;
+    const blocks = editableBlocks(editorContent ?? detail.current_version.content);
     let offset = 0;
     for (const block of blocks) {
       const blockText = String(block.text ?? '').trim();
       if (block.block_id === blockId) {
         const start = Math.min(blockText.length, Math.max(0, charStart ?? 0));
         const end = Math.min(blockText.length, Math.max(start, charEnd ?? start));
-        editorRef.current.focus();
-        editorRef.current.setSelectionRange(offset + start, offset + end);
+        if (editorRef.current) {
+          editorRef.current.focus();
+          editorRef.current.setSelectionRange(offset + start, offset + end);
+        }
+        const target = Array.from(editorSurfaceRef.current?.querySelectorAll<HTMLElement>('[data-block-id]') ?? [])
+          .find((element) => element.dataset.blockId === blockId);
+        if (target) {
+          if (typeof target.scrollIntoView === 'function') target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          target.focus();
+          setLocatedBlockId(blockId);
+          window.setTimeout(() => setLocatedBlockId((current) => current === blockId ? null : current), 1600);
+        }
         return;
       }
       offset += blockText.length + 2;
     }
-    editorRef.current.focus();
+    editorRef.current?.focus();
   };
 
   const confirmFact = async (fact: DeliverableFact) => {
@@ -1200,7 +1368,9 @@ export function ProfessionalDeliverablesPage({ initialDeliverableId }: Professio
             </button>
           ) : null}
           {hasAction('create_revision') && !revisionMode ? (
-            <button className="professional-secondary-button" onClick={() => setRevisionMode(true)} type="button">创建修订版本</button>
+            <button className="professional-secondary-button" disabled={leaseState === 'acquiring'} onClick={() => void enterRevisionMode()} type="button">
+              {leaseState === 'acquiring' ? '获取编辑权…' : '创建修订版本'}
+            </button>
           ) : null}
           {hasAction('review') ? (
             <button className="professional-secondary-button" disabled={busyAction === 'review'} onClick={() => void startReview()} type="button">
@@ -1299,6 +1469,7 @@ export function ProfessionalDeliverablesPage({ initialDeliverableId }: Professio
               <div className="professional-editor-toolbar">
                 <div>
                   <span>结构化正文</span>
+                  <strong className={`professional-lease-indicator is-${leaseState}`} data-lease-state={leaseState}>{leaseLabel}</strong>
                   <strong aria-live="polite" data-autosave-state={autosaveState}>{autosaveLabel}</strong>
                   {autosaveState === 'error' ? (
                     <button
@@ -1319,7 +1490,29 @@ export function ProfessionalDeliverablesPage({ initialDeliverableId }: Professio
                   ) : null}
                 </div>
                 {canEdit ? (
-                  <div className="professional-editor-import">
+                  <div
+                    aria-label="导入与图片上传区"
+                    className={`professional-editor-import${mediaDropActive ? ' is-drop-active' : ''}`}
+                    onDragEnter={(event) => {
+                      if (event.dataTransfer.types.includes('Files')) setMediaDropActive(true);
+                    }}
+                    onDragLeave={(event) => {
+                      if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setMediaDropActive(false);
+                    }}
+                    onDragOver={(event) => {
+                      if (!event.dataTransfer.types.includes('Files')) return;
+                      event.preventDefault();
+                      event.dataTransfer.dropEffect = 'copy';
+                    }}
+                    onDrop={(event) => {
+                      const file = event.dataTransfer.files?.[0];
+                      setMediaDropActive(false);
+                      if (!file || !file.type.startsWith('image/')) return;
+                      event.preventDefault();
+                      void uploadMedia(file);
+                    }}
+                    role="group"
+                  >
                     <input
                       ref={docxInputRef}
                       accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
@@ -1358,6 +1551,25 @@ export function ProfessionalDeliverablesPage({ initialDeliverableId }: Professio
                     >
                       {uploadingMedia ? '上传中…' : '上传图片'}
                     </button>
+                    {mediaUploadState.status === 'error' && mediaUploadState.file ? (
+                      <button
+                        aria-label="重试图片上传"
+                        className="professional-quiet-button"
+                        onClick={retryMediaUpload}
+                        type="button"
+                      >重试</button>
+                    ) : null}
+                    <small
+                      aria-busy={mediaUploadState.status === 'uploading'}
+                      aria-live="polite"
+                      className={`professional-editor-import-status${mediaUploadState.status === 'error' ? ' is-error' : ''}`}
+                    >
+                      {mediaUploadState.status === 'uploading'
+                        ? `正在处理 ${mediaUploadState.fileName}…`
+                        : mediaUploadState.status === 'error'
+                          ? `${mediaUploadState.fileName} 上传失败，可重试`
+                          : '支持将图片直接拖入'}
+                    </small>
                   </div>
                 ) : null}
                 <span>{revisionMode ? '修订模式' : detail.current_version.change_summary}</span>
@@ -1369,10 +1581,21 @@ export function ProfessionalDeliverablesPage({ initialDeliverableId }: Professio
                   ))}
                 </nav>
               ) : null}
+              {leaseState !== 'owned' ? (
+                <div className="professional-editor-lock-notice" role="status">
+                  <strong>{leaseLabel}</strong>
+                  {leaseState === 'blocked' && leaseOwnerUserId ? <span>当前编辑者：{leaseOwnerUserId}{leaseExpiresAt ? ` · 预计 ${new Date(leaseExpiresAt).toLocaleTimeString('zh-CN')} 释放` : ''}</span> : null}
+                  {leaseState === 'expired' ? <span>编辑权已失效，重新获取后才能继续输入或保存。</span> : null}
+                  {canAcquireLease && leaseState !== 'acquiring' ? (
+                    <button className="professional-quiet-button" onClick={() => void acquireEditorLease(detail)} type="button">重新获取编辑权</button>
+                  ) : null}
+                </div>
+              ) : null}
               <DocumentBlockEditor
                 content={editorContent ?? detail.current_version.content}
+                containerRef={editorSurfaceRef}
                 disabled={!canEdit}
-                onDeleteMedia={(block) => void deleteMedia(block)}
+                onRequestDeleteBlock={requestDeleteBlock}
                 onChange={(nextContent) => {
                   setEditorContent(nextContent);
                   setEditorText(blocksToPlainText(nextContent));
@@ -1380,7 +1603,38 @@ export function ProfessionalDeliverablesPage({ initialDeliverableId }: Professio
                 }}
                 onPreviewMedia={(block) => void previewMedia(block)}
                 textareaRef={editorRef}
+                locatedBlockId={locatedBlockId}
               />
+              {pendingBlockDeletion ? (
+                <div
+                  aria-label="删除区块影响确认"
+                  className="professional-block-delete-warning"
+                  role="alertdialog"
+                >
+                  <div>
+                    <strong>删除区块前确认</strong>
+                    <p>
+                      区块「{pendingBlockDeletion.block.block_id}」已绑定
+                      {pendingBlockDeletion.impact.facts} 条事实、
+                      {pendingBlockDeletion.impact.issues} 个审阅问题和
+                      {pendingBlockDeletion.impact.comments} 条评论。删除只会修改当前草稿，相关锚点会在新版本中失效。
+                    </p>
+                  </div>
+                  <div className="professional-block-delete-warning-actions">
+                    <button
+                      className="professional-quiet-button is-danger"
+                      disabled={busyAction === `delete-block:${pendingBlockDeletion.block.block_id}`}
+                      onClick={() => void deleteBlock(pendingBlockDeletion.block)}
+                      type="button"
+                    >继续删除</button>
+                    <button
+                      className="professional-quiet-button"
+                      onClick={() => setPendingBlockDeletion(null)}
+                      type="button"
+                    >取消</button>
+                  </div>
+                </div>
+              ) : null}
               {mediaPreview ? (
                 <div aria-label="图片预览" className="professional-media-preview" role="dialog">
                   <div className="professional-media-preview-card">

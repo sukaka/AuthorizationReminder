@@ -4,6 +4,8 @@ import type { DeliverableContent } from '../src/api/deliverables';
 import {
   blocksToPlainText,
   appendBlock,
+  appendMedia,
+  documentMediaPresentation,
   insertDocumentTableColumn,
   insertDocumentTableRow,
   mergeDocumentTableCells,
@@ -14,12 +16,14 @@ import {
   removeDocumentTableColumn,
   removeDocumentTableRow,
   replaceEditableText,
+  sanitizePastedText,
   setDocumentTableColumnWidth,
   splitDocumentTableCell,
   toEditorDocument,
   tableCellText,
   tableRowCells,
   updateDocumentBlock,
+  updateDocumentMedia,
   updateDocumentTableCell,
 } from '../src/components/documentBlockAdapter';
 
@@ -34,6 +38,11 @@ const legacyContent: DeliverableContent = {
 };
 
 describe('documentBlockAdapter', () => {
+  it('sanitizes clipboard text without allowing hidden control characters or HTML semantics', () => {
+    expect(sanitizePastedText('甲\r\n乙\u0000\u0007\u2028丙')).toBe('甲\n乙\n丙');
+    expect(sanitizePastedText('  甲\t\n乙  ', { singleLine: true })).toBe('甲 乙');
+  });
+
   it('normalizes legacy content without changing order or IDs', () => {
     const result = toEditorDocument(legacyContent);
     expect(result.schema_version).toBe('2');
@@ -61,6 +70,21 @@ describe('documentBlockAdapter', () => {
       'paragraph-2',
       'paragraph-1',
       'table-1',
+    ]);
+  });
+
+  it('supports explicit before and after drop positions', () => {
+    expect(reorderDocumentBlocks(legacyContent, 'paragraph-2', 'paragraph-1', 'before').blocks.map((block) => block.block_id)).toEqual([
+      'heading-1',
+      'paragraph-2',
+      'paragraph-1',
+      'table-1',
+    ]);
+    expect(reorderDocumentBlocks(legacyContent, 'paragraph-1', 'table-1', 'after').blocks.map((block) => block.block_id)).toEqual([
+      'heading-1',
+      'table-1',
+      'paragraph-1',
+      'paragraph-2',
     ]);
   });
 
@@ -103,6 +127,33 @@ describe('documentBlockAdapter', () => {
       'paragraph-2',
     ]);
     expect(result.schema_version).toBe('2');
+  });
+
+  it('normalizes media presentation fields and preserves provider metadata', () => {
+    const content: DeliverableContent = {
+      schema_version: '2',
+      blocks: [{
+        block_id: 'media-1', type: 'media', asset_id: 'asset-1', url: '/image.png', alt: '旧说明',
+        provider_meta: { source: 'office' },
+      }],
+    };
+    expect(documentMediaPresentation(content.blocks[0])).toEqual({ alt: '旧说明', width: null, alignment: 'left' });
+    const updated = updateDocumentMedia(content, 'media-1', { alt: '新说明', width: 9999, alignment: 'center' });
+    expect(updated.blocks[0]).toMatchObject({
+      alt: '新说明',
+      attrs: { alt: '新说明', width: 1200, alignment: 'center' },
+      provider_meta: { source: 'office' },
+    });
+  });
+
+  it('appends media with an explicit presentation contract', () => {
+    const result = appendMedia(legacyContent, {
+      asset_id: 'asset-1', url: '/image.png', alt: '报告图', mime_type: 'image/png', size_bytes: 12,
+    });
+    expect(result.blocks.at(-1)).toMatchObject({
+      type: 'media',
+      attrs: { alt: '报告图', width: null, alignment: 'left' },
+    });
   });
 
   it('appends each supported editor block with a stable ID', () => {
@@ -165,5 +216,46 @@ describe('documentBlockAdapter', () => {
     expect(removeDocumentTableColumn(removeDocumentTableColumn(content, 'table', 0), 'table', 0).blocks[1].rows).toEqual([['右']]);
     expect(moveDocumentBlockToEdge(content, 'b', 'start').blocks.map((block) => block.block_id)).toEqual(['b', 'a', 'table']);
     expect(moveDocumentBlockToEdge(content, 'a', 'end').blocks.map((block) => block.block_id)).toEqual(['table', 'b', 'a']);
+  });
+
+  it('merges and splits a constrained vertical table cell', () => {
+    const content: DeliverableContent = {
+      schema_version: '2',
+      blocks: [{
+        block_id: 'table',
+        type: 'table',
+        rows: [['上', '右上'], ['下', '右下']],
+      }],
+    };
+    const merged = mergeDocumentTableCells(content, 'table', 0, 0, 'down');
+    expect(merged.blocks[0].rows).toEqual([
+      [{ text: '上\n下', row_span: 2 }, '右上'],
+      ['右下'],
+    ]);
+    const split = splitDocumentTableCell(merged, 'table', 0, 0, 'vertical');
+    expect(split.blocks[0].rows).toEqual([
+      [{ text: '上\n下' }, '右上'],
+      ['', '右下'],
+    ]);
+  });
+
+  it('keeps the 500-block document transform within the local editing budget', () => {
+    const content: DeliverableContent = {
+      schema_version: '2',
+      blocks: Array.from({ length: 500 }, (_, index) => ({
+        block_id: `block-${index + 1}`,
+        type: 'paragraph',
+        text: `${String(index + 1).padStart(3, '0')} ${'长文档性能基准'.repeat(14)}`,
+      })),
+    };
+    const startedAt = performance.now();
+    const normalized = toEditorDocument(content);
+    const plainText = blocksToPlainText(normalized);
+    const reordered = reorderDocumentBlocks(normalized, 'block-499', 'block-2', 'after');
+    const durationMs = performance.now() - startedAt;
+
+    expect(plainText.length).toBeGreaterThan(50_000);
+    expect(reordered.blocks[2].block_id).toBe('block-499');
+    expect(durationMs).toBeLessThan(1_000);
   });
 });

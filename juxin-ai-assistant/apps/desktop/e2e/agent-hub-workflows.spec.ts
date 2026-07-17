@@ -21,6 +21,12 @@ async function mockSessionAndHub(page: Page) {
         json: { favorites: [], recent_tasks: [], recent_generations: [], safety_reminders: [] },
       });
     }
+    if (path === '/api/ai/projects') {
+      return route.fulfill({ json: [] });
+    }
+    if (path === '/api/ai/catalog') {
+      return route.fulfill({ json: { assistants: [] } });
+    }
     if (path === '/api/ai/agent-hub/agents') {
       return route.fulfill({
         json: [
@@ -160,17 +166,19 @@ test('admin opens Agent market and invokes echo', async ({ page }) => {
   await mockSessionAndHub(page);
   await page.setViewportSize({ width: 1280, height: 900 });
   await page.goto('/');
+  await page.getByRole('button', { name: 'AI 能力' }).click();
   await page.getByRole('button', { name: 'Agent 市场' }).click();
   await expect(page.getByRole('heading', { name: 'Agent 市场' })).toBeVisible();
-  await expect(page.getByText('本地回声 Agent')).toBeVisible();
+  await expect(page.getByRole('heading', { name: '本地回声 Agent' })).toBeVisible();
   await page.getByRole('button', { name: /本地回声 Agent/ }).click();
   await page.getByRole('button', { name: '试调调用' }).click();
-  await expect(page.getByText(/调用成功|\[echo\]/)).toBeVisible();
+  await expect(page.getByText('调用成功 · local.echo')).toBeVisible();
 });
 
 test('user runs serial workflow and can jump to task center', async ({ page }) => {
   await mockSessionAndHub(page);
   await page.goto('/');
+  await page.getByRole('button', { name: 'AI 能力' }).click();
   await page.getByRole('button', { name: '工作流' }).click();
   await expect(page.getByRole('heading', { name: '工作流' })).toBeVisible();
   await page.getByRole('button', { name: /串行：摘要/ }).click();

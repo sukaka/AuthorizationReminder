@@ -32,11 +32,29 @@ beforeEach(() => {
 
 async function findMainNavButton(name: string) {
   const mainNav = await screen.findByRole('navigation', { name: '主导航' });
-  return within(mainNav).getByRole('button', { name });
-}
+  const directButton = within(mainNav).queryByRole('button', { name });
+  if (directButton) return directButton;
 
-function getMainNavButton(name: string) {
-  return within(screen.getByRole('navigation', { name: '主导航' })).getByRole('button', { name });
+  const sectionByItem: Record<string, string> = {
+    '我的任务': '任务与交付',
+    '专业任务': '任务与交付',
+    '成果中心': '任务与交付',
+    '工作成果': '任务与交付',
+    '助手模式': 'AI 能力',
+    '工作流': 'AI 能力',
+    '能力中心': 'AI 能力',
+    'Agent 市场': 'AI 能力',
+    '我的资料': '知识与学习',
+    '学习中心': '知识与学习',
+    '企业智能中枢': '企业洞察',
+    '部门数据': '企业洞察',
+  };
+  const sectionName = sectionByItem[name];
+  if (!sectionName) throw new Error(`Unknown workspace navigation item: ${name}`);
+
+  await userEvent.click(within(mainNav).getByRole('button', { name: sectionName }));
+  const sectionNav = await screen.findByRole('navigation', { name: `${sectionName}导航` });
+  return within(sectionNav).getByRole('button', { name });
 }
 
 function session(role: string, managedDepartments: string[] = []) {
@@ -109,13 +127,39 @@ function session(role: string, managedDepartments: string[] = []) {
   );
 }
 
+it('groups the admin sidebar into work domains and contextual tabs', async () => {
+  session('admin');
+  render(<App />);
+
+  await screen.findByRole('region', { name: '私人工作助理工作区' });
+
+  const mainNav = screen.getByRole('navigation', { name: '主导航' });
+  expect(within(mainNav).getAllByRole('button')).toHaveLength(6);
+  for (const name of ['对话', '项目', '任务与交付', 'AI 能力', '知识与学习', '企业洞察']) {
+    expect(within(mainNav).getByRole('button', { name })).toBeInTheDocument();
+  }
+
+  const utilityNav = screen.getByRole('navigation', { name: '管理与设置' });
+  for (const name of ['管理中心', '设置', '帮助与反馈']) {
+    expect(within(utilityNav).getByRole('button', { name })).toBeInTheDocument();
+  }
+  expect(screen.queryByRole('button', { name: '4.0 编辑 Demo' })).not.toBeInTheDocument();
+
+  await userEvent.click(within(mainNav).getByRole('button', { name: '知识与学习' }));
+  const knowledgeNav = await screen.findByRole('navigation', { name: '知识与学习导航' });
+  expect(within(knowledgeNav).getByRole('button', { name: '我的资料' })).toHaveAttribute('aria-current', 'page');
+  expect(within(knowledgeNav).getByRole('button', { name: '学习中心' })).toBeInTheDocument();
+});
+
 it('shows AI governance pages to admin without user or server model forms', async () => {
   session('admin');
   render(<App />);
 
-  expect(await screen.findByRole('button', { name: '部门数据' })).toBeInTheDocument();
-  expect(screen.getByRole('button', { name: '提交建议' })).toBeInTheDocument();
-  await userEvent.click(await screen.findByRole('button', { name: '治理中心' }));
+  const mainNav = await screen.findByRole('navigation', { name: '主导航' });
+  expect(within(mainNav).getByRole('button', { name: '企业洞察' })).toBeInTheDocument();
+  const utilityNav = screen.getByRole('navigation', { name: '管理与设置' });
+  expect(within(utilityNav).getByRole('button', { name: '帮助与反馈' })).toBeInTheDocument();
+  await userEvent.click(within(utilityNav).getByRole('button', { name: '管理中心' }));
   expect(screen.getByRole('button', { name: '任务管理' })).toBeInTheDocument();
   const governanceNav = screen.getByRole('navigation', { name: '治理导航' });
   expect(within(governanceNav).getByRole('button', { name: '助手模式' })).toBeInTheDocument();
@@ -137,9 +181,10 @@ it('hides admin-only entries from sysadmin users', async () => {
 
   expect(await screen.findByRole('region', { name: '私人工作助理工作区' })).toBeInTheDocument();
   expect(screen.queryByRole('button', { name: '工作台' })).not.toBeInTheDocument();
-  expect(screen.getByRole('button', { name: '助手模式' })).toBeInTheDocument();
-  expect(screen.getByRole('button', { name: '工作成果' })).toBeInTheDocument();
-  expect(getMainNavButton('我的资料')).toBeInTheDocument();
+  const mainNav = screen.getByRole('navigation', { name: '主导航' });
+  expect(within(mainNav).getByRole('button', { name: 'AI 能力' })).toBeInTheDocument();
+  expect(within(mainNav).getByRole('button', { name: '任务与交付' })).toBeInTheDocument();
+  expect(within(mainNav).getByRole('button', { name: '知识与学习' })).toBeInTheDocument();
   expect(screen.getByRole('button', { name: '设置' })).toBeInTheDocument();
   expect(screen.queryByRole('button', { name: '治理中心' })).not.toBeInTheDocument();
   expect(screen.queryByRole('button', { name: '部门数据' })).not.toBeInTheDocument();
@@ -153,9 +198,10 @@ it('hides department data and suggestions from non-admin department managers', a
 
   expect(await screen.findByRole('region', { name: '私人工作助理工作区' })).toBeInTheDocument();
   expect(screen.queryByRole('button', { name: '工作台' })).not.toBeInTheDocument();
-  expect(screen.getByRole('button', { name: '助手模式' })).toBeInTheDocument();
-  expect(screen.getByRole('button', { name: '工作成果' })).toBeInTheDocument();
-  expect(getMainNavButton('我的资料')).toBeInTheDocument();
+  const mainNav = screen.getByRole('navigation', { name: '主导航' });
+  expect(within(mainNav).getByRole('button', { name: 'AI 能力' })).toBeInTheDocument();
+  expect(within(mainNav).getByRole('button', { name: '任务与交付' })).toBeInTheDocument();
+  expect(within(mainNav).getByRole('button', { name: '知识与学习' })).toBeInTheDocument();
   expect(screen.getByRole('button', { name: '设置' })).toBeInTheDocument();
   expect(screen.queryByRole('button', { name: '部门数据' })).not.toBeInTheDocument();
   expect(screen.queryByRole('button', { name: '提交建议' })).not.toBeInTheDocument();
@@ -593,8 +639,7 @@ it('lets administrators upload official knowledge files from the knowledge page'
   );
   render(<App />);
 
-  const mainNav = await screen.findByRole('navigation', { name: '主导航' });
-  await userEvent.click(within(mainNav).getByRole('button', { name: '我的资料' }));
+  await userEvent.click(await findMainNavButton('我的资料'));
   await userEvent.click(screen.getByRole('tab', { name: '上传资料' }));
   await userEvent.upload(
     await screen.findByLabelText('上传知识文件'),
@@ -654,8 +699,7 @@ it('lets administrators create a knowledge base before uploading official files'
   );
   render(<App />);
 
-  const mainNav = await screen.findByRole('navigation', { name: '主导航' });
-  await userEvent.click(within(mainNav).getByRole('button', { name: '我的资料' }));
+  await userEvent.click(await findMainNavButton('我的资料'));
   await userEvent.click(screen.getByRole('tab', { name: '上传资料' }));
   expect(await screen.findByText('暂无可选资料库，请先创建资料库。')).toBeInTheDocument();
 
@@ -701,8 +745,7 @@ it('explains when knowledge upload is rejected by the proxy body size limit', as
   );
   render(<App />);
 
-  const mainNav = await screen.findByRole('navigation', { name: '主导航' });
-  await userEvent.click(within(mainNav).getByRole('button', { name: '我的资料' }));
+  await userEvent.click(await findMainNavButton('我的资料'));
   await userEvent.click(screen.getByRole('tab', { name: '上传资料' }));
   await userEvent.upload(
     await screen.findByLabelText('上传知识文件'),
@@ -1304,8 +1347,7 @@ it('lets administrators enable and disable RAG for official knowledge files', as
   );
   render(<App />);
 
-  const mainNav = await screen.findByRole('navigation', { name: '主导航' });
-  await userEvent.click(within(mainNav).getByRole('button', { name: '我的资料' }));
+  await userEvent.click(await findMainNavButton('我的资料'));
   const fileCard = await screen.findByRole('listitem', { name: /产品白皮书\.pdf/ });
 
   expect(fileCard).toHaveTextContent('已整理 8 个段落');
@@ -1382,8 +1424,7 @@ it('shows secondary knowledge categories in the left rail and filters by them', 
   );
   render(<App />);
 
-  const mainNav = await screen.findByRole('navigation', { name: '主导航' });
-  await userEvent.click(within(mainNav).getByRole('button', { name: '我的资料' }));
+  await userEvent.click(await findMainNavButton('我的资料'));
   const categoryRail = await screen.findByLabelText('分类目录');
   const parentCategory = within(categoryRail).getByRole('button', { name: '产品资料1' });
   const nestedCategory = within(categoryRail).getByRole('button', { name: 'wdsp1' });
@@ -1444,8 +1485,7 @@ it('opens a searchable secondary category panel when one parent has many childre
   );
   render(<App />);
 
-  const mainNav = await screen.findByRole('navigation', { name: '主导航' });
-  await userEvent.click(within(mainNav).getByRole('button', { name: '我的资料' }));
+  await userEvent.click(await findMainNavButton('我的资料'));
   const categoryRail = await screen.findByLabelText('分类目录');
   await userEvent.click(within(categoryRail).getByRole('button', { name: '产品资料' }));
 
@@ -1519,8 +1559,7 @@ it('lets administrators reparse official knowledge files', async () => {
   );
   render(<App />);
 
-  const mainNav = await screen.findByRole('navigation', { name: '主导航' });
-  await userEvent.click(within(mainNav).getByRole('button', { name: '我的资料' }));
+  await userEvent.click(await findMainNavButton('我的资料'));
   const fileCard = await screen.findByRole('listitem', { name: /交付手册\.docx/ });
 
   expect(fileCard).toHaveTextContent('已整理 6 个段落');
@@ -1589,8 +1628,7 @@ it('lets administrators edit official knowledge category and document type', asy
   );
   render(<App />);
 
-  const mainNav = await screen.findByRole('navigation', { name: '主导航' });
-  await userEvent.click(within(mainNav).getByRole('button', { name: '我的资料' }));
+  await userEvent.click(await findMainNavButton('我的资料'));
   const fileCard = await screen.findByRole('listitem', { name: /产品白皮书\.pdf/ });
 
   await userEvent.click(within(fileCard).getByRole('button', { name: '更多操作 产品白皮书.pdf' }));
@@ -1759,8 +1797,7 @@ it('lets administrators archive files and manage the knowledge trash', async () 
   );
   render(<App />);
 
-  const mainNav = await screen.findByRole('navigation', { name: '主导航' });
-  await userEvent.click(within(mainNav).getByRole('button', { name: '我的资料' }));
+  await userEvent.click(await findMainNavButton('我的资料'));
   const activeCard = await screen.findByRole('listitem', { name: /产品白皮书\.pdf/ });
 
   await userEvent.click(within(activeCard).getByRole('button', { name: '更多操作 产品白皮书.pdf' }));
@@ -1912,8 +1949,7 @@ it('lets administrators approve and reject pending knowledge review files', asyn
   );
   render(<App />);
 
-  const mainNav = await screen.findByRole('navigation', { name: '主导航' });
-  await userEvent.click(within(mainNav).getByRole('button', { name: '我的资料' }));
+  await userEvent.click(await findMainNavButton('我的资料'));
   const approveCard = await screen.findByRole('listitem', { name: /待审核方案\.docx/ });
   const rejectCard = await screen.findByRole('listitem', { name: /待审核记录\.docx/ });
 
@@ -1952,8 +1988,7 @@ it('opens the administrator knowledge workspace from the sidebar', async () => {
   session('admin');
   render(<App />);
 
-  const mainNav = await screen.findByRole('navigation', { name: '主导航' });
-  await userEvent.click(within(mainNav).getByRole('button', { name: '我的资料' }));
+  await userEvent.click(await findMainNavButton('我的资料'));
 
   expect(screen.getByRole('heading', { name: '我的资料' })).toBeInTheDocument();
   expect(screen.getByRole('tab', { name: '资料库' })).toBeInTheDocument();
@@ -2028,8 +2063,7 @@ it('lets administrators manage knowledge document types in a drawer and use them
   );
   render(<App />);
 
-  const mainNav = await screen.findByRole('navigation', { name: '主导航' });
-  await userEvent.click(within(mainNav).getByRole('button', { name: '我的资料' }));
+  await userEvent.click(await findMainNavButton('我的资料'));
   await userEvent.click(screen.getByRole('tab', { name: '字典管理' }));
   await userEvent.click(screen.getByRole('tab', { name: '文档类型' }));
 
@@ -2078,8 +2112,7 @@ it('shows administrator knowledge areas as tabs', async () => {
   );
   render(<App />);
 
-  const mainNav = await screen.findByRole('navigation', { name: '主导航' });
-  await userEvent.click(within(mainNav).getByRole('button', { name: '我的资料' }));
+  await userEvent.click(await findMainNavButton('我的资料'));
 
   const uploadTab = await screen.findByRole('tab', { name: '上传资料' });
   expect(screen.getByRole('tab', { name: '资料库' })).toHaveAttribute('aria-selected', 'true');
@@ -2132,8 +2165,7 @@ it('shows primary and secondary categories separately in the upload form', async
   );
   render(<App />);
 
-  const mainNav = await screen.findByRole('navigation', { name: '主导航' });
-  await userEvent.click(within(mainNav).getByRole('button', { name: '我的资料' }));
+  await userEvent.click(await findMainNavButton('我的资料'));
   await userEvent.click(screen.getByRole('tab', { name: '上传资料' }));
   await userEvent.upload(
     await screen.findByLabelText('上传知识文件'),
@@ -2180,8 +2212,7 @@ it('warns and asks for confirmation before uploading a duplicate file name', asy
   );
   render(<App />);
 
-  const mainNav = await screen.findByRole('navigation', { name: '主导航' });
-  await userEvent.click(within(mainNav).getByRole('button', { name: '我的资料' }));
+  await userEvent.click(await findMainNavButton('我的资料'));
   await userEvent.click(await screen.findByRole('tab', { name: '上传资料' }));
   await userEvent.upload(
     await screen.findByLabelText('上传知识文件'),

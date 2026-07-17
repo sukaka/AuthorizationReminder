@@ -257,7 +257,12 @@ def acquire_lease(
     now = _utc_now()
     lease = db.scalar(select(DeliverableEditLease).where(DeliverableEditLease.deliverable_id == access.artifact.id))
     if lease is not None and lease.status == "active" and lease.expires_at > now and lease.owner_user_id != actor_user_id:
-        raise ProfessionalDeliveryError("DELIVERABLE_EDIT_LEASE_CONFLICT", "成果正在被其他用户编辑", 409)
+        raise ProfessionalDeliveryError(
+            "DELIVERABLE_EDIT_LEASE_CONFLICT",
+            "成果正在被其他用户编辑",
+            409,
+            {"owner_user_id": lease.owner_user_id, "expires_at": lease.expires_at.isoformat()},
+        )
     if lease is None:
         lease = DeliverableEditLease(
             uuid=str(uuid_lib.uuid4()),

@@ -130,6 +130,7 @@ it('adds the capability center to the main navigation for ordinary users', async
 
   render(<App />);
 
+  await userEvent.click(await screen.findByRole('button', { name: 'AI 能力' }));
   await userEvent.click(await screen.findByRole('button', { name: '能力中心' }));
   expect(await screen.findByRole('heading', { name: '能力中心' })).toBeInTheDocument();
 });

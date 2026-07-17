@@ -34,6 +34,21 @@ export function blocksToPlainText(content: DeliverableContent): string {
     .join('\n\n');
 }
 
+/**
+ * Convert clipboard text to the editor's plain-text contract.  We deliberately
+ * ignore clipboard HTML so pasted Word/website markup cannot create unknown
+ * nodes in a structured block.  Line endings are canonicalized and control
+ * characters are removed while tabs/newlines remain useful in a paragraph.
+ */
+export function sanitizePastedText(value: string, options: { singleLine?: boolean } = {}): string {
+  const normalized = String(value ?? '')
+    .replace(/\r\n?/g, '\n')
+    .replace(/[\u2028\u2029]/g, '\n')
+    .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, '');
+  if (options.singleLine) return normalized.replace(/[\t\n]+/g, ' ').replace(/ {2,}/g, ' ').trim();
+  return normalized;
+}
+
 /** Replace only text-bearing blocks, preserving headings, tables, media and IDs. */
 export function replaceEditableText(text: string, current: DeliverableContent): DeliverableContent {
   const normalized = toEditorDocument(current);
@@ -64,6 +79,7 @@ export function reorderDocumentBlocks(
   content: DeliverableContent,
   fromBlockId: string,
   toBlockId: string,
+  position: 'before' | 'after' = 'before',
 ): DeliverableContent {
   const normalized = toEditorDocument(content);
   const fromIndex = normalized.blocks.findIndex((block) => block.block_id === fromBlockId);
@@ -71,7 +87,11 @@ export function reorderDocumentBlocks(
   if (fromIndex < 0 || toIndex < 0 || fromIndex === toIndex) return normalized;
   const blocks = [...normalized.blocks];
   const [moved] = blocks.splice(fromIndex, 1);
-  blocks.splice(toIndex, 0, moved);
+  // Resolve the target after removing the source so both directions have the
+  // same deterministic before/after semantics.
+  const resolvedTargetIndex = blocks.findIndex((block) => block.block_id === toBlockId);
+  if (resolvedTargetIndex < 0) return normalized;
+  blocks.splice(resolvedTargetIndex + (position === 'after' ? 1 : 0), 0, moved);
   return { ...normalized, blocks };
 }
 
@@ -169,6 +189,12 @@ export function tableCellSpan(cell: unknown): number {
   return Number.isInteger(span) && span > 0 ? span : 1;
 }
 
+export function tableCellRowSpan(cell: unknown): number {
+  if (!cell || typeof cell !== 'object' || Array.isArray(cell)) return 1;
+  const span = Number((cell as { row_span?: unknown }).row_span);
+  return Number.isInteger(span) && span > 0 ? span : 1;
+}
+
 function tableCellWithSpan(cell: unknown, span: number): unknown {
   const normalizedSpan = Math.max(1, Math.floor(span));
   if (normalizedSpan === 1 && cell && typeof cell === 'object' && !Array.isArray(cell)) {
@@ -179,6 +205,18 @@ function tableCellWithSpan(cell: unknown, span: number): unknown {
     return { ...(cell as Record<string, unknown>), col_span: normalizedSpan };
   }
   return normalizedSpan === 1 ? cell : { text: tableCellText(cell), col_span: normalizedSpan };
+}
+
+function tableCellWithRowSpan(cell: unknown, span: number): unknown {
+  const normalizedSpan = Math.max(1, Math.floor(span));
+  if (normalizedSpan === 1 && cell && typeof cell === 'object' && !Array.isArray(cell)) {
+    const { row_span: _rowSpan, ...rest } = cell as Record<string, unknown>;
+    return rest;
+  }
+  if (cell && typeof cell === 'object' && !Array.isArray(cell)) {
+    return { ...(cell as Record<string, unknown>), row_span: normalizedSpan };
+  }
+  return normalizedSpan === 1 ? cell : { text: tableCellText(cell), row_span: normalizedSpan };
 }
 
 function tableBlockRows(content: DeliverableContent, blockId: string): {
@@ -263,17 +301,35 @@ export function removeDocumentTableColumn(
   return updateDocumentBlock(target.normalized, blockId, { rows });
 }
 
-/** Merge a cell with its right neighbour. Only horizontal spans are supported in 4.0.0. */
+/** Merge a cell with its right or lower neighbour using a constrained grid-safe operation. */
 export function mergeDocumentTableCells(
   content: DeliverableContent,
   blockId: string,
   rowIndex: number,
   columnIndex: number,
+  direction: 'right' | 'down' = 'right',
 ): DeliverableContent {
   const target = tableBlockRows(content, blockId);
   if (!target || rowIndex < 0 || columnIndex < 0) return target?.normalized ?? toEditorDocument(content);
   const cells = tableRowCells(target.rows[rowIndex]);
-  if (!cells || columnIndex >= cells.length - 1) return target.normalized;
+  if (!cells || columnIndex >= cells.length || (direction === 'right' && columnIndex >= cells.length - 1)) return target.normalized;
+  if (direction === 'down') {
+    const nextRow = tableRowCells(target.rows[rowIndex + 1]);
+    if (!nextRow || columnIndex >= nextRow.length || tableCellSpan(cells[columnIndex]) !== 1
+      || tableCellSpan(nextRow[columnIndex]) !== 1 || tableCellRowSpan(cells[columnIndex]) !== 1
+      || tableCellRowSpan(nextRow[columnIndex]) !== 1) return target.normalized;
+    const top = cells[columnIndex];
+    const bottom = nextRow[columnIndex];
+    cells[columnIndex] = tableCellWithRowSpan(
+      { ...(top && typeof top === 'object' && !Array.isArray(top) ? top as Record<string, unknown> : {}), text: [tableCellText(top), tableCellText(bottom)].filter(Boolean).join('\n') },
+      2,
+    );
+    nextRow.splice(columnIndex, 1);
+    const rows = [...target.rows];
+    rows[rowIndex] = tableRowWithCells(rows[rowIndex], cells);
+    rows[rowIndex + 1] = tableRowWithCells(rows[rowIndex + 1], nextRow);
+    return updateDocumentBlock(target.normalized, blockId, { rows });
+  }
   const left = cells[columnIndex];
   const right = cells[columnIndex + 1];
   const leftSpan = tableCellSpan(left);
@@ -295,12 +351,26 @@ export function splitDocumentTableCell(
   blockId: string,
   rowIndex: number,
   columnIndex: number,
+  direction: 'horizontal' | 'vertical' = 'horizontal',
 ): DeliverableContent {
   const target = tableBlockRows(content, blockId);
   if (!target || rowIndex < 0 || columnIndex < 0) return target?.normalized ?? toEditorDocument(content);
   const cells = tableRowCells(target.rows[rowIndex]);
   if (!cells || columnIndex >= cells.length) return target.normalized;
   const span = tableCellSpan(cells[columnIndex]);
+  if (direction === 'vertical') {
+    const rowSpan = tableCellRowSpan(cells[columnIndex]);
+    if (rowSpan <= 1) return target.normalized;
+    cells[columnIndex] = tableCellWithRowSpan(cells[columnIndex], 1);
+    const rows = [...target.rows];
+    rows[rowIndex] = tableRowWithCells(rows[rowIndex], cells);
+    for (let offset = 1; offset < rowSpan && rowIndex + offset < rows.length; offset += 1) {
+      const row = tableRowCells(rows[rowIndex + offset]) ?? [];
+      row.splice(Math.min(columnIndex, row.length), 0, '');
+      rows[rowIndex + offset] = tableRowWithCells(rows[rowIndex + offset], row);
+    }
+    return updateDocumentBlock(target.normalized, blockId, { rows });
+  }
   if (span <= 1) return target.normalized;
   const original = cells[columnIndex];
   cells[columnIndex] = tableCellWithSpan(original, 1);
@@ -356,6 +426,64 @@ export function removeDocumentBlock(
     ...normalized,
     blocks: normalized.blocks.filter((block) => block.block_id !== blockId),
   };
+}
+
+export type DocumentMediaAlignment = 'left' | 'center' | 'right';
+
+export type DocumentMediaPresentation = {
+  alt: string;
+  width: number | null;
+  alignment: DocumentMediaAlignment;
+};
+
+function mediaAttrs(block: DeliverableBlock): Record<string, unknown> {
+  return block.attrs && typeof block.attrs === 'object' && !Array.isArray(block.attrs)
+    ? block.attrs as Record<string, unknown>
+    : {};
+}
+
+/** Read presentation hints while accepting both the V2 attrs shape and legacy fields. */
+export function documentMediaPresentation(block: DeliverableBlock): DocumentMediaPresentation {
+  const attrs = mediaAttrs(block);
+  const rawAlt = attrs.alt ?? block.alt ?? block.caption ?? block.url ?? '图片';
+  const rawWidth = attrs.width ?? block.width;
+  const numericWidth = Number(rawWidth);
+  const width = Number.isFinite(numericWidth) && numericWidth >= 40
+    ? Math.min(1200, Math.round(numericWidth))
+    : null;
+  const alignment = attrs.alignment === 'center' || attrs.alignment === 'right'
+    ? attrs.alignment
+    : 'left';
+  return { alt: String(rawAlt), width, alignment };
+}
+
+/** Update image presentation without losing unknown provider/media metadata. */
+export function updateDocumentMedia(
+  content: DeliverableContent,
+  blockId: string,
+  patch: Partial<DocumentMediaPresentation>,
+): DeliverableContent {
+  const normalized = toEditorDocument(content);
+  const block = normalized.blocks.find((item) => item.block_id === blockId);
+  if (!block || (block.type !== 'image' && block.type !== 'media')) return normalized;
+  const current = documentMediaPresentation(block);
+  const rawWidth = patch.width === undefined ? current.width : patch.width;
+  const nextWidth = rawWidth === null || !Number.isFinite(Number(rawWidth))
+    ? null
+    : Math.min(1200, Math.max(40, Math.round(Number(rawWidth))));
+  const nextAlignment = patch.alignment === 'center' || patch.alignment === 'right' ? patch.alignment : patch.alignment === 'left' ? 'left' : current.alignment;
+  const next = {
+    ...current,
+    ...patch,
+    width: nextWidth,
+    alignment: nextAlignment,
+    alt: patch.alt === undefined ? current.alt : String(patch.alt),
+  };
+  const attrs = { ...mediaAttrs(block), alt: next.alt, width: next.width, alignment: next.alignment };
+  return updateDocumentBlock(normalized, blockId, {
+    attrs,
+    alt: next.alt,
+  });
 }
 
 export function appendParagraph(content: DeliverableContent): DeliverableContent {
@@ -417,6 +545,11 @@ export function appendMedia(
       asset_id: media.asset_id,
       url: media.url,
       alt: media.alt,
+      attrs: {
+        alt: media.alt,
+        width: null,
+        alignment: 'left',
+      },
       mime_type: media.mime_type,
       size_bytes: media.size_bytes,
     }],
