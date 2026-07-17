@@ -2462,6 +2462,58 @@ it('renders markdown source attribution lines as source capsules without documen
   expect(screen.queryByText(/——/)).not.toBeInTheDocument();
 });
 
+it('renders markdown tables as semantic tables instead of pipe-separated paragraphs', async () => {
+  server.use(
+    http.get('/api/conversations', () => HttpResponse.json({
+      items: [{
+        session_uuid: 'session-markdown-table',
+        title: '表格回答',
+        mode: 'normal',
+        status: 'active',
+        created_at: '2026-07-17T01:00:00Z',
+        updated_at: '2026-07-17T01:01:00Z',
+      }],
+      total: 1,
+    })),
+    http.get('/api/ai/chat/sessions/session-markdown-table', () => HttpResponse.json({
+      session_uuid: 'session-markdown-table',
+      title: '表格回答',
+      mode: 'normal',
+      status: 'active',
+      created_at: '2026-07-17T01:00:00Z',
+      updated_at: '2026-07-17T01:01:00Z',
+      messages: [{
+        message_uuid: 'm-assistant-markdown-table',
+        role: 'assistant',
+        content: [
+          '## 借鉴建议',
+          '| 优先级 | 做法 | 对我们的启发 |',
+          '| :--- | --- | ---: |',
+          '| P0 | **任务工作台** | 统一展示对话与成果 |',
+          '| P1 | 长文本说明 | 窄窗口时允许横向滚动 |',
+          '普通说明 A | B 不应转换成表格',
+        ].join('\n'),
+        status: 'COMPLETED',
+        citations: [],
+        created_at: '2026-07-17T01:00:01Z',
+      }],
+    })),
+  );
+
+  render(<ChatPage />);
+  await userEvent.click(await screen.findByRole('button', { name: '表格回答' }));
+
+  const table = await screen.findByRole('table', { name: '回答表格' });
+  expect(within(table).getAllByRole('columnheader')).toHaveLength(3);
+  expect(within(table).getAllByRole('row')).toHaveLength(3);
+  expect(within(table).getByRole('columnheader', { name: '优先级' })).toBeInTheDocument();
+  expect(within(table).getByRole('cell', { name: '任务工作台' })).toBeInTheDocument();
+  expect(screen.queryByText('| :--- | --- | ---: |')).not.toBeInTheDocument();
+  expect(table.parentElement).toHaveClass('chat-markdown-table-wrap');
+  expect(screen.getAllByRole('table')).toHaveLength(1);
+  expect(screen.getByText('普通说明 A | B 不应转换成表格')).toBeInTheDocument();
+});
+
 it('opens a source preview focused on the cited chunk', async () => {
   const previewRequest = vi.fn();
   server.use(

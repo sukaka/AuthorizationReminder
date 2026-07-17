@@ -1,0 +1,241 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1700 1160" role="img" aria-labelledby="title desc">
+  <title id="title">聚信 AI 助手 3.0 Agent Loop 与 Harness 系统架构</title>
+  <desc id="desc">展示客户端、接入层、任务编排、Agent Loop、连接器、数据存储和稳定性治理之间的关系。</desc>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&amp;family=Noto+Sans+SC:wght@400;500;600;700&amp;display=swap');
+    text { font-family: 'JetBrains Mono', 'Noto Sans SC', 'PingFang SC', sans-serif; }
+    .title { font-size: 25px; font-weight: 700; fill: #f8fafc; letter-spacing: .2px; }
+    .subtitle { font-size: 11px; fill: #94a3b8; }
+    .region-label { font-size: 11px; font-weight: 600; letter-spacing: .5px; }
+    .component { font-size: 12px; font-weight: 600; fill: #f8fafc; text-anchor: middle; }
+    .detail { font-size: 9px; fill: #a5b4fc; text-anchor: middle; }
+    .arrow-label { font-size: 9px; fill: #cbd5e1; text-anchor: middle; }
+    .small { font-size: 9px; fill: #94a3b8; }
+    .note-title { font-size: 12px; font-weight: 700; fill: #f8fafc; }
+    .note { font-size: 10px; fill: #cbd5e1; }
+    .number { font-size: 10px; font-weight: 700; fill: #0f172a; text-anchor: middle; }
+  </style>
+  <defs>
+    <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+      <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#1e293b" stroke-width="0.5"/>
+    </pattern>
+    <marker id="arrow-cyan" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#22d3ee"/>
+    </marker>
+    <marker id="arrow-green" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#34d399"/>
+    </marker>
+    <marker id="arrow-orange" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#fb923c"/>
+    </marker>
+    <marker id="arrow-violet" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#a78bfa"/>
+    </marker>
+    <marker id="arrow-rose" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#fb7185"/>
+    </marker>
+  </defs>
+
+  <rect width="1700" height="1160" fill="#0f172a"/>
+  <rect width="1700" height="1160" fill="url(#grid)"/>
+
+  <text x="40" y="42" class="title">聚信 AI 助手 · 3.0 Agent Loop / Harness 架构</text>
+  <text x="40" y="68" class="subtitle">统一状态契约、工具契约与恢复语义；Native 默认运行，LangGraph 通过能力开关灰度。</text>
+  <rect x="1370" y="25" width="260" height="34" rx="17" fill="rgba(59,130,246,0.22)" stroke="#60a5fa"/>
+  <text x="1500" y="47" class="component" fill="#bfdbfe">codex/3.0-merged · v3.0.0</text>
+
+  <!-- Region boundaries -->
+  <rect x="40" y="100" width="1200" height="120" rx="12" fill="none" stroke="#22d3ee" stroke-width="1" stroke-dasharray="8,4"/>
+  <text x="58" y="119" class="region-label" fill="#22d3ee">01 · 用户与渠道层</text>
+  <rect x="40" y="250" width="1200" height="130" rx="12" fill="none" stroke="#60a5fa" stroke-width="1" stroke-dasharray="8,4"/>
+  <text x="58" y="269" class="region-label" fill="#60a5fa">02 · 接入与身份边界</text>
+  <rect x="40" y="410" width="1200" height="140" rx="12" fill="none" stroke="#fbbf24" stroke-width="1" stroke-dasharray="8,4"/>
+  <text x="58" y="429" class="region-label" fill="#fbbf24">03 · 决策与任务编排</text>
+  <rect x="40" y="580" width="1200" height="170" rx="12" fill="none" stroke="#34d399" stroke-width="1" stroke-dasharray="8,4"/>
+  <text x="58" y="599" class="region-label" fill="#34d399">04 · Agent Loop / Harness 执行层</text>
+  <rect x="40" y="780" width="1200" height="245" rx="12" fill="none" stroke="#a78bfa" stroke-width="1" stroke-dasharray="8,4"/>
+  <text x="58" y="799" class="region-label" fill="#a78bfa">05 · 模型、连接器与持久化</text>
+
+  <!-- Reliability panel -->
+  <rect x="1280" y="100" width="360" height="925" rx="12" fill="rgba(30,41,59,0.45)" stroke="#fb7185" stroke-width="1.2" stroke-dasharray="5,4"/>
+  <text x="1305" y="132" class="note-title">稳定性不变量</text>
+  <text x="1305" y="151" class="small">所有路径都必须可观测、可恢复、可对账</text>
+
+  <rect x="1305" y="175" width="310" height="118" rx="8" fill="#0f172a" stroke="#60a5fa" stroke-width="1.2"/>
+  <circle cx="1330" cy="202" r="13" fill="#60a5fa"/><text x="1330" y="206" class="number">01</text>
+  <text x="1355" y="205" class="note-title">Run / Step 状态契约</text>
+  <text x="1322" y="229" class="note">queued → running → paused</text>
+  <text x="1322" y="247" class="note">→ succeeded / failed / cancelled</text>
+  <text x="1322" y="270" class="small">schema version 不匹配时 fail-closed</text>
+
+  <rect x="1305" y="315" width="310" height="118" rx="8" fill="#0f172a" stroke="#fbbf24" stroke-width="1.2"/>
+  <circle cx="1330" cy="342" r="13" fill="#fbbf24"/><text x="1330" y="346" class="number">02</text>
+  <text x="1355" y="345" class="note-title">Tool Invocation 契约</text>
+  <text x="1322" y="369" class="note">参数校验 · 幂等键 · 权限门禁</text>
+  <text x="1322" y="387" class="note">调用日志 · 结果摘要 · 成本计量</text>
+  <text x="1322" y="410" class="small">未知工具 / 未知结果禁止放行</text>
+
+  <rect x="1305" y="455" width="310" height="118" rx="8" fill="#0f172a" stroke="#34d399" stroke-width="1.2"/>
+  <circle cx="1330" cy="482" r="13" fill="#34d399"/><text x="1330" y="486" class="number">03</text>
+  <text x="1355" y="485" class="note-title">Checkpoint + Lease Fencing</text>
+  <text x="1322" y="509" class="note">步骤级 checkpoint 持久化</text>
+  <text x="1322" y="527" class="note">租约心跳 · 单 owner · 接管恢复</text>
+  <text x="1322" y="550" class="small">旧 fencing token 写入必须被拒绝</text>
+
+  <rect x="1305" y="595" width="310" height="118" rx="8" fill="#0f172a" stroke="#fb923c" stroke-width="1.2"/>
+  <circle cx="1330" cy="622" r="13" fill="#fb923c"/><text x="1330" y="626" class="number">04</text>
+  <text x="1355" y="625" class="note-title">Outbound 对账语义</text>
+  <text x="1322" y="649" class="note">发送前绑定 · 幂等发送 · 未知结果</text>
+  <text x="1322" y="667" class="note">进入 reconciliation backlog</text>
+  <text x="1322" y="690" class="small">禁止未知结果下盲目重发副作用</text>
+
+  <rect x="1305" y="750" width="310" height="125" rx="8" fill="rgba(136,19,55,0.22)" stroke="#fb7185" stroke-width="1.2"/>
+  <text x="1322" y="779" class="note-title" fill="#fecdd3">发布门禁（fail-closed）</text>
+  <text x="1322" y="804" class="note">本地 Gate → staging 真实证据</text>
+  <text x="1322" y="823" class="note">→ 分阶段灰度 → 生产回滚窗口</text>
+  <text x="1322" y="850" class="small">迁移双 head、鉴权、checkpointer、SLO</text>
+  <text x="1322" y="865" class="small">任一证据缺失，不得宣称稳定</text>
+
+  <!-- Connections behind boxes -->
+  <path d="M165 200 L165 285" fill="none" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrow-cyan)"/>
+  <path d="M385 200 L385 285" fill="none" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrow-cyan)"/>
+  <path d="M605 200 L605 285" fill="none" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrow-cyan)"/>
+  <path d="M825 200 L825 285" fill="none" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrow-cyan)"/>
+  <path d="M1045 200 L1045 285" fill="none" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrow-cyan)"/>
+  <path d="M220 317 L400 317" fill="none" stroke="#60a5fa" stroke-width="1.4" marker-end="url(#arrow-cyan)"/>
+  <path d="M650 317 L700 317" fill="none" stroke="#60a5fa" stroke-width="1.4" marker-end="url(#arrow-cyan)"/>
+  <path d="M920 317 L950 317" fill="none" stroke="#fb923c" stroke-width="1.4" marker-end="url(#arrow-orange)"/>
+  <path d="M510 347 L510 440" fill="none" stroke="#fbbf24" stroke-width="1.5" marker-end="url(#arrow-green)"/>
+  <path d="M320 472 L380 472" fill="none" stroke="#fbbf24" stroke-width="1.5" marker-end="url(#arrow-green)"/>
+  <path d="M620 472 L680 472" fill="none" stroke="#fbbf24" stroke-width="1.5" marker-end="url(#arrow-green)"/>
+  <path d="M890 472 L950 472" fill="none" stroke="#fbbf24" stroke-width="1.5" marker-end="url(#arrow-green)"/>
+  <path d="M510 505 L510 615" fill="none" stroke="#34d399" stroke-width="1.6" marker-end="url(#arrow-green)"/>
+  <path d="M215 679 L215 700" fill="none" stroke="#34d399" stroke-width="1.4" marker-end="url(#arrow-orange)"/>
+  <path d="M515 679 L515 700" fill="none" stroke="#34d399" stroke-width="1.4" marker-end="url(#arrow-orange)"/>
+  <path d="M815 679 L815 700" fill="none" stroke="#34d399" stroke-width="1.4" marker-end="url(#arrow-orange)"/>
+  <path d="M1115 679 L1115 700" fill="none" stroke="#34d399" stroke-width="1.4" marker-end="url(#arrow-orange)"/>
+  <path d="M250 725 L250 850" fill="none" stroke="#a78bfa" stroke-width="1.4" marker-end="url(#arrow-violet)"/>
+  <path d="M730 725 L730 850" fill="none" stroke="#a78bfa" stroke-width="1.4" marker-end="url(#arrow-violet)"/>
+  <path d="M1070 725 L1070 850" fill="none" stroke="#fb923c" stroke-width="1.4" marker-end="url(#arrow-orange)"/>
+  <path d="M515 910 L515 950" fill="none" stroke="#a78bfa" stroke-width="1.2" marker-end="url(#arrow-violet)"/>
+  <path d="M780 910 L780 950" fill="none" stroke="#a78bfa" stroke-width="1.2" marker-end="url(#arrow-violet)"/>
+  <path d="M1170 910 L1170 950" fill="none" stroke="#fb7185" stroke-width="1.2" marker-end="url(#arrow-rose)"/>
+
+  <!-- Cross-layer semantic links -->
+  <path d="M1115 730 L1115 472 L1160 472" fill="none" stroke="#fb923c" stroke-width="1.2" stroke-dasharray="5,4" marker-end="url(#arrow-orange)"/>
+  <text x="1170" y="586" class="arrow-label" fill="#fb923c">异步事件</text>
+  <path d="M1060 950 L1250 950 L1250 515 L1305 515" fill="none" stroke="#fb7185" stroke-width="1.1" stroke-dasharray="4,4" marker-end="url(#arrow-rose)"/>
+  <text x="1250" y="735" class="arrow-label" fill="#fb7185" transform="rotate(-90 1250 735)">审计 / 指标 / 证据</text>
+
+  <!-- Client layer -->
+  <rect x="70" y="135" width="190" height="65" rx="8" fill="#0f172a"/>
+  <rect x="70" y="135" width="190" height="65" rx="8" fill="rgba(8,51,68,0.55)" stroke="#22d3ee" stroke-width="1.5"/>
+  <text x="165" y="162" class="component">桌面端 / Tauri</text><text x="165" y="181" class="detail">本地模型桥 · SSE</text>
+  <rect x="290" y="135" width="190" height="65" rx="8" fill="#0f172a"/>
+  <rect x="290" y="135" width="190" height="65" rx="8" fill="rgba(8,51,68,0.55)" stroke="#22d3ee" stroke-width="1.5"/>
+  <text x="385" y="162" class="component">Web 管理台</text><text x="385" y="181" class="detail">React · 任务 / 治理</text>
+  <rect x="510" y="135" width="190" height="65" rx="8" fill="#0f172a"/>
+  <rect x="510" y="135" width="190" height="65" rx="8" fill="rgba(8,51,68,0.55)" stroke="#22d3ee" stroke-width="1.5"/>
+  <text x="605" y="162" class="component">微信 H5</text><text x="605" y="181" class="detail">公众号外部问答</text>
+  <rect x="730" y="135" width="190" height="65" rx="8" fill="#0f172a"/>
+  <rect x="730" y="135" width="190" height="65" rx="8" fill="rgba(8,51,68,0.55)" stroke="#22d3ee" stroke-width="1.5"/>
+  <text x="825" y="162" class="component">飞书 / 企业微信</text><text x="825" y="181" class="detail">消息 · 文件 · 通知</text>
+  <rect x="950" y="135" width="190" height="65" rx="8" fill="#0f172a"/>
+  <rect x="950" y="135" width="190" height="65" rx="8" fill="rgba(8,51,68,0.55)" stroke="#22d3ee" stroke-width="1.5"/>
+  <text x="1045" y="162" class="component">内部 API / 系统</text><text x="1045" y="181" class="detail">同步 · 异步调用</text>
+
+  <!-- Edge layer -->
+  <rect x="100" y="285" width="240" height="65" rx="8" fill="#0f172a"/>
+  <rect x="100" y="285" width="240" height="65" rx="8" fill="rgba(59,130,246,0.26)" stroke="#60a5fa" stroke-width="1.5"/>
+  <text x="220" y="312" class="component">统一登录 / 权限</text><text x="220" y="331" class="detail">身份绑定 · CSRF · 配额</text>
+  <rect x="400" y="285" width="250" height="65" rx="8" fill="#0f172a"/>
+  <rect x="400" y="285" width="250" height="65" rx="8" fill="rgba(59,130,246,0.26)" stroke="#60a5fa" stroke-width="1.5"/>
+  <text x="525" y="312" class="component">Channel Gateway</text><text x="525" y="331" class="detail">Webhook · 入站 / 出站门禁</text>
+  <rect x="700" y="285" width="220" height="65" rx="8" fill="#0f172a"/>
+  <rect x="700" y="285" width="220" height="65" rx="8" fill="rgba(59,130,246,0.26)" stroke="#60a5fa" stroke-width="1.5"/>
+  <text x="810" y="312" class="component">FastAPI API Layer</text><text x="810" y="331" class="detail">REST · SSE · Public Schema</text>
+  <rect x="950" y="285" width="210" height="65" rx="8" fill="#0f172a"/>
+  <rect x="950" y="285" width="210" height="65" rx="8" fill="rgba(251,146,60,0.20)" stroke="#fb923c" stroke-width="1.5"/>
+  <text x="1055" y="312" class="component">Event Stream</text><text x="1055" y="331" class="detail">task_id · event_id · SSE</text>
+
+  <!-- Orchestration layer -->
+  <rect x="90" y="440" width="230" height="65" rx="8" fill="#0f172a"/>
+  <rect x="90" y="440" width="230" height="65" rx="8" fill="rgba(120,53,15,0.26)" stroke="#fbbf24" stroke-width="1.5"/>
+  <text x="205" y="467" class="component">Task / Run Service</text><text x="205" y="486" class="detail">任务主表 · 生命周期</text>
+  <rect x="380" y="440" width="240" height="65" rx="8" fill="#0f172a"/>
+  <rect x="380" y="440" width="240" height="65" rx="8" fill="rgba(120,53,15,0.26)" stroke="#fbbf24" stroke-width="1.5"/>
+  <text x="500" y="467" class="component">Intent Router</text><text x="500" y="486" class="detail">FAQ · 复杂度 · 风险策略</text>
+  <rect x="680" y="440" width="210" height="65" rx="8" fill="#0f172a"/>
+  <rect x="680" y="440" width="210" height="65" rx="8" fill="rgba(120,53,15,0.26)" stroke="#fbbf24" stroke-width="1.5"/>
+  <text x="785" y="467" class="component">Policy Gate</text><text x="785" y="486" class="detail">权限 · 敏感 · 人工确认</text>
+  <rect x="950" y="440" width="210" height="65" rx="8" fill="#0f172a"/>
+  <rect x="950" y="440" width="210" height="65" rx="8" fill="rgba(120,53,15,0.26)" stroke="#fbbf24" stroke-width="1.5"/>
+  <text x="1055" y="467" class="component">Runtime Selector</text><text x="1055" y="486" class="detail">Native / LangGraph</text>
+
+  <!-- Runtime layer -->
+  <rect x="90" y="615" width="250" height="65" rx="8" fill="#0f172a"/>
+  <rect x="90" y="615" width="250" height="65" rx="8" fill="rgba(6,78,59,0.45)" stroke="#34d399" stroke-width="1.5"/>
+  <text x="215" y="642" class="component">Agent Loop Coordinator</text><text x="215" y="661" class="detail">Plan → Act → Verify → Deliver</text>
+  <rect x="390" y="615" width="250" height="65" rx="8" fill="#0f172a"/>
+  <rect x="390" y="615" width="250" height="65" rx="8" fill="rgba(6,78,59,0.45)" stroke="#34d399" stroke-width="1.5"/>
+  <text x="515" y="642" class="component">Research / RAG Agent</text><text x="515" y="661" class="detail">检索 · 引用 · 证据</text>
+  <rect x="690" y="615" width="250" height="65" rx="8" fill="#0f172a"/>
+  <rect x="690" y="615" width="250" height="65" rx="8" fill="rgba(6,78,59,0.45)" stroke="#34d399" stroke-width="1.5"/>
+  <text x="815" y="642" class="component">Writer / Artifact Agent</text><text x="815" y="661" class="detail">文档 · 表格 · 交付物</text>
+  <rect x="990" y="615" width="250" height="65" rx="8" fill="#0f172a"/>
+  <rect x="990" y="615" width="250" height="65" rx="8" fill="rgba(136,19,55,0.38)" stroke="#fb7185" stroke-width="1.5"/>
+  <text x="1115" y="642" class="component">Reviewer / Safety</text><text x="1115" y="661" class="detail">质量 · 风险 · 人工复核</text>
+
+  <rect x="130" y="700" width="300" height="35" rx="8" fill="#0f172a" stroke="#fbbf24" stroke-width="1.2"/>
+  <text x="280" y="722" class="component">Tool Registry / Contract</text>
+  <rect x="480" y="700" width="350" height="35" rx="8" fill="#0f172a" stroke="#34d399" stroke-width="1.2"/>
+  <text x="655" y="722" class="component">Checkpoint · Lease · Recovery</text>
+  <rect x="880" y="700" width="300" height="35" rx="8" fill="#0f172a" stroke="#fb923c" stroke-width="1.2"/>
+  <text x="1030" y="722" class="component">Outbound / Reconciliation</text>
+
+  <!-- Data and integration layer -->
+  <rect x="90" y="850" width="250" height="60" rx="8" fill="#0f172a"/>
+  <rect x="90" y="850" width="250" height="60" rx="8" fill="rgba(6,78,59,0.32)" stroke="#34d399" stroke-width="1.5"/>
+  <text x="215" y="876" class="component">Model Gateway</text><text x="215" y="895" class="detail">本地模型 · 云模型 · 熔断</text>
+  <rect x="370" y="850" width="250" height="60" rx="8" fill="#0f172a"/>
+  <rect x="370" y="850" width="250" height="60" rx="8" fill="rgba(251,146,60,0.23)" stroke="#fb923c" stroke-width="1.5"/>
+  <text x="495" y="876" class="component">Connector SDK</text><text x="495" y="895" class="detail">飞书 · 企微 · Kimi · 内部 Agent</text>
+
+  <g transform="translate(680,850)">
+    <rect x="0" y="12" width="160" height="48" fill="#0f172a"/>
+    <rect x="0" y="12" width="160" height="48" fill="rgba(76,29,149,0.42)" stroke="#a78bfa" stroke-width="1.5"/>
+    <ellipse cx="80" cy="12" rx="80" ry="12" fill="rgba(76,29,149,0.52)" stroke="#a78bfa" stroke-width="1.5"/>
+    <ellipse cx="80" cy="60" rx="80" ry="12" fill="rgba(76,29,149,0.42)" stroke="#a78bfa" stroke-width="1.5"/>
+    <text x="80" y="42" class="component">MySQL</text>
+  </g>
+  <g transform="translate(880,850)">
+    <rect x="0" y="12" width="160" height="48" rx="3" fill="rgba(76,29,149,0.42)" stroke="#a78bfa" stroke-width="1.5"/>
+    <text x="80" y="37" class="component">Redis / Queue</text><text x="80" y="54" class="detail">锁 · 缓存 · 限流</text>
+  </g>
+  <g transform="translate(1080,850)">
+    <rect x="0" y="12" width="160" height="48" rx="3" fill="rgba(76,29,149,0.42)" stroke="#a78bfa" stroke-width="1.5"/>
+    <text x="80" y="37" class="component">向量 / 对象存储</text><text x="80" y="54" class="detail">索引 · 文件 · 成果</text>
+  </g>
+
+  <rect x="370" y="950" width="260" height="52" rx="8" fill="#0f172a" stroke="#a78bfa" stroke-width="1.3"/>
+  <text x="500" y="975" class="component">Audit / Evidence</text><text x="500" y="992" class="detail">审计 · 指标 · 评测集</text>
+  <rect x="680" y="950" width="220" height="52" rx="8" fill="#0f172a" stroke="#a78bfa" stroke-width="1.3"/>
+  <text x="790" y="975" class="component">Prompt Center</text><text x="790" y="992" class="detail">Prompt · 模板 · 版本</text>
+  <rect x="950" y="950" width="230" height="52" rx="8" fill="#0f172a" stroke="#fb7185" stroke-width="1.3"/>
+  <text x="1065" y="975" class="component">Ops / GA Release Gate</text><text x="1065" y="992" class="detail">SLO · 演练 · 灰度 · 回滚</text>
+
+  <!-- Labels on important paths -->
+  <text x="525" y="255" class="arrow-label" fill="#22d3ee">HTTPS / Webhook</text>
+  <text x="500" y="398" class="arrow-label" fill="#fbbf24">统一请求顺序</text>
+  <text x="655" y="568" class="arrow-label" fill="#34d399">Run / Step / Tool / Event</text>
+  <text x="420" y="828" class="arrow-label" fill="#a78bfa">持久化状态与能力调用</text>
+
+  <!-- Legend -->
+  <text x="60" y="1070" class="small" fill="#cbd5e1">图例</text>
+  <line x1="95" y1="1066" x2="135" y2="1066" stroke="#22d3ee" stroke-width="2" marker-end="url(#arrow-cyan)"/><text x="145" y="1070" class="small">用户请求</text>
+  <line x1="245" y1="1066" x2="285" y2="1066" stroke="#34d399" stroke-width="2" marker-end="url(#arrow-green)"/><text x="295" y="1070" class="small">执行链路</text>
+  <line x1="395" y1="1066" x2="435" y2="1066" stroke="#fb923c" stroke-width="2" marker-end="url(#arrow-orange)"/><text x="445" y="1070" class="small">异步 / 出站</text>
+  <line x1="580" y1="1066" x2="620" y2="1066" stroke="#a78bfa" stroke-width="2" marker-end="url(#arrow-violet)"/><text x="630" y="1070" class="small">数据 / 状态</text>
+  <line x1="765" y1="1066" x2="805" y2="1066" stroke="#fb7185" stroke-width="2" marker-end="url(#arrow-rose)"/><text x="815" y="1070" class="small">治理 / 风险</text>
+  <text x="40" y="1112" class="subtitle">核心闭环：接入 → 身份与策略 → 任务编排 → Agent Loop → 工具/模型 → checkpoint 与对账 → 可观测发布</text>
+</svg>

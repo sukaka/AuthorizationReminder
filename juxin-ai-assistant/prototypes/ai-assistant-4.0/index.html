@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="description" content="聚信 AI 助手 4.0 独立交互原型" />
+    <title>聚信 AI 助手 4.0 · 独立原型</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 64 64%22><rect width=%2264%22 height=%2264%22 rx=%2214%22 fill=%22%23007aff%22/><text x=%2232%22 y=%2243%22 text-anchor=%22middle%22 font-size=%2234%22 fill=%22%23ffffff%22>聚</text></svg>" />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <a class="skip-link" href="#editor-stage">跳到文档编辑区</a>
+
+    <div class="prototype-shell">
+      <header class="command-bar">
+        <div class="brand-lockup" aria-label="聚信 AI 助手 4.0">
+          <span class="brand-seal">聚</span>
+          <span class="brand-copy"><strong>聚信</strong><small>AI FLOW STUDIO</small></span>
+          <span class="prototype-badge">4.0 独立原型</span>
+        </div>
+
+        <div class="document-identity">
+          <span>成果 / 战略报告</span>
+          <strong>AI 助手 4.0 自动流程评估报告</strong>
+        </div>
+
+        <div class="global-actions">
+          <button class="icon-action" data-action="open-office" type="button" aria-label="Office 导入导出">
+            <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M5 3h10l4 4v14H5zM15 3v5h4M8 12h8M8 16h6" /></svg>
+            <span>Office</span>
+          </button>
+          <button class="quiet-action" data-action="preview" type="button">预览成果</button>
+          <button class="primary-action" data-action="start-review" type="button">提交审核</button>
+        </div>
+      </header>
+
+      <nav class="workflow-track" aria-label="自动流程进度">
+        <div class="workflow-label">
+          <span>FLOW</span>
+          <strong>月度经营分析</strong>
+        </div>
+        <ol>
+          <li class="is-complete"><span>01</span><div><strong>资料准备</strong><small>12 份资料已核验</small></div></li>
+          <li class="is-complete"><span>02</span><div><strong>AI 生成</strong><small>已完成 3 轮自检</small></div></li>
+          <li class="is-current"><span>03</span><div><strong>在线编辑</strong><small>你正在编辑</small></div></li>
+          <li><span>04</span><div><strong>质量审核</strong><small>2 项待处理</small></div></li>
+          <li><span>05</span><div><strong>正式交付</strong><small>Word / PDF</small></div></li>
+        </ol>
+        <div class="local-state"><i></i><span>本地演示数据<br /><small>无后端依赖</small></span></div>
+      </nav>
+
+      <div class="workspace">
+        <aside class="outline-panel" aria-label="文档结构">
+          <div class="panel-heading">
+            <div><span>STRUCTURE</span><h2>文档结构</h2></div>
+            <button class="bare-icon" data-action="collapse-outline" type="button" aria-label="收起文档结构">‹</button>
+          </div>
+
+          <div class="document-meta">
+            <span class="document-type">专业报告</span>
+            <strong>自动流程评估报告</strong>
+            <small><span data-block-count>4</span> 个内容块 · 约 1,280 字</small>
+          </div>
+
+          <ol class="outline-list" data-outline-list></ol>
+
+          <div class="outline-guide">
+            <span class="guide-mark">⠿</span>
+            <div><strong>像 WordPress 一样编排</strong><p>拖动内容块调整结构；键盘用户可以使用块工具栏中的上下移动。</p></div>
+          </div>
+        </aside>
+
+        <main class="editor-column" id="editor-stage">
+          <div class="editor-toolbar" aria-label="文档编辑工具栏">
+            <div class="insert-tools">
+              <span class="toolbar-label">插入</span>
+              <button data-add-block="paragraph" type="button"><b>¶</b> 段落</button>
+              <button data-add-block="table" type="button"><b>▦</b> 表格</button>
+              <button data-add-block="image" type="button"><b>▧</b> 图片</button>
+            </div>
+            <div class="history-tools">
+              <button data-action="undo" type="button" aria-label="撤销" disabled>↶</button>
+              <button data-action="redo" type="button" aria-label="重做" disabled>↷</button>
+            </div>
+            <div class="save-tools">
+              <span class="save-status is-saved" data-save-status><i></i>本机草稿已保存</span>
+              <span class="version-chip" data-version-chip>V3</span>
+              <button class="save-version" data-action="save-version" type="button">保存为新版本</button>
+            </div>
+          </div>
+
+          <div class="canvas-viewport">
+            <article class="paper" aria-label="可编辑专业成果">
+              <header class="paper-cover">
+                <div class="paper-series"><span>JUXIN INSIGHT</span><i></i><small>NO. 04 / 2026</small></div>
+                <p>聚信 AI 助手 · 专业成果</p>
+                <h1>从生成答案<br />到交付成果</h1>
+                <div class="paper-summary">
+                  <span>AI 助手 4.0 自动流程评估报告</span>
+                  <span>编辑草稿 · 2026 年 7 月</span>
+                </div>
+              </header>
+
+              <section class="blocks" data-blocks aria-label="文档内容块"></section>
+
+              <button class="append-block" data-add-block="paragraph" type="button">
+                <span>＋</span><strong>在文末添加内容块</strong><small>段落、表格或图片都可以继续拖拽排序</small>
+              </button>
+            </article>
+          </div>
+        </main>
+
+        <aside class="inspector-panel" aria-label="审核与追溯">
+          <div class="inspector-heading">
+            <span>REVIEW DESK</span>
+            <h2>审核与追溯</h2>
+            <p>审核结论始终绑定内容块与版本。</p>
+          </div>
+
+          <div class="inspector-tabs" role="tablist" aria-label="审核信息">
+            <button class="is-active" data-tab="evidence" role="tab" aria-selected="true" type="button">证据</button>
+            <button data-tab="quality" role="tab" aria-selected="false" type="button">质量 <b>2</b></button>
+            <button data-tab="comments" role="tab" aria-selected="false" type="button">评论 <b>1</b></button>
+            <button data-tab="versions" role="tab" aria-selected="false" type="button">版本</button>
+          </div>
+
+          <div class="inspector-content" data-inspector-content role="tabpanel"></div>
+
+          <div class="lease-strip">
+            <div><i></i><span><strong>你拥有编辑权</strong><small>剩余 27 分钟</small></span></div>
+            <button data-action="lease-info" type="button">为什么需要？</button>
+          </div>
+        </aside>
+      </div>
+    </div>
+
+    <div class="toast" data-toast role="status" aria-live="polite"></div>
+    <script type="module" src="./app.mjs"></script>
+  </body>
+</html>

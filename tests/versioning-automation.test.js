@@ -28,7 +28,6 @@ const {
   validateRegistryEntries,
   validateSystemRegistry,
 } = require('../scripts/versioning/systems');
-const { STRICT_SEMVER_RE } = require('../scripts/versioning/semver');
 
 const repositoryRoot = path.join(__dirname, '..');
 const versioningDocs = fs.readFileSync(path.join(repositoryRoot, 'docs/versioning.md'), 'utf8');
@@ -600,7 +599,8 @@ test('findSystemVersionDrift reports every declared structured target mismatch',
 
 test('repository runtime versions match every system VERSION source', () => {
   for (const system of SYSTEMS) {
-    assert.match(readSystemVersion(repositoryRoot, system), STRICT_SEMVER_RE);
+    const version = readSystemVersion(repositoryRoot, system);
+    assert.match(version, /^\d+\.\d+\.\d+$/);
     assert.deepEqual(findSystemVersionDrift(repositoryRoot, system), []);
   }
 

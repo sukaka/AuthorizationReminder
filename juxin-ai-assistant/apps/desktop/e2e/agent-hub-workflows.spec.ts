@@ -1,6 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
 
 async function mockSessionAndHub(page: Page) {
+  await page.emulateMedia({ reducedMotion: 'reduce' });
   await page.route('**/api/ai/**', async (route) => {
     const request = route.request();
     const path = new URL(request.url()).pathname;
@@ -169,6 +170,9 @@ test('admin opens Agent market and invokes echo', async ({ page }) => {
   await page.getByRole('button', { name: 'AI 能力' }).click();
   await page.getByRole('button', { name: 'Agent 市场' }).click();
   await expect(page.getByRole('heading', { name: 'Agent 市场' })).toBeVisible();
+  await expect(page.getByRole('region', { name: 'Agent 市场概览' })).toBeVisible();
+  await expect(page.getByRole('complementary', { name: 'Agent 目录' })).toBeVisible();
+  await expect(page.getByRole('searchbox', { name: '搜索 Agent' })).toBeVisible();
   await expect(page.getByRole('heading', { name: '本地回声 Agent' })).toBeVisible();
   await page.getByRole('button', { name: /本地回声 Agent/ }).click();
   await page.getByRole('button', { name: '试调调用' }).click();

@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { HttpResponse, http } from 'msw';
 import { expect, it, vi } from 'vitest';
@@ -83,6 +83,33 @@ function mockHubApis(invokeImpl?: (body: unknown) => unknown) {
   );
   return { invoke };
 }
+
+it('organizes agents into an overview, searchable directory, and workbench', async () => {
+  mockHubApis();
+  render(<AgentHubPage isAdmin />);
+
+  expect(await screen.findByRole('heading', { name: 'Agent 市场' })).toBeInTheDocument();
+
+  const overview = screen.getByRole('region', { name: 'Agent 市场概览' });
+  expect(within(overview).getByText('已注册')).toBeInTheDocument();
+  expect(within(overview).getByText('运行正常')).toBeInTheDocument();
+  expect(within(overview).getByText('本地')).toBeInTheDocument();
+  expect(within(overview).getByText('外部')).toBeInTheDocument();
+
+  const directory = screen.getByRole('complementary', { name: 'Agent 目录' });
+  const search = within(directory).getByRole('searchbox', { name: '搜索 Agent' });
+  expect(screen.getByRole('group', { name: 'Agent 来源筛选' })).toBeInTheDocument();
+  expect(screen.getByRole('region', { name: '试调工作台' })).toBeInTheDocument();
+
+  await userEvent.type(search, 'long_document');
+  expect(within(directory).queryByRole('button', { name: /local\.echo/ })).not.toBeInTheDocument();
+  expect(within(directory).getByRole('button', { name: /kimi\.chat/ })).toBeInTheDocument();
+
+  await userEvent.clear(search);
+  await userEvent.click(screen.getByRole('button', { name: /^外部/ }));
+  expect(within(directory).queryByRole('button', { name: /local\.echo/ })).not.toBeInTheDocument();
+  expect(await screen.findByText(/确认出域发送/)).toBeInTheDocument();
+});
 
 it('lists agents and invokes local echo', async () => {
   const { invoke } = mockHubApis();
