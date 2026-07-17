@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import {
   ApiError,
@@ -20,6 +20,8 @@ type WorkflowItem = {
   step_count: number;
   custom?: boolean;
 };
+
+type WorkflowFilter = 'all' | 'preset' | 'custom';
 
 type StepLog = {
   id: string;
@@ -271,6 +273,8 @@ export function WorkflowsPage({ initialWorkflowId = '', onOpenTaskCenter }: Work
   const [busy, setBusy] = useState(false);
   const [dragIndex, setDragIndex] = useState<number | null>(null);
   const [canvasMode, setCanvasMode] = useState(true);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [workflowFilter, setWorkflowFilter] = useState<WorkflowFilter>('all');
   const [validation, setValidation] = useState<{
     valid: boolean;
     errors: Array<{ code: string; message: string; path?: string; severity?: string }>;
@@ -537,6 +541,28 @@ export function WorkflowsPage({ initialWorkflowId = '', onOpenTaskCenter }: Work
     }
   };
 
+  const selected = items.find((i) => i.id === selectedId);
+  const filteredItems = useMemo(() => {
+    const normalizedQuery = searchQuery.trim().toLocaleLowerCase();
+    return items.filter((item) => {
+      const matchesFilter =
+        workflowFilter === 'all'
+        || (workflowFilter === 'custom' && item.custom)
+        || (workflowFilter === 'preset' && !item.custom);
+      if (!matchesFilter) return false;
+      if (!normalizedQuery) return true;
+      return [item.name, item.id, item.description]
+        .join(' ')
+        .toLocaleLowerCase()
+        .includes(normalizedQuery);
+    });
+  }, [items, searchQuery, workflowFilter]);
+
+  useEffect(() => {
+    if (filteredItems.some((item) => item.id === selectedId)) return;
+    setSelectedId(filteredItems[0]?.id || '');
+  }, [filteredItems, selectedId]);
+
   const removeCustom = async () => {
     if (!selectedId) return;
     if (!window.confirm(`删除自定义流程「${selectedId}」？`)) return;
@@ -550,20 +576,19 @@ export function WorkflowsPage({ initialWorkflowId = '', onOpenTaskCenter }: Work
     }
   };
 
-  const selected = items.find((i) => i.id === selectedId);
   const defSteps = Array.isArray(definition?.steps)
     ? (definition?.steps as Array<Record<string, unknown>>)
     : [];
 
   return (
-    <section className="history-page">
-      <header className="catalog-heading">
+    <section className="history-page workflow-page">
+      <header className="catalog-heading workflow-heading">
         <div>
-          <span className="eyebrow">4.0 自动流程</span>
+          <span className="eyebrow">5.0.0 自动流程</span>
           <h1>工作流</h1>
           <p>预置流程 + 类型化节点编排；先检查草稿，再显式发布，运行后可在任务中心查看审计。</p>
         </div>
-        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+        <div className="workflow-heading-actions">
           <button type="button" className="secondary-action" onClick={() => setBuilderOpen((v) => !v)}>
             {builderOpen ? '关闭编排' : '拖拽编排'}
           </button>
@@ -589,14 +614,7 @@ export function WorkflowsPage({ initialWorkflowId = '', onOpenTaskCenter }: Work
       {notice ? <p className="form-success">{notice}</p> : null}
 
       {builderOpen ? (
-        <section
-          style={{
-            border: '1px solid var(--border, #e5e7eb)',
-            borderRadius: 10,
-            padding: 14,
-            marginBottom: 16,
-          }}
-        >
+        <section className="workflow-builder">
           <h3 style={{ marginTop: 0 }}>拖拽步骤编排</h3>
           <p style={{ fontSize: 12, opacity: 0.75, marginTop: 0 }}>
             按住左侧 ⋮⋮ 拖动排序；画布预览同步展示节点连线。参数使用 JSON 对象，检查不通过时不能发布。
@@ -815,38 +833,88 @@ export function WorkflowsPage({ initialWorkflowId = '', onOpenTaskCenter }: Work
         </section>
       ) : null}
 
-      <div className="history-layout">
-        <div className="history-list">
-          {items.map((item) => (
-            <button
-              key={item.id}
-              type="button"
-              className={selectedId === item.id ? 'is-current' : ''}
-              onClick={() => setSelectedId(item.id)}
-            >
-              <span>
-                <strong>{item.name}</strong>
-                <small>
-                  {item.step_count} 步 · {item.custom ? '自定义' : '预置'} · {item.id}
-                </small>
-              </span>
-            </button>
-          ))}
-          {!items.length ? <p className="empty-hint">暂无预置工作流。</p> : null}
-        </div>
+      <div className="workflow-layout">
+        <aside className="workflow-library" aria-label="工作流库">
+          <div className="workflow-library-heading">
+            <div>
+              <span className="workflow-section-kicker">WORKFLOW LIBRARY</span>
+              <h2>流程库</h2>
+            </div>
+            <span className="workflow-library-count">{filteredItems.length} 个</span>
+          </div>
+          <label className="workflow-search">
+            <span className="sr-only">搜索工作流</span>
+            <input
+              value={searchQuery}
+              onChange={(event) => setSearchQuery(event.target.value)}
+              placeholder="搜索名称、ID 或说明"
+              aria-label="搜索工作流"
+            />
+          </label>
+          <div className="workflow-filters" role="group" aria-label="工作流类型筛选">
+            {([
+              ['all', '全部'],
+              ['preset', '预置'],
+              ['custom', '自定义'],
+            ] as const).map(([value, label]) => (
+              <button
+                key={value}
+                type="button"
+                className={workflowFilter === value ? 'is-current' : ''}
+                onClick={() => setWorkflowFilter(value)}
+                aria-pressed={workflowFilter === value}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          <div className="workflow-list">
+            {filteredItems.map((item, index) => (
+              <button
+                key={item.id}
+                type="button"
+                className={`workflow-item${selectedId === item.id ? ' is-current' : ''}`}
+                onClick={() => setSelectedId(item.id)}
+                aria-current={selectedId === item.id ? 'page' : undefined}
+              >
+                <span className="workflow-item-index">{String(index + 1).padStart(2, '0')}</span>
+                <span className="workflow-item-copy">
+                  <strong>{item.name}</strong>
+                  <small>
+                    {item.step_count} 步 · {item.custom ? '自定义' : '预置'} · {item.id}
+                  </small>
+                </span>
+                <span className={`workflow-item-kind${item.custom ? ' is-custom' : ''}`}>
+                  {item.custom ? '自定义' : '预置'}
+                </span>
+              </button>
+            ))}
+            {!filteredItems.length ? (
+              <div className="workflow-empty">
+                <strong>{items.length ? '没有匹配的工作流' : '暂无工作流'}</strong>
+                <span>{items.length ? '换一个关键词或筛选条件试试。' : '刷新后重新加载工作流列表。'}</span>
+              </div>
+            ) : null}
+          </div>
+        </aside>
 
-        <article className="history-detail">
+        <article className="workflow-detail">
           {selected ? (
             <>
-              <header>
-                <div>
+              <header className="workflow-detail-header">
+                <div className="workflow-detail-title">
                   <span className="eyebrow">{selected.custom ? '自定义' : '预置'}</span>
                   <h2>{selected.name}</h2>
+                  <p>{selected.description || '暂无流程说明。'}</p>
+                </div>
+                <div className="workflow-detail-meta">
+                  <span className="workflow-status-dot" aria-hidden />
+                  <span>可运行</span>
+                  <span className="workflow-detail-id">{selected.id}</span>
                 </div>
               </header>
-              <p style={{ fontSize: 13, opacity: 0.85 }}>{selected.description}</p>
 
-              <div className="history-actions" style={{ marginTop: 10, flexWrap: 'wrap' }}>
+              <div className="workflow-actions">
                 <button
                   type="button"
                   className="secondary-action"
@@ -879,8 +947,14 @@ export function WorkflowsPage({ initialWorkflowId = '', onOpenTaskCenter }: Work
               {validation && !builderOpen ? <WorkflowValidationPanel validation={validation} /> : null}
 
               {defSteps.length ? (
-                <section className="artifact-sources" aria-label="步骤定义">
-                  <strong>步骤定义</strong>
+                <section className="workflow-section workflow-steps" aria-label="步骤定义">
+                  <div className="workflow-section-heading">
+                    <div>
+                      <span className="workflow-section-kicker">STEP DEFINITION</span>
+                      <strong>步骤定义</strong>
+                    </div>
+                    <span>{defSteps.length} 个节点</span>
+                  </div>
                   {canvasMode ? (
                     <div
                       style={{
@@ -911,26 +985,35 @@ export function WorkflowsPage({ initialWorkflowId = '', onOpenTaskCenter }: Work
                 </section>
               ) : null}
 
-              <label style={{ display: 'block', marginTop: 12 }}>
-                输入内容
+              <section className="workflow-section workflow-run-config" aria-label="运行配置">
+                <div className="workflow-section-heading">
+                  <div>
+                    <span className="workflow-section-kicker">RUN CONFIGURATION</span>
+                    <strong>运行配置</strong>
+                  </div>
+                  <span>不会修改流程定义</span>
+                </div>
+                <label className="workflow-field">
+                  输入内容
                 <textarea
                   value={inputText}
                   onChange={(e) => setInputText(e.target.value)}
                   rows={4}
                   style={{ width: '100%', marginTop: 6 }}
                 />
-              </label>
-              <label style={{ display: 'block', marginTop: 8 }}>
-                指定 Agent（可选）
+                </label>
+                <label className="workflow-field">
+                  指定 Agent（可选）
                 <input
                   value={preferred}
                   onChange={(e) => setPreferred(e.target.value)}
                   placeholder="local.summary"
                   style={{ width: '100%', marginTop: 6 }}
                 />
-              </label>
+                </label>
+              </section>
 
-              <div className="history-actions" style={{ marginTop: 12, flexWrap: 'wrap' }}>
+              <div className="workflow-run-actions">
                 <button type="button" className="secondary-action" disabled={busy} onClick={() => void onRoute()}>
                   智能路由
                 </button>

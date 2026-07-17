@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { HttpResponse, http } from 'msw';
 import { expect, it, vi } from 'vitest';
@@ -114,6 +114,36 @@ it('opens builder for drag orchestration', async () => {
   expect(screen.getByLabelText('编排画布预览')).toBeInTheDocument();
 });
 
+it('keeps the workflow library searchable and filterable', async () => {
+  server.use(
+    http.get('/api/ai/workflows', () => HttpResponse.json({
+      items: [
+        ...workflows,
+        { id: 'custom_flow', name: '月度经营报告', description: '自定义交付流程', step_count: 3, custom: true },
+      ],
+      total: 3,
+    })),
+    http.get('/api/ai/workflows/:id', ({ params }) => HttpResponse.json({
+      id: String(params.id),
+      name: '流程定义',
+      description: '测试流程',
+      steps: [],
+    })),
+  );
+
+  render(<WorkflowsPage />);
+  await screen.findByRole('heading', { name: '工作流' });
+
+  await userEvent.click(screen.getByRole('button', { name: '自定义' }));
+  expect(await screen.findByRole('button', { name: /custom_flow/ })).toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: /parallel_dual/ })).not.toBeInTheDocument();
+
+  await userEvent.click(screen.getByRole('button', { name: '全部' }));
+  await userEvent.type(screen.getByRole('textbox', { name: '搜索工作流' }), 'condition');
+  expect(await screen.findByRole('button', { name: /condition_route_demo/ })).toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: /parallel_dual/ })).not.toBeInTheDocument();
+});
+
 it('checks a saved draft before publishing and can copy it into the builder', async () => {
   const publish = vi.fn();
   server.use(
@@ -140,7 +170,7 @@ it('checks a saved draft before publishing and can copy it into the builder', as
   await screen.findByRole('heading', { name: '工作流' });
   await userEvent.click(screen.getByRole('button', { name: '检查当前草稿' }));
   expect(await screen.findByText('检查通过')).toBeInTheDocument();
-  expect(screen.getByText(/1 个节点/)).toBeInTheDocument();
+  expect(within(screen.getByRole('region', { name: '流程检查结果' })).getByText(/1 个节点/)).toBeInTheDocument();
 
   await userEvent.click(screen.getByRole('button', { name: '发布当前版本' }));
   await waitFor(() => expect(publish).toHaveBeenCalled());
