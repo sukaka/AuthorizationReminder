@@ -1292,7 +1292,7 @@ it('renders a Codex-like composer and sends with Enter', async () => {
   expect(composer).toBeInTheDocument();
   expect(within(composer).queryByText('告诉我你想完成什么工作', { selector: 'label' })).not.toBeInTheDocument();
   expect(screen.getByPlaceholderText('告诉我你想完成什么工作...')).toBeInTheDocument();
-  expect(screen.getByRole('combobox', { name: '助手模式' })).toHaveValue('normal');
+  expect(screen.getByRole('combobox', { name: '助手模式' })).toHaveValue('auto');
   await userEvent.type(screen.getByLabelText('告诉我你想完成什么工作'), '写一份会议纪要{enter}');
 
   expect(await screen.findByText('会议纪要已生成')).toBeInTheDocument();
@@ -1464,7 +1464,7 @@ it('limits Word export choices to current content or Juxin formatted Word', asyn
   ]);
 });
 
-it('offers Juxin role modes and sends the selected mode to prepare API', async () => {
+it('offers automatic routing with a manual assistant fallback', async () => {
   const prepareRequest = vi.fn();
   server.use(
     http.get('/api/conversations', () => HttpResponse.json({ items: [], total: 0 })),
@@ -1501,8 +1501,10 @@ it('offers Juxin role modes and sends the selected mode to prepare API', async (
 
   const modeSelect = await screen.findByRole('combobox', { name: '助手模式' });
   const modeOptions = within(modeSelect).getAllByRole('option');
-  expect(modeOptions).toHaveLength(12);
+  expect(modeSelect).toHaveValue('auto');
+  expect(modeOptions).toHaveLength(13);
   expect(modeOptions.map((option) => option.textContent)).toEqual([
+    '自动路由（推荐）',
     '普通助手',
     '销售助手',
     '商务助手',
@@ -1524,6 +1526,55 @@ it('offers Juxin role modes and sends the selected mode to prepare API', async (
   await waitFor(() => expect(prepareRequest).toHaveBeenCalledWith(
     expect.objectContaining({ mode: 'hr_admin' }),
   ));
+});
+
+it('sends auto mode and displays the server-selected assistant', async () => {
+  const prepareRequest = vi.fn();
+  server.use(
+    http.get('/api/conversations', () => HttpResponse.json({ items: [], total: 0 })),
+    http.post('/api/ai/chat/prepare', async ({ request }) => {
+      prepareRequest(await request.json());
+      return HttpResponse.json({
+        session_uuid: 'session-auto',
+        user_message_uuid: 'user-message-auto',
+        assistant_message_uuid: 'assistant-message-auto',
+        completion_token: 'complete-auto',
+        completed: false,
+        answer: '',
+        effective_mode: 'business',
+        requested_mode: 'auto',
+        routing_reason: '命中关键词：投标',
+        routing_confidence: 0.6,
+        messages: [
+          { role: 'system', content: '商务助手：投标、标书、响应文件' },
+          { role: 'user', content: '帮我写投标响应' },
+        ],
+        citations: [],
+      }, { status: 201 });
+    }),
+    http.post('/api/ai/chat/messages/assistant-message-auto/complete', () => {
+      return HttpResponse.json({
+        message_uuid: 'assistant-message-auto',
+        status: 'COMPLETED',
+      });
+    }),
+  );
+  generateLocalModelMock.mockResolvedValue({
+    output: '自动路由后的商务响应建议',
+    latencyMs: 10,
+    usage: { output_tokens: 8 },
+  });
+
+  render(<ChatPage />);
+
+  await userEvent.type(screen.getByLabelText('告诉我你想完成什么工作'), '帮我写投标响应');
+  await userEvent.click(screen.getByRole('button', { name: '发送' }));
+
+  expect(await screen.findByText('自动路由后的商务响应建议')).toBeInTheDocument();
+  await waitFor(() => expect(prepareRequest).toHaveBeenCalledWith(
+    expect.objectContaining({ mode: 'auto' }),
+  ));
+  expect(screen.getByText('自动识别 · 当前商务助手')).toBeInTheDocument();
 });
 
 it('always searches personal materials and session attachments', async () => {
@@ -1624,7 +1675,7 @@ it('removes reference scope controls and always uses the full scope', async () =
   expect(await screen.findByText('已参考我的资料生成纪要。')).toBeInTheDocument();
   await waitFor(() => expect(prepareRequest).toHaveBeenCalledWith(
     expect.objectContaining({
-      mode: 'normal',
+      mode: 'auto',
       personal_reference_file_ids: [],
       include_personal_references: true,
       include_session_attachments: true,

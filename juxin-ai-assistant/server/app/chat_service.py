@@ -17,6 +17,7 @@ from .agent_loop.verifier import Verifier
 from .chat_run_bridge import attach_run_for_chat_question
 from .config import Settings, get_settings
 from .context.context_builder import RecentChatMessage
+from .context.mode_router import ModeRouter
 from .crypto import ContentCipher, EncryptedPayload
 from .knowledge_search import RetrievedKnowledgeChunk
 from .models import AgentTaskState, ChatMessage, ChatMessageSource, ChatSession, ExportRecord, KnowledgeChunk, KnowledgeFile
@@ -660,6 +661,7 @@ def prepare_chat(
 ) -> ChatPrepareOut:
     loop_runner = LoopRunner()
     analysis = loop_runner.task_analyzer.analyze(body.question, body.mode)
+    route = ModeRouter.route(mode=body.mode, question=body.question)
     mode = analysis.mode.upper()
     session = _get_or_create_session(
         db,
@@ -761,6 +763,10 @@ def prepare_chat(
             loop_trace=loop_result.loop_trace,
             task_state=task_state_payload,
             run_id=run_id,
+            requested_mode=route.requested_mode,
+            effective_mode=route.mode,
+            routing_reason=route.reason,
+            routing_confidence=route.confidence,
         )
     web_results: list[WebSearchResult] = []
     web_log_id: int | None = None
@@ -868,6 +874,10 @@ def prepare_chat(
             loop_trace=loop_result.loop_trace,
             task_state=task_state_payload,
             run_id=run_id,
+            requested_mode=route.requested_mode,
+            effective_mode=route.mode,
+            routing_reason=route.reason,
+            routing_confidence=route.confidence,
         )
     token_settings = settings or get_settings()
     completion_token = _sealed_completion_token(
@@ -925,6 +935,10 @@ def prepare_chat(
         loop_trace=loop_result.loop_trace,
         task_state=task_state_payload,
         run_id=run_id,
+        requested_mode=route.requested_mode,
+        effective_mode=route.mode,
+        routing_reason=route.reason,
+        routing_confidence=route.confidence,
     )
 
 

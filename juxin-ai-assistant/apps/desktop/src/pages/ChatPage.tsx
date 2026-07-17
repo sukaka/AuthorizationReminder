@@ -30,6 +30,7 @@ import {
   type ChatCitation,
   type ChatExportType,
   type ChatMode,
+  type ChatModeSelection,
   type ChatSessionListKind,
   type ChatSessionPayload,
   type ChatTaskStatePayload,
@@ -172,6 +173,8 @@ const modeLabels: Record<ChatMode, string> = {
   incident_response: '应急响应助手',
   knowledge: '查公司知识',
 };
+
+const autoModeLabel = '自动路由';
 
 const wordExportTypes = ['single_answer', 'formal_document'] as const satisfies readonly ChatExportType[];
 const supportedKnowledgeAccept = '.pdf,.txt,.md,.docx,.xlsx,.pptx,.png,.jpg,.jpeg,.webp,application/pdf,text/plain,text/markdown,image/png,image/jpeg,image/webp,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.openxmlformats-officedocument.presentationml.presentation';
@@ -841,7 +844,9 @@ export function ChatPage({ onOpenTaskCenter, onOpenWorkArtifacts, initialProject
   const [selectedProjectUuid, setSelectedProjectUuid] = useState(initialProjectUuid || '');
   const [lastRunId, setLastRunId] = useState('');
   const [profiles, setProfiles] = useState<ModelProfile[]>([]);
-  const [mode, setMode] = useState<ChatMode>('normal');
+  const [modeSelection, setModeSelection] = useState<ChatModeSelection>('auto');
+  const [routedMode, setRoutedMode] = useState<ChatMode>('normal');
+  const mode = modeSelection === 'auto' ? routedMode : modeSelection;
   const [question, setQuestion] = useState('');
   const [messages, setMessages] = useState<UiMessage[]>([]);
   const [activeSessionUuid, setActiveSessionUuid] = useState('');
@@ -880,6 +885,10 @@ export function ChatPage({ onOpenTaskCenter, onOpenWorkArtifacts, initialProject
     digest: string;
     findings: SensitiveFinding[];
   } | null>(null);
+  const selectMode = (selection: ChatModeSelection) => {
+    setModeSelection(selection);
+    setRoutedMode(selection === 'auto' ? 'normal' : selection);
+  };
   const messageListRef = useRef<HTMLDivElement | null>(null);
   const sourceHighlightRef = useRef<HTMLElement | null>(null);
   const shouldStickToBottomRef = useRef(true);
@@ -1141,7 +1150,7 @@ export function ChatPage({ onOpenTaskCenter, onOpenWorkArtifacts, initialProject
       if (activeSessionUuidRef.current !== sessionUuid) return;
       setActiveSessionUuid(detail.session_uuid);
       setActiveSessionStatus(normalizeSessionStatus(detail.status));
-      setMode(normalizeMode(detail.mode));
+      selectMode(normalizeMode(detail.mode));
       setSourcePreview({ status: 'idle' });
       setWebCapture({ status: 'idle' });
       setEnabledReferenceFiles([]);
@@ -1205,7 +1214,7 @@ export function ChatPage({ onOpenTaskCenter, onOpenWorkArtifacts, initialProject
             fileName: item.file_name,
             sourceKind: 'session_attachment' as const,
           }))));
-        setMode('knowledge');
+        selectMode('knowledge');
         setReferenceScope((current) => (
           current === 'with_personal' || current === 'personal_and_session'
             ? 'personal_and_session'
@@ -1223,7 +1232,7 @@ export function ChatPage({ onOpenTaskCenter, onOpenWorkArtifacts, initialProject
           setSelectedPersonalReferenceIds((current) => (
             current.concat(readyUploads.map((item) => item.file_uuid).filter((id) => !current.includes(id)))
           ));
-          setMode('knowledge');
+          selectMode('knowledge');
           setReferenceScope((current) => (
             current === 'with_session' || current === 'personal_and_session'
               ? 'personal_and_session'
@@ -1276,7 +1285,7 @@ export function ChatPage({ onOpenTaskCenter, onOpenWorkArtifacts, initialProject
   };
 
   const togglePersonalReferenceFile = (fileId: string) => {
-    setMode('knowledge');
+    selectMode('knowledge');
     setSelectedPersonalReferenceIds((current) => (
       current.includes(fileId)
         ? current.filter((item) => item !== fileId)
@@ -1373,7 +1382,7 @@ export function ChatPage({ onOpenTaskCenter, onOpenWorkArtifacts, initialProject
             fileName: webCapture.preview.title || '网页采集资料',
             sourceKind: 'session_attachment',
           }));
-        setMode('knowledge');
+        selectMode('knowledge');
         setReferenceScope((current) => (
           current === 'with_personal' || current === 'personal_and_session'
             ? 'personal_and_session'
@@ -1442,12 +1451,13 @@ export function ChatPage({ onOpenTaskCenter, onOpenWorkArtifacts, initialProject
       await previewUrlCapture(trimmed, firstUrl);
       return;
     }
-    if (!shouldUseServerModel && !activeProfile && mode !== 'knowledge') {
+    let requestMode = mode;
+    if (!shouldUseServerModel && !activeProfile && requestMode !== 'knowledge') {
       setStatus('请先完成模型设置');
       return;
     }
     shouldStickToBottomRef.current = true;
-    setStatus(mode === 'knowledge' ? '检索中…' : '生成中…');
+    setStatus(requestMode === 'knowledge' ? '检索中…' : '生成中…');
     setGenerationStatus('running');
     setGenerationMetrics(null);
     setQuestion('');
@@ -1490,13 +1500,18 @@ export function ChatPage({ onOpenTaskCenter, onOpenWorkArtifacts, initialProject
         sessionUuid: originSessionUuid || undefined,
         projectUuid,
         question: trimmed,
-        mode,
+        mode: modeSelection,
         attachmentFileIds: sessionAttachmentFiles.map((file) => file.fileUuid),
         personalReferenceFileIds: [],
         includePersonalReferences: true,
         includeSessionAttachments: true,
         sensitiveConfirmationDigest: confirmationDigest,
       });
+      requestMode = normalizeMode(prepared.effective_mode || requestMode);
+      if (modeSelection === 'auto') {
+        setRoutedMode(requestMode);
+        if (requestIsVisible()) setStatus(`自动路由 · ${modeLabels[requestMode]}`);
+      }
       completionToken = prepared.completion_token;
       requestSessionUuid = prepared.session_uuid;
       if (generationKey !== prepared.session_uuid) {
@@ -1647,7 +1662,7 @@ export function ChatPage({ onOpenTaskCenter, onOpenWorkArtifacts, initialProject
       if (shouldRunLoopQualityCheck(prepared.loop_trace)) {
         for (let retryCount = 0; retryCount < 2; retryCount += 1) {
           const check = await checkLoopQuality({
-            mode,
+            mode: requestMode,
             answer: result.output,
             usedKnowledge: prepared.citations.length > 0,
             retryCount,
@@ -2485,15 +2500,23 @@ export function ChatPage({ onOpenTaskCenter, onOpenWorkArtifacts, initialProject
                 <span>助手模式</span>
                 <select
                   aria-label="助手模式"
-                  onChange={(event) => setMode(normalizeMode(event.target.value))}
-                  value={mode}
+                  onChange={(event) => selectMode(event.target.value as ChatModeSelection)}
+                  value={modeSelection}
                 >
-                  {(Object.keys(modeLabels) as ChatMode[]).map((item) => (
-                    <option key={item} value={item}>
-                      {modeLabels[item]}
-                    </option>
-                  ))}
+                  <option value="auto">{autoModeLabel}（推荐）</option>
+                  <optgroup label="手动指定助手">
+                    {(Object.keys(modeLabels) as ChatMode[]).map((item) => (
+                      <option key={item} value={item}>
+                        {modeLabels[item]}
+                      </option>
+                    ))}
+                  </optgroup>
                 </select>
+                <small className="chat-mode-hint" role="status">
+                  {modeSelection === 'auto'
+                    ? `自动识别 · 当前${modeLabels[mode]}`
+                    : `已固定 · ${modeLabels[mode]}`}
+                </small>
               </label>
               <label className="chat-mode-select">
                 <span>导出工作成果</span>

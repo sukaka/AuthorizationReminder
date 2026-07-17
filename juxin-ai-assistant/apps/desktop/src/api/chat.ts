@@ -17,6 +17,8 @@ export type ChatMode =
   | 'incident_response'
   | 'knowledge';
 
+export type ChatModeSelection = ChatMode | 'auto';
+
 export type ChatCitation = {
   source_type: string;
   file_uuid?: string;
@@ -264,6 +266,10 @@ export type ChatPreparePayload = {
   task_state?: ChatTaskStatePayload;
   /** 6.0 统一任务底座 Run ID，用于跳转任务中心 */
   run_id?: string;
+  requested_mode?: ChatModeSelection;
+  effective_mode?: ChatMode;
+  routing_reason?: string;
+  routing_confidence?: number;
 };
 
 export type ChatGeneratePayload = {
@@ -495,7 +501,7 @@ export async function getChatSession(sessionUuid: string, projectUuid?: string):
 export async function prepareChat(payload: {
   sessionUuid?: string;
   question: string;
-  mode: ChatMode;
+  mode: ChatModeSelection;
   topK?: number;
   attachmentFileIds?: string[];
   personalReferenceFileIds?: string[];

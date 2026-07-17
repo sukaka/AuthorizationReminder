@@ -21,7 +21,8 @@ MODE_STRATEGIES = {
 
 
 def analyze_task_mode(question: str, mode: str) -> dict[str, object]:
-    normalized = ModeRouter.normalize(mode)
+    route = ModeRouter.route(mode=mode, question=question)
+    normalized = route.mode
     decision = ModeRouter.decide(mode=normalized, question=question)
     strategy = MODE_STRATEGIES.get(normalized, "single_turn")
     task_type = "chat"
@@ -65,6 +66,9 @@ def analyze_task_mode(question: str, mode: str) -> dict[str, object]:
         task_type = "document_generation"
     return {
         "mode": normalized,
+        "requested_mode": route.requested_mode,
+        "routing_reason": route.reason,
+        "routing_confidence": route.confidence,
         "task_type": task_type,
         "strategy": strategy,
         "needs_knowledge": decision.should_search_knowledge,
