@@ -747,6 +747,44 @@ function renderInlineMarkdown(
   return nodes.length ? nodes : [text];
 }
 
+function splitMarkdownTableRow(line: string): string[] | null {
+  const trimmed = line.trim();
+  if (!trimmed.includes('|')) return null;
+
+  const cells: string[] = [];
+  let currentCell = '';
+  let isInsideInlineCode = false;
+
+  for (let index = 0; index < trimmed.length; index += 1) {
+    const character = trimmed[index];
+    if (character === '\\' && trimmed[index + 1] === '|') {
+      currentCell += '|';
+      index += 1;
+      continue;
+    }
+    if (character === '`') {
+      isInsideInlineCode = !isInsideInlineCode;
+      currentCell += character;
+      continue;
+    }
+    if (character === '|' && !isInsideInlineCode) {
+      cells.push(currentCell.trim());
+      currentCell = '';
+      continue;
+    }
+    currentCell += character;
+  }
+  cells.push(currentCell.trim());
+
+  if (cells[0] === '') cells.shift();
+  if (cells.at(-1) === '') cells.pop();
+  return cells.length >= 2 ? cells : null;
+}
+
+function isMarkdownTableSeparatorRow(cells: string[], expectedColumnCount: number): boolean {
+  return cells.length === expectedColumnCount && cells.every((cell) => /^:?-{3,}:?$/.test(cell));
+}
+
 function renderChatContent(
   content: string,
   citationReferences: CitationFileReference[] = [],
@@ -769,11 +807,66 @@ function renderChatContent(
     listItems = [];
   };
 
-  content.split(/\r?\n/).forEach((line) => {
+  const lines = content.split(/\r?\n/);
+  for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
+    const line = lines[lineIndex];
     const trimmed = line.trim();
     if (!trimmed || trimmed === '>') {
       flushList();
-      return;
+      continue;
+    }
+
+    const headerCells = splitMarkdownTableRow(line);
+    const separatorCells = lineIndex + 1 < lines.length
+      ? splitMarkdownTableRow(lines[lineIndex + 1])
+      : null;
+    if (
+      headerCells
+      && separatorCells
+      && isMarkdownTableSeparatorRow(separatorCells, headerCells.length)
+    ) {
+      flushList();
+      const rows: string[][] = [];
+      let nextLineIndex = lineIndex + 2;
+      while (nextLineIndex < lines.length) {
+        const row = splitMarkdownTableRow(lines[nextLineIndex]);
+        if (!row || row.length !== headerCells.length) break;
+        rows.push(row);
+        nextLineIndex += 1;
+      }
+      const tableKey = `table-${blocks.length}`;
+      blocks.push(
+        <div className="chat-markdown-table-wrap" key={tableKey}>
+          <table className="chat-markdown-table" aria-label="回答表格">
+            <thead>
+              <tr>
+                {headerCells.map((cell, cellIndex) => (
+                  <th key={`${tableKey}-head-${cellIndex}`} scope="col">
+                    {renderInlineMarkdown(cell, citationReferences, `${tableKey}-head-${cellIndex}`)}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((row, rowIndex) => (
+                <tr key={`${tableKey}-row-${rowIndex}`}>
+                  {row.map((cell, cellIndex) => (
+                    <td key={`${tableKey}-cell-${rowIndex}-${cellIndex}`}>
+                      {renderInlineMarkdown(
+                        cell,
+                        citationReferences,
+                        `${tableKey}-cell-${rowIndex}-${cellIndex}`,
+                      )}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>,
+      );
+      lineIndex = nextLineIndex - 1;
+      continue;
     }
 
     const sourceAttribution = parseSourceAttributionLine(trimmed);
@@ -784,7 +877,7 @@ function renderChatContent(
         citationReferences,
         `source-attribution-${blocks.length}`,
       ));
-      return;
+      continue;
     }
 
     const heading = /^(#{1,6})\s+(.+)$/.exec(trimmed);
@@ -794,7 +887,7 @@ function renderChatContent(
       if (heading[1].length === 1) blocks.push(<h1 key={`h1-${blocks.length}`}>{headingContent}</h1>);
       else if (heading[1].length === 2) blocks.push(<h2 key={`h2-${blocks.length}`}>{headingContent}</h2>);
       else blocks.push(<h3 key={`h3-${blocks.length}`}>{headingContent}</h3>);
-      return;
+      continue;
     }
 
     const ordered = /^\d+[.)、]\s+(.+)$/.exec(trimmed);
@@ -802,7 +895,7 @@ function renderChatContent(
       if (listType !== 'ol') flushList();
       listType = 'ol';
       listItems.push(ordered[1]);
-      return;
+      continue;
     }
 
     const unordered = /^[-*]\s+(.+)$/.exec(trimmed);
@@ -810,7 +903,7 @@ function renderChatContent(
       if (listType !== 'ul') flushList();
       listType = 'ul';
       listItems.push(unordered[1]);
-      return;
+      continue;
     }
 
     flushList();
@@ -819,7 +912,7 @@ function renderChatContent(
         {renderInlineMarkdown(trimmed, citationReferences, `p-${blocks.length}`)}
       </p>,
     );
-  });
+  }
 
   flushList();
   return blocks.length ? blocks : [<p key="empty">正在生成…</p>];

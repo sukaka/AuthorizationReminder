@@ -5244,6 +5244,54 @@ textarea:focus-visible {
   margin: 4px 0;
 }
 
+.chat-markdown-table-wrap {
+  width: 100%;
+  max-width: 100%;
+  margin: 10px 0;
+  overflow-x: auto;
+  overscroll-behavior-inline: contain;
+  border: 1px solid color-mix(in srgb, var(--border) 92%, var(--text-secondary));
+  border-radius: 12px;
+  background: var(--surface-solid);
+}
+
+.chat-markdown-table {
+  width: 100%;
+  min-width: 620px;
+  border-collapse: collapse;
+  color: var(--text-primary);
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+.chat-markdown-table th,
+.chat-markdown-table td {
+  padding: 10px 12px;
+  border-right: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  vertical-align: top;
+  overflow-wrap: anywhere;
+}
+
+.chat-markdown-table th {
+  background: color-mix(in srgb, var(--chat-brand-soft) 62%, var(--surface-solid));
+  font-weight: 800;
+}
+
+.chat-markdown-table tbody tr:nth-child(even) td {
+  background: color-mix(in srgb, var(--text-secondary) 5%, var(--surface-solid));
+}
+
+.chat-markdown-table th:last-child,
+.chat-markdown-table td:last-child {
+  border-right: 0;
+}
+
+.chat-markdown-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
 .chat-citations {
   margin-top: 10px;
 }
