@@ -8,9 +8,11 @@ import {
   cancelLongTask,
   completeChatMessage,
   confirmWebCapture,
+  createChatSession,
   createLongChatTask,
   deleteChatSession,
   exportChatWord,
+  failChatMessage,
   getChatSession,
   getChatSessionsByKind,
   hardDeleteChatSession,
@@ -284,7 +286,38 @@ function uploadFileHint(file: File | null): string {
   if (['png', 'jpg', 'jpeg', 'webp'].includes(extension)) return '图片会保存到资料库，并自动参与后续检索和图片引用。';
   if (extension === 'xlsx') return 'Excel 会按 Sheet、表头和行记录解析。';
   if (extension === 'pptx') return 'PPT 会按幻灯片标题、正文和备注解析。';
-  return '当前支持 pdf、docx、xlsx、pptx、txt、md、png、jpg、jpeg、webp。';
+  return '';
+}
+
+const supportedUploadFormatHint = '支持 PDF、DOCX、XLSX、PPTX、TXT、MD、PNG、JPG、JPEG 和 WEBP；单个文件不超过 100 MB。';
+
+function uploadFileExtension(file: File): string {
+  const dotIndex = file.name.lastIndexOf('.');
+  const extension = dotIndex >= 0 ? file.name.slice(dotIndex + 1).trim() : '';
+  return extension ? extension.toUpperCase() : 'FILE';
+}
+
+function formatUploadFileSize(size: number): string {
+  if (size >= 1024 * 1024) {
+    const megabytes = size / (1024 * 1024);
+    return `${megabytes >= 10 ? megabytes.toFixed(0) : megabytes.toFixed(1)} MB`;
+  }
+  if (size >= 1024) {
+    const kilobytes = size / 1024;
+    return `${kilobytes >= 10 ? kilobytes.toFixed(0) : kilobytes.toFixed(1)} KB`;
+  }
+  return `${size} B`;
+}
+
+function uniqueUploadFileNotes(files: File[]): string[] {
+  const notes = new Map<string, string>();
+  files.forEach((file) => {
+    const hint = uploadFileHint(file);
+    if (hint && !notes.has(hint)) {
+      notes.set(hint, `${file.name}：${hint}`);
+    }
+  });
+  return Array.from(notes.values());
 }
 
 function uploadFailureMessage(error: unknown): string {
@@ -873,6 +906,7 @@ export function ChatPage() {
   const activeGenerationsRef = useRef<Map<string, ActiveGeneration>>(new Map());
   const activeGenerationKeyRef = useRef('');
   const activeSessionUuidRef = useRef('');
+  const pendingSessionCreationRef = useRef<Promise<ChatSessionPayload> | null>(null);
 
   useEffect(() => {
     activeSessionUuidRef.current = activeSessionUuid;
@@ -883,6 +917,32 @@ export function ChatPage() {
     setSessions(payload.items);
     const visibleIds = new Set(payload.items.map((item) => item.session_uuid));
     setSelectedSessionIds((current) => current.filter((id) => visibleIds.has(id)));
+  };
+
+  const ensureActiveChatSession = async (): Promise<string> => {
+    if (activeSessionUuidRef.current) return activeSessionUuidRef.current;
+    let pending = pendingSessionCreationRef.current;
+    if (!pending) {
+      pending = createChatSession();
+      pendingSessionCreationRef.current = pending;
+    }
+    try {
+      const created = await pending;
+      if (!activeSessionUuidRef.current) {
+        activeSessionUuidRef.current = created.session_uuid;
+        setActiveSessionUuid(created.session_uuid);
+        setActiveSessionStatus('active');
+        setSessions((current) => [
+          created,
+          ...current.filter((item) => item.session_uuid !== created.session_uuid),
+        ]);
+      }
+      return activeSessionUuidRef.current || created.session_uuid;
+    } finally {
+      if (pendingSessionCreationRef.current === pending) {
+        pendingSessionCreationRef.current = null;
+      }
+    }
   };
 
   const shouldUseServerModel = !isDesktopRuntime();
@@ -1037,7 +1097,12 @@ export function ChatPage() {
 
   useEffect(() => {
     if (sourcePreview.status !== 'ready') return;
-    window.requestAnimationFrame(() => sourceHighlightRef.current?.scrollIntoView({ block: 'center' }));
+    window.requestAnimationFrame(() => {
+      const highlightedSource = sourceHighlightRef.current;
+      if (typeof highlightedSource?.scrollIntoView === 'function') {
+        highlightedSource.scrollIntoView({ block: 'center' });
+      }
+    });
   }, [sourcePreview]);
 
   const activeProfile = useMemo(
@@ -1131,17 +1196,16 @@ export function ChatPage() {
 
   const uploadKnowledge = async () => {
     if (!pendingUploadFiles.length || uploading) return;
-    if (uploadPurpose === 'session_attachment' && !activeSessionUuid) {
-      setUploadStatus('请先开启一个任务，再上传当前附件');
-      return;
-    }
     setUploading(true);
     setUploadStatus(`正在上传 ${pendingUploadFiles.length} 个资料，最多同时处理 3 个…`);
     try {
+      const conversationId = uploadPurpose === 'session_attachment'
+        ? await ensureActiveChatSession()
+        : undefined;
       const options = {
         usageType: uploadPurpose === 'session_attachment' ? 'session_attachment' : 'personal_reference',
         reviewStatus: uploadPurpose === 'submit_review' ? 'pending' : 'draft',
-        conversationId: uploadPurpose === 'session_attachment' ? activeSessionUuid : undefined,
+        conversationId,
         category: uploadPurpose === 'session_attachment' ? '当前附件' : uploadCategory,
         documentType: uploadDocumentType,
         tags: [] as string[],
@@ -1311,20 +1375,16 @@ export function ChatPage() {
     saveTarget: 'temporary' | 'personal_reference' | 'official_knowledge_candidate' | 'cancel',
   ) => {
     if (webCapture.status !== 'ready') return;
-    if (saveTarget === 'temporary' && !activeSessionUuid) {
-      setWebCapture({
-        ...webCapture,
-        actionStatus: '仅本次使用需要先开启一个任务。可以先保存到我的资料，或在已有任务中使用。',
-      });
-      return;
-    }
     setWebCapture({ status: 'saving', preview: webCapture.preview, action: saveTarget });
     try {
+      const conversationId = saveTarget === 'temporary'
+        ? await ensureActiveChatSession()
+        : activeSessionUuidRef.current || undefined;
       const result = await confirmWebCapture(webCapture.preview.capture_id, {
         saveTarget,
         category: webCapture.preview.suggested_category,
         documentType: webCapture.preview.suggested_document_type,
-        conversationId: activeSessionUuid || undefined,
+        conversationId,
       });
       if (saveTarget === 'cancel') {
         setWebCapture({ status: 'idle' });
@@ -1440,6 +1500,17 @@ export function ChatPage() {
       isComplete: true,
     }));
     let assistantId = '';
+    let completionToken = '';
+    const failStoppedGeneration = async () => {
+      if (assistantId && completionToken) {
+        await failChatMessage(assistantId, {
+          completionToken,
+          errorCode: 'USER_CANCELLED',
+          errorMessage: '用户停止生成',
+        }).catch(() => undefined);
+      }
+      if (requestIsVisible()) markGenerationStopped(assistantId);
+    };
     try {
       const prepared = await prepareChat({
         sessionUuid: originSessionUuid || undefined,
@@ -1451,6 +1522,7 @@ export function ChatPage() {
         includeSessionAttachments: true,
         sensitiveConfirmationDigest: confirmationDigest,
       });
+      completionToken = prepared.completion_token;
       requestSessionUuid = prepared.session_uuid;
       if (generationKey !== prepared.session_uuid) {
         const generationWasActive = activeGenerationKeyRef.current === generationKey;
@@ -1532,7 +1604,7 @@ export function ChatPage() {
           ));
         });
         if (generation.stopped) {
-          if (requestIsVisible()) markGenerationStopped(assistantId);
+          await failStoppedGeneration();
           return;
         }
         if (requestIsVisible()) {
@@ -1577,7 +1649,7 @@ export function ChatPage() {
         ));
       });
       if (generation.stopped) {
-        if (requestIsVisible()) markGenerationStopped(assistantId);
+        await failStoppedGeneration();
         return;
       }
       updateRequestMessages((current) => current.map((message) =>
@@ -1603,7 +1675,7 @@ export function ChatPage() {
             break;
           }
           if (generation.stopped) {
-            if (requestIsVisible()) markGenerationStopped(assistantId);
+            await failStoppedGeneration();
             return;
           }
           if (requestIsVisible()) {
@@ -1627,7 +1699,7 @@ export function ChatPage() {
             ));
           });
           if (generation.stopped) {
-            if (requestIsVisible()) markGenerationStopped(assistantId);
+            await failStoppedGeneration();
             return;
           }
           updateRequestMessages((current) => current.map((message) =>
@@ -1704,7 +1776,7 @@ export function ChatPage() {
         }
       }
       if (generation.stopped || isAbortLikeError(error)) {
-        if (requestIsVisible()) markGenerationStopped(assistantId);
+        await failStoppedGeneration();
         return;
       }
       if (requestIsVisible()) {
@@ -2686,9 +2758,8 @@ export function ChatPage() {
                     ) : null}
                     <div className="chat-message-actions">
                       <button
-                        disabled={webCapture.status === 'saving' || !activeSessionUuid}
+                        disabled={webCapture.status === 'saving'}
                         onClick={() => void confirmCurrentWebCapture('temporary')}
-                        title={!activeSessionUuid ? '仅本次使用需要先开启一个任务' : undefined}
                         type="button"
                       >
                         仅本次使用
@@ -2937,93 +3008,189 @@ export function ChatPage() {
             </div>
           ) : null}
           {pendingUploadFiles.length ? (
-            <div aria-label="上传资料" className="chat-upload-dialog" role="dialog">
+            <div
+              aria-busy={uploading}
+              aria-labelledby="chat-upload-dialog-title"
+              aria-modal="true"
+              className="chat-upload-dialog"
+              role="dialog"
+            >
               <div className="chat-upload-dialog-card">
-                <strong>上传资料</strong>
-                <p>已选择 {pendingUploadFiles.length} 个文件：</p>
-                {pendingUploadFiles.map((file) => (
-                  <p key={`${file.name}-${file.size}-${file.lastModified}`} role="note">{file.name}：{uploadFileHint(file)}</p>
-                ))}
-                <p>
-                  你上传的个人资料仅供你本人使用，不会进入公司知识库。
-                  提交管理员审核通过后，才可能成为正式知识来源。
-                </p>
-                <fieldset>
-                  <legend>上传用途</legend>
-                  <label>
-                    <input
-                      disabled={uploading}
-                      checked={uploadPurpose === 'session_attachment'}
-                      name="upload-purpose"
-                      onChange={() => setUploadPurpose('session_attachment')}
-                      type="radio"
-                    />
-                    仅用于当前任务
-                  </label>
-                  <label>
-                    <input
-                      disabled={uploading}
-                      checked={uploadPurpose === 'personal_reference'}
-                      name="upload-purpose"
-                      onChange={() => setUploadPurpose('personal_reference')}
-                      type="radio"
-                    />
-                    保存到我的资料
-                  </label>
-                  <label>
-                    <input
-                      disabled={uploading}
-                      checked={uploadPurpose === 'submit_review'}
-                      name="upload-purpose"
-                      onChange={() => setUploadPurpose('submit_review')}
-                      type="radio"
-                    />
-                    提交管理员审核
-                  </label>
-                </fieldset>
-                <div className="chat-upload-meta-grid">
-                  <label>
-                    资料分类
-                    <select
-                      aria-label="资料分类"
-                      disabled={uploading || uploadPurpose === 'session_attachment'}
-                      onChange={(event) => setUploadCategory(event.target.value)}
-                      value={uploadPurpose === 'session_attachment' ? '当前附件' : uploadCategory}
-                    >
-                      {uploadPurpose === 'session_attachment' ? (
-                        <option value="当前附件">当前附件</option>
-                      ) : uploadCategoryOptions.map((item) => (
-                        <option key={item} value={item}>{item}</option>
+                <header className="chat-upload-dialog-head">
+                  <div className="chat-upload-dialog-heading">
+                    <span aria-hidden="true" className="chat-upload-dialog-mark">
+                      <svg fill="none" viewBox="0 0 24 24">
+                        <path d="M12 16V4m0 0L8 8m4-4 4 4M5 14v4a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-4" />
+                      </svg>
+                    </span>
+                    <div>
+                      <h2 id="chat-upload-dialog-title">上传资料</h2>
+                      <p>{pendingUploadFiles.length} 个文件待上传</p>
+                    </div>
+                  </div>
+                  <button
+                    aria-label="关闭上传资料"
+                    className="chat-upload-dialog-close"
+                    disabled={uploading}
+                    onClick={() => setPendingUploadFiles([])}
+                    type="button"
+                  >
+                    <span aria-hidden="true">×</span>
+                  </button>
+                </header>
+
+                <div className="chat-upload-dialog-body">
+                  <section aria-label="待上传文件" className="chat-upload-file-section" role="region">
+                    <div className="chat-upload-section-head">
+                      <h3>文件列表</h3>
+                      <span>{pendingUploadFiles.length} 项</span>
+                    </div>
+                    <p className="chat-upload-format-note">
+                      <svg aria-hidden="true" fill="none" viewBox="0 0 24 24">
+                        <circle cx="12" cy="12" r="9" />
+                        <path d="M12 10v6m0-9h.01" />
+                      </svg>
+                      <span>{supportedUploadFormatHint}</span>
+                    </p>
+                    <ul className="chat-upload-file-list">
+                      {pendingUploadFiles.map((file, index) => (
+                        <li className="chat-upload-file-item" key={`${file.name}-${file.size}-${file.lastModified}-${index}`}>
+                          <span className="chat-upload-file-type">{uploadFileExtension(file)}</span>
+                          <span className="chat-upload-file-copy">
+                            <strong title={file.name}>{file.name}</strong>
+                            <small>{formatUploadFileSize(file.size)}</small>
+                          </span>
+                          <button
+                            aria-label={`移除文件：${file.name}`}
+                            disabled={uploading}
+                            onClick={() => setPendingUploadFiles((current) => (
+                              current.filter((_, currentIndex) => currentIndex !== index)
+                            ))}
+                            type="button"
+                          >
+                            <span aria-hidden="true">×</span>
+                          </button>
+                        </li>
                       ))}
-                    </select>
-                  </label>
-                  <label>
-                    文档类型
-                    <select
-                      aria-label="文档类型"
-                      disabled={uploading}
-                      onChange={(event) => setUploadDocumentType(event.target.value)}
-                      value={uploadDocumentType}
-                    >
-                      {uploadDocumentTypeOptions.map((item) => (
-                        <option key={item} value={item}>{item}</option>
-                      ))}
-                    </select>
-                  </label>
+                    </ul>
+                    {uniqueUploadFileNotes(pendingUploadFiles).map((note) => (
+                      <p className="chat-upload-parsing-note" key={note} role="note">{note}</p>
+                    ))}
+                  </section>
+
+                  <div className="chat-upload-privacy-note">
+                    <svg aria-hidden="true" fill="none" viewBox="0 0 24 24">
+                      <path d="M12 3 5.5 5.7v5.2c0 4.2 2.7 8 6.5 9.6 3.8-1.6 6.5-5.4 6.5-9.6V5.7L12 3Z" />
+                      <path d="m9.2 11.8 1.8 1.8 3.9-4" />
+                    </svg>
+                    <div>
+                      <strong>{uploadPurpose === 'session_attachment' ? '仅在当前聊天使用' : '默认仅你可见'}</strong>
+                      <p>{uploadPurpose === 'session_attachment'
+                        ? '不会保存到我的资料或公司知识库；永久删除这段聊天后，附件也会清理。'
+                        : '资料不会自动进入公司知识库；提交管理员审核并通过后，才可能成为正式知识来源。'}</p>
+                    </div>
+                  </div>
+
+                  <fieldset className="chat-upload-purpose-options">
+                    <legend>上传用途</legend>
+                    <div className="chat-upload-purpose-grid">
+                      <label>
+                        <input
+                          aria-label="仅用于当前聊天"
+                          disabled={uploading}
+                          checked={uploadPurpose === 'session_attachment'}
+                          name="upload-purpose"
+                          onChange={() => setUploadPurpose('session_attachment')}
+                          type="radio"
+                        />
+                        <span>
+                          <strong>仅用于当前聊天</strong>
+                          <small>只在这段聊天中使用</small>
+                        </span>
+                      </label>
+                      <label>
+                        <input
+                          aria-label="保存到我的资料"
+                          disabled={uploading}
+                          checked={uploadPurpose === 'personal_reference'}
+                          name="upload-purpose"
+                          onChange={() => setUploadPurpose('personal_reference')}
+                          type="radio"
+                        />
+                        <span>
+                          <strong>保存到我的资料</strong>
+                          <small>以后可在个人资料中使用</small>
+                        </span>
+                      </label>
+                      <label>
+                        <input
+                          aria-label="提交管理员审核"
+                          disabled={uploading}
+                          checked={uploadPurpose === 'submit_review'}
+                          name="upload-purpose"
+                          onChange={() => setUploadPurpose('submit_review')}
+                          type="radio"
+                        />
+                        <span>
+                          <strong>提交管理员审核</strong>
+                          <small>审核后可进入公司知识库</small>
+                        </span>
+                      </label>
+                    </div>
+                  </fieldset>
+
+                  <section className="chat-upload-meta-section">
+                    <div className="chat-upload-section-head">
+                      <h3>资料属性</h3>
+                      <span>可稍后修改</span>
+                    </div>
+                    <div className="chat-upload-meta-grid">
+                      <label>
+                        资料分类
+                        <select
+                          aria-label="资料分类"
+                          disabled={uploading || uploadPurpose === 'session_attachment'}
+                          onChange={(event) => setUploadCategory(event.target.value)}
+                          value={uploadPurpose === 'session_attachment' ? '当前附件' : uploadCategory}
+                        >
+                          {uploadPurpose === 'session_attachment' ? (
+                            <option value="当前附件">当前附件</option>
+                          ) : uploadCategoryOptions.map((item) => (
+                            <option key={item} value={item}>{item}</option>
+                          ))}
+                        </select>
+                      </label>
+                      <label>
+                        文档类型
+                        <select
+                          aria-label="文档类型"
+                          disabled={uploading}
+                          onChange={(event) => setUploadDocumentType(event.target.value)}
+                          value={uploadDocumentType}
+                        >
+                          {uploadDocumentTypeOptions.map((item) => (
+                            <option key={item} value={item}>{item}</option>
+                          ))}
+                        </select>
+                      </label>
+                    </div>
+                  </section>
+
+                  {uploadStatus ? (
+                    <p className="chat-upload-dialog-status" role="status">{uploadStatus}</p>
+                  ) : null}
                 </div>
-                {uploadStatus ? (
-                  <p className="chat-upload-dialog-status" role="status">{uploadStatus}</p>
-                ) : null}
-                <div className="chat-message-actions">
+
+                <footer className="chat-upload-dialog-actions">
                   <button disabled={uploading} onClick={() => setPendingUploadFiles([])} type="button">
                     取消
                   </button>
-                  <button disabled={uploading} onClick={() => void uploadKnowledge()} type="button">
+                  <button className="primary" disabled={uploading} onClick={() => void uploadKnowledge()} type="button">
                     {uploading ? (
                       <><span aria-hidden="true" className="upload-parsing-spinner" />正在解析中</>
                     ) : `开始上传（${pendingUploadFiles.length}）`}
                   </button>
-                </div>
+                </footer>
               </div>
             </div>
           ) : null}

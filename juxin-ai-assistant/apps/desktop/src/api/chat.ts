@@ -402,6 +402,13 @@ export async function getChatSessionsByKind(kind: ChatSessionListKind): Promise<
   return readJson(await apiFetch(path, { cache: 'no-store' }), 'CHAT_SESSIONS_FAILED');
 }
 
+export async function createChatSession(): Promise<ChatSessionPayload> {
+  return readJson(
+    await apiFetch('/api/conversations', { method: 'POST' }),
+    'CHAT_SESSION_CREATE_FAILED',
+  );
+}
+
 export async function archiveChatSession(sessionUuid: string): Promise<void> {
   await readJson(
     await apiFetch(`/api/conversations/${encodeURIComponent(sessionUuid)}/archive`, {

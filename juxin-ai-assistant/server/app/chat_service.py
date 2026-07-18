@@ -14,6 +14,7 @@ from .agent_loop.task_state import TaskStateStore
 from .agent_loop.verifier import Verifier
 from .context.context_builder import RecentChatMessage
 from .crypto import ContentCipher, EncryptedPayload
+from .knowledge_files import hard_delete_session_attachment_files
 from .knowledge_search import RetrievedKnowledgeChunk
 from .models import AgentTaskState, ChatMessage, ChatMessageSource, ChatSession, ExportRecord, KnowledgeChunk, KnowledgeFile
 from .models import KnowledgeSearchLog, WebSearchLog
@@ -606,6 +607,8 @@ def prepare_chat(
         session.mode = mode
     session.updated_at = datetime.now(UTC)
     recent_messages = _recent_messages(db, cipher, session=session)
+    if session.title == "新聊天" and not recent_messages:
+        session.title = _session_title(body.question)
     user_message = _create_message(
         db,
         cipher,
@@ -977,6 +980,23 @@ def _session_item(row: ChatSession) -> ChatSessionItemOut:
     )
 
 
+def create_chat_session(
+    db: Session,
+    *,
+    sso_user_id: str,
+) -> ChatSessionItemOut:
+    session = ChatSession(
+        uuid=str(uuid_lib.uuid4()),
+        sso_user_id=sso_user_id,
+        title="新聊天",
+        mode="NORMAL",
+        status=CHAT_SESSION_ACTIVE,
+    )
+    db.add(session)
+    db.flush()
+    return _session_item(session)
+
+
 def list_chat_sessions(
     db: Session,
     *,
@@ -1114,8 +1134,14 @@ def hard_delete_chat_session(
     *,
     sso_user_id: str,
     session_uuid: str,
+    storage_root: str | None = None,
 ) -> None:
     session = _get_owned_session(db, sso_user_id=sso_user_id, session_uuid=session_uuid)
+    hard_delete_session_attachment_files(
+        db,
+        conversation_id=session.uuid,
+        storage_root=storage_root,
+    )
     db.execute(
         delete(ChatMessageSource).where(
             ChatMessageSource.message_id.in_(

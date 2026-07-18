@@ -1,5 +1,6 @@
 import os
 import json
+from pathlib import Path
 from types import SimpleNamespace
 from io import BytesIO
 from datetime import UTC, datetime
@@ -1473,11 +1474,40 @@ def test_chat_sessions_are_isolated_by_user(client_for_user) -> None:
     assert other.get("/api/ai/chat/sessions").json()["total"] == 0
 
 
+def test_empty_conversation_can_be_created_for_a_temporary_attachment(
+    client_for_user,
+) -> None:
+    client = client_for_user("temporary-attachment-owner")
+
+    created = client.post("/api/conversations")
+
+    assert created.status_code == 201, created.text
+    body = created.json()
+    assert body["title"] == "新聊天"
+    assert body["status"] == "active"
+    detail = client.get(f"/api/ai/chat/sessions/{body['session_uuid']}")
+    assert detail.status_code == 200
+    assert detail.json()["messages"] == []
+
+    prepared = client.post(
+        "/api/ai/chat/prepare",
+        json={
+            "session_uuid": body["session_uuid"],
+            "question": "参考临时附件整理内容",
+            "mode": "normal",
+        },
+    )
+    assert prepared.status_code == 201, prepared.text
+    assert prepared.json()["session_uuid"] == body["session_uuid"]
+    assert client.get("/api/conversations").json()["items"][0]["title"] == "参考临时附件整理内容"
+
+
 def test_conversation_archive_trash_restore_and_hard_delete_flow(
     client_for_user,
     generation_db,
 ) -> None:
-    from app.models import ChatMessage, ChatSession
+    from app.config import get_settings
+    from app.models import ChatMessage, ChatSession, KnowledgeFile
 
     client = client_for_user("user-1")
     created = client.post(
@@ -1485,6 +1515,23 @@ def test_conversation_archive_trash_restore_and_hard_delete_flow(
         json={"question": "需要归档的会话", "mode": "normal"},
     ).json()
     session_uuid = created["session_uuid"]
+    stored_path = Path(get_settings().knowledge_storage_dir) / f"{session_uuid}-temporary.txt"
+    stored_path.write_text("只供当前聊天使用", encoding="utf-8")
+    temporary_file = KnowledgeFile(
+        sso_user_id="user-1",
+        file_name="当前聊天附件.txt",
+        file_type="txt",
+        file_size=stored_path.stat().st_size,
+        file_path=str(stored_path),
+        content_sha256="temporary-chat-attachment",
+        usage_type="session_attachment",
+        source_type="session_attachment",
+        rag_scope="session",
+        conversation_id=session_uuid,
+        key_version=get_settings().content_encryption_key_version,
+    )
+    generation_db.add(temporary_file)
+    generation_db.commit()
 
     assert [item["session_uuid"] for item in client.get("/api/conversations").json()["items"]] == [
         session_uuid
@@ -1522,9 +1569,16 @@ def test_conversation_archive_trash_restore_and_hard_delete_flow(
         "/api/ai/chat/prepare",
         json={"session_uuid": session_uuid, "question": "不能继续", "mode": "normal"},
     ).status_code == 409
+    assert stored_path.is_file()
+    assert temporary_file.status == "READY"
 
     hard_deleted = client.delete(f"/api/conversations/{session_uuid}/hard-delete")
     assert hard_deleted.status_code == 204
+    generation_db.refresh(temporary_file)
+    assert temporary_file.status == "HARD_DELETED"
+    assert temporary_file.hard_deleted_at is not None
+    assert temporary_file.file_path == ""
+    assert not stored_path.exists()
     assert generation_db.scalar(select(ChatSession).where(ChatSession.uuid == session_uuid)) is None
     assert generation_db.scalar(
         select(ChatMessage).where(ChatMessage.uuid == created["user_message_uuid"])

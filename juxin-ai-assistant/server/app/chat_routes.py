@@ -16,6 +16,7 @@ from .chat_service import (
     bulk_archive_chat_sessions,
     bulk_soft_delete_chat_sessions,
     complete_chat_message,
+    create_chat_session,
     fail_chat_message,
     get_chat_session_detail,
     hard_delete_chat_session,
@@ -574,6 +575,26 @@ async def active_conversations(
     return ChatSessionListOut(items=items, total=len(items))
 
 
+@conversations_router.post("", response_model=ChatSessionItemOut, status_code=201)
+async def create_conversation(
+    request: Request,
+    session_payload: Annotated[SessionPayload, Depends(get_session)],
+    current_settings: Annotated[Settings, Depends(get_settings)],
+    db: Annotated[Session, Depends(get_db)],
+) -> ChatSessionItemOut:
+    await _require_ai_assistant_use(request, session_payload, current_settings)
+    try:
+        item = create_chat_session(
+            db,
+            sso_user_id=str(session_payload.user.id),
+        )
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    return item
+
+
 @conversations_router.get("/archived", response_model=ChatSessionListOut)
 async def archived_conversations(
     request: Request,
@@ -702,6 +723,7 @@ async def hard_delete_conversation(
             db,
             sso_user_id=str(session_payload.user.id),
             session_uuid=conversation_id,
+            storage_root=current_settings.knowledge_storage_dir,
         )
         db.commit()
     except Exception:
