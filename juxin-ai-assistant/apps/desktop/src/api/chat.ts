@@ -418,6 +418,13 @@ export async function getChatSessionsByKind(kind: ChatSessionListKind, projectUu
   return readJson(await apiFetch(`${path}${projectQuery(projectUuid)}`, { cache: 'no-store' }), 'CHAT_SESSIONS_FAILED');
 }
 
+export async function createChatSession(projectUuid?: string): Promise<ChatSessionPayload> {
+  return readJson(
+    await apiFetch(`/api/conversations${projectQuery(projectUuid)}`, { method: 'POST' }),
+    'CHAT_SESSION_CREATE_FAILED',
+  );
+}
+
 export async function archiveChatSession(sessionUuid: string, projectUuid?: string): Promise<void> {
   await readJson(
     await apiFetch(`/api/conversations/${encodeURIComponent(sessionUuid)}/archive${projectQuery(projectUuid)}`, {

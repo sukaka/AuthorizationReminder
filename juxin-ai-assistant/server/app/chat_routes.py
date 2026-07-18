@@ -18,6 +18,7 @@ from .chat_service import (
     bulk_archive_chat_sessions,
     bulk_soft_delete_chat_sessions,
     complete_chat_message,
+    create_chat_session,
     fail_chat_message,
     get_chat_session_detail,
     hard_delete_chat_session,
@@ -651,6 +652,30 @@ async def active_conversations(
     return ChatSessionListOut(items=items, total=len(items))
 
 
+@conversations_router.post("", response_model=ChatSessionItemOut, status_code=201)
+async def create_conversation(
+    request: Request,
+    session_payload: Annotated[SessionPayload, Depends(get_session)],
+    current_settings: Annotated[Settings, Depends(get_settings)],
+    db: Annotated[Session, Depends(get_db)],
+    project_uuid: str | None = Query(default=None, max_length=64),
+) -> ChatSessionItemOut:
+    await _require_ai_assistant_use(request, session_payload, current_settings)
+    user_id = str(session_payload.user.id)
+    _require_project_scope(db, project_uuid=project_uuid, user_id=user_id)
+    try:
+        item = create_chat_session(
+            db,
+            sso_user_id=user_id,
+            project_uuid=project_uuid,
+        )
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    return item
+
+
 @conversations_router.get("/archived", response_model=ChatSessionListOut)
 async def archived_conversations(
     request: Request,
@@ -815,6 +840,7 @@ async def hard_delete_conversation(
             sso_user_id=user_id,
             session_uuid=conversation_id,
             project_uuid=project_uuid,
+            storage_root=current_settings.knowledge_storage_dir,
         )
         db.commit()
     except Exception:

@@ -2,6 +2,7 @@ import hashlib
 import re
 import uuid as uuid_lib
 from dataclasses import dataclass
+from datetime import datetime
 from io import BytesIO
 from pathlib import Path
 from zipfile import BadZipFile, ZipFile
@@ -798,6 +799,49 @@ def invalidate_knowledge_search(
     except Exception:
         # MySQL status and permission checks still prevent stale points from leaking.
         return
+
+
+def hard_delete_session_attachment_files(
+    db: Session,
+    *,
+    conversation_id: str,
+    storage_root: str | None,
+) -> int:
+    """Remove files that are scoped exclusively to a permanently deleted chat."""
+    files = list(db.scalars(
+        select(KnowledgeFile).where(
+            KnowledgeFile.conversation_id == conversation_id,
+            KnowledgeFile.usage_type == "session_attachment",
+            KnowledgeFile.hard_deleted_at.is_(None),
+        )
+    ))
+    if not files:
+        return 0
+
+    root = Path(storage_root).expanduser().resolve() if storage_root else None
+    now = datetime.now()
+    for file_record in files:
+        db.execute(delete(KnowledgeChunk).where(KnowledgeChunk.file_id == file_record.id))
+        if root is not None and file_record.file_path:
+            stored_path = Path(file_record.file_path).expanduser().resolve()
+            if _is_relative_to(stored_path, root) and stored_path.is_file():
+                stored_path.unlink()
+        file_record.status = "HARD_DELETED"
+        file_record.hard_deleted_at = now
+        file_record.rag_enabled = False
+        file_record.external_public = False
+        file_record.external_download_allowed = False
+        file_record.reference_enabled = False
+        file_record.archived_at = None
+        file_record.file_path = ""
+        file_record.stored_file_name = ""
+
+    db.flush()
+    for file_record in files:
+        invalidate_knowledge_search(file_uuid=file_record.uuid, remove_vector_points=True)
+    return len(files)
+
+
 def create_knowledge_file_from_bytes(
     db: Session,
     *,

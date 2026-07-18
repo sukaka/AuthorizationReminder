@@ -1684,23 +1684,51 @@ it('removes reference scope controls and always uses the full scope', async () =
 });
 
 it('shows uploaded session attachments as a compact attachment bar', async () => {
-  let prepareCount = 0;
+  const createConversationRequest = vi.fn();
   const prepareRequest = vi.fn();
+  const uploadRequest = vi.fn();
+  const appendedFields = new Map<string, string>();
+  const originalAppend = FormData.prototype.append;
+  const appendSpy = vi.spyOn(FormData.prototype, 'append').mockImplementation(function append(
+    this: FormData,
+    name: string,
+    value: string | Blob,
+  ) {
+    if (typeof value === 'string') {
+      appendedFields.set(name, value);
+    } else if (value instanceof File) {
+      appendedFields.set('file_name', value.name);
+    }
+    return (originalAppend as (this: FormData, name: string, value: string | Blob) => void)
+      .call(this, name, value);
+  });
   server.use(
     http.get('/api/conversations', () => HttpResponse.json({ items: [], total: 0 })),
-    http.post('/api/ai/chat/prepare', async ({ request }) => {
-      prepareRequest(await request.json());
-      prepareCount += 1;
+    http.post('/api/conversations', () => {
+      createConversationRequest();
       return HttpResponse.json({
         session_uuid: 'session-attachment-bar',
-        user_message_uuid: `user-message-attachment-bar-${prepareCount}`,
-        assistant_message_uuid: `assistant-message-attachment-bar-${prepareCount}`,
-        completion_token: `complete-attachment-bar-${prepareCount}`,
+        title: '新聊天',
+        mode: 'NORMAL',
+        status: 'active',
+        workspace_type: 'personal',
+        project_uuid: null,
+        created_at: '2026-06-26T01:00:00Z',
+        updated_at: '2026-06-26T01:00:00Z',
+      }, { status: 201 });
+    }),
+    http.post('/api/ai/chat/prepare', async ({ request }) => {
+      prepareRequest(await request.json());
+      return HttpResponse.json({
+        session_uuid: 'session-attachment-bar',
+        user_message_uuid: 'user-message-attachment-bar',
+        assistant_message_uuid: 'assistant-message-attachment-bar',
+        completion_token: 'complete-attachment-bar',
         completed: false,
         answer: '',
         messages: [
           { role: 'system', content: '你是聚信 AI 助手。' },
-          { role: 'user', content: prepareCount === 1 ? '开启任务' : '参考附件整理' },
+          { role: 'user', content: '参考附件整理' },
         ],
         citations: [],
       }, { status: 201 });
@@ -1712,6 +1740,7 @@ it('shows uploaded session attachments as a compact attachment bar', async () =>
       });
     }),
     http.post('/api/knowledge/files/upload', () => {
+      uploadRequest();
       return HttpResponse.json({
         file_uuid: 'file-current-attachment',
         file_name: 'WEB动态安全管理平台白皮书v3.1.docx',
@@ -1737,27 +1766,30 @@ it('shows uploaded session attachments as a compact attachment bar', async () =>
     }),
   );
   generateLocalModelMock.mockResolvedValue({
-    output: '任务已开启。',
+    output: '已参考当前聊天附件整理。',
     latencyMs: 10,
     usage: { output_tokens: 4 },
   });
 
   render(<ChatPage />);
 
-  await userEvent.type(await screen.findByLabelText('告诉我你想完成什么工作'), '开启任务');
-  await userEvent.click(screen.getByRole('button', { name: '发送' }));
-  expect(await screen.findByText('任务已开启。')).toBeInTheDocument();
-
   await userEvent.upload(
-    screen.getByLabelText('上传资料'),
+    await screen.findByLabelText('上传资料'),
     new File(['白皮书内容'], 'WEB动态安全管理平台白皮书v3.1.docx', {
       type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
     }),
   );
   const dialog = await screen.findByRole('dialog', { name: '上传资料' });
-  await userEvent.click(within(dialog).getByRole('radio', { name: '仅用于当前任务' }));
+  await userEvent.click(within(dialog).getByRole('radio', { name: '仅用于当前聊天' }));
   await userEvent.click(within(dialog).getByRole('button', { name: /^开始上传/ }));
 
+  await waitFor(() => expect(createConversationRequest).toHaveBeenCalledTimes(1));
+  await waitFor(() => expect(uploadRequest).toHaveBeenCalledTimes(1));
+  expect(Object.fromEntries(appendedFields)).toEqual(expect.objectContaining({
+    file_name: 'WEB动态安全管理平台白皮书v3.1.docx',
+    conversation_id: 'session-attachment-bar',
+    usage_type: 'session_attachment',
+  }));
   const attachmentBar = await screen.findByRole('region', { name: '当前附件' });
   expect(attachmentBar).toHaveClass('chat-attachment-bar');
   expect(within(attachmentBar).getByText('DOCX')).toBeInTheDocument();
@@ -1774,11 +1806,13 @@ it('shows uploaded session attachments as a compact attachment bar', async () =>
 
   await waitFor(() => expect(prepareRequest).toHaveBeenLastCalledWith(
     expect.objectContaining({
+      session_uuid: 'session-attachment-bar',
       question: '参考附件整理',
       include_session_attachments: true,
       attachment_file_ids: ['file-current-attachment'],
     }),
   ));
+  appendSpy.mockRestore();
 });
 
 it('allows uploading PDF files and explains text extraction limits', async () => {
@@ -1796,6 +1830,47 @@ it('allows uploading PDF files and explains text extraction limits', async () =>
   const dialog = await screen.findByRole('dialog', { name: '上传资料' });
   expect(within(dialog).getByRole('note')).toHaveTextContent('PDF 会按页面提取可复制文本，扫描件需要先转成可复制文本。');
   expect(within(dialog).queryByText(/暂不支持 PDF/)).not.toBeInTheDocument();
+});
+
+it('shows upload guidance once and lets users remove files from the upload list', async () => {
+  server.use(
+    http.get('/api/conversations', () => HttpResponse.json({ items: [], total: 0 })),
+  );
+
+  render(<ChatPage />);
+  const firstFile = new File(['first report'], 'Android应用安全测评报告-新.docx', {
+    type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  });
+  const secondFile = new File(['second report'], '通过OA-Android应用安全测评报告.docx', {
+    type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  });
+
+  await userEvent.upload(
+    await screen.findByLabelText('上传资料'),
+    [firstFile, secondFile],
+  );
+
+  const dialog = await screen.findByRole('dialog', { name: '上传资料' });
+  expect(dialog).toHaveAttribute('aria-modal', 'true');
+  const fileRegion = within(dialog).getByRole('region', { name: '待上传文件' });
+  expect(within(fileRegion).getByRole('list')).toBeInTheDocument();
+  expect(within(dialog).getByText('2 个文件待上传')).toBeInTheDocument();
+  expect(within(dialog).getAllByText(
+    '支持 PDF、DOCX、XLSX、PPTX、TXT、MD、PNG、JPG、JPEG 和 WEBP；单个文件不超过 100 MB。',
+  )).toHaveLength(1);
+  expect(within(fileRegion).getByText(firstFile.name)).toBeInTheDocument();
+  expect(within(fileRegion).getByText(secondFile.name)).toBeInTheDocument();
+
+  await userEvent.click(within(fileRegion).getByRole('button', {
+    name: `移除文件：${firstFile.name}`,
+  }));
+
+  expect(within(fileRegion).queryByText(firstFile.name)).not.toBeInTheDocument();
+  expect(within(fileRegion).getByText(secondFile.name)).toBeInTheDocument();
+  expect(within(dialog).getByText('1 个文件待上传')).toBeInTheDocument();
+  expect(within(dialog).getAllByText(
+    '支持 PDF、DOCX、XLSX、PPTX、TXT、MD、PNG、JPG、JPEG 和 WEBP；单个文件不超过 100 MB。',
+  )).toHaveLength(1);
 });
 
 it('accepts document and image files pasted directly into the chat input', async () => {
@@ -2649,7 +2724,7 @@ it('shows upload purpose choices and submits a personal file for admin review', 
   );
 
   expect(await screen.findByRole('dialog', { name: '上传资料' })).toBeInTheDocument();
-  expect(screen.getByRole('radio', { name: '仅用于当前任务' })).toBeInTheDocument();
+  expect(screen.getByRole('radio', { name: '仅用于当前聊天' })).toBeInTheDocument();
   expect(screen.getByRole('radio', { name: '保存到我的资料' })).toBeInTheDocument();
   expect(screen.getByRole('radio', { name: '提交管理员审核' })).toBeInTheDocument();
   expect(screen.queryByText('加入公司查公司知识')).not.toBeInTheDocument();
