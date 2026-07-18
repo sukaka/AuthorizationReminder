@@ -76,6 +76,46 @@ def test_normal_chat_prepare_complete_and_detail(client_for_user) -> None:
     assert detail.json()["task_state"]["stage_history"][-1]["label"] == "已完成"
 
 
+def test_chat_complete_attaches_requested_document(client_for_user) -> None:
+    client = client_for_user("chat-document-owner")
+
+    prepared = client.post(
+        "/api/ai/chat/prepare",
+        json={
+            "question": "请把今天的工作总结导出为 Markdown 发给我",
+            "mode": "normal",
+        },
+    )
+
+    assert prepared.status_code == 201, prepared.text
+    body = prepared.json()
+    completed = client.post(
+        f"/api/ai/chat/messages/{body['assistant_message_uuid']}/complete",
+        json={
+            "completion_token": body["completion_token"],
+            "answer": "# 项目方案\n\n- 目标",
+            "model_display_name": "DeepSeek",
+            "model_id": "deepseek-chat",
+        },
+    )
+
+    assert completed.status_code == 200, completed.text
+    generated_files = completed.json()["generated_files"]
+    assert len(generated_files) == 1
+    generated_file = generated_files[0]
+    assert generated_file["format"] == "md"
+    assert generated_file["file_name"].endswith(".md")
+    assert generated_file["download_url"].endswith("/export/md")
+
+    detail = client.get(f"/api/ai/chat/sessions/{body['session_uuid']}")
+    assert detail.status_code == 200, detail.text
+    assert detail.json()["messages"][-1]["generated_files"] == generated_files
+
+    download = client.get(generated_file["download_url"])
+    assert download.status_code == 200, download.text
+    assert download.content == "# 项目方案\n\n- 目标".encode("utf-8")
+
+
 def test_project_chat_sessions_are_isolated_from_personal_and_other_projects(
     client_for_user,
 ) -> None:

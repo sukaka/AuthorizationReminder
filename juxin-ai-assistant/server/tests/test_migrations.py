@@ -107,7 +107,7 @@ def test_migration_revision_graph_is_single_linear_head() -> None:
         migration_config("sqlite+pysqlite:///:memory:")
     )
 
-    assert script.get_heads() == ["0064_knowledge_external_download_control"]
+    assert script.get_heads() == ["0065_chat_generated_files"]
     revision_ids = {revision.revision for revision in script.walk_revisions()}
     assert {
         "0060_enterprise_graph_memory",
@@ -115,6 +115,7 @@ def test_migration_revision_graph_is_single_linear_head() -> None:
         "0062_enterprise_capability_evaluation",
         "0063_enterprise_notification_read_state",
         "0064_knowledge_external_download_control",
+        "0065_chat_generated_files",
         "0059_enterprise_metrics_health",
         "0058_enterprise_business_lineage",
         "0057_enterprise_identity_scope",
@@ -186,6 +187,7 @@ def test_migration_revision_graph_is_single_linear_head() -> None:
     assert script.get_revision("0062_enterprise_capability_evaluation").down_revision == "0061_enterprise_insights_recommendations"
     assert script.get_revision("0063_enterprise_notification_read_state").down_revision == "0062_enterprise_capability_evaluation"
     assert script.get_revision("0064_knowledge_external_download_control").down_revision == "0063_enterprise_notification_read_state"
+    assert script.get_revision("0065_chat_generated_files").down_revision == "0064_knowledge_external_download_control"
     assert script.get_revision("0054_merge_langgraph_and_professional_delivery").down_revision == (
         "0045_agent_langgraph_checkpoints",
         "0053_deliverable_media_assets",

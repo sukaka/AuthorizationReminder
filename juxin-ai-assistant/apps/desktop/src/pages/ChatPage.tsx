@@ -30,6 +30,7 @@ import {
   streamChatMessage,
   type ChatCitation,
   type ChatExportType,
+  type ChatGeneratedFile,
   type ChatMode,
   type ChatModeSelection,
   type ChatSessionListKind,
@@ -73,6 +74,7 @@ type UiMessage = {
   role: 'user' | 'assistant';
   content: string;
   citations: ChatCitation[];
+  generatedFiles?: ChatGeneratedFile[];
   isComplete?: boolean;
   runId?: string;
 };
@@ -1314,6 +1316,7 @@ export function ChatPage({ onOpenTaskCenter, onOpenWorkArtifacts, initialProject
         role: message.role,
         content: message.content,
         citations: message.citations,
+        generatedFiles: message.generated_files ?? [],
         isComplete: true,
       })));
       setStatus('');
@@ -1693,6 +1696,7 @@ export function ChatPage({ onOpenTaskCenter, onOpenWorkArtifacts, initialProject
           role: 'assistant',
           content: prepared.answer,
           citations: filterCitationsByAnswer(prepared.citations, prepared.answer),
+          generatedFiles: prepared.generated_files ?? [],
           isComplete: true,
           runId: prepared.run_id || undefined,
         }));
@@ -1711,6 +1715,7 @@ export function ChatPage({ onOpenTaskCenter, onOpenWorkArtifacts, initialProject
         role: 'assistant',
         content: '',
         citations: [],
+        generatedFiles: [],
         isComplete: false,
         runId: prepared.run_id || undefined,
       }));
@@ -1766,6 +1771,7 @@ export function ChatPage({ onOpenTaskCenter, onOpenWorkArtifacts, initialProject
                 ...message,
                 content: generated.answer,
                 citations: generated.citations ?? filterCitationsByAnswer(prepared.citations, generated.answer),
+                generatedFiles: generated.generated_files ?? [],
                 isComplete: true,
               }
             : message,
@@ -1883,6 +1889,7 @@ export function ChatPage({ onOpenTaskCenter, onOpenWorkArtifacts, initialProject
               ...message,
               content: result.output,
               citations: completed.citations ?? filterCitationsByAnswer(prepared.citations, result.output),
+              generatedFiles: completed.generated_files ?? [],
               isComplete: true,
             }
           : message,
@@ -2374,21 +2381,6 @@ export function ChatPage({ onOpenTaskCenter, onOpenWorkArtifacts, initialProject
     }
   };
 
-  const exportSessionWord = async (session: ChatSessionPayload) => {
-    try {
-      setExportingWord(true);
-      const result = await exportChatWord({
-        conversationId: session.session_uuid,
-        exportType: 'full_conversation',
-      });
-      showWordExportSuccess(result.kind === 'desktop' ? result.path : undefined);
-    } catch {
-      showWordExportFailure();
-    } finally {
-      setExportingWord(false);
-    }
-  };
-
   const toggleSessionSelection = (sessionUuid: string, checked: boolean) => {
     setSelectedSessionIds((current) => {
       if (checked) return current.includes(sessionUuid) ? current : current.concat(sessionUuid);
@@ -2557,14 +2549,6 @@ export function ChatPage({ onOpenTaskCenter, onOpenWorkArtifacts, initialProject
                       >
                         删除
                       </button>
-                      <button
-                        aria-label={`导出 Word：${sessionTitle}`}
-                        disabled={exportingWord}
-                        onClick={() => void exportSessionWord(session)}
-                        type="button"
-                      >
-                        导出 Word
-                      </button>
                     </>
                   ) : null}
                   {normalizeSessionStatus(session.status) === 'archived' ? (
@@ -2582,14 +2566,6 @@ export function ChatPage({ onOpenTaskCenter, onOpenWorkArtifacts, initialProject
                         type="button"
                       >
                         删除
-                      </button>
-                      <button
-                        aria-label={`导出 Word：${sessionTitle}`}
-                        disabled={exportingWord}
-                        onClick={() => void exportSessionWord(session)}
-                        type="button"
-                      >
-                        导出 Word
                       </button>
                     </>
                   ) : null}
@@ -2751,6 +2727,9 @@ export function ChatPage({ onOpenTaskCenter, onOpenWorkArtifacts, initialProject
                 const messageCitations = message.role === 'assistant' && message.isComplete !== false
                   ? message.citations
                   : [];
+                const generatedFiles = message.role === 'assistant' && message.isComplete !== false
+                  ? message.generatedFiles ?? []
+                  : [];
                 const citationReferences = citationFileReferences(messageCitations);
                 return (
                   <article className={`chat-message ${message.role}`} key={message.id}>
@@ -2791,6 +2770,19 @@ export function ChatPage({ onOpenTaskCenter, onOpenWorkArtifacts, initialProject
                                 </span>
                               </a>
                             ))}
+                        </div>
+                      ) : null}
+                      {generatedFiles.length ? (
+                        <div className="chat-file-deliveries" aria-label="已生成文件">
+                          {generatedFiles.map((file) => (
+                            <a download href={file.download_url} key={file.artifact_id}>
+                              <span className="chat-file-delivery-icon" aria-hidden="true">↓</span>
+                              <span>
+                                <strong>{file.file_name}</strong>
+                                <small>点击下载 · {file.format.toUpperCase()}</small>
+                              </span>
+                            </a>
+                          ))}
                         </div>
                       ) : null}
                       {citationReferences.length ? (
