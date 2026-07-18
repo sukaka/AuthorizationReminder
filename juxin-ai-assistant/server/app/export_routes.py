@@ -1,3 +1,4 @@
+from pathlib import Path
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Request
@@ -12,6 +13,7 @@ from .crypto import ContentCipher
 from .database import get_db
 from .export_file_manager import (
     DOCX_MEDIA_TYPE,
+    EXPORT_MEDIA_TYPES,
     ExportFileManager,
     content_disposition_for_download,
 )
@@ -118,11 +120,15 @@ async def download_word(
         from fastapi import HTTPException
 
         raise HTTPException(status_code=404, detail="导出文件不存在")
-    content = ExportFileManager(current_settings.export_storage_dir).read_docx(record.file_path)
+    suffix = Path(record.file_name).suffix.lower()
+    if suffix not in EXPORT_MEDIA_TYPES:
+        suffix = ".docx"
+    file_manager = ExportFileManager(current_settings.export_storage_dir)
+    content = file_manager.read_file(record.file_path, suffix=suffix)
     return Response(
         content=content,
-        media_type=DOCX_MEDIA_TYPE,
+        media_type=EXPORT_MEDIA_TYPES.get(suffix, DOCX_MEDIA_TYPE),
         headers={
-            "Content-Disposition": content_disposition_for_download(record.file_name),
+            "Content-Disposition": content_disposition_for_download(record.file_name, suffix=suffix),
         },
     )

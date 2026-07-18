@@ -21,6 +21,7 @@ from .chat_service import (
     hard_delete_chat_session,
     list_chat_sessions,
     message_citations,
+    message_generated_files,
     prepare_chat,
     rename_chat_session,
     restore_chat_session,
@@ -327,6 +328,7 @@ async def chat_message_complete(
         message_uuid=message.uuid,
         status=message.status,
         citations=message_citations(db, cipher, message),
+        generated_files=message_generated_files(message),
     )
 
 
@@ -398,6 +400,7 @@ async def chat_message_generate(
         usage=result.usage,
         latency_ms=result.latency_ms,
         citations=message_citations(db, cipher, message),
+        generated_files=message_generated_files(message),
     )
 
 
@@ -495,6 +498,10 @@ async def chat_message_generate_stream(
                 "citations": [
                     citation.model_dump()
                     for citation in message_citations(db, cipher, message)
+                ],
+                "generated_files": [
+                    generated_file.model_dump()
+                    for generated_file in message_generated_files(message)
                 ],
             })
             logging.getLogger(__name__).info(

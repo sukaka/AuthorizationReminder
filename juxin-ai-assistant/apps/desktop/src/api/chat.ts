@@ -32,12 +32,21 @@ export type ChatCitation = {
   media_type?: string;
 };
 
+export type ChatGeneratedFile = {
+  artifact_id: string;
+  file_name: string;
+  format: 'docx' | 'xlsx' | 'pptx' | 'md';
+  media_type: string;
+  download_url: string;
+};
+
 export type ChatMessagePayload = {
   message_uuid: string;
   role: 'user' | 'assistant';
   content: string;
   status: string;
   citations: ChatCitation[];
+  generated_files?: ChatGeneratedFile[];
   created_at: string;
 };
 
@@ -256,6 +265,7 @@ export type ChatPreparePayload = {
   answer: string;
   messages: Array<{ role: string; content: string }>;
   citations: ChatCitation[];
+  generated_files?: ChatGeneratedFile[];
   loop_trace?: LoopTraceStep[];
   task_state?: ChatTaskStatePayload;
 };
@@ -269,12 +279,14 @@ export type ChatGeneratePayload = {
   usage: Record<string, unknown>;
   latency_ms?: number | null;
   citations?: ChatCitation[];
+  generated_files?: ChatGeneratedFile[];
 };
 
 export type ChatMessageStatusPayload = {
   message_uuid: string;
   status: string;
   citations?: ChatCitation[];
+  generated_files?: ChatGeneratedFile[];
 };
 
 export type LongTaskPayload = {
@@ -743,6 +755,7 @@ export async function streamChatMessage(
       usage: event.usage,
       latency_ms: event.latency_ms,
       citations: event.citations,
+      generated_files: event.generated_files,
     };
   };
 

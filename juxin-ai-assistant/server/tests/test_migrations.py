@@ -31,10 +31,10 @@ def test_migration_revision_graph_is_single_linear_head() -> None:
         migration_config("sqlite+pysqlite:///:memory:")
     )
 
-    assert script.get_heads() == ["0026_agent_run_contracts"]
-    assert [
-        revision.revision for revision in script.walk_revisions()
-    ] == [
+    assert script.get_heads() == ["0065_chat_generated_files"]
+    revision_ids = {revision.revision for revision in script.walk_revisions()}
+    assert {
+        "0065_chat_generated_files",
         "0026_agent_run_contracts",
         "0025_hot_question_reports",
         "0024_shared_faqs",
@@ -61,7 +61,8 @@ def test_migration_revision_graph_is_single_linear_head() -> None:
         "0003_governance",
         "0002_employee_features",
         "0001_foundation",
-    ]
+    } == revision_ids
+    assert script.get_revision("0065_chat_generated_files").down_revision == "0026_agent_run_contracts"
 
 
 def test_knowledge_migration_does_not_set_defaults_on_mysql_text_or_json_columns() -> None:

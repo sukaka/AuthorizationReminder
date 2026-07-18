@@ -441,6 +441,14 @@ class ChatCitationOut(BaseModel):
     media_type: str = ""
 
 
+class ChatGeneratedFileOut(BaseModel):
+    artifact_id: str
+    file_name: str
+    format: Literal["docx", "xlsx", "pptx", "md"]
+    media_type: str
+    download_url: str
+
+
 class ChatPrepareIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -478,6 +486,7 @@ class ChatMessageOut(BaseModel):
     content: str
     status: str
     citations: list[ChatCitationOut] = Field(default_factory=list)
+    generated_files: list[ChatGeneratedFileOut] = Field(default_factory=list)
     created_at: datetime
 
 
@@ -506,6 +515,7 @@ class ChatPrepareOut(BaseModel):
     answer: str = ""
     messages: list[MessageOut]
     citations: list[ChatCitationOut] = Field(default_factory=list)
+    generated_files: list[ChatGeneratedFileOut] = Field(default_factory=list)
     loop_trace: list[dict[str, Any]] = Field(default_factory=list)
     task_state: ChatTaskStateOut = Field(default_factory=ChatTaskStateOut)
 
@@ -727,6 +737,7 @@ class ChatGenerateOut(BaseModel):
     usage: dict = Field(default_factory=dict)
     latency_ms: int | None = Field(default=None, ge=0)
     citations: list[ChatCitationOut] = Field(default_factory=list)
+    generated_files: list[ChatGeneratedFileOut] = Field(default_factory=list)
 
 
 class LongTaskChatCreateIn(BaseModel):
@@ -848,6 +859,7 @@ class ChatMessageStatusOut(BaseModel):
     message_uuid: str
     status: str
     citations: list[ChatCitationOut] = Field(default_factory=list)
+    generated_files: list[ChatGeneratedFileOut] = Field(default_factory=list)
 
 
 class ExportWordSourceIn(BaseModel):

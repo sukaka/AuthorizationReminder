@@ -842,6 +842,7 @@ class ChatMessage(TimestampMixin, Base):
     model_display_name: Mapped[str] = mapped_column(String(128), default="")
     model_id: Mapped[str] = mapped_column(String(128), default="")
     usage_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    generated_files_json: Mapped[list | None] = mapped_column(JSON, nullable=True)
     latency_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
     completion_token_hash: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
     error_code: Mapped[str] = mapped_column(String(64), default="")

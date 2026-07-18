@@ -15,6 +15,12 @@ DOCX_MEDIA_TYPE = (
 PPTX_MEDIA_TYPE = (
     "application/vnd.openxmlformats-officedocument.presentationml.presentation"
 )
+EXPORT_MEDIA_TYPES = {
+    ".docx": DOCX_MEDIA_TYPE,
+    ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    ".pptx": PPTX_MEDIA_TYPE,
+    ".md": "text/markdown",
+}
 
 
 @dataclass(frozen=True)
@@ -60,9 +66,39 @@ class ExportFileManager:
             file_path=str(path),
         )
 
+    def save_file(
+        self,
+        *,
+        file_name: str,
+        content: bytes,
+        suffix: str,
+        fallback_title: str = "聚信得仁文档",
+    ) -> SavedExportFile:
+        normalized_suffix = suffix.lower() if suffix.startswith(".") else f".{suffix.lower()}"
+        if normalized_suffix not in EXPORT_MEDIA_TYPES:
+            raise HTTPException(status_code=400, detail="不支持的导出格式")
+        if not content:
+            raise HTTPException(status_code=500, detail="文档生成失败，请稍后重试")
+        self.storage_dir.mkdir(parents=True, exist_ok=True)
+        file_id = str(uuid_lib.uuid4())
+        safe_name = _safe_export_file_name(
+            file_name,
+            suffix=normalized_suffix,
+            fallback=fallback_title,
+        )
+        path = self.storage_dir.joinpath(f"{file_id}{normalized_suffix}").resolve()
+        if not _is_relative_to(path, self.storage_dir):
+            raise HTTPException(status_code=400, detail="导出路径非法")
+        path.write_bytes(content)
+        return SavedExportFile(file_id=file_id, file_name=safe_name, file_path=str(path))
+
     def read_docx(self, file_path: str) -> bytes:
+        return self.read_file(file_path, suffix=".docx")
+
+    def read_file(self, file_path: str, *, suffix: str | None = None) -> bytes:
         path = Path(file_path).expanduser().resolve()
-        if not _is_relative_to(path, self.storage_dir) or path.suffix.lower() != ".docx":
+        expected_suffix = suffix.lower() if suffix else path.suffix.lower()
+        if not _is_relative_to(path, self.storage_dir) or path.suffix.lower() != expected_suffix:
             raise HTTPException(status_code=404, detail="导出文件不存在")
         if not path.is_file():
             raise HTTPException(status_code=404, detail="导出文件不存在")
@@ -84,10 +120,15 @@ def _safe_export_file_name(file_name: str, *, suffix: str, fallback: str) -> str
     return stem if stem.lower().endswith(suffix) else f"{stem}{suffix}"
 
 
-def content_disposition_for_download(file_name: str) -> str:
-    safe_name = safe_docx_file_name(file_name)
+def content_disposition_for_download(file_name: str, *, suffix: str = ".docx") -> str:
+    normalized_suffix = suffix.lower() if suffix.startswith(".") else f".{suffix.lower()}"
+    safe_name = _safe_export_file_name(
+        file_name,
+        suffix=normalized_suffix,
+        fallback="juxin-export",
+    )
     ascii_name = safe_name.encode("ascii", "ignore").decode("ascii").strip()
-    ascii_name = ascii_name if ascii_name.lower().endswith(".docx") else "juxin-export.docx"
+    ascii_name = ascii_name if ascii_name.lower().endswith(normalized_suffix) else f"juxin-export{normalized_suffix}"
     return f"attachment; filename=\"{ascii_name}\"; filename*=UTF-8''{quote(safe_name)}"
 
 

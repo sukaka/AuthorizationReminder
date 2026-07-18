@@ -1,5 +1,6 @@
 import hashlib
 import hmac
+import logging
 import re
 import secrets
 import uuid as uuid_lib
@@ -12,14 +13,24 @@ from sqlalchemy.orm import Session
 from .agent_loop import LoopRunner
 from .agent_loop.task_state import TaskStateStore
 from .agent_loop.verifier import Verifier
+from .chat_document_delivery import (
+    chat_document_file_name,
+    chat_document_media_type,
+    choose_chat_document_format,
+    should_generate_chat_document,
+)
+from .chat_generated_file_service import render_chat_document_bytes
+from .config import get_settings
 from .context.context_builder import RecentChatMessage
 from .crypto import ContentCipher, EncryptedPayload
+from .export_file_manager import ExportFileManager
 from .knowledge_search import RetrievedKnowledgeChunk
 from .models import AgentTaskState, ChatMessage, ChatMessageSource, ChatSession, ExportRecord, KnowledgeChunk, KnowledgeFile
 from .models import KnowledgeSearchLog, WebSearchLog
 from .schemas import (
     ChatCitationOut,
     ChatCompleteIn,
+    ChatGeneratedFileOut,
     ChatFailIn,
     ChatKnowledgeResultIn,
     ChatKnowledgeResultOut,
@@ -57,6 +68,7 @@ FILE_MEDIA_TYPES = {
     "pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
 }
 IMAGE_FILE_TYPES = {key for key, value in FILE_MEDIA_TYPES.items() if value.startswith("image/")}
+logger = logging.getLogger(__name__)
 
 
 def _is_file_delivery_request(question: str) -> bool:
@@ -253,8 +265,19 @@ def _message_out(
         content=content,
         status=message.status,
         citations=citations,
+        generated_files=_generated_files_out(message),
         created_at=message.created_at,
     )
+
+
+def _generated_files_out(message: ChatMessage) -> list[ChatGeneratedFileOut]:
+    files: list[ChatGeneratedFileOut] = []
+    for payload in message.generated_files_json or []:
+        try:
+            files.append(ChatGeneratedFileOut.model_validate(payload))
+        except Exception:
+            logger.warning("skip_invalid_chat_generated_file message=%s", message.uuid)
+    return files
 
 
 def message_citations(
@@ -264,6 +287,68 @@ def message_citations(
 ) -> list[ChatCitationOut]:
     """Return the verifier-approved sources persisted for a completed message."""
     return _message_out(db, cipher, message).citations
+
+
+def message_generated_files(
+    message: ChatMessage,
+) -> list[ChatGeneratedFileOut]:
+    """Return generated file metadata already persisted on a chat message."""
+    return _generated_files_out(message)
+
+
+def _create_chat_generated_files(
+    db: Session,
+    *,
+    sso_user_id: str,
+    message: ChatMessage,
+    answer: str,
+    cipher: ContentCipher,
+) -> None:
+    user_message = db.scalar(
+        select(ChatMessage)
+        .where(
+            ChatMessage.session_id == message.session_id,
+            ChatMessage.id < message.id,
+            ChatMessage.role == "user",
+        )
+        .order_by(ChatMessage.id.desc())
+        .limit(1)
+    )
+    question = _decrypt_content(cipher, user_message) if user_message else ""
+    if not should_generate_chat_document(question):
+        message.generated_files_json = []
+        return
+
+    fmt = choose_chat_document_format(question, answer)
+    title = chat_document_file_name(question, answer, fmt).rsplit(".", 1)[0]
+    content = render_chat_document_bytes(title=title, answer=answer, fmt=fmt)
+    saved = ExportFileManager(get_settings().export_storage_dir).save_file(
+        file_name=chat_document_file_name(question, answer, fmt),
+        content=content,
+        suffix=f".{fmt}",
+        fallback_title=title,
+    )
+    session = db.get(ChatSession, message.session_id)
+    if session is None:
+        message.generated_files_json = []
+        return
+    record = ExportRecord(
+        conversation_id=session.uuid,
+        message_id=message.uuid,
+        file_name=saved.file_name,
+        file_path=saved.file_path,
+        export_type=f"chat_generated_{fmt}",
+        created_by=sso_user_id,
+    )
+    db.add(record)
+    db.flush()
+    message.generated_files_json = [{
+        "artifact_id": record.uuid,
+        "file_name": saved.file_name,
+        "format": fmt,
+        "media_type": chat_document_media_type(fmt),
+        "download_url": f"/api/export/download/{record.uuid}",
+    }]
 
 
 def _source_payloads_for_verifier(
@@ -770,6 +855,13 @@ def prepare_chat(
             log_id=web_log_id,
             answer_message_uuid=assistant.uuid,
         )
+        _create_chat_generated_files(
+            db,
+            sso_user_id=sso_user_id,
+            message=assistant,
+            answer=loop_result.completed_answer,
+            cipher=cipher,
+        )
         return ChatPrepareOut(
             session_uuid=session.uuid,
             user_message_uuid=user_message.uuid,
@@ -779,6 +871,7 @@ def prepare_chat(
             answer=loop_result.completed_answer,
             messages=[],
             citations=[],
+            generated_files=message_generated_files(assistant),
             loop_trace=loop_result.loop_trace,
             task_state=task_state_payload,
         )
@@ -867,6 +960,13 @@ def complete_chat_message(
         session=session,
         answer=body.answer,
         reference_result=reference_result,
+    )
+    _create_chat_generated_files(
+        db,
+        sso_user_id=sso_user_id,
+        message=message,
+        answer=body.answer,
+        cipher=cipher,
     )
     db.flush()
     return message
