@@ -134,6 +134,9 @@ export type SkillPayload = {
     reviewer_role: string;
   };
   tags: string[];
+  source?: 'builtin' | 'uploaded' | string;
+  upload_id?: string | null;
+  uploaded_by?: string | null;
 };
 
 export type SkillRunPayload = {
@@ -143,7 +146,15 @@ export type SkillRunPayload = {
   status: string;
   tools_used: string[];
   result: Record<string, unknown>;
-  artifacts: Array<{ kind: string; title: string; content: string }>;
+  artifacts: Array<{
+    kind: string;
+    title: string;
+    content?: string;
+    download_url?: string | null;
+    file_name?: string;
+    format?: string;
+    mime_type?: string;
+  }>;
 };
 
 export type LearningMemoryPayload = {
@@ -243,8 +254,10 @@ export class ApiError extends Error {
   }
 }
 
-const DESKTOP_SSO_TOKEN_KEY = 'juxin_ai_assistant_sso_token';
 const DESKTOP_SSO_CALLBACK_PARAMS = ['sso_token', 'portal_session'];
+const LEGACY_DESKTOP_SSO_TOKEN_KEY = 'juxin_ai_assistant_sso_token';
+const MAX_DESKTOP_SSO_TOKEN_LENGTH = 4096;
+let desktopSsoToken = '';
 
 export function clearSsoCallbackParams(): void {
   try {
@@ -267,16 +280,44 @@ export function clearSsoCallbackParams(): void {
 function readDesktopSsoToken(): string {
   if (!isDesktopRuntime()) return '';
   try {
+    // Remove tokens written by versions that persisted the handoff in
+    // sessionStorage.  They are never read or sent by the current client.
+    window.sessionStorage.removeItem(LEGACY_DESKTOP_SSO_TOKEN_KEY);
+  } catch {
+    // sessionStorage may be unavailable in a restricted webview; the
+    // in-memory handoff remains usable.
+  }
+  try {
     const url = new URL(window.location.href);
     const handoffToken = String(url.searchParams.get('sso_token') || '').trim();
-    if (handoffToken) {
-      sessionStorage.setItem(DESKTOP_SSO_TOKEN_KEY, handoffToken);
+    if (handoffToken && handoffToken.length <= MAX_DESKTOP_SSO_TOKEN_LENGTH) {
+      desktopSsoToken = handoffToken;
       clearSsoCallbackParams();
       return handoffToken;
     }
-    return String(sessionStorage.getItem(DESKTOP_SSO_TOKEN_KEY) || '').trim();
+    return desktopSsoToken;
   } catch {
     return '';
+  }
+}
+
+export function clearDesktopSsoToken(): void {
+  desktopSsoToken = '';
+  try {
+    window.sessionStorage.removeItem(LEGACY_DESKTOP_SSO_TOKEN_KEY);
+  } catch {
+    // sessionStorage may be unavailable in a restricted webview.
+  }
+}
+
+export function isSafeSameOriginUrl(raw: string): boolean {
+  if (typeof window === 'undefined') return false;
+  try {
+    const url = new URL(raw, window.location.origin);
+    return (url.protocol === 'http:' || url.protocol === 'https:')
+      && url.origin === window.location.origin;
+  } catch {
+    return false;
   }
 }
 
@@ -291,16 +332,26 @@ function apiHeaders(headers?: HeadersInit): HeadersInit | undefined {
 }
 
 export async function apiFetch(input: RequestInfo | URL, init: RequestInit = {}): Promise<Response> {
+  const inputUrl = typeof input === 'string'
+    ? input
+    : input instanceof URL
+      ? input.toString()
+      : input.url;
+  const sameOrigin = isSafeSameOriginUrl(inputUrl);
   return fetch(input, {
     ...init,
-    credentials: init.credentials ?? 'include',
-    headers: apiHeaders(init.headers),
+    // Cookies are scoped to the local API as well; do not send them to a
+    // caller-supplied external URL either.
+    credentials: sameOrigin ? (init.credentials ?? 'include') : 'omit',
+    // Never attach the desktop bearer token to an external URL.
+    headers: sameOrigin ? apiHeaders(init.headers) : init.headers,
   });
 }
 
 async function readJson<T>(response: Response, code: string): Promise<T> {
   const payload = await response.json().catch(() => null);
   if (response.status === 401) {
+    clearDesktopSsoToken();
     window.location.assign(getAuthPortalUrl());
     throw new ApiError(401, 'AUTH_REDIRECT', payload);
   }
@@ -365,6 +416,7 @@ export function getAuthPortalUrl(options: AuthPortalUrlOptions = {}): string {
 export async function getSession(): Promise<SessionPayload> {
   const response = await apiFetch('/api/ai/session');
   if (response.status === 401) {
+    clearDesktopSsoToken();
     window.location.assign(getAuthPortalUrl());
     throw new ApiError(401, 'AUTH_REDIRECT');
   }
@@ -383,6 +435,29 @@ export async function listSkills(): Promise<{ items: SkillPayload[]; total: numb
   return readJson(
     await apiFetch('/api/skills', { cache: 'no-store' }),
     'SKILLS_FAILED',
+  );
+}
+
+export async function listMySkills(): Promise<{ items: SkillPayload[]; total: number }> {
+  return readJson(
+    await apiFetch('/api/skills/mine', { cache: 'no-store' }),
+    'MY_SKILLS_FAILED',
+  );
+}
+
+export async function uploadPersonalSkill(file: File): Promise<SkillPayload> {
+  const form = new FormData();
+  form.append('file', file);
+  return readJson(
+    await apiFetch('/api/skills/uploads', { method: 'POST', body: form }),
+    'SKILL_UPLOAD_FAILED',
+  );
+}
+
+export async function disableMySkill(skillId: string): Promise<SkillPayload> {
+  return readJson(
+    await apiFetch(`/api/skills/mine/${encodeURIComponent(skillId)}/disable`, { method: 'POST' }),
+    'SKILL_DISABLE_FAILED',
   );
 }
 
@@ -405,6 +480,18 @@ export async function runSkill(
     }),
     'SKILL_RUN_FAILED',
   );
+}
+
+export async function downloadSkillArtifact(
+  downloadUrl: string,
+  fallbackFileName: string,
+): Promise<string> {
+  if (!isSafeSameOriginUrl(downloadUrl)) {
+    throw new ApiError(400, 'SKILL_ARTIFACT_UNSAFE_URL');
+  }
+  const response = await apiFetch(downloadUrl, { cache: 'no-store' });
+  if (!response.ok) throw new ApiError(response.status, 'SKILL_ARTIFACT_DOWNLOAD_FAILED');
+  return downloadBlobFromResponse(response, fallbackFileName);
 }
 
 export async function listLearningMemories(status = 'active'): Promise<{ items: LearningMemoryPayload[]; total: number }> {
@@ -744,6 +831,7 @@ export async function reportLocalModelAuditEvent(payload: {
     }),
   });
   if (response.status === 401) {
+    clearDesktopSsoToken();
     window.location.assign(getAuthPortalUrl());
     throw new ApiError(401, 'AUTH_REDIRECT');
   }
@@ -825,6 +913,9 @@ export async function saveChatMessageWorkArtifact(payload: {
 }
 
 export async function downloadWorkArtifactWord(downloadUrl: string): Promise<WordDownloadResult> {
+  if (!isSafeSameOriginUrl(downloadUrl)) {
+    throw new ApiError(400, 'WORD_EXPORT_UNSAFE_URL');
+  }
   const response = await apiFetch(downloadUrl);
   if (!response.ok) throw new ApiError(response.status, 'WORD_EXPORT_FAILED');
   if (isDesktopRuntime()) {

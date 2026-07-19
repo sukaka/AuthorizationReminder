@@ -19,6 +19,30 @@ def test_skill_registry_loads_builtin_published_skills() -> None:
     assert risk.permissions.allow_web is False
 
 
+def test_dashi_ppt_is_registered_as_safe_company_skill() -> None:
+    from app.skill_registry import SkillRegistry
+
+    registry = SkillRegistry.default()
+    dashi = registry.get("dashi-ppt")
+
+    assert dashi.status == "published"
+    assert dashi.manifest.scope == "company"
+    assert dashi.manifest.owner == "platform-admin"
+    assert dashi.permissions.allow_web is False
+    assert dashi.manifest.output_types == ["markdown", "html", "pptx", "pdf"]
+    assert "pptx" in dashi.manifest.output_types
+    assert "DASHI_PPT_RUNTIME_ROOT" in dashi.readme
+    assert dashi.input_schema["required"] == ["question"]
+    assert dashi.output_schema["properties"]["export"]["required"] == [
+        "html",
+        "pptx",
+        "pdf",
+    ]
+
+    candidates = registry.match("请帮我制作一份客户汇报 PPT")
+    assert any(item.id == "dashi-ppt" for item in candidates)
+
+
 def test_default_skill_root_supports_container_layout(tmp_path, monkeypatch) -> None:
     from app import skill_registry
 
@@ -47,6 +71,7 @@ def test_employee_lists_only_published_skills_and_runs_with_restricted_tools(
         "risk-assessment-review",
         "incident-report",
         "tool-update-record",
+        "dashi-ppt",
     } <= skill_ids
 
     run_response = client.post(

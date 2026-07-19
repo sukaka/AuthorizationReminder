@@ -14,6 +14,7 @@ function permissionLabel(skill: AdminSkill): string {
 export function SkillsAdminPage() {
   const [items, setItems] = useState<AdminSkill[]>([]);
   const [notice, setNotice] = useState('');
+  const [uploading, setUploading] = useState(false);
 
   const refresh = async () => {
     setNotice('正在读取能力配置…');
@@ -31,8 +32,12 @@ export function SkillsAdminPage() {
   }, []);
 
   const review = async (skill: AdminSkill) => {
-    await governanceApi.reviewSkill(skill.id, 'approved', '通过');
-    setNotice(`已审核：${skill.id}`);
+    try {
+      await governanceApi.reviewSkill(skill.id, 'approved', '通过');
+      setNotice(`已审核：${skill.id}`);
+    } catch {
+      setNotice(`审核失败：${skill.id}`);
+    }
   };
 
   const publish = async (skill: AdminSkill) => {
@@ -47,11 +52,39 @@ export function SkillsAdminPage() {
     setNotice(`已停用：${skill.id}`);
   };
 
+  const upload = async (file: File) => {
+    setUploading(true);
+    setNotice('正在校验并上传系统通用 Skill…');
+    try {
+      const uploaded = await governanceApi.uploadSkill(file);
+      setItems((current) => [uploaded, ...current.filter((item) => item.id !== uploaded.id)]);
+      setNotice(`已上传“${uploaded.name}”，请审核后再发布。`);
+    } catch {
+      setNotice('Skill 上传失败：请上传包含完整目录结构的 ZIP 压缩包。');
+    } finally {
+      setUploading(false);
+    }
+  };
+
   return (
     <AdminPageState title="能力治理" description="查看公司级能力版本、工具边界、权限边界与审核状态。">
       <div className="admin-toolbar">
         <button className="primary-action" onClick={() => void refresh()} type="button">刷新能力</button>
         <span>公司级能力发布前需要管理员审核。</span>
+        <label className="primary-action">
+          {uploading ? '上传中…' : '上传系统通用 Skill'}
+          <input
+            accept=".zip,application/zip"
+            disabled={uploading}
+            onChange={(event) => {
+              const file = event.currentTarget.files?.[0];
+              event.currentTarget.value = '';
+              if (file) void upload(file);
+            }}
+            type="file"
+            hidden
+          />
+        </label>
       </div>
       <RequestNotice message={notice} />
       <div className="task-card-list">

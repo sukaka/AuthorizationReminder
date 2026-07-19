@@ -34,7 +34,7 @@ RUN set -eux; \
         > /etc/apt/sources.list; \
     fi; \
     apt-get update \
-    && apt-get install -y --no-install-recommends curl \
+    && apt-get install -y --no-install-recommends curl nodejs npm chromium \
     && rm -rf /var/lib/apt/lists/*
 
 COPY server/requirements.txt ./

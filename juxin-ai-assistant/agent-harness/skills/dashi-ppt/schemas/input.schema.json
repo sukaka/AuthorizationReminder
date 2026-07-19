@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Dashi PPT input",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["question"],
+  "properties": {
+    "question": {"type": "string", "minLength": 1},
+    "attachments": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "file_type"],
+        "properties": {
+          "name": {"type": "string", "minLength": 1},
+          "file_type": {"type": "string", "minLength": 1}
+        }
+      }
+    },
+    "options": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "theme": {"type": "string"},
+        "slide_count": {"type": "integer", "minimum": 1, "maximum": 40},
+        "audience": {"type": "string"},
+        "output_format": {"enum": ["html", "markdown", "pptx", "pdf"]},
+        "image_policy": {"enum": ["no_images", "use_attachments", "reserve_slots"]}
+      }
+    },
+    "format": {"enum": ["html", "markdown", "pptx", "pdf"]},
+    "formats": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"enum": ["html", "markdown", "pptx", "pdf"]},
+      "maxItems": 3
+    },
+    "goal_spec": {
+      "type": "object",
+      "description": "可选的已校验 Dashi goal spec；通常由 Skill 自动生成。"
+    }
+  }
+}

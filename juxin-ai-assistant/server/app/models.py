@@ -1497,6 +1497,36 @@ class SkillReview(TimestampMixin, Base):
     reviewed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
+class UploadedSkill(TimestampMixin, Base):
+    """Metadata for a user-uploaded Skill package.
+
+    The package itself lives outside the database.  ``storage_key`` is a
+    generated directory name under ``Settings.skill_storage_dir`` so a
+    database value can never select an arbitrary filesystem path.
+    """
+
+    __tablename__ = "ai_uploaded_skills"
+
+    id: Mapped[int] = mapped_column(primary_key_type, primary_key=True, autoincrement=True)
+    uuid: Mapped[str] = mapped_column(
+        String(36),
+        unique=True,
+        default=lambda: str(uuid_lib.uuid4()),
+    )
+    skill_id: Mapped[str] = mapped_column(String(96), unique=True, index=True)
+    source_name: Mapped[str] = mapped_column(String(255), default="")
+    storage_key: Mapped[str] = mapped_column(String(128), unique=True)
+    name: Mapped[str] = mapped_column(String(128), default="")
+    description: Mapped[str] = mapped_column(Text, default="")
+    category: Mapped[str] = mapped_column(String(96), default="")
+    version: Mapped[str] = mapped_column(String(32), default="")
+    scope: Mapped[str] = mapped_column(String(24), default="personal", index=True)
+    owner: Mapped[str] = mapped_column(String(128), default="", index=True)
+    uploaded_by: Mapped[str] = mapped_column(String(64), default="", index=True)
+    status: Mapped[str] = mapped_column(String(24), default="pending_review", index=True)
+    manifest_json: Mapped[dict] = mapped_column(JSON, default=dict)
+
+
 class ChatSession(TimestampMixin, Base):
     __tablename__ = "ai_chat_sessions"
 

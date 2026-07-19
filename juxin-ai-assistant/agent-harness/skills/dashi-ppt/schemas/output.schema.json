@@ -1,0 +1,81 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Dashi PPT output",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["title", "goal", "audience", "theme", "slides", "artifacts", "assumptions", "sources", "export"],
+  "properties": {
+    "title": {"type": "string"},
+    "goal": {"type": "string"},
+    "audience": {"type": "string"},
+    "theme": {"type": "string"},
+    "slides": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["index", "title", "purpose", "key_points", "visual_need"],
+        "properties": {
+          "index": {"type": "integer", "minimum": 1},
+          "title": {"type": "string"},
+          "purpose": {"type": "string"},
+          "key_points": {"type": "array", "items": {"type": "string"}},
+          "visual_need": {"type": "string"}
+        }
+      }
+    },
+    "artifacts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["kind", "title", "status"],
+        "properties": {
+          "kind": {"enum": ["markdown", "html", "pptx", "pdf"]},
+          "title": {"type": "string"},
+          "status": {"enum": ["planned", "ready", "blocked"]},
+          "path": {"type": "string"},
+          "format": {"enum": ["markdown", "html", "pptx", "pdf"]},
+          "download_url": {"type": "string"},
+          "mime_type": {"type": "string"}
+        }
+      }
+    },
+    "assumptions": {"type": "array", "items": {"type": "string"}},
+    "sources": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "type"],
+        "properties": {
+          "name": {"type": "string"},
+          "type": {"type": "string"},
+          "location": {"type": "string"}
+        }
+      }
+    },
+    "export": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["html", "pptx", "pdf"],
+      "properties": {
+        "html": {"$ref": "#/$defs/exportStatus"},
+        "pptx": {"$ref": "#/$defs/exportStatus"},
+        "pdf": {"$ref": "#/$defs/exportStatus"}
+      }
+    }
+  },
+  "$defs": {
+    "exportStatus": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "message"],
+      "properties": {
+        "status": {"enum": ["planned", "ready", "blocked"]},
+        "message": {"type": "string"}
+      }
+    }
+  }
+}

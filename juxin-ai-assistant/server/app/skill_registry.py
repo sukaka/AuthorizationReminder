@@ -44,6 +44,29 @@ def _read_json(path: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def load_skill_directory(skill_dir: Path | str) -> SkillDefinition:
+    """Load and validate one Skill package directory."""
+
+    skill_dir = Path(skill_dir)
+    missing = [name for name in REQUIRED_SKILL_FILES if not (skill_dir / name).exists()]
+    if missing:
+        raise ValueError(f"skill {skill_dir.name} missing files: {', '.join(missing)}")
+    manifest = SkillManifest.model_validate(_read_json(skill_dir / "skill.json"))
+    return SkillDefinition(
+        manifest=manifest,
+        root=skill_dir,
+        readme=_read_text(skill_dir / "SKILL.md"),
+        system_prompt=_read_text(skill_dir / "prompts" / "system.md"),
+        task_prompt=_read_text(skill_dir / "prompts" / "task.md"),
+        output_prompt=_read_text(skill_dir / "prompts" / "output.md"),
+        input_schema=_read_json(skill_dir / "schemas" / "input.schema.json"),
+        output_schema=_read_json(skill_dir / "schemas" / "output.schema.json"),
+        good_example=_read_text(skill_dir / "examples" / "good.md"),
+        bad_example=_read_text(skill_dir / "examples" / "bad.md"),
+        checklist=_read_text(skill_dir / "eval" / "checklist.md"),
+    )
+
+
 class SkillRegistry:
     def __init__(self, root: Path | str | None = None) -> None:
         self.root = Path(root) if root is not None else default_skill_root()
@@ -64,25 +87,11 @@ class SkillRegistry:
             self._skills = {}
             return skills
         for skill_dir in sorted(item for item in self.root.iterdir() if item.is_dir()):
-            missing = [name for name in REQUIRED_SKILL_FILES if not (skill_dir / name).exists()]
-            if missing:
-                raise ValueError(f"skill {skill_dir.name} missing files: {', '.join(missing)}")
-            manifest = SkillManifest.model_validate(_read_json(skill_dir / "skill.json"))
+            skill = load_skill_directory(skill_dir)
+            manifest = skill.manifest
             if manifest.id in skills:
                 raise ValueError(f"duplicate skill id: {manifest.id}")
-            skills[manifest.id] = SkillDefinition(
-                manifest=manifest,
-                root=skill_dir,
-                readme=_read_text(skill_dir / "SKILL.md"),
-                system_prompt=_read_text(skill_dir / "prompts" / "system.md"),
-                task_prompt=_read_text(skill_dir / "prompts" / "task.md"),
-                output_prompt=_read_text(skill_dir / "prompts" / "output.md"),
-                input_schema=_read_json(skill_dir / "schemas" / "input.schema.json"),
-                output_schema=_read_json(skill_dir / "schemas" / "output.schema.json"),
-                good_example=_read_text(skill_dir / "examples" / "good.md"),
-                bad_example=_read_text(skill_dir / "examples" / "bad.md"),
-                checklist=_read_text(skill_dir / "eval" / "checklist.md"),
-            )
+            skills[manifest.id] = skill
         self._skills = skills
         return skills
 
