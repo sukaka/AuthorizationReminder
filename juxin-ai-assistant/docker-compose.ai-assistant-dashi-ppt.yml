@@ -1,0 +1,9 @@
+services:
+  ai-assistant-api:
+    environment:
+      # The upstream checkout is mounted read-only and remains the runtime
+      # component of the dashi-ppt Skill; it is not copied into the wrapper.
+      DASHI_PPT_RUNTIME_ROOT: /opt/dashi-ppt-runtime
+      CHROME_PATH: /usr/bin/chromium
+    volumes:
+      - ${DASHI_PPT_RUNTIME_HOST_PATH:?set DASHI_PPT_RUNTIME_HOST_PATH to the installed dashi-ppt project}:/opt/dashi-ppt-runtime:ro

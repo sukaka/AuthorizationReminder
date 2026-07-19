@@ -8,6 +8,13 @@ from .config import Settings, get_settings
 from .schemas import AuthScope, SessionPayload, UserPayload
 
 
+PLATFORM_ADMIN_ROLES = frozenset({"admin", "superadmin", "sys_admin", "platform_admin"})
+
+
+def is_platform_admin_role(role: str | None) -> bool:
+    return str(role or "").strip().lower() in PLATFORM_ADMIN_ROLES
+
+
 def get_request_auth_token(request: Request, settings: Settings) -> tuple[str, bool]:
     authorization = str(request.headers.get("authorization") or "").strip()
     scheme, _, value = authorization.partition(" ")

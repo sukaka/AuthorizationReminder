@@ -1,0 +1,25 @@
+{
+  "id": "dashi-ppt",
+  "name": "Dashi PPT 演示文稿制作",
+  "description": "根据问题、资料和受众生成结构化的可编辑 HTML 演示文稿，并通过独立部署的 Dashi Skill 运行时直接导出 PPTX/PDF。",
+  "category": "presentation_creation",
+  "version": "0.4.4",
+  "status": "published",
+  "scope": "company",
+  "owner": "platform-admin",
+  "requires_attachment": false,
+  "allowed_tools": ["file_parser", "knowledge_retrieval", "personal_memory"],
+  "input_types": ["text", "docx", "pdf", "xlsx", "pptx", "png", "jpg", "jpeg"],
+  "output_types": ["markdown", "html", "pptx", "pdf"],
+  "permissions": {
+    "allow_web": false,
+    "allow_company_knowledge": true,
+    "allow_personal_memory": true,
+    "allow_write_company_kb": false
+  },
+  "review": {
+    "required_for_publish": true,
+    "reviewer_role": "admin"
+  },
+  "tags": ["PPT", "演示文稿", "幻灯片", "汇报材料", "HTML演示", "Dashi PPT"]
+}

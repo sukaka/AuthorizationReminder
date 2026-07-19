@@ -8,6 +8,9 @@ from sqlalchemy.orm import Session
 
 from .agent_runtime import ToolContext, ToolRegistry
 from .agent_runtime.tools import PersonalMemoryTool
+from .auth import is_platform_admin_role
+from .config import Settings, get_settings
+from .dashi_ppt_runtime import DashiPptRuntimeError, generate_dashi_ppt
 from .models import SkillRunLog
 from .schemas import SessionPayload
 from .skill_definition import SkillDefinition
@@ -45,8 +48,9 @@ def _input_summary(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 class SkillRunner:
-    def __init__(self, *, db: Session) -> None:
+    def __init__(self, *, db: Session, settings: Settings | None = None) -> None:
         self.db = db
+        self.settings = settings or get_settings()
 
     def run(
         self,
@@ -75,7 +79,21 @@ class SkillRunner:
         try:
             tools_used = self._run_allowed_tools(skill, session, user_input, run_id=log.uuid)
             summary = self._build_summary(skill, user_input)
-            artifacts = self._build_artifacts(skill, summary)
+            if skill.id == "dashi-ppt":
+                title, exported = generate_dashi_ppt(
+                    settings=self.settings,
+                    user_id=str(session.user.id),
+                    run_id=log.uuid,
+                    question=str(user_input.get("question") or ""),
+                    user_input=user_input,
+                )
+                summary = f"已完成{title}：已生成可编辑 HTML 和真实演示文稿文件。"
+                artifacts = [
+                    {"kind": "markdown", "title": skill.name, "content": summary},
+                    *[artifact.as_dict(run_id=log.uuid) for artifact in exported],
+                ]
+            else:
+                artifacts = self._build_artifacts(skill, summary)
             log.status = "completed"
             log.tools_used_json = tools_used
             log.output_summary_json = {
@@ -94,6 +112,12 @@ class SkillRunner:
                 "result": {"summary": summary},
                 "artifacts": artifacts,
             }
+        except DashiPptRuntimeError as exc:
+            log.status = "failed"
+            log.error_message = str(exc)[:500]
+            log.finished_at = _utc_now()
+            self.db.commit()
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
         except Exception as exc:
             log.status = "failed"
             log.error_message = str(exc)[:500]
@@ -155,8 +179,8 @@ class SkillRunner:
         question = str(user_input.get("question") or "能力运行")
         return f"已完成{skill.name}：{question[:80]}"
 
-    def _build_artifacts(self, skill: SkillDefinition, summary: str) -> list[dict[str, str]]:
-        artifacts = [{"kind": "markdown", "title": skill.name, "content": summary}]
+    def _build_artifacts(self, skill: SkillDefinition, summary: str) -> list[dict[str, Any]]:
+        artifacts: list[dict[str, Any]] = [{"kind": "markdown", "title": skill.name, "content": summary}]
         if "docx" in skill.manifest.output_types:
             artifacts.append({"kind": "docx", "title": f"{skill.name}.docx", "content": summary})
         if "xlsx" in skill.manifest.output_types:

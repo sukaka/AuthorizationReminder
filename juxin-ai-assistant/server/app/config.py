@@ -9,7 +9,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     app_name: str = "聚信 AI 助手"
-    app_version: str = "1.1.2"
+    app_version: str = "1.2.0"
     database_url: str = "sqlite+pysqlite:///./juxin-ai-assistant-dev.db"
     auth_service_url: str = "http://auth:5180"
     auth_public_url: str = "http://localhost:5180"
@@ -28,6 +28,16 @@ class Settings(BaseSettings):
     public_url: str = "http://localhost:18093"
     cors_origins: str = "http://localhost:18093,http://127.0.0.1:18093"
     export_storage_dir: str = "./exports"
+    # Dashi PPT is deployed as an independent, unmodified upstream runtime.
+    # Keep this empty by default so a deployment cannot accidentally report a
+    # successful export without the real exporter being present.
+    dashi_ppt_runtime_root: str = ""
+    dashi_ppt_timeout_seconds: int = Field(default=300, ge=30, le=1800)
+    dashi_ppt_max_output_bytes: int = Field(
+        default=104_857_600,
+        ge=1_048_576,
+        le=2_147_483_648,
+    )
     knowledge_storage_dir: str = "./storage"
     web_search_provider: str = "duckduckgo-html"
     server_model_base_url: str = ""
