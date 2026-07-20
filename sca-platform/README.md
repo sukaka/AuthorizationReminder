@@ -1,6 +1,6 @@
-# 聚信软件成分分析平台
+# 九章软件开源组件分析系统 V2.0
 
-当前版本已完成第一到第十二阶段：基础项目初始化、源码上传、依赖识别、漏洞查询、报告导出、SBOM 与容器镜像扫描、持续风险监测、AI 漏洞降噪、软件资产中心、漏洞整改闭环、DevSecOps 集成、最终部署与生产优化。技术栈保持 FastAPI + Vue3 + Element Plus + PostgreSQL + Redis + Celery + Docker Compose，并复用聚信统一登录平台。
+当前版本已完成第一到第十二阶段：基础项目初始化、源码上传、依赖识别、漏洞查询、报告导出、SBOM 与容器镜像扫描、持续风险监测、AI 漏洞降噪、软件资产中心、漏洞整改闭环、DevSecOps 集成、最终部署与生产优化。技术栈保持 FastAPI + Vue3 + Element Plus + PostgreSQL + Redis + Celery + Docker Compose；系统可独立部署，身份认证与权限校验复用统一登录平台。
 
 ## 生产部署安全清单
 
@@ -27,7 +27,7 @@
   -> Syft / Trivy / Grype CLI
   -> GitLab / GitHub Actions / Jenkins Webhook
   -> Nginx HTTPS Reverse Proxy
-  -> auth:5180 / 聚信统一登录平台
+  -> auth:5180 / 统一身份认证（SCA 专属入口：/sca-login）
 ```
 
 平台以源码包和镜像为输入，沉淀项目、上传文件、组件、漏洞、报告、SBOM、镜像扫描、持续监测、AI 降噪、软件资产、整改工单、CI/CD 阻断事件与生产运维记录，所有运行路径均由 Docker Compose 承载。
@@ -107,7 +107,7 @@ sca-platform
 - `sca-sbom-data`：SBOM、镜像 tar 持久化卷
 - `sca-backup-data`：生产备份文件持久化卷
 
-仓库根目录 `docker-compose.yml` 也已接入同一组服务，并将统一登录入口加入 `auth`。
+仓库根目录 `docker-compose.yml` 也已接入同一组服务；独立启动本目录时，SCA 通过 `AUTH_SERVICE_URL` 连接已有统一登录服务，用户和会话不在 SCA 内重复维护。
 
 ## 4. PostgreSQL 配置
 
@@ -635,7 +635,7 @@ GitLab 使用 `X-Gitlab-Token`，Jenkins 使用 `X-SCA-Webhook-Token` 或 `Autho
 - 数据库、Redis、上传目录、报告目录、SBOM 目录和备份目录均使用 Docker volume。
 - `sca-worker` 和 `sca-beat` 与 `sca-api` 使用同一镜像，确保任务代码一致。
 - `sca-beat` 使用 `/tmp/celerybeat-schedule`，避免容器只读或权限差异导致定时任务启动失败。
-- 根目录 compose 已接入统一登录平台，项目内 compose 保留 `AUTH_DEV_BYPASS=true` 方便离线验证。
+- 根目录 compose 会同时启动统一登录与 SCA；项目内 compose 可单独启动 SCA，但需要先准备可访问的 `AUTH_SERVICE_URL`，默认 `AUTH_DEV_BYPASS=false`。
 
 ### Nginx 与 HTTPS
 
@@ -656,7 +656,7 @@ GitLab 使用 `X-Gitlab-Token`，Jenkins 使用 `X-SCA-Webhook-Token` 或 `Autho
 
 ### JWT 安全
 
-平台业务接口复用聚信统一登录平台，后端通过 `juxin_auth_token` 调用统一登录的 introspect/authorize 接口。生产环境建议：
+九章 SCA 业务接口复用统一登录平台，后端通过 `juxin_auth_token` 调用统一登录的 introspect/authorize 接口。生产环境建议：
 
 - `AUTH_DEV_BYPASS=false`
 - Cookie 开启 `HttpOnly`、`Secure`、`SameSite`
@@ -713,7 +713,7 @@ Copy-Item .env.example .env
 .\scripts\start-windows.ps1
 ```
 
-接入聚信统一登录的完整启动：
+统一登录与 SCA 一体启动：
 
 ```bash
 cd /Users/zhanglei/Documents/codex-new
@@ -723,9 +723,10 @@ cp .env.example .env
 
 访问地址：
 
-- 前端：`http://localhost:18089`
+- SCA 前端：`http://localhost:18089`
 - 后端：`http://localhost:5191`
-- 统一登录：`http://localhost:5180`
+- SCA 专属登录：`http://localhost:5180/sca-login`
+- 统一登录门户：`http://localhost:5180/portal`
 
 ## 19. 测试方法
 
@@ -839,7 +840,7 @@ docker compose logs sca-redis sca-worker
 
 ### 统一登录平台不可用
 
-项目内独立 compose 默认 `AUTH_DEV_BYPASS=true`，用于本地骨架验证。根目录 compose 使用真实统一登录，需先启动 `auth` 服务。
+项目内独立 compose 默认 `AUTH_DEV_BYPASS=false`，启动前需确认 `AUTH_SERVICE_URL` 指向可用的统一登录服务。仅运行后端测试时，测试脚本会临时启用 `AUTH_DEV_BYPASS=true`。
 
 ### 上传大文件仍失败
 
@@ -966,7 +967,7 @@ docker compose logs sca-worker
 - OWASP Dependency-Check：Java 专项漏洞扫描引擎，复用持久化 NVD 缓存
 - OWASP Dependency-Track：SBOM 风险管理平台，通过 API 创建项目、上传 CycloneDX BOM、拉取组件/漏洞/License/指标
 
-Dependency-Track 不作为本地命令扫描器使用。聚信 SCA 作为统一入口，负责任务编排、原始报告保存、标准化、去重合并、可信度评分、AI 降噪和统一报告。
+Dependency-Track 不作为本地命令扫描器使用。九章 SCA 作为统一入口，负责任务编排、原始报告保存、标准化、去重合并、可信度评分、AI 降噪和统一报告。
 
 ### 新增后端模块
 
@@ -1080,7 +1081,8 @@ docker compose up -d --build
 
 访问：
 
-- 聚信 SCA 前端：`http://localhost:18089`
+- 九章 SCA 前端：`http://localhost:18089`
+- SCA 专属登录：`http://localhost:5180/sca-login`
 - FastAPI Swagger：`http://localhost:5191/docs`
 - Dependency-Track API：`http://localhost:18090`
 - Dependency-Track 前端：`http://localhost:18091`

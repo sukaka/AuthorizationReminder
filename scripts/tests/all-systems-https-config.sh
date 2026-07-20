@@ -89,7 +89,7 @@ jq -e '
 
 jq -e '
   .services.web.build.args.VITE_SSO_PORTAL_URL == "https://localhost:5180" and
-  .services["web-sca"].build.args.VITE_SSO_LOGIN_URL == "https://localhost:5180/portal?system=sca" and
+  .services["web-sca"].build.args.VITE_SSO_LOGIN_URL == "https://localhost:5180/sca-login" and
   .services["web-big-screen"].build.args.VITE_SCA_APP_URL == "https://localhost:18089" and
   .services["web-big-screen"].build.args.VITE_TRAIN_EXAM_APP_URL == "https://localhost:18087" and
   .services["web-big-screen"].build.args.VITE_REMINDER_APP_URL == "https://localhost:18080" and

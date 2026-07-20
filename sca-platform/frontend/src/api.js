@@ -1,7 +1,7 @@
 const viteEnv = import.meta.env || {}
 const API_BASE = viteEnv.VITE_API_BASE || ''
 const getSsoLoginUrl = () => {
-  const configured = viteEnv.VITE_SSO_LOGIN_URL || 'http://localhost:5180/portal?system=sca'
+  const configured = viteEnv.VITE_SSO_LOGIN_URL || 'http://localhost:5180/sca-login'
   const target = new URL(configured, window.location.origin)
   const configuredForLocalhost = target.hostname === 'localhost' || target.hostname === '127.0.0.1'
   if (configuredForLocalhost && !['localhost', '127.0.0.1'].includes(window.location.hostname)) {

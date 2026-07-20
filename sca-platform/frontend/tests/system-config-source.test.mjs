@@ -10,6 +10,13 @@ const nginxSource = fs.readFileSync(path.join(root, 'nginx.conf'), 'utf8')
 const deployNginxSource = fs.readFileSync(path.join(root, '..', 'deploy', 'nginx', 'sca-platform.conf'), 'utf8')
 const composeSource = fs.readFileSync(path.join(root, '..', 'docker-compose.yml'), 'utf8')
 
+test('SCA frontend uses the 九章 V2.0 brand and dedicated login entry', () => {
+  assert.match(appSource, /九章软件开源组件分析系统/)
+  assert.match(appSource, /V2\.0/)
+  assert.match(apiSource, /http:\/\/localhost:5180\/sca-login/)
+  assert.match(fs.readFileSync(path.join(root, 'index.html'), 'utf8'), /九章软件开源组件分析系统 V2\.0/)
+})
+
 test('system config menu exposes upload and OpenAI settings', () => {
   assert.match(appSource, /index="system-config"/)
   assert.match(appSource, />系统配置</)

@@ -893,9 +893,9 @@ services:
       dockerfile: Dockerfile
       args: *build_args_python_slim
     environment:
-      APP_NAME: "聚信软件成分分析平台"
+      APP_NAME: "九章软件开源组件分析系统"
       APP_ENV: dev
-      APP_VERSION: ${SCA_APP_VERSION:-1.0.0}
+      APP_VERSION: ${SCA_APP_VERSION:-2.0.0}
       DATABASE_URL: "postgresql+psycopg://sca_user:${SCA_POSTGRES_PASSWORD:-change_me_sca_postgres_password}@sca-postgres:5432/juxin_sca"
       REDIS_URL: "redis://sca-redis:6379/0"
       CELERY_BROKER_URL: "redis://sca-redis:6379/1"
@@ -960,9 +960,9 @@ services:
       args: *build_args_python_slim
     command: ["celery", "-A", "app.celery_app.celery_app", "worker", "--loglevel=INFO"]
     environment:
-      APP_NAME: "聚信软件成分分析平台"
+      APP_NAME: "九章软件开源组件分析系统"
       APP_ENV: dev
-      APP_VERSION: ${SCA_APP_VERSION:-1.0.0}
+      APP_VERSION: ${SCA_APP_VERSION:-2.0.0}
       DATABASE_URL: "postgresql+psycopg://sca_user:${SCA_POSTGRES_PASSWORD:-change_me_sca_postgres_password}@sca-postgres:5432/juxin_sca"
       REDIS_URL: "redis://sca-redis:6379/0"
       CELERY_BROKER_URL: "redis://sca-redis:6379/1"
@@ -1021,9 +1021,9 @@ services:
       dockerfile: Dockerfile.scanner
     command: ["celery", "-A", "app.celery_app.celery_app", "worker", "--loglevel=INFO", "--queues=scanner,celery"]
     environment:
-      APP_NAME: "聚信软件成分分析平台"
+      APP_NAME: "九章软件开源组件分析系统"
       APP_ENV: dev
-      APP_VERSION: ${SCA_APP_VERSION:-1.0.0}
+      APP_VERSION: ${SCA_APP_VERSION:-2.0.0}
       DATABASE_URL: "postgresql+psycopg://sca_user:${SCA_POSTGRES_PASSWORD:-change_me_sca_postgres_password}@sca-postgres:5432/juxin_sca"
       REDIS_URL: "redis://sca-redis:6379/0"
       CELERY_BROKER_URL: "redis://sca-redis:6379/1"
@@ -1091,9 +1091,9 @@ services:
       dockerfile: Dockerfile
     command: ["celery", "-A", "app.celery_app.celery_app", "beat", "--loglevel=INFO", "--schedule=/tmp/celerybeat-schedule"]
     environment:
-      APP_NAME: "聚信软件成分分析平台"
+      APP_NAME: "九章软件开源组件分析系统"
       APP_ENV: dev
-      APP_VERSION: ${SCA_APP_VERSION:-1.0.0}
+      APP_VERSION: ${SCA_APP_VERSION:-2.0.0}
       DATABASE_URL: "postgresql+psycopg://sca_user:${SCA_POSTGRES_PASSWORD:-change_me_sca_postgres_password}@sca-postgres:5432/juxin_sca"
       REDIS_URL: "redis://sca-redis:6379/0"
       CELERY_BROKER_URL: "redis://sca-redis:6379/1"
@@ -1152,7 +1152,7 @@ services:
       args:
         <<: *build_args_node_alpine_nginx
         VITE_API_BASE: ${VITE_SCA_API_BASE:-}
-        VITE_SSO_LOGIN_URL: ${VITE_SCA_SSO_LOGIN_URL:-http://localhost:5180/portal?system=sca}
+        VITE_SSO_LOGIN_URL: ${VITE_SCA_SSO_LOGIN_URL:-http://localhost:5180/sca-login}
     depends_on:
       - sca-api
       - auth

@@ -2,8 +2,8 @@
   <div class="app-shell">
     <aside class="sidebar">
       <div class="brand">
-        <strong><span class="brand-red">聚信</span><span class="brand-blue">SCA</span></strong>
-        <small>软件成分分析平台</small>
+        <strong><span class="brand-red">九章</span><span class="brand-blue">SCA</span></strong>
+        <small>九章软件开源组件分析系统 · V2.0</small>
       </div>
 
       <el-menu class="menu" :default-active="activeMenu" @select="handleMenuSelect">
@@ -79,7 +79,7 @@
       <section class="hero">
         <div>
           <p class="eyebrow">Software Composition Analysis</p>
-          <h1>聚信软件成分分析平台</h1>
+          <h1>九章软件开源组件分析系统 <span class="version-badge">V2.0</span></h1>
           <p class="sub">上传源码包后自动识别依赖，联动漏洞情报、报告、SBOM、持续监测、AI 降噪与资产中心，形成可追踪的软件供应链风险闭环。</p>
         </div>
         <div class="hero-actions">

@@ -5,9 +5,9 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    app_name: str = "聚信软件成分分析平台"
+    app_name: str = "九章软件开源组件分析系统"
     app_env: str = "dev"
-    app_version: str = "1.0.0"
+    app_version: str = "2.0.0"
     database_url: str = "sqlite:///./sca-dev.db"
     redis_url: str = "redis://localhost:6379/0"
     celery_broker_url: str = "redis://localhost:6379/1"

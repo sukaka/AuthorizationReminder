@@ -12,7 +12,7 @@
 - 标书系统（Tender）
 - 培训考试系统（Train-Exam）
 - 提示词管理中心（Prompt Center）
-- 软件成分分析平台（SCA）
+- 九章软件开源组件分析系统 V2.0（SCA）
 - 统一大屏展示中心（Big Screen）
 - 聚信 AI 助手（Juxin AI Assistant）
 
@@ -32,14 +32,14 @@
 - `tender-api`：标书系统后端（Node.js + OnlyOffice + OCR + AI）
 - `train-exam-api`：培训考试系统后端（Node.js + Excel 导题 + 自动评分 + 证书）
 - `prompt-center-api`：提示词管理中心后端（Node.js + 部门分类 + 版本审计）
-- `sca-api`：软件成分分析平台后端（Python FastAPI + PostgreSQL + Redis + Celery）
+- `sca-api`：九章软件开源组件分析系统后端（Python FastAPI + PostgreSQL + Redis + Celery）
 - `big-screen-api`：统一大屏 BFF（模板、播放列表、数据适配、健康与离线资源）
 - `ai-assistant-api`：聚信 AI 助手 FastAPI 服务（任务、Prompt 编排、加密历史）
 - `web-ai-assistant`：macOS 风格浅色/深色工作台；桌面生成由 Tauri 本地模型桥接
 - `web*`：各系统前端（Nginx + 静态资源）
 
 ### 1.2 数据库策略
-既有业务复用同一个 MySQL 实例，不同系统独立 schema；软件成分分析平台按技术栈要求使用 PostgreSQL：
+既有业务复用同一个 MySQL 实例，不同系统独立 schema；九章软件开源组件分析系统按技术栈要求使用 PostgreSQL：
 - `juxin_reminder`（提醒/登录/工单）
 - `juxin_inventory`（库存）
 - `juxin_device_flow`（设备流转）
@@ -51,7 +51,7 @@
 - `juxin_prompt_center`（提示词管理中心）
 - `juxin_big_screen`（统一大屏展示中心）
 - `juxin_ai_assistant`（聚信 AI 助手）
-- `juxin_sca`（软件成分分析平台，PostgreSQL）
+- `juxin_sca`（九章软件开源组件分析系统，PostgreSQL）
 
 > 说明：统一实例 + 独立库，兼顾运维成本与业务隔离。
 
@@ -137,7 +137,7 @@ export PUBLIC_HOST='服务器公网IP或域名，不带协议和端口'
 # 聚信 AI 助手（复用统一登录、现有 MySQL 和提示词中心）
 ./scripts/deploy/docker-compose-aliyun.sh start mysql auth prompt-center-api ai-assistant-db-init ai-assistant-api web-ai-assistant
 
-# 仅 软件成分分析平台
+# 仅 九章软件开源组件分析系统
 ./scripts/deploy/docker-compose-aliyun.sh start auth sca-postgres sca-redis sca-api sca-worker sca-scanner-worker web-sca
 
 # 仅 CMDB 系统
@@ -237,8 +237,8 @@ cd /Users/zhanglei/Documents/codex-new
 | 培训考试后端 | `http://localhost:5188` |
 | 提示词中心前端 | `http://localhost:18088` |
 | 提示词中心后端 | `http://localhost:5189` |
-| 软件成分分析前端 | `http://localhost:18089` |
-| 软件成分分析后端 | `http://localhost:5191` |
+| 九章 SCA 前端 | `http://localhost:18089` |
+| 九章 SCA 后端 | `http://localhost:5191` |
 | CMDB 前端 | `http://localhost:8090` |
 | MySQL（宿主机映射） | `localhost:3308` |
 | SCA PostgreSQL（宿主机映射） | `localhost:5433` |
@@ -410,7 +410,7 @@ npm run test:rbac
 ├── tender/                # 标书系统（Node + OnlyOffice + OCR + AI）
 ├── train-exam/            # 培训考试系统（Node + Web）
 ├── prompt-center/         # 提示词管理中心（Node + Web）
-├── sca-platform/          # 软件成分分析平台（FastAPI + Vue3）
+├── sca-platform/          # 九章软件开源组件分析系统 V2.0（FastAPI + Vue3）
 ├── big-screen-center/     # 统一大屏展示中心（Express + Vue3）
 ├── cmdb/                  # CMDB（Go + Web）
 ├── docs/                  # 发布、测试、设计文档

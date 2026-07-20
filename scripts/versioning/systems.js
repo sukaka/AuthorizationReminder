@@ -107,7 +107,7 @@ const SYSTEMS = Object.freeze([
   }),
   freezeSystem({
     id: 'sca',
-    name: '软件成分分析平台',
+    name: '九章软件开源组件分析系统',
     versionFile: 'sca-platform/VERSION',
     paths: ['sca-platform'],
     packageDirs: ['sca-platform/frontend'],

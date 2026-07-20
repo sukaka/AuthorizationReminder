@@ -120,7 +120,7 @@ services:
     ports: !override []
     build:
       args:
-        VITE_SSO_LOGIN_URL: "https://${HTTPS_PUBLIC_HOST:-localhost}:5180/portal?system=sca"
+        VITE_SSO_LOGIN_URL: "https://${HTTPS_PUBLIC_HOST:-localhost}:5180/sca-login"
   dependency-track-apiserver:
     ports: !override []
   dependency-track-frontend:

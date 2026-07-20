@@ -71,6 +71,18 @@ body {
   color: var(--blue);
 }
 
+.version-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: rgba(37, 99, 235, 0.1);
+  color: var(--blue);
+  font-size: 13px;
+  font-weight: 700;
+  vertical-align: middle;
+}
+
 .menu {
   border-right: 0;
   flex: 1;
