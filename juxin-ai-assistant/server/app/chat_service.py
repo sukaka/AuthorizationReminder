@@ -22,6 +22,7 @@ from .chat_document_delivery import (
 from .chat_generated_file_service import render_chat_document_bytes
 from .config import get_settings
 from .context.context_builder import RecentChatMessage
+from .context.mode_router import ModeRouter
 from .crypto import ContentCipher, EncryptedPayload
 from .export_file_manager import ExportFileManager
 from .knowledge_search import RetrievedKnowledgeChunk
@@ -679,6 +680,7 @@ def prepare_chat(
 ) -> ChatPrepareOut:
     loop_runner = LoopRunner()
     analysis = loop_runner.task_analyzer.analyze(body.question, body.mode)
+    route = ModeRouter.route(mode=body.mode, question=body.question)
     mode = analysis.mode.upper()
     session = _get_or_create_session(
         db,
@@ -769,6 +771,10 @@ def prepare_chat(
             citations=citations,
             loop_trace=loop_result.loop_trace,
             task_state=task_state_payload,
+            requested_mode=route.requested_mode,
+            effective_mode=route.mode,
+            routing_reason=route.reason,
+            routing_confidence=route.confidence,
         )
     web_results: list[WebSearchResult] = []
     web_log_id: int | None = None
@@ -874,6 +880,10 @@ def prepare_chat(
             generated_files=message_generated_files(assistant),
             loop_trace=loop_result.loop_trace,
             task_state=task_state_payload,
+            requested_mode=route.requested_mode,
+            effective_mode=route.mode,
+            routing_reason=route.reason,
+            routing_confidence=route.confidence,
         )
     completion_token = secrets.token_urlsafe(32)
     assistant = _create_message(
@@ -916,6 +926,10 @@ def prepare_chat(
         citations=citations,
         loop_trace=loop_result.loop_trace,
         task_state=task_state_payload,
+        requested_mode=route.requested_mode,
+        effective_mode=route.mode,
+        routing_reason=route.reason,
+        routing_confidence=route.confidence,
     )
 
 

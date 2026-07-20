@@ -9,7 +9,7 @@ from fastapi.responses import Response
 from sqlalchemy import func, or_, select, update
 from sqlalchemy.orm import Session
 
-from .auth import get_session, require_action
+from .auth import get_session, is_platform_admin_role, require_action
 from .config import Settings, get_settings
 from .crypto import ContentCipher, EncryptedPayload
 from .context.context_builder import ContextBuilder
@@ -109,7 +109,7 @@ KNOWLEDGE_DOWNLOAD_MEDIA_TYPES = {
 
 
 def _is_admin(session_payload: SessionPayload) -> bool:
-    return session_payload.user.role.strip().lower() == "admin"
+    return is_platform_admin_role(session_payload.user.role)
 
 
 def _base_out(base: KnowledgeBase) -> KnowledgeBaseOut:
@@ -379,16 +379,41 @@ def _can_manage_base(base: KnowledgeBase, *, user_id: str, is_admin: bool) -> bo
     return is_admin or (base.scope == "personal" and base.owner_user_id == user_id)
 
 
-def _can_view_file(file_record: KnowledgeFile, *, user_id: str, is_admin: bool) -> bool:
-    return (
-        is_admin
-        or file_record.owner_user_id == user_id
-        or (
-            file_record.usage_type == "official_knowledge"
-            and file_record.review_status in {"approved", "official"}
-            and file_record.permission_scope in {"company", "department", "project", "admin"}
-        )
-    )
+_EXTERNAL_ROLES = frozenset({"external", "external_customer", "customer", "visitor", "guest"})
+
+
+def _can_view_file(
+    file_record: KnowledgeFile,
+    *,
+    user_id: str,
+    is_admin: bool,
+    db: Session | None = None,
+    session_payload: SessionPayload | None = None,
+) -> bool:
+    scope = file_record.permission_scope.strip().lower()
+    if scope == "admin":
+        return is_admin
+    if is_admin or file_record.owner_user_id == user_id:
+        return True
+    if (
+        file_record.usage_type != "official_knowledge"
+        or file_record.review_status not in {"approved", "official"}
+        or session_payload is None
+    ):
+        return False
+    if scope == "company":
+        return session_payload.user.role.strip().lower() not in _EXTERNAL_ROLES
+    if scope == "department" and db is not None and file_record.knowledge_base_id:
+        base = db.get(KnowledgeBase, file_record.knowledge_base_id)
+        department_id = str(base.department_id or "").strip() if base else ""
+        allowed_departments = {
+            str(value).strip()
+            for value in [session_payload.scope.department, *session_payload.scope.managed_departments]
+            if str(value or "").strip()
+        }
+        return bool(department_id and department_id in allowed_departments)
+    # 1.0 没有项目成员域模型，不能把 project 范围降级为公司可见。
+    return False
 
 
 def _can_manage_file(file_record: KnowledgeFile, *, user_id: str, is_admin: bool) -> bool:
@@ -739,7 +764,13 @@ async def ask_knowledge_file(
             KnowledgeFile.hard_deleted_at.is_(None),
         )
     )
-    if file_record is None or not _can_view_file(file_record, user_id=user_id, is_admin=is_admin):
+    if file_record is None or not _can_view_file(
+        file_record,
+        user_id=user_id,
+        is_admin=is_admin,
+        db=db,
+        session_payload=session_payload,
+    ):
         raise HTTPException(status_code=404, detail="知识文件不存在或无权访问")
     question = body.question.strip()
     if not question:
@@ -795,7 +826,13 @@ async def summarize_knowledge_file(
             KnowledgeFile.hard_deleted_at.is_(None),
         )
     )
-    if file_record is None or not _can_view_file(file_record, user_id=user_id, is_admin=is_admin):
+    if file_record is None or not _can_view_file(
+        file_record,
+        user_id=user_id,
+        is_admin=is_admin,
+        db=db,
+        session_payload=session_payload,
+    ):
         raise HTTPException(status_code=404, detail="知识文件不存在或无权访问")
     question = body.question.strip() or "请总结这个文档，提炼核心内容、待办事项、风险提醒和下一步建议。"
     chunks = _chunks_for_file(
@@ -1263,7 +1300,17 @@ async def list_knowledge_files(
             .order_by(KnowledgeFile.updated_at.desc(), KnowledgeFile.id.desc())
         )
     )
-    items = [_file_out(db, row) for row in rows]
+    items = [
+        _file_out(db, row)
+        for row in rows
+        if _can_view_file(
+            row,
+            user_id=user_id,
+            is_admin=is_admin,
+            db=db,
+            session_payload=session_payload,
+        )
+    ]
     return KnowledgeFileListOut(items=items, total=len(items))
 
 
@@ -1317,7 +1364,13 @@ async def preview_knowledge_file(
             KnowledgeFile.hard_deleted_at.is_(None),
         )
     )
-    if file_record is None or not _can_view_file(file_record, user_id=user_id, is_admin=is_admin):
+    if file_record is None or not _can_view_file(
+        file_record,
+        user_id=user_id,
+        is_admin=is_admin,
+        db=db,
+        session_payload=session_payload,
+    ):
         raise HTTPException(status_code=404, detail="知识文件不存在或无权访问")
     chunk_filters = [
         KnowledgeChunk.file_id == file_record.id,
@@ -1385,7 +1438,13 @@ async def download_knowledge_file(
             KnowledgeFile.hard_deleted_at.is_(None),
         )
     )
-    if file_record is None or not _can_view_file(file_record, user_id=user_id, is_admin=is_admin):
+    if file_record is None or not _can_view_file(
+        file_record,
+        user_id=user_id,
+        is_admin=is_admin,
+        db=db,
+        session_payload=session_payload,
+    ):
         raise HTTPException(status_code=404, detail="知识文件不存在或无权访问")
     stored_path = _stored_original_path(
         file_record,
@@ -1423,7 +1482,13 @@ async def get_knowledge_file(
             KnowledgeFile.hard_deleted_at.is_(None),
         )
     )
-    if file_record is None or not _can_view_file(file_record, user_id=user_id, is_admin=is_admin):
+    if file_record is None or not _can_view_file(
+        file_record,
+        user_id=user_id,
+        is_admin=is_admin,
+        db=db,
+        session_payload=session_payload,
+    ):
         raise HTTPException(status_code=404, detail="知识文件不存在或无权访问")
     return _file_out(db, file_record)
 

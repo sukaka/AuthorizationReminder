@@ -38,6 +38,7 @@ it('shows published skills as a user-facing capability center and runs a skill',
   const runRequest = vi.fn();
   server.use(
     http.get('/api/skills', () => HttpResponse.json({ items: [skill], total: 1 })),
+    http.get('/api/skills/mine', () => HttpResponse.json({ items: [], total: 0 })),
     http.get('/api/skills/runs', () => HttpResponse.json({ items: [], total: 0 })),
     http.post('/api/skills/risk-assessment-review/run', async ({ request }) => {
       runRequest(await request.json());
@@ -58,7 +59,8 @@ it('shows published skills as a user-facing capability center and runs a skill',
   expect(await screen.findByRole('heading', { name: '能力中心' })).toBeInTheDocument();
   expect(screen.getByText('风险评估过程文档审查')).toBeInTheDocument();
   expect(screen.getByText('需要材料：docx、pdf、xlsx')).toBeInTheDocument();
-  expect(screen.getByText('可生成：markdown、docx')).toBeInTheDocument();
+  expect(screen.getByText('可生成：')).toBeInTheDocument();
+  expect(screen.getByText('markdown、docx')).toBeInTheDocument();
   expect(screen.queryByText(/ToolRegistry|embedding|namespace|RAG/)).not.toBeInTheDocument();
 
   await userEvent.click(screen.getByRole('button', { name: '开始使用 风险评估过程文档审查' }));

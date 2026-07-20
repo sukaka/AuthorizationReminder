@@ -455,6 +455,7 @@ class ChatPrepareIn(BaseModel):
     session_uuid: str | None = Field(default=None, max_length=64)
     question: str = Field(min_length=1, max_length=20_000)
     mode: Literal[
+        "auto",
         "normal",
         "sales",
         "business",
@@ -518,6 +519,10 @@ class ChatPrepareOut(BaseModel):
     generated_files: list[ChatGeneratedFileOut] = Field(default_factory=list)
     loop_trace: list[dict[str, Any]] = Field(default_factory=list)
     task_state: ChatTaskStateOut = Field(default_factory=ChatTaskStateOut)
+    requested_mode: str = "normal"
+    effective_mode: str = "normal"
+    routing_reason: str = ""
+    routing_confidence: float = 1.0
 
 
 class WebCapturePreviewIn(BaseModel):

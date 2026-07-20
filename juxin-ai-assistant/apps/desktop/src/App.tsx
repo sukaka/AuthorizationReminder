@@ -24,6 +24,7 @@ import { SuggestionsPage } from './pages/admin/SuggestionsPage';
 import { LauncherPage } from './launcher/LauncherPage';
 import { WorkspaceUpdateControl } from './launcher/WorkspaceUpdateControl';
 import { getRuntimeCapabilities } from './runtime/capabilities';
+import { isPlatformAdminRole } from './auth/roles';
 import {
   desktopBridge,
   type DesktopBridge,
@@ -83,7 +84,7 @@ function Workspace({ session }: { session: SessionPayload }) {
   const [sidebarTouched, setSidebarTouched] = useState(false);
   const [systemMenuOpen, setSystemMenuOpen] = useState(false);
   const role = session.user.role.trim().toLowerCase();
-  const isAdmin = role === 'admin';
+  const isAdmin = isPlatformAdminRole(role);
   const isWebRuntime = !window.__TAURI_INTERNALS__;
   const immersive = sidebarMode === 'immersive';
   const pageTitle = page === 'assistants'

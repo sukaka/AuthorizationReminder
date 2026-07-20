@@ -9,7 +9,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     app_name: str = "聚信 AI 助手"
-    app_version: str = "1.2.0"
+    app_version: str = "1.3.0"
+    environment: str = "development"
     database_url: str = "sqlite+pysqlite:///./juxin-ai-assistant-dev.db"
     auth_service_url: str = "http://auth:5180"
     auth_public_url: str = "http://localhost:5180"
@@ -46,6 +47,8 @@ class Settings(BaseSettings):
     server_model_display_name: str = "服务端模型"
     server_model_timeout_seconds: int = Field(default=300, ge=5, le=600)
     server_model_max_output_tokens: int = Field(default=8192, ge=1, le=200000)
+    user_model_custom_endpoint_enabled: bool = False
+    user_model_allowed_hosts: str = ""
     embedding_model_api_key: str = ""
     embedding_model_timeout_seconds: int = Field(default=30, ge=3, le=300)
     qdrant_enabled: bool = False
@@ -79,6 +82,10 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_production_secrets(self) -> "Settings":
+        if not auth_dev_bypass_is_safe(self):
+            raise ValueError(
+                "AUTH_DEV_BYPASS 仅允许本地开发环境，且 PUBLIC_URL 必须是 loopback"
+            )
         if len(self.ai_local_binding_secret) < 32:
             raise ValueError("AI_LOCAL_BINDING_SECRET 至少需要 32 个字符")
         if self.ai_local_binding_secret in {
@@ -144,3 +151,19 @@ def normalize_auth_public_url(raw: str) -> str:
     default_port = 443 if parsed.scheme == "https" else 80
     authority = host if port in {None, default_port} else f"{host}:{port}"
     return f"{parsed.scheme}://{authority}"
+
+
+def auth_dev_bypass_is_safe(settings: object) -> bool:
+    if not bool(getattr(settings, "auth_dev_bypass", False)):
+        return True
+    environment = str(getattr(settings, "environment", "development") or "").strip().lower()
+    if environment in {"production", "prod", "staging", "stage"}:
+        return False
+    try:
+        parsed = urlsplit(str(getattr(settings, "public_url", "")))
+    except ValueError:
+        return False
+    return (
+        parsed.scheme in {"http", "https"}
+        and parsed.hostname in {"localhost", "127.0.0.1", "::1"}
+    )

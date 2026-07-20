@@ -18,6 +18,13 @@ from app.web_sources import (
 )
 
 
+def _public_validator() -> WebSafetyValidator:
+    def resolver(_host: str, _port: object) -> list[tuple]:
+        return [(None, None, None, "", ("93.184.216.34", 0))]
+
+    return WebSafetyValidator(resolver=resolver)
+
+
 def test_url_extractor_deduplicates_http_urls() -> None:
     text = "请采集 https://example.com/a 和 https://example.com/a，以及 http://example.org。"
 
@@ -172,7 +179,11 @@ def test_web_search_service_fetches_candidate_page_body(generation_db) -> None:
                 fetched_at=datetime(2026, 7, 3, tzinfo=UTC),
             )
 
-    service = WebSearchService(provider=FakeProvider(), fetcher=FakeFetcher())
+    service = WebSearchService(
+        provider=FakeProvider(),
+        validator=_public_validator(),
+        fetcher=FakeFetcher(),
+    )
 
     results = service.search("查官网参数", limit=1, db=generation_db)
 
@@ -211,7 +222,11 @@ def test_web_search_service_uses_cache(generation_db) -> None:
             )
 
     provider = FakeProvider()
-    service = WebSearchService(provider=provider, fetcher=FakeFetcher())
+    service = WebSearchService(
+        provider=provider,
+        validator=_public_validator(),
+        fetcher=FakeFetcher(),
+    )
 
     first = service.search("查最新公告", limit=1, db=generation_db)
     second = service.search("查最新公告", limit=1, db=generation_db)

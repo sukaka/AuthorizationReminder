@@ -1,4 +1,4 @@
-import { ApiError, apiFetch, getAuthPortalUrl } from './client';
+import { ApiError, apiFetch, getAuthPortalUrl, isSafeSameOriginUrl } from './client';
 import type { LoopTraceStep } from './agentLoop';
 import { downloadBlobFromResponse, saveWordBytesToDesktop } from '../runtime/downloads';
 import { isDesktopRuntime } from '../runtime/capabilities';
@@ -16,6 +16,8 @@ export type ChatMode =
   | 'risk_assessment'
   | 'incident_response'
   | 'knowledge';
+
+export type ChatModeSelection = ChatMode | 'auto';
 
 export type ChatCitation = {
   source_type: string;
@@ -268,6 +270,10 @@ export type ChatPreparePayload = {
   generated_files?: ChatGeneratedFile[];
   loop_trace?: LoopTraceStep[];
   task_state?: ChatTaskStatePayload;
+  requested_mode?: ChatModeSelection;
+  effective_mode?: ChatMode;
+  routing_reason?: string;
+  routing_confidence?: number;
 };
 
 export type ChatGeneratePayload = {
@@ -497,7 +503,7 @@ export async function getChatSession(sessionUuid: string): Promise<ChatSessionDe
 export async function prepareChat(payload: {
   sessionUuid?: string;
   question: string;
-  mode: ChatMode;
+  mode: ChatModeSelection;
   topK?: number;
   attachmentFileIds?: string[];
   personalReferenceFileIds?: string[];
@@ -1408,6 +1414,9 @@ async function downloadWordExport(meta: {
   file_name: string;
   download_url: string;
 }): Promise<ChatWordDownloadResult> {
+  if (!isSafeSameOriginUrl(meta.download_url)) {
+    throw new ApiError(400, 'CHAT_WORD_DOWNLOAD_UNSAFE_URL');
+  }
   const response = await apiFetch(meta.download_url);
   if (!response.ok) throw new ApiError(response.status, 'CHAT_WORD_DOWNLOAD_FAILED');
   if (isDesktopRuntime()) {

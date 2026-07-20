@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 from .config import Settings
 from .crypto import ContentCipher, EncryptedPayload
 from .models import UserModelProfile
+from .model_endpoint_security import validate_user_model_endpoint
 from .schemas import UserModelProfileOut, UserModelProfileUpsertIn
 
 
@@ -102,6 +103,7 @@ def create_user_model_profile(
 ) -> UserModelProfile:
     if not body.api_key:
         raise HTTPException(status_code=422, detail="MODEL_API_KEY_REQUIRED")
+    base_url = validate_user_model_endpoint(body.base_url, settings)
     if body.is_default or not list_user_model_profiles(db, user_id):
         _clear_default(db, user_id)
         is_default = True
@@ -110,7 +112,7 @@ def create_user_model_profile(
     profile = UserModelProfile(
         sso_user_id=user_id,
         display_name=body.display_name,
-        base_url=body.base_url,
+        base_url=base_url,
         model_id=body.model_id,
         temperature=body.temperature,
         max_output_tokens=body.max_output_tokens,
@@ -139,11 +141,12 @@ def update_user_model_profile(
     settings: Settings,
 ) -> UserModelProfile:
     profile = get_user_model_profile(db, user_id, profile_uuid)
+    base_url = validate_user_model_endpoint(body.base_url, settings)
     if body.is_default:
         _clear_default(db, user_id)
         profile.is_default = True
     profile.display_name = body.display_name
-    profile.base_url = body.base_url
+    profile.base_url = base_url
     profile.model_id = body.model_id
     profile.temperature = body.temperature
     profile.max_output_tokens = body.max_output_tokens

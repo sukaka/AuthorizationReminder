@@ -4,7 +4,7 @@ import httpx
 from fastapi import Depends, HTTPException, Request
 from pydantic import ValidationError
 
-from .config import Settings, get_settings
+from .config import Settings, auth_dev_bypass_is_safe, get_settings
 from .schemas import AuthScope, SessionPayload, UserPayload
 
 
@@ -28,6 +28,8 @@ async def get_session(
     settings: Annotated[Settings, Depends(get_settings)],
 ) -> SessionPayload:
     if settings.auth_dev_bypass:
+        if not auth_dev_bypass_is_safe(settings):
+            raise HTTPException(status_code=503, detail="AUTH_DEV_BYPASS_NOT_ALLOWED")
         return SessionPayload(
             user=UserPayload(id="dev", username="dev_admin", role="admin"),
             scope=AuthScope(department="通用", managed_departments=["通用"]),
@@ -81,6 +83,8 @@ async def require_action(
     resource: dict[str, Any] | None = None,
 ) -> SessionPayload:
     if settings.auth_dev_bypass:
+        if not auth_dev_bypass_is_safe(settings):
+            raise HTTPException(status_code=503, detail="AUTH_DEV_BYPASS_NOT_ALLOWED")
         return session
 
     token, uses_bearer = get_request_auth_token(request, settings)

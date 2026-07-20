@@ -31,9 +31,10 @@ def test_migration_revision_graph_is_single_linear_head() -> None:
         migration_config("sqlite+pysqlite:///:memory:")
     )
 
-    assert script.get_heads() == ["0065_chat_generated_files"]
+    assert script.get_heads() == ["0066_skill_uploads"]
     revision_ids = {revision.revision for revision in script.walk_revisions()}
     assert {
+        "0066_skill_uploads",
         "0065_chat_generated_files",
         "0026_agent_run_contracts",
         "0025_hot_question_reports",
@@ -62,6 +63,7 @@ def test_migration_revision_graph_is_single_linear_head() -> None:
         "0002_employee_features",
         "0001_foundation",
     } == revision_ids
+    assert script.get_revision("0066_skill_uploads").down_revision == "0065_chat_generated_files"
     assert script.get_revision("0065_chat_generated_files").down_revision == "0026_agent_run_contracts"
 
 

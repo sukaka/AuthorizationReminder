@@ -658,10 +658,13 @@ def test_task_mode_detect_tool_wraps_existing_task_analyzer(
     assert result.status == "success"
     assert result.payload == {
         "mode": "normal",
+        "requested_mode": "normal",
         "task_type": "document_generation",
         "strategy": "single_turn",
         "needs_knowledge": True,
         "require_knowledge_evidence": True,
+        "routing_confidence": 1.0,
+        "routing_reason": "手动指定助手",
     }
 
     tool_log = generation_db.query(AgentToolCallLog).one()

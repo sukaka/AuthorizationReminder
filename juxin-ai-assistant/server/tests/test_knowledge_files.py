@@ -666,3 +666,14 @@ def test_delete_knowledge_file_api_disables_owner_file(
     )
     assert chunk_statuses
     assert set(chunk_statuses) == {"DELETED"}
+
+
+def test_office_archive_with_abnormal_compression_ratio_is_rejected() -> None:
+    from app.knowledge_files import _extract_blocks
+
+    buffer = BytesIO()
+    with ZipFile(buffer, "w", ZIP_DEFLATED) as archive:
+        archive.writestr("xl/worksheets/sheet1.xml", b"0" * (1024 * 1024 + 1))
+
+    with pytest.raises(HTTPException, match="压缩比异常"):
+        _extract_blocks("compressed.xlsx", buffer.getvalue())

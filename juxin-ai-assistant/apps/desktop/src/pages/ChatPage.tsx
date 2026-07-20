@@ -11,6 +11,7 @@ import {
   createLongChatTask,
   deleteChatSession,
   exportChatWord,
+  failChatMessage,
   getChatSession,
   getChatSessionsByKind,
   hardDeleteChatSession,
@@ -30,6 +31,7 @@ import {
   type ChatExportType,
   type ChatGeneratedFile,
   type ChatMode,
+  type ChatModeSelection,
   type ChatSessionListKind,
   type ChatSessionPayload,
   type ChatTaskStatePayload,
@@ -133,6 +135,7 @@ type GenerationStatus = 'idle' | 'running' | 'stopping';
 
 type ActiveGeneration = {
   abortController?: AbortController;
+  completionToken?: string;
   localRequestId?: string;
   sessionUuid: string;
   stopped: boolean;
@@ -165,6 +168,8 @@ const modeLabels: Record<ChatMode, string> = {
   incident_response: '应急响应助手',
   knowledge: '查公司知识',
 };
+
+const autoModeLabel = '自动路由';
 
 const wordExportTypes = ['single_answer', 'formal_document'] as const satisfies readonly ChatExportType[];
 const supportedKnowledgeAccept = '.pdf,.txt,.md,.docx,.xlsx,.pptx,.png,.jpg,.jpeg,.webp,application/pdf,text/plain,text/markdown,image/png,image/jpeg,image/webp,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.openxmlformats-officedocument.presentationml.presentation';
@@ -923,7 +928,10 @@ function renderChatContent(
 export function ChatPage() {
   const [sessions, setSessions] = useState<ChatSessionPayload[]>([]);
   const [profiles, setProfiles] = useState<ModelProfile[]>([]);
-  const [mode, setMode] = useState<ChatMode>('normal');
+  const [modeSelection, setModeSelection] = useState<ChatModeSelection>('auto');
+  const [routedMode, setRoutedMode] = useState<ChatMode>('normal');
+  const [manualModesOpen, setManualModesOpen] = useState(false);
+  const mode = modeSelection === 'auto' ? routedMode : modeSelection;
   const [question, setQuestion] = useState('');
   const [messages, setMessages] = useState<UiMessage[]>([]);
   const [activeSessionUuid, setActiveSessionUuid] = useState('');
@@ -962,6 +970,11 @@ export function ChatPage() {
     digest: string;
     findings: SensitiveFinding[];
   } | null>(null);
+  const selectMode = (selection: ChatModeSelection) => {
+    setModeSelection(selection);
+    setRoutedMode(selection === 'auto' ? 'normal' : selection);
+    setManualModesOpen(false);
+  };
   const messageListRef = useRef<HTMLDivElement | null>(null);
   const sourceHighlightRef = useRef<HTMLElement | null>(null);
   const shouldStickToBottomRef = useRef(true);
@@ -1132,7 +1145,12 @@ export function ChatPage() {
 
   useEffect(() => {
     if (sourcePreview.status !== 'ready') return;
-    window.requestAnimationFrame(() => sourceHighlightRef.current?.scrollIntoView({ block: 'center' }));
+    window.requestAnimationFrame(() => {
+      const highlightedSource = sourceHighlightRef.current;
+      if (highlightedSource && typeof highlightedSource.scrollIntoView === 'function') {
+        highlightedSource.scrollIntoView({ block: 'center' });
+      }
+    });
   }, [sourcePreview]);
 
   const activeProfile = useMemo(
@@ -1202,7 +1220,7 @@ export function ChatPage() {
       if (activeSessionUuidRef.current !== sessionUuid) return;
       setActiveSessionUuid(detail.session_uuid);
       setActiveSessionStatus(normalizeSessionStatus(detail.status));
-      setMode(normalizeMode(detail.mode));
+      selectMode(normalizeMode(detail.mode));
       setSourcePreview({ status: 'idle' });
       setWebCapture({ status: 'idle' });
       setEnabledReferenceFiles([]);
@@ -1257,8 +1275,14 @@ export function ChatPage() {
         }
       }));
       setPendingUploadFiles(failed.map((item) => item.file));
+      const uploadedFileName = uploaded.length === 1 ? uploaded[0]?.file_name : '';
+      const failureDetail = failed.length ? uploadFailureMessage(failed[0].error) : '';
       if (uploadPurpose === 'submit_review') {
-        setUploadStatus(`已提交管理员审核 ${uploaded.length} 个${failed.length ? `，失败 ${failed.length} 个` : ''}。`);
+        setUploadStatus(
+          uploadedFileName && !failed.length
+            ? `资料已提交管理员审核：${uploadedFileName}`
+            : `已提交管理员审核 ${uploaded.length} 个${failed.length ? `，失败 ${failed.length} 个。${failureDetail}` : '。'}`,
+        );
       } else if (uploadPurpose === 'session_attachment') {
         setEnabledReferenceFiles((current) => current
           .filter((file) => !uploaded.some((item) => item.file_uuid === file.fileUuid))
@@ -1267,13 +1291,13 @@ export function ChatPage() {
             fileName: item.file_name,
             sourceKind: 'session_attachment' as const,
           }))));
-        setMode('knowledge');
+        selectMode('knowledge');
         setReferenceScope((current) => (
           current === 'with_personal' || current === 'personal_and_session'
             ? 'personal_and_session'
             : 'with_session'
         ));
-        setUploadStatus(failed.length ? `已上传 ${uploaded.length} 个，失败 ${failed.length} 个。${uploadFailureMessage(failed[0].error)}` : '');
+        setUploadStatus(failed.length ? `已上传 ${uploaded.length} 个，失败 ${failed.length} 个。${failureDetail}` : '');
       } else {
         const readyUploads = uploaded.filter(isReadyPersonalReference);
         setPersonalReferenceFiles((current) => (
@@ -1285,15 +1309,25 @@ export function ChatPage() {
           setSelectedPersonalReferenceIds((current) => (
             current.concat(readyUploads.map((item) => item.file_uuid).filter((id) => !current.includes(id)))
           ));
-          setMode('knowledge');
+          selectMode('knowledge');
           setReferenceScope((current) => (
             current === 'with_session' || current === 'personal_and_session'
               ? 'personal_and_session'
               : 'with_personal'
           ));
-          setUploadStatus(`已保存 ${uploaded.length} 个资料，将自动参与后续检索${failed.length ? `；失败 ${failed.length} 个` : ''}。`);
+          setUploadStatus(
+            uploadedFileName && !failed.length
+              ? `资料已保存，将自动参与后续检索：${uploadedFileName}`
+              : `已保存 ${uploaded.length} 个资料，将自动参与后续检索${failed.length ? `；失败 ${failed.length} 个。${failureDetail}` : '。'}`,
+          );
         } else {
-          setUploadStatus(`已保存 ${uploaded.length} 个资料；处理完成后会自动参与检索${failed.length ? `，失败 ${failed.length} 个` : ''}。`);
+          if (!uploaded.length && failed.length) {
+            setUploadStatus(failureDetail);
+          } else if (uploadedFileName && !failed.length) {
+            setUploadStatus(`资料已保存，处理完成后会自动参与检索：${uploadedFileName}`);
+          } else {
+            setUploadStatus(`已保存 ${uploaded.length} 个资料；处理完成后会自动参与检索${failed.length ? `，失败 ${failed.length} 个。${failureDetail}` : '。'}`);
+          }
         }
       }
     } catch (error) {
@@ -1338,7 +1372,7 @@ export function ChatPage() {
   };
 
   const togglePersonalReferenceFile = (fileId: string) => {
-    setMode('knowledge');
+    selectMode('knowledge');
     setSelectedPersonalReferenceIds((current) => (
       current.includes(fileId)
         ? current.filter((item) => item !== fileId)
@@ -1435,7 +1469,7 @@ export function ChatPage() {
             fileName: webCapture.preview.title || '网页采集资料',
             sourceKind: 'session_attachment',
           }));
-        setMode('knowledge');
+        selectMode('knowledge');
         setReferenceScope((current) => (
           current === 'with_personal' || current === 'personal_and_session'
             ? 'personal_and_session'
@@ -1504,12 +1538,13 @@ export function ChatPage() {
       await previewUrlCapture(trimmed, firstUrl);
       return;
     }
-    if (!shouldUseServerModel && !activeProfile && mode !== 'knowledge') {
+    let requestMode = mode;
+    if (!shouldUseServerModel && !activeProfile && requestMode !== 'knowledge') {
       setStatus('请先完成模型设置');
       return;
     }
     shouldStickToBottomRef.current = true;
-    setStatus(mode === 'knowledge' ? '检索中…' : '生成中…');
+    setStatus(requestMode === 'knowledge' ? '检索中…' : '生成中…');
     setGenerationStatus('running');
     setGenerationMetrics(null);
     setQuestion('');
@@ -1528,6 +1563,14 @@ export function ChatPage() {
     };
     activeGenerationsRef.current.set(generationKey, generation);
     activeGenerationKeyRef.current = generationKey;
+    const reportStoppedGeneration = async () => {
+      if (!assistantId) return;
+      await failChatMessage(assistantId, {
+        completionToken: generation.completionToken || '',
+        errorCode: 'USER_CANCELLED',
+        errorMessage: '用户停止生成',
+      }).catch(() => undefined);
+    };
     updateRequestMessages((current) => current.concat({
       id: localUserMessageId,
       role: 'user',
@@ -1540,13 +1583,18 @@ export function ChatPage() {
       const prepared = await prepareChat({
         sessionUuid: originSessionUuid || undefined,
         question: trimmed,
-        mode,
+        mode: modeSelection,
         attachmentFileIds: sessionAttachmentFiles.map((file) => file.fileUuid),
         personalReferenceFileIds: [],
         includePersonalReferences: true,
         includeSessionAttachments: true,
         sensitiveConfirmationDigest: confirmationDigest,
       });
+      requestMode = normalizeMode(prepared.effective_mode || requestMode);
+      if (modeSelection === 'auto') {
+        setRoutedMode(requestMode);
+        if (requestIsVisible()) setStatus(`自动路由 · ${modeLabels[requestMode]}`);
+      }
       requestSessionUuid = prepared.session_uuid;
       if (generationKey !== prepared.session_uuid) {
         const generationWasActive = activeGenerationKeyRef.current === generationKey;
@@ -1588,6 +1636,7 @@ export function ChatPage() {
         return;
       }
       assistantId = prepared.assistant_message_uuid;
+      generation.completionToken = prepared.completion_token;
       updateRequestMessages((current) => current.concat({
         id: assistantId,
         role: 'assistant',
@@ -1630,6 +1679,7 @@ export function ChatPage() {
           ));
         });
         if (generation.stopped) {
+          await reportStoppedGeneration();
           if (requestIsVisible()) markGenerationStopped(assistantId);
           return;
         }
@@ -1676,6 +1726,7 @@ export function ChatPage() {
         ));
       });
       if (generation.stopped) {
+        await reportStoppedGeneration();
         if (requestIsVisible()) markGenerationStopped(assistantId);
         return;
       }
@@ -1692,7 +1743,7 @@ export function ChatPage() {
       if (shouldRunLoopQualityCheck(prepared.loop_trace)) {
         for (let retryCount = 0; retryCount < 2; retryCount += 1) {
           const check = await checkLoopQuality({
-            mode,
+            mode: requestMode,
             answer: result.output,
             usedKnowledge: prepared.citations.length > 0,
             retryCount,
@@ -1702,6 +1753,7 @@ export function ChatPage() {
             break;
           }
           if (generation.stopped) {
+            await reportStoppedGeneration();
             if (requestIsVisible()) markGenerationStopped(assistantId);
             return;
           }
@@ -1726,6 +1778,7 @@ export function ChatPage() {
             ));
           });
           if (generation.stopped) {
+            await reportStoppedGeneration();
             if (requestIsVisible()) markGenerationStopped(assistantId);
             return;
           }
@@ -1804,6 +1857,7 @@ export function ChatPage() {
         }
       }
       if (generation.stopped || isAbortLikeError(error)) {
+        await reportStoppedGeneration();
         if (requestIsVisible()) markGenerationStopped(assistantId);
         return;
       }
@@ -2157,6 +2211,7 @@ export function ChatPage() {
     setPendingUploadFiles([]);
     setEnabledReferenceFiles([]);
     setTaskProgress(null);
+    selectMode('auto');
     setStatus('');
   };
 
@@ -2450,20 +2505,64 @@ export function ChatPage() {
         <div className="chat-stage">
           <div className="chat-topbar">
             <div className="chat-top-actions">
-              <label className="chat-mode-select">
-                <span>助手模式</span>
+              <div className="chat-assistant-control">
+                <button
+                  aria-controls="chat-assistant-mode-menu"
+                  aria-expanded={manualModesOpen}
+                  className="chat-assistant-trigger"
+                  onClick={() => setManualModesOpen((open) => !open)}
+                  type="button"
+                >
+                  {modeSelection === 'auto' ? autoModeLabel : modeLabels[mode]}
+                </button>
                 <select
                   aria-label="助手模式"
-                  onChange={(event) => setMode(normalizeMode(event.target.value))}
-                  value={mode}
+                  className="chat-mode-native-select"
+                  onChange={(event) => selectMode(event.target.value as ChatModeSelection)}
+                  value={modeSelection}
                 >
-                  {(Object.keys(modeLabels) as ChatMode[]).map((item) => (
-                    <option key={item} value={item}>
-                      {modeLabels[item]}
-                    </option>
-                  ))}
+                  <option value="auto">{autoModeLabel}（推荐）</option>
+                  <optgroup label="手动指定助手">
+                    {(Object.keys(modeLabels) as ChatMode[]).map((item) => (
+                      <option key={item} value={item}>
+                        {modeLabels[item]}
+                      </option>
+                    ))}
+                  </optgroup>
                 </select>
-              </label>
+                {manualModesOpen ? (
+                  <div
+                    aria-label="手动指定助手"
+                    className="chat-assistant-menu"
+                    id="chat-assistant-mode-menu"
+                    role="menu"
+                  >
+                    <button
+                      aria-checked={modeSelection === 'auto'}
+                      className={modeSelection === 'auto' ? 'is-selected' : ''}
+                      onClick={() => selectMode('auto')}
+                      role="menuitemradio"
+                      type="button"
+                    >
+                      <span>{autoModeLabel}（推荐）</span>
+                      {modeSelection === 'auto' ? <span aria-hidden="true">✓</span> : null}
+                    </button>
+                    {(Object.keys(modeLabels) as ChatMode[]).map((item) => (
+                      <button
+                        aria-checked={modeSelection === item}
+                        className={modeSelection === item ? 'is-selected' : ''}
+                        key={item}
+                        onClick={() => selectMode(item)}
+                        role="menuitemradio"
+                        type="button"
+                      >
+                        <span>{modeLabels[item]}</span>
+                        {modeSelection === item ? <span aria-hidden="true">✓</span> : null}
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
               <label className="chat-mode-select">
                 <span>导出工作成果</span>
                 <select
@@ -3103,7 +3202,12 @@ export function ChatPage() {
                   <button disabled={uploading} onClick={() => setPendingUploadFiles([])} type="button">
                     取消
                   </button>
-                  <button disabled={uploading} onClick={() => void uploadKnowledge()} type="button">
+                  <button
+                    aria-label="开始上传"
+                    disabled={uploading}
+                    onClick={() => void uploadKnowledge()}
+                    type="button"
+                  >
                     {uploading ? (
                       <><span aria-hidden="true" className="upload-parsing-spinner" />正在解析中</>
                     ) : `开始上传（${pendingUploadFiles.length}）`}

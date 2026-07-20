@@ -77,7 +77,10 @@ async def generate_with_model_config(
 ) -> ServerModelResult:
     started = perf_counter()
     try:
-        async with httpx.AsyncClient(timeout=config.timeout_seconds) as client:
+        async with httpx.AsyncClient(
+            timeout=config.timeout_seconds,
+            follow_redirects=False,
+        ) as client:
             response = await client.post(
                 _chat_completions_url(config.base_url),
                 headers={
@@ -126,7 +129,10 @@ async def stream_with_model_config(
     started = perf_counter()
     usage: dict = {}
     try:
-        async with httpx.AsyncClient(timeout=config.timeout_seconds) as client:
+        async with httpx.AsyncClient(
+            timeout=config.timeout_seconds,
+            follow_redirects=False,
+        ) as client:
             async with client.stream(
                 "POST",
                 _chat_completions_url(config.base_url),

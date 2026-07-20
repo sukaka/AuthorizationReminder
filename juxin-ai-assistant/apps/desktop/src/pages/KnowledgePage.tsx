@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 
-import { ApiError, type SessionPayload } from '../api/client';
+import { ApiError, isSafeSameOriginUrl, type SessionPayload } from '../api/client';
+import { isPlatformAdminRole } from '../auth/roles';
 import {
   archiveKnowledgeFile,
   askKnowledge,
@@ -341,7 +342,7 @@ function categorySelectionNames(selectedCategoryName: string, categories: Knowle
 
 export function KnowledgePage({ session }: KnowledgePageProps) {
   const role = session.user.role.trim().toLowerCase();
-  const isAdmin = role === 'admin';
+  const isAdmin = isPlatformAdminRole(role);
   const [files, setFiles] = useState<KnowledgeFilePayload[]>([]);
   const [loading, setLoading] = useState(true);
   const [notice, setNotice] = useState('');
@@ -902,7 +903,12 @@ export function KnowledgePage({ session }: KnowledgePageProps) {
   };
 
   const downloadFile = (file: KnowledgeFilePayload) => {
-    window.open(knowledgeFileDownloadUrl(file.file_uuid), '_blank', 'noopener,noreferrer');
+    const downloadUrl = knowledgeFileDownloadUrl(file.file_uuid);
+    if (!isSafeSameOriginUrl(downloadUrl)) {
+      setActionNotice('下载链接不安全，已阻止本次下载。');
+      return;
+    }
+    window.open(downloadUrl, '_blank', 'noopener,noreferrer');
   };
 
   const deleteFile = async (file: KnowledgeFilePayload) => {
@@ -3146,7 +3152,7 @@ export function KnowledgePage({ session }: KnowledgePageProps) {
                 <span>每页 {preview.page_size || previewPageSize} 段</span>
               </div>
               <div className="knowledge-preview-body">
-                {preview.media_type?.startsWith('image/') && preview.asset_url ? (
+                {preview.media_type?.startsWith('image/') && preview.asset_url && isSafeSameOriginUrl(preview.asset_url) ? (
                   <figure className="knowledge-image-preview">
                     <img alt={preview.file_name} src={preview.asset_url} />
                     <figcaption>{preview.file_name}</figcaption>

@@ -341,6 +341,11 @@ export const governanceApi = {
     { method: 'PUT', body: JSON.stringify({ status, suggested_reply: suggestedReply }) },
   ),
   skills: () => request<GovernanceList<AdminSkill>>('/api/admin/skills'),
+  uploadSkill: (file: File) => {
+    const form = new FormData();
+    form.append('file', file);
+    return request<AdminSkill>('/api/admin/skills/uploads', { method: 'POST', body: form });
+  },
   publishSkill: (skillId: string) => request<AdminSkill>(
     `/api/admin/skills/${encodeURIComponent(skillId)}/publish`,
     { method: 'POST' },

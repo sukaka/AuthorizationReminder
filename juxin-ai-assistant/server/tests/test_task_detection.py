@@ -8,6 +8,22 @@ def test_task_detection_maps_role_modes_to_specific_task_types() -> None:
     assert analyze_task_mode("写授权渗透测试计划", "pentest")["task_type"] == "pentest"
 
 
+def test_task_detection_auto_routes_specialized_requests_with_explanation() -> None:
+    routed = analyze_task_mode("帮我写投标响应", "auto")
+
+    assert routed["mode"] == "business"
+    assert routed["requested_mode"] == "auto"
+    assert "投标" in routed["routing_reason"]
+    assert routed["routing_confidence"] > 0.5
+
+
+def test_task_detection_auto_routes_unmatched_requests_to_normal() -> None:
+    routed = analyze_task_mode("帮我写一段生日祝福", "auto")
+
+    assert routed["mode"] == "normal"
+    assert routed["requested_mode"] == "auto"
+
+
 def test_task_detection_maps_web_and_word_tasks() -> None:
     assert analyze_task_mode("查一下最新 CVE-2026-12345 信息", "normal")["task_type"] == "web_search"
     assert analyze_task_mode("采集 https://example.com 这个网页", "normal")["task_type"] == "web_capture"

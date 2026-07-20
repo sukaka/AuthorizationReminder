@@ -1262,7 +1262,8 @@ it('renders a Codex-like composer and sends with Enter', async () => {
   expect(composer).toBeInTheDocument();
   expect(within(composer).queryByText('告诉我你想完成什么工作', { selector: 'label' })).not.toBeInTheDocument();
   expect(screen.getByPlaceholderText('告诉我你想完成什么工作...')).toBeInTheDocument();
-  expect(screen.getByRole('combobox', { name: '助手模式' })).toHaveValue('normal');
+  expect(screen.getByRole('combobox', { name: '助手模式' })).toHaveValue('auto');
+  expect(screen.getByRole('button', { name: '自动路由' })).toBeInTheDocument();
   await userEvent.type(screen.getByLabelText('告诉我你想完成什么工作'), '写一份会议纪要{enter}');
 
   expect(await screen.findByText('会议纪要已生成')).toBeInTheDocument();
@@ -1471,8 +1472,9 @@ it('offers Juxin role modes and sends the selected mode to prepare API', async (
 
   const modeSelect = await screen.findByRole('combobox', { name: '助手模式' });
   const modeOptions = within(modeSelect).getAllByRole('option');
-  expect(modeOptions).toHaveLength(12);
+  expect(modeOptions).toHaveLength(13);
   expect(modeOptions.map((option) => option.textContent)).toEqual([
+    '自动路由（推荐）',
     '普通助手',
     '销售助手',
     '商务助手',
@@ -1486,6 +1488,11 @@ it('offers Juxin role modes and sends the selected mode to prepare API', async (
     '应急响应助手',
     '查公司知识',
   ]);
+  await userEvent.click(screen.getByRole('button', { name: '自动路由' }));
+  expect(screen.getByRole('menu', { name: '手动指定助手' })).toBeInTheDocument();
+  await userEvent.click(screen.getByRole('menuitemradio', { name: '行政人力助手' }));
+  expect(screen.queryByRole('menu', { name: '手动指定助手' })).not.toBeInTheDocument();
+  expect(screen.getByRole('button', { name: '行政人力助手' })).toBeInTheDocument();
   await userEvent.selectOptions(modeSelect, 'hr_admin');
   await userEvent.type(screen.getByLabelText('告诉我你想完成什么工作'), '帮我写投标响应');
   await userEvent.click(screen.getByRole('button', { name: '发送' }));
@@ -1594,7 +1601,7 @@ it('removes reference scope controls and always uses the full scope', async () =
   expect(await screen.findByText('已参考我的资料生成纪要。')).toBeInTheDocument();
   await waitFor(() => expect(prepareRequest).toHaveBeenCalledWith(
     expect.objectContaining({
-      mode: 'normal',
+      mode: 'auto',
       personal_reference_file_ids: [],
       include_personal_references: true,
       include_session_attachments: true,
@@ -1713,7 +1720,7 @@ it('allows uploading PDF files and explains text extraction limits', async () =>
   );
 
   const dialog = await screen.findByRole('dialog', { name: '上传资料' });
-  expect(within(dialog).getByText('PDF 会按页面提取可复制文本，扫描件需要先转成可复制文本。')).toBeInTheDocument();
+  expect(within(dialog).getByRole('note')).toHaveTextContent('PDF 会按页面提取可复制文本，扫描件需要先转成可复制文本。');
   expect(within(dialog).queryByText(/暂不支持 PDF/)).not.toBeInTheDocument();
 });
 
@@ -1738,8 +1745,8 @@ it('accepts document and image files pasted directly into the chat input', async
   });
 
   const dialog = await screen.findByRole('dialog', { name: '上传资料' });
-  expect(within(dialog).getByText('文件：产品介绍.pptx')).toBeInTheDocument();
-  expect(within(dialog).getByText('已从剪贴板识别文件，确认后即可上传。')).toBeInTheDocument();
+  expect(within(dialog).getByRole('note')).toHaveTextContent('产品介绍.pptx');
+  expect(within(dialog).getByText('已从剪贴板识别 1 个文件，确认后可同时上传。')).toBeInTheDocument();
   expect(within(dialog).getByRole('radio', { name: '保存到我的资料' })).toBeChecked();
 });
 
@@ -2507,7 +2514,7 @@ it('opens a source preview focused on the cited chunk', async () => {
     chunkId: 'chunk-target',
     topK: '1',
   }));
-  expect(await screen.findByRole('region', { name: '来源预览' })).toBeInTheDocument();
+  expect(await screen.findByRole('dialog', { name: '来源预览' })).toBeInTheDocument();
   expect(screen.getByText('第 6 页')).toBeInTheDocument();
   expect(screen.getByText('验收交付物包括测试报告、部署记录和培训签到表。')).toBeInTheDocument();
   expect(screen.queryByText('未识别章节')).not.toBeInTheDocument();
