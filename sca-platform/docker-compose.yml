@@ -4,7 +4,7 @@ x-build-args-python-slim: &build_args_python_slim
   DEBIAN_SECURITY_MIRROR: ${DEBIAN_SECURITY_MIRROR:-http://mirrors.aliyun.com/debian-security}
 
 x-sca-environment: &sca-environment
-  APP_VERSION: ${SCA_APP_VERSION:-2.0.0}
+  APP_VERSION: ${SCA_APP_VERSION:-2.0.1}
   DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-sca_user}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}@sca-postgres:5432/${POSTGRES_DB:-juxin_sca}
   DEPENDENCY_TRACK_URL: ${SCA_DEPENDENCY_TRACK_URL:-${DEPENDENCY_TRACK_URL:-http://dependency-track-apiserver:8080}}
   DEPENDENCY_TRACK_API_KEY: ${SCA_DEPENDENCY_TRACK_API_KEY:-${DEPENDENCY_TRACK_API_KEY:-}}
