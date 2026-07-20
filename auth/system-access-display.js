@@ -8,7 +8,7 @@ const SYSTEM_DISPLAY_OPTIONS = Object.freeze([
   { key: 'tender', label: '标书协同制作系统', shortLabel: '标书协同制作系统' },
   { key: 'train-exam', label: '培训考试系统', shortLabel: '培训考试系统' },
   { key: 'prompt-center', label: '提示词管理中心', shortLabel: '提示词中心' },
-  { key: 'sca', label: '软件成分分析平台', shortLabel: 'SCA平台' },
+  { key: 'sca', label: '九章软件开源组件分析系统', shortLabel: '九章 SCA' },
   { key: 'big-screen', label: '统一大屏展示中心', shortLabel: '大屏中心' },
   { key: 'ai-assistant', label: '聚信 AI 助手', shortLabel: 'AI 助手' },
   { key: 'admin-center', label: '管理中心', shortLabel: '管理中心' },

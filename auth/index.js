@@ -104,6 +104,8 @@ const { version: AUTH_PACKAGE_VERSION } = require('./package.json');
 
 const app = express();
 const PORT = process.env.PORT || 5180;
+const SCA_SYSTEM_DISPLAY_NAME = '九章软件开源组件分析系统';
+const SCA_SYSTEM_DISPLAY_VERSION = 'V2.0';
 const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret-change-me';
 const AUTH_COOKIE_NAME = String(process.env.AUTH_COOKIE_NAME || 'juxin_auth_token').trim() || 'juxin_auth_token';
 const AUTH_COOKIE_SECURE = process.env.AUTH_COOKIE_SECURE === 'true';
@@ -1298,16 +1300,16 @@ const authorizePromptCenter = (user, action) => {
 
 const authorizeSca = (user, action) => {
   if (!user) return deny('未登录');
-  if (!canAccessSystem(user, 'sca')) return deny('无权限访问软件成分分析平台');
+  if (!canAccessSystem(user, 'sca')) return deny(`无权限访问${SCA_SYSTEM_DISPLAY_NAME}`);
   const role = String(user.role || '').toLowerCase();
   if (action === 'app:enter' || action === 'sca:read') return allow();
   if (action === 'sca:write' || action === 'sca:project:manage') {
     if (role === 'admin' || role === 'editor' || role === 'sysadmin') return allow();
-    return deny('仅管理员、系统管理员或业务管理员可维护软件成分分析项目');
+    return deny(`仅管理员、系统管理员或业务管理员可维护${SCA_SYSTEM_DISPLAY_NAME}项目`);
   }
   if (action === 'sca:audit:read') {
     if (role === 'auditor' || role === 'admin') return allow();
-    return deny('仅管理员或审计管理员可查看软件成分分析审计信息');
+    return deny(`仅管理员或审计管理员可查看${SCA_SYSTEM_DISPLAY_NAME}审计信息`);
   }
   return deny('不支持的授权动作');
 };
@@ -1492,7 +1494,7 @@ app.get('/api/auth/apps', async (req, res) => {
   }
   if (appAccess.includes('sca')) {
     const scaAuth = await authorizeSca(user, 'app:enter');
-    apps.push({ key: 'sca', name: '软件成分分析平台', url: scaURL, allow: !!scaAuth.allow });
+    apps.push({ key: 'sca', name: SCA_SYSTEM_DISPLAY_NAME, url: scaURL, allow: !!scaAuth.allow });
   }
   if (appAccess.includes('big-screen')) {
     const bigScreenAuth = authorizeBigScreen(user, 'app:enter');
@@ -2094,7 +2096,7 @@ const renderAuditCenterSections = () => ({
 	                <option value="tender">标书协同制作系统</option>
 	                <option value="train-exam">培训考试系统</option>
 	                <option value="prompt-center">提示词管理中心</option>
-	                <option value="sca">软件成分分析平台</option>
+	                <option value="sca">九章软件开源组件分析系统</option>
 	              </select>
 	            </label>
 	            <label class="form-label">事件
@@ -4473,6 +4475,14 @@ registerDedicatedCenterPage(AUDIT_CENTER_KEY);
 
 const portalLogoutValues = new Set(['1', 'true', 'yes']);
 
+app.get('/sca-login', (req, res) => {
+  const params = new URLSearchParams({ system: 'sca' });
+  if (String(req.query?.mode || '').trim().toLowerCase() === 'switch') {
+    params.set('mode', 'switch');
+  }
+  res.redirect(`/portal?${params.toString()}`);
+});
+
 app.get('/portal', async (req, res) => {
   const isPortalLogoutRequest = portalLogoutValues.has(
     String(req.query?.logout || '').trim().toLowerCase()
@@ -4496,12 +4506,21 @@ app.get('/portal', async (req, res) => {
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
   const nonce = res.locals.cspNonce || '';
   const reminderUrl = process.env.APP_REMINDER_URL || 'http://localhost:18080';
+  const requestedSystem = String(req.query?.system || '').trim().toLowerCase();
+  const isScaPortal = requestedSystem === 'sca';
+  const portalTitle = isScaPortal
+    ? `${SCA_SYSTEM_DISPLAY_NAME} ${SCA_SYSTEM_DISPLAY_VERSION}`
+    : '聚信统一登录平台';
+  const portalHeading = isScaPortal ? SCA_SYSTEM_DISPLAY_NAME : '统一登录平台';
+  const portalHint = isScaPortal
+    ? `使用统一账号登录，登录后进入${SCA_SYSTEM_DISPLAY_NAME}。`
+    : '登录后进入系统（管理员可选择，系统/审计管理员自动进入后台）。';
   res.send(`<!doctype html>
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>聚信统一登录平台</title>
+  <title>${portalTitle}</title>
   <style>
     body{margin:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;background:linear-gradient(135deg,#f8fafc 0%,#e0ecff 60%,#ecfdf5 100%);color:#0f172a}
     .wrap{max-width:520px;margin:0 auto;padding:0 16px;min-height:100vh;display:flex;flex-direction:column;justify-content:center}
@@ -4571,10 +4590,10 @@ app.get('/portal', async (req, res) => {
   <div class="wrap">
     <div class="card" id="loginCard">
       <div class="title-row">
-        <h1 class="title"><span class="brand-red">聚信</span><span class="brand-blue">统一登录平台</span></h1>
-        <span class="version-badge">${DEDICATED_CENTER_VERSION}</span>
+        <h1 class="title"><span class="brand-red">${isScaPortal ? '九章' : '聚信'}</span><span class="brand-blue">${portalHeading.replace(isScaPortal ? '九章' : '', '')}</span></h1>
+        <span class="version-badge">${isScaPortal ? SCA_SYSTEM_DISPLAY_VERSION : DEDICATED_CENTER_VERSION}</span>
       </div>
-      <div class="muted">登录后进入系统（管理员可选择，系统/审计管理员自动进入后台）。</div>
+      <div class="muted">${portalHint}</div>
       <form id="loginForm">
         <label>账号<input id="username" placeholder="内置管理账号或手机号" /></label>
         <label>密码
