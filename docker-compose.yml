@@ -895,7 +895,7 @@ services:
     environment:
       APP_NAME: "九章软件开源组件分析系统"
       APP_ENV: dev
-      APP_VERSION: ${SCA_APP_VERSION:-2.0.1}
+      APP_VERSION: ${SCA_APP_VERSION:-2.0.0}
       DATABASE_URL: "postgresql+psycopg://sca_user:${SCA_POSTGRES_PASSWORD:-change_me_sca_postgres_password}@sca-postgres:5432/juxin_sca"
       REDIS_URL: "redis://sca-redis:6379/0"
       CELERY_BROKER_URL: "redis://sca-redis:6379/1"
@@ -962,7 +962,7 @@ services:
     environment:
       APP_NAME: "九章软件开源组件分析系统"
       APP_ENV: dev
-      APP_VERSION: ${SCA_APP_VERSION:-2.0.1}
+      APP_VERSION: ${SCA_APP_VERSION:-2.0.0}
       DATABASE_URL: "postgresql+psycopg://sca_user:${SCA_POSTGRES_PASSWORD:-change_me_sca_postgres_password}@sca-postgres:5432/juxin_sca"
       REDIS_URL: "redis://sca-redis:6379/0"
       CELERY_BROKER_URL: "redis://sca-redis:6379/1"
@@ -1023,7 +1023,7 @@ services:
     environment:
       APP_NAME: "九章软件开源组件分析系统"
       APP_ENV: dev
-      APP_VERSION: ${SCA_APP_VERSION:-2.0.1}
+      APP_VERSION: ${SCA_APP_VERSION:-2.0.0}
       DATABASE_URL: "postgresql+psycopg://sca_user:${SCA_POSTGRES_PASSWORD:-change_me_sca_postgres_password}@sca-postgres:5432/juxin_sca"
       REDIS_URL: "redis://sca-redis:6379/0"
       CELERY_BROKER_URL: "redis://sca-redis:6379/1"
@@ -1093,7 +1093,7 @@ services:
     environment:
       APP_NAME: "九章软件开源组件分析系统"
       APP_ENV: dev
-      APP_VERSION: ${SCA_APP_VERSION:-2.0.1}
+      APP_VERSION: ${SCA_APP_VERSION:-2.0.0}
       DATABASE_URL: "postgresql+psycopg://sca_user:${SCA_POSTGRES_PASSWORD:-change_me_sca_postgres_password}@sca-postgres:5432/juxin_sca"
       REDIS_URL: "redis://sca-redis:6379/0"
       CELERY_BROKER_URL: "redis://sca-redis:6379/1"
