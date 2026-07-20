@@ -2,15 +2,16 @@
 
 ## 背景
 
-当前仓库已经具备基于提交前缀的自动升版能力：
+当前仓库已经具备基于提交前缀的自动升版与推送能力：
 
 - `commit-msg` 负责校验提交前缀并规范提交标题
-- `post-commit` 负责读取刚提交的 message，自动计算版本升级级别
+- `post-commit` 负责读取刚提交的 message，自动计算版本升级级别并推送当前分支
 - 版本脚本会同步整仓版本号并通过 `git commit --amend --no-verify` 把版本文件并入当前提交
+- 当前分支已有 upstream 时执行普通推送；没有 upstream 时首次推送使用
+  `--set-upstream`。
+- `CODEX_VERSIONING_BYPASS` 会跳过内部 amend 触发的二次推送。
 
-现存缺口是：提交完成后不会自动推送到远端，仍需要手工执行 `git push`。
-
-## 目标
+## 目标（已实现）
 
 - 每次 `git commit` 后自动把当前分支推送到 `origin`
 - 如果当前分支尚未建立 upstream，首次推送自动使用 `--set-upstream`
@@ -44,7 +45,7 @@
 
 ## 采用方案
 
-采用方案 A。
+采用方案 A，当前实现已落地。
 
 实现方式：
 
@@ -53,7 +54,9 @@
 3. 若检测到 `CODEX_VERSIONING_BYPASS`，直接退出，避免内部 amend 的二次推送
 4. 文档补充“自动推送当前分支，旧版本分支保留”
 
-## 测试策略
+## 测试策略与当前状态
 
 - 单测：首次推送时自动设置 upstream
 - 集成测试：自动升版 amend 后，远端分支拿到带版本前缀的新提交
+- 当前 `npm run test:versioning`：56 个测试通过。
+- 本次整改未执行实际 commit/push；正式发布仍需发布负责人明确授权。

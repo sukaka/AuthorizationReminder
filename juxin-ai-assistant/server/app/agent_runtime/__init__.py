@@ -26,7 +26,14 @@ from .runtime_state_contract import phase_contract_status
 from .multi_agent import coordinate, is_complex_task
 from .run_quality import check_delivery_quality
 from .loop_kernel import LoopDecision, LoopKernel, LoopKernelInput
-from .deep_retrieve import deep_retrieve, classify_query, no_evidence_answer
+from .deep_retrieve import (
+    RetrievalGrade,
+    classify_query,
+    deep_retrieve,
+    grade_retrieved_snippets,
+    no_evidence_answer,
+    rewrite_retrieval_query,
+)
 
 __all__ = [
     "BaseTool",
@@ -64,5 +71,8 @@ __all__ = [
     "LoopKernelInput",
     "deep_retrieve",
     "classify_query",
+    "RetrievalGrade",
+    "grade_retrieved_snippets",
+    "rewrite_retrieval_query",
     "no_evidence_answer",
 ]

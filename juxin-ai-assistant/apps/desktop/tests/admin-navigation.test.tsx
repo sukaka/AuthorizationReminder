@@ -226,7 +226,7 @@ it('opens a role-scoped knowledge workspace for ordinary employees', async () =>
 
   expect(screen.getByRole('heading', { name: '我的资料' })).toBeInTheDocument();
   expect(screen.getAllByText('我的资料').length).toBeGreaterThan(0);
-  expect(screen.getByRole('tab', { name: '资料库' })).toHaveAttribute('aria-selected', 'true');
+  expect(screen.getByRole('tab', { name: '全部资料' })).toHaveAttribute('aria-selected', 'true');
   expect(screen.getByText('分类目录')).toBeInTheDocument();
   expect(screen.getByText('资料概览')).toBeInTheDocument();
   expect(screen.getAllByText('上传资料').length).toBeGreaterThan(0);
@@ -236,6 +236,7 @@ it('opens a role-scoped knowledge workspace for ordinary employees', async () =>
 
 it('searches accessible official knowledge from the knowledge page', async () => {
   const searchRequest = vi.fn();
+  const personalSearchRequest = vi.fn();
   const previewRequest = vi.fn();
   session('employee');
   server.use(
@@ -255,6 +256,10 @@ it('searches accessible official knowledge from the knowledge page', async () =>
           snippet: 'Web动态安全管理平台支持本地化部署，并可结合客户网络环境实施。',
         }],
       });
+    }),
+    http.post('/api/personal-reference/search', async ({ request }) => {
+      personalSearchRequest(await request.json());
+      return HttpResponse.json({ total: 0, notice: '个人资料中未找到匹配内容。', sources: [] });
     }),
     http.get('/api/knowledge/files/file-official-1/preview', ({ request }) => {
       const url = new URL(request.url);
@@ -290,8 +295,9 @@ it('searches accessible official knowledge from the knowledge page', async () =>
     top_k: 8,
     include_sources: true,
   }));
+  expect(personalSearchRequest).toHaveBeenCalledWith({ question: '部署方式', top_k: 8 });
   const results = await screen.findByRole('region', { name: '资料查找结果' });
-  expect(results).toHaveTextContent('正式资料');
+  expect(results).toHaveTextContent('公司共享');
   expect(results).toHaveTextContent('Web动态安全管理平台白皮书.txt');
   expect(results).toHaveTextContent('第 3 页');
   expect(results).toHaveTextContent('部署方式');
@@ -307,12 +313,17 @@ it('searches accessible official knowledge from the knowledge page', async () =>
   expect(await screen.findByRole('region', { name: '文档预览' })).toHaveTextContent('Web动态安全管理平台支持本地化部署。');
 });
 
-it('searches personal reference material separately from official knowledge', async () => {
+it('searches company and personal material together from my materials', async () => {
+  const officialSearchRequest = vi.fn();
   const personalSearchRequest = vi.fn();
   const previewRequest = vi.fn();
   session('employee');
   server.use(
     http.get('/api/knowledge/files', () => HttpResponse.json({ items: [], total: 0 })),
+    http.post('/api/knowledge/search', async ({ request }) => {
+      officialSearchRequest(await request.json());
+      return HttpResponse.json({ total: 0, sources: [] });
+    }),
     http.post('/api/personal-reference/search', async ({ request }) => {
       personalSearchRequest(await request.json());
       return HttpResponse.json({
@@ -356,21 +367,26 @@ it('searches personal reference material separately from official knowledge', as
   render(<App />);
 
   await userEvent.click(await findMainNavButton('我的资料'));
-  await userEvent.click(await screen.findByRole('radio', { name: '我的资料' }));
   await userEvent.type(screen.getByLabelText('关键词或问题'), '会议培训');
   await userEvent.click(screen.getByRole('button', { name: '查找资料' }));
 
+  await waitFor(() => expect(officialSearchRequest).toHaveBeenCalledWith({
+    question: '会议培训',
+    mode: 'knowledge',
+    top_k: 8,
+    include_sources: true,
+  }));
   await waitFor(() => expect(personalSearchRequest).toHaveBeenCalledWith({
     question: '会议培训',
     top_k: 8,
   }));
   const results = await screen.findByRole('region', { name: '资料查找结果' });
-  expect(results).toHaveTextContent('我的资料');
+  expect(results).toHaveTextContent('仅自己使用');
   expect(results).toHaveTextContent('我的会议记录.txt');
   expect(results).toHaveTextContent('会议安排');
   expect(results).toHaveTextContent('客户培训和验收材料确认');
   expect(results).not.toHaveTextContent('chunk-personal-secret');
-  expect(screen.getByText('该内容参考用户个人上传资料生成，仅供当前用户使用。')).toBeInTheDocument();
+  expect(screen.getByText('找到 1 条资料（公司共享 0 条，个人 1 条）。')).toBeInTheDocument();
 
   await userEvent.click(within(results).getByRole('button', { name: '打开来源 我的会议记录.txt' }));
 
@@ -436,7 +452,9 @@ it('lets ordinary employees upload personal reference files from the knowledge p
     await screen.findByLabelText('上传知识文件'),
     new File(['个人模板内容'], '个人模板.txt', { type: 'text/plain' }),
   );
-  await userEvent.click(screen.getByRole('radio', { name: '保存到我的资料' }));
+  expect(screen.getByText('仅自己使用')).toBeInTheDocument();
+  expect(screen.queryByRole('radio', { name: '公司共享' })).not.toBeInTheDocument();
+  expect(screen.queryByRole('radio', { name: '提交管理员审核' })).not.toBeInTheDocument();
   await userEvent.selectOptions(screen.getByLabelText('资料分类'), '个人素材');
   await userEvent.selectOptions(screen.getByLabelText('文档类型'), '其他');
   await userEvent.click(screen.getByRole('button', { name: '开始上传' }));
@@ -455,7 +473,7 @@ it('lets ordinary employees upload personal reference files from the knowledge p
     tags: '',
   }));
   const personalCard = await screen.findByRole('listitem', { name: /个人模板\.txt/ });
-  expect(personalCard).toHaveTextContent('我的资料');
+  expect(personalCard).toHaveTextContent('仅自己使用');
   expect(personalCard).toHaveTextContent('用户上传');
   expect(personalCard).not.toHaveTextContent('personal_reference');
   expect(await screen.findByText('已上传 1 个资料。')).toBeInTheDocument();
@@ -549,7 +567,7 @@ it('loads knowledge file metadata with lifecycle states for ordinary employees',
   expect(await screen.findByText('会议纪要模板.docx')).toBeInTheDocument();
   expect(listFiles).toHaveBeenCalledTimes(1);
   const fileCard = screen.getByRole('listitem', { name: /会议纪要模板\.docx/ });
-  expect(fileCard).toHaveTextContent('我的资料');
+  expect(fileCard).toHaveTextContent('仅自己使用');
   expect(fileCard).toHaveTextContent('用户上传');
   expect(fileCard).not.toHaveTextContent('personal_reference');
   expect(fileCard).not.toHaveTextContent('user_upload');
@@ -561,7 +579,7 @@ it('loads knowledge file metadata with lifecycle states for ordinary employees',
   expect(screen.queryByText('file-personal-1')).not.toBeInTheDocument();
 });
 
-it('lets administrators upload official knowledge files from the knowledge page', async () => {
+it('lets administrators upload company-shared files without choosing a knowledge base', async () => {
   const uploadRequest = vi.fn();
   const appendedFields = new Map<string, string>();
   const originalAppend = FormData.prototype.append;
@@ -645,9 +663,9 @@ it('lets administrators upload official knowledge files from the knowledge page'
     await screen.findByLabelText('上传知识文件'),
     new File(['正式产品白皮书'], '产品白皮书.txt', { type: 'text/plain' }),
   );
-  expect(screen.getByRole('radio', { name: '保存为正式资料' })).toBeInTheDocument();
-  expect(screen.queryByRole('radio', { name: '保存到我的资料' })).not.toBeInTheDocument();
-  await userEvent.selectOptions(screen.getByLabelText('所属资料库'), 'kb-company');
+  expect(screen.getByRole('radio', { name: '公司共享' })).toBeChecked();
+  expect(screen.getByRole('radio', { name: '仅自己使用' })).toBeInTheDocument();
+  expect(screen.queryByLabelText('所属资料库')).not.toBeInTheDocument();
   await userEvent.selectOptions(screen.getByLabelText('资料分类'), '产品资料');
   await userEvent.selectOptions(screen.getByLabelText('文档类型'), '产品白皮书');
     await userEvent.click(screen.getByRole('button', { name: '开始上传' }));
@@ -667,16 +685,106 @@ it('lets administrators upload official knowledge files from the knowledge page'
     tags: '',
   }));
   const uploadedCard = await screen.findByRole('listitem', { name: /产品白皮书\.txt/ });
-  expect(uploadedCard).toHaveTextContent('正式资料');
+  expect(uploadedCard).toHaveTextContent('公司共享');
   expect(uploadedCard).toHaveTextContent('管理员上传');
   expect(uploadedCard).not.toHaveTextContent('official_knowledge');
   expect(uploadedCard).toHaveTextContent('可查找');
-  expect(await screen.findByText('已上传 1 个正式资料。')).toBeInTheDocument();
+  expect(await screen.findByText('已上传 1 个公司共享资料。')).toBeInTheDocument();
   appendSpy.mockRestore();
 });
 
-it('lets administrators create a knowledge base before uploading official files', async () => {
+it('lets administrators keep an uploaded file private', async () => {
+  const uploadRequest = vi.fn();
+  const appendedFields = new Map<string, string>();
+  const originalAppend = FormData.prototype.append;
+  const appendSpy = vi.spyOn(FormData.prototype, 'append').mockImplementation(function append(
+    this: FormData,
+    name: string,
+    value: string | Blob,
+  ) {
+    if (typeof value === 'string') {
+      appendedFields.set(name, value);
+    } else if (value instanceof File) {
+      appendedFields.set('file_name', value.name);
+    }
+    return (originalAppend as (this: FormData, name: string, value: string | Blob) => void)
+      .call(this, name, value);
+  });
+  session('admin');
+  server.use(
+    http.get('/api/knowledge/files', () => HttpResponse.json({ items: [], total: 0 })),
+    http.get('/api/knowledge/bases', () => HttpResponse.json({
+      items: [{
+        base_id: 'kb-company',
+        name: '公司知识库',
+        description: '公司级正式资料',
+        scope: 'company',
+        owner_user_id: '',
+        department_id: '',
+        project_id: '',
+        created_by: 'u-admin',
+        created_at: '2026-06-28T09:00:00Z',
+        updated_at: '2026-06-28T09:00:00Z',
+      }],
+      total: 1,
+    })),
+    http.post('/api/knowledge/files/upload', () => {
+      uploadRequest();
+      return HttpResponse.json({
+        file_uuid: 'file-admin-private',
+        knowledge_base_id: '',
+        file_name: '管理员笔记.txt',
+        file_type: 'text/plain',
+        file_size: 12,
+        visibility: 'PRIVATE',
+        status: 'READY',
+        chunk_count: 1,
+        created_at: '2026-07-01T09:00:00Z',
+        source_type: 'user_upload',
+        usage_type: 'personal_reference',
+        review_status: 'draft',
+        rag_enabled: false,
+        reference_enabled: true,
+        rag_scope: 'personal',
+        permission_scope: 'private',
+        category: '个人素材',
+        document_type: '其他',
+        tags: [],
+        parse_status: 'parsed',
+        index_status: 'indexed',
+      }, { status: 201 });
+    }),
+  );
+  render(<App />);
+
+  await userEvent.click(await findMainNavButton('我的资料'));
+  await userEvent.click(screen.getByRole('tab', { name: '上传资料' }));
+  await userEvent.upload(
+    await screen.findByLabelText('上传知识文件'),
+    new File(['管理员个人笔记'], '管理员笔记.txt', { type: 'text/plain' }),
+  );
+  await userEvent.click(screen.getByRole('radio', { name: '仅自己使用' }));
+  await userEvent.click(screen.getByRole('button', { name: '开始上传' }));
+
+  expect(uploadRequest).toHaveBeenCalledTimes(1);
+  expect(Object.fromEntries(appendedFields)).toEqual(expect.objectContaining({
+    file_name: '管理员笔记.txt',
+    usage_type: 'personal_reference',
+    review_status: 'draft',
+    rag_enabled: 'false',
+    reference_enabled: 'true',
+    rag_scope: 'personal',
+    permission_scope: 'private',
+  }));
+  expect(appendedFields.has('knowledge_base_id')).toBe(false);
+  const uploadedCard = await screen.findByRole('listitem', { name: /管理员笔记\.txt/ });
+  expect(uploadedCard).toHaveTextContent('仅自己使用');
+  appendSpy.mockRestore();
+});
+
+it('automatically creates the company sharing area when the first shared file is uploaded', async () => {
   const createBaseRequest = vi.fn();
+  const uploadRequest = vi.fn();
   session('admin');
   server.use(
     http.get('/api/knowledge/files', () => HttpResponse.json({ items: [], total: 0 })),
@@ -696,30 +804,53 @@ it('lets administrators create a knowledge base before uploading official files'
         updated_at: '2026-07-01T09:00:00Z',
       }, { status: 201 });
     }),
+    http.post('/api/knowledge/files/upload', () => {
+      uploadRequest();
+      return HttpResponse.json({
+        file_uuid: 'file-first-shared',
+        knowledge_base_id: 'kb-new-company',
+        file_name: '公司制度.txt',
+        file_type: 'text/plain',
+        file_size: 12,
+        visibility: 'PUBLIC',
+        status: 'READY',
+        chunk_count: 1,
+        created_at: '2026-07-01T09:00:00Z',
+        source_type: 'admin_upload',
+        usage_type: 'official_knowledge',
+        review_status: 'official',
+        rag_enabled: true,
+        reference_enabled: true,
+        rag_scope: 'company',
+        permission_scope: 'company',
+        category: '公司制度',
+        document_type: '其他',
+        tags: [],
+        parse_status: 'parsed',
+        index_status: 'indexed',
+      }, { status: 201 });
+    }),
   );
   render(<App />);
 
   await userEvent.click(await findMainNavButton('我的资料'));
   await userEvent.click(screen.getByRole('tab', { name: '上传资料' }));
-  expect(await screen.findByText('暂无可选资料库，请先创建资料库。')).toBeInTheDocument();
-
-  await userEvent.click(screen.getByRole('button', { name: '新建资料库' }));
-  await userEvent.clear(screen.getByLabelText('资料库名称'));
-  await userEvent.type(screen.getByLabelText('资料库名称'), '公司默认资料库');
-  await userEvent.clear(screen.getByLabelText('资料库说明'));
-  await userEvent.type(screen.getByLabelText('资料库说明'), '公司正式资料');
-  await userEvent.click(screen.getByRole('button', { name: '创建资料库' }));
+  expect(screen.queryByText('暂无可选资料库，请先创建资料库。')).not.toBeInTheDocument();
+  await userEvent.upload(
+    await screen.findByLabelText('上传知识文件'),
+    new File(['公司制度内容'], '公司制度.txt', { type: 'text/plain' }),
+  );
+  await userEvent.click(screen.getByRole('button', { name: '开始上传' }));
 
   await waitFor(() => expect(createBaseRequest).toHaveBeenCalledWith({
-    name: '公司默认资料库',
-    description: '公司正式资料',
+    name: '公司共享资料',
+    description: '管理员上传的公司共享资料',
     scope: 'company',
     department_id: '',
     project_id: '',
   }));
-  expect(await screen.findByRole('option', { name: '公司默认资料库（公司）' })).toBeInTheDocument();
-  expect(screen.getByLabelText('所属资料库')).toHaveValue('kb-new-company');
-  expect(screen.getByText('已创建资料库：公司默认资料库')).toBeInTheDocument();
+  await waitFor(() => expect(uploadRequest).toHaveBeenCalledTimes(1));
+  expect(await screen.findByText('已上传 1 个公司共享资料。')).toBeInTheDocument();
 });
 
 it('explains when knowledge upload is rejected by the proxy body size limit', async () => {
@@ -958,7 +1089,7 @@ it('summarizes a visible knowledge file with source labels', async () => {
   const summary = await screen.findByRole('region', { name: '文档总结' });
   expect(summary).toHaveTextContent('会议核心结论：客户希望下周完成培训');
   expect(summary).toHaveTextContent('该内容参考用户个人上传资料生成，仅供当前用户使用。');
-  expect(summary).toHaveTextContent('我的资料');
+  expect(summary).toHaveTextContent('仅自己使用');
   expect(summary).toHaveTextContent('会议纪要模板.docx');
   expect(summary).toHaveTextContent('第 2 页');
   expect(summary).toHaveTextContent('会议结论');
@@ -1039,7 +1170,7 @@ it('generates editable content from a visible knowledge file with personal sourc
   const result = await screen.findByRole('region', { name: '文档生成结果' });
   expect(result).toHaveTextContent('根据会议纪要模板生成的工作草稿');
   expect(result).toHaveTextContent('该内容参考用户个人上传资料生成，仅供当前用户使用。');
-  expect(result).toHaveTextContent('我的资料');
+  expect(result).toHaveTextContent('仅自己使用');
   expect(result).toHaveTextContent('模板结构');
   expect(result).not.toHaveTextContent('chunk-generate-secret');
 });
@@ -1147,7 +1278,7 @@ it('asks a custom question about a visible knowledge file', async () => {
   });
   const result = await screen.findByRole('region', { name: '资料提问结果' });
   expect(result).toHaveTextContent('文档回答：验收材料需要包含会议结论');
-  expect(result).toHaveTextContent('我的资料');
+  expect(result).toHaveTextContent('仅自己使用');
   expect(result).toHaveTextContent('验收材料');
   expect(result).not.toHaveTextContent('chunk-ask-secret');
 
@@ -1191,8 +1322,7 @@ it('asks a custom question about a visible knowledge file', async () => {
   anchorClick.mockRestore();
 });
 
-it('submits a personal knowledge file for administrator review', async () => {
-  const submitReview = vi.fn();
+it('keeps employee personal files private without a review submission action', async () => {
   session('employee');
   server.use(
     http.get('/api/knowledge/files', () => HttpResponse.json({
@@ -1221,43 +1351,14 @@ it('submits a personal knowledge file for administrator review', async () => {
       }],
       total: 1,
     })),
-    http.post('/api/knowledge/files/file-personal-1/submit-review', async ({ request }) => {
-      submitReview(await request.json());
-      return HttpResponse.json({
-        file_uuid: 'file-personal-1',
-        knowledge_base_id: '',
-        file_name: '会议纪要模板.docx',
-        file_type: 'docx',
-        file_size: 4096,
-        visibility: 'private',
-        status: 'READY',
-        chunk_count: 3,
-        created_at: '2026-06-28T09:00:00Z',
-        source_type: 'user_upload',
-        usage_type: 'personal_reference',
-        review_status: 'pending',
-        rag_enabled: false,
-        reference_enabled: true,
-        rag_scope: 'personal',
-        permission_scope: 'private',
-        category: '会议纪要',
-        document_type: '个人模板',
-        tags: ['会议', '模板'],
-        parse_status: 'parsed',
-        index_status: 'indexed',
-      });
-    }),
   );
   render(<App />);
 
   await userEvent.click(await findMainNavButton('我的资料'));
   const fileCard = await screen.findByRole('listitem', { name: /会议纪要模板\.docx/ });
 
+  expect(fileCard).toHaveTextContent('仅自己使用');
   await userEvent.click(within(fileCard).getByRole('button', { name: '更多操作 会议纪要模板.docx' }));
-  await userEvent.click(within(fileCard).getByRole('menuitem', { name: '提交审核 会议纪要模板.docx' }));
-
-  expect(submitReview).toHaveBeenCalledWith({ comment: '用户从桌面端提交管理员审核' });
-  expect(fileCard).toHaveTextContent('待审核');
   expect(within(fileCard).queryByRole('menuitem', { name: '提交审核 会议纪要模板.docx' })).not.toBeInTheDocument();
 });
 
@@ -1648,7 +1749,7 @@ it('lets administrators edit official knowledge category and document type', asy
     external_download_allowed: false,
   });
   expect(fileCard).toHaveTextContent('WDSP 产品白皮书.pdf');
-  expect(fileCard).toHaveTextContent('安全运维 · 解决方案 · 正式资料');
+  expect(fileCard).toHaveTextContent('安全运维 · 解决方案 · 公司共享');
 });
 
 it('lets administrators archive files and manage the knowledge trash', async () => {
@@ -1971,7 +2072,7 @@ it('lets administrators approve and reject pending knowledge review files', asyn
     document_type: '产品白皮书',
     tags: [],
   });
-  expect(approveCard).toHaveTextContent('正式资料');
+  expect(approveCard).toHaveTextContent('公司共享');
   expect(approveCard).not.toHaveTextContent('official_knowledge');
   expect(approveCard).toHaveTextContent('可查找');
   expect(approveCard).toHaveTextContent('可查找');
@@ -1991,7 +2092,7 @@ it('opens the administrator knowledge workspace from the sidebar', async () => {
   await userEvent.click(await findMainNavButton('我的资料'));
 
   expect(screen.getByRole('heading', { name: '我的资料' })).toBeInTheDocument();
-  expect(screen.getByRole('tab', { name: '资料库' })).toBeInTheDocument();
+  expect(screen.getByRole('tab', { name: '全部资料' })).toBeInTheDocument();
   expect(screen.getByRole('tab', { name: '上传资料' })).toBeInTheDocument();
   expect(screen.getByRole('tab', { name: '字典管理' })).toBeInTheDocument();
   expect(screen.getByRole('tab', { name: '审核与回收站' })).toBeInTheDocument();
@@ -2115,7 +2216,7 @@ it('shows administrator knowledge areas as tabs', async () => {
   await userEvent.click(await findMainNavButton('我的资料'));
 
   const uploadTab = await screen.findByRole('tab', { name: '上传资料' });
-  expect(screen.getByRole('tab', { name: '资料库' })).toHaveAttribute('aria-selected', 'true');
+  expect(screen.getByRole('tab', { name: '全部资料' })).toHaveAttribute('aria-selected', 'true');
   expect(screen.getByRole('tab', { name: '审核与回收站' })).toBeInTheDocument();
 
   await userEvent.click(uploadTab);
@@ -2220,9 +2321,9 @@ it('warns and asks for confirmation before uploading a duplicate file name', asy
   );
 
   expect(screen.getByText('检测到同名资料：管理员手册.docx。上传前需要再次确认。')).toBeInTheDocument();
-  expect(screen.getByText('资料库已存在同名文件，上传时将再次确认')).toBeInTheDocument();
+  expect(screen.getByText('我的资料中已存在同名文件，上传时将再次确认')).toBeInTheDocument();
   await userEvent.click(screen.getByRole('button', { name: '开始上传' }));
-  expect(confirmSpy).toHaveBeenCalledWith(expect.stringContaining('资料库已存在以下同名文件'));
+  expect(confirmSpy).toHaveBeenCalledWith(expect.stringContaining('我的资料中已存在以下同名文件'));
   expect(screen.getByText('已取消上传，请修改文件名或移除同名文件后再试。')).toBeInTheDocument();
 });
 

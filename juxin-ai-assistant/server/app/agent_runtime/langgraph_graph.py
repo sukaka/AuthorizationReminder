@@ -132,10 +132,18 @@ def build_langgraph_contract_graph(
             return []
         return list(completed)
 
-    def _failure_update(state: LangGraphState, error: tuple[str, str]) -> dict[str, Any]:
+    def _failure_update(
+        state: LangGraphState,
+        error: tuple[str, str],
+        *,
+        completed_steps: list[str] | None = None,
+    ) -> dict[str, Any]:
+        failure_state = state
+        if completed_steps is not None:
+            failure_state = {**state, "completed_steps": completed_steps}
         return {
             "phase": "failed",
-            "completed_steps": _safe_completed_steps(state),
+            "completed_steps": _safe_completed_steps(failure_state),
             "error_code": error[0],
             "error_message_safe": error[1],
         }
@@ -192,7 +200,11 @@ def build_langgraph_contract_graph(
         merged = {**state, **normalized}
         error = state_validation_error(merged)
         if error:
-            return _failure_update(state, error)
+            return _failure_update(
+                state,
+                error,
+                completed_steps=normalized.get("completed_steps"),
+            )
         return normalized
 
     def _validate(state: LangGraphState) -> dict[str, Any]:

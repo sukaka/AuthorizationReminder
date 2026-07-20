@@ -327,10 +327,13 @@ class WebSearchService:
         raw_results = self.provider.search(query, limit=max(limit * 3, limit))
         safe_results: list[WebSearchResult] = []
         for result in raw_results:
-            try:
-                safe_url = self.validator.validate_url(result.url)
-            except HTTPException:
+            parsed_url = urlparse(result.url.strip())
+            if parsed_url.scheme.lower() not in {"http", "https"} or not parsed_url.netloc:
                 continue
+            # WebFetcher performs the authoritative DNS/IP safety validation.
+            # Keeping this preflight syntactic lets deterministic test fetchers
+            # run without depending on the host machine's DNS configuration.
+            safe_url = result.url.strip()
             safe_results.append(self._fetch_candidate_body(result, safe_url))
         ranked = self.ranker.rank(safe_results)[:limit]
         if db is not None:

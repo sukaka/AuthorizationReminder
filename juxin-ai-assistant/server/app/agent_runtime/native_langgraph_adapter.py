@@ -15,7 +15,9 @@ from typing import Any
 from ..agent_contracts import AgentRunStatus
 from ..models import AgentRun
 from .native_runtime import NativeRuntime
+from .outcome_evaluator import OutcomeEvaluator, SuccessContract
 from .protocol import RunRequest
+from .run_quality import check_delivery_quality
 
 
 @dataclass
@@ -56,9 +58,40 @@ class NativeLangGraphAdapter:
         if self.row.status == AgentRunStatus.SUCCEEDED.value:
             result = self._result()
             answer = result.get("answer")
-            if isinstance(answer, str) and answer.strip():
-                return {"phase": "verified", "result": result, "outcome": "success"}
-            return self._error("EMPTY_NATIVE_RESULT", "NativeRuntime 未生成可交付结果")
+            if not isinstance(answer, str) or not answer.strip():
+                return self._error("EMPTY_NATIVE_RESULT", "NativeRuntime 未生成可交付结果")
+
+            evidence_count = self._evidence_count(result)
+            if evidence_count is None:
+                return self._error("NATIVE_RESULT_INVALID_EVIDENCE_COUNT", "NativeRuntime 结果的证据数量无效")
+
+            # Re-run the deterministic delivery checks at the graph boundary.
+            # The adapter must not treat a succeeded row as proof that the
+            # payload is safe to deliver after a crash/replay or legacy write.
+            quality = check_delivery_quality(
+                answer=answer,
+                snippets_used=evidence_count,
+                require_citations=evidence_count > 0,
+            )
+            refused = "未找到明确依据" in answer or "无依据拒答" in answer
+            outcome = OutcomeEvaluator().evaluate(
+                SuccessContract(min_answer_chars=8, require_evidence=not refused),
+                output={"answer": answer},
+                evidence_count=evidence_count,
+                effects=("read",),
+            )
+            issues = [*quality.issues, *outcome.issue_codes]
+            if issues:
+                return {
+                    **self._error("NATIVE_RESULT_QUALITY_FAILED", "NativeRuntime 结果未通过最终交付校验"),
+                    "quality_issues": issues,
+                }
+            return {
+                "phase": "verified",
+                "result": result,
+                "outcome": "success",
+                "quality": {"passed": True, "evidence_count": evidence_count},
+            }
         return self._row_error()
 
     def finish(self, state: dict[str, Any]) -> dict[str, Any]:
@@ -81,6 +114,15 @@ class NativeLangGraphAdapter:
             "evidence_count": int(result.get("snippet_count") or 0),
             "effects": ["read"],
         }
+
+    @staticmethod
+    def _evidence_count(result: dict[str, Any]) -> int | None:
+        raw = result.get("snippet_count", 0)
+        try:
+            count = int(raw or 0)
+        except (TypeError, ValueError):
+            return None
+        return count if count >= 0 else None
 
     def _row_error(self) -> dict[str, Any]:
         return self._error(

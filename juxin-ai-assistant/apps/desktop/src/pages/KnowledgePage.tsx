@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 
-import { ApiError, type SessionPayload } from '../api/client';
+import { ApiError, isSafeSameOriginUrl, type SessionPayload } from '../api/client';
+import { isPlatformAdminRole } from '../auth/roles';
 import {
   archiveKnowledgeFile,
   askKnowledge,
@@ -34,7 +35,6 @@ import {
   searchKnowledge,
   searchPersonalReference,
   summarizeKnowledgeFile,
-  submitKnowledgeFileForReview,
   type KnowledgeFileActionPayload,
   type KnowledgeBasePayload,
   type KnowledgeCategoryPayload,
@@ -62,13 +62,8 @@ type KnowledgeDictionaryDrawerMode =
   | 'createDocumentType'
   | 'editDocumentType';
 type KnowledgeRiskFilter = 'all' | 'parseFailed' | 'notIndexed' | 'pendingReview' | 'ragDisabled';
-type KnowledgeSearchScope = 'official' | 'personal';
 type KnowledgeBaseScope = 'company' | 'department' | 'project';
-type KnowledgeUploadPurpose =
-  | 'session_attachment'
-  | 'personal_reference'
-  | 'submit_review'
-  | 'official_knowledge';
+type KnowledgeUploadPurpose = 'personal_reference' | 'official_knowledge';
 type KnowledgeReviewApprovalDraft = {
   fileUuid: string;
   fileName: string;
@@ -88,12 +83,6 @@ const supportedKnowledgeAccept = '.pdf,.txt,.md,.docx,.xlsx,.pptx,.png,.jpg,.jpe
 const unsupportedKnowledgeTypeMessage = '当前版本暂不支持该文件类型，请上传 pdf、docx、xlsx、pptx、txt、md、png、jpg、jpeg 或 webp 文件。';
 const pdfUploadHint = 'PDF 会按页面提取可复制文本，扫描件需要先转成可复制文本。';
 const previewPageSize = 20;
-
-function canSubmitKnowledgeFileForReview(file: KnowledgeFilePayload, isAdmin: boolean): boolean {
-  return !isAdmin
-    && file.usage_type === 'personal_reference'
-    && !['pending', 'approved', 'official'].includes(file.review_status || 'draft');
-}
 
 function canManageKnowledgeFileRag(file: KnowledgeFilePayload, isAdmin: boolean): boolean {
   return isAdmin && file.usage_type === 'official_knowledge';
@@ -120,9 +109,9 @@ function canRenameKnowledgeFile(file: KnowledgeFilePayload, isAdmin: boolean): b
 }
 
 function sourceKindLabel(sourceKind: string): string {
-  if (sourceKind === 'official_knowledge') return '来源：正式资料';
+  if (sourceKind === 'official_knowledge') return '来源：公司共享';
   if (sourceKind === 'session_attachment') return '参考资料：当前附件';
-  if (sourceKind === 'personal_reference') return '参考资料：我的资料';
+  if (sourceKind === 'personal_reference') return '参考资料：仅自己使用';
   return sourceKind || '未知来源';
 }
 
@@ -185,9 +174,9 @@ function knowledgeFileMatchesRiskFilter(file: KnowledgeFilePayload, filter: Know
 }
 
 function fileUsageLabel(file: KnowledgeFilePayload): string {
-  if (file.usage_type === 'official_knowledge') return '正式资料';
+  if (file.usage_type === 'official_knowledge') return '公司共享';
   if (file.usage_type === 'session_attachment') return '当前附件';
-  return '我的资料';
+  return '仅自己使用';
 }
 
 function fileExtension(fileName: string): string {
@@ -341,7 +330,7 @@ function categorySelectionNames(selectedCategoryName: string, categories: Knowle
 
 export function KnowledgePage({ session }: KnowledgePageProps) {
   const role = session.user.role.trim().toLowerCase();
-  const isAdmin = role === 'admin';
+  const isAdmin = isPlatformAdminRole(role);
   const [files, setFiles] = useState<KnowledgeFilePayload[]>([]);
   const [loading, setLoading] = useState(true);
   const [notice, setNotice] = useState('');
@@ -369,7 +358,6 @@ export function KnowledgePage({ session }: KnowledgePageProps) {
   const [pendingUploadFiles, setPendingUploadFiles] = useState<File[]>([]);
   const [uploadingFiles, setUploadingFiles] = useState(false);
   const [knowledgeBases, setKnowledgeBases] = useState<KnowledgeBasePayload[]>([]);
-  const [knowledgeBaseNotice, setKnowledgeBaseNotice] = useState('');
   const [uploadPurpose, setUploadPurpose] = useState<KnowledgeUploadPurpose>(
     isAdmin ? 'official_knowledge' : 'personal_reference',
   );
@@ -401,15 +389,8 @@ export function KnowledgePage({ session }: KnowledgePageProps) {
     sortOrder: number;
     status: 'ACTIVE' | 'DISABLED';
   } | null>(null);
-  const [uploadKnowledgeBaseId, setUploadKnowledgeBaseId] = useState('');
-  const [isCreatingKnowledgeBase, setIsCreatingKnowledgeBase] = useState(false);
-  const [knowledgeBaseCreating, setKnowledgeBaseCreating] = useState(false);
-  const [newKnowledgeBaseName, setNewKnowledgeBaseName] = useState('公司默认资料库');
-  const [newKnowledgeBaseDescription, setNewKnowledgeBaseDescription] = useState('');
-  const [newKnowledgeBaseScope, setNewKnowledgeBaseScope] = useState<KnowledgeBaseScope>('company');
   const [uploadStatus, setUploadStatus] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
-  const [searchScope, setSearchScope] = useState<KnowledgeSearchScope>('official');
   const [searching, setSearching] = useState(false);
   const [searchNotice, setSearchNotice] = useState('');
   const [searchResults, setSearchResults] = useState<KnowledgeFileSourcePayload[]>([]);
@@ -611,34 +592,21 @@ export function KnowledgePage({ session }: KnowledgePageProps) {
     setEditingDocumentType(null);
   };
 
-  const createBase = async () => {
-    const name = newKnowledgeBaseName.trim();
-    if (!name) {
-      setKnowledgeBaseNotice('请先填写资料库名称。');
-      return;
-    }
-    setKnowledgeBaseCreating(true);
-    setKnowledgeBaseNotice('正在创建资料库…');
-    try {
-      const created = await createKnowledgeBase({
-        name,
-        description: newKnowledgeBaseDescription.trim(),
-        scope: newKnowledgeBaseScope,
-        department_id: '',
-        project_id: '',
-      });
-      setKnowledgeBases((current) => [
-        created,
-        ...current.filter((base) => base.base_id !== created.base_id),
-      ]);
-      setUploadKnowledgeBaseId(created.base_id);
-      setKnowledgeBaseNotice(`已创建资料库：${created.name}`);
-      setIsCreatingKnowledgeBase(false);
-    } catch {
-      setKnowledgeBaseNotice('暂时无法创建资料库，请稍后重试。');
-    } finally {
-      setKnowledgeBaseCreating(false);
-    }
+  const ensureCompanyKnowledgeBase = async (): Promise<string> => {
+    const existing = knowledgeBases.find((base) => base.scope === 'company');
+    if (existing) return existing.base_id;
+    const created = await createKnowledgeBase({
+      name: '公司共享资料',
+      description: '管理员上传的公司共享资料',
+      scope: 'company',
+      department_id: '',
+      project_id: '',
+    });
+    setKnowledgeBases((current) => [
+      created,
+      ...current.filter((base) => base.base_id !== created.base_id),
+    ]);
+    return created.base_id;
   };
 
   useEffect(() => {
@@ -701,13 +669,10 @@ export function KnowledgePage({ session }: KnowledgePageProps) {
       .then((payload) => {
         if (!active) return;
         setKnowledgeBases(payload.items);
-        setKnowledgeBaseNotice(payload.items.length ? '' : '暂无可选资料库，请先创建资料库。');
-        setUploadKnowledgeBaseId((current) => current || payload.items[0]?.base_id || '');
       })
       .catch(() => {
         if (!active) return;
         setKnowledgeBases([]);
-        setKnowledgeBaseNotice('资料库列表暂时不可用，请稍后重试。');
       });
     return () => {
       active = false;
@@ -904,7 +869,12 @@ export function KnowledgePage({ session }: KnowledgePageProps) {
   };
 
   const downloadFile = (file: KnowledgeFilePayload) => {
-    window.open(knowledgeFileDownloadUrl(file.file_uuid), '_blank', 'noopener,noreferrer');
+    const downloadUrl = knowledgeFileDownloadUrl(file.file_uuid);
+    if (!isSafeSameOriginUrl(downloadUrl)) {
+      setActionNotice('下载链接不安全，已阻止本次下载。');
+      return;
+    }
+    window.open(downloadUrl, '_blank', 'noopener,noreferrer');
   };
 
   const deleteFile = async (file: KnowledgeFilePayload) => {
@@ -962,12 +932,8 @@ export function KnowledgePage({ session }: KnowledgePageProps) {
 
   const uploadFile = async () => {
     if (!pendingUploadFiles.length || uploadingFiles) return;
-    if (uploadPurpose === 'session_attachment') {
-      setUploadStatus('当前附件请在任务输入框上传。');
-      return;
-    }
     if (duplicateUploadFileNames.length && !window.confirm(
-      `资料库已存在以下同名文件：\n${duplicateUploadFileNames.map((name) => `• ${name}`).join('\n')}\n\n继续上传会保留两个版本，是否继续？`,
+      `我的资料中已存在以下同名文件：\n${duplicateUploadFileNames.map((name) => `• ${name}`).join('\n')}\n\n继续上传会保留两个版本，是否继续？`,
     )) {
       setUploadStatus('已取消上传，请修改文件名或移除同名文件后再试。');
       return;
@@ -976,14 +942,11 @@ export function KnowledgePage({ session }: KnowledgePageProps) {
     setUploadingFiles(true);
     try {
       const isOfficial = uploadPurpose === 'official_knowledge';
-      if (isOfficial && !uploadKnowledgeBaseId.trim()) {
-        setUploadStatus('请先选择所属资料库。');
-        return;
-      }
+      const knowledgeBaseId = isOfficial ? await ensureCompanyKnowledgeBase() : undefined;
       const options = {
-        knowledgeBaseId: isOfficial ? uploadKnowledgeBaseId.trim() : undefined,
+        knowledgeBaseId,
         usageType: isOfficial ? 'official_knowledge' as const : 'personal_reference' as const,
-        reviewStatus: isOfficial ? 'official' as const : uploadPurpose === 'submit_review' ? 'pending' as const : 'draft' as const,
+        reviewStatus: isOfficial ? 'official' as const : 'draft' as const,
         ragEnabled: isOfficial,
         referenceEnabled: true,
         ragScope: isOfficial ? 'company' as const : 'personal' as const,
@@ -1016,7 +979,7 @@ export function KnowledgePage({ session }: KnowledgePageProps) {
         setUploadStatus(`已上传 ${uploaded.length} 个，失败 ${failed.length} 个。${firstError}`);
       } else {
         setUploadStatus(isOfficial
-          ? `已上传 ${uploaded.length} 个正式资料。`
+          ? `已上传 ${uploaded.length} 个公司共享资料。`
           : `已上传 ${uploaded.length} 个资料。`);
       }
     } catch (error) {
@@ -1038,31 +1001,34 @@ export function KnowledgePage({ session }: KnowledgePageProps) {
     setPreview(null);
     setFileAction(null);
     try {
-      const payload = searchScope === 'official'
-        ? await searchKnowledge(question, {
+      const [companyResult, personalResult] = await Promise.allSettled([
+        searchKnowledge(question, {
           mode: 'knowledge',
           topK: 8,
           includeSources: true,
-        })
-        : await searchPersonalReference(question, { topK: 8 });
-      setSearchResults(payload.sources);
-      if (searchScope === 'official') {
-        setSearchNotice(payload.sources.length
-          ? `找到 ${payload.total} 条正式资料。`
-          : '正式资料中未找到匹配内容。');
-      } else {
-        const personalNotice = 'notice' in payload && typeof payload.notice === 'string'
-          ? payload.notice
-          : `找到 ${payload.total} 条我的资料。`;
-        setSearchNotice(payload.sources.length
-          ? personalNotice
-          : '我的资料中未找到匹配内容。');
+        }),
+        searchPersonalReference(question, { topK: 8 }),
+      ]);
+      if (companyResult.status === 'rejected' && personalResult.status === 'rejected') {
+        throw new Error('all knowledge searches failed');
       }
+      const companySources = companyResult.status === 'fulfilled' ? companyResult.value.sources : [];
+      const personalSources = personalResult.status === 'fulfilled' ? personalResult.value.sources : [];
+      const sources = companySources.concat(personalSources).sort((left, right) => (
+        Number(right.score || 0) - Number(left.score || 0)
+      ));
+      setSearchResults(sources);
+      const partialNotice = companyResult.status === 'rejected'
+        ? '公司共享资料暂时不可用。'
+        : personalResult.status === 'rejected'
+          ? '个人资料暂时不可用。'
+          : '';
+      setSearchNotice(sources.length
+        ? `找到 ${sources.length} 条资料（公司共享 ${companySources.length} 条，个人 ${personalSources.length} 条）。${partialNotice}`
+        : `未找到匹配内容。${partialNotice}`);
     } catch {
       setSearchResults([]);
-      setSearchNotice(searchScope === 'official'
-        ? '正式资料查找暂时不可用，请稍后重试。'
-        : '个人资料搜索暂时不可用，请稍后重试。');
+      setSearchNotice('资料查找暂时不可用，请稍后重试。');
     } finally {
       setSearching(false);
     }
@@ -1083,14 +1049,14 @@ export function KnowledgePage({ session }: KnowledgePageProps) {
         includeSources: true,
       });
       setFileAction({
-        fileName: '正式知识库',
+        fileName: '公司共享资料',
         question,
-        title: '正式资料回答',
+        title: '公司共享资料回答',
         payload,
       });
       setSearchNotice(payload.notice);
     } catch {
-      setSearchNotice('暂时无法根据正式资料回答，请稍后重试。');
+      setSearchNotice('暂时无法根据公司共享资料回答，请稍后重试。');
     }
   };
 
@@ -1111,28 +1077,12 @@ export function KnowledgePage({ session }: KnowledgePageProps) {
       setFileAction({
         fileName: source.file_name,
         question,
-        title: '我的资料生成草稿',
+        title: '个人资料生成草稿',
         payload,
       });
       setSearchNotice(payload.notice);
     } catch {
-      setSearchNotice('暂时无法根据我的资料生成，请稍后重试。');
-    }
-  };
-
-  const submitReview = async (file: KnowledgeFilePayload) => {
-    setActionNotice('');
-    try {
-      const updated = await submitKnowledgeFileForReview(
-        file.file_uuid,
-        '用户从桌面端提交管理员审核',
-      );
-      setFiles((current) => current.map((item) => (
-        item.file_uuid === file.file_uuid ? updated : item
-      )));
-      setActionNotice('已提交管理员审核。');
-    } catch {
-      setActionNotice('暂时无法提交审核，请稍后重试。');
+      setSearchNotice('暂时无法根据个人资料生成，请稍后重试。');
     }
   };
 
@@ -1265,7 +1215,7 @@ export function KnowledgePage({ session }: KnowledgePageProps) {
       item.file_uuid !== file.file_uuid
       && normalizedKnowledgeFileName(item.file_name) === normalizedKnowledgeFileName(nextName)
     ));
-    if (hasDuplicate && !window.confirm(`资料库已存在同名文件“${nextName}”，是否仍要使用这个名称？`)) return;
+    if (hasDuplicate && !window.confirm(`我的资料中已存在同名文件“${nextName}”，是否仍要使用这个名称？`)) return;
     setActionNotice('');
     try {
       const updated = await updateKnowledgeFileMetadata(file.file_uuid, { fileName: nextName });
@@ -1490,8 +1440,8 @@ export function KnowledgePage({ session }: KnowledgePageProps) {
           <h1 id="knowledge-heading">我的资料</h1>
           <p>
             {isAdmin
-              ? '统一管理正式资料、员工提交资料和分类目录，让资料可查、可用、可维护。'
-              : '管理你的参考资料，上传后可用于写材料、查资料和生成工作成果。'}
+              ? '公司共享资料和你自己的资料都在这里，权限会自动区分。'
+              : '管理仅供你本人使用的资料，上传后可用于写材料、查资料和生成工作成果。'}
           </p>
         </div>
         <button
@@ -1510,7 +1460,7 @@ export function KnowledgePage({ session }: KnowledgePageProps) {
           role="tab"
           type="button"
         >
-          资料库
+          全部资料
         </button>
         <button
           aria-selected={activeKnowledgeTab === 'upload'}
@@ -1997,41 +1947,10 @@ export function KnowledgePage({ session }: KnowledgePageProps) {
           <div>
             <span className="eyebrow">资料查找</span>
             <h2 id="knowledge-search-heading" tabIndex={-1}>查找资料内容</h2>
-            <p>在正式资料或我的资料里查找相关内容，找到后可直接预览来源段落。</p>
+            <p>一次查找公司共享资料和你自己的资料，找到后可直接预览来源段落。</p>
           </div>
         </div>
         <article className="history-card knowledge-search-form">
-          <fieldset className="knowledge-segmented-control">
-            <legend>查找范围</legend>
-            <label className={searchScope === 'official' ? 'is-selected' : ''}>
-              <input
-                aria-label="正式资料"
-                checked={searchScope === 'official'}
-                name="knowledge-search-scope"
-                onChange={() => {
-                  setSearchScope('official');
-                  setSearchResults([]);
-                  setSearchNotice('');
-                }}
-                type="radio"
-              />
-              正式资料
-            </label>
-            <label className={searchScope === 'personal' ? 'is-selected' : ''}>
-              <input
-                aria-label="我的资料"
-                checked={searchScope === 'personal'}
-                name="knowledge-search-scope"
-                onChange={() => {
-                  setSearchScope('personal');
-                  setSearchResults([]);
-                  setSearchNotice('');
-                }}
-                type="radio"
-              />
-              我的资料
-            </label>
-          </fieldset>
           <label className="knowledge-search-input">
             关键词或问题
             <input
@@ -2040,9 +1959,7 @@ export function KnowledgePage({ session }: KnowledgePageProps) {
               onKeyDown={(event) => {
                 if (event.key === 'Enter') void searchKnowledgeContent();
               }}
-              placeholder={searchScope === 'official'
-                ? '例如：部署方式、验收材料、应急响应流程'
-                : '例如：我的会议记录、客户培训、个人模板'}
+              placeholder="例如：部署方式、会议记录、客户培训或个人模板"
               value={searchQuery}
             />
           </label>
@@ -2059,14 +1976,14 @@ export function KnowledgePage({ session }: KnowledgePageProps) {
         </article>
         {searchResults.length ? (
           <section className="section-block knowledge-search-results" role="region" aria-label="资料查找结果">
-            {searchScope === 'official' ? (
+            {searchResults.some((source) => source.source_kind === 'official_knowledge') ? (
               <div className="history-actions">
                 <button
                   className="knowledge-button knowledge-button-primary"
                   onClick={() => void answerFromOfficialKnowledge()}
                   type="button"
                 >
-                  用正式资料回答
+                  用公司共享资料回答
                 </button>
               </div>
             ) : null}
@@ -2090,15 +2007,15 @@ export function KnowledgePage({ session }: KnowledgePageProps) {
                   </h3>
                   {sourceLocation(source) ? <p>{sourceLocation(source)}</p> : null}
                   {source.snippet ? <p>{source.snippet}</p> : null}
-                  {searchScope === 'personal' ? (
+                  {source.source_kind === 'personal_reference' ? (
                     <div className="history-actions">
                       <button
-                        aria-label={`用我的资料生成 ${source.file_name}`}
+                        aria-label={`用此个人资料生成 ${source.file_name}`}
                         className="knowledge-button knowledge-button-primary"
                         onClick={() => void generateFromPersonalReference(source)}
                         type="button"
                       >
-                        用我的资料生成
+                        用此个人资料生成
                       </button>
                     </div>
                   ) : null}
@@ -2117,8 +2034,8 @@ export function KnowledgePage({ session }: KnowledgePageProps) {
             <h2 id="knowledge-upload-heading" tabIndex={-1}>资料上传入口</h2>
             <p>
               {isAdmin
-                ? '管理员可上传正式资料，设置分类、类型和使用范围。'
-                : '你上传的资料默认只归你本人使用，需要共享时再提交管理员审核。'}
+                ? '选择公司共享或仅自己使用，系统会自动处理可见范围。'
+                : '你上传的资料仅供自己查看和使用。'}
             </p>
           </div>
         </div>
@@ -2151,7 +2068,7 @@ export function KnowledgePage({ session }: KnowledgePageProps) {
                     )) === index
                   ));
                 });
-                setUploadPurpose(isAdmin ? 'official_knowledge' : 'personal_reference');
+                if (!isAdmin) setUploadPurpose('personal_reference');
                 setUploadStatus(duplicateNames.length
                   ? `检测到同名资料：${Array.from(new Set(duplicateNames)).join('、')}。上传前需要再次确认。`
                   : '');
@@ -2163,81 +2080,6 @@ export function KnowledgePage({ session }: KnowledgePageProps) {
             <strong>{pendingUploadFiles.length ? `已选择 ${pendingUploadFiles.length} 个文件，可继续添加` : '点击选择一个或多个文件'}</strong>
             <span>{pendingUploadFiles.length ? '新选择的文件会继续加入上传列表' : '可一次选择多个资料，上传时最多并行处理 3 个'}</span>
           </label>
-          {isAdmin ? (
-            <div className="knowledge-base-manager">
-              <div className="knowledge-base-picker">
-                <label>
-                  所属资料库
-                  <select
-                    aria-label="所属资料库"
-                    onChange={(event) => setUploadKnowledgeBaseId(event.target.value)}
-                    value={uploadKnowledgeBaseId}
-                  >
-                    <option value="">请选择资料库</option>
-                    {knowledgeBases.map((base) => (
-                      <option key={base.base_id} value={base.base_id}>
-                        {base.name}{base.scope === 'company' ? '（公司）' : base.scope === 'department' ? '（部门）' : base.scope === 'project' ? '（项目）' : ''}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <button type="button" onClick={() => setIsCreatingKnowledgeBase((current) => !current)}>
-                  {isCreatingKnowledgeBase ? '收起新建' : '新建资料库'}
-                </button>
-              </div>
-              {isCreatingKnowledgeBase ? (
-                <div className="knowledge-base-create">
-                  <label>
-                    资料库名称
-                    <input
-                      aria-label="资料库名称"
-                      onChange={(event) => setNewKnowledgeBaseName(event.target.value)}
-                      placeholder="例如：公司默认资料库"
-                      value={newKnowledgeBaseName}
-                    />
-                  </label>
-                  <label>
-                    资料库说明
-                    <input
-                      aria-label="资料库说明"
-                      onChange={(event) => setNewKnowledgeBaseDescription(event.target.value)}
-                      placeholder="例如：公司正式资料来源"
-                      value={newKnowledgeBaseDescription}
-                    />
-                  </label>
-                  <label>
-                    资料库范围
-                    <select
-                      aria-label="资料库范围"
-                      onChange={(event) => setNewKnowledgeBaseScope(event.target.value as KnowledgeBaseScope)}
-                      value={newKnowledgeBaseScope}
-                    >
-                      <option value="company">公司资料库</option>
-                      <option value="department">部门资料库</option>
-                      <option value="project">项目资料库</option>
-                    </select>
-                  </label>
-                  <div className="history-actions">
-                    <button
-                      disabled={knowledgeBaseCreating}
-                      onClick={createBase}
-                      type="button"
-                    >
-                      {knowledgeBaseCreating ? '创建中…' : '创建资料库'}
-                    </button>
-                    <button
-                      disabled={knowledgeBaseCreating}
-                      onClick={() => setIsCreatingKnowledgeBase(false)}
-                      type="button"
-                    >
-                      取消
-                    </button>
-                  </div>
-                </div>
-              ) : null}
-              {knowledgeBaseNotice ? <p role="status">{knowledgeBaseNotice}</p> : null}
-            </div>
-          ) : null}
           {pendingUploadFiles.length ? (
             <div className="knowledge-upload-configuration">
               {pendingUploadFiles.map((file) => (
@@ -2245,7 +2087,7 @@ export function KnowledgePage({ session }: KnowledgePageProps) {
                   <span className="knowledge-upload-file-type">{fileExtension(file.name).toUpperCase() || '文件'}</span>
                   <div>
                     <strong>已选择：{file.name}</strong>
-                    <span role="note">{existingKnowledgeFileNames.has(normalizedKnowledgeFileName(file.name)) ? '资料库已存在同名文件，上传时将再次确认' : parseQualityHint(file)}</span>
+                    <span role="note">{existingKnowledgeFileNames.has(normalizedKnowledgeFileName(file.name)) ? '我的资料中已存在同名文件，上传时将再次确认' : parseQualityHint(file)}</span>
                   </div>
                   <button aria-label={`移除 ${file.name}`} disabled={uploadingFiles} onClick={() => setPendingUploadFiles((current) => current.filter((item) => item !== file))} type="button">移除</button>
                 </div>
@@ -2254,77 +2096,38 @@ export function KnowledgePage({ session }: KnowledgePageProps) {
                 <div className="knowledge-upload-step-index">2</div>
                 <div>
                   <strong>设置资料属性</strong>
-                  <span>资料库、分类和文档类型会直接影响后续检索与权限范围</span>
+                  <span>分类、文档类型和使用范围会直接影响后续查找和权限</span>
                 </div>
               </div>
               <fieldset className="knowledge-purpose-options">
-                <legend>上传用途</legend>
+                <legend>谁可以使用</legend>
                 {isAdmin ? (
                   <>
                     <label className="knowledge-purpose-option">
                       <input
-                        aria-label="保存为正式资料"
+                        aria-label="公司共享"
                         checked={uploadPurpose === 'official_knowledge'}
                         name="knowledge-upload-purpose"
                         onChange={() => setUploadPurpose('official_knowledge')}
                         type="radio"
                       />
-                      <span><strong>正式资料</strong><small>进入公司知识库，可用于正式问答和引用</small></span>
-                    </label>
-                    <label className="knowledge-purpose-option is-disabled">
-                      <input
-                        aria-label="保存为部门资料（预留）"
-                        checked={false}
-                        disabled
-                        name="knowledge-upload-purpose-disabled"
-                        type="radio"
-                      />
-                      <span><strong>部门资料</strong><small>即将支持按部门范围使用</small></span>
-                    </label>
-                    <label className="knowledge-purpose-option is-disabled">
-                      <input
-                        aria-label="保存为项目资料（预留）"
-                        checked={false}
-                        disabled
-                        name="knowledge-upload-purpose-disabled"
-                        type="radio"
-                      />
-                      <span><strong>项目资料</strong><small>即将支持按项目范围使用</small></span>
-                    </label>
-                  </>
-                ) : (
-                  <>
-                    <label className="knowledge-purpose-option">
-                      <input
-                        aria-label="仅用于当前任务"
-                        checked={uploadPurpose === 'session_attachment'}
-                        name="knowledge-upload-purpose"
-                        onChange={() => setUploadPurpose('session_attachment')}
-                        type="radio"
-                      />
-                      <span><strong>当前任务</strong><small>仅在本次任务中使用</small></span>
+                      <span><strong>公司共享</strong><small>公司员工都能查看，并可用于 AI 查找和回答</small></span>
                     </label>
                     <label className="knowledge-purpose-option">
                       <input
-                        aria-label="保存到我的资料"
+                        aria-label="仅自己使用"
                         checked={uploadPurpose === 'personal_reference'}
                         name="knowledge-upload-purpose"
                         onChange={() => setUploadPurpose('personal_reference')}
                         type="radio"
                       />
-                      <span><strong>我的资料</strong><small>保存为个人长期参考资料</small></span>
-                    </label>
-                    <label className="knowledge-purpose-option">
-                      <input
-                        aria-label="提交管理员审核"
-                        checked={uploadPurpose === 'submit_review'}
-                        name="knowledge-upload-purpose"
-                        onChange={() => setUploadPurpose('submit_review')}
-                        type="radio"
-                      />
-                      <span><strong>提交审核</strong><small>申请转为公司正式资料</small></span>
+                      <span><strong>仅自己使用</strong><small>只有你本人可以查看和用于 AI</small></span>
                     </label>
                   </>
+                ) : (
+                  <div className="knowledge-purpose-option" role="note">
+                    <span><strong>仅自己使用</strong><small>只有你本人可以查看和用于 AI</small></span>
+                  </div>
                 )}
               </fieldset>
               <div className="knowledge-upload-fields">
@@ -2597,7 +2400,6 @@ export function KnowledgePage({ session }: KnowledgePageProps) {
           <div className="history-list" role="list" aria-label="资料列表">
             {displayedFiles.map((file) => {
               const isTrashMode = listMode === 'trash';
-              const canSubmitReview = canSubmitKnowledgeFileForReview(file, isAdmin);
               const canManageRag = canManageKnowledgeFileRag(file, isAdmin);
               const canReparse = canReparseKnowledgeFile(file, isAdmin);
               const canArchive = canArchiveKnowledgeFile(file, isAdmin);
@@ -2858,20 +2660,6 @@ export function KnowledgePage({ session }: KnowledgePageProps) {
                                   type="button"
                                 >
                                   归档
-                                </button>
-                              ) : null}
-                              {canSubmitReview ? (
-                                <button
-                                  aria-label={`提交审核 ${file.file_name}`}
-                                  className="knowledge-menu-item"
-                                  onClick={() => {
-                                    closeFileMenu();
-                                    void submitReview(file);
-                                  }}
-                                  role="menuitem"
-                                  type="button"
-                                >
-                                  提交审核
                                 </button>
                               ) : null}
                               {canManageRag ? (
@@ -3189,7 +2977,7 @@ export function KnowledgePage({ session }: KnowledgePageProps) {
                 <span>每页 {preview.page_size || previewPageSize} 段</span>
               </div>
               <div className="knowledge-preview-body">
-                {preview.media_type?.startsWith('image/') && preview.asset_url ? (
+                {preview.media_type?.startsWith('image/') && preview.asset_url && isSafeSameOriginUrl(preview.asset_url) ? (
                   <figure className="knowledge-image-preview">
                     <img alt={preview.file_name} src={preview.asset_url} />
                     <figcaption>{preview.file_name}</figcaption>

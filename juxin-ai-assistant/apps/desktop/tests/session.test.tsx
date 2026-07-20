@@ -30,7 +30,6 @@ describe('apiFetch runtime token behavior', () => {
     const { apiFetch } = await import('../src/api/client');
 
     window.__TAURI_INTERNALS__ = { metadata: { currentWebview: { label: 'workspace' } } };
-    window.sessionStorage.setItem('juxin_ai_assistant_sso_token', 'desktop-token');
     const fetchMock = vi.spyOn(window, 'fetch').mockResolvedValue(new Response('{}'));
 
     await apiFetch('/api/ai/session');
@@ -48,7 +47,7 @@ describe('apiFetch runtime token behavior', () => {
     const { apiFetch } = await import('../src/api/client');
 
     window.__TAURI_INTERNALS__ = { metadata: { currentWebview: { label: 'workspace' } } };
-    window.sessionStorage.setItem('juxin_ai_assistant_sso_token', 'desktop-token');
+    window.history.replaceState({}, '', '/?sso_token=desktop-token');
     const fetchMock = vi.spyOn(window, 'fetch').mockResolvedValue(new Response('{}'));
 
     await apiFetch('/api/ai/session');
@@ -57,6 +56,22 @@ describe('apiFetch runtime token behavior', () => {
     const headers = new Headers(init?.headers);
     expect(headers.get('Authorization')).toBe('Bearer desktop-token');
     expect(init?.credentials).toBe('include');
+  });
+
+  it('does not read a bearer token from sessionStorage', async () => {
+    vi.doMock('../src/runtime/capabilities', () => ({
+      isDesktopRuntime: () => true,
+    }));
+    const { apiFetch } = await import('../src/api/client');
+
+    window.__TAURI_INTERNALS__ = { metadata: { currentWebview: { label: 'workspace' } } };
+    window.sessionStorage.setItem('juxin_ai_assistant_sso_token', 'stale-token');
+    const fetchMock = vi.spyOn(window, 'fetch').mockResolvedValue(new Response('{}'));
+
+    await apiFetch('/api/ai/session');
+
+    const [, init] = fetchMock.mock.calls[0];
+    expect(new Headers(init?.headers).get('Authorization')).toBeNull();
   });
 });
 

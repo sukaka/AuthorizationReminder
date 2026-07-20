@@ -52,14 +52,17 @@ import {
 } from '../api/agentLoop';
 import {
   ApiError,
+  cancelAgentRun,
   createLearningExperience,
   createLearningFailureCase,
   createLearningFeedback,
   createLearningMemory,
   createLearningTemplate,
+  isSafeSameOriginUrl,
   saveChatMessageWorkArtifact,
 } from '../api/client';
 import { TaskProgressTimeline } from '../components/TaskProgressTimeline';
+import { ChatRunContext } from '../components/ChatRunContext';
 import {
   SensitiveWarningDialog,
   type SensitiveFinding,
@@ -145,6 +148,7 @@ type GenerationStatus = 'idle' | 'running' | 'stopping';
 type ActiveGeneration = {
   abortController?: AbortController;
   localRequestId?: string;
+  runId?: string;
   sessionUuid: string;
   stopped: boolean;
 };
@@ -160,6 +164,12 @@ type MemorySuggestion = {
   content: string;
   priority: 'high' | 'medium' | 'low';
   tags: string[];
+};
+
+type RoutingNotice = {
+  mode: ChatMode;
+  confidence: number | null;
+  reason?: string;
 };
 
 const modeLabels: Record<ChatMode, string> = {
@@ -370,6 +380,10 @@ const formalDocumentPrompt = `你是聚信得仁内部文档助手。
 function normalizeMode(value: string): ChatMode {
   const normalized = value.toLowerCase();
   return normalized in modeLabels ? normalized as ChatMode : 'normal';
+}
+
+function normalizeModeSelection(value: string): ChatModeSelection {
+  return value.toLowerCase() === 'auto' ? 'auto' : normalizeMode(value);
 }
 
 function normalizeSessionStatus(value: string): 'active' | 'archived' | 'deleted' {
@@ -973,6 +987,8 @@ export function ChatPage({ onOpenTaskCenter, onOpenWorkArtifacts, initialProject
   const [profiles, setProfiles] = useState<ModelProfile[]>([]);
   const [modeSelection, setModeSelection] = useState<ChatModeSelection>('auto');
   const [routedMode, setRoutedMode] = useState<ChatMode>('normal');
+  const [manualModesOpen, setManualModesOpen] = useState(false);
+  const [routingNotice, setRoutingNotice] = useState<RoutingNotice | null>(null);
   const mode = modeSelection === 'auto' ? routedMode : modeSelection;
   const [question, setQuestion] = useState('');
   const [messages, setMessages] = useState<UiMessage[]>([]);
@@ -1015,6 +1031,8 @@ export function ChatPage({ onOpenTaskCenter, onOpenWorkArtifacts, initialProject
   const selectMode = (selection: ChatModeSelection) => {
     setModeSelection(selection);
     setRoutedMode(selection === 'auto' ? 'normal' : selection);
+    setManualModesOpen(false);
+    setRoutingNotice(null);
   };
   const messageListRef = useRef<HTMLDivElement | null>(null);
   const sourceHighlightRef = useRef<HTMLElement | null>(null);
@@ -1119,6 +1137,13 @@ export function ChatPage({ onOpenTaskCenter, onOpenWorkArtifacts, initialProject
         await cancelModelGeneration(activeGeneration.localRequestId);
       } catch {
         // 停止是用户主动操作，底层模型已结束时无需再打扰用户。
+      }
+    }
+    if (activeGeneration.runId) {
+      try {
+        await cancelAgentRun(activeGeneration.runId);
+      } catch {
+        // 统一 Run 可能已经进入终态，取消请求保持幂等容错。
       }
     }
   };
@@ -1298,18 +1323,22 @@ export function ChatPage({ onOpenTaskCenter, onOpenWorkArtifacts, initialProject
     activeGenerationKeyRef.current = sessionUuid;
     const activeGeneration = activeGenerationsRef.current.get(sessionUuid);
     setGenerationStatus(activeGeneration ? (activeGeneration.stopped ? 'stopping' : 'running') : 'idle');
+    setLastRunId('');
     setStatus('正在加载历史任务…');
     try {
       const detail = await getChatSession(sessionUuid, projectUuid);
       if (activeSessionUuidRef.current !== sessionUuid) return;
       setActiveSessionUuid(detail.session_uuid);
       setActiveSessionStatus(normalizeSessionStatus(detail.status));
-      selectMode(normalizeMode(detail.mode));
+      selectMode(normalizeModeSelection(detail.mode));
+      setManualModesOpen(false);
+      setRoutingNotice(null);
       setSourcePreview({ status: 'idle' });
       setWebCapture({ status: 'idle' });
       setEnabledReferenceFiles([]);
       setSelectedPersonalReferenceIds([]);
       setTaskProgress(detail.task_state?.task_state_id ? detail.task_state : null);
+      setLastRunId(detail.task_state?.run_id || '');
       shouldStickToBottomRef.current = true;
       setMessages(detail.messages.map((message) => ({
         id: message.message_uuid,
@@ -1606,6 +1635,7 @@ export function ChatPage({ onOpenTaskCenter, onOpenWorkArtifacts, initialProject
       setStatus('请先完成模型设置');
       return;
     }
+    if (modeSelection === 'auto') setRoutingNotice(null);
     shouldStickToBottomRef.current = true;
     setStatus(requestMode === 'knowledge' ? '检索中…' : '生成中…');
     setGenerationStatus('running');
@@ -1660,6 +1690,15 @@ export function ChatPage({ onOpenTaskCenter, onOpenWorkArtifacts, initialProject
       requestMode = normalizeMode(prepared.effective_mode || requestMode);
       if (modeSelection === 'auto') {
         setRoutedMode(requestMode);
+        if (prepared.effective_mode || prepared.routing_reason) {
+          setRoutingNotice({
+            mode: requestMode,
+            confidence: typeof prepared.routing_confidence === 'number'
+              ? prepared.routing_confidence
+              : null,
+            reason: prepared.routing_reason,
+          });
+        }
         if (requestIsVisible()) setStatus(`自动路由 · ${modeLabels[requestMode]}`);
       }
       completionToken = prepared.completion_token;
@@ -1688,6 +1727,7 @@ export function ChatPage({ onOpenTaskCenter, onOpenWorkArtifacts, initialProject
         setActiveSessionStatus('active');
       }
       if (prepared.run_id) {
+        generation.runId = prepared.run_id;
         setLastRunId(prepared.run_id);
       }
       if (prepared.completed) {
@@ -1706,7 +1746,10 @@ export function ChatPage({ onOpenTaskCenter, onOpenWorkArtifacts, initialProject
         return;
       }
       if (!shouldUseServerModel && !activeProfile) {
-        setStatus('请先完成模型设置');
+        updateRequestMessages((current) => current.filter(
+          (message) => message.id !== localUserMessageId,
+        ));
+        if (requestIsVisible()) setStatus('请先完成模型设置');
         return;
       }
       assistantId = prepared.assistant_message_uuid;
@@ -1909,20 +1952,22 @@ export function ChatPage({ onOpenTaskCenter, onOpenWorkArtifacts, initialProject
           payload?.detail?.code === 'SENSITIVE_CONFIRMATION_REQUIRED'
           && payload.detail.confirmation_digest
         ) {
-          setMessages((current) => current.filter(
-            (message) => message.id !== localUserMessageId,
-          ));
-          setQuestion(trimmed);
-          setSensitiveConfirmation({
-            question: trimmed,
-            digest: payload.detail.confirmation_digest,
-            findings: (payload.detail.findings || []).map((finding) => ({
-              ...finding,
-              field: '工作内容',
-            })),
-          });
-          setStatus('');
-          setTaskProgress(null);
+          if (requestIsVisible()) {
+            setMessages((current) => current.filter(
+              (message) => message.id !== localUserMessageId,
+            ));
+            setQuestion(trimmed);
+            setSensitiveConfirmation({
+              question: trimmed,
+              digest: payload.detail.confirmation_digest,
+              findings: (payload.detail.findings || []).map((finding) => ({
+                ...finding,
+                field: '工作内容',
+              })),
+            });
+            setStatus('');
+            setTaskProgress(null);
+          }
           return;
         }
       }
@@ -2280,6 +2325,7 @@ export function ChatPage({ onOpenTaskCenter, onOpenWorkArtifacts, initialProject
     setSessionListKind('active');
     setSelectedSessionIds([]);
     setMessages([]);
+    setLastRunId('');
     setQuestion('');
     setMemorySuggestion(null);
     setGenerationMetrics(null);
@@ -2289,6 +2335,7 @@ export function ChatPage({ onOpenTaskCenter, onOpenWorkArtifacts, initialProject
     setEnabledReferenceFiles([]);
     setSelectedPersonalReferenceIds([]);
     setTaskProgress(null);
+    selectMode('auto');
     setStatus('');
   };
 
@@ -2301,11 +2348,13 @@ export function ChatPage({ onOpenTaskCenter, onOpenWorkArtifacts, initialProject
     setSessionListKind('active');
     setSelectedSessionIds([]);
     setMessages([]);
+    setLastRunId('');
     setSourcePreview({ status: 'idle' });
     setWebCapture({ status: 'idle' });
     setPendingUploadFiles([]);
     setEnabledReferenceFiles([]);
     setTaskProgress(null);
+    selectMode('auto');
     setStatus('');
   };
 
@@ -2373,6 +2422,7 @@ export function ChatPage({ onOpenTaskCenter, onOpenWorkArtifacts, initialProject
         setActiveSessionUuid('');
         setActiveSessionStatus('');
         setMessages([]);
+        setLastRunId('');
         setEnabledReferenceFiles([]);
       }
       await refreshSessions('trash');
@@ -2619,10 +2669,24 @@ export function ChatPage({ onOpenTaskCenter, onOpenWorkArtifacts, initialProject
                   ) : null}
                 </select>
               </label>
-              <label className="chat-mode-select">
-                <span>助手模式</span>
+              <div className={`chat-assistant-control${modeSelection === 'auto' ? ' is-auto' : ''}`}>
+                <div className="chat-assistant-control-main">
+                  <strong title={routingNotice?.reason || undefined}>
+                    {modeSelection === 'auto' ? autoModeLabel : modeLabels[mode]}
+                  </strong>
+                </div>
+                <button
+                  aria-controls="chat-assistant-mode-menu"
+                  aria-expanded={manualModesOpen}
+                  className="chat-assistant-switch"
+                  onClick={() => setManualModesOpen((open) => !open)}
+                  type="button"
+                >
+                  {manualModesOpen ? '收起' : '切换助手'}
+                </button>
                 <select
                   aria-label="助手模式"
+                  className="chat-mode-native-select"
                   onChange={(event) => selectMode(event.target.value as ChatModeSelection)}
                   value={modeSelection}
                 >
@@ -2635,12 +2699,39 @@ export function ChatPage({ onOpenTaskCenter, onOpenWorkArtifacts, initialProject
                     ))}
                   </optgroup>
                 </select>
-                <small className="chat-mode-hint" role="status">
-                  {modeSelection === 'auto'
-                    ? `自动识别 · 当前${modeLabels[mode]}`
-                    : `已固定 · ${modeLabels[mode]}`}
-                </small>
-              </label>
+                {manualModesOpen ? (
+                  <div
+                    aria-label="手动指定助手"
+                    className="chat-assistant-menu"
+                    id="chat-assistant-mode-menu"
+                    role="menu"
+                  >
+                    <button
+                      aria-checked={modeSelection === 'auto'}
+                      className={modeSelection === 'auto' ? 'is-selected' : ''}
+                      onClick={() => selectMode('auto')}
+                      role="menuitemradio"
+                      type="button"
+                    >
+                      <span>{autoModeLabel}（推荐）</span>
+                      {modeSelection === 'auto' ? <span aria-hidden="true">✓</span> : null}
+                    </button>
+                    {(Object.keys(modeLabels) as ChatMode[]).map((item) => (
+                      <button
+                        aria-checked={modeSelection === item}
+                        className={modeSelection === item ? 'is-selected' : ''}
+                        key={item}
+                        onClick={() => selectMode(item)}
+                        role="menuitemradio"
+                        type="button"
+                      >
+                        <span>{modeLabels[item]}</span>
+                        {modeSelection === item ? <span aria-hidden="true">✓</span> : null}
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
               <label className="chat-mode-select">
                 <span>导出工作成果</span>
                 <select
@@ -2716,9 +2807,16 @@ export function ChatPage({ onOpenTaskCenter, onOpenWorkArtifacts, initialProject
                       '参考我的资料生成内容',
                       '导出 Word 文档',
                     ].map((prompt) => (
-                      <span key={prompt}>
+                      <button
+                        key={prompt}
+                        onClick={() => {
+                          setQuestion(prompt);
+                          requestAnimationFrame(() => document.getElementById('chat-composer-input')?.focus());
+                        }}
+                        type="button"
+                      >
                         {prompt}
-                      </span>
+                      </button>
                     ))}
                   </div>
                 </div>
@@ -2730,6 +2828,7 @@ export function ChatPage({ onOpenTaskCenter, onOpenWorkArtifacts, initialProject
                 const generatedFiles = message.role === 'assistant' && message.isComplete !== false
                   ? message.generatedFiles ?? []
                   : [];
+                const safeGeneratedFiles = generatedFiles.filter((file) => isSafeSameOriginUrl(file.download_url));
                 const citationReferences = citationFileReferences(messageCitations);
                 return (
                   <article className={`chat-message ${message.role}`} key={message.id}>
@@ -2743,10 +2842,18 @@ export function ChatPage({ onOpenTaskCenter, onOpenWorkArtifacts, initialProject
                           ? renderChatContent(message.content, citationReferences)
                           : <p>{message.content || '正在生成…'}</p>}
                       </div>
-                      {citationReferences.some((reference) => reference.citation.media_type?.startsWith('image/') && reference.citation.asset_url) ? (
+                      {citationReferences.some((reference) => (
+                        reference.citation.media_type?.startsWith('image/')
+                        && reference.citation.asset_url
+                        && isSafeSameOriginUrl(reference.citation.asset_url)
+                      )) ? (
                         <div className="chat-image-attachments" aria-label="回答图片">
                           {citationReferences
-                            .filter((reference) => reference.citation.media_type?.startsWith('image/') && reference.citation.asset_url)
+                            .filter((reference) => (
+                              reference.citation.media_type?.startsWith('image/')
+                              && reference.citation.asset_url
+                              && isSafeSameOriginUrl(reference.citation.asset_url)
+                            ))
                             .map((reference) => (
                               <a href={reference.citation.asset_url} key={reference.key} target="_blank" rel="noreferrer">
                                 <img alt={reference.label || '资料库图片'} src={reference.citation.asset_url} />
@@ -2756,11 +2863,17 @@ export function ChatPage({ onOpenTaskCenter, onOpenWorkArtifacts, initialProject
                         </div>
                       ) : null}
                       {message.content.startsWith('已找到文件') && citationReferences.some((reference) => (
-                        reference.citation.asset_url && !reference.citation.media_type?.startsWith('image/')
+                        reference.citation.asset_url
+                        && isSafeSameOriginUrl(reference.citation.asset_url)
+                        && !reference.citation.media_type?.startsWith('image/')
                       )) ? (
                         <div className="chat-file-deliveries" aria-label="可下载文件">
                           {citationReferences
-                            .filter((reference) => reference.citation.asset_url && !reference.citation.media_type?.startsWith('image/'))
+                            .filter((reference) => (
+                              reference.citation.asset_url
+                              && isSafeSameOriginUrl(reference.citation.asset_url)
+                              && !reference.citation.media_type?.startsWith('image/')
+                            ))
                             .map((reference) => (
                               <a download href={reference.citation.asset_url} key={reference.key}>
                                 <span className="chat-file-delivery-icon" aria-hidden="true">↓</span>
@@ -2772,9 +2885,9 @@ export function ChatPage({ onOpenTaskCenter, onOpenWorkArtifacts, initialProject
                             ))}
                         </div>
                       ) : null}
-                      {generatedFiles.length ? (
+                      {safeGeneratedFiles.length ? (
                         <div className="chat-file-deliveries" aria-label="已生成文件">
-                          {generatedFiles.map((file) => (
+                          {safeGeneratedFiles.map((file) => (
                             <a download href={file.download_url} key={file.artifact_id}>
                               <span className="chat-file-delivery-icon" aria-hidden="true">↓</span>
                               <span>
@@ -2991,6 +3104,20 @@ export function ChatPage({ onOpenTaskCenter, onOpenWorkArtifacts, initialProject
                 </article>
               ) : null}
             </div>
+
+            {(messages.length || taskProgress || generationStatus !== 'idle' || lastRunId) ? (
+              <ChatRunContext
+                messages={messages}
+                metrics={generationMetrics}
+                onOpenTaskCenter={onOpenTaskCenter}
+                onRetry={retryLatestTask}
+                onStop={generationActive ? () => void stopActiveGeneration() : undefined}
+                runId={lastRunId}
+                sessionUuid={activeSessionUuid}
+                status={generationStatus}
+                taskProgress={taskProgress}
+              />
+            ) : null}
 
             {sourcePreview.status !== 'idle' ? (
               <div

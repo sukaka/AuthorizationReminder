@@ -501,6 +501,8 @@ class ChatMessageOut(BaseModel):
 class ChatTaskStateOut(BaseModel):
     task_state_id: str = ""
     conversation_id: str = ""
+    # Unified Run linked to this chat task.  Optional for older persisted sessions.
+    run_id: str = ""
     stage: str = ""
     status: str = ""
     label: str = ""

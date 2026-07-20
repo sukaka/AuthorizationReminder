@@ -12,6 +12,7 @@ from .chat_service import complete_chat_message
 from .config import Settings
 from .crypto import ContentCipher, EncryptedPayload
 from .models import ChatMessage, ChatSession, LongTask
+from .model_endpoint_security import validate_user_model_endpoint
 from .schemas import ChatCompleteIn, LongTaskChatCreateIn, LongTaskOut
 from .server_model_client import ModelRequestConfig, ServerModelStreamEvent, stream_with_model_config
 from .user_model_profiles import decrypt_user_model_api_key, get_default_user_model_profile
@@ -322,8 +323,9 @@ class LongTaskExecutor:
             raise HTTPException(status_code=409, detail="SERVER_MODEL_NOT_CONFIGURED")
         profile = get_default_user_model_profile(self.db, row.owner_user_id)
         if profile is not None:
+            base_url = validate_user_model_endpoint(profile.base_url, self.settings)
             config = ModelRequestConfig(
-                base_url=profile.base_url,
+                base_url=base_url,
                 api_key=decrypt_user_model_api_key(self.cipher, profile),
                 model_id=profile.model_id,
                 display_name=profile.display_name,

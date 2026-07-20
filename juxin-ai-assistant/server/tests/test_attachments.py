@@ -318,6 +318,27 @@ def test_upload_docx_with_invalid_document_body_returns_clear_parse_error(
     assert "无法解析" in response.text
 
 
+def test_upload_docx_rejects_zip_bomb_before_document_parser(
+    generation_client,
+    seeded_task,
+):
+    # One highly-compressible entry exceeds the shared 32 MiB per-entry limit
+    # while remaining small enough to upload in this unit test.
+    bomb = _build_zip_bytes({"word/document.xml": b"x" * (32 * 1024 * 1024 + 1)})
+    response = _upload(
+        generation_client,
+        task_uuid=seeded_task.uuid,
+        file_name="zip-bomb.docx",
+        content=bomb,
+        content_type=(
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        ),
+    )
+
+    assert response.status_code == 422
+    assert "解压后的单个条目过大" in response.text
+
+
 @pytest.mark.parametrize(
     "content",
     [

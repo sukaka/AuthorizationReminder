@@ -16,7 +16,7 @@ python3 -m alembic heads
 DATABASE_URL="$DATABASE_URL" python3 -m alembic upgrade head
 ```
 
-`alembic heads` 必须只输出一个 revision；输出多个 head、无法解析迁移图或 `upgrade head` 失败时，均不得启动新版本服务，也不得通过指定任意一个 head 绕过门禁。当前工作树已知存在两个 head：`0045_agent_langgraph_checkpoints` 与 `0051_professional_delivery`；在共享数据库迁移历史确认、候选方案评审并获得明确授权前，保持 fail-closed，不执行正式迁移。
+`alembic heads` 必须只输出一个 revision；输出多个 head、无法解析迁移图或 `upgrade head` 失败时，均不得启动新版本服务，也不得通过指定任意一个 head 绕过门禁。历史上出现过的双 head 示例 `0045_agent_langgraph_checkpoints` 与 `0051_professional_delivery` 已完成收敛；当前工作树已验证为单一 head `0065_chat_generated_files`（共 66 个 revision）。目标 staging/生产数据库仍必须由数据库负责人提供 `alembic current/heads/history`、备份和回滚窗口证据，未完成前保持 fail-closed，不执行正式迁移。
 
 ## 1. 发布前一键检查
 

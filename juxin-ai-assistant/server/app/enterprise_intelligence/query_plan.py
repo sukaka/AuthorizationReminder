@@ -281,7 +281,12 @@ def _metric_row(metric_code: str, projects: list[Project], db: Session, cutoff: 
         }
     if metric_code == "overdue_task_rate":
         tasks = db.scalars(select(ProjectTask).where(ProjectTask.project_id.in_(project_ids))).all() if project_ids else []
-        due = [task for task in tasks if task.due_at and (task.due_at.replace(tzinfo=UTC) if task.due_at.tzinfo is None else task.due_at) <= cutoff]
+        # This is a current-state operational metric: a task that became due
+        # after a report period was selected is still overdue at execution
+        # time. Historical snapshots remain available through the snapshot
+        # service, which preserves its explicit cutoff semantics.
+        current_cutoff = max(cutoff, datetime.now(UTC))
+        due = [task for task in tasks if task.due_at and (task.due_at.replace(tzinfo=UTC) if task.due_at.tzinfo is None else task.due_at) <= current_cutoff]
         overdue = [task for task in due if task.status.lower() not in _COMPLETED_TASK_STATUSES]
         return {
             "metric_code": metric_code,

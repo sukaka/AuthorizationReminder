@@ -3,10 +3,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from hashlib import sha256
 
+from ..auth import is_platform_admin_role
 from ..schemas import SessionPayload
 
 
-_ADMIN_ROLES = frozenset({"admin", "superadmin", "sys_admin", "platform_admin"})
 _EXTERNAL_ROLES = frozenset(
     {"external", "external_customer", "customer", "visitor", "guest"}
 )
@@ -29,7 +29,7 @@ class EnterpriseAccessScope:
     @classmethod
     def from_session(cls, session: SessionPayload) -> "EnterpriseAccessScope":
         role = str(session.user.role or "").strip().lower() or "employee"
-        is_admin = role in _ADMIN_ROLES
+        is_admin = is_platform_admin_role(role)
         is_external = role in _EXTERNAL_ROLES
         capabilities = {"assistant:use"}
         if not is_external:

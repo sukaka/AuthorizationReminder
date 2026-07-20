@@ -19,6 +19,7 @@ from .crypto import ContentCipher, EncryptedPayload
 from .knowledge_vector_index import VectorSearchResult
 from .models import KnowledgeBase, KnowledgeChunk, KnowledgeFile
 from .product_aliases import expand_product_aliases
+from .retrieval_fusion import rank_scores, rrf_score
 
 if TYPE_CHECKING:
     from .knowledge_vector_index import QdrantKnowledgeIndex
@@ -379,8 +380,24 @@ class RerankService:
         vector_score: float,
         metadata_bonus: int,
         bm25_score: float = 0.0,
+        keyword_rank: int | None = None,
+        bm25_rank: int | None = None,
+        vector_rank: int | None = None,
     ) -> int:
         hybrid_bonus = 15 if vector_score > 0 and bm25_score > 0 else 0
+        fused_score = rrf_score((keyword_rank, bm25_rank, vector_rank))
+        if fused_score > 0:
+            # Keep RRF as the primary signal. Raw scores remain a bounded,
+            # deterministic tie-breaker for otherwise similar candidates.
+            tie_breaker = min(
+                999,
+                keyword_score
+                + int(vector_score * 10)
+                + int(bm25_score * 10)
+                + metadata_bonus
+                + hybrid_bonus,
+            )
+            return int(round(fused_score * 100_000)) + tie_breaker
         return (
             keyword_score * 10
             + int(vector_score * 100)
@@ -646,6 +663,9 @@ class HybridRetriever:
                 reverse=True,
             )[:candidate_limit]
         )
+        vector_ranks = rank_scores(vector_scores, limit=candidate_limit)
+        bm25_ranks = rank_scores(bm25_scores, limit=candidate_limit)
+        keyword_ranks = rank_scores(keyword_top, limit=candidate_limit)
 
         candidate_indices = set(vector_scores) | set(bm25_scores) | set(keyword_top)
         candidates: list[_HybridCandidate] = []
@@ -664,6 +684,9 @@ class HybridRetriever:
                 vector_score=vector_score,
                 bm25_score=bm25_score,
                 metadata_bonus=bonus,
+                keyword_rank=keyword_ranks.get(index),
+                bm25_rank=bm25_ranks.get(index),
+                vector_rank=vector_ranks.get(index),
             )
             candidates.append(
                 _HybridCandidate(

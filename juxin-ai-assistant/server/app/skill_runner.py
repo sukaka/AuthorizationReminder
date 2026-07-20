@@ -126,7 +126,7 @@ class SkillRunner:
             raise
 
     def _ensure_user_can_run(self, skill: SkillDefinition, session: SessionPayload) -> None:
-        if skill.status != "published" and session.user.role.strip().lower() != "admin":
+        if skill.status != "published" and not is_platform_admin_role(session.user.role):
             raise HTTPException(status_code=404, detail="SKILL_NOT_FOUND")
 
     def _validate_input(self, skill: SkillDefinition, user_input: dict[str, Any]) -> None:
@@ -161,7 +161,11 @@ class SkillRunner:
                 ToolContext(
                     user_id=str(session.user.id),
                     db=self.db,
-                    permissions={"ai_assistant:admin"} if session.user.role == "admin" else set(),
+                    permissions=(
+                        {"ai_assistant:admin"}
+                        if is_platform_admin_role(session.user.role)
+                        else set()
+                    ),
                     run_id=run_id,
                     mode="skill",
                 ),

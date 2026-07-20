@@ -10,6 +10,8 @@ from .connector_sdk import HttpConnector, InvokeRequest
 from .connector_sdk.vendors.adapters import ConnectorAgentAdapter
 from .connector_sdk.vendors.jimeng import JimengConnector
 from .connector_sdk.vendors.kimi import KimiConnector
+from .config import Settings, get_settings
+from .model_endpoint_security import validate_agent_http_endpoint
 
 
 @dataclass(frozen=True)
@@ -223,11 +225,20 @@ class AgentHub:
         capabilities: list[str] | None = None,
         auth_header: str = "",
         version: str = "0.1.0",
+        settings: Settings | None = None,
     ) -> AgentDescriptor:
         if not _AGENT_ID_RE.match(agent_id):
             raise ValueError("invalid_agent_id")
-        if not endpoint.startswith(("http://", "https://")):
-            raise ValueError("invalid_endpoint")
+        try:
+            endpoint = validate_agent_http_endpoint(
+                endpoint,
+                settings or get_settings(),
+            )
+        except Exception as exc:
+            # Keep the registry API independent of FastAPI while preserving
+            # the same fail-closed SSRF policy used by the HTTP route.
+            detail = getattr(exc, "detail", None) or str(exc)
+            raise ValueError(detail) from exc
         if agent_id.startswith("local."):
             raise ValueError("reserved_agent_id")
         desc = AgentDescriptor(

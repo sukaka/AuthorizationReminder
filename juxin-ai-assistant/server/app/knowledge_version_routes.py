@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 from .auth import get_session, require_action
 from .config import Settings, get_settings
 from .database import get_db
-from .knowledge_routes import _can_view_file, _is_admin
+from .knowledge_routes import _can_view_file, _is_admin, _require_admin_access
 from .knowledge_version_service import set_effective_version, version_timeline
 from .models import KnowledgeFile
 from .schemas import SessionPayload
@@ -32,7 +32,7 @@ async def _require_admin(
     session: SessionPayload,
     settings: Settings,
 ) -> None:
-    if session.user.role.strip().lower() != "admin":
+    if not _is_admin(session):
         raise HTTPException(status_code=403, detail="仅管理员可切换生效版本")
     await require_action("ai_assistant:admin", request, session, settings)
 
@@ -53,10 +53,19 @@ async def get_file_version_timeline(
             KnowledgeFile.hard_deleted_at.is_(None),
         )
     )
-    if file_record is None or not _can_view_file(
+    if file_record is None:
+        raise HTTPException(status_code=404, detail="文档不存在或无权访问")
+    admin_access_granted = False
+    if file_record.permission_scope.strip().lower() == "admin":
+        await _require_admin_access(request, session, settings)
+        admin_access_granted = True
+    if not _can_view_file(
         file_record,
         user_id=str(session.user.id),
         is_admin=_is_admin(session),
+        db=db,
+        session_payload=session,
+        admin_access_granted=admin_access_granted,
     ):
         raise HTTPException(status_code=404, detail="文档不存在或无权访问")
     data = version_timeline(db, file_uuid)

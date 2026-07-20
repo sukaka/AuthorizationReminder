@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from sqlalchemy.orm import Session
 
 from ..admin.route_common import write_request_audit
-from ..auth import get_session, require_action
+from ..auth import get_session, is_platform_admin_role, require_action
 from ..config import Settings, get_settings
 from ..crypto import ContentCipher
 from ..database import get_db
@@ -95,7 +95,7 @@ async def _require_admin(
     session_payload: SessionPayload,
     current_settings: Settings,
 ) -> None:
-    if session_payload.user.role.strip().casefold() != "admin":
+    if not is_platform_admin_role(session_payload.user.role):
         raise HTTPException(status_code=403, detail="仅管理员可管理专业目录")
     await require_action(
         "ai_assistant:admin",
@@ -213,7 +213,7 @@ async def get_professional_skill_version(
             db,
             skill_uuid=skill_uuid,
             version_uuid=version_uuid,
-            include_draft=session_payload.user.role.strip().casefold() == "admin",
+            include_draft=is_platform_admin_role(session_payload.user.role),
         )
         return {
             "request_id": _request_id(request),
@@ -427,7 +427,7 @@ async def get_professional_template_version(
             db,
             template_uuid=template_uuid,
             version_uuid=version_uuid,
-            include_draft=session_payload.user.role.strip().casefold() == "admin",
+            include_draft=is_platform_admin_role(session_payload.user.role),
         )
         return {
             "request_id": _request_id(request),

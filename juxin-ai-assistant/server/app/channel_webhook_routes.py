@@ -6,6 +6,7 @@ Supports encrypt decrypt, bot/message filtering, sync or async Run.
 from __future__ import annotations
 
 import hashlib
+import hmac
 import time
 from typing import Annotated, Any
 
@@ -17,6 +18,7 @@ from sqlalchemy.orm import Session
 from .channel_gateway import ChannelReply, get_channel_gateway
 from .channel_queue import channel_dispatcher
 from .channel_run_bridge import process_channel_message
+from .auth import get_session, require_action
 from .config import Settings, get_settings
 from .crypto import ContentCipher
 from .database import get_db
@@ -24,6 +26,7 @@ from .feature_flags import load_feature_flags
 from .external_question_events import record_external_question
 from .external_answer_safety import MAX_EXTERNAL_QUESTION_CHARS, prepare_external_answer
 from .feishu_crypto import decrypt_feishu_payload
+from .schemas import SessionPayload
 
 router = APIRouter(prefix="/api/ai/channels/webhooks", tags=["channel-webhooks"])
 
@@ -221,13 +224,24 @@ async def feishu_webhook(
     if not isinstance(payload, dict):
         raise HTTPException(status_code=400, detail="invalid_payload")
 
+    verify_token = settings.feishu_verification_token.strip()
+    if not verify_token and not settings.auth_dev_bypass:
+        raise HTTPException(status_code=503, detail="feishu_verification_not_configured")
+
     # Decrypt encrypted envelope when present
     encrypt_key = str(getattr(settings, "feishu_encrypt_key", "") or "")
     if payload.get("encrypt"):
         try:
             payload = decrypt_feishu_payload(encrypt_key, payload)
         except Exception as exc:
-            raise HTTPException(status_code=400, detail=f"decrypt_failed:{exc}") from exc
+            raise HTTPException(status_code=400, detail="decrypt_failed") from exc
+
+    header = payload.get("header") if isinstance(payload.get("header"), dict) else {}
+    token = str(payload.get("token") or header.get("token") or "")
+    if verify_token and (
+        not token or not hmac.compare_digest(token, verify_token)
+    ):
+        raise HTTPException(status_code=401, detail="invalid_token")
 
     # Feishu URL verification (plain or after decrypt)
     if payload.get("type") == "url_verification" or (
@@ -240,13 +254,6 @@ async def feishu_webhook(
             action="url_verification",
             challenge=challenge,
         )
-
-    verify_token = str(getattr(settings, "feishu_verification_token", "") or "")
-    if verify_token:
-        header = payload.get("header") if isinstance(payload.get("header"), dict) else {}
-        token = str(payload.get("token") or header.get("token") or "")
-        if token and token != verify_token:
-            raise HTTPException(status_code=401, detail="invalid_token")
 
     gw = get_channel_gateway()
     msg = gw.normalize("feishu", payload)
@@ -277,9 +284,13 @@ async def wecom_url_verify(
     msg_signature, timestamp, nonce, echostr = _wecom_query_sig(request)
     if not echostr:
         raise HTTPException(status_code=400, detail="missing_echostr")
-    token = str(getattr(settings, "wecom_token", "") or "")
-    encoding_key = str(getattr(settings, "wecom_encoding_aes_key", "") or "")
-    corp_id = str(getattr(settings, "wecom_corp_id", "") or "")
+    token = settings.wecom_token.strip()
+    encoding_key = settings.wecom_encoding_aes_key.strip()
+    corp_id = settings.wecom_corp_id.strip()
+    if not token and not settings.auth_dev_bypass:
+        raise HTTPException(status_code=503, detail="wecom_verification_not_configured")
+    if encoding_key and not token:
+        raise HTTPException(status_code=503, detail="wecom_verification_not_configured")
     # Encrypted mode: echostr is ciphertext
     if encoding_key and token:
         from .wecom_crypto import decrypt_wecom_message, verify_wecom_signature
@@ -304,13 +315,15 @@ async def wecom_url_verify(
 
             return PlainTextResponse(plain)
         except Exception as exc:
-            raise HTTPException(status_code=400, detail=f"decrypt_failed:{exc}") from exc
+            raise HTTPException(status_code=400, detail="decrypt_failed") from exc
     # Plain mode
     if token and msg_signature:
         items = sorted([token, timestamp, nonce, echostr])
         digest = hashlib.sha1("".join(items).encode("utf-8")).hexdigest()
-        if digest != msg_signature:
+        if not hmac.compare_digest(digest, msg_signature):
             raise HTTPException(status_code=401, detail="bad_signature")
+    elif token and not settings.auth_dev_bypass:
+        raise HTTPException(status_code=401, detail="missing_signature")
     from fastapi.responses import PlainTextResponse
 
     return PlainTextResponse(echostr)
@@ -339,9 +352,13 @@ async def wecom_webhook(
 
     content_type = (request.headers.get("content-type") or "").lower()
     raw_body = (await request.body()).decode("utf-8", errors="replace")
-    token = str(getattr(settings, "wecom_token", "") or "")
-    encoding_key = str(getattr(settings, "wecom_encoding_aes_key", "") or "")
-    corp_id = str(getattr(settings, "wecom_corp_id", "") or "")
+    token = settings.wecom_token.strip()
+    encoding_key = settings.wecom_encoding_aes_key.strip()
+    corp_id = settings.wecom_corp_id.strip()
+    if not token and not settings.auth_dev_bypass:
+        raise HTTPException(status_code=503, detail="wecom_verification_not_configured")
+    if encoding_key and not token:
+        raise HTTPException(status_code=503, detail="wecom_verification_not_configured")
 
     try:
         if encoding_key or "Encrypt" in raw_body or "encrypt" in raw_body:
@@ -381,7 +398,7 @@ async def wecom_webhook(
     except HTTPException:
         raise
     except Exception as exc:
-        raise HTTPException(status_code=400, detail=f"wecom_parse_failed:{exc}") from exc
+        raise HTTPException(status_code=400, detail="wecom_parse_failed") from exc
 
     gw = get_channel_gateway()
     msg = gw.normalize("wecom", payload)
@@ -438,9 +455,12 @@ async def wecom_kf_webhook(
 @router.post("/echo")
 async def channel_echo(
     body: dict[str, Any],
+    request: Request,
     settings: Annotated[Settings, Depends(get_settings)],
+    session_payload: Annotated[SessionPayload, Depends(get_session)],
 ) -> dict[str, Any]:
     """Dev helper: normalize + render without external network."""
+    await require_action("ai_assistant:admin", request, session_payload, settings)
     channel = str(body.get("channel") or "web")
     payload = body.get("payload") if isinstance(body.get("payload"), dict) else body
     gw = get_channel_gateway()
@@ -465,8 +485,11 @@ async def channel_echo(
 
 @router.get("/queue-status")
 async def queue_status(
+    request: Request,
     settings: Annotated[Settings, Depends(get_settings)],
+    session_payload: Annotated[SessionPayload, Depends(get_session)],
 ) -> dict[str, Any]:
+    await require_action("ai_assistant:admin", request, session_payload, settings)
     from .channel_job_worker import scheduler_status
 
     return {

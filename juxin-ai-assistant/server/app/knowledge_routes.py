@@ -10,7 +10,7 @@ from fastapi.responses import Response
 from sqlalchemy import func, or_, select, update
 from sqlalchemy.orm import Session
 
-from .auth import get_session, require_action
+from .auth import get_session, is_platform_admin_role, require_action
 from .config import Settings, get_settings
 from .crypto import ContentCipher, EncryptedPayload
 from .context.context_builder import ContextBuilder
@@ -37,6 +37,7 @@ from .models import (
     KnowledgeSearchLog,
     WebCapture,
 )
+from .project_workspace_models import Project, ProjectMember
 from .schemas import (
     KnowledgeBaseCreateIn,
     KnowledgeBaseListOut,
@@ -112,7 +113,17 @@ KNOWLEDGE_DOWNLOAD_MEDIA_TYPES = {
 
 
 def _is_admin(session_payload: SessionPayload) -> bool:
-    return session_payload.user.role.strip().lower() == "admin"
+    return is_platform_admin_role(session_payload.user.role)
+
+
+async def _require_admin_access(
+    request: Request,
+    session_payload: SessionPayload,
+    current_settings: Settings,
+) -> None:
+    if not _is_admin(session_payload):
+        raise HTTPException(status_code=403, detail="只有管理员可以访问该资料库管理功能")
+    await require_action("ai_assistant:admin", request, session_payload, current_settings)
 
 
 def _base_out(base: KnowledgeBase) -> KnowledgeBaseOut:
@@ -400,16 +411,95 @@ def _can_manage_base(base: KnowledgeBase, *, user_id: str, is_admin: bool) -> bo
     return is_admin or (base.scope == "personal" and base.owner_user_id == user_id)
 
 
-def _can_view_file(file_record: KnowledgeFile, *, user_id: str, is_admin: bool) -> bool:
-    return (
-        is_admin
-        or file_record.owner_user_id == user_id
-        or (
-            file_record.usage_type == "official_knowledge"
-            and file_record.review_status in {"approved", "official"}
-            and file_record.permission_scope in {"company", "department", "project", "admin"}
-        )
-    )
+_EXTERNAL_ROLES = frozenset({"external", "external_customer", "customer", "visitor", "guest"})
+
+
+def _can_view_file(
+    file_record: KnowledgeFile,
+    *,
+    user_id: str,
+    is_admin: bool,
+    db: Session | None = None,
+    session_payload: SessionPayload | None = None,
+    admin_access_granted: bool = False,
+) -> bool:
+    scope = file_record.permission_scope.strip().lower()
+    if scope == "admin":
+        return admin_access_granted
+    if file_record.owner_user_id == user_id:
+        return True
+    if (
+        file_record.usage_type != "official_knowledge"
+        or file_record.review_status not in {"approved", "official"}
+    ):
+        return False
+    if session_payload is None:
+        return False
+
+    if scope == "company":
+        return session_payload.user.role.strip().lower() not in _EXTERNAL_ROLES
+
+    if db is None:
+        return False
+    base = db.get(KnowledgeBase, file_record.knowledge_base_id) if file_record.knowledge_base_id else None
+    if base is None:
+        return False
+
+    if scope == "department":
+        department_id = str(base.department_id or "").strip()
+        allowed_departments = {
+            str(value).strip()
+            for value in [session_payload.scope.department, *session_payload.scope.managed_departments]
+            if str(value or "").strip()
+        }
+        return bool(department_id and department_id in allowed_departments)
+
+    if scope == "project":
+        project_key = str(base.project_id or "").strip()
+        if not project_key:
+            return False
+        project = db.scalar(select(Project).where(Project.uuid == project_key))
+        if project is None and project_key.isdigit():
+            project = db.get(Project, int(project_key))
+        if project is None or project.status != "active":
+            return False
+        if project.owner_user_id == user_id:
+            return True
+        return db.scalar(
+            select(ProjectMember.id).where(
+                ProjectMember.project_id == project.id,
+                ProjectMember.user_id == user_id,
+                ProjectMember.status == "active",
+            )
+        ) is not None
+
+    return False
+
+
+async def _require_file_view(
+    file_record: KnowledgeFile | None,
+    *,
+    request: Request,
+    session_payload: SessionPayload,
+    current_settings: Settings,
+    db: Session,
+) -> KnowledgeFile:
+    if file_record is None:
+        raise HTTPException(status_code=404, detail="知识文件不存在或无权访问")
+    admin_access_granted = False
+    if file_record.permission_scope.strip().lower() == "admin":
+        await _require_admin_access(request, session_payload, current_settings)
+        admin_access_granted = True
+    if not _can_view_file(
+        file_record,
+        user_id=str(session_payload.user.id),
+        is_admin=_is_admin(session_payload),
+        db=db,
+        session_payload=session_payload,
+        admin_access_granted=admin_access_granted,
+    ):
+        raise HTTPException(status_code=404, detail="知识文件不存在或无权访问")
+    return file_record
 
 
 def _can_manage_file(file_record: KnowledgeFile, *, user_id: str, is_admin: bool) -> bool:
@@ -751,7 +841,6 @@ async def ask_knowledge_file(
 ) -> KnowledgeAskOut:
     await _require_use(request, session_payload, current_settings)
     user_id = str(session_payload.user.id)
-    is_admin = _is_admin(session_payload)
     file_record = db.scalar(
         select(KnowledgeFile).where(
             KnowledgeFile.uuid == file_id,
@@ -760,8 +849,13 @@ async def ask_knowledge_file(
             KnowledgeFile.hard_deleted_at.is_(None),
         )
     )
-    if file_record is None or not _can_view_file(file_record, user_id=user_id, is_admin=is_admin):
-        raise HTTPException(status_code=404, detail="知识文件不存在或无权访问")
+    file_record = await _require_file_view(
+        file_record,
+        request=request,
+        session_payload=session_payload,
+        current_settings=current_settings,
+        db=db,
+    )
     question = body.question.strip()
     if not question:
         raise HTTPException(status_code=422, detail="question 不能为空")
@@ -807,7 +901,6 @@ async def summarize_knowledge_file(
 ) -> KnowledgeAskOut:
     await _require_use(request, session_payload, current_settings)
     user_id = str(session_payload.user.id)
-    is_admin = _is_admin(session_payload)
     file_record = db.scalar(
         select(KnowledgeFile).where(
             KnowledgeFile.uuid == file_id,
@@ -816,8 +909,13 @@ async def summarize_knowledge_file(
             KnowledgeFile.hard_deleted_at.is_(None),
         )
     )
-    if file_record is None or not _can_view_file(file_record, user_id=user_id, is_admin=is_admin):
-        raise HTTPException(status_code=404, detail="知识文件不存在或无权访问")
+    file_record = await _require_file_view(
+        file_record,
+        request=request,
+        session_payload=session_payload,
+        current_settings=current_settings,
+        db=db,
+    )
     question = body.question.strip() or "请总结这个文档，提炼核心内容、待办事项、风险提醒和下一步建议。"
     chunks = _chunks_for_file(
         db,
@@ -949,8 +1047,7 @@ async def create_knowledge_category(
     db: Annotated[Session, Depends(get_db)],
 ) -> KnowledgeCategoryOut:
     await _require_use(request, session_payload, current_settings)
-    if not _is_admin(session_payload):
-        raise HTTPException(status_code=403, detail="只有管理员可以管理资料分类")
+    await _require_admin_access(request, session_payload, current_settings)
     name = _normalize_category_name(body.name)
     if not name:
         raise HTTPException(status_code=422, detail="分类名称不能为空")
@@ -985,8 +1082,7 @@ async def update_knowledge_category(
     db: Annotated[Session, Depends(get_db)],
 ) -> KnowledgeCategoryOut:
     await _require_use(request, session_payload, current_settings)
-    if not _is_admin(session_payload):
-        raise HTTPException(status_code=403, detail="只有管理员可以管理资料分类")
+    await _require_admin_access(request, session_payload, current_settings)
     category = _category_by_uuid(db, category_id)
     if category is None:
         raise HTTPException(status_code=404, detail="资料分类不存在")
@@ -1037,8 +1133,7 @@ async def delete_knowledge_category(
     db: Annotated[Session, Depends(get_db)],
 ) -> Response:
     await _require_use(request, session_payload, current_settings)
-    if not _is_admin(session_payload):
-        raise HTTPException(status_code=403, detail="只有管理员可以管理资料分类")
+    await _require_admin_access(request, session_payload, current_settings)
     category = _category_by_uuid(db, category_id)
     if category is None:
         raise HTTPException(status_code=404, detail="资料分类不存在")
@@ -1104,8 +1199,7 @@ async def create_knowledge_document_type(
     db: Annotated[Session, Depends(get_db)],
 ) -> KnowledgeDocumentTypeOut:
     await _require_use(request, session_payload, current_settings)
-    if not _is_admin(session_payload):
-        raise HTTPException(status_code=403, detail="只有管理员可以管理文档类型")
+    await _require_admin_access(request, session_payload, current_settings)
     name = _normalize_document_type_name(body.name)
     if not name:
         raise HTTPException(status_code=422, detail="文档类型名称不能为空")
@@ -1133,8 +1227,7 @@ async def update_knowledge_document_type(
     db: Annotated[Session, Depends(get_db)],
 ) -> KnowledgeDocumentTypeOut:
     await _require_use(request, session_payload, current_settings)
-    if not _is_admin(session_payload):
-        raise HTTPException(status_code=403, detail="只有管理员可以管理文档类型")
+    await _require_admin_access(request, session_payload, current_settings)
     document_type = _document_type_by_uuid(db, document_type_id)
     if document_type is None:
         raise HTTPException(status_code=404, detail="文档类型不存在")
@@ -1172,8 +1265,7 @@ async def delete_knowledge_document_type(
     db: Annotated[Session, Depends(get_db)],
 ) -> Response:
     await _require_use(request, session_payload, current_settings)
-    if not _is_admin(session_payload):
-        raise HTTPException(status_code=403, detail="只有管理员可以管理文档类型")
+    await _require_admin_access(request, session_payload, current_settings)
     document_type = _document_type_by_uuid(db, document_type_id)
     if document_type is None:
         raise HTTPException(status_code=404, detail="文档类型不存在")
@@ -1199,8 +1291,7 @@ async def list_pending_reviews(
     db: Annotated[Session, Depends(get_db)],
 ) -> KnowledgeFileListOut:
     await _require_use(request, session_payload, current_settings)
-    if not _is_admin(session_payload):
-        raise HTTPException(status_code=403, detail="只有管理员可以查看待审核文档")
+    await _require_admin_access(request, session_payload, current_settings)
     rows = list(
         db.scalars(
             select(KnowledgeFile)
@@ -1225,8 +1316,7 @@ async def list_review_history(
     db: Annotated[Session, Depends(get_db)],
 ) -> KnowledgeReviewHistoryOut:
     await _require_use(request, session_payload, current_settings)
-    if not _is_admin(session_payload):
-        raise HTTPException(status_code=403, detail="只有管理员可以查看审核历史")
+    await _require_admin_access(request, session_payload, current_settings)
     rows = list(
         db.execute(
             select(KnowledgeReviewLog, KnowledgeFile)
@@ -1261,6 +1351,10 @@ async def list_knowledge_files(
     await _require_use(request, session_payload, current_settings)
     user_id = str(session_payload.user.id)
     is_admin = _is_admin(session_payload)
+    admin_access_granted = False
+    if is_admin:
+        await _require_admin_access(request, session_payload, current_settings)
+        admin_access_granted = True
     filters = [
         KnowledgeFile.status != "DELETED",
         KnowledgeFile.deleted_at.is_(None),
@@ -1284,7 +1378,18 @@ async def list_knowledge_files(
             .order_by(KnowledgeFile.updated_at.desc(), KnowledgeFile.id.desc())
         )
     )
-    items = [_file_out(db, row) for row in rows]
+    items = [
+        _file_out(db, row)
+        for row in rows
+        if _can_view_file(
+            row,
+            user_id=user_id,
+            is_admin=is_admin,
+            db=db,
+            session_payload=session_payload,
+            admin_access_granted=admin_access_granted,
+        )
+    ]
     return KnowledgeFileListOut(items=items, total=len(items))
 
 
@@ -1338,8 +1443,13 @@ async def preview_knowledge_file(
             KnowledgeFile.hard_deleted_at.is_(None),
         )
     )
-    if file_record is None or not _can_view_file(file_record, user_id=user_id, is_admin=is_admin):
-        raise HTTPException(status_code=404, detail="知识文件不存在或无权访问")
+    file_record = await _require_file_view(
+        file_record,
+        request=request,
+        session_payload=session_payload,
+        current_settings=current_settings,
+        db=db,
+    )
     chunk_filters = [
         KnowledgeChunk.file_id == file_record.id,
         KnowledgeChunk.status == "READY",
@@ -1406,8 +1516,13 @@ async def download_knowledge_file(
             KnowledgeFile.hard_deleted_at.is_(None),
         )
     )
-    if file_record is None or not _can_view_file(file_record, user_id=user_id, is_admin=is_admin):
-        raise HTTPException(status_code=404, detail="知识文件不存在或无权访问")
+    file_record = await _require_file_view(
+        file_record,
+        request=request,
+        session_payload=session_payload,
+        current_settings=current_settings,
+        db=db,
+    )
     stored_path = _stored_original_path(
         file_record,
         storage_root=current_settings.knowledge_storage_dir,
@@ -1444,8 +1559,13 @@ async def get_knowledge_file(
             KnowledgeFile.hard_deleted_at.is_(None),
         )
     )
-    if file_record is None or not _can_view_file(file_record, user_id=user_id, is_admin=is_admin):
-        raise HTTPException(status_code=404, detail="知识文件不存在或无权访问")
+    file_record = await _require_file_view(
+        file_record,
+        request=request,
+        session_payload=session_payload,
+        current_settings=current_settings,
+        db=db,
+    )
     return _file_out(db, file_record)
 
 
@@ -2105,8 +2225,7 @@ async def enable_file_rag(
     db: Annotated[Session, Depends(get_db)],
 ) -> KnowledgeFileOut:
     await _require_use(request, session_payload, current_settings)
-    if not _is_admin(session_payload):
-        raise HTTPException(status_code=403, detail="只有管理员可以启用正式 RAG")
+    await _require_admin_access(request, session_payload, current_settings)
     file_record = db.scalar(
         select(KnowledgeFile).where(
             KnowledgeFile.uuid == file_id,
@@ -2142,8 +2261,7 @@ async def disable_file_rag(
     db: Annotated[Session, Depends(get_db)],
 ) -> KnowledgeFileOut:
     await _require_use(request, session_payload, current_settings)
-    if not _is_admin(session_payload):
-        raise HTTPException(status_code=403, detail="只有管理员可以禁用正式 RAG")
+    await _require_admin_access(request, session_payload, current_settings)
     file_record = db.scalar(
         select(KnowledgeFile).where(
             KnowledgeFile.uuid == file_id,
@@ -2175,8 +2293,7 @@ async def approve_file_review(
     db: Annotated[Session, Depends(get_db)],
 ) -> KnowledgeFileOut:
     await _require_use(request, session_payload, current_settings)
-    if not _is_admin(session_payload):
-        raise HTTPException(status_code=403, detail="只有管理员可以审核知识文件")
+    await _require_admin_access(request, session_payload, current_settings)
     reviewer_id = str(session_payload.user.id)
     file_record = db.scalar(
         select(KnowledgeFile).where(
@@ -2269,8 +2386,7 @@ async def reject_file_review(
     db: Annotated[Session, Depends(get_db)],
 ) -> KnowledgeFileOut:
     await _require_use(request, session_payload, current_settings)
-    if not _is_admin(session_payload):
-        raise HTTPException(status_code=403, detail="只有管理员可以审核知识文件")
+    await _require_admin_access(request, session_payload, current_settings)
     reviewer_id = str(session_payload.user.id)
     file_record = db.scalar(
         select(KnowledgeFile).where(

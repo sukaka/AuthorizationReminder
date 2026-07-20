@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import case, select
 from sqlalchemy.orm import Session
 
-from .auth import get_session, require_action
+from .auth import get_session, is_platform_admin_role, require_action
 from .config import Settings, get_settings
 from .database import get_db
 from .models import (
@@ -60,7 +60,7 @@ async def _require_admin(
     session_payload: SessionPayload,
     current_settings: Settings,
 ) -> None:
-    if session_payload.user.role.strip().lower() != "admin":
+    if not is_platform_admin_role(session_payload.user.role):
         raise HTTPException(status_code=403, detail="仅管理员可审核公司模板")
     await require_action(
         "ai_assistant:admin",
@@ -189,7 +189,7 @@ def _memory_priority_order():
 
 
 def _is_admin(session_payload: SessionPayload) -> bool:
-    return session_payload.user.role.strip().lower() == "admin"
+    return is_platform_admin_role(session_payload.user.role)
 
 
 def _ensure_memory_can_be_saved(

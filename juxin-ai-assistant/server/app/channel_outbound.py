@@ -78,8 +78,12 @@ def _egress_gate_text(
             return False, text, payload
         send_text = decision.redacted_text if decision.redaction_applied else text
         return True, send_text, payload
-    except Exception as exc:
-        return True, text, {"egress_error": str(exc)[:200]}
+    except Exception:
+        logger.exception("channel egress policy evaluation failed")
+        return False, text, {
+            "egress_error": "policy_unavailable",
+            "blocked": True,
+        }
 
 
 class RecordingOutboundSender:

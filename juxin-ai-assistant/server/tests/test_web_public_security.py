@@ -42,6 +42,22 @@ def test_public_web_blocks_untrusted_write_origin(monkeypatch):
     assert response.json()["code"] == "ORIGIN_FORBIDDEN"
 
 
+def test_public_web_blocks_cross_origin_bearer_write(monkeypatch):
+    _use_public_web_settings(monkeypatch)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/ai/logout",
+            headers={
+                "Origin": "https://evil.example.com",
+                "Authorization": "Bearer stolen-token",
+            },
+        )
+
+    assert response.status_code == 403
+    assert response.json()["code"] == "ORIGIN_FORBIDDEN"
+
+
 def test_public_web_allows_trusted_write_origin(monkeypatch):
     _use_public_web_settings(monkeypatch)
 

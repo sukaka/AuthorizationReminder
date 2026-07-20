@@ -1,8 +1,10 @@
 from pathlib import Path
+from collections.abc import Iterator
 from typing import Annotated
+import re
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy.orm import Session
 
 from .admin.desktop_update_service import semver_key
@@ -16,6 +18,19 @@ TARGETS = {
     ("darwin", "x86_64"): "darwin-x86_64",
     ("windows", "x86_64"): "windows-x86_64",
 }
+STORAGE_KEY_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+
+
+def _iter_file_range(path: Path, start: int, length: int, chunk_size: int = 1024 * 1024) -> Iterator[bytes]:
+    with path.open("rb") as handle:
+        handle.seek(start)
+        remaining = length
+        while remaining > 0:
+            chunk = handle.read(min(chunk_size, remaining))
+            if not chunk:
+                break
+            remaining -= len(chunk)
+            yield chunk
 
 
 def create_desktop_update_public_router() -> APIRouter:
@@ -86,6 +101,8 @@ def create_desktop_update_public_router() -> APIRouter:
         request: Request,
         settings: Annotated[Settings, Depends(get_settings)],
     ):
+        if not STORAGE_KEY_RE.fullmatch(storage_key):
+            raise HTTPException(404)
         storage_root = Path(settings.desktop_update_storage_dir).resolve()
         file_path = (storage_root / storage_key).resolve()
 
@@ -103,22 +120,31 @@ def create_desktop_update_public_router() -> APIRouter:
                 return Response(status_code=416)
 
             try:
-                start, end = ranges[0].split("-")
-                start = int(start) if start else 0
-                end = int(end) if end else file_size - 1
+                raw_start, raw_end = ranges[0].strip().removeprefix("bytes=").split("-", 1)
+                if raw_start:
+                    start = int(raw_start)
+                    end = int(raw_end) if raw_end else file_size - 1
+                else:
+                    suffix_length = int(raw_end)
+                    if suffix_length <= 0:
+                        return Response(status_code=416)
+                    start = max(file_size - suffix_length, 0)
+                    end = file_size - 1
             except ValueError:
                 return Response(status_code=416)
 
-            if start >= file_size or end >= file_size or start > end:
+            if start < 0 or start >= file_size or end < start:
                 return Response(status_code=416)
 
-            content = file_path.read_bytes()[start : end + 1]
+            end = min(end, file_size - 1)
+            content_length = end - start + 1
             headers = {
                 "Content-Range": f"bytes {start}-{end}/{file_size}",
                 "Accept-Ranges": "bytes",
+                "Content-Length": str(content_length),
             }
-            return Response(
-                content=content,
+            return StreamingResponse(
+                _iter_file_range(file_path, start, content_length),
                 status_code=206,
                 headers=headers,
                 media_type="application/octet-stream",

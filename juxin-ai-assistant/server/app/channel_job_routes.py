@@ -7,7 +7,7 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.orm import Session
 
-from .auth import get_session, require_action
+from .auth import get_session, is_platform_admin_role, require_action
 from .channel_job_service import ChannelJobService
 from .channel_queue import channel_dispatcher
 from .config import Settings, get_settings
@@ -23,7 +23,7 @@ async def _require_admin(
     session: SessionPayload,
     settings: Settings,
 ) -> None:
-    if session.user.role.strip().lower() != "admin":
+    if not is_platform_admin_role(session.user.role):
         raise HTTPException(status_code=403, detail="仅管理员可管理通道任务")
     await require_action("ai_assistant:admin", request, session, settings)
 

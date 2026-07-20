@@ -3,6 +3,8 @@ import { useEffect, useState } from 'react';
 import juxinAiLogo from './assets/juxin-ai-logo.png';
 import {
   ApiError,
+  apiFetch,
+  clearDesktopSsoToken,
   clearSsoCallbackParams,
   getAuthPortalUrl,
   getSession,
@@ -12,6 +14,7 @@ import {
 import { ModelProfilesPage } from './pages/ModelProfilesPage';
 import { AssistantsPage } from './pages/AssistantsPage';
 import { ChatPage } from './pages/ChatPage';
+import { ChatRunPrototypePage } from './pages/ChatRunPrototypePage';
 import { ProjectWorkspacePage } from './pages/ProjectWorkspacePage';
 import { EnterpriseOverviewPage } from './pages/EnterpriseOverviewPage';
 import { EnterpriseManagementPage } from './pages/EnterpriseManagementPage';
@@ -32,6 +35,7 @@ import { SuggestionsPage } from './pages/admin/SuggestionsPage';
 import { LauncherPage } from './launcher/LauncherPage';
 import { WorkspaceUpdateControl } from './launcher/WorkspaceUpdateControl';
 import { getRuntimeCapabilities } from './runtime/capabilities';
+import { isPlatformAdminRole } from './auth/roles';
 import {
   desktopBridge,
   type DesktopBridge,
@@ -40,6 +44,7 @@ import {
 type WorkspacePage =
   | 'assistants'
   | 'chat'
+  | 'chat-prototype'
   | 'project-workspace'
   | 'enterprise-overview'
   | 'enterprise-management'
@@ -108,7 +113,10 @@ function systemLabel(systemKey: string): string {
 
 function Workspace({ session }: { session: SessionPayload }) {
   const capabilities = getRuntimeCapabilities();
-  const [page, setPage] = useState<WorkspacePage>('chat');
+  const [page, setPage] = useState<WorkspacePage>(() => {
+    const prototype = new URLSearchParams(window.location.search).get('prototype');
+    return prototype === 'chat' ? 'chat-prototype' : 'chat';
+  });
   const [task, setTask] = useState<TaskDefinition | null>(null);
   const [taskError, setTaskError] = useState('');
   const [focusRunId, setFocusRunId] = useState('');
@@ -120,8 +128,8 @@ function Workspace({ session }: { session: SessionPayload }) {
   const [sidebarTouched, setSidebarTouched] = useState(false);
   const [systemMenuOpen, setSystemMenuOpen] = useState(false);
   const role = session.user.role.trim().toLowerCase();
-  const isAdmin = role === 'admin';
-  const canManageEnterprise = new Set(['admin', 'superadmin', 'sys_admin', 'platform_admin']).has(role);
+  const isAdmin = isPlatformAdminRole(role);
+  const canManageEnterprise = isAdmin;
   const canViewEnterprise = !new Set(['external', 'external_customer', 'customer', 'visitor', 'guest']).has(role);
   const isWebRuntime = !window.__TAURI_INTERNALS__;
   const immersive = sidebarMode === 'immersive';
@@ -132,7 +140,7 @@ function Workspace({ session }: { session: SessionPayload }) {
   const isManagementPage = managementPages.includes(page);
   const pageTitle = page === 'assistants'
       ? '助手模式'
-      : page === 'chat'
+      : page === 'chat' || page === 'chat-prototype'
         ? '私人工作助理'
           : page === 'project-workspace'
             ? '项目工作空间'
@@ -206,7 +214,7 @@ function Workspace({ session }: { session: SessionPayload }) {
 
   useEffect(() => {
     if (sidebarTouched) return;
-    setSidebarMode(page === 'chat' || page === 'task' ? 'collapsed' : 'expanded');
+    setSidebarMode(page === 'chat' || page === 'chat-prototype' || page === 'task' ? 'collapsed' : 'expanded');
   }, [page, sidebarTouched]);
 
   useEffect(() => {
@@ -250,9 +258,8 @@ function Workspace({ session }: { session: SessionPayload }) {
   const logout = async () => {
     const authLogoutUrl = getAuthPortalUrl({ logout: true });
     try {
-      await fetch('/api/ai/logout', {
+      await apiFetch('/api/ai/logout', {
         method: 'POST',
-        credentials: 'include',
       });
     } catch (error: unknown) {
       if (!(error instanceof TypeError)) throw error;
@@ -264,6 +271,7 @@ function Workspace({ session }: { session: SessionPayload }) {
         // Continue to the unified logout even if local cleanup has already been cleared.
       }
     }
+    clearDesktopSsoToken();
     window.location.assign(authLogoutUrl);
   };
 
@@ -375,7 +383,9 @@ function Workspace({ session }: { session: SessionPayload }) {
               ))}
             </nav>
           ) : null}
-        {page === 'models' ? (
+        {page === 'chat-prototype' ? (
+          <ChatRunPrototypePage onBack={() => setPage('chat')} />
+        ) : page === 'models' ? (
           <ModelProfilesPage />
         ) : page === 'project-workspace' ? (
           <ProjectWorkspacePage />
@@ -515,6 +525,11 @@ type AppProps = {
 export default function App({ bridge = desktopBridge }: AppProps) {
   if (bridge.isLocalLauncherContext()) {
     return <LauncherPage bridge={bridge} />;
+  }
+
+  const prototype = new URLSearchParams(window.location.search).get('prototype');
+  if (prototype === 'chat') {
+    return <ChatRunPrototypePage />;
   }
 
   return <RemoteWorkspace bridge={bridge} />;

@@ -228,6 +228,17 @@ def build_session_payload() -> SessionPayload:
     )
 
 
+def test_platform_admin_role_helper_accepts_normalized_admin_aliases() -> None:
+    from app.auth import is_platform_admin_role
+
+    assert is_platform_admin_role(" ADMIN ") is True
+    assert is_platform_admin_role("superadmin") is True
+    assert is_platform_admin_role("sys_admin") is True
+    assert is_platform_admin_role("platform_admin") is True
+    assert is_platform_admin_role("user") is False
+    assert is_platform_admin_role(None) is False
+
+
 @pytest.mark.asyncio
 async def test_require_action_uses_unified_authorization(
     sso_settings: Settings,

@@ -150,6 +150,16 @@ export function DocumentBlockEditor({
   const documentSignature = useMemo(() => JSON.stringify(document), [document]);
   const lastEmittedSignature = useRef<string | null>(null);
   const composingBlockIdRef = useRef<string | null>(null);
+  const editableBlockRefs = useRef<Record<string, HTMLDivElement | null>>({});
+
+  useEffect(() => {
+    document.blocks.forEach((block) => {
+      if (!['paragraph', 'list', 'quote', 'notice'].includes(block.type) || typeof block.text !== 'string') return;
+      const element = editableBlockRefs.current[block.block_id];
+      if (!element || element === window.document.activeElement) return;
+      if ((element.textContent ?? '') !== block.text) element.textContent = block.text;
+    });
+  }, [document]);
 
   useEffect(() => {
     if (lastEmittedSignature.current === null) {
@@ -241,10 +251,14 @@ export function DocumentBlockEditor({
             commitChange(updateDocumentBlock(document, block.block_id, { text }));
           }}
           role="textbox"
+          ref={(element) => {
+            editableBlockRefs.current[block.block_id] = element;
+            if (element && element !== window.document.activeElement && (element.textContent ?? '') !== block.text) {
+              element.textContent = block.text ?? '';
+            }
+          }}
           suppressContentEditableWarning
-        >
-          {block.text}
-        </div>
+        />
       );
     }
     if (block.type === 'divider') {

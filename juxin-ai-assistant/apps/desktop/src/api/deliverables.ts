@@ -1,4 +1,4 @@
-import { ApiError, apiFetch, getAuthPortalUrl } from './client';
+import { ApiError, apiFetch, getAuthPortalUrl, isSafeSameOriginUrl } from './client';
 import { downloadBlobFromResponse } from '../runtime/downloads';
 import { newIdempotencyKey } from './skills';
 
@@ -1459,6 +1459,9 @@ export async function createProfessionalExport(
 }
 
 export async function downloadProfessionalExport(exportRecord: DeliverableExport): Promise<void> {
+  if (!isSafeSameOriginUrl(exportRecord.download_url)) {
+    throw new ApiError(400, 'PROFESSIONAL_EXPORT_UNSAFE_URL');
+  }
   const response = await apiFetch(exportRecord.download_url, { cache: 'no-store' });
   if (!response.ok) {
     const payload = await response.json().catch(() => null);

@@ -26,6 +26,42 @@ export default function App() {
   const [busy, setBusy] = useState(false)
   const [documentsOpen, setDocumentsOpen] = useState(false)
   const messagesEnd = useRef<HTMLDivElement>(null)
+  const documentsTrigger = useRef<HTMLButtonElement>(null)
+  const sheetClose = useRef<HTMLButtonElement>(null)
+  const sheetContent = useRef<HTMLElement>(null)
+
+  function closeDocuments() {
+    setDocumentsOpen(false)
+    requestAnimationFrame(() => documentsTrigger.current?.focus())
+  }
+
+  useEffect(() => {
+    if (!documentsOpen) return
+    sheetClose.current?.focus()
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        closeDocuments()
+        return
+      }
+      if (event.key !== 'Tab') return
+      const focusable = Array.from(sheetContent.current?.querySelectorAll<HTMLElement>(
+        'button:not([tabindex="-1"]), a[href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
+      ) || [])
+      if (!focusable.length) return
+      const first = focusable[0]
+      const last = focusable[focusable.length - 1]
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault()
+        last.focus()
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault()
+        first.focus()
+      }
+    }
+    document.addEventListener('keydown', onKeyDown)
+    return () => document.removeEventListener('keydown', onKeyDown)
+  }, [documentsOpen])
 
   useEffect(() => {
     Promise.all([api.bootstrap(), api.documents()])
@@ -57,7 +93,13 @@ export default function App() {
       }])
       if (quota) setQuota({ ...quota, hour_remaining: result.hour_remaining, day_remaining: result.day_remaining })
     } catch (error) {
-      setError(error instanceof Error ? error.message : '请求失败，请稍后再试')
+      const message = error instanceof Error ? error.message : '请求失败，请稍后再试'
+      setError(message)
+      setMessages(current => [...current, {
+        id: `assistant-error-${Date.now()}`,
+        role: 'assistant',
+        content: `本次回答未完成：${message}`,
+      }])
     } finally {
       setBusy(false)
     }
@@ -80,7 +122,7 @@ export default function App() {
     <header className="chat-header">
       <img className="brand-mark" src={juxinLogo} alt="聚信" />
       <div><h1>聚信AI客服</h1><p>仅依据公开资料回答</p></div>
-      <button className="documents-trigger" type="button" onClick={() => setDocumentsOpen(true)}>资料</button>
+      <button ref={documentsTrigger} className="documents-trigger" type="button" onClick={() => setDocumentsOpen(true)}>资料</button>
     </header>
 
     <section className="conversation" aria-label="对话内容">
@@ -109,17 +151,17 @@ export default function App() {
     <footer className="composer-area">
       {quota && <p className="quota">本小时剩余 {quota.hour_remaining}/{quota.hour_limit} · 今日剩余 {quota.day_remaining}/{quota.day_limit}</p>}
       <form className="composer" onSubmit={submit}>
-        <textarea value={question} onChange={event => setQuestion(event.target.value)} maxLength={2000} rows={1} placeholder="发消息…" aria-label="向资料助手提问" />
+        <textarea value={question} onChange={event => setQuestion(event.target.value)} onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void ask() } }} maxLength={2000} rows={1} placeholder="发消息…" aria-label="向资料助手提问" />
         <button type="submit" disabled={busy || !question.trim()} aria-label="发送消息"><span>↑</span></button>
       </form>
       <p className="disclaimer">AI 回答可能有误，请以正式资料为准。</p>
     </footer>
 
-    {documentsOpen && <div className="documents-sheet" role="dialog" aria-modal="true" aria-label="公开资料下载">
-      <button className="sheet-backdrop" type="button" aria-label="关闭资料列表" onClick={() => setDocumentsOpen(false)} />
-      <section className="sheet-content">
+    {documentsOpen && <div className="documents-sheet" role="dialog" aria-modal="true" aria-labelledby="documents-sheet-title">
+      <button className="sheet-backdrop" type="button" tabIndex={-1} aria-label="关闭资料列表" onClick={closeDocuments} />
+      <section ref={sheetContent} className="sheet-content">
         <div className="sheet-handle" />
-        <div className="sheet-heading"><div><p>公开资料</p><h2>下载中心</h2></div><button type="button" onClick={() => setDocumentsOpen(false)} aria-label="关闭">×</button></div>
+        <div className="sheet-heading"><div><p>公开资料</p><h2 id="documents-sheet-title">下载中心</h2></div><button ref={sheetClose} type="button" onClick={closeDocuments} aria-label="关闭">×</button></div>
         {documents.length === 0 ? <p className="empty-documents">暂时没有可下载的公开资料。</p> : <ul className="document-list">{documents.map(file => <li key={file.file_uuid}><div><strong>{file.file_name}</strong><small>{file.summary || '公开资料'}</small></div><button type="button" onClick={() => void download(file)}>下载</button></li>)}</ul>}
       </section>
     </div>}

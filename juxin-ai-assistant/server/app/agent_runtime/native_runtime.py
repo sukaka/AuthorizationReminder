@@ -271,6 +271,9 @@ class NativeRuntime:
                         "primary_hits": last.primary_hits,
                         "secondary_hits": last.secondary_hits,
                         "expanded_terms": last.expanded_terms,
+                        "query_variants": last.query_variants,
+                        "retry_reason": last.retry_reason,
+                        "retrieval_grade": last.retrieval_grade,
                     }
                     extra_gaps = list(last.gaps or [])
                 research = research_from_snippets(

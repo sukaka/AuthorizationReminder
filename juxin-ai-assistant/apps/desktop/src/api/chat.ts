@@ -1,4 +1,4 @@
-import { ApiError, apiFetch, getAuthPortalUrl } from './client';
+import { ApiError, apiFetch, getAuthPortalUrl, isSafeSameOriginUrl } from './client';
 import type { LoopTraceStep } from './agentLoop';
 import { downloadBlobFromResponse, saveWordBytesToDesktop } from '../runtime/downloads';
 import { isDesktopRuntime } from '../runtime/capabilities';
@@ -244,6 +244,8 @@ export type KnowledgeReviewHistoryPayload = {
 export type ChatTaskStatePayload = {
   task_state_id: string;
   conversation_id: string;
+  /** Unified Run linked to this chat task; absent on legacy sessions. */
+  run_id?: string;
   stage: string;
   status: string;
   label: string;
@@ -1450,6 +1452,9 @@ async function downloadWordExport(meta: {
   file_name: string;
   download_url: string;
 }): Promise<ChatWordDownloadResult> {
+  if (!isSafeSameOriginUrl(meta.download_url)) {
+    throw new ApiError(400, 'CHAT_WORD_DOWNLOAD_UNSAFE_URL');
+  }
   const response = await apiFetch(meta.download_url);
   if (!response.ok) throw new ApiError(response.status, 'CHAT_WORD_DOWNLOAD_FAILED');
   if (isDesktopRuntime()) {

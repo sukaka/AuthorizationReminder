@@ -28,7 +28,7 @@ from .context.mode_router import ModeRouter
 from .crypto import ContentCipher, EncryptedPayload
 from .knowledge_files import hard_delete_session_attachment_files
 from .knowledge_search import RetrievedKnowledgeChunk
-from .models import AgentTaskState, ChatMessage, ChatMessageSource, ChatSession, ExportRecord, KnowledgeChunk, KnowledgeFile
+from .models import AgentRun, AgentTaskState, ChatMessage, ChatMessageSource, ChatSession, ExportRecord, KnowledgeChunk, KnowledgeFile
 from .models import KnowledgeSearchLog, WebSearchLog
 from .schemas import (
     ChatCitationOut,
@@ -489,9 +489,22 @@ def _latest_task_state_payload(
         )
         .order_by(AgentTaskState.id.desc())
     )
-    if task_state is None:
+    latest_run = db.scalar(
+        select(AgentRun)
+        .where(
+            AgentRun.owner_user_id == user_id,
+            AgentRun.conversation_id == conversation_id,
+        )
+        .order_by(AgentRun.updated_at.desc(), AgentRun.id.desc())
+    )
+    if task_state is None and latest_run is None:
         return {}
-    return TaskStateStore.public_payload(task_state)
+    payload = TaskStateStore.public_payload(task_state) if task_state is not None else {
+        "conversation_id": conversation_id,
+    }
+    if latest_run is not None:
+        payload["run_id"] = latest_run.uuid
+    return payload
 
 
 def _get_or_create_session(
@@ -837,7 +850,7 @@ def prepare_chat(
             messages=[],
             citations=citations,
             loop_trace=loop_result.loop_trace,
-            task_state=task_state_payload,
+            task_state={**task_state_payload, "run_id": run_id},
             run_id=run_id,
             requested_mode=route.requested_mode,
             effective_mode=route.mode,
@@ -956,7 +969,7 @@ def prepare_chat(
             citations=[],
             generated_files=message_generated_files(assistant),
             loop_trace=loop_result.loop_trace,
-            task_state=task_state_payload,
+            task_state={**task_state_payload, "run_id": run_id},
             run_id=run_id,
             requested_mode=route.requested_mode,
             effective_mode=route.mode,
@@ -1017,7 +1030,7 @@ def prepare_chat(
         messages=prepared_messages,
         citations=citations,
         loop_trace=loop_result.loop_trace,
-        task_state=task_state_payload,
+        task_state={**task_state_payload, "run_id": run_id},
         run_id=run_id,
         requested_mode=route.requested_mode,
         effective_mode=route.mode,

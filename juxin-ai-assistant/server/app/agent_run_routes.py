@@ -147,12 +147,18 @@ async def list_runs(
     settings: Annotated[Settings, Depends(get_settings)],
     db: Annotated[Session, Depends(get_db)],
     status: Annotated[str, Query()] = "",
+    conversation_id: Annotated[str, Query(max_length=64)] = "",
     limit: Annotated[int, Query(ge=1, le=200)] = 50,
 ) -> RunListOut:
     """任务中心：当前用户的 Run 列表（产品语言=任务）。"""
     await _require_use(request, session_payload, settings)
     service = _service(db, settings)
-    rows = service.list_owned(str(session_payload.user.id), limit=limit, status=status)
+    rows = service.list_owned(
+        str(session_payload.user.id),
+        limit=limit,
+        status=status,
+        conversation_id=conversation_id,
+    )
     items = [service.to_public_run(r) for r in rows]
     return RunListOut(items=items, total=len(items))
 

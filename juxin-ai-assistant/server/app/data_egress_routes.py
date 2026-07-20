@@ -10,7 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .agent_audit_service import record_egress_audit
-from .auth import get_session, require_action
+from .auth import get_session, is_platform_admin_role, require_action
 from .config import Settings, get_settings
 from .data_egress import (
     DEST_CHANNEL,
@@ -108,7 +108,7 @@ async def list_egress_audits(
     limit: Annotated[int, Query(ge=1, le=200)] = 50,
 ) -> dict[str, Any]:
     await require_action("ai_assistant:use", request, session, settings)
-    is_admin = session.user.role.strip().lower() == "admin"
+    is_admin = is_platform_admin_role(session.user.role)
     stmt = select(EgressAuditLog).order_by(EgressAuditLog.id.desc()).limit(limit)
     if not is_admin:
         stmt = (

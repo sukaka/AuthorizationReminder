@@ -35,6 +35,7 @@ from .config import Settings, get_settings
 from .crypto import ContentCipher
 from .database import get_db
 from .models import ChatMessage, ChatSession
+from .model_endpoint_security import validate_user_model_endpoint
 from .project_access import require_project_access
 from .schemas import (
     ChatCompleteIn,
@@ -126,8 +127,9 @@ def _chat_model_config_for_user(
 ) -> ModelRequestConfig:
     user_model_profile = get_default_user_model_profile(db, user_id)
     if user_model_profile is not None:
+        base_url = validate_user_model_endpoint(user_model_profile.base_url, current_settings)
         return ModelRequestConfig(
-            base_url=user_model_profile.base_url,
+            base_url=base_url,
             api_key=decrypt_user_model_api_key(cipher, user_model_profile),
             model_id=user_model_profile.model_id,
             display_name=user_model_profile.display_name,
@@ -417,9 +419,10 @@ async def chat_message_generate(
     )
     user_model_profile = get_default_user_model_profile(db, str(session_payload.user.id))
     if user_model_profile is not None:
+        base_url = validate_user_model_endpoint(user_model_profile.base_url, current_settings)
         result = await generate_with_model_config(
             ModelRequestConfig(
-                base_url=user_model_profile.base_url,
+                base_url=base_url,
                 api_key=decrypt_user_model_api_key(cipher, user_model_profile),
                 model_id=user_model_profile.model_id,
                 display_name=user_model_profile.display_name,

@@ -20,7 +20,7 @@ from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
 
 from .attachments import create_attachment
-from .auth import get_session, require_action
+from .auth import get_session, is_platform_admin_role, require_action
 from .admin.errors import GovernanceError
 from .agent_loop import QualityChecker
 from .admin.route_common import write_request_audit
@@ -205,7 +205,16 @@ app.add_middleware(
     allow_origins=settings.allowed_origins,
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    allow_headers=["Content-Type", "X-CSRF-Token"],
+    allow_headers=[
+        "Authorization",
+        "Content-Type",
+        "Idempotency-Key",
+        "X-CSRF-Token",
+        "X-Workflow-Event-Credential",
+        "X-Workflow-Event-Signature",
+        "X-Workflow-Event-Timestamp",
+        "X-Workflow-Owner-Id",
+    ],
 )
 
 
@@ -226,13 +235,27 @@ async def enforce_write_origin(
     call_next: Callable[[Request], Awaitable[Response]],
 ) -> Response:
     verify_path = "/api/ai/local-binding/verify"
+    machine_ingress_paths = {
+        "/api/ai/channels/webhooks/feishu",
+        "/api/ai/channels/webhooks/wecom",
+        "/api/ai/channels/webhooks/wecom-kf",
+        "/api/ai/workflows/events/signed",
+    }
     current_settings = get_settings()
     if (
         request.method not in {"GET", "HEAD", "OPTIONS"}
         and request.url.path != verify_path
         and not current_settings.auth_dev_bypass
     ):
-        if request.headers.get("origin", "") not in current_settings.allowed_origins:
+        origin = request.headers.get("origin", "")
+        has_bearer = request.headers.get("authorization", "").lower().startswith("bearer ")
+        # Desktop/native clients commonly have no Origin header.  Keep that
+        # machine-to-machine case working, but never let a cross-origin browser
+        # request bypass the allowlist merely by attaching a bearer token.
+        machine_request = request.url.path in machine_ingress_paths or (
+            has_bearer and not origin
+        )
+        if not machine_request and origin not in current_settings.allowed_origins:
             return _set_security_headers(JSONResponse(
                 status_code=403,
                 content={
@@ -967,7 +990,7 @@ _KNOWLEDGE_PERMISSION_SCOPES = {
 
 
 def _is_admin_session(session_payload: SessionPayload) -> bool:
-    return session_payload.user.role.strip().lower() == "admin"
+    return is_platform_admin_role(session_payload.user.role)
 
 
 def _split_tags(raw_tags: str) -> list[str]:

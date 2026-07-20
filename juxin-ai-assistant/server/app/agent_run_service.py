@@ -146,23 +146,19 @@ class AgentRunService:
         *,
         limit: int = 50,
         status: str = "",
+        conversation_id: str = "",
     ) -> list[AgentRun]:
+        filters = [AgentRun.owner_user_id == owner_user_id]
+        if status.strip():
+            filters.append(AgentRun.status == status.strip())
+        if conversation_id.strip():
+            filters.append(AgentRun.conversation_id == conversation_id.strip())
         stmt = (
             select(AgentRun)
-            .where(AgentRun.owner_user_id == owner_user_id)
+            .where(*filters)
             .order_by(AgentRun.updated_at.desc(), AgentRun.id.desc())
             .limit(max(1, min(int(limit), 200)))
         )
-        if status.strip():
-            stmt = (
-                select(AgentRun)
-                .where(
-                    AgentRun.owner_user_id == owner_user_id,
-                    AgentRun.status == status.strip(),
-                )
-                .order_by(AgentRun.updated_at.desc(), AgentRun.id.desc())
-                .limit(max(1, min(int(limit), 200)))
-            )
         return list(self.db.scalars(stmt))
 
     def decrypt_request(self, row: AgentRun) -> dict[str, Any]:

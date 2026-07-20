@@ -1,0 +1,36 @@
+{
+  "version": "1.0",
+  "description": "聚信 AI 助手检索质量 P0 评测集。relevant_chunk_ids 由人工标注，运行时只需提供生产检索器返回的 chunk_id 排名。",
+  "cases": [
+    {
+      "id": "wdsp-deployment-modes",
+      "query": "WDSP 支持哪些部署模式？",
+      "relevant_chunk_ids": ["wdsp-deployment-modes", "wdsp-deployment-architecture"]
+    },
+    {
+      "id": "compliance-platform-customers",
+      "query": "等保合规云管平台适合什么客户？",
+      "relevant_chunk_ids": ["ccmp-customer-scenarios", "ccmp-security-operations"]
+    },
+    {
+      "id": "risk-assessment-remediation",
+      "query": "风险评估缺少资产赋值方式怎么写整改？",
+      "relevant_chunk_ids": ["risk-asset-valuation", "risk-remediation-review"]
+    },
+    {
+      "id": "citation-preview",
+      "query": "回答里的资料依据应该怎么查看？",
+      "relevant_chunk_ids": ["citation-page-preview", "citation-source-display"]
+    },
+    {
+      "id": "personal-upload-isolation",
+      "query": "我上传的客户材料会自动给全公司使用吗？",
+      "relevant_chunk_ids": ["upload-session-scope", "personal-knowledge-permission"]
+    },
+    {
+      "id": "latest-cve-source",
+      "query": "用户问最新 CVE 时应该怎么办？",
+      "relevant_chunk_ids": ["web-latest-cve", "web-source-date"]
+    }
+  ]
+}

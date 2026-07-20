@@ -9,7 +9,7 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
-from .auth import get_session, require_action
+from .auth import get_session, is_platform_admin_role, require_action
 from .config import Settings, get_settings
 from .learning_eval import DEFAULT_EVAL_PATH, scenario_for_question
 from .schemas import SessionPayload
@@ -49,7 +49,7 @@ async def _require_admin(
     session: SessionPayload,
     settings: Settings,
 ) -> None:
-    if session.user.role.strip().lower() != "admin":
+    if not is_platform_admin_role(session.user.role):
         raise HTTPException(status_code=403, detail="仅管理员可运行学习评测")
     await require_action("ai_assistant:admin", request, session, settings)
 

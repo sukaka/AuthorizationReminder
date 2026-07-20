@@ -15,7 +15,7 @@ from .agent_contracts import AgentEventContract, AgentRunContract, AgentRunStatu
 from .agent_run_service import AgentRunService
 from .agent_runtime.langgraph_runtime import select_runtime
 from .agent_runtime.protocol import RunRequest
-from .auth import get_session, require_action
+from .auth import get_session, is_platform_admin_role, require_action
 from .config import Settings, get_settings
 from .crypto import ContentCipher
 from .database import get_db
@@ -304,7 +304,7 @@ async def _require_admin(
     session: SessionPayload,
     settings: Settings,
 ) -> None:
-    if session.user.role.strip().lower() != "admin":
+    if not is_platform_admin_role(session.user.role):
         raise HTTPException(status_code=403, detail="仅管理员可查看运营看板")
     await require_action("ai_assistant:admin", request, session, settings)
 

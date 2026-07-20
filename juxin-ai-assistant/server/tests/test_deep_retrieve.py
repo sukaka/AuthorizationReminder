@@ -1,8 +1,11 @@
 from app.agent_runtime.deep_retrieve import (
+    DeepRetrievalResult,
     build_citation_cards,
     classify_query,
     deep_retrieve,
+    grade_retrieved_snippets,
     no_evidence_answer,
+    rewrite_retrieval_query,
 )
 from app.agent_runtime.answer_engine import DefaultAnswerEngine, RetrievedSnippet
 from app.agent_runtime.native_runtime import NativeRuntime
@@ -21,6 +24,51 @@ def test_classify_query_modes() -> None:
     assert classify_query("VPN 如何申请").mode == "precise"
     assert classify_query("请汇总多份方案生成报告").mode == "summary"
     assert classify_query("对比两个版本差异").mode == "compare"
+
+
+def test_retrieval_grade_is_explainable_and_bounded() -> None:
+    grade = grade_retrieved_snippets(
+        "WDSP 部署和验收",
+        [
+            RetrievedSnippet(
+                name="WDSP实施指南.pdf",
+                text="部署步骤、验收条件和回滚要求均在本章节说明。" * 4,
+                file_uuid="f1",
+            ),
+            RetrievedSnippet(name="验收清单.docx", text="验收清单。", file_uuid="f2"),
+        ],
+    )
+    assert grade.relevant is True
+    assert 0.0 <= grade.query_term_coverage <= 1.0
+    assert grade.file_coverage == 2
+    assert "no_results" not in grade.reasons
+
+
+def test_rewrite_retrieval_query_keeps_original_and_adds_aliases() -> None:
+    rewritten = rewrite_retrieval_query("WDSP 部署如何验收", ["交付验收"])
+    assert rewritten.startswith("WDSP 部署如何验收")
+    assert "WEB动态安全管理平台" in rewritten
+    assert "交付验收" in rewritten
+
+
+def test_answer_engine_exposes_retrieval_quality_metadata() -> None:
+    engine = DefaultAnswerEngine()
+    engine.last_retrieval = DeepRetrievalResult(
+        snippets=[],
+        mode="precise",
+        primary_hits=1,
+        secondary_hits=1,
+        file_coverage=2,
+        expanded_terms=["交付验收"],
+        second_pass_used=True,
+        query_variants=["原问题", "原问题 交付验收"],
+        retry_reason=["short_evidence"],
+        retrieval_grade={"relevant": True},
+    )
+    _answer, _calls, meta = engine.generate("原问题", [])
+    assert meta["query_variants"] == ["原问题", "原问题 交付验收"]
+    assert meta["retry_reason"] == ["short_evidence"]
+    assert meta["retrieval_grade"] == {"relevant": True}
 
 
 def test_deep_retrieve_with_second_pass_and_coverage(generation_db) -> None:
@@ -59,6 +107,7 @@ def test_deep_retrieve_with_second_pass_and_coverage(generation_db) -> None:
         assert result.secondary_hits >= 1
         assert result.file_coverage >= 1
         assert isinstance(result.expanded_terms, list)
+        assert result.retry_reason
         assert len(calls) >= 2
     finally:
         dr_mod._lexical_search = original  # type: ignore[assignment]

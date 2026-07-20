@@ -217,6 +217,9 @@ export type AdminSkill = {
     reviewer_role: string;
   };
   tags: string[];
+  source?: 'builtin' | 'uploaded' | string;
+  upload_id?: string | null;
+  uploaded_by?: string | null;
 };
 
 export type AssistantMode = {
@@ -254,10 +257,11 @@ export type AssistantModeInput = Pick<
 >;
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const isFormData = typeof FormData !== 'undefined' && init?.body instanceof FormData;
   const response = await fetch(path, {
     credentials: 'include',
     ...init,
-    headers: init?.body
+    headers: init?.body && !isFormData
       ? { 'Content-Type': 'application/json', ...init.headers }
       : init?.headers,
   });
@@ -378,6 +382,11 @@ export const governanceApi = {
     },
   ),
   skills: () => request<GovernanceList<AdminSkill>>('/api/admin/skills'),
+  uploadSkill: (file: File) => {
+    const form = new FormData();
+    form.append('file', file);
+    return request<AdminSkill>('/api/admin/skills/uploads', { method: 'POST', body: form });
+  },
   publishSkill: (skillId: string) => request<AdminSkill>(
     `/api/admin/skills/${encodeURIComponent(skillId)}/publish`,
     { method: 'POST' },

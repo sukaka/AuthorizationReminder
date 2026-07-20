@@ -8,7 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .crypto import ContentCipher, EncryptedPayload
-from .knowledge_files import _extract_blocks
+from .knowledge_files import _extract_blocks, _validated_document_archive
 from .models import GenerationAttachment, Task
 
 
@@ -35,6 +35,10 @@ def _file_suffix(file_name: str) -> str:
 
 def _parse_docx_text(data: bytes) -> str:
     try:
+        # DOCX is a ZIP container too; validate entry count, expansion ratio,
+        # and total uncompressed size before python-docx opens it.
+        with _validated_document_archive(data, file_kind="DOCX"):
+            pass
         document = Document(BytesIO(data))
         parts: list[str] = []
         parts.extend(
@@ -51,6 +55,8 @@ def _parse_docx_text(data: bytes) -> str:
                     )
                 )
         return "\n".join(parts).strip()
+    except HTTPException:
+        raise
     except Exception as exc:
         raise HTTPException(status_code=422, detail="DOCX 文件无法解析") from exc
 

@@ -260,3 +260,9 @@ def test_public_file_download_range(test_app_with_storage):
     resp = client.get(download_url, headers={"Range": "bytes=0-4"})
     assert resp.status_code == 206
     assert resp.content == b"hello"
+
+    # Suffix ranges are streamed too; the handler must not materialize the
+    # complete update artifact in memory.
+    resp = client.get(download_url, headers={"Range": "bytes=-5"})
+    assert resp.status_code == 206
+    assert resp.content == payload[-5:]

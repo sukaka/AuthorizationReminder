@@ -13,11 +13,12 @@ from sqlalchemy.orm import Session
 from .agent_audit_service import record_agent_call, record_egress_audit
 from .agent_hub import get_agent_hub
 from .agent_market_service import list_market, set_connection_status, sync_hub_to_connections
-from .auth import get_session, require_action
+from .auth import get_session, is_platform_admin_role, require_action
 from .config import Settings, get_settings
 from .data_egress import DEST_EXTERNAL_AGENT, DEST_INTERNAL_AGENT, DEST_LOCAL, evaluate_egress
 from .database import get_db
 from .models import AgentConnection
+from .model_endpoint_security import validate_agent_http_endpoint
 from .schemas import SessionPayload
 
 router = APIRouter(prefix="/api/ai/agent-hub", tags=["agent-hub"])
@@ -74,7 +75,7 @@ async def _require_admin(
     session: SessionPayload,
     settings: Settings,
 ) -> None:
-    if session.user.role.strip().lower() != "admin":
+    if not is_platform_admin_role(session.user.role):
         raise HTTPException(status_code=403, detail="仅管理员可注册外部 Agent")
     await require_action("ai_assistant:admin", request, session, settings)
 
@@ -170,14 +171,16 @@ async def register_http_agent(
 ) -> AgentOut:
     await _require_admin(request, session, settings)
     try:
+        endpoint = validate_agent_http_endpoint(body.endpoint, settings)
         desc = get_agent_hub().register_http(
             agent_id=body.agent_id.strip().lower(),
             name=body.name,
             description=body.description,
-            endpoint=body.endpoint.strip(),
+            endpoint=endpoint,
             capabilities=body.capabilities,
             auth_header=body.auth_header,
             version=body.version,
+            settings=settings,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

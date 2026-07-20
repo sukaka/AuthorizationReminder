@@ -1,6 +1,7 @@
 import { useState } from 'react';
 
 import type { SessionPayload } from '../../api/client';
+import { isPlatformAdminRole } from '../../auth/roles';
 import { AdminLinksPage } from './AdminLinksPage';
 import { AssistantModesAdminPage } from './AssistantModesAdminPage';
 import { AuditPage } from './AuditPage';
@@ -35,7 +36,7 @@ const ITEMS: Array<{ page: GovernancePage; label: string }> = [
 
 export function GovernanceCenter({ session }: { session: SessionPayload }) {
   const [page, setPage] = useState<GovernancePage>('tasks');
-  const items = session.user.role.trim().toLowerCase() === 'admin'
+  const items = isPlatformAdminRole(session.user.role)
     ? ITEMS
     : ITEMS.filter((item) => item.page !== 'audit' && item.page !== 'desktop-updates');
   return (

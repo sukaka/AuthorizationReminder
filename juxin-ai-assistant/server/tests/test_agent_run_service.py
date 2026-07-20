@@ -5,6 +5,7 @@ import pytest
 
 from app.agent_contracts import AgentRunStage, AgentRunStatus
 from app.agent_run_service import AgentRunService, BudgetExceededError, LeaseLostError
+from app.chat_service import _latest_task_state_payload
 from app.crypto import ContentCipher
 from app.faq_matcher import normalize_question
 from app.models import AgentRun, SharedFaq
@@ -24,6 +25,49 @@ def test_run_isolation_by_owner(generation_db) -> None:
     assert service.get_owned_run(a.uuid, "user-a") is not None
     assert service.get_owned_run(a.uuid, "user-b") is None
     assert service.get_owned_run(b.uuid, "user-b") is not None
+
+
+def test_list_owned_can_filter_by_conversation(generation_db) -> None:
+    service = AgentRunService(generation_db, _cipher())
+    current = service.create_run(
+        owner_user_id="user-a",
+        input_text="当前会话",
+        conversation_id="conversation-current",
+    )
+    service.create_run(
+        owner_user_id="user-a",
+        input_text="其他会话",
+        conversation_id="conversation-other",
+    )
+    generation_db.commit()
+
+    rows = service.list_owned(
+        "user-a",
+        conversation_id="conversation-current",
+    )
+
+    assert [row.uuid for row in rows] == [current.uuid]
+
+
+def test_latest_chat_task_payload_restores_run_without_task_state(generation_db) -> None:
+    service = AgentRunService(generation_db, _cipher())
+    row = service.create_run(
+        owner_user_id="user-a",
+        input_text="无任务状态的历史会话",
+        conversation_id="conversation-without-task-state",
+    )
+    generation_db.commit()
+
+    payload = _latest_task_state_payload(
+        generation_db,
+        user_id="user-a",
+        conversation_id="conversation-without-task-state",
+    )
+
+    assert payload == {
+        "conversation_id": "conversation-without-task-state",
+        "run_id": row.uuid,
+    }
 
 
 def test_faq_fast_path_zero_model_calls(generation_db) -> None:

@@ -71,7 +71,7 @@ it('applies AI classification from the file actions menu', async () => {
   await userEvent.click(within(card).getByRole('menuitem', { name: '自动分类 零信任交付方案.pdf' }));
 
   await waitFor(() => expect(classifyRequest).toHaveBeenCalledWith({ apply: true }));
-  expect(await within(card).findByText('项目交付 · 解决方案 · 正式资料')).toBeInTheDocument();
+  expect(await within(card).findByText('项目交付 · 解决方案 · 公司共享')).toBeInTheDocument();
   expect(screen.getByText('已自动分类“零信任交付方案.pdf”：项目交付 · 解决方案')).toBeInTheDocument();
 });
 
@@ -244,6 +244,7 @@ it('generates an editable draft from personal reference search results', async (
     http.get('/api/knowledge/categories', () => HttpResponse.json({ items: [], total: 0 })),
     http.get('/api/knowledge/document-types', () => HttpResponse.json({ items: [], total: 0 })),
     http.get('/api/knowledge/files', () => HttpResponse.json({ items: [], total: 0 })),
+    http.post('/api/knowledge/search', () => HttpResponse.json({ total: 0, sources: [] })),
     http.post('/api/personal-reference/search', () => HttpResponse.json({
       total: 1,
       notice: '找到 1 条我的资料。',
@@ -282,10 +283,9 @@ it('generates an editable draft from personal reference search results', async (
 
   render(<KnowledgePage session={{ ...adminSession, user: { ...adminSession.user, role: 'employee' } }} />);
 
-  await userEvent.click(await screen.findByRole('radio', { name: '我的资料' }));
   await userEvent.type(screen.getByRole('textbox', { name: '关键词或问题' }), '根据我的会议记录生成实施计划');
   await userEvent.click(screen.getByRole('button', { name: '查找资料' }));
-  await userEvent.click(await screen.findByRole('button', { name: '用我的资料生成 客户会议记录.md' }));
+  await userEvent.click(await screen.findByRole('button', { name: '用此个人资料生成 客户会议记录.md' }));
 
   expect(generateRequest).toHaveBeenCalledWith({
     question: '根据我的会议记录生成实施计划',
@@ -293,7 +293,7 @@ it('generates an editable draft from personal reference search results', async (
     top_k: 8,
     file_ids: ['file-personal'],
   });
-  expect(await screen.findByText('我的资料生成草稿')).toBeInTheDocument();
+  expect(await screen.findByText('个人资料生成草稿')).toBeInTheDocument();
   expect(screen.getAllByText('已根据我的资料准备生成上下文。').length).toBeGreaterThan(0);
 });
 
@@ -317,6 +317,11 @@ it('answers from official knowledge after search without exposing raw knowledge 
         score: 82,
         snippet: '验收材料需要包含部署记录。',
       }],
+    })),
+    http.post('/api/personal-reference/search', () => HttpResponse.json({
+      total: 0,
+      notice: '个人资料中未找到匹配内容。',
+      sources: [],
     })),
     http.post('/api/knowledge/ask', async ({ request }) => {
       askRequest(await request.json());
@@ -343,7 +348,7 @@ it('answers from official knowledge after search without exposing raw knowledge 
 
   await userEvent.type(await screen.findByRole('textbox', { name: '关键词或问题' }), '验收材料需要什么');
   await userEvent.click(screen.getByRole('button', { name: '查找资料' }));
-  await userEvent.click(await screen.findByRole('button', { name: '用正式资料回答' }));
+  await userEvent.click(await screen.findByRole('button', { name: '用公司共享资料回答' }));
 
   expect(askRequest).toHaveBeenCalledWith({
     question: '验收材料需要什么',
@@ -351,7 +356,7 @@ it('answers from official knowledge after search without exposing raw knowledge 
     top_k: 8,
     include_sources: true,
   });
-  expect(await screen.findByText('正式资料回答')).toBeInTheDocument();
+  expect(await screen.findByText('公司共享资料回答')).toBeInTheDocument();
   expect(screen.getByText('验收材料应包含部署记录、配置清单和双方确认记录。')).toBeInTheDocument();
   expect(screen.queryByText(/raw knowledge body|private-output/i)).not.toBeInTheDocument();
 });

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 
 import { listProfessionalApprovalFlows, type ProfessionalApprovalFlow } from '../api/approvalFlows';
-import { ApiError } from '../api/client';
+import { ApiError, isSafeSameOriginUrl } from '../api/client';
 import {
   approveProfessionalDeliverable,
   acquireProfessionalDeliverableLease,
@@ -721,6 +721,9 @@ export function ProfessionalDeliverablesPage({ initialDeliverableId }: Professio
         ? URL.createObjectURL(blob)
         : fallbackUrl;
       if (!objectUrl) throw new Error('图片暂无可预览内容');
+      if (!objectUrl.startsWith('blob:') && !isSafeSameOriginUrl(objectUrl)) {
+        throw new Error('图片链接不安全，无法预览');
+      }
       setMediaPreview({
         blockId: block.block_id,
         alt: String(block.alt ?? block.url ?? '图片'),
@@ -1649,7 +1652,11 @@ export function ProfessionalDeliverablesPage({ initialDeliverableId }: Professio
                         关闭
                       </button>
                     </div>
-                    <img alt={mediaPreview.alt} src={mediaPreview.sourceUrl} />
+                    {mediaPreview.sourceUrl.startsWith('blob:') || isSafeSameOriginUrl(mediaPreview.sourceUrl) ? (
+                      <img alt={mediaPreview.alt} src={mediaPreview.sourceUrl} />
+                    ) : (
+                      <p className="professional-muted-text">图片链接不安全，无法预览。</p>
+                    )}
                   </div>
                 </div>
               ) : null}

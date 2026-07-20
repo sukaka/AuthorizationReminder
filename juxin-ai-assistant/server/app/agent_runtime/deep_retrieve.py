@@ -13,6 +13,7 @@ from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from ..models import KnowledgeFile
+from ..product_aliases import expand_product_aliases
 
 
 @dataclass(frozen=True)
@@ -59,6 +60,29 @@ class DeepRetrievalResult:
     expanded_terms: list[str]
     second_pass_used: bool
     gaps: list[str] = field(default_factory=list)
+    query_variants: list[str] = field(default_factory=list)
+    retry_reason: list[str] = field(default_factory=list)
+    retrieval_grade: dict[str, object] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class RetrievalGrade:
+    """Small, explainable quality signal used to decide whether to retry."""
+
+    relevant: bool
+    query_term_coverage: float
+    evidence_chars: int
+    file_coverage: int
+    reasons: tuple[str, ...] = ()
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "relevant": self.relevant,
+            "query_term_coverage": round(self.query_term_coverage, 3),
+            "evidence_chars": self.evidence_chars,
+            "file_coverage": self.file_coverage,
+            "reasons": list(self.reasons),
+        }
 
 
 def classify_query(query: str) -> RetrievalPlan:
@@ -123,18 +147,23 @@ def deep_retrieve(
         )
     primary = _dedupe_snippets(primary)
     primary = _enforce_file_coverage(primary, target=MIN_FILE_COVERAGE)
+    primary_grade = grade_retrieved_snippets(query, primary)
 
     secondary: list[RetrievedSnippet] = []
     second_pass = False
+    query_variants = [str(query or "").strip()] if str(query or "").strip() else []
 
-    if plan.need_second_pass and _needs_second_pass(primary, query):
+    if plan.need_second_pass and _needs_second_pass(primary, query, grade=primary_grade):
         second_pass = True
-        alt_terms = _second_pass_terms(query, plan.expand_terms)
+        rewritten_query = rewrite_retrieval_query(query, plan.expand_terms)
+        if rewritten_query and rewritten_query != query:
+            query_variants.append(rewritten_query)
+        alt_terms = _second_pass_terms(rewritten_query or query, plan.expand_terms)
         # Second pass prefers lexical diversification; hybrid already covered
         # dense candidates on the first pass.
         secondary = _lexical_search(
             db,
-            query=query,
+            query=rewritten_query or query,
             terms=alt_terms,
             limit=max(8, effective_limit // 2),
             owner_user_id=owner_user_id,
@@ -153,6 +182,7 @@ def deep_retrieve(
 
     merged = _dedupe_snippets([*primary, *secondary])[:effective_limit]
     coverage = len({s.file_uuid or s.name for s in merged})
+    final_grade = grade_retrieved_snippets(query, merged)
     if not merged:
         gaps.append("未检索到相关资料")
     elif coverage < min(MIN_FILE_COVERAGE, max(1, effective_limit // 4)):
@@ -174,6 +204,9 @@ def deep_retrieve(
         expanded_terms=plan.expand_terms,
         second_pass_used=second_pass,
         gaps=user_gaps,
+        query_variants=query_variants,
+        retry_reason=list(primary_grade.reasons) if second_pass else [],
+        retrieval_grade=final_grade.as_dict(),
     )
 
 
@@ -309,6 +342,88 @@ def _tokenize(text: str) -> list[str]:
     return parts[:12]
 
 
+def _grade_terms(query: str) -> list[str]:
+    """Return short, meaningful terms for deterministic evidence grading."""
+
+    stopwords = {
+        "如何", "怎么", "什么", "哪些", "是否", "请问", "以及", "并且", "同时",
+        "需要", "要求", "相关", "一下", "帮我", "这个", "那个", "和", "与", "的",
+    }
+    segmented = str(query or "")
+    for marker in sorted(stopwords, key=len, reverse=True):
+        segmented = segmented.replace(marker, " ")
+    terms: list[str] = []
+    for term in _tokenize(segmented):
+        if term in stopwords or term in terms:
+            continue
+        terms.append(term)
+    return terms[:12]
+
+
+def grade_retrieved_snippets(
+    query: str,
+    snippets: Iterable[RetrievedSnippet],
+) -> RetrievalGrade:
+    """Grade retrieval evidence without inspecting permissions or answer text."""
+
+    rows = list(snippets)
+    terms = _grade_terms(query)
+    haystack = " ".join(f"{row.name} {row.text}" for row in rows).lower()
+    matched = 0
+    for term in terms:
+        lowered_term = term.lower()
+        if lowered_term in haystack:
+            matched += 1
+            continue
+        if re.search(r"[\u4e00-\u9fff]", lowered_term) and len(lowered_term) > 2:
+            if any(
+                lowered_term[index : index + 2] in haystack
+                for index in range(len(lowered_term) - 1)
+            ):
+                matched += 1
+    coverage = matched / len(terms) if terms else 0.0
+    evidence_chars = sum(len(row.text or "") for row in rows)
+    file_coverage = len({row.file_uuid or row.name for row in rows})
+    reasons: list[str] = []
+    if not rows:
+        reasons.append("no_results")
+    if coverage < 0.25:
+        reasons.append("low_term_coverage")
+    if evidence_chars < 60:
+        reasons.append("short_evidence")
+    if file_coverage < 2:
+        reasons.append("narrow_file_coverage")
+    if any(
+        marker in query for marker in ("以及", "并且", "同时", "对比", "分别")
+    ) and file_coverage < 3:
+        reasons.append("multi_intent_under_coverage")
+    return RetrievalGrade(
+        relevant=bool(rows) and coverage >= 0.25 and evidence_chars >= 60,
+        query_term_coverage=coverage,
+        evidence_chars=evidence_chars,
+        file_coverage=file_coverage,
+        reasons=tuple(dict.fromkeys(reasons)),
+    )
+
+
+def rewrite_retrieval_query(query: str, expanded_terms: Iterable[str] = ()) -> str:
+    """Build a bounded retry query while retaining the user's original wording."""
+
+    original = str(query or "").strip()
+    if not original:
+        return ""
+    aliased = expand_product_aliases(original)
+    candidates = [original]
+    candidates.extend(part.strip() for part in aliased.split() if part.strip())
+    candidates.extend(_tokenize(aliased))
+    candidates.extend(str(term).strip() for term in expanded_terms if str(term).strip())
+    deduped: list[str] = []
+    for candidate in candidates:
+        if candidate and candidate not in deduped:
+            deduped.append(candidate)
+    return " ".join(deduped[:12])
+
+
 def _expand_terms(terms: list[str]) -> list[str]:
     out: list[str] = []
     for term in terms:
@@ -328,19 +443,14 @@ def _second_pass_terms(query: str, expanded: list[str]) -> list[str]:
     return (filtered + expanded + base[:1])[:10]
 
 
-def _needs_second_pass(snippets: list[RetrievedSnippet], query: str) -> bool:
-    if not snippets:
-        return True
-    coverage = len({s.file_uuid or s.name for s in snippets})
-    total = sum(len(s.text) for s in snippets)
-    if coverage < 2:
-        return True
-    if total < 60:
-        return True
-    # query has multi-aspect markers
-    if any(m in query for m in ("以及", "并且", "同时", "对比", "分别")) and coverage < 3:
-        return True
-    return False
+def _needs_second_pass(
+    snippets: list[RetrievedSnippet],
+    query: str,
+    *,
+    grade: RetrievalGrade | None = None,
+) -> bool:
+    evaluated = grade or grade_retrieved_snippets(query, snippets)
+    return bool(evaluated.reasons)
 
 
 def _lexical_search(

@@ -9,7 +9,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     app_name: str = "聚信 AI 助手"
-    app_version: str = "5.4.1"
+    app_version: str = "5.5.0"
+    environment: str = "development"
     database_url: str = "sqlite+pysqlite:///./juxin-ai-assistant-dev.db"
     auth_service_url: str = "http://auth:5180"
     auth_public_url: str = "http://localhost:5180"
@@ -55,6 +56,14 @@ class Settings(BaseSettings):
     server_model_display_name: str = "服务端模型"
     server_model_timeout_seconds: int = Field(default=300, ge=5, le=600)
     server_model_max_output_tokens: int = Field(default=8192, ge=1, le=200000)
+    # User-supplied model endpoints are disabled by default.  When enabled in
+    # a deployment, callers must use an explicit host allowlist.
+    user_model_custom_endpoint_enabled: bool = False
+    user_model_allowed_hosts: str = ""
+    # Agent Hub HTTP connectors are disabled by default.  Deployments must
+    # explicitly allow exact HTTPS hosts before accepting remote endpoints.
+    agent_http_endpoint_enabled: bool = False
+    agent_http_allowed_hosts: str = ""
     embedding_model_api_key: str = ""
     embedding_model_timeout_seconds: int = Field(default=30, ge=3, le=300)
     qdrant_enabled: bool = False
@@ -93,6 +102,14 @@ class Settings(BaseSettings):
     wecom_kf_identity_hash_salt: str = ""
 
     # Internal WeCom app used only to notify configured support staff.
+    feishu_channel_enabled: bool = False
+    feishu_app_id: str = ""
+    feishu_app_secret: str = ""
+    feishu_verification_token: str = ""
+    feishu_encrypt_key: str = ""
+    wecom_channel_enabled: bool = False
+    wecom_token: str = ""
+    wecom_encoding_aes_key: str = ""
     wecom_corp_id: str = ""
     wecom_secret: str = ""
     wecom_agent_id: str = ""
@@ -123,6 +140,10 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_production_secrets(self) -> "Settings":
+        if not auth_dev_bypass_is_safe(self):
+            raise ValueError(
+                "AUTH_DEV_BYPASS 仅允许本地开发环境，且 PUBLIC_URL/AUTH_PUBLIC_URL 必须是 loopback"
+            )
         signature_mode = self.workflow_event_signature_mode.strip().lower()
         if signature_mode not in {"disabled", "required"}:
             raise ValueError(
@@ -222,6 +243,26 @@ class Settings(BaseSettings):
                 raise ValueError("微信客服要求 KNOWLEDGE_REDIS_ENABLED=true")
             if len(self.wecom_kf_identity_hash_salt) < 32:
                 raise ValueError("WECOM_KF_IDENTITY_HASH_SALT 至少需要 32 个字符")
+        if self.feishu_channel_enabled:
+            required = {
+                "FEISHU_APP_ID": self.feishu_app_id,
+                "FEISHU_APP_SECRET": self.feishu_app_secret,
+                "FEISHU_VERIFICATION_TOKEN": self.feishu_verification_token,
+                "FEISHU_ENCRYPT_KEY": self.feishu_encrypt_key,
+            }
+            missing = [name for name, value in required.items() if not value.strip()]
+            if missing:
+                raise ValueError(f"飞书渠道缺少配置: {', '.join(missing)}")
+        if self.wecom_channel_enabled:
+            required = {
+                "WECOM_TOKEN": self.wecom_token,
+                "WECOM_ENCODING_AES_KEY": self.wecom_encoding_aes_key,
+            }
+            missing = [name for name, value in required.items() if not value.strip()]
+            if missing:
+                raise ValueError(f"企业微信渠道缺少配置: {', '.join(missing)}")
+            if len(self.wecom_encoding_aes_key.strip()) != 43:
+                raise ValueError("WECOM_ENCODING_AES_KEY 必须是 43 个字符")
         return self
 
     @property
@@ -262,3 +303,31 @@ def normalize_auth_public_url(raw: str) -> str:
     default_port = 443 if parsed.scheme == "https" else 80
     authority = host if port in {None, default_port} else f"{host}:{port}"
     return f"{parsed.scheme}://{authority}"
+
+
+def auth_dev_bypass_is_safe(settings: object) -> bool:
+    """Return whether the development auth bypass is safe for this process.
+
+    The settings model rejects unsafe combinations during startup.  Keeping
+    this small runtime check in the auth path also protects callers that inject
+    a lightweight settings object in tests or custom integrations.
+    """
+    if not bool(getattr(settings, "auth_dev_bypass", False)):
+        return True
+    environment = str(getattr(settings, "environment", "development") or "").strip().lower()
+    if environment in {"production", "prod", "staging", "stage"}:
+        return False
+    # AUTH_PUBLIC_URL may legitimately point at the separately deployed auth
+    # service in a local development environment.  The bypass must instead be
+    # gated by the app's own public origin; production/staging is rejected
+    # above regardless of origin.
+    for raw_url in (getattr(settings, "public_url", ""),):
+        try:
+            parsed = urlsplit(str(raw_url))
+        except ValueError:
+            return False
+        if parsed.hostname not in {"localhost", "127.0.0.1", "::1"}:
+            return False
+        if parsed.scheme not in {"http", "https"}:
+            return False
+    return True

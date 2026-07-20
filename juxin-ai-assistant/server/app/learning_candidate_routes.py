@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
-from .auth import get_session, require_action
+from .auth import get_session, is_platform_admin_role, require_action
 from .config import Settings, get_settings
 from .database import get_db
 from .learning_candidate_service import LearningCandidateService
@@ -46,7 +46,7 @@ async def _require_admin(
     session: SessionPayload,
     settings: Settings,
 ) -> None:
-    if session.user.role.strip().lower() != "admin":
+    if not is_platform_admin_role(session.user.role):
         raise HTTPException(status_code=403, detail="仅管理员可管理学习候选")
     await require_action("ai_assistant:admin", request, session, settings)
 
@@ -75,7 +75,7 @@ async def list_candidates(
     from sqlalchemy import select
     from .models import LearningCandidate
 
-    is_admin = session.user.role.strip().lower() == "admin"
+    is_admin = is_platform_admin_role(session.user.role)
     if is_admin:
         rows = list(
             db.scalars(

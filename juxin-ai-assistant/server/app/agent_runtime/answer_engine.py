@@ -131,6 +131,9 @@ class DefaultAnswerEngine:
             meta.setdefault("primary_hits", self.last_retrieval.primary_hits)
             meta.setdefault("secondary_hits", self.last_retrieval.secondary_hits)
             meta.setdefault("expanded_terms", self.last_retrieval.expanded_terms)
+            meta.setdefault("query_variants", self.last_retrieval.query_variants)
+            meta.setdefault("retry_reason", self.last_retrieval.retry_reason)
+            meta.setdefault("retrieval_grade", self.last_retrieval.retrieval_grade)
             if self.last_retrieval.gaps:
                 meta.setdefault("retrieval_gaps", self.last_retrieval.gaps)
         if not snippets:

@@ -809,7 +809,7 @@ it('shows user-facing task progress while chat is generating', async () => {
   await userEvent.click(screen.getByRole('button', { name: '发送' }));
 
   expect((await screen.findAllByText('正在生成回答')).length).toBeGreaterThan(0);
-  expect(screen.getByText('正在识别任务')).toBeInTheDocument();
+  expect(within(screen.getByRole('list', { name: '任务阶段' })).getByText('正在识别任务')).toBeInTheDocument();
   expect(screen.queryByText('TaskState')).not.toBeInTheDocument();
   expect(modelResolver.current).toBeDefined();
   modelResolver.current?.({
@@ -817,7 +817,7 @@ it('shows user-facing task progress while chat is generating', async () => {
     latencyMs: 12,
     usage: { output_tokens: 8 },
   });
-  expect(await screen.findByText('生成完成')).toBeInTheDocument();
+  expect(within(screen.getByRole('list', { name: '任务阶段' })).getByText('生成完成')).toBeInTheDocument();
 });
 
 it('asks before saving explicit user memory and then stores it', async () => {
@@ -1032,11 +1032,13 @@ it('shows verifier-approved citations when the final answer omits the file name'
 
   expect(await screen.findByText(/安全服务包含应急响应和运维巡检/)).toBeInTheDocument();
   expect(screen.queryByLabelText('来源：安全白皮书.txt')).not.toBeInTheDocument();
-  const citationSummary = screen.getByText('来源');
-  const citationDetails = citationSummary.closest('details');
+  const citationDetails = document.querySelector('.chat-citations');
+  expect(citationDetails).toBeInTheDocument();
+  const citationSummary = citationDetails?.querySelector('summary');
+  expect(citationSummary).toBeInTheDocument();
   expect(citationDetails).not.toHaveAttribute('open');
   expect(screen.queryByText('安全白皮书.txt')).not.toBeInTheDocument();
-  await userEvent.click(citationSummary);
+  await userEvent.click(citationSummary as HTMLElement);
   const citationList = screen.getByRole('list', { name: '引用来源' });
   expect(within(citationList).getByRole('button', { name: '打开来源：安全白皮书.txt' })).toHaveTextContent('公司知识库');
   expect(within(citationList).queryByText('安全白皮书.txt')).not.toBeInTheDocument();
@@ -1094,8 +1096,11 @@ it('keeps citations when the answer omits a leading file sequence number', async
   await userEvent.click(screen.getByRole('button', { name: '发送' }));
 
   expect(await screen.findByText(/当前资料能确认/)).toBeInTheDocument();
-  const citationSummary = screen.getByText('来源');
-  await userEvent.click(citationSummary);
+  const citationDetails = document.querySelector('.chat-citations');
+  expect(citationDetails).toBeInTheDocument();
+  const citationSummary = citationDetails?.querySelector('summary');
+  expect(citationSummary).toBeInTheDocument();
+  await userEvent.click(citationSummary as HTMLElement);
   const citationList = screen.getByRole('list', { name: '引用来源' });
   expect(within(citationList).getByRole('button', { name: '打开来源：3-聚信等保合规云管平台-招标参数V1.1.docx' })).toHaveTextContent('当前附件');
   expect(within(citationList).queryByText('3-聚信等保合规云管平台-招标参数V1.1.docx')).not.toBeInTheDocument();
@@ -1339,6 +1344,7 @@ it('does not send with Enter while an IME composition is active', async () => {
 it('turns the send button into a compact stop button while generating and cancels by click', async () => {
   const completeRequest = vi.fn();
   const failRequest = vi.fn();
+  const cancelRun = vi.fn();
   let resolveGeneration: ((value: { output: string; latencyMs: number; usage: { output_tokens: number } }) => void) | undefined;
   const pendingGeneration = new Promise<{ output: string; latencyMs: number; usage: { output_tokens: number } }>((resolve) => {
     resolveGeneration = resolve;
@@ -1351,6 +1357,7 @@ it('turns the send button into a compact stop button while generating and cancel
       assistant_message_uuid: 'assistant-message-stop-click',
       completion_token: 'complete-stop-click',
       completed: false,
+      run_id: 'run-stop-click',
       answer: '',
       messages: [
         { role: 'system', content: '你是聚信 AI 助手' },
@@ -1366,6 +1373,10 @@ it('turns the send button into a compact stop button while generating and cancel
       failRequest(await request.json());
       return HttpResponse.json({ message_uuid: 'assistant-message-stop-click', status: 'FAILED' });
     }),
+    http.post('/api/ai/runs/run-stop-click/cancel', () => {
+      cancelRun();
+      return HttpResponse.json({ run_id: 'run-stop-click', status: 'cancelled' });
+    }),
   );
   generateLocalModelMock.mockReturnValue(pendingGeneration);
 
@@ -1380,6 +1391,7 @@ it('turns the send button into a compact stop button while generating and cancel
 
   const requestId = generateLocalModelMock.mock.calls[0][0].requestId;
   expect(cancelModelGenerationMock).toHaveBeenCalledWith(requestId);
+  expect(cancelRun).toHaveBeenCalledOnce();
   resolveGeneration?.({ output: '不应保存的内容', latencyMs: 100, usage: { output_tokens: 3 } });
   await waitFor(() => expect(completeRequest).not.toHaveBeenCalled());
   await waitFor(() => expect(failRequest).toHaveBeenCalledWith({
@@ -1432,7 +1444,7 @@ it('shows static prompt examples and places new task beside the history heading'
   const historyPane = screen.getByLabelText('历史任务');
   expect(within(historyPane).getByRole('button', { name: '开启新任务' })).toBeInTheDocument();
   expect(screen.getByLabelText('示例提示')).toHaveTextContent('写一份项目方案');
-  expect(screen.queryByRole('button', { name: '写一份项目方案' })).not.toBeInTheDocument();
+  expect(within(screen.getByLabelText('示例提示')).getByRole('button', { name: '写一份项目方案' })).toBeInTheDocument();
 });
 
 it('requests chat history without browser cache so 304 responses do not break loading', async () => {
@@ -1518,7 +1530,11 @@ it('offers automatic routing with a manual assistant fallback', async () => {
     '应急响应助手',
     '查公司知识',
   ]);
-  await userEvent.selectOptions(modeSelect, 'hr_admin');
+  await userEvent.click(screen.getByRole('button', { name: '切换助手' }));
+  expect(screen.getByRole('button', { name: '收起' })).toHaveAttribute('aria-expanded', 'true');
+  expect(screen.getByRole('menu', { name: '手动指定助手' })).toBeInTheDocument();
+  await userEvent.click(screen.getByRole('menuitemradio', { name: '行政人力助手' }));
+  expect(modeSelect).toHaveValue('hr_admin');
   await userEvent.type(screen.getByLabelText('告诉我你想完成什么工作'), '帮我写投标响应');
   await userEvent.click(screen.getByRole('button', { name: '发送' }));
 
@@ -1544,7 +1560,7 @@ it('sends auto mode and displays the server-selected assistant', async () => {
         effective_mode: 'business',
         requested_mode: 'auto',
         routing_reason: '命中关键词：投标',
-        routing_confidence: 0.6,
+        routing_confidence: 0.4,
         messages: [
           { role: 'system', content: '商务助手：投标、标书、响应文件' },
           { role: 'user', content: '帮我写投标响应' },
@@ -1574,7 +1590,10 @@ it('sends auto mode and displays the server-selected assistant', async () => {
   await waitFor(() => expect(prepareRequest).toHaveBeenCalledWith(
     expect.objectContaining({ mode: 'auto' }),
   ));
-  expect(screen.getByText('自动识别 · 当前商务助手')).toBeInTheDocument();
+  expect(screen.getByText('自动路由')).toHaveAttribute('title', '命中关键词：投标');
+  expect(screen.queryByText('助手')).not.toBeInTheDocument();
+  expect(screen.queryByText('发送问题后自动识别')).not.toBeInTheDocument();
+  expect(screen.queryByText('已自动分配 · 商务助手 · 识别信心较低，可切换')).not.toBeInTheDocument();
 });
 
 it('always searches personal materials and session attachments', async () => {
@@ -2257,6 +2276,7 @@ it('loads messages when selecting a historical chat session', async () => {
       task_state: {
         task_state_id: 'task-state-history',
         conversation_id: 'session-history',
+        run_id: 'run-history',
         stage: 'completed',
         status: 'completed',
         label: '已完成',
@@ -2305,9 +2325,12 @@ it('loads messages when selecting a historical chat session', async () => {
   render(<ChatPage />);
   await userEvent.click(await screen.findByRole('button', { name: '会议纪要' }));
 
-  expect(await screen.findByText('总结会议')).toBeInTheDocument();
+  const messageList = document.querySelector('.chat-messages');
+  expect(messageList).toBeInTheDocument();
+  expect(within(messageList as HTMLElement).getByText('总结会议')).toBeInTheDocument();
   expect(screen.getByText(/会议决定下周验收/)).toBeInTheDocument();
   expect(screen.getByRole('status', { name: '任务进度' })).toHaveTextContent('已完成');
+  expect(screen.getByText('Run run-hist')).toBeInTheDocument();
   expect(screen.getByRole('list', { name: '任务阶段' })).toHaveTextContent('正在复核结果');
   const inlineSource = screen.getByLabelText('来源：会议记录.txt');
   expect(inlineSource).toHaveClass('chat-inline-source');
@@ -2396,7 +2419,10 @@ it('shows cited file names once without exposing chunk details', async () => {
   render(<ChatPage />);
   await userEvent.click(await screen.findByRole('button', { name: '来源标签' }));
 
-  expect(await screen.findByText('来源')).toBeInTheDocument();
+  const citationDetails = document.querySelector('.chat-citations');
+  expect(citationDetails).toBeInTheDocument();
+  const citationSummary = citationDetails?.querySelector('summary');
+  expect(citationSummary).toBeInTheDocument();
   const citationList = screen.getByRole('list', { name: '引用来源' });
   expect(within(citationList).getByRole('button', { name: '打开来源：聚信产品白皮书.pdf' })).toHaveTextContent('公司知识库');
   expect(within(citationList).getByRole('button', { name: '打开来源：我的会议记录.docx' })).toHaveTextContent('我的资料');
@@ -2460,7 +2486,10 @@ it('renders cited files as compact source pills instead of long filenames', asyn
   render(<ChatPage />);
   await userEvent.click(await screen.findByRole('button', { name: '紧凑来源' }));
 
-  expect(await screen.findByText('来源')).toBeInTheDocument();
+  const citationDetails = document.querySelector('.chat-citations');
+  expect(citationDetails).toBeInTheDocument();
+  const citationSummary = citationDetails?.querySelector('summary');
+  expect(citationSummary).toBeInTheDocument();
   const inlineSources = document.querySelectorAll('.chat-inline-source');
   expect(inlineSources).toHaveLength(1);
   expect(inlineSources[0]).toHaveTextContent('当前附件');
@@ -2470,9 +2499,8 @@ it('renders cited files as compact source pills instead of long filenames', asyn
     element?.textContent?.includes(longFileName) ?? false
   ))).toHaveLength(0);
   expect(screen.queryByText('引用文件 1 个')).not.toBeInTheDocument();
-  const citationDetails = screen.getByText('来源').closest('details');
   expect(citationDetails).not.toHaveAttribute('open');
-  await userEvent.click(screen.getByText('来源'));
+  await userEvent.click(citationSummary as HTMLElement);
   const citationList = screen.getByRole('list', { name: '引用来源' });
   expect(within(citationList).queryByText(longFileName)).not.toBeInTheDocument();
   expect(within(citationList).getByRole('button', { name: `打开来源：${longFileName}` })).toHaveTextContent('当前附件');
