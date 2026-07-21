@@ -282,6 +282,8 @@ export type ChatPreparePayload = {
   effective_mode?: ChatMode;
   routing_reason?: string;
   routing_confidence?: number;
+  execution_mode?: 'foreground' | 'background';
+  execution_reason?: string;
 };
 
 export type ChatGeneratePayload = {

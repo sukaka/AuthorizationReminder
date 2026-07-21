@@ -995,8 +995,8 @@ export function ChatPage({ onOpenTaskCenter, onOpenWorkArtifacts, initialProject
   const [generationStatus, setGenerationStatus] = useState<GenerationStatus>('idle');
   const [generationMetrics, setGenerationMetrics] = useState<GenerationMetrics | null>(null);
   const [webModelLabel, setWebModelLabel] = useState('服务端模型');
-  const [backgroundMode, setBackgroundMode] = useState(false);
   const [longTasks, setLongTasks] = useState<LongTaskPayload[]>([]);
+  const [completedLongTaskNotice, setCompletedLongTaskNotice] = useState<LongTaskPayload | null>(null);
   const [sensitiveConfirmation, setSensitiveConfirmation] = useState<{
     question: string;
     digest: string;
@@ -1015,6 +1015,8 @@ export function ChatPage({ onOpenTaskCenter, onOpenWorkArtifacts, initialProject
   const activeGenerationKeyRef = useRef('');
   const activeSessionUuidRef = useRef('');
   const pendingSessionCreationRef = useRef<Promise<ChatSessionPayload> | null>(null);
+  const longTaskStatusesRef = useRef<Map<string, LongTaskPayload['status']>>(new Map());
+  const longTasksInitializedRef = useRef(false);
 
   useEffect(() => {
     activeSessionUuidRef.current = activeSessionUuid;
@@ -1071,9 +1073,25 @@ export function ChatPage({ onOpenTaskCenter, onOpenWorkArtifacts, initialProject
     };
   }, []);
 
+  const applyLongTasks = (tasks: LongTaskPayload[], notifyCompletion = true) => {
+    if (notifyCompletion && longTasksInitializedRef.current) {
+      const newlyCompleted = tasks.find((task) => (
+        task.status === 'completed'
+        && longTaskStatusesRef.current.has(task.task_id)
+        && longTaskStatusesRef.current.get(task.task_id) !== 'completed'
+      ));
+      if (newlyCompleted) setCompletedLongTaskNotice(newlyCompleted);
+    }
+    longTaskStatusesRef.current = new Map(
+      tasks.map((task) => [task.task_id, task.status] as const),
+    );
+    longTasksInitializedRef.current = true;
+    setLongTasks(tasks);
+  };
+
   const refreshLongTasks = async () => {
     const payload = await listLongTasks();
-    setLongTasks(payload.items);
+    applyLongTasks(payload.items);
   };
 
   const replaceLongTask = (task: LongTaskPayload) => {
@@ -1081,6 +1099,8 @@ export function ChatPage({ onOpenTaskCenter, onOpenWorkArtifacts, initialProject
       task,
       ...current.filter((item) => item.task_id !== task.task_id),
     ]);
+    longTaskStatusesRef.current.set(task.task_id, task.status);
+    longTasksInitializedRef.current = true;
   };
 
   const cancelBackgroundTask = async (taskId: string) => {
@@ -1146,7 +1166,7 @@ export function ChatPage({ onOpenTaskCenter, onOpenWorkArtifacts, initialProject
     let active = true;
     listLongTasks()
       .then((payload) => {
-        if (active) setLongTasks(payload.items);
+        if (active) applyLongTasks(payload.items, false);
       })
       .catch(() => undefined);
     return () => {
@@ -1161,6 +1181,17 @@ export function ChatPage({ onOpenTaskCenter, onOpenWorkArtifacts, initialProject
     }, 1500);
     return () => window.clearInterval(timer);
   }, [longTasks, shouldUseServerModel]);
+
+  useEffect(() => {
+    if (!shouldUseServerModel) return undefined;
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === 'visible') {
+        refreshLongTasks().catch(() => undefined);
+      }
+    };
+    document.addEventListener('visibilitychange', refreshWhenVisible);
+    return () => document.removeEventListener('visibilitychange', refreshWhenVisible);
+  }, [shouldUseServerModel]);
 
   useEffect(() => {
     let active = true;
@@ -1724,7 +1755,7 @@ export function ChatPage({ onOpenTaskCenter, onOpenWorkArtifacts, initialProject
         isComplete: false,
         runId: prepared.run_id || undefined,
       }));
-      if (shouldUseServerModel && backgroundMode) {
+      if (shouldUseServerModel && prepared.execution_mode === 'background') {
         const queued = await createLongChatTask({
           conversationId: prepared.session_uuid,
           messageUuid: assistantId,
@@ -1736,10 +1767,10 @@ export function ChatPage({ onOpenTaskCenter, onOpenWorkArtifacts, initialProject
         replaceLongTask(queued);
         updateRequestMessages((current) => current.map((message) =>
           message.id === assistantId
-            ? { ...message, content: '任务已在后台处理，可继续其他工作。', isComplete: true }
+            ? { ...message, content: '已进入后台处理，可继续其他工作。', isComplete: true }
             : message,
         ));
-        setStatus('已加入后台处理');
+        setStatus('已进入后台处理');
         return;
       }
       if (shouldUseServerModel) {
@@ -3193,17 +3224,6 @@ export function ChatPage({ onOpenTaskCenter, onOpenWorkArtifacts, initialProject
                   />
                 </label>
                 <span className="chat-model-pill">当前设置：{currentModelLabel}</span>
-                {shouldUseServerModel ? (
-                  <label className="chat-background-toggle">
-                    <input
-                      aria-label="后台处理"
-                      checked={backgroundMode}
-                      onChange={(event) => setBackgroundMode(event.target.checked)}
-                      type="checkbox"
-                    />
-                    <span>后台处理</span>
-                  </label>
-                ) : null}
                 <button
                   aria-label={generationActive ? '停止生成' : '发送'}
                   className={`chat-send-button${generationActive ? ' is-stop-button is-stopping-ready' : ''}`}
@@ -3469,6 +3489,31 @@ export function ChatPage({ onOpenTaskCenter, onOpenWorkArtifacts, initialProject
                 void send(pending.question, pending.digest);
               }}
             />
+          ) : null}
+          {completedLongTaskNotice ? (
+            <section aria-label="后台任务完成" className="chat-long-task-notice" role="status">
+              <div>
+                <strong>后台任务已完成</strong>
+                <span title={completedLongTaskNotice.title}>{completedLongTaskNotice.title}</span>
+              </div>
+              <button
+                onClick={() => {
+                  void loadSession(completedLongTaskNotice.conversation_id);
+                  setCompletedLongTaskNotice(null);
+                }}
+                type="button"
+              >
+                查看结果
+              </button>
+              <button
+                aria-label="关闭完成提醒"
+                className="chat-long-task-notice-close"
+                onClick={() => setCompletedLongTaskNotice(null)}
+                type="button"
+              >
+                ×
+              </button>
+            </section>
           ) : null}
           {longTasks.length ? (
             <aside aria-label="后台任务" className="chat-long-task-tray" role="region">

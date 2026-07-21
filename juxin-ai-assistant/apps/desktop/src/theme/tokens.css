@@ -5846,20 +5846,6 @@ textarea:focus-visible {
   overflow: hidden;
 }
 
-.chat-background-toggle {
-  align-items: center;
-  color: var(--text-secondary);
-  display: inline-flex;
-  font-size: 12px;
-  gap: 6px;
-  white-space: nowrap;
-}
-
-.chat-background-toggle input {
-  accent-color: var(--accent-primary);
-  margin: 0;
-}
-
 .chat-long-task-tray {
   background: var(--surface-elevated);
   border: 1px solid var(--border-subtle);
@@ -5872,6 +5858,54 @@ textarea:focus-visible {
   right: 20px;
   width: min(340px, calc(100vw - 32px));
   z-index: 40;
+}
+
+.chat-long-task-notice {
+  align-items: center;
+  background: var(--surface-elevated);
+  border: 1px solid var(--border-subtle);
+  box-shadow: var(--shadow-lg);
+  display: flex;
+  gap: 12px;
+  padding: 12px 14px;
+  position: fixed;
+  right: 20px;
+  top: 72px;
+  width: min(360px, calc(100vw - 32px));
+  z-index: 41;
+}
+
+.chat-long-task-notice > div {
+  display: grid;
+  flex: 1;
+  gap: 3px;
+  min-width: 0;
+}
+
+.chat-long-task-notice strong {
+  font-size: 13px;
+}
+
+.chat-long-task-notice span {
+  color: var(--text-secondary);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-long-task-notice button {
+  background: transparent;
+  border: 0;
+  color: var(--accent-primary);
+  cursor: pointer;
+  flex: 0 0 auto;
+}
+
+.chat-long-task-notice .chat-long-task-notice-close {
+  color: var(--text-tertiary);
+  font-size: 18px;
+  padding: 0;
 }
 
 .chat-long-task-head,
@@ -8549,8 +8583,7 @@ textarea:focus-visible {
 }
 
 @media (max-width: 900px) {
-  .chat-model-pill,
-  .chat-background-toggle {
+  .chat-model-pill {
     display: none;
   }
 }

@@ -209,6 +209,8 @@ it('queues a server-model chat for background processing', async () => {
       completion_token: 'complete-background',
       completed: false,
       answer: '',
+      execution_mode: 'background',
+      execution_reason: '长报告或正式材料默认在后台处理',
       messages: [
         { role: 'system', content: '你是聚信 AI 助手' },
         { role: 'user', content: '生成季度调研报告' },
@@ -239,12 +241,13 @@ it('queues a server-model chat for background processing', async () => {
   );
 
   render(<ChatPage />);
-  await userEvent.click(await screen.findByRole('checkbox', { name: '后台处理' }));
-  await userEvent.type(screen.getByLabelText('告诉我你想完成什么工作'), '生成季度调研报告');
+  await userEvent.type(await screen.findByLabelText('告诉我你想完成什么工作'), '生成季度调研报告');
   await userEvent.click(screen.getByRole('button', { name: '发送' }));
 
   const tray = await screen.findByRole('region', { name: '后台任务' });
   expect(tray).toHaveTextContent('等待处理');
+  expect(screen.getByText('已进入后台处理，可继续其他工作。')).toBeInTheDocument();
+  expect(screen.queryByRole('checkbox', { name: '后台处理' })).not.toBeInTheDocument();
   expect(queuedRequest).toHaveBeenCalledWith(expect.objectContaining({
     conversation_id: 'session-background',
     message_uuid: 'assistant-background',
@@ -316,6 +319,82 @@ it('restores a failed background task with its draft and retries it', async () =
   expect(tray).toHaveTextContent('已取消');
 });
 
+it('notifies when a background task completes and loads the full result', async () => {
+  Object.defineProperty(window, '__TAURI_INTERNALS__', {
+    configurable: true,
+    value: undefined,
+  });
+  let longTaskRequests = 0;
+  const loadedSession = vi.fn();
+  const runningTask = {
+    task_id: 'long-completes',
+    task_type: 'chat_generation',
+    title: '客户合规解决方案 PPT',
+    conversation_id: 'session-completed',
+    message_uuid: 'assistant-completed',
+    status: 'running',
+    stage: 'generating',
+    progress: 60,
+    attempt: 1,
+    draft: '正在生成第 6 页…',
+    error_code: '',
+    error_message: '',
+    retry_allowed: false,
+    cancel_allowed: true,
+    created_at: '2026-07-10T04:00:00Z',
+    updated_at: '2026-07-10T04:01:00Z',
+  } as const;
+  server.use(
+    http.get('/api/conversations', () => HttpResponse.json({ items: [], total: 0 })),
+    http.get('/api/ai/model-profiles', () => HttpResponse.json({ items: [], total: 0 })),
+    http.get('/api/ai/long-tasks', () => {
+      longTaskRequests += 1;
+      const task = longTaskRequests === 1
+        ? runningTask
+        : {
+            ...runningTask,
+            status: 'completed' as const,
+            stage: 'completed',
+            progress: 100,
+            draft: 'PPT 已生成完成。',
+            cancel_allowed: false,
+            updated_at: '2026-07-10T04:02:00Z',
+          };
+      return HttpResponse.json({ items: [task], total: 1 });
+    }),
+    http.get('/api/ai/chat/sessions/session-completed', () => {
+      loadedSession();
+      return HttpResponse.json({
+        session_uuid: 'session-completed',
+        title: '客户合规解决方案 PPT',
+        mode: 'normal',
+        status: 'active',
+        workspace_type: 'personal',
+        project_uuid: null,
+        created_at: '2026-07-10T04:00:00Z',
+        updated_at: '2026-07-10T04:02:00Z',
+        messages: [{
+          message_uuid: 'assistant-completed',
+          role: 'assistant',
+          content: '这是后台任务生成的完整 PPT 结果。',
+          status: 'COMPLETED',
+          citations: [],
+          generated_files: [],
+          created_at: '2026-07-10T04:02:00Z',
+        }],
+      });
+    }),
+  );
+
+  render(<ChatPage />);
+
+  const notice = await screen.findByRole('status', { name: '后台任务完成' }, { timeout: 3500 });
+  expect(notice).toHaveTextContent('客户合规解决方案 PPT');
+  await userEvent.click(within(notice).getByRole('button', { name: '查看结果' }));
+  expect(await screen.findByText('这是后台任务生成的完整 PPT 结果。')).toBeInTheDocument();
+  expect(loadedSession).toHaveBeenCalledOnce();
+});
+
 it('detects explicit memory trigger phrases without saving sensitive content', () => {
   expect(detectMemorySuggestion('以后都这样，导出 Word 成功只显示 Toast')?.memoryType).toBe('user_preference');
   expect(detectMemorySuggestion('不对，应该只显示引用文件名')?.priority).toBe('high');
@@ -334,6 +413,8 @@ it('sends a normal chat message, streams output, and completes it', async () => 
       completion_token: 'complete-chat',
       completed: false,
       answer: '',
+      execution_mode: 'foreground',
+      execution_reason: '普通问答使用前台流式输出',
       messages: [
         { role: 'system', content: '你是聚信 AI 助手' },
         { role: 'user', content: '帮我总结今天工作' },

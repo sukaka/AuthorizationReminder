@@ -89,7 +89,7 @@ describe('chat workspace layout polish', () => {
     expect(css).toMatch(/\.chat-file-trigger\s*{[^}]*flex:\s*0 0 auto;/s);
     expect(css).toMatch(/\.chat-file-trigger span,\s*\.chat-reference-chip,\s*\.chat-model-pill\s*{[^}]*white-space:\s*nowrap;[^}]*flex:\s*0 0 auto;/s);
     expect(css).toMatch(/@media\s*\(max-width:\s*1280px\)[\s\S]*?\.chat-page:not\(\.has-chat-content\) \.chat-composer\s*{[^}]*width:\s*min\(680px,\s*100%\);[^}]*min-width:\s*0;/s);
-    expect(css).toMatch(/@media\s*\(max-width:\s*900px\)[\s\S]*?\.chat-model-pill,\s*\.chat-background-toggle\s*{[^}]*display:\s*none;/s);
+    expect(css).toMatch(/@media\s*\(max-width:\s*900px\)[\s\S]*?\.chat-model-pill\s*{[^}]*display:\s*none;/s);
     expect(css).toMatch(/\.chat-sessions > div\[data-session-status\] > button\s*{[^}]*background:\s*transparent;[^}]*box-shadow:\s*none;/s);
   });
 

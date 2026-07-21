@@ -39,6 +39,8 @@ def test_normal_chat_prepare_complete_and_detail(client_for_user) -> None:
     assert body["assistant_message_uuid"]
     assert body["completion_token"]
     assert body["completed"] is False
+    assert body["execution_mode"] == "foreground"
+    assert "流式" in body["execution_reason"]
     assert body["citations"] == []
     assert body["task_state"]["stage"] == "generating"
     assert body["task_state"]["status"] == "active"
@@ -74,6 +76,23 @@ def test_normal_chat_prepare_complete_and_detail(client_for_user) -> None:
     assert detail.json()["task_state"]["label"] == "已完成"
     assert detail.json()["task_state"]["stage_history"][-2]["label"] == "正在复核结果"
     assert detail.json()["task_state"]["stage_history"][-1]["label"] == "已完成"
+
+
+def test_long_report_prepare_selects_background_execution(client_for_user) -> None:
+    client = client_for_user("long-report-owner")
+
+    prepared = client.post(
+        "/api/ai/chat/prepare",
+        json={
+            "question": "请根据这些资料撰写一份完整的季度经营分析报告",
+            "mode": "normal",
+        },
+    )
+
+    assert prepared.status_code == 201, prepared.text
+    body = prepared.json()
+    assert body["execution_mode"] == "background"
+    assert "长报告" in body["execution_reason"]
 
 
 def test_chat_complete_attaches_requested_document(client_for_user) -> None:

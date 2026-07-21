@@ -534,6 +534,8 @@ class ChatPrepareOut(BaseModel):
     effective_mode: str = "normal"
     routing_reason: str = ""
     routing_confidence: float = 1.0
+    execution_mode: Literal["foreground", "background"] = "foreground"
+    execution_reason: str = "普通问答使用前台流式输出"
 
 
 class WebCapturePreviewIn(BaseModel):

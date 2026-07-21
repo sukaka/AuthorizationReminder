@@ -22,6 +22,7 @@ from .chat_document_delivery import (
     choose_chat_document_format,
     should_generate_chat_document,
 )
+from .chat_execution_policy import decide_chat_execution
 from .chat_ppt_workflow import (
     build_chat_ppt_system_message,
     resolve_chat_ppt_context,
@@ -757,6 +758,7 @@ def prepare_chat(
     loop_runner = LoopRunner()
     analysis = loop_runner.task_analyzer.analyze(body.question, body.mode)
     route = ModeRouter.route(mode=body.mode, question=body.question)
+    execution_decision = decide_chat_execution(body.question)
     mode = analysis.mode.upper()
     session = _get_or_create_session(
         db,
@@ -864,6 +866,8 @@ def prepare_chat(
             effective_mode=route.mode,
             routing_reason=route.reason,
             routing_confidence=route.confidence,
+            execution_mode=execution_decision.mode,
+            execution_reason=execution_decision.reason,
         )
     web_results: list[WebSearchResult] = []
     web_log_id: int | None = None
@@ -938,6 +942,10 @@ def prepare_chat(
         question=body.question,
     )
     if ppt_context is not None:
+        execution_decision = decide_chat_execution(
+            body.question,
+            ppt_intent=ppt_context.intent,
+        )
         prepared_messages = [
             MessageOut(role="system", content=build_chat_ppt_system_message(ppt_context)),
             *prepared_messages,
@@ -996,6 +1004,8 @@ def prepare_chat(
             effective_mode=route.mode,
             routing_reason=route.reason,
             routing_confidence=route.confidence,
+            execution_mode=execution_decision.mode,
+            execution_reason=execution_decision.reason,
         )
     completion_token = _sealed_completion_token(
         settings=token_settings,
@@ -1056,6 +1066,8 @@ def prepare_chat(
         effective_mode=route.mode,
         routing_reason=route.reason,
         routing_confidence=route.confidence,
+        execution_mode=execution_decision.mode,
+        execution_reason=execution_decision.reason,
     )
 
 

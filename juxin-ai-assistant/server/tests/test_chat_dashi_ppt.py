@@ -110,6 +110,8 @@ def test_chat_generates_and_revises_real_dashi_ppt(
         )
         assert prepared.status_code == 201, prepared.text
         first = prepared.json()
+        assert first["execution_mode"] == "background"
+        assert "PPT" in first["execution_reason"]
         ppt_instruction = "\n".join(
             item["content"] for item in first["messages"] if item["role"] == "system"
         )
@@ -154,6 +156,8 @@ def test_chat_generates_and_revises_real_dashi_ppt(
         )
         assert revision.status_code == 201, revision.text
         second = revision.json()
+        assert second["execution_mode"] == "background"
+        assert "PPT" in second["execution_reason"]
         revision_instruction = "\n".join(
             item["content"] for item in second["messages"] if item["role"] == "system"
         )
