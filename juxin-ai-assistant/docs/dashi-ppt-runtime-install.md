@@ -34,13 +34,17 @@ docker compose \
   up -d --build ai-assistant-api
 ```
 
+默认使用无需私有仓库登录的公开基础镜像 `python:3.12-slim`。如果部署环境需要使用内部镜像，可以显式设置 `PYTHON_BASE_IMAGE`；私有镜像必须先完成对应仓库登录，不能依赖仓库中的默认值隐式切换。
+
 如果使用 HTTPS 全套预发布编排，再追加 `-f docker-compose.ai-assistant-https.yml`。服务器启动时不在线安装依赖。
 
 ## 运行结果
 
-在能力中心选择 `Dashi PPT 演示文稿制作`，填写问题后运行。默认会生成：
+普通用户直接在聊天中输入类似“帮我做一份年度经营汇报 PPT”，系统会自动识别并调用 `Dashi PPT 演示文稿制作`，不需要选择助手或手动选择 Skill。生成后可继续在同一聊天输入“把第二页改成风险分析”，系统会基于当前会话上一版演示稿生成新版本并保留旧版本。
 
-- 可离线打开、可继续编辑的 HTML；
+能力中心中的 `Dashi PPT 演示文稿制作` 仍保留，供管理员显式测试 Skill。两种入口默认都会生成：
+
+- 可下载、离线打开并在浏览器中继续编辑的 HTML；
 - 真实 `.pptx` 文件；
 - 需要时可在请求 `input.options.output_format` 中指定 `pdf` 或 `html`，也可以用 `input.formats` 同时生成多种格式。
 

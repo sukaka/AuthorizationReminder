@@ -22,6 +22,11 @@ from .chat_document_delivery import (
     choose_chat_document_format,
     should_generate_chat_document,
 )
+from .chat_ppt_workflow import (
+    build_chat_ppt_system_message,
+    resolve_chat_ppt_context,
+    run_chat_dashi_ppt,
+)
 from .config import Settings, get_settings
 from .context.context_builder import RecentChatMessage
 from .context.mode_router import ModeRouter
@@ -31,6 +36,7 @@ from .knowledge_search import RetrievedKnowledgeChunk
 from .models import AgentRun, AgentTaskState, ChatMessage, ChatMessageSource, ChatSession, ExportRecord, KnowledgeChunk, KnowledgeFile
 from .models import KnowledgeSearchLog, WebSearchLog
 from .schemas import (
+    AuthScope,
     ChatCitationOut,
     ChatCompleteIn,
     ChatGeneratedFileOut,
@@ -43,6 +49,8 @@ from .schemas import (
     ChatSessionDetailOut,
     ChatSessionItemOut,
     MessageOut,
+    SessionPayload,
+    UserPayload,
 )
 from .sensitive import derive_confirmation_key
 from .web_sources import (
@@ -921,7 +929,20 @@ def prepare_chat(
                 error_code="WEB_SEARCH_FAILED",
                 source_count=0,
             )
-    if loop_result.completed_answer:
+    token_settings = settings or get_settings()
+    ppt_context = resolve_chat_ppt_context(
+        db,
+        settings=token_settings,
+        user_id=sso_user_id,
+        session_uuid=session.uuid,
+        question=body.question,
+    )
+    if ppt_context is not None:
+        prepared_messages = [
+            MessageOut(role="system", content=build_chat_ppt_system_message(ppt_context)),
+            *prepared_messages,
+        ]
+    if loop_result.completed_answer and ppt_context is None:
         assistant = _create_message(
             db,
             cipher,
@@ -976,7 +997,6 @@ def prepare_chat(
             routing_reason=route.reason,
             routing_confidence=route.confidence,
         )
-    token_settings = settings or get_settings()
     completion_token = _sealed_completion_token(
         settings=token_settings,
         sso_user_id=sso_user_id,
@@ -1046,6 +1066,8 @@ def complete_chat_message(
     message_uuid: str,
     body: ChatCompleteIn,
     cipher: ContentCipher,
+    session_payload: SessionPayload | None = None,
+    settings: Settings | None = None,
 ) -> ChatMessage:
     message = db.scalar(
         select(ChatMessage)
@@ -1062,6 +1084,40 @@ def complete_chat_message(
     actual = hashlib.sha256(body.completion_token.encode()).digest()
     if expected is None or not hmac.compare_digest(expected, actual):
         raise HTTPException(status_code=403, detail="聊天完成凭据无效")
+    user_message = db.scalar(
+        select(ChatMessage)
+        .where(
+            ChatMessage.session_id == message.session_id,
+            ChatMessage.id < message.id,
+            ChatMessage.role == "user",
+        )
+        .order_by(ChatMessage.id.desc())
+        .limit(1)
+    )
+    question = _decrypt_content(cipher, user_message) if user_message else ""
+    current_settings = settings or get_settings()
+    ppt_context = resolve_chat_ppt_context(
+        db,
+        settings=current_settings,
+        user_id=sso_user_id,
+        session_uuid=session.uuid,
+        question=question,
+    )
+    generated_files: list[dict] | None = None
+    if ppt_context is not None:
+        effective_session = session_payload or SessionPayload(
+            user=UserPayload(id=sso_user_id, username=sso_user_id, role="employee"),
+            scope=AuthScope(),
+            apps=["ai-assistant"],
+        )
+        generated_files = run_chat_dashi_ppt(
+            db,
+            settings=current_settings,
+            session_payload=effective_session,
+            session_uuid=session.uuid,
+            question=question,
+            answer=body.answer,
+        )
     ciphertext, nonce = _encrypt_content(cipher, message.uuid, body.answer)
     message.content_ciphertext = ciphertext
     message.content_nonce = nonce
@@ -1081,13 +1137,16 @@ def complete_chat_message(
         answer=body.answer,
         reference_result=reference_result,
     )
-    _create_chat_generated_files(
-        db,
-        sso_user_id=sso_user_id,
-        message=message,
-        answer=body.answer,
-        cipher=cipher,
-    )
+    if generated_files is not None:
+        message.generated_files_json = generated_files
+    else:
+        _create_chat_generated_files(
+            db,
+            sso_user_id=sso_user_id,
+            message=message,
+            answer=body.answer,
+            cipher=cipher,
+        )
     db.flush()
     return message
 

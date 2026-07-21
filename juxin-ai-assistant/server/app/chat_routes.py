@@ -379,6 +379,8 @@ async def chat_message_complete(
             message_uuid=message_uuid,
             body=body,
             cipher=cipher,
+            session_payload=session_payload,
+            settings=current_settings,
         )
         db.commit()
     except Exception:
@@ -453,6 +455,8 @@ async def chat_message_generate(
             message_uuid=message_uuid,
             body=complete_body,
             cipher=cipher,
+            session_payload=session_payload,
+            settings=current_settings,
         )
         db.commit()
     except Exception:
@@ -554,6 +558,8 @@ async def chat_message_generate_stream(
                 message_uuid=message_uuid,
                 body=complete_body,
                 cipher=cipher,
+                session_payload=session_payload,
+                settings=current_settings,
             )
             db.commit()
             yield _ndjson_line({

@@ -37,7 +37,7 @@ export type ChatCitation = {
 export type ChatGeneratedFile = {
   artifact_id: string;
   file_name: string;
-  format: 'docx' | 'xlsx' | 'pptx' | 'md';
+  format: 'docx' | 'xlsx' | 'pptx' | 'md' | 'html';
   media_type: string;
   download_url: string;
 };

@@ -2892,7 +2892,9 @@ export function ChatPage({ onOpenTaskCenter, onOpenWorkArtifacts, initialProject
                               <span className="chat-file-delivery-icon" aria-hidden="true">↓</span>
                               <span>
                                 <strong>{file.file_name}</strong>
-                                <small>点击下载 · {file.format.toUpperCase()}</small>
+                                <small>
+                                  {file.format === 'html' ? '下载后可编辑' : '点击下载'} · {file.format.toUpperCase()}
+                                </small>
                               </span>
                             </a>
                           ))}

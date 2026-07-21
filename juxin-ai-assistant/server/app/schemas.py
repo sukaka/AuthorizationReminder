@@ -450,7 +450,7 @@ class ChatCitationOut(BaseModel):
 class ChatGeneratedFileOut(BaseModel):
     artifact_id: str
     file_name: str
-    format: Literal["docx", "xlsx", "pptx", "md"]
+    format: Literal["docx", "xlsx", "pptx", "md", "html"]
     media_type: str
     download_url: str
 

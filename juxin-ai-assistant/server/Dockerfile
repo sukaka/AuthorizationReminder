@@ -1,4 +1,4 @@
-ARG PYTHON_BASE_IMAGE=ccr.ccs.tencentyun.com/library/python:3.12-slim
+ARG PYTHON_BASE_IMAGE=python:3.12-slim
 FROM ${PYTHON_BASE_IMAGE}
 
 ARG DEBIAN_APT_MIRROR=http://mirrors.aliyun.com/debian

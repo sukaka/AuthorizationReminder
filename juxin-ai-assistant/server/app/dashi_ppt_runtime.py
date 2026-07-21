@@ -94,6 +94,35 @@ def dashi_ppt_artifact_path(
     return root / f"presentation.{artifact_format}"
 
 
+def dashi_ppt_goal_path(
+    settings: Settings,
+    *,
+    user_id: str,
+    run_id: str,
+) -> Path:
+    return (
+        Path(settings.export_storage_dir).resolve()
+        / "dashi-ppt"
+        / _safe_segment(user_id)
+        / _safe_segment(run_id)
+        / "goal.json"
+    )
+
+
+def load_dashi_ppt_goal_spec(
+    settings: Settings,
+    *,
+    user_id: str,
+    run_id: str,
+) -> dict[str, Any] | None:
+    path = dashi_ppt_goal_path(settings, user_id=user_id, run_id=run_id)
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
 def generate_dashi_ppt(
     *,
     settings: Settings,
@@ -108,7 +137,7 @@ def generate_dashi_ppt(
     output_root = (Path(settings.export_storage_dir).resolve() / "dashi-ppt" / _safe_segment(user_id) / _safe_segment(run_id))
     ppt_dir = output_root / "ppt"
     ppt_dir.mkdir(parents=True, exist_ok=True)
-    spec_path = output_root / "goal.json"
+    spec_path = dashi_ppt_goal_path(settings, user_id=user_id, run_id=run_id)
     spec_path.write_text(json.dumps(goal_spec, ensure_ascii=False, indent=2), encoding="utf-8")
 
     _run_npm(
