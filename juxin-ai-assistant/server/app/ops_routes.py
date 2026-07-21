@@ -1274,12 +1274,13 @@ async def feature_flags(
 ) -> dict[str, Any]:
     """Gray-release flags (file store + runtime capability hints)."""
     await require_action("ai_assistant:use", request, session, settings)
-    from .feature_flags import load_feature_flags
+    from .feature_flags import channel_configuration_summary, load_feature_flags
     from .agent_runtime.langgraph_runtime import langgraph_backend_status
 
     stored = load_feature_flags(settings)
     return {
         **stored,
+        "channel_configuration": channel_configuration_summary(settings),
         "qdrant_enabled": bool(getattr(settings, "qdrant_enabled", False)),
         "server_model_configured": bool(
             getattr(settings, "server_model_base_url", "")
@@ -1325,12 +1326,17 @@ async def update_feature_flags(
     """Admin write path for gray-release flags."""
     await _require_admin(request, session, settings)
     from .admin.route_common import write_request_audit
-    from .feature_flags import save_feature_flags
+    from .feature_flags import (
+        channel_configuration_summary,
+        save_feature_flags,
+        validate_channel_enable_updates,
+    )
 
     # Never allow learning_auto_publish=true via this API (safety gate)
     if body.get("learning_auto_publish") is True:
         raise HTTPException(status_code=400, detail="learning_auto_publish_forbidden")
     try:
+        validate_channel_enable_updates(body, settings)
         result = save_feature_flags(body, settings)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -1345,4 +1351,4 @@ async def update_feature_flags(
         metadata={"setting_key": "feature_flags", "event": "runtime_shadow", "status": "updated"},
     )
     db.commit()
-    return result
+    return {**result, "channel_configuration": channel_configuration_summary(settings)}

@@ -12,6 +12,7 @@ from ..crypto import ContentCipher, EncryptedPayload
 from ..database import get_db
 from ..direct_action_service import DirectActionReplay, DirectActionService
 from ..external_support_tickets import add_engineer_reply, claim_ticket, decrypt_message, decrypt_recipient
+from ..feature_flags import channel_enabled
 from ..models import ExternalQuestionEvent, ExternalSupportTicket, ExternalSupportTicketMessage
 from ..schemas import SessionPayload
 from .route_common import CipherDependency, write_request_audit
@@ -168,7 +169,7 @@ def create_external_support_ticket_router(cipher_dependency: CipherDependency) -
         except ValueError as exc:
             action_service.fail(invocation, error_code="EXTERNAL_SUPPORT_TICKET_INVALID_STATE", error_message_safe="工单当前状态不能回复")
             raise HTTPException(status_code=409, detail="工单当前状态不能回复") from exc
-        if ticket.source_channel == "wecom_kf" and settings.wecom_kf_enabled:
+        if ticket.source_channel == "wecom_kf" and channel_enabled(settings, "wecom_kf"):
             recipient = decrypt_recipient(cipher, ticket)
             if recipient:
                 try:

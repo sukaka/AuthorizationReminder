@@ -22,7 +22,7 @@ from .auth import get_session, require_action
 from .config import Settings, get_settings
 from .crypto import ContentCipher
 from .database import get_db
-from .feature_flags import load_feature_flags
+from .feature_flags import channel_enabled, load_feature_flags
 from .external_question_events import record_external_question
 from .external_answer_safety import MAX_EXTERNAL_QUESTION_CHARS, prepare_external_answer
 from .feishu_crypto import decrypt_feishu_payload
@@ -43,14 +43,6 @@ class WebhookAck(BaseModel):
     answer_preview: str = ""
     outbound_mode: str = ""
     job_key: str = ""
-
-
-def _channel_enabled(settings: Settings, channel: str) -> bool:
-    flags = load_feature_flags(settings)
-    channels = flags.get("channels") or {}
-    if isinstance(channels, dict) and channel in channels:
-        return bool(channels[channel])
-    return bool(getattr(settings, f"{channel}_channel_enabled", False))
 
 
 def _async_enabled(settings: Settings) -> bool:
@@ -215,7 +207,7 @@ async def feishu_webhook(
     settings: Annotated[Settings, Depends(get_settings)],
     db: Annotated[Session, Depends(get_db)],
 ) -> WebhookAck:
-    if not _channel_enabled(settings, "feishu"):
+    if not channel_enabled(settings, "feishu"):
         raise HTTPException(status_code=503, detail="feishu_channel_disabled")
     try:
         payload = await request.json()
@@ -279,7 +271,7 @@ async def wecom_url_verify(
     settings: Annotated[Settings, Depends(get_settings)],
 ) -> Any:
     """WeCom URL verification (GET echostr)."""
-    if not _channel_enabled(settings, "wecom"):
+    if not channel_enabled(settings, "wecom"):
         raise HTTPException(status_code=503, detail="wecom_channel_disabled")
     msg_signature, timestamp, nonce, echostr = _wecom_query_sig(request)
     if not echostr:
@@ -338,7 +330,7 @@ async def wecom_webhook(
     timestamp: Annotated[str | None, Header()] = None,
     nonce: Annotated[str | None, Header()] = None,
 ) -> WebhookAck | dict[str, Any]:
-    if not _channel_enabled(settings, "wecom"):
+    if not channel_enabled(settings, "wecom"):
         raise HTTPException(status_code=503, detail="wecom_channel_disabled")
 
     # Prefer query string signatures (WeCom standard)
@@ -415,7 +407,7 @@ async def wecom_kf_webhook(
     db: Annotated[Session, Depends(get_db)],
 ) -> dict[str, Any]:
     """Receive a WeCom customer-service callback and consume its synced messages."""
-    if not settings.wecom_kf_enabled or not _channel_enabled(settings, "wecom_kf"):
+    if not channel_enabled(settings, "wecom_kf"):
         raise HTTPException(status_code=503, detail="wecom_kf_channel_disabled")
     from .wecom_crypto import extract_wecom_inbound
 

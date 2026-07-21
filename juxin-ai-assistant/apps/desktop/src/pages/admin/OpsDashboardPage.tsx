@@ -78,6 +78,13 @@ function opsRequestError(error: unknown, fallback: string): string {
   return error.code;
 }
 
+type WeComChannelKey = 'wecom' | 'wecom_kf';
+
+const weComChannels: Array<{ key: WeComChannelKey; label: string; description: string }> = [
+  { key: 'wecom', label: '企业微信', description: '企业内部应用消息通道' },
+  { key: 'wecom_kf', label: '企业微信客服', description: '微信客服外部问答通道' },
+];
+
 export function OpsDashboardPage() {
   const [snapshot, setSnapshot] = useState<OpsSnapshotPayload | null>(null);
   const [runReconciliation, setRunReconciliation] = useState<RunReconciliationPayload | null>(null);
@@ -103,6 +110,7 @@ export function OpsDashboardPage() {
   const [runId, setRunId] = useState('');
   const [runDetail, setRunDetail] = useState<OpsRunDetailPayload | null>(null);
   const [runBusy, setRunBusy] = useState(false);
+  const [channelSaving, setChannelSaving] = useState<WeComChannelKey | null>(null);
 
   const reload = useCallback(async () => {
     setLoading(true);
@@ -152,6 +160,24 @@ export function OpsDashboardPage() {
       await reload();
     } catch (err) {
       setError(err instanceof ApiError ? err.code : '状态流转失败');
+    }
+  }
+
+  async function onToggleWeComChannel(channel: WeComChannelKey, label: string) {
+    if (!flags || channelSaving) return;
+    const channels = (flags.channels as Record<string, boolean> | undefined) || {};
+    const enabled = !Boolean(channels[channel]);
+    setNotice('');
+    setError('');
+    setChannelSaving(channel);
+    try {
+      const next = await updateOpsFeatureFlags({ channels: { [channel]: enabled } });
+      setFlags(next);
+      setNotice(`${label}通道已${enabled ? '启用' : '停用'}，立即生效`);
+    } catch (err) {
+      setError(opsRequestError(err, `${label}通道保存失败`));
+    } finally {
+      setChannelSaving(null);
     }
   }
 
@@ -799,6 +825,62 @@ export function OpsDashboardPage() {
             >
               切换飞书通道
             </button>
+          </div>
+          <div
+            role="group"
+            aria-label="企业微信通道开关"
+            style={{
+              border: '1px solid var(--border, #e5e7eb)',
+              borderRadius: 10,
+              padding: 14,
+              marginBottom: 12,
+              background: 'var(--panel, #fff)',
+            }}
+          >
+            <h4 style={{ margin: 0 }}>消息通道</h4>
+            <p style={{ margin: '6px 0 12px', fontSize: 13, opacity: 0.8 }}>
+              开关仅负责启停通道，保存后立即生效。App ID、Secret、Token 和加密密钥等凭据仅从服务器的 .env 读取；修改 .env 后需重启 API。
+            </p>
+            <div style={{ display: 'grid', gap: 10 }}>
+              {weComChannels.map((item) => {
+                const channels = (flags.channels as Record<string, boolean> | undefined) || {};
+                const configuration = (
+                  (flags.channel_configuration as Record<string, { configured?: boolean }> | undefined) || {}
+                )[item.key];
+                const enabled = Boolean(channels[item.key]);
+                return (
+                  <label
+                    key={item.key}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      gap: 16,
+                      border: '1px solid var(--border, #e5e7eb)',
+                      borderRadius: 8,
+                      padding: '10px 12px',
+                      cursor: channelSaving ? 'wait' : 'pointer',
+                    }}
+                  >
+                    <span>
+                      <strong style={{ display: 'block' }}>{item.label}</strong>
+                      <span style={{ display: 'block', marginTop: 3, fontSize: 12, opacity: 0.72 }}>
+                        {item.description} · 环境配置
+                        {configuration?.configured ? '已就绪' : '未完成'}
+                      </span>
+                    </span>
+                    <input
+                      type="checkbox"
+                      role="switch"
+                      aria-label={item.label}
+                      checked={enabled}
+                      disabled={channelSaving !== null}
+                      onChange={() => void onToggleWeComChannel(item.key, item.label)}
+                    />
+                  </label>
+                );
+              })}
+            </div>
           </div>
           <pre
             style={{

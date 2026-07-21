@@ -68,7 +68,15 @@ function mockOpsApis() {
       }),
     ),
     http.get('/api/ai/ops/feature-flags', () =>
-      HttpResponse.json({ rollout_percent: 20, learning_auto_publish: false }),
+      HttpResponse.json({
+        rollout_percent: 20,
+        learning_auto_publish: false,
+        channels: { web: true, desktop: true, feishu: false, wecom: false, wecom_kf: false },
+        channel_configuration: {
+          wecom: { configured: true, missing: [] },
+          wecom_kf: { configured: true, missing: [] },
+        },
+      }),
     ),
     http.get('/api/ai/learning-candidates', () => HttpResponse.json({ items: [], total: 0 })),
     http.get('/api/ai/ops/ga-report', () =>
@@ -150,6 +158,43 @@ it('runs checkpoint recovery suite from ops dashboard', async () => {
   const checkpointStatus = await screen.findByText(/最近 checkpoint 套件/i);
   expect(checkpointStatus).toHaveTextContent('12/12');
   expect(checkpointStatus).toHaveTextContent(/rate\s*1/i);
+});
+
+it('saves WeCom channel switches independently without rendering credentials', async () => {
+  mockOpsApis();
+  const updates = vi.fn();
+  let channels = { web: true, desktop: true, feishu: false, wecom: false, wecom_kf: false };
+  server.use(
+    http.put('/api/ai/ops/feature-flags', async ({ request }) => {
+      const body = (await request.json()) as { channels?: Record<string, boolean> };
+      updates(body);
+      channels = { ...channels, ...(body.channels || {}) };
+      return HttpResponse.json({
+        rollout_percent: 20,
+        learning_auto_publish: false,
+        channels,
+        channel_configuration: {
+          wecom: { configured: true, missing: [] },
+          wecom_kf: { configured: true, missing: [] },
+        },
+      });
+    }),
+  );
+
+  render(<OpsDashboardPage />);
+  const wecom = await screen.findByRole('switch', { name: '企业微信' });
+  const wecomKf = screen.getByRole('switch', { name: '企业微信客服' });
+  expect(wecom).not.toBeChecked();
+  expect(wecomKf).not.toBeChecked();
+  expect(screen.getByText(/凭据仅从服务器的 .env 读取/)).toBeInTheDocument();
+  expect(screen.queryByLabelText(/secret|token|加密密钥/i)).not.toBeInTheDocument();
+
+  await userEvent.click(wecom);
+  await waitFor(() => expect(updates).toHaveBeenCalledWith({ channels: { wecom: true } }));
+  expect(wecom).toBeChecked();
+  await userEvent.click(wecomKf);
+  await waitFor(() => expect(updates).toHaveBeenCalledWith({ channels: { wecom_kf: true } }));
+  expect(wecomKf).toBeChecked();
 });
 
 it('allows an administrator to inspect and control one run by id', async () => {

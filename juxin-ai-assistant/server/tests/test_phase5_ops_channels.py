@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import json
+
 from app.artifact_service import ArtifactService
-from app.feature_flags import load_feature_flags, save_feature_flags
+from app.feature_flags import channel_enabled, load_feature_flags, save_feature_flags
 from app.knowledge_version_service import set_effective_version, version_timeline
 from app.models import KnowledgeFile
 
@@ -138,6 +140,151 @@ def test_feature_flags_write(generation_client, tmp_path, monkeypatch) -> None:
     )
     assert report.status_code == 200, report.text
     assert report.json()["config"]["enabled"] is False
+
+
+def test_wecom_channel_switches_apply_immediately_without_exposing_secrets(
+    generation_client,
+    tmp_path,
+    monkeypatch,
+) -> None:
+    from app import feature_flags as ff
+    from app.config import Settings, get_settings
+    from app.main import app
+
+    monkeypatch.setattr(ff, "_store_path", lambda settings=None: tmp_path / "flags.json")
+    secret_values = {
+        "wecom_corp_id": "corp-private-value",
+        "wecom_secret": "wecom-secret-private-value",
+        "wecom_token": "wecom-token-private-value",
+        "wecom_encoding_aes_key": "A" * 43,
+        "wecom_agent_id": "1000002",
+        "wecom_kf_corp_id": "kf-corp-private-value",
+        "wecom_kf_secret": "kf-secret-private-value",
+        "wecom_kf_token": "kf-token-private-value",
+        "wecom_kf_encoding_aes_key": "B" * 43,
+        "wecom_kf_identity_hash_salt": "kf-identity-private-value-32-bytes",
+    }
+    settings = Settings(
+        auth_dev_bypass=True,
+        wecom_channel_enabled=False,
+        wecom_kf_enabled=False,
+        knowledge_redis_enabled=True,
+        **secret_values,
+    )
+    app.dependency_overrides[get_settings] = lambda: settings
+    try:
+        response = generation_client.put(
+            "/api/ai/ops/feature-flags",
+            json={"channels": {"wecom": True, "wecom_kf": True}},
+            headers={"X-Test-Role": "admin"},
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["channels"]["wecom"] is True
+        assert response.json()["channels"]["wecom_kf"] is True
+        assert channel_enabled(settings, "wecom") is True
+        assert channel_enabled(settings, "wecom_kf") is True
+
+        fetched = generation_client.get("/api/ai/ops/feature-flags")
+        assert fetched.status_code == 200, fetched.text
+        assert fetched.json()["channel_configuration"]["wecom"]["configured"] is True
+        assert fetched.json()["channel_configuration"]["wecom_kf"]["configured"] is True
+        serialized = json.dumps(fetched.json(), ensure_ascii=False)
+        for secret in secret_values.values():
+            assert secret not in serialized
+    finally:
+        app.dependency_overrides.pop(get_settings, None)
+
+
+def test_wecom_channel_switch_rejects_missing_env_configuration(
+    generation_client,
+    tmp_path,
+    monkeypatch,
+) -> None:
+    from app import feature_flags as ff
+    from app.config import Settings, get_settings
+    from app.main import app
+
+    monkeypatch.setattr(ff, "_store_path", lambda settings=None: tmp_path / "flags.json")
+    settings = Settings(
+        auth_dev_bypass=True,
+        wecom_channel_enabled=False,
+        wecom_kf_enabled=False,
+        knowledge_redis_enabled=False,
+        wecom_corp_id="",
+        wecom_secret="",
+        wecom_token="",
+        wecom_encoding_aes_key="",
+        wecom_agent_id="",
+        wecom_kf_corp_id="",
+        wecom_kf_secret="",
+        wecom_kf_token="",
+        wecom_kf_encoding_aes_key="",
+        wecom_kf_identity_hash_salt="",
+    )
+    app.dependency_overrides[get_settings] = lambda: settings
+    try:
+        response = generation_client.put(
+            "/api/ai/ops/feature-flags",
+            json={"channels": {"wecom": True}},
+            headers={"X-Test-Role": "admin"},
+        )
+        assert response.status_code == 400, response.text
+        assert "WECOM_CORP_ID" in str(response.json()["detail"])
+        assert channel_enabled(settings, "wecom") is False
+    finally:
+        app.dependency_overrides.pop(get_settings, None)
+
+
+def test_wecom_webhook_follows_runtime_switch_without_api_restart(
+    generation_client,
+    tmp_path,
+    monkeypatch,
+) -> None:
+    from app import feature_flags as ff
+    from app.config import Settings, get_settings
+    from app.main import app
+    from app.wecom_crypto import encrypt_wecom_message, wecom_signature
+
+    monkeypatch.setattr(ff, "_store_path", lambda settings=None: tmp_path / "flags.json")
+    token = "wecom-callback-token"
+    corp_id = "corp-id"
+    encoding_key = "C" * 43
+    settings = Settings(
+        auth_dev_bypass=True,
+        wecom_channel_enabled=False,
+        wecom_corp_id=corp_id,
+        wecom_secret="wecom-secret",
+        wecom_token=token,
+        wecom_encoding_aes_key=encoding_key,
+        wecom_agent_id="1000002",
+    )
+    app.dependency_overrides[get_settings] = lambda: settings
+    encrypted_echo = encrypt_wecom_message(
+        encoding_aes_key=encoding_key,
+        corp_id=corp_id,
+        plaintext="runtime-switch-ok",
+    )
+    timestamp = "1700000000"
+    nonce = "runtime-nonce"
+    signature = wecom_signature(token, timestamp, nonce, encrypted_echo)
+    query = {
+        "msg_signature": signature,
+        "timestamp": timestamp,
+        "nonce": nonce,
+        "echostr": encrypted_echo,
+    }
+    try:
+        save_feature_flags({"channels": {"wecom": True}}, settings)
+        enabled = generation_client.get("/api/ai/channels/webhooks/wecom", params=query)
+        assert enabled.status_code == 200, enabled.text
+        assert enabled.text == "runtime-switch-ok"
+
+        save_feature_flags({"channels": {"wecom": False}}, settings)
+        disabled = generation_client.get("/api/ai/channels/webhooks/wecom", params=query)
+        assert disabled.status_code == 503, disabled.text
+        assert disabled.json()["detail"] == "wecom_channel_disabled"
+    finally:
+        app.dependency_overrides.pop(get_settings, None)
 
 
 def test_feishu_webhook_challenge(generation_client, tmp_path, monkeypatch) -> None:
