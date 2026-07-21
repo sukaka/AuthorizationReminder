@@ -238,7 +238,7 @@ export function ChatRunContext({
               </div>
             ) : null}
             {stageHistory.length ? (
-              <ol className="chat-run-context-stages">
+              <ol className="chat-run-context-stages" aria-label="任务阶段">
                 {stageHistory.map((item, index) => {
                   const stage = String(item.stage || '');
                   return (

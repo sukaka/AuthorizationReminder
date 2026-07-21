@@ -430,9 +430,10 @@ it('retries a failed task from the progress recovery action', async () => {
   await userEvent.type(await screen.findByLabelText('告诉我你想完成什么工作'), '帮我整理失败恢复测试');
   await userEvent.click(screen.getByRole('button', { name: '发送' }));
 
-  const progress = await screen.findByRole('status', { name: '任务进度' });
-  expect(progress).toHaveTextContent('生成遇到问题');
-  await userEvent.click(screen.getByRole('button', { name: '可重试' }));
+  const runContext = await screen.findByLabelText('Run 上下文');
+  expect(runContext).toHaveTextContent('需要处理');
+  expect(document.querySelector('.chat-progress-rail')).not.toBeInTheDocument();
+  await userEvent.click(screen.getByRole('button', { name: '重新运行' }));
 
   expect(await screen.findByText('失败后已重新生成。')).toBeInTheDocument();
   expect(prepareRequest).toHaveBeenCalledTimes(2);
@@ -500,11 +501,12 @@ it('uses server-side model generation in web runtime without local model profile
   await userEvent.click(screen.getByRole('button', { name: '发送' }));
 
   expect(await screen.findByText('Web 端已使用服务端模型生成。')).toBeInTheDocument();
-  const metrics = screen.getByRole('region', { name: '生成指标' });
+  await userEvent.click(screen.getByRole('button', { name: '活动' }));
+  const metrics = screen.getByRole('region', { name: '任务活动' });
   expect(within(metrics).getByText('总 token')).toBeInTheDocument();
   expect(within(metrics).getByText('3,173')).toBeInTheDocument();
-  expect(within(metrics).queryByText('输入 token')).not.toBeInTheDocument();
-  expect(within(metrics).queryByText('输出 token')).not.toBeInTheDocument();
+  expect(within(metrics).getByText('输入 token')).toBeInTheDocument();
+  expect(within(metrics).getByText('输出 token')).toBeInTheDocument();
   expect(generateLocalModelMock).not.toHaveBeenCalled();
   expect(generateRequest).toHaveBeenCalledWith(expect.objectContaining({
     completion_token: 'complete-web-model',
@@ -809,7 +811,7 @@ it('shows user-facing task progress while chat is generating', async () => {
   await userEvent.click(screen.getByRole('button', { name: '发送' }));
 
   expect((await screen.findAllByText('正在生成回答')).length).toBeGreaterThan(0);
-  expect(within(screen.getByRole('list', { name: '任务阶段' })).getByText('正在识别任务')).toBeInTheDocument();
+  expect(screen.getByRole('list', { name: '任务阶段' })).toHaveTextContent('正在识别任务');
   expect(screen.queryByText('TaskState')).not.toBeInTheDocument();
   expect(modelResolver.current).toBeDefined();
   modelResolver.current?.({
@@ -817,7 +819,7 @@ it('shows user-facing task progress while chat is generating', async () => {
     latencyMs: 12,
     usage: { output_tokens: 8 },
   });
-  expect(within(screen.getByRole('list', { name: '任务阶段' })).getByText('生成完成')).toBeInTheDocument();
+  expect(screen.getByRole('list', { name: '任务阶段' })).toHaveTextContent('生成完成');
 });
 
 it('asks before saving explicit user memory and then stores it', async () => {
@@ -2329,7 +2331,8 @@ it('loads messages when selecting a historical chat session', async () => {
   expect(messageList).toBeInTheDocument();
   expect(within(messageList as HTMLElement).getByText('总结会议')).toBeInTheDocument();
   expect(screen.getByText(/会议决定下周验收/)).toBeInTheDocument();
-  expect(screen.getByRole('status', { name: '任务进度' })).toHaveTextContent('已完成');
+  expect(screen.getByLabelText('Run 上下文')).toHaveTextContent('已完成');
+  expect(document.querySelector('.chat-progress-rail')).not.toBeInTheDocument();
   expect(screen.getByText('Run run-hist')).toBeInTheDocument();
   expect(screen.getByRole('list', { name: '任务阶段' })).toHaveTextContent('正在复核结果');
   const inlineSource = screen.getByLabelText('来源：会议记录.txt');

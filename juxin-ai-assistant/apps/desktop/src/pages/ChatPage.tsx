@@ -61,7 +61,6 @@ import {
   isSafeSameOriginUrl,
   saveChatMessageWorkArtifact,
 } from '../api/client';
-import { TaskProgressTimeline } from '../components/TaskProgressTimeline';
 import { ChatRunContext } from '../components/ChatRunContext';
 import {
   SensitiveWarningDialog,
@@ -682,31 +681,6 @@ function isAbortLikeError(error: unknown): boolean {
     || error instanceof Error && error.name === 'AbortError';
 }
 
-function usageNumber(usage: Record<string, unknown> | null | undefined, keys: string[]): number | null {
-  if (!usage) return null;
-  for (const key of keys) {
-    const value = usage[key];
-    if (typeof value === 'number' && Number.isFinite(value)) return value;
-    if (typeof value === 'string') {
-      const parsed = Number(value);
-      if (Number.isFinite(parsed)) return parsed;
-    }
-  }
-  return null;
-}
-
-function formatLatency(value: number | null | undefined): string {
-  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) return '—';
-  if (value < 1000) return `${Math.round(value)} ms`;
-  return `${(value / 1000).toFixed(value < 10000 ? 1 : 0)} s`;
-}
-
-function formatTokenCount(value: number | null | undefined): string {
-  return typeof value === 'number' && Number.isFinite(value)
-    ? value.toLocaleString()
-    : '—';
-}
-
 function referenceScopeIncludes(scope: ReferenceScope, sourceKind: EnabledReferenceFile['sourceKind']): boolean {
   if (sourceKind === 'personal_reference') {
     return scope === 'with_personal' || scope === 'personal_and_session';
@@ -1269,18 +1243,6 @@ export function ChatPage({ onOpenTaskCenter, onOpenWorkArtifacts, initialProject
   );
   const currentModelLabel = shouldUseServerModel ? webModelLabel : (activeProfile?.displayName || '未配置');
   const generationActive = generationStatus === 'running' || generationStatus === 'stopping';
-  const generationMetricRows = useMemo(() => {
-    if (!generationMetrics) return [];
-    const inputTokens = usageNumber(generationMetrics.usage, ['prompt_tokens', 'input_tokens']);
-    const outputTokens = usageNumber(generationMetrics.usage, ['completion_tokens', 'output_tokens']);
-    const totalTokens = usageNumber(generationMetrics.usage, ['total_tokens']);
-    return [
-      { label: '完成耗时', value: formatLatency(generationMetrics.latencyMs) },
-      { label: '总 token', value: formatTokenCount(totalTokens ?? (
-        inputTokens !== null && outputTokens !== null ? inputTokens + outputTokens : null
-      )) },
-    ];
-  }, [generationMetrics]);
   const sessionAttachmentFiles = useMemo(
     () => enabledReferenceFiles.filter((file) => file.sourceKind === 'session_attachment'),
     [enabledReferenceFiles],
@@ -2761,33 +2723,6 @@ export function ChatPage({ onOpenTaskCenter, onOpenWorkArtifacts, initialProject
             <h2>告诉我你想完成什么工作</h2>
             <p>我是你的私人工作助理，可以帮你写、查、整理、生成和导出工作成果。</p>
           </header>
-
-          {taskProgress || generationMetricRows.length ? (
-            <aside className="chat-progress-rail" aria-label="任务进度">
-              {taskProgress ? (
-                <TaskProgressTimeline
-                  stage={taskProgress.stage}
-                  label={taskProgress.label}
-                  nextAction={taskProgress.next_action}
-                  stageHistory={taskProgress.stage_history}
-                  selectedSources={taskProgress.selected_sources}
-                  toolCalls={taskProgress.tool_calls}
-                  onRetry={retryLatestTask}
-                />
-              ) : null}
-              {generationMetricRows.length ? (
-                <section className="chat-generation-metrics" aria-label="生成指标">
-                  <strong>生成指标</strong>
-                  {generationMetricRows.map((item) => (
-                    <span key={item.label}>
-                      <em>{item.label}</em>
-                      <b>{item.value}</b>
-                    </span>
-                  ))}
-                </section>
-              ) : null}
-            </aside>
-          ) : null}
 
           <div className="chat-content-grid">
             <div
