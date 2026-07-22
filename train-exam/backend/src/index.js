@@ -61,6 +61,11 @@ const { buildQuestionFilterWhere } = require('./question-filter-utils');
 const { normalizeQuestionCategoryRow } = require('./question-category-utils');
 const { normalizePaperRuleCategories } = require('./paper-rule-utils');
 const {
+  dedupeQuestionSnapshots,
+  findDuplicateQuestionIds,
+  selectUniqueQuestionsByRules,
+} = require('./question-selection-utils');
+const {
   buildResultsExportCsv,
   normalizeAdminResultsFilters,
   buildAdminResultsWhere,
@@ -2283,6 +2288,15 @@ const parseIdArray = (value) => {
         .filter((item) => Number.isInteger(item) && item > 0)
     )
   );
+};
+
+const parseIdArrayPreservingDuplicates = (value) => {
+  const values = Array.isArray(value)
+    ? value
+    : trimText(value).split(/[，,、\s]+/);
+  return values
+    .map((item) => Number(item))
+    .filter((item) => Number.isInteger(item) && item > 0);
 };
 
 const getUserProfileByIdentity = async ({ userId, username }) => {
@@ -7148,6 +7162,10 @@ const replacePaperRules = async ({ tx, paperId, rules = [] }) => {
 };
 
 const replacePaperFixedQuestions = async ({ tx, paperId, fixedQuestionIds = [] }) => {
+  const duplicateQuestionIds = findDuplicateQuestionIds(fixedQuestionIds);
+  if (duplicateQuestionIds.length) {
+    throw appError(`固定试卷内不能包含重复题目：${duplicateQuestionIds.join('、')}`, 400);
+  }
   await tx.run('DELETE FROM te_paper_questions WHERE paper_id = ?', [paperId]);
   for (let i = 0; i < fixedQuestionIds.length; i += 1) {
     const qid = Number(fixedQuestionIds[i]);
@@ -7243,11 +7261,15 @@ app.post('/api/train-exam/papers', requireContentWriter, asyncHandler(async (req
   const maxAttempts = Math.max(1, Math.min(20, Number(req.body?.max_attempts || 3)));
   const examWindowHours = normalizePaperExamWindowHours(req.body?.exam_window_hours);
   const courseId = Number(req.body?.course_id || 0) || null;
-  const fixedQuestionIds = parseIdArray(req.body?.fixed_question_ids);
+  const fixedQuestionIds = parseIdArrayPreservingDuplicates(req.body?.fixed_question_ids);
   const rules = Array.isArray(req.body?.rules) ? req.body.rules : [];
+  const duplicateQuestionIds = findDuplicateQuestionIds(fixedQuestionIds);
 
   if (paperMode === 'fixed' && !fixedQuestionIds.length) {
     throw appError('固定试卷必须提供 fixed_question_ids', 400);
+  }
+  if (paperMode === 'fixed' && duplicateQuestionIds.length) {
+    throw appError(`固定试卷内不能包含重复题目：${duplicateQuestionIds.join('、')}`, 400);
   }
   if (paperMode === 'random' && !rules.length) {
     throw appError('随机试卷必须提供 rules', 400);
@@ -7326,11 +7348,15 @@ app.put('/api/train-exam/papers/:id', requireContentWriter, asyncHandler(async (
     ? normalizePaperExamWindowHours(req.body.exam_window_hours)
     : normalizePaperExamWindowHours(before.exam_window_hours);
 
-  const fixedQuestionIds = parseIdArray(req.body?.fixed_question_ids);
+  const fixedQuestionIds = parseIdArrayPreservingDuplicates(req.body?.fixed_question_ids);
   const rules = Array.isArray(req.body?.rules) ? req.body.rules : [];
+  const duplicateQuestionIds = findDuplicateQuestionIds(fixedQuestionIds);
 
   if (paperMode === 'fixed' && !fixedQuestionIds.length && req.body?.fixed_question_ids !== undefined) {
     throw appError('固定试卷必须提供 fixed_question_ids', 400);
+  }
+  if (paperMode === 'fixed' && req.body?.fixed_question_ids !== undefined && duplicateQuestionIds.length) {
+    throw appError(`固定试卷内不能包含重复题目：${duplicateQuestionIds.join('、')}`, 400);
   }
   if (paperMode === 'random' && !rules.length && req.body?.rules !== undefined) {
     throw appError('随机试卷必须提供 rules', 400);
@@ -7568,50 +7594,52 @@ app.delete('/api/train-exam/papers/:id', requireContentWriter, asyncHandler(asyn
 }));
 
 const buildRandomQuestionsByRules = async (rules) => {
-  const selected = [];
-  for (const rule of rules) {
-    const where = ["status = 'published'"];
-    const params = [];
-    const questionType = trimText(rule.question_type).toLowerCase();
-    const difficulty = trimText(rule.difficulty).toLowerCase();
-    const questionCount = Math.max(1, Number(rule.question_count || 1));
-    const pointsPerQuestion = Math.max(1, Number(rule.points_per_question || 1));
-    const tags = Array.isArray(rule.tags) ? rule.tags : parseMaybeJson(rule.tags_json, []);
-    const questionCategories = normalizePaperRuleCategories(
-      Array.isArray(rule.question_categories) ? rule.question_categories : parseMaybeJson(rule.question_categories_json, [])
-    );
+  const selections = await selectUniqueQuestionsByRules({
+    rules,
+    fetchCandidates: async (rule, { excludedIds, limit }) => {
+      const where = ["status = 'published'"];
+      const params = [];
+      const questionType = trimText(rule.question_type).toLowerCase();
+      const difficulty = trimText(rule.difficulty).toLowerCase();
+      const questionCategories = normalizePaperRuleCategories(
+        Array.isArray(rule.question_categories)
+          ? rule.question_categories
+          : parseMaybeJson(rule.question_categories_json, [])
+      );
 
-    if (questionType) {
-      where.push('question_type = ?');
-      params.push(questionType);
-    }
-    if (difficulty) {
-      where.push('difficulty = ?');
-      params.push(difficulty);
-    }
-    if (questionCategories.length) {
-      where.push(`question_category IN (${questionCategories.map(() => '?').join(',')})`);
-      params.push(...questionCategories);
-    }
+      if (questionType) {
+        where.push('question_type = ?');
+        params.push(questionType);
+      }
+      if (difficulty) {
+        where.push('difficulty = ?');
+        params.push(difficulty);
+      }
+      if (questionCategories.length) {
+        where.push(`question_category IN (${questionCategories.map(() => '?').join(',')})`);
+        params.push(...questionCategories);
+      }
+      if (excludedIds.size) {
+        where.push(`id NOT IN (${Array.from(excludedIds).map(() => '?').join(',')})`);
+        params.push(...excludedIds);
+      }
 
-    const candidates = await query(
-      `SELECT * FROM te_question_bank WHERE ${where.join(' AND ')} ORDER BY RAND() LIMIT ?`,
-      [...params, questionCount * 5]
-    );
-
-    const filtered = candidates.filter((item) => {
+      return query(
+        `SELECT * FROM te_question_bank WHERE ${where.join(' AND ')} ORDER BY RAND() LIMIT ?`,
+        [...params, limit]
+      );
+    },
+    isEligible: (item, rule) => {
+      const tags = Array.isArray(rule.tags) ? rule.tags : parseMaybeJson(rule.tags_json, []);
       if (!tags.length) return true;
       const itemTags = parseMaybeJson(item.tags_json, []);
       return tags.every((tag) => itemTags.includes(tag));
-    });
+    },
+  });
 
-    const chosen = filtered.slice(0, questionCount);
-    for (const row of chosen) {
-      const snapshot = await buildQuestionSnapshot(row.id, pointsPerQuestion);
-      selected.push(snapshot);
-    }
-  }
-  return selected;
+  return Promise.all(selections.map(({ row, rule }) => (
+    buildQuestionSnapshot(row.id, Math.max(1, Number(rule.points_per_question || 1)))
+  )));
 };
 
 const normalizeSnapshotForSession = ({ snapshot, standardAnswer, pointsOverride = null, fallbackQuestionId = 0 }) => {
@@ -7673,7 +7701,7 @@ const createExamSessionWithSnapshots = async ({
   operationAfterData = null,
   retakeOpportunityId = 0,
 }) => {
-  const safeSnapshots = Array.isArray(snapshots) ? snapshots : [];
+  const safeSnapshots = dedupeQuestionSnapshots(Array.isArray(snapshots) ? snapshots : []);
   if (!safeSnapshots.length) throw appError('试卷没有可用题目，无法开始考试', 409);
   const userId = Number(user?.id || 0);
   const userOrg = await resolveUserOrgProfile({ userId, username: user?.username });
@@ -7922,8 +7950,8 @@ app.post('/api/train-exam/exam-sessions/:sessionId/answers', requireReader, asyn
   await run(
     `UPDATE te_exam_answers
      SET user_answer_json = ?, updated_at = NOW()
-     WHERE id = ?`,
-    [JSON.stringify(userAnswer ?? null), Number(existing.id)]
+     WHERE session_id = ? AND question_id = ?`,
+    [JSON.stringify(userAnswer ?? null), sessionId, questionId]
   );
 
   res.json({ success: true });

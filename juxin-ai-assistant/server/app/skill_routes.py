@@ -13,7 +13,14 @@ from sqlalchemy.orm import Session
 from .auth import get_session, is_platform_admin_role, require_action
 from .config import Settings, get_settings
 from .database import get_db
-from .dashi_ppt_runtime import SUPPORTED_FORMATS, dashi_ppt_artifact_path
+from .dashi_ppt_runtime import (
+    DashiPptRuntimeError,
+    HTML_PACKAGE_FILE_NAME,
+    HTML_PACKAGE_MIME_TYPE,
+    SUPPORTED_FORMATS,
+    dashi_ppt_artifact_path,
+    dashi_ppt_theme_preview_path,
+)
 from .models import SkillReview, SkillRunLog, UploadedSkill
 from .schemas import SessionPayload
 from .skill_definition import SkillDefinition
@@ -397,6 +404,20 @@ async def list_my_skill_runs(
     return SkillRunLogListOut(items=[_run_log_out(row) for row in rows], total=len(rows))
 
 
+@router.get("/skills/dashi-ppt/theme-preview")
+async def get_dashi_ppt_theme_preview(
+    request: Request,
+    session_payload: Annotated[SessionPayload, Depends(get_session)],
+    current_settings: Annotated[Settings, Depends(get_settings)],
+) -> FileResponse:
+    await _require_use(request, session_payload, current_settings)
+    try:
+        preview_path = dashi_ppt_theme_preview_path(current_settings)
+    except DashiPptRuntimeError as exc:
+        raise HTTPException(status_code=503, detail="DASHI_PPT_THEME_PREVIEW_UNAVAILABLE") from exc
+    return FileResponse(preview_path, media_type="image/png")
+
+
 @router.get("/skills/dashi-ppt/runs/{run_id}/download/{artifact_format}")
 async def download_dashi_ppt_artifact(
     run_id: str,
@@ -433,7 +454,11 @@ async def download_dashi_ppt_artifact(
         "pdf": "application/pdf",
         "html": "text/html; charset=utf-8",
     }[artifact_format]
-    return FileResponse(path, media_type=media_type, filename=f"presentation.{artifact_format}")
+    filename = f"presentation.{artifact_format}"
+    if artifact_format == "html" and path.name == HTML_PACKAGE_FILE_NAME:
+        media_type = HTML_PACKAGE_MIME_TYPE
+        filename = HTML_PACKAGE_FILE_NAME
+    return FileResponse(path, media_type=media_type, filename=filename)
 
 
 @router.get("/skills/{skill_id}", response_model=SkillOut)

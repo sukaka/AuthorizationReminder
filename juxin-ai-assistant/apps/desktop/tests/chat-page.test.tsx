@@ -140,22 +140,13 @@ it('renders a downloadable file card for direct file delivery', async () => {
   expect(generateLocalModelMock).not.toHaveBeenCalled();
 });
 
-it('requires confirmation before a sensitive chat reaches the model', async () => {
+it('sends sensitive-looking chat content without a confirmation dialog', async () => {
   const prepareBodies: unknown[] = [];
   server.use(
     http.get('/api/conversations', () => HttpResponse.json({ items: [], total: 0 })),
     http.post('/api/ai/chat/prepare', async ({ request }) => {
-      const body = await request.json() as { sensitive_confirmation_digest?: string };
+      const body = await request.json();
       prepareBodies.push(body);
-      if (!body.sensitive_confirmation_digest) {
-        return HttpResponse.json({
-          detail: {
-            code: 'SENSITIVE_CONFIRMATION_REQUIRED',
-            confirmation_digest: 'c'.repeat(64),
-            findings: [{ code: 'PHONE', field: 'question', preview: '***' }],
-          },
-        }, { status: 409 });
-      }
       return HttpResponse.json({
         session_uuid: 'session-sensitive-chat',
         user_message_uuid: 'user-sensitive-chat',
@@ -182,15 +173,10 @@ it('requires confirmation before a sensitive chat reaches the model', async () =
   await userEvent.type(await screen.findByLabelText('告诉我你想完成什么工作'), '联系 13800138000 跟进项目');
   await userEvent.click(screen.getByRole('button', { name: '发送' }));
 
-  const dialog = await screen.findByRole('dialog', { name: '检测到敏感信息' });
-  expect(prepareBodies).toHaveLength(1);
-  expect(generateLocalModelMock).not.toHaveBeenCalled();
-  await userEvent.click(within(dialog).getByRole('button', { name: '确认并继续' }));
   expect(await screen.findByText('已生成跟进计划。')).toBeInTheDocument();
-  expect(prepareBodies).toHaveLength(2);
-  expect(prepareBodies[1]).toEqual(expect.objectContaining({
-    sensitive_confirmation_digest: 'c'.repeat(64),
-  }));
+  expect(screen.queryByRole('dialog', { name: '检测到敏感信息' })).not.toBeInTheDocument();
+  expect(prepareBodies).toHaveLength(1);
+  expect(prepareBodies[0]).not.toHaveProperty('sensitive_confirmation_digest');
 });
 
 it('queues a server-model chat for background processing', async () => {
@@ -2699,6 +2685,45 @@ it('renders markdown tables as semantic tables instead of pipe-separated paragra
   expect(table.parentElement).toHaveClass('chat-markdown-table-wrap');
   expect(screen.getAllByRole('table')).toHaveLength(1);
   expect(screen.getByText('普通说明 A | B 不应转换成表格')).toBeInTheDocument();
+});
+
+it('renders the Dashi PPT theme preview in a confirmation message', async () => {
+  server.use(
+    http.get('/api/conversations', () => HttpResponse.json({
+      items: [{
+        session_uuid: 'session-dashi-theme-preview',
+        title: '大师 PPT 确认',
+        mode: 'normal',
+        status: 'active',
+        created_at: '2026-07-21T01:00:00Z',
+        updated_at: '2026-07-21T01:01:00Z',
+      }],
+      total: 1,
+    })),
+    http.get('/api/ai/chat/sessions/session-dashi-theme-preview', () => HttpResponse.json({
+      session_uuid: 'session-dashi-theme-preview',
+      title: '大师 PPT 确认',
+      mode: 'normal',
+      status: 'active',
+      created_at: '2026-07-21T01:00:00Z',
+      updated_at: '2026-07-21T01:01:00Z',
+      messages: [{
+        message_uuid: 'm-assistant-dashi-theme-preview',
+        role: 'assistant',
+        content: '# 大师 PPT 制作前确认\n\n![大师 PPT 主题风格预览](/api/skills/dashi-ppt/theme-preview)',
+        status: 'COMPLETED',
+        citations: [],
+        created_at: '2026-07-21T01:00:01Z',
+      }],
+    })),
+  );
+
+  render(<ChatPage />);
+  await userEvent.click(await screen.findByRole('button', { name: '大师 PPT 确认' }));
+
+  const preview = await screen.findByRole('img', { name: '大师 PPT 主题风格预览' });
+  expect(preview).toHaveAttribute('src', '/api/skills/dashi-ppt/theme-preview');
+  expect(preview.parentElement).toHaveClass('chat-dashi-ppt-theme-preview');
 });
 
 it('opens a source preview focused on the cited chunk', async () => {

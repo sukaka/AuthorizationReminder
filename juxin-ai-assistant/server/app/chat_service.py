@@ -24,6 +24,7 @@ from .chat_document_delivery import (
 )
 from .chat_execution_policy import decide_chat_execution
 from .chat_ppt_workflow import (
+    build_chat_ppt_confirmation_message,
     build_chat_ppt_system_message,
     resolve_chat_ppt_context,
     run_chat_dashi_ppt,
@@ -940,7 +941,39 @@ def prepare_chat(
         user_id=sso_user_id,
         session_uuid=session.uuid,
         question=body.question,
+        recent_messages=recent_messages,
     )
+    if ppt_context is not None and ppt_context.requires_confirmation:
+        confirmation = build_chat_ppt_confirmation_message(ppt_context)
+        assistant = _create_message(
+            db,
+            cipher,
+            session=session,
+            sso_user_id=sso_user_id,
+            role="assistant",
+            content=confirmation,
+            status="COMPLETED",
+            key_version=key_version,
+        )
+        return ChatPrepareOut(
+            session_uuid=session.uuid,
+            user_message_uuid=user_message.uuid,
+            assistant_message_uuid=assistant.uuid,
+            completion_token="",
+            completed=True,
+            answer=confirmation,
+            messages=[],
+            citations=[],
+            loop_trace=loop_result.loop_trace,
+            task_state=task_state_payload,
+            run_id="",
+            requested_mode=route.requested_mode,
+            effective_mode=route.mode,
+            routing_reason=route.reason,
+            routing_confidence=route.confidence,
+            execution_mode=execution_decision.mode,
+            execution_reason=execution_decision.reason,
+        )
     if ppt_context is not None:
         execution_decision = decide_chat_execution(
             body.question,
@@ -1108,12 +1141,14 @@ def complete_chat_message(
     )
     question = _decrypt_content(cipher, user_message) if user_message else ""
     current_settings = settings or get_settings()
+    recent_messages = _recent_messages(db, cipher, session=session)
     ppt_context = resolve_chat_ppt_context(
         db,
         settings=current_settings,
         user_id=sso_user_id,
         session_uuid=session.uuid,
         question=question,
+        recent_messages=recent_messages,
     )
     generated_files: list[dict] | None = None
     if ppt_context is not None:
@@ -1127,8 +1162,10 @@ def complete_chat_message(
             settings=current_settings,
             session_payload=effective_session,
             session_uuid=session.uuid,
-            question=question,
+            question=ppt_context.source_question,
             answer=body.answer,
+            theme_pack=ppt_context.theme_pack,
+            needs_media=ppt_context.needs_media,
         )
     ciphertext, nonce = _encrypt_content(cipher, message.uuid, body.answer)
     message.content_ciphertext = ciphertext

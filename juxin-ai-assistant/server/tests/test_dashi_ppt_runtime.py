@@ -1,4 +1,5 @@
 from pathlib import Path
+from zipfile import ZipFile
 
 import pytest
 
@@ -6,6 +7,7 @@ import pytest
 def _runtime_root(tmp_path: Path) -> Path:
     root = tmp_path / "dashi-runtime" / "project"
     (root / "scripts").mkdir(parents=True)
+    (root / "node_modules").mkdir()
     (root / "package.json").write_text(
         '{"scripts":{"render:goal":"tsx scripts/render-goal-deck.jsx",'
         '"export:pptx":"node scripts/export-pptx.mjs",'
@@ -50,6 +52,11 @@ def test_dashi_ppt_generates_requested_artifacts_in_isolated_run_dir(tmp_path, m
         target = Path(args[-1])
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(b"generated-" + phase.encode("ascii"))
+        if phase == "render":
+            assets = target.parent / "assets"
+            (assets / "fonts").mkdir(parents=True, exist_ok=True)
+            (assets / "imported-theme-runtime.js").write_text("runtime", encoding="utf-8")
+            (assets / "fonts" / "mock.woff2").write_bytes(b"font")
 
     monkeypatch.setattr(dashi_ppt_runtime, "_run_npm", fake_run_npm)
     title, artifacts = dashi_ppt_runtime.generate_dashi_ppt(
@@ -67,6 +74,15 @@ def test_dashi_ppt_generates_requested_artifacts_in_isolated_run_dir(tmp_path, m
     assert [item.format for item in artifacts] == ["html", "pptx", "pdf"]
     assert all(item.path.is_file() for item in artifacts)
     assert all("employee-with-spaces" in str(item.path) for item in artifacts)
+    html_artifact = artifacts[0]
+    assert html_artifact.file_name == "presentation-html.zip"
+    assert html_artifact.mime_type == "application/zip"
+    with ZipFile(html_artifact.path) as package:
+        assert set(package.namelist()) >= {
+            "index.html",
+            "assets/imported-theme-runtime.js",
+            "assets/fonts/mock.woff2",
+        }
     assert (tmp_path / "exports" / "dashi-ppt" / "employee-with-spaces" / "run-1" / "goal.json").is_file()
 
 
@@ -98,3 +114,19 @@ def test_dashi_ppt_accepts_goal_spec_without_title(tmp_path, monkeypatch):
 
     assert title == "聚信 AI 助手专题汇报"
     assert [item.format for item in artifacts] == ["pptx"]
+
+
+def test_dashi_ppt_html_download_path_falls_back_to_legacy_index(tmp_path):
+    from app.config import get_settings
+    from app.dashi_ppt_runtime import dashi_ppt_artifact_path
+
+    settings = get_settings().model_copy(update={"export_storage_dir": str(tmp_path / "exports")})
+    legacy = (
+        tmp_path / "exports" / "dashi-ppt" / "employee-1" / "old-run" / "ppt" / "index.html"
+    )
+    legacy.parent.mkdir(parents=True)
+    legacy.write_text("legacy", encoding="utf-8")
+
+    assert dashi_ppt_artifact_path(
+        settings, user_id="employee-1", run_id="old-run", artifact_format="html"
+    ) == legacy

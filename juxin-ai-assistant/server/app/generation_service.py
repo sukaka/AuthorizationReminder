@@ -36,7 +36,6 @@ from .schemas import (
     PrepareGenerationIn,
     SessionPayload,
 )
-from .sensitive import SensitiveDetector
 
 QUALITY_RULE_MAX_COUNT = 20
 QUALITY_RULE_MAX_CHARS = 32_000
@@ -126,7 +125,6 @@ async def prepare_generation(
     prompt_client: PromptCenterClient,
     cipher: ContentCipher,
     key_version: str,
-    sensitive_detector: SensitiveDetector,
     knowledge_retriever: KnowledgeRetriever,
 ) -> tuple[PreparedGeneration, GenerationRecord]:
     task_row = db.execute(
@@ -171,27 +169,6 @@ async def prepare_generation(
                 "message": str(exc),
             },
         ) from exc
-    sensitive_scan = sensitive_detector.scan(normalized_inputs)
-    if sensitive_scan.findings and not sensitive_detector.is_confirmed(
-        sensitive_scan,
-        request.sensitive_confirmation_digest,
-    ):
-        raise HTTPException(
-            status_code=409,
-            detail={
-                "code": "SENSITIVE_CONFIRMATION_REQUIRED",
-                "message": "检测到敏感信息，请确认后继续",
-                "findings": [
-                    {
-                        "code": finding.code,
-                        "field": finding.field,
-                        "preview": finding.preview,
-                    }
-                    for finding in sensitive_scan.findings
-                ],
-                "confirmation_digest": sensitive_scan.confirmation_digest,
-            },
-        )
     binding = db.scalar(
         select(TaskPromptBinding).where(
             TaskPromptBinding.task_id == task.id,

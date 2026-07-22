@@ -62,10 +62,6 @@ import {
   saveChatMessageWorkArtifact,
 } from '../api/client';
 import { ChatRunContext } from '../components/ChatRunContext';
-import {
-  SensitiveWarningDialog,
-  type SensitiveFinding,
-} from '../components/SensitiveWarningDialog';
 import { cancelModelGeneration, generateLocalModel, listModelProfiles } from '../local/modelStream';
 import { isDesktopRuntime } from '../runtime/capabilities';
 import { openLocalWordFile } from '../runtime/downloads';
@@ -819,6 +815,11 @@ function isMarkdownTableSeparatorRow(cells: string[], expectedColumnCount: numbe
   return cells.length === expectedColumnCount && cells.every((cell) => /^:?-{3,}:?$/.test(cell));
 }
 
+function dashiPptThemePreviewUrl(line: string): string | null {
+  const match = /^!\[大师 PPT 主题风格预览\]\((\/api\/skills\/dashi-ppt\/theme-preview)\)$/.exec(line.trim());
+  return match?.[1] || null;
+}
+
 function renderChatContent(
   content: string,
   citationReferences: CitationFileReference[] = [],
@@ -847,6 +848,17 @@ function renderChatContent(
     const trimmed = line.trim();
     if (!trimmed || trimmed === '>') {
       flushList();
+      continue;
+    }
+
+    const themePreviewUrl = dashiPptThemePreviewUrl(trimmed);
+    if (themePreviewUrl) {
+      flushList();
+      blocks.push(
+        <figure className="chat-dashi-ppt-theme-preview" key={`dashi-theme-preview-${blocks.length}`}>
+          <img alt="大师 PPT 主题风格预览" src={themePreviewUrl} />
+        </figure>,
+      );
       continue;
     }
 
@@ -997,11 +1009,6 @@ export function ChatPage({ onOpenTaskCenter, onOpenWorkArtifacts, initialProject
   const [webModelLabel, setWebModelLabel] = useState('服务端模型');
   const [longTasks, setLongTasks] = useState<LongTaskPayload[]>([]);
   const [completedLongTaskNotice, setCompletedLongTaskNotice] = useState<LongTaskPayload | null>(null);
-  const [sensitiveConfirmation, setSensitiveConfirmation] = useState<{
-    question: string;
-    digest: string;
-    findings: SensitiveFinding[];
-  } | null>(null);
   const selectMode = (selection: ChatModeSelection) => {
     setModeSelection(selection);
     setRoutedMode(selection === 'auto' ? 'normal' : selection);
@@ -1602,7 +1609,7 @@ export function ChatPage({ onOpenTaskCenter, onOpenWorkArtifacts, initialProject
     ));
   };
 
-  const send = async (questionOverride?: string, confirmationDigest?: string) => {
+  const send = async (questionOverride?: string) => {
     if (generationStatus === 'running') {
       await stopActiveGeneration();
       return;
@@ -1678,7 +1685,6 @@ export function ChatPage({ onOpenTaskCenter, onOpenWorkArtifacts, initialProject
         personalReferenceFileIds: [],
         includePersonalReferences: true,
         includeSessionAttachments: true,
-        sensitiveConfirmationDigest: confirmationDigest,
       });
       requestMode = normalizeMode(prepared.effective_mode || requestMode);
       if (modeSelection === 'auto') {
@@ -1933,37 +1939,6 @@ export function ChatPage({ onOpenTaskCenter, onOpenWorkArtifacts, initialProject
       refreshSessions(sessionListKind).catch(() => undefined);
       if (requestIsVisible()) setStatus('');
     } catch (error) {
-      if (error instanceof ApiError && error.status === 409) {
-        const payload = error.payload as {
-          detail?: {
-            code?: string;
-            confirmation_digest?: string;
-            findings?: SensitiveFinding[];
-          };
-        } | null;
-        if (
-          payload?.detail?.code === 'SENSITIVE_CONFIRMATION_REQUIRED'
-          && payload.detail.confirmation_digest
-        ) {
-          if (requestIsVisible()) {
-            setMessages((current) => current.filter(
-              (message) => message.id !== localUserMessageId,
-            ));
-            setQuestion(trimmed);
-            setSensitiveConfirmation({
-              question: trimmed,
-              digest: payload.detail.confirmation_digest,
-              findings: (payload.detail.findings || []).map((finding) => ({
-                ...finding,
-                field: '工作内容',
-              })),
-            });
-            setStatus('');
-            setTaskProgress(null);
-          }
-          return;
-        }
-      }
       if (generation.stopped || isAbortLikeError(error)) {
         await failStoppedGeneration();
         return;
@@ -2859,7 +2834,7 @@ export function ChatPage({ onOpenTaskCenter, onOpenWorkArtifacts, initialProject
                               <span>
                                 <strong>{file.file_name}</strong>
                                 <small>
-                                  {file.format === 'html' ? '下载后可编辑' : '点击下载'} · {file.format.toUpperCase()}
+                                  {file.format === 'html' ? '解压后打开 index.html（可编辑）· HTML 工程包' : `点击下载 · ${file.format.toUpperCase()}`}
                                 </small>
                               </span>
                             </a>
@@ -3478,17 +3453,6 @@ export function ChatPage({ onOpenTaskCenter, onOpenWorkArtifacts, initialProject
                 </footer>
               </div>
             </div>
-          ) : null}
-          {sensitiveConfirmation ? (
-            <SensitiveWarningDialog
-              findings={sensitiveConfirmation.findings}
-              onCancel={() => setSensitiveConfirmation(null)}
-              onConfirm={() => {
-                const pending = sensitiveConfirmation;
-                setSensitiveConfirmation(null);
-                void send(pending.question, pending.digest);
-              }}
-            />
           ) : null}
           {completedLongTaskNotice ? (
             <section aria-label="后台任务完成" className="chat-long-task-notice" role="status">

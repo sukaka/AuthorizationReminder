@@ -3,14 +3,15 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass
-from typing import Literal
+from typing import Iterable, Literal
 
 from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .config import Settings
-from .dashi_ppt_runtime import load_dashi_ppt_goal_spec
+from .context.context_builder import RecentChatMessage
+from .dashi_ppt_runtime import build_scaffolded_dashi_goal_spec, load_dashi_ppt_goal_spec
 from .models import SkillRunLog
 from .schemas import SessionPayload
 from .skill_registry import get_default_skill_registry
@@ -35,12 +36,37 @@ _CONTENT_LAYOUTS = (
     "theme01_page030",
     "theme01_page006",
 )
+_THEME_PATTERN = re.compile(r"\btheme\s*(0?[1-9]|1[0-2])\b", re.IGNORECASE)
+_CONFIRMATION_PREFIX = "# 大师 PPT 制作前确认"
+_DASHI_THEME_PREVIEW_URL = "/api/skills/dashi-ppt/theme-preview"
+_AUTO_THEME_MARKERS = ("你来定", "你决定", "你定", "你帮我定", "默认风格", "随便选")
+_DIRECT_START_MARKERS = ("直接生成", "直接开始", "直接制作", "马上生成", "立即生成", "直接做", "开干")
+_NO_MEDIA_MARKERS = ("不需要图片", "不需要素材", "不需要视频", "无需图片", "无需素材", "无素材", "纯文字")
+_NEEDS_MEDIA_MARKERS = ("需要图片", "需要素材", "需要视频", "要图片", "要素材", "带图", "加图")
+_THEME_LABELS = {
+    "theme01": "留白商务",
+    "theme02": "科技光效",
+    "theme03": "代码科技",
+    "theme04": "玻璃糖果",
+    "theme05": "数据图表",
+    "theme06": "深色数据",
+    "theme07": "冷白研究",
+    "theme08": "黑金质感",
+    "theme09": "深蓝杂志",
+    "theme10": "金融专业",
+    "theme11": "增长活力",
+    "theme12": "霓虹声波",
+}
 
 
 @dataclass(frozen=True)
 class ChatPptContext:
     intent: PptIntent
     previous_goal: dict | None
+    source_question: str
+    theme_pack: str = "theme01"
+    needs_media: bool = False
+    requires_confirmation: bool = False
 
 
 def detect_dashi_ppt_intent(question: str, *, has_previous: bool = False) -> PptIntent | None:
@@ -65,6 +91,7 @@ def resolve_chat_ppt_context(
     user_id: str,
     session_uuid: str,
     question: str,
+    recent_messages: Iterable[RecentChatMessage] = (),
 ) -> ChatPptContext | None:
     previous_goal = _latest_chat_goal(
         db,
@@ -72,10 +99,85 @@ def resolve_chat_ppt_context(
         user_id=user_id,
         session_uuid=session_uuid,
     )
+    history = list(recent_messages)
+    pending_request = _pending_confirmation_request(history)
+    if pending_request is not None:
+        selection = _parse_ppt_selection(question, fallback_question=pending_request)
+        if selection.is_complete:
+            return ChatPptContext(
+                intent="create",
+                previous_goal=None,
+                source_question=pending_request,
+                theme_pack=selection.theme_pack,
+                needs_media=selection.needs_media,
+            )
+        return ChatPptContext(
+            intent="create",
+            previous_goal=None,
+            source_question=pending_request,
+            theme_pack=selection.theme_pack or _choose_theme_pack(pending_request),
+            needs_media=bool(selection.needs_media),
+            requires_confirmation=True,
+        )
+
     intent = detect_dashi_ppt_intent(question, has_previous=previous_goal is not None)
     if intent is None:
         return None
-    return ChatPptContext(intent=intent, previous_goal=previous_goal)
+    if intent == "revise":
+        return ChatPptContext(
+            intent=intent,
+            previous_goal=previous_goal,
+            source_question=question,
+            theme_pack=_theme_pack_from_goal(previous_goal),
+        )
+
+    selection = _parse_ppt_selection(question, fallback_question=question)
+    direct_start = any(marker in _normalized(question) for marker in _DIRECT_START_MARKERS)
+    if selection.is_complete or direct_start:
+        return ChatPptContext(
+            intent=intent,
+            previous_goal=None,
+            source_question=question,
+            theme_pack=selection.theme_pack or _choose_theme_pack(question),
+            needs_media=bool(selection.needs_media),
+        )
+    return ChatPptContext(
+        intent=intent,
+        previous_goal=None,
+        source_question=question,
+        theme_pack=selection.theme_pack or _choose_theme_pack(question),
+        needs_media=bool(selection.needs_media),
+        requires_confirmation=True,
+    )
+
+
+@dataclass(frozen=True)
+class _PptSelection:
+    theme_pack: str | None = None
+    needs_media: bool | None = None
+
+    @property
+    def is_complete(self) -> bool:
+        return self.theme_pack is not None and self.needs_media is not None
+
+
+def build_chat_ppt_confirmation_message(context: ChatPptContext) -> str:
+    theme_rows = "\n".join(
+        f"- `{theme}`：{label}"
+        for theme, label in _THEME_LABELS.items()
+    )
+    return (
+        f"{_CONFIRMATION_PREFIX}\n\n"
+        "请先确认以下三项，确认后我就开始制作：\n"
+        f"1. 主题与用途：`{_clean_text(context.source_question, limit=80)}`"
+        "（如需补充受众、页数或重点，也可以一起说明）\n"
+        "2. 请从下方 12 种主题预览中选择风格：\n"
+        f"![大师 PPT 主题风格预览]({_DASHI_THEME_PREVIEW_URL})\n\n"
+        f"{theme_rows}\n"
+        "也可以回复“你来定”。\n"
+        "3. 是否需要图片/视频素材：回复“需要图片”或“不需要图片”。\n\n"
+        "回复示例：`主题：年度经营汇报；风格：theme05；不需要图片`"
+    )
 
 
 def build_chat_ppt_system_message(context: ChatPptContext) -> str:
@@ -95,7 +197,11 @@ def build_chat_ppt_system_message(context: ChatPptContext) -> str:
         "# 演示标题\n一句简短导语\n## 第 1 页标题\n- 要点一\n- 要点二\n"
         "## 第 2 页标题\n- 要点一\n- 要点二\n"
         "正文建议 5 至 10 页；每页 2 至 5 个简洁、可直接展示的要点。"
-        "不要输出代码围栏，不要只输出制作建议。"
+        "演示标题不超过 36 个字，导语不超过 54 个字，页标题不超过 28 个字，每个要点不超过 36 个字，避免布局溢出。"
+        "不要输出代码围栏，不要只输出制作建议。\n"
+        f"已确认视觉风格：{context.theme_pack}（{_THEME_LABELS.get(context.theme_pack, '自定义主题')}）。\n"
+        f"素材需求：{'需要图片或视频素材，请在适合的页面预留素材位并描述素材建议。' if context.needs_media else '不需要额外图片或视频素材，请以文字、图表和版式组织内容。'}\n"
+        f"本次演示的原始需求：{_clean_text(context.source_question, limit=160)}。"
         f"{revision_context}"
     )
 
@@ -104,8 +210,22 @@ def build_dashi_goal_spec(
     answer: str,
     *,
     question: str,
+    theme_pack: str = "theme01",
+    needs_media: bool = False,
+    settings: Settings | None = None,
 ) -> dict:
     title, lead, sections = _parse_deck_markdown(answer, question=question)
+    if theme_pack != "theme01":
+        if settings is None:
+            raise ValueError("非 theme01 的大师 PPT 生成需要运行时设置。")
+        return build_scaffolded_dashi_goal_spec(
+            settings=settings,
+            title=title,
+            lead=lead,
+            sections=sections,
+            theme_pack=theme_pack,
+            needs_media=needs_media,
+        )
     title_top, title_bottom = _split_title(title)
     slides: list[dict] = [{
         "layout": "theme01_page001",
@@ -116,11 +236,13 @@ def build_dashi_goal_spec(
             "en": "JUXIN AI PRESENTATION",
             "lead": lead,
             "chips": ["自动生成", "可继续调整", "PPTX 交付"],
+            "chipCount": 3,
             "meta": [
                 {"label": "生成方式", "value": "聚信 AI 助手"},
                 {"label": "编辑能力", "value": "HTML 可调整"},
                 {"label": "交付格式", "value": "PPTX"},
             ],
+            "metaCount": 3,
         },
     }]
     for index, (heading, points) in enumerate(sections[:len(_CONTENT_LAYOUTS)], start=1):
@@ -153,7 +275,7 @@ def build_dashi_goal_spec(
             "showDisclaimer": True,
         },
     })
-    return {"title": title, "slides": slides}
+    return {"title": title, "themePack": "theme01", "slides": slides}
 
 
 def _content_slide_props(
@@ -322,9 +444,9 @@ def _slide_points(heading: str, points: list[str]) -> list[str]:
         f"沉淀可复用的方法并形成后续闭环",
     ]
     result: list[str] = []
-    seen = {_clean_text(heading, limit=64)}
+    seen = {_clean_text(heading, limit=36)}
     for candidate in candidates:
-        cleaned = _clean_text(candidate, limit=64)
+        cleaned = _clean_text(candidate, limit=36)
         if not cleaned or cleaned in seen:
             continue
         seen.add(cleaned)
@@ -342,6 +464,8 @@ def run_chat_dashi_ppt(
     session_uuid: str,
     question: str,
     answer: str,
+    theme_pack: str = "theme01",
+    needs_media: bool = False,
 ) -> list[dict]:
     try:
         skill = get_default_skill_registry().get("dashi-ppt")
@@ -354,7 +478,13 @@ def run_chat_dashi_ppt(
         user_input={
             "question": question,
             "formats": ["html", "pptx"],
-            "goal_spec": build_dashi_goal_spec(answer, question=question),
+            "goal_spec": build_dashi_goal_spec(
+                answer,
+                question=question,
+                theme_pack=theme_pack,
+                needs_media=needs_media,
+                settings=settings,
+            ),
         },
     )
     run_id = str(result["run_id"])
@@ -398,6 +528,57 @@ def _latest_chat_goal(
     return load_dashi_ppt_goal_spec(settings, user_id=user_id, run_id=row.uuid)
 
 
+def _pending_confirmation_request(messages: list[RecentChatMessage]) -> str | None:
+    for index in range(len(messages) - 1, -1, -1):
+        message = messages[index]
+        if message.role != "assistant" or _CONFIRMATION_PREFIX not in str(message.content):
+            continue
+        # A later completed assistant reply means this confirmation has already
+        # been consumed to create a deck; do not let it block later revisions.
+        if any(item.role == "assistant" for item in messages[index + 1:]):
+            continue
+        for previous in reversed(messages[:index]):
+            if previous.role == "user" and str(previous.content).strip():
+                return str(previous.content)
+    return None
+
+
+def _parse_ppt_selection(question: str, *, fallback_question: str) -> _PptSelection:
+    normalized = _normalized(question)
+    theme_match = _THEME_PATTERN.search(question)
+    theme_pack = f"theme{int(theme_match.group(1)):02d}" if theme_match else None
+    if theme_pack is None and any(marker in normalized for marker in _AUTO_THEME_MARKERS):
+        theme_pack = _choose_theme_pack(fallback_question)
+    needs_media: bool | None = None
+    if any(marker in normalized for marker in _NO_MEDIA_MARKERS):
+        needs_media = False
+    elif any(marker in normalized for marker in _NEEDS_MEDIA_MARKERS):
+        needs_media = True
+    return _PptSelection(theme_pack=theme_pack, needs_media=needs_media)
+
+
+def _choose_theme_pack(question: str) -> str:
+    normalized = _normalized(question)
+    if any(marker in normalized for marker in ("研究", "课题", "学术", "论文")):
+        return "theme07"
+    if any(marker in normalized for marker in ("科技", "ai", "人工智能", "软件", "数字化")):
+        return "theme02"
+    if any(marker in normalized for marker in ("增长", "营销", "品牌", "市场")):
+        return "theme11"
+    if any(marker in normalized for marker in ("经营", "数据", "复盘", "汇报", "分析")):
+        return "theme05"
+    return "theme01"
+
+
+def _theme_pack_from_goal(goal: dict | None) -> str:
+    theme_pack = str((goal or {}).get("themePack") or "").strip()
+    return theme_pack if theme_pack in _THEME_LABELS else "theme01"
+
+
+def _normalized(value: object) -> str:
+    return "".join(str(value or "").casefold().split())
+
+
 def _parse_deck_markdown(answer: str, *, question: str) -> tuple[str, str, list[tuple[str, list[str]]]]:
     lines = [line.strip() for line in str(answer).splitlines()]
     title = ""
@@ -409,15 +590,15 @@ def _parse_deck_markdown(answer: str, *, question: str) -> tuple[str, str, list[
         if not line or line.startswith("```"):
             continue
         if line.startswith("# ") and not title:
-            title = _clean_text(line[2:], limit=80)
+            title = _clean_text(line[2:], limit=36)
             continue
         if line.startswith("## "):
             if current_heading:
                 sections.append((current_heading, current_points))
-            current_heading = _clean_text(re.sub(r"^\d+[.、]\s*", "", line[3:]), limit=48)
+            current_heading = _clean_text(re.sub(r"^\d+[.、]\s*", "", line[3:]), limit=28)
             current_points = []
             continue
-        cleaned = _clean_text(re.sub(r"^(?:[-*+]\s+|\d+[.、]\s*)", "", line), limit=120)
+        cleaned = _clean_text(re.sub(r"^(?:[-*+]\s+|\d+[.、]\s*)", "", line), limit=36)
         if not cleaned:
             continue
         if current_heading:
@@ -426,13 +607,13 @@ def _parse_deck_markdown(answer: str, *, question: str) -> tuple[str, str, list[
             lead_parts.append(cleaned)
     if current_heading:
         sections.append((current_heading, current_points))
-    title = title or _clean_text(question, limit=80) or "专题汇报"
-    lead = _clean_text(" ".join(lead_parts), limit=180) or "围绕目标、关键判断与下一步行动形成完整汇报。"
+    title = title or _clean_text(question, limit=36) or "专题汇报"
+    lead = _clean_text(" ".join(lead_parts), limit=54) or "围绕目标、关键判断与下一步行动形成完整汇报。"
     if not sections:
         fallback_points = [
-            _clean_text(item, limit=120)
+            _clean_text(item, limit=36)
             for item in re.split(r"[。；\n]+", str(answer))
-            if _clean_text(item, limit=120)
+            if _clean_text(item, limit=36)
         ][:5]
         sections = [("核心内容", fallback_points or [lead])]
     return title, lead, sections

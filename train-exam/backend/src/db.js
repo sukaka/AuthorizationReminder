@@ -136,6 +136,23 @@ const addColumnIfMissing = async (tableName, columnName, columnSql) => {
   await run(`ALTER TABLE ${tableName} ADD COLUMN ${columnSql}`);
 };
 
+const hasIndex = async (tableName, indexName) => {
+  const row = await get(
+    `SELECT COUNT(1) AS total
+     FROM information_schema.STATISTICS
+     WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? AND INDEX_NAME = ?
+     LIMIT 1`,
+    [DB_NAME, String(tableName), String(indexName)]
+  );
+  return Number(row?.total || 0) > 0;
+};
+
+const addIndexIfMissing = async (tableName, indexName, indexSql) => {
+  const exists = await hasIndex(tableName, indexName);
+  if (exists) return;
+  await run(`ALTER TABLE ${tableName} ${indexSql}`);
+};
+
 const createSchema = async () => {
   await run(`CREATE TABLE IF NOT EXISTS te_courses (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,
@@ -508,8 +525,27 @@ const createSchema = async () => {
     sort_order INT NOT NULL DEFAULT 0,
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    INDEX idx_te_exam_answers_session (session_id, sort_order)
+    INDEX idx_te_exam_answers_session (session_id, sort_order),
+    UNIQUE KEY uk_te_exam_answers_session_question (session_id, question_id)
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
+
+  // 仅清理同一会话内重复答题行；不更新历史成绩、考试结果或审计记录。
+  await run(
+    `DELETE duplicate
+     FROM te_exam_answers AS duplicate
+     INNER JOIN te_exam_answers AS keeper
+       ON keeper.session_id = duplicate.session_id
+      AND keeper.question_id = duplicate.question_id
+      AND (
+        keeper.sort_order < duplicate.sort_order
+        OR (keeper.sort_order = duplicate.sort_order AND keeper.id < duplicate.id)
+      )`
+  );
+  await addIndexIfMissing(
+    'te_exam_answers',
+    'uk_te_exam_answers_session_question',
+    'ADD UNIQUE KEY uk_te_exam_answers_session_question (session_id, question_id)'
+  );
 
   await run(`CREATE TABLE IF NOT EXISTS te_exam_results (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,

@@ -41,6 +41,9 @@ class Settings(BaseSettings):
     # Keep this empty by default so a deployment cannot accidentally report a
     # successful export without the real exporter being present.
     dashi_ppt_runtime_root: str = ""
+    # A fixed, administrator-configured upstream Dashi PPT visual asset. It is
+    # exposed only through an authenticated, fixed-purpose endpoint.
+    dashi_ppt_theme_preview_path: str = ""
     dashi_ppt_timeout_seconds: int = Field(default=300, ge=30, le=1800)
     dashi_ppt_max_output_bytes: int = Field(
         default=104_857_600,

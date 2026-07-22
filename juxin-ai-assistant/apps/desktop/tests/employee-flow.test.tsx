@@ -159,7 +159,7 @@ it('opens chat after login without adding an extra sidebar menu', async () => {
   expect(await screen.findByRole('region', { name: '私人工作助理工作区' })).toBeInTheDocument();
 });
 
-it('requires explicit confirmation for the current sensitive digest', async () => {
+it('sends sensitive-looking employee task content without confirmation', async () => {
   const prepareBodies: unknown[] = [];
   const task: TaskDefinition = {
     uuid: 'task-sensitive',
@@ -183,21 +183,6 @@ it('requires explicit confirmation for the current sensitive digest', async () =
     http.post('/api/ai/generations/prepare', async ({ request }) => {
       const body = await request.json();
       prepareBodies.push(body);
-      if (!(body as { sensitive_confirmation_digest?: string }).sensitive_confirmation_digest) {
-        return HttpResponse.json(
-          {
-            detail: {
-              code: 'SENSITIVE_CONFIRMATION_REQUIRED',
-              message: '检测到敏感信息',
-              confirmation_digest: 'a'.repeat(64),
-              findings: [
-                { code: 'PHONE', field: 'background', preview: '***' },
-              ],
-            },
-          },
-          { status: 409 },
-        );
-      }
       return HttpResponse.json(
         {
           generation_uuid: 'gen-sensitive',
@@ -247,14 +232,8 @@ it('requires explicit confirmation for the current sensitive digest', async () =
   await userEvent.type(screen.getByLabelText('背景信息'), '联系 13800138000');
   await userEvent.click(screen.getByRole('button', { name: '开始生成' }));
 
-  const dialog = await screen.findByRole('dialog', { name: '检测到敏感信息' });
-  expect(prepareBodies).toHaveLength(1);
-  await userEvent.click(within(dialog).getByRole('button', { name: '确认并继续' }));
   expect(await screen.findByText('生成结果')).toBeInTheDocument();
-  expect(prepareBodies).toHaveLength(2);
-  expect(prepareBodies[1]).toEqual(
-    expect.objectContaining({
-      sensitive_confirmation_digest: 'a'.repeat(64),
-    }),
-  );
+  expect(screen.queryByRole('dialog', { name: '检测到敏感信息' })).not.toBeInTheDocument();
+  expect(prepareBodies).toHaveLength(1);
+  expect(prepareBodies[0]).not.toHaveProperty('sensitive_confirmation_digest');
 });

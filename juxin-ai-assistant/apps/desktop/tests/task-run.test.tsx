@@ -656,7 +656,7 @@ it('keeps API keys out of the browser-only experience', () => {
   expect(screen.queryByLabelText(/API Key/i)).not.toBeInTheDocument();
 });
 
-it('requires explicit confirmation before sending sensitive findings', async () => {
+it('sends sensitive-looking task content without a confirmation dialog', async () => {
   const prepareBodies: unknown[] = [];
   const sensitiveTask: TaskDefinition = {
     ...workSummaryTask,
@@ -681,18 +681,6 @@ it('requires explicit confirmation before sending sensitive findings', async () 
     http.post('/api/ai/generations/prepare', async ({ request }) => {
       const body = await request.json();
       prepareBodies.push(body);
-      if (!(body as { sensitive_confirmation_digest?: string }).sensitive_confirmation_digest) {
-        return HttpResponse.json({
-          detail: {
-            code: 'SENSITIVE_CONFIRMATION_REQUIRED',
-            confirmation_digest: 'digest-sensitive',
-            findings: [
-              { code: 'ACCOUNT_PASSWORD', field: 'blank_slot_05', preview: '***' },
-              { code: 'ACCOUNT_PASSWORD', field: 'blank_slot_06', preview: '***' },
-            ],
-          },
-        }, { status: 409 });
-      }
       return HttpResponse.json({
         generation_uuid: 'gen-sensitive-auto',
         completion_token: 'complete-sensitive-auto',
@@ -735,20 +723,10 @@ it('requires explicit confirmation before sending sensitive findings', async () 
   await userEvent.type(screen.getByLabelText('登录账号密码'), 'admin/password: secret');
   await userEvent.click(screen.getByRole('button', { name: '开始生成' }));
 
-  const dialog = await screen.findByRole('dialog', { name: '检测到敏感信息' });
-  expect(within(dialog).getByText(/检测到 2 项敏感信息/)).toBeInTheDocument();
-  expect(within(dialog).getByText('登录账号密码')).toBeInTheDocument();
-  expect(within(dialog).queryByText(/blank_slot|ACCOUNT_PASSWORD/)).not.toBeInTheDocument();
-  expect(prepareBodies).toHaveLength(1);
-  expect(screen.queryByText('生成结果')).not.toBeInTheDocument();
-  await userEvent.click(within(dialog).getByRole('button', { name: '确认并继续' }));
   expect(await screen.findByText('生成结果')).toBeInTheDocument();
-  expect(prepareBodies).toHaveLength(2);
-  expect(prepareBodies[1]).toEqual(
-    expect.objectContaining({
-      sensitive_confirmation_digest: 'digest-sensitive',
-    }),
-  );
+  expect(screen.queryByRole('dialog', { name: '检测到敏感信息' })).not.toBeInTheDocument();
+  expect(prepareBodies).toHaveLength(1);
+  expect(prepareBodies[0]).not.toHaveProperty('sensitive_confirmation_digest');
 });
 
 it('cancels the active local request with its request id', async () => {

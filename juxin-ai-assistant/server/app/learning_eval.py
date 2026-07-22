@@ -160,8 +160,8 @@ def scenario_for_question(question_id: str) -> LearningEvalScenario:
         ),
         "sensitive-confirmation": LearningEvalScenario(
             mode="normal",
-            failure_cases=("发现敏感信息要提示用户确认，账号密码不得写入日志。",),
-            required_snippets=("敏感信息", "用户确认", "不得写入日志"),
+            experiences=("包含手机号等内容可直接提交，不弹二次确认；账号密码不得写入日志。",),
+            required_snippets=("直接提交", "不弹二次确认", "不得写入日志"),
         ),
         "web-https-deployment": LearningEvalScenario(
             mode="normal",

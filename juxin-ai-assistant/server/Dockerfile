@@ -50,7 +50,8 @@ COPY server/scripts ./scripts
 COPY agent-harness ./agent-harness
 
 RUN adduser --disabled-password --gecos "" appuser \
-    && chown -R appuser:appuser /app
+    && mkdir -p /data/ai-assistant/dashi-ppt-exports \
+    && chown -R appuser:appuser /app /data
 USER appuser
 
 EXPOSE 5193

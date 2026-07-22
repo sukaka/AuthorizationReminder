@@ -7,10 +7,6 @@ import {
 import { AttachmentUpload } from '../components/AttachmentUpload';
 import { FeedbackPanel } from '../components/FeedbackPanel';
 import { OutputReader } from '../components/OutputReader';
-import {
-  SensitiveWarningDialog,
-  type SensitiveFinding,
-} from '../components/SensitiveWarningDialog';
 import { deleteDraft, loadDraft, saveDraft } from '../local/drafts';
 import { cancelModelGeneration, generateLocalModel, listModelProfiles } from '../local/modelStream';
 import { enqueuePendingResult, syncPendingResults } from '../local/syncQueue';
@@ -119,10 +115,6 @@ export function TaskRunPage({ task, userId }: { task: TaskDefinition; userId?: s
   const [attachments, setAttachments] = useState<AttachmentPayload[]>([]);
   const [attachmentsUploading, setAttachmentsUploading] = useState(false);
   const [knowledgeRefs, setKnowledgeRefs] = useState<KnowledgeRef[]>([]);
-  const [sensitiveConfirmation, setSensitiveConfirmation] = useState<{
-    digest: string;
-    findings: SensitiveFinding[];
-  } | null>(null);
 
   useEffect(() => {
     if (!desktopAvailable) return;
@@ -283,7 +275,7 @@ export function TaskRunPage({ task, userId }: { task: TaskDefinition; userId?: s
     if (userId) await deleteDraft(userId, task.uuid).catch(() => undefined);
   };
 
-  const generate = async (confirmationDigest?: string) => {
+  const generate = async () => {
     setError('');
     for (const field of task.fields) {
       if (field.required && !values[field.field_key]) {
@@ -310,38 +302,9 @@ export function TaskRunPage({ task, userId }: { task: TaskDefinition; userId?: s
           task_uuid: task.uuid,
           inputs: values,
           attachment_uuids: attachments.map((attachment) => attachment.attachment_uuid),
-          ...(confirmationDigest
-            ? { sensitive_confirmation_digest: confirmationDigest }
-            : {}),
         }),
       });
       if (!prepareResponse.ok) {
-        const payload = await prepareResponse.json().catch(() => null) as {
-          detail?: {
-            code?: string;
-            confirmation_digest?: string;
-            findings?: SensitiveFinding[];
-          };
-        } | null;
-        if (
-          prepareResponse.status === 409
-          && payload?.detail?.code === 'SENSITIVE_CONFIRMATION_REQUIRED'
-          && payload.detail.confirmation_digest
-        ) {
-          if (!confirmationDigest) {
-            setSensitiveConfirmation({
-              digest: payload.detail.confirmation_digest,
-              findings: (payload.detail.findings || []).map((finding) => ({
-                ...finding,
-                field: task.fields.find(
-                  (field) => field.field_key === finding.field,
-                )?.label || '输入内容',
-              })),
-            });
-            setStatus('idle');
-            return;
-          }
-        }
         throw new Error(`PREPARE_${prepareResponse.status}`);
       }
       const prepared = (await prepareResponse.json()) as PreparedGeneration;
@@ -543,17 +506,6 @@ export function TaskRunPage({ task, userId }: { task: TaskDefinition; userId?: s
           ) : null}
         </article>
       </div>
-      {sensitiveConfirmation ? (
-        <SensitiveWarningDialog
-          findings={sensitiveConfirmation.findings}
-          onCancel={() => setSensitiveConfirmation(null)}
-          onConfirm={() => {
-            const digest = sensitiveConfirmation.digest;
-            setSensitiveConfirmation(null);
-            void generate(digest);
-          }}
-        />
-      ) : null}
     </section>
   );
 }

@@ -530,7 +530,6 @@ export async function prepareChat(payload: {
   personalReferenceFileIds?: string[];
   includePersonalReferences?: boolean;
   includeSessionAttachments?: boolean;
-  sensitiveConfirmationDigest?: string;
   projectUuid?: string;
 }): Promise<ChatPreparePayload> {
   return readJson(
@@ -546,9 +545,6 @@ export async function prepareChat(payload: {
         personal_reference_file_ids: payload.personalReferenceFileIds ?? [],
         include_personal_references: payload.includePersonalReferences ?? false,
         include_session_attachments: payload.includeSessionAttachments ?? false,
-        ...(payload.sensitiveConfirmationDigest
-          ? { sensitive_confirmation_digest: payload.sensitiveConfirmationDigest }
-          : {}),
         ...(payload.projectUuid ? { project_uuid: payload.projectUuid } : {}),
       }),
     }),

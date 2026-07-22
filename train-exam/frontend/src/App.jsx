@@ -4166,6 +4166,21 @@ function App() {
       .filter(Boolean)
   }
 
+  const parseQuestionIdValues = (text) => String(text || '')
+    .split(/[，,、\s]+/)
+    .map((item) => Number(item))
+    .filter((item) => Number.isInteger(item) && item > 0)
+
+  const findDuplicateValues = (values) => {
+    const seen = new Set()
+    const duplicates = new Set()
+    for (const value of values) {
+      if (seen.has(value)) duplicates.add(value)
+      seen.add(value)
+    }
+    return Array.from(duplicates)
+  }
+
   const getMultiSelectValues = (target) => Array.from(target?.selectedOptions || [])
     .map((option) => String(option?.value || '').trim())
     .filter(Boolean)
@@ -4417,6 +4432,12 @@ function App() {
     e.preventDefault()
     clearFeedback()
     try {
+      const fixedQuestionIds = parseQuestionIdValues(paperForm.fixed_question_ids)
+      const duplicateQuestionIds = findDuplicateValues(fixedQuestionIds)
+      if (paperForm.paper_mode === 'fixed' && duplicateQuestionIds.length) {
+        setError(`固定试卷内不能包含重复题目：${duplicateQuestionIds.join('、')}`)
+        return
+      }
       const payload = {
         name: paperForm.name,
         paper_mode: paperForm.paper_mode,
@@ -4424,7 +4445,7 @@ function App() {
         duration_minutes: Number(paperForm.duration_minutes || 60),
         max_attempts: Number(paperForm.max_attempts || 3),
         exam_window_hours: Number(paperForm.exam_window_hours || 72),
-        fixed_question_ids: paperForm.fixed_question_ids,
+        fixed_question_ids: fixedQuestionIds,
         rules: paperForm.paper_mode === 'random'
           ? (Array.isArray(paperForm.rules) ? paperForm.rules : []).map((rule) => ({
               question_type: rule.question_type,

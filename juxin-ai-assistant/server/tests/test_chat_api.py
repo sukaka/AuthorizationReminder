@@ -217,7 +217,7 @@ def test_chat_generate_rejects_client_mutated_prepared_context(client_for_user) 
     assert response.json()["detail"] == "CHAT_MESSAGE_CONTEXT_INVALID"
 
 
-def test_chat_prepare_requires_explicit_sensitive_confirmation(
+def test_chat_prepare_accepts_sensitive_looking_content_without_confirmation(
     client_for_user,
     generation_db,
 ) -> None:
@@ -227,28 +227,14 @@ def test_chat_prepare_requires_explicit_sensitive_confirmation(
     client = client_for_user("user-sensitive-chat")
     body = {"question": "请联系 13800138000 跟进项目", "mode": "normal"}
 
-    warning = client.post("/api/ai/chat/prepare", json=body)
+    response = client.post("/api/ai/chat/prepare", json=body)
 
-    assert warning.status_code == 409
-    detail = warning.json()["detail"]
-    assert detail["code"] == "SENSITIVE_CONFIRMATION_REQUIRED"
-    assert detail["findings"] == [{
-        "code": "PHONE",
-        "field": "question",
-        "preview": "***",
-    }]
-    assert generation_db.query(ChatMessage).count() == 0
-
-    confirmed = client.post(
-        "/api/ai/chat/prepare",
-        json={**body, "sensitive_confirmation_digest": detail["confirmation_digest"]},
-    )
-
-    assert confirmed.status_code == 201
+    assert response.status_code == 201
+    assert generation_db.query(ChatMessage).count() == 2
     audit = generation_db.query(AuditLog).filter_by(action="chat.prepare").one()
     assert audit.metadata_json == {
         "status": "PREPARED",
-        "risk_confirmation": True,
+        "risk_confirmation": False,
     }
     assert "13800138000" not in repr(audit.metadata_json)
 

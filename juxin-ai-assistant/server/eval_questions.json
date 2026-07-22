@@ -90,7 +90,7 @@
     {
       "id": "sensitive-confirmation",
       "question": "材料里有手机号和账号密码时如何处理？",
-      "expected_focus": ["敏感信息提示", "用户确认", "不写入日志"]
+      "expected_focus": ["直接提交", "不弹二次确认", "不写入日志"]
     },
     {
       "id": "web-https-deployment",

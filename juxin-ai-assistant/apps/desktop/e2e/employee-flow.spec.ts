@@ -192,15 +192,6 @@ async function mockApi(page: Page, state: E2eState) {
       return route.fulfill({ status: 204, body: '' });
     }
     if (path === '/api/ai/generations/prepare') {
-      const payload = JSON.parse(body);
-      if (!payload.sensitive_confirmation_digest) {
-        return route.fulfill({ status: 409, json: { detail: {
-          code: 'SENSITIVE_CONFIRMATION_REQUIRED',
-          message: '检测到敏感信息',
-          confirmation_digest: 'a'.repeat(64),
-          findings: [{ code: 'PHONE', field: 'background', preview: '***' }],
-        } } });
-      }
       return route.fulfill({ status: 201, json: {
         generation_uuid: 'gen-e2e-1', completion_token: 'complete-e2e-1',
         messages: [{ role: 'user', content: '已脱敏的报价背景' }],
@@ -284,11 +275,7 @@ test('employee completes the full local-model workflow without leaking its API k
   await page.getByRole('button', { name: '深色' }).click();
   await page.screenshot({ path: 'output/playwright/task-dark.png', fullPage: true });
   await page.getByRole('button', { name: '开始生成' }).click();
-  const warningDialog = page.getByRole('dialog', { name: '检测到敏感信息' });
-  await expect(warningDialog).toBeVisible();
-  await expect(warningDialog.getByText('13800138000')).toHaveCount(0);
-  await expect(warningDialog.getByText(/\*\*\*/)).toBeVisible();
-  await page.getByRole('button', { name: '确认并继续' }).click();
+  await expect(page.getByRole('dialog', { name: '检测到敏感信息' })).toHaveCount(0);
   await expect(page.getByText('# 报价说明\n已根据客户背景生成。')).toBeVisible();
   await expect(page.getByText('结果已同步')).toBeVisible();
   await page.getByText('有帮助', { exact: true }).click();
@@ -313,4 +300,5 @@ test('employee completes the full local-model workflow without leaking its API k
   expect(await page.evaluate(() => (window as any).__E2E_MODEL_PROCESS_INPUT__.apiKey)).toBe('e2e-model-process-secret');
   expect(networkPayloads.join('\n')).not.toContain('e2e-model-process-secret');
   expect(state.requestBodies.join('\n')).not.toContain('e2e-model-process-secret');
+  expect(state.requestBodies.join('\n')).not.toContain('sensitive_confirmation_digest');
 });

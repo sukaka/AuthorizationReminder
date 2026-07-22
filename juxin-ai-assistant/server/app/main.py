@@ -149,7 +149,6 @@ from .schemas import (
     TaskOut,
     MessageOut,
 )
-from .sensitive import SensitiveDetector, derive_confirmation_key
 
 
 @asynccontextmanager
@@ -344,14 +343,6 @@ def get_content_cipher(
     current_settings: Annotated[Settings, Depends(get_settings)],
 ) -> ContentCipher:
     return ContentCipher(current_settings.content_encryption_key)
-
-
-def get_sensitive_detector(
-    current_settings: Annotated[Settings, Depends(get_settings)],
-) -> SensitiveDetector:
-    return SensitiveDetector(
-        derive_confirmation_key(current_settings.content_encryption_key)
-    )
 
 
 def get_knowledge_retriever(
@@ -1227,10 +1218,6 @@ async def prepare_generation_route(
     db: Annotated[Session, Depends(get_db)],
     prompt_client: Annotated[PromptCenterClient, Depends(get_prompt_client)],
     cipher: Annotated[ContentCipher, Depends(get_content_cipher)],
-    sensitive_detector: Annotated[
-        SensitiveDetector,
-        Depends(get_sensitive_detector),
-    ],
     knowledge_retriever: Annotated[
         KnowledgeRetriever,
         Depends(get_knowledge_retriever),
@@ -1249,7 +1236,6 @@ async def prepare_generation_route(
         prompt_client,
         cipher,
         current_settings.content_encryption_key_version,
-        sensitive_detector,
         knowledge_retriever,
     )
     write_request_audit(
@@ -1266,7 +1252,7 @@ async def prepare_generation_route(
             "prompt_external_id": record.prompt_external_id,
             "prompt_version": record.prompt_version,
             "status": record.status,
-            "risk_confirmation": bool(body.sensitive_confirmation_digest),
+            "risk_confirmation": False,
         },
     )
     db.commit()
@@ -1502,10 +1488,6 @@ async def regenerate_history(
     db: Annotated[Session, Depends(get_db)],
     prompt_client: Annotated[PromptCenterClient, Depends(get_prompt_client)],
     cipher: Annotated[ContentCipher, Depends(get_content_cipher)],
-    sensitive_detector: Annotated[
-        SensitiveDetector,
-        Depends(get_sensitive_detector),
-    ],
     knowledge_retriever: Annotated[
         KnowledgeRetriever,
         Depends(get_knowledge_retriever),
@@ -1523,19 +1505,16 @@ async def regenerate_history(
         generation_uuid,
         cipher,
     )
-    scan = sensitive_detector.scan(inputs)
     prepared, child = await prepare_generation(
         db,
         session_payload,
         PrepareGenerationIn(
             task_uuid=task.uuid,
             inputs=inputs,
-            sensitive_confirmation_digest=scan.confirmation_digest,
         ),
         prompt_client,
         cipher,
         current_settings.content_encryption_key_version,
-        sensitive_detector,
         knowledge_retriever,
     )
     child.parent_generation_id = parent.id

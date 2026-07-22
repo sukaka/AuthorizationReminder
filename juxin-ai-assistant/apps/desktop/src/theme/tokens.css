@@ -7389,6 +7389,22 @@ textarea:focus-visible {
   margin: 4px 0;
 }
 
+.chat-dashi-ppt-theme-preview {
+  width: min(620px, 100%);
+  margin: 12px 0;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--border) 88%, var(--surface-solid));
+  border-radius: 14px;
+  background: var(--surface-solid);
+  box-shadow: 0 8px 20px rgb(16 24 40 / 8%);
+}
+
+.chat-dashi-ppt-theme-preview img {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
 .chat-markdown-table-wrap {
   width: 100%;
   max-width: 100%;

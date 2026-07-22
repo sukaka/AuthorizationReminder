@@ -27,6 +27,7 @@ if [[ ! -f "${PROJECT_DIR}/package.json" || ! -f "${PROJECT_DIR}/package-lock.js
 fi
 
 npm --prefix "${PROJECT_DIR}" ci
+mkdir -p "${PROJECT_DIR}/output"
 
 cat <<EOF
 Dashi PPT runtime installed.

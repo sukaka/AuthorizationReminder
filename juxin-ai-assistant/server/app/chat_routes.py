@@ -64,7 +64,7 @@ from .server_model_client import (
     is_server_model_configured,
     stream_with_model_config,
 )
-from .sensitive import SensitiveDetector, derive_confirmation_key
+from .sensitive import derive_confirmation_key
 from .user_model_profiles import decrypt_user_model_api_key, get_default_user_model_profile
 
 
@@ -278,30 +278,6 @@ async def chat_prepare(
         project_uuid=body.project_uuid,
         user_id=str(session_payload.user.id),
     )
-    sensitive_detector = SensitiveDetector(
-        derive_confirmation_key(current_settings.content_encryption_key)
-    )
-    sensitive_scan = sensitive_detector.scan({"question": body.question})
-    if sensitive_scan.findings and not sensitive_detector.is_confirmed(
-        sensitive_scan,
-        body.sensitive_confirmation_digest,
-    ):
-        raise HTTPException(
-            status_code=409,
-            detail={
-                "code": "SENSITIVE_CONFIRMATION_REQUIRED",
-                "message": "检测到敏感信息，请确认后继续",
-                "findings": [
-                    {
-                        "code": finding.code,
-                        "field": finding.field,
-                        "preview": finding.preview,
-                    }
-                    for finding in sensitive_scan.findings
-                ],
-                "confirmation_digest": sensitive_scan.confirmation_digest,
-            },
-        )
     try:
         prepared = prepare_chat(
             db,
@@ -322,7 +298,7 @@ async def chat_prepare(
             entity_uuid=prepared.session_uuid,
             metadata={
                 "status": "PREPARED",
-                "risk_confirmation": bool(body.sensitive_confirmation_digest),
+                "risk_confirmation": False,
             },
         )
         db.commit()

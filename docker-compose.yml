@@ -760,6 +760,7 @@ services:
     restart: "no"
 
   ai-assistant-api:
+    image: codex-new-ai-assistant-api:latest
     build:
       context: ./juxin-ai-assistant
       dockerfile: server/Dockerfile

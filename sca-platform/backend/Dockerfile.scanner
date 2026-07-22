@@ -1,9 +1,10 @@
+ARG PYTHON_BASE_IMAGE=ccr.ccs.tencentyun.com/library/python:3.12-slim
+
 FROM anchore/syft:v1.45.1 AS syft
 FROM aquasec/trivy:0.71.0 AS trivy
 FROM opensca/opensca-cli@sha256:4de6af4bc2a2c33586ce471c62b85db66815f17a9dff51eb2c9423025c86829d AS opensca
 FROM owasp/dependency-check:12.1.9 AS dependency_check
 
-ARG PYTHON_BASE_IMAGE=ccr.ccs.tencentyun.com/library/python:3.12-slim
 FROM ${PYTHON_BASE_IMAGE}
 
 ARG DEBIAN_APT_MIRROR=http://mirrors.aliyun.com/debian
