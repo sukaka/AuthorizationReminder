@@ -209,7 +209,7 @@ def run_acceptance(*, runtime_root: Path, output_dir: Path) -> dict[str, Any]:
             department="产品研发部",
             author="聚信 AI 助手",
             output=ACCEPTANCE_ANSWER,
-            version="5.10.0",
+            version="5.11.0",
         )
     )
     word_paragraph_count = _inspect_word(word_path, title)
